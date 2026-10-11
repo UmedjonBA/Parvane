@@ -9,7 +9,7 @@ export const PLANNER_STATUSES: PlannerStatus[] = ['queue', 'active', 'done'];
 export type PlannerCalendarView = 'year' | 'month' | 'week' | 'day' | 'agenda';
 // Виды календаря в переключателе: день всегда показан панелью справа, отдельных видов «День» и
 // «Расписание» нет (10 окт 2026)
-export const PLANNER_CALENDAR_VIEWS: PlannerCalendarView[] = ['year', 'month', 'week'];
+export const PLANNER_CALENDAR_VIEWS: PlannerCalendarView[] = ['week', 'month', 'year', 'agenda'];
 // Цвет списка: 0 — нет, 1…8 — индекс палитры
 export const LIST_COLOR_COUNT = 8;
 export const ALL_DAY_START = '00:00';
@@ -849,10 +849,9 @@ export function getDayAvailability(state: PlannerState, day: string) {
 export function findSlots(state: PlannerState, task: PlannerTask, today: string, picked: string) {
   if (!task.minutes) return [];
   const minutes = task.minutes;
-  const {
-    dayStart, dayEnd, lunchStart, lunchEnd, margin,
-  } = state.settings;
-  const lunch: [number, number][] = hasLunchBreak(state.settings) ? [[lunchStart, lunchEnd]] : [];
+  // Перерыва и запаса между делами нет (spec 018 FR-006): свободное время — окно дня минус занятое.
+  // Поля `lunch*` и `margin` остаются в настройках только ради записей прежних версий
+  const { dayStart, dayEnd } = state.settings;
   const base = task.day && task.day >= today ? task.day : (picked >= today ? picked : today);
   const answers: { day: string; start: string; end: string }[] = [];
   for (let offset = 0; offset < SLOT_SEARCH_DAYS && answers.length < SLOT_ANSWERS; offset++) {
@@ -860,10 +859,10 @@ export function findSlots(state: PlannerState, task: PlannerTask, today: string,
     if (task.due && day > task.due) break;
     const ownLoad = task.day === day ? minutes : 0;
     if (getDayLoad(state, day) - ownLoad + minutes > state.budget) continue;
-    const busy = [...lunch, ...getTimedForDay(state, day, instanceKey(task)).map((item): [number, number] => [
-      Math.max(dayStart, toMinutes(item.start) - margin),
-      Math.min(dayEnd, toMinutes(item.end) + margin),
-    ])].filter(([from, until]) => from < until).sort((a, b) => a[0] - b[0]);
+    const busy = getTimedForDay(state, day, instanceKey(task)).map((item): [number, number] => [
+      Math.max(dayStart, toMinutes(item.start)),
+      Math.min(dayEnd, toMinutes(item.end)),
+    ]).filter(([from, until]) => from < until).sort((a, b) => a[0] - b[0]);
     let cursor = dayStart;
     for (const [from, until] of [...busy, [dayEnd, dayEnd]]) {
       if (from - cursor >= minutes) {
@@ -889,6 +888,14 @@ export function getEligibleTasks(state: PlannerState, today?: string) {
     } else if (!task.due && task.status !== 'done') result.push(task);
   });
   return result;
+}
+
+/** Задачи без даты работы (не ряды, не завершённые): «в работе» первыми, дальше по рангу. */
+export function getUndatedTasks(state: PlannerState) {
+  return state.tasks
+    .filter((task) => !task.repeat && !task.day && task.status !== 'done')
+    .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active')
+      || a.rank - b.rank || (a.id < b.id ? -1 : 1));
 }
 
 export function getCompletedTasks(state: PlannerState) {

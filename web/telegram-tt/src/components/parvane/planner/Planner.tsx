@@ -30,16 +30,16 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 import Button from '../../ui/Button';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
+import PlannerAgenda from './PlannerAgenda';
 import PlannerEventEditor from './PlannerEventEditor';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
 import PlannerQuickInput from './PlannerQuickInput';
 import PlannerSettings from './PlannerSettings';
-import PlannerStatistics from './PlannerStatistics';
 import PlannerTaskEditor from './PlannerTaskEditor';
 import PlannerTaskForm from './PlannerTaskForm';
-import PlannerTasks from './PlannerTasks';
 import PlannerTimeline from './PlannerTimeline';
+import PlannerToday from './PlannerToday';
 import PlannerWeek from './PlannerWeek';
 import PlannerYear from './PlannerYear';
 
@@ -51,9 +51,9 @@ function selectCurrentUserId(global: GlobalState) {
 
 // 75 % потолка открытого текста снимка контейнера (1 МиБ, spec 010 R5)
 const SNAPSHOT_WARN_BYTES = 786432;
-const VIEW_CALENDAR = 0;
-const VIEW_TASKS = 1;
-const VIEW_STATISTICS = 2;
+const VIEW_TODAY = 0;
+const VIEW_CALENDAR = 1;
+const VIEW_KEY = 'parvane:planner-tab';
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
 const CALENDAR_VIEW_LABELS = {
   year: 'PlannerCalYear',
@@ -74,6 +74,15 @@ function readCalendarView(): PlannerCalendarView {
     return PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
   } catch (err) {
     return 'month';
+  }
+}
+
+// Вкладка «Плана», на которой пользователь был в последний раз
+function readView() {
+  try {
+    return localStorage.getItem(VIEW_KEY) === String(VIEW_CALENDAR) ? VIEW_CALENDAR : VIEW_TODAY;
+  } catch (err) {
+    return VIEW_TODAY;
   }
 }
 
@@ -102,7 +111,7 @@ const Planner = () => {
   const sizeBytes = useDerivedState(getPlannerSizeBytes);
 
   const [today, setToday] = useState(() => toDayKey(new Date()));
-  const [view, setView] = useState(VIEW_CALENDAR);
+  const [view, setView] = useState(readView);
   const [calendarView, setCalendarView] = useState(readCalendarView);
   // Якорь периода: выбранный день; месяц, неделя и год берутся от него
   const [picked, setPicked] = useState(today);
@@ -110,7 +119,6 @@ const Planner = () => {
   const [editor, setEditor] = useState<{ id: string; day?: string }>();
   const [eventEditor, setEventEditor] = useState<{ id: string; day: string }>();
   const [formParams, setFormParams] = useState<PlannerFormParams>();
-  const [selectedProject, setSelectedProject] = useState('');
   // Узкое окно: виден либо месяц, либо панель дня/задачи
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -148,7 +156,7 @@ const Planner = () => {
   const handleOpenTask = useLastCallback((taskId: string, day?: string) => {
     const task = state.tasks.find(({ id }) => id === taskId);
     const target = day || task?.day;
-    if (target && view === VIEW_CALENDAR) pickDay(target);
+    if (target) pickDay(target);
     setEventEditor(undefined);
     setFormParams(undefined);
     setIsSettingsOpen(false);
@@ -196,12 +204,8 @@ const Planner = () => {
     openForm({ day: picked });
   });
 
-  const handleCreateInList = useLastCallback(() => {
-    openForm({ project: selectedProject });
-  });
-
   const handleAdd = useLastCallback(() => {
-    openForm(view === VIEW_TASKS ? { project: selectedProject } : { day: picked });
+    openForm({ day: picked });
   });
 
   // Кнопка «+» нижней панели телефона: форма новой записи, как у кнопки «+ Задача»
@@ -224,6 +228,15 @@ const Planner = () => {
   const handleSwitchView = useLastCallback((index: number) => {
     setView(index);
     setIsPanelOpen(false);
+    try {
+      localStorage.setItem(VIEW_KEY, String(index));
+    } catch (err) {
+      // Вкладка просто не запомнится
+    }
+  });
+
+  const handleOpenCalendar = useLastCallback(() => {
+    handleSwitchView(VIEW_CALENDAR);
   });
 
   const handleOpenSettings = useLastCallback(() => {
@@ -231,7 +244,7 @@ const Planner = () => {
   });
 
   const changePeriod = useLastCallback((delta: number) => {
-    pickDay(shiftPeriod(view === VIEW_STATISTICS ? 'month' : calendarView, picked, delta));
+    pickDay(shiftPeriod(view === VIEW_TODAY ? 'day' : calendarView, picked, delta));
     setIsPanelOpen(false);
   });
 
@@ -291,12 +304,11 @@ const Planner = () => {
   // свободного окна), а не на отдельном экране
   // Телефон, вид «Неделя»: день и так виден в сетке недели — панель дня не показывается
   const isNarrowWeek = isNarrow && view === VIEW_CALENDAR && calendarView === 'week';
-  const isInlineForm = isCreating && isNarrow && view === VIEW_CALENDAR && !isSettingsOpen && !isNarrowWeek;
+  const isInlineForm = isCreating && isNarrow && !isSettingsOpen && !isNarrowWeek;
   // Левая колонка: настройки, форма создания либо редактор; календарь и панель дня остаются на месте
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : isCreating && !isInlineForm ? 'form' : editedTask ? 'task'
       : editedEvent ? 'event' : undefined;
-  const isCalendar = view === VIEW_CALENDAR;
   const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
   const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
@@ -304,12 +316,13 @@ const Planner = () => {
       : syncStatus === 'no-key' ? 'PlannerSyncPending'
         : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
   const viewTabs = [
+    { title: lang('PlannerToday') },
     { title: lang('PlannerViewCalendar') },
-    { title: lang('PlannerViewTasks') },
-    { title: lang('PlannerViewStatistics') },
   ];
-  const title = view === VIEW_TASKS ? lang('PlannerViewTasks')
-    : view === VIEW_STATISTICS ? lang('PlannerViewStatistics') : lang('ParvaneSectionPlanner');
+  const title = lang('ParvaneSectionPlanner');
+  const isToday = view === VIEW_TODAY;
+  // «Сегодня» на узком экране: расписание дня стоит внутри экрана, отдельной панели нет
+  const hasPanel = isToday ? !isNarrow : !isNarrowWeek;
   const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
     : side === 'task' ? lang('PlannerTitleTask') : lang('PlannerTitleEvent');
   const calendarSegments = PLANNER_CALENDAR_VIEWS
@@ -329,13 +342,31 @@ const Planner = () => {
 
   const handleQuickCreated = useLastCallback((day?: string) => {
     closeQuick();
-    if (day && view === VIEW_CALENDAR) pickDay(day);
+    if (day) pickDay(day);
   });
 
   const handleQuickMore = useLastCallback(() => {
     closeQuick();
     handleAdd();
   });
+  const dayTimeline = (
+    <PlannerTimeline
+      state={state}
+      day={picked}
+      inlineForm={isInlineForm ? (
+        <PlannerTaskForm
+          state={state}
+          params={formParams}
+          onCreated={handleCreatedInline}
+          onCancel={handleCancelCreate}
+        />
+      ) : undefined}
+      onAdd={handleAddToDay}
+      onCreateAt={handleCreateAt}
+      onOpenTask={handleOpenTask}
+      onOpenEvent={handleOpenEvent}
+    />
+  );
   const settingsButton = (
     <Button
       round
@@ -361,15 +392,11 @@ const Planner = () => {
             шестерёнка — в строке периода, задача добавляется из расписания дня */}
         {!isNarrow && <h1 className={styles.title}>{title}</h1>}
         <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
-        {(!isNarrow || view === VIEW_TASKS) && (
+        {!isNarrow && (
           <div className={styles.headerButtons}>
             {settingsButton}
-            {!isNarrow && view !== VIEW_STATISTICS && (
-              <Button size="smaller" color="translucent" onClick={openQuick}>{lang('PlannerQuickButton')}</Button>
-            )}
-            {!isNarrow && view !== VIEW_STATISTICS && (
-              <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
-            )}
+            <Button size="smaller" color="translucent" onClick={openQuick}>{lang('PlannerQuickButton')}</Button>
+            <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
           </div>
         )}
       </header>
@@ -385,7 +412,7 @@ const Planner = () => {
         {!isLoaded ? <Loading /> : (
           <div
             className={buildClassName(
-              styles.layout, side && styles.layoutWithSide, !isCalendar && styles.layoutNoPanel,
+              styles.layout, side && styles.layoutWithSide, !hasPanel && styles.layoutNoPanel,
               isNarrowWeek && styles.layoutWeek,
             )}
           >
@@ -441,39 +468,37 @@ const Planner = () => {
               </aside>
             )}
             <div className={styles.main}>
-              {isCalendar && (
-                <PlannerPeriodBar
-                  title={formatPeriod(lang, calendarView, picked)}
-                  prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
-                  nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
-                  picked={picked}
-                  segments={isNarrow ? undefined : calendarSegments}
-                  activeSegment={calendarView}
-                  segmentsLabel={lang('PlannerCalView')}
-                  trailing={isNarrow ? settingsButton : undefined}
-                  onPrev={handlePrevPeriod}
-                  onNext={handleNextPeriod}
-                  onToday={handleToday}
-                  onPickDay={pickDay}
-                  onSwitchSegment={handleSwitchCalendarView}
-                />
-              )}
-              {view === VIEW_STATISTICS ? (
-                <PlannerStatistics
+              <PlannerPeriodBar
+                title={formatPeriod(lang, isToday ? 'day' : calendarView, picked)}
+                prevLabel={lang(isMonthView && !isToday ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
+                nextLabel={lang(isMonthView && !isToday ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
+                picked={picked}
+                segments={isNarrow || isToday ? undefined : calendarSegments}
+                activeSegment={calendarView}
+                segmentsLabel={lang('PlannerCalView')}
+                trailing={isNarrow ? settingsButton : undefined}
+                onPrev={handlePrevPeriod}
+                onNext={handleNextPeriod}
+                onToday={handleToday}
+                onPickDay={pickDay}
+                onSwitchSegment={handleSwitchCalendarView}
+              />
+              {isToday ? (
+                <PlannerToday
                   state={state}
-                  picked={picked}
-                  today={today}
-                  trailing={isNarrow ? settingsButton : undefined}
-                  onPickDay={pickDay}
-                />
-              ) : view === VIEW_TASKS ? (
-                <PlannerTasks
-                  state={state}
-                  today={today}
-                  selectedProject={state.projects.includes(selectedProject) ? selectedProject : ''}
-                  onSelectProject={setSelectedProject}
+                  day={picked}
+                  schedule={isNarrow ? dayTimeline : undefined}
                   onOpenTask={handleOpenTask}
-                  onCreateTask={handleCreateInList}
+                  onOpenCalendar={handleOpenCalendar}
+                />
+              ) : calendarView === 'agenda' ? (
+                <PlannerAgenda
+                  state={state}
+                  day={picked}
+                  today={today}
+                  onPickDay={handlePickDay}
+                  onOpenTask={handleOpenTask}
+                  onOpenEvent={handleOpenEvent}
                 />
               ) : calendarView === 'year' ? (
                 <PlannerYear
@@ -509,7 +534,7 @@ const Planner = () => {
                 />
               )}
             </div>
-            {isCalendar && !isNarrowWeek && (
+            {hasPanel && (
               <aside className={styles.panel} data-planner-day={picked}>
                 <Button
                   isText
@@ -521,22 +546,7 @@ const Planner = () => {
                   {lang('PlannerBackToCalendar')}
                 </Button>
                 {isNarrow ? (
-                  <PlannerTimeline
-                    state={state}
-                    day={picked}
-                    inlineForm={isInlineForm ? (
-                      <PlannerTaskForm
-                        state={state}
-                        params={formParams}
-                        onCreated={handleCreatedInline}
-                        onCancel={handleCancelCreate}
-                      />
-                    ) : undefined}
-                    onAdd={handleAddToDay}
-                    onCreateAt={handleCreateAt}
-                    onOpenTask={handleOpenTask}
-                    onOpenEvent={handleOpenEvent}
-                  />
+                  dayTimeline
                 ) : (
                   <>
                     <div className={styles.panelHead}>

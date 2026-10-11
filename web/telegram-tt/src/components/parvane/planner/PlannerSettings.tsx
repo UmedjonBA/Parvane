@@ -4,7 +4,7 @@ import type { PlannerSettings as Settings, PlannerSettingsError, PlannerState } 
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, MAX_SLOT_MARGIN, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
   toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
@@ -33,9 +33,8 @@ const ERROR_KEYS = {
   margin: 'PlannerErrorSettingsMargin',
 } as const satisfies Record<PlannerSettingsError, string>;
 const BUDGET_STEP = 30;
-const MARGIN_STEP = 5;
 
-// Parvane (spec 009, T014): настройки дня — бюджет, окна дня, перерыв, запас.
+// Parvane (spec 009, T014): настройки дня — бюджет и окна дня.
 // Каждое поле сохраняется само по завершении ввода; негодное значение не
 // применяется и объясняется уведомлением
 const PlannerSettings = ({
@@ -82,31 +81,12 @@ const PlannerSettings = ({
     value ? applySettings({ dayEnd: toMinutes(value) }) : false
   ));
 
-  // Пустое поле перерыва — перерыва нет
-  const handleLunchStart = useLastCallback((value: string) => (
-    applySettings(value ? { lunchStart: toMinutes(value) } : { lunchStart: 0, lunchEnd: 0 })
-  ));
-
-  const handleLunchEnd = useLastCallback((value: string) => (
-    applySettings(value ? { lunchEnd: toMinutes(value) } : { lunchStart: 0, lunchEnd: 0 })
-  ));
-
-  const handleMargin = useLastCallback((value: string) => {
-    if (value === '') {
-      showPlannerNotice(lang('PlannerErrorSettingsMargin'));
-      return false;
-    }
-    return applySettings({ margin: Number(value) });
-  });
-
   const handleReset = useLastCallback(() => {
     updatePlanner((draft) => {
       draft.settings = { ...DEFAULT_PLANNER_SETTINGS };
       draft.budget = createEmptyPlannerState().budget;
     }, lang('PlannerNoticeSettingsSaved'));
   });
-
-  const clockOrEmpty = (minutes: number) => (minutes > 0 ? toTime(minutes) : '');
 
   return (
     <div className={buildClassName(styles.editor, styles.settings)}>
@@ -136,15 +116,6 @@ const PlannerSettings = ({
           onCommit={handleBudget}
         />
         <PlannerField
-          label={lang('PlannerSettingsMargin')}
-          type="number"
-          value={String(settings.margin)}
-          min={0}
-          max={MAX_SLOT_MARGIN}
-          step={MARGIN_STEP}
-          onCommit={handleMargin}
-        />
-        <PlannerField
           label={lang('PlannerSettingsDayStart')}
           type="time"
           value={toTime(settings.dayStart)}
@@ -156,20 +127,7 @@ const PlannerSettings = ({
           value={toTime(settings.dayEnd)}
           onCommit={handleDayEnd}
         />
-        <PlannerField
-          label={lang('PlannerSettingsLunchStart')}
-          type="time"
-          value={clockOrEmpty(settings.lunchStart)}
-          onCommit={handleLunchStart}
-        />
-        <PlannerField
-          label={lang('PlannerSettingsLunchEnd')}
-          type="time"
-          value={clockOrEmpty(settings.lunchEnd)}
-          onCommit={handleLunchEnd}
-        />
       </div>
-      <p className={styles.small}>{lang('PlannerSettingsLunchHint')}</p>
       <Button size="smaller" color="translucent" className={styles.settingsReset} onClick={handleReset}>
         {lang('PlannerSettingsReset')}
       </Button>

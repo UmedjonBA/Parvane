@@ -8,8 +8,8 @@ import {
   formatClock, formatDay, formatRepeat, formatStatus,
 } from './plannerFormat';
 import {
-  detachInstance, excludeInstance, findSlots, hasLunchBreak, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
-  removeSeries, setTaskStepDone, splitSeries, toMinutes, truncateSeries, validateRepeat,
+  detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
+  removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, validateRepeat,
 } from './plannerModel';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
@@ -20,6 +20,7 @@ import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
+import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
@@ -203,12 +204,7 @@ const PlannerTaskEditor = ({
     setSlots(found);
     const { settings } = state;
     const window = `${formatClock(settings.dayStart)}–${formatClock(settings.dayEnd)}`;
-    const hint = hasLunchBreak(settings)
-      ? lang('PlannerSlotsHint', {
-        window, lunch: `${formatClock(settings.lunchStart)}–${formatClock(settings.lunchEnd)}`, margin: settings.margin,
-      })
-      : lang('PlannerSlotsHintNoBreak', { window, margin: settings.margin });
-    setSlotHint(found.length ? hint : lang('PlannerSlotsNone'));
+    setSlotHint(found.length ? window : lang('PlannerSlotsNone'));
   });
 
   const handleSlotClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -258,7 +254,20 @@ const PlannerTaskEditor = ({
     onBack();
   });
 
+  const handleDone = useLastCallback((isDone: boolean) => {
+    updatePlanner((draft) => {
+      setTaskDone(draft, task, isDone);
+    }, lang(isDone ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
+  });
+
   const doneSteps = task.steps.filter((step) => step.isDone).length;
+  const detailsSummary = [
+    task.repeat ? formatRepeat(lang, task.repeat) : undefined,
+    task.status === 'queue' ? undefined : formatStatus(lang, task.status),
+    task.project || undefined,
+    task.due ? lang('PlannerDueValue', { date: formatDay(lang, task.due) }) : undefined,
+    task.steps.length ? lang('PlannerSteps', { done: doneSteps, total: task.steps.length }) : undefined,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div className={styles.editor}>
@@ -277,12 +286,12 @@ const PlannerTaskEditor = ({
         </p>
       )}
       {task.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
+      {(!task.repeat || isInstance) && (
+        <Checkbox label={lang('PlannerMarkDone')} checked={task.status === 'done'} onCheck={handleDone} />
+      )}
       <div className={styles.fields}>
         {(!task.repeat || isInstance) && (
           <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
-        )}
-        {!task.repeat && (
-          <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
         )}
         <PlannerField label={lang('PlannerFieldStart')} type="time" value={task.start} onCommit={handleStart} />
         <PlannerField
@@ -296,66 +305,73 @@ const PlannerTaskEditor = ({
           onCommit={handleMinutes}
         />
       </div>
-      <TextArea
-        label={lang('PlannerFieldDescription')}
-        value={task.description}
-        disabled={isInstance}
-        onChange={handleDescription}
-      />
-      <h3 className={styles.group}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
-      {task.steps.map((step, index) => (
-        <Checkbox
-          key={`${index}${step.text}`}
-          value={String(index)}
-          label={step.text}
-          checked={step.isDone}
-          onChange={handleStepToggle}
+      <PlannerDetailsFold summary={detailsSummary}>
+        {!task.repeat && (
+          <div className={styles.fields}>
+            <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
+          </div>
+        )}
+        <TextArea
+          label={lang('PlannerFieldDescription')}
+          value={task.description}
+          disabled={isInstance}
+          onChange={handleDescription}
         />
-      ))}
-      <form className={styles.stepForm} onSubmit={handleStepSubmit}>
-        <PlannerField
-          label={lang('PlannerStepNew')}
-          type="text"
-          value={stepText}
-          maxLength={STEP_MAX_LENGTH}
-          onInput={setStepText}
-        />
-        <Button type="submit" round size="smaller" iconName="add" ariaLabel={lang('PlannerStepAdd')} />
-      </form>
-      <div className={styles.fields}>
-        <Select
-          id="planner-task-status"
-          label={lang('PlannerFieldStatus')}
-          value={task.status}
-          hasArrow
-          onChange={handleStatus}
-        >
-          {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
-        </Select>
-      </div>
-      <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
-      {!isInstance && (
-        <div className={styles.repeatBlock}>
-          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
-          {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
-          <Button size="smaller" color="translucent" onClick={handleRepeatSave}>{lang('PlannerRepeatSave')}</Button>
-        </div>
-      )}
-      <Button size="smaller" color="translucent" onClick={handleFindSlots}>{lang('PlannerFindSlots')}</Button>
-      <div className={styles.slots} aria-live="polite">
-        {slotHint && <span className={styles.small}>{slotHint}</span>}
-        {slots?.map((slot, index) => (
-          <button
-            key={`${slot.day}${slot.start}`}
-            type="button"
-            className={styles.slot}
-            data-index={index}
-            onClick={handleSlotClick}
-          >
-            {`${formatDay(lang, slot.day)} · ${slot.start}–${slot.end}`}
-          </button>
+        <h3 className={styles.group}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
+        {task.steps.map((step, index) => (
+          <Checkbox
+            key={`${index}${step.text}`}
+            value={String(index)}
+            label={step.text}
+            checked={step.isDone}
+            onChange={handleStepToggle}
+          />
         ))}
-      </div>
+        <form className={styles.stepForm} onSubmit={handleStepSubmit}>
+          <PlannerField
+            label={lang('PlannerStepNew')}
+            type="text"
+            value={stepText}
+            maxLength={STEP_MAX_LENGTH}
+            onInput={setStepText}
+          />
+          <Button type="submit" round size="smaller" iconName="add" ariaLabel={lang('PlannerStepAdd')} />
+        </form>
+        <div className={styles.fields}>
+          <Select
+            id="planner-task-status"
+            label={lang('PlannerFieldStatus')}
+            value={task.status}
+            hasArrow
+            onChange={handleStatus}
+          >
+            {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
+          </Select>
+        </div>
+        <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
+        {!isInstance && (
+          <div className={styles.repeatBlock}>
+            <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
+            {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
+            <Button size="smaller" color="translucent" onClick={handleRepeatSave}>{lang('PlannerRepeatSave')}</Button>
+          </div>
+        )}
+        <Button size="smaller" color="translucent" onClick={handleFindSlots}>{lang('PlannerFindSlots')}</Button>
+        <div className={styles.slots} aria-live="polite">
+          {slotHint && <span className={styles.small}>{slotHint}</span>}
+          {slots?.map((slot, index) => (
+            <button
+              key={`${slot.day}${slot.start}`}
+              type="button"
+              className={styles.slot}
+              data-index={index}
+              onClick={handleSlotClick}
+            >
+              {`${formatDay(lang, slot.day)} · ${slot.start}–${slot.end}`}
+            </button>
+          ))}
+        </div>
+      </PlannerDetailsFold>
       {pending ? (
         <PlannerSeriesPrompt
           title={lang(pending.kind === 'delete' ? 'PlannerSeriesDeleteTitle' : 'PlannerSeriesEditTitle')}

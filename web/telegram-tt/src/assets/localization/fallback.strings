@@ -3496,7 +3496,7 @@
 "PlannerCalMonth" = "Month";
 "PlannerCalWeek" = "Week";
 "PlannerCalDay" = "Day";
-"PlannerCalAgenda" = "Agenda";
+"PlannerCalAgenda" = "List";
 "PlannerPrevPeriod" = "Previous period";
 "PlannerNextPeriod" = "Next period";
 "PlannerPrevYear" = "Previous year";
@@ -3535,3 +3535,15 @@
 "PlannerQuickRemove" = "Remove: {value}";
 "PlannerQuickNoName" = "No name yet";
 "PlannerQuickTooLong" = "The name is too long.";
+"PlannerTodayNoTasks" = "No tasks for this day";
+"PlannerTodayLeft" = "{count} left";
+"PlannerTodayAllDone" = "All done";
+"PlannerTodayLoad" = "Day load";
+"PlannerTodayOver" = "Over the day budget";
+"PlannerUndated" = "No date · {count}";
+"PlannerUndatedTitle" = "Tasks without a date";
+"PlannerUndatedEmpty" = "No tasks without a date";
+"PlannerUndatedAssign" = "Schedule {name} for {date}";
+"PlannerAgendaEmpty" = "Nothing planned for the next 30 days";
+"PlannerDetails" = "Repeat and details";
+"PlannerMarkDone" = "Mark as done";

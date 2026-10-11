@@ -1576,7 +1576,7 @@
 "PlannerCalMonth" = "Месяц";
 "PlannerCalWeek" = "Неделя";
 "PlannerCalDay" = "День";
-"PlannerCalAgenda" = "Расписание";
+"PlannerCalAgenda" = "Список";
 "PlannerPrevPeriod" = "Предыдущий период";
 "PlannerNextPeriod" = "Следующий период";
 "PlannerPrevYear" = "Предыдущий год";
@@ -1615,3 +1615,15 @@
 "PlannerQuickRemove" = "Убрать: {value}";
 "PlannerQuickNoName" = "Названия пока нет";
 "PlannerQuickTooLong" = "Название слишком длинное.";
+"PlannerTodayNoTasks" = "На этот день задач нет";
+"PlannerTodayLeft" = "осталось: {count}";
+"PlannerTodayAllDone" = "Всё сделано";
+"PlannerTodayLoad" = "Загрузка дня";
+"PlannerTodayOver" = "Больше бюджета дня";
+"PlannerUndated" = "Без даты · {count}";
+"PlannerUndatedTitle" = "Задачи без даты";
+"PlannerUndatedEmpty" = "Задач без даты нет";
+"PlannerUndatedAssign" = "Назначить «{name}» на {date}";
+"PlannerAgendaEmpty" = "На ближайшие 30 дней ничего не запланировано";
+"PlannerDetails" = "Повтор и детали";
+"PlannerMarkDone" = "Отметить выполненной";

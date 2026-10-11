@@ -66,9 +66,9 @@ const PlannerQuickInput = ({
     return () => window.clearTimeout(timeout);
   }, [isOpen]);
 
-  const draft = useMemo(() => {
+  const parse = useLastCallback((value: string) => {
     const now = new Date();
-    return parseQuickInput(text, {
+    return parseQuickInput(value, {
       today,
       nowMinutes: now.getHours() * 60 + now.getMinutes(),
       dayStart: settings.dayStart,
@@ -77,8 +77,10 @@ const PlannerQuickInput = ({
       kinds: QUICK_KINDS,
       skip,
     });
-  }, [text, today, settings, choice, skip]);
+  });
 
+  // Разбор дешёвый (доли миллисекунды) — считается на каждой перерисовке
+  const draft = parse(text);
   const chips = useMemo(() => buildChips(lang, draft), [lang, draft]);
   const hasText = Boolean(text.trim());
   const isNameTooLong = draft.name.length > NAME_MAX_LENGTH;
@@ -95,39 +97,42 @@ const PlannerQuickInput = ({
 
   const handleSubmit = useLastCallback((e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!canSubmit) return;
-    const { repeat } = draft;
-    const day = repeat ? undefined : draft.day;
+    // Enter может прийти раньше перерисовки: черновик берётся из самого поля, а не из показанного
+    const value = inputRef.current?.value ?? text;
+    const entry = parse(value);
+    if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
+    const { repeat } = entry;
+    const day = repeat ? undefined : entry.day;
     updatePlanner((state) => {
-      if (draft.kind === 'event') {
+      if (entry.kind === 'event') {
         state.events.push({
           id: newId(),
-          name: draft.name,
-          start: draft.isAllDay ? ALL_DAY_START : draft.start!,
-          end: draft.isAllDay ? ALL_DAY_END : draft.end!,
+          name: entry.name,
+          start: entry.isAllDay ? ALL_DAY_START : entry.start!,
+          end: entry.isAllDay ? ALL_DAY_END : entry.end!,
           day,
           repeat,
-          isAllDay: draft.isAllDay,
+          isAllDay: entry.isAllDay,
         });
         return;
       }
       state.tasks.push({
         id: newId(),
-        name: draft.name,
+        name: entry.name,
         description: '',
         steps: [],
         status: 'queue',
         project: '',
-        minutes: draft.minutes,
+        minutes: entry.minutes,
         day,
-        start: draft.start,
-        due: draft.due,
+        start: entry.start,
+        due: entry.due,
         repeat,
         // Новая задача — первой в очереди
         rank: Math.min(0, ...state.tasks.map(({ rank }) => rank)) - 1,
       });
-    }, lang('PlannerNoticeAdded', { name: draft.name }));
-    onCreated(draft.day);
+    }, lang('PlannerNoticeAdded', { name: entry.name }));
+    onCreated(entry.day);
   });
 
   // Окно перехватывает Enter раньше формы — добавляем по клавише в самом поле

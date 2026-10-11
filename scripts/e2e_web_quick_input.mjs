@@ -73,6 +73,21 @@ try {
   await submit('Быстрый созвон');
   console.log('OK: событие одной строкой — время и длительность распознаны');
 
+  // ── «Сегодня» на телефоне: карточки, расписание дня, задачи — одной колонкой (spec 018) ──
+  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  const todayView = planner.locator('[data-planner-today]');
+  await todayView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const order = await todayView.evaluate((el) => {
+    const top = (selector) => el.querySelector(selector)?.getBoundingClientRect().top;
+    return { cards: top('[data-today-card]'), tasks: top('[data-today-tasks]'), width: el.scrollWidth - el.clientWidth };
+  });
+  assert.ok(order.cards < order.tasks, `карточки стоят выше задач: ${JSON.stringify(order)}`);
+  assert.ok(order.tasks - order.cards > 150, `между карточками и задачами — расписание дня: ${JSON.stringify(order)}`);
+  assert.ok(order.width <= 1, `экран не шире телефона: ${JSON.stringify(order)}`);
+  assert.equal(await planner.locator('[data-planner-day]').count(), 0, 'отдельной панели дня на телефоне нет');
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/today-phone.png` });
+  console.log('OK: «Сегодня» на телефоне — карточки, расписание, задачи');
+
   // ── Снятый чип возвращает слова в название; ошибка не даёт добавить ───────
   await openQuick();
   await input.fill('звонок завтра');
@@ -126,13 +141,21 @@ try {
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   await sidebar.getByRole('tab', { name: 'Planner' }).click();
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «План» помнит вкладку, на которой пользователь был в последний раз
+  await planner.locator('[data-planner-today]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.locator('header').getByText('Calendar', { exact: true }).first().click();
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
   await planner.locator(`[role="gridcell"][data-day="${dayKey(1)}"]`).click({ position: { x: 10, y: 10 } });
   await planner.locator('[data-planner-day]').getByText('Быстрый созвон').first()
     .waitFor({ state: 'visible', timeout: 30000 });
-  await planner.getByText('Tasks', { exact: true }).first().click();
-  await planner.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByText('купить кабель').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Задачи без даты — в шторке «Без даты» экрана «Сегодня»
+  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  await planner.locator('[data-today-undated]').click();
+  const undatedSheet = page.locator('[data-planner-undated]');
+  await undatedSheet.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await undatedSheet.getByText('купить кабель').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // На компьютере ввод открывается кнопкой в шапке
   await planner.getByRole('button', { name: 'Quick entry' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

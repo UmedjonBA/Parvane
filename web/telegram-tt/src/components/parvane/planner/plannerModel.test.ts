@@ -7,6 +7,7 @@ import {
   expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
   getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
   getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
+  getUndatedTasks,
   getWeekKeys, getYearKeys, isDayClosed, isHolidayOn, layoutTimed, makeFoodEntry, moveTask, nextOpenInstance,
   normalizePlannerState, occursOn, removeSeries, setOccurrence, setTaskDone, setTaskStepDone, shiftPeriod,
   splitSeries, truncateSeries, validateEvent, validateGoalRecord, validateRepeat, validateSettings, validateTask,
@@ -69,12 +70,12 @@ describe('планировщик: события и загрузка дня', ()
 });
 
 describe('планировщик: поиск окна и проверки ввода', () => {
-  it('окно ищется с запасом 15 минут и мимо обеда', () => {
+  it('окно ищется сразу после занятого времени, без запаса и перерыва', () => {
     const state = stateWith({
       tasks: [task({ id: '1', day: TODAY, start: '09:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
     });
     const [first] = findSlots(state, state.tasks[1], TODAY, TODAY);
-    expect(first).toEqual({ day: TODAY, start: '10:15', end: '12:15' });
+    expect(first).toEqual({ day: TODAY, start: '10:00', end: '12:00' });
   });
 
   it('день сверх бюджета пропускается, дедлайн ограничивает поиск', () => {
@@ -111,7 +112,7 @@ describe('планировщик: поиск окна и проверки вво
 });
 
 describe('планировщик: настройки дня и порядок очереди (T014)', () => {
-  it('окна дня, перерыв и запас берутся из настроек', () => {
+  it('окна дня берутся из настроек; перерыва и запаса между делами нет', () => {
     const state = stateWith({
       settings: {
         dayStart: 480, dayEnd: 1080, lunchStart: 0, lunchEnd: 0, margin: 0,
@@ -119,12 +120,13 @@ describe('планировщик: настройки дня и порядок о
       tasks: [task({ id: '1', day: TODAY, start: '08:00', minutes: 60 }), task({ id: '2', minutes: 120 })],
     });
     expect(getDayAvailability(state, TODAY).free).toEqual([{ start: 540, end: 1080 }]);
-    // Без перерыва и запаса окно начинается сразу после задачи
+    // Окно начинается сразу после задачи
     expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '09:00', end: '11:00' });
+    // Перерыв и запас из записей прежних версий на поиск времени не влияют
     state.settings = {
       dayStart: 480, dayEnd: 1080, lunchStart: 540, lunchEnd: 600, margin: 30,
     };
-    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '10:00', end: '12:00' });
+    expect(findSlots(state, state.tasks[1], TODAY, TODAY)[0]).toEqual({ day: TODAY, start: '09:00', end: '11:00' });
   });
 
   it('проверки настроек', () => {
@@ -614,5 +616,21 @@ describe('раскладка пересечений в сетке часов', (
   it('дело, начавшееся заметно позже, не сужает раннее', () => {
     expect(byName(layoutTimed([timed('раннее', '09:00', '12:00'), timed('позднее', '10:00', '11:00')])))
       .toEqual({ раннее: [0, 2, 2], позднее: [1, 2, 2] });
+  });
+});
+
+describe('планировщик: задачи без даты', () => {
+  it('берёт незавершённые без даты работы и не ряды; «в работе» первыми, дальше по рангу', () => {
+    const state = stateWith({
+      tasks: [
+        task({ id: 'a', rank: 3 }),
+        task({ id: 'b', rank: 1, due: '2026-10-20' }),
+        task({ id: 'c', rank: 5, status: 'active' }),
+        task({ id: 'd', rank: 0, day: TODAY }),
+        task({ id: 'e', rank: 0, status: 'done' }),
+        task({ id: 'f', rank: 0, repeat: { kind: 'daily', interval: 1, startDay: TODAY } }),
+      ],
+    });
+    expect(getUndatedTasks(state).map(({ id }) => id)).toEqual(['c', 'b', 'a']);
   });
 });

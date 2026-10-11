@@ -199,7 +199,7 @@ async function createTask(page, name) {
 
 async function expectTask(page, name, timeout = JOIN_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await planner.getByText('Tasks', { exact: true }).first().click();
+  await planner.locator('header').getByText('Today', { exact: true }).first().click();
   await planner.getByRole('button', { name, exact: false }).first().waitFor({ state: 'visible', timeout });
 }
 

@@ -328,10 +328,10 @@ try {
   // Панель дня тоже показывает задачу — считаем в заново открытом разделе
   await closePlanner(sessions.carol.page);
   const planner3 = await openPlanner(sessions.carol.page);
-  await planner3.getByText('Tasks', { exact: true }).first().click();
-  await planner3.getByRole('button', { name: 'Дом', exact: true }).click();
-  await planner3.getByText(legacyTask).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await planner3.getByText(legacyTask).count(), 1, 'после перезагрузки задача не продублирована');
+  await planner3.locator('header').getByText('Today', { exact: true }).first().click();
+  const todayTasks = planner3.locator('[data-today-tasks]');
+  await todayTasks.getByText(legacyTask).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await todayTasks.getByText(legacyTask).count(), 1, 'после перезагрузки задача не продублирована');
   await closePlanner(sessions.carol.page);
   console.log('OK: данные этапа 1 перенесены один раз');
 

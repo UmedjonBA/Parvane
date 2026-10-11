@@ -2623,6 +2623,14 @@ export interface LangPair {
   'PlannerQuickMore': undefined;
   'PlannerQuickNoName': undefined;
   'PlannerQuickTooLong': undefined;
+  'PlannerTodayNoTasks': undefined;
+  'PlannerTodayAllDone': undefined;
+  'PlannerTodayLoad': undefined;
+  'PlannerTodayOver': undefined;
+  'PlannerUndatedTitle': undefined;
+  'PlannerUndatedEmpty': undefined;
+  'PlannerDetails': undefined;
+  'PlannerMarkDone': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4610,6 +4618,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickRemove': {
     'value': V;
+  };
+  'PlannerTodayLeft': {
+    'count': V;
+  };
+  'PlannerUndated': {
+    'count': V;
+  };
+  'PlannerUndatedAssign': {
+    'name': V;
+    'date': V;
   };
 }
 

@@ -17,6 +17,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
+import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
@@ -168,6 +169,12 @@ const PlannerEventEditor = ({
     setPending(undefined);
   });
 
+  const detailsSummary = [
+    event.repeat ? formatRepeat(lang, event.repeat) : undefined,
+    isAllDay ? lang('PlannerAllDay') : undefined,
+    isHoliday ? lang('PlannerHoliday') : undefined,
+  ].filter(Boolean).join(' · ');
+
   return (
     <form className={styles.editor} onSubmit={handleSubmit}>
       <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
@@ -189,11 +196,6 @@ const PlannerEventEditor = ({
         maxLength={NAME_MAX_LENGTH}
         onChange={handleNameChange}
       />
-      <div className={styles.checks}>
-        <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
-        <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
-      </div>
-      <PlannerColorSwatches value={color} onChange={setColor} />
       <div className={styles.fields}>
         {!isAllDay && <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />}
         {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}
@@ -201,7 +203,14 @@ const PlannerEventEditor = ({
           <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
         )}
       </div>
-      {!isInstance && <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />}
+      <PlannerDetailsFold summary={detailsSummary}>
+        <div className={styles.checks}>
+          <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
+          <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
+        </div>
+        <PlannerColorSwatches value={color} onChange={setColor} />
+        {!isInstance && <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />}
+      </PlannerDetailsFold>
       {error && <p className={styles.error} role="alert">{error}</p>}
       {pending ? (
         <PlannerSeriesPrompt
