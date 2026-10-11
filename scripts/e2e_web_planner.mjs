@@ -384,10 +384,22 @@ try {
   await planner.getByRole('button', { name: 'This and following' }).click();
   aside = await openDay(addDays(today, 3));
   await aside.getByText('11:00–11:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «Все в серии»: правка одного экземпляра меняет время у всех экземпляров его ряда
+  aside = await openDay(addDays(today, 4));
+  await aside.getByRole('button', { name: /Зарядка/ }).first().click();
+  await planner.getByLabel('Start', { exact: true }).fill('12:00');
+  for (const scope of ['Only this', 'This and following', 'All in series']) {
+    await planner.getByRole('button', { name: scope, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await planner.getByRole('button', { name: 'All in series', exact: true }).click();
+  aside = await openDay(addDays(today, 3));
+  await aside.getByText('12:00–12:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(addDays(today, 4));
+  await aside.getByText('12:00–12:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   aside = await openDay(today);
   await aside.getByText('10:00–10:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await backToThisMonth();
-  console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие»');
+  console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», «все в серии»');
 
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
   const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });

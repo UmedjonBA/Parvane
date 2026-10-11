@@ -1465,7 +1465,7 @@
 "PlannerRepeatUntil" = "до {date}";
 "PlannerRepeatWeekly" = "Каждую неделю: {days}";
 "PlannerRepeatYearly" = "Ежегодно {date}";
-"PlannerSeriesAll" = "Весь ряд";
+"PlannerSeriesAll" = "Все в серии";
 "PlannerSeriesDeleteTitle" = "Удалить:";
 "PlannerSeriesDetachedHint" = "Отделено от ряда";
 "PlannerSeriesEditTitle" = "Применить изменение к:";

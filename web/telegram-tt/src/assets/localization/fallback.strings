@@ -3420,7 +3420,7 @@
 "PlannerRepeatUntil" = "until {date}";
 "PlannerRepeatWeekly" = "Every week: {days}";
 "PlannerRepeatYearly" = "Yearly on {date}";
-"PlannerSeriesAll" = "Whole series";
+"PlannerSeriesAll" = "All in series";
 "PlannerSeriesDeleteTitle" = "Delete:";
 "PlannerSeriesDetachedHint" = "Detached from a series";
 "PlannerSeriesEditTitle" = "Apply the change to:";

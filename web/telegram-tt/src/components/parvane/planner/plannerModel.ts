@@ -639,6 +639,65 @@ export function truncateSeries(state: PlannerState, kind: 'task' | 'event', id: 
   return true;
 }
 
+/**
+ * «Все в серии»: правка экземпляра дня `day` уходит всему ряду.
+ * Поля `patch` (название, время, длительность, цвет…) пишутся в шаблон; правило повтора из `patch` не берётся.
+ * Другой день в `patch.day` переносит ряд целиком — экземпляр `day` встаёт на новый день, остальные едут следом:
+ * - каждый день / каждую неделю: начало, конец ряда и отметки экземпляров сдвигаются на то же число дней, дни
+ *   недели проворачиваются на тот же сдвиг. Недели ряда «раз в N недель» считаются от нового начала, поэтому при
+ *   нескольких днях недели сдвиг через границу недели может поменять чётность части экземпляров;
+ * - каждый месяц / каждый год: ряд встаёт на число нового дня и едет на столько же месяцев, на сколько переехал
+ *   экземпляр; отметки едут в свой месяц на то же число (29 февраля в невисокосный год — 28-е).
+ * Число повторов `count` не меняется. Отметка, на новый день которой ряд экземпляра не даёт, отбрасывается.
+ */
+export function updateSeries(
+  state: PlannerState, kind: 'task' | 'event', id: string, day: string, patch: Partial<PlannerTask & PlannerEvent>,
+) {
+  const item = seriesOf(state, kind, id);
+  if (!item?.repeat) return undefined;
+  const fields = { ...patch };
+  delete fields.day;
+  delete fields.repeat;
+  Object.assign(item, fields);
+  if (patch.day && patch.day !== day) shiftSeries(item, day, patch.day);
+  return item;
+}
+
+function shiftSeries(item: PlannerSeriesItem, fromDay: string, toDay: string) {
+  const repeat = item.repeat!;
+  const isByMonth = repeat.kind === 'monthly' || repeat.kind === 'yearly';
+  const days = epochDays(toDay) - epochDays(fromDay);
+  const from = parts(fromDay);
+  const to = parts(toDay);
+  const months = (to.year - from.year) * 12 + to.month - from.month;
+  const move = (value: string) => (isByMonth ? moveToMonth(value, months, to.date) : addDays(value, days));
+  const next: PlannerRepeat = { ...repeat, startDay: repeat.startDay && move(repeat.startDay) };
+  if (repeat.kind === 'weekly') next.weekdays = repeat.weekdays?.map((weekday) => ((weekday + days) % 7 + 7) % 7);
+  if (repeat.kind === 'monthly') next.monthDay = to.date;
+  if (repeat.endDay) {
+    const moved = move(repeat.endDay);
+    // Месячный и годовой ряд: экземпляр месяца, на который пришёлся конец, остаётся в ряду, только если он там был
+    const monthStart = `${repeat.endDay.slice(0, 8)}01`;
+    const keepsLast = !isByMonth || expandRepeat(repeat, monthStart, repeat.endDay).length > 0;
+    next.endDay = keepsLast ? moved : addDays(`${moved.slice(0, 8)}01`, -1);
+  }
+  item.occurrences = item.occurrences
+    ?.map((occurrence) => ({ ...occurrence, day: move(occurrence.day) }))
+    .filter((occurrence) => occursOn(next, occurrence.day))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  item.repeat = next;
+}
+
+// День с числом `date` через `months` месяцев от месяца дня; в коротком месяце — последний день
+function moveToMonth(day: string, months: number, date: number) {
+  const d = parts(day);
+  const index = d.year * 12 + d.month - 1 + months;
+  const year = Math.floor(index / 12);
+  const month = index - year * 12 + 1;
+  const clamped = Math.min(date, daysInMonth(year, month));
+  return `${year}-${String(month).padStart(2, '0')}-${String(clamped).padStart(2, '0')}`;
+}
+
 /** Удалить ряд целиком (отделённые экземпляры остаются). */
 export function removeSeries(state: PlannerState, kind: 'task' | 'event', id: string) {
   if (kind === 'task') state.tasks = state.tasks.filter((t) => t.id !== id);
