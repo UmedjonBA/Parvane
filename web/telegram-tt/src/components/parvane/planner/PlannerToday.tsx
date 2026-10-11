@@ -3,9 +3,10 @@ import { memo, useMemo, useRef } from '../../../lib/teact/teact';
 
 import type { PlannerState } from './plannerModel';
 
-import { formatHours, formatStatus } from './plannerFormat';
+import { formatHours, formatSpan, formatStatus } from './plannerFormat';
+import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import {
-  getDayLoad, getListColor, getLoadFraction, getTasksForDay, getUndatedTasks, instanceKey,
+  getDayLoad, getGoalsForDay, getListColor, getNutrientTotal, getTasksForDay, getUndatedTasks, instanceKey,
 } from './plannerModel';
 
 import useFlag from '../../../hooks/useFlag';
@@ -20,17 +21,19 @@ import styles from './Planner.module.scss';
 type OwnProps = {
   state: PlannerState;
   day: string;
+  today: string;
   // Узкий экран: расписание дня стоит между карточками и задачами
   schedule?: TeactNode;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenCalendar: NoneToVoidFunction;
+  onOpenHealth: NoneToVoidFunction;
 };
 
 const PERCENT = 100;
 
 // «Сегодня» (spec 018): сводка дня карточками, задачи дня и задачи без даты
 const PlannerToday = ({
-  state, day, schedule, onOpenTask, onOpenCalendar,
+  state, day, today, schedule, onOpenTask, onOpenCalendar, onOpenHealth,
 }: OwnProps) => {
   const tasksRef = useRef<HTMLElement>();
   const [isUndatedOpen, openUndated, closeUndated] = useFlag();
@@ -43,7 +46,12 @@ const PlannerToday = ({
   const doneCount = tasks.filter(({ status }) => status === 'done').length;
   const leftCount = tasks.length - doneCount;
   const load = getDayLoad(state, day);
-  const isOver = load > state.budget;
+  const budget = getDayBudget(state, day);
+  const isOver = load > budget;
+  const sleep = getDailyRecord(state, 'sleep', day);
+  const sleepGoal = state.healthGoals.sleepMinutes;
+  const kcal = getNutrientTotal(state, day, 'kcal').value;
+  const kcalGoal = getGoalsForDay(state, day, today).kcal?.target;
 
   const handleTasksClick = useLastCallback(() => {
     tasksRef.current?.scrollIntoView({ block: 'start' });
@@ -52,6 +60,39 @@ const PlannerToday = ({
   return (
     <div className={styles.today} data-planner-today={day}>
       <div className={styles.todayCards}>
+        <button type="button" className={styles.todayCard} data-today-card="sleep" onClick={onOpenHealth}>
+          <span className={styles.todayCardLabel}>{lang('PlannerHealthSleep')}</span>
+          <span className={styles.todayCardValue}>{sleep ? formatSpan(sleep.value) : '—'}</span>
+          <span className={styles.todayBar}>
+            <span
+              className={styles.todayBarFill}
+              style={`width: ${sleep && sleepGoal ? Math.min(1, sleep.value / sleepGoal) * PERCENT : 0}%`}
+            />
+          </span>
+          <span className={styles.small}>
+            {!sleep ? lang('PlannerHealthSleepNone')
+              : sleep.time && sleep.endTime && sleepGoal
+                ? lang('PlannerHealthSleepGoal', { from: sleep.time, to: sleep.endTime, goal: formatSpan(sleepGoal) })
+                : sleepGoal ? lang('PlannerHealthGoalValue', { value: formatSpan(sleepGoal) }) : ''}
+          </span>
+        </button>
+        <button type="button" className={styles.todayCard} data-today-card="food" onClick={onOpenHealth}>
+          <span className={styles.todayCardLabel}>{lang('PlannerHealthFood')}</span>
+          <span className={styles.todayCardValue}>
+            {lang('PlannerHealthKcal', { value: lang.number(Math.round(kcal)) })}
+          </span>
+          <span className={styles.todayBar}>
+            <span
+              className={kcalGoal && kcal > kcalGoal ? styles.todayBarOver : styles.todayBarFill}
+              style={`width: ${kcalGoal ? Math.min(1, kcal / kcalGoal) * PERCENT : 0}%`}
+            />
+          </span>
+          <span className={styles.small}>
+            {!kcalGoal ? '' : kcal > kcalGoal
+              ? lang('PlannerHealthKcalOver', { value: lang.number(Math.round(kcal - kcalGoal)) })
+              : lang('PlannerHealthKcalLeft', { value: lang.number(Math.round(kcalGoal - kcal)) })}
+          </span>
+        </button>
         <button type="button" className={styles.todayCard} data-today-card="tasks" onClick={handleTasksClick}>
           <span className={styles.todayCardLabel}>{lang('PlannerViewTasks')}</span>
           <span className={styles.todayCardValue}>{`${doneCount} / ${tasks.length}`}</span>
@@ -69,15 +110,18 @@ const PlannerToday = ({
         <button type="button" className={styles.todayCard} data-today-card="load" onClick={onOpenCalendar}>
           <span className={styles.todayCardLabel}>{lang('ParvaneSectionPlanner')}</span>
           <span className={styles.todayCardValue}>
-            {`${formatHours(lang, load)} / ${formatHours(lang, state.budget)}`}
+            {`${formatHours(lang, load)} / ${formatHours(lang, budget)}`}
           </span>
           <span className={styles.todayBar}>
             <span
               className={isOver ? styles.todayBarOver : styles.todayBarFill}
-              style={`width: ${getLoadFraction(state, load) * PERCENT}%`}
+              style={`width: ${budget ? Math.min(1, load / budget) * PERCENT : 0}%`}
             />
           </span>
-          <span className={styles.small}>{lang(isOver ? 'PlannerTodayOver' : 'PlannerTodayLoad')}</span>
+          <span className={styles.small}>
+            {lang(isOver ? 'PlannerTodayOver'
+              : isShortSleep(state, day) ? 'PlannerHealthBudgetReduced' : 'PlannerTodayLoad')}
+          </span>
         </button>
       </div>
       {schedule}

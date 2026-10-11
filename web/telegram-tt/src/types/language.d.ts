@@ -2634,6 +2634,45 @@ export interface LangPair {
   'ParvaneColorScheme': undefined;
   'ParvaneColorSchemeHint': undefined;
   'ParvaneTabBarPlanEntry': undefined;
+  'PlannerKindFood': undefined;
+  'PlannerKindSleep': undefined;
+  'PlannerKindWorkout': undefined;
+  'PlannerHealth': undefined;
+  'PlannerHealthNutrition': undefined;
+  'PlannerHealthWater': undefined;
+  'PlannerHealthBody': undefined;
+  'PlannerHealthSleep': undefined;
+  'PlannerHealthActivity': undefined;
+  'PlannerHealthGoals': undefined;
+  'PlannerHealthProtein': undefined;
+  'PlannerHealthFat': undefined;
+  'PlannerHealthCarbs': undefined;
+  'PlannerHealthFiber': undefined;
+  'PlannerHealthSugar': undefined;
+  'PlannerHealthSalt': undefined;
+  'PlannerHealthNoMeals': undefined;
+  'PlannerHealthAddGlass': undefined;
+  'PlannerHealthAddBottle': undefined;
+  'PlannerHealthWeight': undefined;
+  'PlannerHealthPressure': undefined;
+  'PlannerHealthPulse': undefined;
+  'PlannerHealthMood': undefined;
+  'PlannerHealthSleepNone': undefined;
+  'PlannerHealthSteps': undefined;
+  'PlannerHealthStepsShort': undefined;
+  'PlannerHealthActiveMinutes': undefined;
+  'PlannerHealthWorkouts': undefined;
+  'PlannerHealthNoWorkouts': undefined;
+  'PlannerHealthHintTitle': undefined;
+  'PlannerHealthHint': undefined;
+  'PlannerHealthGoalsText': undefined;
+  'PlannerHealthGoalsPlaceholder': undefined;
+  'PlannerHealthGoalsApply': undefined;
+  'PlannerNoticeGoalsSaved': undefined;
+  'PlannerHealthGoalsBad': undefined;
+  'PlannerNoticeHealthDeleted': undefined;
+  'PlannerHealthBudgetReduced': undefined;
+  'PlannerHealthFood': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4631,6 +4670,83 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerUndatedAssign': {
     'name': V;
     'date': V;
+  };
+  'PlannerHealthKcal': {
+    'value': V;
+  };
+  'PlannerHealthKcalLeft': {
+    'value': V;
+  };
+  'PlannerHealthKcalOver': {
+    'value': V;
+  };
+  'PlannerHealthGoalValue': {
+    'value': V;
+  };
+  'PlannerHealthGrams': {
+    'value': V;
+    'goal': V;
+  };
+  'PlannerHealthGramsNoGoal': {
+    'value': V;
+  };
+  'PlannerHealthLimit': {
+    'value': V;
+    'goal': V;
+  };
+  'PlannerHealthMacros': {
+    'protein': V;
+    'fat': V;
+    'carbs': V;
+  };
+  'PlannerHealthFiberShort': {
+    'value': V;
+  };
+  'PlannerHealthLitres': {
+    'value': V;
+  };
+  'PlannerHealthMl': {
+    'value': V;
+  };
+  'PlannerHealthKg': {
+    'value': V;
+  };
+  'PlannerHealthWeekChange': {
+    'value': V;
+  };
+  'PlannerHealthBpm': {
+    'value': V;
+  };
+  'PlannerHealthSleepAverage': {
+    'value': V;
+  };
+  'PlannerHealthSleepShort': {
+    'hours': V;
+  };
+  'PlannerHealthMinutes': {
+    'value': V;
+  };
+  'PlannerHealthKm': {
+    'value': V;
+  };
+  'PlannerHealthPace': {
+    'value': V;
+  };
+  'PlannerHealthDelete': {
+    'name': V;
+  };
+  'PlannerHealthSleepGoal': {
+    'from': V;
+    'to': V;
+    'goal': V;
+  };
+  'PlannerHealthDayWindow': {
+    'from': V;
+    'to': V;
+    'budget': V;
+  };
+  'PlannerQuickWorkoutSets': {
+    'count': V;
   };
 }
 

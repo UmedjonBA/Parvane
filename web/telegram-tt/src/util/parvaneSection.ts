@@ -11,14 +11,15 @@ const [getPlannerAddRequest, setPlannerAddRequest] = createSignal(false);
 
 // Экран «Плана»: «Сегодня» либо «Календарь». Выбирается кнопками боковой панели (компьютер) и вкладками
 // раздела (телефон); устройство помнит последний
-export type PlannerView = 'today' | 'calendar';
+export type PlannerView = 'today' | 'calendar' | 'health';
 
 const PLANNER_VIEW_KEY = 'parvane:planner-tab';
-const CALENDAR_VALUE = '1';
+const VIEW_VALUES: Record<PlannerView, string> = { today: '0', calendar: '1', health: '2' };
 
 function readPlannerView(): PlannerView {
   try {
-    return localStorage.getItem(PLANNER_VIEW_KEY) === CALENDAR_VALUE ? 'calendar' : 'today';
+    const saved = localStorage.getItem(PLANNER_VIEW_KEY);
+    return (Object.keys(VIEW_VALUES) as PlannerView[]).find((view) => VIEW_VALUES[view] === saved) || 'today';
   } catch {
     return 'today';
   }
@@ -31,7 +32,7 @@ export { getParvaneSection, getPlannerAddRequest, getPlannerView };
 export function setPlannerView(view: PlannerView) {
   setPlannerViewSignal(view);
   try {
-    localStorage.setItem(PLANNER_VIEW_KEY, view === 'calendar' ? CALENDAR_VALUE : '0');
+    localStorage.setItem(PLANNER_VIEW_KEY, VIEW_VALUES[view]);
   } catch {
     // Экран просто не запомнится
   }

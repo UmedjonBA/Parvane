@@ -43,6 +43,11 @@ export function formatClock(minutes: number) {
   return minutes % 60 ? clock : clock.slice(0, 2);
 }
 
+/** Длительность «часы:минуты» — 6:46, 8:00. */
+export function formatSpan(minutes: number) {
+  return `${Math.floor(minutes / 60)}:${String(Math.round(minutes % 60)).padStart(2, '0')}`;
+}
+
 export function formatDay(lang: LangFn, day: string) {
   return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'long' });
 }

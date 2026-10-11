@@ -131,6 +131,7 @@ const FoldersSidebar = ({
   const plannerView = useDerivedState(getPlannerView);
   const isTodayOpen = section === 'planner' && plannerView === 'today';
   const isCalendarOpen = section === 'planner' && plannerView === 'calendar';
+  const isHealthOpen = section === 'planner' && plannerView === 'health';
 
   const handleSelectToday = useLastCallback(() => {
     openPlannerView('today');
@@ -138,6 +139,10 @@ const FoldersSidebar = ({
 
   const handleSelectCalendar = useLastCallback(() => {
     openPlannerView('calendar');
+  });
+
+  const handleSelectHealth = useLastCallback(() => {
+    openPlannerView('health');
   });
 
   const handleSelectProfile = useLastCallback(() => {
@@ -275,6 +280,16 @@ const FoldersSidebar = ({
         >
           <Icon name="calendar" className={styles.icon} />
           <span className={styles.sectionTitle}>{lang('PlannerViewCalendar')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isHealthOpen}
+          className={buildClassName(styles.section, isHealthOpen && styles.sectionActive)}
+          onClick={handleSelectHealth}
+        >
+          <Icon name="heart-outline" className={styles.icon} />
+          <span className={styles.sectionTitle}>{lang('PlannerHealth')}</span>
         </button>
         <button
           type="button"

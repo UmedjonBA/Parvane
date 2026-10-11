@@ -56,7 +56,7 @@ try {
   // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 4, 'в панели четыре раздела: чаты, сегодня, календарь, облако');
+  assert.equal(await sidebar.getByRole('tab').count(), 5, 'в панели пять разделов: чаты, сегодня, календарь, здоровье, облако');
   assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'под разделами — «Профиль»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
   assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'без папок слева меню — не в панели');
@@ -69,8 +69,8 @@ try {
   });
   assert.ok(geometry.barBottom - geometry.lastBottom < 24, `разделы не у нижнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
-    geometry.firstTop > geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.6,
-    `разделы должны лежать в нижних 40% панели: ${JSON.stringify(geometry)}`,
+    geometry.firstTop > geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.5,
+    `разделы должны лежать в нижней половине панели: ${JSON.stringify(geometry)}`,
   );
   console.log('OK: панель видна без папок, разделы в нижней части');
 

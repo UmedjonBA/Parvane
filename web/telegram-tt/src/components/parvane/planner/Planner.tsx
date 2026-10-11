@@ -34,6 +34,7 @@ import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
 import PlannerAgenda from './PlannerAgenda';
 import PlannerEventEditor from './PlannerEventEditor';
+import PlannerHealth from './PlannerHealth';
 import PlannerMonth from './PlannerMonth';
 import PlannerPeriodBar from './PlannerPeriodBar';
 import PlannerQuickInput from './PlannerQuickInput';
@@ -55,6 +56,8 @@ function selectCurrentUserId(global: GlobalState) {
 const SNAPSHOT_WARN_BYTES = 786432;
 const VIEW_TODAY = 0;
 const VIEW_CALENDAR = 1;
+const VIEW_HEALTH = 2;
+const PLANNER_VIEWS = ['today', 'calendar', 'health'] as const;
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
 const CALENDAR_VIEW_LABELS = {
   year: 'PlannerCalYear',
@@ -104,7 +107,7 @@ const Planner = () => {
 
   const [today, setToday] = useState(() => toDayKey(new Date()));
   // Экран раздела общий с боковой панелью (`util/parvaneSection.ts`)
-  const view = useDerivedState(getPlannerView) === 'calendar' ? VIEW_CALENDAR : VIEW_TODAY;
+  const view = PLANNER_VIEWS.indexOf(useDerivedState(getPlannerView));
   const [calendarView, setCalendarView] = useState(readCalendarView);
   // Якорь периода: выбранный день; месяц, неделя и год берутся от него
   const [picked, setPicked] = useState(today);
@@ -219,7 +222,7 @@ const Planner = () => {
   });
 
   const handleSwitchView = useLastCallback((index: number) => {
-    setPlannerView(index === VIEW_CALENDAR ? 'calendar' : 'today');
+    setPlannerView(PLANNER_VIEWS[index]);
     setIsPanelOpen(false);
   });
 
@@ -227,12 +230,16 @@ const Planner = () => {
     handleSwitchView(VIEW_CALENDAR);
   });
 
+  const handleOpenHealth = useLastCallback(() => {
+    handleSwitchView(VIEW_HEALTH);
+  });
+
   const handleOpenSettings = useLastCallback(() => {
     setIsSettingsOpen(true);
   });
 
   const changePeriod = useLastCallback((delta: number) => {
-    pickDay(shiftPeriod(view === VIEW_TODAY ? 'day' : calendarView, picked, delta));
+    pickDay(shiftPeriod(view === VIEW_CALENDAR ? calendarView : 'day', picked, delta));
     setIsPanelOpen(false);
   });
 
@@ -306,11 +313,15 @@ const Planner = () => {
   const viewTabs = [
     { title: lang('PlannerToday') },
     { title: lang('PlannerViewCalendar') },
+    { title: lang('PlannerHealth') },
   ];
   const isToday = view === VIEW_TODAY;
-  const title = lang(isToday ? 'PlannerToday' : 'PlannerViewCalendar');
+  const isHealth = view === VIEW_HEALTH;
+  // «Сегодня» и «Здоровье» листаются по дням
+  const isDayView = isToday || isHealth;
+  const title = lang(isToday ? 'PlannerToday' : isHealth ? 'PlannerHealth' : 'PlannerViewCalendar');
   // «Сегодня» на узком экране: расписание дня стоит внутри экрана, отдельной панели нет
-  const hasPanel = isToday ? !isNarrow : !isNarrowWeek;
+  const hasPanel = isHealth ? false : isToday ? !isNarrow : !isNarrowWeek;
   const sideTitle = side === 'settings' ? lang('PlannerSettings') : side === 'form' ? lang('PlannerTitleNew')
     : side === 'task' ? lang('PlannerTitleTask') : lang('PlannerTitleEvent');
   const calendarSegments = PLANNER_CALENDAR_VIEWS
@@ -325,8 +336,21 @@ const Planner = () => {
   useEffect(() => {
     if (!addRequest || !isLoaded) return;
     consumePlannerAddRequest();
-    openQuick();
+    handleOpenQuick();
   }, [addRequest, isLoaded]);
+
+  const [quickText, setQuickText] = useState('');
+
+  const handleOpenQuick = useLastCallback(() => {
+    setQuickText('');
+    openQuick();
+  });
+
+  // Пример на экране «Здоровье» открывает ввод с готовой строкой
+  const handleExample = useLastCallback((text: string) => {
+    setQuickText(text);
+    openQuick();
+  });
 
   const handleQuickCreated = useLastCallback((day?: string) => {
     closeQuick();
@@ -386,7 +410,9 @@ const Planner = () => {
         {!isNarrow && (
           <div className={styles.headerButtons}>
             {settingsButton}
-            <Button size="smaller" color="translucent" onClick={openQuick}>{lang('PlannerQuickButton')}</Button>
+            <Button size="smaller" color="translucent" onClick={handleOpenQuick}>
+              {lang('PlannerQuickButton')}
+            </Button>
             <Button size="smaller" onClick={handleAdd}>{lang('PlannerAddTask')}</Button>
           </div>
         )}
@@ -460,11 +486,11 @@ const Planner = () => {
             )}
             <div className={styles.main}>
               <PlannerPeriodBar
-                title={formatPeriod(lang, isToday ? 'day' : calendarView, picked)}
-                prevLabel={lang(isMonthView && !isToday ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
-                nextLabel={lang(isMonthView && !isToday ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
+                title={formatPeriod(lang, isDayView ? 'day' : calendarView, picked)}
+                prevLabel={lang(isMonthView && !isDayView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
+                nextLabel={lang(isMonthView && !isDayView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
                 picked={picked}
-                segments={isNarrow || isToday ? undefined : calendarSegments}
+                segments={isNarrow || isDayView ? undefined : calendarSegments}
                 activeSegment={calendarView}
                 segmentsLabel={lang('PlannerCalView')}
                 trailing={isNarrow ? settingsButton : undefined}
@@ -474,13 +500,17 @@ const Planner = () => {
                 onPickDay={pickDay}
                 onSwitchSegment={handleSwitchCalendarView}
               />
-              {isToday ? (
+              {isHealth ? (
+                <PlannerHealth state={state} day={picked} today={today} onExample={handleExample} />
+              ) : isToday ? (
                 <PlannerToday
                   state={state}
                   day={picked}
+                  today={today}
                   schedule={isNarrow ? dayTimeline : undefined}
                   onOpenTask={handleOpenTask}
                   onOpenCalendar={handleOpenCalendar}
+                  onOpenHealth={handleOpenHealth}
                 />
               ) : calendarView === 'agenda' ? (
                 <PlannerAgenda
@@ -582,6 +612,7 @@ const Planner = () => {
       )}
       <PlannerQuickInput
         isOpen={isQuickOpen}
+        initialText={quickText}
         today={today}
         settings={state.settings}
         onCreated={handleQuickCreated}

@@ -457,6 +457,7 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
     draft.kind = 'food';
     draft.day = day || ctx.today;
     draft.meal = draft.meal || mealByTime(start ?? ctx.nowMinutes);
+    if (start !== undefined && start < MINUTES_IN_DAY) draft.start = toTime(start);
     if (nutrients.kcal === undefined) {
       const { protein, fat, carbs } = nutrients;
       if (protein !== undefined || fat !== undefined || carbs !== undefined) {

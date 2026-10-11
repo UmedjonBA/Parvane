@@ -1,5 +1,6 @@
 import type { Protocol, PvClient } from './engine';
 
+import { coalesceChanges } from './plannerCoalesce';
 import { V2Error } from './transport';
 
 // Parvane (spec 010): планировщик на сервере — контейнер домена
@@ -342,7 +343,8 @@ export function createPlannerSync(deps: Deps) {
       if (!(await ensureAttached(true))) return;
     }
     await loadOutbox();
-    const changes = pendingChanges;
+    // Одна операция — одна метка: правки одного объекта склеиваются, иначе поздняя могла проиграть ранней
+    const changes = coalesceChanges(pendingChanges);
     pendingChanges = [];
     void savePending();
     for (let i = 0; i < changes.length; i += MAX_CHANGES_PER_OP) {

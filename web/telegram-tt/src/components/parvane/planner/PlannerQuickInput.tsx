@@ -6,8 +6,11 @@ import type { PlannerSettings } from './plannerModel';
 import type { QuickDraft, QuickField, QuickKind } from './plannerQuick';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatDuration, formatRepeat } from './plannerFormat';
-import { ALL_DAY_END, ALL_DAY_START, newId } from './plannerModel';
+import {
+  formatDay, formatDuration, formatRepeat, formatSpan,
+} from './plannerFormat';
+import { applyQuickDraft, formatPace } from './plannerHealth';
+import { toTime } from './plannerModel';
 import { parseQuickInput } from './plannerQuick';
 import { updatePlanner } from './plannerStore';
 
@@ -23,6 +26,8 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   isOpen: boolean;
+  // Строка, с которой окно открывается (пример с экрана «Здоровье»)
+  initialText?: string;
   today: string;
   settings: PlannerSettings;
   onCreated: (day?: string) => void;
@@ -30,24 +35,41 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
 };
 
-type KindChoice = 'auto' | 'task' | 'event';
-type Chip = { field: QuickField; text: string; isFixed?: boolean };
+type KindChoice = 'auto' | 'task' | 'event' | 'food' | 'sleep' | 'workout';
+type Chip = { field: QuickField; text: string; isFixed?: boolean; key?: string };
 
-const KIND_CHOICES: KindChoice[] = ['auto', 'event', 'task'];
+const KIND_CHOICES: KindChoice[] = ['auto', 'event', 'task', 'food', 'sleep', 'workout'];
 const KIND_LABELS = {
   auto: 'PlannerQuickAuto',
   event: 'PlannerKindEvent',
   task: 'PlannerKindTask',
+  food: 'PlannerKindFood',
+  sleep: 'PlannerKindSleep',
+  workout: 'PlannerKindWorkout',
 } as const;
-// Питание и вода разбираются, но записывать их начнёт раздел «Здоровье» (spec 017 FR-006)
-const QUICK_KINDS: QuickKind[] = ['task', 'event'];
+// Виды, которые в переключателе стоят под одной кнопкой
+const CHOICE_OF: Partial<Record<QuickKind, KindChoice>> = { water: 'food', metric: 'auto', goal: 'auto' };
+const METRIC_LABELS = {
+  weight: 'PlannerHealthWeight',
+  pressure: 'PlannerHealthPressure',
+  pulse: 'PlannerHealthPulse',
+  steps: 'PlannerHealthStepsShort',
+  mood: 'PlannerHealthMood',
+} as const;
+const MEAL_LABELS = {
+  breakfast: 'PlannerMealBreakfast',
+  lunch: 'PlannerMealLunch',
+  dinner: 'PlannerMealDinner',
+  snack: 'PlannerMealSnack',
+  other: 'PlannerMealOther',
+} as const;
 const NAME_MAX_LENGTH = 160;
 const INPUT_MAX_LENGTH = 300;
 const FOCUS_DELAY_MS = 200;
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
-  isOpen, today, settings, onCreated, onMore, onClose,
+  isOpen, initialText, today, settings, onCreated, onMore, onClose,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
   const [text, setText] = useState('');
@@ -58,13 +80,13 @@ const PlannerQuickInput = ({
 
   useEffect(() => {
     if (!isOpen) return undefined;
-    setText('');
+    setText(initialText || '');
     setChoice('auto');
     setSkip([]);
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => window.clearTimeout(timeout);
-  }, [isOpen]);
+  }, [isOpen, initialText]);
 
   const parse = useLastCallback((value: string) => {
     const now = new Date();
@@ -74,7 +96,6 @@ const PlannerQuickInput = ({
       dayStart: settings.dayStart,
       dayEnd: settings.dayEnd,
       kind: choice === 'auto' ? undefined : choice,
-      kinds: QUICK_KINDS,
       skip,
     });
   });
@@ -84,9 +105,9 @@ const PlannerQuickInput = ({
   const chips = useMemo(() => buildChips(lang, draft), [lang, draft]);
   const hasText = Boolean(text.trim());
   const isNameTooLong = draft.name.length > NAME_MAX_LENGTH;
-  const errorKey = !hasText ? undefined
-    : draft.kind === 'event' ? EVENT_ERROR_KEYS[draft.error as keyof typeof EVENT_ERROR_KEYS]
-      : TASK_ERROR_KEYS[draft.error as keyof typeof TASK_ERROR_KEYS];
+  const errorKey = !hasText || !draft.error ? undefined
+    : EVENT_ERROR_KEYS[draft.error as keyof typeof EVENT_ERROR_KEYS]
+      || TASK_ERROR_KEYS[draft.error as keyof typeof TASK_ERROR_KEYS];
   const canSubmit = hasText && !draft.error && !isNameTooLong;
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -101,37 +122,10 @@ const PlannerQuickInput = ({
     const value = inputRef.current?.value ?? text;
     const entry = parse(value);
     if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
-    const { repeat } = entry;
-    const day = repeat ? undefined : entry.day;
     updatePlanner((state) => {
-      if (entry.kind === 'event') {
-        state.events.push({
-          id: newId(),
-          name: entry.name,
-          start: entry.isAllDay ? ALL_DAY_START : entry.start!,
-          end: entry.isAllDay ? ALL_DAY_END : entry.end!,
-          day,
-          repeat,
-          isAllDay: entry.isAllDay,
-        });
-        return;
-      }
-      state.tasks.push({
-        id: newId(),
-        name: entry.name,
-        description: '',
-        steps: [],
-        status: 'queue',
-        project: '',
-        minutes: entry.minutes,
-        day,
-        start: entry.start,
-        due: entry.due,
-        repeat,
-        // Новая задача — первой в очереди
-        rank: Math.min(0, ...state.tasks.map(({ rank }) => rank)) - 1,
-      });
-    }, lang('PlannerNoticeAdded', { name: entry.name }));
+      applyQuickDraft(state, entry, today);
+    }, entry.kind === 'goal' ? lang('PlannerNoticeGoalsSaved')
+      : lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
     onCreated(entry.day);
   });
 
@@ -177,7 +171,8 @@ const PlannerQuickInput = ({
         />
         <div className={styles.quickKinds} role="radiogroup">
           {KIND_CHOICES.map((kind) => {
-            const isActive = choice === kind || (choice === 'auto' && hasText && draft.kind === kind);
+            const isActive = choice === kind
+              || (choice === 'auto' && hasText && (CHOICE_OF[draft.kind] || draft.kind) === kind);
             return (
               <button
                 key={kind}
@@ -196,10 +191,17 @@ const PlannerQuickInput = ({
         </div>
         {hasText ? (
           <div className={styles.quickDraft} aria-live="polite">
-            <div className={styles.quickName} dir="auto">{draft.name || lang('PlannerQuickNoName')}</div>
+            <div className={styles.quickName} dir="auto">
+              {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
+                || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
+                || (draft.kind === 'water' && lang('PlannerHealthWater'))
+                || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
+            </div>
             <div className={styles.quickChips}>
-              {chips.map(({ field, text: label, isFixed }) => (
-                <span key={field} className={styles.quickChip} data-quick-chip={field}>
+              {chips.map(({
+                field, text: label, isFixed, key,
+              }) => (
+                <span key={key || field} className={styles.quickChip} data-quick-chip={field}>
                   {label}
                   {!isFixed && (
                     <button
@@ -230,10 +232,65 @@ const PlannerQuickInput = ({
 function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[] {
   const has = (field: QuickField) => draft.spans.some((span) => span.field === field);
   const chips: Chip[] = [];
+  const fixed = (field: QuickField, text: string) => chips.push({ field, text, isFixed: true });
+  const number = (value: number) => lang.number(value);
+  if (draft.kind === 'goal') {
+    const changes = draft.goalChanges!;
+    Object.entries(changes.goals).forEach(([metric, value]) => fixed('health', `${metric} → ${number(value)}`));
+    Object.entries(changes.health).forEach(([key, value]) => fixed('health', `${key} → ${number(value)}`));
+    if (changes.dayStart !== undefined) {
+      fixed('time', `${toTime(changes.dayStart)}–${toTime(changes.dayEnd!)}`);
+    }
+    if (changes.budget) fixed('minutes', formatDuration(lang, changes.budget));
+    return chips.map((chip, index) => ({ ...chip, key: `${chip.field}${index}` }));
+  }
+  if (draft.kind === 'metric') {
+    if (draft.value !== undefined) {
+      fixed('health', draft.value2 ? `${draft.value}/${draft.value2}` : number(draft.value));
+    }
+    return chips;
+  }
+  if (draft.kind === 'water') {
+    if (draft.waterMl) fixed('water', lang('PlannerHealthMl', { value: draft.waterMl }));
+    return chips;
+  }
+  if (draft.kind === 'sleep') {
+    if (draft.start && draft.end) fixed('time', `${draft.start}–${draft.end}`);
+    if (draft.minutes) fixed('minutes', formatSpan(draft.minutes));
+    return chips;
+  }
   if (draft.repeat) {
     chips.push({ field: 'repeat', text: formatRepeat(lang, draft.repeat) });
   } else if (draft.day) {
-    chips.push({ field: 'day', text: formatDay(lang, draft.day), isFixed: draft.isDayAssumed });
+    chips.push({ field: 'day', text: formatDay(lang, draft.day), isFixed: draft.isDayAssumed || !has('day') });
+  }
+  if (draft.kind === 'food') {
+    const nutrients = draft.nutrients || {};
+    if (draft.meal) fixed('meal', lang(MEAL_LABELS[draft.meal]));
+    if (nutrients.kcal !== undefined) fixed('kcal', lang('PlannerHealthKcal', { value: number(nutrients.kcal) }));
+    if (nutrients.protein !== undefined || nutrients.fat !== undefined || nutrients.carbs !== undefined) {
+      fixed('protein', lang('PlannerHealthMacros', {
+        protein: number(nutrients.protein || 0), fat: number(nutrients.fat || 0), carbs: number(nutrients.carbs || 0),
+      }));
+    }
+    if (nutrients.fiber !== undefined) {
+      fixed('fiber', lang('PlannerHealthFiberShort', { value: number(nutrients.fiber) }));
+    }
+    if (draft.grams) fixed('grams', lang('PlannerHealthGramsNoGoal', { value: number(draft.grams) }));
+    return chips;
+  }
+  if (draft.kind === 'workout') {
+    if (draft.start) fixed('time', draft.start);
+    if (draft.minutes) fixed('minutes', formatDuration(lang, draft.minutes));
+    if (draft.distanceKm) {
+      const pace = formatPace(draft.minutes || 0, draft.distanceKm);
+      fixed('health', [
+        lang('PlannerHealthKm', { value: number(draft.distanceKm) }),
+        pace && lang('PlannerHealthPace', { value: pace }),
+      ].filter(Boolean).join(' · '));
+    }
+    if (draft.exercises) fixed('grams', lang('PlannerQuickWorkoutSets', { count: draft.exercises.length }));
+    return chips;
   }
   if (draft.isAllDay) chips.push({ field: 'time', text: lang('PlannerAllDayShort'), isFixed: true });
   else if (draft.start) {
