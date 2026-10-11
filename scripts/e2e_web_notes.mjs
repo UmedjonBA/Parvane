@@ -119,7 +119,8 @@ try {
   await visible(note.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }), 'обратная ссылка');
   await knowledge.locator('#knowledge-search').fill('gpu');
   await visible(row(NOTE), 'найденная заметка');
-  assert.equal(await row(OTHER).count(), 0, 'лишняя заметка в поиске');
+  await row(OTHER).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('лишняя заметка в поиске'));
   await knowledge.locator('#knowledge-search').fill('');
   console.log('OK: заметка по ссылке, обратные ссылки, поиск по тексту');
 
