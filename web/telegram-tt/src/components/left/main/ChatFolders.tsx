@@ -15,6 +15,7 @@ import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { captureEvents, SwipeDirection } from '../../../util/captureEvents';
+import { getParvaneSection } from '../../../util/parvaneSection';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -206,9 +207,11 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
   const isNotInFirstFolderRef = useRef();
   isNotInFirstFolderRef.current = !isInFirstFolder;
   useEffect(() => (isNotInFirstFolderRef.current ? captureEscKeyListener(() => {
+    if (getParvaneSection() !== 'messenger') return false;
     if (isNotInFirstFolderRef.current) {
       setActiveChatFolder({ activeChatFolder: FIRST_FOLDER_INDEX });
     }
+    return undefined;
   }) : undefined), [activeChatFolder, setActiveChatFolder]);
 
   useHistoryBack({

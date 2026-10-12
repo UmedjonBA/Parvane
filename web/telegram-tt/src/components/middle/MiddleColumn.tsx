@@ -61,6 +61,7 @@ import buildStyle from '../../util/buildStyle';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { isUserId } from '../../util/entities/ids';
+import { getParvaneSection } from '../../util/parvaneSection';
 import { resolveTransitionName } from '../../util/resolveTransitionName';
 import calculateMiddleFooterTransforms from './helpers/calculateMiddleFooterTransforms';
 import getHasMiddleFooter from './helpers/getHasMiddleFooter';
@@ -356,7 +357,7 @@ function MiddleColumn({
     return chatId
       ? captureEscKeyListener(() => {
         // Let the Right Column (profile, management, etc.) handle Esc first while it is open
-        if (isRightColumnShown) return false;
+        if (isRightColumnShown || getParvaneSection() !== 'messenger') return false;
         openChat({ id: undefined });
         return undefined;
       })

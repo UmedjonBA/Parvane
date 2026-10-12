@@ -19,6 +19,7 @@ import {
   IS_APP, IS_FIREFOX, IS_MAC_OS, IS_TOUCH_ENV,
 } from '../../util/browser/windowEnvironment';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
+import { getParvaneSection } from '../../util/parvaneSection';
 import { resolveTransitionName } from '../../util/resolveTransitionName';
 import { captureControlledSwipe } from '../../util/swipeController';
 import { isComposerHasSelection } from '../middle/composer/helpers/selection';
@@ -408,7 +409,9 @@ function LeftColumn({
       if ((isArchived && noChatOrForumOpen) || (!isChatList && !isArchived)
         || (isFirstChatFolderActive && noChatOrForumOpen)) {
         return captureEscKeyListener(() => {
+          if (getParvaneSection() !== 'messenger') return false;
           handleReset();
+          return undefined;
         });
       } else {
         return undefined;

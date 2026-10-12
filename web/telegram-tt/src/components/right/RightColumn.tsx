@@ -17,6 +17,7 @@ import {
 } from '../../global/selectors';
 import { selectSharedSettings } from '../../global/selectors/sharedState.ts';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
+import { getParvaneSection } from '../../util/parvaneSection';
 import { resolveTransitionName } from '../../util/resolveTransitionName.ts';
 
 import useCurrentOrPrev from '../../hooks/useCurrentOrPrev';
@@ -300,7 +301,11 @@ const RightColumn: FC<OwnProps & StateProps> = ({
     addChatMembers({ chatId: chatId!, memberIds });
   });
 
-  useEffect(() => (isOpen && chatId ? captureEscKeyListener(close) : undefined), [isOpen, close, chatId]);
+  useEffect(() => (isOpen && chatId ? captureEscKeyListener(() => {
+    if (getParvaneSection() !== 'messenger') return false;
+    close();
+    return undefined;
+  }) : undefined), [isOpen, close, chatId]);
 
   useEffect(() => {
     if (nextManagementScreen) {
