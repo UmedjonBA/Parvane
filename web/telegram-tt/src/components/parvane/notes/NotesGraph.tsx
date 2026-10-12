@@ -4,34 +4,53 @@ import {
 
 import type { PlannerState } from '../planner/plannerModel';
 import type { BoardView } from './boardView';
-import type { GraphNode } from './notesGraph';
+import type { GraphEdge, GraphNode, GraphPoint } from './notesGraph';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
-import { buildGraph, layoutGraph, neighboursOf, nodeRadius } from './notesGraph';
+import {
+  buildGraph, canLinkFrom, canLinkTo, edgeShape, MISSING_NODE_PREFIX, neighboursOf, nodeAt, nodeRadius, placeGraph,
+} from './notesGraph';
 import { displayTitle, folderColor } from './notesLook';
-import { parseNote } from './notesModel';
+import { normalizeNoteTitle, parseNote } from './notesModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+import useResizeObserver from '../../../hooks/useResizeObserver';
 
 import PvIcon from './PvIcon';
 
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
 
+// Выбранная точка графа — то, что показывает панель справа
+export type GraphPick = Pick<GraphNode, 'id' | 'kind' | 'title' | 'group'>;
+export type GraphLinkOutcome = 'added' | 'exists' | 'refused' | 'failed';
+
 type OwnProps = {
   notes: NoteEntry[];
   planner: PlannerState;
-  onOpenNote: (noteId: string) => void;
-  onOpenTitle: (title: string) => void;
+  pickedId?: string;
+  // Режим «Связать»: следующая нажатая заметка получает ссылку из этой
+  linkFromId?: string;
+  onPick: (node: GraphPick) => void;
+  // Двойное нажатие: заметка открывается на вкладке «Заметки»
+  onOpen: (node: GraphPick) => void;
+  onLink: (fromId: string, toTitle: string) => Promise<GraphLinkOutcome>;
+  // Связь, брошенная на пустое место: новая заметка с этим названием; возвращает её id
+  onLinkNew: (fromId: string, title: string) => Promise<string | undefined>;
+  onUnlink: (fromId: string, toTitle: string) => void;
+  onLinkModeEnd: NoneToVoidFunction;
 };
 
 type Drag = {
+  // Что тянут: поле, точку, связь из кольца точки; нажатая связь при движении тянет поле
+  mode: 'pan' | 'node' | 'link' | 'edge';
   id?: string;
+  edge?: string;
   startX: number;
   startY: number;
   // Положение точки либо сдвиг поля в начале движения
@@ -40,26 +59,38 @@ type Drag = {
   hasMoved: boolean;
 };
 
-const WIDTH = 900;
-const HEIGHT = 620;
+// Связь, которую ведут: от точки `from` до места указателя на поле; `overId` — заметка под указателем
+type Draft = GraphPoint & { from: string; overId?: string };
+
+// Раскладка свободная (не сжата в область): область задаёт только центр
+const LAYOUT = { width: 900, height: 620, isLoose: true };
 const LINK = /\[\[([^\]|\n]+)/g;
 const RECORD_LINK = /\[\[[^\]\n]*\]\]/g;
 const LABEL_MAX = 22;
-const LABEL_GAP = 15;
+const LABEL_GAP = 17;
+// Мельче этого масштаба подписи остаются только у выбранной точки, её соседей и найденного поиском
+const LABEL_MIN_SCALE = 0.55;
+// Кольцо, за которое тянут связь: настолько шире кружка
+const HANDLE_GAP = 5;
+// Запас попадания в точку при отпускании связи, в пикселях экрана
+const DROP_SLOP = 10;
 // Место под подпись точки при вписывании графа в поле
 const FIT_BOX_WIDTH = 120;
 const FIT_BOX_HEIGHT = 60;
 const FIT_TOP = 60;
 const FIT_BOTTOM = 20;
+// Выбранная точка ближе этого к краю поля считается скрытой — поле сдвигается к ней
+const REVEAL_PAD = 32;
 const DRAG_THRESHOLD = 5;
 const DOUBLE_TAP_MS = 380;
-const KIND_KEYS = {
-  note: 'KnowledgeGraphKindNote',
-  day: 'KnowledgeGraphKindDay',
-  missing: 'KnowledgeGraphKindMissing',
-  task: 'KnowledgeGraphKindTask',
-  event: 'KnowledgeGraphKindEvent',
-} as const;
+const FLASH_MS = 1200;
+const NEW_TITLE_MAX = 120;
+// Где на выбранной связи стоит крестик: посередине, а у взаимной — по крестику ближе к заметке, чью ссылку он убирает
+const REMOVE_AT_MIDDLE = 0.5;
+const REMOVE_AT_SOURCE = 0.3;
+
+// Места точек переживают уход с вкладки: граф не перетряхивается, пока его не попросят разложить заново
+const placedById = new Map<string, GraphPoint>();
 
 function linksIn(text: string) {
   return [...text.matchAll(LINK)].map((match) => match[1].trim());
@@ -72,21 +103,49 @@ function colorOf(node: GraphNode) {
   return folderColor(node.group || '');
 }
 
+function keyOf(edge: GraphEdge) {
+  return `${edge.from}>${edge.to}`;
+}
+
+function pairOf(a: string, b: string) {
+  return a < b ? `${a}>${b}` : `${b}>${a}`;
+}
+
+function normalizeQuery(value: string) {
+  return value.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
+function isTyping(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  return Boolean(element?.closest?.('input, textarea, [contenteditable="true"]'));
+}
+
 // Граф связей: заметки, заметки, которых ещё нет (блёклые), по желанию дни и записи «Плана».
-// Поле двигается и масштабируется (колесо, щипок, кнопки), точки перетаскиваются; нажатие выделяет
-// точку с соседями и показывает карточку, двойное нажатие открывает заметку
+// Поле двигается и масштабируется (колесо, щипок, кнопки), точки перетаскиваются. Нажатие выбирает точку —
+// её показывает панель справа; двойное открывает заметку на вкладке «Заметки». Связь — это ссылка в тексте:
+// её ведут от кольца вокруг заметки к другой заметке (или на пустое место — к новой), а убирают, выбрав линию
 const NotesGraph = ({
-  notes, planner, onOpenNote, onOpenTitle,
+  notes, planner, pickedId, linkFromId, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd,
 }: OwnProps) => {
   const boardRef = useRef<HTMLDivElement>();
+  const newInputRef = useRef<HTMLInputElement>();
   const [withDays, setWithDays] = useState(false);
   const [withRecords, setWithRecords] = useState(false);
-  const [picked, setPicked] = useState<string>();
   const [view, setView] = useState<BoardView>({ scale: 1, x: 0, y: 0 });
-  const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
+  const [moved, setMoved] = useState<Record<string, GraphPoint>>({});
+  // Растёт, когда граф просят разложить заново
+  const [layoutRound, setLayoutRound] = useState(0);
+  const [draft, setDraft] = useState<Draft>();
+  // Связь брошена на пустое место: здесь спрашивают название новой заметки
+  const [newAt, setNewAt] = useState<Draft>();
+  const [pickedEdge, setPickedEdge] = useState<string>();
+  const [flash, setFlash] = useState<string>();
+  const [query, setQuery] = useState('');
   const dragRef = useRef<Drag>();
   const pinchRef = useRef(createPinch());
   const lastTapRef = useRef<{ id?: string; at: number }>({ at: 0 });
+  const sizeRef = useRef<{ width: number; height: number }>();
+  const fitKeyRef = useRef<string>();
 
   const lang = useLang();
 
@@ -108,16 +167,24 @@ const NotesGraph = ({
         })),
       ],
     }, { withDays, withRecords });
-    return { nodes: layoutGraph(built.nodes, built.edges, { width: WIDTH, height: HEIGHT }), edges: built.edges };
-  }, [notes, planner, withDays, withRecords]);
+    // Точки, у которых уже есть место, стоят на нём: новая связь или заметка граф не перетряхивает
+    const placed = placeGraph(built.nodes, built.edges, placedById, LAYOUT);
+    placed.forEach((node) => placedById.set(node.id, { x: node.x, y: node.y }));
+    return { nodes: placed, edges: built.edges };
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [notes, planner, withDays, withRecords, layoutRound]);
 
   const nodes = useMemo(() => graph.nodes.map((node) => ({ ...node, ...moved[node.id] })), [graph, moved]);
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const neighbours = useMemo(() => (picked ? neighboursOf(picked, graph.edges) : undefined), [picked, graph]);
-  const pickedNode = picked ? byId.get(picked) : undefined;
+  const neighbours = useMemo(() => (
+    pickedId ? neighboursOf(pickedId, graph.edges) : undefined
+  ), [pickedId, graph]);
   const dailyById = useMemo(() => (
     new Map(notes.filter((note) => note.isDaily).map((note) => [note.id, note]))
   ), [notes]);
+  const picked = pickedId && byId.has(pickedId) ? pickedId : undefined;
+  const linkFrom = linkFromId ? byId.get(linkFromId) : undefined;
+  const selectedEdge = pickedEdge ? graph.edges.find((edge) => keyOf(edge) === pickedEdge) : undefined;
 
   // Подпись точки: у заметки дня — дата словами, у записи «Плана» — название без разметки ссылок
   const labelOf = (node: GraphNode) => {
@@ -126,6 +193,14 @@ const NotesGraph = ({
     if (node.kind !== 'record') return node.title;
     return node.title.replace(RECORD_LINK, '').replace(/\s+/g, ' ').trim() || node.title;
   };
+
+  const found = useMemo(() => {
+    const wanted = normalizeQuery(query);
+    if (!wanted) return undefined;
+    return new Set(nodes.filter((node) => normalizeQuery(labelOf(node)).includes(wanted)
+      || normalizeQuery(node.title).includes(wanted)).map(({ id }) => id));
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [query, nodes, dailyById, lang]);
 
   const fit = useLastCallback(() => {
     const box = boardRef.current?.getBoundingClientRect();
@@ -141,17 +216,122 @@ const NotesGraph = ({
     ));
   });
 
-  // Граф вписывается в поле при открытии и когда фильтр меняет набор точек
-  const nodeCount = graph.nodes.length;
+  // Граф вписывается в поле при открытии, при смене фильтра и когда его раскладывают заново. Новая заметка
+  // или связь вид не трогают: масштаб и место выбирает пользователь
+  const hasNodes = graph.nodes.length > 0;
   useEffect(() => {
+    const key = `${hasNodes}${withDays}${withRecords}${layoutRound}`;
+    if (fitKeyRef.current === key) return;
+    fitKeyRef.current = key;
     fit();
-  }, [nodeCount, withDays, withRecords]);
+  }, [hasNodes, withDays, withRecords, layoutRound]);
 
-  const openNode = (node?: GraphNode) => {
-    if (!node) return;
-    if (node.kind === 'missing') onOpenTitle(node.title);
-    else if (node.kind !== 'record') onOpenNote(node.id);
+  // Вид, в котором точка видна: прежний, если она и так на поле, иначе поле сдвигается к ней без смены масштаба
+  const revealIn = (current: BoardView, node: GraphPoint | undefined, width: number, height: number) => {
+    if (!node || !width || !height) return current;
+    const x = current.x + node.x * current.scale;
+    const y = current.y + node.y * current.scale;
+    const isShown = x >= REVEAL_PAD && x <= width - REVEAL_PAD && y >= FIT_TOP && y <= height - REVEAL_PAD;
+    if (isShown) return current;
+    return { ...current, x: width / 2 - node.x * current.scale, y: height / 2 - node.y * current.scale };
   };
+
+  // Выбранная точка (нажатием, поиском или ссылкой в панели) не остаётся за краем поля
+  useEffect(() => {
+    const box = boardRef.current?.getBoundingClientRect();
+    const node = picked ? byId.get(picked) : undefined;
+    if (!box || !node) return;
+    const next = revealIn(view, node, box.width, box.height);
+    if (next !== view) setView(next);
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [picked]);
+
+  // Панель справа открылась или закрылась: поле стало уже или шире. Граф остаётся посередине в прежнем
+  // масштабе; сдвигается к выбранной точке, только если она оказалась за краем
+  const handleResize = useLastCallback((entry: ResizeObserverEntry) => {
+    const { width, height } = entry.contentRect;
+    const previous = sizeRef.current;
+    sizeRef.current = { width, height };
+    if (!previous || previous.width === width) return;
+    const centred = { ...view, x: view.x + (width - previous.width) / 2 };
+    setView(revealIn(centred, picked ? byId.get(picked) : undefined, width, height));
+  });
+  useResizeObserver(boardRef, handleResize);
+
+  useEffect(() => {
+    if (!flash) return undefined;
+    const timer = window.setTimeout(() => setFlash(undefined), FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
+
+  // Режим «Связать» кончился — недоведённая связь исчезает
+  useEffect(() => {
+    if (!linkFromId) setDraft(undefined);
+  }, [linkFromId]);
+
+  useEffect(() => {
+    if (newAt) newInputRef.current?.focus();
+  }, [newAt]);
+
+  const pickOf = (node: GraphNode): GraphPick => ({
+    id: node.id, kind: node.kind, title: node.title, group: node.group,
+  });
+
+  const toWorld = (clientX: number, clientY: number, box: { left: number; top: number }): GraphPoint => ({
+    x: (clientX - box.left - view.x) / view.scale,
+    y: (clientY - box.top - view.y) / view.scale,
+  });
+
+  // Заметка под указателем, к которой можно привести связь из `fromId`
+  const targetAt = (point: GraphPoint, fromId: string) => {
+    const node = nodeAt(nodes, point.x, point.y, DROP_SLOP / view.scale);
+    return node && node.id !== fromId && canLinkTo(node) ? node : undefined;
+  };
+
+  const connect = useLastCallback(async (fromId: string, to: GraphNode) => {
+    setDraft(undefined);
+    const outcome = await onLink(fromId, to.title);
+    if (outcome === 'added' || outcome === 'exists') setFlash(pairOf(fromId, to.id));
+  });
+
+  const cancelNew = useLastCallback(() => {
+    setNewAt(undefined);
+    setDraft(undefined);
+  });
+
+  const submitNew = useLastCallback(async (title: string) => {
+    const at = newAt;
+    cancelNew();
+    if (!at || !title.trim()) return;
+    const spot = { x: at.x, y: at.y };
+    // Новая заметка встаёт туда, где бросили связь: место ждёт её под названием
+    placedById.set(MISSING_NODE_PREFIX + normalizeNoteTitle(title), spot);
+    const id = await onLinkNew(at.from, title);
+    if (!id) return;
+    placedById.set(id, spot);
+    setMoved((current) => ({ ...current, [id]: spot }));
+    setFlash(pairOf(at.from, id));
+  });
+
+  // Ссылки выбранной связи: одна, при взаимной связи — две (у каждой заметки своя, убираются по отдельности)
+  const removals = useMemo(() => {
+    const from = selectedEdge && byId.get(selectedEdge.from);
+    const to = selectedEdge && byId.get(selectedEdge.to);
+    if (!selectedEdge || !from || !to) return [];
+    const at = (share: number) => ({ x: from.x + (to.x - from.x) * share, y: from.y + (to.y - from.y) * share });
+    if (!selectedEdge.isMutual) return [{ from, to, spot: at(REMOVE_AT_MIDDLE) }];
+    return [{ from, to, spot: at(REMOVE_AT_SOURCE) }, { from: to, to: from, spot: at(1 - REMOVE_AT_SOURCE) }];
+  }, [selectedEdge, byId]);
+
+  const removeLink = useLastCallback((fromId?: string) => {
+    const removal = removals.find(({ from }) => from.id === fromId) || removals[0];
+    setPickedEdge(undefined);
+    if (removal) onUnlink(removal.from.id, removal.to.title);
+  });
+
+  const handleRemoveClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    removeLink(e.currentTarget.dataset.graphEdgeRemove);
+  });
 
   const handlePointerDown = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as Element;
@@ -159,36 +339,51 @@ const NotesGraph = ({
     e.currentTarget.setPointerCapture(e.pointerId);
     if (pinchRef.current.down(e.pointerId, e.clientX, e.clientY, view)) {
       dragRef.current = undefined;
+      setDraft(undefined);
       return;
     }
-    const id = target.closest<SVGGElement>('[data-node]')?.dataset.node;
+    const handleId = target.closest<SVGElement>('[data-graph-handle]')?.dataset.graphHandle;
+    const id = handleId || target.closest<SVGElement>('[data-node]')?.dataset.node;
+    const edge = id ? undefined : target.closest<SVGElement>('[data-graph-edge]')?.dataset.graphEdge;
     const node = id ? byId.get(id) : undefined;
+    const mode = handleId && !linkFromId ? 'link' : id ? 'node' : edge ? 'edge' : 'pan';
     dragRef.current = {
+      mode,
       id,
+      edge,
       startX: e.clientX,
       startY: e.clientY,
-      originX: node ? node.x : view.x,
-      originY: node ? node.y : view.y,
+      originX: mode === 'node' && node ? node.x : view.x,
+      originY: mode === 'node' && node ? node.y : view.y,
       hasMoved: false,
     };
   });
 
   const handlePointerMove = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const pinched = pinchRef.current.move(
-      e.pointerId, e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(),
-    );
+    const box = e.currentTarget.getBoundingClientRect();
+    const pinched = pinchRef.current.move(e.pointerId, e.clientX, e.clientY, box);
     if (pinched) {
       setView(pinched);
       return;
     }
     const drag = dragRef.current;
-    if (!drag) return;
+    if (!drag) {
+      // Режим «Связать» с мышью: линия тянется за указателем до нажатия
+      if (linkFromId && e.pointerType === 'mouse' && !(e.target as Element).closest('[data-board-tools]')) {
+        const point = toWorld(e.clientX, e.clientY, box);
+        setDraft({ ...point, from: linkFromId, overId: targetAt(point, linkFromId)?.id });
+      }
+      return;
+    }
     const dx = e.clientX - drag.startX;
     const dy = e.clientY - drag.startY;
     if (!drag.hasMoved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
     drag.hasMoved = true;
-    if (drag.id) {
-      setMoved({ ...moved, [drag.id]: { x: drag.originX + dx / view.scale, y: drag.originY + dy / view.scale } });
+    if (drag.mode === 'link') {
+      const point = toWorld(e.clientX, e.clientY, box);
+      setDraft({ ...point, from: drag.id!, overId: targetAt(point, drag.id!)?.id });
+    } else if (drag.mode === 'node') {
+      setMoved({ ...moved, [drag.id!]: { x: drag.originX + dx / view.scale, y: drag.originY + dy / view.scale } });
     } else {
       setView({ ...view, x: drag.originX + dx, y: drag.originY + dy });
     }
@@ -199,23 +394,81 @@ const NotesGraph = ({
     pinchRef.current.up(e.pointerId);
     const drag = dragRef.current;
     dragRef.current = undefined;
-    if (!drag || drag.hasMoved || wasPinch) return;
-    // Нажатие без движения: выделить точку (мимо точек — снять выделение); второе подряд — открыть
-    const now = Date.now();
-    const isDouble = Boolean(drag.id) && lastTapRef.current.id === drag.id
-      && now - lastTapRef.current.at < DOUBLE_TAP_MS;
-    lastTapRef.current = { id: drag.id, at: now };
-    if (isDouble) {
-      openNode(byId.get(drag.id!));
+    if (!drag || wasPinch) return;
+    if (drag.hasMoved) {
+      if (drag.mode === 'node') {
+        // Место, куда точку поставили руками, она сохраняет
+        const at = moved[drag.id!];
+        if (at) placedById.set(drag.id!, at);
+      }
+      if (drag.mode !== 'link') return;
+      // Связь отпущена: на заметке — ссылка, на пустом месте — вопрос о названии новой заметки
+      const point = toWorld(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
+      const over = nodeAt(nodes, point.x, point.y, DROP_SLOP / view.scale);
+      const to = targetAt(point, drag.id!);
+      if (to) void connect(drag.id!, to);
+      else if (over) setDraft(undefined);
+      else {
+        setDraft(undefined);
+        setNewAt({ ...point, from: drag.id! });
+      }
       return;
     }
-    setPicked(drag.id);
+    const node = drag.id ? byId.get(drag.id) : undefined;
+    if (linkFromId) {
+      // Режим «Связать»: нажатая заметка получает ссылку, нажатие мимо точек выходит из режима
+      if (!node) onLinkModeEnd();
+      else if (node.id !== linkFromId && canLinkTo(node)) {
+        void connect(linkFromId, node);
+        onLinkModeEnd();
+      }
+      return;
+    }
+    if (drag.edge) {
+      setPickedEdge(drag.edge);
+      return;
+    }
+    setPickedEdge(undefined);
+    // Нажатие мимо точек выбор не снимает: панель закрывает её крестик
+    if (!node) return;
+    // Нажатие без движения выбирает точку; второе подряд открывает заметку
+    const now = Date.now();
+    const isDouble = lastTapRef.current.id === node.id && now - lastTapRef.current.at < DOUBLE_TAP_MS;
+    lastTapRef.current = { id: node.id, at: now };
+    if (isDouble) onOpen(pickOf(node));
+    else onPick(pickOf(node));
+  });
+
+  const handlePointerCancel = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    pinchRef.current.up(e.pointerId);
+    dragRef.current = undefined;
+    if (!linkFromId) setDraft(undefined);
   });
 
   const handleWheel = useLastCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if ((e.target as Element).closest('[data-board-tools]')) return;
     const box = e.currentTarget.getBoundingClientRect();
     setView(zoomByWheel(view, e.deltaY, e.clientX - box.left, e.clientY - box.top));
   });
+
+  // Escape выходит из недоведённой связи, режима «Связать» и снимает выбор линии; Delete убирает выбранную связь
+  const handleKey = useLastCallback((e: KeyboardEvent) => {
+    if (!pickedEdge && !linkFromId && !newAt) return;
+    if (e.key === 'Escape') {
+      if (newAt) cancelNew();
+      else if (linkFromId) onLinkModeEnd();
+      else setPickedEdge(undefined);
+      return;
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && pickedEdge && !isTyping(e.target)) {
+      e.preventDefault();
+      removeLink();
+    }
+  });
+  useEffect(() => {
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [handleKey]);
 
   const zoomBy = (factor: number) => {
     const box = boardRef.current?.getBoundingClientRect();
@@ -225,30 +478,52 @@ const NotesGraph = ({
 
   const handleZoomIn = useLastCallback(() => zoomBy(BOARD_ZOOM_STEP));
   const handleZoomOut = useLastCallback(() => zoomBy(1 / BOARD_ZOOM_STEP));
+  // «Вписать» раскладывает граф заново (сдвинутые руками точки возвращаются) и показывает его целиком
   const handleFit = useLastCallback(() => {
+    placedById.clear();
     setMoved({});
-    fit();
+    setLayoutRound(layoutRound + 1);
   });
 
   const handleToggleDays = useLastCallback(() => setWithDays(!withDays));
   const handleToggleRecords = useLastCallback(() => setWithRecords(!withRecords));
-  const handleDeselect = useLastCallback(() => setPicked(undefined));
-  const handleOpenPicked = useLastCallback(() => openNode(pickedNode));
+  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.currentTarget.value));
+
+  // Enter в поиске выбирает первую найденную точку
+  const handleQueryKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    const first = nodes.find(({ id }) => found?.has(id));
+    if (first) onPick(pickOf(first));
+  });
+
+  const handleNewKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') void submitNew(e.currentTarget.value);
+  });
 
   const noteCount = nodes.filter(({ kind }) => kind === 'note').length;
-  const pickedKind = !pickedNode ? undefined
-    : pickedNode.kind === 'record' ? (pickedNode.group === 'task' ? 'task' : 'event') : pickedNode.kind;
+  const line = newAt || draft;
+  const lineFrom = line ? byId.get(line.from) : undefined;
+  const linkSourceId = line?.from || linkFromId;
+  const areLabelsShown = view.scale >= LABEL_MIN_SCALE;
+  const toScreen = (point: GraphPoint) => (
+    `left: ${view.x + point.x * view.scale}px; top: ${view.y + point.y * view.scale}px`
+  );
+  // Поле названия новой заметки стоит там, где бросили связь, но за край поля графа не выходит
+  const newInputStyle = newAt && `left: clamp(7.75rem, ${view.x + newAt.x * view.scale}px, calc(100% - 7.75rem)); `
+    + `top: clamp(5rem, ${view.y + newAt.y * view.scale}px, calc(100% - 2rem))`;
 
   return (
     <div
       ref={boardRef}
-      className={styles.board}
+      className={buildClassName(styles.board, Boolean(linkSourceId) && styles.boardLinking)}
       style={boardBackgroundStyle(view)}
       data-notes-graph
+      data-graph-scale={view.scale}
+      data-graph-picked={picked}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onWheel={handleWheel}
     >
       <div className={styles.world} style={`transform: translate(${view.x}px, ${view.y}px) scale(${view.scale})`}>
@@ -257,24 +532,59 @@ const NotesGraph = ({
             const from = byId.get(edge.from);
             const to = byId.get(edge.to);
             if (!from || !to) return undefined;
+            const key = keyOf(edge);
+            const shape = edgeShape(from, to, nodeRadius(from.degree), nodeRadius(to.degree), edge.isMutual);
+            // Править можно связь между заметками: у дней и записей «Плана» ссылки стоят не в тексте заметки
+            const isEditable = canLinkFrom(from) && canLinkTo(to);
             const isOn = picked === edge.from || picked === edge.to;
+            // Пока ведут связь, граф виден целиком: любая заметка — цель
+            const isDim = !linkSourceId
+              && (found ? !(found.has(edge.from) && found.has(edge.to)) : Boolean(picked) && !isOn);
             return (
-              <line
-                key={`${edge.from}>${edge.to}`}
+              <g
+                key={key}
                 className={buildClassName(
-                  styles.graphEdge, picked && (isOn ? styles.graphEdgeOn : styles.graphDim),
+                  styles.graphEdge,
+                  isEditable && styles.graphEdgeEditable,
+                  isOn && !isDim && styles.graphEdgeOn,
+                  isDim && key !== pickedEdge && styles.graphDim,
+                  key === pickedEdge && styles.graphEdgePicked,
+                  flash === pairOf(edge.from, edge.to) && styles.graphEdgeFlash,
                 )}
-                x1={from.x}
-                y1={from.y}
-                x2={to.x}
-                y2={to.y}
-              />
+                data-graph-edge={key}
+                data-from={edge.from}
+                data-to={edge.to}
+                data-from-title={from.title}
+                data-to-title={to.title}
+                data-editable={isEditable ? 'true' : undefined}
+                data-mutual={edge.isMutual ? 'true' : undefined}
+              >
+                <line className={styles.graphEdgeHit} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
+                <line className={styles.graphEdgeLine} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2} />
+                {shape.heads.map((head) => <path key={head} d={head} />)}
+              </g>
             );
           })}
+          {line && lineFrom && (
+            <line
+              className={styles.graphDraft}
+              x1={lineFrom.x}
+              y1={lineFrom.y}
+              x2={line.x}
+              y2={line.y}
+              data-graph-draft
+            />
+          )}
           {nodes.map((node) => {
             const radius = nodeRadius(node.degree);
             const label = labelOf(node);
-            const isDim = Boolean(picked) && picked !== node.id && !neighbours?.has(node.id);
+            const isNear = picked === node.id || Boolean(picked && neighbours?.has(node.id));
+            const isFound = Boolean(found?.has(node.id));
+            const isTarget = line?.overId === node.id;
+            const isSource = linkSourceId === node.id;
+            const isDim = linkSourceId ? !isSource && !canLinkTo(node)
+              : found ? !isFound : Boolean(picked) && !isNear;
+            const hasLabel = areLabelsShown || isNear || isFound || isTarget || isSource;
             return (
               <g
                 key={node.id}
@@ -282,16 +592,31 @@ const NotesGraph = ({
                   styles.graphNode,
                   node.kind === 'missing' && styles.graphMissing,
                   picked === node.id && styles.graphPicked,
+                  isFound && styles.graphFound,
+                  isTarget && styles.graphTarget,
+                  isSource && styles.graphSource,
                   isDim && styles.graphDim,
                 )}
                 style={`--c: ${colorOf(node)}`}
                 data-node={node.id}
                 data-kind={node.kind}
+                data-title={node.title}
               >
                 <circle cx={node.x} cy={node.y} r={radius} />
-                <text x={node.x} y={node.y + radius + LABEL_GAP}>
-                  {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
-                </text>
+                {canLinkFrom(node) && (
+                  <circle
+                    className={styles.graphHandle}
+                    cx={node.x}
+                    cy={node.y}
+                    r={radius + HANDLE_GAP}
+                    data-graph-handle={node.id}
+                  />
+                )}
+                {hasLabel && (
+                  <text x={node.x} y={node.y + radius + LABEL_GAP}>
+                    {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -324,8 +649,70 @@ const NotesGraph = ({
         >
           {lang('KnowledgeGraphRecords')}
         </button>
+        <label className={styles.graphSearch}>
+          <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
+          <input
+            className={styles.graphSearchInput}
+            type="search"
+            value={query}
+            placeholder={lang('KnowledgeGraphSearch')}
+            aria-label={lang('KnowledgeGraphSearch')}
+            autoComplete="off"
+            data-graph-search
+            onChange={handleQuery}
+            onKeyDown={handleQueryKey}
+          />
+        </label>
       </div>
+      {linkFrom && (
+        <div
+          className={buildClassName(styles.boardHint, styles.graphLinkHint)}
+          role="status"
+          data-board-tools
+          data-graph-link-mode={linkFrom.id}
+        >
+          <span>{lang('KnowledgeGraphConnectHint', { name: linkFrom.title })}</span>
+          <button type="button" className={buildClassName(kit.plain, styles.graphLinkCancel)} onClick={onLinkModeEnd}>
+            {lang('Cancel')}
+          </button>
+        </div>
+      )}
       {!nodes.length && <p className={styles.boardEmpty}>{lang('KnowledgeGraphEmpty')}</p>}
+      {removals.map(({ from, spot }) => {
+        const label = removals.length > 1
+          ? lang('KnowledgeGraphRemoveLinkFrom', { name: from.title }) : lang('KnowledgeGraphRemoveLink');
+        return (
+          <button
+            key={from.id}
+            type="button"
+            className={styles.graphEdgeRemove}
+            style={toScreen(spot)}
+            aria-label={label}
+            title={label}
+            data-board-tools
+            data-graph-edge-remove={from.id}
+            data-from-title={from.title}
+            onClick={handleRemoveClick}
+          >
+            <PvIcon name="x" isSmall />
+          </button>
+        );
+      })}
+      {newAt && (
+        <input
+          ref={newInputRef}
+          className={buildClassName(kit.input, styles.graphNewInput)}
+          style={newInputStyle}
+          maxLength={NEW_TITLE_MAX}
+          placeholder={lang('KnowledgeGraphNewLinked')}
+          aria-label={lang('KnowledgeGraphNewLinked')}
+          autoComplete="off"
+          data-board-tools
+          data-graph-new
+          onKeyDown={handleNewKey}
+          onBlur={cancelNew}
+        />
+      )}
       <div className={styles.boardZoom} data-board-tools>
         <button
           type="button"
@@ -347,30 +734,6 @@ const NotesGraph = ({
           <PvIcon name="fit" isSmall />
         </button>
       </div>
-      {pickedNode && pickedKind && (
-        <div className={styles.boardInfo} data-graph-card data-board-tools>
-          <div className={styles.boardInfoHead}>
-            <span className={styles.boardInfoDot} style={`--c: ${colorOf(pickedNode)}`} />
-            <b className={buildClassName(kit.ttl, kit.grow)}>{labelOf(pickedNode)}</b>
-            <button
-              type="button"
-              className={kit.ib}
-              aria-label={lang('ParvaneCloudClearSelection')}
-              onClick={handleDeselect}
-            >
-              <PvIcon name="x" isSmall />
-            </button>
-          </div>
-          <div className={styles.boardInfoSub}>
-            {`${lang(KIND_KEYS[pickedKind])} · ${lang('KnowledgeGraphLinks', { count: pickedNode.degree })}`}
-          </div>
-          {pickedNode.kind !== 'record' && (
-            <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleOpenPicked}>
-              {lang(pickedNode.kind === 'missing' ? 'KnowledgeGraphCreate' : 'Open')}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 };

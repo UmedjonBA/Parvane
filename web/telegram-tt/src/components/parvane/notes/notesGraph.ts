@@ -1,6 +1,6 @@
 // Parvane, раздел «Знания»: граф заметок. Чистые функции — сборка узлов и связей из заметок и записей
-// планировщика, раскладка Fruchterman–Reingold с гравитацией к центру, соседи узла и его размер.
-// Без UI, хранилища и сети.
+// планировщика, раскладка Fruchterman–Reingold с гравитацией к центру, место новых узлов рядом с уже
+// разложенными, соседи узла, его размер, стрелка связи и попадание в узел. Без UI, хранилища и сети.
 
 export type GraphNodeKind = 'note' | 'missing' | 'day' | 'record';
 
@@ -18,7 +18,9 @@ export type GraphNode = {
   y: number;
 };
 
-export type GraphEdge = { from: string; to: string };
+// Связь направлена: `from` ссылается на `to`. `isMutual` — есть и обратная ссылка (связь на пару одна)
+export type GraphEdge = { from: string; to: string; isMutual?: true };
+export type GraphPoint = { x: number; y: number };
 
 export type GraphNoteInput = {
   id: string;
@@ -48,6 +50,9 @@ export type GraphLayoutOptions = {
   seed?: number;
   // Отступ от краёв области
   margin?: number;
+  // Не сжимать раскладку в область: длина связи остаётся своей, область задаёт только центр (поле графа само
+  // масштабируется, а новым узлам нужны те же единицы, что и разложенным)
+  isLoose?: boolean;
 };
 
 export const MISSING_NODE_PREFIX = 'missing:';
@@ -66,11 +71,18 @@ export const GRAPH_WORK_BUDGET = 50_000_000;
 
 export const GRAPH_MIN_RADIUS = 6;
 export const GRAPH_MAX_RADIUS = 28;
+// Столько шагов новый узел ищет место среди уже разложенных (те стоят на месте)
+export const GRAPH_PLACE_ITERATIONS = 120;
+// Длина наконечника стрелки и зазор между связью и кружком
+export const GRAPH_ARROW = 7;
+export const GRAPH_EDGE_GAP = 3;
 
 const START_TEMPERATURE = 40;
 const COOLING = 0.99;
 const START_SPREAD = 300;
 const MIN_DISTANCE = 4;
+const PLACE_TEMPERATURE = 24;
+const PLACE_COOLING = 0.97;
 
 function titleKey(title: string) {
   return title.trim().toLowerCase();
@@ -84,14 +96,15 @@ function edgeKey(a: string, b: string) {
 // регистра). Ежедневные заметки — только при `withDays`; ссылки на скрытую ежедневную заметку не
 // рисуются (она существует, «ещё нет» про неё сказать нельзя). Записи планировщика — только при
 // `withRecords` и только те, что ссылаются на заметки; записи с одним названием — один узел
-// (повторяющееся событие), их ссылки складываются. Связи без дублей и петель.
+// (повторяющееся событие), их ссылки складываются. Связи без дублей и петель: на пару узлов одна связь
+// в сторону первой найденной ссылки, встречная ссылка помечает её `isMutual`.
 export function buildGraph(input: GraphInput, options: GraphOptions): Graph {
   const nodes: GraphNode[] = [];
   const nodeById = new Map<string, GraphNode>();
   const noteIdByTitle = new Map<string, string>();
   const hiddenTitles = new Set<string>();
   const edges: GraphEdge[] = [];
-  const edgeKeys = new Set<string>();
+  const edgeByKey = new Map<string, GraphEdge>();
 
   function addNode(id: string, title: string, kind: GraphNodeKind, group?: string) {
     const node: GraphNode = {
@@ -116,9 +129,14 @@ export function buildGraph(input: GraphInput, options: GraphOptions): Graph {
       const to = resolveTarget(link);
       if (to === undefined || to === from) return;
       const key = edgeKey(from, to);
-      if (edgeKeys.has(key)) return;
-      edgeKeys.add(key);
-      edges.push({ from, to });
+      const known = edgeByKey.get(key);
+      if (known) {
+        if (known.from === to) known.isMutual = true;
+        return;
+      }
+      const edge: GraphEdge = { from, to };
+      edgeByKey.set(key, edge);
+      edges.push(edge);
     });
   }
 
@@ -282,7 +300,7 @@ export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[], options: Gra
   const roomY = Math.max(0, height - margin * 2);
   const spanX = maxX - minX;
   const spanY = maxY - minY;
-  const scale = Math.min(1, spanX > 0 ? roomX / spanX : 1, spanY > 0 ? roomY / spanY : 1);
+  const scale = options.isLoose ? 1 : Math.min(1, spanX > 0 ? roomX / spanX : 1, spanY > 0 ? roomY / spanY : 1);
   const midX = (minX + maxX) / 2;
   const midY = (minY + maxY) / 2;
 
@@ -307,4 +325,183 @@ export function neighboursOf(nodeId: string, edges: GraphEdge[]) {
 export function nodeRadius(degree: number) {
   const safe = Number.isFinite(degree) ? Math.max(0, degree) : 0;
   return Math.min(GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS + Math.sqrt(safe) * 3.2);
+}
+
+// Раскладка, которая не перетряхивает граф при малом изменении: узлы, у которых есть прежнее место (`previous`),
+// остаются ровно на нём, место ищут только новые — рядом с уже стоящими соседями (без соседей — с краю), теми же
+// силами, что и в полной раскладке. Заметка, созданная на месте «заметки, которой ещё нет», занимает её место.
+// Прежних мест нет ни у одного узла — полная раскладка `layoutGraph`.
+export function placeGraph(
+  nodes: GraphNode[], edges: GraphEdge[], previous: ReadonlyMap<string, GraphPoint>, options: GraphLayoutOptions,
+): GraphNode[] {
+  const count = nodes.length;
+  const px = new Float64Array(count);
+  const py = new Float64Array(count);
+  const free: number[] = [];
+  let sumX = 0;
+  let sumY = 0;
+  nodes.forEach((node, i) => {
+    const at = previous.get(node.id)
+      || (node.kind === 'note' || node.kind === 'day'
+        ? previous.get(MISSING_NODE_PREFIX + titleKey(node.title)) : undefined);
+    if (!at) {
+      free.push(i);
+      return;
+    }
+    px[i] = at.x;
+    py[i] = at.y;
+    sumX += at.x;
+    sumY += at.y;
+  });
+  const known = count - free.length;
+  if (!known) return layoutGraph(nodes, edges, options);
+  const place = () => nodes.map((node, i) => ({ ...node, x: px[i], y: py[i] }));
+  if (!free.length) return place();
+
+  const centerX = sumX / known;
+  const centerY = sumY / known;
+  const isPlaced = new Uint8Array(count).fill(1);
+  free.forEach((i) => {
+    isPlaced[i] = 0;
+  });
+  let reach = 0;
+  for (let i = 0; i < count; i++) {
+    if (isPlaced[i]) reach = Math.max(reach, Math.hypot(px[i] - centerX, py[i] - centerY));
+  }
+
+  const indexById = new Map<string, number>();
+  nodes.forEach((node, i) => {
+    if (!indexById.has(node.id)) indexById.set(node.id, i);
+  });
+  const linked: number[][] = nodes.map(() => []);
+  edges.forEach((edge) => {
+    const a = indexById.get(edge.from);
+    const b = indexById.get(edge.to);
+    if (a === undefined || b === undefined || a === b) return;
+    linked[a].push(b);
+    linked[b].push(a);
+  });
+
+  // Начальное место: на длину связи от середины стоящих соседей, в сторону от центра графа
+  const random = createSeededRandom(options.seed ?? GRAPH_DEFAULT_SEED);
+  free.forEach((i) => {
+    const around = linked[i].filter((j) => isPlaced[j]);
+    const angle = random() * Math.PI * 2;
+    let baseX = centerX;
+    let baseY = centerY;
+    let distance = reach + GRAPH_SPRING_LENGTH;
+    let dirX = Math.cos(angle);
+    let dirY = Math.sin(angle);
+    if (around.length) {
+      baseX = around.reduce((sum, j) => sum + px[j], 0) / around.length;
+      baseY = around.reduce((sum, j) => sum + py[j], 0) / around.length;
+      distance = GRAPH_SPRING_LENGTH;
+      const away = Math.hypot(baseX - centerX, baseY - centerY);
+      if (away > MIN_DISTANCE) {
+        dirX = (baseX - centerX) / away;
+        dirY = (baseY - centerY) / away;
+      }
+    }
+    px[i] = baseX + dirX * distance;
+    py[i] = baseY + dirY * distance;
+    isPlaced[i] = 1;
+  });
+
+  const k2 = GRAPH_SPRING_LENGTH * GRAPH_SPRING_LENGTH;
+  const iterations = Math.max(0, Math.floor(options.iterations ?? GRAPH_PLACE_ITERATIONS));
+  let temperature = PLACE_TEMPERATURE;
+  for (let step = 0; step < iterations; step++, temperature *= PLACE_COOLING) {
+    for (let f = 0; f < free.length; f++) {
+      const i = free[f];
+      let fx = (centerX - px[i]) * GRAPH_GRAVITY;
+      let fy = (centerY - py[i]) * GRAPH_GRAVITY;
+      for (let j = 0; j < count; j++) {
+        if (j === i) continue;
+        let dx = px[i] - px[j];
+        let dy = py[i] - py[j];
+        if (dx === 0 && dy === 0) {
+          dx = 0.01 * (i - j);
+          dy = 0.01;
+        }
+        const distance = Math.max(MIN_DISTANCE, Math.hypot(dx, dy));
+        const force = k2 / (distance * distance);
+        fx += dx * force;
+        fy += dy * force;
+      }
+      for (let n = 0; n < linked[i].length; n++) {
+        const j = linked[i][n];
+        const dx = px[i] - px[j];
+        const dy = py[i] - py[j];
+        const force = (Math.max(MIN_DISTANCE, Math.hypot(dx, dy)) / GRAPH_SPRING_LENGTH) * GRAPH_ATTRACTION;
+        fx -= dx * force;
+        fy -= dy * force;
+      }
+      const length = Math.max(1, Math.hypot(fx, fy));
+      const limited = Math.min(length, temperature) / length;
+      px[i] += fx * limited;
+      py[i] += fy * limited;
+    }
+  }
+  return place();
+}
+
+// Узел под точкой поля (ближайший из тех, в чей кружок с запасом `slop` она попала)
+export function nodeAt(nodes: GraphNode[], x: number, y: number, slop = 0) {
+  let found: GraphNode | undefined;
+  let best = Infinity;
+  nodes.forEach((node) => {
+    const distance = Math.hypot(node.x - x, node.y - y);
+    if (distance <= nodeRadius(node.degree) + slop && distance < best) {
+      best = distance;
+      found = node;
+    }
+  });
+  return found;
+}
+
+// Связь проводят от заметки (у неё есть текст, куда пишется ссылка) к заметке — существующей либо той, которой
+// ещё нет. Заметки дней и записи «Плана» в правке связей не участвуют
+export function canLinkFrom(node?: Pick<GraphNode, 'kind'>) {
+  return node?.kind === 'note';
+}
+
+export function canLinkTo(node?: Pick<GraphNode, 'kind'>) {
+  return node?.kind === 'note' || node?.kind === 'missing';
+}
+
+function round(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function arrowHead(tipX: number, tipY: number, ux: number, uy: number) {
+  const backX = tipX - ux * GRAPH_ARROW;
+  const backY = tipY - uy * GRAPH_ARROW;
+  const wing = GRAPH_ARROW * 0.5;
+  return `M${round(tipX)} ${round(tipY)}L${round(backX - uy * wing)} ${round(backY + ux * wing)}`
+    + `L${round(backX + uy * wing)} ${round(backY - ux * wing)}Z`;
+}
+
+// Линия связи от края кружка до края кружка и наконечники: у `to`, при взаимной ссылке — и у `from`.
+// Кружки вплотную — линия от центра к центру без наконечников
+export function edgeShape(
+  from: GraphPoint, to: GraphPoint, fromRadius: number, toRadius: number, isMutual?: boolean,
+) {
+  const length = Math.hypot(to.x - from.x, to.y - from.y);
+  const middle = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  if (length <= fromRadius + toRadius + GRAPH_EDGE_GAP * 2 + GRAPH_ARROW) {
+    return {
+      x1: round(from.x), y1: round(from.y), x2: round(to.x), y2: round(to.y), heads: [] as string[], middle,
+    };
+  }
+  const ux = (to.x - from.x) / length;
+  const uy = (to.y - from.y) / length;
+  const x1 = from.x + ux * (fromRadius + GRAPH_EDGE_GAP);
+  const y1 = from.y + uy * (fromRadius + GRAPH_EDGE_GAP);
+  const x2 = to.x - ux * (toRadius + GRAPH_EDGE_GAP);
+  const y2 = to.y - uy * (toRadius + GRAPH_EDGE_GAP);
+  const heads = [arrowHead(x2, y2, ux, uy)];
+  if (isMutual) heads.push(arrowHead(x1, y1, -ux, -uy));
+  return {
+    x1: round(x1), y1: round(y1), x2: round(x2), y2: round(y2), heads, middle,
+  };
 }

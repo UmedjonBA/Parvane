@@ -256,6 +256,30 @@ export function renameLinks(text: string, oldTitle: string, newTitle: string) {
   }).join('\n');
 }
 
+export type NoteLineLink = { target: string; alias?: string; from: number; to: number };
+
+export type NoteLines = {
+  // Строки полного текста (разрез по `\n`; `\r` в конце строки остаётся)
+  lines: string[];
+  // Строка, где ссылки не разбираются: свойства в начале файла и блок кода
+  skipped: boolean[];
+  // Ссылки строки с позициями в ней; код в строке ссылкой не считается
+  links: NoteLineLink[][];
+};
+
+/** Текст заметки построчно — для правки ссылок на месте: где они стоят и какие строки разбору не подлежат. */
+export function scanNoteLines(text: string): NoteLines {
+  const { body, bodyLine } = splitFrontMatter(text);
+  const lines = text.split('\n');
+  const { masked, fenced } = maskCode(body.split('\n'));
+  const isSkipped = (index: number) => index < bodyLine || fenced[index - bodyLine];
+  return {
+    lines,
+    skipped: lines.map((_, index) => isSkipped(index)),
+    links: lines.map((_, index) => (isSkipped(index) ? [] : findLinks(masked[index - bodyLine]))),
+  };
+}
+
 /** Название ежедневной заметки — сам ключ дня `YYYY-MM-DD`. */
 export function dailyNoteTitle(day: string) {
   return day;

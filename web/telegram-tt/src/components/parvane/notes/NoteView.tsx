@@ -29,6 +29,9 @@ import PvIcon from './PvIcon';
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
 
+// Просьба открыть правку заметки с выделенным куском текста (ссылка, которую с графа убрать нельзя)
+export type NoteEditRequest = { noteId: string; from: number; to: number; at: number };
+
 type OwnProps = {
   note: NoteEntry;
   index: NotesIndex;
@@ -38,6 +41,9 @@ type OwnProps = {
   onBack?: NoneToVoidFunction;
   // «Связи» стоят под заметкой, когда для них нет отдельного острова справа
   hasLinks?: boolean;
+  // «Связи» без малого графа: заметка стоит в панели большого
+  isGraphHidden?: boolean;
+  editRequest?: NoteEditRequest;
   onOpenTitle: (title: string) => void;
   // `base` — текст, с которого начата правка: изменения заметки, пришедшие за время правки, сводятся с ней
   onSave: (noteId: string, text: string, base?: string) => Promise<boolean>;
@@ -55,14 +61,20 @@ const MARKER = / \^(t[a-z0-9]{4,12})\s*$/;
 const FENCE = '```';
 // Сколько прошедших записей остаётся в «Запланировано» перед будущими
 const PLANNED_PAST_MAX = 3;
+// Высота строки редактора, если её не удалось узнать у браузера
+const EDITOR_LINE_HEIGHT = 22;
 
 // Заметка: чтение с живыми ссылками, тегами и круглыми галочками; правка — текстом `.md`.
 // Ниже — «Запланировано» (записи «Плана» со ссылкой сюда), на узком экране ещё и «Связи»
 const NoteView = ({
-  note, index, planner, planned, onBack, hasLinks, onOpenTitle, onSave, onRename, onDelete, onPickFolder,
+  note, index, planner, planned, onBack, hasLinks, isGraphHidden, editRequest, onOpenTitle, onSave, onRename,
+  onDelete, onPickFolder,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
   const baseRef = useRef<string>();
+  const editorRef = useRef<HTMLTextAreaElement>();
+  const handledRequestRef = useRef<number>();
+  const selectionRef = useRef<{ from: number; to: number }>();
   const [title, setTitle] = useState(note.title);
   const [isSaving, markSaving, unmarkSaving] = useFlag();
   const [isDeleteOpen, openDelete, closeDelete] = useFlag();
@@ -73,6 +85,28 @@ const NoteView = ({
     setDraft(undefined);
     setTitle(note.title);
   }, [note.id, note.title]);
+
+  // Просьба о правке выполняется один раз: открывает редактор и запоминает, что выделить
+  useEffect(() => {
+    if (!editRequest || editRequest.noteId !== note.id || handledRequestRef.current === editRequest.at) return;
+    handledRequestRef.current = editRequest.at;
+    selectionRef.current = { from: editRequest.from, to: editRequest.to };
+    baseRef.current = note.text;
+    setDraft(note.text);
+  }, [editRequest, note.id, note.text]);
+
+  // Редактор открылся по просьбе: кусок выделен и виден
+  useEffect(() => {
+    const selection = selectionRef.current;
+    const editor = editorRef.current;
+    if (!selection || !editor || draft === undefined) return;
+    selectionRef.current = undefined;
+    editor.focus();
+    editor.setSelectionRange(selection.from, selection.to);
+    const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || EDITOR_LINE_HEIGHT;
+    const line = editor.value.slice(0, selection.from).split('\n').length - 1;
+    editor.scrollTop = Math.max(0, line * lineHeight - editor.clientHeight / 2);
+  }, [draft]);
 
   const isEditing = draft !== undefined;
   const isDaily = note.isDaily && isDayTitle(note.title);
@@ -337,6 +371,7 @@ const NoteView = ({
         </div>
         {isEditing ? (
           <textarea
+            ref={editorRef}
             id="knowledge-note-editor"
             className={buildClassName(kit.textarea, styles.editor)}
             value={draft}
@@ -415,6 +450,7 @@ const NoteView = ({
             note={note}
             index={index}
             planned={planned}
+            isGraphHidden={isGraphHidden}
             onOpenTitle={onOpenTitle}
           />
         )}
