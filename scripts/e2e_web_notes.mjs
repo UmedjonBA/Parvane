@@ -17,6 +17,7 @@ const PHONE = { width: 390, height: 800 };
 const STEP_TIMEOUT_MS = 20000;
 const NOTE = 'Сервер X99';
 const OTHER = 'Курс ОГЭ';
+const WELCOME = 'How to use Knowledge';
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
@@ -46,8 +47,29 @@ try {
   await visible(cloud, 'вкладка «Файлы»');
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок');
-  await visible(knowledge.getByText('No notes yet'), 'пустое состояние');
   console.log('OK: «Знания» открыты, «Файлы» — одна из вкладок');
+
+  // ── Новое хранилище встречает заметкой о разделе; удалённая, она не возвращается ──
+  const trashOpenNote = async () => {
+    await note.getByRole('button', { name: 'Move to trash' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Move to trash' }).click();
+  };
+  await visible(row(WELCOME), 'первая заметка нового хранилища');
+  await visible(knowledge.locator(`[data-note-title="${WELCOME}"]`), 'первая заметка открыта сама');
+  await visible(body.getByRole('button', { name: 'My first note' }), 'ссылка на заметку, которой ещё нет');
+  await visible(body.getByText('#welcome'), 'тег в первой заметке');
+  assert.equal(await body.locator('input[type="checkbox"]').count(), 2, 'два пункта в первой заметке');
+  assert.equal(await knowledge.locator('[data-note-row]').count(), 1, 'первая заметка одна');
+  await trashOpenNote();
+  await visible(knowledge.getByText('No notes yet'), 'пустое состояние после удаления первой заметки');
+  // Следующие обновления облака (опрос, эхо своей правки) заметку не возвращают
+  await page.waitForTimeout(4000);
+  assert.equal(await knowledge.locator('[data-note-row]').count(), 0, 'удалённая первая заметка не создана заново');
+  await knowledge.locator('[data-notes-guide]').click();
+  await visible(knowledge.locator(`[data-note-title="${WELCOME}"]`), 'заметка о разделе по кнопке');
+  await trashOpenNote();
+  await visible(knowledge.getByText('No notes yet'), 'пустое состояние');
+  console.log('OK: первая заметка создаётся один раз, после удаления не возвращается');
 
   // ── Новая заметка, название, текст со ссылкой, тегом и пунктами ───────────
   await knowledge.getByRole('button', { name: 'New note' }).click();
@@ -169,6 +191,7 @@ try {
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');
+  assert.equal(await row(WELCOME).count(), 0, 'удалённая первая заметка не вернулась после перезагрузки');
   await row(NOTE).click();
   await visible(body.getByText('проверить обе GPU'), 'текст заметки после перезагрузки');
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');

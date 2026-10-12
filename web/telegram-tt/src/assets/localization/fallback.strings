@@ -3677,6 +3677,7 @@
 "KnowledgeSearch" = "Search notes";
 "KnowledgeEmpty" = "No notes yet. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud.";
 "KnowledgeNothingFound" = "Nothing found";
+"KnowledgeGuide" = "How to use Knowledge";
 "KnowledgePickNote" = "Pick a note on the left. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud. Any event or task that links [[to a note]] shows up in its «Planned» block.";
 "KnowledgeRoot" = "No folder";
 "KnowledgeEdit" = "Edit";

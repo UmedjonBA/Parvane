@@ -2725,6 +2725,7 @@ export interface LangPair {
   'KnowledgeSearch': undefined;
   'KnowledgeEmpty': undefined;
   'KnowledgeNothingFound': undefined;
+  'KnowledgeGuide': undefined;
   'KnowledgePickNote': undefined;
   'KnowledgeRoot': undefined;
   'KnowledgeEdit': undefined;

@@ -21,6 +21,9 @@ import {
 import {
   applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, planNoteTasks,
 } from './notesTasks';
+import {
+  buildWelcomeNote, WELCOME_NOTE_NODE_ID, WELCOME_VAULT_NODE_ID, type WelcomeLang,
+} from './notesWelcome';
 
 export type NoteEntry = NoteSource & {
   // Версия содержимого, от которой идёт следующая правка
@@ -31,7 +34,10 @@ export type CanvasEntry = { id: string; title: string; text: string; fileId: str
 export type NotesStatus = 'loading' | 'ready';
 export type NotesNotice = { code: 'conflict' | 'failed' | 'merged'; title: string; at: number };
 
+export type NotesOptions = { welcomeLang: WelcomeLang; vaultName: string };
+
 type TextResult = { text: string; fileId: string } | undefined;
+type DriveCheck = 'unknown' | 'none' | 'synced';
 type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string } | undefined;
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -50,9 +56,11 @@ const [getNotes, setNotes] = createSignal<NoteEntry[]>([]);
 const [getCanvases, setCanvases] = createSignal<CanvasEntry[]>([]);
 const [getNotesStatus, setNotesStatus] = createSignal<NotesStatus>('loading');
 const [getNotesNotice, setNotesNotice] = createSignal<NotesNotice | undefined>(undefined);
+// Первая заметка, созданная в этой сессии: раздел открывает её сам
+const [getWelcomeNoteId, setWelcomeNoteId] = createSignal<string | undefined>(undefined);
 
 export {
-  getNotes, getCanvases, getNotesStatus, getNotesNotice,
+  getNotes, getCanvases, getNotesStatus, getNotesNotice, getWelcomeNoteId,
 };
 
 let isListening = false;
@@ -61,6 +69,11 @@ let cachedIndex: { notes: NoteEntry[]; index: NotesIndex } | undefined;
 // Метки пунктов, которым уже выдавалась задача: исчезнувшая в «Плане» задача такой метки — удаление
 const knownMarkers = new Set<string>();
 const texts = new Map<string, { fileId: string; text: string }>();
+let notesUserId: string | undefined;
+let welcomeOptions: NotesOptions | undefined;
+// Первая заметка: идёт проверка и создание (правки хранилища её ждут) либо вопрос для этой сессии решён
+let welcomeRun: Promise<void> | undefined;
+let isWelcomeSettled = false;
 
 function rootIdOf(data = getCloudData()) {
   return data?.rootId;
@@ -69,6 +82,14 @@ function rootIdOf(data = getCloudData()) {
 function findVault(nodes: CloudNode[]) {
   return nodes.find((node) => (
     node.kind === 'folder' && !node.parent && !node.trashed && VAULT_NAMES.includes(node.name)
+  ));
+}
+
+// Папка хранилища в любом состоянии, в том числе в корзине: хранилище у аккаунта уже заводили
+function hasVaultTrace(nodes: CloudNode[]) {
+  return nodes.some((node) => (
+    node.id === WELCOME_VAULT_NODE_ID || node.id === WELCOME_NOTE_NODE_ID
+    || (node.kind === 'folder' && !node.parent && VAULT_NAMES.includes(node.name))
   ));
 }
 
@@ -142,6 +163,57 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   setNotes(notes);
   setCanvases(canvases);
   setNotesStatus('ready');
+  if (!hasVaultTrace(nodes)) startWelcome();
+  else isWelcomeSettled = true;
+}
+
+// Первая заметка хранилища — один раз на аккаунт. Создаётся, только когда всё сразу верно:
+// (1) в личном диске нет и следа папки хранилища (нет её и в корзине) — у аккаунта с заметками, как и у
+//     аккаунта, удалившего первую заметку, папка есть;
+// (2) дерево диска только что сверено с сервером (`parvaneCloudCheckDrive`): непривязанное устройство,
+//     устройство без связи и устройство, до которого ещё не дошёл диск другого своего устройства, получают
+//     `unknown` и ничего не создают; диска нет вовсе (`none`) — он создаётся этой же правкой;
+// (3) папка и заметка создаются одной правкой с постоянными идентификаторами: два устройства, успевшие
+//     пройти (1) и (2) одновременно, дают один и тот же узел, а стёртая из корзины папка с таким
+//     идентификатором заново не создаётся, пока движок помнит её стёртой.
+function startWelcome() {
+  const options = welcomeOptions;
+  if (!options || welcomeRun || isWelcomeSettled) return;
+  const userId = notesUserId;
+  welcomeRun = (async () => {
+    const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as DriveCheck | undefined;
+    // Судить рано: попытка повторится со следующим изменением облака
+    if (!check || check === 'unknown' || userId !== notesUserId) return;
+    const data = await refreshCloud();
+    const rootId = rootIdOf(data);
+    if (!data || Boolean(rootId) !== (check === 'synced')) return;
+    isWelcomeSettled = true;
+    if (rootId && hasVaultTrace(getNodes(rootId, data))) return;
+    const welcome = buildWelcomeNote(options.welcomeLang);
+    const result = await callParvane('parvaneCloudWriteText', {
+      container: ROOT,
+      name: `${welcome.title}${NOTE_EXTENSION}`,
+      text: welcome.text,
+      newNodeId: WELCOME_NOTE_NODE_ID,
+      newFolder: { id: WELCOME_VAULT_NODE_ID, name: options.vaultName },
+    }).catch(() => undefined) as WriteResult;
+    if (!result?.ok || !result.node) {
+      // Запись не удалась целиком (ни папки, ни заметки) — попробуем при следующем изменении облака
+      isWelcomeSettled = false;
+      return;
+    }
+    texts.set(result.node, { fileId: result.fileId!, text: welcome.text });
+    setWelcomeNoteId(result.node);
+    // Дерево с новой папкой — до того, как продолжатся правки, ждавшие эту проверку
+    await refreshCloud();
+  })().catch(() => undefined).finally(() => {
+    welcomeRun = undefined;
+  });
+}
+
+/** Раздел показал первую заметку — больше её открывать не нужно. */
+export function consumeWelcomeNote() {
+  setWelcomeNoteId(undefined);
 }
 
 function queueSync() {
@@ -149,8 +221,15 @@ function queueSync() {
   return syncQueue;
 }
 
-/** Открыть хранилище: дерево облака → тексты заметок; дальше следует за изменениями облака. */
-export function loadNotes(userId?: string) {
+/** Открыть хранилище: дерево облака → тексты заметок; дальше следует за изменениями облака.
+ * `options` — язык и название папки для первой заметки нового хранилища. */
+export function loadNotes(userId?: string, options?: NotesOptions) {
+  if (notesUserId !== userId) {
+    notesUserId = userId;
+    isWelcomeSettled = false;
+    setWelcomeNoteId(undefined);
+  }
+  welcomeOptions = options || welcomeOptions;
   void loadCloud(userId);
   if (!isListening) {
     isListening = true;
@@ -176,6 +255,8 @@ function notify(code: NotesNotice['code'], title: string) {
 }
 
 async function ensureFolder(name: string, parent?: string): Promise<string | undefined> {
+  // Папку хранилища может прямо сейчас создавать первая заметка — второй такой же папки не нужно
+  await welcomeRun;
   const rootId = rootIdOf();
   const names = parent ? [name] : VAULT_NAMES;
   const find = () => getNodes(rootId).find((node) => (
