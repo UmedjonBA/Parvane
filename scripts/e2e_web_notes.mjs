@@ -321,8 +321,18 @@ try {
   const gnode = (title) => graph.locator(`[data-node][data-title="${title}"]`);
   const gedge = (from, to) => graph.locator(`[data-graph-edge][data-from-title="${from}"][data-to-title="${to}"]`);
   // Точка — её кружок: подпись под ним нажатий не принимает
+  // Граф после открытия вкладки и смены ширины вписывается заново: место точки берётся, когда оно устоялось
   const centreOf = async (title) => {
-    const box = await gnode(title).locator('circle').first().boundingBox();
+    const circle = gnode(title).locator('circle').first();
+    await circle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    let box = await circle.boundingBox();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.waitForTimeout(150);
+      const next = await circle.boundingBox();
+      const isStill = box && next && Math.abs(next.x - box.x) < 0.5 && Math.abs(next.y - box.y) < 0.5;
+      box = next;
+      if (isStill) break;
+    }
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   };
   const clickNode = async (title) => {
