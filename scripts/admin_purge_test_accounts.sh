@@ -143,7 +143,9 @@ G_PROLOGUE="$TEMP CREATE TEMP TABLE g AS $GROUPS_V2;"
 FILE_IDS="$(printf "%s\nSELECT quote(id) FROM files WHERE owner IN (SELECT u FROM t);\n" "$TEMP" | sql cloud cloud.db | paste -sd, -)"
 run messenger messenger.db-v2.db "$G_PROLOGUE" "${MESSENGER_V2[@]}"
 run messenger messenger.db "$TEMP" "${MESSENGER_V1[@]}"
-run cloud cloud.db-v2.db "" "blob_caps|file_id IN (${FILE_IDS:-''})"
+# Ссылки облака (spec 022): их копии — файлы аккаунта в cloud.db, уйдут вместе с остальными
+run cloud cloud.db-v2.db "$TEMP" "blob_caps|file_id IN (${FILE_IDS:-''})" \
+  "link_blobs|link_key IN (SELECT key FROM links WHERE owner IN (SELECT u FROM t))" "links|owner IN (SELECT u FROM t)"
 run cloud cloud.db "$TEMP" "${CLOUD_V1[@]}"
 run push push.db "$TEMP" "${PUSH_V1[@]}"
 run push push.db-v2.db "$TEMP" "${PUSH_V2[@]}"

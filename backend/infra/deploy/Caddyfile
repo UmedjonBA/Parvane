@@ -61,6 +61,13 @@
 	@v2invite path_regexp v2invite ^/join/([A-Za-z0-9_-]{43})$
 	redir @v2invite /?join={re.v2invite.1} 302
 
+	# Ссылка на файлы облака для людей без аккаунта `/s/<link_id>#k=<ключ>`
+	# (spec 022): публичная страница — отдельный вход сборки `s.html`.
+	# Идентификатор — ровно 22 знака base64url, иное сюда не попадает; ключ во
+	# фрагменте браузер переносит сам, серверу он не уходит.
+	@cloudlink path_regexp cloudlink ^/s/([A-Za-z0-9_-]{22})$
+	redir @cloudlink /s.html?id={re.cloudlink.1} 302
+
 	handle {
 		root * /srv/dist
 		encode gzip

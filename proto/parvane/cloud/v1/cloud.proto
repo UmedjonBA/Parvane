@@ -92,6 +92,94 @@ service BlobService {
   }
 }
 
+// Ссылка на файлы облака для людей без аккаунта (spec 022). Ссылка — снимок:
+// копии блобов владельца (bucket DRIVE, в его квоте) и зашифрованный ключом
+// ссылки список. Ключ ссылки серверу не передаётся (он во фрагменте адреса).
+// Копии читаются только через `cloud.link.download`: методам `cloud.blob.*`
+// они не видны. Срок и состояние проверяются при каждом чтении.
+service LinkService {
+  // Новая ссылка в состоянии «готовится»; идентификатор выдаёт сервер.
+  rpc LinkCreate(LinkCreateRequest) returns (LinkCreateResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.create"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Копия блоба в готовящуюся ссылку (повтор с тем же источником — прежняя копия).
+  rpc LinkAdd(LinkAddRequest) returns (LinkAddResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.add"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Список и запись владельца; ссылка начинает действовать, срок идёт отсюда.
+  rpc LinkPublish(LinkPublishRequest) returns (LinkPublishResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.publish"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Все ссылки вызывающего (готовящиеся, действующие, истёкшие).
+  rpc LinkList(LinkListRequest) returns (LinkListResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.list"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Отзыв: ссылка и её копии удаляются сразу, место возвращается.
+  rpc LinkRevoke(LinkRevokeRequest) returns (LinkRevokeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.revoke"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Новый срок действующей либо истёкшей (в пределах срока льготы) ссылки.
+  rpc LinkExtend(LinkExtendRequest) returns (LinkExtendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.extend"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Список ссылки — анонимно, по идентификатору.
+  rpc LinkGet(LinkGetRequest) returns (LinkGetResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.get"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_CALL
+      shard: "cloud"
+    };
+  }
+  // Копия из действующей ссылки — анонимно, окнами (как download_cap).
+  rpc LinkDownload(LinkDownloadRequest) returns (LinkDownloadResponse) {
+    option (parvane.core.v2.method) = {
+      name: "cloud.link.download"
+      channel: METHOD_CHANNEL_ANON
+      rate: RATE_CLASS_ANON
+      kind: METHOD_KIND_STREAM
+      shard: "cloud"
+    };
+  }
+}
+
 // К какому пределу и квоте относится блоб.
 enum BlobBucket {
   // Не задан = медиа чатов, аватары, служебные блобы.
@@ -173,6 +261,8 @@ message BucketUsage {
 }
 message UsageResponse {
   repeated BucketUsage buckets = 1 [(parvane.core.v2.max_items) = 4];
+  // Байты копий всех ссылок вызывающего (spec 022); входят в used bucket'а DRIVE.
+  uint64 links_bytes = 2;
 }
 
 message UploadStatusRequest {
@@ -196,6 +286,102 @@ message CopyResponse {
   string file_id = 1 [(parvane.core.v2.max_len) = 64];
   uint64 size = 2;
   uint32 chunks = 3;
+}
+
+// ── ссылки облака (spec 022) ─────────────────────────────────────────────────
+// link_id — 16 случайных байт, base64url без `=` (22 знака). Времена — unix-
+// секунды; expires_at = 0 — без срока. ttl_days — 0 (без срока), 1, 7 или 30.
+
+enum LinkState {
+  LINK_STATE_UNSPECIFIED = 0;
+  // Создана, копии собираются; получателю не видна.
+  LINK_STATE_PREPARING = 1;
+  LINK_STATE_ACTIVE = 2;
+  // Срок вышел, копии ещё не удалены: можно продлить.
+  LINK_STATE_EXPIRED = 3;
+}
+
+message LinkCreateRequest {
+  uint32 ttl_days = 1;
+}
+message LinkCreateResponse {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+
+message LinkAddRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+  // Источник копии.
+  string file_id = 2 [(parvane.core.v2.max_len) = 64];
+  // Секрет доступа к источнику; пусто — источник принадлежит вызывающему.
+  bytes capability = 3 [(parvane.core.v2.max_len) = 32];
+}
+// Блоб-копия: её file_id идёт в список ссылки.
+message LinkAddResponse {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  uint64 size = 2;
+  uint32 chunks = 3;
+}
+
+message LinkPublishRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+  // Шифртекст списка (ключ ссылки).
+  bytes manifest = 2 [(parvane.core.v2.max_len) = 1048576];
+  // Шифртекст записи владельца (ключ личного диска): название и ключ ссылки.
+  bytes owner_record = 3 [(parvane.core.v2.max_len) = 4096];
+}
+message LinkPublishResponse {
+  uint64 expires_at = 1;
+}
+
+message LinkListRequest {}
+message LinkInfo {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+  LinkState state = 2;
+  uint64 created_at = 3;
+  uint64 expires_at = 4;
+  // Байты копий ссылки (шифртекст).
+  uint64 bytes = 5;
+  uint32 files = 6;
+  bytes owner_record = 7 [(parvane.core.v2.max_len) = 4096];
+}
+message LinkListResponse {
+  repeated LinkInfo links = 1 [(parvane.core.v2.max_items) = 256];
+}
+
+message LinkRevokeRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message LinkRevokeResponse {}
+
+message LinkExtendRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+  uint32 ttl_days = 2;
+}
+message LinkExtendResponse {
+  uint64 expires_at = 1;
+}
+
+message LinkGetRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+}
+message LinkGetResponse {
+  // Пусто у истёкшей ссылки.
+  bytes manifest = 1 [(parvane.core.v2.max_len) = 1048576];
+  uint64 expires_at = 2;
+  bool expired = 3;
+}
+
+message LinkDownloadRequest {
+  string link_id = 1 [(parvane.core.v2.max_len) = 32];
+  // Копия из списка ссылки.
+  string file_id = 2 [(parvane.core.v2.max_len) = 64];
+  uint32 first_chunk = 3;
+  // ≤ 256.
+  uint32 chunk_count = 4;
+}
+message LinkDownloadResponse {
+  uint64 size = 1;
+  uint32 chunks = 2;
 }
 
 // ── облако как домен каркаса (spec 016) ─────────────────────────────────────

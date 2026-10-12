@@ -56,9 +56,17 @@ async fn main() -> Result<()> {
         .await
         .context("миграции v2")?;
     info!("SQLite v2 готов: {}", v2_path);
-    v2::run(nc.clone(), std::sync::Arc::new(v2::V2Ctx { pool: pool.clone(), pool_v2 })).await?;
+    let v2_ctx = std::sync::Arc::new(v2::V2Ctx::new(pool.clone(), pool_v2));
+    // spec 022: копии ссылок, чьё копирование оборвала остановка шарда, и
+    // всё, что положено убрать сборщику, — до приёма запросов.
+    match v2::links::recover(&v2_ctx).await {
+        Ok(n) if n > 0 => info!("очищено ссылок облака при старте: {}", n),
+        Err(e) => warn!("очистка ссылок облака при старте не удалась: {:#}", e),
+        _ => {}
+    }
+    v2::run(nc.clone(), v2_ctx.clone()).await?;
 
-    info!("Cloud шард запущен (протокол v2: cloud.blob.*)");
+    info!("Cloud шард запущен (протокол v2: cloud.blob.*, cloud.link.*)");
 
     // P-08: чистим брошенные незавершённые аплоады при старте и раз в час.
     match purge_stale_uploads(&pool).await {
@@ -76,6 +84,12 @@ async fn main() -> Result<()> {
                 match purge_stale_uploads(&pool_gc).await {
                     Ok(n) if n > 0 => info!("GC: очищено брошенных аплоадов: {}", n),
                     Err(e) => warn!("GC аплоадов не удался: {}", e),
+                    _ => {}
+                }
+                // spec 022: брошенные готовящиеся ссылки и истёкшие дольше срока льготы.
+                match v2::links::purge(&v2_ctx).await {
+                    Ok(n) if n > 0 => info!("GC: удалено ссылок облака: {}", n),
+                    Err(e) => warn!("GC ссылок облака не удался: {:#}", e),
                     _ => {}
                 }
                 release_free_pages(&pool_gc).await;
@@ -663,6 +677,23 @@ pub(crate) async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -
         .await?;
     tx.commit().await?;
     Ok(true)
+}
+
+/// Удалить блоб по id без проверки владельца — готовый файл либо незавершённую
+/// загрузку, со всеми чанками. Только для внутренних путей: откат серверной
+/// копии и копии ссылок облака (spec 022), где право уже проверено.
+pub(crate) async fn delete_blob_any(pool: &SqlitePool, file_id: &str) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    for sql in [
+        "DELETE FROM files WHERE id = ?",
+        "DELETE FROM uploads WHERE file_id = ?",
+        "DELETE FROM chunks WHERE file_id = ?",
+        "DELETE FROM file_grants WHERE file_id = ?",
+    ] {
+        sqlx::query(sql).bind(file_id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 pub(crate) fn now_unix() -> i64 {
