@@ -18,6 +18,7 @@ export const CLOUD_TRASH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 // Текстовый файл крупнее в просмотре не открывается (его можно скачать)
 export const CLOUD_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SERVICE_PREFIX = '.parvane-';
 const TYPE_LABEL_MAX_LENGTH = 8;
 // eslint-disable-next-line no-control-regex
 const BAD_NAME_CHARS = /[/\\\u0000-\u001f\u007f]/;
@@ -73,6 +74,17 @@ export function freeName(taken: Iterable<string>, name: string) {
 /** Содержимое папки (`parent` не задан — корень); корзина — отдельно. */
 export function childrenOf(nodes: CloudNode[], parent?: string) {
   return nodes.filter((n) => !n.trashed && (n.parent || undefined) === parent);
+}
+
+/** Служебный файл Parvane (отметка справки в хранилище заметок и подобные): имя начинается с `.parvane-`.
+ * В списках, поиске и счётчиках «Файлов» не показывается; в корзине, квоте и занятых именах он обычный узел. */
+export function isServiceNode(node: Pick<CloudNode, 'kind' | 'name'>) {
+  return node.kind === 'file' && node.name.toLowerCase().startsWith(SERVICE_PREFIX);
+}
+
+/** Узлы для показа: без служебных файлов. */
+export function listedNodes(nodes: CloudNode[]) {
+  return nodes.some(isServiceNode) ? nodes.filter((node) => !isServiceNode(node)) : nodes;
 }
 
 /** Имена, занятые в папке (для подбора свободного). */

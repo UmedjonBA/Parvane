@@ -3,7 +3,7 @@ import { memo, useMemo, useState } from '../../../lib/teact/teact';
 import type { CloudNode } from '../cloud/cloudModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { childrenOf, sortNodes } from '../cloud/cloudModel';
+import { childrenOf, listedNodes, sortNodes } from '../cloud/cloudModel';
 import { drivePathOf, formatCardSize } from './notesCanvasFiles';
 
 import useLang from '../../../hooks/useLang';
@@ -33,7 +33,7 @@ const CanvasFilePicker = ({
   const [folderId, setFolderId] = useState<string>();
   const folder = folderId ? nodes.find(({ id }) => id === folderId && !trashedIn(nodes, id)) : undefined;
   // Папки идут первыми, корзина в список не попадает
-  const rows = useMemo(() => sortNodes(childrenOf(nodes, folder?.id), BY_NAME), [nodes, folder]);
+  const rows = useMemo(() => sortNodes(childrenOf(listedNodes(nodes), folder?.id), BY_NAME), [nodes, folder]);
 
   const handleUp = useLastCallback(() => setFolderId(folder?.parent));
 

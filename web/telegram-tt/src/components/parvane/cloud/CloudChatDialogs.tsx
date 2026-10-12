@@ -11,7 +11,7 @@ import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { callApi } from '../../../api/gramjs';
 import { closeCloudBridge, getCloudBridgeRequest } from './cloudBridge';
-import { childrenOf, pathOf, sortNodes } from './cloudModel';
+import { childrenOf, listedNodes, pathOf, sortNodes } from './cloudModel';
 import {
   getCloudData, getNodes, loadCloud, refreshCloud, refreshCloudUsage,
 } from './cloudStore';
@@ -60,7 +60,7 @@ const CloudChatDialogs = () => {
   const rootId = data?.rootId;
   const nodes = getNodes(rootId, data);
   const path = useMemo(() => pathOf(nodes, folder), [nodes, folder]);
-  const children = useMemo(() => sortNodes(childrenOf(nodes, folder), NAME_SORT), [nodes, folder]);
+  const children = useMemo(() => sortNodes(childrenOf(listedNodes(nodes), folder), NAME_SORT), [nodes, folder]);
 
   const notify = (result: CloudResult | undefined, doneKey: 'ParvaneCloudSavedToCloud' | 'ParvaneCloudSentToChat') => {
     showNotification({ message: lang(result?.ok ? doneKey : CLOUD_ERROR_KEYS[result?.error || 'rejected']) });
