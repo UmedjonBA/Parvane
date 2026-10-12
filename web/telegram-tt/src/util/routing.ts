@@ -187,3 +187,12 @@ export function clearWebTokenAuth() {
 export function getInitialLocationHash() {
   return initialLocationHash;
 }
+
+// Parvane: закрытый чат остаётся в истории браузера «закрытой» записью, и адрес хранит его номер — после
+// обновления страницы чат открывался снова. Адрес чистится, когда чата на экране уже нет
+const CHAT_HASH_REGEX = /^#-?\d+(_|$)/;
+
+export function dropChatLocationHash() {
+  if (!CHAT_HASH_REGEX.test(window.location.hash)) return;
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+}

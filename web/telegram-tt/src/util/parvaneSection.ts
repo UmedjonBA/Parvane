@@ -5,7 +5,20 @@ import { createSignal } from './signals';
 // только решает, что показано справа от панели
 export type ParvaneSection = 'messenger' | 'planner' | 'cloud';
 
-const [getParvaneSection, setSignal] = createSignal<ParvaneSection>('messenger');
+// Раздел переживает обновление страницы в этой вкладке; новая вкладка открывается на чатах
+const SECTION_KEY = 'parvane:section';
+const SECTIONS: ParvaneSection[] = ['messenger', 'planner', 'cloud'];
+
+function readSection(): ParvaneSection {
+  try {
+    const saved = sessionStorage.getItem(SECTION_KEY) as ParvaneSection | null;
+    return saved && SECTIONS.includes(saved) ? saved : 'messenger';
+  } catch {
+    return 'messenger';
+  }
+}
+
+const [getParvaneSection, setSignal] = createSignal<ParvaneSection>(readSection());
 // Запрос «новая запись» из нижней панели телефона: «План» открывает форму и сбрасывает запрос
 const [getPlannerAddRequest, setPlannerAddRequest] = createSignal(false);
 
@@ -79,6 +92,11 @@ export function openPlannerCalendar() {
 export function setParvaneSection(section: ParvaneSection) {
   if (getParvaneSection() === section) return;
   setSignal(section);
+  try {
+    sessionStorage.setItem(SECTION_KEY, section);
+  } catch {
+    // Раздел просто не запомнится
+  }
 }
 
 export function requestPlannerAdd() {

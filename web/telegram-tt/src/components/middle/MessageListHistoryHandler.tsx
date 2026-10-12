@@ -1,12 +1,14 @@
-import { memo } from '../../lib/teact/teact';
+import { memo, useEffect } from '../../lib/teact/teact';
 import { getActions, withGlobal } from '../../global';
 
 import type { MessageList as GlobalMessageList } from '../../types';
 
 import { selectTabState } from '../../global/selectors';
-import { createLocationHash } from '../../util/routing';
+import { createLocationHash, dropChatLocationHash } from '../../util/routing';
 
 import useHistoryBack from '../../hooks/useHistoryBack';
+
+const HASH_SETTLE_MS = 700;
 
 type StateProps = {
   messageLists?: GlobalMessageList[];
@@ -16,6 +18,15 @@ type StateProps = {
 // so we need a separate component just for handling history
 const MessageListHistoryHandler = ({ messageLists }: StateProps) => {
   const { openChat } = getActions();
+
+  // Parvane: чатов на экране нет — номер последнего чата из адреса убирается (с задержкой: очередь
+  // истории браузера отрабатывает не сразу, а чат мог закрыться ради открытия другого)
+  const hasChats = Boolean(messageLists?.length);
+  useEffect(() => {
+    if (hasChats) return undefined;
+    const timeout = window.setTimeout(dropChatLocationHash, HASH_SETTLE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [hasChats]);
 
   const closeChat = () => {
     openChat({ id: undefined }, { forceSyncOnIOs: true });

@@ -30,6 +30,7 @@ import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import { isUserId } from '../../util/entities/ids';
+import { dropChatLocationHash } from '../../util/routing';
 
 import useAppLayout from '../../hooks/useAppLayout';
 import useCurrentOrPrev from '../../hooks/useCurrentOrPrev';
@@ -259,7 +260,7 @@ const RightHeader: FC<OwnProps & StateProps> = ({
       openChat({ id: undefined });
       // Запись экрана правки встаёт на место записи закрытого чата и наследует его адрес — после
       // перезагрузки снова открылось бы «Избранное». Адрес чистим, когда очередь истории отработала
-      window.setTimeout(dropChatHash, HISTORY_SETTLE_MS);
+      window.setTimeout(dropChatLocationHash, HISTORY_SETTLE_MS);
     }
     openSettingsScreen({ screen: SettingsScreens.EditProfile });
   });
@@ -796,8 +797,3 @@ export default withGlobal<OwnProps>(
     };
   },
 )(RightHeader);
-
-function dropChatHash() {
-  if (!window.location.hash) return;
-  window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
-}
