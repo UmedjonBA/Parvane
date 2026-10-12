@@ -21,8 +21,11 @@ import {
   ACCOUNT_SLOT, getAccountsInfo, getAccountSlotUrl, getFirstLoggedInAccountSlot,
 } from '../../../util/multiaccount';
 import { unsubscribe } from '../../../util/notifications';
+import { setParvaneSection } from '../../../util/parvaneSection';
 import { clearEncryptedSession, encryptSession, forgetPasscode } from '../../../util/passcode';
-import { parseInitialLocationHash, resetInitialLocationHash, resetLocationHash } from '../../../util/routing';
+import {
+  dropChatLocationHash, parseInitialLocationHash, resetInitialLocationHash, resetLocationHash,
+} from '../../../util/routing';
 import { pause } from '../../../util/schedulers';
 import {
   clearStoredSession,
@@ -224,6 +227,10 @@ addActionHandler('saveSession', (global, actions, payload): ActionReturnType => 
 });
 
 addActionHandler('signOut', async (global, actions, payload): Promise<void> => {
+  // Parvane: после выхода следующий вход открывается на чатах, без раздела и чата прошлого сеанса
+  setParvaneSection('messenger');
+  dropChatLocationHash();
+
   if ('hangUp' in actions) actions.hangUp({ tabId: getCurrentTabId() });
   if ('leaveGroupCall' in actions) actions.leaveGroupCall({ tabId: getCurrentTabId() });
 
