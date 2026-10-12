@@ -58,6 +58,17 @@ try {
   // Строка нужной группы с этим названием — выбранная либо первая в группе
   const found = (groupName, title) => group(groupName).locator('[data-palette-item]').filter({ hasText: title });
   const selectedKey = () => selected.getAttribute('data-palette-item');
+  // Выбор меняется перерисовкой после нажатия — ждём, а не читаем сразу
+  const selectedIs = async (expected, message) => {
+    const deadline = Date.now() + 3000;
+    let actual;
+    while (Date.now() < deadline) {
+      actual = await selectedKey().catch(() => undefined);
+      if (expected instanceof RegExp ? expected.test(actual || '') : actual === expected) return;
+      await page.waitForTimeout(100);
+    }
+    assert.fail(`${message}: ${actual}`);
+  };
 
   // ── Данные: заметка, задача и событие ─────────────────────────────────────
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
@@ -100,7 +111,7 @@ try {
   await visible(group('command'), 'группа команд');
   assert.equal(await items.count(), COMMANDS, 'пустой запрос показывает не только команды');
   assert.equal(await group('note').count(), 0, 'пустой запрос показывает заметки');
-  assert.equal(await selectedKey(), 'nav:chats', 'первая строка не выбрана');
+  await selectedIs('nav:chats', 'первая строка не выбрана');
   assert.equal(await input.getAttribute('type'), 'search', 'поле палитры — не поле поиска');
   assert.equal(await input.getAttribute('autocomplete'), 'off', 'у поля палитры включено автозаполнение');
   assert.equal(await page.locator('form[role="search"] #parvane-palette-search').count(), 1, 'поле палитры вне формы поиска');
@@ -114,15 +125,17 @@ try {
   // ── Кнопка «Поиск» боковой панели; команда-переход; стрелки ───────────────
   await sidebar.getByRole('button', { name: 'Search' }).click();
   await visible(input, 'палитра по кнопке боковой панели');
+  // Перехват стрелок ставится эффектом после открытия окна
+  await page.waitForTimeout(300);
   await page.keyboard.press('ArrowDown');
-  assert.equal(await selectedKey(), 'nav:today', 'стрелка вниз не выбрала вторую строку');
+  await selectedIs('nav:today', 'стрелка вниз не выбрала вторую строку');
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
-  assert.equal(await selectedKey(), 'settings', 'стрелка вверх с первой строки не ушла на последнюю');
+  await selectedIs('settings', 'стрелка вверх с первой строки не ушла на последнюю');
   await input.fill('HEAL');
   await visible(found('command', 'Health'), 'команда «Здоровье» по запросу без учёта регистра');
   // В заметках справки слово тоже встречается: команды стоят первой группой, выбрана команда
-  assert.equal(await selectedKey(), 'nav:health', 'по запросу выбрана не команда «Здоровье»');
+  await selectedIs('nav:health', 'по запросу выбрана не команда «Здоровье»');
   await page.keyboard.press('Enter');
   await hidden(input, 'Enter не закрыл палитру');
   await visible(planner.locator('[data-health="activity"]'), 'экран «Здоровье» по команде');
@@ -132,7 +145,7 @@ try {
   await openByKeys();
   await input.fill('сервер x9');
   await visible(found('note', NOTE), 'заметка по названию');
-  assert.match(await selectedKey(), /^note:/, 'найденная заметка не выбрана');
+  await selectedIs(/^note:/, 'найденная заметка не выбрана');
   await page.keyboard.press('Enter');
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка, открытая из палитры');
   await openByKeys();

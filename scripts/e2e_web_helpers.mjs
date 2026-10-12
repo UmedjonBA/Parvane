@@ -100,6 +100,9 @@ export async function openMyProfile(page) {
 // («My Profile») и карандаш в шапке открывшегося профиля. На широком экране профиль остаётся открытым справа
 export async function openEditProfile(page) {
   await openMyProfile(page);
+  // Свой профиль, а не сведения «Избранного»: у тех карандаш правит контакт
+  await page.locator('#RightColumn .RightHeader .title').getByText('My Profile', { exact: true })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit', exact: true }).click();
   await page.locator('#Settings').getByLabel('First name (required)')
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

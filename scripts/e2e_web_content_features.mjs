@@ -168,7 +168,7 @@ try {
   const chips = aliceSession.page.locator('#LeftColumn [role="tab"]');
   const folderChip = chips.filter({ hasText: folderName });
   // Списки папок живут соседними слайдами — строка берётся из показанного
-  const bobRow = aliceSession.page.locator('#LeftColumn .Transition_slide-active > .chat-list .Chat')
+  const bobRow = aliceSession.page.locator('#LeftColumn .chat-list .ListItem.Chat >> visible=true')
     .filter({ hasText: bobName }).first();
   const folderTag = bobRow.locator('[data-folder-tag]');
   await folderTag.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

@@ -114,16 +114,3 @@
 
   background: var(--pv-blue);
 }
-
-// Знак — два мотылька буквой P; красится акцентом схемы через маску
-.logoMark {
-  display: block;
-
-  width: 2rem;
-  height: 2rem;
-  margin: 0 auto 0.125rem;
-
-  background-color: currentColor;
-
-  mask: url("../../assets/parvane/logo-mark.svg") center / contain no-repeat;
-}
