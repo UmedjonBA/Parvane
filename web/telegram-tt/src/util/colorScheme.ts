@@ -34,6 +34,21 @@ type Palette = {
 
 type SchemeColors = Record<string, [light: string, dark: string]>;
 
+// Тона прототипа для своих разделов («План», «Знания»): яркий акцент с тёмным текстом на нём и цвета
+// видов записей. Отдаются переменными `--pv-*`; у мессенджера свой акцент (`--color-primary`) — на нём
+// текст белый, поэтому он темнее
+type Tones = {
+  accent: string;
+  accentInk: string;
+  blue: string;
+  purple: string;
+  orange: string;
+  aqua: string;
+  green: string;
+  red: string;
+  yellow: string;
+};
+
 const STORAGE_KEY = 'parvane:color-scheme';
 const FLAT_BACKGROUND_CLASS = 'color-scheme-flat';
 const LIGHT = 0;
@@ -158,6 +173,114 @@ const PALETTES: Record<Exclude<ColorScheme, 'telegram'>, [light: Palette, dark: 
   }],
 };
 
+const TONES: Record<ColorScheme, [light: Tones, dark: Tones]> = {
+  gruvbox: [{
+    accent: '#b57614',
+    accentInk: '#fbf1c7',
+    blue: '#076678',
+    purple: '#8f3f71',
+    orange: '#af3a03',
+    aqua: '#427b58',
+    green: '#79740e',
+    red: '#9d0006',
+    yellow: '#b57614',
+  }, {
+    accent: '#fabd2f',
+    accentInk: '#1d2021',
+    blue: '#83a598',
+    purple: '#d3869b',
+    orange: '#fe8019',
+    aqua: '#8ec07c',
+    green: '#b8bb26',
+    red: '#fb4934',
+    yellow: '#fabd2f',
+  }],
+  telegram: [{
+    accent: '#3390ec',
+    accentInk: '#ffffff',
+    blue: '#3390ec',
+    purple: '#8b5a96',
+    orange: '#d9730d',
+    aqua: '#2f7772',
+    green: '#44774a',
+    red: '#e53935',
+    yellow: '#b8860b',
+  }, {
+    accent: '#8774e1',
+    accentInk: '#ffffff',
+    blue: '#6ab3f3',
+    purple: '#cb86db',
+    orange: '#f5a25d',
+    aqua: '#6ff9f0',
+    green: '#8eee98',
+    red: '#fb6f5f',
+    yellow: '#ffd67e',
+  }],
+  nord: [{
+    accent: '#5e81ac',
+    accentInk: '#eceff4',
+    blue: '#5e81ac',
+    purple: '#8f6a8a',
+    orange: '#b8654f',
+    aqua: '#5f9ea0',
+    green: '#6f8f5a',
+    red: '#bf616a',
+    yellow: '#a8842c',
+  }, {
+    accent: '#88c0d0',
+    accentInk: '#2e3440',
+    blue: '#81a1c1',
+    purple: '#b48ead',
+    orange: '#d08770',
+    aqua: '#8fbcbb',
+    green: '#a3be8c',
+    red: '#bf616a',
+    yellow: '#ebcb8b',
+  }],
+  catppuccin: [{
+    accent: '#8839ef',
+    accentInk: '#eff1f5',
+    blue: '#1e66f5',
+    purple: '#8839ef',
+    orange: '#fe640b',
+    aqua: '#179299',
+    green: '#40a02b',
+    red: '#d20f39',
+    yellow: '#df8e1d',
+  }, {
+    accent: '#cba6f7',
+    accentInk: '#1e1e2e',
+    blue: '#89b4fa',
+    purple: '#cba6f7',
+    orange: '#fab387',
+    aqua: '#94e2d5',
+    green: '#a6e3a1',
+    red: '#f38ba8',
+    yellow: '#f9e2af',
+  }],
+  solarized: [{
+    accent: '#268bd2',
+    accentInk: '#fdf6e3',
+    blue: '#268bd2',
+    purple: '#6c71c4',
+    orange: '#cb4b16',
+    aqua: '#2aa198',
+    green: '#859900',
+    red: '#dc322f',
+    yellow: '#b58900',
+  }, {
+    accent: '#2aa198',
+    accentInk: '#002b36',
+    blue: '#268bd2',
+    purple: '#6c71c4',
+    orange: '#cb4b16',
+    aqua: '#2aa198',
+    green: '#859900',
+    red: '#dc322f',
+    yellow: '#b58900',
+  }],
+};
+
 const [getColorScheme, setColorSchemeSignal] = createSignal<ColorScheme>(readStoredColorScheme());
 
 export { getColorScheme };
@@ -279,4 +402,40 @@ export function getSchemeSwatches(scheme: ColorScheme, theme: ThemeKey) {
   }
   const palette = PALETTES[scheme][theme === 'dark' ? DARK : LIGHT];
   return [palette.bg, palette.panel, palette.accent, palette.text];
+}
+
+/** Переменные `--pv-*` для своих разделов: акцент прототипа, цвета видов записей и нейтральные тона.
+ * У «Telegram» нейтральные тона берутся из переменных мессенджера. */
+export function buildSchemeTokens(scheme: ColorScheme, theme: ThemeKey): Record<string, string> {
+  const index = theme === 'dark' ? DARK : LIGHT;
+  const tones = TONES[scheme][index];
+  const palette = scheme === 'telegram' ? undefined : PALETTES[scheme][index];
+  return {
+    '--pv-accent': tones.accent,
+    '--pv-accent-ink': tones.accentInk,
+    '--pv-blue': tones.blue,
+    '--pv-purple': tones.purple,
+    '--pv-orange': tones.orange,
+    '--pv-aqua': tones.aqua,
+    '--pv-green': tones.green,
+    '--pv-red': tones.red,
+    '--pv-yellow': tones.yellow,
+    // Виды записей, как в прототипе
+    '--pv-event': tones.blue,
+    '--pv-task': tones.purple,
+    '--pv-food': tones.orange,
+    '--pv-sleep': tones.aqua,
+    '--pv-workout': tones.green,
+    '--pv-note': tones.yellow,
+    '--pv-metric': tones.red,
+    '--pv-bg': palette?.bg || 'var(--color-background-secondary)',
+    '--pv-panel': palette?.panel || 'var(--color-background)',
+    '--pv-raised': palette?.raised || 'var(--color-background-secondary-accent)',
+    '--pv-hover': palette?.hover || 'var(--color-chat-hover)',
+    '--pv-line': palette?.line || 'var(--color-borders)',
+    '--pv-line2': palette?.lineStrong || 'var(--color-borders-input)',
+    '--pv-fg': palette?.text || 'var(--color-text)',
+    '--pv-muted': palette?.muted || 'var(--color-text-secondary)',
+    '--pv-faint': palette?.faint || 'var(--color-gray)',
+  };
 }

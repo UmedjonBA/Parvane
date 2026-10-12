@@ -7,7 +7,9 @@ import { requestMutation } from '../lib/fasterdom/fasterdom';
 import themeColors from '../styles/themes.json';
 import { animate } from './animation';
 import { convertSrgbChannel } from './colors.ts';
-import { buildSchemeColors, getSchemeChatColors, readStoredColorScheme, storeColorScheme } from './colorScheme';
+import {
+  buildSchemeColors, buildSchemeTokens, getSchemeChatColors, readStoredColorScheme, storeColorScheme,
+} from './colorScheme';
 
 let isInitialized = false;
 
@@ -39,6 +41,13 @@ function buildColors(scheme: ColorScheme) {
 let currentScheme = readStoredColorScheme();
 let colors = buildColors(currentScheme);
 
+// Тона своих разделов (`--pv-*`) — без плавного перехода, одной записью
+function applySchemeTokens(isDarkTheme: boolean) {
+  Object.entries(buildSchemeTokens(currentScheme, isDarkTheme ? 'dark' : 'light')).forEach(([property, value]) => {
+    document.documentElement.style.setProperty(property, value);
+  });
+}
+
 function getThemeColor(isDarkTheme: boolean) {
   return getSchemeChatColors(currentScheme, isDarkTheme ? 'dark' : 'light')?.panel
     || (isDarkTheme ? '#212121' : '#fff');
@@ -53,6 +62,7 @@ export function applyColorScheme(scheme: ColorScheme) {
   const index = isDarkTheme ? 1 : 0;
   requestMutation(() => {
     applyColorAnimationStep(index, index);
+    applySchemeTokens(isDarkTheme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getThemeColor(isDarkTheme));
   });
 }
@@ -86,6 +96,7 @@ const switchTheme = (theme: ThemeKey, withAnimation: boolean) => {
       document.documentElement.classList.add('no-animations');
     }
     document.documentElement.classList.add(themeClassName);
+    applySchemeTokens(isDarkTheme);
     if (themeColorTag) {
       themeColorTag.setAttribute('content', getThemeColor(isDarkTheme));
     }

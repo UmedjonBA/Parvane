@@ -2,11 +2,25 @@ import Color from 'colorjs.io';
 import { describe, expect, it } from 'vitest';
 
 import themeColors from '../styles/themes.json';
-import { buildSchemeColors, COLOR_SCHEMES, getSchemeChatColors, getSchemeSwatches } from './colorScheme';
+import {
+  buildSchemeColors, buildSchemeTokens, COLOR_SCHEMES, getSchemeChatColors, getSchemeSwatches,
+} from './colorScheme';
 
 const WHITE = new Color('#ffffff');
 
 describe('цветовые схемы', () => {
+  it('тона своих разделов есть у каждой схемы в обеих темах; тёмный текст читается на акценте', () => {
+    COLOR_SCHEMES.forEach((scheme) => {
+      (['light', 'dark'] as const).forEach((theme) => {
+        const tokens = buildSchemeTokens(scheme, theme);
+        expect(Object.keys(tokens).length, scheme).toBeGreaterThan(20);
+        const accent = new Color(tokens['--pv-accent']);
+        const ink = new Color(tokens['--pv-accent-ink']);
+        expect(ink.contrast(accent, 'WCAG21'), `${scheme} ${theme}`).toBeGreaterThan(3);
+      });
+    });
+  });
+
   it('«Telegram» ничего не заменяет', () => {
     expect(buildSchemeColors('telegram')).toEqual({});
     expect(getSchemeChatColors('telegram', 'dark')).toBeUndefined();
