@@ -45,6 +45,10 @@ type MediaDependencies = {
   getStore: () => ParvaneStore;
   getToken: () => string;
   getV2?: () => V2BlobTransport | undefined;
+  // Картинки, которых нет в облаке (стикеры и эмодзи паков, встроенные наборы):
+  // вернуть блоб в кэш (`cacheBlobIfAbsent`), если `fileId` — такой документ.
+  // Для прочих id — сразу `undefined`, без обещания
+  restoreLocalBlob?: (fileId: string) => Promise<void> | undefined;
 };
 
 type CloudUploadOptions = {
@@ -66,8 +70,17 @@ export const MEDIA_INTEGRITY_ERROR = 'MEDIA_INTEGRITY';
 type MediaIntegrityFailure = { error: typeof MEDIA_INTEGRITY_ERROR };
 
 const UPLOAD_CHUNK_BYTES = 192 * 1024;
-// `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId
-const MEDIA_URL_REGEX = /^(?:photo|document|wallpaper)([\w-]+?)(?:\?|$)/;
+// `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId.
+// Двоеточие — часть id стикера пака (`pvpk-<набор>:<файл>`, `stickerPacks.ts`):
+// без него хэш такого стикера не разбирался, полный файл не отдавался вовсе, а
+// миниатюра `?size=m` (ею рисуются плитки панели и окна набора) подменялась
+// серой заглушкой — пак выглядел набором серых квадратов
+const MEDIA_URL_REGEX = /^(?:photo|document|wallpaper)([\w:-]+?)(?:\?|$)/;
+
+// id файла из медиа-хэша tt (`document<id>`, `photo<id>?size=…`, `wallpaper<id>`)
+export function getMediaFileId(url: string) {
+  return url.match(MEDIA_URL_REGEX)?.[1];
+}
 const PROGRESSIVE_MEDIA_FORMAT = 1; // ApiMediaFormat.Progressive
 // Статичная карта геолокации: tt просит `staticMap:<hash>?lat&long&w&h&zoom&scale`
 // (Telegram отдаёт картинку со своего сервера). Мы склеиваем OSM-тайлы,
@@ -91,6 +104,10 @@ const RANGE_FILE_CACHE_LIMIT = 6;
 // кодек не поддержан, таймаут): серый PNG 1×1
 const PLACEHOLDER_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAA'
   + 'AADElEQVR4nGPo6uoCAANAAZ/jRRJXAAAAAElFTkSuQmCC';
+// Прозрачная заглушка 1×1 — «миниатюра» анимированного стикера (tgs/webm):
+// кадра у него нет, а серый квадрат под стикером с прозрачным фоном виден
+const TRANSPARENT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAA'
+  + 'AAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=';
 // Миниатюра видео — кадр самого видео на стороне клиента (spec 002 FR-020)
 const THUMB_MAX_SIDE = 320;
 const THUMB_TIMEOUT_MS = 8000;
@@ -576,7 +593,7 @@ export function createMediaService(deps: MediaDependencies) {
       // Миниатюр на проводе нет. Картинки (стикеры/эмодзи) отдаём тем же
       // блобом, для видео — кадр самого видео; undefined заставлял tt
       // ретраить запрос по кругу
-      const thumbFileId = normalizedUrl.match(MEDIA_URL_REGEX)?.[1];
+      const thumbFileId = getMediaFileId(normalizedUrl);
       if (!thumbFileId) return Promise.resolve(buildThumbPlaceholder());
       if (tamperedFileIds.has(thumbFileId)) return Promise.resolve(buildThumbPlaceholder());
       if (mimeByFileId.get(thumbFileId)?.startsWith('video/')) {
@@ -584,11 +601,15 @@ export function createMediaService(deps: MediaDependencies) {
           ? { dataBlob: blob, mimeType: 'image/jpeg' }
           : buildThumbPlaceholder()));
       }
-      const cachedFull = cacheByFileId.get(thumbFileId);
+      const cachedFull = cacheByFileId.get(thumbFileId) || restoreLocalBlob(thumbFileId);
       if (!cachedFull) return Promise.resolve(buildThumbPlaceholder());
-      return cachedFull.then((result) => (result && result.mimeType.startsWith('image/')
-        ? { dataBlob: result.blob, mimeType: result.mimeType }
-        : buildThumbPlaceholder()));
+      return cachedFull.then((result) => {
+        if (!result) return buildThumbPlaceholder();
+        return result.mimeType.startsWith('image/')
+          ? { dataBlob: result.blob, mimeType: result.mimeType }
+          // Блоб есть, но это не картинка — анимированный стикер или эмодзи
+          : buildThumbPlaceholder(TRANSPARENT_PNG_BASE64);
+      });
     }
     if (normalizedUrl.startsWith('staticMap:')) {
       if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT) return Promise.resolve(undefined);
@@ -605,7 +626,7 @@ export function createMediaService(deps: MediaDependencies) {
     if (mediaFormat === PROGRESSIVE_MEDIA_FORMAT && !cacheByFileId.has(fileId) && keysByFileId.has(fileId)) {
       return downloadRange(fileId, start || 0, end);
     }
-    let cached = cacheByFileId.get(fileId);
+    let cached = cacheByFileId.get(fileId) || restoreLocalBlob(fileId);
     if (!cached) {
       cached = downloadBlob(fileId);
       cacheByFileId.set(fileId, cached);
@@ -628,8 +649,15 @@ export function createMediaService(deps: MediaDependencies) {
     });
   }
 
-  function buildThumbPlaceholder() {
-    const bytes = decodeBase64(PLACEHOLDER_PNG_BASE64);
+  // Блоб локального документа (стикер пака и т. п.), вытесненный из кэша
+  // бюджетом памяти: в облаке такого файла нет, и без возврата плитка осталась
+  // бы заглушкой до перезагрузки вкладки. `undefined` — id не локальный
+  function restoreLocalBlob(fileId: string): Promise<CachedMedia> | undefined {
+    return deps.restoreLocalBlob?.(fileId)?.then(() => cacheByFileId.get(fileId));
+  }
+
+  function buildThumbPlaceholder(pngBase64 = PLACEHOLDER_PNG_BASE64) {
+    const bytes = decodeBase64(pngBase64);
     return { dataBlob: new Blob([bytes], { type: 'image/png' }), mimeType: 'image/png' };
   }
 
@@ -1319,6 +1347,7 @@ export function createMediaService(deps: MediaDependencies) {
     downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),
+    restoreLocalBlob,
     isTampered: (fileId: string) => tamperedFileIds.has(fileId),
     getMediaKeys: (fileId: string) => keysByFileId.get(fileId),
     getCapability: (fileId: string) => capByFileId.get(fileId),

@@ -16,6 +16,9 @@ const PACK_MAX_BYTES = 20 * 1024 * 1024;
 const PACK_MAX_FILES = 200;
 const SET_ID_PREFIX = 'pvpk-';
 const STICKER_SIZE = 512;
+// Разделитель в id стикера пака. Попадает в медиа-хэш `document<id>` — его
+// обязан принимать MEDIA_URL_REGEX (`media.ts`)
+const STICKER_ID_SEPARATOR = ':';
 const DEFAULT_ALT_EMOJI = '🙂';
 const STORAGE = createStore('parvane-stickers', 'packs');
 
@@ -420,8 +423,27 @@ export function resetPackRegistries() {
 
 // ── синтез ApiStickerSet ─────────────────────────────────────────────────────
 
+// ЕДИНСТВЕННОЕ место, где в провайдере собирается ApiSticker (стикер и
+// кастом-эмодзи): сторож `stickerObjects.test.ts` падает, если литерал
+// с `mediaType` стикера появится где-то ещё. Premium в Parvane нет, а tt считает
+// премиальным всё, у чего не выставлен `isFree` (`StickerButton`: звезда в углу
+// плитки, замок и окно Premium по клику; `selectIsSetPremium`: замок на наборе
+// эмодзи; фильтр подсказок эмодзи). Поэтому `isFree` ставится здесь, а
+// `hasEffect` (премиальный эффект поверх стикера) собрать нельзя по типу
+export function buildParvaneSticker(fields: Omit<ApiSticker, 'mediaType' | 'isFree' | 'hasEffect'>): ApiSticker {
+  return { ...fields, mediaType: 'sticker', isFree: true };
+}
+
+// Набор, которому принадлежит стикер пака, по его id (`<setId>:<хэш файла>`).
+// Нужен, чтобы заново достать картинку, вытесненную из кэша медиа
+export function getPackSetIdOfStickerId(stickerId: string) {
+  if (!stickerId.startsWith(SET_ID_PREFIX)) return undefined;
+  const separator = stickerId.indexOf(STICKER_ID_SEPARATOR);
+  return separator > 0 ? stickerId.slice(0, separator) : undefined;
+}
+
 function buildStickerId(setId: string, fileName: string) {
-  return `${setId}:${buildHashedId(fileName)}`;
+  return `${setId}${STICKER_ID_SEPARATOR}${buildHashedId(fileName)}`;
 }
 
 // alt-эмодзи из hex-кода в имени файла (NN-1f602.webp) — конвенция desktop
@@ -457,8 +479,7 @@ export function buildApiCustomEmojiSetFromPack(
       const mime = getPackFileMime(file.name);
       if (!mime) return;
       emojiSetIdByDocId.set(id, setId);
-      aliasStickers.set(id, {
-        mediaType: 'sticker',
+      aliasStickers.set(id, buildParvaneSticker({
         id,
         stickerSetInfo: { id: setId, accessHash: '0' },
         emoji: altEmojiForFileName(file.name),
@@ -467,7 +488,7 @@ export function buildApiCustomEmojiSetFromPack(
         isVideo: mime === 'video/webm',
         width: EMOJI_SIZE,
         height: EMOJI_SIZE,
-      });
+      }));
       blobs.set(id, { blob: new Blob([file.data], { type: mime }), mime });
     }));
   });
@@ -476,8 +497,7 @@ export function buildApiCustomEmojiSetFromPack(
     if (!mime) continue;
     const id = buildEmojiDocId(rawName, file.name);
     emojiSetIdByDocId.set(id, setId);
-    stickers.push({
-      mediaType: 'sticker',
+    stickers.push(buildParvaneSticker({
       id,
       stickerSetInfo: { id: setId, accessHash: '0' },
       emoji: altEmojiForFileName(file.name),
@@ -486,7 +506,7 @@ export function buildApiCustomEmojiSetFromPack(
       isVideo: mime === 'video/webm',
       width: EMOJI_SIZE,
       height: EMOJI_SIZE,
-    });
+    }));
     blobs.set(id, { blob: new Blob([file.data], { type: mime }), mime });
   }
   const apiSet: ApiStickerSet = {
@@ -526,8 +546,7 @@ export function buildApiStickerSetFromPack(pack: StoredPack, installedDate?: num
     const mime = getPackFileMime(file.name);
     if (!mime) continue;
     const id = buildStickerId(setId, file.name);
-    stickers.push({
-      mediaType: 'sticker',
+    stickers.push(buildParvaneSticker({
       id,
       stickerSetInfo: { id: setId, accessHash: '0' },
       emoji: altEmojiForFileName(file.name),
@@ -535,7 +554,7 @@ export function buildApiStickerSetFromPack(pack: StoredPack, installedDate?: num
       isVideo: mime === 'video/webm',
       width: STICKER_SIZE,
       height: STICKER_SIZE,
-    });
+    }));
     blobs.set(id, { blob: new Blob([file.data], { type: mime }), mime });
   }
   const apiSet: ApiStickerSet = {

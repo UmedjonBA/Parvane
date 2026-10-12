@@ -7,7 +7,12 @@ import type { ApiSticker, ApiStickerSet } from '../types';
 import type { PackFile, StoredPack } from './stickerPacks';
 
 import {
-  buildEmojiDocId, buildLegacyEmojiDocId, registerAliasEmojiSticker, registerEmojiDocId, registerEmojiPackName,
+  buildEmojiDocId,
+  buildLegacyEmojiDocId,
+  buildParvaneSticker,
+  registerAliasEmojiSticker,
+  registerEmojiDocId,
+  registerEmojiPackName,
 } from './stickerPacks';
 
 const SET_ID = 'parvane-builtin';
@@ -36,8 +41,7 @@ async function renderEmoji(emoji: string): Promise<Blob> {
 }
 
 function buildApiSticker(index: number, emoji: string): ApiSticker {
-  return {
-    mediaType: 'sticker',
+  return buildParvaneSticker({
     id: stickerId(index),
     stickerSetInfo: { id: SET_ID, accessHash: SET_ACCESS },
     emoji,
@@ -45,7 +49,7 @@ function buildApiSticker(index: number, emoji: string): ApiSticker {
     isVideo: false,
     width: SIZE,
     height: SIZE,
-  };
+  });
 }
 
 // ── анимированные стикеры (webm) ─────────────────────────────────────────────
@@ -106,8 +110,7 @@ async function recordAnimatedSticker(emoji: string): Promise<Blob> {
 }
 
 function buildApiAnimSticker(index: number, emoji: string): ApiSticker {
-  return {
-    mediaType: 'sticker',
+  return buildParvaneSticker({
     id: animStickerId(index),
     stickerSetInfo: { id: SET_ID, accessHash: SET_ACCESS },
     emoji,
@@ -115,7 +118,7 @@ function buildApiAnimSticker(index: number, emoji: string): ApiSticker {
     isVideo: true,
     width: SIZE,
     height: SIZE,
-  };
+  });
 }
 
 // Строит встроенный набор + карту id→Blob (для регистрации в media-кэше).
@@ -190,8 +193,7 @@ export function getBuiltinLegacyEmojiIds() {
 }
 
 function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
-  return {
-    mediaType: 'sticker',
+  return buildParvaneSticker({
     id: customEmojiId(index),
     stickerSetInfo: { id: EMOJI_SET_ID, accessHash: SET_ACCESS },
     emoji,
@@ -200,7 +202,7 @@ function buildApiCustomEmoji(index: number, emoji: string): ApiSticker {
     isVideo: false,
     width: EMOJI_SIZE,
     height: EMOJI_SIZE,
-  };
+  });
 }
 
 export async function buildBuiltinCustomEmojiSet() {

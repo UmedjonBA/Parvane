@@ -10,7 +10,7 @@ import type {
 } from './wire';
 
 import { wireEntitiesToApi } from './entities';
-import { registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
+import { buildParvaneSticker, registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
 
@@ -658,8 +658,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
       // по клику на стикер модалка предложит установить весь пак
       const packSetId = content.pack_ref ? registerReceivedPackRef(content.pack_ref, stored.from) : undefined;
       return {
-        sticker: {
-          mediaType: 'sticker',
+        sticker: buildParvaneSticker({
           id: content.file_id!,
           stickerSetInfo: { id: packSetId || 'parvane-builtin', accessHash: '0' },
           emoji: content.filename || '⭐',
@@ -667,7 +666,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           isVideo: content.mime === 'video/webm',
           width: content.width || 256,
           height: content.height || 256,
-        },
+        }),
       };
     }
     case 'gif':

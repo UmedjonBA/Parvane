@@ -407,7 +407,8 @@ export function createMessageController(deps: MessageDependencies) {
     const currentStore = store();
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
-    const cached = await deps.media.getCached(sticker.id);
+    // Блоб стикера пака мог быть вытеснен из кэша медиа — возвращаем его из пака
+    const cached = await (deps.media.getCached(sticker.id) || deps.media.restoreLocalBlob(sticker.id));
     const blob = cached?.blob;
     if (!blob) return;
     const mime = cached.mimeType || 'image/png';

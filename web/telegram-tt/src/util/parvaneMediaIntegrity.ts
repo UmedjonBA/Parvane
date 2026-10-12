@@ -24,7 +24,7 @@ export function isMediaTampered(fileId?: string) {
 // — с префиксом пути). Набор префиксов тот же, что у MEDIA_URL_REGEX в
 // `api/parvane/media.ts`: иначе подменённые обои не сбрасывались бы из кэшей
 export function getMediaIdFromUrl(url?: string) {
-  return url?.match(/(?:document|photo|wallpaper)([\w-]+?)(?:\?|$)/)?.[1];
+  return url?.match(/(?:document|photo|wallpaper)([\w:-]+?)(?:\?|$)/)?.[1];
 }
 
 // Настоящий старт воспроизведения (событие `play` у <video>): от него

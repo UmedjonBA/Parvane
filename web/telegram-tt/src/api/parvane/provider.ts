@@ -84,8 +84,10 @@ import {
   getAliasEmojiSticker,
   getEmojiPackNames,
   getEmojiPackRawName,
+  getEmojiSetIdForDocId,
   getPackFileMime,
   getPackSetId,
+  getPackSetIdOfStickerId,
   getPendingFiles,
   getReceivedEmojiPackSetIds,
   getReceivedPackRef,
@@ -101,7 +103,12 @@ import {
   setPendingFiles,
 } from './stickerPacks';
 import {
-  buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getBuiltinLegacyEmojiIds, getStickerBlobMime,
+  buildBuiltinCustomEmojiSet,
+  buildBuiltinStickerSet,
+  getBuiltinLegacyEmojiIds,
+  getBuiltinSetId,
+  getStickerBlobMime,
+  isBuiltinStickerId,
 } from './stickers';
 import { ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
@@ -347,6 +354,7 @@ const mediaService = createMediaService({
   getToken: () => token,
   // Блобы вложений v2-чатов — по capability (контроллер создаётся ниже)
   getV2: () => v2Controller,
+  restoreLocalBlob: (fileId) => restoreStickerBlob(fileId),
 });
 
 const localState = createLocalState({
@@ -834,6 +842,29 @@ const INSTALLED_PACK_DATE = Math.floor(Date.now() / 1000);
 
 function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
   blobs.forEach(({ blob, mime }, id) => mediaService.cacheBlobIfAbsent(id, blob, mime));
+}
+
+// Картинка стикера/эмодзи живёт только в кэше медиа (в облаке её нет), а кэш
+// под бюджетом памяти: вытесненный блоб возвращаем, заново собрав его набор.
+// `undefined` — id не из наших наборов (обычный файл облака)
+const restoringStickerSets = new Map<string, Promise<void>>();
+
+function restoreStickerBlob(fileId: string): Promise<void> | undefined {
+  const setId = isBuiltinStickerId(fileId)
+    ? getBuiltinSetId()
+    : getPackSetIdOfStickerId(fileId) || getEmojiSetIdForDocId(fileId);
+  if (!setId) return undefined;
+  // Плитки одного набора просят картинки разом — набор собираем один раз
+  let restoring = restoringStickerSets.get(setId);
+  if (!restoring) {
+    restoring = methods.fetchStickerSet({ stickerSetInfo: { id: setId } })
+      .then(() => undefined, (err) => {
+        logDebug(`картинка стикера ${fileId}: набор ${setId} не собран — ${String(err)}`);
+      })
+      .finally(() => restoringStickerSets.delete(setId));
+    restoringStickerSets.set(setId, restoring);
+  }
+  return restoring;
 }
 
 // Стикер-пак или эмодзи-пак (по реестру emoji_packs / флагу isEmoji)
