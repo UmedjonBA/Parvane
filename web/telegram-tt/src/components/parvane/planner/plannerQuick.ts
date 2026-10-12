@@ -675,7 +675,7 @@ function compile(id: QuickLang, words: QuickWords) {
     )),
     // То же слово в КОНЦЕ названия («ОГЭ по информатике пн 18:30 пара») — мера длительности, не часть названия
     eventMinutesTail: (words.eventMinutesTail || []).map(([body, minutes]) => (
-      [new RegExp(`(^|.*[^${ALNUM}])(?:${body})\\s*$`), minutes] as const
+      [new RegExp(`^(?:(.*[^${ALNUM}]))?(?:${body})\\s*$`), minutes] as const
     )),
     descLeads: words.descLeads,
     // Название начинается служебным словом либо словом-вводом описания или кончается служебным словом
@@ -1385,7 +1385,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
       if (!usual && end === undefined && !draft.minutes) {
         // Слово-мера в конце названия: длительность берётся по нему, а само слово из названия уходит
         const tail = lang.eventMinutesTail.find(([pattern]) => pattern.test(head));
-        const rest = tail && draft.name.slice(0, tail[0].exec(head)![1].length).trim();
+        const rest = tail && draft.name.slice(0, (tail[0].exec(head)![1] || '').length).trim();
         if (tail && rest) {
           usual = tail[1];
           draft.name = rest;
