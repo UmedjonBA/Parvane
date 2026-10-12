@@ -62,7 +62,12 @@ function driver(page) {
     },
     rename: async (from, to) => {
       await api.menu(from, 'Rename');
-      await page.locator('#parvane-cloud-name').fill(to);
+      // Окно подставляет прежнее имя при открытии: ввод сразу после появления поля может стереться
+      const field = page.locator('#parvane-cloud-name');
+      for (let attempt = 0; attempt < 5 && (await field.inputValue()) !== to; attempt++) {
+        await field.fill(to);
+        await page.waitForTimeout(200);
+      }
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       await item(to).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     },

@@ -309,9 +309,13 @@ try {
     await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   };
+  // Окно ловит Escape со следующего кадра после появления — нажатие повторяется, пока окно не закрылось
   const closeQuickWide = async () => {
-    await page.keyboard.press('Escape');
-    await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await page.keyboard.press('Escape');
+      if (await input.waitFor({ state: 'hidden', timeout: 3000 }).then(() => true, () => false)) return;
+    }
+    assert.fail('окно ввода не закрылось по Escape');
   };
   await openQuickWide();
   await closeQuickWide();

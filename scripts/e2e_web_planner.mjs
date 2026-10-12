@@ -597,7 +597,9 @@ try {
   await reloadPage(page);
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
-  assert.equal(await isShown(page, '#LeftColumn'), true, 'после перезагрузки открыт мессенджер');
+  // Раздел запоминается на вкладку: после перезагрузки открыт тот же «План», а не мессенджер
+  await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await isShown(page, '#LeftColumn'), false, 'после перезагрузки открыт тот же раздел');
   await openPlannerScreen(page, 'calendar');
   // Вид «Неделя» запомнен устройством
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: 30000 });

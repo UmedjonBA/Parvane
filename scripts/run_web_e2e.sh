@@ -148,7 +148,10 @@ start_shard() {
 }
 
 log "Build backend binaries"
-cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
+# PARVANE_E2E_SKIP_BACKEND_BUILD=1 — шарды уже собраны (серия сценариев: сборка один раз, перед первым)
+if [[ "${PARVANE_E2E_SKIP_BACKEND_BUILD:-0}" != "1" ]]; then
+  cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
+fi
 
 log "Start isolated production-like NATS"
 env \
