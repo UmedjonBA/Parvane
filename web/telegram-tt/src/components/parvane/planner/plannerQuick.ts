@@ -1753,7 +1753,16 @@ function parseGoal(rest: string, ctx: QuickContext, { words }: Lang): QuickDraft
   take(`(?:${names.salt})\\s*(${NUM})`, (g) => {
     changes.health.saltMax = toNumber(g[1]!);
   });
-  take(`(?:${names.sleep})\\s*(${NUM})\\s*(?:${words.hour})?`, (g) => {
+  // «сон 23:30-07:00» — режим: когда ложиться и вставать (минуты от полуночи); «сон 8ч» — длительность
+  take(
+    `(?:${names.sleep})\\s+(?:(?:${words.from})\\s+)?(${HOUR}):(${MINUTE})\\s*(?:${DASH}|${words.to})\\s*`
+    + `(${HOUR}):(${MINUTE})`,
+    (g) => {
+      changes.health.bedtime = (Number(g[1]) % 24) * MINUTES_IN_HOUR + Number(g[2]);
+      changes.health.wakeTime = (Number(g[3]) % 24) * MINUTES_IN_HOUR + Number(g[4]);
+    },
+  );
+  take(`(?:${names.sleep})\\s*(${NUM})(?![:\\d])\\s*(?:${words.hour})?`, (g) => {
     changes.health.sleepMinutes = Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR);
   });
   take(`(?:${names.weight})\\s*(${NUM})`, (g) => {

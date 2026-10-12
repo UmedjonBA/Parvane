@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from '../../../lib/teact/teact';
 
+import type { SleepNight } from './plannerHealth';
 import type {
   PlannerFoodEntry, PlannerHealthRecord, PlannerMetric, PlannerNutrient, PlannerState,
 } from './plannerModel';
@@ -9,8 +10,9 @@ import {
   formatDayShort, formatDuration, formatHours, formatSpan, formatWeekday,
 } from './plannerFormat';
 import {
-  applyQuickDraft, formatPace, getActiveMinutes, getDailyRecord, getDailySeries, getLastDays, getLatestRecord,
-  getLimitTotal, getWorkouts, SHORT_SLEEP_MINUTES,
+  applyQuickDraft, clockDifference, formatPace, getActiveMinutes, getClockGoal, getDailyRecord, getDailySeries,
+  getLastDays, getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES,
+  SLEEP_ROUTINE_DRIFTING_SPREAD, SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, wrapClock,
 } from './plannerHealth';
 import {
   addDays, fromDayKey, getGoalsForDay, getNutrientTotal, toTime,
@@ -73,6 +75,34 @@ const SPARK_HEIGHT = 90;
 const SPARK_PAD = 6;
 const SPARK_DOT = 4;
 const WEIGHT_PAD_KG = 0.5;
+// Режим сна: уровень — плашкой своего тона
+const ROUTINE_LEVELS = {
+  stable: { label: 'PlannerSleepRoutineStable', tone: styles.toneGood },
+  drifting: { label: 'PlannerSleepRoutineDrifting', tone: styles.toneWarn },
+  broken: { label: 'PlannerSleepRoutineBroken', tone: styles.kindDue },
+  none: { label: 'PlannerSleepRoutineNone', tone: styles.kindMuted },
+} as const;
+// График режима: ночи столбиками, справа — поле подписей времени (та же доля — у подписей дней в стилях)
+const ROUTINE_WIDTH = 300;
+const ROUTINE_HEIGHT = 120;
+const ROUTINE_GUTTER = 36;
+const ROUTINE_PAD = 8;
+const ROUTINE_BAR_SHARE = 0.56;
+const ROUTINE_BAR_RADIUS = 2;
+const ROUTINE_DOT = 3;
+const ROUTINE_LABEL_SHIFT = 4;
+// Запас оси над самым ранним отходом ко сну и под самым поздним подъёмом, мин
+const ROUTINE_AXIS_PAD = 30;
+// Половина оси, когда ночей со временем нет
+const ROUTINE_EMPTY_SPAN = 360;
+// Среднее время показывается с точностью до пяти минут
+const CLOCK_STEP = 5;
+// Среднее ближе этого к цели — «по цели»
+const ON_GOAL_MINUTES = 10;
+
+function roundToStep(minutes: number) {
+  return Math.round(minutes / CLOCK_STEP) * CLOCK_STEP;
+}
 
 function share(value: number, goal?: number) {
   return goal ? Math.min(1, value / goal) * PERCENT : 0;
@@ -84,6 +114,7 @@ const PlannerHealth = ({
   state, day, today, onExample, onOpenSettings,
 }: OwnProps) => {
   const [goalText, setGoalText] = useState('');
+  const [sleepText, setSleepText] = useState('');
 
   const lang = useLang();
 
@@ -128,6 +159,12 @@ const PlannerHealth = ({
   const sleepSeries = useMemo(() => getDailySeries(state, 'sleep', week), [state, week]);
   const knownSleep = sleepSeries.filter((value): value is number => value !== undefined);
   const sleepAverage = knownSleep.length ? knownSleep.reduce((a, b) => a + b, 0) / knownSleep.length : undefined;
+  const routine = useMemo(() => getSleepRoutine(state, day), [state, day]);
+  // Цель режима — минуты от полуночи: полночь (ноль) — тоже цель
+  const goalBed = getClockGoal(healthGoals.bedtime);
+  const goalWake = getClockGoal(healthGoals.wakeTime);
+  const routineGoal = goalBed !== undefined && goalWake !== undefined
+    ? { bed: toTime(goalBed), wake: toTime(goalWake) } : undefined;
 
   const steps = getDailyRecord(state, 'steps', day)?.value || 0;
   const stepSeries = useMemo(() => getDailySeries(state, 'steps', week), [state, week]);
@@ -140,6 +177,35 @@ const PlannerHealth = ({
 
   const handleAddSleep = useLastCallback(() => {
     onExample(lang('PlannerHealthSleepExample'));
+  });
+
+  const handleRoutineGoal = useLastCallback(() => {
+    onExample(lang('PlannerSleepRoutineGoalExample'));
+  });
+
+  const handleSleepText = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSleepText(e.currentTarget.value);
+  });
+
+  // Сон дня экрана: ввод через «+» пишет в сегодняшний день, а режим складывается и из прошлых ночей
+  const handleSleepSubmit = useLastCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    const draft = parseQuickInput(sleepText, {
+      today: day,
+      nowMinutes: 0,
+      dayStart: state.settings.dayStart,
+      dayEnd: state.settings.dayEnd,
+      kind: 'sleep',
+      lang: getQuickLang(lang.code),
+    });
+    if (draft.error || draft.kind !== 'sleep') {
+      showPlannerNotice(lang('PlannerHealthSleepDayBad'));
+      return;
+    }
+    updatePlanner((next) => {
+      applyQuickDraft(next, draft, day);
+    }, lang('PlannerNoticeAdded', { name: lang('PlannerHealthSleep') }));
+    setSleepText('');
   });
 
   const handleAddWorkout = useLastCallback(() => {
@@ -371,6 +437,206 @@ const PlannerHealth = ({
     );
   };
 
+  // Ночи двух недель столбиками от отхода ко сну до подъёма. Ось времени — вокруг средней середины сна,
+  // поэтому ночь не рвётся на полуночи. Сплошные линии — среднее, пунктир — цель, точка — ночь без времени
+  const renderRoutineChart = () => {
+    const { days, nights, center } = routine;
+    if (!nights.length) return undefined;
+    const offset = (clock: number) => clockDifference(clock, center || 0);
+    const spans = nights.filter((night) => night.bed !== undefined).map((night) => {
+      const middle = offset(night.midpoint!);
+      const half = wrapClock(night.wake! - night.bed!) / 2;
+      return { night, from: middle - half, to: middle + half };
+    });
+    const means = routine.bed && routine.wake ? [routine.bed.mean, routine.wake.mean] : [];
+    const goalLines = spans.length && routineGoal ? [goalBed!, goalWake!] : [];
+    const marks = [...spans.flatMap(({ from, to }) => [from, to]), ...[...means, ...goalLines].map(offset)];
+    const low = marks.length
+      ? Math.floor((Math.min(...marks) - ROUTINE_AXIS_PAD) / MINUTES_IN_HOUR) * MINUTES_IN_HOUR : -ROUTINE_EMPTY_SPAN;
+    const high = marks.length
+      ? Math.ceil((Math.max(...marks) + ROUTINE_AXIS_PAD) / MINUTES_IN_HOUR) * MINUTES_IN_HOUR : ROUTINE_EMPTY_SPAN;
+    const plotWidth = ROUTINE_WIDTH - ROUTINE_GUTTER;
+    const column = plotWidth / days.length;
+    const x = (key: string) => days.indexOf(key) * column;
+    const y = (value: number) => (
+      ROUTINE_PAD + ((value - low) / (high - low)) * (ROUTINE_HEIGHT - ROUTINE_PAD * 2)
+    );
+    // Подписи справа: средние времена, а пока их нет — границы оси
+    const labels = means.length
+      ? means.map((clock) => ({ at: offset(clock), text: toTime(wrapClock(roundToStep(clock))) }))
+      : spans.length ? [low, high].map((at) => ({ at, text: toTime(wrapClock(center! + at)) })) : [];
+    const barTone = ({ deviation }: SleepNight) => (
+      deviation === undefined || deviation <= SLEEP_ROUTINE_STABLE_SPREAD ? undefined
+        : deviation <= SLEEP_ROUTINE_DRIFTING_SPREAD ? styles.routineBarDrift : styles.routineBarOff
+    );
+    return (
+      <div>
+        <svg
+          className={styles.routineChart}
+          viewBox={`0 0 ${ROUTINE_WIDTH} ${ROUTINE_HEIGHT}`}
+          role="img"
+          aria-label={lang('PlannerSleepRoutineChart')}
+          data-sleep-routine-chart
+        >
+          {goalLines.map((clock, index) => (
+            <line
+              key={`goal-${index === 0 ? 'bed' : 'wake'}`}
+              className={styles.routineGoal}
+              x1="0"
+              x2={plotWidth}
+              y1={y(offset(clock)).toFixed(1)}
+              y2={y(offset(clock)).toFixed(1)}
+              data-sleep-routine-goal-line
+            />
+          ))}
+          {spans.map(({ night, from, to }) => (
+            <rect
+              key={night.day}
+              className={buildClassName(
+                styles.routineBar, barTone(night), night.day === day && styles.routineBarCurrent,
+              )}
+              x={(x(night.day) + (column * (1 - ROUTINE_BAR_SHARE)) / 2).toFixed(1)}
+              y={y(from).toFixed(1)}
+              width={(column * ROUTINE_BAR_SHARE).toFixed(1)}
+              height={(y(to) - y(from)).toFixed(1)}
+              rx={ROUTINE_BAR_RADIUS}
+              data-sleep-night={night.day}
+              data-sleep-night-kind="timed"
+            />
+          ))}
+          {nights.filter((night) => night.bed === undefined).map((night) => (
+            <circle
+              key={night.day}
+              className={styles.routineDot}
+              cx={(x(night.day) + column / 2).toFixed(1)}
+              cy={ROUTINE_HEIGHT / 2}
+              r={ROUTINE_DOT}
+              data-sleep-night={night.day}
+              data-sleep-night-kind="untimed"
+            />
+          ))}
+          {means.map((clock, index) => (
+            <line
+              key={`mean-${index === 0 ? 'bed' : 'wake'}`}
+              className={styles.routineMean}
+              x1="0"
+              x2={plotWidth}
+              y1={y(offset(clock)).toFixed(1)}
+              y2={y(offset(clock)).toFixed(1)}
+            />
+          ))}
+          {labels.map(({ at, text }, index) => (
+            <text
+              key={index === 0 ? 'top' : 'bottom'}
+              className={styles.routineLabel}
+              x={ROUTINE_WIDTH}
+              y={(y(at) + ROUTINE_LABEL_SHIFT).toFixed(1)}
+              text-anchor="end"
+            >
+              {text}
+            </text>
+          ))}
+        </svg>
+        <div className={styles.routineDays}>
+          {days.map((key) => (
+            <span key={key} className={buildClassName(styles.routineDay, key === day && styles.routineDayCurrent)}>
+              {fromDayKey(key).getDate()}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // «Режим сна»: одинаково ли время отхода ко сну и подъёма изо дня в день
+  const renderRoutine = () => {
+    const {
+      level, bed, wake, spread, timedCount, untimedCount, outliers, socialJetlag, bedGoalDeviation, wakeGoalDeviation,
+    } = routine;
+    const { label, tone } = ROUTINE_LEVELS[level];
+    const minutes = (value: number) => lang('PlannerMinutesValue', { minutes: value });
+    const toGoal = (deviation: number, goal: string) => (
+      Math.abs(deviation) < ON_GOAL_MINUTES ? lang('PlannerSleepRoutineOnGoal', { goal })
+        : lang(deviation > 0 ? 'PlannerSleepRoutineLater' : 'PlannerSleepRoutineEarlier', {
+          value: formatDuration(lang, roundToStep(Math.abs(deviation))), goal,
+        })
+    );
+    const goalParts = routineGoal && bedGoalDeviation !== undefined && wakeGoalDeviation !== undefined ? [
+      lang('PlannerSleepRoutineBedGoal', { value: toGoal(bedGoalDeviation, routineGoal.bed) }),
+      lang('PlannerSleepRoutineWakeGoal', { value: toGoal(wakeGoalDeviation, routineGoal.wake) }),
+    ] : [];
+    // Сдвиг выходных меньше получаса — не повод для строки
+    const jetlag = socialJetlag !== undefined && Math.abs(socialJetlag) >= SLEEP_ROUTINE_STABLE_SPREAD
+      ? socialJetlag : undefined;
+    return (
+      <div
+        className={styles.stack}
+        data-health="sleep-routine"
+        data-sleep-routine-level={level}
+        data-sleep-routine-spread={spread}
+      >
+        <div className={styles.cardHead}>
+          <h4 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('PlannerSleepRoutine')}</h4>
+          <span className={styles.grow} />
+          {routineGoal && (
+            <span className={styles.cardNote} data-sleep-routine-goal>
+              {goalLabel(`${routineGoal.bed}–${routineGoal.wake}`)}
+            </span>
+          )}
+          <span className={buildClassName(styles.tag, tone)} data-sleep-routine-chip>{lang(label)}</span>
+        </div>
+        {bed && wake ? (
+          <p className={styles.cardText} data-sleep-routine-summary>
+            {lang('PlannerSleepRoutineSummary', {
+              bed: toTime(wrapClock(roundToStep(bed.mean))),
+              bedSpread: minutes(bed.spread),
+              wake: toTime(wrapClock(roundToStep(wake.mean))),
+              wakeSpread: minutes(wake.spread),
+            })}
+          </p>
+        ) : (
+          <p className={styles.cardText} data-sleep-routine-hint>
+            {lang('PlannerSleepRoutineHint', { count: timedCount, min: SLEEP_ROUTINE_MIN_NIGHTS })}
+          </p>
+        )}
+        {Boolean(goalParts.length) && (
+          <p className={styles.cardText} data-sleep-routine-deviation>{goalParts.join(' · ')}</p>
+        )}
+        {renderRoutineChart()}
+        {Boolean(outliers.length) && (
+          <p className={styles.cardText} data-sleep-routine-outliers>
+            {lang('PlannerSleepRoutineOutliers', {
+              nights: outliers.map((night) => (
+                `${formatDayShort(lang, night.day)} ${toTime(night.bed!)} → ${toTime(night.wake!)}`
+              )).join(', '),
+            })}
+          </p>
+        )}
+        {jetlag !== undefined && (
+          <p className={styles.cardText} data-sleep-routine-jetlag>
+            {lang(jetlag > 0 ? 'PlannerSleepRoutineJetlagLater' : 'PlannerSleepRoutineJetlagEarlier', {
+              value: formatDuration(lang, roundToStep(Math.abs(jetlag))),
+            })}
+          </p>
+        )}
+        {Boolean(untimedCount) && (
+          <p className={styles.cardText} data-sleep-routine-untimed={untimedCount}>
+            {lang('PlannerSleepRoutineUntimed', { count: untimedCount })}
+          </p>
+        )}
+        {Boolean(routine.nights.length) && <p className={styles.small}>{lang('PlannerSleepRoutineLegend')}</p>}
+        {!routineGoal && (
+          <div className={styles.chips}>
+            <span className={styles.cardText}>{lang('PlannerSleepRoutineGoalHint')}</span>
+            <button type="button" className={styles.chip} data-sleep-routine-goal-example onClick={handleRoutineGoal}>
+              {lang('PlannerSleepRoutineGoalExample')}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderFact = (label: string, value: string | undefined, isAccent?: boolean) => (
     <span className={styles.healthFact}>
       <span className={styles.healthFactLabel}>{label}</span>
@@ -545,6 +811,19 @@ const PlannerHealth = ({
             {lang('PlannerHealthSleepAdd')}
           </button>
         )}
+        <form className={styles.healthGoalForm} onSubmit={handleSleepSubmit}>
+          <input
+            id="planner-health-sleep"
+            className={buildClassName('form-control', styles.fieldInput)}
+            type="text"
+            value={sleepText}
+            placeholder={lang('PlannerHealthSleepDayPlaceholder')}
+            aria-label={lang('PlannerHealthSleepDayLabel')}
+            autoComplete="off"
+            onChange={handleSleepText}
+          />
+          <button type="submit" className={styles.btn} disabled={!sleepText.trim()}>{lang('Save')}</button>
+        </form>
         {renderBars(
           sleepSeries, formatSpan, 'sleep', styles.kindSleep, healthGoals.sleepMinutes,
           (value) => value < SHORT_SLEEP_MINUTES,
@@ -552,6 +831,7 @@ const PlannerHealth = ({
         <p className={styles.cardText}>
           {lang('PlannerHealthSleepShort', { hours: SHORT_SLEEP_MINUTES / MINUTES_IN_HOUR })}
         </p>
+        {renderRoutine()}
       </section>
 
       <section className={buildClassName(styles.card, styles.stack)} data-health="activity">
@@ -620,6 +900,7 @@ const PlannerHealth = ({
             waterGoal ? `${lang('PlannerHealthWater')} ${litres(waterGoal)}` : undefined,
             healthGoals.sleepMinutes
               ? `${lang('PlannerHealthSleep')} ${formatSpan(healthGoals.sleepMinutes)}` : undefined,
+            routineGoal ? lang('PlannerSleepRoutineGoalShort', routineGoal) : undefined,
             healthGoals.steps ? `${lang('PlannerHealthStepsShort')} ${number(healthGoals.steps)}` : undefined,
             lang('PlannerHealthDayWindow', {
               from: toTime(state.settings.dayStart),
