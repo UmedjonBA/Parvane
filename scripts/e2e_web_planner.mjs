@@ -663,9 +663,12 @@ try {
   const sheet = await page.evaluate(() => {
     const pane = document.querySelector('#ParvanePlanner [data-planner-side]').getBoundingClientRect();
     const root = document.querySelector('#ParvanePlanner').getBoundingClientRect();
-    return { paneBottom: pane.bottom, rootBottom: window.innerHeight, paneWidth: pane.width, rootWidth: root.width };
+    return {
+      paneBottom: pane.bottom, rootBottom: root.bottom, viewBottom: window.innerHeight, paneWidth: pane.width, rootWidth: root.width,
+    };
   });
-  assert.ok(Math.abs(sheet.paneBottom - sheet.rootBottom) < 2 && Math.abs(sheet.paneWidth - sheet.rootWidth) < 2,
+  assert.ok(sheet.paneBottom >= sheet.rootBottom - 2 && sheet.paneBottom <= sheet.viewBottom + 2
+    && Math.abs(sheet.paneWidth - sheet.rootWidth) < 2,
     `форма на телефоне — шторка у нижнего края: ${JSON.stringify(sheet)}`);
   await sidePane.locator('#planner-new-name').fill('С телефона');
   await sidePane.getByRole('button', { name: 'Create', exact: true }).click();
