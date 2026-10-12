@@ -56,23 +56,34 @@ try {
   // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 5, 'в панели пять разделов: чаты, сегодня, календарь, здоровье, облако');
-  assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'под разделами — «Профиль»');
+  assert.equal(await sidebar.getByRole('tab').count(), 6, 'в панели шесть разделов: чаты, сегодня, календарь, здоровье, знания, облако');
+  assert.equal(await sidebar.getByRole('button', { name: 'Search' }).count(), 1, 'внизу панели — «Поиск»');
+  assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'внизу панели — «Профиль»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
-  assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'без папок слева меню — не в панели');
+  assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'меню — не в панели');
   assert.ok(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 'меню осталось в шапке');
-  // Разделы прижаты к низу панели
+  // Разделы идут сверху под знаком, «Поиск» и «Профиль» прижаты к низу панели
   const geometry = await page.evaluate(() => {
     const bar = document.querySelector('#FoldersSidebar').getBoundingClientRect();
     const tabs = [...document.querySelectorAll('#FoldersSidebar [role="tablist"] > button')].map((el) => el.getBoundingClientRect());
-    return { barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top };
+    const profile = document.querySelector('#FoldersSidebar > button:last-of-type').getBoundingClientRect();
+    return {
+      barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top, profileBottom: profile.bottom,
+    };
   });
-  assert.ok(geometry.barBottom - geometry.lastBottom < 24, `разделы не у нижнего края: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.firstTop - geometry.barTop < 80, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
-    geometry.firstTop > geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.5,
-    `разделы должны лежать в нижней половине панели: ${JSON.stringify(geometry)}`,
+    geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.6,
+    `разделы должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
   );
-  console.log('OK: панель видна без папок, разделы в нижней части');
+  assert.ok(geometry.barBottom - geometry.profileBottom < 24, `«Профиль» не у нижнего края: ${JSON.stringify(geometry)}`);
+  // «Поиск» панели открывает поиск по чатам; папок чатов в панели нет
+  await sidebar.getByRole('button', { name: 'Search' }).click();
+  await page.locator('#telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.waitForFunction(() => document.activeElement?.id === 'telegram-search-input', undefined, { timeout: STEP_TIMEOUT_MS });
+  await page.keyboard.press('Escape');
+  await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: панель — знак, шесть разделов сверху, «Поиск» и «Профиль» внизу');
 
   // ── Раздел «План» вместо колонок мессенджера ──────────────────────────────
   await sidebar.getByRole('tab', { name: 'Calendar' }).click();

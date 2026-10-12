@@ -150,17 +150,18 @@ try {
   };
   const used = () => cloud.locator('footer[data-used]').getAttribute('data-used').then(Number);
   const openCloud = async () => {
-    await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+    await sidebar.getByRole('tab', { name: 'Cloud' }).click();
     await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await page.waitForFunction(() => document.querySelector('#ParvaneCloud')?.dataset.loaded === '1', undefined, { timeout: STEP_TIMEOUT_MS });
   };
 
   // ── Раздел: кнопка в панели, вместо колонок мессенджера, пустое состояние ──
-  assert.equal(await sidebar.getByRole('tab').count(), 5, 'в панели пять разделов');
+  assert.equal(await sidebar.getByRole('tab').count(), 6, 'в панели шесть разделов');
   await openCloud();
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
   assert.equal(await isShown(page, '#MiddleColumn'), false, 'переписка должна быть скрыта');
-  assert.equal(await sidebar.getByRole('tab', { name: 'Knowledge' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await sidebar.getByRole('tab', { name: 'Cloud' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await sidebar.getByRole('tab', { name: 'Knowledge' }).getAttribute('aria-selected'), 'false', '«Знания» — заметки, не файлы');
   await cloud.getByText('No files yet').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await cloud.getByText('Drag files here or press Upload.').waitFor({ state: 'visible' });
   // Один список без вкладок: путь из одного шага, в конце корня — «Доступные мне» и «Корзина»

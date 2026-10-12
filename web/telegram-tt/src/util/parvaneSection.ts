@@ -97,3 +97,25 @@ export function openNote(title: string) {
 export function consumeNoteRequest() {
   setNoteRequest(undefined);
 }
+
+/** Открыть «Знания» на вкладке: «Облако» боковой панели — это вкладка «Файлы». */
+export function openKnowledgeView(view: KnowledgeView) {
+  setKnowledgeView(view);
+  setParvaneSection('cloud');
+}
+
+// Запрос «открыть настройки плана» из «Профиля»: «План» открывает свои настройки и сбрасывает запрос
+// (как запрос новой записи). Пока раздел запрос не читает, «Профиль» просто открывает «Сегодня»
+const [getPlannerSettingsRequest, setPlannerSettingsRequest] = createSignal(false);
+
+export { getPlannerSettingsRequest };
+
+export function requestPlannerSettings() {
+  setPlannerView('today');
+  setParvaneSection('planner');
+  setPlannerSettingsRequest(true);
+}
+
+export function consumePlannerSettingsRequest() {
+  setPlannerSettingsRequest(false);
+}

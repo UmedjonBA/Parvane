@@ -48,8 +48,8 @@
   --call-header-height: 2rem;
 
   #FoldersSidebar {
-    height: calc(100% - var(--call-header-height) - 2rem);
-    margin-top: calc(var(--call-header-height) + 1rem);
+    height: calc(100% - var(--call-header-height));
+    margin-top: var(--call-header-height);
   }
 
   #LeftColumn {
@@ -286,8 +286,12 @@
   .folders-sidebar-visible {
     #FoldersSidebar {
       position: fixed;
-      transform: translate3d(calc(-100% - 2rem), 0, 0);
-      height: calc(var(--vh, 1vh) * 100 - 2rem);
+      top: 0;
+      left: 0;
+      transform: translate3d(-100%, 0, 0);
+
+      height: calc(var(--vh, 1vh) * 100);
+
       transition: transform var(--layer-transition);
     }
 
@@ -301,7 +305,7 @@
       }
 
       #LeftColumn {
-        left: calc(var(--folders-sidebar-width) + 1.5rem) !important;
+        left: calc(var(--folders-sidebar-width) + 0.5rem) !important;
       }
     }
   }
