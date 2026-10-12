@@ -1518,17 +1518,15 @@
   background-color: color-mix(in srgb, var(--pv-accent) 4%, transparent);
 }
 
-// Событие на весь день заливает колонку дня; несколько событий делят её по ширине
+// Событие на весь день заливает колонку дня тем же тоном, что и свою клетку в строке «весь день»
 .weekAllDayFill {
-  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
-
   pointer-events: none;
-
   position: absolute;
-  top: 0;
-  bottom: 0;
+  inset: 0;
+}
 
-  background: color-mix(in srgb, var(--planner-color) 14%, transparent);
+.weekAllDayCellSleep {
+  background: color-mix(in srgb, var(--pv-sleep) 10%, transparent);
 }
 
 // Время вне дня из настроек

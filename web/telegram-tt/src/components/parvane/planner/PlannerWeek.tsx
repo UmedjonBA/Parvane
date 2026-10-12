@@ -3,7 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { PlannerLayers } from './plannerLayers';
-import type { PlannerState } from './plannerModel';
+import type { PlannerEvent, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -40,6 +40,7 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
 };
 
+const ALL_DAY_FILL_PERCENT = 14;
 const MINUTES_IN_HOUR = 60;
 const HOURS_IN_DAY = 24;
 const PERCENT = 100;
@@ -63,6 +64,19 @@ function getNowMinutes() {
 // Сетка по часам: неделя либо один день. Над сеткой недели — шапки дней с загрузкой и строка «весь день»
 // (сон, калории, события на весь день, задачи без времени, сроки). В сетке — время вне дня затемнено, сон
 // полосой до подъёма, блоки дел цветом вида записи, отметки приёмов пищи, черта «сейчас»
+// Заливка события на весь день — один тон на строку «весь день» и на колонку дня; несколько событий
+// делят ширину поровну
+function allDayFillStyle(events: PlannerEvent[]) {
+  const share = PERCENT / events.length;
+  const stops = events.map((event, index) => {
+    const color = event.color
+      ? `var(--color-peer-${event.color - 1})` : `var(--pv-${event.isHoliday ? 'red' : 'event'})`;
+    const tone = `color-mix(in srgb, ${color} ${ALL_DAY_FILL_PERCENT}%, transparent)`;
+    return `${tone} ${index * share}% ${(index + 1) * share}%`;
+  });
+  return `background: linear-gradient(to right, ${stops.join(', ')})`;
+}
+
 const PlannerWeek = ({
   state, days, picked, today, layers, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
 }: OwnProps) => {
@@ -119,6 +133,12 @@ const PlannerWeek = ({
   const gridMinutes = hours.length * MINUTES_IN_HOUR;
   const offset = (minutes: number) => (
     (Math.max(0, Math.min(gridMinutes, minutes - gridStart)) / MINUTES_IN_HOUR) * hourRem
+  );
+  // Границы затемнения времени вне дня: полоса сна его вытесняет
+  const offTop = (wake?: number) => (wake !== undefined && wake > gridStart ? offset(wake) : 0);
+  const offBottom = (bedtime: number) => (gridMinutes / MINUTES_IN_HOUR) * hourRem - offset(bedtime);
+  const hasMorningSleep = (sleep?: { endTime?: string }) => (
+    Boolean(sleep?.endTime && toMinutes(sleep.endTime) > gridStart)
   );
   const firstDay = days[0];
   const hasToday = days.includes(today);
@@ -212,7 +232,14 @@ const PlannerWeek = ({
           {columns.map(({
             day, allDay, untimed, deadlines, sleep, isShort, kcal,
           }) => (
-            <div key={day} className={styles.weekAllDayCell} data-day={day}>
+            <div
+              key={day}
+              className={buildClassName(
+                styles.weekAllDayCell, !allDay.length && hasMorningSleep(sleep) && styles.weekAllDayCellSleep,
+              )}
+              style={allDay.length ? allDayFillStyle(allDay) : undefined}
+              data-day={day}
+            >
               {sleep && (
                 <span className={buildClassName(styles.tag, isShort ? styles.kindDue : styles.kindSleep)}>
                   <Icon name="darkmode" />
@@ -307,19 +334,26 @@ const PlannerWeek = ({
               onClick={handleColumnClick}
               onDoubleClick={isSingle ? undefined : handleColumnDoubleClick}
             >
-              {allDay.map((event, index) => (
+              {Boolean(allDay.length) && (
                 <span
-                  key={`fill${instanceKey(event)}`}
-                  className={buildClassName(styles.weekAllDayFill, event.isHoliday ? styles.kindDue : styles.kindEvent)}
-                  style={buildClassName(
-                    listColorStyle(event.color),
-                    `; inset-inline-start: ${(index * 100) / allDay.length}%; width: ${100 / allDay.length}%`,
-                  )}
-                  data-all-day-fill={event.id}
+                  className={styles.weekAllDayFill}
+                  style={allDayFillStyle(allDay)}
+                  data-all-day-fill={allDay[0].id}
                 />
-              ))}
-              <span className={styles.weekOff} style={`top: 0; height: ${offset(dayStart)}rem`} />
-              <span className={styles.weekOff} style={`top: ${offset(dayEnd)}rem; bottom: 0`} />
+              )}
+              {/* Время вне дня не затемняется там, где день залит событием или сном: заливка одного тона */}
+              {!allDay.length && offTop(wake) < offset(dayStart) && (
+                <span
+                  className={styles.weekOff}
+                  style={`top: ${offTop(wake)}rem; height: ${offset(dayStart) - offTop(wake)}rem`}
+                />
+              )}
+              {!allDay.length && (bedtime === undefined || bedtime > dayEnd) && (
+                <span
+                  className={styles.weekOff}
+                  style={`top: ${offset(dayEnd)}rem; bottom: ${bedtime !== undefined ? offBottom(bedtime) : 0}rem`}
+                />
+              )}
               {wake !== undefined && wake > gridStart && (
                 <span className={styles.weekSleep} style={`top: 0; height: ${offset(wake)}rem`} data-sleep="morning" />
               )}
