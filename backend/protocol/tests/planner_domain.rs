@@ -347,6 +347,61 @@ fn list_color_and_event_flags_merge_per_field() {
     assert!(b.events["e"].all_day.as_ref().unwrap().value);
 }
 
+// 12 окт 2026: описание события — отдельный регистр. Одно устройство правит описание, другое в это же
+// время — время события: обе правки переживают сведение в любом порядке.
+#[test]
+fn event_description_merges_per_field_from_two_devices() {
+    let created = change::Change::Event(Event {
+        id: "e".into(),
+        name: s("пара по английскому", 1, "d1"),
+        start: s("15:00", 1, "d1"),
+        end: s("16:45", 1, "d1"),
+        day: s("2026-10-13", 1, "d1"),
+        ..Default::default()
+    });
+    let describe = change::Change::Event(Event { id: "e".into(), description: s("будет тест\nлисенинг", 2, "d1"), ..Default::default() });
+    let retime = change::Change::Event(Event { id: "e".into(), start: s("16:00", 2, "d2"), end: s("17:45", 2, "d2"), ..Default::default() });
+
+    let mut a = PlannerState::default();
+    a.apply_op(&op(vec![created.clone()]), "d1").unwrap();
+    a.apply_op(&op(vec![describe.clone()]), "d1").unwrap();
+    a.apply_op(&op(vec![retime.clone()]), "d2").unwrap();
+    let mut b = PlannerState::default();
+    b.apply_op(&op(vec![retime]), "d2").unwrap();
+    b.apply_op(&op(vec![describe]), "d1").unwrap();
+    b.apply_op(&op(vec![created]), "d1").unwrap();
+    for state in [&a, &b] {
+        let e = &state.events["e"];
+        assert_eq!(e.description.as_ref().unwrap().value, "будет тест\nлисенинг");
+        assert_eq!(e.start.as_ref().unwrap().value, "16:00");
+        assert_eq!(e.end.as_ref().unwrap().value, "17:45");
+        assert_eq!(e.name.as_ref().unwrap().value, "пара по английскому");
+    }
+    assert_eq!(snapshot_bytes(&a), snapshot_bytes(&b));
+
+    // Более старая правка описания не побеждает, пустая строка — «описания нет»
+    a.apply_op(&op(vec![change::Change::Event(Event { id: "e".into(), description: s("старое", 1, "d2"), ..Default::default() })]), "d2").unwrap();
+    assert_eq!(a.events["e"].description.as_ref().unwrap().value, "будет тест\nлисенинг");
+    a.apply_op(&op(vec![change::Change::Event(Event { id: "e".into(), description: s("", 3, "d2"), ..Default::default() })]), "d2").unwrap();
+    assert_eq!(a.events["e"].description.as_ref().unwrap().value, "");
+    // Слишком длинное описание — негодное изменение: не применяется
+    let long = "я".repeat(2001);
+    let applied = a.apply_op(&op(vec![change::Change::Event(Event { id: "e".into(), description: s(&long, 4, "d1"), ..Default::default() })]), "d1").unwrap();
+    assert_eq!(applied, 0);
+    assert_eq!(a.events["e"].description.as_ref().unwrap().value, "");
+
+    // Описание — правка события: она новее надгробия и возвращает событие; снимок несёт поле
+    let mut c = PlannerState::default();
+    c.apply_op(&op(vec![change::Change::Event(Event { id: "x".into(), name: s("встреча", 1, "d1"), start: s("10:00", 1, "d1"), end: s("11:00", 1, "d1"), ..Default::default() })]), "d1").unwrap();
+    c.apply_op(&op(vec![change::Change::Event(Event { id: "x".into(), deleted: st(2, "d1"), ..Default::default() })]), "d1").unwrap();
+    assert!(!PlannerState::is_event_alive(&c.events["x"]));
+    c.apply_op(&op(vec![change::Change::Event(Event { id: "x".into(), description: s("взять паспорт", 3, "d2"), ..Default::default() })]), "d2").unwrap();
+    assert!(PlannerState::is_event_alive(&c.events["x"]));
+    let mut d = PlannerState::default();
+    d.merge_snapshot(&c.to_snapshot()).unwrap();
+    assert_eq!(d.events["x"].description.as_ref().unwrap().value, "взять паспорт");
+}
+
 #[test]
 fn stamp_op_marks_every_present_register() {
     let mut o = op(vec![
@@ -357,6 +412,7 @@ fn stamp_op_marks_every_present_register() {
             // spec 013: «весь день» и «праздник» — отдельные регистры
             all_day: Some(Bool { stamp: None, value: true }),
             is_holiday: Some(Bool { stamp: None, value: true }),
+            description: Some(Str { stamp: None, value: "взять паспорт".into() }),
             ..Default::default()
         }),
         change::Change::List(List {
@@ -368,7 +424,7 @@ fn stamp_op_marks_every_present_register() {
     ]);
     planner::stamp_op(&mut o, &Stamp::new(9, "d1"));
     let stamps = planner::op_stamps(&o).unwrap();
-    assert_eq!(stamps.len(), 7);
+    assert_eq!(stamps.len(), 8);
     assert!(stamps.iter().all(|s| s.lamport == 9 && s.device_id == "d1"));
     // spec 011: правило, экземпляры, источник и запись цели тоже получают метку.
     let mut o = op(vec![
@@ -435,6 +491,7 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
                 end: field("11:00"),
                 all_day: Some(Bool { stamp: st(lamport, &dev), value: lamport % 2 == 0 }),
                 is_holiday: Some(Bool { stamp: st(lamport, &dev), value: lamport % 3 == 0 }),
+                description: if lamport % 2 == 1 { field("описание") } else { None },
                 ..Default::default()
             }),
             4 => change::Change::List(List {
