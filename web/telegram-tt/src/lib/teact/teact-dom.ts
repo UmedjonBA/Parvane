@@ -840,7 +840,9 @@ function setAttribute(element: DOMElement, key: string, value: any, namespace?: 
 
 function removeAttribute(element: DOMElement, key: string, value: any) {
   if (key === 'className') {
-    updateClassName(element, '');
+    // Parvane: у SVG-элемента `className` только для чтения — снятие класса присваиванием бросало
+    // исключение и останавливало перерисовку всего компонента (холст «Знаний» замирал)
+    updateClassName(element, '', element instanceof SVGElement ? SVG_NAMESPACE : undefined);
   } else if (key === 'value') {
     (element as HTMLInputElement).value = '';
   } else if (key === 'style') {
