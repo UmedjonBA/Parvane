@@ -2009,7 +2009,9 @@ const NotesCanvas = ({
         key={edge.id}
         data-canvas-edge={edge.id}
         data-canvas-ends={`${hasStartArrow ? 'arrow' : 'none'}-${hasEndArrow ? 'arrow' : 'none'}`}
-        className={selection.edges.includes(edge.id) ? styles.canvasEdgeOn : undefined}
+        // Класс у узла SVG всегда строка: снять его совсем Teact не умеет (свойство `className` там только
+        // для чтения) — отрисовка падала, и холст замирал, стоило снять выделение со стрелки
+        className={selection.edges.includes(edge.id) ? styles.canvasEdgeOn : ''}
         style={colorStyle(edge.color) || undefined}
       >
         <path className={styles.canvasEdgeHit} d={path} />
@@ -2149,7 +2151,7 @@ const NotesCanvas = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        onPointerLeave={handlePointerLeave}
+        onMouseLeave={handlePointerLeave}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
