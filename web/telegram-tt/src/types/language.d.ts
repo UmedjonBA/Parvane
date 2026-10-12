@@ -2780,6 +2780,7 @@ export interface LangPair {
   'KnowledgeDelete': undefined;
   'KnowledgeBack': undefined;
   'KnowledgeEditorPlaceholder': undefined;
+  'KnowledgePlan': undefined;
   'KnowledgePlanned': undefined;
   'KnowledgeNoDate': undefined;
   'KnowledgeBacklinksEmpty': undefined;

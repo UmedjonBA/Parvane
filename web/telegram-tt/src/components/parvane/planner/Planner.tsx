@@ -385,7 +385,7 @@ const Planner = () => {
   useEffect(() => {
     if (!addRequest || !isLoaded) return;
     consumePlannerAddRequest();
-    handleOpenQuick();
+    handleQuickText(addRequest.text || '');
   }, [addRequest, isLoaded]);
 
   // «Настройки плана» в профиле

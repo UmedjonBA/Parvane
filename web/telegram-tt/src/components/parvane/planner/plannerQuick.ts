@@ -13,6 +13,7 @@ import type {
 import type { NumeralEdit } from './plannerNumerals';
 import type { PickItem } from './plannerQuickPick';
 
+import { maskNameLinks, unmaskNameLinks } from './plannerLinks';
 import {
   addDays, DEFAULT_EVENT_MINUTES, fromDayKey, MINUTES_IN_DAY, toDayKey, toTime, validateEvent,
   validateRepeat, validateTask,
@@ -671,7 +672,8 @@ function compile(id: QuickLang, words: QuickWords) {
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
     waterLead: lead(words.water),
     eventMinutes: (words.eventMinutes || []).map(([body, minutes]) => (
-      [new RegExp(`^\\s*(?:${body})${SEPARATOR}`), minutes] as const
+      // Ссылки на заметки перед словом (их заглушки) первым словом не считаются: «[[Сервер]] созвон 16:00»
+      [new RegExp(`^\\s*(?:[\\ue000-\\uf8ff]+\\s*)*(?:${body})${SEPARATOR}`), minutes] as const
     )),
     // То же слово в КОНЦЕ названия («ОГЭ по информатике пн 18:30 пара») — мера длительности, не часть названия
     eventMinutesTail: (words.eventMinutesTail || []).map(([body, minutes]) => (
@@ -740,7 +742,7 @@ export function getQuickLang(code?: string): QuickLang {
 
 /** Обычная длительность события по первому слову названия: её разбор подставит сам, когда она не названа. */
 export function quickUsualMinutes(name: string, lang: QuickLang) {
-  const head = name.toLowerCase().replace(/ё/g, 'е');
+  const head = maskNameLinks(name).text.toLowerCase().replace(/ё/g, 'е');
   return LANGS[lang].eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
 }
 
@@ -860,7 +862,19 @@ function mealByTime(minutes: number): PlannerMeal {
 // буквами («зал присед 4x8x80», «созвон Zoom завтра») разбирается обоими словарями по отдельности, берётся
 // разбор, распознавший больше; при равенстве — язык интерфейса. Слова двух словарей в одной строке не
 // складываются
-export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
+//
+// Ссылки на заметки `[[…]]` разбор не читает: на время разбора они закрыты заглушками (`maskNameLinks`) и
+// целиком остаются в названии либо описании — «[[Встреча завтра]] сб 15:00» ставится на субботу
+export function parseQuickInput(typed: string, ctx: QuickContext): QuickDraft {
+  const { text, links } = maskNameLinks(typed);
+  const draft = parseMasked(text, ctx);
+  if (!links.length) return draft;
+  draft.name = unmaskNameLinks(draft.name, links);
+  if (draft.description) draft.description = unmaskNameLinks(draft.description, links);
+  return draft;
+}
+
+function parseMasked(text: string, ctx: QuickContext): QuickDraft {
   const lang = ctx.lang || 'ru';
   const other: QuickLang = lang === 'ru' ? 'en' : 'ru';
   const has: Record<QuickLang, boolean> = { ru: /[а-яё]/i.test(text), en: /[a-z]/i.test(text) };
@@ -1493,8 +1507,9 @@ function cleanDescription(text: string) {
   return text.split('\n').map(cleanName).filter(Boolean).join('\n');
 }
 
+// Ссылка на заметку (её заглушка) — тоже слово: название может состоять из неё одной
 function hasLetter(text: string) {
-  return new RegExp(`[${LETTER}ё]`, 'i').test(text);
+  return new RegExp(`[${LETTER}ё\\ue000-\\uf8ff]`, 'i').test(text);
 }
 
 // Название и описание задачи либо события. На входе — строка, из которой уже вынуты распознанные

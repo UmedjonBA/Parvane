@@ -3758,6 +3758,7 @@
 "KnowledgeDeleteConfirm" = "Move the note «{name}» to the cloud trash?";
 "KnowledgeBack" = "Back to notes";
 "KnowledgeEditorPlaceholder" = "Text, - [ ] items, [[links]], #tags";
+"KnowledgePlan" = "Schedule";
 "KnowledgePlanned" = "Planned";
 "KnowledgeNoDate" = "no date";
 "KnowledgeBacklinks" = "Backlinks · {count}";

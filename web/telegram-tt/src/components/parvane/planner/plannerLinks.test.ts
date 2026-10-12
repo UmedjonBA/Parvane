@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDescriptionLine, formatPlainName, splitNameLinks } from './plannerLinks';
+import {
+  formatDescriptionLine, formatPlainName, maskNameLinks, splitNameLinks, unmaskNameLinks,
+} from './plannerLinks';
 
 describe('планировщик: ссылки на заметки в названии записи', () => {
   it('название без ссылок — одна часть текста', () => {
@@ -50,5 +52,20 @@ describe('планировщик: ссылки на заметки в назва
     expect(formatDescriptionLine('\n  см. [[Конспект|конспект]] \nещё')).toBe('см. конспект');
     expect(formatDescriptionLine('')).toBe('');
     expect(formatDescriptionLine(undefined)).toBe('');
+  });
+
+  it('заглушки закрывают ссылки, не сдвигая остальной текст, и снимаются обратно', () => {
+    const source = '[[Встреча завтра]] сб [[А|б]][[В]] 15:00';
+    const { text, links } = maskNameLinks(source);
+    expect(links).toEqual(['[[Встреча завтра]]', '[[А|б]]', '[[В]]']);
+    expect(text).toHaveLength(source.length);
+    expect(text).not.toMatch(/[[\]|]|завтра/);
+    expect(text.slice(18, 22)).toBe(' сб ');
+    expect(unmaskNameLinks(text, links)).toBe(source);
+    // Часть строки (название без описания) возвращает только свои ссылки
+    expect(unmaskNameLinks(text.slice(0, 18), links)).toBe('[[Встреча завтра]]');
+    // Скобки без названия ссылкой не считаются
+    expect(maskNameLinks('[[]] и [[ ]]')).toEqual({ text: '[[]] и [[ ]]', links: [] });
+    expect(unmaskNameLinks('без ссылок', [])).toBe('без ссылок');
   });
 });

@@ -56,7 +56,8 @@ type OwnProps = {
   tasks: PlannerTask[];
   events: PlannerEvent[];
   onCreated: (day?: string) => void;
-  onMore: NoneToVoidFunction;
+  // Полная форма записи; без неё (окно открыто вне «Плана») кнопки «Подробнее» нет
+  onMore?: NoneToVoidFunction;
   onClose: NoneToVoidFunction;
 };
 
@@ -570,9 +571,11 @@ const PlannerQuickInput = ({
           <span className={buildClassName(styles.muted, styles.grow)}>
             {lang('PlannerQuickDefault', { date: formatDayLabel(lang, today) })}
           </span>
-          <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
-            {lang('PlannerQuickMore')}
-          </button>
+          {onMore && (
+            <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
+              {lang('PlannerQuickMore')}
+            </button>
+          )}
           <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onClose}>
             {lang('Cancel')}
           </button>

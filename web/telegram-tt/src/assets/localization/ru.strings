@@ -1844,6 +1844,7 @@
 "KnowledgeDeleteConfirm" = "Переместить заметку «{name}» в корзину облака?";
 "KnowledgeBack" = "К заметкам";
 "KnowledgeEditorPlaceholder" = "Текст, - [ ] пункты, [[ссылки]], #теги";
+"KnowledgePlan" = "Запланировать";
 "KnowledgePlanned" = "Запланировано";
 "KnowledgeNoDate" = "без даты";
 "KnowledgeBacklinks" = "Обратные ссылки · {count}";

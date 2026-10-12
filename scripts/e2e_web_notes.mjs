@@ -1080,6 +1080,34 @@ try {
   await page.waitForTimeout(2500);
   console.log('OK: холст — текст, карточка заметки, связь');
 
+  // ── «Запланировать» в заметке: окно ввода поверх «Знаний», запись — в «Запланировано» и в «Плане» ──
+  const PLANNED_TASK = 'купить кулер';
+  const quickInput = page.locator('#planner-quick-input');
+  await openTab('Notes');
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка перед «Запланировать»');
+  await note.locator('[data-note-plan]').click();
+  await visible(quickInput, 'окно ввода текстом поверх заметки');
+  assert.equal(await quickInput.inputValue(), `[[${NOTE}]] `, 'заготовка окна — ссылка на заметку');
+  // Слова названия заметки («X99») разбор не читает: название записи — ссылка и дописанное
+  await quickInput.fill(`[[${NOTE}]] ${PLANNED_TASK} сегодня`);
+  await visible(page.locator('form[data-quick-kind="task"] [data-quick-chip="day"]'), 'чип дня в окне ввода');
+  await quickInput.press('Enter');
+  await quickInput.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('окно ввода не закрылось после записи'));
+  // Раздел не сменился: открыта та же заметка, запись уже в её «Запланировано»
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка после «Запланировать»');
+  assert.equal(await planner.count(), 0, '«Запланировать» увело из «Знаний» в «План»');
+  await visible(note.locator('[data-note-planned]').getByText(PLANNED_TASK), 'запись из «Запланировать» в «Запланировано»');
+  await openPlannerScreen(page, 'today');
+  const plannedTask = planner.locator('[data-today-tasks] [data-task-id]').filter({ hasText: PLANNED_TASK });
+  await visible(plannedTask, 'задача из «Запланировать» на «Сегодня»');
+  await visible(plannedTask.locator(`[data-note-link="${NOTE}"]`), 'ссылка на заметку в названии задачи');
+  // Ссылка в названии возвращает в заметку
+  await plannedTask.locator(`[data-note-link="${NOTE}"]`).click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка по ссылке из задачи');
+  console.log('OK: «Запланировать» — окно ввода поверх заметки, запись в «Запланировано» и в «Плане»');
+
   // ── «Файлы»: хранилище — обычная папка облака с файлами .md ───────────────
   await openTab('Files');
   await visible(cloud.getByText('Knowledge', { exact: true }), 'папка хранилища в облаке');
@@ -1100,6 +1128,7 @@ try {
   await visible(body.getByText('проверить обе GPU'), 'текст заметки после перезагрузки');
   await visible(body.getByText('Строка с холста'), 'правка заметки с холста после перезагрузки');
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');
+  await visible(note.locator('[data-note-planned]').getByText(PLANNED_TASK), 'запись из «Запланировать» после перезагрузки');
   await openTab('Canvas');
   await visible(board.locator('[data-canvas-type="file"]'), 'карточка холста после перезагрузки');
   await visible(

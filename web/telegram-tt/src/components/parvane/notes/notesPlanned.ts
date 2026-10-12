@@ -54,6 +54,14 @@ function sortKey(item: PlannedItem) {
   return `${item.day || NO_DAY}${item.time || ''}`;
 }
 
+/**
+ * Заготовка строки ввода текстом для «Запланировать»: ссылка на заметку и пробел — дальше пользователь
+ * дописывает, что и когда. Запись с такой ссылкой в названии встаёт в «Запланировано» заметки.
+ */
+export function notePlanLine(title: string) {
+  return `[[${title.trim()}]] `;
+}
+
 /** Все записи «Плана» по заметкам: по названию из ссылки и по id заметки-источника. */
 export function buildPlannedIndex(planner: PlannerState, today: string): PlannedIndex {
   const byTitle = new Map<string, PlannedItem[]>();

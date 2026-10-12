@@ -43,6 +43,7 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
+import PlannerQuickHost from '../planner/PlannerQuickHost';
 import GraphPanel from './GraphPanel';
 import KnowledgeTabs from './KnowledgeTabs';
 import NoteFolderPicker from './NoteFolderPicker';
@@ -879,6 +880,8 @@ const Knowledge = () => {
         confirmHandler={handleRestoreGuide}
         onClose={closeRestore}
       />
+      {/* «Запланировать» в заметке: окно ввода текстом «Плана» поверх раздела */}
+      <PlannerQuickHost />
     </div>
   );
 };
