@@ -1800,6 +1800,14 @@
 "PlannerHealthWorkoutExample" = "бег 5 км 30 мин";
 "PlannerHealthActivityHint" = "Текстом: «бег 5 км 28 мин», «зал присед 4x8x80, жим 3x10x60», «шаги 9500». Норма ВОЗ — от 150 минут умеренной активности в неделю.";
 "PlannerHealthKcalWeek" = "Калории за неделю";
+"ParvanePalettePlaceholder" = "Заметка, событие или команда";
+"ParvanePaletteCommands" = "Команды";
+"ParvanePaletteRecords" = "Записи";
+"ParvanePaletteLogSleep" = "Записать сон";
+"ParvanePaletteLogFood" = "Записать еду";
+"ParvanePaletteSleepText" = "сон";
+"ParvanePaletteFoodText" = "обед";
+"ParvanePaletteLoading" = "Заметки и записи загружаются…";
 "ParvaneSectionKnowledge" = "Знания";
 "KnowledgeNotes" = "Заметки";
 "KnowledgeGraph" = "Граф";

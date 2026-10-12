@@ -2744,6 +2744,14 @@ export interface LangPair {
   'PlannerHealthWorkoutExample': undefined;
   'PlannerHealthActivityHint': undefined;
   'PlannerHealthKcalWeek': undefined;
+  'ParvanePalettePlaceholder': undefined;
+  'ParvanePaletteCommands': undefined;
+  'ParvanePaletteRecords': undefined;
+  'ParvanePaletteLogSleep': undefined;
+  'ParvanePaletteLogFood': undefined;
+  'ParvanePaletteSleepText': undefined;
+  'ParvanePaletteFoodText': undefined;
+  'ParvanePaletteLoading': undefined;
   'ParvaneSectionKnowledge': undefined;
   'KnowledgeNotes': undefined;
   'KnowledgeGraph': undefined;

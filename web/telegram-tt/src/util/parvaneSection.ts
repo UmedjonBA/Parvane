@@ -104,8 +104,20 @@ export function requestPlannerAdd() {
   setPlannerAddRequest(true);
 }
 
+// Строка, с которой откроется окно ввода («Записать сон» в общем поиске); обычный запрос — пустая
+let plannerAddText = '';
+
+export function requestPlannerAddText(text: string) {
+  plannerAddText = text;
+  requestPlannerAdd();
+}
+
+/** Снять запрос новой записи; возвращает строку, заготовленную для окна ввода. */
 export function consumePlannerAddRequest() {
+  const text = plannerAddText;
+  plannerAddText = '';
   setPlannerAddRequest(false);
+  return text;
 }
 
 // Вкладка раздела «Знания»: заметки, граф связей, холст либо файлы (прежнее «Облако»)

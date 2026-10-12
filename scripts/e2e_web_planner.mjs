@@ -91,11 +91,12 @@ try {
   await page.keyboard.press('Escape');
   await chatsHeader.getByRole('menuitem', { name: 'Planner entry' }).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.locator('#LeftColumn .NewChatButton').count(), 0, 'карандаша Telegram нет и на компьютере');
-  // «Поиск» панели открывает поиск по чатам; папок чатов в панели нет
+  // «Поиск» панели открывает общий поиск (палитру Ctrl+K, сценарий `e2e_web_palette.mjs`); папок чатов в панели нет
   await sidebar.getByRole('button', { name: 'Search' }).click();
-  await page.locator('#telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.waitForFunction(() => document.activeElement?.id === 'telegram-search-input', undefined, { timeout: STEP_TIMEOUT_MS });
+  await page.locator('#parvane-palette-search').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.waitForFunction(() => document.activeElement?.id === 'parvane-palette-search', undefined, { timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
+  await page.locator('#parvane-palette-search').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await waitForChatList(page, STEP_TIMEOUT_MS);
   console.log('OK: панель — знак, пять разделов сверху, «Поиск» и «Профиль» внизу');
 

@@ -14,6 +14,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   consumeNoteRequest, getKnowledgeView, getNoteRequest, setKnowledgeView,
 } from '../../../util/parvaneSection';
+import { openPalette } from '../palette/paletteOpen';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
@@ -747,6 +748,15 @@ const Knowledge = () => {
           <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
             <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>
             <KnowledgeTabs />
+            <button
+              type="button"
+              className={buildClassName(kit.ib, kit.onlyM)}
+              aria-label={lang('Search')}
+              data-palette-open
+              onClick={openPalette}
+            >
+              <PvIcon name="search" />
+            </button>
             {isNoteShown && (
               <span className={buildClassName(kit.muted, kit.hideM, styles.crumb)}>
                 {`/ ${openFolder || lang('KnowledgeRoot')}`}

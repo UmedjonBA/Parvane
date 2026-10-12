@@ -13,6 +13,7 @@ import {
   consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerSettingsRequest,
   getPlannerView, setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
+import { consumePlannerRecordRequest, getPlannerRecordRequest, openPalette } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
   formatDay, formatDayLabel, formatPeriod, formatWeekRange,
@@ -384,8 +385,9 @@ const Planner = () => {
   const addRequest = useDerivedState(getPlannerAddRequest);
   useEffect(() => {
     if (!addRequest || !isLoaded) return;
-    consumePlannerAddRequest();
-    handleOpenQuick();
+    const text = consumePlannerAddRequest();
+    if (text) handleQuickText(text);
+    else handleOpenQuick();
   }, [addRequest, isLoaded]);
 
   // «Настройки плана» в профиле
@@ -403,6 +405,20 @@ const Planner = () => {
     consumePlannerDayRequest();
     pickDay(dayRequest);
   }, [dayRequest]);
+
+  // Запись, выбранная в общем поиске (Ctrl+K): её день и карточка
+  const recordRequest = useDerivedState(getPlannerRecordRequest);
+  useEffect(() => {
+    if (!recordRequest || !isLoaded) return;
+    consumePlannerRecordRequest();
+    const { kind, id, day } = recordRequest;
+    if (kind === 'task') {
+      handleOpenTask(id, day);
+      return;
+    }
+    if (day) pickDay(day);
+    if (kind === 'event' && day) handleOpenEvent(id, day);
+  }, [recordRequest, isLoaded]);
 
   const [quickText, setQuickText] = useState('');
 
@@ -686,6 +702,15 @@ const Planner = () => {
                 activeTab={isHealth ? TAB_HEALTH : TAB_CALENDAR}
                 onSwitchTab={handleSwitchTab}
               />
+              <button
+                type="button"
+                className={styles.ib}
+                aria-label={lang('Search')}
+                data-palette-open
+                onClick={openPalette}
+              >
+                <Icon name="search" />
+              </button>
             </header>
           )}
           {renderHeader()}
