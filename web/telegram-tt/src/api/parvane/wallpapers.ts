@@ -13,7 +13,10 @@ const PATTERN_SIZE = 2048;
 const PATTERN_TILE_WIDTH = 480;
 // Пропорции рисунка `pattern.svg` (viewBox 1440×2960)
 const PATTERN_TILE_HEIGHT = Math.round((PATTERN_TILE_WIDTH * 2960) / 1440);
-const THUMB_SIZE = 32;
+// Миниатюра плитки галереи: рисунок на ней должен быть виден, как в чате
+const THUMB_SIZE = 192;
+// Сторона вырезки готового фона под миниатюру: рисунок на плитке читается, а не превращается в шум
+const THUMB_CROP = 640;
 export const PATTERN_SLUG_PREFIX = 'builtin-pattern-';
 // Картинка, загруженная пользователем (`uploadWallpaper`)
 export const UPLOADED_SLUG_PREFIX = 'wp';
@@ -22,9 +25,11 @@ interface GradientPreset {
   id: string;
   colors: [string, string, string?];
   angle: number;
-  // Фон с узором: цвет и плотность рисунка поверх градиента
-  ink?: string;
-  inkAlpha?: number;
+  // Цвет и плотность рисунка поверх градиента
+  ink: string;
+  inkAlpha: number;
+  // Прежний вид идентификатора (`builtin-<id>`): им названы фоны, выбранные до того, как узор получили все
+  isLegacySlug?: boolean;
 }
 
 // Фоны с узором — как штатные фоны Telegram: рисунок-«дудл» поверх градиента. Галереи Telegram в
@@ -40,18 +45,19 @@ export const PATTERN_PRESETS: GradientPreset[] = [
   { id: 'lilac', colors: ['#d9d0f5', '#b9a8ea', '#ece6fb'], angle: 125, ink: '#3f2f8a', inkAlpha: 0.14 },
 ];
 
+// Фонов без узора нет (решение пользователя 12 окт 2026): прежние чистые градиенты получили тот же рисунок
 const PRESETS: GradientPreset[] = [
-  { id: 'dusk', colors: ['#3b2a5a', '#1c1b33', '#0f1a2e'], angle: 135 },
-  { id: 'forest', colors: ['#1f4d3a', '#0f2f25', '#24613f'], angle: 160 },
-  { id: 'ocean', colors: ['#0f3d5c', '#0a2540', '#146b8a'], angle: 120 },
-  { id: 'ember', colors: ['#5a2a2a', '#2e1414', '#7a3b1f'], angle: 145 },
-  { id: 'lavender', colors: ['#7c6fcf', '#4a3f9a', '#a48ad6'], angle: 110 },
-  { id: 'mint', colors: ['#7cd4b0', '#3f9a7a', '#b4e6cf'], angle: 150 },
-  { id: 'sand', colors: ['#d9c39a', '#b58f5a', '#f0dfc0'], angle: 130 },
-  { id: 'sky', colors: ['#8cc6f0', '#4a8fd6', '#cfe6fa'], angle: 100 },
-  { id: 'rose', colors: ['#e2a0b8', '#b3607f', '#f4cfdc'], angle: 125 },
-  { id: 'graphite', colors: ['#3a3d45', '#1f2126', '#5a5f6a'], angle: 140 },
-];
+  { id: 'dusk', colors: ['#3b2a5a', '#1c1b33', '#0f1a2e'], angle: 135, ink: '#ffffff', inkAlpha: 0.1 },
+  { id: 'forest', colors: ['#1f4d3a', '#0f2f25', '#24613f'], angle: 160, ink: '#ffffff', inkAlpha: 0.1 },
+  { id: 'ocean', colors: ['#0f3d5c', '#0a2540', '#146b8a'], angle: 120, ink: '#ffffff', inkAlpha: 0.1 },
+  { id: 'ember', colors: ['#5a2a2a', '#2e1414', '#7a3b1f'], angle: 145, ink: '#ffffff', inkAlpha: 0.1 },
+  { id: 'lavender', colors: ['#7c6fcf', '#4a3f9a', '#a48ad6'], angle: 110, ink: '#ffffff', inkAlpha: 0.14 },
+  { id: 'mint', colors: ['#7cd4b0', '#3f9a7a', '#b4e6cf'], angle: 150, ink: '#124a36', inkAlpha: 0.16 },
+  { id: 'sand', colors: ['#d9c39a', '#b58f5a', '#f0dfc0'], angle: 130, ink: '#5a3d14', inkAlpha: 0.16 },
+  { id: 'sky', colors: ['#8cc6f0', '#4a8fd6', '#cfe6fa'], angle: 100, ink: '#143f6e', inkAlpha: 0.15 },
+  { id: 'rose', colors: ['#e2a0b8', '#b3607f', '#f4cfdc'], angle: 125, ink: '#6a1f3d', inkAlpha: 0.15 },
+  { id: 'graphite', colors: ['#3a3d45', '#1f2126', '#5a5f6a'], angle: 140, ink: '#ffffff', inkAlpha: 0.09 },
+].map((preset) => ({ ...preset, isLegacySlug: true } as GradientPreset));
 
 function drawGradient(size: number, preset: GradientPreset) {
   const canvas = document.createElement('canvas');
@@ -96,13 +102,24 @@ function drawPattern(canvas: HTMLCanvasElement, tile: HTMLCanvasElement, preset:
   const tintedCtx = tinted.getContext('2d')!;
   tintedCtx.drawImage(tile, 0, 0);
   tintedCtx.globalCompositeOperation = 'source-in';
-  tintedCtx.fillStyle = preset.ink!;
+  tintedCtx.fillStyle = preset.ink;
   tintedCtx.fillRect(0, 0, tinted.width, tinted.height);
   const ctx = canvas.getContext('2d')!;
-  ctx.globalAlpha = preset.inkAlpha!;
+  ctx.globalAlpha = preset.inkAlpha;
   ctx.fillStyle = ctx.createPattern(tinted, 'repeat')!;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.globalAlpha = 1;
+}
+
+// Миниатюра — середина готового фона в том же масштабе рисунка, что и в чате
+function drawThumbnail(source: HTMLCanvasElement) {
+  const canvas = document.createElement('canvas');
+  canvas.width = THUMB_SIZE;
+  canvas.height = THUMB_SIZE;
+  const crop = Math.min(source.width, THUMB_CROP);
+  const offset = (source.width - crop) / 2;
+  canvas.getContext('2d')!.drawImage(source, offset, offset, crop, crop, 0, 0, THUMB_SIZE, THUMB_SIZE);
+  return canvas;
 }
 
 /** Миниатюра картинки пользователя: по ней считается средний цвет фона. */
@@ -137,16 +154,15 @@ export function buildBuiltinWallpapers(
     if (typeof document === 'undefined') return [];
     const result: ApiWallpaper[] = [];
     const tile = await loadPatternTile();
-    // Без рисунка (не загрузился) фоны с узором не показываем — это были бы дубли градиентов
-    const presets = [...(tile ? PATTERN_PRESETS : []), ...PRESETS];
-    for (const preset of presets) {
-      const id = preset.ink ? `${PATTERN_SLUG_PREFIX}${preset.id}` : `builtin-${preset.id}`;
-      const canvas = drawGradient(preset.ink ? PATTERN_SIZE : SIZE, preset);
-      if (preset.ink) drawPattern(canvas, tile!, preset);
+    // Рисунок не загрузился — фоны остаются градиентами: пустая галерея хуже
+    for (const preset of [...PATTERN_PRESETS, ...PRESETS]) {
+      const id = preset.isLegacySlug ? `builtin-${preset.id}` : `${PATTERN_SLUG_PREFIX}${preset.id}`;
+      const canvas = drawGradient(tile ? PATTERN_SIZE : SIZE, preset);
+      if (tile) drawPattern(canvas, tile, preset);
       const full = await canvasToBlob(canvas, 'image/jpeg', 0.9);
       if (!full) continue;
       cacheBlob(id, full, 'image/jpeg');
-      const thumb = drawGradient(THUMB_SIZE, preset).toDataURL('image/jpeg', 0.7);
+      const thumb = drawThumbnail(canvas).toDataURL('image/jpeg', 0.8);
       result.push({
         slug: id,
         document: {
