@@ -1,18 +1,21 @@
 import { memo, useMemo } from '../../../lib/teact/teact';
 
-import type { PlannerState } from './plannerModel';
+import type {
+  PlannerDayIndexEntry, PlannerEvent, PlannerState, PlannerTask,
+} from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDayLong, listColorStyle } from './plannerFormat';
 import {
-  addDays, AGENDA_DAYS, buildDayIndex, getListColor, instanceKey,
+  formatDay, formatDuration, formatProject, formatRelativeDay, listColorStyle,
+} from './plannerFormat';
+import {
+  addDays, AGENDA_DAYS, buildDayIndex, getListColor, instanceKey, toMinutes, toTime,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import PlannerName from './PlannerName';
-import PlannerTaskRow from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
 
@@ -26,7 +29,8 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
 };
 
-// Вид «Список» (spec 018): повестка на 30 дней от выбранного дня, пустые дни пропущены
+// Вид «Список» (spec 018): повестка на 30 дней от выбранного дня, пустые дни пропущены. Строка — время и
+// блок цвета записи; срок задачи — красной строкой
 const PlannerAgenda = ({
   state, day, today, onPickDay, onOpenTask, onOpenEvent,
 }: OwnProps) => {
@@ -48,56 +52,105 @@ const PlannerAgenda = ({
     onOpenEvent(e.currentTarget.dataset.eventId!, e.currentTarget.dataset.day!);
   });
 
+  const handleTaskClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    onOpenTask(e.currentTarget.dataset.taskId!, e.currentTarget.dataset.instanceDay);
+  });
+
+  const renderEvent = (event: PlannerEvent, dayKey: string) => (
+    <div key={`e${instanceKey(event)}`} className={styles.feedLine}>
+      <span className={styles.feedTime}>{event.isAllDay ? lang('PlannerAllDayTiny') : event.start}</span>
+      <div
+        className={buildClassName(styles.feedBlock, event.isHoliday ? styles.kindDue : styles.kindEvent)}
+        style={listColorStyle(event.color)}
+      >
+        <button
+          type="button"
+          className={styles.feedBlockOpen}
+          data-event-id={event.id}
+          data-day={dayKey}
+          onClick={handleEventClick}
+        >
+          <span className={styles.feedBlockName}><PlannerName name={event.name} /></span>
+          <span className={styles.feedBlockSub}>
+            {event.isAllDay ? lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')
+              : `${event.start}–${event.end}`}
+            {event.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderTask = (task: PlannerTask) => {
+    const isTimed = Boolean(task.start) && task.minutes !== undefined;
+    return (
+      <div key={`t${instanceKey(task)}`} className={styles.feedLine}>
+        <span className={styles.feedTime}>{task.start || '—'}</span>
+        <div
+          className={buildClassName(
+            styles.feedBlock, styles.kindTask, task.status === 'done' && styles.feedBlockDone,
+          )}
+          style={listColorStyle(getListColor(state, task.project))}
+        >
+          <button
+            type="button"
+            className={styles.feedBlockOpen}
+            data-task-id={task.id}
+            data-instance-day={task.instanceDay}
+            onClick={handleTaskClick}
+          >
+            <span className={styles.feedBlockName}><PlannerName name={task.name} /></span>
+            <span className={styles.feedBlockSub}>
+              {isTimed ? `${task.start}–${toTime(toMinutes(task.start!) + task.minutes!)}`
+                : [
+                  lang('PlannerKindTask').toLowerCase(),
+                  task.minutes === undefined ? undefined : formatDuration(lang, task.minutes),
+                ].filter(Boolean).join(' · ')}
+              {task.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
+            </span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // События на весь день — первыми, дальше события и задачи по времени начала, задачи без времени — в конце
+  const renderDayRows = (entry: PlannerDayIndexEntry, dayKey: string) => [
+    ...entry.events.map((event) => ({ order: event.isAllDay ? '' : event.start, node: renderEvent(event, dayKey) })),
+    ...entry.tasks.map((task) => ({ order: task.start || '99', node: renderTask(task) })),
+  ].sort((a, b) => a.order.localeCompare(b.order)).map(({ node }) => node);
+
   return (
     <div className={styles.agenda} data-planner-view="agenda">
-      {!days.length && <p className={styles.small}>{lang('PlannerAgendaEmpty')}</p>}
+      {!days.length && <p className={styles.empty}>{lang('PlannerAgendaEmpty')}</p>}
       {days.map(([key, entry]) => (
         <section key={key} className={styles.agendaDay} data-day={key}>
           <button
             type="button"
             className={buildClassName(
-              styles.agendaDayTitle, key === today && styles.agendaDayToday, entry.isHoliday && styles.agendaHoliday,
+              styles.agendaDayTitle, key === today && styles.agendaDayToday, entry.isHoliday && styles.red,
             )}
             data-day={key}
             onClick={handleDayClick}
           >
-            {formatDayLong(lang, key)}
+            {`${formatRelativeDay(lang, key, today)}, ${formatDay(lang, key)}`}
           </button>
-          {entry.events.map((event) => (
-            <button
-              key={event.id}
-              type="button"
-              className={styles.agendaRow}
-              style={listColorStyle(event.color)}
-              data-event-id={event.id}
-              data-day={key}
-              onClick={handleEventClick}
-            >
-              <span className={styles.agendaTime}>
-                {event.isAllDay ? lang('PlannerAllDayShort') : `${event.start}–${event.end}`}
-              </span>
-              <span className={styles.agendaName}><PlannerName name={event.name} /></span>
-            </button>
-          ))}
-          {[...entry.tasks]
-            .sort((a, b) => (a.start || '99').localeCompare(b.start || '99'))
-            .map((task) => (
-              <PlannerTaskRow
-                key={instanceKey(task)}
-                task={task}
-                context="day"
-                color={getListColor(state, task.project)}
-                onOpen={onOpenTask}
-              />
-            ))}
+          {renderDayRows(entry, key)}
           {entry.deadlines.map((task) => (
-            <PlannerTaskRow
-              key={`due-${task.id}`}
-              task={task}
-              context="all"
-              color={getListColor(state, task.project)}
-              onOpen={onOpenTask}
-            />
+            <div key={`due-${task.id}`} className={styles.feedLine}>
+              <span className={buildClassName(styles.feedTime, styles.red)}>{lang('PlannerDueTiny')}</span>
+              <div className={buildClassName(styles.feedBlock, styles.kindDue)}>
+                <button
+                  type="button"
+                  className={styles.feedBlockOpen}
+                  data-task-id={task.id}
+                  onClick={handleTaskClick}
+                >
+                  <span className={styles.feedBlockName}><PlannerName name={task.name} /></span>
+                  <span className={styles.feedBlockSub}>{formatProject(lang, task.project)}</span>
+                </button>
+              </div>
+            </div>
           ))}
         </section>
       ))}

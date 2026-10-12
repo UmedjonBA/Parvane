@@ -22,8 +22,11 @@ type OwnProps = {
 };
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
+// Самый насыщенный цвет клетки — день, занятый на весь бюджет, %
+const MAX_LOAD_TINT = 85;
 
-// Вид «Год»: двенадцать месяцев, дни с делами и праздники отмечены; нажатие открывает месяц
+// Вид «Год»: двенадцать месяцев; насыщенность клетки — загрузка дня, красное число — праздник, точка —
+// срок задачи. Нажатие открывает месяц
 const PlannerYear = ({
   state, year, picked, today, onOpenMonth,
 }: OwnProps) => {
@@ -35,51 +38,61 @@ const PlannerYear = ({
     onOpenMonth(e.currentTarget.dataset.day!);
   });
 
+  const todayMonth = today.slice(0, 7);
+
   return (
-    <div className={styles.year} data-planner-view="year">
-      {getYearMonths(year).map((month) => {
-        const prefix = toDayKey(month).slice(0, 7);
-        return (
-          <section key={prefix} className={styles.yearMonth} data-month={prefix}>
-            <button
-              type="button"
-              className={styles.yearMonthTitle}
-              data-day={prefix === picked.slice(0, 7) ? picked : toDayKey(month)}
-              onClick={handleDayClick}
-            >
-              {formatMonthName(lang, month)}
-            </button>
-            <div className={styles.yearGrid}>
-              {WEEKDAY_INDEXES.map((weekday) => (
-                <span key={`w${weekday}`} className={styles.yearWeekday}>{formatWeekday(lang, weekday).charAt(0)}</span>
-              ))}
-              {getMonthGridKeys(month).map((day) => {
-                if (!day.startsWith(prefix)) return <span key={day} />;
-                const entry = index.get(day);
-                const count = entry ? entry.tasks.length + entry.events.length + entry.deadlines.length : 0;
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    className={buildClassName(
-                      styles.yearDay,
-                      Boolean(count) && styles.yearDayBusy,
-                      entry?.isHoliday && styles.yearDayHoliday,
-                      day === today && styles.yearDayToday,
-                      day === picked && styles.yearDayPicked,
-                    )}
-                    data-day={day}
-                    aria-label={lang('PlannerAriaYearDay', { date: formatDay(lang, day), count })}
-                    onClick={handleDayClick}
-                  >
-                    {fromDayKey(day).getDate()}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        );
-      })}
+    <div data-planner-view="year">
+      <div className={styles.year}>
+        {getYearMonths(year).map((month) => {
+          const prefix = toDayKey(month).slice(0, 7);
+          return (
+            <section key={prefix} data-month={prefix}>
+              <button
+                type="button"
+                className={buildClassName(styles.yearMonthTitle, prefix === todayMonth && styles.yearMonthCurrent)}
+                data-day={prefix === picked.slice(0, 7) ? picked : toDayKey(month)}
+                onClick={handleDayClick}
+              >
+                {formatMonthName(lang, month)}
+              </button>
+              <div className={styles.yearGrid}>
+                {WEEKDAY_INDEXES.map((weekday) => (
+                  <span key={`w${weekday}`} className={styles.yearWeekday}>
+                    {formatWeekday(lang, weekday).charAt(0)}
+                  </span>
+                ))}
+                {getMonthGridKeys(month).map((day) => {
+                  if (!day.startsWith(prefix)) return <span key={day} />;
+                  const entry = index.get(day);
+                  const count = entry ? entry.tasks.length + entry.events.length + entry.deadlines.length : 0;
+                  const tint = entry && state.budget
+                    ? Math.min(MAX_LOAD_TINT, Math.round((entry.minutes / state.budget) * MAX_LOAD_TINT)) : 0;
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      className={buildClassName(
+                        styles.yearDay,
+                        entry?.isHoliday && styles.yearDayHoliday,
+                        Boolean(entry?.deadlines.length) && styles.yearDayDue,
+                        day === today && styles.yearDayToday,
+                        day === picked && styles.yearDayPicked,
+                      )}
+                      style={tint ? `--planner-load: ${tint}%` : undefined}
+                      data-day={day}
+                      aria-label={lang('PlannerAriaYearDay', { date: formatDay(lang, day), count })}
+                      onClick={handleDayClick}
+                    >
+                      {fromDayKey(day).getDate()}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      <p className={styles.yearLegend}>{lang('PlannerYearLegend')}</p>
     </div>
   );
 };
