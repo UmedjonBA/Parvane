@@ -43,7 +43,7 @@ type EngineTask = {
 type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
-  allDay?: boolean; isHoliday?: boolean; color?: number;
+  allDay?: boolean; isHoliday?: boolean; color?: number; description?: string;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 type EngineGoal = { target: number; tolerance: number } | null;
@@ -256,6 +256,8 @@ export function fromEngineState(engine: EngineState): PlannerState {
       return {
         id: e.id,
         name: e.name,
+        // Движок прежней сборки поля не отдаёт
+        description: e.description || undefined,
         start: e.start,
         end: e.end,
         day: !repeat && e.day ? e.day : undefined,
@@ -351,6 +353,7 @@ function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
       allDay: Boolean(e.isAllDay),
       isHoliday: Boolean(e.isHoliday),
       color: e.color || 0,
+      description: e.description || '',
     },
   };
 }

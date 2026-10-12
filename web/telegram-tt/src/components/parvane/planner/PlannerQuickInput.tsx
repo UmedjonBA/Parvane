@@ -240,12 +240,39 @@ const PlannerQuickInput = ({
                   )}
                 </span>
               ))}
-              <div className={styles.quickName} dir="auto">
-                {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
-                  || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
-                  || (draft.kind === 'water' && lang('PlannerHealthWater'))
-                  || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
-              </div>
+              {draft.kind === 'task' || draft.kind === 'event' ? (
+                <div className={styles.quickParts}>
+                  <div className={styles.quickPart} data-quick-part="name">
+                    <span className={styles.quickPartLabel}>{lang('PlannerQuickName')}</span>
+                    <span className={buildClassName(styles.quickPartText, styles.quickPartName)} dir="auto">
+                      {draft.name || lang('PlannerQuickNoName')}
+                    </span>
+                  </div>
+                  {draft.description && (
+                    <div className={styles.quickPart} data-quick-part="description" data-quick-chip="description">
+                      <span className={styles.quickPartLabel}>{lang('PlannerFieldDescription')}</span>
+                      <span className={styles.quickPartText} dir="auto">{draft.description}</span>
+                      <button
+                        type="button"
+                        className={styles.tagRemove}
+                        data-field="description"
+                        aria-label={lang('PlannerQuickRemove', { value: lang('PlannerFieldDescription') })}
+                        title={lang('PlannerQuickDescriptionToName')}
+                        onClick={handleSkip}
+                      >
+                        <Icon name="close" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className={styles.quickName} dir="auto">
+                  {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
+                    || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
+                    || (draft.kind === 'water' && lang('PlannerHealthWater'))
+                    || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
+                </div>
+              )}
               {errorKey && <div className={styles.quickError} role="alert">{lang(errorKey)}</div>}
               {isNameTooLong && <div className={styles.quickError} role="alert">{lang('PlannerQuickTooLong')}</div>}
             </>

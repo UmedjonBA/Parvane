@@ -8,6 +8,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   formatDay, formatDuration, formatProject, formatRelativeDay, listColorStyle,
 } from './plannerFormat';
+import { formatDescriptionLine } from './plannerLinks';
 import {
   addDays, AGENDA_DAYS, buildDayIndex, getListColor, instanceKey, toMinutes, toTime,
 } from './plannerModel';
@@ -76,6 +77,9 @@ const PlannerAgenda = ({
               : `${event.start}–${event.end}`}
             {event.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
           </span>
+          {event.description && (
+            <span className={styles.feedBlockNote} data-block-note>{formatDescriptionLine(event.description)}</span>
+          )}
         </button>
       </div>
     </div>
@@ -108,6 +112,9 @@ const PlannerAgenda = ({
                 ].filter(Boolean).join(' · ')}
               {task.repeat ? ` · ${lang('PlannerRepeatMark')}` : ''}
             </span>
+            {task.description && (
+              <span className={styles.feedBlockNote} data-block-note>{formatDescriptionLine(task.description)}</span>
+            )}
           </button>
         </div>
       </div>

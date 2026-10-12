@@ -1190,6 +1190,17 @@
   color: var(--pv-muted);
 }
 
+// Первая строка описания записи
+.feedBlockNote {
+  unicode-bidi: plaintext;
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .feedNow {
   display: grid;
   grid-template-columns: 3rem minmax(0, 1fr);
@@ -1622,6 +1633,17 @@
   font-family: var(--font-family-monospace);
   font-size: 0.6875rem;
   color: var(--pv-muted);
+  white-space: nowrap;
+}
+
+.weekBlockNote {
+  unicode-bidi: plaintext;
+  overflow: hidden;
+  flex: none;
+
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -2602,6 +2624,40 @@
   margin-top: 0.125rem;
   font-weight: var(--font-weight-medium);
   overflow-wrap: anywhere;
+}
+
+// «Название» и «Описание» разобранной строки — подписанными строками под чипами
+.quickParts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  width: 100%;
+  margin-top: 0.125rem;
+}
+
+.quickPart {
+  display: flex;
+  gap: 0.625rem;
+  align-items: baseline;
+}
+
+.quickPartLabel {
+  flex: none;
+  min-width: 5rem;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.quickPartText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.quickPartName {
+  font-weight: var(--font-weight-medium);
 }
 
 .quickError {

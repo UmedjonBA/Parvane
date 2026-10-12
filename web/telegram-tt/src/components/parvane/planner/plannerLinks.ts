@@ -24,3 +24,9 @@ export function splitNameLinks(name: string): PlannerNamePart[] {
 export function formatPlainName(name: string) {
   return splitNameLinks(name).map(({ text }) => text).join('');
 }
+
+/** Первая непустая строка описания без разметки ссылок — вторая строка записи в расписании. */
+export function formatDescriptionLine(description?: string) {
+  const line = (description || '').split('\n').find((part) => part.trim());
+  return line ? formatPlainName(line.trim()) : '';
+}

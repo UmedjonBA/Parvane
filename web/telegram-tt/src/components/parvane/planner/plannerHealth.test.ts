@@ -31,6 +31,18 @@ describe('здоровье: черновик ввода → состояние',
     expect(state.events[1].repeat?.weekdays).toEqual([2]);
   });
 
+  it('описание из строки уходит в событие и в задачу', () => {
+    const state = stateAfter([
+      'вт 15:00 пара по Английскому будет тест  лисининг', 'задача сдать отчёт до пт — приложить таблицу',
+      'созвон завтра 16:00',
+    ]);
+    expect(state.events[0]).toMatchObject({
+      name: 'пара по Английскому', description: 'будет тест лисининг', day: '2026-10-13', start: '15:00', end: '16:45',
+    });
+    expect(state.tasks[0]).toMatchObject({ name: 'сдать отчёт', description: 'приложить таблицу', due: '2026-10-09' });
+    expect(state.events[1].description).toBeUndefined();
+  });
+
   it('еда с сахаром и временем, вода складывается', () => {
     const state = stateAfter(['обед гречка 150г б30 ж10 у60 кл6 сахар 4 13:30 520 ккал', 'вода 500 мл', '2 стакана']);
     const day = state.nutrition[TODAY];

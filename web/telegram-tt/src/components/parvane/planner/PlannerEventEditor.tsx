@@ -19,6 +19,7 @@ import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
+import TextArea from '../../ui/TextArea';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
@@ -48,6 +49,8 @@ const EVENT_ERROR_KEYS = {
 } as const satisfies Record<PlannerEventError, string>;
 
 const NAME_MAX_LENGTH = 160;
+// Движок принимает до 4000 байт: запас на кириллицу
+const DESCRIPTION_MAX_LENGTH = 2000;
 
 type Pending = { kind: 'save'; patch: Partial<PlannerEvent> } | { kind: 'delete' };
 
@@ -58,6 +61,7 @@ const PlannerEventEditor = ({
   const lang = useLang();
 
   const [name, setName] = useState(event.name);
+  const [description, setDescription] = useState(event.description || '');
   const [start, setStart] = useState(event.start);
   const [end, setEnd] = useState(event.end);
   const [day, setDay] = useState(event.instanceDay || event.day || '');
@@ -74,6 +78,10 @@ const PlannerEventEditor = ({
 
   const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.currentTarget.value);
+  });
+
+  const handleDescriptionChange = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setDescription(e.currentTarget.value);
   });
 
   const applyScope = useLastCallback((scope: PlannerSeriesScope, action: Pending) => {
@@ -112,6 +120,7 @@ const PlannerEventEditor = ({
     }
     const next = {
       name: name.trim(),
+      description: description.trim() || undefined,
       start: isAllDay ? ALL_DAY_START : start,
       end: isAllDay ? ALL_DAY_END : end,
       repeat,
@@ -132,6 +141,7 @@ const PlannerEventEditor = ({
         kind: 'save',
         patch: {
           name: next.name,
+          description: next.description,
           start: next.start,
           end: next.end,
           isAllDay: next.isAllDay,
@@ -203,6 +213,14 @@ const PlannerEventEditor = ({
           <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
         )}
       </div>
+      <TextArea
+        id="planner-event-description"
+        label={lang('PlannerFieldDescription')}
+        value={description}
+        maxLength={DESCRIPTION_MAX_LENGTH}
+        noReplaceNewlines
+        onChange={handleDescriptionChange}
+      />
       <PlannerDetailsFold summary={detailsSummary}>
         <div className={styles.checks}>
           <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />

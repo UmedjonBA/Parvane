@@ -135,6 +135,7 @@ const PlannerTaskForm = ({
     if (kind === 'event') {
       const event = {
         name: name.trim(),
+        description: description.trim() || undefined,
         start: isAllDay ? ALL_DAY_START : start,
         end: isAllDay ? ALL_DAY_END : (end || (start ? getDefaultEventEnd(start) : '')),
         repeat,
@@ -211,14 +212,15 @@ const PlannerTaskForm = ({
         autoFocus
         onChange={handleNameChange}
       />
+      <TextArea
+        id="planner-new-description"
+        label={lang('PlannerFieldDescription')}
+        value={description}
+        onChange={handleDescriptionChange}
+        noReplaceNewlines
+      />
       {kind === 'task' ? (
         <>
-          <TextArea
-            label={lang('PlannerFieldDescription')}
-            value={description}
-            onChange={handleDescriptionChange}
-            noReplaceNewlines
-          />
           <div className={styles.fields}>
             {repeatDraft.kind === 'none' && (
               <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={day} onInput={setDay} />

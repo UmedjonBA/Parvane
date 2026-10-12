@@ -82,6 +82,8 @@ export type PlannerTask = {
 export type PlannerEvent = {
   id: string;
   name: string;
+  // Подробности события (нет значения — описания нет); название — короткая строка для календаря
+  description?: string;
   start: string;
   end: string;
   // Разовая дата либо правило повтора (события «по дням недели» этапов 1–2 читаются как еженедельный ряд)
@@ -1329,6 +1331,7 @@ export function normalizePlannerState(raw: unknown): PlannerState {
       return {
         id: String(event.id),
         name: event.name,
+        description: typeof event.description === 'string' && event.description ? event.description : undefined,
         start: event.start,
         end: event.end,
         day: !repeat && isDay(event.day) ? event.day : undefined,

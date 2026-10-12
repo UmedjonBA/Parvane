@@ -10,7 +10,7 @@ import {
   formatDay, formatHours, formatHoursNumber, formatSpan, formatWeekday, listColorStyle,
 } from './plannerFormat';
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
-import { formatPlainName } from './plannerLinks';
+import { formatDescriptionLine, formatPlainName } from './plannerLinks';
 import {
   addDays, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getListColor, getNutrientTotal, getTasksForDay,
   getTimedForDay, instanceKey, isHolidayOn, layoutTimed, MINUTES_IN_DAY, toMinutes, toTime,
@@ -375,6 +375,8 @@ const PlannerWeek = ({
                   + `inset-inline-start: ${(lane / lanes) * PERCENT}%; width: ${((right - lane) / lanes) * PERCENT}%`;
                 const color = listColorStyle(item.task ? getListColor(state, item.task.project) : item.event!.color);
                 const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
+                // Описание — третьей строкой: видно, когда блок достаточно высок, иначе обрезается
+                const note = formatDescriptionLine(item.task ? item.task.description : item.event!.description);
                 return (
                   <div
                     key={itemKey}
@@ -390,7 +392,7 @@ const PlannerWeek = ({
                     <button
                       type="button"
                       className={styles.weekBlockOpen}
-                      title={`${item.start}–${item.end} ${formatPlainName(item.name)}`}
+                      title={`${item.start}–${item.end} ${formatPlainName(item.name)}${note ? ` — ${note}` : ''}`}
                       data-kind={item.task ? 'task' : 'event'}
                       data-id={item.task ? item.task.id : item.event!.id}
                       data-day={day}
@@ -398,6 +400,7 @@ const PlannerWeek = ({
                     >
                       <span className={styles.weekBlockName}><PlannerName name={item.name} /></span>
                       <span className={styles.weekBlockTime}>{`${item.start}–${item.end}`}</span>
+                      {note && <span className={styles.weekBlockNote} data-block-note>{note}</span>}
                     </button>
                   </div>
                 );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatPlainName, splitNameLinks } from './plannerLinks';
+import { formatDescriptionLine, formatPlainName, splitNameLinks } from './plannerLinks';
 
 describe('планировщик: ссылки на заметки в названии записи', () => {
   it('название без ссылок — одна часть текста', () => {
@@ -43,5 +43,12 @@ describe('планировщик: ссылки на заметки в назва
   it('название без разметки: подпись либо название заметки на месте ссылки', () => {
     expect(formatPlainName('созвон [[Сервер X99|сервер]] и [[Parvane]]')).toBe('созвон сервер и Parvane');
     expect(formatPlainName('Зарядка')).toBe('Зарядка');
+  });
+
+  it('строка описания для расписания: первая непустая, без разметки ссылок', () => {
+    expect(formatDescriptionLine('будет тест\nвзять тетрадь')).toBe('будет тест');
+    expect(formatDescriptionLine('\n  см. [[Конспект|конспект]] \nещё')).toBe('см. конспект');
+    expect(formatDescriptionLine('')).toBe('');
+    expect(formatDescriptionLine(undefined)).toBe('');
   });
 });

@@ -38,6 +38,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       state.events.push({
         id: newId(),
         name: draft.name,
+        description: draft.description,
         start: draft.isAllDay ? ALL_DAY_START : draft.start!,
         end: draft.isAllDay ? ALL_DAY_END : draft.end!,
         day: repeat ? undefined : draft.day,
@@ -49,7 +50,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       state.tasks.push({
         id: newId(),
         name: draft.name,
-        description: '',
+        description: draft.description || '',
         steps: [],
         status: 'queue',
         project: '',

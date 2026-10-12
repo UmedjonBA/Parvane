@@ -7,6 +7,7 @@ import type { PlannerState } from './plannerModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatDuration, formatSpan, listColorStyle } from './plannerFormat';
 import { getDailyRecord, getWorkouts, isShortSleep } from './plannerHealth';
+import { formatDescriptionLine } from './plannerLinks';
 import {
   getEventsForDay, getListColor, getTasksForDay, getTimedForDay, instanceKey, setTaskDone, toMinutes, toTime,
 } from './plannerModel';
@@ -118,6 +119,7 @@ const PlannerDayFeed = ({
     getTimedForDay(state, day).forEach((item) => {
       const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
       const color = item.task ? getListColor(state, item.task.project) : item.event!.color;
+      const note = formatDescriptionLine(item.task ? item.task.description : item.event!.description);
       rows.push({
         minutes: toMinutes(item.start),
         node: (
@@ -154,6 +156,7 @@ const PlannerDayFeed = ({
                   <span>{`${item.start}–${item.end}`}</span>
                   {item.task?.description.includes('[[') && <PlannerName name={item.task.description} onlyLinks />}
                 </span>
+                {note && <span className={styles.feedBlockNote} data-block-note>{note}</span>}
               </button>
             </div>
           </div>
@@ -220,6 +223,9 @@ const PlannerDayFeed = ({
             >
               <span className={styles.feedBlockName}><PlannerName name={event.name} /></span>
               <span className={styles.feedBlockSub}>{lang(event.isHoliday ? 'PlannerHoliday' : 'PlannerAllDay')}</span>
+              {event.description && (
+                <span className={styles.feedBlockNote} data-block-note>{formatDescriptionLine(event.description)}</span>
+              )}
             </button>
           </div>
         </div>

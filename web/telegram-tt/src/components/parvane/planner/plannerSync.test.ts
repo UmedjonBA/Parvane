@@ -246,6 +246,51 @@ describe('планировщик ↔ движок (spec 010)', () => {
     });
   });
 
+  it('описание события: из движка в состояние и обратно отдельным полем', () => {
+    const state = fromEngineState({
+      ...ENGINE,
+      events: [{
+        id: 'e5',
+        name: 'пара',
+        start: '15:00',
+        end: '16:45',
+        weekdays: null,
+        day: '2026-10-13',
+        description: 'будет тест',
+      }, {
+        // Движок прежней сборки поля не отдаёт; пустая строка — описания нет
+        id: 'e6', name: 'созвон', start: '10:00', end: '11:00', weekdays: null, day: '2026-10-13',
+      }, {
+        id: 'e7', name: 'обед', start: '13:00', end: '14:00', weekdays: null, day: '2026-10-13', description: '',
+      }],
+    });
+    expect(state.events.map(({ description }) => description)).toEqual(['будет тест', undefined, undefined]);
+
+    // Правка описания не переписывает время, правка времени — описание (сведение по полям между устройствами)
+    const described = structuredClone(state);
+    described.events[0].description = 'будет тест\nвзять тетрадь';
+    described.events[1].description = 'обсудить бюджет';
+    expect(diffChanges(state, described)).toEqual([
+      { event: { id: 'e5', weekdays: null, repeat: null, description: 'будет тест\nвзять тетрадь' } },
+      { event: { id: 'e6', weekdays: null, repeat: null, description: 'обсудить бюджет' } },
+    ]);
+    const moved = structuredClone(state);
+    moved.events[0].start = '16:00';
+    expect(diffChanges(state, moved)).toEqual([{ event: { id: 'e5', weekdays: null, repeat: null, start: '16:00' } }]);
+    // Стёртое описание уходит пустой строкой
+    const cleared = structuredClone(state);
+    cleared.events[0].description = undefined;
+    expect(diffChanges(state, cleared)).toEqual([
+      { event: { id: 'e5', weekdays: null, repeat: null, description: '' } },
+    ]);
+    // Новое событие несёт описание вместе с остальными полями
+    const created = structuredClone(state);
+    created.events.push({
+      id: 'e8', name: 'врач', start: '10:30', end: '11:30', day: '2026-10-09', description: 'взять полис',
+    });
+    expect((diffChanges(state, created)[0].event as { description: string }).description).toBe('взять полис');
+  });
+
   it('правка одного поля не переписывает остальные (сведение по полям между устройствами)', () => {
     const before = fromEngineState(ENGINE);
     const after: PlannerState = structuredClone(before);

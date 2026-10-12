@@ -630,6 +630,19 @@ describe('планировщик: статистика времени и хра�
     expect(restored.events).toEqual([]);
     expect(restored.projects).toEqual(['', 'Работа', 'Дом']);
     expect(restored.lists.map((list) => list.name)).toEqual(['Работа', 'Дом']);
+    // Описание события: строка сохраняется, пустое либо негодное значение — «описания нет»
+    const events = normalizePlannerState({
+      version: 1,
+      tasks: [],
+      events: [
+        { id: 'a', name: 'пара', start: '15:00', end: '16:45', day: '2026-10-13', description: 'будет тест' },
+        { id: 'b', name: 'созвон', start: '10:00', end: '11:00', day: '2026-10-13', description: '' },
+        { id: 'c', name: 'обед', start: '13:00', end: '14:00', day: '2026-10-13', description: 5 },
+        { id: 'd', name: 'ужин', start: '19:00', end: '20:00', day: '2026-10-13' },
+      ],
+      projects: [],
+    }).events;
+    expect(events.map(({ description }) => description)).toEqual(['будет тест', undefined, undefined, undefined]);
   });
 });
 

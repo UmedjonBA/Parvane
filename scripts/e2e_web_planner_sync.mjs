@@ -255,7 +255,7 @@ try {
         {
           event: {
             id: `holiday-${day}`, name: 'Праздник двора', start: '00:00', end: '23:59', weekdays: null, day,
-            allDay: true, isHoliday: true,
+            allDay: true, isHoliday: true, description: 'Столы во дворе',
           },
         },
       ],
@@ -266,8 +266,21 @@ try {
     const state = await sessions.bob2.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
     const list = state?.state?.lists?.find((l) => l.name === 'Цветной');
     const event = state?.state?.events?.find((e) => e.name === 'Праздник двора');
-    return list?.color === 5 && event?.allDay === true && event?.isHoliday === true;
-  }, SYNC_TIMEOUT_MS, 'на B — цвет списка и событие-праздник на весь день');
+    return list?.color === 5 && event?.allDay === true && event?.isHoliday === true
+      && event?.description === 'Столы во дворе';
+  }, SYNC_TIMEOUT_MS, 'на B — цвет списка и событие-праздник на весь день с описанием');
+  // Описание события — отдельное поле: правка одного описания с B не трогает остальное
+  await sessions.bob2.page.evaluate(async ({ day }) => {
+    await window.__parvaneDiagCallApi('parvanePlannerApply', {
+      changes: [{ event: { id: `holiday-${day}`, description: 'Столы во дворе\nпринести пирог' } }],
+    });
+    await window.__parvaneDiagCallApi('parvanePlannerFlush');
+  }, { day: todayKey() });
+  await waitFor(async () => {
+    const state = await sessions.bob1.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+    const event = state?.state?.events?.find((e) => e.name === 'Праздник двора');
+    return event?.description === 'Столы во дворе\nпринести пирог' && event?.allDay === true && event?.isHoliday === true;
+  }, SYNC_TIMEOUT_MS, 'на A — описание события, поправленное на B; остальные поля прежние');
   // Запись цели с A видна на B
   await sessions.bob1.page.evaluate(async ({ day }) => {
     await window.__parvaneDiagCallApi('parvanePlannerApply', {

@@ -24,6 +24,11 @@ function dayKey(delta = 0) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// Ближайший будущий вторник («вт» в строке ввода; сегодняшний день не считается)
+function nextTuesdayKey() {
+  return dayKey(((2 - new Date().getDay() + 7) % 7) || 7);
+}
+
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: PHONE });
 let session;
@@ -142,6 +147,26 @@ try {
   await planner.getByText('Added: купить кабель').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: задача со сроком и задача без даты');
 
+  // ── Название и описание (отзыв 12 окт 2026): «пара» — 1 ч 45 мин, «будет…» — описание ──
+  const OWNER_NAME = 'пара по Английскому';
+  const OWNER_DESCRIPTION = 'будет тест лисининг';
+  const namePart = form.locator('[data-quick-part="name"] [dir="auto"]');
+  await openQuick();
+  await input.fill('вт 15:00 пара по Английскому будет тест  лисининг');
+  await expectKind('event');
+  assert.equal((await chip('time').innerText()).trim(), '15:00–16:45');
+  assert.equal((await namePart.innerText()).trim(), OWNER_NAME);
+  assert.equal((await chip('description').locator('[dir="auto"]').innerText()).trim(), OWNER_DESCRIPTION);
+  // Снятое описание возвращается в название; правка строки делит заново
+  await chip('description').getByRole('button').click();
+  await chip('description').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  assert.equal((await namePart.innerText()).trim(), `${OWNER_NAME} ${OWNER_DESCRIPTION}`);
+  await input.fill('вт 15:00 пара по Английскому будет тест лисининг');
+  await chip('description').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/quick-input-description-phone.png` });
+  await submit(OWNER_NAME);
+  console.log('OK: название и описание разделены, «пара» длится 1 ч 45 мин');
+
   // ── Повтор; «Подробнее» ведёт в полную форму ──────────────────────────────
   await openQuick();
   await input.fill('урок вт 15:00 каждую неделю 5 мес');
@@ -181,6 +206,22 @@ try {
   await page.keyboard.press('Escape');
   await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   console.log('OK: записи пережили перезагрузку; на компьютере ввод открывает «+ Запись»');
+
+  // ── Событие с описанием после перезагрузки: строка в расписании дня и карточка события ──
+  await openPlannerScreen(page, 'calendar');
+  await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
+  await planner.locator(`[role="gridcell"][data-day="${nextTuesdayKey()}"]`).click({ position: { x: 10, y: 10 } });
+  const ownerBlock = planner.locator('[data-planner-day] [data-block]', { hasText: OWNER_NAME });
+  await ownerBlock.waitFor({ state: 'visible', timeout: 30000 });
+  assert.match(await ownerBlock.innerText(), /15:00–16:45/);
+  assert.equal((await ownerBlock.locator('[data-block-note]').innerText()).trim(), OWNER_DESCRIPTION);
+  await ownerBlock.getByRole('button').click();
+  const descriptionField = planner.locator('#planner-event-description');
+  await descriptionField.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await descriptionField.inputValue(), OWNER_DESCRIPTION);
+  assert.equal(await planner.locator('#planner-event-name').inputValue(), OWNER_NAME);
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/event-description-wide.png` });
+  console.log('OK: событие «пара» 15:00–16:45 с описанием пережило перезагрузку');
 
   console.log('e2e_web_quick_input: OK');
 } catch (error) {
