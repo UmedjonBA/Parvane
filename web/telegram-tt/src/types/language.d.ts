@@ -2806,6 +2806,7 @@ export interface LangPair {
   'KnowledgeGraphKindEvent': undefined;
   'KnowledgeGraphCreate': undefined;
   'KnowledgeGraphHint': undefined;
+  'KnowledgeGraphSearch': undefined;
   'KnowledgeGraphOpenInNotes': undefined;
   'KnowledgeGraphOpenInPlan': undefined;
   'KnowledgeGraphMissingText': undefined;

@@ -1864,6 +1864,7 @@
 "KnowledgeGraphLinks" = "связей: {count}";
 "KnowledgeGraphCreate" = "Создать заметку";
 "KnowledgeGraphHint" = "нажмите заметку — она откроется справа · потяните от кольца вокруг заметки, чтобы связать · нажмите линию, чтобы убрать связь";
+"KnowledgeGraphSearch" = "Найти на графе";
 "KnowledgeGraphOpenInNotes" = "Открыть в заметках";
 "KnowledgeGraphOpenInPlan" = "Открыть в плане";
 "KnowledgeGraphMissingText" = "На эту заметку ссылаются другие, но самой её ещё нет.";

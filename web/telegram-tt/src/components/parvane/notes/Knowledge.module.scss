@@ -1105,6 +1105,11 @@
   opacity: 0.7;
 }
 
+.graphFound circle:first-child {
+  stroke: var(--pv-fg);
+  stroke-width: 3;
+}
+
 // Заметка под ведомой связью: сюда ляжет ссылка
 .graphTarget circle:first-child {
   stroke: var(--pv-accent);
@@ -1181,6 +1186,54 @@
 
   background: var(--pv-panel);
   box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+}
+
+.graphSearch {
+  position: relative;
+  flex: 0 1 13rem;
+  min-width: 8rem;
+  margin-inline-start: auto;
+}
+
+.graphSearchIcon {
+  pointer-events: none;
+
+  position: absolute;
+  inset-block-start: 0.4375rem;
+  inset-inline-start: 0.625rem;
+
+  color: var(--pv-muted);
+}
+
+.graphSearchInput {
+  user-select: text;
+
+  width: 100%;
+  height: 1.875rem;
+  padding: 0 0.75rem;
+  padding-inline-start: 2rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.9375rem;
+
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--pv-fg);
+
+  appearance: none;
+  background: var(--pv-panel);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-faint);
+  }
+
+  &::-webkit-search-cancel-button {
+    appearance: none;
+  }
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
 }
 
 // ── холст ────────────────────────────────────────────────────────────────────

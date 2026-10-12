@@ -3778,6 +3778,7 @@
 "KnowledgeGraphLinks" = "links: {count}";
 "KnowledgeGraphCreate" = "Create note";
 "KnowledgeGraphHint" = "click a note to read it here · drag from the ring around a note to link it · click a line to remove the link";
+"KnowledgeGraphSearch" = "Find in graph";
 "KnowledgeGraphOpenInNotes" = "Open in Notes";
 "KnowledgeGraphOpenInPlan" = "Open in plan";
 "KnowledgeGraphMissingText" = "Other notes link here, but the note itself does not exist yet.";

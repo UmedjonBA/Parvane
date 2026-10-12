@@ -68,6 +68,8 @@ const LINK = /\[\[([^\]|\n]+)/g;
 const RECORD_LINK = /\[\[[^\]\n]*\]\]/g;
 const LABEL_MAX = 22;
 const LABEL_GAP = 17;
+// Мельче этого масштаба подписи остаются только у выбранной точки, её соседей и найденного поиском
+const LABEL_MIN_SCALE = 0.55;
 // Кольцо, за которое тянут связь: настолько шире кружка
 const HANDLE_GAP = 5;
 // Запас попадания в точку при отпускании связи, в пикселях экрана
@@ -109,6 +111,10 @@ function pairOf(a: string, b: string) {
   return a < b ? `${a}>${b}` : `${b}>${a}`;
 }
 
+function normalizeQuery(value: string) {
+  return value.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
 function isTyping(target: EventTarget | null) {
   const element = target as HTMLElement | null;
   return Boolean(element?.closest?.('input, textarea, [contenteditable="true"]'));
@@ -134,6 +140,7 @@ const NotesGraph = ({
   const [newAt, setNewAt] = useState<Draft>();
   const [pickedEdge, setPickedEdge] = useState<string>();
   const [flash, setFlash] = useState<string>();
+  const [query, setQuery] = useState('');
   const dragRef = useRef<Drag>();
   const pinchRef = useRef(createPinch());
   const lastTapRef = useRef<{ id?: string; at: number }>({ at: 0 });
@@ -186,6 +193,14 @@ const NotesGraph = ({
     if (node.kind !== 'record') return node.title;
     return node.title.replace(RECORD_LINK, '').replace(/\s+/g, ' ').trim() || node.title;
   };
+
+  const found = useMemo(() => {
+    const wanted = normalizeQuery(query);
+    if (!wanted) return undefined;
+    return new Set(nodes.filter((node) => normalizeQuery(labelOf(node)).includes(wanted)
+      || normalizeQuery(node.title).includes(wanted)).map(({ id }) => id));
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [query, nodes, dailyById, lang]);
 
   const fit = useLastCallback(() => {
     const box = boardRef.current?.getBoundingClientRect();
@@ -472,6 +487,14 @@ const NotesGraph = ({
 
   const handleToggleDays = useLastCallback(() => setWithDays(!withDays));
   const handleToggleRecords = useLastCallback(() => setWithRecords(!withRecords));
+  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.currentTarget.value));
+
+  // Enter в поиске выбирает первую найденную точку
+  const handleQueryKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    const first = nodes.find(({ id }) => found?.has(id));
+    if (first) onPick(pickOf(first));
+  });
 
   const handleNewKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') void submitNew(e.currentTarget.value);
@@ -481,6 +504,7 @@ const NotesGraph = ({
   const line = newAt || draft;
   const lineFrom = line ? byId.get(line.from) : undefined;
   const linkSourceId = line?.from || linkFromId;
+  const areLabelsShown = view.scale >= LABEL_MIN_SCALE;
   const toScreen = (point: GraphPoint) => (
     `left: ${view.x + point.x * view.scale}px; top: ${view.y + point.y * view.scale}px`
   );
@@ -514,7 +538,8 @@ const NotesGraph = ({
             const isEditable = canLinkFrom(from) && canLinkTo(to);
             const isOn = picked === edge.from || picked === edge.to;
             // Пока ведут связь, граф виден целиком: любая заметка — цель
-            const isDim = !linkSourceId && Boolean(picked) && !isOn;
+            const isDim = !linkSourceId
+              && (found ? !(found.has(edge.from) && found.has(edge.to)) : Boolean(picked) && !isOn);
             return (
               <g
                 key={key}
@@ -554,9 +579,12 @@ const NotesGraph = ({
             const radius = nodeRadius(node.degree);
             const label = labelOf(node);
             const isNear = picked === node.id || Boolean(picked && neighbours?.has(node.id));
+            const isFound = Boolean(found?.has(node.id));
             const isTarget = line?.overId === node.id;
             const isSource = linkSourceId === node.id;
-            const isDim = linkSourceId ? !isSource && !canLinkTo(node) : Boolean(picked) && !isNear;
+            const isDim = linkSourceId ? !isSource && !canLinkTo(node)
+              : found ? !isFound : Boolean(picked) && !isNear;
+            const hasLabel = areLabelsShown || isNear || isFound || isTarget || isSource;
             return (
               <g
                 key={node.id}
@@ -564,6 +592,7 @@ const NotesGraph = ({
                   styles.graphNode,
                   node.kind === 'missing' && styles.graphMissing,
                   picked === node.id && styles.graphPicked,
+                  isFound && styles.graphFound,
                   isTarget && styles.graphTarget,
                   isSource && styles.graphSource,
                   isDim && styles.graphDim,
@@ -583,9 +612,11 @@ const NotesGraph = ({
                     data-graph-handle={node.id}
                   />
                 )}
-                <text x={node.x} y={node.y + radius + LABEL_GAP}>
-                  {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
-                </text>
+                {hasLabel && (
+                  <text x={node.x} y={node.y + radius + LABEL_GAP}>
+                    {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -618,6 +649,20 @@ const NotesGraph = ({
         >
           {lang('KnowledgeGraphRecords')}
         </button>
+        <label className={styles.graphSearch}>
+          <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
+          <input
+            className={styles.graphSearchInput}
+            type="search"
+            value={query}
+            placeholder={lang('KnowledgeGraphSearch')}
+            aria-label={lang('KnowledgeGraphSearch')}
+            autoComplete="off"
+            data-graph-search
+            onChange={handleQuery}
+            onKeyDown={handleQueryKey}
+          />
+        </label>
       </div>
       {linkFrom && (
         <div
