@@ -2714,6 +2714,66 @@
   color: var(--pv-red);
 }
 
+// Подсказки: прежние строки и примеры. На компьютере переносятся, на телефоне — не выше двух рядов,
+// лишнее листается вбок: кнопка «Добавить» остаётся на экране и при открытой клавиатуре
+.quickSuggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+
+  @media (max-width: 600px) {
+    overflow-x: auto;
+    display: grid;
+    grid-auto-columns: max-content;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(2, auto);
+    justify-content: start;
+  }
+}
+
+.quickSuggestion {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+
+  max-width: 100%;
+  min-height: 1.875rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.9375rem;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+
+  &:hover,
+  &:focus-within {
+    color: var(--pv-fg);
+  }
+
+  &:focus-within {
+    border-color: var(--pv-accent);
+  }
+}
+
+.quickSuggestionText {
+  cursor: var(--custom-cursor, pointer);
+
+  overflow: hidden;
+
+  min-width: 0;
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  color: inherit;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
+  outline: none;
+}
+
 .quickFooter {
   display: flex;
   flex-wrap: wrap;

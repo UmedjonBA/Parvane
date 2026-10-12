@@ -56,6 +56,25 @@ try {
       { timeout: STEP_TIMEOUT_MS },
     );
   };
+  // Подсказки окна: прежние строки и примеры
+  const suggestionBlock = form.locator('[data-quick-suggestions]');
+  const suggestion = (text) => suggestionBlock.locator(`[data-quick-suggestion][data-text="${text}"]`);
+  const readSuggestions = () => suggestionBlock.locator('[data-quick-suggestion]').evaluateAll(
+    (items) => items.map((item) => ({ text: item.dataset.text, source: item.dataset.source })),
+  );
+  const suggestionTitle = async () => (await suggestionBlock.locator('> div').first().innerText()).trim();
+  const expectSuggestions = async (expected) => {
+    await page.waitForFunction((texts) => {
+      const items = [...document.querySelectorAll('[data-quick-suggestions] [data-quick-suggestion]')];
+      return items.length === texts.length && items.every((item, index) => item.dataset.text === texts[index]);
+    }, expected, { timeout: STEP_TIMEOUT_MS });
+  };
+  // Поле заполняется на следующей перерисовке — значение ждём
+  const expectInput = async (value) => {
+    await page.waitForFunction(
+      (expected) => document.querySelector('#planner-quick-input')?.value === expected, value, { timeout: STEP_TIMEOUT_MS },
+    );
+  };
   const submit = async (name) => {
     await addButton.click();
     await planner.getByText(`Added: ${name}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -84,6 +103,18 @@ try {
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await addButton.isDisabled(), true, 'пустую строку добавить нельзя');
   console.log('OK: «+» нижней панели открывает ввод текстом в «Плане»');
+
+  // ── Новый аккаунт: своих строк нет — встроенные примеры, пример заполняет строку ──
+  const examples = await readSuggestions();
+  assert.equal(examples.length, 8, `примеров должно быть восемь: ${JSON.stringify(examples)}`);
+  assert.ok(examples.every(({ source }) => source === 'example'), 'у нового аккаунта — только примеры');
+  assert.equal(await suggestionTitle(), 'Examples');
+  assert.equal(await suggestionBlock.locator('[data-quick-suggestion-forget]').count(), 0, 'пример забыть нельзя');
+  await suggestion(examples[0].text).click();
+  await expectInput(examples[0].text);
+  await expectKind('event');
+  assert.equal((await chip('time').innerText()).trim(), '16:00–16:45');
+  console.log('OK: у нового аккаунта подсказки — встроенные примеры');
 
   // ── Событие: дата, время и длительность видны чипами ──────────────────────
   await input.fill('Быстрый созвон завтра 16:00 45 мин');
@@ -151,6 +182,54 @@ try {
   const namePart = form.locator('[data-quick-part="name"] [dir="auto"]');
   const LIST_NAME = 'Ремонт';
   await openQuick();
+
+  // ── Подсказки: добавленные строки — первыми, свежие выше; примеры добирают список ──
+  const RECENT = ['купить кабель', 'задача сдать отчёт до пт', 'Быстрый созвон завтра 16:00 45 мин'];
+  const shown = await readSuggestions();
+  assert.deepEqual(shown.slice(0, RECENT.length), RECENT.map((text) => ({ text, source: 'history' })));
+  assert.ok(shown.slice(RECENT.length).every(({ source }) => source === 'example'), 'список добирают примеры');
+  assert.equal(await suggestionTitle(), 'Suggestions');
+  // Первые буквы сужают список до подходящей строки; она заполняет поле и разбирается так же
+  await input.fill('Быс');
+  await expectSuggestions([RECENT[2]]);
+  assert.equal(await suggestionTitle(), 'Recent');
+  await suggestion(RECENT[2]).click();
+  await expectInput(RECENT[2]);
+  await expectKind('event');
+  assert.equal((await chip('time').innerText()).trim(), '16:00–16:45');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'planner-quick-input', 'фокус остался в поле');
+  // Строка, равная набранной, не предлагается; ничего не подошло — блока нет
+  await input.fill('купить кабель');
+  await suggestionBlock.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Tab дописывает набранное начало до первой подсказки
+  await input.fill('куп');
+  await expectSuggestions([RECENT[0]]);
+  await input.press('Tab');
+  await expectInput(RECENT[0]);
+  // Стрелка вниз уводит в подсказки, Escape возвращает в поле, окно остаётся открытым
+  await input.fill('');
+  await suggestion(RECENT[0]).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await input.press('ArrowDown');
+  await page.waitForFunction(
+    (text) => document.activeElement?.dataset.text === text, RECENT[0], { timeout: STEP_TIMEOUT_MS },
+  );
+  await page.keyboard.press('ArrowDown');
+  await page.waitForFunction(
+    (text) => document.activeElement?.dataset.text === text, RECENT[1], { timeout: STEP_TIMEOUT_MS },
+  );
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.activeElement?.id === 'planner-quick-input', undefined, {
+    timeout: STEP_TIMEOUT_MS,
+  });
+  assert.equal(await input.isVisible(), true, 'первый Escape окно не закрывает');
+  // «Забыть» убирает строку: она не возвращается и из данных «Плана»
+  await suggestionBlock.locator(`[data-quick-suggestion-forget][data-text="${RECENT[0]}"]`).click();
+  await suggestion(RECENT[0]).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  assert.deepEqual((await readSuggestions()).slice(0, 2), RECENT.slice(1).map((text) => ({ text, source: 'history' })));
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/quick-suggestions-phone.png` });
+  console.log('OK: подсказки — прежние строки, сужаются по первым буквам, заполняют поле, забываются');
+
   await input.fill('планёрка завтра в пять вечера');
   await expectKind('event');
   assert.equal((await chip('time').innerText()).trim(), '17:00–18:00');
@@ -331,6 +410,12 @@ try {
   await expectKind('event');
   await learnedChip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal((await chip('time').innerText()).trim(), '15:00–15:20');
+  // Набранные строки лежат на устройстве и пережили перезагрузку: подсказка есть и на компьютере
+  await input.fill('сдать');
+  await page.waitForFunction(() => (
+    document.querySelector('[data-quick-suggestions] [data-quick-suggestion]')?.dataset.text === 'задача сдать отчёт до пт'
+  ), undefined, { timeout: STEP_TIMEOUT_MS });
+  assert.equal((await readSuggestions())[0].source, 'history');
   await closeQuickWide();
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await planner.locator('[data-quick-learned-reset]').click();
@@ -341,8 +426,37 @@ try {
   await expectKind('event');
   assert.equal((await chip('time').innerText()).trim(), '15:00–16:00');
   assert.equal(await learnedChip.count(), 0, 'после сброса выученного нет');
+  // Тот же сброс стирает набранные строки: подсказки остались только из данных «Плана»
+  await input.fill('');
+  await suggestionBlock.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.ok((await readSuggestions()).every(({ source }) => source !== 'history'), 'набранные строки стёрты');
+  assert.deepEqual(
+    await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('parvane:quick-history:'))),
+    [], 'история набранных строк должна быть стёрта',
+  );
   await closeQuickWide();
   console.log('OK: выученное пережило перезагрузку и сброшено в настройках плана');
+
+  // ── Запись, созданная полной формой, предлагается строкой, собранной из данных «Плана» ──
+  const FORM_TASK = 'Разобрать архив';
+  await openQuickWide();
+  await form.getByRole('button', { name: 'More options' }).click();
+  await page.locator('#planner-new-name').fill(FORM_TASK);
+  await planner.getByRole('button', { name: 'Create', exact: true }).click();
+  await planner.getByRole('heading', { name: FORM_TASK }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await openQuickWide();
+  await input.fill('Разоб');
+  await expectSuggestions([FORM_TASK]);
+  assert.deepEqual(await readSuggestions(), [{ text: FORM_TASK, source: 'data' }]);
+  await suggestion(FORM_TASK).click();
+  await expectInput(FORM_TASK);
+  await expectKind('task');
+  // Событие с повтором, добавленное строкой до сброса, — шаблоном без даты
+  await input.fill('урок');
+  await expectSuggestions(['урок вт 15:00 каждую неделю']);
+  await closeQuickWide();
+  console.log('OK: запись полной формы и ряд событий предлагаются строками из данных «Плана»');
 
   // ── Событие с описанием после перезагрузки: строка в расписании дня и карточка события ──
   await openPlannerScreen(page, 'calendar');

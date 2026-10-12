@@ -3,13 +3,17 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { IconName } from '../../../types/icons';
-import type { PlannerLearnedWord, PlannerSettings } from './plannerModel';
+import type {
+  PlannerEvent, PlannerLearnedWord, PlannerSettings, PlannerTask,
+} from './plannerModel';
 import type {
   QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
 } from './plannerQuick';
 import type { LearnStore } from './plannerQuickLearn';
 
 import buildClassName from '../../../util/buildClassName';
+import captureEscKeyListener from '../../../util/captureEscKeyListener';
+import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import {
   formatDay, formatDayLabel, formatDuration, formatRepeat, formatSpan,
 } from './plannerFormat';
@@ -20,8 +24,13 @@ import {
   correctWords, hasLearned, learnedDefaults, learnStoreFromWords, mergeLearnStores, readLearned, recordCorrection,
   resetLearned, saveLearned,
 } from './plannerQuickLearn';
+import {
+  buildCandidates, filterSuggestions, forgetSuggestion, isSuggestionPrefix, lineKey, readHistory, recordHistoryLine,
+  saveHistory,
+} from './plannerQuickSuggest';
 import { canSyncLearned, updatePlanner } from './plannerStore';
 
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -43,6 +52,9 @@ type OwnProps = {
   learnedWords: PlannerLearnedWord[];
   // «План» загружен и принимает правки: словарь читается из него и пишется в него
   isLearnedSynced: boolean;
+  // Задачи и события «Плана»: из них собираются подсказки для записей, созданных не этим окном
+  tasks: PlannerTask[];
+  events: PlannerEvent[];
   onCreated: (day?: string) => void;
   onMore: NoneToVoidFunction;
   onClose: NoneToVoidFunction;
@@ -116,18 +128,24 @@ const MEAL_LABELS = {
 const NAME_MAX_LENGTH = 160;
 const INPUT_MAX_LENGTH = 300;
 const FOCUS_DELAY_MS = 200;
+const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
-  isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, onCreated, onMore, onClose,
+  isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, tasks, events, onCreated, onMore,
+  onClose,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
+  const suggestionsRef = useRef<HTMLDivElement>();
   const [text, setText] = useState('');
   const [choice, setChoice] = useState<KindChoice>('auto');
   const [skip, setSkip] = useState<QuickField[]>([]);
   // Чтения, выбранные из вариантов чипа, и чип, у которого варианты сейчас показаны
   const [pick, setPick] = useState<QuickPick>({});
   const [altField, setAltField] = useState<QuickAltField | undefined>();
+  // История набранных строк читается из хранилища устройства; «Забыть» правит её и просит перечитать
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const [isSuggestionFocused, markSuggestionFocused, unmarkSuggestionFocused] = useFlag();
   // Словарь правок читается в момент открытия окна, а не кадром позже: иначе первый разбор шёл бы по
   // словарю прошлого открытия (например, уже сброшенному в настройках). Источник — данные «Плана» вместе
   // с ещё не перенесённой записью устройства; пока «План» недоступен — только запись устройства
@@ -147,6 +165,7 @@ const PlannerQuickInput = ({
     setSkip([]);
     setPick({});
     setAltField(undefined);
+    unmarkSuggestionFocused();
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => window.clearTimeout(timeout);
@@ -238,6 +257,8 @@ const PlannerQuickInput = ({
       : lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
     // Запись устройства влита в «План» той же правкой
     if (isSynced && hasLearned(local)) resetLearned(userId);
+    // Строка запоминается на устройстве: она станет подсказкой в этом окне
+    saveHistory(userId, recordHistoryLine(readHistory(userId), value, lineKey(value, entry, baseContext().lang!)));
     onCreated(entry.day);
   });
 
@@ -278,19 +299,81 @@ const PlannerQuickInput = ({
 
   // Примеры — на языке интерфейса: их разбирает словарь того же языка
   const examples = useMemo(() => lang('PlannerQuickExamples').split(/\s*\|\s*/).filter(Boolean), [lang]);
+  // Кандидаты собираются при открытии окна (каждая строка проходит разбор), набор текста их только фильтрует
+  const candidates = useMemo(() => {
+    if (!isOpen) return undefined;
+    return buildCandidates({
+      history: readHistory(userId), tasks, events, examples,
+    }, { ...baseContext(), learned });
+    // Номер правки истории — зависимость: история лежит в хранилище устройства, а не в состоянии
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [isOpen, userId, tasks, events, examples, learned, historyVersion]);
+  const suggestions = useMemo(() => (candidates ? filterSuggestions(text, candidates) : []), [candidates, text]);
+  const hasExamples = suggestions.some(({ source }) => source === 'example');
+  const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');
 
   const handleChoice = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setChoice(e.currentTarget.dataset.kind as KindChoice);
     inputRef.current?.focus();
   });
 
-  const handleExample = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    setText(e.currentTarget.dataset.text!);
+  // Подсказка заполняет строку: день и время пользователь правит сам, запись добавляет «Добавить»
+  const fillInput = useLastCallback((value: string) => {
+    setText(value);
     setSkip([]);
     setPick({});
     setAltField(undefined);
     inputRef.current?.focus();
   });
+
+  const handleSuggestion = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    fillInput(e.currentTarget.dataset.text!);
+  });
+
+  const handleForget = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const line = e.currentTarget.dataset.text!;
+    const candidate = candidates!.find((item) => item.text === line)!;
+    saveHistory(userId, forgetSuggestion(readHistory(userId), candidate));
+    setHistoryVersion(historyVersion + 1);
+    inputRef.current?.focus();
+  });
+
+  // Стрелки: из поля — в подсказки и по ним по кругу. Окно и ловушка фокуса слушают клавиши на документе,
+  // поэтому и эти слушатели стоят там же: `false` — клавиша не наша
+  const moveSuggestionFocus = useLastCallback((e: KeyboardEvent, delta: 1 | -1) => {
+    if (!suggestions.length) return false;
+    const items = Array.from(suggestionsRef.current!.querySelectorAll<HTMLElement>(SUGGESTION_SELECTOR));
+    const index = items.findIndex((item) => item === document.activeElement);
+    const isFromInput = document.activeElement === inputRef.current && delta > 0;
+    if (!items.length || (index < 0 && !isFromInput)) return false;
+    e.preventDefault();
+    items[(index + delta + items.length) % items.length].focus();
+    return true;
+  });
+
+  // Tab дописывает строку до первой подсказки, когда набрано её начало; иначе — обычный переход фокуса
+  const handleTab = useLastCallback((e: KeyboardEvent) => {
+    const [top] = suggestions;
+    const value = inputRef.current?.value ?? text;
+    const isAccepted = !e.shiftKey && document.activeElement === inputRef.current && top
+      && isSuggestionPrefix(value, top.text);
+    if (!isAccepted) return false;
+    e.preventDefault();
+    fillInput(top.text);
+    return true;
+  });
+
+  useEffect(() => (isOpen ? captureKeyboardListeners({
+    onDown: (e) => moveSuggestionFocus(e, 1),
+    onUp: (e) => moveSuggestionFocus(e, -1),
+    onTab: handleTab,
+  }) : undefined), [isOpen]);
+
+  // Escape на подсказке возвращает в поле; окно закрывает уже следующий Escape. Слушатель ставится позже
+  // слушателя окна (пока подсказка в фокусе) и потому получает клавишу первым
+  useEffect(() => (isOpen && isSuggestionFocused ? captureEscKeyListener(() => {
+    inputRef.current?.focus();
+  }) : undefined), [isOpen, isSuggestionFocused]);
 
   return (
     <Modal
@@ -444,23 +527,45 @@ const PlannerQuickInput = ({
             );
           })}
         </div>
-        <div>
-          <div className={styles.sheetHint}>{lang('PlannerQuickExamplesTitle')}</div>
-          <div className={styles.chips}>
-            {examples.map((example) => (
-              <button
-                key={example}
-                type="button"
-                className={styles.chip}
-                data-text={example}
-                data-quick-example
-                onClick={handleExample}
-              >
-                {example}
-              </button>
-            ))}
+        {Boolean(suggestions.length) && (
+          <div data-quick-suggestions>
+            <div className={styles.sheetHint}>
+              {lang(!hasExamples ? 'PlannerQuickRecentTitle'
+                : hasOwnSuggestions ? 'PlannerQuickSuggestionsTitle' : 'PlannerQuickExamplesTitle')}
+            </div>
+            <div ref={suggestionsRef} className={buildClassName(styles.quickSuggestions, 'no-scrollbar')}>
+              {suggestions.map(({ text: line, source }) => (
+                <span key={line} className={styles.quickSuggestion}>
+                  <button
+                    type="button"
+                    className={styles.quickSuggestionText}
+                    data-quick-suggestion
+                    data-source={source}
+                    data-text={line}
+                    onClick={handleSuggestion}
+                    onFocus={markSuggestionFocused}
+                    onBlur={unmarkSuggestionFocused}
+                  >
+                    {line}
+                  </button>
+                  {source !== 'example' && (
+                    <button
+                      type="button"
+                      className={styles.tagRemove}
+                      data-quick-suggestion-forget
+                      data-text={line}
+                      aria-label={lang('PlannerQuickForget', { value: line })}
+                      title={lang('PlannerQuickForget', { value: line })}
+                      onClick={handleForget}
+                    >
+                      <Icon name="close" />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
         <div className={styles.quickFooter}>
           <span className={buildClassName(styles.muted, styles.grow)}>
             {lang('PlannerQuickDefault', { date: formatDayLabel(lang, today) })}

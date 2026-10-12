@@ -3429,7 +3429,7 @@
 "PlannerSettingsMargin" = "Gap between items, min";
 "PlannerSettingsReset" = "Reset to defaults";
 "PlannerSettingsLearnedReset" = "Reset learned defaults";
-"PlannerSettingsLearnedHint" = "Text entry remembers how you correct the kind and the duration for the first word of a name. After three identical corrections the value becomes the default. What it has learned is kept with your Plan data and syncs across your devices.";
+"PlannerSettingsLearnedHint" = "Text entry remembers how you correct the kind and the duration for the first word of a name. After three identical corrections the value becomes the default. What it has learned is kept with your Plan data and syncs across your devices. The lines you added entries with are shown as suggestions in the entry window and stay on this device only. The button clears both.";
 "PlannerSlotsHint" = "{window} · break {lunch} · {margin} min margin";
 "PlannerSlotsHintNoBreak" = "{window} · {margin} min margin";
 "PlannerSlotsNone" = "No suitable slots in the next 7 days. Shorten the task or move other things.";
@@ -3659,6 +3659,9 @@
 "PlannerMonthSleep" = "sleep {value}";
 "PlannerYearLegend" = "Colour depth is the day load, a red number is a holiday, a dot is a task deadline.";
 "PlannerQuickExamplesTitle" = "Examples";
+"PlannerQuickRecentTitle" = "Recent";
+"PlannerQuickSuggestionsTitle" = "Suggestions";
+"PlannerQuickForget" = "Forget: {value}";
 "PlannerQuickExamples" = "call tomorrow 16:00 45 min | English lesson tue 15:00 — listening test | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml";
 "PlannerQuickDefault" = "Default: {date}";
 "PlannerSettingsGoalsHint" = "Goals change with text too: start a line in «+» with the word «goal».";

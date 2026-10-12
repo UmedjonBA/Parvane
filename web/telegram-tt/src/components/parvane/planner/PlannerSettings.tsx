@@ -8,6 +8,7 @@ import {
   toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
 import { resetLearned } from './plannerQuickLearn';
+import { resetHistory } from './plannerQuickSuggest';
 import { canSyncLearned, showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -78,9 +79,11 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
     }, lang('PlannerNoticeSettingsSaved'));
   });
 
-  // Словарь правок стирается в данных «Плана» (на всех устройствах) и в записи этого устройства
+  // Словарь правок стирается в данных «Плана» (на всех устройствах) и в записи этого устройства; вместе с
+  // ним — строки, набранные в окне ввода на этом устройстве, и список забытых подсказок
   const handleLearnedReset = useLastCallback(() => {
     resetLearned(userId);
+    resetHistory(userId);
     if (canSyncLearned() && state.learned.length) {
       updatePlanner((draft) => {
         draft.learned = [];
