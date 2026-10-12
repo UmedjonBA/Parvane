@@ -44,10 +44,6 @@
     }
   }
 
-  &.is-pattern .media-inner img {
-    transform: scale(4.5);
-  }
-
   &.selected {
     &::after {
       opacity: 1;

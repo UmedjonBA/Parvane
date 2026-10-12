@@ -106,7 +106,7 @@ import {
 import { ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
 import { TaskOfferStore } from './taskOffers';
-import { buildBuiltinWallpapers, buildThumbnailDataUri, UPLOADED_SLUG_PREFIX } from './wallpapers';
+import { buildThumbnailDataUri, renderBackgroundBlob, UPLOADED_SLUG_PREFIX } from './wallpapers';
 import {
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
@@ -147,6 +147,25 @@ function readPlannerState() {
   };
 }
 const BACKGROUND_RECORD_PREFIX = 'background:';
+// Последняя своя картинка — отдельной копией: выбор встроенного фона перезаписывает запись темы, а плитка
+// «Свои» должна остаться и после перезагрузки
+const OWN_BACKGROUND_RECORD = `${BACKGROUND_RECORD_PREFIX}own`;
+const builtinBackgroundRequests = new Map<string, number>();
+let builtinBackgroundQueue: Promise<unknown> = Promise.resolve();
+
+async function storeChatBackground(theme: string, bytes: ArrayBuffer, mimeType: string, slug?: string) {
+  if (!store.self) return { status: 'not-ready' as const };
+  const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+  if (!storage) return { status: 'not-ready' as const };
+  const names = [`${BACKGROUND_RECORD_PREFIX}${theme}`];
+  if (slug?.startsWith(UPLOADED_SLUG_PREFIX)) names.push(OWN_BACKGROUND_RECORD);
+  for (const name of names) {
+    await storage.saveBytesRecord(name, new Uint8Array(bytes));
+    await storage.saveRecord(`${name}:mime`, mimeType);
+    await storage.saveRecord(`${name}:slug`, slug || '');
+  }
+  return { status: 'ok' as const };
+}
 
 async function buildUploadedWallpaper(slug: string, blob: Blob, fileName: string): Promise<ApiWallpaper> {
   const dataUri = await buildThumbnailDataUri(blob);
@@ -2135,19 +2154,29 @@ const methods = {
   // Картинка хранится БАЙТАМИ (`saveBytesRecord`), а не base64 в JSON: тот же
   // довод, что и для архивов паков — base64 раздувает файл на треть, а обои
   // бывают многомегабайтными. Мим-тип лежит отдельной маленькой записью
-  async saveChatBackground({
+  saveChatBackground({
     theme, bytes, mimeType, slug,
   }: {
     theme: string; bytes: ArrayBuffer; mimeType: string; slug?: string;
   }) {
-    if (!store.self) return { status: 'not-ready' as const };
-    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
-    if (!storage) return { status: 'not-ready' as const };
-    const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
-    await storage.saveBytesRecord(name, new Uint8Array(bytes));
-    await storage.saveRecord(`${name}:mime`, mimeType);
-    await storage.saveRecord(`${name}:slug`, slug || '');
-    return { status: 'ok' as const };
+    return storeChatBackground(theme, bytes, mimeType, slug);
+  },
+
+  // Встроенный фон (сочетание «цвет + рисунок»): картинка рисуется здесь по идентификатору и кладётся
+  // туда же, куда своя картинка, — после перезагрузки `loadChatBackground` отдаёт готовые байты, рисовать
+  // заново не нужно. Быстрый перебор образцов: записи идут по очереди, устаревший выбор не пишется
+  applyBuiltinChatBackground({ theme, slug }: { theme: string; slug: string }) {
+    const request = (builtinBackgroundRequests.get(theme) || 0) + 1;
+    builtinBackgroundRequests.set(theme, request);
+    const rendering = renderBackgroundBlob(slug);
+    const result = builtinBackgroundQueue.then(async () => {
+      const blob = await rendering;
+      if (!blob) return { status: 'failed' as const };
+      if (builtinBackgroundRequests.get(theme) !== request) return { status: 'superseded' as const };
+      return storeChatBackground(theme, await blob.arrayBuffer(), blob.type || 'image/jpeg', slug);
+    }).catch(() => ({ status: 'failed' as const }));
+    builtinBackgroundQueue = result;
+    return result;
   },
 
   // `not-ready` (провайдер ещё не знает пользователя) и `empty` (обоев нет)
@@ -2227,15 +2256,15 @@ const methods = {
     return mediaService.fetchLinkPreview(url);
   },
 
+  // Галерея — только свои картинки: встроенные фоны собираются на экране из градиента и рисунка
+  // (`wallpaperCombo.ts`) и рисуются по требованию. Своя картинка живёт в шифрованном хранилище (фон темы
+  // и копия последней загруженной) — возвращаем её плитку, иначе после перезагрузки её не выбрать снова
   async fetchWallpapers() {
-    const builtin = await buildBuiltinWallpapers(mediaService.cacheBlob);
-    // Картинка пользователя живёт в шифрованном хранилище (по одной на тему) — возвращаем её плитку,
-    // иначе после перезагрузки фон есть, а в галерее его нет
     const uploaded: ApiWallpaper[] = [];
     const storage = store.self ? await SecureE2eStorage.open(store.self).catch(() => undefined) : undefined;
     if (storage) {
-      for (const theme of ['light', 'dark']) {
-        const name = `${BACKGROUND_RECORD_PREFIX}${theme}`;
+      const names = [...['light', 'dark'].map((theme) => `${BACKGROUND_RECORD_PREFIX}${theme}`), OWN_BACKGROUND_RECORD];
+      for (const name of names) {
         const slug = await storage.loadRecord<string>(`${name}:slug`);
         if (!slug?.startsWith(UPLOADED_SLUG_PREFIX) || uploaded.some((item) => item.slug === slug)) continue;
         const bytes = await storage.loadBytesRecord(name);
@@ -2246,7 +2275,7 @@ const methods = {
         uploaded.push(await buildUploadedWallpaper(slug, blob, 'wallpaper.jpg'));
       }
     }
-    return { wallpapers: [...uploaded, ...builtin] };
+    return { wallpapers: uploaded };
   },
 
   async uploadWallpaper(file: File) {
