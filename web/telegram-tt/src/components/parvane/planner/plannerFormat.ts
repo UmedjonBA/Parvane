@@ -1,10 +1,8 @@
 import type { LangFn } from '../../../util/localization';
-import type {
-  PlannerCalendarView, PlannerRepeat, PlannerState, PlannerStatus,
-} from './plannerModel';
+import type { PlannerCalendarView, PlannerRepeat, PlannerStatus } from './plannerModel';
 
 import {
-  addDays, AGENDA_DAYS, countUnrated, fromDayKey, getDayLoad, getWeekKeys, toTime,
+  addDays, AGENDA_DAYS, fromDayKey, getWeekKeys, toTime,
 } from './plannerModel';
 
 // Parvane (spec 009): подписи планировщика — даты и длительности в языке интерфейса
@@ -52,8 +50,31 @@ export function formatDay(lang: LangFn, day: string) {
   return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'long' });
 }
 
+// «12 окт» — короткая дата для плашек и подписей
+export function formatDayShort(lang: LangFn, day: string) {
+  return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '');
+}
+
+// «Сегодня», «Завтра», «Вчера», иначе день недели
+export function formatRelativeDay(lang: LangFn, day: string, today: string) {
+  if (day === today) return lang('PlannerToday');
+  if (day === addDays(today, 1)) return lang('PlannerTomorrow');
+  if (day === addDays(today, -1)) return lang('WeekdayYesterday');
+  return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'long' }));
+}
+
+// Часы без единицы — «4,5» (до десятых)
+export function formatHoursNumber(lang: LangFn, minutes: number) {
+  return formatNumber(lang, minutes / 60, 1);
+}
+
 export function formatDayLong(lang: LangFn, day: string) {
   return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'long', day: 'numeric', month: 'long' }));
+}
+
+// «Пн, 12 октября» — подпись дня в шапке карточки и в окне ввода
+export function formatDayLabel(lang: LangFn, day: string) {
+  return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'short', day: 'numeric', month: 'long' }));
 }
 
 export function formatMonth(lang: LangFn, month: Date) {
@@ -81,6 +102,12 @@ export function formatPeriod(lang: LangFn, view: PlannerCalendarView, day: strin
     day: 'numeric', month: 'short', year: withYear ? 'numeric' : undefined,
   }).replace(/ г\.$/, '');
   return `${short(from, from.getFullYear() !== to.getFullYear())} – ${short(to, true)}`;
+}
+
+// Заголовок недели без года — «12 окт – 18 окт»
+export function formatWeekRange(lang: LangFn, day: string) {
+  const days = getWeekKeys(day);
+  return `${formatDayShort(lang, days[0])} – ${formatDayShort(lang, days[days.length - 1])}`;
 }
 
 // Цвет списка — переменная палитры собеседников (`--color-peer-0…7`)
@@ -121,17 +148,4 @@ export function formatRepeat(lang: LangFn, repeat: PlannerRepeat) {
     repeat.count ? lang('PlannerRepeatTimes', { count: repeat.count }) : undefined,
   ].filter(Boolean);
   return [base, ...tail].join(' · ');
-}
-
-// Строка сводки дня: запланировано из бюджета, перегруз, неоценённые задачи
-export function buildDaySummary(lang: LangFn, state: PlannerState, day: string) {
-  const minutes = getDayLoad(state, day);
-  const unrated = countUnrated(state, day);
-  const isOver = minutes > state.budget;
-  const text = [
-    lang('PlannerDayPlan', { planned: formatHours(lang, minutes), budget: formatHours(lang, state.budget) }),
-    isOver ? lang('PlannerDayOverload', { minutes: minutes - state.budget }) : undefined,
-    unrated ? lang('PlannerDayUnrated', { count: unrated }) : undefined,
-  ].filter(Boolean).join(' · ');
-  return { text, isOver };
 }
