@@ -419,7 +419,10 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  // «Знания» в боковой панели открывают заметки — граф выбирается вкладкой
+  await openTab('Graph');
   await visible(graph, 'вкладка графа после перезагрузки');
+  await visible(gnode(NOTE), 'точка заметки после перезагрузки');
   await visible(gedge(NOTE, GRAPH_NOTE), 'связь, проведённая на графе, после перезагрузки');
   await visible(gedge(OTHER, GRAPH_NOTE), 'связь с новой заметкой после перезагрузки');
   await clickNode(NOTE);
