@@ -615,6 +615,32 @@
   }
 }
 
+// Подпись чипа с другими чтениями: нажатие раскрывает их список
+.tagAlt {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  gap: 0.125rem;
+  align-items: center;
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+
+  :global(.icon) {
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+
+  &:hover :global(.icon) {
+    opacity: 1;
+  }
+}
+
 // Знак значения, подставленного из словаря правок ввода текстом
 .tagLearned {
   flex: none;
@@ -2636,6 +2662,16 @@
   margin-top: 0.125rem;
   font-weight: var(--font-weight-medium);
   overflow-wrap: anywhere;
+}
+
+// Другие чтения выбранного чипа — строкой под чипами
+.quickAlts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+
+  width: 100%;
 }
 
 // «Название» и «Описание» разобранной строки — подписанными строками под чипами

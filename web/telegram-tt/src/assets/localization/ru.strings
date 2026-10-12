@@ -1625,6 +1625,7 @@
 "PlannerQuickDescriptionToName" = "Вернуть описание в название";
 "PlannerQuickTooLong" = "Название слишком длинное.";
 "PlannerQuickLearned" = "По вашим правкам";
+"PlannerQuickAlternatives" = "Другие чтения";
 "PlannerTodayNoTasks" = "На этот день задач нет";
 "PlannerTodayLeft" = "осталось: {count}";
 "PlannerTodayAllDone" = "Всё сделано";

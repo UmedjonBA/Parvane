@@ -1,18 +1,24 @@
-// Ввод текстом (spec 017): одна строка → черновик записи «Плана». Чистая функция без сети: распознаватели
-// по очереди помечают свои участки строки, название — всё непомеченное. Слова разбора лежат в словаре на
-// язык (`WORDS`); порядок распознавателей и правила неоднозначности — общие для всех языков.
+// Ввод текстом (spec 017): одна строка → черновик записи «Плана». Чистая функция без сети. Шаги:
+//   1. опечатки (`fixTypos`) и числительные словами (`plannerNumerals.ts`);
+//   2. распознаватели предлагают кандидатов — участок строки, поле, значение, оценка;
+//   3. лучший набор кандидатов без пересечений (`plannerQuickPick.ts`), остальные чтения — варианты;
+//   4. тип записи, название и описание — из того, что никто не забрал.
+// Слова разбора лежат в словаре на язык (`WORDS`); распознаватели, их ранги и правила неоднозначности —
+// общие для всех языков. «Сейчас» и «сегодня» приходят только из `ctx`.
 
 import type {
   PlannerEventError, PlannerExercise, PlannerGoalMetric, PlannerHealthGoals, PlannerHealthKind, PlannerMeal,
   PlannerNutrient, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
 } from './plannerModel';
 import type { NumeralEdit } from './plannerNumerals';
+import type { PickItem } from './plannerQuickPick';
 
 import {
   addDays, DEFAULT_EVENT_MINUTES, fromDayKey, MINUTES_IN_DAY, toDayKey, toTime, validateEvent,
   validateRepeat, validateTask,
 } from './plannerModel';
 import { restoreNumerals, rewriteNumerals, toSourceOffset } from './plannerNumerals';
+import { candidateScore, pickCandidates } from './plannerQuickPick';
 
 // sleep, workout, metric — записи здоровья (spec 020); goal — правка целей и настроек, записи не создаёт
 export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout' | 'metric' | 'goal';
@@ -30,6 +36,14 @@ export type QuickGoalChanges = {
   budget?: number;
 };
 export type QuickLang = 'ru' | 'en';
+// Другие чтения строки: значение поля, на которое пользователь может переключиться. `pick` — ключ
+// значения: время `HH:MM` либо `HH:MM-HH:MM`, день и срок `YYYY-MM-DD`, тип записи, для повтора —
+// `QUICK_REPEAT_OPEN` («до <дата>» не конец ряда, слова остаются в названии) либо `QUICK_REPEAT_END`
+// (обратно; `day` — конец ряда)
+export type QuickAltField = 'kind' | 'time' | 'day' | 'due' | 'repeat';
+export type QuickAlt = { field: QuickAltField; pick: string; day?: string };
+// Чтение, закреплённое пользователем; тип закрепляется выбором типа (`ctx.kind`)
+export type QuickPick = Partial<Record<Exclude<QuickAltField, 'kind'>, string>>;
 // Выученное по правкам пользователя (`plannerQuickLearn.ts`): первое слово названия → значения по умолчанию
 export type QuickLearnedKind = 'task' | 'event';
 export type QuickLearned = Record<string, { kind?: QuickLearnedKind; minutes?: number }>;
@@ -73,6 +87,8 @@ export type QuickDraft = {
   usualMinutes?: number;
   // Что подставлено из словаря правок (`ctx.learned`)
   learned?: ('kind' | 'minutes')[];
+  // Другие чтения распознанных значений (не больше `MAX_ALTERNATIVES` на поле)
+  alternatives?: QuickAlt[];
   spans: QuickSpan[];
   error?: QuickError;
 };
@@ -92,12 +108,19 @@ export type QuickContext = {
   // Значения по умолчанию из личного словаря правок; явное значение в строке и выбор пользователя сильнее.
   // Снятые `kind` и `minutes` (`skip`) выключают и выученное
   learned?: QuickLearned;
+  // Чтения, выбранные пользователем из других вариантов (`QuickDraft.alternatives`); ключ, которому в
+  // строке ничего не отвечает, не действует
+  pick?: QuickPick;
   // Язык интерфейса (по умолчанию русский). Строка на другом языке словаря тоже разбирается — правило
   // выбора у `parseQuickInput`
   lang?: QuickLang;
 };
 
 export const QUICK_TASK_MINUTES = 30;
+export const QUICK_REPEAT_OPEN = 'open';
+export const QUICK_REPEAT_END = 'end';
+const MAX_ALTERNATIVES = 4;
+const MAX_PICK_ROUNDS = 8;
 const GLASS_ML = 250;
 const ML_IN_LITRE = 1000;
 const MINUTES_IN_HOUR = 60;
@@ -448,6 +471,146 @@ const WORDS: Record<QuickLang, QuickWords> = {
 
 type Groups = (string | undefined)[];
 
+// ── кандидаты ────────────────────────────────────────────────────────────────
+// Распознаватель предлагает кандидата: участок строки, поле (чип) и значение. Слот — значение, которое
+// в записи одно; оценка и выбор набора — `plannerQuickPick.ts`. Ранг распознавателя — насколько он точен:
+// метки и единицы питания старше длительности, длительность — времени, время — повтора, срок — дня;
+// внутри поля составное старше простого.
+const RANK = {
+  kind: 60,
+  // Метки: список, место, «важное» — по убыванию
+  marker: 58,
+  kcal: 54,
+  // Нутриенты по порядку словаря — по убыванию
+  macro: 52,
+  shortMacro: 44,
+  grams: 40,
+  meal: 39,
+  waterLead: 38,
+  water: 37,
+  durationHalf: 34,
+  durationHours: 33,
+  durationMinutes: 32,
+  timeRange: 30,
+  timeClock: 29,
+  timeHour: 28,
+  timeNamed: 27,
+  repeatEvery: 24,
+  repeatAdverb: 23,
+  repeatOnce: 22,
+  repeatWorkdays: 21,
+  repeatWeekends: 20,
+  repeatDays: 19,
+  repeatEnd: 18,
+  repeatCount: 17,
+  repeatSpan: 16,
+  due: 12,
+  day: 10,
+};
+
+type CandidateValue = {
+  nutrient?: QuickNutrient;
+  isShort?: boolean;
+  amount?: number;
+  meal?: PlannerMeal;
+  minutes?: number;
+  // Время в минутах от полуночи; `altStart` — другое чтение часа («в 7»: утро либо вечер)
+  start?: number;
+  end?: number;
+  altStart?: number;
+  repeatKind?: PlannerRepeatKind;
+  interval?: number;
+  days?: number[];
+  count?: number;
+  months?: number;
+  weeks?: number;
+  // День либо срок; `altDay` — другое чтение (сегодня, а не через неделю; этот год, а не следующий)
+  day?: string;
+  altDay?: string;
+  weekday?: number;
+  isWeak?: boolean;
+};
+type Candidate = PickItem & {
+  slot: string;
+  field: QuickField;
+  value: CandidateValue;
+  // Условие: кандидат годится только при таком выборе кандидатов старше его
+  when?: (state: Chosen, item: Candidate) => boolean;
+};
+// Выбранный набор и то, что о нём спрашивают условия
+type Chosen = {
+  items: Candidate[];
+  slots: Map<string, Candidate>;
+  // Занятые символы строки; день в счёт не идёт — он младше всех
+  taken: boolean[];
+  nutrients: number;
+  regularNutrients: number;
+};
+
+function chosenState(items: Candidate[], length: number): Chosen {
+  const taken = new Array<boolean>(length).fill(false);
+  const slots = new Map<string, Candidate>();
+  let nutrients = 0;
+  let regularNutrients = 0;
+  items.forEach((item) => {
+    slots.set(item.slot, item);
+    if (item.slot !== 'day') taken.fill(true, item.from, item.to);
+    if (item.value.nutrient) nutrients += 1;
+    if (item.value.nutrient && !item.value.isShort) regularNutrients += 1;
+  });
+  return {
+    items, slots, taken, nutrients, regularNutrients,
+  };
+}
+
+function matchZones(re: RegExp, lower: string) {
+  const zones: { from: number; to: number; groups: Groups }[] = [];
+  for (let found = re.exec(lower); found; found = re.exec(lower)) {
+    const from = found.index + found[1].length;
+    zones.push({ from, to: from + found[2].length, groups: found.slice(2) });
+    re.lastIndex = Math.max(from + found[2].length, found.index + 1);
+  }
+  return zones;
+}
+
+// Ключ значения для вариантов и закрепления: время, день, срок
+const PICK_SLOTS = ['time', 'day', 'due'] as const;
+type PickSlot = typeof PICK_SLOTS[number];
+
+function timeKey(start?: number, end?: number) {
+  if (start === undefined || start >= MINUTES_IN_DAY) return undefined;
+  if (end === undefined || end > MINUTES_IN_DAY) return toTime(start);
+  return `${toTime(start)}-${toTime(Math.min(end, MINUTES_IN_DAY - 1))}`;
+}
+
+function valueKey(slot: PickSlot, value: CandidateValue) {
+  return slot === 'time' ? timeKey(value.start, value.end) : value.day;
+}
+
+function altKey(slot: PickSlot, value: CandidateValue) {
+  return slot === 'time' ? timeKey(value.altStart, value.end) : value.altDay;
+}
+
+// Закреплённое чтение: в слоте остаётся кандидат с этим значением (своим либо другим чтением)
+function pinCandidates(pool: Candidate[], pick?: QuickPick) {
+  if (!pick) return pool;
+  let result = pool;
+  PICK_SLOTS.forEach((slot) => {
+    const wanted = pick[slot];
+    if (!wanted) return;
+    const inSlot = result.filter((item) => item.slot === slot);
+    const exact = inSlot.find((item) => valueKey(slot, item.value) === wanted);
+    const other = exact ? undefined : inSlot.find((item) => altKey(slot, item.value) === wanted);
+    const pinned: Candidate | undefined = exact || (other && {
+      ...other,
+      value: slot === 'time' ? { ...other.value, start: other.value.altStart, altStart: other.value.start }
+        : { ...other.value, day: other.value.altDay, altDay: other.value.day },
+    });
+    if (pinned) result = [...result.filter((item) => item.slot !== slot), pinned];
+  });
+  return result;
+}
+
 // Граница слова: `\b` в регулярных выражениях JS не знает кириллицы, а просмотр назад есть не во всех
 // браузерах — поэтому символ перед словом захватывается первой группой и в совпадение не входит.
 // Класс букв и цифр общий для всех языков словаря
@@ -579,8 +742,9 @@ function addMonths(day: string, months: number) {
   return toDayKey(target);
 }
 
-// Ближайшая будущая дата с таким числом и месяцем (сегодня считается)
-function nearestDate(today: string, month: number, dayOfMonth: number, year?: number) {
+// Ближайшая будущая дата с таким числом и месяцем (сегодня считается); `isNear` — дата этого года,
+// даже если она уже прошла
+function nearestDate(today: string, month: number, dayOfMonth: number, year?: number, isNear = false) {
   if (month < 1 || month > 12 || dayOfMonth < 1 || dayOfMonth > 31) return undefined;
   const build = (y: number) => {
     const date = new Date(y, month - 1, dayOfMonth);
@@ -589,7 +753,7 @@ function nearestDate(today: string, month: number, dayOfMonth: number, year?: nu
   if (year !== undefined) return build(year < 100 ? 2000 + year : year);
   const thisYear = fromDayKey(today).getFullYear();
   const day = build(thisYear);
-  return day && day >= today ? day : build(thisYear + 1);
+  return day && (isNear || day >= today) ? day : build(thisYear + 1);
 }
 
 function nextWeekday(from: string, weekday: number, isTodayCounted: boolean) {
@@ -603,7 +767,9 @@ function weekdayIn(text: string, lang: Lang) {
   return parts ? lang.weekdayOf(parts[1]) : undefined;
 }
 
-function resolveDate(text: string, today: string, lang: Lang): string | undefined {
+// `isNear` — другое чтение: день недели, совпавший с сегодняшним, — сегодня (а не через неделю), дата без
+// года — в этом году, даже если прошла
+function resolveDate(text: string, today: string, lang: Lang, isNear = false): string | undefined {
   const relative = lang.relativeOf(text);
   if (relative !== undefined) return addDays(today, relative);
   const inParts = lang.inParts.exec(text);
@@ -616,17 +782,19 @@ function resolveDate(text: string, today: string, lang: Lang): string | undefine
   if (lang.isNextWeek.test(text)) return nextWeekday(today, 1, false);
   const dotted = /^(\d{1,2})\.(\d{2})(?:\.(\d{2,4}))?$/.exec(text);
   if (dotted) {
-    return nearestDate(today, Number(dotted[2]), Number(dotted[1]), dotted[3] ? Number(dotted[3]) : undefined);
+    return nearestDate(
+      today, Number(dotted[2]), Number(dotted[1]), dotted[3] ? Number(dotted[3]) : undefined, isNear,
+    );
   }
   const dayMonth = lang.dayMonth.exec(text);
-  if (dayMonth) return nearestDate(today, lang.monthOf(dayMonth[2]) || 0, Number(dayMonth[1]));
+  if (dayMonth) return nearestDate(today, lang.monthOf(dayMonth[2]) || 0, Number(dayMonth[1]), undefined, isNear);
   const monthDay = lang.words.isMonthFirst ? lang.monthDay.exec(text) : undefined;
-  if (monthDay) return nearestDate(today, lang.monthOf(monthDay[1]) || 0, Number(monthDay[2]));
+  if (monthDay) return nearestDate(today, lang.monthOf(monthDay[1]) || 0, Number(monthDay[2]), undefined, isNear);
   const weekday = weekdayIn(text, lang);
-  if (weekday !== undefined) return nextWeekday(today, weekday, false);
+  if (weekday !== undefined) return nextWeekday(today, weekday, isNear);
   // «до марта»: первый день месяца
   const month = lang.monthOf(text);
-  return month ? nearestDate(today, month, 1) : undefined;
+  return month ? nearestDate(today, month, 1, undefined, isNear) : undefined;
 }
 
 function resolveHour(hour: number, minute: number, daypart?: Daypart) {
@@ -738,292 +906,355 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   const health = parseHealth(text, lower, edits, ctx, allowed, lang);
   if (health) return health;
 
-  const mark = (field: QuickField, from: number, to: number) => {
-    for (let i = from; i < to; i++) taken[i] = true;
-    spans.push({ field, from, to });
-  };
-
-  // Совпадения по порядку; занятый участок пропускается. `handle` возвращает false — «не моё»
-  const scan = (
-    field: QuickField, body: string, handle: (groups: Groups, from: number, to: number) => boolean | void,
-    isOnce = true,
-  ) => {
-    if (skipped.has(field)) return;
-    const re = word(body);
-    let match = re.exec(lower);
-    while (match) {
-      const from = match.index + match[1].length;
-      const to = from + match[2].length;
-      re.lastIndex = to;
-      const isFree = !taken.slice(from, to).some(Boolean);
-      if (isFree && handle(match.slice(2), from, to) !== false) {
-        mark(field, from, to);
-        if (isOnce) return;
-      }
-      match = re.exec(lower);
-    }
-  };
-
   const draft: QuickDraft = { kind: 'task', name: '', spans };
   let explicitKind = ctx.kind;
 
-  // ── слова-типы в начале строки ─────────────────────────────────────────────
+  // ── кандидаты ──────────────────────────────────────────────────────────────
+  // Каждый распознаватель предлагает все свои совпадения, не глядя на остальные; условие `when` —
+  // зависимость от уже выбранного («граммы — только у еды», «до <дата>» — конец ряда, только если есть
+  // повтор). Лучший набор без пересечений выбирает `pickCandidates` (`plannerQuickPick.ts`)
+  const pool: Candidate[] = [];
+  const push = (
+    slot: string, field: QuickField, rank: number, from: number, to: number, value: CandidateValue = {},
+    when?: Candidate['when'],
+  ) => {
+    pool.push({
+      slot, field, from, to, score: candidateScore(rank, from, to), value, when,
+    });
+  };
+  // Все совпадения выражения по порядку; `read` возвращает значение либо ничего — «не моё»
+  const offer = (
+    slot: string, field: QuickField, rank: number, body: string,
+    read: (groups: Groups, from: number, to: number) => CandidateValue | undefined,
+    when?: Candidate['when'],
+  ) => {
+    if (skipped.has(field)) return;
+    const re = word(body);
+    for (let match = re.exec(lower); match; match = re.exec(lower)) {
+      const from = match.index + match[1].length;
+      const to = from + match[2].length;
+      re.lastIndex = Math.max(to, match.index + 1);
+      const value = read(match.slice(2), from, to);
+      if (value) push(slot, field, rank, from, to, value, when);
+    }
+  };
+
+  // Слова-типы в начале строки
   if (!explicitKind) {
     const lead = lang.kindLead.exec(lower);
     const leadKind: QuickKind | undefined = lead ? (lead[2] ? 'event' : 'task') : undefined;
     if (lead && leadKind && allowed.has(leadKind) && !skipped.has('kind')) {
       explicitKind = leadKind;
-      mark('kind', 0, lead[0].length);
+      push('kind', 'kind', RANK.kind, 0, lead[0].length);
     }
   }
 
-  // ── явные метки: #список, @место, ! ───────────────────────────────────────
-  // Помечаются первыми, чтобы слова внутри метки не разбирались («#пт» — список, а не пятница); у записи,
-  // которой метка не положена, участок возвращается в название (`unmark`)
-  MARKERS.forEach(([field, find]) => {
+  // Явные метки: #список, @место, !. Старше всех, чтобы слова внутри метки не разбирались («#пт» —
+  // список, а не пятница); у записи, которой метка не положена, участок возвращается в название
+  MARKERS.forEach(([field, find], index) => {
     const found = skipped.has(field) ? undefined : find(text);
-    if (found) mark(field, found.from, found.to);
+    if (found) push(field, field, RANK.marker - index, found.from, found.to);
   });
-  const unmark = (fields: QuickField[]) => {
-    for (let i = spans.length - 1; i >= 0; i--) {
-      const { field, from, to } = spans[i];
-      if (fields.includes(field)) {
-        taken.fill(false, from, to);
-        spans.splice(i, 1);
-      }
-    }
-  };
-  const markerText = (field: QuickField) => {
-    const span = spans.find((item) => item.field === field);
-    return span && text.slice(span.from + 1, span.to);
-  };
 
-  // ── числа с единицами: питание и вода ─────────────────────────────────────
-  const nutrients: Partial<Record<QuickNutrient, number>> = {};
+  // Числа с единицами: питание и вода
+  const isFoodIn = (state: Chosen) => explicitKind === 'food' || (!explicitKind && state.nutrients > 0);
+  const isWaterIn = (state: Chosen) => explicitKind === 'water' || state.slots.has('water');
   if (allowed.has('food') && explicitKind !== 'water') {
-    scan('kcal', `(${NUM})\\s*(?:${words.kcal})`, (g) => {
-      nutrients.kcal = toNumber(g[1]!);
-    });
+    offer('kcal', 'kcal', RANK.kcal, `(${NUM})\\s*(?:${words.kcal})`, (g) => (
+      { nutrient: 'kcal', amount: toNumber(g[1]!) }
+    ));
     const macroBody = (names: string) => `(?:${names})\\s*(${NUM})(?:\\s*(?:${words.gram}))?`;
-    const scanMacro = ([names, nutrient]: Entry<QuickNutrient>) => {
-      scan(nutrient, macroBody(names), (g) => {
-        nutrients[nutrient] = toNumber(g[1]!);
-      });
-    };
-    words.macros.forEach(scanMacro);
+    words.macros.forEach(([names, nutrient], index) => {
+      offer(nutrient, nutrient, RANK.macro - index, macroBody(names), (g) => ({ nutrient, amount: toNumber(g[1]!) }));
+    });
     // «f1», «c4» — обычные слова: одна буква с числом считается, когда признаков питания не меньше двух
     const short = (words.shortMacros || []).filter(([names]) => word(macroBody(names)).test(lower));
-    if (Object.keys(nutrients).length + short.length > 1) short.forEach(scanMacro);
-  }
-  const isFood = explicitKind === 'food' || (!explicitKind && Object.keys(nutrients).length > 0);
-  if (isFood) {
-    scan('grams', `(${NUM})\\s*(?:${words.gram})`, (g) => {
-      draft.grams = toNumber(g[1]!);
-    });
-    scan('meal', bodies(words.meals), (g) => {
-      draft.meal = lang.mealOf(g[0]!);
+    short.forEach(([names, nutrient], index) => {
+      offer(`short-${nutrient}`, nutrient, RANK.shortMacro - index, macroBody(names), (g) => (
+        { nutrient, amount: toNumber(g[1]!), isShort: true }
+      ), (state) => state.regularNutrients + short.length > 1);
     });
   }
+  offer('grams', 'grams', RANK.grams, `(${NUM})\\s*(?:${words.gram})`, (g) => ({ amount: toNumber(g[1]!) }), isFoodIn);
+  offer('meal', 'meal', RANK.meal, bodies(words.meals), (g) => ({ meal: lang.mealOf(g[0]!) }), isFoodIn);
 
-  let isWater = false;
-  if (!isFood && allowed.has('water') && (!explicitKind || explicitKind === 'water')) {
+  if (allowed.has('water') && (!explicitKind || explicitKind === 'water')) {
     const lead = lang.waterLead.exec(lower);
     const volume = `(${NUM})\\s*(?:(${words.ml})|(${words.glass})|(${words.litre}))`;
     const found = word(volume).exec(lower);
     const rest = found ? lower.slice(lead?.[0].length || 0).replace(found[2], '').trim() : 'x';
     // Вода — слово «вода» в начале либо один объём без других слов
     if (found && (lead || explicitKind === 'water' || !rest)) {
-      scan('water', volume, (g) => {
-        draft.waterMl = Math.round(toNumber(g[1]!) * (g[2] ? 1 : g[3] ? GLASS_ML : ML_IN_LITRE));
-      });
-      if (lead) mark('kind', 0, lead[0].length);
-      isWater = draft.waterMl !== undefined;
-    }
-    if (explicitKind === 'water') isWater = true;
-  }
-
-  // ── длительность ──────────────────────────────────────────────────────────
-  if (!isFood && !isWater) {
-    scan('minutes', `(${words.hourAndHalf})|(?:${words.halfHour})`, (g) => {
-      draft.minutes = g[1] ? 90 : 30;
-    });
-    if (draft.minutes === undefined) {
-      scan('minutes', `(${NUM})\\s*(?:${words.hour})(?:\\s*(\\d{1,2})${lang.minutes})?`, (g) => {
-        draft.minutes = Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR) + Number(g[2] || 0);
-      });
-    }
-    if (draft.minutes === undefined) {
-      scan('minutes', `(\\d{1,4})${lang.minutes}`, (g) => {
-        draft.minutes = Number(g[1]);
-      });
+      const isNotFood = (state: Chosen) => !isFoodIn(state);
+      offer('water', 'water', RANK.water, volume, (g) => (
+        { amount: Math.round(toNumber(g[1]!) * (g[2] ? 1 : g[3] ? GLASS_ML : ML_IN_LITRE)) }
+      ), isNotFood);
+      if (lead) push('waterLead', 'kind', RANK.waterLead, 0, lead[0].length, {}, isNotFood);
     }
   }
 
-  // ── время: диапазон, затем одно значение ──────────────────────────────────
-  let start: number | undefined;
-  let end: number | undefined;
-  if (!isWater) {
-    const clock = `(${HOUR})(?::(${MINUTE}))?(?:\\s*(${lang.daypart}))?`;
-    const repeatZones: { from: number; to: number }[] = [];
-    const zonePattern = word(`(?:${words.every}|${words.oncePer})\\s+(?:${lang.count})\\s+(?:${bodies(words.units)})`);
-    for (let found = zonePattern.exec(lower); found; found = zonePattern.exec(lower)) {
-      const from = found.index + found[1].length;
-      repeatZones.push({ from, to: from + found[2].length });
+  // Длительность: составная старше простой
+  const isPlainIn = (state: Chosen) => !isFoodIn(state) && !isWaterIn(state);
+  offer('minutes', 'minutes', RANK.durationHalf, `(${words.hourAndHalf})|(?:${words.halfHour})`, (g) => (
+    { minutes: g[1] ? 90 : 30 }
+  ), isPlainIn);
+  const hoursBody = `(${NUM})\\s*(?:${words.hour})(?:\\s*(\\d{1,2})${lang.minutes})?`;
+  offer('minutes', 'minutes', RANK.durationHours, hoursBody, (g) => (
+    { minutes: Math.round(toNumber(g[1]!) * MINUTES_IN_HOUR) + Number(g[2] || 0) }
+  ), isPlainIn);
+  offer('minutes', 'minutes', RANK.durationMinutes, `(\\d{1,4})${lang.minutes}`, (g) => (
+    { minutes: Number(g[1]) }
+  ), isPlainIn);
+
+  // Время: диапазон старше одного значения, часы с минутами — голого часа
+  const isNotWaterIn = (state: Chosen) => !isWaterIn(state);
+  const clock = `(${HOUR})(?::(${MINUTE}))?(?:\\s*(${lang.daypart}))?`;
+  const repeatZones = matchZones(
+    word(`(?:${words.every}|${words.oncePer})\\s+(?:${lang.count})\\s+(?:${bodies(words.units)})`), lower,
+  );
+  // Уточнение после часа сильнее уточнения перед ним: «вечером в 7», «в 7 вечера»
+  const daypartIn = (after?: string, before?: string) => (
+    after ? lang.daypartOf(after) : before ? lang.daypartLeadOf(before) : undefined
+  );
+  const rangeBody = `(?:(${words.from})\\s+)?${clock}\\s*(?:${DASH}|${words.to})\\s*${clock}`;
+  offer('time', 'time', RANK.timeRange, rangeBody, (g) => {
+    const fromPart = g[4] ? lang.daypartOf(g[4]) : undefined;
+    const toPart = g[7] ? lang.daypartOf(g[7]) : undefined;
+    // «10-12» без «с», без минут и без уточнения — не время (счёт, номер, диапазон чего угодно)
+    if (!g[1] && g[3] === undefined && g[6] === undefined && !fromPart && !toPart) return undefined;
+    let from = resolveHour(Number(g[2]), Number(g[3] || 0), fromPart);
+    const to = resolveHour(Number(g[5]), Number(g[6] || 0), toPart);
+    if (from === undefined || to === undefined) return undefined;
+    // «5-6pm»: уточнение конца относится и к началу, если начало при этом остаётся раньше конца
+    if (!fromPart && toPart) {
+      const same = resolveHour(Number(g[2]), Number(g[3] || 0), toPart);
+      if (same !== undefined && same < to) from = same;
     }
-    // Уточнение после часа сильнее уточнения перед ним: «вечером в 7», «в 7 вечера»
-    const daypartIn = (after?: string, before?: string) => (
-      after ? lang.daypartOf(after) : before ? lang.daypartLeadOf(before) : undefined
-    );
-    scan('time', `(?:(${words.from})\\s+)?${clock}\\s*(?:${DASH}|${words.to})\\s*${clock}`, (g) => {
-      const fromPart = g[4] ? lang.daypartOf(g[4]) : undefined;
-      const toPart = g[7] ? lang.daypartOf(g[7]) : undefined;
-      // «10-12» без «с», без минут и без уточнения — не время (счёт, номер, диапазон чего угодно)
-      if (!g[1] && g[3] === undefined && g[6] === undefined && !fromPart && !toPart) return false;
-      let from = resolveHour(Number(g[2]), Number(g[3] || 0), fromPart);
-      const to = resolveHour(Number(g[5]), Number(g[6] || 0), toPart);
-      if (from === undefined || to === undefined) return false;
-      // «5-6pm»: уточнение конца относится и к началу, если начало при этом остаётся раньше конца
-      if (!fromPart && toPart) {
-        const same = resolveHour(Number(g[2]), Number(g[3] || 0), toPart);
-        if (same !== undefined && same < to) from = same;
-      }
-      start = from;
-      end = to;
-      return true;
-    });
-    if (start === undefined) {
-      scan('time', `${lang.daypartLead}(?:(?:${words.at})\\s+)?(${HOUR}):(${MINUTE})(?:\\s*(${lang.daypart}))?`, (
-        g, from, to,
-      ) => {
-        const part = daypartIn(g[4], g[1]);
-        const isLoose = !part && edits.some((edit) => edit.isLoose && edit.from >= from && edit.to <= to);
-        start = isLoose ? resolveLooseClock(Number(g[2]), Number(g[3]), ctx)
-          : resolveHour(Number(g[2]), Number(g[3]), part);
-        return start !== undefined;
-      });
+    return { start: from, end: to };
+  }, isNotWaterIn);
+  const clockBody = `${lang.daypartLead}(?:(?:${words.at})\\s+)?(${HOUR}):(${MINUTE})(?:\\s*(${lang.daypart}))?`;
+  offer('time', 'time', RANK.timeClock, clockBody, (g, from, to) => {
+    const part = daypartIn(g[4], g[1]);
+    const hour = Number(g[2]);
+    const minute = Number(g[3]);
+    // Разговорные часы двенадцатичасовые: вторая половина суток — другое чтение
+    if (!part && edits.some((edit) => edit.isLoose && edit.from >= from && edit.to <= to)) {
+      const start = resolveLooseClock(hour, minute, ctx);
+      return { start, altStart: (start + MINUTES_IN_DAY / 2) % MINUTES_IN_DAY };
     }
-    if (start === undefined) {
-      scan('time', `${lang.daypartLead}(?:(${words.at})\\s+)?(${HOUR})(?![.:,]\\d)(?:\\s*(${lang.daypart}))?`, (
-        g, from, to,
-      ) => {
-        // Голый час — только с предлогом («в 5») либо с уточнением, понятным без него («5pm»)
-        if (!g[2] && !(g[4] && lang.isBareDaypart?.test(g[4]))) return false;
-        // «раз в 2 недели», «once in 2 weeks»: число принадлежит повтору
-        if (repeatZones.some((zone) => zone.from < to && from < zone.to)) return false;
-        const part = daypartIn(g[4], g[1]);
-        start = part ? resolveHour(Number(g[3]), 0, part) : resolveBareHour(Number(g[3]), ctx);
-        return start !== undefined;
-      });
+    const start = resolveHour(hour, minute, part);
+    return start === undefined ? undefined : { start };
+  }, isNotWaterIn);
+  const hourBody = `${lang.daypartLead}(?:(${words.at})\\s+)?(${HOUR})(?![.:,]\\d)(?:\\s*(${lang.daypart}))?`;
+  offer('time', 'time', RANK.timeHour, hourBody, (g, from, to) => {
+    // Голый час — только с предлогом («в 5») либо с уточнением, понятным без него («5pm»)
+    if (!g[2] && !(g[4] && lang.isBareDaypart?.test(g[4]))) return undefined;
+    // «раз в 2 недели», «once in 2 weeks»: число принадлежит повтору
+    if (repeatZones.some((zone) => zone.from < to && from < zone.to)) return undefined;
+    const part = daypartIn(g[4], g[1]);
+    const hour = Number(g[3]);
+    if (part) {
+      const start = resolveHour(hour, 0, part);
+      return start === undefined ? undefined : { start };
     }
-    if (start === undefined && words.namedTimes) {
-      scan('time', `(?:(?:${words.at})\\s+)?(${bodies(words.namedTimes)})`, (g) => {
-        start = lang.namedTimeOf(g[1]!);
-        return start !== undefined;
-      });
-    }
+    // «в 7» — утро либо вечер: выбор по окну дня, другое чтение остаётся вариантом
+    const start = resolveBareHour(hour, ctx);
+    const isAmbiguous = hour >= 1 && hour < 12;
+    return { start, altStart: isAmbiguous ? (start + MINUTES_IN_DAY / 2) % MINUTES_IN_DAY : undefined };
+  }, isNotWaterIn);
+  if (words.namedTimes) {
+    offer('time', 'time', RANK.timeNamed, `(?:(?:${words.at})\\s+)?(${bodies(words.namedTimes)})`, (g) => {
+      const start = lang.namedTimeOf(g[1]!);
+      return start === undefined ? undefined : { start };
+    }, isNotWaterIn);
   }
 
-  // ── повтор ────────────────────────────────────────────────────────────────
-  let repeatKind: PlannerRepeatKind | undefined;
-  let interval = 1;
-  let weekdays: number[] | undefined;
-  let endDay: string | undefined;
-  let count: number | undefined;
-  let spanMonths = 0;
-  let spanWeeks = 0;
-  if (!isFood && !isWater && !skipped.has('repeat')) {
-    const units = bodies(words.units);
-    scan('repeat', `(?:${words.every})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => {
-      repeatKind = lang.unitOf(g[2]!);
-      interval = lang.countOf(g[1]);
-    });
-    if (!repeatKind) {
-      scan('repeat', bodies(words.adverbs), (g) => {
-        repeatKind = lang.adverbOf(g[0]!);
-      });
+  // Повтор
+  const units = bodies(words.units);
+  const repeatKindIn = (state: Chosen) => (
+    state.slots.get('repeatKind')?.value.repeatKind || (state.slots.has('weekdays') ? 'weekly' as const : undefined)
+  );
+  const hasRepeatIn = (state: Chosen) => isPlainIn(state) && Boolean(repeatKindIn(state));
+  // Дни недели — только у еженедельного повтора
+  const isWeeklyIn = (state: Chosen) => {
+    const kind = state.slots.get('repeatKind')?.value.repeatKind;
+    return isPlainIn(state) && (!kind || kind === 'weekly');
+  };
+  offer('repeatKind', 'repeat', RANK.repeatEvery, `(?:${words.every})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => (
+    { repeatKind: lang.unitOf(g[2]!), interval: lang.countOf(g[1]) }
+  ), isPlainIn);
+  offer('repeatKind', 'repeat', RANK.repeatAdverb, bodies(words.adverbs), (g) => (
+    { repeatKind: lang.adverbOf(g[0]!) }
+  ), isPlainIn);
+  offer('repeatKind', 'repeat', RANK.repeatOnce, `(?:${words.oncePer})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => (
+    { repeatKind: lang.unitOf(g[2]!), interval: lang.countOf(g[1]) }
+  ), isPlainIn);
+  offer('weekdays', 'repeat', RANK.repeatWorkdays, words.workdays, () => ({ days: [1, 2, 3, 4, 5] }), isWeeklyIn);
+  offer('weekdays', 'repeat', RANK.repeatWeekends, words.weekends, () => ({ days: [6, 0] }), isWeeklyIn);
+  const dayList = `(?:${lang.weekday})(?:${lang.listSeparator}(?:${lang.weekday}))*`;
+  offer('weekdays', 'repeat', RANK.repeatDays, `(?:(${words.every}|${words.on})\\s+)?(${dayList})`, (g) => {
+    const names = g[2]!.split(lang.listSplit);
+    const isRepeat = g[1]
+      // «каждый вторник», «по вт»; «on friday» — дата, «on mon and wed» — повтор
+      ? lang.isEvery.test(g[1]) || words.isOnAlwaysRepeat || names.length > 1
+      : false;
+    // «mondays 19:00» — повтор и без предлога
+    const isPlural = names.some((name) => lang.isPluralWeekday?.test(name));
+    if (!isRepeat && !isPlural) return undefined;
+    return { days: [...new Set(names.map((name) => lang.weekdayOf(name)!))] };
+  }, isWeeklyIn);
+  // «N мес / N раз / до <дата>» — граница ряда, только когда повтор найден; иначе «до <дата>» — срок
+  const untilBody = `(?:${words.until})\\s+(${lang.date}|${lang.month})`;
+  const readDate = (value: string): CandidateValue | undefined => {
+    const day = resolveDate(value, ctx.today, lang);
+    if (!day) return undefined;
+    // Другое чтение: день недели — сегодня, а не через неделю; дата без года — в этом году, хотя прошла
+    const altDay = resolveDate(value, ctx.today, lang, true);
+    return { day, altDay: altDay !== day ? altDay : undefined };
+  };
+  if (ctx.pick?.repeat !== QUICK_REPEAT_OPEN) {
+    offer('repeatEnd', 'repeat', RANK.repeatEnd, untilBody, (g) => readDate(g[1]!), hasRepeatIn);
+  }
+  offer('repeatCount', 'repeat', RANK.repeatCount, `(\\d{1,3})\\s*(?:${words.times})`, (g) => (
+    { count: Number(g[1]) }
+  ), hasRepeatIn);
+  const spanLead = words.spanLead ? `(?:(?:${words.spanLead})\\s+)?` : '';
+  offer('repeatSpan', 'repeat', RANK.repeatSpan, `${spanLead}(\\d{1,2})\\s*(${bodies(words.spans)})`, (g) => {
+    const amount = Number(g[1]);
+    const unit = lang.spanOf(g[2]!);
+    return unit === 'week' ? { weeks: amount } : { months: unit === 'month' ? amount : amount * 12 };
+  }, hasRepeatIn);
+
+  // Срок и дата: «до пт» как срок старше «пт» как дня
+  offer('due', 'due', RANK.due, untilBody, (g) => readDate(g[1]!), isPlainIn);
+  offer('day', 'day', RANK.day, `(?:(?:${words.dayLead})\\s+)?(${lang.date})`, (g) => {
+    const value = readDate(g[1]!);
+    if (!value) return undefined;
+    const weekday = weekdayIn(g[1]!, lang);
+    if (weekday === undefined) return value;
+    // «sat down» — не суббота: такое сокращение без предлога — день только в конце строки, перед
+    // числом или перед уже распознанным значением
+    return { ...value, weekday, isWeak: g[0] === g[1] && Boolean(lang.isWeakWeekday?.test(g[1]!)) };
+  }, (state, { value, from, to }) => {
+    if (isWaterIn(state)) return false;
+    if (value.weekday === undefined) return true;
+    // «1000 Вт» — не вторник: день недели сразу после числа, не распознанного как значение, — не день
+    const before = lower.slice(0, from).trimEnd().length - 1;
+    if (before >= 0 && /\d/.test(lower[before]) && !state.taken[before]) return false;
+    if (value.isWeak) {
+      const after = to + lower.slice(to).search(/\S/);
+      if (after >= to && !state.taken[after] && !/[\d,;.!?)]/.test(lower[after])) return false;
     }
-    if (!repeatKind) {
-      scan('repeat', `(?:${words.oncePer})\\s+(?:(${lang.count})\\s+)?(${units})`, (g) => {
-        repeatKind = lang.unitOf(g[2]!);
-        interval = lang.countOf(g[1]);
-      });
-    }
-    const pickDays = (days: number[]) => {
-      if (repeatKind && repeatKind !== 'weekly') return false;
-      repeatKind = 'weekly';
-      weekdays = days;
-      return true;
+    return true;
+  });
+
+  // «до <дата>» при повторе прочитано не как конец ряда (выбор пользователя): слова остаются в названии —
+  // ни срок, ни день их не забирают
+  const openZones = ctx.pick?.repeat === QUICK_REPEAT_OPEN ? matchZones(word(untilBody), lower) : [];
+  const offered = !openZones.length ? pool : pool.map((item): Candidate => {
+    const isInside = (item.slot === 'due' || item.slot === 'day')
+      && openZones.some((zone) => zone.from < item.to && item.from < zone.to);
+    return !isInside ? item : {
+      ...item, when: (state, self) => !repeatKindIn(state) && (!item.when || item.when(state, self)),
     };
-    if (!weekdays) scan('repeat', words.workdays, () => pickDays([1, 2, 3, 4, 5]));
-    if (!weekdays) scan('repeat', words.weekends, () => pickDays([6, 0]));
-    if (!weekdays) {
-      const list = `(?:${lang.weekday})(?:${lang.listSeparator}(?:${lang.weekday}))*`;
-      scan('repeat', `(?:(${words.every}|${words.on})\\s+)?(${list})`, (g) => {
-        const names = g[2]!.split(lang.listSplit);
-        const isRepeat = g[1]
-          // «каждый вторник», «по вт»; «on friday» — дата, «on mon and wed» — повтор
-          ? lang.isEvery.test(g[1]) || words.isOnAlwaysRepeat || names.length > 1
-          : false;
-        // «mondays 19:00» — повтор и без предлога
-        const isPlural = names.some((name) => lang.isPluralWeekday?.test(name));
-        if (!isRepeat && !isPlural) return false;
-        return pickDays([...new Set(names.map((name) => lang.weekdayOf(name)!))]);
-      });
-    }
-    if (repeatKind) {
-      scan('repeat', `(?:${words.until})\\s+(${lang.date}|${lang.month})`, (g) => {
-        endDay = resolveDate(g[1]!, ctx.today, lang);
-        return Boolean(endDay);
-      });
-      scan('repeat', `(\\d{1,3})\\s*(?:${words.times})`, (g) => {
-        count = Number(g[1]);
-      });
-      const spanLead = words.spanLead ? `(?:(?:${words.spanLead})\\s+)?` : '';
-      scan('repeat', `${spanLead}(\\d{1,2})\\s*(${bodies(words.spans)})`, (g) => {
-        const amount = Number(g[1]);
-        const unit = lang.spanOf(g[2]!);
-        if (unit === 'month') spanMonths = amount;
-        else if (unit === 'week') spanWeeks = amount;
-        else spanMonths = amount * 12;
-      });
-    }
-  }
+  });
+  const candidates = pinCandidates(offered, ctx.pick);
 
-  // ── срок и дата ───────────────────────────────────────────────────────────
-  let day: string | undefined;
-  let namedWeekday: number | undefined;
-  if (!isWater) {
-    if (!isFood) {
-      scan('due', `(?:${words.until})\\s+(${lang.date}|${lang.month})`, (g) => {
-        draft.due = resolveDate(g[1]!, ctx.today, lang);
-        return Boolean(draft.due);
-      });
-    }
-    scan('day', `(?:(?:${words.dayLead})\\s+)?(${lang.date})`, (g, from, to) => {
-      const value = g[1]!;
-      const weekday = weekdayIn(value, lang);
-      if (weekday !== undefined) {
-        // «1000 Вт» — не вторник: день недели сразу после числа, не распознанного как значение, — не день
-        const before = lower.slice(0, from).trimEnd().length - 1;
-        if (before >= 0 && /\d/.test(lower[before]) && !taken[before]) return false;
-        // «sat down» — не суббота: такое сокращение без предлога — день только в конце строки, перед
-        // числом или перед уже распознанным значением
-        if (g[0] === value && lang.isWeakWeekday?.test(value)) {
-          const after = to + lower.slice(to).search(/\S/);
-          if (after >= to && !taken[after] && !/[\d,;.!?)]/.test(lower[after])) return false;
-        }
-      }
-      day = resolveDate(value, ctx.today, lang);
-      if (!day) return false;
-      namedWeekday = weekday;
-      return true;
-    });
+  // ── выбор ──────────────────────────────────────────────────────────────────
+  // Условия зависят от выбранного, а выбранное — от условий: выбор повторяется, пока набор не
+  // перестанет меняться. Условие кандидата смотрит только на кандидатов старше его рангом, поэтому
+  // круг сходится за несколько шагов
+  let state = chosenState([], text.length);
+  for (let round = 0; round < MAX_PICK_ROUNDS; round++) {
+    const current = state;
+    const chosen = pickCandidates(candidates.filter((item) => !item.when || item.when(current, item)));
+    state = chosenState(chosen, text.length);
+    if (chosen.length === current.items.length && chosen.every((item, index) => item === current.items[index])) break;
   }
+  const isFood = isFoodIn(state);
+  const isWater = isWaterIn(state);
+  let picked = state.items;
+  const valueOf = (slot: string) => picked.find((item) => item.slot === slot)?.value;
+
+  // ── значения выбранных кандидатов ──────────────────────────────────────────
+  const nutrients: Partial<Record<QuickNutrient, number>> = {};
+  // Однобуквенное обозначение разбирается после полного и потому сильнее его
+  [false, true].forEach((isShort) => picked.forEach(({ value }) => {
+    if (value.nutrient && Boolean(value.isShort) === isShort) nutrients[value.nutrient] = value.amount;
+  }));
+  draft.grams = valueOf('grams')?.amount;
+  draft.meal = valueOf('meal')?.meal;
+  draft.waterMl = valueOf('water')?.amount;
+  draft.minutes = valueOf('minutes')?.minutes;
+  const time = valueOf('time');
+  const start = time?.start;
+  const end = time?.end;
+  const days = valueOf('weekdays')?.days;
+  const repeatKind = repeatKindIn(state);
+  const interval = valueOf('repeatKind')?.interval ?? 1;
+  let weekdays = days;
+  let endDay = valueOf('repeatEnd')?.day;
+  const count = valueOf('repeatCount')?.count;
+  const spanMonths = valueOf('repeatSpan')?.months || 0;
+  const spanWeeks = valueOf('repeatSpan')?.weeks || 0;
+  draft.due = valueOf('due')?.day;
+  let day = valueOf('day')?.day;
+  const namedWeekday = valueOf('day')?.weekday;
+
+  const settle = () => {
+    taken.fill(false);
+    spans.length = 0;
+    picked.forEach(({ field, from, to }) => {
+      taken.fill(true, from, to);
+      spans.push({ field, from, to });
+    });
+  };
+  const unmark = (fields: QuickField[]) => {
+    picked = picked.filter(({ field }) => !fields.includes(field));
+    settle();
+  };
+  const markerText = (field: QuickField) => {
+    const span = spans.find((item) => item.field === field);
+    return span && text.slice(span.from + 1, span.to);
+  };
+  settle();
 
   // ── тип задачи либо события; метки, которые ему не положены ───────────────
   const blank = () => restoreNumerals(text.split('').map((char, i) => (taken[i] ? ' ' : char)).join(''), edits);
   const hasTime = start !== undefined;
   let learned: QuickLearned[string] | undefined;
+  // Другие чтения: второе значение выбранного кандидата («в 7» — 07:00 либо 19:00) и кандидаты того же
+  // поля, которым не хватило места в слоте («созвон 16:00 или 18:00»)
+  const alternatives: QuickAlt[] = [];
+  const suggest = (field: QuickAltField, pick?: string, altDay?: string) => {
+    const isKnown = alternatives.some((item) => item.field === field && item.pick === pick);
+    const isFull = alternatives.filter((item) => item.field === field).length >= MAX_ALTERNATIVES;
+    if (pick && !isKnown && !isFull) alternatives.push(altDay ? { field, pick, day: altDay } : { field, pick });
+  };
+  PICK_SLOTS.forEach((slot) => {
+    const winner = picked.find((item) => item.slot === slot);
+    if (!winner) return;
+    const current = valueKey(slot, winner.value);
+    const other = altKey(slot, winner.value);
+    if (other !== current) suggest(slot, other);
+    // Закрепление оставляет в слоте одного кандидата — остальные берутся из полного набора. Из
+    // пересекающихся остаётся лучший: диапазон, а не два его времени
+    const spare = offered.filter((item) => (
+      item.slot === slot && (!item.when || item.when(state, item))
+      && !picked.some((taker) => taker.from < item.to && item.from < taker.to)
+    ));
+    pickCandidates(spare.map((item) => ({ ...item, slot: undefined }))).forEach((item) => {
+      const key = valueKey(slot, item.value);
+      if (key !== current) suggest(slot, key);
+    });
+  });
+  // «до <дата>» при повторе — конец ряда; другое чтение — слова названия
+  if (valueOf('repeatEnd')) {
+    suggest('repeat', QUICK_REPEAT_OPEN);
+  } else if (repeatKind && openZones.length) {
+    const closed = openZones.map(({ groups }) => readDate(groups[1]!)?.day).find(Boolean);
+    if (closed) suggest('repeat', QUICK_REPEAT_END, closed);
+  }
   if (isWater || isFood) {
     unmark(MARKER_FIELDS);
   } else {
@@ -1042,11 +1273,18 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     }
     // У события нет ни списка, ни статуса: «#слово» и «!» остаются в названии
     if (draft.kind === 'event') unmark(['list', 'important']);
+    // Событие либо задача: разбор выбрал сам — другое чтение остаётся вариантом (у задачи без даты и
+    // времени его нет: событию нужен день)
+    const otherKind: QuickKind = draft.kind === 'event' ? 'task' : 'event';
+    const isDated = hasTime || Boolean(valueOf('day') || repeatKind);
+    if (!explicitKind && allowed.has(otherKind) && (draft.kind === 'event' || isDated)) suggest('kind', otherKind);
     const list = markerText('list');
     draft.list = list && list.replace(/_/g, ' ');
     draft.place = markerText('place');
     draft.isImportant = spans.some(({ field }) => field === 'important') || undefined;
   }
+
+  if (alternatives.length) draft.alternatives = alternatives;
 
   // ── название: всё непомеченное, в словах пользователя ─────────────────────
   const plain = blank();
@@ -1096,7 +1334,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     spans.sort((a, b) => a.from - b.from);
   }
   if (!day && (hasTime || draft.kind === 'event') && !repeatKind) {
-    day = hasTime && start! <= ctx.nowMinutes ? addDays(ctx.today, 1) : ctx.today;
+    day = hasTime && start <= ctx.nowMinutes ? addDays(ctx.today, 1) : ctx.today;
     draft.isDayAssumed = true;
   }
 
@@ -1108,8 +1346,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     // Начало ряда — первый подходящий день не раньше названной даты
     let startDay = base;
     if (repeatKind === 'weekly') {
-      const candidates = weekdays!.map((weekday) => nextWeekday(base, weekday, true));
-      startDay = candidates.sort()[0];
+      startDay = weekdays!.map((weekday) => nextWeekday(base, weekday, true)).sort()[0];
     }
     if (!endDay && spanMonths) endDay = addMonths(startDay, spanMonths);
     if (!endDay && spanWeeks) endDay = addDays(startDay, spanWeeks * DAYS_IN_WEEK);
@@ -1136,11 +1373,11 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
       const own = !isNamed && !skipped.has('minutes') && learned?.minutes !== usual ? learned?.minutes : undefined;
       if (own) draft.learned = [...(draft.learned || []), 'minutes'];
       draft.usualMinutes = usual;
-      const finish = end ?? start! + (draft.minutes || own || usual);
-      draft.start = toTime(start!);
+      const finish = end ?? start + (draft.minutes || own || usual);
+      draft.start = toTime(start);
       // Ровно полночь — последняя минута суток; позже — ошибка, а не обрезка
       draft.end = finish === MINUTES_IN_DAY ? '23:59' : finish < MINUTES_IN_DAY ? toTime(finish) : undefined;
-      draft.minutes = end !== undefined ? end - start! : draft.minutes;
+      draft.minutes = end !== undefined ? end - start : draft.minutes;
     } else {
       draft.isAllDay = true;
     }
@@ -1157,8 +1394,8 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   }
 
   if (hasTime) {
-    draft.start = toTime(start!);
-    draft.minutes = end !== undefined ? end - start! : (draft.minutes ?? QUICK_TASK_MINUTES);
+    draft.start = toTime(start);
+    draft.minutes = end !== undefined ? end - start : (draft.minutes ?? QUICK_TASK_MINUTES);
   }
   if (draft.repeat) draft.due = undefined;
   draft.error = validateTask({
@@ -1442,8 +1679,13 @@ function parseWorkout(
     || (!base.start && !base.repeat && (base.day || ctx.today) <= ctx.today);
   if (!isRecord && ctx.kind !== 'workout') return undefined;
   const hasContent = Boolean(distanceKm || exercises.length || base.minutes);
+  // «бег 28 мин» — запись тренировки либо дело с длительностью: второе чтение остаётся вариантом
+  const plainKinds = (['task', 'event'] as const).filter((kind) => !ctx.kinds || ctx.kinds.includes(kind));
+  const other = !ctx.kind && plainKinds.length
+    ? parseText(text, edits, { ...ctx, kinds: plainKinds, pick: undefined }, lang).kind : undefined;
   return {
     kind: 'workout',
+    alternatives: other ? [{ field: 'kind', pick: other }] : undefined,
     name: base.name,
     day: base.day || ctx.today,
     start: base.start,

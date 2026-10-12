@@ -1298,3 +1298,222 @@ describe('ввод текстом: обычная длительность и в
     }],
   ], EN);
 });
+
+describe('ввод текстом: выбор кандидатов и другие чтения', () => {
+  const TASK = { field: 'kind', pick: 'task' } as const;
+  const EVENT = { field: 'kind', pick: 'event' } as const;
+  // Понедельник 12 октября 2026
+  const MONDAY: Partial<QuickContext> = { today: '2026-10-12' };
+  run([
+    // Составное старше своих частей: диапазон — двух времён, «1 ч 30 мин» — «30 мин», срок — дня
+    ['пара 10:00-11:30', { name: 'пара', start: '10:00', end: '11:30', alternatives: [TASK] }],
+    ['пара с 10:00 до 11:30 45 мин', { name: 'пара', start: '10:00', end: '11:30', minutes: 90 }],
+    ['созвон 16:00 1 ч 30 мин', { name: 'созвон', minutes: 90, end: '17:30' }],
+    ['созвон 16:00 1 ч и 30 мин', { name: 'созвон и 30 мин', minutes: 60, end: '17:00' }],
+    ['созвон в 7 вечера', { name: 'созвон', start: '19:00', alternatives: [TASK] }],
+    ['отчёт до пт', { name: 'отчёт', due: '2026-10-09', day: undefined, alternatives: undefined }],
+    ['отчёт по вт, чт и пт', { name: 'отчёт', day: '2026-10-08', repeat: { kind: 'weekly', weekdays: [2, 4, 5] } }],
+    ['отчёт раз в 2 недели', { name: 'отчёт', repeat: { kind: 'weekly', interval: 2 }, start: undefined }],
+    ['обед 150г б30 ж10', { kind: 'food', grams: 150, nutrients: { protein: 30, fat: 10 } }],
+    // Голый час: утро либо вечер
+    ['созвон в 7', { start: '19:00', day: '2026-10-08', alternatives: [{ field: 'time', pick: '07:00' }, TASK] }],
+    ['созвон в 7', {
+      start: '07:00', day: '2026-10-09', alternatives: [{ field: 'time', pick: '19:00' }, TASK],
+    }, { pick: { time: '07:00' } }],
+    ['созвон в семь', { start: '07:00' }, { pick: { time: '07:00' } }],
+    ['созвон в 10', { start: '10:00', alternatives: [{ field: 'time', pick: '22:00' }, TASK] }],
+    ['созвон в 12', { start: '12:00', alternatives: [TASK] }],
+    ['созвон в 15', { start: '15:00', alternatives: [TASK] }],
+    ['созвон в 7:30', { start: '07:30', alternatives: [TASK] }],
+    // Разговорные часы — то же
+    ['встреча полтретьего', { start: '14:30', alternatives: [{ field: 'time', pick: '02:30' }, TASK] }],
+    ['встреча полтретьего', {
+      start: '02:30', alternatives: [{ field: 'time', pick: '14:30' }, TASK],
+    }, { pick: { time: '02:30' } }],
+    // Второе время в строке
+    ['созвон 16:00 или 18:00', {
+      name: 'созвон или 18:00', start: '16:00', alternatives: [{ field: 'time', pick: '18:00' }, TASK],
+    }],
+    ['созвон 16:00 или 18:00', {
+      name: 'созвон 16:00 или', start: '18:00', end: '18:30', alternatives: [{ field: 'time', pick: '16:00' }, TASK],
+    }, { pick: { time: '18:00' } }],
+    ['созвон 16:00 или с 18:00 до 19:00', {
+      name: 'созвон 16:00 или', start: '18:00', end: '19:00', alternatives: [{ field: 'time', pick: '16:00' }, TASK],
+    }],
+    ['созвон 16:00 или с 18:00 до 19:00', {
+      name: 'созвон или с 18:00 до 19:00', start: '16:00', end: '16:30',
+      alternatives: [{ field: 'time', pick: '18:00-19:00' }, TASK],
+    }, { pick: { time: '16:00' } }],
+    // День недели, совпавший с сегодняшним: через неделю либо сегодня
+    ['отчёт пн', { day: '2026-10-19', alternatives: [{ field: 'day', pick: '2026-10-12' }, EVENT] }, MONDAY],
+    ['отчёт пн', {
+      day: '2026-10-12', alternatives: [{ field: 'day', pick: '2026-10-19' }, EVENT],
+    }, { ...MONDAY, pick: { day: '2026-10-12' } }],
+    ['отчёт вт', { day: '2026-10-13', alternatives: [EVENT] }, MONDAY],
+    ['отчёт до пн', { due: '2026-10-19', alternatives: [{ field: 'due', pick: '2026-10-12' }] }, MONDAY],
+    ['отчёт до пн', { due: '2026-10-12' }, { ...MONDAY, pick: { due: '2026-10-12' } }],
+    // Дата без года, которая уже прошла: следующий год либо этот
+    ['отчёт 5 октября', { day: '2027-10-05', alternatives: [{ field: 'day', pick: '2026-10-05' }, EVENT] }],
+    ['отчёт 5 октября', { day: '2026-10-05' }, { pick: { day: '2026-10-05' } }],
+    ['отчёт 05.10', { day: '2027-10-05', alternatives: [{ field: 'day', pick: '2026-10-05' }, EVENT] }],
+    ['отчёт 05.10.2026', { day: '2026-10-05', alternatives: [EVENT] }],
+    ['отчёт 20 октября', { day: '2026-10-20', alternatives: [EVENT] }],
+    ['отчёт до 5 октября', { due: '2027-10-05', alternatives: [{ field: 'due', pick: '2026-10-05' }] }],
+    // Второй день в строке
+    ['отчёт завтра или в сб', {
+      name: 'отчёт или в сб', day: '2026-10-09', alternatives: [{ field: 'day', pick: '2026-10-10' }, EVENT],
+    }],
+    ['отчёт завтра или в сб', { name: 'отчёт завтра или', day: '2026-10-10' }, { pick: { day: '2026-10-10' } }],
+    // «до <дата>» при повторе — конец ряда; другое чтение — слова названия
+    ['отчёт каждую неделю до 20.12', {
+      name: 'отчёт', repeat: { kind: 'weekly', endDay: '2026-12-20' },
+      alternatives: [{ field: 'repeat', pick: 'open' }, EVENT],
+    }],
+    ['отчёт каждую неделю до 20.12', {
+      name: 'отчёт до 20.12', repeat: { kind: 'weekly', endDay: undefined }, due: undefined,
+      alternatives: [{ field: 'repeat', pick: 'end', day: '2026-12-20' }, EVENT],
+    }, { pick: { repeat: 'open' } }],
+    ['отчёт до 20.12', { name: 'отчёт', due: '2026-12-20', alternatives: undefined }, { pick: { repeat: 'open' } }],
+    // Событие либо задача
+    ['купить молоко 18:00', { kind: 'event', alternatives: [TASK] }],
+    ['купить молоко завтра', { kind: 'task', alternatives: [EVENT] }],
+    ['купить молоко каждую неделю', { kind: 'task', alternatives: [EVENT] }],
+    ['купить молоко', { kind: 'task', alternatives: undefined }],
+    ['купить молоко 18:00', { kind: 'task', alternatives: undefined }, { kind: 'task' }],
+    ['задача купить молоко 18:00', { kind: 'task', alternatives: undefined }],
+    ['купить молоко 18:00', { kind: 'event', alternatives: undefined }, { kinds: ['event'] }],
+    // «28 мин» — длительность тренировки либо длительность дела
+    ['бег 28 мин', { kind: 'workout', minutes: 28, alternatives: [TASK] }],
+    ['бег 28 мин', { kind: 'task', name: 'бег', minutes: 28, alternatives: undefined }, { kind: 'task' }],
+    ['бег 28 мин', { kind: 'workout', alternatives: undefined }, { kind: 'workout' }],
+    ['бег 28 мин', { kind: 'workout', alternatives: undefined }, { kinds: ['workout'] }],
+    // Ключ, которому в строке ничего не отвечает, не действует
+    ['созвон в 7', { start: '19:00' }, { pick: { time: '09:00', day: '2026-10-20', due: '2026-10-20' } }],
+    ['созвон 16:00', { start: '16:00', alternatives: [TASK] }, { pick: { time: '18:00' } }],
+    // Снятое значение чтений не предлагает
+    ['созвон в 7', { kind: 'task', name: 'созвон в 7', alternatives: undefined }, { skip: ['time'] }],
+  ]);
+  run([
+    ['call at 7', { start: '19:00', alternatives: [{ field: 'time', pick: '07:00' }, TASK] }],
+    ['call at 7', { start: '07:00', day: '2026-10-09' }, { pick: { time: '07:00' } }],
+    ['call at 7 pm', { start: '19:00', alternatives: [TASK] }],
+    ['call half past two', { start: '14:30', alternatives: [{ field: 'time', pick: '02:30' }, TASK] }],
+    ['call 16:00 or 18:00', {
+      name: 'call or 18:00', start: '16:00', alternatives: [{ field: 'time', pick: '18:00' }, TASK],
+    }],
+    ['call 16:00 or 18:00', { name: 'call 16:00 or', start: '18:00' }, { pick: { time: '18:00' } }],
+    ['report mon', { day: '2026-10-19', alternatives: [{ field: 'day', pick: '2026-10-12' }, EVENT] }, MONDAY],
+    ['report mon', { day: '2026-10-12' }, { ...MONDAY, pick: { day: '2026-10-12' } }],
+    ['report by mon', { due: '2026-10-19', alternatives: [{ field: 'due', pick: '2026-10-12' }] }, MONDAY],
+    ['report Oct 5', { day: '2027-10-05', alternatives: [{ field: 'day', pick: '2026-10-05' }, EVENT] }],
+    ['report Oct 5', { day: '2026-10-05' }, { pick: { day: '2026-10-05' } }],
+    ['report every week until 20.12', {
+      name: 'report', repeat: { kind: 'weekly', endDay: '2026-12-20' },
+      alternatives: [{ field: 'repeat', pick: 'open' }, EVENT],
+    }],
+    ['report every week until 20.12', {
+      name: 'report until 20.12', repeat: { kind: 'weekly', endDay: undefined },
+      alternatives: [{ field: 'repeat', pick: 'end', day: '2026-12-20' }, EVENT],
+    }, { pick: { repeat: 'open' } }],
+    ['buy milk 6pm', { kind: 'event', alternatives: [TASK] }],
+    ['buy milk tomorrow', { kind: 'task', alternatives: [EVENT] }],
+    ['run 28 min', { kind: 'workout', minutes: 28, alternatives: [TASK] }],
+    ['run 28 min', { kind: 'task', name: 'run', minutes: 28 }, { kind: 'task' }],
+  ], EN);
+});
+
+describe('ввод текстом: любая строка разбирается', () => {
+  // Генератор с зерном: набор строк один и тот же при каждом запуске
+  function seeded(seed: number) {
+    let state = seed;
+    return () => {
+      state = (state * 1664525 + 1013904223) % 4294967296;
+      return state / 4294967296;
+    };
+  }
+  const PIECES = [
+    'созвон', 'call', 'в', 'at', 'до', 'by', 'по', 'on', 'каждые', 'every', 'пт', 'fri', 'завтра', 'tomorrow', 'пять',
+    'five', 'полтретьего', 'half past', 'без', 'мин', 'min', 'ч', 'h', 'ккал', 'kcal', 'вода', 'water', 'сон', 'sleep',
+    'цель', 'goal', 'зал', 'gym', 'вес', 'weight', '16:00', '25:99', '10-12', '31.02', '00.00', '99.99.9999', '1e9',
+    '0', '7', '24', '999999999999999999999', '-', '—', ':', ';', '.', ',', '!', '!!!', '?!', '#', '@', '#дом', '@x',
+    '(', ')', '[[', ']]', '/', '\\', '*', '+', '$', '^', '|', '\n', '\t', '\r', '\u0000', '\u001b', ' ', '​',
+    '‮', '﻿', '🙂', '👨‍👩‍👧', '🇷🇺', '\ud83d', 'שלום', 'مرحبا', '日本語', 'İ', 'ß', 'ǅ', 'é', 'Ё', 'ё',
+    'constructor', '__proto__', 'toString', 'undefined', 'NaN', ' ', '  ',
+  ];
+  const CONTEXTS: Partial<QuickContext>[] = [
+    {}, { lang: 'en' }, { kinds: ['task', 'event'] }, { kind: 'task' }, { kind: 'event' }, { kind: 'food' },
+    { kind: 'water' }, { kind: 'sleep' }, { kind: 'workout' }, { kind: 'metric' }, { kind: 'goal' },
+    { skip: ['time', 'day', 'kind', 'minutes', 'due', 'repeat', 'description', 'list', 'place', 'important'] },
+    { pick: { time: '07:00', day: '2026-10-12', due: '2026-10-12', repeat: 'open' } },
+    { learned: { созвон: { kind: 'task', minutes: 20 }, call: { kind: 'event', minutes: 1440 } } },
+    { today: '2026-12-31', nowMinutes: 1439, dayStart: 0, dayEnd: 1440 }, { today: '2028-02-29', nowMinutes: 0 },
+  ];
+  const KINDS = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
+
+  function check(line: string, ctx: Partial<QuickContext>) {
+    const draft = parseQuickInput(line, { ...CTX, ...ctx });
+    expect(KINDS).toContain(draft.kind);
+    expect(typeof draft.name).toBe('string');
+    expect(Array.isArray(draft.spans)).toBe(true);
+    draft.spans.forEach(({ from, to }) => {
+      const isInside = from >= 0 && from <= to && to <= line.length;
+      expect(isInside, `участок ${from}–${to} в строке длины ${line.length}`).toBe(true);
+    });
+    // Запись без ошибки пригодна к добавлению: время и день — правильного вида
+    if (!draft.error && (draft.kind === 'task' || draft.kind === 'event')) {
+      expect(draft.name.trim()).not.toBe('');
+      if (draft.start) expect(draft.start).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+      if (draft.end) expect(draft.end).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+      if (draft.day) expect(draft.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    return draft;
+  }
+
+  it('случайные строки из смешанного набора не роняют разбор', () => {
+    const random = seeded(20261012);
+    for (let i = 0; i < 3000; i++) {
+      const count = 1 + Math.floor(random() * 8);
+      let line = '';
+      for (let j = 0; j < count; j++) {
+        line += PIECES[Math.floor(random() * PIECES.length)] + (random() < 0.7 ? ' ' : '');
+      }
+      check(line, CONTEXTS[i % CONTEXTS.length]);
+    }
+  });
+
+  it('случайные символы и очень длинные строки', () => {
+    const random = seeded(7);
+    const alphabet = 'абвёяabcxyz0123456789 :.,;-—–!?#@/\\()[]{}<>«»"\'`~*+=%$^&|_\n\t\r\u0000 ‍‮🙂שלם';
+    const letters = [...alphabet];
+    for (let i = 0; i < 1500; i++) {
+      const length = Math.floor(random() * 40);
+      let line = '';
+      for (let j = 0; j < length; j++) line += letters[Math.floor(random() * letters.length)];
+      check(line, CONTEXTS[i % CONTEXTS.length]);
+    }
+    const long = [
+      'созвон завтра в пять 16:00 45 мин до пт каждую неделю #дом @офис ! '.repeat(300),
+      'a'.repeat(20000), '1'.repeat(20000), ' '.repeat(20000), '10:00-'.repeat(3000), 'пн '.repeat(5000),
+      'полтретьего '.repeat(1500), '🙂'.repeat(5000), `${'в 5 '.repeat(2000)}\n${'до пт '.repeat(2000)}`,
+    ];
+    long.forEach((line) => CONTEXTS.slice(0, 3).forEach((ctx) => check(line, ctx)));
+  });
+
+  it('разбор строки в 200 символов укладывается в миллисекунды', () => {
+    const line = 'созвон с командой завтра в пять вечера 45 мин каждую неделю до 20.12 #работа @Zoom — обсудить '
+      + 'бюджет, план на квартал, найм двух инженеров и переезд офиса в ноябре, не забыть про отчёт до пт !';
+    expect(line.length).toBeGreaterThan(180);
+    const mixed = `${line.slice(0, 150)} call tomorrow at 5pm for 45 min every week`;
+    const rounds = 200;
+    // Прогрев: выражения словаря и самой строки
+    for (let i = 0; i < 20; i++) parseQuickInput(line, CTX);
+    const started = performance.now();
+    for (let i = 0; i < rounds; i++) {
+      parseQuickInput(line, CTX);
+      parseQuickInput(mixed, CTX);
+    }
+    const perLine = (performance.now() - started) / (rounds * 2);
+    // Обычно доли миллисекунды; запас — на загруженную машину
+    expect(perLine).toBeLessThan(10);
+  });
+});

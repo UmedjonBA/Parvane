@@ -202,6 +202,51 @@ try {
   await submit('Летучка');
   console.log('OK: длительность, исправленная трижды, на четвёртый раз подставлена сама');
 
+  // ── Другие чтения: «в 7» — вечер по окну дня, утро — вариантом чипа ───────
+  const expectTime = async (expected) => {
+    await page.waitForFunction(
+      (value) => document.querySelector('form[data-quick-kind] [data-quick-chip="time"]')?.innerText.trim() === value,
+      expected,
+      { timeout: STEP_TIMEOUT_MS },
+    );
+  };
+  const altToggle = chip('time').locator('[data-quick-alt-toggle]');
+  const altItem = (pick) => form.locator(`[data-quick-alts="time"] [data-quick-alt="${pick}"]`);
+  const altMenu = form.locator('[data-quick-alts]');
+  await openQuick();
+  await input.fill('планёрка завтра в 7');
+  await expectKind('event');
+  await expectTime('19:00–20:00');
+  await altToggle.click();
+  await altItem('07:00').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await altItem('07:00').click();
+  await expectTime('07:00–08:00');
+  await altMenu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Прежнее чтение осталось вариантом
+  await altToggle.click();
+  await altItem('19:00').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await altToggle.click();
+  await altMenu.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Правка строки сбрасывает выбранное чтение; у однозначного времени вариантов нет
+  await input.fill('планёрка завтра в 7 ');
+  await expectTime('19:00–20:00');
+  await input.fill('планёрка завтра в 7 утра');
+  await expectTime('07:00–08:00');
+  assert.equal(await altToggle.count(), 0, 'у однозначного времени вариантов нет');
+  // Тип записи — тоже чтение: событие со временем можно прочитать задачей
+  await form.locator('[data-quick-alt-toggle="kind"]').click();
+  await form.locator('[data-quick-alts="kind"] [data-quick-alt="task"]').click();
+  await expectKind('task');
+  await form.getByRole('radio', { name: 'Auto' }).click();
+  await expectKind('event');
+  await input.fill('планёрка завтра в 7');
+  await expectTime('19:00–20:00');
+  await altToggle.click();
+  await altItem('07:00').click();
+  await expectTime('07:00–08:00');
+  await submit('планёрка');
+  console.log('OK: другое чтение времени и типа выбирается из вариантов чипа');
+
   // ── Название и описание (отзыв 12 окт 2026): «пара» — 1 ч 45 мин, «будет…» — описание ──
   const OWNER_NAME = 'пара по Английскому';
   const OWNER_DESCRIPTION = 'будет тест лисининг';

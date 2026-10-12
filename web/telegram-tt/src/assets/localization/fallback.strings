@@ -3539,6 +3539,7 @@
 "PlannerQuickDescriptionToName" = "Move the description back to the name";
 "PlannerQuickTooLong" = "The name is too long.";
 "PlannerQuickLearned" = "From your corrections";
+"PlannerQuickAlternatives" = "Other readings";
 "PlannerTodayNoTasks" = "No tasks for this day";
 "PlannerTodayLeft" = "{count} left";
 "PlannerTodayAllDone" = "All done";
