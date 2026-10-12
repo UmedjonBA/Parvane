@@ -2255,10 +2255,11 @@ const methods = {
     return { wallpaper: await buildUploadedWallpaper(id, file, file.name || 'wallpaper.jpg') };
   },
 
-  // Просмотр фото профиля (MediaViewer): у пользователя одно фото — аватар
+  // Просмотр фото профиля (MediaViewer): у пользователя одно фото — аватар; у группы и канала — фото из
+  // сведений группы (без него просмотрщик открывался пустым)
   fetchProfilePhotos({ peer }: { peer: ApiPeer; offset?: number; limit?: number }) {
     const address = store.getAddressForId(peer.id);
-    const fileId = address ? store.getAvatar(address) : undefined;
+    const fileId = address ? store.getAvatar(address) || store.getGroupInfo(address)?.avatar || undefined : undefined;
     const photos: ApiPhoto[] = fileId ? [buildAvatarPhoto(fileId)] : [];
     return Promise.resolve({ count: photos.length, photos, nextOffsetId: undefined });
   },
