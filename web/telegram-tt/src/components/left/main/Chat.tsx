@@ -20,7 +20,7 @@ import type { ChatAnimationTypes } from './hooks';
 import { MAIN_THREAD_ID } from '../../../api/types';
 import { StoryViewerOrigin, type TopicsInfo } from '../../../types';
 
-import { ALL_FOLDER_ID, UNMUTE_TIMESTAMP } from '../../../config';
+import { UNMUTE_TIMESTAMP } from '../../../config';
 import {
   groupStatefulContent,
   isUserOnline,
@@ -34,7 +34,6 @@ import {
   selectChatMessage,
   selectCurrentMessageList,
   selectIsCurrentUserFrozen,
-  selectIsCurrentUserPremium,
   selectIsForumPanelClosed,
   selectIsForumPanelOpen,
   selectMonoforumChannel,
@@ -54,6 +53,7 @@ import { selectDraft, selectThreadLocalStateParam } from '../../../global/select
 import { IS_OPEN_IN_NEW_TAB_SUPPORTED } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { isUserId } from '../../../util/entities/ids';
+import { buildFolderColorsById, pickChatTagFolderIds } from '../../../util/folderColors';
 import { getChatFolderIds } from '../../../util/folderManager';
 import { createLocationHash } from '../../../util/routing';
 
@@ -129,7 +129,6 @@ type StateProps = {
   chatFolderIds?: number[];
   orderedFolderIds?: number[];
   chatFoldersById?: Record<number, ApiChatFolder>;
-  areTagsEnabled?: boolean;
 };
 
 const Chat: FC<OwnProps & StateProps> = ({
@@ -171,7 +170,6 @@ const Chat: FC<OwnProps & StateProps> = ({
   chatFolderIds,
   orderedFolderIds,
   chatFoldersById,
-  areTagsEnabled,
   withTags,
   isFoldersSidebarShown,
   onDragEnter,
@@ -209,24 +207,17 @@ const Chat: FC<OwnProps & StateProps> = ({
 
   useEnsureMessage(isSavedDialog ? currentUserId : chatId, lastMessageId, lastMessage);
 
+  // Parvane: метка папки по прототипу — в списке «Все чаты», в строке названия, цветом чипа папки. Настройки
+  // «метки папок» (Premium в Telegram) нет: метка есть у каждого чата, входящего в папку. Третьей строки
+  // оригинала (`has-tags`, `chat-item-with-tags`) мы не рисуем
   const tagFolderIds = useMemo(() => {
-    const chatFolderIdsSet = new Set(chatFolderIds);
-
-    return orderedFolderIds?.filter((id) => {
-      if (!chatFolderIdsSet.has(id)) return undefined;
-
-      const isActive = id === folderId;
-      const isAll = id === ALL_FOLDER_ID;
-
-      const folder = chatFoldersById?.[id];
-      const hasColor = folder?.color !== undefined && folder.color !== -1;
-
-      return !isActive && !isAll && hasColor;
-    });
+    return pickChatTagFolderIds(orderedFolderIds, chatFolderIds, folderId).filter((id) => chatFoldersById?.[id]);
   }, [orderedFolderIds, folderId, chatFoldersById, chatFolderIds]);
+  const folderColorsById = useMemo(() => {
+    return buildFolderColorsById(orderedFolderIds, chatFoldersById);
+  }, [orderedFolderIds, chatFoldersById]);
 
-  const isTagsMode = areTagsEnabled && withTags;
-  const shouldRenderTags = isTagsMode && Boolean(tagFolderIds?.length);
+  const shouldRenderTags = withTags && folderId === undefined && Boolean(tagFolderIds.length);
 
   const { renderSubtitle, ref } = useChatListEntry({
     chat,
@@ -405,7 +396,6 @@ const Chat: FC<OwnProps & StateProps> = ({
     isSelected && 'selected',
     isSelectedForum && 'selected-forum',
     isPreview && 'standalone',
-    areTagsEnabled && withTags && 'chat-item-with-tags',
     className,
   );
 
@@ -456,7 +446,7 @@ const Chat: FC<OwnProps & StateProps> = ({
           <ChatCallStatus isMobile={isMobile} isSelected={isSelected} isActive={withInterfaceAnimations} />
         )}
       </div>
-      <div className={buildClassName('info', isTagsMode && 'has-tags')}>
+      <div className="info">
         <div className="info-row">
           <FullNameTitle
             peer={isMonoforum ? monoforumChannel! : peer}
@@ -469,6 +459,15 @@ const Chat: FC<OwnProps & StateProps> = ({
             withStatusTextColor={isSelected}
           />
           {isMuted && !isSavedDialog && <Icon name="muted" />}
+          {shouldRenderTags && (
+            <ChatTags
+              itemClassName="chat-tag"
+              orderedFolderIds={tagFolderIds}
+              chatFoldersById={chatFoldersById}
+              isFoldersSidebarShown={isFoldersSidebarShown}
+              colorsById={folderColorsById}
+            />
+          )}
           <div className="separator" />
           {lastMessage && (
             <LastMessageMeta
@@ -492,14 +491,6 @@ const Chat: FC<OwnProps & StateProps> = ({
             />
           )}
         </div>
-        {shouldRenderTags && (
-          <ChatTags
-            itemClassName="chat-tag"
-            orderedFolderIds={tagFolderIds}
-            chatFoldersById={chatFoldersById}
-            isFoldersSidebarShown={isFoldersSidebarShown}
-          />
-        )}
       </div>
       {shouldRenderDeleteModal && (
         <DeleteChatModal
@@ -543,8 +534,6 @@ export default memo(withGlobal<OwnProps>(
     }
 
     const chatFolderIds = getChatFolderIds(chatId);
-    const { areTagsEnabled } = global.chatFolders;
-    const isPremium = selectIsCurrentUserPremium(global);
 
     const lastMessageId = previewMessageId || selectChatLastMessageId(global, chatId, isSavedDialog ? 'saved' : 'all');
     const lastMessage = previewMessageId
@@ -607,7 +596,6 @@ export default memo(withGlobal<OwnProps>(
       chatFolderIds,
       orderedFolderIds: global.chatFolders.orderedIds,
       chatFoldersById: global.chatFolders.byId,
-      areTagsEnabled: areTagsEnabled && isPremium,
     };
   },
 )(Chat));

@@ -29,7 +29,6 @@ import Icon from '../../../common/icons/Icon';
 import Island, { IslandOutside, IslandTitle } from '../../../gili/layout/Island';
 import Surface from '../../../gili/layout/Surface';
 import Button from '../../../ui/Button';
-import Checkbox from '../../../ui/Checkbox';
 import Draggable from '../../../ui/Draggable';
 import ListItem from '../../../ui/ListItem';
 import Loading from '../../../ui/Loading';
@@ -79,8 +78,6 @@ const SettingsFoldersMain = ({
     openLimitReachedModal,
     openDeleteChatFolderModal,
     sortChatFolders,
-    toggleDialogFilterTags,
-    openPremiumModal,
   } = getActions();
 
   const [state, setState] = useState<SortState>({
@@ -174,14 +171,6 @@ const SettingsFoldersMain = ({
 
     addChatFolder({ folder });
   }, [foldersById, maxFolders, addChatFolder, openLimitReachedModal]);
-
-  const handleToggleTags = useCallback(() => {
-    if (!isPremium) {
-      return;
-    }
-
-    toggleDialogFilterTags({ isEnabled: !areTagsEnabled });
-  }, [areTagsEnabled, isPremium, toggleDialogFilterTags]);
 
   const handleDrag = useCallback((translation: { x: number; y: number }, id: string | number) => {
     const delta = Math.round(translation.y / FOLDER_HEIGHT_PX);
@@ -407,23 +396,7 @@ const SettingsFoldersMain = ({
           </Island>
         </>
       )}
-      <Island>
-        <div className="settings-item-relative">
-          <Checkbox
-            label={lang('ShowFolderTags')}
-            subLabel={lang('ShowFolderTagsHint')}
-            checked={isPremium && areTagsEnabled}
-            onChange={handleToggleTags}
-            onClickLabel={(event) => {
-              if (!isPremium) {
-                event.preventDefault();
-                openPremiumModal();
-              }
-            }}
-          />
-          {!isPremium && <Icon name="lock-badge" className="settings-folders-lock-icon" />}
-        </div>
-      </Island>
+      {/* Parvane: галочки «метки папок» (Premium в Telegram) нет — метка папки в строке чата есть всегда */}
     </Surface>
   );
 };

@@ -164,6 +164,28 @@ try {
   ).find((folder) => folder.title.text === title)?.emoticon, folderName);
   assert.equal(folderIcon, '💼', 'значок папки не сохранился после перезагрузки');
 
+  // Метка папки в строке чата: в «Всех чатах» — названием папки и цветом её чипа, внутри папки метки нет
+  const chips = aliceSession.page.locator('#LeftColumn [role="tab"]');
+  const folderChip = chips.filter({ hasText: folderName });
+  // Списки папок живут соседними слайдами — строка берётся из показанного
+  const bobRow = aliceSession.page.locator('#LeftColumn .Transition_slide-active > .chat-list .Chat')
+    .filter({ hasText: bobName }).first();
+  const folderTag = bobRow.locator('[data-folder-tag]');
+  await folderTag.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal((await folderTag.textContent()).trim(), folderName, 'метка папки несёт название папки');
+  const readColor = (locator, name) => locator.evaluate(
+    (element, variable) => getComputedStyle(element).getPropertyValue(variable).trim(), name,
+  );
+  assert.equal(
+    await readColor(folderTag, '--tag-color'), await readColor(folderChip, '--chip-color'),
+    'метка папки того же цвета, что чип папки',
+  );
+  await folderChip.click();
+  await bobRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await folderTag.waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  await chips.first().click();
+  await folderTag.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+
   // ── Блокировка: список переживает reload ───────────────────────────────────
   await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Privacy and Security' }).click();

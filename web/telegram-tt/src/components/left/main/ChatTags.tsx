@@ -11,6 +11,8 @@ import { getPeerColorClass } from '../../../hooks/usePeerColor';
 import styles from './ChatTags.module.scss';
 
 const MAX_VISIBLE_TAGS = 3;
+// Parvane: метка стоит в строке названия чата, места там на одну папку — остальные счётчиком «+N»
+const MAX_VISIBLE_INLINE_TAGS = 1;
 const CUSTOM_EMOJI_SIZE = 0.875 * REM;
 
 type OwnProps = {
@@ -18,6 +20,9 @@ type OwnProps = {
   chatFoldersById?: Record<number, ApiChatFolder>;
   isFoldersSidebarShown?: boolean;
   itemClassName?: string;
+  // Parvane: цвета папок, те же, что у чипов над списком (`util/folderColors.ts`); с ними метка рисуется
+  // по прототипу — в строке названия, тоном папки
+  colorsById?: Record<number, string>;
 };
 
 const ChatTags = ({
@@ -25,12 +30,14 @@ const ChatTags = ({
   chatFoldersById,
   isFoldersSidebarShown,
   itemClassName,
+  colorsById,
 }: OwnProps) => {
   if (!orderedFolderIds) {
     return undefined;
   }
 
-  const visibleFolderIds = orderedFolderIds.slice(0, MAX_VISIBLE_TAGS);
+  const isInline = Boolean(colorsById);
+  const visibleFolderIds = orderedFolderIds.slice(0, isInline ? MAX_VISIBLE_INLINE_TAGS : MAX_VISIBLE_TAGS);
   const remainingCount = orderedFolderIds.length - visibleFolderIds.length;
 
   function getFolderTitle(folder: ApiChatFolder) {
@@ -59,7 +66,7 @@ const ChatTags = ({
   };
 
   return (
-    <div className={styles.wrapper}>
+    <div className={buildClassName(styles.wrapper, isInline && styles.inline)}>
       {visibleFolderIds.map((folderId) => {
         const folder = chatFoldersById?.[folderId];
         return folder && (
@@ -67,9 +74,11 @@ const ChatTags = ({
             key={folder.id}
             className={buildClassName(
               styles.tag,
-              folder.color !== undefined && folder.color !== -1 && getPeerColorClass(folder.color),
+              !isInline && folder.color !== undefined && folder.color !== -1 && getPeerColorClass(folder.color),
               itemClassName,
             )}
+            style={isInline ? `--tag-color: ${colorsById[folderId]}` : undefined}
+            data-folder-tag={isInline ? folderId : undefined}
           >
             {getFolderTitle(folder)}
           </div>
