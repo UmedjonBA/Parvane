@@ -423,7 +423,8 @@ export default memo(withGlobal<OwnProps>(
       chat,
       chatFullInfo: selectChatFullInfo(global, chatId),
       progress,
-      canChangeInfo: getHasAdminRight(chat, 'changeInfo'),
+      // Parvane: у владельца набора прав нет — ему доступно всё (как в `ManageGroup`)
+      canChangeInfo: chat.isCreator || getHasAdminRight(chat, 'changeInfo'),
       // Parvane: владелец канала — isCreator без adminRights, ссылка ему тоже нужна
       canInvite: chat.isCreator || getHasAdminRight(chat, 'inviteUsers'),
       exportedInvites: invites,
