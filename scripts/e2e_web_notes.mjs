@@ -249,6 +249,138 @@ try {
   await visible(groupCard.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'новое название группы');
   assert.equal(await board.getByText('Group', { exact: true }).count(), 0, 'слова-заглушки на холсте нет');
   console.log('OK: текст карточки и название группы правятся двойным кликом на месте');
+
+  // ── Холст как редактор: размер, группы, отмена, клавиши, стрелки — настоящими движениями мыши ──
+  // Кадр на перерисовку: положение и размер читаются из стиля узла
+  const settle = () => page.waitForTimeout(200);
+  const rectOf = async (locator) => {
+    await settle();
+    return locator.evaluate((element) => ({
+      x: parseFloat(element.style.left),
+      y: parseFloat(element.style.top),
+      width: parseFloat(element.style.width),
+      height: parseFloat(element.style.height || element.style.minHeight),
+    }));
+  };
+  const centerOf = async (locator) => {
+    const box = await locator.boundingBox();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const drag = async (from, to) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 6 });
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    await page.mouse.up();
+    await settle();
+  };
+  // Новая текстовая карточка двойным кликом по пустому месту поля
+  const addCardAt = async (x, y, text) => {
+    await page.mouse.dblclick(x, y);
+    await visible(inlineField, `поле новой карточки «${text}»`);
+    await settle();
+    await inlineField.fill(text);
+    await inlineField.press('Enter');
+    await visible(textCard.getByText(text, { exact: true }), `карточка «${text}»`);
+    await settle();
+  };
+  const isInside = (inner, outer) => inner.x >= outer.x && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+  const groupNamed = (name) => groupCard.filter({ hasText: name });
+  const cardNamed = (name) => textCard.filter({ hasText: name });
+  const bar = board.locator('[data-canvas-selection-bar]');
+  const boardBox = await board.boundingBox();
+  const left = boardBox.x + 200;
+  const bottom = boardBox.y + boardBox.height;
+
+  // Группа меняет размер за угловую ручку; содержимое остаётся на месте
+  const serverGroup = groupNamed('Сервер');
+  await serverGroup.locator('[data-canvas-group-label]').click();
+  const serverBefore = await rectOf(serverGroup);
+  const fileBefore = await rectOf(board.locator('[data-canvas-type="file"]'));
+  const serverCorner = await centerOf(serverGroup.locator('[data-canvas-handle="se"]'));
+  await drag(serverCorner, { x: serverCorner.x + 130, y: serverCorner.y + 90 });
+  const serverSize = await rectOf(serverGroup);
+  assert.ok(
+    serverSize.width >= serverBefore.width + 120 && serverSize.height >= serverBefore.height + 80,
+    `группа не выросла за ручку: ${JSON.stringify(serverBefore)} → ${JSON.stringify(serverSize)}`,
+  );
+  assert.deepEqual(await rectOf(board.locator('[data-canvas-type="file"]')), fileBefore, 'содержимое группы сдвинулось при смене размера');
+  console.log('OK: группа меняет размер за угловую ручку');
+
+  // Две выделенные карточки оборачиваются в группу
+  await addCardAt(left, bottom - 260, 'Альфа');
+  await addCardAt(left + 320, bottom - 260, 'Бета');
+  await cardNamed('Альфа').click();
+  await cardNamed('Бета').click({ modifiers: ['Shift'] });
+  await visible(bar, 'панель выделенного');
+  await bar.locator('[data-canvas-action="wrap"]').click();
+  await visible(groupCard.locator('input[data-canvas-inline]'), 'поле названия группы из выделенного');
+  await settle();
+  await inlineField.fill('Пара');
+  await inlineField.press('Enter');
+  const pairGroup = groupNamed('Пара');
+  await visible(pairGroup.locator('[data-canvas-group-label]'), 'группа из двух карточек');
+  const pairFrame = await rectOf(pairGroup);
+  assert.ok(isInside(await rectOf(cardNamed('Альфа')), pairFrame), 'группа не охватила первую карточку');
+  assert.ok(isInside(await rectOf(cardNamed('Бета')), pairFrame), 'группа не охватила вторую карточку');
+  console.log('OK: две выделенные карточки обёрнуты в группу');
+
+  // «По содержимому» возвращает растянутую рамку к содержимому
+  await pairGroup.locator('[data-canvas-group-label]').click();
+  const pairCorner = await centerOf(pairGroup.locator('[data-canvas-handle="se"]'));
+  await drag(pairCorner, { x: pairCorner.x + 140, y: pairCorner.y + 60 });
+  assert.ok((await rectOf(pairGroup)).width >= pairFrame.width + 130, 'рамка не растянулась перед «по содержимому»');
+  await bar.locator('[data-canvas-action="fit"]').click();
+  assert.deepEqual(await rectOf(pairGroup), pairFrame, '«по содержимому» не вернуло рамку к содержимому');
+  console.log('OK: «по содержимому» подгоняет рамку группы');
+
+  // Сдвиг карточки отменяется и возвращается
+  await addCardAt(left, bottom - 110, 'Гамма');
+  const gamma = cardNamed('Гамма');
+  const gammaBefore = await rectOf(gamma);
+  const gammaCenter = await centerOf(gamma);
+  await drag(gammaCenter, { x: gammaCenter.x + 400, y: gammaCenter.y + 20 });
+  const gammaMoved = await rectOf(gamma);
+  assert.ok(gammaMoved.x >= gammaBefore.x + 380, 'карточка не сдвинулась');
+  await page.keyboard.press('Control+z');
+  assert.deepEqual(await rectOf(gamma), gammaBefore, 'отмена не вернула карточку на место');
+  await page.keyboard.press('Control+Shift+z');
+  assert.deepEqual(await rectOf(gamma), gammaMoved, 'возврат не повторил сдвиг');
+  await knowledge.locator('[data-canvas-undo]').click();
+  assert.deepEqual(await rectOf(gamma), gammaBefore, 'кнопка отмены не вернула карточку');
+  await knowledge.locator('[data-canvas-redo]').click();
+  assert.deepEqual(await rectOf(gamma), gammaMoved, 'кнопка возврата не повторила сдвиг');
+  console.log('OK: сдвиг отменяется и возвращается клавишами и кнопками');
+
+  // Delete удаляет выделенную карточку
+  await gamma.click();
+  await page.keyboard.press('Delete');
+  await gamma.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('Delete не удалил выделенную карточку'));
+  console.log('OK: Delete удаляет выделенную карточку');
+
+  // Стрелка тянется от точки на стороне карточки к другой карточке
+  await cardNamed('Альфа').hover();
+  const port = await centerOf(cardNamed('Альфа').locator('[data-canvas-port="right"]'));
+  await drag(port, await centerOf(cardNamed('Бета')));
+  await canvasCount('[data-canvas-edge]', 2, 'стрелка от точки на стороне карточки не создана');
+  console.log('OK: стрелка от точки на стороне карточки');
+
+  // Подпись стрелки правится на месте двойным кликом
+  const edgeMiddle = await board.locator('[data-canvas-edge]').nth(1).locator('path').first().evaluate((path) => {
+    const point = path.getPointAtLength(path.getTotalLength() / 2);
+    const matrix = path.getScreenCTM();
+    return { x: point.x * matrix.a + point.y * matrix.c + matrix.e, y: point.x * matrix.b + point.y * matrix.d + matrix.f };
+  });
+  await page.mouse.dblclick(edgeMiddle.x, edgeMiddle.y);
+  await visible(board.locator('input[data-canvas-inline]'), 'поле подписи стрелки');
+  await settle();
+  await inlineField.fill('ведёт');
+  await inlineField.press('Enter');
+  await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт' }), 'подпись стрелки');
+  await page.keyboard.press('Escape');
+  console.log('OK: подпись стрелки правится на месте');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas.png` });
   await page.waitForTimeout(2500);
   console.log('OK: холст — текст, карточка заметки, связь');
@@ -272,7 +404,14 @@ try {
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');
   await openTab('Canvas');
   await visible(board.locator('[data-canvas-type="file"]'), 'карточка холста после перезагрузки');
-  assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 1, 'связь холста после перезагрузки');
+  assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 2, 'связи холста после перезагрузки');
+  await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт' }), 'подпись стрелки после перезагрузки');
+  const serverAfter = await rectOf(groupNamed('Сервер'));
+  assert.deepEqual(
+    [serverAfter.width, serverAfter.height], [serverSize.width, serverSize.height], 'размер группы после перезагрузки',
+  );
+  await visible(groupNamed('Пара').locator('[data-canvas-group-label]'), 'группа из выделенного после перезагрузки');
+  assert.equal(await cardNamed('Гамма').count(), 0, 'удалённая карточка не вернулась после перезагрузки');
   assert.equal(await chip('Canvas 2').getAttribute('aria-pressed'), 'true', 'после перезагрузки открыт первый по названию холст');
   await visible(board.locator('[data-canvas-type="text"]').getByText('Идея 2', { exact: true }), 'текст карточки после перезагрузки');
   await visible(board.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'название группы после перезагрузки');

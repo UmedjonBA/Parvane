@@ -108,6 +108,7 @@ const THUMB_DRAW_ATTEMPTS = 20;
 const THUMB_DRAW_RETRY_MS = 150;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
+const LINK_PREVIEW_TIMEOUT_MS = 10000;
 
 function encodeBase64(bytes: Uint8Array) {
   let binary = '';
@@ -1054,6 +1055,37 @@ export function createMediaService(deps: MediaDependencies) {
     return fallback;
   }
 
+  // Превью страницы для карточки-ссылки на холсте: те же метаданные шарда `preview` и картинка, если
+  // шард её отдал. `undefined` — превью недоступно (нет связи, таймаут, отказ шарда)
+  async function fetchLinkPreview(url: string, timeoutMs = LINK_PREVIEW_TIMEOUT_MS) {
+    const connection = deps.getConnection();
+    if (!connection) return undefined;
+    try {
+      const event = buildWireEvent(deps.getStore().self, deps.getToken(), { url });
+      const raw = await Promise.race([
+        connection.request(TOPIC_PREVIEW_FETCH, JSON.stringify(event)),
+        new Promise<string>((_, reject) => { window.setTimeout(() => reject(new Error('timeout')), timeoutMs); }),
+      ]);
+      const { ok, webpage } = JSON.parse(raw) as {
+        ok?: boolean;
+        webpage?: {
+          url: string; site_name?: string; title?: string; description?: string; image?: string; image_mime?: string;
+        };
+      };
+      if (!ok || !webpage) return undefined;
+      return {
+        url: webpage.url || url,
+        siteName: webpage.site_name,
+        title: webpage.title,
+        description: webpage.description,
+        imageBase64: webpage.image,
+        imageMime: webpage.image_mime,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   function messageToWireContent(message: ApiMessage): Record<string, unknown> | undefined {
     const content = message.content;
     if (content.text && !content.photo && !content.document && !content.sticker) {
@@ -1283,6 +1315,7 @@ export function createMediaService(deps: MediaDependencies) {
     },
     detectWebPage,
     fetchWebPagePreview,
+    fetchLinkPreview,
     downloadBlob,
     downloadMedia,
     getCached: (fileId: string) => cacheByFileId.get(fileId),

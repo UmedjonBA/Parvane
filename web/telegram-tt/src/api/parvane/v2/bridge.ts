@@ -379,6 +379,12 @@ export class V2Bridge {
         if (siteName) webpage.site_name = siteName;
         if (str(r, 'title')) webpage.title = str(r, 'title');
         if (str(r, 'description')) webpage.description = str(r, 'description');
+        // Картинка превью (bytes в proto3-JSON — base64); шард пока отдаёт её не для всех страниц
+        const imageMime = str(r, 'imageMime', 'image_mime');
+        if (str(r, 'image') && imageMime) {
+          webpage.image = str(r, 'image');
+          webpage.image_mime = imageMime;
+        }
         return { ok: true, webpage };
       }
       case 'preview.map.tile': {
