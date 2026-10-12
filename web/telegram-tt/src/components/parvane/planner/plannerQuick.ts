@@ -90,6 +90,7 @@ const DASH = '-|–|—';
 const ALL_KINDS: QuickKind[] = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
 const SEPARATOR = `(?![${ALNUM}])`;
 const MAX_MOOD = 5;
+const MIN_TYPO_LENGTH = 6;
 const MAX_SLEEP_MINUTES = 16 * 60;
 const MAX_STEPS = 200000;
 
@@ -107,6 +108,10 @@ type QuickWords = {
   task: string;
   event: string;
   water: string;
+  // Длинные слова разбора через пробел: слово строки с одной опечаткой заменяется словом отсюда
+  typoWords: string;
+  // Обычные слова, отличающиеся от слов разбора одной буквой («завтрак» — не «завтра»)
+  typoSafe?: string;
   sleep: string;
   // Слова перед словом сна («сегодня я спал…») и глаголы «лёг … встал …»
   sleepPrefix?: string;
@@ -193,6 +198,13 @@ const WORDS: Record<QuickLang, QuickWords> = {
     task: 'задач[ау]',
     event: 'событие',
     water: 'вод[аыу]',
+    typoWords: 'понедельник понедельника понедельникам вторник вторника вторникам средам четверг четверга четвергам'
+      + ' пятница пятницу пятницы пятницам суббота субботу субботы субботам воскресенье воскресенья воскресеньям'
+      + ' января февраля апреля августа сентября октября ноября декабря сегодня завтра послезавтра'
+      + ' неделя неделю недели недель каждый каждую каждое каждые месяц месяца месяцев'
+      + ' ежедневно еженедельно ежемесячно ежегодно будням выходным задача событие',
+    typoSafe: 'завтрак завтраки неделе каждой каждого каждая месяцы выходные выходных будние задачи задачу'
+      + ' события событий',
     sleep: 'сон|(?:по|про)?спал[аи]?|выспал(?:ся|ась)',
     sleepPrefix: 'сегодня|ночью|сейчас|я',
     sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
@@ -278,6 +290,10 @@ const WORDS: Record<QuickLang, QuickWords> = {
     task: 'task|todo|to-do',
     event: 'event',
     water: 'water',
+    typoWords: 'monday mondays tuesday tuesdays wednesday wednesdays thursday thursdays friday fridays saturday'
+      + ' saturdays sunday sundays january february august september october november december tomorrow'
+      + ' weekly monthly yearly weekdays weekends minutes',
+    typoSafe: 'minute weekend weekday',
     sleep: 'sleep|slept',
     sleepPrefix: 'today|tonight|last\\s+night|i',
     sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
@@ -428,6 +444,8 @@ function compile(words: QuickWords) {
     minutes: `(?:\\s*(?:${words.minute})${words.minuteGlued ? `|(?:${words.minuteGlued})` : ''})`,
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
     waterLead: lead(words.water),
+    typoWords: words.typoWords.split(' '),
+    typoSafe: new Set([...words.typoWords.split(' '), ...(words.typoSafe || '').split(' ')]),
     sleepLead: lead(`(?:(?:${words.sleepPrefix || '(?!)'})\\s+)*(?:${words.sleep})`),
     plainSleepLead: lead(words.sleep),
     bedWake: words.sleepBed && words.sleepWake ? new RegExp(
@@ -580,14 +598,38 @@ export function parseQuickInput(text: string, ctx: QuickContext): QuickDraft {
   return recognisedCount(foreign) > recognisedCount(own) ? foreign : own;
 }
 
+// «по понидельникам каждую ниделю»: длинное слово с одной опечаткой (замена, пропуск, лишняя буква,
+// перестановка соседних) читается как слово разбора. Первая буква обязана совпасть
+function fixTypos(text: string, lang: Lang) {
+  return text.replace(/[a-zа-яё]+/gi, (token) => {
+    const typed = token.toLowerCase().replace(/ё/g, 'е');
+    if (typed.length < MIN_TYPO_LENGTH || lang.typoSafe.has(typed)) return token;
+    return lang.typoWords.find((known) => known[0] === typed[0] && isOneEditAway(typed, known)) || token;
+  });
+}
+
+function isOneEditAway(a: string, b: string) {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  const restA = a.slice(start);
+  const restB = b.slice(start);
+  if (a.length === b.length) {
+    return restA.slice(1) === restB.slice(1)
+      || (restA[0] === restB[1] && restA[1] === restB[0] && restA.slice(2) === restB.slice(2));
+  }
+  return a.length > b.length ? restA.slice(1) === restB : restA === restB.slice(1);
+}
+
 // Сколько распознано: помеченные участки; запись здоровья, еды или воды без ошибки — ещё одно
 function recognisedCount(draft: QuickDraft) {
   const isPlain = draft.kind === 'task' || draft.kind === 'event';
   return draft.spans.length + (!isPlain && !draft.error ? 1 : 0);
 }
 
-function parseLine(text: string, ctx: QuickContext, lang: Lang): QuickDraft {
+function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
   const { words } = lang;
+  const text = fixTypos(typed, lang);
   const folded = text.toLowerCase().replace(/ё/g, 'е');
   // Свёртка регистра обязана сохранять позиции символов: участки меряются по исходной строке
   const lower = folded.length === text.length ? folded : text;
