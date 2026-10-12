@@ -64,6 +64,8 @@
   border-radius: var(--planner-island-radius);
 
   background: var(--pv-panel);
+
+  animation: side-appear 0.9s ease-out;
 }
 
 .page {
@@ -2899,4 +2901,14 @@
   text-decoration: underline;
 
   background: none;
+}
+
+@keyframes side-appear {
+  from {
+    box-shadow: 0 0 0 2px var(--pv-accent);
+  }
+
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
 }

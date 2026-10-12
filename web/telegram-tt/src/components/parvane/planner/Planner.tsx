@@ -64,6 +64,8 @@ function selectCurrentUserId(global: GlobalState) {
 }
 
 // 75 % потолка открытого текста снимка контейнера (1 МиБ, spec 010 R5)
+const NEW_NAME_ID = 'planner-new-name';
+const FORM_FOCUS_DELAY_MS = 250;
 const SNAPSHOT_WARN_BYTES = 786432;
 // Вкладки раздела на телефоне: «Сегодня» — первый вид календаря, своей вкладки у него нет
 const TAB_CALENDAR = 0;
@@ -110,6 +112,10 @@ function msUntilTomorrow() {
 // в том же переключателе, что неделя, месяц, год и список) и «Здоровье». Данные — запись устройства
 // (plannerStore). Раскладка — острова: страница раздела и справа день календаря либо карточка
 // записи; на телефоне карточка и настройки выезжают снизу
+function focusNewName() {
+  document.getElementById(NEW_NAME_ID)?.focus();
+}
+
 const Planner = () => {
   const lang = useLang();
 
@@ -402,9 +408,12 @@ const Planner = () => {
     if (day) pickDay(day);
   });
 
+  // Полная форма открывается сбоку на месте дня: курсор уходит в её первое поле, а панель коротко
+  // подсвечивается — иначе кажется, что окно ввода просто закрылось
   const handleQuickMore = useLastCallback(() => {
     closeQuick();
     handleAddToDay();
+    window.setTimeout(focusNewName, FORM_FOCUS_DELAY_MS);
   });
 
   const settingsButton = (
