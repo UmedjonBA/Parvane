@@ -3692,7 +3692,6 @@
 "KnowledgeBack" = "Back to notes";
 "KnowledgeEditorPlaceholder" = "Text, - [ ] items, [[links]], #tags";
 "KnowledgePlanned" = "Planned";
-"KnowledgePlannedEmpty" = "Nothing links here from the planner";
 "KnowledgeNoDate" = "no date";
 "KnowledgeBacklinks" = "Backlinks · {count}";
 "KnowledgeBacklinksEmpty" = "No one links here yet";

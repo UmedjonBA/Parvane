@@ -2738,7 +2738,6 @@ export interface LangPair {
   'KnowledgeBack': undefined;
   'KnowledgeEditorPlaceholder': undefined;
   'KnowledgePlanned': undefined;
-  'KnowledgePlannedEmpty': undefined;
   'KnowledgeNoDate': undefined;
   'KnowledgeBacklinksEmpty': undefined;
   'KnowledgeMissingNote': undefined;

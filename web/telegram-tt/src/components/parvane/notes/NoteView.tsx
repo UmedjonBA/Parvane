@@ -352,13 +352,12 @@ const NoteView = ({
             </>
           )}
         </div>
-        {!isDaily && (
+        {!isDaily && Boolean(shownPlanned.length) && (
           <section className={buildClassName(kit.card, styles.planned)} data-note-planned>
             <div className={kit.cardHead}>
               <h3 className={buildClassName(kit.cardTitle, kit.grow)}>{lang('KnowledgePlanned')}</h3>
               <span className={styles.plannedHint}>{lang('KnowledgePlannedHint')}</span>
             </div>
-            {!shownPlanned.length && <p className={styles.mutedLine}>{lang('KnowledgePlannedEmpty')}</p>}
             {shownPlanned.map((item) => (
               <div
                 key={item.key}

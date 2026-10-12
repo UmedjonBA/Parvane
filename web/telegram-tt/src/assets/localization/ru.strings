@@ -1778,7 +1778,6 @@
 "KnowledgeBack" = "К заметкам";
 "KnowledgeEditorPlaceholder" = "Текст, - [ ] пункты, [[ссылки]], #теги";
 "KnowledgePlanned" = "Запланировано";
-"KnowledgePlannedEmpty" = "Из «Плана» сюда никто не ссылается";
 "KnowledgeNoDate" = "без даты";
 "KnowledgeBacklinks" = "Обратные ссылки · {count}";
 "KnowledgeBacklinksEmpty" = "Пока никто не ссылается";
