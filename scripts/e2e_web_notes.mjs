@@ -158,11 +158,36 @@ try {
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-graph.png` });
   console.log('OK: граф — заметки, по фильтру записи «Плана»');
 
-  // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
+  // ── Холст из графа: карточка на каждую заметку, стрелка на каждую ссылку ──
   await openTab('Canvas');
-  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  const canvasCount = (selector, count, what) => page.waitForFunction(
+    ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail(what));
+  const chip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
+  await knowledge.locator('[data-notes-canvas="empty"] [data-canvas-from-graph]').click();
   const board = knowledge.locator('[data-canvas-board]');
   await visible(board, 'поле холста');
+  await visible(chip('Link graph'), 'холст из графа назван «Link graph»');
+  // Заметки: NOTE, OTHER и заметка дня; ссылка одна — из NOTE в OTHER
+  await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'на холсте из графа не по карточке на заметку');
+  await canvasCount('[data-canvas-edge]', 1, 'на холсте из графа не по стрелке на ссылку');
+  const boxes = await board.locator('[data-canvas-node]').evaluateAll((nodes) => nodes.map((node) => {
+    const box = node.getBoundingClientRect();
+    return [box.left, box.top, box.right, box.bottom];
+  }));
+  boxes.forEach((a, i) => boxes.slice(i + 1).forEach((b) => {
+    assert.ok(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1], 'карточки холста из графа накладываются');
+  }));
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-graph.png` });
+  // Ещё раз — новый холст со следующим свободным названием
+  await knowledge.locator('[data-board-tools] [data-canvas-from-graph]').click();
+  await visible(chip('Link graph 2'), 'второй холст из графа');
+  console.log('OK: холст из графа — карточки заметок и стрелки ссылок');
+
+  // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
+  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  await visible(chip('Canvas 3'), 'новый пустой холст');
+  await canvasCount('[data-canvas-node]', 0, 'новый холст не пуст');
   await knowledge.getByRole('button', { name: 'Text', exact: true }).click();
   await visible(board.locator('[data-canvas-type="text"]'), 'текстовая карточка');
   await knowledge.getByRole('button', { name: 'Note', exact: true }).click();

@@ -17,6 +17,7 @@ import {
   createEmptyCanvas, edgeAnchors, findNode, isCanvasPresetColor, moveNode, newCanvasId, nodesInGroup,
   parseCanvas, removeEdge, removeNode, serializeCanvas, updateEdge, updateNode,
 } from './notesCanvas';
+import { canvasFromGraph, freeCanvasTitle } from './notesCanvasGraph';
 import { folderColor } from './notesLook';
 import { parseNote } from './notesModel';
 import { saveCanvas } from './notesStore';
@@ -111,6 +112,7 @@ const NotesCanvas = ({
   const pinchRef = useRef(createPinch());
   const saveTimerRef = useRef<number>();
   const loadedRef = useRef<string>();
+  const isCreatingRef = useRef(false);
 
   const lang = useLang();
   const vaultName = lang('KnowledgeVaultName');
@@ -192,10 +194,34 @@ const NotesCanvas = ({
       || lang(node.type === 'group' ? 'KnowledgeCanvasGroup' : 'KnowledgeCanvasText');
   };
 
-  const handleNewCanvas = useLastCallback(async () => {
-    const title = lang('KnowledgeCanvasName', { count: canvases.length + 1 });
-    const id = await saveCanvas(title, serializeCanvas(createEmptyCanvas()), vaultName);
+  // Новый файл холста; повторное нажатие, пока он пишется, второго не создаёт
+  const createCanvas = async (title: string, content: CanvasDoc) => {
+    if (isCreatingRef.current) return;
+    isCreatingRef.current = true;
+    const id = await saveCanvas(title, serializeCanvas(content), vaultName).catch(() => undefined);
+    isCreatingRef.current = false;
     if (id) setCanvasId(id);
+  };
+
+  const handleNewCanvas = useLastCallback(() => {
+    const taken = canvases.map((item) => item.title.toLowerCase());
+    let count = canvases.length + 1;
+    while (taken.includes(lang('KnowledgeCanvasName', { count }).toLowerCase())) count++;
+    void createCanvas(lang('KnowledgeCanvasName', { count }), createEmptyCanvas());
+  });
+
+  // «Холст из графа»: карточка на каждую заметку, стрелка на каждую ссылку; дальше это обычный холст
+  const handleGraphCanvas = useLastCallback(() => {
+    const content = canvasFromGraph(notes.map((note) => ({
+      id: note.id,
+      title: note.title,
+      folder: note.folder,
+      links: parseNote(note.text).links,
+      isDaily: note.isDaily,
+    })), { cardHeight: NOTE_HEIGHT });
+    void createCanvas(
+      freeCanvasTitle(lang('KnowledgeCanvasGraphName'), canvases.map((item) => item.title)), content,
+    );
   });
 
   const handlePickCanvas = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -497,8 +523,25 @@ const NotesCanvas = ({
     return (
       <div className={styles.board} data-notes-canvas="empty">
         <div className={styles.boardStart}>
-          <p className={styles.mutedLine}>{lang('KnowledgeCanvasEmpty')}</p>
-          <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleNewCanvas}>
+          <p className={styles.mutedLine}>
+            {lang(notes.length ? 'KnowledgeCanvasEmptyGraph' : 'KnowledgeCanvasEmpty')}
+          </p>
+          {Boolean(notes.length) && (
+            <button
+              type="button"
+              className={buildClassName(kit.btn, kit.btnAcc)}
+              data-canvas-from-graph
+              onClick={handleGraphCanvas}
+            >
+              <PvIcon name="graph" isSmall />
+              {lang('KnowledgeCanvasFromGraph')}
+            </button>
+          )}
+          <button
+            type="button"
+            className={buildClassName(kit.btn, !notes.length && kit.btnAcc)}
+            onClick={handleNewCanvas}
+          >
             <PvIcon name="plus" isSmall />
             {lang('KnowledgeCanvasNew')}
           </button>
@@ -563,6 +606,7 @@ const NotesCanvas = ({
                 )}
                 aria-pressed={item.id === entry.id}
                 data-id={item.id}
+                data-canvas-chip={item.title}
                 onClick={handlePickCanvas}
               >
                 <PvIcon name="board" isSmall />
@@ -577,6 +621,18 @@ const NotesCanvas = ({
             >
               <PvIcon name="plus" isSmall />
               {lang('KnowledgeCanvas')}
+            </button>
+            <button
+              type="button"
+              className={buildClassName(kit.chip, styles.boardChip)}
+              title={lang('KnowledgeCanvasFromGraph')}
+              aria-label={lang('KnowledgeCanvasFromGraph')}
+              disabled={!notes.length}
+              data-canvas-from-graph
+              onClick={handleGraphCanvas}
+            >
+              <PvIcon name="graph" isSmall />
+              {lang('KnowledgeCanvasFromGraphShort')}
             </button>
           </div>
           <div className={styles.boardToolRow}>

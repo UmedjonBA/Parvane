@@ -3706,6 +3706,10 @@
 "KnowledgeCanvasNew" = "New canvas";
 "KnowledgeCanvasName" = "Canvas {count}";
 "KnowledgeCanvasEmpty" = "No canvases yet. A canvas is a .canvas file (JSON Canvas) in the «Knowledge» folder.";
+"KnowledgeCanvasEmptyGraph" = "No canvases yet. Start from your link graph: every note becomes a card and every [[link]] an arrow — then move and draw as you like.";
+"KnowledgeCanvasFromGraph" = "Canvas from graph";
+"KnowledgeCanvasFromGraphShort" = "From graph";
+"KnowledgeCanvasGraphName" = "Link graph";
 "KnowledgeCanvasText" = "Text";
 "KnowledgeCanvasNote" = "Note";
 "KnowledgeCanvasGroup" = "Group";

@@ -2747,6 +2747,10 @@ export interface LangPair {
   'KnowledgeZoomFit': undefined;
   'KnowledgeCanvasNew': undefined;
   'KnowledgeCanvasEmpty': undefined;
+  'KnowledgeCanvasEmptyGraph': undefined;
+  'KnowledgeCanvasFromGraph': undefined;
+  'KnowledgeCanvasFromGraphShort': undefined;
+  'KnowledgeCanvasGraphName': undefined;
   'KnowledgeCanvasText': undefined;
   'KnowledgeCanvasNote': undefined;
   'KnowledgeCanvasGroup': undefined;

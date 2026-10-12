@@ -1788,6 +1788,10 @@
 "KnowledgeCanvasNew" = "Новый холст";
 "KnowledgeCanvasName" = "Холст {count}";
 "KnowledgeCanvasEmpty" = "Холстов пока нет. Холст — файл .canvas (JSON Canvas) в папке «Знания».";
+"KnowledgeCanvasEmptyGraph" = "Холстов пока нет. Начните с графа связей: каждая заметка станет карточкой, каждая [[ссылка]] — стрелкой, дальше двигайте и дорисовывайте как угодно.";
+"KnowledgeCanvasFromGraph" = "Холст из графа";
+"KnowledgeCanvasFromGraphShort" = "Из графа";
+"KnowledgeCanvasGraphName" = "Граф связей";
 "KnowledgeCanvasText" = "Текст";
 "KnowledgeCanvasNote" = "Заметка";
 "KnowledgeCanvasGroup" = "Группа";
