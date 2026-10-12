@@ -20,7 +20,7 @@ import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
-import { requestPlannerAdd } from '../../../util/parvaneSection';
+import { markContactsFromProfile, requestPlannerAdd } from '../../../util/parvaneSection';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useConnectionStatus from '../../../hooks/useConnectionStatus';
@@ -131,6 +131,7 @@ const LeftMainHeader = ({
   });
 
   const handleNewMessage = useLastCallback(() => {
+    markContactsFromProfile(false);
     openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
   });
 

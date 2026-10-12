@@ -19,7 +19,7 @@ import {
   IS_APP, IS_FIREFOX, IS_MAC_OS, IS_TOUCH_ENV,
 } from '../../util/browser/windowEnvironment';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
-import { getParvaneSection } from '../../util/parvaneSection';
+import { getIsContactsFromProfile, getParvaneSection, markContactsFromProfile } from '../../util/parvaneSection';
 import { resolveTransitionName } from '../../util/resolveTransitionName';
 import { captureControlledSwipe } from '../../util/swipeController';
 import { isComposerHasSelection } from '../middle/composer/helpers/selection';
@@ -160,6 +160,15 @@ function LeftColumn({
 
     if (forceReturnToChatList === true) {
       fullReset();
+      return;
+    }
+
+    // Parvane: «Контакты» из «Профиля» возвращают в «Профиль»
+    if (contentKey === LeftColumnContent.Contacts && getIsContactsFromProfile()) {
+      markContactsFromProfile(false);
+      setContactsFilter('');
+      openLeftColumnContent({ contentKey: LeftColumnContent.Settings });
+      openSettingsScreen({ screen: SettingsScreens.Main });
       return;
     }
 

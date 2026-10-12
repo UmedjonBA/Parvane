@@ -170,3 +170,14 @@ export function requestPlannerSettings() {
 export function consumePlannerSettingsRequest() {
   setPlannerSettingsRequest(false);
 }
+
+// «Контакты», открытые из «Профиля»: «назад» возвращает в «Профиль», а не к списку чатов
+let isContactsFromProfile = false;
+
+export function markContactsFromProfile(isFromProfile: boolean) {
+  isContactsFromProfile = isFromProfile;
+}
+
+export function getIsContactsFromProfile() {
+  return isContactsFromProfile;
+}

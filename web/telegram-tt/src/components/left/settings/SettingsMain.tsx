@@ -15,7 +15,9 @@ import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
-import { openKnowledgeView, openPlannerView, requestPlannerSettings } from '../../../util/parvaneSection';
+import {
+  markContactsFromProfile, openKnowledgeView, openPlannerView, requestPlannerSettings,
+} from '../../../util/parvaneSection';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
@@ -105,7 +107,10 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
     openChatWithInfo({ id: currentUserId, shouldReplaceHistory: true, isOwnProfile: true });
   });
 
+  // Чат «Избранное» открывается вместе со списком чатов: на компьютере чат мог быть уже открыт справа, и
+  // нажатие выглядело так, будто ничего не произошло
   const handleOpenSaved = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
     openChat({ id: currentUserId, shouldReplaceHistory: true });
   });
 
@@ -115,6 +120,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   });
 
   const handleOpenContacts = useLastCallback(() => {
+    markContactsFromProfile(true);
     openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
   });
 
