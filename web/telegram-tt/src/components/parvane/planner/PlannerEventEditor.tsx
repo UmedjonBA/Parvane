@@ -2,6 +2,7 @@ import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerEvent, PlannerEventError, PlannerState } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
+import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
 import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
@@ -10,6 +11,7 @@ import {
   ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
   validateEvent,
 } from './plannerModel';
+import { detachWithDescription, getDescriptionScope, setDescription as writeDescription } from './plannerSeriesEdit';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -20,6 +22,7 @@ import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import TextArea from '../../ui/TextArea';
+import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
@@ -52,7 +55,8 @@ const NAME_MAX_LENGTH = 160;
 // Движок принимает до 4000 байт: запас на кириллицу
 const DESCRIPTION_MAX_LENGTH = 2000;
 
-type Pending = { kind: 'save'; patch: Partial<PlannerEvent> } | { kind: 'delete' };
+// `ownDescription` — описание только этого дня: остальные поля правятся в выбранном объёме, день отделяется
+type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string } | { kind: 'delete' };
 
 // Правка события (spec 011): поля, правило повтора; у экземпляра ряда — выбор объёма правки
 const PlannerEventEditor = ({
@@ -62,6 +66,10 @@ const PlannerEventEditor = ({
 
   const [name, setName] = useState(event.name);
   const [description, setDescription] = useState(event.description || '');
+  // Чьё описание: всех повторов либо только этого дня; `undefined` — запись не из ряда, галочки нет
+  const [descriptionScope, setDescriptionScope] = useState<DescriptionScope | undefined>(
+    () => getDescriptionScope(state, 'event', event),
+  );
   const [start, setStart] = useState(event.start);
   const [end, setEnd] = useState(event.end);
   const [day, setDay] = useState(event.instanceDay || event.day || '');
@@ -95,16 +103,21 @@ const PlannerEventEditor = ({
       onBack();
       return;
     }
-    const { patch } = action;
+    const { patch, ownDescription } = action;
+    const targetDay = day || instanceDay;
     updatePlanner((draft) => {
       if (scope === 'one') {
-        detachInstance(draft, 'event', event.id, instanceDay, { ...patch, repeat: undefined, day: day || instanceDay });
+        const own = ownDescription === undefined ? {} : { description: ownDescription || undefined };
+        detachInstance(draft, 'event', event.id, instanceDay, {
+          ...patch, ...own, repeat: undefined, day: targetDay,
+        });
         return;
       }
       // Новый день экземпляра переносит ряд (весь либо его продолжение)
       const seriesId = scope === 'following'
         ? splitSeries(draft, 'event', event.id, instanceDay, patch)?.id || event.id : event.id;
-      updateSeries(draft, 'event', seriesId, instanceDay, { ...patch, day: day || instanceDay });
+      updateSeries(draft, 'event', seriesId, instanceDay, { ...patch, day: targetDay });
+      if (ownDescription !== undefined) detachWithDescription(draft, 'event', seriesId, targetDay, ownDescription);
     }, lang('PlannerNoticeEventUpdated', { name: patch.name || event.name }));
     onBack();
   });
@@ -136,18 +149,34 @@ const PlannerEventEditor = ({
     }
     setError(undefined);
     if (isInstance) {
+      const instanceDay = event.instanceDay!;
+      const nextDescription = next.description || '';
+      const isDescriptionChanged = nextDescription !== (event.description || '');
+      const hasOtherChanges = next.name !== event.name || next.start !== event.start || next.end !== event.end
+        || Boolean(next.isAllDay) !== Boolean(event.isAllDay) || Boolean(next.isHoliday) !== Boolean(event.isHoliday)
+        || (next.color || 0) !== (event.color || 0) || (day || instanceDay) !== instanceDay;
+      // Одно описание объёма не спрашивает: его задаёт галочка у поля
+      if (isDescriptionChanged && !hasOtherChanges) {
+        updatePlanner((draft) => {
+          writeDescription(draft, 'event', event, nextDescription, descriptionScope || 'all');
+        }, lang('PlannerNoticeEventUpdated', { name: next.name }));
+        onBack();
+        return;
+      }
+      const isOwnDescription = isDescriptionChanged && descriptionScope === 'one';
       // Правило повтора у экземпляра не правится — объём правки спрашивается для остальных полей
       setPending({
         kind: 'save',
         patch: {
           name: next.name,
-          description: next.description,
+          ...(isOwnDescription ? undefined : { description: next.description }),
           start: next.start,
           end: next.end,
           isAllDay: next.isAllDay,
           isHoliday: next.isHoliday,
           color: next.color,
         },
+        ownDescription: isOwnDescription ? nextDescription : undefined,
       });
       return;
     }
@@ -156,6 +185,8 @@ const PlannerEventEditor = ({
       if (!target) return;
       Object.assign(target, next);
       if (repeat) target.occurrences = undefined;
+      // Отделённый день с галочкой «для всех» пишет описание и в свой ряд
+      else if (descriptionScope === 'all') writeDescription(draft, 'event', target, next.description || '', 'all');
     }, lang('PlannerNoticeEventUpdated', { name: next.name }));
     onBack();
   });
@@ -221,6 +252,13 @@ const PlannerEventEditor = ({
         noReplaceNewlines
         onChange={handleDescriptionChange}
       />
+      {descriptionScope && (
+        <PlannerDescriptionScope
+          scope={descriptionScope}
+          shouldConfirmAll={!isInstance}
+          onChange={setDescriptionScope}
+        />
+      )}
       <PlannerDetailsFold summary={detailsSummary}>
         <div className={styles.checks}>
           <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />

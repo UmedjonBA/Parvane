@@ -3418,6 +3418,11 @@
 "PlannerSeriesOnlyThis" = "Only this";
 "PlannerSeriesOpen" = "Open series";
 "PlannerSeriesTemplateHint" = "Series: {rule}";
+"PlannerDescriptionScope" = "Description for every repetition";
+"PlannerDescriptionShareTitle" = "This description will be used for every repetition of the series.";
+"PlannerDescriptionShare" = "Use for all";
+"PlannerDescriptionSave" = "Save description";
+"PlannerNoticeDescriptionUpdated" = "Description updated: {name}";
 "PlannerSettings" = "Planner settings";
 "PlannerSettingsBudget" = "Daily budget, min";
 "PlannerSettingsDayEnd" = "Day ends";

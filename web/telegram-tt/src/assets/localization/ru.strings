@@ -1467,6 +1467,11 @@
 "PlannerSeriesOnlyThis" = "Только это";
 "PlannerSeriesOpen" = "Открыть ряд";
 "PlannerSeriesTemplateHint" = "Ряд: {rule}";
+"PlannerDescriptionScope" = "Описание для всех повторов";
+"PlannerDescriptionShareTitle" = "Это описание станет общим для всех повторов серии.";
+"PlannerDescriptionShare" = "Сделать общим";
+"PlannerDescriptionSave" = "Сохранить описание";
+"PlannerNoticeDescriptionUpdated" = "Описание обновлено: {name}";
 "PlannerSettings" = "Настройки плана";
 "PlannerSettingsBudget" = "Дневной бюджет, мин";
 "PlannerSettingsDayEnd" = "Конец дня";

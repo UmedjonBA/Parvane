@@ -2,6 +2,7 @@ import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerState, PlannerStatus, PlannerTask } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
+import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
 import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
@@ -12,6 +13,7 @@ import {
   detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
   removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, updateSeries, validateRepeat,
 } from './plannerModel';
+import { getDescriptionScope, setDescription, shareDescription } from './plannerSeriesEdit';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -20,6 +22,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Icon from '../../common/icons/Icon';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
+import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
@@ -59,6 +62,12 @@ const PlannerTaskEditor = ({
     () => repeatToDraft(task.repeat, task.day || today),
   );
   const [repeatError, setRepeatError] = useState<string>();
+  // Чьё описание: всех повторов либо только этого дня; `undefined` — запись не из ряда, галочки нет
+  const [descriptionScope, setDescriptionScope] = useState<DescriptionScope | undefined>(
+    () => getDescriptionScope(state, 'task', task),
+  );
+  // У экземпляра ряда описание сохраняется кнопкой: до неё можно выбрать, чьё оно
+  const [descriptionDraft, setDescriptionDraft] = useState(task.description);
 
   const isInstance = Boolean(task.repeat && task.instanceDay);
 
@@ -160,11 +169,32 @@ const PlannerTaskEditor = ({
 
   const handleDescription = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const description = e.currentTarget.value;
-    if (isInstance) return;
+    if (isInstance) {
+      setDescriptionDraft(description);
+      return;
+    }
+    // Отделённый день с галочкой «для всех» пишет описание и в свой ряд
     updatePlanner((draft) => {
-      const target = draft.tasks.find(({ id }) => id === task.id);
-      if (target) target.description = description;
+      setDescription(draft, 'task', task, description, descriptionScope || 'one');
     });
+  });
+
+  // «Для всех» — описание ряда (отделённые дни хранят своё); «только этот день» — день отделяется без вопроса
+  const handleDescriptionSave = useLastCallback(() => {
+    let savedId: string | undefined;
+    updatePlanner((draft) => {
+      savedId = setDescription(draft, 'task', task, descriptionDraft, descriptionScope || 'all')?.id;
+    }, lang('PlannerNoticeDescriptionUpdated', { name: task.name }));
+    if (savedId && savedId !== task.id) onOpenTask(savedId);
+  });
+
+  const handleDescriptionScope = useLastCallback((scope: DescriptionScope) => {
+    setDescriptionScope(scope);
+    // Отделённый день: «для всех» переносит его описание в ряд (вопрос уже задан)
+    if (scope !== 'all' || isInstance) return;
+    updatePlanner((draft) => {
+      shareDescription(draft, 'task', task);
+    }, lang('PlannerNoticeDescriptionUpdated', { name: task.name }));
   });
 
   // Шаги экземпляра отмечаются по дню, без выбора объёма (FR-005)
@@ -321,10 +351,21 @@ const PlannerTaskEditor = ({
         )}
         <TextArea
           label={lang('PlannerFieldDescription')}
-          value={task.description}
-          disabled={isInstance}
+          value={isInstance ? descriptionDraft : task.description}
           onChange={handleDescription}
         />
+        {descriptionScope && (
+          <PlannerDescriptionScope
+            scope={descriptionScope}
+            shouldConfirmAll={!isInstance}
+            onChange={handleDescriptionScope}
+          />
+        )}
+        {isInstance && descriptionDraft !== task.description && (
+          <button type="button" className={styles.btn} data-description-save onClick={handleDescriptionSave}>
+            {lang('PlannerDescriptionSave')}
+          </button>
+        )}
         <h3 className={styles.fieldLabel}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
         {task.steps.map((step, index) => (
           <label
