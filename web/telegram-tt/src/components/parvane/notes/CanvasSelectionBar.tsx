@@ -1,6 +1,7 @@
 import { memo } from '../../../lib/teact/teact';
 
 import type { CanvasPresetColor } from './notesCanvas';
+import type { PvIconName } from './PvIcon';
 
 import buildClassName from '../../../util/buildClassName';
 import { CANVAS_PRESET_COLORS, isCanvasPresetColor } from './notesCanvas';
@@ -19,12 +20,18 @@ type OwnProps = {
   tones: Record<CanvasPresetColor, string>;
   color?: string;
   canEdit?: boolean;
+  // Значок и подпись «Изменить»: у карточки заметки — правка её текста либо «Создать заметку»
+  editIcon?: PvIconName;
+  editLabel?: string;
+  // «Открыть заметку» — у карточки заметки
+  canOpen?: boolean;
   canDuplicate?: boolean;
   canWrap?: boolean;
   canFit?: boolean;
   canTurn?: boolean;
   onColor: (color?: string) => void;
   onEdit: NoneToVoidFunction;
+  onOpen?: NoneToVoidFunction;
   onDuplicate: NoneToVoidFunction;
   onWrap: NoneToVoidFunction;
   onFit: NoneToVoidFunction;
@@ -35,8 +42,8 @@ type OwnProps = {
 
 // Панель у выделенного: цвет, правка, копия, группа, удаление; остальное — в меню «⋯»
 const CanvasSelectionBar = ({
-  place, tones, color, canEdit, canDuplicate, canWrap, canFit, canTurn,
-  onColor, onEdit, onDuplicate, onWrap, onFit, onTurn, onRemove, onMore,
+  place, tones, color, canEdit, editIcon = 'edit', editLabel, canOpen, canDuplicate, canWrap, canFit, canTurn,
+  onColor, onEdit, onOpen, onDuplicate, onWrap, onFit, onTurn, onRemove, onMore,
 }: OwnProps) => {
   const lang = useLang();
   const [isPaletteOpen, openPalette, closePalette] = useFlag();
@@ -49,7 +56,7 @@ const CanvasSelectionBar = ({
   });
 
   const renderButton = (
-    name: string, icon: Parameters<typeof PvIcon>[0]['name'], label: string, onClick: NoneToVoidFunction,
+    name: string, icon: PvIconName, label: string, onClick?: NoneToVoidFunction,
   ) => (
     <button
       type="button"
@@ -116,7 +123,8 @@ const CanvasSelectionBar = ({
             style={isCanvasPresetColor(color) ? `--c: ${tones[color]}` : undefined}
           />
         </button>
-        {canEdit && renderButton('edit', 'edit', lang('KnowledgeCanvasEdit'), onEdit)}
+        {canEdit && renderButton('edit', editIcon, editLabel || lang('KnowledgeCanvasEdit'), onEdit)}
+        {canOpen && renderButton('open', 'open', lang('KnowledgeCanvasOpenNote'), onOpen)}
         {canTurn && renderButton('direction', 'arrow', lang('KnowledgeCanvasDirection'), onTurn)}
         {canDuplicate && renderButton('duplicate', 'copy', lang('KnowledgeCanvasDuplicate'), onDuplicate)}
         {canWrap && renderButton('wrap', 'group', lang('KnowledgeCanvasWrap'), onWrap)}

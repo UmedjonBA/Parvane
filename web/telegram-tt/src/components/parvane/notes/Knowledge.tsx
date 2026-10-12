@@ -6,7 +6,9 @@ import type { GlobalState } from '../../../global/types';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
-import { consumeNoteRequest, getKnowledgeView, getNoteRequest } from '../../../util/parvaneSection';
+import {
+  consumeNoteRequest, getKnowledgeView, getNoteRequest, setKnowledgeView,
+} from '../../../util/parvaneSection';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import {
@@ -124,6 +126,12 @@ const Knowledge = () => {
     if (id) setOpenId(id);
   });
 
+  // С холста заметка открывается на вкладке «Заметки»
+  const openFromCanvas = useLastCallback(async (title: string) => {
+    await openTitle(title);
+    setKnowledgeView('notes');
+  });
+
   useEffect(() => {
     if (!noteRequest || status !== 'ready') return;
     consumeNoteRequest();
@@ -158,7 +166,9 @@ const Knowledge = () => {
     setAreAllDailyShown(true);
   });
 
-  const handleSave = useLastCallback((noteId: string, text: string) => saveNote(noteId, text, vaultName));
+  const handleSave = useLastCallback((noteId: string, text: string, base?: string) => (
+    saveNote(noteId, text, vaultName, base)
+  ));
 
   const handleRename = useLastCallback((noteId: string, title: string) => {
     void renameNote(noteId, title, vaultName);
@@ -315,7 +325,7 @@ const Knowledge = () => {
           {status !== 'ready' ? <Loading /> : view === 'graph' ? (
             <NotesGraph notes={notes} planner={planner} onOpenNote={handleOpenFromGraph} onOpenTitle={openTitle} />
           ) : view === 'canvas' ? (
-            <NotesCanvas canvases={canvases} notes={notes} isNarrow={isNarrow} onOpenTitle={openTitle} />
+            <NotesCanvas canvases={canvases} notes={notes} isNarrow={isNarrow} onOpenTitle={openFromCanvas} />
           ) : (
             <div className={styles.layout}>
               {!isNoteAlone && renderList()}

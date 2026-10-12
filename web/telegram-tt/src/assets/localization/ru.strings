@@ -1832,7 +1832,7 @@
 "KnowledgeLinks" = "Связи";
 "KnowledgeNearest" = "ближайшее";
 "KnowledgePlannedHint" = "со ссылкой сюда";
-"KnowledgeCanvasHint" = "двойной клик — новая карточка, правка текста · Shift и рамка — выделить несколько · правая кнопка — меню";
+"KnowledgeCanvasHint" = "двойной клик — новая карточка, правка текста и заметок · группу двигают за любое место внутри · Shift и рамка — выделить несколько · правая кнопка — меню";
 "KnowledgeGraphKindNote" = "заметка";
 "KnowledgeGraphKindDay" = "ежедневная заметка";
 "KnowledgeGraphKindMissing" = "заметки ещё нет";
@@ -1889,6 +1889,11 @@
 "KnowledgeCanvasFileMissing" = "Файл не найден";
 "KnowledgeCanvasFileEmpty" = "Здесь пока пусто";
 "KnowledgeCanvasOpenFile" = "Открыть файл";
+"KnowledgeCanvasEditNote" = "Изменить текст заметки";
+"KnowledgeCanvasCreateNote" = "Создать заметку";
+"KnowledgeCanvasNoteLoading" = "Заметка загружается…";
+"KnowledgeCanvasNoteText" = "Текст заметки";
+"KnowledgeCanvasNoteSaveHint" = "Ctrl+Enter или щелчок мимо — сохранить, Esc — отменить";
 "KnowledgeFilesItems_one" = "{count} объект";
 "KnowledgeFilesItems_few" = "{count} объекта";
 "KnowledgeFilesItems_many" = "{count} объектов";

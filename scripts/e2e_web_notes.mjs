@@ -1,5 +1,6 @@
 // Раздел «Знания»: заметки `.md` в папке облака, ссылки и обратные ссылки, пункты-задачи в обе стороны,
-// «Запланировано», поиск, граф, холст; всё переживает перезагрузку. Запуск: scripts/run_web_notes_e2e.sh
+// «Запланировано», поиск, граф, холст (группа двигается за пустое место внутри, заметка правится прямо на
+// карточке); всё переживает перезагрузку. Запуск: scripts/run_web_notes_e2e.sh
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -495,6 +496,213 @@ try {
   await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт' }), 'подпись стрелки');
   await page.keyboard.press('Escape');
   console.log('OK: подпись стрелки правится на месте');
+
+  // ── Группа двигается за пустое место внутри; поле двигается только вне групп ──
+  const world = board.locator('[data-canvas-world]');
+  // Вид поля числами: сдвиг и масштаб из преобразования слоя с узлами
+  const viewOf = () => world.evaluate((element) => (
+    element.style.transform.match(/-?\d+(\.\d+)?(e-?\d+)?/g).map(Number)
+  ));
+  const sameView = (a, b) => a.length === b.length && a.every((value, i) => Math.abs(value - b[i]) < 0.01);
+  const deltaOf = (before, after) => [after.x - before.x, after.y - before.y];
+  // Пустая точка поля: внутри рамки группы `inside` либо (без неё) вне всех групп; не у карточки и не у стрелки
+  const emptyPoint = (inside) => board.evaluate((element, groupName) => {
+    const groups = Array.from(element.querySelectorAll('[data-canvas-type="group"]'));
+    const target = groupName ? groups.find((group) => group.textContent.includes(groupName)) : undefined;
+    const box = (target || element).getBoundingClientRect();
+    const near = (rect, x, y, by) => x >= rect.left - by && x <= rect.right + by && y >= rect.top - by && y <= rect.bottom + by;
+    const edges = Array.from(element.querySelectorAll('[data-canvas-edge]')).map((edge) => edge.getBoundingClientRect());
+    const frames = groups.map((group) => group.getBoundingClientRect());
+    const from = target ? 10 : 160;
+    for (let y = box.top + from; y < box.bottom - 10; y += 8) {
+      for (let x = box.left + 10; x < box.right - (target ? 10 : 120); x += 8) {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !element.contains(hit) || hit.closest('[data-canvas-node], [data-board-tools]')) continue;
+        if (edges.some((rect) => near(rect, x, y, 24))) continue;
+        if (!target && frames.some((rect) => near(rect, x, y, 48))) continue;
+        return { x, y };
+      }
+    }
+    return undefined;
+  }, inside);
+  await page.keyboard.press('Escape');
+  await settle();
+  const pairBefore = await rectOf(pairGroup);
+  const alphaBefore = await rectOf(cardNamed('Альфа'));
+  const betaBefore = await rectOf(cardNamed('Бета'));
+  const viewBefore = await viewOf();
+  const insidePair = await emptyPoint('Пара');
+  assert.ok(insidePair, 'внутри группы нет пустого места для перетаскивания');
+  await drag(insidePair, { x: insidePair.x + 130, y: insidePair.y - 90 });
+  const pairDelta = deltaOf(pairBefore, await rectOf(pairGroup));
+  assert.ok(
+    Math.abs(pairDelta[0]) >= 100 && Math.abs(pairDelta[1]) >= 60,
+    `группа не сдвинулась за пустое место внутри: ${JSON.stringify(pairDelta)}`,
+  );
+  assert.deepEqual(deltaOf(alphaBefore, await rectOf(cardNamed('Альфа'))), pairDelta, 'первая карточка не поехала вместе с группой');
+  assert.deepEqual(deltaOf(betaBefore, await rectOf(cardNamed('Бета'))), pairDelta, 'вторая карточка не поехала вместе с группой');
+  assert.deepEqual(await viewOf(), viewBefore, 'вместо группы сдвинулось поле');
+  await visible(bar.locator('[data-canvas-action="fit"]'), 'группа выделена после перетаскивания');
+  await page.keyboard.press('Control+z');
+  assert.deepEqual(await rectOf(pairGroup), pairBefore, 'отмена не вернула группу на место');
+  assert.deepEqual(await rectOf(cardNamed('Альфа')), alphaBefore, 'отмена не вернула карточку группы на место');
+  // Нажатие без сдвига внутри группы её выделяет
+  await page.keyboard.press('Escape');
+  await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('выделение не снято'));
+  await page.mouse.click(insidePair.x, insidePair.y);
+  await visible(bar.locator('[data-canvas-action="fit"]'), 'группа выделена нажатием внутри неё');
+  await page.keyboard.press('Escape');
+  console.log('OK: группа двигается за пустое место внутри вместе с карточками, поле стоит');
+
+  const outside = await emptyPoint();
+  assert.ok(outside, 'на поле нет пустого места вне групп');
+  const placesBeforePan = await places();
+  await drag(outside, { x: outside.x + 70, y: outside.y + 50 });
+  const viewPanned = await viewOf();
+  assert.ok(
+    Math.abs(viewPanned[0] - viewBefore[0] - 70) < 1 && Math.abs(viewPanned[1] - viewBefore[1] - 50) < 1,
+    `перетаскивание пустого места вне групп не сдвинуло поле: ${viewBefore} → ${viewPanned}`,
+  );
+  samePlaces(placesBeforePan, await places(), 'после сдвига поля');
+  await drag({ x: outside.x + 70, y: outside.y + 50 }, outside);
+  assert.ok(sameView(await viewOf(), viewBefore), 'поле не вернулось обратным перетаскиванием');
+  console.log('OK: поле двигается перетаскиванием пустого места вне групп');
+
+  // ── Заметка правится прямо на карточке: текст, название; заметку открывает кнопка в шапке ──
+  const RENAMED = `${NOTE} новый`;
+  const noteCardOf = (title) => board.locator('[data-canvas-type="file"]')
+    .filter({ has: page.locator(`[data-canvas-note-title="${title}"]`) });
+  const noteCard = noteCardOf(NOTE);
+  const noteEditor = board.locator('[data-canvas-note-editor]');
+  const titleField = board.locator('[data-canvas-note-title-input]');
+  const gone = (locator, what) => locator.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(`не исчезло: ${what}`));
+  await visible(noteCard.locator('[data-canvas-open-note]'), 'кнопка «открыть заметку» в шапке карточки');
+  // Двойной клик по тексту карточки открывает исходник заметки целиком; Escape отменяет
+  await noteCard.locator('[data-canvas-note-body]').dblclick();
+  await visible(noteEditor, 'поле текста заметки на карточке');
+  const noteSource = await noteEditor.inputValue();
+  assert.ok(
+    noteSource.startsWith(`# ${NOTE}`) && noteSource.includes('- [ ] проверить обе GPU'),
+    `в поле не исходник заметки целиком: ${noteSource}`,
+  );
+  await noteEditor.fill(`${noteSource}\nНе сохранится`);
+  await noteEditor.press('Escape');
+  await gone(noteEditor, 'поле текста заметки после Escape');
+  // Enter — новая строка, Ctrl+Z — отмена ввода в поле (а не правок холста); уход фокуса сохраняет
+  const placesBeforeEdit = await places();
+  await noteCard.locator('[data-canvas-note-body]').dblclick();
+  await visible(noteEditor, 'поле текста заметки по второму двойному клику');
+  assert.equal(await noteEditor.inputValue(), noteSource, 'отменённая правка попала в заметку');
+  await noteEditor.fill(`${noteSource}\nСтрока с холста`);
+  await noteEditor.press('Enter');
+  await page.keyboard.type('вторая строка');
+  assert.equal(await noteEditor.inputValue(), `${noteSource}\nСтрока с холста\nвторая строка`, 'Enter не дал новую строку');
+  await page.keyboard.type(' лишнее');
+  await page.keyboard.press('Control+z');
+  await settle();
+  assert.equal(await noteEditor.count(), 1, 'Ctrl+Z в поле заметки закрыл поле (сработала отмена холста)');
+  samePlaces(placesBeforeEdit, await places(), 'Ctrl+Z в поле заметки');
+  await noteEditor.fill(`${noteSource}\nСтрока с холста\nвторая строка`);
+  // Карточка на время правки выросла — пустое место ищется заново
+  const blurAt = await emptyPoint();
+  await page.mouse.click(blurAt.x, blurAt.y);
+  await gone(noteEditor, 'поле текста заметки после ухода фокуса');
+  await visible(noteCard.getByText('вторая строка'), 'сохранённый текст на карточке');
+  samePlaces(placesBeforeEdit, await places(), 'после правки заметки на карточке');
+  // Enter на выделенной карточке тоже открывает правку; Ctrl+Enter сохраняет
+  await noteCard.locator('[data-canvas-note-body]').click();
+  await page.keyboard.press('Enter');
+  await visible(noteEditor, 'поле текста заметки по Enter');
+  await page.waitForFunction((want) => document.querySelector('[data-canvas-note-editor]')?.value === want,
+    `${noteSource}\nСтрока с холста\nвторая строка`, { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('сохранённая с холста правка не вернулась в поле'));
+  await noteEditor.fill(`${noteSource}\nСтрока с холста`);
+  await noteEditor.press('Control+Enter');
+  await gone(noteEditor, 'поле текста заметки после Ctrl+Enter');
+  await page.keyboard.press('Escape');
+  // Холст пишется с задержкой — дождаться записи перед уходом с вкладки
+  await page.waitForTimeout(2000);
+  await noteCard.locator('[data-canvas-open-note]').click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка, открытая кнопкой на карточке');
+  await visible(body.getByText('Строка с холста'), 'правка с холста на экране заметки');
+  assert.equal(await body.getByText('вторая строка').count(), 0, 'убранная на холсте строка осталась в заметке');
+  assert.equal(await body.getByText('Не сохранится').count(), 0, 'отменённая правка попала в заметку');
+  console.log('OK: текст заметки правится на карточке холста: Escape, новая строка, уход фокуса, Ctrl+Enter');
+
+  // Название с карточки: Escape и пустое название ничего не меняют; новое доходит до списка и ссылок
+  await row(OTHER).click();
+  await visible(knowledge.locator(`[data-note-title="${OTHER}"]`), 'заметка для ссылки');
+  await note.getByRole('button', { name: 'Edit' }).click();
+  await page.locator('#knowledge-note-editor').fill(`# ${OTHER}\n\nСм. [[${NOTE}]]`);
+  await note.getByRole('button', { name: 'Save' }).click();
+  await visible(body.getByRole('button', { name: NOTE, exact: true }), 'ссылка на заметку в другой заметке');
+  const toCanvasCard = async (title) => {
+    await openTab('Canvas');
+    await visible(noteCardOf(title), `карточка заметки «${title}» на холсте`);
+  };
+  const retitle = async (from, value, key) => {
+    await noteCardOf(from).locator('[data-canvas-note-title]').dblclick();
+    await visible(titleField, 'поле названия заметки на карточке');
+    await settle();
+    await titleField.fill(value);
+    await titleField.press(key);
+    await gone(titleField, 'поле названия заметки');
+  };
+  await toCanvasCard(NOTE);
+  await retitle(NOTE, 'Не то', 'Escape');
+  await visible(noteCardOf(NOTE), 'название после отмены');
+  await retitle(NOTE, '', 'Enter');
+  await visible(noteCardOf(NOTE), 'название после пустого ввода');
+  await retitle(NOTE, RENAMED, 'Enter');
+  await visible(noteCardOf(RENAMED), 'новое название на карточке');
+  await visible(board.locator('[data-canvas-note="found"]').filter({ hasText: RENAMED }), 'карточка нашла переименованную заметку');
+  await page.waitForTimeout(2500);
+  assert.equal(await board.locator('[data-canvas-note="missing"]').count(), 0, 'после переименования карточка потеряла заметку');
+  await openTab('Notes');
+  await visible(row(RENAMED), 'переименованная с холста заметка в списке');
+  assert.equal(await row(NOTE).count(), 0, 'прежнее название осталось в списке');
+  await row(OTHER).click();
+  await visible(body.getByRole('button', { name: RENAMED, exact: true }), 'ссылка с новым названием в другой заметке');
+  // Обратно тем же путём: дальше сценарий ищет заметку под прежним названием
+  await toCanvasCard(RENAMED);
+  await retitle(RENAMED, NOTE, 'Enter');
+  await visible(noteCardOf(NOTE), 'прежнее название на карточке');
+  await page.waitForTimeout(2500);
+  await openTab('Notes');
+  await visible(row(NOTE), 'заметка под прежним названием в списке');
+  await row(OTHER).click();
+  await visible(body.getByRole('button', { name: NOTE, exact: true }), 'ссылка с прежним названием');
+  console.log('OK: название заметки правится на карточке: список и ссылки следуют за ним');
+
+  // Карточка заметки, которой нет, не правится; «Изменить» предлагает её создать
+  await toCanvasCard(NOTE);
+  await knowledge.getByRole('button', { name: 'Note', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: CASE }).click();
+  await visible(noteCardOf(CASE), 'карточка второй заметки');
+  await page.waitForTimeout(2000);
+  await openTab('Notes');
+  await row(CASE).click();
+  await visible(knowledge.locator(`[data-note-title="${CASE}"]`), 'заметка перед удалением');
+  await trashOpenNote();
+  await gone(row(CASE), 'удалённая заметка в списке');
+  await openTab('Canvas');
+  const missingCard = board.locator('[data-canvas-note="missing"]');
+  await visible(missingCard.getByText('Note not found'), 'карточка заметки, которой нет');
+  assert.equal(await missingCard.locator('[data-canvas-open-note]').count(), 0, 'у карточки без заметки есть «открыть заметку»');
+  await missingCard.locator('[data-canvas-note-body]').dblclick();
+  await missingCard.locator('[data-canvas-note-title]').dblclick();
+  await settle();
+  assert.equal(await board.locator('[data-canvas-inline]').count(), 0, 'карточка заметки, которой нет, открыла правку');
+  await visible(bar.locator('[data-canvas-action="edit"][title="Create note"]'), '«Создать заметку» у карточки без заметки');
+  await page.keyboard.press('Delete');
+  await gone(missingCard, 'карточка заметки, которой нет, после удаления');
+  await page.waitForTimeout(2000);
+  await openTab('Notes');
+  await visible(row(NOTE), 'список заметок');
+  assert.equal(await row(CASE).count(), 0, 'двойной клик по карточке создал заметку');
+  await toCanvasCard(NOTE);
+  console.log('OK: карточка заметки, которой нет, не правится');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas.png` });
   await page.waitForTimeout(2500);
   console.log('OK: холст — текст, карточка заметки, связь');
@@ -515,9 +723,14 @@ try {
   assert.equal(await row(WELCOME).count(), 0, 'удалённая первая заметка не вернулась после перезагрузки');
   await row(NOTE).click();
   await visible(body.getByText('проверить обе GPU'), 'текст заметки после перезагрузки');
+  await visible(body.getByText('Строка с холста'), 'правка заметки с холста после перезагрузки');
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');
   await openTab('Canvas');
   await visible(board.locator('[data-canvas-type="file"]'), 'карточка холста после перезагрузки');
+  await visible(
+    board.locator('[data-canvas-note="found"]').filter({ hasText: 'Строка с холста' }),
+    'карточка заметки с правкой после перезагрузки',
+  );
   assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 2, 'связи холста после перезагрузки');
   await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт' }), 'подпись стрелки после перезагрузки');
   const serverAfter = await rectOf(groupNamed('Сервер'));

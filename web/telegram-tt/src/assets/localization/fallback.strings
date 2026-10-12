@@ -3746,7 +3746,7 @@
 "KnowledgeLinks" = "Links";
 "KnowledgeNearest" = "next";
 "KnowledgePlannedHint" = "linking here";
-"KnowledgeCanvasHint" = "double-click: new card, edit text · Shift+drag: select several · right-click: menu";
+"KnowledgeCanvasHint" = "double-click: new card, edit text and notes · drag a group by its inside · Shift+drag: select several · right-click: menu";
 "KnowledgeGraphKindNote" = "note";
 "KnowledgeGraphKindDay" = "daily note";
 "KnowledgeGraphKindMissing" = "no such note yet";
@@ -3803,6 +3803,11 @@
 "KnowledgeCanvasFileMissing" = "File not found";
 "KnowledgeCanvasFileEmpty" = "There is nothing here yet";
 "KnowledgeCanvasOpenFile" = "Open file";
+"KnowledgeCanvasEditNote" = "Edit note text";
+"KnowledgeCanvasCreateNote" = "Create note";
+"KnowledgeCanvasNoteLoading" = "Loading the note…";
+"KnowledgeCanvasNoteText" = "Note text";
+"KnowledgeCanvasNoteSaveHint" = "Ctrl+Enter or a click outside saves, Esc cancels";
 "KnowledgeFilesItems_one" = "{count} item";
 "KnowledgeFilesItems_other" = "{count} items";
 "KnowledgeFilesVault" = "notes vault · .md";

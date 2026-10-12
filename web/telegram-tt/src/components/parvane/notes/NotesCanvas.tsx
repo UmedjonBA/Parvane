@@ -11,6 +11,7 @@ import type {
 } from './notesCanvas';
 import type { CanvasAlign, CanvasGuide } from './notesCanvasAlign';
 import type { CanvasCurve, CanvasHandle, CanvasSelection } from './notesCanvasEdit';
+import type { CanvasInlineKind, NoteCardPart, NoteCardState } from './notesCanvasNote';
 import type { CanvasEntry, NoteEntry } from './notesStore';
 
 import { requestMeasure } from '../../../lib/fasterdom/fasterdom';
@@ -39,14 +40,20 @@ import {
 } from './notesCanvasEdit';
 import { noteTitleOfPath, resolveDrivePath } from './notesCanvasFiles';
 import {
-  canvasFromGraph, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph,
+  canvasFromGraph, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph, renameCanvasNote,
 } from './notesCanvasGraph';
 import {
-  createHistory, dropStep, recordStep, redoStep, undoStep,
+  createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
-import { folderColor } from './notesLook';
+import {
+  inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, notePreviewLines,
+} from './notesCanvasNote';
+import { groupAtPoint, pressAction } from './notesCanvasPress';
+import { folderColor, isDayTitle } from './notesLook';
 import { parseNote } from './notesModel';
-import { deleteCanvas, renameCanvas, saveCanvas } from './notesStore';
+import {
+  deleteCanvas, freeNoteTitle, getNotes, getNotesStatus, renameCanvas, renameNote, saveCanvas, saveNote,
+} from './notesStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
@@ -79,7 +86,7 @@ type Gesture =
   | { kind: 'pan'; x: number; y: number; hasMoved: boolean; tapKey?: string }
   | {
     kind: 'move'; lead: string; ids: string[]; origin: CanvasPoint; base: CanvasDoc; others: CanvasRect[];
-    bounds: CanvasRect; hasMoved: boolean; collapseTo?: string;
+    bounds: CanvasRect; hasMoved: boolean; collapseTo?: string; tapKey?: string;
   }
   | {
     kind: 'resize'; id: string; handle: CanvasHandle; origin: CanvasPoint; base: CanvasDoc; others: CanvasRect[];
@@ -92,8 +99,11 @@ type Live = { doc: CanvasDoc; guides: CanvasGuide[] };
 type Editing = { text: string; color: string; labels: Record<string, string>; removed: string[] };
 // Правка на месте: текст карточки, название группы либо подпись стрелки прямо на холсте. `isNew` — узел
 // только что добавлен: оставленный пустым (или отменённый) текст убирает карточку. `isAuto` — высота
-// текстовой карточки шла по тексту и после правки снова пойдёт по нему
-type Inline = { id: string; kind: 'node' | 'edge'; isNew: boolean; isAuto: boolean };
+// текстовой карточки шла по тексту и после правки снова пойдёт по нему. У карточки заметки правятся текст
+// (`note`) и название (`title`) самой заметки: `noteId` — заметка, `base` — то, с чего правка начата
+type Inline = {
+  id: string; kind: CanvasInlineKind; isNew: boolean; isAuto: boolean; noteId?: string; base?: string;
+};
 type Pending = { id: string; title: string; doc: CanvasDoc };
 type InlineField = HTMLTextAreaElement | HTMLInputElement;
 type Menu = { x: number; y: number; point: CanvasPoint; kind: 'selection' | 'board' };
@@ -104,6 +114,8 @@ const SAVE_DELAY_MS = 1200;
 const GROUP_WIDTH = 420;
 const GROUP_HEIGHT = 280;
 const NOTE_HEIGHT = 140;
+// Пока правится текст заметки, карточка растёт за ним до этой высоты поля; дальше текст листается
+const NOTE_EDIT_MAX_HEIGHT = 360;
 const LINK_WIDTH = 300;
 const LINK_HEIGHT = 160;
 const FILE_HEIGHT = 200;
@@ -138,7 +150,8 @@ const BAR_HEIGHT = 44;
 const PREVIEW_MAX_BYTES = 256 * 1024 * 1024;
 const PREVIEW_MAX_BYTES_NARROW = 64 * 1024 * 1024;
 const INLINE_SELECTOR = '[data-canvas-inline]';
-const PASSIVE_SELECTOR = `[data-board-tools], ${INLINE_SELECTOR}, [data-canvas-open]`;
+const PASSIVE_SELECTOR = `[data-board-tools], ${INLINE_SELECTOR}, [data-canvas-open], [data-canvas-open-note]`;
+const NOTE_HEAD_SELECTOR = '[data-canvas-note-head]';
 const TAP_BOARD = 'board';
 // Пустая строка текста держит свою высоту неразрывным пробелом; копия текста в поле правки кончается
 // пробелом нулевой ширины, чтобы последняя пустая строка тоже занимала место
@@ -251,6 +264,12 @@ const NotesCanvas = ({
   const [canvasName, setCanvasName] = useState('');
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  // Текст заметки, отправленный на запись: карточка показывает его, не дожидаясь ответа облака
+  const [savingNote, setSavingNote] = useState<{ noteId: string; text: string }>();
+  // Переименование заметки с холста: карточки уже несут новое название, заметка — пока прежнее
+  const [renaming, setRenaming] = useState<{ from: string; to: string }>();
+  // Группа под указателем: её возьмёт перетаскивание
+  const [hoverGroup, setHoverGroup] = useState<string>();
   const gestureRef = useRef<Gesture>();
   const liveRef = useRef<Live>();
   const pinchRef = useRef(createPinch());
@@ -277,6 +296,7 @@ const NotesCanvas = ({
 
   const lang = useLang();
   const cloud = useDerivedState(getCloudData);
+  const notesStatus = useDerivedState(getNotesStatus);
   const driveId = cloud?.rootId;
   const driveNodes = useMemo(() => (driveId ? getNodes(driveId, cloud) : []), [cloud, driveId]);
   const vaultName = lang('KnowledgeVaultName');
@@ -331,6 +351,8 @@ const NotesCanvas = ({
   const loadDoc = (text: string) => {
     const parsed = parseCanvas(text);
     knownTextRef.current = text;
+    // Несохранённый текст заметки к файлу холста не относится: он сохраняется, а не пропадает с документом
+    if (inlineRef.current?.kind === 'note') finishInline();
     docRef.current = parsed.doc;
     inlineRef.current = undefined;
     historyRef.current = createHistory();
@@ -366,10 +388,10 @@ const NotesCanvas = ({
     window.clearTimeout(saveTimerRef.current);
     const pending = pendingRef.current;
     pendingRef.current = undefined;
-    if (!pending || shouldDrop) return;
+    if (!pending || shouldDrop) return undefined;
     const text = serializeCanvas(pending.doc);
     if (pending.id === loadedRef.current) knownTextRef.current = text;
-    void saveCanvas(pending.title, text, vaultName, pending.id);
+    return saveCanvas(pending.title, text, vaultName, pending.id).catch(() => undefined);
   });
 
   // Документ на экран и в отложенную запись; истории правок не касается
@@ -379,7 +401,9 @@ const NotesCanvas = ({
     if (!entry) return;
     pendingRef.current = { id: entry.id, title: entry.title, doc: next };
     window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(flushSave, SAVE_DELAY_MS);
+    saveTimerRef.current = window.setTimeout(() => {
+      void flushSave();
+    }, SAVE_DELAY_MS);
   };
 
   // Правка документа — один шаг истории. `isAmend` — продолжение предыдущего шага (текст только что
@@ -393,7 +417,9 @@ const NotesCanvas = ({
     applyDoc(next);
   });
 
-  useEffect(() => flushSave, [flushSave]);
+  useEffect(() => () => {
+    void flushSave();
+  }, [flushSave]);
 
   const nodeElement = (id: string) => Array.from(
     boardRef.current?.querySelectorAll<HTMLElement>('[data-canvas-node]') || [],
@@ -453,14 +479,79 @@ const NotesCanvas = ({
     select({ nodes: [], edges: [edge.id] });
   };
 
+  // Правка заметки прямо на карточке: текст целиком (исходник `.md`) либо название
+  const startNoteInline = (node: CanvasNode, note: NoteEntry, kind: 'note' | 'title') => {
+    // Текст, который ещё пишется в облако, уже считается текстом заметки: повторная правка идёт от него
+    const base = kind === 'title' ? note.title : savingNote?.noteId === note.id ? savingNote.text : note.text;
+    const next: Inline = {
+      id: node.id, kind, isNew: false, isAuto: false, noteId: note.id, base,
+    };
+    inlineRef.current = next;
+    setInline(next);
+    setInlineText(base);
+    setMenu(undefined);
+    selectNodes([node.id]);
+  };
+
+  // Текст заметки пишется тем же путём, что с экрана заметки. Изменения, пришедшие в заметку за время
+  // правки, сводятся с ней при записи. Не записалось — поле открывается снова с набранным текстом
+  const commitNoteText = (current: Inline, text: string) => {
+    const noteId = current.noteId!;
+    setSavingNote({ noteId, text });
+    void saveNote(noteId, text, vaultName, current.base).catch(() => false).then((isSaved) => {
+      setSavingNote((saving) => (saving?.noteId === noteId && saving.text === text ? undefined : saving));
+      if (isSaved || inlineRef.current || !findNode(docRef.current, current.id)) return;
+      if (!getNotes().some(({ id }) => id === noteId)) return;
+      inlineRef.current = current;
+      setInline(current);
+      setInlineText(text);
+    });
+  };
+
+  // Переименованная заметка — новый путь в её карточках: в открытом документе и во всех шагах истории
+  // (отмена не вернёт прежний путь). Шагом истории это не становится
+  const retitleCards = (from: string, to: string) => {
+    historyRef.current = mapHistory(historyRef.current, (step) => renameCanvasNote(step, from, to));
+    const next = renameCanvasNote(docRef.current, from, to);
+    if (next !== docRef.current) applyDoc(next);
+  };
+
+  // Название заметки: карточки холста получают его сразу, файл холста пишется до переименования — тогда
+  // хранилищу в этом холсте править нечего, и он не перечитывается с диска. Ссылки в других заметках и
+  // карточки других холстов правит `renameNote`
+  const commitNoteTitle = async (noteId: string, from: string, title: string) => {
+    const to = freeNoteTitle(noteId, title);
+    if (to === from) return;
+    const canvas = loadedRef.current;
+    setRenaming({ from, to });
+    retitleCards(from, to);
+    await flushSave();
+    const isDone = await renameNote(noteId, to, vaultName).catch(() => false);
+    setRenaming(undefined);
+    if (isDone) return;
+    if (canvas === loadedRef.current) retitleCards(to, from);
+    showNotification({ message: lang('KnowledgeNoticeFailed', { name: from }) });
+  };
+
   // Конец правки на месте. Значение читается из самого поля: уход фокуса и Enter приходят раньше
   // перерисовки с набранным текстом. Вызывается и с ухода фокуса, и явно — второй вызов ничего не делает
   const finishInline = useLastCallback((isCanceled?: boolean) => {
     const current = inlineRef.current;
     if (!current) return;
-    const value = (inlineField()?.value ?? inlineText).trim();
+    const raw = inlineField()?.value ?? inlineText;
+    const value = raw.trim();
     inlineRef.current = undefined;
     setInline(undefined);
+    // Текст и название заметки — другой файл: ни шага истории холста, ни записи холста
+    if (current.kind === 'note') {
+      if (!isCanceled && raw !== current.base) commitNoteText(current, raw);
+      return;
+    }
+    if (current.kind === 'title') {
+      const title = isCanceled ? undefined : nextNoteTitle(raw, current.base!);
+      if (title) void commitNoteTitle(current.noteId!, current.base!, title);
+      return;
+    }
     if (current.kind === 'edge') {
       if (!isCanceled) change(updateEdge(docRef.current, current.id, { label: value }));
       return;
@@ -499,6 +590,17 @@ const NotesCanvas = ({
     else field.setSelectionRange(field.value.length, field.value.length);
   }, [inline]);
 
+  // Уход с вкладки посреди правки заметки: набранное сохраняется (поля на странице уже может не быть)
+  const saveNoteOnLeave = useLastCallback(() => {
+    const current = inlineRef.current;
+    if (current?.kind !== 'note') return;
+    inlineRef.current = undefined;
+    const text = inlineField()?.value ?? inlineText;
+    if (text !== current.base) void saveNote(current.noteId!, text, vaultName, current.base);
+  });
+
+  useEffect(() => saveNoteOnLeave, [saveNoteOnLeave]);
+
   // Escape перехватывают общие слушатели приложения раньше поля — отмена правки встаёт в их очередь
   useEffect(() => (inline ? captureEscKeyListener(() => finishInline(true)) : undefined), [inline]);
 
@@ -521,16 +623,14 @@ const NotesCanvas = ({
 
   const handleInlineBlur = useLastCallback(() => finishInline());
 
-  // Enter сохраняет (в тексте Shift+Enter — новая строка), Escape отменяет
+  // Enter сохраняет (в тексте карточки Shift+Enter — новая строка; в тексте заметки Enter — новая строка,
+  // сохраняет Ctrl/Cmd+Enter), Escape отменяет
   const handleInlineKey = useLastCallback((e: React.KeyboardEvent<InlineField>) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      finishInline(true);
-    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      finishInline();
-    }
+    const action = inlineKeyAction(inlineRef.current?.kind || 'node', e);
+    if (!action) return;
+    e.preventDefault();
+    if (action === 'cancel') e.stopPropagation();
+    finishInline(action === 'cancel');
   });
 
   const noteByTitle = useMemo(() => new Map(notes.map((note) => [note.title.toLowerCase(), note])), [notes]);
@@ -542,6 +642,19 @@ const NotesCanvas = ({
     doc.nodes.filter((node) => node.type === 'file' && node.file)
       .map((node) => [node.file!, resolveDrivePath(driveNodes, node.file!)]),
   ), [doc, driveNodes]);
+
+  // Заметка карточки по названию из пути. Пока идёт переименование с холста, карточка несёт новое название,
+  // а заметка ещё прежнее
+  const noteOf = (title: string) => {
+    const key = title.toLowerCase();
+    return noteByTitle.get(key)
+      || (renaming && key === renaming.to.toLowerCase() ? noteByTitle.get(renaming.from.toLowerCase()) : undefined);
+  };
+
+  // Заметки нет в прочитанном хранилище — «не найдена»; хранилище ещё читается — судить рано
+  const noteStateOf = (note?: NoteEntry): NoteCardState => (
+    note ? 'found' : notesStatus === 'ready' ? 'missing' : 'loading'
+  );
 
   // Карточка файла — заметка: путь кончается на `.md` и такая заметка есть (либо файла с таким путём нет)
   const noteTitleOf = (node: CanvasNode) => {
@@ -998,7 +1111,8 @@ const NotesCanvas = ({
   const openFileNode = (node: CanvasNode) => {
     const title = noteTitleOf(node);
     if (title !== undefined) {
-      onOpenTitle(title);
+      // Заметка, которую прямо сейчас переименовывают с холста, открывается под прежним названием
+      onOpenTitle(noteOf(title)?.title || title);
       return;
     }
     const file = node.file ? driveFiles.get(node.file) : undefined;
@@ -1016,12 +1130,34 @@ const NotesCanvas = ({
     void downloadCloudNode(container, node, isNarrow ? PREVIEW_MAX_BYTES_NARROW : PREVIEW_MAX_BYTES);
   });
 
-  // Двойной клик (двойной тап), Enter и «Изменить»: карточка заметки или файла открывает их, текстовая —
-  // правку текста на месте, группа — правку названия, ссылка — правку адреса
-  const activate = (nodeId: string) => {
+  const handleOpenNote = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const node = findNode(docRef.current, e.currentTarget.dataset.node!);
+    finishInline();
+    if (node) openFileNode(node);
+  });
+
+  const handleOpenSelected = useLastCallback(() => {
+    setMenu(undefined);
+    finishInline();
+    const [id] = selectionRef.current.nodes;
+    const node = id ? findNode(docRef.current, id) : undefined;
+    if (node?.type === 'file') openFileNode(node);
+  });
+
+  // Двойной клик (двойной тап), Enter и «Изменить»: текстовая карточка — правка текста на месте, группа —
+  // правка названия, ссылка — правка адреса, карточка файла открывает просмотр. Карточка заметки правит
+  // саму заметку: по тексту (`part`) — её текст, по шапке — название; заметку, которой нет, команда создаёт
+  const activate = (nodeId: string, part: NoteCardPart = 'command') => {
     const node = findNode(docRef.current, nodeId);
     if (!node) return;
-    if (node.type === 'file') {
+    const noteTitle = node.type === 'file' ? noteTitleOf(node) : undefined;
+    if (noteTitle !== undefined) {
+      const note = noteOf(noteTitle);
+      const action = noteCardAction(noteStateOf(note), part, note?.isDaily && isDayTitle(note.title));
+      if (action === 'create') onOpenTitle(noteTitle);
+      else if (note && action !== 'none') startNoteInline(node, note, action === 'editTitle' ? 'title' : 'note');
+      else selectNodes([node.id]);
+    } else if (node.type === 'file') {
       openFileNode(node);
     } else if (node.type === 'text' || node.type === 'group') {
       startInline(node);
@@ -1034,14 +1170,17 @@ const NotesCanvas = ({
     }
   };
 
-  const handleActivate = useLastCallback(() => {
+  // Единственное выделенное: `part` — откуда пришло действие (клавиша правит текст заметки, но не создаёт её)
+  const activateSelected = (part: NoteCardPart) => {
     setMenu(undefined);
     const current = selectionRef.current;
     const edge = current.edges.length === 1 && !current.nodes.length
       ? docRef.current.edges.find(({ id }) => id === current.edges[0]) : undefined;
     if (edge) startEdgeInline(edge);
-    else if (current.nodes.length === 1 && !current.edges.length) activate(current.nodes[0]);
-  });
+    else if (current.nodes.length === 1 && !current.edges.length) activate(current.nodes[0], part);
+  };
+
+  const handleActivate = useLastCallback(() => activateSelected('command'));
 
   // ── меню по правой кнопке и долгому нажатию ──
   // Меню в точке экрана: для того, что под ней (оно становится выделенным), либо для пустого места
@@ -1088,6 +1227,9 @@ const NotesCanvas = ({
     switch (command) {
       case 'edit':
         handleActivate();
+        break;
+      case 'open':
+        handleOpenSelected();
         break;
       case 'direction':
         handleTurnEdges();
@@ -1156,7 +1298,9 @@ const NotesCanvas = ({
   });
 
   // ── указатель ──
-  const startMove = (nodeId: string, ids: string[], origin: CanvasPoint, collapseTo?: string) => {
+  const startMove = (
+    nodeId: string, ids: string[], origin: CanvasPoint, collapseTo?: string, tapKey?: string,
+  ) => {
     const base = docRef.current;
     const moving = new Set(ids);
     ids.forEach((id) => nodesInGroup(base, id).forEach((node) => moving.add(node.id)));
@@ -1170,6 +1314,7 @@ const NotesCanvas = ({
       bounds: selectionBounds(base, Array.from(moving))!,
       hasMoved: false,
       collapseTo,
+      tapKey,
     };
   };
 
@@ -1198,83 +1343,116 @@ const NotesCanvas = ({
     const pan = (tapKey?: string): Gesture => ({
       kind: 'pan', x: e.clientX, y: e.clientY, hasMoved: false, tapKey,
     });
-    // Средняя кнопка и пробел двигают поле, что бы ни было под указателем
-    if (e.button === 1 || isSpaceDownRef.current) {
-      e.preventDefault();
-      gestureRef.current = pan();
-      return;
-    }
     const nodeId = target.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
     const port = target.closest<HTMLElement>('[data-canvas-port]')?.dataset.canvasPort as CanvasSide | undefined;
     const handle = target.closest<HTMLElement>('[data-canvas-handle]')?.dataset.canvasHandle as
       CanvasHandle | undefined;
-    if (nodeId && port && CANVAS_SIDES.includes(port)) {
-      setLinkFrom(undefined);
-      selectNodes([nodeId]);
-      gestureRef.current = {
-        kind: 'edge', from: nodeId, side: port, hasMoved: false,
-      };
-      return;
-    }
-    if (nodeId && handle) {
-      const base = docRef.current;
-      gestureRef.current = {
-        kind: 'resize',
-        id: nodeId,
-        handle,
-        origin: point,
-        base,
-        others: base.nodes.filter((node) => node.id !== nodeId),
-        hasMoved: false,
-      };
-      return;
-    }
-    if (linkFrom) {
-      const node = nodeId ? findNode(docRef.current, nodeId) : undefined;
-      if (node && node.id !== linkFrom && node.type !== 'group') {
-        change(addEdge(docRef.current, linkFrom, node.id));
-      }
-      setLinkFrom(undefined);
-      return;
-    }
     const isAdditive = e.shiftKey || e.ctrlKey || e.metaKey || isSelectMode;
     const current = selectionRef.current;
-    if (nodeId) {
-      const isIn = current.nodes.includes(nodeId);
-      const next = isAdditive ? toggleSelected(current, 'nodes', nodeId)
-        : isIn ? current : { nodes: [nodeId], edges: [] };
-      select(next);
-      // Нажатие без сдвига на одном из нескольких выделенных оставляет выделенным только его
-      if (next.nodes.includes(nodeId)) {
-        startMove(nodeId, next.nodes, point, !isAdditive && isIn && next.nodes.length > 1 ? nodeId : undefined);
-      } else {
-        gestureRef.current = undefined;
+    // Пустое место: под указателем нет ни карточки, ни шапки или границы группы
+    const action = pressAction({
+      isPanForced: e.button === 1 || isSpaceDownRef.current,
+      isAdditive,
+      isLinking: Boolean(linkFrom),
+      nodeId,
+      port: port && CANVAS_SIDES.includes(port) ? port : undefined,
+      handle,
+      edgeId: nodeId ? undefined : edgeAt(
+        docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / view.scale,
+      ),
+      groupId: nodeId ? undefined : groupAtPoint(docRef.current, point)?.id,
+    });
+    switch (action.kind) {
+      // Средняя кнопка и пробел двигают поле, что бы ни было под указателем
+      case 'pan':
+        e.preventDefault();
+        gestureRef.current = pan();
+        break;
+      case 'arrow':
+        setLinkFrom(undefined);
+        selectNodes([action.id]);
+        gestureRef.current = {
+          kind: 'edge', from: action.id, side: action.side, hasMoved: false,
+        };
+        break;
+      case 'resize': {
+        const base = docRef.current;
+        gestureRef.current = {
+          kind: 'resize',
+          id: action.id,
+          handle: action.handle,
+          origin: point,
+          base,
+          others: base.nodes.filter((node) => node.id !== action.id),
+          hasMoved: false,
+        };
+        break;
       }
-      return;
+      case 'link': {
+        const node = action.id ? findNode(docRef.current, action.id) : undefined;
+        if (node && node.id !== linkFrom && node.type !== 'group') {
+          change(addEdge(docRef.current, linkFrom!, node.id));
+        }
+        setLinkFrom(undefined);
+        break;
+      }
+      case 'node': {
+        const isIn = current.nodes.includes(action.id);
+        const next = isAdditive ? toggleSelected(current, 'nodes', action.id)
+          : isIn ? current : { nodes: [action.id], edges: [] };
+        select(next);
+        // Нажатие без сдвига на одном из нескольких выделенных оставляет выделенным только его
+        if (next.nodes.includes(action.id)) {
+          startMove(
+            action.id, next.nodes, point, !isAdditive && isIn && next.nodes.length > 1 ? action.id : undefined,
+          );
+        } else {
+          gestureRef.current = undefined;
+        }
+        break;
+      }
+      case 'edge':
+        select(isAdditive ? toggleSelected(current, 'edges', action.id) : { nodes: [], edges: [action.id] });
+        gestureRef.current = pan(`edge:${action.id}`);
+        break;
+      // Пустое место с Shift (или в режиме выбора) рисует рамку — и вне групп, и внутри группы
+      case 'marquee':
+        gestureRef.current = {
+          kind: 'marquee', origin: point, base: current, hasMoved: false,
+        };
+        break;
+      // Пустое место внутри группы двигает группу со всем, что в ней лежит; нажатие без сдвига её выделяет.
+      // Двойное нажатие там же — новая текстовая карточка, как на пустом поле
+      case 'group': {
+        const isIn = current.nodes.includes(action.id);
+        const next = isIn ? current : { nodes: [action.id], edges: [] };
+        select(next);
+        setHoverGroup(action.id);
+        startMove(action.id, next.nodes, point, isIn && next.nodes.length > 1 ? action.id : undefined, TAP_BOARD);
+        break;
+      }
+      // Пустое место вне групп двигает поле
+      default:
+        select(CANVAS_EMPTY_SELECTION);
+        gestureRef.current = pan(TAP_BOARD);
     }
-    const edgeId = edgeAt(
-      docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / view.scale,
-    );
-    if (edgeId) {
-      select(isAdditive ? toggleSelected(current, 'edges', edgeId) : { nodes: [], edges: [edgeId] });
-      gestureRef.current = pan(`edge:${edgeId}`);
-      return;
-    }
-    // Пустое место: обычное перетаскивание двигает поле, с Shift (или в режиме выбора) — рисует рамку
-    if (isAdditive) {
-      gestureRef.current = {
-        kind: 'marquee', origin: point, base: current, hasMoved: false,
-      };
-      return;
-    }
-    select(CANVAS_EMPTY_SELECTION);
-    gestureRef.current = pan(TAP_BOARD);
   });
 
   const showLive = (next: CanvasDoc, guides: CanvasGuide[]) => {
     liveRef.current = { doc: next, guides };
     setLive(liveRef.current);
   };
+
+  // Группа, которую возьмёт перетаскивание из-под указателя: её шапка и граница либо пустое место внутри
+  const hoverGroupAt = (e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as Element;
+    if (target.closest(PASSIVE_SELECTOR)) return undefined;
+    const element = target.closest<HTMLElement>('[data-canvas-node]');
+    if (element) return element.dataset.canvasType === 'group' ? element.dataset.canvasNode : undefined;
+    return groupAtPoint(docRef.current, toCanvas(e))?.id;
+  };
+
+  const handlePointerLeave = useLastCallback(() => setHoverGroup(undefined));
 
   const handlePointerMove = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     pointerRef.current = { x: e.clientX, y: e.clientY };
@@ -1286,7 +1464,10 @@ const NotesCanvas = ({
       return;
     }
     const gesture = gestureRef.current;
-    if (!gesture) return;
+    if (!gesture) {
+      if (e.pointerType !== 'touch') setHoverGroup(hoverGroupAt(e));
+      return;
+    }
     if (gesture.kind === 'pan') {
       const dx = e.clientX - gesture.x;
       const dy = e.clientY - gesture.y;
@@ -1361,15 +1542,20 @@ const NotesCanvas = ({
   });
 
   // Двойное нажатие на пустом месте — новая текстовая карточка, на стрелке — правка подписи, на узле — он сам
-  const activateKey = (key: string, at: CanvasPoint) => {
+  const activateKey = (key: string, at: CanvasPoint, part?: NoteCardPart) => {
     if (key === TAP_BOARD) {
       addText(at);
       return;
     }
     const edge = key.startsWith('edge:') ? docRef.current.edges.find(({ id }) => `edge:${id}` === key) : undefined;
     if (edge) startEdgeInline(edge);
-    else activate(key);
+    else activate(key, part);
   };
+
+  // Часть карточки заметки под точкой экрана: шапка с названием либо текст
+  const notePartAt = (hit: Element | null | undefined): NoteCardPart => (
+    hit?.closest(NOTE_HEAD_SELECTOR) ? 'title' : 'body'
+  );
 
   const handlePointerUp = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     pinchRef.current.up(e.pointerId);
@@ -1415,7 +1601,8 @@ const NotesCanvas = ({
     }
     if (gesture.kind === 'move' && gesture.collapseTo) selectNodes([gesture.collapseTo]);
     // Двойной тап: браузеры на сенсорных экранах `dblclick` присылают не всегда
-    const key = gesture.kind === 'move' ? gesture.lead : gesture.kind === 'pan' ? gesture.tapKey : undefined;
+    const key = gesture.kind === 'move' ? gesture.tapKey || gesture.lead
+      : gesture.kind === 'pan' ? gesture.tapKey : undefined;
     if (e.pointerType !== 'touch' || !key || isSelectMode) return;
     const last = tapRef.current;
     const now = Date.now();
@@ -1423,7 +1610,7 @@ const NotesCanvas = ({
     if (last && last.key === key && isNear && now - last.at < DOUBLE_TAP_MS) {
       tapRef.current = undefined;
       tapActivatedAtRef.current = now;
-      activateKey(key, point);
+      activateKey(key, point, notePartAt(document.elementFromPoint(e.clientX, e.clientY)));
     } else {
       tapRef.current = {
         key, at: now, x: e.clientX, y: e.clientY,
@@ -1446,7 +1633,7 @@ const NotesCanvas = ({
     if (hit.closest(`${PASSIVE_SELECTOR}, [data-canvas-handle], [data-canvas-port]`)) return;
     const nodeId = hit.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
     if (nodeId) {
-      activate(nodeId);
+      activate(nodeId, notePartAt(hit));
       return;
     }
     const point = toCanvas(e);
@@ -1499,7 +1686,7 @@ const NotesCanvas = ({
         handleRemove();
         break;
       case 'edit':
-        handleActivate();
+        activateSelected('body');
         break;
       case 'left':
         nudge(-step, 0);
@@ -1566,7 +1753,8 @@ const NotesCanvas = ({
   const handleZoomOut = useLastCallback(() => zoomBy(1 / BOARD_ZOOM_STEP));
   const handleFit = useLastCallback(() => setView(fitTo(doc)));
   const handleWheel = useLastCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    if ((e.target as Element).closest('[data-canvas-context]')) return;
+    // В меню и в поле текста заметки колесо листает их, а не меняет масштаб
+    if ((e.target as Element).closest('[data-canvas-context], [data-canvas-note-editor]')) return;
     const box = e.currentTarget.getBoundingClientRect();
     setView(zoomByWheel(view, e.deltaY, e.clientX - box.left, e.clientY - box.top));
   });
@@ -1607,35 +1795,41 @@ const NotesCanvas = ({
           key={node.id}
           data-canvas-node={node.id}
           data-canvas-type={node.type}
-          className={buildClassName(styles.canvasGroup, isSelected && styles.canvasSelected)}
+          className={buildClassName(
+            styles.canvasGroup, isSelected && styles.canvasSelected, hoverGroup === node.id && styles.canvasGroupHover,
+          )}
           style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
         >
           <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeTop)} />
           <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeRight)} />
           <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeBottom)} />
           <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeLeft)} />
-          {inline?.id === node.id ? (
-            <input
-              className={styles.canvasGroupInput}
-              value={inlineText}
-              placeholder={lang('KnowledgeCanvasGroupName')}
-              aria-label={lang('KnowledgeCanvasGroupName')}
-              data-canvas-inline
-              onChange={handleInlineChange}
-              onBlur={handleInlineBlur}
-              onKeyDown={handleInlineKey}
-            />
-          ) : node.label ? (
-            <span className={styles.canvasGroupLabel} data-canvas-group-label>{node.label}</span>
-          ) : (
-            <span
-              className={buildClassName(styles.canvasGroupLabel, styles.canvasGroupGrip)}
-              title={lang('KnowledgeCanvasUnnamedGroup')}
-              data-canvas-group-grip
-            >
-              <PvIcon name="group" isSmall />
-            </span>
-          )}
+          {/* Шапка вдоль верхнего края: за неё группу берут, по двойному нажатию называют */}
+          <div className={styles.canvasGroupHead} data-canvas-group-head>
+            {inline?.id === node.id ? (
+              <input
+                className={styles.canvasGroupInput}
+                value={inlineText}
+                placeholder={lang('KnowledgeCanvasGroupName')}
+                aria-label={lang('KnowledgeCanvasGroupName')}
+                data-canvas-inline
+                onChange={handleInlineChange}
+                onBlur={handleInlineBlur}
+                onKeyDown={handleInlineKey}
+              />
+            ) : node.label ? (
+              <span className={styles.canvasGroupLabel} data-canvas-group-label>{node.label}</span>
+            ) : (
+              <span
+                className={buildClassName(styles.canvasGroupLabel, styles.canvasGroupGrip)}
+                title={lang('KnowledgeCanvasUnnamedGroup')}
+                data-canvas-group-grip
+              >
+                <PvIcon name="group" isSmall />
+                {lang('KnowledgeCanvasGroup')}
+              </span>
+            )}
+          </div>
           {renderHandles(node)}
         </div>
       );
@@ -1714,34 +1908,89 @@ const NotesCanvas = ({
         </div>
       );
     }
-    const note = noteByTitle.get(title.toLowerCase());
-    // Начало текста без разметки: заголовок с названием и метки пунктов не показываются
-    const lines = note
-      ? parseNote(note.text).body.split('\n')
-        .map((line) => line.replace(/^#+\s*/, '').replace(/ \^t[a-z0-9]{4,12}\s*$/, '')
-          .replace(/^\s*[-*+] (\[[ xX]\] )?/, '• '))
-        .filter((line) => line.trim() && line.trim().toLowerCase() !== note.title.toLowerCase())
-        .slice(0, PREVIEW_LINES)
-      : undefined;
+    const note = noteOf(title);
+    const noteState = noteStateOf(note);
+    const isEditingText = inline?.id === node.id && inline.kind === 'note';
+    const isEditingTitle = inline?.id === node.id && inline.kind === 'title';
+    // Начало текста без разметки; отправленный на запись текст виден, не дожидаясь ответа облака
+    const lines = note ? notePreviewLines(
+      parseNote(savingNote?.noteId === note.id ? savingNote.text : note.text).body, note.title, PREVIEW_LINES,
+    ) : undefined;
     return (
       <div
         key={node.id}
         data-canvas-node={node.id}
         data-canvas-type={node.type}
-        data-canvas-note={note ? 'found' : 'missing'}
-        className={cardClass}
-        style={`--gc: ${note ? folderColor(note.folder, note.isDaily) : 'var(--pv-faint)'}; ${place}; height: ${
-          node.height}px`}
+        data-canvas-note={noteState}
+        className={buildClassName(cardClass, isEditingText && styles.canvasCardEditing)}
+        // Пока правится текст, карточка растёт за ним; размер узла в файле от этого не меняется
+        style={`--gc: ${note ? folderColor(note.folder, note.isDaily) : 'var(--pv-faint)'}; ${place}; ${
+          isEditingText ? 'min-height' : 'height'}: ${node.height}px`}
       >
-        <div className={styles.canvasCardHead}>
+        <div className={styles.canvasCardHead} data-canvas-note-head>
           <i className={styles.canvasCardDot} />
-          <span className={kit.ttl}>{title}</span>
+          {isEditingTitle ? (
+            <input
+              className={styles.canvasTitleInput}
+              value={inlineText}
+              maxLength={NOTE_TITLE_MAX}
+              aria-label={lang('KnowledgeNoteTitle')}
+              data-canvas-inline
+              data-canvas-note-title-input
+              onChange={handleInlineChange}
+              onBlur={handleInlineBlur}
+              onKeyDown={handleInlineKey}
+            />
+          ) : (
+            <span className={buildClassName(kit.ttl, styles.canvasCardTitle)} data-canvas-note-title={title}>
+              {title}
+            </span>
+          )}
+          {note && !isEditingTitle && (
+            <button
+              type="button"
+              className={styles.canvasCardOpen}
+              title={lang('KnowledgeCanvasOpenNote')}
+              aria-label={lang('KnowledgeCanvasOpenNote')}
+              data-node={node.id}
+              data-canvas-open-note
+              onClick={handleOpenNote}
+            >
+              <PvIcon name="open" isSmall />
+            </button>
+          )}
         </div>
-        <div className={styles.canvasCardBody}>
-          {lines ? lines.map((line, i) => (
-            <div key={i}>{renderCardInline(line)}</div>
-          )) : <div className={kit.faint}>{lang('KnowledgeCanvasNoteMissing')}</div>}
-        </div>
+        {isEditingText ? (
+          <div
+            className={styles.canvasNoteBox}
+            style={`max-height: ${Math.max(NOTE_EDIT_MAX_HEIGHT, node.height)}px`}
+          >
+            {/* Невидимая копия текста задаёт высоту поля; выше предела поле листается */}
+            <div className={styles.canvasInlineMirror} aria-hidden="true">{`${inlineText}${MIRROR_TAIL}`}</div>
+            <textarea
+              className={buildClassName(styles.canvasInline, styles.canvasNoteEditor)}
+              value={inlineText}
+              placeholder={lang('KnowledgeEditorPlaceholder')}
+              aria-label={lang('KnowledgeCanvasNoteText')}
+              title={lang('KnowledgeCanvasNoteSaveHint')}
+              data-canvas-inline
+              data-canvas-note-editor
+              onChange={handleInlineChange}
+              onBlur={handleInlineBlur}
+              onKeyDown={handleInlineKey}
+            />
+          </div>
+        ) : (
+          <div className={styles.canvasCardBody} data-canvas-note-body>
+            {lines ? lines.map((line, i) => (
+              <div key={i}>{renderCardInline(line)}</div>
+            )) : (
+              <div className={kit.faint}>
+                {lang(noteState === 'loading' ? 'KnowledgeCanvasNoteLoading' : 'KnowledgeCanvasNoteMissing')}
+              </div>
+            )}
+          </div>
+        )}
         {renderPorts(node)}
         {renderHandles(node)}
       </div>
@@ -1819,6 +2068,18 @@ const NotesCanvas = ({
   const inlineEdgeCurve = inlineEdge && edgeCurve(shown, inlineEdge);
   const inlineEdgePoint = inlineEdgeCurve && curvePoint(inlineEdgeCurve, 0.5);
 
+  // «Изменить» у выделенного: карточка заметки правит её текст (нет заметки — создаёт её, хранилище ещё
+  // читается — ничего), карточка файла открывает просмотр
+  const selectedNoteTitle = selectedNode?.type === 'file' ? noteTitleOf(selectedNode) : undefined;
+  const selectedNoteState = selectedNoteTitle === undefined ? undefined : noteStateOf(noteOf(selectedNoteTitle));
+  const isPlainFile = selectedNode?.type === 'file' && !selectedNoteState;
+  const canEditSelected = Boolean(selectedEdge || (selectedNode && selectedNoteState !== 'loading'));
+  const editIcon = selectedNoteState === 'missing' ? 'plus' : isPlainFile ? 'open' : 'edit';
+  const editLabel = selectedEdge ? lang('KnowledgeCanvasEdgeLabel')
+    : selectedNoteState === 'found' ? lang('KnowledgeCanvasEditNote')
+      : selectedNoteState === 'missing' ? lang('KnowledgeCanvasCreateNote')
+        : isPlainFile ? lang('KnowledgeCanvasOpenFile') : lang('KnowledgeCanvasEdit');
+
   // Панель у выделенного: над ним, а если сверху нет места — под ним; на телефоне прижата к низу поля
   const isBarShown = hasSelection && !live && !inline && !linkFrom && !marquee && !draft;
   const hasGroupSelected = selectedNodes.some(({ type }) => type === 'group');
@@ -1861,9 +2122,8 @@ const NotesCanvas = ({
     ];
   } else if (menu) {
     menuItems = [
-      ...(selectedNode ? [item(
-        'edit', 'edit', lang(selectedNode.type === 'file' ? 'KnowledgeCanvasOpenFile' : 'KnowledgeCanvasEdit'),
-      )] : []),
+      ...(selectedNode && canEditSelected ? [item('edit', editIcon, editLabel)] : []),
+      ...(selectedNoteState === 'found' ? [item('open', 'open', lang('KnowledgeCanvasOpenNote'))] : []),
       item('duplicate', 'copy', lang('KnowledgeCanvasDuplicate')),
       item('copy', 'copy', lang('KnowledgeCanvasCopy')),
       item('cut', 'x', lang('KnowledgeCanvasCut')),
@@ -1889,6 +2149,7 @@ const NotesCanvas = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
+        onPointerLeave={handlePointerLeave}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
@@ -1896,6 +2157,7 @@ const NotesCanvas = ({
         <div
           className={styles.world}
           style={`transform: translate(${view.x}px, ${view.y}px) scale(${view.scale}); --inv: ${1 / view.scale}`}
+          data-canvas-world
         >
           <svg className={styles.canvasEdges} width="1" height="1">
             {shown.edges.map(renderEdge)}
@@ -2083,13 +2345,17 @@ const NotesCanvas = ({
             place={barPlace}
             tones={CANVAS_TONES}
             color={colorOfSelection(doc, selection)}
-            canEdit={Boolean(selectedNode || selectedEdge)}
+            canEdit={canEditSelected}
+            editIcon={editIcon}
+            editLabel={editLabel}
+            canOpen={selectedNoteState === 'found'}
             canDuplicate={Boolean(selection.nodes.length)}
             canWrap={Boolean(selection.nodes.length)}
             canFit={hasGroupSelected}
             canTurn={Boolean(selection.edges.length) && !selection.nodes.length}
             onColor={handleColor}
             onEdit={handleActivate}
+            onOpen={handleOpenSelected}
             onDuplicate={handleDuplicate}
             onWrap={handleAddGroup}
             onFit={handleFitGroups}

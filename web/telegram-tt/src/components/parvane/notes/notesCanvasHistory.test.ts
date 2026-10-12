@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { CanvasDoc } from './notesCanvas';
 
 import {
-  CANVAS_HISTORY_LIMIT, createHistory, dropStep, recordStep, redoStep, undoStep,
+  CANVAS_HISTORY_LIMIT, createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
 
 function docOf(count: number): CanvasDoc {
@@ -62,5 +62,20 @@ describe('история правок холста', () => {
     const dropped = dropStep(history)!;
     expect(dropped.doc).toBe(b);
     expect(dropped.history).toEqual({ past: [a], future: [] });
+  });
+
+  it('поправка проходит по всем шагам, отмена возвращает уже поправленный документ', () => {
+    // a → b → c, затем одна отмена: в прошлом a, в «вернуть» c
+    const history = undoStep(recordStep(recordStep(createHistory(), a), b), c)!.history;
+    const shift = (doc: CanvasDoc) => ({ ...doc, nodes: doc.nodes.map((node) => ({ ...node, y: 10 })) });
+    const mapped = mapHistory(history, shift);
+    expect(mapped.past).toEqual([shift(a)]);
+    expect(mapped.future).toEqual([shift(c)]);
+    expect(undoStep(mapped, b)!.doc.nodes[0].y).toBe(10);
+  });
+
+  it('поправка, ничего не изменившая, оставляет прежнюю историю', () => {
+    const history = recordStep(createHistory(), a);
+    expect(mapHistory(history, (doc) => doc)).toBe(history);
   });
 });

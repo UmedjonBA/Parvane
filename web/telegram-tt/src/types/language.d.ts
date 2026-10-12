@@ -2838,6 +2838,11 @@ export interface LangPair {
   'KnowledgeCanvasFileMissing': undefined;
   'KnowledgeCanvasFileEmpty': undefined;
   'KnowledgeCanvasOpenFile': undefined;
+  'KnowledgeCanvasEditNote': undefined;
+  'KnowledgeCanvasCreateNote': undefined;
+  'KnowledgeCanvasNoteLoading': undefined;
+  'KnowledgeCanvasNoteText': undefined;
+  'KnowledgeCanvasNoteSaveHint': undefined;
   'KnowledgeFilesVault': undefined;
   'KnowledgeFilesUploadFile': undefined;
   'KnowledgeFilesShareOpen': undefined;

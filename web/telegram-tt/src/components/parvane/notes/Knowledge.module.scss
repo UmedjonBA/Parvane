@@ -869,8 +869,8 @@
   stroke-width: 4px;
 }
 
-// Рамка группы пропускает нажатия: внутри неё поле двигается и рисуется рамка выделения. Саму группу
-// берут за границу, название и ручки
+// Рамка группы пропускает нажатия до поля, и что начнёт нажатие внутри неё, решает поле: сдвиг группы, с Shift —
+// рамку выделения, двойное — новую карточку. Шапка, граница и ручки ловят нажатия сами
 .canvasGroup {
   pointer-events: none;
 
@@ -878,15 +878,59 @@
 
   box-sizing: border-box;
   border: 2px solid var(--gc, var(--pv-line2));
-  border-radius: 1rem;
+  border-radius: 0 0 1rem 1rem;
 
   background: color-mix(in srgb, var(--gc, var(--pv-line2)) 7%, transparent);
+
+  transition: background-color 0.15s;
+}
+
+// Указатель над группой (над шапкой, границей либо пустым местом внутри): перетаскивание возьмёт её
+.canvasGroupHover {
+  background: color-mix(in srgb, var(--gc, var(--pv-line2)) 13%, transparent);
+
+  .canvasGroupHead {
+    background: color-mix(in srgb, var(--gc, var(--pv-line2)) 30%, var(--pv-panel));
+  }
+}
+
+// Шапка вдоль верхнего края: название группы; за неё группу берут и двигают
+.canvasGroupHead {
+  pointer-events: auto;
+  cursor: grab;
+
+  position: absolute;
+  right: -2px;
+  bottom: calc(100% + 2px);
+  left: -2px;
+
+  display: flex;
+  align-items: center;
+
+  box-sizing: border-box;
+  height: 2rem;
+  padding: 0 0.625rem;
+  border: 2px solid var(--gc, var(--pv-line2));
+  border-bottom: 0;
+  border-radius: 0.75rem 0.75rem 0 0;
+
+  background: color-mix(in srgb, var(--gc, var(--pv-line2)) 16%, var(--pv-panel));
+
+  transition: background-color 0.15s;
+
+  &:active {
+    cursor: grabbing;
+  }
 }
 
 .canvasGroupEdge {
   pointer-events: auto;
-  cursor: move;
+  cursor: grab;
   position: absolute;
+
+  &:active {
+    cursor: grabbing;
+  }
 }
 
 .canvasGroupEdgeTop,
@@ -920,29 +964,23 @@
 }
 
 .canvasGroupLabel {
-  pointer-events: auto;
-  cursor: move;
-
-  position: absolute;
-  bottom: calc(100% + 0.375rem);
-  left: 0;
-
-  padding: 0.125rem 0.625rem;
-  border-radius: 0.5rem;
+  overflow: hidden;
 
   font-size: 1rem;
   font-weight: var(--font-weight-semibold);
   color: var(--gc, var(--pv-muted));
+  text-overflow: ellipsis;
   white-space: nowrap;
-
-  background: color-mix(in srgb, var(--gc, var(--pv-line2)) 16%, var(--pv-panel));
 }
 
-// Группа без названия: за этот значок её берут и по двойному нажатию называют
+// Группа без названия: в шапке приглушённое слово «Группа», по двойному нажатию её называют
 .canvasGroupGrip {
   display: inline-flex;
+  gap: 0.375rem;
   align-items: center;
-  padding: 0.25rem 0.5rem;
+
+  font-weight: var(--font-weight-normal);
+  color: var(--pv-faint);
 }
 
 .canvasCard {
@@ -963,9 +1001,10 @@
   border: 2px solid var(--gc, var(--pv-line2));
 }
 
-// Правка на месте: поле занимает карточку (название группы — место её подписи)
+// Правка на месте: поле занимает карточку (название группы и заметки — место самого названия)
 .canvasInline,
 .canvasGroupInput,
+.canvasTitleInput,
 .canvasEdgeInput {
   cursor: text;
   user-select: text;
@@ -1018,22 +1057,25 @@
   background: transparent;
 }
 
-.canvasGroupInput {
-  pointer-events: auto;
+.canvasGroupInput,
+.canvasTitleInput {
+  flex: 1 1 auto;
 
-  position: absolute;
-  bottom: calc(100% + 0.375rem);
-  left: 0;
-
-  width: min(100%, 17.5rem);
-  padding: 0.125rem 0.625rem;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0 0.375rem;
   border: 1px solid var(--pv-accent);
-  border-radius: 0.5rem;
+  border-radius: 0.375rem;
 
-  font-size: 1rem;
+  font-size: inherit;
   font-weight: var(--font-weight-semibold);
 
   background: var(--pv-panel);
+}
+
+.canvasGroupInput {
+  pointer-events: auto;
+  font-size: 1rem;
 }
 
 .canvasEdgeInput {
@@ -1094,6 +1136,58 @@
 .canvasCardBodyText {
   color: var(--pv-fg);
   overflow-wrap: anywhere;
+}
+
+// Карточка заметки: название занимает шапку, справа — «открыть заметку»
+.canvasCardTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.canvasCardOpen {
+  cursor: pointer;
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: -0.25rem -0.375rem -0.25rem 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.375rem;
+
+  color: var(--pv-faint);
+
+  background: transparent;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--pv-fg);
+    background: var(--pv-line);
+  }
+}
+
+// Правка текста заметки на карточке: карточка растёт за текстом и ложится поверх соседних; выше предела
+// (он задан стилем поля) текст листается
+.canvasCardEditing {
+  z-index: 3;
+}
+
+.canvasNoteBox {
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 auto;
+
+  min-height: 0;
+}
+
+.canvasNoteEditor {
+  touch-action: pan-y;
+  overflow-y: auto;
 }
 
 .canvasSelected {

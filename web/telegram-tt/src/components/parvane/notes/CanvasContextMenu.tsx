@@ -17,7 +17,7 @@ import PvIcon from './PvIcon';
 import styles from './Knowledge.module.scss';
 
 export type CanvasCommand =
-  'edit' | 'direction' | 'duplicate' | 'copy' | 'cut' | 'paste' | 'wrap' | 'fit' | 'front' | 'back' | 'props'
+  'edit' | 'open' | 'direction' | 'duplicate' | 'copy' | 'cut' | 'paste' | 'wrap' | 'fit' | 'front' | 'back' | 'props'
   | 'remove' | 'selectAll' | 'textHere' | 'groupHere' | 'note' | 'link' | 'file' | 'fitView' | 'refreshGraph';
 export type CanvasMenuItem = { command: CanvasCommand; icon: PvIconName; label: string; isDanger?: boolean };
 
