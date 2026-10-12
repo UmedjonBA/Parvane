@@ -1129,9 +1129,16 @@ try {
   const phoneGraph = knowledge.locator('[data-notes-graph]');
   const phoneNode = phoneGraph.locator(`[data-node][data-title="${NOTE}"]`).locator('circle').first();
   await visible(phoneNode, 'заметка на графе телефона');
-  const phoneBox = await phoneNode.boundingBox();
-  await page.mouse.click(phoneBox.x + phoneBox.width / 2, phoneBox.y + phoneBox.height / 2);
   const phoneSheet = page.locator('[data-graph-panel]');
+  // Граф после смены ширины вписывается заново — точка могла сдвинуться между замером и нажатием
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await page.waitForTimeout(600);
+    const phoneBox = await phoneNode.boundingBox();
+    await page.mouse.click(phoneBox.x + phoneBox.width / 2, phoneBox.y + phoneBox.height / 2);
+    const isOpen = await phoneSheet.locator(`[data-note-title="${NOTE}"]`)
+      .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
+    if (isOpen) break;
+  }
   await visible(phoneSheet.locator(`[data-note-title="${NOTE}"]`), 'заметка в листе графа на телефоне');
   await visible(page.locator('[data-graph-link-start]'), 'кнопка «Связать» в листе');
   await page.locator('[data-graph-link-start]').click();

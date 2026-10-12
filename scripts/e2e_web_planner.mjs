@@ -74,7 +74,8 @@ try {
       barBottom: bar.bottom, barTop: bar.top, lastBottom: tabs.at(-1).bottom, firstTop: tabs[0].top, profileBottom: profile.bottom,
     };
   });
-  assert.ok(geometry.firstTop - geometry.barTop < 80, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
+  // Над разделами — знак и надпись «parvane»
+  assert.ok(geometry.firstTop - geometry.barTop < 110, `разделы не у верхнего края: ${JSON.stringify(geometry)}`);
   assert.ok(
     geometry.lastBottom < geometry.barTop + (geometry.barBottom - geometry.barTop) * 0.6,
     `разделы должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
