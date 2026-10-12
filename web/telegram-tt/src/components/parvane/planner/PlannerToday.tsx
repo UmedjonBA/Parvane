@@ -7,7 +7,9 @@ import { openNote } from '../../../util/parvaneSection';
 import {
   formatHours, formatHoursNumber, formatSpan, formatStatus,
 } from './plannerFormat';
-import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
+import {
+  getDailyRecord, getDayBudget, getSleepRoutine, isShortSleep,
+} from './plannerHealth';
 import { ALL_LAYERS } from './plannerLayers';
 import {
   getDayLoad, getGoalsForDay, getListColor, getNutrientTotal, getTasksForDay, getUndatedTasks, instanceKey,
@@ -67,6 +69,12 @@ const PlannerToday = ({
   const isShort = isShortSleep(state, day);
   const sleep = getDailyRecord(state, 'sleep', day);
   const sleepGoal = state.healthGoals.sleepMinutes;
+  // Режим сна только сообщается: бюджет дня снижает один короткий сон
+  const routine = useMemo(() => getSleepRoutine(state, day), [state, day]);
+  const routineHint = routine.level === 'drifting' || routine.level === 'broken'
+    ? lang(routine.level === 'drifting' ? 'PlannerSleepRoutineDriftingShort' : 'PlannerSleepRoutineBrokenShort', {
+      value: lang('PlannerMinutesValue', { minutes: routine.spread! }),
+    }) : undefined;
   const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
   const kcalGoal = getGoalsForDay(state, day, today).kcal?.target;
 
@@ -115,6 +123,7 @@ const PlannerToday = ({
             type="button"
             className={buildClassName(styles.card, styles.stat, isShort ? styles.kindDue : styles.kindSleep)}
             data-today-card="sleep"
+            data-sleep-routine-level={routine.level}
             onClick={onOpenHealth}
           >
             <span className={styles.statLabel}>{lang('PlannerHealthSleep')}</span>
@@ -124,11 +133,11 @@ const PlannerToday = ({
             </span>
             <span className={styles.statSub}>
               {!sleep ? lang('PlannerHealthSleepNone')
-                : sleep.time && sleep.endTime && sleepGoal
+                : routineHint || (sleep.time && sleep.endTime && sleepGoal
                   ? lang('PlannerHealthSleepGoal', {
                     from: sleep.time, to: sleep.endTime, goal: formatSpan(sleepGoal),
                   })
-                  : sleepGoal ? lang('PlannerHealthGoalValue', { value: formatSpan(sleepGoal) }) : ''}
+                  : sleepGoal ? lang('PlannerHealthGoalValue', { value: formatSpan(sleepGoal) }) : '')}
             </span>
           </button>
           <button

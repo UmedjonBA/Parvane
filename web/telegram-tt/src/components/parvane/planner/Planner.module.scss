@@ -2960,6 +2960,81 @@
   fill: var(--pv-green);
 }
 
+// Режим сна: тон плашки уровня («стабильный» — зелёный, «плавает» — жёлтый, «сбит» — красный .kindDue)
+.toneGood {
+  --planner-kind: var(--pv-green);
+}
+
+.toneWarn {
+  --planner-kind: var(--pv-yellow);
+}
+
+// График режима: ночь — столбик от отхода ко сну до подъёма, цвет — по отклонению от среднего
+.routineChart {
+  display: block;
+  width: 100%;
+}
+
+.routineBar {
+  fill: var(--pv-sleep);
+}
+
+.routineBarDrift {
+  fill: var(--pv-yellow);
+}
+
+.routineBarOff {
+  fill: var(--pv-red);
+}
+
+.routineBarCurrent {
+  stroke: var(--pv-fg);
+  stroke-width: 1.5;
+}
+
+.routineDot {
+  fill: var(--pv-faint);
+}
+
+.routineMean {
+  opacity: 0.6;
+  stroke: var(--pv-fg);
+}
+
+.routineGoal {
+  stroke: var(--pv-green);
+  stroke-dasharray: 4 3;
+}
+
+.routineLabel {
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  fill: var(--pv-muted);
+}
+
+// Справа — та же доля ширины, что у поля подписей графика (ROUTINE_GUTTER из ROUTINE_WIDTH)
+.routineDays {
+  display: flex;
+  margin-top: 0.25rem;
+  padding-inline-end: 12%;
+}
+
+.routineDay {
+  flex: 1 1 0;
+
+  min-width: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+.routineDayCurrent {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
 // ── уведомление с «Отменить» ─────────────────────────────────────────────────
 
 .toast {

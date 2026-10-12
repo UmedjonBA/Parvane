@@ -2719,6 +2719,18 @@ export interface LangPair {
   'PlannerHealthWeightChart': undefined;
   'PlannerHealthSleepAdd': undefined;
   'PlannerHealthSleepExample': undefined;
+  'PlannerHealthSleepDayLabel': undefined;
+  'PlannerHealthSleepDayPlaceholder': undefined;
+  'PlannerHealthSleepDayBad': undefined;
+  'PlannerSleepRoutine': undefined;
+  'PlannerSleepRoutineStable': undefined;
+  'PlannerSleepRoutineDrifting': undefined;
+  'PlannerSleepRoutineBroken': undefined;
+  'PlannerSleepRoutineNone': undefined;
+  'PlannerSleepRoutineGoalHint': undefined;
+  'PlannerSleepRoutineGoalExample': undefined;
+  'PlannerSleepRoutineChart': undefined;
+  'PlannerSleepRoutineLegend': undefined;
   'PlannerHealthWorkoutExample': undefined;
   'PlannerHealthActivityHint': undefined;
   'PlannerHealthKcalWeek': undefined;
@@ -4991,6 +5003,55 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickDefault': {
     'date': V;
+  };
+  'PlannerSleepRoutineSummary': {
+    'bed': V;
+    'bedSpread': V;
+    'wake': V;
+    'wakeSpread': V;
+  };
+  'PlannerSleepRoutineHint': {
+    'count': V;
+    'min': V;
+  };
+  'PlannerSleepRoutineUntimed': {
+    'count': V;
+  };
+  'PlannerSleepRoutineOutliers': {
+    'nights': V;
+  };
+  'PlannerSleepRoutineBedGoal': {
+    'value': V;
+  };
+  'PlannerSleepRoutineWakeGoal': {
+    'value': V;
+  };
+  'PlannerSleepRoutineLater': {
+    'value': V;
+    'goal': V;
+  };
+  'PlannerSleepRoutineEarlier': {
+    'value': V;
+    'goal': V;
+  };
+  'PlannerSleepRoutineOnGoal': {
+    'goal': V;
+  };
+  'PlannerSleepRoutineGoalShort': {
+    'bed': V;
+    'wake': V;
+  };
+  'PlannerSleepRoutineJetlagLater': {
+    'value': V;
+  };
+  'PlannerSleepRoutineJetlagEarlier': {
+    'value': V;
+  };
+  'PlannerSleepRoutineDriftingShort': {
+    'value': V;
+  };
+  'PlannerSleepRoutineBrokenShort': {
+    'value': V;
   };
   'KnowledgeGuideAdded': {
     'name': V;
