@@ -2,12 +2,12 @@
 import type {
   PlannerEvent, PlannerExercise, PlannerFoodEntry, PlannerGoal, PlannerGoalRecord, PlannerGoalValues,
   PlannerHealthGoals, PlannerHealthRecord, PlannerLearnedWord, PlannerList, PlannerNutrient, PlannerNutritionDay,
-  PlannerOccurrence, PlannerRepeat, PlannerState, PlannerTask,
+  PlannerOccurrence, PlannerQuickLine, PlannerRepeat, PlannerState, PlannerTask,
 } from './plannerModel';
 
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, isKnownNumber, normalizeLearned, PLANNER_GOAL_METRICS,
-  PLANNER_MEALS, PLANNER_REPEAT_KINDS, PLANNER_STATUSES,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, isKnownNumber, normalizeLearned, normalizeQuickLines,
+  PLANNER_GOAL_METRICS, PLANNER_MEALS, PLANNER_REPEAT_KINDS, PLANNER_STATUSES,
 } from './plannerModel';
 
 // Parvane (spec 010): планировщик ↔ движок. Состояние для экранов (`PlannerState`)
@@ -78,6 +78,10 @@ type EngineHealth = {
 type EngineLearned = {
   id: string; kind: string; kindCount: number; minutes: number | null; minutesCount: number; touched: number;
 };
+// Запись истории ввода текстом: строка либо забытый шаблон (`hidden`)
+type EngineQuickLine = {
+  id: string; text: string; count: number; touched: number; hidden: boolean;
+};
 type EngineDay = {
   day: string; entries: EngineEntry[]; isComplete: boolean; fixedGoals: EngineGoals; waterMl: number | null;
 };
@@ -89,6 +93,8 @@ export type EngineState = {
   settings: EngineSettings; goals: EngineGoals; goalPeriods?: EngineGoalPeriod[]; health?: EngineHealth[];
   // Движок прежней сборки словаря не отдаёт
   learned?: EngineLearned[];
+  // История ввода текстом; движок прежней сборки её не знает — и не принимает правку `quickLine`
+  quickLines?: EngineQuickLine[];
   headSeq: number; sizeBytes: number;
 };
 
@@ -292,7 +298,19 @@ export function fromEngineState(engine: EngineState): PlannerState {
     learned: normalizeLearned((engine.learned || []).map((word) => ({
       ...word, kind: word.kind as PlannerLearnedWord['kind'], minutes: word.minutes ?? undefined,
     }))),
+    quickLines: normalizeQuickLines((engine.quickLines || []).map(({ hidden, ...line }) => ({
+      ...line, isHidden: hidden,
+    }))),
   };
+}
+
+/**
+ * Движок понимает историю ввода текстом (отдаёт `quickLines`). Движок прежней сборки отвергает операцию с
+ * незнакомой правкой целиком — вместе с записью, добавленной той же правкой, — поэтому без этого признака
+ * история в данные «Плана» не пишется и остаётся на устройстве.
+ */
+export function hasEngineQuickLines(engine: EngineState) {
+  return Array.isArray(engine.quickLines);
 }
 
 // ── состояние → изменения ───────────────────────────────────────────────────
@@ -442,6 +460,14 @@ function learnedChange(word: PlannerLearnedWord, before?: PlannerLearnedWord): P
   return { learned: change };
 }
 
+function quickLineChange(line: PlannerQuickLine): PlannerChange {
+  return {
+    quickLine: {
+      id: line.id, text: line.text, count: line.count, touched: line.touched, hidden: Boolean(line.isHidden),
+    },
+  };
+}
+
 function settingsChange(state: PlannerState): PlannerChange {
   return { settings: { ...state.settings, budget: state.budget } };
 }
@@ -539,6 +565,19 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
     });
     previous.learned.forEach((word) => {
       if (!learnedAfter.has(word.id)) changes.push({ learned: { id: word.id, deleted: true } });
+    });
+  }
+
+  // История ввода текстом: запись уходит целиком (движок сводит её одним регистром), пропавшая — надгробием
+  if (previous.quickLines !== next.quickLines) {
+    const linesBefore = new Map(previous.quickLines.map((line) => [line.id, line]));
+    const linesAfter = new Set(next.quickLines.map((line) => line.id));
+    next.quickLines.forEach((line) => {
+      const before = linesBefore.get(line.id);
+      if (!before || !same(before, line)) changes.push(quickLineChange(line));
+    });
+    previous.quickLines.forEach((line) => {
+      if (!linesAfter.has(line.id)) changes.push({ quickLine: { id: line.id, deleted: true } });
     });
   }
   return changes;

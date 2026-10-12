@@ -23,8 +23,8 @@ import {
   taskInstance, toDayKey,
 } from './plannerModel';
 import {
-  getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
-  undoPlanner, updatePlanner,
+  getHasQuickLines, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus,
+  loadPlanner, undoPlanner, updatePlanner,
 } from './plannerStore';
 import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
 
@@ -127,6 +127,9 @@ const Planner = () => {
   const notice = useDerivedState(getPlannerNotice);
   const syncStatus = useDerivedState(getPlannerStatus);
   const sizeBytes = useDerivedState(getPlannerSizeBytes);
+  const hasQuickLines = useDerivedState(getHasQuickLines);
+  // «План» загружен и принимает правки: словарь правок и история ввода текстом читаются из него
+  const isSynced = isLoaded && (syncStatus === 'ready' || syncStatus === 'offline');
 
   const [today, setToday] = useState(() => toDayKey(new Date()));
   // Экран раздела общий с боковой панелью (`util/parvaneSection.ts`)
@@ -775,7 +778,8 @@ const Planner = () => {
         settings={state.settings}
         userId={currentUserId}
         learnedWords={state.learned}
-        isLearnedSynced={isLoaded && (syncStatus === 'ready' || syncStatus === 'offline')}
+        isLearnedSynced={isSynced}
+        quickLines={isSynced && hasQuickLines ? state.quickLines : undefined}
         tasks={state.tasks}
         events={state.events}
         onCreated={handleQuickCreated}

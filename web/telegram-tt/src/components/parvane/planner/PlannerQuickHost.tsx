@@ -5,7 +5,7 @@ import type { GlobalState } from '../../../global/types';
 import { consumePlannerAddRequest, getPlannerAddRequest } from '../../../util/parvaneSection';
 import { toDayKey } from './plannerModel';
 import {
-  getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
+  getHasQuickLines, getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
 } from './plannerStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -26,6 +26,7 @@ const PlannerQuickHost = () => {
   const state = useDerivedState(getPlannerState);
   const isLoaded = useDerivedState(getIsPlannerLoaded);
   const syncStatus = useDerivedState(getPlannerStatus);
+  const hasQuickLines = useDerivedState(getHasQuickLines);
   const request = useDerivedState(getPlannerAddRequest);
   const currentUserId = useSelector(selectCurrentUserId);
 
@@ -45,6 +46,8 @@ const PlannerQuickHost = () => {
     open();
   }, [request, isLoaded]);
 
+  const isSynced = isLoaded && (syncStatus === 'ready' || syncStatus === 'offline');
+
   const handleCreated = useLastCallback(() => {
     close();
   });
@@ -57,7 +60,8 @@ const PlannerQuickHost = () => {
       settings={state.settings}
       userId={currentUserId}
       learnedWords={state.learned}
-      isLearnedSynced={isLoaded && (syncStatus === 'ready' || syncStatus === 'offline')}
+      isLearnedSynced={isSynced}
+      quickLines={isSynced && hasQuickLines ? state.quickLines : undefined}
       tasks={state.tasks}
       events={state.events}
       onCreated={handleCreated}

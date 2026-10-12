@@ -7,7 +7,7 @@ use parvane_protocol::domain::planner::{self, PlannerState, SNAPSHOT_WARN_BYTES}
 use parvane_protocol::domain::{LamportGuard, Stamp};
 use parvane_protocol::pb::parvane::core::v2::LwwStamp;
 use parvane_protocol::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, LearnedWord, List, NutritionDay, Occurrence, PlannerOp, Repeat,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, LearnedWord, List, NutritionDay, Occurrence, PlannerOp, QuickLine, Repeat,
     RepeatKind, Settings, Step, Steps, Str, Task, I32, U32,
 };
 use parvane_protocol::ProtoError;
@@ -568,6 +568,155 @@ fn learned_dictionary_is_capped_without_depending_on_order() {
     assert!(snap.learned.iter().any(|w| w.id == format!("t{:05}", planner::MAX_LEARNED_STORED + 49)));
     let restored = PlannerState::from_snapshot(&planner::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
     assert_eq!(restored.learned_live().iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), vec!["живое"]);
+}
+
+// ── история ввода текстом ───────────────────────────────────────────────────
+
+/// Строка истории — запись целиком под одной меткой.
+fn quick(id: &str, text: &str, count: u32, touched: u32, lamport: u64, dev: &str) -> change::Change {
+    change::Change::QuickLine(QuickLine { id: id.into(), stamp: st(lamport, dev), text: text.into(), count, touched, ..Default::default() })
+}
+
+fn quick_hidden(id: &str, key: &str, touched: u32, lamport: u64, dev: &str) -> change::Change {
+    change::Change::QuickLine(QuickLine { id: id.into(), stamp: st(lamport, dev), text: key.into(), touched, hidden: true, ..Default::default() })
+}
+
+fn quick_deleted(id: &str, lamport: u64, dev: &str) -> change::Change {
+    change::Change::QuickLine(QuickLine { id: id.into(), deleted: st(lamport, dev), ..Default::default() })
+}
+
+fn quick_ids(state: &PlannerState) -> Vec<&str> {
+    state.quick_live().iter().map(|l| l.id.as_str()).collect()
+}
+
+#[test]
+fn quick_lines_from_two_devices_merge_by_line() {
+    // d1 и d2 без связи добавляют записи: разные строки объединяются, у общей — позднее использование.
+    let a = (quick("q1", "созвон завтра 16:00", 1, 1, 2, "d1"), "d1");
+    let b = (quick("q2", "зал пн ср пт 19:00", 1, 1, 2, "d2"), "d2");
+    let c = (quick("q1", "Созвон завтра 16:00", 4, 7, 3, "d2"), "d2");
+    let x = apply_in(&[&a, &b, &c]);
+    let y = apply_in(&[&c, &b, &a]);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    assert_eq!(quick_ids(&x), vec!["q1", "q2"]);
+    let line = &x.quick_lines["q1"];
+    assert_eq!((line.text.as_str(), line.count, line.touched), ("Созвон завтра 16:00", 4, 7));
+    // Равные lamport: побеждает старшее устройство, запись целиком.
+    let d = (quick("q1", "созвон завтра 16:00", 9, 9, 3, "d1"), "d1");
+    let z = apply_in(&[&d, &c]);
+    assert_eq!((z.quick_lines["q1"].count, z.quick_lines["q1"].touched), (4, 7));
+    assert_eq!(snapshot_bytes(&z), snapshot_bytes(&apply_in(&[&c, &d])));
+
+    // Снимок несёт историю; повторное слияние идемпотентно.
+    let snap = x.to_snapshot();
+    assert_eq!(snap.quick_lines.len(), 2);
+    let restored = PlannerState::from_snapshot(&planner::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
+    assert_eq!(restored, x);
+    let mut again = restored.clone();
+    again.merge_snapshot(&snap).unwrap();
+    assert_eq!(again, x);
+}
+
+#[test]
+fn forgotten_quick_line_stays_forgotten_until_used_again() {
+    let created = (quick("q1", "созвон завтра 16:00", 2, 1, 1, "d1"), "d1");
+    let del = (quick_deleted("q1", 5, "d2"), "d2");
+    // d1 без связи использовало строку ДО того, как d2 её забыло, а правка дошла после.
+    let old = (quick("q1", "созвон завтра 16:00", 3, 2, 3, "d1"), "d1");
+    let fresh = (quick("q1", "созвон завтра 16:00", 1, 9, 7, "d1"), "d1");
+    let x = apply_in(&[&created, &del]);
+    assert!(quick_ids(&x).is_empty());
+    let x = apply_in(&[&created, &del, &old]);
+    assert!(quick_ids(&x).is_empty(), "использование старше «Забыть» строку не возвращает");
+    let x = apply_in(&[&created, &del, &old, &fresh]);
+    assert_eq!(quick_ids(&x), vec!["q1"]);
+    assert_eq!((x.quick_lines["q1"].count, x.quick_lines["q1"].touched), (1, 9));
+    let y = apply_in(&[&fresh, &old, &del, &created]);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    // Надгробие остаётся в снимке: устройство, поднятое из снимка, старую правку тоже не примет;
+    // надгробие, пришедшее раньше самой строки, действует так же.
+    let dead = apply_in(&[&created, &del]);
+    let mut restored = PlannerState::from_snapshot(&dead.to_snapshot()).unwrap();
+    restored.apply_op(&op(vec![old.0.clone()]), "d1").unwrap();
+    assert!(quick_ids(&restored).is_empty());
+    assert!(quick_ids(&apply_in(&[&del, &old, &created])).is_empty());
+
+    // Забытый шаблон — такая же запись: снятая пометка (надгробие) не возвращается старой правкой.
+    let hide = (quick_hidden("h1", "созвон 16:00", 3, 2, "d1"), "d1");
+    let unhide = (quick_deleted("h1", 4, "d2"), "d2");
+    let x = apply_in(&[&hide, &created]);
+    assert_eq!(quick_ids(&x), vec!["h1", "q1"]);
+    assert!(x.quick_lines["h1"].hidden);
+    assert_eq!(quick_ids(&apply_in(&[&unhide, &created, &hide])), vec!["q1"]);
+}
+
+#[test]
+fn quick_history_is_capped_without_depending_on_order() {
+    // Два устройства без связи довели историю до 205 строк: живыми считаются 200 самых свежих;
+    // забытые шаблоны считаются отдельно и строк не вытесняют.
+    let total = planner::MAX_QUICK_LIVE as u32 + 5;
+    let mut lines: Vec<(change::Change, &str)> = (1..=total)
+        .map(|i| {
+            let dev = if i % 2 == 0 { "d1" } else { "d2" };
+            (quick(&format!("q{i:03}"), &format!("строка {i}"), 1, i, u64::from(i), dev), dev)
+        })
+        .collect();
+    lines.push((quick_hidden("h001", "шаблон", 1, 1, "d1"), "d1"));
+    let forward: Vec<&(change::Change, &str)> = lines.iter().collect();
+    let backward: Vec<&(change::Change, &str)> = lines.iter().rev().collect();
+    let x = apply_in(&forward);
+    let y = apply_in(&backward);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    assert_eq!(x.quick_lines.len(), total as usize + 1);
+    let live = quick_ids(&x);
+    assert_eq!(live.len(), planner::MAX_QUICK_LIVE + 1);
+    assert_eq!((live[0], live[1]), ("h001", "q006"));
+    assert_eq!(live, quick_ids(&y));
+    // Забытая строка освобождает место самой свежей из скрытых потолком.
+    let mut z = x.clone();
+    z.apply_op(&op(vec![quick_deleted("q100", 900, "d1")]), "d1").unwrap();
+    let live = quick_ids(&z);
+    assert_eq!(live.len(), planner::MAX_QUICK_LIVE + 1);
+    assert_eq!(live[1], "q005");
+    assert!(!live.contains(&"q100"));
+
+    // Хранится не больше потолка снимка: лишнее — самые старые надгробия, живые строки остаются.
+    let mut big = PlannerState::default();
+    for i in 0..(planner::MAX_QUICK_STORED as u64 + 50) {
+        let id = format!("t{i:05}");
+        big.apply_op(&op(vec![quick(&id, "строка", 1, 1, 1, "d1")]), "d1").unwrap();
+        big.apply_op(&op(vec![quick_deleted(&id, 10 + i, "d1")]), "d1").unwrap();
+    }
+    big.apply_op(&op(vec![quick("live", "живая строка", 3, 7, 5, "d1")]), "d1").unwrap();
+    let snap = big.to_snapshot();
+    assert_eq!(snap.quick_lines.len(), planner::MAX_QUICK_STORED);
+    assert!(snap.quick_lines.iter().any(|l| l.id == "live"));
+    assert!(!snap.quick_lines.iter().any(|l| l.id == "t00000"));
+    assert!(snap.quick_lines.iter().any(|l| l.id == format!("t{:05}", planner::MAX_QUICK_STORED + 49)));
+    let restored = PlannerState::from_snapshot(&planner::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
+    assert_eq!(quick_ids(&restored), vec!["live"]);
+}
+
+#[test]
+fn invalid_quick_line_is_skipped() {
+    let mut a = PlannerState::default();
+    let bad = vec![
+        quick("q1", "", 1, 1, 1, "d1"),
+        quick("q1", "  ", 1, 1, 1, "d1"),
+        quick("q1", "две\nстроки", 1, 1, 1, "d1"),
+        quick("q1", &"я".repeat(planner::MAX_QUICK_TEXT / 2 + 1), 1, 1, 1, "d1"),
+        quick("", "строка", 1, 1, 1, "d1"),
+        quick("с пробелом", "строка", 1, 1, 1, "d1"),
+        quick(&"q".repeat(65), "строка", 1, 1, 1, "d1"),
+    ];
+    let count = bad.len();
+    let mut changes = bad;
+    changes.push(quick("q2", &"я".repeat(planner::MAX_QUICK_TEXT / 2), 1, 1, 1, "d1"));
+    assert_eq!(a.apply_op(&op(changes), "d1").unwrap(), 1, "из {count} негодных не применено ни одно");
+    assert_eq!(a.quick_lines.keys().collect::<Vec<_>>(), vec!["q2"]);
+    // Чужая метка в записи — отказ на всю операцию, как у остальных объектов.
+    assert!(a.apply_op(&op(vec![quick("q3", "строка", 1, 1, 2, "d2")]), "d1").is_err());
+    assert!(a.apply_op(&op(vec![quick_deleted("q2", 2, "d2")]), "d1").is_err());
 }
 
 #[test]

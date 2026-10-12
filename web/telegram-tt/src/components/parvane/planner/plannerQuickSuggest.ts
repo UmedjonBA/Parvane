@@ -1,8 +1,15 @@
 // Ввод текстом: подсказки окна «Новая запись» — прежние строки пользователя вместо постоянных примеров.
 //
-// Приватность. Набранные строки остаются на устройстве: `localStorage`, запись на аккаунт, никуда не
-// отправляются и между устройствами не синхронизируются. Строки второго источника собираются из данных
-// «Плана», которые уже лежат на устройстве расшифрованными (сервер их не видит). Сети модуль не касается.
+// Приватность и хранение. История набранных строк — часть данных «Плана» (`PlannerState.quickLines`, запись
+// на строку в зашифрованном контейнере): едет на все устройства пользователя и переживает выход, сервер
+// её не видит. `QuickHistory` — рабочий вид для правил ниже: `historyFromLines` / `historyToLines`. Пока
+// «План» на устройстве недоступен (устройство не привязано, нет ключа, движок прежней сборки), история
+// ведётся в `localStorage`, как раньше; когда «План» готов, запись устройства вливается в него
+// (`mergeHistories`) и стирается — тем же порядком, что словарь правок (`plannerQuickLearn.ts`).
+// Сведение между устройствами — у движка: записи объединяются по строке, у одной строки побеждает позднее
+// использование, «Забыть» — надгробие (не возвращается, пока строкой не воспользуются снова). Строки
+// второго источника собираются из данных «Плана», которые уже лежат на устройстве расшифрованными.
+// Сети модуль не касается.
 //
 // Источники, по убыванию доверия:
 //   history — строки, которыми пользователь добавил запись в этом окне, дословно (`QuickHistory`);
@@ -17,7 +24,7 @@
 // (`filterSuggestions`) — без разбора.
 
 import type {
-  PlannerEvent, PlannerRepeat, PlannerRepeatKind, PlannerTask,
+  PlannerEvent, PlannerQuickLine, PlannerRepeat, PlannerRepeatKind, PlannerTask,
 } from './plannerModel';
 import type { QuickContext, QuickDraft, QuickLang } from './plannerQuick';
 
@@ -66,8 +73,13 @@ export type QuickLineDraft = {
 };
 
 export const MAX_SUGGESTIONS = 8;
-export const HISTORY_MAX_LINES = 100;
+// Столько последних строк помнит история и столько же забытых шаблонов (как потолки движка `MAX_QUICK_LIVE`)
+export const HISTORY_MAX_LINES = 200;
 export const HISTORY_MAX_HIDDEN = 200;
+// Потолок строки в данных «Плана» — в байтах UTF-8 (схема `QuickLine.text`)
+const MAX_LINE_BYTES = 1200;
+const LINE_ID_PREFIX = 'q';
+const HIDDEN_ID_PREFIX = 'h';
 const HISTORY_VERSION = 1;
 const HISTORY_KEY_PREFIX = 'parvane:quick-history:';
 const MAX_LINE_LENGTH = 300;
@@ -487,6 +499,133 @@ export function forgetSuggestion(history: QuickHistory, { key, texts }: Pick<Qui
     hidden: [key, ...history.hidden.filter((item) => item !== key)].slice(0, HISTORY_MAX_HIDDEN),
   } satisfies QuickHistory;
 }
+
+export function hasHistory(history: QuickHistory) {
+  return history.lines.length > 0 || history.hidden.length > 0;
+}
+
+// ── история в данных «Плана» ─────────────────────────────────────────────────
+
+const HASH_SEEDS = [0xdeadbeef, 0x41c6ce57];
+const HASH_STEPS = [2654435761, 1597334677];
+const HASH_MIX = [2246822507, 3266489909];
+const HASH_SHIFTS = [16, 13];
+const HEX = 16;
+const HASH_PART_LENGTH = 8;
+
+// Хэш строки (cyrb53, обе половины): шестнадцать шестнадцатеричных цифр. Не криптография — только ключ
+// записи, одинаковый на всех устройствах; движок принимает в ключе латиницу и цифры
+function hashLine(text: string) {
+  let [h1, h2] = HASH_SEEDS;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, HASH_STEPS[0]);
+    h2 = Math.imul(h2 ^ code, HASH_STEPS[1]);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> HASH_SHIFTS[0]), HASH_MIX[0]) ^ Math.imul(h2 ^ (h2 >>> HASH_SHIFTS[1]), HASH_MIX[1]);
+  h2 = Math.imul(h2 ^ (h2 >>> HASH_SHIFTS[0]), HASH_MIX[0]) ^ Math.imul(h1 ^ (h1 >>> HASH_SHIFTS[1]), HASH_MIX[1]);
+  return [h2, h1].map((part) => (part >>> 0).toString(HEX).padStart(HASH_PART_LENGTH, '0')).join('');
+}
+
+/**
+ * Ключ записи истории в данных «Плана». Строка — по её виду без регистра и лишних пробелов (одна и та же
+ * строка с двух устройств — одна запись), забытый шаблон — по ключу шаблона.
+ */
+export function quickLineId(text: string, isHidden?: boolean) {
+  return `${isHidden ? HIDDEN_ID_PREFIX : LINE_ID_PREFIX}${hashLine(foldLine(normalizeLine(text)))}`;
+}
+
+// Движок принимает одну строку без управляющих знаков, не длиннее потолка в байтах
+function isSyncedLine(text: string) {
+  return !/\p{Cc}/u.test(text) && new TextEncoder().encode(text).length <= MAX_LINE_BYTES;
+}
+
+/** Записи из данных «Плана» → рабочая история: строки от новых к старым, забытые шаблоны — так же. */
+export function historyFromLines(lines: PlannerQuickLine[]): QuickHistory {
+  const history = createQuickHistory();
+  const seen = new Set<string>();
+  [...lines].sort((a, b) => b.touched - a.touched || (a.id < b.id ? -1 : 1)).forEach((line) => {
+    history.tick = Math.max(history.tick, line.touched);
+    const text = normalizeLine(line.text);
+    const mark = `${line.isHidden ? HIDDEN_ID_PREFIX : LINE_ID_PREFIX}${foldLine(text)}`;
+    if (!text || text.length > MAX_LINE_LENGTH || seen.has(mark)) return;
+    seen.add(mark);
+    if (line.isHidden) history.hidden.push(text);
+    else history.lines.push({ text, count: Math.max(1, line.count), at: line.touched });
+  });
+  history.lines = history.lines.slice(0, HISTORY_MAX_LINES);
+  history.hidden = history.hidden.slice(0, HISTORY_MAX_HIDDEN);
+  return history;
+}
+
+/**
+ * Рабочая история → записи для данных «Плана» (по ключу; непригодное движку пропускается). `previous` —
+ * записи в данных сейчас: забытый шаблон, который в них уже есть, сохраняет свою свежесть, новый получает
+ * текущую.
+ */
+export function historyToLines(history: QuickHistory, previous: PlannerQuickLine[] = []): PlannerQuickLine[] {
+  const known = new Map(previous.map((line) => [line.id, line]));
+  const lines: PlannerQuickLine[] = [];
+  history.lines.slice(0, HISTORY_MAX_LINES).forEach(({ text, count, at }) => {
+    if (isSyncedLine(text)) {
+      lines.push({
+        id: quickLineId(text), text, count, touched: at,
+      });
+    }
+  });
+  history.hidden.slice(0, HISTORY_MAX_HIDDEN).forEach((key) => {
+    if (!isSyncedLine(key)) return;
+    const id = quickLineId(key, true);
+    lines.push({
+      id, text: key, count: 0, touched: known.get(id)?.touched ?? history.tick, isHidden: true,
+    });
+  });
+  return lines.sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+/**
+ * Влить запись устройства в историю из данных «Плана». Строка, которая есть в обеих, не складывается:
+ * остаётся запись «Плана» с большим из двух счётчиков. Строки только с устройства становятся самыми
+ * свежими, в прежнем порядке между собой; забытые на устройстве шаблоны добавляются к забытым.
+ */
+export function mergeHistories(synced: QuickHistory, local: QuickHistory): QuickHistory {
+  if (!hasHistory(local)) return synced;
+  const lines = synced.lines.map((line) => ({ ...line }));
+  const byFold = new Map(lines.map((line) => [foldLine(line.text), line]));
+  let { tick } = synced;
+  [...local.lines].sort((a, b) => a.at - b.at).forEach((mine) => {
+    const known = byFold.get(foldLine(mine.text));
+    if (known) {
+      known.count = Math.max(known.count, mine.count);
+      return;
+    }
+    tick += 1;
+    lines.push({ text: mine.text, count: mine.count, at: tick });
+  });
+  return {
+    tick,
+    lines: lines.sort((a, b) => b.at - a.at).slice(0, HISTORY_MAX_LINES),
+    hidden: [...synced.hidden, ...local.hidden.filter((key) => !synced.hidden.includes(key))]
+      .slice(0, HISTORY_MAX_HIDDEN),
+  };
+}
+
+/**
+ * Добавленная строка для данных «Плана»: `lines` — история в них сейчас, `local` — ещё не перенесённая
+ * запись устройства. Возвращает новый список записей.
+ */
+export function recordQuickLine(lines: PlannerQuickLine[], local: QuickHistory, typed: string, key: string) {
+  return historyToLines(recordHistoryLine(mergeHistories(historyFromLines(lines), local), typed, key), lines);
+}
+
+/** «Забыть» для данных «Плана»: строки подсказки уходят, её шаблон становится забытым. */
+export function forgetQuickLine(
+  lines: PlannerQuickLine[], local: QuickHistory, candidate: Pick<QuickCandidate, 'key' | 'texts'>,
+) {
+  return historyToLines(forgetSuggestion(mergeHistories(historyFromLines(lines), local), candidate), lines);
+}
+
+// ── запись устройства (запасной путь) ────────────────────────────────────────
 
 export function serializeHistory(history: QuickHistory) {
   return JSON.stringify({ v: HISTORY_VERSION, ...history });
