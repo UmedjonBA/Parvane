@@ -150,7 +150,11 @@ const ParvanePalette = () => {
     void loadPlanner(currentUserId);
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
-    return () => window.clearTimeout(timeout);
+    return () => {
+      window.clearTimeout(timeout);
+      // Запрос стирается при закрытии: следующее открытие не показывает прежний текст даже на первом кадре
+      setQuery('');
+    };
   }, [isOpen, currentUserId]);
 
   const handleOpenChat = useLastCallback((chatId: string) => {

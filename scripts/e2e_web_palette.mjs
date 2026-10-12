@@ -149,7 +149,9 @@ try {
   await page.keyboard.press('Enter');
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка, открытая из палитры');
   await openByKeys();
-  assert.equal(await input.inputValue(), '', 'палитра открылась с прежним запросом');
+  await page.waitForFunction(() => document.querySelector('#parvane-palette-search')?.value === '', undefined, {
+    timeout: STEP_TIMEOUT_MS,
+  }).catch(() => assert.fail('палитра открылась с прежним запросом'));
   await input.fill(NOTE_WORD.toUpperCase());
   await visible(found('note', NOTE).getByText(`Заменить ${NOTE_WORD} до зимы`), 'отрывок текста заметки с совпадением');
   await page.keyboard.press('Escape');
