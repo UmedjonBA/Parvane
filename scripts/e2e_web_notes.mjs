@@ -1,6 +1,7 @@
 // Раздел «Знания»: папка «Справка Parvane» нового хранилища, папки заметок, заметки `.md` в папке облака,
-// ссылки и обратные ссылки, пункты-задачи в обе стороны, «Запланировано», поиск, граф, холст (группа двигается
-// за пустое место внутри, заметка правится прямо на карточке); всё переживает перезагрузку.
+// ссылки и обратные ссылки, пункты-задачи в обе стороны, «Запланировано», поиск, граф (заметка читается и
+// правится в панели справа, связь проводят линией от кольца заметки и убирают, выбрав линию), холст (группа
+// двигается за пустое место внутри, заметка правится прямо на карточке); всё переживает перезагрузку.
 // Запуск: scripts/run_web_notes_e2e.sh
 import assert from 'node:assert/strict';
 
@@ -25,6 +26,9 @@ const GUIDE_FOLDER = 'Parvane guide';
 const GUIDE_OVERVIEW = 'Overview';
 const GUIDE_HUB = 'How sections connect';
 const GUIDE_NOTES = 12;
+// Заметка, которую создаёт связь, брошенная на пустое место графа
+const GRAPH_NOTE = 'Граф-заметка';
+const PANEL_EDIT = 'Правка из панели графа';
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
@@ -104,7 +108,7 @@ try {
   await visible(guideGraph.locator('[data-node][data-kind="note"]'), 'узлы справки на графе');
   assert.equal(await guideGraph.locator('[data-node][data-kind="note"]').count(), GUIDE_NOTES, 'на графе не все заметки справки');
   assert.equal(await guideGraph.locator('[data-node][data-kind="missing"]').count(), 0, 'на графе справки есть несуществующие заметки');
-  assert.ok(await guideGraph.locator('svg line').count() >= GUIDE_NOTES - 1, 'заметки справки на графе не связаны');
+  assert.ok(await guideGraph.locator('[data-graph-edge]').count() >= GUIDE_NOTES - 1, 'заметки справки на графе не связаны');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-guide-graph.png` });
   await openTab('Notes');
   console.log('OK: граф — справка одной связной картой');
@@ -309,10 +313,179 @@ try {
   await visible(graph.locator('[data-node][data-kind="note"]'), 'узлы заметок');
   assert.equal(await graph.locator('[data-node][data-kind="note"]').count(), 2, 'две заметки на графе (заметка дня скрыта фильтром)');
   assert.equal(await graph.locator('[data-node][data-kind="record"]').count(), 0, 'записи «Плана» скрыты по умолчанию');
+
+  // ── Граф: выбранная заметка открывается в панели справа, читается и правится на месте ──
+  const panel = knowledge.locator('[data-graph-panel]');
+  const panelBody = panel.locator('[data-note-body]');
+  const graphNotice = knowledge.locator('[data-graph-notice]');
+  const gnode = (title) => graph.locator(`[data-node][data-title="${title}"]`);
+  const gedge = (from, to) => graph.locator(`[data-graph-edge][data-from-title="${from}"][data-to-title="${to}"]`);
+  // Точка — её кружок: подпись под ним нажатий не принимает
+  const centreOf = async (title) => {
+    const box = await gnode(title).locator('circle').first().boundingBox();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const clickNode = async (title) => {
+    const at = await centreOf(title);
+    await page.mouse.click(at.x, at.y);
+  };
+  const clickEdge = async (from, to) => {
+    const a = await centreOf(from);
+    const b = await centreOf(to);
+    await page.mouse.click((a.x + b.x) / 2, (a.y + b.y) / 2);
+  };
+  // Связь ведут настоящей мышью: от кольца вокруг заметки (оно видно под указателем) до цели
+  const dragLink = async (fromTitle, to) => {
+    const from = await centreOf(fromTitle);
+    await page.mouse.move(from.x, from.y);
+    const radius = Number(await gnode(fromTitle).locator('[data-graph-handle]').getAttribute('r'));
+    const scale = Number(await graph.getAttribute('data-graph-scale'));
+    await page.mouse.move(from.x, from.y - radius * scale);
+    await page.mouse.down();
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 5 });
+    await page.mouse.move(to.x, to.y, { steps: 5 });
+    await visible(graph.locator('[data-graph-draft]'), 'линия связи под указателем');
+    await page.mouse.up();
+  };
+  const linksTo = (title) => panelBody.locator(`button[data-title="${title}"]`);
+
+  assert.equal(await knowledge.locator('[data-graph-card]').count(), 0, 'карточки выбранной точки в углу графа больше нет');
+  assert.equal(await panel.count(), 0, 'пока ничего не выбрано, панели нет — граф во всю ширину');
+  const wideBoard = (await graph.boundingBox()).width;
+  await clickNode(OTHER);
+  await visible(panel.locator(`[data-note-title="${OTHER}"]`), 'заметка выбранной точки в панели справа');
+  assert.ok((await graph.boundingBox()).width < wideBoard, 'панель не встала рядом с графом');
+  assert.ok((await panel.boundingBox()).width >= 340, 'панель графа слишком узкая для чтения');
+  await clickNode(NOTE);
+  await visible(panelBody.getByText('Бюджетный сервер под LLM'), 'текст заметки в панели графа');
+  assert.equal(await graph.getAttribute('data-graph-picked'), await gnode(NOTE).getAttribute('data-node'), 'выбранная точка не отмечена');
+  await visible(panel.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» в панели графа');
+  // Ссылка в панели выбирает точку на графе, обратная ссылка возвращает
+  await linksTo(OTHER).click();
+  await visible(panel.locator(`[data-note-title="${OTHER}"]`), 'заметка по ссылке в панели графа');
+  await panel.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }).click();
+  await visible(panel.locator(`[data-note-title="${NOTE}"]`), 'заметка по обратной ссылке в панели графа');
+  // Правка прямо в панели
+  await panel.getByRole('button', { name: 'Edit' }).click();
+  const panelEditor = page.locator('#knowledge-note-editor');
+  await panelEditor.fill(`${await panelEditor.inputValue()}\n\n${PANEL_EDIT}`);
+  await panel.getByRole('button', { name: 'Save' }).click();
+  await visible(panelBody.getByText(PANEL_EDIT), 'правка заметки в панели графа');
+  console.log('OK: граф — заметка открывается в панели справа, ссылки в ней выбирают точки, правка на месте');
+
+  // ── Граф: связь — это ссылка в тексте. Связь на пустое место создаёт заметку ──
+  const noteAt = await centreOf(NOTE);
+  const otherAt = await centreOf(OTHER);
+  const graphBox = await graph.boundingBox();
+  // Место новой заметки — в стороне от линии между двумя прежними, чтобы связи не легли друг на друга
+  const apart = Math.hypot(otherAt.x - noteAt.x, otherAt.y - noteAt.y) || 1;
+  const side = [1, -1].map((sign) => ({
+    x: (noteAt.x + otherAt.x) / 2 + sign * ((otherAt.y - noteAt.y) / apart) * 200,
+    y: (noteAt.y + otherAt.y) / 2 - sign * ((otherAt.x - noteAt.x) / apart) * 200,
+  })).find((point) => point.x > graphBox.x + 140 && point.x < graphBox.x + graphBox.width - 140
+    && point.y > graphBox.y + 100 && point.y < graphBox.y + graphBox.height - 100);
+  assert.ok(side, 'на поле графа нет места в стороне от заметок');
+  await dragLink(OTHER, side);
+  const newTitle = graph.locator('[data-graph-new]');
+  await visible(newTitle, 'поле названия новой заметки там, где бросили связь');
+  await newTitle.fill(GRAPH_NOTE);
+  await newTitle.press('Enter');
+  await visible(gnode(GRAPH_NOTE), 'новая заметка на графе');
+  await visible(gedge(OTHER, GRAPH_NOTE), 'связь с новой заметкой');
+  assert.equal(await gnode(GRAPH_NOTE).getAttribute('data-kind'), 'note', 'новая заметка — настоящая, а не «ещё нет»');
+
+  // Связь между существующими заметками — перетаскиванием от кольца
+  await dragLink(NOTE, await centreOf(GRAPH_NOTE));
+  await visible(gedge(NOTE, GRAPH_NOTE), 'связь, проведённая на графе');
+  await visible(graphNotice.getByText('Link added'), 'сообщение о новой связи');
+  await visible(linksTo(GRAPH_NOTE), 'ссылка в тексте заметки-источника');
+  await visible(panelBody.getByText(PANEL_EDIT), 'текст заметки после новой связи на месте');
+  await clickNode(GRAPH_NOTE);
+  const backlinks = panel.locator('[data-note-backlinks]');
+  await visible(backlinks.getByRole('button', { name: NOTE }), 'источник в обратных ссылках цели');
+  await visible(backlinks.getByRole('button', { name: OTHER }), 'второй источник в обратных ссылках цели');
+  // Та же связь второй раз ссылку не дублирует
+  await dragLink(NOTE, await centreOf(GRAPH_NOTE));
+  await visible(graphNotice.getByText('already links'), 'сообщение о существующей связи');
+  await clickNode(NOTE);
+  await visible(linksTo(GRAPH_NOTE), 'ссылка в тексте после повторной связи');
+  assert.equal(await linksTo(GRAPH_NOTE).count(), 1, 'повторная связь продублировала ссылку');
+  assert.equal(await graph.locator('[data-graph-edge]').count(), 3, 'на графе не три связи');
+  console.log('OK: граф — связь линией пишет ссылку в текст, на пустом месте создаёт заметку, дважды не дублирует');
+
+  // Связи пережили перезагрузку
+  await page.waitForTimeout(1500);
+  await reloadPage(page);
+  await relogin(page, PASSWORD).catch(() => undefined);
+  await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await visible(graph, 'вкладка графа после перезагрузки');
+  await visible(gedge(NOTE, GRAPH_NOTE), 'связь, проведённая на графе, после перезагрузки');
+  await visible(gedge(OTHER, GRAPH_NOTE), 'связь с новой заметкой после перезагрузки');
+  await clickNode(NOTE);
+  await visible(linksTo(GRAPH_NOTE), 'ссылка в тексте после перезагрузки');
+  console.log('OK: граф — связи пережили перезагрузку');
+
+  // ── Граф: связь убирают, выбрав линию. Ссылка отдельной строкой уходит из текста ──
+  await clickEdge(NOTE, GRAPH_NOTE);
+  await graph.locator('[data-graph-edge-remove]').click();
+  await gone(gedge(NOTE, GRAPH_NOTE), 'убранная связь');
+  await visible(graphNotice.getByText('Link removed'), 'сообщение об убранной связи');
+  await gone(linksTo(GRAPH_NOTE), 'ссылка в тексте после удаления связи');
+  await visible(panelBody.getByText(PANEL_EDIT), 'остальной текст заметки после удаления связи');
+  // «Отменить» возвращает ссылку, Delete убирает выбранную связь снова
+  await knowledge.locator('[data-graph-undo]').click();
+  await visible(gedge(NOTE, GRAPH_NOTE), 'связь после отмены удаления');
+  await visible(linksTo(GRAPH_NOTE), 'ссылка в тексте после отмены удаления');
+  await clickEdge(NOTE, GRAPH_NOTE);
+  await visible(graph.locator('[data-graph-edge-remove]'), 'крестик выбранной связи');
+  await page.keyboard.press('Delete');
+  await gone(gedge(NOTE, GRAPH_NOTE), 'связь, убранная клавишей');
+  await gone(linksTo(GRAPH_NOTE), 'ссылка в тексте после удаления клавишей');
+  // Ссылку внутри предложения граф не переписывает: заметка открывается в правке, ссылка выделена
+  await clickEdge(NOTE, OTHER);
+  await graph.locator('[data-graph-edge-remove]').click();
+  await visible(panelEditor, 'правка заметки со ссылкой внутри текста');
+  await visible(graphNotice.getByText('inside the text'), 'сообщение о ссылке внутри текста');
+  await page.waitForFunction((wanted) => {
+    const editor = document.querySelector('#knowledge-note-editor');
+    return editor && editor.value.slice(editor.selectionStart, editor.selectionEnd) === wanted;
+  }, `[[${OTHER}]]`, { timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('ссылка внутри текста не выделена в правке'));
+  await panel.getByRole('button', { name: 'Cancel' }).click();
+  assert.equal(await gedge(NOTE, OTHER).count(), 1, 'связь со ссылкой внутри текста осталась');
+  await visible(linksTo(OTHER), 'ссылка внутри текста на месте');
+  // Вернуть хранилище к двум заметкам с одной связью: дальше по ним строится холст
+  await clickEdge(OTHER, GRAPH_NOTE);
+  await graph.locator('[data-graph-edge-remove]').click();
+  await gone(gedge(OTHER, GRAPH_NOTE), 'связь с новой заметкой');
+  await clickNode(GRAPH_NOTE);
+  await visible(panel.locator(`[data-note-title="${GRAPH_NOTE}"]`), 'новая заметка в панели');
+  await panel.getByRole('button', { name: 'Move to trash' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Move to trash' }).click();
+  await gone(gnode(GRAPH_NOTE), 'удалённая заметка на графе');
+  await gone(panel, 'панель удалённой заметки');
+  assert.equal(await graph.locator('[data-node][data-kind="note"]').count(), 2, 'на графе снова две заметки');
+  assert.equal(await graph.locator('[data-graph-edge]').count(), 1, 'на графе снова одна связь');
+  console.log('OK: граф — отдельная ссылка убирается линией (крестик, Delete, отмена), ссылка внутри текста — только в правке');
+
   await graph.getByText('Events and tasks', { exact: true }).click();
   await visible(graph.locator('[data-node][data-kind="record"]'), 'узел записи «Плана»');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-graph.png` });
+  // Запись «Плана» в панели: день и время, переход в «План» есть
+  const recordNode = graph.locator('[data-node][data-kind="record"]').locator('circle').first();
+  const recordBox = await recordNode.boundingBox();
+  await page.mouse.click(recordBox.x + recordBox.width / 2, recordBox.y + recordBox.height / 2);
+  await visible(panel.locator('[data-graph-panel-record]').getByText('созвон'), 'запись «Плана» в панели графа');
+  await visible(panel.locator('[data-graph-panel-plan]'), 'переход к записи в «План»');
+  await panel.locator('[data-graph-panel-close]').click();
+  await gone(panel, 'закрытая панель графа');
   console.log('OK: граф — заметки, по фильтру записи «Плана»');
+
+  // Правка из панели графа видна на вкладке «Заметки»
+  await openTab('Notes');
+  await row(NOTE).click();
+  await visible(body.getByText(PANEL_EDIT), 'правка из панели графа на вкладке «Заметки»');
+  assert.equal(await body.locator(`button[data-title="${GRAPH_NOTE}"]`).count(), 0, 'убранная на графе ссылка осталась в тексте');
 
   // ── Холст из графа: карточка на каждую заметку, стрелка на каждую ссылку ──
   await openTab('Canvas');
@@ -912,6 +1085,27 @@ try {
   await note.getByRole('button', { name: 'Back to notes' }).click();
   await visible(row(NOTE), 'список после возврата');
   console.log('OK: заметки на телефоне');
+
+  // ── Телефон: выбранная точка графа — лист снизу, после закрытия граф работает ──
+  await openTab('Graph');
+  const phoneGraph = knowledge.locator('[data-notes-graph]');
+  const phoneNode = phoneGraph.locator(`[data-node][data-title="${NOTE}"]`).locator('circle').first();
+  await visible(phoneNode, 'заметка на графе телефона');
+  const phoneBox = await phoneNode.boundingBox();
+  await page.mouse.click(phoneBox.x + phoneBox.width / 2, phoneBox.y + phoneBox.height / 2);
+  const phoneSheet = page.locator('[data-graph-panel]');
+  await visible(phoneSheet.locator(`[data-note-title="${NOTE}"]`), 'заметка в листе графа на телефоне');
+  await visible(page.locator('[data-graph-link-start]'), 'кнопка «Связать» в листе');
+  await page.locator('[data-graph-link-start]').click();
+  await visible(phoneGraph.locator('[data-graph-link-mode]'), 'режим «Связать» на телефоне');
+  await phoneSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('лист заметки закрывает граф в режиме «Связать»'));
+  await phoneGraph.locator('[data-graph-link-mode]').getByRole('button', { name: 'Cancel' }).click();
+  await visible(phoneSheet.locator(`[data-note-title="${NOTE}"]`), 'лист после выхода из режима «Связать»');
+  await page.getByRole('dialog').getByRole('button', { name: 'Close' }).first().click();
+  await phoneSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('лист графа не закрылся'));
+  await phoneGraph.getByText('Days', { exact: true }).click();
+  await visible(phoneGraph.locator('[data-node][data-kind="day"]'), 'граф после закрытия листа отвечает на нажатия');
+  console.log('OK: граф на телефоне — лист заметки, режим «Связать»');
 
   console.log('e2e_web_notes: OK');
 } catch (error) {
