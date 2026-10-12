@@ -1856,6 +1856,12 @@
 "KnowledgeGraphDays" = "Дни";
 "KnowledgeGraphRecords" = "События и задачи";
 "KnowledgeGraphNotes" = "Заметки {count}";
+"KnowledgeGraphFolders" = "Папки на графе";
+"KnowledgeGraphFoldersAll" = "Все папки";
+"KnowledgeGraphFoldersCount" = "Папки: {count}";
+"KnowledgeGraphToCanvas" = "Создать холст";
+"KnowledgeGraphToCanvasTitle" = "Создать холст из заметок, которые сейчас видны на графе";
+"KnowledgeGraphToCanvasEmpty" = "На графе нет заметок для холста";
 "KnowledgeGraphEmpty" = "Граф появится, когда заметки начнут ссылаться друг на друга через [[ссылки]].";
 "KnowledgeZoomIn" = "Приблизить";
 "KnowledgeZoomOut" = "Отдалить";

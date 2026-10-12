@@ -77,6 +77,8 @@ type OwnProps = {
   canvases: CanvasEntry[];
   notes: NoteEntry[];
   isNarrow: boolean;
+  // Холст, на котором открыть вкладку (созданный с графа); нет такого — первый
+  openId?: string;
   onOpenTitle: (title: string) => void;
 };
 
@@ -232,7 +234,7 @@ function isTypingElement(element: Element | undefined) {
 // Холст (JSON Canvas): карточки заметок, файлов и ссылок, текстовые карточки, группы и стрелки с подписями.
 // Файл `.canvas` лежит в папке «Знания»; правки сохраняются сами через паузу
 const NotesCanvas = ({
-  canvases: allCanvases, notes, isNarrow, onOpenTitle,
+  canvases: allCanvases, notes, isNarrow, openId, onOpenTitle,
 }: OwnProps) => {
   const { showNotification } = getActions();
   const boardRef = useRef<HTMLDivElement>();
@@ -241,7 +243,7 @@ const NotesCanvas = ({
   const canvases = useMemo(() => (
     removedIds.length ? allCanvases.filter(({ id }) => !removedIds.includes(id)) : allCanvases
   ), [allCanvases, removedIds]);
-  const [canvasId, setCanvasId] = useState<string | undefined>(canvases[0]?.id);
+  const [canvasId, setCanvasId] = useState<string | undefined>(openId || canvases[0]?.id);
   const [doc, setDoc] = useState<CanvasDoc>(createEmptyCanvas);
   const [live, setLive] = useState<Live>();
   const [isDamaged, setIsDamaged] = useState(false);

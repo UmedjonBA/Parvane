@@ -1,7 +1,8 @@
-// Настройки списка заметок на этом устройстве: свёрнутые папки и «справку уже показывали»
+// Настройки раздела «Знания» на этом устройстве: свёрнутые папки, «справку уже показывали», папки графа
 
 const COLLAPSED_KEY = 'parvane:knowledge-collapsed';
 const GUIDE_SEEN_KEY = 'parvane:knowledge-guide-seen';
+const GRAPH_FOLDERS_KEY = 'parvane:knowledge-graph-folders';
 const COLLAPSED_MAX = 200;
 
 function read(key: string) {
@@ -12,9 +13,10 @@ function read(key: string) {
   }
 }
 
-function write(key: string, value: string) {
+function write(key: string, value?: string) {
   try {
-    localStorage.setItem(key, value);
+    if (value === undefined) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
   } catch (err) {
     // Хранилище недоступно (закрытый режим) — настройка живёт до перезагрузки
   }
@@ -32,6 +34,20 @@ export function readCollapsedFolders(): string[] {
 
 export function writeCollapsedFolders(keys: string[]) {
   write(COLLAPSED_KEY, JSON.stringify(keys.slice(0, COLLAPSED_MAX)));
+}
+
+/** Папки, выбранные на графе (пути, корень — пустая строка); `undefined` — все папки. */
+export function readGraphFolders(): string[] | undefined {
+  try {
+    const value: unknown = JSON.parse(read(GRAPH_FOLDERS_KEY) || 'null');
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : undefined;
+  } catch (err) {
+    return undefined;
+  }
+}
+
+export function writeGraphFolders(paths?: readonly string[]) {
+  write(GRAPH_FOLDERS_KEY, paths && JSON.stringify(paths.slice(0, COLLAPSED_MAX)));
 }
 
 /** Сообщение о появившейся справке на этом устройстве уже показано (либо справку открывали). */

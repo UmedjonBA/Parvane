@@ -4,18 +4,23 @@ import {
 
 import type { PlannerState } from '../planner/plannerModel';
 import type { BoardView } from './boardView';
+import type { GraphCanvasScope } from './notesCanvasGraph';
 import type { GraphEdge, GraphNode, GraphPoint } from './notesGraph';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
+import { folderCaption, ROOT_FOLDER } from './notesFolders';
 import {
-  buildGraph, canLinkFrom, canLinkTo, edgeShape, MISSING_NODE_PREFIX, neighboursOf, nodeAt, nodeRadius, placeGraph,
+  buildGraph, canLinkFrom, canLinkTo, edgeShape, isNoteInGraph, listGraphFolders, MISSING_NODE_PREFIX, neighboursOf,
+  nodeAt, nodeRadius, placeGraph, resolveGraphFolders,
 } from './notesGraph';
 import { displayTitle, folderColor } from './notesLook';
 import { normalizeNoteTitle, parseNote } from './notesModel';
+import { readGraphFolders, writeGraphFolders } from './notesPrefs';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -44,6 +49,10 @@ type OwnProps = {
   onLinkNew: (fromId: string, title: string) => Promise<string | undefined>;
   onUnlink: (fromId: string, toTitle: string) => void;
   onLinkModeEnd: NoneToVoidFunction;
+  // Escape без иных дел закрывает панель выбранной точки
+  onClose: NoneToVoidFunction;
+  // «Создать холст»: холст из заметок, которые сейчас видны на графе
+  onMakeCanvas: (scope: GraphCanvasScope) => void;
 };
 
 type Drag = {
@@ -88,6 +97,8 @@ const NEW_TITLE_MAX = 120;
 // Где на выбранной связи стоит крестик: посередине, а у взаимной — по крестику ближе к заметке, чью ссылку он убирает
 const REMOVE_AT_MIDDLE = 0.5;
 const REMOVE_AT_SOURCE = 0.3;
+// Редактор заметки в панели графа: пока он открыт, Escape панель не закрывает
+const PANEL_EDITOR = '[data-graph-panel] #knowledge-note-editor';
 
 // Места точек переживают уход с вкладки: граф не перетряхивается, пока его не попросят разложить заново
 const placedById = new Map<string, GraphPoint>();
@@ -125,12 +136,17 @@ function isTyping(target: EventTarget | null) {
 // её показывает панель справа; двойное открывает заметку на вкладке «Заметки». Связь — это ссылка в тексте:
 // её ведут от кольца вокруг заметки к другой заметке (или на пустое место — к новой), а убирают, выбрав линию
 const NotesGraph = ({
-  notes, planner, pickedId, linkFromId, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd,
+  notes, planner, pickedId, linkFromId, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd, onClose,
+  onMakeCanvas,
 }: OwnProps) => {
   const boardRef = useRef<HTMLDivElement>();
   const newInputRef = useRef<HTMLInputElement>();
+  const foldersRef = useRef<HTMLSpanElement>();
   const [withDays, setWithDays] = useState(false);
   const [withRecords, setWithRecords] = useState(false);
+  // Выбор папок запоминается на устройстве; `undefined` — все папки
+  const [savedFolders, setSavedFolders] = useState(readGraphFolders);
+  const [isFolderMenuOpen, setIsFolderMenuOpen] = useState(false);
   const [view, setView] = useState<BoardView>({ scale: 1, x: 0, y: 0 });
   const [moved, setMoved] = useState<Record<string, GraphPoint>>({});
   // Растёт, когда граф просят разложить заново
@@ -149,6 +165,11 @@ const NotesGraph = ({
 
   const lang = useLang();
 
+  // Папки с заметками; выбор приводится к ним — удалённая папка из него выпадает
+  const folderOptions = useMemo(() => listGraphFolders(notes), [notes]);
+  const folders = useMemo(() => resolveGraphFolders(savedFolders, folderOptions), [savedFolders, folderOptions]);
+  const foldersKey = folders ? folders.join('\n') : undefined;
+
   const graph = useMemo(() => {
     const built = buildGraph({
       notes: notes.map((note) => ({
@@ -166,13 +187,13 @@ const NotesGraph = ({
           id: `t${task.id}`, title: task.name, links: linksIn(task.name), type: 'task',
         })),
       ],
-    }, { withDays, withRecords });
-    // Точки, у которых уже есть место, стоят на нём: новая связь или заметка граф не перетряхивает
+    }, { withDays, withRecords, folders });
+    // Точки, у которых уже есть место, стоят на нём: новая связь, заметка или смена папок граф не перетряхивают
     const placed = placeGraph(built.nodes, built.edges, placedById, LAYOUT);
     placed.forEach((node) => placedById.set(node.id, { x: node.x, y: node.y }));
     return { nodes: placed, edges: built.edges };
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  }, [notes, planner, withDays, withRecords, layoutRound]);
+  }, [notes, planner, withDays, withRecords, foldersKey, layoutRound]);
 
   const nodes = useMemo(() => graph.nodes.map((node) => ({ ...node, ...moved[node.id] })), [graph, moved]);
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
@@ -220,11 +241,11 @@ const NotesGraph = ({
   // или связь вид не трогают: масштаб и место выбирает пользователь
   const hasNodes = graph.nodes.length > 0;
   useEffect(() => {
-    const key = `${hasNodes}${withDays}${withRecords}${layoutRound}`;
+    const key = `${hasNodes}${withDays}${withRecords}${layoutRound}${foldersKey}`;
     if (fitKeyRef.current === key) return;
     fitKeyRef.current = key;
     fit();
-  }, [hasNodes, withDays, withRecords, layoutRound]);
+  }, [hasNodes, withDays, withRecords, layoutRound, foldersKey]);
 
   // Вид, в котором точка видна: прежний, если она и так на поле, иначе поле сдвигается к ней без смены масштаба
   const revealIn = (current: BoardView, node: GraphPoint | undefined, width: number, height: number) => {
@@ -451,15 +472,23 @@ const NotesGraph = ({
     setView(zoomByWheel(view, e.deltaY, e.clientX - box.left, e.clientY - box.top));
   });
 
-  // Escape выходит из недоведённой связи, режима «Связать» и снимает выбор линии; Delete убирает выбранную связь
+  // Escape по очереди: название новой заметки, список папок, режим «Связать», выбранная линия, панель выбранной
+  // точки. Панель не закрывается, пока в ней правят заметку или набирают текст в поле: там Escape — дело поля.
+  // Общие слушатели приложения перехватывают Escape раньше — обработчик встаёт в их очередь
+  const handleEscape = useLastCallback(() => {
+    if (newAt) cancelNew();
+    else if (isFolderMenuOpen) setIsFolderMenuOpen(false);
+    else if (linkFromId) onLinkModeEnd();
+    else if (pickedEdge) setPickedEdge(undefined);
+    else if (document.querySelector(PANEL_EDITOR) || isTyping(document.activeElement)) return false;
+    else onClose();
+    return undefined;
+  });
+  const hasEscapeTarget = Boolean(newAt || isFolderMenuOpen || linkFromId || pickedEdge || pickedId);
+  useEffect(() => (hasEscapeTarget ? captureEscKeyListener(handleEscape) : undefined), [hasEscapeTarget]);
+
+  // Delete убирает выбранную связь
   const handleKey = useLastCallback((e: KeyboardEvent) => {
-    if (!pickedEdge && !linkFromId && !newAt) return;
-    if (e.key === 'Escape') {
-      if (newAt) cancelNew();
-      else if (linkFromId) onLinkModeEnd();
-      else setPickedEdge(undefined);
-      return;
-    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && pickedEdge && !isTyping(e.target)) {
       e.preventDefault();
       removeLink();
@@ -487,6 +516,48 @@ const NotesGraph = ({
 
   const handleToggleDays = useLastCallback(() => setWithDays(!withDays));
   const handleToggleRecords = useLastCallback(() => setWithRecords(!withRecords));
+
+  // ── выбор папок ──
+  const handleToggleFolderMenu = useLastCallback(() => setIsFolderMenuOpen(!isFolderMenuOpen));
+
+  // Нажатие мимо списка папок закрывает его
+  useEffect(() => {
+    if (!isFolderMenuOpen) return undefined;
+    const handleOutside = (e: PointerEvent) => {
+      if (!foldersRef.current?.contains(e.target as Node)) setIsFolderMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handleOutside, true);
+    return () => document.removeEventListener('pointerdown', handleOutside, true);
+  }, [isFolderMenuOpen]);
+
+  const pickFolders = (next?: string[]) => {
+    const resolved = resolveGraphFolders(next, folderOptions);
+    setSavedFolders(resolved);
+    writeGraphFolders(resolved);
+    // Заметка в панели ушла с графа вместе со своей папкой — панель закрывается
+    const pickedNote = pickedId ? notes.find(({ id }) => id === pickedId) : undefined;
+    if (pickedNote && !isNoteInGraph(pickedNote, { withDays, folders: resolved })) onClose();
+  };
+
+  const handleAllFolders = useLastCallback(() => {
+    pickFolders(undefined);
+    setIsFolderMenuOpen(false);
+  });
+
+  // Папка в списке — галочка: из «всех папок» нажатие оставляет одну, дальше папки добавляются и убираются;
+  // сняли последнюю либо отметили все — снова «все папки»
+  const handleFolder = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const path = e.currentTarget.dataset.graphFolder!;
+    if (!folders) pickFolders([path]);
+    else pickFolders(folders.includes(path) ? folders.filter((item) => item !== path) : [...folders, path]);
+  });
+
+  const captionOf = (path: string) => (path === ROOT_FOLDER ? lang('KnowledgeRoot') : folderCaption(path));
+
+  // «Создать холст»: заметки, что сейчас на графе, — выбранные папки и, если включены, дни. Поиск набор не сужает
+  const handleMakeCanvas = useLastCallback(() => {
+    onMakeCanvas({ folders, days: withDays });
+  });
   const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.currentTarget.value));
 
   // Enter в поиске выбирает первую найденную точку
@@ -501,6 +572,11 @@ const NotesGraph = ({
   });
 
   const noteCount = nodes.filter(({ kind }) => kind === 'note').length;
+  const hasCanvasNotes = nodes.some(({ kind }) => kind === 'note' || kind === 'day');
+  // Выбирать есть из чего, когда заметки лежат больше чем в одном месте
+  const hasFolderChoice = folderOptions.length > 1;
+  const foldersLabel = !folders ? lang('KnowledgeGraphFoldersAll')
+    : folders.length === 1 ? captionOf(folders[0]) : lang('KnowledgeGraphFoldersCount', { count: folders.length });
   const line = newAt || draft;
   const lineFrom = line ? byId.get(line.from) : undefined;
   const linkSourceId = line?.from || linkFromId;
@@ -648,6 +724,76 @@ const NotesGraph = ({
           onClick={handleToggleRecords}
         >
           {lang('KnowledgeGraphRecords')}
+        </button>
+        {hasFolderChoice && (
+          <span ref={foldersRef} className={styles.graphFolders}>
+            <button
+              type="button"
+              className={buildClassName(
+                kit.chip, styles.boardChip, folders && kit.chipOn, folders && styles.boardChipOn,
+              )}
+              aria-haspopup="menu"
+              aria-expanded={isFolderMenuOpen}
+              title={lang('KnowledgeGraphFolders')}
+              data-graph-folders={folders ? folders.length : 'all'}
+              onClick={handleToggleFolderMenu}
+            >
+              <PvIcon name="folder" isSmall />
+              <span className={styles.graphFoldersLabel}>{foldersLabel}</span>
+              <PvIcon name={isFolderMenuOpen ? 'up' : 'down'} isSmall />
+            </button>
+            {isFolderMenuOpen && (
+              <div
+                className={buildClassName(styles.graphFoldersMenu, 'custom-scroll')}
+                role="menu"
+                aria-label={lang('KnowledgeGraphFolders')}
+                data-graph-folders-menu
+              >
+                <button
+                  type="button"
+                  className={styles.canvasMenuItem}
+                  role="menuitemradio"
+                  aria-checked={!folders}
+                  data-graph-folder-all
+                  onClick={handleAllFolders}
+                >
+                  <PvIcon name="check" isSmall className={buildClassName(folders && styles.graphFolderOff)} />
+                  <span className={styles.graphFolderName}>{lang('KnowledgeGraphFoldersAll')}</span>
+                </button>
+                {folderOptions.map(({ path, count }) => {
+                  const isOn = Boolean(folders?.includes(path));
+                  return (
+                    <button
+                      key={path}
+                      type="button"
+                      className={styles.canvasMenuItem}
+                      role="menuitemcheckbox"
+                      aria-checked={isOn}
+                      data-graph-folder={path}
+                      onClick={handleFolder}
+                    >
+                      <PvIcon name="check" isSmall className={buildClassName(!isOn && styles.graphFolderOff)} />
+                      <span className={styles.graphFolderName} style={`--c: ${folderColor(path)}`}>
+                        {captionOf(path)}
+                      </span>
+                      <span className={styles.graphFolderCount}>{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </span>
+        )}
+        <button
+          type="button"
+          className={buildClassName(kit.chip, styles.boardChip)}
+          title={lang('KnowledgeGraphToCanvasTitle')}
+          disabled={!hasCanvasNotes}
+          data-graph-to-canvas
+          onClick={handleMakeCanvas}
+        >
+          <PvIcon name="board" isSmall />
+          {lang('KnowledgeGraphToCanvas')}
         </button>
         <label className={styles.graphSearch}>
           <PvIcon name="search" isSmall className={styles.graphSearchIcon} />

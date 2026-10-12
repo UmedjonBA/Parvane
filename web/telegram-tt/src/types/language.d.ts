@@ -2787,6 +2787,11 @@ export interface LangPair {
   'KnowledgeDaily': undefined;
   'KnowledgeGraphDays': undefined;
   'KnowledgeGraphRecords': undefined;
+  'KnowledgeGraphFolders': undefined;
+  'KnowledgeGraphFoldersAll': undefined;
+  'KnowledgeGraphToCanvas': undefined;
+  'KnowledgeGraphToCanvasTitle': undefined;
+  'KnowledgeGraphToCanvasEmpty': undefined;
   'KnowledgeGraphEmpty': undefined;
   'KnowledgeZoomIn': undefined;
   'KnowledgeZoomOut': undefined;
@@ -5120,6 +5125,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'KnowledgeGraphNotes': {
+    'count': V;
+  };
+  'KnowledgeGraphFoldersCount': {
     'count': V;
   };
   'KnowledgeCanvasName': {

@@ -2,7 +2,9 @@
 // заметку, стрелка на каждую ссылку `[[…]]` между существующими заметками, места карточек — раскладка графа,
 // растянутая до размера настоящих карточек. `refreshCanvasFromGraph` — сверка открытого холста с заметками:
 // недостающие карточки и стрелки добавляются, свои стрелки исчезнувших ссылок убираются, сделанное руками
-// не трогается. Результат — обычный документ JSON Canvas: его можно править как любой холст.
+// не трогается. Заметки одной папки стоят вместе и обведены группой с названием папки. Холст может помнить
+// свой набор заметок (`GraphCanvasScope` в поле `pvGraphScope` файла): обновление берёт новые заметки только
+// из него. Результат — обычный документ JSON Canvas: его можно править как любой холст.
 
 import type {
   CanvasDoc, CanvasEdge, CanvasNode, CanvasPoint, CanvasRect,
@@ -10,11 +12,20 @@ import type {
 import type { GraphNoteInput } from './notesGraph';
 
 import { boundsOf, CANVAS_DEFAULT_NODE_WIDTH, newCanvasId } from './notesCanvas';
-import { CANVAS_GRID } from './notesCanvasEdit';
+import { CANVAS_GRID, CANVAS_GROUP_PADDING } from './notesCanvasEdit';
 import { noteTitleOfPath } from './notesCanvasFiles';
+import { folderCaption, ROOT_FOLDER } from './notesFolders';
 import { buildGraph, GRAPH_DEFAULT_SEED, layoutGraph } from './notesGraph';
 
+// Набор заметок холста из графа: папки (точный путь, корень — пустая строка; не заданы — все) и заметки дней
+// (`false` — без них). Заметок дней выбор папок не касается — как на графе
+export type GraphCanvasScope = { folders?: string[]; days?: boolean };
+
 export type GraphCanvasOptions = {
+  // Какие заметки брать; не задан — все. Сужающий набор записывается в холст и действует при обновлении
+  scope?: GraphCanvasScope;
+  // Подпись группы папки по её пути
+  folderLabel?: (path: string) => string;
   cardWidth?: number;
   cardHeight?: number;
   // Просвет между карточками
@@ -40,6 +51,12 @@ export const GRAPH_CANVAS_GAP = 60;
 export const GRAPH_EDGE_PREFIX = 'graph-';
 // Поле карточки заметки: идентификатор заметки. По нему карточка находит заметку после переименования
 export const GRAPH_NOTE_FIELD = 'pvNote';
+// Поле группы: путь папки, чьи заметки она обводит. По нему новая заметка папки находит свою группу
+export const GRAPH_FOLDER_FIELD = 'pvFolder';
+// Поле файла холста (верхний уровень): набор заметок, из которого холст собран
+export const GRAPH_SCOPE_FIELD = 'pvGraphScope';
+// Место над рамкой группы под её шапку с названием
+export const GRAPH_GROUP_HEAD = 40;
 
 const FILE_SUFFIX = '.md';
 const PATH_SEPARATOR = '/';
@@ -58,6 +75,8 @@ const SPOT_MAX_RINGS = 240;
 const BLOCK_WIDE_RATIO = 2;
 
 const FREE_SPOT_GAP = 40;
+// Ряд кластеров папок не шире стольких сторон квадрата той же площади
+const PACK_ASPECT = 1.5;
 
 function titleKey(title: string) {
   return title.trim().toLowerCase();
@@ -129,19 +148,123 @@ function separate(points: { x: number; y: number }[], width: number, height: num
   }
 }
 
+// Набор без ограничений не хранится: `undefined`
+function cleanScope(scope?: GraphCanvasScope): GraphCanvasScope | undefined {
+  const folders = scope?.folders && [...new Set(scope.folders)].sort();
+  const result: GraphCanvasScope = { ...(folders && { folders }), ...(scope?.days === false && { days: false }) };
+  return Object.keys(result).length ? result : undefined;
+}
+
+// Набор заметок, записанный в холсте; у обычного холста и у холста из всех заметок его нет
+export function scopeOfCanvas(doc: CanvasDoc): GraphCanvasScope | undefined {
+  const raw = doc.extra?.[GRAPH_SCOPE_FIELD];
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { folders, days } = raw as { folders?: unknown; days?: unknown };
+  return cleanScope({
+    folders: Array.isArray(folders) ? folders.filter((item): item is string => typeof item === 'string') : undefined,
+    days: days === false ? false : undefined,
+  });
+}
+
+// Заметка входит в набор холста
+export function isInCanvasScope(note: Pick<GraphNoteInput, 'folder' | 'isDaily'>, scope?: GraphCanvasScope) {
+  if (!scope) return true;
+  if (note.isDaily) return scope.days !== false;
+  return !scope.folders || scope.folders.includes(note.folder);
+}
+
+function withScope(doc: CanvasDoc, scope?: GraphCanvasScope): CanvasDoc {
+  return scope ? { ...doc, extra: { ...doc.extra, [GRAPH_SCOPE_FIELD]: scope } } : doc;
+}
+
+function isInside(inner: CanvasRect, outer: CanvasRect) {
+  return inner.x >= outer.x && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+}
+
+function inflate(rect: CanvasRect, byX: number, byY = byX): CanvasRect {
+  return {
+    x: rect.x - byX, y: rect.y - byY, width: rect.width + byX * 2, height: rect.height + byY * 2,
+  };
+}
+
+// Группа папки: первая по слоям группа с этим путём
+function folderGroups(nodes: CanvasNode[]) {
+  const result = new Map<string, CanvasNode>();
+  nodes.forEach((node) => {
+    const folder = node[GRAPH_FOLDER_FIELD];
+    if (node.type === 'group' && typeof folder === 'string' && !result.has(folder)) result.set(folder, node);
+  });
+  return result;
+}
+
+// Места карточек одного кластера (заметки одной папки): раскладка графа ссылок между ними, растянутая до
+// размера карточек. Левый верхний угол кластера — в начале координат
+function layoutCluster(
+  notes: GraphNoteInput[], width: number, height: number, gap: number, seed: number,
+): { spots: CanvasPoint[]; width: number; height: number } {
+  const graph = buildGraph({ notes }, { withDays: true, withRecords: false });
+  const points = layoutGraph(graph.nodes, graph.edges, {
+    width: LAYOUT_FIELD, height: LAYOUT_FIELD, margin: 0, seed,
+  }).map(({ x, y }) => ({ x, y }));
+  const spread = spreadOf(points, width + gap, height + gap);
+  points.forEach((point) => {
+    point.x *= spread;
+    point.y *= spread;
+  });
+  separate(points, width + gap, height + gap);
+  const minX = Math.min(...points.map(({ x }) => x));
+  const minY = Math.min(...points.map(({ y }) => y));
+  const spots = points.map(({ x, y }) => ({ x: Math.round(x - minX), y: Math.round(y - minY) }));
+  return {
+    spots,
+    width: Math.max(...spots.map(({ x }) => x)) + width,
+    height: Math.max(...spots.map(({ y }) => y)) + height,
+  };
+}
+
+// Места прямоугольников рядами слева направо: ряд не шире `PACK_ASPECT` сторон квадрата общей площади
+// (и не уже самого широкого прямоугольника), между соседями — `gap`
+function packBoxes(boxes: { width: number; height: number }[], gap: number): CanvasPoint[] {
+  const area = boxes.reduce((sum, box) => sum + (box.width + gap) * (box.height + gap), 0);
+  const limit = Math.max(...boxes.map((box) => box.width), Math.sqrt(area) * PACK_ASPECT);
+  let x = 0;
+  let y = 0;
+  let rowHeight = 0;
+  return boxes.map((box) => {
+    if (x > 0 && x + box.width > limit) {
+      x = 0;
+      y += rowHeight + gap;
+      rowHeight = 0;
+    }
+    const at = { x, y };
+    x += box.width + gap;
+    rowHeight = Math.max(rowHeight, box.height);
+    return at;
+  });
+}
+
 // Холст из заметок и ссылок между ними. Карточка — на каждую заметку (ежедневные тоже), в порядке входа;
 // стрелка — от заметки к той, на которую она ссылается: по одной на пару в каждом направлении, без петель;
 // ссылка на заметку, которой ещё нет, стрелки не даёт. Одноимённые заметки получают по карточке, ссылка на
 // такое название ведёт к первой. Карточки не накладываются, левый верхний угол холста — в начале координат.
 // Идентификаторы стрелок начинаются с `GRAPH_EDGE_PREFIX`, карточка несёт идентификатор своей заметки.
+// Заметки каждой папки раскладываются своим кластером и обводятся группой (`label` — название папки, поле
+// `GRAPH_FOLDER_FIELD` — её путь); заметки без папки — без группы, их кластер первый. Кластеры стоят рядами
+// и не накладываются; группы лежат под карточками (в начале списка узлов). `options.scope` оставляет только
+// заметки набора и записывается в холст.
 export function canvasFromGraph(notes: GraphNoteInput[], options: GraphCanvasOptions = {}): CanvasDoc {
   const width = options.cardWidth ?? CANVAS_DEFAULT_NODE_WIDTH;
   const height = options.cardHeight ?? GRAPH_CANVAS_CARD_HEIGHT;
   const gap = options.gap ?? GRAPH_CANVAS_GAP;
   const makeId = options.makeId || newCanvasId;
 
-  const shown = uniqueNotes(notes);
-  if (!shown.length) return { nodes: [], edges: [] };
+  const scope = cleanScope(options.scope);
+  const labelOf = options.folderLabel || folderCaption;
+  const seed = options.seed ?? GRAPH_DEFAULT_SEED;
+
+  const shown = uniqueNotes(notes).filter((note) => isInCanvasScope(note, scope));
+  if (!shown.length) return withScope({ nodes: [], edges: [] }, scope);
 
   const noteIdByTitle = new Map<string, string>();
   shown.forEach((note) => {
@@ -155,25 +278,44 @@ export function canvasFromGraph(notes: GraphNoteInput[], options: GraphCanvasOpt
     links: note.links.filter((link) => noteIdByTitle.has(titleKey(link))),
   }));
 
-  const graph = buildGraph({ notes: linked }, { withDays: true, withRecords: false });
-  const points = layoutGraph(graph.nodes, graph.edges, {
-    width: LAYOUT_FIELD, height: LAYOUT_FIELD, margin: 0, seed: options.seed ?? GRAPH_DEFAULT_SEED,
-  }).map(({ x, y }) => ({ x, y }));
-  const spread = spreadOf(points, width + gap, height + gap);
-  points.forEach((point) => {
-    point.x *= spread;
-    point.y *= spread;
+  // Кластеры: заметки без папки, затем папки по пути
+  const byFolder = new Map<string, number[]>();
+  linked.forEach((note, i) => byFolder.set(note.folder, [...(byFolder.get(note.folder) || []), i]));
+  const folders = [...byFolder.keys()].sort((a, b) => (a < b ? -1 : 1));
+  const clusters = folders.map((folder) => {
+    const indexes = byFolder.get(folder)!;
+    const ids = new Set(indexes.map((i) => linked[i].id));
+    // Внутри кластера раскладку тянут только ссылки между его заметками
+    const inner = indexes.map((i) => ({
+      ...linked[i], links: linked[i].links.filter((link) => ids.has(noteIdByTitle.get(titleKey(link))!)),
+    }));
+    const layout = layoutCluster(inner, width, height, gap, seed);
+    const pad = folder === ROOT_FOLDER ? 0 : CANVAS_GROUP_PADDING;
+    const head = folder === ROOT_FOLDER ? 0 : GRAPH_GROUP_HEAD;
+    return {
+      folder, indexes, layout, pad, head, width: layout.width + pad * 2, height: layout.height + pad * 2 + head,
+    };
   });
-  separate(points, width + gap, height + gap);
-  const minX = Math.min(...points.map(({ x }) => x));
-  const minY = Math.min(...points.map(({ y }) => y));
+  const places = packBoxes(clusters, gap);
+  // Верх холста — верх карточек и рамок: шапка первой группы в счёт не идёт
+  const top = Math.min(...clusters.map(({ head }, c) => places[c].y + head));
+
+  const spots: CanvasPoint[] = [];
+  clusters.forEach((cluster, c) => {
+    cluster.indexes.forEach((i, k) => {
+      spots[i] = {
+        x: places[c].x + cluster.pad + cluster.layout.spots[k].x,
+        y: places[c].y + cluster.head + cluster.pad + cluster.layout.spots[k].y - top,
+      };
+    });
+  });
 
   const usedIds = new Set<string>();
   const cardIdByNote = new Map<string, string>();
-  const nodes: CanvasNode[] = shown.map((note, i) => {
+  const cards: CanvasNode[] = shown.map((note, i) => {
     const id = uniqueId(usedIds, makeId);
     cardIdByNote.set(note.id, id);
-    return noteCard(note, id, { x: Math.round(points[i].x - minX), y: Math.round(points[i].y - minY) }, width, height);
+    return noteCard(note, id, spots[i], width, height);
   });
 
   const edges: CanvasEdge[] = [];
@@ -192,7 +334,22 @@ export function canvasFromGraph(notes: GraphNoteInput[], options: GraphCanvasOpt
     });
   });
 
-  return { nodes, edges };
+  const groups: CanvasNode[] = [];
+  clusters.forEach((cluster, c) => {
+    if (cluster.folder === ROOT_FOLDER) return;
+    groups.push({
+      id: uniqueId(usedIds, makeId),
+      type: 'group',
+      x: places[c].x,
+      y: places[c].y + cluster.head - top,
+      width: cluster.width,
+      height: cluster.height - cluster.head,
+      label: labelOf(cluster.folder),
+      [GRAPH_FOLDER_FIELD]: cluster.folder,
+    });
+  });
+
+  return withScope({ nodes: [...groups, ...cards], edges }, scope);
 }
 
 // ── обновление холста из графа ───────────────────────────────────────────────
@@ -319,6 +476,10 @@ function blockSpots(count: number, bounds: CanvasRect, width: number, height: nu
 //    ещё нет стрелки в эту сторону (нарисованной или своей).
 // 4. Своя стрелка (`isGraphEdge`), ссылки для которой в заметке-источнике больше нет, убирается — кроме
 //    правленой (`isCustomizedEdge`) и той, чья заметка-источник пропала (её ссылки неизвестны).
+//    Заметка папки, у которой на холсте есть группа (`GRAPH_FOLDER_FIELD`), встаёт в эту группу: на свободное
+//    место внутри либо у края, рамка группы растёт за ней (единственное, что обновление меняет у готового
+//    узла). Группу удалили — заметка встаёт как любая другая; новых групп обновление не заводит.
+//    У холста с набором заметок (`scopeOfCanvas`) карточки получают только заметки набора.
 // 5. Карточка пропавшей заметки остаётся (`missing`). Если она несёт идентификатор заметки, которая теперь
 //    называется иначе, карточка перенацеливается на новое название (`renamed`).
 // Карточка соответствует заметке по названию (последняя часть пути без `.md`, регистр не важен); у
@@ -337,11 +498,16 @@ export function refreshCanvasFromGraph(
   // Заметка без названия карточкой не находится — она бы добавлялась при каждом обновлении
   const shown = uniqueNotes(notes).filter((note) => titleKey(note.title));
 
+  const scope = scopeOfCanvas(doc);
+
   if (!doc.nodes.length && !doc.edges.length) {
-    const built = canvasFromGraph(shown, options);
+    const built = canvasFromGraph(shown, { ...options, scope });
     if (!built.nodes.length) return result;
     result.doc = { ...doc, nodes: built.nodes, edges: built.edges };
-    result.added = { cards: built.nodes.map(({ id }) => id), edges: built.edges.map(({ id }) => id) };
+    result.added = {
+      cards: built.nodes.filter(({ type }) => type !== 'group').map(({ id }) => id),
+      edges: built.edges.map(({ id }) => id),
+    };
     return result;
   }
 
@@ -408,7 +574,39 @@ export function refreshCanvasFromGraph(
     cardOfNote.set(note.id, card);
     noteOfCard.set(card.id, note);
   };
-  let pending = shown.filter((note) => !cardOfNote.has(note.id));
+  let pending = shown.filter((note) => !cardOfNote.has(note.id) && isInCanvasScope(note, scope));
+
+  // Сначала заметки папок, у которых на холсте есть группа: карточка встаёт в группу, рамка растёт за ней
+  const groupOfFolder = folderGroups(nodes);
+  const apart = CANVAS_GROUP_PADDING + GRAPH_GROUP_HEAD;
+  pending = pending.filter((note) => {
+    const groupId = groupOfFolder.get(note.folder)?.id;
+    const at = groupId === undefined ? -1 : taken.findIndex(({ id }) => id === groupId);
+    if (at < 0) return true;
+    const frame = taken[at];
+    const inside = new Set(taken.filter((node) => node !== frame && isInside(node, frame)).map(({ id }) => id));
+    const near = [...(neighbours.get(note.id) || [])].map((id) => cardOfNote.get(id))
+      .filter((card): card is CanvasNode => Boolean(card && inside.has(card.id)));
+    // Чужое вокруг отодвинуто на поле и шапку группы: выросшая рамка его не заденет
+    const others = taken.filter((node) => node !== frame && !isInside(frame, node))
+      .map((node) => (inside.has(node.id) ? node : inflate(node, CANVAS_GROUP_PADDING, apart)));
+    const spot = findSpot(boundsOf({ nodes: near, edges: [] }) || frame, others, width, height, gap);
+    if (!spot) return true;
+    place(note, spot);
+    const room = inflate({ ...spot, width, height }, CANVAS_GROUP_PADDING);
+    if (!isInside(room, frame)) {
+      const x = Math.min(frame.x, room.x);
+      const y = Math.min(frame.y, room.y);
+      taken[at] = {
+        ...frame,
+        x,
+        y,
+        width: Math.max(frame.x + frame.width, room.x + room.width) - x,
+        height: Math.max(frame.y + frame.height, room.y + room.height) - y,
+      };
+    }
+    return false;
+  });
   // Сначала те, у кого на холсте уже есть связанная карточка; поставленная карточка сама становится опорой
   for (let hasPlaced = true; hasPlaced && pending.length;) {
     hasPlaced = false;
