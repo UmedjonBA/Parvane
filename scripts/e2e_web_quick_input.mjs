@@ -146,7 +146,7 @@ try {
   await input.fill('урок вт 15:00 каждую неделю 5 мес');
   await expectKind('event');
   assert.match((await chip('repeat').innerText()).trim(), /Tue/);
-  assert.equal((await chip('time').innerText()).trim(), '15:00–16:00');
+  assert.equal((await chip('time').innerText()).trim(), '15:00–15:45');
   await submit('урок');
   await openQuick();
   await form.getByRole('button', { name: 'More options' }).click();

@@ -149,7 +149,7 @@ describe('ввод текстом: повтор', () => {
       kind: 'event',
       name: 'урок',
       start: '15:00',
-      end: '16:00',
+      end: '15:45',
       day: '2026-10-13',
       repeat: {
         ...WEEKLY, weekdays: [2], startDay: '2026-10-13', endDay: '2027-03-13',
@@ -194,6 +194,13 @@ describe('ввод текстом: повтор', () => {
     ['Рисование(ауд. 12) по понидельникам с 17:00 до 18:30 каждую ниделю', {
       kind: 'event', name: 'Рисование(ауд. 12)', start: '17:00', end: '18:30', repeat: { ...WEEKLY, weekdays: [1] },
     }],
+    ['пара в суботу в 9:00 каждую ниделю', {
+      kind: 'event', name: 'пара', start: '09:00', end: '10:45', repeat: { ...WEEKLY, weekdays: [6] },
+    }],
+    ['урок завтра 9:00', { kind: 'event', name: 'урок', start: '09:00', end: '09:45' }],
+    ['урок завтра 9:00 60 мин', { kind: 'event', start: '09:00', end: '10:00' }],
+    ['пара завтра с 9 до 10:30', { kind: 'event', start: '09:00', end: '10:30' }],
+    ['сдать пару отчётов завтра 9:00', { kind: 'event', start: '09:00', end: '10:00' }],
     ['урок по понедльникам 15:00', { kind: 'event', name: 'урок', repeat: { ...WEEKLY, weekdays: [1] } }],
     ['завтрак с мамой завтар 9:00', { kind: 'event', name: 'завтрак с мамой', day: '2026-10-09' }],
     ['выходные задачи события', { kind: 'task', name: 'выходные задачи события', repeat: undefined }],
@@ -494,7 +501,7 @@ describe('quick input (en): repeat', () => {
       kind: 'event',
       name: 'lesson',
       start: '15:00',
-      end: '16:00',
+      end: '15:45',
       day: '2026-10-13',
       repeat: {
         ...WEEKLY, weekdays: [2], startDay: '2026-10-13', endDay: '2027-03-13',

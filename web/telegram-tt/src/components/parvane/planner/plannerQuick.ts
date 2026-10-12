@@ -112,6 +112,8 @@ type QuickWords = {
   typoWords: string;
   // Обычные слова, отличающиеся от слов разбора одной буквой («завтрак» — не «завтра»)
   typoSafe?: string;
+  // Обычная длительность события по первому слову строки, минуты («пара» — 1 ч 45 мин, «урок» — 45 мин)
+  eventMinutes?: Entry<number>[];
   sleep: string;
   // Слова перед словом сна («сегодня я спал…») и глаголы «лёг … встал …»
   sleepPrefix?: string;
@@ -205,6 +207,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + ' ежедневно еженедельно ежемесячно ежегодно будням выходным задача событие',
     typoSafe: 'завтрак завтраки неделе каждой каждого каждая месяцы выходные выходных будние задачи задачу'
       + ' события событий',
+    eventMinutes: [['пар[ауые]', 105], ['урок(?:а|и|ов)?', 45]],
     sleep: 'сон|(?:по|про)?спал[аи]?|выспал(?:ся|ась)',
     sleepPrefix: 'сегодня|ночью|сейчас|я',
     sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
@@ -294,6 +297,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + ' saturdays sunday sundays january february august september october november december tomorrow'
       + ' weekly monthly yearly weekdays weekends minutes',
     typoSafe: 'minute weekend weekday',
+    eventMinutes: [['lessons?', 45]],
     sleep: 'sleep|slept',
     sleepPrefix: 'today|tonight|last\\s+night|i',
     sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
@@ -444,6 +448,9 @@ function compile(words: QuickWords) {
     minutes: `(?:\\s*(?:${words.minute})${words.minuteGlued ? `|(?:${words.minuteGlued})` : ''})`,
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
     waterLead: lead(words.water),
+    eventMinutes: (words.eventMinutes || []).map(([body, minutes]) => (
+      [new RegExp(`^\\s*(?:${body})${SEPARATOR}`), minutes] as const
+    )),
     typoWords: words.typoWords.split(' '),
     typoSafe: new Set([...words.typoWords.split(' '), ...(words.typoSafe || '').split(' ')]),
     sleepLead: lead(`(?:(?:${words.sleepPrefix || '(?!)'})\\s+)*(?:${words.sleep})`),
@@ -956,7 +963,8 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
 
   if (draft.kind === 'event') {
     if (hasTime) {
-      const finish = end ?? start! + (draft.minutes || DEFAULT_EVENT_MINUTES);
+      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(lower))?.[1];
+      const finish = end ?? start! + (draft.minutes || usual || DEFAULT_EVENT_MINUTES);
       draft.start = toTime(start!);
       // Ровно полночь — последняя минута суток; позже — ошибка, а не обрезка
       draft.end = finish === MINUTES_IN_DAY ? '23:59' : finish < MINUTES_IN_DAY ? toTime(finish) : undefined;
