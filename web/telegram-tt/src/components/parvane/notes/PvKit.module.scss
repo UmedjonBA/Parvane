@@ -674,6 +674,8 @@
     flex-direction: column;
     gap: 0.875rem;
 
+    // Высоту ограничивает само окно; содержимое прокручивается внутри него
+    min-height: 0;
     max-height: none;
     padding: 0.5rem 1.25rem 1.25rem;
 
