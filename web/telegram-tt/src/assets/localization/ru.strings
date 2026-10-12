@@ -1987,6 +1987,17 @@
 "KnowledgeCanvasNoteLoading" = "Заметка загружается…";
 "KnowledgeCanvasNoteText" = "Текст заметки";
 "KnowledgeCanvasNoteSaveHint" = "Ctrl+Enter или щелчок мимо — сохранить, Esc — отменить";
+"KnowledgeCanvasNewNote" = "Новая заметка";
+"KnowledgeCanvasNewNoteHere" = "Новая заметка здесь";
+"KnowledgeCanvasNewNoteHint" = "Настоящая заметка: появится в «Заметках» и на графе";
+"KnowledgeCanvasNewNoteLinkedHint" = "Заметка создаётся в «Заметках», её карточка встаёт на конец стрелки";
+"KnowledgeCanvasNewNoteCreate" = "Создать заметку";
+"KnowledgeCanvasDropNote" = "Заметка из списка";
+"KnowledgeCanvasNoteRestored" = "Заметку удалили, пока вы её правили. Текст сохранён в заметке «{name}»";
+"KnowledgeCanvasImages" = "Картинки на холсте";
+"KnowledgeCanvasImagesFull" = "В полном качестве";
+"KnowledgeCanvasImagesThumb" = "Миниатюрами";
+"KnowledgeCanvasImagesHint" = "Миниатюры берегут мобильный трафик. Настройка действует только на этом устройстве";
 "KnowledgeFilesItems_one" = "{count} объект";
 "KnowledgeFilesItems_few" = "{count} объекта";
 "KnowledgeFilesItems_many" = "{count} объектов";

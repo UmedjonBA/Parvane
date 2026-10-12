@@ -3901,6 +3901,17 @@
 "KnowledgeCanvasNoteLoading" = "Loading the note…";
 "KnowledgeCanvasNoteText" = "Note text";
 "KnowledgeCanvasNoteSaveHint" = "Ctrl+Enter or a click outside saves, Esc cancels";
+"KnowledgeCanvasNewNote" = "New note";
+"KnowledgeCanvasNewNoteHere" = "New note here";
+"KnowledgeCanvasNewNoteHint" = "A real note: it appears in «Notes» and on the graph";
+"KnowledgeCanvasNewNoteLinkedHint" = "The note is created in «Notes», its card is put at the end of the arrow";
+"KnowledgeCanvasNewNoteCreate" = "Create note";
+"KnowledgeCanvasDropNote" = "Existing note";
+"KnowledgeCanvasNoteRestored" = "The note was deleted while you were editing. Your text is saved as «{name}»";
+"KnowledgeCanvasImages" = "Pictures on the canvas";
+"KnowledgeCanvasImagesFull" = "Full quality";
+"KnowledgeCanvasImagesThumb" = "Thumbnails";
+"KnowledgeCanvasImagesHint" = "Thumbnails save mobile data. The setting applies to this device only";
 "KnowledgeFilesItems_one" = "{count} item";
 "KnowledgeFilesItems_other" = "{count} items";
 "KnowledgeFilesVault" = "notes vault · .md";

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf, fileTypeLabel,
-  freeName, kindOfFile, namesIn, pathOf, searchNodes, sizeOf, sortNodes, subtreeOf, trashDaysLeft, trashOf, usageOf,
-  validateName,
+  freeName, isServiceNode, kindOfFile, listedNodes, namesIn, pathOf, searchNodes, sizeOf, sortNodes, subtreeOf,
+  trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
 function node(
@@ -180,5 +180,39 @@ describe('облако: модель дерева', () => {
     expect(decodeTextPreview(new Uint8Array([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]))).toBe('Привет');
     expect(decodeTextPreview(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]))).toBeUndefined();
     expect(decodeTextPreview(new Uint8Array())).toBe('');
+  });
+});
+
+describe('облако: служебные файлы Parvane', () => {
+  const VAULT: CloudNode[] = [
+    node('v', 'folder', 'Знания'),
+    node('m', 'file', '.parvane-guide.json', 'v', { size: 40 }),
+    node('n', 'file', 'Идея.md', 'v'),
+    node('p', 'folder', '.parvane-папка', 'v'),
+    node('q', 'file', '.PARVANE-other.json'),
+    node('r', 'file', 'parvane-заметки.txt'),
+    node('t', 'file', '.parvane-old.json', 'v', { trashed: true, trashTop: true, trashedAt: 3, size: 5 }),
+  ];
+
+  it('служебный — файл с именем на `.parvane-`; папка и обычное имя — нет', () => {
+    expect(VAULT.filter(isServiceNode).map((n) => n.id)).toEqual(['m', 'q', 't']);
+  });
+
+  it('в списке папки, поиске и счётчике служебных файлов нет', () => {
+    const listed = listedNodes(VAULT);
+    expect(childrenOf(listed, 'v').map((n) => n.id)).toEqual(['n', 'p']);
+    expect(childrenOf(listed).map((n) => n.id)).toEqual(['v', 'r']);
+    expect(searchNodes(listed, 'parvane').map((n) => n.id)).toEqual(['p', 'r']);
+    expect(searchNodes(listed, 'guide')).toEqual([]);
+  });
+
+  it('корзина, квота и занятые имена считают служебные файлы как обычные', () => {
+    expect(trashOf(VAULT).map((n) => n.id)).toEqual(['t']);
+    expect(usageOf(VAULT)).toEqual({ total: 75, trash: 5 });
+    expect(namesIn(VAULT, 'v')).toContain('.parvane-guide.json');
+  });
+
+  it('без служебных файлов список возвращается тем же массивом', () => {
+    expect(listedNodes(TREE)).toBe(TREE);
   });
 });

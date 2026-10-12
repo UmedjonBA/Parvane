@@ -10,17 +10,28 @@ import TeactDOM from '../../../lib/teact/teact-dom';
 // доходят до жеста, а отрисовка переживает смену выделения
 
 const NO_COMPONENT = { default: () => undefined };
+const NOTE = {
+  id: 'n1', title: 'Идея', folder: '', text: '# Идея\n\nстарое\n', updatedAt: 1, fileId: 'f1', isDaily: false,
+};
+
+const store = vi.hoisted(() => ({
+  notes: [] as unknown[],
+  createNote: undefined as unknown as ReturnType<typeof vi.fn>,
+  saveNoteOrRestore: undefined as unknown as ReturnType<typeof vi.fn>,
+  showNotification: undefined as unknown as ReturnType<typeof vi.fn>,
+}));
 
 vi.mock('./notesStore', async () => {
   const { createSignal } = await import('../../../util/signals');
   return {
     getNotesStatus: createSignal('ready')[0],
-    getNotes: createSignal([])[0],
+    getNotes: () => store.notes,
+    createNote: (store.createNote = vi.fn()),
+    saveNoteOrRestore: (store.saveNoteOrRestore = vi.fn()),
     saveCanvas: vi.fn(() => Promise.resolve('canvas')),
     deleteCanvas: vi.fn(),
     renameCanvas: vi.fn(),
     renameNote: vi.fn(),
-    saveNote: vi.fn(),
     freeNoteTitle: (noteId: string, title: string) => title,
   };
 });
@@ -28,14 +39,24 @@ vi.mock('../cloud/cloudStore', async () => {
   const { createSignal } = await import('../../../util/signals');
   return { getCloudData: createSignal(undefined)[0], getNodes: () => [], downloadCloudNode: vi.fn() };
 });
-vi.mock('../../../global', () => ({ getActions: () => ({ showNotification: vi.fn() }) }));
+vi.mock('../../../global', () => ({
+  getActions: () => ({ showNotification: (store.showNotification ||= vi.fn()) }),
+}));
 vi.mock('../../../hooks/useLang', () => ({ default: () => (key: string) => key }));
 vi.mock('../cloud/CloudPreview', () => NO_COMPONENT);
 vi.mock('../../ui/ConfirmDialog', () => NO_COMPONENT);
 vi.mock('./CanvasFilePicker', () => NO_COMPONENT);
 vi.mock('./CanvasFileBody', () => NO_COMPONENT);
 vi.mock('./CanvasLinkBody', () => NO_COMPONENT);
-vi.mock('./PvSheet', () => NO_COMPONENT);
+// Шторка — её содержимое, пока она открыта
+vi.mock('./PvSheet', async () => {
+  const teact = (await import('../../../lib/teact/teact')).default;
+  return {
+    default: ({ isOpen, children }: { isOpen: boolean; children: never }) => (
+      isOpen ? teact.createElement('div', { 'data-sheet': true }, children) : undefined
+    ),
+  };
+});
 
 // Группа 610×100 с двумя карточками, занимающими её почти целиком, и стрелкой между ними (от правой стороны
 // первой к верху второй, середина кривой — около точки (-308, 110)); свободны только поля группы
@@ -107,14 +128,41 @@ async function drop(at: Point) {
   await frame();
 }
 
-async function mount() {
+// Нажатие на самом элементе (точка на стороне карточки)
+function fireOn(element: Element, type: string, at: Point) {
+  const [x, y, scale] = viewOf();
+  const event = new MouseEvent(type, {
+    bubbles: true, cancelable: true, clientX: at.x * scale + x, clientY: at.y * scale + y, button: 0,
+  });
+  Object.assign(event, { pointerId: 1, pointerType: 'mouse' });
+  element.dispatchEvent(event);
+}
+
+// Стрелка от правой стороны карточки «Альфа», брошенная в точке холста
+async function dragArrow(to: Point) {
+  const start = { x: -430, y: 150 };
+  fireOn(find('[data-canvas-node="alpha"] [data-canvas-port="right"]'), 'pointerdown', start);
+  fire('pointermove', { x: (to.x + start.x) / 2, y: to.y });
+  fire('pointermove', to);
+  await frame();
+  fire('pointerup', to);
+  await frame();
+}
+
+const command = (name: string) => find(`[data-canvas-command="${name}"]`);
+const edgeCount = () => root.querySelectorAll('[data-canvas-edge]').length;
+const nodeIds = () => Array.from(root.querySelectorAll<HTMLElement>('[data-canvas-node]'))
+  .map((node) => node.dataset.canvasNode!);
+
+async function mount(doc: unknown = DOC, notes: unknown[] = []) {
   root = document.createElement('div');
   document.body.appendChild(root);
+  store.notes = notes;
   TeactDOM.render(Teact.createElement(NotesCanvas, {
     canvases: [{
-      id: 'canvas', title: 'Холст', text: JSON.stringify(DOC), fileId: 'file',
+      id: 'canvas', title: 'Холст', text: JSON.stringify(doc), fileId: 'file',
     }],
-    notes: [],
+    notes,
     isNarrow: false,
     onOpenTitle: () => undefined,
   }) as Parameters<typeof TeactDOM.render>[0], root);
@@ -210,5 +258,152 @@ describe('холст: нажатия мыши', () => {
     expect(viewOf()[1]).not.toBe(view[1]);
     expect(placeOf('pair')).toEqual([-700, 100]);
     expect(placeOf('alpha')).toEqual([-680, 120]);
+  });
+});
+
+describe('холст: стрелка, брошенная на пустом месте', () => {
+  it('спрашивает, что поставить на конце; стрелка остаётся на экране, пока открыто меню', async () => {
+    await mount();
+    await dragArrow(OUTSIDE);
+    expect(Array.from(root.querySelectorAll<HTMLElement>('[data-canvas-command]'))
+      .map((item) => item.dataset.canvasCommand)).toEqual(['dropNewNote', 'dropNote', 'dropText']);
+    expect(root.querySelector('[data-canvas-draft]')).not.toBeNull();
+    expect(nodeIds()).toHaveLength(3);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await frame();
+    expect(root.querySelector('[data-canvas-context]')).toBeNull();
+    expect(root.querySelector('[data-canvas-draft]')).toBeNull();
+    expect(nodeIds()).toHaveLength(3);
+    expect(edgeCount()).toBe(1);
+  });
+
+  it('«Текстовая карточка» ставит связанную карточку с открытым полем текста', async () => {
+    await mount();
+    await dragArrow(OUTSIDE);
+    command('dropText').click();
+    await frame();
+    expect(nodeIds()).toHaveLength(4);
+    expect(edgeCount()).toBe(2);
+    expect(root.querySelector('textarea[data-canvas-inline]')).not.toBeNull();
+  });
+
+  it('«Новая заметка» создаёт заметку в хранилище, ставит её карточку и стрелку к ней', async () => {
+    store.createNote.mockReset();
+    store.createNote.mockImplementation((title: string) => {
+      // Название занято: хранилище даёт заметке номер
+      store.notes = [{ ...NOTE, id: 'n7', title: `${title} 2` }];
+      return Promise.resolve('n7');
+    });
+    await mount();
+    await dragArrow(OUTSIDE);
+    command('dropNewNote').click();
+    await frame();
+    const field = find('#knowledge-canvas-note-name') as HTMLInputElement;
+    field.value = '  Замысел ';
+    find('[data-canvas-note-create]').click();
+    await frame();
+    expect(store.createNote).toHaveBeenCalledWith('Замысел', 'KnowledgeVaultName');
+    const card = find('[data-canvas-type="file"]');
+    expect(card.querySelector('[data-canvas-note-title]')!.textContent).toBe('Замысел 2');
+    // Карточка стоит за точкой, где брошена стрелка: левым краем к ней, на сетке
+    expect(placeOf(card.dataset.canvasNode!)).toEqual([200, 330]);
+    expect(edgeCount()).toBe(2);
+    expect(root.querySelector('#knowledge-canvas-note-name')).toBeNull();
+  });
+
+  it('пустое название заметку не создаёт', async () => {
+    store.createNote.mockReset();
+    await mount();
+    await dragArrow(OUTSIDE);
+    command('dropNewNote').click();
+    await frame();
+    find('[data-canvas-note-create]').click();
+    await frame();
+    expect(store.createNote).not.toHaveBeenCalled();
+    expect(root.querySelector('#knowledge-canvas-note-name')).not.toBeNull();
+    expect(nodeIds()).toHaveLength(3);
+  });
+});
+
+describe('холст: новая заметка кнопкой панели', () => {
+  it('создаёт заметку и ставит её карточку без стрелки', async () => {
+    store.createNote.mockReset();
+    store.createNote.mockImplementation((title: string) => {
+      store.notes = [{ ...NOTE, id: 'n8', title }];
+      return Promise.resolve('n8');
+    });
+    await mount();
+    find('[data-canvas-tool="new-note"]').click();
+    await frame();
+    (find('#knowledge-canvas-note-name') as HTMLInputElement).value = 'Черновик';
+    find('[data-canvas-note-create]').click();
+    await frame();
+    expect(find('[data-canvas-type="file"] [data-canvas-note-title]').textContent).toBe('Черновик');
+    expect(edgeCount()).toBe(1);
+  });
+
+  it('заметка не создалась — карточки нет', async () => {
+    store.createNote.mockReset();
+    store.createNote.mockResolvedValue(undefined);
+    await mount();
+    find('[data-canvas-tool="new-note"]').click();
+    await frame();
+    (find('#knowledge-canvas-note-name') as HTMLInputElement).value = 'Черновик';
+    find('[data-canvas-note-create]').click();
+    await frame();
+    expect(root.querySelector('[data-canvas-type="file"]')).toBeNull();
+  });
+});
+
+describe('холст: правка заметки на карточке', () => {
+  const NOTE_DOC = {
+    nodes: [{
+      id: 'card', type: 'file', x: 0, y: 300, width: 250, height: 140, file: 'Идея.md', pvNote: 'n1',
+    }],
+    edges: [],
+  };
+  const DRAFT = '# Идея\n\nстарое\nнабрано на карточке\n';
+
+  // Двойной щелчок по тексту карточки и набранный текст, сохранённый Ctrl+Enter
+  async function editNote(text: string) {
+    const body = find('[data-canvas-note-body]');
+    Object.assign(document, { elementFromPoint: () => body });
+    fire('dblclick', { x: 100, y: 380 });
+    await frame();
+    const editor = find('[data-canvas-note-editor]') as HTMLTextAreaElement;
+    editor.value = text;
+    editor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true,
+    }));
+    await frame();
+  }
+
+  it('заметку удалили за время правки: текст уходит в хранилище, карточка указывает на новую заметку', async () => {
+    store.saveNoteOrRestore.mockReset();
+    store.saveNoteOrRestore.mockResolvedValue({ status: 'restored', id: 'n9', title: 'Идея 2' });
+    await mount(NOTE_DOC, [NOTE]);
+    store.showNotification.mockClear();
+    await editNote(DRAFT);
+    expect(store.saveNoteOrRestore).toHaveBeenCalledWith('n1', 'Идея', DRAFT, 'KnowledgeVaultName', NOTE.text);
+    expect(find('[data-canvas-node="card"] [data-canvas-note-title]').textContent).toBe('Идея 2');
+    expect(store.showNotification).toHaveBeenCalledTimes(1);
+    expect(root.querySelector('[data-canvas-note-editor]')).toBeNull();
+  });
+
+  it('запись не удалась: поле открыто снова с набранным текстом', async () => {
+    store.saveNoteOrRestore.mockReset();
+    store.saveNoteOrRestore.mockResolvedValue({ status: 'failed' });
+    await mount(NOTE_DOC, [NOTE]);
+    await editNote(DRAFT);
+    expect((find('[data-canvas-note-editor]') as HTMLTextAreaElement).value).toBe(DRAFT);
+  });
+
+  it('сохранённая заметка поле закрывает, карточка остаётся при своей заметке', async () => {
+    store.saveNoteOrRestore.mockReset();
+    store.saveNoteOrRestore.mockResolvedValue({ status: 'saved' });
+    await mount(NOTE_DOC, [NOTE]);
+    await editNote(DRAFT);
+    expect(root.querySelector('[data-canvas-note-editor]')).toBeNull();
+    expect(find('[data-canvas-node="card"] [data-canvas-note-title]').textContent).toBe('Идея');
   });
 });

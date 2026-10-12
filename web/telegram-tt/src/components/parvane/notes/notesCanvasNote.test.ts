@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  inlineKeyAction, nextNoteTitle, noteCardAction, notePreviewLines,
+  droppedCardPlace, inlineKeyAction, nextNoteTitle, noteCardAction, notePreviewLines, relinkNoteCards,
 } from './notesCanvasNote';
 
 describe('noteCardAction', () => {
@@ -98,5 +98,50 @@ describe('notePreviewLines', () => {
 
   it('пустой текст — пустой список', () => {
     expect(notePreviewLines('# Заметка\n\n', 'заметка', 7)).toEqual([]);
+  });
+});
+
+describe('droppedCardPlace', () => {
+  const at = { x: 400, y: 300 };
+
+  it('карточка встаёт за концом стрелки по её ходу, на сетке', () => {
+    expect(droppedCardPlace(at, 'right', 250, 140, 20)).toEqual({ x: 400, y: 240 });
+    expect(droppedCardPlace(at, 'left', 250, 140, 20)).toEqual({ x: 160, y: 240 });
+    expect(droppedCardPlace(at, 'bottom', 250, 140, 20)).toEqual({ x: 280, y: 300 });
+    expect(droppedCardPlace(at, 'top', 250, 140, 20)).toEqual({ x: 280, y: 160 });
+  });
+});
+
+describe('relinkNoteCards', () => {
+  const card = (id: string, file: string, pvNote?: string) => ({
+    id, type: 'file', x: 0, y: 0, width: 250, height: 140, file, ...(pvNote ? { pvNote } : {}),
+  });
+  const doc = {
+    nodes: [
+      card('a', 'Идея.md', 'n1'),
+      card('b', 'Проекты/идея.md'),
+      card('c', 'План.md', 'n2'),
+      {
+        id: 't', type: 'text', x: 0, y: 0, width: 250, height: 60, text: 'Идея',
+      },
+    ],
+    edges: [],
+  };
+
+  it('карточки удалённой заметки указывают на новую: идентификатор и название в пути', () => {
+    const next = relinkNoteCards(doc, 'n1', 'Идея', 'n9', 'Идея 2');
+    expect(next.nodes.map((node) => [node.file, node.pvNote])).toEqual([
+      ['Идея 2.md', 'n9'], ['Проекты/Идея 2.md', 'n9'], ['План.md', 'n2'], [undefined, undefined],
+    ]);
+  });
+
+  it('название прежнее — путь не меняется, идентификатор новый', () => {
+    const next = relinkNoteCards(doc, 'n1', 'Идея', 'n9', 'Идея');
+    expect(next.nodes[0]).toMatchObject({ file: 'Идея.md', pvNote: 'n9' });
+    expect(next.nodes[2]).toBe(doc.nodes[2]);
+  });
+
+  it('карточек заметки нет — прежний документ', () => {
+    expect(relinkNoteCards(doc, 'n5', 'Другое', 'n9', 'Другое')).toBe(doc);
   });
 });

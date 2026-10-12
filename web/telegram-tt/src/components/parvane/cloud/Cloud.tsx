@@ -15,7 +15,7 @@ import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { openPalette } from '../palette/paletteOpen';
 import {
-  childrenOf, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
+  childrenOf, listedNodes, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
 import {
   answerCloudInvite, canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
@@ -156,13 +156,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
       // Поиск — по всем папкам: личный диск, свои и принятые совместные; корзина не в счёт
       const owners = new Map<CloudNode, string>();
       (allContainers || []).filter((c) => c.kind !== 'invite').forEach((c) => {
-        searchNodes(getNodes(c.id, data), trimmedQuery).forEach((node) => owners.set(node, c.id));
+        searchNodes(listedNodes(getNodes(c.id, data)), trimmedQuery).forEach((node) => owners.set(node, c.id));
       });
       return sortNodes(Array.from(owners.keys()), prefs.sort).map((node) => ({ container: owners.get(node)!, node }));
     }
     if (isTrash) return trash;
     if (isSharedList || !containerId) return [];
-    return sortNodes(childrenOf(nodes, place.folder), prefs.sort).map((node) => ({ container: containerId, node }));
+    // Служебные файлы Parvane (отметка справки в хранилище заметок) в списке не показываются
+    return sortNodes(childrenOf(listedNodes(nodes), place.folder), prefs.sort)
+      .map((node) => ({ container: containerId, node }));
   }, [trimmedQuery, allContainers, data, prefs.sort, isTrash, trash, isSharedList, containerId, nodes, place.folder]);
 
   // Куда можно переносить: личный диск и совместные папки с правом записи
@@ -563,7 +565,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
 
   function renderContainerRow(c: CloudContainerInfo) {
     const isOwned = c.kind === 'owned';
-    const count = childrenOf(getNodes(c.id, data)).length;
+    const count = childrenOf(listedNodes(getNodes(c.id, data))).length;
     return (
       <div
         key={c.id}
@@ -888,7 +890,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
                       : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
                         : lang('ParvaneCloudTrashExpired')}
                     daysLeft={daysLeft}
-                    childCount={entryNodes ? childrenOf(entryNodes, entry.node.id).length : undefined}
+                    childCount={entryNodes ? childrenOf(listedNodes(entryNodes), entry.node.id).length : undefined}
                     folderSize={entryNodes ? sizeOf(entryNodes, entry.node.id) : undefined}
                     isSelected={selected.includes(keyOf(entry))}
                     isSelecting={selected.length > 0}
