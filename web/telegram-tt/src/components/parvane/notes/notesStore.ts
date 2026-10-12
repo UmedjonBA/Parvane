@@ -5,17 +5,24 @@
 
 import type { CloudDriveState } from '../../../api/parvane/cloudDrive';
 import type { CloudNode } from '../cloud/cloudModel';
+import type { FolderSubmitError, NoteFolder } from './notesFolders';
+import type { GuideDrive, GuideLang, GuideMode } from './notesGuide';
 import type { NotesIndex, NoteSource } from './notesModel';
 
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import {
-  getCloudData, getNodes, loadCloud, refreshCloud, renameCloudNode, trashCloudNodes,
+  getCloudData, getNodes, loadCloud, moveCloudNodes, refreshCloud, renameCloudNode, trashCloudNodes,
 } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
 import { parseCanvas, serializeCanvas } from './notesCanvas';
 import { freeCanvasTitle, renameCanvasNote } from './notesCanvasGraph';
+import { checkFolderName, folderContents, listNoteFolders } from './notesFolders';
+import {
+  buildGuideMarker, findGuideOverview, GUIDE_MARKER_MIME, GUIDE_MARKER_NAME, GUIDE_MARKER_NODE_ID, hasGuideMarker,
+  planGuide,
+} from './notesGuide';
 import { mergeNotes } from './notesMerge';
 import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNote, renameLinks,
@@ -23,9 +30,6 @@ import {
 import {
   applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, planNoteTasks,
 } from './notesTasks';
-import {
-  buildWelcomeNote, WELCOME_NOTE_NODE_ID, WELCOME_VAULT_NODE_ID, type WelcomeLang,
-} from './notesWelcome';
 
 export type NoteEntry = NoteSource & {
   // Версия содержимого, от которой идёт следующая правка
@@ -34,12 +38,15 @@ export type NoteEntry = NoteSource & {
 };
 export type CanvasEntry = { id: string; title: string; text: string; fileId: string };
 export type NotesStatus = 'loading' | 'ready';
-export type NotesNotice = { code: 'conflict' | 'failed' | 'merged'; title: string; at: number };
+export type NotesNotice = {
+  code: 'conflict' | 'failed' | 'merged' | 'folder-files' | 'guide-failed'; title: string; at: number;
+};
+export type FolderDeleteResult = 'done' | 'has-notes' | 'has-files' | 'failed';
 
-export type NotesOptions = { welcomeLang: WelcomeLang; vaultName: string };
+export type NotesOptions = { guideLang: GuideLang; vaultName: string };
 
 type TextResult = { text: string; fileId: string } | undefined;
-type DriveCheck = 'unknown' | 'none' | 'synced';
+type GuideResult = { status: 'retry' | 'skipped' } | { status: 'done'; isFreshVault: boolean; overviewId?: string };
 type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string } | undefined;
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
@@ -53,16 +60,20 @@ const CANVAS_MIME = 'application/json';
 const ROOT = 'root';
 const LOAD_PARALLEL = 4;
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+// Столько раз за сессию справка пробует создаться сама (сбой записи — повтор при следующем изменении облака)
+const GUIDE_ATTEMPTS_MAX = 3;
 
 const [getNotes, setNotes] = createSignal<NoteEntry[]>([]);
 const [getCanvases, setCanvases] = createSignal<CanvasEntry[]>([]);
 const [getNotesStatus, setNotesStatus] = createSignal<NotesStatus>('loading');
 const [getNotesNotice, setNotesNotice] = createSignal<NotesNotice | undefined>(undefined);
-// Первая заметка, созданная в этой сессии: раздел открывает её сам
-const [getWelcomeNoteId, setWelcomeNoteId] = createSignal<string | undefined>(undefined);
+// Папки хранилища (пустые тоже): список заметок показывает их заголовками
+const [getNoteFolders, setNoteFolders] = createSignal<NoteFolder[]>([]);
+// «Обзор» справки, созданной в этой сессии вместе с хранилищем: раздел открывает его сам
+const [getGuideOpenId, setGuideOpenId] = createSignal<string | undefined>(undefined);
 
 export {
-  getNotes, getCanvases, getNotesStatus, getNotesNotice, getWelcomeNoteId,
+  getNotes, getCanvases, getNotesStatus, getNotesNotice, getNoteFolders, getGuideOpenId,
 };
 
 let isListening = false;
@@ -72,10 +83,11 @@ let cachedIndex: { notes: NoteEntry[]; index: NotesIndex } | undefined;
 const knownMarkers = new Set<string>();
 const texts = new Map<string, { fileId: string; text: string }>();
 let notesUserId: string | undefined;
-let welcomeOptions: NotesOptions | undefined;
-// Первая заметка: идёт проверка и создание (правки хранилища её ждут) либо вопрос для этой сессии решён
-let welcomeRun: Promise<void> | undefined;
-let isWelcomeSettled = false;
+let notesOptions: NotesOptions | undefined;
+// Справка: идёт проверка и создание (создание папки хранилища её ждёт) либо вопрос для этой сессии решён
+let guideRun: Promise<unknown> | undefined;
+let isGuideSettled = false;
+let guideAttempts = 0;
 
 function rootIdOf(data = getCloudData()) {
   return data?.rootId;
@@ -87,12 +99,8 @@ function findVault(nodes: CloudNode[]) {
   ));
 }
 
-// Папка хранилища в любом состоянии, в том числе в корзине: хранилище у аккаунта уже заводили
-function hasVaultTrace(nodes: CloudNode[]) {
-  return nodes.some((node) => (
-    node.id === WELCOME_VAULT_NODE_ID || node.id === WELCOME_NOTE_NODE_ID
-    || (node.kind === 'folder' && !node.parent && VAULT_NAMES.includes(node.name))
-  ));
+function newNodeId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function pathOf(nodes: CloudNode[], node: CloudNode, vaultId: string) {
@@ -164,58 +172,139 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   }));
   setNotes(notes);
   setCanvases(canvases);
+  setNoteFolders(vault ? listNoteFolders(nodes, vault.id) : []);
   setNotesStatus('ready');
-  if (!hasVaultTrace(nodes)) startWelcome();
-  else isWelcomeSettled = true;
+  if (hasGuideMarker(nodes, VAULT_NAMES)) isGuideSettled = true;
+  else startGuide();
 }
 
-// Первая заметка хранилища — один раз на аккаунт. Создаётся, только когда всё сразу верно:
-// (1) в личном диске нет и следа папки хранилища (нет её и в корзине) — у аккаунта с заметками, как и у
-//     аккаунта, удалившего первую заметку, папка есть;
+// Справка Parvane — один раз на аккаунт (решение и перечень узлов — `planGuide`). Создаётся сама, когда:
+// (1) в хранилище нет файла-отметки (нет его и в корзине): отметка ставится последней и остаётся, даже если
+//     справку потом удалили, — второй раз сама она не создаётся ни на одном устройстве аккаунта;
 // (2) дерево диска только что сверено с сервером (`parvaneCloudCheckDrive`): непривязанное устройство,
 //     устройство без связи и устройство, до которого ещё не дошёл диск другого своего устройства, получают
-//     `unknown` и ничего не создают; диска нет вовсе (`none`) — он создаётся этой же правкой;
-// (3) папка и заметка создаются одной правкой с постоянными идентификаторами: два устройства, успевшие
-//     пройти (1) и (2) одновременно, дают один и тот же узел, а стёртая из корзины папка с таким
-//     идентификатором заново не создаётся, пока движок помнит её стёртой.
-function startWelcome() {
-  const options = welcomeOptions;
-  if (!options || welcomeRun || isWelcomeSettled) return;
+//     `unknown` и ничего не создают; диска нет вовсе (`none`) — он создаётся первой же правкой;
+// (3) узлы создаются с постоянными идентификаторами: два устройства, прошедшие (1) и (2) одновременно, дают
+//     одни и те же папку, заметки и отметку — движок сводит их в один набор. Прерванное создание продолжается
+//     при следующем открытии: дописывается только то, чего ещё нет.
+function startGuide() {
+  const options = notesOptions;
+  if (!options || guideRun || isGuideSettled || guideAttempts >= GUIDE_ATTEMPTS_MAX) return;
   const userId = notesUserId;
-  welcomeRun = (async () => {
-    const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as DriveCheck | undefined;
+  guideRun = (async () => {
+    const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as GuideDrive | undefined;
     // Судить рано: попытка повторится со следующим изменением облака
     if (!check || check === 'unknown' || userId !== notesUserId) return;
-    const data = await refreshCloud();
-    const rootId = rootIdOf(data);
-    if (!data || Boolean(rootId) !== (check === 'synced')) return;
-    isWelcomeSettled = true;
-    if (rootId && hasVaultTrace(getNodes(rootId, data))) return;
-    const welcome = buildWelcomeNote(options.welcomeLang);
-    const result = await callParvane('parvaneCloudWriteText', {
-      container: ROOT,
-      name: `${welcome.title}${NOTE_EXTENSION}`,
-      text: welcome.text,
-      newNodeId: WELCOME_NOTE_NODE_ID,
-      newFolder: { id: WELCOME_VAULT_NODE_ID, name: options.vaultName },
-    }).catch(() => undefined) as WriteResult;
-    if (!result?.ok || !result.node) {
-      // Запись не удалась целиком (ни папки, ни заметки) — попробуем при следующем изменении облака
-      isWelcomeSettled = false;
-      return;
-    }
-    texts.set(result.node, { fileId: result.fileId!, text: welcome.text });
-    setWelcomeNoteId(result.node);
-    // Дерево с новой папкой — до того, как продолжатся правки, ждавшие эту проверку
-    await refreshCloud();
+    guideAttempts++;
+    const result = await writeGuide('auto', check, options);
+    if (result.status === 'retry' || userId !== notesUserId) return;
+    isGuideSettled = true;
+    if (result.status === 'done' && result.isFreshVault) setGuideOpenId(result.overviewId);
   })().catch(() => undefined).finally(() => {
-    welcomeRun = undefined;
+    guideRun = undefined;
   });
 }
 
-/** Раздел показал первую заметку — больше её открывать не нужно. */
-export function consumeWelcomeNote() {
-  setWelcomeNoteId(undefined);
+async function writeGuide(mode: GuideMode, check: GuideDrive, options: NotesOptions): Promise<GuideResult> {
+  const data = await refreshCloud();
+  const rootId = rootIdOf(data);
+  if (!data || Boolean(rootId) !== (check === 'synced')) return { status: 'retry' };
+  const plan = planGuide({
+    drive: check,
+    nodes: rootId ? getNodes(rootId, data) : [],
+    lang: options.guideLang,
+    vaultName: options.vaultName,
+    vaultNames: VAULT_NAMES,
+    mode,
+    makeId: newNodeId,
+  });
+  if (plan.action === 'skip') return { status: 'skipped' };
+  if (plan.folders.length) {
+    // Папки — одной правкой: либо появятся все, либо ни одной
+    const result = await callParvane('parvaneCloudApply', {
+      container: ROOT,
+      ops: plan.folders.map(({ id, name, parent }) => ({
+        op: 'create', id, kind: 'folder', parent, name,
+      })),
+    }).catch(() => undefined) as { ok: boolean } | undefined;
+    if (!result?.ok) return { status: 'retry' };
+    const fresh = await refreshCloud();
+    const nodes = getNodes(rootIdOf(fresh), fresh);
+    // Стёртая из корзины папка с постоянным идентификатором заново не появляется, пока движок помнит её
+    // стёртой: справку этому аккаунту уже создавали — остаётся поставить отметку
+    if (!nodes.some(({ id, trashed }) => id === plan.folderId && !trashed)) {
+      if (!findVault(nodes)) return { status: 'skipped' };
+      return (await writeGuideMarker(options)) ? { status: 'done', isFreshVault: false } : { status: 'retry' };
+    }
+  }
+  let overviewId: string | undefined;
+  for (const note of plan.notes) {
+    const result = await callParvane('parvaneCloudWriteText', {
+      container: ROOT,
+      parent: plan.folderId,
+      name: `${note.title}${NOTE_EXTENSION}`,
+      text: note.text,
+      newNodeId: note.nodeId,
+    }).catch(() => undefined) as WriteResult;
+    // Записанное остаётся; недостающее допишет следующая попытка
+    if (!result?.ok || !result.node) return { status: 'retry' };
+    texts.set(result.node, { fileId: result.fileId!, text: note.text });
+    if (note.key === 'overview') overviewId = result.node;
+  }
+  if (plan.hasMarkerWrite && !(await writeGuideMarker(options))) return { status: 'retry' };
+  // Дерево со справкой — до того, как продолжатся правки, ждавшие эту проверку
+  await refreshCloud();
+  return { status: 'done', isFreshVault: plan.isFreshVault, overviewId };
+}
+
+// Файл-отметка в корне хранилища. Узел с постоянным идентификатором мог быть стёрт из корзины — тогда
+// отметка пишется обычным узлом: «справка уже была» узнаётся и по имени файла
+async function writeGuideMarker(options: NotesOptions) {
+  const write = async (nodeId?: string) => {
+    const vault = findVault(getNodes(rootIdOf()));
+    if (!vault) return false;
+    const result = await callParvane('parvaneCloudWriteText', {
+      container: ROOT,
+      parent: vault.id,
+      name: GUIDE_MARKER_NAME,
+      text: buildGuideMarker(options.guideLang, Date.now()),
+      mime: GUIDE_MARKER_MIME,
+      newNodeId: nodeId,
+    }).catch(() => undefined) as WriteResult;
+    if (!result?.ok) return false;
+    const data = await refreshCloud();
+    return hasGuideMarker(getNodes(rootIdOf(data), data), VAULT_NAMES);
+  };
+  return (await write(GUIDE_MARKER_NODE_ID)) || write();
+}
+
+/** Справка по кнопке: недостающие заметки создаются заново, существующие не трогаются. Возвращает id «Обзора». */
+export async function restoreGuide(): Promise<string | undefined> {
+  const options = notesOptions;
+  if (!options) return undefined;
+  // Справку может прямо сейчас создавать само хранилище
+  await guideRun;
+  const existing = findGuideOverview(getNotes());
+  if (existing) return existing.id;
+  const run = (async () => {
+    const check = await callParvane('parvaneCloudCheckDrive').catch(() => undefined) as GuideDrive | undefined;
+    return check && check !== 'unknown' ? writeGuide('restore', check, options) : undefined;
+  })().catch(() => undefined);
+  guideRun = run;
+  const result = await run;
+  guideRun = undefined;
+  await queueSync();
+  const overview = findGuideOverview(getNotes());
+  if (!result || result.status === 'retry' || !overview) {
+    notify('guide-failed', '');
+    return undefined;
+  }
+  return overview.id;
+}
+
+/** Раздел показал справку нового хранилища — больше её открывать не нужно. */
+export function consumeGuideOpen() {
+  setGuideOpenId(undefined);
 }
 
 function queueSync() {
@@ -224,14 +313,15 @@ function queueSync() {
 }
 
 /** Открыть хранилище: дерево облака → тексты заметок; дальше следует за изменениями облака.
- * `options` — язык и название папки для первой заметки нового хранилища. */
+ * `options` — язык справки и название папки нового хранилища. */
 export function loadNotes(userId?: string, options?: NotesOptions) {
   if (notesUserId !== userId) {
     notesUserId = userId;
-    isWelcomeSettled = false;
-    setWelcomeNoteId(undefined);
+    isGuideSettled = false;
+    guideAttempts = 0;
+    setGuideOpenId(undefined);
   }
-  welcomeOptions = options || welcomeOptions;
+  notesOptions = options || notesOptions;
   void loadCloud(userId);
   if (!isListening) {
     isListening = true;
@@ -257,8 +347,8 @@ function notify(code: NotesNotice['code'], title: string) {
 }
 
 async function ensureFolder(name: string, parent?: string): Promise<string | undefined> {
-  // Папку хранилища может прямо сейчас создавать первая заметка — второй такой же папки не нужно
-  await welcomeRun;
+  // Папку хранилища может прямо сейчас создавать справка — второй такой же папки не нужно
+  if (!findVault(getNodes(rootIdOf()))) await guideRun;
   const rootId = rootIdOf();
   const names = parent ? [name] : VAULT_NAMES;
   const find = () => getNodes(rootId).find((node) => (
@@ -267,7 +357,7 @@ async function ensureFolder(name: string, parent?: string): Promise<string | und
   ));
   const existing = find();
   if (existing) return existing.id;
-  const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const id = newNodeId();
   const result = await callParvane('parvaneCloudApply', {
     container: ROOT,
     ops: [{
@@ -292,13 +382,16 @@ function uniqueTitle(title: string, notes = getNotes()) {
   }
 }
 
-/** Новая заметка в папке хранилища; возвращает её id. Название занято — добавляется номер. */
+/** Новая заметка в хранилище; возвращает её id. Название занято — добавляется номер.
+ * `folderId` — папка хранилища, `folderName` — папка в корне хранилища по названию (создаётся, если её нет). */
 export async function createNote(
-  title: string, vaultName: string, options: { text?: string; folderName?: string } = {},
+  title: string, vaultName: string, options: { text?: string; folderName?: string; folderId?: string } = {},
 ): Promise<string | undefined> {
   const vault = await ensureFolder(vaultName);
   if (!vault) return undefined;
-  const parent = options.folderName ? await ensureFolder(options.folderName, vault) : vault;
+  const folderId = options.folderId && getNoteFolders().some(({ id }) => id === options.folderId)
+    ? options.folderId : undefined;
+  const parent = folderId || (options.folderName ? await ensureFolder(options.folderName, vault) : vault);
   const name = uniqueTitle(title);
   const text = options.text ?? `# ${name}\n\n`;
   const result = await callParvane('parvaneCloudWriteText', {
@@ -442,6 +535,81 @@ export async function deleteNote(noteId: string) {
   const isDone = await trashCloudNodes(rootId, [node]);
   await queueSync();
   return isDone;
+}
+
+/** Новая папка в корне хранилища; папка с таким названием уже есть — возвращается она. */
+export async function createNoteFolder(
+  name: string, vaultName: string,
+): Promise<{ id?: string; error?: FolderSubmitError }> {
+  const clean = name.trim();
+  if (checkFolderName(clean, []) === 'bad-name') return { error: 'bad-name' };
+  const existing = getNoteFolders().find(({ path }) => path.toLowerCase() === clean.toLowerCase());
+  if (existing) return { id: existing.id };
+  const vault = await ensureFolder(vaultName);
+  const id = vault && await ensureFolder(clean, vault);
+  if (!id) return { error: 'failed' };
+  await queueSync();
+  return { id };
+}
+
+/** Перенести заметку в папку хранилища (`folderId` не задан — «Без папки»). Узел остаётся тем же: ссылки по
+ * названию, карточки холстов (название и id заметки) и задачи «Плана» из её пунктов переноса не замечают. */
+export async function moveNote(noteId: string, folderId?: string) {
+  const rootId = rootIdOf();
+  const nodes = getNodes(rootId);
+  const node = nodes.find(({ id }) => id === noteId);
+  const target = folderId ? getNoteFolders().find(({ id }) => id === folderId)?.id : findVault(nodes)?.id;
+  if (!rootId || !node || !target) return false;
+  if (node.parent === target) return true;
+  const isDone = await moveCloudNodes(rootId, [node], target);
+  if (!isDone) notify('failed', node.name.slice(0, -NOTE_EXTENSION.length));
+  await queueSync();
+  return isDone;
+}
+
+/** Переименовать папку заметок. Заметки остаются в ней; ссылки на них идут по названиям заметок. */
+export async function renameNoteFolder(
+  folderId: string, name: string,
+): Promise<FolderSubmitError | undefined> {
+  const rootId = rootIdOf();
+  const nodes = getNodes(rootId);
+  const node = nodes.find(({ id }) => id === folderId);
+  const clean = name.trim();
+  if (!rootId || !node || !getNoteFolders().some(({ id }) => id === folderId)) return 'failed';
+  if (clean === node.name) return undefined;
+  const siblings = nodes.filter((other) => (
+    other.kind === 'folder' && !other.trashed && other.id !== folderId && other.parent === node.parent
+  )).map((other) => other.name);
+  const error = checkFolderName(clean, siblings);
+  if (error) return error;
+  if (!(await renameCloudNode(rootId, node, clean))) return 'failed';
+  await queueSync();
+  return undefined;
+}
+
+/** Удалить папку заметок: пустая уходит в корзину облака. С заметками — только с `shouldMoveNotes`: заметки
+ * сначала переносятся в «Без папки». Папка с файлами, которые не заметки, не удаляется — это делают в «Файлах». */
+export async function deleteNoteFolder(folderId: string, shouldMoveNotes?: boolean): Promise<FolderDeleteResult> {
+  const rootId = rootIdOf();
+  const nodes = getNodes(rootId);
+  const node = nodes.find(({ id }) => id === folderId);
+  const vault = findVault(nodes);
+  if (!rootId || !node || !vault || !getNoteFolders().some(({ id }) => id === folderId)) return 'failed';
+  const inside = folderContents(nodes, folderId);
+  if (inside.others.length) {
+    notify('folder-files', node.name);
+    return 'has-files';
+  }
+  if (inside.notes.length) {
+    if (!shouldMoveNotes) return 'has-notes';
+    if (!(await moveCloudNodes(rootId, inside.notes, vault.id))) {
+      notify('failed', node.name);
+      return 'failed';
+    }
+  }
+  const isDone = await trashCloudNodes(rootId, [node]);
+  await queueSync();
+  return isDone ? 'done' : 'failed';
 }
 
 /** Холст: создать либо сохранить (`canvasId` не задан — новый). */

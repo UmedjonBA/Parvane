@@ -12,6 +12,7 @@ import buildClassName from '../../../util/buildClassName';
 import { formatRepeat } from '../planner/plannerFormat';
 import { toDayKey } from '../planner/plannerModel';
 import { nextNoteTitle, NOTE_TITLE_MAX } from './notesCanvasNote';
+import { folderCaption } from './notesFolders';
 import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
 import { nearestPlanned } from './notesPlanned';
@@ -42,6 +43,8 @@ type OwnProps = {
   onSave: (noteId: string, text: string, base?: string) => Promise<boolean>;
   onRename: (noteId: string, title: string) => void;
   onDelete: (noteId: string) => void;
+  // Перенос в другую папку: открыть выбор папки
+  onPickFolder?: (noteId: string) => void;
 };
 
 const INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*|(?:^|\s)#[\p{L}\d_/-]+)/gu;
@@ -56,7 +59,7 @@ const PLANNED_PAST_MAX = 3;
 // Заметка: чтение с живыми ссылками, тегами и круглыми галочками; правка — текстом `.md`.
 // Ниже — «Запланировано» (записи «Плана» со ссылкой сюда), на узком экране ещё и «Связи»
 const NoteView = ({
-  note, index, planner, planned, onBack, hasLinks, onOpenTitle, onSave, onRename, onDelete,
+  note, index, planner, planned, onBack, hasLinks, onOpenTitle, onSave, onRename, onDelete, onPickFolder,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
   const baseRef = useRef<string>();
@@ -135,6 +138,10 @@ const NoteView = ({
   const handleDelete = useLastCallback(() => {
     closeDelete();
     onDelete(note.id);
+  });
+
+  const handleFolder = useLastCallback(() => {
+    onPickFolder?.(note.id);
   });
 
   const formatWhen = (day?: string, time?: string, due?: string) => {
@@ -257,7 +264,8 @@ const NoteView = ({
   };
 
   const properties = Object.entries(parsed.properties);
-  const folderName = isDaily ? lang('KnowledgeDailyFolder') : note.folder || lang('KnowledgeRoot');
+  const folderName = isDaily ? lang('KnowledgeDailyFolder')
+    : note.folder ? folderCaption(note.folder) : lang('KnowledgeRoot');
 
   return (
     <article className={styles.note} data-note-id={note.id} data-note-title={note.title}>
@@ -301,7 +309,19 @@ const NoteView = ({
           />
         )}
         <div className={styles.props}>
-          <span className={styles.prop}>{folderName}</span>
+          {onPickFolder && !isDaily ? (
+            <button
+              type="button"
+              className={buildClassName(kit.plain, styles.prop, styles.propButton)}
+              aria-label={`${folderName}. ${lang('KnowledgeMoveNote')}`}
+              title={lang('KnowledgeMoveNote')}
+              data-note-folder={note.folder}
+              onClick={handleFolder}
+            >
+              <PvIcon name="folder" isSmall />
+              {folderName}
+            </button>
+          ) : <span className={styles.prop}>{folderName}</span>}
           {properties.map(([key, value]) => (
             <span key={key} className={styles.prop}>
               {`${key} `}

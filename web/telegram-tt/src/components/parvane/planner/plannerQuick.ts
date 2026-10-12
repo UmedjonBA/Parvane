@@ -161,6 +161,9 @@ type QuickWords = {
   typoSafe?: string;
   // Обычная длительность события по первому слову названия, минуты («пара» — 1 ч 45 мин, «урок» — 45 мин)
   eventMinutes?: Entry<number>[];
+  // Слова-меры: в конце названия значат длительность, а не название («… пн 18:30 пара»). Только те, что
+  // в конце названия обычно не стоят: «урок» и «встреча» сюда не входят («английский урок»)
+  eventMinutesTail?: Entry<number>[];
   // Название и описание (правила — у `splitName`).
   // Слова, с которых начинается описание; само слово остаётся в описании («будет тест», «взять паспорт»)
   descLeads: string;
@@ -268,6 +271,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
     typoSafe: 'завтрак завтраки неделе каждой каждого каждая месяцы выходные выходных будние задачи задачу'
       + ' события событий',
     eventMinutes: [['пар[ауые]', 105], ['урок(?:а|и|ов)?', 45], ['созвон(?:а|ы|ов)?', 30], ['встреч[аиу]', 60]],
+    eventMinutesTail: [['пара', 105]],
     descLeads: 'будет|будут|нужно|надо|не\\s+забыть|взять|принести',
     descLabels: [['(?:описание|примечание|заметка|прим)\\s*:|прим\\.', false], ['тема\\s*:', true]],
     descWeak: 'я|мне|мы|нам|ты|тебе|вы|вам|он|ему|она|ей|они|им|это|что|чтобы|если|когда|как|где|и|или|а|но|не'
@@ -668,6 +672,10 @@ function compile(id: QuickLang, words: QuickWords) {
     waterLead: lead(words.water),
     eventMinutes: (words.eventMinutes || []).map(([body, minutes]) => (
       [new RegExp(`^\\s*(?:${body})${SEPARATOR}`), minutes] as const
+    )),
+    // То же слово в КОНЦЕ названия («ОГЭ по информатике пн 18:30 пара») — мера длительности, не часть названия
+    eventMinutesTail: (words.eventMinutesTail || []).map(([body, minutes]) => (
+      [new RegExp(`(^|.*[^${ALNUM}])(?:${body})\\s*$`), minutes] as const
     )),
     descLeads: words.descLeads,
     // Название начинается служебным словом либо словом-вводом описания или кончается служебным словом
@@ -1367,7 +1375,17 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
       // Обычная длительность — по первому слову НАЗВАНИЯ: «вт 15:00 пара по английскому» — пара,
       // «сдать пару отчётов 9:00» — нет
       const head = draft.name.toLowerCase().replace(/ё/g, 'е');
-      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
+      let usual = lang.eventMinutes.find(([pattern]) => pattern.test(head))?.[1];
+      if (!usual && end === undefined && !draft.minutes) {
+        // Слово-мера в конце названия: длительность берётся по нему, а само слово из названия уходит
+        const tail = lang.eventMinutesTail.find(([pattern]) => pattern.test(head));
+        const rest = tail && draft.name.slice(0, tail[0].exec(head)![1].length).trim();
+        if (tail && rest) {
+          usual = tail[1];
+          draft.name = rest;
+        }
+      }
+      usual ||= DEFAULT_EVENT_MINUTES;
       // Длительность, выученная по правкам, — только когда она не названа и её чип не снят
       const isNamed = end !== undefined || Boolean(draft.minutes);
       const own = !isNamed && !skipped.has('minutes') && learned?.minutes !== usual ? learned?.minutes : undefined;
