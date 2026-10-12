@@ -67,6 +67,7 @@ try {
   const pattern = await waitBackground(page, (bg) => bg.image.includes('blob:'), 'фон с узором не применился');
   assert.equal(pattern.filter, 'none', 'фон с узором не должен размываться');
   assert.ok(await blur.isDisabled(), 'для узора «Размытие» недоступно');
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/chat-background-gallery.png` });
   // Настройки темы пишутся на диск с задержкой
   await page.waitForTimeout(4000);
   await reloadPage(page);
