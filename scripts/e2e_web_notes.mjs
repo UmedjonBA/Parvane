@@ -687,8 +687,13 @@ try {
   const viewBefore = await viewOf();
   const insidePair = await emptyPoint('Пара');
   assert.ok(insidePair, 'внутри группы нет пустого места для перетаскивания');
+  console.log('DEBUG group drag', JSON.stringify(insidePair), JSON.stringify(pairBefore), await page.evaluate(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y);
+    return `${hit?.tagName}.${hit?.className} | ${hit?.closest('[data-canvas-type]')?.getAttribute('data-canvas-type')} | sel=${document.querySelectorAll('[data-canvas-selection-bar]').length}`;
+  }, insidePair));
   await drag(insidePair, { x: insidePair.x + 130, y: insidePair.y - 90 });
   const pairDelta = deltaOf(pairBefore, await rectOf(pairGroup));
+  console.log('DEBUG after drag', JSON.stringify(await rectOf(pairGroup)), JSON.stringify(await viewOf()), JSON.stringify(viewBefore));
   assert.ok(
     Math.abs(pairDelta[0]) >= 100 && Math.abs(pairDelta[1]) >= 60,
     `группа не сдвинулась за пустое место внутри: ${JSON.stringify(pairDelta)}`,

@@ -685,7 +685,9 @@ export function createStateJournal(deps: Deps) {
       excludeMuted: f.exclude_muted ? true : undefined,
       excludeRead: f.exclude_read ? true : undefined,
       excludeArchived: f.exclude_archived ? true : undefined,
-      color: f.color === undefined || f.color === NO_COLOR ? undefined : f.color,
+      // Цвет 0 (первый, красный) движок в JSON не пишет — нулевое значение поля опускается, а «без
+      // цвета» хранится явным -1. Раньше отсутствие поля читалось как «без цвета», и красный терялся
+      color: f.color === NO_COLOR ? undefined : f.color ?? 0,
     };
   }
 

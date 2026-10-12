@@ -14,6 +14,7 @@ import {
   preparePage as preparePageShared,
   sendText,
   openProfile,
+  showChatList,
   waitForChatList,
   profileRow,
 } from './e2e_web_helpers.mjs';
@@ -35,8 +36,11 @@ async function openContacts(page) {
   await page.getByPlaceholder('Search contacts').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
+// «Контакты» открыты из «Профиля»: «назад» возвращает в «Профиль», к списку чатов — кнопка «Чаты»
 async function closeContacts(page) {
   await page.locator('#LeftMainHeader').getByRole('button', { name: 'Return to chat list' }).click();
+  await page.locator('#Settings').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await showChatList(page);
   await waitForChatList(page);
 }
 
