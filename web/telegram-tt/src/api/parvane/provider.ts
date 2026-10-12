@@ -2222,6 +2222,11 @@ const methods = {
   // Облако (spec 016): состояние, загрузка, скачивание, место — `./cloudDrive`
   ...cloudDrive,
 
+  /** Превью страницы для карточки-ссылки холста («Знания»): метаданные шарда `preview`, наружу браузер не ходит. */
+  parvaneLinkPreview({ url }: { url: string }) {
+    return mediaService.fetchLinkPreview(url);
+  },
+
   async fetchWallpapers() {
     const builtin = await buildBuiltinWallpapers(mediaService.cacheBlob);
     // Картинка пользователя живёт в шифрованном хранилище (по одной на тему) — возвращаем её плитку,
