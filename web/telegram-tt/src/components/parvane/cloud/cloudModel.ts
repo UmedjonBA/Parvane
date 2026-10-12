@@ -8,19 +8,35 @@ import type { CloudNodeJson } from '../../../api/parvane/cloudDrive';
 export type CloudNode = CloudNodeJson;
 export type CloudSortKey = 'name' | 'date' | 'size';
 export type CloudSort = { key: CloudSortKey; isDescending: boolean };
-export type CloudFileKind = 'photo' | 'video' | 'audio' | 'pdf' | 'other';
+export type CloudFileKind = 'photo' | 'video' | 'audio' | 'pdf' | 'text' | 'other';
 export type CloudNameError = 'empty' | 'too-long' | 'bad-chars' | 'reserved';
 
 export const CLOUD_NAME_MAX_BYTES = 255;
 export const CLOUD_MAX_NODES = 8000;
 // Срок корзины: старше — стирает устройство владельца при синхронизации
 export const CLOUD_TRASH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+// Текстовый файл крупнее в просмотре не открывается (его можно скачать)
+export const CLOUD_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TYPE_LABEL_MAX_LENGTH = 8;
 // eslint-disable-next-line no-control-regex
 const BAD_NAME_CHARS = /[/\\\u0000-\u001f\u007f]/;
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'ogg', 'oga', 'opus', 'm4a', 'wav', 'flac', 'aac']);
+// Файлы, которые читаются как текст: заметки и холсты, данные, настройки, исходный код
+const TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'canvas', 'log', 'csv', 'tsv', 'json', 'jsonl', 'ndjson', 'xml', 'svg', 'yaml', 'yml',
+  'toml', 'ini', 'cfg', 'conf', 'env', 'properties', 'html', 'htm', 'css', 'scss', 'less', 'js', 'mjs', 'cjs', 'jsx',
+  'ts', 'tsx', 'py', 'rs', 'go', 'java', 'kt', 'kts', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'rb', 'php', 'swift', 'sh',
+  'bash', 'zsh', 'fish', 'bat', 'ps1', 'sql', 'lua', 'pl', 'r', 'tex', 'srt', 'vtt', 'gcode', 'diff', 'patch', 'lock',
+  'gradle', 'cmake', 'proto', 'graphql', 'vue', 'svelte', 'dart',
+]);
+const TEXT_MIMES = new Set([
+  'application/json', 'application/xml', 'application/javascript', 'application/x-javascript',
+  'application/typescript', 'application/x-sh', 'application/x-yaml', 'application/yaml', 'application/toml',
+  'application/sql', 'application/x-ndjson', 'image/svg+xml',
+]);
 
 function byteLength(text: string) {
   return new TextEncoder().encode(text).length;
@@ -158,7 +174,31 @@ export function kindOfFile(mime: string, name: string): CloudFileKind {
   const extension = getExtension(name);
   if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
   if (mime.startsWith('image/') && mime !== 'image/svg+xml' ? true : PHOTO_EXTENSIONS.has(extension)) return 'photo';
+  // Расширение текста важнее типа: `.ts` браузер считает видео (MPEG-TS), `.svg` показываем исходником
+  if (TEXT_EXTENSIONS.has(extension)) return 'text';
   if (mime.startsWith('video/') || VIDEO_EXTENSIONS.has(extension)) return 'video';
   if (mime.startsWith('audio/') || AUDIO_EXTENSIONS.has(extension)) return 'audio';
+  if (mime.startsWith('text/') || TEXT_MIMES.has(mime.split(';')[0].trim())) return 'text';
   return 'other';
+}
+
+/** Подпись типа файла для заглушки просмотра: расширение прописными («3MF»); нет короткого — пусто. */
+export function fileTypeLabel(name: string) {
+  const extension = getExtension(name);
+  return extension.length <= TYPE_LABEL_MAX_LENGTH && /^[\p{L}\p{N}_+-]+$/u.test(extension)
+    ? extension.toUpperCase() : '';
+}
+
+/** Текст файла для просмотра: UTF-8 (в том числе с меткой порядка байтов), UTF-16 с меткой, иначе —
+ * windows-1251 (старые русские файлы). Двоичное содержимое (нулевые байты) — `undefined`. */
+export function decodeTextPreview(bytes: Uint8Array): string | undefined {
+  if (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) {
+    return new TextDecoder(bytes[0] === 0xff ? 'utf-16le' : 'utf-16be').decode(bytes);
+  }
+  if (bytes.includes(0)) return undefined;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (err) {
+    return new TextDecoder('windows-1251').decode(bytes);
+  }
 }

@@ -1,9 +1,12 @@
-import { memo } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useRef, useState,
+} from '../../../lib/teact/teact';
 
 import type { CloudNode } from './cloudModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
+import { callApi } from '../../../api/gramjs';
 import { kindOfFile } from './cloudModel';
 
 import useLang from '../../../hooks/useLang';
@@ -42,6 +45,8 @@ type OwnProps = {
   onAction: (action: CloudItemAction, container: string, node: CloudNode) => void;
 };
 
+const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
+
 // Parvane (spec 016): строка файла/папки по прототипу — цветная плитка со значком, название, строка
 // сведений, «⋯». Нажатие открывает (в корзине — меню), флажок поверх плитки выделяет
 const CloudItem = ({
@@ -49,8 +54,40 @@ const CloudItem = ({
   isIncoming, onOpen, onToggle, onMenu, onAction,
 }: OwnProps) => {
   const lang = useLang();
+  const rowRef = useRef<HTMLDivElement>();
+  const [thumbUrl, setThumbUrl] = useState<string>();
   const isFolder = node.kind === 'folder';
   const fileKind = isFolder ? undefined : kindOfFile(node.mime, node.name);
+  const thumbId = node.thumb?.fileId;
+
+  // Миниатюра картинки вместо значка: читается, когда строка показалась на экране (адрес хранит провайдер)
+  useEffect(() => {
+    setThumbUrl(undefined);
+    if (!thumbId) return undefined;
+    let isActual = true;
+    const load = () => {
+      void callParvane('parvaneCloudThumb', { container, node: node.id }).then((url) => {
+        if (isActual && typeof url === 'string') setThumbUrl(url);
+      }).catch(() => undefined);
+    };
+    const row = rowRef.current;
+    if (!row || typeof IntersectionObserver === 'undefined') {
+      load();
+      return () => {
+        isActual = false;
+      };
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      load();
+    });
+    observer.observe(row);
+    return () => {
+      isActual = false;
+      observer.disconnect();
+    };
+  }, [container, node.id, thumbId]);
 
   const handleOpen = useLastCallback(() => {
     if (isTrash) onMenu(container, node);
@@ -88,6 +125,7 @@ const CloudItem = ({
 
   return (
     <div
+      ref={rowRef}
       className={buildClassName(kit.row, styles.item, isSelected && kit.rowSel, isSelecting && styles.itemSelecting)}
       role="listitem"
       tabIndex={0}
@@ -101,7 +139,11 @@ const CloudItem = ({
     >
       <span className={styles.itemIcon}>
         <span className={kit.ava} style={`--c: ${color}`}>
-          <PvIcon name={isFolder ? 'folder' : fileKind === 'photo' ? 'image' : 'note'} isSmall />
+          {thumbUrl ? (
+            <img className={styles.itemThumb} src={thumbUrl} alt="" draggable={false} data-thumb />
+          ) : (
+            <PvIcon name={isFolder ? 'folder' : fileKind === 'photo' ? 'image' : 'note'} isSmall />
+          )}
         </span>
         <button
           type="button"

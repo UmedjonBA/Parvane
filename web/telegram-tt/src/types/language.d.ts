@@ -2320,6 +2320,7 @@ export interface LangPair {
   'ParvaneCloudSelect': undefined;
   'ParvaneCloudActions': undefined;
   'ParvaneCloudPreviewUnavailable': undefined;
+  'ParvaneCloudPreviewTooLarge': undefined;
   'ParvaneCloudName': undefined;
   'ParvaneCloudSize': undefined;
   'ParvaneCloudModified': undefined;
@@ -4524,6 +4525,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneCloudUsageTrash': {
     'size': V;
+  };
+  'ParvaneCloudPreviewNoViewer': {
+    'type': V;
   };
   'ParvaneCloudShareFolderConfirm': {
     'name': V;

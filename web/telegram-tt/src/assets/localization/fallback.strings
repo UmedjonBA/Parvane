@@ -3154,6 +3154,8 @@
 "ParvaneCloudSelect" = "Select";
 "ParvaneCloudActions" = "Actions";
 "ParvaneCloudPreviewUnavailable" = "Preview is not available. Download the file to open it.";
+"ParvaneCloudPreviewNoViewer" = "{type} files cannot be shown in the browser. Download the file to open it.";
+"ParvaneCloudPreviewTooLarge" = "The file is too large to show here. Download it to open.";
 "ParvaneCloudName" = "Name";
 "ParvaneCloudSize" = "Size";
 "ParvaneCloudModified" = "Date";

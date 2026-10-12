@@ -1197,6 +1197,8 @@
 "ParvaneCloudSelect" = "Выбрать";
 "ParvaneCloudActions" = "Действия";
 "ParvaneCloudPreviewUnavailable" = "Просмотр недоступен. Скачайте файл, чтобы открыть его.";
+"ParvaneCloudPreviewNoViewer" = "Файлы {type} в браузере не открываются. Скачайте файл, чтобы открыть его.";
+"ParvaneCloudPreviewTooLarge" = "Файл слишком большой для просмотра здесь. Скачайте его, чтобы открыть.";
 "ParvaneCloudName" = "Имя";
 "ParvaneCloudSize" = "Размер";
 "ParvaneCloudModified" = "Дата";
