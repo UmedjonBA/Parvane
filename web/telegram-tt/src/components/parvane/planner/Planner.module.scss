@@ -161,8 +161,12 @@
       display: none;
     }
 
-    .segButton {
-      padding: 0 0.875rem;
+    // Пять пунктов переключателя («Сегодня» и четыре вида) и настройки — в одну строку телефона
+    .seg {
+      scrollbar-width: none;
+      overflow-x: auto;
+      flex: 0 1 auto;
+      min-width: 0;
     }
   }
 }

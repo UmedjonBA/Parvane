@@ -29,7 +29,7 @@ const PlannerDateNav = ({
         <div className={styles.dateNavBig}>{formatDay(lang, day)}</div>
       </div>
       {day !== today && (
-        <button type="button" className={styles.pill} onClick={onToday}>{lang('PlannerToday')}</button>
+        <button type="button" className={styles.pill} onClick={onToday}>{lang('PlannerJumpToday')}</button>
       )}
       <button type="button" className={styles.ib} aria-label={lang('PlannerPrevPeriod')} onClick={onPrev}>
         <Icon name="previous" />

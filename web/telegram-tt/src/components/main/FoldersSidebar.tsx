@@ -8,7 +8,8 @@ import { ALL_FOLDER_ID } from '../../config';
 import { selectLeftColumnContentKey } from '../../global/selectors';
 import buildClassName from '../../util/buildClassName';
 import {
-  getKnowledgeView, getParvaneSection, getPlannerView, openKnowledgeView, openPlannerView, setParvaneSection,
+  getKnowledgeView, getParvaneSection, getPlannerView, openKnowledgeView, openPlannerCalendar, openPlannerView,
+  setParvaneSection,
 } from '../../util/parvaneSection';
 
 import useDerivedState from '../../hooks/useDerivedState';
@@ -34,8 +35,9 @@ type OwnProps = {
 
 const MAX_BADGE_COUNT = 99;
 
-// Parvane: боковая панель разделов на компьютере. Сверху знак и разделы (Чаты, Сегодня, Календарь,
-// Здоровье, Знания, Облако), внизу поиск и профиль. Папок чатов здесь нет — они над списком чатов.
+// Parvane: боковая панель разделов на компьютере. Сверху знак и разделы (Чаты, Календарь, Здоровье,
+// Знания, Облако), внизу поиск и профиль. «Сегодня» — первый вид календаря, отдельной кнопки у него нет.
+// Папок чатов здесь нет — они над списком чатов.
 // На телефоне разделы в нижней панели (`ParvaneTabBar`)
 const SEARCH_INPUT_ID = 'telegram-search-input';
 const SEARCH_FOCUS_DELAY_MS = 150;
@@ -63,12 +65,8 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
     if (isSettingsOpen) openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
   });
 
-  const handleSelectToday = useLastCallback(() => {
-    openPlannerView('today');
-  });
-
   const handleSelectCalendar = useLastCallback(() => {
-    openPlannerView('calendar');
+    openPlannerCalendar();
   });
 
   const handleSelectHealth = useLastCallback(() => {
@@ -129,9 +127,8 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
           'chat', lang('ParvaneSectionMessenger'), section === 'messenger' && !isSettingsOpen, handleSelectChats,
           unreadCount,
         )}
-        {renderTab('sun', lang('PlannerToday'), section === 'planner' && plannerView === 'today', handleSelectToday)}
         {renderTab(
-          'calendar', lang('PlannerViewCalendar'), section === 'planner' && plannerView === 'calendar',
+          'calendar', lang('PlannerViewCalendar'), section === 'planner' && plannerView !== 'health',
           handleSelectCalendar,
         )}
         {renderTab(

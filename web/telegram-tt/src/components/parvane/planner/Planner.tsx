@@ -11,7 +11,7 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 import buildClassName from '../../../util/buildClassName';
 import {
   consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerSettingsRequest,
-  getPlannerView, setPlannerView,
+  getPlannerView, setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
@@ -65,10 +65,11 @@ function selectCurrentUserId(global: GlobalState) {
 
 // 75 % потолка открытого текста снимка контейнера (1 МиБ, spec 010 R5)
 const SNAPSHOT_WARN_BYTES = 786432;
-const VIEW_TODAY = 0;
-const VIEW_CALENDAR = 1;
-const VIEW_HEALTH = 2;
-const PLANNER_VIEWS = ['today', 'calendar', 'health'] as const;
+// Вкладки раздела на телефоне: «Сегодня» — первый вид календаря, своей вкладки у него нет
+const TAB_CALENDAR = 0;
+const TAB_HEALTH = 1;
+// Пункт «Сегодня» в переключателе вида календаря
+const SEGMENT_TODAY = 'today';
 const CALENDAR_VIEW_KEY = 'parvane:planner-view';
 const CALENDAR_VIEW_LABELS = {
   year: 'PlannerCalYear',
@@ -105,8 +106,9 @@ function msUntilTomorrow() {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() + MS_IN_SECOND;
 }
 
-// Parvane (spec 009): раздел «План» — «Сегодня», календарь с загрузкой дней и «Здоровье». Данные — запись
-// устройства (plannerStore). Раскладка — острова: страница раздела и справа день календаря либо карточка
+// Parvane (spec 009): раздел «План» — календарь с загрузкой дней («Сегодня» — первый его вид, выбирается
+// в том же переключателе, что неделя, месяц, год и список) и «Здоровье». Данные — запись устройства
+// (plannerStore). Раскладка — острова: страница раздела и справа день календаря либо карточка
 // записи; на телефоне карточка и настройки выезжают снизу
 const Planner = () => {
   const lang = useLang();
@@ -119,7 +121,7 @@ const Planner = () => {
 
   const [today, setToday] = useState(() => toDayKey(new Date()));
   // Экран раздела общий с боковой панелью (`util/parvaneSection.ts`)
-  const view = PLANNER_VIEWS.indexOf(useDerivedState(getPlannerView));
+  const view = useDerivedState(getPlannerView);
   const [calendarView, setCalendarView] = useState(readCalendarView);
   const [layers, setLayers] = useState(readLayers);
   // Якорь периода: выбранный день; месяц, неделя и год берутся от него
@@ -218,16 +220,17 @@ const Planner = () => {
     setFormParams(undefined);
   });
 
-  const handleSwitchView = useLastCallback((index: number) => {
-    setPlannerView(PLANNER_VIEWS[index]);
+  const handleSwitchTab = useLastCallback((index: number) => {
+    if (index === TAB_HEALTH) setPlannerView('health');
+    else showPlannerCalendar();
   });
 
   const handleOpenCalendar = useLastCallback(() => {
-    handleSwitchView(VIEW_CALENDAR);
+    setPlannerView('calendar');
   });
 
   const handleOpenHealth = useLastCallback(() => {
-    handleSwitchView(VIEW_HEALTH);
+    setPlannerView('health');
   });
 
   const handleOpenSettings = useLastCallback(() => {
@@ -235,7 +238,7 @@ const Planner = () => {
   });
 
   const changePeriod = useLastCallback((delta: number) => {
-    pickDay(shiftPeriod(view === VIEW_CALENDAR ? calendarView : 'day', picked, delta));
+    pickDay(shiftPeriod(view === 'calendar' ? calendarView : 'day', picked, delta));
   });
 
   const handlePrevPeriod = useLastCallback(() => changePeriod(-1));
@@ -267,9 +270,16 @@ const Planner = () => {
     pickDay(today);
   });
 
-  const handleSwitchCalendarView = useLastCallback((next: string) => {
-    setCalendarView(next as PlannerCalendarView);
-    saveCalendarView(next as PlannerCalendarView);
+  const handleSwitchCalendarView = useLastCallback((next: PlannerCalendarView) => {
+    setPlannerView('calendar');
+    setCalendarView(next);
+    saveCalendarView(next);
+  });
+
+  // Переключатель вида: «Сегодня» — экран дня, остальные пункты — виды календаря
+  const handleSwitchSegment = useLastCallback((next: string) => {
+    if (next === SEGMENT_TODAY) setPlannerView('today');
+    else handleSwitchCalendarView(next as PlannerCalendarView);
   });
 
   const handleToggleLayer = useLastCallback((layer: PlannerLayer) => {
@@ -323,24 +333,26 @@ const Planner = () => {
       : syncStatus === 'no-key' ? 'PlannerSyncPending'
         : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
   const viewTabs = [
-    { title: lang('PlannerToday') },
     { title: lang('PlannerViewCalendar') },
     { title: lang('PlannerHealth') },
   ];
-  const isToday = view === VIEW_TODAY;
-  const isHealth = view === VIEW_HEALTH;
-  const isCalendar = view === VIEW_CALENDAR;
+  const isToday = view === 'today';
+  const isHealth = view === 'health';
+  const isCalendar = view === 'calendar';
   const isMonthView = calendarView === 'month';
   const isWeekView = calendarView === 'week';
   // Сетка недели на компьютере листается сама, а шапки дней стоят на месте; на телефоне под полосой дней
   // листается день
   const isFlush = isCalendar && isWeekView && isLoaded;
-  const calendarSegments = PLANNER_CALENDAR_VIEWS.map((item) => ({
-    value: item,
-    // На телефоне «Неделя» показывает один день с полосой дней недели и называется «День»
-    label: lang(isNarrow && item === 'week' ? CALENDAR_VIEW_LABELS.day
-      : isNarrow && item === 'month' ? 'PlannerCalMonthShort' : CALENDAR_VIEW_LABELS[item]),
-  }));
+  const calendarSegments = [
+    { value: SEGMENT_TODAY, label: lang('PlannerToday') },
+    ...PLANNER_CALENDAR_VIEWS.map((item) => ({
+      value: item,
+      // На телефоне «Неделя» показывает один день с полосой дней недели и называется «День»
+      label: lang(isNarrow && item === 'week' ? CALENDAR_VIEW_LABELS.day
+        : isNarrow && item === 'month' ? 'PlannerCalMonthShort' : CALENDAR_VIEW_LABELS[item]),
+    })),
+  ];
   const pickedDays = useMemo(() => [picked], [picked]);
   const weekDays = useMemo(() => getWeekKeys(picked), [picked]);
   const periodTitle = isWeekView && !isNarrow ? formatWeekRange(lang, picked)
@@ -402,9 +414,11 @@ const Planner = () => {
   );
 
   function renderHeader() {
-    if (isCalendar) {
+    // «Сегодня» — вид календаря: шапка та же, переключатель вида остаётся на месте
+    if (!isHealth) {
       return (
         <PlannerPeriodBar
+          heading={isToday ? lang('PlannerToday') : undefined}
           title={periodTitle}
           prevLabel={lang(isMonthView ? 'PlannerPrevMonth' : 'PlannerPrevPeriod')}
           nextLabel={lang(isMonthView ? 'PlannerNextMonth' : 'PlannerNextPeriod')}
@@ -412,7 +426,7 @@ const Planner = () => {
           today={today}
           isNarrow={isNarrow}
           segments={calendarSegments}
-          activeSegment={calendarView}
+          activeSegment={isToday ? SEGMENT_TODAY : calendarView}
           segmentsLabel={lang('PlannerCalView')}
           layers={layers}
           trailing={(
@@ -434,16 +448,16 @@ const Planner = () => {
           onNext={handleNextPeriod}
           onToday={handleToday}
           onPickDay={pickDay}
-          onSwitchSegment={handleSwitchCalendarView}
+          onSwitchSegment={handleSwitchSegment}
           onToggleLayer={handleToggleLayer}
         />
       );
     }
-    // Телефон: шапки у «Сегодня» и «Здоровья» нет — вкладки сверху, запись добавляет «+» нижней панели
+    // Телефон: шапки у «Здоровья» нет — вкладки сверху, запись добавляет «+» нижней панели
     if (isNarrow) return undefined;
     return (
       <div className={styles.hdr}>
-        <h1 className={styles.hdrTitle}>{lang(isToday ? 'PlannerToday' : 'PlannerHealth')}</h1>
+        <h1 className={styles.hdrTitle}>{lang('PlannerHealth')}</h1>
         <span className={styles.grow} />
         {settingsButton}
         <button type="button" className={buildClassName(styles.pill, styles.pillAccent)} onClick={handleOpenQuick}>
@@ -643,7 +657,12 @@ const Planner = () => {
           {/* Компьютер: экраны «Плана» — кнопки боковой панели, вкладок в шапке нет */}
           {isNarrow && (
             <header className={styles.mtabs}>
-              <TabList className={styles.viewTabs} tabs={viewTabs} activeTab={view} onSwitchTab={handleSwitchView} />
+              <TabList
+                className={styles.viewTabs}
+                tabs={viewTabs}
+                activeTab={isHealth ? TAB_HEALTH : TAB_CALENDAR}
+                onSwitchTab={handleSwitchTab}
+              />
             </header>
           )}
           {renderHeader()}

@@ -3460,6 +3460,7 @@
 "PlannerTimeConflict" = "Time conflict";
 "PlannerTitleNew" = "New entry";
 "PlannerToday" = "Today";
+"PlannerJumpToday" = "Current date";
 "PlannerUndo" = "Undo";
 "PlannerUnitGram" = "g";
 "PlannerUnitKcal" = "kcal";

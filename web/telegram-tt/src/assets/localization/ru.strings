@@ -1509,6 +1509,7 @@
 "PlannerTimeConflict" = "Пересечение времени";
 "PlannerTitleNew" = "Новая запись";
 "PlannerToday" = "Сегодня";
+"PlannerJumpToday" = "Текущая дата";
 "PlannerUndo" = "Отменить";
 "PlannerUnitGram" = "г";
 "PlannerUnitKcal" = "ккал";

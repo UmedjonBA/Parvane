@@ -9,37 +9,70 @@ const [getParvaneSection, setSignal] = createSignal<ParvaneSection>('messenger')
 // Запрос «новая запись» из нижней панели телефона: «План» открывает форму и сбрасывает запрос
 const [getPlannerAddRequest, setPlannerAddRequest] = createSignal(false);
 
-// Экран «Плана»: «Сегодня» либо «Календарь». Выбирается кнопками боковой панели (компьютер) и вкладками
-// раздела (телефон); устройство помнит последний
+// Экран «Плана»: «Сегодня», виды календаря либо «Здоровье». «Сегодня» — первый вид «Календаря»: в боковой
+// панели (компьютер) и во вкладках раздела (телефон) это одна кнопка «Календарь», а между «Сегодня» и
+// неделей / месяцем / годом / списком переключает шапка календаря. Устройство помнит последний экран
 export type PlannerView = 'today' | 'calendar' | 'health';
+type PlannerCalendarSide = Exclude<PlannerView, 'health'>;
 
 const PLANNER_VIEW_KEY = 'parvane:planner-tab';
+// Что показывал «Календарь» в последний раз — «Сегодня» либо сетку; нужно, когда последним было «Здоровье»
+const PLANNER_CALENDAR_SIDE_KEY = 'parvane:planner-calendar-tab';
 const VIEW_VALUES: Record<PlannerView, string> = { today: '0', calendar: '1', health: '2' };
 
-function readPlannerView(): PlannerView {
+function readSavedView(key: string): PlannerView | undefined {
   try {
-    const saved = localStorage.getItem(PLANNER_VIEW_KEY);
-    return (Object.keys(VIEW_VALUES) as PlannerView[]).find((view) => VIEW_VALUES[view] === saved) || 'today';
+    const saved = localStorage.getItem(key);
+    return (Object.keys(VIEW_VALUES) as PlannerView[]).find((view) => VIEW_VALUES[view] === saved);
   } catch {
-    return 'today';
+    return undefined;
   }
 }
 
-const [getPlannerView, setPlannerViewSignal] = createSignal<PlannerView>(readPlannerView());
-
-export { getParvaneSection, getPlannerAddRequest, getPlannerView };
-
-export function setPlannerView(view: PlannerView) {
-  setPlannerViewSignal(view);
+function saveView(key: string, view: PlannerView) {
   try {
-    localStorage.setItem(PLANNER_VIEW_KEY, VIEW_VALUES[view]);
+    localStorage.setItem(key, VIEW_VALUES[view]);
   } catch {
     // Экран просто не запомнится
   }
 }
 
+function readPlannerView(): PlannerView {
+  return readSavedView(PLANNER_VIEW_KEY) || 'today';
+}
+
+// Записи прежних версий ключа стороны не несут: тогда сторона — последний экран, если это не «Здоровье»
+function readCalendarSide(): PlannerCalendarSide {
+  const side = readSavedView(PLANNER_CALENDAR_SIDE_KEY) || readPlannerView();
+  return side === 'health' ? 'today' : side;
+}
+
+const [getPlannerView, setPlannerViewSignal] = createSignal<PlannerView>(readPlannerView());
+let calendarSide = readCalendarSide();
+
+export { getParvaneSection, getPlannerAddRequest, getPlannerView };
+
+export function setPlannerView(view: PlannerView) {
+  setPlannerViewSignal(view);
+  saveView(PLANNER_VIEW_KEY, view);
+  if (view === 'health') return;
+  calendarSide = view;
+  saveView(PLANNER_CALENDAR_SIDE_KEY, view);
+}
+
+/** Показать «Календарь» на том, что он показывал в последний раз: «Сегодня» либо сетка. */
+export function showPlannerCalendar() {
+  setPlannerView(calendarSide);
+}
+
 export function openPlannerView(view: PlannerView) {
   setPlannerView(view);
+  setParvaneSection('planner');
+}
+
+/** Кнопка «Календарь» боковой панели: раздел «План» на последнем виде календаря. */
+export function openPlannerCalendar() {
+  showPlannerCalendar();
   setParvaneSection('planner');
 }
 

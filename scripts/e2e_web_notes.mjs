@@ -9,6 +9,7 @@ import {
   preparePage,
   relogin,
   reloadPage,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notes-e2e-1';
@@ -70,7 +71,7 @@ try {
   console.log('OK: заметка создана, переименована, текст со ссылкой, тегом и пунктами');
 
   // ── Пункт со сроком стал задачей «Плана»; галочка ходит в обе стороны ─────
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   await planner.locator('[data-today-undated]').click();
   const sheet = page.locator('[data-planner-undated]');
   const sheetTask = sheet.locator('[data-task-id]').filter({ hasText: 'заказать блок питания' });
@@ -84,7 +85,7 @@ try {
     timeout: STEP_TIMEOUT_MS,
   }).catch(() => assert.fail('галочка из «Плана» не дошла до пункта заметки'));
   await body.locator('input[type="checkbox"]').first().uncheck();
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   await planner.locator('[data-today-undated]').click();
   await visible(sheetTask, 'задача снова не выполнена');
   assert.equal(await sheetTask.locator('input[type="checkbox"]').isChecked(), false, 'снятая в заметке галочка дошла до «Плана»');
@@ -99,7 +100,7 @@ try {
   });
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
   await visible(knowledge.locator('[data-folder="Daily"]'), 'папка ежедневных заметок');
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   console.log('OK: заметка дня создаётся с экрана «Сегодня»');
 
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────

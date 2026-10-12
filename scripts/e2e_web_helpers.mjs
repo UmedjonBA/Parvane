@@ -96,6 +96,37 @@ export async function openMyProfile(page) {
   await screen.getByRole('button', { name: 'My Profile', exact: true }).click();
 }
 
+// Экран «Плана»: `today`, `calendar` (сетка в виде, который устройство запомнило, — по умолчанию месяц)
+// либо `health`. «Сегодня» — первый пункт переключателя вида календаря, отдельной кнопки раздела у него
+// нет: путь — «Календарь» в боковой панели (на телефоне — «План» нижней панели и вкладка «Календарь»),
+// затем пункт переключателя. Кнопка «Календарь» сама открывает то, что календарь показывал в последний
+// раз, поэтому нужный пункт выбирается явно
+const PLANNER_CALENDAR_VIEWS = ['week', 'month', 'year', 'agenda'];
+
+export async function openPlannerScreen(page, screen = 'calendar') {
+  const planner = page.locator('#ParvanePlanner');
+  const tabName = screen === 'health' ? 'Health' : 'Calendar';
+  const rail = page.locator('#FoldersSidebar');
+  if (await rail.isVisible().catch(() => false)) {
+    await rail.getByRole('tab', { name: tabName, exact: true }).click();
+  } else {
+    if (!(await planner.isVisible().catch(() => false))) {
+      await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Planner' }).click();
+    }
+    await planner.locator('header').getByText(tabName, { exact: true }).first().click();
+  }
+  await planner.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (screen === 'health') return planner;
+  const saved = await page.evaluate(() => localStorage.getItem('parvane:planner-view'));
+  const value = screen === 'today' ? 'today' : PLANNER_CALENDAR_VIEWS.includes(saved) ? saved : 'month';
+  const segment = planner.getByRole('group', { name: 'Calendar view' }).locator(`button[data-value="${value}"]`);
+  await segment.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (await segment.getAttribute('aria-pressed') !== 'true') await segment.click();
+  await planner.locator(`button[data-value="${value}"][aria-pressed="true"]`)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  return planner;
+}
+
 // Полный выход из аккаунта (не reload): «Профиль» → «More actions» → «Log Out»
 export async function logOut(page) {
   await openProfile(page);
@@ -166,9 +197,13 @@ export async function preparePage(context, user, password, options = {}) {
   });
   await page.addInitScript(({ gatewayUrl: url, seed }) => {
     localStorage.setItem('parvane:gateway', url);
-    // «План» открывается на вкладке, где пользователь был в последний раз (по умолчанию «Сегодня»);
-    // сценарии календаря ждут календарь сразу — вкладку «Сегодня» сценарий открывает сам
+    // «План» открывается на экране, где пользователь был в последний раз (по умолчанию «Сегодня» — первый
+    // вид календаря); сценарии календаря ждут сетку сразу — «Сегодня» сценарий открывает сам
+    // (`openPlannerScreen(page, 'today')`). Второй ключ — что «Календарь» показывал в последний раз
     if (!localStorage.getItem('parvane:planner-tab')) localStorage.setItem('parvane:planner-tab', '1');
+    if (!localStorage.getItem('parvane:planner-calendar-tab')) {
+      localStorage.setItem('parvane:planner-calendar-tab', '1');
+    }
     // Раздел «Знания» открывается на вкладке «Файлы»: сценарии облака ждут список файлов сразу
     if (!localStorage.getItem('parvane:knowledge-tab')) localStorage.setItem('parvane:knowledge-tab', 'files');
     // Блок «Повтор и детали» карточки записи раскрыт: сценарии правят поля внутри него

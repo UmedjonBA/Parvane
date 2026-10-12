@@ -10,6 +10,7 @@ import {
   preparePage,
   relogin,
   reloadPage,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-quick-e2e-1';
@@ -90,7 +91,7 @@ try {
   console.log('OK: событие одной строкой — время и длительность распознаны');
 
   // ── «Сегодня» на телефоне: карточки, расписание дня, задачи — одной колонкой (spec 018) ──
-  await planner.locator('header').getByText('Today', { exact: true }).first().click();
+  await openPlannerScreen(page, 'today');
   const todayView = planner.locator('[data-planner-today]');
   await todayView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const order = await todayView.evaluate((el) => {
@@ -160,14 +161,14 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   const sidebar = page.locator('#FoldersSidebar');
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
   await planner.locator(`[role="gridcell"][data-day="${dayKey(1)}"]`).click({ position: { x: 10, y: 10 } });
   await planner.locator('[data-planner-day]').getByText('Быстрый созвон').first()
     .waitFor({ state: 'visible', timeout: 30000 });
   // Задачи без даты — в шторке «Без даты» экрана «Сегодня»
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   await planner.locator('[data-today-undated]').click();
   const undatedSheet = page.locator('[data-planner-undated]');
   await undatedSheet.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

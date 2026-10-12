@@ -10,6 +10,7 @@ import {
   preparePage,
   relogin,
   reloadPage,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-health-e2e-1';
@@ -110,7 +111,7 @@ try {
   console.log('OK: цели меняются текстом, негодная строка объясняется');
 
   // ── «Сегодня»: карточки сна и еды; короткий сон снижает бюджет дня ────────
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   const today = planner.locator('[data-planner-today]');
   await expectText(today.locator('[data-today-card="sleep"]'), /5:00/, 'карточка сна');
   await expectText(today.locator('[data-today-card="food"]'), /520 kcal/, 'карточка еды');
