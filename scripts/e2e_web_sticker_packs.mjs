@@ -232,6 +232,8 @@ try {
   await packSection(bobSession.page, packName).scrollIntoViewIfNeeded();
   await assertPackTiles(packSection(bobSession.page, packName), 'панель получателя после установки');
   await bobSetStickers.first().click();
+  // Escape, которым закрывалось меню стикеров, мог закрыть и чат автора — открываем его заново
+  await openPrivateChat(aliceSession.page, bob);
   await aliceSession.page.locator('.Transition_slide-active > .MessageList .Message .media-inner')
     .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
