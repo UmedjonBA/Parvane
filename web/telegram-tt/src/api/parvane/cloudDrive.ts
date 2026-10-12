@@ -1,5 +1,7 @@
 import type { CloudBlobKeys, CloudBlobTransport, CloudUploadResult } from './cloudBlobs';
-import type { CloudContainerInfo, CloudSync, CloudSyncStatus } from './v2/cloud';
+import type {
+  CloudContainerInfo, CloudDriveCheck, CloudSync, CloudSyncStatus,
+} from './v2/cloud';
 
 import { V2Error } from './v2/transport';
 import { decryptBlob } from './blobcrypt';
@@ -575,6 +577,10 @@ export function createCloudDrive(deps: Deps) {
     async parvaneCloudWriteText(args: {
       container: string; parent?: string; node?: string; name: string; text: string; mime?: string;
       expectedFileId?: string;
+      // Идентификатор создаваемого узла: одинаковый на всех устройствах — два создания сведутся в один узел
+      newNodeId?: string;
+      // Папка, создаваемая той же правкой, что и файл (он ложится в неё): либо появятся оба узла, либо ни одного
+      newFolder?: { id: string; name: string };
     }): Promise<CloudResult<{ container: string; node: string; fileId: string; conflict?: string }>> {
       try {
         const existing = args.node ? findNode(args.container, args.node) : undefined;
@@ -602,13 +608,21 @@ export function createCloudDrive(deps: Deps) {
           mime,
           uploader: deps.self() || '',
         };
-        const node = args.node || newCloudNodeId();
+        const node = args.node || args.newNodeId || newCloudNodeId();
         const mtime = Date.now();
-        const container = await deps.cloud().apply(args.container, [existing
-          ? { op: 'setBlob', id: node, blob, mtime }
-          : {
-            op: 'create', id: node, kind: 'file', parent: args.parent, name: args.name, mtime, blob,
-          }]);
+        const folder = existing ? undefined : args.newFolder;
+        const container = await deps.cloud().apply(args.container, existing
+          ? [{
+            op: 'setBlob', id: node, blob, mtime,
+          }]
+          : [
+            ...(folder ? [{
+              op: 'create', id: folder.id, kind: 'folder', parent: args.parent, name: folder.name,
+            }] : []),
+            {
+              op: 'create', id: node, kind: 'file', parent: folder?.id || args.parent, name: args.name, mtime, blob,
+            },
+          ]);
         usage = undefined;
         return {
           ok: true, container, node, fileId: uploaded.fileId,
@@ -617,6 +631,11 @@ export function createCloudDrive(deps: Deps) {
         deps.log(`облако: текст не записан: ${String(e)}`);
         return { ok: false, error: errorOf(e) };
       }
+    },
+
+    /** Сверка личного диска с сервером перед правкой «только если ещё нет» (см. `CloudSync.checkDrive`). */
+    parvaneCloudCheckDrive(): Promise<CloudDriveCheck> {
+      return deps.cloud().checkDrive();
     },
 
     /** Содержимое текстового файла и идентификатор его версии (для `expectedFileId`). */

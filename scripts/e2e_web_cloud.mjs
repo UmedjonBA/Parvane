@@ -362,10 +362,11 @@ try {
   await sortBy('By name');
   console.log('OK: поиск с путём и «ничего не найдено»; сортировка, папки выше файлов');
 
-  // ── Вид один — список: плитки и миниатюр в строках нет; сортировка запоминается ──
+  // ── Вид один — список; у картинки вместо значка миниатюра; сортировка запоминается ──
   assert.equal(await cloud.getByRole('button', { name: 'Tiles' }).count(), 0, 'переключателя на плитку нет');
   assert.equal(await cloud.getByRole('button', { name: 'List' }).count(), 0, 'переключателя вида нет');
-  assert.equal(await cloud.locator('[data-node-id] img').count(), 0, 'строки списка без миниатюр');
+  await item('снимок.png').locator('img[data-thumb]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await cloud.locator('[data-node-id] img').count(), 1, 'миниатюра — только у картинки');
   await sortBy('By size');
   await reloadPage(page);
   await dismissRecoveryKeyDialog(page).catch(() => undefined);
@@ -386,6 +387,18 @@ try {
   await pdfPreview.getByRole('button', { name: 'Close', exact: true }).last().click();
   await pdfPreview.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: фото и PDF открываются встроенным просмотром');
+
+  // ── Просмотр: текстовый файл читается на месте; для прочего — тип файла и «Скачать» ──
+  await item(SECRET_NAME).click();
+  await item('дневник.txt').click();
+  const textPreview = page.locator('.Modal').filter({ hasText: 'дневник.txt' });
+  await textPreview.locator('[data-preview-kind="text"] [data-preview-text]').filter({ hasText: SECRET_TEXT })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await textPreview.locator('[data-preview-stub]').count(), 0, 'у текстового файла заглушки нет');
+  await textPreview.getByRole('button', { name: 'Close', exact: true }).last().click();
+  await textPreview.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await toRoot();
+  console.log('OK: текстовый файл открывается встроенным просмотром');
 
   // ── Файл больше предела: отказ до начала, на сервере ничего не остаётся ───
   const beforeBig = counts();

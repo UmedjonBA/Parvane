@@ -14,9 +14,10 @@ import {
 } from './notesLook';
 import { buildPlannedIndex, nearestPlanned, plannedOf } from './notesPlanned';
 import {
-  applyPlannerToNotes, createNote, deleteNote, findNoteByTitle, getCanvases, getNotes, getNotesIndex,
-  getNotesNotice, getNotesStatus, loadNotes, openDailyNote, renameNote, saveNote,
+  applyPlannerToNotes, consumeWelcomeNote, createNote, deleteNote, findNoteByTitle, getCanvases, getNotes,
+  getNotesIndex, getNotesNotice, getNotesStatus, getWelcomeNoteId, loadNotes, openDailyNote, renameNote, saveNote,
 } from './notesStore';
+import { buildWelcomeNote, getWelcomeLang } from './notesWelcome';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -65,6 +66,7 @@ const Knowledge = () => {
   const view = useDerivedState(getKnowledgeView);
   const planner = useDerivedState(getPlannerState);
   const noteRequest = useDerivedState(getNoteRequest);
+  const welcomeNoteId = useDerivedState(getWelcomeNoteId);
   const currentUserId = useSelector(selectCurrentUserId);
 
   const [openId, setOpenId] = useState<string>();
@@ -79,10 +81,19 @@ const Knowledge = () => {
   const vaultName = lang('KnowledgeVaultName');
   const [today] = useState(() => toDayKey(new Date()));
 
+  const welcomeLang = getWelcomeLang(lang.code);
+
   useEffect(() => {
-    void loadNotes(currentUserId);
+    void loadNotes(currentUserId, { welcomeLang, vaultName });
     void loadPlanner(currentUserId);
-  }, [currentUserId]);
+  }, [currentUserId, welcomeLang, vaultName]);
+
+  // Первая заметка нового хранилища открывается сама (на узком экране остаётся список с ней)
+  useEffect(() => {
+    if (!welcomeNoteId || !notes.some(({ id }) => id === welcomeNoteId)) return;
+    consumeWelcomeNote();
+    if (!openId && !isNarrow) setOpenId(welcomeNoteId);
+  }, [welcomeNoteId, notes, openId, isNarrow]);
 
   // Галочки и удаления из «Плана» доезжают до пунктов заметок
   useEffect(() => {
@@ -121,6 +132,13 @@ const Knowledge = () => {
 
   const handleNew = useLastCallback(async () => {
     const id = await createNote(lang('KnowledgeNewNote'), vaultName);
+    if (id) setOpenId(id);
+  });
+
+  // «Как пользоваться»: та же заметка, что встречает в новом хранилище; уже есть — открывается она
+  const handleGuide = useLastCallback(async () => {
+    const guide = buildWelcomeNote(welcomeLang);
+    const id = findNoteByTitle(guide.title)?.id || await createNote(guide.title, vaultName, { text: guide.text });
     if (id) setOpenId(id);
   });
 
@@ -249,6 +267,14 @@ const Knowledge = () => {
         <button type="button" className={buildClassName(kit.btn, kit.btnWide, styles.newNote)} onClick={handleNew}>
           <PvIcon name="plus" isSmall />
           {lang('KnowledgeNewNote')}
+        </button>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnGhost, kit.btnWide)}
+          data-notes-guide
+          onClick={handleGuide}
+        >
+          {lang('KnowledgeGuide')}
         </button>
       </aside>
     );

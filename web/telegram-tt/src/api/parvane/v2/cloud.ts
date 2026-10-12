@@ -16,6 +16,9 @@ import { V2Error } from './transport';
 
 export type CloudSyncStatus = 'loading' | 'needs-linking' | 'no-key' | 'offline' | 'ready';
 export type CloudContainerKind = 'root' | 'owned' | 'shared' | 'invite';
+// Сверка личного диска с сервером: `none` — у аккаунта на сервере нет ни одного своего контейнера облака
+// (диск ещё никто не создавал), `synced` — журнал диска только что дочитан, `unknown` — судить нельзя
+export type CloudDriveCheck = 'unknown' | 'none' | 'synced';
 export type CloudRole = 'owner' | 'editor' | 'reader';
 
 export type CloudContainerInfo = {
@@ -137,6 +140,8 @@ export function createCloudSync(deps: Deps) {
   let isWanted = false;
   let isActive = false;
   let isDiscovered = false;
+  // Сколько своих контейнеров облака назвал сервер при последнем опросе списка
+  let ownOnServer: number | undefined;
   let lastError: string | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -285,6 +290,7 @@ export function createCloudSync(deps: Deps) {
     engineContainers().forEach((c) => {
       if (c.owner !== self && !onServer.has(c.id)) dropContainer(c.id);
     });
+    ownOnServer = [...onServer.values()].filter((owner) => owner === self).length;
     isDiscovered = true;
   }
 
@@ -644,6 +650,29 @@ export function createCloudSync(deps: Deps) {
     });
   }
 
+  /** Можно ли считать локальное дерево личного диска полным: перед правкой «только если ещё нет»
+   * (первая заметка хранилища). Список контейнеров и журнал диска перечитываются с сервера прямо здесь. */
+  function checkDrive(): Promise<CloudDriveCheck> {
+    return serial(async (): Promise<CloudDriveCheck> => {
+      const client = deps.client();
+      if (!client || !deps.isReady() || deps.needsLinking() || status !== 'ready') return 'unknown';
+      try {
+        const root = rootId();
+        if (!root) {
+          // Диск другого своего устройства виден в списке сервера раньше, чем доходит запись журнала состояния
+          await discover();
+          return !rootId() && ownOnServer === 0 ? 'none' : 'unknown';
+        }
+        if (!client.cloudIsAttached(root) || !client.cloudHasKey(root)) return 'unknown';
+        if (await pull(root)) deps.onChanged();
+        return 'synced';
+      } catch (e) {
+        deps.log(`облако: сверка личного диска: ${String(e)}`);
+        return 'unknown';
+      }
+    });
+  }
+
   function containers(): CloudContainerInfo[] {
     const self = deps.self();
     const entries = deps.stateEntries();
@@ -832,6 +861,7 @@ export function createCloudSync(deps: Deps) {
     isWanted = false;
     isActive = false;
     isDiscovered = false;
+    ownOnServer = undefined;
     lastError = undefined;
   }
 
@@ -844,6 +874,7 @@ export function createCloudSync(deps: Deps) {
     containers,
     stateJson,
     rootId,
+    checkDrive,
     status: currentStatus,
     lastError: () => lastError,
     hasPending: (id: string) => Boolean(outboxes.get(id)?.length),

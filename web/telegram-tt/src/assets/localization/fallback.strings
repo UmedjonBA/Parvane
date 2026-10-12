@@ -3154,6 +3154,8 @@
 "ParvaneCloudSelect" = "Select";
 "ParvaneCloudActions" = "Actions";
 "ParvaneCloudPreviewUnavailable" = "Preview is not available. Download the file to open it.";
+"ParvaneCloudPreviewNoViewer" = "{type} files cannot be shown in the browser. Download the file to open it.";
+"ParvaneCloudPreviewTooLarge" = "The file is too large to show here. Download it to open.";
 "ParvaneCloudName" = "Name";
 "ParvaneCloudSize" = "Size";
 "ParvaneCloudModified" = "Date";
@@ -3678,6 +3680,7 @@
 "KnowledgeSearch" = "Search notes";
 "KnowledgeEmpty" = "No notes yet. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud.";
 "KnowledgeNothingFound" = "Nothing found";
+"KnowledgeGuide" = "How to use Knowledge";
 "KnowledgePickNote" = "Pick a note on the left. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud. Any event or task that links [[to a note]] shows up in its «Planned» block.";
 "KnowledgeRoot" = "No folder";
 "KnowledgeEdit" = "Edit";
@@ -3706,6 +3709,14 @@
 "KnowledgeCanvasNew" = "New canvas";
 "KnowledgeCanvasName" = "Canvas {count}";
 "KnowledgeCanvasEmpty" = "No canvases yet. A canvas is a .canvas file (JSON Canvas) in the «Knowledge» folder.";
+"KnowledgeCanvasEmptyGraph" = "No canvases yet. Start from your link graph: every note becomes a card and every [[link]] an arrow — then move and draw as you like.";
+"KnowledgeCanvasFromGraph" = "Canvas from graph";
+"KnowledgeCanvasFromGraphShort" = "From graph";
+"KnowledgeCanvasGraphName" = "Link graph";
+"KnowledgeCanvasActions" = "Canvas actions";
+"KnowledgeCanvasTitle" = "Canvas name";
+"KnowledgeCanvasRename" = "Rename";
+"KnowledgeCanvasDeleteConfirm" = "Move the canvas «{name}» to the cloud trash?";
 "KnowledgeCanvasText" = "Text";
 "KnowledgeCanvasNote" = "Note";
 "KnowledgeCanvasGroup" = "Group";
@@ -3724,7 +3735,7 @@
 "KnowledgeLinks" = "Links";
 "KnowledgeNearest" = "next";
 "KnowledgePlannedHint" = "linking here";
-"KnowledgeCanvasHint" = "drag cards · double-click opens a note";
+"KnowledgeCanvasHint" = "drag cards · double-click: edit text, rename a group, open a note";
 "KnowledgeGraphKindNote" = "note";
 "KnowledgeGraphKindDay" = "daily note";
 "KnowledgeGraphKindMissing" = "no such note yet";

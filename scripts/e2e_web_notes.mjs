@@ -18,6 +18,7 @@ const PHONE = { width: 390, height: 800 };
 const STEP_TIMEOUT_MS = 20000;
 const NOTE = 'Сервер X99';
 const OTHER = 'Курс ОГЭ';
+const WELCOME = 'How to use Knowledge';
 
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
@@ -47,8 +48,29 @@ try {
   await visible(cloud, 'вкладка «Файлы»');
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок');
-  await visible(knowledge.getByText('No notes yet'), 'пустое состояние');
   console.log('OK: «Знания» открыты, «Файлы» — одна из вкладок');
+
+  // ── Новое хранилище встречает заметкой о разделе; удалённая, она не возвращается ──
+  const trashOpenNote = async () => {
+    await note.getByRole('button', { name: 'Move to trash' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Move to trash' }).click();
+  };
+  await visible(row(WELCOME), 'первая заметка нового хранилища');
+  await visible(knowledge.locator(`[data-note-title="${WELCOME}"]`), 'первая заметка открыта сама');
+  await visible(body.getByRole('button', { name: 'My first note' }), 'ссылка на заметку, которой ещё нет');
+  await visible(body.getByText('#welcome'), 'тег в первой заметке');
+  assert.equal(await body.locator('input[type="checkbox"]').count(), 2, 'два пункта в первой заметке');
+  assert.equal(await knowledge.locator('[data-note-row]').count(), 1, 'первая заметка одна');
+  await trashOpenNote();
+  await visible(knowledge.getByText('No notes yet'), 'пустое состояние после удаления первой заметки');
+  // Следующие обновления облака (опрос, эхо своей правки) заметку не возвращают
+  await page.waitForTimeout(4000);
+  assert.equal(await knowledge.locator('[data-note-row]').count(), 0, 'удалённая первая заметка не создана заново');
+  await knowledge.locator('[data-notes-guide]').click();
+  await visible(knowledge.locator(`[data-note-title="${WELCOME}"]`), 'заметка о разделе по кнопке');
+  await trashOpenNote();
+  await visible(knowledge.getByText('No notes yet'), 'пустое состояние');
+  console.log('OK: первая заметка создаётся один раз, после удаления не возвращается');
 
   // ── Новая заметка, название, текст со ссылкой, тегом и пунктами ───────────
   await knowledge.getByRole('button', { name: 'New note' }).click();
@@ -137,13 +159,73 @@ try {
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-graph.png` });
   console.log('OK: граф — заметки, по фильтру записи «Плана»');
 
-  // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
+  // ── Холст из графа: карточка на каждую заметку, стрелка на каждую ссылку ──
   await openTab('Canvas');
-  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  const canvasCount = (selector, count, what) => page.waitForFunction(
+    ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail(what));
+  const chip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
+  await knowledge.locator('[data-notes-canvas="empty"] [data-canvas-from-graph]').click();
   const board = knowledge.locator('[data-canvas-board]');
   await visible(board, 'поле холста');
+  await visible(chip('Link graph'), 'холст из графа назван «Link graph»');
+  // Заметки: NOTE, OTHER и заметка дня; ссылка одна — из NOTE в OTHER
+  await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'на холсте из графа не по карточке на заметку');
+  await canvasCount('[data-canvas-edge]', 1, 'на холсте из графа не по стрелке на ссылку');
+  const boxes = await board.locator('[data-canvas-node]').evaluateAll((nodes) => nodes.map((node) => {
+    const box = node.getBoundingClientRect();
+    return [box.left, box.top, box.right, box.bottom];
+  }));
+  boxes.forEach((a, i) => boxes.slice(i + 1).forEach((b) => {
+    assert.ok(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1], 'карточки холста из графа накладываются');
+  }));
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-graph.png` });
+  // Ещё раз — новый холст со следующим свободным названием
+  await knowledge.locator('[data-board-tools] [data-canvas-from-graph]').click();
+  await visible(chip('Link graph 2'), 'второй холст из графа');
+  console.log('OK: холст из графа — карточки заметок и стрелки ссылок');
+
+  // ── Холст можно переименовать и отправить в корзину ───────────────────────
+  await knowledge.locator('[data-canvas-menu]').click();
+  await page.locator('#knowledge-canvas-name').fill('Карта проекта');
+  await page.locator('#knowledge-canvas-name').press('Enter');
+  await visible(chip('Карта проекта'), 'переименованный холст');
+  await chip('Link graph 2').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('прежнее название холста осталось'));
+  await knowledge.locator('[data-canvas-menu]').click();
+  await page.locator('[data-canvas-delete]').click();
+  await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
+  await chip('Карта проекта').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('удалённый холст остался в списке'));
+  // После удаления открыт оставшийся холст
+  await visible(chip('Link graph'), 'оставшийся холст');
+  assert.equal(await chip('Link graph').getAttribute('aria-pressed'), 'true', 'после удаления открыт другой холст');
+  await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'оставшийся холст не показан');
+  assert.equal(await knowledge.locator('[data-canvas-chip]').count(), 1, 'холст остался один');
+  console.log('OK: холст переименован и удалён, открыт оставшийся');
+
+  // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
+  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  await visible(chip('Canvas 2'), 'новый пустой холст');
+  await canvasCount('[data-canvas-node]', 0, 'новый холст не пуст');
+  // Новая текстовая карточка сразу открыта для ввода; Enter сохраняет
+  const inlineField = board.locator('[data-canvas-inline]');
+  const textCard = board.locator('[data-canvas-type="text"]');
   await knowledge.getByRole('button', { name: 'Text', exact: true }).click();
-  await visible(board.locator('[data-canvas-type="text"]'), 'текстовая карточка');
+  await visible(textCard.locator('textarea[data-canvas-inline]'), 'поле текста новой карточки');
+  await inlineField.fill('Идея');
+  await inlineField.press('Enter');
+  await visible(textCard.getByText('Идея', { exact: true }), 'текст новой карточки');
+  // Двойной клик правит текст на месте: Escape отменяет, уход фокуса сохраняет
+  await textCard.dblclick();
+  await visible(inlineField, 'поле правки текста по двойному клику');
+  await inlineField.fill('Не сохранится');
+  await inlineField.press('Escape');
+  await visible(textCard.getByText('Идея', { exact: true }), 'текст после отмены правки');
+  await textCard.dblclick();
+  await inlineField.fill('Идея 2');
+  await board.click({ position: { x: 20, y: 300 } });
+  await visible(textCard.getByText('Идея 2', { exact: true }), 'текст после правки на месте');
   await knowledge.getByRole('button', { name: 'Note', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: NOTE }).click();
   await visible(board.locator('[data-canvas-type="file"]').getByText('Бюджетный сервер под LLM'), 'карточка заметки с началом текста');
@@ -153,6 +235,20 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('[data-canvas-edge]').length === 1, undefined, {
     timeout: STEP_TIMEOUT_MS,
   }).catch(() => assert.fail('связь на холсте не создана'));
+  // Группа: новая сразу просит название; двойной клик по подписи его меняет
+  const groupCard = board.locator('[data-canvas-type="group"]');
+  await knowledge.getByRole('button', { name: 'Group', exact: true }).click();
+  await visible(groupCard.locator('input[data-canvas-inline]'), 'поле названия новой группы');
+  await inlineField.fill('Железо');
+  await inlineField.press('Enter');
+  await visible(groupCard.locator('[data-canvas-group-label]').filter({ hasText: 'Железо' }), 'название группы');
+  await groupCard.locator('[data-canvas-group-label]').dblclick();
+  await visible(groupCard.locator('input[data-canvas-inline]'), 'поле названия группы по двойному клику');
+  await inlineField.fill('Сервер');
+  await inlineField.press('Enter');
+  await visible(groupCard.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'новое название группы');
+  assert.equal(await board.getByText('Group', { exact: true }).count(), 0, 'слова-заглушки на холсте нет');
+  console.log('OK: текст карточки и название группы правятся двойным кликом на месте');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas.png` });
   await page.waitForTimeout(2500);
   console.log('OK: холст — текст, карточка заметки, связь');
@@ -170,12 +266,17 @@ try {
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');
+  assert.equal(await row(WELCOME).count(), 0, 'удалённая первая заметка не вернулась после перезагрузки');
   await row(NOTE).click();
   await visible(body.getByText('проверить обе GPU'), 'текст заметки после перезагрузки');
   await visible(note.locator('[data-note-planned]').getByText('созвон'), '«Запланировано» после перезагрузки');
   await openTab('Canvas');
   await visible(board.locator('[data-canvas-type="file"]'), 'карточка холста после перезагрузки');
   assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 1, 'связь холста после перезагрузки');
+  assert.equal(await chip('Canvas 2').getAttribute('aria-pressed'), 'true', 'после перезагрузки открыт первый по названию холст');
+  await visible(board.locator('[data-canvas-type="text"]').getByText('Идея 2', { exact: true }), 'текст карточки после перезагрузки');
+  await visible(board.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'название группы после перезагрузки');
+  assert.equal(await chip('Карта проекта').count(), 0, 'удалённый холст не вернулся после перезагрузки');
   console.log('OK: заметки и холст пережили перезагрузку');
 
   // ── Телефон: список либо заметка, со стрелкой назад ───────────────────────

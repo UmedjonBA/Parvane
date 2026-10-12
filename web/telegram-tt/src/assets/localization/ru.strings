@@ -1201,6 +1201,8 @@
 "ParvaneCloudSelect" = "Выбрать";
 "ParvaneCloudActions" = "Действия";
 "ParvaneCloudPreviewUnavailable" = "Просмотр недоступен. Скачайте файл, чтобы открыть его.";
+"ParvaneCloudPreviewNoViewer" = "Файлы {type} в браузере не открываются. Скачайте файл, чтобы открыть его.";
+"ParvaneCloudPreviewTooLarge" = "Файл слишком большой для просмотра здесь. Скачайте его, чтобы открыть.";
 "ParvaneCloudName" = "Имя";
 "ParvaneCloudSize" = "Размер";
 "ParvaneCloudModified" = "Дата";
@@ -1764,6 +1766,7 @@
 "KnowledgeSearch" = "Поиск по заметкам";
 "KnowledgeEmpty" = "Заметок пока нет. Заметки — обычные .md в зашифрованной папке «Знания» вашего облака.";
 "KnowledgeNothingFound" = "Ничего не найдено";
+"KnowledgeGuide" = "Как пользоваться Знаниями";
 "KnowledgePickNote" = "Выберите заметку слева. Заметки — обычные .md в зашифрованной папке «Знания» в облаке. Любое событие или задача со ссылкой [[на заметку]] попадает в её блок «Запланировано».";
 "KnowledgeRoot" = "Без папки";
 "KnowledgeEdit" = "Изменить";
@@ -1792,6 +1795,14 @@
 "KnowledgeCanvasNew" = "Новый холст";
 "KnowledgeCanvasName" = "Холст {count}";
 "KnowledgeCanvasEmpty" = "Холстов пока нет. Холст — файл .canvas (JSON Canvas) в папке «Знания».";
+"KnowledgeCanvasEmptyGraph" = "Холстов пока нет. Начните с графа связей: каждая заметка станет карточкой, каждая [[ссылка]] — стрелкой, дальше двигайте и дорисовывайте как угодно.";
+"KnowledgeCanvasFromGraph" = "Холст из графа";
+"KnowledgeCanvasFromGraphShort" = "Из графа";
+"KnowledgeCanvasGraphName" = "Граф связей";
+"KnowledgeCanvasActions" = "Действия с холстом";
+"KnowledgeCanvasTitle" = "Название холста";
+"KnowledgeCanvasRename" = "Переименовать";
+"KnowledgeCanvasDeleteConfirm" = "Переместить холст «{name}» в корзину облака?";
 "KnowledgeCanvasText" = "Текст";
 "KnowledgeCanvasNote" = "Заметка";
 "KnowledgeCanvasGroup" = "Группа";
@@ -1810,7 +1821,7 @@
 "KnowledgeLinks" = "Связи";
 "KnowledgeNearest" = "ближайшее";
 "KnowledgePlannedHint" = "со ссылкой сюда";
-"KnowledgeCanvasHint" = "перетаскивайте карточки · двойной клик открывает заметку";
+"KnowledgeCanvasHint" = "перетаскивайте карточки · двойной клик — править текст, назвать группу, открыть заметку";
 "KnowledgeGraphKindNote" = "заметка";
 "KnowledgeGraphKindDay" = "ежедневная заметка";
 "KnowledgeGraphKindMissing" = "заметки ещё нет";

@@ -5,7 +5,9 @@ import type { CloudNode } from './cloudModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import { callApi } from '../../../api/gramjs';
-import { kindOfFile } from './cloudModel';
+import {
+  CLOUD_TEXT_PREVIEW_MAX_BYTES, decodeTextPreview, fileTypeLabel, kindOfFile,
+} from './cloudModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -38,26 +40,39 @@ type OwnProps = {
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Просмотр файла облака без скачивания на диск: фото, видео, аудио и PDF — средствами браузера из
-// расшифрованного содержимого; остальное — скачать. Под просмотром — сведения и действия
+// расшифрованного содержимого, текстовые файлы (заметки, данные, код) — текстом; остальное — скачать,
+// а на месте просмотра стоит тип файла. Под просмотром — сведения и действия
 const CloudPreview = ({
   container, node, maxBytes, siblings, folderText, accessText, onNavigate, onDownload, onSend, onMore, onClose,
 }: OwnProps) => {
   const lang = useLang();
   const [url, setUrl] = useState<string>();
+  const [text, setText] = useState<string>();
   const [hasFailed, setHasFailed] = useState(false);
   const kind = node ? kindOfFile(node.mime, node.name) : 'other';
-  const canPreview = Boolean(node) && kind !== 'other' && node.size <= maxBytes;
+  const isText = kind === 'text';
+  const isTooLarge = node ? node.size > (isText ? Math.min(maxBytes, CLOUD_TEXT_PREVIEW_MAX_BYTES) : maxBytes) : false;
+  const canPreview = Boolean(node) && kind !== 'other' && !isTooLarge;
 
   useEffect(() => {
     setUrl(undefined);
+    setText(undefined);
     setHasFailed(false);
     if (!container || !node || !canPreview) return undefined;
     let isActual = true;
     let created: string | undefined;
-    void callParvane('parvaneCloudOpenBlob', { container, node: node.id }).then((blob) => {
+    void callParvane('parvaneCloudOpenBlob', { container, node: node.id }).then(async (blob) => {
       if (!isActual) return;
       if (!(blob instanceof Blob)) {
         setHasFailed(true);
+        return;
+      }
+      if (isText) {
+        const decoded = decodeTextPreview(new Uint8Array(await blob.arrayBuffer()));
+        if (!isActual) return;
+        // Расширение текстовое, а внутри двоичные данные — показываем заглушку
+        if (decoded === undefined) setHasFailed(true);
+        else setText(decoded);
         return;
       }
       // Тип нужен браузеру, чтобы выбрать проигрыватель (в дереве он мог не сохраниться)
@@ -69,7 +84,7 @@ const CloudPreview = ({
       isActual = false;
       if (created) URL.revokeObjectURL(created);
     };
-  }, [container, node, canPreview, kind]);
+  }, [container, node, canPreview, kind, isText]);
 
   const isOpen = Boolean(container && node);
   const position = siblings && node ? siblings.findIndex((entry) => entry.node.id === node.id) : -1;
@@ -87,7 +102,11 @@ const CloudPreview = ({
   const handleSend = useLastCallback(() => onSend?.(container!, node!));
   const handleMore = useLastCallback(() => onMore?.(container!, node!));
 
-  const isBig = canPreview && !hasFailed && (kind === 'photo' || kind === 'video' || kind === 'pdf');
+  const isBig = canPreview && !hasFailed && (kind === 'photo' || kind === 'video' || kind === 'pdf' || isText);
+  const typeLabel = node ? fileTypeLabel(node.name) : '';
+  const stubText = isTooLarge ? lang('ParvaneCloudPreviewTooLarge')
+    : kind === 'other' && typeLabel ? lang('ParvaneCloudPreviewNoViewer', { type: typeLabel })
+      : lang('ParvaneCloudPreviewUnavailable');
   const dateText = node?.mtime
     ? new Date(node.mtime).toLocaleDateString(lang.code, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 
@@ -110,12 +129,19 @@ const CloudPreview = ({
     >
       <div className={buildClassName(styles.previewArt, isBig && styles.previewArtBig)} data-preview-kind={kind}>
         {(!canPreview || hasFailed) && (
-          <div className={styles.previewStub}>
-            <PvIcon name={kind === 'photo' ? 'image' : 'note'} className={styles.previewStubIcon} />
-            <span>{lang('ParvaneCloudPreviewUnavailable')}</span>
+          <div className={styles.previewStub} data-preview-stub>
+            {typeLabel ? (
+              <span className={styles.previewType} data-preview-type>{typeLabel}</span>
+            ) : (
+              <PvIcon name={kind === 'photo' ? 'image' : 'note'} className={styles.previewStubIcon} />
+            )}
+            <span>{stubText}</span>
           </div>
         )}
-        {canPreview && !hasFailed && !url && <Loading />}
+        {canPreview && !hasFailed && !url && text === undefined && <Loading />}
+        {text !== undefined && (
+          <pre className={buildClassName(styles.previewText, 'custom-scroll')} dir="auto" data-preview-text>{text}</pre>
+        )}
         {url && kind === 'photo' && <img className={styles.previewMedia} src={url} alt={node!.name} />}
         {url && kind === 'video' && <video className={styles.previewMedia} src={url} controls autoPlay />}
         {url && kind === 'audio' && <audio className={styles.previewAudio} src={url} controls autoPlay />}

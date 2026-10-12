@@ -2320,6 +2320,7 @@ export interface LangPair {
   'ParvaneCloudSelect': undefined;
   'ParvaneCloudActions': undefined;
   'ParvaneCloudPreviewUnavailable': undefined;
+  'ParvaneCloudPreviewTooLarge': undefined;
   'ParvaneCloudName': undefined;
   'ParvaneCloudSize': undefined;
   'ParvaneCloudModified': undefined;
@@ -2726,6 +2727,7 @@ export interface LangPair {
   'KnowledgeSearch': undefined;
   'KnowledgeEmpty': undefined;
   'KnowledgeNothingFound': undefined;
+  'KnowledgeGuide': undefined;
   'KnowledgePickNote': undefined;
   'KnowledgeRoot': undefined;
   'KnowledgeEdit': undefined;
@@ -2747,6 +2749,13 @@ export interface LangPair {
   'KnowledgeZoomFit': undefined;
   'KnowledgeCanvasNew': undefined;
   'KnowledgeCanvasEmpty': undefined;
+  'KnowledgeCanvasEmptyGraph': undefined;
+  'KnowledgeCanvasFromGraph': undefined;
+  'KnowledgeCanvasFromGraphShort': undefined;
+  'KnowledgeCanvasGraphName': undefined;
+  'KnowledgeCanvasActions': undefined;
+  'KnowledgeCanvasTitle': undefined;
+  'KnowledgeCanvasRename': undefined;
   'KnowledgeCanvasText': undefined;
   'KnowledgeCanvasNote': undefined;
   'KnowledgeCanvasGroup': undefined;
@@ -4518,6 +4527,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudUsageTrash': {
     'size': V;
   };
+  'ParvaneCloudPreviewNoViewer': {
+    'type': V;
+  };
   'ParvaneCloudShareFolderConfirm': {
     'name': V;
   };
@@ -4928,6 +4940,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'KnowledgeCanvasName': {
     'count': V;
+  };
+  'KnowledgeCanvasDeleteConfirm': {
+    'name': V;
   };
   'KnowledgeShowAll': {
     'count': V;
