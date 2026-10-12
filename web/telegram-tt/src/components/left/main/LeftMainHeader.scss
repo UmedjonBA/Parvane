@@ -218,3 +218,172 @@
   max-width: 20rem;
   max-height: calc(100 * var(--vh) - 3.75rem);
 }
+
+// Parvane: шапка списка чатов по прототипу — меню, «Чаты», поиск пилюлей, «Написать». Поле поиска в этом
+// состоянии свёрнуто в пилюлю (на телефоне — в круглую кнопку со значком); по фокусу список сменяется
+// поиском, и поле снова занимает всю шапку
+#LeftMainHeader.left-header--chats {
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  .left-header-title {
+    user-select: none;
+
+    overflow: hidden;
+    flex: 1 1 auto;
+
+    min-width: 0;
+    margin: 0;
+    margin-inline-start: 0.375rem;
+
+    font-size: 1.25rem;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.5rem;
+    color: var(--color-text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .SearchInput--pill {
+    cursor: var(--custom-cursor, pointer);
+
+    overflow: hidden;
+    flex: 0 1 6.5rem;
+
+    width: auto;
+    min-width: 2.125rem;
+    height: 2.125rem;
+    margin-inline-start: 0;
+    padding-inline-end: 0;
+    border: none;
+    border-radius: 1.0625rem;
+
+    background-color: var(--pv-raised);
+
+    transition: background-color 0.15s;
+
+    &:hover {
+      background-color: var(--pv-hover);
+    }
+
+    input {
+      cursor: inherit;
+      height: 2.125rem;
+      padding: 0 0.75rem 0 0.375rem;
+      font-size: 0.875rem;
+
+      &::placeholder {
+        color: var(--pv-fg);
+        opacity: 0.85;
+      }
+    }
+
+    .icon-container-left {
+      width: 1.125rem;
+      margin-inline-start: 0.75rem;
+      color: var(--pv-fg);
+    }
+
+    .search-icon {
+      font-size: 1.125rem;
+    }
+
+    .icon-container-right {
+      display: none;
+    }
+
+    .Loading .Spinner {
+      --spinner-size: 1.125rem;
+    }
+  }
+
+  .left-header-compose-wrapper {
+    position: relative;
+
+    // Сжимается раньше поиска: в узкой колонке от кнопки остаётся значок
+    flex: 0 1000 auto;
+    min-width: 2.125rem;
+  }
+
+  .left-header-compose {
+    cursor: var(--custom-cursor, pointer);
+
+    overflow: hidden;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.375rem;
+    align-content: flex-start;
+    justify-content: center;
+
+    width: 100%;
+    height: 2.125rem;
+    padding: 0 0.5rem;
+    border: none;
+    border-radius: 1.0625rem;
+
+    font-size: 0.875rem;
+    font-weight: var(--font-weight-semibold);
+    line-height: 2.125rem;
+    color: var(--pv-accent-ink);
+    white-space: nowrap;
+
+    background: var(--pv-accent);
+    outline: none;
+
+    transition: filter 0.15s;
+
+    &:hover {
+      filter: brightness(1.06);
+    }
+
+    &:focus-visible {
+      box-shadow: 0 0 0 2px var(--pv-fg);
+    }
+
+    // Строка значка — во всю высоту кнопки: подпись, не поместившись, уходит на вторую строку и не видна
+    > svg {
+      align-self: center;
+      height: 2.125rem;
+    }
+  }
+
+  .left-header-compose-label {
+    padding-inline-end: 0.375rem;
+  }
+
+  @media (max-width: 600px) {
+    .SearchInput--pill {
+      position: relative;
+
+      flex: none;
+
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 50%;
+
+      background-color: transparent;
+
+      // Поле лежит поверх значка невидимым: нажатие ставит в него фокус и открывает поиск
+      input {
+        position: absolute;
+        inset: 0;
+
+        width: 100%;
+        height: 100%;
+        padding: 0;
+
+        opacity: 0;
+      }
+
+      .icon-container-left {
+        width: 1.5rem;
+        margin-inline-start: 0.5rem;
+        color: var(--color-text-secondary);
+      }
+
+      .search-icon {
+        font-size: 1.5rem;
+      }
+    }
+  }
+}

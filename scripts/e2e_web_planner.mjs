@@ -77,6 +77,16 @@ try {
     `разделы должны лежать в верхней части панели: ${JSON.stringify(geometry)}`,
   );
   assert.ok(geometry.barBottom - geometry.profileBottom < 24, `«Профиль» не у нижнего края: ${JSON.stringify(geometry)}`);
+  // Шапка списка чатов: заголовок, «Написать» с меню из четырёх пунктов; карандаша Telegram нет
+  const chatsHeader = page.locator('#LeftMainHeader');
+  await chatsHeader.getByRole('heading', { name: 'Chats' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await chatsHeader.getByRole('button', { name: 'New Message' }).click();
+  for (const item of ['New Message', 'New Group', 'New Channel', 'Planner entry']) {
+    await chatsHeader.getByRole('menuitem', { name: item }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await page.keyboard.press('Escape');
+  await chatsHeader.getByRole('menuitem', { name: 'Planner entry' }).waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await page.locator('#LeftColumn .NewChatButton').count(), 0, 'карандаша Telegram нет и на компьютере');
   // «Поиск» панели открывает поиск по чатам; папок чатов в панели нет
   await sidebar.getByRole('button', { name: 'Search' }).click();
   await page.locator('#telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

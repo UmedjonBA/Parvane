@@ -2633,6 +2633,7 @@ export interface LangPair {
   'ParvaneColorScheme': undefined;
   'ParvaneColorSchemeHint': undefined;
   'ParvaneTabBarPlanEntry': undefined;
+  'ParvaneCompose': undefined;
   'PlannerKindFood': undefined;
   'PlannerKindSleep': undefined;
   'PlannerKindWorkout': undefined;

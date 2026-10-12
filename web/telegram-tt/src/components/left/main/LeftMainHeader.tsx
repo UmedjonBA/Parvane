@@ -12,7 +12,6 @@ import {
   selectCanSetPasscode,
   selectCurrentMessageList,
   selectIsCurrentUserPremium,
-  selectIsForumPanelOpen,
   selectTabState,
   selectTheme,
 } from '../../../global/selectors';
@@ -22,19 +21,23 @@ import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { formatDateToString } from '../../../util/dates/oldDateFormat';
+import { requestPlannerAdd } from '../../../util/parvaneSection';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useConnectionStatus from '../../../hooks/useConnectionStatus';
+import useFlag from '../../../hooks/useFlag';
 import { useHotkeys } from '../../../hooks/useHotkeys';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
-import Icon from '../../common/icons/Icon';
 import MainMenuDropdown from '../../common/MainMenuDropdown';
 import PeerChip from '../../common/PeerChip';
+import ParvaneIcon from '../../main/ParvaneIcon';
 import StoryToggler from '../../story/StoryToggler';
 import Button from '../../ui/Button';
+import Menu from '../../ui/Menu';
+import MenuItem from '../../ui/MenuItem';
 import SearchInput from '../../ui/SearchInput';
 import ShowTransition from '../../ui/ShowTransition';
 import ConnectionStatusOverlay from '../ConnectionStatusOverlay';
@@ -68,7 +71,6 @@ type StateProps = {
   areChatsLoaded?: boolean;
   hasPasscode?: boolean;
   canSetPasscode?: boolean;
-  isForumPanelOpen?: boolean;
 } & Pick<GlobalState, 'connectionState' | 'isSyncing' | 'isFetchingDifference'>;
 
 const CLEAR_DATE_SEARCH_PARAM = { date: undefined };
@@ -96,8 +98,6 @@ const LeftMainHeader = ({
   areChatsLoaded,
   hasPasscode,
   canSetPasscode,
-  isFoldersSidebarShown,
-  isForumPanelOpen,
   onSearchQuery,
   onReset,
 }: OwnProps & StateProps) => {
@@ -108,7 +108,7 @@ const LeftMainHeader = ({
     lockScreen,
     openSettingsScreen,
     searchMessagesGlobal,
-    closeForumPanel,
+    openLeftColumnContent,
   } = getActions();
 
   const oldLang = useOldLang();
@@ -117,8 +117,24 @@ const LeftMainHeader = ({
 
   const areContactsVisible = content === LeftColumnContent.Contacts;
   const hasMenu = content === LeftColumnContent.ChatList;
+  // Parvane: шапка списка чатов по прототипу — меню, заголовок «Чаты», поиск пилюлей (на телефоне —
+  // значком) и на компьютере кнопка «Написать». Поле поиска то же: по фокусу оно разворачивается во всю
+  // шапку, заголовок и «Написать» уходят
+  const isChatsHeader = hasMenu && !shouldHideSearch;
 
-  const isSearchButton = isForumPanelOpen && isFoldersSidebarShown && !IS_WITH_WINDOW_BUTTONS;
+  const [isComposeMenuOpen, openComposeMenu, closeComposeMenu] = useFlag();
+
+  const handleNewMessage = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
+  });
+
+  const handleNewGroup = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
+  });
+
+  const handleNewChannel = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
+  });
 
   const selectedSearchDate = useMemo(() => {
     return searchDate
@@ -145,10 +161,6 @@ const LeftMainHeader = ({
     }
   });
 
-  const handleForumSearchClick = useLastCallback(() => {
-    closeForumPanel();
-  });
-
   useHotkeys(useMemo(() => (canSetPasscode ? {
     'Ctrl+Shift+L': handleLockScreenHotkey,
     'Alt+Shift+L': handleLockScreenHotkey,
@@ -165,22 +177,18 @@ const LeftMainHeader = ({
         color="translucent"
         className={buildClassName(isOpen && 'active')}
 
-        onClick={isSearchButton ? handleForumSearchClick : hasMenu ? onTrigger : () => onReset()}
+        onClick={hasMenu ? onTrigger : () => onReset()}
         ariaLabel={hasMenu ? lang('AriaLabelOpenMenu') : lang('AriaLabelBackChatList')}
       >
-        {isSearchButton ? (
-          <Icon name="search" />
-        ) : (
-          <div className={buildClassName(
-            'animated-menu-icon',
-            !hasMenu && 'state-back',
-            shouldSkipTransition && 'no-animation',
-          )}
-          />
+        <div className={buildClassName(
+          'animated-menu-icon',
+          !hasMenu && 'state-back',
+          shouldSkipTransition && 'no-animation',
         )}
+        />
       </Button>
     );
-  }, [hasMenu, isSearchButton, isMobile, lang, onReset, shouldSkipTransition]);
+  }, [hasMenu, isMobile, lang, onReset, shouldSkipTransition]);
 
   const handleSearchFocus = useLastCallback(() => {
     if (!searchQuery) {
@@ -252,24 +260,19 @@ const LeftMainHeader = ({
     <div className="LeftMainHeader">
       <div
         id="LeftMainHeader"
-        className="left-header"
+        className={buildClassName('left-header', isChatsHeader && 'left-header--chats')}
         data-tauri-drag-region={IS_WITH_WINDOW_BUTTONS ? true : undefined}
       >
         {lang.isRtl && <div className="DropdownMenuFiller" />}
-        <MainMenuDropdown
-          trigger={MainButton}
-          className={buildClassName(
-            hasMenu && isFoldersSidebarShown && !IS_WITH_WINDOW_BUTTONS && !isSearchButton && 'hide-menu-button',
-            isSearchButton && 'forum-search-button',
-          )}
-        />
+        <MainMenuDropdown trigger={MainButton} />
+        {isChatsHeader && <h1 className="left-header-title">{lang('ParvaneSectionMessenger')}</h1>}
         <SearchInput
           inputId="telegram-search-input"
           resultsItemSelector=".LeftSearch .ListItem-button"
           className={buildClassName(
             (globalSearchChatId || searchDate) ? 'with-picker-item' : undefined,
             shouldHideSearch && 'SearchInput--hidden',
-            hasMenu && isFoldersSidebarShown && !IS_WITH_WINDOW_BUTTONS && 'SearchInput--no-left-margin',
+            isChatsHeader && 'SearchInput--pill',
           )}
           value={isClosingSearch ? undefined : (contactsFilter || searchQuery)}
           focused={isSearchFocused}
@@ -290,6 +293,33 @@ const LeftMainHeader = ({
             canShow={withStoryToggler}
           />
         </SearchInput>
+        {isChatsHeader && !isMobile && (
+          <div className="left-header-compose-wrapper">
+            <button
+              type="button"
+              className="left-header-compose"
+              aria-label={lang('NewMessageTitle')}
+              aria-haspopup="menu"
+              aria-expanded={isComposeMenuOpen}
+              onClick={openComposeMenu}
+            >
+              <ParvaneIcon name="pen" isSmall />
+              <span className="left-header-compose-label">{lang('ParvaneCompose')}</span>
+            </button>
+            <Menu
+              isOpen={isComposeMenuOpen}
+              positionX="right"
+              positionY="top"
+              autoClose
+              onClose={closeComposeMenu}
+            >
+              <MenuItem icon="user" onClick={handleNewMessage}>{lang('NewMessageTitle')}</MenuItem>
+              <MenuItem icon="group" onClick={handleNewGroup}>{lang('NewGroup')}</MenuItem>
+              <MenuItem icon="channel" onClick={handleNewChannel}>{lang('NewChannel')}</MenuItem>
+              <MenuItem icon="calendar" onClick={requestPlannerAdd}>{lang('ParvaneTabBarPlanEntry')}</MenuItem>
+            </Menu>
+          </div>
+        )}
         {/* Parvane: кнопка emoji-статуса (звёздочка premium) — подписок нет */}
         {IS_EMOJI_STATUS_SUPPORTED && isCurrentUserPremium && <StatusButton />}
         {hasPasscode && (
@@ -330,8 +360,6 @@ export default memo(withGlobal<OwnProps>(
       connectionState, isSyncing, isFetchingDifference,
     } = global;
     const { isConnectionStatusMinimized } = selectSharedSettings(global);
-    const isForumPanelOpen = selectIsForumPanelOpen(global);
-
     return {
       searchQuery,
       isLoading: fetchingStatus ? Boolean(fetchingStatus.chats
@@ -348,7 +376,6 @@ export default memo(withGlobal<OwnProps>(
       areChatsLoaded: Boolean(global.chats.listIds.active),
       hasPasscode: Boolean(global.passcode.hasPasscode),
       canSetPasscode: selectCanSetPasscode(global),
-      isForumPanelOpen,
     };
   },
 )(LeftMainHeader));

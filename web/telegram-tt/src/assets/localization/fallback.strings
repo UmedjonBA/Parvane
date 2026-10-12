@@ -3555,6 +3555,7 @@
 "ParvaneColorScheme" = "Colour scheme";
 "ParvaneColorSchemeHint" = "Changes colours only, in the messenger and in every section. Light or dark follows the theme setting above.";
 "ParvaneTabBarPlanEntry" = "Planner entry";
+"ParvaneCompose" = "Compose";
 "PlannerKindFood" = "Meal";
 "PlannerKindSleep" = "Sleep";
 "PlannerKindWorkout" = "Workout";

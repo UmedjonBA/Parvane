@@ -1,20 +1,15 @@
 import type { Update } from '@tauri-apps/plugin-updater';
 import type { FC } from '../../../lib/teact/teact';
-import {
-  memo, useEffect, useRef, useState,
-} from '../../../lib/teact/teact';
-import { getActions } from '../../../global';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { FolderEditDispatch } from '../../../hooks/reducers/useFoldersReducer';
 import { LeftColumnContent } from '../../../types';
 
 import { DEBUG } from '../../../config';
 import { IS_TAURI } from '../../../util/browser/globalEnvironment';
-import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
-import useAppLayout from '../../../hooks/useAppLayout';
 import useForumPanelRender from '../../../hooks/useForumPanelRender';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -22,7 +17,6 @@ import useShowTransitionDeprecated from '../../../hooks/useShowTransitionDepreca
 
 import Button from '../../ui/Button';
 import Transition from '../../ui/Transition';
-import NewChatButton from '../NewChatButton';
 import LeftSearch from '../search/LeftSearch.async';
 import ChatFolders from './ChatFolders';
 import ContactList from './ContactList.async';
@@ -49,10 +43,7 @@ type OwnProps = {
 };
 
 const TRANSITION_RENDER_COUNT = Object.keys(LeftColumnContent).length / 2;
-const BUTTON_CLOSE_DELAY_MS = 250;
 const TAURI_CHECK_UPDATE_INTERVAL = 10 * 60 * 1000;
-
-let closeTimeout: number | undefined;
 
 const LeftMain: FC<OwnProps> = ({
   content,
@@ -70,8 +61,6 @@ const LeftMain: FC<OwnProps> = ({
   isAccountFrozen,
   isFoldersSidebarShown,
 }) => {
-  const { openLeftColumnContent } = getActions();
-  const [isNewChatButtonShown, setIsNewChatButtonShown] = useState(IS_TOUCH_ENV);
   const [tauriUpdate, setTauriUpdate] = useState<Update>();
   const [isTauriUpdateDownloading, setIsTauriUpdateDownloading] = useState(false);
 
@@ -86,35 +75,6 @@ const LeftMain: FC<OwnProps> = ({
     shouldRender: shouldRenderUpdateButton,
     transitionClassNames: updateButtonClassNames,
   } = useShowTransitionDeprecated(isAppUpdateAvailable || Boolean(tauriUpdate));
-
-  const isMouseInsideRef = useRef(false);
-
-  const handleMouseEnter = useLastCallback(() => {
-    if (content !== LeftColumnContent.ChatList) {
-      return;
-    }
-    isMouseInsideRef.current = true;
-    setIsNewChatButtonShown(true);
-  });
-
-  const handleMouseLeave = useLastCallback(() => {
-    isMouseInsideRef.current = false;
-
-    if (closeTimeout) {
-      clearTimeout(closeTimeout);
-      closeTimeout = undefined;
-    }
-
-    closeTimeout = window.setTimeout(() => {
-      if (!isMouseInsideRef.current) {
-        setIsNewChatButtonShown(false);
-      }
-    }, BUTTON_CLOSE_DELAY_MS);
-  });
-
-  const handleSelectContacts = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
-  });
 
   const handleUpdateClick = useLastCallback(async () => {
     if (tauriUpdate) {
@@ -135,32 +95,6 @@ const LeftMain: FC<OwnProps> = ({
     }
   });
 
-  const handleSelectNewChannel = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.NewChannelStep1 });
-  });
-
-  const handleSelectNewGroup = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.NewGroupStep1 });
-  });
-
-  useEffect(() => {
-    let autoCloseTimeout: number | undefined;
-    if (content !== LeftColumnContent.ChatList) {
-      autoCloseTimeout = window.setTimeout(() => {
-        setIsNewChatButtonShown(false);
-      }, BUTTON_CLOSE_DELAY_MS);
-    } else if (isMouseInsideRef.current || IS_TOUCH_ENV) {
-      setIsNewChatButtonShown(true);
-    }
-
-    return () => {
-      if (autoCloseTimeout) {
-        clearTimeout(autoCloseTimeout);
-        autoCloseTimeout = undefined;
-      }
-    };
-  }, [content]);
-
   const checkTauriUpdate = useLastCallback(() => {
     window.tauri?.checkUpdate()
       .then((update) => setTauriUpdate(update ?? undefined))
@@ -180,14 +114,9 @@ const LeftMain: FC<OwnProps> = ({
   );
 
   const lang = useLang();
-  const { isMobile } = useAppLayout();
 
   return (
-    <div
-      id="LeftColumn-main"
-      onMouseEnter={!IS_TOUCH_ENV ? handleMouseEnter : undefined}
-      onMouseLeave={!IS_TOUCH_ENV ? handleMouseLeave : undefined}
-    >
+    <div id="LeftColumn-main">
       <LeftMainHeader
         shouldHideSearch={isForumPanelVisible}
         content={content}
@@ -253,16 +182,8 @@ const LeftMain: FC<OwnProps> = ({
           onCloseAnimationEnd={handleForumPanelAnimationEnd}
         />
       )}
-      {/* Parvane: на телефоне карандаша нет — новое сообщение, группа и канал в меню «+» нижней панели */}
-      {!isMobile && (
-        <NewChatButton
-          isShown={isNewChatButtonShown}
-          onNewPrivateChat={handleSelectContacts}
-          onNewChannel={handleSelectNewChannel}
-          onNewGroup={handleSelectNewGroup}
-          isAccountFrozen={isAccountFrozen}
-        />
-      )}
+      {/* Parvane: карандаша Telegram нет. Новое сообщение, группа, канал и запись в план — в меню «Написать»
+          шапки списка (компьютер) и в меню «+» нижней панели (телефон) */}
     </div>
   );
 };
