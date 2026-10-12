@@ -30,7 +30,7 @@ const PATTERNS = [
 // Миниатюра плитки галереи: рисунок на ней должен быть виден, как в чате
 const THUMB_SIZE = 192;
 // Сторона вырезки готового фона под миниатюру: рисунок на плитке читается, а не превращается в шум
-const THUMB_CROP = 640;
+const THUMB_CROP = 300;
 export const PATTERN_SLUG_PREFIX = 'builtin-pattern-';
 // Картинка, загруженная пользователем (`uploadWallpaper`)
 export const UPLOADED_SLUG_PREFIX = 'wp';
