@@ -1,12 +1,15 @@
-import { memo, useMemo } from '../../../lib/teact/teact';
+import { memo } from '../../../lib/teact/teact';
 
+import type { KnowledgeView } from '../../../util/parvaneSection';
+
+import buildClassName from '../../../util/buildClassName';
 import { getKnowledgeView, KNOWLEDGE_VIEWS, setKnowledgeView } from '../../../util/parvaneSection';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import TabList from '../../ui/TabList';
+import kit from './PvKit.module.scss';
 
 type OwnProps = {
   className?: string;
@@ -19,25 +22,33 @@ const LABELS = {
   files: 'KnowledgeFiles',
 } as const;
 
-// Вкладки раздела «Знания»: стоят в шапке и заметок, и «Файлов» (прежнее «Облако»)
+// Вкладки раздела «Знания»: стоят в шапке и заметок, и «Файлов» (прежнее «Облако»).
+// На компьютере — сегменты в шапке острова, на телефоне — подчёркнутые вкладки во всю ширину
 const KnowledgeTabs = ({ className }: OwnProps) => {
   const view = useDerivedState(getKnowledgeView);
 
   const lang = useLang();
 
-  const tabs = useMemo(() => KNOWLEDGE_VIEWS.map((item) => ({ title: lang(LABELS[item]) })), [lang]);
-
-  const handleSwitch = useLastCallback((index: number) => {
-    setKnowledgeView(KNOWLEDGE_VIEWS[index]);
+  const handleSwitch = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setKnowledgeView(e.currentTarget.dataset.view as KnowledgeView);
   });
 
   return (
-    <TabList
-      className={className}
-      tabs={tabs}
-      activeTab={KNOWLEDGE_VIEWS.indexOf(view)}
-      onSwitchTab={handleSwitch}
-    />
+    <div className={buildClassName(kit.seg, className)} role="tablist">
+      {KNOWLEDGE_VIEWS.map((item) => (
+        <button
+          key={item}
+          type="button"
+          role="tab"
+          aria-selected={item === view}
+          className={buildClassName(kit.segItem, item === view && kit.segItemOn)}
+          data-view={item}
+          onClick={handleSwitch}
+        >
+          {lang(LABELS[item])}
+        </button>
+      ))}
+    </div>
   );
 };
 

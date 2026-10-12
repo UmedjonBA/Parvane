@@ -5,47 +5,57 @@ import {
 
 import type { PlannerState } from '../planner/plannerModel';
 import type { NotesIndex } from './notesModel';
+import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatRepeat } from '../planner/plannerFormat';
+import { formatRepeat } from '../planner/plannerFormat';
+import { toDayKey } from '../planner/plannerModel';
+import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
-import { getNoteTasks } from './notesTasks';
+import { nearestPlanned } from './notesPlanned';
+import { getNoteTasks, markerOfTask } from './notesTasks';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
+import NoteLinks from './NoteLinks';
+import PvIcon from './PvIcon';
 
 import styles from './Knowledge.module.scss';
+import kit from './PvKit.module.scss';
 
 type OwnProps = {
   note: NoteEntry;
   index: NotesIndex;
   planner: PlannerState;
+  planned: PlannedItem[];
+  // Узкий экран: заметка занимает весь раздел, сверху своя шапка и стрелка назад
   onBack?: NoneToVoidFunction;
+  // «Связи» стоят под заметкой, когда для них нет отдельного острова справа
+  hasLinks?: boolean;
   onOpenTitle: (title: string) => void;
   onSave: (noteId: string, text: string) => Promise<boolean>;
   onRename: (noteId: string, title: string) => void;
   onDelete: (noteId: string) => void;
 };
 
-type PlannedItem = { key: string; name: string; when: string; sort: string };
-
 const TITLE_MAX_LENGTH = 120;
 const INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*|(?:^|\s)#[\p{L}\d_/-]+)/gu;
 const TASK_LINE = /^(\s*)[-*+] \[( |x|X)\](?: (.*))?$/;
 const LIST_LINE = /^(\s*)[-*+] (.*)$/;
 const HEADING = /^(#{1,3}) (.*)$/;
-const MARKER = / \^t[a-z0-9]{4,12}\s*$/;
+const MARKER = / \^(t[a-z0-9]{4,12})\s*$/;
 const FENCE = '```';
+// Сколько прошедших записей остаётся в «Запланировано» перед будущими
+const PLANNED_PAST_MAX = 3;
 
-// Заметка: чтение с живыми ссылками, тегами и галочками; правка — текстом `.md`.
-// Ниже — «Запланировано» (записи «Плана» со ссылкой сюда) и обратные ссылки
+// Заметка: чтение с живыми ссылками, тегами и круглыми галочками; правка — текстом `.md`.
+// Ниже — «Запланировано» (записи «Плана» со ссылкой сюда), на узком экране ещё и «Связи»
 const NoteView = ({
-  note, index, planner, onBack, onOpenTitle, onSave, onRename, onDelete,
+  note, index, planner, planned, onBack, hasLinks, onOpenTitle, onSave, onRename, onDelete,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
   const [title, setTitle] = useState(note.title);
@@ -60,37 +70,20 @@ const NoteView = ({
   }, [note.id, note.title]);
 
   const isEditing = draft !== undefined;
+  const isDaily = note.isDaily && isDayTitle(note.title);
   const parsed = useMemo(() => parseNote(note.text), [note.text]);
-  const backlinks = useMemo(() => index.backlinks(note.id), [index, note.id]);
+  const [today] = useState(() => toDayKey(new Date()));
 
-  const planned = useMemo(() => {
-    const link = `[[${note.title.toLowerCase()}`;
-    const items: PlannedItem[] = [];
-    const linked = (name: string) => name.toLowerCase().includes(link);
-    const fromNote = new Set(getNoteTasks(planner, note.id).map(({ id }) => id));
-    planner.tasks.forEach((task) => {
-      if (!fromNote.has(task.id) && !linked(task.name)) return;
-      const day = task.day || task.due;
-      items.push({
-        key: `t${task.id}`,
-        name: task.name,
-        when: task.repeat ? formatRepeat(lang, task.repeat)
-          : day ? `${formatDay(lang, day)}${task.start ? `, ${task.start}` : ''}` : lang('KnowledgeNoDate'),
-        sort: task.repeat?.startDay || day || '9999',
-      });
-    });
-    planner.events.forEach((event) => {
-      if (!linked(event.name)) return;
-      items.push({
-        key: `e${event.id}`,
-        name: event.name,
-        when: event.repeat ? `${formatRepeat(lang, event.repeat)}, ${event.start}`
-          : `${event.day ? formatDay(lang, event.day) : ''}${event.isAllDay ? '' : `, ${event.start}`}`,
-        sort: event.repeat?.startDay || event.day || '9999',
-      });
-    });
-    return items.sort((a, b) => (a.sort < b.sort ? -1 : 1));
-  }, [planner, note.id, note.title, lang]);
+  // Пункты, ставшие задачами «Плана»: метка пункта → задача
+  const taskByMarker = useMemo(() => (
+    new Map(getNoteTasks(planner, note.id).map((task) => [markerOfTask(task), task]))
+  ), [planner, note.id]);
+
+  const shownPlanned = useMemo(() => {
+    const past = planned.filter((item) => item.day && item.day < today);
+    return [...past.slice(-PLANNED_PAST_MAX), ...planned.filter((item) => !item.day || item.day >= today)];
+  }, [planned, today]);
+  const nearest = nearestPlanned(planned, today);
 
   const handleEdit = useLastCallback(() => {
     setDraft(note.text);
@@ -123,6 +116,10 @@ const NoteView = ({
     else setTitle(note.title);
   });
 
+  const handleTitleKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur();
+  });
+
   const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const line = Number(e.currentTarget.dataset.line);
     void onSave(note.id, setTaskDone(note.text, line, e.currentTarget.checked));
@@ -136,6 +133,11 @@ const NoteView = ({
     closeDelete();
     onDelete(note.id);
   });
+
+  const formatWhen = (day?: string, time?: string, due?: string) => {
+    if (day) return `${formatDayShort(lang, day)}${time ? ` ${time}` : ''}`;
+    return due ? lang('PlannerDueValue', { date: formatDayShort(lang, due) }) : '';
+  };
 
   const renderInline = (text: string) => text.split(INLINE).map((part, i) => {
     const key = `${i}${part}`;
@@ -165,8 +167,10 @@ const NoteView = ({
   const renderBody = () => {
     const lines = note.text.split('\n');
     const bodyStart = lines.length - parsed.body.split('\n').length;
+    const ownTitle = note.title.trim().toLowerCase();
     const out: TeactNode[] = [];
     let isCode = false;
+    let hasContent = false;
     lines.forEach((line, i) => {
       if (i < bodyStart) return;
       if (line.trim().startsWith(FENCE)) {
@@ -179,17 +183,32 @@ const NoteView = ({
       }
       const task = TASK_LINE.exec(line);
       if (task) {
+        const isDone = task[2] !== ' ';
+        const text = task[3] || '';
+        const planTask = taskByMarker.get(MARKER.exec(text)?.[1] || '');
+        const when = planTask && formatWhen(planTask.day, planTask.start, planTask.due);
+        hasContent = true;
         out.push(
-          <label key={i} className={styles.taskLine} style={`padding-inline-start: ${task[1].length * 0.5}rem`}>
+          <label
+            key={i}
+            className={buildClassName(styles.item, isDone && styles.itemDone)}
+            style={`padding-inline-start: ${task[1].length * 0.5}rem`}
+          >
             <input
               type="checkbox"
-              className={styles.taskCheck}
-              checked={task[2] !== ' '}
+              className={styles.check}
+              checked={isDone}
               data-line={i}
               onChange={handleToggle}
             />
-            <span className={task[2] !== ' ' ? styles.taskDone : undefined}>
-              {renderInline((task[3] || '').replace(MARKER, ''))}
+            <span className={styles.itemText}>
+              {renderInline(text.replace(MARKER, ''))}
+              {when && (
+                <span className={styles.dateTag} title={lang('KnowledgeTaskInPlan')}>
+                  <PvIcon name="cal" className={styles.dateTagIcon} />
+                  {when}
+                </span>
+              )}
             </span>
           </label>,
         );
@@ -197,8 +216,16 @@ const NoteView = ({
       }
       const heading = HEADING.exec(line);
       if (heading) {
+        // Первый заголовок, повторяющий название, не показывается: название стоит над текстом
+        if (!hasContent && heading[2].trim().toLowerCase() === ownTitle) return;
+        hasContent = true;
         out.push(
-          <div key={i} className={buildClassName(styles.heading, styles[`heading${heading[1].length}`])}>
+          <div
+            key={i}
+            role="heading"
+            aria-level={heading[1].length + 1}
+            className={buildClassName(styles.heading, styles[`heading${heading[1].length}`])}
+          >
             {renderInline(heading[2])}
           </div>,
         );
@@ -206,112 +233,170 @@ const NoteView = ({
       }
       const item = LIST_LINE.exec(line);
       if (item) {
+        hasContent = true;
         out.push(
-          <div key={i} className={styles.listLine} style={`padding-inline-start: ${item[1].length * 0.5 + 1}rem`}>
-            {renderInline(item[2])}
+          <div key={i} className={styles.item} style={`padding-inline-start: ${item[1].length * 0.5}rem`}>
+            <span className={styles.bullet}>•</span>
+            <span className={styles.itemText}>{renderInline(item[2])}</span>
           </div>,
         );
         return;
       }
-      out.push(line.trim()
-        ? <p key={i} className={styles.paragraph}>{renderInline(line)}</p>
-        : <div key={i} className={styles.gap} />);
+      if (!line.trim()) {
+        // Пустые строки перед текстом (после скрытого заголовка) не дают отступа
+        if (hasContent) out.push(<div key={i} className={styles.gap} />);
+        return;
+      }
+      hasContent = true;
+      out.push(<div key={i}>{renderInline(line)}</div>);
     });
     return out;
   };
 
   const properties = Object.entries(parsed.properties);
+  const folderName = isDaily ? lang('KnowledgeDailyFolder') : note.folder || lang('KnowledgeRoot');
 
   return (
     <article className={styles.note} data-note-id={note.id} data-note-title={note.title}>
-      <div className={styles.noteHead}>
+      {onBack && (
+        <header className={buildClassName(kit.hdr, styles.noteBar)}>
+          <h1 className={buildClassName(kit.hdrSmall, kit.muted, kit.grow)}>{folderName}</h1>
+          <button
+            type="button"
+            className={kit.ib}
+            aria-label={lang(isEditing ? 'KnowledgeDone' : 'KnowledgeEdit')}
+            disabled={isSaving}
+            onClick={isEditing ? handleSave : handleEdit}
+          >
+            <PvIcon name={isEditing ? 'check' : 'edit'} />
+          </button>
+        </header>
+      )}
+      <div className={styles.noteBody}>
         {onBack && (
-          <Button
-            round
-            size="smaller"
-            color="translucent"
-            iconName="arrow-left"
-            ariaLabel={lang('KnowledgeBack')}
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnGhost, styles.backButton)}
+            aria-label={lang('KnowledgeBack')}
             onClick={onBack}
+          >
+            <PvIcon name="left" isSmall />
+            {lang('ParvaneSectionKnowledge')}
+          </button>
+        )}
+        {isDaily ? (
+          <h2 className={styles.noteTitle}>{displayTitle(lang, note)}</h2>
+        ) : (
+          <input
+            className={buildClassName(styles.noteTitle, styles.noteTitleInput, isEditing && styles.noteTitleEditing)}
+            value={title}
+            maxLength={TITLE_MAX_LENGTH}
+            aria-label={lang('KnowledgeNoteTitle')}
+            onChange={handleTitle}
+            onBlur={handleTitleBlur}
+            onKeyDown={handleTitleKey}
           />
         )}
-        <input
-          className={styles.noteTitle}
-          value={title}
-          maxLength={TITLE_MAX_LENGTH}
-          aria-label={lang('KnowledgeNoteTitle')}
-          onChange={handleTitle}
-          onBlur={handleTitleBlur}
-        />
-        {isEditing ? (
-          <>
-            <Button size="smaller" isText onClick={handleCancel}>{lang('KnowledgeCancel')}</Button>
-            <Button size="smaller" disabled={isSaving} onClick={handleSave}>{lang('KnowledgeSave')}</Button>
-          </>
-        ) : (
-          <>
-            <Button size="smaller" color="translucent" onClick={handleEdit}>{lang('KnowledgeEdit')}</Button>
-            <Button
-              round
-              size="smaller"
-              color="translucent"
-              iconName="delete"
-              ariaLabel={lang('KnowledgeDelete')}
-              onClick={openDelete}
-            />
-          </>
-        )}
-      </div>
-      {Boolean(note.folder || properties.length) && (
-        <div className={styles.chips}>
-          {note.folder && <span className={styles.chip}>{note.folder}</span>}
+        <div className={styles.props}>
+          <span className={styles.prop}>{folderName}</span>
           {properties.map(([key, value]) => (
-            <span
-              key={key}
-              className={styles.chip}
-            >
-              {`${key}: ${Array.isArray(value) ? value.join(', ') : value}`}
+            <span key={key} className={styles.prop}>
+              {`${key} `}
+              <b>{Array.isArray(value) ? value.join(', ') : value}</b>
             </span>
           ))}
+          {nearest && (
+            <span className={styles.prop}>
+              {`${lang('KnowledgeNearest')} `}
+              <b>{`${formatDayShort(lang, nearest.day!)}${nearest.time ? `, ${nearest.time}` : ''}`}</b>
+            </span>
+          )}
         </div>
-      )}
-      {isEditing ? (
-        <textarea
-          id="knowledge-note-editor"
-          className={buildClassName('form-control', styles.editor)}
-          value={draft}
-          placeholder={lang('KnowledgeEditorPlaceholder')}
-          aria-label={note.title}
-          onChange={handleDraft}
-        />
-      ) : (
-        <div className={styles.body} data-note-body>{renderBody()}</div>
-      )}
-      <section className={styles.block} data-note-planned>
-        <h3 className={styles.blockTitle}>{lang('KnowledgePlanned')}</h3>
-        {!planned.length && <p className={styles.muted}>{lang('KnowledgePlannedEmpty')}</p>}
-        {planned.map((item) => (
-          <div key={item.key} className={styles.blockRow}>
-            <span className={styles.blockWhen}>{item.when}</span>
-            <span>{item.name}</span>
-          </div>
-        ))}
-      </section>
-      <section className={styles.block} data-note-backlinks>
-        <h3 className={styles.blockTitle}>{lang('KnowledgeBacklinks', { count: backlinks.length })}</h3>
-        {!backlinks.length && <p className={styles.muted}>{lang('KnowledgeBacklinksEmpty')}</p>}
-        {backlinks.map((other) => (
-          <button
-            key={other.id}
-            type="button"
-            className={styles.blockLink}
-            data-title={other.title}
-            onClick={handleLink}
-          >
-            {other.title}
-          </button>
-        ))}
-      </section>
+        {isEditing ? (
+          <textarea
+            id="knowledge-note-editor"
+            className={buildClassName(kit.textarea, styles.editor)}
+            value={draft}
+            placeholder={lang('KnowledgeEditorPlaceholder')}
+            aria-label={note.title}
+            onChange={handleDraft}
+          />
+        ) : (
+          <div className={styles.md} data-note-body>{renderBody()}</div>
+        )}
+        <div className={styles.noteButtons}>
+          {isEditing ? (
+            <>
+              <button type="button" className={kit.btn} disabled={isSaving} onClick={handleSave}>
+                <PvIcon name="check" isSmall />
+                {lang('KnowledgeDone')}
+              </button>
+              <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleCancel}>
+                {lang('KnowledgeCancel')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className={kit.btn} onClick={handleEdit}>
+                <PvIcon name="edit" isSmall />
+                {lang('KnowledgeEdit')}
+              </button>
+              <button
+                type="button"
+                className={buildClassName(kit.btn, kit.btnGhost)}
+                onClick={openDelete}
+              >
+                <PvIcon name="trash" isSmall />
+                {lang('KnowledgeDelete')}
+              </button>
+            </>
+          )}
+        </div>
+        {!isDaily && (
+          <section className={buildClassName(kit.card, styles.planned)} data-note-planned>
+            <div className={kit.cardHead}>
+              <h3 className={buildClassName(kit.cardTitle, kit.grow)}>{lang('KnowledgePlanned')}</h3>
+              <span className={styles.plannedHint}>{lang('KnowledgePlannedHint')}</span>
+            </div>
+            {!shownPlanned.length && <p className={styles.mutedLine}>{lang('KnowledgePlannedEmpty')}</p>}
+            {shownPlanned.map((item) => (
+              <div
+                key={item.key}
+                className={buildClassName(
+                  styles.plannedRow, item.day && item.day < today && !item.repeat && styles.plannedPast,
+                )}
+                style={`--c: var(--pv-${item.kind})`}
+                data-planned-kind={item.kind}
+              >
+                <span className={styles.plannedDay}>
+                  {item.day ? formatDayShort(lang, item.day) : lang('KnowledgeNoDate')}
+                </span>
+                <span className={styles.plannedBar} />
+                <span className={buildClassName(kit.rowText, kit.ttl)}>
+                  {item.name}
+                  {item.repeat && <span className={styles.plannedNote}>{` · ${formatRepeat(lang, item.repeat)}`}</span>}
+                  {item.isActive && !item.day && (
+                    <span className={styles.plannedNote}>{` · ${lang('PlannerStatusActive')}`}</span>
+                  )}
+                </span>
+                <span className={kit.meta}>
+                  {item.day ? item.time || '' : item.due
+                    ? lang('PlannerDueValue', { date: formatDayShort(lang, item.due) }) : ''}
+                </span>
+              </div>
+            ))}
+          </section>
+        )}
+        {hasLinks && (
+          <NoteLinks
+            className={styles.linksInline}
+            note={note}
+            index={index}
+            planned={planned}
+            onOpenTitle={onOpenTitle}
+          />
+        )}
+      </div>
       <ConfirmDialog
         isOpen={isDeleteOpen}
         text={lang('KnowledgeDeleteConfirm', { name: note.title })}

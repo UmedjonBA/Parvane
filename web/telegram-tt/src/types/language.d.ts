@@ -2721,6 +2721,30 @@ export interface LangPair {
   'KnowledgeCanvasNoColor': undefined;
   'KnowledgeCanvasChooseNote': undefined;
   'KnowledgeCanvasDamaged': undefined;
+  'KnowledgeNoteShort': undefined;
+  'KnowledgeNoteEmpty': undefined;
+  'KnowledgeLinks': undefined;
+  'KnowledgeLocalGraph': undefined;
+  'KnowledgeDone': undefined;
+  'KnowledgeNearest': undefined;
+  'KnowledgePlannedHint': undefined;
+  'KnowledgeTaskInPlan': undefined;
+  'KnowledgeCanvasHint': undefined;
+  'KnowledgeGraphKindNote': undefined;
+  'KnowledgeGraphKindDay': undefined;
+  'KnowledgeGraphKindMissing': undefined;
+  'KnowledgeGraphKindTask': undefined;
+  'KnowledgeGraphKindEvent': undefined;
+  'KnowledgeGraphCreate': undefined;
+  'KnowledgeGraphDeselect': undefined;
+  'KnowledgeCanvasTextCard': undefined;
+  'KnowledgeCanvasLinkTitle': undefined;
+  'KnowledgeCanvasEdgeTitle': undefined;
+  'KnowledgeCanvasOpenNote': undefined;
+  'KnowledgeCanvasGroupName': undefined;
+  'KnowledgeCanvasEdgesHint': undefined;
+  'KnowledgeCanvasRemoveEdge': undefined;
+  'KnowledgeCanvasAlreadyOn': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4831,6 +4855,12 @@ export interface LangPairWithVariables<V = LangVariable> {
     'count': V;
   };
   'KnowledgeCanvasName': {
+    'count': V;
+  };
+  'KnowledgeShowAll': {
+    'count': V;
+  };
+  'KnowledgeGraphLinks': {
     'count': V;
   };
 }
