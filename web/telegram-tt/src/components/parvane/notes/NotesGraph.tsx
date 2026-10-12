@@ -1,21 +1,27 @@
 import {
-  memo, useMemo, useRef, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { PlannerState } from '../planner/plannerModel';
+import type { BoardView } from './boardView';
+import type { GraphNode } from './notesGraph';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import {
+  BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
+} from './boardView';
 import { buildGraph, layoutGraph, neighboursOf, nodeRadius } from './notesGraph';
+import { displayTitle, folderColor } from './notesLook';
 import { parseNote } from './notesModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
+import PvIcon from './PvIcon';
 
 import styles from './Knowledge.module.scss';
+import kit from './PvKit.module.scss';
 
 type OwnProps = {
   notes: NoteEntry[];
@@ -24,38 +30,74 @@ type OwnProps = {
   onOpenTitle: (title: string) => void;
 };
 
-type Drag = { id?: string; x: number; y: number };
+type Drag = {
+  id?: string;
+  startX: number;
+  startY: number;
+  // Положение точки либо сдвиг поля в начале движения
+  originX: number;
+  originY: number;
+  hasMoved: boolean;
+};
 
 const WIDTH = 900;
 const HEIGHT = 620;
-const ZOOM_STEP = 1.25;
-const MIN_ZOOM = 0.4;
-const MAX_ZOOM = 4;
 const LINK = /\[\[([^\]|\n]+)/g;
+const RECORD_LINK = /\[\[[^\]\n]*\]\]/g;
 const LABEL_MAX = 22;
+const LABEL_GAP = 15;
+// Место под подпись точки при вписывании графа в поле
+const FIT_BOX_WIDTH = 120;
+const FIT_BOX_HEIGHT = 60;
+const FIT_TOP = 60;
+const FIT_BOTTOM = 20;
+const DRAG_THRESHOLD = 5;
+const DOUBLE_TAP_MS = 380;
+const KIND_KEYS = {
+  note: 'KnowledgeGraphKindNote',
+  day: 'KnowledgeGraphKindDay',
+  missing: 'KnowledgeGraphKindMissing',
+  task: 'KnowledgeGraphKindTask',
+  event: 'KnowledgeGraphKindEvent',
+} as const;
 
 function linksIn(text: string) {
   return [...text.matchAll(LINK)].map((match) => match[1].trim());
 }
 
-// Граф связей: заметки, заметки, которых ещё нет (блёклые), по желанию дни и записи «Плана»
+function colorOf(node: GraphNode) {
+  if (node.kind === 'missing') return 'var(--pv-faint)';
+  if (node.kind === 'day') return 'var(--pv-note)';
+  if (node.kind === 'record') return node.group === 'task' ? 'var(--pv-task)' : 'var(--pv-event)';
+  return folderColor(node.group || '');
+}
+
+// Граф связей: заметки, заметки, которых ещё нет (блёклые), по желанию дни и записи «Плана».
+// Поле двигается и масштабируется (колесо, щипок, кнопки), точки перетаскиваются; нажатие выделяет
+// точку с соседями и показывает карточку, двойное нажатие открывает заметку
 const NotesGraph = ({
   notes, planner, onOpenNote, onOpenTitle,
 }: OwnProps) => {
-  const svgRef = useRef<SVGSVGElement>();
+  const boardRef = useRef<HTMLDivElement>();
   const [withDays, setWithDays] = useState(false);
   const [withRecords, setWithRecords] = useState(false);
   const [picked, setPicked] = useState<string>();
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
+  const [view, setView] = useState<BoardView>({ scale: 1, x: 0, y: 0 });
   const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
   const dragRef = useRef<Drag>();
+  const pinchRef = useRef(createPinch());
+  const lastTapRef = useRef<{ id?: string; at: number }>({ at: 0 });
 
   const lang = useLang();
 
   const graph = useMemo(() => {
     const built = buildGraph({
       notes: notes.map((note) => ({
-        id: note.id, title: note.title, folder: note.folder, links: parseNote(note.text).links, isDaily: note.isDaily,
+        id: note.id,
+        title: note.title,
+        folder: note.folder,
+        links: parseNote(note.text).links,
+        isDaily: note.isDaily,
       })),
       records: [
         ...planner.events.map((event) => ({
@@ -73,110 +115,144 @@ const NotesGraph = ({
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const neighbours = useMemo(() => (picked ? neighboursOf(picked, graph.edges) : undefined), [picked, graph]);
   const pickedNode = picked ? byId.get(picked) : undefined;
+  const dailyById = useMemo(() => (
+    new Map(notes.filter((note) => note.isDaily).map((note) => [note.id, note]))
+  ), [notes]);
 
-  const toGraph = (e: { clientX: number; clientY: number }) => {
-    const box = svgRef.current!.getBoundingClientRect();
-    const scale = WIDTH / box.width;
-    return { x: (e.clientX - box.left) * scale, y: (e.clientY - box.top) * scale };
+  // Подпись точки: у заметки дня — дата словами, у записи «Плана» — название без разметки ссылок
+  const labelOf = (node: GraphNode) => {
+    const daily = dailyById.get(node.id);
+    if (daily) return displayTitle(lang, daily);
+    if (node.kind !== 'record') return node.title;
+    return node.title.replace(RECORD_LINK, '').replace(/\s+/g, ' ').trim() || node.title;
   };
 
-  const handlePointerDown = useLastCallback((e: React.PointerEvent<SVGSVGElement>) => {
-    const id = (e.target as Element).closest<SVGGElement>('[data-node]')?.dataset.node;
-    const point = toGraph(e);
-    dragRef.current = { id, x: point.x, y: point.y };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setPicked(id);
+  const fit = useLastCallback(() => {
+    const box = boardRef.current?.getBoundingClientRect();
+    if (!box) return;
+    setView(fitRects(
+      nodes.map((node) => ({
+        x: node.x - FIT_BOX_WIDTH / 2, y: node.y - FIT_BOX_HEIGHT / 2, width: FIT_BOX_WIDTH, height: FIT_BOX_HEIGHT,
+      })),
+      box.width,
+      box.height,
+      FIT_TOP,
+      FIT_BOTTOM,
+    ));
   });
 
-  const handlePointerMove = useLastCallback((e: React.PointerEvent<SVGSVGElement>) => {
+  // Граф вписывается в поле при открытии и когда фильтр меняет набор точек
+  const nodeCount = graph.nodes.length;
+  useEffect(() => {
+    fit();
+  }, [nodeCount, withDays, withRecords]);
+
+  const openNode = (node?: GraphNode) => {
+    if (!node) return;
+    if (node.kind === 'missing') onOpenTitle(node.title);
+    else if (node.kind !== 'record') onOpenNote(node.id);
+  };
+
+  const handlePointerDown = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as Element;
+    if (target.closest('[data-board-tools]')) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (pinchRef.current.down(e.pointerId, e.clientX, e.clientY, view)) {
+      dragRef.current = undefined;
+      return;
+    }
+    const id = target.closest<SVGGElement>('[data-node]')?.dataset.node;
+    const node = id ? byId.get(id) : undefined;
+    dragRef.current = {
+      id,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: node ? node.x : view.x,
+      originY: node ? node.y : view.y,
+      hasMoved: false,
+    };
+  });
+
+  const handlePointerMove = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const pinched = pinchRef.current.move(
+      e.pointerId, e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(),
+    );
+    if (pinched) {
+      setView(pinched);
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) return;
-    const point = toGraph(e);
-    const dx = point.x - drag.x;
-    const dy = point.y - drag.y;
-    dragRef.current = { ...drag, x: point.x, y: point.y };
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    if (!drag.hasMoved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+    drag.hasMoved = true;
     if (drag.id) {
-      const node = byId.get(drag.id)!;
-      setMoved({ ...moved, [drag.id]: { x: node.x + dx / view.zoom, y: node.y + dy / view.zoom } });
+      setMoved({ ...moved, [drag.id]: { x: drag.originX + dx / view.scale, y: drag.originY + dy / view.scale } });
     } else {
-      setView({ ...view, x: view.x + dx, y: view.y + dy });
+      setView({ ...view, x: drag.originX + dx, y: drag.originY + dy });
     }
   });
 
-  const handlePointerUp = useLastCallback(() => {
+  const handlePointerUp = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const wasPinch = pinchRef.current.isActive();
+    pinchRef.current.up(e.pointerId);
+    const drag = dragRef.current;
     dragRef.current = undefined;
+    if (!drag || drag.hasMoved || wasPinch) return;
+    // Нажатие без движения: выделить точку (мимо точек — снять выделение); второе подряд — открыть
+    const now = Date.now();
+    const isDouble = Boolean(drag.id) && lastTapRef.current.id === drag.id
+      && now - lastTapRef.current.at < DOUBLE_TAP_MS;
+    lastTapRef.current = { id: drag.id, at: now };
+    if (isDouble) {
+      openNode(byId.get(drag.id!));
+      return;
+    }
+    setPicked(drag.id);
   });
 
-  const handleDoubleClick = useLastCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    const id = (e.target as Element).closest<SVGGElement>('[data-node]')?.dataset.node;
-    const node = id ? byId.get(id) : undefined;
-    if (node?.kind === 'note' || node?.kind === 'day') onOpenNote(node.id);
-    else if (node?.kind === 'missing') onOpenTitle(node.title);
+  const handleWheel = useLastCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    setView(zoomByWheel(view, e.deltaY, e.clientX - box.left, e.clientY - box.top));
   });
 
   const zoomBy = (factor: number) => {
-    const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * factor));
-    // Масштаб — вокруг центра поля
-    const k = zoom / view.zoom;
-    setView({ zoom, x: WIDTH / 2 - (WIDTH / 2 - view.x) * k, y: HEIGHT / 2 - (HEIGHT / 2 - view.y) * k });
+    const box = boardRef.current?.getBoundingClientRect();
+    if (!box) return;
+    setView(zoomAround(view, view.scale * factor, box.width / 2, box.height / 2));
   };
 
-  const handleZoomIn = useLastCallback(() => zoomBy(ZOOM_STEP));
-  const handleZoomOut = useLastCallback(() => zoomBy(1 / ZOOM_STEP));
+  const handleZoomIn = useLastCallback(() => zoomBy(BOARD_ZOOM_STEP));
+  const handleZoomOut = useLastCallback(() => zoomBy(1 / BOARD_ZOOM_STEP));
   const handleFit = useLastCallback(() => {
-    setView({ zoom: 1, x: 0, y: 0 });
     setMoved({});
+    fit();
   });
 
-  const handleWheel = useLastCallback((e: React.WheelEvent<SVGSVGElement>) => {
-    zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-  });
-
-  const handleOpenPicked = useLastCallback(() => {
-    if (!pickedNode) return;
-    if (pickedNode.kind === 'missing') onOpenTitle(pickedNode.title);
-    else if (pickedNode.kind !== 'record') onOpenNote(pickedNode.id);
-  });
+  const handleToggleDays = useLastCallback(() => setWithDays(!withDays));
+  const handleToggleRecords = useLastCallback(() => setWithRecords(!withRecords));
+  const handleDeselect = useLastCallback(() => setPicked(undefined));
+  const handleOpenPicked = useLastCallback(() => openNode(pickedNode));
 
   const noteCount = nodes.filter(({ kind }) => kind === 'note').length;
+  const pickedKind = !pickedNode ? undefined
+    : pickedNode.kind === 'record' ? (pickedNode.group === 'task' ? 'task' : 'event') : pickedNode.kind;
 
   return (
-    <div className={styles.graph} data-notes-graph>
-      <div className={styles.graphBar}>
-        <span className={styles.chip}>{lang('KnowledgeGraphNotes', { count: noteCount })}</span>
-        <Checkbox label={lang('KnowledgeGraphDays')} checked={withDays} onCheck={setWithDays} />
-        <Checkbox label={lang('KnowledgeGraphRecords')} checked={withRecords} onCheck={setWithRecords} />
-        <span className={styles.grow} />
-        <Button
-          round
-          size="tiny"
-          color="translucent"
-          iconName="zoom-out"
-          ariaLabel={lang('KnowledgeZoomOut')}
-          onClick={handleZoomOut}
-        />
-        <Button
-          round
-          size="tiny"
-          color="translucent"
-          iconName="zoom-in"
-          ariaLabel={lang('KnowledgeZoomIn')}
-          onClick={handleZoomIn}
-        />
-        <Button size="tiny" color="translucent" onClick={handleFit}>{lang('KnowledgeZoomFit')}</Button>
-      </div>
-      {!nodes.length && <p className={styles.muted}>{lang('KnowledgeGraphEmpty')}</p>}
-      <svg
-        ref={svgRef}
-        className={styles.graphField}
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onDoubleClick={handleDoubleClick}
-        onWheel={handleWheel}
-      >
-        <g transform={`translate(${view.x} ${view.y}) scale(${view.zoom})`}>
+    <div
+      ref={boardRef}
+      className={styles.board}
+      style={boardBackgroundStyle(view)}
+      data-notes-graph
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      onWheel={handleWheel}
+    >
+      <div className={styles.world} style={`transform: translate(${view.x}px, ${view.y}px) scale(${view.scale})`}>
+        <svg className={styles.graphSvg} width="1" height="1">
           {graph.edges.map((edge) => {
             const from = byId.get(edge.from);
             const to = byId.get(edge.to);
@@ -185,7 +261,9 @@ const NotesGraph = ({
             return (
               <line
                 key={`${edge.from}>${edge.to}`}
-                className={buildClassName(styles.graphEdge, isOn && styles.graphEdgeOn)}
+                className={buildClassName(
+                  styles.graphEdge, picked && (isOn ? styles.graphEdgeOn : styles.graphDim),
+                )}
                 x1={from.x}
                 y1={from.y}
                 x2={to.x}
@@ -195,30 +273,101 @@ const NotesGraph = ({
           })}
           {nodes.map((node) => {
             const radius = nodeRadius(node.degree);
+            const label = labelOf(node);
             const isDim = Boolean(picked) && picked !== node.id && !neighbours?.has(node.id);
             return (
               <g
                 key={node.id}
-                className={buildClassName(styles.graphNode, styles[`graph_${node.kind}`], isDim && styles.graphDim)}
+                className={buildClassName(
+                  styles.graphNode,
+                  node.kind === 'missing' && styles.graphMissing,
+                  picked === node.id && styles.graphPicked,
+                  isDim && styles.graphDim,
+                )}
+                style={`--c: ${colorOf(node)}`}
                 data-node={node.id}
                 data-kind={node.kind}
-                transform={`translate(${node.x} ${node.y})`}
               >
-                <circle r={radius} />
-                <text y={radius + 12} textAnchor="middle">
-                  {node.title.length > LABEL_MAX ? `${node.title.slice(0, LABEL_MAX)}…` : node.title}
+                <circle cx={node.x} cy={node.y} r={radius} />
+                <text x={node.x} y={node.y + radius + LABEL_GAP}>
+                  {label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX - 1)}…` : label}
                 </text>
               </g>
             );
           })}
-        </g>
-      </svg>
-      {pickedNode && (
-        <div className={styles.graphCard} data-graph-card>
-          <span className={styles.rowTitle}>{pickedNode.title}</span>
-          {pickedNode.kind === 'missing' && <span className={styles.muted}>{lang('KnowledgeMissingNote')}</span>}
+        </svg>
+      </div>
+      <div className={styles.boardTools} data-board-tools>
+        <span
+          className={buildClassName(kit.chip, kit.chipOn, styles.boardChip, styles.boardChipOn)}
+          style="--c: var(--pv-note)"
+        >
+          {lang('KnowledgeGraphNotes', { count: noteCount })}
+        </span>
+        <button
+          type="button"
+          className={buildClassName(kit.chip, styles.boardChip, withDays && kit.chipOn, withDays && styles.boardChipOn)}
+          style="--c: var(--pv-note)"
+          aria-pressed={withDays}
+          onClick={handleToggleDays}
+        >
+          {lang('KnowledgeGraphDays')}
+        </button>
+        <button
+          type="button"
+          className={buildClassName(
+            kit.chip, styles.boardChip, withRecords && kit.chipOn, withRecords && styles.boardChipOn,
+          )}
+          style="--c: var(--pv-event)"
+          aria-pressed={withRecords}
+          onClick={handleToggleRecords}
+        >
+          {lang('KnowledgeGraphRecords')}
+        </button>
+      </div>
+      {!nodes.length && <p className={styles.boardEmpty}>{lang('KnowledgeGraphEmpty')}</p>}
+      <div className={styles.boardZoom} data-board-tools>
+        <button
+          type="button"
+          className={styles.boardTool}
+          aria-label={lang('KnowledgeZoomIn')}
+          onClick={handleZoomIn}
+        >
+          <PvIcon name="plus" isSmall />
+        </button>
+        <button
+          type="button"
+          className={styles.boardTool}
+          aria-label={lang('KnowledgeZoomOut')}
+          onClick={handleZoomOut}
+        >
+          <PvIcon name="minus" isSmall />
+        </button>
+        <button type="button" className={styles.boardTool} aria-label={lang('KnowledgeZoomFit')} onClick={handleFit}>
+          <PvIcon name="fit" isSmall />
+        </button>
+      </div>
+      {pickedNode && pickedKind && (
+        <div className={styles.boardInfo} data-graph-card data-board-tools>
+          <div className={styles.boardInfoHead}>
+            <span className={styles.boardInfoDot} style={`--c: ${colorOf(pickedNode)}`} />
+            <b className={buildClassName(kit.ttl, kit.grow)}>{labelOf(pickedNode)}</b>
+            <button
+              type="button"
+              className={kit.ib}
+              aria-label={lang('KnowledgeGraphDeselect')}
+              onClick={handleDeselect}
+            >
+              <PvIcon name="x" isSmall />
+            </button>
+          </div>
+          <div className={styles.boardInfoSub}>
+            {`${lang(KIND_KEYS[pickedKind])} · ${lang('KnowledgeGraphLinks', { count: pickedNode.degree })}`}
+          </div>
           {pickedNode.kind !== 'record' && (
-            <Button size="tiny" onClick={handleOpenPicked}>{lang('KnowledgeGraphOpen')}</Button>
+            <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleOpenPicked}>
+              {lang(pickedNode.kind === 'missing' ? 'KnowledgeGraphCreate' : 'KnowledgeGraphOpen')}
+            </button>
           )}
         </div>
       )}
