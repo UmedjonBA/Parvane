@@ -1,6 +1,8 @@
-// Маскот Parvane: лист из 16 кадров 24×24 в ряд, показывается покадрово
+// Маскот Parvane: лист кадров 24×24 в ряд, показывается покадрово.
+// Число кадров и длительность — у варианта; размер — `--mascot-size`
 .root {
   --mascot-size: 3rem;
+  --mascot-frames: 16;
 
   flex: 0 0 auto;
 
@@ -10,19 +12,35 @@
   background-image: url("../../assets/parvane/mascot-ghost.png");
   background-repeat: no-repeat;
   background-position: 0 0;
-  background-size: calc(var(--mascot-size) * 16) var(--mascot-size);
+  background-size: calc(var(--mascot-size) * var(--mascot-frames)) var(--mascot-size);
 
   image-rendering: pixelated;
 
-  animation: mascot-dance 2s steps(16) infinite;
+  animation: mascot-play 2s steps(16) infinite;
 
   @media (prefers-reduced-motion: reduce) {
     animation: none;
   }
 }
 
-@keyframes mascot-dance {
+// Дух с лупой («ничего не найдено»): 32 кадра, 4 с — ищет слева и справа, потом разводит руками.
+// Размер — как у прежней утки (120 px: кадр увеличен ровно впятеро)
+.search {
+  --mascot-size: 7.5rem;
+  --mascot-frames: 32;
+
+  background-image: url("../../assets/parvane/mascot-ghost-search.png");
+  animation-duration: 4s;
+  animation-timing-function: steps(32);
+
+  @media (prefers-reduced-motion: reduce) {
+    // Стоит на кадре 20: руки разведены, над головой «?»
+    background-position: calc(var(--mascot-size) * -20) 0;
+  }
+}
+
+@keyframes mascot-play {
   to {
-    background-position: calc(var(--mascot-size) * -16) 0;
+    background-position: calc(var(--mascot-size) * -1 * var(--mascot-frames)) 0;
   }
 }

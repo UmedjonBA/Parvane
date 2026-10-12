@@ -12,7 +12,6 @@ import VoiceMuted from '../../../assets/tgs/calls/VoiceMuted.tgs';
 import VoiceOutlined from '../../../assets/tgs/calls/VoiceOutlined.tgs';
 import CraftProgress from '../../../assets/tgs/CraftProgress.tgs';
 import Diamond from '../../../assets/tgs/Diamond.tgs';
-import DuckNothingFound from '../../../assets/tgs/DuckNothingFound.tgs';
 import Flame from '../../../assets/tgs/general/Flame.tgs';
 import Fragment from '../../../assets/tgs/general/Fragment.tgs';
 import Mention from '../../../assets/tgs/general/Mention.tgs';
@@ -44,7 +43,6 @@ import Passkeys from '../../../assets/tgs/settings/Passkeys.tgs';
 import StarReaction from '../../../assets/tgs/stars/StarReaction.tgs';
 import StarReactionEffect from '../../../assets/tgs/stars/StarReactionEffect.tgs';
 import Unlock from '../../../assets/tgs/Unlock.tgs';
-import DuckNothingFoundPreview from '../../../assets/tgs-previews/DuckNothingFound.svg';
 import WritingPreview from '../../../assets/tgs-previews/message/Writing.svg';
 import SearchPreview from '../../../assets/tgs-previews/Search.svg';
 import HandStopPreview from '../../../assets/tgs-previews/settings/HandStopPreview.png';
@@ -53,7 +51,6 @@ import PasskeysPreview from '../../../assets/tgs-previews/settings/Passkeys.svg'
 export const LOCAL_TGS_PREVIEW_URLS = {
   HandStop: HandStopPreview,
   BrokenGift: BrokenGiftPreview,
-  DuckNothingFound: DuckNothingFoundPreview,
   Search: SearchPreview,
   Passkeys: PasskeysPreview,
   Writing: WritingPreview,
@@ -98,7 +95,6 @@ export const LOCAL_TGS_URLS = {
   CraftProgress,
   Diamond,
   Search,
-  DuckNothingFound,
   Passkeys,
   DuckCake,
   HandStop,
