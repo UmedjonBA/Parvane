@@ -1,17 +1,22 @@
-// Parvane (spec 009): раздел «План». Цвета, шрифты и скругления — токены
-// мессенджера; свои только цвета серий статистики и загрузки дня.
+// Parvane: раздел «План» — вид по прототипу «Пространство Parvane» (disain/prototype.html).
+// Нейтральные тона, акцент и цвета видов записей — переменные схемы `--pv-*`; свои здесь только размеры.
+// Раскладка — острова на фоне приложения: страница раздела и справа день календаря либо карточка записи.
+
+// Акцент раздела — яркий тон схемы с тёмным текстом на нём: кнопки, галочки и вкладки мессенджера внутри
+// «Плана» берут его вместо акцента мессенджера
+@mixin tokens {
+  --color-primary: var(--pv-accent);
+  --color-primary-shade: color-mix(in srgb, var(--pv-accent) 88%, #000);
+  --color-primary-shade-darker: color-mix(in srgb, var(--pv-accent) 78%, #000);
+  --color-white: var(--pv-accent-ink);
+  --planner-radius: 0.75rem;
+  --planner-radius-small: 0.5rem;
+  --planner-island-radius: 1.125rem;
+  --planner-side-width: 23.75rem;
+}
 
 .root {
-  --planner-series-1: var(--color-primary);
-  --planner-series-2: var(--color-green);
-  --planner-series-3: var(--color-orange);
-  --planner-series-4: var(--color-yellow);
-  --planner-series-5: var(--color-text-secondary);
-  --planner-panel-width: 23rem;
-  --planner-side-width: 22rem;
-  // Клетки дат — нежный бежевый поверх фона раздела: без заливки по загрузке календарь сливался с фоном
-  --planner-cell: color-mix(in srgb, #f3e6cf 55%, var(--color-background));
-  --planner-cell-weekend: color-mix(in srgb, #e9d5b4 55%, var(--color-background));
+  @include tokens;
 
   position: relative;
   z-index: 1;
@@ -22,1188 +27,1266 @@
   flex-direction: column;
 
   min-width: 0;
-  margin: 1rem;
-  border-radius: var(--border-radius-island);
+  margin: 0.5rem 0.5rem 0.5rem 0;
 
-  color: var(--color-text);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  color: var(--pv-fg);
 
-  background: var(--color-background);
   outline: none;
-  box-shadow: var(--shadow-island);
+
+  @media (max-width: 1240px) {
+    --planner-side-width: 20rem;
+  }
 
   @media (max-width: 600px) {
     position: fixed;
     inset: 0;
     margin: 0;
+  }
+}
+
+.body {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.page,
+.side {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  min-width: 0;
+  min-height: 0;
+  border-radius: var(--planner-island-radius);
+
+  background: var(--pv-panel);
+}
+
+.page {
+  position: relative;
+  flex: 1 1 auto;
+
+  @media (max-width: 600px) {
     border-radius: 0;
   }
 }
 
-.header {
-  display: flex;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  align-items: center;
-
-  min-height: var(--column-header-height);
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-borders);
+.side {
+  flex: 0 0 var(--planner-side-width);
+  width: var(--planner-side-width);
 }
 
-.title {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.5rem;
+// ── шапки ────────────────────────────────────────────────────────────────────
+
+.mtabs {
+  display: flex;
+  flex: none;
+  align-items: center;
+
+  padding: 0.375rem 0.5rem 0 0.625rem;
+  border-bottom: 1px solid var(--pv-line);
 }
 
 .viewTabs {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.headerButtons {
+.hdr {
   display: flex;
-  gap: 0.375rem;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 0.625rem 0.875rem;
   align-items: center;
-  margin-inline-start: auto;
+
+  min-height: 3.75rem;
+  padding: 0.75rem 1.125rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  @media (max-width: 925px) {
+    gap: 0.5rem;
+    min-height: 3.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+}
+
+.hdrTitle {
+  margin: 0;
+
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+  white-space: nowrap;
+}
+
+.hdrText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hdrOver {
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.sideHdr {
+  flex-wrap: nowrap;
+}
+
+.sideTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+}
+
+.calendarHdr {
+  gap: 0.5rem;
+
+  .segButton {
+    padding: 0 0.625rem;
+  }
+
+  @media (max-width: 925px) {
+    .periodNav {
+      flex: 1 0 100%;
+    }
+
+    .grow {
+      display: none;
+    }
+
+    .segButton {
+      padding: 0 0.875rem;
+    }
+  }
+}
+
+.grow {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 // Состояние синхронизации (spec 010): привязка, шард недоступен, нет ключа, потолок
 .syncNotice {
-  flex-shrink: 0;
+  flex: none;
 
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-borders);
+  padding: 0.5rem 1.125rem;
+  border-bottom: 1px solid var(--pv-line);
 
   font-size: 0.875rem;
-  color: var(--color-text-secondary);
+  color: var(--pv-muted);
 
-  background: var(--color-background-secondary);
+  background: var(--pv-raised);
 }
 
 .syncNoticeBlocking {
-  color: var(--color-text);
+  color: var(--pv-fg);
 }
 
 .content {
-  overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-// Три колонки (spec 013): форма или настройки слева, календарь в центре, день справа.
-// 926–1199 px — левая колонка встаёт на место панели дня; ≤ 925 px — одна колонка
-.layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--planner-panel-width);
-  min-height: 100%;
-
-  @media (max-width: 925px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.layoutNoPanel {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.layoutWithSide {
-  grid-template-columns: var(--planner-side-width) minmax(0, 1fr) var(--planner-panel-width);
-
-  &.layoutNoPanel {
-    grid-template-columns: var(--planner-side-width) minmax(0, 1fr);
-  }
-
-  @media (max-width: 1199px) {
-    grid-template-columns: var(--planner-side-width) minmax(0, 1fr);
-  }
-
-  @media (max-width: 925px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.main {
-  container: planner-main / inline-size;
-  min-width: 0;
-  padding: 1rem;
-
-  @media (max-width: 925px) {
-    .panelOpen &,
-    .sideOpen & {
-      display: none;
-    }
-  }
-}
-
-.side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-
-  min-width: 0;
-  padding: 1rem;
-  border-inline-end: 1px solid var(--color-borders);
-
-  background: var(--color-background-secondary);
-
-  @media (max-width: 925px) {
-    border-inline-end: none;
-  }
-}
-
-.sideHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-
-  min-width: 0;
-  padding: 1rem;
-  border-inline-start: 1px solid var(--color-borders);
-
-  background: var(--color-background-secondary);
-
-  @media (max-width: 1199px) {
-    .layoutWithSide & {
-      display: none;
-    }
-  }
-
-  @media (max-width: 925px) {
-    display: none;
-    border-inline-start: none;
-
-    .panelOpen & {
-      display: flex;
-    }
-
-    .sideOpen & {
-      display: none;
-    }
-  }
-}
-
-.panelHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-// «+» рядом с днём: новое дело на этот день
-.panelAdd {
-  flex: 0 0 auto;
-  color: var(--color-primary) !important;
-}
-
-.panelTitle {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.backToMain {
-  display: none;
-  align-self: flex-start;
-
-  @media (max-width: 925px) {
-    display: flex;
-  }
-}
-
-// ── месяц ────────────────────────────────────────────────────────────────────
-
-.month {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.375rem;
-}
-
-.weekday {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
-
-.day {
-  cursor: var(--custom-cursor, pointer);
-
   position: relative;
 
+  overflow: auto;
+  flex: 1 1 auto;
+
+  min-height: 0;
+  padding: 1.25rem;
+
+  @media (max-width: 925px) {
+    padding: 0.875rem 1rem 1.5rem;
+  }
+}
+
+// Вид со своей прокруткой (сетка недели, день под полосой дней): страница не листается
+.contentFlush {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
-
-  min-width: 0;
-  min-height: 6.5rem;
-  padding: 0.375rem 0.5rem 0.625rem;
-  border: 0.125rem solid transparent;
-  border-radius: var(--border-radius-default-small);
-
-  // Загрузка дня — только полоской внизу клетки (spec 013); фон клетки — мягкий бежевый
-  background: var(--planner-cell);
-
-  transition: border-color 0.15s;
-
-  &:hover {
-    border-color: var(--color-borders);
-  }
+  padding: 0;
 }
 
-.dayWeekend {
-  background: var(--planner-cell-weekend);
+.sideContent {
+  padding: 1.125rem;
 }
 
-// День соседнего месяца
-.dayOutside {
-  opacity: 0.45;
+// ── общие детали ─────────────────────────────────────────────────────────────
+
+// Цвет вида записи: событие, задача, еда, сон, тренировка, заметка, показатель; срок и перегруз — красный
+.kindEvent {
+  --planner-kind: var(--pv-event);
 }
 
-// Праздник — заливкой клетки (цвет события, без цвета — красный)
-.dayHoliday {
-  --planner-holiday: var(--planner-holiday-color, var(--color-error));
-
-  background: color-mix(in srgb, var(--planner-holiday) 26%, var(--planner-cell, var(--color-background)));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--planner-holiday) 45%, transparent);
+.kindTask {
+  --planner-kind: var(--pv-task);
 }
 
-// События на весь день — цветные метки у числа
-.dayMarks {
-  display: flex;
-  flex: 1 1 auto;
-  gap: 0.1875rem;
-  align-items: center;
-
-  min-width: 0;
+.kindFood {
+  --planner-kind: var(--pv-food);
 }
 
-.dayMark {
-  flex: 0 0 auto;
-
-  width: 0.4375rem;
-  height: 0.4375rem;
-  border-radius: 50%;
-
-  background: var(--planner-list-color, var(--color-text-secondary));
+.kindSleep {
+  --planner-kind: var(--pv-sleep);
 }
 
-.daySelected,
-.daySelected:hover {
-  border-color: var(--color-primary);
+.kindWorkout {
+  --planner-kind: var(--pv-workout);
 }
 
-.dayHead {
-  display: flex;
-  gap: 0.25rem;
-  align-items: baseline;
-  justify-content: space-between;
+.kindNote {
+  --planner-kind: var(--pv-note);
 }
 
-.dayNumber {
-  font-size: 1.125rem;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.5rem;
-
-  .dayToday & {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-
-    min-width: 1.75rem;
-    height: 1.75rem;
-    border-radius: 50%;
-
-    color: var(--color-white);
-
-    background: var(--color-primary);
-  }
+.kindMetric {
+  --planner-kind: var(--pv-metric);
 }
 
-.dayHours {
-  font-size: 0.6875rem;
-  color: var(--color-text-secondary);
+.kindDue {
+  --planner-kind: var(--pv-red);
 }
 
-.preview {
-  overflow: hidden;
-  display: block;
-
-  width: 100%;
-  padding: 0 0.125rem;
-  border: none;
-  border-radius: 0.25rem;
-
-  font-size: 0.6875rem;
-  line-height: 1.125rem;
-  color: var(--color-text);
-  text-align: start;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  background: none;
+.kindMuted {
+  --planner-kind: var(--pv-muted);
 }
 
-.previewTask {
-  cursor: var(--custom-cursor, pointer);
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
+.mono {
+  font-family: var(--font-family-monospace);
+  font-variant-numeric: tabular-nums;
 }
 
-// Полоска цвета списка
-.previewColored {
-  padding-inline-start: 0.375rem;
-  box-shadow: inset 0.1875rem 0 0 var(--planner-list-color);
+.muted {
+  margin: 0;
+  color: var(--pv-muted);
 }
 
-.previewMore {
-  display: block;
+.faint {
+  color: var(--pv-faint);
 }
 
-.previewDue {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-error);
+.red {
+  color: var(--pv-red);
 }
-
-// Телефон: ячейка ~2.5rem шириной — часы и превью не помещаются (переполнение
-// на 390 px, снимки T015); остаются число, «!» пересечения и полоса загрузки
-@media (max-width: 600px) {
-  .day {
-    min-height: 3.5rem;
-    padding: 0.25rem 0.25rem 0.5rem;
-  }
-
-  .dayHead {
-    justify-content: center;
-  }
-
-  .dayHours,
-  .preview,
-  .previewMore {
-    display: none;
-  }
-}
-
-.loadBar {
-  position: absolute;
-  right: 0.5rem;
-  bottom: 0.25rem;
-  left: 0.5rem;
-
-  overflow: hidden;
-
-  height: 0.1875rem;
-  border-radius: 0.125rem;
-
-  background: var(--color-borders);
-}
-
-.loadFill {
-  display: block;
-  width: var(--planner-load);
-  height: 100%;
-  background: hsl(var(--planner-load-hue) 55% 50%);
-}
-
-// ── общее ────────────────────────────────────────────────────────────────────
 
 .small {
-  font-size: 0.75rem;
-  line-height: 1rem;
-  color: var(--color-text-secondary);
-}
+  unicode-bidi: plaintext;
 
-.warning {
-  font-size: 0.75rem;
-  color: var(--color-error);
+  margin: 0;
+
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: var(--pv-muted);
 }
 
 .error {
   margin: 0;
   font-size: 0.8125rem;
-  color: var(--color-error);
+  color: var(--pv-red);
 }
 
-.summary {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
+.empty {
+  margin: 2.5rem auto;
+  color: var(--pv-muted);
+  text-align: center;
 }
 
-.group {
-  margin: 0.75rem 0 0.25rem;
-  font-size: 0.8125rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-
-.actions {
+.stack {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.inlineAdd {
-  align-self: flex-start;
-}
-
-.fold {
-  margin-top: 0.75rem;
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
-}
-
-// ── поля и формы ─────────────────────────────────────────────────────────────
-
-.field {
-  display: block;
+  flex-direction: column;
+  gap: 0.875rem;
   min-width: 0;
 }
 
-.fieldLabel {
-  display: block;
-  margin-bottom: 0.25rem;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
-
-.fieldInput {
-  height: 2.5rem;
-  padding: 0.375rem 0.75rem;
-  font-size: 0.875rem;
-}
-
-.fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-
-  max-width: 34rem;
-  margin: 0 auto;
-  padding: 1rem;
-
-  .panel & {
-    max-width: none;
-    padding: 0;
-  }
-}
-
-.weekdays {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 0.5rem;
-}
-
-// ── повторы и цели (spec 011) ────────────────────────────────────────────────
-
-.repeat {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.repeatBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  align-items: flex-start;
-
-  padding: 0.5rem 0;
-  border-top: 1px solid var(--color-borders);
-}
-
-.seriesPrompt {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-
-  padding: 0.75rem;
-  border-radius: var(--border-radius-default);
-
-  background: var(--color-background-secondary);
-}
-
-.goals {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.goalActive {
-  border-inline-start: 0.1875rem solid var(--color-primary);
-}
-
-.stepForm {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-end;
-
-  > .field {
-    flex: 1 1 auto;
-  }
-}
-
-.goalPair {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 0.375rem;
-}
-
-// ── задача ───────────────────────────────────────────────────────────────────
-
-.task {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-
-  min-width: 0;
-  padding: 0.25rem 0;
-}
-
-.taskCheck {
-  flex-shrink: 0;
-
-  width: 1.125rem;
-  height: 1.125rem;
-  margin-top: 0.1875rem;
-
-  accent-color: var(--color-primary);
-}
-
-.taskButton {
+// Круглая кнопка со значком
+.ib {
   cursor: var(--custom-cursor, pointer);
 
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
 
-  min-width: 0;
-  padding: 0.125rem 0.375rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
   border: none;
-  border-radius: var(--border-radius-default-tiny);
+  border-radius: 50%;
 
-  color: var(--color-text);
-  text-align: start;
+  font-size: 1.375rem;
+  color: var(--pv-muted);
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    color: var(--pv-fg);
+    background: var(--pv-hover);
   }
 }
 
-.taskReorder {
-  display: flex;
-  flex-shrink: 0;
-  gap: 0.125rem;
-  align-items: center;
+.ibSmall {
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1rem;
 }
 
-.taskName {
-  overflow: hidden;
+.ibAccent,
+.ibAccent:hover {
+  color: var(--pv-accent-ink);
+  background: var(--pv-accent);
+}
 
-  min-width: 0;
+.pill {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  height: 2.125rem;
+  padding: 0 0.875rem;
+  border: none;
+  border-radius: 1.0625rem;
 
   font-size: 0.875rem;
-  line-height: 1.25rem;
-  text-overflow: ellipsis;
+  color: var(--pv-fg);
+  white-space: nowrap;
 
-  .taskDone & {
-    color: var(--color-text-secondary);
-    text-decoration: line-through;
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
   }
 }
 
-// Ссылка на заметку в названии записи (`PlannerName`)
-.nameLink {
+.pillAccent,
+.pillAccent:hover {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  background: var(--pv-accent);
+}
+
+.btn {
   cursor: var(--custom-cursor, pointer);
-  color: var(--color-links);
+
+  display: inline-flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  min-height: 2.25rem;
+  padding: 0 0.875rem;
+  border: none;
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.875rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-hover);
+
+  &:hover {
+    background: var(--pv-line2);
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+}
+
+.btnAccent,
+.btnAccent:hover {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-accent-ink);
+  background: var(--pv-accent);
+}
+
+.btnGhost {
+  color: var(--pv-muted);
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
+  }
+}
+
+.btnDanger {
+  align-self: flex-start;
+  color: var(--pv-red);
+  background: none;
+
+  &:hover {
+    background: color-mix(in srgb, var(--pv-red) 14%, transparent);
+  }
+}
+
+// Вариант во всю ширину: выбор объёма правки ряда
+.btnWide {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 2.875rem;
+}
+
+.linkButton {
+  cursor: var(--custom-cursor, pointer);
+
+  margin-inline-start: 0.5rem;
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  color: var(--pv-purple);
   text-decoration: underline;
 
-  &:focus-visible {
-    border-radius: 0.125rem;
-    outline: 0.125rem solid var(--color-primary);
-  }
-
-  // На цветной плашке и в блоке сетки ссылка — цветом текста: цвет ссылок на заливке не читается
-  .weekChip &,
-  .weekBlock & {
-    color: inherit;
-  }
+  background: none;
 }
 
-// ── расписание дня ───────────────────────────────────────────────────────────
+.seg {
+  display: inline-flex;
+  flex: none;
 
-.dayList {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
+  padding: 0.1875rem;
+  border-radius: 1.125rem;
+
+  background: var(--pv-raised);
 }
 
-.clock {
-  flex: 0 0 5.5rem;
-  font-size: 0.75rem;
-  line-height: 1.5rem;
-  color: var(--color-text-secondary);
-}
-
-.free {
+.segButton {
   cursor: var(--custom-cursor, pointer);
 
-  display: flex;
-  gap: 0.5rem;
-
-  padding: 0.5rem 0.75rem;
+  height: 1.875rem;
+  padding: 0 0.875rem;
   border: none;
-  border-radius: var(--border-radius-default-small);
-
-  color: var(--color-text);
-  text-align: start;
-
-  background: color-mix(in srgb, var(--color-green) 12%, var(--color-background));
-
-  &:hover {
-    background: color-mix(in srgb, var(--color-green) 20%, var(--color-background));
-  }
-}
-
-.freeBody {
-  display: flex;
-  flex-direction: column;
-  font-size: 0.875rem;
-}
-
-.busy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--border-radius-default-small);
-
-  background: var(--color-background);
-}
-
-.busyCollision {
-  background: color-mix(in srgb, var(--color-orange) 16%, var(--color-background));
-}
-
-.busyRow {
-  display: flex;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.eventBody {
-  position: relative;
-
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-
-  min-width: 0;
-  padding-inline-end: 2rem;
-}
-
-.eventDelete {
-  position: absolute;
-  inset-inline-end: 0;
-  top: 0;
-}
-
-// ── редактор ─────────────────────────────────────────────────────────────────
-
-.editor {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.back {
-  align-self: flex-start;
-
-  @media (max-width: 925px) {
-    display: none;
-  }
-}
-
-// ── настройки (T014) ─────────────────────────────────────────────────────────
-
-.settings {
-  max-width: 44rem;
-  padding: 1rem;
-}
-
-.settingsBack,
-.settingsReset {
-  align-self: flex-start;
-}
-
-.editorTitle {
-  margin: 0;
-  font-size: 1.125rem;
-  font-weight: var(--font-weight-medium);
-  overflow-wrap: anywhere;
-}
-
-.slots {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.slot {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0.5rem 0.75rem;
-  border: none;
-  border-radius: var(--border-radius-default-small);
-
-  font-size: 0.8125rem;
-  color: var(--color-text);
-  text-align: start;
-
-  background: var(--color-background);
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
-}
-
-// ── списки задач ─────────────────────────────────────────────────────────────
-
-.lists {
-  display: grid;
-  grid-template-columns: 14rem minmax(0, 1fr);
-  gap: 1.5rem;
-
-  @media (max-width: 600px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.listNav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.listButton {
-  cursor: var(--custom-cursor, pointer);
-
-  overflow: hidden;
-
-  padding: 0.5rem 0.75rem;
-  border: none;
-  border-radius: var(--border-radius-default-small);
+  border-radius: 0.9375rem;
 
   font-size: 0.875rem;
-  color: var(--color-text);
-  text-align: start;
-  text-overflow: ellipsis;
+  color: var(--pv-muted);
   white-space: nowrap;
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    color: var(--pv-fg);
   }
 }
 
-.listButtonActive,
-.listButtonActive:hover {
-  color: var(--color-white);
-  background: var(--color-primary);
+.segOn {
+  color: var(--pv-fg);
+  background: var(--pv-panel);
+  box-shadow: 0 1px 0.1875rem rgb(0 0 0 / 25%);
 }
 
-.listBody {
-  min-width: 0;
-}
-
-.listTitle {
-  margin: 0 0 0.5rem;
-  font-size: 1rem;
-  font-weight: var(--font-weight-medium);
-}
-
-// ── питание ──────────────────────────────────────────────────────────────────
-
-.nutrients {
+.chips {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.375rem;
 }
 
-.nutrient {
-  font-size: 0.8125rem;
-}
+.chip {
+  --planner-color: var(--planner-kind, var(--pv-accent));
 
-.nutrientHead {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.1875rem;
-}
-
-.track {
-  overflow: hidden;
-  height: 0.375rem;
-  border-radius: 0.1875rem;
-  background: var(--color-borders);
-
-  > span {
-    display: block;
-    width: var(--planner-progress);
-    height: 100%;
-    background: var(--color-primary);
-  }
-}
-
-.mealHead {
-  display: flex;
-  justify-content: space-between;
-}
-
-.mealEntry {
   cursor: var(--custom-cursor, pointer);
 
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
 
-  width: 100%;
-  padding: 0.375rem 0.5rem;
-  border: none;
-  border-radius: var(--border-radius-default-tiny);
+  min-height: 1.875rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.9375rem;
 
-  color: var(--color-text);
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
   text-align: start;
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    color: var(--pv-fg);
   }
 }
 
-.mealEntryTop {
-  display: flex;
-  gap: 0.5rem;
-  justify-content: space-between;
-  font-size: 0.875rem;
+.chipOn,
+.chipOn:hover {
+  border-color: transparent;
+  color: var(--planner-color);
+  background: color-mix(in srgb, var(--planner-color) 22%, transparent);
 }
 
-// ── статистика ───────────────────────────────────────────────────────────────
-
-.statistics {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-
-  max-width: 48rem;
-  margin: 0 auto;
-  padding: 1rem;
+.chipDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--planner-color);
 }
 
-.statHead {
+.hscroll {
+  overflow-x: auto;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.375rem;
+  padding-bottom: 0.125rem;
+}
+
+// Плашка цвета записи: сон, калории, срок, дело без времени
+.tag {
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-accent)));
+
+  overflow: hidden;
+  display: inline-flex;
+  gap: 0.25rem;
   align-items: center;
-  justify-content: space-between;
+
+  max-width: 100%;
+  padding: 0.0625rem 0.375rem;
+  border: none;
+  border-radius: 0.3125rem;
+
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  color: var(--planner-color);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: color-mix(in srgb, var(--planner-color) 18%, transparent);
+
+  :global(.icon) {
+    flex: none;
+    font-size: 0.8125rem;
+  }
 }
 
-.timeStat {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-  align-items: center;
+.tagButton {
+  cursor: var(--custom-cursor, pointer);
+  display: block;
+  text-align: start;
+
+  &:hover {
+    background: color-mix(in srgb, var(--planner-color) 30%, transparent);
+  }
+
+  :global(.icon) {
+    margin-inline-end: 0.25rem;
+    vertical-align: -0.0625rem;
+  }
 }
 
-.donut {
-  position: relative;
+.tagLarge {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.875rem;
+  font-size: 0.8125rem;
+}
 
-  display: flex;
-  flex-shrink: 0;
+.tagDone {
+  opacity: 0.6;
+}
+
+.tagRemove {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
   align-items: center;
   justify-content: center;
 
-  width: 11rem;
-  height: 11rem;
-  border-radius: 50%;
-
-  background: var(--color-borders);
-
-  &::before {
-    content: "";
-
-    position: absolute;
-    inset: 1.75rem;
-
-    border-radius: 50%;
-
-    background: var(--color-background);
-  }
-}
-
-.donutTotal {
-  position: relative;
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.legend {
-  display: flex;
-  flex: 1 1 14rem;
-  flex-direction: column;
-  gap: 0.375rem;
-
-  min-width: 0;
-}
-
-.legendRow {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
+  margin-inline-end: -0.25rem;
+  padding: 0;
+  border: none;
 
   font-size: 0.875rem;
+  color: inherit;
 
-  > .taskName {
-    flex: 1 1 auto;
+  opacity: 0.7;
+  background: none;
+
+  &:hover {
+    opacity: 1;
   }
 }
 
-.legendDot {
-  flex-shrink: 0;
+.card {
+  min-width: 0;
+  padding: 1rem;
+  border: none;
+  border-radius: var(--planner-radius);
 
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 50%;
+  color: var(--pv-fg);
 
-  background: var(--planner-series);
+  background: var(--pv-raised);
 }
 
-.foodStat {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.foodTotal {
-  font-size: 1.5rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 0.8125rem;
-
-  th,
-  td {
-    padding: 0.375rem 0.5rem;
-    border-bottom: 1px solid var(--color-borders);
-    text-align: start;
-  }
-
-  th {
-    font-weight: var(--font-weight-medium);
-    color: var(--color-text-secondary);
-  }
-}
-
-.chart {
+.cardHead {
   display: flex;
   gap: 0.5rem;
-  height: 10rem;
-  padding-bottom: 1.25rem;
-}
-
-.chartAxis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-
-  font-size: 0.6875rem;
-  color: var(--color-text-secondary);
-}
-
-.chartBars {
-  position: relative;
-
-  display: flex;
-  flex: 1 1 auto;
-  gap: 0.125rem;
-  align-items: flex-end;
-
-  border-bottom: 1px solid var(--color-borders);
-}
-
-.chartGoal {
-  pointer-events: none;
-
-  position: absolute;
-  right: 0;
-  bottom: var(--planner-goal);
-  left: 0;
-
-  border-top: 1px dashed var(--color-text-secondary);
-}
-
-.bar {
-  position: relative;
-
-  display: flex;
-  flex: 1 1 0;
-  align-items: flex-end;
-
-  height: 100%;
-}
-
-.barFill {
-  display: block;
-
-  width: 100%;
-  height: var(--planner-height);
-  border-radius: 0.125rem 0.125rem 0 0;
-
-  background: var(--color-primary);
-
-  .barOpen & {
-    opacity: 0.45;
-  }
-
-  .barEmpty & {
-    height: 0;
-  }
-}
-
-.barLabel {
-  position: absolute;
-  bottom: -1.125rem;
-  left: 50%;
-  transform: translateX(-50%);
-
-  font-size: 0.6875rem;
-  color: var(--color-text-secondary);
-}
-
-// ── строка уведомления с «Отменить» ──────────────────────────────────────────
-
-.notice {
-  display: flex;
-  flex-shrink: 0;
-  gap: 0.75rem;
   align-items: center;
-
   min-height: 2.25rem;
-  padding: 0.25rem 1rem;
-  border-top: 1px solid var(--color-borders);
-
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
 }
 
-// Кнопки мессенджера по умолчанию растягиваются на всю ширину и пишутся
-// прописными — в планировщике они по содержимому и обычным регистром
-.root :global(.Button) {
-  flex-shrink: 0;
-  width: auto;
-  padding-inline: 0.875rem;
-  text-transform: none;
+.card > .cardHead {
+  margin-bottom: 0.625rem;
 }
 
-.root :global(.Button.round) {
-  width: 2.5rem;
-}
-
-.root :global(.input-group) {
+.stack > .cardHead {
   margin-bottom: 0;
 }
 
-// RTL: интервалы времени и числа с единицами — всегда слева направо, иначе
-// bidi переставляет «09:00–09:30» и «30 min» (снимки T015)
-.clock,
-.dayHours,
-.preview,
-.small,
-.summary {
-  unicode-bidi: plaintext;
+.cardTitle {
+  margin: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.125rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.clock {
-  direction: ltr;
+.cardNote {
+  flex: none;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
 }
 
-// ── панель периода и переключатель (spec 013) ────────────────────────────────
+.cardText {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
 
-.periodBar {
+.groupTitle {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+
+  margin: 0.75rem 0 0.125rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.125rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.groupTitleFirst {
+  margin-top: 0;
+}
+
+.groupCount {
+  margin-inline-start: 0.375rem;
+  font-weight: var(--font-weight-normal);
+}
+
+.prog {
+  overflow: hidden;
+  display: block;
+
+  height: 0.375rem;
+  border-radius: 0.1875rem;
+
+  background: var(--pv-line);
+}
+
+.progThin {
+  height: 0.25rem;
+}
+
+.progThick {
+  height: 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.progFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--planner-kind, var(--pv-accent));
+}
+
+// Круглая галочка задачи
+.check {
+  cursor: var(--custom-cursor, pointer);
+
+  position: relative;
+
+  flex: none;
+
+  width: 1.375rem;
+  height: 1.375rem;
+  margin: 0;
+  border: 0.125rem solid var(--pv-line2);
+  border-radius: 50%;
+
+  appearance: none;
+  background: none;
+
+  &::after {
+    content: "";
+
+    position: absolute;
+    top: 22%;
+    left: 22%;
+    transform: rotate(-45deg);
+
+    width: 56%;
+    height: 32%;
+    border-bottom: 0.125rem solid var(--pv-accent-ink);
+    border-left: 0.125rem solid var(--pv-accent-ink);
+
+    opacity: 0;
+  }
+
+  &:checked {
+    border-color: var(--pv-task);
+    background: var(--pv-task);
+  }
+
+  &:checked::after {
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 0.125rem solid var(--pv-accent);
+    outline-offset: 0.125rem;
+  }
+}
+
+.checkSmall {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.checkGreen:checked {
+  border-color: var(--pv-green);
+  background: var(--pv-green);
+}
+
+.warn {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.875rem;
+  color: var(--pv-red);
+
+  background: color-mix(in srgb, var(--pv-red) 14%, transparent);
+
+  :global(.icon) {
+    flex: none;
+    font-size: 1.125rem;
+    line-height: 1.25rem;
+  }
+}
+
+// ── строка задачи ────────────────────────────────────────────────────────────
+
+.rows {
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: calc(100% + 1.25rem);
+  min-width: 0;
+  min-height: 2.75rem;
+  margin: 0 -0.625rem;
+  padding: 0.375rem 0.625rem;
+  border: none;
+  border-radius: var(--planner-radius-small);
+
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  > :global(.icon) {
+    flex: none;
+    font-size: 1.125rem;
+    color: var(--pv-muted);
+  }
+}
+
+.rowButton {
+  cursor: var(--custom-cursor, pointer);
+}
+
+.rowStep {
+  min-height: 2.25rem;
+}
+
+.rowBody {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  color: inherit;
+  text-align: start;
+
+  background: none;
+}
+
+.rowTitle {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  .rowDone & {
+    color: var(--pv-faint);
+    text-decoration: line-through;
+  }
+}
+
+.rowTag {
+  --planner-kind: var(--pv-blue);
+
+  margin-inline-start: 0.375rem;
+  vertical-align: 0.125rem;
+}
+
+.rowSub {
+  overflow: hidden;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1rem;
+  gap: 0.125rem 0.625rem;
   align-items: center;
-  justify-content: space-between;
 
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+
+  :global(.icon) {
+    font-size: 0.875rem;
+    vertical-align: -0.125rem;
+  }
+}
+
+.rowSubItem {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.rowMeta {
+  flex: none;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.rowIcon {
+  --planner-color: var(--planner-kind, var(--pv-muted));
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 1.125rem;
+  color: var(--planner-color);
+
+  background: color-mix(in srgb, var(--planner-color) 22%, transparent);
+}
+
+.rowUndated {
+  margin-top: 0.375rem;
+  border-top: 1px dashed var(--pv-line2);
+  border-radius: 0 0 var(--planner-radius-small) var(--planner-radius-small);
+}
+
+// Квадрат цвета списка
+.listMark {
+  display: inline-block;
+  flex: none;
+
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 0.1875rem;
+
+  background: var(--planner-list-color, var(--pv-faint));
+}
+
+// Ссылка на заметку в названии записи и в подписи ряда (`PlannerName`)
+.nameLink {
+  cursor: var(--custom-cursor, pointer);
+  color: var(--pv-purple);
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    border-radius: 0.125rem;
+    outline: 0.125rem solid var(--pv-accent);
+  }
+}
+
+// ── шапка дня: «Сегодня», «Здоровье» ─────────────────────────────────────────
+
+.dateNav {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.dateNavOver {
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
+
+.dateNavBig {
+  font-family: var(--font-family-monospace);
+  font-size: 1.625rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.1;
+
+  @media (max-width: 925px) {
+    font-size: 1.375rem;
+  }
+}
+
+// ── «Сегодня» ────────────────────────────────────────────────────────────────
+
+.todayGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 21.25rem;
+  gap: 1rem;
+  align-items: start;
+
+  @media (max-width: 1240px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  // Открыта карточка записи: странице уже, расписание уходит под задачи
+  @media (max-width: 1640px) {
+    .withSide & {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.625rem;
+
+  @media (max-width: 925px) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  @media (max-width: 1640px) and (min-width: 926px) {
+    .withSide & {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+}
+
+.stat {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+
+  font-size: inherit;
+  text-align: start;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.statLabel {
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--planner-kind);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statValue {
+  font-family: var(--font-family-monospace);
+  font-size: 1.5rem;
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.statUnit {
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-normal);
+  color: var(--pv-muted);
+}
+
+.statSub {
+  unicode-bidi: plaintext;
+  min-height: 1.125rem;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+// ── расписание дня списком ───────────────────────────────────────────────────
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.feedLine {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0.1875rem 0;
+}
+
+.feedTime {
+  direction: ltr;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+// Подъём и приём пищи: значок цвета записи и подпись
+.feedMark {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.25rem 0;
+
+  font-size: 0.875rem;
+  color: var(--planner-kind);
+
+  :global(.icon) {
+    flex: none;
+    font-size: 1.125rem;
+  }
+}
+
+.feedMarkText {
+  overflow: hidden;
+  color: var(--pv-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedMarkValue {
+  margin-inline-start: auto;
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.feedBlock {
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.375rem 0.625rem;
+  border-inline-start: 0.1875rem solid var(--planner-color);
+  border-radius: 0.375rem;
+
+  background: color-mix(in srgb, var(--planner-color) 16%, var(--pv-raised));
+
+  &:hover {
+    background: color-mix(in srgb, var(--planner-color) 26%, var(--pv-raised));
+  }
+
+  // На острове дня фон — панель, а не карточка
+  .side & {
+    background: color-mix(in srgb, var(--planner-color) 16%, var(--pv-panel));
+  }
+
+  .side &:hover {
+    background: color-mix(in srgb, var(--planner-color) 26%, var(--pv-panel));
+  }
+}
+
+.feedBlockOpen {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-width: 0;
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+}
+
+.feedBlockName {
+  overflow: hidden;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  .feedBlockDone & {
+    color: var(--pv-faint);
+    text-decoration: line-through;
+  }
+}
+
+.feedBlockSub {
+  unicode-bidi: plaintext;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.feedNow {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.625rem;
+  align-items: center;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-red);
+}
+
+.feedNowLine {
+  height: 0.125rem;
+  border-radius: 0.0625rem;
+  background: var(--pv-red);
+}
+
+// ── день календаря: сводка, остров, карточка ─────────────────────────────────
+
+.sumRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.daySummary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-bottom: 0.625rem;
+}
+
+.dayCardTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.layerRow {
   margin-bottom: 0.75rem;
 }
+
+.monthDay {
+  margin-top: 1rem;
+}
+
+// ── шапка календаря: период и выбор месяца ───────────────────────────────────
 
 .periodNav {
   position: relative;
   display: flex;
-  gap: 0.25rem;
+  gap: 0.125rem;
   align-items: center;
+
+  .pill {
+    margin-inline-start: 0.5rem;
+  }
+
+  @media (max-width: 925px) {
+    justify-content: space-between;
+  }
 }
 
 .periodTitle {
   cursor: var(--custom-cursor, pointer);
 
-  margin-inline-end: 0.25rem;
-  padding: 0.25rem 0.5rem;
+  margin-inline-end: 0.375rem;
+  padding: 0.25rem 0.375rem;
   border: none;
-  border-radius: var(--border-radius-default-small);
+  border-radius: var(--planner-radius-small);
 
-  font-size: 1.125rem;
-  font-weight: var(--font-weight-medium);
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
   line-height: 1.5rem;
-  color: var(--color-text);
+  color: var(--pv-fg);
+  white-space: nowrap;
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    background: var(--pv-hover);
+  }
+
+  @media (max-width: 925px) {
+    font-size: 1.0625rem;
   }
 }
 
 .periodPicker {
   position: absolute;
-  z-index: 3;
+  z-index: 6;
   inset-inline-start: 0;
   top: 100%;
 
   width: 16rem;
   margin-top: 0.25rem;
   padding: 0.75rem;
-  border: 1px solid var(--color-borders);
-  border-radius: var(--border-radius-default);
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--planner-radius);
 
-  background: var(--color-background);
-  box-shadow: var(--shadow-island);
+  background: var(--pv-panel);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
 }
 
 .periodPickerYear {
@@ -1214,7 +1297,8 @@
 }
 
 .periodPickerYearValue {
-  font-weight: var(--font-weight-medium);
+  font-family: var(--font-family-monospace);
+  font-weight: var(--font-weight-semibold);
 }
 
 .periodPickerMonths {
@@ -1228,362 +1312,261 @@
 
   padding: 0.375rem 0;
   border: none;
-  border-radius: var(--border-radius-default-small);
+  border-radius: var(--planner-radius-small);
 
   font-size: 0.875rem;
-  color: var(--color-text);
+  color: var(--pv-fg);
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    background: var(--pv-hover);
   }
 }
 
 .periodPickerMonthActive,
 .periodPickerMonthActive:hover {
-  color: var(--color-white);
-  background: var(--color-primary);
+  color: var(--pv-accent-ink);
+  background: var(--pv-accent);
 }
 
-.segments {
-  display: inline-flex;
-  padding: 0.125rem;
-  border-radius: var(--border-radius-default-small);
-  background: var(--color-background-secondary);
-}
-
-.segment {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0.25rem 0.625rem;
-  border: none;
-  border-radius: 0.375rem;
-
-  font-size: 0.8125rem;
-  line-height: 1.25rem;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-
-  background: none;
-
-  &:hover {
-    color: var(--color-text);
-  }
-}
-
-.segmentActive {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text);
-  background: var(--color-background);
-  box-shadow: 0 0 0 1px var(--color-borders);
-}
-
-// ── год ──────────────────────────────────────────────────────────────────────
-
-.year {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
-  gap: 1rem 1.25rem;
-}
-
-.yearMonth {
-  min-width: 0;
-}
-
-.yearMonthTitle {
-  cursor: var(--custom-cursor, pointer);
-
-  margin-bottom: 0.25rem;
-  padding: 0.125rem 0.375rem;
-  border: none;
-  border-radius: 0.375rem;
-
-  font-size: 0.9375rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text);
-
-  background: none;
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
-}
-
-.yearGrid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.0625rem;
-}
-
-.yearWeekday {
-  font-size: 0.625rem;
-  line-height: 1.25rem;
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
-.yearDay {
-  cursor: var(--custom-cursor, pointer);
-
-  aspect-ratio: 1;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-
-  font-size: 0.75rem;
-  color: var(--color-text);
-
-  background: none;
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
-}
-
-// День с делами
-.yearDayBusy {
-  font-weight: var(--font-weight-medium);
-  background: color-mix(in srgb, var(--color-primary) 18%, transparent);
-}
-
-.yearDayHoliday {
-  color: var(--color-error);
-}
-
-.yearDayPicked {
-  box-shadow: inset 0 0 0 0.125rem var(--color-primary);
-}
-
-.yearDayToday,
-.yearDayToday:hover {
-  color: var(--color-white);
-  background: var(--color-primary);
-}
-
-// ── неделя и день ────────────────────────────────────────────────────────────
+// ── неделя и сетка дня ───────────────────────────────────────────────────────
 
 .week {
-  --planner-week-gutter: 3rem;
+  --planner-hours-width: 3.25rem;
 
-  overflow-x: auto;
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
+
   min-width: 0;
-}
-
-.weekHead,
-.weekAllDay,
-.weekBody {
-  display: grid;
-  grid-template-columns:
-    var(--planner-week-gutter)
-    repeat(var(--planner-week-days), minmax(var(--planner-week-column, 5.5rem), 1fr));
-  // Ряд — во всю ширину сетки, а не окна: иначе закреплённая колонка часов уезжала бы при прокрутке
-  width: max-content;
-  min-width: 100%;
-}
-
-// Оси остаются на месте при прокрутке: дни — сверху, часы — слева
-.weekHead {
-  position: sticky;
-  z-index: 30;
-  top: 0;
-  background: var(--planner-week-surface, var(--color-background));
-}
-
-.weekCorner,
-.weekHours {
-  position: sticky;
-  z-index: 25;
-  inset-inline-start: 0;
-  background: var(--planner-week-surface, var(--color-background));
+  min-height: 0;
 }
 
 .weekSingle {
-  .weekHead,
-  .weekAllDay,
-  .weekBody {
-    grid-template-columns: var(--planner-week-gutter) minmax(0, 1fr);
-  }
+  --planner-hours-width: 2.875rem;
+
+  flex: none;
 }
 
-.weekHeadHidden {
-  display: none;
+.weekHead,
+.weekGrid {
+  display: grid;
+  grid-template-columns: var(--planner-hours-width) repeat(var(--planner-week-days), minmax(0, 1fr));
 }
 
-// Сетка дня в правой панели: узкая колонка часов, без горизонтальной прокрутки
-.weekPanel {
-  --planner-week-gutter: 2.5rem;
-  --planner-week-surface: var(--color-background-secondary);
-
-  overflow-x: hidden;
-
-  .weekColumn {
-    cursor: var(--custom-cursor, pointer);
-  }
+.weekHead {
+  flex: none;
+  padding-inline-end: 0.625rem;
+  border-bottom: 1px solid var(--pv-line);
 }
 
-.weekCorner {
-  padding: 0.25rem;
-  font-size: 0.625rem;
-  color: var(--color-text-secondary);
-  text-align: end;
-}
-
-.weekDayTitle {
+.weekDay {
   cursor: var(--custom-cursor, pointer);
 
   display: flex;
-  gap: 0.375rem;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
 
-  padding: 0.25rem;
+  min-width: 0;
+  padding: 0.5rem 0.5rem 0.375rem;
   border: none;
-  border-radius: var(--border-radius-default-small);
+  border-inline-start: 1px solid var(--pv-line);
 
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
+  color: var(--pv-fg);
+  text-align: start;
 
   background: none;
 
   &:hover {
-    background: var(--color-chat-hover);
+    background: var(--pv-hover);
+  }
+
+  .prog {
+    margin-top: 0.375rem;
   }
 }
 
+.weekDayPicked {
+  box-shadow: inset 0 -0.125rem 0 var(--pv-accent);
+}
+
+.weekDayName {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+
+  .weekDayHoliday & {
+    color: var(--pv-red);
+  }
+}
+
+.weekDayRow {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
 .weekDayNumber {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  font-family: var(--font-family-monospace);
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
 
-  min-width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 50%;
-
-  font-size: 1rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text);
+  .weekDayToday & {
+    color: var(--pv-accent);
+  }
 }
 
-.weekDayHoliday .weekDayNumber {
-  color: var(--color-error);
+.weekDayLoad {
+  overflow: hidden;
+
+  margin-inline-start: auto;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+  white-space: nowrap;
 }
 
-.weekDayPicked .weekDayNumber {
-  box-shadow: inset 0 0 0 0.125rem var(--color-primary);
-}
+.weekAllDayLabel {
+  padding: 0.375rem 0.5rem 0 0;
+  border-top: 1px solid var(--pv-line);
 
-.weekDayToday .weekDayNumber {
-  color: var(--color-white);
-  background: var(--color-primary);
-}
-
-.weekAllDay {
-  border-bottom: 1px solid var(--color-borders);
+  font-size: 0.6875rem;
+  line-height: 0.875rem;
+  color: var(--pv-muted);
+  text-align: end;
 }
 
 .weekAllDayCell {
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: 0.1875rem;
 
   min-width: 0;
-  min-height: 1.5rem;
-  padding: 0.125rem;
-  border-inline-start: 1px solid var(--color-borders);
+  min-height: 1.75rem;
+  padding: 0.25rem;
+  border-top: 1px solid var(--pv-line);
+  border-inline-start: 1px solid var(--pv-line);
 }
 
-.weekChip {
-  cursor: var(--custom-cursor, pointer);
+.weekScroll {
+  position: relative;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 
-  overflow: hidden;
-
-  padding: 0 0.375rem;
-  border: none;
-  border-radius: 0.25rem;
-
-  font-size: 0.6875rem;
-  line-height: 1.25rem;
-  color: var(--color-text);
-  text-align: start;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  background: var(--color-background-secondary);
-  box-shadow: inset 0.1875rem 0 0 var(--planner-list-color, transparent);
-
-  &:hover {
-    background: var(--color-chat-hover);
+  .weekSingle & {
+    overflow: visible;
+    flex: none;
   }
 }
 
-.weekChipHoliday {
-  color: var(--color-error);
+.weekGrid {
+  position: relative;
+  padding-inline-end: 0.625rem;
+
+  .weekSingle & {
+    padding-inline-end: 0;
+  }
 }
 
 .weekHours {
-  display: flex;
-  flex-direction: column;
+  position: relative;
 }
 
 .weekHour {
-  height: var(--planner-hour);
-  padding-inline-end: 0.375rem;
+  position: absolute;
+  inset-inline-end: 0.5rem;
+  transform: translateY(-50%);
 
-  font-size: 0.625rem;
-  line-height: 1;
-  color: var(--color-text-secondary);
-  text-align: end;
+  direction: ltr;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-faint);
+
+  // Подпись первого часа обрезалась бы краем сетки
+  &:first-child {
+    visibility: hidden;
+  }
 }
 
 .weekColumn {
+  cursor: var(--custom-cursor, pointer);
+
   position: relative;
+
   min-width: 0;
-  border-inline-start: 1px solid var(--color-borders);
-  // Линии часов
-  background:
+  border-inline-start: 1px solid var(--pv-line);
+
+  background-image:
  repeating-linear-gradient(
     to bottom,
-    var(--color-borders) 0,
-    var(--color-borders) 1px,
-    transparent 1px,
-    transparent var(--planner-hour)
+    transparent 0,
+    transparent calc(var(--planner-hour) - 1px),
+    var(--pv-line) calc(var(--planner-hour) - 1px),
+    var(--pv-line) var(--planner-hour)
   );
 }
 
-.weekColumnPicked {
-  background-color: color-mix(in srgb, var(--color-primary) 5%, transparent);
+.weekColumnToday {
+  background-color: color-mix(in srgb, var(--pv-accent) 4%, transparent);
+}
+
+// Время вне дня из настроек
+.weekOff {
+  pointer-events: none;
+
+  position: absolute;
+  right: 0;
+  left: 0;
+
+  background: color-mix(in srgb, var(--pv-bg) 35%, transparent);
+}
+
+// Сон: полоса до подъёма и после отхода ко сну
+.weekSleep {
+  pointer-events: none;
+
+  position: absolute;
+  right: 0;
+  left: 0;
+
+  border-bottom: 1px dashed color-mix(in srgb, var(--pv-sleep) 50%, transparent);
+
+  background: color-mix(in srgb, var(--pv-sleep) 10%, transparent);
+}
+
+.weekSleepNight {
+  border-top: 1px dashed color-mix(in srgb, var(--pv-sleep) 50%, transparent);
+  border-bottom: none;
 }
 
 .weekBlock {
-  cursor: var(--custom-cursor, pointer);
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
 
   position: absolute;
 
   overflow: hidden;
   display: flex;
-  gap: 0.375rem;
-  align-items: flex-start;
 
-  padding: 0.125rem 0.375rem;
-  border: 1px solid var(--color-background);
+  box-sizing: border-box;
+  margin-top: 1px;
+  padding: 0.1875rem 0.4375rem;
+  border: 1px solid var(--pv-panel);
+  border-inline-start: 0.1875rem solid var(--planner-color);
   border-radius: 0.375rem;
 
-  font-size: 0.6875rem;
-  line-height: 1rem;
-  color: var(--color-text);
-  text-align: start;
+  background: color-mix(in srgb, var(--planner-color) 20%, var(--pv-panel));
 
-  background: color-mix(in srgb, var(--planner-list-color, var(--color-primary)) 22%, var(--color-background));
-  box-shadow: inset 0.1875rem 0 0 var(--planner-list-color, var(--color-primary));
-
-  // Наведённое дело каскада выходит поверх остальных
   &:hover {
-    z-index: 20 !important;
-    filter: brightness(0.96);
+    background: color-mix(in srgb, var(--planner-color) 32%, var(--pv-panel));
   }
+}
+
+.weekBlockDone {
+  opacity: 0.55;
 }
 
 .weekBlockOpen {
@@ -1593,674 +1576,118 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  justify-content: flex-start;
 
   min-width: 0;
-  height: 100%;
   padding: 0;
   border: none;
 
-  font: inherit;
-  color: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--pv-fg);
   text-align: start;
 
   background: none;
-}
-
-.weekBlockCheck {
-  flex: 0 0 auto;
-  width: 0.875rem;
-  height: 0.875rem;
-  margin: 0.0625rem 0 0;
-}
-
-.weekBlockEvent {
-  background: color-mix(in srgb, var(--color-text-secondary) 18%, var(--color-background));
-  box-shadow: inset 0.1875rem 0 0 var(--color-text-secondary);
 }
 
 .weekBlockName {
-  overflow: hidden;
-  display: block;
-
+  flex: none;
   font-weight: var(--font-weight-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+
+  .weekBlockDone & {
+    text-decoration: line-through;
+  }
 }
 
 .weekBlockTime {
-  unicode-bidi: plaintext;
-  display: block;
+  direction: ltr;
+  flex: none;
 
-  margin-inline-end: 0.25rem;
-
-  color: var(--color-text-secondary);
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
   white-space: nowrap;
 }
 
-// ── расписание ───────────────────────────────────────────────────────────────
+// Приём пищи: отметка с калориями у правого края колонки
+.weekMeal {
+  pointer-events: none;
 
-.agenda {
+  position: absolute;
+  z-index: 2;
+  inset-inline-end: 0.1875rem;
+  transform: translateY(-50%);
+
   display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  max-width: 44rem;
-}
+  gap: 0.1875rem;
+  align-items: center;
 
-.agendaDay {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
+  height: 1.25rem;
+  padding: 0 0.4375rem;
+  border-radius: 0.625rem;
 
-.agendaDayTitle {
-  cursor: var(--custom-cursor, pointer);
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-accent-ink);
+  white-space: nowrap;
 
-  align-self: flex-start;
+  background: var(--pv-food);
 
-  padding: 0.125rem 0.375rem;
-  border: none;
-  border-radius: 0.375rem;
-
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-
-  background: none;
-
-  &:hover {
-    background: var(--color-chat-hover);
+  :global(.icon) {
+    font-size: 0.75rem;
   }
 }
 
-.agendaDayToday {
-  color: var(--color-primary);
-}
+.weekNow {
+  pointer-events: none;
 
-.agendaHoliday {
-  color: var(--color-error);
-}
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  left: 0;
 
-.agendaRow {
-  cursor: var(--custom-cursor, pointer);
+  height: 0.125rem;
 
-  display: flex;
-  gap: 0.75rem;
-  align-items: baseline;
-
-  padding: 0.375rem 0.625rem;
-  border: none;
-  border-radius: var(--border-radius-default-small);
-
-  font-size: 0.875rem;
-  color: var(--color-text);
-  text-align: start;
-
-  background: var(--color-background-secondary);
-  box-shadow: inset 0.1875rem 0 0 var(--planner-list-color, transparent);
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
-}
-
-.agendaTime {
-  unicode-bidi: plaintext;
-  flex: 0 0 6.5rem;
-  font-size: 0.75rem;
-  color: var(--color-text-secondary);
-}
-
-.agendaName {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-}
-
-.agendaDone {
-  text-decoration: line-through;
-  opacity: 0.6;
-}
-
-.agendaDue .agendaTime {
-  color: var(--color-error);
-}
-
-// ── цвет списка, галочки события (spec 013) ──────────────────────────────────
-
-// Цвет списка у строки задачи: скруглённая полоска с отступом от галочки (вплотную к ней
-// прямоугольная полоска выглядела обрубком)
-.taskColored {
-  position: relative;
-  padding-inline-start: 0.875rem;
+  background: var(--pv-red);
 
   &::before {
     content: "";
 
     position: absolute;
-    inset-block: 0.375rem;
-    inset-inline-start: 0;
+    top: -0.1875rem;
+    left: -0.25rem;
 
-    width: 0.25rem;
-    border-radius: 0.125rem;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
 
-    background: var(--planner-list-color);
+    background: var(--pv-red);
   }
 }
 
-.swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-}
-
-.swatch {
-  cursor: var(--custom-cursor, pointer);
-
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0;
-  border: 0.125rem solid var(--color-background);
-  border-radius: 50%;
-
-  background: var(--planner-list-color);
-}
-
-.swatchNone {
-  background: var(--color-background);
-  box-shadow: inset 0 0 0 1px var(--color-borders);
-}
-
-.swatchActive {
-  outline: 0.125rem solid var(--color-primary);
-}
-
-.listCreate {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 1rem;
-}
-
-// Левая колонка: у редакторов и настроек своя шапка колонки — их кнопка «назад» и отступы лишние
-.side .back,
-.side .settingsBack {
-  display: none;
-}
-
-.side .settings {
-  max-width: none;
-  padding: 0;
-}
-
-.side .form {
-  max-width: none;
-}
-
-// Узкий календарь (открыта левая колонка): в клетке месяца остаются число и полоса загрузки
-@container planner-main (max-width: 30rem) {
-  .day {
-    min-height: 3.5rem;
-    padding: 0.25rem 0.25rem 0.5rem;
-  }
-
-  .dayHead {
-    justify-content: center;
-  }
-
-  .dayHours,
-  .preview,
-  .previewMore {
-    display: none;
-  }
-}
-
-// Тёмная тема: тот же тёплый оттенок, но едва заметный — клетки светлее фона раздела
-:global(html.theme-dark) .root {
-  --planner-cell: color-mix(in srgb, #fff1d6 9%, var(--color-background));
-  --planner-cell-weekend: color-mix(in srgb, #fff1d6 4%, var(--color-background));
-}
-
-// Узкий экран: форма новой задачи раскрыта в расписании дня на месте свободного окна
-.inlineForm {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-
-  padding: 0.75rem;
-  border: 1px solid var(--color-primary);
-  border-radius: var(--border-radius-default);
-
-  background: var(--color-background);
-}
-
-.inlineForm .form {
-  max-width: none;
-  margin: 0;
-  padding: 0;
-}
-
-// ── узкий экран: расписание дня лентой под календарём (отзыв 9 окт 2026) ─────
-
-.periodTrailing {
-  display: inline-flex;
-  margin-inline-start: auto;
-}
-
-.dayItems {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-// Лента: карточки дел и свободных окон в ряд, листается вбок; календарь остаётся на виду
-.dayStrip {
-  scroll-snap-type: x proximity;
-
-  overflow-x: auto;
-  flex-direction: row;
-  align-items: stretch;
-
-  padding-bottom: 0.25rem;
-
-  > * {
-    scroll-snap-align: start;
-    flex: 0 0 11.5rem;
-    min-width: 0;
-  }
-
-  .group {
-    display: none;
-  }
-
-  .free,
-  .busyRow {
-    flex-direction: column;
-    gap: 0.125rem;
-  }
-
-  .clock {
-    flex: 0 0 auto;
-  }
-
-  .inlineAdd {
-    align-self: center;
-  }
-}
-
-@media (max-width: 925px) {
-  // Календарь и день — друг под другом, оба видны; отдельного экрана дня нет
-  .panelOpen .main,
-  .main {
-    display: block;
-    padding-bottom: 0.5rem;
-  }
-
-  .sideOpen .main {
-    display: none;
-  }
-
-  .panel,
-  .panelOpen .panel {
-    display: flex;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--color-borders);
-  }
-
-  .sideOpen .panel,
-  .backToMain {
-    display: none;
-  }
-
-  .periodNav {
-    flex: 1 1 100%;
-  }
-
-  // В клетке месяца на телефоне — только число и полоса загрузки
-  .day .small {
-    display: none;
-  }
-
-  .header {
-    flex-wrap: nowrap;
-    gap: 0.25rem;
-    min-height: 0;
-    padding: 0.375rem 0.5rem;
-  }
-}
-
-// ── узкий экран: под календарём только лента высоких карточек (отзыв 9 окт, вечер) ──
-
-.stripCard {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-
-  padding: 0.625rem 0.75rem;
-  border: none;
-  border-radius: var(--border-radius-default-small);
-
-  color: var(--color-text);
-  text-align: start;
-
-  background: var(--color-background);
-}
-
-.stripValue {
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.5rem;
-}
-
-.stripAdd {
-  cursor: var(--custom-cursor, pointer);
-
-  align-items: center;
-  justify-content: center;
-
-  font-weight: var(--font-weight-medium);
-  color: var(--color-primary);
-  text-align: center;
-}
-
-// Переключатель «Расписание / Питание» — первая карточка ленты
-.stripSwitch {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-}
-
-.stripSwitchButton {
-  cursor: var(--custom-cursor, pointer);
-
-  flex: 1 1 0;
-
-  padding: 0.5rem;
-  border: none;
-  border-radius: var(--border-radius-default-small);
-
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-
-  background: var(--color-background);
-}
-
-.stripSwitchActive {
-  color: var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 18%, var(--color-background));
-}
-
-@media (max-width: 925px) {
-  // Календарь сверху по содержимому, лента занимает всё, что осталось
-  .layout {
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
-  }
-
-  .main {
-    flex: 0 0 auto;
-  }
-
-  .panel,
-  .panelOpen .panel {
-    flex: 1 1 auto;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem 0.75rem;
-  }
-
-  .panel .dayList {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  .dayStrip {
-    flex: 1 1 auto;
-    min-height: 10rem;
-
-    > * {
-      flex: 0 0 8.75rem;
-    }
-
-    // Переключатель — узкая колонка, закреплённая слева: остаётся на месте, пока лента листается
-    > .stripSwitch {
-      position: sticky;
-      z-index: 2;
-      inset-inline-start: 0;
-
-      flex: 0 0 2.5rem;
-
-      background: var(--color-background-secondary);
-      box-shadow: 0.375rem 0 0 var(--color-background-secondary);
-    }
-
-    > .stripMetric {
-      flex: 0 0 3.75rem;
-    }
-
-    > .stripAdd {
-      flex: 0 0 2.75rem;
-    }
-  }
-
-  // Надписи узких колонок — вертикально, снизу вверх
-  .stripSwitchButton,
-  .stripAdd,
-  .stripMetricName {
-    transform: rotate(180deg);
-    writing-mode: vertical-rl;
-    white-space: nowrap;
-  }
-
-  .stripSwitchButton,
-  .stripAdd {
-    padding: 0.5rem 0;
-  }
-}
-
-// Показатель питания в ленте: значение сверху, вертикальная полоска заполнения и подпись вдоль неё
-.stripMetric {
-  gap: 0.125rem;
-  align-items: center;
-  padding: 0.5rem 0.25rem;
-}
-
-.stripMetricValue {
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.125rem;
-}
-
-.stripMetricGoal {
-  font-size: 0.625rem;
-  line-height: 0.875rem;
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
-.stripMetricBody {
-  display: flex;
-  flex: 1 1 auto;
-  gap: 0.375rem;
-  align-items: stretch;
-  justify-content: center;
-
-  min-height: 0;
-  margin-top: 0.25rem;
-}
-
-.stripTrack {
-  position: relative;
-
-  overflow: hidden;
-
-  width: 0.5rem;
-  border-radius: 0.25rem;
-
-  background: var(--color-borders);
-
-  > span {
-    position: absolute;
-    inset-block-end: 0;
-    inset-inline: 0;
-
-    height: var(--planner-progress);
-    border-radius: 0.25rem;
-
-    background: var(--color-primary);
-  }
-}
-
-.stripMetricName {
-  font-size: 0.6875rem;
-  color: var(--color-text-secondary);
-}
-
-// ── узкий экран: день — горизонтальной шкалой времени над календарём (отзыв 10 окт) ──
-
-.timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  min-width: 0;
-}
-
-.timelineHead {
-  overflow-x: auto;
-  display: flex;
-  gap: 0.375rem;
-  align-items: center;
-}
-
-.timelineDay {
-  flex: 0 0 auto;
-  font-size: 0.9375rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.timelineChip {
-  flex: 0 0 auto;
-  width: auto;
-  max-width: 10rem;
-}
-
-.timelineScroll {
-  overflow-x: auto;
-  border-radius: var(--border-radius-default-small);
-  background: var(--color-background);
-}
-
-.timelineHours {
-  display: flex;
-}
-
-.timelineHour {
-  flex: 0 0 auto;
-
-  padding: 0.25rem 0.375rem;
-
-  font-size: 0.6875rem;
-  line-height: 1rem;
-  color: var(--color-text-secondary);
-}
-
-.timelineTrack {
-  cursor: var(--custom-cursor, pointer);
-  position: relative;
-  // Линии часов
-  background:
-    repeating-linear-gradient(
-      to right,
-      var(--color-borders) 0,
-      var(--color-borders) 1px,
-      transparent 1px,
-      transparent var(--planner-hour)
-    );
-}
-
-.timelineBlock {
-  align-items: center;
-}
-
-// Событие на весь день — полоса во всю шкалу; подпись остаётся на виду при прокрутке вбок
-.timelineAllDay {
-  overflow: visible;
-}
-
-.timelineAllDayLabel {
-  position: sticky;
-  inset-inline-start: 0.5rem;
-  flex: 0 1 auto;
-  max-width: 16rem;
-}
-
-@media (max-width: 925px) {
-  // День — над календарём и забирает всё место, что осталось от календаря
-  .timeline,
-  .timelineScroll {
-    flex: 1 1 auto;
-  }
-
-  .timelineScroll {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .timelineTrack {
-    flex: 1 1 auto;
-  }
-
-  .timelineBlock {
-    font-size: 0.8125rem;
-
-    .weekBlockName {
-      white-space: normal;
-    }
-  }
-
-  .panel,
-  .panelOpen .panel {
-    flex: 1 1 auto;
-    order: -1;
-
-    padding: 0.5rem 0.75rem;
-    border-top: none;
-    border-bottom: 1px solid var(--color-borders);
-  }
-}
-
-// ── телефон, вид «Неделя»: полоса дней недели и сетка выбранного дня под ней ──
-
-.phoneWeek,
-.phoneWeekDay {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
+// ── телефон: полоса дней недели и день под ней ───────────────────────────────
 
 .phoneWeek {
-  gap: 0.5rem;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
 
-  .summary {
-    margin: 0;
-  }
+  min-width: 0;
+  min-height: 0;
+}
 
-  .weekPanel {
-    --planner-week-surface: var(--color-background);
-  }
+.stripBar {
+  flex: none;
+  padding: 0.5rem 0.75rem 0.625rem;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.phoneWeekDay {
+  padding-top: 0.75rem;
 }
 
 .dayStrip {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  flex: 0 0 auto;
   gap: 0.25rem;
 }
 
@@ -2275,17 +1702,21 @@
   min-width: 0;
   padding: 0.375rem 0 0.4375rem;
   border: none;
-  border-radius: var(--border-radius-default-small);
+  border-radius: var(--planner-radius);
 
-  color: var(--color-text);
+  color: var(--pv-fg);
 
   background: none;
 }
 
 .dayStripWeekday {
   font-size: 0.6875rem;
-  color: var(--color-text-secondary);
+  color: var(--pv-muted);
   text-transform: uppercase;
+
+  .dayStripHoliday & {
+    color: var(--pv-red);
+  }
 }
 
 .dayStripNumber {
@@ -2297,24 +1728,20 @@
   height: 2.125rem;
   border-radius: 50%;
 
+  font-family: var(--font-family-monospace);
   font-size: 1.0625rem;
   font-weight: var(--font-weight-semibold);
 
-  .dayStripHoliday & {
-    color: var(--color-error);
-  }
-
   .dayStripToday & {
-    color: var(--color-primary);
+    color: var(--pv-accent);
   }
 
   .dayStripPicked & {
-    color: var(--color-white);
-    background: var(--color-primary);
+    color: var(--pv-accent-ink);
+    background: var(--pv-accent);
   }
 }
 
-// Загрузка дня: занято от бюджета
 .dayStripLoad {
   overflow: hidden;
 
@@ -2322,46 +1749,764 @@
   height: 0.1875rem;
   border-radius: 0.125rem;
 
-  background: var(--color-borders);
+  background: var(--pv-line);
 }
 
 .dayStripLoadFill {
   display: block;
   height: 100%;
-  background: var(--color-primary);
+  background: var(--pv-event);
 }
 
 .dayStripLoadOver {
-  background: var(--color-error);
+  background: var(--pv-red);
 }
 
-@media (max-width: 925px) {
-  // Вид «Неделя» на телефоне: панели дня нет; полоса дней стоит на месте, сетка дня под ней — на всё
-  // оставшееся место и листается по вертикали (вбок — нет: горизонтальный жест листает дни)
-  .layoutWeek {
-    height: 100%;
-    min-height: 0;
+// ── месяц ────────────────────────────────────────────────────────────────────
+
+.month {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.375rem;
+
+  @media (max-width: 925px) {
+    gap: 0.1875rem;
+  }
+}
+
+.monthWeekday {
+  padding: 0 0.375rem;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-transform: uppercase;
+}
+
+.monthCell {
+  cursor: var(--custom-cursor, pointer);
+
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+
+  min-width: 0;
+  min-height: 6.5rem;
+  padding: 0.5rem;
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.75rem;
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
   }
 
-  .layoutWeek .main {
+  @media (max-width: 925px) {
+    gap: 0.25rem;
+    align-items: center;
+    min-height: 3.375rem;
+    padding: 0.3125rem 0.25rem;
+  }
+}
+
+.monthCellOutside {
+  opacity: 0.4;
+}
+
+.monthCellPicked {
+  box-shadow: 0 0 0 0.125rem var(--pv-accent);
+}
+
+// Праздник — заливкой клетки (цвет события, без цвета — красный)
+.monthCellHoliday,
+.monthCellHoliday:hover {
+  background: color-mix(in srgb, var(--planner-holiday-color, var(--pv-red)) 14%, var(--pv-raised));
+}
+
+.monthHead {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  align-self: stretch;
+
+  @media (max-width: 925px) {
+    justify-content: center;
+  }
+}
+
+.monthNumber {
+  font-family: var(--font-family-monospace);
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
+
+  .monthCellToday & {
+    padding: 0 0.375rem;
+    border-radius: 0.625rem;
+    color: var(--pv-accent-ink);
+    background: var(--pv-accent);
+  }
+
+  @media (max-width: 925px) {
+    font-size: 0.875rem;
+  }
+}
+
+.monthHours {
+  unicode-bidi: plaintext;
+
+  margin-inline-start: auto;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+
+  @media (max-width: 925px) {
+    display: none;
+  }
+}
+
+// Дело дня: точка цвета записи и название
+.monthItem {
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
+
+  overflow: hidden;
+  display: block;
+  flex: none;
+  align-self: stretch;
+
+  padding: 0;
+  border: none;
+
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  color: var(--pv-fg);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: none;
+
+  &::before {
+    content: "";
+
+    display: inline-block;
+
+    width: 0.375rem;
+    height: 0.375rem;
+    margin-inline-end: 0.3125rem;
+    border-radius: 50%;
+
+    vertical-align: middle;
+
+    background: var(--planner-color);
+  }
+
+  @media (max-width: 925px) {
+    display: none;
+  }
+}
+
+.monthItemButton {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.monthSleep,
+.monthMore {
+  color: var(--pv-muted);
+}
+
+.monthMore::before {
+  background: transparent;
+}
+
+.monthDots {
+  display: none;
+  gap: 0.1875rem;
+  min-height: 0.3125rem;
+
+  @media (max-width: 925px) {
     display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .layoutWeek .week {
-    overflow: hidden auto;
-    flex: 1 1 auto;
-    min-height: 0;
   }
 }
 
-// Окна «Плана» (spec 017, 018): по центру, на телефоне — шторка у нижнего края
+.monthDot {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  border-radius: 50%;
+  background: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
+}
+
+// ── год ──────────────────────────────────────────────────────────────────────
+
+.year {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13.75rem, 1fr));
+  gap: 1.125rem;
+}
+
+.yearMonthTitle {
+  cursor: var(--custom-cursor, pointer);
+
+  display: block;
+
+  margin-bottom: 0.375rem;
+  padding: 0;
+  border: none;
+
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.yearMonthCurrent {
+  color: var(--pv-accent);
+}
+
+.yearGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.125rem;
+}
+
+.yearWeekday {
+  font-size: 0.625rem;
+  color: var(--pv-faint);
+  text-align: center;
+}
+
+// Насыщенность клетки — загрузка дня
+.yearDay {
+  cursor: var(--custom-cursor, pointer);
+
+  position: relative;
+
+  aspect-ratio: 1;
+  padding: 0;
+  border: none;
+  border-radius: 0.3125rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-fg);
+
+  background: color-mix(in srgb, var(--pv-event) var(--planner-load, 0%), var(--pv-raised));
+
+  &:hover {
+    outline: 1px solid var(--pv-line2);
+  }
+}
+
+.yearDayHoliday {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-red);
+}
+
+.yearDayDue::after {
+  content: "";
+
+  position: absolute;
+  top: 0.125rem;
+  right: 0.125rem;
+
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 50%;
+
+  background: var(--pv-red);
+}
+
+.yearDayPicked {
+  outline: 1px solid var(--pv-muted);
+  outline-offset: -1px;
+}
+
+.yearDayToday,
+.yearDayToday:hover {
+  outline: 0.125rem solid var(--pv-accent);
+  outline-offset: -1px;
+}
+
+.yearLegend {
+  margin: 0.875rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+// ── список ───────────────────────────────────────────────────────────────────
+
+.agenda {
+  max-width: 44rem;
+}
+
+.agendaDay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.agendaDayTitle {
+  cursor: var(--custom-cursor, pointer);
+
+  align-self: flex-start;
+
+  margin: 0.875rem 0 0.375rem;
+  padding: 0;
+  border: none;
+
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-muted);
+
+  background: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.agendaDayToday {
+  color: var(--pv-accent);
+}
+
+// ── карточка записи, формы, настройки ────────────────────────────────────────
+
+// Шторка: карточка записи на телефоне и окно настроек
+.scrim {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+
+  background: rgb(0 0 0 / 45%);
+}
+
+.scrimCentered {
+  @media (min-width: 926px) {
+    align-items: flex-start;
+    padding: 10vh 1rem 1rem;
+  }
+}
+
+.sheetPane {
+  flex: none;
+
+  width: 100%;
+  max-height: 88%;
+  border-radius: var(--planner-island-radius) var(--planner-island-radius) 0 0;
+
+  box-shadow: 0 -0.625rem 2.5rem rgb(0 0 0 / 40%);
+
+  @media (prefers-reduced-motion: no-preference) {
+    animation: planner-sheet-up 0.18s ease-out;
+  }
+}
+
+.sheetPaneCentered {
+  @media (min-width: 926px) {
+    width: min(35rem, 100%);
+    max-height: 80vh;
+    border-radius: var(--planner-island-radius);
+    box-shadow: 0 1.25rem 3.75rem rgb(0 0 0 / 40%);
+  }
+}
+
+@keyframes planner-sheet-up {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
+  }
+}
+
+.grab {
+  flex: none;
+
+  width: 2.5rem;
+  height: 0.25rem;
+  margin: 0.5rem auto 0;
+  border-radius: 0.125rem;
+
+  background: var(--pv-line2);
+}
+
+.typePill {
+  --planner-color: var(--planner-kind, var(--pv-accent));
+
+  display: inline-flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  height: 1.75rem;
+  padding: 0 0.75rem;
+  border-radius: 0.875rem;
+
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--planner-color);
+
+  background: color-mix(in srgb, var(--planner-color) 20%, transparent);
+
+  :global(.icon) {
+    font-size: 1rem;
+  }
+}
+
+.editor,
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  min-width: 0;
+}
+
+.editorTitle {
+  margin: 0;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--pv-line2);
+
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.field {
+  display: block;
+  min-width: 0;
+}
+
+.fieldLabel {
+  display: block;
+
+  margin: 0 0 0.25rem;
+
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-normal);
+  color: var(--pv-muted);
+}
+
+.fieldInput {
+  height: 2.625rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.9375rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.125rem;
+}
+
+.weekdays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.repeat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.repeatBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--pv-line);
+}
+
+.stepForm {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+
+  > .field {
+    flex: 1 1 auto;
+  }
+}
+
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.slot {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: var(--planner-radius-small);
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: var(--pv-raised);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+// Блок «Повтор и детали»
+.detailsFold {
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--planner-radius-small);
+}
+
+.detailsToggle {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3.25rem;
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  :global(.icon) {
+    flex: none;
+    font-size: 1.125rem;
+    color: var(--pv-muted);
+  }
+}
+
+.detailsText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.detailsLabel {
+  font-weight: var(--font-weight-medium);
+}
+
+.detailsSummary {
+  overflow: hidden;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detailsBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.25rem 0 0.75rem;
+}
+
+// Запись ряда: правило повтора и подсказка
+.seriesBox {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px dashed var(--pv-line2);
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.875rem;
+
+  :global(.icon) {
+    margin-inline-end: 0.5rem;
+    font-size: 1rem;
+    vertical-align: -0.125rem;
+  }
+}
+
+// Объём правки ряда: только это, это и последующие, все в серии
+.seriesPrompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  padding: 0.75rem;
+  border-radius: var(--planner-radius);
+
+  background: var(--pv-raised);
+}
+
+.seriesTitle {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.swatch {
+  cursor: var(--custom-cursor, pointer);
+
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0.1875rem solid var(--pv-panel);
+  border-radius: 50%;
+
+  background: var(--planner-list-color);
+}
+
+.swatchNone {
+  background: var(--pv-panel);
+  box-shadow: inset 0 0 0 1px var(--pv-line2);
+}
+
+.swatchActive {
+  outline: 0.125rem solid var(--pv-accent);
+}
+
+.listCreate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fold {
+  margin-top: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+// Кнопки мессенджера по умолчанию растягиваются на всю ширину и пишутся прописными — в планировщике они
+// по содержимому и обычным регистром
+.root :global(.Button) {
+  flex-shrink: 0;
+
+  width: auto;
+  padding-inline: 0.875rem;
+  border-radius: var(--planner-radius-small);
+
+  font-weight: var(--font-weight-semibold);
+  text-transform: none;
+}
+
+.root :global(.Button.primary) {
+  --button-active-background-color: var(--color-primary-shade);
+}
+
+// Поля мессенджера с плавающей подписью внутри «Плана» выглядят как поля прототипа: подпись над полем
+.root :global(.input-group) {
+  display: flex;
+  flex-direction: column-reverse;
+  margin-bottom: 0;
+}
+
+.root :global(.input-group) > :global(label) {
+  pointer-events: auto;
+
+  position: static;
+  transform: none !important;
+
+  margin: 0 0 0.25rem;
+  padding: 0;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  white-space: normal;
+
+  background: none;
+}
+
+.root :global(.input-group) > :global(.form-control) {
+  height: 2.625rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: var(--planner-radius-small);
+
+  font-size: 0.9375rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+  box-shadow: none;
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
+.root :global(.input-group) > :global(textarea.form-control) {
+  min-height: 5rem;
+  padding: 0.625rem 0.75rem;
+}
+
+.root :global(.input-group.with-arrow)::after {
+  top: auto;
+  right: 1rem;
+  bottom: 1.125rem;
+
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+// ── окна: ввод текстом, задачи без даты ──────────────────────────────────────
+
 .quick,
 .sheet {
+  @include tokens;
+
   :global(.modal-dialog) {
-    max-width: 32rem;
+    max-width: 35rem;
+    border-radius: var(--planner-island-radius);
+    color: var(--pv-fg);
+    background: var(--pv-panel);
+  }
+
+  :global(.modal-title) {
+    font-size: 1.125rem;
+    font-weight: var(--font-weight-semibold);
   }
 
   @media (max-width: 600px) {
@@ -2372,473 +2517,168 @@
     :global(.modal-dialog) {
       max-width: none;
       margin: 0;
-      border-radius: var(--border-radius-default) var(--border-radius-default) 0 0;
+      border-radius: var(--planner-island-radius) var(--planner-island-radius) 0 0;
     }
   }
+}
+
+.sheetBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.sheetBody .row {
+  width: 100%;
+  margin: 0;
+}
+
+.sheetHint {
+  margin: 0 0 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
 }
 
 .quickForm {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.875rem;
+
+  font-size: 0.9375rem;
+  line-height: 1.45;
 }
 
 .quickInput {
-  font-size: 1rem;
+  width: 100%;
+  height: 3.25rem;
+  padding: 0 1rem;
+  border: 0.125rem solid var(--pv-accent);
+  border-radius: var(--planner-radius);
+
+  font-size: 1.0625rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+  outline: none;
+
+  &::placeholder {
+    color: var(--pv-faint);
+  }
 }
 
-.quickKinds,
-.quickChips {
+.quickPreview {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
-}
+  align-items: center;
 
-.quickKind {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0.25rem 0.75rem;
-  border: 1px solid var(--color-borders);
-  border-radius: 1rem;
+  min-height: 1.875rem;
 
   font-size: 0.875rem;
-  color: var(--color-text-secondary);
-
-  background: none;
-}
-
-.quickKindOn {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.quickDraft {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-height: 4.5rem;
 }
 
 .quickName {
+  width: 100%;
+  margin-top: 0.125rem;
   font-weight: var(--font-weight-medium);
   overflow-wrap: anywhere;
 }
 
-.quickChip {
-  display: inline-flex;
-  gap: 0.25rem;
-  align-items: center;
-
-  padding: 0.125rem 0.375rem 0.125rem 0.625rem;
-  border-radius: 1rem;
-
-  font-size: 0.875rem;
-  color: var(--color-primary);
-
-  background: var(--color-primary-tint, var(--color-background-secondary));
-}
-
-.quickChipRemove {
-  cursor: var(--custom-cursor, pointer);
-
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  width: 1.25rem;
-  height: 1.25rem;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-
-  font-size: 0.875rem;
-  color: inherit;
-
-  background: none;
-}
-
-.quickHint {
-  min-height: 4.5rem;
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-}
-
 .quickError {
-  font-size: 0.875rem;
-  color: var(--color-error);
-}
-
-.quickMore {
-  cursor: var(--custom-cursor, pointer);
-
-  margin-inline-start: auto;
-  padding: 0.25rem 0.5rem;
-  border: 0;
-
-  font-size: 0.875rem;
-  color: var(--color-primary);
-
-  background: none;
-}
-
-// ── «Сегодня» (spec 018) ─────────────────────────────────────────────────────
-
-.today {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-
-  max-width: 44rem;
-  margin-top: 0.75rem;
-}
-
-.todayCards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
-  gap: 0.75rem;
-}
-
-.todayCard {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  align-items: flex-start;
-
-  min-width: 0;
-  padding: 0.875rem 1rem;
-  border: 0;
-  border-radius: var(--border-radius-default);
-
-  color: var(--color-text);
-  text-align: start;
-
-  background: var(--color-background-secondary);
-}
-
-.todayCardLabel {
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.todayCardValue {
-  font-family: var(--font-family-monospace);
-  font-size: 1.375rem;
-  font-weight: var(--font-weight-medium);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.75rem;
-}
-
-.todayBar {
-  overflow: hidden;
-  display: block;
-
   width: 100%;
-  height: 0.25rem;
-  border-radius: 0.125rem;
-
-  background: var(--color-borders);
+  font-size: 0.8125rem;
+  color: var(--pv-red);
 }
 
-.todayBarFill,
-.todayBarOver {
-  display: block;
-  height: 100%;
-  border-radius: 0.125rem;
-  background: var(--color-primary);
-}
-
-.todayBarOver {
-  background: var(--color-error);
-}
-
-.todaySection {
-  scroll-margin-top: 0.5rem;
-}
-
-.todayUndated {
-  cursor: var(--custom-cursor, pointer);
-
-  width: 100%;
-  margin-top: 0.75rem;
-  padding: 0.625rem 0.75rem;
-  border: 0;
-  border-radius: var(--border-radius-default);
-
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-  text-align: start;
-
-  background: var(--color-background-secondary);
-}
-
-.undated {
+.quickFooter {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.undatedTitle {
-  display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-
-  margin: 0 0 0.25rem;
-
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.undatedDot {
-  flex: 0 0 auto;
-
-  width: 0.625rem;
-  height: 0.625rem;
-  border-radius: 50%;
-
-  background: var(--planner-list-color, var(--color-borders));
-}
-
-.undatedRow {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.undatedAssign {
-  cursor: var(--custom-cursor, pointer);
-
-  flex: 0 0 auto;
-
-  padding: 0.25rem 0.625rem;
-  border: 1px solid var(--color-borders);
-  border-radius: 1rem;
+  justify-content: flex-end;
 
   font-size: 0.8125rem;
-  color: var(--color-primary);
-
-  background: none;
 }
 
-// ── карточка записи: «Повтор и детали» (spec 018) ────────────────────────────
-
-.detailsFold {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--color-borders);
-}
-
-.detailsToggle {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-
-  width: 100%;
-  padding: 0.25rem 0;
-  border: 0;
-
-  color: var(--color-text);
-  text-align: start;
-
-  background: none;
-}
-
-.detailsLabel {
-  flex: 0 0 auto;
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-}
-
-.detailsSummary {
-  overflow: hidden;
-  flex: 1 1 auto;
-
-  min-width: 0;
-
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-// ── «Здоровье» (spec 020) ────────────────────────────────────────────────────
+// ── «Здоровье» ───────────────────────────────────────────────────────────────
 
 .health {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   align-items: start;
 
-  margin-top: 0.75rem;
+  @media (max-width: 1100px) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (max-width: 1500px) {
+    .withSide & {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
 }
 
-.healthCard {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
-
-  min-width: 0;
-  padding: 1rem;
-  border-radius: var(--border-radius-default);
-
-  background: var(--color-background-secondary);
-}
-
-.healthHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.healthTitle {
-  margin: 0;
-
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.healthWide {
+  grid-column: 1 / -1;
 }
 
 .healthBig {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: baseline;
 }
 
-.healthRow {
+.big {
+  font-family: var(--font-family-monospace);
+  font-size: 2.125rem;
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--planner-kind, var(--pv-fg));
+}
+
+.macros {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.macroRow {
+  display: grid;
+  grid-template-columns: 5.25rem 6.5rem minmax(0, 1fr);
+  gap: 0.625rem;
+  align-items: center;
+}
+
+.healthTime {
+  flex: none;
+
+  width: 2.875rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
 }
 
 .healthRowHead {
   display: flex;
   gap: 0.5rem;
   justify-content: space-between;
+
+  margin-bottom: 0.25rem;
+
   font-size: 0.875rem;
 }
 
 .healthRowValue {
-  font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.healthItem {
-  display: flex;
-  gap: 0.625rem;
-  align-items: center;
-
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--color-borders);
-
-  font-size: 0.875rem;
-}
-
-.healthItemBody {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.healthExample {
-  cursor: var(--custom-cursor, pointer);
-
-  padding: 0.25rem 0.625rem;
-  border: 1px solid var(--color-borders);
-  border-radius: 1rem;
-
-  font-size: 0.8125rem;
-  color: var(--color-text);
-
-  background: var(--color-background);
-
-  &:disabled {
-    cursor: default;
-    opacity: 0.5;
-  }
-}
-
-.healthBars {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.375rem;
-  align-items: end;
-}
-
-.healthBarColumn {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  align-items: center;
-}
-
-.healthBarValue {
-  min-height: 0.875rem;
-  font-family: var(--font-family-monospace);
-  font-size: 0.625rem;
-  color: var(--color-text-secondary);
-}
-
-.healthBarTrack {
-  position: relative;
-
-  overflow: hidden;
-  display: block;
-
-  width: 100%;
-  height: 3rem;
-  border-radius: 0.25rem;
-
-  background: var(--color-borders);
-}
-
-.healthBarFill {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-
-  border-radius: 0.25rem;
-
-  background: var(--color-primary);
-}
-
-.healthDots {
-  display: grid;
-  grid-auto-columns: minmax(0, 1fr);
-  grid-auto-flow: column;
-
-  height: 3rem;
-  padding-block: 0.25rem;
-}
-
-.healthDotColumn {
-  position: relative;
-}
-
-.healthDot {
-  position: absolute;
-  left: 50%;
-  transform: translate(-50%, 50%);
-
-  width: 0.375rem;
-  height: 0.375rem;
-  border-radius: 50%;
-
-  background: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+  color: var(--planner-kind);
 }
 
 .healthFacts {
@@ -2851,10 +2691,197 @@
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--planner-radius);
+
+  background: var(--pv-panel);
+}
+
+.healthFactLabel {
+  overflow: hidden;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.healthFactValue {
+  font-family: var(--font-family-monospace);
+  font-weight: var(--font-weight-semibold);
+  color: var(--planner-kind, var(--pv-fg));
 }
 
 .healthGoalForm {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+
+  .fieldInput {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+// Столбики недели с пунктиром цели
+.bars {
+  position: relative;
+
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+
+  height: 9.375rem;
+  padding-top: 1.125rem;
+}
+
+.barsColumn {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+  justify-content: flex-end;
+
+  min-width: 0;
+  height: 100%;
+}
+
+.barsValue {
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-muted);
+  white-space: nowrap;
+}
+
+.barsFill {
+  display: block;
+
+  width: 100%;
+  max-width: 2.125rem;
+  border-radius: 0.375rem 0.375rem 0.125rem 0.125rem;
+
+  background: var(--planner-kind, var(--pv-accent));
+
+  .barsColumnLow & {
+    background: var(--pv-red);
+  }
+
+  .barsColumnCurrent & {
+    box-shadow: 0 0 0 0.125rem var(--pv-fg);
+  }
+}
+
+.barsGoal {
+  pointer-events: none;
+
+  position: absolute;
+  right: 0;
+  left: 0;
+
+  border-top: 1px dashed var(--pv-faint);
+}
+
+.barsGoalLabel {
+  position: absolute;
+  top: -1rem;
+  right: 0;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  color: var(--pv-faint);
+}
+
+.barsLabels {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+}
+
+.barsLabel {
+  flex: 1 1 0;
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+.barsLabelCurrent {
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+// График веса
+.spark {
+  display: block;
+  width: 100%;
+}
+
+.sparkGoal {
+  stroke: var(--pv-faint);
+  stroke-dasharray: 4 4;
+}
+
+.sparkLabel {
+  font-family: var(--font-family-monospace);
+  font-size: 0.6875rem;
+  fill: var(--pv-faint);
+}
+
+.sparkLine {
+  fill: none;
+  stroke: var(--pv-green);
+  stroke-width: 2;
+}
+
+.sparkDot {
+  fill: var(--pv-green);
+}
+
+// ── уведомление с «Отменить» ─────────────────────────────────────────────────
+
+.toast {
+  pointer-events: none;
+
+  position: absolute;
+  z-index: 30;
+  bottom: 1.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  max-width: calc(100% - 2rem);
+  padding: 0.625rem 1.125rem;
+  border-radius: 1.375rem;
+
+  font-size: 0.875rem;
+  color: var(--pv-panel);
+
+  background: var(--pv-fg);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+
+  @media (max-width: 925px) {
+    bottom: 1rem;
+  }
+}
+
+.toastUndo {
+  pointer-events: auto;
+  cursor: var(--custom-cursor, pointer);
+
+  flex: none;
+
+  padding: 0;
+  border: none;
+
+  font-size: inherit;
+  font-weight: var(--font-weight-semibold);
+  color: inherit;
+  text-decoration: underline;
+
+  background: none;
 }

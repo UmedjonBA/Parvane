@@ -4,6 +4,7 @@ import type { PlannerState, PlannerStatus, PlannerTask } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
+import buildClassName from '../../../util/buildClassName';
 import {
   formatClock, formatDay, formatRepeat, formatStatus,
 } from './plannerFormat';
@@ -16,8 +17,7 @@ import { showPlannerNotice, updatePlanner } from './plannerStore';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
-import Checkbox from '../../ui/Checkbox';
+import Icon from '../../common/icons/Icon';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
 import PlannerDetailsFold from './PlannerDetailsFold';
@@ -36,7 +36,6 @@ type OwnProps = {
   task: PlannerTask;
   today: string;
   picked: string;
-  backLabel: string;
   onBack: NoneToVoidFunction;
   onPickDay: (day: string) => void;
   onOpenTask: (taskId: string, day?: string) => void;
@@ -48,7 +47,7 @@ type Pending = { kind: 'patch'; changes: Partial<PlannerTask>; notice: string } 
 const STEP_MAX_LENGTH = 160;
 
 const PlannerTaskEditor = ({
-  state, task, today, picked, backLabel, onBack, onPickDay, onOpenTask,
+  state, task, today, picked, onBack, onPickDay, onOpenTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -257,11 +256,14 @@ const PlannerTaskEditor = ({
     onBack();
   });
 
-  const handleDone = useLastCallback((isDone: boolean) => {
+  const handleDone = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const { checked } = e.currentTarget;
     updatePlanner((draft) => {
-      setTaskDone(draft, task, isDone);
-    }, lang(isDone ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
+      setTaskDone(draft, task, checked);
+    }, lang(checked ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
   });
+
+  const isDone = task.status === 'done';
 
   const doneSteps = task.steps.filter((step) => step.isDone).length;
   const detailsSummary = [
@@ -274,23 +276,26 @@ const PlannerTaskEditor = ({
 
   return (
     <div className={styles.editor}>
-      <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
-        {backLabel}
-      </Button>
       <h2 className={styles.editorTitle}><PlannerName name={task.name} /></h2>
       {task.repeat && (
-        <p className={styles.small}>
+        <p className={styles.seriesBox}>
+          <Icon name="loop" />
           {isInstance
             ? lang('PlannerSeriesInstanceHint', { rule: formatRepeat(lang, task.repeat) })
             : lang('PlannerSeriesTemplateHint', { rule: formatRepeat(lang, task.repeat) })}
           {isInstance && (
-            <Button isText size="tiny" onClick={handleOpenSeries}>{lang('PlannerSeriesOpen')}</Button>
+            <button type="button" className={styles.linkButton} onClick={handleOpenSeries}>
+              {lang('PlannerSeriesOpen')}
+            </button>
           )}
         </p>
       )}
       {task.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
       {(!task.repeat || isInstance) && (
-        <Checkbox label={lang('PlannerMarkDone')} checked={task.status === 'done'} onCheck={handleDone} />
+        <label className={buildClassName(styles.row, styles.rowButton, isDone && styles.rowDone)}>
+          <input type="checkbox" className={styles.check} checked={isDone} onChange={handleDone} />
+          <span>{lang(isDone ? 'PlannerStatusDone' : 'PlannerMarkDone')}</span>
+        </label>
       )}
       <div className={styles.fields}>
         {(!task.repeat || isInstance) && (
@@ -320,15 +325,21 @@ const PlannerTaskEditor = ({
           disabled={isInstance}
           onChange={handleDescription}
         />
-        <h3 className={styles.group}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
+        <h3 className={styles.fieldLabel}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
         {task.steps.map((step, index) => (
-          <Checkbox
+          <label
             key={`${index}${step.text}`}
-            value={String(index)}
-            label={step.text}
-            checked={step.isDone}
-            onChange={handleStepToggle}
-          />
+            className={buildClassName(styles.row, styles.rowButton, styles.rowStep, step.isDone && styles.rowDone)}
+          >
+            <input
+              type="checkbox"
+              className={buildClassName(styles.check, styles.checkSmall)}
+              value={String(index)}
+              checked={step.isDone}
+              onChange={handleStepToggle}
+            />
+            <span className={styles.rowTitle}>{step.text}</span>
+          </label>
         ))}
         <form className={styles.stepForm} onSubmit={handleStepSubmit}>
           <PlannerField
@@ -338,7 +349,9 @@ const PlannerTaskEditor = ({
             maxLength={STEP_MAX_LENGTH}
             onInput={setStepText}
           />
-          <Button type="submit" round size="smaller" iconName="add" ariaLabel={lang('PlannerStepAdd')} />
+          <button type="submit" className={styles.ib} aria-label={lang('PlannerStepAdd')}>
+            <Icon name="add" />
+          </button>
         </form>
         <div className={styles.fields}>
           <Select
@@ -356,10 +369,13 @@ const PlannerTaskEditor = ({
           <div className={styles.repeatBlock}>
             <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
             {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
-            <Button size="smaller" color="translucent" onClick={handleRepeatSave}>{lang('PlannerRepeatSave')}</Button>
+            <button type="button" className={styles.btn} onClick={handleRepeatSave}>
+              <Icon name="loop" />
+              {lang('PlannerRepeatSave')}
+            </button>
           </div>
         )}
-        <Button size="smaller" color="translucent" onClick={handleFindSlots}>{lang('PlannerFindSlots')}</Button>
+        <button type="button" className={styles.btn} onClick={handleFindSlots}>{lang('PlannerFindSlots')}</button>
         <div className={styles.slots} aria-live="polite">
           {slotHint && <span className={styles.small}>{slotHint}</span>}
           {slots?.map((slot, index) => (
@@ -382,7 +398,10 @@ const PlannerTaskEditor = ({
           onCancel={handleCancelPrompt}
         />
       ) : (
-        <Button isText size="smaller" color="danger" onClick={handleDelete}>{lang('PlannerDeleteTask')}</Button>
+        <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
+          <Icon name="delete" />
+          {lang('PlannerDeleteTask')}
+        </button>
       )}
     </div>
   );

@@ -9,12 +9,17 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   name: string;
+  // Только ссылки на заметки, без остального текста (подпись ряда: заметки из описания задачи)
+  onlyLinks?: boolean;
 };
 
 // Название записи: `[[Заметка]]` и `[[Заметка|подпись]]` — ссылки, открывающие заметку в «Знаниях».
 // Название стоит внутри кнопок рядов и блоков, поэтому ссылка — не кнопка и не отдаёт нажатие ряду
-const PlannerName = ({ name }: OwnProps) => {
-  const parts = useMemo(() => splitNameLinks(name), [name]);
+const PlannerName = ({ name, onlyLinks }: OwnProps) => {
+  const parts = useMemo(() => {
+    const all = splitNameLinks(name);
+    return onlyLinks ? all.filter((part) => part.note !== undefined) : all;
+  }, [name, onlyLinks]);
 
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLSpanElement>) => {
     e.stopPropagation();

@@ -2688,6 +2688,41 @@ export interface LangPair {
   'PlannerNoticeHealthDeleted': undefined;
   'PlannerHealthBudgetReduced': undefined;
   'PlannerHealthFood': undefined;
+  'PlannerTomorrow': undefined;
+  'PlannerDuePassed': undefined;
+  'PlannerDueToday': undefined;
+  'PlannerDueTomorrow': undefined;
+  'PlannerAllDayTiny': undefined;
+  'PlannerDueTiny': undefined;
+  'PlannerAddForDay': undefined;
+  'PlannerPrevDay': undefined;
+  'PlannerNextDay': undefined;
+  'PlannerSchedule': undefined;
+  'PlannerNewTask': undefined;
+  'PlannerUndatedShort': undefined;
+  'PlannerUndatedHint': undefined;
+  'PlannerDailyNote': undefined;
+  'PlannerDailyNoteHint': undefined;
+  'PlannerLayers': undefined;
+  'PlannerLayerWork': undefined;
+  'PlannerCalMonthShort': undefined;
+  'PlannerYearLegend': undefined;
+  'PlannerQuickExamplesTitle': undefined;
+  'PlannerQuickExamples': undefined;
+  'PlannerSettingsGoalsHint': undefined;
+  'PlannerHealthGoalsShort': undefined;
+  'PlannerHealthCloseDay': undefined;
+  'PlannerHealthDayClosedHint': undefined;
+  'PlannerHealthDayClosed': undefined;
+  'PlannerHealthDayReopened': undefined;
+  'PlannerHealthNoMacros': undefined;
+  'PlannerHealthNoRecords': undefined;
+  'PlannerHealthWeightChart': undefined;
+  'PlannerHealthSleepAdd': undefined;
+  'PlannerHealthSleepExample': undefined;
+  'PlannerHealthWorkoutExample': undefined;
+  'PlannerHealthActivityHint': undefined;
+  'PlannerHealthKcalWeek': undefined;
   'ParvaneSectionKnowledge': undefined;
   'KnowledgeNotes': undefined;
   'KnowledgeGraph': undefined;
@@ -4826,6 +4861,30 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickWorkoutSets': {
     'count': V;
+  };
+  'PlannerMinutesShort': {
+    'minutes': V;
+  };
+  'PlannerStepsCount': {
+    'done': V;
+    'total': V;
+  };
+  'PlannerFeedWake': {
+    'sleep': V;
+  };
+  'PlannerSleepWarn': {
+    'sleep': V;
+    'budget': V;
+  };
+  'PlannerKcalLeftOf': {
+    'left': V;
+    'goal': V;
+  };
+  'PlannerMonthSleep': {
+    'value': V;
+  };
+  'PlannerQuickDefault': {
+    'date': V;
   };
   'KnowledgeDeleteConfirm': {
     'name': V;

@@ -1,15 +1,17 @@
 import { memo } from '../../../lib/teact/teact';
 
+import type { PlannerLayers } from './plannerLayers';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatHours, formatWeekday, listColorStyle,
+  formatDay, formatHours, formatSpan, formatWeekday, listColorStyle,
 } from './plannerFormat';
+import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatPlainName } from './plannerLinks';
 import {
   countConflicts, countUnrated, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getListColor,
-  getLoadFraction, getMonthGridKeys, getTasksForDay, instanceKey, toDayKey,
+  getMonthGridKeys, getTasksForDay, instanceKey, toDayKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -24,6 +26,7 @@ type OwnProps = {
   month: Date;
   picked: string;
   today: string;
+  layers: PlannerLayers;
   onPickDay: (day: string) => void;
   onCreateForDay: (day: string) => void;
   onOpenTask: (taskId: string, day: string) => void;
@@ -31,18 +34,29 @@ type OwnProps = {
   onMoveTask: (taskKey: string, day: string) => void;
 };
 
+type Entry = {
+  key: string;
+  // `id` задачи либо `id@день` экземпляра ряда; у события нет
+  taskId?: string;
+  label: string;
+  kind: 'event' | 'task' | 'due';
+  color: number;
+  order: string;
+};
+
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6];
 const PREVIEW_COUNT = 2;
-const MARK_COUNT = 3;
-// Оттенок HSL: 140 — зелёный (день свободен), 0 — красный (бюджет исчерпан)
-const FREE_DAY_HUE = 140;
+const DOT_COUNT = 4;
+const KIND_CLASSES = {
+  event: styles.kindEvent,
+  task: styles.kindTask,
+  due: styles.kindDue,
+};
 
-function getLoadHue(fraction: number) {
-  return Math.round(FREE_DAY_HUE * (1 - fraction));
-}
-
+// Месяц: в клетке — число, занятые часы, сон и первые дела дня с точкой цвета записи; на телефоне — число
+// и точки. Праздник заливает клетку
 const PlannerMonth = ({
-  state, month, picked, today, onPickDay, onCreateForDay, onOpenTask, onMoveTask,
+  state, month, picked, today, layers, onPickDay, onCreateForDay, onOpenTask, onMoveTask,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -77,66 +91,66 @@ const PlannerMonth = ({
     e.dataTransfer.effectAllowed = 'move';
   });
 
-  // Полные недели: дни соседних месяцев показаны серым, нажатие переходит к ним
+  // Полные недели: дни соседних месяцев показаны бледнее, нажатие переходит к ним
   const days = getMonthGridKeys(month);
   const monthPrefix = toDayKey(month).slice(0, 7);
 
   return (
     <div className={styles.month} role="grid">
       {WEEKDAY_INDEXES.map((index) => (
-        <span key={`weekday${index}`} className={styles.weekday}>{formatWeekday(lang, index)}</span>
+        <span key={`weekday${index}`} className={styles.monthWeekday}>{formatWeekday(lang, index)}</span>
       ))}
       {days.map((day) => {
         const minutes = getDayLoad(state, day);
-        const deadlines = getDeadlines(state, day);
         const unrated = countUnrated(state, day);
         const conflicts = countConflicts(state, day);
-        const fraction = getLoadFraction(state, minutes);
         const events = getEventsForDay(state, day);
-        const entries = [
-          ...deadlines.map((task) => ({
-            key: `due${task.id}`,
-            taskId: task.id,
-            label: lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) }),
-            isDue: true,
-            color: getListColor(state, task.project),
+        const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
+        const isShort = isShortSleep(state, day);
+        // События на весь день — первыми, дальше дела по времени начала, сроки — в конце
+        const dayItems: Entry[] = [
+          ...events.map((event): Entry => ({
+            key: `event${instanceKey(event)}`,
+            label: formatPlainName(event.name),
+            kind: event.isHoliday && !event.color ? 'due' : 'event',
+            color: event.color || 0,
+            order: event.isAllDay ? '' : event.start,
           })),
-          ...getTasksForDay(state, day).filter((task) => !deadlines.includes(task)).map((task) => ({
+          ...getTasksForDay(state, day).map((task): Entry => ({
             key: `task${instanceKey(task)}`,
             taskId: instanceKey(task),
-            label: `${task.start ? `${task.start} ` : ''}${formatPlainName(task.name)}`,
-            isDue: false,
+            label: formatPlainName(task.name),
+            kind: 'task',
             color: getListColor(state, task.project),
+            order: task.start || '00:00',
           })),
-          ...events.map((event) => ({
-            key: `event${instanceKey(event)}`,
-            taskId: undefined,
-            label: `${event.isAllDay ? '' : `${event.start} `}${formatPlainName(event.name)}`,
-            isDue: false,
-            color: event.color || 0,
-          })),
-        ];
+        ].sort((a, b) => a.order.localeCompare(b.order));
+        const dueItems = getDeadlines(state, day).map((task): Entry => ({
+          key: `due${task.id}`,
+          taskId: task.id,
+          label: lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) }),
+          kind: 'due',
+          color: 0,
+          order: '',
+        }));
+        const entries = layers.work ? [...dayItems, ...dueItems] : [];
         const holiday = events.find((event) => event.isHoliday);
-        // События на весь день — цветными метками у числа: в клетке на телефоне подписей нет
-        const allDayMarks = events.filter((event) => event.isAllDay).slice(0, MARK_COUNT);
-        const weekday = fromDayKey(day).getDay();
+        const allDayCount = events.filter((event) => event.isAllDay).length;
+        // Точки (телефон): по одной на цвет записи, недосып — красная
+        const dots = [...new Map(entries.map((entry) => [`${entry.kind}${entry.color}`, entry])).values()]
+          .slice(0, DOT_COUNT);
 
         return (
           <div
             key={day}
             className={buildClassName(
-              styles.day,
-              day === today && styles.dayToday,
-              day === picked && styles.daySelected,
-              (weekday === 0 || weekday === 6) && styles.dayWeekend,
-              holiday && styles.dayHoliday,
-              !day.startsWith(monthPrefix) && styles.dayOutside,
+              styles.monthCell,
+              day === today && styles.monthCellToday,
+              day === picked && styles.monthCellPicked,
+              holiday && styles.monthCellHoliday,
+              !day.startsWith(monthPrefix) && styles.monthCellOutside,
             )}
-            style={[
-              `--planner-load: ${Math.round(fraction * 100)}%`,
-              `--planner-load-hue: ${getLoadHue(fraction)}`,
-              holiday?.color ? `--planner-holiday-color: var(--color-peer-${holiday.color - 1})` : undefined,
-            ].filter(Boolean).join('; ')}
+            style={holiday?.color ? `--planner-holiday-color: var(--color-peer-${holiday.color - 1})` : undefined}
             data-day={day}
             data-holiday={holiday ? '1' : undefined}
             role="gridcell"
@@ -149,33 +163,29 @@ const PlannerMonth = ({
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            <span className={styles.dayHead}>
-              <span className={styles.dayNumber}>{fromDayKey(day).getDate()}</span>
-              {Boolean(allDayMarks.length) && (
-                <span className={styles.dayMarks} data-all-day-marks={allDayMarks.length}>
-                  {allDayMarks.map((event) => (
-                    <span
-                      key={instanceKey(event)}
-                      className={styles.dayMark}
-                      style={listColorStyle(event.color)}
-                      title={formatPlainName(event.name)}
-                    />
-                  ))}
+            <span className={styles.monthHead}>
+              <span className={styles.monthNumber}>{fromDayKey(day).getDate()}</span>
+              {Boolean(minutes) && (
+                <span className={buildClassName(styles.monthHours, minutes > getDayBudget(state, day) && styles.red)}>
+                  {conflicts ? '! ' : ''}
+                  {formatHours(lang, minutes)}
                 </span>
               )}
-              <span className={styles.dayHours}>
-                {conflicts ? '! ' : ''}
-                {formatHours(lang, minutes)}
-              </span>
             </span>
+            {sleep && (
+              <span
+                className={buildClassName(
+                  styles.monthItem, styles.monthSleep, isShort ? styles.kindDue : styles.kindSleep,
+                )}
+              >
+                {lang('PlannerMonthSleep', { value: formatSpan(sleep.value) })}
+              </span>
+            )}
             {entries.slice(0, PREVIEW_COUNT).map((entry) => (entry.taskId !== undefined ? (
               <button
                 key={entry.key}
                 type="button"
-                className={buildClassName(
-                  styles.preview, styles.previewTask, entry.isDue && styles.previewDue,
-                  Boolean(entry.color) && styles.previewColored,
-                )}
+                className={buildClassName(styles.monthItem, styles.monthItemButton, KIND_CLASSES[entry.kind])}
                 style={listColorStyle(entry.color)}
                 title={entry.label}
                 draggable
@@ -187,7 +197,7 @@ const PlannerMonth = ({
             ) : (
               <span
                 key={entry.key}
-                className={buildClassName(styles.preview, Boolean(entry.color) && styles.previewColored)}
+                className={buildClassName(styles.monthItem, KIND_CLASSES[entry.kind])}
                 style={listColorStyle(entry.color)}
                 title={entry.label}
               >
@@ -195,13 +205,20 @@ const PlannerMonth = ({
               </span>
             )))}
             {entries.length > PREVIEW_COUNT && (
-              <span className={buildClassName(styles.small, styles.previewMore)}>
-                {lang('PlannerMore', { count: entries.length - PREVIEW_COUNT })}
+              <span className={buildClassName(styles.monthItem, styles.monthMore)}>
+                {`+${entries.length - PREVIEW_COUNT}`}
               </span>
             )}
-            {!entries.length && <span className={styles.small}>{lang('PlannerFree')}</span>}
-            {Boolean(unrated) && <span className={styles.warning}>{`+${unrated} ?`}</span>}
-            <span className={styles.loadBar} aria-hidden="true"><span className={styles.loadFill} /></span>
+            <span className={styles.monthDots} data-all-day-marks={allDayCount || undefined}>
+              {dots.map((entry) => (
+                <span
+                  key={entry.key}
+                  className={buildClassName(styles.monthDot, KIND_CLASSES[entry.kind])}
+                  style={listColorStyle(entry.color)}
+                />
+              ))}
+              {sleep && isShort && <span className={buildClassName(styles.monthDot, styles.kindDue)} />}
+            </span>
           </div>
         );
       })}

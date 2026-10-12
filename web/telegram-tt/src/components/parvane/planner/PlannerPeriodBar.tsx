@@ -1,6 +1,8 @@
 import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useState } from '../../../lib/teact/teact';
 
+import type { PlannerLayer, PlannerLayers } from './plannerLayers';
+
 import buildClassName from '../../../util/buildClassName';
 import { formatMonthShort } from './plannerFormat';
 import { fromDayKey, getYearMonths, shiftPeriod, toDayKey } from './plannerModel';
@@ -9,7 +11,8 @@ import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
+import Icon from '../../common/icons/Icon';
+import PlannerLayerChips from './PlannerLayerChips';
 
 import styles from './Planner.module.scss';
 
@@ -18,23 +21,27 @@ type OwnProps = {
   prevLabel: string;
   nextLabel: string;
   picked: string;
-  // Нет — переключателя нет (узкий экран: вид календаря выбирается в настройках)
-  segments?: { value: string; label: string }[];
+  today: string;
+  // Телефон: стрелок и слоёв в шапке нет (дни листает жест, слои стоят над календарём)
+  isNarrow: boolean;
+  segments: { value: string; label: string }[];
   activeSegment: string;
   segmentsLabel: string;
-  // Справа от навигации (узкий экран — шестерёнка настроек)
+  layers: PlannerLayers;
+  // Справа от переключателя вида: настройки, новая запись
   trailing?: TeactNode;
   onPrev: NoneToVoidFunction;
   onNext: NoneToVoidFunction;
   onToday: NoneToVoidFunction;
   onPickDay: (day: string) => void;
   onSwitchSegment: (value: string) => void;
+  onToggleLayer: (layer: PlannerLayer) => void;
 };
 
-// Панель периода: заголовок-кнопка с выбором месяца и года, стрелки, «Сегодня», переключатель
+// Шапка календаря: заголовок-кнопка с выбором месяца и года, стрелки, «Сегодня», слои, переключатель вида
 const PlannerPeriodBar = ({
-  title, prevLabel, nextLabel, picked, segments, activeSegment, segmentsLabel, trailing,
-  onPrev, onNext, onToday, onPickDay, onSwitchSegment,
+  title, prevLabel, nextLabel, picked, today, isNarrow, segments, activeSegment, segmentsLabel, layers, trailing,
+  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onToggleLayer,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -70,7 +77,7 @@ const PlannerPeriodBar = ({
   const pickedDate = fromDayKey(picked);
 
   return (
-    <div className={styles.periodBar}>
+    <div className={buildClassName(styles.hdr, styles.calendarHdr)}>
       <div className={styles.periodNav}>
         <button
           type="button"
@@ -82,30 +89,29 @@ const PlannerPeriodBar = ({
         >
           {title}
         </button>
-        <Button round size="tiny" color="translucent" iconName="previous" ariaLabel={prevLabel} onClick={onPrev} />
-        <Button size="tiny" color="translucent" onClick={onToday}>{lang('PlannerToday')}</Button>
-        <Button round size="tiny" color="translucent" iconName="next" ariaLabel={nextLabel} onClick={onNext} />
-        {Boolean(trailing) && <span className={styles.periodTrailing}>{trailing}</span>}
+        {!isNarrow && (
+          <>
+            <button type="button" className={styles.ib} aria-label={prevLabel} onClick={onPrev}>
+              <Icon name="previous" />
+            </button>
+            <button type="button" className={styles.ib} aria-label={nextLabel} onClick={onNext}>
+              <Icon name="next" />
+            </button>
+          </>
+        )}
+        {(!isNarrow || picked !== today) && (
+          <button type="button" className={styles.pill} onClick={onToday}>{lang('PlannerToday')}</button>
+        )}
         {isPickerOpen && (
           <div className={styles.periodPicker} role="dialog" aria-label={lang('PlannerPickPeriod')}>
             <div className={styles.periodPickerYear}>
-              <Button
-                round
-                size="tiny"
-                color="translucent"
-                iconName="previous"
-                ariaLabel={lang('PlannerPrevYear')}
-                onClick={handlePrevYear}
-              />
+              <button type="button" className={styles.ib} aria-label={lang('PlannerPrevYear')} onClick={handlePrevYear}>
+                <Icon name="previous" />
+              </button>
               <span className={styles.periodPickerYearValue}>{pickerYear}</span>
-              <Button
-                round
-                size="tiny"
-                color="translucent"
-                iconName="next"
-                ariaLabel={lang('PlannerNextYear')}
-                onClick={handleNextYear}
-              />
+              <button type="button" className={styles.ib} aria-label={lang('PlannerNextYear')} onClick={handleNextYear}>
+                <Icon name="next" />
+              </button>
             </div>
             <div className={styles.periodPickerMonths}>
               {getYearMonths(pickerYear).map((month) => (
@@ -127,22 +133,23 @@ const PlannerPeriodBar = ({
           </div>
         )}
       </div>
-      {segments && (
-        <div className={styles.segments} role="group" aria-label={segmentsLabel}>
-          {segments.map((segment) => (
-            <button
-              key={segment.value}
-              type="button"
-              className={buildClassName(styles.segment, segment.value === activeSegment && styles.segmentActive)}
-              aria-pressed={segment.value === activeSegment}
-              data-value={segment.value}
-              onClick={handleSegmentClick}
-            >
-              {segment.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <span className={styles.grow} />
+      {!isNarrow && <PlannerLayerChips layers={layers} onToggle={onToggleLayer} />}
+      <div className={styles.seg} role="group" aria-label={segmentsLabel}>
+        {segments.map((segment) => (
+          <button
+            key={segment.value}
+            type="button"
+            className={buildClassName(styles.segButton, segment.value === activeSegment && styles.segOn)}
+            aria-pressed={segment.value === activeSegment}
+            data-value={segment.value}
+            onClick={handleSegmentClick}
+          >
+            {segment.label}
+          </button>
+        ))}
+      </div>
+      {trailing}
     </div>
   );
 };

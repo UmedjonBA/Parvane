@@ -4,6 +4,7 @@ import type { PlannerEvent, PlannerEventError, PlannerState } from './plannerMod
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
 
+import buildClassName from '../../../util/buildClassName';
 import { formatRepeat } from './plannerFormat';
 import {
   ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
@@ -14,6 +15,7 @@ import { updatePlanner } from './plannerStore';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
@@ -30,7 +32,6 @@ type OwnProps = {
   state: PlannerState;
   // Событие либо экземпляр ряда (`instanceDay`)
   event: PlannerEvent;
-  backLabel: string;
   onBack: NoneToVoidFunction;
 };
 
@@ -52,7 +53,7 @@ type Pending = { kind: 'save'; patch: Partial<PlannerEvent> } | { kind: 'delete'
 
 // Правка события (spec 011): поля, правило повтора; у экземпляра ряда — выбор объёма правки
 const PlannerEventEditor = ({
-  state, event, backLabel, onBack,
+  state, event, onBack,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -178,12 +179,10 @@ const PlannerEventEditor = ({
 
   return (
     <form className={styles.editor} onSubmit={handleSubmit}>
-      <Button isText size="smaller" className={styles.back} iconName="arrow-left" onClick={onBack}>
-        {backLabel}
-      </Button>
       <h2 className={styles.editorTitle}><PlannerName name={event.name} /></h2>
       {event.repeat && (
-        <p className={styles.small}>
+        <p className={styles.seriesBox}>
+          <Icon name="loop" />
           {isInstance
             ? lang('PlannerSeriesInstanceHint', { rule: formatRepeat(lang, event.repeat) })
             : formatRepeat(lang, event.repeat)}
@@ -222,7 +221,10 @@ const PlannerEventEditor = ({
       ) : (
         <div className={styles.actions}>
           <Button type="submit" size="smaller">{lang('Save')}</Button>
-          <Button isText size="smaller" color="danger" onClick={handleDelete}>{lang('PlannerDeleteEvent')}</Button>
+          <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleDelete}>
+            <Icon name="delete" />
+            {lang('PlannerDeleteEvent')}
+          </button>
         </div>
       )}
     </form>

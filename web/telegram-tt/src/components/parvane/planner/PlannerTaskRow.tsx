@@ -1,16 +1,21 @@
-import { memo } from '../../../lib/teact/teact';
+import type { TeactNode } from '../../../lib/teact/teact';
+import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerTask } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatDay, formatProject, listColorStyle } from './plannerFormat';
-import { instanceKey, setTaskDone } from './plannerModel';
+import {
+  formatDayShort, formatProject, formatStatus, listColorStyle,
+} from './plannerFormat';
+import {
+  addDays, instanceKey, setTaskDone, toDayKey,
+} from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
+import Icon from '../../common/icons/Icon';
 import PlannerName from './PlannerName';
 
 import styles from './Planner.module.scss';
@@ -19,34 +24,30 @@ export const TASK_DRAG_TYPE = 'application/x-parvane-planner-task';
 
 type OwnProps = {
   task: PlannerTask;
-  // `all` — строка в списках (дата или список в подписи), `day` — в расписании дня
+  // `all` — строка в списках (дата и список в подписи), `day` — в расписании дня
   context: 'all' | 'day';
-  // Цвет списка задачи (0 — нет) — полоска слева
+  // Цвет списка задачи (0 — нет) — цвет квадрата списка в подписи
   color?: number;
   // Строка стоит на экране своего списка — список в подписи не повторяется
   noProject?: boolean;
-  canMoveUp?: boolean;
-  canMoveDown?: boolean;
+  // Справа от строки (кнопка назначения дня у задачи без даты)
+  trailing?: TeactNode;
   // `day` — день экземпляра ряда (spec 011)
   onOpen: (taskId: string, day?: string) => void;
-  // Стрелки порядка в очереди (T014) — только там, где передан обработчик
-  onReorder?: (taskId: string, direction: -1 | 1) => void;
 };
 
+// Срок ближе этого числа дней выделяется красным
+const DUE_SOON_DAYS = 2;
+
+// Строка задачи: круглая галочка, название, подпись (срок, шаги, повтор, заметки), справа — время и оценка
 const PlannerTaskRow = ({
-  task, context, color, noProject, canMoveUp, canMoveDown, onOpen, onReorder,
+  task, context, color, noProject, trailing, onOpen,
 }: OwnProps) => {
   const lang = useLang();
 
+  const [today] = useState(() => toDayKey(new Date()));
+
   const isDone = task.status === 'done';
-
-  const handleMoveUp = useLastCallback(() => {
-    onReorder!(task.id, -1);
-  });
-
-  const handleMoveDown = useLastCallback(() => {
-    onReorder!(task.id, 1);
-  });
 
   const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const checked = e.currentTarget.checked;
@@ -64,20 +65,26 @@ const PlannerTaskRow = ({
     e.dataTransfer.effectAllowed = 'move';
   });
 
-  const meta = [task.minutes === undefined ? lang('PlannerNoEstimate') : lang('PlannerMinutesValue', {
-    minutes: task.minutes,
-  })];
-  if (context === 'all') {
-    if (task.day) meta.push(formatDay(lang, task.day));
-    else if (!noProject) meta.push(formatProject(lang, task.project));
-  }
-  if (task.due) meta.push(lang('PlannerDueValue', { date: formatDay(lang, task.due) }));
-  if (task.steps.length) meta.push(`${task.steps.filter((step) => step.isDone).length}/${task.steps.length}`);
-  if (task.repeat) meta.push(lang('PlannerRepeatMark'));
+  const hasDue = Boolean(task.due) && !isDone;
+  const dueLabel = !hasDue ? undefined
+    : task.due! < today ? lang('PlannerDuePassed')
+      : task.due === today ? lang('PlannerDueToday')
+        : task.due === addDays(today, 1) ? lang('PlannerDueTomorrow')
+          : lang('PlannerDueValue', { date: formatDayShort(lang, task.due!) });
+  const isDueSoon = hasDue && task.due! <= addDays(today, DUE_SOON_DAYS);
+  const doneSteps = task.steps.filter((step) => step.isDone).length;
+  const isListShown = context === 'all' && !noProject && Boolean(task.project);
+  const isDayShown = context === 'all' && Boolean(task.day);
+  const hasNotes = task.description.includes('[[');
+  const hasSub = isListShown || isDayShown || hasDue || Boolean(task.steps.length) || Boolean(task.repeat) || hasNotes;
+  const meta = [
+    task.start,
+    task.minutes === undefined ? undefined : lang('PlannerMinutesShort', { minutes: task.minutes }),
+  ].filter(Boolean).join(' · ');
 
   return (
     <div
-      className={buildClassName(styles.task, isDone && styles.taskDone, Boolean(color) && styles.taskColored)}
+      className={buildClassName(styles.row, isDone && styles.rowDone)}
       style={listColorStyle(color)}
       draggable
       data-task-id={task.id}
@@ -86,37 +93,43 @@ const PlannerTaskRow = ({
     >
       <input
         type="checkbox"
-        className={styles.taskCheck}
+        className={styles.check}
         checked={isDone}
         aria-label={lang('PlannerAriaDone', { name: task.name })}
         onChange={handleToggle}
       />
-      <button type="button" className={styles.taskButton} onClick={handleOpen}>
-        <span className={styles.taskName}><PlannerName name={task.name} /></span>
-        <span className={styles.small}>{meta.join(' · ')}</span>
+      <button type="button" className={styles.rowBody} data-kind="task" data-id={task.id} onClick={handleOpen}>
+        <span className={styles.rowTitle}>
+          <PlannerName name={task.name} />
+          {context === 'all' && task.status === 'active' && (
+            <span className={buildClassName(styles.tag, styles.rowTag)}>{formatStatus(lang, 'active')}</span>
+          )}
+        </span>
+        {hasSub && (
+          <span className={styles.rowSub}>
+            {isListShown && (
+              <span className={styles.rowSubItem}>
+                <span className={styles.listMark} />
+                {formatProject(lang, task.project)}
+              </span>
+            )}
+            {isDayShown && <span>{formatDayShort(lang, task.day!)}</span>}
+            {hasDue && (
+              <span className={buildClassName(styles.rowSubItem, isDueSoon && styles.red)}>
+                <Icon name="flag" />
+                {dueLabel}
+              </span>
+            )}
+            {Boolean(task.steps.length) && (
+              <span>{lang('PlannerStepsCount', { done: doneSteps, total: task.steps.length })}</span>
+            )}
+            {task.repeat && <span title={lang('PlannerRepeatMark')}><Icon name="loop" /></span>}
+            {hasNotes && <PlannerName name={task.description} onlyLinks />}
+          </span>
+        )}
       </button>
-      {onReorder && (
-        <div className={styles.taskReorder}>
-          <Button
-            round
-            size="tiny"
-            color="translucent"
-            iconName="up"
-            disabled={!canMoveUp}
-            ariaLabel={lang('PlannerAriaMoveUp', { name: task.name })}
-            onClick={handleMoveUp}
-          />
-          <Button
-            round
-            size="tiny"
-            color="translucent"
-            iconName="down"
-            disabled={!canMoveDown}
-            ariaLabel={lang('PlannerAriaMoveDown', { name: task.name })}
-            onClick={handleMoveDown}
-          />
-        </div>
-      )}
+      {Boolean(meta) && <span className={styles.rowMeta}>{meta}</span>}
+      {trailing}
     </div>
   );
 };

@@ -1,9 +1,9 @@
 import { memo } from '../../../lib/teact/teact';
 
+import buildClassName from '../../../util/buildClassName';
+
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-
-import Button from '../../ui/Button';
 
 import styles from './Planner.module.scss';
 
@@ -25,13 +25,19 @@ const PlannerSeriesPrompt = ({ title, onChoose, onCancel }: OwnProps) => {
 
   return (
     <div className={styles.seriesPrompt} role="group" aria-label={title}>
-      <p className={styles.summary}>{title}</p>
-      <div className={styles.actions}>
-        <Button size="smaller" onClick={handleOne}>{lang('PlannerSeriesOnlyThis')}</Button>
-        <Button size="smaller" color="translucent" onClick={handleFollowing}>{lang('PlannerSeriesFollowing')}</Button>
-        <Button size="smaller" color="translucent" onClick={handleAll}>{lang('PlannerSeriesAll')}</Button>
-        <Button isText size="smaller" onClick={onCancel}>{lang('Cancel')}</Button>
-      </div>
+      <p className={styles.seriesTitle}>{title}</p>
+      <button type="button" className={buildClassName(styles.btn, styles.btnWide)} onClick={handleOne}>
+        {lang('PlannerSeriesOnlyThis')}
+      </button>
+      <button type="button" className={buildClassName(styles.btn, styles.btnWide)} onClick={handleFollowing}>
+        {lang('PlannerSeriesFollowing')}
+      </button>
+      <button type="button" className={buildClassName(styles.btn, styles.btnWide)} onClick={handleAll}>
+        {lang('PlannerSeriesAll')}
+      </button>
+      <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onCancel}>
+        {lang('Cancel')}
+      </button>
     </div>
   );
 };

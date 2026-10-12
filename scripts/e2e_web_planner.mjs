@@ -45,9 +45,11 @@ try {
   const sidebar = page.locator('#FoldersSidebar');
   const today = todayKey();
   const todayCell = planner.locator(`[role="gridcell"][data-day="${today}"]`);
-  // Левая колонка (форма, редактор, настройки) и панель дня (spec 013)
+  // Карточка записи (форма, редактор) и окно настроек; день календаря — остров справа, на его место
+  // встаёт карточка
   const sidePane = planner.locator('[data-planner-side]');
   const dayPane = planner.locator('[data-planner-day]');
+  const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });
   const closeSide = async () => {
     await sidePane.getByRole('button', { name: 'Close' }).first().click();
     await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -101,7 +103,6 @@ try {
   await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
   assert.equal(await isShown(page, '#MiddleColumn'), false, 'переписка должна быть скрыта');
-  assert.match(await todayCell.innerText(), /Free/, 'пустой день помечен «Свободно»');
   console.log('OK: «План» открыт, колонки мессенджера скрыты');
 
   // ── Задача: создание, отмена, повтор ──────────────────────────────────────
@@ -120,17 +121,13 @@ try {
     await planner.getByRole('button', { name: 'Create', exact: true }).click();
     await planner.getByRole('heading', { name }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
-  // Форма открывается колонкой слева: календарь и панель дня остаются видны (spec 013, US1)
+  // Форма открывается справа на месте острова дня: календарь остаётся виден
   await openFullForm();
   await sidePane.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const boxes = {
-    side: await sidePane.boundingBox(), cell: await todayCell.boundingBox(), day: await dayPane.boundingBox(),
-  };
-  assert.ok(boxes.side && boxes.cell && boxes.day, `не все три колонки видны: ${JSON.stringify(boxes)}`);
-  assert.ok(
-    boxes.side.x + boxes.side.width <= boxes.cell.x + 1 && boxes.cell.x + boxes.cell.width <= boxes.day.x + 1,
-    `колонки перекрываются: ${JSON.stringify(boxes)}`,
-  );
+  const boxes = { side: await sidePane.boundingBox(), cell: await todayCell.boundingBox() };
+  assert.ok(boxes.side && boxes.cell, `форма и календарь должны быть видны: ${JSON.stringify(boxes)}`);
+  assert.ok(boxes.cell.x + boxes.cell.width <= boxes.side.x + 1, `форма перекрывает календарь: ${JSON.stringify(boxes)}`);
+  assert.equal(await dayPane.count(), 0, 'карточка записи встаёт на место острова дня');
   // Выбор дня в календаре меняет дату открытой формы
   const tomorrowKey = (() => {
     const date = new Date();
@@ -147,10 +144,10 @@ try {
   await todayCell.click({ position: { x: 10, y: 10 } });
   await expectFormDate(today, 'дата формы вернулась к сегодняшнему дню');
   await planner.getByRole('button', { name: 'Cancel' }).click();
-  console.log('OK: форма слева, календарь и панель дня видны; дата формы следует за выбранным днём');
+  console.log('OK: форма справа на месте дня, календарь виден; дата формы следует за выбранным днём');
 
   await createTask('Подготовить макет', 90, '14:00');
-  await todayCell.getByText('14:00 Подготовить макет').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await todayCell.getByText('Подготовить макет').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await todayCell.innerText(), /1\.5 h/, 'загрузка дня — полтора часа');
   // Загрузка дня — только полоской: фон клетки не зависит от загрузки (spec 013, B9)
   const cellBackgrounds = await page.evaluate(([busy, free]) => [busy, free].map((day) => getComputedStyle(
@@ -183,9 +180,15 @@ try {
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByText('Added: Созвон команды').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await todayCell.innerText(), /! 2 h/, 'в ячейке дня — отметка пересечения и 2 часа');
-  // Панель дня — сетка по часам; пересекающиеся дела не закрывают названия друг друга
-  const dayGrid = dayPane.locator('[data-day-grid]');
-  const gridColumn = dayGrid.locator(`div[data-day="${today}"]`).last();
+  // Остров дня — расписание списком: задача и событие блоками с временем
+  await dayPane.locator('[data-block]').filter({ hasText: 'Подготовить макет' }).getByText('14:00–15:30')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await dayPane.locator('[data-block]').filter({ hasText: 'Созвон команды' }).getByText('14:30–15:00')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Сетка недели по часам; пересекающиеся дела не закрывают названия друг друга
+  await viewButton('Week').click();
+  const gridColumn = planner.locator(`[data-planner-view="week"] div[data-day="${today}"]`).last();
+  await gridColumn.locator('[data-block]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const cascade = await gridColumn.locator('[data-block]').evaluateAll((items) => items.map((el) => {
     const box = el.getBoundingClientRect();
     return { text: el.textContent, left: box.left, right: box.right, z: Number(getComputedStyle(el).zIndex) };
@@ -198,15 +201,25 @@ try {
   assert.match(lower.text, /14:00–15:30/, 'в блоке — время дела');
   // Виды календаря (spec 018): неделя, месяц, год, список; день всегда в панели справа
   const viewGroup = planner.getByRole('group', { name: 'Calendar view' });
+  // Слои календаря: «Дела» прячет блоки сетки и возвращает их
+  const workLayer = planner.getByRole('group', { name: 'Calendar layers' }).getByRole('button', { name: 'Plans' });
+  await workLayer.click();
+  await gridColumn.locator('[data-block]').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await workLayer.click();
+  await gridColumn.locator('[data-block]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.deepEqual(await viewGroup.getByRole('button').allInnerTexts(), ['Week', 'Month', 'Year', 'List'], 'виды календаря');
-  // «+» рядом с днём открывает форму на этот день; надписи «+ Задача на этот день» нет
-  assert.equal(await dayPane.getByText('+ Task for this day').count(), 0, 'лишняя надпись в панели дня');
-  await dayPane.getByRole('button', { name: '+ Task for this day' }).click();
-  assert.equal(await sidePane.getByLabel('Work date').inputValue(), today, '«+» создаёт дело на выбранный день');
+  // «Добавить на этот день» в острове дня открывает форму на этот день
+  await dayPane.getByRole('button', { name: 'Add to this day' }).click();
+  assert.equal(await sidePane.getByLabel('Work date').inputValue(), today, 'кнопка острова создаёт дело на выбранный день');
   await planner.getByRole('button', { name: 'Cancel' }).click();
   // Нажатие на свободное время в сетке: форма с этим временем; пересекаться с другими делами можно
-  await gridColumn.click({ position: { x: 20, y: 6 } });
-  assert.equal(await sidePane.getByLabel('Start', { exact: true }).inputValue(), '09:00', 'начало — по месту нажатия');
+  const gridBox = await gridColumn.evaluate((el) => ({
+    height: el.getBoundingClientRect().height,
+    first: Number(el.parentElement.dataset.firstHour),
+    hours: Number(el.parentElement.dataset.hours),
+  }));
+  await gridColumn.click({ position: { x: 20, y: ((12 - gridBox.first) / gridBox.hours) * gridBox.height + 6 } });
+  assert.equal(await sidePane.getByLabel('Start', { exact: true }).inputValue(), '12:00', 'начало — по месту нажатия');
   assert.equal(await sidePane.getByLabel('Duration, min').inputValue(), '30', 'длительность по умолчанию — полчаса');
   await page.locator('#planner-new-name').fill('Внахлёст');
   await sidePane.getByLabel('Start', { exact: true }).fill('14:10');
@@ -247,7 +260,7 @@ try {
   assert.ok(longBlock && lateBlock, `в сетке нет дел для проверки наслоения: ${JSON.stringify(pair)}`);
   assert.ok(lateBlock.left > longBlock.left + 10 && lateBlock.left < longBlock.right - 10 && lateBlock.top > longBlock.top + 10,
     `позднее дело должно лежать поверх раннего со сдвигом: ${JSON.stringify(pair)}`);
-  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-day-panel.png` });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-week.png` });
   await planner.getByRole('button', { name: 'Undo' }).click();
   await gridColumn.locator('[data-block]').filter({ hasText: 'Внахлёст' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await page.evaluate(async () => {
@@ -256,8 +269,10 @@ try {
     });
   });
   await gridColumn.locator('[data-block]').filter({ hasText: 'Долгое' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  if (await sidePane.count()) await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  console.log('OK: событие; пересечения разрешены и лежат каскадом; «+» и нажатие на свободное время');
+  if (await sidePane.count()) await closeSide();
+  await viewButton('Month').click();
+  await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: событие; пересечения разрешены и лежат каскадом; слои; «Добавить на этот день» и нажатие на свободное время');
 
   // ── «Сегодня»: сводка дня, задачи дня, задачи без даты (spec 018) ─────────
   assert.equal(await planner.getByText('Statistics', { exact: true }).count(), 0, 'вкладки «Статистика» больше нет');
@@ -268,16 +283,17 @@ try {
   await todayView.locator('[data-today-tasks]').getByText('Подготовить макет').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.match(await todayView.locator('[data-today-card="tasks"]').innerText(), /\d+ \/ \d+/, 'карточка задач — «сделано / всего»');
-  assert.match(await todayView.locator('[data-today-card="load"]').innerText(), /h \/ 10 h/, 'карточка загрузки — «занято / бюджет»');
-  await dayPane.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  // Задача без даты: строка «Без даты · N», в шторке — по спискам, кнопка назначает день
+  assert.match(await todayView.locator('[data-today-card="load"]').innerText(), /\/ 10 h/, 'карточка загрузки — «занято / бюджет»');
+  // Расписание дня — карточка-список рядом с задачами
+  await todayView.locator('[data-today-schedule]').getByText('14:00–15:30').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Задача без даты: строка «Без даты» с числом, в шторке — по спискам, кнопка назначает день
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await page.locator('#planner-quick-input').fill('Вторая задача');
   await page.locator('#planner-quick-input').press('Enter');
   await planner.getByText('Added: Вторая задача').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const undatedRow = todayView.locator('[data-today-undated]');
   await undatedRow.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.match(await undatedRow.innerText(), /No date · \d+/);
+  assert.match(await undatedRow.innerText(), /No date\s+\d+/);
   assert.equal(await todayView.locator('[data-today-tasks]').getByText('Вторая задача').count(), 0, 'без даты — не в задачах дня');
   await undatedRow.click();
   const undatedSheet = page.locator('[data-planner-undated]');
@@ -308,9 +324,11 @@ try {
   assert.equal(await planner.getByLabel('Day ends').inputValue(), '21:00', 'негодное значение не применяется');
   await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
   await sidebar.getByRole('tab', { name: 'Calendar' }).click();
-  await todayCell.click({ position: { x: 10, y: 10 } });
-  await dayPane.locator('[data-day-grid]').getByText('08:00', { exact: true })
+  await viewButton('Week').click();
+  await planner.locator('[data-planner-view="week"]').getByText('08:00', { exact: true })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await viewButton('Month').click();
+  await todayCell.click({ position: { x: 10, y: 10 } });
   console.log('OK: настройки дня применяются к сетке дня');
 
   // ── Повторы (spec 011, US1) ───────────────────────────────────────────────
@@ -400,6 +418,8 @@ try {
   await planner.getByLabel('Start', { exact: true }).fill('10:30');
   await planner.getByRole('button', { name: 'Only this' }).click();
   await planner.getByText('Detached from a series').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Карточка отделённой записи осталась открытой на месте острова дня
+  await closeSide();
   aside = await openDay(addDays(today, 1));
   await aside.getByText('10:30–10:45').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await aside.getByRole('button', { name: /Зарядка/ }).count(), 1, 'отделённый экземпляр — один');
@@ -410,6 +430,8 @@ try {
   await aside.getByRole('button', { name: /Зарядка/ }).first().click();
   await planner.getByLabel('Start', { exact: true }).fill('11:00');
   await planner.getByRole('button', { name: 'This and following' }).click();
+  await planner.getByRole('button', { name: 'This and following' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
   aside = await openDay(addDays(today, 3));
   await aside.getByText('11:00–11:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // «Все в серии»: правка одного экземпляра меняет время у всех экземпляров его ряда
@@ -420,6 +442,8 @@ try {
     await planner.getByRole('button', { name: scope, exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   }
   await planner.getByRole('button', { name: 'All in series', exact: true }).click();
+  await planner.getByRole('button', { name: 'All in series', exact: true }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
   aside = await openDay(addDays(today, 3));
   await aside.getByText('12:00–12:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   aside = await openDay(addDays(today, 4));
@@ -439,14 +463,15 @@ try {
     await linkedTitle.getByRole('link', { name: 'конспект' }).getAttribute('data-note-link'), 'Конспект',
     'ссылка в названии ведёт на заметку',
   );
+  await closeSide();
   await dayPane.locator('[data-note-link="Конспект"]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await dayPane.getByText('[[').count(), 0, 'скобок ссылки в названии на экране нет');
+  await dayPane.locator('button[data-kind="task"]').filter({ hasText: 'Читать' }).click({ position: { x: 4, y: 4 } });
   await sidePane.getByRole('button', { name: 'Delete task' }).click();
   await dayPane.locator('[data-note-link="Конспект"]').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   console.log('OK: ссылка на заметку в названии записи');
 
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
-  const viewButton = (name) => planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name, exact: true });
   const main = planner.locator('[data-planner-view]');
   await sidebar.getByRole('tab', { name: 'Calendar' }).click();
   await viewButton('Week').click();
@@ -544,7 +569,7 @@ try {
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByRole('heading', { name: 'Цветная задача' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closeSide();
-  // Задача без времени — плашкой над сеткой дня, окрашена цветом списка
+  // Задача без времени — строкой в острове дня, несёт цвет списка
   const colorRow = dayPane.locator('button[data-kind="task"]').filter({ hasText: 'Цветная задача' });
   await colorRow.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const stripe = await colorRow.evaluate((el) => getComputedStyle(el).getPropertyValue('--planner-list-color').trim());
@@ -606,81 +631,52 @@ try {
   assert.ok(plannerBottom <= barGeometry.barTop + 1, `«План» не должен уходить под панель: ${plannerBottom}`);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
-  // Телефон: заголовка и кнопки «+ Задача» нет, шестерёнка — в строке периода; расписание дня —
-  // горизонтальная лента под календарём, календарь остаётся на виду
-  // Переключателя вида над календарём нет — вид выбирается в настройках (шестерёнка)
-  assert.equal(await planner.getByRole('group', { name: 'Calendar view' }).count(), 0, 'на телефоне переключатель вида — в настройках');
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  const viewSelect = page.locator('#planner-settings-view');
-  await viewSelect.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await viewSelect.locator('option').count(), 4, 'в настройках четыре вида календаря');
-  await viewSelect.selectOption('week');
-  await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await viewSelect.selectOption('month');
-  await sidePane.getByRole('button', { name: 'Close' }).first().click();
+  // Телефон: заголовка и кнопки «+ Запись» нет; переключатель вида и настройки — в шапке календаря
+  const phoneViews = planner.getByRole('group', { name: 'Calendar view' });
+  assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Day', 'Month', 'Year', 'List'], 'виды календаря на телефоне');
   assert.equal(await planner.getByRole('button', { name: '+ Entry', exact: true }).count(), 0, 'на телефоне кнопки «+ Запись» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
+  // Месяц: день — карточкой ПОД сеткой месяца (расписание списком), вбок ничего не листается
   await todayCell.click({ position: { x: 10, y: 10 } });
-  // День — горизонтальной шкалой времени НАД календарём: часы по оси X, шкала листается вбок
-  const timeline = dayPane.locator('[data-day-timeline]');
-  await timeline.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.locator(`[data-planner-day="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const layout = await page.evaluate(() => {
-    const cell = document.querySelector('#ParvanePlanner [role="gridcell"]').getBoundingClientRect();
-    const root = document.querySelector('#ParvanePlanner [data-day-timeline]');
-    const hours = [...root.querySelectorAll('[data-hour]')].map((el) => el.getBoundingClientRect());
-    const scroller = root.querySelector('[data-hour]').parentElement.parentElement;
-    const blocks = [...root.querySelectorAll('[data-block]')].map((el) => {
-      const box = el.getBoundingClientRect();
-      return { text: el.textContent, left: box.left, right: box.right, top: box.top, bottom: box.bottom };
-    });
+    const cells = [...document.querySelectorAll('#ParvanePlanner [role="gridcell"]')].map((el) => el.getBoundingClientRect());
+    const card = document.querySelector('#ParvanePlanner [data-planner-day]');
     return {
-      cellTop: cell.top,
-      timelineBottom: root.getBoundingClientRect().bottom,
-      isHorizontal: hours.length > 1 && Math.abs(hours[0].top - hours[1].top) < 2 && hours[1].left > hours[0].left,
-      canScroll: scroller.scrollWidth > scroller.clientWidth,
+      gridBottom: Math.max(...cells.map((cell) => cell.bottom)),
+      cardTop: card.getBoundingClientRect().top,
+      blocks: [...card.querySelectorAll('[data-block]')].map((el) => el.textContent),
       overflow: document.documentElement.scrollWidth - window.innerWidth,
-      blocks,
     };
   });
-  assert.ok(layout.timelineBottom <= layout.cellTop + 1, `день должен стоять над календарём: ${JSON.stringify(layout)}`);
-  assert.ok(layout.isHorizontal, `часы должны идти по оси X: ${JSON.stringify(layout)}`);
-  assert.ok(layout.canScroll, `шкала должна листаться вбок: ${JSON.stringify(layout)}`);
+  assert.ok(layout.cardTop >= layout.gridBottom - 1, `день должен стоять под месяцем: ${JSON.stringify(layout)}`);
   assert.ok(layout.overflow <= 0, `страница не должна листаться вбок: ${JSON.stringify(layout)}`);
-  // Пересекающиеся задача и событие — в разных строках, друг друга не закрывают
-  const taskBlock = layout.blocks.find((block) => block.text.includes('Подготовить макет'));
-  const eventBlock = layout.blocks.find((block) => block.text.includes('Созвон команды'));
-  assert.ok(taskBlock && eventBlock, `на шкале должны быть задача и событие: ${JSON.stringify(layout.blocks)}`);
-  assert.ok(
-    eventBlock.top >= taskBlock.bottom - 1 || taskBlock.top >= eventBlock.bottom - 1,
-    `пересекающиеся дела должны стоять в разных строках: ${JSON.stringify(layout.blocks)}`,
-  );
-  assert.ok(await todayCell.isVisible(), 'календарь остаётся на виду');
-  // Событие на весь день — полосой во всю шкалу
-  const allDayBar = timeline.locator('[data-block][data-all-day]').filter({ hasText: 'День города' });
-  await allDayBar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  const barWidth = await allDayBar.evaluate((el) => el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width);
-  assert.ok(barWidth > 0.98, `событие на весь день должно занимать всю шкалу: ${barWidth}`);
+  assert.ok(layout.blocks.some((text) => text.includes('Подготовить макет')) && layout.blocks.some((text) => text.includes('Созвон команды')),
+    `в расписании дня должны быть задача и событие: ${JSON.stringify(layout.blocks)}`);
+  assert.equal(await planner.locator('[data-day-timeline]').count(), 0, 'горизонтальной шкалы дня больше нет');
+  // Событие на весь день — строкой расписания
+  await dayPane.locator('[data-all-day]').filter({ hasText: 'День города' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone.png` });
-  // Новое дело: «+» раскрывает форму под шкалой, без отдельного экрана
-  await timeline.getByRole('button', { name: '+ Task for this day' }).click();
-  const inlineForm = dayPane.locator('[data-inline-form]');
-  await inlineForm.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidePane.count(), 0, 'на телефоне форма задачи не должна открываться отдельным экраном');
-  await inlineForm.locator('#planner-new-name').fill('С телефона');
-  await inlineForm.getByRole('button', { name: 'Create', exact: true }).click();
-  await inlineForm.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  await timeline.getByText('С телефона').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
-  // Вид «Неделя» на телефоне: полоса из семи дней и сетка выбранного дня под ней (панели дня и широкой
+  // Новое дело: форма выезжает шторкой снизу
+  await dayPane.getByRole('button', { name: 'Add to this day' }).click();
+  await sidePane.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const sheet = await page.evaluate(() => {
+    const pane = document.querySelector('#ParvanePlanner [data-planner-side]').getBoundingClientRect();
+    const root = document.querySelector('#ParvanePlanner').getBoundingClientRect();
+    return { paneBottom: pane.bottom, rootBottom: root.bottom, paneWidth: pane.width, rootWidth: root.width };
+  });
+  assert.ok(Math.abs(sheet.paneBottom - sheet.rootBottom) < 2 && Math.abs(sheet.paneWidth - sheet.rootWidth) < 2,
+    `форма на телефоне — шторка у нижнего края: ${JSON.stringify(sheet)}`);
+  await sidePane.locator('#planner-new-name').fill('С телефона');
+  await sidePane.getByRole('button', { name: 'Create', exact: true }).click();
+  await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await dayPane.getByText('С телефона').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Вид «День» на телефоне: полоса из семи дней и сетка выбранного дня под ней (острова дня и широкой
   // сетки недели нет), вбок ничего не листается; нажатие на свободное время создаёт дело
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  assert.equal(await viewSelect.locator('option[value="week"]').innerText(), 'Day', 'на телефоне вид недели называется «День»');
-  await viewSelect.selectOption('week');
-  await sidePane.getByRole('button', { name: 'Close' }).first().click();
+  await phoneViews.getByRole('button', { name: 'Day', exact: true }).click();
   const phoneWeek = planner.locator('[data-planner-view="week"]');
   await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await timeline.count(), 0, 'в виде «Неделя» на телефоне шкалы дня быть не должно');
+  assert.equal(await dayPane.count(), 0, 'в виде «День» на телефоне отдельной панели дня нет');
   const stripDays = phoneWeek.locator('[data-day-strip] button');
   const pickedStripDay = phoneWeek.locator('[data-day-strip] button[aria-pressed="true"]');
   assert.equal(await stripDays.count(), 7, 'в полосе недели семь дней');
@@ -688,7 +684,10 @@ try {
   assert.equal(await stripDays.locator('[data-load]').count(), 7, 'у каждого дня полосы — полоска загрузки');
   const phoneDayGrid = phoneWeek.locator('[data-day-grid]');
   await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await phoneDayGrid.getByText('С телефона').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Задача без времени — строкой над сеткой, дела со временем — блоками в сетке
+  await phoneWeek.locator(`[data-day-summary="${today}"]`).getByText('С телефона').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await phoneDayGrid.locator('[data-block]').filter({ hasText: 'Подготовить макет' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const weekGeometry = await phoneWeek.evaluate((week) => {
     const strip = week.querySelector('[data-day-strip]').getBoundingClientRect();
     const grid = week.querySelector('[data-day-grid]');
@@ -728,12 +727,10 @@ try {
     await phoneDayGrid.locator(`div[data-day="${tomorrowKey}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await swipe('#ParvanePlanner [data-day-grid]', 80, 300);
     await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    // «Сегодня»: жест листает дни, а начатый на шкале дня (она сама листается вбок) — нет
+    // «Сегодня»: расписание — карточка-список между карточками дня и задачами; жест листает дни
     await planner.locator('header').getByText('Today').first().click();
     await planner.locator(`[data-planner-today="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await swipe('#ParvanePlanner [data-day-timeline] [data-hour]', 300, 80);
-    await page.waitForTimeout(300);
-    assert.equal(await planner.locator(`[data-planner-today="${today}"]`).count(), 1, 'жест по шкале дня не должен листать дни');
+    await planner.locator('[data-today-schedule] [data-block]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await swipe('#ParvanePlanner [data-today-tasks]', 300, 80);
     await planner.locator(`[data-planner-today="${tomorrowKey}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await swipe('#ParvanePlanner [data-today-tasks]', 80, 300);
@@ -747,16 +744,16 @@ try {
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone-week.png` });
   await phoneDayGrid.locator('div[data-day]').last().click({ position: { x: 30, y: 8 } });
   await sidePane.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.ok(await sidePane.getByLabel('Start', { exact: true }).inputValue(), 'нажатие на свободное время недели задаёт начало');
+  assert.ok(await sidePane.getByLabel('Start', { exact: true }).inputValue(), 'нажатие на свободное время дня задаёт начало');
   await planner.getByRole('button', { name: 'Cancel' }).click();
-  await planner.getByRole('button', { name: 'Planner settings' }).click();
-  await viewSelect.selectOption('month');
-  await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  // Шестерёнка — в строке периода
+  await phoneViews.getByRole('button', { name: 'Month', exact: true }).click();
+  await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Настройки — кнопкой в шапке календаря, окном снизу
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.getByLabel('Day starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await sidePane.getByRole('button', { name: 'Close' }).first().click();
-  console.log('OK: телефон — день шкалой времени над календарём, пересечения в разных строках, новое дело под шкалой');
+  await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — виды в шапке, день карточкой под месяцем, форма шторкой, вид «День» с полосой недели');
   // «+» нижней панели открывает ввод текстом прямо в «Плане» (spec 017, сценарий quick_input)
   await tabBar.getByRole('button', { name: 'New entry' }).click();
   await page.locator('#planner-quick-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
