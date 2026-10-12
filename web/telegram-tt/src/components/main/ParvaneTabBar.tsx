@@ -13,9 +13,9 @@ import { useFolderManagerForUnreadCounters } from '../../hooks/useFolderManager'
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
-import Icon from '../common/icons/Icon';
 import Menu from '../ui/Menu';
 import MenuItem from '../ui/MenuItem';
+import ParvaneIcon from './ParvaneIcon';
 
 import styles from './ParvaneTabBar.module.scss';
 
@@ -26,7 +26,7 @@ type OwnProps = {
 
 const MAX_BADGE_COUNT = 99;
 
-// Parvane: нижняя панель разделов на телефоне — Чаты, План, новая запись, Облако, Профиль.
+// Parvane: нижняя панель разделов на телефоне — Чаты, План, новая запись, Знания, Профиль.
 // На компьютере разделы в боковой панели (`FoldersSidebar`)
 const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
   const { openLeftColumnContent, openSettingsScreen } = getActions();
@@ -85,15 +85,13 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         aria-current={isChatsActive ? 'page' : undefined}
         onClick={handleChatsClick}
       >
-        <span className={styles.iconWrap}>
-          <Icon name="folder-tabs-chats" className={styles.icon} />
-          {Boolean(unreadCount) && (
-            <span className={styles.badge}>
-              {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
-            </span>
-          )}
-        </span>
+        <ParvaneIcon name="chat" />
         <span className={styles.title}>{lang('ParvaneSectionMessenger')}</span>
+        {Boolean(unreadCount) && (
+          <span className={styles.badge}>
+            {unreadCount > MAX_BADGE_COUNT ? `${MAX_BADGE_COUNT}+` : unreadCount}
+          </span>
+        )}
       </button>
       <button
         type="button"
@@ -101,7 +99,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         aria-current={section === 'planner' ? 'page' : undefined}
         onClick={handlePlannerClick}
       >
-        <Icon name="calendar" className={styles.icon} />
+        <ParvaneIcon name="calendar" />
         <span className={styles.title}>{lang('ParvaneSectionPlanner')}</span>
       </button>
       <button
@@ -111,7 +109,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         aria-haspopup={isChatsActive ? 'menu' : undefined}
         onClick={handleAddClick}
       >
-        <Icon name="add" className={styles.addIcon} />
+        <ParvaneIcon name="plus" className={styles.addIcon} />
       </button>
       <Menu
         isOpen={isAddMenuOpen}
@@ -132,7 +130,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         aria-current={section === 'cloud' ? 'page' : undefined}
         onClick={handleCloudClick}
       >
-        <Icon name="folder" className={styles.icon} />
+        <ParvaneIcon name="book" />
         <span className={styles.title}>{lang('ParvaneSectionKnowledge')}</span>
       </button>
       <button
@@ -141,7 +139,7 @@ const ParvaneTabBar = ({ section, isSettingsOpen }: OwnProps) => {
         aria-current={isProfileActive ? 'page' : undefined}
         onClick={handleProfileClick}
       >
-        <Icon name="user" className={styles.icon} />
+        <ParvaneIcon name="user" />
         <span className={styles.title}>{lang('ParvaneTabBarProfile')}</span>
       </button>
     </nav>
