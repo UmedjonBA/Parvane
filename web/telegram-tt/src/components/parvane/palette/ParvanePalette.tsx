@@ -144,8 +144,8 @@ const ParvanePalette = () => {
   // и языка справки ничего не создаёт — это остаётся разделу «Знания»
   useEffect(() => {
     if (!isOpen) return undefined;
-    setQuery('');
-    setSelected(0);
+    // Запрос здесь не трогаем (он стёрт при закрытии): эффект приходит позже первых нажатий клавиш
+    // и стёр бы уже набранное
     void loadNotes(currentUserId);
     void loadPlanner(currentUserId);
     // Поле появляется вместе с окном: фокус — после его показа
@@ -154,6 +154,7 @@ const ParvanePalette = () => {
       window.clearTimeout(timeout);
       // Запрос стирается при закрытии: следующее открытие не показывает прежний текст даже на первом кадре
       setQuery('');
+      setSelected(0);
     };
   }, [isOpen, currentUserId]);
 
