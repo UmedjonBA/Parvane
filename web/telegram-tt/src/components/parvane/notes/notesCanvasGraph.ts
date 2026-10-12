@@ -57,6 +57,8 @@ const SPOT_MAX_RINGS = 240;
 // Блок несвязанных заметок встаёт под холстом, если холст заметно шире своей высоты, иначе — справа
 const BLOCK_WIDE_RATIO = 2;
 
+const FREE_SPOT_GAP = 40;
+
 function titleKey(title: string) {
   return title.trim().toLowerCase();
 }
@@ -273,6 +275,18 @@ function findSpot(
     }
   }
   return undefined;
+}
+
+// Свободное место для новой карточки с серединой около `center`: карточки, добавленные кнопкой панели,
+// не ложатся поверх уже стоящих. Группы местом не считаются — карточку можно положить внутрь группы
+export function findFreeSpot(
+  doc: CanvasDoc, center: CanvasPoint, width: number, height: number, gap = FREE_SPOT_GAP,
+): CanvasPoint {
+  const taken = doc.nodes.filter((node) => node.type !== 'group');
+  const around = {
+    x: center.x, y: center.y, width: 0, height: 0,
+  };
+  return findSpot(around, taken, width, height, gap) || { x: center.x - width / 2, y: center.y - height / 2 };
 }
 
 // Места блока из `count` карточек вне рамки холста `bounds`: справа от неё (столбцами в высоту холста) либо,

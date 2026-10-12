@@ -40,7 +40,7 @@ import {
 } from './notesCanvasEdit';
 import { noteTitleOfPath, resolveDrivePath } from './notesCanvasFiles';
 import {
-  canvasFromGraph, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph, renameCanvasNote,
+  canvasFromGraph, findFreeSpot, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph, renameCanvasNote,
 } from './notesCanvasGraph';
 import {
   createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
@@ -829,11 +829,14 @@ const NotesCanvas = ({
   const add = (node: Pick<CanvasNode, 'type' | 'width' | 'height'> & Partial<CanvasNode>, at?: CanvasPoint) => {
     finishInline();
     const point = at || centerPoint();
+    // Без точки (кнопка панели) карточка встаёт на свободное место рядом с серединой экрана
+    const spot = at || node.type === 'group' ? undefined
+      : findFreeSpot(docRef.current, point, node.width, node.height);
     const created = {
       ...node,
       id: newCanvasId(),
-      x: snapTo(point.x - node.width / 2, at ? CANVAS_GRID : 1),
-      y: snapTo(point.y - node.height / 2, at ? CANVAS_GRID : 1),
+      x: spot ? spot.x : snapTo(point.x - node.width / 2, at ? CANVAS_GRID : 1),
+      y: spot ? spot.y : snapTo(point.y - node.height / 2, at ? CANVAS_GRID : 1),
     };
     change(addNode(docRef.current, created));
     selectNodes([created.id]);

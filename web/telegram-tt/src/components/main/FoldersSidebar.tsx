@@ -121,7 +121,10 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
 
   return (
     <div className={styles.root} id="FoldersSidebar">
-      <div className={styles.logo} aria-hidden>parvane</div>
+      <div className={styles.logo} aria-hidden>
+        <i className={styles.logoMark} />
+        parvane
+      </div>
       <div className={styles.sections} role="tablist" aria-label={lang('ParvaneSections')}>
         {renderTab(
           'chat', lang('ParvaneSectionMessenger'), section === 'messenger' && !isSettingsOpen, handleSelectChats,
