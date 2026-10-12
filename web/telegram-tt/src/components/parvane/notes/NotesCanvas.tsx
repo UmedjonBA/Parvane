@@ -746,7 +746,7 @@ const NotesCanvas = ({
     add({
       type: 'file',
       width: CANVAS_DEFAULT_NODE_WIDTH,
-      height: noteTitleOfPath(path) !== undefined ? NOTE_HEIGHT : file?.thumb ? FILE_HEIGHT : NOTE_HEIGHT,
+      height: file?.thumb && noteTitleOfPath(path) === undefined ? FILE_HEIGHT : NOTE_HEIGHT,
       file: path,
     }, insertAtRef.current);
   });
@@ -1471,8 +1471,9 @@ const NotesCanvas = ({
     }
   });
 
-  const handleKeyUp = useLastCallback((e: KeyboardEvent) => {
-    if (e.code === 'Space') isSpaceDownRef.current = false;
+  // Отпущенный пробел и уход из окна (отпускание тогда не придёт) возвращают обычное перетаскивание
+  const handleKeyUp = useLastCallback((e: KeyboardEvent | FocusEvent) => {
+    if (!('code' in e) || e.code === 'Space') isSpaceDownRef.current = false;
   });
 
   // Копирование кладёт в буфер обмена текст JSON Canvas — его примет другой холст и другое приложение
@@ -1497,12 +1498,14 @@ const NotesCanvas = ({
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown, true);
     document.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', handleKeyUp);
     document.addEventListener('copy', handleCopy);
     document.addEventListener('cut', handleCopy);
     document.addEventListener('paste', handlePaste);
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('keyup', handleKeyUp, true);
+      window.removeEventListener('blur', handleKeyUp);
       document.removeEventListener('copy', handleCopy);
       document.removeEventListener('cut', handleCopy);
       document.removeEventListener('paste', handlePaste);

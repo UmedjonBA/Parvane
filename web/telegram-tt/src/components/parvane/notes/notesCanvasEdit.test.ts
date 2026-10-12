@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import type { CanvasDoc, CanvasNode } from './notesCanvas';
+import type { CanvasHandle } from './notesCanvasEdit';
 
 import { findNode, nodesInGroup, parseCanvas, serializeCanvas } from './notesCanvas';
 import {
   CANVAS_CARD_MIN, CANVAS_EMPTY_SELECTION, CANVAS_GROUP_MIN, CANVAS_GROUP_PADDING, canvasShortcut, clipBounds,
   colorOfSelection, connectNodes, copyNodes, curvePoint, distanceToCurve, edgeAt, edgeCurve, fitGroupToContent,
-  growGroups, isSelectionEmpty, moveNodes, nearestSide, nextEdgeEnds, nodeAtPoint, nodesInRect, normalizeCanvasUrl,
-  oppositeSide, parsePasted, pasteClip, placeNode, pruneSelection, recolorSelection, rectOfPoints, removeSelection,
-  reorderNodes, resizeNode, resizeRect, selectAll, selectionBounds, serializeClip, snapDelta, snapTo, toggleSelected,
-  wrapInGroup,
+  growGroups, isSelectionEmpty, minSizeOf, moveNodes, nearestSide, nextEdgeEnds, nodeAtPoint, nodesInRect,
+  normalizeCanvasUrl, oppositeSide, parsePasted, pasteClip, placeNode, pruneSelection, recolorSelection,
+  rectOfPoints, removeSelection, reorderNodes, resizeRect, selectAll, selectionBounds, serializeClip, snapDelta,
+  snapTo, toggleSelected, wrapInGroup,
 } from './notesCanvasEdit';
 
 function node(id: string, x: number, y: number, width = 100, height = 60, type = 'text'): CanvasNode {
@@ -41,6 +42,12 @@ function rectOf(doc: CanvasDoc, id: string) {
   return {
     x, y, width, height,
   };
+}
+
+// Узел после того, как его ручку протащили на (dx, dy), — так размер меняет редактор
+function resizeNode(doc: CanvasDoc, id: string, handle: CanvasHandle, dx: number, dy: number) {
+  const target = findNode(doc, id)!;
+  return placeNode(doc, id, resizeRect(target, handle, dx, dy, minSizeOf(target)));
 }
 
 function counter(prefix = 'n') {
@@ -125,7 +132,7 @@ describe('размер', () => {
     }), 'a')).toEqual({
       x: 1, y: 2, width: 3, height: 4,
     });
-    expect(resizeNode(doc, 'нет', 'se', 10, 10)).toBe(doc);
+    expect(placeNode(doc, 'нет', rectOf(doc, 'a'))).toBe(doc);
     expect(resizeNode(doc, 'a', 'se', 2, 2)).toBe(doc);
   });
 });

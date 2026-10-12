@@ -98,16 +98,8 @@ export function resizeRect(
   };
 }
 
-// Новый размер узла. У группы меняется только рамка — содержимое остаётся на месте
-export function resizeNode(
-  doc: CanvasDoc, id: string, handle: CanvasHandle, dx: number, dy: number, grid = CANVAS_GRID,
-): CanvasDoc {
-  const node = findNode(doc, id);
-  if (!node) return doc;
-  return placeNode(doc, id, resizeRect(node, handle, dx, dy, minSizeOf(node), grid));
-}
-
-// Узел в новом прямоугольнике; прочие узлы (и содержимое группы) не трогаются
+// Узел в новом прямоугольнике (после смены размера). Прочие узлы не трогаются: у группы меняется
+// только рамка, содержимое остаётся на месте
 export function placeNode(doc: CanvasDoc, id: string, rect: CanvasRect): CanvasDoc {
   const node = findNode(doc, id);
   if (!node || isSameRect(rect, node)) return doc;
