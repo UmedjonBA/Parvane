@@ -1,5 +1,5 @@
 import type { FC } from '@teact';
-import { memo, useEffect, useRef } from '@teact';
+import { memo, useEffect, useMemo, useRef } from '@teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiChatFolder, ApiChatlistExportedInvite } from '../../../api/types';
@@ -55,6 +55,16 @@ type StateProps = {
 
 const SAVED_MESSAGES_HOTKEY = '0';
 const FIRST_FOLDER_INDEX = 0;
+// Цвета папок — тона цветовой схемы. Первый набор отвечает семи цветам Telegram, которые выбирают в
+// настройках папки (красный, оранжевый, фиолетовый, зелёный, бирюзовый, синий, розовый); второй — порядок
+// для папок без выбранного цвета
+const CHOSEN_FOLDER_COLORS = [
+  'var(--pv-red)', 'var(--pv-orange)', 'var(--pv-purple)', 'var(--pv-green)', 'var(--pv-aqua)', 'var(--pv-blue)',
+  'var(--pv-purple)',
+];
+const FALLBACK_FOLDER_COLORS = [
+  'var(--pv-blue)', 'var(--pv-orange)', 'var(--pv-purple)', 'var(--pv-aqua)', 'var(--pv-green)', 'var(--pv-red)',
+];
 
 const ChatFolders: FC<OwnProps & StateProps> = ({
   foldersDispatch,
@@ -73,7 +83,6 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
   hasArchivedStories,
   archiveSettings,
   isStoryRibbonShown,
-  isFoldersSidebarShown,
 }) => {
   const {
     loadChatFolders,
@@ -115,9 +124,10 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
     });
   });
 
-  const { displayedFolders, folderTabs } = useFolderTabs({
+  // Parvane: папки всегда полосой над списком чатов (и на компьютере); положение «слева» не читается,
+  // пункт меню папки, который его переключал, убран
+  const { displayedFolders, folderTabs: allFolderTabs } = useFolderTabs({
     sidebarMode: false,
-    noEmoticons: true,
     orderedFolderIds,
     chatFoldersById,
     maxFolders,
@@ -125,6 +135,27 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
     folderInvitesById,
     maxFolderInvites,
   });
+
+  const folderTabs = useMemo(() => {
+    const positionTitle = lang('TabsPositionLeft');
+    return allFolderTabs?.map((tab) => {
+      const actions = tab.contextActions?.filter((action) => (
+        !('isSeparator' in action) && action.title !== positionTitle
+      ));
+      return { ...tab, contextActions: actions?.length ? actions : undefined };
+    });
+  }, [allFolderTabs, lang]);
+
+  // Цвет папки: выбранный в её настройках, иначе по порядку из набора схемы; «Все» — яркий акцент
+  const folderColors = useMemo(() => {
+    let fallbackIndex = 0;
+    return displayedFolders?.map((folder) => {
+      if (folder.id === ALL_FOLDER_ID) return 'var(--pv-accent)';
+      const { color } = folder;
+      if (color !== undefined && color >= 0) return CHOSEN_FOLDER_COLORS[color % CHOSEN_FOLDER_COLORS.length];
+      return FALLBACK_FOLDER_COLORS[fallbackIndex++ % FALLBACK_FOLDER_COLORS.length];
+    });
+  }, [displayedFolders]);
 
   const allChatsFolderIndex = displayedFolders?.findIndex((folder) => folder.id === ALL_FOLDER_ID);
   const isInAllChatsFolder = allChatsFolderIndex === activeChatFolder;
@@ -215,7 +246,7 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
     ref: placeholderRef,
     shouldRender: shouldRenderPlaceholder,
   } = useShowTransition({
-    isOpen: !orderedFolderIds && !isFoldersSidebarShown,
+    isOpen: !orderedFolderIds,
     noMountTransition: true,
     withShouldRender: true,
   });
@@ -235,7 +266,6 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
         isMainList
         canDisplayArchive={(hasArchivedChats || hasArchivedStories) && !archiveSettings.isHidden}
         archiveSettings={archiveSettings}
-        isFoldersSidebarShown={isFoldersSidebarShown}
         isStoryRibbonShown={isStoryRibbonShown}
         withTags
         onScroll={handleScroll}
@@ -244,7 +274,7 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
   }
 
   const hasFolders = folderTabs && folderTabs.length > 1;
-  const shouldRenderFolders = hasFolders && !isFoldersSidebarShown;
+  const shouldRenderFolders = hasFolders;
 
   return (
     <div
@@ -252,7 +282,6 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
       className={buildClassName(
         'ChatFolders',
         shouldRenderStoryRibbon && 'with-story-ribbon',
-        isFoldersSidebarShown && 'ChatFolders--tabs-sidebar-shown',
       )}
     >
       {shouldRenderStoryRibbon && <StoryRibbon isClosing={isStoryRibbonClosing} />}
@@ -266,6 +295,7 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
           <ChatFolderTabList
             tabs={folderTabs}
             activeTab={activeChatFolder}
+            colors={folderColors}
             onSwitchTab={handleSwitchTab}
           />
         ) : shouldRenderPlaceholder ? (

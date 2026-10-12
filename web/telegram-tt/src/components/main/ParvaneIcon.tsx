@@ -37,7 +37,14 @@ const PATHS = {
   link: [
     'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   ],
-  smile: ['M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z', 'M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5v.5M15 9.5v.5'],
+  // Значки папок чатов
+  work: ['M5 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z', 'M9 7V5h6v2M3 13h18'],
+  cap: ['M2 9l10-5 10 5-10 5z', 'M6 11v5c3 2 9 2 12 0v-5M22 9v6'],
+  home: ['M3 11l9-7 9 7', 'M5 10v10h5v-6h4v6h5V10'],
+  folder: ['M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+  bell: ['M6 16V11a6 6 0 0 1 12 0v5l2 2H4z', 'M10 20a2 2 0 0 0 4 0'],
+  note: ['M6 3h9l4 4v14H6z', 'M14 3v5h5'],
+  star: ['M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z'],
 } satisfies Record<string, string[]>;
 
 export type ParvaneIconName = keyof typeof PATHS;

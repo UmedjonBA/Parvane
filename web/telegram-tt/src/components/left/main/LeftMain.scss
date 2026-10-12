@@ -64,12 +64,9 @@
         flex: 1;
       }
 
-      &.with-tabs > .Transition {
-        margin-top: 2rem;
-      }
-
+      // Parvane: полоса папок стоит в потоке над списком, а не плавает поверх него
       &.with-tabs .chat-list {
-        padding-top: 1.875rem;
+        padding-top: 0;
       }
     }
 
