@@ -1,6 +1,6 @@
 import type { TeactNode } from '../../../lib/teact/teact';
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { PlannerState } from '../planner/plannerModel';
@@ -11,6 +11,7 @@ import type { NoteEntry } from './notesStore';
 import buildClassName from '../../../util/buildClassName';
 import { formatRepeat } from '../planner/plannerFormat';
 import { toDayKey } from '../planner/plannerModel';
+import { nextNoteTitle, NOTE_TITLE_MAX } from './notesCanvasNote';
 import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
 import { nearestPlanned } from './notesPlanned';
@@ -37,12 +38,12 @@ type OwnProps = {
   // «Связи» стоят под заметкой, когда для них нет отдельного острова справа
   hasLinks?: boolean;
   onOpenTitle: (title: string) => void;
-  onSave: (noteId: string, text: string) => Promise<boolean>;
+  // `base` — текст, с которого начата правка: изменения заметки, пришедшие за время правки, сводятся с ней
+  onSave: (noteId: string, text: string, base?: string) => Promise<boolean>;
   onRename: (noteId: string, title: string) => void;
   onDelete: (noteId: string) => void;
 };
 
-const TITLE_MAX_LENGTH = 120;
 const INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*|(?:^|\s)#[\p{L}\d_/-]+)/gu;
 const TASK_LINE = /^(\s*)[-*+] \[( |x|X)\](?: (.*))?$/;
 const LIST_LINE = /^(\s*)[-*+] (.*)$/;
@@ -58,6 +59,7 @@ const NoteView = ({
   note, index, planner, planned, onBack, hasLinks, onOpenTitle, onSave, onRename, onDelete,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
+  const baseRef = useRef<string>();
   const [title, setTitle] = useState(note.title);
   const [isSaving, markSaving, unmarkSaving] = useFlag();
   const [isDeleteOpen, openDelete, closeDelete] = useFlag();
@@ -86,6 +88,7 @@ const NoteView = ({
   const nearest = nearestPlanned(planned, today);
 
   const handleEdit = useLastCallback(() => {
+    baseRef.current = note.text;
     setDraft(note.text);
   });
 
@@ -100,7 +103,7 @@ const NoteView = ({
   const handleSave = useLastCallback(async () => {
     if (draft === undefined) return;
     markSaving();
-    const isSaved = await onSave(note.id, draft);
+    const isSaved = await onSave(note.id, draft, baseRef.current);
     unmarkSaving();
     if (isSaved) setDraft(undefined);
   });
@@ -111,8 +114,8 @@ const NoteView = ({
 
   // Значение берётся из самого поля: уход фокуса может прийти раньше перерисовки с набранным текстом
   const handleTitleBlur = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    const next = e.currentTarget.value.trim();
-    if (next && next !== note.title) onRename(note.id, next);
+    const next = nextNoteTitle(e.currentTarget.value, note.title);
+    if (next) onRename(note.id, next);
     else setTitle(note.title);
   });
 
@@ -290,7 +293,7 @@ const NoteView = ({
           <input
             className={buildClassName(styles.noteTitle, styles.noteTitleInput, isEditing && styles.noteTitleEditing)}
             value={title}
-            maxLength={TITLE_MAX_LENGTH}
+            maxLength={NOTE_TITLE_MAX}
             aria-label={lang('KnowledgeNoteTitle')}
             onChange={handleTitle}
             onBlur={handleTitleBlur}

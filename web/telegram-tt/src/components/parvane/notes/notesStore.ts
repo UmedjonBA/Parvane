@@ -340,24 +340,38 @@ async function writeNote(note: NoteEntry, text: string, expectedFileId?: string)
   }).catch(() => undefined) as Promise<WriteResult>;
 }
 
-/** Сохранить текст заметки. Пункты с датой получают метки и становятся задачами «Плана». */
-export async function saveNote(noteId: string, draft: string, vaultName: string): Promise<boolean> {
+// Правка и чужая версия заметки от общей основы: сводятся построчно; изменено одно и то же место — остаётся
+// своя правка, чужая версия сохраняется рядом копией «… (конфликт …)»
+async function reconcileNote(note: NoteEntry, base: string, mine: string, theirs: string, vaultName: string) {
+  const merged = mergeNotes(base, mine, theirs);
+  if (merged.hasConflict) {
+    await createNote(`${note.title} (конфликт ${new Date().toLocaleString()})`, vaultName, { text: theirs });
+    notify('conflict', note.title);
+    return mine;
+  }
+  // Чужая версия ничего не добавила к своей — сводить было нечего
+  if (merged.text !== mine) notify('merged', note.title);
+  return merged.text;
+}
+
+/** Сохранить текст заметки. Пункты с датой получают метки и становятся задачами «Плана».
+ * `baseText` — текст, с которого начата правка: если заметка с тех пор изменилась (другое устройство,
+ * галочка из «Плана»), правка сводится с этими изменениями, а не затирает их. */
+export async function saveNote(
+  noteId: string, draft: string, vaultName: string, baseText?: string,
+): Promise<boolean> {
   const note = getNotes().find(({ id }) => id === noteId);
   if (!note) return false;
   const planned = planNoteTasks(draft, quickContext());
   let text = planned.text;
+  if (baseText !== undefined && baseText !== note.text && text !== note.text) {
+    text = await reconcileNote(note, baseText, text, note.text, vaultName);
+  }
   if (text === note.text) return true;
   let result = await writeNote(note, text, note.fileId);
   if (result?.ok && result.conflict !== undefined) {
     // Заметку тем временем изменило другое устройство: сводим построчно от общей версии
-    const merged = mergeNotes(note.text, text, result.conflict);
-    if (merged.hasConflict) {
-      await createNote(`${note.title} (конфликт ${new Date().toLocaleString()})`, vaultName, { text: result.conflict });
-      notify('conflict', note.title);
-    } else {
-      text = merged.text;
-      notify('merged', note.title);
-    }
+    text = await reconcileNote(note, note.text, text, result.conflict, vaultName);
     result = await writeNote(note, text, result.fileId);
     // Второе расхождение подряд — пишем свою версию: чужая уже сохранена копией либо сведена
     if (result?.ok && result.conflict !== undefined) result = await writeNote(note, text);
@@ -392,12 +406,18 @@ export async function applyPlannerToNotes(vaultName: string) {
   }
 }
 
+/** Название, которое заметка получит при переименовании: без знаков, запрещённых в именах файлов; занятое
+ * другой заметкой — с номером. */
+export function freeNoteTitle(noteId: string, title: string) {
+  return uniqueTitle(title, getNotes().filter(({ id }) => id !== noteId));
+}
+
 /** Переименовать заметку и поправить ссылки на неё в остальных заметках и её карточки на холстах. */
 export async function renameNote(noteId: string, title: string, vaultName: string) {
   const note = getNotes().find(({ id }) => id === noteId);
   const rootId = rootIdOf();
   const node = getNodes(rootId).find(({ id }) => id === noteId);
-  const next = uniqueTitle(title, getNotes().filter(({ id }) => id !== noteId));
+  const next = freeNoteTitle(noteId, title);
   if (!note || !node || !rootId || next === note.title) return false;
   if (!(await renameCloudNode(rootId, node, `${next}${NOTE_EXTENSION}`))) return false;
   await queueSync();

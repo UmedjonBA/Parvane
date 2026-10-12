@@ -36,3 +36,12 @@ export function dropStep(history: CanvasHistory): CanvasHistoryMove | undefined 
   if (!history.past.length) return undefined;
   return { history: { ...history, past: history.past.slice(0, -1) }, doc: history.past[history.past.length - 1] };
 }
+
+// Одна и та же поправка во всех шагах (переименованная заметка — новый путь в её карточках): отмена не
+// вернёт на холст прежний путь. Шагов не прибавляется; нечего менять — прежняя история
+export function mapHistory(history: CanvasHistory, change: (doc: CanvasDoc) => CanvasDoc): CanvasHistory {
+  const past = history.past.map(change);
+  const future = history.future.map(change);
+  const isSame = past.every((doc, i) => doc === history.past[i]) && future.every((doc, i) => doc === history.future[i]);
+  return isSame ? history : { past, future };
+}
