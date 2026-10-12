@@ -815,10 +815,19 @@
 }
 
 .canvasEdge {
-  pointer-events: stroke;
   fill: none;
-  stroke: var(--pv-muted);
+  stroke: var(--gc, var(--pv-muted));
   stroke-width: 2;
+}
+
+// Широкая невидимая линия поверх стрелки: по ней стрелку легко выбрать
+.canvasEdgeHit {
+  pointer-events: stroke;
+  cursor: var(--custom-cursor, pointer);
+
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
 }
 
 .canvasEdgeOn .canvasEdge {
@@ -826,9 +835,26 @@
   stroke-width: 3;
 }
 
+.canvasEdgeOn .canvasArrow {
+  fill: var(--pv-accent);
+}
+
+.canvasEdgeDraft {
+  fill: none;
+  stroke: var(--pv-accent);
+  stroke-dasharray: 6 5;
+  stroke-width: 2;
+}
+
 .canvasArrow {
-  fill: var(--pv-muted);
+  fill: var(--gc, var(--pv-muted));
   stroke: none;
+}
+
+.canvasGuide {
+  stroke: var(--pv-red);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .canvasEdgeLabel {
@@ -843,14 +869,60 @@
   stroke-width: 4px;
 }
 
+// Рамка группы пропускает нажатия: внутри неё поле двигается и рисуется рамка выделения. Саму группу
+// берут за границу, название и ручки
 .canvasGroup {
+  pointer-events: none;
+
   position: absolute;
+
+  box-sizing: border-box;
   border: 2px solid var(--gc, var(--pv-line2));
   border-radius: 1rem;
+
   background: color-mix(in srgb, var(--gc, var(--pv-line2)) 7%, transparent);
 }
 
+.canvasGroupEdge {
+  pointer-events: auto;
+  cursor: move;
+  position: absolute;
+}
+
+.canvasGroupEdgeTop,
+.canvasGroupEdgeBottom {
+  right: 0;
+  left: 0;
+  height: 0.875rem;
+}
+
+.canvasGroupEdgeLeft,
+.canvasGroupEdgeRight {
+  top: 0;
+  bottom: 0;
+  width: 0.875rem;
+}
+
+.canvasGroupEdgeTop {
+  top: -0.5rem;
+}
+
+.canvasGroupEdgeBottom {
+  bottom: -0.5rem;
+}
+
+.canvasGroupEdgeLeft {
+  left: -0.5rem;
+}
+
+.canvasGroupEdgeRight {
+  right: -0.5rem;
+}
+
 .canvasGroupLabel {
+  pointer-events: auto;
+  cursor: move;
+
   position: absolute;
   bottom: calc(100% + 0.375rem);
   left: 0;
@@ -859,20 +931,27 @@
   border-radius: 0.5rem;
 
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--gc, var(--pv-muted));
   white-space: nowrap;
 
   background: color-mix(in srgb, var(--gc, var(--pv-line2)) 16%, var(--pv-panel));
 }
 
+// Группа без названия: за этот значок её берут и по двойному нажатию называют
+.canvasGroupGrip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+}
+
 .canvasCard {
   position: absolute;
 
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 
+  box-sizing: border-box;
   border: 1px solid var(--pv-line2);
   border-radius: 0.75rem;
 
@@ -886,7 +965,8 @@
 
 // Правка на месте: поле занимает карточку (название группы — место её подписи)
 .canvasInline,
-.canvasGroupInput {
+.canvasGroupInput,
+.canvasEdgeInput {
   cursor: text;
   user-select: text;
 
@@ -900,23 +980,47 @@
   }
 }
 
-.canvasInline {
-  resize: none;
-
+// Поле и невидимая копия его текста лежат в одной ячейке: копия задаёт высоту, поле её занимает
+.canvasInlineBox {
+  display: grid;
   flex: 1 1 auto;
-
-  width: 100%;
   min-height: 0;
+}
+
+.canvasInline,
+.canvasInlineMirror {
+  grid-area: 1 / 1;
+
+  box-sizing: border-box;
+  min-width: 0;
   padding: 0.5rem 0.75rem;
-  border: 0;
 
   font-size: 0.8125rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.canvasInlineMirror {
+  visibility: hidden;
+}
+
+.canvasInline {
+  resize: none;
+
+  overflow: hidden;
+
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
 
   background: transparent;
 }
 
 .canvasGroupInput {
+  pointer-events: auto;
+
   position: absolute;
   bottom: calc(100% + 0.375rem);
   left: 0;
@@ -927,7 +1031,23 @@
   border-radius: 0.5rem;
 
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
+
+  background: var(--pv-panel);
+}
+
+.canvasEdgeInput {
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+
+  width: 10rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--pv-accent);
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+  text-align: center;
 
   background: var(--pv-panel);
 }
@@ -941,7 +1061,7 @@
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--pv-line);
 
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .canvasCardDot {
@@ -958,6 +1078,7 @@
   overflow: hidden;
   flex: 1 1 auto;
 
+  min-height: 0;
   padding: 0.5rem 0.75rem;
 
   font-size: 0.8125rem;
@@ -976,6 +1097,7 @@
 
 .canvasCardBodyText {
   color: var(--pv-fg);
+  overflow-wrap: anywhere;
 }
 
 .canvasSelected {
@@ -985,6 +1107,524 @@
 
 .canvasLinkable {
   cursor: crosshair;
+}
+
+// Ручки размера и точки стрелок не мельчают при отдалении: `--inv` — обратный масштаб поля
+.canvasHandle {
+  pointer-events: auto;
+  touch-action: none;
+
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -50%) scale(var(--inv, 1));
+
+  box-sizing: border-box;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--pv-accent);
+  border-radius: 0.1875rem;
+
+  background: var(--pv-panel);
+
+  // Пальцем берут один угол, зато крупный
+  @media (pointer: coarse) {
+    display: none;
+  }
+}
+
+.canvasHandleN,
+.canvasHandleS,
+.canvasHandleE,
+.canvasHandleW {
+  transform: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.canvasHandleN,
+.canvasHandleS {
+  cursor: ns-resize;
+
+  right: 0.5rem;
+  left: 0.5rem;
+
+  width: auto;
+  height: 0.625rem;
+}
+
+.canvasHandleE,
+.canvasHandleW {
+  cursor: ew-resize;
+
+  top: 0.5rem;
+  bottom: 0.5rem;
+
+  width: 0.625rem;
+  height: auto;
+}
+
+.canvasHandleN {
+  top: -0.3125rem;
+}
+
+.canvasHandleS {
+  bottom: -0.3125rem;
+}
+
+.canvasHandleE {
+  right: -0.3125rem;
+}
+
+.canvasHandleW {
+  left: -0.3125rem;
+}
+
+.canvasHandleNe {
+  cursor: nesw-resize;
+  top: 0;
+  left: 100%;
+}
+
+.canvasHandleSw {
+  cursor: nesw-resize;
+  top: 100%;
+  left: 0;
+}
+
+.canvasHandleNw {
+  cursor: nwse-resize;
+  top: 0;
+  left: 0;
+}
+
+.canvasHandleSe {
+  cursor: nwse-resize;
+  top: 100%;
+  left: 100%;
+
+  @media (pointer: coarse) {
+    display: block;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+  }
+}
+
+.canvasPort {
+  pointer-events: none;
+  touch-action: none;
+  cursor: crosshair;
+
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, -50%) scale(var(--inv, 1));
+
+  box-sizing: border-box;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid var(--pv-panel);
+  border-radius: 50%;
+
+  opacity: 0;
+  background: var(--pv-accent);
+
+  transition: opacity 0.12s;
+
+  .canvasCard:hover > & {
+    pointer-events: auto;
+    opacity: 1;
+  }
+
+  @media (pointer: coarse) {
+    width: 1.375rem;
+    height: 1.375rem;
+  }
+}
+
+// У единственной выделенной карточки точки видны и без наведения — пальцем навести нельзя
+.canvasPortShown {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.canvasPortTop {
+  top: 0;
+  left: 50%;
+}
+
+.canvasPortRight {
+  top: 50%;
+  left: 100%;
+}
+
+.canvasPortBottom {
+  top: 100%;
+  left: 50%;
+}
+
+.canvasPortLeft {
+  top: 50%;
+  left: 0;
+}
+
+.canvasMarquee {
+  pointer-events: none;
+
+  position: absolute;
+  z-index: 5;
+
+  border: 1px solid var(--pv-accent);
+  border-radius: 0.125rem;
+
+  background: color-mix(in srgb, var(--pv-accent) 12%, transparent);
+}
+
+.boardSelecting {
+  cursor: crosshair;
+}
+
+// ── карточка-ссылка и карточка файла ──
+
+.canvasLink,
+.canvasFile {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+
+  min-height: 0;
+  border-radius: 0.625rem;
+}
+
+.canvasLinkImage,
+.canvasFileImage {
+  pointer-events: none;
+
+  flex: 1 1 0;
+
+  width: 100%;
+  min-height: 0;
+
+  object-fit: cover;
+}
+
+.canvasFileImage {
+  object-fit: contain;
+  background: color-mix(in srgb, var(--pv-bg) 60%, var(--pv-panel));
+}
+
+.canvasLinkText {
+  overflow: hidden;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  min-height: 0;
+  padding: 0.5rem 0.75rem 0;
+
+  font-size: 0.8125rem;
+  line-height: 1.4;
+
+  .boardFar & {
+    visibility: hidden;
+  }
+}
+
+.canvasLinkImage + .canvasLinkText {
+  flex: none;
+  max-height: 45%;
+}
+
+.canvasLinkTitle {
+  overflow: hidden;
+  flex: none;
+
+  max-height: 2.8em;
+
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+  overflow-wrap: anywhere;
+}
+
+.canvasLinkDescription,
+.canvasLinkUrl {
+  overflow: hidden;
+  color: var(--pv-muted);
+  overflow-wrap: anywhere;
+}
+
+.canvasSkeleton {
+  display: block;
+  flex: none;
+
+  width: 85%;
+  height: 0.625rem;
+  border-radius: 0.3125rem;
+
+  opacity: 0.6;
+  background: var(--pv-line2);
+
+  animation: canvas-skeleton 1.2s ease-in-out infinite alternate;
+
+  & + & {
+    width: 55%;
+  }
+}
+
+@keyframes canvas-skeleton {
+  to {
+    opacity: 0.25;
+  }
+}
+
+.canvasLinkFoot,
+.canvasFileFoot {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+  align-items: center;
+
+  min-width: 0;
+  padding: 0.375rem 0.5rem 0.375rem 0.75rem;
+
+  font-size: 0.75rem;
+  color: var(--pv-muted);
+}
+
+.canvasLinkHost,
+.canvasFileName {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvasFileName {
+  font-size: 0.8125rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-fg);
+}
+
+.canvasFileSize {
+  flex: none;
+}
+
+.canvasLinkOpen {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+
+  color: var(--pv-accent);
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+  }
+}
+
+.canvasFileIcon {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 0;
+
+  color: var(--pv-muted);
+}
+
+.canvasFileType {
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+}
+
+// ── панель выделенного и меню ──
+
+.canvasBar,
+.canvasMenu {
+  cursor: default;
+
+  position: absolute;
+  z-index: 6;
+
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.75rem;
+
+  background: var(--pv-panel);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+}
+
+.canvasBar {
+  top: clamp(7rem, var(--by, 0px), calc(100% - 0.5rem));
+  left: clamp(9.5rem, var(--bx, 0px), calc(100% - 9.5rem));
+  transform: translate(-50%, -100%);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  padding: 0.25rem;
+}
+
+// На телефоне панель прижата к низу поля, слева от кнопок масштаба
+.canvasBarDocked {
+  top: auto;
+  right: 3.625rem;
+  bottom: 0.625rem;
+  left: 0.625rem;
+  transform: none;
+
+  overflow-x: auto;
+}
+
+.canvasBarRow,
+.canvasBarColors,
+.canvasMenuStrip {
+  display: flex;
+  gap: 0.125rem;
+  align-items: center;
+}
+
+.canvasBarColors,
+.canvasMenuStrip {
+  gap: 0.375rem;
+  padding: 0.25rem 0.375rem;
+}
+
+.canvasMenuStrip {
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.canvasBarButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+
+  color: var(--pv-fg);
+
+  background: transparent;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+  }
+
+  @media (pointer: coarse) {
+    width: 2.375rem;
+    height: 2.375rem;
+  }
+}
+
+.canvasSwatch {
+  cursor: var(--custom-cursor, pointer);
+
+  display: block;
+  flex: none;
+
+  box-sizing: border-box;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+
+  background: var(--c, var(--pv-muted));
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+    outline-offset: 2px;
+  }
+
+  @media (pointer: coarse) {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+}
+
+// «Без цвета» — пустой кружок
+.canvasSwatchNone {
+  border-color: var(--pv-line2);
+  background: transparent;
+}
+
+.canvasSwatchOn {
+  border-color: var(--pv-fg);
+}
+
+.canvasMenu {
+  top: clamp(0.5rem, var(--my, 0px), calc(100% - 24rem));
+  left: clamp(0.5rem, var(--mx, 0px), calc(100% - 15.5rem));
+
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+
+  width: 15rem;
+  max-height: calc(100% - 1rem);
+  padding: 0.25rem;
+}
+
+.canvasMenuItem {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex: none;
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0.4375rem 0.625rem;
+  border: 0;
+  border-radius: 0.5rem;
+
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: transparent;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+  }
+}
+
+.canvasMenuDanger {
+  color: var(--pv-red);
 }
 
 .rowDim {
