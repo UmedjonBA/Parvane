@@ -3,7 +3,6 @@ import { memo, useMemo, useRef } from '../../../lib/teact/teact';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { openNote } from '../../../util/parvaneSection';
 import {
   formatHours, formatHoursNumber, formatSpan, formatStatus,
 } from './plannerFormat';
@@ -20,6 +19,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
+import PlannerDailyNote from './PlannerDailyNote';
 import PlannerDayFeed from './PlannerDayFeed';
 import PlannerTaskRow from './PlannerTaskRow';
 import PlannerUndated from './PlannerUndated';
@@ -77,10 +77,6 @@ const PlannerToday = ({
     }) : undefined;
   const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
   const kcalGoal = getGoalsForDay(state, day, today).kcal?.target;
-
-  const handleDaily = useLastCallback(() => {
-    openNote(day);
-  });
 
   const handleTasksClick = useLastCallback(() => {
     tasksRef.current?.scrollIntoView({ block: 'start' });
@@ -241,22 +237,7 @@ const PlannerToday = ({
             </button>
           )}
         </section>
-        <section className={styles.card} data-today-note>
-          <div className={styles.cardHead}>
-            <h3 className={styles.cardTitle}>{lang('PlannerDailyNote')}</h3>
-            <span className={styles.grow} />
-            <button
-              type="button"
-              className={buildClassName(styles.btn, styles.btnGhost)}
-              data-today-daily
-              onClick={handleDaily}
-            >
-              <Icon name="edit" />
-              {lang('Edit')}
-            </button>
-          </div>
-          <p className={styles.muted}>{lang('PlannerDailyNoteHint')}</p>
-        </section>
+        <PlannerDailyNote day={day} />
       </div>
       {!isNarrow && <div className={styles.stack}>{feedCard}</div>}
       <PlannerUndated

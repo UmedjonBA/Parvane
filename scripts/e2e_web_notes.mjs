@@ -274,7 +274,9 @@ try {
   console.log('OK: пункт со сроком — задача «Плана», галочка ходит в обе стороны');
 
   // ── Заметка дня: кнопка на «Сегодня» создаёт её по шаблону в папке «Ежедневные» ──
-  await planner.locator('[data-today-daily]').click();
+  // Заметки дня ещё нет: карточка приглашает её написать
+  await visible(planner.locator('[data-today-note="empty"]').getByText('Write the daily note'), 'приглашение написать заметку дня');
+  await planner.locator('[data-today-note-empty]').click();
   const dayKey = await page.evaluate(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -282,7 +284,32 @@ try {
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
   await visible(knowledge.locator('[data-folder="Daily"]'), 'папка ежедневных заметок');
   await openPlannerScreen(page, 'today');
+  // Заметка по шаблону пуста: приглашение остаётся, кнопка «Изменить» открывает ту же заметку
+  await visible(planner.locator('[data-today-note="empty"]'), 'карточка пустой заметки дня');
+  await planner.locator('[data-today-daily]').click();
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по кнопке «Изменить»');
   console.log('OK: заметка дня создаётся с экрана «Сегодня»');
+
+  // ── Текст заметки дня виден на «Сегодня»; нажатие на него открывает заметку ──
+  const DAILY_TEXT = 'Выспался, день спокойный';
+  await note.getByRole('button', { name: 'Edit' }).click();
+  await page.locator('#knowledge-note-editor').fill([
+    `# ${dayKey}`, '', 'Выспался, **день** спокойный', '', '- [ ] разобрать почту', '- [x] зарядка',
+  ].join('\n'));
+  await note.getByRole('button', { name: 'Save' }).click();
+  await visible(body.getByText('разобрать почту'), 'текст заметки дня в «Знаниях»');
+  await openPlannerScreen(page, 'today');
+  const dailyCard = planner.locator('[data-today-note="text"]');
+  await visible(dailyCard.getByText(DAILY_TEXT), 'текст заметки дня на «Сегодня» (разметка упрощена)');
+  await visible(dailyCard.getByText('разобрать почту'), 'пункт заметки дня на «Сегодня»');
+  await visible(dailyCard.locator('[data-mark="done"]'), 'отмеченный пункт заметки дня');
+  assert.equal(await dailyCard.getByText(dayKey).count(), 0, 'заголовок с датой на карточке заметки дня повторён');
+  assert.equal(await planner.locator('[data-today-note-empty]').count(), 0, 'приглашение осталось при написанной заметке');
+  await dailyCard.locator('[data-today-note-text]').click();
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по нажатию на её текст');
+  await openPlannerScreen(page, 'today');
+  await visible(dailyCard.getByText(DAILY_TEXT), 'текст заметки дня после возврата на «Сегодня»');
+  console.log('OK: текст заметки дня на «Сегодня», нажатие открывает заметку');
 
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
@@ -1118,6 +1145,12 @@ try {
   await reloadPage(page);
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+  // «Знания» после перезагрузки ещё не открывались: «Сегодня» читает одну заметку дня само
+  await openPlannerScreen(page, 'today');
+  await visible(
+    planner.locator('[data-today-note="text"]').getByText(DAILY_TEXT),
+    'текст заметки дня на «Сегодня» после перезагрузки',
+  );
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');

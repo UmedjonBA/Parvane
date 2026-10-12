@@ -3662,6 +3662,7 @@
 "PlannerUndatedHint" = "Tasks without a day. Those «in progress» show up on «Today», the button on the right schedules a task for the selected day.";
 "PlannerDailyNote" = "Daily note";
 "PlannerDailyNoteHint" = "Thoughts, checklist items and links for the day live in «Knowledge».";
+"PlannerDailyNoteWrite" = "Write the daily note";
 "PlannerKcalLeftOf" = "{left} left of {goal}";
 "PlannerLayers" = "Calendar layers";
 "PlannerLayerWork" = "Plans";

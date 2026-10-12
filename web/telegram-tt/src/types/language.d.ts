@@ -2710,6 +2710,7 @@ export interface LangPair {
   'PlannerUndatedHint': undefined;
   'PlannerDailyNote': undefined;
   'PlannerDailyNoteHint': undefined;
+  'PlannerDailyNoteWrite': undefined;
   'PlannerLayers': undefined;
   'PlannerLayerWork': undefined;
   'PlannerCalMonthShort': undefined;

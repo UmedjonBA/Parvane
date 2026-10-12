@@ -1748,6 +1748,7 @@
 "PlannerUndatedHint" = "Задачи без дня. «В работе» видны в «Сегодня», кнопка справа ставит задачу на выбранный день.";
 "PlannerDailyNote" = "Заметка дня";
 "PlannerDailyNoteHint" = "Мысли, пункты и ссылки дня — в «Знаниях».";
+"PlannerDailyNoteWrite" = "Написать заметку дня";
 "PlannerKcalLeftOf" = "осталось {left} из {goal}";
 "PlannerLayers" = "Слои календаря";
 "PlannerLayerWork" = "Дела";

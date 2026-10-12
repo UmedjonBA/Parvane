@@ -42,6 +42,50 @@ export function formatDayShort(lang: LangFn, day: string) {
   return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '');
 }
 
+// Строка начала текста заметки: `mark` — чем была строка в разметке (пункт с галочкой, пункт списка, заголовок)
+export type NotePreviewLine = { text: string; mark?: 'todo' | 'done' | 'bullet' | 'heading' };
+
+const FENCE = '```';
+const PREVIEW_TASK = /^\s*[-*+] \[( |x|X)\](?: (.*))?$/;
+const PREVIEW_ITEM = /^\s*[-*+] (.*)$/;
+const PREVIEW_HEADING = /^#+\s+(.*)$/;
+
+// Разметка внутри строки — упрощённо, как в строке списка заметок: ссылка показывается подписью либо
+// названием заметки, метка пункта, обратные кавычки и звёздочки жирного убираются
+function plainInline(text: string) {
+  return text
+    .replace(/ \^t[a-z0-9]{4,12}\s*$/, '')
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (link, title: string, alias?: string) => alias?.trim() || title)
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/`/g, '')
+    .trim();
+}
+
+/**
+ * Начало текста заметки для карточки (заметка дня на «Сегодня»): первые `max` содержательных строк без
+ * блока свойств, заголовка с названием, блоков кода и пустых пунктов шаблона. `hasMore` — текст длиннее.
+ */
+export function previewLines(note: Pick<NoteEntry, 'title' | 'text'>, max: number) {
+  const title = note.title.trim().toLowerCase();
+  const lines: NotePreviewLine[] = [];
+  let isCode = false;
+  parseNote(note.text).body.split('\n').forEach((raw) => {
+    if (raw.trim().startsWith(FENCE)) {
+      isCode = !isCode;
+      return;
+    }
+    if (isCode) return;
+    const task = PREVIEW_TASK.exec(raw);
+    const item = !task && PREVIEW_ITEM.exec(raw);
+    const heading = !task && !item && PREVIEW_HEADING.exec(raw);
+    const text = plainInline(task ? task[2] || '' : item ? item[1] : heading ? heading[1] : raw).slice(0, PREVIEW_MAX);
+    if (!text || (heading && text.toLowerCase() === title)) return;
+    const mark = task ? (task[1] === ' ' ? 'todo' : 'done') : item ? 'bullet' : heading ? 'heading' : undefined;
+    lines.push(mark ? { text, mark } : { text });
+  });
+  return { lines: lines.slice(0, max), hasMore: lines.length > max };
+}
+
 // Строка под названием в списке: первая содержательная строка текста, не повторяющая само название
 export function previewOf(note: Pick<NoteEntry, 'title' | 'text'>) {
   const title = note.title.trim().toLowerCase();
