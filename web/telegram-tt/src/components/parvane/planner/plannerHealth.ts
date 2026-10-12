@@ -8,8 +8,9 @@ import type {
 import type { QuickDraft } from './plannerQuick';
 
 import {
-  addDays, ALL_DAY_END, ALL_DAY_START, isKnownNumber, makeFoodEntry, newId, toMinutes,
+  addDays, ALL_DAY_END, ALL_DAY_START, ensureList, isKnownNumber, makeFoodEntry, newId, toMinutes,
 } from './plannerModel';
+import { quickDescription } from './plannerQuick';
 
 // Сна меньше этого — бюджет дня снижается
 export const SHORT_SLEEP_MINUTES = 360;
@@ -38,7 +39,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       state.events.push({
         id: newId(),
         name: draft.name,
-        description: draft.description,
+        description: quickDescription(draft),
         start: draft.isAllDay ? ALL_DAY_START : draft.start!,
         end: draft.isAllDay ? ALL_DAY_END : draft.end!,
         day: repeat ? undefined : draft.day,
@@ -46,14 +47,20 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
         isAllDay: draft.isAllDay,
       });
       return draft.name;
-    case 'task':
+    case 'task': {
+      // Список из метки `#…`: существующий — по названию без учёта регистра, иначе новый — тем же путём,
+      // что у полной формы
+      const listName = draft.list?.trim().toLowerCase();
+      const known = listName ? state.lists.find(({ name }) => name.toLowerCase() === listName) : undefined;
+      const project = known?.name || ensureList(state, draft.list?.trim() || '')?.name || '';
       state.tasks.push({
         id: newId(),
         name: draft.name,
-        description: draft.description || '',
+        description: quickDescription(draft) || '',
         steps: [],
-        status: 'queue',
-        project: '',
+        // Метка «!» — задача сразу «В работе»
+        status: draft.isImportant ? 'active' : 'queue',
+        project,
         minutes: draft.minutes,
         day: repeat ? undefined : draft.day,
         start: draft.start,
@@ -63,6 +70,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
         rank: Math.min(0, ...state.tasks.map(({ rank }) => rank)) - 1,
       });
       return draft.name;
+    }
     case 'food': {
       const nutrients = draft.nutrients || {};
       const entry = makeFoodEntry({

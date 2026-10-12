@@ -620,7 +620,7 @@ const Planner = () => {
         </div>
         <div className={buildClassName(styles.content, styles.sideContent, 'custom-scroll')}>
           {side === 'settings' ? (
-            <PlannerSettings state={state} />
+            <PlannerSettings state={state} userId={currentUserId} />
           ) : side === 'form' ? (
             <PlannerTaskForm
               state={state}
@@ -759,6 +759,7 @@ const Planner = () => {
         initialText={quickText}
         today={today}
         settings={state.settings}
+        userId={currentUserId}
         onCreated={handleQuickCreated}
         onMore={handleQuickMore}
         onClose={closeQuick}

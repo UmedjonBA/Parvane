@@ -3370,6 +3370,7 @@
 "PlannerNoticeRepeatUpdated" = "Repeat rule updated: {name}";
 "PlannerNoticeScheduled" = "Scheduled for {date} at {time}";
 "PlannerNoticeSettingsSaved" = "Settings saved";
+"PlannerNoticeLearnedReset" = "Learned defaults reset";
 "PlannerNoticeStatusUpdated" = "Status updated: {name}";
 "PlannerNoticeStepAdded" = "Step added";
 "PlannerNoticeStepUpdated" = "Step updated: {name}";
@@ -3427,6 +3428,8 @@
 "PlannerSettingsLunchStart" = "Break from";
 "PlannerSettingsMargin" = "Gap between items, min";
 "PlannerSettingsReset" = "Reset to defaults";
+"PlannerSettingsLearnedReset" = "Reset learned defaults";
+"PlannerSettingsLearnedHint" = "Text entry remembers how you correct the kind and the duration for the first word of a name. After three identical corrections the value becomes the default on this device.";
 "PlannerSlotsHint" = "{window} · break {lunch} · {margin} min margin";
 "PlannerSlotsHintNoBreak" = "{window} · {margin} min margin";
 "PlannerSlotsNone" = "No suitable slots in the next 7 days. Shorten the task or move other things.";
@@ -3527,7 +3530,7 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. A description goes after a dash: “English lesson tue 15:00 — listening test”.";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. A description goes after a dash: “English lesson tue 15:00 — listening test”. Numbers can be words (“at five pm”). Markers #list, @place and a final ! set the list, the place and “in progress”.";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";
@@ -3535,6 +3538,8 @@
 "PlannerQuickName" = "Name";
 "PlannerQuickDescriptionToName" = "Move the description back to the name";
 "PlannerQuickTooLong" = "The name is too long.";
+"PlannerQuickLearned" = "From your corrections";
+"PlannerQuickAlternatives" = "Other readings";
 "PlannerTodayNoTasks" = "No tasks for this day";
 "PlannerTodayLeft" = "{count} left";
 "PlannerTodayAllDone" = "All done";

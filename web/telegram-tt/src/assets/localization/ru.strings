@@ -1419,6 +1419,7 @@
 "PlannerNoticeRepeatUpdated" = "Правило повтора обновлено: {name}";
 "PlannerNoticeScheduled" = "Назначено на {date} в {time}";
 "PlannerNoticeSettingsSaved" = "Настройки сохранены";
+"PlannerNoticeLearnedReset" = "Выученное сброшено";
 "PlannerNoticeStatusUpdated" = "Статус обновлён: {name}";
 "PlannerNoticeStepAdded" = "Шаг добавлен";
 "PlannerNoticeStepUpdated" = "Шаг обновлён: {name}";
@@ -1476,6 +1477,8 @@
 "PlannerSettingsLunchStart" = "Перерыв с";
 "PlannerSettingsMargin" = "Запас между делами, мин";
 "PlannerSettingsReset" = "Сбросить по умолчанию";
+"PlannerSettingsLearnedReset" = "Сбросить выученное";
+"PlannerSettingsLearnedHint" = "Ввод текстом запоминает, как вы поправляете тип и длительность для первого слова названия. После трёх одинаковых правок значение подставляется само — на этом устройстве.";
 "PlannerSlotsHint" = "{window} · перерыв {lunch} · запас {margin} мин";
 "PlannerSlotsHintNoBreak" = "{window} · запас {margin} мин";
 "PlannerSlotsNone" = "В ближайшие 7 дней подходящих окон нет. Уменьшите длительность или перенесите другие дела.";
@@ -1613,7 +1616,7 @@
 "PlannerQuickTitle" = "Новая запись";
 "PlannerQuickAuto" = "Авто";
 "PlannerQuickPlaceholder" = "созвон завтра 16:00 45 мин";
-"PlannerQuickHint" = "Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами. Описание — после тире: «пара по английскому вт 15:00 — тест по лисенингу».";
+"PlannerQuickHint" = "Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами. Описание — после тире: «пара по английскому вт 15:00 — тест по лисенингу». Числа можно словами («в пять вечера»). Метки #список, @место и ! в конце — список, место и «в работе».";
 "PlannerQuickMore" = "Подробнее";
 "PlannerQuickDue" = "до {date}";
 "PlannerQuickRemove" = "Убрать: {value}";
@@ -1621,6 +1624,8 @@
 "PlannerQuickName" = "Название";
 "PlannerQuickDescriptionToName" = "Вернуть описание в название";
 "PlannerQuickTooLong" = "Название слишком длинное.";
+"PlannerQuickLearned" = "По вашим правкам";
+"PlannerQuickAlternatives" = "Другие чтения";
 "PlannerTodayNoTasks" = "На этот день задач нет";
 "PlannerTodayLeft" = "осталось: {count}";
 "PlannerTodayAllDone" = "Всё сделано";
