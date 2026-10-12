@@ -3714,6 +3714,14 @@
 "PlannerHealthWorkoutExample" = "run 5 km 30 min";
 "PlannerHealthActivityHint" = "As text: «run 5 km 28 min», «gym squat 4x8x80, bench 3x10x60», «steps 9500». WHO advises at least 150 minutes of moderate activity a week.";
 "PlannerHealthKcalWeek" = "Calories this week";
+"ParvanePalettePlaceholder" = "Note, event or command";
+"ParvanePaletteCommands" = "Commands";
+"ParvanePaletteRecords" = "Planner entries";
+"ParvanePaletteLogSleep" = "Log sleep";
+"ParvanePaletteLogFood" = "Log a meal";
+"ParvanePaletteSleepText" = "sleep";
+"ParvanePaletteFoodText" = "lunch";
+"ParvanePaletteLoading" = "Loading notes and entries…";
 "ParvaneSectionKnowledge" = "Knowledge";
 "KnowledgeNotes" = "Notes";
 "KnowledgeGraph" = "Graph";

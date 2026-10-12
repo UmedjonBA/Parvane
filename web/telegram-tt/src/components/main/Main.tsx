@@ -103,6 +103,7 @@ import ModalContainer from '../modals/ModalContainer';
 import Cloud from '../parvane/cloud/Cloud';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
 import Knowledge from '../parvane/notes/Knowledge';
+import ParvanePalette from '../parvane/palette/ParvanePalette';
 import Planner from '../parvane/planner/Planner';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
@@ -948,6 +949,8 @@ const Main = ({
       {isCloudOpen && (knowledgeView === 'files' ? <Cloud isMobile={isMobile} /> : <Knowledge />)}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
+      {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}
+      <ParvanePalette />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
       <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
       <RightColumn isMobile={isMobile} />

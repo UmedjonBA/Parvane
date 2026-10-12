@@ -1,0 +1,48 @@
+// Parvane: общий поиск (Ctrl+K). Окно, строки и поле — из набора разделов (`PvKit.module.scss`),
+// здесь только то, чего в наборе нет. Цвета — переменными `--pv-*`
+
+// Удвоенный класс — чтобы правило было сильнее отступа шторки из набора при любом порядке стилей
+.root.root {
+  // Поле поиска остаётся на месте, прокручивается только список
+  :global(.modal-content) {
+    padding-top: 0;
+  }
+}
+
+.form {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+
+  display: block;
+
+  margin: 0;
+  padding: 1rem 0 0.5rem;
+
+  background: var(--pv-panel);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.ava {
+  width: 2.125rem;
+  height: 2.125rem;
+}
+
+.mark {
+  font-weight: 600;
+  color: var(--pv-accent);
+}
+
+.note {
+  padding: 0.75rem 0.25rem 0.25rem;
+}

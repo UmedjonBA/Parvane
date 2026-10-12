@@ -13,6 +13,7 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
+import { openPalette } from '../palette/paletteOpen';
 import {
   childrenOf, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
@@ -674,6 +675,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
         <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
           {!isMobile && <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>}
           <KnowledgeTabs />
+          <button
+            type="button"
+            className={buildClassName(kit.ib, kit.onlyM)}
+            aria-label={lang('Search')}
+            data-palette-open
+            onClick={openPalette}
+          >
+            <PvIcon name="search" />
+          </button>
           <span className={buildClassName(kit.grow, kit.hideM)} />
           {canAdd && isPersonalRoot && (
             <button

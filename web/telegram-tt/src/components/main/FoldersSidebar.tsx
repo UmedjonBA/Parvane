@@ -6,11 +6,13 @@ import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import { ALL_FOLDER_ID } from '../../config';
 import { selectLeftColumnContentKey } from '../../global/selectors';
+import { IS_MAC_OS } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import {
   getKnowledgeView, getParvaneSection, getPlannerView, openKnowledgeView, openPlannerCalendar, openPlannerView,
   setParvaneSection,
 } from '../../util/parvaneSection';
+import { openPalette } from '../parvane/palette/paletteOpen';
 
 import useDerivedState from '../../hooks/useDerivedState';
 import { useFolderManagerForUnreadCounters } from '../../hooks/useFolderManager';
@@ -36,16 +38,10 @@ type OwnProps = {
 const MAX_BADGE_COUNT = 99;
 
 // Parvane: боковая панель разделов на компьютере. Сверху знак и разделы (Чаты, Календарь, Здоровье,
-// Знания, Облако), внизу поиск и профиль. «Сегодня» — первый вид календаря, отдельной кнопки у него нет.
+// Знания, Облако), внизу общий поиск (палитра Ctrl+K) и профиль. «Сегодня» — первый вид календаря,
+// отдельной кнопки у него нет.
 // Папок чатов здесь нет — они над списком чатов.
 // На телефоне разделы в нижней панели (`ParvaneTabBar`)
-const SEARCH_INPUT_ID = 'telegram-search-input';
-const SEARCH_FOCUS_DELAY_MS = 150;
-
-function focusChatSearch() {
-  document.getElementById(SEARCH_INPUT_ID)?.focus();
-}
-
 const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => {
   const { openLeftColumnContent, openSettingsScreen } = getActions();
 
@@ -79,14 +75,6 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
 
   const handleSelectFiles = useLastCallback(() => {
     openKnowledgeView('files');
-  });
-
-  // Поиск по всему приложению (заметки, записи, команды) не сделан: кнопка открывает поиск по чатам
-  const handleSearch = useLastCallback(() => {
-    setParvaneSection('messenger');
-    openLeftColumnContent({ contentKey: LeftColumnContent.GlobalSearch });
-    // Поле появляется со следующей отрисовкой шапки
-    window.setTimeout(focusChatSearch, SEARCH_FOCUS_DELAY_MS);
   });
 
   const handleSelectProfile = useLastCallback(() => {
@@ -143,7 +131,14 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
         {renderTab('cloud', lang('ParvaneSectionCloud'), isFilesOpen, handleSelectFiles)}
       </div>
       <div className={styles.spacer} />
-      <button type="button" className={styles.section} onClick={handleSearch}>
+      {/* Общий поиск (палитра): заметки, записи «Плана», чаты и команды. То же — Ctrl+K */}
+      <button
+        type="button"
+        className={styles.section}
+        title={`${lang('Search')} (${IS_MAC_OS ? '⌘K' : 'Ctrl+K'})`}
+        aria-label={lang('Search')}
+        onClick={openPalette}
+      >
         <ParvaneIcon name="search" />
         <span className={styles.sectionTitle}>{lang('Search')}</span>
       </button>
