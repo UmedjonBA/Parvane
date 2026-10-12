@@ -14,7 +14,8 @@ import {
 } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
-import { freeCanvasTitle } from './notesCanvasGraph';
+import { parseCanvas, serializeCanvas } from './notesCanvas';
+import { freeCanvasTitle, renameCanvasNote } from './notesCanvasGraph';
 import { mergeNotes } from './notesMerge';
 import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNote, renameLinks,
@@ -391,7 +392,7 @@ export async function applyPlannerToNotes(vaultName: string) {
   }
 }
 
-/** Переименовать заметку и поправить ссылки на неё в остальных. */
+/** Переименовать заметку и поправить ссылки на неё в остальных заметках и её карточки на холстах. */
 export async function renameNote(noteId: string, title: string, vaultName: string) {
   const note = getNotes().find(({ id }) => id === noteId);
   const rootId = rootIdOf();
@@ -403,6 +404,12 @@ export async function renameNote(noteId: string, title: string, vaultName: strin
   for (const other of getNotes()) {
     const text = renameLinks(other.text, note.title, next);
     if (text !== other.text) await saveNote(other.id, text, vaultName);
+  }
+  // Карточка холста хранит название заметки путём файла; повреждённый файл холста не переписывается
+  for (const canvas of getCanvases()) {
+    const parsed = parseCanvas(canvas.text);
+    const doc = parsed.error ? parsed.doc : renameCanvasNote(parsed.doc, note.title, next);
+    if (doc !== parsed.doc) await saveCanvas(canvas.title, serializeCanvas(doc), vaultName, canvas.id);
   }
   return true;
 }

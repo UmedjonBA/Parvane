@@ -2754,6 +2754,9 @@ export interface LangPair {
   'KnowledgeCanvasFromGraph': undefined;
   'KnowledgeCanvasFromGraphShort': undefined;
   'KnowledgeCanvasGraphName': undefined;
+  'KnowledgeCanvasRefresh': undefined;
+  'KnowledgeCanvasRefreshNothing': undefined;
+  'KnowledgeCanvasNoteMissing': undefined;
   'KnowledgeCanvasActions': undefined;
   'KnowledgeCanvasTitle': undefined;
   'KnowledgeCanvasRename': undefined;
@@ -4982,6 +4985,14 @@ export interface LangPairWithVariables<V = LangVariable> {
     'count': V;
   };
   'KnowledgeCanvasName': {
+    'count': V;
+  };
+  'KnowledgeCanvasRefreshDone': {
+    'cards': V;
+    'edges': V;
+    'removed': V;
+  };
+  'KnowledgeCanvasRefreshRenamed': {
     'count': V;
   };
   'KnowledgeCanvasDeleteConfirm': {

@@ -51,6 +51,27 @@ export function fitRects(
   };
 }
 
+/**
+ * Вид, в котором видны и прямоугольники `rects`, и то, что было на экране. Если они уже целиком на поле (под
+ * панелью `top`, над низом `bottom`) — прежний вид без изменений.
+ */
+export function revealRects(
+  view: BoardView, rects: BoardRect[], width: number, height: number, top: number, bottom: number, side = 20,
+): BoardView {
+  if (!rects.length || !width || !height) return view;
+  const shown = {
+    x: (side - view.x) / view.scale,
+    y: (top - view.y) / view.scale,
+    width: Math.max(1, width - side * 2) / view.scale,
+    height: Math.max(1, height - top - bottom) / view.scale,
+  };
+  const isShown = rects.every((rect) => (
+    rect.x >= shown.x && rect.y >= shown.y
+    && rect.x + rect.width <= shown.x + shown.width && rect.y + rect.height <= shown.y + shown.height
+  ));
+  return isShown ? view : fitRects([shown, ...rects], width, height, top, bottom, side);
+}
+
 /** Точечный фон, который едет и растёт вместе с полем. */
 export function boardBackgroundStyle(view: BoardView) {
   const cell = BOARD_GRID * view.scale;

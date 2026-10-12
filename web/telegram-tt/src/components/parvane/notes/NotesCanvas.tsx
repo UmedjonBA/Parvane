@@ -18,7 +18,8 @@ import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { downloadCloudNode, getCloudData, getNodes } from '../cloud/cloudStore';
 import {
-  BOARD_FAR_SCALE, BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
+  BOARD_FAR_SCALE, BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, revealRects, zoomAround,
+  zoomByWheel,
 } from './boardView';
 import {
   addEdge, addNode, CANVAS_DEFAULT_NODE_HEIGHT, CANVAS_DEFAULT_NODE_WIDTH, CANVAS_PRESET_COLORS, CANVAS_SIDES,
@@ -37,7 +38,9 @@ import {
   resizeRect, selectAll, selectionBounds, serializeClip, snapDelta, snapTo, toggleSelected, wrapInGroup,
 } from './notesCanvasEdit';
 import { noteTitleOfPath, resolveDrivePath } from './notesCanvasFiles';
-import { canvasFromGraph, freeCanvasTitle } from './notesCanvasGraph';
+import {
+  canvasFromGraph, freeCanvasTitle, GRAPH_NOTE_FIELD, refreshCanvasFromGraph,
+} from './notesCanvasGraph';
 import {
   createHistory, dropStep, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
@@ -606,18 +609,53 @@ const NotesCanvas = ({
     void createCanvas(lang('KnowledgeCanvasName', { count }), createEmptyCanvas());
   });
 
+  // Заметки и ссылки между ними — вход холста из графа и его обновления
+  const graphNotes = () => notes.map((note) => ({
+    id: note.id,
+    title: note.title,
+    folder: note.folder,
+    links: parseNote(note.text).links,
+    isDaily: note.isDaily,
+  }));
+
   // «Холст из графа»: карточка на каждую заметку, стрелка на каждую ссылку; дальше это обычный холст
   const handleGraphCanvas = useLastCallback(() => {
-    const content = canvasFromGraph(notes.map((note) => ({
-      id: note.id,
-      title: note.title,
-      folder: note.folder,
-      links: parseNote(note.text).links,
-      isDaily: note.isDaily,
-    })), { cardHeight: NOTE_HEIGHT });
+    const content = canvasFromGraph(graphNotes(), { cardHeight: NOTE_HEIGHT });
     void createCanvas(
       freeCanvasTitle(lang('KnowledgeCanvasGraphName'), canvases.map((item) => item.title)), content,
     );
+  });
+
+  // «Обновить из графа»: открытый холст получает карточки новых заметок и стрелки новых ссылок, свои стрелки
+  // исчезнувших ссылок уходят; сделанное руками не трогается. Один шаг истории. Новые карточки выделены, вид
+  // сдвигается к ним, только если они за краем поля
+  const handleRefreshGraph = useLastCallback(() => {
+    if (!entry) return;
+    finishInline();
+    dropGesture();
+    setMenu(undefined);
+    setLinkFrom(undefined);
+    const result = refreshCanvasFromGraph(docRef.current, graphNotes(), { cardHeight: NOTE_HEIGHT });
+    if (result.doc === docRef.current) {
+      showNotification({ message: lang('KnowledgeCanvasRefreshNothing') });
+      return;
+    }
+    change(result.doc);
+    const added = result.added.cards.map((id) => findNode(result.doc, id)!);
+    if (added.length) {
+      selectNodes(result.added.cards);
+      const size = viewport();
+      setView(revealRects(view, added, size.width, size.height, isNarrow ? FIT_TOP_NARROW : FIT_TOP, FIT_BOTTOM));
+    } else {
+      select(pruneSelection(result.doc, selectionRef.current));
+    }
+    const counts = lang('KnowledgeCanvasRefreshDone', {
+      cards: result.added.cards.length, edges: result.added.edges.length, removed: result.removed.edges.length,
+    });
+    const renamed = result.renamed.cards.length;
+    showNotification({
+      message: renamed ? `${counts}. ${lang('KnowledgeCanvasRefreshRenamed', { count: renamed })}` : counts,
+    });
   });
 
   const handlePickCanvas = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -724,11 +762,14 @@ const NotesCanvas = ({
 
   const handlePickNote = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setIsPickingNote(false);
+    const title = e.currentTarget.dataset.title || '';
+    // Идентификатор заметки: по нему карточка найдёт её после переименования («Обновить из графа»)
     add({
       type: 'file',
       width: CANVAS_DEFAULT_NODE_WIDTH,
       height: NOTE_HEIGHT,
-      file: `${e.currentTarget.dataset.title}.md`,
+      file: `${title}.md`,
+      [GRAPH_NOTE_FIELD]: noteByTitle.get(title.toLowerCase())?.id,
     }, insertAtRef.current);
   });
 
@@ -1105,6 +1146,9 @@ const NotesCanvas = ({
         break;
       case 'file':
         pickFile(at);
+        break;
+      case 'refreshGraph':
+        handleRefreshGraph();
         break;
       default:
         setView(fitTo(docRef.current));
@@ -1684,6 +1728,7 @@ const NotesCanvas = ({
         key={node.id}
         data-canvas-node={node.id}
         data-canvas-type={node.type}
+        data-canvas-note={note ? 'found' : 'missing'}
         className={cardClass}
         style={`--gc: ${note ? folderColor(note.folder, note.isDaily) : 'var(--pv-faint)'}; ${place}; height: ${
           node.height}px`}
@@ -1695,7 +1740,7 @@ const NotesCanvas = ({
         <div className={styles.canvasCardBody}>
           {lines ? lines.map((line, i) => (
             <div key={i}>{renderCardInline(line)}</div>
-          )) : <div className={kit.faint}>{lang('KnowledgeMissingNote')}</div>}
+          )) : <div className={kit.faint}>{lang('KnowledgeCanvasNoteMissing')}</div>}
         </div>
         {renderPorts(node)}
         {renderHandles(node)}
@@ -1805,6 +1850,7 @@ const NotesCanvas = ({
       item('file', 'file', lang('KnowledgeCanvasFileChoose')),
       item('paste', 'paste', lang('KnowledgeCanvasPaste')),
       item('selectAll', 'select', lang('KnowledgeCanvasSelectAll')),
+      item('refreshGraph', 'refresh', lang('KnowledgeCanvasRefresh')),
       item('fitView', 'fit', lang('KnowledgeZoomFit')),
     ];
   } else if (menu && !selection.nodes.length) {
@@ -1932,6 +1978,16 @@ const NotesCanvas = ({
             >
               <PvIcon name="graph" isSmall />
               {lang('KnowledgeCanvasFromGraphShort')}
+            </button>
+            <button
+              type="button"
+              className={buildClassName(kit.chip, styles.boardChip)}
+              title={lang('KnowledgeCanvasRefresh')}
+              aria-label={lang('KnowledgeCanvasRefresh')}
+              data-canvas-refresh
+              onClick={handleRefreshGraph}
+            >
+              <PvIcon name="refresh" isSmall />
             </button>
             <button
               type="button"

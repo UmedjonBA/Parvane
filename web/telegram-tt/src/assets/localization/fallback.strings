@@ -3714,6 +3714,11 @@
 "KnowledgeCanvasFromGraph" = "Canvas from graph";
 "KnowledgeCanvasFromGraphShort" = "From graph";
 "KnowledgeCanvasGraphName" = "Link graph";
+"KnowledgeCanvasRefresh" = "Refresh from graph";
+"KnowledgeCanvasRefreshDone" = "Added notes: {cards}, links: {edges}. Removed links: {removed}";
+"KnowledgeCanvasRefreshNothing" = "Nothing to update";
+"KnowledgeCanvasRefreshRenamed" = "Cards moved to renamed notes: {count}";
+"KnowledgeCanvasNoteMissing" = "Note not found";
 "KnowledgeCanvasActions" = "Canvas actions";
 "KnowledgeCanvasTitle" = "Canvas name";
 "KnowledgeCanvasRename" = "Rename";
