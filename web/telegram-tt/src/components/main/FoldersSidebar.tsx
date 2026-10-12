@@ -37,6 +37,13 @@ const MAX_BADGE_COUNT = 99;
 // Parvane: боковая панель разделов на компьютере. Сверху знак и разделы (Чаты, Сегодня, Календарь,
 // Здоровье, Знания, Облако), внизу поиск и профиль. Папок чатов здесь нет — они над списком чатов.
 // На телефоне разделы в нижней панели (`ParvaneTabBar`)
+const SEARCH_INPUT_ID = 'telegram-search-input';
+const SEARCH_FOCUS_DELAY_MS = 150;
+
+function focusChatSearch() {
+  document.getElementById(SEARCH_INPUT_ID)?.focus();
+}
+
 const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => {
   const { openLeftColumnContent, openSettingsScreen } = getActions();
 
@@ -80,6 +87,8 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   const handleSearch = useLastCallback(() => {
     setParvaneSection('messenger');
     openLeftColumnContent({ contentKey: LeftColumnContent.GlobalSearch });
+    // Поле появляется со следующей отрисовкой шапки
+    window.setTimeout(focusChatSearch, SEARCH_FOCUS_DELAY_MS);
   });
 
   const handleSelectProfile = useLastCallback(() => {

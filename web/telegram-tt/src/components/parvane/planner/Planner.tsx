@@ -10,7 +10,8 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumePlannerAddRequest, getPlannerAddRequest, getPlannerView, setPlannerView,
+  consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerSettingsRequest,
+  getPlannerView, setPlannerView,
 } from '../../../util/parvaneSection';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
@@ -354,6 +355,14 @@ const Planner = () => {
     consumePlannerAddRequest();
     handleOpenQuick();
   }, [addRequest, isLoaded]);
+
+  // «Настройки плана» в профиле
+  const settingsRequest = useDerivedState(getPlannerSettingsRequest);
+  useEffect(() => {
+    if (!settingsRequest || !isLoaded) return;
+    consumePlannerSettingsRequest();
+    handleOpenSettings();
+  }, [settingsRequest, isLoaded]);
 
   // «В плане · открыть» на карточке в чате: «План» открывается на дне записи
   const dayRequest = useDerivedState(getPlannerDayRequest);

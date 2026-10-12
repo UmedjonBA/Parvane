@@ -7,6 +7,7 @@ import { dismissRecoveryKeyDialog, preparePage, sendText } from './e2e_web_helpe
 
 const PASSWORD = 'Parvane-theme-e2e-1';
 const WIDE = { width: 1440, height: 900 };
+const PHONE = { width: 390, height: 844 };
 const STEP_TIMEOUT_MS = 20000;
 const dir = process.env.PARVANE_E2E_SHOT_DIR;
 const schemes = (process.env.PARVANE_E2E_SCHEMES || 'gruvbox').split(',');
@@ -68,6 +69,30 @@ try {
       // Настройки: выбор схемы
       await sidebar.getByRole('button', { name: 'Profile' }).click();
       await shot('settings');
+      // Те же экраны на ширине телефона: нижняя панель, вкладки внутри разделов
+      await page.setViewportSize(PHONE);
+      const bar = page.getByRole('navigation', { name: 'Sections' });
+      const phone = async (name, open) => {
+        await open().catch((err) => console.log(`WARN: телефон, ${name}: ${String(err).split('\n')[0]}`));
+        await shot(`phone-${name}`);
+      };
+      await phone('profile', () => bar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }));
+      await phone('chats', () => bar.getByRole('button', { name: 'Chats' }).click());
+      await phone('plus', () => bar.getByRole('button', { name: 'New entry' }).click());
+      await page.keyboard.press('Escape');
+      await phone('today', async () => {
+        await bar.getByRole('button', { name: 'Planner' }).click();
+        await planner.locator('header').getByText('Today', { exact: true }).first().click();
+      });
+      await phone('calendar', () => planner.locator('header').getByText('Calendar', { exact: true }).first().click());
+      await phone('health', () => planner.locator('header').getByText('Health', { exact: true }).first().click());
+      await phone('quick', async () => {
+        await bar.getByRole('button', { name: 'New entry' }).click();
+        await page.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
+      });
+      await page.keyboard.press('Escape');
+      await phone('knowledge', () => bar.getByRole('button', { name: 'Knowledge' }).click());
+      await phone('files', () => page.getByRole('tab', { name: 'Files' }).first().click());
       console.log(`OK: снимки ${scheme} / ${mode}`);
       await context.close();
     }
