@@ -1080,9 +1080,102 @@ try {
   await page.waitForTimeout(2500);
   console.log('OK: холст — текст, карточка заметки, связь');
 
+  // ── Холст: новая заметка прямо с холста; стрелка, брошенная на пустом месте, создаёт заметку ──
+  // Всё на отдельном холсте, который в конце уходит в корзину: проверки после перезагрузки считают
+  // карточки и стрелки на «Canvas 2»
+  const MADE_ON_CANVAS = 'Заметка с холста';
+  const MADE_BY_ARROW = 'Заметка от стрелки';
+  await knowledge.getByRole('button', { name: 'New canvas' }).click();
+  await visible(chip('Canvas 3'), 'холст для новых заметок');
+  await canvasCount('[data-canvas-node]', 0, 'новый холст не пуст');
+  await knowledge.locator('[data-canvas-tool="new-note"]').click();
+  await visible(page.locator('#knowledge-canvas-note-name'), 'поле названия новой заметки');
+  await page.locator('#knowledge-canvas-note-name').fill(MADE_ON_CANVAS);
+  await page.locator('#knowledge-canvas-note-name').press('Enter');
+  await visible(noteCardOf(MADE_ON_CANVAS), 'карточка заметки, созданной с холста');
+  await visible(board.locator('[data-canvas-note="found"]'), 'карточка новой заметки нашла заметку в хранилище');
+  await canvasCount('[data-canvas-edge]', 0, 'новая заметка с кнопки панели получила стрелку');
+  // Стрелка от стороны карточки, брошенная на пустом месте: меню конца стрелки → «Новая заметка»
+  await noteCardOf(MADE_ON_CANVAS).hover();
+  const madePort = await centerOf(noteCardOf(MADE_ON_CANVAS).locator('[data-canvas-port="right"]'));
+  await drag(madePort, { x: madePort.x + 220, y: madePort.y + 170 });
+  await visible(page.locator('[data-canvas-context] [data-canvas-command="dropNewNote"]'), 'меню конца стрелки');
+  await visible(board.locator('[data-canvas-draft]'), 'стрелка на экране, пока открыто меню её конца');
+  await canvasCount('[data-canvas-node]', 1, 'брошенная стрелка создала карточку до выбора в меню');
+  await page.locator('[data-canvas-command="dropNewNote"]').click();
+  await page.locator('#knowledge-canvas-note-name').fill(MADE_BY_ARROW);
+  await page.locator('[data-canvas-note-create]').click();
+  await visible(noteCardOf(MADE_BY_ARROW), 'карточка заметки на конце стрелки');
+  await canvasCount('[data-canvas-edge]', 1, 'стрелка к новой заметке не создана');
+  await canvasCount('[data-canvas-note="found"]', 2, 'карточки новых заметок не нашли заметки');
+  // Escape в меню конца стрелки ничего не создаёт
+  await noteCardOf(MADE_BY_ARROW).hover();
+  const arrowPort = await centerOf(noteCardOf(MADE_BY_ARROW).locator('[data-canvas-port="bottom"]'));
+  await drag(arrowPort, { x: arrowPort.x + 40, y: arrowPort.y + 150 });
+  await visible(page.locator('[data-canvas-command="dropText"]'), 'меню конца второй стрелки');
+  await page.keyboard.press('Escape');
+  await page.locator('[data-canvas-context]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await canvasCount('[data-canvas-node]', 2, 'отменённое меню конца стрелки создало карточку');
+  await canvasCount('[data-canvas-edge]', 1, 'отменённое меню конца стрелки создало стрелку');
+  // Обе заметки — настоящие: есть в списке; стрелка холста ссылку в текст заметки не пишет
+  await page.waitForTimeout(1500);
+  await openTab('Notes');
+  await visible(row(MADE_ON_CANVAS), 'заметка, созданная с холста, в списке заметок');
+  await visible(row(MADE_BY_ARROW), 'заметка, созданная стрелкой, в списке заметок');
+  await row(MADE_ON_CANVAS).click();
+  await visible(
+    knowledge.locator(`[data-note-id][data-note-title="${MADE_ON_CANVAS}"]`), 'созданная с холста заметка открыта',
+  );
+  assert.equal(
+    (await body.innerText()).includes(MADE_BY_ARROW), false, 'стрелка холста записала ссылку в текст заметки',
+  );
+  await openTab('Canvas');
+  await chip('Canvas 3').click();
+  await canvasCount('[data-canvas-note="found"]', 2, 'карточки новых заметок после возврата на холст');
+  console.log('OK: новая заметка с холста кнопкой и стрелкой, брошенной на пустом месте');
+
+  // Картинки на холсте: настройка устройства в меню холста
+  await knowledge.locator('[data-canvas-menu]').click();
+  assert.equal(
+    await page.locator('[data-canvas-images="full"]').getAttribute('aria-checked'), 'true',
+    'по умолчанию картинки холста — в полном качестве',
+  );
+  await page.locator('[data-canvas-images="thumb"]').click();
+  await page.waitForFunction(
+    () => document.querySelector('[data-canvas-images="thumb"]')?.getAttribute('aria-checked') === 'true'
+      && localStorage.getItem('parvane:knowledge-canvas-images') === 'thumb',
+    undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('настройка «миниатюрами» не запомнилась'));
+  await page.locator('[data-canvas-images="full"]').click();
+  await page.waitForFunction(
+    () => localStorage.getItem('parvane:knowledge-canvas-images') === 'full', undefined, { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('настройка «в полном качестве» не вернулась'));
+  // Шторка ещё открыта: холст — в корзину
+  await page.locator('[data-canvas-delete]').click();
+  await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
+  await chip('Canvas 3').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('холст для новых заметок не удалён'));
+  await visible(chip('Canvas 2'), 'холст после удаления временного');
+  console.log('OK: настройка качества картинок холста');
+
   // ── «Файлы»: хранилище — обычная папка облака с файлами .md ───────────────
   await openTab('Files');
   await visible(cloud.getByText('Knowledge', { exact: true }), 'папка хранилища в облаке');
+  // Служебная отметка справки (`.parvane-guide.json` в корне хранилища) в «Файлах» не видна: ни в папке,
+  // ни в поиске
+  await cloud.locator('[data-node-id][data-name="Knowledge"]').click();
+  await visible(cloud.locator('[data-node-id][data-name$=".md"]'), 'заметки в папке хранилища');
+  assert.equal(
+    await cloud.locator('[data-node-id][data-name^=".parvane-"]').count(), 0, 'служебный файл виден в папке хранилища',
+  );
+  await cloud.getByRole('searchbox').fill('parvane-guide');
+  await page.waitForFunction(
+    () => !document.querySelector('#ParvaneCloud [data-node-id][data-name$=".md"]'), undefined,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('поиск по файлам не применился'));
+  assert.equal(await cloud.locator('[data-node-id]').count(), 0, 'служебный файл найден поиском');
+  await cloud.getByRole('searchbox').fill('');
+  await visible(cloud.locator('[data-node-id][data-name$=".md"]'), 'папка хранилища после сброса поиска');
   console.log('OK: хранилище заметок — папка «Знания» в облаке');
 
   // ── Всё пережило перезагрузку ─────────────────────────────────────────────

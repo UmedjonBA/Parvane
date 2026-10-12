@@ -11,6 +11,7 @@ import type {
 } from './notesCanvas';
 import type { CanvasAlign, CanvasGuide } from './notesCanvasAlign';
 import type { CanvasCurve, CanvasHandle, CanvasSelection } from './notesCanvasEdit';
+import type { CanvasImageQuality } from './notesCanvasImages';
 import type { CanvasInlineKind, NoteCardPart, NoteCardState } from './notesCanvasNote';
 import type { CanvasEntry, NoteEntry } from './notesStore';
 
@@ -45,14 +46,17 @@ import {
 import {
   createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
+import { isCanvasImage } from './notesCanvasImages';
 import {
-  inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, notePreviewLines,
+  droppedCardPlace, inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, notePreviewLines, relinkNoteCards,
 } from './notesCanvasNote';
 import { groupAtPoint, pressAction } from './notesCanvasPress';
 import { folderColor, isDayTitle } from './notesLook';
 import { parseNote } from './notesModel';
+import { readCanvasImageQuality, writeCanvasImageQuality } from './notesPrefs';
 import {
-  deleteCanvas, freeNoteTitle, getNotes, getNotesStatus, renameCanvas, renameNote, saveCanvas, saveNote,
+  createNote, deleteCanvas, freeNoteTitle, getNotes, getNotesStatus, renameCanvas, renameNote, saveCanvas,
+  saveNoteOrRestore,
 } from './notesStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -103,10 +107,17 @@ type Editing = { text: string; color: string; labels: Record<string, string>; re
 // (`note`) и название (`title`) самой заметки: `noteId` — заметка, `base` — то, с чего правка начата
 type Inline = {
   id: string; kind: CanvasInlineKind; isNew: boolean; isAuto: boolean; noteId?: string; base?: string;
+  // Название заметки на начало правки текста: под ним она создаётся заново, если её за это время удалили
+  noteTitle?: string;
 };
+// Начало стрелки, брошенной на пустом месте: карточка, которую там создадут, будет связана с этой
+type EdgeStart = { id: string; side: CanvasSide };
 type Pending = { id: string; title: string; doc: CanvasDoc };
 type InlineField = HTMLTextAreaElement | HTMLInputElement;
-type Menu = { x: number; y: number; point: CanvasPoint; kind: 'selection' | 'board' };
+// `drop` — меню стрелки, брошенной на пустом месте: что создать на её конце
+type Menu = { x: number; y: number; point: CanvasPoint; kind: 'selection' | 'board' | 'drop'; from?: EdgeStart };
+// Название новой заметки: карточка встанет в точку `at`, а со стрелкой `from` — у её конца
+type NoteDraft = { title: string; at?: CanvasPoint; from?: EdgeStart };
 type LinkDraft = { id?: string; url: string; at?: CanvasPoint };
 type Tap = { key: string; at: number; x: number; y: number };
 
@@ -153,6 +164,7 @@ const INLINE_SELECTOR = '[data-canvas-inline]';
 const PASSIVE_SELECTOR = `[data-board-tools], ${INLINE_SELECTOR}, [data-canvas-open], [data-canvas-open-note]`;
 const NOTE_HEAD_SELECTOR = '[data-canvas-note-head]';
 const TAP_BOARD = 'board';
+const IMAGE_QUALITIES: CanvasImageQuality[] = ['full', 'thumb'];
 // Пустая строка текста держит свою высоту неразрывным пробелом; копия текста в поле правки кончается
 // пробелом нулевой ширины, чтобы последняя пустая строка тоже занимала место
 const EMPTY_LINE = String.fromCharCode(0xa0);
@@ -256,6 +268,8 @@ const NotesCanvas = ({
   const [linkDraft, setLinkDraft] = useState<LinkDraft>();
   const [filePreview, setFilePreview] = useState<{ container: string; node: CloudNode }>();
   const [isPickingNote, setIsPickingNote] = useState(false);
+  const [noteDraft, setNoteDraft] = useState<NoteDraft>();
+  const [imageQuality, setImageQuality] = useState<CanvasImageQuality>(readCanvasImageQuality);
   const [isPickingFile, openFilePicker, closeFilePicker] = useFlag();
   const [inline, setInline] = useState<Inline>();
   const [inlineText, setInlineText] = useState('');
@@ -293,6 +307,9 @@ const NotesCanvas = ({
   const isSpaceDownRef = useRef(false);
   // Точка, выбранная в меню пустого места: туда встанет заметка, файл либо ссылка после выбора в шторке
   const insertAtRef = useRef<CanvasPoint>();
+  // Стрелка, от конца которой выбирают заметку в шторке
+  const insertFromRef = useRef<EdgeStart>();
+  const isCreatingNoteRef = useRef(false);
 
   const lang = useLang();
   const cloud = useDerivedState(getCloudData);
@@ -484,7 +501,7 @@ const NotesCanvas = ({
     // Текст, который ещё пишется в облако, уже считается текстом заметки: повторная правка идёт от него
     const base = kind === 'title' ? note.title : savingNote?.noteId === note.id ? savingNote.text : note.text;
     const next: Inline = {
-      id: node.id, kind, isNew: false, isAuto: false, noteId: note.id, base,
+      id: node.id, kind, isNew: false, isAuto: false, noteId: note.id, base, noteTitle: note.title,
     };
     inlineRef.current = next;
     setInline(next);
@@ -493,15 +510,32 @@ const NotesCanvas = ({
     selectNodes([node.id]);
   };
 
+  // Заметку удалили, пока её текст правили на карточке: набранное легло в новую заметку. Карточки прежней
+  // заметки (в открытом документе и в шагах истории) указывают на новую; шагом истории это не становится
+  const relinkCards = (fromId: string, fromTitle: string, toId: string, toTitle: string) => {
+    const relink = (step: CanvasDoc) => relinkNoteCards(step, fromId, fromTitle, toId, toTitle);
+    historyRef.current = mapHistory(historyRef.current, relink);
+    const next = relink(docRef.current);
+    if (next !== docRef.current) applyDoc(next);
+  };
+
   // Текст заметки пишется тем же путём, что с экрана заметки. Изменения, пришедшие в заметку за время
-  // правки, сводятся с ней при записи. Не записалось — поле открывается снова с набранным текстом
+  // правки, сводятся с ней при записи. Заметку за это время удалили — она создаётся заново с набранным
+  // текстом. Не записалось — поле открывается снова с набранным текстом
   const commitNoteText = (current: Inline, text: string) => {
     const noteId = current.noteId!;
+    const title = current.noteTitle!;
+    const canvas = loadedRef.current;
     setSavingNote({ noteId, text });
-    void saveNote(noteId, text, vaultName, current.base).catch(() => false).then((isSaved) => {
+    void saveNoteOrRestore(noteId, title, text, vaultName, current.base).catch(() => undefined).then((result) => {
       setSavingNote((saving) => (saving?.noteId === noteId && saving.text === text ? undefined : saving));
-      if (isSaved || inlineRef.current || !findNode(docRef.current, current.id)) return;
-      if (!getNotes().some(({ id }) => id === noteId)) return;
+      if (result?.status === 'saved') return;
+      if (result?.status === 'restored') {
+        if (canvas === loadedRef.current) relinkCards(noteId, title, result.id, result.title);
+        showNotification({ message: lang('KnowledgeCanvasNoteRestored', { name: result.title }) });
+        return;
+      }
+      if (inlineRef.current || canvas !== loadedRef.current || !findNode(docRef.current, current.id)) return;
       inlineRef.current = current;
       setInline(current);
       setInlineText(text);
@@ -596,13 +630,20 @@ const NotesCanvas = ({
     if (current?.kind !== 'note') return;
     inlineRef.current = undefined;
     const text = inlineField()?.value ?? inlineText;
-    if (text !== current.base) void saveNote(current.noteId!, text, vaultName, current.base);
+    if (text !== current.base) {
+      void saveNoteOrRestore(current.noteId!, current.noteTitle!, text, vaultName, current.base);
+    }
   });
 
   useEffect(() => saveNoteOnLeave, [saveNoteOnLeave]);
 
   // Escape перехватывают общие слушатели приложения раньше поля — отмена правки встаёт в их очередь
   useEffect(() => (inline ? captureEscKeyListener(() => finishInline(true)) : undefined), [inline]);
+
+  // Стрелка, оставленная на экране меню её конца, уходит вместе с меню
+  useEffect(() => {
+    if (!menu) setDraft(undefined);
+  }, [menu]);
 
   const hasSelection = !isSelectionEmpty(selection);
   const hasEscapeTarget = !inline && Boolean(menu || linkFrom || hasSelection || isSelectMode);
@@ -805,6 +846,13 @@ const NotesCanvas = ({
     }
   });
 
+  // Настройка устройства: на телефоне миниатюры берегут трафик
+  const handleImageQuality = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const quality: CanvasImageQuality = e.currentTarget.dataset.quality === 'thumb' ? 'thumb' : 'full';
+    writeCanvasImageQuality(quality);
+    setImageQuality(quality);
+  });
+
   const handleAskDelete = useLastCallback(() => {
     closeMenu();
     openDelete();
@@ -867,9 +915,41 @@ const NotesCanvas = ({
 
   const handleAddGroup = useLastCallback(() => addGroup());
 
-  const pickNote = (at?: CanvasPoint) => {
+  // Карточка у конца стрелки, брошенной на пустом месте, и сама стрелка — одним шагом истории
+  const addLinked = (
+    node: Pick<CanvasNode, 'type' | 'width' | 'height'> & Partial<CanvasNode>, from: EdgeStart, point: CanvasPoint,
+  ) => {
+    const created: CanvasNode = {
+      ...node, id: newCanvasId(), ...droppedCardPlace(point, from.side, node.width, node.height, CANVAS_GRID),
+    };
+    change(connectNodes(addNode(docRef.current, created), from.id, created.id, {
+      fromSide: from.side, toSide: oppositeSide(from.side),
+    }));
+    selectNodes([created.id]);
+    return created;
+  };
+
+  // Карточка заметки: в точке `at`, у конца стрелки `from` (если её начало ещё на холсте) либо на свободном
+  // месте. Идентификатор заметки: по нему карточка найдёт её после переименования («Обновить из графа»)
+  const addNoteCard = (title: string, noteId: string | undefined, at?: CanvasPoint, from?: EdgeStart) => {
+    const card = {
+      type: 'file',
+      width: CANVAS_DEFAULT_NODE_WIDTH,
+      height: NOTE_HEIGHT,
+      file: `${title}.md`,
+      [GRAPH_NOTE_FIELD]: noteId,
+    };
+    if (from && at && findNode(docRef.current, from.id)) {
+      finishInline();
+      return addLinked(card, from, at);
+    }
+    return add(card, at);
+  };
+
+  const pickNote = (at?: CanvasPoint, from?: EdgeStart) => {
     finishInline();
     insertAtRef.current = at;
+    insertFromRef.current = from;
     setIsPickingNote(true);
   };
 
@@ -879,14 +959,44 @@ const NotesCanvas = ({
   const handlePickNote = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setIsPickingNote(false);
     const title = e.currentTarget.dataset.title || '';
-    // Идентификатор заметки: по нему карточка найдёт её после переименования («Обновить из графа»)
-    add({
-      type: 'file',
-      width: CANVAS_DEFAULT_NODE_WIDTH,
-      height: NOTE_HEIGHT,
-      file: `${title}.md`,
-      [GRAPH_NOTE_FIELD]: noteByTitle.get(title.toLowerCase())?.id,
-    }, insertAtRef.current);
+    addNoteCard(title, noteByTitle.get(title.toLowerCase())?.id, insertAtRef.current, insertFromRef.current);
+  });
+
+  // ── новая заметка прямо с холста ──
+  // Название спрашивается шторкой; заметка — настоящий файл `.md` в хранилище, как созданная на вкладке
+  // «Заметки»
+  const askNewNote = (at?: CanvasPoint, from?: EdgeStart) => {
+    finishInline();
+    setIsPickingNote(false);
+    setNoteDraft({ title: '', at, from });
+  };
+
+  const handleNewNote = useLastCallback(() => askNewNote());
+  // Из шторки выбора заметки: место и стрелка остаются теми же
+  const handleNewNoteFromPicker = useLastCallback(() => askNewNote(insertAtRef.current, insertFromRef.current));
+
+  const handleNewNoteTitle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setNoteDraft({ ...noteDraft!, title: e.currentTarget.value });
+  });
+
+  const handleNewNoteClose = useLastCallback(() => setNoteDraft(undefined));
+
+  // Название берётся из самого поля (Enter приходит раньше перерисовки с набранным). Карточка встаёт, когда
+  // заметка записана: занятое название получает номер, и карточка несёт уже его. О неудаче сообщает хранилище
+  const handleNewNoteSave = useLastCallback(async () => {
+    if (!noteDraft || isCreatingNoteRef.current) return;
+    const field = document.querySelector<HTMLInputElement>('#knowledge-canvas-note-name');
+    const title = (field?.value ?? noteDraft.title).trim();
+    if (!title) return;
+    const { at, from } = noteDraft;
+    const canvas = loadedRef.current;
+    setNoteDraft(undefined);
+    isCreatingNoteRef.current = true;
+    const id = await createNote(title, vaultName).catch(() => undefined);
+    isCreatingNoteRef.current = false;
+    // Холст за это время сменили — заметка создана, карточку ставить некуда
+    if (!id || canvas !== loadedRef.current) return;
+    addNoteCard(getNotes().find((note) => note.id === id)?.title || title, id, at, from);
   });
 
   const pickFile = (at?: CanvasPoint) => {
@@ -903,7 +1013,7 @@ const NotesCanvas = ({
     add({
       type: 'file',
       width: CANVAS_DEFAULT_NODE_WIDTH,
-      height: file?.thumb && noteTitleOfPath(path) === undefined ? FILE_HEIGHT : NOTE_HEIGHT,
+      height: (file?.thumb || isCanvasImage(file)) && noteTitleOfPath(path) === undefined ? FILE_HEIGHT : NOTE_HEIGHT,
       file: path,
     }, insertAtRef.current);
   });
@@ -1226,6 +1336,7 @@ const NotesCanvas = ({
 
   const handleCommand = useLastCallback((command: CanvasCommand) => {
     const at = menu?.kind === 'board' ? menu.point : undefined;
+    const drop = menu?.kind === 'drop' && menu.from ? { point: menu.point, from: menu.from } : undefined;
     setMenu(undefined);
     switch (command) {
       case 'edit':
@@ -1285,6 +1396,23 @@ const NotesCanvas = ({
         break;
       case 'note':
         pickNote(at);
+        break;
+      case 'newNote':
+        askNewNote(at);
+        break;
+      // Конец стрелки, брошенной на пустом месте: текстовая карточка, новая заметка либо заметка из списка
+      case 'dropText':
+        if (drop && findNode(docRef.current, drop.from.id)) {
+          startInline(addLinked({
+            type: 'text', width: CANVAS_DEFAULT_NODE_WIDTH, height: CANVAS_DEFAULT_NODE_HEIGHT, text: '',
+          }, drop.from, drop.point), true);
+        }
+        break;
+      case 'dropNewNote':
+        if (drop) askNewNote(drop.point, drop.from);
+        break;
+      case 'dropNote':
+        if (drop) pickNote(drop.point, drop.from);
         break;
       case 'link':
         askLink(at);
@@ -1583,22 +1711,17 @@ const NotesCanvas = ({
           }));
           return;
         }
-        // Стрелка, брошенная на пустом месте, — новая текстовая карточка, связанная с исходной
-        const toSide = oppositeSide(gesture.side);
-        const normal = CANVAS_SIDE_NORMALS[gesture.side];
-        const created: CanvasNode = {
-          id: newCanvasId(),
-          type: 'text',
-          x: snapTo(point.x - CANVAS_DEFAULT_NODE_WIDTH / 2 + (normal.x * CANVAS_DEFAULT_NODE_WIDTH) / 2),
-          y: snapTo(point.y - CANVAS_DEFAULT_NODE_HEIGHT / 2 + (normal.y * CANVAS_DEFAULT_NODE_HEIGHT) / 2),
-          width: CANVAS_DEFAULT_NODE_WIDTH,
-          height: CANVAS_DEFAULT_NODE_HEIGHT,
-          text: '',
-        };
-        change(connectNodes(addNode(docRef.current, created), gesture.from, created.id, {
-          fromSide: gesture.side, toSide,
-        }));
-        startInline(created, true);
+        // Стрелка, брошенная на пустом месте, спрашивает, что поставить на её конце: новую заметку, заметку
+        // из списка либо текстовую карточку. Пока меню открыто, стрелка остаётся на экране
+        const box = boardRef.current!.getBoundingClientRect();
+        setDraft(draft);
+        setMenu({
+          x: e.clientX - box.left,
+          y: e.clientY - box.top,
+          point,
+          kind: 'drop',
+          from: { id: gesture.from, side: gesture.side },
+        });
       }
       return;
     }
@@ -1646,7 +1769,8 @@ const NotesCanvas = ({
 
   // ── клавиши и буфер обмена ──
   // Клавиши холста молчат, пока открыта шторка или окно, идёт правка на месте либо фокус в чужом поле
-  const isKeyboardBusy = () => Boolean(inlineRef.current || editing || linkDraft || filePreview || isPickingNote
+  const isKeyboardBusy = () => Boolean(inlineRef.current || editing || linkDraft || noteDraft || filePreview
+    || isPickingNote
     || isPickingFile || isMenuOpen || isDeleteOpen || document.body.classList.contains('has-open-dialog')
     || isTypingElement(document.activeElement || undefined));
 
@@ -1905,7 +2029,12 @@ const NotesCanvas = ({
           className={cardClass}
           style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
         >
-          <CanvasFileBody path={node.file || ''} container={driveId} node={driveFiles.get(node.file || '')} />
+          <CanvasFileBody
+            path={node.file || ''}
+            container={driveId}
+            node={driveFiles.get(node.file || '')}
+            quality={imageQuality}
+          />
           {renderPorts(node)}
           {renderHandles(node)}
         </div>
@@ -2111,6 +2240,7 @@ const NotesCanvas = ({
     menuItems = [
       item('textHere', 'text', lang('KnowledgeCanvasTextHere')),
       item('groupHere', 'group', lang('KnowledgeCanvasGroupHere')),
+      item('newNote', 'noteNew', lang('KnowledgeCanvasNewNoteHere')),
       item('note', 'note', lang('KnowledgeCanvasChooseNote')),
       item('link', 'link', lang('KnowledgeCanvasLinkTitle')),
       item('file', 'file', lang('KnowledgeCanvasFileChoose')),
@@ -2118,6 +2248,12 @@ const NotesCanvas = ({
       item('selectAll', 'select', lang('KnowledgeCanvasSelectAll')),
       item('refreshGraph', 'refresh', lang('KnowledgeCanvasRefresh')),
       item('fitView', 'fit', lang('KnowledgeZoomFit')),
+    ];
+  } else if (menu?.kind === 'drop') {
+    menuItems = [
+      item('dropNewNote', 'noteNew', lang('KnowledgeCanvasNewNote')),
+      item('dropNote', 'note', lang('KnowledgeCanvasDropNote')),
+      item('dropText', 'text', lang('KnowledgeCanvasTextCard')),
     ];
   } else if (menu && !selection.nodes.length) {
     menuItems = [
@@ -2287,6 +2423,16 @@ const NotesCanvas = ({
               onClick={handleAddNote}
             >
               <PvIcon name="note" isSmall />
+            </button>
+            <button
+              type="button"
+              className={styles.boardTool}
+              title={lang('KnowledgeCanvasNewNote')}
+              aria-label={lang('KnowledgeCanvasNewNote')}
+              data-canvas-tool="new-note"
+              onClick={handleNewNote}
+            >
+              <PvIcon name="noteNew" isSmall />
             </button>
             <button
               type="button"
@@ -2558,6 +2704,24 @@ const NotesCanvas = ({
           <PvIcon name="edit" isSmall />
           {lang('KnowledgeCanvasRename')}
         </button>
+        <div className={buildClassName(kit.muted, kit.small)}>{lang('KnowledgeCanvasImages')}</div>
+        <div className={kit.chips} role="radiogroup" aria-label={lang('KnowledgeCanvasImages')}>
+          {IMAGE_QUALITIES.map((quality) => (
+            <button
+              key={quality}
+              type="button"
+              role="radio"
+              aria-checked={imageQuality === quality}
+              className={buildClassName(kit.chip, imageQuality === quality && kit.chipOn)}
+              data-quality={quality}
+              data-canvas-images={quality}
+              onClick={handleImageQuality}
+            >
+              {lang(quality === 'full' ? 'KnowledgeCanvasImagesFull' : 'KnowledgeCanvasImagesThumb')}
+            </button>
+          ))}
+        </div>
+        <div className={buildClassName(kit.faint, kit.small)}>{lang('KnowledgeCanvasImagesHint')}</div>
         <button
           type="button"
           className={buildClassName(kit.btn, kit.btnDanger)}
@@ -2582,7 +2746,15 @@ const NotesCanvas = ({
         isTight
         onClose={handleCloseNotePicker}
       >
-        {!notes.length && <p className={styles.mutedLine}>{lang('KnowledgeEmpty')}</p>}
+        <button type="button" className={kit.row} data-canvas-pick-new onClick={handleNewNoteFromPicker}>
+          <span className={buildClassName(kit.ava, kit.avaM)} style="--c: var(--pv-accent)">
+            <PvIcon name="noteNew" isSmall />
+          </span>
+          <span className={kit.rowText}>
+            <span className={kit.ttl}>{lang('KnowledgeCanvasNewNote')}</span>
+            <span className={kit.sub}>{lang('KnowledgeCanvasNewNoteHint')}</span>
+          </span>
+        </button>
         {notes.map((note) => {
           const isOnCanvas = filesOnCanvas.has(note.title.toLowerCase());
           return (
@@ -2608,6 +2780,33 @@ const NotesCanvas = ({
             </button>
           );
         })}
+      </PvSheet>
+      <PvSheet
+        isOpen={Boolean(noteDraft)}
+        title={lang('KnowledgeCanvasNewNote')}
+        onClose={handleNewNoteClose}
+        onEnter={handleNewNoteSave}
+      >
+        <input
+          id="knowledge-canvas-note-name"
+          className={kit.input}
+          value={noteDraft?.title || ''}
+          maxLength={NOTE_TITLE_MAX}
+          placeholder={lang('KnowledgeNoteTitle')}
+          aria-label={lang('KnowledgeNoteTitle')}
+          onChange={handleNewNoteTitle}
+        />
+        <div className={buildClassName(kit.faint, kit.small)}>
+          {lang(noteDraft?.from ? 'KnowledgeCanvasNewNoteLinkedHint' : 'KnowledgeCanvasNewNoteHint')}
+        </div>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc)}
+          data-canvas-note-create
+          onClick={handleNewNoteSave}
+        >
+          {lang('KnowledgeCanvasNewNoteCreate')}
+        </button>
       </PvSheet>
       <CanvasFilePicker isOpen={isPickingFile} nodes={driveNodes} onPick={handlePickFile} onClose={closeFilePicker} />
       <CloudPreview

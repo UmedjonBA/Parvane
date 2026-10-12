@@ -2891,6 +2891,16 @@ export interface LangPair {
   'KnowledgeCanvasNoteLoading': undefined;
   'KnowledgeCanvasNoteText': undefined;
   'KnowledgeCanvasNoteSaveHint': undefined;
+  'KnowledgeCanvasNewNote': undefined;
+  'KnowledgeCanvasNewNoteHere': undefined;
+  'KnowledgeCanvasNewNoteHint': undefined;
+  'KnowledgeCanvasNewNoteLinkedHint': undefined;
+  'KnowledgeCanvasNewNoteCreate': undefined;
+  'KnowledgeCanvasDropNote': undefined;
+  'KnowledgeCanvasImages': undefined;
+  'KnowledgeCanvasImagesFull': undefined;
+  'KnowledgeCanvasImagesThumb': undefined;
+  'KnowledgeCanvasImagesHint': undefined;
   'KnowledgeFilesVault': undefined;
   'KnowledgeFilesUploadFile': undefined;
   'KnowledgeFilesShareOpen': undefined;
@@ -5166,6 +5176,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeGraphUnlinkInline': {
     'to': V;
     'from': V;
+  };
+  'KnowledgeCanvasNoteRestored': {
+    'name': V;
   };
   'KnowledgeFilesSharedWith': {
     'count': V;

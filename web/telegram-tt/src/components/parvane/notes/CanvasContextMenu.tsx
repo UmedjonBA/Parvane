@@ -18,7 +18,8 @@ import styles from './Knowledge.module.scss';
 
 export type CanvasCommand =
   'edit' | 'open' | 'direction' | 'duplicate' | 'copy' | 'cut' | 'paste' | 'wrap' | 'fit' | 'front' | 'back' | 'props'
-  | 'remove' | 'selectAll' | 'textHere' | 'groupHere' | 'note' | 'link' | 'file' | 'fitView' | 'refreshGraph';
+  | 'remove' | 'selectAll' | 'textHere' | 'groupHere' | 'note' | 'newNote' | 'link' | 'file' | 'fitView'
+  | 'refreshGraph' | 'dropText' | 'dropNewNote' | 'dropNote';
 export type CanvasMenuItem = { command: CanvasCommand; icon: PvIconName; label: string; isDanger?: boolean };
 
 type OwnProps = {

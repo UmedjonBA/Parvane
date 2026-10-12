@@ -1,6 +1,14 @@
 // Parvane, раздел «Знания»: карточка заметки на холсте — что делает нажатие по ней, правила названия,
 // клавиши поля правки, начало текста для показа. Чистые функции, без UI.
 
+import type {
+  CanvasDoc, CanvasNode, CanvasPoint, CanvasSide,
+} from './notesCanvas';
+
+import { CANVAS_SIDE_NORMALS, snapTo } from './notesCanvasEdit';
+import { noteTitleOfPath } from './notesCanvasFiles';
+import { GRAPH_NOTE_FIELD, renameCanvasNote } from './notesCanvasGraph';
+
 export type NoteCardState = 'found' | 'missing' | 'loading';
 // Куда пришлось действие: шапка с названием, текст карточки либо команда («Изменить» панели и меню)
 export type NoteCardPart = 'title' | 'body' | 'command';
@@ -50,4 +58,35 @@ export function notePreviewLines(body: string, title: string, max: number) {
     .map((line) => line.replace(HEADING_MARK, '').replace(TASK_MARKER, '').replace(LIST_MARK, '• '))
     .filter((line) => line.trim() && line.trim().toLowerCase() !== ownTitle)
     .slice(0, max);
+}
+
+// Место карточки у конца стрелки, брошенной в точке `point`: карточка встаёт за точкой по ходу стрелки —
+// стороной, противоположной стороне начала, к точке (стрелка вправо — левый край карточки у точки)
+export function droppedCardPlace(
+  point: CanvasPoint, side: CanvasSide, width: number, height: number, grid: number,
+): CanvasPoint {
+  const normal = CANVAS_SIDE_NORMALS[side];
+  return {
+    x: snapTo(point.x - width / 2 + (normal.x * width) / 2, grid),
+    y: snapTo(point.y - height / 2 + (normal.y * height) / 2, grid),
+  };
+}
+
+// Заметку `fromId` (название `fromTitle`) удалили, её текст лёг в новую заметку `toId` под названием
+// `toTitle`: карточки прежней заметки — по идентификатору и по названию в пути — указывают на новую.
+// Нечего менять — прежний документ
+export function relinkNoteCards(
+  doc: CanvasDoc, fromId: string, fromTitle: string, toId: string, toTitle: string,
+): CanvasDoc {
+  const fromKey = fromTitle.trim().toLowerCase();
+  const isCard = (node: CanvasNode) => node.type === 'file' && (
+    node[GRAPH_NOTE_FIELD] === fromId || (noteTitleOfPath(node.file) || '').trim().toLowerCase() === fromKey
+  );
+  const cards = new Set(doc.nodes.filter(isCard).map(({ id }) => id));
+  if (!cards.size) return doc;
+  const renamed = renameCanvasNote(doc, fromTitle, toTitle);
+  return {
+    ...renamed,
+    nodes: renamed.nodes.map((node) => (cards.has(node.id) ? { ...node, [GRAPH_NOTE_FIELD]: toId } : node)),
+  };
 }

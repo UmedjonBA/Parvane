@@ -1,7 +1,11 @@
-// Настройки списка заметок на этом устройстве: свёрнутые папки и «справку уже показывали»
+// Настройки раздела «Знания» на этом устройстве: свёрнутые папки, «справку уже показывали», качество картинок
+// на холсте
+
+import type { CanvasImageQuality } from './notesCanvasImages';
 
 const COLLAPSED_KEY = 'parvane:knowledge-collapsed';
 const GUIDE_SEEN_KEY = 'parvane:knowledge-guide-seen';
+const CANVAS_IMAGES_KEY = 'parvane:knowledge-canvas-images';
 const COLLAPSED_MAX = 200;
 
 function read(key: string) {
@@ -41,4 +45,13 @@ export function isGuideSeen(userId?: string) {
 
 export function markGuideSeen(userId?: string) {
   write(`${GUIDE_SEEN_KEY}:${userId || ''}`, '1');
+}
+
+/** Картинки карточек холста: сам файл (по умолчанию) либо миниатюра облака — экономия трафика на телефоне. */
+export function readCanvasImageQuality(): CanvasImageQuality {
+  return read(CANVAS_IMAGES_KEY) === 'thumb' ? 'thumb' : 'full';
+}
+
+export function writeCanvasImageQuality(quality: CanvasImageQuality) {
+  write(CANVAS_IMAGES_KEY, quality);
 }

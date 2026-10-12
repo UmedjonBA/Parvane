@@ -41,6 +41,8 @@ export type NotesStatus = 'loading' | 'ready';
 export type NotesNotice = {
   code: 'conflict' | 'failed' | 'merged' | 'folder-files' | 'guide-failed'; title: string; at: number;
 };
+// Итог записи с карточки холста: `restored` — заметки уже не было, текст лёг в новую заметку
+export type NoteSaveResult = { status: 'saved' | 'failed' } | { status: 'restored'; id: string; title: string };
 export type FolderDeleteResult = 'done' | 'has-notes' | 'has-files' | 'failed';
 
 export type NotesOptions = { guideLang: GuideLang; vaultName: string };
@@ -488,6 +490,23 @@ export async function saveNote(
     } : entry)));
   void refreshCloud();
   return true;
+}
+
+/** Сохранить текст, набранный на карточке холста. Заметку за время правки могли удалить (с другого
+ * устройства либо на вкладке «Заметки») — тогда набранное не теряется: заметка создаётся заново под тем же
+ * названием (занятое получает номер) и в той же папке, если папка ещё есть. Удалённая заметка остаётся в
+ * корзине облака как была. */
+export async function saveNoteOrRestore(
+  noteId: string, title: string, draft: string, vaultName: string, baseText?: string,
+): Promise<NoteSaveResult> {
+  const node = getNodes(rootIdOf()).find(({ id }) => id === noteId);
+  const isAlive = Boolean(node && !node.trashed) && getNotes().some(({ id }) => id === noteId);
+  if (isAlive) return { status: (await saveNote(noteId, draft, vaultName, baseText)) ? 'saved' : 'failed' };
+  // Дерево облака ещё не прочитано — судить, удалена ли заметка, рано
+  if (!getCloudData() || getNotesStatus() !== 'ready') return { status: 'failed' };
+  const id = await createNote(title, vaultName, { text: draft, folderId: node?.parent || undefined });
+  const created = id ? getNotes().find((note) => note.id === id) : undefined;
+  return id ? { status: 'restored', id, title: created?.title || title } : { status: 'failed' };
 }
 
 /** Галочки и удаления из «Плана» → в заметки (вызывается при изменении «Плана» и после загрузки). */
