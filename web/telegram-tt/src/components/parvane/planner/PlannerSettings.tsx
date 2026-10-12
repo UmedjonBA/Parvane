@@ -7,6 +7,7 @@ import {
   createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
   toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
+import { resetLearned } from './plannerQuickLearn';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -18,6 +19,8 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
+  // Аккаунт: словарь правок ввода текстом хранится на устройстве отдельно для каждого
+  userId?: string;
 };
 
 const ERROR_KEYS = {
@@ -30,7 +33,7 @@ const BUDGET_STEP = 30;
 // Parvane (spec 009, T014): настройки дня — бюджет и окна дня.
 // Каждое поле сохраняется само по завершении ввода; негодное значение не
 // применяется и объясняется уведомлением
-const PlannerSettings = ({ state }: OwnProps) => {
+const PlannerSettings = ({ state, userId }: OwnProps) => {
   const lang = useLang();
 
   const { settings, budget } = state;
@@ -75,6 +78,11 @@ const PlannerSettings = ({ state }: OwnProps) => {
     }, lang('PlannerNoticeSettingsSaved'));
   });
 
+  const handleLearnedReset = useLastCallback(() => {
+    resetLearned(userId);
+    showPlannerNotice(lang('PlannerNoticeLearnedReset'));
+  });
+
   return (
     <div className={styles.editor}>
       <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('ParvaneSectionPlanner')}</h3>
@@ -105,6 +113,15 @@ const PlannerSettings = ({ state }: OwnProps) => {
       <p className={styles.sheetHint}>{lang('PlannerSettingsGoalsHint')}</p>
       <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleReset}>
         {lang('PlannerSettingsReset')}
+      </button>
+      <p className={styles.sheetHint}>{lang('PlannerSettingsLearnedHint')}</p>
+      <button
+        type="button"
+        className={buildClassName(styles.btn, styles.btnGhost)}
+        data-quick-learned-reset
+        onClick={handleLearnedReset}
+      >
+        {lang('PlannerSettingsLearnedReset')}
       </button>
     </div>
   );

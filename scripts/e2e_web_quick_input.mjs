@@ -178,6 +178,30 @@ try {
   await submit('купить валик');
   console.log('OK: «в пять вечера» — время, #список, @место и ! — чипами');
 
+  // ── Словарь правок: одна и та же длительность трижды — на четвёртый раз подставляется сама ──
+  const learnedChip = form.locator('[data-quick-chip="minutes"][data-learned="1"]');
+  for (const hour of ['10', '11', '12']) {
+    await openQuick();
+    await input.fill(`летучка завтра ${hour}:00 20 мин`);
+    await expectKind('event');
+    assert.equal((await chip('time').innerText()).trim(), `${hour}:00–${hour}:20`);
+    assert.equal(await learnedChip.count(), 0, 'названная длительность — не выученная');
+    await submit('летучка');
+  }
+  await openQuick();
+  await input.fill('летучка завтра 13:00');
+  await expectKind('event');
+  await learnedChip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal((await chip('time').innerText()).trim(), '13:00–13:20');
+  // Снятый чип выученного возвращает обычную длительность; правка строки возвращает выученное
+  await learnedChip.getByRole('button').click();
+  await learnedChip.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  assert.equal((await chip('time').innerText()).trim(), '13:00–14:00');
+  await input.fill('Летучка завтра 13:00');
+  await learnedChip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await submit('Летучка');
+  console.log('OK: длительность, исправленная трижды, на четвёртый раз подставлена сама');
+
   // ── Название и описание (отзыв 12 окт 2026): «пара» — 1 ч 45 мин, «будет…» — описание ──
   const OWNER_NAME = 'пара по Английскому';
   const OWNER_DESCRIPTION = 'будет тест лисининг';
@@ -236,11 +260,36 @@ try {
   await page.keyboard.press('Escape');
   await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // На компьютере ввод открывается кнопкой в шапке
-  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
-  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.keyboard.press('Escape');
-  await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  const openQuickWide = async () => {
+    await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
+    await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  };
+  const closeQuickWide = async () => {
+    await page.keyboard.press('Escape');
+    await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  };
+  await openQuickWide();
+  await closeQuickWide();
   console.log('OK: записи пережили перезагрузку; на компьютере ввод открывает «+ Запись»');
+
+  // ── Словарь правок хранится на устройстве: пережил перезагрузку; «Сбросить выученное» его очищает ──
+  await openQuickWide();
+  await input.fill('летучка завтра 15:00');
+  await expectKind('event');
+  await learnedChip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal((await chip('time').innerText()).trim(), '15:00–15:20');
+  await closeQuickWide();
+  await planner.getByRole('button', { name: 'Planner settings' }).click();
+  await planner.locator('[data-quick-learned-reset]').click();
+  await planner.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await openQuickWide();
+  await input.fill('летучка завтра 15:00');
+  await expectKind('event');
+  assert.equal((await chip('time').innerText()).trim(), '15:00–16:00');
+  assert.equal(await learnedChip.count(), 0, 'после сброса выученного нет');
+  await closeQuickWide();
+  console.log('OK: выученное пережило перезагрузку и сброшено в настройках плана');
 
   // ── Событие с описанием после перезагрузки: строка в расписании дня и карточка события ──
   await openPlannerScreen(page, 'calendar');

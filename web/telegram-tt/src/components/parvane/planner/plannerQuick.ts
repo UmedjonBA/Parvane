@@ -30,6 +30,9 @@ export type QuickGoalChanges = {
   budget?: number;
 };
 export type QuickLang = 'ru' | 'en';
+// Выученное по правкам пользователя (`plannerQuickLearn.ts`): первое слово названия → значения по умолчанию
+export type QuickLearnedKind = 'task' | 'event';
+export type QuickLearned = Record<string, { kind?: QuickLearnedKind; minutes?: number }>;
 export type QuickSpan = { field: QuickField; from: number; to: number };
 export type QuickError = PlannerTaskError | PlannerEventError;
 
@@ -63,6 +66,13 @@ export type QuickDraft = {
   distanceKm?: number;
   exercises?: PlannerExercise[];
   goalChanges?: QuickGoalChanges;
+  // Задача и событие. Первое слово названия (нижний регистр, «ё» → «е», без служебных и однобуквенных
+  // слов) — ключ личного словаря правок
+  head?: string;
+  // Событие со временем: обычная длительность для этого слова без словаря правок
+  usualMinutes?: number;
+  // Что подставлено из словаря правок (`ctx.learned`)
+  learned?: ('kind' | 'minutes')[];
   spans: QuickSpan[];
   error?: QuickError;
 };
@@ -79,6 +89,9 @@ export type QuickContext = {
   kinds?: QuickKind[];
   // Значения, снятые пользователем: их слова остаются в названии
   skip?: QuickField[];
+  // Значения по умолчанию из личного словаря правок; явное значение в строке и выбор пользователя сильнее.
+  // Снятые `kind` и `minutes` (`skip`) выключают и выученное
+  learned?: QuickLearned;
   // Язык интерфейса (по умолчанию русский). Строка на другом языке словаря тоже разбирается — правило
   // выбора у `parseQuickInput`
   lang?: QuickLang;
@@ -231,7 +244,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + ' ежедневно еженедельно ежемесячно ежегодно будням выходным задача событие',
     typoSafe: 'завтрак завтраки неделе каждой каждого каждая месяцы выходные выходных будние задачи задачу'
       + ' события событий',
-    eventMinutes: [['пар[ауые]', 105], ['урок(?:а|и|ов)?', 45]],
+    eventMinutes: [['пар[ауые]', 105], ['урок(?:а|и|ов)?', 45], ['созвон(?:а|ы|ов)?', 30], ['встреч[аиу]', 60]],
     descLeads: 'будет|будут|нужно|надо|не\\s+забыть|взять|принести',
     descLabels: [['(?:описание|примечание|заметка|прим)\\s*:|прим\\.', false], ['тема\\s*:', true]],
     descWeak: 'я|мне|мы|нам|ты|тебе|вы|вам|он|ему|она|ей|они|им|это|что|чтобы|если|когда|как|где|и|или|а|но|не'
@@ -329,7 +342,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + ' saturdays sunday sundays january february august september october november december tomorrow'
       + ' weekly monthly yearly weekdays weekends minutes',
     typoSafe: 'minute weekend weekday',
-    eventMinutes: [['lessons?', 45]],
+    eventMinutes: [['lessons?', 45], ['calls?', 30], ['meetings?', 60], ['stand-?ups?', 15]],
     descLeads: 'will\\s+be|need\\s+to|needs|don[\'’]?t\\s+forget|bring',
     descLabels: [['(?:notes?|description)\\s*:', false], ['topic\\s*:', true]],
     descWeak: 'i|me|we|us|you|he|him|she|her|they|them|it|this|that|there|what|who|if|when|and|or|but|not|to|also'
@@ -520,6 +533,7 @@ function compile(id: QuickLang, words: QuickWords) {
     weakLead: words.weakLeads ? lead(words.weakLeads) : undefined,
     listSplit: new RegExp(listSeparator),
     isEvery: whole(words.every),
+    isFunctionWord: whole(words.descWeak),
     isWeakWeekday: words.weakWeekdays ? whole(words.weakWeekdays) : undefined,
     isPluralWeekday: words.pluralWeekday ? new RegExp(`(?:${words.pluralWeekday})$`) : undefined,
     isBareDaypart: words.bareDayparts ? whole(words.bareDayparts) : undefined,
@@ -1007,13 +1021,25 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   }
 
   // ── тип задачи либо события; метки, которые ему не положены ───────────────
+  const blank = () => restoreNumerals(text.split('').map((char, i) => (taken[i] ? ' ' : char)).join(''), edits);
   const hasTime = start !== undefined;
+  let learned: QuickLearned[string] | undefined;
   if (isWater || isFood) {
     unmark(MARKER_FIELDS);
   } else {
-    draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind
-      : hasTime && allowed.has('event') ? 'event' : 'task';
+    // Первое слово названия считается до возврата меток: «#дом купить молоко» — «купить»
+    draft.head = headWord(blank(), lang);
+    learned = draft.head && ctx.learned && Object.prototype.hasOwnProperty.call(ctx.learned, draft.head)
+      ? ctx.learned[draft.head] : undefined;
+    const guessed: QuickKind = hasTime && allowed.has('event') ? 'event' : 'task';
+    draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind : guessed;
     if (!allowed.has(draft.kind)) draft.kind = allowed.has('task') ? 'task' : 'event';
+    // Тип, выученный по правкам: когда пользователь не выбрал тип сам и не снял выученный
+    if (!explicitKind && learned?.kind && learned.kind !== draft.kind && allowed.has(learned.kind)
+      && !skipped.has('kind')) {
+      draft.kind = learned.kind;
+      draft.learned = ['kind'];
+    }
     // У события нет ни списка, ни статуса: «#слово» и «!» остаются в названии
     if (draft.kind === 'event') unmark(['list', 'important']);
     const list = markerText('list');
@@ -1023,7 +1049,7 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
   }
 
   // ── название: всё непомеченное, в словах пользователя ─────────────────────
-  const plain = restoreNumerals(text.split('').map((char, i) => (taken[i] ? ' ' : char)).join(''), edits);
+  const plain = blank();
   draft.name = cleanName(plain);
   spans.sort((a, b) => a.from - b.from);
   const mealSpan = spans.find(({ field }) => field === 'meal');
@@ -1104,8 +1130,13 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
       // Обычная длительность — по первому слову НАЗВАНИЯ: «вт 15:00 пара по английскому» — пара,
       // «сдать пару отчётов 9:00» — нет
       const head = draft.name.toLowerCase().replace(/ё/g, 'е');
-      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(head))?.[1];
-      const finish = end ?? start! + (draft.minutes || usual || DEFAULT_EVENT_MINUTES);
+      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
+      // Длительность, выученная по правкам, — только когда она не названа и её чип не снят
+      const isNamed = end !== undefined || Boolean(draft.minutes);
+      const own = !isNamed && !skipped.has('minutes') && learned?.minutes !== usual ? learned?.minutes : undefined;
+      if (own) draft.learned = [...(draft.learned || []), 'minutes'];
+      draft.usualMinutes = usual;
+      const finish = end ?? start! + (draft.minutes || own || usual);
       draft.start = toTime(start!);
       // Ровно полночь — последняя минута суток; позже — ошибка, а не обрезка
       draft.end = finish === MINUTES_IN_DAY ? '23:59' : finish < MINUTES_IN_DAY ? toTime(finish) : undefined;
@@ -1134,6 +1165,12 @@ function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: 
     name: draft.name, minutes: draft.minutes, day: draft.day, start: draft.start, due: draft.due,
   }) || (draft.repeat && validateRepeat(draft.repeat));
   return draft;
+}
+
+// Первое слово названия для словаря правок: служебные и однобуквенные слова пропускаются
+function headWord(name: string, lang: Lang) {
+  const found = fold(name).match(new RegExp(`[${LETTER}]+`, 'g')) || [];
+  return found.find((item) => item.length > 1 && !lang.isFunctionWord.test(item));
 }
 
 // ── явные метки ──────────────────────────────────────────────────────────────

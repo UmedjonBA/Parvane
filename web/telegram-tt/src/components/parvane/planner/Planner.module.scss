@@ -615,6 +615,18 @@
   }
 }
 
+// Знак значения, подставленного из словаря правок ввода текстом
+.tagLearned {
+  flex: none;
+
+  width: 0.3125rem;
+  height: 0.3125rem;
+  margin-inline-start: 0.125rem;
+  border-radius: 50%;
+
+  background: currentColor;
+}
+
 .card {
   min-width: 0;
   padding: 1rem;

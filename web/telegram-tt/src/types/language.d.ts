@@ -2483,6 +2483,7 @@ export interface LangPair {
   'PlannerNoticeGoalsUpdated': undefined;
   'PlannerNoticeReordered': undefined;
   'PlannerNoticeSettingsSaved': undefined;
+  'PlannerNoticeLearnedReset': undefined;
   'PlannerNoticeStepAdded': undefined;
   'PlannerNoticeUndone': undefined;
   'PlannerNoticeWaterUpdated': undefined;
@@ -2524,6 +2525,8 @@ export interface LangPair {
   'PlannerSettingsLunchStart': undefined;
   'PlannerSettingsMargin': undefined;
   'PlannerSettingsReset': undefined;
+  'PlannerSettingsLearnedReset': undefined;
+  'PlannerSettingsLearnedHint': undefined;
   'PlannerSlotsNone': undefined;
   'PlannerStatAverage': undefined;
   'PlannerStatChartMetric': undefined;
@@ -2615,6 +2618,7 @@ export interface LangPair {
   'PlannerQuickName': undefined;
   'PlannerQuickDescriptionToName': undefined;
   'PlannerQuickTooLong': undefined;
+  'PlannerQuickLearned': undefined;
   'PlannerTodayNoTasks': undefined;
   'PlannerTodayAllDone': undefined;
   'PlannerTodayLoad': undefined;
