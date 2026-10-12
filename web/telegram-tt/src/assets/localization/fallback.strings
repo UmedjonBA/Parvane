@@ -3418,6 +3418,11 @@
 "PlannerSeriesOnlyThis" = "Only this";
 "PlannerSeriesOpen" = "Open series";
 "PlannerSeriesTemplateHint" = "Series: {rule}";
+"PlannerSeriesRuleTitle" = "Apply the new repeat to:";
+"PlannerSeriesStopTitle" = "Remove the repeat:";
+"PlannerSeriesStop" = "Do not repeat from this day";
+"PlannerSeriesOnlyThisDay" = "Only this day without repeat";
+"PlannerNoticeRepeatStopped" = "Repeat removed: {name}";
 "PlannerDescriptionScope" = "Description for every repetition";
 "PlannerDescriptionShareTitle" = "This description will be used for every repetition of the series.";
 "PlannerDescriptionShare" = "Use for all";

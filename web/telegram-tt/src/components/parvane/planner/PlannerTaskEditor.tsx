@@ -1,9 +1,11 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
-import type { PlannerState, PlannerStatus, PlannerTask } from './plannerModel';
+import type {
+  PlannerRepeat, PlannerSeriesItem, PlannerState, PlannerStatus, PlannerTask,
+} from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
-import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
+import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -14,6 +16,7 @@ import {
   removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, updateSeries, validateRepeat,
 } from './plannerModel';
 import { getDescriptionScope, setDescription, shareDescription } from './plannerSeriesEdit';
+import { changeSeriesRule, nearestSeriesDay, sameRepeat } from './plannerSeriesRule';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -45,7 +48,10 @@ type OwnProps = {
 };
 
 type Slot = { day: string; start: string; end: string };
-type Pending = { kind: 'patch'; changes: Partial<PlannerTask>; notice: string } | { kind: 'delete' };
+// `rule` — новое правило повтора у экземпляра; без правила — «Не повторяется»
+type Pending = { kind: 'patch'; changes: Partial<PlannerTask>; notice: string }
+  | { kind: 'delete' }
+  | { kind: 'rule'; repeat?: PlannerRepeat };
 
 const STEP_MAX_LENGTH = 160;
 
@@ -89,10 +95,22 @@ const PlannerTaskEditor = ({
     return true;
   });
 
-  const handleScope = useLastCallback((scope: PlannerSeriesScope) => {
+  const handleScope = useLastCallback((scope: PlannerPromptScope) => {
     const action = pending!;
     const instanceDay = task.instanceDay!;
     setPending(undefined);
+    if (action.kind === 'rule') {
+      const { repeat } = action;
+      let result: PlannerSeriesItem | undefined;
+      updatePlanner((draft) => {
+        result = repeat
+          ? changeSeriesRule(draft, 'task', task.id, instanceDay, repeat, scope === 'following' ? 'following' : 'all')
+          : changeSeriesRule(draft, 'task', task.id, instanceDay, undefined, scope === 'stop' ? 'stop' : 'one');
+      }, lang(repeat ? 'PlannerNoticeRepeatUpdated' : 'PlannerNoticeRepeatStopped', { name: task.name }));
+      // Карточка остаётся на записи этого дня: разовой копии, продолжении ряда либо ближайшем дне нового правила
+      if (result) onOpenTask(result.id, nearestSeriesDay(result, instanceDay));
+      return;
+    }
     if (action.kind === 'delete') {
       updatePlanner((draft) => {
         if (scope === 'one') excludeInstance(draft, 'task', task.id, instanceDay);
@@ -248,7 +266,8 @@ const PlannerTaskEditor = ({
     );
   });
 
-  // Правило повтора правится у всего ряда (без выбора объёма); у экземпляра — только просмотр
+  // Правило повтора: у шаблона ряда и разовой задачи пишется сразу; у экземпляра спрашивается объём —
+  // «это и последующие» или «все в серии», а для «Не повторяется» — с какого дня ряда больше нет
   const handleRepeatSave = useLastCallback(() => {
     const repeat = draftToRepeat(repeatDraft);
     const problem = repeat && validateRepeat(repeat);
@@ -257,6 +276,11 @@ const PlannerTaskEditor = ({
       return;
     }
     setRepeatError(undefined);
+    if (isInstance) {
+      // Сравнение — с правилом в том виде, в каком его показывает форма
+      if (!sameRepeat(repeat, draftToRepeat(repeatToDraft(task.repeat)))) setPending({ kind: 'rule', repeat });
+      return;
+    }
     updatePlanner((draft) => {
       const target = draft.tasks.find(({ id }) => id === task.id);
       if (!target) return;
@@ -292,6 +316,11 @@ const PlannerTaskEditor = ({
       setTaskDone(draft, task, checked);
     }, lang(checked ? 'PlannerNoticeDone' : 'PlannerNoticeReopened', { name: task.name }));
   });
+
+  // О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
+  const promptMode = !pending ? undefined
+    : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
+      : pending.kind === 'delete' ? 'delete' : 'edit';
 
   const isDone = task.status === 'done';
 
@@ -406,16 +435,14 @@ const PlannerTaskEditor = ({
           </Select>
         </div>
         <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
-        {!isInstance && (
-          <div className={styles.repeatBlock}>
-            <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
-            {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
-            <button type="button" className={styles.btn} onClick={handleRepeatSave}>
-              <Icon name="loop" />
-              {lang('PlannerRepeatSave')}
-            </button>
-          </div>
-        )}
+        <div className={styles.repeatBlock}>
+          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
+          {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
+          <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
+            <Icon name="loop" />
+            {lang('PlannerRepeatSave')}
+          </button>
+        </div>
         <button type="button" className={styles.btn} onClick={handleFindSlots}>{lang('PlannerFindSlots')}</button>
         <div className={styles.slots} aria-live="polite">
           {slotHint && <span className={styles.small}>{slotHint}</span>}
@@ -432,9 +459,9 @@ const PlannerTaskEditor = ({
           ))}
         </div>
       </PlannerDetailsFold>
-      {pending ? (
+      {promptMode ? (
         <PlannerSeriesPrompt
-          title={lang(pending.kind === 'delete' ? 'PlannerSeriesDeleteTitle' : 'PlannerSeriesEditTitle')}
+          mode={promptMode}
           onChoose={handleScope}
           onCancel={handleCancelPrompt}
         />

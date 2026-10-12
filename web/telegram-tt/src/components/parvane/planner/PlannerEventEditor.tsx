@@ -1,9 +1,11 @@
 import { memo, useState } from '../../../lib/teact/teact';
 
-import type { PlannerEvent, PlannerEventError, PlannerState } from './plannerModel';
+import type {
+  PlannerEvent, PlannerEventError, PlannerRepeat, PlannerState,
+} from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
-import type { PlannerSeriesScope } from './PlannerSeriesPrompt';
+import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatRepeat } from './plannerFormat';
@@ -12,6 +14,7 @@ import {
   validateEvent,
 } from './plannerModel';
 import { detachWithDescription, getDescriptionScope, setDescription as writeDescription } from './plannerSeriesEdit';
+import { changeSeriesRule, sameRepeat } from './plannerSeriesRule';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -56,7 +59,10 @@ const NAME_MAX_LENGTH = 160;
 const DESCRIPTION_MAX_LENGTH = 2000;
 
 // `ownDescription` — описание только этого дня: остальные поля правятся в выбранном объёме, день отделяется
-type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string } | { kind: 'delete' };
+// `rule` — вместе с полями меняется правило повтора; без правила — «Не повторяется»
+type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string }
+  | { kind: 'rule'; repeat?: PlannerRepeat; patch: Partial<PlannerEvent>; ownDescription?: string }
+  | { kind: 'delete' };
 
 // Правка события (spec 011): поля, правило повтора; у экземпляра ряда — выбор объёма правки
 const PlannerEventEditor = ({
@@ -92,7 +98,7 @@ const PlannerEventEditor = ({
     setDescription(e.currentTarget.value);
   });
 
-  const applyScope = useLastCallback((scope: PlannerSeriesScope, action: Pending) => {
+  const applyScope = useLastCallback((scope: PlannerPromptScope, action: Pending) => {
     const instanceDay = event.instanceDay!;
     if (action.kind === 'delete') {
       updatePlanner((draft) => {
@@ -105,9 +111,30 @@ const PlannerEventEditor = ({
     }
     const { patch, ownDescription } = action;
     const targetDay = day || instanceDay;
+    const own = ownDescription === undefined ? {} : { description: ownDescription || undefined };
+    if (action.kind === 'rule') {
+      const { repeat } = action;
+      updatePlanner((draft) => {
+        if (!repeat) {
+          // Без повтора: день остаётся разовой записью со всеми правками карточки
+          changeSeriesRule(draft, 'event', event.id, instanceDay, undefined, scope === 'stop' ? 'stop' : 'one', {
+            ...patch, ...own, day: targetDay,
+          });
+          return;
+        }
+        // Дни ряда задаёт новое правило: дата из карточки на него не влияет
+        const series = changeSeriesRule(
+          draft, 'event', event.id, instanceDay, repeat, scope === 'following' ? 'following' : 'all', patch,
+        );
+        if (series && ownDescription !== undefined) {
+          detachWithDescription(draft, 'event', series.id, instanceDay, ownDescription);
+        }
+      }, lang(repeat ? 'PlannerNoticeEventUpdated' : 'PlannerNoticeRepeatStopped', { name: patch.name || event.name }));
+      onBack();
+      return;
+    }
     updatePlanner((draft) => {
       if (scope === 'one') {
-        const own = ownDescription === undefined ? {} : { description: ownDescription || undefined };
         detachInstance(draft, 'event', event.id, instanceDay, {
           ...patch, ...own, repeat: undefined, day: targetDay,
         });
@@ -155,6 +182,25 @@ const PlannerEventEditor = ({
       const hasOtherChanges = next.name !== event.name || next.start !== event.start || next.end !== event.end
         || Boolean(next.isAllDay) !== Boolean(event.isAllDay) || Boolean(next.isHoliday) !== Boolean(event.isHoliday)
         || (next.color || 0) !== (event.color || 0) || (day || instanceDay) !== instanceDay;
+      const isOwnDescription = isDescriptionChanged && descriptionScope === 'one';
+      const patch = {
+        name: next.name,
+        ...(isOwnDescription ? undefined : { description: next.description }),
+        start: next.start,
+        end: next.end,
+        isAllDay: next.isAllDay,
+        isHoliday: next.isHoliday,
+        color: next.color,
+      };
+      const ownDescription = isOwnDescription ? nextDescription : undefined;
+      // Новое правило повтора (сравнение — с правилом в том виде, в каком его показывает форма): объём —
+      // «это и последующие» или «все в серии», для «Не повторяется» — с какого дня ряда больше нет
+      if (!sameRepeat(repeat, draftToRepeat(repeatToDraft(event.repeat)))) {
+        setPending({
+          kind: 'rule', repeat, patch, ownDescription,
+        });
+        return;
+      }
       // Одно описание объёма не спрашивает: его задаёт галочка у поля
       if (isDescriptionChanged && !hasOtherChanges) {
         updatePlanner((draft) => {
@@ -163,21 +209,7 @@ const PlannerEventEditor = ({
         onBack();
         return;
       }
-      const isOwnDescription = isDescriptionChanged && descriptionScope === 'one';
-      // Правило повтора у экземпляра не правится — объём правки спрашивается для остальных полей
-      setPending({
-        kind: 'save',
-        patch: {
-          name: next.name,
-          ...(isOwnDescription ? undefined : { description: next.description }),
-          start: next.start,
-          end: next.end,
-          isAllDay: next.isAllDay,
-          isHoliday: next.isHoliday,
-          color: next.color,
-        },
-        ownDescription: isOwnDescription ? nextDescription : undefined,
-      });
+      setPending({ kind: 'save', patch, ownDescription });
       return;
     }
     updatePlanner((draft) => {
@@ -202,7 +234,7 @@ const PlannerEventEditor = ({
     onBack();
   });
 
-  const handleScope = useLastCallback((scope: PlannerSeriesScope) => {
+  const handleScope = useLastCallback((scope: PlannerPromptScope) => {
     const action = pending!;
     setPending(undefined);
     applyScope(scope, action);
@@ -211,6 +243,11 @@ const PlannerEventEditor = ({
   const handleCancelPrompt = useLastCallback(() => {
     setPending(undefined);
   });
+
+  // О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
+  const promptMode = !pending ? undefined
+    : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
+      : pending.kind === 'delete' ? 'delete' : 'edit';
 
   const detailsSummary = [
     event.repeat ? formatRepeat(lang, event.repeat) : undefined,
@@ -265,12 +302,12 @@ const PlannerEventEditor = ({
           <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
         </div>
         <PlannerColorSwatches value={color} onChange={setColor} />
-        {!isInstance && <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />}
+        <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
       </PlannerDetailsFold>
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {pending ? (
+      {promptMode ? (
         <PlannerSeriesPrompt
-          title={lang(pending.kind === 'delete' ? 'PlannerSeriesDeleteTitle' : 'PlannerSeriesEditTitle')}
+          mode={promptMode}
           onChoose={handleScope}
           onCancel={handleCancelPrompt}
         />

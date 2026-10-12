@@ -520,6 +520,87 @@ try {
   await backToThisMonth();
   console.log('OK: описание ряда — «для всех повторов» и «только этого дня»');
 
+  // ── Правило повтора правится из карточки экземпляра задачи ────────────────
+  const shortWeekday = (day) => {
+    const [y, m, d] = day.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short' });
+  };
+  const repeatBox = sidePane.locator('[data-repeat-kind]');
+  const openDetails = async () => {
+    const details = sidePane.locator('[data-planner-details]');
+    await details.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    if (await details.getAttribute('data-planner-details') === 'closed') {
+      await details.getByRole('button', { name: /Repeat and details/ }).click();
+    }
+    await sidePane.locator('[data-planner-details="open"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  };
+  const countTasksOn = async (day, name) => {
+    await backToThisMonth();
+    const pane = await openDay(day);
+    return pane.locator('button[data-kind="task"]').filter({ hasText: name }).count();
+  };
+  const openTaskOn = async (day, name) => {
+    await backToThisMonth();
+    const pane = await openDay(day);
+    await pane.locator('button[data-kind="task"]').filter({ hasText: name }).first().click();
+    await sidePane.getByRole('heading', { name }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await openDetails();
+  };
+  const scopesOf = (prompt) => prompt.locator('[data-series-scope]')
+    .evaluateAll((items) => items.map((el) => el.dataset.seriesScope));
+  // Еженедельная задача по сегодняшнему дню недели
+  await backToThisMonth();
+  await openFullForm();
+  await page.locator('#planner-new-name').fill('Бассейн');
+  await planner.getByLabel('Duration, min').fill('20');
+  await planner.getByLabel('Start', { exact: true }).fill('13:00');
+  await repeatSelect().selectOption('weekly');
+  await sidePane.getByText(weekdayShort, { exact: true }).click();
+  await planner.getByRole('button', { name: 'Create', exact: true }).click();
+  await planner.getByRole('heading', { name: 'Бассейн' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  // У экземпляра выбор повтора на месте; другой день недели — «это и последующие» либо «все в серии»
+  await openTaskOn(addDays(today, 7), 'Бассейн');
+  await repeatBox.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await repeatBox.getAttribute('data-repeat-kind'), 'weekly', 'у экземпляра показано правило его ряда');
+  const nextWeekdayShort = shortWeekday(addDays(today, 1));
+  // Правило без дней недели словами не описывается — подпись под полями пропадает и возвращается с новым днём
+  await repeatBox.getByText(weekdayShort, { exact: true }).click();
+  await repeatBox.locator('[data-repeat-summary]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await repeatBox.getByText(nextWeekdayShort, { exact: true }).click();
+  await repeatBox.locator('[data-repeat-summary]').getByText(`Every week: ${nextWeekdayShort}`)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sidePane.locator('[data-repeat-save]').click();
+  const rulePrompt = planner.locator('[data-series-prompt="rule"]');
+  await rulePrompt.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.deepEqual(await scopesOf(rulePrompt), ['following', 'all'], 'одному дню своё правило не предлагается');
+  await rulePrompt.getByRole('button', { name: 'This and following', exact: true }).click();
+  await rulePrompt.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Сводка блока «Повтор и детали» сразу называет новое правило
+  await sidePane.locator('[data-planner-details]').getByText(`Every week: ${nextWeekdayShort}`).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  assert.equal(await countTasksOn(today, 'Бассейн'), 1, 'прежний экземпляр остался на месте');
+  assert.equal(await countTasksOn(addDays(today, 1), 'Бассейн'), 0, 'до дня правки новое правило не действует');
+  assert.equal(await countTasksOn(addDays(today, 7), 'Бассейн'), 0, 'с дня правки прежнего дня недели нет');
+  assert.equal(await countTasksOn(addDays(today, 8), 'Бассейн'), 1, 'последующие идут по новому правилу');
+  // «Не повторяется» у экземпляра: ряд кончается этим днём, сам день остаётся разовой задачей
+  await openTaskOn(addDays(today, 15), 'Бассейн');
+  await repeatSelect().selectOption('none');
+  await sidePane.locator('[data-repeat-save]').click();
+  const stopPrompt = planner.locator('[data-series-prompt="stop"]');
+  await stopPrompt.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.deepEqual(await scopesOf(stopPrompt), ['stop', 'one']);
+  await stopPrompt.getByRole('button', { name: 'Do not repeat from this day', exact: true }).click();
+  await stopPrompt.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Detached from a series').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  assert.equal(await countTasksOn(addDays(today, 8), 'Бассейн'), 1, 'дни до остановки остались');
+  assert.equal(await countTasksOn(addDays(today, 15), 'Бассейн'), 1, 'день остановки — разовая задача');
+  assert.equal(await countTasksOn(addDays(today, 22), 'Бассейн'), 0, 'после остановки ряда нет');
+  await backToThisMonth();
+  console.log('OK: правило повтора у экземпляра — «это и последующие», «не повторять с этого дня»');
+
   // Ссылка на заметку в названии записи: на экране — нажимаемая ссылка с подписью, без скобок
   await openFullForm();
   await page.locator('#planner-new-name').fill('Читать [[Конспект|конспект]]');

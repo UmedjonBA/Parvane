@@ -2515,6 +2515,10 @@ export interface LangPair {
   'PlannerSeriesFollowing': undefined;
   'PlannerSeriesOnlyThis': undefined;
   'PlannerSeriesOpen': undefined;
+  'PlannerSeriesRuleTitle': undefined;
+  'PlannerSeriesStopTitle': undefined;
+  'PlannerSeriesStop': undefined;
+  'PlannerSeriesOnlyThisDay': undefined;
   'PlannerDescriptionScope': undefined;
   'PlannerDescriptionShareTitle': undefined;
   'PlannerDescriptionShare': undefined;
@@ -4823,6 +4827,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerSeriesTemplateHint': {
     'rule': V;
+  };
+  'PlannerNoticeRepeatStopped': {
+    'name': V;
   };
   'PlannerNoticeDescriptionUpdated': {
     'name': V;
