@@ -1514,6 +1514,19 @@
   background-color: color-mix(in srgb, var(--pv-accent) 4%, transparent);
 }
 
+// Событие на весь день заливает колонку дня; несколько событий делят её по ширине
+.weekAllDayFill {
+  --planner-color: var(--planner-list-color, var(--planner-kind, var(--pv-event)));
+
+  pointer-events: none;
+
+  position: absolute;
+  top: 0;
+  bottom: 0;
+
+  background: color-mix(in srgb, var(--planner-color) 14%, transparent);
+}
+
 // Время вне дня из настроек
 .weekOff {
   pointer-events: none;

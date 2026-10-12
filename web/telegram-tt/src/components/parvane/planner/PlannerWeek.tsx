@@ -233,7 +233,8 @@ const PlannerWeek = ({
                     styles.tag, styles.tagButton, event.isHoliday ? styles.kindDue : styles.kindEvent,
                   )}
                   style={listColorStyle(event.color)}
-                  title={formatPlainName(event.name)}
+                  title={event.isHoliday
+                    ? `${lang('PlannerHoliday')}: ${formatPlainName(event.name)}` : formatPlainName(event.name)}
                   data-kind="event"
                   data-all-day={event.id}
                   data-holiday={event.isHoliday ? '1' : undefined}
@@ -241,7 +242,7 @@ const PlannerWeek = ({
                   data-day={day}
                   onClick={handleItemClick}
                 >
-                  {event.isHoliday && <Icon name="flag" />}
+                  {event.isHoliday && <Icon name="star" />}
                   <PlannerName name={event.name} />
                 </button>
               ))}
@@ -268,7 +269,7 @@ const PlannerWeek = ({
                   key={`d${task.id}`}
                   type="button"
                   className={buildClassName(styles.tag, styles.tagButton, styles.kindDue)}
-                  title={formatPlainName(task.name)}
+                  title={lang('PlannerDeadlinePreview', { name: formatPlainName(task.name) })}
                   data-kind="task"
                   data-id={task.id}
                   onClick={handleItemClick}
@@ -296,7 +297,7 @@ const PlannerWeek = ({
             ))}
           </div>
           {columns.map(({
-            day, layout, meals, wake, bedtime,
+            day, layout, meals, wake, bedtime, allDay,
           }) => (
             <div
               key={day}
@@ -306,6 +307,17 @@ const PlannerWeek = ({
               onClick={handleColumnClick}
               onDoubleClick={isSingle ? undefined : handleColumnDoubleClick}
             >
+              {allDay.map((event, index) => (
+                <span
+                  key={`fill${instanceKey(event)}`}
+                  className={buildClassName(styles.weekAllDayFill, event.isHoliday ? styles.kindDue : styles.kindEvent)}
+                  style={buildClassName(
+                    listColorStyle(event.color),
+                    `; inset-inline-start: ${(index * 100) / allDay.length}%; width: ${100 / allDay.length}%`,
+                  )}
+                  data-all-day-fill={event.id}
+                />
+              ))}
               <span className={styles.weekOff} style={`top: 0; height: ${offset(dayStart)}rem`} />
               <span className={styles.weekOff} style={`top: ${offset(dayEnd)}rem; bottom: 0`} />
               {wake !== undefined && wake > gridStart && (
