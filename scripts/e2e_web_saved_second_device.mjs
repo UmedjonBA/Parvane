@@ -17,18 +17,12 @@ import {
   preparePage,
   relogin,
   sendText,
+  openSavedMessages,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-saved-second-device-e2e-password';
 // Доставка соседнему устройству аккаунта — инбокс v2 + запас
 const SIBLING_SYNC_TIMEOUT_MS = 45000;
-
-async function openSavedMessagesFromMenu(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Saved Messages' }).click();
-  await page.locator('#MiddleColumn').getByText('Saved Messages').first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 function savedListItem(page) {
   return page.locator('#LeftColumn .ListItem').filter({ hasText: 'Saved Messages' }).first();
@@ -64,7 +58,7 @@ try {
   await linkSecondDevice(sessions.bob1.page, sessions.bob2.page);
 
   // Первое устройство пишет себе; на втором чат открыт не был — только список
-  await openSavedMessagesFromMenu(sessions.bob1.page);
+  await openSavedMessages(sessions.bob1.page);
   await sendText(sessions.bob1.page, noteAfterLink);
   await expectVisible(sessions.bob1.page, noteAfterLink, 'bob1', LOGIN_TIMEOUT_MS);
 
@@ -92,7 +86,7 @@ try {
   const carol = `s2d-carol-${suffix}@local`;
   const noteBeforeLink = `s2d-before-${suffix}`;
   sessions.carol1 = await preparePage(await browser.newContext(), carol, PASSWORD);
-  await openSavedMessagesFromMenu(sessions.carol1.page);
+  await openSavedMessages(sessions.carol1.page);
   await sendText(sessions.carol1.page, noteBeforeLink);
   await expectVisible(sessions.carol1.page, noteBeforeLink, 'carol1', LOGIN_TIMEOUT_MS);
   // Журнал исходящих пишется в IDB с задержкой — даём записаться до экспорта

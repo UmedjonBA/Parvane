@@ -26,6 +26,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS, assertNoPageErrors, closeSettings, dismissRecoveryKeyDialog, findMessage, openDevicesScreen,
   openPrivateChatStrict, requireEnv, sendText, submitNick,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 import { botConfirmV2, botPullV2, botReplyV2 } from './e2e_tg_confirm_v2.mjs';
 
@@ -177,7 +178,7 @@ async function pullFor(telegramId, kind, timeout = STEP_TIMEOUT_MS) {
 
 async function openPlanner(page) {
   const planner = page.locator('#ParvanePlanner');
-  if (!(await planner.count())) await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
+  if (!(await planner.count())) await openPlannerScreen(page, 'calendar');
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   return planner;
 }
@@ -189,7 +190,7 @@ async function closePlanner(page) {
 
 async function createTask(page, name) {
   const planner = await openPlanner(page);
-  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(planner.page(), 'calendar');
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await page.getByRole('button', { name: 'More options' }).click();
   await page.locator('#planner-new-name').fill(name);
@@ -200,7 +201,7 @@ async function createTask(page, name) {
 
 async function expectTask(page, name, timeout = JOIN_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(planner.page(), 'today');
   await planner.getByRole('button', { name, exact: false }).first().waitFor({ state: 'visible', timeout });
 }
 

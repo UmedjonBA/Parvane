@@ -16,6 +16,8 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 import {
   LOGIN_TIMEOUT_MS, assertNoPageErrors, logOut, requireEnv, submitNick,
   autoDismissRecoveryKeyDialog,
+  openProfile,
+  waitForChatList,
 } from './e2e_web_helpers.mjs';
 import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
 
@@ -146,8 +148,7 @@ async function reloadToPasswordLogin(page, address, { dropTrustSecret = false } 
 }
 
 async function openPrivacySettings(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: /Privacy and Security/ }).click();
   const toggle = page.getByLabel('Confirm sign-in in Telegram');
   await toggle.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -291,7 +292,7 @@ try {
   assert.equal((await botConfirm(reloginToken, TG_OWNER)).ok, true);
   await signedIn(s1.page);
   // После повторного входа — список чатов, а не экран Settings, с которого вышли
-  await s1.page.getByRole('button', { name: 'Open menu' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await waitForChatList(s1.page);
   console.log('OK: после полного выхода вход снова подтверждается в Telegram (на список чатов)');
 
   // ── Новое устройство (другой контекст): снова подтверждение ──

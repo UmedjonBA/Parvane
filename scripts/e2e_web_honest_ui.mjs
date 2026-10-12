@@ -15,6 +15,7 @@ import {
   preparePage,
   readDiagJournal,
   sendText,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-honest-ui-e2e-password';
@@ -294,8 +295,7 @@ try {
 
   // ── Приватность: только работающие пункты ────────────────────────────────
   // Шаг обязательный: не нашли меню или пункт — сценарий падает, а не пропускает
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).first().click();
+  await openProfile(page);
   const privacyItem = page.getByText('Privacy and Security', { exact: true }).first();
   await privacyItem.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await privacyItem.click();

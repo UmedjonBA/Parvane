@@ -7,6 +7,7 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
   buildPngBuffer, dismissRecoveryKeyDialog, LOGIN_TIMEOUT_MS, preparePage, reloadPage, relogin,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-background-e2e-1';
@@ -39,8 +40,7 @@ async function waitBackground(page, check, what) {
 }
 
 async function openBackgroundSettings(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByText('General Settings', { exact: false }).first().click();
   await page.getByText('Chat Wallpaper', { exact: true }).first().click();
   await page.locator('.settings-wallpapers .WallpaperTile').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

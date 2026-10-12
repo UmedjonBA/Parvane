@@ -123,7 +123,6 @@ const LeftMain: FC<OwnProps> = ({
         contactsFilter={contactsFilter}
         onSearchQuery={onSearchQuery}
         onReset={onReset}
-        shouldSkipTransition={shouldSkipTransition}
         isClosingSearch={isClosingSearch}
         isFoldersSidebarShown={isFoldersSidebarShown}
       />

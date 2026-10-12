@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
@@ -32,7 +31,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 import useResizeObserver from '../../../hooks/useResizeObserver';
 
-import MainMenuDropdown from '../../common/MainMenuDropdown';
 import PeerChip from '../../common/PeerChip';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import StoryToggler from '../../story/StoryToggler';
@@ -54,7 +52,6 @@ type OwnProps = {
   content: LeftColumnContent;
   contactsFilter: string;
   isClosingSearch?: boolean;
-  shouldSkipTransition?: boolean;
   isFoldersSidebarShown?: boolean;
   onSearchQuery: (query: string) => void;
   onReset: NoneToVoidFunction;
@@ -90,7 +87,6 @@ const LeftMainHeader = ({
   searchQuery,
   isLoading,
   isCurrentUserPremium,
-  shouldSkipTransition,
   globalSearchChatId,
   searchDate,
   theme,
@@ -120,11 +116,11 @@ const LeftMainHeader = ({
   const { isMobile } = useAppLayout();
 
   const areContactsVisible = content === LeftColumnContent.Contacts;
-  const hasMenu = content === LeftColumnContent.ChatList;
-  // Parvane: шапка списка чатов по прототипу — меню, заголовок «Чаты», поиск пилюлей (на телефоне —
-  // значком) и на компьютере кнопка «Написать». Поле поиска то же: по фокусу оно разворачивается во всю
-  // шапку, заголовок и «Написать» уходят
-  const isChatsHeader = hasMenu && !shouldHideSearch;
+  const isChatList = content === LeftColumnContent.ChatList;
+  // Parvane: шапка списка чатов по прототипу — заголовок «Чаты», поиск пилюлей (на телефоне — значком)
+  // и на компьютере кнопка «Написать». Поле поиска то же: по фокусу оно разворачивается во всю шапку,
+  // заголовок и «Написать» уходят
+  const isChatsHeader = isChatList && !shouldHideSearch;
 
   const [isComposeMenuOpen, openComposeMenu, closeComposeMenu] = useFlag();
 
@@ -178,27 +174,9 @@ const LeftMainHeader = ({
     ...(IS_APP && { 'Mod+L': handleLockScreenHotkey }),
   } : undefined), [canSetPasscode]));
 
-  const MainButton: FC<{ onTrigger: () => void; isOpen?: boolean }> = useMemo(() => {
-    return ({ onTrigger, isOpen }) => (
-      <Button
-        round
-        ripple={hasMenu && !isMobile}
-        size="smaller"
-        color="translucent"
-        className={buildClassName(isOpen && 'active')}
-
-        onClick={hasMenu ? onTrigger : () => onReset()}
-        ariaLabel={hasMenu ? lang('AriaLabelOpenMenu') : lang('AriaLabelBackChatList')}
-      >
-        <div className={buildClassName(
-          'animated-menu-icon',
-          !hasMenu && 'state-back',
-          shouldSkipTransition && 'no-animation',
-        )}
-        />
-      </Button>
-    );
-  }, [hasMenu, isMobile, lang, onReset, shouldSkipTransition]);
+  const handleBack = useLastCallback(() => {
+    onReset();
+  });
 
   const handleSearchFocus = useLastCallback(() => {
     if (!searchQuery) {
@@ -276,8 +254,18 @@ const LeftMainHeader = ({
         )}
         data-tauri-drag-region={IS_WITH_WINDOW_BUTTONS ? true : undefined}
       >
-        {lang.isRtl && <div className="DropdownMenuFiller" />}
-        <MainMenuDropdown trigger={MainButton} />
+        {/* Parvane: меню «☰» нет — его пункты в «Профиле». Вне списка чатов на этом месте «назад» */}
+        {!isChatList && (
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            onClick={handleBack}
+            ariaLabel={lang('AriaLabelBackChatList')}
+          >
+            <div className={buildClassName('animated-menu-icon', 'state-back', 'no-animation')} />
+          </Button>
+        )}
         {isChatsHeader && <h1 className="left-header-title">{lang('ParvaneSectionMessenger')}</h1>}
         <SearchInput
           inputId="telegram-search-input"

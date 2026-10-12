@@ -27,6 +27,7 @@ import {
   openPrivateChatStrict,
   preparePage,
   sendText,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-v2-state-password';
@@ -39,8 +40,7 @@ const STATE_SYNC_BUDGET_MS = 10000;
 
 // Текст подтверждения выхода (диалог закрывается без выхода)
 async function readLogoutWarning(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   // «More actions» есть и в шапке чата — ждём сам экран настроек
   await page.getByRole('button', { name: 'Edit profile' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first()
@@ -99,8 +99,7 @@ async function openDevicesScreen(page) {
     .then(() => true, () => false)) {
     return page.locator('.SettingsActiveSessions');
   }
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Devices' }).click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -121,8 +120,7 @@ async function closeSettings(page) {
 
 // Папка через нативный экран Settings → Chat Folders (как e2e_web_content_features)
 async function createFolder(page, folderName, chatName) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Chat Folders' }).click();
   await page.getByRole('button', { name: 'Create New Folder' }).click();
   const nameInput = page.getByRole('textbox', { name: 'Folder name' });

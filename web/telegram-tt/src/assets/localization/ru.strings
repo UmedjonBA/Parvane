@@ -879,6 +879,10 @@
 "MenuSettings" = "Настройки";
 "MenuMore" = "Ещё";
 "MenuNightMode" = "Ночной режим";
+"AriaMenuEnableNightMode" = "Включить ночной режим";
+"AriaMenuDisableNightMode" = "Выключить ночной режим";
+"PremiumLimitAccountsTitle" = "Достигнут предел";
+"PremiumLimitAccountsNoPremium" = "В этом браузере уже подключено наибольшее число аккаунтов.";
 "AriaSettingsEditProfilePhoto" = "Изменить фото профиля";
 "MenuUIFeaturesSwitch" = "Анимации";
 "MenuReportBug" = "Сообщить об ошибке";
@@ -1505,6 +1509,7 @@
 "PlannerTimeConflict" = "Пересечение времени";
 "PlannerTitleNew" = "Новая запись";
 "PlannerToday" = "Сегодня";
+"PlannerJumpToday" = "Текущая дата";
 "PlannerUndo" = "Отменить";
 "PlannerUnitGram" = "г";
 "PlannerUnitKcal" = "ккал";

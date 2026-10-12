@@ -2550,6 +2550,7 @@ export interface LangPair {
   'PlannerTimeConflict': undefined;
   'PlannerTitleNew': undefined;
   'PlannerToday': undefined;
+  'PlannerJumpToday': undefined;
   'PlannerUndo': undefined;
   'PlannerUnitGram': undefined;
   'PlannerUnitKcal': undefined;

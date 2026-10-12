@@ -3,7 +3,13 @@
 // Запуск: PARVANE_E2E_SHOT_DIR=<каталог> scripts/run_web_theme_shots_e2e.sh
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-import { dismissRecoveryKeyDialog, preparePage, sendText } from './e2e_web_helpers.mjs';
+import {
+  dismissRecoveryKeyDialog,
+  preparePage,
+  sendText,
+  openSavedMessages,
+  openPlannerScreen,
+} from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-theme-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -29,14 +35,12 @@ try {
       const sidebar = page.locator('#FoldersSidebar');
       const planner = page.locator('#ParvanePlanner');
       // Чат с собой: свои сообщения, поле ввода, шапка
-      await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).click();
-      await page.getByRole('menuitem', { name: 'Saved Messages' }).click();
-      await page.locator('#MiddleColumn').getByText('Saved Messages').first().waitFor({ timeout: STEP_TIMEOUT_MS });
+      await openSavedMessages(page);
       await sendText(page, 'Проверка цветов: своё сообщение со ссылкой https://example.org и `кодом`');
       await sendText(page, 'Второе сообщение');
       await shot('chat');
       // «План»: запись, «Сегодня», календарь, карточка, «Здоровье»
-      await sidebar.getByRole('tab', { name: 'Today' }).click();
+      await openPlannerScreen(page, 'today');
       await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       for (const line of ['созвон 16:00 45 мин', 'задача сдать отчёт до пт', 'обед гречка б30 ж10 у60 сахар 60 520 ккал', 'сон 01:00-06:00', 'вес 72,4']) {
         await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
@@ -49,7 +53,7 @@ try {
       await page.locator('#planner-quick-input').fill('урок вт 15:00 каждую неделю 5 мес');
       await shot('quick');
       await page.keyboard.press('Escape');
-      await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+      await openPlannerScreen(page, 'calendar');
       await shot('calendar');
       await sidebar.getByRole('tab', { name: 'Health' }).click();
       await shot('health');
@@ -90,9 +94,9 @@ try {
       await phonePage.keyboard.press('Escape');
       await phone('today', async () => {
         await bar.getByRole('button', { name: 'Planner' }).click();
-        await phonePage.locator('#ParvanePlanner').locator('header').getByText('Today', { exact: true }).first().click();
+        await openPlannerScreen(phonePage, 'today');
       });
-      await phone('calendar', () => phonePage.locator('#ParvanePlanner').locator('header').getByText('Calendar', { exact: true }).first().click());
+      await phone('calendar', () => openPlannerScreen(phonePage, 'calendar'));
       await phone('health', () => phonePage.locator('#ParvanePlanner').locator('header').getByText('Health', { exact: true }).first().click());
       await phone('quick', async () => {
         await bar.getByRole('button', { name: 'New entry' }).click();

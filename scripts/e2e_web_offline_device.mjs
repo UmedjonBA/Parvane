@@ -30,6 +30,8 @@ import {
   requireEnv,
   sendText,
   autoDismissRecoveryKeyDialog,
+  openProfile,
+  showChatList,
 } from './e2e_web_helpers.mjs';
 
 async function attachVideo(page, path, caption) {
@@ -45,8 +47,7 @@ async function attachVideo(page, path, caption) {
 }
 
 async function setOwnBio(page, bio) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Edit profile' }).click();
   await page.getByLabel('First name (required)').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Форма подставляет поля из fullInfo асинхронно и затирает уже введённое
@@ -64,14 +65,7 @@ async function setOwnBio(page, bio) {
     const fab = document.querySelector('.FloatingActionButton');
     return !fab || !fab.classList.contains('revealed');
   }, undefined, { timeout: LOGIN_TIMEOUT_MS });
-  const menu = page.getByRole('button', { name: 'Open menu' }).first();
-  for (let i = 0; i < 6; i++) {
-    if (await menu.isVisible().catch(() => false)) return;
-    const back = page.locator('.Transition_slide-active')
-      .getByRole('button', { name: /Go back|Return to Chat List/ }).first();
-    if (await back.isVisible().catch(() => false)) await back.click({ timeout: 5000 }).catch(() => {});
-    await page.waitForTimeout(500);
-  }
+  await showChatList(page);
 }
 
 const PASSWORD = 'Parvane-offline-device-password';

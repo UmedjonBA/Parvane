@@ -13,6 +13,9 @@ import {
   openPrivateChatStrict,
   preparePage as preparePageShared,
   sendText,
+  openProfile,
+  waitForChatList,
+  profileRow,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-contacts-e2e-password';
@@ -27,14 +30,14 @@ let bobSession;
 let carolSession;
 
 async function openContacts(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Contacts' }).click();
+  await openProfile(page);
+  await profileRow(page, 'Contacts').click();
   await page.getByPlaceholder('Search contacts').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
 async function closeContacts(page) {
-  await page.getByRole('button', { name: /Return to chat list|Go back/ }).first().click();
-  await page.getByPlaceholder('Search').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#LeftMainHeader').getByRole('button', { name: 'Return to chat list' }).click();
+  await waitForChatList(page);
 }
 
 const contactRow = (page, nick) => page.locator('.contact-list-item').filter({ hasText: nick });

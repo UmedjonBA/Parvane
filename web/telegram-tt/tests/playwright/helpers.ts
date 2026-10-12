@@ -80,6 +80,21 @@ export async function registerAndSignIn(
   await expectSignedIn(page);
 }
 
+const PROFILE_STEP_TIMEOUT_MS = 5000;
+
+// «Профиль» — главный экран настроек: кнопка `Profile` боковой панели (компьютер) либо нижней панели
+// (телефон). Диалог ключа восстановления (v2) появляется в произвольный момент после входа и перекрывает
+// кнопку — нажатие повторяется, пока экран не откроется
+export async function openProfile(page: Page) {
+  const rail = page.locator('#FoldersSidebar').getByRole('button', { name: 'Profile' });
+  const bar = page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Profile' });
+  const screen = page.locator('.settings-main-scroll');
+  await expect(async () => {
+    if (!(await screen.isVisible())) await rail.or(bar).first().click({ timeout: PROFILE_STEP_TIMEOUT_MS });
+    await expect(screen).toBeVisible({ timeout: PROFILE_STEP_TIMEOUT_MS });
+  }).toPass({ timeout: LOGIN_TIMEOUT_MS });
+}
+
 export function uniqueUser(prefix: string, projectName: string) {
   const slug = projectName.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   return `${prefix}-${slug}-${Date.now()}@local`;

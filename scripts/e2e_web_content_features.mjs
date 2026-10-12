@@ -13,6 +13,7 @@ import {
   openPrivateChat,
   preparePage,
   sendText,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-content-e2e-password';
@@ -117,8 +118,7 @@ try {
     .waitFor({ state: 'visible', timeout: (SCHEDULE_DELAY_SECS + 90) * 1000 });
 
   // ── Папки чатов: локальный персист после reload ────────────────────────────
-  await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Chat Folders' }).click();
   await aliceSession.page.getByRole('button', { name: 'Create New Folder' }).click();
   const folderNameInput = aliceSession.page.getByRole('textbox', { name: 'Folder name' });
@@ -165,8 +165,7 @@ try {
   assert.equal(folderIcon, '💼', 'значок папки не сохранился после перезагрузки');
 
   // ── Блокировка: список переживает reload ───────────────────────────────────
-  await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Privacy and Security' }).click();
   await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
   const blockFab = aliceSession.page.getByRole('button', { name: 'Block', exact: true }).last();
@@ -191,8 +190,7 @@ try {
   await blockedRow.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   await relogin(aliceSession.page, PASSWORD);
-  await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Privacy and Security' }).click();
   await aliceSession.page.getByRole('button', { name: 'Blocked Users' }).click();
   await blockedRow.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

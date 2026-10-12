@@ -24,6 +24,7 @@ import {
   preparePage,
   relogin,
   sendText,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-task-offer-e2e-1';
@@ -63,7 +64,7 @@ function cardOf(page, name) {
 async function openPlanner(page) {
   const planner = page.locator('#ParvanePlanner');
   if (!(await planner.count())) {
-    await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
+    await openPlannerScreen(page, 'calendar');
   }
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   return planner;
@@ -77,7 +78,7 @@ async function closePlanner(page) {
 /** Задача есть в расписании сегодняшнего дня (панель дня). */
 async function expectTaskInPlan(page, name, timeout = SYNC_TIMEOUT_MS) {
   const planner = await openPlanner(page);
-  await planner.page().locator('#FoldersSidebar').getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(planner.page(), 'calendar');
   await planner.locator(`[role="gridcell"][data-day="${todayKey()}"]`).click({ position: { x: 10, y: 10 } });
   await planner.locator('[data-planner-day]').getByRole('button', { name, exact: false }).first()
     .waitFor({ state: 'visible', timeout })

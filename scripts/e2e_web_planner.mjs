@@ -12,6 +12,8 @@ import {
   preparePage,
   relogin,
   reloadPage,
+  waitForChatList,
+  openPlannerScreen,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-planner-e2e-1';
@@ -55,15 +57,14 @@ try {
     await sidePane.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   };
 
-  // ── Панель: видна без папок, в ней только разделы; меню — в шапке списка ──
+  // ── Панель: видна без папок, в ней только разделы; меню «☰» нет ни в ней, ни в шапке списка ──
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/scheme-chats-wide.png` });
   await sidebar.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidebar.getByRole('tab').count(), 6, 'в панели шесть разделов: чаты, сегодня, календарь, здоровье, знания, облако');
+  assert.equal(await sidebar.getByRole('tab').count(), 5, 'в панели пять разделов: чаты, календарь, здоровье, знания, облако');
   assert.equal(await sidebar.getByRole('button', { name: 'Search' }).count(), 1, 'внизу панели — «Поиск»');
   assert.equal(await sidebar.getByRole('button', { name: 'Profile' }).count(), 1, 'внизу панели — «Профиль»');
   assert.equal(await sidebar.getByRole('tab', { name: 'Chats' }).getAttribute('aria-selected'), 'true');
-  assert.equal(await sidebar.getByRole('button', { name: 'Open menu' }).count(), 0, 'меню — не в панели');
-  assert.ok(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 'меню осталось в шапке');
+  assert.equal(await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).count(), 0, 'меню «☰» убрано: его пункты в «Профиле»');
   // Разделы идут сверху под знаком, «Поиск» и «Профиль» прижаты к низу панели
   const geometry = await page.evaluate(() => {
     const bar = document.querySelector('#FoldersSidebar').getBoundingClientRect();
@@ -94,11 +95,11 @@ try {
   await page.locator('#telegram-search-input').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.waitForFunction(() => document.activeElement?.id === 'telegram-search-input', undefined, { timeout: STEP_TIMEOUT_MS });
   await page.keyboard.press('Escape');
-  await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: панель — знак, шесть разделов сверху, «Поиск» и «Профиль» внизу');
+  await waitForChatList(page, STEP_TIMEOUT_MS);
+  console.log('OK: панель — знак, пять разделов сверху, «Поиск» и «Профиль» внизу');
 
   // ── Раздел «План» вместо колонок мессенджера ──────────────────────────────
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await isShown(page, '#LeftColumn'), false, 'список чатов должен быть скрыт');
@@ -207,7 +208,7 @@ try {
   await gridColumn.locator('[data-block]').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
   await workLayer.click();
   await gridColumn.locator('[data-block]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.deepEqual(await viewGroup.getByRole('button').allInnerTexts(), ['Week', 'Month', 'Year', 'List'], 'виды календаря');
+  assert.deepEqual(await viewGroup.getByRole('button').allInnerTexts(), ['Today', 'Week', 'Month', 'Year', 'List'], 'виды календаря');
   // «Добавить на этот день» в острове дня открывает форму на этот день
   await dayPane.getByRole('button', { name: 'Add to this day' }).click();
   assert.equal(await sidePane.getByLabel('Work date').inputValue(), today, 'кнопка острова создаёт дело на выбранный день');
@@ -277,7 +278,7 @@ try {
   // ── «Сегодня»: сводка дня, задачи дня, задачи без даты (spec 018) ─────────
   assert.equal(await planner.getByText('Statistics', { exact: true }).count(), 0, 'вкладки «Статистика» больше нет');
   assert.equal(await planner.getByText('Nutrition', { exact: true }).count(), 0, 'вкладки «Питание» быть не должно');
-  await sidebar.getByRole('tab', { name: 'Today' }).click();
+  await openPlannerScreen(page, 'today');
   const todayView = planner.locator(`[data-planner-today="${today}"]`);
   await todayView.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await todayView.locator('[data-today-tasks]').getByText('Подготовить макет').first()
@@ -323,7 +324,7 @@ try {
   await planner.getByText('The day must end after it starts').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await planner.getByLabel('Day ends').inputValue(), '21:00', 'негодное значение не применяется');
   await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   await viewButton('Week').click();
   await planner.locator('[data-planner-view="week"]').getByText('08:00', { exact: true })
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -340,7 +341,7 @@ try {
   const weekdayShort = new Date().toLocaleDateString('en-US', { weekday: 'short' });
   const repeatSelect = () => planner.locator('[data-repeat-kind] select').first();
   const openDay = async (day) => {
-    await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+    await openPlannerScreen(page, 'calendar');
     const cell = planner.locator(`[role="gridcell"][data-day="${day}"]`);
     if (!(await cell.count())) {
       // День в соседнем месяце — листаем вперёд
@@ -352,11 +353,12 @@ try {
     await planner.locator(`[data-planner-day="${day}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     return dayPane;
   };
+  // «Текущая дата» — кнопка шапки календаря; «Сегодня» (`Today`) — пункт переключателя вида
   const backToThisMonth = async () => {
-    await planner.getByRole('button', { name: 'Today' }).click();
+    await planner.getByRole('button', { name: 'Current date' }).click();
   };
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   await openFullForm();
   await page.locator('#planner-new-kind').selectOption('event');
   await page.locator('#planner-new-name').fill('Йога');
@@ -473,7 +475,7 @@ try {
 
   // ── Виды календаря и выбор месяца и года (spec 013, US2) ──────────────────
   const main = planner.locator('[data-planner-view]');
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   await viewButton('Week').click();
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const weekColumn = planner.locator(`[data-planner-view="week"] div[data-day="${today}"]`).last();
@@ -505,7 +507,7 @@ try {
   const nextMarch = `${Number(today.slice(0, 4)) + 1}-03-15`;
   await planner.locator(`[role="gridcell"][data-day="${nextMarch}"][aria-selected="true"]`)
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('button', { name: 'Today' }).click();
+  await planner.getByRole('button', { name: 'Current date' }).click();
   await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Вид «Список» (spec 018): повестка от выбранного дня, пустые дни пропущены
   await viewButton('List').click();
@@ -594,7 +596,7 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   assert.equal(await isShown(page, '#LeftColumn'), true, 'после перезагрузки открыт мессенджер');
-  await sidebar.getByRole('tab', { name: 'Calendar' }).click();
+  await openPlannerScreen(page, 'calendar');
   // Вид «Неделя» запомнен устройством
   await planner.locator('[data-planner-view="week"]').waitFor({ state: 'visible', timeout: 30000 });
   await planner.getByRole('group', { name: 'Calendar view' }).getByRole('button', { name: 'Month', exact: true }).click();
@@ -633,7 +635,7 @@ try {
   assert.ok(overflow <= 0, `горизонтальное переполнение на телефоне: ${overflow}`);
   // Телефон: заголовка и кнопки «+ Запись» нет; переключатель вида и настройки — в шапке календаря
   const phoneViews = planner.getByRole('group', { name: 'Calendar view' });
-  assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Day', 'Month', 'Year', 'List'], 'виды календаря на телефоне');
+  assert.deepEqual(await phoneViews.getByRole('button').allInnerTexts(), ['Today', 'Day', 'Month', 'Year', 'List'], 'виды календаря на телефоне');
   assert.equal(await planner.getByRole('button', { name: '+ Entry', exact: true }).count(), 0, 'на телефоне кнопки «+ Запись» нет');
   assert.equal(await planner.locator('header h1').count(), 0, 'на телефоне заголовка раздела нет');
   // Месяц: день — карточкой ПОД сеткой месяца (расписание списком), вбок ничего не листается
@@ -731,14 +733,14 @@ try {
     await swipe('#ParvanePlanner [data-day-grid]', 80, 300);
     await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     // «Сегодня»: расписание — карточка-список между карточками дня и задачами; жест листает дни
-    await planner.locator('header').getByText('Today').first().click();
+    await phoneViews.getByRole('button', { name: 'Today', exact: true }).click();
     await planner.locator(`[data-planner-today="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await planner.locator('[data-today-schedule] [data-block]').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await swipe('#ParvanePlanner [data-today-tasks]', 300, 80);
     await planner.locator(`[data-planner-today="${tomorrowKey}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await swipe('#ParvanePlanner [data-today-tasks]', 80, 300);
     await planner.locator(`[data-planner-today="${today}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    await planner.locator('header').getByText('Calendar').first().click();
+    await phoneViews.getByRole('button', { name: 'Day', exact: true }).click();
     await phoneWeek.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     console.log('OK: телефон — жест листает дни на «Сегодня» и в сетке дня');
   } else {

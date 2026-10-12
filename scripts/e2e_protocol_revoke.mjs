@@ -24,6 +24,7 @@ import {
   preparePage,
   sendText,
   terminateSessionWithPassword,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-v2-revoke-password';
@@ -69,8 +70,7 @@ async function openDevicesScreen(page) {
     .then(() => true, () => false)) {
     return page.locator('.SettingsActiveSessions');
   }
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Devices' }).click();
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

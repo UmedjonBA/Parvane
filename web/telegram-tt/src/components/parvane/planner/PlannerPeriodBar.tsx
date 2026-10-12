@@ -17,6 +17,9 @@ import PlannerLayerChips from './PlannerLayerChips';
 import styles from './Planner.module.scss';
 
 type OwnProps = {
+  // Экран без периода («Сегодня»): вместо заголовка-кнопки, стрелок и слоёв — название экрана
+  // (на телефоне — ничего), переключатель вида остаётся
+  heading?: string;
   title: string;
   prevLabel: string;
   nextLabel: string;
@@ -38,10 +41,11 @@ type OwnProps = {
   onToggleLayer: (layer: PlannerLayer) => void;
 };
 
-// Шапка календаря: заголовок-кнопка с выбором месяца и года, стрелки, «Сегодня», слои, переключатель вида
+// Шапка календаря: заголовок-кнопка с выбором месяца и года, стрелки, «Текущая дата», слои, переключатель
+// вида («Сегодня» — первый его пункт)
 const PlannerPeriodBar = ({
-  title, prevLabel, nextLabel, picked, today, isNarrow, segments, activeSegment, segmentsLabel, layers, trailing,
-  onPrev, onNext, onToday, onPickDay, onSwitchSegment, onToggleLayer,
+  heading, title, prevLabel, nextLabel, picked, today, isNarrow, segments, activeSegment, segmentsLabel, layers,
+  trailing, onPrev, onNext, onToday, onPickDay, onSwitchSegment, onToggleLayer,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -76,6 +80,36 @@ const PlannerPeriodBar = ({
 
   const pickedDate = fromDayKey(picked);
 
+  function renderSegments() {
+    return (
+      <div className={styles.seg} role="group" aria-label={segmentsLabel}>
+        {segments.map((segment) => (
+          <button
+            key={segment.value}
+            type="button"
+            className={buildClassName(styles.segButton, segment.value === activeSegment && styles.segOn)}
+            aria-pressed={segment.value === activeSegment}
+            data-value={segment.value}
+            onClick={handleSegmentClick}
+          >
+            {segment.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  if (heading !== undefined) {
+    return (
+      <div className={buildClassName(styles.hdr, styles.calendarHdr)}>
+        {!isNarrow && <h1 className={styles.hdrTitle}>{heading}</h1>}
+        <span className={styles.grow} />
+        {renderSegments()}
+        {trailing}
+      </div>
+    );
+  }
+
   return (
     <div className={buildClassName(styles.hdr, styles.calendarHdr)}>
       <div className={styles.periodNav}>
@@ -100,7 +134,7 @@ const PlannerPeriodBar = ({
           </>
         )}
         {(!isNarrow || picked !== today) && (
-          <button type="button" className={styles.pill} onClick={onToday}>{lang('PlannerToday')}</button>
+          <button type="button" className={styles.pill} onClick={onToday}>{lang('PlannerJumpToday')}</button>
         )}
         {isPickerOpen && (
           <div className={styles.periodPicker} role="dialog" aria-label={lang('PlannerPickPeriod')}>
@@ -135,20 +169,7 @@ const PlannerPeriodBar = ({
       </div>
       <span className={styles.grow} />
       {!isNarrow && <PlannerLayerChips layers={layers} onToggle={onToggleLayer} />}
-      <div className={styles.seg} role="group" aria-label={segmentsLabel}>
-        {segments.map((segment) => (
-          <button
-            key={segment.value}
-            type="button"
-            className={buildClassName(styles.segButton, segment.value === activeSegment && styles.segOn)}
-            aria-pressed={segment.value === activeSegment}
-            data-value={segment.value}
-            onClick={handleSegmentClick}
-          >
-            {segment.label}
-          </button>
-        ))}
-      </div>
+      {renderSegments()}
       {trailing}
     </div>
   );
