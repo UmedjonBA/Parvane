@@ -3,7 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { IconName } from '../../../types/icons';
-import type { PlannerSettings } from './plannerModel';
+import type { PlannerLearnedWord, PlannerSettings } from './plannerModel';
 import type {
   QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
 } from './plannerQuick';
@@ -17,9 +17,10 @@ import { applyQuickDraft, formatPace } from './plannerHealth';
 import { toMinutes, toTime } from './plannerModel';
 import { getQuickLang, parseQuickInput, QUICK_REPEAT_END } from './plannerQuick';
 import {
-  learnedDefaults, readLearned, recordCorrection, saveLearned,
+  correctWords, hasLearned, learnedDefaults, learnStoreFromWords, mergeLearnStores, readLearned, recordCorrection,
+  resetLearned, saveLearned,
 } from './plannerQuickLearn';
-import { updatePlanner } from './plannerStore';
+import { canSyncLearned, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -36,8 +37,12 @@ type OwnProps = {
   initialText?: string;
   today: string;
   settings: PlannerSettings;
-  // Аккаунт: у каждого свой словарь правок ввода текстом (настройка устройства)
+  // Аккаунт: запись словаря правок на устройстве (пока «План» недоступен) — у каждого своя
   userId?: string;
+  // Словарь правок ввода текстом из данных «Плана»
+  learnedWords: PlannerLearnedWord[];
+  // «План» загружен и принимает правки: словарь читается из него и пишется в него
+  isLearnedSynced: boolean;
   onCreated: (day?: string) => void;
   onMore: NoneToVoidFunction;
   onClose: NoneToVoidFunction;
@@ -114,7 +119,7 @@ const FOCUS_DELAY_MS = 200;
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
-  isOpen, initialText, today, settings, userId, onCreated, onMore, onClose,
+  isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, onCreated, onMore, onClose,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
   const [text, setText] = useState('');
@@ -124,10 +129,13 @@ const PlannerQuickInput = ({
   const [pick, setPick] = useState<QuickPick>({});
   const [altField, setAltField] = useState<QuickAltField | undefined>();
   // Словарь правок читается в момент открытия окна, а не кадром позже: иначе первый разбор шёл бы по
-  // словарю прошлого открытия (например, уже сброшенному в настройках)
-  const learnStore = useMemo<LearnStore | undefined>(
-    () => (isOpen ? readLearned(userId) : undefined), [isOpen, userId],
-  );
+  // словарю прошлого открытия (например, уже сброшенному в настройках). Источник — данные «Плана» вместе
+  // с ещё не перенесённой записью устройства; пока «План» недоступен — только запись устройства
+  const learnStore = useMemo<LearnStore | undefined>(() => {
+    if (!isOpen) return undefined;
+    const local = readLearned(userId);
+    return isLearnedSynced ? mergeLearnStores(learnStoreFromWords(learnedWords), local) : local;
+  }, [isOpen, userId, isLearnedSynced, learnedWords]);
 
   const lang = useLang();
   const learned = useMemo(() => learnStore && learnedDefaults(learnStore), [learnStore]);
@@ -213,15 +221,23 @@ const PlannerQuickInput = ({
     const entry = parse(value);
     if (!value.trim() || entry.error || entry.name.length > NAME_MAX_LENGTH) return;
     // Правка угаданного типа либо длительности запоминается за первым словом названия
-    const store = learnStore || readLearned(userId);
-    const corrected = recordCorrection(store, parseQuickInput(value, baseContext()), entry);
-    if (corrected !== store) {
-      saveLearned(userId, corrected);
+    const auto = parseQuickInput(value, baseContext());
+    const local = readLearned(userId);
+    // Состояние «Плана» берётся в момент записи: окно могло открыться раньше, чем он стал доступен
+    const isSynced = canSyncLearned();
+    if (!isSynced) {
+      const corrected = recordCorrection(local, auto, entry);
+      if (corrected !== local) saveLearned(userId, corrected);
     }
     updatePlanner((state) => {
       applyQuickDraft(state, entry, today);
+      // Правка словаря — в той же правке «Плана», что и запись: одна операция, одна отмена
+      const words = isSynced ? correctWords(state.learned, local, auto, entry) : undefined;
+      if (words) state.learned = words;
     }, entry.kind === 'goal' ? lang('PlannerNoticeGoalsSaved')
       : lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
+    // Запись устройства влита в «План» той же правкой
+    if (isSynced && hasLearned(local)) resetLearned(userId);
     onCreated(entry.day);
   });
 

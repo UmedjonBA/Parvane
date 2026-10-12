@@ -390,3 +390,66 @@ describe('планировщик ↔ движок: здоровье (spec 020)',
     expect(fromEngineState(ENGINE_EMPTY).healthGoals.activeMinutes).toBe(150);
   });
 });
+
+describe('планировщик ↔ движок: словарь правок ввода текстом', () => {
+  const ENGINE_EMPTY: EngineState = {
+    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
+  };
+  const word = {
+    id: 'пара', kind: 'event' as const, kindCount: 2, minutes: 105, minutesCount: 3, touched: 4,
+  };
+
+  it('слова движка читаются; негодные и пустые пропускаются; прежний движок — пустой словарь', () => {
+    const state = fromEngineState({
+      ...ENGINE_EMPTY,
+      learned: [
+        {
+          id: 'пара', kind: 'event', kindCount: 2, minutes: 105, minutesCount: 3, touched: 4,
+        },
+        {
+          id: 'созвон', kind: '', kindCount: 0, minutes: 20, minutesCount: 1, touched: 5,
+        },
+        {
+          id: 'пусто', kind: '', kindCount: 0, minutes: null, minutesCount: 0, touched: 6,
+        },
+        {
+          id: 'чужое', kind: 'food', kindCount: 3, minutes: null, minutesCount: 0, touched: 7,
+        },
+      ],
+    });
+    expect(state.learned).toEqual([word, {
+      id: 'созвон', kind: undefined, kindCount: 0, minutes: 20, minutesCount: 1, touched: 5,
+    }]);
+    expect(fromEngineState(ENGINE_EMPTY).learned).toEqual([]);
+  });
+
+  it('новое слово уходит целиком, правка — только изменившейся парой, пропавшее — удалением', () => {
+    const empty = createEmptyPlannerState();
+    const one: PlannerState = { ...empty, learned: [word] };
+    expect(diffChanges(empty, one)).toEqual([{
+      learned: {
+        id: 'пара', kind: 'event', kindCount: 2, minutes: 105, minutesCount: 3, touched: 4,
+      },
+    }]);
+    expect(diffChanges(one, { ...one, learned: [{ ...word }] })).toEqual([]);
+    // Счётчик длительности вырос: тип не уходит и не затрёт правку типа с другого устройства
+    expect(diffChanges(one, { ...one, learned: [{ ...word, minutesCount: 4, touched: 5 }] }))
+      .toEqual([{ learned: { id: 'пара', minutes: 105, minutesCount: 4, touched: 5 } }]);
+    // Тип разучен: пустая строка и ноль
+    expect(diffChanges(one, { ...one, learned: [{ ...word, kind: undefined, kindCount: 0 }] }))
+      .toEqual([{ learned: { id: 'пара', kind: '', kindCount: 0 } }]);
+    expect(diffChanges(one, { ...one, learned: [{ ...word, minutes: undefined, minutesCount: 0 }] }))
+      .toEqual([{ learned: { id: 'пара', minutes: null, minutesCount: 0 } }]);
+    // Сброс словаря и вытеснение — надгробия по слову
+    const two: PlannerState = {
+      ...one,
+      learned: [word, {
+        id: 'зал', kind: 'event', kindCount: 3, minutesCount: 0, touched: 6,
+      }],
+    };
+    expect(diffChanges(two, { ...two, learned: [] }))
+      .toEqual([{ learned: { id: 'пара', deleted: true } }, { learned: { id: 'зал', deleted: true } }]);
+    // Перенос данных этапа 1 словаря не несёт
+    expect(legacyToChanges(empty, 'web1').some((change) => 'learned' in change)).toBe(false);
+  });
+});

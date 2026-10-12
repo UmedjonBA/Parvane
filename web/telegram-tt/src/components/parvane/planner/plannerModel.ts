@@ -197,6 +197,18 @@ export type PlannerSettings = {
 // `lists` — сущности с id для синхронизации (spec 010); `projects` строится из `lists`
 export type PlannerList = { id: string; name: string; order: number; color?: number };
 
+// Слово словаря правок ввода текстом (`plannerQuickLearn.ts`): первое слово названия → тип записи и
+// длительность события, выбранные пользователем вместо угаданных; счётчик — сколько раз правка
+// повторилась, `touched` — свежесть (вытесняются дольше всех не тронутые)
+export type PlannerLearnedWord = {
+  id: string;
+  kind?: 'task' | 'event';
+  kindCount: number;
+  minutes?: number;
+  minutesCount: number;
+  touched: number;
+};
+
 export type PlannerState = {
   version: 1;
   tasks: PlannerTask[];
@@ -214,6 +226,8 @@ export type PlannerState = {
   // spec 020: записи здоровья и цели здоровья
   health: PlannerHealthRecord[];
   healthGoals: PlannerHealthGoals;
+  // Словарь правок ввода текстом: едет с данными «Плана» на все устройства
+  learned: PlannerLearnedWord[];
 };
 
 export type PlannerTimed = {
@@ -262,6 +276,7 @@ export function createEmptyPlannerState(): PlannerState {
     settings: { ...DEFAULT_PLANNER_SETTINGS },
     health: [],
     healthGoals: { ...DEFAULT_HEALTH_GOALS },
+    learned: [],
   };
 }
 
@@ -1418,7 +1433,33 @@ export function normalizePlannerState(raw: unknown): PlannerState {
         && typeof record.kind === 'string' && isKnownNumber(record.value)),
     healthGoals: saved.healthGoals && typeof saved.healthGoals === 'object'
       ? { ...saved.healthGoals } : empty.healthGoals,
+    learned: normalizeLearned(saved.learned),
   };
+}
+
+// Словарь правок: негодное слово отбрасывается, негодная половина (тип либо длительность) — тоже
+export function normalizeLearned(raw: unknown): PlannerLearnedWord[] {
+  if (!Array.isArray(raw)) return [];
+  const count = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? value as number : 0);
+  const seen = new Set<string>();
+  const words: PlannerLearnedWord[] = [];
+  (raw as Partial<PlannerLearnedWord>[]).forEach((word) => {
+    if (!word || typeof word.id !== 'string' || !word.id || seen.has(word.id)) return;
+    const kindCount = word.kind === 'task' || word.kind === 'event' ? count(word.kindCount) : 0;
+    const minutesCount = Number.isInteger(word.minutes) && word.minutes! >= MIN_TASK_MINUTES
+      && word.minutes! <= MINUTES_IN_DAY ? count(word.minutesCount) : 0;
+    if (!kindCount && !minutesCount) return;
+    seen.add(word.id);
+    words.push({
+      id: word.id,
+      kind: kindCount ? word.kind : undefined,
+      kindCount,
+      minutes: minutesCount ? word.minutes : undefined,
+      minutesCount,
+      touched: count(word.touched),
+    });
+  });
+  return words;
 }
 
 // Правило повтора, экземпляры и происхождение из сохранённого объекта (негодное отбрасывается)

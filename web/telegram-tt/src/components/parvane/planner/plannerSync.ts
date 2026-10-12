@@ -1,13 +1,13 @@
 /* eslint-disable no-null/no-null -- контракт JSON движка (planner_json.rs): null = «не задано», отсутствие поля = «без изменений» */
 import type {
   PlannerEvent, PlannerExercise, PlannerFoodEntry, PlannerGoal, PlannerGoalRecord, PlannerGoalValues,
-  PlannerHealthGoals, PlannerHealthRecord, PlannerList, PlannerNutrient, PlannerNutritionDay, PlannerOccurrence,
-  PlannerRepeat, PlannerState, PlannerTask,
+  PlannerHealthGoals, PlannerHealthRecord, PlannerLearnedWord, PlannerList, PlannerNutrient, PlannerNutritionDay,
+  PlannerOccurrence, PlannerRepeat, PlannerState, PlannerTask,
 } from './plannerModel';
 
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, isKnownNumber, PLANNER_GOAL_METRICS, PLANNER_MEALS,
-  PLANNER_REPEAT_KINDS, PLANNER_STATUSES,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, isKnownNumber, normalizeLearned, PLANNER_GOAL_METRICS,
+  PLANNER_MEALS, PLANNER_REPEAT_KINDS, PLANNER_STATUSES,
 } from './plannerModel';
 
 // Parvane (spec 010): планировщик ↔ движок. Состояние для экранов (`PlannerState`)
@@ -74,6 +74,10 @@ type EngineHealth = {
   id: string; day: string; kind: string; time: string; endTime: string; value: number; value2: number;
   name: string; details: string;
 };
+// Слово словаря правок ввода текстом: `kind` пуст и `minutes: null` — «не выучено»
+type EngineLearned = {
+  id: string; kind: string; kindCount: number; minutes: number | null; minutesCount: number; touched: number;
+};
 type EngineDay = {
   day: string; entries: EngineEntry[]; isComplete: boolean; fixedGoals: EngineGoals; waterMl: number | null;
 };
@@ -83,6 +87,8 @@ type EngineSettings = {
 export type EngineState = {
   tasks: EngineTask[]; events: EngineEvent[]; lists: EngineList[]; nutrition: EngineDay[];
   settings: EngineSettings; goals: EngineGoals; goalPeriods?: EngineGoalPeriod[]; health?: EngineHealth[];
+  // Движок прежней сборки словаря не отдаёт
+  learned?: EngineLearned[];
   headSeq: number; sizeBytes: number;
 };
 
@@ -283,6 +289,9 @@ export function fromEngineState(engine: EngineState): PlannerState {
     health: (engine.health || []).filter((record) => record.kind !== HEALTH_GOALS_KIND).map(healthFrom),
     healthGoals: (healthGoalsRecord && parseDetails<PlannerHealthGoals>(healthGoalsRecord.details))
       || empty.healthGoals,
+    learned: normalizeLearned((engine.learned || []).map((word) => ({
+      ...word, kind: word.kind as PlannerLearnedWord['kind'], minutes: word.minutes ?? undefined,
+    }))),
   };
 }
 
@@ -415,6 +424,24 @@ function dayChange(day: string, d: PlannerNutritionDay, previous?: PlannerNutrit
   return { nutritionDay: change };
 }
 
+// Слово словаря правок: значение и его счётчик уходят парой (движок сводит их отдельными регистрами,
+// пара под одной меткой остаётся согласованной), и только изменившаяся пара — тип, исправленный на одном
+// устройстве, не затирает длительность, исправленную на другом. Новое слово уходит целиком: оно могло
+// быть удалено раньше, и прежние значения под надгробием не должны вернуться
+function learnedChange(word: PlannerLearnedWord, before?: PlannerLearnedWord): PlannerChange {
+  const change: Record<string, unknown> = { id: word.id };
+  if (!before || before.kind !== word.kind || before.kindCount !== word.kindCount) {
+    change.kind = word.kind || '';
+    change.kindCount = word.kindCount;
+  }
+  if (!before || before.minutes !== word.minutes || before.minutesCount !== word.minutesCount) {
+    change.minutes = word.minutes === undefined ? null : word.minutes;
+    change.minutesCount = word.minutesCount;
+  }
+  if (!before || before.touched !== word.touched) change.touched = word.touched;
+  return { learned: change };
+}
+
 function settingsChange(state: PlannerState): PlannerChange {
   return { settings: { ...state.settings, budget: state.budget } };
 }
@@ -502,6 +529,18 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
     if (!next.health.some((r) => r.id === record.id)) changes.push({ health: { id: record.id, deleted: true } });
   });
   if (!same(previous.healthGoals, next.healthGoals)) changes.push(healthGoalsChange(next.healthGoals));
+
+  if (previous.learned !== next.learned) {
+    const learnedBefore = new Map(previous.learned.map((word) => [word.id, word]));
+    const learnedAfter = new Set(next.learned.map((word) => word.id));
+    next.learned.forEach((word) => {
+      const before = learnedBefore.get(word.id);
+      if (!before || !same(before, word)) changes.push(learnedChange(word, before));
+    });
+    previous.learned.forEach((word) => {
+      if (!learnedAfter.has(word.id)) changes.push({ learned: { id: word.id, deleted: true } });
+    });
+  }
   return changes;
 }
 

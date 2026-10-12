@@ -763,6 +763,8 @@ const Planner = () => {
         today={today}
         settings={state.settings}
         userId={currentUserId}
+        learnedWords={state.learned}
+        isLearnedSynced={isLoaded && (syncStatus === 'ready' || syncStatus === 'offline')}
         onCreated={handleQuickCreated}
         onMore={handleQuickMore}
         onClose={closeQuick}
