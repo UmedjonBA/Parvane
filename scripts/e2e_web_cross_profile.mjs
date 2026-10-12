@@ -19,6 +19,7 @@ import {
   openPrivateChatStrict,
   preparePage,
   sendText,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-xprofile-e2e-password';
@@ -166,8 +167,7 @@ try {
   const bobBio = `web bio ${suffix}`;
   const bobPhone = `+7911${String(Date.now()).slice(-6)}`;
   await bobWeb.page.keyboard.press('Escape');
-  await bobWeb.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await bobWeb.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(bobWeb.page);
   await bobWeb.page.getByRole('button', { name: 'Edit profile' }).click();
   await bobWeb.page.getByLabel('Bio').fill(bobBio);
   await bobWeb.page.getByLabel('Phone', { exact: true }).fill(bobPhone);

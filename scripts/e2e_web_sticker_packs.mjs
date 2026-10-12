@@ -15,6 +15,7 @@ import {
   LOGIN_TIMEOUT_MS,
   openPrivateChat,
   preparePage,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-packs-e2e-password';
@@ -73,8 +74,7 @@ try {
 
   // ── Алиса создаёт пак из файлов ────────────────────────────────────────────
   aliceSession.page.on('dialog', (dialog) => dialog.accept(packName));
-  await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Stickers and Emoji' }).click();
   const fileChooserPromise = aliceSession.page.waitForEvent('filechooser');
   await aliceSession.page.getByRole('button', { name: 'Create Sticker Pack' }).click();

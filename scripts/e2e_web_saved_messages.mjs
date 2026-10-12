@@ -14,6 +14,7 @@ import {
   openPrivateChatStrict,
   preparePage as preparePageShared,
   sendText,
+  openSavedMessages,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-saved-messages-e2e-password';
@@ -24,13 +25,6 @@ const aliceContext = await browser.newContext();
 const bobContext = await browser.newContext();
 let aliceSession;
 let bobSession;
-
-async function openSavedMessages(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Saved Messages' }).click();
-  await page.locator('#MiddleColumn').getByText('Saved Messages').first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-}
 
 // Порядок пузырей в ленте открытого чата (ORDER-1): первое выше второго
 async function expectOrder(page, first, second, label) {

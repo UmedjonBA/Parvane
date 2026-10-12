@@ -3,7 +3,7 @@
 // Запуск: PARVANE_E2E_SHOT_DIR=<каталог> scripts/run_web_theme_shots_e2e.sh
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-import { dismissRecoveryKeyDialog, preparePage, sendText } from './e2e_web_helpers.mjs';
+import { dismissRecoveryKeyDialog, preparePage, sendText, openSavedMessages } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-theme-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -29,9 +29,7 @@ try {
       const sidebar = page.locator('#FoldersSidebar');
       const planner = page.locator('#ParvanePlanner');
       // Чат с собой: свои сообщения, поле ввода, шапка
-      await page.locator('#LeftColumn').getByRole('button', { name: 'Open menu' }).click();
-      await page.getByRole('menuitem', { name: 'Saved Messages' }).click();
-      await page.locator('#MiddleColumn').getByText('Saved Messages').first().waitFor({ timeout: STEP_TIMEOUT_MS });
+      await openSavedMessages(page);
       await sendText(page, 'Проверка цветов: своё сообщение со ссылкой https://example.org и `кодом`');
       await sendText(page, 'Второе сообщение');
       await shot('chat');

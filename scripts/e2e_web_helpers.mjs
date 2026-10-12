@@ -8,26 +8,97 @@ import { readFile } from 'node:fs/promises';
 export const LOGIN_TIMEOUT_MS = 60000;
 export const RECONNECT_TIMEOUT_MS = 30000;
 
-// Полный выход из аккаунта (не reload): добирается до корня настроек из
-// любого экрана левой колонки, затем «More actions» → «Log Out»
-export async function logOut(page) {
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
-  for (;;) {
-    const visible = (locator) => locator.isVisible().catch(() => false);
-    if (await visible(page.getByRole('button', { name: 'Edit profile' }).first())) break;
-    const menu = page.getByRole('button', { name: 'Open menu' }).first();
-    if (await visible(menu)) {
-      await menu.click();
-      await page.getByRole('menuitem', { name: 'Settings' }).click();
-      await page.getByRole('button', { name: 'Edit profile' }).first()
-        .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-      break;
-    }
-    const back = page.getByRole('button', { name: /Go back|Return to Chat List/ }).first();
-    if (await visible(back)) await back.click();
-    assert(Date.now() < deadline, 'не нашёл ни «Open menu», ни «Go back» в левой колонке');
-    await page.waitForTimeout(500);
+// --- Оболочка: меню «☰» в шапке списка чатов нет, его пункты — в «Профиле» (главный экран настроек).
+// «Профиль» открывает кнопка `Profile`: на компьютере — в боковой панели `#FoldersSidebar`, на телефоне — в
+// нижней панели (`navigation` `Sections`). Вернуться к списку чатов — вкладка/кнопка `Chats` там же.
+
+// Признак «показан список чатов»: заголовок «Чаты» в шапке списка. Он есть на обеих ширинах и только в
+// состоянии списка — в поиске, контактах, настройках и при открытой панели форума его нет
+// (`#telegram-search-input` есть и в поиске, и в контактах, поэтому признаком списка не служит)
+export function chatListMarker(page) {
+  return page.locator('#LeftMainHeader .left-header-title');
+}
+
+export async function isChatListShown(page) {
+  return chatListMarker(page).isVisible().catch(() => false);
+}
+
+export async function waitForChatList(page, timeout = LOGIN_TIMEOUT_MS) {
+  await chatListMarker(page).waitFor({ state: 'visible', timeout });
+}
+
+// Кнопка раздела оболочки (`Chats`, `Profile`): боковая панель либо нижняя панель телефона. У «Чатов» в
+// название входит счётчик непрочитанного — поэтому по началу названия
+function shellButton(page, name) {
+  const pattern = new RegExp(`^${name}`);
+  const rail = page.locator('#FoldersSidebar').getByRole(name === 'Profile' ? 'button' : 'tab', { name: pattern });
+  const bar = page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: pattern });
+  return rail.or(bar).first();
+}
+
+const profileScreen = (page) => page.locator('.settings-main-scroll');
+
+// Строка «Профиля» по точному названию (подпись строки в название не входит)
+export function profileRow(page, name) {
+  return profileScreen(page).locator('.ListItem')
+    .filter({ has: page.getByText(name, { exact: true }) }).first().locator('.ListItem-button');
+}
+
+// «Профиль» — главный экран настроек; из вложенного экрана настроек возвращается к главному
+export async function openProfile(page) {
+  const screen = profileScreen(page);
+  await clickUntil(
+    shellButton(page, 'Profile'),
+    () => screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
+  );
+  return screen;
+}
+
+// Экран настроек по названию строки «Профиля» (`Devices`, `Privacy and Security`, `Language`, …)
+export async function openSettingsScreen(page, name) {
+  await openProfile(page);
+  await profileRow(page, name).click();
+}
+
+// К списку чатов из «Профиля» (кнопка `Chats`) и из поиска или контактов (стрелка «назад» в шапке)
+export async function showChatList(page) {
+  const back = page.locator('#LeftMainHeader').getByRole('button', { name: 'Return to chat list' });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (await isChatListShown(page)) return;
+    const target = await back.isVisible().catch(() => false) ? back : shellButton(page, 'Chats');
+    await target.click({ timeout: 5000 }).catch(() => {});
+    await waitForChatList(page, 3000).catch(() => {});
   }
+  await waitForChatList(page);
+}
+
+// «Избранное»: строка «Профиля» `Saved Messages`. На компьютере чат открывается в средней колонке, после
+// чего левая колонка возвращается к списку чатов (как было при открытии из меню); на телефоне открыт чат
+export async function openSavedMessages(page) {
+  await openProfile(page);
+  await profileRow(page, 'Saved Messages').click();
+  await page.locator('#MiddleColumn').getByText('Saved Messages').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#editable-message-text[contenteditable="true"]')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (await page.locator('#FoldersSidebar').isVisible().catch(() => false)) await showChatList(page);
+}
+
+// Список контактов в левой колонке: строка «Профиля» `Contacts`
+export async function openContacts(page) {
+  await openProfile(page);
+  await profileRow(page, 'Contacts').click();
+}
+
+// «Мой профиль»: карточка аккаунта вверху «Профиля»
+export async function openMyProfile(page) {
+  const screen = await openProfile(page);
+  await screen.getByRole('button', { name: 'My Profile', exact: true }).click();
+}
+
+// Полный выход из аккаунта (не reload): «Профиль» → «More actions» → «Log Out»
+export async function logOut(page) {
+  await openProfile(page);
   await page.getByRole('button', { name: 'More actions' }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.getByRole('button', { name: 'More actions' }).first().click();
@@ -1098,9 +1169,7 @@ export async function openDevicesScreen(page) {
     await page.waitForTimeout(700);
     if (await shown.isVisible().catch(() => false)) return shown;
   }
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: 'Devices' }).click();
+  await openSettingsScreen(page, 'Devices');
   const screen = page.locator('.SettingsActiveSessions');
   await screen.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   return screen;

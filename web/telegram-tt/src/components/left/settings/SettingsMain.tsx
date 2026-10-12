@@ -1,3 +1,4 @@
+import { APP_REVISION } from 'virtual:git-info';
 import type { FC } from '../../../lib/teact/teact';
 import { memo, useEffect } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
@@ -5,12 +6,13 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiUser } from '../../../api/types';
 import type { ThemeKey } from '../../../types';
 import type { ParvaneIconName } from '../../main/ParvaneIcon';
-import { SettingsScreens } from '../../../types';
+import { LeftColumnContent, SettingsScreens } from '../../../types';
 
-import { ALL_FOLDER_ID } from '../../../config';
+import { ALL_FOLDER_ID, APP_NAME, DEBUG, IS_BETA } from '../../../config';
 import { getUserFullName } from '../../../global/helpers';
 import { selectTheme, selectUser } from '../../../global/selectors';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
+import { IS_MULTIACCOUNT_SUPPORTED } from '../../../util/browser/globalEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { getColorScheme } from '../../../util/colorScheme';
 import { openKnowledgeView, openPlannerView, requestPlannerSettings } from '../../../util/parvaneSection';
@@ -25,7 +27,9 @@ import Avatar from '../../common/Avatar';
 import { SCHEME_NAMES } from '../../common/ColorSchemePicker';
 import ParvaneIcon from '../../main/ParvaneIcon';
 import ListItem from '../../ui/ListItem';
+import SettingsAccounts from './SettingsAccounts';
 import SettingsAppearanceModal from './SettingsAppearanceModal';
+import SettingsMore from './SettingsMore';
 
 import styles from './SettingsMain.module.scss';
 
@@ -41,13 +45,19 @@ type StateProps = {
   folderNames?: string;
   theme: ThemeKey;
   shouldUseSystemTheme?: boolean;
+  // Архив убран из списка чатов (настройка архива): тогда он открывается строкой здесь
+  isArchiveHidden?: boolean;
 };
 
 const AVATAR_SIZE = 56;
 const MAX_FOLDER_NAMES = 4;
+const VERSION = IS_BETA ? `${APP_VERSION} Beta (${APP_REVISION})` : (DEBUG ? APP_REVISION : APP_VERSION);
 
 // Parvane: «Профиль» — главный экран настроек по прототипу: карточка аккаунта, настройки мессенджера
-// (прежние экраны Telegram) карточкой строк с плитками-значками и подписями, ниже карточка «Parvane»
+// (прежние экраны Telegram) карточкой строк с плитками-значками и подписями, ниже карточка «Parvane».
+// Сюда же перенесены пункты прежнего меню «☰» списка чатов: «Мой профиль» — карточка аккаунта, другие
+// аккаунты — `SettingsAccounts`, «Избранное», «Архив» и «Контакты» — первые строки мессенджера, «Ещё» —
+// `SettingsMore`, строка версии — внизу
 const SettingsMain: FC<OwnProps & StateProps> = ({
   isActive,
   currentUserId,
@@ -55,12 +65,17 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   folderNames,
   theme,
   shouldUseSystemTheme,
+  isArchiveHidden,
   onReset,
 }) => {
   const {
     loadAuthorizations,
     loadMoreProfilePhotos,
     openSettingsScreen,
+    openChat,
+    openChatWithInfo,
+    openLeftColumnContent,
+    closeForumPanel,
   } = getActions();
 
   const lang = useLang();
@@ -84,6 +99,23 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   useHistoryBack({
     isActive,
     onBack: onReset,
+  });
+
+  const handleOpenMyProfile = useLastCallback(() => {
+    openChatWithInfo({ id: currentUserId, shouldReplaceHistory: true, isOwnProfile: true });
+  });
+
+  const handleOpenSaved = useLastCallback(() => {
+    openChat({ id: currentUserId, shouldReplaceHistory: true });
+  });
+
+  const handleOpenArchived = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.Archived });
+    closeForumPanel();
+  });
+
+  const handleOpenContacts = useLastCallback(() => {
+    openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
   });
 
   const handleOpenPlannerSettings = useLastCallback(() => {
@@ -117,12 +149,16 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   }
 
   // Строка настроек мессенджера: прежний `ListItem` (на нём стоят сценарии), вид — строки прототипа
-  function renderScreenRow(icon: ParvaneIconName, title: string, screen: SettingsScreens, subtitle?: string) {
+  function renderListRow(icon: ParvaneIconName, title: string, onClick: NoneToVoidFunction, subtitle?: string) {
     return (
-      <ListItem className={styles.screenRow} onClick={() => openSettingsScreen({ screen })}>
+      <ListItem className={styles.screenRow} onClick={onClick}>
         {renderRowContent(icon, title, subtitle)}
       </ListItem>
     );
+  }
+
+  function renderScreenRow(icon: ParvaneIconName, title: string, screen: SettingsScreens, subtitle?: string) {
+    return renderListRow(icon, title, () => openSettingsScreen({ screen }), subtitle);
   }
 
   function renderActionRow(icon: ParvaneIconName, title: string, subtitle: string, onClick: NoneToVoidFunction) {
@@ -136,16 +172,27 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
   return (
     <div className={buildClassName(styles.root, 'settings-main-scroll', 'custom-scroll')}>
       <div className={styles.content}>
-        <div className={buildClassName(styles.card, styles.account)}>
+        <button
+          type="button"
+          className={buildClassName(styles.card, styles.account)}
+          aria-label={lang('MenuMyProfile')}
+          title={lang('MenuMyProfile')}
+          onClick={handleOpenMyProfile}
+        >
           {currentUser && <Avatar peer={currentUser} size={AVATAR_SIZE} className={styles.avatar} />}
-          <div className={styles.accountInfo}>
-            <div className={styles.accountName}>{currentUser ? getUserFullName(currentUser) : ''}</div>
-            {address && <div className={styles.accountAddress}>{address}</div>}
-          </div>
-        </div>
+          <span className={styles.accountInfo}>
+            <span className={styles.accountName}>{currentUser ? getUserFullName(currentUser) : ''}</span>
+            {address && <span className={styles.accountAddress}>{address}</span>}
+          </span>
+          <ParvaneIcon name="right" isSmall className={styles.chevron} />
+        </button>
+        {IS_MULTIACCOUNT_SUPPORTED && currentUser && <SettingsAccounts currentUser={currentUser} />}
 
         <div className={styles.caption}>{lang('ParvaneProfileMessenger')}</div>
         <div className={styles.card}>
+          {renderListRow('star', lang('MenuSavedMessages'), handleOpenSaved)}
+          {isArchiveHidden && renderListRow('folder', lang('MenuArchivedChats'), handleOpenArchived)}
+          {renderListRow('users', lang('MenuContacts'), handleOpenContacts)}
           {renderScreenRow(
             'sliders', lang('TelegramGeneralSettingsViewController'), SettingsScreens.General,
             lang('ParvaneProfileGeneralHint'),
@@ -177,6 +224,9 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
             'sun', lang('ParvaneAppearance'), `${SCHEME_NAMES[colorScheme]} · ${modeName}`, openAppearance,
           )}
         </div>
+
+        <SettingsMore />
+        <div className={styles.version}>{`${APP_NAME} ${VERSION}`}</div>
       </div>
       <SettingsAppearanceModal
         isOpen={isAppearanceOpen}
@@ -190,7 +240,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
 
 export default memo(withGlobal<OwnProps>(
   (global): Complete<StateProps> => {
-    const { currentUserId, chatFolders } = global;
+    const { currentUserId, chatFolders, archiveSettings } = global;
     const folderNames = chatFolders.orderedIds
       ?.filter((id) => id !== ALL_FOLDER_ID)
       .map((id) => chatFolders.byId[id]?.title.text)
@@ -204,6 +254,7 @@ export default memo(withGlobal<OwnProps>(
       folderNames: folderNames || undefined,
       theme: selectTheme(global),
       shouldUseSystemTheme: selectSharedSettings(global).shouldUseSystemTheme,
+      isArchiveHidden: archiveSettings.isHidden,
     };
   },
 )(SettingsMain));

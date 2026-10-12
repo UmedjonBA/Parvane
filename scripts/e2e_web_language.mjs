@@ -23,9 +23,10 @@ const bobContext = await browser.newContext();
 let aliceSession;
 let bobSession;
 
+// «Профиль» боковой панели — главный экран настроек (подпись кнопки зависит от языка)
 async function openSettings(page) {
-  await page.getByRole('button', { name: /Open menu|Открыть меню/ }).first().click();
-  await page.getByRole('menuitem', { name: /^(Settings|Настройки)$/ }).click();
+  await page.locator('#FoldersSidebar').getByRole('button', { name: /^(Profile|Профиль)$/ }).click();
+  await page.locator('.settings-main-scroll').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
 const RAW_KEY = /^(lng_\w+|[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+|[A-Z][a-z]+([A-Z][a-z0-9]+){2,})$/;
@@ -33,8 +34,13 @@ const RAW_KEY = /^(lng_\w+|[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)+|[A-Z][a-z]+([
 const ENGLISH_LINE = /^[A-Za-z][A-Za-z'’,.!?:()-]*( [A-Za-z'’,.!?:()-]+)+$/;
 // Имена собственные и то, что по-русски пишется так же
 const ENGLISH_ALLOWED = /Parvane|Telegram|GIF|Ctrl|Cmd|Enter|Wi-Fi|Web|Linux|Chrome|Firefox|Playwright|@local/;
-// Пункты, которые не открывают экран настроек или уводят из них
-const SKIPPED_ITEMS = /Выйти|Log Out|Сообщить|Report|Вопрос|Ask/i;
+// Пункты, которые не открывают экран настроек или уводят из них: выход, отчёт об ошибке и прежние пункты
+// меню списка чатов («Избранное», «Архив», «Контакты», ночной режим, уровень анимаций, установка)
+const SKIPPED_ITEMS = new RegExp([
+  'Выйти|Log Out|Сообщить|Report|Вопрос|Ask',
+  'Избранное|Saved Messages|Архив|Archived|Контакты|Contacts',
+  'Ночной режим|Night Mode|^(Анимации|Animations)$|Установить|Install',
+].join('|'), 'i');
 
 function classifyTexts(text, found) {
   text.split('\n').map((line) => line.trim()).filter(Boolean).forEach((line) => {

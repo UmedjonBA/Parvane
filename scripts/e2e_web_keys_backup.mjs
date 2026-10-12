@@ -16,6 +16,7 @@ import {
   preparePage,
   relogin,
   sendText,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-keys-e2e-password';
@@ -27,8 +28,7 @@ async function openPrivacySettings(page) {
     .then(() => true, () => false)) {
     await closeSettings(page);
   }
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Privacy and Security' }).click();
 }
 

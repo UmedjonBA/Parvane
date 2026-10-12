@@ -4,6 +4,7 @@ import {
   expectSignedIn,
   LOGIN_TIMEOUT_MS,
   openApp,
+  openProfile,
   readSecureStateSnapshot,
   registerAndSignIn,
   requireGatewayUrl,
@@ -14,8 +15,6 @@ import {
 
 const PASSWORD = 'Parvane-auth-e2e-password';
 const WRONG_PASSWORD = 'Parvane-auth-wrong-password';
-const MENU_STEP_TIMEOUT_MS = 5000;
-
 test('keeps the saved address after reload and rejects an invalid password', async ({ page }, testInfo) => {
   const gatewayUrl = requireGatewayUrl();
   const user = uniqueUser('auth-reload', testInfo.project.name);
@@ -64,15 +63,7 @@ test('logs out through settings and clears the local session state', async ({ pa
     loginAddress: user,
   });
 
-  // Диалог ключа восстановления (v2) появляется в произвольный момент после
-  // входа и, закрываясь, уносит с собой открытое меню — открываем его заново
-  await expect(async () => {
-    const settingsItem = page.getByRole('menuitem', { name: 'Settings' });
-    if (!(await settingsItem.isVisible())) {
-      await page.getByRole('button', { name: 'Open menu' }).first().click({ timeout: MENU_STEP_TIMEOUT_MS });
-    }
-    await settingsItem.click({ timeout: MENU_STEP_TIMEOUT_MS });
-  }).toPass({ timeout: LOGIN_TIMEOUT_MS });
+  await openProfile(page);
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Log Out' }).click();
   await page.getByRole('button', { name: 'Log Out', exact: true }).click();

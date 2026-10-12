@@ -19,6 +19,8 @@ import {
   preparePage,
   requireEnv,
   sendText,
+  openProfile,
+  openMyProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-b4-e2e-password';
@@ -134,8 +136,7 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   // ── Честный push-fallback: Offline Notifications выключен и «Not supported»
-  await aliceSession.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(aliceSession.page);
   await aliceSession.page.getByRole('button', { name: 'Notifications' }).click();
   const webRow = aliceSession.page.locator('.Checkbox').filter({ hasText: 'Web Notifications' }).first();
   await webRow.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -159,9 +160,9 @@ try {
   );
   assert.equal(hasOverflow, false, 'mobile layout must not overflow horizontally');
 
-  // ── «Мой профиль» на телефоне: «назад» ведёт в список чатов, а не в
-  // «Избранное»; карандаш открывает редактирование профиля, откуда «назад»
-  // (системная кнопка) идёт в настройки и затем в список чатов
+  // ── «Мой профиль» на телефоне (карточка аккаунта в «Профиле»): «назад» ведёт
+  // обратно в «Профиль», а не в «Избранное»; карандаш открывает редактирование
+  // профиля, откуда «назад» (системная кнопка) идёт в настройки и затем в список чатов
   const mobilePage = mobileSession.page;
   // Что лежит под пальцем в середине экрана: колонка и открытый чат (hash)
   const topColumn = () => mobilePage.evaluate(() => {
@@ -178,9 +179,8 @@ try {
       assert.fail(`${message}: ожидалось ${expected}, на экране ${await topColumn()}`);
     });
   };
-  const openMyProfile = async () => {
-    await mobilePage.getByRole('button', { name: 'Open menu' }).first().click();
-    await mobilePage.getByRole('menuitem', { name: 'My Profile' }).click();
+  const openOwnProfile = async () => {
+    await openMyProfile(mobilePage);
     await mobilePage.locator('#RightColumn .RightHeader').getByText('My Profile')
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     // Чат «Избранное» под профилем не рисуется — иначе он мелькает при возврате в список чатов
@@ -189,15 +189,15 @@ try {
     );
     assert.equal(middleVisibility, 'hidden', 'под «Моим профилем» на телефоне виден чат «Избранное»');
   };
-  await openMyProfile();
+  await openOwnProfile();
   await mobilePage.locator('#RightColumn .RightHeader .close-button').click();
   // Сразу после нажатия (профиль ещё уезжает) чат по-прежнему скрыт
   assert.equal(await mobilePage.evaluate(
     () => getComputedStyle(document.querySelector('#MiddleColumn')).visibility,
   ), 'hidden', 'чат «Избранное» показался во время закрытия «Моего профиля»');
-  await waitTop('LeftColumn|false|', '«назад» из «Моего профиля»');
+  await waitTop('LeftColumn|true|', '«назад» из «Моего профиля»');
 
-  await openMyProfile();
+  await openOwnProfile();
   await mobilePage.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit' }).click();
   await waitTop('LeftColumn|true|', 'карандаш в «Моём профиле»');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'visible', timeout: 10_000 });

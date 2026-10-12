@@ -20,6 +20,8 @@ import {
   relogin,
   sendText,
   linkSecondDevice,
+  openProfile,
+  showChatList,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-notify-e2e-password';
@@ -63,27 +65,14 @@ async function muteChatForever(page, address) {
 }
 
 async function openEditProfile(page) {
-  await page.getByRole('button', { name: 'Open menu' }).first().click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(page);
   await page.getByRole('button', { name: 'Edit profile' }).click();
   await page.getByLabel('First name (required)').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
-// Из Edit profile — назад до списка чатов. После перехода кнопка «Go back»
-// ещё видна в уходящем слайде (Transition_slide-to), а шапка списка чатов
-// перехватывает клики — поэтому ориентируемся на «Open menu» и жмём назад
-// только в активном слайде.
+// Из Edit profile — к списку чатов: «Чаты» боковой панели закрывают настройки с любого их экрана
 async function closeSettings(page) {
-  const menu = page.getByRole('button', { name: 'Open menu' }).first();
-  for (let i = 0; i < 6; i++) {
-    if (await menu.isVisible().catch(() => false)) return;
-    const back = page.locator('.Transition_slide-active').getByRole('button', { name: /Go back|Return to Chat List/ }).first();
-    if (await back.isVisible().catch(() => false)) {
-      await back.click({ timeout: 5000 }).catch(() => {});
-    }
-    await page.waitForTimeout(600);
-  }
-  await menu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await showChatList(page);
 }
 
 async function saveProfileFab(page) {

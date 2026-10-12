@@ -22,6 +22,7 @@ import {
   sendText,
   terminateSessionWithPassword,
   linkSecondDevice,
+  openProfile,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-devices-e2e-password';
@@ -133,8 +134,7 @@ try {
     .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
 
   // ── Settings → Devices на первом устройстве: видим второе и отзываем ───────
-  await bobDevice1.page.getByRole('button', { name: 'Open menu' }).first().click();
-  await bobDevice1.page.getByRole('menuitem', { name: 'Settings' }).click();
+  await openProfile(bobDevice1.page);
   await bobDevice1.page.getByRole('button', { name: 'Devices' }).click();
 
   const sessionsScreen = bobDevice1.page.locator('.SettingsActiveSessions');

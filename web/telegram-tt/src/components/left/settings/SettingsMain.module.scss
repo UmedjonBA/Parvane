@@ -62,18 +62,30 @@
 }
 
 .account {
+  cursor: var(--custom-cursor, pointer);
+
   display: flex;
   gap: 0.875rem;
   align-items: center;
+
+  width: 100%;
   padding: 1rem;
+  border: none;
+
+  text-align: start;
+
+  outline: none;
+
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--pv-hover);
+  }
 }
 
 .avatar {
   flex: none;
-}
-
-.accountInfo {
-  min-width: 0;
 }
 
 .accountName {
@@ -107,6 +119,13 @@
 
 .row {
   @include row;
+
+  text-decoration: none;
+
+  &:hover {
+    color: var(--pv-fg);
+    text-decoration: none;
+  }
 }
 
 // Строка экрана настроек — `ListItem`: его кнопке задан тот же вид
@@ -129,6 +148,7 @@
   background: color-mix(in srgb, var(--pv-accent) 22%, transparent);
 }
 
+.accountInfo,
 .rowText {
   display: flex;
   flex: 1 1 auto;
@@ -157,4 +177,11 @@
 .chevron {
   color: var(--pv-fg);
   opacity: 0.85;
+}
+
+.version {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--pv-muted);
+  text-align: center;
 }
