@@ -413,6 +413,9 @@ function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[]
     chips.push({ field: 'minutes', text: formatDuration(lang, draft.minutes), isFixed: !has('minutes') });
   }
   if (draft.due) chips.push({ field: 'due', text: lang('PlannerQuickDue', { date: formatDay(lang, draft.due) }) });
+  if (draft.list) chips.push({ field: 'list', text: `#${draft.list}` });
+  if (draft.place) chips.push({ field: 'place', text: `@${draft.place}` });
+  if (draft.isImportant) chips.push({ field: 'important', text: `! ${lang('PlannerStatusActive')}` });
   return chips;
 }
 

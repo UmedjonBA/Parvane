@@ -43,6 +43,23 @@ describe('здоровье: черновик ввода → состояние',
     expect(state.events[1].description).toBeUndefined();
   });
 
+  it('метки строки: список, место и «важное»', () => {
+    const state = stateAfter([
+      'купить молоко #Дом', 'купить хлеб #дом @Ашан ! — бородинский', 'пара вт 15:00 @301ГК — взять тетрадь',
+      'созвон завтра 16:00 @Zoom', 'позвонить в банк #мой_банк',
+    ]);
+    // Список создаётся один раз; второе упоминание находит его без учёта регистра
+    expect(state.lists.map(({ name }) => name)).toEqual(['Дом', 'мой банк']);
+    expect(state.projects).toEqual(['', 'Дом', 'мой банк']);
+    expect(state.tasks[0]).toMatchObject({ name: 'купить молоко', project: 'Дом', status: 'queue', description: '' });
+    expect(state.tasks[1]).toMatchObject({
+      name: 'купить хлеб', project: 'Дом', status: 'active', description: '@Ашан\nбородинский',
+    });
+    expect(state.tasks[2]).toMatchObject({ name: 'позвонить в банк', project: 'мой банк' });
+    expect(state.events[0]).toMatchObject({ name: 'пара', description: '@301ГК\nвзять тетрадь' });
+    expect(state.events[1]).toMatchObject({ name: 'созвон', description: '@Zoom' });
+  });
+
   it('еда с сахаром и временем, вода складывается', () => {
     const state = stateAfter(['обед гречка 150г б30 ж10 у60 кл6 сахар 4 13:30 520 ккал', 'вода 500 мл', '2 стакана']);
     const day = state.nutrition[TODAY];

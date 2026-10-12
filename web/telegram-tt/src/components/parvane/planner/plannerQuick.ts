@@ -6,18 +6,20 @@ import type {
   PlannerEventError, PlannerExercise, PlannerGoalMetric, PlannerHealthGoals, PlannerHealthKind, PlannerMeal,
   PlannerNutrient, PlannerRepeat, PlannerRepeatKind, PlannerTaskError,
 } from './plannerModel';
+import type { NumeralEdit } from './plannerNumerals';
 
 import {
   addDays, DEFAULT_EVENT_MINUTES, fromDayKey, MINUTES_IN_DAY, toDayKey, toTime, validateEvent,
   validateRepeat, validateTask,
 } from './plannerModel';
+import { restoreNumerals, rewriteNumerals, toSourceOffset } from './plannerNumerals';
 
 // sleep, workout, metric — записи здоровья (spec 020); goal — правка целей и настроек, записи не создаёт
 export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout' | 'metric' | 'goal';
 export type QuickNutrient = PlannerNutrient | 'sugar' | 'salt';
 export type QuickField =
   'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | 'description'
-  | QuickNutrient;
+  | 'list' | 'place' | 'important' | QuickNutrient;
 // Показатель здоровья одной строкой: «вес 72,4», «давление 120/80», «пульс 64», «шаги 9500», «самочувствие 4»
 export type QuickMetric = Exclude<PlannerHealthKind, 'sleep' | 'workout'>;
 export type QuickGoalChanges = {
@@ -36,6 +38,11 @@ export type QuickDraft = {
   name: string;
   // Описание задачи либо события: часть строки после названия (правила — у `splitName`)
   description?: string;
+  // Явные метки строки задачи либо события: `#список` (только у задачи), `@место` (первая строка
+  // описания записи — `quickDescription`), `!` — важное (только у задачи: статус «В работе»)
+  list?: string;
+  place?: string;
+  isImportant?: boolean;
   day?: string;
   // День не назван: взят сегодняшний либо завтрашний (время уже прошло)
   isDayAssumed?: boolean;
@@ -96,6 +103,7 @@ const MAX_MOOD = 5;
 const MIN_TYPO_LENGTH = 6;
 const MAX_SLEEP_MINUTES = 16 * 60;
 const MAX_STEPS = 200000;
+const MARKER_FIELDS: QuickField[] = ['list', 'place', 'important'];
 
 // ── словарь языка ────────────────────────────────────────────────────────────
 // Значения — тела регулярных выражений по свёрнутой строке (нижний регистр, «ё» → «е»). В телах допустимы
@@ -162,6 +170,8 @@ type QuickWords = {
   from: string;
   to: string;
   dayparts: Entry<Daypart>[];
+  // Уточнение перед временем: «вечером в 7», «tomorrow morning at 7». Без часа такое слово — не время
+  daypartLeads?: Entry<Daypart>[];
   // Уточнения, с которыми час понятен и без предлога («5pm»)
   bareDayparts?: string;
   namedTimes?: Entry<number>[];
@@ -254,7 +264,9 @@ const WORDS: Record<QuickLang, QuickWords> = {
     at: 'в',
     from: 'с',
     to: 'до',
-    dayparts: [['утра', 'am'], ['дня|вечера', 'pm'], ['ночи', 'night']],
+    dayparts: [['утра|утром', 'am'], ['дня|днем|вечера|вечером', 'pm'], ['ночи|ночью', 'night']],
+    daypartLeads: [['утром', 'am'], ['днем|вечером', 'pm'], ['ночью', 'night']],
+    namedTimes: [['полдень', 12 * MINUTES_IN_HOUR], ['полночь', 0]],
     weekdays: [
       ['пн|понедельник(?:а|у|ам|и)?', 1], ['вт|вторник(?:а|у|ам|и)?', 2], ['ср|сред(?:а|у|ы|ам)', 3],
       ['чт|четверг(?:а|у|ам|и)?', 4], ['пт|пятниц(?:а|у|ы|ам)', 5], ['сб|суббот(?:а|у|ы|ам)', 6],
@@ -355,9 +367,11 @@ const WORDS: Record<QuickLang, QuickWords> = {
     from: 'from',
     to: 'to|till|until',
     dayparts: [
-      ['am|a\\.m\\.|in\\s+the\\s+morning', 'am'], ['pm|p\\.m\\.|in\\s+the\\s+(?:afternoon|evening)', 'pm'],
+      ['am|a\\.m\\.|in\\s+the\\s+morning|this\\s+morning', 'am'],
+      ['pm|p\\.m\\.|in\\s+the\\s+(?:afternoon|evening)|this\\s+(?:afternoon|evening)|tonight', 'pm'],
       ['at\\s+night', 'night'],
     ],
+    daypartLeads: [['(?:this\\s+)?morning', 'am'], ['(?:this\\s+)?(?:afternoon|evening)|tonight', 'pm']],
     bareDayparts: 'am|a\\.m\\.|pm|p\\.m\\.',
     namedTimes: [['noon|midday', 12 * MINUTES_IN_HOUR], ['midnight', 0]],
     weekdays: [
@@ -438,7 +452,7 @@ function lookup<T>(entries: Entry<T>[]) {
 }
 
 // Словарь, собранный в выражения: считается один раз на язык
-function compile(words: QuickWords) {
+function compile(id: QuickLang, words: QuickWords) {
   const weekday = bodies(words.weekdays);
   const month = bodies(words.months);
   const small = Object.keys(words.numbers).join('|');
@@ -462,6 +476,7 @@ function compile(words: QuickWords) {
   const lead = (body: string) => new RegExp(`^\\s*(?:${body})${SEPARATOR}\\s*`);
   const whole = (body: string) => new RegExp(`^(?:${body})$`);
   return {
+    id,
     words,
     weekday,
     month,
@@ -469,6 +484,8 @@ function compile(words: QuickWords) {
     listSeparator,
     count: `\\d{1,2}|${small}`,
     daypart: bodies(words.dayparts),
+    // Уточнение перед временем; пустой словарь — выражение, которое не совпадает ни с чем
+    daypartLead: `(?:(${bodies(words.daypartLeads || []) || '(?!)'})\\s+)?`,
     // Единица минут после числа
     minutes: `(?:\\s*(?:${words.minute})${words.minuteGlued ? `|(?:${words.minuteGlued})` : ''})`,
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
@@ -514,6 +531,7 @@ function compile(words: QuickWords) {
     weekdayOf: lookup(words.weekdays),
     monthOf: lookup(words.months),
     daypartOf: lookup(words.dayparts),
+    daypartLeadOf: lookup(words.daypartLeads || []),
     relativeOf: lookup(words.relative),
     unitOf: lookup(words.units),
     adverbOf: lookup(words.adverbs),
@@ -528,7 +546,7 @@ function compile(words: QuickWords) {
 
 type Lang = ReturnType<typeof compile>;
 
-const LANGS: Record<QuickLang, Lang> = { ru: compile(WORDS.ru), en: compile(WORDS.en) };
+const LANGS: Record<QuickLang, Lang> = { ru: compile('ru', WORDS.ru), en: compile('en', WORDS.en) };
 
 // Язык словаря по коду языка интерфейса
 export function getQuickLang(code?: string): QuickLang {
@@ -619,6 +637,21 @@ function resolveBareHour(hour: number, ctx: QuickContext) {
   return hour <= 11 && !isInside(morning) && isInside(evening) ? evening : morning;
 }
 
+// Разговорные часы («полтретьего», «quarter to five») двенадцатичасовые: половина суток — по окну дня,
+// как у голого часа
+function resolveLooseClock(hour: number, minute: number, ctx: QuickContext) {
+  const morning = (hour % 12) * MINUTES_IN_HOUR + minute;
+  const evening = morning + 12 * MINUTES_IN_HOUR;
+  const isInside = (value: number) => value >= ctx.dayStart && value <= ctx.dayEnd;
+  return !isInside(morning) && isInside(evening) ? evening : morning;
+}
+
+function fold(text: string) {
+  const folded = text.toLowerCase().replace(/ё/g, 'е');
+  // Свёртка регистра обязана сохранять позиции символов: участки меряются по исходной строке
+  return folded.length === text.length ? folded : text;
+}
+
 function mealByTime(minutes: number): PlannerMeal {
   if (minutes < 11 * MINUTES_IN_HOUR) return 'breakfast';
   if (minutes < 16 * MINUTES_IN_HOUR) return 'lunch';
@@ -671,19 +704,24 @@ function recognisedCount(draft: QuickDraft) {
   return draft.spans.length + (!isPlain && !draft.error ? 1 : 0);
 }
 
+// Строка проходит правку опечаток и замену числительных цифрами (`plannerNumerals.ts`), затем разбор
 function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
+  const { text, edits } = rewriteNumerals(fixTypos(typed, lang), lang.id);
+  return parseText(text, edits, ctx, lang);
+}
+
+// `text` — строка с цифрами на месте числительных, `edits` — её замены: название и описание режутся из
+// слов пользователя (незабранная замена возвращает исходные слова), участки — в позициях этих слов
+function parseText(text: string, edits: NumeralEdit[], ctx: QuickContext, lang: Lang): QuickDraft {
   const { words } = lang;
-  const text = fixTypos(typed, lang);
-  const folded = text.toLowerCase().replace(/ё/g, 'е');
-  // Свёртка регистра обязана сохранять позиции символов: участки меряются по исходной строке
-  const lower = folded.length === text.length ? folded : text;
+  const lower = fold(text);
   const taken = new Array<boolean>(text.length).fill(false);
   const spans: QuickSpan[] = [];
   const skipped = new Set(ctx.skip);
   const allowed = new Set<QuickKind>(ctx.kind ? [ctx.kind] : (ctx.kinds || ALL_KINDS));
 
   // Здоровье и цели узнаются по первому слову; тип, выбранный пользователем, сильнее слова
-  const health = parseHealth(text, lower, ctx, allowed, lang);
+  const health = parseHealth(text, lower, edits, ctx, allowed, lang);
   if (health) return health;
 
   const mark = (field: QuickField, from: number, to: number) => {
@@ -724,6 +762,27 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
       mark('kind', 0, lead[0].length);
     }
   }
+
+  // ── явные метки: #список, @место, ! ───────────────────────────────────────
+  // Помечаются первыми, чтобы слова внутри метки не разбирались («#пт» — список, а не пятница); у записи,
+  // которой метка не положена, участок возвращается в название (`unmark`)
+  MARKERS.forEach(([field, find]) => {
+    const found = skipped.has(field) ? undefined : find(text);
+    if (found) mark(field, found.from, found.to);
+  });
+  const unmark = (fields: QuickField[]) => {
+    for (let i = spans.length - 1; i >= 0; i--) {
+      const { field, from, to } = spans[i];
+      if (fields.includes(field)) {
+        taken.fill(false, from, to);
+        spans.splice(i, 1);
+      }
+    }
+  };
+  const markerText = (field: QuickField) => {
+    const span = spans.find((item) => item.field === field);
+    return span && text.slice(span.from + 1, span.to);
+  };
 
   // ── числа с единицами: питание и вода ─────────────────────────────────────
   const nutrients: Partial<Record<QuickNutrient, number>> = {};
@@ -791,6 +850,16 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
   let end: number | undefined;
   if (!isWater) {
     const clock = `(${HOUR})(?::(${MINUTE}))?(?:\\s*(${lang.daypart}))?`;
+    const repeatZones: { from: number; to: number }[] = [];
+    const zonePattern = word(`(?:${words.every}|${words.oncePer})\\s+(?:${lang.count})\\s+(?:${bodies(words.units)})`);
+    for (let found = zonePattern.exec(lower); found; found = zonePattern.exec(lower)) {
+      const from = found.index + found[1].length;
+      repeatZones.push({ from, to: from + found[2].length });
+    }
+    // Уточнение после часа сильнее уточнения перед ним: «вечером в 7», «в 7 вечера»
+    const daypartIn = (after?: string, before?: string) => (
+      after ? lang.daypartOf(after) : before ? lang.daypartLeadOf(before) : undefined
+    );
     scan('time', `(?:(${words.from})\\s+)?${clock}\\s*(?:${DASH}|${words.to})\\s*${clock}`, (g) => {
       const fromPart = g[4] ? lang.daypartOf(g[4]) : undefined;
       const toPart = g[7] ? lang.daypartOf(g[7]) : undefined;
@@ -809,17 +878,26 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
       return true;
     });
     if (start === undefined) {
-      scan('time', `(?:(?:${words.at})\\s+)?(${HOUR}):(${MINUTE})(?:\\s*(${lang.daypart}))?`, (g) => {
-        start = resolveHour(Number(g[1]), Number(g[2]), g[3] ? lang.daypartOf(g[3]) : undefined);
+      scan('time', `${lang.daypartLead}(?:(?:${words.at})\\s+)?(${HOUR}):(${MINUTE})(?:\\s*(${lang.daypart}))?`, (
+        g, from, to,
+      ) => {
+        const part = daypartIn(g[4], g[1]);
+        const isLoose = !part && edits.some((edit) => edit.isLoose && edit.from >= from && edit.to <= to);
+        start = isLoose ? resolveLooseClock(Number(g[2]), Number(g[3]), ctx)
+          : resolveHour(Number(g[2]), Number(g[3]), part);
         return start !== undefined;
       });
     }
     if (start === undefined) {
-      scan('time', `(?:(${words.at})\\s+)?(${HOUR})(?![.:,]\\d)(?:\\s*(${lang.daypart}))?`, (g) => {
+      scan('time', `${lang.daypartLead}(?:(${words.at})\\s+)?(${HOUR})(?![.:,]\\d)(?:\\s*(${lang.daypart}))?`, (
+        g, from, to,
+      ) => {
         // Голый час — только с предлогом («в 5») либо с уточнением, понятным без него («5pm»)
-        if (!g[1] && !(g[3] && lang.isBareDaypart?.test(g[3]))) return false;
-        const part = g[3] ? lang.daypartOf(g[3]) : undefined;
-        start = part ? resolveHour(Number(g[2]), 0, part) : resolveBareHour(Number(g[2]), ctx);
+        if (!g[2] && !(g[4] && lang.isBareDaypart?.test(g[4]))) return false;
+        // «раз в 2 недели», «once in 2 weeks»: число принадлежит повтору
+        if (repeatZones.some((zone) => zone.from < to && from < zone.to)) return false;
+        const part = daypartIn(g[4], g[1]);
+        start = part ? resolveHour(Number(g[3]), 0, part) : resolveBareHour(Number(g[3]), ctx);
         return start !== undefined;
       });
     }
@@ -928,11 +1006,34 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
     });
   }
 
-  // ── название: всё непомеченное ────────────────────────────────────────────
-  const unmarked = (source: string) => [...source].map((char, i) => (taken[i] ? ' ' : char)).join('');
-  const plain = unmarked(text);
+  // ── тип задачи либо события; метки, которые ему не положены ───────────────
+  const hasTime = start !== undefined;
+  if (isWater || isFood) {
+    unmark(MARKER_FIELDS);
+  } else {
+    draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind
+      : hasTime && allowed.has('event') ? 'event' : 'task';
+    if (!allowed.has(draft.kind)) draft.kind = allowed.has('task') ? 'task' : 'event';
+    // У события нет ни списка, ни статуса: «#слово» и «!» остаются в названии
+    if (draft.kind === 'event') unmark(['list', 'important']);
+    const list = markerText('list');
+    draft.list = list && list.replace(/_/g, ' ');
+    draft.place = markerText('place');
+    draft.isImportant = spans.some(({ field }) => field === 'important') || undefined;
+  }
+
+  // ── название: всё непомеченное, в словах пользователя ─────────────────────
+  const plain = restoreNumerals(text.split('').map((char, i) => (taken[i] ? ' ' : char)).join(''), edits);
   draft.name = cleanName(plain);
   spans.sort((a, b) => a.from - b.from);
+  const mealSpan = spans.find(({ field }) => field === 'meal');
+  const mealText = mealSpan ? text.slice(mealSpan.from, mealSpan.to) : '';
+  if (edits.length) {
+    spans.forEach((span) => {
+      span.from = toSourceOffset(span.from, edits);
+      span.to = toSourceOffset(span.to, edits, true);
+    });
+  }
 
   // ── вода и еда ────────────────────────────────────────────────────────────
   if (isWater) {
@@ -953,16 +1054,13 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
       }
     }
     draft.nutrients = nutrients;
-    if (!draft.name) {
-      const meal = spans.find(({ field }) => field === 'meal');
-      draft.name = meal ? text.slice(meal.from, meal.to) : '';
-    }
+    if (!draft.name) draft.name = mealText;
     if (!draft.name) draft.error = 'name';
     return draft;
   }
 
   // ── задача либо событие: название и описание ──────────────────────────────
-  const split = skipped.has('description') ? undefined : splitName(plain, unmarked(lower), lang);
+  const split = skipped.has('description') ? undefined : splitName(plain, fold(plain), lang);
   if (split) {
     draft.name = split.name;
     draft.description = split.description;
@@ -971,11 +1069,6 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
     });
     spans.sort((a, b) => a.from - b.from);
   }
-  const hasTime = start !== undefined;
-  draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind
-    : hasTime && allowed.has('event') ? 'event' : 'task';
-  if (!allowed.has(draft.kind)) draft.kind = allowed.has('task') ? 'task' : 'event';
-
   if (!day && (hasTime || draft.kind === 'event') && !repeatKind) {
     day = hasTime && start! <= ctx.nowMinutes ? addDays(ctx.today, 1) : ctx.today;
     draft.isDayAssumed = true;
@@ -1041,6 +1134,51 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
     name: draft.name, minutes: draft.minutes, day: draft.day, start: draft.start, due: draft.due,
   }) || (draft.repeat && validateRepeat(draft.repeat));
   return draft;
+}
+
+// ── явные метки ──────────────────────────────────────────────────────────────
+// Метка — отдельное слово: перед знаком начало строки либо пробел, после слова — конец строки, пробел
+// либо знак препинания. Поэтому не метки: «C#», «№5», адрес почты, ссылка с «#» либо «@» внутри.
+//   #слово — список задачи: первая буква, дальше буквы, цифры, «_» (в названии списка — пробел) и «-».
+//            «#1» (нумерация) — не список;
+//   @место — место: буквы, цифры, «_» и «-», первый знак — буква либо цифра («@301ГК»);
+//   !      — важное: один «!» отдельным словом либо один «!» в самом конце первой строки сразу после
+//            слова («сдать отчёт!»). «!!!», «?!» и «!» в середине фразы («Ура! купить торт») — не метка.
+// Берётся первая метка каждого вида; остальные остаются в названии.
+type MarkerFinder = (text: string) => { from: number; to: number } | undefined;
+
+const MARKER_TAIL = '(?![^\\s,;.:!?)])';
+
+function markerFinder(pattern: string): MarkerFinder {
+  const re = new RegExp(`(^|\\s)(${pattern})${MARKER_TAIL}`, 'u');
+  return (text) => {
+    const found = re.exec(text);
+    if (!found) return undefined;
+    const from = found.index + found[1].length;
+    return { from, to: from + found[2].length };
+  };
+}
+
+const findImportant: MarkerFinder = (text) => {
+  const alone = /(^|\s)!(?=\s|$)/.exec(text);
+  if (alone) {
+    const from = alone.index + alone[1].length;
+    return { from, to: from + 1 };
+  }
+  const lineEnd = text.indexOf('\n');
+  const line = (lineEnd < 0 ? text : text.slice(0, lineEnd)).trimEnd();
+  return /[^\s!?]!$/.test(line) ? { from: line.length - 1, to: line.length } : undefined;
+};
+
+const MARKERS: [QuickField, MarkerFinder][] = [
+  ['list', markerFinder('#\\p{L}[\\p{L}\\p{N}_-]*')],
+  ['place', markerFinder('@[\\p{L}\\p{N}][\\p{L}\\p{N}_-]*')],
+  ['important', findImportant],
+];
+
+/** Описание записи из черновика: место (`@…`) — первой строкой, за ним описание из строки. */
+export function quickDescription(draft: Pick<QuickDraft, 'place' | 'description'>) {
+  return [draft.place && `@${draft.place}`, draft.description].filter(Boolean).join('\n') || undefined;
 }
 
 // ── название и описание ──────────────────────────────────────────────────────
@@ -1135,7 +1273,7 @@ function splitName(plain: string, lower: string, lang: Lang) {
 // ── здоровье и цели (spec 020) ───────────────────────────────────────────────
 
 function parseHealth(
-  text: string, lower: string, ctx: QuickContext, allowed: Set<QuickKind>, lang: Lang,
+  text: string, lower: string, edits: NumeralEdit[], ctx: QuickContext, allowed: Set<QuickKind>, lang: Lang,
 ): QuickDraft | undefined {
   const can = (kind: QuickKind) => allowed.has(kind) && (!ctx.kind || ctx.kind === kind);
   // Слово, обычное и в названиях дел: без разобранного значения это не запись здоровья
@@ -1161,7 +1299,7 @@ function parseHealth(
   // Тип «цель» выбран вызывающим: слово «цель» в начале не обязательно
   if (ctx.kind === 'goal') return parseGoal(lower, ctx, lang);
   if (can('workout') && (ctx.kind === 'workout' || lang.workoutLead.test(lower))) {
-    return settle(parseWorkout(text, lower, ctx, lang));
+    return settle(parseWorkout(text, lower, edits, ctx, lang));
   }
   return undefined;
 }
@@ -1224,7 +1362,9 @@ function sleepRange(groups: RegExpExecArray, ctx: QuickContext): QuickDraft {
 // Тренировка-запись: «бег 5 км 28 мин», «зал присед 4x8x80, жим 3x10x60», «зал 60 мин». Тренировка с
 // временем начала, на будущий день либо с повтором — запланированное событие календаря, его разбирает
 // основной разбор
-function parseWorkout(text: string, lower: string, ctx: QuickContext, lang: Lang): QuickDraft | undefined {
+function parseWorkout(
+  text: string, lower: string, edits: NumeralEdit[], ctx: QuickContext, lang: Lang,
+): QuickDraft | undefined {
   const { words } = lang;
   const taken = new Array<boolean>(text.length).fill(false);
   const cut = (from: number, to: number) => {
@@ -1257,9 +1397,9 @@ function parseWorkout(text: string, lower: string, ctx: QuickContext, lang: Lang
     match = sets.exec(lower);
   }
   const rest = [...text].map((char, i) => (taken[i] ? ' ' : char)).join('');
-  // У записи тренировки описания нет: название не делится
-  const base = parseLine(rest, {
-    ...ctx, kind: 'event', kinds: undefined, skip: [...(ctx.skip || []), 'description'],
+  // У записи тренировки нет ни описания, ни меток: название не делится
+  const base = parseText(rest, edits, {
+    ...ctx, kind: 'event', kinds: undefined, skip: [...(ctx.skip || []), 'description', ...MARKER_FIELDS],
   }, lang);
   const isRecord = Boolean(distanceKm || exercises.length)
     || (!base.start && !base.repeat && (base.day || ctx.today) <= ctx.today);

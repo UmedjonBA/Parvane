@@ -3527,7 +3527,7 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. A description goes after a dash: “English lesson tue 15:00 — listening test”.";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. A description goes after a dash: “English lesson tue 15:00 — listening test”. Numbers can be words (“at five pm”). Markers #list, @place and a final ! set the list, the place and “in progress”.";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";

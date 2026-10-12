@@ -147,10 +147,40 @@ try {
   await planner.getByText('Added: купить кабель').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: задача со сроком и задача без даты');
 
+  // ── Числительные словами и явные метки: #список, @место, ! ────────────────
+  const namePart = form.locator('[data-quick-part="name"] [dir="auto"]');
+  const LIST_NAME = 'Ремонт';
+  await openQuick();
+  await input.fill('планёрка завтра в пять вечера');
+  await expectKind('event');
+  assert.equal((await chip('time').innerText()).trim(), '17:00–18:00');
+  assert.equal((await namePart.innerText()).trim(), 'планёрка');
+  // Число, которое никто не забрал, остаётся словом
+  await input.fill('купить пять кистей');
+  await expectKind('task');
+  assert.equal((await namePart.innerText()).trim(), 'купить пять кистей');
+  await input.fill(`купить краску #${LIST_NAME} @Леруа !`);
+  await expectKind('task');
+  assert.equal((await chip('list').innerText()).trim(), `#${LIST_NAME}`);
+  assert.equal((await chip('place').innerText()).trim(), '@Леруа');
+  assert.equal(await chip('important').count(), 1, '«!» распознан как «важное»');
+  assert.equal((await namePart.innerText()).trim(), 'купить краску');
+  // Снятая метка возвращается в название
+  await chip('important').getByRole('button').click();
+  await chip('important').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  assert.equal((await namePart.innerText()).trim(), 'купить краску !');
+  await input.fill(`купить краску #${LIST_NAME} @Леруа`);
+  await submit('купить краску');
+  // Второе упоминание списка в другом регистре находит тот же список
+  await openQuick();
+  await input.fill(`купить валик #${LIST_NAME.toLowerCase()}`);
+  await expectKind('task');
+  await submit('купить валик');
+  console.log('OK: «в пять вечера» — время, #список, @место и ! — чипами');
+
   // ── Название и описание (отзыв 12 окт 2026): «пара» — 1 ч 45 мин, «будет…» — описание ──
   const OWNER_NAME = 'пара по Английскому';
   const OWNER_DESCRIPTION = 'будет тест лисининг';
-  const namePart = form.locator('[data-quick-part="name"] [dir="auto"]');
   await openQuick();
   await input.fill('вт 15:00 пара по Английскому будет тест  лисининг');
   await expectKind('event');
@@ -198,6 +228,11 @@ try {
   const undatedSheet = page.locator('[data-planner-undated]');
   await undatedSheet.getByText('сдать отчёт').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await undatedSheet.getByText('купить кабель').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Список из метки создан один раз, обе задачи — в нём
+  const listSection = undatedSheet.locator(`[data-project="${LIST_NAME}"]`);
+  await listSection.getByText('купить краску').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await listSection.getByText('купить валик').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await undatedSheet.locator('[data-project]').count(), 2, 'списки: «Без списка» и один из метки');
   await page.keyboard.press('Escape');
   await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // На компьютере ввод открывается кнопкой в шапке
