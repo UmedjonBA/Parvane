@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { GraphEdge, GraphInput, GraphNode } from './notesGraph';
 
 import {
-  buildGraph, createSeededRandom, getLayoutIterations, GRAPH_ITERATIONS, GRAPH_MARGIN, GRAPH_MAX_RADIUS,
-  GRAPH_MIN_RADIUS, GRAPH_WORK_BUDGET, layoutGraph, neighboursOf, nodeRadius,
+  buildGraph, canLinkFrom, canLinkTo, createSeededRandom, edgeShape, getLayoutIterations, GRAPH_ARROW,
+  GRAPH_EDGE_GAP, GRAPH_ITERATIONS, GRAPH_MARGIN, GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS, GRAPH_SPRING_LENGTH,
+  GRAPH_WORK_BUDGET, layoutGraph, neighboursOf, nodeAt, nodeRadius, placeGraph,
 } from './notesGraph';
 
 const ALL = { withDays: true, withRecords: true };
@@ -141,8 +142,19 @@ describe('граф заметок: сборка', () => {
         { id: 'b', title: 'Б', folder: '', links: ['А', 'А'] },
       ],
     }, ALL);
-    expect(graph.edges).toEqual([{ from: 'a', to: 'b' }]);
+    expect(graph.edges).toEqual([{ from: 'a', to: 'b', isMutual: true }]);
     expect(graph.nodes.map((item) => item.degree)).toEqual([1, 1]);
+  });
+
+  it('связь направлена от ссылающейся заметки, встречная ссылка её не переворачивает', () => {
+    const graph = buildGraph({
+      notes: [
+        { id: 'a', title: 'А', folder: '', links: [] },
+        { id: 'b', title: 'Б', folder: '', links: ['А', 'В'] },
+        { id: 'c', title: 'В', folder: '', links: ['Б'] },
+      ],
+    }, ALL);
+    expect(graph.edges).toEqual([{ from: 'b', to: 'a' }, { from: 'b', to: 'c', isMutual: true }]);
   });
 
   it('пустые ссылки пропускаются, одноимённые заметки — ссылка ведёт на первую', () => {
@@ -306,5 +318,147 @@ describe('граф заметок: соседи и размер точки', () 
     expect(nodeRadius(10_000)).toBe(GRAPH_MAX_RADIUS);
     expect(nodeRadius(-3)).toBe(GRAPH_MIN_RADIUS);
     expect(nodeRadius(Number.NaN)).toBe(GRAPH_MIN_RADIUS);
+  });
+});
+
+describe('граф заметок: место новых узлов', () => {
+  const OPTIONS = { width: 800, height: 600, seed: 4 };
+
+  function positions(nodes: GraphNode[]) {
+    return new Map(nodes.map((item) => [item.id, { x: item.x, y: item.y }]));
+  }
+
+  it('свободная раскладка не сжимается в область и стоит вокруг её центра', () => {
+    const { nodes, edges } = chain(60);
+    const small = { width: 200, height: 200, seed: 2 };
+    const tight = layoutGraph(nodes, edges, small);
+    const loose = layoutGraph(nodes, edges, { ...small, isLoose: true });
+    const span = (placed: GraphNode[]) => (
+      Math.max(...placed.map((item) => item.x)) - Math.min(...placed.map((item) => item.x))
+    );
+    expect(span(tight)).toBeLessThanOrEqual(200);
+    expect(span(loose)).toBeGreaterThan(400);
+    const xs = loose.map((item) => item.x);
+    expect((Math.max(...xs) + Math.min(...xs)) / 2).toBeCloseTo(100, 6);
+  });
+
+  it('без прежних мест — полная раскладка', () => {
+    const { nodes, edges } = chain(6);
+    expect(placeGraph(nodes, edges, new Map(), OPTIONS)).toEqual(layoutGraph(nodes, edges, OPTIONS));
+  });
+
+  it('новая связь не двигает ни один узел', () => {
+    const { nodes, edges } = chain(12);
+    const placed = layoutGraph(nodes, edges, OPTIONS);
+    const next = placeGraph(nodes, [...edges, { from: 'n0', to: 'n11' }], positions(placed), OPTIONS);
+    expect(next.map(({ id, x, y }) => [id, x, y])).toEqual(placed.map(({ id, x, y }) => [id, x, y]));
+  });
+
+  it('новый узел встаёт рядом с соседом, остальные стоят на месте', () => {
+    const { nodes, edges } = chain(12);
+    const placed = layoutGraph(nodes, edges, OPTIONS);
+    const added: GraphNode = {
+      id: 'new', title: 'Новая', kind: 'note', degree: 1, x: 0, y: 0,
+    };
+    const next = placeGraph([...nodes, added], [...edges, { from: 'n3', to: 'new' }], positions(placed), OPTIONS);
+    placed.forEach((item) => {
+      const moved = node(next, item.id);
+      expect(Math.hypot(moved.x - item.x, moved.y - item.y)).toBeLessThan(1e-9);
+    });
+    const fresh = node(next, 'new');
+    const anchor = node(next, 'n3');
+    const reach = Math.hypot(fresh.x - anchor.x, fresh.y - anchor.y);
+    expect(reach).toBeGreaterThan(GRAPH_SPRING_LENGTH / 3);
+    expect(reach).toBeLessThan(GRAPH_SPRING_LENGTH * 3);
+    placed.forEach((item) => {
+      expect(Math.hypot(fresh.x - item.x, fresh.y - item.y)).toBeGreaterThan(GRAPH_SPRING_LENGTH / 3);
+    });
+    expect(placeGraph([...nodes, added], [...edges, { from: 'n3', to: 'new' }], positions(placed), OPTIONS))
+      .toEqual(next);
+  });
+
+  it('узел без связей встаёт с краю, а не в гущу', () => {
+    const { nodes, edges } = chain(8);
+    const placed = layoutGraph(nodes, edges, OPTIONS);
+    const loner: GraphNode = {
+      id: 'new', title: 'Одна', kind: 'note', degree: 0, x: 0, y: 0,
+    };
+    const fresh = node(placeGraph([...nodes, loner], edges, positions(placed), OPTIONS), 'new');
+    expect(Number.isFinite(fresh.x) && Number.isFinite(fresh.y)).toBe(true);
+    placed.forEach((item) => {
+      expect(Math.hypot(fresh.x - item.x, fresh.y - item.y)).toBeGreaterThan(GRAPH_SPRING_LENGTH / 3);
+    });
+  });
+
+  it('два новых узла у одного соседа не сливаются', () => {
+    const { nodes, edges } = chain(4);
+    const placed = layoutGraph(nodes, edges, OPTIONS);
+    const extra = ['p', 'q'].map((id): GraphNode => ({
+      id, title: id, kind: 'note', degree: 1, x: 0, y: 0,
+    }));
+    const next = placeGraph(
+      [...nodes, ...extra], [...edges, { from: 'n1', to: 'p' }, { from: 'n1', to: 'q' }], positions(placed), OPTIONS,
+    );
+    const p = node(next, 'p');
+    const q = node(next, 'q');
+    expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(GRAPH_SPRING_LENGTH / 3);
+  });
+
+  it('созданная заметка занимает место «заметки, которой ещё нет»', () => {
+    const previous = new Map([['a', { x: 10, y: 20 }], ['missing:новая тема', { x: 300, y: -40 }]]);
+    const nodes: GraphNode[] = [
+      {
+        id: 'a', title: 'А', kind: 'note', degree: 1, x: 0, y: 0,
+      },
+      {
+        id: 'n9', title: 'Новая тема', kind: 'note', degree: 1, x: 0, y: 0,
+      },
+    ];
+    const next = placeGraph(nodes, [{ from: 'a', to: 'n9' }], previous, OPTIONS);
+    expect(next.map(({ x, y }) => [x, y])).toEqual([[10, 20], [300, -40]]);
+  });
+});
+
+describe('граф заметок: попадание в узел, правка связей, стрелка', () => {
+  const NODES: GraphNode[] = [
+    {
+      id: 'a', title: 'А', kind: 'note', degree: 0, x: 0, y: 0,
+    },
+    {
+      id: 'b', title: 'Б', kind: 'missing', degree: 4, x: 100, y: 0,
+    },
+  ];
+
+  it('узел под точкой — с запасом и без', () => {
+    expect(nodeAt(NODES, 3, 3)?.id).toBe('a');
+    expect(nodeAt(NODES, 10, 0)).toBeUndefined();
+    expect(nodeAt(NODES, 10, 0, 6)?.id).toBe('a');
+    expect(nodeAt(NODES, 90, 5)?.id).toBe('b');
+    expect(nodeAt(NODES, 50, 50, 10)).toBeUndefined();
+    expect(nodeAt([], 0, 0, 100)).toBeUndefined();
+  });
+
+  it('связь ведут от заметки к заметке, существующей или будущей', () => {
+    expect(['note', 'missing', 'day', 'record'].map((kind) => canLinkFrom({ kind } as GraphNode)))
+      .toEqual([true, false, false, false]);
+    expect(['note', 'missing', 'day', 'record'].map((kind) => canLinkTo({ kind } as GraphNode)))
+      .toEqual([true, true, false, false]);
+    expect(canLinkFrom(undefined)).toBe(false);
+    expect(canLinkTo(undefined)).toBe(false);
+  });
+
+  it('линия идёт от края до края кружков, наконечник — у цели', () => {
+    const shape = edgeShape({ x: 0, y: 0 }, { x: 100, y: 0 }, 6, 10);
+    expect([shape.x1, shape.y1, shape.x2, shape.y2]).toEqual([6 + GRAPH_EDGE_GAP, 0, 90 - GRAPH_EDGE_GAP, 0]);
+    expect(shape.heads).toEqual([`M87 0L${87 - GRAPH_ARROW} 3.5L${87 - GRAPH_ARROW} -3.5Z`]);
+    expect(shape.middle).toEqual({ x: 50, y: 0 });
+  });
+
+  it('взаимная связь — наконечники с обеих сторон, кружки вплотную — без наконечников', () => {
+    expect(edgeShape({ x: 0, y: 0 }, { x: 0, y: 200 }, 6, 6, true).heads).toHaveLength(2);
+    const near = edgeShape({ x: 0, y: 0 }, { x: 20, y: 0 }, 6, 6);
+    expect(near.heads).toEqual([]);
+    expect([near.x1, near.x2]).toEqual([0, 20]);
+    expect(edgeShape({ x: 5, y: 5 }, { x: 5, y: 5 }, 6, 6).heads).toEqual([]);
   });
 });
