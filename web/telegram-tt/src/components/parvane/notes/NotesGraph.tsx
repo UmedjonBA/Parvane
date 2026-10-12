@@ -8,6 +8,7 @@ import type { GraphEdge, GraphNode, GraphPoint } from './notesGraph';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
@@ -21,6 +22,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useResizeObserver from '../../../hooks/useResizeObserver';
 
+import SearchForm from '../../ui/SearchForm';
 import PvIcon from './PvIcon';
 
 import styles from './Knowledge.module.scss';
@@ -649,20 +651,21 @@ const NotesGraph = ({
         >
           {lang('KnowledgeGraphRecords')}
         </button>
-        <label className={styles.graphSearch}>
-          <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
-          <input
-            className={styles.graphSearchInput}
-            type="search"
-            value={query}
-            placeholder={lang('KnowledgeGraphSearch')}
-            aria-label={lang('KnowledgeGraphSearch')}
-            autoComplete="off"
-            data-graph-search
-            onChange={handleQuery}
-            onKeyDown={handleQueryKey}
-          />
-        </label>
+        <SearchForm>
+          <label className={styles.graphSearch}>
+            <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
+            <input
+              {...SEARCH_FIELD_PROPS}
+              className={styles.graphSearchInput}
+              value={query}
+              placeholder={lang('KnowledgeGraphSearch')}
+              aria-label={lang('KnowledgeGraphSearch')}
+              data-graph-search
+              onChange={handleQuery}
+              onKeyDown={handleQueryKey}
+            />
+          </label>
+        </SearchForm>
       </div>
       {linkFrom && (
         <div

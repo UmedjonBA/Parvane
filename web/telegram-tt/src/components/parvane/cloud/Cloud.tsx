@@ -12,6 +12,7 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
+import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { formatFileSize } from '../../../util/textFormat';
 import {
   childrenOf, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
@@ -33,6 +34,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
+import SearchForm from '../../ui/SearchForm';
 import KnowledgeTabs from '../notes/KnowledgeTabs';
 import PvIcon from '../notes/PvIcon';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
@@ -716,18 +718,19 @@ const Cloud = ({ isMobile }: OwnProps) => {
         <div className={buildClassName(styles.content, 'custom-scroll')}>
           {!isBlocked && (
             <div className={styles.tools}>
-              <label className={kit.search}>
-                <PvIcon name="search" isSmall className={kit.searchIcon} />
-                <input
-                  className={kit.searchInput}
-                  type="search"
-                  value={query}
-                  placeholder={lang('ParvaneCloudSearch')}
-                  aria-label={lang('ParvaneCloudSearch')}
-                  autoComplete="off"
-                  onChange={handleQueryChange}
-                />
-              </label>
+              <SearchForm>
+                <label className={kit.search}>
+                  <PvIcon name="search" isSmall className={kit.searchIcon} />
+                  <input
+                    {...SEARCH_FIELD_PROPS}
+                    className={kit.searchInput}
+                    value={query}
+                    placeholder={lang('ParvaneCloudSearch')}
+                    aria-label={lang('ParvaneCloudSearch')}
+                    onChange={handleQueryChange}
+                  />
+                </label>
+              </SearchForm>
               {!isTrash && !isSharedList && (
                 <DropdownMenu trigger={SortButton} positionX="right">
                   {SORT_KEYS.map((key) => (

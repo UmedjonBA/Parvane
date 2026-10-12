@@ -29,6 +29,7 @@ import {
   getChatSelectionKeyHash,
   includesChatSelectionKey,
 } from '../../util/keys/chatSelectionKey';
+import { SEARCH_FIELD_PROPS } from '../../util/searchField';
 import sortChatIds from './helpers/sortChatIds';
 
 import useCurrentOrPrev from '../../hooks/useCurrentOrPrev';
@@ -38,6 +39,7 @@ import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import { useStateRef } from '../../hooks/useStateRef';
 
+import SearchForm from '../ui/SearchForm';
 import TabList from '../ui/TabList';
 import PeerChip from './PeerChip';
 import ChatOrUserPicker, { type SearchRowRenderProps } from './pickers/ChatOrUserPicker';
@@ -295,17 +297,19 @@ const RecipientPicker = ({
     if (!hasSelectedChips) {
       return (
         <div className="search-input-wrapper">
-          <i className="icon icon-search" />
-          <input
-            ref={props.inputRef}
-            className="search-input"
-            type="text"
-            dir="auto"
-            placeholder={props.placeholder}
-            value={props.value}
-            onChange={props.onChange}
-            onKeyDown={props.onKeyDown}
-          />
+          <SearchForm>
+            <i className="icon icon-search" />
+            <input
+              {...SEARCH_FIELD_PROPS}
+              ref={props.inputRef}
+              className="search-input"
+              dir="auto"
+              placeholder={props.placeholder}
+              value={props.value}
+              onChange={props.onChange}
+              onKeyDown={props.onKeyDown}
+            />
+          </SearchForm>
         </div>
       );
     }
@@ -343,17 +347,19 @@ const RecipientPicker = ({
             );
           })}
           <div className="inline-search">
-            <i className="icon icon-search" />
-            <input
-              ref={props.inputRef}
-              className="search-input"
-              type="text"
-              dir="auto"
-              placeholder={props.placeholder}
-              value={props.value}
-              onChange={props.onChange}
-              onKeyDown={props.onKeyDown}
-            />
+            <SearchForm>
+              <i className="icon icon-search" />
+              <input
+                {...SEARCH_FIELD_PROPS}
+                ref={props.inputRef}
+                className="search-input"
+                dir="auto"
+                placeholder={props.placeholder}
+                value={props.value}
+                onChange={props.onChange}
+                onKeyDown={props.onKeyDown}
+              />
+            </SearchForm>
           </div>
         </div>
       </div>
