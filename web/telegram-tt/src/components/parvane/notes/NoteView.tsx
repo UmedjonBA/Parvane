@@ -204,7 +204,7 @@ const NoteView = ({
             <span className={styles.itemText}>
               {renderInline(text.replace(MARKER, ''))}
               {when && (
-                <span className={styles.dateTag} title={lang('KnowledgeTaskInPlan')}>
+                <span className={styles.dateTag}>
                   <PvIcon name="cal" className={styles.dateTagIcon} />
                   {when}
                 </span>
@@ -264,7 +264,7 @@ const NoteView = ({
           <button
             type="button"
             className={kit.ib}
-            aria-label={lang(isEditing ? 'KnowledgeDone' : 'KnowledgeEdit')}
+            aria-label={lang(isEditing ? 'KnowledgeSave' : 'KnowledgeEdit')}
             disabled={isSaving}
             onClick={isEditing ? handleSave : handleEdit}
           >
@@ -329,10 +329,10 @@ const NoteView = ({
             <>
               <button type="button" className={kit.btn} disabled={isSaving} onClick={handleSave}>
                 <PvIcon name="check" isSmall />
-                {lang('KnowledgeDone')}
+                {lang('KnowledgeSave')}
               </button>
               <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleCancel}>
-                {lang('KnowledgeCancel')}
+                {lang('Cancel')}
               </button>
             </>
           ) : (

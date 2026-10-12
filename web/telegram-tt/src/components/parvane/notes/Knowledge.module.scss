@@ -103,9 +103,12 @@
   margin-bottom: 0.625rem;
 }
 
-// Составные селекторы — чтобы правка побеждала общее правило из `PvKit` при любом порядке файлов
+// Составные селекторы — чтобы правка побеждала общее правило из `PvKit` при любом порядке файлов.
+// Строка шире колонки на свои поля: плитка стоит по краю поиска, подсветка выходит за него
 .list .listRow {
+  width: calc(100% + 1.25rem);
   min-height: 3.25rem;
+  margin-inline: -0.625rem;
 }
 
 .list .newNote {
@@ -479,6 +482,11 @@
 
 .links .linksCaption {
   margin-bottom: 0.375rem;
+}
+
+.links .linkRow {
+  width: calc(100% + 1.25rem);
+  margin-inline: -0.625rem;
 }
 
 .miniGraph {

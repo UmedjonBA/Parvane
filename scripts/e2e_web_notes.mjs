@@ -61,7 +61,7 @@ try {
     `# ${NOTE}`, '', `Бюджетный сервер под LLM. См. [[${OTHER}]] #проект`, '',
     '- [ ] заказать блок питания до пт', '- [ ] проверить обе GPU',
   ].join('\n'));
-  await note.getByRole('button', { name: 'Done', exact: true }).click();
+  await note.getByRole('button', { name: 'Save' }).click();
   await visible(body.getByRole('button', { name: OTHER }), 'ссылка в тексте');
   await visible(body.getByText('#проект'), 'тег');
   assert.equal(await body.locator('input[type="checkbox"]').count(), 2, 'два пункта с галочками');

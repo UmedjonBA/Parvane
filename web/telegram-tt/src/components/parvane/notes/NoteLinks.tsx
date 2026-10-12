@@ -107,7 +107,7 @@ const NoteLinks = ({
           <button
             key={other.id}
             type="button"
-            className={kit.row}
+            className={buildClassName(kit.row, styles.linkRow)}
             data-title={other.title}
             onClick={handleOpen}
           >
@@ -124,7 +124,7 @@ const NoteLinks = ({
           className={styles.miniGraph}
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label={lang('KnowledgeLocalGraph')}
+          aria-label={lang('KnowledgeGraph')}
         >
           {points.map((point) => (
             <line key={`l${point.key}`} x1={WIDTH / 2} y1={HEIGHT / 2} x2={point.x} y2={point.y} />

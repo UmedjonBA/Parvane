@@ -610,7 +610,7 @@ const NotesCanvas = ({
             <button
               type="button"
               className={buildClassName(styles.boardTool, linkFrom && styles.boardToolOn)}
-              title={lang('KnowledgeCanvasLinkTitle')}
+              title={lang('KnowledgeCanvasLink')}
               aria-label={lang('KnowledgeCanvasLink')}
               aria-pressed={Boolean(linkFrom)}
               disabled={!selectedNode || selectedNode.type === 'group'}
@@ -749,7 +749,7 @@ const NotesCanvas = ({
           </>
         )}
         <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleEditSave}>
-          {lang('KnowledgeDone')}
+          {lang('Done')}
         </button>
       </PvSheet>
       <PvSheet

@@ -355,7 +355,7 @@ const NotesGraph = ({
             <button
               type="button"
               className={kit.ib}
-              aria-label={lang('KnowledgeGraphDeselect')}
+              aria-label={lang('ParvaneCloudClearSelection')}
               onClick={handleDeselect}
             >
               <PvIcon name="x" isSmall />
@@ -366,7 +366,7 @@ const NotesGraph = ({
           </div>
           {pickedNode.kind !== 'record' && (
             <button type="button" className={buildClassName(kit.btn, kit.btnAcc)} onClick={handleOpenPicked}>
-              {lang(pickedNode.kind === 'missing' ? 'KnowledgeGraphCreate' : 'KnowledgeGraphOpen')}
+              {lang(pickedNode.kind === 'missing' ? 'KnowledgeGraphCreate' : 'Open')}
             </button>
           )}
         </div>
