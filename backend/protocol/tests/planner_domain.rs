@@ -7,7 +7,7 @@ use parvane_protocol::domain::planner::{self, PlannerState, SNAPSHOT_WARN_BYTES}
 use parvane_protocol::domain::{LamportGuard, Stamp};
 use parvane_protocol::pb::parvane::core::v2::LwwStamp;
 use parvane_protocol::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, List, NutritionDay, Occurrence, PlannerOp, Repeat,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, LearnedWord, List, NutritionDay, Occurrence, PlannerOp, Repeat,
     RepeatKind, Settings, Step, Steps, Str, Task, I32, U32,
 };
 use parvane_protocol::ProtoError;
@@ -402,6 +402,174 @@ fn event_description_merges_per_field_from_two_devices() {
     assert_eq!(d.events["x"].description.as_ref().unwrap().value, "взять паспорт");
 }
 
+// ── словарь правок ввода текстом ────────────────────────────────────────────
+
+fn num(value: u32, lamport: u64, dev: &str) -> Option<U32> {
+    Some(U32 { stamp: st(lamport, dev), value, unset: false })
+}
+
+/// Правка типа слова: значение и счётчик парой, плюс свежесть.
+fn learned_kind(id: &str, kind: &str, count: u32, touched: u32, lamport: u64, dev: &str) -> change::Change {
+    change::Change::Learned(LearnedWord { id: id.into(), kind: s(kind, lamport, dev), kind_count: num(count, lamport, dev), touched: num(touched, lamport, dev), ..Default::default() })
+}
+
+fn learned_minutes(id: &str, minutes: u32, count: u32, touched: u32, lamport: u64, dev: &str) -> change::Change {
+    change::Change::Learned(LearnedWord { id: id.into(), minutes: num(minutes, lamport, dev), minutes_count: num(count, lamport, dev), touched: num(touched, lamport, dev), ..Default::default() })
+}
+
+fn apply_in(order: &[&(change::Change, &str)]) -> PlannerState {
+    let mut state = PlannerState::default();
+    for (c, dev) in order {
+        state.apply_op(&op(vec![c.clone()]), dev).unwrap();
+    }
+    state
+}
+
+#[test]
+fn learned_words_from_two_devices_merge_per_word_and_per_field() {
+    // d1 учит длительность «пары», d2 без связи — тип «созвона» и тип той же «пары».
+    let a = (learned_minutes("пара", 105, 3, 1, 2, "d1"), "d1");
+    let b = (learned_kind("созвон", "event", 3, 1, 2, "d2"), "d2");
+    let c = (learned_kind("пара", "event", 1, 2, 3, "d2"), "d2");
+    let x = apply_in(&[&a, &b, &c]);
+    let y = apply_in(&[&c, &b, &a]);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    // Разные слова — оба на месте; у одного слова длительность с d1 и тип с d2 живут вместе.
+    assert_eq!(x.learned_live().iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), vec!["пара", "созвон"]);
+    let word = &x.learned["пара"];
+    assert_eq!((word.minutes.as_ref().unwrap().value, word.minutes_count.as_ref().unwrap().value), (105, 3));
+    assert_eq!((word.kind.as_ref().unwrap().value.as_str(), word.kind_count.as_ref().unwrap().value), ("event", 1));
+    assert_eq!(word.touched.as_ref().unwrap().value, 2);
+
+    // Одно слово, одно поле, два устройства одновременно: пара «значение + счётчик» целиком от поздней метки.
+    let d = (learned_minutes("пара", 90, 1, 3, 5, "d1"), "d1");
+    let e = (learned_minutes("пара", 60, 4, 4, 6, "d2"), "d2");
+    let x = apply_in(&[&a, &d, &e]);
+    let y = apply_in(&[&e, &a, &d]);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    let word = &x.learned["пара"];
+    assert_eq!((word.minutes.as_ref().unwrap().value, word.minutes_count.as_ref().unwrap().value), (60, 4));
+    // Равные lamport: побеждает старшее устройство, тоже парой.
+    let f = (learned_minutes("пара", 45, 2, 5, 6, "d1"), "d1");
+    let z = apply_in(&[&f, &e]);
+    assert_eq!((z.learned["пара"].minutes.as_ref().unwrap().value, z.learned["пара"].minutes_count.as_ref().unwrap().value), (60, 4));
+
+    // Снимок несёт слова; повторное слияние идемпотентно.
+    let snap = x.to_snapshot();
+    assert_eq!(snap.learned.len(), 1);
+    let restored = PlannerState::from_snapshot(&planner::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
+    assert_eq!(restored, x);
+    let mut again = restored.clone();
+    again.merge_snapshot(&snap).unwrap();
+    assert_eq!(again, x);
+}
+
+#[test]
+fn learned_word_tombstone_is_stable_and_newer_edit_resurrects() {
+    let created = (learned_kind("зал", "event", 3, 1, 1, "d1"), "d1");
+    let del = (change::Change::Learned(LearnedWord { id: "зал".into(), deleted: st(5, "d2"), ..Default::default() }), "d2");
+    let old = (learned_minutes("зал", 90, 1, 2, 3, "d1"), "d1");
+    let fresh = (learned_minutes("зал", 120, 1, 3, 7, "d1"), "d1");
+    let x = apply_in(&[&created, &del]);
+    assert!(!PlannerState::is_learned_alive(&x.learned["зал"]));
+    assert!(x.learned_live().is_empty());
+    // Правка старше надгробия слово не возвращает, новее — возвращает.
+    let x = apply_in(&[&created, &del, &old]);
+    assert!(!PlannerState::is_learned_alive(&x.learned["зал"]));
+    let x = apply_in(&[&created, &del, &old, &fresh]);
+    assert!(PlannerState::is_learned_alive(&x.learned["зал"]));
+    assert_eq!(x.learned["зал"].minutes.as_ref().unwrap().value, 120);
+    let y = apply_in(&[&fresh, &old, &del, &created]);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    // Надгробие остаётся в снимке: устройство, поднятое из снимка, старую правку тоже не примет.
+    let dead = apply_in(&[&created, &del]);
+    let mut restored = PlannerState::from_snapshot(&dead.to_snapshot()).unwrap();
+    restored.apply_op(&op(vec![old.0.clone()]), "d1").unwrap();
+    assert!(restored.learned_live().is_empty());
+}
+
+#[test]
+fn invalid_learned_word_is_skipped() {
+    let mut a = PlannerState::default();
+    let word = |w: LearnedWord| change::Change::Learned(w);
+    let bad = vec![
+        learned_kind("пара", "food", 1, 1, 1, "d1"),
+        learned_kind("пара", "event", 6, 1, 1, "d1"),
+        learned_minutes("пара", 4, 1, 1, 1, "d1"),
+        learned_minutes("пара", 1441, 1, 1, 1, "d1"),
+        learned_minutes("пара", 60, 6, 1, 1, "d1"),
+        learned_kind("", "event", 1, 1, 1, "d1"),
+        learned_kind("Пара", "event", 1, 1, 1, "d1"),
+        learned_kind("две пары", "event", 1, 1, 1, "d1"),
+        learned_kind(&"я".repeat(33), "event", 1, 1, 1, "d1"),
+        word(LearnedWord { id: "пара".into(), kind_count: Some(U32 { stamp: st(1, "d1"), value: 0, unset: true }), ..Default::default() }),
+        word(LearnedWord { id: "пара".into(), touched: Some(U32 { stamp: st(1, "d1"), value: 0, unset: true }), ..Default::default() }),
+    ];
+    let count = bad.len();
+    let good = learned_minutes("урок", 45, 3, 1, 1, "d1");
+    let mut changes = bad;
+    changes.push(good);
+    assert_eq!(a.apply_op(&op(changes), "d1").unwrap(), 1, "из {count} негодных не применено ни одно");
+    assert_eq!(a.learned.keys().collect::<Vec<_>>(), vec!["урок"]);
+    // Пустые значения годны: тип «не выучен» и длительность «не выучена» (счётчик 0).
+    let cleared = word(LearnedWord {
+        id: "урок".into(),
+        kind: s("", 2, "d1"),
+        kind_count: num(0, 2, "d1"),
+        minutes: Some(U32 { stamp: st(2, "d1"), value: 0, unset: true }),
+        minutes_count: num(0, 2, "d1"),
+        ..Default::default()
+    });
+    assert_eq!(a.apply_op(&op(vec![cleared]), "d1").unwrap(), 1);
+    assert!(a.learned["урок"].minutes.as_ref().unwrap().unset);
+}
+
+#[test]
+fn learned_dictionary_is_capped_without_depending_on_order() {
+    // Два устройства без связи довели словарь до 205 слов: живыми считаются 200 самых свежих.
+    let total = planner::MAX_LEARNED_LIVE as u32 + 5;
+    let words: Vec<(change::Change, &str)> = (1..=total)
+        .map(|i| {
+            let dev = if i % 2 == 0 { "d1" } else { "d2" };
+            (learned_kind(&format!("w{i:03}"), "task", 3, i, u64::from(i), dev), dev)
+        })
+        .collect();
+    let forward: Vec<&(change::Change, &str)> = words.iter().collect();
+    let backward: Vec<&(change::Change, &str)> = words.iter().rev().collect();
+    let x = apply_in(&forward);
+    let y = apply_in(&backward);
+    assert_eq!(snapshot_bytes(&x), snapshot_bytes(&y));
+    assert_eq!(x.learned.len(), total as usize);
+    let live: Vec<&str> = x.learned_live().iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(live.len(), planner::MAX_LEARNED_LIVE);
+    // Сверх потолка — пять дольше всех не тронутых.
+    assert_eq!(live[0], "w006");
+    assert_eq!(live, y.learned_live().iter().map(|w| w.id.as_str()).collect::<Vec<_>>());
+    // Удалённое слово освобождает место самому свежему из скрытых.
+    let mut z = x.clone();
+    z.apply_op(&op(vec![change::Change::Learned(LearnedWord { id: "w100".into(), deleted: st(900, "d1"), ..Default::default() })]), "d1").unwrap();
+    let live: Vec<&str> = z.learned_live().iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(live.len(), planner::MAX_LEARNED_LIVE);
+    assert_eq!(live[0], "w005");
+    assert!(!live.contains(&"w100"));
+
+    // Хранится не больше потолка снимка: лишнее — самые старые надгробия, живые слова остаются.
+    let mut big = PlannerState::default();
+    for i in 0..(planner::MAX_LEARNED_STORED as u64 + 50) {
+        let id = format!("t{i:05}");
+        big.apply_op(&op(vec![learned_kind(&id, "event", 1, 1, 1, "d1")]), "d1").unwrap();
+        big.apply_op(&op(vec![change::Change::Learned(LearnedWord { id, deleted: st(10 + i, "d1"), ..Default::default() })]), "d1").unwrap();
+    }
+    big.apply_op(&op(vec![learned_kind("живое", "event", 3, 7, 5, "d1")]), "d1").unwrap();
+    let snap = big.to_snapshot();
+    assert_eq!(snap.learned.len(), planner::MAX_LEARNED_STORED);
+    assert!(snap.learned.iter().any(|w| w.id == "живое"));
+    assert!(!snap.learned.iter().any(|w| w.id == "t00000"));
+    assert!(snap.learned.iter().any(|w| w.id == format!("t{:05}", planner::MAX_LEARNED_STORED + 49)));
+    let restored = PlannerState::from_snapshot(&planner::decode_snapshot(&snap.encode_to_vec()).unwrap()).unwrap();
+    assert_eq!(restored.learned_live().iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), vec!["живое"]);
+}
+
 #[test]
 fn stamp_op_marks_every_present_register() {
     let mut o = op(vec![
@@ -444,6 +612,23 @@ fn stamp_op_marks_every_present_register() {
     assert!(stamps.iter().all(|s| s.lamport == 10 && s.device_id == "d1"));
     let mut st_ = PlannerState::default();
     assert_eq!(st_.apply_op(&o, "d1").unwrap(), 3);
+    // Слово словаря правок: метку получает каждый присутствующий регистр и надгробие.
+    let mut o = op(vec![
+        change::Change::Learned(LearnedWord {
+            id: "пара".into(),
+            minutes: Some(U32 { stamp: None, value: 105, unset: false }),
+            minutes_count: Some(U32 { stamp: None, value: 3, unset: false }),
+            touched: Some(U32 { stamp: None, value: 4, unset: false }),
+            ..Default::default()
+        }),
+        change::Change::Learned(LearnedWord { id: "зал".into(), kind: Some(Str { stamp: None, value: "event".into() }), kind_count: Some(U32 { stamp: None, value: 1, unset: false }), ..Default::default() }),
+        change::Change::Learned(LearnedWord { id: "урок".into(), deleted: Some(LwwStamp::default()), ..Default::default() }),
+    ]);
+    planner::stamp_op(&mut o, &Stamp::new(11, "d1"));
+    let stamps = planner::op_stamps(&o).unwrap();
+    assert_eq!(stamps.len(), 6);
+    assert!(stamps.iter().all(|s| s.lamport == 11 && s.device_id == "d1"));
+    assert_eq!(st_.apply_op(&o, "d1").unwrap(), 3);
 }
 
 #[test]
@@ -478,7 +663,7 @@ fn size_estimate_grows_with_data_and_year_of_food_fits() {
 fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
     let dev = prop::sample::select(vec!["d1".to_string(), "d2".to_string(), "d3".to_string()]);
     let id = prop::sample::select(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
-    (dev, id, 1u64..40, 0u8..9, prop::option::of(1u64..40)).prop_map(|(dev, id, lamport, kind, del)| {
+    (dev, id, 1u64..40, 0u8..11, prop::option::of(1u64..40)).prop_map(|(dev, id, lamport, kind, del)| {
         let field = |v: &str| s(v, lamport, &dev);
         let change = match kind {
             0 => change::Change::Task(Task { id: id.clone(), name: field("имя"), ..Default::default() }),
@@ -519,6 +704,17 @@ fn arb_change() -> impl Strategy<Value = (change::Change, String)> {
                 kcal: Some(Goal { target: 1000 + lamport as u32, tolerance: 50, set: true }),
                 ..Default::default()
             }),
+            // Словарь правок: пара «значение + счётчик», свежесть, надгробие
+            8 => change::Change::Learned(LearnedWord {
+                id: id.clone(),
+                kind: if lamport % 2 == 0 { field(if lamport % 4 == 0 { "task" } else { "event" }) } else { None },
+                kind_count: if lamport % 2 == 0 { Some(U32 { stamp: st(lamport, &dev), value: (lamport % 6) as u32, unset: false }) } else { None },
+                minutes: if lamport % 2 == 1 { Some(U32 { stamp: st(lamport, &dev), value: 5 + lamport as u32, unset: lamport % 7 == 0 }) } else { None },
+                minutes_count: if lamport % 2 == 1 { Some(U32 { stamp: st(lamport, &dev), value: (lamport % 6) as u32, unset: false }) } else { None },
+                touched: Some(U32 { stamp: st(lamport, &dev), value: lamport as u32, unset: false }),
+                ..Default::default()
+            }),
+            9 => change::Change::Learned(LearnedWord { id: id.clone(), deleted: del.map(|l| LwwStamp { lamport: l, device_id: dev.clone() }).or(st(lamport, &dev)), ..Default::default() }),
             _ => change::Change::Settings(Settings { stamp: st(lamport, &dev), day_start: 540, day_end: 1260, lunch_start: 780, lunch_end: 840, margin: 15, budget: 600 + lamport as u32 }),
         };
         (change, dev)

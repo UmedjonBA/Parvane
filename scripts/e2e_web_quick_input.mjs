@@ -321,7 +321,11 @@ try {
   await closeQuickWide();
   console.log('OK: записи пережили перезагрузку; на компьютере ввод открывает «+ Запись»');
 
-  // ── Словарь правок хранится на устройстве: пережил перезагрузку; «Сбросить выученное» его очищает ──
+  // ── Словарь правок хранится в данных «Плана»: пережил перезагрузку; «Сбросить выученное» его очищает ──
+  assert.deepEqual(
+    await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('parvane:quick-learned:'))),
+    [], 'словарь правок не должен оставаться в localStorage',
+  );
   await openQuickWide();
   await input.fill('летучка завтра 15:00');
   await expectKind('event');

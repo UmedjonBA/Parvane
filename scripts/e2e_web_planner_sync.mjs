@@ -3,7 +3,9 @@
 // после привязки — весь планировщик; правки онлайн сходятся; правки без сети
 // на обоих устройствах сливаются (разные объекты сохраняются, удалённое не
 // воскресает); очередь переживает перезагрузку; данные этапа 1 переносятся
-// один раз; в базе шарда domains нет названий открытым текстом.
+// один раз; словарь правок ввода текстом едет с данными «Плана» (выученное на
+// одном устройстве подставляется на другом, сброс действует на оба); в базе
+// шарда domains нет названий открытым текстом.
 // Запуск: scripts/run_web_planner_sync_e2e.sh
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -81,6 +83,52 @@ async function expectTaskInDay(page, name, isPresent, timeout = SYNC_TIMEOUT_MS)
     .catch(() => {
       assert.fail(`${name}: ожидалось ${isPresent ? 'видно' : 'нет'} в расписании дня`);
     });
+}
+
+// ── ввод текстом (шаги — как в e2e_web_quick_input.mjs) ───────────────────────
+
+async function openQuick(page) {
+  const planner = await openPlanner(page);
+  await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
+  const input = page.locator('#planner-quick-input');
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  return input;
+}
+
+// Окно ловит Escape со следующего кадра после появления — нажатие повторяется, пока окно не закрылось
+async function closeQuick(page) {
+  const input = page.locator('#planner-quick-input');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await page.keyboard.press('Escape');
+    if (await input.waitFor({ state: 'hidden', timeout: 3000 }).then(() => true, () => false)) return;
+  }
+  assert.fail('окно ввода не закрылось по Escape');
+}
+
+async function expectQuickTime(page, expected) {
+  await page.waitForFunction(
+    (value) => document.querySelector('form[data-quick-kind="event"] [data-quick-chip="time"]')?.innerText.trim() === value,
+    expected,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => {
+    assert.fail(`ввод текстом: ожидалось время ${expected}`);
+  });
+}
+
+/** Добавить событие строкой; `name` — название, которое покажет уведомление. */
+async function quickAdd(page, text, name, time) {
+  const input = await openQuick(page);
+  await input.fill(text);
+  await expectQuickTime(page, time);
+  await page.locator('form[data-quick-kind]').getByRole('button', { name: 'Add', exact: true }).click();
+  await page.locator('#ParvanePlanner').getByText(`Added: ${name}`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+}
+
+/** Слово словаря правок в состоянии движка устройства (или его отсутствие). */
+async function learnedWordOf(page, id) {
+  const state = await page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+  return state?.state?.learned?.find((word) => word.id === id);
 }
 
 /** Сид журнала: по одной правке в операции (движок пакетирует только из UI).
@@ -294,6 +342,49 @@ try {
   }, SYNC_TIMEOUT_MS, 'запись цели с A на B');
   console.log('OK: ряд, отметка экземпляра и правка ряда сходятся; запись цели синхронизируется');
 
+  // ── Словарь правок ввода текстом: выученное на A подставляется на B, сброс на B действует на A ──
+  const learnedHead = 'летучка';
+  const learnedChip = (page) => page.locator('form[data-quick-kind] [data-quick-chip="minutes"][data-learned="1"]');
+  // Одна и та же длительность трижды — правка становится значением по умолчанию
+  for (const hour of ['10', '11', '12']) {
+    await quickAdd(sessions.bob1.page, `${learnedHead} завтра ${hour}:00 20 мин`, learnedHead, `${hour}:00–${hour}:20`);
+  }
+  await openQuick(sessions.bob1.page);
+  await sessions.bob1.page.locator('#planner-quick-input').fill(`${learnedHead} завтра 13:00`);
+  await learnedChip(sessions.bob1.page).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await expectQuickTime(sessions.bob1.page, '13:00–13:20');
+  await closeQuick(sessions.bob1.page);
+  await closePlanner(sessions.bob1.page);
+  // На устройстве словаря больше нет: он в данных «Плана»
+  assert.deepEqual(
+    await sessions.bob1.page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('parvane:quick-learned:'))),
+    [], 'словарь правок не должен оставаться в localStorage',
+  );
+  await waitFor(async () => {
+    const word = await learnedWordOf(sessions.bob2.page, learnedHead);
+    return word?.minutes === 20 && word?.minutesCount === 3;
+  }, SYNC_TIMEOUT_MS, 'на B — слово словаря правок, выученное на A');
+  await openQuick(sessions.bob2.page);
+  await sessions.bob2.page.locator('#planner-quick-input').fill(`${learnedHead} завтра 13:00`);
+  await learnedChip(sessions.bob2.page).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await expectQuickTime(sessions.bob2.page, '13:00–13:20');
+  await closeQuick(sessions.bob2.page);
+  console.log('OK: длительность, выученная на первом устройстве, подставлена на втором');
+  // Сброс на B: словарь очищен на обоих устройствах
+  await planner2b.getByRole('button', { name: 'Planner settings' }).click();
+  await planner2b.locator('[data-quick-learned-reset]').click();
+  await planner2b.getByText('Learned defaults reset').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner2b.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
+  await closePlanner(sessions.bob2.page);
+  await waitFor(async () => !(await learnedWordOf(sessions.bob1.page, learnedHead)), SYNC_TIMEOUT_MS, 'на A — словарь правок сброшен с B');
+  await openQuick(sessions.bob1.page);
+  await sessions.bob1.page.locator('#planner-quick-input').fill(`${learnedHead} завтра 13:00`);
+  await expectQuickTime(sessions.bob1.page, '13:00–14:00');
+  assert.equal(await learnedChip(sessions.bob1.page).count(), 0, 'после сброса на B выученного на A нет');
+  await closeQuick(sessions.bob1.page);
+  await closePlanner(sessions.bob1.page);
+  console.log('OK: сброс выученного на втором устройстве очистил словарь первого');
+
   // ── FR-006: очередь переживает перезагрузку ───────────────────────────────
   await bob2Context.setOffline(true);
   await createTask(sessions.bob2.page, taskE, '14:00');
@@ -371,7 +462,7 @@ try {
   console.log(`OK: третье устройство стартовало со снимка, данные за ${firstDataMs} мс`);
 
   // ── SC-003: сервер хранит только шифртекст ────────────────────────────────
-  const check = plaintextLeaks([taskA, taskB, taskC, taskD, taskE, legacyTask, `сид1-${suffix} 7`]);
+  const check = plaintextLeaks([taskA, taskB, taskC, taskD, taskE, legacyTask, `сид1-${suffix} 7`, learnedHead]);
   assert.ok(check.ops >= 5, `в журнале контейнеров мало операций: ${check.ops}`);
   assert.deepEqual(check.leaks, [], `названия в базе открытым текстом: ${check.leaks}`);
   console.log(`OK: в базе шарда domains ${check.ops} операций, названий открытым текстом нет`);

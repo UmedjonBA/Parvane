@@ -13,19 +13,20 @@
 //!   nutrition:[{day,entries:[{id,name,meal,kcal,protein|null,fat|null,carbs|null,fiber|null,grams|null,per100}],
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
 //!   goalPeriods:[{id,startDay,endDay,kcal|null,protein|null,fat|null,carbs|null,fiber|null,water|null}],
-//!   health:[{id,day,kind,time,endTime,value,value2,name,details}]}` (spec 020; у записи питания ещё
-//! `sugar|null,salt|null,time`),
+//!   health:[{id,day,kind,time,endTime,value,value2,name,details}],
+//!   learned:[{id,kind,kindCount,minutes|null,minutesCount,touched}]}` (spec 020; у записи питания ещё
+//! `sugar|null,salt|null,time`; `learned` — словарь правок ввода текстом, не более 200 самых свежих слов),
 //! где `repeat = {kind:"daily|weekly|monthly|yearly",interval,weekdays,monthDay,startDay,endDay,count}`,
 //! `origin = {seriesId,day}`, `source = {chat,opId}` (spec 011).
 //! Изменения: `{changes:[{task:{…}}|{event:{…}}|{list:{…}}|{nutritionDay:{…}}|{settings:{…}}|{goals:{…}}|
-//! {goalPeriod:{…}}|{migration:{…}}]}`; `occurrences` в правке — только изменённые дни.
+//! {goalPeriod:{…}}|{health:{…}}|{learned:{…}}|{migration:{…}}]}`; `occurrences` в правке — только изменённые дни.
 
 use serde_json::{json, Map, Value};
 
 use super::planner::PlannerState;
 use crate::error::{ProtoError, Result};
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, List, Migration, NutritionDay, Occurrence, Origin,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, Migration, NutritionDay, Occurrence, Origin,
     PlannerOp, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
 };
 
@@ -190,10 +191,22 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
             })
         })
         .collect();
+    let count = |c: &Option<U32>| c.as_ref().map(|c| c.value).unwrap_or(0);
+    let learned: Vec<Value> = state
+        .learned_live()
+        .into_iter()
+        .map(|w| {
+            json!({
+                "id": w.id, "kind": sv(&w.kind), "kindCount": count(&w.kind_count),
+                "minutes": w.minutes.as_ref().filter(|m| !m.unset).map(|m| json!(m.value)).unwrap_or(Value::Null),
+                "minutesCount": count(&w.minutes_count), "touched": count(&w.touched),
+            })
+        })
+        .collect();
     json!({
         "tasks": tasks, "events": events, "lists": lists, "nutrition": nutrition,
         "settings": settings.unwrap_or(Value::Null), "goals": state.goals.as_ref().map(goals_json).unwrap_or(Value::Null),
-        "goalPeriods": goal_periods, "health": health,
+        "goalPeriods": goal_periods, "health": health, "learned": learned,
         "headSeq": head_seq, "sizeBytes": state.size_estimate(),
     })
     .to_string()
@@ -519,6 +532,20 @@ fn health_of(o: &Map<String, Value>) -> Result<HealthRecord> {
     })
 }
 
+/// Слово словаря правок: присутствующее поле — правка регистра; `minutes: null` — длительность не
+/// выучена, `kind: null` либо пустая строка — тип не выучен.
+fn learned_of(o: &Map<String, Value>) -> Result<LearnedWord> {
+    Ok(LearnedWord {
+        id: id_of(o)?,
+        kind: str_field(o, "kind")?,
+        kind_count: u32_field(o, "kindCount")?,
+        minutes: u32_field(o, "minutes")?,
+        minutes_count: u32_field(o, "minutesCount")?,
+        touched: u32_field(o, "touched")?,
+        deleted: deleted_of(o),
+    })
+}
+
 fn day_of(o: &Map<String, Value>) -> Result<NutritionDay> {
     let day = o.get("day").and_then(Value::as_str).ok_or(ProtoError::InvalidField("day"))?.to_string();
     let entries = match o.get("entries") {
@@ -568,6 +595,7 @@ pub fn op_from_json(text: &str) -> Result<PlannerOp> {
             "goals" => change::Change::Goals(goals_of(body)?),
             "goalPeriod" => change::Change::GoalPeriod(goal_period_of(obj()?)?),
             "health" => change::Change::Health(health_of(obj()?)?),
+            "learned" => change::Change::Learned(learned_of(obj()?)?),
             "migration" => change::Change::Migration(Migration {
                 source_device: body.get("sourceDevice").and_then(Value::as_str).unwrap_or_default().to_string(),
                 count: body.get("count").and_then(Value::as_u64).unwrap_or(0) as u32,
@@ -709,6 +737,60 @@ mod tests {
             planner::stamp_op(&mut op, &Stamp::new(9, "d1"));
             assert_eq!(PlannerState::default().apply_op(&op, "d1").unwrap(), 0, "{bad}");
         }
+    }
+
+    /// Словарь правок ввода текстом: слова проходят через состояние, правка несёт только присланные
+    /// регистры, `null` у длительности — «не выучена», надгробие убирает слово из вывода.
+    #[test]
+    fn learned_words_roundtrip() {
+        let text = r#"{"changes":[
+          {"learned":{"id":"пара","kind":"event","kindCount":1,"minutes":105,"minutesCount":3,"touched":1}},
+          {"learned":{"id":"созвон","kind":"","kindCount":0,"minutes":20,"minutesCount":2,"touched":2}},
+          {"task":{"id":"t1","name":"Задача"}}
+        ]}"#;
+        let mut op = op_from_json(text).unwrap();
+        planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
+        let mut st = PlannerState::default();
+        assert_eq!(st.apply_op(&op, "d1").unwrap(), 3);
+        let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
+        assert_eq!(
+            out["learned"],
+            json!([
+                {"id": "пара", "kind": "event", "kindCount": 1, "minutes": 105, "minutesCount": 3, "touched": 1},
+                {"id": "созвон", "kind": "", "kindCount": 0, "minutes": 20, "minutesCount": 2, "touched": 2},
+            ])
+        );
+
+        // Другое устройство правит только длительность: тип остаётся; `null` снимает длительность.
+        let mut edit = op_from_json(r#"{"changes":[{"learned":{"id":"пара","minutes":null,"minutesCount":0,"touched":3}}]}"#).unwrap();
+        planner::stamp_op(&mut edit, &Stamp::new(2, "d2"));
+        st.apply_op(&edit, "d2").unwrap();
+        let out: Value = serde_json::from_str(&state_json(&st, 2)).unwrap();
+        assert_eq!(out["learned"][0], json!({"id": "пара", "kind": "event", "kindCount": 1, "minutes": null, "minutesCount": 0, "touched": 3}));
+
+        // Надгробие и снимок.
+        let mut del = op_from_json(r#"{"changes":[{"learned":{"id":"созвон","deleted":true}}]}"#).unwrap();
+        planner::stamp_op(&mut del, &Stamp::new(3, "d1"));
+        st.apply_op(&del, "d1").unwrap();
+        let restored = PlannerState::from_snapshot(&st.to_snapshot()).unwrap();
+        let out: Value = serde_json::from_str(&state_json(&restored, 3)).unwrap();
+        assert_eq!(out["learned"].as_array().unwrap().len(), 1);
+        assert_eq!(out["learned"][0]["id"], json!("пара"));
+
+        // Негодные слова пропускаются; пустое состояние отдаёт пустой словарь.
+        for bad in [
+            r#"{"changes":[{"learned":{"id":"x","kind":"food","kindCount":1}}]}"#,
+            r#"{"changes":[{"learned":{"id":"x","minutes":2,"minutesCount":1}}]}"#,
+            r#"{"changes":[{"learned":{"id":"x","kind":"task","kindCount":9}}]}"#,
+            r#"{"changes":[{"learned":{"id":"X","kind":"task","kindCount":1}}]}"#,
+        ] {
+            let mut op = op_from_json(bad).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(9, "d1"));
+            assert_eq!(PlannerState::default().apply_op(&op, "d1").unwrap(), 0, "{bad}");
+        }
+        let empty: Value = serde_json::from_str(&state_json(&PlannerState::default(), 0)).unwrap();
+        assert_eq!(empty["learned"], json!([]));
+        assert!(op_from_json(r#"{"changes":[{"learned":{"kind":"task"}}]}"#).is_err());
     }
 
     #[test]

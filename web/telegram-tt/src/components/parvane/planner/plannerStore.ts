@@ -2,6 +2,9 @@ import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import { createEmptyPlannerState, normalizePlannerState, type PlannerState } from './plannerModel';
 import {
+  hasLearned, learnStoreFromWords, learnStoreToWords, mergeLearnStores, readLearned, resetLearned,
+} from './plannerQuickLearn';
+import {
   diffChanges, type EngineState, fromEngineState, isLegacyPlannerRecord, legacyToChanges, type PlannerChange,
 } from './plannerSync';
 
@@ -40,6 +43,8 @@ let loadedUserId: string | undefined;
 let stateBeforeLastChange: PlannerState | undefined;
 let isListening = false;
 let isMigrating = false;
+// Запись словаря правок на устройстве проверяется один раз за загрузку, когда «План» готов
+let isLearnedMigrated = false;
 // Пока устройство не привязано, стек планировщика не запускается — опрашиваем до готовности
 let linkingTimer: number | undefined;
 const LINKING_POLL_MS = 3000;
@@ -78,6 +83,8 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
     // Контейнера ещё нет (создастся первой правкой) — пустой планировщик
     setIsPlannerLoaded(true);
   }
+  // Словарь на экране — весь словарь из «Плана» (нет непревращённых правок): можно вливать запись устройства
+  if (result.status === 'ready' && !result.hasPending) migrateLearned();
   if (result.status === 'needs-linking' && linkingTimer === undefined && typeof window !== 'undefined') {
     linkingTimer = window.setInterval(() => {
       void refreshFromEngine().then((next) => {
@@ -110,6 +117,29 @@ async function migrateLegacy(result: StateResult) {
   } finally {
     isMigrating = false;
   }
+}
+
+/** Словарь правок ввода текстом пишется в данные «Плана»: «План» загружен и не ждёт привязки либо ключа. */
+export function canSyncLearned() {
+  const status = getPlannerStatus();
+  return getIsPlannerLoaded() && (status === 'ready' || status === 'offline');
+}
+
+// Словарь правок, накопленный на устройстве (до синхронизации либо пока «План» был недоступен),
+// вливается в данные «Плана» и стирается с устройства. Без уведомления и без «Отменить»
+function migrateLearned() {
+  if (isLearnedMigrated || !canSyncLearned()) return;
+  isLearnedMigrated = true;
+  const local = readLearned(loadedUserId);
+  if (!hasLearned(local)) return;
+  const previous = getPlannerState();
+  const draft = structuredClone(previous);
+  draft.learned = learnStoreToWords(mergeLearnStores(learnStoreFromWords(previous.learned), local));
+  // «Отменить» прежней правки вернуло бы и состояние без словаря
+  stateBeforeLastChange = undefined;
+  setPlannerState(draft);
+  sendChanges(diffChanges(previous, draft));
+  resetLearned(loadedUserId);
 }
 
 function hashCode(text: string) {
@@ -195,6 +225,7 @@ function resetPlanner() {
   linkingTimer = undefined;
   loadPromise = undefined;
   stateBeforeLastChange = undefined;
+  isLearnedMigrated = false;
   setIsPlannerLoaded(false);
   setPlannerStatus('loading');
   publishNotice(undefined);

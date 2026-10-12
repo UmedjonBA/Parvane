@@ -8,7 +8,7 @@ import {
   toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
 import { resetLearned } from './plannerQuickLearn';
-import { showPlannerNotice, updatePlanner } from './plannerStore';
+import { canSyncLearned, showPlannerNotice, updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -19,7 +19,7 @@ import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
-  // Аккаунт: словарь правок ввода текстом хранится на устройстве отдельно для каждого
+  // Аккаунт: запись словаря правок ввода текстом на устройстве (пока «План» недоступен) — у каждого своя
   userId?: string;
 };
 
@@ -78,9 +78,16 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
     }, lang('PlannerNoticeSettingsSaved'));
   });
 
+  // Словарь правок стирается в данных «Плана» (на всех устройствах) и в записи этого устройства
   const handleLearnedReset = useLastCallback(() => {
     resetLearned(userId);
-    showPlannerNotice(lang('PlannerNoticeLearnedReset'));
+    if (canSyncLearned() && state.learned.length) {
+      updatePlanner((draft) => {
+        draft.learned = [];
+      }, lang('PlannerNoticeLearnedReset'));
+    } else {
+      showPlannerNotice(lang('PlannerNoticeLearnedReset'));
+    }
   });
 
   return (

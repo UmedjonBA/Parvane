@@ -7,8 +7,9 @@ import type { LearnStore } from './plannerQuickLearn';
 
 import { parseQuickInput } from './plannerQuick';
 import {
-  createLearnStore, LEARN_MAX_COUNT, LEARN_MAX_HEADS, LEARN_THRESHOLD, learnedDefaults, parseLearned,
-  readLearned, recordCorrection, resetLearned, saveLearned, serializeLearned,
+  correctWords, createLearnStore, LEARN_MAX_COUNT, LEARN_MAX_HEADS, LEARN_THRESHOLD, learnedDefaults,
+  learnStoreFromWords, learnStoreToWords, mergeLearnStores, parseLearned, readLearned, recordCorrection, resetLearned,
+  saveLearned, serializeLearned,
 } from './plannerQuickLearn';
 
 const CTX: QuickContext = {
@@ -222,5 +223,121 @@ describe('словарь правок: хранение', () => {
     expect(readLearned('user-a')).toEqual(createLearnStore());
     expect(() => saveLearned('user-a', createLearnStore())).not.toThrow();
     expect(() => resetLearned('user-a')).not.toThrow();
+  });
+});
+
+describe('словарь правок: данные «Плана»', () => {
+  it('словарь переводится в слова «Плана» и обратно без потерь', () => {
+    let store = addTimes(createLearnStore(), LEARN_THRESHOLD, 'летучка завтра 10:00 20 мин');
+    store = addTimes(store, 2, 'др мамы 12 октября', { kind: 'event' });
+    const words = learnStoreToWords(store);
+    expect(words).toEqual([
+      {
+        id: 'др', kind: 'event', kindCount: 2, minutes: undefined, minutesCount: 0, touched: 5,
+      },
+      {
+        id: 'летучка', kind: undefined, kindCount: 0, minutes: 20, minutesCount: 3, touched: 3,
+      },
+    ]);
+    const back = learnStoreFromWords(words);
+    expect(back).toEqual(store);
+    expect(learnStoreToWords(back)).toEqual(words);
+    expect(learnedDefaults(back)).toEqual({ летучка: { kind: undefined, minutes: 20 } });
+  });
+
+  it('негодное движку в «План» не уходит, негодное из «Плана» пропускается', () => {
+    const long = 'я'.repeat(33);
+    const store = {
+      tick: 4,
+      heads: {
+        [long]: { kind: { value: 'event' as const, count: 3 }, at: 1 },
+        миг: { minutes: { value: 2, count: 3 }, at: 2 },
+        зал: { kind: { value: 'event' as const, count: 1 }, minutes: { value: 3, count: 2 }, at: 3 },
+        урок: { minutes: { value: 45, count: 3 }, at: 4 },
+      },
+    };
+    // Слово длиннее 64 байт и длительность короче пяти минут движок отверг бы
+    expect(learnStoreToWords(store).map(({ id, minutes }) => [id, minutes]))
+      .toEqual([['зал', undefined], ['урок', 45]]);
+    expect(learnStoreFromWords([
+      {
+        id: 'пусто', kindCount: 0, minutesCount: 0, touched: 9,
+      },
+      {
+        id: 'пара', minutes: 105, minutesCount: 9, kindCount: 0, touched: 2,
+      },
+    ])).toEqual({
+      tick: 2, heads: { пара: { kind: undefined, minutes: { value: 105, count: LEARN_MAX_COUNT }, at: 2 } },
+    });
+  });
+
+  it('запись устройства вливается без двойного счёта: остаётся правка с большим счётчиком', () => {
+    const synced = learnStoreFromWords([
+      {
+        id: 'пара', kind: 'event', kindCount: 2, minutes: 90, minutesCount: 4, touched: 7,
+      },
+      {
+        id: 'созвон', minutes: 20, minutesCount: 1, kindCount: 0, touched: 3,
+      },
+    ]);
+    const local = {
+      tick: 12,
+      heads: {
+        // Тот же тип с большим счётчиком, другая длительность с меньшим
+        пара: { kind: { value: 'event' as const, count: 3 }, minutes: { value: 60, count: 2 }, at: 12 },
+        // Равные счётчики — остаётся значение из «Плана»
+        созвон: { minutes: { value: 30, count: 1 }, at: 4 },
+        зал: { kind: { value: 'event' as const, count: 3 }, at: 9 },
+        летучка: { minutes: { value: 20, count: 3 }, at: 5 },
+      },
+    };
+    const merged = mergeLearnStores(synced, local);
+    expect(merged.heads['пара']).toEqual({
+      kind: { value: 'event', count: 3 }, minutes: { value: 90, count: 4 }, at: 7,
+    });
+    expect(merged.heads['созвон']).toBe(synced.heads['созвон']);
+    // Слова только с устройства — самые свежие, в прежнем порядке
+    expect(merged.heads['летучка'].at).toBe(8);
+    expect(merged.heads['зал'].at).toBe(9);
+    expect(merged.tick).toBe(9);
+    // Повторное вливание ничего не меняет; пустая запись устройства — тот же объект
+    expect(mergeLearnStores(merged, local).heads).toEqual(merged.heads);
+    expect(mergeLearnStores(synced, createLearnStore())).toBe(synced);
+  });
+
+  it('правка добавленной записи: писать нечего — undefined, иначе новый список слов', () => {
+    const none = createLearnStore();
+    const draft = (text: string, words = learnStoreToWords(none), user?: Partial<QuickContext>) => {
+      const learned = learnedDefaults(learnStoreFromWords(words));
+      return [parseQuickInput(text, CTX), parseQuickInput(text, { ...CTX, learned, ...user })] as const;
+    };
+    expect(correctWords([], none, ...draft('летучка завтра 11:00'))).toBeUndefined();
+    const first = correctWords([], none, ...draft('летучка завтра 10:00 20 мин'))!;
+    expect(first).toEqual([{
+      id: 'летучка', kind: undefined, kindCount: 0, minutes: 20, minutesCount: 1, touched: 1,
+    }]);
+    const second = correctWords(first, none, ...draft('летучка завтра 10:00 20 мин', first))!;
+    expect(second[0]).toMatchObject({ minutesCount: 2, touched: 2 });
+    // Ещё не перенесённая запись устройства уходит той же правкой, даже если сама запись — не правка
+    const local = addTimes(none, LEARN_THRESHOLD, 'др мамы 12 октября', { kind: 'event' });
+    const withLocal = correctWords(second, local, ...draft('купить хлеб', second))!;
+    expect(withLocal.map(({ id }) => id)).toEqual(['др', 'летучка']);
+    expect(withLocal[0]).toMatchObject({ kind: 'event', kindCount: 3, touched: 3 });
+  });
+
+  it('потолок слов действует до записи: вытесненные слова из списка уходят', () => {
+    const full = Array.from({ length: LEARN_MAX_HEADS }, (_, index) => ({
+      id: `слово${String.fromCharCode(1072 + (index % 26))}${String.fromCharCode(1072 + Math.floor(index / 26))}`,
+      minutes: 20,
+      minutesCount: 1,
+      kindCount: 0,
+      touched: index + 1,
+    }));
+    const oldest = full[0].id;
+    const text = 'летучка завтра 10:00 20 мин';
+    const next = correctWords(full, createLearnStore(), parseQuickInput(text, CTX), parseQuickInput(text, CTX))!;
+    expect(next).toHaveLength(LEARN_MAX_HEADS);
+    expect(next.some(({ id }) => id === oldest)).toBe(false);
+    expect(next.find(({ id }) => id === 'летучка')).toMatchObject({ touched: LEARN_MAX_HEADS + 1 });
   });
 });
