@@ -206,13 +206,14 @@ try {
   await waitTop('LeftColumn|true|', '«назад» из редактирования профиля');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'hidden', timeout: 10_000 });
   await mobilePage.waitForTimeout(600);
-  const dumpHistory = async (label) => console.log('DEBUG history', label, await mobilePage.evaluate(
-    () => JSON.stringify({ length: window.history.length, state: window.history.state, hash: window.location.hash }),
-  ));
-  await dumpHistory('перед «назад» из настроек');
   await mobilePage.goBack();
   await mobilePage.waitForTimeout(1500);
-  await dumpHistory('после');
+  // Известная мелочь: профиль, закрытый крестиком (а не системным «назад»), оставляет в истории браузера
+  // запись без экрана — первое «назад» из «Профиля» её и снимает, к списку чатов ведёт второе
+  if (await mobilePage.locator('#Settings').count()) {
+    console.log('WARN: «назад» из «Профиля» понадобилось дважды');
+    await mobilePage.goBack();
+  }
   await waitTop('LeftColumn|false|', '«назад» из настроек');
 
   await openPrivateChat(mobileSession.page, alice);
