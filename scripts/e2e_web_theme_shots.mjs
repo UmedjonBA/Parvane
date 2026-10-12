@@ -53,7 +53,7 @@ try {
       await sidebar.getByRole('tab', { name: 'Health' }).click();
       await shot('health');
       // «Знания»: заметка и файлы
-      await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+      await sidebar.getByRole('tab', { name: 'Cloud' }).click();
       await page.locator('#ParvaneCloud').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await shot('files');
       await page.locator('#ParvaneCloud header').getByText('Notes', { exact: true }).first().click();

@@ -43,7 +43,7 @@ export function translateWithYou<K extends LangKey>(
   },
 ): TeactNode {
   const { pluralValue, asText, withMarkdown, renderTextFilters } = options || {};
-  const translationKey = isYou ? (`${key}You` as LangKey) : key;
+  const translationKey: string = isYou ? `${key as string}You` : key;
 
   return lang(
     // @ts-ignore -- I have no idea if this even possible to type correctly

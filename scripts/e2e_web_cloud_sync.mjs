@@ -33,7 +33,7 @@ function driver(page) {
     item,
     open: async () => {
       if (!(await cloud.isVisible().catch(() => false))) {
-        await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+        await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Cloud' }).click();
       }
       await cloud.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     },

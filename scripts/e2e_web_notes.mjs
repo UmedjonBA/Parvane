@@ -42,9 +42,9 @@ try {
   };
 
   // ── «Знания» в боковой панели; «Файлы» — вкладка, рядом заметки, граф и холст ──
-  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
+  await sidebar.getByRole('tab', { name: 'Cloud' }).click();
   await visible(cloud, 'вкладка «Файлы»');
-  await openTab('Notes');
+  await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
   await visible(knowledge, 'раздел заметок');
   await visible(knowledge.getByText('No notes yet'), 'пустое состояние');
   console.log('OK: «Знания» открыты, «Файлы» — одна из вкладок');
