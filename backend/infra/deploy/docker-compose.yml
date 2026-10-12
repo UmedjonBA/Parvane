@@ -126,6 +126,13 @@ services:
       # пределы шарда (4 ГиБ / 512 МиБ).
       PARVANE_CLOUD_DRIVE_QUOTA_BYTES: ${PARVANE_CLOUD_DRIVE_QUOTA_BYTES:-10737418240}
       PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES: ${PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES:-2306867200}
+      # Ссылки облака для людей без аккаунта (spec 022): выключатель создания
+      # (0 — новых ссылок нет, прежние живут до срока либо отзыва), файлов в
+      # одной ссылке, ссылок на аккаунт, дней на продление истёкшей ссылки.
+      PARVANE_CLOUD_LINKS_ENABLED: ${PARVANE_CLOUD_LINKS_ENABLED:-1}
+      PARVANE_CLOUD_LINK_MAX_FILES: ${PARVANE_CLOUD_LINK_MAX_FILES:-500}
+      PARVANE_CLOUD_LINKS_PER_OWNER: ${PARVANE_CLOUD_LINKS_PER_OWNER:-100}
+      PARVANE_CLOUD_LINK_GRACE_DAYS: ${PARVANE_CLOUD_LINK_GRACE_DAYS:-30}
 
   call:
     <<: *shard-common

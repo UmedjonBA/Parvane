@@ -15,6 +15,10 @@
 //! чанк файла (index — номер чанка в файле) до `last = true`. Сбой посреди
 //! потока — последний кадр `ShardStreamChunk{last: true, error}`.
 //!
+//! Ссылки облака для людей без аккаунта (spec 022, `cloud.link.*`) — в
+//! подмодуле `links`: копии ссылок лежат в тех же таблицах блобов, но методам
+//! `cloud.blob.*` не видны (`links::is_link_blob`).
+//!
 //! Подписчик на каждый метод роли `cloud` — ровно один (`run`), поэтому
 //! `parvane_v2rt::serve` (он отвечает только одним сообщением) здесь не
 //! используется; кодирование ответов и разбор тела — из `parvane_v2rt`.
@@ -33,7 +37,9 @@ use parvane_protocol::pb::parvane::cloud::v1::{
     UploadCompleteRequest, UploadStatusRequest, UploadStatusResponse, UsageRequest, UsageResponse,
     UploadCompleteResponse, Visibility,
 };
-use parvane_protocol::pb::parvane::core::v2::{Error, ErrorCode, MethodKind, ShardRequest, ShardStreamChunk};
+use parvane_protocol::pb::parvane::core::v2::{
+    shard_response, Error, ErrorCode, MethodKind, ShardRequest, ShardResponse, ShardStreamChunk,
+};
 use parvane_protocol::schema::MethodInfo;
 use parvane_v2rt::{body, error_reply, ok_reply};
 use prost::Message;
@@ -42,8 +48,10 @@ use sqlx::SqlitePool;
 use subtle::ConstantTimeEq;
 use tracing::{debug, error, info, warn};
 
+pub(crate) mod links;
+
 use super::{
-    delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency,
+    delete_blob_any, delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency,
     max_chunk_bytes, max_download_chunks, max_file_bytes, max_total_chunks, now_unix,
     owner_quota_bytes, release_free_pages, store_chunk_raw, used_bytes, FileMeta, Finalize, RejectKind,
     Rejected, BUCKETS, BUCKET_DRIVE, BUCKET_MEDIA,
@@ -63,8 +71,34 @@ const V2_MIME: &str = "application/octet-stream";
 pub(crate) struct V2Ctx {
     /// Основная (v1) БД: блобы, загрузки, гранты.
     pub pool: SqlitePool,
-    /// `<PARVANE_DB_PATH>-v2.db`: хэши capability.
+    /// `<PARVANE_DB_PATH>-v2.db`: хэши capability, ссылки облака.
     pub pool_v2: SqlitePool,
+    /// Состояние ссылок в памяти: частота по ссылке, потоки скачивания.
+    pub links: links::Runtime,
+}
+
+impl V2Ctx {
+    pub(crate) fn new(pool: SqlitePool, pool_v2: SqlitePool) -> Self {
+        V2Ctx { pool, pool_v2, links: links::Runtime::new() }
+    }
+}
+
+/// Отказ обработчика: код и, для отказов по частоте, через сколько повторить.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub code: ErrorCode,
+    pub retry_after_ms: u32,
+}
+
+impl From<ErrorCode> for Refusal {
+    fn from(code: ErrorCode) -> Self {
+        Refusal { code, retry_after_ms: 0 }
+    }
+}
+
+fn refusal_reply(r: Refusal) -> Vec<u8> {
+    ShardResponse { result: Some(shard_response::Result::Error(Error { code: r.code as i32, retry_after_ms: r.retry_after_ms })) }
+        .encode_to_vec()
 }
 
 /// Путь v2-БД рядом с основной.
@@ -118,16 +152,29 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                     }
                 };
                 if m.kind == MethodKind::Stream as i32 {
+                    // Анонимные скачивания по ссылкам — не больше своего числа
+                    // потоков разом, иначе они заняли бы все обработчики шарда.
+                    let _link_stream = if m.name == links::DOWNLOAD {
+                        match ctx.links.stream_slot() {
+                            Ok(slot) => Some(slot),
+                            Err(r) => {
+                                emit(refusal_reply(r)).await;
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     match plan(&ctx, m, &req).await {
                         Ok(p) => stream_blob(&ctx.pool, &p, emit).await,
-                        Err(code) => {
-                            emit(error_reply(code)).await;
+                        Err(r) => {
+                            emit(refusal_reply(r)).await;
                         }
                     }
                 } else {
                     let out = match call(&ctx, m, &req).await {
                         Ok(b) => ok_reply(b),
-                        Err(code) => error_reply(code),
+                        Err(r) => refusal_reply(r),
                     };
                     emit(out).await;
                 }
@@ -138,23 +185,32 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     Ok(())
 }
 
-async fn call(ctx: &V2Ctx, m: &'static MethodInfo, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
-    match m.name {
+async fn call(ctx: &V2Ctx, m: &'static MethodInfo, req: &ShardRequest) -> Result<Vec<u8>, Refusal> {
+    let out = match m.name {
         "cloud.blob.upload_chunk" => upload_chunk(ctx, req).await,
         "cloud.blob.upload_complete" => upload_complete(ctx, req).await,
         "cloud.blob.delete" => delete(ctx, req).await,
         "cloud.blob.usage" => usage(ctx, req).await,
         "cloud.blob.upload_status" => upload_status(ctx, req).await,
         "cloud.blob.copy" => copy(ctx, req).await,
+        "cloud.link.create" => links::create(ctx, req).await,
+        "cloud.link.add" => links::add(ctx, req).await,
+        "cloud.link.publish" => links::publish(ctx, req).await,
+        "cloud.link.list" => links::list(ctx, req).await,
+        "cloud.link.revoke" => links::revoke(ctx, req).await,
+        "cloud.link.extend" => links::extend(ctx, req).await,
+        "cloud.link.get" => return links::get(ctx, req).await,
         _ => Err(ErrorCode::Unavailable),
-    }
+    };
+    out.map_err(Refusal::from)
 }
 
-async fn plan(ctx: &V2Ctx, m: &'static MethodInfo, req: &ShardRequest) -> Result<Plan, ErrorCode> {
+async fn plan(ctx: &V2Ctx, m: &'static MethodInfo, req: &ShardRequest) -> Result<Plan, Refusal> {
     match m.name {
-        "cloud.blob.download" => plan_download(ctx, req).await,
-        "cloud.blob.download_cap" => plan_download_cap(ctx, req).await,
-        _ => Err(ErrorCode::Unavailable),
+        "cloud.blob.download" => plan_download(ctx, req).await.map_err(Refusal::from),
+        "cloud.blob.download_cap" => plan_download_cap(ctx, req).await.map_err(Refusal::from),
+        links::DOWNLOAD => links::plan_download(ctx, req).await,
+        _ => Err(ErrorCode::Unavailable.into()),
     }
 }
 
@@ -193,7 +249,7 @@ fn store_code(what: &str, e: anyhow::Error) -> ErrorCode {
     }
 }
 
-fn db_code(what: &str) -> impl FnOnce(sqlx::Error) -> ErrorCode + '_ {
+fn db_code(what: &'static str) -> impl FnOnce(sqlx::Error) -> ErrorCode {
     move |e| {
         error!("v2 {what}: {e}");
         ErrorCode::Unavailable
@@ -318,6 +374,11 @@ async fn delete(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
     let owner = owner(req)?;
     let r: DeleteRequest = body(req)?;
     let file_id = parse_id(&r.file_id)?;
+    // Копия ссылки живёт и умирает вместе со ссылкой (`cloud.link.revoke`):
+    // удалённая отдельно, она оставила бы ссылку с битым списком.
+    if links::is_link_blob(&ctx.pool_v2, &file_id).await.map_err(db_code("delete"))? {
+        return Err(ErrorCode::NotFound);
+    }
     // Удаляет только владелец; чужой и несуществующий — одинаково NOT_FOUND.
     match delete_file(&ctx.pool, owner, &file_id).await {
         Ok(true) => {}
@@ -360,7 +421,8 @@ async fn usage(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
             max_file: max_file_bytes(bucket).max(0) as u64,
         });
     }
-    Ok(UsageResponse { buckets }.encode_to_vec())
+    let links_bytes = links::owner_bytes(&ctx.pool_v2, owner).await.map_err(db_code("usage"))?;
+    Ok(UsageResponse { buckets, links_bytes }.encode_to_vec())
 }
 
 async fn upload_status(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
@@ -426,67 +488,86 @@ async fn copy(ctx: &V2Ctx, req: &ShardRequest) -> Result<Vec<u8>, ErrorCode> {
     if r.capability_hash.len() != CAP_LEN {
         return Err(ErrorCode::Invalid);
     }
-    let meta = if r.capability.is_empty() {
-        let own: Option<(i64, i64)> =
-            sqlx::query_as("SELECT size_bytes, total_chunks FROM files WHERE id = ? AND owner = ?")
-                .bind(&source)
-                .bind(owner)
-                .fetch_optional(&ctx.pool)
-                .await
-                .map_err(db_code("copy"))?;
-        own.ok_or(ErrorCode::NotFound)?
-    } else {
-        if r.capability.len() != CAP_LEN {
-            return Err(ErrorCode::Invalid);
-        }
-        if !cap_matches(&ctx.pool_v2, &source, &r.capability).await.map_err(db_code("copy"))? {
-            return Err(ErrorCode::NotFound);
-        }
-        let m = file_meta_any(&ctx.pool, &source).await.map_err(|e| store_code("copy", e))?.ok_or(ErrorCode::NotFound)?;
-        (m.size_bytes, m.total_chunks)
-    };
-    let (size, total) = meta;
-    if size > max_file_bytes(bucket) {
-        return Err(ErrorCode::Limit);
-    }
-    let quota = owner_quota_bytes(bucket);
-    let file_id = uuid::Uuid::now_v7().to_string();
-    {
-        let mut tx = ctx.pool.begin().await.map_err(db_code("copy"))?;
-        if quota > 0 && used_bytes(&mut *tx, owner, bucket).await.map_err(db_code("copy"))? + size > quota {
-            return Err(ErrorCode::Limit);
-        }
-        sqlx::query(
-            "INSERT INTO uploads (file_id, owner, total_chunks, created_at, bucket, bytes, chunks, updated_at)
-             VALUES (?, ?, 0, ?, ?, ?, ?, ?)",
-        )
-        .bind(&file_id)
-        .bind(owner)
-        .bind(now_unix())
-        .bind(bucket)
-        .bind(size)
-        .bind(total)
-        .bind(now_unix())
-        .execute(&mut *tx)
-        .await
-        .map_err(db_code("copy"))?;
-        tx.commit().await.map_err(db_code("copy"))?;
-    }
-    let done = copy_chunks(ctx, owner, &source, &file_id, size, total, &r.capability_hash).await;
-    if let Err(code) = done {
+    let (size, total) = copy_source(ctx, "copy", owner, &source, &r.capability).await?;
+    let file_id = begin_copy(ctx, "copy", owner, bucket, size, total).await?;
+    if let Err(code) = copy_chunks(ctx, "copy", owner, &source, &file_id, size, total).await {
         // Источник удалили посреди копии либо сбой базы: недокопированное убираем.
-        for sql in ["DELETE FROM chunks WHERE file_id = ?", "DELETE FROM uploads WHERE file_id = ?"] {
-            if let Err(e) = sqlx::query(sql).bind(&file_id).execute(&ctx.pool).await {
-                error!("v2 copy: откат не удался: {e}");
-            }
-        }
+        abort_copy(ctx, "copy", &file_id).await;
         return Err(code);
+    }
+    if let Err(e) = put_cap(&ctx.pool_v2, &file_id, &r.capability_hash).await {
+        error!("v2 copy: capability не сохранена: {e}");
+        abort_copy(ctx, "copy", &file_id).await;
+        return Err(ErrorCode::Unavailable);
     }
     debug!("v2: файл {source} скопирован в {file_id} ({size} байт)");
     Ok(CopyResponse { file_id, size: size.max(0) as u64, chunks: u32::try_from(total).unwrap_or(0) }.encode_to_vec())
 }
 
-async fn copy_chunks(ctx: &V2Ctx, owner: &str, source: &str, file_id: &str, size: i64, total: i64, cap_hash: &[u8]) -> Result<(), ErrorCode> {
+/// Источник копии: свой файл либо любой файл, к которому предъявлен секрет.
+/// Возвращает (размер, число чанков). Копия ссылки источником не бывает.
+async fn copy_source(ctx: &V2Ctx, what: &'static str, owner: &str, source: &str, capability: &[u8]) -> Result<(i64, i64), ErrorCode> {
+    if links::is_link_blob(&ctx.pool_v2, source).await.map_err(db_code(what))? {
+        return Err(ErrorCode::NotFound);
+    }
+    if capability.is_empty() {
+        let own: Option<(i64, i64)> = sqlx::query_as("SELECT size_bytes, total_chunks FROM files WHERE id = ? AND owner = ?")
+            .bind(source)
+            .bind(owner)
+            .fetch_optional(&ctx.pool)
+            .await
+            .map_err(db_code(what))?;
+        return own.ok_or(ErrorCode::NotFound);
+    }
+    if capability.len() != CAP_LEN {
+        return Err(ErrorCode::Invalid);
+    }
+    if !cap_matches(&ctx.pool_v2, source, capability).await.map_err(db_code(what))? {
+        return Err(ErrorCode::NotFound);
+    }
+    let m = file_meta_any(&ctx.pool, source).await.map_err(|e| store_code(what, e))?.ok_or(ErrorCode::NotFound)?;
+    Ok((m.size_bytes, m.total_chunks))
+}
+
+/// Завести копию как незавершённую загрузку владельца: предел файла и квота
+/// bucket'а проверяются в одной транзакции с записью, место занято сразу.
+async fn begin_copy(ctx: &V2Ctx, what: &'static str, owner: &str, bucket: i64, size: i64, total: i64) -> Result<String, ErrorCode> {
+    if size > max_file_bytes(bucket) {
+        return Err(ErrorCode::Limit);
+    }
+    let quota = owner_quota_bytes(bucket);
+    let file_id = uuid::Uuid::now_v7().to_string();
+    let mut tx = ctx.pool.begin().await.map_err(db_code(what))?;
+    if quota > 0 && used_bytes(&mut *tx, owner, bucket).await.map_err(db_code(what))? + size > quota {
+        return Err(ErrorCode::Limit);
+    }
+    sqlx::query(
+        "INSERT INTO uploads (file_id, owner, total_chunks, created_at, bucket, bytes, chunks, updated_at)
+         VALUES (?, ?, 0, ?, ?, ?, ?, ?)",
+    )
+    .bind(&file_id)
+    .bind(owner)
+    .bind(now_unix())
+    .bind(bucket)
+    .bind(size)
+    .bind(total)
+    .bind(now_unix())
+    .execute(&mut *tx)
+    .await
+    .map_err(db_code(what))?;
+    tx.commit().await.map_err(db_code(what))?;
+    Ok(file_id)
+}
+
+/// Убрать копию целиком — и недокопированную, и уже завершённую.
+async fn abort_copy(ctx: &V2Ctx, what: &'static str, file_id: &str) {
+    if let Err(e) = delete_blob_any(&ctx.pool, file_id).await {
+        error!("v2 {what}: откат копии не удался: {e:#}");
+    }
+}
+
+/// Перенести чанки источника пакетами и завершить загрузку обычным путём.
+async fn copy_chunks(ctx: &V2Ctx, what: &'static str, owner: &str, source: &str, file_id: &str, size: i64, total: i64) -> Result<(), ErrorCode> {
     let mut from = 0;
     while from < total {
         sqlx::query(
@@ -499,7 +580,7 @@ async fn copy_chunks(ctx: &V2Ctx, owner: &str, source: &str, file_id: &str, size
         .bind(from + COPY_BATCH_CHUNKS)
         .execute(&ctx.pool)
         .await
-        .map_err(db_code("copy"))?;
+        .map_err(db_code(what))?;
         from += COPY_BATCH_CHUNKS;
     }
     finalize_upload(
@@ -517,15 +598,7 @@ async fn copy_chunks(ctx: &V2Ctx, owner: &str, source: &str, file_id: &str, size
         },
     )
     .await
-    .map_err(|e| store_code("copy", e))?;
-    if let Err(e) = put_cap(&ctx.pool_v2, file_id, cap_hash).await {
-        error!("v2 copy: capability не сохранена: {e}");
-        if let Err(e) = delete_file(&ctx.pool, owner, file_id).await {
-            error!("v2 copy: откат файла не удался: {e:#}");
-        }
-        return Err(ErrorCode::Unavailable);
-    }
-    Ok(())
+    .map_err(|e| store_code(what, e))
 }
 
 // ── cloud.blob.download / cloud.blob.download_cap (STREAM) ───────────────────
@@ -560,6 +633,10 @@ async fn plan_download(ctx: &V2Ctx, req: &ShardRequest) -> Result<Plan, ErrorCod
     let user = owner(req)?;
     let r: DownloadRequest = body(req)?;
     let file_id = parse_id(&r.file_id)?;
+    // Копия ссылки читается только через ссылку (срок и отзыв проверяются там).
+    if links::is_link_blob(&ctx.pool_v2, &file_id).await.map_err(db_code("download"))? {
+        return Err(ErrorCode::NotFound);
+    }
     // ACL v1: владелец, грант получателю или публичный объект.
     let meta = file_meta_for_user(&ctx.pool, &file_id, user)
         .await
@@ -582,6 +659,10 @@ async fn plan_download_cap(ctx: &V2Ctx, req: &ShardRequest) -> Result<Plan, Erro
         .map_err(db_code("download_cap"))?
     {
         // Нет файла и неверный секрет неразличимы.
+        return Err(ErrorCode::NotFound);
+    }
+    // У копии ссылки секрета нет; проверка — на случай посторонней строки blob_caps.
+    if links::is_link_blob(&ctx.pool_v2, &file_id).await.map_err(db_code("download_cap"))? {
         return Err(ErrorCode::NotFound);
     }
     let meta = file_meta_any(&ctx.pool, &file_id)
@@ -648,7 +729,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parvane_protocol::pb::parvane::core::v2::{shard_response, ShardResponse};
+    use parvane_protocol::pb::parvane::core::v2::MethodChannel;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::Mutex;
 
@@ -662,11 +743,11 @@ mod tests {
         pool
     }
 
-    async fn ctx() -> V2Ctx {
-        V2Ctx { pool: mem_pool(false).await, pool_v2: mem_pool(true).await }
+    pub(super) async fn ctx() -> V2Ctx {
+        V2Ctx::new(mem_pool(false).await, mem_pool(true).await)
     }
 
-    fn req(method: &str, user: &str, body: impl Message) -> ShardRequest {
+    pub(super) fn req(method: &str, user: &str, body: impl Message) -> ShardRequest {
         ShardRequest { method: method.into(), user: user.into(), body: body.encode_to_vec(), ..Default::default() }
     }
 
@@ -703,7 +784,7 @@ mod tests {
     }
 
     /// Загрузить файл из частей, вернуть file_id.
-    async fn upload(c: &V2Ctx, user: &str, parts: &[&[u8]], vis: Visibility, cap_hash: &[u8]) -> String {
+    pub(super) async fn upload(c: &V2Ctx, user: &str, parts: &[&[u8]], vis: Visibility, cap_hash: &[u8]) -> String {
         let id = up_chunk(c, user, "", 0, parts[0]).await.unwrap();
         for (i, p) in parts.iter().enumerate().skip(1) {
             assert_eq!(up_chunk(c, user, &id, i as u32, p).await.unwrap(), id);
@@ -713,7 +794,7 @@ mod tests {
     }
 
     /// Прогнать поток и собрать кадры: метаданные (или ошибка) + чанки.
-    async fn run_stream(c: &V2Ctx, method: &'static str, r: ShardRequest) -> (Result<Vec<u8>, i32>, Vec<ShardStreamChunk>) {
+    pub(super) async fn run_stream(c: &V2Ctx, method: &'static str, r: ShardRequest) -> (Result<Vec<u8>, i32>, Vec<ShardStreamChunk>) {
         let m = parvane_protocol::schema::method(method).unwrap();
         let out: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
         match plan(c, m, &r).await {
@@ -724,7 +805,7 @@ mod tests {
                 })
                 .await
             }
-            Err(code) => out.lock().unwrap().push(error_reply(code)),
+            Err(r) => out.lock().unwrap().push(refusal_reply(r)),
         }
         let frames = out.into_inner().unwrap();
         let head = match ShardResponse::decode(frames[0].as_slice()).unwrap().result.unwrap() {
@@ -735,11 +816,11 @@ mod tests {
         (head, chunks)
     }
 
-    fn dl(user: &str, file_id: &str, first: u32, count: u32) -> ShardRequest {
+    pub(super) fn dl(user: &str, file_id: &str, first: u32, count: u32) -> ShardRequest {
         req("cloud.blob.download", user, DownloadRequest { file_id: file_id.into(), first_chunk: first, chunk_count: count })
     }
 
-    fn dl_cap(file_id: &str, cap: &[u8], first: u32, count: u32) -> ShardRequest {
+    pub(super) fn dl_cap(file_id: &str, cap: &[u8], first: u32, count: u32) -> ShardRequest {
         req(
             "cloud.blob.download_cap",
             "",
@@ -759,13 +840,30 @@ mod tests {
             "cloud.blob.usage",
             "cloud.blob.upload_status",
             "cloud.blob.copy",
+            "cloud.link.create",
+            "cloud.link.add",
+            "cloud.link.publish",
+            "cloud.link.list",
+            "cloud.link.revoke",
+            "cloud.link.extend",
+            "cloud.link.get",
+            "cloud.link.download",
         ] {
             assert!(names.contains(&n), "{n} нет в реестре");
         }
         for m in parvane_v2rt::methods_of("cloud") {
             let stream = m.kind == MethodKind::Stream as i32;
-            assert_eq!(stream, matches!(m.name, "cloud.blob.download" | "cloud.blob.download_cap"), "{}", m.name);
+            assert_eq!(
+                stream,
+                matches!(m.name, "cloud.blob.download" | "cloud.blob.download_cap" | "cloud.link.download"),
+                "{}",
+                m.name
+            );
+            // Без личности — только чтение по секрету и чтение по ссылке.
+            let anon = m.channel == MethodChannel::Anon as i32;
+            assert_eq!(anon, matches!(m.name, "cloud.blob.download_cap" | "cloud.link.get" | "cloud.link.download"), "{}", m.name);
         }
+        assert_eq!(parvane_v2rt::methods_of("cloud").len(), 16);
         assert_eq!(db_path("/data/cloud.db"), "/data/cloud.db-v2.db");
     }
 
@@ -894,7 +992,7 @@ mod tests {
         assert_eq!(second.unwrap_err(), ErrorCode::Limit, "незавершённые чанки в квоте");
     }
 
-    async fn up_drive(c: &V2Ctx, user: &str, upload_id: &str, index: u32, data: &[u8]) -> Result<String, ErrorCode> {
+    pub(super) async fn up_drive(c: &V2Ctx, user: &str, upload_id: &str, index: u32, data: &[u8]) -> Result<String, ErrorCode> {
         let r = req(
             "cloud.blob.upload_chunk",
             user,
@@ -903,7 +1001,7 @@ mod tests {
         upload_chunk(c, &r).await.map(|b| UploadChunkResponse::decode(b.as_slice()).unwrap().upload_id)
     }
 
-    async fn usage_of(c: &V2Ctx, user: &str) -> Vec<(i32, u64, u64, u64)> {
+    pub(super) async fn usage_of(c: &V2Ctx, user: &str) -> Vec<(i32, u64, u64, u64)> {
         let b = usage(c, &req("cloud.blob.usage", user, UsageRequest {})).await.unwrap();
         UsageResponse::decode(b.as_slice()).unwrap().buckets.iter().map(|u| (u.bucket, u.used, u.quota, u.max_file)).collect()
     }
@@ -916,7 +1014,7 @@ mod tests {
         })
     }
 
-    async fn copy_of(c: &V2Ctx, user: &str, source: &str, cap: &[u8], bucket: BlobBucket, new_hash: &[u8]) -> Result<CopyResponse, ErrorCode> {
+    pub(super) async fn copy_of(c: &V2Ctx, user: &str, source: &str, cap: &[u8], bucket: BlobBucket, new_hash: &[u8]) -> Result<CopyResponse, ErrorCode> {
         let r = req(
             "cloud.blob.copy",
             user,

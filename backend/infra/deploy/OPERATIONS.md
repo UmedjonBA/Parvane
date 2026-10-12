@@ -158,6 +158,46 @@ docker run --rm -v parvane_db-cloud:/data alpine sh -c \
 docker compose start cloud
 ```
 
+## Ссылки облака для людей без аккаунта (spec 022)
+Владелец в «Файлах» создаёт ссылку `https://<сервер>/s/<id>#k=<ключ>`; человек без аккаунта открывает её в
+браузере. Caddy переводит `/s/<id>` на страницу `/s.html?id=<id>`, страница ходит в gateway анонимным каналом
+(`cloud.link.get`, `cloud.link.download`) — отдельного HTTP-входа у ссылок нет.
+
+**Что хранит сервер** (`cloud.db-v2.db`, таблицы `links` и `link_blobs`; копии файлов — обычные блобы в `cloud.db`,
+bucket облака, в квоте владельца): идентификатор ссылки, владелец, состояние, время создания и срок, шифртекст
+списка, шифртекст записи владельца, какие блобы — копии какой ссылки. Ключа ссылки, названий и содержимого файлов у
+сервера нет: ключ живёт только в части адреса после `#`. Идентификатор — половина доступа, поэтому в журнале шарда
+он усечён до шести знаков.
+```bash
+# все ссылки: кто, состояние (1 готовится, 2 действует), срок, место
+docker run --rm -v parvane_db-cloud:/data alpine sh -c 'apk add -q sqlite && sqlite3 -readonly /data/cloud.db-v2.db \
+  "SELECT substr(link_id,1,6), owner, state, datetime(created_at,\"unixepoch\"), expires_at,
+          (SELECT COALESCE(SUM(size),0) FROM link_blobs b WHERE b.link_key = l.key) FROM links l ORDER BY created_at;"'
+```
+**Срок и чистка.** Срок и отзыв проверяются при каждом чтении. Раз в час (и при старте) шард удаляет: готовящиеся
+ссылки старше 24 ч, истёкшие дольше `PARVANE_CLOUD_LINK_GRACE_DAYS` (30 дней — столько владелец может продлить),
+копии без ссылки. Отзыв владельцем удаляет ссылку и копии сразу.
+
+**Выключить.** `PARVANE_CLOUD_LINKS_ENABLED=0` в `.env` и `docker compose up -d cloud`: новые ссылки не создаются
+(`FORBIDDEN`), уже созданные работают до срока либо отзыва. Закрыть разом и существующие — удалить их, как ниже,
+без условия по `link_id`.
+
+**Удалить ссылку вручную** (жалоба, утечка адреса). Ссылку переводят в «брошенные готовящиеся»: получателю она с
+этого запроса не отдаётся (как несуществующая), а копии и строку шард уберёт сам — при ближайшей чистке либо сразу
+после перезапуска. Руками удалять строки `link_blobs` и блобы не нужно.
+```bash
+docker run --rm -v parvane_db-cloud:/data alpine sh -c 'apk add -q sqlite && sqlite3 /data/cloud.db-v2.db \
+  "UPDATE links SET state = 1, created_at = 0 WHERE link_id = \"<link_id целиком>\"; SELECT changes();"'   # → 1
+docker compose restart cloud        # чистка при старте; без перезапуска — в течение часа
+```
+Ссылки одного аккаунта — то же с `WHERE owner = "<адрес>"`. Удаление аккаунта (`scripts/admin_purge_test_accounts.sh`)
+убирает и его ссылки.
+
+**Нагрузка.** На одну ссылку — `PARVANE_CLOUD_LINK_RATE_PER_MIN` (120) обращений в минуту (`RATE_LIMITED` с
+`retry_after_ms`), на адрес посетителя — общий лимит анонимного канала gateway (`GATEWAY_RATE_ANON_IP_*`), разом не
+больше `PARVANE_CLOUD_LINK_STREAMS` (8) скачиваний по ссылкам на весь шард — остальные обработчики остаются
+пользователям.
+
 ## Обновление кода (с рабочей машины, НЕ на сервере)
 `backend/infra/deploy/deploy.sh` — пересобирает образы (podman, baseline x86-64) и dist,
 заливает, поднимает. Флаги: `PARVANE_DEPLOY_SKIP_WEB_BUILD=1`,
@@ -320,6 +360,10 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
 | `PARVANE_PREKEY_REUSE_SECS` (600) | identity | окно, в котором повторный фетч той же пары отдаёт тот же one-time prekey (P-21) |
 | `PARVANE_REGISTER_RATE_IP` (30) / `PARVANE_LOGIN_RATE_IP` (120) | identity | лимиты по IP за минуту (P-43) |
 | `PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS` (256) | cloud | верхняя граница чанков одного download-запроса (P-28) |
+| `PARVANE_CLOUD_LINKS_ENABLED` (1) | cloud | `0` — новые ссылки облака не создаются (spec 022); прежние живут до срока либо отзыва |
+| `PARVANE_CLOUD_LINK_MAX_FILES` (500) / `PARVANE_CLOUD_LINKS_PER_OWNER` (100, не больше 256) | cloud | файлов в одной ссылке / ссылок на аккаунт (готовящиеся, действующие, истёкшие) |
+| `PARVANE_CLOUD_LINK_GRACE_DAYS` (30) | cloud | сколько дней истёкшую ссылку можно продлить; потом копии удаляются |
+| `PARVANE_CLOUD_LINK_RATE_PER_MIN` (120) / `PARVANE_CLOUD_LINK_STREAMS` (8) | cloud | обращений к одной ссылке в минуту / одновременных скачиваний по ссылкам |
 | `PARVANE_PREVIEW_RATE` (60) | preview | запросов превью и тайлов на пользователя за минуту (P-30, P-23) |
 | `PARVANE_PREVIEW_TILE_CACHE_MAX` (20000) | preview | кап кэша тайлов карты, старые выселяются (P-23) |
 | `PARVANE_PUSH_MAX_SUBSCRIPTIONS` (8) | push | web-push подписок на пользователя (P-17) |

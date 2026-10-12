@@ -1262,6 +1262,22 @@
       }
     },
     {
+      "id": "CLOUD-2",
+      "title": "Ссылки облака для людей без аккаунта: создаёт и ведёт только web; desktop и android методов cloud.link.* не вызывают и раздел не показывают; общий движок от новых методов и поля не ломается",
+      "ownerMethods": ["cloud.link.create", "cloud.link.add", "cloud.link.publish", "cloud.link.list", "cloud.link.revoke", "cloud.link.extend"],
+      "anonMethods": ["cloud.link.get", "cloud.link.download"],
+      "usageField": "links_bytes",
+      "usageFieldNumber": 2,
+      "linkIdChars": 22,
+      "ttlDays": [0, 1, 7, 30],
+      "pagePath": "/s/",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/cloudDrive.ts (создание, список, отзыв, продление), публичная страница s.html (src/publicLink/, свой кодек кадров v2 — сверяется с движком тестом vitest); сценарий scripts/e2e_web_cloud_links.mjs",
+        "desktop": "движок общий: методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет; новые методы реестра и поле UsageResponse.links_bytes клиенту не мешают (тесты backend/shards/cloud/src/v2.rs registry_methods_are_known, backend/tests/integration/tests/v2_links_live.rs)",
+        "android": "движок общий (те же тесты): методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет"
+      }
+    },
+    {
       "id": "ORDER-1",
       "title": "Порядок сообщений в ленте: живое сообщение встаёт после всего, что уже есть в чате; место сохраняется; старое — по времени отправителя",
       "liveWindowSecs": 300,
