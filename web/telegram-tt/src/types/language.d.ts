@@ -2707,6 +2707,8 @@ export interface LangPair {
   'PlannerCalMonthShort': undefined;
   'PlannerYearLegend': undefined;
   'PlannerQuickExamplesTitle': undefined;
+  'PlannerQuickRecentTitle': undefined;
+  'PlannerQuickSuggestionsTitle': undefined;
   'PlannerQuickExamples': undefined;
   'PlannerSettingsGoalsHint': undefined;
   'PlannerHealthGoalsShort': undefined;
@@ -4987,6 +4989,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'goal': V;
   };
   'PlannerMonthSleep': {
+    'value': V;
+  };
+  'PlannerQuickForget': {
     'value': V;
   };
   'PlannerQuickDefault': {

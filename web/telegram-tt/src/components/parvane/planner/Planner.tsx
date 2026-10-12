@@ -765,6 +765,8 @@ const Planner = () => {
         userId={currentUserId}
         learnedWords={state.learned}
         isLearnedSynced={isLoaded && (syncStatus === 'ready' || syncStatus === 'offline')}
+        tasks={state.tasks}
+        events={state.events}
         onCreated={handleQuickCreated}
         onMore={handleQuickMore}
         onClose={closeQuick}
