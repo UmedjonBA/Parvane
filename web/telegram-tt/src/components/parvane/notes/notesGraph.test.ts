@@ -5,7 +5,8 @@ import type { GraphEdge, GraphInput, GraphNode } from './notesGraph';
 import {
   buildGraph, canLinkFrom, canLinkTo, createSeededRandom, edgeShape, getLayoutIterations, GRAPH_ARROW,
   GRAPH_EDGE_GAP, GRAPH_ITERATIONS, GRAPH_MARGIN, GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS, GRAPH_SPRING_LENGTH,
-  GRAPH_WORK_BUDGET, layoutGraph, neighboursOf, nodeAt, nodeRadius, placeGraph,
+  GRAPH_WORK_BUDGET, isNoteInGraph, layoutGraph, listGraphFolders, neighboursOf, nodeAt, nodeRadius, placeGraph,
+  resolveGraphFolders,
 } from './notesGraph';
 
 const ALL = { withDays: true, withRecords: true };
@@ -172,6 +173,71 @@ describe('граф заметок: сборка', () => {
 
   it('пустой вход — пустой граф', () => {
     expect(buildGraph({ notes: [] }, ALL)).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+describe('граф заметок: выбор папок', () => {
+  it('в графе только заметки выбранных папок; соседей из других папок нет — ни точкой, ни «ещё нет»', () => {
+    const graph = buildGraph(INPUT, { ...NOTES_ONLY, folders: ['Работа'] });
+    // «Идеи» лежит в «Личном»: ссылка на неё не рисуется; заметки «Sealed sender» нет вовсе — она «ещё нет»
+    expect(graph.nodes.map((item) => item.id)).toEqual(['n1', 'n2', 'missing:sealed sender']);
+    expect(pairs(graph.edges)).toEqual(['missing:sealed sender — n2', 'n1 — n2']);
+    expect(node(graph.nodes, 'n1').degree).toBe(1);
+    expect(graph.nodes.filter((item) => item.kind === 'note').length).toBe(2);
+  });
+
+  it('несколько папок, корень — пустая строка, пустой выбор — заметок нет', () => {
+    const input: GraphInput = {
+      notes: [
+        { id: 'a', title: 'А', folder: '', links: ['Б', 'В'] },
+        { id: 'b', title: 'Б', folder: 'Работа', links: ['В'] },
+        { id: 'c', title: 'В', folder: 'Работа/Вложенная', links: [] },
+      ],
+    };
+    expect(buildGraph(input, { ...NOTES_ONLY, folders: ['', 'Работа'] }).nodes.map(({ id }) => id)).toEqual(['a', 'b']);
+    // Путь совпадает точно: вложенная папка — отдельная
+    expect(buildGraph(input, { ...NOTES_ONLY, folders: ['Работа/Вложенная'] }).nodes.map(({ id }) => id))
+      .toEqual(['c']);
+    expect(buildGraph(input, { ...NOTES_ONLY, folders: [] })).toEqual({ nodes: [], edges: [] });
+    expect(buildGraph(input, { ...NOTES_ONLY, folders: undefined }).nodes.length).toBe(3);
+  });
+
+  it('заметки дней выбор папок не трогает; записи «Плана» — только со ссылкой на видимую заметку', () => {
+    const graph = buildGraph(INPUT, { ...ALL, folders: ['Личное'] });
+    expect(graph.nodes.map((item) => item.id)).toEqual([
+      'n3', 'n4', 'd1', 'missing:sealed sender', 'r3', 'missing:черновик спеки',
+    ]);
+    expect(pairs(graph.edges)).toEqual([
+      'd1 — missing:sealed sender',
+      'd1 — n3',
+      'missing:черновик спеки — r3',
+    ]);
+    expect(isNoteInGraph({ folder: 'Дни', isDaily: true }, { withDays: true, folders: [] })).toBe(true);
+    expect(isNoteInGraph({ folder: 'Дни', isDaily: true }, { withDays: false })).toBe(false);
+    expect(isNoteInGraph({ folder: 'Личное' }, { withDays: false, folders: ['Работа'] })).toBe(false);
+  });
+
+  it('смена выбора папок не двигает уже разложенные точки', () => {
+    const all = buildGraph(INPUT, NOTES_ONLY);
+    const placed = layoutGraph(all.nodes, all.edges, { width: 900, height: 620, isLoose: true });
+    const places = new Map(placed.map(({ id, x, y }) => [id, { x, y }]));
+    const narrow = buildGraph(INPUT, { ...NOTES_ONLY, folders: ['Работа'] });
+    placeGraph(narrow.nodes, narrow.edges, places, { width: 900, height: 620, isLoose: true }).forEach((item) => {
+      expect({ x: item.x, y: item.y }).toEqual(places.get(item.id));
+    });
+  });
+
+  it('папки для выбора: с обычными заметками, корень первым; сохранённый выбор приводится к существующим', () => {
+    const folders = listGraphFolders([...INPUT.notes, { folder: '' }, { folder: 'Архив' }, { folder: '' }]);
+    expect(folders).toEqual([
+      { path: '', count: 2 }, { path: 'Архив', count: 1 }, { path: 'Личное', count: 2 }, { path: 'Работа', count: 2 },
+    ]);
+    expect(listGraphFolders([{ folder: 'Дни', isDaily: true }])).toEqual([]);
+    expect(resolveGraphFolders(undefined, folders)).toBeUndefined();
+    expect(resolveGraphFolders(['Работа', 'Удалённая', ''], folders)).toEqual(['', 'Работа']);
+    expect(resolveGraphFolders(['Удалённая'], folders)).toBeUndefined();
+    expect(resolveGraphFolders(['', 'Архив', 'Личное', 'Работа'], folders)).toBeUndefined();
+    expect(resolveGraphFolders([], folders)).toBeUndefined();
   });
 });
 

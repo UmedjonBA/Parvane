@@ -1,8 +1,9 @@
 import {
-  memo, useEffect, useMemo, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
+import type { GraphCanvasScope } from './notesCanvasGraph';
 import type { FolderSubmitError, NoteGroup } from './notesFolders';
 import type { GraphLinkOutcome, GraphPick } from './NotesGraph';
 import type { PlannedItem } from './notesPlanned';
@@ -16,6 +17,8 @@ import {
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
+import { serializeCanvas } from './notesCanvas';
+import { canvasFromGraph, freeCanvasTitle } from './notesCanvasGraph';
 import {
   buildNoteGroups, folderCaption, isInFolder, ROOT_FOLDER,
 } from './notesFolders';
@@ -24,6 +27,7 @@ import { addLinkToText, canLinkTitle, removeLinkFromText } from './notesLinkEdit
 import {
   avatarText, displayTitle, folderColor, formatDayShort, isDayTitle, previewOf,
 } from './notesLook';
+import { parseNote } from './notesModel';
 import { buildPlannedIndex, nearestPlanned, plannedOf } from './notesPlanned';
 import {
   isGuideSeen, markGuideSeen, readCollapsedFolders, writeCollapsedFolders,
@@ -31,7 +35,8 @@ import {
 import {
   applyPlannerToNotes, consumeGuideOpen, createNote, createNoteFolder, deleteNote, deleteNoteFolder,
   findNoteByTitle, getCanvases, getGuideOpenId, getNoteFolders, getNotes, getNotesIndex, getNotesNotice,
-  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, saveNote,
+  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, saveCanvas,
+  saveNote,
 } from './notesStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -118,6 +123,9 @@ const Knowledge = () => {
   const [linkFromId, setLinkFromId] = useState<string>();
   const [editRequest, setEditRequest] = useState<NoteEditRequest>();
   const [graphNotice, setGraphNotice] = useState<GraphNotice>();
+  // Холст, созданный с графа: вкладка «Холст» открывается на нём
+  const [graphCanvasId, setGraphCanvasId] = useState<string>();
+  const isMakingCanvasRef = useRef(false);
 
   const lang = useLang();
   const { width: windowWidth } = useWindowSize();
@@ -441,6 +449,31 @@ const Knowledge = () => {
     void deleteNote(noteId);
   });
 
+  // «Создать холст» на графе: холст из заметок, которые сейчас на нём видны (тот же путь, что «Из графа» на
+  // холсте), открывается на вкладке «Холст». Набор заметок записан в холст — «Обновить из графа» берёт новые
+  // заметки только из него. Повторное нажатие, пока файл пишется, второго холста не создаёт
+  const makeGraphCanvas = useLastCallback(async (scope: GraphCanvasScope) => {
+    if (isMakingCanvasRef.current) return;
+    const content = canvasFromGraph(notes.map((note) => ({
+      id: note.id,
+      title: note.title,
+      folder: note.folder,
+      links: parseNote(note.text).links,
+      isDaily: note.isDaily,
+    })), { scope });
+    if (!content.nodes.length) {
+      showGraphNotice(lang('KnowledgeGraphToCanvasEmpty'));
+      return;
+    }
+    isMakingCanvasRef.current = true;
+    const title = freeCanvasTitle(lang('KnowledgeCanvasGraphName'), canvases.map((item) => item.title));
+    const id = await saveCanvas(title, serializeCanvas(content), vaultName).catch(() => undefined);
+    isMakingCanvasRef.current = false;
+    if (!id) return;
+    setGraphCanvasId(id);
+    setKnowledgeView('canvas');
+  });
+
   // Отмена правки связи: текст заметки возвращается, а что в ней изменили после — остаётся (сведение от
   // текста, который дала правка)
   const revertNote = (noteId: string, before: string) => {
@@ -762,9 +795,17 @@ const Knowledge = () => {
               onLinkNew={linkNewInGraph}
               onUnlink={unlinkInGraph}
               onLinkModeEnd={handleLinkModeEnd}
+              onClose={handleGraphClose}
+              onMakeCanvas={makeGraphCanvas}
             />
           ) : view === 'canvas' ? (
-            <NotesCanvas canvases={canvases} notes={notes} isNarrow={isNarrow} onOpenTitle={openFromCanvas} />
+            <NotesCanvas
+              canvases={canvases}
+              notes={notes}
+              isNarrow={isNarrow}
+              openId={graphCanvasId}
+              onOpenTitle={openFromCanvas}
+            />
           ) : (
             <div className={styles.layout}>
               {!isNoteAlone && renderList()}

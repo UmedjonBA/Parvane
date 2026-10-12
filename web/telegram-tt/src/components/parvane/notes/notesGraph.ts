@@ -40,7 +40,15 @@ export type GraphRecordInput = {
 };
 
 export type GraphInput = { notes: GraphNoteInput[]; records?: GraphRecordInput[] };
-export type GraphOptions = { withDays: boolean; withRecords: boolean };
+export type GraphOptions = {
+  withDays: boolean;
+  withRecords: boolean;
+  // Папки, заметки которых показаны (точное совпадение пути, корень — пустая строка); не задано — все папки.
+  // Заметок дней выбор папок не касается: их включает `withDays`
+  folders?: readonly string[];
+};
+// Папка в выборе графа: путь и число обычных заметок в ней
+export type GraphFolder = { path: string; count: number };
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
 
 export type GraphLayoutOptions = {
@@ -92,9 +100,37 @@ function edgeKey(a: string, b: string) {
   return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
 }
 
+// Заметка видна на графе: заметка дня — при включённых днях, обычная — если её папка выбрана
+export function isNoteInGraph(
+  note: Pick<GraphNoteInput, 'folder' | 'isDaily'>, options: Pick<GraphOptions, 'withDays' | 'folders'>,
+) {
+  if (note.isDaily) return options.withDays;
+  return !options.folders || options.folders.includes(note.folder);
+}
+
+// Папки для выбора на графе: те, где есть обычные заметки (заметки дней папкой не считаются), корень первым,
+// дальше по пути
+export function listGraphFolders(notes: Pick<GraphNoteInput, 'folder' | 'isDaily'>[]): GraphFolder[] {
+  const counts = new Map<string, number>();
+  notes.forEach((note) => {
+    if (!note.isDaily) counts.set(note.folder, (counts.get(note.folder) || 0) + 1);
+  });
+  return [...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([path, count]) => ({ path, count }));
+}
+
+// Сохранённый выбор папок, приведённый к существующим: исчезнувшие папки выпадают; не осталось ни одной
+// либо выбраны все — это «все папки» (`undefined`)
+export function resolveGraphFolders(saved: readonly string[] | undefined, known: GraphFolder[]) {
+  if (!saved) return undefined;
+  const kept = known.filter(({ path }) => saved.includes(path)).map(({ path }) => path);
+  return kept.length && kept.length < known.length ? kept : undefined;
+}
+
 // Узлы и связи графа. Ссылка на название без заметки даёт один узел `missing` на название (без учёта
-// регистра). Ежедневные заметки — только при `withDays`; ссылки на скрытую ежедневную заметку не
-// рисуются (она существует, «ещё нет» про неё сказать нельзя). Записи планировщика — только при
+// регистра). Ежедневные заметки — только при `withDays`, обычные — только из выбранных папок (`folders`);
+// ссылки на скрытую заметку не рисуются (она существует, «ещё нет» про неё сказать нельзя), так что соседей
+// из невыбранных папок на графе нет. Записи планировщика — только при
 // `withRecords` и только те, что ссылаются на заметки; записи с одним названием — один узел
 // (повторяющееся событие), их ссылки складываются. Связи без дублей и петель: на пару узлов одна связь
 // в сторону первой найденной ссылки, встречная ссылка помечает её `isMutual`.
@@ -142,7 +178,7 @@ export function buildGraph(input: GraphInput, options: GraphOptions): Graph {
 
   const shownNotes: GraphNoteInput[] = [];
   input.notes.forEach((note) => {
-    if ((note.isDaily && !options.withDays) || nodeById.has(note.id)) return;
+    if (!isNoteInGraph(note, options) || nodeById.has(note.id)) return;
     addNode(note.id, note.title, note.isDaily ? 'day' : 'note', note.folder);
     shownNotes.push(note);
     // Заметки с одним названием: ссылка ведёт на первую
@@ -151,7 +187,7 @@ export function buildGraph(input: GraphInput, options: GraphOptions): Graph {
   });
   input.notes.forEach((note) => {
     const key = titleKey(note.title);
-    if (note.isDaily && !options.withDays && key && !noteIdByTitle.has(key)) hiddenTitles.add(key);
+    if (!isNoteInGraph(note, options) && key && !noteIdByTitle.has(key)) hiddenTitles.add(key);
   });
   shownNotes.forEach((note) => connect(note.id, note.links));
 

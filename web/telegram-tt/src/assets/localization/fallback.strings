@@ -3770,6 +3770,12 @@
 "KnowledgeGraphDays" = "Days";
 "KnowledgeGraphRecords" = "Events and tasks";
 "KnowledgeGraphNotes" = "Notes {count}";
+"KnowledgeGraphFolders" = "Folders shown on the graph";
+"KnowledgeGraphFoldersAll" = "All folders";
+"KnowledgeGraphFoldersCount" = "Folders: {count}";
+"KnowledgeGraphToCanvas" = "Create canvas";
+"KnowledgeGraphToCanvasTitle" = "Create a canvas from the notes shown on the graph";
+"KnowledgeGraphToCanvasEmpty" = "There are no notes on the graph to put on a canvas";
 "KnowledgeGraphEmpty" = "The graph appears when notes link to each other with [[links]].";
 "KnowledgeZoomIn" = "Zoom in";
 "KnowledgeZoomOut" = "Zoom out";
