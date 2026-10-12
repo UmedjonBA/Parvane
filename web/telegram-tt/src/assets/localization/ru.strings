@@ -1792,6 +1792,10 @@
 "KnowledgeCanvasFromGraph" = "Холст из графа";
 "KnowledgeCanvasFromGraphShort" = "Из графа";
 "KnowledgeCanvasGraphName" = "Граф связей";
+"KnowledgeCanvasActions" = "Действия с холстом";
+"KnowledgeCanvasTitle" = "Название холста";
+"KnowledgeCanvasRename" = "Переименовать";
+"KnowledgeCanvasDeleteConfirm" = "Переместить холст «{name}» в корзину облака?";
 "KnowledgeCanvasText" = "Текст";
 "KnowledgeCanvasNote" = "Заметка";
 "KnowledgeCanvasGroup" = "Группа";
@@ -1810,7 +1814,7 @@
 "KnowledgeLinks" = "Связи";
 "KnowledgeNearest" = "ближайшее";
 "KnowledgePlannedHint" = "со ссылкой сюда";
-"KnowledgeCanvasHint" = "перетаскивайте карточки · двойной клик открывает заметку";
+"KnowledgeCanvasHint" = "перетаскивайте карточки · двойной клик — править текст, назвать группу, открыть заметку";
 "KnowledgeGraphKindNote" = "заметка";
 "KnowledgeGraphKindDay" = "ежедневная заметка";
 "KnowledgeGraphKindMissing" = "заметки ещё нет";

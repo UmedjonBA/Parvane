@@ -14,6 +14,7 @@ import {
 } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
+import { freeCanvasTitle } from './notesCanvasGraph';
 import { mergeNotes } from './notesMerge';
 import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNote, renameLinks,
@@ -277,8 +278,13 @@ async function ensureFolder(name: string, parent?: string): Promise<string | und
   return find()?.id || id;
 }
 
+// Название как имя файла: без знаков, запрещённых в именах, и без лишних пробелов
+function cleanTitle(title: string) {
+  return title.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function uniqueTitle(title: string, notes = getNotes()) {
-  const clean = title.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || 'Без названия';
+  const clean = cleanTitle(title) || 'Без названия';
   if (!findNoteByTitle(clean, notes)) return clean;
   for (let n = 2; ; n++) {
     if (!findNoteByTitle(`${clean} ${n}`, notes)) return `${clean} ${n}`;
@@ -437,4 +443,28 @@ export async function saveCanvas(title: string, text: string, vaultName: string,
     await queueSync();
   }
   return result.node;
+}
+
+/** Переименовать холст; занятое название получает номер. Пустое название — отказ. */
+export async function renameCanvas(canvasId: string, title: string) {
+  const rootId = rootIdOf();
+  const node = getNodes(rootId).find(({ id }) => id === canvasId);
+  const canvas = getCanvases().find(({ id }) => id === canvasId);
+  const clean = cleanTitle(title);
+  if (!rootId || !node || !canvas || !clean) return false;
+  if (clean === canvas.title) return true;
+  const next = freeCanvasTitle(clean, getCanvases().filter(({ id }) => id !== canvasId).map((item) => item.title));
+  if (!(await renameCloudNode(rootId, node, `${next}${CANVAS_EXTENSION}`))) return false;
+  await queueSync();
+  return true;
+}
+
+/** Холст — в корзину облака (оттуда его можно вернуть 30 дней). */
+export async function deleteCanvas(canvasId: string) {
+  const rootId = rootIdOf();
+  const node = getNodes(rootId).find(({ id }) => id === canvasId);
+  if (!rootId || !node) return false;
+  const isDone = await trashCloudNodes(rootId, [node]);
+  await queueSync();
+  return isDone;
 }

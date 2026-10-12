@@ -2751,6 +2751,9 @@ export interface LangPair {
   'KnowledgeCanvasFromGraph': undefined;
   'KnowledgeCanvasFromGraphShort': undefined;
   'KnowledgeCanvasGraphName': undefined;
+  'KnowledgeCanvasActions': undefined;
+  'KnowledgeCanvasTitle': undefined;
+  'KnowledgeCanvasRename': undefined;
   'KnowledgeCanvasText': undefined;
   'KnowledgeCanvasNote': undefined;
   'KnowledgeCanvasGroup': undefined;
@@ -4932,6 +4935,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'KnowledgeCanvasName': {
     'count': V;
+  };
+  'KnowledgeCanvasDeleteConfirm': {
+    'name': V;
   };
   'KnowledgeShowAll': {
     'count': V;

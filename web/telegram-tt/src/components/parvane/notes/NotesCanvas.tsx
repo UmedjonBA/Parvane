@@ -20,11 +20,13 @@ import {
 import { canvasFromGraph, freeCanvasTitle } from './notesCanvasGraph';
 import { folderColor } from './notesLook';
 import { parseNote } from './notesModel';
-import { saveCanvas } from './notesStore';
+import { deleteCanvas, renameCanvas, saveCanvas } from './notesStore';
 
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ConfirmDialog from '../../ui/ConfirmDialog';
 import PvIcon from './PvIcon';
 import PvSheet from './PvSheet';
 
@@ -42,6 +44,11 @@ type Selection = { kind: 'node' | 'edge'; id: string };
 type Drag = { id?: string; x: number; y: number; hasMoved: boolean };
 // Правка в шторке: текст карточки (название группы, подпись связи), цвет, подписи связей карточки
 type Editing = { text: string; color: string; labels: Record<string, string>; removed: string[] };
+// Правка на месте: текст карточки либо название группы прямо на холсте. `isNew` — узел только что добавлен:
+// оставленный пустым (или отменённый) текст убирает карточку
+type Inline = { id: string; isNew: boolean };
+type Pending = { id: string; title: string; doc: CanvasDoc };
+type InlineField = HTMLTextAreaElement | HTMLInputElement;
 
 const SAVE_DELAY_MS = 1200;
 const GROUP_WIDTH = 420;
@@ -62,6 +69,11 @@ const GROUP_LABEL_ROOM = 40;
 const EDGE_MIN_BEND = 40;
 const EDGE_LABEL_SHIFT = 4;
 const NODE_NAME_MAX = 24;
+const CANVAS_TITLE_MAX = 80;
+const DOUBLE_TAP_MS = 350;
+// Двойной тап и `dblclick` за ним — одно действие
+const ACTIVATE_GAP_MS = 500;
+const INLINE_SELECTOR = '[data-canvas-inline]';
 const CARD_INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
 // Цвета JSON Canvas 1…6: красный, оранжевый, жёлтый, зелёный, синий, фиолетовый
 const CANVAS_TONES: Record<CanvasPresetColor, string> = {
@@ -97,9 +109,14 @@ function renderCardInline(text: string) {
 // Холст (JSON Canvas): карточки заметок, текстовые карточки, группы и стрелки с подписями.
 // Файл `.canvas` лежит в папке «Знания»; правки сохраняются сами через паузу
 const NotesCanvas = ({
-  canvases, notes, isNarrow, onOpenTitle,
+  canvases: allCanvases, notes, isNarrow, onOpenTitle,
 }: OwnProps) => {
   const boardRef = useRef<HTMLDivElement>();
+  // Холст, отправленный в корзину, пропадает с экрана сразу, не дожидаясь ответа облака
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
+  const canvases = useMemo(() => (
+    removedIds.length ? allCanvases.filter(({ id }) => !removedIds.includes(id)) : allCanvases
+  ), [allCanvases, removedIds]);
   const [canvasId, setCanvasId] = useState<string | undefined>(canvases[0]?.id);
   const [doc, setDoc] = useState<CanvasDoc>(createEmptyCanvas);
   const [isDamaged, setIsDamaged] = useState(false);
@@ -108,11 +125,23 @@ const NotesCanvas = ({
   const [linkFrom, setLinkFrom] = useState<string>();
   const [editing, setEditing] = useState<Editing>();
   const [isPickingNote, setIsPickingNote] = useState(false);
+  const [inline, setInline] = useState<Inline>();
+  const [inlineText, setInlineText] = useState('');
+  const [isMenuOpen, openMenu, closeMenu] = useFlag();
+  const [isDeleteOpen, openDelete, closeDelete] = useFlag();
+  const [canvasName, setCanvasName] = useState('');
   const dragRef = useRef<Drag>();
   const pinchRef = useRef(createPinch());
   const saveTimerRef = useRef<number>();
   const loadedRef = useRef<string>();
   const isCreatingRef = useRef(false);
+  // Последний документ: две правки подряд в одном событии (сохранить текст, затем добавить карточку)
+  // обе идут от него, а не от снимка прошлой отрисовки
+  const docRef = useRef(doc);
+  const pendingRef = useRef<Pending>();
+  const inlineRef = useRef<Inline>();
+  const tapRef = useRef<{ id: string; at: number }>();
+  const activatedAtRef = useRef(0);
 
   const lang = useLang();
   const vaultName = lang('KnowledgeVaultName');
@@ -144,21 +173,92 @@ const NotesCanvas = ({
     if (!entry || loadedRef.current === entry.id) return;
     loadedRef.current = entry.id;
     const parsed = parseCanvas(entry.text);
+    docRef.current = parsed.doc;
+    inlineRef.current = undefined;
     setDoc(parsed.doc);
+    setInline(undefined);
     setIsDamaged(Boolean(parsed.error));
     setSelection(undefined);
     setLinkFrom(undefined);
     setView(fitTo(parsed.doc));
   }, [entry, isNarrow]);
 
+  // Записать отложенную правку сейчас (смена холста, уход с вкладки); `shouldDrop` — забыть её (холст удалён)
+  const flushSave = useLastCallback((shouldDrop?: boolean) => {
+    window.clearTimeout(saveTimerRef.current);
+    const pending = pendingRef.current;
+    pendingRef.current = undefined;
+    if (pending && !shouldDrop) void saveCanvas(pending.title, serializeCanvas(pending.doc), vaultName, pending.id);
+  });
+
   const change = useLastCallback((next: CanvasDoc) => {
-    if (next === doc) return;
+    if (next === docRef.current) return;
+    docRef.current = next;
     setDoc(next);
     if (!entry) return;
+    pendingRef.current = { id: entry.id, title: entry.title, doc: next };
     window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => {
-      void saveCanvas(entry.title, serializeCanvas(next), vaultName, entry.id);
-    }, SAVE_DELAY_MS);
+    saveTimerRef.current = window.setTimeout(flushSave, SAVE_DELAY_MS);
+  });
+
+  useEffect(() => flushSave, [flushSave]);
+
+  const inlineField = () => boardRef.current?.querySelector<InlineField>(INLINE_SELECTOR) || undefined;
+
+  const startInline = (node: CanvasNode, isNew = false) => {
+    const next = { id: node.id, isNew };
+    inlineRef.current = next;
+    setInline(next);
+    setInlineText((node.type === 'group' ? node.label : node.text) || '');
+    setSelection({ kind: 'node', id: node.id });
+  };
+
+  // Конец правки на месте. Значение читается из самого поля: уход фокуса и Enter приходят раньше
+  // перерисовки с набранным текстом. Вызывается и с ухода фокуса, и явно — второй вызов ничего не делает
+  const finishInline = useLastCallback((isCanceled?: boolean) => {
+    const current = inlineRef.current;
+    if (!current) return;
+    const value = (inlineField()?.value ?? inlineText).trim();
+    inlineRef.current = undefined;
+    setInline(undefined);
+    const node = findNode(docRef.current, current.id);
+    if (!node) return;
+    const isGroup = node.type === 'group';
+    if (current.isNew && !isGroup && (isCanceled || !value)) {
+      // Новая текстовая карточка без текста не остаётся
+      change(removeNode(docRef.current, node.id));
+      setSelection(undefined);
+      return;
+    }
+    if (isCanceled || value === ((isGroup ? node.label : node.text) || '')) return;
+    change(updateNode(docRef.current, node.id, isGroup ? { label: value || undefined } : { text: value }));
+  });
+
+  // Курсор — в поле, как только оно появилось: у названия выделено всё, у текста курсор в конце
+  useEffect(() => {
+    const field = inline && inlineField();
+    if (!field) return;
+    field.focus();
+    if (field instanceof HTMLInputElement) field.select();
+    else field.setSelectionRange(field.value.length, field.value.length);
+  }, [inline]);
+
+  const handleInlineChange = useLastCallback((e: React.ChangeEvent<InlineField>) => {
+    setInlineText(e.currentTarget.value);
+  });
+
+  const handleInlineBlur = useLastCallback(() => finishInline());
+
+  // Enter сохраняет (в тексте Shift+Enter — новая строка), Escape отменяет
+  const handleInlineKey = useLastCallback((e: React.KeyboardEvent<InlineField>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      finishInline(true);
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      finishInline();
+    }
   });
 
   const noteByTitle = useMemo(() => new Map(notes.map((note) => [note.title.toLowerCase(), note])), [notes]);
@@ -198,6 +298,8 @@ const NotesCanvas = ({
   const createCanvas = async (title: string, content: CanvasDoc) => {
     if (isCreatingRef.current) return;
     isCreatingRef.current = true;
+    finishInline();
+    flushSave();
     const id = await saveCanvas(title, serializeCanvas(content), vaultName).catch(() => undefined);
     isCreatingRef.current = false;
     if (id) setCanvasId(id);
@@ -225,37 +327,87 @@ const NotesCanvas = ({
   });
 
   const handlePickCanvas = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    finishInline();
+    flushSave();
     setCanvasId(e.currentTarget.dataset.id);
   });
 
+  // ── действия с холстом: название и корзина ──
+  const handleOpenMenu = useLastCallback(() => {
+    finishInline();
+    setCanvasName(entry?.title || '');
+    openMenu();
+  });
+
+  const handleCanvasName = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setCanvasName(e.currentTarget.value);
+  });
+
+  // Название берётся из самого поля (Enter приходит раньше перерисовки с набранным)
+  const handleRenameCanvas = useLastCallback(() => {
+    const field = document.querySelector<HTMLInputElement>('#knowledge-canvas-name');
+    const title = (field?.value ?? canvasName).trim();
+    closeMenu();
+    if (!entry || !title || title === entry.title) return;
+    flushSave();
+    void renameCanvas(entry.id, title);
+  });
+
+  const handleCanvasNameKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleRenameCanvas();
+    }
+  });
+
+  const handleAskDelete = useLastCallback(() => {
+    closeMenu();
+    openDelete();
+  });
+
+  // В корзину облака; после этого открыт другой холст, а если их не осталось — пустое состояние
+  const handleDeleteCanvas = useLastCallback(() => {
+    closeDelete();
+    if (!entry) return;
+    const { id } = entry;
+    flushSave(true);
+    setCanvasId(undefined);
+    setRemovedIds((ids) => [...ids, id]);
+    void deleteCanvas(id).then((isDone) => {
+      // Не удалось — холст возвращается в список
+      if (!isDone) setRemovedIds((ids) => ids.filter((item) => item !== id));
+    });
+  });
+
   const add = (node: Pick<CanvasNode, 'type' | 'width' | 'height'> & Partial<CanvasNode>) => {
+    finishInline();
     const point = centerPoint();
-    const id = newCanvasId();
-    change(addNode(doc, {
+    const created = {
       ...node,
-      id,
+      id: newCanvasId(),
       x: point.x - node.width / 2,
       y: point.y - node.height / 2,
-    }));
-    setSelection({ kind: 'node', id });
+    };
+    change(addNode(docRef.current, created));
+    setSelection({ kind: 'node', id: created.id });
+    return created;
   };
 
+  // Новая текстовая карточка и новая группа сразу открыты для ввода — слов-заглушек в файл не попадает
   const handleAddText = useLastCallback(() => {
-    add({
-      type: 'text',
-      width: CANVAS_DEFAULT_NODE_WIDTH,
-      height: CANVAS_DEFAULT_NODE_HEIGHT,
-      text: lang('KnowledgeCanvasText'),
-    });
+    startInline(add({
+      type: 'text', width: CANVAS_DEFAULT_NODE_WIDTH, height: CANVAS_DEFAULT_NODE_HEIGHT, text: '',
+    }), true);
   });
 
   const handleAddGroup = useLastCallback(() => {
-    add({
-      type: 'group', width: GROUP_WIDTH, height: GROUP_HEIGHT, label: lang('KnowledgeCanvasGroup'),
-    });
+    startInline(add({ type: 'group', width: GROUP_WIDTH, height: GROUP_HEIGHT }), true);
   });
 
-  const handleAddNote = useLastCallback(() => setIsPickingNote(true));
+  const handleAddNote = useLastCallback(() => {
+    finishInline();
+    setIsPickingNote(true);
+  });
   const handleCloseNotePicker = useLastCallback(() => setIsPickingNote(false));
 
   const handlePickNote = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -275,11 +427,15 @@ const NotesCanvas = ({
 
   const handleRemove = useLastCallback(() => {
     if (!selection) return;
-    change(selection.kind === 'node' ? removeNode(doc, selection.id) : removeEdge(doc, selection.id));
+    inlineRef.current = undefined;
+    setInline(undefined);
+    const current = docRef.current;
+    change(selection.kind === 'node' ? removeNode(current, selection.id) : removeEdge(current, selection.id));
     setSelection(undefined);
   });
 
   const handleEdit = useLastCallback(() => {
+    finishInline();
     if (selectedEdge) {
       setEditing({
         text: selectedEdge.label || '', color: '', labels: {}, removed: [],
@@ -316,12 +472,17 @@ const NotesCanvas = ({
 
   const handleEditSave = useLastCallback(() => {
     if (!selection || !editing) return;
+    const current = docRef.current;
     if (selection.kind === 'edge') {
-      change(updateEdge(doc, selection.id, { label: editing.text.trim() }));
+      change(updateEdge(current, selection.id, { label: editing.text.trim() }));
     } else {
-      const node = findNode(doc, selection.id)!;
+      const node = findNode(current, selection.id);
+      if (!node) {
+        setEditing(undefined);
+        return;
+      }
       const text = editing.text.trim();
-      let next = updateNode(doc, selection.id, {
+      let next = updateNode(current, selection.id, {
         color: editing.color || undefined,
         label: node.type === 'group' ? text || undefined : node.label,
         text: node.type === 'text' ? text : node.text,
@@ -346,7 +507,9 @@ const NotesCanvas = ({
 
   const handlePointerDown = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as Element;
-    if (target.closest('[data-board-tools]')) return;
+    if (target.closest(`[data-board-tools], ${INLINE_SELECTOR}`)) return;
+    // Нажатие мимо поля правки сохраняет набранное (уход фокуса приходит не во всех браузерах)
+    finishInline();
     e.currentTarget.setPointerCapture(e.pointerId);
     if (pinchRef.current.down(e.pointerId, e.clientX, e.clientY, view)) {
       dragRef.current = undefined;
@@ -356,8 +519,10 @@ const NotesCanvas = ({
     const edgeId = target.closest<SVGElement>('[data-canvas-edge]')?.dataset.canvasEdge;
     const point = toCanvas(e);
     if (linkFrom) {
-      const node = nodeId ? findNode(doc, nodeId) : undefined;
-      if (node && node.id !== linkFrom && node.type !== 'group') change(addEdge(doc, linkFrom, node.id));
+      const node = nodeId ? findNode(docRef.current, nodeId) : undefined;
+      if (node && node.id !== linkFrom && node.type !== 'group') {
+        change(addEdge(docRef.current, linkFrom, node.id));
+      }
       setLinkFrom(undefined);
       return;
     }
@@ -385,7 +550,7 @@ const NotesCanvas = ({
       dragRef.current = {
         ...drag, x: point.x, y: point.y, hasMoved: true,
       };
-      change(moveNode(doc, drag.id, dx, dy));
+      change(moveNode(docRef.current, drag.id, dx, dy));
       return;
     }
     setView({ ...view, x: view.x + e.clientX - drag.x, y: view.y + e.clientY - drag.y });
@@ -394,16 +559,47 @@ const NotesCanvas = ({
     };
   });
 
+  // Двойной клик (двойной тап): карточка заметки открывает заметку, текстовая — правку текста на месте,
+  // группа — правку названия на месте; у прочих узлов (ссылка) — шторка правки
+  const activate = (nodeId: string) => {
+    const now = Date.now();
+    const node = findNode(docRef.current, nodeId);
+    if (!node || now - activatedAtRef.current < ACTIVATE_GAP_MS) return;
+    activatedAtRef.current = now;
+    if (node.type === 'file') {
+      onOpenTitle(titleOfFile(node.file));
+    } else if (node.type === 'text' || node.type === 'group') {
+      startInline(node);
+    } else {
+      setSelection({ kind: 'node', id: node.id });
+      handleEdit();
+    }
+  };
+
   const handlePointerUp = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     pinchRef.current.up(e.pointerId);
+    const drag = dragRef.current;
     dragRef.current = undefined;
+    // Двойной тап: браузеры на сенсорных экранах `dblclick` присылают не всегда
+    if (e.pointerType !== 'touch' || !drag?.id || drag.hasMoved) {
+      if (drag?.hasMoved) tapRef.current = undefined;
+      return;
+    }
+    const last = tapRef.current;
+    const now = Date.now();
+    if (last && last.id === drag.id && now - last.at < DOUBLE_TAP_MS) {
+      tapRef.current = undefined;
+      activate(drag.id);
+    } else {
+      tapRef.current = { id: drag.id, at: now };
+    }
   });
 
   const handleDoubleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const nodeId = (e.target as Element).closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
-    const node = nodeId ? findNode(doc, nodeId) : undefined;
-    if (node?.type === 'file') onOpenTitle(titleOfFile(node.file));
-    else if (node) handleEdit();
+    const target = e.target as Element;
+    if (target.closest(`[data-board-tools], ${INLINE_SELECTOR}`)) return;
+    const nodeId = target.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    if (nodeId) activate(nodeId);
   });
 
   const zoomBy = (factor: number) => {
@@ -433,7 +629,20 @@ const NotesCanvas = ({
           className={buildClassName(styles.canvasGroup, isSelected && styles.canvasSelected)}
           style={`${colorStyle(node.color)}${place}`}
         >
-          <span className={styles.canvasGroupLabel}>{node.label || lang('KnowledgeCanvasGroup')}</span>
+          {inline?.id === node.id ? (
+            <input
+              className={styles.canvasGroupInput}
+              value={inlineText}
+              placeholder={lang('KnowledgeCanvasGroupName')}
+              aria-label={lang('KnowledgeCanvasGroupName')}
+              data-canvas-inline
+              onChange={handleInlineChange}
+              onBlur={handleInlineBlur}
+              onKeyDown={handleInlineKey}
+            />
+          ) : node.label ? (
+            <span className={styles.canvasGroupLabel} data-canvas-group-label>{node.label}</span>
+          ) : undefined}
         </div>
       );
     }
@@ -451,11 +660,24 @@ const NotesCanvas = ({
           className={buildClassName(cardClass, styles.canvasCardText)}
           style={`${colorStyle(node.color)}${place}`}
         >
-          <div className={buildClassName(styles.canvasCardBody, styles.canvasCardBodyText)}>
-            {((node.type === 'link' ? node.url : node.text) || '').split('\n').map((line, i) => (
-              <div key={i}>{renderCardInline(line)}</div>
-            ))}
-          </div>
+          {inline?.id === node.id ? (
+            <textarea
+              className={styles.canvasInline}
+              value={inlineText}
+              placeholder={lang('KnowledgeCanvasText')}
+              aria-label={lang('KnowledgeCanvasText')}
+              data-canvas-inline
+              onChange={handleInlineChange}
+              onBlur={handleInlineBlur}
+              onKeyDown={handleInlineKey}
+            />
+          ) : (
+            <div className={buildClassName(styles.canvasCardBody, styles.canvasCardBodyText)}>
+              {((node.type === 'link' ? node.url : node.text) || '').split('\n').map((line, i) => (
+                <div key={i}>{renderCardInline(line)}</div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
@@ -634,6 +856,16 @@ const NotesCanvas = ({
               <PvIcon name="graph" isSmall />
               {lang('KnowledgeCanvasFromGraphShort')}
             </button>
+            <button
+              type="button"
+              className={buildClassName(kit.chip, styles.boardChip)}
+              title={lang('KnowledgeCanvasActions')}
+              aria-label={lang('KnowledgeCanvasActions')}
+              data-canvas-menu
+              onClick={handleOpenMenu}
+            >
+              <PvIcon name="dots" isSmall />
+            </button>
           </div>
           <div className={styles.boardToolRow}>
             <button
@@ -808,6 +1040,44 @@ const NotesCanvas = ({
           {lang('Done')}
         </button>
       </PvSheet>
+      <PvSheet isOpen={isMenuOpen} title={entry.title} onClose={closeMenu}>
+        <input
+          id="knowledge-canvas-name"
+          className={kit.input}
+          value={canvasName}
+          maxLength={CANVAS_TITLE_MAX}
+          placeholder={lang('KnowledgeCanvasTitle')}
+          aria-label={lang('KnowledgeCanvasTitle')}
+          onChange={handleCanvasName}
+          onKeyDown={handleCanvasNameKey}
+        />
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnAcc)}
+          data-canvas-rename
+          onClick={handleRenameCanvas}
+        >
+          <PvIcon name="edit" isSmall />
+          {lang('KnowledgeCanvasRename')}
+        </button>
+        <button
+          type="button"
+          className={buildClassName(kit.btn, kit.btnDanger)}
+          data-canvas-delete
+          onClick={handleAskDelete}
+        >
+          <PvIcon name="trash" isSmall />
+          {lang('KnowledgeDelete')}
+        </button>
+      </PvSheet>
+      <ConfirmDialog
+        isOpen={isDeleteOpen}
+        text={lang('KnowledgeCanvasDeleteConfirm', { name: entry.title })}
+        confirmLabel={lang('KnowledgeDelete')}
+        confirmIsDestructive
+        confirmHandler={handleDeleteCanvas}
+        onClose={closeDelete}
+      />
       <PvSheet
         isOpen={isPickingNote}
         title={lang('KnowledgeCanvasChooseNote')}

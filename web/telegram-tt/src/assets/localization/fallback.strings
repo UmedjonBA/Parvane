@@ -3710,6 +3710,10 @@
 "KnowledgeCanvasFromGraph" = "Canvas from graph";
 "KnowledgeCanvasFromGraphShort" = "From graph";
 "KnowledgeCanvasGraphName" = "Link graph";
+"KnowledgeCanvasActions" = "Canvas actions";
+"KnowledgeCanvasTitle" = "Canvas name";
+"KnowledgeCanvasRename" = "Rename";
+"KnowledgeCanvasDeleteConfirm" = "Move the canvas «{name}» to the cloud trash?";
 "KnowledgeCanvasText" = "Text";
 "KnowledgeCanvasNote" = "Note";
 "KnowledgeCanvasGroup" = "Group";
@@ -3728,7 +3732,7 @@
 "KnowledgeLinks" = "Links";
 "KnowledgeNearest" = "next";
 "KnowledgePlannedHint" = "linking here";
-"KnowledgeCanvasHint" = "drag cards · double-click opens a note";
+"KnowledgeCanvasHint" = "drag cards · double-click: edit text, rename a group, open a note";
 "KnowledgeGraphKindNote" = "note";
 "KnowledgeGraphKindDay" = "daily note";
 "KnowledgeGraphKindMissing" = "no such note yet";
