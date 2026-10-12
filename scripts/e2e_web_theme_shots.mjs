@@ -63,13 +63,12 @@ try {
       await shot('files');
       await page.locator('#ParvaneCloud header').getByText('Notes', { exact: true }).first().click();
       const knowledge = page.locator('#ParvaneKnowledge');
-      await knowledge.getByRole('button', { name: 'New note' }).click();
-      await knowledge.locator('[data-note-id]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-      await knowledge.getByRole('button', { name: 'Edit' }).click();
-      await page.locator('#knowledge-note-editor').fill('# Заметка\n\nТекст со [[ссылкой]] и #тегом\n\n- [ ] пункт\n- [x] сделано');
-      await knowledge.getByRole('button', { name: 'Save' }).click();
+      // Новому аккаунту «Знания» сами открывают заметку-инструкцию
       await knowledge.locator('[data-note-body]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
       await shot('note');
+      await page.getByRole('tab', { name: 'Canvas' }).first().click();
+      await knowledge.locator('[data-canvas-from-graph]').first().click().catch(() => undefined);
+      await shot('canvas');
       // Настройки: выбор схемы
       await sidebar.getByRole('button', { name: 'Profile' }).click();
       await shot('settings');

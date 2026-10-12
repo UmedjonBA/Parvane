@@ -588,6 +588,8 @@ try {
     ['Queue', 'In progress', 'Done'], 'статусов задачи должно быть три',
   );
   await viewButton('Week').click();
+  await planner.locator('[data-all-day-fill]').first().waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-week-allday.png` });
   console.log('OK: событие на весь день и праздник, список с цветом из формы, три статуса');
 
   // ── Данные переживают перезагрузку; возврат в мессенджер ──────────────────
