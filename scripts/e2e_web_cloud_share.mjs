@@ -91,7 +91,7 @@ try {
   const member = shareDialog.locator(`[data-member="${bob}"]`);
 
   const invite = async (role) => {
-    await shareDialog.locator('[role="radiogroup"][aria-label="Add people"]').getByRole('radio', { name: role }).click();
+    await shareDialog.locator('select[data-new-role]').selectOption({ label: role });
     await shareDialog.getByRole('button', { name: 'Add people', exact: true }).click();
     const picker = a.locator('.Modal').filter({ has: a.locator('.ChatOrUserPicker-item') });
     await picker.locator('.ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
@@ -137,7 +137,7 @@ try {
   await bc.openShared();
   assert.deepEqual(await bc.crumbs(), ['Cloud', 'Shared with me']);
   assert.equal(await bc.folderRow(FOLDER).getAttribute('data-container-kind'), 'shared', 'после принятия — чужая папка');
-  await bc.folderRow(FOLDER).getByRole('button', { name: 'Leave folder', exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await bc.hasFolderMenuAction(FOLDER, 'Leave folder'), true, '«Покинуть папку» — в меню строки');
   await bc.folderRow(FOLDER).click();
   await bc.item('план.txt').waitFor({ state: 'visible', timeout: STEP });
   assert.equal((await bc.download('план.txt')).toString(), CONTENT, 'читатель скачивает файл');
@@ -149,8 +149,8 @@ try {
   console.log('OK: приглашение сообщением, принятие, читатель смотрит и скачивает, но не меняет');
 
   // ── Редактор: загрузка Боба видна Алисе ───────────────────────────────────
-  await ac.cloud.locator('nav').getByRole('button', { name: 'Sharing', exact: true }).click();
-  await member.getByRole('radio', { name: 'Editor' }).click();
+  await ac.cloud.locator('[data-share-banner="owned"]').click();
+  await member.locator('select').selectOption({ label: 'Editor' });
   await a.waitForFunction(
     (address) => document.querySelector(`[data-member="${address}"]`)?.dataset.role === 'editor', bob, { timeout: STEP },
   );
@@ -162,8 +162,8 @@ try {
   console.log('OK: редактор загружает, владелец видит и скачивает');
 
   // ── Понижение до читателя: запись снова недоступна, чтение нового — есть ──
-  await ac.cloud.locator('nav').getByRole('button', { name: 'Sharing', exact: true }).click();
-  await member.getByRole('radio', { name: 'Reader' }).click();
+  await ac.cloud.locator('[data-share-banner="owned"]').click();
+  await member.locator('select').selectOption({ label: 'Reader' });
   await a.waitForFunction(
     (address) => document.querySelector(`[data-member="${address}"]`)?.dataset.role === 'reader', bob, { timeout: STEP },
   );
@@ -175,7 +175,7 @@ try {
   console.log('OK: понижение до читателя — запись закрыта, чтение осталось');
 
   // ── Алиса убирает Боба: папка у него исчезает, новое он не получает ───────
-  await ac.cloud.locator('nav').getByRole('button', { name: 'Sharing', exact: true }).click();
+  await ac.cloud.locator('[data-share-banner="owned"]').click();
   await member.getByRole('button', { name: 'Remove' }).click();
   await member.waitFor({ state: 'detached', timeout: STEP });
   await shareDialog.getByRole('button', { name: 'Close', exact: true }).last().click();
@@ -192,7 +192,7 @@ try {
   await a.getByRole('button', { name: 'Create', exact: true }).click();
   const second = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: 'Фото' });
   await second.waitFor({ state: 'visible', timeout: STEP });
-  await second.locator('[role="radiogroup"][aria-label="Add people"]').getByRole('radio', { name: 'Editor' }).click();
+  await second.locator('select[data-new-role]').selectOption({ label: 'Editor' });
   await second.getByRole('button', { name: 'Add people', exact: true }).click();
   await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
   await second.locator(`[data-member="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
@@ -201,10 +201,10 @@ try {
   await photoInvite.waitFor({ state: 'visible', timeout: SYNC });
   await photoInvite.getByRole('button', { name: 'Accept', exact: true }).click();
   await bc.cloud.locator('nav').getByRole('button', { name: 'Фото', exact: true }).waitFor({ state: 'visible', timeout: SYNC });
-  // «Покинуть папку» — в строке «Доступных мне»
+  // «Покинуть папку» — в меню «⋯» строки «Доступных мне»
   await bc.root();
   await bc.openShared();
-  await bc.folderRow('Фото').getByRole('button', { name: 'Leave folder', exact: true }).click();
+  await bc.folderMenu('Фото', 'Leave folder');
   await b.locator('.Modal').filter({ hasText: 'You will lose access' }).getByRole('button', { name: 'Leave folder', exact: true }).click();
   await bc.cloud.getByText('No one has shared a folder with you yet').waitFor({ state: 'visible', timeout: SYNC });
   // Владелец видит, что участников не осталось
@@ -224,9 +224,9 @@ try {
   const toMyFiles = () => ac.root();
   const moveTo = async (name, placeName) => {
     await ac.menu(name, 'Move');
-    const dialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Move to' });
-    await dialog.getByRole('button', { name: 'Cloud', exact: true }).click();
-    await dialog.getByRole('listitem').filter({ hasText: placeName }).click();
+    // Дерево назначения показывает сразу все места: личный диск («Cloud») и совместные папки
+    const dialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Move here' });
+    await dialog.locator(`[data-place-id][role="listitem"]`).filter({ hasText: placeName }).click();
     await dialog.getByRole('button', { name: 'Move here', exact: true }).click();
     await ac.item(name).waitFor({ state: 'detached', timeout: SYNC });
   };
@@ -240,11 +240,11 @@ try {
   await ac.item('Вложенная').click();
   await ac.upload('глубоко.txt', 'файл в глубине');
   await toMyFiles();
-  await ac.menu(ARCHIVE, 'Sharing');
+  await ac.menu(ARCHIVE, 'Share');
   await a.locator('.Modal').getByRole('button', { name: 'Make shared', exact: true }).click();
   const archiveDialog = a.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' }).filter({ hasText: ARCHIVE });
   await archiveDialog.waitFor({ state: 'visible', timeout: SYNC });
-  await archiveDialog.locator('[role="radiogroup"][aria-label="Add people"]').getByRole('radio', { name: 'Reader' }).click();
+  await archiveDialog.locator('select[data-new-role]').selectOption({ label: 'Reader' });
   await archiveDialog.getByRole('button', { name: 'Add people', exact: true }).click();
   await a.locator('.Modal .ChatOrUserPicker-item').filter({ hasText: bobName }).first().click();
   await archiveDialog.locator(`[data-member="${bob}"]`).waitFor({ state: 'visible', timeout: STEP });
@@ -287,7 +287,7 @@ try {
   assert.equal((await bc.download('личный.txt')).toString(), 'с личного диска', 'участник читает перенесённый файл');
   await ac.folderRow(ARCHIVE).click();
   await ac.item('личный.txt').waitFor({ state: 'visible', timeout: STEP });
-  await moveTo('отчёт.txt', 'My files');
+  await moveTo('отчёт.txt', 'Cloud');
   await bc.item('отчёт.txt').waitFor({ state: 'detached', timeout: SYNC });
   await toMyFiles();
   assert.equal((await ac.download('отчёт.txt')).toString(), 'данные архива', 'файл вернулся на личный диск целым');

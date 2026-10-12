@@ -159,7 +159,7 @@ const CloudChatDialogs = () => {
             {lang('ParvaneCloudSend')}
           </Button>
           <Button className="confirm-dialog-button" isText onClick={closeCloudBridge}>
-            {lang('ParvaneCloudCancel')}
+            {lang('Cancel')}
           </Button>
         </div>
       </Modal>

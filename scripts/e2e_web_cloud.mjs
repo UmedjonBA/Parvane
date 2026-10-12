@@ -126,9 +126,9 @@ try {
     await openMenu(name);
     await page.getByRole('menuitem', { name: action, exact: true }).click();
   };
+  // Кнопки шапки раздела: «Папка» (её название для доступности — 'New folder')
   const addAction = async (action) => {
-    await cloud.getByRole('button', { name: 'Upload', exact: true }).click();
-    await page.getByRole('menuitem', { name: action, exact: true }).click();
+    await cloud.getByRole('button', { name: action, exact: true }).click();
   };
   const upload = async (files) => {
     await cloud.locator('input[type="file"]').setInputFiles(files);
@@ -269,7 +269,7 @@ try {
   }
   await cloud.getByText('Selected: 2').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await cloud.getByRole('toolbar').getByRole('button', { name: 'Move', exact: true }).click();
-  const moveDialog = page.locator('.Modal').filter({ hasText: 'Move to' });
+  const moveDialog = page.locator('.Modal').filter({ hasText: 'Move here' });
   await moveDialog.getByRole('listitem').filter({ hasText: SECRET_NAME }).click();
   await moveDialog.getByRole('button', { name: 'Move here', exact: true }).click();
   await item('дневник.txt').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
@@ -279,7 +279,7 @@ try {
   // Папку нельзя переместить в саму себя и во вложенную: кнопка недоступна
   await toRoot();
   await menuAction(SECRET_NAME, 'Move');
-  const folderMove = page.locator('.Modal').filter({ hasText: 'Move to' });
+  const folderMove = page.locator('.Modal').filter({ hasText: 'Move here' });
   assert.ok(await folderMove.getByRole('listitem').filter({ hasText: SECRET_NAME }).isDisabled(), 'папка не может быть целью самой себя');
   await folderMove.getByRole('button', { name: 'Cancel', exact: true }).click();
   console.log('OK: два выделенных элемента перемещены; папку нельзя переместить в саму себя');
