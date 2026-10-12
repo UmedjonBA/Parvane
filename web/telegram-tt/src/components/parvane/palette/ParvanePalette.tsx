@@ -255,7 +255,8 @@ const ParvanePalette = () => {
   // Стрелки — общим перехватчиком клавиш: иначе их забирают слушатели под окном (список чатов)
   const moveSelection = useLastCallback((e: KeyboardEvent, delta: number) => {
     e.preventDefault();
-    setSelected(movePaletteIndex(selectedIndex, delta, flat.length));
+    // Удержанная стрелка шлёт нажатия чаще перерисовки — шаг считается от текущего значения, а не от показанного
+    setSelected((current) => movePaletteIndex(Math.min(current, Math.max(0, flat.length - 1)), delta, flat.length));
   });
 
   useEffect(() => (isOpen ? captureKeyboardListeners({
