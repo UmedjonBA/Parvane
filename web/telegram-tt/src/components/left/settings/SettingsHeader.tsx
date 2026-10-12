@@ -271,19 +271,12 @@ const SettingsHeader: FC<OwnProps> = ({
       default:
         return (
           <div className="settings-main-header">
+            {/* Parvane: главный экран настроек — раздел «Профиль» (так он назван в боковой и нижней панели).
+                Карандаша в шапке нет, как в прототипе: правка профиля — из карточки аккаунта («Мой профиль») */}
             <h3 onClick={handleMultiClick}>
-              {oldLang('SETTINGS')}
+              {lang('ParvaneProfileTitle')}
             </h3>
 
-            <Button
-              round
-              ripple={!isMobile}
-              size="smaller"
-              color="translucent"
-              onClick={() => openSettingsScreen({ screen: SettingsScreens.EditProfile })}
-              ariaLabel={oldLang('lng_settings_information')}
-              iconName="edit"
-            />
             <DropdownMenu
               className="settings-more-menu"
               trigger={SettingsMenuButton}

@@ -20,7 +20,7 @@ import {
   relogin,
   sendText,
   linkSecondDevice,
-  openProfile,
+  openEditProfile,
   showChatList,
 } from './e2e_web_helpers.mjs';
 
@@ -62,12 +62,6 @@ async function muteChatForever(page, address) {
   await options.locator('label').last().click();
   await modal.locator('.confirm-dialog-button').first().click();
   await options.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-}
-
-async function openEditProfile(page) {
-  await openProfile(page);
-  await page.getByRole('button', { name: 'Edit profile' }).click();
-  await page.getByLabel('First name (required)').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 }
 
 // Из Edit profile — к списку чатов: «Чаты» боковой панели закрывают настройки с любого их экрана

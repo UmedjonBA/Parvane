@@ -1146,6 +1146,7 @@
 "ParvaneSectionCloud" = "Облако";
 "ParvaneTabBarAdd" = "Новая запись";
 "ParvaneTabBarProfile" = "Профиль";
+"ParvaneProfileTitle" = "Профиль";
 "ParvaneCloudTabDrive" = "Мои файлы";
 "ParvaneCloudTabShared" = "Доступные мне";
 "ParvaneCloudTabTrash" = "Корзина";

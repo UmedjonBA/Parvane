@@ -2268,6 +2268,7 @@ export interface LangPair {
   'ParvaneSectionCloud': undefined;
   'ParvaneTabBarAdd': undefined;
   'ParvaneTabBarProfile': undefined;
+  'ParvaneProfileTitle': undefined;
   'ParvaneCloudTabDrive': undefined;
   'ParvaneCloudTabShared': undefined;
   'ParvaneCloudTabTrash': undefined;

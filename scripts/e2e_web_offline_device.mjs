@@ -30,7 +30,7 @@ import {
   requireEnv,
   sendText,
   autoDismissRecoveryKeyDialog,
-  openProfile,
+  openEditProfile,
   showChatList,
 } from './e2e_web_helpers.mjs';
 
@@ -47,9 +47,7 @@ async function attachVideo(page, path, caption) {
 }
 
 async function setOwnBio(page, bio) {
-  await openProfile(page);
-  await page.getByRole('button', { name: 'Edit profile' }).click();
-  await page.getByLabel('First name (required)').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await openEditProfile(page);
   // Форма подставляет поля из fullInfo асинхронно и затирает уже введённое
   // (в c35 ушло `updateProfile {bio:len=0}`) — перепроверяем значение перед Save
   const bioInput = page.getByLabel('Bio');

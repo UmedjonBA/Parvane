@@ -42,7 +42,7 @@ const STATE_SYNC_BUDGET_MS = 10000;
 async function readLogoutWarning(page) {
   await openProfile(page);
   // «More actions» есть и в шапке чата — ждём сам экран настроек
-  await page.getByRole('button', { name: 'Edit profile' }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.locator('#Settings .settings-main-header').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first().click();
