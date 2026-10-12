@@ -133,7 +133,7 @@ const NoteLinks = ({
           {points.map((point) => (
             <g
               key={point.key}
-              className={point.title ? styles.miniNode : undefined}
+              className={point.title ? styles.miniNode : ''}
               style={`--c: ${point.color}`}
               data-title={point.title}
               onClick={point.title ? handleOpen : undefined}

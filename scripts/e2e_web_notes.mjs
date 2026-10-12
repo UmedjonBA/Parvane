@@ -659,14 +659,24 @@ try {
   ));
   const sameView = (a, b) => a.length === b.length && a.every((value, i) => Math.abs(value - b[i]) < 0.01);
   const deltaOf = (before, after) => [after.x - before.x, after.y - before.y];
-  // Пустая точка поля: внутри рамки группы `inside` либо (без неё) вне всех групп; не у карточки и не у стрелки
-  const emptyPoint = (inside) => board.evaluate((element, groupName) => {
+  // Пустая точка поля: внутри рамки группы `inside` либо (без неё) вне всех групп; не у карточки и не у стрелки.
+  // Обычно — первая найденная (у группы это узкое поле у левого верхнего угла рамки); `roomy` — та, вокруг
+  // которой больше всего свободного места (нет точки просторнее 12 px — `undefined`)
+  const emptyPoint = (inside, roomy = false) => board.evaluate((element, [groupName, isRoomy]) => {
     const groups = Array.from(element.querySelectorAll('[data-canvas-type="group"]'));
     const target = groupName ? groups.find((group) => group.textContent.includes(groupName)) : undefined;
     const box = (target || element).getBoundingClientRect();
     const near = (rect, x, y, by) => x >= rect.left - by && x <= rect.right + by && y >= rect.top - by && y <= rect.bottom + by;
     const edges = Array.from(element.querySelectorAll('[data-canvas-edge]')).map((edge) => edge.getBoundingClientRect());
     const frames = groups.map((group) => group.getBoundingClientRect());
+    const cards = Array.from(element.querySelectorAll('[data-canvas-node]:not([data-canvas-type="group"])'))
+      .map((card) => card.getBoundingClientRect());
+    // Свободное место вокруг точки: до ближайшей карточки, стрелки и границы области поиска
+    const roomAt = (x, y) => Math.min(
+      x - box.left, box.right - x, y - box.top, box.bottom - y,
+      ...[...cards, ...edges].map((rect) => Math.max(rect.left - x, x - rect.right, rect.top - y, y - rect.bottom)),
+    );
+    let best;
     const from = target ? 10 : 160;
     for (let y = box.top + from; y < box.bottom - 10; y += 8) {
       for (let x = box.left + 10; x < box.right - (target ? 10 : 120); x += 8) {
@@ -674,12 +684,17 @@ try {
         if (!hit || !element.contains(hit) || hit.closest('[data-canvas-node], [data-board-tools]')) continue;
         if (edges.some((rect) => near(rect, x, y, 24))) continue;
         if (!target && frames.some((rect) => near(rect, x, y, 48))) continue;
-        return { x, y };
+        if (!isRoomy) return { x, y };
+        const room = roomAt(x, y);
+        if (room >= 12 && (!best || room > best.room)) best = { x, y, room };
       }
     }
-    return undefined;
-  }, inside);
+    return best && { x: best.x, y: best.y };
+  }, [inside, roomy]);
   await page.keyboard.press('Escape');
+  // Выделение со стрелки снято, и холст после этого жив (отрисовка падала на снятии класса с узла SVG)
+  await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('Escape не снял выделение со стрелки'));
   await settle();
   const pairBefore = await rectOf(pairGroup);
   const alphaBefore = await rectOf(cardNamed('Альфа'));
@@ -705,6 +720,21 @@ try {
   await page.keyboard.press('Control+z');
   assert.deepEqual(await rectOf(pairGroup), pairBefore, 'отмена не вернула группу на место');
   assert.deepEqual(await rectOf(cardNamed('Альфа')), alphaBefore, 'отмена не вернула карточку группы на место');
+  // То же из середины свободного места внутри рамки, когда оно есть
+  const roomyPair = await emptyPoint('Пара', true);
+  if (roomyPair && (roomyPair.x !== insidePair.x || roomyPair.y !== insidePair.y)) {
+    await page.keyboard.press('Escape');
+    await drag(roomyPair, { x: roomyPair.x - 110, y: roomyPair.y - 80 });
+    const roomyDelta = deltaOf(pairBefore, await rectOf(pairGroup));
+    assert.ok(
+      Math.abs(roomyDelta[0]) >= 80 && Math.abs(roomyDelta[1]) >= 50,
+      `группа не сдвинулась из середины свободного места: ${JSON.stringify(roomyDelta)}`,
+    );
+    assert.deepEqual(deltaOf(alphaBefore, await rectOf(cardNamed('Альфа'))), roomyDelta, 'карточка не поехала вместе с группой');
+    assert.deepEqual(await viewOf(), viewBefore, 'вместо группы сдвинулось поле');
+    await page.keyboard.press('Control+z');
+    assert.deepEqual(await rectOf(pairGroup), pairBefore, 'отмена не вернула группу на место');
+  }
   // Нажатие без сдвига внутри группы её выделяет
   await page.keyboard.press('Escape');
   await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('выделение не снято'));

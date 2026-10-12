@@ -99,7 +99,7 @@ const PvIcon = ({ name, isSmall, className }: OwnProps) => {
           return (
             <circle
               key={key}
-              className={shape.isFilled ? kit.iconDot : undefined}
+              className={shape.isFilled ? kit.iconDot : ''}
               cx={shape.c[0]}
               cy={shape.c[1]}
               r={shape.c[2]}
@@ -109,7 +109,7 @@ const PvIcon = ({ name, isSmall, className }: OwnProps) => {
         return (
           <rect
             key={key}
-            className={shape.isDashed ? kit.iconDashed : undefined}
+            className={shape.isDashed ? kit.iconDashed : ''}
             x={shape.r[0]}
             y={shape.r[1]}
             width={shape.r[2]}
