@@ -112,8 +112,11 @@ function msUntilTomorrow() {
 // в том же переключателе, что неделя, месяц, год и список) и «Здоровье». Данные — запись устройства
 // (plannerStore). Раскладка — острова: страница раздела и справа день календаря либо карточка
 // записи; на телефоне карточка и настройки выезжают снизу
+// Курсор ставится в поле названия, только если человек ещё не начал заполнять форму сам
 function focusNewName() {
-  document.getElementById(NEW_NAME_ID)?.focus();
+  const field = document.getElementById(NEW_NAME_ID);
+  if (!field || field.closest('[data-planner-side]')?.contains(document.activeElement)) return;
+  field.focus();
 }
 
 const Planner = () => {

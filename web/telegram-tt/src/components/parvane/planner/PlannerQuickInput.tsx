@@ -123,7 +123,11 @@ const PlannerQuickInput = ({
   // Чтения, выбранные из вариантов чипа, и чип, у которого варианты сейчас показаны
   const [pick, setPick] = useState<QuickPick>({});
   const [altField, setAltField] = useState<QuickAltField | undefined>();
-  const [learnStore, setLearnStore] = useState<LearnStore | undefined>();
+  // Словарь правок читается в момент открытия окна, а не кадром позже: иначе первый разбор шёл бы по
+  // словарю прошлого открытия (например, уже сброшенному в настройках)
+  const learnStore = useMemo<LearnStore | undefined>(
+    () => (isOpen ? readLearned(userId) : undefined), [isOpen, userId],
+  );
 
   const lang = useLang();
   const learned = useMemo(() => learnStore && learnedDefaults(learnStore), [learnStore]);
@@ -135,7 +139,6 @@ const PlannerQuickInput = ({
     setSkip([]);
     setPick({});
     setAltField(undefined);
-    setLearnStore(readLearned(userId));
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => window.clearTimeout(timeout);
@@ -214,7 +217,6 @@ const PlannerQuickInput = ({
     const corrected = recordCorrection(store, parseQuickInput(value, baseContext()), entry);
     if (corrected !== store) {
       saveLearned(userId, corrected);
-      setLearnStore(corrected);
     }
     updatePlanner((state) => {
       applyQuickDraft(state, entry, today);
