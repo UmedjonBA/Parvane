@@ -44,11 +44,13 @@ const PlannerDetailsFold = ({ summary, children }: OwnProps) => {
   return (
     <div className={styles.detailsFold} data-planner-details={isOpen ? 'open' : 'closed'}>
       <button type="button" className={styles.detailsToggle} aria-expanded={isOpen} onClick={handleToggle}>
-        <span className={styles.detailsLabel}>{lang('PlannerDetails')}</span>
-        {!isOpen && <span className={styles.detailsSummary}>{summary}</span>}
+        <span className={styles.detailsText}>
+          <span className={styles.detailsLabel}>{lang('PlannerDetails')}</span>
+          {Boolean(summary) && <span className={styles.detailsSummary}>{summary}</span>}
+        </span>
         <Icon name={isOpen ? 'up' : 'down'} />
       </button>
-      {isOpen && children}
+      {isOpen && <div className={styles.detailsBody}>{children}</div>}
     </div>
   );
 };

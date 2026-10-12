@@ -2,7 +2,10 @@ import { memo } from '../../../lib/teact/teact';
 
 import type { PlannerState, PlannerTask } from './plannerModel';
 
-import { formatDay, formatProject, listColorStyle } from './plannerFormat';
+import buildClassName from '../../../util/buildClassName';
+import {
+  formatDay, formatDayShort, formatProject, listColorStyle,
+} from './plannerFormat';
 import { getCompletedTasks, getListColor } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -19,6 +22,7 @@ type OwnProps = {
   state: PlannerState;
   // День, на который назначает кнопка у задачи
   day: string;
+  today: string;
   tasks: PlannerTask[];
   onOpenTask: (taskId: string, day?: string) => void;
   onClose: NoneToVoidFunction;
@@ -26,7 +30,7 @@ type OwnProps = {
 
 // Задачи без даты (spec 018): по спискам, «в работе» сверху группы; кнопка справа назначает день
 const PlannerUndated = ({
-  isOpen, state, day, tasks, onOpenTask, onClose,
+  isOpen, state, day, today, tasks, onOpenTask, onClose,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -50,35 +54,49 @@ const PlannerUndated = ({
   return (
     <Modal
       isOpen={isOpen}
-      title={lang('PlannerUndatedTitle')}
+      title={lang('PlannerUndated', { count: tasks.length })}
       className={styles.sheet}
       hasCloseButton
       onClose={onClose}
     >
-      <div className={styles.undated} data-planner-undated>
-        {!tasks.length && <p className={styles.small}>{lang('PlannerUndatedEmpty')}</p>}
-        {projects.map((project) => (
-          <section key={project} className={styles.undatedGroup} data-project={project}>
-            <h3 className={styles.undatedTitle}>
-              <span className={styles.undatedDot} style={listColorStyle(getListColor(state, project))} />
-              {formatProject(lang, project)}
-            </h3>
-            {tasks.filter((task) => task.project === project).map((task) => (
-              <div key={task.id} className={styles.undatedRow}>
-                <PlannerTaskRow task={task} context="all" noProject onOpen={handleOpen} />
-                <button
-                  type="button"
-                  className={styles.undatedAssign}
-                  data-task-id={task.id}
-                  aria-label={lang('PlannerUndatedAssign', { date: dayLabel, name: task.name })}
-                  onClick={handleAssign}
-                >
-                  {dayLabel}
-                </button>
-              </div>
-            ))}
-          </section>
-        ))}
+      <div className={styles.sheetBody} data-planner-undated>
+        <p className={styles.sheetHint}>{lang('PlannerUndatedHint')}</p>
+        {!tasks.length && <p className={styles.muted}>{lang('PlannerUndatedEmpty')}</p>}
+        {projects.map((project) => {
+          const projectTasks = tasks.filter((task) => task.project === project);
+          return (
+            <section key={project} data-project={project}>
+              <h3
+                className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}
+                style={listColorStyle(getListColor(state, project))}
+              >
+                <span className={styles.listMark} />
+                {formatProject(lang, project)}
+                <span className={styles.groupCount}>{projectTasks.length}</span>
+              </h3>
+              {projectTasks.map((task) => (
+                <PlannerTaskRow
+                  key={task.id}
+                  task={task}
+                  context="all"
+                  noProject
+                  trailing={(
+                    <button
+                      type="button"
+                      className={buildClassName(styles.btn, styles.btnGhost)}
+                      data-task-id={task.id}
+                      aria-label={lang('PlannerUndatedAssign', { date: dayLabel, name: task.name })}
+                      onClick={handleAssign}
+                    >
+                      {day === today ? lang('PlannerToday') : formatDayShort(lang, day)}
+                    </button>
+                  )}
+                  onOpen={handleOpen}
+                />
+              ))}
+            </section>
+          );
+        })}
         {Boolean(completed.length) && (
           <details className={styles.fold}>
             <summary>{lang('PlannerCompleted', { count: completed.length })}</summary>

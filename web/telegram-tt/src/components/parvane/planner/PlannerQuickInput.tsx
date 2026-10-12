@@ -2,12 +2,13 @@ import {
   memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
+import type { IconName } from '../../../types/icons';
 import type { PlannerSettings } from './plannerModel';
 import type { QuickDraft, QuickField, QuickKind } from './plannerQuick';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDay, formatDuration, formatRepeat, formatSpan,
+  formatDay, formatDayLabel, formatDuration, formatRepeat, formatSpan,
 } from './plannerFormat';
 import { applyQuickDraft, formatPace } from './plannerHealth';
 import { toTime } from './plannerModel';
@@ -18,7 +19,6 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
 import { EVENT_ERROR_KEYS, TASK_ERROR_KEYS } from './PlannerTaskForm';
 
@@ -47,6 +47,36 @@ const KIND_LABELS = {
   sleep: 'PlannerKindSleep',
   workout: 'PlannerKindWorkout',
 } as const;
+const DRAFT_KIND_LABELS = {
+  event: 'PlannerKindEvent',
+  task: 'PlannerKindTask',
+  food: 'PlannerKindFood',
+  water: 'PlannerHealthWater',
+  sleep: 'PlannerKindSleep',
+  workout: 'PlannerKindWorkout',
+  metric: 'PlannerHealthBody',
+  goal: 'PlannerHealthGoals',
+} as const satisfies Record<QuickKind, string>;
+const KIND_CLASSES = {
+  event: styles.kindEvent,
+  task: styles.kindTask,
+  food: styles.kindFood,
+  water: styles.kindFood,
+  sleep: styles.kindSleep,
+  workout: styles.kindWorkout,
+  metric: styles.kindMetric,
+  goal: styles.kindMuted,
+} satisfies Record<QuickKind, string>;
+const KIND_ICONS = {
+  event: 'calendar',
+  task: 'check',
+  food: 'eats',
+  water: 'eats',
+  sleep: 'darkmode',
+  workout: 'sport',
+  metric: 'heart-outline',
+  goal: 'settings',
+} as const satisfies Record<QuickKind, IconName>;
 // Виды, которые в переключателе стоят под одной кнопкой
 const CHOICE_OF: Partial<Record<QuickKind, KindChoice>> = { water: 'food', metric: 'auto', goal: 'auto' };
 const METRIC_LABELS = {
@@ -142,8 +172,19 @@ const PlannerQuickInput = ({
     inputRef.current?.focus();
   });
 
+  const handleSubmitClick = useLastCallback(() => handleSubmit());
+
+  // Примеры — на языке интерфейса: их разбирает словарь того же языка
+  const examples = useMemo(() => lang('PlannerQuickExamples').split(/\s*\|\s*/).filter(Boolean), [lang]);
+
   const handleChoice = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     setChoice(e.currentTarget.dataset.kind as KindChoice);
+    inputRef.current?.focus();
+  });
+
+  const handleExample = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    setText(e.currentTarget.dataset.text!);
+    setSkip([]);
     inputRef.current?.focus();
   });
 
@@ -159,7 +200,7 @@ const PlannerQuickInput = ({
         <input
           ref={inputRef}
           id="planner-quick-input"
-          className={buildClassName('form-control', styles.quickInput)}
+          className={styles.quickInput}
           type="text"
           value={text}
           maxLength={INPUT_MAX_LENGTH}
@@ -170,7 +211,49 @@ const PlannerQuickInput = ({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
         />
-        <div className={styles.quickKinds} role="radiogroup">
+        <div className={styles.quickPreview} aria-live="polite">
+          {hasText ? (
+            <>
+              <span className={buildClassName(styles.tag, styles.tagLarge, KIND_CLASSES[draft.kind])}>
+                <Icon name={KIND_ICONS[draft.kind]} />
+                {draft.metric ? lang(METRIC_LABELS[draft.metric]) : lang(DRAFT_KIND_LABELS[draft.kind])}
+              </span>
+              {chips.map(({
+                field, text: label, isFixed, key,
+              }) => (
+                <span
+                  key={key || field}
+                  className={buildClassName(styles.tag, styles.tagLarge, styles.kindMuted)}
+                  data-quick-chip={field}
+                >
+                  {label}
+                  {!isFixed && (
+                    <button
+                      type="button"
+                      className={styles.tagRemove}
+                      data-field={field}
+                      aria-label={lang('PlannerQuickRemove', { value: label })}
+                      onClick={handleSkip}
+                    >
+                      <Icon name="close" />
+                    </button>
+                  )}
+                </span>
+              ))}
+              <div className={styles.quickName} dir="auto">
+                {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
+                  || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
+                  || (draft.kind === 'water' && lang('PlannerHealthWater'))
+                  || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
+              </div>
+              {errorKey && <div className={styles.quickError} role="alert">{lang(errorKey)}</div>}
+              {isNameTooLong && <div className={styles.quickError} role="alert">{lang('PlannerQuickTooLong')}</div>}
+            </>
+          ) : (
+            <span className={styles.muted}>{lang('PlannerQuickHint')}</span>
+          )}
+        </div>
+        <div className={buildClassName(styles.hscroll, 'no-scrollbar')} role="radiogroup">
           {KIND_CHOICES.map((kind) => {
             const isActive = choice === kind
               || (choice === 'auto' && hasText && (CHOICE_OF[draft.kind] || draft.kind) === kind);
@@ -181,50 +264,52 @@ const PlannerQuickInput = ({
                 role="radio"
                 aria-checked={choice === kind}
                 data-kind={kind}
-                className={buildClassName(styles.quickKind, isActive && styles.quickKindOn)}
+                className={buildClassName(
+                  styles.chip, kind !== 'auto' && KIND_CLASSES[kind], isActive && styles.chipOn,
+                )}
                 onClick={handleChoice}
               >
                 {lang(KIND_LABELS[kind])}
               </button>
             );
           })}
-          <button type="button" className={styles.quickMore} onClick={onMore}>{lang('PlannerQuickMore')}</button>
         </div>
-        {hasText ? (
-          <div className={styles.quickDraft} aria-live="polite">
-            <div className={styles.quickName} dir="auto">
-              {draft.name || (draft.metric && lang(METRIC_LABELS[draft.metric]))
-                || (draft.kind === 'sleep' && lang('PlannerKindSleep'))
-                || (draft.kind === 'water' && lang('PlannerHealthWater'))
-                || (draft.kind === 'goal' && lang('PlannerHealthGoals')) || lang('PlannerQuickNoName')}
-            </div>
-            <div className={styles.quickChips}>
-              {chips.map(({
-                field, text: label, isFixed, key,
-              }) => (
-                <span key={key || field} className={styles.quickChip} data-quick-chip={field}>
-                  {label}
-                  {!isFixed && (
-                    <button
-                      type="button"
-                      className={styles.quickChipRemove}
-                      data-field={field}
-                      aria-label={lang('PlannerQuickRemove', { value: label })}
-                      onClick={handleSkip}
-                    >
-                      <Icon name="close" />
-                    </button>
-                  )}
-                </span>
-              ))}
-            </div>
-            {errorKey && <div className={styles.quickError} role="alert">{lang(errorKey)}</div>}
-            {isNameTooLong && <div className={styles.quickError} role="alert">{lang('PlannerQuickTooLong')}</div>}
+        <div>
+          <div className={styles.sheetHint}>{lang('PlannerQuickExamplesTitle')}</div>
+          <div className={styles.chips}>
+            {examples.map((example) => (
+              <button
+                key={example}
+                type="button"
+                className={styles.chip}
+                data-text={example}
+                data-quick-example
+                onClick={handleExample}
+              >
+                {example}
+              </button>
+            ))}
           </div>
-        ) : (
-          <div className={styles.quickHint}>{lang('PlannerQuickHint')}</div>
-        )}
-        <Button size="smaller" disabled={!canSubmit} onClick={handleSubmit}>{lang('PlannerAdd')}</Button>
+        </div>
+        <div className={styles.quickFooter}>
+          <span className={buildClassName(styles.muted, styles.grow)}>
+            {lang('PlannerQuickDefault', { date: formatDayLabel(lang, today) })}
+          </span>
+          <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
+            {lang('PlannerQuickMore')}
+          </button>
+          <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onClose}>
+            {lang('Cancel')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(styles.btn, styles.btnAccent)}
+            disabled={!canSubmit}
+            onClick={handleSubmitClick}
+          >
+            {lang('PlannerAdd')}
+          </button>
+        </div>
       </form>
     </Modal>
   );

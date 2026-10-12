@@ -12,19 +12,12 @@ import { showPlannerNotice, updatePlanner } from './plannerStore';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Button from '../../ui/Button';
-import Select from '../../ui/Select';
 import PlannerField from './PlannerField';
 
 import styles from './Planner.module.scss';
 
 type OwnProps = {
   state: PlannerState;
-  // Узкий экран: выбор вида календаря живёт здесь, а не над календарём
-  viewOptions?: { value: string; label: string }[];
-  activeView?: string;
-  onSwitchView?: (value: string) => void;
-  onBack: NoneToVoidFunction;
 };
 
 const ERROR_KEYS = {
@@ -37,14 +30,8 @@ const BUDGET_STEP = 30;
 // Parvane (spec 009, T014): настройки дня — бюджет и окна дня.
 // Каждое поле сохраняется само по завершении ввода; негодное значение не
 // применяется и объясняется уведомлением
-const PlannerSettings = ({
-  state, viewOptions, activeView, onSwitchView, onBack,
-}: OwnProps) => {
+const PlannerSettings = ({ state }: OwnProps) => {
   const lang = useLang();
-
-  const handleViewChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    onSwitchView?.(e.currentTarget.value);
-  });
 
   const { settings, budget } = state;
 
@@ -89,32 +76,9 @@ const PlannerSettings = ({
   });
 
   return (
-    <div className={buildClassName(styles.editor, styles.settings)}>
-      <Button isText size="smaller" className={styles.settingsBack} iconName="arrow-left" onClick={onBack}>
-        {lang('Back')}
-      </Button>
-      {viewOptions && (
-        <Select
-          id="planner-settings-view"
-          label={lang('PlannerCalView')}
-          value={activeView}
-          hasArrow
-          onChange={handleViewChange}
-        >
-          {viewOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </Select>
-      )}
-      <p className={styles.small}>{lang('PlannerSettingsHint')}</p>
+    <div className={styles.editor}>
+      <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('ParvaneSectionPlanner')}</h3>
       <div className={styles.fields}>
-        <PlannerField
-          label={lang('PlannerSettingsBudget')}
-          type="number"
-          value={String(budget)}
-          min={MIN_BUDGET_MINUTES}
-          max={MINUTES_IN_DAY}
-          step={BUDGET_STEP}
-          onCommit={handleBudget}
-        />
         <PlannerField
           label={lang('PlannerSettingsDayStart')}
           type="time"
@@ -127,10 +91,21 @@ const PlannerSettings = ({
           value={toTime(settings.dayEnd)}
           onCommit={handleDayEnd}
         />
+        <PlannerField
+          label={lang('PlannerSettingsBudget')}
+          type="number"
+          value={String(budget)}
+          min={MIN_BUDGET_MINUTES}
+          max={MINUTES_IN_DAY}
+          step={BUDGET_STEP}
+          onCommit={handleBudget}
+        />
       </div>
-      <Button size="smaller" color="translucent" className={styles.settingsReset} onClick={handleReset}>
+      <p className={styles.sheetHint}>{lang('PlannerSettingsHint')}</p>
+      <p className={styles.sheetHint}>{lang('PlannerSettingsGoalsHint')}</p>
+      <button type="button" className={buildClassName(styles.btn, styles.btnDanger)} onClick={handleReset}>
         {lang('PlannerSettingsReset')}
-      </Button>
+      </button>
     </div>
   );
 };
