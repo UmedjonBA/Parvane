@@ -609,6 +609,8 @@ function formatAlt(lang: ReturnType<typeof useLang>, draft: QuickDraft, alt: Qui
   }
 }
 
+const TIME_GOAL_KEYS = new Set(['bedtime', 'wakeTime']);
+
 function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[] {
   const has = (field: QuickField) => draft.spans.some((span) => span.field === field);
   const chips: Chip[] = [];
@@ -617,7 +619,10 @@ function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[]
   if (draft.kind === 'goal') {
     const changes = draft.goalChanges!;
     Object.entries(changes.goals).forEach(([metric, value]) => fixed('health', `${metric} → ${number(value)}`));
-    Object.entries(changes.health).forEach(([key, value]) => fixed('health', `${key} → ${number(value)}`));
+    // Цель режима сна — минуты от полуночи: показываются временем
+    Object.entries(changes.health).forEach(([key, value]) => fixed(
+      'health', `${key} → ${TIME_GOAL_KEYS.has(key) ? toTime(value) : number(value)}`,
+    ));
     if (changes.dayStart !== undefined) {
       fixed('time', `${toTime(changes.dayStart)}–${toTime(changes.dayEnd!)}`);
     }
