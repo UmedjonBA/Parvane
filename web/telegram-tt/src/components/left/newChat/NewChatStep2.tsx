@@ -48,6 +48,7 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
   const {
     createGroupChat,
     createChannel,
+    resetChatCreation,
   } = getActions();
 
   const lang = useOldLang();
@@ -147,17 +148,16 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
     });
   }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded]);
 
-  // Parvane: сброс — один раз на завершение. `onReset` меняется с каждой сменой экрана колонки, и пока
-  // шаг мастера ещё смонтирован, повторный сброс закрывал только что открытый «Профиль»
-  const handledProgressRef = useRef<ChatCreationProgress>();
+  // Parvane: отметка «создано» снимается здесь же, а колонка сбрасывается, только пока мастер на экране:
+  // иначе подтверждение, пришедшее позже, закрывало только что открытый «Профиль»
   useEffect(() => {
-    if (handledProgressRef.current === creationProgress) return;
-    handledProgressRef.current = creationProgress;
     if (creationProgress === ChatCreationProgress.Complete) {
       isTitleTouchedRef.current = false;
-      onReset(true);
+      resetChatCreation();
+      // Сервер подтверждает создание позже, чем открывается чат: человек мог уже уйти с мастера
+      if (isActive) onReset(true);
     }
-  }, [creationProgress, onReset]);
+  }, [creationProgress, isActive, onReset]);
 
   const renderedError = (creationError && lang(creationError)) || (
     error !== chatTitleEmptyError && error !== channelTitleEmptyError

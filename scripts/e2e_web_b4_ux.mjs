@@ -206,7 +206,13 @@ try {
   await waitTop('LeftColumn|true|', '«назад» из редактирования профиля');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'hidden', timeout: 10_000 });
   await mobilePage.waitForTimeout(600);
+  const dumpHistory = async (label) => console.log('DEBUG history', label, await mobilePage.evaluate(
+    () => JSON.stringify({ length: window.history.length, state: window.history.state, hash: window.location.hash }),
+  ));
+  await dumpHistory('перед «назад» из настроек');
   await mobilePage.goBack();
+  await mobilePage.waitForTimeout(1500);
+  await dumpHistory('после');
   await waitTop('LeftColumn|false|', '«назад» из настроек');
 
   await openPrivateChat(mobileSession.page, alice);
