@@ -1,6 +1,7 @@
 // Раздел «Знания»: папка «Справка Parvane» нового хранилища, папки заметок, заметки `.md` в папке облака,
 // ссылки и обратные ссылки, пункты-задачи в обе стороны, «Запланировано», поиск, граф (заметка читается и
-// правится в панели справа, связь проводят линией от кольца заметки и убирают, выбрав линию), холст (группа
+// правится в панели справа, связь проводят линией от кольца заметки и убирают, выбрав линию; выбор папок,
+// Escape закрывает панель, «Создать холст» — холст из видимого на графе с группами папок), холст (группа
 // двигается за пустое место внутри, заметка правится прямо на карточке); всё переживает перезагрузку.
 // Запуск: scripts/run_web_notes_e2e.sh
 import assert from 'node:assert/strict';
@@ -500,12 +501,166 @@ try {
   await visible(body.getByText(PANEL_EDIT), 'правка из панели графа на вкладке «Заметки»');
   assert.equal(await body.locator(`button[data-title="${GRAPH_NOTE}"]`).count(), 0, 'убранная на графе ссылка осталась в тексте');
 
+  // ── Граф: выбор папок, Escape закрывает панель, «Создать холст» из того, что видно на графе ──
+  const GRAPH_FOLDER = 'Железо';
+  const FOLDER_NOTE = 'Стойка';
+  const GRAPH_NOTES = '#ParvaneKnowledge [data-notes-graph] [data-node][data-kind="note"]';
+  const BOARD_FILES = '#ParvaneKnowledge [data-canvas-node][data-canvas-type="file"]';
+  const BOARD_GROUPS = '#ParvaneKnowledge [data-canvas-node][data-canvas-type="group"]';
+  const domCount = (selector, count, what) => page.waitForFunction(
+    ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail(what));
+  const savedGraphFolders = () => page.evaluate(() => JSON.parse(localStorage.getItem('parvane:knowledge-graph-folders')));
+  // Папка с заметкой, которая ссылается на заметку без папки
+  await knowledge.locator('[data-notes-new-folder]').click();
+  await visible(folderName, 'поле названия папки для графа');
+  await folderName.fill(GRAPH_FOLDER);
+  await folderName.press('Enter');
+  await folderOf(GRAPH_FOLDER).locator('[data-folder-add]').click();
+  await visible(chipOf(GRAPH_FOLDER), 'папка заметки для графа');
+  await note.getByLabel('Note title').fill(FOLDER_NOTE);
+  await note.getByLabel('Note title').blur();
+  await visible(rowsIn(GRAPH_FOLDER).and(row(FOLDER_NOTE)), 'заметка в папке для графа');
+  await note.getByRole('button', { name: 'Edit' }).click();
+  await page.locator('#knowledge-note-editor').fill(`В ней стоит [[${NOTE}]]`);
+  await note.getByRole('button', { name: 'Save' }).click();
+  await visible(body.getByRole('button', { name: NOTE }), 'ссылка из заметки папки');
+
+  await openTab('Graph');
+  await visible(graph, 'граф с заметкой папки');
+  const foldersChip = graph.locator('[data-graph-folders]');
+  const foldersMenu = graph.locator('[data-graph-folders-menu]');
+  await domCount(GRAPH_NOTES, 3, 'на графе не три заметки');
+  await visible(foldersChip, 'чип выбора папок на графе');
+  assert.equal(await foldersChip.getAttribute('data-graph-folders'), 'all', 'по умолчанию выбраны не все папки');
+  // Одна папка: её заметки, соседей из других папок нет — ни точкой, ни «заметкой, которой ещё нет»
+  await foldersChip.click();
+  await visible(foldersMenu, 'список папок графа');
+  await foldersMenu.locator(`[data-graph-folder="${GRAPH_FOLDER}"]`).click();
+  await domCount(GRAPH_NOTES, 1, 'после выбора папки на графе остались чужие заметки');
+  await visible(gnode(FOLDER_NOTE), 'заметка выбранной папки на графе');
+  assert.equal(await graph.locator('[data-node][data-kind="missing"]').count(), 0, 'сосед из другой папки показан «заметкой, которой ещё нет»');
+  assert.equal(await graph.locator('[data-graph-edge]').count(), 0, 'связь с заметкой другой папки осталась');
+  await visible(graph.getByText('Notes 1', { exact: true }), 'счётчик заметок считает видимые');
+  assert.equal(await foldersChip.getAttribute('data-graph-folders'), '1', 'чип не показывает выбранную папку');
+  assert.deepEqual(await savedGraphFolders(), [GRAPH_FOLDER], 'выбор папок не запомнен на устройстве');
+  // Вторая галочка — «Без папки»: отмечены все, это снова «все папки»
+  await foldersMenu.locator('[data-graph-folder=""]').click();
+  await domCount(GRAPH_NOTES, 3, 'после выбора всех папок заметки не вернулись');
+  assert.equal(await foldersChip.getAttribute('data-graph-folders'), 'all', 'все отмеченные папки не стали «всеми папками»');
+  assert.equal(await savedGraphFolders(), null, 'выбор «все папки» остался записан');
+  await foldersMenu.locator(`[data-graph-folder="${GRAPH_FOLDER}"]`).click();
+  await domCount(GRAPH_NOTES, 1, 'папка не выбрана снова');
+  // Escape закрывает список папок
+  await page.keyboard.press('Escape');
+  await gone(foldersMenu, 'Escape не закрыл список папок');
+  console.log('OK: граф — выбор папок: одна папка без соседей, все папки, выбор запомнен');
+
+  // Escape: правка в панели остаётся, режим «Связать» отменяется первым, потом закрывается панель
+  await clickNode(FOLDER_NOTE);
+  await visible(panel.locator(`[data-note-title="${FOLDER_NOTE}"]`), 'заметка папки в панели графа');
+  await panel.getByRole('button', { name: 'Edit' }).click();
+  await visible(page.locator('#knowledge-note-editor'), 'правка заметки в панели');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  assert.equal(await panel.count(), 1, 'Escape закрыл панель с открытой правкой');
+  assert.equal(await page.locator('#knowledge-note-editor').count(), 1, 'Escape закрыл правку заметки в панели');
+  await panel.getByRole('button', { name: 'Cancel' }).click();
+  await gone(page.locator('#knowledge-note-editor'), 'правка в панели не отменена');
+  await panel.locator('[data-graph-link-start]').click();
+  await visible(graph.locator('[data-graph-link-mode]'), 'режим «Связать»');
+  await page.keyboard.press('Escape');
+  await gone(graph.locator('[data-graph-link-mode]'), 'Escape не вышел из режима «Связать»');
+  assert.equal(await panel.count(), 1, 'Escape в режиме «Связать» закрыл и панель');
+  await page.keyboard.press('Escape');
+  await gone(panel, 'Escape не закрыл панель заметки на графе');
+  assert.equal(await graph.getAttribute('data-graph-picked'), null, 'после Escape точка осталась выбранной');
+  console.log('OK: граф — Escape: сначала режим «Связать», потом панель; правку в панели не закрывает');
+
+  // «Создать холст» при выбранной папке: на холсте только её заметка, в группе с именем папки
+  const graphChip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
+  const graphBoard = knowledge.locator('[data-canvas-board]');
+  await graph.locator('[data-graph-to-canvas]').click();
+  await visible(graphBoard, 'холст, созданный с графа');
+  assert.equal(await knowledge.getAttribute('data-knowledge-view'), 'canvas', 'после «Создать холст» открыта не вкладка «Холст»');
+  await visible(graphChip('Link graph'), 'холст с графа назван «Link graph»');
+  assert.equal(await graphChip('Link graph').getAttribute('aria-pressed'), 'true', 'созданный с графа холст не открыт');
+  await domCount(BOARD_FILES, 1, 'на холсте из одной папки не одна карточка');
+  await domCount(BOARD_GROUPS, 1, 'заметка папки не обведена группой');
+  await visible(
+    graphBoard.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: GRAPH_FOLDER }),
+    'группа названа именем папки',
+  );
+  assert.equal(await knowledge.locator('[data-canvas-edge]').count(), 0, 'на холсте из одной папки есть стрелка наружу');
+  // Холст помнит свой набор: обновление из графа чужих заметок не втягивает
+  await knowledge.locator('[data-canvas-refresh]').click();
+  await visible(page.getByText('Nothing to update'), 'обновление холста одной папки ничего не добавляет');
+  await domCount(BOARD_FILES, 1, 'обновление втянуло заметки вне набора холста');
+
+  // Выбор папки пережил уход с вкладки; все папки — холст со всеми заметками, папка обведена группой
+  await openTab('Graph');
+  await visible(foldersChip, 'чип папок после возврата на граф');
+  assert.equal(await foldersChip.getAttribute('data-graph-folders'), '1', 'выбор папки не пережил уход с вкладки');
+  await domCount(GRAPH_NOTES, 1, 'после возврата на граф показаны не только заметки выбранной папки');
+  await foldersChip.click();
+  await foldersMenu.locator('[data-graph-folder-all]').click();
+  await gone(foldersMenu, '«Все папки» не закрыли список');
+  await domCount(GRAPH_NOTES, 3, '«Все папки» не вернули заметки');
+  await graph.locator('[data-graph-to-canvas]').click();
+  await visible(graphChip('Link graph 2'), 'второй холст с графа');
+  assert.equal(await graphChip('Link graph 2').getAttribute('aria-pressed'), 'true', 'второй холст с графа не открыт');
+  // Заметки дней на графе выключены — на холсте их нет: NOTE, OTHER и заметка папки
+  await domCount(BOARD_FILES, 3, 'на холсте со всеми папками не три карточки');
+  await domCount(BOARD_GROUPS, 1, 'на холсте со всеми папками не одна группа');
+  await domCount('#ParvaneKnowledge [data-canvas-edge]', 2, 'на холсте со всеми папками не две стрелки');
+  await visible(
+    graphBoard.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: GRAPH_FOLDER }),
+    'группа папки на холсте со всеми папками',
+  );
+  // В группе лежит заметка папки и только она
+  const grouped = await graphBoard.evaluate((element, title) => {
+    const frame = element.querySelector('[data-canvas-type="group"]').getBoundingClientRect();
+    return Array.from(element.querySelectorAll('[data-canvas-type="file"]')).map((card) => {
+      const box = card.getBoundingClientRect();
+      const isInside = box.left >= frame.left && box.right <= frame.right
+        && box.top >= frame.top && box.bottom <= frame.bottom;
+      return [card.textContent.includes(title), isInside];
+    });
+  }, FOLDER_NOTE);
+  assert.equal(grouped.filter(([, isInside]) => isInside).length, 1, 'в группе папки не одна карточка');
+  assert.ok(grouped.every(([isFolderNote, isInside]) => isFolderNote === isInside), 'в группе папки лежит не её заметка');
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-folders.png` });
+  console.log('OK: граф — «Создать холст»: холст из видимого, папка обведена группой, набор холста помнится');
+
+  // Убрать за собой: холсты, заметку и папку — дальше сценарий идёт с прежним набором
+  for (const [name, renamed] of [['Link graph 2', 'С графа 2'], ['Link graph', 'С графа 1']]) {
+    await graphChip(name).click();
+    await knowledge.locator('[data-canvas-menu]').click();
+    await page.locator('#knowledge-canvas-name').fill(renamed);
+    await page.locator('#knowledge-canvas-name').press('Enter');
+    await visible(graphChip(renamed), 'переименованный холст с графа');
+    await knowledge.locator('[data-canvas-menu]').click();
+    await page.locator('[data-canvas-delete]').click();
+    await page.locator('.confirm-dialog-button').filter({ hasText: 'Move to trash' }).click();
+    await gone(graphChip(renamed), 'холст с графа не удалён');
+  }
+  await openTab('Notes');
+  await row(FOLDER_NOTE).click();
+  await visible(knowledge.locator(`[data-note-title="${FOLDER_NOTE}"]`), 'заметка папки перед удалением');
+  await trashOpenNote();
+  await gone(row(FOLDER_NOTE), 'заметка папки не удалена');
+  await folderOf(GRAPH_FOLDER).locator('[data-folder-menu]').click();
+  await page.locator('[data-folder-delete]').click();
+  await gone(folderOf(GRAPH_FOLDER), 'папка для графа не удалена');
+
   // ── Холст из графа: карточка на каждую заметку, стрелка на каждую ссылку ──
   await openTab('Canvas');
   const canvasCount = (selector, count, what) => page.waitForFunction(
     ([query, wanted]) => document.querySelectorAll(query).length === wanted, [selector, count], { timeout: STEP_TIMEOUT_MS },
   ).catch(() => assert.fail(what));
   const chip = (name) => knowledge.locator(`[data-canvas-chip="${name}"]`);
+  // Группа обводит свои карточки — в проверках «ничего не накладывается» участвуют узлы без групп
+  const fileCardsOnly = '[data-canvas-node]:not([data-canvas-type="group"])';
   await knowledge.locator('[data-notes-canvas="empty"] [data-canvas-from-graph]').click();
   const board = knowledge.locator('[data-canvas-board]');
   await visible(board, 'поле холста');
@@ -513,7 +668,13 @@ try {
   // Заметки: NOTE, OTHER и заметка дня; ссылка одна — из NOTE в OTHER
   await canvasCount('[data-canvas-node][data-canvas-type="file"]', 3, 'на холсте из графа не по карточке на заметку');
   await canvasCount('[data-canvas-edge]', 1, 'на холсте из графа не по стрелке на ссылку');
-  const boxes = await board.locator('[data-canvas-node]').evaluateAll((nodes) => nodes.map((node) => {
+  // Заметка дня лежит в папке «Daily» — она обведена группой с этим названием; остальные заметки без папки
+  await canvasCount('[data-canvas-node][data-canvas-type="group"]', 1, 'папка заметки дня не обведена группой');
+  await visible(
+    board.locator('[data-canvas-type="group"] [data-canvas-group-label]').filter({ hasText: 'Daily' }),
+    'группа названа именем папки',
+  );
+  const boxes = await board.locator(fileCardsOnly).evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return [box.left, box.top, box.right, box.bottom];
   }));
@@ -608,7 +769,7 @@ try {
   const placesAdded = await places();
   samePlaces(placesBefore, placesAdded, 'после обновления');
   assert.equal(Object.keys(placesAdded).length, Object.keys(placesBefore).length + 1, 'после обновления узлов не на один больше');
-  const refreshed = await board.locator('[data-canvas-node]').evaluateAll((nodes) => nodes.map((node) => {
+  const refreshed = await board.locator(fileCardsOnly).evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return [box.left, box.top, box.right, box.bottom];
   }));
