@@ -287,6 +287,7 @@ export function createCallController(deps: CallDependencies) {
       onRemoteStream: (stream) => listeners.onRemoteStream(stream),
       onIncoming: (from, callId, media) => listeners.onIncoming(from, callId, media),
       onSas: (sas) => listeners.onSas(sas),
+      log: deps.log,
     });
 
     groupEngine = new GroupCallEngine(deps.getStore().self, {

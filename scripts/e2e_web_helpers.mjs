@@ -892,7 +892,15 @@ export async function expectMediaFlowing(page, {
     ));
     if (flowing.length >= minPeers && Date.now() <= deadline) return lastReport;
   }
-  throw new Error(`media is not flowing within ${timeoutMs} ms: ${JSON.stringify(lastReport)}`);
+  // Пустой отчёт — живых соединений нет вовсе: звонок завершился. Состояние звонка и всех
+  // соединений (включая закрытые) отличает это от «соединение есть, медиа не идёт»
+  const diag = await page.evaluate(() => ({
+    callState: window.parvaneCall?.state,
+    peers: (globalThis.__parvaneE2ePeers || []).map((pc) => `${pc.connectionState}/${pc.iceConnectionState}`),
+  })).catch((err) => ({ error: String(err) }));
+  throw new Error(
+    `media is not flowing within ${timeoutMs} ms: ${JSON.stringify(lastReport)}; call ${JSON.stringify(diag)}`,
+  );
 }
 
 // Миниатюра в пузыре: картинка ненулевого размера и не однотонная

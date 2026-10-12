@@ -43,6 +43,7 @@ function findHistoryEntry(page, text) {
     .filter({ hasText: text }).first();
 }
 
+const sessions = {};
 try {
   const suffix = `${Date.now()}-${process.pid}`;
   const alice = `call-alice-${suffix}@local`;
@@ -50,6 +51,8 @@ try {
 
   const aliceSession = await preparePage(aliceContext, alice, PASSWORD);
   const bobSession = await preparePage(bobContext, bob, PASSWORD);
+  sessions.alice = aliceSession;
+  sessions.bob = bobSession;
   await openPrivateChat(aliceSession.page, bob);
 
   // ── Протокол v2 (по умолчанию, T135): звонок принимается только от того, кому
@@ -338,6 +341,11 @@ try {
   for (const [name, context] of [['alice', aliceContext], ['bob', bobContext]]) {
     const page = context.pages()[0];
     if (page) await page.screenshot({ path: `${dir}calls-${name}.png` }).catch(() => {});
+  }
+  // Журнал провайдера обеих сторон: причина завершения звонка, отказы сигналов
+  for (const [name, session] of [['alice', sessions.alice], ['bob', sessions.bob]]) {
+    const tail = (session?.logs || []).filter((line) => /вонок|вонка|ICE|Сигнал/.test(line)).slice(-15);
+    if (tail.length) console.error(`${name} call log:\n  ${tail.join('\n  ')}`);
   }
   throw err;
 } finally {

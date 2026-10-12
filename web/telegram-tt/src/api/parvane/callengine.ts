@@ -47,6 +47,8 @@ type CallCallbacks = {
   onRemoteStream: (stream: MediaStream) => void;
   onIncoming: (from: string, callId: string, media: CallMedia) => void;
   onSas: (sas?: string) => void;
+  // Причина завершения звонка (без содержимого) — в журнал провайдера, для разбора обрывов
+  log?: (text: string) => void;
 };
 
 export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
@@ -134,7 +136,10 @@ export class CallEngine {
       this.cb.onState('ringing');
       this.ringTimer = window.setTimeout(() => {
         // Недозвон: собеседник так и не ответил — отбой (сервер запишет missed)
-        if (this.isCurrentCall(peer, callId) && !this.remoteReady) this.hangUp();
+        if (this.isCurrentCall(peer, callId) && !this.remoteReady) {
+          this.cb.log?.('Звонок завершён: собеседник не ответил');
+          this.hangUp();
+        }
       }, this.cb.getRingTimeoutMs?.() ?? RING_TIMEOUT_MS);
     } catch {
       if (this.isCurrentCall(peer, callId)) this.endAfterMediaFailure();
@@ -185,6 +190,7 @@ export class CallEngine {
   }
 
   hangUp() {
+    if (this.callId) this.cb.log?.('Звонок завершён с этой стороны');
     try {
       if (this.peer && this.callId) {
         this.cb.sendSignal(this.peer, this.isAwaitingAcceptance
@@ -276,6 +282,7 @@ export class CallEngine {
       case 'hangup':
         if (signal.call_id === this.callId && from === this.peer) {
           const isBusy = signal.type === 'reject' && signal.reason === 'busy';
+          this.cb.log?.(`Звонок завершён собеседником: ${signal.type}${signal.reason ? ` (${signal.reason})` : ''}`);
           this.cleanup();
           this.cb.onState(isBusy ? 'busy' : 'ended');
         }
@@ -351,11 +358,13 @@ export class CallEngine {
         window.clearTimeout(this.disconnectTimer);
         this.disconnectTimer = window.setTimeout(() => {
           if (this.pc === pc && pc.connectionState === 'disconnected') {
+            this.cb.log?.('Звонок завершён: соединение не восстановилось');
             this.cleanup();
             this.cb.onState('ended');
           }
         }, DISCONNECT_GRACE_MS);
       } else if (s === 'failed' || s === 'closed') {
+        this.cb.log?.(`Звонок завершён: соединение ${s} (ICE ${pc.iceConnectionState})`);
         this.cleanup();
         this.cb.onState('ended');
       }
