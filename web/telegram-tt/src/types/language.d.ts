@@ -2735,6 +2735,22 @@ export interface LangPair {
   'KnowledgeEmpty': undefined;
   'KnowledgeNothingFound': undefined;
   'KnowledgeGuide': undefined;
+  'KnowledgeGuideOpen': undefined;
+  'KnowledgeGuideDismiss': undefined;
+  'KnowledgeGuideRestore': undefined;
+  'KnowledgeNoticeGuideFailed': undefined;
+  'KnowledgeNewFolder': undefined;
+  'KnowledgeFolderName': undefined;
+  'KnowledgeFolderCreate': undefined;
+  'KnowledgeFolderRename': undefined;
+  'KnowledgeFolderDelete': undefined;
+  'KnowledgeFolderDeleteAction': undefined;
+  'KnowledgeFolderEmpty': undefined;
+  'KnowledgeFolderBadName': undefined;
+  'KnowledgeFolderTaken': undefined;
+  'KnowledgeFolderFailed': undefined;
+  'KnowledgeMoveNote': undefined;
+  'KnowledgeMoveNewFolder': undefined;
   'KnowledgePickNote': undefined;
   'KnowledgeRoot': undefined;
   'KnowledgeEdit': undefined;
@@ -4970,6 +4986,28 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickDefault': {
     'date': V;
+  };
+  'KnowledgeGuideAdded': {
+    'name': V;
+  };
+  'KnowledgeGuideRestoreText': {
+    'name': V;
+  };
+  'KnowledgeFolderDeleteConfirm': {
+    'name': V;
+    'count': V;
+  };
+  'KnowledgeFolderActions': {
+    'name': V;
+  };
+  'KnowledgeFolderAddNote': {
+    'name': V;
+  };
+  'KnowledgeNoticeFolderFiles': {
+    'name': V;
+  };
+  'KnowledgeMoveTitle': {
+    'name': V;
   };
   'KnowledgeDeleteConfirm': {
     'name': V;

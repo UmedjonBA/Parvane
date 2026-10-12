@@ -111,8 +111,129 @@
   margin-inline: -0.625rem;
 }
 
-.list .newNote {
-  margin-top: 0.75rem;
+// ── папки в списке заметок, справка ──────────────────────────────────────────
+
+// Группа списка: заголовок папки со сворачиванием, «+» и «⋯»; на неё же переносят заметку перетаскиванием
+.folder {
+  border-radius: 0.5rem;
+}
+
+.folderDrop {
+  outline: 2px dashed var(--pv-accent);
+  outline-offset: 2px;
+}
+
+.folderHead {
+  display: flex;
+  gap: 0.125rem;
+  align-items: center;
+
+  min-height: 2.25rem;
+  padding-top: 0.375rem;
+}
+
+.list .folderTitle {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+
+.folderToggle {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 1.875rem;
+  padding: 0 0.25rem;
+  border-radius: 0.375rem;
+
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+}
+
+.folderCaption {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderCount {
+  flex: none;
+  color: var(--pv-faint);
+}
+
+.list .folderButton {
+  width: 1.875rem;
+  height: 1.875rem;
+}
+
+.folderEmpty {
+  width: 100%;
+  padding: 0.375rem 0.25rem 0.5rem 1.625rem;
+  border-radius: 0.375rem;
+
+  font-size: 0.8125rem;
+  color: var(--pv-faint);
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+}
+
+.listButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.list .listButton {
+  flex: 1 1 8rem;
+  justify-content: center;
+}
+
+// Сообщение о появившейся папке справки: один раз, пока не открыли или не скрыли
+.guideNotice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.25rem 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.8125rem;
+
+  background: var(--pv-raised);
+}
+
+.guideNoticeText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+// Шторки папки: название новой папки, переименование, выбор папки для заметки
+.folderForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.folderPicker {
+  display: flex;
+  flex-direction: column;
+
+  .folderForm {
+    padding: 0.5rem 0.625rem 0.25rem;
+  }
 }
 
 .pane {
@@ -218,6 +339,26 @@
   b {
     font-weight: 500;
     color: var(--pv-fg);
+  }
+}
+
+// Папка заметки — кнопка: открывает выбор другой папки
+.props .propButton {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+
+  padding: 0.1875rem 0.625rem;
+  border-radius: 0.75rem;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+
+  background: var(--pv-raised);
+
+  &:hover {
+    color: var(--pv-fg);
+    background: var(--pv-hover);
   }
 }
 
