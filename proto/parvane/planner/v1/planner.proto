@@ -262,6 +262,25 @@ message HealthRecord {
   parvane.core.v2.LwwStamp deleted = 11;
 }
 
+// Слово словаря правок ввода текстом (12 окт 2026): первое слово названия записи → тип записи и
+// длительность события, которые пользователь выбирает вместо угаданных. Счётчик — сколько раз подряд
+// правка повторилась (клиент подставляет значение с порога 3, потолок 5). Значение и его счётчик —
+// два регистра, которые клиент всегда пишет парой: тип и длительность одного слова, исправленные на
+// разных устройствах, сохраняются оба. `touched` — счётчик свежести: клиент держит не более 200 слов и
+// вытесняет дольше всех не тронутые (надгробием). Сервер словарь не видит, как и остальное содержимое.
+message LearnedWord {
+  // слово строчными буквами, как его выделяет разбор клиента
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  // task | event; пустая строка — тип не выучен
+  Str kind = 2;
+  U32 kind_count = 3;
+  // минуты 5…1440; unset — длительность не выучена
+  U32 minutes = 4;
+  U32 minutes_count = 5;
+  U32 touched = 6;
+  parvane.core.v2.LwwStamp deleted = 7;
+}
+
 message NutritionDay {
   string day = 1 [(parvane.core.v2.max_len) = 10];
   repeated FoodEntry entries = 2 [(parvane.core.v2.max_items) = 200];
@@ -302,6 +321,7 @@ message Change {
     Migration migration = 7;
     GoalPeriod goal_period = 8;
     HealthRecord health = 9;
+    LearnedWord learned = 10;
   }
 }
 
@@ -320,4 +340,6 @@ message PlannerSnapshot {
   GoalSet goals = 6;
   repeated GoalPeriod goal_periods = 7 [(parvane.core.v2.max_items) = 1000];
   repeated HealthRecord health = 8 [(parvane.core.v2.max_items) = 20000];
+  // живые слова и надгробия вместе; движок не пишет в снимок больше (planner.rs `MAX_LEARNED_STORED`)
+  repeated LearnedWord learned = 9 [(parvane.core.v2.max_items) = 2000];
 }

@@ -10,6 +10,13 @@
 //! воскрешает). Запись питания сливается целиком по `stamp`. Настройки и цели —
 //! регистры под одной меткой.
 //!
+//! Словарь правок ввода текстом (`LearnedWord`, ключ — слово): тип, длительность, их счётчики и
+//! свежесть — отдельные регистры, удаление — надгробие, как у задачи. Потолок словаря — не отказ при
+//! сведении (отказ по числу записей зависел бы от порядка применения и развёл бы устройства), а правило
+//! показа: живыми считаются `MAX_LEARNED_LIVE` самых свежих слов (`learned_live`), остальные хранятся и
+//! возвращаются, когда место освобождается. Хранится не более `MAX_LEARNED_STORED` слов с надгробиями:
+//! лишнее в снимок не попадает (сначала самые старые надгробия).
+//!
 //! Инварианты значений проверяются при применении; негодное изменение
 //! пропускается, остальные изменения операции применяются (FR-004). Метки
 //! операции обязаны нести устройство автора (подпись `SignedOp`), иначе отказ
@@ -25,7 +32,7 @@ use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
-    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
+    change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
     PlannerOp, PlannerSnapshot, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
@@ -56,6 +63,12 @@ const MAX_CHAT: usize = 128;
 /// spec 020: записи здоровья.
 const MAX_HEALTH_KIND: usize = 16;
 const MAX_HEALTH_DETAILS: usize = 4000;
+/// Словарь правок ввода текстом: виды записи, потолок счётчика (как `LEARN_MAX_COUNT` клиента), число
+/// живых слов и число хранимых вместе с надгробиями (= `max_items` снимка).
+pub const LEARNED_KINDS: [&str; 2] = ["task", "event"];
+pub const MAX_LEARNED_COUNT: u32 = 5;
+pub const MAX_LEARNED_LIVE: usize = 200;
+pub const MAX_LEARNED_STORED: usize = 2000;
 
 pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
     decode_checked(bytes, Origin::Client)
@@ -323,6 +336,25 @@ fn check_health(r: &HealthRecord) -> Result<()> {
     Ok(())
 }
 
+/// Слово словаря правок: непустое, без пробелов и управляющих знаков, строчными буквами; тип — `task`,
+/// `event` либо пусто; длительность — как оценка задачи; счётчики не выше потолка.
+fn check_learned(w: &LearnedWord) -> Result<()> {
+    if w.id.is_empty() || w.id.len() > MAX_ID || w.id.chars().any(|c| c.is_whitespace() || c.is_control() || c.is_uppercase()) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    check_str(&w.kind, 16, |s| s.is_empty() || LEARNED_KINDS.contains(&s))?;
+    if w.minutes.as_ref().is_some_and(|m| !m.unset && !(MIN_TASK_MINUTES..=MINUTES_IN_DAY).contains(&m.value)) {
+        return Err(ProtoError::InvalidField("minutes"));
+    }
+    if [&w.kind_count, &w.minutes_count].into_iter().flatten().any(|c| c.unset || c.value > MAX_LEARNED_COUNT) {
+        return Err(ProtoError::InvalidField("count"));
+    }
+    if w.touched.as_ref().is_some_and(|t| t.unset) {
+        return Err(ProtoError::InvalidField("touched"));
+    }
+    Ok(())
+}
+
 fn check_day(d: &NutritionDay) -> Result<()> {
     if !is_day(&d.day) {
         return Err(ProtoError::InvalidField("day"));
@@ -376,6 +408,20 @@ pub struct PlannerState {
     pub goal_periods: BTreeMap<String, GoalPeriod>,
     /// spec 020: записи здоровья (ключ — id).
     pub health: BTreeMap<String, HealthRecord>,
+    /// Словарь правок ввода текстом (ключ — слово).
+    pub learned: BTreeMap<String, LearnedWord>,
+}
+
+fn learned_stamps(w: &LearnedWord) -> impl Iterator<Item = &LwwStamp> {
+    w.kind
+        .as_ref()
+        .and_then(|f| f.stamp.as_ref())
+        .into_iter()
+        .chain([&w.kind_count, &w.minutes, &w.minutes_count, &w.touched].into_iter().flatten().filter_map(|f| f.stamp.as_ref()))
+}
+
+fn learned_touched(w: &LearnedWord) -> u32 {
+    w.touched.as_ref().map(|t| t.value).unwrap_or(0)
 }
 
 /// Самая свежая метка среди полей объекта.
@@ -460,6 +506,50 @@ impl PlannerState {
 
     pub fn is_health_alive(r: &HealthRecord) -> bool {
         stamp_key(r.stamp.as_ref()) > stamp_key(r.deleted.as_ref())
+    }
+
+    /// Слово не удалено: самая свежая правка его полей новее надгробия.
+    pub fn is_learned_alive(w: &LearnedWord) -> bool {
+        let mut best = (0u64, String::new());
+        for s in learned_stamps(w) {
+            if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
+                best = (s.lamport, s.device_id.clone());
+            }
+        }
+        is_alive(best, w.deleted.as_ref())
+    }
+
+    /// Живые слова словаря: не удалённые, не более `MAX_LEARNED_LIVE` самых свежих (`touched`, при
+    /// равенстве — по слову). Функция сведённого состояния, от порядка применения не зависит.
+    pub fn learned_live(&self) -> Vec<&LearnedWord> {
+        let mut live: Vec<&LearnedWord> = self.learned.values().filter(|w| Self::is_learned_alive(w)).collect();
+        if live.len() > MAX_LEARNED_LIVE {
+            live.sort_by(|a, b| learned_touched(b).cmp(&learned_touched(a)).then_with(|| a.id.cmp(&b.id)));
+            live.truncate(MAX_LEARNED_LIVE);
+            live.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        live
+    }
+
+    /// Слова для снимка: всё, пока их не больше `MAX_LEARNED_STORED`; иначе остаются живые (свежие
+    /// первыми), затем надгробия от поздних к ранним.
+    fn learned_stored(&self) -> Vec<LearnedWord> {
+        if self.learned.len() <= MAX_LEARNED_STORED {
+            return self.learned.values().cloned().collect();
+        }
+        let rank = |w: &LearnedWord| {
+            if Self::is_learned_alive(w) {
+                (true, u64::from(learned_touched(w)), String::new())
+            } else {
+                let d = stamp_key(w.deleted.as_ref());
+                (false, d.0, d.1.to_string())
+            }
+        };
+        let mut all: Vec<&LearnedWord> = self.learned.values().collect();
+        all.sort_by(|a, b| rank(b).cmp(&rank(a)).then_with(|| a.id.cmp(&b.id)));
+        all.truncate(MAX_LEARNED_STORED);
+        all.sort_by(|a, b| a.id.cmp(&b.id));
+        all.into_iter().cloned().collect()
     }
 
     pub fn is_list_alive(l: &List) -> bool {
@@ -561,6 +651,16 @@ impl PlannerState {
         }
     }
 
+    fn merge_learned(&mut self, inc: &LearnedWord) {
+        let cur = self.learned.entry(inc.id.clone()).or_insert_with(|| LearnedWord { id: inc.id.clone(), ..Default::default() });
+        merge_reg!(cur.kind, inc.kind, Str);
+        merge_reg!(cur.kind_count, inc.kind_count, U32);
+        merge_reg!(cur.minutes, inc.minutes, U32);
+        merge_reg!(cur.minutes_count, inc.minutes_count, U32);
+        merge_reg!(cur.touched, inc.touched, U32);
+        merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
     fn merge_list(&mut self, inc: &List) {
         let cur = self.lists.entry(inc.id.clone()).or_insert_with(|| List { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.name, inc.name, Str);
@@ -627,6 +727,10 @@ impl PlannerState {
                 check_health(r)?;
                 self.merge_health(r);
             }
+            Some(change::Change::Learned(w)) => {
+                check_learned(w)?;
+                self.merge_learned(w);
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
         Ok(())
@@ -683,6 +787,10 @@ impl PlannerState {
             check_health(r)?;
             self.merge_health(r);
         }
+        for w in &s.learned {
+            check_learned(w)?;
+            self.merge_learned(w);
+        }
         Ok(())
     }
 
@@ -697,6 +805,7 @@ impl PlannerState {
             goals: self.goals.clone(),
             goal_periods: self.goal_periods.values().cloned().collect(),
             health: self.health.values().cloned().collect(),
+            learned: self.learned_stored(),
         }
     }
 
@@ -777,6 +886,12 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
             Some(change::Change::Health(r)) => {
                 push(r.stamp.as_ref())?;
                 push(r.deleted.as_ref())?;
+            }
+            Some(change::Change::Learned(w)) => {
+                for s in learned_stamps(w) {
+                    push(Some(s))?;
+                }
+                push(w.deleted.as_ref())?;
             }
             Some(change::Change::Migration(_)) | None => {}
         }
@@ -908,6 +1023,15 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     r.deleted = Some(pb.clone());
                 } else {
                     r.stamp = Some(pb.clone());
+                }
+            }
+            Some(change::Change::Learned(w)) => {
+                st(&mut w.kind);
+                for f in [&mut w.kind_count, &mut w.minutes, &mut w.minutes_count, &mut w.touched].into_iter().flatten() {
+                    f.stamp = Some(pb.clone());
+                }
+                if w.deleted.is_some() {
+                    w.deleted = Some(pb.clone());
                 }
             }
             Some(change::Change::Migration(_)) | None => {}
