@@ -2,6 +2,7 @@
 //! `preview.map_tile`. Логика — та же, что у v1 (`preview.link.fetch`,
 //! `preview.map.tile`): общий SSRF-фильтр parvane-netguard (≤ 3 редиректов,
 //! тело ≤ 256 КиБ, только html, фиксация IP, без прокси), кэш превью и тайлов,
+//! картинка превью страницы (тем же фильтром, ≤ 256 КиБ, jpeg/png/webp/gif),
 //! зум ≤ 15, общий per-user лимит частоты. Пользователь — `req.user` (JWT уже
 //! проверил gateway); пустой `req.user` — отказ `FORBIDDEN`. Текста ошибок
 //! клиенту нет — только `ErrorCode`, подробности в лог.
@@ -18,7 +19,10 @@ use prost::Message;
 use sqlx::SqlitePool;
 use tracing::{debug, info, warn};
 
-use crate::{handler_concurrency, preview_rate_ok, resolve_preview, resolve_tile, tile_in_range, UrlPolicy, REQUEST_DEADLINE_MS};
+use crate::{
+    handler_concurrency, preview_rate_ok, resolve_preview, resolve_tile, tile_in_range, PreviewImage, UrlPolicy,
+    IMAGE_MAX_BYTES, REQUEST_DEADLINE_MS,
+};
 
 // Лимиты полей ответа по схеме (preview.proto, `max_len` в байтах)
 const URL_MAX_BYTES: usize = 2048;
@@ -26,6 +30,7 @@ const SITE_MAX_BYTES: usize = 256;
 const TITLE_MAX_BYTES: usize = 512;
 const DESC_MAX_BYTES: usize = 2048;
 const PNG_MAX_BYTES: usize = 262_144;
+const IMAGE_MIME_MAX_BYTES: usize = 64;
 
 pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool) -> anyhow::Result<()> {
     let handler: parvane_v2rt::Handler = Arc::new(move |m: &'static MethodInfo, req: ShardRequest| -> BoxFut {
@@ -75,16 +80,26 @@ async fn link(pool: &SqlitePool, req: &ShardRequest) -> Reply {
             warn!("v2 preview.link: превью не уложилось в дедлайн");
             ErrorCode::Unavailable
         })?;
-    Ok(link_response(&url, resp)?.encode_to_vec())
+    Ok(link_response(&url, resp.resp, resp.image)?.encode_to_vec())
 }
 
-/// Ответ v1 → `LinkResponse`. Картинку v1 не добывает — `image` пуст.
-fn link_response(request_url: &str, resp: PreviewFetchResponse) -> Result<LinkResponse, ErrorCode> {
+/// Итог превью → `LinkResponse`. Картинка — только в пределах схемы: если она
+/// почему-то крупнее `image` или её тип длиннее `image_mime`, уходит превью без
+/// картинки (не обрезаем).
+fn link_response(
+    request_url: &str,
+    resp: PreviewFetchResponse,
+    image: Option<PreviewImage>,
+) -> Result<LinkResponse, ErrorCode> {
     let Some(wp) = resp.webpage.filter(|_| resp.ok) else {
         // Превью нет (не html, HTTP-ошибка, заблокированный адрес по пути, кэш отказа)
         debug!("v2 preview.link: превью нет: {}", resp.error.as_deref().unwrap_or(""));
         return Err(ErrorCode::NotFound);
     };
+    let image = image
+        .filter(|i| !i.bytes.is_empty() && i.bytes.len() <= IMAGE_MAX_BYTES)
+        .filter(|i| !i.mime.is_empty() && i.mime.len() <= IMAGE_MIME_MAX_BYTES)
+        .unwrap_or(PreviewImage { mime: String::new(), bytes: Vec::new() });
     // Итоговый URL после редиректов; если он длиннее схемы — исходный
     let url = if wp.url.len() <= URL_MAX_BYTES { wp.url } else { request_url.to_string() };
     Ok(LinkResponse {
@@ -92,8 +107,8 @@ fn link_response(request_url: &str, resp: PreviewFetchResponse) -> Result<LinkRe
         site_name: clip_bytes(wp.site_name.unwrap_or_default(), SITE_MAX_BYTES),
         title: clip_bytes(wp.title.unwrap_or_default(), TITLE_MAX_BYTES),
         description: clip_bytes(wp.description.unwrap_or_default(), DESC_MAX_BYTES),
-        image: Vec::new(),
-        image_mime: String::new(),
+        image: image.bytes,
+        image_mime: image.mime,
     })
 }
 
@@ -212,7 +227,7 @@ mod tests {
             }),
             error: None,
         };
-        let r = link_response("https://example.com/", ok).unwrap();
+        let r = link_response("https://example.com/", ok, None).unwrap();
         assert_eq!(r.url, "https://example.com/final");
         assert_eq!(r.site_name, "Пример");
         assert_eq!(r.title.len(), 512);
@@ -220,14 +235,43 @@ mod tests {
         assert!(r.description.is_empty() && r.image.is_empty() && r.image_mime.is_empty());
 
         let fail = PreviewFetchResponse { ok: false, webpage: None, error: Some("not_html".into()) };
-        assert_eq!(link_response("https://example.com/", fail).err(), Some(ErrorCode::NotFound));
+        assert_eq!(link_response("https://example.com/", fail, None).err(), Some(ErrorCode::NotFound));
 
         let long = PreviewFetchResponse {
             ok: true,
             webpage: Some(WebPagePreview { url: format!("https://e.com/{}", "a".repeat(3000)), site_name: None, title: None, description: None }),
             error: None,
         };
-        assert_eq!(link_response("https://e.com/", long).unwrap().url, "https://e.com/");
+        assert_eq!(link_response("https://e.com/", long, None).unwrap().url, "https://e.com/");
+    }
+
+    #[test]
+    fn link_response_carries_image_within_schema_limits() {
+        let page = || PreviewFetchResponse {
+            ok: true,
+            webpage: Some(WebPagePreview { url: "https://example.com/".into(), site_name: None, title: Some("T".into()), description: None }),
+            error: None,
+        };
+        let image = |mime: &str, len: usize| Some(PreviewImage { mime: mime.into(), bytes: vec![7u8; len] });
+
+        let r = link_response("https://example.com/", page(), image("image/png", 1000)).unwrap();
+        assert_eq!((r.image.len(), r.image_mime.as_str(), r.title.as_str()), (1000, "image/png", "T"));
+        let max = link_response("https://example.com/", page(), image("image/jpeg", IMAGE_MAX_BYTES)).unwrap();
+        assert_eq!(max.image.len(), IMAGE_MAX_BYTES);
+        // Лимиты в коде — те же, что в схеме
+        let spec = parvane_protocol::schema::message("parvane.preview.v2.LinkResponse").unwrap();
+        assert_eq!(spec.field(5).unwrap().max_len as usize, IMAGE_MAX_BYTES);
+        assert_eq!(spec.field(6).unwrap().max_len as usize, IMAGE_MIME_MAX_BYTES);
+
+        // Крупнее схемы, пустая или с непомерным типом — превью без картинки, не обрезок
+        for bad in [image("image/png", IMAGE_MAX_BYTES + 1), image("image/png", 0), image(&"x".repeat(65), 10), image("", 10)] {
+            let r = link_response("https://example.com/", page(), bad).unwrap();
+            assert!(r.image.is_empty() && r.image_mime.is_empty());
+            assert_eq!(r.title, "T");
+        }
+        // Отказ превью остаётся отказом и с картинкой
+        let fail = PreviewFetchResponse { ok: false, webpage: None, error: None };
+        assert_eq!(link_response("https://example.com/", fail, image("image/png", 10)).err(), Some(ErrorCode::NotFound));
     }
 
     #[test]
