@@ -738,6 +738,12 @@ export function getQuickLang(code?: string): QuickLang {
   return code?.toLowerCase().startsWith('ru') ? 'ru' : 'en';
 }
 
+/** Обычная длительность события по первому слову названия: её разбор подставит сам, когда она не названа. */
+export function quickUsualMinutes(name: string, lang: QuickLang) {
+  const head = name.toLowerCase().replace(/ё/g, 'е');
+  return LANGS[lang].eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
+}
+
 function toNumber(value: string) {
   return Number(value.replace(',', '.'));
 }
