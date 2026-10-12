@@ -167,7 +167,7 @@ try {
   await relogin(page, PASSWORD).catch(() => undefined);
   await sidebar.waitFor({ state: 'visible', timeout: 60000 });
   await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
-  await openTab('Notes');
+  await visible(knowledge, 'раздел заметок после перезагрузки');
   await visible(row(NOTE), 'заметка после перезагрузки');
   await row(NOTE).click();
   await visible(body.getByText('проверить обе GPU'), 'текст заметки после перезагрузки');

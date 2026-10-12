@@ -1093,7 +1093,11 @@ export async function openDevicesScreen(page) {
   // Непривязанное устройство web само открывает экран «Устройства» (код линковки,
   // ключ восстановления) — тогда он уже на месте
   const shown = page.locator('.SettingsActiveSessions');
-  if (await shown.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false)) return shown;
+  if (await shown.waitFor({ state: 'visible', timeout: 2500 }).then(() => true, () => false)) {
+    // «Чаты» в боковой панели закрывают настройки: экран мог быть уходящим слайдом — перепроверяем
+    await page.waitForTimeout(700);
+    if (await shown.isVisible().catch(() => false)) return shown;
+  }
   await page.getByRole('button', { name: 'Open menu' }).first().click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Devices' }).click();
