@@ -479,6 +479,15 @@ describe('ввод текстом: здоровье (spec 020)', () => {
       },
       error: undefined,
     }],
+    // Режим сна: время отхода ко сну и подъёма; длительность рядом остаётся длительностью
+    ['цель сон 23:30-07:00', {
+      kind: 'goal', goalChanges: { goals: {}, health: { bedtime: 1410, wakeTime: 420 } }, error: undefined,
+    }],
+    ['цель сон с 0:30 до 8:15 сон 7,5 ч', {
+      kind: 'goal',
+      goalChanges: { goals: {}, health: { bedtime: 30, wakeTime: 495, sleepMinutes: 450 } },
+      error: undefined,
+    }],
     ['цели ккал 2200 жиры 75 углеводы 260 клетчатка 30', {
       kind: 'goal',
       goalChanges: {
@@ -934,6 +943,11 @@ describe('quick input (en): health', () => {
       goalChanges: {
         goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
       },
+      error: undefined,
+    }],
+    ['goal sleep 23:30-07:00 sleep 8h', {
+      kind: 'goal',
+      goalChanges: { goals: {}, health: { bedtime: 1410, wakeTime: 420, sleepMinutes: 480 } },
       error: undefined,
     }],
     ['goals kcal 2200 fat 75 carbs 260 fiber 30', {

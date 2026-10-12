@@ -149,11 +149,13 @@ export type PlannerHealthRecord = {
   exercises?: PlannerExercise[];
 };
 // Цели здоровья: пределы сахара и соли (г), сон (мин), вес (кг), шаги за день, активные минуты и
-// тренировки за 7 дней
+// тренировки за 7 дней; режим сна — время отхода ко сну и подъёма минутами от полуночи (все цели — числа)
 export type PlannerHealthGoals = {
   sugarMax?: number;
   saltMax?: number;
   sleepMinutes?: number;
+  bedtime?: number;
+  wakeTime?: number;
   weight?: number;
   steps?: number;
   activeMinutes?: number;
