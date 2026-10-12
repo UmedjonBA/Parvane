@@ -52,8 +52,7 @@ function driver(page) {
       await page.getByRole('menuitem', { name: action, exact: true }).click();
     },
     add: async (action) => {
-      await cloud.getByRole('button', { name: 'Upload', exact: true }).click();
-      await page.getByRole('menuitem', { name: action, exact: true }).click();
+      await cloud.getByRole('button', { name: action, exact: true }).click();
     },
     folder: async (name) => {
       await api.add('New folder');
@@ -69,7 +68,7 @@ function driver(page) {
     },
     moveInto: async (name, target) => {
       await api.menu(name, 'Move');
-      const dialog = page.locator('.Modal').filter({ hasText: 'Move to' });
+      const dialog = page.locator('.Modal').filter({ hasText: 'Move here' });
       await dialog.getByRole('listitem').filter({ hasText: target }).click();
       await dialog.getByRole('button', { name: 'Move here', exact: true }).click();
       await item(name).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });

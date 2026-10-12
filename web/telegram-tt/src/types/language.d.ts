@@ -2289,7 +2289,6 @@ export interface LangPair {
   'ParvaneCloudDelete': undefined;
   'ParvaneCloudRestore': undefined;
   'ParvaneCloudDeleteForever': undefined;
-  'ParvaneCloudOpen': undefined;
   'ParvaneCloudEmptyTrashAction': undefined;
   'ParvaneCloudEmptyTrashConfirm': undefined;
   'ParvaneCloudDeleteForeverConfirm': undefined;
@@ -2298,7 +2297,6 @@ export interface LangPair {
   'ParvaneCloudNewName': undefined;
   'ParvaneCloudCreate': undefined;
   'ParvaneCloudSave': undefined;
-  'ParvaneCloudCancel': undefined;
   'ParvaneCloudErrorNameEmpty': undefined;
   'ParvaneCloudErrorNameChars': undefined;
   'ParvaneCloudErrorNameLong': undefined;
@@ -2308,8 +2306,6 @@ export interface LangPair {
   'ParvaneCloudSortName': undefined;
   'ParvaneCloudSortDate': undefined;
   'ParvaneCloudSortSize': undefined;
-  'ParvaneCloudSortAscending': undefined;
-  'ParvaneCloudSortDescending': undefined;
   'ParvaneCloudUsageAlmostFull': undefined;
   'ParvaneCloudErrorNoSpace': undefined;
   'ParvaneCloudErrorTooLarge': undefined;
@@ -2318,15 +2314,12 @@ export interface LangPair {
   'ParvaneCloudErrorRejected': undefined;
   'ParvaneCloudErrorTooMany': undefined;
   'ParvaneCloudErrorNotFound': undefined;
-  'ParvaneCloudTransferDone': undefined;
-  'ParvaneCloudTransferFailed': undefined;
   'ParvaneCloudRetry': undefined;
   'ParvaneCloudDropHere': undefined;
   'ParvaneCloudFolder': undefined;
   'ParvaneCloudSelect': undefined;
   'ParvaneCloudActions': undefined;
   'ParvaneCloudPreviewUnavailable': undefined;
-  'ParvaneCloudClose': undefined;
   'ParvaneCloudName': undefined;
   'ParvaneCloudSize': undefined;
   'ParvaneCloudModified': undefined;
@@ -2357,12 +2350,9 @@ export interface LangPair {
   'ParvaneCloudLeaveConfirm': undefined;
   'ParvaneCloudAccept': undefined;
   'ParvaneCloudDecline': undefined;
-  'ParvaneCloudInviteOpen': undefined;
   'ParvaneCloudNoMembers': undefined;
   'ParvaneCloudSharedFolder': undefined;
   'ParvaneCloudInviteGone': undefined;
-  'ParvaneCloudBack': undefined;
-  'ParvaneCloudSharedFolders': undefined;
   'ParvaneCloudView': undefined;
   'ParvaneCloudToTrash': undefined;
   'ParvaneCloudSharedNone': undefined;
@@ -2739,7 +2729,6 @@ export interface LangPair {
   'KnowledgeRoot': undefined;
   'KnowledgeEdit': undefined;
   'KnowledgeSave': undefined;
-  'KnowledgeCancel': undefined;
   'KnowledgeDelete': undefined;
   'KnowledgeBack': undefined;
   'KnowledgeEditorPlaceholder': undefined;
@@ -2751,14 +2740,12 @@ export interface LangPair {
   'KnowledgeDaily': undefined;
   'KnowledgeGraphDays': undefined;
   'KnowledgeGraphRecords': undefined;
-  'KnowledgeGraphOpen': undefined;
   'KnowledgeGraphEmpty': undefined;
   'KnowledgeZoomIn': undefined;
   'KnowledgeZoomOut': undefined;
   'KnowledgeZoomFit': undefined;
   'KnowledgeCanvasNew': undefined;
   'KnowledgeCanvasEmpty': undefined;
-  'KnowledgeCanvasPick': undefined;
   'KnowledgeCanvasText': undefined;
   'KnowledgeCanvasNote': undefined;
   'KnowledgeCanvasGroup': undefined;
@@ -2771,6 +2758,40 @@ export interface LangPair {
   'KnowledgeCanvasNoColor': undefined;
   'KnowledgeCanvasChooseNote': undefined;
   'KnowledgeCanvasDamaged': undefined;
+  'KnowledgeNoteShort': undefined;
+  'KnowledgeNoteEmpty': undefined;
+  'KnowledgeLinks': undefined;
+  'KnowledgeNearest': undefined;
+  'KnowledgePlannedHint': undefined;
+  'KnowledgeCanvasHint': undefined;
+  'KnowledgeGraphKindNote': undefined;
+  'KnowledgeGraphKindDay': undefined;
+  'KnowledgeGraphKindMissing': undefined;
+  'KnowledgeGraphKindTask': undefined;
+  'KnowledgeGraphKindEvent': undefined;
+  'KnowledgeGraphCreate': undefined;
+  'KnowledgeCanvasTextCard': undefined;
+  'KnowledgeCanvasEdgeTitle': undefined;
+  'KnowledgeCanvasOpenNote': undefined;
+  'KnowledgeCanvasGroupName': undefined;
+  'KnowledgeCanvasEdgesHint': undefined;
+  'KnowledgeCanvasRemoveEdge': undefined;
+  'KnowledgeCanvasAlreadyOn': undefined;
+  'KnowledgeFilesVault': undefined;
+  'KnowledgeFilesUploadFile': undefined;
+  'KnowledgeFilesShareOpen': undefined;
+  'KnowledgeFilesSharedAlone': undefined;
+  'KnowledgeFilesOnlyYou': undefined;
+  'KnowledgeFilesCanEdit': undefined;
+  'KnowledgeFilesViewOnly': undefined;
+  'KnowledgeFilesEncrypted': undefined;
+  'KnowledgeFilesHere': undefined;
+  'KnowledgeFilesPrevious': undefined;
+  'KnowledgeFilesNext': undefined;
+  'KnowledgeFilesToChat': undefined;
+  'KnowledgeFilesDecryptedHere': undefined;
+  'KnowledgeFilesShareNote': undefined;
+  'KnowledgeFilesRole': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -4907,6 +4928,45 @@ export interface LangPairWithVariables<V = LangVariable> {
   'KnowledgeCanvasName': {
     'count': V;
   };
+  'KnowledgeShowAll': {
+    'count': V;
+  };
+  'KnowledgeGraphLinks': {
+    'count': V;
+  };
+  'KnowledgeFilesSharedWith': {
+    'count': V;
+  };
+  'KnowledgeFilesFrom': {
+    'name': V;
+  };
+  'KnowledgeFilesSharedBanner': {
+    'name': V;
+    'members': V;
+  };
+  'KnowledgeFilesSharedBannerAlone': {
+    'name': V;
+  };
+  'KnowledgeFilesIncomingBanner': {
+    'name': V;
+    'owner': V;
+    'rights': V;
+  };
+  'KnowledgeFilesUploading': {
+    'percent': V;
+    'size': V;
+  };
+  'KnowledgeFilesDownloading': {
+    'percent': V;
+    'size': V;
+  };
+  'KnowledgeFilesMoving': {
+    'percent': V;
+    'size': V;
+  };
+  'KnowledgeFilesMoveTitle': {
+    'name': V;
+  };
 }
 
 export interface LangPairPlural {
@@ -5429,6 +5489,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
     'count': V;
   };
   'ParvaneCloudTrashDaysLeft': {
+    'count': V;
+  };
+  'KnowledgeFilesItems': {
     'count': V;
   };
 }

@@ -6,10 +6,11 @@ import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import type { GlobalState } from '../../../global/types';
 import type { CloudMovePlace } from './CloudDialogs';
 import type { CloudItemAction } from './CloudItem';
+import type { CloudMenuAction } from './CloudMenu';
 import type { CloudNode, CloudSortKey } from './cloudModel';
 import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
-import { MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
+import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
 import {
@@ -28,20 +29,21 @@ import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
-import Icon from '../../common/icons/Icon';
-import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
 import KnowledgeTabs from '../notes/KnowledgeTabs';
+import PvIcon from '../notes/PvIcon';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
 import CloudItem from './CloudItem';
+import CloudMenu from './CloudMenu';
 import CloudPreview from './CloudPreview';
 import CloudSendDialog from './CloudSendDialog';
 import CloudShareDialog from './CloudShareDialog';
 import CloudTransfers, { CLOUD_ERROR_KEYS } from './CloudTransfers';
 
+import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
 
 type OwnProps = {
@@ -49,6 +51,9 @@ type OwnProps = {
 };
 
 type Entry = { container: string; node: CloudNode };
+// Чьё меню «⋯» открыто: файла либо папки дерева или строки совместной папки
+type MenuTarget = { type: 'node'; entry: Entry } | { type: 'container'; id: string };
+type ContainerAction = 'open' | 'access' | 'leave';
 type Dialog =
   | { type: 'newFolder' }
   | { type: 'newShared' }
@@ -66,7 +71,11 @@ const SORT_KEYS: CloudSortKey[] = ['name', 'date', 'size'];
 const PREVIEW_MAX_BYTES_DESKTOP = 256 * 1024 * 1024;
 const PREVIEW_MAX_BYTES_MOBILE = 64 * 1024 * 1024;
 const USAGE_WARN_SHARE = 0.9;
-const PERCENT = 100;
+// Папка хранилища заметок в корне личного диска (названия — как в `notes/notesStore.ts`)
+const VAULT_NAMES = ['Знания', 'Knowledge'];
+const SORT_SHORT_KEYS = {
+  name: 'ParvaneCloudName', date: 'ParvaneCloudModified', size: 'ParvaneCloudSize',
+} as const;
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
@@ -80,10 +89,10 @@ function nameOf(address: string) {
   return address.split('@')[0];
 }
 
-// Parvane (spec 016): раздел «Облако» — личное файловое хранилище одним
-// списком: путь сверху, поиск по всем папкам и сортировка в шапке, приглашения
-// строкой вверху корня, в конце корня — строки-папки «Доступные мне» и
-// «Корзина». Дерево — контейнеры домена `cloud.v1` (cloudStore), содержимое
+// Parvane (spec 016): «Файлы» — личное файловое хранилище одним списком по прототипу (`vCloud`): поиск по
+// всем папкам и сортировка, путь, приглашения строкой вверху корня, строки с цветной плиткой и «⋯»,
+// в конце корня — строки-папки «Доступные мне» и «Корзина», внизу строка о занятом месте. Действия,
+// просмотр, перенос и доступ — шторки. Дерево — контейнеры домена `cloud.v1` (cloudStore), содержимое
 // файлов сервер не видит.
 const Cloud = ({ isMobile }: OwnProps) => {
   const lang = useLang();
@@ -101,6 +110,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const [selected, setSelected] = useState<string[]>([]);
   const [dialog, setDialog] = useState<Dialog>();
   const [preview, setPreview] = useState<Entry>();
+  const [menu, setMenu] = useState<MenuTarget>();
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>();
   const dragDepthRef = useRef(0);
@@ -160,7 +170,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
       .filter((c) => c.kind !== 'invite' && (c.role === 'owner' || c.role === 'editor'))
       .map((c) => ({
         id: c.id,
-        name: c.kind === 'root' ? lang('ParvaneCloudTabDrive') : c.name || lang('ParvaneCloudSharedFolder'),
+        name: c.kind === 'root' ? lang('ParvaneSectionCloud') : c.name || lang('ParvaneCloudSharedFolder'),
         isShared: c.kind !== 'root',
         nodes: getNodes(c.id, data),
       }))
@@ -242,6 +252,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
 
   const handleAction = useLastCallback((action: CloudItemAction, entryContainer: string, node: CloudNode) => {
     const entry = { container: entryContainer, node };
+    if (action === 'select') {
+      const key = keyOf(entry);
+      if (!selected.includes(key)) setSelected([...selected, key]);
+    }
     if (action === 'open') handleOpen(entryContainer, node);
     if (action === 'download') handleDownload(entryContainer, node);
     if (action === 'rename') setDialog({ type: 'rename', entry });
@@ -251,6 +265,36 @@ const Cloud = ({ isMobile }: OwnProps) => {
     if (action === 'purge') setDialog({ type: 'purge', entries: [entry] });
     if (action === 'send') setDialog({ type: 'send', entries: [entry] });
     if (action === 'share') setDialog({ type: 'shareFolder', entry });
+  });
+
+  const handleMenu = useLastCallback((entryContainer: string, node: CloudNode) => {
+    setMenu({ type: 'node', entry: { container: entryContainer, node } });
+  });
+
+  const handleCloseMenu = useLastCallback(() => setMenu(undefined));
+
+  const handleMenuPick = useLastCallback((key: string) => {
+    const target = menu;
+    setMenu(undefined);
+    if (!target) return;
+    if (target.type === 'node') {
+      handleAction(key as CloudItemAction, target.entry.container, target.entry.node);
+      return;
+    }
+    const action = key as ContainerAction;
+    if (action === 'open') handleOpenContainer(target.id);
+    if (action === 'access') setDialog({ type: 'share', container: target.id });
+    if (action === 'leave') setDialog({ type: 'leave', container: target.id });
+  });
+
+  const handlePreviewSend = useLastCallback((entryContainer: string, node: CloudNode) => {
+    setPreview(undefined);
+    setDialog({ type: 'send', entries: [{ container: entryContainer, node }] });
+  });
+
+  const handlePreviewMore = useLastCallback((entryContainer: string, node: CloudNode) => {
+    setPreview(undefined);
+    setMenu({ type: 'node', entry: { container: entryContainer, node } });
   });
 
   const handleClearSelection = useLastCallback(() => setSelected([]));
@@ -370,28 +414,19 @@ const Cloud = ({ isMobile }: OwnProps) => {
     setCloudPrefs({ sort: { key, isDescending: isSame ? !prefs.sort.isDescending : false } });
   };
 
-  const SortButton = ({ onTrigger, isOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
-    <Button
-      round
-      size="smaller"
-      color="translucent"
-      className={isOpen ? 'active' : undefined}
-      iconName="sort"
-      ariaLabel={lang('ParvaneCloudSort')}
-      onClick={onTrigger}
-    />
-  );
+  const handleNewFolder = useLastCallback(() => setDialog({ type: 'newFolder' }));
+  const handleNewShared = useLastCallback(() => setDialog({ type: 'newShared' }));
+  const handleEmptyTrash = useLastCallback(() => setDialog({ type: 'emptyTrash' }));
 
-  const AddButton = ({ onTrigger, isOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
-    <Button
-      size="smaller"
-      className={buildClassName(styles.addButton, isOpen && 'active')}
-      iconName="add"
-      onClick={onTrigger}
-    >
-      {lang('ParvaneCloudUpload')}
-    </Button>
-  );
+  // «Доступ» в открытой папке: у совместной — участники, у папки личного диска — предложение сделать её совместной
+  const handleAccess = useLastCallback(() => {
+    if (container) {
+      setDialog({ type: 'share', container: container.id });
+      return;
+    }
+    const folder = containerId && place.folder ? nodes.find(({ id }) => id === place.folder) : undefined;
+    if (folder && containerId) setDialog({ type: 'shareFolder', entry: { container: containerId, node: folder } });
+  });
 
   const statusKey = status === 'needs-linking' ? 'ParvaneCloudNeedsLinking'
     : status === 'offline' ? 'ParvaneCloudSyncUnavailable'
@@ -400,6 +435,19 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const sortTitles = {
     name: lang('ParvaneCloudSortName'), date: lang('ParvaneCloudSortDate'), size: lang('ParvaneCloudSortSize'),
   };
+
+  const SortButton = ({ onTrigger, isOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
+    <button
+      type="button"
+      className={buildClassName(styles.sortPill, isOpen && styles.sortPillOpen)}
+      aria-label={`${lang('ParvaneCloudSort')}: ${sortTitles[prefs.sort.key]}`}
+      onClick={onTrigger}
+    >
+      {lang(SORT_SHORT_KEYS[prefs.sort.key])}
+      <PvIcon name={prefs.sort.isDescending ? 'down' : 'up'} isSmall />
+    </button>
+  );
+
   const usedShare = usage?.quota ? usage.used / usage.quota : 0;
   const emptyKey = isSearch ? 'ParvaneCloudNothingFound'
     : isTrash ? 'ParvaneCloudEmptyTrash'
@@ -407,93 +455,169 @@ const Cloud = ({ isMobile }: OwnProps) => {
         : isRoot ? 'ParvaneCloudEmpty' : 'ParvaneCloudEmptyFolder';
   const moveContainer = dialog?.type === 'move' ? dialog.container : containerId;
   const moveRootName = !moveContainer || moveContainer === data?.rootId
-    ? lang('ParvaneCloudTabDrive') : containerName(getContainer(moveContainer, data));
+    ? lang('ParvaneSectionCloud') : containerName(getContainer(moveContainer, data));
+  // Один объект — «Переместить «имя»», несколько — общее название окна
+  const moveTitle = dialog?.type === 'move' && dialog.nodes.length === 1
+    ? lang('KnowledgeFilesMoveTitle', { name: dialog.nodes[0].name }) : undefined;
   const listedFolders = isRoot ? ownedFolders : isSharedList ? sharedFolders : undefined;
   const hasRows = entries.length > 0 || Boolean(listedFolders?.length);
+  const canAdd = !isBlocked && canEdit;
+  const isPersonalRoot = !place.container && !place.folder;
+  // «Доступ» для открытой папки: совместная папка либо папка личного диска, которую можно сделать совместной
+  const hasAccessChip = canAdd && !isSearch && (Boolean(container) || Boolean(place.folder && !place.container));
+  const roleText = (role?: string) => lang(role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader')
+    .toLocaleLowerCase();
+  const itemsText = (count: number) => lang('KnowledgeFilesItems', { count }, { pluralValue: count });
+  const isVault = (entry: Entry) => entry.container === data?.rootId && entry.node.kind === 'folder'
+    && !entry.node.parent && VAULT_NAMES.includes(entry.node.name);
+  // Файлы открытой папки — между ними листает просмотр
+  const previewSiblings = entries.filter((entry) => entry.node.kind === 'file');
+
+  const accessText = (id: string) => {
+    const c = getContainer(id, data);
+    if (!c || c.kind === 'root') return lang('KnowledgeFilesOnlyYou');
+    if (c.kind !== 'owned') return lang('KnowledgeFilesFrom', { name: nameOf(c.owner) });
+    return c.members.length ? c.members.map((m) => nameOf(m.user)).join(', ') : lang('KnowledgeFilesOnlyYou');
+  };
+
+  const menuTitle = !menu ? undefined
+    : menu.type === 'node' ? menu.entry.node.name : containerName(getContainer(menu.id, data));
+
+  const menuActions = (): CloudMenuAction[] => {
+    if (!menu) return [];
+    const item = (
+      key: CloudItemAction | ContainerAction, icon: CloudMenuAction['icon'], title: string, isDanger?: boolean,
+    ): CloudMenuAction => ({
+      key, icon, title, isDanger,
+    });
+    if (menu.type === 'container') {
+      const isOwned = getContainer(menu.id, data)?.kind === 'owned';
+      return [
+        item('open', 'folder', lang('Open')),
+        isOwned ? item('access', 'users', lang('ParvaneCloudShare'))
+          : item('leave', 'x', lang('ParvaneCloudLeave'), true),
+      ];
+    }
+    const { entry } = menu;
+    const isFolder = entry.node.kind === 'folder';
+    if (entry.node.trashed) {
+      return [
+        item('restore', 'restore', lang('ParvaneCloudRestore')),
+        item('purge', 'trash', lang('ParvaneCloudDeleteForever'), true),
+      ];
+    }
+    const canEditThis = canEditEntry(entry);
+    const isFixed = isVault(entry);
+    return [
+      item('open', isFolder ? 'folder' : 'eye', lang(isFolder ? 'Open' : 'ParvaneCloudView')),
+      !isFolder && item('download', 'download', lang('ParvaneCloudDownload')),
+      isFolder && canEditThis && entry.container === data?.rootId
+      && item('share', 'users', lang('KnowledgeFilesShareOpen')),
+      !isFolder && item('send', 'chat', lang('ParvaneCloudSendToChat')),
+      canEditThis && !isFixed && item('move', 'move', lang('ParvaneCloudMove')),
+      canEditThis && item('rename', 'edit', lang('ParvaneCloudRename')),
+      IS_TOUCH_ENV && item('select', 'check', lang('ParvaneCloudSelect')),
+      canEditThis && !isFixed && item('delete', 'trash', lang('ParvaneCloudToTrash'), true),
+    ].filter((action): action is CloudMenuAction => Boolean(action));
+  };
 
   function renderInviteRow(c: CloudContainerInfo) {
     return (
       <div
         key={c.id}
-        className={buildClassName(styles.row, styles.containerRow, styles.inviteRow)}
+        className={buildClassName(styles.plainRow, styles.inviteRow)}
         role="listitem"
         data-container-id={c.id}
         data-container-kind={c.kind}
         data-name={c.name}
       >
-        <div className={buildClassName(styles.itemIcon, styles.itemIconShared)}>
-          <Icon name="group" />
-        </div>
-        <div className={styles.itemText}>
-          <div className={styles.inviteTitle} dir="auto">
+        <span className={buildClassName(kit.ava, kit.avaRound)} style="--c: var(--pv-purple)">
+          {(Array.from(nameOf(c.owner))[0] || '').toUpperCase()}
+        </span>
+        <span className={buildClassName(kit.rowText, styles.inviteText)}>
+          <span className={styles.inviteTitle} dir="auto">
             {lang('ParvaneCloudInviteFrom', { name: nameOf(c.owner), folder: containerName(c) })}
-          </div>
-          <div className={styles.itemHint} dir="auto">
-            {lang(c.role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader')}
-          </div>
-        </div>
-        <div className={styles.inviteButtons}>
-          <Button size="tiny" isText color="danger" onClick={() => void answerCloudInvite(c.id, false)}>
+          </span>
+          <span className={kit.sub} dir="auto">{roleText(c.role)}</span>
+        </span>
+        <span className={styles.inviteButtons}>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnGhost)}
+            onClick={() => void answerCloudInvite(c.id, false)}
+          >
             {lang('ParvaneCloudDecline')}
-          </Button>
-          <Button size="tiny" onClick={() => void answerCloudInvite(c.id, true)}>
+          </button>
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnAcc)}
+            onClick={() => void answerCloudInvite(c.id, true)}
+          >
             {lang('ParvaneCloudAccept')}
-          </Button>
-        </div>
+          </button>
+        </span>
       </div>
     );
   }
 
   function renderContainerRow(c: CloudContainerInfo) {
     const isOwned = c.kind === 'owned';
+    const count = childrenOf(getNodes(c.id, data)).length;
     return (
       <div
         key={c.id}
-        className={buildClassName(styles.item, styles.row, styles.containerRow)}
+        className={buildClassName(kit.row, styles.item)}
         role="listitem"
         tabIndex={0}
         data-container-id={c.id}
         data-container-kind={c.kind}
         data-name={c.name}
         onClick={() => handleOpenContainer(c.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && e.target === e.currentTarget) handleOpenContainer(c.id);
+        }}
       >
-        <div className={buildClassName(styles.itemIcon, styles.itemIconShared)}>
-          <Icon name="group" />
-        </div>
-        <div className={styles.itemText}>
-          <div className={styles.itemName} dir="auto">{containerName(c)}</div>
-          <div className={styles.itemHint} dir="auto">
-            {isOwned ? lang('ParvaneCloudSharedFolder') : lang('ParvaneCloudSharedBy', { name: nameOf(c.owner) })}
-            {c.role && !isOwned && ` · ${lang(
-              c.role === 'editor' ? 'ParvaneCloudRoleEditor' : 'ParvaneCloudRoleReader',
-            )}`}
-          </div>
-        </div>
-        {isOwned ? (
-          <Button
-            round
-            size="tiny"
-            color="translucent"
-            iconName="add-user"
-            ariaLabel={lang('ParvaneCloudShare')}
+        <span className={kit.ava} style={`--c: var(--pv-${isOwned ? 'blue' : 'purple'})`}>
+          <PvIcon name="folder" isSmall />
+        </span>
+        <span className={kit.rowText}>
+          <span className={kit.ttl} dir="auto">{containerName(c)}</span>
+          <span className={kit.sub} dir="auto">
+            <span>{itemsText(count)}</span>
+            {' · '}
+            <span className={styles.shared}>
+              {isOwned
+                ? (c.members.length
+                  ? lang('KnowledgeFilesSharedWith', { count: c.members.length })
+                  : lang('KnowledgeFilesSharedAlone'))
+                : `${lang('KnowledgeFilesFrom', { name: nameOf(c.owner) })} · ${roleText(c.role)}`}
+            </span>
+          </span>
+        </span>
+        {isOwned && (
+          <button
+            type="button"
+            className={buildClassName(kit.ib, styles.sharedButton)}
+            aria-label={lang('ParvaneCloudShare')}
             onClick={(e) => {
               e.stopPropagation();
               setDialog({ type: 'share', container: c.id });
             }}
-          />
-        ) : (
-          <Button
-            size="tiny"
-            isText
-            color="danger"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDialog({ type: 'leave', container: c.id });
-            }}
           >
-            {lang('ParvaneCloudLeave')}
-          </Button>
+            <PvIcon name="users" isSmall />
+          </button>
         )}
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang('ParvaneCloudActions')}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenu({ type: 'container', id: c.id });
+          }}
+        >
+          <PvIcon name="dots" />
+        </button>
       </div>
     );
   }
@@ -504,7 +628,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
       : (count ? lang('ParvaneCloudTrashCount', { count }) : lang('ParvaneCloudEmptyTrash'));
     return (
       <div
-        className={buildClassName(styles.item, styles.row, styles.containerRow)}
+        className={buildClassName(kit.row, styles.item)}
         role="listitem"
         tabIndex={0}
         data-virtual={view}
@@ -514,13 +638,13 @@ const Cloud = ({ isMobile }: OwnProps) => {
           if (e.key === 'Enter') goTo({ view });
         }}
       >
-        <div className={buildClassName(styles.itemIcon, styles.itemIconVirtual)}>
-          <Icon name={view === 'shared' ? 'group' : 'delete'} />
-        </div>
-        <div className={styles.itemText}>
-          <div className={styles.itemName} dir="auto">{virtualName(view)}</div>
-          <div className={styles.itemHint} dir="auto">{hint}</div>
-        </div>
+        <span className={kit.ava} style="--c: var(--pv-fg)">
+          <PvIcon name={view === 'shared' ? 'users' : 'trash'} isSmall />
+        </span>
+        <span className={kit.rowText}>
+          <span className={kit.ttl} dir="auto">{virtualName(view)}</span>
+          <span className={kit.sub} dir="auto">{hint}</span>
+        </span>
       </div>
     );
   }
@@ -528,7 +652,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
   function renderCrumb(key: string, title: string, onClick: NoneToVoidFunction, isFirst?: boolean) {
     return (
       <span key={key} className={styles.pathStep}>
-        {!isFirst && <Icon name="next" className={styles.pathArrow} />}
+        {!isFirst && <i className={styles.pathSlash} aria-hidden="true">/</i>}
         <button type="button" className={styles.pathLink} onClick={onClick}>{title}</button>
       </span>
     );
@@ -546,201 +670,269 @@ const Cloud = ({ isMobile }: OwnProps) => {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <header className={styles.header}>
-        {!isMobile && <h1 className={styles.title}>{lang('ParvaneSectionKnowledge')}</h1>}
-        <KnowledgeTabs />
-        {!isBlocked && (
-          <label className={styles.search}>
-            <Icon name="search" className={styles.searchIcon} />
-            <input
-              className={styles.searchInput}
-              type="search"
-              value={query}
-              placeholder={lang('ParvaneCloudSearch')}
-              aria-label={lang('ParvaneCloudSearch')}
-              onChange={handleQueryChange}
-            />
-          </label>
-        )}
-        {!isBlocked && (
-          <div className={styles.headerButtons}>
-            {!isTrash && !isSharedList && (
-              <DropdownMenu trigger={SortButton} positionX="right">
-                {SORT_KEYS.map((key) => (
-                  <MenuItem
-                    key={key}
-                    icon={prefs.sort.key !== key ? undefined : prefs.sort.isDescending ? 'down' : 'up'}
-                    onClick={handleSort(key)}
-                  >
-                    {sortTitles[key]}
-                  </MenuItem>
-                ))}
-              </DropdownMenu>
-            )}
-            {isTrash && entries.length > 0 && (
-              <Button size="smaller" color="danger" isText onClick={() => setDialog({ type: 'emptyTrash' })}>
-                {lang('ParvaneCloudEmptyTrashAction')}
-              </Button>
-            )}
-            {canEdit && (
-              <DropdownMenu trigger={AddButton} positionX="right">
-                <MenuItem icon="document" onClick={handlePickFiles}>{lang('ParvaneCloudUpload')}</MenuItem>
-                <MenuItem icon="folder" onClick={() => setDialog({ type: 'newFolder' })}>
-                  {lang('ParvaneCloudNewFolder')}
-                </MenuItem>
-                {!place.container && !place.folder && (
-                  <MenuItem icon="group" onClick={() => setDialog({ type: 'newShared' })}>
-                    {lang('ParvaneCloudNewShared')}
-                  </MenuItem>
-                )}
-              </DropdownMenu>
-            )}
-          </div>
-        )}
-      </header>
-      {statusKey && (
-        <div className={buildClassName(styles.syncNotice, isBlocked && styles.syncNoticeBlocking)} role="status">
-          {lang(statusKey)}
-        </div>
-      )}
-      {!isBlocked && isSearch && (
-        <div className={styles.found} data-found={entries.length}>
-          {lang('ParvaneCloudFound', { count: entries.length })}
-        </div>
-      )}
-      {!isBlocked && !isSearch && (
-        <nav className={styles.path} aria-label={lang('ParvaneSectionCloud')}>
-          {renderCrumb('root', lang('ParvaneSectionCloud'), handleOpenRoot, true)}
-          {place.view && renderCrumb(place.view, virtualName(place.view), () => goTo({ view: place.view }))}
-          {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
-          {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
-          {container && (
-            <Button
-              className={styles.pathShare}
-              size="tiny"
-              isText
-              onClick={() => setDialog({ type: 'share', container: container.id })}
+      <div className={buildClassName(kit.island, styles.page)}>
+        <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
+          {!isMobile && <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>}
+          <KnowledgeTabs />
+          <span className={buildClassName(kit.grow, kit.hideM)} />
+          {canAdd && isPersonalRoot && (
+            <button
+              type="button"
+              className={buildClassName(kit.pill, kit.hideM)}
+              aria-label={lang('ParvaneCloudNewShared')}
+              onClick={handleNewShared}
             >
-              {lang('ParvaneCloudShare')}
-            </Button>
+              <PvIcon name="users" isSmall />
+              {lang('ParvaneCloudSharedFolder')}
+            </button>
           )}
-        </nav>
-      )}
-      {selectedEntries.length > 0 && (
-        <div className={styles.selection} role="toolbar">
-          <Button
-            round
-            size="tiny"
-            color="translucent"
-            iconName="close"
-            ariaLabel={lang('ParvaneCloudClearSelection')}
-            onClick={handleClearSelection}
-          />
-          <span className={styles.selectionCount}>
-            {lang('ParvaneCloudSelected', { count: selectedEntries.length })}
-          </span>
-          {isTrash ? (
-            <>
-              <Button size="tiny" isText onClick={handleBulkRestore}>{lang('ParvaneCloudRestore')}</Button>
-              <Button size="tiny" isText color="danger" onClick={handleBulkPurge}>
-                {lang('ParvaneCloudDeleteForever')}
-              </Button>
-            </>
-          ) : (
-            <>
-              {selectedEntries.some((e) => e.node.kind === 'file') && (
-                <Button size="tiny" isText onClick={handleBulkSend}>{lang('ParvaneCloudSendToChat')}</Button>
-              )}
-              {selectionContainer && (
-                <Button size="tiny" isText onClick={handleBulkMove}>{lang('ParvaneCloudMove')}</Button>
-              )}
-              {editableSelection.length > 0 && (
-                <Button size="tiny" isText color="danger" onClick={handleBulkDelete}>
-                  {lang('ParvaneCloudToTrash')}
-                </Button>
-              )}
-            </>
+          {canAdd && (
+            <button
+              type="button"
+              className={buildClassName(kit.pill, kit.hideM)}
+              aria-label={lang('ParvaneCloudNewFolder')}
+              onClick={handleNewFolder}
+            >
+              <PvIcon name="folder" isSmall />
+              {lang('ParvaneCloudFolder')}
+            </button>
           )}
-        </div>
-      )}
-      <div className={buildClassName(styles.content, 'custom-scroll')}>
-        {!isLoaded && !isBlocked && <Loading />}
-        {isLoaded && (
-          <div className={styles.list} role="list">
-            {isRoot && invites.map(renderInviteRow)}
-            {isTrash && entries.length > 0 && (
-              <div className={styles.listNote}>{lang('ParvaneCloudTrashNote')}</div>
-            )}
-            {listedFolders?.map(renderContainerRow)}
-            {entries.map((entry) => {
-              const daysLeft = isTrash ? trashDaysLeft(entry.node, now) : undefined;
-              const canEditThis = canEditEntry(entry);
-              return (
-                <CloudItem
-                  key={keyOf(entry)}
-                  container={entry.container}
-                  node={entry.node}
-                  hint={daysLeft === undefined ? (isSearch ? pathText(entry) : undefined)
-                    : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
-                      : lang('ParvaneCloudTrashExpired')}
-                  daysLeft={daysLeft}
-                  folderSize={entry.node.kind === 'folder'
-                    ? sizeOf(getNodes(entry.container, data), entry.node.id) : undefined}
-                  isSelected={selected.includes(keyOf(entry))}
-                  isTrash={isTrash}
-                  canEdit={canEditThis}
-                  canShare={canEditThis && entry.container === data?.rootId}
-                  onOpen={handleOpen}
-                  onToggle={handleToggle}
-                  onAction={handleAction}
-                />
-              );
-            })}
-            {!hasRows && (
-              <div className={buildClassName(styles.empty, isRoot && styles.emptyRoot)}>
-                <div className={styles.emptyTitle}>{lang(emptyKey)}</div>
-                {emptyKey === 'ParvaneCloudEmpty' && (
-                  <div className={styles.emptyHint}>{lang('ParvaneCloudEmptyHint')}</div>
-                )}
-              </div>
-            )}
-            {isRoot && renderVirtualRow('shared', sharedFolders.length)}
-            {isRoot && renderVirtualRow('trash', trash.length)}
+          {canAdd && (
+            <button
+              type="button"
+              className={buildClassName(kit.pill, kit.pillAcc, kit.hideM)}
+              onClick={handlePickFiles}
+            >
+              <PvIcon name="upload" isSmall />
+              {lang('ParvaneCloudUpload')}
+            </button>
+          )}
+        </header>
+        {statusKey && (
+          <div className={buildClassName(styles.syncNotice, isBlocked && styles.syncNoticeBlocking)} role="status">
+            {lang(statusKey)}
           </div>
         )}
-        {isDragging && <div className={styles.dropZone}>{lang('ParvaneCloudDropHere')}</div>}
-      </div>
-      <CloudTransfers transfers={transfers} />
-      {notice && (
-        <div className={styles.notice} role="alert" onClick={hideCloudNotice}>
-          {notice.code === 'saved' ? lang('ParvaneCloudSavedToCloud')
-            : notice.code === 'sent' ? lang('ParvaneCloudSentToChat') : lang(CLOUD_ERROR_KEYS[notice.code])}
+        <div className={buildClassName(styles.content, 'custom-scroll')}>
+          {!isBlocked && (
+            <div className={styles.tools}>
+              <label className={kit.search}>
+                <PvIcon name="search" isSmall className={kit.searchIcon} />
+                <input
+                  className={kit.searchInput}
+                  type="search"
+                  value={query}
+                  placeholder={lang('ParvaneCloudSearch')}
+                  aria-label={lang('ParvaneCloudSearch')}
+                  autoComplete="off"
+                  onChange={handleQueryChange}
+                />
+              </label>
+              {!isTrash && !isSharedList && (
+                <DropdownMenu trigger={SortButton} positionX="right">
+                  {SORT_KEYS.map((key) => (
+                    <MenuItem
+                      key={key}
+                      icon={prefs.sort.key !== key ? undefined : prefs.sort.isDescending ? 'down' : 'up'}
+                      onClick={handleSort(key)}
+                    >
+                      {sortTitles[key]}
+                    </MenuItem>
+                  ))}
+                </DropdownMenu>
+              )}
+            </div>
+          )}
+          {!isBlocked && isSearch && (
+            <div className={styles.found} data-found={entries.length}>
+              {lang('ParvaneCloudFound', { count: entries.length })}
+            </div>
+          )}
+          {!isBlocked && !isSearch && (
+            <nav className={styles.path} aria-label={lang('ParvaneSectionCloud')}>
+              {renderCrumb('root', lang('ParvaneSectionCloud'), handleOpenRoot, true)}
+              {place.view && renderCrumb(place.view, virtualName(place.view), () => goTo({ view: place.view }))}
+              {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
+              {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
+            </nav>
+          )}
+          {!isBlocked && !isSearch && container && (container.kind === 'owned' ? (
+            <button type="button" className={styles.banner} data-share-banner="owned" onClick={handleAccess}>
+              <PvIcon name="users" isSmall />
+              <span>
+                {container.members.length
+                  ? lang('KnowledgeFilesSharedBanner', {
+                    name: containerName(container),
+                    members: container.members.map((m) => nameOf(m.user)).join(', '),
+                  })
+                  : lang('KnowledgeFilesSharedBannerAlone', { name: containerName(container) })}
+              </span>
+            </button>
+          ) : (
+            <div className={styles.banner} data-share-banner="shared">
+              <PvIcon name="users" isSmall />
+              <span>
+                {lang('KnowledgeFilesIncomingBanner', {
+                  name: containerName(container),
+                  owner: nameOf(container.owner),
+                  rights: lang(container.role === 'editor' ? 'KnowledgeFilesCanEdit' : 'KnowledgeFilesViewOnly'),
+                })}
+              </span>
+            </div>
+          ))}
+          {canAdd && !isSearch && (
+            <div className={buildClassName(kit.chips, kit.onlyM, styles.chips)}>
+              <button type="button" className={kit.chip} onClick={handleNewFolder}>
+                <PvIcon name="folder" isSmall />
+                {lang('ParvaneCloudNewFolder')}
+              </button>
+              <button type="button" className={kit.chip} onClick={handlePickFiles}>
+                <PvIcon name="upload" isSmall />
+                {lang('KnowledgeFilesUploadFile')}
+              </button>
+              {hasAccessChip && (
+                <button type="button" className={kit.chip} onClick={handleAccess}>
+                  <PvIcon name="users" isSmall />
+                  {lang('ParvaneCloudShare')}
+                </button>
+              )}
+              {isPersonalRoot && (
+                <button type="button" className={kit.chip} onClick={handleNewShared}>
+                  <PvIcon name="users" isSmall />
+                  {lang('ParvaneCloudNewShared')}
+                </button>
+              )}
+            </div>
+          )}
+          {isTrash && entries.length > 0 && (
+            <div className={styles.trashNote}>
+              <span className={buildClassName(kit.muted, kit.small, kit.grow)}>{lang('ParvaneCloudTrashNote')}</span>
+              <button type="button" className={buildClassName(kit.btn, kit.btnDanger)} onClick={handleEmptyTrash}>
+                {lang('ParvaneCloudEmptyTrashAction')}
+              </button>
+            </div>
+          )}
+          {selectedEntries.length > 0 && (
+            <div className={styles.selection} role="toolbar">
+              <button
+                type="button"
+                className={kit.ib}
+                aria-label={lang('ParvaneCloudClearSelection')}
+                onClick={handleClearSelection}
+              >
+                <PvIcon name="x" isSmall />
+              </button>
+              <span className={styles.selectionCount}>
+                {lang('ParvaneCloudSelected', { count: selectedEntries.length })}
+              </span>
+              {isTrash ? (
+                <>
+                  <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleBulkRestore}>
+                    {lang('ParvaneCloudRestore')}
+                  </button>
+                  <button type="button" className={buildClassName(kit.btn, kit.btnDanger)} onClick={handleBulkPurge}>
+                    {lang('ParvaneCloudDeleteForever')}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {selectedEntries.some((e) => e.node.kind === 'file') && (
+                    <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleBulkSend}>
+                      {lang('ParvaneCloudSendToChat')}
+                    </button>
+                  )}
+                  {selectionContainer && (
+                    <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleBulkMove}>
+                      {lang('ParvaneCloudMove')}
+                    </button>
+                  )}
+                  {editableSelection.length > 0 && (
+                    <button
+                      type="button"
+                      className={buildClassName(kit.btn, kit.btnDanger)}
+                      onClick={handleBulkDelete}
+                    >
+                      {lang('ParvaneCloudToTrash')}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {!isLoaded && !isBlocked && <Loading />}
+          {isLoaded && (
+            <div className={styles.list} role="list">
+              {isRoot && invites.map(renderInviteRow)}
+              <CloudTransfers transfers={transfers} />
+              {listedFolders?.map(renderContainerRow)}
+              {entries.map((entry) => {
+                const daysLeft = isTrash ? trashDaysLeft(entry.node, now) : undefined;
+                const entryNodes = entry.node.kind === 'folder' ? getNodes(entry.container, data) : undefined;
+                return (
+                  <CloudItem
+                    key={keyOf(entry)}
+                    container={entry.container}
+                    node={entry.node}
+                    hint={isSearch ? pathText(entry) : undefined}
+                    trashHint={daysLeft === undefined ? undefined
+                      : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
+                        : lang('ParvaneCloudTrashExpired')}
+                    daysLeft={daysLeft}
+                    childCount={entryNodes ? childrenOf(entryNodes, entry.node.id).length : undefined}
+                    folderSize={entryNodes ? sizeOf(entryNodes, entry.node.id) : undefined}
+                    isSelected={selected.includes(keyOf(entry))}
+                    isSelecting={selected.length > 0}
+                    isTrash={isTrash}
+                    isVault={isVault(entry)}
+                    isIncoming={getContainer(entry.container, data)?.kind === 'shared'}
+                    onOpen={handleOpen}
+                    onToggle={handleToggle}
+                    onMenu={handleMenu}
+                    onAction={handleAction}
+                  />
+                );
+              })}
+              {!hasRows && !transfers.length && (
+                <div className={buildClassName(kit.empty, styles.empty)}>
+                  <div>{lang(emptyKey)}</div>
+                  {emptyKey === 'ParvaneCloudEmpty' && (
+                    <div className={kit.small}>{lang('ParvaneCloudEmptyHint')}</div>
+                  )}
+                </div>
+              )}
+              {isRoot && renderVirtualRow('shared', sharedFolders.length)}
+              {isRoot && renderVirtualRow('trash', trash.length)}
+            </div>
+          )}
+          {usage && usage.quota > 0 && (
+            <footer
+              className={buildClassName(styles.usage, usedShare >= USAGE_WARN_SHARE && styles.usageWarn)}
+              data-used={usage.used}
+              data-quota={usage.quota}
+            >
+              <span>
+                {lang('ParvaneCloudUsage', {
+                  used: formatFileSize(lang, usage.used), total: formatFileSize(lang, usage.quota),
+                })}
+              </span>
+              {sizes.trash > 0 && (
+                <span>{` · ${lang('ParvaneCloudUsageTrash', { size: formatFileSize(lang, sizes.trash) })}`}</span>
+              )}
+              <span>{` · ${lang('KnowledgeFilesEncrypted')}`}</span>
+              {usedShare >= USAGE_WARN_SHARE && (
+                <span className={styles.usageAlert}>{` ${lang('ParvaneCloudUsageAlmostFull')}`}</span>
+              )}
+            </footer>
+          )}
+          {isDragging && <div className={styles.dropZone}>{lang('ParvaneCloudDropHere')}</div>}
         </div>
-      )}
-      {usage && usage.quota > 0 && (
-        <footer
-          className={buildClassName(styles.usage, usedShare >= USAGE_WARN_SHARE && styles.usageWarn)}
-          data-used={usage.used}
-          data-quota={usage.quota}
-        >
-          <div className={styles.usageBar}>
-            <div className={styles.usageFill} style={`width: ${Math.min(PERCENT, usedShare * PERCENT)}%`} />
+        {notice && (
+          <div className={styles.notice} role="alert" onClick={hideCloudNotice}>
+            {notice.code === 'saved' ? lang('ParvaneCloudSavedToCloud')
+              : notice.code === 'sent' ? lang('ParvaneCloudSentToChat') : lang(CLOUD_ERROR_KEYS[notice.code])}
           </div>
-          <span className={styles.usageText}>
-            {lang('ParvaneCloudUsage', {
-              used: formatFileSize(lang, usage.used), total: formatFileSize(lang, usage.quota),
-            })}
-          </span>
-          {sizes.trash > 0 && (
-            <span className={styles.usageTrash}>
-              {lang('ParvaneCloudUsageTrash', { size: formatFileSize(lang, sizes.trash) })}
-            </span>
-          )}
-          {usedShare >= USAGE_WARN_SHARE && (
-            <span className={styles.usageAlert}>{lang('ParvaneCloudUsageAlmostFull')}</span>
-          )}
-        </footer>
-      )}
+        )}
+      </div>
       <input
         ref={fileInputRef}
         className={styles.fileInput}
@@ -748,6 +940,13 @@ const Cloud = ({ isMobile }: OwnProps) => {
         multiple
         aria-label={lang('ParvaneCloudUpload')}
         onChange={handleFilesPicked}
+      />
+      <CloudMenu
+        isOpen={Boolean(menu)}
+        title={menuTitle}
+        actions={menuActions()}
+        onPick={handleMenuPick}
+        onClose={handleCloseMenu}
       />
       <CloudNameDialog
         isOpen={dialog?.type === 'newFolder' || dialog?.type === 'rename'}
@@ -760,6 +959,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
       />
       <CloudFolderDialog
         isOpen={dialog?.type === 'move'}
+        title={moveTitle}
         rootName={moveRootName}
         nodes={dialog?.type === 'move' ? getNodes(dialog.container, data) : nodes}
         movedIds={dialog?.type === 'move' ? dialog.nodes.map((n) => n.id) : []}
@@ -813,7 +1013,13 @@ const Cloud = ({ isMobile }: OwnProps) => {
         container={preview?.container}
         node={preview?.node}
         maxBytes={isMobile ? PREVIEW_MAX_BYTES_MOBILE : PREVIEW_MAX_BYTES_DESKTOP}
+        siblings={previewSiblings}
+        folderText={preview ? pathText(preview) : undefined}
+        accessText={preview ? accessText(preview.container) : undefined}
+        onNavigate={handleOpen}
         onDownload={handleDownload}
+        onSend={handlePreviewSend}
+        onMore={handlePreviewMore}
         onClose={handleClosePreview}
       />
     </div>

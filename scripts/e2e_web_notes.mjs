@@ -116,7 +116,8 @@ try {
   // ── Ссылка на несуществующую заметку создаёт её; обратные ссылки; поиск ───
   await body.getByRole('button', { name: OTHER }).click();
   await visible(knowledge.locator(`[data-note-title="${OTHER}"]`), 'созданная по ссылке заметка');
-  await visible(note.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }), 'обратная ссылка');
+  // На широком экране «Связи» — отдельный остров справа от заметки, на узком — под её текстом
+  await visible(knowledge.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }), 'обратная ссылка');
   await knowledge.locator('#knowledge-search').fill('gpu');
   await visible(row(NOTE), 'найденная заметка');
   await row(OTHER).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })

@@ -1,75 +1,67 @@
-// Parvane: раздел «Знания» — заметки, граф и холст. Цвета, шрифты и скругления — токены мессенджера.
+// Parvane: раздел «Знания» — заметки, граф и холст по прототипу `disain/prototype.html` (`vKb`, `vLinks`,
+// `vGraph`, `vCanvas`). Общие детали — `PvKit.module.scss`; цвета — переменные `--pv-*`.
 
 .root {
   position: relative;
   z-index: 1;
 
-  overflow: hidden;
   display: flex;
   grid-column: 2 / -1;
-  flex-direction: column;
+  gap: 0.5rem;
 
   min-width: 0;
   margin: 1rem;
-  border-radius: var(--border-radius-island);
 
-  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  color: var(--pv-fg);
 
-  background: var(--color-background);
   outline: none;
-  box-shadow: var(--shadow-island);
 
   @media (max-width: 600px) {
     position: fixed;
     inset: 0;
     margin: 0;
-    border-radius: 0;
   }
 }
 
-.header {
-  display: flex;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  align-items: center;
-
-  min-height: var(--column-header-height);
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-borders);
+.page {
+  flex: 1 1 auto;
 }
 
-.title {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.5rem;
+.side {
+  flex: 0 0 23.75rem;
 }
 
-.tabs {
-  flex: 0 1 auto;
+.sideContent {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1.125rem;
 }
 
-.headerButtons {
-  display: flex;
-  gap: 0.375rem;
-  align-items: center;
-  margin-inline-start: auto;
+.crumb {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notice {
-  flex-shrink: 0;
+  flex: none;
 
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--color-borders);
+  padding: 0.5rem 1.125rem;
+  border-bottom: 1px solid var(--pv-line);
 
   font-size: 0.875rem;
 
-  background: var(--color-background-secondary);
+  background: var(--pv-raised);
 }
 
 .content {
-  overflow-y: auto;
+  position: relative;
+
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -77,254 +69,323 @@
   min-height: 0;
 }
 
+.mutedLine {
+  margin: 0;
+  color: var(--pv-muted);
+}
+
+// ── список и заметка ─────────────────────────────────────────────────────────
+
 .layout {
   display: grid;
-  grid-template-columns: 22rem minmax(0, 1fr);
+  grid-template-columns: 20rem minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
 
-  @media (max-width: 925px) {
+  @media (max-width: 760px) {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
 .list {
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-
   min-width: 0;
-  padding: 1rem;
-  border-inline-end: 1px solid var(--color-borders);
+  padding: 0.75rem;
+  border-inline-end: 1px solid var(--pv-line);
 
-  @media (max-width: 925px) {
-    border-inline-end: none;
-
-    .layoutNote & {
-      display: none;
-    }
+  @media (max-width: 760px) {
+    padding: 0.875rem 1rem 1.5rem;
+    border-inline-end: 0;
   }
+}
+
+.listSearch {
+  margin-bottom: 0.625rem;
+}
+
+// Составные селекторы — чтобы правка побеждала общее правило из `PvKit` при любом порядке файлов.
+// Строка шире колонки на свои поля: плитка стоит по краю поиска, подсветка выходит за него
+.list .listRow {
+  width: calc(100% + 1.25rem);
+  min-height: 3.25rem;
+  margin-inline: -0.625rem;
+}
+
+.list .newNote {
+  margin-top: 0.75rem;
 }
 
 .pane {
   overflow-y: auto;
   min-width: 0;
-  padding: 1rem 1.25rem;
+  padding: 1.5rem 1.75rem;
 
-  @media (max-width: 925px) {
-    display: none;
-
-    .layoutNote & {
-      display: block;
-    }
+  @media (max-width: 760px) {
+    padding: 0;
   }
 }
 
-.search {
-  flex-shrink: 0;
+.pickNote {
+  max-width: 52ch;
+  margin: 2.5rem 0 0;
+  color: var(--pv-muted);
 }
-
-.groupTitle,
-.blockTitle {
-  margin: 0.5rem 0 0.25rem;
-
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.row {
-  cursor: var(--custom-cursor, pointer);
-
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-
-  width: 100%;
-  padding: 0.5rem 0.625rem;
-  border: 0;
-  border-radius: var(--border-radius-default-small);
-
-  color: var(--color-text);
-  text-align: start;
-
-  background: none;
-
-  &:hover {
-    background: var(--color-chat-hover);
-  }
-}
-
-.rowActive {
-  background: var(--color-background-secondary);
-}
-
-.rowTitle {
-  overflow: hidden;
-
-  font-size: 0.9375rem;
-  font-weight: var(--font-weight-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rowPreview {
-  overflow: hidden;
-
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.muted {
-  margin: 0;
-  font-size: 0.875rem;
-  color: var(--color-text-secondary);
-}
-
-.grow {
-  flex: 1 1 auto;
-}
-
-// ── заметка ──────────────────────────────────────────────────────────────────
 
 .note {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  max-width: 46rem;
+  min-width: 0;
 }
 
-.noteHead {
+// Шапка заметки на узком экране: папка и кнопка правки; остаётся на месте при прокрутке
+.noteBar {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--pv-panel);
+}
+
+.noteBody {
   display: flex;
-  gap: 0.5rem;
-  align-items: center;
+  flex-direction: column;
+  min-width: 0;
+
+  @media (max-width: 760px) {
+    padding: 0.875rem 1rem 1.5rem;
+  }
+}
+
+.noteBody .backButton {
+  align-self: flex-start;
+  margin: -0.25rem 0 0.5rem -0.5rem;
 }
 
 .noteTitle {
-  flex: 1 1 auto;
+  margin: 0;
 
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--pv-fg);
+  overflow-wrap: anywhere;
+
+  @media (max-width: 760px) {
+    font-size: 1.5rem;
+  }
+}
+
+.noteTitleInput {
+  width: 100%;
   min-width: 0;
-  padding: 0.25rem 0;
+  padding: 0.125rem 0;
   border: 0;
+  border-bottom: 1px solid transparent;
 
-  font-size: 1.375rem;
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text);
+  font-family: inherit;
 
   background: none;
   outline: none;
+
+  &:hover {
+    border-bottom-color: var(--pv-line2);
+  }
+
+  &:focus {
+    border-bottom-color: var(--pv-accent);
+  }
 }
 
-.chips {
+.noteTitleEditing {
+  border-bottom-color: var(--pv-line2);
+}
+
+.props {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
-  align-items: center;
+  margin: 0.375rem 0 1.125rem;
 }
 
-.chip {
-  padding: 0.125rem 0.625rem;
-  border: 1px solid var(--color-borders);
-  border-radius: 1rem;
+.prop {
+  padding: 0.1875rem 0.625rem;
+  border-radius: 0.75rem;
 
   font-size: 0.8125rem;
-  color: var(--color-text-secondary);
+  color: var(--pv-muted);
 
-  background: none;
+  background: var(--pv-raised);
+
+  b {
+    font-weight: 500;
+    color: var(--pv-fg);
+  }
 }
 
-.editor {
-  resize: vertical;
-
-  min-height: 22rem;
-
-  font-family: var(--font-family-monospace);
-  font-size: 0.875rem;
-  line-height: 1.5;
+.noteBody .editor {
+  min-height: 18.75rem;
 }
 
-.body {
-  font-size: 0.9375rem;
-  line-height: 1.5;
+// Текст заметки
+.md {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  max-width: 70ch;
+
   overflow-wrap: anywhere;
 }
 
 .heading {
-  margin: 0.75rem 0 0.25rem;
-  font-weight: var(--font-weight-semibold);
+  font-weight: 700;
 }
 
 .heading1 {
-  font-size: 1.25rem;
+  margin: 0.625rem 0 0.125rem;
+  font-size: 1rem;
+  color: var(--pv-accent);
 }
 
 .heading2 {
-  font-size: 1.125rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.9375rem;
+  color: var(--pv-orange);
 }
 
 .heading3 {
-  font-size: 1rem;
-}
-
-.paragraph {
-  margin: 0 0 0.25rem;
+  margin: 0.375rem 0 0;
+  font-size: 0.875rem;
+  color: var(--pv-orange);
 }
 
 .gap {
-  height: 0.5rem;
+  height: 0.375rem;
 }
 
-.listLine {
-  position: relative;
-
-  &::before {
-    content: "•";
-    margin-inline-start: -0.875rem;
-    padding-inline-end: 0.375rem;
-    color: var(--color-text-secondary);
-  }
-}
-
-.taskLine {
+.item {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.625rem;
   align-items: flex-start;
 }
 
-.taskCheck {
-  flex-shrink: 0;
-  width: 1rem;
-  height: 1rem;
-  margin-top: 0.25rem;
+.itemText {
+  min-width: 0;
 }
 
-.taskDone {
-  color: var(--color-text-secondary);
+.itemDone .itemText {
+  color: var(--pv-faint);
   text-decoration: line-through;
+}
+
+.bullet {
+  flex: none;
+  width: 1.375rem;
+  color: var(--pv-faint);
+  text-align: center;
+}
+
+// Круглая галочка пункта: настоящий флажок без системного вида
+.check {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-grid;
+  flex: none;
+  place-content: center;
+
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.0625rem 0 0;
+  border: 2px solid var(--pv-line2);
+  border-radius: 50%;
+
+  appearance: none;
+  background: none;
+
+  &::after {
+    content: "";
+
+    transform: translateY(-0.0625rem) rotate(-45deg);
+
+    display: none;
+
+    width: 0.5625rem;
+    height: 0.3125rem;
+    border-bottom: 0.125rem solid var(--pv-accent-ink);
+    border-left: 0.125rem solid var(--pv-accent-ink);
+  }
+
+  &:checked {
+    border-color: var(--pv-task);
+    background: var(--pv-task);
+
+    &::after {
+      display: block;
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+    outline-offset: 2px;
+  }
+}
+
+// Дата пункта, ставшего задачей «Плана»
+.dateTag {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+
+  margin-inline-start: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.3125rem;
+
+  font-size: 0.75rem;
+  color: var(--pv-task);
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: 0.0625rem;
+
+  background: color-mix(in srgb, var(--pv-task) 18%, transparent);
+}
+
+.dateTag .dateTagIcon {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.link,
+.linkSample,
+.cardLink {
+  border-bottom: 1px dashed color-mix(in srgb, var(--pv-purple) 50%, transparent);
+  color: var(--pv-purple);
 }
 
 .link {
   cursor: var(--custom-cursor, pointer);
 
   padding: 0;
-  border: 0;
+  border-top: 0;
+  border-inline: 0;
 
-  color: var(--color-links);
+  font: inherit;
+  text-align: start;
 
   background: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+    outline-offset: 2px;
+  }
 }
 
 .linkMissing {
-  opacity: 0.6;
+  border-bottom-color: color-mix(in srgb, var(--pv-red) 50%, transparent);
+  color: var(--pv-red);
+  opacity: 0.85;
 }
 
 .tag {
-  color: var(--color-primary);
+  color: var(--pv-aqua);
 }
 
 .code,
@@ -333,310 +394,567 @@
   font-size: 0.8125rem;
 }
 
+.code {
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 0.25rem;
+  color: var(--pv-orange);
+  background: var(--pv-hover);
+}
+
 .pre {
   margin: 0;
+  padding: 0 0.5rem;
+
+  color: var(--pv-fg);
   white-space: pre-wrap;
+
+  background: var(--pv-raised);
 }
 
-.block {
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--color-borders);
-}
-
-.blockRow {
-  display: flex;
-  gap: 0.75rem;
-  padding: 0.125rem 0;
-  font-size: 0.875rem;
-}
-
-.blockWhen {
-  flex: 0 0 auto;
-  font-family: var(--font-family-monospace);
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
-}
-
-.blockLink {
-  cursor: var(--custom-cursor, pointer);
-
-  display: block;
-
-  padding: 0.125rem 0;
-  border: 0;
-
-  font-size: 0.875rem;
-  color: var(--color-links);
-
-  background: none;
-}
-
-// ── граф ─────────────────────────────────────────────────────────────────────
-
-.graph,
-.canvas {
-  position: relative;
-
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 0.5rem;
-
-  min-height: 0;
-  padding: 0.75rem 1rem 1rem;
-}
-
-.graphBar {
+.noteButtons {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  align-items: center;
+  margin: 1rem 0 1.375rem;
 }
 
-.graphField {
-  touch-action: none;
-  cursor: grab;
-
-  flex: 1 1 auto;
-
-  width: 100%;
-  min-height: 20rem;
-  border-radius: var(--border-radius-default);
-
-  background: var(--color-background-secondary);
+// «Запланировано»
+.planned {
+  max-width: 70ch;
 }
 
-.graphEdge {
-  stroke: var(--color-borders-input);
-  stroke-width: 1;
+.plannedHint {
+  font-size: 0.75rem;
+  color: var(--pv-muted);
 }
 
-.graphEdgeOn {
-  stroke: var(--color-primary);
-  stroke-width: 1.5;
-}
-
-.graphNode {
-  cursor: var(--custom-cursor, pointer);
-  font-size: 11px;
-  fill: var(--color-primary);
-}
-
-.graphNode text {
-  pointer-events: none;
-  fill: var(--color-text);
-}
-
-.graph_missing {
-  opacity: 0.45;
-  fill: var(--color-text-secondary);
-}
-
-.graph_day {
-  fill: var(--color-green);
-}
-
-.graph_record {
-  fill: var(--color-links);
-}
-
-.graphDim {
-  opacity: 0.2;
-}
-
-.graphCard {
-  position: absolute;
-  right: 1.5rem;
-  bottom: 1.5rem;
-
+.plannedRow {
   display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  align-items: flex-start;
-
-  max-width: 16rem;
-  padding: 0.75rem;
-  border-radius: var(--border-radius-default);
-
-  background: var(--color-background);
-  box-shadow: var(--shadow-island);
-}
-
-// ── холст ────────────────────────────────────────────────────────────────────
-
-.canvasEmpty {
-  display: flex;
-  flex-direction: column;
   gap: 0.75rem;
-  align-items: flex-start;
+  align-items: center;
 
-  padding: 1rem;
+  min-height: 2.75rem;
+  padding: 0.375rem 0;
 }
 
-.canvasSelect {
-  max-width: 14rem;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--color-borders);
-  border-radius: var(--border-radius-default-small);
+.plannedPast {
+  opacity: 0.5;
+}
 
-  color: var(--color-text);
+.plannedDay {
+  flex: none;
 
-  background: var(--color-background);
+  width: 3.5rem;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--pv-muted);
+}
+
+.plannedBar {
+  flex: none;
+  align-self: stretch;
+
+  width: 0.25rem;
+  border-radius: 0.125rem;
+
+  background: var(--c, var(--pv-event));
+}
+
+.plannedNote {
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+// «Связи»: обратные ссылки и малый граф
+.links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  min-width: 0;
+}
+
+.linksInline {
+  max-width: 70ch;
+  margin-top: 1.375rem;
+}
+
+.links .linksCaption {
+  margin-bottom: 0.375rem;
+}
+
+.links .linkRow {
+  width: calc(100% + 1.25rem);
+  margin-inline: -0.625rem;
+}
+
+.miniGraph {
+  display: block;
+  width: 100%;
+  max-width: 26rem;
+
+  line {
+    stroke: var(--pv-line2);
+  }
+
+  circle {
+    fill: var(--c, var(--pv-note));
+  }
+
+  text {
+    font-family: var(--font-family);
+    font-size: 11px;
+    text-anchor: middle;
+    fill: var(--pv-fg);
+  }
+}
+
+.miniCenter {
+  --c: var(--pv-accent);
+}
+
+.miniNode {
+  cursor: var(--custom-cursor, pointer);
+
+  &:hover text {
+    fill: var(--pv-accent);
+  }
+}
+
+// ── поле графа и холста ──────────────────────────────────────────────────────
+
+.canvas {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .board {
   touch-action: none;
   cursor: grab;
+  user-select: none;
 
   position: relative;
 
   overflow: hidden;
   flex: 1 1 auto;
 
-  min-height: 22rem;
-  border-radius: var(--border-radius-default);
+  min-height: 0;
 
-  background: var(--color-background-secondary);
+  background-color: color-mix(in srgb, var(--pv-bg) 55%, var(--pv-panel));
+  background-image: radial-gradient(var(--pv-line2) 1px, transparent 1.3px);
+
+  &:active {
+    cursor: grabbing;
+  }
 }
 
-.boardLayer {
+.world {
   position: absolute;
   top: 0;
   left: 0;
   transform-origin: 0 0;
 }
 
-.boardEdges {
+.boardTools {
   pointer-events: none;
 
   position: absolute;
+  z-index: 5;
+  top: 0.625rem;
+  right: 0.625rem;
+  left: 0.625rem;
+
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+
+  > * {
+    pointer-events: auto;
+  }
+}
+
+.boardScroll {
+  scrollbar-width: none;
+
+  overflow-x: auto;
+  display: flex;
+  gap: 0.375rem;
+
+  max-width: 100%;
+  padding-bottom: 0.125rem;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.boardToolRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.boardTools .boardChip {
+  background: var(--pv-panel);
+}
+
+.boardTools .boardChipOn {
+  background: color-mix(in srgb, var(--c, var(--pv-accent)) 22%, var(--pv-panel));
+}
+
+.boardTool {
+  cursor: var(--custom-cursor, pointer);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.375rem;
+  height: 2.375rem;
+  padding: 0;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.625rem;
+
+  color: var(--pv-fg);
+
+  background: var(--pv-panel);
+
+  &:hover:not(:disabled) {
+    background: var(--pv-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+}
+
+.boardToolOn,
+.boardToolOn:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--pv-accent-ink);
+  background: var(--pv-accent);
+}
+
+.boardZoom {
+  position: absolute;
+  z-index: 5;
+  right: 0.625rem;
+  bottom: 0.625rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.boardInfo {
+  cursor: default;
+
+  position: absolute;
+  z-index: 5;
+  bottom: 0.625rem;
+  left: 0.625rem;
+
+  width: min(23.75rem, calc(100% - 4.375rem));
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.875rem;
+
+  background: var(--pv-panel);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+}
+
+.boardInfoHead {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.boardInfoDot {
+  flex: none;
+
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+
+  background: var(--c, var(--pv-note));
+}
+
+.boardInfoSub {
+  margin: 0.125rem 0 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.boardHint {
+  position: absolute;
+  z-index: 5;
+  top: 3.625rem;
+  left: 50%;
+  transform: translateX(-50%);
+
+  max-width: calc(100% - 1.25rem);
+  padding: 0.375rem 0.875rem;
+  border-radius: 1rem;
+
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+
+  @media (max-width: 760px) {
+    top: 6.5rem;
+  }
+}
+
+.boardEmpty {
+  pointer-events: none;
+
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  width: min(36ch, calc(100% - 2rem));
+  margin: 0;
+
+  color: var(--pv-muted);
+  text-align: center;
+}
+
+.boardStart {
+  cursor: default;
+
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: min(40ch, calc(100% - 2rem));
+
+  text-align: center;
+}
+
+// ── граф ─────────────────────────────────────────────────────────────────────
+
+.graphSvg,
+.canvasEdges {
+  position: absolute;
   top: 0;
   left: 0;
-
   overflow: visible;
+}
 
-  width: 1px;
-  height: 1px;
+.graphEdge {
+  stroke: var(--pv-line2);
+  stroke-width: 1.5;
+}
+
+.graphEdgeOn {
+  stroke: var(--pv-accent);
+  stroke-width: 2.5;
+}
+
+.graphNode {
+  cursor: var(--custom-cursor, pointer);
+
+  circle {
+    fill: var(--c, var(--pv-note));
+    stroke: var(--pv-bg);
+    stroke-width: 2;
+  }
+
+  text {
+    pointer-events: none;
+
+    font-family: var(--font-family);
+    font-size: 12px;
+    paint-order: stroke;
+
+    text-anchor: middle;
+    fill: var(--pv-fg);
+    stroke: var(--pv-bg);
+    stroke-linejoin: round;
+    stroke-width: 4px;
+  }
+}
+
+.graphMissing circle {
+  fill-opacity: 0.35;
+}
+
+.graphPicked circle {
+  stroke: var(--pv-accent);
+  stroke-width: 3;
+}
+
+.graphDim {
+  opacity: 0.15;
+}
+
+// ── холст ────────────────────────────────────────────────────────────────────
+
+.canvasEdges {
+  pointer-events: none;
 }
 
 .canvasEdge {
   pointer-events: stroke;
-  stroke: var(--color-text-secondary);
-  stroke-width: 1.5;
+  fill: none;
+  stroke: var(--pv-muted);
+  stroke-width: 2;
 }
 
 .canvasEdgeOn .canvasEdge {
-  stroke: var(--color-primary);
-  stroke-width: 2.5;
+  stroke: var(--pv-accent);
+  stroke-width: 3;
 }
 
 .canvasArrow {
-  fill: var(--color-text-secondary);
+  fill: var(--pv-muted);
+  stroke: none;
 }
 
 .canvasEdgeLabel {
+  font-family: var(--font-family);
   font-size: 12px;
-  fill: var(--color-text-secondary);
+  paint-order: stroke;
+
+  text-anchor: middle;
+  fill: var(--pv-fg);
+  stroke: var(--pv-bg);
+  stroke-linejoin: round;
+  stroke-width: 4px;
 }
 
-.canvasNode {
-  --canvas-color: var(--color-borders-input);
+.canvasGroup {
+  position: absolute;
+  border: 2px solid var(--gc, var(--pv-line2));
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--gc, var(--pv-line2)) 7%, transparent);
+}
 
-  cursor: var(--custom-cursor, pointer);
-  user-select: none;
+.canvasGroupLabel {
+  position: absolute;
+  bottom: calc(100% + 0.375rem);
+  left: 0;
 
+  padding: 0.125rem 0.625rem;
+  border-radius: 0.5rem;
+
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--gc, var(--pv-muted));
+  white-space: nowrap;
+
+  background: color-mix(in srgb, var(--gc, var(--pv-line2)) 16%, var(--pv-panel));
+}
+
+.canvasCard {
   position: absolute;
 
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
 
-  padding: 0.5rem 0.625rem;
-  border: 2px solid var(--canvas-color);
-  border-radius: var(--border-radius-default-small);
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.75rem;
+
+  background: var(--pv-panel);
+  box-shadow: 0 0.375rem 1.125rem rgb(0 0 0 / 25%);
+}
+
+.canvasCardText {
+  border: 2px solid var(--gc, var(--pv-line2));
+}
+
+.canvasCardHead {
+  display: flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--pv-line);
+
+  font-weight: 600;
+}
+
+.canvasCardDot {
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+
+  background: var(--gc, var(--pv-note));
+}
+
+.canvasCardBody {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  padding: 0.5rem 0.75rem;
 
   font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--pv-muted);
 
-  background: var(--color-background);
+  > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .boardFar & {
+    visibility: hidden;
+  }
 }
 
-.canvas_group {
-  border-style: dashed;
-  background: color-mix(in srgb, var(--canvas-color) 10%, transparent);
-}
-
-.canvasGroupLabel {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-
-.canvasText,
-.canvasPreview {
-  overflow: hidden;
-  white-space: pre-wrap;
-}
-
-.canvasPreview {
-  color: var(--color-text-secondary);
+.canvasCardBodyText {
+  color: var(--pv-fg);
 }
 
 .canvasSelected {
-  box-shadow: 0 0 0 2px var(--color-primary);
+  outline: 2px solid var(--pv-accent);
+  outline-offset: 3px;
 }
 
-.canvasColor1 {
-  --canvas-color: var(--color-error);
+.canvasLinkable {
+  cursor: crosshair;
 }
 
-.canvasColor2 {
-  --canvas-color: var(--color-orange);
+.rowDim {
+  opacity: 0.45;
 }
 
-.canvasColor3 {
-  --canvas-color: var(--color-yellow);
-}
-
-.canvasColor4 {
-  --canvas-color: var(--color-green);
-}
-
-.canvasColor5 {
-  --canvas-color: var(--color-links);
-}
-
-.canvasColor6 {
-  --canvas-color: var(--color-primary);
-}
-
-.canvasSwatch {
-  cursor: var(--custom-cursor, pointer);
-
-  width: 1.5rem;
-  height: 1.5rem;
-  border: 0;
-  border-radius: 50%;
-
-  background: var(--canvas-color);
-}
-
-.canvasForm {
+// Строка связи в шторке карточки: «откуда → куда», подпись, удалить
+.edgeRow {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  align-items: center;
 }
 
-.canvasFormText {
-  min-height: 6rem;
+.edgeName {
+  flex: none;
+  width: 44%;
 }
 
-// Кнопки мессенджера по умолчанию во всю ширину — в строках раздела они по содержимому
-.noteHead,
-.graphBar,
-.canvasEmpty,
-.graphCard {
-  :global(.Button) {
-    flex: 0 0 auto;
-    width: auto;
-  }
+.edgeInput {
+  flex: 1 1 auto;
 }
