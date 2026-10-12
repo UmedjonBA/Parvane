@@ -15,6 +15,7 @@ import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
+import SecretForm from '../../ui/SecretForm';
 
 import styles from './SettingsActiveSession.module.scss';
 
@@ -114,15 +115,17 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
       {/* Parvane: IP/гео сервер не хранит, per-session тумблеры звонков и
           секретных чатов не поддерживаются — примечание и переключатели скрыты */}
       <p className={buildClassName(styles.note, 'mb-2')}>{oldLang('ParvaneSessionPasswordHint')}</p>
-      <input
-        type="password"
-        className="form-control"
-        autoComplete="current-password"
-        placeholder={oldLang('ParvanePasswordConfirm')}
-        aria-label={oldLang('ParvanePasswordConfirm')}
-        value={password}
-        onChange={handlePasswordChange}
-      />
+      <SecretForm>
+        <input
+          type="password"
+          className="form-control"
+          autoComplete="current-password"
+          placeholder={oldLang('ParvanePasswordConfirm')}
+          aria-label={oldLang('ParvanePasswordConfirm')}
+          value={password}
+          onChange={handlePasswordChange}
+        />
+      </SecretForm>
       <div className="dialog-buttons mt-2">
         <Button
           color="danger"

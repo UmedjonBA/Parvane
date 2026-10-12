@@ -104,7 +104,7 @@ try {
     .locator('text=Язык интерфейса').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.getByRole('button', { name: /Назад|Go back|Back/ }).first().click();
-  await page.locator('#LeftColumn').getByText('Настройки').first()
+  await page.locator('#Settings .settings-main-header').getByText('Профиль', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: интерфейс переключился на русский');
 
@@ -138,7 +138,7 @@ try {
   await pickLanguage(page, 'English');
   await page.locator('text=Interface Language').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.getByRole('button', { name: /Go back|Back|Назад/ }).first().click();
-  await page.locator('#LeftColumn').getByText('Settings').first()
+  await page.locator('#Settings .settings-main-header').getByText('Profile', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   console.log('OK: обратно на английский');
 

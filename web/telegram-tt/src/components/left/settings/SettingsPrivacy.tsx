@@ -22,6 +22,7 @@ import Island, { IslandTitle } from '../../gili/layout/Island';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
+import SecretForm from '../../ui/SecretForm';
 
 // parvane* — кастомные методы провайдера вне типизированного Methods
 // Parvane: серверных MTProto-разделов (веб-сессии, passkeys, автоархив, TTL
@@ -370,10 +371,11 @@ const SettingsPrivacy = ({
           onCheck={handleTwoFactorChange}
         />
         {pendingTwoFactor !== undefined && (
-          <div className="settings-item">
+          <SecretForm className="settings-item">
             <input
               type="password"
               className="form-control"
+              autoComplete="current-password"
               placeholder={oldLang('ParvanePasswordConfirm')}
               value={twoFactorPassword}
               onChange={(e) => setTwoFactorPassword(e.currentTarget.value)}
@@ -382,7 +384,7 @@ const SettingsPrivacy = ({
             <Button size="smaller" disabled={!twoFactorPassword || isTwoFactorBusy} onClick={handleConfirmTwoFactor}>
               {oldLang(pendingTwoFactor ? 'ParvaneTwoFactorEnableConfirm' : 'ParvaneTwoFactorDisableConfirm')}
             </Button>
-          </div>
+          </SecretForm>
         )}
       </Island>
 
@@ -391,10 +393,11 @@ const SettingsPrivacy = ({
         {oldLang('ParvaneChangePasswordTitle')}
       </IslandTitle>
       <Island>
-        <div className="settings-item">
+        <SecretForm className="settings-item">
           <input
             type="password"
             className="form-control"
+            autoComplete="current-password"
             placeholder={oldLang('ParvaneChangePasswordOld')}
             value={oldPassword}
             onChange={(e) => setOldPassword(e.currentTarget.value)}
@@ -403,6 +406,7 @@ const SettingsPrivacy = ({
           <input
             type="password"
             className="form-control"
+            autoComplete="new-password"
             placeholder={oldLang('ParvaneChangePasswordNew')}
             value={newPassword}
             onChange={(e) => setNewPassword(e.currentTarget.value)}
@@ -411,6 +415,7 @@ const SettingsPrivacy = ({
           <input
             type="password"
             className="form-control"
+            autoComplete="new-password"
             placeholder={oldLang('ParvaneChangePasswordRepeat')}
             value={newPasswordRepeat}
             onChange={(e) => setNewPasswordRepeat(e.currentTarget.value)}
@@ -419,7 +424,7 @@ const SettingsPrivacy = ({
           <Button size="smaller" disabled={!canChangePassword || isPasswordBusy} onClick={handleChangePassword}>
             {oldLang('ParvaneChangePasswordButton')}
           </Button>
-        </div>
+        </SecretForm>
       </Island>
 
       {/* Parvane: кто может добавлять меня в группы (P-34) */}
@@ -474,10 +479,11 @@ const SettingsPrivacy = ({
             </Button>
           </div>
         ) : (
-          <div className="settings-item">
+          <SecretForm className="settings-item">
             <input
               type="password"
               className="form-control"
+              autoComplete="new-password"
               placeholder={oldLang('ParvaneStoragePinPlaceholder')}
               value={storagePin}
               onChange={(e) => setStoragePin(e.currentTarget.value)}
@@ -486,6 +492,7 @@ const SettingsPrivacy = ({
             <input
               type="password"
               className="form-control"
+              autoComplete="new-password"
               placeholder={oldLang('ParvaneStoragePinRepeat')}
               value={storagePinRepeat}
               onChange={(e) => setStoragePinRepeat(e.currentTarget.value)}
@@ -494,7 +501,7 @@ const SettingsPrivacy = ({
             <Button size="smaller" disabled={!canSetPin || isPinBusy} onClick={() => applyStoragePin(storagePin)}>
               {oldLang('ParvaneStoragePinSet')}
             </Button>
-          </div>
+          </SecretForm>
         )}
       </Island>
 

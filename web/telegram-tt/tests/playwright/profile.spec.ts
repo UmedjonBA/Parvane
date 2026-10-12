@@ -5,7 +5,7 @@ import {
   expectSignedIn,
   LOGIN_TIMEOUT_MS,
   openApp,
-  openProfile,
+  openEditProfile,
   registerAndSignIn,
   requireGatewayUrl,
   uniqueUser,
@@ -73,8 +73,7 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
   await openApp(page, gatewayUrl);
   await registerAndSignIn(page, user, PASSWORD);
 
-  await openProfile(page);
-  await page.getByRole('button', { name: 'Edit profile' }).click();
+  await openEditProfile(page);
 
   const firstNameInput = page.getByLabel('First name (required)');
   await expect(firstNameInput).toBeVisible({ timeout: LOGIN_TIMEOUT_MS });
@@ -103,8 +102,7 @@ test('edits the profile name and avatar, both survive relogin', async ({ page },
   // восстанавливается без ввода пароля
   await expectSignedIn(page);
 
-  await openProfile(page);
-  await page.getByRole('button', { name: 'Edit profile' }).click();
+  await openEditProfile(page);
 
   await expect(page.getByLabel('First name (required)')).toHaveValue(
     `${NEW_FIRST_NAME} ${NEW_LAST_NAME}`,

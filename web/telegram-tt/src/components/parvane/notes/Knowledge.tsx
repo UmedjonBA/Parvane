@@ -14,6 +14,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   consumeNoteRequest, getKnowledgeView, getNoteRequest, setKnowledgeView,
 } from '../../../util/parvaneSection';
+import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { openPalette } from '../palette/paletteOpen';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
@@ -49,6 +50,7 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
+import SearchForm from '../../ui/SearchForm';
 import GraphPanel from './GraphPanel';
 import KnowledgeTabs from './KnowledgeTabs';
 import NoteFolderPicker from './NoteFolderPicker';
@@ -668,19 +670,20 @@ const Knowledge = () => {
   function renderList() {
     return (
       <aside className={buildClassName(styles.list, 'custom-scroll')} data-notes-list>
-        <label className={buildClassName(kit.search, styles.listSearch)}>
-          <PvIcon name="search" isSmall className={kit.searchIcon} />
-          <input
-            id="knowledge-search"
-            className={kit.searchInput}
-            type="search"
-            value={query}
-            placeholder={lang('KnowledgeSearch')}
-            aria-label={lang('KnowledgeSearch')}
-            autoComplete="off"
-            onChange={handleQuery}
-          />
-        </label>
+        <SearchForm>
+          <label className={buildClassName(kit.search, styles.listSearch)}>
+            <PvIcon name="search" isSmall className={kit.searchIcon} />
+            <input
+              {...SEARCH_FIELD_PROPS}
+              id="knowledge-search"
+              className={kit.searchInput}
+              value={query}
+              placeholder={lang('KnowledgeSearch')}
+              aria-label={lang('KnowledgeSearch')}
+              onChange={handleQuery}
+            />
+          </label>
+        </SearchForm>
         {isGuideNew && (
           <div className={styles.guideNotice} role="status" data-notes-guide-notice>
             <span className={styles.guideNoticeText}>{lang('KnowledgeGuideAdded', { name: guideFolderName })}</span>

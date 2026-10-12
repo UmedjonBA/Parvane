@@ -272,3 +272,41 @@ textarea.form-control {
     }
   }
 }
+
+// Parvane: поля поиска (`util/searchField.ts`). Форма-обёртка места не занимает; у самого поля нет ни системного
+// вида, ни крестика, ни подсветки автозаполнения. Фон автозаполнения Firefox задаёт в своей таблице с
+// `!important` (`background-color: -moz-autofill-background`, прежде — `filter`), перебить его правилом нельзя —
+// поэтому смена фона и цвета текста откладывается переходом на недостижимый срок
+@mixin search-autofill-reset {
+  filter: none !important;
+  transition:
+    background-color 0s 1000000s,
+    color 0s 1000000s !important;
+
+  -webkit-text-fill-color: currentColor;
+}
+
+.SearchForm {
+  display: contents;
+}
+
+input[type="search"] {
+  appearance: none;
+
+  &::-webkit-search-cancel-button,
+  &::-webkit-search-decoration,
+  &::-webkit-search-results-button,
+  &::-webkit-search-results-decoration {
+    display: none;
+    appearance: none;
+  }
+
+  // Двумя правилами: незнакомый браузеру псевдокласс выбрасывает весь список селекторов
+  &:autofill {
+    @include search-autofill-reset;
+  }
+
+  &:-webkit-autofill {
+    @include search-autofill-reset;
+  }
+}

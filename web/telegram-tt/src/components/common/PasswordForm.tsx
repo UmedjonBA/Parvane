@@ -23,6 +23,8 @@ type OwnProps = {
   error?: string;
   hint?: string;
   placeholder?: string;
+  // Parvane: логин, к которому относится пароль (шаг пароля экрана входа) — скрытое поле для менеджера паролей
+  username?: string;
   description?: string;
   isLoading?: boolean;
   shouldDisablePasswordManager?: boolean;
@@ -42,6 +44,7 @@ const PasswordForm: FC<OwnProps> = ({
   error,
   hint,
   placeholder,
+  username,
   submitLabel,
   description,
   shouldShowSubmit,
@@ -131,6 +134,18 @@ const PasswordForm: FC<OwnProps> = ({
         dir={lang.isRtl ? 'rtl' : undefined}
       >
         {shouldDisablePasswordManager && renderFakeInput()}
+        {username && !shouldDisablePasswordManager && (
+          <input
+            type="text"
+            name="username"
+            autoComplete="username"
+            className="visually-hidden"
+            value={username}
+            tabIndex={-1}
+            readOnly
+            aria-hidden
+          />
+        )}
         <input
           ref={inputRef}
           className="form-control"

@@ -29,6 +29,7 @@ import {
   includesChatSelectionKey,
 } from '../../../util/keys/chatSelectionKey';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
+import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { REM } from '../helpers/mediaDimensions';
 import renderText from '../helpers/renderText';
 
@@ -43,6 +44,7 @@ import useOldLang from '../../../hooks/useOldLang';
 import InfiniteScroll, { type OwnProps as InfiniteScrollProps } from '../../ui/InfiniteScroll';
 import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
+import SearchForm from '../../ui/SearchForm';
 import Transition from '../../ui/Transition';
 import Avatar from '../Avatar';
 import FullNameTitle from '../FullNameTitle';
@@ -332,17 +334,19 @@ const ChatOrUserPicker = ({
             onKeyDown: handleTopicKeyDown,
           }) : (
             <div className="search-input-wrapper">
-              <i className="icon icon-search" />
-              <input
-                ref={topicSearchRef}
-                className="search-input"
-                type="text"
-                dir="auto"
-                placeholder={searchPlaceholder}
-                value={topicSearch}
-                onChange={handleTopicSearchChange}
-                onKeyDown={handleTopicKeyDown}
-              />
+              <SearchForm>
+                <i className="icon icon-search" />
+                <input
+                  {...SEARCH_FIELD_PROPS}
+                  ref={topicSearchRef}
+                  className="search-input"
+                  dir="auto"
+                  placeholder={searchPlaceholder}
+                  value={topicSearch}
+                  onChange={handleTopicSearchChange}
+                  onKeyDown={handleTopicKeyDown}
+                />
+              </SearchForm>
             </div>
           )}
         </div>
@@ -417,17 +421,19 @@ const ChatOrUserPicker = ({
             onKeyDown: chatKeyDownHandler,
           }) : (
             <div className="search-input-wrapper">
-              <i className="icon icon-search" />
-              <input
-                ref={searchRef}
-                className="search-input"
-                type="text"
-                dir="auto"
-                placeholder={searchPlaceholder}
-                value={search}
-                onChange={handleSearchChange}
-                onKeyDown={chatKeyDownHandler}
-              />
+              <SearchForm>
+                <i className="icon icon-search" />
+                <input
+                  {...SEARCH_FIELD_PROPS}
+                  ref={searchRef}
+                  className="search-input"
+                  dir="auto"
+                  placeholder={searchPlaceholder}
+                  value={search}
+                  onChange={handleSearchChange}
+                  onKeyDown={chatKeyDownHandler}
+                />
+              </SearchForm>
             </div>
           )}
           {subheader}

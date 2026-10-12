@@ -19,7 +19,9 @@ const AuthPassword = ({
   auth,
 }: StateProps) => {
   const { setAuthPassword, clearAuthErrorKey, parvaneStartRegistration } = getActions();
-  const { isLoading, errorKey, hint } = auth;
+  const {
+    isLoading, errorKey, hint, phoneNumber,
+  } = auth;
 
   const lang = useLang();
   const [showPassword, setShowPassword] = useState(false);
@@ -48,6 +50,7 @@ const AuthPassword = ({
           onClearError={clearAuthErrorKey}
           error={errorKey && lang.withRegular(errorKey)}
           hint={hint}
+          username={phoneNumber}
           isLoading={isLoading}
           isPasswordVisible={showPassword}
           onChangePasswordVisibility={handleChangePasswordVisibility}

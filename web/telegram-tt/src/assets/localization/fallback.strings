@@ -3099,6 +3099,7 @@
 "ParvaneSectionCloud" = "Cloud";
 "ParvaneTabBarAdd" = "New entry";
 "ParvaneTabBarProfile" = "Profile";
+"ParvaneProfileTitle" = "Profile";
 "ParvaneCloudTabDrive" = "My files";
 "ParvaneCloudTabShared" = "Shared with me";
 "ParvaneCloudTabTrash" = "Trash";

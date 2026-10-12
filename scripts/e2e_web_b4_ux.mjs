@@ -206,15 +206,10 @@ try {
   await waitTop('LeftColumn|true|', '«назад» из редактирования профиля');
   await mobilePage.locator('#Settings input[type="text"]').first().waitFor({ state: 'hidden', timeout: 10_000 });
   await mobilePage.waitForTimeout(600);
+  // Одно нажатие: профиль выше закрывали кнопкой дважды (крестик, карандаш) — запись закрытого профиля
+  // в истории браузера остаться не должна (`useHistoryBack`: отметка «заменена» сбрасывается с новой записью)
   await mobilePage.goBack();
-  await mobilePage.waitForTimeout(1500);
-  // Известная мелочь: профиль, закрытый крестиком (а не системным «назад»), оставляет в истории браузера
-  // запись без экрана — первое «назад» из «Профиля» её и снимает, к списку чатов ведёт второе
-  if (await mobilePage.locator('#Settings').count()) {
-    console.log('WARN: «назад» из «Профиля» понадобилось дважды');
-    await mobilePage.goBack();
-  }
-  await waitTop('LeftColumn|false|', '«назад» из настроек');
+  await waitTop('LeftColumn|false|', '«назад» из «Профиля» — с первого нажатия');
 
   await openPrivateChat(mobileSession.page, alice);
   await sendText(mobileSession.page, `mobile-${suffix}`);

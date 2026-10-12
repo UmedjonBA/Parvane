@@ -15,6 +15,7 @@ import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { captureEvents, SwipeDirection } from '../../../util/captureEvents';
+import { buildFolderColors } from '../../../util/folderColors';
 import { getParvaneSection } from '../../../util/parvaneSection';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
 
@@ -56,16 +57,6 @@ type StateProps = {
 
 const SAVED_MESSAGES_HOTKEY = '0';
 const FIRST_FOLDER_INDEX = 0;
-// Цвета папок — тона цветовой схемы. Первый набор отвечает семи цветам Telegram, которые выбирают в
-// настройках папки (красный, оранжевый, фиолетовый, зелёный, бирюзовый, синий, розовый); второй — порядок
-// для папок без выбранного цвета
-const CHOSEN_FOLDER_COLORS = [
-  'var(--pv-red)', 'var(--pv-orange)', 'var(--pv-purple)', 'var(--pv-green)', 'var(--pv-aqua)', 'var(--pv-blue)',
-  'var(--pv-purple)',
-];
-const FALLBACK_FOLDER_COLORS = [
-  'var(--pv-blue)', 'var(--pv-orange)', 'var(--pv-purple)', 'var(--pv-aqua)', 'var(--pv-green)', 'var(--pv-red)',
-];
 
 const ChatFolders: FC<OwnProps & StateProps> = ({
   foldersDispatch,
@@ -147,15 +138,9 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
     });
   }, [allFolderTabs, lang]);
 
-  // Цвет папки: выбранный в её настройках, иначе по порядку из набора схемы; «Все» — яркий акцент
+  // Цвет папки — `util/folderColors.ts` (тот же расчёт у меток папок в строках чатов)
   const folderColors = useMemo(() => {
-    let fallbackIndex = 0;
-    return displayedFolders?.map((folder) => {
-      if (folder.id === ALL_FOLDER_ID) return 'var(--pv-accent)';
-      const { color } = folder;
-      if (color !== undefined && color >= 0) return CHOSEN_FOLDER_COLORS[color % CHOSEN_FOLDER_COLORS.length];
-      return FALLBACK_FOLDER_COLORS[fallbackIndex++ % FALLBACK_FOLDER_COLORS.length];
-    });
+    return displayedFolders && buildFolderColors(displayedFolders);
   }, [displayedFolders]);
 
   const allChatsFolderIndex = displayedFolders?.findIndex((folder) => folder.id === ALL_FOLDER_ID);

@@ -95,6 +95,14 @@ export async function openProfile(page: Page) {
   }).toPass({ timeout: LOGIN_TIMEOUT_MS });
 }
 
+// Правка своего профиля: карандаша в шапке «Профиля» нет — путь через карточку аккаунта («My Profile») и
+// карандаш в шапке открывшегося профиля
+export async function openEditProfile(page: Page) {
+  await openProfile(page);
+  await page.locator('.settings-main-scroll').getByRole('button', { name: 'My Profile', exact: true }).click();
+  await page.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit', exact: true }).click();
+}
+
 export function uniqueUser(prefix: string, projectName: string) {
   const slug = projectName.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   return `${prefix}-${slug}-${Date.now()}@local`;

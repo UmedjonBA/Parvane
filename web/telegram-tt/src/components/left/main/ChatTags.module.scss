@@ -33,3 +33,41 @@
     color: var(--color-text-secondary);
   }
 }
+
+// Parvane: метка папки в строке названия чата по прототипу — небольшая плашка тоном папки (`--tag-color`,
+// тот же цвет, что у чипа папки над списком)
+.inline {
+  flex-shrink: 0;
+
+  min-width: 0;
+  max-width: 45%;
+  margin-inline-start: 0.375rem;
+  padding-top: 0;
+
+  .tag {
+    overflow: hidden;
+    display: block;
+    flex-shrink: 1;
+
+    min-width: 0;
+    height: 1rem;
+    padding: 0 0.375rem;
+    border-radius: 0.3125rem;
+
+    font-size: 0.6875rem;
+    font-weight: var(--font-weight-normal);
+    line-height: 1rem;
+    color: var(--tag-color, var(--pv-muted));
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+
+    background-color: color-mix(in srgb, var(--tag-color, var(--pv-muted)) 18%, transparent);
+  }
+
+  .tagColorMore {
+    flex-shrink: 0;
+    color: var(--pv-muted);
+    background-color: color-mix(in srgb, var(--pv-muted) 18%, transparent);
+  }
+}

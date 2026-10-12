@@ -96,6 +96,15 @@ export async function openMyProfile(page) {
   await screen.getByRole('button', { name: 'My Profile', exact: true }).click();
 }
 
+// Правка своего профиля: карандаша в шапке «Профиля» нет (по прототипу) — путь через карточку аккаунта
+// («My Profile») и карандаш в шапке открывшегося профиля. На широком экране профиль остаётся открытым справа
+export async function openEditProfile(page) {
+  await openMyProfile(page);
+  await page.locator('#RightColumn .RightHeader').getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.locator('#Settings').getByLabel('First name (required)')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+}
+
 // Экран «Плана»: `today`, `calendar` (сетка в виде, который устройство запомнило, — по умолчанию месяц)
 // либо `health`. «Сегодня» — первый пункт переключателя вида календаря, отдельной кнопки раздела у него
 // нет: путь — «Календарь» в боковой панели (на телефоне — «План» нижней панели и вкладка «Календарь»),

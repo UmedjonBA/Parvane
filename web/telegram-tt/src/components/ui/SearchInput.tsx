@@ -6,6 +6,7 @@ import {
 
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import buildClassName from '../../util/buildClassName';
+import { SEARCH_FIELD_PROPS, SEARCH_FORM_PROPS } from '../../util/searchField';
 
 import useFlag from '../../hooks/useFlag';
 import useInputFocusOnOpen from '../../hooks/useInputFocusOnOpen';
@@ -45,7 +46,7 @@ type OwnProps = {
   onReset?: NoneToVoidFunction;
   onFocus?: NoneToVoidFunction;
   onBlur?: NoneToVoidFunction;
-  onClick?: (e: ReactMouseEvent<HTMLDivElement, MouseEvent>) => void;
+  onClick?: (e: ReactMouseEvent<HTMLFormElement, MouseEvent>) => void;
   onUpClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onDownClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onSpinnerClick?: NoneToVoidFunction;
@@ -161,7 +162,10 @@ const SearchInput: FC<OwnProps> = ({
   });
 
   return (
-    <div
+    // Parvane: поле лежит в своей форме поиска — иначе менеджер паролей Firefox принимал его за поле логина
+    // (см. `util/searchField.ts`)
+    <form
+      {...SEARCH_FORM_PROPS}
       className={buildClassName('SearchInput', className, isInputFocused && 'has-focus')}
       onClick={onClick}
       dir={lang.isRtl ? 'rtl' : undefined}
@@ -184,14 +188,14 @@ const SearchInput: FC<OwnProps> = ({
       <div>{children}</div>
       <input
         ref={inputRef}
+        {...SEARCH_FIELD_PROPS}
         id={inputId}
-        type="text"
         dir="auto"
         placeholder={placeholder || oldLang('Search')}
         className="form-control"
         value={value}
         disabled={disabled}
-        autoComplete={autoComplete || 'off'}
+        autoComplete={autoComplete || SEARCH_FIELD_PROPS.autoComplete}
         spellCheck={IS_TAURI ? false : undefined}
         onChange={handleChange}
         onFocus={handleFocus}
@@ -242,7 +246,7 @@ const SearchInput: FC<OwnProps> = ({
           )
         )}
       </Transition>
-    </div>
+    </form>
   );
 };
 

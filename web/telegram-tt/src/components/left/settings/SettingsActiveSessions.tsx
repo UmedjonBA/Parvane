@@ -22,6 +22,7 @@ import Island, { IslandTitle } from '../../gili/layout/Island';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import ListItem from '../../ui/ListItem';
 import RadioGroup from '../../ui/RadioGroup';
+import SecretForm from '../../ui/SecretForm';
 import SettingsActiveSession from './SettingsActiveSession';
 
 import './SettingsActiveSessions.scss';
@@ -644,15 +645,17 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           isConfirmDisabled={!terminateAllPassword}
           areButtonsInColumn
         >
-          <input
-            type="password"
-            className="form-control"
-            autoComplete="current-password"
-            placeholder={oldLang('ParvanePasswordConfirm')}
-            aria-label={oldLang('ParvanePasswordConfirm')}
-            value={terminateAllPassword}
-            onChange={handleTerminateAllPasswordChange}
-          />
+          <SecretForm>
+            <input
+              type="password"
+              className="form-control"
+              autoComplete="current-password"
+              placeholder={oldLang('ParvanePasswordConfirm')}
+              aria-label={oldLang('ParvanePasswordConfirm')}
+              value={terminateAllPassword}
+              onChange={handleTerminateAllPasswordChange}
+            />
+          </SecretForm>
         </ConfirmDialog>
       )}
       <ConfirmDialog
@@ -692,15 +695,17 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
         isConfirmDisabled={!resetPassword}
         areButtonsInColumn
       >
-        <input
-          type="password"
-          className="form-control"
-          autoComplete="current-password"
-          placeholder={oldLang('ParvanePasswordConfirm')}
-          aria-label={oldLang('ParvanePasswordConfirm')}
-          value={resetPassword}
-          onChange={handleResetPasswordChange}
-        />
+        <SecretForm>
+          <input
+            type="password"
+            className="form-control"
+            autoComplete="current-password"
+            placeholder={oldLang('ParvanePasswordConfirm')}
+            aria-label={oldLang('ParvanePasswordConfirm')}
+            value={resetPassword}
+            onChange={handleResetPasswordChange}
+          />
+        </SecretForm>
       </ConfirmDialog>
       <SettingsActiveSession isOpen={isModalOpen} hash={openedSessionHash} onClose={handleCloseSessionModal} />
     </div>
