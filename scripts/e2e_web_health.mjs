@@ -143,6 +143,123 @@ try {
   await expectText(card('activity'), /1 \/ 3/, 'тренировок после удаления');
   console.log('OK: данные здоровья пережили перезагрузку; записи удаляются');
 
+  // ── Режим сна: одинаково ли время отхода ко сну и подъёма ─────────────────
+  // Сон прошлых дней вписывается строкой блока «Сон» на экране нужного дня (ввод «+» пишет в сегодня)
+  const routine = health.locator('[data-health="sleep-routine"]');
+  const dayKey = (shift) => {
+    const date = new Date();
+    date.setDate(date.getDate() + shift);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
+  const goToDay = async (shift) => {
+    const key = dayKey(shift);
+    for (let step = 0; step < 20; step++) {
+      const current = await health.getAttribute('data-planner-health');
+      if (current === key) return;
+      await planner.getByRole('button', { name: current > key ? 'Previous period' : 'Next period' }).first().click();
+      await planner.locator(`[data-planner-health]:not([data-planner-health="${current}"])`)
+        .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    }
+    assert.fail(`экран «Здоровье» не дошёл до дня ${key}`);
+  };
+  const saveSleep = async (shift, line, kind = 'timed') => {
+    await goToDay(shift);
+    await page.locator('#planner-health-sleep').fill(line);
+    await card('sleep').getByRole('button', { name: 'Save', exact: true }).click();
+    await routine.locator(`[data-sleep-night="${dayKey(shift)}"][data-sleep-night-kind="${kind}"]`)
+      .waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS })
+      .catch(() => assert.fail(`ночь ${dayKey(shift)} (${line}) не появилась на графике режима`));
+  };
+  const expectLevel = (level, what) => health
+    .locator(`[data-health="sleep-routine"][data-sleep-routine-level="${level}"]`)
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(async () => assert.fail(
+      `${what}: уровень режима ${await routine.getAttribute('data-sleep-routine-level')}, ожидался ${level}`,
+    ));
+  const nights = (kind) => routine.locator(`[data-sleep-night][data-sleep-night-kind="${kind}"]`).count();
+
+  // Одна ночь со временем (сегодняшняя 01:00–06:00) — данных мало, подсказка называет счёт
+  await goToDay(0);
+  await expectLevel('none', 'одна ночь');
+  await expectText(routine, /Not enough data/, 'плашка «мало данных»');
+  await expectText(routine, /1 of 4 nights/, 'счёт ночей со временем');
+  assert.equal(await nights('timed'), 1, 'на графике одна ночь');
+
+  // Пять ночей подряд с малым разбросом — режим стабильный (окно кончается днём экрана: сегодняшняя
+  // ночь в него ещё не входит)
+  const steady = ['23:40-07:30', '23:50-07:20', '23:30-07:30', '23:45-07:40', '23:35-07:25'];
+  for (const [index, line] of steady.entries()) {
+    await saveSleep(index - 6, line);
+    if (index < 3) await expectLevel('none', `ночей со временем ${index + 1}`);
+  }
+  await expectLevel('stable', 'пять ровных ночей');
+  await expectText(routine, /Stable/, 'плашка «стабильный»');
+  await expectText(routine, /Bed around 23:40 ± \d min · up around 07:30 ± \d min/, 'среднее и разброс');
+  assert.equal(await nights('timed'), 5, 'на графике пять ночей');
+  assert.equal(await routine.locator('[data-sleep-routine-outliers]').count(), 0, 'выбившихся ночей нет');
+  await expectText(card('sleep'), /23:35 → 07:25/, 'сон дня экрана');
+
+  // Цель режима текстом: отклонение среднего от цели и линии цели на графике
+  await routine.locator('[data-sleep-routine-goal-example]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#planner-health-goals').fill('sleep 23:30-07:00');
+  await card('goals').getByRole('button', { name: 'Apply' }).click();
+  await planner.getByText('Goals updated').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await expectText(routine.locator('[data-sleep-routine-goal]'), /goal 23:30–07:00/, 'цель режима');
+  await expectText(
+    routine.locator('[data-sleep-routine-deviation]'),
+    /Bedtime: on average 10 min later than the goal 23:30 · Wake-up: on average 30 min later than the goal 07:00/,
+    'отклонение от цели',
+  );
+  assert.equal(await routine.locator('[data-sleep-routine-goal-line]').count(), 2, 'две линии цели');
+  assert.equal(await routine.locator('[data-sleep-routine-goal-example]').count(), 0, 'пример цели убран');
+  await expectText(card('goals'), /Routine 23:30–07:00/, 'цель режима в сводке целей');
+  await expectText(card('goals'), /Sleep 8:00/, 'цель длительности сна не тронута');
+  console.log('OK: режим сна — мало данных, стабильный, цель и отклонение от неё');
+
+  // Ночь на три часа позже — режим сбит, ночь названа
+  await saveSleep(-1, '02:40-10:30');
+  await expectLevel('broken', 'ночь на три часа позже');
+  await expectText(routine, /Off track/, 'плашка «сбит»');
+  await expectText(routine.locator('[data-sleep-routine-outliers]'), /02:40 → 10:30/, 'выбившаяся ночь');
+  assert.equal(await nights('timed'), 6, 'на графике шесть ночей');
+
+  // Та же ночь одной длительностью — «без времени»: в расчёт не идёт, режим снова стабильный
+  await saveSleep(-1, '7.5 h', 'untimed');
+  await expectLevel('stable', 'ночь без времени в расчёт не идёт');
+  await expectText(routine.locator('[data-sleep-routine-untimed]'), /Nights without times: 1/, 'ночь без времени');
+  assert.equal(await nights('timed'), 5, 'ночей со временем снова пять');
+  assert.equal(await nights('untimed'), 1, 'ночь без времени отмечена точкой');
+  await expectText(card('sleep'), /7:30/, 'длительность ночи без времени');
+
+  // Сегодня: в окно вошла ночь 01:00–06:00 — режим «плавает». то же говорит карточка «Сегодня»
+  await goToDay(0);
+  await expectLevel('drifting', 'с сегодняшней ночью');
+  await expectText(routine, /Drifting/, 'плашка «плавает»');
+  assert.equal(await nights('timed'), 6, 'шесть ночей со временем');
+  console.log('OK: режим сна — сбит поздней ночью, ночь без времени, «плавает»');
+
+  await page.waitForTimeout(1500);
+  await reloadPage(page);
+  await relogin(page, PASSWORD).catch(() => undefined);
+  await sidebar.waitFor({ state: 'visible', timeout: 60000 });
+  await sidebar.getByRole('tab', { name: 'Health' }).click();
+  await health.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await expectLevel('drifting', 'после перезагрузки');
+  assert.equal(await nights('timed'), 6, 'ночи со временем после перезагрузки');
+  assert.equal(await nights('untimed'), 1, 'ночь без времени после перезагрузки');
+  await expectText(routine.locator('[data-sleep-routine-goal]'), /goal 23:30–07:00/, 'цель режима после перезагрузки');
+  await expectText(routine.locator('[data-sleep-routine-untimed]'), /Nights without times: 1/, 'счёт без времени');
+  await openPlannerScreen(page, 'today');
+  const sleepCard = planner.locator('[data-planner-today] [data-today-card="sleep"]');
+  await expectText(sleepCard, /routine drifting: ±\d+ min/, 'режим на карточке сна');
+  assert.equal(await sleepCard.getAttribute('data-sleep-routine-level'), 'drifting', 'уровень на карточке сна');
+  // Режим только сообщается: бюджет дня по-прежнему снижает один короткий сон
+  await expectText(planner.locator('[data-today-card="load"]'), /\/ 8 h/, 'бюджет дня режимом не тронут');
+  await sleepCard.click();
+  await health.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/health-routine.png` });
+  console.log('OK: режим сна пережил перезагрузку и виден на «Сегодня»');
+
   // ── Телефон: «Здоровье» — третья вкладка «Плана», одной колонкой ──────────
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
