@@ -18,7 +18,7 @@ import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { downloadCloudNode, getCloudData, getNodes } from '../cloud/cloudStore';
 import {
-  BOARD_FAR_SCALE, BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, revealRects, zoomAround,
+  BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, revealRects, zoomAround,
   zoomByWheel,
 } from './boardView';
 import {
@@ -1881,7 +1881,7 @@ const NotesCanvas = ({
       <div
         ref={boardRef}
         className={buildClassName(
-          styles.board, view.scale < BOARD_FAR_SCALE && styles.boardFar, isSelectMode && styles.boardSelecting,
+          styles.board, isSelectMode && styles.boardSelecting,
         )}
         style={boardBackgroundStyle(view)}
         data-canvas-board

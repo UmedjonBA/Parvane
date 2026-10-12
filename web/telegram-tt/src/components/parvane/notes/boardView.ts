@@ -11,8 +11,6 @@ export const BOARD_ZOOM_STEP = 1.25;
 export const BOARD_FIT_MAX_SCALE = 1.2;
 // Клетка точечного фона при масштабе 1
 export const BOARD_GRID = 22;
-// Ниже этого масштаба текст карточек холста не рисуется
-export const BOARD_FAR_SCALE = 0.5;
 const WHEEL_RATE = 0.0015;
 const MIN_PINCH_DISTANCE = 4;
 
