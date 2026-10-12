@@ -50,8 +50,10 @@ const FoldersSidebar = ({ isActive, isSettingsOpen }: OwnProps & StateProps) => 
   const isProfileOpen = section === 'messenger' && isSettingsOpen;
   const isFilesOpen = section === 'cloud' && knowledgeView === 'files';
 
+  // Из «Профиля» «Чаты» возвращают к списку чатов; в остальном колонка остаётся, как была
   const handleSelectChats = useLastCallback(() => {
     setParvaneSection('messenger');
+    if (isSettingsOpen) openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
   });
 
   const handleSelectToday = useLastCallback(() => {

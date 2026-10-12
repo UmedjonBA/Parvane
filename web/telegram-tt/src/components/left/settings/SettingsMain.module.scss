@@ -1,22 +1,160 @@
 @use "../../../styles/mixins";
 
+// Parvane: «Профиль» по прототипу — карточки на фоне панели, строки с плиткой-значком, подписью и стрелкой.
+// Тона — переменные `--pv-*` цветовой схемы
+
+@mixin row {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.375rem 0.625rem;
+  border: none;
+  border-radius: 0.5rem;
+
+  color: var(--pv-fg);
+  text-align: start;
+  white-space: normal;
+
+  background: none;
+  outline: none;
+
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:focus-visible {
+    background: var(--pv-hover);
+  }
+}
+
 .root {
   overflow-y: scroll;
   height: calc(100% - var(--column-header-height));
-  background-color: var(--color-background-secondary);
+  background-color: var(--pv-panel);
 }
 
-.menuSection,
-.selfProfile {
+// Шапка экрана — того же тона, что экран, с линией снизу
+:global(#Settings .left-header):has(~ .root) {
+  border-bottom: 1px solid var(--pv-line);
+  background-color: var(--pv-panel);
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  max-width: 40rem;
   padding: 1rem;
 
   @include mixins.adapt-padding-to-scrollbar(1rem);
 }
 
-.selfProfile {
-  padding-bottom: 0;
-  :global(.ProfileInfo) {
-    margin: -1rem 0 0.75rem -1rem;
-    margin-inline-end: calc(min(var(--scrollbar-width) - 1rem, 0px));
-  }
+.card {
+  min-width: 0;
+  padding: 0.375rem;
+  border-radius: 0.75rem;
+  background: var(--pv-raised);
+}
+
+.account {
+  display: flex;
+  gap: 0.875rem;
+  align-items: center;
+  padding: 1rem;
+}
+
+.avatar {
+  flex: none;
+}
+
+.accountInfo {
+  min-width: 0;
+}
+
+.accountName {
+  overflow: hidden;
+
+  font-size: 1.125rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5rem;
+  color: var(--pv-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountAddress {
+  overflow: hidden;
+
+  font-family: var(--font-family-monospace);
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--pv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caption {
+  margin: 0.25rem 0.25rem -0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--pv-muted);
+}
+
+.row {
+  @include row;
+}
+
+// Строка экрана настроек — `ListItem`: его кнопке задан тот же вид
+.card .screenRow :global(.ListItem-button) {
+  @include row;
+}
+
+.tile {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.625rem;
+
+  color: var(--pv-accent);
+
+  background: color-mix(in srgb, var(--pv-accent) 22%, transparent);
+}
+
+.rowText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rowTitle,
+.rowSubtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowTitle {
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+}
+
+.rowSubtitle {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: var(--pv-muted);
+}
+
+.chevron {
+  color: var(--pv-fg);
+  opacity: 0.85;
 }
