@@ -4,12 +4,14 @@ import type {
   PlannerEventError, PlannerRepeatError, PlannerSlot, PlannerState, PlannerStatus, PlannerTaskError,
 } from './plannerModel';
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
+import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
 
 import { formatStatus } from './plannerFormat';
 import {
-  ALL_DAY_END, ALL_DAY_START, ensureList, getDefaultEventEnd, newId, PLANNER_STATUSES, toTime,
+  ALL_DAY_END, ALL_DAY_START, ensureList, getDefaultEventEnd, newId, PLANNER_STATUSES, toDayKey, toTime,
   validateEvent, validateRepeat, validateTask,
 } from './plannerModel';
+import { addEntry } from './plannerSeriesEdit';
 import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
@@ -20,6 +22,7 @@ import Checkbox from '../../ui/Checkbox';
 import InputText from '../../ui/InputText';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
+import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
@@ -78,6 +81,8 @@ const PlannerTaskForm = ({
   const [kind, setKind] = useState<'task' | 'event'>('task');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  // Описание ряда — всех повторов (по умолчанию) либо только первого дня
+  const [descriptionScope, setDescriptionScope] = useState<DescriptionScope>('all');
   const [minutes, setMinutes] = useState(
     () => (slot ? String(Math.min(DEFAULT_SLOT_MINUTES, slot.end - slot.start)) : ''),
   );
@@ -132,6 +137,8 @@ const PlannerTaskForm = ({
   const handleSubmit = useLastCallback((e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const repeat = draftToRepeat(repeatDraft);
+    // День отсчёта первого повтора у ряда без даты начала
+    const fallbackDay = day || toDayKey(new Date());
     if (kind === 'event') {
       const event = {
         name: name.trim(),
@@ -150,7 +157,7 @@ const PlannerTaskForm = ({
         return;
       }
       updatePlanner((draft) => {
-        draft.events.push({ ...event, id: newId() });
+        addEntry(draft, 'event', { ...event, id: newId() }, descriptionScope, fallbackDay);
       }, lang('PlannerNoticeAdded', { name: event.name }));
       onCreated();
       return;
@@ -175,9 +182,11 @@ const PlannerTaskForm = ({
       return;
     }
     const taskId = newId();
+    // Первый день с собственным описанием — отдельная запись: карточка открывается на ней
+    let ownDayId: string | undefined;
     updatePlanner((draft) => {
       ensureList(draft, project);
-      draft.tasks.push({
+      ownDayId = addEntry(draft, 'task', {
         ...task,
         id: taskId,
         description: description.trim(),
@@ -187,9 +196,10 @@ const PlannerTaskForm = ({
         repeat,
         // Новая задача — первой в очереди
         rank: Math.min(0, ...draft.tasks.map(({ rank }) => rank)) - 1,
-      });
+      }, descriptionScope, fallbackDay)?.id;
     }, lang('PlannerNoticeAdded', { name: task.name }));
-    onCreated(taskId, repeat?.startDay || undefined);
+    if (ownDayId) onCreated(ownDayId);
+    else onCreated(taskId, repeat?.startDay || undefined);
   });
 
   return (
@@ -219,6 +229,9 @@ const PlannerTaskForm = ({
         onChange={handleDescriptionChange}
         noReplaceNewlines
       />
+      {repeatDraft.kind !== 'none' && (
+        <PlannerDescriptionScope scope={descriptionScope} onChange={setDescriptionScope} />
+      )}
       {kind === 'task' ? (
         <>
           <div className={styles.fields}>

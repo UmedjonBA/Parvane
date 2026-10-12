@@ -19,8 +19,8 @@ import {
 } from './plannerFormat';
 import { readLayers, saveLayers } from './plannerLayers';
 import {
-  addDays, detachInstance, eventInstance, fromDayKey, getWeekKeys, PLANNER_CALENDAR_VIEWS, shiftPeriod, taskInstance,
-  toDayKey,
+  addDays, detachInstance, eventInstance, fromDayKey, getWeekKeys, hasInstanceOn, PLANNER_CALENDAR_VIEWS, shiftPeriod,
+  taskInstance, toDayKey,
 } from './plannerModel';
 import {
   getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus, loadPlanner,
@@ -176,6 +176,17 @@ const Planner = () => {
     setFormParams(undefined);
     setIsSettingsOpen(false);
     setEditor({ id: taskId, day: task?.repeat ? day : undefined });
+  });
+
+  // Карточка после правки ряда переходит на запись, созданную этой же правкой (отделённый день, продолжение
+  // ряда): в отрисованном состоянии её ещё нет — запись берётся из хранилища. Экземпляр открывается, только
+  // если ряд даёт его в этот день, иначе — шаблон ряда
+  const handleReopenTask = useLastCallback((taskId: string, day?: string) => {
+    const task = getPlannerState().tasks.find(({ id }) => id === taskId);
+    const instanceDay = task?.repeat && day && hasInstanceOn(task, day) ? day : undefined;
+    const target = instanceDay || task?.day;
+    if (target) pickDay(target);
+    setEditor({ id: taskId, day: instanceDay });
   });
 
   const handleOpenEvent = useLastCallback((eventId: string, day: string) => {
@@ -640,7 +651,7 @@ const Planner = () => {
               picked={picked}
               onBack={closeEditors}
               onPickDay={pickDay}
-              onOpenTask={handleOpenTask}
+              onOpenTask={handleReopenTask}
             />
           ) : (
             <PlannerEventEditor

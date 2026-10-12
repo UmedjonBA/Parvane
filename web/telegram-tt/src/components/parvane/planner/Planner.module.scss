@@ -2439,6 +2439,14 @@
   }
 }
 
+// Галочка «описание для всех повторов» под полем описания
+.descriptionScope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
 // Объём правки ряда: только это, это и последующие, все в серии
 .seriesPrompt {
   display: flex;

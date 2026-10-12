@@ -111,9 +111,11 @@ const PlannerRepeatFields = ({ value, onChange }: OwnProps) => {
 
   const handleWeekdayToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const weekday = Number(e.currentTarget.value);
-    set({
-      weekdays: e.currentTarget.checked
-        ? [...value.weekdays, weekday] : value.weekdays.filter((item) => item !== weekday),
+    const isChecked = e.currentTarget.checked;
+    // От прежнего черновика, а не от пропса: два дня, отмеченные между отрисовками, не затирают друг друга
+    onChange((previous) => {
+      const rest = previous.weekdays.filter((item) => item !== weekday);
+      return { ...previous, weekdays: isChecked ? [...rest, weekday] : rest };
     });
   });
 

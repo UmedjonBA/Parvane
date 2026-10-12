@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { PlannerState } from './plannerModel';
 
-import { createEmptyPlannerState } from './plannerModel';
+import { createEmptyPlannerState, eventInstance } from './plannerModel';
+import { addEntry, setDescription } from './plannerSeriesEdit';
 import {
   diffChanges, type EngineState, fromEngineState, isLegacyPlannerRecord, legacyToChanges,
 } from './plannerSync';
@@ -451,5 +452,73 @@ describe('планировщик ↔ движок: словарь правок �
       .toEqual([{ learned: { id: 'пара', deleted: true } }, { learned: { id: 'зал', deleted: true } }]);
     // Перенос данных этапа 1 словаря не несёт
     expect(legacyToChanges(empty, 'web1').some((change) => 'learned' in change)).toBe(false);
+  });
+});
+
+describe('планировщик ↔ движок: описание ряда и одного дня', () => {
+  const SERIES = {
+    id: 'e1',
+    name: 'Йога',
+    start: '18:00',
+    end: '19:00',
+    description: 'Взять коврик',
+    repeat: {
+      kind: 'weekly' as const, interval: 1, weekdays: [1], startDay: '2026-10-12',
+    },
+  };
+
+  it('ряд с описанием первого дня уходит двумя созданиями разных объектов: ряд без описания и день с описанием', () => {
+    const before = createEmptyPlannerState();
+    const after = structuredClone(before);
+    const own = addEntry(after, 'event', SERIES, 'one', '2026-10-12')!;
+    const changes = diffChanges(before, after);
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toMatchObject({
+      event: {
+        id: 'e1',
+        description: '',
+        repeat: { kind: 'weekly', weekdays: [1], startDay: '2026-10-12' },
+        occurrences: [{ day: '2026-10-12', excluded: true, done: false, doneSteps: [] }],
+        origin: null,
+      },
+    });
+    expect(changes[1]).toMatchObject({
+      event: {
+        id: own.id,
+        description: 'Взять коврик',
+        day: '2026-10-12',
+        repeat: null,
+        occurrences: [],
+        origin: { seriesId: 'e1', day: '2026-10-12' },
+      },
+    });
+  });
+
+  it('описание «для всех» у экземпляра — одно поле ряда; «только этот день» — отметка дня и новая запись', () => {
+    const before = createEmptyPlannerState();
+    addEntry(before, 'event', SERIES, 'all', '2026-10-12');
+    const instance = eventInstance(before.events[0], '2026-10-19');
+
+    const all = structuredClone(before);
+    setDescription(all, 'event', instance, 'Новый зал', 'all');
+    const allChanges = diffChanges(before, all);
+    expect(allChanges).toHaveLength(1);
+    const allEvent = allChanges[0].event as Record<string, unknown>;
+    expect(allEvent).toMatchObject({ id: 'e1', description: 'Новый зал' });
+    expect(allEvent).not.toHaveProperty('occurrences');
+    expect(allEvent).not.toHaveProperty('name');
+
+    const one = structuredClone(before);
+    const own = setDescription(one, 'event', instance, 'Только сегодня', 'one')!;
+    const oneChanges = diffChanges(before, one);
+    expect(oneChanges).toHaveLength(2);
+    const seriesEvent = oneChanges[0].event as Record<string, unknown>;
+    expect(seriesEvent).toMatchObject({
+      id: 'e1', occurrences: [{ day: '2026-10-19', excluded: true, done: false, doneSteps: [] }],
+    });
+    expect(seriesEvent).not.toHaveProperty('description');
+    expect(oneChanges[1]).toMatchObject({
+      event: { id: own.id, description: 'Только сегодня', day: '2026-10-19', origin: { seriesId: 'e1' } },
+    });
   });
 });
