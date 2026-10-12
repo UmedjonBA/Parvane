@@ -1,33 +1,120 @@
-@use "../../../styles/mixins";
-
 .SettingsGeneralBackground {
-  padding-bottom: 0 !important;
+  // Ширина колонки настроек, а не окна: на телефоне и в узкой колонке образцы идут двумя лентами
+  .settings-backgrounds {
+    container-type: inline-size;
+    margin-top: 1rem;
+  }
 
-  .settings-wallpapers {
-    overflow: clip;
+  .settings-backgrounds-picker {
     display: grid;
-    grid-auto-rows: 1fr;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.0625rem;
+    grid-template-columns: 2fr 3fr;
+    gap: 1rem;
+    align-items: start;
 
-    margin: 1rem -1rem 0;
-    margin-inline: calc(min(var(--scrollbar-width) - 1rem, 0px));
-    border-top-left-radius: var(--border-radius-island);
-    border-top-right-radius: var(--border-radius-island);
+    padding: 0.75rem;
+  }
 
-    > :first-child .media-inner,
-    > :first-child::after {
-      border-top-left-radius: var(--border-radius-island);
+  .settings-backgrounds-column {
+    min-width: 0;
+  }
+
+  .settings-backgrounds-title {
+    margin: 0 0 0.5rem;
+
+    font-size: 0.875rem;
+    font-weight: var(--font-weight-medium);
+    line-height: 1.25rem;
+    color: var(--color-text-secondary);
+  }
+
+  .settings-backgrounds-list {
+    display: grid;
+    gap: 0.5rem;
+
+    &.is-patterns {
+      grid-template-columns: repeat(2, 1fr);
     }
 
-    > :nth-child(3) .media-inner,
-    > :nth-child(3)::after {
-      border-top-right-radius: var(--border-radius-island);
+    &.is-gradients {
+      grid-template-columns: repeat(3, 1fr);
     }
   }
 
-  .Loading {
-    height: auto !important;
-    margin-top: 5rem;
+  .settings-backgrounds-tile {
+    cursor: var(--custom-cursor, pointer);
+
+    position: relative;
+
+    overflow: hidden;
+    display: block;
+
+    aspect-ratio: 1;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0.75rem;
+
+    background: var(--bg-gradient);
+    outline: none;
+
+    transition: box-shadow 0.15s ease;
+
+    &:focus-visible {
+      box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px var(--color-borders-input);
+    }
+
+    &.selected {
+      box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px var(--color-primary);
+    }
+  }
+
+  // Рисунок — маска: контур красится в цвет, которым он ляжет на этот градиент
+  .settings-backgrounds-drawing {
+    position: absolute;
+    inset: 0;
+
+    opacity: 0.75;
+    background-color: var(--bg-ink);
+
+    mask-image: var(--bg-drawing);
+    mask-repeat: repeat;
+    mask-position: center;
+    mask-size: 7.5rem auto;
+  }
+
+  @container (max-width: 339px) {
+    .settings-backgrounds-picker {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-backgrounds-list {
+      overflow-x: auto;
+      display: flex;
+
+      // Место под обводку выбранного образца: прокручиваемая лента обрезает тень
+      margin: -0.25rem;
+      padding: 0.25rem;
+    }
+
+    .settings-backgrounds-tile {
+      flex: 0 0 4rem;
+      width: 4rem;
+    }
+  }
+
+  .settings-backgrounds-own {
+    margin-top: 1rem;
+    padding: 0.75rem;
+  }
+
+  .settings-wallpapers {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(4.5rem, 1fr));
+    gap: 0.5rem;
+
+    .media-inner,
+    .WallpaperTile::after {
+      border-radius: 0.75rem;
+    }
   }
 }
