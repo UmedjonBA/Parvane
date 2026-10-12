@@ -19,8 +19,11 @@ function readSection(): ParvaneSection {
 }
 
 const [getParvaneSection, setSignal] = createSignal<ParvaneSection>(readSection());
-// Запрос «новая запись» из нижней панели телефона: «План» открывает форму и сбрасывает запрос
-const [getPlannerAddRequest, setPlannerAddRequest] = createSignal(false);
+// Запрос «новая запись»: окно ввода текстом «Плана». `text` — заготовка строки; `isInPlace` — окно
+// показывает раздел, из которого пришёл запрос («Знания»), и после записи пользователь остаётся в нём.
+// Запрос забирает тот, кто показывает окно: «План» либо `PlannerQuickHost` открытого раздела
+export type PlannerAddRequest = { text?: string; isInPlace?: boolean };
+const [getPlannerAddRequest, setPlannerAddRequest] = createSignal<PlannerAddRequest | undefined>(undefined);
 
 // Экран «Плана»: «Сегодня», виды календаря либо «Здоровье». «Сегодня» — первый вид «Календаря»: в боковой
 // панели (компьютер) и во вкладках раздела (телефон) это одна кнопка «Календарь», а между «Сегодня» и
@@ -99,25 +102,35 @@ export function setParvaneSection(section: ParvaneSection) {
   }
 }
 
-export function requestPlannerAdd() {
+/**
+ * Открыть «План» с окном ввода текстом; `text` — заготовка строки. Функцию ставят и обработчиком нажатия
+ * (тогда аргументом приходит событие), поэтому текстом считается только строка.
+ */
+export function requestPlannerAdd(text?: unknown) {
   setParvaneSection('planner');
-  setPlannerAddRequest(true);
+  setPlannerAddRequest({ text: typeof text === 'string' ? text : undefined });
 }
 
-// Строка, с которой откроется окно ввода («Записать сон» в общем поиске); обычный запрос — пустая
-let plannerAddText = '';
+/**
+ * Окно ввода текстом поверх раздела «Знания» («Запланировать» в заметке): раздел не меняется. Из раздела,
+ * который окно не держит, запрос открывает «План», как `requestPlannerAdd`.
+ */
+export function requestPlannerAddInPlace(text: string) {
+  if (getParvaneSection() !== 'cloud') {
+    requestPlannerAdd(text);
+    return;
+  }
+  setPlannerAddRequest({ text, isInPlace: true });
+}
 
+/** Окно ввода с готовой строкой («Записать сон» в общем поиске). */
 export function requestPlannerAddText(text: string) {
-  plannerAddText = text;
-  requestPlannerAdd();
+  requestPlannerAdd(text);
 }
 
-/** Снять запрос новой записи; возвращает строку, заготовленную для окна ввода. */
+/** Снять запрос новой записи. */
 export function consumePlannerAddRequest() {
-  const text = plannerAddText;
-  plannerAddText = '';
-  setPlannerAddRequest(false);
-  return text;
+  setPlannerAddRequest(undefined);
 }
 
 // Вкладка раздела «Знания»: заметки, граф связей, холст либо файлы (прежнее «Облако»)

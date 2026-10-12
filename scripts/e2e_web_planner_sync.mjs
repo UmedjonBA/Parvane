@@ -4,7 +4,9 @@
 // на обоих устройствах сливаются (разные объекты сохраняются, удалённое не
 // воскресает); очередь переживает перезагрузку; данные этапа 1 переносятся
 // один раз; словарь правок ввода текстом едет с данными «Плана» (выученное на
-// одном устройстве подставляется на другом, сброс действует на оба); в базе
+// одном устройстве подставляется на другом, сброс действует на оба); история
+// строк ввода текстом — тоже (строка первого устройства — подсказка на втором,
+// «Забыть» действует на оба, история переживает перезагрузку); в базе
 // шарда domains нет названий открытым текстом.
 // Запуск: scripts/run_web_planner_sync_e2e.sh
 import assert from 'node:assert/strict';
@@ -129,6 +131,17 @@ async function quickAdd(page, text, name, time) {
 async function learnedWordOf(page, id) {
   const state = await page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
   return state?.state?.learned?.find((word) => word.id === id);
+}
+
+/** История ввода текстом в состоянии движка устройства: строки и забытые шаблоны (`hidden`). */
+async function quickLinesOf(page) {
+  const state = await page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
+  return state?.state?.quickLines || [];
+}
+
+/** Подсказка окна ввода, взятая из истории набранных строк (а не собранная из записей «Плана»). */
+function historySuggestion(page, text) {
+  return page.locator(`[data-quick-suggestion][data-source="history"][data-text="${text}"]`);
 }
 
 /** Сид журнала: по одной правке в операции (движок пакетирует только из UI).
@@ -370,6 +383,51 @@ try {
   await expectQuickTime(sessions.bob2.page, '13:00–13:20');
   await closeQuick(sessions.bob2.page);
   console.log('OK: длительность, выученная на первом устройстве, подставлена на втором');
+
+  // ── История ввода текстом: строки, набранные на A, — подсказки на B; «Забыть» на B действует на A ──
+  const historyHead = 'планёрка';
+  const lineKept = `${learnedHead} завтра 11:00 20 мин`;
+  const lineForgotten = `${learnedHead} завтра 12:00 20 мин`;
+  const quickInput2 = sessions.bob2.page.locator('#planner-quick-input');
+  // На устройстве истории нет: она в данных «Плана»
+  assert.deepEqual(
+    await sessions.bob1.page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('parvane:quick-history:'))),
+    [], 'история ввода текстом не должна оставаться в localStorage',
+  );
+  await waitFor(async () => {
+    const lines = (await quickLinesOf(sessions.bob2.page)).map((line) => line.text);
+    return lines.includes(lineKept) && lines.includes(lineForgotten);
+  }, SYNC_TIMEOUT_MS, 'на B — строки истории, набранные на A');
+  await openQuick(sessions.bob2.page);
+  await quickInput2.fill('лету');
+  // Подсказка — строка первого устройства дословно (с датой), а не шаблон, собранный из записей «Плана»
+  await historySuggestion(sessions.bob2.page, lineKept).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('на B нет подсказки из строки, набранной на A'));
+  await historySuggestion(sessions.bob2.page, lineForgotten).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await sessions.bob2.page.locator(`[data-quick-suggestion-forget][data-text="${lineForgotten}"]`).click();
+  await historySuggestion(sessions.bob2.page, lineForgotten).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('забытая подсказка осталась на B'));
+  assert.equal(
+    await sessions.bob2.page.locator('[data-quick-suggestion][data-text*="12:00"]').count(), 0,
+    'забытая строка вернулась на B подсказкой из записей «Плана»',
+  );
+  await closeQuick(sessions.bob2.page);
+  // Забытое не воскресает на A: строки нет, её шаблон помечен забытым
+  await waitFor(async () => {
+    const lines = await quickLinesOf(sessions.bob1.page);
+    return !lines.some((line) => line.text === lineForgotten) && lines.some((line) => line.hidden);
+  }, SYNC_TIMEOUT_MS, 'на A — строка истории, забытая на B');
+  await openQuick(sessions.bob1.page);
+  await sessions.bob1.page.locator('#planner-quick-input').fill('лету');
+  await historySuggestion(sessions.bob1.page, lineKept).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(
+    await sessions.bob1.page.locator('[data-quick-suggestion][data-text*="12:00"]').count(), 0,
+    'строка, забытая на B, предлагается на A',
+  );
+  await closeQuick(sessions.bob1.page);
+  await closePlanner(sessions.bob1.page);
+  console.log('OK: история ввода текстом — подсказки первого устройства на втором, «Забыть» действует на оба');
+
   // Сброс на B: словарь очищен на обоих устройствах
   await planner2b.getByRole('button', { name: 'Planner settings' }).click();
   await planner2b.locator('[data-quick-learned-reset]').click();
@@ -381,9 +439,18 @@ try {
   await sessions.bob1.page.locator('#planner-quick-input').fill(`${learnedHead} завтра 13:00`);
   await expectQuickTime(sessions.bob1.page, '13:00–14:00');
   assert.equal(await learnedChip(sessions.bob1.page).count(), 0, 'после сброса на B выученного на A нет');
+  // Вместе со словарём сброшена история строк — на обоих устройствах
+  assert.deepEqual(await quickLinesOf(sessions.bob1.page), [], 'после сброса на B история ввода на A осталась');
+  assert.equal(
+    await sessions.bob1.page.locator('[data-quick-suggestion][data-source="history"]').count(), 0,
+    'после сброса на B на A остались подсказки из истории',
+  );
   await closeQuick(sessions.bob1.page);
+  // Строка, набранная после сброса: её второе устройство покажет после своей перезагрузки
+  const lineAfterReset = `${historyHead} завтра 9:00 15 мин`;
+  await quickAdd(sessions.bob1.page, lineAfterReset, historyHead, '09:00–09:15');
   await closePlanner(sessions.bob1.page);
-  console.log('OK: сброс выученного на втором устройстве очистил словарь первого');
+  console.log('OK: сброс выученного на втором устройстве очистил словарь и историю первого');
 
   // ── FR-006: очередь переживает перезагрузку ───────────────────────────────
   await bob2Context.setOffline(true);
@@ -394,10 +461,20 @@ try {
   await relogin(sessions.bob2.page, PASSWORD).catch(() => undefined);
   await sessions.bob2.page.locator('#FoldersSidebar').waitFor({ state: 'visible', timeout: 60000 });
   await expectTaskInDay(sessions.bob2.page, taskE, true);
+  // История ввода текстом после перезагрузки второго устройства: строка первого — по-прежнему подсказка
+  await waitFor(
+    async () => (await quickLinesOf(sessions.bob2.page)).some((line) => line.text === lineAfterReset),
+    SYNC_TIMEOUT_MS, 'на B после перезагрузки — строка истории, набранная на A',
+  );
+  await openQuick(sessions.bob2.page);
+  await sessions.bob2.page.locator('#planner-quick-input').fill('план');
+  await historySuggestion(sessions.bob2.page, lineAfterReset).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('после перезагрузки B нет подсказки из строки, набранной на A'));
+  await closeQuick(sessions.bob2.page);
   await closePlanner(sessions.bob2.page);
   await expectTaskInDay(sessions.bob1.page, taskE, true);
   await closePlanner(sessions.bob1.page);
-  console.log('OK: правка без сети ушла после перезагрузки');
+  console.log('OK: правка без сети ушла после перезагрузки; история ввода текстом на месте');
 
   // ── US3: перенос данных этапа 1 ───────────────────────────────────────────
   const carol = `psync-carol-${suffix}@local`;
@@ -462,7 +539,9 @@ try {
   console.log(`OK: третье устройство стартовало со снимка, данные за ${firstDataMs} мс`);
 
   // ── SC-003: сервер хранит только шифртекст ────────────────────────────────
-  const check = plaintextLeaks([taskA, taskB, taskC, taskD, taskE, legacyTask, `сид1-${suffix} 7`, learnedHead]);
+  const check = plaintextLeaks([
+    taskA, taskB, taskC, taskD, taskE, legacyTask, `сид1-${suffix} 7`, learnedHead, historyHead,
+  ]);
   assert.ok(check.ops >= 5, `в журнале контейнеров мало операций: ${check.ops}`);
   assert.deepEqual(check.leaks, [], `названия в базе открытым текстом: ${check.leaks}`);
   console.log(`OK: в базе шарда domains ${check.ops} операций, названий открытым текстом нет`);

@@ -410,7 +410,12 @@ try {
   await expectKind('event');
   await learnedChip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal((await chip('time').innerText()).trim(), '15:00–15:20');
-  // Набранные строки лежат на устройстве и пережили перезагрузку: подсказка есть и на компьютере
+  // Набранные строки — тоже в данных «Плана» (на устройстве их нет) и пережили перезагрузку: подсказка
+  // есть и на компьютере
+  assert.deepEqual(
+    await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('parvane:quick-history:'))),
+    [], 'история набранных строк не должна оставаться в localStorage',
+  );
   await input.fill('сдать');
   await page.waitForFunction(() => (
     document.querySelector('[data-quick-suggestions] [data-quick-suggestion]')?.dataset.text === 'задача сдать отчёт до пт'

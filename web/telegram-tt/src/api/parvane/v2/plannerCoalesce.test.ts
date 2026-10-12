@@ -77,6 +77,23 @@ describe('планировщик: склейка правок одной опе�
     ]);
   });
 
+  it('история ввода текстом: поздняя запись строки заменяет раннюю, забытая и добавленная снова — остаётся', () => {
+    expect(coalesceChanges([
+      { quickLine: { id: 'q1', text: 'созвон завтра 16:00', count: 1, touched: 1, hidden: false } },
+      { task: { id: 't1', name: 'созвон' } },
+      { quickLine: { id: 'q1', text: 'Созвон завтра 16:00', count: 2, touched: 2, hidden: false } },
+      { quickLine: { id: 'q2', text: 'вес 72,4', count: 1, touched: 3, hidden: false } },
+      { quickLine: { id: 'q2', deleted: true } },
+      { quickLine: { id: 'q3', deleted: true } },
+      { quickLine: { id: 'q3', text: 'зал 19:00', count: 1, touched: 4, hidden: false } },
+    ])).toEqual([
+      { quickLine: { id: 'q1', text: 'Созвон завтра 16:00', count: 2, touched: 2, hidden: false } },
+      { task: { id: 't1', name: 'созвон' } },
+      { quickLine: { id: 'q2', deleted: true } },
+      { quickLine: { id: 'q3', text: 'зал 19:00', count: 1, touched: 4, hidden: false } },
+    ]);
+  });
+
   it('перенос данных и незнакомое остаются как есть', () => {
     const changes = [{ migration: { count: 1 } }, { migration: { count: 2 } }, {}];
     expect(coalesceChanges(changes)).toEqual(changes);

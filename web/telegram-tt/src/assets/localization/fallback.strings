@@ -3440,7 +3440,7 @@
 "PlannerSettingsMargin" = "Gap between items, min";
 "PlannerSettingsReset" = "Reset to defaults";
 "PlannerSettingsLearnedReset" = "Reset learned defaults";
-"PlannerSettingsLearnedHint" = "Text entry remembers how you correct the kind and the duration for the first word of a name. After three identical corrections the value becomes the default. What it has learned is kept with your Plan data and syncs across your devices. The lines you added entries with are shown as suggestions in the entry window and stay on this device only. The button clears both.";
+"PlannerSettingsLearnedHint" = "Text entry remembers how you correct the kind and the duration for the first word of a name. After three identical corrections the value becomes the default. What it has learned is kept with your Plan data and syncs across your devices. The lines you added entries with are shown as suggestions in the entry window and are kept there too, so you see them on all your devices. The button clears both.";
 "PlannerSlotsHint" = "{window} · break {lunch} · {margin} min margin";
 "PlannerSlotsHintNoBreak" = "{window} · {margin} min margin";
 "PlannerSlotsNone" = "No suitable slots in the next 7 days. Shorten the task or move other things.";
@@ -3663,6 +3663,7 @@
 "PlannerUndatedHint" = "Tasks without a day. Those «in progress» show up on «Today», the button on the right schedules a task for the selected day.";
 "PlannerDailyNote" = "Daily note";
 "PlannerDailyNoteHint" = "Thoughts, checklist items and links for the day live in «Knowledge».";
+"PlannerDailyNoteWrite" = "Write the daily note";
 "PlannerKcalLeftOf" = "{left} left of {goal}";
 "PlannerLayers" = "Calendar layers";
 "PlannerLayerWork" = "Plans";
@@ -3767,6 +3768,7 @@
 "KnowledgeDeleteConfirm" = "Move the note «{name}» to the cloud trash?";
 "KnowledgeBack" = "Back to notes";
 "KnowledgeEditorPlaceholder" = "Text, - [ ] items, [[links]], #tags";
+"KnowledgePlan" = "Schedule";
 "KnowledgePlanned" = "Planned";
 "KnowledgeNoDate" = "no date";
 "KnowledgeBacklinks" = "Backlinks · {count}";

@@ -6,9 +6,10 @@ vi.mock('../../../api/gramjs', () => ({ callApi: vi.fn(() => Promise.resolve(und
 
 const { callApi } = await import('../../../api/gramjs');
 const {
-  canSyncLearned, getPlannerNotice, getPlannerState, loadPlanner, showPlannerNotice,
+  canSyncLearned, canSyncQuickHistory, getPlannerNotice, getPlannerState, loadPlanner, showPlannerNotice,
 } = await import('./plannerStore');
 const { serializeLearned } = await import('./plannerQuickLearn');
+const { quickLineId, serializeHistory } = await import('./plannerQuickSuggest');
 
 describe('Уведомление планировщика', () => {
   beforeEach(() => {
@@ -136,5 +137,117 @@ describe('Словарь правок: перенос записи устрой�
     await loadPlanner('user-f');
     expect(applied()).toEqual([]);
     expect(saved.has(`${KEY}user-f`)).toBe(true);
+  });
+});
+
+describe('История ввода текстом: перенос записи устройства в «План»', () => {
+  const KEY = 'parvane:quick-history:';
+  const api = callApi as unknown as ReturnType<typeof vi.fn>;
+  const saved = new Map<string, string>();
+  const local = serializeHistory({
+    tick: 3,
+    lines: [{ text: 'Купить кабель', count: 2, at: 3 }, { text: 'зал 19:00', count: 1, at: 1 }],
+    hidden: ['обед'],
+  });
+  // `quickLines` нет — движок прежней сборки
+  const engine = (quickLines?: unknown[]) => ({
+    // eslint-disable-next-line no-null/no-null -- JSON движка: null = «не задано»
+    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, quickLines, headSeq: 1, sizeBytes: 10,
+  });
+  let answer: Record<string, unknown> = {};
+
+  beforeEach(() => {
+    saved.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => saved.get(key) ?? null, // eslint-disable-line no-null/no-null
+      setItem: (key: string, value: string) => saved.set(key, value),
+      removeItem: (key: string) => saved.delete(key),
+    });
+    vi.stubGlobal('window', { addEventListener: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
+    api.mockReset();
+    api.mockImplementation((method: string) => Promise.resolve(
+      method === 'parvanePlannerState' ? answer : method === 'parvaneLoadPlanner' ? { status: 'ok' } : undefined,
+    ));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const applied = () => api.mock.calls.filter(([method]) => method === 'parvanePlannerApply')
+    .flatMap(([, args]) => (args as { changes: Record<string, unknown>[] }).changes);
+
+  it('готовый «План» с историей другого устройства: строки объединяются, запись стирается', async () => {
+    saved.set(`${KEY}hist-a`, local);
+    answer = {
+      status: 'ready',
+      sizeBytes: 10,
+      hasPending: false,
+      state: engine([{
+        id: quickLineId('купить кабель'), text: 'купить кабель', count: 5, touched: 40, hidden: false,
+      }]),
+    };
+    await loadPlanner('hist-a');
+    expect(canSyncQuickHistory()).toBe(true);
+    // «купить кабель» у другого устройства использована чаще — запись не трогается; своя строка добавляется
+    // самой свежей, забытый шаблон — к забытым
+    expect(applied()).toEqual([
+      {
+        quickLine: {
+          id: quickLineId('обед', true), text: 'обед', count: 0, touched: 41, hidden: true,
+        },
+      },
+      {
+        quickLine: {
+          id: quickLineId('зал 19:00'), text: 'зал 19:00', count: 1, touched: 41, hidden: false,
+        },
+      },
+    ]);
+    expect(getPlannerState().quickLines.map(({ text }) => text).sort()).toEqual(['зал 19:00', 'купить кабель', 'обед']);
+    expect(saved.has(`${KEY}hist-a`)).toBe(false);
+    // Повторная загрузка того же аккаунта ничего не пишет
+    api.mockClear();
+    await loadPlanner('hist-a');
+    expect(applied()).toEqual([]);
+  });
+
+  it('движок прежней сборки истории не знает: запись остаётся на устройстве и в «План» не пишется', async () => {
+    saved.set(`${KEY}hist-b`, local);
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, state: engine(),
+    };
+    await loadPlanner('hist-b');
+    expect(canSyncLearned()).toBe(true);
+    expect(canSyncQuickHistory()).toBe(false);
+    expect(applied()).toEqual([]);
+    expect(saved.has(`${KEY}hist-b`)).toBe(true);
+  });
+
+  it('новый аккаунт без контейнера: история ждёт на устройстве первого состояния движка', async () => {
+    saved.set(`${KEY}hist-c`, local);
+    answer = { status: 'ready', sizeBytes: 0, hasPending: false };
+    await loadPlanner('hist-c');
+    expect(canSyncQuickHistory()).toBe(false);
+    expect(applied()).toEqual([]);
+    // Контейнер появился (первая запись): следующая загрузка переносит историю целиком
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, state: engine([]),
+    };
+    await loadPlanner('hist-c');
+    // Повторная загрузка перечитывает состояние, не дожидаясь ответа
+    await vi.waitFor(() => {
+      expect(applied().map((change) => (change.quickLine as { text: string }).text).sort())
+        .toEqual(['Купить кабель', 'зал 19:00', 'обед']);
+    });
+    expect(saved.size).toBe(0);
+  });
+
+  it('устройство не привязано: история остаётся на устройстве', async () => {
+    saved.set(`${KEY}hist-d`, local);
+    answer = { status: 'needs-linking', sizeBytes: 0, hasPending: false };
+    await loadPlanner('hist-d');
+    expect(canSyncQuickHistory()).toBe(false);
+    expect(applied()).toEqual([]);
+    expect(saved.has(`${KEY}hist-d`)).toBe(true);
   });
 });

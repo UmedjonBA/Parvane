@@ -994,6 +994,113 @@
   }
 }
 
+// ── заметка дня на «Сегодня»: начало текста, нажатие открывает заметку ───────
+
+.dailyText {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  width: 100%;
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  line-height: 1.375rem;
+  color: var(--pv-fg);
+  text-align: start;
+
+  background: none;
+
+  &:focus-visible {
+    border-radius: 0.25rem;
+    outline: 0.125rem solid var(--pv-accent);
+    outline-offset: 0.125rem;
+  }
+}
+
+.dailyLine {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.dailyLineText {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+
+  min-width: 0;
+
+  overflow-wrap: anywhere;
+}
+
+.dailyHeading {
+  font-weight: var(--font-weight-semibold);
+}
+
+.dailyDone .dailyLineText {
+  color: var(--pv-faint);
+  text-decoration: line-through;
+}
+
+// Знак строки: круг пункта (пустой либо закрашенный) и точка списка
+.dailyMark {
+  flex: none;
+
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.25rem;
+  border: 2px solid var(--pv-line2);
+  border-radius: 50%;
+
+  &[data-mark="done"] {
+    border-color: var(--pv-accent);
+    background: var(--pv-accent);
+  }
+
+  &[data-mark="bullet"] {
+    width: 0.375rem;
+    height: 0.375rem;
+    margin: 0.5rem 0.25rem 0;
+    border: none;
+
+    background: var(--pv-faint);
+  }
+}
+
+.dailyMore {
+  line-height: 1rem;
+  color: var(--pv-faint);
+}
+
+.dailyEmpty {
+  cursor: var(--custom-cursor, pointer);
+
+  padding: 0;
+  border: none;
+
+  font: inherit;
+  color: var(--pv-muted);
+  text-align: start;
+
+  background: none;
+
+  &:hover {
+    color: var(--pv-fg);
+  }
+
+  &:focus-visible {
+    border-radius: 0.25rem;
+    outline: 0.125rem solid var(--pv-accent);
+    outline-offset: 0.125rem;
+  }
+}
+
 // ── шапка дня: «Сегодня», «Здоровье» ─────────────────────────────────────────
 
 .dateNav {

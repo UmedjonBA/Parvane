@@ -6,7 +6,7 @@ import type { PlannerState } from './plannerModel';
 import { createEmptyPlannerState, eventInstance } from './plannerModel';
 import { addEntry, setDescription } from './plannerSeriesEdit';
 import {
-  diffChanges, type EngineState, fromEngineState, isLegacyPlannerRecord, legacyToChanges,
+  diffChanges, type EngineState, fromEngineState, hasEngineQuickLines, isLegacyPlannerRecord, legacyToChanges,
 } from './plannerSync';
 
 const ENGINE: EngineState = {
@@ -452,6 +452,78 @@ describe('планировщик ↔ движок: словарь правок �
       .toEqual([{ learned: { id: 'пара', deleted: true } }, { learned: { id: 'зал', deleted: true } }]);
     // Перенос данных этапа 1 словаря не несёт
     expect(legacyToChanges(empty, 'web1').some((change) => 'learned' in change)).toBe(false);
+  });
+});
+
+describe('планировщик ↔ движок: история ввода текстом', () => {
+  const ENGINE_EMPTY: EngineState = {
+    tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,
+  };
+  const line = {
+    id: 'q01', text: 'созвон завтра 16:00', count: 2, touched: 4,
+  };
+  const hidden = {
+    id: 'h02', text: 'созвон 16:00', count: 0, touched: 5, isHidden: true,
+  };
+
+  it('записи движка читаются; пустые и повторные пропускаются; прежний движок истории не ведёт', () => {
+    const engine: EngineState = {
+      ...ENGINE_EMPTY,
+      quickLines: [
+        { ...line, hidden: false },
+        {
+          id: 'h02', text: 'созвон 16:00', count: 0, touched: 5, hidden: true,
+        },
+        {
+          id: 'q03', text: '  ', count: 1, touched: 6, hidden: false,
+        },
+        {
+          id: 'q01', text: 'дубль', count: 1, touched: 7, hidden: false,
+        },
+      ],
+    };
+    expect(fromEngineState(engine).quickLines).toEqual([line, hidden]);
+    expect(hasEngineQuickLines(engine)).toBe(true);
+    expect(hasEngineQuickLines({ ...ENGINE_EMPTY, quickLines: [] })).toBe(true);
+    expect(fromEngineState(ENGINE_EMPTY).quickLines).toEqual([]);
+    expect(hasEngineQuickLines(ENGINE_EMPTY)).toBe(false);
+  });
+
+  it('запись уходит целиком, неизменённая не уходит, пропавшая — надгробием', () => {
+    const empty = createEmptyPlannerState();
+    const two: PlannerState = { ...empty, quickLines: [line, hidden] };
+    expect(diffChanges(empty, two)).toEqual([
+      {
+        quickLine: {
+          id: 'q01', text: 'созвон завтра 16:00', count: 2, touched: 4, hidden: false,
+        },
+      },
+      {
+        quickLine: {
+          id: 'h02', text: 'созвон 16:00', count: 0, touched: 5, hidden: true,
+        },
+      },
+    ]);
+    expect(diffChanges(two, { ...two, quickLines: [{ ...hidden }, { ...line }] })).toEqual([]);
+    expect(diffChanges(two, { ...two, quickLines: [{ ...line, count: 3, touched: 9 }, hidden] })).toEqual([{
+      quickLine: {
+        id: 'q01', text: 'созвон завтра 16:00', count: 3, touched: 9, hidden: false,
+      },
+    }]);
+    // «Забыть», вытеснение и сброс — надгробия по записи
+    expect(diffChanges(two, { ...two, quickLines: [hidden] })).toEqual([{ quickLine: { id: 'q01', deleted: true } }]);
+    expect(diffChanges(two, { ...two, quickLines: [] }))
+      .toEqual([{ quickLine: { id: 'q01', deleted: true } }, { quickLine: { id: 'h02', deleted: true } }]);
+    // Запись и её строка истории уходят одной пачкой: история не мешает остальным правкам
+    const withTask = diffChanges(empty, {
+      ...two,
+      tasks: [{
+        id: 't1', name: 'созвон', description: '', steps: [], status: 'queue', project: '', rank: 0,
+      }],
+    });
+    expect(withTask.map((change) => Object.keys(change)[0])).toEqual(['task', 'quickLine', 'quickLine']);
+    // Перенос данных этапа 1 истории не несёт
+    expect(legacyToChanges(empty, 'web1').some((change) => 'quickLine' in change)).toBe(false);
   });
 });
 

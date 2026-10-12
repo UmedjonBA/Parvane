@@ -281,6 +281,27 @@ message LearnedWord {
   parvane.core.v2.LwwStamp deleted = 7;
 }
 
+// Строка истории ввода текстом (13 окт 2026): строка, которой пользователь добавил запись, — подсказка
+// окна ввода на всех его устройствах. Регистр целиком по `stamp`, надгробие: строки с двух устройств
+// объединяются по `id`, у одной и той же строки побеждает позднее использование; «Забыть» — надгробие,
+// правка старше него строку не возвращает, новое использование (метка новее) — возвращает.
+// `hidden` — не строка, а забытый шаблон: `text` — ключ шаблона, по которому клиент больше не собирает
+// подсказку из записей «Плана». `touched` — счётчик свежести, как у LearnedWord: клиент держит не более
+// 200 строк и столько же забытых шаблонов, вытесняя дольше всех не тронутые надгробием. Сервер историю
+// не видит, как и остальное содержимое.
+message QuickLine {
+  // ключ строки, его выбирает клиент: хэш строки без учёта регистра и лишних пробелов
+  string id = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.LwwStamp stamp = 2;
+  // строка как набрана (клиент ограничивает её 300 знаками) либо ключ забытого шаблона
+  string text = 3 [(parvane.core.v2.max_len) = 1200];
+  // сколько раз строкой добавлена запись
+  uint32 count = 4;
+  uint32 touched = 5;
+  bool hidden = 6;
+  parvane.core.v2.LwwStamp deleted = 7;
+}
+
 message NutritionDay {
   string day = 1 [(parvane.core.v2.max_len) = 10];
   repeated FoodEntry entries = 2 [(parvane.core.v2.max_items) = 200];
@@ -322,6 +343,7 @@ message Change {
     GoalPeriod goal_period = 8;
     HealthRecord health = 9;
     LearnedWord learned = 10;
+    QuickLine quick_line = 11;
   }
 }
 
@@ -342,4 +364,6 @@ message PlannerSnapshot {
   repeated HealthRecord health = 8 [(parvane.core.v2.max_items) = 20000];
   // живые слова и надгробия вместе; движок не пишет в снимок больше (planner.rs `MAX_LEARNED_STORED`)
   repeated LearnedWord learned = 9 [(parvane.core.v2.max_items) = 2000];
+  // история ввода текстом: живые строки и надгробия вместе, не больше `MAX_QUICK_STORED` (planner.rs)
+  repeated QuickLine quick_lines = 10 [(parvane.core.v2.max_items) = 2000];
 }

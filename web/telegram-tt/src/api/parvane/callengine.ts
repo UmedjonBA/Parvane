@@ -282,7 +282,8 @@ export class CallEngine {
       case 'hangup':
         if (signal.call_id === this.callId && from === this.peer) {
           const isBusy = signal.type === 'reject' && signal.reason === 'busy';
-          this.cb.log?.(`Звонок завершён собеседником: ${signal.type}${signal.reason ? ` (${signal.reason})` : ''}`);
+          const reason = signal.type === 'reject' ? signal.reason : undefined;
+          this.cb.log?.(`Звонок завершён собеседником: ${signal.type}${reason ? ` (${reason})` : ''}`);
           this.cleanup();
           this.cb.onState(isBusy ? 'busy' : 'ended');
         }

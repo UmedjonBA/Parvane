@@ -2245,6 +2245,7 @@ const methods = {
   // первый вызов запускает подключение контейнера и синхронизацию, итог —
   // событием `parvane-planner-changed`
   // Методы планировщика — всегда Promise: вызывающие ждут `.catch` у результата
+  // eslint-disable-next-line @typescript-eslint/require-await
   async parvanePlannerState() {
     try {
       return readPlannerState();
@@ -2260,6 +2261,7 @@ const methods = {
     return true;
   },
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async parvanePlannerApply({ changes }: { changes: unknown[] }) {
     v2Controller.planner.apply(changes);
     return true;

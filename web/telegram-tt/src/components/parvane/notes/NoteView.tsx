@@ -9,13 +9,14 @@ import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import { requestPlannerAddInPlace } from '../../../util/parvaneSection';
 import { formatRepeat } from '../planner/plannerFormat';
 import { toDayKey } from '../planner/plannerModel';
 import { nextNoteTitle, NOTE_TITLE_MAX } from './notesCanvasNote';
 import { folderCaption } from './notesFolders';
 import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
-import { nearestPlanned } from './notesPlanned';
+import { nearestPlanned, notePlanLine } from './notesPlanned';
 import { getNoteTasks, markerOfTask } from './notesTasks';
 
 import useFlag from '../../../hooks/useFlag';
@@ -172,6 +173,11 @@ const NoteView = ({
   const handleDelete = useLastCallback(() => {
     closeDelete();
     onDelete(note.id);
+  });
+
+  // «Запланировать»: окно ввода текстом «Плана» со ссылкой на заметку — запись с ней встаёт в «Запланировано»
+  const handlePlan = useLastCallback(() => {
+    requestPlannerAddInPlace(notePlanLine(note.title));
   });
 
   const handleFolder = useLastCallback(() => {
@@ -399,6 +405,12 @@ const NoteView = ({
                 <PvIcon name="edit" isSmall />
                 {lang('KnowledgeEdit')}
               </button>
+              {!isDaily && (
+                <button type="button" className={kit.btn} data-note-plan onClick={handlePlan}>
+                  <PvIcon name="cal" isSmall />
+                  {lang('KnowledgePlan')}
+                </button>
+              )}
               <button
                 type="button"
                 className={buildClassName(kit.btn, kit.btnGhost)}

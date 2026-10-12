@@ -8,9 +8,10 @@ import type {
 
 import { parseQuickInput } from './plannerQuick';
 import {
-  buildCandidates, buildSuggestions, createQuickHistory, draftToLine, filterSuggestions, forgetSuggestion,
-  HISTORY_MAX_HIDDEN, HISTORY_MAX_LINES, isSuggestionPrefix, lineKey, MAX_SUGGESTIONS, parseHistory,
-  recordHistoryLine, serializeHistory,
+  buildCandidates, buildSuggestions, createQuickHistory, draftToLine, filterSuggestions, forgetQuickLine,
+  forgetSuggestion, hasHistory, HISTORY_MAX_HIDDEN, HISTORY_MAX_LINES, historyFromLines, historyToLines,
+  isSuggestionPrefix, lineKey, MAX_SUGGESTIONS, mergeHistories, parseHistory, quickLineId, recordHistoryLine,
+  recordQuickLine, serializeHistory,
 } from './plannerQuickSuggest';
 
 // 8 октября 2026 — четверг, полдень; окно дня 09:00–21:00
@@ -463,7 +464,7 @@ describe('подсказки: история и «Забыть»', () => {
     expect(recordHistoryLine(store, 'а'.repeat(301), 'x')).toBe(store);
   });
 
-  it('помнит сто последних строк', () => {
+  it('помнит двести последних строк', () => {
     const store = history(...Array.from({ length: HISTORY_MAX_LINES + 20 }, (_, index) => `дело ${index}`));
     expect(store.lines).toHaveLength(HISTORY_MAX_LINES);
     expect(store.lines[0].text).toBe(`дело ${HISTORY_MAX_LINES + 19}`);
@@ -531,5 +532,120 @@ describe('подсказки: история и «Забыть»', () => {
       lines: [{ text: 'дело раз', count: 1, at: 4 }, { text: 'дело два', count: 2, at: 0 }],
       hidden: ['дело'],
     });
+  });
+});
+
+describe('подсказки: история в данных «Плана»', () => {
+  const key = (line: string) => lineKey(line, parseQuickInput(line, CTX), 'ru');
+
+  it('ключ записи — по строке без регистра и лишних пробелов, только латиница и цифры', () => {
+    expect(quickLineId('Купить  кабель')).toBe(quickLineId(' купить КАБЕЛЬ'));
+    expect(quickLineId('ёлка')).toBe(quickLineId('елка'));
+    expect(quickLineId('купить кабель')).not.toBe(quickLineId('купить кабели'));
+    // Строка и забытый шаблон с тем же текстом — разные записи
+    expect(quickLineId('созвон', true)).not.toBe(quickLineId('созвон'));
+    expect(quickLineId('купить кабель')).toMatch(/^q[0-9a-f]{16}$/);
+    expect(quickLineId('созвон', true)).toMatch(/^h[0-9a-f]{16}$/);
+    // Ключ одинаков на всех устройствах: значение закреплено
+    expect(quickLineId('созвон завтра 16:00')).toBe('q84f71769879cc437');
+  });
+
+  it('история проходит через записи «Плана» без потерь', () => {
+    const store = forgetSuggestion(history('купить кабель', 'вес 72,4', 'Купить кабель'), { key: 'созвон', texts: [] });
+    const lines = historyToLines(store);
+    expect(lines).toHaveLength(3);
+    expect(lines.find(({ text }) => text === 'Купить кабель')).toEqual({
+      id: quickLineId('купить кабель'), text: 'Купить кабель', count: 2, touched: 3,
+    });
+    expect(lines.find(({ isHidden }) => isHidden)).toEqual({
+      id: quickLineId('созвон', true), text: 'созвон', count: 0, touched: 3, isHidden: true,
+    });
+    expect(historyFromLines(lines)).toEqual(store);
+    // Повторный проход записи не меняет: движку уходит только изменившееся
+    expect(historyToLines(historyFromLines(lines), lines)).toEqual(lines);
+  });
+
+  it('добавленная строка меняет одну запись, вытесненная сотней новых — уходит', () => {
+    const lines = historyToLines(history('купить кабель', 'вес 72,4'));
+    const next = recordQuickLine(lines, createQuickHistory(), 'купить КАБЕЛЬ', key('купить кабель'));
+    expect(next.filter((line) => !lines.some((before) => JSON.stringify(before) === JSON.stringify(line)))).toEqual([{
+      id: quickLineId('купить кабель'), text: 'купить КАБЕЛЬ', count: 2, touched: 3,
+    }]);
+    expect(next).toHaveLength(2);
+    const full = historyToLines(history(
+      ...Array.from({ length: HISTORY_MAX_LINES }, (_, index) => `дело ${index}`),
+    ));
+    const pushed = recordQuickLine(full, createQuickHistory(), 'новое дело', key('новое дело'));
+    expect(pushed).toHaveLength(HISTORY_MAX_LINES);
+    expect(pushed.some(({ text }) => text === 'дело 0')).toBe(false);
+    expect(pushed.some(({ text }) => text === 'новое дело')).toBe(true);
+  });
+
+  it('«Забыть» убирает строки подсказки и помечает шаблон; добавленная снова строка снимает пометку', () => {
+    const lines = historyToLines(history('летучка завтра 10:00 20 мин', 'купить кабель', 'летучка пт 10:00 20 мин'));
+    const template = key('летучка пт 10:00 20 мин');
+    const forgotten = forgetQuickLine(lines, createQuickHistory(), {
+      key: template, texts: ['летучка пт 10:00 20 мин', 'летучка завтра 10:00 20 мин'],
+    });
+    expect(forgotten.map(({ text, isHidden }) => [text, Boolean(isHidden)]).sort()).toEqual([
+      ['купить кабель', false], [template, true],
+    ]);
+    // Свежесть забытого шаблона при следующих правках не меняется
+    const later = recordQuickLine(forgotten, createQuickHistory(), 'вес 72,4', key('вес 72,4'));
+    const hiddenOf = (list: typeof lines) => list.find(({ isHidden }) => isHidden);
+    expect(hiddenOf(later)).toEqual(hiddenOf(forgotten));
+    const again = recordQuickLine(later, createQuickHistory(), 'летучка 10:00 20 мин', template);
+    expect(hiddenOf(again)).toBeUndefined();
+    expect(again.map(({ text }) => text).sort()).toEqual(['вес 72,4', 'купить кабель', 'летучка 10:00 20 мин']);
+  });
+
+  it('запись устройства вливается: общая строка не складывается, своя становится самой свежей', () => {
+    const synced = historyFromLines([
+      {
+        id: quickLineId('купить кабель'), text: 'купить кабель', count: 5, touched: 40,
+      },
+      {
+        id: quickLineId('вес 72,4'), text: 'вес 72,4', count: 1, touched: 41,
+      },
+      {
+        id: quickLineId('созвон', true), text: 'созвон', count: 0, touched: 12, isHidden: true,
+      },
+    ]);
+    const local = forgetSuggestion(history('Купить кабель', 'зал 19:00', 'пробежка 5 км'), { key: 'обед', texts: [] });
+    const merged = mergeHistories(synced, local);
+    expect(merged).toEqual({
+      tick: 43,
+      lines: [
+        { text: 'пробежка 5 км', count: 1, at: 43 },
+        { text: 'зал 19:00', count: 1, at: 42 },
+        { text: 'вес 72,4', count: 1, at: 41 },
+        { text: 'купить кабель', count: 5, at: 40 },
+      ],
+      hidden: ['созвон', 'обед'],
+    });
+    expect(mergeHistories(synced, createQuickHistory())).toBe(synced);
+    expect(hasHistory(local)).toBe(true);
+    expect(hasHistory(createQuickHistory())).toBe(false);
+  });
+
+  it('негодное движку в записи не попадает, чужие записи читаются терпимо', () => {
+    const store: QuickHistory = {
+      tick: 2,
+      lines: [{ text: 'дело\u0007 со звонком', count: 1, at: 2 }, { text: 'дело', count: 1, at: 1 }],
+      hidden: ['ключ\u0000'],
+    };
+    expect(historyToLines(store).map(({ text }) => text)).toEqual(['дело']);
+    // Две записи одной строки (ключ выбран другим клиентом), пустой текст и нулевой счётчик
+    expect(historyFromLines([
+      {
+        id: 'other', text: ' Дело ', count: 0, touched: 7,
+      },
+      {
+        id: quickLineId('дело'), text: 'дело', count: 3, touched: 5,
+      },
+      {
+        id: 'empty', text: '   ', count: 1, touched: 9,
+      },
+    ])).toEqual({ tick: 9, lines: [{ text: 'Дело', count: 1, at: 7 }], hidden: [] });
   });
 });

@@ -17,6 +17,12 @@
 //! возвращаются, когда место освобождается. Хранится не более `MAX_LEARNED_STORED` слов с надгробиями:
 //! лишнее в снимок не попадает (сначала самые старые надгробия).
 //!
+//! История ввода текстом (`QuickLine`, ключ — id строки): регистр целиком по `stamp` и надгробие, как у
+//! записи здоровья, — строки двух устройств объединяются, у одной строки побеждает позднее использование,
+//! забытая строка возвращается только использованием новее надгробия. Потолок — то же правило показа, что
+//! у словаря: живыми считаются `MAX_QUICK_LIVE` самых свежих строк и столько же забытых шаблонов
+//! (`quick_live`), хранится не более `MAX_QUICK_STORED` записей с надгробиями.
+//!
 //! Инварианты значений проверяются при применении; негодное изменение
 //! пропускается, остальные изменения операции применяются (FR-004). Метки
 //! операции обязаны нести устройство автора (подпись `SignedOp`), иначе отказ
@@ -33,7 +39,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
     change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
-    PlannerOp, PlannerSnapshot, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
+    PlannerOp, PlannerSnapshot, QuickLine, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
 pub const DOMAIN_NAME: &str = "parvane.planner.v1";
@@ -69,6 +75,11 @@ pub const LEARNED_KINDS: [&str; 2] = ["task", "event"];
 pub const MAX_LEARNED_COUNT: u32 = 5;
 pub const MAX_LEARNED_LIVE: usize = 200;
 pub const MAX_LEARNED_STORED: usize = 2000;
+/// История ввода текстом: длина строки в байтах (300 знаков клиента), число живых строк (и столько же
+/// забытых шаблонов) и число хранимых вместе с надгробиями (= `max_items` снимка).
+pub const MAX_QUICK_TEXT: usize = 1200;
+pub const MAX_QUICK_LIVE: usize = 200;
+pub const MAX_QUICK_STORED: usize = 2000;
 
 pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
     decode_checked(bytes, Origin::Client)
@@ -355,6 +366,21 @@ fn check_learned(w: &LearnedWord) -> Result<()> {
     Ok(())
 }
 
+/// Строка истории ввода текстом: текст непустой, одной строкой (без управляющих знаков), не длиннее
+/// потолка; надгробие без метки несёт только id.
+fn check_quick_line(l: &QuickLine) -> Result<()> {
+    if !is_id(&l.id) {
+        return Err(ProtoError::InvalidField("id"));
+    }
+    if l.stamp.is_none() && l.deleted.is_some() {
+        return Ok(());
+    }
+    if l.text.trim().is_empty() || l.text.len() > MAX_QUICK_TEXT || l.text.chars().any(char::is_control) {
+        return Err(ProtoError::InvalidField("quick_text"));
+    }
+    Ok(())
+}
+
 fn check_day(d: &NutritionDay) -> Result<()> {
     if !is_day(&d.day) {
         return Err(ProtoError::InvalidField("day"));
@@ -410,6 +436,8 @@ pub struct PlannerState {
     pub health: BTreeMap<String, HealthRecord>,
     /// Словарь правок ввода текстом (ключ — слово).
     pub learned: BTreeMap<String, LearnedWord>,
+    /// История ввода текстом: строки и забытые шаблоны (ключ — id).
+    pub quick_lines: BTreeMap<String, QuickLine>,
 }
 
 fn learned_stamps(w: &LearnedWord) -> impl Iterator<Item = &LwwStamp> {
@@ -552,6 +580,48 @@ impl PlannerState {
         all.into_iter().cloned().collect()
     }
 
+    pub fn is_quick_line_alive(l: &QuickLine) -> bool {
+        stamp_key(l.stamp.as_ref()) > stamp_key(l.deleted.as_ref())
+    }
+
+    /// Живая история ввода: не удалённые записи, не более `MAX_QUICK_LIVE` самых свежих строк и столько же
+    /// забытых шаблонов (`touched`, при равенстве — по id). Функция сведённого состояния, от порядка
+    /// применения не зависит.
+    pub fn quick_live(&self) -> Vec<&QuickLine> {
+        let mut live: Vec<&QuickLine> = Vec::new();
+        for hidden in [false, true] {
+            let mut part: Vec<&QuickLine> = self.quick_lines.values().filter(|l| l.hidden == hidden && Self::is_quick_line_alive(l)).collect();
+            if part.len() > MAX_QUICK_LIVE {
+                part.sort_by(|a, b| b.touched.cmp(&a.touched).then_with(|| a.id.cmp(&b.id)));
+                part.truncate(MAX_QUICK_LIVE);
+            }
+            live.extend(part);
+        }
+        live.sort_by(|a, b| a.id.cmp(&b.id));
+        live
+    }
+
+    /// История для снимка: всё, пока записей не больше `MAX_QUICK_STORED`; иначе остаются живые (свежие
+    /// первыми), затем надгробия от поздних к ранним.
+    fn quick_stored(&self) -> Vec<QuickLine> {
+        if self.quick_lines.len() <= MAX_QUICK_STORED {
+            return self.quick_lines.values().cloned().collect();
+        }
+        let rank = |l: &QuickLine| {
+            if Self::is_quick_line_alive(l) {
+                (true, u64::from(l.touched), String::new())
+            } else {
+                let d = stamp_key(l.deleted.as_ref());
+                (false, d.0, d.1.to_string())
+            }
+        };
+        let mut all: Vec<&QuickLine> = self.quick_lines.values().collect();
+        all.sort_by(|a, b| rank(b).cmp(&rank(a)).then_with(|| a.id.cmp(&b.id)));
+        all.truncate(MAX_QUICK_STORED);
+        all.sort_by(|a, b| a.id.cmp(&b.id));
+        all.into_iter().cloned().collect()
+    }
+
     pub fn is_list_alive(l: &List) -> bool {
         let mut best = (0u64, String::new());
         for s in l
@@ -661,6 +731,27 @@ impl PlannerState {
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
+    fn merge_quick_line(&mut self, inc: &QuickLine) {
+        match self.quick_lines.get_mut(&inc.id) {
+            Some(c) => {
+                let inc_bytes = inc.encode_to_vec();
+                let cur_bytes = c.encode_to_vec();
+                let deleted = c.deleted.clone();
+                if is_newer(inc.stamp.as_ref(), &inc_bytes, c.stamp.as_ref(), &cur_bytes) {
+                    *c = inc.clone();
+                    c.deleted = deleted;
+                }
+                merge_deleted(&mut c.deleted, inc.deleted.as_ref());
+            }
+            None => {
+                // Надгробие без метки — только id и `deleted`, иначе его
+                // «попутные» поля зависели бы от порядка применения.
+                let fresh = if inc.stamp.is_none() { QuickLine { id: inc.id.clone(), deleted: inc.deleted.clone(), ..Default::default() } } else { inc.clone() };
+                self.quick_lines.insert(inc.id.clone(), fresh);
+            }
+        }
+    }
+
     fn merge_list(&mut self, inc: &List) {
         let cur = self.lists.entry(inc.id.clone()).or_insert_with(|| List { id: inc.id.clone(), ..Default::default() });
         merge_reg!(cur.name, inc.name, Str);
@@ -731,6 +822,10 @@ impl PlannerState {
                 check_learned(w)?;
                 self.merge_learned(w);
             }
+            Some(change::Change::QuickLine(l)) => {
+                check_quick_line(l)?;
+                self.merge_quick_line(l);
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
         Ok(())
@@ -791,6 +886,10 @@ impl PlannerState {
             check_learned(w)?;
             self.merge_learned(w);
         }
+        for l in &s.quick_lines {
+            check_quick_line(l)?;
+            self.merge_quick_line(l);
+        }
         Ok(())
     }
 
@@ -806,6 +905,7 @@ impl PlannerState {
             goal_periods: self.goal_periods.values().cloned().collect(),
             health: self.health.values().cloned().collect(),
             learned: self.learned_stored(),
+            quick_lines: self.quick_stored(),
         }
     }
 
@@ -892,6 +992,10 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                     push(Some(s))?;
                 }
                 push(w.deleted.as_ref())?;
+            }
+            Some(change::Change::QuickLine(l)) => {
+                push(l.stamp.as_ref())?;
+                push(l.deleted.as_ref())?;
             }
             Some(change::Change::Migration(_)) | None => {}
         }
@@ -1032,6 +1136,13 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 }
                 if w.deleted.is_some() {
                     w.deleted = Some(pb.clone());
+                }
+            }
+            Some(change::Change::QuickLine(l)) => {
+                if l.deleted.is_some() {
+                    l.deleted = Some(pb.clone());
+                } else {
+                    l.stamp = Some(pb.clone());
                 }
             }
             Some(change::Change::Migration(_)) | None => {}

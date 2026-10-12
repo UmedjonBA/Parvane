@@ -5,7 +5,11 @@ import {
   hasLearned, learnStoreFromWords, learnStoreToWords, mergeLearnStores, readLearned, resetLearned,
 } from './plannerQuickLearn';
 import {
-  diffChanges, type EngineState, fromEngineState, isLegacyPlannerRecord, legacyToChanges, type PlannerChange,
+  hasHistory, historyFromLines, historyToLines, mergeHistories, readHistory, resetHistory,
+} from './plannerQuickSuggest';
+import {
+  diffChanges, type EngineState, fromEngineState, hasEngineQuickLines, isLegacyPlannerRecord, legacyToChanges,
+  type PlannerChange,
 } from './plannerSync';
 
 // Parvane (spec 010): состояние планировщика — сигнал поверх контейнера домена
@@ -37,6 +41,9 @@ const [getIsPlannerLoaded, setIsPlannerLoaded] = createSignal(false);
 const [getPlannerStatus, setPlannerStatus] = createSignal<PlannerStatus>('loading');
 const [getPlannerNotice, setPlannerNotice] = createSignal<PlannerNotice | undefined>(undefined);
 const [getPlannerSizeBytes, setPlannerSizeBytes] = createSignal(0);
+// Движок отдаёт историю ввода текстом (`quickLines`): значит, примет и её правку. У движка прежней сборки
+// (вкладка со старым WASM) признака нет — история остаётся на устройстве
+const [getHasQuickLines, setHasQuickLines] = createSignal(false);
 
 let loadPromise: Promise<void> | undefined;
 let loadedUserId: string | undefined;
@@ -52,7 +59,7 @@ const NOTICE_HIDE_MS = 3000;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 export {
-  getPlannerState, getIsPlannerLoaded, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes,
+  getPlannerState, getIsPlannerLoaded, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes, getHasQuickLines,
 };
 
 function listen() {
@@ -69,6 +76,7 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
   if (!result) return undefined;
   setPlannerStatus(result.status);
   setPlannerSizeBytes(result.sizeBytes || 0);
+  if (result.state) setHasQuickLines(hasEngineQuickLines(result.state));
   if (result.state && result.status !== 'needs-linking' && !result.hasPending) {
     // Пока у провайдера есть непревращённые в операцию правки, состояние движка
     // отстаёт от черновика экрана — не затираем его
@@ -84,7 +92,10 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
     setIsPlannerLoaded(true);
   }
   // Словарь на экране — весь словарь из «Плана» (нет непревращённых правок): можно вливать запись устройства
-  if (result.status === 'ready' && !result.hasPending) migrateLearned();
+  if (result.status === 'ready' && !result.hasPending) {
+    migrateLearned();
+    migrateQuickHistory();
+  }
   if (result.status === 'needs-linking' && linkingTimer === undefined && typeof window !== 'undefined') {
     linkingTimer = window.setInterval(() => {
       void refreshFromEngine().then((next) => {
@@ -140,6 +151,32 @@ function migrateLearned() {
   setPlannerState(draft);
   sendChanges(diffChanges(previous, draft));
   resetLearned(loadedUserId);
+}
+
+/**
+ * История ввода текстом пишется в данные «Плана»: «План» принимает правки, и движок историю понимает. У
+ * нового аккаунта контейнера ещё нет (состояния движок не отдал) — до первой записи история ведётся на
+ * устройстве и переносится, как только состояние появится.
+ */
+export function canSyncQuickHistory() {
+  return canSyncLearned() && getHasQuickLines();
+}
+
+// История, накопленная на устройстве (до синхронизации либо пока «План» был недоступен), вливается в
+// данные «Плана» и стирается с устройства. Отметки о переносе нет: перенесённое — это стёртая запись.
+// Без уведомления и без «Отменить»
+function migrateQuickHistory() {
+  if (!canSyncQuickHistory()) return;
+  const local = readHistory(loadedUserId);
+  if (!hasHistory(local)) return;
+  const previous = getPlannerState();
+  const draft = structuredClone(previous);
+  draft.quickLines = historyToLines(mergeHistories(historyFromLines(previous.quickLines), local), previous.quickLines);
+  // «Отменить» прежней правки вернуло бы и состояние без истории
+  stateBeforeLastChange = undefined;
+  setPlannerState(draft);
+  sendChanges(diffChanges(previous, draft));
+  resetHistory(loadedUserId);
 }
 
 function hashCode(text: string) {
@@ -226,6 +263,7 @@ function resetPlanner() {
   loadPromise = undefined;
   stateBeforeLastChange = undefined;
   isLearnedMigrated = false;
+  setHasQuickLines(false);
   setIsPlannerLoaded(false);
   setPlannerStatus('loading');
   publishNotice(undefined);

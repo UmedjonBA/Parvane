@@ -14,12 +14,15 @@
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
 //!   goalPeriods:[{id,startDay,endDay,kcal|null,protein|null,fat|null,carbs|null,fiber|null,water|null}],
 //!   health:[{id,day,kind,time,endTime,value,value2,name,details}],
-//!   learned:[{id,kind,kindCount,minutes|null,minutesCount,touched}]}` (spec 020; у записи питания ещё
-//! `sugar|null,salt|null,time`; `learned` — словарь правок ввода текстом, не более 200 самых свежих слов),
+//!   learned:[{id,kind,kindCount,minutes|null,minutesCount,touched}],
+//!   quickLines:[{id,text,count,touched,hidden}]}` (spec 020; у записи питания ещё
+//! `sugar|null,salt|null,time`; `learned` — словарь правок ввода текстом, не более 200 самых свежих слов;
+//! `quickLines` — история ввода текстом: не более 200 самых свежих строк и 200 забытых шаблонов (`hidden`)),
 //! где `repeat = {kind:"daily|weekly|monthly|yearly",interval,weekdays,monthDay,startDay,endDay,count}`,
 //! `origin = {seriesId,day}`, `source = {chat,opId}` (spec 011).
 //! Изменения: `{changes:[{task:{…}}|{event:{…}}|{list:{…}}|{nutritionDay:{…}}|{settings:{…}}|{goals:{…}}|
-//! {goalPeriod:{…}}|{health:{…}}|{learned:{…}}|{migration:{…}}]}`; `occurrences` в правке — только изменённые дни.
+//! {goalPeriod:{…}}|{health:{…}}|{learned:{…}}|{quickLine:{…}}|{migration:{…}}]}`; `occurrences` в правке — только
+//! изменённые дни; `quickLine` — запись целиком.
 
 use serde_json::{json, Map, Value};
 
@@ -27,7 +30,7 @@ use super::planner::PlannerState;
 use crate::error::{ProtoError, Result};
 use crate::pb::parvane::planner::v1::{
     change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, Migration, NutritionDay, Occurrence, Origin,
-    PlannerOp, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
+    PlannerOp, QuickLine, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
 };
 
 const KNOWN_KCAL: u32 = 1;
@@ -203,10 +206,15 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
             })
         })
         .collect();
+    let quick_lines: Vec<Value> = state
+        .quick_live()
+        .into_iter()
+        .map(|l| json!({"id": l.id, "text": l.text, "count": l.count, "touched": l.touched, "hidden": l.hidden}))
+        .collect();
     json!({
         "tasks": tasks, "events": events, "lists": lists, "nutrition": nutrition,
         "settings": settings.unwrap_or(Value::Null), "goals": state.goals.as_ref().map(goals_json).unwrap_or(Value::Null),
-        "goalPeriods": goal_periods, "health": health, "learned": learned,
+        "goalPeriods": goal_periods, "health": health, "learned": learned, "quickLines": quick_lines,
         "headSeq": head_seq, "sizeBytes": state.size_estimate(),
     })
     .to_string()
@@ -546,6 +554,29 @@ fn learned_of(o: &Map<String, Value>) -> Result<LearnedWord> {
     })
 }
 
+/// Строка истории ввода текстом — регистр целиком: отсутствующее число — ноль, `hidden` — ложь.
+fn quick_line_of(o: &Map<String, Value>) -> Result<QuickLine> {
+    let id = id_of(o)?;
+    if let Some(d) = deleted_of(o) {
+        return Ok(QuickLine { id, deleted: Some(d), ..Default::default() });
+    }
+    let num = |key: &str| -> Result<u32> {
+        match o.get(key) {
+            None | Some(Value::Null) => Ok(0),
+            Some(v) => v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or(ProtoError::Malformed),
+        }
+    };
+    Ok(QuickLine {
+        id,
+        stamp: Some(Default::default()),
+        text: o.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+        count: num("count")?,
+        touched: num("touched")?,
+        hidden: o.get("hidden").and_then(Value::as_bool).unwrap_or(false),
+        deleted: None,
+    })
+}
+
 fn day_of(o: &Map<String, Value>) -> Result<NutritionDay> {
     let day = o.get("day").and_then(Value::as_str).ok_or(ProtoError::InvalidField("day"))?.to_string();
     let entries = match o.get("entries") {
@@ -596,6 +627,7 @@ pub fn op_from_json(text: &str) -> Result<PlannerOp> {
             "goalPeriod" => change::Change::GoalPeriod(goal_period_of(obj()?)?),
             "health" => change::Change::Health(health_of(obj()?)?),
             "learned" => change::Change::Learned(learned_of(obj()?)?),
+            "quickLine" => change::Change::QuickLine(quick_line_of(obj()?)?),
             "migration" => change::Change::Migration(Migration {
                 source_device: body.get("sourceDevice").and_then(Value::as_str).unwrap_or_default().to_string(),
                 count: body.get("count").and_then(Value::as_u64).unwrap_or(0) as u32,
@@ -791,6 +823,68 @@ mod tests {
         let empty: Value = serde_json::from_str(&state_json(&PlannerState::default(), 0)).unwrap();
         assert_eq!(empty["learned"], json!([]));
         assert!(op_from_json(r#"{"changes":[{"learned":{"kind":"task"}}]}"#).is_err());
+    }
+
+    /// История ввода текстом: строки и забытые шаблоны проходят через состояние; правка — запись
+    /// целиком; надгробие убирает строку из вывода и переживает снимок; новое использование её возвращает.
+    #[test]
+    fn quick_lines_roundtrip() {
+        let text = r#"{"changes":[
+          {"quickLine":{"id":"qa1","text":"Созвон завтра 16:00","count":2,"touched":1}},
+          {"quickLine":{"id":"hb2","text":"созвон 16:00","touched":2,"hidden":true}},
+          {"task":{"id":"t1","name":"Задача"}}
+        ]}"#;
+        let mut op = op_from_json(text).unwrap();
+        planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
+        let mut st = PlannerState::default();
+        assert_eq!(st.apply_op(&op, "d1").unwrap(), 3);
+        let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
+        assert_eq!(
+            out["quickLines"],
+            json!([
+                {"id": "hb2", "text": "созвон 16:00", "count": 0, "touched": 2, "hidden": true},
+                {"id": "qa1", "text": "Созвон завтра 16:00", "count": 2, "touched": 1, "hidden": false},
+            ])
+        );
+
+        // Та же строка с другого устройства позже: запись заменяется целиком.
+        let mut edit = op_from_json(r#"{"changes":[{"quickLine":{"id":"qa1","text":"созвон завтра 16:00","count":3,"touched":5}}]}"#).unwrap();
+        planner::stamp_op(&mut edit, &Stamp::new(2, "d2"));
+        st.apply_op(&edit, "d2").unwrap();
+        let out: Value = serde_json::from_str(&state_json(&st, 2)).unwrap();
+        assert_eq!(out["quickLines"][1], json!({"id": "qa1", "text": "созвон завтра 16:00", "count": 3, "touched": 5, "hidden": false}));
+
+        // Надгробие и снимок; использование новее надгробия возвращает строку.
+        let mut del = op_from_json(r#"{"changes":[{"quickLine":{"id":"qa1","deleted":true}}]}"#).unwrap();
+        planner::stamp_op(&mut del, &Stamp::new(3, "d1"));
+        st.apply_op(&del, "d1").unwrap();
+        let mut restored = PlannerState::from_snapshot(&st.to_snapshot()).unwrap();
+        let out: Value = serde_json::from_str(&state_json(&restored, 3)).unwrap();
+        assert_eq!(out["quickLines"].as_array().unwrap().len(), 1);
+        assert_eq!(out["quickLines"][0]["id"], json!("hb2"));
+        let mut again = op_from_json(r#"{"changes":[{"quickLine":{"id":"qa1","text":"созвон завтра 16:00","count":1,"touched":6}}]}"#).unwrap();
+        planner::stamp_op(&mut again, &Stamp::new(4, "d2"));
+        restored.apply_op(&again, "d2").unwrap();
+        let out: Value = serde_json::from_str(&state_json(&restored, 4)).unwrap();
+        assert_eq!(out["quickLines"].as_array().unwrap().len(), 2);
+
+        // Негодные строки пропускаются; пустое состояние отдаёт пустую историю.
+        let long = format!(r#"{{"changes":[{{"quickLine":{{"id":"q1","text":"{}"}}}}]}}"#, "я".repeat(601));
+        for bad in [
+            r#"{"changes":[{"quickLine":{"id":"q1","text":""}}]}"#,
+            r#"{"changes":[{"quickLine":{"id":"q1","text":"   "}}]}"#,
+            r#"{"changes":[{"quickLine":{"id":"q1","text":"две\nстроки"}}]}"#,
+            r#"{"changes":[{"quickLine":{"id":"с пробелом","text":"строка"}}]}"#,
+            long.as_str(),
+        ] {
+            let mut op = op_from_json(bad).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(9, "d1"));
+            assert_eq!(PlannerState::default().apply_op(&op, "d1").unwrap(), 0, "{bad}");
+        }
+        let empty: Value = serde_json::from_str(&state_json(&PlannerState::default(), 0)).unwrap();
+        assert_eq!(empty["quickLines"], json!([]));
+        assert!(op_from_json(r#"{"changes":[{"quickLine":{"text":"без id"}}]}"#).is_err());
+        assert!(op_from_json(r#"{"changes":[{"quickLine":{"id":"q1","text":"x","count":-1}}]}"#).is_err());
     }
 
     #[test]

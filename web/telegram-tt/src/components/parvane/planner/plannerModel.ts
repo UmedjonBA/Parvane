@@ -211,6 +211,17 @@ export type PlannerLearnedWord = {
   touched: number;
 };
 
+// Запись истории ввода текстом (`plannerQuickSuggest.ts`): строка, которой добавлена запись (`count` —
+// сколько раз), либо забытый шаблон (`isHidden`, `text` — ключ шаблона). `id` — ключ записи (хэш строки),
+// `touched` — свежесть (вытесняются дольше всех не тронутые)
+export type PlannerQuickLine = {
+  id: string;
+  text: string;
+  count: number;
+  touched: number;
+  isHidden?: boolean;
+};
+
 export type PlannerState = {
   version: 1;
   tasks: PlannerTask[];
@@ -230,6 +241,8 @@ export type PlannerState = {
   healthGoals: PlannerHealthGoals;
   // Словарь правок ввода текстом: едет с данными «Плана» на все устройства
   learned: PlannerLearnedWord[];
+  // История ввода текстом (строки-подсказки и забытые шаблоны): тоже в данных «Плана»
+  quickLines: PlannerQuickLine[];
 };
 
 export type PlannerTimed = {
@@ -279,6 +292,7 @@ export function createEmptyPlannerState(): PlannerState {
     health: [],
     healthGoals: { ...DEFAULT_HEALTH_GOALS },
     learned: [],
+    quickLines: [],
   };
 }
 
@@ -1436,7 +1450,29 @@ export function normalizePlannerState(raw: unknown): PlannerState {
     healthGoals: saved.healthGoals && typeof saved.healthGoals === 'object'
       ? { ...saved.healthGoals } : empty.healthGoals,
     learned: normalizeLearned(saved.learned),
+    quickLines: normalizeQuickLines(saved.quickLines),
   };
+}
+
+// История ввода текстом: запись без ключа либо без текста отбрасывается, повтор ключа — тоже
+export function normalizeQuickLines(raw: unknown): PlannerQuickLine[] {
+  if (!Array.isArray(raw)) return [];
+  const count = (value: unknown) => (Number.isInteger(value) && (value as number) > 0 ? value as number : 0);
+  const seen = new Set<string>();
+  const lines: PlannerQuickLine[] = [];
+  (raw as Partial<PlannerQuickLine>[]).forEach((line) => {
+    if (!line || typeof line.id !== 'string' || !line.id || seen.has(line.id)) return;
+    if (typeof line.text !== 'string' || !line.text.trim()) return;
+    seen.add(line.id);
+    lines.push({
+      id: line.id,
+      text: line.text,
+      count: count(line.count),
+      touched: count(line.touched),
+      ...(line.isHidden && { isHidden: true }),
+    });
+  });
+  return lines;
 }
 
 // Словарь правок: негодное слово отбрасывается, негодная половина (тип либо длительность) — тоже

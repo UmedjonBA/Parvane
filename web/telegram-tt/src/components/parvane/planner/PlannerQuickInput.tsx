@@ -4,7 +4,7 @@ import {
 
 import type { IconName } from '../../../types/icons';
 import type {
-  PlannerEvent, PlannerLearnedWord, PlannerSettings, PlannerTask,
+  PlannerEvent, PlannerLearnedWord, PlannerQuickLine, PlannerSettings, PlannerTask,
 } from './plannerModel';
 import type {
   QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
@@ -25,10 +25,11 @@ import {
   resetLearned, saveLearned,
 } from './plannerQuickLearn';
 import {
-  buildCandidates, filterSuggestions, forgetSuggestion, isSuggestionPrefix, lineKey, readHistory, recordHistoryLine,
+  buildCandidates, filterSuggestions, forgetQuickLine, forgetSuggestion, hasHistory, historyFromLines,
+  isSuggestionPrefix, lineKey, mergeHistories, readHistory, recordHistoryLine, recordQuickLine, resetHistory,
   saveHistory,
 } from './plannerQuickSuggest';
-import { canSyncLearned, updatePlanner } from './plannerStore';
+import { canSyncLearned, canSyncQuickHistory, updatePlanner } from './plannerStore';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -52,11 +53,15 @@ type OwnProps = {
   learnedWords: PlannerLearnedWord[];
   // «План» загружен и принимает правки: словарь читается из него и пишется в него
   isLearnedSynced: boolean;
+  // История ввода текстом из данных «Плана»; нет — «План» её не ведёт (недоступен либо движок прежней
+  // сборки), история читается из записи устройства
+  quickLines?: PlannerQuickLine[];
   // Задачи и события «Плана»: из них собираются подсказки для записей, созданных не этим окном
   tasks: PlannerTask[];
   events: PlannerEvent[];
   onCreated: (day?: string) => void;
-  onMore: NoneToVoidFunction;
+  // Полная форма записи; без неё (окно открыто вне «Плана») кнопки «Подробнее» нет
+  onMore?: NoneToVoidFunction;
   onClose: NoneToVoidFunction;
 };
 
@@ -132,8 +137,8 @@ const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
-  isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, tasks, events, onCreated, onMore,
-  onClose,
+  isOpen, initialText, today, settings, userId, learnedWords, isLearnedSynced, quickLines, tasks, events, onCreated,
+  onMore, onClose,
 }: OwnProps) => {
   const inputRef = useRef<HTMLInputElement>();
   const suggestionsRef = useRef<HTMLDivElement>();
@@ -143,7 +148,8 @@ const PlannerQuickInput = ({
   // Чтения, выбранные из вариантов чипа, и чип, у которого варианты сейчас показаны
   const [pick, setPick] = useState<QuickPick>({});
   const [altField, setAltField] = useState<QuickAltField | undefined>();
-  // История набранных строк читается из хранилища устройства; «Забыть» правит её и просит перечитать
+  // История набранных строк — в данных «Плана»; запасная запись устройства лежит в его хранилище, а не в
+  // состоянии: «Забыть» правит её и просит перечитать
   const [historyVersion, setHistoryVersion] = useState(0);
   const [isSuggestionFocused, markSuggestionFocused, unmarkSuggestionFocused] = useFlag();
   // Словарь правок читается в момент открытия окна, а не кадром позже: иначе первый разбор шёл бы по
@@ -248,17 +254,24 @@ const PlannerQuickInput = ({
       const corrected = recordCorrection(local, auto, entry);
       if (corrected !== local) saveLearned(userId, corrected);
     }
+    // Строка запоминается: она станет подсказкой в этом окне — на всех устройствах, если «План» ведёт
+    // историю, иначе на этом
+    const localHistory = readHistory(userId);
+    const isHistorySynced = canSyncQuickHistory();
+    const historyKey = lineKey(value, entry, baseContext().lang!);
+    if (!isHistorySynced) saveHistory(userId, recordHistoryLine(localHistory, value, historyKey));
     updatePlanner((state) => {
       applyQuickDraft(state, entry, today);
       // Правка словаря — в той же правке «Плана», что и запись: одна операция, одна отмена
       const words = isSynced ? correctWords(state.learned, local, auto, entry) : undefined;
       if (words) state.learned = words;
+      // Строка истории — тоже: «Отменить» убирает запись вместе с её подсказкой
+      if (isHistorySynced) state.quickLines = recordQuickLine(state.quickLines, localHistory, value, historyKey);
     }, entry.kind === 'goal' ? lang('PlannerNoticeGoalsSaved')
       : lang('PlannerNoticeAdded', { name: entry.name || value.trim() }));
     // Запись устройства влита в «План» той же правкой
     if (isSynced && hasLearned(local)) resetLearned(userId);
-    // Строка запоминается на устройстве: она станет подсказкой в этом окне
-    saveHistory(userId, recordHistoryLine(readHistory(userId), value, lineKey(value, entry, baseContext().lang!)));
+    if (isHistorySynced && hasHistory(localHistory)) resetHistory(userId);
     onCreated(entry.day);
   });
 
@@ -302,12 +315,16 @@ const PlannerQuickInput = ({
   // Кандидаты собираются при открытии окна (каждая строка проходит разбор), набор текста их только фильтрует
   const candidates = useMemo(() => {
     if (!isOpen) return undefined;
+    // История из данных «Плана» вместе с ещё не перенесённой записью устройства; «План» её не ведёт —
+    // только запись устройства
+    const local = readHistory(userId);
+    const history = quickLines ? mergeHistories(historyFromLines(quickLines), local) : local;
     return buildCandidates({
-      history: readHistory(userId), tasks, events, examples,
+      history, tasks, events, examples,
     }, { ...baseContext(), learned });
-    // Номер правки истории — зависимость: история лежит в хранилище устройства, а не в состоянии
+    // Номер правки истории — зависимость: запись устройства лежит в его хранилище, а не в состоянии
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  }, [isOpen, userId, tasks, events, examples, learned, historyVersion]);
+  }, [isOpen, userId, quickLines, tasks, events, examples, learned, historyVersion]);
   const suggestions = useMemo(() => (candidates ? filterSuggestions(text, candidates) : []), [candidates, text]);
   const hasExamples = suggestions.some(({ source }) => source === 'example');
   const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');
@@ -333,7 +350,16 @@ const PlannerQuickInput = ({
   const handleForget = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const line = e.currentTarget.dataset.text!;
     const candidate = candidates!.find((item) => item.text === line)!;
-    saveHistory(userId, forgetSuggestion(readHistory(userId), candidate));
+    const local = readHistory(userId);
+    if (canSyncQuickHistory()) {
+      // Забытое уходит со всех устройств; запись устройства влита той же правкой
+      updatePlanner((state) => {
+        state.quickLines = forgetQuickLine(state.quickLines, local, candidate);
+      });
+      if (hasHistory(local)) resetHistory(userId);
+    } else {
+      saveHistory(userId, forgetSuggestion(local, candidate));
+    }
     setHistoryVersion(historyVersion + 1);
     inputRef.current?.focus();
   });
@@ -570,9 +596,11 @@ const PlannerQuickInput = ({
           <span className={buildClassName(styles.muted, styles.grow)}>
             {lang('PlannerQuickDefault', { date: formatDayLabel(lang, today) })}
           </span>
-          <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
-            {lang('PlannerQuickMore')}
-          </button>
+          {onMore && (
+            <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onMore}>
+              {lang('PlannerQuickMore')}
+            </button>
+          )}
           <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={onClose}>
             {lang('Cancel')}
           </button>

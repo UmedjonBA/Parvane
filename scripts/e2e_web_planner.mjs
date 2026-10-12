@@ -289,6 +289,9 @@ try {
   assert.match(await todayView.locator('[data-today-card="load"]').innerText(), /\/ 10 h/, 'карточка загрузки — «занято / бюджет»');
   // Расписание дня — карточка-список рядом с задачами
   await todayView.locator('[data-today-schedule]').getByText('14:00–15:30').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Заметки дня у нового аккаунта нет: карточка приглашает её написать (текст заметки — сценарий notes)
+  await todayView.locator('[data-today-note="empty"]').getByText('Write the daily note')
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Задача без даты: строка «Без даты» с числом, в шторке — по спискам, кнопка назначает день
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
   await page.locator('#planner-quick-input').fill('Вторая задача');

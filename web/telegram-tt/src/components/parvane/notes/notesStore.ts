@@ -418,6 +418,28 @@ export async function openDailyNote(day: string, vaultName: string, dailyFolderN
   return createNote(title, vaultName, { text: dailyNoteTemplate(day), folderName });
 }
 
+/**
+ * Текст заметки дня без чтения всего хранилища (карточка на «Сегодня»): по дереву облака находится один
+ * файл и читается только он. `data` — дерево облака (`loadCloud` его уже прочитал); пока дерева нет —
+ * `undefined`, заметки дня нет — `{}`. Текст берётся из той же памяти, что у раздела «Знания»: после
+ * правки заметки (версия файла сменилась) читается заново.
+ */
+export async function readDailyNote(
+  day: string, data = getCloudData(),
+): Promise<{ text?: string } | undefined> {
+  if (!data) return undefined;
+  const nodes = getNodes(rootIdOf(data), data);
+  const vault = findVault(nodes);
+  const name = `${dailyNoteTitle(day)}${NOTE_EXTENSION}`;
+  const node = vault && nodes.find((item) => (
+    item.kind === 'file' && !item.trashed && item.name === name && pathOf(nodes, item, vault.id) !== undefined
+  ));
+  if (!node) return {};
+  const content = await readText(node);
+  // Файл есть, а прочитать не вышло (нет связи): не «заметки нет»
+  return content ? { text: content.text } : undefined;
+}
+
 function quickContext() {
   const { settings } = getPlannerState();
   const now = new Date();

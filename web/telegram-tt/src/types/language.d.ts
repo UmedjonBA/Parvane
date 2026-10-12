@@ -2711,6 +2711,7 @@ export interface LangPair {
   'PlannerUndatedHint': undefined;
   'PlannerDailyNote': undefined;
   'PlannerDailyNoteHint': undefined;
+  'PlannerDailyNoteWrite': undefined;
   'PlannerLayers': undefined;
   'PlannerLayerWork': undefined;
   'PlannerCalMonthShort': undefined;
@@ -2789,6 +2790,7 @@ export interface LangPair {
   'KnowledgeDelete': undefined;
   'KnowledgeBack': undefined;
   'KnowledgeEditorPlaceholder': undefined;
+  'KnowledgePlan': undefined;
   'KnowledgePlanned': undefined;
   'KnowledgeNoDate': undefined;
   'KnowledgeBacklinksEmpty': undefined;
