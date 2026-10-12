@@ -109,6 +109,12 @@ const SearchInput: FC<OwnProps> = ({
 
   function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
     const { currentTarget } = event;
+    // Parvane: менеджер паролей браузера подставляет логин в поле поиска, когда рядом появляется поле
+    // пароля (экран «Конфиденциальность»), — поле без фокуса текст не принимает, иначе открывался поиск
+    if (document.activeElement !== currentTarget) {
+      currentTarget.value = value || '';
+      return;
+    }
     onChange(currentTarget.value);
 
     if (!isInputFocused) {
@@ -185,7 +191,7 @@ const SearchInput: FC<OwnProps> = ({
         className="form-control"
         value={value}
         disabled={disabled}
-        autoComplete={autoComplete}
+        autoComplete={autoComplete || 'off'}
         spellCheck={IS_TAURI ? false : undefined}
         onChange={handleChange}
         onFocus={handleFocus}
