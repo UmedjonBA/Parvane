@@ -9,6 +9,7 @@ import type {
 import type { CanvasEntry, NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
+import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import {
   BOARD_FAR_SCALE, BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
@@ -242,6 +243,9 @@ const NotesCanvas = ({
     if (field instanceof HTMLInputElement) field.select();
     else field.setSelectionRange(field.value.length, field.value.length);
   }, [inline]);
+
+  // Escape перехватывают общие слушатели приложения раньше поля — отмена правки встаёт в их очередь
+  useEffect(() => (inline ? captureEscKeyListener(() => finishInline(true)) : undefined), [inline]);
 
   const handleInlineChange = useLastCallback((e: React.ChangeEvent<InlineField>) => {
     setInlineText(e.currentTarget.value);
@@ -598,7 +602,10 @@ const NotesCanvas = ({
     const target = e.target as Element;
     if (target.closest(`[data-board-tools], ${INLINE_SELECTOR}`)) return;
     if (Date.now() - tapActivatedAtRef.current < TAP_ECHO_MS) return;
-    const nodeId = target.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    // Указатель захвачен полем холста: целью события бывает само поле, а не карточка под курсором
+    const hit = target.closest<HTMLElement>('[data-canvas-node]')
+      || document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-canvas-node]');
+    const nodeId = hit?.dataset.canvasNode;
     if (nodeId) activate(nodeId);
   });
 

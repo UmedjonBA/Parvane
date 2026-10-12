@@ -96,6 +96,7 @@ type StateProps = {
   isOwnProfile?: boolean;
 };
 
+const HISTORY_SETTLE_MS = 350;
 const COLUMN_ANIMATION_DURATION = 450 + ANIMATION_END_DELAY;
 
 enum HeaderContent {
@@ -256,6 +257,10 @@ const RightHeader: FC<OwnProps & StateProps> = ({
     if (isMobile) {
       toggleChatInfo({ force: false });
       openChat({ id: undefined });
+      // Экран открывается после того, как закрытие чата ушло из истории браузера: иначе запись экрана
+      // правки наследует адрес чата, и перезагрузка снова открывает «Избранное»
+      window.setTimeout(() => openSettingsScreen({ screen: SettingsScreens.EditProfile }), HISTORY_SETTLE_MS);
+      return;
     }
     openSettingsScreen({ screen: SettingsScreens.EditProfile });
   });

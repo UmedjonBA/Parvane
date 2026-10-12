@@ -147,7 +147,12 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
     });
   }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded]);
 
+  // Parvane: сброс — один раз на завершение. `onReset` меняется с каждой сменой экрана колонки, и пока
+  // шаг мастера ещё смонтирован, повторный сброс закрывал только что открытый «Профиль»
+  const handledProgressRef = useRef<ChatCreationProgress>();
   useEffect(() => {
+    if (handledProgressRef.current === creationProgress) return;
+    handledProgressRef.current = creationProgress;
     if (creationProgress === ChatCreationProgress.Complete) {
       isTitleTouchedRef.current = false;
       onReset(true);
