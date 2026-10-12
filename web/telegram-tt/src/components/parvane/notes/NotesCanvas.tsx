@@ -71,8 +71,8 @@ const EDGE_LABEL_SHIFT = 4;
 const NODE_NAME_MAX = 24;
 const CANVAS_TITLE_MAX = 80;
 const DOUBLE_TAP_MS = 350;
-// Двойной тап и `dblclick` за ним — одно действие
-const ACTIVATE_GAP_MS = 500;
+// `dblclick`, который браузер присылает следом за уже обработанным двойным тапом, — то же действие
+const TAP_ECHO_MS = 500;
 const INLINE_SELECTOR = '[data-canvas-inline]';
 const CARD_INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
 // Цвета JSON Canvas 1…6: красный, оранжевый, жёлтый, зелёный, синий, фиолетовый
@@ -141,7 +141,7 @@ const NotesCanvas = ({
   const pendingRef = useRef<Pending>();
   const inlineRef = useRef<Inline>();
   const tapRef = useRef<{ id: string; at: number }>();
-  const activatedAtRef = useRef(0);
+  const tapActivatedAtRef = useRef(0);
 
   const lang = useLang();
   const vaultName = lang('KnowledgeVaultName');
@@ -562,10 +562,8 @@ const NotesCanvas = ({
   // Двойной клик (двойной тап): карточка заметки открывает заметку, текстовая — правку текста на месте,
   // группа — правку названия на месте; у прочих узлов (ссылка) — шторка правки
   const activate = (nodeId: string) => {
-    const now = Date.now();
     const node = findNode(docRef.current, nodeId);
-    if (!node || now - activatedAtRef.current < ACTIVATE_GAP_MS) return;
-    activatedAtRef.current = now;
+    if (!node) return;
     if (node.type === 'file') {
       onOpenTitle(titleOfFile(node.file));
     } else if (node.type === 'text' || node.type === 'group') {
@@ -589,6 +587,7 @@ const NotesCanvas = ({
     const now = Date.now();
     if (last && last.id === drag.id && now - last.at < DOUBLE_TAP_MS) {
       tapRef.current = undefined;
+      tapActivatedAtRef.current = now;
       activate(drag.id);
     } else {
       tapRef.current = { id: drag.id, at: now };
@@ -598,6 +597,7 @@ const NotesCanvas = ({
   const handleDoubleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as Element;
     if (target.closest(`[data-board-tools], ${INLINE_SELECTOR}`)) return;
+    if (Date.now() - tapActivatedAtRef.current < TAP_ECHO_MS) return;
     const nodeId = target.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
     if (nodeId) activate(nodeId);
   });
