@@ -4,7 +4,10 @@ import {
 
 import type { GlobalState } from '../../../global/types';
 import type { FolderSubmitError, NoteGroup } from './notesFolders';
+import type { GraphLinkOutcome, GraphPick } from './NotesGraph';
+import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
+import type { NoteEditRequest } from './NoteView';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -12,10 +15,12 @@ import {
 } from '../../../util/parvaneSection';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
+import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
 import {
   buildNoteGroups, folderCaption, isInFolder, ROOT_FOLDER,
 } from './notesFolders';
 import { buildGuide, findGuideOverview, getGuideLang } from './notesGuide';
+import { addLinkToText, canLinkTitle, removeLinkFromText } from './notesLinkEdit';
 import {
   avatarText, displayTitle, folderColor, formatDayShort, isDayTitle, previewOf,
 } from './notesLook';
@@ -38,6 +43,7 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
+import GraphPanel from './GraphPanel';
 import KnowledgeTabs from './KnowledgeTabs';
 import NoteFolderPicker from './NoteFolderPicker';
 import NoteFolderSheet from './NoteFolderSheet';
@@ -70,6 +76,8 @@ const NOTICE_KEYS = {
 
 type Group = NoteGroup<NoteEntry>;
 type FolderRemoval = { id: string; name: string; count: number };
+// Сообщение о правке связи на графе; `undo` возвращает текст заметки
+type GraphNotice = { text: string; at: number; undo?: NoneToVoidFunction };
 
 function selectCurrentUserId(global: GlobalState) {
   return global.currentUserId;
@@ -105,6 +113,11 @@ const Knowledge = () => {
   const [movedNoteId, setMovedNoteId] = useState<string>();
   const [isPickerOpen, openPicker, closePicker] = useFlag();
   const [isRestoreOpen, openRestore, closeRestore] = useFlag();
+  // Граф: точка, открытая в панели справа, заметка-источник режима «Связать», просьба о правке, сообщение
+  const [graphPick, setGraphPick] = useState<GraphPick>();
+  const [linkFromId, setLinkFromId] = useState<string>();
+  const [editRequest, setEditRequest] = useState<NoteEditRequest>();
+  const [graphNotice, setGraphNotice] = useState<GraphNotice>();
 
   const lang = useLang();
   const { width: windowWidth } = useWindowSize();
@@ -147,6 +160,19 @@ const Knowledge = () => {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (!graphNotice) return undefined;
+    const timer = window.setTimeout(() => setGraphNotice(undefined), NOTICE_HIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [graphNotice]);
+
+  // Режим «Связать» и просьба о правке живут только на графе
+  useEffect(() => {
+    if (view === 'graph') return;
+    setLinkFromId(undefined);
+    setEditRequest(undefined);
+  }, [view]);
+
   const index = useMemo(() => getNotesIndex(notes), [notes]);
   const plannedIndex = useMemo(() => buildPlannedIndex(planner, today), [planner, today]);
   const openNote = notes.find(({ id }) => id === openId);
@@ -159,13 +185,16 @@ const Knowledge = () => {
   const sheetFolder = folders.find(({ id }) => id === sheetFolderId);
   const movedNote = notes.find(({ id }) => id === movedNoteId);
 
+  // Заметка с этим названием; нет такой — создаётся. Название-дата — заметка дня: по шаблону в своей папке
+  const ensureNote = useLastCallback(async (title: string) => (
+    findNoteByTitle(title)?.id || (isDayTitle(title)
+      ? openDailyNote(title, vaultName, lang('KnowledgeDailyFolder'))
+      : createNote(title, vaultName))
+  ));
+
   // Ссылка на заметку, которой ещё нет, создаёт её
   const openTitle = useLastCallback(async (title: string) => {
-    const existing = findNoteByTitle(title);
-    // Название-дата — заметка дня: создаётся по шаблону в своей папке
-    const id = existing?.id || (isDayTitle(title)
-      ? await openDailyNote(title, vaultName, lang('KnowledgeDailyFolder'))
-      : await createNote(title, vaultName));
+    const id = await ensureNote(title);
     if (id) setOpenId(id);
   });
 
@@ -335,8 +364,139 @@ const Knowledge = () => {
     void deleteNote(noteId);
   });
 
-  const handleOpenFromGraph = useLastCallback((noteId: string) => {
+  // ── граф: панель выбранной точки и правка связей ──
+
+  const plannedByKey = useMemo(() => {
+    const map = new Map<string, PlannedItem>();
+    [...plannedIndex.byTitle.values(), ...plannedIndex.byNote.values()].forEach((items) => {
+      items.forEach((item) => map.set(item.key, item));
+    });
+    return map;
+  }, [plannedIndex]);
+  // Заметка выбранной точки; «заметка, которой ещё нет», могла тем временем появиться
+  const pickNote = !graphPick || graphPick.kind === 'record' ? undefined
+    : graphPick.kind === 'missing' ? findNoteByTitle(graphPick.title, notes)
+      : notes.find(({ id }) => id === graphPick.id);
+  const pickRecord = graphPick?.kind === 'record' ? plannedByKey.get(graphPick.id) : undefined;
+  const pickPlanned = useMemo(() => (
+    pickNote ? plannedOf(plannedIndex, pickNote) : []
+  ), [plannedIndex, pickNote]);
+  // Точка, чья заметка или запись исчезла, панель не держит
+  const shownPick = view === 'graph' && status === 'ready' && graphPick
+    && (graphPick.kind === 'missing' || pickNote || pickRecord) ? graphPick : undefined;
+
+  const showGraphNotice = useLastCallback((text: string, undo?: NoneToVoidFunction) => {
+    setGraphNotice({ text, undo, at: Date.now() });
+  });
+
+  const pickNoteInGraph = useLastCallback((noteId?: string) => {
+    const note = noteId ? getNotes().find(({ id }) => id === noteId) : undefined;
+    if (!note) return;
+    setEditRequest(undefined);
+    setGraphPick({
+      id: note.id, kind: note.isDaily ? 'day' : 'note', title: note.title, group: note.folder,
+    });
+  });
+
+  // Ссылка в панели графа выбирает точку на графе; заметки ещё нет — создаёт её
+  const pickTitleInGraph = useLastCallback(async (title: string) => {
+    pickNoteInGraph(await ensureNote(title));
+  });
+
+  const handleGraphPick = useLastCallback((node: GraphPick) => {
+    setEditRequest(undefined);
+    setGraphPick(node);
+  });
+
+  const handleGraphOpen = useLastCallback(async (node: GraphPick) => {
+    if (node.kind === 'record') return;
+    const id = node.kind === 'missing' ? await ensureNote(node.title) : node.id;
+    if (!id) return;
+    setOpenId(id);
+    setKnowledgeView('notes');
+  });
+
+  const handleGraphClose = useLastCallback(() => {
+    setGraphPick(undefined);
+    setLinkFromId(undefined);
+    setEditRequest(undefined);
+  });
+
+  const handleOpenInNotes = useLastCallback((noteId: string) => {
     setOpenId(noteId);
+    setKnowledgeView('notes');
+  });
+
+  const handleLinkModeEnd = useLastCallback(() => {
+    setLinkFromId(undefined);
+  });
+
+  const handleOpenInPlan = useLastCallback((record: PlannedItem) => {
+    openOfferInPlan(record.kind, record.day || record.due);
+  });
+
+  const handleGraphDelete = useLastCallback((noteId: string) => {
+    setGraphPick(undefined);
+    if (openId === noteId) setOpenId(undefined);
+    void deleteNote(noteId);
+  });
+
+  // Отмена правки связи: текст заметки возвращается, а что в ней изменили после — остаётся (сведение от
+  // текста, который дала правка)
+  const revertNote = (noteId: string, before: string) => {
+    const after = getNotes().find(({ id }) => id === noteId)?.text;
+    return () => {
+      setGraphNotice(undefined);
+      void saveNote(noteId, before, vaultName, after);
+    };
+  };
+
+  // Связь на графе — ссылка `[[…]]` в тексте заметки-источника: одно сохранение на жест
+  const linkInGraph = useLastCallback(async (fromId: string, toTitle: string): Promise<GraphLinkOutcome> => {
+    const from = getNotes().find(({ id }) => id === fromId);
+    if (!from) return 'failed';
+    const names = { from: from.title, to: toTitle.trim() };
+    const result = addLinkToText(from.text, toTitle);
+    if (result.status === 'refused') showGraphNotice(lang('KnowledgeGraphLinkRefused', { name: names.to }));
+    if (result.status === 'exists') showGraphNotice(lang('KnowledgeGraphLinkExists', names));
+    if (result.status !== 'added') return result.status;
+    if (!(await saveNote(fromId, result.text, vaultName, from.text))) return 'failed';
+    showGraphNotice(lang('KnowledgeGraphLinked', names), revertNote(fromId, from.text));
+    // На телефоне лист заметки закрыт, пока выбирают цель: после связи остаётся граф
+    if (isNarrow && linkFromId) setGraphPick(undefined);
+    return 'added';
+  });
+
+  // Связь, брошенная на пустое место: заметка с таким названием (новая либо уже существующая) и ссылка на неё
+  const linkNewInGraph = useLastCallback(async (fromId: string, title: string) => {
+    if (!canLinkTitle(title)) {
+      showGraphNotice(lang('KnowledgeGraphLinkRefused', { name: title.trim() }));
+      return undefined;
+    }
+    const id = await ensureNote(title.trim());
+    const created = id ? getNotes().find((note) => note.id === id) : undefined;
+    if (!created || created.id === fromId) return undefined;
+    await linkInGraph(fromId, created.title);
+    return created.id;
+  });
+
+  // Убрать связь: ссылка отдельной строкой уходит из текста; ссылку внутри предложения граф не трогает —
+  // заметка открывается в панели в правке, ссылка выделена
+  const unlinkInGraph = useLastCallback(async (fromId: string, toTitle: string) => {
+    const from = getNotes().find(({ id }) => id === fromId);
+    if (!from) return;
+    const names = { from: from.title, to: toTitle };
+    const result = removeLinkFromText(from.text, toTitle);
+    if (result.status === 'inline') {
+      pickNoteInGraph(fromId);
+      setEditRequest({
+        noteId: fromId, from: result.from, to: result.to, at: Date.now(),
+      });
+      showGraphNotice(lang('KnowledgeGraphUnlinkInline', names));
+      return;
+    }
+    if (result.status !== 'removed' || !(await saveNote(fromId, result.text, vaultName, from.text))) return;
+    showGraphNotice(lang('KnowledgeGraphUnlinked', names), revertNote(fromId, from.text));
   });
 
   const found = useMemo(() => (query.trim() ? index.search(query) : undefined), [index, query]);
@@ -573,6 +733,14 @@ const Knowledge = () => {
             {view === 'canvas' && (
               <span className={buildClassName(kit.muted, kit.small, kit.hideM)}>{lang('KnowledgeCanvasHint')}</span>
             )}
+            {view === 'graph' && (
+              <span
+                className={buildClassName(kit.muted, kit.small, kit.hideM, styles.graphHint)}
+                title={lang('KnowledgeGraphHint')}
+              >
+                {lang('KnowledgeGraphHint')}
+              </span>
+            )}
           </header>
         )}
         {isNoticeShown && notice && (
@@ -583,7 +751,18 @@ const Knowledge = () => {
         )}
         <div className={styles.content}>
           {status !== 'ready' ? <Loading /> : view === 'graph' ? (
-            <NotesGraph notes={notes} planner={planner} onOpenNote={handleOpenFromGraph} onOpenTitle={openTitle} />
+            <NotesGraph
+              notes={notes}
+              planner={planner}
+              pickedId={shownPick && (pickNote?.id || shownPick.id)}
+              linkFromId={linkFromId}
+              onPick={handleGraphPick}
+              onOpen={handleGraphOpen}
+              onLink={linkInGraph}
+              onLinkNew={linkNewInGraph}
+              onUnlink={unlinkInGraph}
+              onLinkModeEnd={handleLinkModeEnd}
+            />
           ) : view === 'canvas' ? (
             <NotesCanvas canvases={canvases} notes={notes} isNarrow={isNarrow} onOpenTitle={openFromCanvas} />
           ) : (
@@ -618,6 +797,22 @@ const Knowledge = () => {
               )}
             </div>
           )}
+          {view === 'graph' && graphNotice && (
+            <div className={styles.graphNotice} role="status" data-graph-notice>
+              <span>{graphNotice.text}</span>
+              {graphNotice.undo && (
+                <button
+                  type="button"
+                  className={buildClassName(kit.plain, styles.graphNoticeUndo)}
+                  data-graph-undo
+                  onClick={graphNotice.undo}
+                >
+                  <PvIcon name="undo" isSmall />
+                  {lang('KnowledgeGraphUndo')}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
       {hasSide && isNoteShown && openNote && (
@@ -629,6 +824,29 @@ const Knowledge = () => {
             <NoteLinks note={openNote} index={index} planned={openPlanned} onOpenTitle={openTitle} />
           </div>
         </aside>
+      )}
+      {(isNarrow ? view === 'graph' : Boolean(shownPick)) && (
+        <GraphPanel
+          // На телефоне лист уходит, пока в режиме «Связать» выбирают цель на графе
+          pick={isNarrow && linkFromId ? undefined : shownPick}
+          note={pickNote}
+          record={pickRecord}
+          index={index}
+          planner={planner}
+          planned={pickPlanned}
+          isSheet={isNarrow}
+          editRequest={editRequest}
+          onClose={handleGraphClose}
+          onOpenInNotes={handleOpenInNotes}
+          onLinkStart={setLinkFromId}
+          onCreate={pickTitleInGraph}
+          onOpenInPlan={handleOpenInPlan}
+          onOpenTitle={pickTitleInGraph}
+          onSave={handleSave}
+          onRename={handleRename}
+          onDelete={handleGraphDelete}
+          onPickFolder={handleAskMove}
+        />
       )}
       <NoteFolderSheet
         isOpen={isFolderSheetOpen}

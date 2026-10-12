@@ -20,6 +20,8 @@ type OwnProps = {
   index: NotesIndex;
   planned: PlannedItem[];
   className?: string;
+  // Только обратные ссылки: рядом уже стоит большой граф
+  isGraphHidden?: boolean;
   onOpenTitle: (title: string) => void;
 };
 
@@ -49,7 +51,7 @@ function shorten(text: string) {
 // «Связи» заметки: обратные ссылки и малый граф — заметка в центре, вокруг заметки, на которые она
 // ссылается, заметки, ссылающиеся на неё, и записи «Плана» со ссылкой сюда
 const NoteLinks = ({
-  note, index, planned, className, onOpenTitle,
+  note, index, planned, className, isGraphHidden, onOpenTitle,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -118,34 +120,36 @@ const NoteLinks = ({
           </button>
         ))}
       </section>
-      <section data-note-graph>
-        <h3 className={buildClassName(kit.caps, styles.linksCaption)}>{lang('KnowledgeGraph')}</h3>
-        <svg
-          className={styles.miniGraph}
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          role="img"
-          aria-label={lang('KnowledgeGraph')}
-        >
-          {points.map((point) => (
-            <line key={`l${point.key}`} x1={WIDTH / 2} y1={HEIGHT / 2} x2={point.x} y2={point.y} />
-          ))}
-          <circle className={styles.miniCenter} cx={WIDTH / 2} cy={HEIGHT / 2} r={9} />
-          {points.map((point) => (
-            <g
-              key={point.key}
-              className={point.title ? styles.miniNode : undefined}
-              style={`--c: ${point.color}`}
-              data-title={point.title}
-              onClick={point.title ? handleOpen : undefined}
-            >
-              <circle cx={point.x} cy={point.y} r={6} />
-              <text x={point.x} y={point.y + (point.y > HEIGHT / 2 ? LABEL_BELOW : LABEL_ABOVE)}>
-                {shorten(point.label)}
-              </text>
-            </g>
-          ))}
-        </svg>
-      </section>
+      {!isGraphHidden && (
+        <section data-note-graph>
+          <h3 className={buildClassName(kit.caps, styles.linksCaption)}>{lang('KnowledgeGraph')}</h3>
+          <svg
+            className={styles.miniGraph}
+            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+            role="img"
+            aria-label={lang('KnowledgeGraph')}
+          >
+            {points.map((point) => (
+              <line key={`l${point.key}`} x1={WIDTH / 2} y1={HEIGHT / 2} x2={point.x} y2={point.y} />
+            ))}
+            <circle className={styles.miniCenter} cx={WIDTH / 2} cy={HEIGHT / 2} r={9} />
+            {points.map((point) => (
+              <g
+                key={point.key}
+                className={point.title ? styles.miniNode : undefined}
+                style={`--c: ${point.color}`}
+                data-title={point.title}
+                onClick={point.title ? handleOpen : undefined}
+              >
+                <circle cx={point.x} cy={point.y} r={6} />
+                <text x={point.x} y={point.y + (point.y > HEIGHT / 2 ? LABEL_BELOW : LABEL_ABOVE)}>
+                  {shorten(point.label)}
+                </text>
+              </g>
+            ))}
+          </svg>
+        </section>
+      )}
     </div>
   );
 };

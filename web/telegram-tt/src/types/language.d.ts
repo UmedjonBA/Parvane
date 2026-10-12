@@ -2805,6 +2805,15 @@ export interface LangPair {
   'KnowledgeGraphKindTask': undefined;
   'KnowledgeGraphKindEvent': undefined;
   'KnowledgeGraphCreate': undefined;
+  'KnowledgeGraphHint': undefined;
+  'KnowledgeGraphOpenInNotes': undefined;
+  'KnowledgeGraphOpenInPlan': undefined;
+  'KnowledgeGraphMissingText': undefined;
+  'KnowledgeGraphConnect': undefined;
+  'KnowledgeGraphConnectTitle': undefined;
+  'KnowledgeGraphNewLinked': undefined;
+  'KnowledgeGraphRemoveLink': undefined;
+  'KnowledgeGraphUndo': undefined;
   'KnowledgeCanvasTextCard': undefined;
   'KnowledgeCanvasEdgeTitle': undefined;
   'KnowledgeCanvasOpenNote': undefined;
@@ -5051,6 +5060,31 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'KnowledgeGraphLinks': {
     'count': V;
+  };
+  'KnowledgeGraphConnectHint': {
+    'name': V;
+  };
+  'KnowledgeGraphRemoveLinkFrom': {
+    'name': V;
+  };
+  'KnowledgeGraphLinked': {
+    'from': V;
+    'to': V;
+  };
+  'KnowledgeGraphUnlinked': {
+    'from': V;
+    'to': V;
+  };
+  'KnowledgeGraphLinkExists': {
+    'from': V;
+    'to': V;
+  };
+  'KnowledgeGraphLinkRefused': {
+    'name': V;
+  };
+  'KnowledgeGraphUnlinkInline': {
+    'to': V;
+    'from': V;
   };
   'KnowledgeFilesSharedWith': {
     'count': V;

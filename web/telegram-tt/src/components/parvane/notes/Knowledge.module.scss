@@ -28,6 +28,7 @@
 
 .page {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
 .side {
@@ -39,6 +40,71 @@
   flex: 1 1 auto;
   min-height: 0;
   padding: 1.125rem;
+}
+
+// Панель графа: выбранная заметка читается и правится рядом с графом
+.graphPanel {
+  flex: 0 0 clamp(22rem, 38%, 30rem);
+}
+
+.graphPanel .graphPanelHead {
+  flex-wrap: nowrap;
+}
+
+.graphPanelTitle {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graphPanel .graphPanelLink {
+  flex: none;
+  height: 2.125rem;
+  padding: 0 0.75rem;
+}
+
+.graphPanelBody {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1.25rem 1.375rem 1.5rem;
+}
+
+// Лист панели на телефоне: поля даёт сам лист
+.graphSheet .noteBody {
+  padding: 0;
+}
+
+.graphInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  align-items: flex-start;
+}
+
+.graphInfoKind {
+  color: var(--c, var(--pv-muted));
+}
+
+.graphInfoTitle {
+  margin: 0;
+
+  font-size: 1.375rem;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.graphInfoLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+
+  margin: 0 0 0.375rem;
+
+  color: var(--pv-muted);
 }
 
 .crumb {
@@ -57,6 +123,51 @@
   font-size: 0.875rem;
 
   background: var(--pv-raised);
+}
+
+// Подсказка графа в шапке: одна строка, не помещается — обрезается (целиком — во всплывающей подписи)
+.graphHint {
+  overflow: hidden;
+  flex: 1 1 0;
+
+  min-width: 0;
+
+  text-align: end;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Сообщение о правке связи: поверх поля графа внизу, чтобы поле не прыгало
+.graphNotice {
+  position: absolute;
+  z-index: 6;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: flex;
+  gap: 0.875rem;
+  align-items: center;
+
+  max-width: calc(100% - 7.5rem);
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.875rem;
+
+  font-size: 0.875rem;
+
+  background: var(--pv-panel);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
+}
+
+.graphNotice .graphNoticeUndo {
+  display: inline-flex;
+  flex: none;
+  gap: 0.25rem;
+  align-items: center;
+
+  font-weight: 600;
+  color: var(--pv-accent);
 }
 
 .content {
@@ -798,45 +909,6 @@
   gap: 0.375rem;
 }
 
-.boardInfo {
-  cursor: default;
-
-  position: absolute;
-  z-index: 5;
-  bottom: 0.625rem;
-  left: 0.625rem;
-
-  width: min(23.75rem, calc(100% - 4.375rem));
-  padding: 0.75rem 0.875rem;
-  border: 1px solid var(--pv-line2);
-  border-radius: 0.875rem;
-
-  background: var(--pv-panel);
-  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
-}
-
-.boardInfoHead {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.boardInfoDot {
-  flex: none;
-
-  width: 0.625rem;
-  height: 0.625rem;
-  border-radius: 50%;
-
-  background: var(--c, var(--pv-note));
-}
-
-.boardInfoSub {
-  margin: 0.125rem 0 0.625rem;
-  font-size: 0.8125rem;
-  color: var(--pv-muted);
-}
-
 .boardHint {
   position: absolute;
   z-index: 5;
@@ -903,13 +975,73 @@
 }
 
 .graphEdge {
-  stroke: var(--pv-line2);
-  stroke-width: 1.5;
+  line {
+    pointer-events: none;
+    stroke: var(--pv-line2);
+    stroke-width: 1.5;
+  }
+
+  path {
+    pointer-events: none;
+    fill: var(--pv-line2);
+  }
+
+  // Широкая невидимая полоса: по тонкой линии не промахнуться
+  .graphEdgeHit {
+    stroke: transparent;
+    stroke-width: 14;
+  }
 }
 
-.graphEdgeOn {
+.graphEdgeEditable .graphEdgeHit {
+  pointer-events: stroke;
+  cursor: var(--custom-cursor, pointer);
+}
+
+.graphEdgeEditable:hover .graphEdgeLine {
+  stroke: var(--pv-muted);
+}
+
+.graphEdgeEditable:hover path {
+  fill: var(--pv-muted);
+}
+
+.graphEdgeOn .graphEdgeLine,
+.graphEdgePicked .graphEdgeLine,
+.graphEdgePicked:hover .graphEdgeLine {
   stroke: var(--pv-accent);
   stroke-width: 2.5;
+}
+
+.graphEdgeOn path,
+.graphEdgePicked path,
+.graphEdgePicked:hover path {
+  fill: var(--pv-accent);
+}
+
+.graphEdgePicked .graphEdgeLine {
+  stroke-width: 3.5;
+}
+
+.graphEdgeFlash .graphEdgeLine {
+  animation: graph-edge-flash 0.6s ease-in-out 2;
+}
+
+@keyframes graph-edge-flash {
+  50% {
+    stroke: var(--pv-accent);
+    stroke-width: 5;
+  }
+}
+
+// Связь, которую ведут от заметки
+.graphDraft {
+  pointer-events: none;
+
+  stroke: var(--pv-accent);
+  stroke-dasharray: 6 5;
+  stroke-linecap: round;
+  stroke-width: 2;
 }
 
 .graphNode {
@@ -934,6 +1066,29 @@
     stroke-linejoin: round;
     stroke-width: 4px;
   }
+
+  // Кольцо вокруг заметки: за него тянут связь. Видно под указателем и у выбранной заметки
+  .graphHandle {
+    cursor: crosshair;
+
+    opacity: 0;
+
+    fill: none;
+    stroke: var(--pv-accent);
+    stroke-dasharray: 3 3;
+    stroke-width: 4;
+
+    transition: opacity 0.12s;
+
+    // Пальцем связь ведут кнопкой «Связать»
+    @media (pointer: coarse) {
+      display: none;
+    }
+  }
+
+  &:hover .graphHandle {
+    opacity: 0.7;
+  }
 }
 
 .graphMissing circle {
@@ -945,8 +1100,87 @@
   stroke-width: 3;
 }
 
+.graphPicked .graphHandle,
+.graphSource .graphHandle {
+  opacity: 0.7;
+}
+
+// Заметка под ведомой связью: сюда ляжет ссылка
+.graphTarget circle:first-child {
+  stroke: var(--pv-accent);
+  stroke-width: 5;
+}
+
 .graphDim {
   opacity: 0.15;
+}
+
+// Ведут связь: любая заметка — цель
+.boardLinking,
+.boardLinking:active,
+.boardLinking .graphNode {
+  cursor: crosshair;
+}
+
+.boardLinking .graphHandle {
+  pointer-events: none;
+}
+
+.graphLinkHint {
+  cursor: default;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.graphLinkHint .graphLinkCancel {
+  flex: none;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.graphEdgeRemove {
+  cursor: var(--custom-cursor, pointer);
+
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+  box-shadow: 0 0.125rem 0.5rem rgb(0 0 0 / 30%);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-fg);
+    outline-offset: 2px;
+  }
+}
+
+// Название новой заметки там, где связь бросили на пустое место
+.board .graphNewInput {
+  user-select: text;
+
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+
+  width: 14rem;
+  max-width: calc(100% - 1.25rem);
+  border-color: var(--pv-accent);
+
+  background: var(--pv-panel);
+  box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 30%);
 }
 
 // ── холст ────────────────────────────────────────────────────────────────────
