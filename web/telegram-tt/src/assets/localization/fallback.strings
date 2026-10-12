@@ -3527,11 +3527,13 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised.";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. A description goes after a dash: “English lesson tue 15:00 — listening test”.";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";
 "PlannerQuickNoName" = "No name yet";
+"PlannerQuickName" = "Name";
+"PlannerQuickDescriptionToName" = "Move the description back to the name";
 "PlannerQuickTooLong" = "The name is too long.";
 "PlannerTodayNoTasks" = "No tasks for this day";
 "PlannerTodayLeft" = "{count} left";
@@ -3652,7 +3654,7 @@
 "PlannerMonthSleep" = "sleep {value}";
 "PlannerYearLegend" = "Colour depth is the day load, a red number is a holiday, a dot is a task deadline.";
 "PlannerQuickExamplesTitle" = "Examples";
-"PlannerQuickExamples" = "call tomorrow 16:00 45 min | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml";
+"PlannerQuickExamples" = "call tomorrow 16:00 45 min | English lesson tue 15:00 — listening test | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml";
 "PlannerQuickDefault" = "Default: {date}";
 "PlannerSettingsGoalsHint" = "Goals change with text too: start a line in «+» with the word «goal».";
 "PlannerHealthGoalsShort" = "Goals";

@@ -16,7 +16,8 @@ import {
 export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout' | 'metric' | 'goal';
 export type QuickNutrient = PlannerNutrient | 'sugar' | 'salt';
 export type QuickField =
-  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | QuickNutrient;
+  'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | 'description'
+  | QuickNutrient;
 // Показатель здоровья одной строкой: «вес 72,4», «давление 120/80», «пульс 64», «шаги 9500», «самочувствие 4»
 export type QuickMetric = Exclude<PlannerHealthKind, 'sleep' | 'workout'>;
 export type QuickGoalChanges = {
@@ -33,6 +34,8 @@ export type QuickError = PlannerTaskError | PlannerEventError;
 export type QuickDraft = {
   kind: QuickKind;
   name: string;
+  // Описание задачи либо события: часть строки после названия (правила — у `splitName`)
+  description?: string;
   day?: string;
   // День не назван: взят сегодняшний либо завтрашний (время уже прошло)
   isDayAssumed?: boolean;
@@ -112,8 +115,19 @@ type QuickWords = {
   typoWords: string;
   // Обычные слова, отличающиеся от слов разбора одной буквой («завтрак» — не «завтра»)
   typoSafe?: string;
-  // Обычная длительность события по первому слову строки, минуты («пара» — 1 ч 45 мин, «урок» — 45 мин)
+  // Обычная длительность события по первому слову названия, минуты («пара» — 1 ч 45 мин, «урок» — 45 мин)
   eventMinutes?: Entry<number>[];
+  // Название и описание (правила — у `splitName`).
+  // Слова, с которых начинается описание; само слово остаётся в описании («будет тест», «взять паспорт»)
+  descLeads: string;
+  // Метки вместе со своим знаком: [метка, остаётся ли она в описании].
+  // false — только подпись, отбрасывается («описание: …», «прим. …»); true — несёт смысл («тема: оптика»)
+  descLabels: Entry<boolean>[];
+  // Служебные слова (местоимения, предлоги, союзы, частицы): название не может ни начинаться, ни кончаться
+  // таким словом — «мне надо купить молоко» и «в банке взять справку» остаются названием целиком
+  descWeak: string;
+  // Сокращения с точкой, после которых предложение не кончается («ул. Ленина»); одна буква — тоже сокращение
+  abbreviations: string;
   sleep: string;
   // Слова перед словом сна («сегодня я спал…») и глаголы «лёг … встал …»
   sleepPrefix?: string;
@@ -208,6 +222,12 @@ const WORDS: Record<QuickLang, QuickWords> = {
     typoSafe: 'завтрак завтраки неделе каждой каждого каждая месяцы выходные выходных будние задачи задачу'
       + ' события событий',
     eventMinutes: [['пар[ауые]', 105], ['урок(?:а|и|ов)?', 45]],
+    descLeads: 'будет|будут|нужно|надо|не\\s+забыть|взять|принести',
+    descLabels: [['(?:описание|примечание|заметка|прим)\\s*:|прим\\.', false], ['тема\\s*:', true]],
+    descWeak: 'я|мне|мы|нам|ты|тебе|вы|вам|он|ему|она|ей|они|им|это|что|чтобы|если|когда|как|где|и|или|а|но|не'
+      + '|еще|уже|тоже|там|тут|в|во|на|у|из|для|к|ко|от|по|с|со|за|до|при|о|об|под|над|через|после|перед|без',
+    abbreviations: 'ул|пр|пер|пл|кв|корп|стр|оф|ауд|каб|эт|им|см|напр|др|руб|тыс|млн|мин|сек|тел|доб|кг|гр|мл|шт|уп'
+      + '|экз|км|мм',
     sleep: 'сон|(?:по|про)?спал[аи]?|выспал(?:ся|ась)',
     sleepPrefix: 'сегодня|ночью|сейчас|я',
     sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
@@ -298,6 +318,11 @@ const WORDS: Record<QuickLang, QuickWords> = {
       + ' weekly monthly yearly weekdays weekends minutes',
     typoSafe: 'minute weekend weekday',
     eventMinutes: [['lessons?', 45]],
+    descLeads: 'will\\s+be|need\\s+to|needs|don[\'’]?t\\s+forget|bring',
+    descLabels: [['(?:notes?|description)\\s*:', false], ['topic\\s*:', true]],
+    descWeak: 'i|me|we|us|you|he|him|she|her|they|them|it|this|that|there|what|who|if|when|and|or|but|not|to|also'
+      + '|just|still|at|in|on|from|for|after|before|with|without|of|by|the|a|an',
+    abbreviations: 'etc|vs|mr|mrs|ms|dr|st|no|approx|apt|rm|tel|ext|min|max|hr|hrs|kg|ml|pcs|km|lb|lbs|oz',
     sleep: 'sleep|slept',
     sleepPrefix: 'today|tonight|last\\s+night|i',
     sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
@@ -451,6 +476,18 @@ function compile(words: QuickWords) {
     eventMinutes: (words.eventMinutes || []).map(([body, minutes]) => (
       [new RegExp(`^\\s*(?:${body})${SEPARATOR}`), minutes] as const
     )),
+    descLeads: words.descLeads,
+    // Название начинается служебным словом либо словом-вводом описания или кончается служебным словом
+    isWeakName: new RegExp(
+      `^(?:${words.descWeak}|${words.descLeads})${SEPARATOR}|(?:^|[^${ALNUM}])(?:${words.descWeak})$`,
+    ),
+    // Метка со знаком в конце названия: группа 1 — метка-подпись, группа 2 — метка, несущая смысл
+    labelTail: new RegExp(
+      `(?:^|[^${ALNUM}])(?:(${bodies(words.descLabels.filter(([, isKept]) => !isKept))})`
+      + `|(${bodies(words.descLabels.filter(([, isKept]) => isKept))}))$`,
+    ),
+    labelHead: new RegExp(`^(?:${bodies(words.descLabels.filter(([, isKept]) => !isKept))})\\s*(?=\\S)`),
+    abbreviationTail: new RegExp(`(?:^|[^${ALNUM}])(?:${words.abbreviations}|[${LETTER}])$`),
     typoWords: words.typoWords.split(' '),
     typoSafe: new Set([...words.typoWords.split(' '), ...(words.typoSafe || '').split(' ')]),
     sleepLead: lead(`(?:(?:${words.sleepPrefix || '(?!)'})\\s+)*(?:${words.sleep})`),
@@ -892,10 +929,9 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
   }
 
   // ── название: всё непомеченное ────────────────────────────────────────────
-  draft.name = [...text].map((char, i) => (taken[i] ? ' ' : char)).join('')
-    .replace(/\s+/g, ' ')
-    .replace(/\s+([,;])/g, '$1')
-    .replace(/^[\s,;.:—–-]+|[\s,;:—–-]+$/g, '');
+  const unmarked = (source: string) => [...source].map((char, i) => (taken[i] ? ' ' : char)).join('');
+  const plain = unmarked(text);
+  draft.name = cleanName(plain);
   spans.sort((a, b) => a.from - b.from);
 
   // ── вода и еда ────────────────────────────────────────────────────────────
@@ -925,7 +961,16 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
     return draft;
   }
 
-  // ── задача либо событие ───────────────────────────────────────────────────
+  // ── задача либо событие: название и описание ──────────────────────────────
+  const split = skipped.has('description') ? undefined : splitName(plain, unmarked(lower), lang);
+  if (split) {
+    draft.name = split.name;
+    draft.description = split.description;
+    spans.push({
+      field: 'description', from: split.from + plain.slice(split.from).search(/\S/), to: plain.trimEnd().length,
+    });
+    spans.sort((a, b) => a.from - b.from);
+  }
   const hasTime = start !== undefined;
   draft.kind = explicitKind === 'task' || explicitKind === 'event' ? explicitKind
     : hasTime && allowed.has('event') ? 'event' : 'task';
@@ -963,7 +1008,10 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
 
   if (draft.kind === 'event') {
     if (hasTime) {
-      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(lower))?.[1];
+      // Обычная длительность — по первому слову НАЗВАНИЯ: «вт 15:00 пара по английскому» — пара,
+      // «сдать пару отчётов 9:00» — нет
+      const head = draft.name.toLowerCase().replace(/ё/g, 'е');
+      const usual = lang.eventMinutes.find(([pattern]) => pattern.test(head))?.[1];
       const finish = end ?? start! + (draft.minutes || usual || DEFAULT_EVENT_MINUTES);
       draft.start = toTime(start!);
       // Ровно полночь — последняя минута суток; позже — ошибка, а не обрезка
@@ -993,6 +1041,95 @@ function parseLine(typed: string, ctx: QuickContext, lang: Lang): QuickDraft {
     name: draft.name, minutes: draft.minutes, day: draft.day, start: draft.start, due: draft.due,
   }) || (draft.repeat && validateRepeat(draft.repeat));
   return draft;
+}
+
+// ── название и описание ──────────────────────────────────────────────────────
+
+function cleanName(text: string) {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,;])/g, '$1')
+    .replace(/^[\s,;.:—–-]+|[\s,;:—–-]+$/g, '');
+}
+
+// Описание многострочное: переводы строк внутри него сохраняются
+function cleanDescription(text: string) {
+  return text.split('\n').map(cleanName).filter(Boolean).join('\n');
+}
+
+function hasLetter(text: string) {
+  return new RegExp(`[${LETTER}ё]`, 'i').test(text);
+}
+
+// Название и описание задачи либо события. На входе — строка, из которой уже вынуты распознанные
+// значения (дата, время, длительность, срок, повтор заменены пробелами, позиции символов сохранены):
+// значения могут стоять где угодно — перед названием, между названием и описанием, после описания.
+//
+// Название — короткая строка для календаря, описание — всё, что её поясняет. Граница ищется по
+// признакам в порядке их силы; берётся первое место, слева от которого остаётся название (хотя бы одно
+// слово с буквой), а справа — непустое описание:
+//   1. перевод строки: первая строка — название, остальные — описание;
+//   2. явный разделитель: тире либо дефис с пробелами по обе стороны (« — », « – », « - »), ` // `,
+//      двоеточие, точка с запятой либо точка с пробелом после (`: `, `; `, `. `). Явный знак сильнее
+//      слов: «Маме нужно позвонить — насчёт дачи» делится по тире, а не по слову «нужно».
+//      Слово-метка со своим знаком (`descLabels`) — не название: подпись отбрасывается («встреча
+//      описание: …», «встреча прим. …», «meeting note: …»), метка со смыслом уходит в описание вместе
+//      со знаком («пара тема: оптика»). Без своего знака метки — обычные слова названия («написать
+//      описание проекта», «новая тема оформления», «meeting notes - check the draft»);
+//   3. слово-ввод описания (`descLeads`: «будет», «нужно», «надо», «не забыть», «взять», «принести»;
+//      will be, need to, needs, don't forget, bring): описание начинается с него, слово в нём остаётся.
+//      Срабатывает, только если после слова есть ещё слова, а название перед ним не начинается и не
+//      кончается служебным словом (`descWeak`) и не начинается с другого слова-ввода: «надо взять
+//      паспорт», «мне надо купить молоко», «в банке взять справку», «встреча не будет долгой» —
+//      название целиком.
+// Не делят: запятая («купить молоко, хлеб»), скобки («Рисование(ауд. 12)»), дефис и двоеточие без
+// пробела («кое-что», «10:30», «a-b»), точка после сокращения либо одной буквы («ул. Ленина», «т.е.»),
+// знаки внутри распознанных значений («10:00 — 11:30»), знак в самом начале либо конце строки.
+// Снятое пользователем описание (`skip: ['description']`) возвращает слова в название.
+function splitName(plain: string, lower: string, lang: Lang) {
+  const result = (nameEnd: number, from: number) => {
+    const name = cleanName(plain.slice(0, nameEnd)).replace(/\.+$/, '');
+    const full = cleanDescription(plain.slice(from));
+    // «встреча — описание: взять паспорт»: подпись в начале описания не нужна
+    const description = full.slice(lang.labelHead.exec(full.toLowerCase())?.[0].length || 0);
+    return hasLetter(name) && /[^\s\p{P}]/u.test(description) ? { name, description, from } : undefined;
+  };
+
+  const lineBreak = lower.indexOf('\n');
+  const byLine = lineBreak >= 0 ? result(lineBreak, lineBreak + 1) : undefined;
+  if (byLine) return byLine;
+
+  const separator = /\s(?:[—–-]|\/\/)\s|[:;.]\s/g;
+  let match = separator.exec(lower);
+  while (match) {
+    const sign = match[0].trim();
+    const at = match.index + match[0].indexOf(sign);
+    const to = at + sign.length;
+    separator.lastIndex = match.index + 1;
+    const label = lang.labelTail.exec(lower.slice(0, to));
+    // Точка сразу после сокращения либо одной буквы предложение не кончает
+    if (label || sign !== '.' || !lang.abbreviationTail.test(lower.slice(0, at))) {
+      const labelAt = label ? to - (label[1] || label[2]).length : at;
+      // «тема: оптика» уходит в описание целиком; подпись («описание:») отбрасывается
+      const found = label?.[2] ? result(labelAt, labelAt) : result(labelAt, to);
+      if (found) return found;
+    }
+    match = separator.exec(lower);
+  }
+
+  const lead = word(lang.descLeads);
+  match = lead.exec(lower);
+  while (match) {
+    const from = match.index + match[1].length;
+    const to = from + match[2].length;
+    lead.lastIndex = to;
+    if (!lang.isWeakName.test(cleanName(lower.slice(0, from))) && hasLetter(lower.slice(to))) {
+      const found = result(from, from);
+      if (found) return found;
+    }
+    match = lead.exec(lower);
+  }
+  return undefined;
 }
 
 // ── здоровье и цели (spec 020) ───────────────────────────────────────────────
@@ -1120,7 +1257,10 @@ function parseWorkout(text: string, lower: string, ctx: QuickContext, lang: Lang
     match = sets.exec(lower);
   }
   const rest = [...text].map((char, i) => (taken[i] ? ' ' : char)).join('');
-  const base = parseLine(rest, { ...ctx, kind: 'event', kinds: undefined }, lang);
+  // У записи тренировки описания нет: название не делится
+  const base = parseLine(rest, {
+    ...ctx, kind: 'event', kinds: undefined, skip: [...(ctx.skip || []), 'description'],
+  }, lang);
   const isRecord = Boolean(distanceKm || exercises.length)
     || (!base.start && !base.repeat && (base.day || ctx.today) <= ctx.today);
   if (!isRecord && ctx.kind !== 'workout') return undefined;

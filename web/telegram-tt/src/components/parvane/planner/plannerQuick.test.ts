@@ -224,6 +224,147 @@ describe('ввод текстом: снятые значения остаютс�
   ]);
 });
 
+describe('ввод текстом: обычная длительность по первому слову названия', () => {
+  run([
+    ['вт 15:00 пара по английскому', {
+      kind: 'event', name: 'пара по английскому', description: undefined, start: '15:00', end: '16:45',
+    }],
+    ['завтра в 9 урок', { kind: 'event', name: 'урок', day: '2026-10-09', start: '09:00', end: '09:45' }],
+    ['пара завтра 9:00', { name: 'пара', start: '09:00', end: '10:45' }],
+    ['событие пара 10:00', { kind: 'event', name: 'пара', start: '10:00', end: '11:45' }],
+    ['сдать пару отчётов завтра 9:00', { name: 'сдать пару отчётов', start: '09:00', end: '10:00' }],
+    ['подготовка к уроку завтра 9:00', { name: 'подготовка к уроку', end: '10:00' }],
+    // Названная длительность и названный конец сильнее обычной
+    ['вт 15:00 пара по физике 2 часа', { name: 'пара по физике', end: '17:00' }],
+    ['вт пара по физике 15:00-16:20', { name: 'пара по физике', end: '16:20' }],
+    ['пара завтра 9:00 — принести тетрадь', { name: 'пара', description: 'принести тетрадь', end: '10:45' }],
+  ]);
+});
+
+describe('ввод текстом: название и описание', () => {
+  const OWNER = {
+    kind: 'event', name: 'пара по Английскому', description: 'будет тест лисининг', day: '2026-10-13',
+    start: '15:00', end: '16:45', error: undefined,
+  } as const;
+  run([
+    // Строка пользователя (12 окт 2026): «пара» — 1 ч 45 мин, «будет…» — описание
+    ['вт 15:00 пара по Английскому будет тест  лисининг', OWNER],
+    // Значения — в любом месте строки
+    ['пара по Английскому вт 15:00 будет тест лисининг', OWNER],
+    ['пара по Английскому будет тест лисининг вт 15:00', OWNER],
+    ['пара по Английскому вт будет тест лисининг 15:00', OWNER],
+    ['пара по английскому — тест по лисенингу вт 15:00', {
+      name: 'пара по английскому', description: 'тест по лисенингу', day: '2026-10-13', end: '16:45',
+    }],
+    ['завтра созвон — обсудить бюджет в 16:00 45 мин', {
+      name: 'созвон', description: 'обсудить бюджет', day: '2026-10-09', start: '16:00', end: '16:45',
+    }],
+    // Явные разделители
+    ['созвон завтра 16:00 — обсудить бюджет', {
+      kind: 'event', name: 'созвон', description: 'обсудить бюджет', day: '2026-10-09', start: '16:00', end: '17:00',
+    }],
+    ['созвон – обсудить бюджет', { kind: 'task', name: 'созвон', description: 'обсудить бюджет' }],
+    ['купить молоко - 2 пакета', { name: 'купить молоко', description: '2 пакета' }],
+    ['встреча с Петей: бюджет, сроки', { name: 'встреча с Петей', description: 'бюджет, сроки' }],
+    ['купить подарок; маме нравятся серьги', { name: 'купить подарок', description: 'маме нравятся серьги' }],
+    ['Сдать отчёт. Приложить таблицу', { name: 'Сдать отчёт', description: 'Приложить таблицу' }],
+    ['стрижка сб 12:00 // мастер Аня', {
+      name: 'стрижка', description: 'мастер Аня', day: '2026-10-10', start: '12:00',
+    }],
+    ['созвон завтра\nобсудить бюджет\nи сроки', {
+      name: 'созвон', description: 'обсудить бюджет\nи сроки', day: '2026-10-09',
+    }],
+    ['отчёт: добавить графики', {
+      kind: 'event', name: 'отчёт', description: 'добавить графики', isAllDay: true,
+    }, { kind: 'event' }],
+    // Явный знак сильнее слова-ввода
+    ['Маме нужно позвонить — насчёт дачи', { name: 'Маме нужно позвонить', description: 'насчёт дачи' }],
+    // Метки: подпись отбрасывается, метка со смыслом остаётся
+    ['встреча с куратором описание: обсудить диплом', {
+      name: 'встреча с куратором', description: 'обсудить диплом',
+    }],
+    ['встреча с куратором прим. взять зачётку', { name: 'встреча с куратором', description: 'взять зачётку' }],
+    ['встреча с куратором, заметка: взять зачётку', {
+      name: 'встреча с куратором', description: 'взять зачётку',
+    }],
+    ['встреча — примечание: взять паспорт', { name: 'встреча', description: 'взять паспорт' }],
+    ['пара по физике тема: оптика', { name: 'пара по физике', description: 'тема: оптика' }],
+    ['написать описание проекта', { name: 'написать описание проекта', description: undefined }],
+    ['новая тема оформления', { name: 'новая тема оформления', description: undefined }],
+    ['написать описание. Срочно', { name: 'написать описание', description: 'Срочно' }],
+    // Слова-вводы описания: слово остаётся в описании
+    ['врач пт 10:30 нужно взять полис', {
+      kind: 'event', name: 'врач', description: 'нужно взять полис', day: '2026-10-09', start: '10:30',
+    }],
+    ['собрание жильцов надо принести квитанции', {
+      name: 'собрание жильцов', description: 'надо принести квитанции',
+    }],
+    ['поездка в Казань не забыть зарядку', { name: 'поездка в Казань', description: 'не забыть зарядку' }],
+    ['бассейн взять шапочку', { name: 'бассейн', description: 'взять шапочку' }],
+    ['семинар принести ноутбук', { name: 'семинар', description: 'принести ноутбук' }],
+    ['контрольные будут сложные вопросы', { name: 'контрольные', description: 'будут сложные вопросы' }],
+    ['купить молоко, надо успеть до закрытия', { name: 'купить молоко', description: 'надо успеть до закрытия' }],
+    // Срок и повтор вместе с описанием
+    ['задача проверить работы до пт — классы 9Б и 10А', {
+      kind: 'task', name: 'проверить работы', due: '2026-10-09', description: 'классы 9Б и 10А',
+    }],
+    ['отчёт до 20.10: добавить графики', { name: 'отчёт', due: '2026-10-20', description: 'добавить графики' }],
+    ['английский по вт и чт 18:00 — взять учебник', {
+      kind: 'event', name: 'английский', description: 'взять учебник', repeat: { ...WEEKLY, weekdays: [2, 4] },
+    }],
+    ['планёрка каждый день надо собрать статусы', {
+      kind: 'task', name: 'планёрка', description: 'надо собрать статусы', repeat: { kind: 'daily', interval: 1 },
+    }],
+    // Опечатки в словах разбора по-прежнему исправляются
+    ['пара по английскому во вторнек 15:00 будет тест', {
+      name: 'пара по английскому', description: 'будет тест', day: '2026-10-13', end: '16:45',
+    }],
+    ['отчёт послезавтро — приложить таблицу', {
+      name: 'отчёт', description: 'приложить таблицу', day: '2026-10-10',
+    }],
+    // Не делят
+    ['Рисование(ауд. 12) вт 15:00', { name: 'Рисование(ауд. 12)', description: undefined, day: '2026-10-13' }],
+    ['купить молоко, хлеб', { name: 'купить молоко, хлеб', description: undefined }],
+    ['купить кое-что завтра', { name: 'купить кое-что', description: undefined }],
+    ['пара 10:00 — 11:30', { name: 'пара', description: undefined, end: '11:30' }],
+    ['созвон 16:00 —', { name: 'созвон', description: undefined }],
+    ['— купить хлеб', { name: 'купить хлеб', description: undefined }],
+    ['1. купить хлеб', { name: '1. купить хлеб', description: undefined }],
+    ['зайти на ул. Ленина 5', { name: 'зайти на ул. Ленина 5', description: undefined }],
+    ['доклад и т.д. завтра', { name: 'доклад и т.д.', description: undefined, day: '2026-10-09' }],
+    ['купить 2 кг. яблок', { name: 'купить 2 кг. яблок', description: undefined }],
+    ['позвонить Иванову И. И. завтра', { name: 'позвонить Иванову И. И.', description: undefined }],
+    ['у Пети будет день рождения', { name: 'у Пети будет день рождения', description: undefined }],
+    ['презентация будет в 305 аудитории', { name: 'презентация', description: 'будет в 305 аудитории' }],
+    ['надо взять паспорт', { name: 'надо взять паспорт', description: undefined }],
+    ['не забыть взять паспорт', { name: 'не забыть взять паспорт', description: undefined }],
+    ['завтра надо купить молоко', { name: 'надо купить молоко', description: undefined, day: '2026-10-09' }],
+    ['мне надо купить молоко', { name: 'мне надо купить молоко', description: undefined }],
+    ['в банке взять справку', { name: 'в банке взять справку', description: undefined }],
+    ['встреча не будет долгой', { name: 'встреча не будет долгой', description: undefined }],
+    ['тест будет в пятницу', { name: 'тест будет', description: undefined, day: '2026-10-09' }],
+    // Снятое описание возвращается в название
+    ['вт 15:00 пара по Английскому будет тест', {
+      name: 'пара по Английскому будет тест', description: undefined, end: '16:45',
+    }, { skip: ['description'] }],
+    ['созвон завтра — обсудить бюджет', {
+      name: 'созвон — обсудить бюджет', description: undefined,
+    }, { skip: ['description'] }],
+    // Еда, вода и здоровье названий не делят
+    ['обед гречка 13:00 650 ккал — вкусно', { kind: 'food', name: 'гречка — вкусно', description: undefined }],
+    ['бег 5 км 28 мин — парк', { kind: 'workout', description: undefined }],
+    ['сон 23:40-07:30', { kind: 'sleep', description: undefined }],
+  ]);
+
+  it('помечает участок описания', () => {
+    const text = 'Созвон завтра 16:00 — обсудить бюджет';
+    const { spans } = parseQuickInput(text, CTX);
+    expect(spans.map(({ field, from, to }) => [field, text.slice(from, to)])).toEqual([
+      ['day', 'завтра'], ['time', '16:00'], ['description', 'обсудить бюджет'],
+    ]);
+  });
+});
+
 describe('ввод текстом: еда и вода', () => {
   run([
     ['обед гречка 150г б30 ж10 у60 кл6 520 ккал', {
@@ -567,6 +708,109 @@ describe('quick input (en): removed values stay in the name', () => {
   ], EN);
 });
 
+describe('quick input (en): usual duration by the head word of the name', () => {
+  run([
+    ['tue 15:00 lesson on English', {
+      kind: 'event', name: 'lesson on English', description: undefined, start: '15:00', end: '15:45',
+    }],
+    ['tomorrow at 9 lesson', { kind: 'event', name: 'lesson', day: '2026-10-09', start: '09:00', end: '09:45' }],
+    ['event lessons 10:00', { kind: 'event', name: 'lessons', start: '10:00', end: '10:45' }],
+    ['prepare lessons tomorrow 9:00', { name: 'prepare lessons', start: '09:00', end: '10:00' }],
+    ['English lesson tue 15:00', { name: 'English lesson', end: '16:00' }],
+    ['tue 15:00 lesson on physics 2 hours', { name: 'lesson on physics', end: '17:00' }],
+    ['tue lesson on physics 15:00-16:20', { name: 'lesson on physics', end: '16:20' }],
+  ], EN);
+});
+
+describe('quick input (en): name and description', () => {
+  const OWNER = {
+    kind: 'event', name: 'lesson on English', description: 'will be a listening test', day: '2026-10-13',
+    start: '15:00', end: '15:45', error: undefined,
+  } as const;
+  run([
+    ['tue 15:00 lesson on English will be a listening test', OWNER],
+    ['lesson on English tue 15:00 will be a listening test', OWNER],
+    ['lesson on English will be a listening test tue 15:00', OWNER],
+    ['lesson on English — listening test tue 15:00', {
+      name: 'lesson on English', description: 'listening test', day: '2026-10-13', end: '15:45',
+    }],
+    // Separators
+    ['call tomorrow 16:00 — discuss the budget', {
+      kind: 'event', name: 'call', description: 'discuss the budget', day: '2026-10-09', start: '16:00', end: '17:00',
+    }],
+    ['call – discuss the budget', { kind: 'task', name: 'call', description: 'discuss the budget' }],
+    ['buy milk - 2 cartons', { name: 'buy milk', description: '2 cartons' }],
+    ['meeting with Pete: budget, deadlines', { name: 'meeting with Pete', description: 'budget, deadlines' }],
+    ['buy a gift; mom likes earrings', { name: 'buy a gift', description: 'mom likes earrings' }],
+    ['Send the report. Attach the table', { name: 'Send the report', description: 'Attach the table' }],
+    ['haircut sat 12:00 // ask for Anna', {
+      name: 'haircut', description: 'ask for Anna', day: '2026-10-10', start: '12:00',
+    }],
+    ['call tomorrow\ndiscuss the budget\nand deadlines', {
+      name: 'call', description: 'discuss the budget\nand deadlines', day: '2026-10-09',
+    }],
+    ['Mom needs a call — about the cottage', { name: 'Mom needs a call', description: 'about the cottage' }],
+    // Labels
+    ['meeting with advisor note: check the draft', { name: 'meeting with advisor', description: 'check the draft' }],
+    ['meeting with advisor - description: check the draft', {
+      name: 'meeting with advisor', description: 'check the draft',
+    }],
+    ['physics class topic: optics', { name: 'physics class', description: 'topic: optics' }],
+    ['meeting notes - check the draft', { name: 'meeting notes', description: 'check the draft' }],
+    ['write description of the project', { name: 'write description of the project', description: undefined }],
+    ['send note to John', { name: 'send note to John', description: undefined }],
+    ['pick a topic for the talk', { name: 'pick a topic for the talk', description: undefined }],
+    // Lead-ins
+    ['dentist fri 10:30 need to bring insurance card', {
+      kind: 'event', name: 'dentist', description: 'need to bring insurance card', day: '2026-10-09', start: '10:30',
+    }],
+    ['trip to Boston don\'t forget the charger', {
+      name: 'trip to Boston', description: 'don\'t forget the charger',
+    }],
+    ['trip to Boston dont forget the charger', { name: 'trip to Boston', description: 'dont forget the charger' }],
+    ['seminar bring laptop', { name: 'seminar', description: 'bring laptop' }],
+    ['car service needs an oil change', { name: 'car service', description: 'needs an oil change' }],
+    // Deadline and repeat with a description
+    ['task check the papers by fri — classes 9B and 10A', {
+      kind: 'task', name: 'check the papers', due: '2026-10-09', description: 'classes 9B and 10A',
+    }],
+    ['English on tue and thu 18:00 — bring the textbook', {
+      kind: 'event', name: 'English', description: 'bring the textbook', repeat: { ...WEEKLY, weekdays: [2, 4] },
+    }],
+    ['standup daily: collect the statuses', {
+      kind: 'task', name: 'standup', description: 'collect the statuses', repeat: { kind: 'daily', interval: 1 },
+    }],
+    // Typos are still corrected
+    ['lesson tomorow 9:00 — bring notebook', {
+      name: 'lesson', description: 'bring notebook', day: '2026-10-09', end: '09:45',
+    }],
+    // No split
+    ['Python from scratch(R212) tue 15:00', {
+      name: 'Python from scratch(R212)', description: undefined, day: '2026-10-13',
+    }],
+    ['buy milk, bread', { name: 'buy milk, bread', description: undefined }],
+    ['buy a T-shirt tomorrow', { name: 'buy a T-shirt', description: undefined }],
+    ['class 10:00 — 11:30', { name: 'class', description: undefined, end: '11:30' }],
+    ['meet Mr. Smith tomorrow', { name: 'meet Mr. Smith', description: undefined }],
+    ['buy milk e.g. oat tomorrow', { name: 'buy milk e.g. oat', description: undefined }],
+    ['buy 2 kg. of apples', { name: 'buy 2 kg. of apples', description: undefined }],
+    ['U.S. visa interview fri 10:00', { name: 'U.S. visa interview', description: undefined }],
+    ['need to bring passport', { name: 'need to bring passport', description: undefined }],
+    ['don\'t forget to bring passport', { name: 'don\'t forget to bring passport', description: undefined }],
+    ['I need to buy milk', { name: 'I need to buy milk', description: undefined }],
+    ['at the bank bring the form', { name: 'at the bank bring the form', description: undefined }],
+    ['remember to bring laptop', { name: 'remember to bring laptop', description: undefined }],
+    ['test will be on friday', { name: 'test will be', description: undefined, day: '2026-10-09' }],
+    // The removed description goes back to the name
+    ['tue 15:00 lesson on English will be a test', {
+      name: 'lesson on English will be a test', description: undefined, end: '15:45',
+    }, { skip: ['description'] }],
+    // Meals and health records are not split
+    ['lunch buckwheat 13:00 650 kcal — tasty', { kind: 'food', description: undefined }],
+    ['run 5 km 28 min - park', { kind: 'workout', description: undefined }],
+  ], EN);
+});
+
 describe('quick input (en): meal and water', () => {
   run([
     ['lunch buckwheat 150g p30 f10 c60 fiber 6 520 kcal', {
@@ -748,6 +992,20 @@ describe('ввод текстом: язык словаря', () => {
     expect(goals.goalChanges).toMatchObject({
       goals: { protein: 140, water: 2500 }, health: { sleepMinutes: 480 }, dayStart: 480, dayEnd: 1320,
     });
+  });
+
+  // Примеры окна ввода: каждый разбирается без ошибки, один показывает описание
+  it.each([['fallback.strings', 'en'], ['ru.strings', 'ru']] as const)('примеры окна из %s', (file, lang) => {
+    const strings = readFileSync(resolve(__dirname, '../../../assets/localization', file), 'utf8');
+    const examples = /^"PlannerQuickExamples" = "(.*)";$/m.exec(strings)![1].split(/\s*\|\s*/);
+    const drafts = examples.map((line) => parseQuickInput(line, { ...CTX, lang }));
+    drafts.forEach((draft, index) => expect(draft.error, examples[index]).toBeUndefined());
+    const described = drafts.filter(({ description }) => description);
+    expect(described).toHaveLength(1);
+    expect(described[0]).toMatchObject({ kind: 'event', day: '2026-10-13', start: '15:00' });
+    expect(described[0].name).toMatch(/^(пара по английскому|English lesson)$/);
+    // Подсказка окна приводит тот же пример
+    expect(/^"PlannerQuickHint" = "(.*)";$/m.exec(strings)![1]).toContain(examples[1]);
   });
 
   it('помечает участки английской строки', () => {

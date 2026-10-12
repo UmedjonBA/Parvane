@@ -2612,6 +2612,8 @@ export interface LangPair {
   'PlannerQuickHint': undefined;
   'PlannerQuickMore': undefined;
   'PlannerQuickNoName': undefined;
+  'PlannerQuickName': undefined;
+  'PlannerQuickDescriptionToName': undefined;
   'PlannerQuickTooLong': undefined;
   'PlannerTodayNoTasks': undefined;
   'PlannerTodayAllDone': undefined;

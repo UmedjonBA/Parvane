@@ -1613,11 +1613,13 @@
 "PlannerQuickTitle" = "Новая запись";
 "PlannerQuickAuto" = "Авто";
 "PlannerQuickPlaceholder" = "созвон завтра 16:00 45 мин";
-"PlannerQuickHint" = "Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами.";
+"PlannerQuickHint" = "Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами. Описание — после тире: «пара по английскому вт 15:00 — тест по лисенингу».";
 "PlannerQuickMore" = "Подробнее";
 "PlannerQuickDue" = "до {date}";
 "PlannerQuickRemove" = "Убрать: {value}";
 "PlannerQuickNoName" = "Названия пока нет";
+"PlannerQuickName" = "Название";
+"PlannerQuickDescriptionToName" = "Вернуть описание в название";
 "PlannerQuickTooLong" = "Название слишком длинное.";
 "PlannerTodayNoTasks" = "На этот день задач нет";
 "PlannerTodayLeft" = "осталось: {count}";
@@ -1738,7 +1740,7 @@
 "PlannerMonthSleep" = "сон {value}";
 "PlannerYearLegend" = "Насыщенность — загрузка дня, красное число — праздник, точка — срок задачи.";
 "PlannerQuickExamplesTitle" = "Примеры";
-"PlannerQuickExamples" = "созвон завтра 16:00 45 мин | задача проверить работы до пт | обед гречка 13:00 650 ккал | сон 23:40-07:30 | бег 5 км 28 мин | вес 72,4 | вода 500 мл";
+"PlannerQuickExamples" = "созвон завтра 16:00 45 мин | пара по английскому вт 15:00 — тест по лисенингу | задача проверить работы до пт | обед гречка 13:00 650 ккал | сон 23:40-07:30 | бег 5 км 28 мин | вес 72,4 | вода 500 мл";
 "PlannerQuickDefault" = "По умолчанию: {date}";
 "PlannerSettingsGoalsHint" = "Цели меняются и текстом: начните строку в «+» со слова «цель».";
 "PlannerHealthGoalsShort" = "Цели";
