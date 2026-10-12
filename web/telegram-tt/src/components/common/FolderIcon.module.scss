@@ -4,3 +4,14 @@
   width: 2rem;
   height: 2rem;
 }
+
+.mask {
+  display: inline-block;
+
+  width: 2.25rem;
+  height: 2.25rem;
+
+  background-color: currentColor;
+
+  mask: var(--folder-icon) center / contain no-repeat;
+}

@@ -4,10 +4,9 @@ import {
 import { getActions, withGlobal } from '../../../../global';
 
 import type { ApiChatFolder } from '../../../../api/types';
-import type { FoldersPosition } from '../../../../types';
 
 import {
-  ALL_FOLDER_ID, FOLDERS_POSITION_LEFT, FOLDERS_POSITION_TOP, STICKER_SIZE_FOLDER_SETTINGS,
+  ALL_FOLDER_ID, STICKER_SIZE_FOLDER_SETTINGS,
 } from '../../../../config';
 import { getFolderDescriptionText } from '../../../../global/helpers';
 import { selectIsCurrentUserPremium } from '../../../../global/selectors';
@@ -22,7 +21,6 @@ import { renderTextWithEntities } from '../../../common/helpers/renderTextWithEn
 import { useFolderManagerForChatsCount } from '../../../../hooks/useFolderManager';
 import useHistoryBack from '../../../../hooks/useHistoryBack';
 import useLang from '../../../../hooks/useLang';
-import useLastCallback from '../../../../hooks/useLastCallback';
 import { getPeerColorClass } from '../../../../hooks/usePeerColor';
 import usePreviousDeprecated from '../../../../hooks/usePreviousDeprecated';
 
@@ -35,7 +33,6 @@ import Checkbox from '../../../ui/Checkbox';
 import Draggable from '../../../ui/Draggable';
 import ListItem from '../../../ui/ListItem';
 import Loading from '../../../ui/Loading';
-import RadioGroup from '../../../ui/RadioGroup';
 
 type OwnProps = {
   isActive?: boolean;
@@ -52,7 +49,6 @@ type StateProps = {
   maxFolders: number;
   isPremium?: boolean;
   areTagsEnabled?: boolean;
-  foldersPosition: FoldersPosition;
 };
 
 type SortState = {
@@ -71,7 +67,6 @@ const SettingsFoldersMain = ({
   recommendedChatFolders,
   maxFolders,
   areTagsEnabled,
-  foldersPosition,
   isMobile,
   onCreateFolder,
   onEditFolder,
@@ -86,7 +81,6 @@ const SettingsFoldersMain = ({
     sortChatFolders,
     toggleDialogFilterTags,
     openPremiumModal,
-    setSharedSettingOption,
   } = getActions();
 
   const [state, setState] = useState<SortState>({
@@ -217,10 +211,6 @@ const SettingsFoldersMain = ({
       };
     });
   }, [sortChatFolders]);
-
-  const handleFoldersPositionChange = useLastCallback((value: string) => {
-    setSharedSettingOption({ foldersPosition: value as FoldersPosition });
-  });
 
   const canCreateNewFolder = useMemo(() => {
     return !isPremium || Object.keys(foldersById).length < maxFolders - 1;
@@ -434,25 +424,6 @@ const SettingsFoldersMain = ({
           {!isPremium && <Icon name="lock-badge" className="settings-folders-lock-icon" />}
         </div>
       </Island>
-      {!isMobile && (
-        <>
-          <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang('TabsPosition')}</IslandTitle>
-          <Island>
-            <RadioGroup
-              name="tabsPosition"
-              options={[{
-                label: lang('TabsPositionLeft'),
-                value: FOLDERS_POSITION_LEFT,
-              }, {
-                label: lang('TabsPositionTop'),
-                value: FOLDERS_POSITION_TOP,
-              }]}
-              selected={foldersPosition}
-              onChange={handleFoldersPositionChange}
-            />
-          </Island>
-        </>
-      )}
     </Surface>
   );
 };
@@ -473,7 +444,6 @@ export default memo(withGlobal<OwnProps>(
       recommendedChatFolders,
       maxFolders: selectCurrentLimit(global, 'dialogFilters'),
       areTagsEnabled,
-      foldersPosition: global.sharedState.settings.foldersPosition,
     };
   },
 )(SettingsFoldersMain));

@@ -1,6 +1,6 @@
 import { memo } from '../../lib/teact/teact';
 
-import { emojiToFolderIcon } from '../../util/folderIconMap';
+import { emojiToFolderIcon, getFolderIconImage } from '../../util/folderIconMap';
 import { REM } from './helpers/mediaDimensions';
 import renderText from './helpers/renderText';
 
@@ -28,6 +28,12 @@ const FolderIcon = ({
 
   if (!emoji) {
     return <Icon name="folder-tabs-folder" />;
+  }
+
+  // Parvane: значки Telegram Desktop — одноцветные, цветом текста
+  const image = getFolderIconImage(emoji);
+  if (image) {
+    return <i className={styles.mask} style={`--folder-icon: url("${image}")`} aria-hidden />;
   }
 
   const iconName = emojiToFolderIcon(emoji);

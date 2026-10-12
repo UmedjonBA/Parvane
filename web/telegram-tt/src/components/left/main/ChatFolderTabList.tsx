@@ -5,7 +5,7 @@ import type { TabWithProperties } from '../../ui/TabList';
 
 import { MouseButton } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
-import { emojiToFolderIcon } from '../../../util/folderIconMap';
+import { emojiToFolderIcon, getFolderIconImage } from '../../../util/folderIconMap';
 import renderText from '../../common/helpers/renderText';
 
 import useContextMenuHandlers from '../../../hooks/useContextMenuHandlers';
@@ -70,6 +70,9 @@ function renderChipIcon(tab: TabWithProperties) {
 
   if (!emoticon) return <ParvaneIcon name="folder" isSmall />;
 
+  const image = getFolderIconImage(emoticon);
+  if (image) return <i className={styles.maskIcon} style={`--folder-icon: url("${image}")`} aria-hidden />;
+
   const lineIcon = LINE_ICONS[emoticon];
   if (lineIcon) return <ParvaneIcon name={lineIcon} isSmall />;
 
@@ -120,7 +123,7 @@ const FolderChip = ({
       onMouseDown={handleMouseDown}
       onContextMenu={handleContextMenu}
     >
-      {renderChipIcon(tab)}
+      <span className={styles.chipIcon}>{renderChipIcon(tab)}</span>
       <span className={styles.title}>{typeof tab.title === 'string' ? renderText(tab.title) : tab.title}</span>
       {Boolean(tab.badgeCount) && (
         <span className={buildClassName(styles.badge, !tab.isBadgeActive && styles.badgeMuted)}>

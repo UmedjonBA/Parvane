@@ -28,7 +28,7 @@
 
   height: 1.875rem;
   padding: 0 0.75rem;
-  border: 1px solid var(--pv-line2);
+  border: 1px solid color-mix(in srgb, var(--chip-color) 45%, var(--pv-line2));
   border-radius: 0.9375rem;
 
   font-size: 0.8125rem;
@@ -55,6 +55,23 @@
 
   display: inline-flex;
   align-items: center;
+}
+
+.chipIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--chip-color);
+}
+
+.maskIcon {
+  display: inline-block;
+
+  width: 1.125rem;
+  height: 1.125rem;
+
+  background-color: currentColor;
+
+  mask: var(--folder-icon) center / contain no-repeat;
 }
 
 .fontIcon {
