@@ -361,6 +361,8 @@ try {
   await openPlannerScreen(page, 'calendar');
   await openFullForm();
   await page.locator('#planner-new-kind').selectOption('event');
+  // Форма перестраивается под событие: поля времени заполняются уже в новой раскладке
+  await sidePane.getByText('All day', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#planner-new-name').fill('Йога');
   // Конец не задаётся: по умолчанию — через час после начала (spec 013, B6)
   await planner.getByLabel('Start', { exact: true }).fill('18:00');
