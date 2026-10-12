@@ -204,6 +204,120 @@ try {
   assert.equal(await knowledge.locator('[data-canvas-chip]').count(), 1, 'холст остался один');
   console.log('OK: холст переименован и удалён, открыт оставшийся');
 
+  // ── «Обновить из графа»: новое из заметок появляется, сделанное руками остаётся на месте ──
+  const CASE = 'Корпус';
+  const HAND_TEXT = 'Своя пометка';
+  const fileCards = '[data-canvas-node][data-canvas-type="file"]';
+  const handCard = board.locator('[data-canvas-type="text"]').filter({ hasText: HAND_TEXT });
+  const refresh = knowledge.locator('[data-canvas-refresh]');
+  // Место и ширина каждого узла — из его стиля (координаты холста, от вида не зависят)
+  const places = async () => {
+    await page.waitForTimeout(300);
+    return board.locator('[data-canvas-node]').evaluateAll((nodes) => Object.fromEntries(
+      nodes.map((node) => [node.dataset.canvasNode, [node.style.left, node.style.top, node.style.width]]),
+    ));
+  };
+  const samePlaces = (before, after, what) => Object.keys(before).forEach((id) => {
+    assert.deepEqual(after[id], before[id], `${what}: узел ${id} сдвинут или пропал`);
+  });
+  // Правка текста заметки NOTE; возвращает текст, который был до правки
+  const rewriteNote = async (change) => {
+    await openTab('Notes');
+    await row(NOTE).click();
+    await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для правки');
+    await note.getByRole('button', { name: 'Edit' }).click();
+    const editor = page.locator('#knowledge-note-editor');
+    const before = await editor.inputValue();
+    await editor.fill(change(before));
+    await note.getByRole('button', { name: 'Save' }).click();
+    return before;
+  };
+  const backToCanvas = async () => {
+    await openTab('Canvas');
+    await visible(board, 'поле холста после возврата');
+    await visible(handCard, 'своя текстовая карточка после возврата на холст');
+  };
+
+  await knowledge.getByRole('button', { name: 'Text', exact: true }).click();
+  await visible(board.locator('textarea[data-canvas-inline]'), 'поле текста своей карточки');
+  await board.locator('[data-canvas-inline]').fill(HAND_TEXT);
+  await board.locator('[data-canvas-inline]').press('Enter');
+  await visible(handCard, 'своя текстовая карточка');
+  // Обновление без перемен в заметках ничего не меняет
+  await refresh.click();
+  await visible(page.getByText('Nothing to update'), 'сообщение «обновлять нечего»');
+  await canvasCount(fileCards, 3, 'обновление без перемен добавило карточки');
+  await canvasCount('[data-canvas-edge]', 1, 'обновление без перемен изменило стрелки');
+  const placesBefore = await places();
+  // Правка холста пишется с задержкой — дождаться записи перед уходом с вкладки
+  await page.waitForTimeout(2000);
+
+  // Новая заметка, на которую ссылается прежняя
+  const noteText = await rewriteNote((text) => `${text}\n\nКуда ставить: [[${CASE}]]`);
+  await body.getByRole('button', { name: CASE }).click();
+  await visible(knowledge.locator(`[data-note-title="${CASE}"]`), 'новая заметка по ссылке');
+  await backToCanvas();
+  await canvasCount(fileCards, 3, 'карточка новой заметки появилась без обновления');
+  await refresh.click();
+  await canvasCount(fileCards, 4, 'обновление не добавило карточку новой заметки');
+  await canvasCount('[data-canvas-edge]', 2, 'обновление не добавило стрелку новой ссылки');
+  await visible(page.getByText('Added notes: 1, links: 1. Removed links: 0'), 'итог обновления');
+  await visible(board.locator(fileCards).filter({ hasText: CASE }), 'карточка новой заметки');
+  await visible(handCard, 'своя текстовая карточка после обновления');
+  const placesAdded = await places();
+  samePlaces(placesBefore, placesAdded, 'после обновления');
+  assert.equal(Object.keys(placesAdded).length, Object.keys(placesBefore).length + 1, 'после обновления узлов не на один больше');
+  const refreshed = await board.locator('[data-canvas-node]').evaluateAll((nodes) => nodes.map((node) => {
+    const box = node.getBoundingClientRect();
+    return [box.left, box.top, box.right, box.bottom];
+  }));
+  refreshed.forEach((a, i) => refreshed.slice(i + 1).forEach((b) => {
+    assert.ok(a[2] <= b[0] || b[2] <= a[0] || a[3] <= b[1] || b[3] <= a[1], 'новая карточка легла на другой узел');
+  }));
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-canvas-refresh.png` });
+  await page.waitForTimeout(2000);
+
+  // Ссылку убрали из заметки: своя стрелка уходит, карточка остаётся; отмена возвращает стрелку
+  await rewriteNote(() => noteText);
+  await body.getByRole('button', { name: CASE }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('ссылка осталась в заметке'));
+  await backToCanvas();
+  await canvasCount('[data-canvas-edge]', 2, 'стрелка пропала без обновления');
+  await refresh.click();
+  await canvasCount('[data-canvas-edge]', 1, 'обновление не убрало стрелку исчезнувшей ссылки');
+  await canvasCount(fileCards, 4, 'обновление убрало карточку');
+  await visible(page.getByText('Added notes: 0, links: 0. Removed links: 1'), 'итог обновления после удаления ссылки');
+  samePlaces(placesAdded, await places(), 'после второго обновления');
+  await knowledge.locator('[data-canvas-undo]').click();
+  await canvasCount('[data-canvas-edge]', 2, 'отмена не вернула стрелку');
+  await canvasCount(fileCards, 4, 'отмена обновления тронула карточки');
+  await knowledge.locator('[data-canvas-redo]').click();
+  await canvasCount('[data-canvas-edge]', 1, 'возврат не убрал стрелку снова');
+  // То же действие — в меню пустого места поля
+  const freePoints = await board.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const points = [];
+    for (let y = box.bottom - 30; y > box.top + 140; y -= 60) {
+      for (let x = box.left + 30; x < box.right - 90; x += 60) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && element.contains(hit) && !hit.closest('[data-canvas-node], [data-board-tools]')) points.push([x, y]);
+      }
+    }
+    return points;
+  });
+  let hasRefreshItem = false;
+  for (const [x, y] of freePoints.slice(0, 12)) {
+    await page.mouse.click(x, y, { button: 'right' });
+    await page.locator('[data-canvas-context]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    hasRefreshItem = (await page.locator('[data-canvas-command="refreshGraph"]').count()) > 0;
+    await page.keyboard.press('Escape');
+    await page.locator('[data-canvas-context]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+    // Точка у самой стрелки открывает меню стрелки — берётся следующая
+    if (hasRefreshItem) break;
+  }
+  assert.ok(hasRefreshItem, 'в меню пустого места поля нет «Обновить из графа»');
+  console.log('OK: «Обновить из графа» — новая карточка и стрелка, своё на месте, исчезнувшая ссылка убрана, отмена');
+
   // ── Холст: текст, карточка заметки, связь ─────────────────────────────────
   await knowledge.getByRole('button', { name: 'New canvas' }).click();
   await visible(chip('Canvas 2'), 'новый пустой холст');

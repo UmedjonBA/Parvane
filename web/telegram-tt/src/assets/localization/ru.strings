@@ -1800,6 +1800,11 @@
 "KnowledgeCanvasFromGraph" = "Холст из графа";
 "KnowledgeCanvasFromGraphShort" = "Из графа";
 "KnowledgeCanvasGraphName" = "Граф связей";
+"KnowledgeCanvasRefresh" = "Обновить из графа";
+"KnowledgeCanvasRefreshDone" = "Добавлено заметок: {cards}, связей: {edges}. Убрано связей: {removed}";
+"KnowledgeCanvasRefreshNothing" = "Обновлять нечего";
+"KnowledgeCanvasRefreshRenamed" = "Карточек перенесено на переименованные заметки: {count}";
+"KnowledgeCanvasNoteMissing" = "Заметка не найдена";
 "KnowledgeCanvasActions" = "Действия с холстом";
 "KnowledgeCanvasTitle" = "Название холста";
 "KnowledgeCanvasRename" = "Переименовать";
