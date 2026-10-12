@@ -31,6 +31,7 @@ type OwnProps = {
   onClick: (slug: string) => void;
 };
 
+const BUILTIN_SLUG_PREFIX = 'builtin-';
 const WallpaperTile: FC<OwnProps> = ({
   wallpaper,
   theme,
@@ -106,6 +107,8 @@ const WallpaperTile: FC<OwnProps> = ({
   const className = buildClassName(
     'WallpaperTile',
     isSelected && 'selected',
+    // Parvane: встроенный фон — градиент с узором; плитка показывает его середину крупно, иначе узор сливается
+    slug.startsWith(BUILTIN_SLUG_PREFIX) && 'is-pattern',
   );
 
   return (
