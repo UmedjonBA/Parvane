@@ -8,7 +8,7 @@
   background-position: center;
   background-size: 100% 100%;
 
-  @include mixins.chat-pattern-background("../assets/pattern.svg");
+  @include mixins.chat-pattern-background("../assets/parvane/chat-patterns/science-mix.svg");
 
   &::before {
     @media (max-width: 600px) {

@@ -57,6 +57,6 @@
   }
 
   &:not(.customBgImage):not(.customBgColor)::after {
-    @include mixins.chat-pattern-styles("../assets/pattern.svg");
+    @include mixins.chat-pattern-styles("../assets/parvane/chat-patterns/science-mix.svg");
   }
 }
