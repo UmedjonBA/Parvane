@@ -1,6 +1,6 @@
 import type { FC } from '../../../lib/teact/teact';
 import {
-  memo, useEffect, useMemo,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
@@ -30,6 +30,7 @@ import { useHotkeys } from '../../../hooks/useHotkeys';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
+import useResizeObserver from '../../../hooks/useResizeObserver';
 
 import MainMenuDropdown from '../../common/MainMenuDropdown';
 import PeerChip from '../../common/PeerChip';
@@ -77,6 +78,9 @@ const CLEAR_DATE_SEARCH_PARAM = { date: undefined };
 const CLEAR_CHAT_SEARCH_PARAM = { id: undefined };
 
 const IS_WITH_WINDOW_BUTTONS = IS_TAURI && IS_MAC_OS;
+// Ширина шапки без полей, px. Меньше — у «Написать» остаётся один значок (так у колонки в четверть окна
+// шириной 1280; при 1440 подпись ещё помещается)
+const COMPACT_HEADER_WIDTH = 330;
 
 const LeftMainHeader = ({
   shouldHideSearch,
@@ -123,6 +127,12 @@ const LeftMainHeader = ({
   const isChatsHeader = hasMenu && !shouldHideSearch;
 
   const [isComposeMenuOpen, openComposeMenu, closeComposeMenu] = useFlag();
+
+  const headerRef = useRef<HTMLDivElement>();
+  const [isCompact, setIsCompact] = useState(false);
+  useResizeObserver(headerRef, (entry) => {
+    setIsCompact(entry.contentRect.width < COMPACT_HEADER_WIDTH);
+  });
 
   const handleNewMessage = useLastCallback(() => {
     openLeftColumnContent({ contentKey: LeftColumnContent.Contacts });
@@ -259,8 +269,11 @@ const LeftMainHeader = ({
   return (
     <div className="LeftMainHeader">
       <div
+        ref={headerRef}
         id="LeftMainHeader"
-        className={buildClassName('left-header', isChatsHeader && 'left-header--chats')}
+        className={buildClassName(
+          'left-header', isChatsHeader && 'left-header--chats', isCompact && 'left-header--compact',
+        )}
         data-tauri-drag-region={IS_WITH_WINDOW_BUTTONS ? true : undefined}
       >
         {lang.isRtl && <div className="DropdownMenuFiller" />}

@@ -248,7 +248,7 @@
     cursor: var(--custom-cursor, pointer);
 
     overflow: hidden;
-    flex: 0 1 6.5rem;
+    flex: 0 1 5.75rem;
 
     width: auto;
     min-width: 2.125rem;
@@ -299,31 +299,26 @@
 
   .left-header-compose-wrapper {
     position: relative;
-
-    // Сжимается раньше поиска: в узкой колонке от кнопки остаётся значок
-    flex: 0 1000 auto;
-    min-width: 2.125rem;
+    flex: none;
   }
 
   .left-header-compose {
     cursor: var(--custom-cursor, pointer);
 
-    overflow: hidden;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0 0.375rem;
-    align-content: flex-start;
+    display: inline-flex;
+    gap: 0.375rem;
+    align-items: center;
     justify-content: center;
 
-    width: 100%;
+    min-width: 2.125rem;
     height: 2.125rem;
-    padding: 0 0.5rem;
+    padding: 0 0.875rem;
     border: none;
     border-radius: 1.0625rem;
 
     font-size: 0.875rem;
     font-weight: var(--font-weight-semibold);
-    line-height: 2.125rem;
+    line-height: 1.25rem;
     color: var(--pv-accent-ink);
     white-space: nowrap;
 
@@ -339,16 +334,17 @@
     &:focus-visible {
       box-shadow: 0 0 0 2px var(--pv-fg);
     }
-
-    // Строка значка — во всю высоту кнопки: подпись, не поместившись, уходит на вторую строку и не видна
-    > svg {
-      align-self: center;
-      height: 2.125rem;
-    }
   }
 
-  .left-header-compose-label {
-    padding-inline-end: 0.375rem;
+  // Узкая колонка: от «Написать» остаётся значок
+  &.left-header--compact {
+    .left-header-compose {
+      padding: 0;
+    }
+
+    .left-header-compose-label {
+      display: none;
+    }
   }
 
   @media (max-width: 600px) {
