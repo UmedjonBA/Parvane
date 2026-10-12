@@ -90,6 +90,7 @@ const DASH = '-|–|—';
 const ALL_KINDS: QuickKind[] = ['task', 'event', 'food', 'water', 'sleep', 'workout', 'metric', 'goal'];
 const SEPARATOR = `(?![${ALNUM}])`;
 const MAX_MOOD = 5;
+const MAX_SLEEP_MINUTES = 16 * 60;
 const MAX_STEPS = 200000;
 
 // ── словарь языка ────────────────────────────────────────────────────────────
@@ -107,6 +108,10 @@ type QuickWords = {
   event: string;
   water: string;
   sleep: string;
+  // Слова перед словом сна («сегодня я спал…») и глаголы «лёг … встал …»
+  sleepPrefix?: string;
+  sleepBed?: string;
+  sleepWake?: string;
   workout: string;
   goal: string;
   metrics: Entry<QuickMetric>[];
@@ -188,7 +193,10 @@ const WORDS: Record<QuickLang, QuickWords> = {
     task: 'задач[ау]',
     event: 'событие',
     water: 'вод[аыу]',
-    sleep: 'сон|спал[аи]?',
+    sleep: 'сон|(?:по|про)?спал[аи]?|выспал(?:ся|ась)',
+    sleepPrefix: 'сегодня|ночью|сейчас|я',
+    sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
+    sleepWake: 'встал[а]?|проснул(?:ся|ась)',
     workout: 'зал|бег|тренировк[аиу]|кардио|плавание|йога|велосипед|прогулк[аиу]|спорт',
     goal: 'цел[ьи]',
     metrics: [
@@ -271,6 +279,9 @@ const WORDS: Record<QuickLang, QuickWords> = {
     event: 'event',
     water: 'water',
     sleep: 'sleep|slept',
+    sleepPrefix: 'today|tonight|last\\s+night|i',
+    sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
+    sleepWake: 'woke(?:\\s+up)?|got\\s+up',
     workout: 'gym|workout|training|cardio|run|running|jog|jogging|swim|swimming|yoga|bike|cycling|walk|hike',
     goal: 'goals?',
     metrics: [
@@ -417,7 +428,13 @@ function compile(words: QuickWords) {
     minutes: `(?:\\s*(?:${words.minute})${words.minuteGlued ? `|(?:${words.minuteGlued})` : ''})`,
     kindLead: new RegExp(`^\\s*(?:(${words.task})|(${words.event}))(?:\\s*[:—–]\\s*|\\s+-\\s+|\\s+|$)`),
     waterLead: lead(words.water),
-    sleepLead: lead(words.sleep),
+    sleepLead: lead(`(?:(?:${words.sleepPrefix || '(?!)'})\\s+)*(?:${words.sleep})`),
+    plainSleepLead: lead(words.sleep),
+    bedWake: words.sleepBed && words.sleepWake ? new RegExp(
+      `(?:^|[^${ALNUM}])(?:${words.sleepBed})\\s+(?:(?:${words.at})\\s+)?(\\d{1,2})(?:[:.](\\d{2}))?`
+      + `[^${ALNUM}]+(?:(?:${words.and})\\s+)?(?:${words.sleepWake})\\s+(?:(?:${words.at})\\s+)?`
+      + `(\\d{1,2})(?:[:.](\\d{2}))?${SEPARATOR}`,
+    ) : undefined,
     workoutLead: lead(words.workout),
     goalLead: lead(words.goal),
     metricLead: new RegExp(`^\\s*(${bodies(words.metrics)})${SEPARATOR}\\s*(.*)$`),
@@ -946,8 +963,12 @@ function parseHealth(
     const metric = can('metric') && lang.metricLead.exec(lower);
     if (metric) return settle(parseMetric(lang.metricOf(metric[1])!, metric[2], ctx, lang));
     if (can('sleep') && lang.sleepLead.test(lower)) {
-      return settle(parseSleep(lower.replace(lang.sleepLead, ''), ctx, lang));
+      const sleep = parseSleep(lower.replace(lang.sleepLead, ''), ctx, lang);
+      // «я спал плохо» без времени — не запись сна, а обычная строка
+      return !lang.plainSleepLead.test(lower) && sleep.error ? undefined : settle(sleep);
     }
+    const bedWake = can('sleep') && lang.bedWake?.exec(lower);
+    if (bedWake) return sleepRange(bedWake, ctx);
   }
   if (ctx.kind === 'sleep') return parseSleep(lower, ctx, lang);
   // Тип «цель» выбран вызывающим: слово «цель» в начале не обязательно
@@ -983,23 +1004,34 @@ function parseMetric(metric: QuickMetric, rest: string, ctx: QuickContext, { wor
 // «23:40-07:30» — лёг и встал (ночь уходит за полночь); «7,5 ч», «7 ч 30 мин» — только длительность
 function parseSleep(rest: string, ctx: QuickContext, lang: Lang): QuickDraft {
   const { words } = lang;
-  const range = new RegExp(`(\\d{1,2})[:.](\\d{2})\\s*(?:${DASH}|${words.to})\\s*(\\d{1,2})[:.](\\d{2})`).exec(rest);
-  if (range) {
-    const bed = resolveHour(Number(range[1]), Number(range[2]));
-    const wake = resolveHour(Number(range[3]), Number(range[4]));
-    if (bed === undefined || wake === undefined || bed === wake || bed >= MINUTES_IN_DAY || wake >= MINUTES_IN_DAY) {
-      return healthDraft('sleep', ctx, { error: 'time' });
-    }
-    return healthDraft('sleep', ctx, {
-      start: toTime(bed), end: toTime(wake), minutes: (wake - bed + MINUTES_IN_DAY) % MINUTES_IN_DAY,
-    });
-  }
+  // Минуты необязательны: «с 4 до 12»; «7-8 ч» — не время, а длительность
+  const range = new RegExp(
+    `(\\d{1,2})(?:[:.](\\d{2}))?\\s*(?:${DASH}|${words.to})\\s*(\\d{1,2})(?:[:.](\\d{2}))?`
+    + `(?![.,:]?\\d|\\s*(?:${words.hour})${SEPARATOR})`,
+  ).exec(rest);
+  if (range) return sleepRange(range, ctx);
   const duration = new RegExp(
     `(${NUM})\\s*(?:${words.hour})${SEPARATOR}(?:\\s*(\\d{1,2})${lang.minutes}${SEPARATOR})?`,
   ).exec(rest);
   const minutes = duration ? Math.round(toNumber(duration[1]) * MINUTES_IN_HOUR) + Number(duration[2] || 0) : 0;
   return minutes > 0 && minutes < MINUTES_IN_DAY
     ? healthDraft('sleep', ctx, { minutes }) : healthDraft('sleep', ctx, { error: 'time' });
+}
+
+// Группы: час и минуты отхода ко сну, час и минуты подъёма
+function sleepRange(groups: RegExpExecArray, ctx: QuickContext): QuickDraft {
+  const typedBed = resolveHour(Number(groups[1]), Number(groups[2] || 0));
+  const wake = resolveHour(Number(groups[3]), Number(groups[4] || 0));
+  // «с 11 до 7» — лёг вечером: сон дольше 16 часов означает, что час отхода назван без «вечера»
+  const isEvening = typedBed !== undefined && wake !== undefined && typedBed < MINUTES_IN_DAY / 2
+    && (wake - typedBed + MINUTES_IN_DAY) % MINUTES_IN_DAY > MAX_SLEEP_MINUTES;
+  const bed = isEvening ? typedBed + MINUTES_IN_DAY / 2 : typedBed;
+  if (bed === undefined || wake === undefined || bed === wake || bed >= MINUTES_IN_DAY || wake >= MINUTES_IN_DAY) {
+    return healthDraft('sleep', ctx, { error: 'time' });
+  }
+  return healthDraft('sleep', ctx, {
+    start: toTime(bed), end: toTime(wake), minutes: (wake - bed + MINUTES_IN_DAY) % MINUTES_IN_DAY,
+  });
 }
 
 // Тренировка-запись: «бег 5 км 28 мин», «зал присед 4x8x80, жим 3x10x60», «зал 60 мин». Тренировка с
