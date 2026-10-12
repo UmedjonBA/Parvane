@@ -219,6 +219,9 @@ try {
   await openGroupChatByTitle(sessions.bob.page, groupTitle);
   await waitHeaderAvatarImage(sessions.bob.page);
   console.log(`group photo reached bob in ${Date.now() - photoSetAt} ms`);
+  // Просмотрщик фото группы получает это фото (раньше список был пуст и просмотрщик открывался тёмным)
+  const viewerPhotos = await callProviderForChat(alicePage, 'fetchProfilePhotos', groupTitle, undefined, { peer: '$chat' });
+  assert.equal(viewerPhotos.result?.photos?.length, 1, `фото группы для просмотрщика: ${JSON.stringify(viewerPhotos)}`);
   await openGroupChatByTitle(sessions.carol.page, groupTitle);
   await waitHeaderAvatarImage(sessions.carol.page);
 

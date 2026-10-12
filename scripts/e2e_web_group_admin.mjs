@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  closeRightColumn,
+  openGroupManagement,
   LOGIN_TIMEOUT_MS,
   findMessage,
   openPrivateChat,
@@ -238,6 +240,12 @@ try {
     .waitFor({ state: 'visible', timeout: CONVERGENCE_TIMEOUT_MS });
   const bobComposerCount = await bobSession.page.locator('#editable-message-text').count();
   assert.equal(bobComposerCount, 0, 'у подписчика канала не должно быть composer');
+
+  // Владелец канала может менять фото и сведения: набора прав у владельца нет, экран не должен их требовать
+  const channelManage = await openGroupManagement(aliceSession.page, channelTitle);
+  await channelManage.getByText('Choose photo').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await channelManage.locator('#channel-title').isDisabled(), false, 'название канала недоступно владельцу');
+  await closeRightColumn(aliceSession.page);
 
   assert.deepEqual(aliceSession.errors, [], `alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `bob page errors: ${bobSession.errors.join('; ')}`);
