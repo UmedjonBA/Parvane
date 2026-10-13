@@ -1,3 +1,5 @@
+import type { PlannerCalendarView } from '../components/parvane/planner/plannerModel';
+
 import { createSignal } from './signals';
 
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
@@ -66,7 +68,25 @@ function readCalendarSide(): PlannerCalendarSide {
 const [getPlannerView, setPlannerViewSignal] = createSignal<PlannerView>(readPlannerView());
 let calendarSide = readCalendarSide();
 
-export { getParvaneSection, getPlannerAddRequest, getPlannerView };
+// Выбранный день «Плана» и вид календаря — в сигналах, а не в состоянии раздела: при переключении разделов
+// раздел размонтируется, и при возврате открывается на том же дне и виде. Нет значения — «сегодня» и
+// сохранённый на устройстве вид (их знает сам раздел)
+const [getPlannerPickedDay, setPlannerPickedDaySignal] = createSignal<string | undefined>(undefined);
+const [getPlannerCalendarView, setPlannerCalendarViewSignal] = createSignal<PlannerCalendarView | undefined>(
+  undefined,
+);
+
+export {
+  getParvaneSection, getPlannerAddRequest, getPlannerView, getPlannerPickedDay, getPlannerCalendarView,
+};
+
+export function setPlannerPickedDay(day: string) {
+  setPlannerPickedDaySignal(day);
+}
+
+export function setPlannerCalendarView(view: PlannerCalendarView) {
+  setPlannerCalendarViewSignal(view);
+}
 
 export function setPlannerView(view: PlannerView) {
   setPlannerViewSignal(view);
@@ -90,6 +110,19 @@ export function openPlannerView(view: PlannerView) {
 export function openPlannerCalendar() {
   showPlannerCalendar();
   setParvaneSection('planner');
+}
+
+/**
+ * Показан ли экран пользователю. Разделы после первого показа остаются смонтированными и скрытыми (E1,
+ * `Main.tsx`): слушатели клавиш на документе, таймеры и обработка запросов в скрытом разделе обязаны
+ * сверяться с этим признаком — иначе скрытый «План» или холст «Знаний» перехватит клавишу у мессенджера.
+ * «Знания» (`knowledge`) и «Файлы» (`files`) — две части раздела `cloud`
+ */
+export function getIsParvaneScreenShown(screen: ParvaneSection | 'knowledge' | 'files') {
+  const section = getParvaneSection();
+  if (screen === 'knowledge') return section === 'cloud' && getKnowledgeView() !== 'files';
+  if (screen === 'files') return section === 'cloud' && getKnowledgeView() === 'files';
+  return section === screen;
 }
 
 export function setParvaneSection(section: ParvaneSection) {

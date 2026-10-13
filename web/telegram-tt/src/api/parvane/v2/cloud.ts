@@ -9,10 +9,13 @@ import { V2Error } from './transport';
 // ключи эпох, журнал грантов и метки; здесь — жизненный цикл: найти контейнеры
 // (журнал личного состояния + `domain.container.list`), подключить, снимок и
 // журнал (`domain.op.sync`), очередь отправки своих операций (переживает
-// перезагрузку), снимок по порогу, опрос (8 с при открытом разделе, 60 с в
-// фоне), доступ участников, сборка блобов стёртых файлов. Статусы для UI — как
-// у планировщика: `loading`, `needs-linking` (диск не создаём), `no-key`,
-// `offline`, `ready`.
+// перезагрузку), снимок по порогу, опрос (8 с при открытом разделе и видимой
+// вкладке, иначе 60 с; при возврате — сразу), доступ участников, сборка блобов
+// стёртых файлов (после применённых операций), срок корзины (раз в час).
+// Персист и событие для UI — только когда дерево менялось; `revision()` растёт
+// при каждом изменении деревьев в движке — по ней `cloudDrive` держит кэш
+// разобранных деревьев. Статусы для UI — как у планировщика: `loading`,
+// `needs-linking` (диск не создаём), `no-key`, `offline`, `ready`.
 
 export type CloudSyncStatus = 'loading' | 'needs-linking' | 'no-key' | 'offline' | 'ready';
 export type CloudContainerKind = 'root' | 'owned' | 'shared' | 'invite';
@@ -95,6 +98,8 @@ const SYNC_PAGES = 50;
 const MAX_OPS_PER_BATCH = 400;
 // Запрос без ответа (обрыв во время реконнекта) не должен вешать очередь модуля
 const CALL_TIMEOUT_MS = 20000;
+// Срок корзины проверяется раз в час (и при первом синке контейнера), а не каждый опрос
+const TRASH_CHECK_MS = 60 * 60 * 1000;
 
 function hexToB64(hex: string) {
   const bytes = new Uint8Array(hex.length / 2);
@@ -134,12 +139,22 @@ export function createCloudSync(deps: Deps) {
   // Чужие контейнеры, в которых доступа больше нет (сервер ответил NOT_FOUND)
   const lost = new Set<string>();
   let gcDone: string[] | undefined;
+  // Контейнеры, у которых сборка блобов и срок корзины уже проверялись (и когда)
+  const gcChecked = new Set<string>();
+  const trashCheckedAt = new Map<string, number>();
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   let isWanted = false;
   let isActive = false;
   let isDiscovered = false;
+  let areListenersSet = false;
+  // Движок менял деревья, а персиста после этого не было
+  let isDirty = false;
+  // Растёт при каждом изменении деревьев/состава в движке — ключ кэша разобранных деревьев
+  let revision = 0;
+  // Кэш личного диска: записи журнала состояния приходят тем же массивом, пока снимок не менялся
+  let rootCache: { entries: CloudStateEntry[]; id: string | undefined } | undefined;
   // Сколько своих контейнеров облака назвал сервер при последнем опросе списка
   let ownOnServer: number | undefined;
   let lastError: string | undefined;
@@ -148,6 +163,18 @@ export function createCloudSync(deps: Deps) {
     const next = queue.then(fn, fn);
     queue = next.catch(() => undefined);
     return next;
+  }
+
+  /** Движок изменил дерево либо состав: кэш деревьев устарел, персист нужен. */
+  function touch() {
+    revision += 1;
+    isDirty = true;
+  }
+
+  async function persistIfDirty() {
+    if (!isDirty) return;
+    isDirty = false;
+    await deps.persist();
   }
 
   function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
@@ -190,7 +217,11 @@ export function createCloudSync(deps: Deps) {
 
   /** Личный диск: запись журнала состояния (при двух — меньший id). */
   function rootId(): string | undefined {
-    return liveEntries().filter((e) => e.role === 'root').map((e) => e.id).sort()[0];
+    const entries = deps.stateEntries();
+    if (rootCache && rootCache.entries === entries) return rootCache.id;
+    const id = entries.filter((e) => !e.isRemoved && e.role === 'root').map((e) => e.id).sort()[0];
+    rootCache = { entries, id };
+    return id;
   }
 
   // ── очередь отправки ───────────────────────────────────────────────────────
@@ -203,7 +234,7 @@ export function createCloudSync(deps: Deps) {
     // Операции очереди уже применены локально до перезагрузки — движок их не
     // помнит (состояние без них в персисте): применить заново (идемпотентно)
     const client = deps.client();
-    if (client?.cloudIsAttached(id)) {
+    if (client?.cloudIsAttached(id) && saved.length) {
       saved.forEach((item) => {
         try {
           client.cloudApplyLocal(id, b64ToBytes(item.op));
@@ -211,6 +242,7 @@ export function createCloudSync(deps: Deps) {
           deps.log(`облако: операция из очереди не применена: ${String(e)}`);
         }
       });
+      touch();
     }
     return saved;
   }
@@ -240,7 +272,9 @@ export function createCloudSync(deps: Deps) {
       throw e;
     }
     snapshotTried.delete(id);
+    touch();
     await loadOutbox(id);
+    isDirty = false;
     await deps.persist();
     deps.log(`облако: контейнер подключён (${id.slice(0, 8)}…)`);
     return true;
@@ -250,6 +284,7 @@ export function createCloudSync(deps: Deps) {
   function dropContainer(id: string) {
     const client = deps.client();
     client?.cloudForget(id);
+    touch();
     outboxes.delete(id);
     void deps.deleteRecord(OUTBOX_RECORD + id).catch(() => undefined);
     lost.add(id);
@@ -314,8 +349,10 @@ export function createCloudSync(deps: Deps) {
       client.cloudForget(made.id);
       throw e;
     }
+    touch();
     outboxes.set(made.id, []);
     deps.recordEntry({ id: made.id, domain: deps.serverDomain() || '', role });
+    isDirty = false;
     await deps.persist();
     deps.log(`облако: контейнер создан (${made.id.slice(0, 8)}…, ${role})`);
     await shareWithOwnDevices(made.id);
@@ -363,6 +400,7 @@ export function createCloudSync(deps: Deps) {
     await pullGrants(id);
     if (client.cloudGrantVersion(id) !== versionBefore) {
       changed = true;
+      touch();
       // Участник ушёл сам (состав уменьшился, эпоха прежняя): владелец меняет
       // эпоху, чтобы ушедший не читал новое
       const after = engineContainers().find((c) => c.id === id);
@@ -383,6 +421,7 @@ export function createCloudSync(deps: Deps) {
       try {
         if (client.cloudIngestSnapshot(id, resp) !== 0) {
           changed = true;
+          touch();
           // Дерево из снимка — на экран сразу, догон журнала следом
           deps.onChanged();
         }
@@ -398,7 +437,10 @@ export function createCloudSync(deps: Deps) {
       const r = client.cloudIngestSync(id, resp, isStrict) as {
         applied: number; more: boolean; grantsBehind: boolean; authorsBehind: boolean;
       };
-      if (r.applied) changed = true;
+      if (r.applied) {
+        changed = true;
+        touch();
+      }
       if (r.authorsBehind) {
         // Ключ автора неизвестен: новое устройство участника — обновить журналы
         // устройств и повторить; что не опознано и после этого — пропускается
@@ -423,6 +465,8 @@ export function createCloudSync(deps: Deps) {
       const req = client.cloudSnapshotRequest(id, Date.now()) as OutReq | undefined;
       if (!req) return;
       await call(req.chan, req.method, req.body);
+      // Движок запомнил seq снимка — в персист (дерево не менялось, ревизия прежняя)
+      isDirty = true;
       deps.log(`облако: снимок записан (${id.slice(0, 8)}…, seq ${client.cloudHeadSeq(id)})`);
     } catch (e) {
       deps.log(`облако: снимок не записан: ${String(e)}`);
@@ -521,10 +565,19 @@ export function createCloudSync(deps: Deps) {
     try {
       await sendOutbox(id);
       const changed = await pull(id);
-      // После журнала: восстановленное на другом устройстве уже не в корзине
-      const purged = await purgeExpiredTrash(id);
+      // Срок корзины — раз в час и после журнала: восстановленное на другом
+      // устройстве уже не в корзине
+      const now = Date.now();
+      const isTrashDue = now - (trashCheckedAt.get(id) || 0) >= TRASH_CHECK_MS;
+      if (isTrashDue) trashCheckedAt.set(id, now);
+      const purged = isTrashDue ? await purgeExpiredTrash(id) : false;
       await maybeSnapshot(id);
-      await collectGarbage(id);
+      // Сборка блобов стёртых файлов — только когда дерево менялось (и один раз
+      // после запуска: стёртое до перезагрузки могло остаться не собранным)
+      if (changed || purged || !gcChecked.has(id)) {
+        gcChecked.add(id);
+        await collectGarbage(id);
+      }
       return changed || purged;
     } catch (e) {
       if (errorCode(e) === 'ERROR_CODE_NOT_FOUND') {
@@ -543,12 +596,30 @@ export function createCloudSync(deps: Deps) {
     }, RETRY_OFFLINE_MS);
   }
 
+  function isHidden() {
+    return typeof document !== 'undefined' && document.hidden;
+  }
+
+  /** Следующий опрос: частый при открытом разделе и видимой вкладке, иначе редкий. */
   function scheduleSync() {
     if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = undefined;
     if (!isWanted) return;
     syncTimer = setTimeout(() => {
+      syncTimer = undefined;
       void syncNow();
-    }, isActive ? SYNC_ACTIVE_MS : SYNC_IDLE_MS);
+    }, isActive && !isHidden() ? SYNC_ACTIVE_MS : SYNC_IDLE_MS);
+  }
+
+  function setListeners() {
+    if (areListenersSet || typeof document === 'undefined') return;
+    areListenersSet = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!isWanted) return;
+      // Вкладка снова видна при открытом разделе: догнать сразу
+      if (!document.hidden && isActive) void syncNow();
+      else scheduleSync();
+    });
   }
 
   function syncNow(shouldDiscover = false) {
@@ -567,7 +638,7 @@ export function createCloudSync(deps: Deps) {
         for (const id of ids) {
           if (await syncContainer(id)) changed = true;
         }
-        await deps.persist();
+        await persistIfDirty();
         const hasMissingKey = engineContainers().some((c) => c.id === rootId() && !c.hasKey);
         setStatus(hasMissingKey ? 'no-key' : 'ready');
         lastError = undefined;
@@ -597,7 +668,9 @@ export function createCloudSync(deps: Deps) {
       };
       outbox.push({ opId: local.opId, op: bytesToB64(local.op) });
     }
+    touch();
     await saveOutbox(id);
+    isDirty = false;
     await deps.persist();
     deps.onChanged();
   }
@@ -607,6 +680,7 @@ export function createCloudSync(deps: Deps) {
   /** Раздел открыт (`active`) либо облако понадобилось в фоне. */
   async function ensure(active: boolean) {
     isWanted = true;
+    setListeners();
     if (active !== isActive) {
       isActive = active;
       scheduleSync();
@@ -617,12 +691,14 @@ export function createCloudSync(deps: Deps) {
   function setActive(active: boolean) {
     if (isActive === active) return;
     isActive = active;
-    if (active) void syncNow(true);
+    if (active && !isHidden()) void syncNow(true);
     else scheduleSync();
   }
 
   /** Правки дерева контейнера (`container` — id либо `root`): применяются
-   * локально сразу (ошибка движка — исключением), на сервер уходят очередью. */
+   * локально сразу (ошибка движка — исключением), на сервер уходят очередью.
+   * Экран узнаёт о правке один раз — из `applyNow`; отправка очереди дерево
+   * не меняет (смена статуса сообщается сама). */
   function apply(container: string, ops: unknown[]): Promise<string> {
     return serial(async () => {
       const id = container === 'root' ? await ensureRoot(true) : container;
@@ -636,7 +712,7 @@ export function createCloudSync(deps: Deps) {
           setStatus('offline');
           scheduleRetry();
         }
-      })).then(() => deps.onChanged());
+      }));
       return id;
     });
   }
@@ -727,6 +803,7 @@ export function createCloudSync(deps: Deps) {
   /** Запись журнала грантов уже применена локально: при отказе сервера —
    * перечитать журнал с сервера, раздачу ключей не слать. */
   async function runGrantRequests(id: string, reqs: OutReq[]) {
+    touch();
     try {
       await run(reqs);
     } catch (e) {
@@ -734,6 +811,7 @@ export function createCloudSync(deps: Deps) {
       await attach(id).catch(() => undefined);
       throw e;
     } finally {
+      isDirty = false;
       await deps.persist();
       deps.onChanged();
     }
@@ -760,12 +838,14 @@ export function createCloudSync(deps: Deps) {
     const client = deps.client();
     if (!client?.cloudIsAttached(id)) return;
     const req = client.cloudLeave(id, Date.now()) as OutReq;
+    touch();
     outboxes.delete(id);
     lost.add(id);
     await deps.deleteRecord(OUTBOX_RECORD + id).catch(() => undefined);
     await call(req.chan, req.method, req.body).catch((e) => {
       if (errorCode(e) !== 'ERROR_CODE_NOT_FOUND') throw e;
     });
+    isDirty = false;
     await deps.persist();
   }
 
@@ -799,9 +879,11 @@ export function createCloudSync(deps: Deps) {
       await sendOutbox(id).catch(() => undefined);
       await collectGarbage(id).catch(() => undefined);
       client.cloudForget(id);
+      touch();
       outboxes.delete(id);
       lost.add(id);
       deps.recordEntry({ id, domain: deps.serverDomain() || '', role: 'owned', isRemoved: true });
+      isDirty = false;
       await deps.persist();
       deps.onChanged();
     });
@@ -813,6 +895,8 @@ export function createCloudSync(deps: Deps) {
       const client = deps.client();
       if (!client) return;
       await run(await deps.withNeeds(() => client.cloudRotate(id, Date.now()) as OutReq[]));
+      touch();
+      isDirty = false;
       await deps.persist();
     });
   }
@@ -824,6 +908,7 @@ export function createCloudSync(deps: Deps) {
   function keysImport(json: string) {
     try {
       deps.client()?.cloudKeysImport(json);
+      touch();
     } catch (e) {
       deps.log(`облако: ключи из экспорта не приняты: ${String(e)}`);
     }
@@ -834,17 +919,22 @@ export function createCloudSync(deps: Deps) {
     lost.delete(id);
     // Приглашение приходит и при закрытом разделе: подключить контейнер сразу
     isWanted = true;
+    setListeners();
     void serial(async () => {
       const client = deps.client();
       if (!client || !deps.isReady()) return;
+      // Ключ принят движком — дерево могло стать читаемым, экран перечитает
+      let changed = true;
       try {
         if (!client.cloudIsAttached(id)) await attach(id);
-        if (client.cloudIsAttached(id)) await syncContainer(id);
-        await deps.persist();
+        if (client.cloudIsAttached(id)) changed = (await syncContainer(id)) || changed;
+        await persistIfDirty();
       } catch (e) {
         deps.log(`облако: контейнер ${id.slice(0, 8)}… не подключён: ${String(e)}`);
       }
-      deps.onChanged();
+      touch();
+      isDirty = false;
+      if (changed) deps.onChanged();
     });
   }
 
@@ -858,9 +948,14 @@ export function createCloudSync(deps: Deps) {
     snapshotTried.clear();
     lost.clear();
     gcDone = undefined;
+    gcChecked.clear();
+    trashCheckedAt.clear();
     isWanted = false;
     isActive = false;
     isDiscovered = false;
+    isDirty = false;
+    rootCache = undefined;
+    revision += 1;
     ownOnServer = undefined;
     lastError = undefined;
   }
@@ -873,6 +968,8 @@ export function createCloudSync(deps: Deps) {
     syncNow,
     containers,
     stateJson,
+    /** Ревизия деревьев в движке: растёт при каждом их изменении (ключ кэша разбора). */
+    revision: () => revision,
     rootId,
     checkDrive,
     status: currentStatus,

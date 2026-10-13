@@ -1178,9 +1178,19 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
       `if (content.${r.contentField}) capByFileId.set(content.file_id, content.${r.contentField});`,
     );
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
-    r.uploadMethods.forEach((method) => expect(controller, method).toContain(`'id', '${method}'`));
+    // Загрузка — авторизованным соединением блобов (perf A7: своё соединение
+    // V2Control, не очередь соединения движка), чанк — байтами от движка
+    r.uploadMethods.forEach((method) => expect(controller, method).toContain(`'${method}'`));
+    expect(controller).toContain('blobControl.requestBytes(method, body, BLOB_TIMEOUT_MS)');
+    expect(controller).toContain('encodeUploadChunkBody(pv, uploadId, index, 0, data)');
     expect(controller).toContain(`const method = '${r.downloadMethod}';`);
-    expect(controller).toContain('const conn = await openAnon(plan.conn);');
+    // Скачивание по секрету — анонимным каналом: пул соединений блобов (A9) открывает их только так
+    const blobPool = controller.slice(
+      controller.indexOf('const blobConns = createBlobConnPool<V2Connection>('),
+      controller.indexOf('function streamBlobCap('),
+    );
+    expect(blobPool).toContain('new V2Connection(pv, deps.gatewayUrl(), CHANNEL_ANONYMOUS)');
+    expect(controller).toMatch(/blobConns\.run\(\s*`file:\$\{fileId\}`/);
     const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
     expect(map).toContain(`${r.contentField}: c.${r.contentField},`);
     expect(map).toContain(`${r.contentField}: m.${r.contentField} || undefined,`);

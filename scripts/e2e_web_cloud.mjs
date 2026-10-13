@@ -431,7 +431,8 @@ try {
   const box = await cloud.boundingBox();
   assert.ok(box.width >= 389 && box.x <= 1, `раздел должен занимать экран: ${JSON.stringify(box)}`);
   await tabBar.getByRole('button', { name: 'Chats' }).click();
-  await cloud.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
+  await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.ok(await isShown(page, '#LeftColumn'), '«Чаты» нижней панели возвращают к списку');
   console.log('OK: телефон — вход и возврат нижней панелью');
 

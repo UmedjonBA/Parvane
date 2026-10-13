@@ -37,17 +37,21 @@ function makeTransport() {
 }
 
 describe('attachment upload stream (perf A7)', () => {
-  it('streams PVB2 in 512 KiB server chunks, first alone, then a window of three', async () => {
-    const plain = new Uint8Array(1_300_000);
+  it('streams PVB2 in fixed server chunks, first alone, then a window of three', async () => {
+    // Серверный чанк в тесте — 128 КиБ (в бою ATTACHMENT_CHUNK_BYTES): геометрия
+    // та же, а шифрование в jsdom укладывается в бюджет теста
+    const chunkBytes = 128 * 1024;
+    expect(ATTACHMENT_CHUNK_BYTES).toBe(512 * 1024);
+    const plain = new Uint8Array(300_000);
     for (let i = 0; i < plain.length; i++) plain[i] = (i * 31) & 0xff;
     const key = crypto.getRandomValues(new Uint8Array(32));
     const nonce = crypto.getRandomValues(new Uint8Array(12));
     const source = createCipherSource(new Blob([plain]), key, nonce);
     const fake = makeTransport();
 
-    const fileId = await uploadAttachmentStream(fake.transport, source, new Uint8Array(32));
+    const fileId = await uploadAttachmentStream(fake.transport, source, new Uint8Array(32), chunkBytes);
     expect(fileId).toBe('file-1');
-    const chunks = Math.ceil(source.cipherSize / ATTACHMENT_CHUNK_BYTES);
+    const chunks = Math.ceil(source.cipherSize / chunkBytes);
     expect(chunks).toBe(3);
     expect(fake.order[0]).toBe(0);
     expect(fake.peak()).toBeLessThanOrEqual(3);
@@ -58,7 +62,7 @@ describe('attachment upload stream (perf A7)', () => {
     let offset = 0;
     for (let index = 0; index < chunks; index++) {
       const part = fake.received.get(index)!;
-      expect(part.length).toBeLessThanOrEqual(ATTACHMENT_CHUNK_BYTES);
+      expect(part.length).toBeLessThanOrEqual(chunkBytes);
       cipher.set(part, offset);
       offset += part.length;
     }

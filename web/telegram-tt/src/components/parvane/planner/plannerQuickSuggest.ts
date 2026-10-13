@@ -156,6 +156,35 @@ const LINE_WORDS: Record<QuickLang, LineWords> = {
 
 // ── подсказки ────────────────────────────────────────────────────────────────
 
+// Разбор строк истории и примеров и проверка строк записей — самое дорогое в сборке кандидатов (сотни
+// разборов); результаты запоминаются на уровне модуля для текущего контекста разбора. Смена контекста (день,
+// окно дня, язык, словарь правок) кэш сбрасывает; минута «сейчас» на кандидатов не влияет и в ключ не входит
+let cacheContextKey = '';
+const parsedLines = new Map<string, QuickDraft>();
+const verifiedLines = new Map<string, string | undefined>();
+
+function contextKey(ctx: QuickContext) {
+  const { nowMinutes, ...rest } = ctx;
+  return JSON.stringify(rest);
+}
+
+function syncCacheContext(ctx: QuickContext) {
+  const key = contextKey(ctx);
+  if (key === cacheContextKey) return;
+  cacheContextKey = key;
+  parsedLines.clear();
+  verifiedLines.clear();
+}
+
+function parseCached(text: string, ctx: QuickContext) {
+  let draft = parsedLines.get(text);
+  if (!draft) {
+    draft = parseQuickInput(text, ctx);
+    parsedLines.set(text, draft);
+  }
+  return draft;
+}
+
 /** Подсказки для набранного: список кандидатов собирается заново. Окну — `buildCandidates` один раз. */
 export function buildSuggestions(input: string, sources: QuickSuggestSources, ctx: QuickContext) {
   return filterSuggestions(input, buildCandidates(sources, ctx));
@@ -166,6 +195,7 @@ export function buildSuggestions(input: string, sources: QuickSuggestSources, ct
  * «Плана», примеры), затем новее. Строка с ошибкой разбора кандидатом не становится.
  */
 export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext): QuickCandidate[] {
+  syncCacheContext(ctx);
   const uiLang = ctx.lang || 'ru';
   const byKey = new Map<string, QuickCandidate>();
   const lines = new Set<string>();
@@ -175,7 +205,7 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
   };
 
   sources.history.lines.forEach(({ text, count, at }) => {
-    const draft = parseQuickInput(text, ctx);
+    const draft = parseCached(text, ctx);
     if (draft.error) return;
     const key = lineKey(text, draft, uiLang);
     const known = byKey.get(key);
@@ -199,7 +229,10 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
       return;
     }
     if (hidden.has(key)) return;
-    const text = verifiedLine(draft, lang, ctx);
+    // Шаблон записи уже проверялся в этом контексте — строка берётся из кэша
+    const cacheKey = `${key}\u0001${draft.name}`;
+    const text = verifiedLines.has(cacheKey) ? verifiedLines.get(cacheKey) : verifiedLine(draft, lang, ctx);
+    verifiedLines.set(cacheKey, text);
     if (text && !lines.has(foldLine(text))) add(makeCandidate(text, 'data', key, draft.name, count, at, []));
   });
 
@@ -207,7 +240,7 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
     const text = normalizeLine(example);
     const key = foldLine(text);
     if (!text || lines.has(key) || byKey.has(key)) return;
-    const draft = parseQuickInput(text, ctx);
+    const draft = parseCached(text, ctx);
     if (!draft.error) add(makeCandidate(text, 'example', key, draft.name, 0, -MAX_DATA_ENTRIES - 1 - index, []));
   });
 

@@ -17,7 +17,6 @@ import {
   openKnowledgeView, openNote, openPlannerView, requestPlannerAdd, requestPlannerAddText, requestPlannerSettings,
   setParvaneSection,
 } from '../../../util/parvaneSection';
-import { isComposerHasSelection } from '../../middle/composer/helpers/selection';
 import { getCloudStatus } from '../cloud/cloudStore';
 import { folderColor } from '../notes/notesLook';
 import { getNotes, getNotesStatus, loadNotes } from '../notes/notesStore';
@@ -27,10 +26,12 @@ import {
   getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
 } from '../planner/plannerStore';
 import {
-  closePalette, getIsPaletteOpen, openPalette, openRecordInPlan,
+  closePalette, getIsPaletteOpen, openRecordInPlan,
 } from './paletteOpen';
 import { collectPlannerRecords } from './paletteRecords';
-import { movePaletteIndex, searchPalette, splitByRanges } from './paletteSearch';
+import {
+  movePaletteIndex, searchPalette, splitByRanges, withNormalized,
+} from './paletteSearch';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -55,6 +56,8 @@ type PaletteEntry = PaletteItem & {
 
 const INPUT_ID = 'parvane-palette-search';
 const FOCUS_DELAY_MS = 100;
+// Задержка поиска после последнего нажатия: ввод не ждёт перебора заметок и записей
+const SEARCH_DELAY_MS = 120;
 const ACCENT = 'var(--pv-accent)';
 const RECORD_LOOK = {
   event: { icon: 'calendar', tone: 'var(--pv-event)' },
@@ -83,14 +86,14 @@ function collectChats(global: GlobalState, lang: LangFn, onOpen: (chatId: string
     const peer = selectPeer(global, id);
     const title = id === global.currentUserId ? lang('SavedMessages') : peer && getPeerFullTitle(lang, peer);
     if (!title) return;
-    entries.push({
+    entries.push(withNormalized({
       key: `chat:${id}`,
       group: 'chat',
       title,
       icon: 'chat',
       tone: 'var(--pv-muted)',
       run: () => onOpen(id),
-    });
+    }));
   });
   return entries;
 }
@@ -113,7 +116,13 @@ const ParvanePalette = () => {
   const notes = useDerivedState(getNotes);
   const notesStatus = useDerivedState(getNotesStatus);
   const cloudStatus = useDerivedState(getCloudStatus);
-  const planner = useDerivedState(getPlannerState);
+  // Состояние плана нужно только открытой палитре: закрытая на его изменения не перерисовывается
+  const planner = useDerivedState(
+    () => (getIsPaletteOpen() ? getPlannerState() : undefined),
+    // Сигналы — зависимости: по ним производное пересчитывается
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+    [getIsPaletteOpen, getPlannerState],
+  );
   const isPlannerLoaded = useDerivedState(getIsPlannerLoaded);
   const plannerStatus = useDerivedState(getPlannerStatus);
   const currentUserId = useSelector(selectCurrentUserId);
@@ -123,21 +132,7 @@ const ParvanePalette = () => {
   const inputRef = useRef<HTMLInputElement>();
   const listRef = useRef<HTMLDivElement>();
 
-  // Ctrl+K (Cmd+K) из любого раздела и любого поля. Исключение — выделенный текст в поле сообщения:
-  // там это «вставить ссылку» редактора (`TextFormatter`)
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-      // `code` — чтобы сочетание работало и в русской раскладке
-      if (e.code !== 'KeyK' && e.key.toLowerCase() !== 'k') return;
-      if (isComposerHasSelection()) return;
-      e.preventDefault();
-      openPalette();
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, []);
+  // Ctrl+K слушает обёртка `ParvanePalette.async` (B2): код палитры грузится при первом открытии
 
   // Заметки и «План» читаются при открытии своих разделов. Палитра догружает их при первом открытии
   // и ввод не задерживает: найденное появляется в списке само. Хранилище заметок без названия папки
@@ -164,9 +159,11 @@ const ParvanePalette = () => {
   });
 
   const commands = useMemo((): PaletteEntry[] => {
-    const command = (key: string, title: string, icon: ParvaneIconName, run: NoneToVoidFunction): PaletteEntry => ({
-      key, group: 'command', title, icon, tone: ACCENT, run,
-    });
+    const command = (key: string, title: string, icon: ParvaneIconName, run: NoneToVoidFunction): PaletteEntry => (
+      withNormalized({
+        key, group: 'command', title, icon, tone: ACCENT, run,
+      })
+    );
     return [
       command('nav:chats', lang('ParvaneSectionMessenger'), 'chat', () => {
         setParvaneSection('messenger');
@@ -196,7 +193,9 @@ const ParvanePalette = () => {
     [isOpen, lang, handleOpenChat],
   );
 
-  const noteEntries = useMemo((): PaletteEntry[] => (!isOpen ? [] : notes.map((note) => ({
+  // Строки для сравнения приводятся здесь, один раз на список (E2): раньше `matchItem` нормализовал полный
+  // текст каждой заметки на каждое нажатие клавиши
+  const noteEntries = useMemo((): PaletteEntry[] => (!isOpen ? [] : notes.map((note) => withNormalized({
     key: `note:${note.id}`,
     group: 'note',
     title: note.title,
@@ -208,8 +207,8 @@ const ParvanePalette = () => {
   }))), [isOpen, notes]);
 
   const recordEntries = useMemo((): PaletteEntry[] => {
-    if (!isOpen || !isPlannerLoaded) return [];
-    return collectPlannerRecords(planner, toDayKey(new Date())).map((record) => ({
+    if (!isOpen || !isPlannerLoaded || !planner) return [];
+    return collectPlannerRecords(planner, toDayKey(new Date())).map((record) => withNormalized({
       ...record,
       ...RECORD_LOOK[record.kind],
       meta: record.day ? formatDayShort(lang, record.day) : lang('PlannerUndatedShort'),
@@ -217,10 +216,28 @@ const ParvanePalette = () => {
     }));
   }, [isOpen, isPlannerLoaded, planner, lang]);
 
-  const sections = useMemo(
-    () => searchPalette([...commands, ...chats, ...noteEntries, ...recordEntries], query),
-    [commands, chats, noteEntries, recordEntries, query],
+  const items = useMemo(
+    () => [...commands, ...chats, ...noteEntries, ...recordEntries],
+    [commands, chats, noteEntries, recordEntries],
   );
+
+  // Поиск идёт с задержкой после последнего нажатия (E2): ввод не ждёт перебора списка. Пока задержка не
+  // вышла, показан прежний результат; Enter в это время ищет по набранному сам (`runAt`)
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchTimeoutRef = useRef<number>();
+  useEffect(() => {
+    if (query === searchQuery) return undefined;
+    searchTimeoutRef.current = window.setTimeout(() => {
+      searchTimeoutRef.current = undefined;
+      setSearchQuery(query);
+    }, SEARCH_DELAY_MS);
+    return () => {
+      window.clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = undefined;
+    };
+  }, [query, searchQuery]);
+
+  const sections = useMemo(() => searchPalette(items, searchQuery), [items, searchQuery]);
   const flat = useMemo(() => sections.flatMap(({ results }) => results), [sections]);
   const selectedIndex = Math.min(selected, Math.max(0, flat.length - 1));
   const selectedKey = flat[selectedIndex]?.item.key;
@@ -237,7 +254,11 @@ const ParvanePalette = () => {
   const runAt = useLastCallback((index: number) => {
     // Enter приходит дважды — клавишей окна и отправкой формы: второй раз палитра уже закрыта
     if (!getIsPaletteOpen()) return;
-    const entry = flat[index]?.item;
+    // Набранное ещё не искалось — результат по нему считается сейчас, иначе выбор пошёл бы по прежнему списку
+    const list = searchTimeoutRef.current !== undefined
+      ? searchPalette(items, query).flatMap(({ results }) => results)
+      : flat;
+    const entry = list[Math.min(index, Math.max(0, list.length - 1))]?.item;
     if (!entry) return;
     closePalette();
     entry.run();

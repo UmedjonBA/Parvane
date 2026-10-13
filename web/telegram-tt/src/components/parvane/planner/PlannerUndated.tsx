@@ -1,4 +1,4 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useMemo, useRef } from '../../../lib/teact/teact';
 
 import type { PlannerState, PlannerTask } from './plannerModel';
 
@@ -35,11 +35,21 @@ const PlannerUndated = ({
   const lang = useLang();
 
   const dayLabel = formatDay(lang, day);
-  const projects = state.projects.filter((project) => tasks.some((task) => task.project === project));
-  const completed = isOpen ? getCompletedTasks(state) : [];
+  const assignLabel = day === today ? lang('PlannerToday') : formatDayShort(lang, day);
+  // Группы и завершённые считаются, только пока окно открыто (закрытое перерисовывается с каждым состоянием
+  // вместе с экраном «Сегодня»); пока окно уходит, показано посчитанное в последний раз
+  const shownRef = useRef<{ projects: string[]; completed: PlannerTask[] }>({ projects: [], completed: [] });
+  const { projects, completed } = useMemo(() => {
+    if (isOpen) {
+      shownRef.current = {
+        projects: state.projects.filter((project) => tasks.some((task) => task.project === project)),
+        completed: getCompletedTasks(state),
+      };
+    }
+    return shownRef.current;
+  }, [isOpen, state, tasks]);
 
-  const handleAssign = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    const taskId = e.currentTarget.dataset.taskId!;
+  const handleAssign = useLastCallback((taskId: string) => {
     const task = tasks.find(({ id }) => id === taskId)!;
     updatePlanner((draft) => {
       draft.tasks.find(({ id }) => id === taskId)!.day = day;
@@ -80,17 +90,9 @@ const PlannerUndated = ({
                   task={task}
                   context="all"
                   noProject
-                  trailing={(
-                    <button
-                      type="button"
-                      className={buildClassName(styles.btn, styles.btnGhost)}
-                      data-task-id={task.id}
-                      aria-label={lang('PlannerUndatedAssign', { date: dayLabel, name: task.name })}
-                      onClick={handleAssign}
-                    >
-                      {day === today ? lang('PlannerToday') : formatDayShort(lang, day)}
-                    </button>
-                  )}
+                  assignLabel={assignLabel}
+                  assignTitle={lang('PlannerUndatedAssign', { date: dayLabel, name: task.name })}
+                  onAssign={handleAssign}
                   onOpen={handleOpen}
                 />
               ))}

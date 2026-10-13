@@ -18,6 +18,7 @@ import { hasEncryptedSession } from '../util/passcode';
 import { getInitialLocationHash, parseInitialLocationHash } from '../util/routing';
 import { checkSessionLocked, hasStoredSession } from '../util/sessions';
 import { updateSizes } from '../util/windowSize';
+import { isSessionExpired, readLoginAddress, readRememberMe } from '../api/parvane/authStorage';
 
 import useTauriDrag from '../hooks/tauri/useTauriDrag';
 import useAppLayout from '../hooks/useAppLayout';
@@ -54,11 +55,21 @@ enum AppScreens {
   main,
   lock,
   inactive,
+  // Parvane (B1): сессия возобновляется сохранённым JWT — под каркасом `UiLoader` пусто, пока провайдер
+  // не скажет «готово» (тогда Main) или «нужен пароль» (тогда форма входа)
+  starting,
 }
 
 const TRANSITION_RENDER_COUNT = Object.keys(AppScreens).length / 2;
 const ACTIVE_PAGE_TITLE = IS_TAURI ? PAGE_TITLE_TAURI : PAGE_TITLE;
 const INACTIVE_PAGE_TITLE = `${ACTIVE_PAGE_TITLE} ${INACTIVE_MARKER}`;
+
+// Parvane: признак сохранённой сессии — адрес входа, «оставаться в системе» и сутки активности не истекли.
+// Сам JWT лежит в шифрованном IndexedDB и проверяется провайдером: отозванный или протухший токен
+// переводит на экран пароля (`authorizationStateWaitPassword`)
+function hasParvaneStoredSession() {
+  return Boolean(readLoginAddress()) && readRememberMe() && !isSessionExpired();
+}
 
 const App = ({
   authState,
@@ -168,6 +179,10 @@ const App = ({
   } else if (hasStoredSession()) {
     page = 'main';
     activeKey = AppScreens.main;
+  } else if (hasParvaneStoredSession()) {
+    // Каркас списка чатов вместо мелькающей формы входа; бандл Main качается параллельно соединению
+    page = 'main';
+    activeKey = AppScreens.starting;
   } else if (hasPasscode) {
     activeKey = AppScreens.lock;
   } else {
@@ -208,6 +223,8 @@ const App = ({
         return <LockScreen isLocked={isScreenLocked} />;
       case AppScreens.inactive:
         return <AppInactive inactiveReason={inactiveReason!} />;
+      case AppScreens.starting:
+        return undefined;
     }
   }
 
@@ -242,7 +259,7 @@ const App = ({
   }, [getIsInBackgroundLocal]);
 
   return (
-    <UiLoader page={page} isMobile={isMobile}>
+    <UiLoader page={page} isMobile={isMobile} isPending={activeKey === AppScreens.starting}>
       <Transition
         name="fade"
         activeKey={activeKey}

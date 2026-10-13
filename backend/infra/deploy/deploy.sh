@@ -50,16 +50,39 @@ if grep -rqs --include='*.js' '__parvaneDiagCallApi' "$REPO/web/telegram-tt/dist
   exit 1
 fi
 
+# B3: подсказка «Доступно обновление» у открытых вкладок — по `version.txt` в dist:
+# сборка пишет туда свой идентификатор (git-хеш, см. vite.config.ts `APP_BUILD`),
+# и он же вшит в бандл. Без файла старые вкладки о новой сборке не узнают.
+if [[ ! -s "$REPO/web/telegram-tt/dist/version.txt" ]]; then
+  echo "в dist нет version.txt — сборка без идентификатора; пересоберите: npm run build:production" >&2
+  exit 1
+fi
+echo "Сборка web: $(cat "$REPO/web/telegram-tt/dist/version.txt")"
+
 log "Заливка конфигов и web-dist (tar over ssh — rsync локально нет)"
 "${SSH[@]}" "mkdir -p $REMOTE_DIR/nats"
 scp -P "$SSH_PORT" -q "$BACKEND/infra/deploy/docker-compose.yml" \
   "$BACKEND/infra/deploy/Caddyfile" "$SSH_DEST:$REMOTE_DIR/"
 scp -P "$SSH_PORT" -q "$BACKEND/infra/nats/server.prod.conf" "$SSH_DEST:$REMOTE_DIR/nats/"
-# OPS-05: source maps и build-stats.json апстрима наружу не отдаём
+# OPS-05: source maps и build-stats.json апстрима наружу не отдаём.
+# B3: хешированные ассеты ПРЕДЫДУЩЕЙ сборки переезжают в новый dist — открытые
+# вкладки старой сборки ещё догружают свои ленивые куски (настройки, звонки,
+# «План»). Ровно одно поколение: список собственных файлов каждой сборки лежит
+# в $REMOTE_DIR/web-dist.assets (вне раздаваемого каталога), переносятся только
+# файлы из него, а не всё содержимое assets/ (иначе каталог рос бы бесконечно).
 tar -C "$REPO/web/telegram-tt/dist" --exclude='*.map' --exclude='build-stats.json' -czf - . \
-  | "${SSH[@]}" "rm -rf $REMOTE_DIR/web-dist.new && mkdir -p $REMOTE_DIR/web-dist.new \
-      && tar -C $REMOTE_DIR/web-dist.new -xzf - \
-      && rm -rf $REMOTE_DIR/web-dist && mv $REMOTE_DIR/web-dist.new $REMOTE_DIR/web-dist"
+  | "${SSH[@]}" "set -e; cd $REMOTE_DIR \
+      && rm -rf web-dist.new && mkdir -p web-dist.new \
+      && tar -C web-dist.new -xzf - \
+      && ls web-dist.new/assets > web-dist.assets.new \
+      && if [ -d web-dist/assets ]; then \
+           { [ -f web-dist.assets ] && cat web-dist.assets || ls web-dist/assets; } \
+             | while read -r f; do \
+                 [ -f \"web-dist/assets/\$f\" ] && [ ! -e \"web-dist.new/assets/\$f\" ] \
+                   && cp -p \"web-dist/assets/\$f\" web-dist.new/assets/ || true; \
+               done; \
+         fi \
+      && rm -rf web-dist && mv web-dist.new web-dist && mv web-dist.assets.new web-dist.assets"
 # Подмена каталога web-dist меняет inode — bind-mount у работающего caddy
 # продолжает смотреть в удалённый каталог (всё отдаётся 404). Перемонтируем.
 "${SSH[@]}" "cd $REMOTE_DIR && docker compose restart caddy >/dev/null 2>&1 || true"

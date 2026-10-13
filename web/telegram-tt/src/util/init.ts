@@ -2,15 +2,13 @@ import type { GlobalState } from '../global/types';
 
 import { IS_MOCKED_CLIENT } from '../config';
 import {
-  loadCache, loadCachedParvaneSettings, loadCachedParvaneThemes, loadCachedSharedState,
+  loadCachedParvaneSettings, loadCachedParvaneThemes, loadCachedSharedState,
 } from '../global/cache';
 import {
   getGlobal, setGlobal,
 } from '../global/index';
 import { INITIAL_GLOBAL_STATE } from '../global/initialState';
-import { updatePasscodeSettings } from '../global/reducers';
 import { cloneDeep } from './iteratees';
-import { clearStoredSession } from './sessions';
 
 export async function initGlobal(force: boolean = false, prevGlobal?: GlobalState) {
   prevGlobal = prevGlobal || getGlobal();
@@ -19,47 +17,46 @@ export async function initGlobal(force: boolean = false, prevGlobal?: GlobalStat
   }
 
   const initial = cloneDeep(INITIAL_GLOBAL_STATE);
-  const cache = await loadCache(initial);
-  let global = cache || initial;
+  // Parvane: полного global-кэша нет — MTProto-сессии нет, `saveSession` не диспатчится, и `loadCache`
+  // лишь делал два лишних чтения IndexedDB (global и sharedState), а потом sharedState читался ещё раз.
+  // Что переживает перезапуск, читается одной волной (B1): общие настройки устройства (тема, анимации),
+  // настройки аккаунта (уведомления, автозагрузка) и фон чата по темам (spec 014)
+  const [storedSharedState, storedSettings, storedThemes] = await Promise.all([
+    loadCachedSharedState(),
+    loadCachedParvaneSettings(),
+    loadCachedParvaneThemes(),
+  ]);
+
+  let global = initial;
   if (IS_MOCKED_CLIENT) global.auth.state = 'authorizationStateReady';
-
-  const { hasPasscode, isScreenLocked } = global.passcode;
-  if (hasPasscode && !isScreenLocked) {
-    global = updatePasscodeSettings(global, {
-      isScreenLocked: true,
-    });
-
-    clearStoredSession();
-  }
 
   if (force) {
     global.byTabId = prevGlobal.byTabId;
   }
 
-  if (!cache) { // Try loading shared state separately
-    const storedSharedState = await loadCachedSharedState();
-    if (storedSharedState) {
-      global.sharedState = storedSharedState;
-    }
-    // Parvane: без полного global-кэша настройки аккаунта персистятся отдельно
-    const storedSettings = await loadCachedParvaneSettings();
-    if (storedSettings) {
-      global.settings = {
+  if (storedSharedState) {
+    global.sharedState = storedSharedState;
+  }
+  if (storedSettings) {
+    global = {
+      ...global,
+      settings: {
         ...global.settings,
         byKey: { ...global.settings.byKey, ...storedSettings },
-      };
-    }
-    // Фон чата по темам: настройка устройства, как и сама картинка в шифрованном хранилище
-    const storedThemes = await loadCachedParvaneThemes();
-    if (storedThemes) {
-      global.settings = {
+      },
+    };
+  }
+  if (storedThemes) {
+    global = {
+      ...global,
+      settings: {
         ...global.settings,
         themes: {
           light: { ...global.settings.themes.light, ...storedThemes.light },
           dark: { ...global.settings.themes.dark, ...storedThemes.dark },
         },
-      };
-    }
+      },
+    };
   }
 
   setGlobal(global);

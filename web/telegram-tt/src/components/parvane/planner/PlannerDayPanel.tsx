@@ -11,7 +11,7 @@ import {
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatPlainName } from './plannerLinks';
 import {
-  countUnrated, getDayLoad, getDeadlines, getListColor, getNutrientTotal, getTasksForDay, instanceKey,
+  getDayEntry, getListColor, getNutrientTotal, instanceKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -50,15 +50,16 @@ const PlannerDayPanel = ({
     onOpenTask(e.currentTarget.dataset.id!);
   });
 
-  const load = getDayLoad(state, day);
+  // Дела дня — из индекса (построен сеткой календаря либо для одного дня)
+  const entry = getDayEntry(state, day);
+  const load = entry.minutes;
   const budget = getDayBudget(state, day);
-  const unrated = countUnrated(state, day);
+  const { unrated } = entry;
   const sleep = getDailyRecord(state, 'sleep', day);
   const isShort = isShortSleep(state, day);
   const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
-  const untimed = layers.work
-    ? getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined) : [];
-  const deadlines = layers.work ? getDeadlines(state, day) : [];
+  const untimed = layers.work ? entry.untimed : [];
+  const deadlines = layers.work ? entry.deadlines : [];
   const title = formatDay(lang, day);
   const relative = formatRelativeDay(lang, day, today);
 

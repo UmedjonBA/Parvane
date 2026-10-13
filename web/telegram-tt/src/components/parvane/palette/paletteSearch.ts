@@ -11,6 +11,10 @@ export type PaletteItem = {
   title: string;
   // Текст, по которому запись тоже находится (в строке показывается отрывок вокруг совпадения)
   text?: string;
+  // Те же строки, приведённые `normalizePaletteText`, — считаются один раз при сборке записи, а не на каждое
+  // нажатие (E2: текст заметок — до мегабайта). Без них поиск нормализует сам
+  normTitle?: string;
+  normText?: string;
 };
 
 // Участок совпадения: начало и конец (не включая) в символах строки
@@ -30,6 +34,9 @@ export type PaletteSection<T extends PaletteItem = PaletteItem> = {
 };
 
 export const PALETTE_GROUP_LIMIT = 6;
+// По текстам записей запрос ищется с этой длины (без пробелов): одна буква в текстах заметок находит почти всё
+// и перебирает их целиком на первое же нажатие; запрос из нескольких слов с короткими («9 класс») ищется
+export const TEXT_MIN_QUERY_LENGTH = 2;
 const SNIPPET_BEFORE = 24;
 const SNIPPET_LENGTH = 90;
 
@@ -104,9 +111,20 @@ function buildSnippet(text: string, hits: PaletteRange[]) {
 
 type Match<T extends PaletteItem> = PaletteResult<T> & { rank: number; order: number };
 
-function matchItem<T extends PaletteItem>(item: T, terms: string[], order: number): Match<T> | undefined {
-  const title = normalizePaletteText(item.title);
-  const text = item.text ? normalizePaletteText(item.text) : '';
+/** Запись с заранее приведёнными строками — для списков, которые собираются один раз на открытие палитры. */
+export function withNormalized<T extends PaletteItem>(item: T): T {
+  return {
+    ...item,
+    normTitle: normalizePaletteText(item.title),
+    normText: item.text ? normalizePaletteText(item.text) : undefined,
+  };
+}
+
+function matchItem<T extends PaletteItem>(
+  item: T, terms: string[], order: number, withText: boolean,
+): Match<T> | undefined {
+  const title = item.normTitle ?? normalizePaletteText(item.title);
+  const text = withText ? item.normText ?? (item.text ? normalizePaletteText(item.text) : '') : '';
   const ranges: PaletteRange[] = [];
   const textHits: PaletteRange[] = [];
   let rank = 0;
@@ -140,11 +158,12 @@ export function searchPalette<T extends PaletteItem>(
   items: T[], query: string, limit = PALETTE_GROUP_LIMIT,
 ): PaletteSection<T>[] {
   const terms = splitPaletteQuery(query);
+  const withText = terms.join('').length >= TEXT_MIN_QUERY_LENGTH;
   const byGroup = new Map<PaletteGroup, Match<T>[]>();
   items.forEach((item, order) => {
     let match: Match<T> | undefined;
     if (terms.length) {
-      match = matchItem(item, terms, order);
+      match = matchItem(item, terms, order, withText);
     } else if (item.group === 'command') {
       match = {
         item, ranges: [], rank: 0, order,

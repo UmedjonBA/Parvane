@@ -11,7 +11,8 @@ import {
 //   - чанки облака одного размера (512 КиБ), уходят окном из нескольких
 //     параллельных запросов; первый чанк заводит загрузку;
 //   - скачивание — окнами чанков облака, каждый кусок PVB2 проверяется тегом и
-//     сразу уходит в приёмник (файл на диске либо части Blob).
+//     сразу уходит в приёмник (файл на диске либо части Blob); следующее окно
+//     запрашивается заранее, пока текущее расшифровывается и пишется.
 
 /** Размер чанка облака, байт шифртекста. */
 export const CLOUD_CHUNK_BYTES = 512 * 1024;
@@ -40,13 +41,19 @@ export type CloudUploadResult = CloudBlobKeys & {
   chunks: number;
 };
 
-export type CloudBlobTransport = {
-  /** Метод блобов шарда cloud по имени: proto3-JSON запроса → proto3-JSON ответа. */
-  blobCall: <T>(method: string, request: unknown) => Promise<T>;
-  /** Чанки блоба по секрету (анонимный канал). */
+/** Серия скачиваний по одному анонимному соединению (A9). */
+export type BlobSession = {
   downloadBlobCap: (fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number) => Promise<{
     size: number; chunks: number; parts: Map<number, Uint8Array>;
   }>;
+};
+
+export type CloudBlobTransport = BlobSession & {
+  /** Метод блобов шарда cloud по имени: proto3-JSON запроса → proto3-JSON ответа. */
+  blobCall: <T>(method: string, request: unknown) => Promise<T>;
+  /** Серия: все `session.downloadBlobCap` внутри `fn` — по одному соединению
+   * (миниатюры папки, тексты заметок); без серии — соединение на каждый блоб. */
+  withBlobSession?: <T>(fn: (session: BlobSession) => Promise<T>) => Promise<T>;
 };
 
 export type CloudUploadOptions = {
@@ -116,6 +123,29 @@ export async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): 
       await pause(Math.max(hinted, Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1))), signal);
     }
   }
+}
+
+/** Очередь с пределом одновременных задач (миниатюры, картинки холста). */
+export function createLimiter(limit: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  function next() {
+    active -= 1;
+    waiting.shift()?.();
+  }
+  return async function run<T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= limit) {
+      await new Promise<void>((resolve) => {
+        waiting.push(resolve);
+      });
+    }
+    active += 1;
+    try {
+      return await fn();
+    } finally {
+      next();
+    }
+  };
 }
 
 /** Длина шифртекста PVB2 для открытого файла `size` байт. */
@@ -264,9 +294,11 @@ export async function uploadCloudBlob(
 /**
  * Скачать блоб облака в приёмник: окна чанков облака, каждый кусок PVB2
  * проверяется тегом. `size` — открытый размер файла (из узла дерева).
+ * `transport` может быть сессией серии (`BlobSession`): тогда все окна идут по
+ * её соединению.
  */
 export async function downloadCloudBlob(
-  transport: CloudBlobTransport,
+  transport: BlobSession,
   blob: CloudBlobKeys & { fileId: string; size: number; chunks: number },
   sink: CloudSink,
   options: { signal?: AbortSignal; onProgress?: (doneBytes: number, totalBytes: number) => void } = {},
@@ -280,13 +312,21 @@ export async function downloadCloudBlob(
   let nextSealed = 0;
   let isHeaderRead = false;
   let written = 0;
+  const fetchWindow = (first: number) => {
+    const count = Math.min(DOWNLOAD_WINDOW_CHUNKS, blob.chunks - first);
+    const window = withRetry(() => transport.downloadBlobCap(blob.fileId, blob.capability, first, count), signal);
+    // Предзапрошенное окно может отвергнуться уже после того, как цикл прервался своей ошибкой
+    window.catch(() => undefined);
+    return window;
+  };
   try {
+    // Одно окно «в полёте» заранее: сеть не ждёт расшифровки и записи предыдущего
+    let pending = fetchWindow(0);
     for (let first = 0; first < blob.chunks; first += DOWNLOAD_WINDOW_CHUNKS) {
       checkAborted(signal);
       const count = Math.min(DOWNLOAD_WINDOW_CHUNKS, blob.chunks - first);
-      const got = await withRetry(
-        () => transport.downloadBlobCap(blob.fileId, blob.capability, first, count), signal,
-      );
+      const got = await pending;
+      if (first + count < blob.chunks) pending = fetchWindow(first + count);
       const parts: Uint8Array[] = [carry];
       for (let index = first; index < first + count; index++) {
         const part = got.parts.get(index);

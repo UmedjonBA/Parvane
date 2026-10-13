@@ -1,4 +1,6 @@
-import type { CloudBlobKeys, CloudBlobTransport, CloudUploadResult } from './cloudBlobs';
+import type {
+  BlobSession, CloudBlobKeys, CloudBlobTransport, CloudUploadResult,
+} from './cloudBlobs';
 import type {
   CloudContainerInfo, CloudDriveCheck, CloudSync, CloudSyncStatus,
 } from './v2/cloud';
@@ -6,8 +8,8 @@ import type {
 import { V2Error } from './v2/transport';
 import { decryptBlob } from './blobcrypt';
 import {
-  CloudAbortError, cloudCipherSize, cloudPlainSize, createBlobSink, createFileSink, downloadCloudBlob,
-  uploadCloudBlob, withRetry,
+  CloudAbortError, cloudCipherSize, cloudPlainSize, createBlobSink, createFileSink, createLimiter,
+  downloadCloudBlob, uploadCloudBlob, withRetry,
 } from './cloudBlobs';
 import {
   base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, LINK_MANIFEST_MAX_BYTES,
@@ -18,7 +20,9 @@ import {
 // движке (`v2/cloud.ts`), содержимое файлов — потоковые блобы (`cloudBlobs.ts`);
 // здесь — их связка для UI: состояние раздела, загрузка с ходом и отменой,
 // скачивание, миниатюры, занятое место. Ход загрузок и скачиваний — событиями
-// окна `parvane-cloud-transfer`.
+// окна `parvane-cloud-transfer`. Разобранные деревья кэшируются по ревизии
+// движка (A8); мелкие скачивания (миниатюры, картинки холста, тексты заметок)
+// идут серией по одному анонимному соединению (A9).
 
 export type CloudBlobInfo = CloudBlobKeys & {
   fileId: string; size: number; chunks: number; mime: string; uploader: string;
@@ -128,7 +132,18 @@ const THUMB_QUALITY = 0.8;
 // Картинки крупнее декодировать ради миниатюры не будем (память вкладки)
 const THUMB_SOURCE_MAX_BYTES = 40 * 1024 * 1024;
 const THUMB_CACHE = 300;
-const PREVIEW_CACHE = 6;
+// Миниатюр качается не больше четырёх разом: список из 30 картинок иначе качал бы все 30 сразу
+const THUMB_PARALLEL = 4;
+// Содержимое для просмотра (картинки холста, предпросмотр): кэш по байтам, не по счёту —
+// шесть файлов по 32 МБ держали бы 192 МБ памяти вкладки
+const PREVIEW_CACHE_BYTES = 128 * 1024 * 1024;
+// Картинок холста разом качается не больше трёх, остальные ждут своей очереди
+const PREVIEW_PARALLEL = 3;
+// Тексты заметок пакетом (`parvaneCloudReadTexts`): окно одновременных скачиваний
+const READ_TEXTS_PARALLEL = 12;
+// Серия анонимного соединения для мелких скачиваний живёт ещё столько после последнего
+// потребителя: следующая миниатюра того же списка не открывает соединение заново
+const SERIES_GRACE_MS = 1500;
 const TEXT_MIME = 'text/markdown';
 const USAGE_TTL_MS = 1500;
 const DRIVE_BUCKET = 'BLOB_BUCKET_DRIVE';
@@ -189,19 +204,95 @@ function emit(event: CloudTransferEvent) {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-cloud-transfer', { detail: event }));
 }
 
-export function createCloudDrive(deps: Deps) {
+/** Общая серия анонимного соединения для мелких скачиваний (A9): открывается первым
+ * потребителем, живёт, пока есть потребители, и ещё `graceMs` после последнего. Без
+ * `withBlobSession` у транспорта потребители идут напрямую (соединение на блоб). */
+export function createSharedSession(transport: () => CloudBlobTransport, graceMs = SERIES_GRACE_MS) {
+  type Holder = {
+    session: Promise<BlobSession>; users: number; end: () => void; timer?: ReturnType<typeof setTimeout>;
+  };
+  let current: Holder | undefined;
+  return async function inSeries<T>(fn: (session: BlobSession) => Promise<T>): Promise<T> {
+    const t = transport();
+    if (!t.withBlobSession) return fn(t);
+    let holder = current;
+    if (!holder) {
+      let open!: (session: BlobSession) => void;
+      let fail!: (e: unknown) => void;
+      let end!: () => void;
+      const session = new Promise<BlobSession>((resolve, reject) => {
+        open = resolve;
+        fail = reject;
+      });
+      const done = new Promise<void>((resolve) => {
+        end = resolve;
+      });
+      const made: Holder = { session, users: 0, end };
+      holder = made;
+      current = made;
+      t.withBlobSession(async (s) => {
+        open(s);
+        await done;
+      }).catch((e: unknown) => {
+        fail(e);
+        if (current === made) current = undefined;
+      });
+      session.catch(() => undefined);
+    }
+    if (holder.timer) {
+      clearTimeout(holder.timer);
+      holder.timer = undefined;
+    }
+    const taken = holder;
+    taken.users += 1;
+    try {
+      return await fn(await taken.session);
+    } finally {
+      taken.users -= 1;
+      if (!taken.users) {
+        taken.timer = setTimeout(() => {
+          if (current === taken) current = undefined;
+          taken.end();
+        }, graceMs);
+      }
+    }
+  };
+}
+
+/** Пределы кэшей (в тестах — меньше). */
+export type CloudDriveLimits = { thumbCache: number; previewCacheBytes: number };
+
+export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {}) {
+  const thumbCache = caps.thumbCache ?? THUMB_CACHE;
+  const previewCacheBytes = caps.previewCacheBytes ?? PREVIEW_CACHE_BYTES;
   const uploads = new Map<string, UploadJob>();
   const downloads = new Map<string, AbortController>();
   const moves = new Map<string, AbortController>();
   const links = new Map<string, AbortController>();
   const thumbs = new Map<string, Promise<string | undefined>>();
-  const previews = new Map<string, Promise<Blob | undefined>>();
+  const previews = new Map<string, { loading: Promise<Blob | undefined>; bytes: number }>();
+  let previewBytes = 0;
+  const runThumb = createLimiter(THUMB_PARALLEL);
+  const runPreview = createLimiter(PREVIEW_PARALLEL);
+  const inSmallSeries = createSharedSession(() => deps.transport());
+  // Разобранные деревья по контейнеру — пока ревизия деревьев в движке та же (A8)
+  const treeCache = new Map<string, CloudStateJson | undefined>();
+  let treeCacheRevision = -1;
   let isEnsureStarted = false;
   let usage: { at: number; value: CloudUsage } | undefined;
 
   function readTree(container: string): CloudStateJson | undefined {
-    const json = deps.cloud().stateJson(container);
-    return json ? JSON.parse(json) as CloudStateJson : undefined;
+    const cloud = deps.cloud();
+    const revision = cloud.revision();
+    if (revision !== treeCacheRevision) {
+      treeCache.clear();
+      treeCacheRevision = revision;
+    }
+    if (treeCache.has(container)) return treeCache.get(container);
+    const json = cloud.stateJson(container);
+    const tree = json ? JSON.parse(json) as CloudStateJson : undefined;
+    treeCache.set(container, tree);
+    return tree;
   }
 
   function findNode(container: string, node: string) {
@@ -326,21 +417,54 @@ export function createCloudDrive(deps: Deps) {
     }
   }
 
-  async function loadBlob(blob: CloudBlobKeys & { fileId: string; size: number; chunks: number }, mime: string) {
+  /** Содержимое блоба целиком в память; `session` — серия (A9), без неё соединение своё у блоба. */
+  async function loadBlob(
+    blob: CloudBlobKeys & { fileId: string; size: number; chunks: number }, mime: string, session?: BlobSession,
+  ) {
     const { sink, getBlob } = createBlobSink(mime);
-    await downloadCloudBlob(deps.transport(), blob, sink);
+    await downloadCloudBlob(session || deps.transport(), blob, sink);
     return getBlob();
   }
 
-  function remember<T>(cache: Map<string, Promise<T>>, key: string, limit: number, load: () => Promise<T>) {
+  /** Кэш последних `limit` обещаний; вытесненное отдаётся в `onEvict` (D9: blob-URL миниатюры освобождается). */
+  function remember<T>(
+    cache: Map<string, Promise<T>>, key: string, limit: number, load: () => Promise<T>, onEvict?: (value: T) => void,
+  ) {
     let hit = cache.get(key);
     if (!hit) {
       hit = load();
       cache.set(key, hit);
       hit.catch(() => cache.delete(key));
-      if (cache.size > limit) cache.delete(cache.keys().next().value!);
+      while (cache.size > limit) {
+        const oldest = cache.keys().next().value!;
+        const evicted = cache.get(oldest)!;
+        cache.delete(oldest);
+        if (onEvict) evicted.then(onEvict).catch(() => undefined);
+      }
     }
     return hit;
+  }
+
+  function forgetPreview(fileId: string) {
+    const entry = previews.get(fileId);
+    if (!entry) return;
+    previews.delete(fileId);
+    previewBytes -= entry.bytes;
+  }
+
+  /** Кэш содержимого для просмотра с бюджетом по байтам (D6): старое вытесняется, пока не уложимся. */
+  function rememberPreview(fileId: string, bytes: number, load: () => Promise<Blob | undefined>) {
+    const hit = previews.get(fileId);
+    if (hit) return hit.loading;
+    const entry = { loading: load(), bytes };
+    previews.set(fileId, entry);
+    previewBytes += bytes;
+    entry.loading.catch(() => forgetPreview(fileId));
+    for (const key of previews.keys()) {
+      if (previewBytes <= previewCacheBytes || key === fileId) break;
+      forgetPreview(key);
+    }
+    return entry.loading;
   }
 
   /** Независимая копия блоба в облаке под новым секретом доступа (без перекачки). */
@@ -756,13 +880,17 @@ export function createCloudDrive(deps: Deps) {
       return Promise.resolve(true);
     },
 
-    /** Содержимое файла для просмотра (небольшой кэш последних). */
-    async parvaneCloudOpenBlob({ container, node }: { container: string; node: string }): Promise<Blob | undefined> {
-      const found = findNode(container, node);
+    /** Содержимое файла для просмотра (кэш последних с бюджетом по байтам; не больше трёх
+     * загрузок разом, серия по общему соединению). `blob` узла из UI избавляет от поиска в дереве. */
+    async parvaneCloudOpenBlob({ container, node, blob: given }: {
+      container: string; node: string; blob?: CloudBlobInfo;
+    }): Promise<Blob | undefined> {
+      const found = given ? { blob: given, mime: given.mime } : findNode(container, node);
       if (!found?.blob) return undefined;
       const { blob, mime } = found;
-      return remember(previews, blob.fileId, PREVIEW_CACHE, () => loadBlob(blob, mime || 'application/octet-stream'))
-        .catch(() => undefined);
+      return rememberPreview(blob.fileId, blob.size, () => runPreview(() => inSmallSeries(
+        (session) => loadBlob(blob, mime || 'application/octet-stream', session),
+      ))).catch(() => undefined);
     },
 
     /** Текстовый файл (заметка, холст): создать либо заменить содержимое существующего узла.
@@ -832,32 +960,74 @@ export function createCloudDrive(deps: Deps) {
       return deps.cloud().checkDrive();
     },
 
-    /** Содержимое текстового файла и идентификатор его версии (для `expectedFileId`). */
+    /** Содержимое текстового файла и идентификатор его версии (для `expectedFileId`).
+     * `blob` узла из UI избавляет от поиска в дереве. */
     async parvaneCloudReadText(
-      { container, node }: { container: string; node: string },
+      { container, node, blob: given }: { container: string; node: string; blob?: CloudBlobInfo },
     ): Promise<{ text: string; fileId: string } | undefined> {
-      const found = findNode(container, node);
+      const found = given ? { blob: given, mime: given.mime } : findNode(container, node);
       if (!found?.blob) return undefined;
+      const target = found.blob;
       try {
-        const blob = await loadBlob(found.blob, found.mime || TEXT_MIME);
-        return blob ? { text: await blob.text(), fileId: found.blob.fileId } : undefined;
+        const blob = await inSmallSeries((session) => loadBlob(target, found.mime || TEXT_MIME, session));
+        return blob ? { text: await blob.text(), fileId: target.fileId } : undefined;
       } catch (e) {
         deps.log(`облако: текст не прочитан: ${String(e)}`);
         return undefined;
       }
     },
 
-    /** Миниатюра файла → blob-URL (кэш на сессию). */
-    async parvaneCloudThumb({ container, node }: { container: string; node: string }): Promise<string | undefined> {
-      const found = findNode(container, node);
+    /** Тексты нескольких файлов пакетом (заметки хранилища): один разбор дерева, одна серия
+     * скачиваний по общему соединению, не больше `READ_TEXTS_PARALLEL` разом. Узел без `blob`
+     * ищется в дереве; ответ — в порядке запроса, у каждого либо `text`+`fileId`, либо `error`. */
+    async parvaneCloudReadTexts({ container, nodes }: {
+      container: string; nodes: { id: string; blob?: CloudBlobInfo }[];
+    }): Promise<{ id: string; text?: string; fileId?: string; error?: CloudErrorCode }[]> {
+      const tree = nodes.some((n) => !n.blob) ? readTree(container) : undefined;
+      const byId = new Map((tree?.nodes || []).map((n) => [n.id, n]));
+      const targets = nodes.map(({ id, blob }) => ({ id, blob: blob || byId.get(id)?.blob }));
+      const read = async (session: BlobSession) => {
+        const run = createLimiter(READ_TEXTS_PARALLEL);
+        return Promise.all(targets.map(({ id, blob }) => run(async () => {
+          if (!blob) return { id, error: 'not-found' as CloudErrorCode };
+          try {
+            const got = await loadBlob(blob, blob.mime || TEXT_MIME, session);
+            if (!got) return { id, error: 'not-found' as CloudErrorCode };
+            return { id, text: await got.text(), fileId: blob.fileId };
+          } catch (e) {
+            deps.log(`облако: текст не прочитан: ${String(e)}`);
+            return { id, error: errorOf(e) };
+          }
+        })));
+      };
+      if (!targets.some((t) => t.blob)) return read(deps.transport());
+      const transport = deps.transport();
+      if (!transport.withBlobSession) return read(transport);
+      return transport.withBlobSession(read).catch((e: unknown) => {
+        deps.log(`облако: тексты не прочитаны: ${String(e)}`);
+        return targets.map(({ id, blob }) => ({ id, error: blob ? errorOf(e) : 'not-found' }));
+      });
+    },
+
+    /** Миниатюра файла → blob-URL (кэш на сессию; вытесненный адрес освобождается). Качается не
+     * больше `THUMB_PARALLEL` разом, серией по общему соединению. `blob`/`thumb` узла из UI
+     * избавляют от поиска в дереве. */
+    async parvaneCloudThumb({
+      container, node, blob: givenBlob, thumb: givenThumb,
+    }: {
+      container: string; node: string; blob?: CloudBlobInfo; thumb?: CloudThumbInfo;
+    }): Promise<string | undefined> {
+      const found = givenBlob && givenThumb ? { blob: givenBlob, thumb: givenThumb } : findNode(container, node);
       if (!found?.blob || !found.thumb) return undefined;
       const { thumb, blob } = found;
-      return remember(thumbs, thumb.fileId, THUMB_CACHE, async () => {
+      return remember(thumbs, thumb.fileId, thumbCache, () => runThumb(() => inSmallSeries(async (session) => {
         // Миниатюра мала — один чанк облака; открытый размер в дереве не хранится
-        const got = await deps.transport().downloadBlobCap(thumb.fileId, thumb.capability, 0, 1);
+        const got = await session.downloadBlobCap(thumb.fileId, thumb.capability, 0, 1);
         const cipher = got.parts.get(0);
         const plain = cipher && await decryptBlob(cipher, blob.key, thumb.nonce);
         return plain ? URL.createObjectURL(new Blob([plain as BlobPart], { type: 'image/jpeg' })) : undefined;
+      })), (url) => {
+        if (url) URL.revokeObjectURL(url);
       }).catch(() => undefined);
     },
 

@@ -7,6 +7,7 @@ vi.mock('../../../api/gramjs', () => ({ callApi: vi.fn(() => Promise.resolve(und
 const { callApi } = await import('../../../api/gramjs');
 const {
   canSyncLearned, canSyncQuickHistory, getPlannerNotice, getPlannerState, loadPlanner, showPlannerNotice,
+  updatePlanner,
 } = await import('./plannerStore');
 const { serializeLearned } = await import('./plannerQuickLearn');
 const { quickLineId, serializeHistory } = await import('./plannerQuickSuggest');
@@ -37,6 +38,111 @@ describe('Уведомление планировщика', () => {
     expect(getPlannerNotice()?.text).toBe('Second');
     vi.advanceTimersByTime(1100);
     expect(getPlannerNotice()).toBeUndefined();
+  });
+});
+
+describe('Перечитка состояния движка без изменений не трогает состояние экранов (C1)', () => {
+  const api = callApi as unknown as ReturnType<typeof vi.fn>;
+  const task = (id: string, name: string) => ({
+    id, name, description: '', steps: [], status: 'queue', listId: '', rank: 1, day: '2026-10-08', start: '',
+    due: '', minutes: 30, repeat: null, occurrences: [], origin: null, source: null, // eslint-disable-line no-null/no-null
+  });
+  const engine = (tasks: unknown[]) => ({
+    // eslint-disable-next-line no-null/no-null -- JSON движка: null = «не задано»
+    tasks, events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 1, sizeBytes: 10,
+  });
+  let answer: Record<string, unknown> = {};
+  const flush = () => new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null, // eslint-disable-line no-null/no-null
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    vi.stubGlobal('window', { addEventListener: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
+    api.mockReset();
+    api.mockImplementation((method: string) => Promise.resolve(
+      method === 'parvanePlannerState' ? answer : method === 'parvaneLoadPlanner' ? { status: 'ok' } : undefined,
+    ));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('та же сырая строка — тот же объект состояния; другая — новое с прежними объектами записей', async () => {
+    const state = engine([task('t1', 'Один'), task('t2', 'Два')]);
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, state, raw: 'A',
+    };
+    await loadPlanner('user-raw');
+    const shown = getPlannerState();
+    expect(shown.tasks.map(({ id }) => id)).toEqual(['t1', 't2']);
+    // Раздел открыт заново — перечитка
+    void loadPlanner('user-raw');
+    await flush();
+    expect(getPlannerState()).toBe(shown);
+    // Разобранный JSON мог бы отличаться, но строка та же — не перечитывается
+    answer = { ...answer, state: engine([task('t1', 'Другое')]) };
+    void loadPlanner('user-raw');
+    await flush();
+    expect(getPlannerState()).toBe(shown);
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, raw: 'B',
+      state: engine([task('t1', 'Один'), task('t2', 'Два-2')]),
+    };
+    void loadPlanner('user-raw');
+    await flush();
+    const next = getPlannerState();
+    expect(next).not.toBe(shown);
+    expect(next.tasks[0]).toBe(shown.tasks[0]);
+    expect(next.tasks[1].name).toBe('Два-2');
+  });
+
+  it('ревизия и отпечаток JSON — то же правило', async () => {
+    const state = engine([task('t1', 'Один')]);
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, state, revision: 3,
+    };
+    await loadPlanner('user-rev');
+    const shown = getPlannerState();
+    void loadPlanner('user-rev');
+    await flush();
+    expect(getPlannerState()).toBe(shown);
+    answer = { ...answer, revision: 4 };
+    void loadPlanner('user-rev');
+    await flush();
+    expect(getPlannerState()).not.toBe(shown);
+
+    answer = { status: 'ready', sizeBytes: 10, hasPending: false, state: engine([task('t1', 'Один')]) };
+    await loadPlanner('user-print');
+    const printed = getPlannerState();
+    answer = { ...answer, state: engine([task('t1', 'Один')]) };
+    void loadPlanner('user-print');
+    await flush();
+    expect(getPlannerState()).toBe(printed);
+    answer = { ...answer, state: engine([task('t1', 'Иное')]) };
+    void loadPlanner('user-print');
+    await flush();
+    expect(getPlannerState().tasks[0].name).toBe('Иное');
+  });
+
+  it('после своей правки ответ движка применяется, даже если строка та же', async () => {
+    answer = {
+      status: 'ready', sizeBytes: 10, hasPending: false, state: engine([task('t1', 'Один')]), raw: 'A',
+    };
+    await loadPlanner('user-edit');
+    updatePlanner((draft) => {
+      draft.tasks[0].name = 'Правка';
+    });
+    expect(getPlannerState().tasks[0].name).toBe('Правка');
+    // Движок правку отверг (строка прежняя) — экран возвращается к состоянию движка
+    void loadPlanner('user-edit');
+    await flush();
+    expect(getPlannerState().tasks[0].name).toBe('Один');
   });
 });
 

@@ -8,7 +8,9 @@ import { V2Error } from './transport';
 // ключи эпох и метки; здесь — жизненный цикл: найти/создать контейнер, снимок и
 // журнал (`domain.op.sync`), очередь отправки своих операций (переживает
 // перезагрузку), пакетирование правок (R4), снимок по порогу (R5), опрос раз в
-// 8 с. Статусы для UI: `loading` (стек не поднят), `needs-linking` (устройство
+// 8 с, пока «План» кому-то нужен и вкладка видна (иначе раз в 60 с; при возврате
+// — сразу). Персист и событие для UI — только когда состояние менялось.
+// Статусы для UI: `loading` (стек не поднят), `needs-linking` (устройство
 // не в журнале — контейнер не создаём, FR-011), `no-key` (контейнер есть, ключ
 // эпохи ещё не пришёл от своих устройств), `offline` (шард недоступен —
 // работаем локально), `ready`.
@@ -50,6 +52,8 @@ const PENDING_RECORD = 'planner-pending';
 const FLUSH_IDLE_MS = 1500;
 const FLUSH_MAX_MS = 10000;
 const SYNC_INTERVAL_MS = 8000;
+// Раздел закрыт либо вкладка скрыта: опрос редкий (правки уходят своими таймерами)
+const SYNC_IDLE_MS = 60000;
 const RETRY_OFFLINE_MS = 15000;
 const SYNC_PAGES = 50;
 const MAX_CHANGES_PER_OP = 400;
@@ -98,11 +102,15 @@ export function createPlannerSync(deps: Deps) {
   let pendingChanges: unknown[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let flushDeadline: ReturnType<typeof setTimeout> | undefined;
-  let syncTimer: ReturnType<typeof setInterval> | undefined;
+  let syncTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   let isWanted = false;
+  // Есть потребители состояния (раздел, палитра, карточки задания в чате): частый опрос
+  let isActive = true;
   let isSnapshotTried = false;
+  let isNoContainerAnnounced = false;
+  let areListenersSet = false;
   let lastError: string | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -318,35 +326,40 @@ export function createPlannerSync(deps: Deps) {
     return changed;
   }
 
-  async function maybeSnapshot() {
+  /** Снимок по порогу; `true` — записан (движок запомнил его seq — нужен персист). */
+  async function maybeSnapshot(): Promise<boolean> {
     const client = deps.client();
-    if (!client || !client.plannerHasKey()) return;
+    if (!client || !client.plannerHasKey()) return false;
     try {
       const req = client.plannerSnapshotRequest(Date.now()) as OutReq | undefined;
-      if (!req) return;
+      if (!req) return false;
       await call(req.chan, req.method, req.body);
       deps.log(`планировщик: снимок записан (seq ${client.plannerHeadSeq()})`);
+      return true;
     } catch (e) {
       deps.log(`планировщик: снимок не записан: ${String(e)}`);
+      return false;
     }
   }
 
   // ── своя очередь ───────────────────────────────────────────────────────────
 
-  /** Накопленные правки → одна операция движка (метки) → очередь отправки. */
-  async function prepareLocal() {
+  /** Накопленные правки → одна операция движка (метки) → очередь отправки.
+   * Возвращает число подготовленных операций (состояние движка изменилось). */
+  async function prepareLocal(): Promise<number> {
     const client = deps.client();
     if (!client && pendingChanges.length) deps.log('планировщик: движка нет — правки ждут');
-    if (!client || !pendingChanges.length) return;
+    if (!client || !pendingChanges.length) return 0;
     if (!client.plannerIsAttached()) {
       // Первая правка без контейнера: создать (непривязанное устройство сюда не попадает)
-      if (!(await ensureAttached(true))) return;
+      if (!(await ensureAttached(true))) return 0;
     }
     await loadOutbox();
     // Одна операция — одна метка: правки одного объекта склеиваются, иначе поздняя могла проиграть ранней
     const changes = coalesceChanges(pendingChanges);
     pendingChanges = [];
     void savePending();
+    let prepared = 0;
     for (let i = 0; i < changes.length; i += MAX_CHANGES_PER_OP) {
       const chunk = changes.slice(i, i + MAX_CHANGES_PER_OP);
       try {
@@ -354,12 +367,14 @@ export function createPlannerSync(deps: Deps) {
           opId: string; op: Uint8Array; applied: number;
         };
         outbox.push({ opId: local.opId, op: bytesToB64(local.op) });
+        prepared += 1;
       } catch (e) {
         deps.log(`планировщик: правка отвергнута движком: ${String(e)}`);
       }
     }
     await saveOutbox();
     await deps.persist();
+    return prepared;
   }
 
   async function sendOutbox() {
@@ -433,11 +448,13 @@ export function createPlannerSync(deps: Deps) {
   function flushNow() {
     clearFlushTimers();
     return serial(async () => {
+      let changed = false;
       try {
-        await prepareLocal();
+        changed = (await prepareLocal()) > 0;
         await sendOutbox();
-        await maybeSnapshot();
+        if (await maybeSnapshot()) await deps.persist();
       } catch (e) {
+        if (lastError !== String(e)) changed = true;
         lastError = String(e);
         deps.log(`планировщик: отправка не удалась: ${String(e)}`);
         if (isUnavailable(e)) {
@@ -445,50 +462,80 @@ export function createPlannerSync(deps: Deps) {
           scheduleRetry();
         }
       }
-      deps.onChanged();
+      // Состояние движка менялось только подготовленными правками (и ошибка нужна экрану)
+      if (changed) deps.onChanged();
     });
   }
 
   /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
   function syncNow() {
     return serial(async () => {
+      let changed = false;
       try {
         // Накопленные правки уходят и отсюда: периодический синк не должен ни
         // отменять таймер пакета, ни оставлять пакет без контейнера
         const hasPendingChanges = pendingChanges.length > 0;
         if (hasPendingChanges) clearFlushTimers();
         if (!(await ensureAttached(hasPendingChanges))) {
-          deps.onChanged();
+          // Контейнера нет (создастся первой правкой): экрану это сообщается один
+          // раз, иначе каждый опрос перерисовывал бы всех подписчиков
+          if (!isNoContainerAnnounced) {
+            isNoContainerAnnounced = true;
+            deps.onChanged();
+          }
           return;
         }
-        await prepareLocal();
+        if ((await prepareLocal()) > 0) changed = true;
         await sendOutbox();
-        const changed = await pull();
-        await maybeSnapshot();
-        await deps.persist();
-        if (changed) deps.onChanged();
+        if (await pull()) changed = true;
+        const isSnapshotWritten = await maybeSnapshot();
+        // Персист — только когда движок что-то менял; иначе каждые 8 с на диск
+        // уходило бы полное состояние без изменений
+        if (changed || isSnapshotWritten) await deps.persist();
       } catch (e) {
+        // Новая ошибка нужна экрану; та же самая при каждом опросе — нет
+        if (lastError !== String(e)) changed = true;
         lastError = String(e);
         deps.log(`планировщик: синхронизация: ${String(e)}`);
         if (isUnavailable(e)) {
           setStatus('offline');
           scheduleRetry();
         }
+      } finally {
+        scheduleSync();
       }
-      deps.onChanged();
+      if (changed) deps.onChanged();
     });
   }
 
-  function startTimers() {
-    if (syncTimer) return;
-    syncTimer = setInterval(() => {
+  function isHidden() {
+    return typeof document !== 'undefined' && document.hidden;
+  }
+
+  /** Следующий опрос: частый, пока есть потребители и вкладка видна, иначе редкий. */
+  function scheduleSync() {
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = undefined;
+    if (!isWanted) return;
+    syncTimer = setTimeout(() => {
+      syncTimer = undefined;
       void syncNow();
-    }, SYNC_INTERVAL_MS);
-    if (typeof window !== 'undefined') {
-      window.addEventListener('pagehide', () => {
-        if (pendingChanges.length) void flushNow();
-      });
-    }
+    }, isActive && !isHidden() ? SYNC_INTERVAL_MS : SYNC_IDLE_MS);
+  }
+
+  function startTimers() {
+    scheduleSync();
+    if (areListenersSet || typeof window === 'undefined') return;
+    areListenersSet = true;
+    window.addEventListener('pagehide', () => {
+      if (pendingChanges.length) void flushNow();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!isWanted) return;
+      // Вкладка снова видна: догнать сразу, дальше — по обычному расписанию
+      if (!document.hidden && isActive) void syncNow();
+      else scheduleSync();
+    });
   }
 
   // ── API ────────────────────────────────────────────────────────────────────
@@ -523,6 +570,16 @@ export function createPlannerSync(deps: Deps) {
     return flushNow();
   }
 
+  /** Есть ли потребители состояния (раздел «План», палитра, карточки задания в
+   * чате): без них опрос редкий, с первым — немедленный синк. */
+  function setActive(active: boolean) {
+    if (isActive === active) return;
+    isActive = active;
+    if (!isWanted) return;
+    if (active && !isHidden()) void syncNow();
+    else scheduleSync();
+  }
+
   function stateJson(): string | undefined {
     return deps.client()?.plannerStateJson();
   }
@@ -555,7 +612,7 @@ export function createPlannerSync(deps: Deps) {
 
   function reset() {
     clearFlushTimers();
-    if (syncTimer) clearInterval(syncTimer);
+    if (syncTimer) clearTimeout(syncTimer);
     if (retryTimer) clearTimeout(retryTimer);
     syncTimer = undefined;
     retryTimer = undefined;
@@ -566,12 +623,15 @@ export function createPlannerSync(deps: Deps) {
     isPendingLoaded = false;
     pendingChanges = [];
     isWanted = false;
+    isActive = true;
     isSnapshotTried = false;
+    isNoContainerAnnounced = false;
     lastError = undefined;
   }
 
   return {
     ensure,
+    setActive,
     apply,
     flush,
     syncNow,

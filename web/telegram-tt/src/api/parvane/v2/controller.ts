@@ -9,6 +9,7 @@
 // (sync.applyExternal) — UI не знает, по какому протоколу пришло сообщение.
 
 import type { WireCallSignal } from '../callengine';
+import type { BlobSession } from '../cloudBlobs';
 import type { WireGroupInvite } from '../groupcall';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
@@ -20,6 +21,7 @@ import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
 import { base64ToBytes, bytesToBase64 } from './base64';
+import { createBlobConnPool } from './blobConns';
 import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
 } from './callMap';
@@ -651,10 +653,11 @@ export function createV2Controller(deps: Deps) {
   /** Открыть ID-соединение: Hello/Welcome, проверка описателя сервера, Auth,
    * обработчики событий и обрыва. */
   async function openIdentified(token: string) {
-    const conn = new V2Connection(pv!, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
+    if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const conn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
     idConn = conn;
     const welcome = await conn.connect('v2');
-    const desc = JSON.parse(pv!.verifyServerDescriptor(welcome.serverDescriptor)) as {
+    const desc = JSON.parse(pv.verifyServerDescriptor(welcome.serverDescriptor)) as {
       domain: string; serverKey: string;
     };
     serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
@@ -2275,44 +2278,71 @@ export function createV2Controller(deps: Deps) {
     return fileId;
   }
 
-  /** Скачать чанки блоба по секрету: анонимный канал, одноразовое соединение
-   * (живёт до последнего чанка потока). */
-  async function downloadBlobCap(fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number) {
-    if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+  // Соединения для скачивания по секрету (A9, `./blobConns`): анонимный канал;
+  // вне серии — одно соединение на блоб (окна одного файла идут по нему, простой
+  // 5 с закрывает), внутри `withBlobSession` — одно на всю серию (облако:
+  // миниатюры папки, тексты заметок — решение пользователя). Планировщик
+  // анонимных соединений движка (получатели, копии) эти соединения не ведёт
+  const blobConns = createBlobConnPool<V2Connection>({
+    open: async () => {
+      if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      const conn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_ANONYMOUS);
+      await conn.connect('v2');
+      return conn;
+    },
+  });
+
+  async function streamBlobCap(
+    conn: V2Connection, fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number,
+  ) {
+    if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const method = 'cloud.blob.download_cap';
     const body = pv.encodeMessage('parvane.cloud.v1.DownloadCapRequest', JSON.stringify({
       file_id: fileId, capability: capabilityB64, first_chunk: firstChunk, chunk_count: chunkCount,
     }));
-    anonPlanner = anonPlanner || new pv.PvAnonPlanner();
-    const plan = anonPlanner.assign(method, body, Date.now()) as { conn: number };
-    const conn = await openAnon(plan.conn);
-    try {
-      const parts = new Map<number, Uint8Array>();
-      let streamError: string | undefined;
-      let finish: NoneToVoidFunction | undefined;
-      const isDone = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      const meta = JSON.parse(pv.decodeMessage('parvane.cloud.v1.DownloadCapResponse', await conn.stream(
-        method,
-        body,
-        (chunk) => {
-          if (chunk.error) streamError = chunk.error;
-          else if (chunk.data.length) parts.set(chunk.index, chunk.data);
-          if (chunk.last) finish?.();
-        },
-        BLOB_TIMEOUT_MS,
-      ))) as { size?: string | number; chunks?: number };
-      // Метаданные приходят первыми; чанки — следом кадрами того же запроса
-      const expected = Math.min(chunkCount, Math.max(0, (meta.chunks || 0) - firstChunk));
-      if (expected > 0 && parts.size < expected && !streamError) {
-        await Promise.race([isDone, pause(BLOB_TIMEOUT_MS)]);
-      }
-      if (streamError) throw new V2Error(streamError);
-      return { size: Number(meta.size || 0), chunks: meta.chunks || 0, parts };
-    } finally {
-      closeAnon(plan.conn);
+    const parts = new Map<number, Uint8Array>();
+    let streamError: string | undefined;
+    let finish: NoneToVoidFunction | undefined;
+    const isDone = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const meta = JSON.parse(pv.decodeMessage('parvane.cloud.v1.DownloadCapResponse', await conn.stream(
+      method,
+      body,
+      (chunk) => {
+        if (chunk.error) streamError = chunk.error;
+        else if (chunk.data.length) parts.set(chunk.index, chunk.data);
+        if (chunk.last) finish?.();
+      },
+      BLOB_TIMEOUT_MS,
+    ))) as { size?: string | number; chunks?: number };
+    // Метаданные приходят первыми; чанки — следом кадрами того же запроса
+    const expected = Math.min(chunkCount, Math.max(0, (meta.chunks || 0) - firstChunk));
+    if (expected > 0 && parts.size < expected && !streamError) {
+      await Promise.race([isDone, pause(BLOB_TIMEOUT_MS)]);
     }
+    if (streamError) throw new V2Error(streamError);
+    return { size: Number(meta.size || 0), chunks: meta.chunks || 0, parts };
+  }
+
+  /** Скачать чанки блоба по секрету: анонимный канал, соединение — своё у каждого
+   * блоба (окна одного файла идут по нему же). */
+  function downloadBlobCap(fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number) {
+    if (!pv || !ready) return Promise.reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
+    return blobConns.run(
+      `file:${fileId}`, (conn) => streamBlobCap(conn, fileId, capabilityB64, firstChunk, chunkCount),
+    );
+  }
+
+  /** Серия скачиваний по секрету: все `session.downloadBlobCap` внутри `fn` идут
+   * по одному анонимному соединению; оно закрывается по концу серии. */
+  function withBlobSession<T>(fn: (session: BlobSession) => Promise<T>): Promise<T> {
+    if (!pv || !ready) return Promise.reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
+    return blobConns.withSeries((key) => fn({
+      downloadBlobCap: (fileId, capabilityB64, firstChunk, chunkCount) => blobConns.run(
+        key, (conn) => streamBlobCap(conn, fileId, capabilityB64, firstChunk, chunkCount),
+      ),
+    }));
   }
 
   // ── Эфемерные каналы: «печатает» (T127, FR-013/FR-064) ─────────────────────
@@ -3564,6 +3594,7 @@ export function createV2Controller(deps: Deps) {
     uploadBlobChunk,
     completeBlobUpload,
     downloadBlobCap,
+    withBlobSession,
     trySendTyping,
     publishPresence,
     watchPresence,
@@ -3590,6 +3621,7 @@ export function createV2Controller(deps: Deps) {
       idConn?.close();
       blobControl.close();
       [...anonConns.keys()].forEach(closeAnon);
+      blobConns.closeAll();
       anonPlanner?.free();
       anonPlanner = undefined;
       // Снимок снимается синхронно до освобождения движка; запись доходит сама

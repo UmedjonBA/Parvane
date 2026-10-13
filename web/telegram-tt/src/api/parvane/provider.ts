@@ -146,12 +146,18 @@ function readPlannerState() {
     void planner.ensure();
   }
   const json = planner.stateJson();
+  // Размер и ревизия — из того же JSON: отдельный `plannerSize()` движка — ещё одна
+  // полная protobuf-копия состояния. `raw` — та же строка: по ней экран
+  // пропускает равные состояния, не разбирая их заново
+  const state = json ? JSON.parse(json) as { sizeBytes?: number; headSeq?: number } : undefined;
   return {
     status,
-    state: json ? JSON.parse(json) as unknown : undefined,
-    sizeBytes: planner.sizeBytes(),
+    state: state as unknown,
+    sizeBytes: state?.sizeBytes ?? 0,
     hasPending: planner.hasPending(),
     error: planner.lastError(),
+    raw: json,
+    revision: state?.headSeq,
   };
 }
 const BACKGROUND_RECORD_PREFIX = 'background:';
@@ -2273,6 +2279,14 @@ const methods = {
   /** Явный синк (раздел открыт заново): не чаще, чем позволяет модуль. */
   async parvanePlannerSync() {
     await v2Controller.planner.syncNow();
+    return true;
+  },
+
+  /** Есть ли потребители «Плана» (раздел, палитра, карточки задания в чате):
+   * без них опрос сервера редкий (60 с), с первым — немедленный синк и 8 с. */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async parvanePlannerSetActive({ isActive }: { isActive: boolean }) {
+    v2Controller.planner.setActive(isActive);
     return true;
   },
 
