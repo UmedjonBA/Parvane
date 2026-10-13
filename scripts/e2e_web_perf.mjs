@@ -18,9 +18,11 @@ import {
 
 const PASSWORD = 'Parvane-perf-e2e-1';
 const STEP_TIMEOUT_MS = 30000;
-const NOTES = 24;
-const ENTRIES = 30;
-const MESSAGES = 25;
+// PARVANE_E2E_PERF_SCALE=4 — вчетверо больше данных (замер «после» на объёме)
+const SCALE = Math.max(1, Number(process.env.PARVANE_E2E_PERF_SCALE) || 1);
+const NOTES = 24 * SCALE;
+const ENTRIES = 30 * SCALE;
+const MESSAGES = 25 * SCALE;
 const OUT_DIR = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR || '.';
 
 const results = [];
