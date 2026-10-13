@@ -645,6 +645,33 @@ mod tests {
     use crate::domain::planner::{self, PlannerState};
     use crate::domain::Stamp;
 
+    /// C1: размер снимка считается один раз на ревизию — `state_json` и
+    /// `size_estimate` после неё не делают вторую protobuf-копию; правка
+    /// сбрасывает кэш.
+    #[test]
+    fn snapshot_size_is_computed_once_per_revision() {
+        let text = r#"{"changes":[{"task":{"id":"t1","title":"Хлеб","day":"2026-10-01","minutes":10}}]}"#;
+        let mut op = op_from_json(text).unwrap();
+        planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
+        let mut st = PlannerState::default();
+        assert_eq!(st.apply_op(&op, "d1").unwrap(), 1);
+        assert_eq!(st.size_cached(), None, "после правки кэша нет");
+        let rev = st.rev();
+        let out: Value = serde_json::from_str(&state_json(&st, 1)).unwrap();
+        let size = st.size_cached().expect("state_json посчитал размер");
+        assert_eq!(out["sizeBytes"], json!(size));
+        assert_eq!(size, prost::Message::encoded_len(&st.to_snapshot()));
+        assert_eq!(st.size_estimate(), size);
+        assert_eq!(st.rev(), rev, "чтение ревизию не меняет");
+        let text2 = r#"{"changes":[{"task":{"id":"t2","title":"Молоко","day":"2026-10-01"}}]}"#;
+        let mut op2 = op_from_json(text2).unwrap();
+        planner::stamp_op(&mut op2, &Stamp::new(2, "d1"));
+        st.apply_op(&op2, "d1").unwrap();
+        assert_ne!(st.rev(), rev);
+        assert_eq!(st.size_cached(), None, "правка сбрасывает кэш");
+        assert!(st.size_estimate() > size);
+    }
+
     #[test]
     fn json_roundtrip_through_state() {
         let text = r#"{"changes":[

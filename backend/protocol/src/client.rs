@@ -3175,6 +3175,61 @@ mod session_proof_tests {
     }
 }
 
+#[cfg(test)]
+mod state_json_cache_tests {
+    use super::*;
+    use crate::pb::parvane::cloud::v1::{cloud_op, CloudCreate, CloudNodeKind, CloudOp};
+
+    /// C1: JSON планировщика для хоста пересобирается только при смене
+    /// ревизии состояния или `head_seq`.
+    #[test]
+    fn planner_state_json_is_cached_by_revision() {
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        c.planner_create(1_700_000_000_000).unwrap();
+        let a = c.planner_state_json().unwrap();
+        let key = c.planner.as_ref().unwrap().json_cache.key();
+        assert!(key.is_some());
+        assert_eq!(c.planner_state_json().unwrap(), a);
+        assert_eq!(c.planner.as_ref().unwrap().json_cache.key(), key, "повторное чтение — из кэша");
+        c.planner_prepare_local(r#"{"changes":[{"task":{"id":"t1","title":"Хлеб","day":"2026-10-01"}}]}"#).unwrap();
+        let b = c.planner_state_json().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(c.planner.as_ref().unwrap().json_cache.key(), key, "правка — новая ревизия");
+        let key2 = c.planner.as_ref().unwrap().json_cache.key();
+        c.planner.as_mut().unwrap().head_seq += 1;
+        let d: serde_json::Value = serde_json::from_str(&c.planner_state_json().unwrap()).unwrap();
+        assert_eq!(d["headSeq"], serde_json::json!(1));
+        assert_ne!(c.planner.as_ref().unwrap().json_cache.key(), key2, "сдвиг курсора — новая строка");
+    }
+
+    /// C1/A8: JSON дерева облака — та же строка, пока дерево не менялось.
+    #[test]
+    fn cloud_state_json_is_cached_by_revision() {
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        let (id, _) = c.cloud_create(1_700_000_000_000).unwrap();
+        let a = c.cloud_state_json(&id).unwrap();
+        let key = c.cloud[&id].json_cache.key();
+        assert_eq!(c.cloud_state_json(&id).unwrap(), a);
+        assert_eq!(c.cloud[&id].json_cache.key(), key);
+        let op = CloudOp {
+            op: Some(cloud_op::Op::Create(CloudCreate {
+                node_id: vec![9; 16],
+                kind: CloudNodeKind::Folder as i32,
+                name: "Документы".into(),
+                stamp: Some(crate::domain::Stamp::new(1, "d1").to_pb()),
+                ..Default::default()
+            })),
+        };
+        c.cloud.get_mut(&id).unwrap().state.apply(&op).unwrap();
+        let b = c.cloud_state_json(&id).unwrap();
+        assert_ne!(a, b);
+        assert_ne!(c.cloud[&id].json_cache.key(), key);
+        assert!(b.contains("Документы"));
+    }
+}
+
 // Контейнер планировщика (spec 010) — отдельный файл той же области видимости.
 include!("client_planner.rs");
 include!("client_cloud.rs");
