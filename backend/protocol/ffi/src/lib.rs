@@ -1024,6 +1024,13 @@ pub unsafe extern "C" fn pv_encode_method_request(method: *const c_char, json: *
     })
 }
 
+/// Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
+/// base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака».
+#[no_mangle]
+pub unsafe extern "C" fn pv_encode_upload_chunk(upload_id: *const c_char, index: u32, bucket: i32, data: *const u8, len: usize, err: *mut *mut c_char) -> PvBytes {
+    guard(err, PvBytes::empty(), || host::encode_upload_chunk(str_arg(upload_id).ok_or_else(bad_arg)?, index, bucket, bytes_arg(data, len)).map(PvBytes::from_vec))
+}
+
 /// Ответ любого метода реестра → proto3-JSON (T161).
 #[no_mangle]
 pub unsafe extern "C" fn pv_decode_method_response(method: *const c_char, bytes: *const u8, len: usize, err: *mut *mut c_char) -> *mut c_char {
