@@ -14,6 +14,7 @@ export const encodeMessage: (a: number, b: number, c: number, d: number, e: numb
 export const encodeMethodRequest: (a: number, b: number, c: number, d: number, e: number) => void;
 export const encodePing: (a: number, b: bigint) => void;
 export const encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number) => void;
+export const encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const generateRecoveryKey: (a: number) => void;
 export const grantRootBackup: (a: number, b: number, c: number) => void;
 export const grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;

@@ -617,6 +617,14 @@ export function encodePing(nonce: bigint): Uint8Array;
 export function encodeRequest(id: bigint, method: string, body: Uint8Array, timeout_ms: number): Uint8Array;
 
 /**
+ * Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
+ * base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака». Кадр запроса —
+ * как обычно, `encodeRequest(id, method, body, timeout)`. Чанки скачивания
+ * уже приходят байтами (`decodeFrame` → `chunk.data`).
+ */
+export function encodeUploadChunk(upload_id: string, index: number, bucket: number, data: Uint8Array): Uint8Array;
+
+/**
  * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
  */
 export function generateRecoveryKey(): string;
@@ -689,6 +697,7 @@ export interface InitOutput {
     readonly encodeMethodRequest: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodePing: (a: number, b: bigint) => void;
     readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
     readonly grantRootBackup: (a: number, b: number, c: number) => void;
     readonly grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
