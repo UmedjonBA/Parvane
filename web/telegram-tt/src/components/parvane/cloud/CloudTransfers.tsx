@@ -1,22 +1,18 @@
 import { memo } from '../../../lib/teact/teact';
 
 import type { CloudErrorCode } from '../../../api/parvane/cloudDrive';
-import type { CloudTransfer } from './cloudStore';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatFileSize } from '../../../util/textFormat';
-import { cancelCloudTransfer, retryCloudUpload } from './cloudStore';
+import { cancelCloudTransfer, getCloudTransfers, retryCloudUpload } from './cloudStore';
 
+import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
 
 import PvIcon from '../notes/PvIcon';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
-
-type OwnProps = {
-  transfers: CloudTransfer[];
-};
 
 export const CLOUD_ERROR_KEYS = {
   offline: 'ParvaneCloudErrorOffline',
@@ -39,9 +35,11 @@ const PROGRESS_KEYS = {
 
 const PERCENT = 100;
 
-// Ход загрузок, скачиваний и переносов — строками в списке файлов: полоска, отмена, повтор после сбоя
-const CloudTransfers = ({ transfers }: OwnProps) => {
+// Ход загрузок, скачиваний и переносов — строками в списке файлов: полоска, отмена, повтор после сбоя.
+// На ход подписан только этот компонент: список файлов от каждого процента не перерисовывается
+const CloudTransfers = () => {
   const lang = useLang();
+  const transfers = useDerivedState(getCloudTransfers);
   if (!transfers.length) return undefined;
 
   return (

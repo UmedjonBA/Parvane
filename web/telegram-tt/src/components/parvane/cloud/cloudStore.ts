@@ -55,7 +55,9 @@ const [getCloudData, setCloudData] = createSignal<CloudDriveState | undefined>(u
 const [getIsCloudLoaded, setIsCloudLoaded] = createSignal(false);
 const [getCloudStatus, setCloudStatus] = createSignal<CloudStatus>('loading');
 const [getCloudPlace, setCloudPlaceSignal] = createSignal<CloudPlace>({});
-const [getCloudTransfers, setCloudTransfers] = createSignal<CloudTransfer[]>([]);
+const [getCloudTransfers, setCloudTransfersSignal] = createSignal<CloudTransfer[]>([]);
+// Есть ли переносы вообще: на сам ход подписан только `CloudTransfers`, список файлов — на этот флаг
+const [getHasCloudTransfers, setHasCloudTransfers] = createSignal(false);
 const [getCloudUsage, setCloudUsage] = createSignal<CloudUsage | undefined>(undefined);
 const [getCloudPrefs, setCloudPrefsSignal] = createSignal<CloudPrefs>(readPrefs());
 const [getCloudNotice, setCloudNotice] = createSignal<CloudNotice | undefined>(undefined);
@@ -66,9 +68,14 @@ const [getCloudLinkProgress, setCloudLinkProgress] = createSignal<
 >(undefined);
 
 export {
-  getCloudData, getIsCloudLoaded, getCloudStatus, getCloudPlace, getCloudTransfers, getCloudUsage, getCloudPrefs,
-  getCloudNotice, getCloudLinks, getCloudLinkProgress,
+  getCloudData, getIsCloudLoaded, getCloudStatus, getCloudPlace, getCloudTransfers, getHasCloudTransfers, getCloudUsage,
+  getCloudPrefs, getCloudNotice, getCloudLinks, getCloudLinkProgress,
 };
+
+function setCloudTransfers(list: CloudTransfer[]) {
+  setCloudTransfersSignal(list);
+  setHasCloudTransfers(list.length > 0);
+}
 
 let loadedUserId: string | undefined;
 let loadPromise: Promise<void> | undefined;
