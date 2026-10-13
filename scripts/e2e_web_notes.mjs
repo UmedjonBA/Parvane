@@ -147,6 +147,7 @@ try {
   // «+» в заголовке папки создаёт заметку в ней
   await folderOf(FOLDER).locator('[data-folder-add]').click();
   await visible(chipOf(FOLDER), 'папка новой заметки');
+  await page.waitForTimeout(400);
   await note.getByLabel('Note title').fill(DRAFT);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(FOLDER).and(row(DRAFT)), 'заметка в своей папке');
@@ -547,6 +548,8 @@ try {
   await visible(chipOf(GRAPH_FOLDER), 'папка заметки для графа');
   // Название меняется у заметки, которая уже записана: строка в списке — знак, что запись дошла
   await visible(rowsIn(GRAPH_FOLDER).and(row('New note')), 'новая заметка в папке для графа');
+  // Поле названия подхватывает название открытой заметки эффектом — набор раньше него был бы стёрт
+  await page.waitForTimeout(400);
   await note.getByLabel('Note title').fill(FOLDER_NOTE);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(GRAPH_FOLDER).and(row(FOLDER_NOTE)), 'заметка в папке для графа');
@@ -1069,8 +1072,16 @@ try {
   }, [inside, roomy]);
   await page.keyboard.press('Escape');
   // Выделение со стрелки снято, и холст после этого жив (отрисовка падала на снятии класса с узла SVG)
-  await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
-    .catch(() => assert.fail('Escape не снял выделение со стрелки'));
+  await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(async () => {
+    // Разбор редкого сбоя: где фокус и снимает ли выделение повторное нажатие
+    const focus = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el ? `${el.tagName}#${el.id}.${String(el.className).slice(0, 60)}` : 'нет';
+    });
+    await page.keyboard.press('Escape');
+    const isGoneAfterRetry = await bar.waitFor({ state: 'detached', timeout: 3000 }).then(() => true, () => false);
+    assert.fail(`Escape не снял выделение со стрелки (фокус: ${focus}; повторное нажатие сняло: ${isGoneAfterRetry})`);
+  });
   await settle();
   const pairBefore = await rectOf(pairGroup);
   const alphaBefore = await rectOf(cardNamed('Альфа'));
@@ -1356,7 +1367,11 @@ try {
   await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка перед «Запланировать»');
   await note.locator('[data-note-plan]').click();
   await visible(quickInput, 'окно ввода текстом поверх заметки');
-  assert.equal(await quickInput.inputValue(), `[[${NOTE}]] `, 'заготовка окна — ссылка на заметку');
+  // Заготовка приходит в поле эффектом после показа окна
+  await page.waitForFunction(
+    (expected) => document.querySelector('#planner-quick-input')?.value === expected, `[[${NOTE}]] `,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(() => assert.fail('заготовка окна — ссылка на заметку'));
   // Слова названия заметки («X99») разбор не читает: название записи — ссылка и дописанное
   await quickInput.fill(`[[${NOTE}]] ${PLANNED_TASK} сегодня`);
   await visible(page.locator('form[data-quick-kind="task"] [data-quick-chip="day"]'), 'чип дня в окне ввода');

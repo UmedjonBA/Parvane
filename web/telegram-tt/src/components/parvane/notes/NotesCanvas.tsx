@@ -648,17 +648,22 @@ const NotesCanvas = ({
   }, [menu]);
 
   const hasSelection = !isSelectionEmpty(selection);
-  const hasEscapeTarget = !inline && Boolean(menu || linkFrom || hasSelection || isSelectMode);
 
-  // Escape по очереди: меню, режим связи, выделение, режим выбора
-  useEffect(() => (hasEscapeTarget ? captureEscKeyListener(() => {
+  // Escape по очереди: меню, режим связи, выделение, режим выбора. Слушатель стоит всё время, пока холст открыт
+  // (нечего снимать — клавиша уходит дальше): поставленный эффектом лишь при появлении цели, он пропускал
+  // нажатие, пришедшее в том же кадре, что и меню либо выделение
+  const handleEscape = useLastCallback(() => {
     // Правка началась в этом же кадре — её слушатель ещё не встал в очередь
     if (inlineRef.current) finishInline(true);
     else if (menu) setMenu(undefined);
     else if (linkFrom) setLinkFrom(undefined);
     else if (!isSelectionEmpty(selectionRef.current)) select(CANVAS_EMPTY_SELECTION);
-    else setIsSelectMode(false);
-  }) : undefined), [hasEscapeTarget, menu, linkFrom]);
+    else if (isSelectMode) setIsSelectMode(false);
+    else return false;
+    return undefined;
+  });
+
+  useEffect(() => captureEscKeyListener(handleEscape), [handleEscape]);
 
   const handleInlineChange = useLastCallback((e: React.ChangeEvent<InlineField>) => {
     setInlineText(e.currentTarget.value);
