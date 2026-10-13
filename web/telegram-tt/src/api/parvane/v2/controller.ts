@@ -36,6 +36,7 @@ import {
 import { createL2Gate, type L2State, parseL2State } from './l2';
 import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createPlannerSync } from './planner';
+import { createReconnectBackoff } from './reconnectBackoff';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
 type Deps = {
@@ -345,7 +346,10 @@ const OTK_COUNT = 50;
 // устройство не получало бы сообщений, пока само не напишет
 const PEER_TTL_MS = 10 * 60 * 1000;
 const PEER_LOG_REFRESH_MS = 15000;
-const RECONNECT_MS = 3000;
+// Переподключение (perf A5): повторы 1 → 2 → 4 … 60 с с разбросом, сброс при
+// успехе; `online` и возврат вкладки на экран — попытка сразу
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 60000;
 
 function b64(bytes: Uint8Array) {
   let s = '';
@@ -371,8 +375,13 @@ export function createV2Controller(deps: Deps) {
   const anonConns = new Map<number, V2Connection>();
   let serverKey: Uint8Array | undefined;
   let ready = false;
+  // Движок, с которым стек дошёл до готовности: при обрыве связи с ним
+  // переподключается только транспорт, состояние с диска не перечитывается
+  let readyClient: PvClient | undefined;
   let ownDeviceId: string | undefined;
   let starting: Promise<void> | undefined;
+  const reconnectBackoff = createReconnectBackoff({ baseMs: RECONNECT_BASE_MS, maxMs: RECONNECT_MAX_MS });
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   // Линковка второго устройства (LINK-1 v2): журнал у аккаунта есть, грант ещё
   // не получен; материал гранта живёт в памяти только до вступления
   let needsLinking = false;
@@ -480,12 +489,31 @@ export function createV2Controller(deps: Deps) {
     await target.deleteRecord(STATE_RECORD).catch(() => undefined);
   }
 
+  /** Повтор подключения через задержку ряда повторов (или заданную). */
+  function scheduleReconnect(delayMs = reconnectBackoff.next()) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void start().catch(() => undefined);
+    }, delayMs);
+  }
+
+  /** Сеть вернулась / вкладка снова на экране: не ждать очереди повторов. */
+  function reconnectNow() {
+    if (!reconnectTimer || starting || ready || isHalted) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    void start().catch(() => undefined);
+  }
+
   if (typeof window !== 'undefined') {
     // Уход со страницы: дописать состояние движка сразу — отложенная запись не успеет
     window.addEventListener('pagehide', () => void persistNow());
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') void persistNow();
+      else reconnectNow();
     });
+    window.addEventListener('online', reconnectNow);
   }
 
   async function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
@@ -623,6 +651,58 @@ export function createV2Controller(deps: Deps) {
 
   // ── запуск ────────────────────────────────────────────────────────────────
 
+  /** Открыть ID-соединение: Hello/Welcome, проверка описателя сервера, Auth,
+   * обработчики событий и обрыва. */
+  async function openIdentified(token: string) {
+    const conn = new V2Connection(pv!, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
+    idConn = conn;
+    const welcome = await conn.connect('v2');
+    const desc = JSON.parse(pv!.verifyServerDescriptor(welcome.serverDescriptor)) as {
+      domain: string; serverKey: string;
+    };
+    serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
+    serverDomain = desc.domain;
+    const auth = await conn.auth(token);
+    ownDeviceId = auth.deviceId;
+    conn.onEvent = (ev) => {
+      if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
+      if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
+      if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
+    };
+    conn.onClose = () => {
+      // Соединение уже сменили (перезапуск, линковка) — его обрыв не наш
+      if (idConn !== conn) return;
+      ready = false;
+      starting = undefined;
+      scheduleReconnect();
+    };
+    return { auth, desc };
+  }
+
+  /** Хвост запуска — общий для первого подъёма и переподключения транспорта:
+   * подписка на инбокс, догон, эфемерные каналы, фоновые проверки. */
+  async function goLive(isReconnect: boolean) {
+    if (!client) return;
+    await call('id', 'msg.inbox.subscribe', new Uint8Array());
+    ready = true;
+    readyClient = client;
+    void serial(refillTokens);
+    tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
+    // Группы v2 из состояния движка — в UI до разбора инбокса
+    client.groupList().forEach((hex) => publishGroup(hex));
+    await serial(syncAll);
+    // L2-1: до готовности движка решение о typing/presence бралось из памяти
+    l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
+      .forEach((address) => deps.onL2Changed?.(address));
+    deps.log(isReconnect ? 'v2: соединение восстановлено' : 'v2: готов');
+    // «Печатает» по v2: каналы известных v2-собеседников и групп (подписки
+    // живут на соединении — после обрыва оформляются заново)
+    void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
+    deps.onStateReady?.(stateHost);
+    void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
+    void startRecoveryUpkeep();
+  }
+
   async function start() {
     if (starting) return starting;
     starting = (async () => {
@@ -630,32 +710,23 @@ export function createV2Controller(deps: Deps) {
       const token = deps.getToken();
       if (!self || !token || isHalted) return;
       pv = await loadProtocol();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      // perf A5: движок жив и уже был готов — обрыв связи; поднимаем только
+      // транспорт и догоняем инбокс, состояние с диска не перечитываем
+      if (client && client === readyClient && storage && storageKey) {
+        await openIdentified(token);
+        // Подписки на эфемерные каналы жили на прежнем соединении
+        client.ephReset();
+        await goLive(true);
+        return;
+      }
       storage = await SecureE2eStorage.open(self);
       const savedKey = await storage.loadRecord<string>(KEY_RECORD);
       storageKey = savedKey ? unb64(savedKey) : crypto.getRandomValues(new Uint8Array(32));
       if (!savedKey) await storage.saveRecord(KEY_RECORD, b64(storageKey));
 
-      idConn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
-      const welcome = await idConn.connect('v2');
-      const desc = JSON.parse(pv.verifyServerDescriptor(welcome.serverDescriptor)) as {
-        domain: string; serverKey: string;
-      };
-      serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
-      serverDomain = desc.domain;
-      const auth = await idConn.auth(token);
-      ownDeviceId = auth.deviceId;
-      idConn.onEvent = (ev) => {
-        if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
-        if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
-        if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
-      };
-      idConn.onClose = () => {
-        ready = false;
-        starting = undefined;
-        setTimeout(() => {
-          void start().catch(() => undefined);
-        }, RECONNECT_MS);
-      };
+      const { auth, desc } = await openIdentified(token);
 
       // Прежние версии хранили корень открыто (C1-06) — стираем
       await storage.deleteRecord('v2-root').catch(() => undefined);
@@ -758,32 +829,20 @@ export function createV2Controller(deps: Deps) {
       const ownDevices = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
       if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persistNow();
       rootBackupB64 = rootBackupB64 || await storage.loadRecord<string>(ROOT_BACKUP_RECORD);
-      await call('id', 'msg.inbox.subscribe', new Uint8Array());
-      ready = true;
-      void serial(refillTokens);
-      tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
-      // Группы v2 из состояния движка — в UI до разбора инбокса
-      client.groupList().forEach((hex) => publishGroup(hex));
-      await serial(syncAll);
-      // L2-1: до готовности движка решение о typing/presence бралось из памяти
-      l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
-        .forEach((address) => deps.onL2Changed?.(address));
-      deps.log('v2: готов');
-      // «Печатает» по v2: каналы известных v2-собеседников и групп
-      void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
-      deps.onStateReady?.(stateHost);
-      void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
-      void startRecoveryUpkeep();
-    })().catch((e: unknown) => {
+      await goLive(false);
+    })().then(() => {
+      if (ready) reconnectBackoff.reset();
+    }).catch((e: unknown) => {
       starting = undefined;
       deps.log(`v2: запуск не удался: ${String(e)}`);
       // Вступление в журнал не завершено из-за связи — повторяем сами: соединение
-      // могло остаться открытым, и повтор по его закрытию тогда не случится
-      if (joinRetry) {
+      // могло остаться открытым, и повтор по его закрытию тогда не случится.
+      // Обрыв на самом подключении (Welcome/Auth не пришли) закрытием сокета
+      // повтор не назначает — назначаем здесь
+      const isConnectionLoss = !idConn?.isOpen && !(e instanceof V2Error);
+      if (joinRetry || isConnectionLoss) {
         joinRetry = false;
-        setTimeout(() => {
-          void start().catch(() => undefined);
-        }, RECONNECT_MS);
+        scheduleReconnect();
       }
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
@@ -3540,6 +3599,10 @@ export function createV2Controller(deps: Deps) {
       void persistNow();
       client?.free();
       client = undefined;
+      readyClient = undefined;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      reconnectBackoff.reset();
       peers.clear();
       messages.clear();
       reactions.clear();
