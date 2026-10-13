@@ -822,17 +822,20 @@ const Main = ({
   // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
   const isCloudFilesOpen = isCloudOpen && knowledgeView === 'files';
   const isKnowledgeOpen = isCloudOpen && !isCloudFilesOpen;
-  // Parvane (E1): «План» и «Облако» после первого показа остаются смонтированными и скрываются (`Main.scss`),
-  // как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не теряет выбранный
-  // день, папку, положение списка. «План» всё же размонтирован, пока показаны «Знания»: у них своё окно ввода
-  // «Плана» (`PlannerQuickHost`), делящее с разделом один запрос «новая запись». «Знания» размонтируются,
-  // как и прежде: холст и граф держат слушатели клавиш на документе и не проверяют, показан ли раздел
+  // Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются смонтированными и скрываются
+  // (`Main.scss`), как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не
+  // теряет выбранный день, папку, заметку, положение списка. Запрос «новая запись» делят два раздела: окно
+  // поверх «Знаний» (`PlannerQuickHost`, `isInPlace`) «План» не трогает; слушатели клавиш холста и графа
+  // сверяются с `getIsParvaneScreenShown('knowledge')`
   const isPlannerMountedRef = useRef(false);
-  const shouldMountPlanner = isPlannerOpen || (isPlannerMountedRef.current && !isKnowledgeOpen);
+  const shouldMountPlanner = isPlannerOpen || isPlannerMountedRef.current;
   isPlannerMountedRef.current = shouldMountPlanner;
   const isCloudMountedRef = useRef(false);
   const shouldMountCloud = isCloudFilesOpen || isCloudMountedRef.current;
   isCloudMountedRef.current = shouldMountCloud;
+  const isKnowledgeMountedRef = useRef(false);
+  const shouldMountKnowledge = isKnowledgeOpen || isKnowledgeMountedRef.current;
+  isKnowledgeMountedRef.current = shouldMountKnowledge;
   // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
@@ -855,6 +858,7 @@ const Main = ({
     isPlannerOpen && 'section-planner',
     isCloudOpen && 'section-cloud',
     isCloudFilesOpen && 'section-cloud-files',
+    isKnowledgeOpen && 'section-knowledge',
     isTabBarShown && 'parvane-tab-bar-shown',
   );
 
@@ -905,7 +909,7 @@ const Main = ({
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
       {shouldMountPlanner && <Planner />}
       {shouldMountCloud && <Cloud isMobile={isMobile} />}
-      {isKnowledgeOpen && <Knowledge />}
+      {shouldMountKnowledge && <Knowledge />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}

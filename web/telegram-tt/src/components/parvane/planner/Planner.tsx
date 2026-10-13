@@ -404,9 +404,11 @@ const Planner = () => {
   // Кнопка «+» нижней панели телефона и «+ Запись» в шапке: запись одной строкой (spec 017).
   // Полная форма — по «Подробнее» в окне ввода, по «Добавить на этот день» и по нажатию на свободное время
   const [isQuickOpen, openQuick, closeQuick] = useFlag();
+  // Запрос «на месте» (`isInPlace`) — окно поверх «Знаний», его держит `PlannerQuickHost`; раздел его не
+  // трогает, иначе оба смонтированных раздела открыли бы окно разом (E1)
   const addRequest = useDerivedState(getPlannerAddRequest);
   useEffect(() => {
-    if (!addRequest || !isLoaded) return;
+    if (!addRequest || addRequest.isInPlace || !isLoaded) return;
     consumePlannerAddRequest();
     handleQuickText(addRequest.text || '');
   }, [addRequest, isLoaded]);

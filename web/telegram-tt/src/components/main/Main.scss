@@ -338,9 +338,10 @@
   }
 }
 
-// Parvane (E1): «План» и «Облако» после первого показа остаются смонтированными
-// под другими разделами (см. Main.tsx) — скрываем их так же, как колонки
+// Parvane (E1): «План», «Знания» и «Облако» после первого показа остаются
+// смонтированными под другими разделами (см. Main.tsx) — скрываем их так же, как колонки
 #Main:not(.section-planner) > #ParvanePlanner,
+#Main:not(.section-knowledge) > #ParvaneKnowledge,
 #Main:not(.section-cloud-files) > #ParvaneCloud {
   display: none;
 }
