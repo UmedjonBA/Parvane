@@ -607,6 +607,17 @@ char *pv_decode_message(const char *type_name, const uint8_t *bytes, uintptr_t l
 struct PvBytes pv_encode_method_request(const char *method, const char *json, char **err);
 
 /**
+ * Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
+ * base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака».
+ */
+struct PvBytes pv_encode_upload_chunk(const char *upload_id,
+                                      uint32_t index,
+                                      int32_t bucket,
+                                      const uint8_t *data,
+                                      uintptr_t len,
+                                      char **err);
+
+/**
  * Ответ любого метода реестра → proto3-JSON (T161).
  */
 char *pv_decode_method_response(const char *method,

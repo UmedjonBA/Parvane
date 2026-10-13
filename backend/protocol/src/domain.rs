@@ -25,6 +25,7 @@
 //! Защита от «вечного победителя» (D-16) — `LamportGuard`, применяемый в
 //! порядке `seq` журнала (одинаковом у всех клиентов).
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -924,6 +925,81 @@ pub mod sample {
             m.apply(&e.key, cell(e)?);
         }
         Ok(m)
+    }
+}
+
+// ── кэш производных состояния ───────────────────────────────────────────────
+
+/// Ревизия сведённого состояния и кэш размера снимка. Ревизия растёт при
+/// каждой правке; размер считается один раз на ревизию (C1: хосты читают
+/// состояние по таймеру, а `to_snapshot().encoded_len()` — полная копия всех
+/// объектов). В сравнении состояний не участвует: два одинаковых дерева,
+/// собранные в разном порядке, равны.
+#[derive(Debug, Clone, Default)]
+pub struct StateCache {
+    rev: u64,
+    size: Cell<Option<usize>>,
+}
+
+impl StateCache {
+    /// Состояние изменилось: новая ревизия, размер пересчитать.
+    pub fn touch(&mut self) {
+        self.rev = self.rev.wrapping_add(1);
+        self.size.set(None);
+    }
+
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
+    /// Размер снимка текущей ревизии: из кэша либо `compute` (один раз).
+    pub fn size_or(&self, compute: impl FnOnce() -> usize) -> usize {
+        if let Some(n) = self.size.get() {
+            return n;
+        }
+        let n = compute();
+        self.size.set(Some(n));
+        n
+    }
+
+    pub fn size_cached(&self) -> Option<usize> {
+        self.size.get()
+    }
+}
+
+impl PartialEq for StateCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// Кэш JSON состояния для хоста по ключу (ревизия, курсор): пока ничего не
+/// изменилось, хост получает ту же строку без пересборки. В сравнении
+/// контейнеров не участвует.
+#[derive(Debug, Clone, Default)]
+pub struct JsonCache(RefCell<Option<(u64, u64, String)>>);
+
+impl JsonCache {
+    pub fn get_or(&self, rev: u64, cursor: u64, build: impl FnOnce() -> String) -> String {
+        if let Some((r, c, s)) = self.0.borrow().as_ref() {
+            if *r == rev && *c == cursor {
+                return s.clone();
+            }
+        }
+        let s = build();
+        *self.0.borrow_mut() = Some((rev, cursor, s.clone()));
+        s
+    }
+
+    /// Ключ, под которым лежит кэш (для тестов).
+    pub fn key(&self) -> Option<(u64, u64)> {
+        self.0.borrow().as_ref().map(|(r, c, _)| (*r, *c))
+    }
+}
+
+impl PartialEq for JsonCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
 
