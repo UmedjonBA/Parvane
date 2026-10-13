@@ -1646,6 +1646,49 @@ describe('CLOUD-1: приглашение в папку облака — вид�
   });
 });
 
+describe('CLOUD-2: ссылки облака для людей без аккаунта — только web', () => {
+  const r = rule('CLOUD-2') as unknown as {
+    ownerMethods: string[];
+    anonMethods: string[];
+    usageField: string;
+    usageFieldNumber: number;
+    pagePath: string;
+  };
+
+  it('схема: методы владельца — с личностью, методы посетителя — анонимным каналом', () => {
+    const proto = readRepo('proto/parvane/cloud/v1/cloud.proto');
+    [...r.ownerMethods, ...r.anonMethods].forEach((name) => expect(proto).toContain(`name: "${name}"`));
+    r.anonMethods.forEach((name) => {
+      const at = proto.indexOf(`name: "${name}"`);
+      expect(proto.slice(at, at + 120)).toContain('channel: METHOD_CHANNEL_ANON');
+    });
+    r.ownerMethods.forEach((name) => {
+      const at = proto.indexOf(`name: "${name}"`);
+      expect(proto.slice(at, at + 120)).toContain('channel: METHOD_CHANNEL_ID');
+    });
+    expect(proto).toContain(`uint64 ${r.usageField} = ${r.usageFieldNumber};`);
+  });
+
+  it('web: приложение ведёт ссылки, публичная страница зовёт только методы посетителя', () => {
+    const drive = readRepo('web/telegram-tt/src/api/parvane/cloudDrive.ts');
+    r.ownerMethods.forEach((name) => expect(drive).toContain(`'${name}'`));
+    const pageFiles = ['client.ts', 'frames.ts', 'index.ts', 'linkProto.ts'];
+    const page = pageFiles.map((file) => readRepo(`web/telegram-tt/src/publicLink/${file}`)).join('\n');
+    r.anonMethods.forEach((name) => expect(page).toContain(`'${name}'`));
+    r.ownerMethods.forEach((name) => expect(page).not.toContain(name));
+    expect(readRepo('backend/infra/deploy/Caddyfile')).toContain(r.pagePath);
+  });
+
+  it('desktop и android: методы ссылок не вызываются', () => {
+    const core = readRepo('desktop/parvane-core/src/v2_bridge.cpp');
+    const jni = readRepo('android/jni/parvane_jni.cpp');
+    [...r.ownerMethods, ...r.anonMethods].forEach((name) => {
+      expect(core).not.toContain(name);
+      expect(jni).not.toContain(name);
+    });
+  });
+});
+
 describe('ORDER-1: живое сообщение встаёт после всего, что уже есть в чате', () => {
   const r = rule('ORDER-1') as unknown as {
     liveWindowSecs: number;
