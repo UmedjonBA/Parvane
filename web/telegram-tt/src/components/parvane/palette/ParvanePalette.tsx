@@ -113,7 +113,13 @@ const ParvanePalette = () => {
   const notes = useDerivedState(getNotes);
   const notesStatus = useDerivedState(getNotesStatus);
   const cloudStatus = useDerivedState(getCloudStatus);
-  const planner = useDerivedState(getPlannerState);
+  // Состояние плана нужно только открытой палитре: закрытая на его изменения не перерисовывается
+  const planner = useDerivedState(
+    () => (getIsPaletteOpen() ? getPlannerState() : undefined),
+    // Сигналы — зависимости: по ним производное пересчитывается
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+    [getIsPaletteOpen, getPlannerState],
+  );
   const isPlannerLoaded = useDerivedState(getIsPlannerLoaded);
   const plannerStatus = useDerivedState(getPlannerStatus);
   const currentUserId = useSelector(selectCurrentUserId);
@@ -208,7 +214,7 @@ const ParvanePalette = () => {
   }))), [isOpen, notes]);
 
   const recordEntries = useMemo((): PaletteEntry[] => {
-    if (!isOpen || !isPlannerLoaded) return [];
+    if (!isOpen || !isPlannerLoaded || !planner) return [];
     return collectPlannerRecords(planner, toDayKey(new Date())).map((record) => ({
       ...record,
       ...RECORD_LOOK[record.kind],
