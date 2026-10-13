@@ -133,8 +133,10 @@ const ALL_CHATS_FOLDER_ID = 0;
 const MS_IN_SECOND = 1000;
 const FLUSH_DELAY_MS = 700;
 // SC-009: правка с другого устройства видна ≤ 10 с (запись 0,7 с + опрос);
-// живого события об изменении журнала в протоколе нет — только опрос
+// живого события об изменении журнала в протоколе нет — только опрос.
+// В скрытой вкладке — раз в минуту; при возврате — сразу
 const SYNC_INTERVAL_MS = 8000;
+const SYNC_HIDDEN_MS = 60000;
 const SYNC_PAGES = 1000;
 const V2_GROUP_PREFIX = 'v2g:';
 const UUID_HEX_LENGTH = 32;
@@ -160,14 +162,56 @@ export function createStateJournal(deps: Deps) {
   let session: PvState | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
-  let syncTimer: ReturnType<typeof setInterval> | undefined;
+  let syncTimer: ReturnType<typeof setTimeout> | undefined;
+  let isVisibilityListened = false;
   // Записи, не принятые сервером (обрыв): повтор тем же op_id идемпотентен
   const pendingAppends: Uint8Array[] = [];
+  // Разобранный снимок сессии: сбрасывается при любом изменении журнала. Его
+  // читают по многу раз за опрос (контейнеры облака — на каждый вызов `rootId`)
+  let snapshotCache: SSnapshot | undefined;
+  let cloudEntriesCache: { snapshot: SSnapshot; entries: CloudStateEntry[] } | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = queue.then(fn, fn);
     queue = next.catch(() => undefined);
     return next;
+  }
+
+  function invalidateSnapshot() {
+    snapshotCache = undefined;
+  }
+
+  /** Записи, рождённые изменением сессии, — в очередь отправки. */
+  function append(...bodies: Uint8Array[]) {
+    invalidateSnapshot();
+    pendingAppends.push(...bodies);
+  }
+
+  function isHidden() {
+    return typeof document !== 'undefined' && document.hidden;
+  }
+
+  function scheduleSync() {
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = undefined;
+    if (!session) return;
+    syncTimer = setTimeout(() => {
+      syncTimer = undefined;
+      void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
+    }, isHidden() ? SYNC_HIDDEN_MS : SYNC_INTERVAL_MS);
+  }
+
+  function listenVisibility() {
+    if (isVisibilityListened || typeof document === 'undefined') return;
+    isVisibilityListened = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!session) return;
+      if (!document.hidden) {
+        void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
+      } else {
+        scheduleSync();
+      }
+    });
   }
 
   function migratedKey() {
@@ -211,7 +255,7 @@ export function createStateJournal(deps: Deps) {
         JSON.stringify({ ...current, notify: desired.notify, notify_defaults: desired.notify_defaults }),
         ['notify'],
       );
-      pendingAppends.push(...bodies);
+      append(...bodies);
       await pushAppends();
       if (bodies.length) deps.log(`v2: настройки уведомлений перенесены в журнал (${bodies.length} записей)`);
     }
@@ -244,7 +288,7 @@ export function createStateJournal(deps: Deps) {
       const isReadable = await pullRemote();
       if (carried) {
         const bodies = session!.migrate(carried);
-        pendingAppends.push(...bodies);
+        append(...bodies);
         await pushAppends();
         deps.log(`v2: журнал состояния перенесён под новый ключ (${bodies.length} записей)`);
       } else if (rekey && !isReadable) {
@@ -256,7 +300,7 @@ export function createStateJournal(deps: Deps) {
         // Первый запуск на v2: локальные данные — начальными записями журнала
         const revision = deps.localState.getDirtyRevision();
         const bodies = session!.migrate(JSON.stringify(buildDesired({})));
-        pendingAppends.push(...bodies);
+        append(...bodies);
         await pushAppends();
         markMigrated();
         markKindMigrated('notify');
@@ -269,9 +313,8 @@ export function createStateJournal(deps: Deps) {
     }).catch((e: unknown) => deps.log(`v2: журнал состояния не прочитан: ${String(e)}`));
     deps.localState.setChangeListener(scheduleFlush);
     deps.localState.setScheduledHooks({ gate: canSendScheduled, sent: markScheduledSent });
-    syncTimer = setInterval(() => {
-      void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
-    }, SYNC_INTERVAL_MS);
+    listenVisibility();
+    scheduleSync();
     deps.log('v2: журнал состояния подключён');
   }
 
@@ -281,7 +324,7 @@ export function createStateJournal(deps: Deps) {
 
   function detach() {
     if (flushTimer) clearTimeout(flushTimer);
-    if (syncTimer) clearInterval(syncTimer);
+    if (syncTimer) clearTimeout(syncTimer);
     flushTimer = undefined;
     syncTimer = undefined;
     deps.localState.setChangeListener(undefined);
@@ -290,6 +333,7 @@ export function createStateJournal(deps: Deps) {
     session = undefined;
     host = undefined;
     pendingAppends.length = 0;
+    invalidateSnapshot();
   }
 
   function scheduleFlush() {
@@ -303,8 +347,12 @@ export function createStateJournal(deps: Deps) {
   /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
   function syncNow() {
     return serial(async () => {
-      await flushLocal();
-      if (await pullRemote()) project();
+      try {
+        await flushLocal();
+        if (await pullRemote()) project();
+      } finally {
+        scheduleSync();
+      }
     });
   }
 
@@ -313,7 +361,7 @@ export function createStateJournal(deps: Deps) {
     const revision = deps.localState.getDirtyRevision();
     const current = readSnapshot();
     const bodies = session.diff(JSON.stringify(buildDesired(current)), MANAGED_KINDS);
-    pendingAppends.push(...bodies);
+    append(...bodies);
     await pushAppends();
     deps.localState.clearDirtyKinds(revision);
   }
@@ -328,7 +376,7 @@ export function createStateJournal(deps: Deps) {
     if (!kinds.length) return;
     const revision = deps.localState.getDirtyRevision();
     const bodies = session.diff(JSON.stringify(buildDesired(readSnapshot())), kinds);
-    pendingAppends.push(...bodies);
+    append(...bodies);
     await pushAppends();
     deps.localState.clearDirtyKinds(revision);
     deps.log(`v2: несохранённые правки (${kinds.join(', ')}) дописаны в журнал (${bodies.length} записей)`);
@@ -348,6 +396,7 @@ export function createStateJournal(deps: Deps) {
     for (let page = 0; page < SYNC_PAGES; page++) {
       const resp = await host.call('state.sync', session.syncRequest());
       const result = JSON.parse(session.ingest(resp)) as { more: boolean; applied: number; rejected: number };
+      if (result.applied) invalidateSnapshot();
       applied += result.applied;
       if (!result.more) break;
     }
@@ -356,11 +405,13 @@ export function createStateJournal(deps: Deps) {
 
   function readSnapshot(): SSnapshot {
     if (!session) return {};
+    if (snapshotCache) return snapshotCache;
     try {
-      return JSON.parse(session.snapshot()) as SSnapshot;
+      snapshotCache = JSON.parse(session.snapshot()) as SSnapshot;
     } catch {
-      return {};
+      snapshotCache = {};
     }
+    return snapshotCache;
   }
 
   // ── отложенные: отправляет первое устройство, заметившее срок ─────────────
@@ -374,7 +425,7 @@ export function createStateJournal(deps: Deps) {
   function markScheduledSent(opId: string) {
     void serial(async () => {
       if (!session) return;
-      pendingAppends.push(...session.markSent(uuidToB64(opId)));
+      append(...session.markSent(uuidToB64(opId)));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: отметка отправки отложенного: ${String(e)}`));
   }
@@ -395,16 +446,25 @@ export function createStateJournal(deps: Deps) {
   function recordPlannerContainer(ref: { domain: string; id: string }) {
     void serial(async () => {
       if (!session) return;
-      pendingAppends.push(...session.plannerContainerSet(ref.domain, ref.id));
+      append(...session.plannerContainerSet(ref.domain, ref.id));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись контейнера планировщика в журнал состояния: ${String(e)}`));
   }
 
   // ── контейнеры облака (spec 016) ───────────────────────────────────────────
 
-  /** Контейнеры облака из журнала: личный диск, свои и чужие совместные папки. */
+  /** Контейнеры облака из журнала: личный диск, свои и чужие совместные папки.
+   * Пока снимок не менялся, возвращается тот же массив (по нему кэшируется `rootId`). */
   function cloudEntries(): CloudStateEntry[] {
-    const list = (readSnapshot().cloud_containers || []) as {
+    const snapshot = readSnapshot();
+    if (cloudEntriesCache?.snapshot === snapshot) return cloudEntriesCache.entries;
+    const entries = parseCloudEntries(snapshot);
+    cloudEntriesCache = { snapshot, entries };
+    return entries;
+  }
+
+  function parseCloudEntries(snapshot: SSnapshot): CloudStateEntry[] {
+    const list = (snapshot.cloud_containers || []) as {
       ref?: { domain?: string; id?: string }; role?: string | number; status?: string | number;
       removed?: boolean; owner?: string;
     }[];
@@ -428,7 +488,7 @@ export function createStateJournal(deps: Deps) {
   function recordCloudEntry(entry: CloudStateEntry) {
     void serial(async () => {
       if (!session) return;
-      pendingAppends.push(...session.cloudContainerSet(JSON.stringify({
+      append(...session.cloudContainerSet(JSON.stringify({
         ref: { domain: entry.domain, id: hexToB64(entry.id) },
         role: CLOUD_ROLE_NAMES[entry.role],
         status: entry.status ? CLOUD_STATUS_NAMES[entry.status] : undefined,
@@ -444,7 +504,7 @@ export function createStateJournal(deps: Deps) {
       if (!session) return;
       const body = callToState(record);
       if (!body) return;
-      pendingAppends.push(...session.callSet(JSON.stringify(body)));
+      append(...session.callSet(JSON.stringify(body)));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись звонка в журнал состояния: ${String(e)}`));
   }
@@ -458,7 +518,7 @@ export function createStateJournal(deps: Deps) {
       if (!session) return;
       const peer = peerOf(address);
       if (!peer) return;
-      pendingAppends.push(...session.chatCleared(JSON.stringify({ peer, cleared_until_ms: String(untilMs) })));
+      append(...session.chatCleared(JSON.stringify({ peer, cleared_until_ms: String(untilMs) })));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись очистки чата в журнал состояния: ${String(e)}`));
   }
@@ -470,7 +530,7 @@ export function createStateJournal(deps: Deps) {
   function recordGroupInvite({ address, record }: V2SharedInvite) {
     void serial(async () => {
       if (!session || !isV2GroupAddress(address)) return;
-      pendingAppends.push(...session.groupInviteSet(JSON.stringify(inviteToState(address, record))));
+      append(...session.groupInviteSet(JSON.stringify(inviteToState(address, record))));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: запись ссылки-приглашения в журнал состояния: ${String(e)}`));
   }
@@ -478,7 +538,7 @@ export function createStateJournal(deps: Deps) {
   function removeGroupInvite(linkId: string) {
     void serial(async () => {
       if (!session) return;
-      pendingAppends.push(...session.groupInviteRemove(hexToB64(linkId)));
+      append(...session.groupInviteRemove(hexToB64(linkId)));
       await pushAppends();
     }).catch((e: unknown) => deps.log(`v2: снятие ссылки-приглашения в журнале состояния: ${String(e)}`));
   }
