@@ -1044,8 +1044,12 @@ try {
   await settle();
   await inlineField.fill('ведёт');
   await inlineField.press('Enter');
+  const escProbe = (label) => page.evaluate((name) => `${name}: bar=${Boolean(document.querySelector('[data-canvas-selection-bar]'))} inline=${Boolean(document.querySelector('[data-canvas-inline]'))} menu=${Boolean(document.querySelector('[data-canvas-context]'))} toast=${document.querySelectorAll('.Notification, .Notification-container > *').length} modal=${document.querySelectorAll('.Modal.open').length} linkmode=${Boolean(document.querySelector('[data-canvas-linking], [data-link-mode]'))}`, label);
   await visible(board.locator('[data-canvas-edge] text').filter({ hasText: 'ведёт' }), 'подпись стрелки');
+  const escLog = [await escProbe('до первого Escape')];
   await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  escLog.push(await escProbe('после первого'));
   console.log('OK: подпись стрелки правится на месте');
 
   // ── Группа двигается за пустое место внутри; поле двигается только вне групп ──
@@ -1088,7 +1092,10 @@ try {
     }
     return best && { x: best.x, y: best.y };
   }, [inside, roomy]);
+  escLog.push(await escProbe('до второго'));
   await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+  escLog.push(await escProbe('после второго'));
   // Выделение со стрелки снято, и холст после этого жив (отрисовка падала на снятии класса с узла SVG)
   await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(async () => {
     // Разбор редкого сбоя: где фокус и снимает ли выделение повторное нажатие
@@ -1098,7 +1105,7 @@ try {
     });
     await page.keyboard.press('Escape');
     const isGoneAfterRetry = await bar.waitFor({ state: 'detached', timeout: 3000 }).then(() => true, () => false);
-    assert.fail(`Escape не снял выделение со стрелки (фокус: ${focus}; повторное нажатие сняло: ${isGoneAfterRetry})`);
+    assert.fail(`Escape не снял выделение со стрелки (фокус: ${focus}; повторное нажатие сняло: ${isGoneAfterRetry}; ${escLog.join(' | ')})`);
   });
   await settle();
   const pairBefore = await rectOf(pairGroup);
