@@ -2068,26 +2068,54 @@ export function createV2Controller(deps: Deps) {
       return false;
     }
     const hit = peers.get(address);
-    if (hit && Date.now() - hit.at < (hit.v2 ? PEER_LOG_REFRESH_MS : PEER_TTL_MS)) return hit.v2 || isSticky;
+    if (hit) {
+      const age = Date.now() - hit.at;
+      // perf A11: журнал собеседника известен — отвечаем по кэшу, устаревший
+      // (> PEER_LOG_REFRESH_MS) обновляем в фоне (stale-while-revalidate); ждать
+      // сеть на каждой отправке/квитанции/«печатает» не нужно. Компромисс:
+      // новое устройство собеседника может не получить одно сообщение
+      if (hit.v2) {
+        if (age >= PEER_LOG_REFRESH_MS) void revalidatePeer(address);
+        return true;
+      }
+      if (age < PEER_TTL_MS) return isSticky;
+    }
+    // Журнала ещё нет (или давно сказали «не v2») — только синхронно
     try {
-      const v2 = await serial(async () => {
-        const before = client!.logVersion(address);
-        try {
-          await satisfy(JSON.stringify({ need: { kind: 'peerLog', user: address } }));
-        } catch (e) {
-          if (before === 0n) throw e;
-          deps.log(`v2: журнал ${address} не обновлён: ${String(e)}`);
-        }
-        if (client!.logVersion(address) !== before) await persist();
-        return client!.logVersion(address) > 0n;
-      });
-      peers.set(address, { v2, at: Date.now() });
-      if (v2) rememberStickyPeer(address);
+      const v2 = await syncPeerLog(address);
       return v2 || isSticky;
     } catch (e) {
       if (isSticky) throw e;
       return false;
     }
+  }
+
+  /** Перечитать журнал устройств собеседника (путь отправки); true — он на v2. */
+  async function syncPeerLog(address: string): Promise<boolean> {
+    const v2 = await serial(async () => {
+      const before = client!.logVersion(address);
+      try {
+        await satisfy(JSON.stringify({ need: { kind: 'peerLog', user: address } }));
+      } catch (e) {
+        if (before === 0n) throw e;
+        deps.log(`v2: журнал ${address} не обновлён: ${String(e)}`);
+      }
+      if (client!.logVersion(address) !== before) await persist();
+      return client!.logVersion(address) > 0n;
+    });
+    peers.set(address, { v2, at: Date.now() });
+    if (v2) rememberStickyPeer(address);
+    return v2;
+  }
+
+  const peerRevalidating = new Set<string>();
+
+  function revalidatePeer(address: string) {
+    if (peerRevalidating.has(address) || !ready || !client) return;
+    peerRevalidating.add(address);
+    syncPeerLog(address)
+      .catch((e: unknown) => deps.log(`v2: журнал ${address} в фоне не обновлён: ${String(e)}`))
+      .finally(() => peerRevalidating.delete(address));
   }
 
   function stickyKey() {
