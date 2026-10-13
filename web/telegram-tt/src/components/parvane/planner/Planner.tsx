@@ -350,7 +350,13 @@ const Planner = () => {
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : formParams ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
   const isSheet = side === 'settings' || (Boolean(side) && isNarrow);
-  const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
+  // Месяц — один объект на месяц выбранного дня: иначе `memo` сетки месяца не срабатывал бы никогда
+  const monthKey = picked.slice(0, 7);
+  const month = useMemo(() => {
+    const date = fromDayKey(picked);
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [monthKey]);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
   const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
     : syncStatus === 'offline' ? 'PlannerSyncUnavailable'

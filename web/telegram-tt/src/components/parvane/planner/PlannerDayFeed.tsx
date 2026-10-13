@@ -9,7 +9,7 @@ import { formatDuration, formatSpan, listColorStyle } from './plannerFormat';
 import { getDailyRecord, getWorkouts, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine } from './plannerLinks';
 import {
-  getEventsForDay, getListColor, getTasksForDay, getTimedForDay, instanceKey, setTaskDone, toMinutes, toTime,
+  getDayEntry, getListColor, instanceKey, setTaskDone, toMinutes, toTime,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -56,7 +56,12 @@ const PlannerDayFeed = ({
 
   const lang = useLang();
 
-  useInterval(() => setNowMinutes(getNowMinutes()), MINUTE_MS, true);
+  const isToday = day === today;
+  // Черта «сейчас» идёт по минутам, только пока показан сегодняшний день
+  useInterval(() => setNowMinutes(getNowMinutes()), isToday ? MINUTE_MS : undefined, true);
+
+  // Дела дня — из индекса (построен сеткой календаря либо для одного дня)
+  const entry = getDayEntry(state, day);
 
   const handleItemClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     const { kind, id } = e.currentTarget.dataset;
@@ -67,7 +72,7 @@ const PlannerDayFeed = ({
   const handleToggle = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const { id } = e.currentTarget.dataset;
     const { checked } = e.currentTarget;
-    const task = getTasksForDay(state, day).find((candidate) => candidate.id === id);
+    const task = entry.tasks.find((candidate) => candidate.id === id);
     if (!task) return;
     updatePlanner((draft) => {
       setTaskDone(draft, task, checked);
@@ -75,7 +80,7 @@ const PlannerDayFeed = ({
   });
 
   const rows: FeedRow[] = [];
-  const allDay = layers.work ? getEventsForDay(state, day).filter((event) => event.isAllDay) : [];
+  const allDay = layers.work ? entry.allDay : [];
 
   const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
   if (sleep?.endTime) {
@@ -97,17 +102,17 @@ const PlannerDayFeed = ({
   }
 
   if (layers.food) {
-    (state.nutrition[day]?.entries || []).forEach((entry) => {
-      if (!entry.time) return;
+    (state.nutrition[day]?.entries || []).forEach((meal) => {
+      if (!meal.time) return;
       rows.push({
-        minutes: toMinutes(entry.time),
+        minutes: toMinutes(meal.time),
         node: (
-          <div key={`meal${entry.id}`} className={styles.feedLine} data-feed="meal">
-            <span className={styles.feedTime}>{entry.time}</span>
+          <div key={`meal${meal.id}`} className={styles.feedLine} data-feed="meal">
+            <span className={styles.feedTime}>{meal.time}</span>
             <span className={buildClassName(styles.feedMark, styles.kindFood)}>
               <Icon name="eats" />
-              <span className={styles.feedMarkText}>{`${lang(MEAL_LABELS[entry.meal])}: ${entry.name}`}</span>
-              <span className={styles.feedMarkValue}>{lang.number(Math.round(entry.kcal))}</span>
+              <span className={styles.feedMarkText}>{`${lang(MEAL_LABELS[meal.meal])}: ${meal.name}`}</span>
+              <span className={styles.feedMarkValue}>{lang.number(Math.round(meal.kcal))}</span>
             </span>
           </div>
         ),
@@ -116,7 +121,7 @@ const PlannerDayFeed = ({
   }
 
   if (layers.work) {
-    getTimedForDay(state, day).forEach((item) => {
+    entry.timed.forEach((item) => {
       const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
       const color = item.task ? getListColor(state, item.task.project) : item.event!.color;
       const note = formatDescriptionLine(item.task ? item.task.description : item.event!.description);
@@ -187,7 +192,6 @@ const PlannerDayFeed = ({
   }
 
   rows.sort((a, b) => a.minutes - b.minutes);
-  const isToday = day === today;
   const nowIndex = isToday ? rows.filter((row) => row.minutes <= nowMinutes).length : -1;
   const nowLine = (
     <div key="now" className={styles.feedNow} data-feed="now">
