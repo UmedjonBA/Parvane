@@ -68,17 +68,31 @@
 	@cloudlink path_regexp cloudlink ^/s/([A-Za-z0-9_-]{22})$
 	redir @cloudlink /s.html?id={re.cloudlink.1} 302
 
+	# Кэш: хешированные ассеты (/assets/name-<hash>.js) можно держать вечно —
+	# новый деплой даёт новые имена. Нет файла — 404, а не index.html (B3):
+	# открытая вкладка прошлой сборки, догружая свой ленивый кусок, получала
+	# HTML вместо JS и падала с невнятной ошибкой разбора; 404 ловит
+	# `moduleLoader` и предлагает перезагрузку. Ассеты прошлой сборки deploy.sh
+	# оставляет на один деплой, так что обычно файл на месте.
+	handle /assets/* {
+		root * /srv/dist
+		encode zstd gzip
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
 	handle {
 		root * /srv/dist
-		encode gzip
-		# Кэш: хешированные ассеты (/assets/name-<hash>.js) можно держать вечно —
-		# новый деплой даёт новые имена. А index.html и корневые воркеры (в т.ч.
-		# service worker) — ВСЕГДА перепроверять: без Cache-Control браузер
-		# кэшировал index.html эвристически и продолжал ссылаться на старый JS
-		# даже после обновления страницы («баг не уходит после деплоя»).
-		@assets path /assets/*
-		header @assets Cache-Control "public, max-age=31536000, immutable"
-		@volatile not path /assets/*
+		encode zstd gzip
+		# index.html и корневые воркеры (в т.ч. service worker) — ВСЕГДА
+		# перепроверять: без Cache-Control браузер кэшировал index.html
+		# эвристически и продолжал ссылаться на старый JS даже после обновления
+		# страницы («баг не уходит после деплоя»). Исключение — картинки эмодзи
+		# img-apple-64/160: имена без хеша, но содержимое не меняется; под
+		# no-cache панель эмодзи давала сотни 304 при каждом открытии (B3)
+		@emoji path /img-apple-*
+		header @emoji Cache-Control "public, max-age=2592000"
+		@volatile not path /img-apple-*
 		header @volatile Cache-Control "no-cache, must-revalidate"
 		try_files {path} /index.html
 		file_server

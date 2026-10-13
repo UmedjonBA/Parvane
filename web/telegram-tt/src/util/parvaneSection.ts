@@ -92,6 +92,19 @@ export function openPlannerCalendar() {
   setParvaneSection('planner');
 }
 
+/**
+ * Показан ли экран пользователю. Разделы после первого показа остаются смонтированными и скрытыми (E1,
+ * `Main.tsx`): слушатели клавиш на документе, таймеры и обработка запросов в скрытом разделе обязаны
+ * сверяться с этим признаком — иначе скрытый «План» или холст «Знаний» перехватит клавишу у мессенджера.
+ * «Знания» (`knowledge`) и «Файлы» (`files`) — две части раздела `cloud`
+ */
+export function getIsParvaneScreenShown(screen: ParvaneSection | 'knowledge' | 'files') {
+  const section = getParvaneSection();
+  if (screen === 'knowledge') return section === 'cloud' && getKnowledgeView() !== 'files';
+  if (screen === 'files') return section === 'cloud' && getKnowledgeView() === 'files';
+  return section === screen;
+}
+
 export function setParvaneSection(section: ParvaneSection) {
   if (getParvaneSection() === section) return;
   setSignal(section);

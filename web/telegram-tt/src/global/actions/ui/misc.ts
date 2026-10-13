@@ -11,7 +11,6 @@ import { IS_TAURI } from '../../../util/browser/globalEnvironment';
 import { IS_WAVE_TRANSFORM_SUPPORTED } from '../../../util/browser/windowEnvironment';
 import { getAllMultitabTokens, getCurrentTabId, reestablishMasterToSelf } from '../../../util/establishMultitabRole';
 import { getAllNotificationsCount } from '../../../util/folderManager';
-import getIsAppUpdateNeeded from '../../../util/getIsAppUpdateNeeded';
 import { shouldShowErrorDialog } from '../../../util/getReadableErrorText';
 import { compact, unique } from '../../../util/iteratees';
 import { refreshFromCache } from '../../../util/localization';
@@ -46,6 +45,8 @@ import { selectDraft, selectEditingId } from '../../selectors/threads';
 import { getIsMobile, getIsTablet } from '../../../hooks/useAppLayout';
 
 export const APP_VERSION_URL = 'version.txt';
+// Содержимое version.txt — идентификатор сборки (`APP_BUILD`): хеш коммита, при необходимости с отметкой времени
+const APP_BUILD_ID_RE = /^[\w.-]{1,64}$/;
 const FLOOD_PREMIUM_WAIT_NOTIFICATION_DURATION = 6000;
 const MAX_STORED_EMOJIS = 8 * 4; // Represents four rows of recent emojis
 
@@ -749,7 +750,10 @@ addActionHandler('checkAppVersion', (global): ActionReturnType => {
     .then((version) => {
       version = version.trim();
 
-      if (getIsAppUpdateNeeded(version, APP_VERSION)) {
+      // Parvane (B3): сборка пишет в version.txt свой идентификатор (`APP_BUILD`, vite.config.ts), а не номер версии
+      // пакета — тот между деплоями не менялся, и подсказка «Доступно обновление» не появлялась никогда. Ответ не
+      // того вида (например, HTML) — не обновление
+      if (APP_BUILD_ID_RE.test(version) && version !== APP_BUILD) {
         global = getGlobal();
         global = {
           ...global,

@@ -47,7 +47,7 @@ import useMentionTooltip from './hooks/useMentionTooltip';
 
 import Button from '../../ui/Button';
 import DropdownMenu from '../../ui/DropdownMenu';
-import MediaEditor from '../../ui/mediaEditor/MediaEditor';
+import MediaEditor from '../../ui/mediaEditor/MediaEditor.async';
 import MenuItem from '../../ui/MenuItem';
 import Modal from '../../ui/Modal';
 import AttachmentModalItem from './AttachmentModalItem';
