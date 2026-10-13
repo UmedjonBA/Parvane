@@ -49,19 +49,19 @@ const signatureCache = new WeakMap<PlannerTask[], string>();
 
 /** Задачи «Плана» из заметок, по id заметки-источника. */
 export function noteTasksBySource(state: PlannerState): Map<string, PlannerTask[]> {
-  let index = tasksBySourceCache.get(state.tasks);
-  if (index) return index;
-  index = new Map();
+  const cached = tasksBySourceCache.get(state.tasks);
+  if (cached) return cached;
+  const built = new Map<string, PlannerTask[]>();
   state.tasks.forEach((task) => {
     const chat = task.source?.chat;
     if (!chat?.startsWith(NOTE_SOURCE_PREFIX)) return;
     const noteId = chat.slice(NOTE_SOURCE_PREFIX.length);
-    const list = index!.get(noteId);
+    const list = built.get(noteId);
     if (list) list.push(task);
-    else index!.set(noteId, [task]);
+    else built.set(noteId, [task]);
   });
-  tasksBySourceCache.set(state.tasks, index);
-  return index;
+  tasksBySourceCache.set(state.tasks, built);
+  return built;
 }
 
 /** Задачи «Плана», пришедшие из этой заметки. */

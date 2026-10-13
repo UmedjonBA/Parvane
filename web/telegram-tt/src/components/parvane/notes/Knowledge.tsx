@@ -37,8 +37,8 @@ import {
 import {
   applyPlannerToNotes, consumeGuideOpen, createNote, createNoteFolder, deleteNote, deleteNoteFolder,
   findNoteByTitle, getCanvases, getGuideOpenId, getNoteFolders, getNotes, getNotesIndex, getNotesNotice,
-  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, saveCanvas,
-  saveNote,
+  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, retainNotes,
+  saveCanvas, saveNote,
 } from './notesStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -139,6 +139,9 @@ const Knowledge = () => {
   const [today] = useState(() => toDayKey(new Date()));
 
   const guideLang = getGuideLang(lang.code);
+
+  // Пока раздел открыт, изменения облака применяются к заметкам сразу; закрыт — при следующем открытии
+  useEffect(() => retainNotes(), []);
 
   useEffect(() => {
     void loadNotes(currentUserId, { guideLang, vaultName });

@@ -20,7 +20,9 @@ import {
 import { isComposerHasSelection } from '../../middle/composer/helpers/selection';
 import { getCloudStatus } from '../cloud/cloudStore';
 import { folderColor } from '../notes/notesLook';
-import { getNotes, getNotesStatus, loadNotes } from '../notes/notesStore';
+import {
+  getNotes, getNotesStatus, loadNotes, retainNotes,
+} from '../notes/notesStore';
 import { formatDayShort } from '../planner/plannerFormat';
 import { toDayKey } from '../planner/plannerModel';
 import {
@@ -146,11 +148,14 @@ const ParvanePalette = () => {
     if (!isOpen) return undefined;
     // Запрос здесь не трогаем (он стёрт при закрытии): эффект приходит позже первых нажатий клавиш
     // и стёр бы уже набранное
+    // Пока палитра открыта, хранилище заметок следит за облаком; закрытая палитра его не держит
+    const releaseNotes = retainNotes();
     void loadNotes(currentUserId);
     void loadPlanner(currentUserId);
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => {
+      releaseNotes();
       window.clearTimeout(timeout);
       // Запрос стирается при закрытии: следующее открытие не показывает прежний текст даже на первом кадре
       setQuery('');
