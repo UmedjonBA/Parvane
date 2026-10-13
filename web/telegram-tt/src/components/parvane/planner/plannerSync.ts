@@ -404,8 +404,10 @@ function repeatOf(repeat: PlannerRepeat | undefined) {
 
 // Движок сливает экземпляры по дню — уходят только изменённые дни
 function occurrencesOf(next: PlannerOccurrence[] | undefined, previous: PlannerOccurrence[] | undefined) {
-  return (next || [])
-    .filter((o) => JSON.stringify(previous?.find((p) => p.day === o.day)) !== JSON.stringify(o))
+  if (!next?.length) return [];
+  const before = new Map((previous || []).map((o) => [o.day, o]));
+  return next
+    .filter((o) => stableJson(before.get(o.day)) !== stableJson(o))
     .map((o) => ({ day: o.day, excluded: Boolean(o.excluded), done: Boolean(o.done), doneSteps: o.doneSteps || [] }));
 }
 
@@ -496,16 +498,18 @@ function entryOf(e: PlannerFoodEntry) {
 
 function dayChange(day: string, d: PlannerNutritionDay, previous?: PlannerNutritionDay): PlannerChange {
   const entries: unknown[] = [];
+  const beforeById = new Map((previous?.entries || []).map((p) => [p.id, p]));
+  const afterIds = new Set(d.entries.map((e) => e.id));
   d.entries.forEach((e) => {
-    const before = previous?.entries.find((p) => p.id === e.id);
-    if (!before || JSON.stringify(before) !== JSON.stringify(e)) entries.push(entryOf(e));
+    const before = beforeById.get(e.id);
+    if (!before || stableJson(before) !== stableJson(e)) entries.push(entryOf(e));
   });
   previous?.entries.forEach((p) => {
-    if (!d.entries.some((e) => e.id === p.id)) entries.push({ id: p.id, deleted: true });
+    if (!afterIds.has(p.id)) entries.push({ id: p.id, deleted: true });
   });
   const change: Record<string, unknown> = { day, entries };
   if (!previous || previous.isComplete !== d.isComplete) change.isComplete = d.isComplete;
-  if (!previous || JSON.stringify(previous.fixedGoals) !== JSON.stringify(d.fixedGoals)) {
+  if (!previous || stableJson(previous.fixedGoals) !== stableJson(d.fixedGoals)) {
     change.fixedGoals = d.fixedGoals ? goalsOf(d.fixedGoals) : null;
   }
   if (!previous || previous.waterMl !== d.waterMl) change.waterMl = d.waterMl === undefined ? null : d.waterMl;
@@ -562,94 +566,70 @@ function onlyChanged(kind: 'task' | 'event' | 'list', change: PlannerChange, bef
 
 export function diffChanges(previous: PlannerState, next: PlannerState): PlannerChange[] {
   const changes: PlannerChange[] = [];
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  // Тот же объект (запись переиспользована из прежнего состояния) — без сериализации
+  const same = (a: unknown, b: unknown) => a === b || stableJson(a) === stableJson(b);
+  // Коллекция по id: изменившиеся и новые — в порядке нового состояния, пропавшие — в порядке прежнего
+  const diffById = <T extends { id: string }>(
+    nextItems: T[], previousItems: T[],
+    onChanged: (item: T, before?: T) => void, onDeleted: (item: T) => void,
+  ) => {
+    if (nextItems === previousItems) return;
+    const before = new Map(previousItems.map((item) => [item.id, item]));
+    const after = new Set<string>();
+    nextItems.forEach((item) => {
+      after.add(item.id);
+      const old = before.get(item.id);
+      if (!old || !same(old, item)) onChanged(item, old);
+    });
+    previousItems.forEach((item) => {
+      if (!after.has(item.id)) onDeleted(item);
+    });
+  };
 
-  next.lists.forEach((list) => {
-    const before = previous.lists.find((l) => l.id === list.id);
-    if (!before || !same(before, list)) {
-      changes.push(onlyChanged('list', listChange(list), before && listChange(before)));
-    }
-  });
-  previous.lists.forEach((list) => {
-    if (!next.lists.some((l) => l.id === list.id)) changes.push({ list: { id: list.id, deleted: true } });
-  });
+  diffById(next.lists, previous.lists, (list, before) => {
+    changes.push(onlyChanged('list', listChange(list), before && listChange(before)));
+  }, (list) => changes.push({ list: { id: list.id, deleted: true } }));
 
-  next.tasks.forEach((task) => {
-    const before = previous.tasks.find((t) => t.id === task.id);
-    if (!before || !same(before, task)) {
-      changes.push(onlyChanged('task', taskChange(next, task, before), before && taskChange(previous, before)));
-    }
-  });
-  previous.tasks.forEach((task) => {
-    if (!next.tasks.some((t) => t.id === task.id)) changes.push({ task: { id: task.id, deleted: true } });
-  });
+  diffById(next.tasks, previous.tasks, (task, before) => {
+    changes.push(onlyChanged('task', taskChange(next, task, before), before && taskChange(previous, before)));
+  }, (task) => changes.push({ task: { id: task.id, deleted: true } }));
 
-  next.events.forEach((event) => {
-    const before = previous.events.find((e) => e.id === event.id);
-    if (!before || !same(before, event)) {
-      changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
-    }
-  });
-  previous.events.forEach((event) => {
-    if (!next.events.some((e) => e.id === event.id)) changes.push({ event: { id: event.id, deleted: true } });
-  });
+  diffById(next.events, previous.events, (event, before) => {
+    changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
+  }, (event) => changes.push({ event: { id: event.id, deleted: true } }));
 
-  Object.entries(next.nutrition).forEach(([day, record]) => {
-    const before = previous.nutrition[day];
-    if (!before || !same(before, record)) changes.push(dayChange(day, record, before));
-  });
-  Object.entries(previous.nutrition).forEach(([day, record]) => {
-    if (!next.nutrition[day]) {
-      changes.push(dayChange(day, { entries: [], isComplete: false }, record));
-    }
-  });
+  if (next.nutrition !== previous.nutrition) {
+    Object.entries(next.nutrition).forEach(([day, record]) => {
+      const before = previous.nutrition[day];
+      if (!before || !same(before, record)) changes.push(dayChange(day, record, before));
+    });
+    Object.entries(previous.nutrition).forEach(([day, record]) => {
+      if (!next.nutrition[day]) {
+        changes.push(dayChange(day, { entries: [], isComplete: false }, record));
+      }
+    });
+  }
 
   if (!same(previous.settings, next.settings) || previous.budget !== next.budget) changes.push(settingsChange(next));
   if (!same(previous.goals, next.goals)) changes.push({ goals: goalsOf(next.goals) });
 
-  next.goalPeriods.forEach((record) => {
-    const before = previous.goalPeriods.find((r) => r.id === record.id);
-    if (!before || !same(before, record)) changes.push(goalPeriodChange(record));
-  });
-  previous.goalPeriods.forEach((record) => {
-    if (!next.goalPeriods.some((r) => r.id === record.id)) {
-      changes.push({ goalPeriod: { id: record.id, deleted: true } });
-    }
-  });
+  diffById(next.goalPeriods, previous.goalPeriods, (record) => {
+    changes.push(goalPeriodChange(record));
+  }, (record) => changes.push({ goalPeriod: { id: record.id, deleted: true } }));
 
-  next.health.forEach((record) => {
-    const before = previous.health.find((r) => r.id === record.id);
-    if (!before || !same(before, record)) changes.push(healthChange(record));
-  });
-  previous.health.forEach((record) => {
-    if (!next.health.some((r) => r.id === record.id)) changes.push({ health: { id: record.id, deleted: true } });
-  });
+  diffById(next.health, previous.health, (record) => {
+    changes.push(healthChange(record));
+  }, (record) => changes.push({ health: { id: record.id, deleted: true } }));
   if (!same(previous.healthGoals, next.healthGoals)) changes.push(healthGoalsChange(next.healthGoals));
 
-  if (previous.learned !== next.learned) {
-    const learnedBefore = new Map(previous.learned.map((word) => [word.id, word]));
-    const learnedAfter = new Set(next.learned.map((word) => word.id));
-    next.learned.forEach((word) => {
-      const before = learnedBefore.get(word.id);
-      if (!before || !same(before, word)) changes.push(learnedChange(word, before));
-    });
-    previous.learned.forEach((word) => {
-      if (!learnedAfter.has(word.id)) changes.push({ learned: { id: word.id, deleted: true } });
-    });
-  }
+  diffById(next.learned, previous.learned, (word, before) => {
+    changes.push(learnedChange(word, before));
+  }, (word) => changes.push({ learned: { id: word.id, deleted: true } }));
 
   // История ввода текстом: запись уходит целиком (движок сводит её одним регистром), пропавшая — надгробием
-  if (previous.quickLines !== next.quickLines) {
-    const linesBefore = new Map(previous.quickLines.map((line) => [line.id, line]));
-    const linesAfter = new Set(next.quickLines.map((line) => line.id));
-    next.quickLines.forEach((line) => {
-      const before = linesBefore.get(line.id);
-      if (!before || !same(before, line)) changes.push(quickLineChange(line));
-    });
-    previous.quickLines.forEach((line) => {
-      if (!linesAfter.has(line.id)) changes.push({ quickLine: { id: line.id, deleted: true } });
-    });
-  }
+  diffById(next.quickLines, previous.quickLines, (line) => {
+    changes.push(quickLineChange(line));
+  }, (line) => changes.push({ quickLine: { id: line.id, deleted: true } }));
   return changes;
 }
 
