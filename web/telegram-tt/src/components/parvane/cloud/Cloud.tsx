@@ -18,13 +18,13 @@ import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { formatFileSize } from '../../../util/textFormat';
 import { openPalette } from '../palette/paletteOpen';
 import {
-  childrenOf, listedNodes, pathOf, searchNodes, sizeOf, sortNodes, trashDaysLeft, usageOf,
+  childrenOf, folderStats, listedNodes, pathOf, searchNodes, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
 import {
   answerCloudInvite, canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
-  getCloudData, getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudTransfers,
-  getCloudUsage, getContainer, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder, loadCloud,
-  moveCloudNodes, moveCloudNodesAcross, purgeCloudNodes, refreshCloud, refreshCloudLinks, renameCloudNode,
+  getCloudData, getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudUsage,
+  getContainer, getHasCloudTransfers, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder,
+  loadCloud, moveCloudNodes, moveCloudNodesAcross, purgeCloudNodes, refreshCloud, refreshCloudLinks, renameCloudNode,
   restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs, shareCloudFolder, trashCloudNodes, uploadCloudFiles,
 } from './cloudStore';
 
@@ -78,6 +78,9 @@ const SORT_KEYS: CloudSortKey[] = ['name', 'date', 'size'];
 const PREVIEW_MAX_BYTES_DESKTOP = 256 * 1024 * 1024;
 const PREVIEW_MAX_BYTES_MOBILE = 64 * 1024 * 1024;
 const USAGE_WARN_SHARE = 0.9;
+// Поиск по всем папкам применяется с задержкой после ввода, а не на каждую букву
+const SEARCH_DEBOUNCE_MS = 150;
+const NO_CHILDREN = { count: 0, size: 0 };
 // Папка хранилища заметок в корне личного диска (названия — как в `notes/notesStore.ts`)
 const VAULT_NAMES = ['Знания', 'Knowledge'];
 const SORT_SHORT_KEYS = {
@@ -109,12 +112,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const status = useDerivedState(getCloudStatus);
   const place = useDerivedState(getCloudPlace);
   const prefs = useDerivedState(getCloudPrefs);
-  const transfers = useDerivedState(getCloudTransfers);
+  // Сам ход переносов показывает `CloudTransfers`; здесь нужно лишь знать, есть ли они
+  const hasTransfers = useDerivedState(getHasCloudTransfers);
   const usage = useDerivedState(getCloudUsage);
   const notice = useDerivedState(getCloudNotice);
   const links = useDerivedState(getCloudLinks);
 
   const [query, setQuery] = useState('');
+  // Запрос, по которому строится список: с задержкой после ввода, очистка — сразу
+  const [appliedQuery, setAppliedQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [dialog, setDialog] = useState<Dialog>();
   const [preview, setPreview] = useState<Entry>();
@@ -135,7 +141,16 @@ const Cloud = ({ isMobile }: OwnProps) => {
     return () => setCloudActive(false);
   }, []);
 
-  const trimmedQuery = query.trim();
+  useEffect(() => {
+    if (!query.trim()) {
+      setAppliedQuery('');
+      return undefined;
+    }
+    const timer = setTimeout(() => setAppliedQuery(query), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const trimmedQuery = appliedQuery.trim();
   const isSearch = Boolean(trimmedQuery);
   const isVirtual = place.view !== undefined && !place.container;
   const isTrash = !isSearch && isVirtual && place.view === 'trash';
@@ -163,6 +178,10 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const sharedFolders = useMemo(() => (allContainers || []).filter((c) => c.kind === 'shared'), [allContainers]);
   const invites = useMemo(() => (allContainers || []).filter((c) => c.kind === 'invite'), [allContainers]);
   const trash = useMemo(() => getTrash(data), [data]);
+  // Счётчики папок (число детей, размер поддерева) — одним проходом по каждому контейнеру
+  const statsByContainer = useMemo(() => new Map(
+    (allContainers || []).map((c) => [c.id, folderStats(getNodes(c.id, data))]),
+  ), [allContainers, data]);
 
   const entries: Entry[] = useMemo(() => {
     if (trimmedQuery) {
@@ -938,12 +957,13 @@ const Cloud = ({ isMobile }: OwnProps) => {
           {isLoaded && (
             <div className={styles.list} role="list">
               {isRoot && invites.map(renderInviteRow)}
-              <CloudTransfers transfers={transfers} />
+              <CloudTransfers />
               {listedFolders?.map(renderContainerRow)}
               {isLinksList && links?.map(renderLinkRow)}
               {entries.map((entry) => {
                 const daysLeft = isTrash ? trashDaysLeft(entry.node, now) : undefined;
-                const entryNodes = entry.node.kind === 'folder' ? getNodes(entry.container, data) : undefined;
+                const stats = entry.node.kind === 'folder'
+                  ? statsByContainer.get(entry.container)?.get(entry.node.id) || NO_CHILDREN : undefined;
                 return (
                   <CloudItem
                     key={keyOf(entry)}
@@ -954,8 +974,8 @@ const Cloud = ({ isMobile }: OwnProps) => {
                       : daysLeft ? lang('ParvaneCloudTrashDaysLeft', { count: daysLeft }, { pluralValue: daysLeft })
                         : lang('ParvaneCloudTrashExpired')}
                     daysLeft={daysLeft}
-                    childCount={entryNodes ? childrenOf(listedNodes(entryNodes), entry.node.id).length : undefined}
-                    folderSize={entryNodes ? sizeOf(entryNodes, entry.node.id) : undefined}
+                    childCount={stats?.count}
+                    folderSize={stats?.size}
                     isSelected={selected.includes(keyOf(entry))}
                     isSelecting={selected.length > 0}
                     isTrash={isTrash}
@@ -968,7 +988,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
                   />
                 );
               })}
-              {!hasRows && !transfers.length && (
+              {!hasRows && !hasTransfers && (
                 <div className={buildClassName(kit.empty, styles.empty)}>
                   <div>{lang(emptyKey)}</div>
                   {emptyKey === 'ParvaneCloudEmpty' && (

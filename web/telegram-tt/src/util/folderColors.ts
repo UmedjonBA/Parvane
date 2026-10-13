@@ -1,6 +1,7 @@
 import type { ApiChatFolder } from '../api/types';
 
 import { ALL_FOLDER_ID } from '../config';
+import memoized from './memoized';
 
 // Parvane: цвета папок — тона цветовой схемы. Первый набор отвечает семи цветам Telegram, которые выбирают в
 // настройках папки (красный, оранжевый, фиолетовый, зелёный, бирюзовый, синий, розовый); второй — порядок
@@ -37,6 +38,10 @@ export function buildFolderColorsById(
   });
   return byId;
 }
+
+// E3: один объект цветов на изменение папок для всех строк списка чатов — считается в мапперах `Chat`
+// (`withGlobal`), а не `useMemo` в каждой строке; те же аргументы дают тот же объект, и строки не перерисовываются
+export const selectFolderColorsById = memoized(buildFolderColorsById);
 
 // Метки папок в строке чата: папки чата в порядке чипов, без «Всех» и без папки, список которой открыт
 export function pickChatTagFolderIds(

@@ -14,7 +14,7 @@ import type { ThemeKey } from '../../types';
 import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import {
-  BASE_EMOJI_KEYWORD_LANG, DARK_THEME_PATTERN_COLOR, DEBUG, DEFAULT_PATTERN_COLOR, FOLDERS_POSITION_LEFT,
+  DARK_THEME_PATTERN_COLOR, DEBUG, DEFAULT_PATTERN_COLOR, FOLDERS_POSITION_LEFT,
   INACTIVE_MARKER,
 } from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
@@ -100,11 +100,11 @@ import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
 import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
-import Cloud from '../parvane/cloud/Cloud';
+import Cloud from '../parvane/Cloud.async';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
-import Knowledge from '../parvane/notes/Knowledge';
-import ParvanePalette from '../parvane/palette/ParvanePalette';
-import Planner from '../parvane/planner/Planner';
+import Knowledge from '../parvane/Knowledge.async';
+import ParvanePalette from '../parvane/palette/ParvanePalette.async';
+import Planner from '../parvane/Planner.async';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
 import RightColumn from '../right/RightColumn';
@@ -199,6 +199,8 @@ type StateProps = {
 const INVITE_OFFLINE_NOTICE_MS = 15000;
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
+// Parvane (B2): разделы и палитра — вне критического пути старта, но заранее: первый переход без ожидания
+const PARVANE_BUNDLE_LOADING_DELAY_MS = 3000;
 const OWN_PROFILE_CLOSE_DURATION = 450;
 
 let DEBUG_isLogged = false;
@@ -262,25 +264,17 @@ const Main = ({
 }: OwnProps & StateProps) => {
   const {
     initMain,
-    loadAnimatedEmojis,
     loadBirthdayNumbersStickers,
     loadRestrictedEmojiStickers,
     loadNotificationSettings,
-    loadNotificationExceptions,
     updateIsOnline,
     onTabFocusChange,
-    loadTopPeers,
     openSettingsScreen,
-    loadEmojiKeywords,
     loadCountryList,
     loadAvailableReactions,
     loadStickerSets,
     loadDiceStickers,
-    loadPremiumGifts,
-    loadTonGifts,
-    loadStarGifts,
     loadMyUniqueGifts,
-    loadDefaultTopicIcons,
     loadAddedStickers,
     loadFavoriteStickers,
     loadDefaultStatusIcons,
@@ -288,41 +282,20 @@ const Main = ({
     closeStickerSetModal,
     closeCustomEmojiSets,
     checkVersionNotification,
-    loadConfig,
     loadAppConfig,
-    loadAttachBots,
     loadContactList,
     loadCustomEmojis,
-    loadGenericEmojiEffects,
     closePaymentModal,
     clearReceipt,
     checkAppVersion,
     openThread,
     toggleLeftColumn,
     loadRecentEmojiStatuses,
-    loadUserCollectibleStatuses,
     updatePageTitle,
-    loadTopReactions,
-    loadRecentReactions,
-    loadDefaultTagReactions,
-    loadFeaturedEmojiStickers,
     loadAuthorizations,
-    loadPeerColors,
-    loadSavedReactionTags,
-    loadTimezones,
-    loadAiComposeTones,
-    loadQuickReplies,
-    loadStarStatus,
-    loadAvailableEffects,
-    loadPaidReactionPrivacy,
     loadPasswordInfo,
     loadBotFreezeAppeal,
-    loadAllStories,
-    loadAllHiddenStories,
-    loadContentSettings,
     loadGiftAuction,
-    loadPromoData,
-    loadActiveGiftAuctions,
     openChatByUsername,
     checkChatInvite,
     showNotification,
@@ -341,6 +314,10 @@ const Main = ({
   useTimeout(() => {
     void loadBundle(Bundles.Calls);
   }, CALL_BUNDLE_LOADING_DELAY_MS);
+
+  useTimeout(() => {
+    void loadBundle(Bundles.Parvane);
+  }, PARVANE_BUNDLE_LOADING_DELAY_MS);
 
   const containerRef = useRef<HTMLDivElement>();
   const leftColumnRef = useRef<HTMLDivElement>();
@@ -365,12 +342,13 @@ const Main = ({
   useInterval(checkAppVersion, isMasterTab ? APP_OUTDATED_TIMEOUT_MS : undefined, true);
 
   // Initial API calls
+  // Parvane (B5): после синка tt запускал ~40 загрузчиков Telegram (stories, промо, подарки, Stars, реакции-теги,
+  // боты, эффекты, часовые пояса…) — у провайдера Parvane этих методов нет, каждый вызов был холостым проходом
+  // через `callApi` с записью «метод не реализован» в журнал. Остались только те, что провайдер отвечает
   useEffect(() => {
     if (isMasterTab && isSynced) {
       updateIsOnline({ isOnline: true });
-      loadConfig();
       loadAppConfig();
-      loadPeerColors();
       initMain();
       loadContactList();
       checkAppVersion();
@@ -379,43 +357,13 @@ const Main = ({
     }
   }, [isMasterTab, isSynced]);
 
-  // Initial API calls
   useEffect(() => {
     if (isMasterTab && isSynced && isAppConfigLoaded && !isAccountFrozen) {
-      loadAllStories();
-      loadAllHiddenStories();
-      loadPromoData();
-      loadContentSettings();
-      loadRecentReactions();
-      loadDefaultTagReactions();
-      loadAttachBots();
       loadNotificationSettings();
-      loadNotificationExceptions();
-      loadTopPeers({ category: 'botsInline' });
-      loadTopReactions();
-      loadStarStatus();
-      loadEmojiKeywords({ language: BASE_EMOJI_KEYWORD_LANG });
-      loadFeaturedEmojiStickers();
-      loadSavedReactionTags();
-      loadTopPeers({ category: 'botsApp' });
-      loadTopPeers({ category: 'botsGuestChat' });
-      loadPaidReactionPrivacy();
-      loadDefaultTopicIcons();
-      loadAnimatedEmojis();
       loadAvailableReactions();
-      loadUserCollectibleStatuses();
-      loadGenericEmojiEffects();
-      loadPremiumGifts();
-      loadTonGifts();
-      loadStarGifts();
       loadMyUniqueGifts();
-      loadAvailableEffects();
       loadBirthdayNumbersStickers();
       loadRestrictedEmojiStickers();
-      loadQuickReplies();
-      loadTimezones();
-      loadAiComposeTones();
-      loadActiveGiftAuctions();
     }
   }, [isMasterTab, isSynced, isAppConfigLoaded, isAccountFrozen]);
 
@@ -427,13 +375,9 @@ const Main = ({
     }
   }, [isCurrentUserPremium, isMasterTab, isAppConfigLoaded, isAccountFrozen]);
 
-  // Language-based API calls
+  // Language-based API calls (B5: словарь эмодзи `loadEmojiKeywords` провайдер не отдаёт — не запрашиваем)
   useEffect(() => {
     if (isMasterTab) {
-      if (lang.code !== BASE_EMOJI_KEYWORD_LANG) {
-        loadEmojiKeywords({ language: lang.code });
-      }
-
       loadCountryList({ langCode: lang.code });
     }
   }, [lang.code, isMasterTab]);
@@ -875,6 +819,20 @@ const Main = ({
   const isPlannerOpen = parvaneSection === 'planner';
   const isCloudOpen = parvaneSection === 'cloud';
   const knowledgeView = useDerivedState(getKnowledgeView);
+  // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
+  const isCloudFilesOpen = isCloudOpen && knowledgeView === 'files';
+  const isKnowledgeOpen = isCloudOpen && !isCloudFilesOpen;
+  // Parvane (E1): «План» и «Облако» после первого показа остаются смонтированными и скрываются (`Main.scss`),
+  // как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не теряет выбранный
+  // день, папку, положение списка. «План» всё же размонтирован, пока показаны «Знания»: у них своё окно ввода
+  // «Плана» (`PlannerQuickHost`), делящее с разделом один запрос «новая запись». «Знания» размонтируются,
+  // как и прежде: холст и граф держат слушатели клавиш на документе и не проверяют, показан ли раздел
+  const isPlannerMountedRef = useRef(false);
+  const shouldMountPlanner = isPlannerOpen || (isPlannerMountedRef.current && !isKnowledgeOpen);
+  isPlannerMountedRef.current = shouldMountPlanner;
+  const isCloudMountedRef = useRef(false);
+  const shouldMountCloud = isCloudFilesOpen || isCloudMountedRef.current;
+  isCloudMountedRef.current = shouldMountCloud;
   // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
@@ -896,6 +854,7 @@ const Main = ({
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
     isCloudOpen && 'section-cloud',
+    isCloudFilesOpen && 'section-cloud-files',
     isTabBarShown && 'parvane-tab-bar-shown',
   );
 
@@ -944,9 +903,9 @@ const Main = ({
         <div className="tauri-drag-region" data-tauri-drag-region />
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
-      {isPlannerOpen && <Planner />}
-      {/* Parvane: раздел «Знания»: «Файлы» рисует прежнее «Облако», остальные вкладки — `Knowledge` */}
-      {isCloudOpen && (knowledgeView === 'files' ? <Cloud isMobile={isMobile} /> : <Knowledge />)}
+      {shouldMountPlanner && <Planner />}
+      {shouldMountCloud && <Cloud isMobile={isMobile} />}
+      {isKnowledgeOpen && <Knowledge />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}

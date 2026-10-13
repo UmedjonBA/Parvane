@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import { readFileSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { bundleStats } from 'rollup-plugin-bundle-stats';
@@ -15,6 +16,12 @@ const CHANGELOG_PATH = resolve(DIR_NAME, 'src/versionNotification.txt');
 const PRODUCTION_URL = 'https://web.telegram.org/a';
 
 const { version: APP_VERSION } = packageJson;
+// Идентификатор сборки (B3): вшивается в бандл как `APP_BUILD` и пишется в `version.txt` dist — по нему открытая
+// вкладка узнаёт о новой выкладке (`checkAppVersion`) и старые вкладки перезагружаются при открытии новой
+// (`multitab.ts`). Номер версии пакета для этого не годился: между деплоями он не менялся.
+// PARVANE_BUILD_ID задаёт его явно; иначе — хеш коммита, при незакоммиченных правках — с отметкой времени
+const APP_BUILD = process.env.PARVANE_BUILD_ID || buildAppBuildId();
+const VERSION_FILE_NAME = 'version.txt';
 const BUNDLE_STATS_OUT_DIR = 'bundle-stats';
 const DEFAULT_BUNDLE_STATS_BASELINE_FILE = 'baseline.json';
 const BUNDLE_STATS_VISUALIZER_FILE = 'visualizer.html';
@@ -30,9 +37,18 @@ const DEV_BUNDLE_WARMUP_CLIENT_FILES = [
   'src/bundles/extra.ts',
   'src/bundles/calls.ts',
   'src/bundles/stars.ts',
+  'src/bundles/parvane.ts',
+  'src/bundles/mediaEditor.ts',
 ];
 const LINK_PAGE_SHARED_RE = /\/src\/api\/parvane\/(blobcrypt|cloudBlobs|cloudLinks|v2\/transport)\.ts$/;
+// Провайдер шины и движок протокола (WASM-обвязка): меняются почти каждым деплоем — своим куском, чтобы кэш
+// общих UI-модулей не сгорал вместе с ними (B2)
+const API_PARVANE_RE = /\/src\/(?:api\/parvane|lib\/parvane-protocol)\//;
+// Общие UI-модули; редактор медиа исключён — он грузится лениво из окна вложений (`MediaEditor.async`)
+const SHARED_UI_RE = /\/src\/components\/ui\/(?!mediaEditor\/)/;
 const IMAGE_ASSET_RE = /\.(?:avif|gif|jpe?g|png|svg|webp)$/i;
+// Анимации `.tgs` до 4 КБ vite вшивал в JS как data: — файлами они кэшируются отдельно и не грузят бандл
+const TGS_ASSET_RE = /\.tgs$/i;
 const STATIC_COPY_TARGETS: Target[] = [
   {
     src: normalizePath(resolve(DIR_NAME, 'node_modules/opus-recorder/dist/decoderWorker.min.wasm')),
@@ -92,6 +108,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const plugins: PluginOption[] = [
     v2InviteRedirectPlugin(),
     cloudLinkRedirectPlugin(),
+    buildVersionFilePlugin(APP_BUILD),
     buildGitInfoPlugin({
       appEnv,
       head: HEAD,
@@ -188,6 +205,7 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     define: {
       APP_VERSION: JSON.stringify(APP_VERSION),
+      APP_BUILD: JSON.stringify(APP_BUILD),
       CHANGELOG_DATETIME: JSON.stringify(statSync(CHANGELOG_PATH, { throwIfNoEntry: false })?.mtime.getTime()),
     },
     resolve: {
@@ -223,7 +241,9 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     build: {
       sourcemap: true,
-      assetsInlineLimit: (filePath) => (IMAGE_ASSET_RE.test(filePath) ? false : undefined),
+      assetsInlineLimit: (filePath) => (
+        IMAGE_ASSET_RE.test(filePath) || TGS_ASSET_RE.test(filePath) ? false : undefined
+      ),
       rolldownOptions: {
         // Два входа: приложение и лёгкая публичная страница ссылки облака (spec 022)
         input: {
@@ -231,16 +251,32 @@ export default defineConfig(({ mode }): UserConfig => {
           s: resolve(DIR_NAME, 's.html'),
         },
         output: {
-          manualChunks(id) {
-            // Модули, общие у приложения и публичной страницы ссылки, — своим малым куском: иначе они
-            // попадают в `shared-components`, и страница тянет мегабайт кода и стили приложения (её CSP их режет)
-            if (LINK_PAGE_SHARED_RE.test(id)) {
-              return 'link-shared';
-            }
-            if (id.includes('/src/components/ui/')) {
-              return 'shared-components';
-            }
-            return undefined;
+          // Группы в порядке приоритета. Зависимости попавшего в группу модуля идут в тот же кусок
+          // (`includeDependenciesRecursively`, умолчание rolldown): так между кусками не возникает
+          // круговых импортов, а для `shared-components` это значило бы обращение к `withGlobal` из куска
+          // входа до его исполнения (TDZ). Поэтому провайдер вынесен не отключением рекурсии, а своей
+          // группой выше по приоритету (B2)
+          codeSplitting: {
+            groups: [
+              {
+                // Модули, общие у приложения и публичной страницы ссылки, — своим малым куском: иначе
+                // они попадают в `shared-components`, и страница тянет мегабайт кода и стили приложения
+                // (её CSP их режет)
+                name: 'link-shared',
+                test: LINK_PAGE_SHARED_RE,
+                priority: 30,
+              },
+              {
+                name: 'api-parvane',
+                test: API_PARVANE_RE,
+                priority: 20,
+              },
+              {
+                name: 'shared-components',
+                test: SHARED_UI_RE,
+                priority: 10,
+              },
+            ],
           },
         },
       },
@@ -320,6 +356,41 @@ function gatewayOrigins(appEnv: string) {
 // сервер переводит её на корень — `/?join=<link_id>`; фрагмент с секретом
 // браузер переносит сам, серверу он не уходит. То же правило — в Caddyfile прода.
 const V2_INVITE_PATH = /^\/join\/([A-Za-z0-9_-]{43})$/;
+
+function buildAppBuildId() {
+  try {
+    const git = (args: string[]) => execFileSync('git', args, {
+      cwd: DIR_NAME, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const commit = git(['rev-parse', '--short=12', 'HEAD']);
+    const isDirty = git(['status', '--porcelain', '--untracked-files=no']) !== '';
+    return isDirty ? `${commit}-${Date.now().toString(36)}` : commit;
+  } catch {
+    return `build-${Date.now().toString(36)}`;
+  }
+}
+
+// `version.txt` в корне dist с идентификатором сборки (B3). В dev отдаётся промежуточным обработчиком —
+// `checkAppVersion` сравнивает его с вшитым `APP_BUILD`
+function buildVersionFilePlugin(appBuild: string): Plugin {
+  return {
+    name: 'parvane-build-version',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: VERSION_FILE_NAME, source: appBuild });
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.split('?')[0] !== `/${VERSION_FILE_NAME}`) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end(appBuild);
+      });
+    },
+  };
+}
 
 function v2InviteRedirectPlugin(): Plugin {
   type Middlewares = { use: (fn: (req: { url?: string }, res: {

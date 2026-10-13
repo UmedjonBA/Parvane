@@ -10,7 +10,7 @@ import {
 } from './plannerFormat';
 import { formatDescriptionLine } from './plannerLinks';
 import {
-  addDays, AGENDA_DAYS, buildDayIndex, getListColor, instanceKey, toMinutes, toTime,
+  addDays, AGENDA_DAYS, getDayIndex, getListColor, instanceKey, toMinutes, toTime,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -39,7 +39,7 @@ const PlannerAgenda = ({
 
   const days = useMemo(() => {
     const lastDay = addDays(day, AGENDA_DAYS - 1);
-    const index = buildDayIndex(state, day, lastDay);
+    const index = getDayIndex(state, day, lastDay);
     return [...index.entries()]
       .filter(([, entry]) => entry.tasks.length + entry.events.length + entry.deadlines.length)
       .sort(([a], [b]) => (a < b ? -1 : 1));

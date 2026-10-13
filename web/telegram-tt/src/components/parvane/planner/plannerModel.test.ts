@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { PlannerState, PlannerTask } from './plannerModel';
 
 import {
-  buildDayIndex, countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
-  expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayLoad, getDefaultEventEnd,
+  countConflicts, createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, detachInstance, excludeInstance,
+  expandRepeat, findSlots, freezePastGoals, getDayAvailability, getDayIndex, getDayLoad, getDefaultEventEnd,
   getEligibleTasks, getEventsForDay, getGoalRecordForDay, getGoalsForDay, getListColor, getMonthGridKeys,
   getNutrientStatistics, getNutrientStatus, getNutrientTotal, getOrderedGroup, getTasksForDay, getTimeStatistics,
   getUndatedTasks,
@@ -688,7 +688,7 @@ describe('планировщик: виды календаря и навигац�
         task({ id: 't3', minutes: 20, repeat: { kind: 'daily', interval: 2, startDay: '2026-10-07' } }),
       ],
     });
-    const index = buildDayIndex(state, '2026-10-01', '2026-10-31');
+    const index = getDayIndex(state, '2026-10-01', '2026-10-31');
     expect(index.get(TODAY)!.events.map(({ id }) => id)).toEqual(['e2', 'e1']);
     expect(index.get(TODAY)!.isHoliday).toBe(true);
     // Весь день в минуты не входит: созвон 30 + задача 45
@@ -712,7 +712,7 @@ describe('планировщик: виды календаря и навигац�
       repeat: { kind: 'weekly' as const, interval: 1, weekdays: [i % 7], startDay: '2026-01-01' },
     }));
     const started = performance.now();
-    const index = buildDayIndex(stateWith({ tasks, events }), '2026-01-01', '2026-12-31');
+    const index = getDayIndex(stateWith({ tasks, events }), '2026-01-01', '2026-12-31');
     expect(performance.now() - started).toBeLessThan(500);
     expect(index.size).toBe(365);
   });

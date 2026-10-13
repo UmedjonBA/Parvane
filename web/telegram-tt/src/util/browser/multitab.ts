@@ -93,8 +93,59 @@ type BroadcastChannelInitApi = {
   initialArgs: ApiInitialArgs;
 };
 
+// Ответа хозяина (его global) ждём только когда другая вкладка точно есть (B1): прежде это ожидание стояло
+// в каждом запуске, где ключ вкладки не снялся (телефон, PWA — `beforeunload` там почти не приходит)
 const MULTITAB_ESTABLISH_TIMEOUT = 800;
 const BROADCAST_DIFF_FALLBACK_TIMEOUT = 500;
+// Живая вкладка держит общий замок Web Locks: он снимается браузером сам при любом закрытии вкладки, так что
+// «есть ли другие вкладки» узнаётся точно и за миллисекунды. Где замков нет — ключ в localStorage (см. ниже)
+const TAB_LOCK_NAME = `${MULTITAB_STORAGE_KEY}:tab`;
+
+let isAloneTab = true;
+
+async function detectOtherTabs() {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    try {
+      const { held = [] } = await navigator.locks.query();
+      return held.some((lock) => lock.name === TAB_LOCK_NAME);
+    } catch {
+      // Приватный режим и т. п. — ниже запасной признак
+    }
+  }
+  return Boolean(localStorage.getItem(MULTITAB_STORAGE_KEY));
+}
+
+function holdTabLock() {
+  if (typeof navigator === 'undefined' || !navigator.locks) return;
+  // Замок держится до выгрузки документа: обещание намеренно не завершается
+  void navigator.locks.request(TAB_LOCK_NAME, { mode: 'shared' }, () => new Promise<void>(() => {})).catch(() => {});
+}
+
+/** Одна ли это вкладка на момент запуска (по итогу `requestGlobal`). */
+export function getIsAloneTab() {
+  return isAloneTab;
+}
+
+// Ключ «вкладка открыта» — запасной признак для браузеров без Web Locks и для `requestGlobal` другой вкладки.
+// Снимается не только в `beforeunload` (на iOS/Android и в PWA он почти не приходит), но и в `pagehide`:
+// уходящая в bfcache вкладка ответить всё равно не может, а при возврате (`pageshow`) ключ ставится снова
+export function markTabOpen() {
+  localStorage.setItem(MULTITAB_STORAGE_KEY, '1');
+}
+
+export function listenTabLifecycle() {
+  const release = () => {
+    const global = getGlobal();
+    if (Object.keys(global.byTabId).length <= 1) {
+      localStorage.removeItem(MULTITAB_STORAGE_KEY);
+    }
+  };
+  window.addEventListener('pagehide', release);
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) markTabOpen();
+  });
+  return release;
+}
 
 export type TypedBroadcastChannel = {
   postMessage: (message: BroadcastChannelMessage) => void;
@@ -247,17 +298,20 @@ export function handleMessage({ data }: { data: BroadcastChannelMessage }) {
       currentGlobal = data.global;
       // eslint-disable-next-line tt-multitab/set-global-only-variable
       setGlobal(data.global);
+      // Ответ мог прийти раньше, чем `requestGlobal` начал ждать (пока опрашивались замки)
+      isFirstGlobalResolved = true;
       if (resolveGlobalPromise) {
         resolveGlobalPromise();
         resolveGlobalPromise = undefined;
-        isFirstGlobalResolved = true;
       }
       break;
     }
 
     case 'requestGlobal': {
       const { appVersion } = data;
-      if (appVersion !== APP_VERSION) {
+      // Сравнивается идентификатор сборки, а не номер версии пакета (B3): новая вкладка после деплоя —
+      // и вкладки прошлой сборки перезагружаются сами
+      if (appVersion !== APP_BUILD) {
         // If app version on the other tab was updated, reload the current page immediately and don't respond
         // to the other tab's request because our current global might be incompatible with the new version
         window.location.reload();
@@ -377,7 +431,7 @@ export function handleMessage({ data }: { data: BroadcastChannelMessage }) {
   }
 }
 
-export function requestGlobal(appVersion: string): Promise<void> {
+export async function requestGlobal(appVersion: string): Promise<void> {
   channel.postMessage({
     type: 'requestGlobal',
     appVersion,
@@ -391,14 +445,21 @@ export function requestGlobal(appVersion: string): Promise<void> {
     isFirstGlobalResolved = true;
   };
 
-  if (localStorage.getItem(MULTITAB_STORAGE_KEY)) {
-    setTimeout(resolveWithoutGlobal, MULTITAB_ESTABLISH_TIMEOUT);
-  } else {
+  const hasOtherTabs = await detectOtherTabs();
+  holdTabLock();
+  isAloneTab = !hasOtherTabs;
+
+  if (!hasOtherTabs) {
     resolveWithoutGlobal();
-    return Promise.resolve();
+    return;
   }
 
-  return new Promise((resolve) => {
+  // Ответ мог прийти, пока шёл опрос замков
+  if (isFirstGlobalResolved) return;
+
+  setTimeout(resolveWithoutGlobal, MULTITAB_ESTABLISH_TIMEOUT);
+
+  await new Promise<void>((resolve) => {
     resolveGlobalPromise = resolve;
   });
 }

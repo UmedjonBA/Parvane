@@ -10,8 +10,9 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerSettingsRequest,
-  getPlannerView, setPlannerView, showPlannerCalendar,
+  consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerCalendarView,
+  getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView, setPlannerCalendarView, setPlannerPickedDay,
+  setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
 import { consumePlannerRecordRequest, getPlannerRecordRequest, openPalette } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
@@ -25,7 +26,7 @@ import {
 } from './plannerModel';
 import {
   getHasQuickLines, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus,
-  loadPlanner, undoPlanner, updatePlanner,
+  loadPlanner, setPlannerActive, undoPlanner, updatePlanner,
 } from './plannerStore';
 import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
 
@@ -135,10 +136,16 @@ const Planner = () => {
   const [today, setToday] = useState(() => toDayKey(new Date()));
   // Экран раздела общий с боковой панелью (`util/parvaneSection.ts`)
   const view = useDerivedState(getPlannerView);
-  const [calendarView, setCalendarView] = useState(readCalendarView);
+  // Вид календаря и выбранный день живут в сигналах (`util/parvaneSection.ts`): раздел, размонтированный при
+  // переключении, возвращается на то же место; до первого выбора — сохранённый вид и «сегодня»
+  const [savedCalendarView] = useState(readCalendarView);
+  const sessionCalendarView = useDerivedState(getPlannerCalendarView);
+  const calendarView = sessionCalendarView || savedCalendarView;
   const [layers, setLayers] = useState(readLayers);
   // Якорь периода: выбранный день; месяц, неделя и год берутся от него
-  const [picked, setPicked] = useState(today);
+  const pickedDay = useDerivedState(getPlannerPickedDay);
+  const picked = pickedDay || today;
+  const setPicked = setPlannerPickedDay;
   // Редактор задачи: id и день экземпляра ряда (spec 011); редактор события — то же
   const [editor, setEditor] = useState<{ id: string; day?: string }>();
   const [eventEditor, setEventEditor] = useState<{ id: string; day: string }>();
@@ -154,6 +161,12 @@ const Planner = () => {
   useEffect(() => {
     void loadPlanner(currentUserId);
   }, [currentUserId]);
+
+  // Раздел на экране: провайдер опрашивает движок чаще, скрыт — реже
+  useEffect(() => {
+    setPlannerActive(true);
+    return () => setPlannerActive(false);
+  }, []);
 
   // Смена суток при открытом «Плане»: «сегодня» и завершённость вчерашнего дня обновляются сами
   useEffect(() => {
@@ -296,7 +309,7 @@ const Planner = () => {
 
   const handleSwitchCalendarView = useLastCallback((next: PlannerCalendarView) => {
     setPlannerView('calendar');
-    setCalendarView(next);
+    setPlannerCalendarView(next);
     saveCalendarView(next);
   });
 
@@ -350,7 +363,13 @@ const Planner = () => {
   const side = !isLoaded ? undefined
     : isSettingsOpen ? 'settings' : formParams ? 'form' : editedTask ? 'task' : editedEvent ? 'event' : undefined;
   const isSheet = side === 'settings' || (Boolean(side) && isNarrow);
-  const month = new Date(fromDayKey(picked).getFullYear(), fromDayKey(picked).getMonth(), 1);
+  // Месяц — один объект на месяц выбранного дня: иначе `memo` сетки месяца не срабатывал бы никогда
+  const monthKey = picked.slice(0, 7);
+  const month = useMemo(() => {
+    const date = fromDayKey(picked);
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [monthKey]);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
   const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
     : syncStatus === 'offline' ? 'PlannerSyncUnavailable'

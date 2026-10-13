@@ -1,4 +1,4 @@
-import { memo, useState } from '../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
 import type { ApiMessage, ApiTaskOffer, ApiUser } from '../../../api/types';
@@ -6,10 +6,11 @@ import type { ApiMessage, ApiTaskOffer, ApiUser } from '../../../api/types';
 import { getUserFullName } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
-import { findOfferInPlan, getTaskOfferKind } from '../../../api/parvane/taskOffers';
+import { getTaskOfferKind } from '../../../api/parvane/taskOffers';
 import { getPlannerState } from '../../parvane/planner/plannerStore';
 import { formatOfferWhen } from '../../parvane/taskOffer/taskOfferFormat';
 import { openOfferInPlan } from '../../parvane/taskOffer/taskOfferOpen';
+import { offerInPlanKey, parseOfferInPlanKey } from '../../parvane/taskOffer/taskOfferPlan';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useLang from '../../../hooks/useLang';
@@ -45,11 +46,18 @@ const TaskOffer = ({ message, taskOffer, usersById }: OwnProps & StateProps) => 
   const [isBusy, setIsBusy] = useState(false);
   // Автор ответа себе не шлёт: его «в плане» — запись плана либо нажатие в этом сеансе
   const [isAdded, setIsAdded] = useState(false);
-  const plannerState = useDerivedState(getPlannerState);
+  // Производное от состояния плана — строка-ключ записи: карточка перерисовывается, только когда запись
+  // по ней появляется, исчезает либо меняет день, а не на каждое изменение плана
+  const plannedKey = useDerivedState(
+    () => offerInPlanKey(getPlannerState(), taskOffer.id),
+    // Сигнал состояния плана — зависимость: по нему производное пересчитывается
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+    [getPlannerState, taskOffer.id],
+  );
+  const planned = useMemo(() => parseOfferInPlanKey(plannedKey), [plannedKey]);
 
   const kind = getTaskOfferKind(taskOffer);
   const isEvent = kind === 'event';
-  const planned = findOfferInPlan(plannerState, taskOffer.id);
   const isInPlan = Boolean(planned) || isAdded || taskOffer.myDecision === true;
 
   const respond = useLastCallback(async (isAccepted: boolean) => {

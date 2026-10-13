@@ -6,7 +6,7 @@ import type { PaletteItem } from './paletteSearch';
 import { createEmptyPlannerState } from '../planner/plannerModel';
 import { collectPlannerRecords, recordDay } from './paletteRecords';
 import {
-  movePaletteIndex, normalizePaletteText, PALETTE_GROUP_LIMIT, searchPalette, splitByRanges,
+  movePaletteIndex, normalizePaletteText, PALETTE_GROUP_LIMIT, searchPalette, splitByRanges, withNormalized,
 } from './paletteSearch';
 
 function item(group: PaletteItem['group'], title: string, text?: string): PaletteItem {
@@ -53,6 +53,26 @@ describe('палитра: сравнение строк', () => {
   it.each(rows)('«%s»', (query, found) => {
     const all = searchPalette(ITEMS, query).flatMap(({ results }) => results.map((r) => r.item.title));
     expect(all).toEqual(found);
+  });
+});
+
+describe('палитра: заранее приведённые строки', () => {
+  it('поиск по normTitle/normText даёт то же, что по исходным строкам', () => {
+    const plain = searchPalette(ITEMS, 'сервер вентилятор').flatMap(({ results }) => results.map((r) => r.item.title));
+    const prepared = searchPalette(ITEMS.map(withNormalized), 'сервер вентилятор')
+      .flatMap(({ results }) => results.map((r) => r.item.title));
+    expect(prepared).toEqual(plain);
+    const [note] = ITEMS.filter((entry) => entry.text).map(withNormalized);
+    expect(note.normTitle).toBe(normalizePaletteText(note.title));
+    expect(note.normText).toBe(normalizePaletteText(note.text));
+  });
+
+  it('по тексту запрос ищется с двух букв, по названию — с одной', () => {
+    const notes = [item('note', 'Заметка', 'про вентилятор 9'), item('note', 'В поле')];
+    expect(titles(notes, 'в')).toEqual([['note', ['В поле']]]);
+    expect(titles(notes, 'ве')).toEqual([['note', ['Заметка']]]);
+    // Короткое слово в составе длинного запроса по тексту всё же ищется
+    expect(titles(notes, '9 вентилятор')).toEqual([['note', ['Заметка']]]);
   });
 });
 

@@ -8,6 +8,7 @@ export default defineConfig((configEnv) => mergeConfig(
     define: {
       APP_REVISION: JSON.stringify('vitest-test'),
       APP_VERSION: JSON.stringify('0.0.1'),
+      APP_BUILD: JSON.stringify('vitest-build'),
     },
     test: {
       environment: 'jsdom',

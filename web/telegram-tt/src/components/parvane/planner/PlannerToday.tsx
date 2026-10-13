@@ -11,7 +11,7 @@ import {
 } from './plannerHealth';
 import { ALL_LAYERS } from './plannerLayers';
 import {
-  getDayLoad, getGoalsForDay, getListColor, getNutrientTotal, getTasksForDay, getUndatedTasks, instanceKey,
+  getDayEntry, getGoalsForDay, getListColor, getNutrientTotal, getUndatedTasks, instanceKey,
 } from './plannerModel';
 
 import useFlag from '../../../hooks/useFlag';
@@ -55,15 +55,16 @@ const PlannerToday = ({
 
   const lang = useLang();
 
-  // Несделанные — первыми, дальше по времени начала; без времени — в конце
-  const tasks = useMemo(() => [...getTasksForDay(state, day)].sort((a, b) => (
+  // Дела дня — из индекса; несделанные — первыми, дальше по времени начала; без времени — в конце
+  const entry = getDayEntry(state, day);
+  const tasks = useMemo(() => [...entry.tasks].sort((a, b) => (
     Number(a.status === 'done') - Number(b.status === 'done') || (a.start || '99').localeCompare(b.start || '99')
-  )), [state, day]);
+  )), [entry]);
   const undated = useMemo(() => getUndatedTasks(state), [state]);
-  const active = undated.filter(({ status }) => status === 'active');
+  const active = useMemo(() => undated.filter(({ status }) => status === 'active'), [undated]);
   const doneCount = tasks.filter(({ status }) => status === 'done').length;
   const leftCount = tasks.length - doneCount;
-  const load = getDayLoad(state, day);
+  const load = entry.minutes;
   const budget = getDayBudget(state, day);
   const isOver = load > budget;
   const isShort = isShortSleep(state, day);

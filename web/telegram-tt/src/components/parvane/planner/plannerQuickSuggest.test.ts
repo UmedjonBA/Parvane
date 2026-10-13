@@ -325,6 +325,49 @@ describe('подсказки: источники', () => {
   });
 });
 
+describe('подсказки: кэш разбора (C5)', () => {
+  const base = sources({
+    history: history('пара по английскому вт 15:00', 'купить ёлку', 'вес 72,4'),
+    tasks: [task('написать Оле'), task('отчёт', { start: '10:00', minutes: 30 })],
+    events: [event('Стендап', '09:30', '09:45')],
+  });
+
+  it('повторная сборка в том же контексте даёт то же; смена контекста кэш не путает', () => {
+    const first = buildCandidates(base, CTX);
+    expect(buildCandidates(base, CTX)).toEqual(first);
+    const english = buildCandidates(base, EN);
+    expect(buildCandidates(base, EN)).toEqual(english);
+    expect(buildCandidates(base, CTX)).toEqual(first);
+    // Другой день, тот же язык — свой разбор (относительные дни)
+    const tomorrow = buildCandidates(base, { ...CTX, today: '2026-10-09' });
+    expect(texts(tomorrow)).toEqual(texts(first));
+    // Минута «сейчас» кандидатов не меняет
+    expect(buildCandidates(base, { ...CTX, nowMinutes: 18 * 60 })).toEqual(first);
+  });
+
+  it('на больших данных повторная сборка заметно дешевле первой', () => {
+    const big = sources({
+      history: history(...Array.from({ length: 150 }, (_, i) => `дело номер ${i} завтра ${9 + (i % 10)}:00`)),
+      tasks: Array.from({ length: 150 }, (_, i) => task(`задача ${i}`, { start: '10:00', minutes: 15 + i })),
+      events: Array.from({ length: 150 }, (_, i) => event(`встреча ${i}`, '12:00', '13:00')),
+    });
+    const ctx = { ...CTX, today: '2026-10-10' };
+    const startedCold = performance.now();
+    const cold = buildCandidates(big, ctx);
+    const coldMs = performance.now() - startedCold;
+    const startedWarm = performance.now();
+    const warm = buildCandidates(big, ctx);
+    const warmMs = performance.now() - startedWarm;
+    expect(warm).toEqual(cold);
+    expect(cold.length).toBeGreaterThan(300);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf] подсказки, 450 записей: первая сборка ${coldMs.toFixed(1)} мс, повторная ${warmMs.toFixed(1)} мс`,
+    );
+    expect(warmMs).toBeLessThan(Math.max(coldMs / 2, 5));
+  });
+});
+
 describe('подсказки: набранное', () => {
   const candidates = buildCandidates(sources({
     history: history(

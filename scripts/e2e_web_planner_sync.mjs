@@ -47,7 +47,8 @@ async function openPlanner(page) {
 
 async function closePlanner(page) {
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
-  await page.locator('#ParvanePlanner').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // «План» после первого показа остаётся смонтированным и скрывается (E1), поэтому ждём `hidden`, не `detached`
+  await page.locator('#ParvanePlanner').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
 }
 
 async function createTask(page, name, start) {
