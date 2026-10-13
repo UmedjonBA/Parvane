@@ -7,6 +7,36 @@ import {
 
 // Parvane (spec 009): подписи планировщика — даты и длительности в языке интерфейса
 
+// Intl-объекты дороги в создании (единицы миллисекунд каждый), а подписей на отрисовку года — сотни:
+// форматы живут в кэше по языку и набору параметров
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+const numberFormats = new Map<string, Intl.NumberFormat>();
+
+function dateFormat(code: string | undefined, options: Intl.DateTimeFormatOptions) {
+  const key = `${code || ''}|${JSON.stringify(options)}`;
+  let format = dateFormats.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(code, options);
+    dateFormats.set(key, format);
+  }
+  return format;
+}
+
+function numberFormat(code: string | undefined, options: Intl.NumberFormatOptions) {
+  const key = `${code || ''}|${JSON.stringify(options)}`;
+  let format = numberFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(code, options);
+    numberFormats.set(key, format);
+  }
+  return format;
+}
+
+/** Дата в языке интерфейса с теми же параметрами, что у стандартного метода даты; формат — из кэша. */
+export function formatDate(code: string | undefined, date: Date, options: Intl.DateTimeFormatOptions) {
+  return dateFormat(code, options).format(date);
+}
+
 const STATUS_KEYS = {
   queue: 'PlannerStatusQueue',
   active: 'PlannerStatusActive',
@@ -22,7 +52,7 @@ export function formatProject(lang: LangFn, project: string) {
 }
 
 export function formatNumber(lang: LangFn, value: number, maximumFractionDigits = 1) {
-  return value.toLocaleString(lang.code, { maximumFractionDigits });
+  return numberFormat(lang.code, { maximumFractionDigits }).format(value);
 }
 
 export function formatHours(lang: LangFn, minutes: number) {
@@ -47,12 +77,12 @@ export function formatSpan(minutes: number) {
 }
 
 export function formatDay(lang: LangFn, day: string) {
-  return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'long' });
+  return formatDate(lang.code, fromDayKey(day), { day: 'numeric', month: 'long' });
 }
 
 // «12 окт» — короткая дата для плашек и подписей
 export function formatDayShort(lang: LangFn, day: string) {
-  return fromDayKey(day).toLocaleDateString(lang.code, { day: 'numeric', month: 'short' }).replace(/\.$/, '');
+  return formatDate(lang.code, fromDayKey(day), { day: 'numeric', month: 'short' }).replace(/\.$/, '');
 }
 
 // «Сегодня», «Завтра», «Вчера», иначе день недели
@@ -60,7 +90,7 @@ export function formatRelativeDay(lang: LangFn, day: string, today: string) {
   if (day === today) return lang('PlannerToday');
   if (day === addDays(today, 1)) return lang('PlannerTomorrow');
   if (day === addDays(today, -1)) return lang('WeekdayYesterday');
-  return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'long' }));
+  return capitalize(formatDate(lang.code, fromDayKey(day), { weekday: 'long' }));
 }
 
 // Часы без единицы — «4,5» (до десятых)
@@ -69,24 +99,24 @@ export function formatHoursNumber(lang: LangFn, minutes: number) {
 }
 
 export function formatDayLong(lang: LangFn, day: string) {
-  return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'long', day: 'numeric', month: 'long' }));
+  return capitalize(formatDate(lang.code, fromDayKey(day), { weekday: 'long', day: 'numeric', month: 'long' }));
 }
 
 // «Пн, 12 октября» — подпись дня в шапке карточки и в окне ввода
 export function formatDayLabel(lang: LangFn, day: string) {
-  return capitalize(fromDayKey(day).toLocaleDateString(lang.code, { weekday: 'short', day: 'numeric', month: 'long' }));
+  return capitalize(formatDate(lang.code, fromDayKey(day), { weekday: 'short', day: 'numeric', month: 'long' }));
 }
 
 export function formatMonth(lang: LangFn, month: Date) {
-  return capitalize(month.toLocaleDateString(lang.code, { month: 'long', year: 'numeric' }).replace(/ г\.$/, ''));
+  return capitalize(formatDate(lang.code, month, { month: 'long', year: 'numeric' }).replace(/ г\.$/, ''));
 }
 
 export function formatMonthShort(lang: LangFn, month: Date) {
-  return capitalize(month.toLocaleDateString(lang.code, { month: 'short' }).replace(/\.$/, ''));
+  return capitalize(formatDate(lang.code, month, { month: 'short' }).replace(/\.$/, ''));
 }
 
 export function formatMonthName(lang: LangFn, month: Date) {
-  return capitalize(month.toLocaleDateString(lang.code, { month: 'long' }));
+  return capitalize(formatDate(lang.code, month, { month: 'long' }));
 }
 
 // Заголовок периода вида: год, месяц, «5–11 окт. 2026», день
@@ -98,7 +128,7 @@ export function formatPeriod(lang: LangFn, view: PlannerCalendarView, day: strin
   const days = view === 'week' ? getWeekKeys(day) : [day, addDays(day, AGENDA_DAYS - 1)];
   const from = fromDayKey(days[0]);
   const to = fromDayKey(days[days.length - 1]);
-  const short = (value: Date, withYear: boolean) => value.toLocaleDateString(lang.code, {
+  const short = (value: Date, withYear: boolean) => formatDate(lang.code, value, {
     day: 'numeric', month: 'short', year: withYear ? 'numeric' : undefined,
   }).replace(/ г\.$/, '');
   return `${short(from, from.getFullYear() !== to.getFullYear())} – ${short(to, true)}`;
@@ -118,7 +148,7 @@ export function listColorStyle(color?: number) {
 // Понедельник — первым; `index` 0…6
 export function formatWeekday(lang: LangFn, index: number, style: 'short' | 'long' = 'short') {
   // 5 января 2026 — понедельник
-  return capitalize(new Date(2026, 0, 5 + index).toLocaleDateString(lang.code, { weekday: style }));
+  return capitalize(formatDate(lang.code, new Date(2026, 0, 5 + index), { weekday: style }));
 }
 
 function capitalize(text: string) {

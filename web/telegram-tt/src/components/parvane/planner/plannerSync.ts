@@ -217,8 +217,62 @@ function healthGoalsChange(goals: PlannerHealthGoals): PlannerChange {
   };
 }
 
-/** JSON движка → состояние для экранов. */
-export function fromEngineState(engine: EngineState): PlannerState {
+// JSON записи считается один раз на объект: записи состояния не меняются на месте (правка идёт по глубокой
+// копии), поэтому по нему и сравниваются версии одной записи — при разборе состояния движка и в `diffChanges`
+const jsonByObject = new WeakMap<object, string>();
+
+/** `JSON.stringify` объекта записи с кэшем по самому объекту. */
+export function stableJson(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value);
+  let json = jsonByObject.get(value);
+  if (json === undefined) {
+    json = JSON.stringify(value);
+    jsonByObject.set(value, json);
+  }
+  return json;
+}
+
+// Записи с тем же id и тем же JSON берутся из прежнего состояния: строки и клетки, обёрнутые в `memo`, после эха
+// движка не перерисовываются, а индексы по записям (`WeakMap`) продолжают действовать
+function reuseById<T extends { id: string }>(next: T[], previous: T[] | undefined): T[] {
+  if (!previous) return next;
+  if (!next.length || !previous.length) return next.length === previous.length ? previous : next;
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  let isSame = previous.length === next.length;
+  const result = next.map((item, index) => {
+    const before = byId.get(item.id);
+    const kept = before && stableJson(before) === stableJson(item) ? before : item;
+    if (kept !== previous[index]) isSame = false;
+    return kept;
+  });
+  return isSame ? previous : result;
+}
+
+function reuseByKey<T extends object>(
+  next: Record<string, T>, previous: Record<string, T> | undefined,
+): Record<string, T> {
+  if (!previous) return next;
+  const nextKeys = Object.keys(next);
+  let isSame = nextKeys.length === Object.keys(previous).length;
+  const result: Record<string, T> = {};
+  nextKeys.forEach((key) => {
+    const before = previous[key];
+    const kept = before && stableJson(before) === stableJson(next[key]) ? before : next[key];
+    if (kept !== before) isSame = false;
+    result[key] = kept;
+  });
+  return isSame ? previous : result;
+}
+
+function reuseValue<T>(next: T, previous: T | undefined): T {
+  return previous !== undefined && stableJson(previous) === stableJson(next) ? previous : next;
+}
+
+/**
+ * JSON движка → состояние для экранов. `previous` — прежнее состояние экранов: записи, не изменившиеся по
+ * JSON, берутся из него теми же объектами.
+ */
+export function fromEngineState(engine: EngineState, previous?: PlannerState): PlannerState {
   const empty = createEmptyPlannerState();
   const sorted = [...engine.lists].sort((a, b) => a.order - b.order || (a.name < b.name ? -1 : 1));
   // Задачи находят список по id, поэтому одноимённые списки (созданы на двух устройствах
@@ -260,7 +314,7 @@ export function fromEngineState(engine: EngineState): PlannerState {
   const s = engine.settings;
   const goals = goalValuesFrom(engine.goals);
   const healthGoalsRecord = engine.health?.find((record) => record.id === HEALTH_GOALS_ID);
-  return {
+  const built: PlannerState = {
     version: 1,
     tasks,
     events: engine.events.map((e): PlannerEvent => {
@@ -302,6 +356,22 @@ export function fromEngineState(engine: EngineState): PlannerState {
       ...line, isHidden: hidden,
     }))),
   };
+  if (!previous) return built;
+  return {
+    ...built,
+    tasks: reuseById(built.tasks, previous.tasks),
+    events: reuseById(built.events, previous.events),
+    lists: reuseById(built.lists, previous.lists),
+    projects: reuseValue(built.projects, previous.projects),
+    nutrition: reuseByKey(built.nutrition, previous.nutrition),
+    goals: reuseValue(built.goals, previous.goals),
+    goalPeriods: reuseById(built.goalPeriods, previous.goalPeriods),
+    settings: reuseValue(built.settings, previous.settings),
+    health: reuseById(built.health, previous.health),
+    healthGoals: reuseValue(built.healthGoals, previous.healthGoals),
+    learned: reuseById(built.learned, previous.learned),
+    quickLines: reuseById(built.quickLines, previous.quickLines),
+  };
 }
 
 /**
@@ -334,8 +404,10 @@ function repeatOf(repeat: PlannerRepeat | undefined) {
 
 // Движок сливает экземпляры по дню — уходят только изменённые дни
 function occurrencesOf(next: PlannerOccurrence[] | undefined, previous: PlannerOccurrence[] | undefined) {
-  return (next || [])
-    .filter((o) => JSON.stringify(previous?.find((p) => p.day === o.day)) !== JSON.stringify(o))
+  if (!next?.length) return [];
+  const before = new Map((previous || []).map((o) => [o.day, o]));
+  return next
+    .filter((o) => stableJson(before.get(o.day)) !== stableJson(o))
     .map((o) => ({ day: o.day, excluded: Boolean(o.excluded), done: Boolean(o.done), doneSteps: o.doneSteps || [] }));
 }
 
@@ -426,16 +498,18 @@ function entryOf(e: PlannerFoodEntry) {
 
 function dayChange(day: string, d: PlannerNutritionDay, previous?: PlannerNutritionDay): PlannerChange {
   const entries: unknown[] = [];
+  const beforeById = new Map((previous?.entries || []).map((p) => [p.id, p]));
+  const afterIds = new Set(d.entries.map((e) => e.id));
   d.entries.forEach((e) => {
-    const before = previous?.entries.find((p) => p.id === e.id);
-    if (!before || JSON.stringify(before) !== JSON.stringify(e)) entries.push(entryOf(e));
+    const before = beforeById.get(e.id);
+    if (!before || stableJson(before) !== stableJson(e)) entries.push(entryOf(e));
   });
   previous?.entries.forEach((p) => {
-    if (!d.entries.some((e) => e.id === p.id)) entries.push({ id: p.id, deleted: true });
+    if (!afterIds.has(p.id)) entries.push({ id: p.id, deleted: true });
   });
   const change: Record<string, unknown> = { day, entries };
   if (!previous || previous.isComplete !== d.isComplete) change.isComplete = d.isComplete;
-  if (!previous || JSON.stringify(previous.fixedGoals) !== JSON.stringify(d.fixedGoals)) {
+  if (!previous || stableJson(previous.fixedGoals) !== stableJson(d.fixedGoals)) {
     change.fixedGoals = d.fixedGoals ? goalsOf(d.fixedGoals) : null;
   }
   if (!previous || previous.waterMl !== d.waterMl) change.waterMl = d.waterMl === undefined ? null : d.waterMl;
@@ -492,94 +566,70 @@ function onlyChanged(kind: 'task' | 'event' | 'list', change: PlannerChange, bef
 
 export function diffChanges(previous: PlannerState, next: PlannerState): PlannerChange[] {
   const changes: PlannerChange[] = [];
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  // Тот же объект (запись переиспользована из прежнего состояния) — без сериализации
+  const same = (a: unknown, b: unknown) => a === b || stableJson(a) === stableJson(b);
+  // Коллекция по id: изменившиеся и новые — в порядке нового состояния, пропавшие — в порядке прежнего
+  const diffById = <T extends { id: string }>(
+    nextItems: T[], previousItems: T[],
+    onChanged: (item: T, before?: T) => void, onDeleted: (item: T) => void,
+  ) => {
+    if (nextItems === previousItems) return;
+    const before = new Map(previousItems.map((item) => [item.id, item]));
+    const after = new Set<string>();
+    nextItems.forEach((item) => {
+      after.add(item.id);
+      const old = before.get(item.id);
+      if (!old || !same(old, item)) onChanged(item, old);
+    });
+    previousItems.forEach((item) => {
+      if (!after.has(item.id)) onDeleted(item);
+    });
+  };
 
-  next.lists.forEach((list) => {
-    const before = previous.lists.find((l) => l.id === list.id);
-    if (!before || !same(before, list)) {
-      changes.push(onlyChanged('list', listChange(list), before && listChange(before)));
-    }
-  });
-  previous.lists.forEach((list) => {
-    if (!next.lists.some((l) => l.id === list.id)) changes.push({ list: { id: list.id, deleted: true } });
-  });
+  diffById(next.lists, previous.lists, (list, before) => {
+    changes.push(onlyChanged('list', listChange(list), before && listChange(before)));
+  }, (list) => changes.push({ list: { id: list.id, deleted: true } }));
 
-  next.tasks.forEach((task) => {
-    const before = previous.tasks.find((t) => t.id === task.id);
-    if (!before || !same(before, task)) {
-      changes.push(onlyChanged('task', taskChange(next, task, before), before && taskChange(previous, before)));
-    }
-  });
-  previous.tasks.forEach((task) => {
-    if (!next.tasks.some((t) => t.id === task.id)) changes.push({ task: { id: task.id, deleted: true } });
-  });
+  diffById(next.tasks, previous.tasks, (task, before) => {
+    changes.push(onlyChanged('task', taskChange(next, task, before), before && taskChange(previous, before)));
+  }, (task) => changes.push({ task: { id: task.id, deleted: true } }));
 
-  next.events.forEach((event) => {
-    const before = previous.events.find((e) => e.id === event.id);
-    if (!before || !same(before, event)) {
-      changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
-    }
-  });
-  previous.events.forEach((event) => {
-    if (!next.events.some((e) => e.id === event.id)) changes.push({ event: { id: event.id, deleted: true } });
-  });
+  diffById(next.events, previous.events, (event, before) => {
+    changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
+  }, (event) => changes.push({ event: { id: event.id, deleted: true } }));
 
-  Object.entries(next.nutrition).forEach(([day, record]) => {
-    const before = previous.nutrition[day];
-    if (!before || !same(before, record)) changes.push(dayChange(day, record, before));
-  });
-  Object.entries(previous.nutrition).forEach(([day, record]) => {
-    if (!next.nutrition[day]) {
-      changes.push(dayChange(day, { entries: [], isComplete: false }, record));
-    }
-  });
+  if (next.nutrition !== previous.nutrition) {
+    Object.entries(next.nutrition).forEach(([day, record]) => {
+      const before = previous.nutrition[day];
+      if (!before || !same(before, record)) changes.push(dayChange(day, record, before));
+    });
+    Object.entries(previous.nutrition).forEach(([day, record]) => {
+      if (!next.nutrition[day]) {
+        changes.push(dayChange(day, { entries: [], isComplete: false }, record));
+      }
+    });
+  }
 
   if (!same(previous.settings, next.settings) || previous.budget !== next.budget) changes.push(settingsChange(next));
   if (!same(previous.goals, next.goals)) changes.push({ goals: goalsOf(next.goals) });
 
-  next.goalPeriods.forEach((record) => {
-    const before = previous.goalPeriods.find((r) => r.id === record.id);
-    if (!before || !same(before, record)) changes.push(goalPeriodChange(record));
-  });
-  previous.goalPeriods.forEach((record) => {
-    if (!next.goalPeriods.some((r) => r.id === record.id)) {
-      changes.push({ goalPeriod: { id: record.id, deleted: true } });
-    }
-  });
+  diffById(next.goalPeriods, previous.goalPeriods, (record) => {
+    changes.push(goalPeriodChange(record));
+  }, (record) => changes.push({ goalPeriod: { id: record.id, deleted: true } }));
 
-  next.health.forEach((record) => {
-    const before = previous.health.find((r) => r.id === record.id);
-    if (!before || !same(before, record)) changes.push(healthChange(record));
-  });
-  previous.health.forEach((record) => {
-    if (!next.health.some((r) => r.id === record.id)) changes.push({ health: { id: record.id, deleted: true } });
-  });
+  diffById(next.health, previous.health, (record) => {
+    changes.push(healthChange(record));
+  }, (record) => changes.push({ health: { id: record.id, deleted: true } }));
   if (!same(previous.healthGoals, next.healthGoals)) changes.push(healthGoalsChange(next.healthGoals));
 
-  if (previous.learned !== next.learned) {
-    const learnedBefore = new Map(previous.learned.map((word) => [word.id, word]));
-    const learnedAfter = new Set(next.learned.map((word) => word.id));
-    next.learned.forEach((word) => {
-      const before = learnedBefore.get(word.id);
-      if (!before || !same(before, word)) changes.push(learnedChange(word, before));
-    });
-    previous.learned.forEach((word) => {
-      if (!learnedAfter.has(word.id)) changes.push({ learned: { id: word.id, deleted: true } });
-    });
-  }
+  diffById(next.learned, previous.learned, (word, before) => {
+    changes.push(learnedChange(word, before));
+  }, (word) => changes.push({ learned: { id: word.id, deleted: true } }));
 
   // История ввода текстом: запись уходит целиком (движок сводит её одним регистром), пропавшая — надгробием
-  if (previous.quickLines !== next.quickLines) {
-    const linesBefore = new Map(previous.quickLines.map((line) => [line.id, line]));
-    const linesAfter = new Set(next.quickLines.map((line) => line.id));
-    next.quickLines.forEach((line) => {
-      const before = linesBefore.get(line.id);
-      if (!before || !same(before, line)) changes.push(quickLineChange(line));
-    });
-    previous.quickLines.forEach((line) => {
-      if (!linesAfter.has(line.id)) changes.push({ quickLine: { id: line.id, deleted: true } });
-    });
-  }
+  diffById(next.quickLines, previous.quickLines, (line) => {
+    changes.push(quickLineChange(line));
+  }, (line) => changes.push({ quickLine: { id: line.id, deleted: true } }));
   return changes;
 }
 

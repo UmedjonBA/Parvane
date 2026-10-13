@@ -1,3 +1,5 @@
+import type { PlannerCalendarView } from '../components/parvane/planner/plannerModel';
+
 import { createSignal } from './signals';
 
 // Parvane (spec 009): раздел приложения, выбранный в нижней части боковой
@@ -66,7 +68,25 @@ function readCalendarSide(): PlannerCalendarSide {
 const [getPlannerView, setPlannerViewSignal] = createSignal<PlannerView>(readPlannerView());
 let calendarSide = readCalendarSide();
 
-export { getParvaneSection, getPlannerAddRequest, getPlannerView };
+// Выбранный день «Плана» и вид календаря — в сигналах, а не в состоянии раздела: при переключении разделов
+// раздел размонтируется, и при возврате открывается на том же дне и виде. Нет значения — «сегодня» и
+// сохранённый на устройстве вид (их знает сам раздел)
+const [getPlannerPickedDay, setPlannerPickedDaySignal] = createSignal<string | undefined>(undefined);
+const [getPlannerCalendarView, setPlannerCalendarViewSignal] = createSignal<PlannerCalendarView | undefined>(
+  undefined,
+);
+
+export {
+  getParvaneSection, getPlannerAddRequest, getPlannerView, getPlannerPickedDay, getPlannerCalendarView,
+};
+
+export function setPlannerPickedDay(day: string) {
+  setPlannerPickedDaySignal(day);
+}
+
+export function setPlannerCalendarView(view: PlannerCalendarView) {
+  setPlannerCalendarViewSignal(view);
+}
 
 export function setPlannerView(view: PlannerView) {
   setPlannerViewSignal(view);

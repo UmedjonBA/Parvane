@@ -1,9 +1,9 @@
 import {
-  memo, useEffect, useRef, useState,
+  memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { PlannerLayers } from './plannerLayers';
-import type { PlannerEvent, PlannerState } from './plannerModel';
+import type { PlannerDayIndexEntry, PlannerEvent, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import {
@@ -12,8 +12,8 @@ import {
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
 import {
-  addDays, fromDayKey, getDayLoad, getDeadlines, getEventsForDay, getListColor, getNutrientTotal, getTasksForDay,
-  getTimedForDay, instanceKey, isHolidayOn, layoutTimed, MINUTES_IN_DAY, toMinutes, toTime,
+  addDays, fromDayKey, getDayRange, getListColor, getNutrientTotal, instanceKey, layoutTimed, MINUTES_IN_DAY,
+  toMinutes, toTime,
 } from './plannerModel';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
@@ -55,6 +55,10 @@ const CREATE_MINUTES = 60;
 // Сетка открывается чуть выше начала дня (либо текущего часа), а не вплотную к нему
 const SCROLL_LEAD_HOURS = 0.3;
 const NOW_LEAD_HOURS = 2;
+const EMPTY_ENTRY: PlannerDayIndexEntry = {
+  tasks: [], events: [], deadlines: [], isHoliday: false, minutes: 0, timed: [], untimed: [], allDay: [],
+  conflicts: 0, unrated: 0,
+};
 
 function getNowMinutes() {
   const now = new Date();
@@ -85,36 +89,44 @@ const PlannerWeek = ({
   const scrollRef = useRef<HTMLDivElement>();
   const [nowMinutes, setNowMinutes] = useState(getNowMinutes);
 
-  useInterval(() => setNowMinutes(getNowMinutes()), MINUTE_MS, true);
-
   const isSingle = days.length === 1;
   const hourRem = isSingle ? HOUR_REM_SINGLE : HOUR_REM;
   const { dayStart, dayEnd } = state.settings;
+  const firstDay = days[0];
+  const hasToday = days.includes(today);
 
-  const columns = days.map((day) => {
-    const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
-    const nextSleep = layers.sleep ? getDailyRecord(state, 'sleep', addDays(day, 1)) : undefined;
-    // Лёг до полуночи — вечер этого дня тоже сон
-    const bedtime = nextSleep?.time && nextSleep.endTime && nextSleep.time > nextSleep.endTime
-      ? toMinutes(nextSleep.time) : undefined;
-    return {
-      day,
-      layout: layers.work ? layoutTimed(getTimedForDay(state, day)) : [],
-      allDay: layers.work ? getEventsForDay(state, day).filter((event) => event.isAllDay) : [],
-      untimed: layers.work
-        ? getTasksForDay(state, day).filter((task) => !task.start || task.minutes === undefined) : [],
-      deadlines: layers.work ? getDeadlines(state, day) : [],
-      meals: layers.food ? (state.nutrition[day]?.entries || []).filter((entry) => entry.time) : [],
-      kcal: layers.food ? Math.round(getNutrientTotal(state, day, 'kcal').value) : 0,
-      sleep,
-      wake: sleep?.endTime ? toMinutes(sleep.endTime) : undefined,
-      bedtime,
-      isShort: isShortSleep(state, day),
-      isHoliday: isHolidayOn(state, day),
-      load: getDayLoad(state, day),
-      budget: getDayBudget(state, day),
-    };
-  });
+  // Черта «сейчас» идёт по минутам, только пока сегодняшний день на экране
+  useInterval(() => setNowMinutes(getNowMinutes()), hasToday ? MINUTE_MS : undefined, true);
+
+  // Дела колонок — из индекса дней (один проход по записям на неделю); пересчёт только при смене
+  // состояния, дней либо слоёв
+  const columns = useMemo(() => {
+    const index = getDayRange(state, firstDay, days[days.length - 1]);
+    return days.map((day) => {
+      const entry = index.get(day) || EMPTY_ENTRY;
+      const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
+      const nextSleep = layers.sleep ? getDailyRecord(state, 'sleep', addDays(day, 1)) : undefined;
+      // Лёг до полуночи — вечер этого дня тоже сон
+      const bedtime = nextSleep?.time && nextSleep.endTime && nextSleep.time > nextSleep.endTime
+        ? toMinutes(nextSleep.time) : undefined;
+      return {
+        day,
+        layout: layers.work ? layoutTimed(entry.timed) : [],
+        allDay: layers.work ? entry.allDay : [],
+        untimed: layers.work ? entry.untimed : [],
+        deadlines: layers.work ? entry.deadlines : [],
+        meals: layers.food ? (state.nutrition[day]?.entries || []).filter((item) => item.time) : [],
+        kcal: layers.food ? Math.round(getNutrientTotal(state, day, 'kcal').value) : 0,
+        sleep,
+        wake: sleep?.endTime ? toMinutes(sleep.endTime) : undefined,
+        bedtime,
+        isShort: isShortSleep(state, day),
+        isHoliday: entry.isHoliday,
+        load: entry.minutes,
+        budget: getDayBudget(state, day),
+      };
+    });
+  }, [state, days, firstDay, layers]);
   // Сетка начинается за час до начала дня и покрывает всё, что выходит за окна дня
   const starts = columns.flatMap((column) => [
     ...column.layout.map(({ item }) => toMinutes(item.start)),
@@ -140,9 +152,6 @@ const PlannerWeek = ({
   const hasMorningSleep = (sleep?: { endTime?: string }) => (
     Boolean(sleep?.endTime && toMinutes(sleep.endTime) > gridStart)
   );
-  const firstDay = days[0];
-  const hasToday = days.includes(today);
-
   // Неделя открывается на начале дня, а текущая — за пару часов до «сейчас». Сетка одного дня листается
   // вместе со страницей
   useEffect(() => {

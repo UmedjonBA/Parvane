@@ -1,4 +1,3 @@
-import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerTask } from './plannerModel';
@@ -30,8 +29,11 @@ type OwnProps = {
   color?: number;
   // Строка стоит на экране своего списка — список в подписи не повторяется
   noProject?: boolean;
-  // Справа от строки (кнопка назначения дня у задачи без даты)
-  trailing?: TeactNode;
+  // Кнопка справа от строки (назначение дня у задачи без даты): подпись, описание для чтения с экрана и
+  // обработчик — плоскими значениями, чтобы `memo` строки держался (готовый узел был бы новым каждый раз)
+  assignLabel?: string;
+  assignTitle?: string;
+  onAssign?: (taskId: string) => void;
   // `day` — день экземпляра ряда (spec 011)
   onOpen: (taskId: string, day?: string) => void;
 };
@@ -41,7 +43,7 @@ const DUE_SOON_DAYS = 2;
 
 // Строка задачи: круглая галочка, название, подпись (срок, шаги, повтор, заметки), справа — время и оценка
 const PlannerTaskRow = ({
-  task, context, color, noProject, trailing, onOpen,
+  task, context, color, noProject, assignLabel, assignTitle, onAssign, onOpen,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -58,6 +60,10 @@ const PlannerTaskRow = ({
 
   const handleOpen = useLastCallback(() => {
     onOpen(task.id, task.instanceDay);
+  });
+
+  const handleAssign = useLastCallback(() => {
+    onAssign?.(task.id);
   });
 
   const handleDragStart = useLastCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -129,7 +135,17 @@ const PlannerTaskRow = ({
         )}
       </button>
       {Boolean(meta) && <span className={styles.rowMeta}>{meta}</span>}
-      {trailing}
+      {assignLabel !== undefined && (
+        <button
+          type="button"
+          className={buildClassName(styles.btn, styles.btnGhost)}
+          data-task-id={task.id}
+          aria-label={assignTitle}
+          onClick={handleAssign}
+        >
+          {assignLabel}
+        </button>
+      )}
     </div>
   );
 };

@@ -1,11 +1,11 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useMemo } from '../../../lib/teact/teact';
 
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
 import { formatDayLong, formatWeekday } from './plannerFormat';
 import { getDayBudget } from './plannerHealth';
-import { fromDayKey, getDayLoad, isHolidayOn } from './plannerModel';
+import { fromDayKey, getDayRange } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
@@ -34,12 +34,24 @@ const PlannerDayStrip = ({
     onPickDay(e.currentTarget.dataset.day!);
   });
 
+  // Загрузка дней — из индекса недели (его же читает сетка дня под полосой)
+  const cells = useMemo(() => {
+    const index = getDayRange(state, days[0], days[days.length - 1]);
+    return days.map((day) => {
+      const entry = index.get(day);
+      const load = entry?.minutes || 0;
+      const budget = getDayBudget(state, day);
+      return {
+        day, load, budget, isHoliday: Boolean(entry?.isHoliday), fraction: budget ? Math.min(1, load / budget) : 0,
+      };
+    });
+  }, [state, days]);
+
   return (
     <div className={styles.dayStrip} data-day-strip data-swipe="week">
-      {days.map((day, index) => {
-        const load = getDayLoad(state, day);
-        const budget = getDayBudget(state, day);
-        const fraction = budget ? Math.min(1, load / budget) : 0;
+      {cells.map(({
+        day, load, budget, isHoliday, fraction,
+      }, index) => {
         return (
           <button
             key={day}
@@ -48,7 +60,7 @@ const PlannerDayStrip = ({
               styles.dayStripDay,
               day === today && styles.dayStripToday,
               day === picked && styles.dayStripPicked,
-              isHolidayOn(state, day) && styles.dayStripHoliday,
+              isHoliday && styles.dayStripHoliday,
             )}
             data-day={day}
             aria-pressed={day === picked}

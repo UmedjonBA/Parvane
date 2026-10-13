@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, onFullyIdle, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { IconName } from '../../../types/icons';
@@ -10,6 +10,7 @@ import type {
   QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
 } from './plannerQuick';
 import type { LearnStore } from './plannerQuickLearn';
+import type { QuickCandidate, QuickHistory } from './plannerQuickSuggest';
 
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
@@ -134,6 +135,10 @@ const NAME_MAX_LENGTH = 160;
 const INPUT_MAX_LENGTH = 300;
 const FOCUS_DELAY_MS = 200;
 const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
+// Столько строк истории и записей «Плана» разбираются сразу при открытии; больше — сначала показываются
+// примеры, полный список собирается, когда окно показано и браузер свободен
+const SYNC_CANDIDATES_LIMIT = 120;
+const EMPTY_HISTORY: QuickHistory = { tick: 0, lines: [], hidden: [] };
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
@@ -197,8 +202,15 @@ const PlannerQuickInput = ({
     learned,
   }));
 
-  // Разбор дешёвый (доли миллисекунды) — считается на каждой перерисовке
-  const draft = parse(text);
+  // Черновик — по строке и выбору пользователя; при закрытом окне не разбирается (пока окно уходит, показан
+  // прежний)
+  const draftRef = useRef<QuickDraft>();
+  const draft = useMemo(() => {
+    if (isOpen || !draftRef.current) draftRef.current = parse(text);
+    return draftRef.current;
+    // `parse` читает ровно эти значения
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  }, [isOpen, text, choice, skip, pick, learned, today, settings, lang]);
   const chips = useMemo(() => buildChips(lang, draft), [lang, draft]);
   const hasText = Boolean(text.trim());
   const isNameTooLong = draft.name.length > NAME_MAX_LENGTH;
@@ -312,19 +324,47 @@ const PlannerQuickInput = ({
 
   // Примеры — на языке интерфейса: их разбирает словарь того же языка
   const examples = useMemo(() => lang('PlannerQuickExamples').split(/\s*\|\s*/).filter(Boolean), [lang]);
-  // Кандидаты собираются при открытии окна (каждая строка проходит разбор), набор текста их только фильтрует
-  const candidates = useMemo(() => {
+  // Кандидаты собираются при открытии окна (каждая строка проходит разбор), набор текста их только фильтрует.
+  // Данные «Плана» без изменений приходят теми же объектами (C1), поэтому перечитка состояния список не
+  // пересобирает; разбор строк кэширует `buildCandidates`. Небольшие данные собираются сразу; большие —
+  // сначала примеры, полный список — когда окно показано и браузер свободен
+  const sources = useMemo(() => {
     if (!isOpen) return undefined;
     // История из данных «Плана» вместе с ещё не перенесённой записью устройства; «План» её не ведёт —
     // только запись устройства
     const local = readHistory(userId);
     const history = quickLines ? mergeHistories(historyFromLines(quickLines), local) : local;
-    return buildCandidates({
-      history, tasks, events, examples,
-    }, { ...baseContext(), learned });
+    return {
+      sources: {
+        history, tasks, events, examples,
+      },
+      ctx: { ...baseContext(), learned },
+      isHeavy: history.lines.length + tasks.length + events.length > SYNC_CANDIDATES_LIMIT,
+    };
     // Номер правки истории — зависимость: запись устройства лежит в его хранилище, а не в состоянии
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [isOpen, userId, quickLines, tasks, events, examples, learned, historyVersion]);
+  const quickCandidates = useMemo(() => {
+    if (!sources) return undefined;
+    return sources.isHeavy
+      ? buildCandidates({
+        ...sources.sources, history: EMPTY_HISTORY, tasks: [], events: [],
+      }, sources.ctx)
+      : buildCandidates(sources.sources, sources.ctx);
+  }, [sources]);
+  const [idleCandidates, setIdleCandidates] = useState<QuickCandidate[] | undefined>();
+  useEffect(() => {
+    setIdleCandidates(undefined);
+    if (!sources?.isHeavy) return undefined;
+    let isStale = false;
+    onFullyIdle(() => {
+      if (!isStale) setIdleCandidates(buildCandidates(sources.sources, sources.ctx));
+    });
+    return () => {
+      isStale = true;
+    };
+  }, [sources]);
+  const candidates = idleCandidates || quickCandidates;
   const suggestions = useMemo(() => (candidates ? filterSuggestions(text, candidates) : []), [candidates, text]);
   const hasExamples = suggestions.some(({ source }) => source === 'example');
   const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');

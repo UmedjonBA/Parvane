@@ -733,7 +733,17 @@ function compile(id: QuickLang, words: QuickWords) {
 
 type Lang = ReturnType<typeof compile>;
 
-const LANGS: Record<QuickLang, Lang> = { ru: compile('ru', WORDS.ru), en: compile('en', WORDS.en) };
+// Словарь языка компилируется при первом разборе, а не при загрузке модуля (десятки регулярных выражений)
+const LANGS: Partial<Record<QuickLang, Lang>> = {};
+
+function langOf(id: QuickLang): Lang {
+  let lang = LANGS[id];
+  if (!lang) {
+    lang = compile(id, WORDS[id]);
+    LANGS[id] = lang;
+  }
+  return lang;
+}
 
 // Язык словаря по коду языка интерфейса
 export function getQuickLang(code?: string): QuickLang {
@@ -743,7 +753,7 @@ export function getQuickLang(code?: string): QuickLang {
 /** Обычная длительность события по первому слову названия: её разбор подставит сам, когда она не названа. */
 export function quickUsualMinutes(name: string, lang: QuickLang) {
   const head = maskNameLinks(name).text.toLowerCase().replace(/ё/g, 'е');
-  return LANGS[lang].eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
+  return langOf(lang).eventMinutes.find(([pattern]) => pattern.test(head))?.[1] || DEFAULT_EVENT_MINUTES;
 }
 
 function toNumber(value: string) {
@@ -878,10 +888,10 @@ function parseMasked(text: string, ctx: QuickContext): QuickDraft {
   const lang = ctx.lang || 'ru';
   const other: QuickLang = lang === 'ru' ? 'en' : 'ru';
   const has: Record<QuickLang, boolean> = { ru: /[а-яё]/i.test(text), en: /[a-z]/i.test(text) };
-  if (!has[other]) return parseLine(text, ctx, LANGS[lang]);
-  if (!has[lang]) return parseLine(text, ctx, LANGS[other]);
-  const own = parseLine(text, ctx, LANGS[lang]);
-  const foreign = parseLine(text, ctx, LANGS[other]);
+  if (!has[other]) return parseLine(text, ctx, langOf(lang));
+  if (!has[lang]) return parseLine(text, ctx, langOf(other));
+  const own = parseLine(text, ctx, langOf(lang));
+  const foreign = parseLine(text, ctx, langOf(other));
   return recognisedCount(foreign) > recognisedCount(own) ? foreign : own;
 }
 
