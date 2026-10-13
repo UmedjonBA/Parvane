@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import {
+  afterEach, beforeEach, describe, expect, it, vi,
+} from 'vitest';
 
-import { diagLog, getDiagEntries, summarize } from './parvaneDiag';
+import {
+  diagLog, flushDiag, getDiagEntries, summarize,
+} from './parvaneDiag';
 
 describe('parvaneDiag summarize', () => {
   it('never journals a top-level string argument verbatim (passwords)', () => {
@@ -23,5 +27,34 @@ describe('parvaneDiag summarize', () => {
     expect(out).toContain('user:len=11');
     expect(out).toContain('chatId:"42"');
     expect(out).not.toContain('top-secret');
+  });
+});
+
+describe('parvaneDiag persistence (perf A12)', () => {
+  const setItem = vi.fn();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Среда теста без localStorage — подменяем хранилище целиком
+    vi.stubGlobal('localStorage', { getItem: () => undefined, setItem, removeItem: () => undefined });
+    // Отложенная запись прежних тестов (реальный таймер) — дописать и забыть
+    flushDiag();
+    setItem.mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('does not touch localStorage synchronously and coalesces a burst into one deferred write', () => {
+    for (let i = 0; i < 50; i++) diagLog('act:test', { chatId: String(i) });
+    expect(setItem).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(4999);
+    expect(setItem).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    // без requestIdleCallback — запись сразу по таймеру
+    expect(setItem).toHaveBeenCalledTimes(1);
+    // Нечего дописывать — повторной записи нет
+    flushDiag();
+    expect(setItem).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,7 @@ import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
+import { createBatchedResolver } from './batchedResolver';
 import { isContentAllowedForMember } from './groups';
 import { readPollFields } from './polls';
 import { buildWebPage, compareStoredOrder, type ParvaneStore } from './store';
@@ -40,6 +41,8 @@ type SyncDependencies = {
     removeOwnJournalEntries: (uuids: string[]) => Promise<void>;
     scheduleTtlDeletion: (chatId: string, messageId: number, ttlSecs: number) => void;
     isBlocked: (address: string) => boolean;
+    // Блок-лист целиком — раз на проход восстановления (perf A3)
+    loadBlocked?: () => string[];
     loadNotifyExceptions: () => Record<string, Record<string, unknown>>;
     saveNotifyExceptions: (map: Record<string, Record<string, unknown>>) => void;
     loadNotifyDefaults: () => Record<string, Record<string, unknown>>;
@@ -54,12 +57,18 @@ type SyncDependencies = {
   taskOffers: TaskOfferStore;
   refreshTaskOfferMessage: (uuid: string) => void;
   rememberSavedGif: (gif: ApiVideo) => void;
+  // perf A2: индекс строк истории по uuid для мутаций v2 — наполняется здесь
+  rememberStored?: (stored: WireStoredMessage) => void;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
 };
 
 type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: string };
 const MS_IN_SECOND = 1000;
+// perf A3: имена и профили — одним запросом списком за окно сбора, с памятью
+const NAMES_BATCH_DELAY_MS = 200;
+const NAMES_TTL_MS = 10 * 60 * 1000;
+const NAMES_CHUNK = 100;
 
 export function createSyncController(deps: SyncDependencies) {
   let isSynced = false;
@@ -68,6 +77,11 @@ export function createSyncController(deps: SyncDependencies) {
   const readOutboxMaxByChatId = new Map<string, number>();
   const reportedReadUuids = new Set<string>();
   const announcedThreadChatIds = new Set<string>();
+  // Собеседники, уже объявленные UI (updateUser/updateChat) в этой сессии
+  const announcedPeers = new Set<string>();
+  const names = createBatchedResolver({
+    delayMs: NAMES_BATCH_DELAY_MS, ttlMs: NAMES_TTL_MS, chunk: NAMES_CHUNK, resolve: fetchProfiles,
+  });
 
   const buildWireFlags = (stored: WireStoredMessage): WireFlags => ({
     read: Boolean(stored.read),
@@ -81,6 +95,8 @@ export function createSyncController(deps: SyncDependencies) {
     syncPromise = undefined;
     wireFlagsByUuid.clear();
     announcedThreadChatIds.clear();
+    announcedPeers.clear();
+    names.reset();
     inFlightByUuid.clear();
     readOutboxMaxByChatId.clear();
     reportedReadUuids.clear();
@@ -159,17 +175,34 @@ export function createSyncController(deps: SyncDependencies) {
     return store.getIdForAddress(chatAddress, store.isGroupAddress(chatAddress) ? 'group' : 'user');
   }
 
-  async function resolveDisplayNames(addresses: string[]) {
+  /** Имена и профили адресов: пачкой за окно сбора, повтор не раньше TTL
+   * (`force` — профиль открыт, перечитать сейчас). Ответ не критичен. */
+  function resolveDisplayNames(addresses: string[], force?: boolean) {
+    const store = deps.getStore();
+    return names.request(addresses.filter((address) => !store.isGroupAddress(address)), force);
+  }
+
+  async function fetchProfiles(addresses: string[]) {
     if (!addresses.length) return;
+    const connection = deps.getConnection();
+    if (!connection) return;
+    const raw = await connection.request(
+      TOPIC_IDENTITY_RESOLVE,
+      JSON.stringify({ usernames: addresses }),
+    );
     try {
-      const raw = await deps.getConnection()!.request(
-        TOPIC_IDENTITY_RESOLVE,
-        JSON.stringify({ usernames: addresses }),
-      );
       const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
       const store = deps.getStore();
       users.forEach((userInfo) => {
+        const previousName = store.getDisplayName(userInfo.username);
         store.setDisplayName(userInfo.username, userInfo.display_name || userInfo.username);
+        // Имя сменилось (или только что узнали): список чатов и шапки берут
+        // его из объекта пользователя — раньше список ждал этот ответ целиком,
+        // теперь он не блокирует старт, а имя доезжает апдейтом
+        if (store.getDisplayName(userInfo.username) !== previousName) {
+          const user = store.buildApiUser(userInfo.username);
+          deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+        }
         const previousProfile = store.getProfile(userInfo.username);
         const profile = {
           bio: userInfo.bio,
@@ -213,7 +246,7 @@ export function createSyncController(deps: SyncDependencies) {
         }
       });
     } catch {
-      // Имена не критичны — показываем локальную часть адреса.
+      // Ответ не разобран — имена не критичны, показываем локальную часть адреса
     }
   }
 
@@ -246,9 +279,12 @@ export function createSyncController(deps: SyncDependencies) {
     deps.log(`ключ безопасности ${address} изменился`);
   }
 
+  // Собеседник в UI: объекты пользователя и чата, тред — один раз за сессию
+  // (perf A3; раньше — на каждое входящее, с запросом имени по сети)
   function announcePeer(address: string) {
     const store = deps.getStore();
-    if (store.isGroupAddress(address)) return;
+    if (store.isGroupAddress(address) || announcedPeers.has(address)) return;
+    announcedPeers.add(address);
     const user = store.buildApiUser(address);
     deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
     deps.sendUpdate({ '@type': 'updateChat', id: user.id, chat: store.buildApiChatForUser(address) });
@@ -313,8 +349,7 @@ export function createSyncController(deps: SyncDependencies) {
   // Чат очищен «у себя» (T145) позже этого сообщения. Сервер v1 очищенное не
   // присылает сам, а копия v2 (эхо своего сообщения, повтор доставки) приходит
   // мимо него — без отсева она воскрешала только что удалённый чат
-  function isClearedForMe(stored: WireStoredMessage) {
-    const clearedUntil = deps.localState.loadClearedUntil?.();
+  function isClearedForMe(stored: WireStoredMessage, clearedUntil = deps.localState.loadClearedUntil?.()) {
     if (!clearedUntil) return false;
     const until = clearedUntil[deps.getStore().resolveChatAddress(stored)];
     return Boolean(until) && stored.ts * MS_IN_SECOND <= until;
@@ -463,6 +498,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
     handleTaskOfferContent(stored);
     deps.media.rememberKeys(stored.content);
+    deps.rememberStored?.(stored);
     const previousFlags = wireFlagsByUuid.get(stored.id);
     const flags = buildWireFlags(stored);
     wireFlagsByUuid.set(stored.id, flags);
@@ -554,7 +590,10 @@ export function createSyncController(deps: SyncDependencies) {
   }
 
   // История — из локального кэша (расшифрованные строки) и журнала исходящих;
-  // сервер v2 хранит только недоставленное, его отдаёт движок (`applyExternal`)
+  // сервер v2 хранит только недоставленное, его отдаёт движок (`applyExternal`).
+  // perf A3: строки кладутся прямо в стор, без `newMessage` на каждую — список
+  // чатов, последние сообщения и счётчики UI забирает `fetchChats`/`fetchMessages`
+  // из стора (как и Telegram); блок-лист и границы очистки читаются раз на проход
   async function restoreFromCache(): Promise<boolean> {
     const records = await deps.localState.loadHistoryRecords();
     if (!records.length) return false;
@@ -565,21 +604,54 @@ export function createSyncController(deps: SyncDependencies) {
     const savedNotes = (await deps.localState.readOwnJournal())
       .filter((message) => message.to === store.self && !knownIds.has(message.id));
     const ordered = records.concat(savedNotes).sort(compareStoredOrder);
-    for (const stored of ordered) {
-      await applyStoredUpdate(stored, false);
-    }
-    // Восстановление идёт апдейтами `newMessage`, а tt на каждое чужое сообщение
-    // прибавляет «+1 непрочитанное». Если список чатов уже загружен (чат объявлен
-    // раньше — например, записью о звонке из журнала состояния), исправить счётчик
-    // больше некому: возвращаем его к честному значению по стору
+    const blocked = new Set(deps.localState.loadBlocked?.() || []);
+    const clearedUntil = deps.localState.loadClearedUntil?.();
+    const nowSecs = Math.floor(Date.now() / 1000);
     const restoredChatIds = new Set<string>();
     ordered.forEach((stored) => {
-      const message = store.getMessageByUuid(stored.id);
+      const message = restoreStored(stored, blocked, clearedUntil, nowSecs);
       if (message && !message.isOutgoing) restoredChatIds.add(message.chatId);
     });
+    // Чат мог быть объявлен раньше восстановления (запись о звонке из журнала
+    // состояния) — его счётчик приводим к честному значению по стору, по разу на чат
     restoredChatIds.forEach((chatId) => pushReadState(chatId));
     deps.log(`история восстановлена из кэша: ${records.length} сообщений`);
     return true;
+  }
+
+  // Строка кэша — в стор (без апдейтов UI). Возвращает сообщение либо undefined,
+  // если строка скрыта (блок, права, очистка, надгробие, служебная)
+  function restoreStored(
+    stored: WireStoredMessage, blocked: Set<string>, clearedUntil: Record<string, number> | undefined, nowSecs: number,
+  ): ApiMessage | undefined {
+    const store = deps.getStore();
+    if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self && blocked.has(stored.from)) {
+      return undefined;
+    }
+    if (isHiddenByGroupPermissions(stored) || isForgedChatMode(stored, stored.origin)) return undefined;
+    if (isClearedForMe(stored, clearedUntil)) return undefined;
+    if (stored.content.kind === 'encrypted' || stored.content.kind === 'group_encrypted') return undefined;
+    if (handlePollContent(stored)) return undefined;
+    handleTaskOfferContent(stored);
+    deps.media.rememberKeys(stored.content);
+    deps.rememberStored?.(stored);
+    wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
+    if (stored.deleted) {
+      deps.localState.deleteHistoryRecord(stored.id);
+      return undefined;
+    }
+    const message = store.buildApiMessage(stored);
+    store.putMessage(message);
+    if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
+    if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
+      const current = readOutboxMaxByChatId.get(message.chatId) || 0;
+      if (message.id > current) readOutboxMaxByChatId.set(message.chatId, message.id);
+    }
+    if (stored.content.ttl_secs) {
+      const remaining = stored.content.ttl_secs - (nowSecs - stored.ts);
+      deps.localState.scheduleTtlDeletion(message.chatId, message.id, Math.max(0, remaining));
+    }
+    return message;
   }
 
   async function runFullSync() {
@@ -588,7 +660,8 @@ export function createSyncController(deps: SyncDependencies) {
 
     if (await restoreFromCache()) {
       isSynced = true;
-      await resolveDisplayNames(store.getKnownUserAddresses().filter((address) => address !== store.self));
+      // Имена — в фоне: список чатов сети не ждёт, имя доедет апдейтом
+      void resolveDisplayNames(store.getKnownUserAddresses().filter((address) => address !== store.self));
       return;
     }
 
@@ -628,7 +701,7 @@ export function createSyncController(deps: SyncDependencies) {
     });
     peerAddresses.delete(store.self);
     deps.log('полный синк: история применена');
-    await resolveDisplayNames(Array.from(peerAddresses));
+    void resolveDisplayNames(Array.from(peerAddresses));
     isSynced = true;
     deps.log('полный синк завершён');
   }

@@ -665,6 +665,8 @@ export function createMessageController(deps: MessageDependencies) {
         // ним до аплоада, иначе обращение до/после подмены контента упирается в
         // несуществующий file_id (у voice плеер фиксирует audio.src навсегда)
         deps.media.cacheBlob(uuid, blob, attachment.mimeType || 'application/octet-stream');
+        // Миниатюра фото/видео (perf A10) считается параллельно загрузке
+        const thumbnailPending = deps.media.buildThumbnail(attachment, blob);
         const {
           fileId, size, mediaKeys, capability,
         } = await deps.media.uploadBlob(
@@ -673,6 +675,7 @@ export function createMessageController(deps: MessageDependencies) {
           attachment.mimeType,
           mediaUploadOptions(),
         );
+        const thumbnail = await thumbnailPending;
         const mediaCrypto = mediaKeys
           ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
         if (attachment.voice) {
@@ -708,6 +711,7 @@ export function createMessageController(deps: MessageDependencies) {
             size_bytes: size,
             caption: isRound ? undefined : params.text || undefined,
             ttl_secs: ttlSecs || undefined,
+            thumbnail,
             ...mediaCrypto,
           };
           sentContent = {
@@ -763,6 +767,7 @@ export function createMessageController(deps: MessageDependencies) {
             size_bytes: size,
             caption: params.text || undefined,
             ttl_secs: ttlSecs || undefined,
+            thumbnail,
             ...mediaCrypto,
           };
           sentContent = {

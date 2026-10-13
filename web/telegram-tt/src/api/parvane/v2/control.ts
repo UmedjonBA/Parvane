@@ -12,22 +12,26 @@
 //   контроллера движка: работает и пока устройство ждёт линковки.
 // Тела кодирует движок по имени метода; запросы и ответы — proto3-JSON.
 
+import { bytesToBase64 } from './base64';
 import { loadProtocol, type Protocol } from './engine';
 import { CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
 export type V2Json = Record<string, unknown>;
 
 const CALL_TIMEOUT_MS = 15000;
-const BLOB_TIMEOUT_MS = 60000;
+export const BLOB_TIMEOUT_MS = 60000;
 const UPLOAD_CHUNK_BYTES = 512 * 1024;
 const DOWNLOAD_BATCH = 256;
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
+/** Тело `cloud.blob.upload_chunk`: движком из байт (A7), иначе JSON с base64. */
+export function encodeUploadChunkBody(
+  pv: Protocol, uploadId: string, index: number, bucket: number, data: Uint8Array,
+): Uint8Array {
+  const encode = (pv as Partial<Protocol>).encodeUploadChunk;
+  if (typeof encode === 'function') return encode(uploadId, index, bucket, data);
+  return pv.encodeMethodRequest('cloud.blob.upload_chunk', JSON.stringify({
+    upload_id: uploadId, index, data: bytesToBase64(data), ...(bucket ? { bucket } : {}),
+  }));
 }
 
 async function openConnection(pv: Protocol, url: string): Promise<V2Connection> {
@@ -108,18 +112,25 @@ export class V2Control {
     });
   }
 
+  /** Метод с уже закодированным телом (чанк блоба байтами) → тело ответа. */
+  requestBytes(method: string, body: Uint8Array, timeoutMs = CALL_TIMEOUT_MS): Promise<Uint8Array> {
+    return this.withConnection((_pv, conn) => conn.request(method, body, timeoutMs));
+  }
+
   /**
    * Блоб без capability: владелец — этот аккаунт. `isPublic` — открытый объект
    * (аватар, фото группы), иначе доступен только владельцу (блоб линковки).
    */
   async uploadBlob(bytes: Uint8Array, isPublic: boolean): Promise<string> {
+    const pv = await loadProtocol();
     const total = Math.max(1, Math.ceil(bytes.length / UPLOAD_CHUNK_BYTES));
     let uploadId = '';
     for (let index = 0; index < total; index++) {
       const data = bytes.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
-      const got = await this.call(
-        'cloud.blob.upload_chunk', { upload_id: uploadId, index, data: toBase64(data) }, BLOB_TIMEOUT_MS,
-      );
+      const method = 'cloud.blob.upload_chunk';
+      const body = encodeUploadChunkBody(pv, uploadId, index, 0, data);
+      const resp = await this.requestBytes(method, body, BLOB_TIMEOUT_MS);
+      const got = JSON.parse(pv.decodeMethodResponse(method, resp)) as V2Json;
       const nextId = got.uploadId || got.upload_id;
       if (typeof nextId === 'string' && nextId) uploadId = nextId;
     }

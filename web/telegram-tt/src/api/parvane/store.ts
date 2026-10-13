@@ -10,6 +10,7 @@ import type {
 } from './wire';
 
 import { wireEntitiesToApi } from './entities';
+import { thumbnailFromWire } from './mediaThumb';
 import { buildParvaneSticker, registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
 
 type PeerKind = 'user' | 'group' | 'channel';
@@ -560,6 +561,8 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           mediaType: 'photo',
           id: content.file_id!,
           date: ts,
+          // Миниатюра из содержимого (perf A10): размытое превью до скачивания
+          thumbnail: thumbnailFromWire(content),
           sizes: [
             { type: 'x', width: content.width || 800, height: content.height || 600 },
             { type: 'y', width: content.width || 800, height: content.height || 600 },
@@ -588,6 +591,7 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
           mediaType: 'video',
           id: content.file_id!,
           isRound: isRound || undefined,
+          thumbnail: thumbnailFromWire(content),
           mimeType: content.mime || 'video/mp4',
           duration: content.duration_secs || 1,
           fileName: content.filename

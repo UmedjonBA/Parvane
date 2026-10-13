@@ -20,6 +20,7 @@ import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
+import { base64ToBytes, bytesToBase64 } from './base64';
 import { createBlobConnPool } from './blobConns';
 import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
@@ -28,14 +29,19 @@ import { createCloudSync } from './cloud';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
-import { preauth } from './control';
+import {
+  BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
+} from './control';
+import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import {
   buildBundleMark, deriveBundleKey, type KeyBundleHistory, openKeyBundle, readGrantBundleKey, sealKeyBundle,
   withBundleKey, withFreshLog,
 } from './keyBundle';
 import { createL2Gate, type L2State, parseL2State } from './l2';
+import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createPlannerSync } from './planner';
+import { createReconnectBackoff } from './reconnectBackoff';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
 type Deps = {
@@ -46,6 +52,9 @@ type Deps = {
   applyExternal: (stored: WireStoredMessage) => Promise<void>;
   /** История (расшифрованные строки) — чтобы мутации находили сообщения после перезагрузки. */
   loadHistory: () => Promise<WireStoredMessage[]>;
+  /** Индекс строк истории по uuid (perf A2): общий с конвейером отображения,
+   * который наполняет его при восстановлении из кэша и на каждую строку. */
+  index?: MessageIndex;
   /** В журнале устройств появились новые свои устройства (T119). */
   onNewOwnDevices: (deviceIds: string[]) => void;
   /** Состав своих устройств изменился (появилось, вышло, отозвано). */
@@ -209,7 +218,6 @@ type RevokeOutcome = {
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
 // Скачивание/загрузка блобов (чанки до 700 КиБ)
-const BLOB_TIMEOUT_MS = 60000;
 // parvane.msg.v2.TypingAction
 const TYPING_ACTION_TYPING = 1;
 const TYPING_ACTION_CANCEL = 2;
@@ -240,6 +248,14 @@ type EngineEvent = {
 };
 
 const STATE_RECORD = 'v2-engine';
+// Состояние движка байтами (perf A1): прежняя запись `v2-engine` хранила base64
+// в JSON — читается как запасной вариант и удаляется после первой записи байтами
+const STATE_BYTES_RECORD = 'v2-engine-bin';
+// Отложенная запись состояния движка: не чаще раза в PERSIST_DEBOUNCE_MS и не
+// позже PERSIST_MAX_DELAY_MS после первого изменения; перед ack, при уходе со
+// страницы и в важных местах (вступление, отзыв, ротации) — сразу
+const PERSIST_DEBOUNCE_MS = 400;
+const PERSIST_MAX_DELAY_MS = 2000;
 const GROUP_RESYNC_MS = 3000;
 // Через сколько сторож очереди движка сообщает о зависшей задаче
 const SERIAL_WATCHDOG_MS = 20000;
@@ -334,19 +350,13 @@ const OTK_COUNT = 50;
 // устройство не получало бы сообщений, пока само не напишет
 const PEER_TTL_MS = 10 * 60 * 1000;
 const PEER_LOG_REFRESH_MS = 15000;
-const RECONNECT_MS = 3000;
+// Переподключение (perf A5): повторы 1 → 2 → 4 … 60 с с разбросом, сброс при
+// успехе; `online` и возврат вкладки на экран — попытка сразу
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 60000;
 
-function b64(bytes: Uint8Array) {
-  let s = '';
-  bytes.forEach((b) => {
-    s += String.fromCharCode(b);
-  });
-  return btoa(s);
-}
-
-function unb64(s: string) {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-}
+const b64 = bytesToBase64;
+const unb64 = base64ToBytes;
 
 export function createV2Controller(deps: Deps) {
   let pv: Protocol | undefined;
@@ -354,14 +364,23 @@ export function createV2Controller(deps: Deps) {
   let storage: SecureE2eStorage | undefined;
   let storageKey: Uint8Array | undefined;
   let idConn: V2Connection | undefined;
+  // Блобы (загрузка вложений и облака, ссылки) — своим авторизованным
+  // соединением (perf A7): иначе текстовое сообщение стояло в очереди сокета
+  // движка за мегабайтным чанком
+  const blobControl = new V2Control(() => deps.gatewayUrl(), () => deps.getToken() || undefined);
   // C2-01: анонимные соединения выдаёт планировщик движка — по получателю
   // (серия ≤ 60 с), копии своим устройствам и служебные запросы — отдельно
   let anonPlanner: InstanceType<Protocol['PvAnonPlanner']> | undefined;
   const anonConns = new Map<number, V2Connection>();
   let serverKey: Uint8Array | undefined;
   let ready = false;
+  // Движок, с которым стек дошёл до готовности: при обрыве связи с ним
+  // переподключается только транспорт, состояние с диска не перечитывается
+  let readyClient: PvClient | undefined;
   let ownDeviceId: string | undefined;
   let starting: Promise<void> | undefined;
+  const reconnectBackoff = createReconnectBackoff({ baseMs: RECONNECT_BASE_MS, maxMs: RECONNECT_MAX_MS });
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   // Линковка второго устройства (LINK-1 v2): журнал у аккаунта есть, грант ещё
   // не получен; материал гранта живёт в памяти только до вступления
   let needsLinking = false;
@@ -383,7 +402,8 @@ export function createV2Controller(deps: Deps) {
   const peers = new Map<string, { v2: boolean; at: number }>();
   // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение)
   const ephChats = new Set<string>();
-  const messages = new Map<string, WireStoredMessage>();
+  // Строки истории по uuid: цели мутаций (perf A2 — без чтения всей истории)
+  const messages = deps.index || createMessageIndex({ loadAll: deps.loadHistory });
   const reactions = new Map<string, Map<string, string>>();
   // Домен сервера из описателя (группы v2 живут на нём)
   let serverDomain = '';
@@ -419,9 +439,80 @@ export function createV2Controller(deps: Deps) {
     return next;
   }
 
-  async function persist() {
-    if (!client || !storage || !storageKey) return;
-    await storage.saveRecord(STATE_RECORD, b64(client.export(storageKey)));
+  // perf A1: состояние движка пишется отложенно; `persist()` только помечает
+  // изменение (прежние вызывающие ничего не ждут), `persistNow()` — запись сейчас
+  let hasLegacyState = false;
+  const stateWriter = createDeferredWrite<{ owner: PvClient; target: SecureE2eStorage; bytes: Uint8Array }>({
+    debounceMs: PERSIST_DEBOUNCE_MS,
+    maxDelayMs: PERSIST_MAX_DELAY_MS,
+    snapshot: () => (client && storage && storageKey
+      ? { owner: client, target: storage, bytes: client.export(storageKey) }
+      : undefined),
+    store: async ({ owner, target, bytes }) => {
+      // Движок подменили другим (перезапуск, линковка) — снимок прежнего не
+      // пишем; после выхода (`reset`) снимок последнего состояния дописывается
+      if (client && owner !== client) return;
+      await target.saveBytesRecord(STATE_BYTES_RECORD, bytes);
+      if (hasLegacyState) {
+        hasLegacyState = false;
+        await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+      }
+    },
+    onError: (e) => deps.log(`v2: состояние движка не записано: ${String(e)}`),
+  });
+
+  function persist(): Promise<void> {
+    if (client && storage && storageKey) stateWriter.mark();
+    return Promise.resolve();
+  }
+
+  function persistNow(): Promise<void> {
+    return stateWriter.flush();
+  }
+
+  /** Состояние движка с диска: байтами либо прежней записью base64. */
+  async function loadEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
+    const bytes = await target.loadBytesRecord(STATE_BYTES_RECORD);
+    if (bytes) return bytes;
+    const legacy = await target.loadRecord<string>(STATE_RECORD);
+    hasLegacyState = Boolean(legacy);
+    return legacy ? unb64(legacy) : undefined;
+  }
+
+  // Стереть состояние с диска: отложенный снимок отменяется, начатая запись
+  // дожидается — иначе она легла бы поверх стирания
+  async function deleteEngineState(target: SecureE2eStorage) {
+    stateWriter.discard();
+    await stateWriter.settled();
+    await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
+    await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+  }
+
+  /** Повтор подключения через задержку ряда повторов (или заданную). */
+  function scheduleReconnect(delayMs = reconnectBackoff.next()) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void start().catch(() => undefined);
+    }, delayMs);
+  }
+
+  /** Сеть вернулась / вкладка снова на экране: не ждать очереди повторов. */
+  function reconnectNow() {
+    if (!reconnectTimer || starting || ready || isHalted) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    void start().catch(() => undefined);
+  }
+
+  if (typeof window !== 'undefined') {
+    // Уход со страницы: дописать состояние движка сразу — отложенная запись не успеет
+    window.addEventListener('pagehide', () => void persistNow());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') void persistNow();
+      else reconnectNow();
+    });
+    window.addEventListener('online', reconnectNow);
   }
 
   async function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
@@ -559,6 +650,59 @@ export function createV2Controller(deps: Deps) {
 
   // ── запуск ────────────────────────────────────────────────────────────────
 
+  /** Открыть ID-соединение: Hello/Welcome, проверка описателя сервера, Auth,
+   * обработчики событий и обрыва. */
+  async function openIdentified(token: string) {
+    if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const conn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
+    idConn = conn;
+    const welcome = await conn.connect('v2');
+    const desc = JSON.parse(pv.verifyServerDescriptor(welcome.serverDescriptor)) as {
+      domain: string; serverKey: string;
+    };
+    serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
+    serverDomain = desc.domain;
+    const auth = await conn.auth(token);
+    ownDeviceId = auth.deviceId;
+    conn.onEvent = (ev) => {
+      if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
+      if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
+      if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
+    };
+    conn.onClose = () => {
+      // Соединение уже сменили (перезапуск, линковка) — его обрыв не наш
+      if (idConn !== conn) return;
+      ready = false;
+      starting = undefined;
+      scheduleReconnect();
+    };
+    return { auth, desc };
+  }
+
+  /** Хвост запуска — общий для первого подъёма и переподключения транспорта:
+   * подписка на инбокс, догон, эфемерные каналы, фоновые проверки. */
+  async function goLive(isReconnect: boolean) {
+    if (!client) return;
+    await call('id', 'msg.inbox.subscribe', new Uint8Array());
+    ready = true;
+    readyClient = client;
+    void serial(refillTokens);
+    tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
+    // Группы v2 из состояния движка — в UI до разбора инбокса
+    client.groupList().forEach((hex) => publishGroup(hex));
+    await serial(syncAll);
+    // L2-1: до готовности движка решение о typing/presence бралось из памяти
+    l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
+      .forEach((address) => deps.onL2Changed?.(address));
+    deps.log(isReconnect ? 'v2: соединение восстановлено' : 'v2: готов');
+    // «Печатает» по v2: каналы известных v2-собеседников и групп (подписки
+    // живут на соединении — после обрыва оформляются заново)
+    void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
+    deps.onStateReady?.(stateHost);
+    void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
+    void startRecoveryUpkeep();
+  }
+
   async function start() {
     if (starting) return starting;
     starting = (async () => {
@@ -566,38 +710,33 @@ export function createV2Controller(deps: Deps) {
       const token = deps.getToken();
       if (!self || !token || isHalted) return;
       pv = await loadProtocol();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      // perf A5: движок жив и уже был готов — обрыв связи; поднимаем только
+      // транспорт и догоняем инбокс, состояние с диска не перечитываем
+      if (client && client === readyClient && storage && storageKey) {
+        await openIdentified(token);
+        // Подписки на эфемерные каналы жили на прежнем соединении
+        client.ephReset();
+        await goLive(true);
+        return;
+      }
       storage = await SecureE2eStorage.open(self);
       const savedKey = await storage.loadRecord<string>(KEY_RECORD);
       storageKey = savedKey ? unb64(savedKey) : crypto.getRandomValues(new Uint8Array(32));
       if (!savedKey) await storage.saveRecord(KEY_RECORD, b64(storageKey));
 
-      idConn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_IDENTIFIED);
-      const welcome = await idConn.connect('v2');
-      const desc = JSON.parse(pv.verifyServerDescriptor(welcome.serverDescriptor)) as {
-        domain: string; serverKey: string;
-      };
-      serverKey = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
-      serverDomain = desc.domain;
-      const auth = await idConn.auth(token);
-      ownDeviceId = auth.deviceId;
-      idConn.onEvent = (ev) => {
-        if (ev.eventKind === 'inbox.record') void serial(() => openRecord(ev.body));
-        if (ev.eventKind === 'ephemeral') applyEphemeral(ev.body);
-        if (ev.eventKind === 'session.revoked') deps.log('v2: сессия отозвана');
-      };
-      idConn.onClose = () => {
-        ready = false;
-        starting = undefined;
-        setTimeout(() => {
-          void start().catch(() => undefined);
-        }, RECONNECT_MS);
-      };
+      const { auth, desc } = await openIdentified(token);
 
       // Прежние версии хранили корень открыто (C1-06) — стираем
       await storage.deleteRecord('v2-root').catch(() => undefined);
-      const saved = await storage.loadRecord<string>(STATE_RECORD);
+      // Отложенный снимок прежнего движка (перезапуск после обрыва) — на диск до
+      // чтения, иначе поднялось бы устаревшее состояние
+      await persistNow();
+      const saved = await loadEngineState(storage);
       if (saved) {
-        client = pv.PvClient.importState(unb64(saved), storageKey);
+        client?.free();
+        client = pv.PvClient.importState(saved, storageKey);
         // Пока устройство было выключено, личность аккаунта могли сбросить
         // (новый корень и журнал, T130): тогда оно вне неё — только линковка
         const ownLog = await call('id', 'identity.device.log_sync', pv.encodeMessage(
@@ -609,6 +748,7 @@ export function createV2Controller(deps: Deps) {
           return;
         }
       } else {
+        client?.free();
         client = new pv.PvClient(self, auth.deviceId, desc.domain);
         // Первое v2-устройство пользователя — корень и журнал устройств.
         // Если у пользователя уже есть журнал (другое устройство на v2) —
@@ -681,40 +821,28 @@ export function createV2Controller(deps: Deps) {
           created.rootSecret.fill(0);
           await rememberBundleKey(recoveryKey);
           await queueRecoveryKey(recoveryKey);
-          await persist();
+          await persistNow();
         }
       }
       // Ключ личного состояния (T098): первое v2-устройство создаёт его;
       // связанное получает от своего устройства (StateKeyShare)
       const ownDevices = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
-      if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persist();
+      if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persistNow();
       rootBackupB64 = rootBackupB64 || await storage.loadRecord<string>(ROOT_BACKUP_RECORD);
-      await call('id', 'msg.inbox.subscribe', new Uint8Array());
-      ready = true;
-      void serial(refillTokens);
-      tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
-      // Группы v2 из состояния движка — в UI до разбора инбокса
-      client.groupList().forEach((hex) => publishGroup(hex));
-      await serial(syncAll);
-      // L2-1: до готовности движка решение о typing/presence бралось из памяти
-      l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
-        .forEach((address) => deps.onL2Changed?.(address));
-      deps.log('v2: готов');
-      // «Печатает» по v2: каналы известных v2-собеседников и групп
-      void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
-      deps.onStateReady?.(stateHost);
-      void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
-      void startRecoveryUpkeep();
-    })().catch((e: unknown) => {
+      await goLive(false);
+    })().then(() => {
+      if (ready) reconnectBackoff.reset();
+    }).catch((e: unknown) => {
       starting = undefined;
       deps.log(`v2: запуск не удался: ${String(e)}`);
       // Вступление в журнал не завершено из-за связи — повторяем сами: соединение
-      // могло остаться открытым, и повтор по его закрытию тогда не случится
-      if (joinRetry) {
+      // могло остаться открытым, и повтор по его закрытию тогда не случится.
+      // Обрыв на самом подключении (Welcome/Auth не пришли) закрытием сокета
+      // повтор не назначает — назначаем здесь
+      const isConnectionLoss = !idConn?.isOpen && !(e instanceof V2Error);
+      if (joinRetry || isConnectionLoss) {
         joinRetry = false;
-        setTimeout(() => {
-          void start().catch(() => undefined);
-        }, RECONNECT_MS);
+        scheduleReconnect();
       }
       // Сервер больше не принимает эту версию протокола (Welcome не пришёл)
       if (e instanceof V2Error && e.code === 'ERROR_CODE_UPGRADE_REQUIRED') deps.onUpgradeRequired();
@@ -785,7 +913,8 @@ export function createV2Controller(deps: Deps) {
     }
     needsLinking = false;
     isJustJoined = true;
-    await persist();
+    // Запись в журнале принята: ключи устройства — на диск до снятия отметки вступления
+    await persistNow();
     await storage.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
     deps.log('v2: устройство привязано грантом линковки');
     return true;
@@ -803,9 +932,12 @@ export function createV2Controller(deps: Deps) {
       }
       if (!batch.more || !batch.records.length) break;
     }
+    // Порядок: строки истории уже на диске (`applyExternal` сбрасывает кэш на
+    // каждую), состояние движка с курсором — перед ack, после которого сервер
+    // записи повторно не отдаст
+    await persistNow();
     const ack = client.ackRequest() as OutReq;
     await call(ack.chan, ack.method, ack.body).catch(() => undefined);
-    await persist();
   }
 
   async function openRecord(bytes: Uint8Array) {
@@ -873,20 +1005,18 @@ export function createV2Controller(deps: Deps) {
 
   // ── приём: событие движка → строка конвейера UI ──────────────────────────
 
-  async function knownMessage(uuid: string): Promise<WireStoredMessage | undefined> {
-    const hit = messages.get(uuid);
-    if (hit) return hit;
-    const history = await deps.loadHistory();
-    const found = history.find((h) => h.id === uuid);
-    if (found) messages.set(uuid, found);
-    return found;
+  function knownMessage(uuid: string): Promise<WireStoredMessage | undefined> {
+    return messages.find(uuid);
   }
 
   async function update(uuid: string, patch: (m: WireStoredMessage) => WireStoredMessage) {
     const m = await knownMessage(uuid);
     if (!m) return;
     const next = patch(m);
-    messages.set(uuid, next);
+    // Патч ничего не изменил (цель из другого чата, чужая квитанция) — запись
+    // не переписываем и UI не трогаем
+    if (next === m) return;
+    messages.set(next);
     await deps.applyExternal(next);
   }
 
@@ -966,8 +1096,7 @@ export function createV2Controller(deps: Deps) {
   /** Метод блобов шарда cloud по имени метода реестра: proto3-JSON → proto3-JSON. */
   async function blobCall<T>(method: string, request: unknown): Promise<T> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
-    const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify(request)));
-    return JSON.parse(pv.decodeMethodResponse(method, resp)) as T;
+    return blobControl.call(method, request as V2Json, BLOB_TIMEOUT_MS) as Promise<T>;
   }
 
   async function applyEvent(ev: EngineEvent) {
@@ -1021,7 +1150,7 @@ export function createV2Controller(deps: Deps) {
         const stub: WireStoredMessage = {
           id: ev.opId, from: author, to, ts: Math.floor((ev.tsMs || 0) / 1000), content: { kind: 'unsupported' },
         };
-        messages.set(ev.opId, stub);
+        messages.set(stub);
         await deps.applyExternal(stub);
         return;
       }
@@ -1071,7 +1200,9 @@ export function createV2Controller(deps: Deps) {
         return;
       }
       if (c.receipt?.messages) {
-        if (c.receipt.kind === 'RECEIPT_KIND_READ') {
+        // Своя квитанция (копия с другого своего устройства) меняет только
+        // исходящие, а помечает она чужие сообщения — применять нечего
+        if (c.receipt.kind === 'RECEIPT_KIND_READ' && author !== self) {
           for (const t of c.receipt.messages) {
             const target = b64ToUuid(t.op_id);
 
@@ -1095,7 +1226,7 @@ export function createV2Controller(deps: Deps) {
         content: wire,
         reply_to: b64ToUuid(c.reply_to?.op_id),
       };
-      messages.set(ev.opId, stored);
+      messages.set(stored);
       await deps.applyExternal(stored);
       // Собеседник (или своё другое устройство) сменил режим L2 личного чата
       if (c.chat_mode) announceL2(author === self ? chat : author);
@@ -1166,7 +1297,7 @@ export function createV2Controller(deps: Deps) {
   async function dropIdentity() {
     deps.log('v2: личность аккаунта сброшена другим устройством — нужна линковка этого устройства');
     ready = false;
-    await storage?.deleteRecord(STATE_RECORD).catch(() => undefined);
+    if (storage) await deleteEngineState(storage);
     await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
@@ -1186,6 +1317,7 @@ export function createV2Controller(deps: Deps) {
       idConn.onClose = undefined;
       idConn.close();
     }
+    await persistNow();
     client?.free();
     client = undefined;
     starting = undefined;
@@ -1201,12 +1333,12 @@ export function createV2Controller(deps: Deps) {
 
   async function exportBackup(): Promise<V2DeviceBackup | undefined> {
     if (!ready || !client || !storage || !storageKey) return undefined;
-    await persist();
-    const state = await storage.loadRecord<string>(STATE_RECORD);
+    await persistNow();
+    const state = await loadEngineState(storage);
     if (!state) return undefined;
     return {
       key: b64(storageKey),
-      state,
+      state: b64(state),
       rootBackup: await storage.loadRecord<string>(ROOT_BACKUP_RECORD),
       invites: await loadInvites(),
     };
@@ -1220,6 +1352,9 @@ export function createV2Controller(deps: Deps) {
     isHalted = true;
     const target = storage || await SecureE2eStorage.open(self);
     await target.saveRecord(KEY_RECORD, backup.key);
+    stateWriter.discard();
+    await stateWriter.settled();
+    await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
     await target.saveRecord(STATE_RECORD, backup.state);
     if (backup.rootBackup) await target.saveRecord(ROOT_BACKUP_RECORD, backup.rootBackup);
     if (backup.invites) await target.saveRecord(INVITES_RECORD, backup.invites);
@@ -1724,7 +1859,7 @@ export function createV2Controller(deps: Deps) {
         await call(r.chan, r.method, r.body)
           .catch((e: unknown) => deps.log(`v2: ротация после отзыва (${r.method}): ${String(e)}`));
       }
-      await persist();
+      await persistNow();
       // Отложенное: собеседники, которым новый ключ доступа не ушёл, и группы,
       // где эпоху сменить не удалось (добор данных/частота)
       for (const peer of outcome.pendingKeyShares) {
@@ -1738,7 +1873,7 @@ export function createV2Controller(deps: Deps) {
         await rotateEpoch(hex).then(() => publishGroup(hex))
           .catch((e: unknown) => deps.log(`v2: новая эпоха группы ${hex} после отзыва: ${String(e)}`));
       }
-      await persist();
+      await persistNow();
       deps.log(`v2: устройство отозвано (ротаций ${rotations.length}, эпох ждут админа ${
         outcome.epochsNeedAdmin.length})`);
       // Ключ личного состояния сменён — журнал состояния заново под новым ключом
@@ -1773,7 +1908,7 @@ export function createV2Controller(deps: Deps) {
         await call(r.chan, r.method, r.body)
           .catch((e: unknown) => deps.log(`v2: раздача ключа доступа (${r.method}): ${String(e)}`));
       }
-      await persist();
+      await persistNow();
       for (const other of outcome.pendingKeyShares) {
         try {
           await run(await withNeeds(() => client!.shareDeliveryKey(other) as OutReq[]));
@@ -1781,7 +1916,7 @@ export function createV2Controller(deps: Deps) {
           deps.log(`v2: ключ доступа ${other} не роздан: ${String(e)}`);
         }
       }
-      await persist();
+      await persistNow();
       deps.log(`v2: доступ собеседника отозван — ключ доступа сменён (раздач ${shares.length})`);
       return true;
     });
@@ -1813,7 +1948,7 @@ export function createV2Controller(deps: Deps) {
         await sealRootEscrow(client!);
         client!.forgetRoot();
         created.rootSecret.fill(0);
-        await persist();
+        await persistNow();
       });
       await target.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
@@ -1895,7 +2030,7 @@ export function createV2Controller(deps: Deps) {
           idConn?.close();
           throw e;
         }
-        await persist();
+        await persistNow();
       });
       deps.log('v2: SSK сменён корнем');
       // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
@@ -1933,26 +2068,54 @@ export function createV2Controller(deps: Deps) {
       return false;
     }
     const hit = peers.get(address);
-    if (hit && Date.now() - hit.at < (hit.v2 ? PEER_LOG_REFRESH_MS : PEER_TTL_MS)) return hit.v2 || isSticky;
+    if (hit) {
+      const age = Date.now() - hit.at;
+      // perf A11: журнал собеседника известен — отвечаем по кэшу, устаревший
+      // (> PEER_LOG_REFRESH_MS) обновляем в фоне (stale-while-revalidate); ждать
+      // сеть на каждой отправке/квитанции/«печатает» не нужно. Компромисс:
+      // новое устройство собеседника может не получить одно сообщение
+      if (hit.v2) {
+        if (age >= PEER_LOG_REFRESH_MS) void revalidatePeer(address);
+        return true;
+      }
+      if (age < PEER_TTL_MS) return isSticky;
+    }
+    // Журнала ещё нет (или давно сказали «не v2») — только синхронно
     try {
-      const v2 = await serial(async () => {
-        const before = client!.logVersion(address);
-        try {
-          await satisfy(JSON.stringify({ need: { kind: 'peerLog', user: address } }));
-        } catch (e) {
-          if (before === 0n) throw e;
-          deps.log(`v2: журнал ${address} не обновлён: ${String(e)}`);
-        }
-        if (client!.logVersion(address) !== before) await persist();
-        return client!.logVersion(address) > 0n;
-      });
-      peers.set(address, { v2, at: Date.now() });
-      if (v2) rememberStickyPeer(address);
+      const v2 = await syncPeerLog(address);
       return v2 || isSticky;
     } catch (e) {
       if (isSticky) throw e;
       return false;
     }
+  }
+
+  /** Перечитать журнал устройств собеседника (путь отправки); true — он на v2. */
+  async function syncPeerLog(address: string): Promise<boolean> {
+    const v2 = await serial(async () => {
+      const before = client!.logVersion(address);
+      try {
+        await satisfy(JSON.stringify({ need: { kind: 'peerLog', user: address } }));
+      } catch (e) {
+        if (before === 0n) throw e;
+        deps.log(`v2: журнал ${address} не обновлён: ${String(e)}`);
+      }
+      if (client!.logVersion(address) !== before) await persist();
+      return client!.logVersion(address) > 0n;
+    });
+    peers.set(address, { v2, at: Date.now() });
+    if (v2) rememberStickyPeer(address);
+    return v2;
+  }
+
+  const peerRevalidating = new Set<string>();
+
+  function revalidatePeer(address: string) {
+    if (peerRevalidating.has(address) || !ready || !client) return;
+    peerRevalidating.add(address);
+    syncPeerLog(address)
+      .catch((e: unknown) => deps.log(`v2: журнал ${address} в фоне не обновлён: ${String(e)}`))
+      .finally(() => peerRevalidating.delete(address));
   }
 
   function stickyKey() {
@@ -2115,30 +2278,29 @@ export function createV2Controller(deps: Deps) {
   // блоб анонимным каналом — записи «отправитель → получатель» в cloud нет
 
   /** Загрузить шифртекст блоба; возвращает file_id. */
-  async function uploadBlob(bytes: Uint8Array, capability: Uint8Array, chunkBytes: number): Promise<string> {
+  /** Чанк загрузки вложения чата (bucket медиа) байтами по соединению блобов;
+   * пустой `uploadId` заводит загрузку. Возвращает uploadId. */
+  async function uploadBlobChunk(uploadId: string, index: number, data: Uint8Array): Promise<string> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const method = 'cloud.blob.upload_chunk';
+    const body = encodeUploadChunkBody(pv, uploadId, index, 0, data);
+    const resp = await blobControl.requestBytes(method, body, BLOB_TIMEOUT_MS);
+    const got = JSON.parse(pv.decodeMethodResponse(method, resp)) as { uploadId?: string; upload_id?: string };
+    return got.uploadId || got.upload_id || uploadId;
+  }
+
+  /** Завершить загрузку вложения под секретом capability (FR-062); возвращает file_id. */
+  async function completeBlobUpload(
+    uploadId: string, chunks: number, size: number, capability: Uint8Array,
+  ): Promise<string> {
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability as BufferSource));
-    const total = Math.max(1, Math.ceil(bytes.length / chunkBytes));
-    let uploadId = '';
-    for (let index = 0; index < total; index++) {
-      const data = bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes);
-      const resp = await call('id', 'cloud.blob.upload_chunk', pv.encodeMessage(
-        'parvane.cloud.v1.UploadChunkRequest', JSON.stringify({ upload_id: uploadId, index, data: b64(data) }),
-      ));
-      const got = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadChunkResponse', resp)) as {
-        uploadId?: string; upload_id?: string;
-      };
-      uploadId = got.uploadId || got.upload_id || uploadId;
-    }
-    const done = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadCompleteResponse', await call(
-      'id', 'cloud.blob.upload_complete', pv.encodeMessage('parvane.cloud.v1.UploadCompleteRequest', JSON.stringify({
-        upload_id: uploadId,
-        chunks: total,
-        size: String(bytes.length),
-        visibility: 'VISIBILITY_PRIVATE',
-        capability_hash: b64(hash),
-      })),
-    ))) as { fileId?: string; file_id?: string };
+    const done = await blobCall<{ fileId?: string; file_id?: string }>('cloud.blob.upload_complete', {
+      upload_id: uploadId,
+      chunks,
+      size: String(size),
+      visibility: 'VISIBILITY_PRIVATE',
+      capability_hash: b64(hash),
+    });
     const fileId = done.fileId || done.file_id;
     if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
     return fileId;
@@ -2293,7 +2455,7 @@ export function createV2Controller(deps: Deps) {
     const stored: WireStoredMessage = {
       id: uuid, from: deps.getSelf(), to, ts: Math.floor(Date.now() / 1000), content: wire, reply_to: replyTo,
     };
-    messages.set(uuid, stored);
+    messages.set(stored);
     return true;
   }
 
@@ -2384,7 +2546,7 @@ export function createV2Controller(deps: Deps) {
       ts: Math.floor(Date.now() / 1000),
       content: { kind: 'chat_mode', l2: enabled },
     };
-    messages.set(opId, stored);
+    messages.set(stored);
     await deps.applyExternal(stored);
     deps.recordOwn?.(stored);
     return true;
@@ -2410,7 +2572,7 @@ export function createV2Controller(deps: Deps) {
       ts: Math.floor(Date.now() / 1000),
       content: { kind: 'chat_mode', l2: isEnabled },
     };
-    messages.set(stored.id, stored);
+    messages.set(stored);
     void deps.applyExternal(stored)
       .then(() => {
         if (stored.from === deps.getSelf()) deps.recordOwn?.(stored);
@@ -2577,7 +2739,7 @@ export function createV2Controller(deps: Deps) {
       // Срок следующей партии движок уже сдвинул — «дозапроса» не будет (D-06)
       deps.log(`v2: жетоны — партия по расписанию не получена: ${String(err)}`);
     }
-    await persist();
+    await persistNow();
   }
 
   /** Жетоны на раздачу ключей незнакомым участникам — до операции движка. */
@@ -2614,7 +2776,7 @@ export function createV2Controller(deps: Deps) {
       await call(r.chan, r.method, r.body)
         .catch((e: unknown) => deps.log(`v2: ключи эпохи не доставлены: ${String(e)}`));
     }
-    await persist();
+    await persistNow();
     deps.log(`v2: новая эпоха группы ${hex}: ${readGroup(hex)?.epoch}`);
   }
 
@@ -2667,7 +2829,7 @@ export function createV2Controller(deps: Deps) {
         deps.log(`v2: первая эпоха группы не начата: ${String(e)}`);
         scheduleRotate(hex, EPOCH_RETRY_MS);
       });
-      await persist();
+      await persistNow();
       deps.log(`v2: группа создана ${hex} (${members.length + 1} участников)`);
       const g = readGroup(hex)!;
       publishedGroups.add(groupAddress(hex));
@@ -2730,7 +2892,7 @@ export function createV2Controller(deps: Deps) {
         scheduleRotate(hex, EPOCH_RETRY_MS);
       });
     }
-    await persist();
+    await persistNow();
     publishGroup(hex);
     return true;
   }
@@ -2962,7 +3124,7 @@ export function createV2Controller(deps: Deps) {
       const all = await loadInvites();
       all[address] = [...(all[address] || []), record];
       await storage?.saveRecord(INVITES_RECORD, all);
-      await persist();
+      await persistNow();
       publishGroup(hex);
       deps.onInviteCreated?.(address, record);
       return record;
@@ -3106,7 +3268,7 @@ export function createV2Controller(deps: Deps) {
           scheduleRotate(hex, EPOCH_RETRY_MS);
         });
       }
-      await persist();
+      await persistNow();
       pendingRequests.set(hex, Math.max(0, (pendingRequests.get(hex) || 1) - 1));
       publishGroup(hex);
       return true;
@@ -3204,7 +3366,7 @@ export function createV2Controller(deps: Deps) {
           client!.groupForget(hex);
           return { status: 'requested' as const };
         }
-        await persist();
+        await persistNow();
         deps.log(`v2: вступление в группу ${hex} по ссылке`);
         publishedGroups.add(groupAddress(hex));
         const info = toWireGroupInfo(hex, readGroup(hex)!);
@@ -3366,9 +3528,9 @@ export function createV2Controller(deps: Deps) {
       const pvm = await loadProtocol();
       const st = await SecureE2eStorage.open(user);
       const savedKey = await st.loadRecord<string>(KEY_RECORD);
-      const saved = await st.loadRecord<string>(STATE_RECORD);
+      const saved = await loadEngineState(st);
       if (!savedKey || !saved) return undefined;
-      const c = pvm.PvClient.importState(unb64(saved), unb64(savedKey));
+      const c = pvm.PvClient.importState(saved, unb64(savedKey));
       try {
         // Состояние и зеркало device_id — одного хранилища; при расхождении
         // сервер отвергнет подпись, и вход пойдёт как с нового устройства
@@ -3417,6 +3579,8 @@ export function createV2Controller(deps: Deps) {
     storeEscrowCopy,
     exportBackup,
     importBackup,
+    // Дождаться записи состояния движка (перед стиранием хранилища устройства)
+    settleState: persistNow,
     cachedGroups,
     changeGroup,
     setGroupInfo,
@@ -3455,7 +3619,8 @@ export function createV2Controller(deps: Deps) {
     readers,
     trySend,
     trySendCall,
-    uploadBlob,
+    uploadBlobChunk,
+    completeBlobUpload,
     downloadBlobCap,
     withBlobSession,
     trySendTyping,
@@ -3482,12 +3647,19 @@ export function createV2Controller(deps: Deps) {
       linkMaterial = undefined;
       rootBackupB64 = undefined;
       idConn?.close();
+      blobControl.close();
       [...anonConns.keys()].forEach(closeAnon);
       blobConns.closeAll();
       anonPlanner?.free();
       anonPlanner = undefined;
+      // Снимок снимается синхронно до освобождения движка; запись доходит сама
+      void persistNow();
       client?.free();
       client = undefined;
+      readyClient = undefined;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      reconnectBackoff.reset();
       peers.clear();
       messages.clear();
       reactions.clear();

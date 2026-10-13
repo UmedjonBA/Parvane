@@ -72,6 +72,37 @@ describe('secure E2E storage records', () => {
   });
 });
 
+describe('secure E2E storage batches (perf A6)', () => {
+  it('saves and deletes many records at once and lists a prefix by key range', async () => {
+    const storage = await SecureE2eStorage.open('erin@local');
+    await storage.saveRecords(Array.from({ length: 70 }, (_, i) => [`m:${String(i).padStart(3, '0')}`, { id: i }]));
+    // Соседний префикс в диапазон не попадает
+    await storage.saveRecord('mx:1', { id: 'other' });
+    await storage.saveRecord('j:1', { id: 'journal' });
+    const rows = await storage.loadRecordsByPrefix<{ id: number }>('m:');
+    expect(rows.map((r) => r.id)).toEqual(Array.from({ length: 70 }, (_, i) => i));
+    await storage.deleteRecords(['m:000', 'm:001', 'm:069']);
+    expect((await storage.loadRecordsByPrefix<{ id: number }>('m:')).length).toBe(67);
+    expect(await storage.loadRecord('mx:1')).toEqual({ id: 'other' });
+    await SecureE2eStorage.clearRecords('erin@local');
+    expect(await storage.loadRecord('j:1')).toBeUndefined();
+  });
+
+  it('re-keys binary records together with JSON records when a PIN is set', async () => {
+    const user = 'frank@local';
+    const storage = await SecureE2eStorage.open(user);
+    const bytes = new Uint8Array([1, 2, 3, 250, 251]);
+    await storage.saveBytesRecord('v2-engine-bin', bytes);
+    await storage.saveRecord('m:1', { id: 1 });
+    await setStoragePin(user, '4321');
+    const pinned = await SecureE2eStorage.open(user);
+    expect(await pinned.loadBytesRecord('v2-engine-bin')).toEqual(bytes);
+    expect(await pinned.loadRecord('m:1')).toEqual({ id: 1 });
+    await setStoragePin(user, '');
+    await SecureE2eStorage.clear(user);
+  });
+});
+
 describe('secure E2E storage compatibility', () => {
   it('keeps the legacy AAD for the state record so old profiles still decrypt', () => {
     const decoder = new TextDecoder();

@@ -109,6 +109,12 @@ export function createConnectionController(deps: ConnectionDependencies) {
   let lastServerInfo: ServerInfo | undefined;
   let presenceTimer: number | undefined;
   let sessionGeneration = 0;
+  if (typeof document !== 'undefined') {
+    // Вкладка снова на экране — присутствие сразу, не дожидаясь такта таймера
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && presenceTimer !== undefined) publishPresence();
+    });
+  }
   const typingClearTimers = new Map<string, number>();
   // P-18: presence — только конкретных собеседников, а не всех пользователей сервера
   const watchedPresence = new Set<string>();
@@ -333,6 +339,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   function publishPresence() {
     if (!deps.getConnection()) return;
+    // Скрытая вкладка «в сети» не считается: публикуем при возврате на экран
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     // L2-1: присутствие одно на аккаунт — молчим, пока режим активен хоть в одном чате
     if (deps.v2 && !deps.v2.presenceAllowed()) return;
     // FR-040: «кто видит, что я в сети — никто» — присутствие не публикуется вовсе
@@ -360,7 +368,11 @@ export function createConnectionController(deps: ConnectionDependencies) {
     deps.setConnection(activeConnection);
 
     try {
-      const info = await requestServerInfo(activeConnection);
+      // perf B1: по сохранённому токену адрес уже полный — описатель сервера
+      // (отдельное соединение server.describe) не нужен; описатель для форм
+      // входа/регистрации запрашивается отдельно, когда понадобится
+      const isTokenResume = Boolean(savedToken) && input.includes('@');
+      const info = isTokenResume ? knownServerInfo(input) : await requestServerInfo(activeConnection);
       lastServerInfo = info;
       const user = canonicalAddress(input, info.domain);
 
@@ -414,8 +426,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
       if (generation !== sessionGeneration) throw new Error('Вход прерван новой сессией');
       deps.calls.setup();
 
-      await deps.resolveDisplayNames([user]);
-      deps.log('имена получены, шлю ready-апдейты');
+      // perf B1: своё имя не задерживает готовность — доедет апдейтом updateUser
+      void deps.resolveDisplayNames([user]).catch(() => undefined);
+      deps.log('шлю ready-апдейты (имя себя — в фоне)');
       const currentUser = deps.getStore().buildApiUser(user);
       deps.sendUpdate({ '@type': 'updateCurrentUser', currentUser, currentUserFullInfo: {} });
       deps.sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateReady' });
@@ -465,6 +478,12 @@ export function createConnectionController(deps: ConnectionDependencies) {
       deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
     }
     return fallbackServerInfo();
+  }
+
+  // Параметры сервера по полному адресу аккаунта (возобновление по токену):
+  // домен — из адреса, остальное формам входа при живой сессии не нужно
+  function knownServerInfo(address: string): ServerInfo {
+    return { ...fallbackServerInfo(), domain: address.slice(address.indexOf('@') + 1) };
   }
 
   // Для формы регистрации (сессии ещё нет)

@@ -11,6 +11,8 @@ import {
   registerBudgetConsumer,
   totalDecryptedBytes,
 } from '../../util/parvaneMediaBudget';
+import { base64ToBytes, bytesToBase64 } from './v2/base64';
+import { type AttachmentUploadTransport, uploadAttachmentStream } from './attachmentUpload';
 import {
   blobChunkCount,
   blobChunkOffset,
@@ -20,8 +22,10 @@ import {
   encryptBlob,
   parseBlobHeader,
 } from './blobcrypt';
+import { createCipherSource } from './cloudBlobs';
 import { apiEntitiesToWire } from './entities';
 import { getV2Bridge } from './gateway';
+import { encodeThumbnail, thumbBytes } from './mediaThumb';
 import {
   buildWireEvent,
   TOPIC_FILE_DELETE,
@@ -32,8 +36,7 @@ import {
 
 // Блобы вложений v2-чатов (T131, FR-062): загрузка без per-recipient гранта и
 // скачивание по секрету capability анонимным каналом — `v2/controller.ts`
-type V2BlobTransport = {
-  uploadBlob: (bytes: Uint8Array, capability: Uint8Array, chunkBytes: number) => Promise<string>;
+type V2BlobTransport = AttachmentUploadTransport & {
   downloadBlobCap: (fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number) => Promise<{
     size: number; chunks: number; parts: Map<number, Uint8Array>;
   }>;
@@ -61,6 +64,8 @@ type CloudUploadOptions = {
 
 // Чанков блоба за один запрос скачивания по capability (потолок схемы)
 const CAP_DOWNLOAD_BATCH = 256;
+// Миниатюр из содержимого (perf A10) держим в памяти: ≤ 16 КиБ каждая
+const THUMB_FIELD_CACHE = 4000;
 
 type CachedMedia = { blob: Blob; mimeType: string } | undefined;
 
@@ -69,7 +74,9 @@ type CachedMedia = { blob: Blob; mimeType: string } | undefined;
 export const MEDIA_INTEGRITY_ERROR = 'MEDIA_INTEGRITY';
 type MediaIntegrityFailure = { error: typeof MEDIA_INTEGRITY_ERROR };
 
-const UPLOAD_CHUNK_BYTES = 192 * 1024;
+// Ключ и nonce PVB2 вложения (как у `encryptBlob`)
+const BLOB_KEY_LEN = 32;
+const BLOB_NONCE_LEN = 12;
 // `wallpaper<id>` — локальные обои (uploadWallpaper), блоб лежит в cacheByFileId.
 // Двоеточие — часть id стикера пака (`pvpk-<набор>:<файл>`, `stickerPacks.ts`):
 // без него хэш такого стикера не разбирался, полный файл не отдавался вовсе, а
@@ -127,21 +134,8 @@ const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
 const LINK_PREVIEW_TIMEOUT_MS = 10000;
 
-function encodeBase64(bytes: Uint8Array) {
-  let binary = '';
-  const step = 0x8000;
-  for (let index = 0; index < bytes.length; index += step) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + step));
-  }
-  return btoa(binary);
-}
-
-function decodeBase64(data: string) {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
+const encodeBase64 = bytesToBase64;
+const decodeBase64 = base64ToBytes;
 
 function concatBytes(parts: Uint8Array[]) {
   const total = parts.reduce((sum, part) => sum + part.length, 0);
@@ -193,6 +187,40 @@ export function createMediaService(deps: MediaDependencies) {
   // Секреты скачивания блобов v2-чатов (file_id → capability, base64)
   const capByFileId = new Map<string, string>();
   const mimeByFileId = new Map<string, string>();
+  // Миниатюры фото/видео из содержимого (perf A10): base64 JPEG по file_id —
+  // `?size=m` отдаётся из них без скачивания файла
+  const thumbByFileId = new Map<string, string>();
+
+  function rememberThumbnail(fileId: string, thumbnail: string) {
+    thumbByFileId.delete(fileId);
+    thumbByFileId.set(fileId, thumbnail);
+    if (thumbByFileId.size > THUMB_FIELD_CACHE) thumbByFileId.delete(thumbByFileId.keys().next().value!);
+  }
+
+  function thumbnailResult(fileId: string) {
+    const bytes = thumbByFileId.get(fileId);
+    const decoded = bytes ? thumbBytes(bytes) : undefined;
+    if (!decoded) return undefined;
+    return { dataBlob: new Blob([decoded as BlobPart], { type: 'image/jpeg' }), mimeType: 'image/jpeg' };
+  }
+
+  /** Миниатюра вложения для содержимого (perf A10): фото — из самого файла,
+   * видео — из кадра превью, снятого композером (`previewBlobUrl`). */
+  async function buildThumbnail(
+    attachment: NonNullable<SendMessageParams['attachment']>, blob: Blob,
+  ): Promise<string | undefined> {
+    try {
+      if (isPhotoAttachment(attachment)) return await encodeThumbnail(blob);
+      if (attachment.isRoundVideo || isVideoAttachment(attachment)) {
+        if (!attachment.previewBlobUrl) return undefined;
+        const frame = await fetch(attachment.previewBlobUrl).then((response) => response.blob());
+        return await encodeThumbnail(frame);
+      }
+    } catch {
+      // без миниатюры — как раньше
+    }
+    return undefined;
+  }
 
   function requireConnection() {
     const connection = deps.getConnection();
@@ -212,23 +240,28 @@ export function createMediaService(deps: MediaDependencies) {
   ) {
     const { encrypt = false, publicAccess = false, withCapability = false } = options;
     requireConnection();
-    let bytes: Uint8Array = new Uint8Array(await blob.arrayBuffer());
     let mediaKeys: { keyB64: string; nonceB64: string } | undefined;
-    if (encrypt) {
-      const encrypted = await encryptBlob(bytes);
-      bytes = encrypted.ciphertext;
-      mediaKeys = { keyB64: encrypted.keyB64, nonceB64: encrypted.nonceB64 };
-    }
-    const v2 = withCapability && mediaKeys ? deps.getV2?.() : undefined;
+    const v2 = withCapability && encrypt ? deps.getV2?.() : undefined;
     if (withCapability && !v2?.isReady()) throw new Error('стек v2 не готов — вложение не загружено');
     let fileId: string;
     let capabilityB64: string | undefined;
     if (v2) {
+      // Вложение чата — потоком (perf A7): PVB2 считается из кусков файла по
+      // требованию, файл целиком в память не читается
+      const rawKey = crypto.getRandomValues(new Uint8Array(BLOB_KEY_LEN));
+      const nonce = crypto.getRandomValues(new Uint8Array(BLOB_NONCE_LEN));
       const capability = crypto.getRandomValues(new Uint8Array(32));
-      fileId = await v2.uploadBlob(bytes, capability, UPLOAD_CHUNK_BYTES);
+      fileId = await uploadAttachmentStream(v2, createCipherSource(blob, rawKey, nonce), capability);
+      mediaKeys = { keyB64: encodeBase64(rawKey), nonceB64: encodeBase64(nonce) };
       capabilityB64 = encodeBase64(capability);
       capByFileId.set(fileId, capabilityB64);
     } else {
+      let bytes: Uint8Array = new Uint8Array(await blob.arrayBuffer());
+      if (encrypt) {
+        const encrypted = await encryptBlob(bytes);
+        bytes = encrypted.ciphertext;
+        mediaKeys = { keyB64: encrypted.keyB64, nonceB64: encrypted.nonceB64 };
+      }
       fileId = await getV2Bridge().control.uploadBlob(bytes, publicAccess);
     }
     if (mediaKeys) {
@@ -280,7 +313,8 @@ export function createMediaService(deps: MediaDependencies) {
   // Блоб без capability — методом v2 `cloud.blob.download` (свой либо
   // открытый); тот же вид ответа, что у скачивания по секрету
   const ownedTransport: V2BlobTransport = {
-    uploadBlob: () => Promise.reject(new Error('ownedTransport: только скачивание')),
+    uploadBlobChunk: () => Promise.reject(new Error('ownedTransport: только скачивание')),
+    completeBlobUpload: () => Promise.reject(new Error('ownedTransport: только скачивание')),
     downloadBlobCap: async (fileId, _capability, firstChunk, chunkCount) => {
       const got = await getV2Bridge().control.downloadChunks(fileId, firstChunk, chunkCount);
       return { size: got.size, chunks: got.totalChunks, parts: got.parts };
@@ -596,6 +630,9 @@ export function createMediaService(deps: MediaDependencies) {
       const thumbFileId = getMediaFileId(normalizedUrl);
       if (!thumbFileId) return Promise.resolve(buildThumbPlaceholder());
       if (tamperedFileIds.has(thumbFileId)) return Promise.resolve(buildThumbPlaceholder());
+      // Миниатюра из содержимого (perf A10) — без скачивания файла и съёмки кадра
+      const fromContent = thumbnailResult(thumbFileId);
+      if (fromContent) return Promise.resolve(fromContent);
       if (mimeByFileId.get(thumbFileId)?.startsWith('video/')) {
         return getVideoThumbnail(thumbFileId).then((blob) => (blob
           ? { dataBlob: blob, mimeType: 'image/jpeg' }
@@ -617,6 +654,12 @@ export function createMediaService(deps: MediaDependencies) {
     }
     const fileId = avatarMatch ? avatarMatch[1] : mediaMatch?.[1];
     if (!fileId) return Promise.resolve(undefined);
+    // Пиктограмма фото (`?size=m`: ответы, закреп, поиск) — из миниатюры
+    // содержимого (perf A10), пока полный файл не скачан по открытию
+    if (normalizedUrl.startsWith('photo') && /[?&]size=m(?:&|$)/.test(normalizedUrl) && !cacheByFileId.has(fileId)) {
+      const fromContent = thumbnailResult(fileId);
+      if (fromContent) return Promise.resolve(fromContent);
+    }
     if (tamperedFileIds.has(fileId)) {
       return Promise.resolve({ error: MEDIA_INTEGRITY_ERROR } as MediaIntegrityFailure);
     }
@@ -936,6 +979,7 @@ export function createMediaService(deps: MediaDependencies) {
       if (content.mime) mimeByFileId.set(content.file_id, content.mime);
       // Секрет скачивания (v2): блоб без гранта на нас — только анонимным каналом
       if (content.capability) capByFileId.set(content.file_id, content.capability);
+      if (content.thumbnail) rememberThumbnail(content.file_id, content.thumbnail);
     }
     const pack = content.pack_ref;
     if (pack?.file_id && pack.capability) capByFileId.set(pack.file_id, pack.capability);
@@ -1353,6 +1397,7 @@ export function createMediaService(deps: MediaDependencies) {
     getCapability: (fileId: string) => capByFileId.get(fileId),
     isPhotoAttachment,
     isVideoAttachment,
+    buildThumbnail,
     messageToWireContent,
     rememberKeys,
     rememberCapability,

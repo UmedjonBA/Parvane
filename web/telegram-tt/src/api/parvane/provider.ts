@@ -36,8 +36,10 @@ import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
+import { loadProtocol } from './v2/engine';
 import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
 import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
+import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import {
   clearLoginStorage,
@@ -450,6 +452,16 @@ if (draftsChannel) {
   };
 }
 
+// perf A2: строки истории по uuid — общий индекс конвейера отображения и
+// контроллера v2 (цели мутаций без чтения всей истории)
+const messageIndex = createMessageIndex({
+  loadAll: async () => [
+    ...await localState.loadHistoryRecords(),
+    ...await localState.readOwnJournal(),
+  ],
+  loadOne: (uuid) => localState.loadHistoryRecord(uuid),
+});
+
 const syncController = createSyncController({
   getConnection: () => connection,
   getStore: () => store,
@@ -462,6 +474,7 @@ const syncController = createSyncController({
   taskOffers,
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
+  rememberStored: messageIndex.set,
   sendUpdate,
   log: logDebug,
 });
@@ -572,6 +585,7 @@ const v2Controller = createV2Controller({
     ...await localState.loadHistoryRecords(),
     ...await localState.readOwnJournal(),
   ],
+  index: messageIndex,
   log: logDebug,
 });
 // ID-01: вход привязанного устройства несёт доказательство его ключа
@@ -616,6 +630,8 @@ const connectionController = createConnectionController({
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     localState.clearUserData(user);
+    // Отложенная запись состояния движка (perf A1) не должна лечь поверх стирания
+    await v2Controller.settleState().catch(() => undefined);
     await SecureE2eStorage.clear(user);
     await clearSecureSession(user).catch(() => undefined);
   },
@@ -664,6 +680,9 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
   onUpdate = _onUpdate;
   // eslint-disable-next-line no-console
   console.info('[parvane] initApi вызван');
+  // perf B1: WASM-движок (2,6 МБ) качается и инициализируется параллельно
+  // чтению хранилища и входу, а не на первом вызове движка
+  void loadProtocol().catch(() => undefined);
 
   sendUpdate({ '@type': 'updateApiReady' });
   sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
@@ -948,7 +967,12 @@ const BUNDLE_HISTORY_MIN_MS = 30 * 60 * 1000;
 // кладёт туда свежий снимок истории
 const BUNDLE_RECHECK_DELAYS_MS = [60 * 1000, 5 * 60 * 1000];
 const BUNDLE_APPLIED_KEY = 'parvane:bundle-history:';
+// Опрос ответа владельца из Telegram: первый через 3 с, дальше интервал растёт
+// ×1,5 до 30 с (вместо запроса каждые 3 с четверть часа); по истечении
+// TELEGRAM_KEY_WAIT_MS опрос останавливается («истекло», можно попросить снова)
 const TELEGRAM_KEY_POLL_MS = 3000;
+const TELEGRAM_KEY_POLL_MAX_MS = 30000;
+const TELEGRAM_KEY_POLL_GROWTH = 1.5;
 const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
 
 type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
@@ -1070,9 +1094,21 @@ function setTelegramRecoveryState(state: TelegramRecoveryState) {
 
 function stopTelegramRecovery(state: TelegramRecoveryState) {
   telegramRecovery.generation++;
-  window.clearInterval(telegramRecovery.timer);
+  window.clearTimeout(telegramRecovery.timer);
   telegramRecovery.timer = undefined;
   setTelegramRecoveryState(state);
+}
+
+/** Следующий опрос через `delayMs`; пока ждём ответа — интервал растёт. */
+function scheduleTelegramPoll(generation: number, startedAt: number, delayMs: number) {
+  telegramRecovery.timer = window.setTimeout(() => {
+    telegramRecovery.timer = undefined;
+    void pollTelegramRecovery(generation, startedAt).then(() => {
+      if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting') return;
+      const next = Math.min(TELEGRAM_KEY_POLL_MAX_MS, Math.round(delayMs * TELEGRAM_KEY_POLL_GROWTH));
+      scheduleTelegramPoll(generation, startedAt, next);
+    });
+  }, delayMs);
 }
 
 // Новое устройство: бот просит владельца ответить ключом восстановления, ответ
@@ -1091,9 +1127,7 @@ async function startTelegramRecovery(again: boolean) {
   logDebug('ключ восстановления: бот спросит владельца в Telegram');
   const startedAt = Date.now();
   setTelegramRecoveryState('waiting');
-  telegramRecovery.timer = window.setInterval(() => {
-    void pollTelegramRecovery(generation, startedAt);
-  }, TELEGRAM_KEY_POLL_MS);
+  scheduleTelegramPoll(generation, startedAt, TELEGRAM_KEY_POLL_MS);
 }
 
 async function pollTelegramRecovery(generation: number, startedAt: number) {
@@ -1114,7 +1148,7 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
     if (!reply.pending) void v2Controller.requestTelegramKey(false);
     return;
   }
-  window.clearInterval(telegramRecovery.timer);
+  window.clearTimeout(telegramRecovery.timer);
   telegramRecovery.timer = undefined;
   setTelegramRecoveryState('joining');
   logDebug('ключ восстановления: получен ответ владельца из Telegram');
@@ -3410,7 +3444,7 @@ const methods = {
     // профиль показывал старые поля до перезагрузки или входящего сообщения —
     // resolve сам разошлёт updateUser/updateUserFullInfo, если что-то менялось
     // (SC-011)
-    if (address !== store.self) void syncController.resolveDisplayNames([address]).catch(() => undefined);
+    if (address !== store.self) void syncController.resolveDisplayNames([address], true).catch(() => undefined);
     const user = store.buildApiUser(address);
     const isBlocked = localState.loadBlocked().includes(address);
     // `loadFullUser` без guard'ов читает `users`/`chats`/`userStatusesById` —
@@ -3543,7 +3577,8 @@ function sendUpdate(update: ApiUpdate) {
   // штатного порядка, selectIsViewportNewest становился false и новое сообщение
   // не попадало в загруженное окно (стрелка ↓, «сообщение не появляется»).
   // Отдаём всё reducer'у — поведение 1:1 с Telegram.
-  diagLog(`upd:${update['@type']}`, update);
+  // perf A12: апдейты в диагностический журнал не пишутся — их сотни на старте,
+  // каждый стоил summarize и записи в localStorage; действия и вызовы остаются
   onUpdate(update);
 }
 
@@ -3574,10 +3609,12 @@ export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<
   const method = (methods as Record<string, AnyFunction>)[fnName as string];
   if (!method) {
     // parvaneDiag: пропуск метода виден в журнале — по нему сценарий обхода
-    // UI ловит действия, которые молча ничего не делают
-    diagLog('api-missing', String(fnName));
+    // UI ловит действия, которые молча ничего не делают. Заглушки Telegram
+    // (B5: ~40 загрузок после синка) — раз на имя метода, без записи на
+    // каждый вызов
     if (!reportedMissingMethods.has(fnName)) {
       reportedMissingMethods.add(fnName);
+      diagLog('api-missing', String(fnName));
       // eslint-disable-next-line no-console
       console.debug(`[parvane] метод не реализован: ${String(fnName)}`);
     }

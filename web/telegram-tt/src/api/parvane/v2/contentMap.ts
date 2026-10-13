@@ -216,6 +216,7 @@ function mediaToV2(c: WireMessageContent): V2Media {
     caption_entities: entitiesToV2(c.entities),
     title: c.audio_title,
     performer: c.audio_performer,
+    thumbnail: c.thumbnail,
     capability: c.capability,
   };
 }
@@ -247,6 +248,7 @@ function mediaFromV2(m: V2Media): WireMessageContent {
     entities: entitiesFromV2(m.caption_entities),
     audio_title: m.title || undefined,
     audio_performer: m.performer || undefined,
+    thumbnail: m.thumbnail || undefined,
     capability: m.capability || undefined,
   };
   return prune(out);
