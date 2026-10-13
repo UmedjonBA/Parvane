@@ -99,6 +99,9 @@ function chain(count: number): { nodes: GraphNode[]; edges: GraphEdge[] } {
   return { nodes, edges };
 }
 
+// Раскладка синтетических графов в сотни узлов под нагрузкой полного прогона не укладывается в 5 с по умолчанию
+const HEAVY_TIMEOUT_MS = 60_000;
+
 describe('граф заметок: сборка', () => {
   it('только заметки: узлы, недостающие заметки, связи без дублей и петель', () => {
     const graph = buildGraph(INPUT, NOTES_ONLY);
@@ -280,7 +283,7 @@ describe('граф заметок: выбор папок', () => {
   });
 });
 
-describe('граф заметок: раскладка', () => {
+describe('граф заметок: раскладка', { timeout: HEAVY_TIMEOUT_MS }, () => {
   const BOX = { width: 800, height: 600 };
 
   it('одно зерно — одинаковый результат, другое зерно — другой', () => {
@@ -503,7 +506,7 @@ describe('граф заметок: соседи и размер точки', () 
   });
 });
 
-describe('граф заметок: место новых узлов', () => {
+describe('граф заметок: место новых узлов', { timeout: HEAVY_TIMEOUT_MS }, () => {
   const OPTIONS = { width: 800, height: 600, seed: 4 };
 
   function positions(nodes: GraphNode[]) {
