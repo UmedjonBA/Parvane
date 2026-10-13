@@ -4,6 +4,8 @@ declare module '*.css';
 declare module '*.scss';
 
 declare const APP_VERSION: string;
+// Идентификатор сборки (хеш коммита), см. vite.config.ts — по нему вкладка узнаёт о новой выкладке
+declare const APP_BUILD: string;
 declare const CHANGELOG_DATETIME: number | undefined;
 
 declare module 'virtual:git-info' {

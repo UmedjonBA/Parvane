@@ -309,7 +309,9 @@ export function handleMessage({ data }: { data: BroadcastChannelMessage }) {
 
     case 'requestGlobal': {
       const { appVersion } = data;
-      if (appVersion !== APP_VERSION) {
+      // Сравнивается идентификатор сборки, а не номер версии пакета (B3): новая вкладка после деплоя —
+      // и вкладки прошлой сборки перезагружаются сами
+      if (appVersion !== APP_BUILD) {
         // If app version on the other tab was updated, reload the current page immediately and don't respond
         // to the other tab's request because our current global might be incompatible with the new version
         window.location.reload();

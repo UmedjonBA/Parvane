@@ -59,7 +59,7 @@ async function init() {
   listenOtherClients();
 
   subscribeToMultitabBroadcastChannel();
-  await requestGlobal(APP_VERSION);
+  await requestGlobal(APP_BUILD);
   markTabOpen();
   // Ключ вкладки снимается и в `pagehide` (B1): на телефоне `beforeunload` почти не приходит, и каждый
   // следующий запуск ждал ответа несуществующей вкладки

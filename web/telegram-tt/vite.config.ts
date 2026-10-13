@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import { readFileSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { bundleStats } from 'rollup-plugin-bundle-stats';
@@ -15,6 +16,12 @@ const CHANGELOG_PATH = resolve(DIR_NAME, 'src/versionNotification.txt');
 const PRODUCTION_URL = 'https://web.telegram.org/a';
 
 const { version: APP_VERSION } = packageJson;
+// Идентификатор сборки (B3): вшивается в бандл как `APP_BUILD` и пишется в `version.txt` dist — по нему открытая
+// вкладка узнаёт о новой выкладке (`checkAppVersion`) и старые вкладки перезагружаются при открытии новой
+// (`multitab.ts`). Номер версии пакета для этого не годился: между деплоями он не менялся.
+// PARVANE_BUILD_ID задаёт его явно; иначе — хеш коммита, при незакоммиченных правках — с отметкой времени
+const APP_BUILD = process.env.PARVANE_BUILD_ID || buildAppBuildId();
+const VERSION_FILE_NAME = 'version.txt';
 const BUNDLE_STATS_OUT_DIR = 'bundle-stats';
 const DEFAULT_BUNDLE_STATS_BASELINE_FILE = 'baseline.json';
 const BUNDLE_STATS_VISUALIZER_FILE = 'visualizer.html';
@@ -101,6 +108,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const plugins: PluginOption[] = [
     v2InviteRedirectPlugin(),
     cloudLinkRedirectPlugin(),
+    buildVersionFilePlugin(APP_BUILD),
     buildGitInfoPlugin({
       appEnv,
       head: HEAD,
@@ -197,6 +205,7 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     define: {
       APP_VERSION: JSON.stringify(APP_VERSION),
+      APP_BUILD: JSON.stringify(APP_BUILD),
       CHANGELOG_DATETIME: JSON.stringify(statSync(CHANGELOG_PATH, { throwIfNoEntry: false })?.mtime.getTime()),
     },
     resolve: {
@@ -347,6 +356,41 @@ function gatewayOrigins(appEnv: string) {
 // сервер переводит её на корень — `/?join=<link_id>`; фрагмент с секретом
 // браузер переносит сам, серверу он не уходит. То же правило — в Caddyfile прода.
 const V2_INVITE_PATH = /^\/join\/([A-Za-z0-9_-]{43})$/;
+
+function buildAppBuildId() {
+  try {
+    const git = (args: string[]) => execFileSync('git', args, {
+      cwd: DIR_NAME, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const commit = git(['rev-parse', '--short=12', 'HEAD']);
+    const isDirty = git(['status', '--porcelain', '--untracked-files=no']) !== '';
+    return isDirty ? `${commit}-${Date.now().toString(36)}` : commit;
+  } catch {
+    return `build-${Date.now().toString(36)}`;
+  }
+}
+
+// `version.txt` в корне dist с идентификатором сборки (B3). В dev отдаётся промежуточным обработчиком —
+// `checkAppVersion` сравнивает его с вшитым `APP_BUILD`
+function buildVersionFilePlugin(appBuild: string): Plugin {
+  return {
+    name: 'parvane-build-version',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: VERSION_FILE_NAME, source: appBuild });
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.split('?')[0] !== `/${VERSION_FILE_NAME}`) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end(appBuild);
+      });
+    },
+  };
+}
 
 function v2InviteRedirectPlugin(): Plugin {
   type Middlewares = { use: (fn: (req: { url?: string }, res: {

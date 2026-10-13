@@ -1,6 +1,6 @@
 import { DEBUG } from '../config';
 import { pause } from '../util/schedulers';
-import { clearAssetCache, respondWithCache, respondWithCacheNetworkFirst } from './assetCache';
+import { pruneAssetCache, respondWithCache, respondWithCacheNetworkFirst } from './assetCache';
 import { respondForDownload } from './download';
 import { respondForProgressive } from './progressive';
 import {
@@ -13,7 +13,9 @@ import { handleClientMessage as handleShareMessage, respondForShare } from './sh
 declare const self: ServiceWorkerGlobalScope;
 
 const CACHE_FIRST_ASSET_EXTENSIONS = 'js|css|woff2?|svg|png|jpe?g|tgs|json|wasm';
-const RE_NETWORK_FIRST_ASSETS = /\.(wasm|html)$/;
+// B3: WASM (движок протокола 2,7 МБ) больше не «сначала сеть» — имя файла с хешем, он в кэше навсегда,
+// как и остальные хешированные ассеты; «сначала сеть» остаётся только для HTML
+const RE_NETWORK_FIRST_ASSETS = /\.html$/;
 const RE_CACHE_FIRST_ASSETS = new RegExp(
   `(?:/assets/[^/]+|/(?:[^/]+\\.)?worker|/index)-[\\w-]{8}`
   + `\\.(${CACHE_FIRST_ASSET_EXTENSIONS})$`,
@@ -41,7 +43,8 @@ self.addEventListener('activate', (e) => {
       // An attempt to fix freezing UI on iOS
       pause(ACTIVATE_TIMEOUT),
       Promise.all([
-        clearAssetCache(),
+        // B3: не стирать кэш целиком при каждой смене service worker (= каждый деплой), а убрать устаревшее
+        pruneAssetCache((url) => RE_CACHE_FIRST_ASSETS.test(new URL(url).pathname)),
         // Become available to all pages
         self.clients.claim(),
       ]),
