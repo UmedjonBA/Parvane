@@ -736,8 +736,8 @@ impl Client {
                 genesis: b64(&c.genesis.encode_to_vec()),
                 grants: c.grants.iter().map(|g| b64(&g.encode_to_vec())).collect(),
                 keys: (dom::FIRST_EPOCH..=c.access.epoch).filter_map(|e| c.keys.get(e).map(|k| (e, b64(k)))).collect(),
-                // Локальная копия хранит все надгробия (момент 0 — ничего не отбрасывать).
-                snapshot: b64(&c.state.to_snapshot(0).encode_to_vec()),
+                // Надгробия старше `PURGED_KEEP_MS` — как в снимке на сервере (A1(в)).
+                snapshot: b64(&c.state.to_snapshot(now_ms().max(0) as u64).encode_to_vec()),
                 head_seq: c.head_seq,
                 snapshot_seq: c.snapshot_seq,
                 guard_max: c.guard.max_seen(),
