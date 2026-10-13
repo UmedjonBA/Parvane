@@ -593,6 +593,68 @@
   flex-direction: column;
 }
 
+// ── ссылка для людей без аккаунта (`CloudLinkBlock`, spec 022) ───────────────
+
+.link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.linkHead {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+
+  font-weight: 500;
+  color: var(--pv-blue);
+}
+
+.linkUrlRow,
+.linkTerm,
+.linkProgress {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.linkUrl {
+  user-select: all;
+
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.5rem;
+
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  background: var(--pv-bg);
+}
+
+.linkTerm,
+.linkProgress {
+  font-size: 0.875rem;
+}
+
+.linkExpired {
+  color: var(--pv-red);
+}
+
+.linkKeyNote {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
 // ── выбор файлов облака в чате (`CloudChatDialogs`) ──────────────────────────
 
 .dialog :global(.modal-dialog) {

@@ -26,6 +26,9 @@ export const CLOUD_ERROR_KEYS = {
   rejected: 'ParvaneCloudErrorRejected',
   'not-found': 'ParvaneCloudErrorNotFound',
   'too-many': 'ParvaneCloudErrorTooMany',
+  'link-too-many': 'ParvaneCloudLinkErrorTooMany',
+  'link-limit': 'ParvaneCloudLinkErrorLimit',
+  'link-disabled': 'ParvaneCloudLinkErrorDisabled',
 } as const satisfies Record<CloudErrorCode, string>;
 
 const PROGRESS_KEYS = {

@@ -9,7 +9,8 @@ import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
 import { validateName } from './cloudModel';
 import {
-  getCloudData, getCloudPlace, getContainer, setCloudPlace, showCloudNotice, unshareCloudFolder,
+  getCloudData, getCloudLinks, getCloudPlace, getContainer, linkOfSource, setCloudPlace, showCloudNotice,
+  unshareCloudFolder,
 } from './cloudStore';
 
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -21,6 +22,7 @@ import RecipientPicker from '../../common/RecipientPicker';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import PvIcon from '../notes/PvIcon';
 import PvSheet from '../notes/PvSheet';
+import CloudLinkBlock from './CloudLinkBlock';
 
 import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
@@ -51,6 +53,7 @@ const CloudShareDialog = ({
 }: OwnProps) => {
   const lang = useLang();
   const data = useDerivedState(getCloudData);
+  const links = useDerivedState(getCloudLinks);
   const [createdId, setCreatedId] = useState<string>();
   const [name, setName] = useState('');
   const [hasTried, setHasTried] = useState(false);
@@ -258,6 +261,14 @@ const CloudShareDialog = ({
                   <div className={kit.muted}>{lang('ParvaneCloudNoMembers')}</div>
                 )}
               </div>
+            )}
+            {/* Ссылка для людей без аккаунта (spec 022): снимок всей папки, создаёт владелец либо редактор */}
+            {(isOwner || container.role === 'editor') && (
+              <CloudLinkBlock
+                link={linkOfSource(links, { container: container.id })}
+                source={{ container: container.id, name: folderName }}
+                hasHeading
+              />
             )}
             <div className={kit.sheetButtons}>
               {isOwner && (
