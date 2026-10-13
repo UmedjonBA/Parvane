@@ -5,7 +5,7 @@ import type { PlannerState } from './plannerModel';
 import buildClassName from '../../../util/buildClassName';
 import { formatDay, formatMonthName, formatWeekday } from './plannerFormat';
 import {
-  buildDayIndex, fromDayKey, getMonthGridKeys, getYearMonths, toDayKey,
+  fromDayKey, getDayIndex, getMonthGridKeys, getYearMonths, toDayKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -32,7 +32,10 @@ const PlannerYear = ({
 }: OwnProps) => {
   const lang = useLang();
 
-  const index = useMemo(() => buildDayIndex(state, `${year}-01-01`, `${year}-12-31`), [state, year]);
+  const index = getDayIndex(state, `${year}-01-01`, `${year}-12-31`);
+  const months = useMemo(() => getYearMonths(year).map((month) => ({
+    month, prefix: toDayKey(month).slice(0, 7), days: getMonthGridKeys(month),
+  })), [year]);
 
   const handleDayClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onOpenMonth(e.currentTarget.dataset.day!);
@@ -43,8 +46,7 @@ const PlannerYear = ({
   return (
     <div data-planner-view="year">
       <div className={styles.year}>
-        {getYearMonths(year).map((month) => {
-          const prefix = toDayKey(month).slice(0, 7);
+        {months.map(({ month, prefix, days }) => {
           return (
             <section key={prefix} data-month={prefix}>
               <button
@@ -61,7 +63,7 @@ const PlannerYear = ({
                     {formatWeekday(lang, weekday).charAt(0)}
                   </span>
                 ))}
-                {getMonthGridKeys(month).map((day) => {
+                {days.map((day) => {
                   if (!day.startsWith(prefix)) return <span key={day} />;
                   const entry = index.get(day);
                   const count = entry ? entry.tasks.length + entry.events.length + entry.deadlines.length : 0;

@@ -150,16 +150,66 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
   }
 }
 
+// Индекс записей здоровья: запись вида на день (первая, как у `find`), записи вида по порядку данных и
+// по дням — один проход по массиву. Массив опубликованного состояния не меняется (правки создают новый),
+// в черновике он тоже заменяется целиком
+type HealthIndex = {
+  // Длина массива на момент построения: дописанный на месте массив перечитывается
+  size: number;
+  daily: Map<string, PlannerHealthRecord>;
+  byKind: Map<string, PlannerHealthRecord[]>;
+  // Записи вида по дню по возрастанию (устойчиво: тот же день — в порядке данных)
+  sortedByKind: Map<string, PlannerHealthRecord[]>;
+};
+
+const healthIndexes = new WeakMap<PlannerHealthRecord[], HealthIndex>();
+
+function getHealthIndex(state: PlannerState): HealthIndex {
+  const { health } = state;
+  let index = healthIndexes.get(health);
+  if (index && index.size === health.length) return index;
+  const daily = new Map<string, PlannerHealthRecord>();
+  const byKind = new Map<string, PlannerHealthRecord[]>();
+  health.forEach((record) => {
+    const key = `${record.kind}|${record.day}`;
+    if (!daily.has(key)) daily.set(key, record);
+    const list = byKind.get(record.kind);
+    if (list) list.push(record);
+    else byKind.set(record.kind, [record]);
+  });
+  const sortedByKind = new Map<string, PlannerHealthRecord[]>();
+  byKind.forEach((list, kind) => {
+    sortedByKind.set(kind, [...list].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)));
+  });
+  index = {
+    size: health.length, daily, byKind, sortedByKind,
+  };
+  healthIndexes.set(health, index);
+  return index;
+}
+
 /** Запись показателя дня (одна на день). */
 export function getDailyRecord(state: PlannerState, kind: PlannerHealthKind, day: string) {
-  return state.health.find((record) => record.kind === kind && record.day === day);
+  return getHealthIndex(state).daily.get(`${kind}|${day}`);
 }
 
 /** Последняя запись показателя не позже дня. */
 export function getLatestRecord(state: PlannerState, kind: PlannerHealthKind, day: string) {
-  return state.health
-    .filter((record) => record.kind === kind && record.day <= day)
-    .sort((a, b) => (a.day < b.day ? 1 : -1))[0];
+  const sorted = getHealthIndex(state).sortedByKind.get(kind);
+  if (!sorted?.length) return undefined;
+  // Двоичный поиск: первая запись позже дня
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (sorted[middle].day <= day) low = middle + 1;
+    else high = middle;
+  }
+  if (low === 0) return undefined;
+  // Среди записей последнего дня — первая по порядку данных
+  let at = low - 1;
+  while (at > 0 && sorted[at - 1].day === sorted[at].day) at--;
+  return sorted[at];
 }
 
 /** Дни недели, заканчивающейся этим днём (от старого к новому). */
@@ -173,14 +223,20 @@ export function getDailySeries(state: PlannerState, kind: PlannerHealthKind, day
 }
 
 export function getWorkouts(state: PlannerState, days: string[]) {
-  return state.health
-    .filter((record) => record.kind === 'workout' && days.includes(record.day))
+  const wanted = new Set(days);
+  return (getHealthIndex(state).byKind.get('workout') || [])
+    .filter((record) => wanted.has(record.day))
     .sort((a, b) => (a.day === b.day ? (b.time || '').localeCompare(a.time || '') : a.day < b.day ? 1 : -1));
+}
+
+/** Активные минуты тренировок: сумма их длительностей. */
+export function sumActiveMinutes(workouts: PlannerHealthRecord[]) {
+  return workouts.reduce((sum, record) => sum + record.value, 0);
 }
 
 /** Активные минуты за дни: длительность тренировок. */
 export function getActiveMinutes(state: PlannerState, days: string[]) {
-  return getWorkouts(state, days).reduce((sum, record) => sum + record.value, 0);
+  return sumActiveMinutes(getWorkouts(state, days));
 }
 
 /** Темп «мин:сек на километр». */

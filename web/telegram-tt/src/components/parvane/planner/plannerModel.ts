@@ -334,9 +334,7 @@ export function fromDayKey(key: string) {
 }
 
 export function addDays(key: string, delta: number) {
-  const date = fromDayKey(key);
-  date.setDate(date.getDate() + delta);
-  return toDayKey(date);
+  return keyOfEpoch(epochDays(key) + delta);
 }
 
 export function toMinutes(time: string) {
@@ -399,15 +397,47 @@ export function getDefaultEventEnd(start: string) {
 
 // ── повторы: разворачивание ряда ─────────────────────────────────────────────
 
+const MS_IN_DAY = 86400000;
+// 1970-01-01 — четверг
+const EPOCH_WEEKDAY = 4;
+
 // Дни от эпохи без влияния часового пояса и перевода часов
 function epochDays(day: string) {
   const [year, month, date] = day.split('-').map(Number);
-  return Math.floor(Date.UTC(year, month - 1, date) / 86400000);
+  return epochOf(year, month, date);
 }
 
-// Номер недели с понедельника (1970-01-01 — четверг)
-function weekIndex(day: string) {
-  return Math.floor((epochDays(day) + 3) / 7);
+function epochOf(year: number, month: number, date: number) {
+  return Math.floor(Date.UTC(year, month - 1, date) / MS_IN_DAY);
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function keyOfEpoch(epoch: number) {
+  const d = new Date(epoch * MS_IN_DAY);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+function partsOfEpoch(epoch: number) {
+  const d = new Date(epoch * MS_IN_DAY);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, date: d.getUTCDate() };
+}
+
+// Номер недели с понедельника
+function weekIndexOfEpoch(epoch: number) {
+  return Math.floor((epoch + 3) / 7);
+}
+
+// Понедельник недели с таким номером
+function mondayOfWeek(week: number) {
+  return week * 7 - 3;
+}
+
+// День недели как `Date.getDay` (0 — воскресенье)
+function weekdayOfEpoch(epoch: number) {
+  return (((epoch + EPOCH_WEEKDAY) % 7) + 7) % 7;
 }
 
 function daysInMonth(year: number, month: number) {
@@ -420,8 +450,7 @@ function parts(day: string) {
 }
 
 function weekdayOf(day: string) {
-  const d = parts(day);
-  return new Date(Date.UTC(d.year, d.month - 1, d.date)).getUTCDay();
+  return weekdayOfEpoch(epochDays(day));
 }
 
 // Позиция дня недели при неделе с понедельника
@@ -433,60 +462,207 @@ export function isRepeating(item: PlannerSeriesItem) {
   return Boolean(item.repeat);
 }
 
+// Отметки экземпляров по дню — один проход по массиву на массив; в черновике массив дописывается на
+// месте (`push`), поэтому запись проверяется ещё и по длине
+const occurrenceMaps = new WeakMap<PlannerOccurrence[], { size: number; byDay: Map<string, PlannerOccurrence> }>();
+
 export function getOccurrence(item: PlannerSeriesItem, day: string) {
-  return item.occurrences?.find((o) => o.day === day);
+  const { occurrences } = item;
+  if (!occurrences?.length) return undefined;
+  let cached = occurrenceMaps.get(occurrences);
+  if (!cached || cached.size !== occurrences.length) {
+    const byDay = new Map<string, PlannerOccurrence>();
+    // Первая отметка дня — как у `find`
+    occurrences.forEach((o) => {
+      if (!byDay.has(o.day)) byDay.set(o.day, o);
+    });
+    cached = { size: occurrences.length, byDay };
+    occurrenceMaps.set(occurrences, cached);
+  }
+  return cached.byDay.get(day);
+}
+
+// Правило повтора, разобранное один раз: границы и начало — днями от эпохи, дни недели — отсортированы и
+// битовой маской, число месяца — готовое. Правило неизменяемо (правки создают новый объект), поэтому
+// разбор привязан к самому объекту
+type CompiledRepeat = {
+  kind: PlannerRepeatKind;
+  interval: number;
+  isValid: boolean;
+  start?: number;
+  end?: number;
+  count?: number;
+  // weekly: позиции при неделе с понедельника по порядку, маска по `Date.getDay`
+  positions: number[];
+  weekdayMask: number;
+  startWeek: number;
+  skippedInFirstWeek: number;
+  // monthly / yearly
+  startYear: number;
+  startMonth: number;
+  startDate: number;
+  monthDay: number;
+};
+
+const compiledRepeats = new WeakMap<PlannerRepeat, CompiledRepeat>();
+
+function compileRepeat(repeat: PlannerRepeat): CompiledRepeat {
+  let compiled = compiledRepeats.get(repeat);
+  if (compiled) return compiled;
+  const { kind, interval } = repeat;
+  const start = repeat.startDay ? epochDays(repeat.startDay) : undefined;
+  const positions = [...new Set(repeat.weekdays || [])].map(mondayBased).sort((a, b) => a - b);
+  const startPosition = start === undefined ? 0 : mondayBased(weekdayOfEpoch(start));
+  const startParts = repeat.startDay ? parts(repeat.startDay) : { year: 0, month: 0, date: 0 };
+  compiled = {
+    kind,
+    interval,
+    isValid: Number.isInteger(interval) && interval >= 1,
+    start,
+    end: repeat.endDay ? epochDays(repeat.endDay) : undefined,
+    count: repeat.count || undefined,
+    positions,
+    weekdayMask: positions.reduce((mask, position) => mask | (1 << ((position + 1) % 7)), 0),
+    startWeek: start === undefined ? 0 : weekIndexOfEpoch(start),
+    skippedInFirstWeek: start === undefined ? 0 : positions.filter((position) => position < startPosition).length,
+    startYear: startParts.year,
+    startMonth: startParts.month,
+    startDate: startParts.date,
+    monthDay: repeat.monthDay || startParts.date,
+  };
+  compiledRepeats.set(repeat, compiled);
+  return compiled;
 }
 
 // Порядковый номер экземпляра (с 1) по правилу — без учёта исключений; `undefined` — ряд в этот день не даёт экземпляра
-function ordinalOf(repeat: PlannerRepeat, day: string): number | undefined {
-  const { kind, interval } = repeat;
-  if (!DAY_KEY_PATTERN.test(day) || !Number.isInteger(interval) || interval < 1) return undefined;
-  if (repeat.startDay && day < repeat.startDay) return undefined;
-  if (repeat.endDay && day > repeat.endDay) return undefined;
-  const d = parts(day);
+function ordinalOfEpoch(rule: CompiledRepeat, epoch: number): number | undefined {
+  if (!rule.isValid) return undefined;
+  if (rule.start !== undefined && epoch < rule.start) return undefined;
+  if (rule.end !== undefined && epoch > rule.end) return undefined;
+  const { kind, interval, start } = rule;
   if (kind === 'weekly') {
-    const weekdays = [...(repeat.weekdays || [])].sort((a, b) => mondayBased(a) - mondayBased(b));
-    const index = weekdays.indexOf(weekdayOf(day));
-    if (index < 0) return undefined;
-    if (!repeat.startDay) return 1;
-    const weeks = weekIndex(day) - weekIndex(repeat.startDay);
+    const weekday = weekdayOfEpoch(epoch);
+    if (!(rule.weekdayMask & (1 << weekday))) return undefined;
+    if (start === undefined) return 1;
+    const weeks = weekIndexOfEpoch(epoch) - rule.startWeek;
     if (weeks % interval !== 0) return undefined;
     // Дни первой недели до даты начала не порождаются и в счёт не идут
-    const startPosition = mondayBased(weekdayOf(repeat.startDay));
-    const skippedInFirstWeek = weekdays.filter((w) => mondayBased(w) < startPosition).length;
-    return (weeks / interval) * weekdays.length + index + 1 - skippedInFirstWeek;
+    const index = rule.positions.indexOf(mondayBased(weekday));
+    return (weeks / interval) * rule.positions.length + index + 1 - rule.skippedInFirstWeek;
   }
-  if (!repeat.startDay) return undefined;
-  const start = parts(repeat.startDay);
+  if (start === undefined) return undefined;
   if (kind === 'daily') {
-    const diff = epochDays(day) - epochDays(repeat.startDay);
+    const diff = epoch - start;
     return diff % interval === 0 ? diff / interval + 1 : undefined;
   }
+  const d = partsOfEpoch(epoch);
   if (kind === 'monthly') {
-    const months = (d.year * 12 + d.month) - (start.year * 12 + start.month);
+    const months = (d.year * 12 + d.month) - (rule.startYear * 12 + rule.startMonth);
     if (months % interval !== 0) return undefined;
-    const wanted = Math.min(repeat.monthDay || start.date, daysInMonth(d.year, d.month));
+    const wanted = Math.min(rule.monthDay, daysInMonth(d.year, d.month));
     return d.date === wanted ? months / interval + 1 : undefined;
   }
-  const years = d.year - start.year;
-  if (years % interval !== 0 || d.month !== start.month) return undefined;
-  const wanted = Math.min(start.date, daysInMonth(d.year, d.month));
+  const years = d.year - rule.startYear;
+  if (years % interval !== 0 || d.month !== rule.startMonth) return undefined;
+  const wanted = Math.min(rule.startDate, daysInMonth(d.year, d.month));
   return d.date === wanted ? years / interval + 1 : undefined;
+}
+
+function occursOnEpoch(rule: CompiledRepeat, epoch: number) {
+  const ordinal = ordinalOfEpoch(rule, epoch);
+  if (ordinal === undefined) return false;
+  return !rule.count || ordinal <= rule.count;
 }
 
 /** Даёт ли правило экземпляр в этот день (исключения не учитываются). */
 export function occursOn(repeat: PlannerRepeat, day: string) {
-  const ordinal = ordinalOf(repeat, day);
-  if (ordinal === undefined) return false;
-  return !repeat.count || ordinal <= repeat.count;
+  if (!DAY_KEY_PATTERN.test(day)) return false;
+  return occursOnEpoch(compileRepeat(repeat), epochDays(day));
+}
+
+/**
+ * Дни ряда в промежутке включительно по порядку (исключения не учитываются): обход идёт шагом правила —
+ * по дням интервала, по дням недели нужных недель, по месяцам либо годам. `visit` возвращает `true`,
+ * чтобы остановить обход.
+ */
+function forEachRepeatDay(repeat: PlannerRepeat, fromDay: string, toDay: string, visit: (day: string) => unknown) {
+  const rule = compileRepeat(repeat);
+  if (!rule.isValid || fromDay > toDay) return;
+  const from = epochDays(fromDay);
+  const to = epochDays(toDay);
+  const lo = rule.start === undefined ? from : Math.max(from, rule.start);
+  const hi = rule.end === undefined ? to : Math.min(to, rule.end);
+  if (lo > hi) return;
+  const { interval, count, start } = rule;
+  // `false` — обход остановлен
+  const emit = (epoch: number, ordinal: number) => {
+    if (count && ordinal > count) return false;
+    if (epoch > hi) return false;
+    if (epoch < lo) return true;
+    return !visit(keyOfEpoch(epoch));
+  };
+  if (rule.kind === 'weekly') {
+    if (start === undefined) {
+      for (let epoch = lo; epoch <= hi; epoch++) {
+        if ((rule.weekdayMask & (1 << weekdayOfEpoch(epoch))) && visit(keyOfEpoch(epoch))) return;
+      }
+      return;
+    }
+    const firstWeek = weekIndexOfEpoch(lo);
+    const skip = Math.ceil((firstWeek - rule.startWeek) / interval);
+    for (let week = rule.startWeek + skip * interval; ; week += interval) {
+      const monday = mondayOfWeek(week);
+      if (monday > hi) return;
+      const base = ((week - rule.startWeek) / interval) * rule.positions.length + 1 - rule.skippedInFirstWeek;
+      for (let index = 0; index < rule.positions.length; index++) {
+        if (!emit(monday + rule.positions[index], base + index)) return;
+      }
+    }
+  }
+  if (start === undefined) return;
+  if (rule.kind === 'daily') {
+    const skip = Math.ceil((lo - start) / interval);
+    for (let ordinal = skip + 1, epoch = start + skip * interval; emit(epoch, ordinal); ordinal++) {
+      epoch += interval;
+    }
+    return;
+  }
+  const loParts = partsOfEpoch(lo);
+  if (rule.kind === 'monthly') {
+    const startIndex = rule.startYear * 12 + rule.startMonth - 1;
+    const skip = Math.max(0, Math.ceil((loParts.year * 12 + loParts.month - 1 - startIndex) / interval));
+    for (let step = skip; ; step++) {
+      const index = startIndex + step * interval;
+      const year = Math.floor(index / 12);
+      const month = index - year * 12 + 1;
+      const epoch = epochOf(year, month, Math.min(rule.monthDay, daysInMonth(year, month)));
+      if (!emit(epoch, step + 1)) return;
+    }
+  }
+  const skip = Math.max(0, Math.ceil((loParts.year - rule.startYear) / interval));
+  for (let step = skip; ; step++) {
+    const year = rule.startYear + step * interval;
+    const epoch = epochOf(year, rule.startMonth, Math.min(rule.startDate, daysInMonth(year, rule.startMonth)));
+    if (!emit(epoch, step + 1)) return;
+  }
 }
 
 /** Дни ряда в промежутке включительно (исключения не учитываются). */
 export function expandRepeat(repeat: PlannerRepeat, fromDay: string, toDay: string) {
   const days: string[] = [];
-  for (let day = fromDay; day <= toDay; day = addDays(day, 1)) {
-    if (occursOn(repeat, day)) days.push(day);
-  }
+  forEachRepeatDay(repeat, fromDay, toDay, (day) => {
+    days.push(day);
+  });
+  return days;
+}
+
+/** Дни ряда в промежутке, в которые экземпляр есть (исключённые дни пропущены). */
+export function expandInstances(item: PlannerSeriesItem, fromDay: string, toDay: string) {
+  const days: string[] = [];
+  if (!item.repeat) return days;
+  forEachRepeatDay(item.repeat, fromDay, toDay, (day) => {
+    if (!getOccurrence(item, day)?.excluded) days.push(day);
+  });
   return days;
 }
 
@@ -500,9 +676,57 @@ export function instanceKey(item: PlannerSeriesItem) {
   return item.instanceDay ? `${item.id}@${item.instanceDay}` : item.id;
 }
 
-/** Экземпляр задачи-ряда на день: выполнение и шаги — из состояния экземпляра. */
-export function taskInstance(task: PlannerTask, day: string): PlannerTask {
-  const occurrence = getOccurrence(task, day);
+// Экземпляры рядов на день — по одному объекту на шаблон и день: строки и клетки под `memo` не
+// перерисовываются, пока шаблон тот же. Запись кэша проверяется по полям шаблона и отметке дня (черновик
+// правки меняет объекты на месте); черновик перед публикацией сбрасывает кэши целиком
+// (`resetPlannerCaches`)
+type InstanceEntry<T> = { instance: T; occurrence?: PlannerOccurrence; done?: boolean; doneSteps?: number[] };
+let taskInstances = new WeakMap<PlannerTask, Map<string, InstanceEntry<PlannerTask>>>();
+let eventInstances = new WeakMap<PlannerEvent, Map<string, InstanceEntry<PlannerEvent>>>();
+// Индексы по объекту состояния (`getDayIndex`, индекс здоровья) — там же
+let stateCaches = new WeakMap<PlannerState, Map<string, unknown>>();
+
+/** Сбросить кэши экземпляров и индексов: вызывается перед публикацией черновика правки. */
+export function resetPlannerCaches() {
+  taskInstances = new WeakMap();
+  eventInstances = new WeakMap();
+  stateCaches = new WeakMap();
+}
+
+/** Кэш, привязанный к объекту состояния: ключ — имя индекса, значение считается один раз. */
+export function getStateCache<T>(state: PlannerState, key: string, build: () => T): T {
+  let byKey = stateCaches.get(state);
+  if (!byKey) {
+    byKey = new Map();
+    stateCaches.set(state, byKey);
+  }
+  if (!byKey.has(key)) byKey.set(key, build());
+  return byKey.get(key) as T;
+}
+
+// Поля экземпляра, которые берутся не из шаблона
+const TASK_INSTANCE_OWN = new Set(['day', 'due', 'status', 'steps', 'instanceDay']);
+const EVENT_INSTANCE_OWN = new Set(['day', 'instanceDay']);
+
+// Экземпляр ещё отвечает шаблону: все унаследованные поля те же, отметка дня та же
+function isFresh<T extends PlannerSeriesItem>(
+  entry: InstanceEntry<T>, template: T, occurrence: PlannerOccurrence | undefined, own: Set<string>,
+) {
+  if (entry.occurrence !== occurrence || entry.done !== occurrence?.done || entry.doneSteps !== occurrence?.doneSteps) {
+    return false;
+  }
+  const keys = Object.keys(template);
+  const { instance } = entry;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (!own.has(key) && (instance as Record<string, unknown>)[key] !== (template as Record<string, unknown>)[key]) {
+      return false;
+    }
+  }
+  return Object.keys(instance).length === keys.length + (own.size - keys.filter((key) => own.has(key)).length);
+}
+
+function buildTaskInstance(task: PlannerTask, day: string, occurrence: PlannerOccurrence | undefined): PlannerTask {
   const doneSteps = new Set(occurrence?.doneSteps || []);
   return {
     ...task,
@@ -514,8 +738,42 @@ export function taskInstance(task: PlannerTask, day: string): PlannerTask {
   };
 }
 
+/** Экземпляр задачи-ряда на день: выполнение и шаги — из состояния экземпляра. */
+export function taskInstance(task: PlannerTask, day: string): PlannerTask {
+  let byDay = taskInstances.get(task);
+  if (!byDay) {
+    byDay = new Map();
+    taskInstances.set(task, byDay);
+  }
+  const occurrence = getOccurrence(task, day);
+  const entry = byDay.get(day);
+  // Шаги шаблона правятся на месте (`setTaskStepDone`): сверяется и их текст
+  if (entry && isFresh(entry, task, occurrence, TASK_INSTANCE_OWN)
+    && entry.instance.steps.length === task.steps.length
+    && entry.instance.steps.every((step, index) => step.text === task.steps[index].text)) {
+    return entry.instance;
+  }
+  const instance = buildTaskInstance(task, day, occurrence);
+  byDay.set(day, {
+    instance, occurrence, done: occurrence?.done, doneSteps: occurrence?.doneSteps,
+  });
+  return instance;
+}
+
 export function eventInstance(event: PlannerEvent, day: string): PlannerEvent {
-  return { ...event, day, instanceDay: day };
+  let byDay = eventInstances.get(event);
+  if (!byDay) {
+    byDay = new Map();
+    eventInstances.set(event, byDay);
+  }
+  const occurrence = getOccurrence(event, day);
+  const entry = byDay.get(day);
+  if (entry && isFresh(entry, event, occurrence, EVENT_INSTANCE_OWN)) return entry.instance;
+  const instance: PlannerEvent = { ...event, day, instanceDay: day };
+  byDay.set(day, {
+    instance, occurrence, done: occurrence?.done, doneSteps: occurrence?.doneSteps,
+  });
+  return instance;
 }
 
 export function isInstanceDone(task: PlannerTask, day: string) {
@@ -525,11 +783,14 @@ export function isInstanceDone(task: PlannerTask, day: string) {
 /** Ближайший невыполненный экземпляр задачи-ряда с `today` (горизонт года). */
 export function nextOpenInstance(task: PlannerTask, today: string): PlannerTask | undefined {
   if (!task.repeat) return undefined;
-  for (let i = 0; i < REPEAT_HORIZON_DAYS; i++) {
-    const day = addDays(today, i);
-    if (hasInstanceOn(task, day) && !isInstanceDone(task, day)) return taskInstance(task, day);
-  }
-  return undefined;
+  let found: string | undefined;
+  forEachRepeatDay(task.repeat, today, addDays(today, REPEAT_HORIZON_DAYS - 1), (day) => {
+    const occurrence = getOccurrence(task, day);
+    if (occurrence?.excluded || occurrence?.done) return false;
+    found = day;
+    return true;
+  });
+  return found === undefined ? undefined : taskInstance(task, found);
 }
 
 export type PlannerRepeatError = 'interval' | 'weekdays' | 'monthDay' | 'startDay' | 'endDay' | 'count';
@@ -568,7 +829,8 @@ export function setOccurrence(
 ) {
   const item = seriesOf(state, kind, id);
   if (!item) return false;
-  const occurrences = item.occurrences || [];
+  // Массив отметок не правится на месте: по нему строится кэш отметок по дню
+  const occurrences = [...(item.occurrences || [])];
   const index = occurrences.findIndex((o) => o.day === day);
   const next: PlannerOccurrence = { ...(index >= 0 ? occurrences[index] : {}), day, ...patch };
   if (index >= 0) occurrences[index] = next;
@@ -789,25 +1051,60 @@ export function getEventsForDay(state: PlannerState, day: string): PlannerEvent[
   return result.sort(compareEvents);
 }
 
+// Дела дня одним объектом: то же, что дают функции дня (`getTasksForDay`, `getEventsForDay`,
+// `getDeadlines`, `getTimedForDay`, `getDayLoad`, `countUnrated`, `countConflicts`, `isHolidayOn`), но за
+// один проход по всем записям на весь промежуток
 export type PlannerDayIndexEntry = {
   tasks: PlannerTask[];
+  // По порядку `compareEvents`
   events: PlannerEvent[];
   deadlines: PlannerTask[];
   isHoliday: boolean;
+  // Первый праздник дня (по порядку событий)
+  holiday?: PlannerEvent;
+  // Загрузка: оценки задач и длительность событий со временем
   minutes: number;
+  // Дела со временем по началу — как `getTimedForDay`
+  timed: PlannerTimed[];
+  // Задачи без времени начала либо без оценки
+  untimed: PlannerTask[];
+  allDay: PlannerEvent[];
+  conflicts: number;
+  unrated: number;
 };
 
-/**
- * Дела по дням промежутка за один проход по задачам и событиям — для видов «Год» и
- * «Расписание», где вызов функций дня на каждый день слишком дорог.
- */
-export function buildDayIndex(state: PlannerState, fromDay: string, toDay: string) {
-  const index = new Map<string, PlannerDayIndexEntry>();
+export type PlannerDayIndex = Map<string, PlannerDayIndexEntry>;
+
+const EMPTY_DAY_ENTRY: PlannerDayIndexEntry = Object.freeze({
+  tasks: [], events: [], deadlines: [], isHoliday: false, minutes: 0, timed: [], untimed: [], allDay: [],
+  conflicts: 0, unrated: 0,
+});
+
+function timedOf(name: string, start: string, end: string, task?: PlannerTask, event?: PlannerEvent): PlannerTimed {
+  return {
+    name, start, end, task, event,
+  };
+}
+
+function countTimedConflicts(timed: PlannerTimed[]) {
+  const spans = timed.map((item) => [toMinutes(item.start), toMinutes(item.end)]);
+  let count = 0;
+  for (let i = 0; i < spans.length; i++) {
+    for (let j = i + 1; j < spans.length; j++) {
+      if (spans[i][0] < spans[j][1] && spans[j][0] < spans[i][1]) count++;
+    }
+  }
+  return count;
+}
+
+function buildDayIndex(state: PlannerState, fromDay: string, toDay: string): PlannerDayIndex {
+  const index: PlannerDayIndex = new Map();
   const entryOf = (day: string) => {
     let entry = index.get(day);
     if (!entry) {
       entry = {
-        tasks: [], events: [], deadlines: [], isHoliday: false, minutes: 0,
+        tasks: [], events: [], deadlines: [], isHoliday: false, minutes: 0, timed: [], untimed: [], allDay: [],
+        conflicts: 0, unrated: 0,
       };
       index.set(day, entry);
     }
@@ -815,7 +1112,7 @@ export function buildDayIndex(state: PlannerState, fromDay: string, toDay: strin
   };
   const isInside = (day?: string): day is string => Boolean(day && day >= fromDay && day <= toDay);
   const daysOf = (item: PlannerSeriesItem) => (item.repeat
-    ? expandRepeat(item.repeat, fromDay, toDay).filter((day) => !getOccurrence(item, day)?.excluded)
+    ? expandInstances(item, fromDay, toDay)
     : (isInside(item.day) ? [item.day] : []));
   state.tasks.forEach((task) => {
     daysOf(task).forEach((day) => {
@@ -833,8 +1130,72 @@ export function buildDayIndex(state: PlannerState, fromDay: string, toDay: strin
       if (!event.isAllDay) entry.minutes += toMinutes(event.end) - toMinutes(event.start);
     });
   });
-  index.forEach((entry) => entry.events.sort(compareEvents));
+  index.forEach((entry) => {
+    entry.events.sort(compareEvents);
+    entry.holiday = entry.events.find((event) => event.isHoliday);
+    entry.allDay = entry.events.filter((event) => event.isAllDay);
+    entry.timed = [
+      ...entry.events.filter((event) => !event.isAllDay)
+        .map((event) => timedOf(event.name, event.start, event.end, undefined, event)),
+      ...entry.tasks.filter((task) => task.start && task.minutes !== undefined)
+        .map((task) => timedOf(task.name, task.start!, toTime(toMinutes(task.start!) + task.minutes!), task)),
+    ].sort((a, b) => a.start.localeCompare(b.start));
+    entry.untimed = entry.tasks.filter((task) => !task.start || task.minutes === undefined);
+    entry.unrated = entry.tasks.filter((task) => task.minutes === undefined).length;
+    entry.conflicts = countTimedConflicts(entry.timed);
+  });
   return index;
+}
+
+/**
+ * Дела по дням промежутка за один проход по задачам и событиям — для видов календаря, где вызов функций
+ * дня на каждый день слишком дорог. Считается один раз на объект состояния и промежуток; дня без дел в
+ * индексе нет (`getDayEntry` даёт пустую запись).
+ */
+export function getDayIndex(state: PlannerState, fromDay: string, toDay: string): PlannerDayIndex {
+  return getStateCache(state, `days:${fromDay}|${toDay}`, () => buildDayIndex(state, fromDay, toDay));
+}
+
+/** Дела одного дня из индекса: из уже построенного промежутка, накрывающего день, либо индекс одного дня. */
+export function getDayEntry(state: PlannerState, day: string): PlannerDayIndexEntry {
+  const ranges = getStateCache(state, 'dayRanges', () => new Map<string, PlannerDayIndex>());
+  let index = ranges.get(day);
+  if (!index) {
+    for (const [range, candidate] of ranges) {
+      const [from, to] = range.split('|');
+      if (day >= from && day <= to) {
+        index = candidate;
+        break;
+      }
+    }
+  }
+  if (!index) {
+    index = getDayIndex(state, day, day);
+    ranges.set(`${day}|${day}`, index);
+  }
+  return index.get(day) || EMPTY_DAY_ENTRY;
+}
+
+/** Индекс промежутка, который дальше отвечает и на `getDayEntry` по его дням. */
+export function getDayRange(state: PlannerState, fromDay: string, toDay: string): PlannerDayIndex {
+  const index = getDayIndex(state, fromDay, toDay);
+  getStateCache(state, 'dayRanges', () => new Map<string, PlannerDayIndex>()).set(`${fromDay}|${toDay}`, index);
+  return index;
+}
+
+/**
+ * Подпись задач, выросших из пунктов заметок (`source.chat` вида `note:*`): меняется, только когда у таких
+ * задач меняется выполнение, шаги, название либо состав. По ней «Знания» решают, перечитывать ли заметки.
+ */
+export function noteTasksSignature(state: PlannerState) {
+  return getStateCache(state, 'noteTasks', () => state.tasks
+    .filter((task) => task.source?.chat.startsWith('note:'))
+    .map((task) => [
+      task.id, task.source!.chat, task.name, task.status, task.day || '', task.due || '',
+      task.steps.map((step) => (step.isDone ? '1' : '0')).join(''),
+      (task.occurrences || []).map((o) => `${o.day}${o.done ? '+' : ''}${o.excluded ? '-' : ''}`).join(','),
+    ].join('\u0001'))
+    .join('\n'));
 }
 
 // События на весь день — первыми, остальные — по началу
