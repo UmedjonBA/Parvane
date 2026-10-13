@@ -19,6 +19,7 @@ import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
+import { base64ToBytes, bytesToBase64 } from './base64';
 import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
 } from './callMap';
@@ -26,7 +27,9 @@ import { createCloudSync } from './cloud';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
-import { preauth } from './control';
+import {
+  BLOB_TIMEOUT_MS, encodeUploadChunkBody, preauth, V2Control, type V2Json,
+} from './control';
 import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import {
@@ -213,7 +216,6 @@ type RevokeOutcome = {
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
 // Скачивание/загрузка блобов (чанки до 700 КиБ)
-const BLOB_TIMEOUT_MS = 60000;
 // parvane.msg.v2.TypingAction
 const TYPING_ACTION_TYPING = 1;
 const TYPING_ACTION_CANCEL = 2;
@@ -351,17 +353,8 @@ const PEER_LOG_REFRESH_MS = 15000;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 60000;
 
-function b64(bytes: Uint8Array) {
-  let s = '';
-  bytes.forEach((b) => {
-    s += String.fromCharCode(b);
-  });
-  return btoa(s);
-}
-
-function unb64(s: string) {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-}
+const b64 = bytesToBase64;
+const unb64 = base64ToBytes;
 
 export function createV2Controller(deps: Deps) {
   let pv: Protocol | undefined;
@@ -369,6 +362,10 @@ export function createV2Controller(deps: Deps) {
   let storage: SecureE2eStorage | undefined;
   let storageKey: Uint8Array | undefined;
   let idConn: V2Connection | undefined;
+  // Блобы (загрузка вложений и облака, ссылки) — своим авторизованным
+  // соединением (perf A7): иначе текстовое сообщение стояло в очереди сокета
+  // движка за мегабайтным чанком
+  const blobControl = new V2Control(() => deps.gatewayUrl(), () => deps.getToken() || undefined);
   // C2-01: анонимные соединения выдаёт планировщик движка — по получателю
   // (серия ≤ 60 с), копии своим устройствам и служебные запросы — отдельно
   let anonPlanner: InstanceType<Protocol['PvAnonPlanner']> | undefined;
@@ -1096,8 +1093,7 @@ export function createV2Controller(deps: Deps) {
   /** Метод блобов шарда cloud по имени метода реестра: proto3-JSON → proto3-JSON. */
   async function blobCall<T>(method: string, request: unknown): Promise<T> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
-    const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify(request)));
-    return JSON.parse(pv.decodeMethodResponse(method, resp)) as T;
+    return blobControl.call(method, request as V2Json, BLOB_TIMEOUT_MS) as Promise<T>;
   }
 
   async function applyEvent(ev: EngineEvent) {
@@ -2251,30 +2247,29 @@ export function createV2Controller(deps: Deps) {
   // блоб анонимным каналом — записи «отправитель → получатель» в cloud нет
 
   /** Загрузить шифртекст блоба; возвращает file_id. */
-  async function uploadBlob(bytes: Uint8Array, capability: Uint8Array, chunkBytes: number): Promise<string> {
+  /** Чанк загрузки вложения чата (bucket медиа) байтами по соединению блобов;
+   * пустой `uploadId` заводит загрузку. Возвращает uploadId. */
+  async function uploadBlobChunk(uploadId: string, index: number, data: Uint8Array): Promise<string> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const method = 'cloud.blob.upload_chunk';
+    const body = encodeUploadChunkBody(pv, uploadId, index, 0, data);
+    const resp = await blobControl.requestBytes(method, body, BLOB_TIMEOUT_MS);
+    const got = JSON.parse(pv.decodeMethodResponse(method, resp)) as { uploadId?: string; upload_id?: string };
+    return got.uploadId || got.upload_id || uploadId;
+  }
+
+  /** Завершить загрузку вложения под секретом capability (FR-062); возвращает file_id. */
+  async function completeBlobUpload(
+    uploadId: string, chunks: number, size: number, capability: Uint8Array,
+  ): Promise<string> {
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', capability as BufferSource));
-    const total = Math.max(1, Math.ceil(bytes.length / chunkBytes));
-    let uploadId = '';
-    for (let index = 0; index < total; index++) {
-      const data = bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes);
-      const resp = await call('id', 'cloud.blob.upload_chunk', pv.encodeMessage(
-        'parvane.cloud.v1.UploadChunkRequest', JSON.stringify({ upload_id: uploadId, index, data: b64(data) }),
-      ));
-      const got = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadChunkResponse', resp)) as {
-        uploadId?: string; upload_id?: string;
-      };
-      uploadId = got.uploadId || got.upload_id || uploadId;
-    }
-    const done = JSON.parse(pv.decodeMessage('parvane.cloud.v1.UploadCompleteResponse', await call(
-      'id', 'cloud.blob.upload_complete', pv.encodeMessage('parvane.cloud.v1.UploadCompleteRequest', JSON.stringify({
-        upload_id: uploadId,
-        chunks: total,
-        size: String(bytes.length),
-        visibility: 'VISIBILITY_PRIVATE',
-        capability_hash: b64(hash),
-      })),
-    ))) as { fileId?: string; file_id?: string };
+    const done = await blobCall<{ fileId?: string; file_id?: string }>('cloud.blob.upload_complete', {
+      upload_id: uploadId,
+      chunks,
+      size: String(size),
+      visibility: 'VISIBILITY_PRIVATE',
+      capability_hash: b64(hash),
+    });
     const fileId = done.fileId || done.file_id;
     if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
     return fileId;
@@ -3566,7 +3561,8 @@ export function createV2Controller(deps: Deps) {
     readers,
     trySend,
     trySendCall,
-    uploadBlob,
+    uploadBlobChunk,
+    completeBlobUpload,
     downloadBlobCap,
     trySendTyping,
     publishPresence,
@@ -3592,6 +3588,7 @@ export function createV2Controller(deps: Deps) {
       linkMaterial = undefined;
       rootBackupB64 = undefined;
       idConn?.close();
+      blobControl.close();
       [...anonConns.keys()].forEach(closeAnon);
       anonPlanner?.free();
       anonPlanner = undefined;
