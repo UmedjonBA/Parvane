@@ -100,11 +100,11 @@ import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
 import AudioPlayer from '../middle/panes/AudioPlayer';
 import ModalContainer from '../modals/ModalContainer';
-import Cloud from '../parvane/cloud/Cloud';
+import Cloud from '../parvane/Cloud.async';
 import CloudChatDialogs from '../parvane/cloud/CloudChatDialogs';
-import Knowledge from '../parvane/notes/Knowledge';
-import ParvanePalette from '../parvane/palette/ParvanePalette';
-import Planner from '../parvane/planner/Planner';
+import Knowledge from '../parvane/Knowledge.async';
+import ParvanePalette from '../parvane/palette/ParvanePalette.async';
+import Planner from '../parvane/Planner.async';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
 import RightColumn from '../right/RightColumn';
@@ -199,6 +199,8 @@ type StateProps = {
 const INVITE_OFFLINE_NOTICE_MS = 15000;
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
+// Parvane (B2): разделы и палитра — вне критического пути старта, но заранее: первый переход без ожидания
+const PARVANE_BUNDLE_LOADING_DELAY_MS = 3000;
 const OWN_PROFILE_CLOSE_DURATION = 450;
 
 let DEBUG_isLogged = false;
@@ -341,6 +343,10 @@ const Main = ({
   useTimeout(() => {
     void loadBundle(Bundles.Calls);
   }, CALL_BUNDLE_LOADING_DELAY_MS);
+
+  useTimeout(() => {
+    void loadBundle(Bundles.Parvane);
+  }, PARVANE_BUNDLE_LOADING_DELAY_MS);
 
   const containerRef = useRef<HTMLDivElement>();
   const leftColumnRef = useRef<HTMLDivElement>();

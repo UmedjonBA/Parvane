@@ -7,6 +7,10 @@ export enum Bundles {
   Extra,
   Calls,
   Stars,
+  // Parvane (B2): разделы «План», «Знания», «Облако» и палитра — вне бандла Main
+  Parvane,
+  // Редактор медиа окна вложений (тянет colorjs.io) — только когда открыт
+  MediaEditor,
 }
 
 interface ImportedBundles {
@@ -15,6 +19,8 @@ interface ImportedBundles {
   [Bundles.Extra]: typeof import('../bundles/extra');
   [Bundles.Calls]: typeof import('../bundles/calls');
   [Bundles.Stars]: typeof import('../bundles/stars');
+  [Bundles.Parvane]: typeof import('../bundles/parvane');
+  [Bundles.MediaEditor]: typeof import('../bundles/mediaEditor');
 }
 
 type BundlePromises = {
@@ -50,6 +56,12 @@ export async function loadBundle<B extends Bundles>(bundleName: B) {
         break;
       case Bundles.Stars:
         LOAD_PROMISES[Bundles.Stars] = import('../bundles/stars');
+        break;
+      case Bundles.Parvane:
+        LOAD_PROMISES[Bundles.Parvane] = import('../bundles/parvane');
+        break;
+      case Bundles.MediaEditor:
+        LOAD_PROMISES[Bundles.MediaEditor] = import('../bundles/mediaEditor');
         break;
     }
 

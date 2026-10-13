@@ -30,9 +30,18 @@ const DEV_BUNDLE_WARMUP_CLIENT_FILES = [
   'src/bundles/extra.ts',
   'src/bundles/calls.ts',
   'src/bundles/stars.ts',
+  'src/bundles/parvane.ts',
+  'src/bundles/mediaEditor.ts',
 ];
 const LINK_PAGE_SHARED_RE = /\/src\/api\/parvane\/(blobcrypt|cloudBlobs|cloudLinks|v2\/transport)\.ts$/;
+// Провайдер шины и движок протокола (WASM-обвязка): меняются почти каждым деплоем — своим куском, чтобы кэш
+// общих UI-модулей не сгорал вместе с ними (B2)
+const API_PARVANE_RE = /\/src\/(?:api\/parvane|lib\/parvane-protocol)\//;
+// Общие UI-модули; редактор медиа исключён — он грузится лениво из окна вложений (`MediaEditor.async`)
+const SHARED_UI_RE = /\/src\/components\/ui\/(?!mediaEditor\/)/;
 const IMAGE_ASSET_RE = /\.(?:avif|gif|jpe?g|png|svg|webp)$/i;
+// Анимации `.tgs` до 4 КБ vite вшивал в JS как data: — файлами они кэшируются отдельно и не грузят бандл
+const TGS_ASSET_RE = /\.tgs$/i;
 const STATIC_COPY_TARGETS: Target[] = [
   {
     src: normalizePath(resolve(DIR_NAME, 'node_modules/opus-recorder/dist/decoderWorker.min.wasm')),
@@ -223,7 +232,9 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     build: {
       sourcemap: true,
-      assetsInlineLimit: (filePath) => (IMAGE_ASSET_RE.test(filePath) ? false : undefined),
+      assetsInlineLimit: (filePath) => (
+        IMAGE_ASSET_RE.test(filePath) || TGS_ASSET_RE.test(filePath) ? false : undefined
+      ),
       rolldownOptions: {
         // Два входа: приложение и лёгкая публичная страница ссылки облака (spec 022)
         input: {
@@ -231,16 +242,32 @@ export default defineConfig(({ mode }): UserConfig => {
           s: resolve(DIR_NAME, 's.html'),
         },
         output: {
-          manualChunks(id) {
-            // Модули, общие у приложения и публичной страницы ссылки, — своим малым куском: иначе они
-            // попадают в `shared-components`, и страница тянет мегабайт кода и стили приложения (её CSP их режет)
-            if (LINK_PAGE_SHARED_RE.test(id)) {
-              return 'link-shared';
-            }
-            if (id.includes('/src/components/ui/')) {
-              return 'shared-components';
-            }
-            return undefined;
+          // Группы в порядке приоритета. Зависимости попавшего в группу модуля идут в тот же кусок
+          // (`includeDependenciesRecursively`, умолчание rolldown): так между кусками не возникает
+          // круговых импортов, а для `shared-components` это значило бы обращение к `withGlobal` из куска
+          // входа до его исполнения (TDZ). Поэтому провайдер вынесен не отключением рекурсии, а своей
+          // группой выше по приоритету (B2)
+          codeSplitting: {
+            groups: [
+              {
+                // Модули, общие у приложения и публичной страницы ссылки, — своим малым куском: иначе
+                // они попадают в `shared-components`, и страница тянет мегабайт кода и стили приложения
+                // (её CSP их режет)
+                name: 'link-shared',
+                test: LINK_PAGE_SHARED_RE,
+                priority: 30,
+              },
+              {
+                name: 'api-parvane',
+                test: API_PARVANE_RE,
+                priority: 20,
+              },
+              {
+                name: 'shared-components',
+                test: SHARED_UI_RE,
+                priority: 10,
+              },
+            ],
           },
         },
       },

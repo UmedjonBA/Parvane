@@ -17,7 +17,6 @@ import {
   openKnowledgeView, openNote, openPlannerView, requestPlannerAdd, requestPlannerAddText, requestPlannerSettings,
   setParvaneSection,
 } from '../../../util/parvaneSection';
-import { isComposerHasSelection } from '../../middle/composer/helpers/selection';
 import { getCloudStatus } from '../cloud/cloudStore';
 import { folderColor } from '../notes/notesLook';
 import { getNotes, getNotesStatus, loadNotes } from '../notes/notesStore';
@@ -27,7 +26,7 @@ import {
   getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
 } from '../planner/plannerStore';
 import {
-  closePalette, getIsPaletteOpen, openPalette, openRecordInPlan,
+  closePalette, getIsPaletteOpen, openRecordInPlan,
 } from './paletteOpen';
 import { collectPlannerRecords } from './paletteRecords';
 import { movePaletteIndex, searchPalette, splitByRanges } from './paletteSearch';
@@ -123,21 +122,7 @@ const ParvanePalette = () => {
   const inputRef = useRef<HTMLInputElement>();
   const listRef = useRef<HTMLDivElement>();
 
-  // Ctrl+K (Cmd+K) из любого раздела и любого поля. Исключение — выделенный текст в поле сообщения:
-  // там это «вставить ссылку» редактора (`TextFormatter`)
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
-      // `code` — чтобы сочетание работало и в русской раскладке
-      if (e.code !== 'KeyK' && e.key.toLowerCase() !== 'k') return;
-      if (isComposerHasSelection()) return;
-      e.preventDefault();
-      openPalette();
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, []);
+  // Ctrl+K слушает обёртка `ParvanePalette.async` (B2): код палитры грузится при первом открытии
 
   // Заметки и «План» читаются при открытии своих разделов. Палитра догружает их при первом открытии
   // и ввод не задерживает: найденное появляется в списке само. Хранилище заметок без названия папки
