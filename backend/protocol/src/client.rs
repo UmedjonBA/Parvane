@@ -15,7 +15,7 @@
 //! `Event`; «нужно ещё» — ошибкой `Need` (хост добирает данные и повторяет).
 //! Состояние экспортируется целиком, зашифрованным ключом хранилища хоста.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -23,6 +23,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use ed25519_dalek::SigningKey;
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::access::{OwnDeliveryKey, TokenStock};
@@ -307,7 +308,9 @@ pub struct Client {
     trust: RootTrust,
     sticky: StickyV2,
     seen: ReplayGuard,
-    seen_list: Vec<Vec<u8>>,
+    /// Отпечатки «видели» с моментом записи — для экспорта (A1(в)): окно
+    /// `SEEN_WINDOW_MS`, не больше `SEEN_CAP`.
+    seen_list: VecDeque<(SeenHash, i64)>,
     cursor: Cursor,
     pending_group: Vec<(u64, GroupEnvelope)>,
     /// Расшифрованные ключи группы, для которых ещё нет журнала группы
@@ -373,6 +376,22 @@ fn now_ms() -> i64 {
 }
 
 const SEEN_CAP: usize = 20_000;
+/// Сколько живёт отпечаток «видели» (A1(в)). Повтор доставки возможен только
+/// из инбокса сервера, а тот стирает записи через 30 дней после приёма
+/// (`INBOX_TTL_SECS` шарда messenger; нонсы групповых конвертов — столько же):
+/// позже 30 дней после первого открытия та же запись прийти не может. Сутки
+/// сверху — на расхождение часов.
+const SEEN_WINDOW_MS: i64 = 31 * 24 * 3600 * 1000;
+/// Отпечаток ключа «видели»: SHA-256, первые 16 байт (ключ — адрес, устройство
+/// и op_id либо сессия Megolm и индекс — до 80 байт; в экспорте хранится отпечаток).
+type SeenHash = [u8; 16];
+
+fn seen_hash(key: &[u8]) -> SeenHash {
+    let d = Sha256::digest(key);
+    let mut h = [0u8; 16];
+    h.copy_from_slice(&d[..16]);
+    h
+}
 /// Сколько вытесненных Olm-сессий держать на устройство собеседника.
 const MAX_OLD_SESSIONS: usize = 4;
 
@@ -412,7 +431,7 @@ impl Client {
             trust: RootTrust::default(),
             sticky: StickyV2::default(),
             seen: ReplayGuard::new(SEEN_CAP),
-            seen_list: vec![],
+            seen_list: VecDeque::new(),
             cursor: Cursor::default(),
             pending_group: vec![],
             pending_keys: vec![],
@@ -2843,7 +2862,8 @@ impl Client {
             revocations_done: self.revocations_done.iter().cloned().collect(),
             trust: self.peers.keys().filter_map(|u| self.trust.get(u).map(|r| (u.clone(), b(r)))).collect(),
             sticky: self.sticky.users().cloned().collect(),
-            seen: self.seen_list.iter().map(|s| b(s)).collect(),
+            seen: vec![],
+            seen_packed: self.seen_packed(),
             cursor: self.cursor.disk_value(),
             pending_group: self.pending_group.iter().map(|(s, e)| (*s, b(&e.encode_to_vec()))).collect(),
             pending_keys: self.pending_keys.iter().map(|(u, k)| (u.clone(), b(&k.encode_to_vec()))).collect(),
@@ -2963,11 +2983,14 @@ impl Client {
         c.state_key = p.state_key.as_ref().map(|(k, v)| d(k).and_then(|b| StateKey::from_bytes(&b).map_err(|_| ProtoError::Malformed)).map(|k| (k, *v))).transpose()?;
         c.reads = p.reads;
         c.revocations_done = p.revocations_done.into_iter().collect();
+        // Прежний формат: сырые ключи без момента записи — считаем свежими.
+        let now = now_ms();
         for s in p.seen {
-            let k = d(&s)?;
-            let _ = c.seen.check_and_insert(&k);
-            c.seen_list.push(k);
+            let h = seen_hash(&d(&s)?);
+            let _ = c.seen.check_and_insert(&h);
+            c.seen_list.push_back((h, now));
         }
+        c.seen_unpack(&d(&p.seen_packed)?);
         c.cursor = Cursor::from_disk(p.cursor);
         for (u, k) in p.pending_keys {
             c.pending_keys.push((u, GroupKeyShare::decode(d(&k)?.as_slice()).map_err(|_| ProtoError::Malformed)?));
@@ -3027,20 +3050,55 @@ fn x25519_public(sk: &[u8; 32]) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-/// ReplayGuard + список для экспорта.
+/// ReplayGuard + список для экспорта (оба — по отпечатку ключа).
 struct SeenAdapter<'a> {
     c: &'a mut ReplayGuard,
-    list: &'a mut Vec<Vec<u8>>,
+    list: &'a mut VecDeque<(SeenHash, i64)>,
 }
 
 impl msg::SeenStore for SeenAdapter<'_> {
     fn insert_once(&mut self, key: &[u8]) -> Result<()> {
-        self.c.check_and_insert(key)?;
-        self.list.push(key.to_vec());
-        if self.list.len() > SEEN_CAP {
-            self.list.remove(0);
+        let h = seen_hash(key);
+        self.c.check_and_insert(&h)?;
+        self.list.push_back((h, now_ms()));
+        while self.list.len() > SEEN_CAP {
+            self.list.pop_front();
         }
         Ok(())
+    }
+}
+
+/// Размер одной записи `seen_packed`: отпечаток + момент записи (мс, BE).
+const SEEN_PACKED_ENTRY: usize = 16 + 8;
+
+impl Client {
+    /// Отпечатки «видели» не старше окна, одной строкой base64
+    /// (`[отпечаток 16][момент i64 BE]` подряд).
+    fn seen_packed(&self) -> String {
+        let now = now_ms();
+        let mut out = Vec::with_capacity(self.seen_list.len() * SEEN_PACKED_ENTRY);
+        for (h, ts) in &self.seen_list {
+            if now.saturating_sub(*ts) > SEEN_WINDOW_MS {
+                continue;
+            }
+            out.extend_from_slice(h);
+            out.extend_from_slice(&ts.to_be_bytes());
+        }
+        base64::engine::general_purpose::STANDARD.encode(out)
+    }
+
+    fn seen_unpack(&mut self, packed: &[u8]) {
+        for e in packed.chunks_exact(SEEN_PACKED_ENTRY) {
+            let mut h = [0u8; 16];
+            h.copy_from_slice(&e[..16]);
+            let ts = i64::from_be_bytes(e[16..].try_into().unwrap_or([0; 8]));
+            if self.seen.check_and_insert(&h).is_ok() {
+                self.seen_list.push_back((h, ts));
+            }
+        }
+        while self.seen_list.len() > SEEN_CAP {
+            self.seen_list.pop_front();
+        }
     }
 }
 
@@ -3080,7 +3138,11 @@ struct Persisted {
     tokens: Vec<String>,
     trust: Vec<(String, String)>,
     sticky: Vec<String>,
+    /// Прежний формат «видели»: сырые ключи base64 (читается, не пишется).
     seen: Vec<String>,
+    /// «Видели» с A1(в): отпечатки с моментом записи одной строкой base64.
+    #[serde(default)]
+    seen_packed: String,
     cursor: u64,
     pending_group: Vec<(u64, String)>,
     #[serde(default)]
@@ -3172,6 +3234,224 @@ mod session_proof_tests {
         assert!(!verify_session_proof(&ed, "alice@local", "dev-1", ts + 1, &proof), "другое время");
         let other = Client::new("alice@local", "dev-2", "local").unwrap();
         assert!(!verify_session_proof(&ed, "alice@local", "dev-1", ts, &other.session_proof(ts)), "чужой ключ");
+    }
+}
+
+#[cfg(test)]
+mod export_size_tests {
+    use super::*;
+    use crate::pb::parvane::cloud::v1::{cloud_op, CloudBlobRef, CloudCreate, CloudNodeKind, CloudOp, CloudPurge};
+
+    /// Ключ «видели» как в `msg::seen_key` (части с длиной).
+    fn seen_key(parts: &[&[u8]]) -> Vec<u8> {
+        let mut k = Vec::new();
+        for p in parts {
+            k.extend_from_slice(&(p.len() as u32).to_be_bytes());
+            k.extend_from_slice(p);
+        }
+        k
+    }
+
+    fn file_op(n: u32, parent: &[u8]) -> CloudOp {
+        let mut id = [0u8; 16];
+        id[..4].copy_from_slice(&n.to_be_bytes());
+        let blob = CloudBlobRef {
+            file_id: format!("f{n:08x}"),
+            key: vec![1; 32],
+            size: 1000,
+            chunks: 1,
+            mime: "image/jpeg".into(),
+            sha256: vec![2; 32],
+            nonce: vec![3; 12],
+            capability: vec![4; 32],
+            uploader: "alice@local".into(),
+        };
+        CloudOp {
+            op: Some(cloud_op::Op::Create(CloudCreate {
+                node_id: id.to_vec(),
+                kind: CloudNodeKind::File as i32,
+                parent_id: parent.to_vec(),
+                name: format!("Фото {n}.jpg"),
+                stamp: Some(crate::domain::Stamp::new(n as u64 + 1, "d1").to_pb()),
+                blob: Some(blob),
+                mtime_ms: 1_700_000_000_000 + n as u64,
+                ..Default::default()
+            })),
+        }
+    }
+
+    /// A1(в): синтетика — 10 000 сообщений (6 000 личных, 4 000 групповых) и
+    /// облако из 3 000 узлов, из которых 1 000 стёрты. Печатает размер экспорта
+    /// по слоям; проверяет потолок.
+    #[test]
+    fn export_size_on_synthetic_state() {
+        use msg::SeenStore;
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        let key = [5u8; 32];
+        let base = c.export(&key).unwrap().len();
+
+        let now = now_ms();
+        for i in 0u32..6_000 {
+            let mut op_id = [0u8; 16];
+            op_id[..4].copy_from_slice(&i.to_be_bytes());
+            let k = seen_key(&[b"bob@local", b"desktop-0123456789ab", &op_id]);
+            let mut s = SeenAdapter { c: &mut c.seen, list: &mut c.seen_list };
+            s.insert_once(&k).unwrap();
+        }
+        let sid = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefg";
+        for i in 0u32..4_000 {
+            let mut op_id = [0u8; 16];
+            op_id[..4].copy_from_slice(&(i | 0x8000_0000).to_be_bytes());
+            let mut s = SeenAdapter { c: &mut c.seen, list: &mut c.seen_list };
+            s.insert_once(&seen_key(&[b"megolm", sid.as_bytes(), &(i as u32).to_be_bytes()])).unwrap();
+            s.insert_once(&seen_key(&[b"carol@local", b"web-0123456789abcdef", &op_id])).unwrap();
+        }
+        let _ = now;
+        let with_seen = c.export(&key).unwrap().len();
+
+        let (id, _) = c.cloud_create(1_700_000_000_000).unwrap();
+        {
+            let st = &mut c.cloud.get_mut(&id).unwrap().state;
+            for n in 0u32..3_000 {
+                st.apply(&file_op(n, &[])).unwrap();
+            }
+            for n in 0u32..1_000 {
+                let mut nid = [0u8; 16];
+                nid[..4].copy_from_slice(&n.to_be_bytes());
+                // Половина надгробий старше 90 дней, половина свежие.
+                let at = if n % 2 == 0 { 1_600_000_000_000 } else { (now_ms() as u64).saturating_sub(1000) };
+                st.apply(&CloudOp {
+                    op: Some(cloud_op::Op::Purge(CloudPurge { node_id: nid.to_vec(), stamp: Some(crate::domain::Stamp::new(5000 + n as u64, "d1").to_pb()), at_ms: at })),
+                })
+                .unwrap();
+            }
+        }
+        let with_cloud = c.export(&key).unwrap().len();
+        eprintln!("export: base={base} +seen(10k msgs)={with_seen} (+{}) +cloud(3k/1k)={with_cloud} (+{})", with_seen - base, with_cloud - with_seen);
+        // 14 000 отпечатков по 24 байта ≈ 450 КБ base64; узлы облака без 500 старых надгробий.
+        assert!(with_seen - base < 480_000, "seen: {}", with_seen - base);
+        assert!(with_cloud - with_seen < 760_000, "cloud: {}", with_cloud - with_seen);
+        // Восстановление: дедупликация живёт, свежие надгробия на месте, старые ушли.
+        let mut r = Client::import(&c.export(&key).unwrap(), &key).unwrap();
+        let mut op_id = [0u8; 16];
+        op_id[..4].copy_from_slice(&7u32.to_be_bytes());
+        let k = seen_key(&[b"bob@local", b"desktop-0123456789ab", &op_id]);
+        let mut s = SeenAdapter { c: &mut r.seen, list: &mut r.seen_list };
+        assert_eq!(s.insert_once(&k).err(), Some(ProtoError::Duplicate));
+        let tree: serde_json::Value = serde_json::from_str(&r.cloud_state_json(&id).unwrap()).unwrap();
+        assert_eq!(tree["purgedBlobs"].as_array().unwrap().len(), 500, "свежие надгробия (≤ 90 дней) сохранены");
+        assert_eq!(tree["nodes"].as_array().map(|n| n.len()).unwrap_or(0), 2_000);
+    }
+
+    /// Отпечаток старше окна в экспорт не попадает; в окне — попадает.
+    #[test]
+    fn seen_export_keeps_only_window() {
+        use msg::SeenStore;
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        let fresh = seen_key(&[b"bob@local", b"d1", &[1u8; 16]]);
+        let stale = seen_key(&[b"bob@local", b"d1", &[2u8; 16]]);
+        SeenAdapter { c: &mut c.seen, list: &mut c.seen_list }.insert_once(&fresh).unwrap();
+        SeenAdapter { c: &mut c.seen, list: &mut c.seen_list }.insert_once(&stale).unwrap();
+        // Состарить вторую запись за окно.
+        let old = now_ms() - SEEN_WINDOW_MS - 1;
+        if let Some(e) = c.seen_list.iter_mut().find(|(h, _)| *h == seen_hash(&stale)) {
+            e.1 = old;
+        }
+        let key = [3u8; 32];
+        let mut r = Client::import(&c.export(&key).unwrap(), &key).unwrap();
+        assert_eq!(r.seen_list.len(), 1);
+        assert_eq!(SeenAdapter { c: &mut r.seen, list: &mut r.seen_list }.insert_once(&fresh).err(), Some(ProtoError::Duplicate));
+        assert!(SeenAdapter { c: &mut r.seen, list: &mut r.seen_list }.insert_once(&stale).is_ok(), "за окном — забыт");
+    }
+
+    /// Экспорт прежнего формата (поле `seen` — сырые ключи base64) читается:
+    /// ключи превращаются в отпечатки, дедупликация сохраняется.
+    #[test]
+    fn import_reads_legacy_seen_keys() {
+        use msg::SeenStore;
+        let c = {
+            let mut c = Client::new("alice@local", "d1", "local").unwrap();
+            let _ = c.create_identity(2).unwrap();
+            c
+        };
+        let key = [4u8; 32];
+        let blob = c.export(&key).unwrap();
+        let json = ChaCha20Poly1305::new(Key::from_slice(&key))
+            .decrypt(Nonce::from_slice(&blob[..12]), chacha20poly1305::aead::Payload { msg: &blob[12..], aad: b"parvane/v2/client-state" })
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let raw = seen_key(&[b"bob@local", b"d1", &[9u8; 16]]);
+        v["seen"] = serde_json::json!([base64::engine::general_purpose::STANDARD.encode(&raw)]);
+        v.as_object_mut().unwrap().remove("seen_packed");
+        let json = serde_json::to_vec(&v).unwrap();
+        let nonce = [1u8; 12];
+        let ct = ChaCha20Poly1305::new(Key::from_slice(&key))
+            .encrypt(Nonce::from_slice(&nonce), chacha20poly1305::aead::Payload { msg: &json, aad: b"parvane/v2/client-state" })
+            .unwrap();
+        let mut old = nonce.to_vec();
+        old.extend(ct);
+        let mut r = Client::import(&old, &key).unwrap();
+        assert_eq!(SeenAdapter { c: &mut r.seen, list: &mut r.seen_list }.insert_once(&raw).err(), Some(ProtoError::Duplicate));
+        // Новый экспорт — уже отпечатком, и он переживает ещё один круг.
+        let mut r2 = Client::import(&r.export(&key).unwrap(), &key).unwrap();
+        assert_eq!(SeenAdapter { c: &mut r2.seen, list: &mut r2.seen_list }.insert_once(&raw).err(), Some(ProtoError::Duplicate));
+    }
+}
+
+#[cfg(test)]
+mod state_json_cache_tests {
+    use super::*;
+    use crate::pb::parvane::cloud::v1::{cloud_op, CloudCreate, CloudNodeKind, CloudOp};
+
+    /// C1: JSON планировщика для хоста пересобирается только при смене
+    /// ревизии состояния или `head_seq`.
+    #[test]
+    fn planner_state_json_is_cached_by_revision() {
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        c.planner_create(1_700_000_000_000).unwrap();
+        let a = c.planner_state_json().unwrap();
+        let key = c.planner.as_ref().unwrap().json_cache.key();
+        assert!(key.is_some());
+        assert_eq!(c.planner_state_json().unwrap(), a);
+        assert_eq!(c.planner.as_ref().unwrap().json_cache.key(), key, "повторное чтение — из кэша");
+        c.planner_prepare_local(r#"{"changes":[{"task":{"id":"t1","title":"Хлеб","day":"2026-10-01"}}]}"#).unwrap();
+        let b = c.planner_state_json().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(c.planner.as_ref().unwrap().json_cache.key(), key, "правка — новая ревизия");
+        let key2 = c.planner.as_ref().unwrap().json_cache.key();
+        c.planner.as_mut().unwrap().head_seq += 1;
+        let d: serde_json::Value = serde_json::from_str(&c.planner_state_json().unwrap()).unwrap();
+        assert_eq!(d["headSeq"], serde_json::json!(1));
+        assert_ne!(c.planner.as_ref().unwrap().json_cache.key(), key2, "сдвиг курсора — новая строка");
+    }
+
+    /// C1/A8: JSON дерева облака — та же строка, пока дерево не менялось.
+    #[test]
+    fn cloud_state_json_is_cached_by_revision() {
+        let mut c = Client::new("alice@local", "d1", "local").unwrap();
+        let _ = c.create_identity(2).unwrap();
+        let (id, _) = c.cloud_create(1_700_000_000_000).unwrap();
+        let a = c.cloud_state_json(&id).unwrap();
+        let key = c.cloud[&id].json_cache.key();
+        assert_eq!(c.cloud_state_json(&id).unwrap(), a);
+        assert_eq!(c.cloud[&id].json_cache.key(), key);
+        let op = CloudOp {
+            op: Some(cloud_op::Op::Create(CloudCreate {
+                node_id: vec![9; 16],
+                kind: CloudNodeKind::Folder as i32,
+                name: "Документы".into(),
+                stamp: Some(crate::domain::Stamp::new(1, "d1").to_pb()),
+                ..Default::default()
+            })),
+        };
+        c.cloud.get_mut(&id).unwrap().state.apply(&op).unwrap();
+        let b = c.cloud_state_json(&id).unwrap();
+        assert_ne!(a, b);
+        assert_ne!(c.cloud[&id].json_cache.key(), key);
+        assert!(b.contains("Документы"));
     }
 }
 

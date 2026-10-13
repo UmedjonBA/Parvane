@@ -1499,6 +1499,15 @@ pub fn decode_method_response(method: &str, bytes: &[u8]) -> Result<String, JsVa
     parvane_protocol::host::decode_method_response(method, bytes).map_err(|e| JsValue::from_str(&e))
 }
 
+/// Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
+/// base64/JSON. `bucket`: 0 — медиа чатов, 1 — диск «Облака». Кадр запроса —
+/// как обычно, `encodeRequest(id, method, body, timeout)`. Чанки скачивания
+/// уже приходят байтами (`decodeFrame` → `chunk.data`).
+#[wasm_bindgen(js_name = encodeUploadChunk)]
+pub fn encode_upload_chunk(upload_id: &str, index: u32, bucket: i32, data: &[u8]) -> Result<Vec<u8>, JsValue> {
+    parvane_protocol::host::encode_upload_chunk(upload_id, index, bucket, data).map_err(|e| JsValue::from_str(&e))
+}
+
 /// proto3-JSON → байты сообщения по полному имени типа (тела запросов из JS).
 #[wasm_bindgen(js_name = encodeMessage)]
 pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {
