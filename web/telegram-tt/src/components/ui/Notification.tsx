@@ -12,6 +12,7 @@ import { isLangFnParam } from '../../util/localization/types';
 import { ANIMATION_END_DELAY } from '../../config';
 import buildClassName from '../../util/buildClassName';
 import captureEscKeyListener from '../../util/captureEscKeyListener';
+import { getParvaneSection } from '../../util/parvaneSection';
 import { REM } from '../common/helpers/mediaDimensions';
 import renderText from '../common/helpers/renderText';
 import { renderTextWithEntities } from '../common/helpers/renderTextWithEntities';
@@ -115,7 +116,14 @@ const Notification = ({
     closeAndDismiss();
   });
 
-  useEffect(() => (isOpen ? captureEscKeyListener(closeAndDismiss) : undefined), [isOpen, closeAndDismiss]);
+  // Parvane: в «Плане» и «Знаниях» Escape закрывает уведомление, но клавишу не съедает — она нужна тому, что
+  // открыто под ним (меню и выделение холста, панель графа, окно ввода). В мессенджере — как было
+  const handleEscape = useLastCallback(() => {
+    closeAndDismiss();
+    return getParvaneSection() === 'messenger' ? undefined : false;
+  });
+
+  useEffect(() => (isOpen ? captureEscKeyListener(handleEscape) : undefined), [isOpen, handleEscape]);
 
   useEffect(() => {
     timerRef.current = window.setTimeout(() => closeAndDismiss(true), duration);

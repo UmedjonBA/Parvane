@@ -844,8 +844,26 @@ try {
     await page.mouse.click(x, y, { button: 'right' });
     await page.locator('[data-canvas-context]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     hasRefreshItem = (await page.locator('[data-canvas-command="refreshGraph"]').count()) > 0;
+    // Разбор редкого сбоя «Escape не закрыл меню»: дошло ли нажатие до документа и обработал ли его кто-то
+    await page.evaluate(() => {
+      window.__escSeen = 0;
+      window.__escUnhandled = 0;
+      if (window.__escProbe) return;
+      window.__escProbe = true;
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.__escSeen += 1; }, true);
+      window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.__escUnhandled += 1; });
+    });
     await page.keyboard.press('Escape');
-    await page.locator('[data-canvas-context]').waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+    await page.locator('[data-canvas-context]').waitFor({ state: 'detached', timeout: 5000 }).catch(async () => {
+      const probe = await page.evaluate(() => ({
+        seen: window.__escSeen,
+        unhandled: window.__escUnhandled,
+        focus: document.activeElement?.tagName,
+        kind: document.querySelector('[data-canvas-context]')?.textContent?.slice(0, 80),
+        selected: document.querySelectorAll('[data-canvas-selected="true"], [aria-selected="true"]').length,
+      }));
+      assert.fail(`Escape не закрыл меню холста: ${JSON.stringify(probe)}`);
+    });
     // Точка у самой стрелки открывает меню стрелки — берётся следующая
     if (hasRefreshItem) break;
   }
