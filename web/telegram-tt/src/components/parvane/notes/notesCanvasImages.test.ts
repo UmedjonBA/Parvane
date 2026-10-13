@@ -17,11 +17,12 @@ function file(name: string, mime: string, size: number, hasThumb = true) {
   } as unknown as Parameters<typeof canvasImageSource>[0];
 }
 
-function setup(keepMs = 100) {
+function setup(keepMs = 100, limits: { maxLoads?: number; maxBytes?: number } = {}) {
   const timers: { run: () => void; ms: number; isCleared?: boolean }[] = [];
   const revoked: string[] = [];
   let count = 0;
   const cache = createCanvasImageCache({
+    ...limits,
     createUrl: () => `blob:${++count}`,
     revokeUrl: (url) => revoked.push(url),
     setTimer: (run, ms) => {
@@ -151,5 +152,54 @@ describe('холст: адреса картинок в полном качест
     expect(await pending).toBeUndefined();
     expect(revoked).toEqual([]);
     expect(cache.size).toBe(0);
+  });
+
+  it('читается не больше заданного числа файлов разом, остальные ждут своей очереди', async () => {
+    const { cache } = setup(100, { maxLoads: 2 });
+    const started: string[] = [];
+    const finish = new Map<string, (blob: Blob) => void>();
+    const slow = (key: string) => () => new Promise<Blob>((resolve) => {
+      started.push(key);
+      finish.set(key, resolve);
+    });
+    const urls = ['a', 'b', 'c', 'd'].map((key) => cache.acquire(key, slow(key)));
+    await Promise.resolve();
+    expect(started).toEqual(['a', 'b']);
+    expect(cache.pending).toBe(4);
+    finish.get('a')!(new Blob(['x']));
+    await urls[0];
+    await Promise.resolve();
+    expect(started).toEqual(['a', 'b', 'c']);
+    finish.get('b')!(new Blob(['x']));
+    finish.get('c')!(new Blob(['x']));
+    await Promise.all([urls[1], urls[2]]);
+    await Promise.resolve();
+    expect(started).toEqual(['a', 'b', 'c', 'd']);
+    finish.get('d')!(new Blob(['x']));
+    expect(await Promise.all(urls)).toEqual(['blob:1', 'blob:2', 'blob:3', 'blob:4']);
+    expect(cache.pending).toBe(0);
+  });
+
+  it('память сверх предела освобождают адреса без карточек, давно свободные первыми; занятые остаются', async () => {
+    const { cache, revoked } = setup(100, { maxBytes: 10 });
+    const big = (size: number) => () => Promise.resolve(new Blob([new Uint8Array(size)]));
+    await cache.acquire('a', big(4));
+    await cache.acquire('b', big(4));
+    expect(cache.bytes).toBe(8);
+    cache.release('a');
+    cache.release('b');
+    // Третья картинка не влезает: уходит «a» (освобождена раньше), «b» остаётся
+    await cache.acquire('c', big(4));
+    expect(revoked).toEqual(['blob:1']);
+    expect(cache.bytes).toBe(8);
+    expect(cache.size).toBe(2);
+    // Четвёртая вытесняет и «b»; занятые карточками адреса предел не трогает, даже если он превышен
+    await cache.acquire('d', big(6));
+    expect(revoked).toEqual(['blob:1', 'blob:2']);
+    expect(cache.bytes).toBe(10);
+    await cache.acquire('e', big(6));
+    expect(revoked).toEqual(['blob:1', 'blob:2']);
+    expect(cache.bytes).toBe(16);
+    expect(cache.size).toBe(3);
   });
 });

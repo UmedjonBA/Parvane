@@ -68,6 +68,29 @@ const PROPERTY_RE = /^([^\s:#-][^:]*?)\s*:(?:\s+(.*))?$/;
 const PROPERTY_ITEM_RE = /^\s*-(?:\s+(.*))?$/;
 const QUOTED_START_RE = /^["'[\]{}#&*!|>%@`]/;
 
+// Разбор по объекту заметки: объекты заметок хранилища живут, пока заметка не изменилась, — разбор одной
+// заметки делается один раз на все экраны (список, граф, холст, индекс). Ключ — сам объект, текст сверяется
+const parsedByNote = new WeakMap<object, { text: string; parsed: ParsedNote }>();
+const searchTextByNote = new WeakMap<object, { text: string; value: string }>();
+
+export function parseNoteCached(note: Pick<NoteSource, 'text'>): ParsedNote {
+  const cached = parsedByNote.get(note);
+  if (cached && cached.text === note.text) return cached.parsed;
+  const parsed = parseNote(note.text);
+  parsedByNote.set(note, { text: note.text, parsed });
+  return parsed;
+}
+
+/** Текст заметки для поиска (без регистра, «ё» = «е», длина сохранена) — одна строчная копия на заметку,
+ * общая для указателя и палитры. */
+export function noteSearchText(note: Pick<NoteSource, 'text'>) {
+  const cached = searchTextByNote.get(note);
+  if (cached && cached.text === note.text) return cached.value;
+  const value = normalizeSearch(note.text);
+  searchTextByNote.set(note, { text: note.text, value });
+  return value;
+}
+
 export function parseNote(text: string): ParsedNote {
   const { properties, body, bodyLine } = splitFrontMatter(text);
   const lines = body.split('\n');
@@ -181,7 +204,7 @@ export function buildNotesIndex(sources: NoteSource[]): NotesIndex {
   });
 
   const notes = sources.map((source): IndexedNote => {
-    const parsed = parseNote(source.text);
+    const parsed = parseNoteCached(source);
     const linkedIds: string[] = [];
     const unresolved: string[] = [];
     parsed.links.forEach((link) => {
@@ -212,8 +235,9 @@ export function buildNotesIndex(sources: NoteSource[]): NotesIndex {
     });
   });
 
+  // Строчная копия текста — из общего кэша: индекс перестраивается чаще, чем меняются заметки
   const haystacks = notes.map((note) => ({
-    note, title: normalizeSearch(note.title), text: normalizeSearch(note.text),
+    note, title: normalizeSearch(note.title), text: noteSearchText(note),
   }));
 
   return {
@@ -490,8 +514,19 @@ function splitEol(line: string): [content: string, eol: string] {
   return line.endsWith('\r') ? [line.slice(0, -1), '\r'] : [line, ''];
 }
 
+// Без регистра и с «ё» = «е», длина сохраняется (редкие буквы вроде «İ» меняют длину при смене регистра
+// и остаются как есть) — участки совпадения годятся для исходной строки
 function normalizeSearch(value: string) {
-  return value.toLowerCase().replace(/ё/g, 'е');
+  // Обычно смена регистра длину не меняет — хватает встроенного преобразования
+  const whole = value.toLowerCase();
+  if (whole.length === value.length) return whole.replace(/ё/g, 'е');
+  let result = '';
+  for (const char of value) {
+    const lower = char.toLowerCase();
+    const safe = lower.length === char.length ? lower : char;
+    result += safe === 'ё' ? 'е' : safe;
+  }
+  return result;
 }
 
 function compareUpdated(a: NoteSource, b: NoteSource) {

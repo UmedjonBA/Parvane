@@ -4,7 +4,8 @@ import type { NoteProperties, NoteSource, NoteTask } from './notesModel';
 
 import {
   buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, dedupeTaskMarkers, ensureTaskMarker, findTaskLine,
-  normalizeNoteTitle, parseNote, removeTaskLine, renameLinks, serializeNote, setTaskDone,
+  normalizeNoteTitle, noteSearchText, parseNote, parseNoteCached, removeTaskLine, renameLinks, serializeNote,
+  setTaskDone,
 } from './notesModel';
 
 function makeIds(...ids: string[]) {
@@ -362,5 +363,26 @@ describe('заметки: название и заметка дня', () => {
     expect(note.body.startsWith('# 2026-10-12\n')).toBe(true);
     expect(note.tasks).toEqual([{ line: 2, isDone: false, text: '', marker: undefined }]);
     expect(note.preview).toBe('2026-10-12');
+  });
+});
+
+describe('заметки: кэш разбора по объекту заметки', () => {
+  it('тот же объект с тем же текстом — тот же разбор; новый текст — новый', () => {
+    const note = { id: 'a', title: 'А', folder: '', text: '# А\n\n[[Б]] #тег\n', updatedAt: 1 };
+    const parsed = parseNoteCached(note);
+    expect(parsed.links).toEqual(['Б']);
+    expect(parseNoteCached(note)).toBe(parsed);
+    expect(parseNoteCached({ ...note })).not.toBe(parsed);
+    expect(parseNoteCached({ ...note }).tags).toEqual(['тег']);
+    expect(parseNoteCached({ ...note, text: '# А\n\n[[В]]\n' }).links).toEqual(['В']);
+  });
+
+  it('строка поиска: без регистра, «ё» = «е», длина сохранена, одна копия на объект', () => {
+    const note = { id: 'a', title: 'А', folder: '', text: 'Ёлка İstanbul', updatedAt: 1 };
+    const value = noteSearchText(note);
+    expect(value.length).toBe(note.text.length);
+    expect(value.startsWith('елка ')).toBe(true);
+    expect(noteSearchText(note)).toBe(value);
+    expect(buildNotesIndex([note]).search('ёЛКА').map(({ id }) => id)).toEqual(['a']);
   });
 });

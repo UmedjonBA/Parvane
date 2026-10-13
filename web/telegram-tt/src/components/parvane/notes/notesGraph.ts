@@ -51,6 +51,15 @@ export type GraphOptions = {
 export type GraphFolder = { path: string; count: number };
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
 
+// Раскладка по шагам: `step` считает целые шаги, пока не кончится работа `maxWork` (в парах узлов) или раскладка;
+// `nodes()` — копии узлов с текущими местами (до конца — промежуточными); `work` — сколько пар пройдено всего
+export type GraphLayoutRun = {
+  readonly isDone: boolean;
+  readonly work: number;
+  step: (maxWork?: number) => boolean;
+  nodes: () => GraphNode[];
+};
+
 export type GraphLayoutOptions = {
   width: number;
   height: number;
@@ -76,11 +85,21 @@ export const GRAPH_MARGIN = 24;
 // 400 итераций; дальше итераций становится меньше во столько же раз, во сколько выросло число пар
 // (1000 узлов — 100 итераций, 2000 — 25), но не меньше одной
 export const GRAPH_WORK_BUDGET = 50_000_000;
+// Потолок работы расстановки новых узлов: число новых × число остальных × число шагов. До ~200 новых узлов
+// на графе в 1 000 идут все 120 шагов, 365 дней к 1 000 заметкам — 68, половина новых из 1 000 — 50
+export const GRAPH_PLACE_WORK_BUDGET = 25_000_000;
+// С этого числа узлов отталкивание считается по сетке ячеек: соседи в пределах GRAPH_REPULSION_RANGE — точно,
+// дальние — клеткой целиком (их квадратично много, а толкают они слабо и почти одинаково). Меньше — точно, все пары
+export const GRAPH_GRID_FROM = 250;
+export const GRAPH_REPULSION_RANGE = GRAPH_SPRING_LENGTH * 3;
 
 export const GRAPH_MIN_RADIUS = 6;
 export const GRAPH_MAX_RADIUS = 28;
 // Столько шагов новый узел ищет место среди уже разложенных (те стоят на месте)
 export const GRAPH_PLACE_ITERATIONS = 120;
+// Сколько пар за один шаг `GraphLayoutRun.step` успевает за кадр (~16 мс) и за первый, синхронный, кусок
+export const GRAPH_FRAME_WORK = 400_000;
+export const GRAPH_SYNC_WORK = 1_500_000;
 // Длина наконечника стрелки и зазор между связью и кружком
 export const GRAPH_ARROW = 7;
 export const GRAPH_EDGE_GAP = 3;
@@ -231,35 +250,172 @@ export function createSeededRandom(seed: number) {
   };
 }
 
-// Сколько итераций реально пройдёт раскладка для графа из `nodeCount` узлов (см. GRAPH_WORK_BUDGET)
-export function getLayoutIterations(nodeCount: number, requested = GRAPH_ITERATIONS) {
+// Сколько итераций реально пройдёт раскладка для графа из `nodeCount` узлов (см. GRAPH_WORK_BUDGET). По сетке
+// (`isByGrid`) пар не перебирают — потолок ставит сам движок по работе первого шага, здесь только запрошенное
+export function getLayoutIterations(nodeCount: number, requested = GRAPH_ITERATIONS, isByGrid = false) {
   const wanted = Math.max(0, Math.floor(Number.isFinite(requested) ? requested : GRAPH_ITERATIONS));
   const pairs = (nodeCount * (nodeCount - 1)) / 2;
-  if (pairs <= 0 || wanted === 0) return wanted;
+  if (pairs <= 0 || wanted === 0 || isByGrid) return wanted;
   return Math.min(wanted, Math.max(1, Math.floor(GRAPH_WORK_BUDGET / pairs)));
 }
 
-// Раскладка Fruchterman–Reingold с гравитацией к центру. Возвращает копии узлов в прежнем порядке с
-// новыми `x`/`y` внутри области `width` × `height` с отступом `margin`: раскладка считается в своих
-// единицах (длина связи 70), затем центрируется и, если не помещается, равномерно сжимается.
-// Результат зависит только от входа и зерна. Связи с неизвестными узлами и петли игнорируются.
-export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[], options: GraphLayoutOptions): GraphNode[] {
-  const count = nodes.length;
-  if (!count) return [];
+// Сколько шагов ищут место `freeCount` новых узлов на графе из `nodeCount` (см. GRAPH_PLACE_WORK_BUDGET)
+export function getPlaceIterations(
+  freeCount: number, nodeCount: number, requested = GRAPH_PLACE_ITERATIONS, isByGrid = false,
+) {
+  const wanted = Math.max(0, Math.floor(Number.isFinite(requested) ? requested : GRAPH_PLACE_ITERATIONS));
+  const pairs = freeCount * (nodeCount - 1);
+  if (pairs <= 0 || wanted === 0 || isByGrid) return wanted;
+  return Math.min(wanted, Math.max(1, Math.floor(GRAPH_PLACE_WORK_BUDGET / pairs)));
+}
 
+type Forces = { fx: Float64Array; fy: Float64Array };
+
+// Отталкивание всех пар точно: `movers` — кто получает силу (остальные стоят); при `isMutual` сила
+// прикладывается к обеим точкам пары, и каждая пара считается один раз
+function repelExact(
+  px: Float64Array, py: Float64Array, { fx, fy }: Forces, movers: Int32Array, count: number, isMutual: boolean,
+) {
+  const k2 = GRAPH_SPRING_LENGTH * GRAPH_SPRING_LENGTH;
+  let work = 0;
+  for (let m = 0; m < movers.length; m++) {
+    const i = movers[m];
+    for (let j = isMutual ? i + 1 : 0; j < count; j++) {
+      if (j === i) continue;
+      let dx = px[i] - px[j];
+      let dy = py[i] - py[j];
+      if (dx === 0 && dy === 0) {
+        // Совпавшие точки расталкиваются в направлении, заданном их номерами
+        dx = 0.01 * (i - j);
+        dy = 0.01;
+      }
+      const distance = Math.max(MIN_DISTANCE, Math.sqrt(dx * dx + dy * dy));
+      const force = k2 / (distance * distance);
+      fx[i] += dx * force;
+      fy[i] += dy * force;
+      if (isMutual) {
+        fx[j] -= dx * force;
+        fy[j] -= dy * force;
+      }
+    }
+    work += isMutual ? count - 1 - i : count - 1;
+  }
+  return work;
+}
+
+// Отталкивание по сетке: клетка со стороной GRAPH_REPULSION_RANGE. Соседи из своей и восьми смежных клеток
+// толкают точно, каждая дальняя клетка — одной силой из своего центра масс с весом по числу узлов (дальнее поле
+// держит граф в прежнем размере, а считается за число клеток, не узлов). Сила прикладывается только к `movers`
+// (пара считается с каждой стороны), порядок обхода задан номерами узлов — результат повторяем
+function repelByGrid(px: Float64Array, py: Float64Array, { fx, fy }: Forces, movers: Int32Array, count: number) {
+  const k2 = GRAPH_SPRING_LENGTH * GRAPH_SPRING_LENGTH;
+  const range = GRAPH_REPULSION_RANGE;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < count; i++) {
+    if (px[i] < minX) minX = px[i];
+    if (px[i] > maxX) maxX = px[i];
+    if (py[i] < minY) minY = py[i];
+    if (py[i] > maxY) maxY = py[i];
+  }
+  const cols = Math.max(1, Math.floor((maxX - minX) / range) + 1);
+  const rows = Math.max(1, Math.floor((maxY - minY) / range) + 1);
+  const cells = cols * rows;
+  const head = new Int32Array(cells).fill(-1);
+  const next = new Int32Array(count);
+  const cellOf = new Int32Array(count);
+  const cellCount = new Int32Array(cells);
+  const cellX = new Float64Array(cells);
+  const cellY = new Float64Array(cells);
+  // Узлы входят в списки клеток с конца, чтобы обход шёл по возрастанию номеров
+  for (let i = count - 1; i >= 0; i--) {
+    const cell = Math.floor((px[i] - minX) / range) + Math.floor((py[i] - minY) / range) * cols;
+    cellOf[i] = cell;
+    next[i] = head[cell];
+    head[cell] = i;
+    cellCount[cell]++;
+    cellX[cell] += px[i];
+    cellY[cell] += py[i];
+  }
+  for (let cell = 0; cell < cells; cell++) {
+    if (cellCount[cell]) {
+      cellX[cell] /= cellCount[cell];
+      cellY[cell] /= cellCount[cell];
+    }
+  }
+  let work = 0;
+  for (let m = 0; m < movers.length; m++) {
+    const i = movers[m];
+    const col = cellOf[i] % cols;
+    const row = (cellOf[i] - col) / cols;
+    for (let cell = 0; cell < cells; cell++) {
+      if (!cellCount[cell]) continue;
+      const c = cell % cols;
+      const r = (cell - c) / cols;
+      work++;
+      if (Math.abs(c - col) > 1 || Math.abs(r - row) > 1) {
+        const dx = px[i] - cellX[cell];
+        const dy = py[i] - cellY[cell];
+        const distance = Math.max(MIN_DISTANCE, Math.sqrt(dx * dx + dy * dy));
+        const force = (k2 * cellCount[cell]) / (distance * distance);
+        fx[i] += dx * force;
+        fy[i] += dy * force;
+        continue;
+      }
+      for (let j = head[cell]; j !== -1; j = next[j]) {
+        if (j === i) continue;
+        work++;
+        let dx = px[i] - px[j];
+        let dy = py[i] - py[j];
+        if (dx === 0 && dy === 0) {
+          dx = 0.01 * (i - j);
+          dy = 0.01;
+        }
+        const distance = Math.max(MIN_DISTANCE, Math.sqrt(dx * dx + dy * dy));
+        const force = k2 / (distance * distance);
+        fx[i] += dx * force;
+        fy[i] += dy * force;
+      }
+    }
+  }
+  return work;
+}
+
+// Общий движок раскладки. Полная (`previous` пуст): все узлы с случайных мест по зерну, гравитация к началу
+// координат, в конце — центрирование в области и, если не помещается, равномерное сжатие. Расстановка (есть
+// прежние места): известные узлы стоят, новые начинают рядом со стоящими соседями и ищут место теми же
+// силами; гравитация — к центру стоящих. Отталкивание — точно до GRAPH_GRID_FROM узлов, дальше по сетке
+export function startGraphLayout(
+  nodes: GraphNode[], edges: GraphEdge[], previous: ReadonlyMap<string, GraphPoint> | undefined,
+  options: GraphLayoutOptions,
+): GraphLayoutRun {
+  const count = nodes.length;
   const width = Math.max(0, options.width || 0);
   const height = Math.max(0, options.height || 0);
-  const centerX = width / 2;
-  const centerY = height / 2;
-  if (count === 1) return [{ ...nodes[0], x: centerX, y: centerY }];
-
-  const random = createSeededRandom(options.seed ?? GRAPH_DEFAULT_SEED);
   const px = new Float64Array(count);
   const py = new Float64Array(count);
-  for (let i = 0; i < count; i++) {
-    px[i] = (random() * 2 - 1) * START_SPREAD;
-    py[i] = (random() * 2 - 1) * START_SPREAD;
-  }
+  const freeList: number[] = [];
+  let sumX = 0;
+  let sumY = 0;
+  nodes.forEach((node, i) => {
+    const at = previous?.get(node.id)
+      || (node.kind === 'note' || node.kind === 'day'
+        ? previous?.get(MISSING_NODE_PREFIX + titleKey(node.title)) : undefined);
+    if (!at) {
+      freeList.push(i);
+      return;
+    }
+    px[i] = at.x;
+    py[i] = at.y;
+    sumX += at.x;
+    sumY += at.y;
+  });
+  const known = count - freeList.length;
+  const isFull = !known;
+  const movers = Int32Array.from(freeList);
+  const random = createSeededRandom(options.seed ?? GRAPH_DEFAULT_SEED);
 
   const indexById = new Map<string, number>();
   nodes.forEach((node, i) => {
@@ -272,79 +428,182 @@ export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[], options: Gra
     if (a !== undefined && b !== undefined && a !== b) links.push([a, b]);
   });
 
-  const iterations = getLayoutIterations(count, options.iterations);
-  // При урезанном числе итераций остывание идёт быстрее и заканчивается на той же температуре
-  const cooling = iterations ? COOLING ** (GRAPH_ITERATIONS / Math.max(iterations, 1)) : COOLING;
-  const k2 = GRAPH_SPRING_LENGTH * GRAPH_SPRING_LENGTH;
-  const fx = new Float64Array(count);
-  const fy = new Float64Array(count);
-  let temperature = START_TEMPERATURE;
-
-  for (let step = 0; step < iterations; step++, temperature *= cooling) {
+  const useGrid = count >= GRAPH_GRID_FROM;
+  let centerX = 0;
+  let centerY = 0;
+  let iterations: number;
+  let temperature: number;
+  let cooling: number;
+  if (isFull) {
     for (let i = 0; i < count; i++) {
-      fx[i] = -px[i] * GRAPH_GRAVITY;
-      fy[i] = -py[i] * GRAPH_GRAVITY;
+      px[i] = (random() * 2 - 1) * START_SPREAD;
+      py[i] = (random() * 2 - 1) * START_SPREAD;
     }
+    iterations = count > 1 ? getLayoutIterations(count, options.iterations, useGrid) : 0;
+    temperature = START_TEMPERATURE;
+    // При урезанном числе итераций остывание идёт быстрее и заканчивается на той же температуре
+    cooling = iterations ? COOLING ** (GRAPH_ITERATIONS / Math.max(iterations, 1)) : COOLING;
+  } else {
+    centerX = sumX / known;
+    centerY = sumY / known;
+    const isPlaced = new Uint8Array(count).fill(1);
+    freeList.forEach((i) => {
+      isPlaced[i] = 0;
+    });
+    let reach = 0;
     for (let i = 0; i < count; i++) {
-      for (let j = i + 1; j < count; j++) {
-        let dx = px[i] - px[j];
-        let dy = py[i] - py[j];
-        if (dx === 0 && dy === 0) {
-          // Совпавшие точки расталкиваются в направлении, заданном их номерами
-          dx = 0.01 * (j - i);
-          dy = 0.01;
+      if (isPlaced[i]) reach = Math.max(reach, Math.hypot(px[i] - centerX, py[i] - centerY));
+    }
+    const linked: number[][] = nodes.map(() => []);
+    links.forEach(([a, b]) => {
+      linked[a].push(b);
+      linked[b].push(a);
+    });
+    // Начальное место: на длину связи от середины стоящих соседей, в сторону от центра графа
+    freeList.forEach((i) => {
+      const around = linked[i].filter((j) => isPlaced[j]);
+      const angle = random() * Math.PI * 2;
+      let baseX = centerX;
+      let baseY = centerY;
+      let distance = reach + GRAPH_SPRING_LENGTH;
+      let dirX = Math.cos(angle);
+      let dirY = Math.sin(angle);
+      if (around.length) {
+        baseX = around.reduce((sum, j) => sum + px[j], 0) / around.length;
+        baseY = around.reduce((sum, j) => sum + py[j], 0) / around.length;
+        distance = GRAPH_SPRING_LENGTH;
+        const away = Math.hypot(baseX - centerX, baseY - centerY);
+        if (away > MIN_DISTANCE) {
+          dirX = (baseX - centerX) / away;
+          dirY = (baseY - centerY) / away;
         }
-        const distance = Math.max(MIN_DISTANCE, Math.hypot(dx, dy));
-        const force = k2 / (distance * distance);
-        fx[i] += dx * force;
-        fy[i] += dy * force;
-        fx[j] -= dx * force;
-        fy[j] -= dy * force;
       }
+      px[i] = baseX + dirX * distance;
+      py[i] = baseY + dirY * distance;
+      isPlaced[i] = 1;
+    });
+    iterations = freeList.length ? getPlaceIterations(freeList.length, count, options.iterations, useGrid) : 0;
+    temperature = PLACE_TEMPERATURE;
+    cooling = PLACE_COOLING;
+  }
+
+  const isMover = new Uint8Array(count);
+  movers.forEach((i) => {
+    isMover[i] = 1;
+  });
+  const forces: Forces = { fx: new Float64Array(count), fy: new Float64Array(count) };
+  const budget = isFull ? GRAPH_WORK_BUDGET : GRAPH_PLACE_WORK_BUDGET;
+  let done = 0;
+  let work = 0;
+
+  const iterate = () => {
+    const { fx, fy } = forces;
+    for (let m = 0; m < movers.length; m++) {
+      const i = movers[m];
+      fx[i] = (centerX - px[i]) * GRAPH_GRAVITY;
+      fy[i] = (centerY - py[i]) * GRAPH_GRAVITY;
     }
+    work += useGrid
+      ? repelByGrid(px, py, forces, movers, count)
+      : repelExact(px, py, forces, movers, count, isFull);
     for (let e = 0; e < links.length; e++) {
       const [a, b] = links[e];
       const dx = px[a] - px[b];
       const dy = py[a] - py[b];
-      const distance = Math.max(MIN_DISTANCE, Math.hypot(dx, dy));
+      const distance = Math.max(MIN_DISTANCE, Math.sqrt(dx * dx + dy * dy));
       const force = (distance / GRAPH_SPRING_LENGTH) * GRAPH_ATTRACTION;
-      fx[a] -= dx * force;
-      fy[a] -= dy * force;
-      fx[b] += dx * force;
-      fy[b] += dy * force;
+      if (isMover[a]) {
+        fx[a] -= dx * force;
+        fy[a] -= dy * force;
+      }
+      if (isMover[b]) {
+        fx[b] += dx * force;
+        fy[b] += dy * force;
+      }
     }
-    for (let i = 0; i < count; i++) {
-      const length = Math.max(1, Math.hypot(fx[i], fy[i]));
+    for (let m = 0; m < movers.length; m++) {
+      const i = movers[m];
+      const length = Math.max(1, Math.sqrt(fx[i] * fx[i] + fy[i] * fy[i]));
       const limited = Math.min(length, temperature) / length;
       px[i] += fx[i] * limited;
       py[i] += fy[i] * limited;
     }
-  }
+    temperature *= cooling;
+    done++;
+    // По сетке работа шага известна только после первого: потолок итераций — по ней, а не по числу пар
+    if (done === 1 && useGrid && work) {
+      iterations = Math.min(iterations, Math.max(1, Math.floor(budget / work)));
+      cooling = isFull ? COOLING ** (GRAPH_ITERATIONS / Math.max(iterations, 1)) : cooling;
+    }
+  };
 
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < count; i++) {
-    minX = Math.min(minX, px[i]);
-    maxX = Math.max(maxX, px[i]);
-    minY = Math.min(minY, py[i]);
-    maxY = Math.max(maxY, py[i]);
-  }
-  const margin = Math.max(0, options.margin ?? GRAPH_MARGIN);
-  const roomX = Math.max(0, width - margin * 2);
-  const roomY = Math.max(0, height - margin * 2);
-  const spanX = maxX - minX;
-  const spanY = maxY - minY;
-  const scale = options.isLoose ? 1 : Math.min(1, spanX > 0 ? roomX / spanX : 1, spanY > 0 ? roomY / spanY : 1);
-  const midX = (minX + maxX) / 2;
-  const midY = (minY + maxY) / 2;
+  const result = () => {
+    if (!count) return [];
+    if (!isFull) return nodes.map((node, i) => ({ ...node, x: px[i], y: py[i] }));
+    const boxCenterX = width / 2;
+    const boxCenterY = height / 2;
+    if (count === 1) return [{ ...nodes[0], x: boxCenterX, y: boxCenterY }];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < count; i++) {
+      minX = Math.min(minX, px[i]);
+      maxX = Math.max(maxX, px[i]);
+      minY = Math.min(minY, py[i]);
+      maxY = Math.max(maxY, py[i]);
+    }
+    const margin = Math.max(0, options.margin ?? GRAPH_MARGIN);
+    const roomX = Math.max(0, width - margin * 2);
+    const roomY = Math.max(0, height - margin * 2);
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const scale = options.isLoose ? 1 : Math.min(1, spanX > 0 ? roomX / spanX : 1, spanY > 0 ? roomY / spanY : 1);
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    return nodes.map((node, i) => ({
+      ...node,
+      x: boxCenterX + (px[i] - midX) * scale,
+      y: boxCenterY + (py[i] - midY) * scale,
+    }));
+  };
 
-  return nodes.map((node, i) => ({
-    ...node,
-    x: centerX + (px[i] - midX) * scale,
-    y: centerY + (py[i] - midY) * scale,
-  }));
+  return {
+    get isDone() {
+      return done >= iterations;
+    },
+    get work() {
+      return work;
+    },
+    step(maxWork = Infinity) {
+      const until = work + Math.max(0, maxWork);
+      while (done < iterations && work < until) iterate();
+      return done >= iterations;
+    },
+    nodes: result,
+  };
+}
+
+// Раскладка Fruchterman–Reingold с гравитацией к центру. Возвращает копии узлов в прежнем порядке с
+// новыми `x`/`y` внутри области `width` × `height` с отступом `margin`: раскладка считается в своих
+// единицах (длина связи 70), затем центрируется и, если не помещается, равномерно сжимается.
+// Результат зависит только от входа и зерна. Связи с неизвестными узлами и петли игнорируются.
+export function layoutGraph(nodes: GraphNode[], edges: GraphEdge[], options: GraphLayoutOptions): GraphNode[] {
+  const run = startGraphLayout(nodes, edges, undefined, options);
+  run.step();
+  return run.nodes();
+}
+
+// Раскладка, которая не перетряхивает граф при малом изменении: узлы, у которых есть прежнее место (`previous`),
+// остаются ровно на нём, место ищут только новые — рядом с уже стоящими соседями (без соседей — с краю), теми же
+// силами, что и в полной раскладке. Заметка, созданная на месте «заметки, которой ещё нет», занимает её место.
+// Прежних мест нет ни у одного узла — полная раскладка `layoutGraph`.
+export function placeGraph(
+  nodes: GraphNode[], edges: GraphEdge[], previous: ReadonlyMap<string, GraphPoint>, options: GraphLayoutOptions,
+): GraphNode[] {
+  const run = startGraphLayout(nodes, edges, previous, options);
+  run.step();
+  return run.nodes();
 }
 
 // Соседи узла (сам узел не входит) — для подсветки по тапу
@@ -361,124 +620,6 @@ export function neighboursOf(nodeId: string, edges: GraphEdge[]) {
 export function nodeRadius(degree: number) {
   const safe = Number.isFinite(degree) ? Math.max(0, degree) : 0;
   return Math.min(GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS + Math.sqrt(safe) * 3.2);
-}
-
-// Раскладка, которая не перетряхивает граф при малом изменении: узлы, у которых есть прежнее место (`previous`),
-// остаются ровно на нём, место ищут только новые — рядом с уже стоящими соседями (без соседей — с краю), теми же
-// силами, что и в полной раскладке. Заметка, созданная на месте «заметки, которой ещё нет», занимает её место.
-// Прежних мест нет ни у одного узла — полная раскладка `layoutGraph`.
-export function placeGraph(
-  nodes: GraphNode[], edges: GraphEdge[], previous: ReadonlyMap<string, GraphPoint>, options: GraphLayoutOptions,
-): GraphNode[] {
-  const count = nodes.length;
-  const px = new Float64Array(count);
-  const py = new Float64Array(count);
-  const free: number[] = [];
-  let sumX = 0;
-  let sumY = 0;
-  nodes.forEach((node, i) => {
-    const at = previous.get(node.id)
-      || (node.kind === 'note' || node.kind === 'day'
-        ? previous.get(MISSING_NODE_PREFIX + titleKey(node.title)) : undefined);
-    if (!at) {
-      free.push(i);
-      return;
-    }
-    px[i] = at.x;
-    py[i] = at.y;
-    sumX += at.x;
-    sumY += at.y;
-  });
-  const known = count - free.length;
-  if (!known) return layoutGraph(nodes, edges, options);
-  const place = () => nodes.map((node, i) => ({ ...node, x: px[i], y: py[i] }));
-  if (!free.length) return place();
-
-  const centerX = sumX / known;
-  const centerY = sumY / known;
-  const isPlaced = new Uint8Array(count).fill(1);
-  free.forEach((i) => {
-    isPlaced[i] = 0;
-  });
-  let reach = 0;
-  for (let i = 0; i < count; i++) {
-    if (isPlaced[i]) reach = Math.max(reach, Math.hypot(px[i] - centerX, py[i] - centerY));
-  }
-
-  const indexById = new Map<string, number>();
-  nodes.forEach((node, i) => {
-    if (!indexById.has(node.id)) indexById.set(node.id, i);
-  });
-  const linked: number[][] = nodes.map(() => []);
-  edges.forEach((edge) => {
-    const a = indexById.get(edge.from);
-    const b = indexById.get(edge.to);
-    if (a === undefined || b === undefined || a === b) return;
-    linked[a].push(b);
-    linked[b].push(a);
-  });
-
-  // Начальное место: на длину связи от середины стоящих соседей, в сторону от центра графа
-  const random = createSeededRandom(options.seed ?? GRAPH_DEFAULT_SEED);
-  free.forEach((i) => {
-    const around = linked[i].filter((j) => isPlaced[j]);
-    const angle = random() * Math.PI * 2;
-    let baseX = centerX;
-    let baseY = centerY;
-    let distance = reach + GRAPH_SPRING_LENGTH;
-    let dirX = Math.cos(angle);
-    let dirY = Math.sin(angle);
-    if (around.length) {
-      baseX = around.reduce((sum, j) => sum + px[j], 0) / around.length;
-      baseY = around.reduce((sum, j) => sum + py[j], 0) / around.length;
-      distance = GRAPH_SPRING_LENGTH;
-      const away = Math.hypot(baseX - centerX, baseY - centerY);
-      if (away > MIN_DISTANCE) {
-        dirX = (baseX - centerX) / away;
-        dirY = (baseY - centerY) / away;
-      }
-    }
-    px[i] = baseX + dirX * distance;
-    py[i] = baseY + dirY * distance;
-    isPlaced[i] = 1;
-  });
-
-  const k2 = GRAPH_SPRING_LENGTH * GRAPH_SPRING_LENGTH;
-  const iterations = Math.max(0, Math.floor(options.iterations ?? GRAPH_PLACE_ITERATIONS));
-  let temperature = PLACE_TEMPERATURE;
-  for (let step = 0; step < iterations; step++, temperature *= PLACE_COOLING) {
-    for (let f = 0; f < free.length; f++) {
-      const i = free[f];
-      let fx = (centerX - px[i]) * GRAPH_GRAVITY;
-      let fy = (centerY - py[i]) * GRAPH_GRAVITY;
-      for (let j = 0; j < count; j++) {
-        if (j === i) continue;
-        let dx = px[i] - px[j];
-        let dy = py[i] - py[j];
-        if (dx === 0 && dy === 0) {
-          dx = 0.01 * (i - j);
-          dy = 0.01;
-        }
-        const distance = Math.max(MIN_DISTANCE, Math.hypot(dx, dy));
-        const force = k2 / (distance * distance);
-        fx += dx * force;
-        fy += dy * force;
-      }
-      for (let n = 0; n < linked[i].length; n++) {
-        const j = linked[i][n];
-        const dx = px[i] - px[j];
-        const dy = py[i] - py[j];
-        const force = (Math.max(MIN_DISTANCE, Math.hypot(dx, dy)) / GRAPH_SPRING_LENGTH) * GRAPH_ATTRACTION;
-        fx -= dx * force;
-        fy -= dy * force;
-      }
-      const length = Math.max(1, Math.hypot(fx, fy));
-      const limited = Math.min(length, temperature) / length;
-      px[i] += fx * limited;
-      py[i] += fy * limited;
-    }
-  }
-  return place();
 }
 
 // Узел под точкой поля (ближайший из тех, в чей кружок с запасом `slop` она попала)

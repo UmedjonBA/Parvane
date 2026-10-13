@@ -174,6 +174,53 @@ describe('хранилище заметок: запись с карточки х
     expect(store.getNotes().find(({ id }) => id === 'n3')?.text).toBe('# Идея\n\nдругая\n');
   });
 
+  it('то же дерево заново и дерево с одной правкой: прежние объекты заметок, setNotes лишний раз нет', async () => {
+    const store = await open(TREE(), TEXTS);
+    const before = store.getNotes();
+    expect(before.map(({ id }) => id)).toEqual(['n1', 'n2']);
+    let changes = 0;
+    const unsubscribe = store.getNotes.subscribe(() => {
+      changes++;
+    });
+    // Новый объект дерева с тем же содержимым (эхо облака): проход не меняет список
+    cloud.set(stateWith(treeNodes().map((node) => ({ ...node }))));
+    await store.loadNotes('user');
+    expect(store.getNotes()).toBe(before);
+    expect(changes).toBe(0);
+    // Та же ссылка на дерево — проход пропускается вовсе (тексты не перечитываются)
+    await store.loadNotes('user');
+    expect(store.getNotes()).toBe(before);
+    // Изменилась одна заметка: её объект новый, остальные прежние; тексты читаются только для неё
+    cloud.texts.set('n2', '# План\n\nновое\n');
+    cloud.set(stateWith(treeNodes().map((node) => (
+      node.id === 'n2' ? { ...node, mtime: 9, blob: { fileId: 'n2-v1' } as CloudNodeJson['blob'] } : node
+    ))));
+    await store.loadNotes('user');
+    const after = store.getNotes();
+    expect(changes).toBe(1);
+    expect(after.find(({ id }) => id === 'n1')).toBe(before.find(({ id }) => id === 'n1'));
+    expect(after.find(({ id }) => id === 'n2')).toMatchObject({ text: '# План\n\nновое\n', fileId: 'n2-v1' });
+    expect(store.getNoteFolders()).toBe(store.getNoteFolders());
+    unsubscribe();
+  });
+
+  it('без потребителей изменение облака лишь помечает хранилище; удержание применяет его', async () => {
+    const store = await open(TREE(), TEXTS);
+    const before = store.getNotes();
+    cloud.texts.set('n1', '# Идея\n\nправка с другого устройства\n');
+    cloud.set(stateWith(treeNodes().map((node) => (
+      node.id === 'n1' ? { ...node, blob: { fileId: 'n1-v1' } as CloudNodeJson['blob'] } : node
+    ))));
+    await Promise.resolve();
+    expect(store.getNotes()).toBe(before);
+    const release = store.retainNotes();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(store.getNotes().find(({ id }) => id === 'n1')?.text).toBe('# Идея\n\nправка с другого устройства\n');
+    release();
+  });
+
   it('папки заметки тоже нет — восстановленная заметка ложится в корень хранилища', async () => {
     const store = await open(TREE(), TEXTS);
     cloud.set(stateWith(treeNodes().map((node) => (

@@ -108,7 +108,11 @@ export function buildNoteGroups<T extends GroupedNote>({
   const daily: T[] = [];
   notes.forEach((note) => {
     if (note.isDaily && DAY_KEY.test(note.title)) daily.push(note);
-    else byFolder.set(note.folder, [...(byFolder.get(note.folder) || []), note]);
+    else {
+      const items = byFolder.get(note.folder);
+      if (items) items.push(note);
+      else byFolder.set(note.folder, [note]);
+    }
   });
   if (!isSearch) {
     folders.forEach(({ path }) => {

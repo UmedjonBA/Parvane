@@ -2,6 +2,12 @@
 // дерево — домен `cloud.v1`). Тексты читаются при открытии раздела и держатся в памяти; указатель связей
 // строится из содержимого. Сохранение сводит правки с двух устройств построчно; при расхождении рядом
 // создаётся копия «… (конфликт …)» — молча ничего не теряется.
+//
+// Работа с деревом облака скупая (ревью производительности 13 окт 2026, D1/D2): события облака сливаются в
+// один проход, проход по тому же дереву не повторяется, объекты заметок, которые не изменились, остаются
+// прежними (экраны и кэши по объекту их переиспользуют), тексты читаются пачкой и помнятся между
+// перезагрузками в шифрованном хранилище устройства по версии файла. Пока ни раздел «Знания», ни палитра
+// не открыты (`retainNotes`), изменение облака лишь помечает хранилище «грязным».
 
 import type { CloudDriveState } from '../../../api/parvane/cloudDrive';
 import type { CloudNode } from '../cloud/cloudModel';
@@ -11,6 +17,7 @@ import type { NotesIndex, NoteSource } from './notesModel';
 
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
+import { SecureE2eStorage } from '../../../api/parvane/secureStorage';
 import {
   getCloudData, getNodes, loadCloud, moveCloudNodes, refreshCloud, renameCloudNode, trashCloudNodes,
 } from '../cloud/cloudStore';
@@ -25,10 +32,11 @@ import {
 } from './notesGuide';
 import { mergeNotes } from './notesMerge';
 import {
-  buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNote, renameLinks,
+  buildNotesIndex, dailyNoteTemplate, dailyNoteTitle, normalizeNoteTitle, parseNoteCached, renameLinks,
 } from './notesModel';
 import {
-  applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, planNoteTasks,
+  applyNoteTasks, applyPlannerToNote, hasNoteTaskChanges, markerOfTask, noteTasksBySource, noteTasksSignature,
+  planNoteTasks,
 } from './notesTasks';
 
 export type NoteEntry = NoteSource & {
@@ -47,9 +55,15 @@ export type FolderDeleteResult = 'done' | 'has-notes' | 'has-files' | 'failed';
 
 export type NotesOptions = { guideLang: GuideLang; vaultName: string };
 
-type TextResult = { text: string; fileId: string } | undefined;
+type TextContent = { fileId: string; text: string };
+type TextResult = TextContent | undefined;
+// Ответ пакетного чтения провайдера (`parvaneCloudReadTexts`): по записи на узел
+type BatchTextItem = { id: string; text?: string; fileId?: string; error?: string };
+// Запись кэша текстов в хранилище устройства: узел, версия файла, текст
+type CachedText = TextContent & { node: string };
 type GuideResult = { status: 'retry' | 'skipped' } | { status: 'done'; isFreshVault: boolean; overviewId?: string };
 type WriteResult = { ok: boolean; node?: string; fileId?: string; conflict?: string } | undefined;
+type VaultFile = { node: CloudNode; folder: string; isNote: boolean };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
@@ -60,10 +74,18 @@ const NOTE_EXTENSION = '.md';
 const CANVAS_EXTENSION = '.canvas';
 const CANVAS_MIME = 'application/json';
 const ROOT = 'root';
+// Чтение по одному (провайдер без пакетного метода) и запись справки — столько запросов разом
 const LOAD_PARALLEL = 4;
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
 // Столько раз за сессию справка пробует создаться сама (сбой записи — повтор при следующем изменении облака)
 const GUIDE_ATTEMPTS_MAX = 3;
+// Кэш текстов в шифрованном хранилище устройства: имя записи — `notes:<id узла>`
+const TEXT_CACHE_PREFIX = 'notes:';
+// Запись в кэш идёт пачками в фоне, между пачками — пауза, чтобы не занимать поток
+const TEXT_CACHE_CHUNK = 24;
+const TEXT_CACHE_PAUSE_MS = 40;
+// Признак того, что вызов провайдера упал (а не что метода нет)
+const CALL_FAILED = Symbol('call-failed');
 
 const [getNotes, setNotes] = createSignal<NoteEntry[]>([]);
 const [getCanvases, setCanvases] = createSignal<CanvasEntry[]>([]);
@@ -79,17 +101,33 @@ export {
 };
 
 let isListening = false;
-let syncQueue: Promise<void> = Promise.resolve();
+// Проход по дереву облака: один в работе, события за это время сливаются в следующий
+let syncRun: Promise<void> | undefined;
+let isDirty = false;
+// Дерево, по которому прошли последний раз: то же самое второй раз не разбирается
+let lastSyncedData: CloudDriveState | undefined;
+// Сколько экранов сейчас читают заметки (раздел «Знания», палитра): без них проход откладывается
+let consumers = 0;
+// Пока > 0, события облака лишь помечают хранилище «грязным» (серия записей — один проход в конце)
+let suspendDepth = 0;
 let cachedIndex: { notes: NoteEntry[]; index: NotesIndex } | undefined;
 // Метки пунктов, которым уже выдавалась задача: исчезнувшая в «Плане» задача такой метки — удаление
 const knownMarkers = new Set<string>();
-const texts = new Map<string, { fileId: string; text: string }>();
+const texts = new Map<string, TextContent>();
 let notesUserId: string | undefined;
 let notesOptions: NotesOptions | undefined;
 // Справка: идёт проверка и создание (создание папки хранилища её ждёт) либо вопрос для этой сессии решён
 let guideRun: Promise<unknown> | undefined;
 let isGuideSettled = false;
 let guideAttempts = 0;
+// Пакетного чтения у провайдера нет — читаем по одному и больше не спрашиваем
+let isBatchReadMissing = false;
+// Кэш текстов на устройстве: хранилище аккаунта и прочитанные из него записи (по id узла)
+let storageRun: Promise<SecureE2eStorage | undefined> | undefined;
+let textCacheRun: Promise<Map<string, CachedText> | undefined> | undefined;
+let textCacheWrites: Promise<void> = Promise.resolve();
+// Что уже применяли из «Плана» к заметкам: та же подпись задач и тот же список — править нечего
+let appliedPlanner: { signature: string; notes: NoteEntry[] } | undefined;
 
 function rootIdOf(data = getCloudData()) {
   return data?.rootId;
@@ -105,28 +143,195 @@ function newNodeId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function pathOf(nodes: CloudNode[], node: CloudNode, vaultId: string) {
-  const parts: string[] = [];
-  let parent = node.parent ? nodes.find(({ id }) => id === node.parent) : undefined;
-  while (parent && parent.id !== vaultId) {
-    parts.unshift(parent.name);
-    parent = parent.parent ? nodes.find(({ id }) => id === parent!.parent) : undefined;
-  }
-  // Узел вне папки хранилища в заметки не входит
-  return parent ? parts.join('/') : undefined;
+function isSameList<T>(a: readonly T[], b: readonly T[]) {
+  return a.length === b.length && a.every((item, i) => item === b[i]);
 }
 
-async function readText(node: CloudNode): Promise<{ fileId: string; text: string } | undefined> {
+function isSameFolders(a: NoteFolder[], b: NoteFolder[]) {
+  return a.length === b.length && a.every((item, i) => (
+    item.id === b[i].id && item.path === b[i].path && item.name === b[i].name
+  ));
+}
+
+// Пути папок от хранилища по id папки (`''` — само хранилище, `undefined` — папка вне хранилища): узлы по
+// `Map`, каждая папка разбирается один раз на проход, а не заново от каждого файла
+function folderPathsOf(nodes: CloudNode[], vaultId: string) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const paths = new Map<string, string | undefined>([[vaultId, '']]);
+  const pathOf = (id: string, depth = 0): string | undefined => {
+    if (paths.has(id)) return paths.get(id);
+    const node = byId.get(id);
+    let result: string | undefined;
+    // Предел глубины — защита от цикла в повреждённом дереве
+    if (node?.parent && depth <= nodes.length) {
+      const parent = pathOf(node.parent, depth + 1);
+      if (parent !== undefined) result = parent ? `${parent}/${node.name}` : node.name;
+    }
+    paths.set(id, result);
+    return result;
+  };
+  return pathOf;
+}
+
+// Файлы хранилища (заметки и холсты) с путями папок; узлы вне папки хранилища в заметки не входят
+function vaultFilesOf(nodes: CloudNode[], vault: CloudNode | undefined): VaultFile[] {
+  if (!vault) return [];
+  const pathOf = folderPathsOf(nodes, vault.id);
+  const files: VaultFile[] = [];
+  nodes.forEach((node) => {
+    if (node.kind !== 'file' || node.trashed || !node.parent) return;
+    const isNote = node.name.endsWith(NOTE_EXTENSION);
+    if (!isNote && !node.name.endsWith(CANVAS_EXTENSION)) return;
+    const folder = pathOf(node.parent);
+    if (folder !== undefined) files.push({ node, folder, isNote });
+  });
+  return files;
+}
+
+// ── кэш текстов на устройстве ────────────────────────────────────────────────
+
+// Хранилище аккаунта (тот же non-extractable ключ, что у состояния движка; под PIN — только после
+// разблокировки, иначе кэша нет). Адрес аккаунта отдаёт провайдер
+function notesStorage() {
+  storageRun ||= (async () => {
+    const info = await callParvane('fetchParvaneDiagStoreInfo', {}).catch(() => undefined) as
+      { self?: string } | undefined;
+    if (!info?.self) return undefined;
+    return SecureE2eStorage.open(info.self).catch(() => undefined);
+  })();
+  return storageRun;
+}
+
+function loadTextCache() {
+  textCacheRun ||= (async () => {
+    const storage = await notesStorage();
+    if (!storage) return undefined;
+    const records = await storage.loadRecordsByPrefix<CachedText>(TEXT_CACHE_PREFIX).catch(() => []);
+    const cache = new Map<string, CachedText>();
+    records.forEach((record) => {
+      if (record?.node && record.fileId && typeof record.text === 'string') cache.set(record.node, record);
+    });
+    return cache;
+  })();
+  return textCacheRun;
+}
+
+function pause(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+// Записи — в фоне и по очереди, пачками с паузами; смена аккаунта за это время отменяет остаток
+function queueTextCacheWrite(run: (storage: SecureE2eStorage, cache: Map<string, CachedText>) => Promise<void>) {
+  const userId = notesUserId;
+  textCacheWrites = textCacheWrites.then(async () => {
+    const [storage, cache] = await Promise.all([notesStorage(), loadTextCache()]);
+    if (!storage || !cache || userId !== notesUserId) return;
+    await run(storage, cache);
+  }).catch(() => undefined);
+}
+
+function storeTexts(items: CachedText[]) {
+  if (!items.length) return;
+  queueTextCacheWrite(async (storage, cache) => {
+    for (let i = 0; i < items.length; i += TEXT_CACHE_CHUNK) {
+      await Promise.all(items.slice(i, i + TEXT_CACHE_CHUNK).map(async (item) => {
+        if (cache.get(item.node)?.fileId === item.fileId) return;
+        await storage.saveRecord(`${TEXT_CACHE_PREFIX}${item.node}`, item);
+        cache.set(item.node, item);
+      }));
+      if (i + TEXT_CACHE_CHUNK < items.length) await pause(TEXT_CACHE_PAUSE_MS);
+    }
+  });
+}
+
+// Записи узлов, которых в хранилище больше нет (удалены, в корзине), уходят из кэша
+function pruneTextCache(alive: Set<string>) {
+  queueTextCacheWrite(async (storage, cache) => {
+    const stale = [...cache.keys()].filter((node) => !alive.has(node));
+    for (const node of stale) {
+      cache.delete(node);
+      await storage.deleteRecord(`${TEXT_CACHE_PREFIX}${node}`);
+    }
+  });
+}
+
+// Текст, который хранилище знает (прочитан либо только что записан): в памяти и в кэше устройства
+function rememberText(nodeId: string, content: TextContent) {
+  texts.set(nodeId, content);
+  storeTexts([{ node: nodeId, ...content }]);
+}
+
+// ── чтение текстов ───────────────────────────────────────────────────────────
+
+async function readText(node: CloudNode): Promise<TextContent | undefined> {
   const fileId = node.blob?.fileId;
   if (!fileId) return undefined;
   const cached = texts.get(node.id);
   if (cached?.fileId === fileId) return cached;
+  const stored = (await loadTextCache())?.get(node.id);
+  if (stored?.fileId === fileId) {
+    texts.set(node.id, stored);
+    return stored;
+  }
   const container = rootIdOf();
-  const result = await callParvane('parvaneCloudReadText', { container, node: node.id })
+  const result = await callParvane('parvaneCloudReadText', { container, node: node.id, blob: node.blob })
     .catch(() => undefined) as TextResult;
   if (!result) return cached;
-  texts.set(node.id, result);
+  rememberText(node.id, result);
   return result;
+}
+
+// Тексты узлов пачкой: один вызов провайдера на всё (окно чтения — внутри него); провайдер без такого метода
+// отвечает `undefined` — тогда по одному, как прежде. Не прочитавшееся остаётся прежним (если было)
+async function readTextsOf(nodes: CloudNode[]): Promise<Map<string, TextContent>> {
+  const result = new Map<string, TextContent>();
+  const container = rootIdOf();
+  if (!isBatchReadMissing) {
+    const batch = await callParvane('parvaneCloudReadTexts', {
+      container, nodes: nodes.map(({ id, blob }) => ({ id, blob })),
+    }).catch(() => CALL_FAILED) as BatchTextItem[] | typeof CALL_FAILED | undefined;
+    if (Array.isArray(batch)) {
+      batch.forEach((item) => {
+        if (item && typeof item.text === 'string' && item.fileId) {
+          result.set(item.id, { fileId: item.fileId, text: item.text });
+        }
+      });
+      return result;
+    }
+    if (batch !== CALL_FAILED) isBatchReadMissing = true;
+  }
+  for (let i = 0; i < nodes.length; i += LOAD_PARALLEL) {
+    await Promise.all(nodes.slice(i, i + LOAD_PARALLEL).map(async (node) => {
+      const got = await callParvane('parvaneCloudReadText', { container, node: node.id, blob: node.blob })
+        .catch(() => undefined) as TextResult;
+      if (got) result.set(node.id, got);
+    }));
+  }
+  return result;
+}
+
+// Тексты файлов хранилища в `texts`: сначала память, потом кэш устройства, остальное — у облака
+async function readTexts(files: VaultFile[]) {
+  const cache = await loadTextCache();
+  const needed: CloudNode[] = [];
+  files.forEach(({ node }) => {
+    const fileId = node.blob?.fileId;
+    if (!fileId || texts.get(node.id)?.fileId === fileId) return;
+    const stored = cache?.get(node.id);
+    if (stored?.fileId === fileId) {
+      texts.set(node.id, stored);
+      return;
+    }
+    needed.push(node);
+  });
+  if (needed.length) {
+    const got = await readTextsOf(needed);
+    got.forEach((content, id) => texts.set(id, content));
+    storeTexts(needed.filter((node) => got.has(node.id)).map((node) => ({ node: node.id, ...got.get(node.id)! })));
+  }
+  if (cache) pruneTextCache(new Set(files.map(({ node }) => node.id)));
 }
 
 async function syncFromCloud(data: CloudDriveState | undefined) {
@@ -135,46 +340,54 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   const rootId = rootIdOf(data);
   const nodes = rootId ? getNodes(rootId, data) : [];
   const vault = findVault(nodes);
-  const files = !vault ? [] : nodes
-    .filter((node) => node.kind === 'file' && !node.trashed)
-    .map((node) => ({ node, folder: pathOf(nodes, node, vault.id) }))
-    .filter((item): item is { node: CloudNode; folder: string } => item.folder !== undefined);
+  const files = vaultFilesOf(nodes, vault);
+  await readTexts(files);
+  // Заметка, у которой не изменились ни версия файла, ни папка, ни название, ни время, остаётся прежним
+  // объектом: экраны и кэши по объекту (разбор, превью, граф) её не пересчитывают
+  const previousNotes = new Map(getNotes().map((note) => [note.id, note]));
+  const previousCanvases = new Map(getCanvases().map((canvas) => [canvas.id, canvas]));
   const notes: NoteEntry[] = [];
   const canvases: CanvasEntry[] = [];
-  for (let i = 0; i < files.length; i += LOAD_PARALLEL) {
-    await Promise.all(files.slice(i, i + LOAD_PARALLEL).map(async ({ node, folder }) => {
-      const isNote = node.name.endsWith(NOTE_EXTENSION);
-      if (!isNote && !node.name.endsWith(CANVAS_EXTENSION)) return;
-      const content = await readText(node);
-      if (!content) return;
-      const title = node.name.slice(0, -(isNote ? NOTE_EXTENSION : CANVAS_EXTENSION).length);
-      if (!isNote) {
-        canvases.push({
+  files.forEach(({ node, folder, isNote }) => {
+    const content = texts.get(node.id);
+    if (!content) return;
+    const title = node.name.slice(0, -(isNote ? NOTE_EXTENSION : CANVAS_EXTENSION).length);
+    if (!isNote) {
+      const previous = previousCanvases.get(node.id);
+      canvases.push(previous && previous.fileId === content.fileId && previous.text === content.text
+        && previous.title === title ? previous : {
           id: node.id, title, text: content.text, fileId: content.fileId,
         });
-        return;
-      }
-      notes.push({
-        id: node.id,
-        title,
-        folder,
-        text: content.text,
-        updatedAt: node.mtime,
-        fileId: content.fileId,
-        isDaily: DAY_KEY.test(title),
-      });
-    }));
-  }
+      return;
+    }
+    const previous = previousNotes.get(node.id);
+    const isSame = previous && previous.fileId === content.fileId && previous.text === content.text
+      && previous.title === title && previous.folder === folder && previous.updatedAt === node.mtime;
+    notes.push(isSame ? previous : {
+      id: node.id,
+      title,
+      folder,
+      text: content.text,
+      updatedAt: node.mtime,
+      fileId: content.fileId,
+      isDaily: DAY_KEY.test(title),
+    });
+  });
   notes.sort((a, b) => b.updatedAt - a.updatedAt || (a.title < b.title ? -1 : 1));
   canvases.sort((a, b) => (a.title < b.title ? -1 : 1));
-  notes.forEach((note) => parseNote(note.text).tasks.forEach((task) => {
-    if (task.marker && getNoteTasks(getPlannerState(), note.id).some((t) => markerOfTask(t) === task.marker)) {
-      knownMarkers.add(task.marker);
-    }
-  }));
-  setNotes(notes);
-  setCanvases(canvases);
-  setNoteFolders(vault ? listNoteFolders(nodes, vault.id) : []);
+  const tasksBySource = noteTasksBySource(getPlannerState());
+  notes.forEach((note) => {
+    const planned = tasksBySource.get(note.id);
+    if (!planned?.length) return;
+    const markers = new Set(planned.map(markerOfTask));
+    parseNoteCached(note).tasks.forEach((task) => {
+      if (task.marker && markers.has(task.marker)) knownMarkers.add(task.marker);
+    });
+  });
+  if (!isSameList(notes, getNotes())) setNotes(notes);
+  if (!isSameList(canvases, getCanvases())) setCanvases(canvases);
+  const folders = vault ? listNoteFolders(nodes, vault.id) : [];
+  if (!isSameFolders(folders, getNoteFolders())) setNoteFolders(folders);
   setNotesStatus('ready');
   if (hasGuideMarker(nodes, VAULT_NAMES)) isGuideSettled = true;
   else startGuide();
@@ -239,20 +452,28 @@ async function writeGuide(mode: GuideMode, check: GuideDrive, options: NotesOpti
       return (await writeGuideMarker(options)) ? { status: 'done', isFreshVault: false } : { status: 'retry' };
     }
   }
+  // Заметки справки пишутся по нескольку разом (каждая — свой блоб и своя правка дерева; узлы с постоянными
+  // идентификаторами, так что недописанное дописывает следующая попытка). Записанное остаётся
   let overviewId: string | undefined;
-  for (const note of plan.notes) {
-    const result = await callParvane('parvaneCloudWriteText', {
-      container: ROOT,
-      parent: plan.folderId,
-      name: `${note.title}${NOTE_EXTENSION}`,
-      text: note.text,
-      newNodeId: note.nodeId,
-    }).catch(() => undefined) as WriteResult;
-    // Записанное остаётся; недостающее допишет следующая попытка
-    if (!result?.ok || !result.node) return { status: 'retry' };
-    texts.set(result.node, { fileId: result.fileId!, text: note.text });
-    if (note.key === 'overview') overviewId = result.node;
+  let hasFailure = false;
+  for (let i = 0; i < plan.notes.length && !hasFailure; i += LOAD_PARALLEL) {
+    await Promise.all(plan.notes.slice(i, i + LOAD_PARALLEL).map(async (note) => {
+      const result = await callParvane('parvaneCloudWriteText', {
+        container: ROOT,
+        parent: plan.folderId,
+        name: `${note.title}${NOTE_EXTENSION}`,
+        text: note.text,
+        newNodeId: note.nodeId,
+      }).catch(() => undefined) as WriteResult;
+      if (!result?.ok || !result.node) {
+        hasFailure = true;
+        return;
+      }
+      rememberText(result.node, { fileId: result.fileId!, text: note.text });
+      if (note.key === 'overview') overviewId = result.node;
+    }));
   }
+  if (hasFailure) return { status: 'retry' };
   if (plan.hasMarkerWrite && !(await writeGuideMarker(options))) return { status: 'retry' };
   // Дерево со справкой — до того, как продолжатся правки, ждавшие эту проверку
   await refreshCloud();
@@ -309,9 +530,75 @@ export function consumeGuideOpen() {
   setGuideOpenId(undefined);
 }
 
+// Проход по дереву облака: не больше одного в работе; просьбы, пришедшие за это время, сливаются в один
+// следующий проход. Дерево, по которому уже прошли, второй раз не разбирается
+async function runSync() {
+  while (isDirty) {
+    isDirty = false;
+    const data = getCloudData();
+    if (data !== undefined && data === lastSyncedData) continue;
+    await syncFromCloud(data);
+    lastSyncedData = data;
+  }
+}
+
 function queueSync() {
-  syncQueue = syncQueue.then(() => syncFromCloud(getCloudData())).catch(() => undefined);
-  return syncQueue;
+  isDirty = true;
+  if (!syncRun) {
+    // Проход не удался (нет связи) — следующее изменение облака повторит его. Признак «в работе» снимается
+    // в `finally` обещания, а не внутри прохода: проход без ожиданий кончается раньше присваивания
+    syncRun = runSync().catch(() => undefined).finally(() => {
+      syncRun = undefined;
+    });
+  }
+  return syncRun;
+}
+
+// Изменилось облако: пока заметки кому-то нужны, проход идёт сразу, иначе откладывается до открытия
+function handleCloudChange() {
+  if (consumers > 0 && !suspendDepth) void queueSync();
+  else isDirty = true;
+}
+
+// Серия записей (переименование со ссылками): проход по облаку — один, в конце
+async function withSyncSuspended<T>(run: () => Promise<T>) {
+  suspendDepth++;
+  try {
+    return await run();
+  } finally {
+    suspendDepth--;
+    if (!suspendDepth) await queueSync();
+  }
+}
+
+/** Экран, которому нужны заметки (раздел «Знания», палитра), держит хранилище «живым»: изменения облака
+ * применяются сразу. Возвращает отпускание; отложенные изменения применяются при следующем удержании. */
+export function retainNotes() {
+  consumers++;
+  if (isDirty && isListening) void queueSync();
+  let isReleased = false;
+  return () => {
+    if (isReleased) return;
+    isReleased = true;
+    consumers = Math.max(0, consumers - 1);
+  };
+}
+
+function resetForUser() {
+  texts.clear();
+  knownMarkers.clear();
+  cachedIndex = undefined;
+  lastSyncedData = undefined;
+  storageRun = undefined;
+  textCacheRun = undefined;
+  appliedPlanner = undefined;
+  isGuideSettled = false;
+  guideAttempts = 0;
+  setGuideOpenId(undefined);
+  setNotes([]);
+  setCanvases([]);
+  setNoteFolders([]);
+  setNotesStatus('loading');
 }
 
 /** Открыть хранилище: дерево облака → тексты заметок; дальше следует за изменениями облака.
@@ -319,17 +606,13 @@ function queueSync() {
 export function loadNotes(userId?: string, options?: NotesOptions) {
   if (notesUserId !== userId) {
     notesUserId = userId;
-    isGuideSettled = false;
-    guideAttempts = 0;
-    setGuideOpenId(undefined);
+    resetForUser();
   }
   notesOptions = options || notesOptions;
   void loadCloud(userId);
   if (!isListening) {
     isListening = true;
-    getCloudData.subscribe(() => {
-      void queueSync();
-    });
+    getCloudData.subscribe(handleCloudChange);
   }
   return queueSync();
 }
@@ -403,7 +686,7 @@ export async function createNote(
     notify('failed', name);
     return undefined;
   }
-  texts.set(result.node, { fileId: result.fileId!, text });
+  rememberText(result.node, { fileId: result.fileId!, text });
   await refreshCloud();
   await queueSync();
   return result.node;
@@ -431,9 +714,8 @@ export async function readDailyNote(
   const nodes = getNodes(rootIdOf(data), data);
   const vault = findVault(nodes);
   const name = `${dailyNoteTitle(day)}${NOTE_EXTENSION}`;
-  const node = vault && nodes.find((item) => (
-    item.kind === 'file' && !item.trashed && item.name === name && pathOf(nodes, item, vault.id) !== undefined
-  ));
+  const node = vault && vaultFilesOf(nodes.filter((item) => item.kind !== 'file' || item.name === name), vault)
+    .find((file) => file.isNote)?.node;
   if (!node) return {};
   const content = await readText(node);
   // Файл есть, а прочитать не вышло (нет связи): не «заметки нет»
@@ -479,7 +761,9 @@ export async function saveNote(
 ): Promise<boolean> {
   const note = getNotes().find(({ id }) => id === noteId);
   if (!note) return false;
-  const planned = planNoteTasks(draft, quickContext());
+  const ctx = quickContext();
+  // Пункты с датой планируются один раз; заново — только если сведение с чужой версией изменило текст
+  let planned = planNoteTasks(draft, ctx);
   let text = planned.text;
   if (baseText !== undefined && baseText !== note.text && text !== note.text) {
     text = await reconcileNote(note, baseText, text, note.text, vaultName);
@@ -497,11 +781,12 @@ export async function saveNote(
     notify('failed', note.title);
     return false;
   }
-  texts.set(note.id, { fileId: result.fileId, text });
-  const tasks = planNoteTasks(text, quickContext()).tasks;
+  rememberText(note.id, { fileId: result.fileId, text });
+  if (text !== planned.text) planned = planNoteTasks(text, ctx);
+  const { tasks } = planned;
   tasks.forEach(({ marker }) => knownMarkers.add(marker));
-  const probe = structuredClone(getPlannerState());
-  if (applyNoteTasks(probe, note.id, tasks)) {
+  // Есть ли что править в «Плане» — по его задачам, без копии всего состояния
+  if (hasNoteTaskChanges(getPlannerState(), note.id, tasks)) {
     updatePlanner((state) => {
       applyNoteTasks(state, note.id, tasks);
     });
@@ -531,11 +816,18 @@ export async function saveNoteOrRestore(
   return id ? { status: 'restored', id, title: created?.title || title } : { status: 'failed' };
 }
 
-/** Галочки и удаления из «Плана» → в заметки (вызывается при изменении «Плана» и после загрузки). */
+/** Галочки и удаления из «Плана» → в заметки (вызывается при изменении «Плана» и после загрузки).
+ * Проход — только когда изменились задачи из заметок либо сами заметки, и только по заметкам с метками. */
 export async function applyPlannerToNotes(vaultName: string) {
   const state = getPlannerState();
-  for (const note of getNotes()) {
-    const next = applyPlannerToNote(note.text, getNoteTasks(state, note.id), knownMarkers);
+  const notes = getNotes();
+  const signature = noteTasksSignature(state);
+  if (appliedPlanner && appliedPlanner.signature === signature && appliedPlanner.notes === notes) return;
+  appliedPlanner = { signature, notes };
+  const tasksBySource = noteTasksBySource(state);
+  for (const note of notes) {
+    if (!parseNoteCached(note).tasks.some(({ marker }) => marker)) continue;
+    const next = applyPlannerToNote(note.text, tasksBySource.get(note.id) || [], knownMarkers);
     if (next !== note.text) await saveNote(note.id, next, vaultName);
   }
 }
@@ -555,16 +847,21 @@ export async function renameNote(noteId: string, title: string, vaultName: strin
   if (!note || !node || !rootId || next === note.title) return false;
   if (!(await renameCloudNode(rootId, node, `${next}${NOTE_EXTENSION}`))) return false;
   await queueSync();
-  for (const other of getNotes()) {
-    const text = renameLinks(other.text, note.title, next);
-    if (text !== other.text) await saveNote(other.id, text, vaultName);
-  }
-  // Карточка холста хранит название заметки путём файла; повреждённый файл холста не переписывается
-  for (const canvas of getCanvases()) {
-    const parsed = parseCanvas(canvas.text);
-    const doc = parsed.error ? parsed.doc : renameCanvasNote(parsed.doc, note.title, next);
-    if (doc !== parsed.doc) await saveCanvas(canvas.title, serializeCanvas(doc), vaultName, canvas.id);
-  }
+  const oldKey = normalizeNoteTitle(note.title);
+  // Ссылающиеся заметки и холсты пишутся подряд, дерево облака разбирается один раз в конце
+  await withSyncSuspended(async () => {
+    for (const other of getNotes()) {
+      if (!parseNoteCached(other).links.some((link) => normalizeNoteTitle(link) === oldKey)) continue;
+      const text = renameLinks(other.text, note.title, next);
+      if (text !== other.text) await saveNote(other.id, text, vaultName);
+    }
+    // Карточка холста хранит название заметки путём файла; повреждённый файл холста не переписывается
+    for (const canvas of getCanvases()) {
+      const parsed = parseCanvas(canvas.text);
+      const doc = parsed.error ? parsed.doc : renameCanvasNote(parsed.doc, note.title, next);
+      if (doc !== parsed.doc) await saveCanvas(canvas.title, serializeCanvas(doc), vaultName, canvas.id);
+    }
+  });
   return true;
 }
 
@@ -653,11 +950,12 @@ export async function deleteNoteFolder(folderId: string, shouldMoveNotes?: boole
   return isDone ? 'done' : 'failed';
 }
 
-/** Холст: создать либо сохранить (`canvasId` не задан — новый). */
+/** Холст: создать либо сохранить (`canvasId` не задан — новый). Текст, равный записанному, не пишется. */
 export async function saveCanvas(title: string, text: string, vaultName: string, canvasId?: string) {
   const vault = await ensureFolder(vaultName);
   if (!vault) return undefined;
   const existing = canvasId ? getCanvases().find(({ id }) => id === canvasId) : undefined;
+  if (existing && existing.text === text) return existing.id;
   const result = await callParvane('parvaneCloudWriteText', {
     container: rootIdOf() || ROOT,
     parent: vault,
@@ -670,7 +968,7 @@ export async function saveCanvas(title: string, text: string, vaultName: string,
     notify('failed', title);
     return undefined;
   }
-  texts.set(result.node, { fileId: result.fileId!, text });
+  rememberText(result.node, { fileId: result.fileId!, text });
   if (existing) {
     setCanvases(getCanvases().map((entry) => (entry.id === existing.id
       ? { ...entry, text, fileId: result.fileId! } : entry)));

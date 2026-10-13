@@ -23,61 +23,85 @@ type OwnProps = {
   node?: CloudNode;
   // Настройка устройства: картинка — сам файл либо миниатюра облака (экономия трафика)
   quality: CanvasImageQuality;
+  // Карточка на экране достаточно крупна для полного файла; мелкой хватает миниатюры
+  isLarge: boolean;
 };
+
+// Столько карточка, ушедшая с экрана, ещё держит свою картинку: прокрутка туда-обратно не читает файл заново
+const OFFSCREEN_KEEP_MS = 4000;
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 // Содержимое карточки файла облака: у картинки — она сама в полном качестве (миниатюра облака, та же, что в
-// «Файлах», стоит заглушкой, пока файл читается, и остаётся при настройке «миниатюрами»), у прочих — значок,
-// имя и размер. Читается, когда карточка показалась на экране. Адрес миниатюры хранит провайдер, адрес
-// картинки — общий кэш холста: смена масштаба и перерисовки ничего не качают заново
+// «Файлах», стоит заглушкой, пока файл читается, и остаётся при настройке «миниатюрами» и у мелкой на экране
+// карточки), у прочих — значок, имя и размер. Полный файл читается, пока карточка на экране, и отпускается
+// через паузу после ухода с него. Адрес миниатюры хранит провайдер, адрес картинки — общий кэш холста с
+// очередью чтения и пределом памяти: смена масштаба и перерисовки ничего не качают заново
 const CanvasFileBody = ({
-  path, container, node, quality,
+  path, container, node, quality, isLarge,
 }: OwnProps) => {
   const lang = useLang();
   const ref = useRef<HTMLDivElement>();
   const [isSeen, setIsSeen] = useState(false);
+  const [isOnScreen, setIsOnScreen] = useState(false);
   const [thumbUrl, setThumbUrl] = useState<string>();
   const [fullUrl, setFullUrl] = useState<string>();
   const nodeId = node?.id;
-  const thumbId = node?.thumb?.fileId;
-  const fileId = node?.blob?.fileId;
-  const isFull = canvasImageSource(node, quality) === 'full';
+  const nodeBlob = node?.blob;
+  const nodeThumb = node?.thumb;
+  const thumbId = nodeThumb?.fileId;
+  const fileId = nodeBlob?.fileId;
+  const isFull = isLarge && canvasImageSource(node, quality) === 'full';
 
+  // Наблюдатель живёт всё время: `isSeen` — карточка показывалась хоть раз (миниатюра остаётся), `isOnScreen` —
+  // она на экране сейчас; уход с экрана засчитывается через паузу
   useEffect(() => {
     const element = ref.current;
     if (!element || typeof IntersectionObserver === 'undefined') {
       setIsSeen(true);
+      setIsOnScreen(true);
       return undefined;
     }
+    let leaveTimer: number | undefined;
     const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      observer.disconnect();
-      setIsSeen(true);
+      const isIn = entries.some((entry) => entry.isIntersecting);
+      window.clearTimeout(leaveTimer);
+      if (isIn) {
+        setIsSeen(true);
+        setIsOnScreen(true);
+        return;
+      }
+      leaveTimer = window.setTimeout(() => setIsOnScreen(false), OFFSCREEN_KEEP_MS);
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      window.clearTimeout(leaveTimer);
+      observer.disconnect();
+    };
   }, []);
 
   useEffect(() => {
     setThumbUrl(undefined);
     if (!isSeen || !container || !nodeId || !thumbId) return undefined;
     let isActual = true;
-    void callParvane('parvaneCloudThumb', { container, node: nodeId }).then((url) => {
+    // Блоб и миниатюра узла — провайдеру сразу: ему не нужно искать узел по дереву облака
+    void callParvane('parvaneCloudThumb', {
+      container, node: nodeId, blob: nodeBlob, thumb: nodeThumb,
+    }).then((url) => {
       if (isActual && typeof url === 'string') setThumbUrl(url);
     }).catch(() => undefined);
     return () => {
       isActual = false;
     };
-  }, [isSeen, container, nodeId, thumbId]);
+  }, [isSeen, container, nodeId, thumbId, nodeBlob, nodeThumb]);
 
   useEffect(() => {
     setFullUrl(undefined);
-    if (!isSeen || !isFull || !container || !nodeId || !fileId) return undefined;
+    if (!isOnScreen || !isFull || !container || !nodeId || !fileId) return undefined;
     let isActual = true;
     const cache = getCanvasImageCache();
     void cache.acquire(fileId, async () => {
-      const blob = await callParvane('parvaneCloudOpenBlob', { container, node: nodeId });
+      const blob = await callParvane('parvaneCloudOpenBlob', { container, node: nodeId, blob: nodeBlob });
       return blob instanceof Blob ? blob : undefined;
     }).then((url) => {
       if (isActual && url) setFullUrl(url);
@@ -86,7 +110,7 @@ const CanvasFileBody = ({
       isActual = false;
       cache.release(fileId);
     };
-  }, [isSeen, isFull, container, nodeId, fileId]);
+  }, [isOnScreen, isFull, container, nodeId, fileId, nodeBlob]);
 
   // Не прочитавшаяся картинка (нет связи) остаётся миниатюрой
   const imageUrl = fullUrl || thumbUrl;

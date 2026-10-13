@@ -37,11 +37,12 @@ import {
 import {
   applyPlannerToNotes, consumeGuideOpen, createNote, createNoteFolder, deleteNote, deleteNoteFolder,
   findNoteByTitle, getCanvases, getGuideOpenId, getNoteFolders, getNotes, getNotesIndex, getNotesNotice,
-  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, saveCanvas,
-  saveNote,
+  getNotesStatus, loadNotes, moveNote, openDailyNote, renameNote, renameNoteFolder, restoreGuide, retainNotes,
+  saveCanvas, saveNote,
 } from './notesStore';
 
 import useSelector from '../../../hooks/data/useSelector';
+import useDebouncedCallback from '../../../hooks/useDebouncedCallback';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -70,6 +71,8 @@ const NARROW_WIDTH = 760;
 // Широкий экран: «Связи» открытой заметки — отдельный остров справа
 const SIDE_MIN_WIDTH = 1241;
 const NOTICE_HIDE_MS = 6000;
+// Пауза между набором в поиске и самим поиском
+const SEARCH_DELAY_MS = 150;
 // Столько последних заметок дня видно в списке, пока не попросили все
 const DAILY_SHOWN = 5;
 const NOTE_LINK = /(\[\[[^\]\n]+\]\])/;
@@ -108,6 +111,8 @@ const Knowledge = () => {
 
   const [openId, setOpenId] = useState<string>();
   const [query, setQuery] = useState('');
+  // Поиск идёт с задержкой после набора: список не перебирается на каждую букву
+  const [searchQuery, setSearchQuery] = useState('');
   const [isNoticeShown, setIsNoticeShown] = useState(false);
   const [areAllDailyShown, setAreAllDailyShown] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsedFolders);
@@ -139,6 +144,9 @@ const Knowledge = () => {
   const [today] = useState(() => toDayKey(new Date()));
 
   const guideLang = getGuideLang(lang.code);
+
+  // Пока раздел открыт, изменения облака применяются к заметкам сразу; закрыт — при следующем открытии
+  useEffect(() => retainNotes(), []);
 
   useEffect(() => {
     void loadNotes(currentUserId, { guideLang, vaultName });
@@ -266,8 +274,13 @@ const Knowledge = () => {
     markGuide();
   });
 
+  const searchSoon = useDebouncedCallback((value: string) => setSearchQuery(value), [], SEARCH_DELAY_MS, true);
   const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.currentTarget.value);
+    const { value } = e.currentTarget;
+    setQuery(value);
+    // Очищенное поле показывает весь список сразу
+    if (!value.trim()) setSearchQuery('');
+    else searchSoon(value);
   });
 
   const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
@@ -536,14 +549,15 @@ const Knowledge = () => {
     showGraphNotice(lang('KnowledgeGraphUnlinked', names), revertNote(fromId, from.text));
   });
 
-  const found = useMemo(() => (query.trim() ? index.search(query) : undefined), [index, query]);
+  const found = useMemo(() => (searchQuery.trim() ? index.search(searchQuery) : undefined), [index, searchQuery]);
+  const noteById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes]);
   const groups = useMemo(() => buildNoteGroups({
-    notes: found ? found.map((item) => notes.find(({ id }) => id === item.id)!).filter(Boolean) : notes,
+    notes: found ? found.map((item) => noteById.get(item.id)!).filter(Boolean) : notes,
     folders,
     dailyFolders: DAILY_FOLDERS,
     isSearch: Boolean(found),
     dailyShown: areAllDailyShown ? undefined : DAILY_SHOWN,
-  }), [notes, folders, found, areAllDailyShown]);
+  }), [notes, noteById, folders, found, areAllDailyShown]);
 
   const isList = view === 'notes';
   const isNoteShown = isList && Boolean(openNote);
