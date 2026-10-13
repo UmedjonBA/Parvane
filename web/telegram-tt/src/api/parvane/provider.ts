@@ -3558,7 +3558,8 @@ function sendUpdate(update: ApiUpdate) {
   // штатного порядка, selectIsViewportNewest становился false и новое сообщение
   // не попадало в загруженное окно (стрелка ↓, «сообщение не появляется»).
   // Отдаём всё reducer'у — поведение 1:1 с Telegram.
-  diagLog(`upd:${update['@type']}`, update);
+  // perf A12: апдейты в диагностический журнал не пишутся — их сотни на старте,
+  // каждый стоил summarize и записи в localStorage; действия и вызовы остаются
   onUpdate(update);
 }
 
@@ -3589,10 +3590,12 @@ export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<
   const method = (methods as Record<string, AnyFunction>)[fnName as string];
   if (!method) {
     // parvaneDiag: пропуск метода виден в журнале — по нему сценарий обхода
-    // UI ловит действия, которые молча ничего не делают
-    diagLog('api-missing', String(fnName));
+    // UI ловит действия, которые молча ничего не делают. Заглушки Telegram
+    // (B5: ~40 загрузок после синка) — раз на имя метода, без записи на
+    // каждый вызов
     if (!reportedMissingMethods.has(fnName)) {
       reportedMissingMethods.add(fnName);
+      diagLog('api-missing', String(fnName));
       // eslint-disable-next-line no-console
       console.debug(`[parvane] метод не реализован: ${String(fnName)}`);
     }

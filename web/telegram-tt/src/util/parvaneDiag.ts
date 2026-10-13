@@ -7,6 +7,8 @@
  * PARVANE_BUG_REPORT_ADDRESS. СОДЕРЖИМОЕ сообщений/паролей НЕ пишется —
  * только длины строк, id и имена действий. После финального деплоя модуль
  * удаляется целиком (точки врезки помечены «parvaneDiag»).
+ * perf A12: апдейты провайдера (`upd:*`) в журнал не пишутся — только действия
+ * UI, вызовы API, ошибки и навигация; запись на диск — в простое, раз в 5 с.
  */
 
 export const PARVANE_DIAG_ENABLED = true;
@@ -26,7 +28,11 @@ export type DiagEntry = {
 const STORAGE_KEY = 'parvane:diag:v2';
 const LEGACY_STORAGE_KEYS = ['parvane:diag:v1'];
 const MAX_ENTRIES = 800;
-const SAVE_DELAY_MS = 1500;
+// perf A12: запись в localStorage (до 80 КБ синхронно) — не чаще раза в
+// SAVE_DELAY_MS и только в простое главного потока (requestIdleCallback);
+// при уходе со страницы — сразу
+const SAVE_DELAY_MS = 5000;
+const IDLE_TIMEOUT_MS = 10000;
 const DEDUPE_WINDOW_MS = 60;
 // Строки журналим ТОЛЬКО по allowlist ключей (идентификаторы/типы); всё
 // остальное (адреса, имена, url, текст) — только длина
@@ -53,15 +59,27 @@ function load() {
   }
 }
 
+let isDirty = false;
+
+function saveNow() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (!isDirty) return;
+  isDirty = false;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // quota / приватный режим — журнал остаётся только в памяти
+  }
+}
+
 function scheduleSave() {
+  isDirty = true;
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = undefined;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-    } catch {
-      // quota / приватный режим — журнал остаётся только в памяти
-    }
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(saveNow, { timeout: IDLE_TIMEOUT_MS });
+    else saveNow();
   }, SAVE_DELAY_MS);
 }
 
@@ -133,6 +151,11 @@ export function getDiagEntries(): DiagEntry[] {
   return entries.slice();
 }
 
+/** Дописать журнал на диск сейчас (тесты, уход со страницы). */
+export function flushDiag() {
+  saveNow();
+}
+
 export function clearDiag() {
   entries = [];
   scheduleSave();
@@ -160,7 +183,11 @@ export function installParvaneDiag() {
   });
   window.addEventListener('online', () => diagLog('nav', 'online'));
   window.addEventListener('offline', () => diagLog('nav', 'offline'));
-  document.addEventListener('visibilitychange', () => diagLog('nav', `visibility=${document.visibilityState}`));
+  document.addEventListener('visibilitychange', () => {
+    diagLog('nav', `visibility=${document.visibilityState}`);
+    if (document.visibilityState === 'hidden') saveNow();
+  });
+  window.addEventListener('pagehide', saveNow);
   // eslint-disable-next-line no-console
   const originalError = console.error;
   // eslint-disable-next-line no-console
