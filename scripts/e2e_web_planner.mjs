@@ -763,7 +763,8 @@ try {
   assert.equal(await planner.getByLabel('Day starts').inputValue(), '08:00', 'начало дня после перезагрузки');
   await planner.locator('[data-planner-side]').getByRole('button', { name: 'Close' }).first().click();
   await sidebar.getByRole('tab', { name: 'Chats' }).click();
-  await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
+  await planner.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await isShown(page, '#LeftColumn'), true, 'список чатов вернулся');
   console.log('OK: данные планировщика пережили перезагрузку, мессенджер возвращается');
 
@@ -921,7 +922,8 @@ try {
   await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   // «Профиль» — главный экран настроек; во вложенном экране и в открытом чате панели нет
   await tabBar.getByRole('button', { name: 'Profile' }).click();
-  await planner.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
+  await planner.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   assert.equal(await tabBar.getByRole('button', { name: 'Profile' }).getAttribute('aria-current'), 'page');
   // «Профиль»: карточка аккаунта не уходит под шапку, настройки мессенджера и блок Parvane — карточками;
   // «Оформление» — окно с режимом и цветовыми схемами

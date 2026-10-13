@@ -39,7 +39,8 @@ function driver(page) {
     },
     close: async () => {
       await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
-      await cloud.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+      // Раздел после первого показа остаётся смонтированным и скрывается (E1): ждём `hidden`, не `detached`
+      await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
     },
     root: async () => {
       await cloud.locator('nav').getByRole('button', { name: 'Cloud', exact: true }).click();

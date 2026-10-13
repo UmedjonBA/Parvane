@@ -819,6 +819,20 @@ const Main = ({
   const isPlannerOpen = parvaneSection === 'planner';
   const isCloudOpen = parvaneSection === 'cloud';
   const knowledgeView = useDerivedState(getKnowledgeView);
+  // «Файлы» раздела «Знания» рисует прежнее «Облако», остальные вкладки — `Knowledge`
+  const isCloudFilesOpen = isCloudOpen && knowledgeView === 'files';
+  const isKnowledgeOpen = isCloudOpen && !isCloudFilesOpen;
+  // Parvane (E1): «План» и «Облако» после первого показа остаются смонтированными и скрываются (`Main.scss`),
+  // как колонки мессенджера под другими разделами, — возврат не строит раздел заново и не теряет выбранный
+  // день, папку, положение списка. «План» всё же размонтирован, пока показаны «Знания»: у них своё окно ввода
+  // «Плана» (`PlannerQuickHost`), делящее с разделом один запрос «новая запись». «Знания» размонтируются,
+  // как и прежде: холст и граф держат слушатели клавиш на документе и не проверяют, показан ли раздел
+  const isPlannerMountedRef = useRef(false);
+  const shouldMountPlanner = isPlannerOpen || (isPlannerMountedRef.current && !isKnowledgeOpen);
+  isPlannerMountedRef.current = shouldMountPlanner;
+  const isCloudMountedRef = useRef(false);
+  const shouldMountCloud = isCloudFilesOpen || isCloudMountedRef.current;
+  isCloudMountedRef.current = shouldMountCloud;
   // Parvane: на телефоне разделы переключаются нижней панелью. В мессенджере она видна на списке чатов
   // и главном экране настроек («Профиль»), в открытом чате, поиске и вложенных настройках — нет
   const isSettingsMainOpen = leftColumnContentKey === LeftColumnContent.Settings
@@ -840,6 +854,7 @@ const Main = ({
     isAppSidebarShown && 'folders-sidebar-visible',
     isPlannerOpen && 'section-planner',
     isCloudOpen && 'section-cloud',
+    isCloudFilesOpen && 'section-cloud-files',
     isTabBarShown && 'parvane-tab-bar-shown',
   );
 
@@ -888,9 +903,9 @@ const Main = ({
         <div className="tauri-drag-region" data-tauri-drag-region />
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isAppSidebarShown} withFolders={isFoldersSidebarShown} />
-      {isPlannerOpen && <Planner />}
-      {/* Parvane: раздел «Знания»: «Файлы» рисует прежнее «Облако», остальные вкладки — `Knowledge` */}
-      {isCloudOpen && (knowledgeView === 'files' ? <Cloud isMobile={isMobile} /> : <Knowledge />)}
+      {shouldMountPlanner && <Planner />}
+      {shouldMountCloud && <Cloud isMobile={isMobile} />}
+      {isKnowledgeOpen && <Knowledge />}
       {isTabBarShown && <ParvaneTabBar section={parvaneSection} isSettingsOpen={isSettingsMainOpen} />}
       <CloudChatDialogs />
       {/* Parvane: общий поиск по Ctrl+K — заметки, записи «Плана», чаты, команды */}
