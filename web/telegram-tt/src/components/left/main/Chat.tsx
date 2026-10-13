@@ -53,7 +53,7 @@ import { selectDraft, selectThreadLocalStateParam } from '../../../global/select
 import { IS_OPEN_IN_NEW_TAB_SUPPORTED } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import { isUserId } from '../../../util/entities/ids';
-import { buildFolderColorsById, pickChatTagFolderIds } from '../../../util/folderColors';
+import { pickChatTagFolderIds, selectFolderColorsById } from '../../../util/folderColors';
 import { getChatFolderIds } from '../../../util/folderManager';
 import { createLocationHash } from '../../../util/routing';
 
@@ -129,6 +129,7 @@ type StateProps = {
   chatFolderIds?: number[];
   orderedFolderIds?: number[];
   chatFoldersById?: Record<number, ApiChatFolder>;
+  folderColorsById?: Record<number, string>;
 };
 
 const Chat: FC<OwnProps & StateProps> = ({
@@ -170,6 +171,7 @@ const Chat: FC<OwnProps & StateProps> = ({
   chatFolderIds,
   orderedFolderIds,
   chatFoldersById,
+  folderColorsById,
   withTags,
   isFoldersSidebarShown,
   onDragEnter,
@@ -213,9 +215,6 @@ const Chat: FC<OwnProps & StateProps> = ({
   const tagFolderIds = useMemo(() => {
     return pickChatTagFolderIds(orderedFolderIds, chatFolderIds, folderId).filter((id) => chatFoldersById?.[id]);
   }, [orderedFolderIds, folderId, chatFoldersById, chatFolderIds]);
-  const folderColorsById = useMemo(() => {
-    return buildFolderColorsById(orderedFolderIds, chatFoldersById);
-  }, [orderedFolderIds, chatFoldersById]);
 
   const shouldRenderTags = withTags && folderId === undefined && Boolean(tagFolderIds.length);
 
@@ -596,6 +595,8 @@ export default memo(withGlobal<OwnProps>(
       chatFolderIds,
       orderedFolderIds: global.chatFolders.orderedIds,
       chatFoldersById: global.chatFolders.byId,
+      // E3: цвета меток — общий мемо на все строки (один объект на изменение папок), а не расчёт в каждой
+      folderColorsById: selectFolderColorsById(global.chatFolders.orderedIds, global.chatFolders.byId),
     };
   },
 )(Chat));
