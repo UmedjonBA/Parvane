@@ -1,5 +1,5 @@
 import {
-  createStore, del, delMany, get, getMany, keys, set,
+  createStore, del, delMany, get, promisifyRequest, set, setMany,
 } from 'idb-keyval';
 
 const STORAGE_VERSION = 2;
@@ -10,8 +10,12 @@ const STORAGE = createStore('parvane-e2e-v2', 'secure-state');
 // перезагрузки на диске оказывается устаревшее состояние. Долгую запись называем
 // в журнале — вместе с числом записей, идущих одновременно
 const SLOW_WRITE_MS = 3000;
-// Сколько записей расшифровывать параллельно при чтении по префиксу (perf A3)
-const DECRYPT_BATCH = 64;
+// Сколько записей шифровать/расшифровывать параллельно при чтении и записи
+// пачкой (perf A3/A6)
+const CRYPTO_BATCH = 64;
+// Сколько записей класть одной транзакцией IndexedDB (perf A6): перенос
+// 20 000 строк истории при привязке шёл 20 000 транзакциями
+const WRITE_BATCH = 512;
 let writesInFlight = 0;
 
 async function timedWrite(name: string, bytes: number, write: () => Promise<void>) {
@@ -61,6 +65,39 @@ function additionalData(user: string, record = 'state') {
 
 function recordId(user: string, name: string) {
   return `rec:${user}:${name}`;
+}
+
+// Диапазон ключей IndexedDB с данным префиксом (perf A6): вместо перебора всех
+// ключей хранилища — выборка по индексу первичного ключа
+function prefixRange(fullPrefix: string) {
+  return IDBKeyRange.bound(fullPrefix, `${fullPrefix}\uffff`);
+}
+
+async function keysByPrefix(fullPrefix: string): Promise<string[]> {
+  return STORAGE('readonly', (store) => promisifyRequest(
+    store.getAllKeys(prefixRange(fullPrefix)),
+  )) as Promise<string[]>;
+}
+
+async function entriesByPrefix<T>(fullPrefix: string): Promise<{ keys: string[]; values: T[] }> {
+  return STORAGE('readonly', async (store) => {
+    const range = prefixRange(fullPrefix);
+    const [found, values] = await Promise.all([
+      promisifyRequest(store.getAllKeys(range)),
+      promisifyRequest(store.getAll(range)),
+    ]);
+    return { keys: found as string[], values: values as T[] };
+  });
+}
+
+/** Пачками по `size`, каждая — параллельно. */
+async function mapInBatches<T, R>(items: T[], size: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let start = 0; start < items.length; start += size) {
+    const batch = await Promise.all(items.slice(start, start + size).map((item, offset) => fn(item, start + offset)));
+    out.push(...batch);
+  }
+  return out;
 }
 
 async function generateProtectionKey() {
@@ -135,66 +172,73 @@ export class SecureE2eStorage {
     }
   }
 
-  private async saveEncrypted(id: string, name: string, value: unknown) {
+  private async encryptNamed(name: string, plain: ArrayBuffer): Promise<EncryptedRecord> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, additionalData: additionalData(this.user, name) },
       this.protectionKey,
-      encoder.encode(JSON.stringify(value)).buffer,
+      plain,
     );
-    const record: EncryptedRecord = {
-      version: STORAGE_VERSION,
-      iv: iv.buffer,
-      ciphertext,
-    };
-    await timedWrite(name, ciphertext.byteLength, () => set(id, record, STORAGE));
+    return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
   }
 
-  // Все записи с префиксом имени (кэш истории `m:<uuid>`): ключи IDB
-  // читаются списком, значения — пачкой, расшифровка — параллельно по DECRYPT_BATCH
-  async loadRecordsByPrefix<T>(prefix: string): Promise<T[]> {
-    const fullPrefix = recordId(this.user, prefix);
-    const allKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(fullPrefix));
-    if (!allKeys.length) return [];
-    const records = await getMany<EncryptedRecord>(allKeys, STORAGE);
-    const nameOffset = recordId(this.user, '').length;
-    const out: T[] = [];
-    for (let start = 0; start < records.length; start += DECRYPT_BATCH) {
-      const batch = await Promise.all(records.slice(start, start + DECRYPT_BATCH).map(async (record, offset) => {
-        if (!record || record.version !== STORAGE_VERSION) return undefined;
-        const name = (allKeys[start + offset] as string).slice(nameOffset);
-        try {
-          const plaintext = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
-            this.protectionKey,
-            record.ciphertext,
-          );
-          return JSON.parse(decoder.decode(plaintext)) as T;
-        } catch {
-          // повреждённая запись — пропускаем
-          return undefined;
-        }
-      }));
-      batch.forEach((value) => {
-        if (value !== undefined) out.push(value);
-      });
+  private async saveEncrypted(id: string, name: string, value: unknown) {
+    const record = await this.encryptNamed(name, encoder.encode(JSON.stringify(value)).buffer);
+    await timedWrite(name, record.ciphertext.byteLength, () => set(id, record, STORAGE));
+  }
+
+  // Несколько именованных записей (пачка кэша истории): шифрование —
+  // параллельно по CRYPTO_BATCH, запись — одной транзакцией на WRITE_BATCH
+  // записей вместо транзакции на каждую (perf A6)
+  async saveRecords(entries: [name: string, value: unknown][]) {
+    if (!entries.length) return;
+    const encrypted = await mapInBatches(entries, CRYPTO_BATCH, async ([name, value]) => [
+      recordId(this.user, name),
+      await this.encryptNamed(name, encoder.encode(JSON.stringify(value)).buffer),
+    ] as [string, EncryptedRecord]);
+    for (let start = 0; start < encrypted.length; start += WRITE_BATCH) {
+      const batch = encrypted.slice(start, start + WRITE_BATCH);
+      const bytes = batch.reduce((sum, [, record]) => sum + record.ciphertext.byteLength, 0);
+      await timedWrite(`${entries[start][0]} (+${batch.length - 1})`, bytes, () => setMany(batch, STORAGE));
     }
-    return out;
+  }
+
+  async deleteRecords(names: string[]) {
+    if (!names.length) return;
+    await delMany(names.map((name) => recordId(this.user, name)), STORAGE);
+  }
+
+  // Все записи с префиксом имени (кэш истории `m:<uuid>`): ключи и значения
+  // диапазоном одной транзакции, расшифровка — параллельно по CRYPTO_BATCH
+  async loadRecordsByPrefix<T>(prefix: string): Promise<T[]> {
+    const { keys: allKeys, values: records } = await entriesByPrefix<EncryptedRecord>(recordId(this.user, prefix));
+    if (!allKeys.length) return [];
+    const nameOffset = recordId(this.user, '').length;
+    const decrypted = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
+      if (!record || record.version !== STORAGE_VERSION) return undefined;
+      const name = allKeys[index].slice(nameOffset);
+      try {
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: record.iv, additionalData: additionalData(this.user, name) },
+          this.protectionKey,
+          record.ciphertext,
+        );
+        return JSON.parse(decoder.decode(plaintext)) as T;
+      } catch {
+        // повреждённая запись — пропускаем
+        return undefined;
+      }
+    });
+    return decrypted.filter((value): value is Awaited<T> => value !== undefined);
   }
 
   // Двоичная запись (архив пака): шифруем байты как есть, без JSON — иначе
   // ArrayBuffer не сериализуется, а base64 раздувал бы 20-МБ пак на треть
   async saveBytesRecord(name: string, bytes: Uint8Array) {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
     const plain = new Uint8Array(bytes.length);
     plain.set(bytes);
-    const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: additionalData(this.user, name) },
-      this.protectionKey,
-      plain.buffer,
-    );
-    const record: EncryptedRecord = { version: STORAGE_VERSION, iv: iv.buffer, ciphertext };
-    await timedWrite(name, ciphertext.byteLength, () => set(recordId(this.user, name), record, STORAGE));
+    const record = await this.encryptNamed(name, plain.buffer);
+    await timedWrite(name, record.ciphertext.byteLength, () => set(recordId(this.user, name), record, STORAGE));
   }
 
   async loadBytesRecord(name: string): Promise<Uint8Array | undefined> {
@@ -226,8 +270,7 @@ export class SecureE2eStorage {
   }
 
   static async clearRecords(user: string) {
-    const prefix = recordId(user, '');
-    const userKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(prefix));
+    const userKeys = await keysByPrefix(recordId(user, ''));
     if (userKeys.length) await delMany(userKeys, STORAGE);
   }
 }
@@ -328,14 +371,29 @@ async function rekeyAll(user: string, from: CryptoKey, to: CryptoKey) {
     if (plain === undefined) throw new Error('E2E state cannot be re-keyed: current key does not open it.');
     await set(stateId(user), await encryptWith(to, additionalData(user), plain), STORAGE);
   }
+  // Именованные записи — байтами как есть (среди них двоичные: состояние
+  // движка v2, архивы паков — JSON они не являются), одним чтением диапазона
+  // и записью пачками
   const prefix = recordId(user, '');
-  const userKeys = (await keys(STORAGE)).filter((key) => typeof key === 'string' && key.startsWith(prefix)) as string[];
-  for (const fullKey of userKeys) {
-    const name = fullKey.slice(prefix.length);
-    const record = await get<EncryptedRecord>(fullKey, STORAGE);
-    const plain = await decryptWith<unknown>(from, additionalData(user, name), record);
-    if (plain === undefined) continue;
-    await set(fullKey, await encryptWith(to, additionalData(user, name), plain), STORAGE);
+  const { keys: userKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
+  const rekeyed = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
+    if (!record || record.version !== STORAGE_VERSION) return undefined;
+    const name = userKeys[index].slice(prefix.length);
+    const aad = additionalData(user, name);
+    try {
+      const plain = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: record.iv, additionalData: aad }, from, record.ciphertext,
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, to, plain);
+      return [userKeys[index], { version: STORAGE_VERSION, iv: iv.buffer, ciphertext }] as [string, EncryptedRecord];
+    } catch {
+      return undefined;
+    }
+  });
+  const entries = rekeyed.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
+  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
+    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
   }
 }
 

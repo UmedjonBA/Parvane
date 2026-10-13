@@ -48,6 +48,8 @@ const RECORD_SAVE_DELAY_MS = 300;
 const HISTORY_FLUSH_DELAY_MS = 500;
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 const JOURNAL_MAX_ENTRIES = 5000;
+// Запись журнала исходящих на одно сообщение (perf A6)
+const JOURNAL_PREFIX = 'j:';
 
 export function createLocalState(deps: LocalStateDependencies) {
   const scheduledQueue: ScheduledEntry[] = [];
@@ -121,10 +123,35 @@ export function createLocalState(deps: LocalStateDependencies) {
   // SecureE2eStorage (тот же, что у E2E-состояния), с одноразовой миграцией.
   let secureUser = '';
   let securePromise: Promise<SecureE2eStorage> | undefined;
+  // Журнал исходящих: в памяти — списком по времени, на диске — записями
+  // `j:<uuid>` (perf A6): раньше каждая отправка переписывала весь журнал
+  // (до 5 000 сообщений) одной записью
   let journalCache: WireStoredMessage[] | undefined;
+  let isJournalLoaded = false;
+  // Записи журнала идут одна за другой: удаление не должно обогнать запись
+  let journalChain: Promise<void> = Promise.resolve();
   let draftsCache: Record<string, Record<string, unknown>> | undefined;
-  let journalSaveTimer: ReturnType<typeof setTimeout> | undefined;
   let draftsSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function compareJournal(a: WireStoredMessage, b: WireStoredMessage) {
+    return (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  }
+
+  /** Срезать журнал до JOURNAL_MAX_ENTRIES; возвращает id срезанных. */
+  function trimJournal(): string[] {
+    if (!journalCache || journalCache.length <= JOURNAL_MAX_ENTRIES) return [];
+    return journalCache.splice(0, journalCache.length - JOURNAL_MAX_ENTRIES).map((m) => m.id);
+  }
+
+  function queueJournalWrite(op: (storage: SecureE2eStorage) => Promise<void>): Promise<void> {
+    const pending = secureStorage();
+    if (!pending) return journalChain;
+    journalChain = journalChain.then(() => pending).then(op).catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.warn(`[parvane] журнал исходящих: запись не сохранена: ${String(err)}`);
+    });
+    return journalChain;
+  }
 
   function secureStorage() {
     const { self } = deps.getStore();
@@ -147,27 +174,42 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Загрузить журнал и черновики (один раз на сессию) — с миграцией из
   // localStorage. Зовётся перед первым чтением (sync/fetchChats).
   async function hydrate() {
-    if (journalCache && draftsCache) return;
+    if (isJournalLoaded && draftsCache) return;
     const storage = await secureStorage();
     if (!storage) {
       journalCache = journalCache || [];
       draftsCache = draftsCache || {};
       return;
     }
-    if (!journalCache) {
-      const stored = await storage.loadRecord<WireStoredMessage[]>('journal');
-      const legacy = readLegacyJson<WireStoredMessage[]>(storageKey('hist'), []);
-      journalCache = stored || [];
-      if (legacy.length) {
-        const known = new Set(journalCache.map((m) => m.id));
-        legacy.forEach((m) => {
-          if (!known.has(m.id)) {
-            journalCache!.push(m);
-          }
-        });
-        await storage.saveRecord('journal', journalCache);
-        localStorage.removeItem(storageKey('hist'));
-      }
+    if (!isJournalLoaded) {
+      isJournalLoaded = true;
+      // Записи `j:<uuid>` (perf A6) + разовый перенос прежних форматов: одной
+      // записи `journal` целиком и localStorage `hist`
+      const rows = await storage.loadRecordsByPrefix<WireStoredMessage>(JOURNAL_PREFIX);
+      const legacyRecord = (await storage.loadRecord<WireStoredMessage[]>('journal')) || [];
+      const legacyLocal = readLegacyJson<WireStoredMessage[]>(storageKey('hist'), []);
+      // Дописанное до загрузки (сразу после входа) уже на диске и свежее строк
+      const known = new Set((journalCache || []).map((m) => m.id));
+      const merged = [...(journalCache || [])];
+      const migrated: WireStoredMessage[] = [];
+      rows.forEach((m) => {
+        if (known.has(m.id)) return;
+        known.add(m.id);
+        merged.push(m);
+      });
+      [...legacyRecord, ...legacyLocal].forEach((m) => {
+        if (known.has(m.id)) return;
+        known.add(m.id);
+        merged.push(m);
+        migrated.push(m);
+      });
+      merged.sort(compareJournal);
+      journalCache = merged;
+      const trimmed = trimJournal();
+      if (migrated.length) await storage.saveRecords(migrated.map((m) => [`${JOURNAL_PREFIX}${m.id}`, m]));
+      if (trimmed.length) await storage.deleteRecords(trimmed.map((id) => `${JOURNAL_PREFIX}${id}`));
+      if (legacyRecord.length) await storage.deleteRecord('journal').catch(() => undefined);
+      if (legacyLocal.length) localStorage.removeItem(storageKey('hist'));
     }
     // P-44: очередь запланированных (текст сообщений) — тоже в шифрованном
     // хранилище, с миграцией из localStorage
@@ -194,24 +236,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     }
   }
 
-  function scheduleRecordSave(name: 'journal' | 'drafts') {
-    const isJournal = name === 'journal';
-    if (isJournal ? journalSaveTimer : draftsSaveTimer) return;
-    const timer = setTimeout(() => {
-      if (isJournal) {
-        journalSaveTimer = undefined;
-      } else {
-        draftsSaveTimer = undefined;
-      }
-      void secureStorage()?.then((storage) => storage.saveRecord(
-        name, isJournal ? (journalCache || []) : (draftsCache || {}),
-      )).catch(() => undefined);
+  function scheduleRecordSave(name: 'drafts') {
+    if (draftsSaveTimer) return;
+    draftsSaveTimer = setTimeout(() => {
+      draftsSaveTimer = undefined;
+      void secureStorage()?.then((storage) => storage.saveRecord(name, draftsCache || {})).catch(() => undefined);
     }, RECORD_SAVE_DELAY_MS);
-    if (isJournal) {
-      journalSaveTimer = timer;
-    } else {
-      draftsSaveTimer = timer;
-    }
   }
 
   // ── кэш истории (шифрованные записи m:<uuid>) ───────────────────────────
@@ -234,17 +264,28 @@ export function createLocalState(deps: LocalStateDependencies) {
     const pending = secureStorage();
     if (!pending) return historyFlushChain;
     historyFlushChain = historyFlushChain.then(() => pending).then(async (storage) => {
-      for (const [uuid, stored] of batch) {
-        try {
-          if (stored) await storage.saveRecord(`m:${uuid}`, stored);
-          else await storage.deleteRecord(`m:${uuid}`);
-        } catch (err) {
-          // Сбой одной записи не должен ронять остаток пачки и не должен быть немым:
-          // сообщение без записи в кэше пропадает после перезагрузки
-          // eslint-disable-next-line no-console
-          console.warn(`[parvane] кэш истории: запись ${uuid} не сохранена: ${String(err)}`);
+      // Пачка — одной транзакцией на запись и одной на удаление (perf A6)
+      const saves = batch.filter((entry): entry is [string, WireStoredMessage] => Boolean(entry[1]))
+        .map(([uuid, stored]) => [`m:${uuid}`, stored] as [string, WireStoredMessage]);
+      const deletes = batch.filter(([, stored]) => !stored).map(([uuid]) => `m:${uuid}`);
+      try {
+        await storage.saveRecords(saves);
+      } catch (err) {
+        // Сбой пачки не должен быть немым (сообщение без записи в кэше пропадает
+        // после перезагрузки) и не должен ронять остаток: дописываем по одной
+        // eslint-disable-next-line no-console
+        console.warn(`[parvane] кэш истории: пачка из ${saves.length} записей не сохранена: ${String(err)}`);
+        for (const [name, stored] of saves) {
+          await storage.saveRecord(name, stored).catch((e: unknown) => {
+            // eslint-disable-next-line no-console
+            console.warn(`[parvane] кэш истории: запись ${name} не сохранена: ${String(e)}`);
+          });
         }
       }
+      await storage.deleteRecords(deletes).catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[parvane] кэш истории: ${deletes.length} записей не удалено: ${String(err)}`);
+      });
     }).catch(() => undefined);
     return historyFlushChain;
   }
@@ -252,14 +293,9 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Уход со страницы: дописать очередь кэша сразу (иначе удаление/очистка,
   // сделанные за <500 мс до reload, терялись — курсор уже записан, а сервер
   // скрытое повторно не отдаст → в кэше навсегда оставались старые строки)
-  // Журнал исходящих и черновики тоже: сообщение «Избранному» без других
-  // устройств живёт ТОЛЬКО в журнале — reload сразу после отправки терял его
+  // Черновики тоже; журнал исходящих пишется записью на сообщение сразу при
+  // отправке (perf A6) — сбрасывать нечего
   function flushRecordSaves() {
-    if (journalSaveTimer) {
-      clearTimeout(journalSaveTimer);
-      journalSaveTimer = undefined;
-      void secureStorage()?.then((storage) => storage.saveRecord('journal', journalCache || [])).catch(() => undefined);
-    }
     if (draftsSaveTimer) {
       clearTimeout(draftsSaveTimer);
       draftsSaveTimer = undefined;
@@ -363,12 +399,12 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (historyFlushTimer) clearTimeout(historyFlushTimer);
     historyFlushTimer = undefined;
     journalCache = undefined;
+    isJournalLoaded = false;
+    journalChain = Promise.resolve();
     draftsCache = undefined;
     securePromise = undefined;
     secureUser = '';
-    if (journalSaveTimer) clearTimeout(journalSaveTimer);
     if (draftsSaveTimer) clearTimeout(draftsSaveTimer);
-    journalSaveTimer = undefined;
     draftsSaveTimer = undefined;
   }
 
@@ -551,18 +587,18 @@ export function createLocalState(deps: LocalStateDependencies) {
   }
 
   function appendOwnJournal(entry: WireStoredMessage) {
-    // До hydrate (сразу после логина) копим в памяти — hydrate сольёт с записью
+    // До hydrate (сразу после логина) копим в памяти — hydrate сольёт со строками
     journalCache = journalCache || [];
     journalCache.push(entry);
-    if (journalCache.length > JOURNAL_MAX_ENTRIES) {
-      journalCache.splice(0, journalCache.length - JOURNAL_MAX_ENTRIES);
-    }
+    const trimmed = trimJournal();
     // Своё исходящее пишем на диск сразу, без отложенной записи: вкладка,
     // закрытая в первую секунду после отправки, теряла сообщение — запись,
     // начатая в pagehide, не успевает (шифрование и IndexedDB асинхронны), а
-    // сервер своё сообщение не вернёт (v2; v1 после отключения — тем более)
-    scheduleRecordSave('journal');
-    flushRecordSaves();
+    // сервер своё сообщение не вернёт. Запись — одна, своя для сообщения
+    void queueJournalWrite(async (storage) => {
+      await storage.saveRecord(`${JOURNAL_PREFIX}${entry.id}`, entry);
+      if (trimmed.length) await storage.deleteRecords(trimmed.map((id) => `${JOURNAL_PREFIX}${id}`));
+    });
     // Своё исходящее — сразу и в кэш истории. Сервер не шлёт эхо отправителю:
     // копия для своего устройства приходит только дельта-синком, а живые
     // входящие двигают курсор `last_seen_id` дальше неё — тогда синк своё
@@ -583,7 +619,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     if (index < 0) return;
     if (stored.deleted) journalCache.splice(index, 1);
     else journalCache[index] = stored;
-    scheduleRecordSave('journal');
+    void queueJournalWrite((storage) => (stored.deleted
+      ? storage.deleteRecord(`${JOURNAL_PREFIX}${stored.id}`)
+      : storage.saveRecord(`${JOURNAL_PREFIX}${stored.id}`, stored)));
   }
 
   // Очистка истории: убрать свои исходящие из журнала СРАЗУ (журнал сливается
@@ -595,10 +633,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     const before = journalCache?.length || 0;
     journalCache = (journalCache || []).filter((entry) => !drop.has(entry.id));
     if (journalCache.length === before) return;
-    if (journalSaveTimer) clearTimeout(journalSaveTimer);
-    journalSaveTimer = undefined;
-    await secureStorage()?.then((storage) => storage.saveRecord('journal', journalCache || []))
-      .catch(() => undefined);
+    await queueJournalWrite((storage) => storage.deleteRecords(uuids.map((id) => `${JOURNAL_PREFIX}${id}`)));
   }
 
   function loadPeerTtl(): Record<string, number> {
