@@ -2151,7 +2151,8 @@ export function createV2Controller(deps: Deps) {
   // анонимных соединений движка (получатели, копии) эти соединения не ведёт
   const blobConns = createBlobConnPool<V2Connection>({
     open: async () => {
-      const conn = new V2Connection(pv!, deps.gatewayUrl(), CHANNEL_ANONYMOUS);
+      if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      const conn = new V2Connection(pv, deps.gatewayUrl(), CHANNEL_ANONYMOUS);
       await conn.connect('v2');
       return conn;
     },
@@ -2160,8 +2161,9 @@ export function createV2Controller(deps: Deps) {
   async function streamBlobCap(
     conn: V2Connection, fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number,
   ) {
+    if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const method = 'cloud.blob.download_cap';
-    const body = pv!.encodeMessage('parvane.cloud.v1.DownloadCapRequest', JSON.stringify({
+    const body = pv.encodeMessage('parvane.cloud.v1.DownloadCapRequest', JSON.stringify({
       file_id: fileId, capability: capabilityB64, first_chunk: firstChunk, chunk_count: chunkCount,
     }));
     const parts = new Map<number, Uint8Array>();
@@ -2170,7 +2172,7 @@ export function createV2Controller(deps: Deps) {
     const isDone = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const meta = JSON.parse(pv!.decodeMessage('parvane.cloud.v1.DownloadCapResponse', await conn.stream(
+    const meta = JSON.parse(pv.decodeMessage('parvane.cloud.v1.DownloadCapResponse', await conn.stream(
       method,
       body,
       (chunk) => {
