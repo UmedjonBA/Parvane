@@ -19,20 +19,38 @@ type Loaded = LinkPreview & { imageUrl?: string };
 
 const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
-// Превью по адресу — в памяти до конца сеанса; в файл холста оно не пишется
+// Превью по адресу — в памяти, не больше PREVIEWS_MAX адресов (давно не спрошенные уходят вместе с адресом
+// картинки); в файл холста оно не пишется
+const PREVIEWS_MAX = 100;
 const previews = new Map<string, Promise<Loaded>>();
 
+function rememberPreview(url: string, loaded: Promise<Loaded>) {
+  previews.delete(url);
+  previews.set(url, loaded);
+  while (previews.size > PREVIEWS_MAX) {
+    const [oldestUrl, oldest] = previews.entries().next().value as [string, Promise<Loaded>];
+    previews.delete(oldestUrl);
+    void oldest.then((item) => {
+      if (item.imageUrl) URL.revokeObjectURL(item.imageUrl);
+    });
+  }
+}
+
 function loadPreview(url: string) {
-  let cached = previews.get(url);
-  if (cached) return cached;
-  cached = callParvane('parvaneLinkPreview', { url }).catch(() => undefined).then((raw) => {
+  const cached = previews.get(url);
+  if (cached) {
+    // Спрошенное снова — самое свежее
+    rememberPreview(url, cached);
+    return cached;
+  }
+  const loaded: Promise<Loaded> = callParvane('parvaneLinkPreview', { url }).catch(() => undefined).then((raw) => {
     const preview = buildLinkPreview(url, raw as LinkPreviewSource | undefined);
     // Недоступное превью не запоминается: при следующем открытии холста будет новая попытка
-    if (!hasPreviewContent(preview)) previews.delete(url);
+    if (!hasPreviewContent(preview) && previews.get(url) === loaded) previews.delete(url);
     return { ...preview, imageUrl: imageUrlOf(preview) };
   });
-  previews.set(url, cached);
-  return cached;
+  rememberPreview(url, loaded);
+  return loaded;
 }
 
 function imageUrlOf(preview: LinkPreview) {

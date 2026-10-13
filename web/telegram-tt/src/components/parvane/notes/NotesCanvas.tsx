@@ -7,7 +7,7 @@ import type { CloudNode } from '../cloud/cloudModel';
 import type { BoardView } from './boardView';
 import type { CanvasCommand, CanvasMenuItem } from './CanvasContextMenu';
 import type {
-  CanvasDoc, CanvasEdge, CanvasNode, CanvasPoint, CanvasPresetColor, CanvasRect, CanvasSide,
+  CanvasDoc, CanvasEdge, CanvasNode, CanvasPoint, CanvasRect, CanvasSide,
 } from './notesCanvas';
 import type { CanvasAlign, CanvasGuide } from './notesCanvasAlign';
 import type { CanvasCurve, CanvasHandle, CanvasSelection } from './notesCanvasEdit';
@@ -15,9 +15,10 @@ import type { CanvasImageQuality } from './notesCanvasImages';
 import type { CanvasInlineKind, NoteCardPart, NoteCardState } from './notesCanvasNote';
 import type { CanvasEntry, NoteEntry } from './notesStore';
 
-import { requestMeasure } from '../../../lib/fasterdom/fasterdom';
+import { requestMeasure, requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
+import { debounce } from '../../../util/schedulers';
 import { downloadCloudNode, getCloudData, getNodes } from '../cloud/cloudStore';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, revealRects, zoomAround,
@@ -25,15 +26,15 @@ import {
 } from './boardView';
 import {
   addEdge, addNode, CANVAS_DEFAULT_NODE_HEIGHT, CANVAS_DEFAULT_NODE_WIDTH, CANVAS_PRESET_COLORS, CANVAS_SIDES,
-  createEmptyCanvas, findNode, isCanvasPresetColor, newCanvasId, nodesInGroup, parseCanvas, removeEdge,
+  createEmptyCanvas, findNode, newCanvasId, nodesInGroup, parseCanvas, removeEdge,
   removeNode, serializeCanvas, sidePoint, updateEdge, updateNode,
 } from './notesCanvas';
 import {
   alignNodes, CANVAS_SNAP_DISTANCE, distributeNodes, snapResize, snapToNeighbours,
 } from './notesCanvasAlign';
 import {
-  CANVAS_COPY_SHIFT, CANVAS_CORNER_HANDLES, CANVAS_EMPTY_SELECTION, CANVAS_GRID, CANVAS_HANDLES,
-  CANVAS_NUDGE_BIG, CANVAS_SIDE_NORMALS, canvasShortcut, clipBounds, colorOfSelection, connectNodes, copyNodes,
+  CANVAS_COPY_SHIFT, CANVAS_EMPTY_SELECTION, CANVAS_GRID,
+  CANVAS_NUDGE_BIG, canvasShortcut, clipBounds, colorOfSelection, connectNodes, copyNodes,
   curveBetween, curvePoint, edgeAt, edgeCurve, fitGroupToContent, growGroups, isSelectionEmpty, minSizeOf,
   moveNodes, nearestSide, nextEdgeEnds, nodeAtPoint, nodesInRect, normalizeCanvasUrl, oppositeSide, parsePasted,
   pasteClip, placeNode, pruneSelection, recolorSelection, rectOfPoints, removeSelection, reorderNodes,
@@ -46,9 +47,10 @@ import {
 import {
   createHistory, dropStep, mapHistory, recordStep, redoStep, undoStep,
 } from './notesCanvasHistory';
-import { isCanvasImage } from './notesCanvasImages';
+import { CANVAS_FULL_IMAGE_MIN_PX, isCanvasImage } from './notesCanvasImages';
+import { arrowPath, CANVAS_TONES, curvePath } from './notesCanvasLook';
 import {
-  droppedCardPlace, inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, notePreviewLines, relinkNoteCards,
+  droppedCardPlace, inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, relinkNoteCards,
 } from './notesCanvasNote';
 import { groupAtPoint, pressAction } from './notesCanvasPress';
 import { folderColor, isDayTitle } from './notesLook';
@@ -66,10 +68,10 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import CloudPreview from '../cloud/CloudPreview';
+import CanvasCard from './CanvasCard';
 import CanvasContextMenu from './CanvasContextMenu';
-import CanvasFileBody from './CanvasFileBody';
+import CanvasEdgeView from './CanvasEdgeView';
 import CanvasFilePicker from './CanvasFilePicker';
-import CanvasLinkBody from './CanvasLinkBody';
 import CanvasSelectionBar from './CanvasSelectionBar';
 import PvIcon from './PvIcon';
 import PvSheet from './PvSheet';
@@ -128,7 +130,6 @@ const GROUP_WIDTH = 420;
 const GROUP_HEIGHT = 280;
 const NOTE_HEIGHT = 140;
 // Пока правится текст заметки, карточка растёт за ним до этой высоты поля; дальше текст листается
-const NOTE_EDIT_MAX_HEIGHT = 360;
 const LINK_WIDTH = 300;
 const LINK_HEIGHT = 160;
 const FILE_HEIGHT = 200;
@@ -136,16 +137,12 @@ const FILE_HEIGHT = 200;
 const NEW_OFFSET_X = 280;
 const NEW_OFFSET_Y = 40;
 const NEW_COLUMNS = 3;
-const PREVIEW_LINES = 7;
 const DRAG_THRESHOLD = 3;
 // Место под панель инструментов сверху (на телефоне она в два ряда) и под название группы над рамкой
 const FIT_TOP = 64;
 const FIT_TOP_NARROW = 112;
 const FIT_BOTTOM = 20;
 const GROUP_LABEL_ROOM = 40;
-const EDGE_LABEL_SHIFT = 4;
-const ARROW_LENGTH = 11;
-const ARROW_HALF_WIDTH = 5;
 // Стрелка выбирается нажатием не дальше этого от линии (в точках экрана): пальцем — шире, чем мышью
 const EDGE_HIT = 8;
 const EDGE_HIT_TOUCH = 18;
@@ -167,74 +164,13 @@ const PASSIVE_SELECTOR = `[data-board-tools], ${INLINE_SELECTOR}, [data-canvas-o
 const NOTE_HEAD_SELECTOR = '[data-canvas-note-head]';
 const TAP_BOARD = 'board';
 const IMAGE_QUALITIES: CanvasImageQuality[] = ['full', 'thumb'];
-// Пустая строка текста держит свою высоту неразрывным пробелом; копия текста в поле правки кончается
-// пробелом нулевой ширины, чтобы последняя пустая строка тоже занимала место
-const EMPTY_LINE = String.fromCharCode(0xa0);
-const MIRROR_TAIL = String.fromCharCode(0x200b);
-const CARD_INLINE = /(\[\[[^\]\n]+\]\]|`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
-// Цвета JSON Canvas 1…6: красный, оранжевый, жёлтый, зелёный, синий, фиолетовый
-const CANVAS_TONES: Record<CanvasPresetColor, string> = {
-  1: 'var(--pv-red)',
-  2: 'var(--pv-orange)',
-  3: 'var(--pv-yellow)',
-  4: 'var(--pv-green)',
-  5: 'var(--pv-blue)',
-  6: 'var(--pv-purple)',
-};
-const HANDLE_CLASSES: Record<CanvasHandle, string> = {
-  n: styles.canvasHandleN,
-  ne: styles.canvasHandleNe,
-  e: styles.canvasHandleE,
-  se: styles.canvasHandleSe,
-  s: styles.canvasHandleS,
-  sw: styles.canvasHandleSw,
-  w: styles.canvasHandleW,
-  nw: styles.canvasHandleNw,
-};
-const PORT_CLASSES: Record<CanvasSide, string> = {
-  top: styles.canvasPortTop,
-  right: styles.canvasPortRight,
-  bottom: styles.canvasPortBottom,
-  left: styles.canvasPortLeft,
-};
-
 // Последнее скопированное на холсте — запасной путь для «Вставить» из меню, когда буфер обмена браузера
 // прочитать нельзя
 let lastClipText = '';
 
-function renderCardInline(text: string) {
-  return text.split(CARD_INLINE).map((part, i) => {
-    const key = `${i}${part}`;
-    if (part.startsWith('[[')) {
-      const [target, alias] = part.slice(2, -2).split('|');
-      return <span key={key} className={styles.cardLink}>{(alias || target).trim()}</span>;
-    }
-    if (part.startsWith('`')) return <code key={key} className={styles.code}>{part.slice(1, -1)}</code>;
-    if (part.startsWith('**')) return <b key={key}>{part.slice(2, -2)}</b>;
-    return part;
-  });
-}
-
-// Треугольник наконечника: остриё в конце стрелки, основание отведено от стороны узла наружу
-function arrowPath(anchor: CanvasPoint & { side: CanvasSide }) {
-  const normal = CANVAS_SIDE_NORMALS[anchor.side];
-  const baseX = anchor.x + normal.x * ARROW_LENGTH;
-  const baseY = anchor.y + normal.y * ARROW_LENGTH;
-  const sideX = normal.y * ARROW_HALF_WIDTH;
-  const sideY = normal.x * ARROW_HALF_WIDTH;
-  return `M${anchor.x} ${anchor.y}L${baseX + sideX} ${baseY + sideY}L${baseX - sideX} ${baseY - sideY}z`;
-}
-
-function curvePath({
-  p, c1, c2, q,
-}: CanvasCurve, hasStartArrow: boolean, hasEndArrow: boolean) {
-  // Линия кончается у основания наконечника, чтобы не торчать из его острия
-  const cut = (anchor: CanvasCurve['p'], hasArrow: boolean) => {
-    const normal = CANVAS_SIDE_NORMALS[anchor.side];
-    const by = hasArrow ? ARROW_LENGTH - 1 : 0;
-    return `${anchor.x + normal.x * by} ${anchor.y + normal.y * by}`;
-  };
-  return `M${cut(p, hasStartArrow)}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${cut(q, hasEndArrow)}`;
+// Сдвиг и масштаб поля; `--inv` — обратный масштаб для ручек и точек стрелок, которые не мельчают при отдалении
+function worldStyle(view: BoardView) {
+  return `transform: translate(${view.x}px, ${view.y}px) scale(${view.scale}); --inv: ${1 / view.scale}`;
 }
 
 function isTypingElement(element: Element | undefined) {
@@ -259,7 +195,11 @@ const NotesCanvas = ({
   const [doc, setDoc] = useState<CanvasDoc>(createEmptyCanvas);
   const [live, setLive] = useState<Live>();
   const [isDamaged, setIsDamaged] = useState(false);
+  // Вид поля: закреплённый — состоянием (от него зависят панель выделенного и порог картинок), живой — в
+  // ссылке. Во время жеста меняется только живой и пишется прямо в DOM; состояние догоняет при отпускании
   const [view, setView] = useState<BoardView>({ scale: 1, x: 0, y: 0 });
+  const viewRef = useRef<BoardView>(view);
+  const worldRef = useRef<HTMLDivElement>();
   const [selection, setSelection] = useState<CanvasSelection>(CANVAS_EMPTY_SELECTION);
   const [marquee, setMarquee] = useState<CanvasRect>();
   const [draft, setDraft] = useState<CanvasCurve>();
@@ -323,11 +263,31 @@ const NotesCanvas = ({
   const entryId = entry?.id;
   const entryText = entry?.text;
   const shown = live?.doc || doc;
+  const shownById = useMemo(() => new Map(shown.nodes.map((node) => [node.id, node])), [shown]);
 
   const viewport = () => {
     const box = boardRef.current?.getBoundingClientRect();
     return { width: box?.width || 800, height: box?.height || 600 };
   };
+
+  // Новый вид: в живую ссылку и сразу в DOM (поле и фон); `isFinal` закрепляет его состоянием
+  const applyView = (next: BoardView, isFinal: boolean) => {
+    viewRef.current = next;
+    if (isFinal) {
+      setView(next);
+      return;
+    }
+    requestMutation(() => {
+      if (viewRef.current !== next) return;
+      const world = worldRef.current;
+      const board = boardRef.current;
+      if (world) world.style.cssText = worldStyle(next);
+      if (board) board.style.cssText = boardBackgroundStyle(next);
+    });
+  };
+  const commitView = useLastCallback(() => setView(viewRef.current));
+  // Колесо: вид едет сразу, состояние закрепляется, когда колесо остановилось
+  const commitViewSoon = useMemo(() => debounce(commitView, 120, false), [commitView]);
 
   // Вид, в котором видно всё (на телефоне — крупно первая группа со своим содержимым)
   const fitTo = useLastCallback((target: CanvasDoc) => {
@@ -391,7 +351,7 @@ const NotesCanvas = ({
     if (loadedRef.current !== entryId) {
       loadedRef.current = entryId;
       select(CANVAS_EMPTY_SELECTION);
-      setView(fitTo(loadDoc(entryText)));
+      applyView(fitTo(loadDoc(entryText)), true);
       return;
     }
     if (entryText === knownTextRef.current) return;
@@ -711,7 +671,7 @@ const NotesCanvas = ({
     return noteByTitle.has(title.toLowerCase()) || !driveFiles.get(node.file!) ? title : undefined;
   };
 
-  const selectedNodes = selection.nodes.map((id) => findNode(shown, id)).filter((node): node is CanvasNode => (
+  const selectedNodes = selection.nodes.map((id) => shownById.get(id)).filter((node): node is CanvasNode => (
     Boolean(node)
   ));
   const selectedNode = selectedNodes.length === 1 && !selection.edges.length ? selectedNodes[0] : undefined;
@@ -724,14 +684,18 @@ const NotesCanvas = ({
 
   const toCanvas = (e: { clientX: number; clientY: number }) => {
     const box = boardRef.current!.getBoundingClientRect();
-    return { x: (e.clientX - box.left - view.x) / view.scale, y: (e.clientY - box.top - view.y) / view.scale };
+    const current = viewRef.current;
+    return {
+      x: (e.clientX - box.left - current.x) / current.scale, y: (e.clientY - box.top - current.y) / current.scale,
+    };
   };
 
   const centerPoint = () => {
     const size = viewport();
+    const current = viewRef.current;
     return {
-      x: Math.round((size.width / 2 - view.x) / view.scale) + (doc.nodes.length % NEW_COLUMNS) * NEW_OFFSET_X,
-      y: Math.round((size.height / 2 - view.y) / view.scale)
+      x: Math.round((size.width / 2 - current.x) / current.scale) + (doc.nodes.length % NEW_COLUMNS) * NEW_OFFSET_X,
+      y: Math.round((size.height / 2 - current.y) / current.scale)
         + Math.floor(doc.nodes.length / NEW_COLUMNS) * (NOTE_HEIGHT + NEW_OFFSET_Y),
     };
   };
@@ -806,7 +770,10 @@ const NotesCanvas = ({
     if (added.length) {
       selectNodes(result.added.cards);
       const size = viewport();
-      setView(revealRects(view, added, size.width, size.height, isNarrow ? FIT_TOP_NARROW : FIT_TOP, FIT_BOTTOM));
+      applyView(
+        revealRects(viewRef.current, added, size.width, size.height, isNarrow ? FIT_TOP_NARROW : FIT_TOP, FIT_BOTTOM),
+        true,
+      );
     } else {
       select(pruneSelection(result.doc, selectionRef.current));
     }
@@ -1311,7 +1278,7 @@ const NotesCanvas = ({
     const point = toCanvas({ clientX, clientY });
     const hit = document.elementFromPoint(clientX, clientY);
     const nodeId = hit?.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
-    const edgeId = nodeId ? undefined : edgeAt(docRef.current, point, EDGE_HIT_TOUCH / view.scale);
+    const edgeId = nodeId ? undefined : edgeAt(docRef.current, point, EDGE_HIT_TOUCH / viewRef.current.scale);
     const current = selectionRef.current;
     if (nodeId && !current.nodes.includes(nodeId)) selectNodes([nodeId]);
     else if (edgeId && !current.edges.includes(edgeId)) select({ nodes: [], edges: [edgeId] });
@@ -1431,7 +1398,7 @@ const NotesCanvas = ({
         handleRefreshGraph();
         break;
       default:
-        setView(fitTo(docRef.current));
+        applyView(fitTo(docRef.current), true);
     }
   });
 
@@ -1465,7 +1432,7 @@ const NotesCanvas = ({
     // Правая кнопка — меню (событие `contextmenu`)
     if (e.button === 2) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    if (pinchRef.current.down(e.pointerId, e.clientX, e.clientY, view)) {
+    if (pinchRef.current.down(e.pointerId, e.clientX, e.clientY, viewRef.current)) {
       dropGesture();
       return;
     }
@@ -1496,7 +1463,7 @@ const NotesCanvas = ({
       port: port && CANVAS_SIDES.includes(port) ? port : undefined,
       handle,
       edgeId: nodeId ? undefined : edgeAt(
-        docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / view.scale,
+        docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / viewRef.current.scale,
       ),
       groupId: nodeId ? undefined : groupAtPoint(docRef.current, point)?.id,
     });
@@ -1598,7 +1565,7 @@ const NotesCanvas = ({
       e.pointerId, e.clientX, e.clientY, e.currentTarget.getBoundingClientRect(),
     );
     if (pinched) {
-      setView(pinched);
+      applyView(pinched, false);
       return;
     }
     const gesture = gestureRef.current;
@@ -1611,7 +1578,8 @@ const NotesCanvas = ({
       const dy = e.clientY - gesture.y;
       if (!gesture.hasMoved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
       window.clearTimeout(pressTimerRef.current);
-      setView({ ...view, x: view.x + dx, y: view.y + dy });
+      const current = viewRef.current;
+      applyView({ ...current, x: current.x + dx, y: current.y + dy }, false);
       gestureRef.current = {
         ...gesture, x: e.clientX, y: e.clientY, hasMoved: true,
       };
@@ -1633,7 +1601,7 @@ const NotesCanvas = ({
     }
     const dx = point.x - gesture.origin.x;
     const dy = point.y - gesture.origin.y;
-    if (!gesture.hasMoved && (Math.abs(dx) + Math.abs(dy)) * view.scale < DRAG_THRESHOLD) return;
+    if (!gesture.hasMoved && (Math.abs(dx) + Math.abs(dy)) * viewRef.current.scale < DRAG_THRESHOLD) return;
     window.clearTimeout(pressTimerRef.current);
     gesture.hasMoved = true;
     if (gesture.kind === 'marquee') {
@@ -1648,7 +1616,7 @@ const NotesCanvas = ({
     }
     // Alt отключает и сетку, и прилипание к соседям
     const isFree = e.altKey;
-    const tolerance = CANVAS_SNAP_DISTANCE / view.scale;
+    const tolerance = CANVAS_SNAP_DISTANCE / viewRef.current.scale;
     if (gesture.kind === 'move') {
       const lead = findNode(gesture.base, gesture.lead)!;
       const delta = isFree ? { dx: Math.round(dx), dy: Math.round(dy) } : snapDelta(lead, dx, dy);
@@ -1696,6 +1664,7 @@ const NotesCanvas = ({
   );
 
   const handlePointerUp = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const wasPinch = pinchRef.current.isActive();
     pinchRef.current.up(e.pointerId);
     window.clearTimeout(pressTimerRef.current);
     const gesture = gestureRef.current;
@@ -1705,10 +1674,12 @@ const NotesCanvas = ({
     setLive(undefined);
     setMarquee(undefined);
     setDraft(undefined);
+    if (wasPinch) commitView();
     if (!gesture) return;
     const point = toCanvas(e);
     if (gesture.hasMoved) {
       tapRef.current = undefined;
+      if (gesture.kind === 'pan') commitView();
       if ((gesture.kind === 'move' || gesture.kind === 'resize') && result) change(result.doc);
       if (gesture.kind === 'edge') {
         const target = nodeAtPoint(docRef.current, point, gesture.from);
@@ -1755,6 +1726,7 @@ const NotesCanvas = ({
   const handlePointerCancel = useLastCallback((e: React.PointerEvent<HTMLDivElement>) => {
     pinchRef.current.up(e.pointerId);
     dropGesture();
+    commitView();
   });
 
   const handleDoubleClick = useLastCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -1770,7 +1742,7 @@ const NotesCanvas = ({
       return;
     }
     const point = toCanvas(e);
-    const edgeId = edgeAt(docRef.current, point, EDGE_HIT / view.scale);
+    const edgeId = edgeAt(docRef.current, point, EDGE_HIT / viewRef.current.scale);
     activateKey(edgeId ? `edge:${edgeId}` : TAP_BOARD, point);
   });
 
@@ -1880,289 +1852,71 @@ const NotesCanvas = ({
 
   const zoomBy = (factor: number) => {
     const size = viewport();
-    setView(zoomAround(view, view.scale * factor, size.width / 2, size.height / 2));
+    const current = viewRef.current;
+    applyView(zoomAround(current, current.scale * factor, size.width / 2, size.height / 2), true);
   };
 
   const handleZoomIn = useLastCallback(() => zoomBy(BOARD_ZOOM_STEP));
   const handleZoomOut = useLastCallback(() => zoomBy(1 / BOARD_ZOOM_STEP));
-  const handleFit = useLastCallback(() => setView(fitTo(doc)));
+  const handleFit = useLastCallback(() => applyView(fitTo(doc), true));
   const handleWheel = useLastCallback((e: React.WheelEvent<HTMLDivElement>) => {
     // В меню и в поле текста заметки колесо листает их, а не меняет масштаб
     if ((e.target as Element).closest('[data-canvas-context], [data-canvas-note-editor]')) return;
     const box = e.currentTarget.getBoundingClientRect();
-    setView(zoomByWheel(view, e.deltaY, e.clientX - box.left, e.clientY - box.top));
+    applyView(zoomByWheel(viewRef.current, e.deltaY, e.clientX - box.left, e.clientY - box.top), false);
+    commitViewSoon();
   });
-
-  const colorStyle = (color?: string) => (isCanvasPresetColor(color) ? `--gc: ${CANVAS_TONES[color]}; ` : '');
 
   // Ручки размера и точки для стрелок — у единственного выделенного узла, когда нет ни правки, ни режима связи
   const hasGrips = (node: CanvasNode) => selectedNode?.id === node.id && !linkFrom && inline?.id !== node.id;
+  // Картинка в полном качестве — когда карточка на экране шире порога; порог сравнивается по закреплённому
+  // масштабу, так что сам по себе жест карточки не перерисовывает
+  const isLargeImage = (node: CanvasNode) => node.width * view.scale >= CANVAS_FULL_IMAGE_MIN_PX;
 
-  const renderHandles = (node: CanvasNode) => (
-    hasGrips(node) && (node.type === 'group' ? CANVAS_CORNER_HANDLES : CANVAS_HANDLES).map((handle) => (
-      <i
-        key={handle}
-        className={buildClassName(styles.canvasHandle, HANDLE_CLASSES[handle])}
-        title={lang('KnowledgeCanvasResize')}
-        data-canvas-handle={handle}
-      />
-    ))
-  );
-
-  const renderPorts = (node: CanvasNode) => (
-    !linkFrom && inline?.id !== node.id && CANVAS_SIDES.map((side) => (
-      <i
-        key={side}
-        className={buildClassName(styles.canvasPort, PORT_CLASSES[side], hasGrips(node) && styles.canvasPortShown)}
-        title={lang('KnowledgeCanvasPort')}
-        data-canvas-port={side}
-      />
-    ))
-  );
-
+  // Карточка холста — memo-компонент: перерисовывается только при смене своих данных
   const renderNode = (node: CanvasNode) => {
-    const isSelected = selection.nodes.includes(node.id) || linkFrom === node.id;
-    const place = `left: ${node.x}px; top: ${node.y}px; width: ${node.width}px`;
-    if (node.type === 'group') {
-      return (
-        <div
-          key={node.id}
-          data-canvas-node={node.id}
-          data-canvas-type={node.type}
-          className={buildClassName(
-            styles.canvasGroup, isSelected && styles.canvasSelected, hoverGroup === node.id && styles.canvasGroupHover,
-          )}
-          style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
-        >
-          <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeTop)} />
-          <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeRight)} />
-          <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeBottom)} />
-          <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeLeft)} />
-          {/* Шапка вдоль верхнего края: за неё группу берут, по двойному нажатию называют */}
-          <div className={styles.canvasGroupHead} data-canvas-group-head>
-            {inline?.id === node.id ? (
-              <input
-                className={styles.canvasGroupInput}
-                value={inlineText}
-                placeholder={lang('KnowledgeCanvasGroupName')}
-                aria-label={lang('KnowledgeCanvasGroupName')}
-                data-canvas-inline
-                onChange={handleInlineChange}
-                onBlur={handleInlineBlur}
-                onKeyDown={handleInlineKey}
-              />
-            ) : node.label ? (
-              <span className={styles.canvasGroupLabel} data-canvas-group-label>{node.label}</span>
-            ) : (
-              <span
-                className={buildClassName(styles.canvasGroupLabel, styles.canvasGroupGrip)}
-                title={lang('KnowledgeCanvasUnnamedGroup')}
-                data-canvas-group-grip
-              >
-                <PvIcon name="group" isSmall />
-                {lang('KnowledgeCanvasGroup')}
-              </span>
-            )}
-          </div>
-          {renderHandles(node)}
-        </div>
-      );
-    }
-    const cardClass = buildClassName(
-      styles.canvasCard,
-      isSelected && styles.canvasSelected,
-      linkFrom && linkFrom !== node.id && styles.canvasLinkable,
-    );
-    if (node.type === 'link') {
-      return (
-        <div
-          key={node.id}
-          data-canvas-node={node.id}
-          data-canvas-type={node.type}
-          className={buildClassName(cardClass, styles.canvasCardText)}
-          style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
-        >
-          <CanvasLinkBody url={node.url || ''} />
-          {renderPorts(node)}
-          {renderHandles(node)}
-        </div>
-      );
-    }
-    if (node.type !== 'file') {
-      // Высота текстовой карточки — не меньше заданной и не меньше её текста
-      const isAuto = node.type === 'text';
-      return (
-        <div
-          key={node.id}
-          data-canvas-node={node.id}
-          data-canvas-type={node.type}
-          className={buildClassName(cardClass, styles.canvasCardText)}
-          style={`${colorStyle(node.color)}${place}; ${isAuto ? 'min-height' : 'height'}: ${node.height}px`}
-        >
-          {inline?.id === node.id ? (
-            <div className={styles.canvasInlineBox}>
-              {/* Невидимая копия текста задаёт высоту поля: карточка растёт вместе с набранным */}
-              <div className={styles.canvasInlineMirror} aria-hidden="true">{`${inlineText}${MIRROR_TAIL}`}</div>
-              <textarea
-                className={styles.canvasInline}
-                value={inlineText}
-                placeholder={lang('KnowledgeCanvasText')}
-                aria-label={lang('KnowledgeCanvasText')}
-                data-canvas-inline
-                onChange={handleInlineChange}
-                onBlur={handleInlineBlur}
-                onKeyDown={handleInlineKey}
-              />
-            </div>
-          ) : (
-            <div className={buildClassName(styles.canvasCardBody, styles.canvasCardBodyText)} data-canvas-body>
-              {(node.text || '').split('\n').map((line, i) => (
-                <div key={i}>{line ? renderCardInline(line) : EMPTY_LINE}</div>
-              ))}
-            </div>
-          )}
-          {renderPorts(node)}
-          {renderHandles(node)}
-        </div>
-      );
-    }
-    const title = noteTitleOf(node);
-    if (title === undefined) {
-      return (
-        <div
-          key={node.id}
-          data-canvas-node={node.id}
-          data-canvas-type={node.type}
-          className={cardClass}
-          style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
-        >
-          <CanvasFileBody
-            path={node.file || ''}
-            container={driveId}
-            node={driveFiles.get(node.file || '')}
-            quality={imageQuality}
-          />
-          {renderPorts(node)}
-          {renderHandles(node)}
-        </div>
-      );
-    }
-    const note = noteOf(title);
-    const noteState = noteStateOf(note);
-    const isEditingText = inline?.id === node.id && inline.kind === 'note';
-    const isEditingTitle = inline?.id === node.id && inline.kind === 'title';
-    // Начало текста без разметки; отправленный на запись текст виден, не дожидаясь ответа облака
-    const lines = note ? notePreviewLines(
-      parseNote(savingNote?.noteId === note.id ? savingNote.text : note.text).body, note.title, PREVIEW_LINES,
-    ) : undefined;
+    const title = node.type === 'file' ? noteTitleOf(node) : undefined;
+    const note = title !== undefined ? noteOf(title) : undefined;
+    const isEdited = inline?.id === node.id;
     return (
-      <div
+      <CanvasCard
         key={node.id}
-        data-canvas-node={node.id}
-        data-canvas-type={node.type}
-        data-canvas-note={noteState}
-        className={buildClassName(cardClass, isEditingText && styles.canvasCardEditing)}
-        // Пока правится текст, карточка растёт за ним; размер узла в файле от этого не меняется
-        style={`--gc: ${note ? folderColor(note.folder, note.isDaily) : 'var(--pv-faint)'}; ${place}; ${
-          isEditingText ? 'min-height' : 'height'}: ${node.height}px`}
-      >
-        <div className={styles.canvasCardHead} data-canvas-note-head>
-          <i className={styles.canvasCardDot} />
-          {isEditingTitle ? (
-            <input
-              className={styles.canvasTitleInput}
-              value={inlineText}
-              maxLength={NOTE_TITLE_MAX}
-              aria-label={lang('KnowledgeNoteTitle')}
-              data-canvas-inline
-              data-canvas-note-title-input
-              onChange={handleInlineChange}
-              onBlur={handleInlineBlur}
-              onKeyDown={handleInlineKey}
-            />
-          ) : (
-            <span className={buildClassName(kit.ttl, styles.canvasCardTitle)} data-canvas-note-title={title}>
-              {title}
-            </span>
-          )}
-          {note && !isEditingTitle && (
-            <button
-              type="button"
-              className={styles.canvasCardOpen}
-              title={lang('KnowledgeCanvasOpenNote')}
-              aria-label={lang('KnowledgeCanvasOpenNote')}
-              data-node={node.id}
-              data-canvas-open-note
-              onClick={handleOpenNote}
-            >
-              <PvIcon name="open" isSmall />
-            </button>
-          )}
-        </div>
-        {isEditingText ? (
-          <div
-            className={styles.canvasNoteBox}
-            style={`max-height: ${Math.max(NOTE_EDIT_MAX_HEIGHT, node.height)}px`}
-          >
-            {/* Невидимая копия текста задаёт высоту поля; выше предела поле листается */}
-            <div className={styles.canvasInlineMirror} aria-hidden="true">{`${inlineText}${MIRROR_TAIL}`}</div>
-            <textarea
-              className={buildClassName(styles.canvasInline, styles.canvasNoteEditor)}
-              value={inlineText}
-              placeholder={lang('KnowledgeEditorPlaceholder')}
-              aria-label={lang('KnowledgeCanvasNoteText')}
-              title={lang('KnowledgeCanvasNoteSaveHint')}
-              data-canvas-inline
-              data-canvas-note-editor
-              onChange={handleInlineChange}
-              onBlur={handleInlineBlur}
-              onKeyDown={handleInlineKey}
-            />
-          </div>
-        ) : (
-          <div className={styles.canvasCardBody} data-canvas-note-body>
-            {lines ? lines.map((line, i) => (
-              <div key={i}>{renderCardInline(line)}</div>
-            )) : (
-              <div className={kit.faint}>
-                {lang(noteState === 'loading' ? 'KnowledgeCanvasNoteLoading' : 'KnowledgeCanvasNoteMissing')}
-              </div>
-            )}
-          </div>
-        )}
-        {renderPorts(node)}
-        {renderHandles(node)}
-      </div>
+        node={node}
+        isSelected={selection.nodes.includes(node.id) || linkFrom === node.id}
+        isLinkable={Boolean(linkFrom) && linkFrom !== node.id}
+        isHover={hoverGroup === node.id}
+        hasGrips={hasGrips(node)}
+        arePortsShown={!linkFrom && !isEdited}
+        inline={isEdited && inline ? { kind: inline.kind, text: inlineText } : undefined}
+        noteTitle={title}
+        note={note}
+        noteState={title !== undefined ? noteStateOf(note) : undefined}
+        savingText={note && savingNote?.noteId === note.id ? savingNote.text : undefined}
+        driveId={driveId}
+        driveNode={node.type === 'file' && node.file ? driveFiles.get(node.file) : undefined}
+        imageQuality={imageQuality}
+        isLargeImage={isLargeImage(node)}
+        onInlineChange={handleInlineChange}
+        onInlineBlur={handleInlineBlur}
+        onInlineKey={handleInlineKey}
+        onOpenNote={handleOpenNote}
+      />
     );
   };
 
   const renderEdge = (edge: CanvasEdge) => {
-    const curve = edgeCurve(shown, edge);
-    if (!curve) return undefined;
-    const hasStartArrow = edge.fromEnd === 'arrow';
-    const hasEndArrow = edge.toEnd !== 'none';
-    const path = curvePath(curve, hasStartArrow, hasEndArrow);
-    const label = curvePoint(curve, 0.5);
+    const from = shownById.get(edge.fromNode);
+    const to = shownById.get(edge.toNode);
+    if (!from || !to) return undefined;
     return (
-      <g
+      <CanvasEdgeView
         key={edge.id}
-        data-canvas-edge={edge.id}
-        data-canvas-ends={`${hasStartArrow ? 'arrow' : 'none'}-${hasEndArrow ? 'arrow' : 'none'}`}
-        // Класс у узла SVG всегда строка: снять его совсем Teact не умеет (свойство `className` там только
-        // для чтения) — отрисовка падала, и холст замирал, стоило снять выделение со стрелки
-        className={selection.edges.includes(edge.id) ? styles.canvasEdgeOn : ''}
-        style={colorStyle(edge.color) || undefined}
-      >
-        <path className={styles.canvasEdgeHit} d={path} />
-        <path className={styles.canvasEdge} d={path} />
-        {hasStartArrow && <path className={styles.canvasArrow} d={arrowPath(curve.p)} />}
-        {hasEndArrow && <path className={styles.canvasArrow} d={arrowPath(curve.q)} />}
-        {edge.label && inline?.id !== edge.id && (
-          <text className={styles.canvasEdgeLabel} x={label.x} y={label.y + EDGE_LABEL_SHIFT}>
-            {edge.label}
-          </text>
-        )}
-      </g>
+        edge={edge}
+        from={from}
+        to={to}
+        isOn={selection.edges.includes(edge.id)}
+        isLabelHidden={inline?.id === edge.id}
+      />
     );
   };
 
@@ -2206,7 +1960,7 @@ const NotesCanvas = ({
       : editNode.type === 'file' ? nameOfNode(editNode.id)
         : editNode.type === 'link' ? lang('KnowledgeCanvasLinkCard') : lang('KnowledgeCanvasTextCard');
   const inlineEdge = inline?.kind === 'edge' ? doc.edges.find(({ id }) => id === inline.id) : undefined;
-  const inlineEdgeCurve = inlineEdge && edgeCurve(shown, inlineEdge);
+  const inlineEdgeCurve = inlineEdge && edgeCurve(shown, inlineEdge, shownById);
   const inlineEdgePoint = inlineEdgeCurve && curvePoint(inlineEdgeCurve, 0.5);
 
   // «Изменить» у выделенного: карточка заметки правит её текст (нет заметки — создаёт её, хранилище ещё
@@ -2228,7 +1982,7 @@ const NotesCanvas = ({
   if (isBarShown && !isNarrow) {
     const nodeBounds = selectionBounds(shown, selection.nodes);
     const firstEdge = !nodeBounds ? doc.edges.find(({ id }) => id === selection.edges[0]) : undefined;
-    const edgeMiddle = firstEdge && edgeCurve(shown, firstEdge);
+    const edgeMiddle = firstEdge && edgeCurve(shown, firstEdge, shownById);
     const edgePoint = edgeMiddle && curvePoint(edgeMiddle, 0.5);
     const bounds = nodeBounds || (edgePoint ? { ...edgePoint, width: 0, height: 0 } : undefined);
     if (bounds) {
@@ -2284,6 +2038,9 @@ const NotesCanvas = ({
     ];
   }
 
+  // Поле и фон рисуются по живому виду: перерисовка посреди жеста не откатывает их к закреплённому
+  const liveView = viewRef.current;
+
   return (
     <div className={styles.canvas} data-notes-canvas={entry.id}>
       <div
@@ -2291,7 +2048,7 @@ const NotesCanvas = ({
         className={buildClassName(
           styles.board, isSelectMode && styles.boardSelecting,
         )}
-        style={boardBackgroundStyle(view)}
+        style={boardBackgroundStyle(liveView)}
         data-canvas-board
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -2302,11 +2059,7 @@ const NotesCanvas = ({
         onContextMenu={handleContextMenu}
         onWheel={handleWheel}
       >
-        <div
-          className={styles.world}
-          style={`transform: translate(${view.x}px, ${view.y}px) scale(${view.scale}); --inv: ${1 / view.scale}`}
-          data-canvas-world
-        >
+        <div ref={worldRef} className={styles.world} style={worldStyle(liveView)} data-canvas-world>
           <svg className={styles.canvasEdges} width="1" height="1">
             {shown.edges.map(renderEdge)}
             {draft && <path className={styles.canvasEdgeDraft} d={curvePath(draft, false, true)} data-canvas-draft />}
@@ -2762,7 +2515,7 @@ const NotesCanvas = ({
             <span className={kit.sub}>{lang('KnowledgeCanvasNewNoteHint')}</span>
           </span>
         </button>
-        {notes.map((note) => {
+        {isPickingNote && notes.map((note) => {
           const isOnCanvas = filesOnCanvas.has(note.title.toLowerCase());
           return (
             <button

@@ -261,6 +261,62 @@ describe('холст: нажатия мыши', () => {
   });
 });
 
+describe('холст: перерисовки во время жеста', () => {
+  // Карточка далеко от группы: жест группы её не касается
+  const FAR = {
+    id: 'far', type: 'text', x: 900, y: 900, width: 200, height: 60, text: 'Далеко',
+  };
+
+  it('перетаскивание группы не перерисовывает несдвинутые карточки и не перерисовывает поле', async () => {
+    const { getCanvasCardRenders } = await import('./CanvasCard');
+    await mount({ ...DOC, nodes: [...DOC.nodes, FAR] });
+    const farBefore = getCanvasCardRenders('far');
+    const alphaBefore = getCanvasCardRenders('alpha');
+    fire('pointermove', IN_CORNER);
+    fire('pointerdown', IN_CORNER);
+    for (let step = 1; step <= 8; step++) {
+      fire('pointermove', { x: IN_CORNER.x + step * 15, y: IN_CORNER.y - step * 10 });
+      // eslint-disable-next-line no-await-in-loop
+      await frame();
+    }
+    // Сдвинутые карточки отрисовались по шагам, несдвинутая — ни разу
+    expect(getCanvasCardRenders('alpha')).toBeGreaterThan(alphaBefore);
+    expect(getCanvasCardRenders('far')).toBe(farBefore);
+    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    expect(placeOf('pair')).toEqual([-580, 20]);
+    expect(placeOf('far')).toEqual([900, 900]);
+    expect(getCanvasCardRenders('far')).toBe(farBefore);
+  });
+
+  it('сдвиг поля не перерисовывает ни одной карточки, вид закрепляется по отпусканию', async () => {
+    const { getCanvasCardRenders } = await import('./CanvasCard');
+    await mount({ ...DOC, nodes: [...DOC.nodes, FAR] });
+    const before = ['pair', 'alpha', 'beta', 'far'].map(getCanvasCardRenders);
+    const [x0, y0, scale] = viewOf();
+    // Точки экрана считаются по виду до жеста: поле едет уже на первом движении
+    const fireAt = (type: string, dx: number, dy: number) => {
+      const event = new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: OUTSIDE.x * scale + x0 + dx, clientY: OUTSIDE.y * scale + y0 + dy,
+        button: 0,
+      });
+      Object.assign(event, { pointerId: 1, pointerType: 'mouse' });
+      find('[data-canvas-board]').dispatchEvent(event);
+    };
+    fireAt('pointermove', 0, 0);
+    fireAt('pointerdown', 0, 0);
+    for (let step = 1; step <= 6; step++) {
+      fireAt('pointermove', step * 10, step * 5);
+      // eslint-disable-next-line no-await-in-loop
+      await frame();
+    }
+    fireAt('pointerup', 60, 30);
+    await frame();
+    const [x1, y1] = viewOf();
+    expect([x1 - x0, y1 - y0].map(Math.round)).toEqual([60, 30]);
+    expect(['pair', 'alpha', 'beta', 'far'].map(getCanvasCardRenders)).toEqual(before);
+  });
+});
+
 describe('холст: стрелка, брошенная на пустом месте', () => {
   it('спрашивает, что поставить на конце; стрелка остаётся на экране, пока открыто меню', async () => {
     await mount();

@@ -132,25 +132,30 @@ export function moveNodes(doc: CanvasDoc, ids: string[], dx: number, dy: number)
 // Правило рамки: узел, который до правки лежал в группе целиком, а после неё выступил за рамку меньше чем
 // наполовину, остаётся в группе — рамка растягивается до него с полем. Выступил больше чем наполовину —
 // вышел из группы, рамка прежняя. Выросшая группа так же растягивает ту, в которой лежала сама
+// Узлы ищутся по карте, а не перебором: сдвинутые узлы — те, чей объект сменился (несдвинутые `moveNodes`
+// оставляет прежними), так что проход стоит O(узлы + сдвинутые × группы), а не O(узлы²)
 export function growGroups(before: CanvasDoc, after: CanvasDoc, padding = CANVAS_GROUP_PADDING): CanvasDoc {
   const groups = before.nodes.filter((node) => node.type === 'group');
   if (!groups.length || before === after) return after;
+  const beforeById = new Map(before.nodes.map((node) => [node.id, node]));
+  const nowById = new Map(after.nodes.map((node) => [node.id, node]));
   const queue = after.nodes.filter((node) => {
-    const was = findNode(before, node.id);
-    return was && !isSameRect(was, node);
+    const was = beforeById.get(node.id);
+    return was && was !== node && !isSameRect(was, node);
   }).map((node) => node.id);
   let doc = after;
   // Каждая группа растёт не больше раза на каждый узел — цикл заведомо конечен
   for (let step = 0; queue.length && step < before.nodes.length * groups.length + 1; step++) {
     const id = queue.shift()!;
-    const was = findNode(before, id)!;
+    const was = beforeById.get(id)!;
     groups.forEach((group) => {
-      const now = findNode(doc, id);
-      const frame = findNode(doc, group.id);
+      const now = nowById.get(id);
+      const frame = nowById.get(group.id);
       if (!now || !frame || group.id === id || !isInside(was, group) || isInside(now, frame)) return;
       if (overlapShare(now, frame) < GROUP_KEEP_SHARE) return;
-      const grown = unionRect(frame, inflateRect(now, padding));
-      doc = { ...doc, nodes: doc.nodes.map((node) => (node.id === group.id ? { ...node, ...grown } : node)) };
+      const grownFrame = { ...frame, ...unionRect(frame, inflateRect(now, padding)) };
+      doc = { ...doc, nodes: doc.nodes.map((node) => (node.id === group.id ? grownFrame : node)) };
+      nowById.set(group.id, grownFrame);
       queue.push(group.id);
     });
   }
@@ -382,10 +387,13 @@ export function connectNodes(
   return updateEdge(next, next.edges[next.edges.length - 1].id, sides);
 }
 
-// Кривая стрелки: концы на сторонах узлов и две опорные точки, отведённые от сторон наружу
-export function edgeCurve(doc: CanvasDoc, edge: CanvasEdge): CanvasCurve | undefined {
-  const from = findNode(doc, edge.fromNode);
-  const to = findNode(doc, edge.toNode);
+// Кривая стрелки: концы на сторонах узлов и две опорные точки, отведённые от сторон наружу. `nodeById` —
+// готовая карта узлов документа, когда кривые считают для многих стрелок разом
+export function edgeCurve(
+  doc: CanvasDoc, edge: CanvasEdge, nodeById?: ReadonlyMap<string, CanvasNode>,
+): CanvasCurve | undefined {
+  const from = nodeById ? nodeById.get(edge.fromNode) : findNode(doc, edge.fromNode);
+  const to = nodeById ? nodeById.get(edge.toNode) : findNode(doc, edge.toNode);
   if (!from || !to) return undefined;
   const { from: p, to: q } = edgeAnchors(from, to, edge);
   return curveBetween(p, q);
@@ -430,8 +438,9 @@ export function distanceToCurve(curve: CanvasCurve, point: CanvasPoint) {
 export function edgeAt(doc: CanvasDoc, point: CanvasPoint, tolerance: number): string | undefined {
   let found: string | undefined;
   let best = tolerance;
+  const nodeById = new Map(doc.nodes.map((node) => [node.id, node]));
   doc.edges.forEach((edge) => {
-    const curve = edgeCurve(doc, edge);
+    const curve = edgeCurve(doc, edge, nodeById);
     if (!curve) return;
     const distance = distanceToCurve(curve, point);
     if (distance <= best) {
