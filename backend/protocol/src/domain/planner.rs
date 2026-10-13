@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use prost::Message;
 
-use super::{LamportGuard, Stamp};
+use super::{LamportGuard, Stamp, StateCache};
 use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
@@ -438,6 +438,8 @@ pub struct PlannerState {
     pub learned: BTreeMap<String, LearnedWord>,
     /// История ввода текстом: строки и забытые шаблоны (ключ — id).
     pub quick_lines: BTreeMap<String, QuickLine>,
+    /// Ревизия и кэш размера снимка (C1); в сравнении не участвует.
+    cache: StateCache,
 }
 
 fn learned_stamps(w: &LearnedWord) -> impl Iterator<Item = &LwwStamp> {
@@ -785,6 +787,7 @@ impl PlannerState {
 
     /// Применить одно изменение (проверка значений внутри).
     pub fn apply_change(&mut self, c: &Change) -> Result<()> {
+        self.cache.touch();
         match &c.change {
             Some(change::Change::Task(t)) => {
                 check_task(t)?;
@@ -850,6 +853,7 @@ impl PlannerState {
 
     /// Слить снимок (идемпотентно).
     pub fn merge_snapshot(&mut self, s: &PlannerSnapshot) -> Result<()> {
+        self.cache.touch();
         for t in &s.tasks {
             check_task(t)?;
             self.merge_task(t);
@@ -916,8 +920,19 @@ impl PlannerState {
     }
 
     /// Размер открытого текста снимка (для предупреждения о потолке).
+    /// Считается один раз на ревизию: снимок — полная копия всех объектов.
     pub fn size_estimate(&self) -> usize {
-        self.to_snapshot().encoded_len()
+        self.cache.size_or(|| self.to_snapshot().encoded_len())
+    }
+
+    /// Ревизия состояния: растёт при каждой правке и слиянии снимка.
+    pub fn rev(&self) -> u64 {
+        self.cache.rev()
+    }
+
+    /// Размер снимка, если уже посчитан для текущей ревизии.
+    pub fn size_cached(&self) -> Option<usize> {
+        self.cache.size_cached()
     }
 }
 

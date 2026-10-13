@@ -10,7 +10,7 @@
 // пришедшие раньше ключа, ждут в `pending_ops`. Отзыв своего устройства
 // поднимает эпоху записью «rotate» (REVOKE-1, R6).
 
-use crate::domain::{self as dom, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, KeyRing, LamportGuard as DomainGuard};
+use crate::domain::{self as dom, no_groups, planner, planner_json, Author as DomainAuthor, ContainerAccess, JsonCache, KeyRing, LamportGuard as DomainGuard};
 use crate::pb::parvane::core::v2::{
     ContainerKeyShare, ContainerOp, DomainContainerCreateRequest, DomainContainerGetResponse, DomainGrantListResponse,
     DomainKeyRotateRequest, DomainOpAppendRequest, DomainOpSyncResponse, DomainSnapshotGetResponse,
@@ -30,6 +30,8 @@ struct PlannerLocal {
     snapshot_seq: u64,
     /// Операции журнала, ждущие ключа своей эпохи (в порядке seq).
     pending_ops: Vec<ContainerOp>,
+    /// JSON состояния для хоста по (ревизия, head_seq) — C1.
+    json_cache: JsonCache,
 }
 
 /// Итог приёма страницы журнала планировщика (`domain.op.sync`).
@@ -113,9 +115,10 @@ impl Client {
         self.planner.as_ref().map(|p| p.head_seq).unwrap_or(0)
     }
 
-    /// Сведённое состояние для хоста (JSON, только живые объекты).
+    /// Сведённое состояние для хоста (JSON, только живые объекты). Пока
+    /// ревизия состояния и `head_seq` не менялись — та же строка из кэша.
     pub fn planner_state_json(&self) -> Option<String> {
-        self.planner.as_ref().map(|p| planner_json::state_json(&p.state, p.head_seq))
+        self.planner.as_ref().map(|p| p.json_cache.get_or(p.state.rev(), p.head_seq, || planner_json::state_json(&p.state, p.head_seq)))
     }
 
     /// Создать контейнер планировщика: генезис + ключ эпохи 1 → `domain.container.create`.
@@ -141,6 +144,7 @@ impl Client {
             head_seq: 0,
             snapshot_seq: 0,
             pending_ops: vec![],
+            json_cache: JsonCache::default(),
         });
         Ok(OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }))
     }
@@ -174,6 +178,7 @@ impl Client {
             head_seq: existing.as_ref().map(|p| p.head_seq).unwrap_or(0),
             snapshot_seq: existing.as_ref().map(|p| p.snapshot_seq).unwrap_or(0),
             pending_ops: existing.map(|p| p.pending_ops).unwrap_or_default(),
+            json_cache: JsonCache::default(),
         };
         self.planner = Some(local);
         self.planner_absorb_pending_keys();
@@ -504,7 +509,7 @@ impl Client {
             }
         }
         let pending_ops = pp.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
-        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops });
+        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, json_cache: JsonCache::default() });
         Ok(())
     }
 }
