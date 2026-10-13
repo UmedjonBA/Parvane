@@ -61,7 +61,7 @@ const CloudPreview = ({
     if (!container || !node || !canPreview) return undefined;
     let isActual = true;
     let created: string | undefined;
-    void callParvane('parvaneCloudOpenBlob', { container, node: node.id }).then(async (blob) => {
+    void callParvane('parvaneCloudOpenBlob', { container, node: node.id, blob: node.blob }).then(async (blob) => {
       if (!isActual) return;
       if (!(blob instanceof Blob)) {
         setHasFailed(true);

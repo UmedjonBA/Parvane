@@ -4,7 +4,7 @@ import { V2Error } from './v2/transport';
 import { decryptBlob, encryptBlobWithKey } from './blobcrypt';
 import {
   CLOUD_CHUNK_BYTES, CloudAbortError, type CloudBlobTransport, cloudCipherSize, cloudPlainSize, createBlobSink,
-  createCipherSource, downloadCloudBlob, uploadCloudBlob,
+  createCipherSource, createLimiter, downloadCloudBlob, uploadCloudBlob,
 } from './cloudBlobs';
 
 function bytesOf(length: number) {
@@ -151,6 +151,57 @@ describe('блобы облака: потоковый PVB2', () => {
     expect(Buffer.compare(Buffer.from(got), Buffer.from(plain))).toBe(0);
     expect(server.calls.filter((c) => c.method === 'download').map((c) => c.index)).toEqual([0, 32]);
   }, 60000);
+
+  it('следующее окно запрашивается, пока предыдущее пишется в приёмник', async () => {
+    const server = createServer();
+    // Три окна: 70 чанков облака
+    const plain = bytesOf(70 * CLOUD_CHUNK_BYTES - 777);
+    const up = await uploadCloudBlob(server.transport, new Blob([plain]));
+    const order: string[] = [];
+    const transport = {
+      ...server.transport,
+      downloadBlobCap: (fileId: string, capability: string, first: number, count: number) => {
+        order.push(`request ${first}`);
+        return server.transport.downloadBlobCap(fileId, capability, first, count);
+      },
+    };
+    const { sink, getBlob } = createBlobSink('application/octet-stream');
+    let writes = 0;
+    await downloadCloudBlob(transport, up, {
+      ...sink,
+      write: async (bytes) => {
+        writes += 1;
+        order.push(`write ${writes}`);
+        // Медленный приёмник: за это время уже должен уйти запрос следующего окна
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        return sink.write(bytes);
+      },
+    });
+    expect(Buffer.compare(Buffer.from(new Uint8Array(await getBlob()!.arrayBuffer())), Buffer.from(plain))).toBe(0);
+    expect(order).toEqual(['request 0', 'request 32', 'write 1', 'request 64', 'write 2', 'write 3']);
+  }, 60000);
+
+  it('ограничитель: не больше N задач разом, остальные ждут своей очереди', async () => {
+    const run = createLimiter(2);
+    let active = 0;
+    let peak = 0;
+    const results = await Promise.all(Array.from({ length: 7 }, (_, i) => run(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
+      active -= 1;
+      return i;
+    })));
+    expect(results).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(peak).toBe(2);
+    // Ошибка задачи освобождает место
+    await expect(run(() => Promise.reject(new Error('x')))).rejects.toThrow('x');
+    expect(await run(() => Promise.resolve('ok'))).toBe('ok');
+  });
 
   it('пустой файл и файл в один байт', async () => {
     const server = createServer();
