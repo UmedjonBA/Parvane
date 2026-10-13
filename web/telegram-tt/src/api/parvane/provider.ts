@@ -3409,7 +3409,7 @@ const methods = {
     // профиль показывал старые поля до перезагрузки или входящего сообщения —
     // resolve сам разошлёт updateUser/updateUserFullInfo, если что-то менялось
     // (SC-011)
-    if (address !== store.self) void syncController.resolveDisplayNames([address]).catch(() => undefined);
+    if (address !== store.self) void syncController.resolveDisplayNames([address], true).catch(() => undefined);
     const user = store.buildApiUser(address);
     const isBlocked = localState.loadBlocked().includes(address);
     // `loadFullUser` без guard'ов читает `users`/`chats`/`userStatusesById` —
