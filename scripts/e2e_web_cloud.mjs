@@ -171,7 +171,7 @@ try {
   await trashRow.getByText('Trash is empty').waitFor({ state: 'visible' });
   assert.deepEqual(
     await cloud.locator('[role="list"] > [role="listitem"]').evaluateAll((els) => els.map((el) => el.dataset.virtual)),
-    ['shared', 'trash'], 'строки-папки стоят в конце корня',
+    ['shared', 'links', 'trash'], 'строки-папки стоят в конце корня',
   );
   assert.equal(await cloud.getByRole('button', { name: 'Tiles' }).count(), 0, 'переключателя вида нет');
   assert.equal(counts().ops, 0, 'пустой раздел диск на сервере не создаёт');
