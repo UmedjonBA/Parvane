@@ -422,6 +422,7 @@ export function createCloudSync(deps: Deps) {
         if (client.cloudIngestSnapshot(id, resp) !== 0) {
           changed = true;
           touch();
+          deps.log(`облако: ${id.slice(0, 8)}… снимок принят (seq ${client.cloudHeadSeq(id)})`);
           // Дерево из снимка — на экран сразу, догон журнала следом
           deps.onChanged();
         }
@@ -440,6 +441,7 @@ export function createCloudSync(deps: Deps) {
       if (r.applied) {
         changed = true;
         touch();
+        deps.log(`облако: ${id.slice(0, 8)}… догнано ${r.applied} операций (seq ${client.cloudHeadSeq(id)})`);
       }
       if (r.authorsBehind) {
         // Ключ автора неизвестен: новое устройство участника — обновить журналы

@@ -44,7 +44,16 @@ export function createDeferredWrite<T>(options: Options<T>) {
     timer = undefined;
     if (!isDirty) return chain;
     isDirty = false;
-    const value = options.snapshot();
+    let value: T | undefined;
+    try {
+      value = options.snapshot();
+    } catch (error) {
+      // Снимок не снялся (движок бросил исключение): отметка остаётся, следующая
+      // правка попробует снова; из таймера исключение иначе ушло бы в никуда
+      isDirty = true;
+      options.onError?.(error);
+      return chain;
+    }
     if (value === undefined) return chain;
     chain = chain.then(() => options.store(value)).catch((error: unknown) => options.onError?.(error));
     return chain;

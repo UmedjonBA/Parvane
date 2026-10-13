@@ -451,7 +451,10 @@ export function createV2Controller(deps: Deps) {
     store: async ({ owner, target, bytes }) => {
       // Движок подменили другим (перезапуск, линковка) — снимок прежнего не
       // пишем; после выхода (`reset`) снимок последнего состояния дописывается
-      if (client && owner !== client) return;
+      if (client && owner !== client) {
+        deps.log('v2: снимок состояния прежнего движка не записан (движок сменён)');
+        return;
+      }
       await target.saveBytesRecord(STATE_BYTES_RECORD, bytes);
       if (hasLegacyState) {
         hasLegacyState = false;
@@ -461,8 +464,15 @@ export function createV2Controller(deps: Deps) {
     onError: (e) => deps.log(`v2: состояние движка не записано: ${String(e)}`),
   });
 
+  let isPersistSkipLogged = false;
   function persist(): Promise<void> {
-    if (client && storage && storageKey) stateWriter.mark();
+    if (client && storage && storageKey) {
+      stateWriter.mark();
+    } else if (!isPersistSkipLogged) {
+      isPersistSkipLogged = true;
+      const has = (value: unknown) => (value ? 'есть' : 'нет');
+      deps.log(`v2: persist пропущен (движок ${has(client)}, хранилище ${has(storage)}, ключ ${has(storageKey)})`);
+    }
     return Promise.resolve();
   }
 
@@ -473,9 +483,13 @@ export function createV2Controller(deps: Deps) {
   /** Состояние движка с диска: байтами либо прежней записью base64. */
   async function loadEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
     const bytes = await target.loadBytesRecord(STATE_BYTES_RECORD);
-    if (bytes) return bytes;
+    if (bytes) {
+      deps.log(`v2: состояние движка с диска (${bytes.length} байт)`);
+      return bytes;
+    }
     const legacy = await target.loadRecord<string>(STATE_RECORD);
     hasLegacyState = Boolean(legacy);
+    deps.log(legacy ? 'v2: состояние движка с диска (прежняя запись base64)' : 'v2: состояния движка на диске нет');
     return legacy ? unb64(legacy) : undefined;
   }
 
@@ -1042,7 +1056,9 @@ export function createV2Controller(deps: Deps) {
     needsLinking: () => needsLinking,
     call,
     withNeeds,
-    persist,
+    // Правки пользователя (дерево, записи плана) видны на экране сразу — на диске они должны быть
+    // раньше, чем экран их покажет (perf A1): иначе перезагрузка в ближайшие 2 с их теряет
+    persist: persistNow,
     loadRecord: async (key) => storage?.loadRecord(key),
     saveRecord: async (key, value) => {
       await storage?.saveRecord(key, value);
@@ -1067,7 +1083,9 @@ export function createV2Controller(deps: Deps) {
     call,
     withNeeds,
     refreshPeerLog,
-    persist,
+    // Правки пользователя (дерево, записи плана) видны на экране сразу — на диске они должны быть
+    // раньше, чем экран их покажет (perf A1): иначе перезагрузка в ближайшие 2 с их теряет
+    persist: persistNow,
     loadRecord: async (key) => storage?.loadRecord(key),
     saveRecord: async (key, value) => {
       await storage?.saveRecord(key, value);

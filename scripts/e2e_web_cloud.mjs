@@ -444,7 +444,8 @@ try {
 } catch (err) {
   if (session?.page) {
     await session.page.screenshot({ path: `${BACKEND_DIR}/cloud-failure.png` }).catch(() => undefined);
-    const tail = (session.logs || []).filter((l) => l.includes('облако') || l.includes('v2:')).slice(-40);
+    const tail = (session.logs || [])
+      .filter((l) => l.includes('облако') || l.includes('v2:') || l.includes('хранилище')).slice(-60);
     console.log(tail.join('\n'));
   }
   throw err;

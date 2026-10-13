@@ -200,7 +200,8 @@ export async function preparePage(context, user, password, options = {}) {
   page.on('console', (message) => {
     const text = message.text();
     if (text.includes('[parvane]') && !text.includes('метод не реализован')) {
-      logs.push(text.slice(0, 300));
+      // Время браузера нам недоступно — ставим своё: разбирать паузы между строками
+      logs.push(`${new Date().toISOString().slice(11, 23)} ${text.slice(0, 300)}`);
       if (logs.length > 400) logs.shift();
     }
     if (/\[parvane\] v2: (готов|у аккаунта уже есть журнал устройств|запуск не удался)/.test(text)) {
