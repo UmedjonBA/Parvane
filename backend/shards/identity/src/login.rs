@@ -257,7 +257,7 @@ pub(crate) async fn do_password_change(pool: &SqlitePool, decoding: &DecodingKey
         anyhow::bail!("новый пароль совпадает со старым");
     }
     let hash = hash_password(&req.new_password)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = parvane_db::begin_write(pool).await?;
     // ID-06: прежние JWT (iat < now) гаснут, кроме токенов этого устройства —
     // владелец, сменивший пароль после компрометации, выкидывает чужие сессии.
     sqlx::query("UPDATE users SET password_hash = ?, password_changed_at = ?, password_changed_dev = ? WHERE username = ?")

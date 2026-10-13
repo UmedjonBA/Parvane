@@ -127,7 +127,7 @@ async fn handle_update(nc: &Client, pool: &SqlitePool, msg: async_nats::Message)
 
         // Все операции в одной транзакции — иначе каждый INSERT делает fsync
         // и вставка 200 символов занимает ~200 секунд.
-        let mut tx = pool.begin().await?;
+        let mut tx = parvane_db::begin_write(pool).await?;
         for op in &event.payload.ops {
             match op {
                 NoteOp::Insert { id, after, ch } => {

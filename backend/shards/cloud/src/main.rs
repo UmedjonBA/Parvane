@@ -239,7 +239,7 @@ pub(crate) async fn store_chunk_raw(
     if raw.len() > max_chunk_bytes() {
         return Err(reject(RejectKind::Limit, format!("чанк больше лимита {} байт", max_chunk_bytes())));
     }
-    let mut tx = pool.begin().await?;
+    let mut tx = parvane_db::begin_write(pool).await?;
     let finalized: Option<(String,)> = sqlx::query_as("SELECT owner FROM files WHERE id = ?")
         .bind(file_id)
         .fetch_optional(&mut *tx)
@@ -384,7 +384,7 @@ pub(crate) async fn finalize_upload(pool: &SqlitePool, owner: &str, p: &Finalize
         return Err(reject(RejectKind::Limit, "слишком много получателей (лимит 256)"));
     }
     let file_id = p.file_id.as_str();
-    let mut tx = pool.begin().await?;
+    let mut tx = parvane_db::begin_write(pool).await?;
     let claim: Option<(String, i64, i64)> =
         sqlx::query_as("SELECT owner, total_chunks, bucket FROM uploads WHERE file_id = ?")
             .bind(file_id)
@@ -657,7 +657,7 @@ pub(crate) async fn release_free_pages(pool: &SqlitePool) {
 /// P-52/C2: удалить файл владельца — метаданные, чанки и гранты. Возвращает
 /// true, если файл принадлежал `owner` и был удалён.
 pub(crate) async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -> Result<bool> {
-    let mut tx = pool.begin().await?;
+    let mut tx = parvane_db::begin_write(pool).await?;
     let res = sqlx::query("DELETE FROM files WHERE id = ? AND owner = ?")
         .bind(file_id)
         .bind(owner)
@@ -683,7 +683,7 @@ pub(crate) async fn delete_file(pool: &SqlitePool, owner: &str, file_id: &str) -
 /// загрузку, со всеми чанками. Только для внутренних путей: откат серверной
 /// копии и копии ссылок облака (spec 022), где право уже проверено.
 pub(crate) async fn delete_blob_any(pool: &SqlitePool, file_id: &str) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = parvane_db::begin_write(pool).await?;
     for sql in [
         "DELETE FROM files WHERE id = ?",
         "DELETE FROM uploads WHERE file_id = ?",

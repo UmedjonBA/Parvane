@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Таймаут ожидания блокировки (P-38).
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -44,9 +44,46 @@ pub async fn connect(db_path: &str) -> Result<SqlitePool> {
     Ok(pool)
 }
 
+/// Пишущая транзакция: `BEGIN IMMEDIATE` берёт блокировку записи сразу. Обычный
+/// `pool.begin()` (DEFERRED) начинает с чтения, и при попытке записать после того,
+/// как другой писатель успел закоммитить, SQLite в WAL отвечает `SQLITE_BUSY_SNAPSHOT`
+/// («database is locked»), не дожидаясь `busy_timeout` — так падали параллельные
+/// `cloud.blob.upload_chunk` одного клиента (14 окт 2026).
+pub async fn begin_write(pool: &SqlitePool) -> sqlx::Result<Transaction<'static, Sqlite>> {
+    pool.begin_with("BEGIN IMMEDIATE").await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn begin_write_serializes_read_then_write() {
+        let dir = std::env::temp_dir().join(format!("parvane-db-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("w.db");
+        let pool = connect(path.to_str().unwrap()).await.unwrap();
+        sqlx::query("CREATE TABLE t (k INTEGER PRIMARY KEY, n INTEGER NOT NULL)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO t (k, n) VALUES (1, 0)").execute(&pool).await.unwrap();
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let pool = pool.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut tx = begin_write(&pool).await.unwrap();
+                let (n,): (i64,) = sqlx::query_as("SELECT n FROM t WHERE k = 1").fetch_one(&mut *tx).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                sqlx::query("UPDATE t SET n = ? WHERE k = 1").bind(n + 1).execute(&mut *tx).await.unwrap();
+                tx.commit().await.unwrap();
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        let (n,): (i64,) = sqlx::query_as("SELECT n FROM t WHERE k = 1").fetch_one(&pool).await.unwrap();
+        assert_eq!(n, 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 
     #[tokio::test]
     async fn connect_enables_wal_and_busy_timeout() {

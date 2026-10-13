@@ -537,7 +537,7 @@ async fn begin_copy(ctx: &V2Ctx, what: &'static str, owner: &str, bucket: i64, s
     }
     let quota = owner_quota_bytes(bucket);
     let file_id = uuid::Uuid::now_v7().to_string();
-    let mut tx = ctx.pool.begin().await.map_err(db_code(what))?;
+    let mut tx = parvane_db::begin_write(&ctx.pool).await.map_err(db_code(what))?;
     if quota > 0 && used_bytes(&mut *tx, owner, bucket).await.map_err(db_code(what))? + size > quota {
         return Err(ErrorCode::Limit);
     }

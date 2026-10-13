@@ -334,7 +334,7 @@ impl Domains {
         let seal = domain::verify_op_seal(&op).map_err(code)?;
         self.author_is_caller(&seal.signer, user).await?;
         let stored = ContainerOp { seq: 0, ..op }.encode_to_vec();
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
         // UPDATE первым — берёт блокировку записи, seq без гонок.
         let (seq,): (i64,) = sqlx::query_as("UPDATE containers SET head_seq = head_seq + 1 WHERE id = ? RETURNING head_seq")
             .bind(&id)
@@ -435,7 +435,7 @@ impl Domains {
         let ev = access.apply(&op, &resolve, &no_groups).map_err(code)?;
 
         let (kind, grantee) = grantee_row(&ev.grantee);
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
         let upd = sqlx::query("UPDATE containers SET grant_version = ?, key_epoch = ? WHERE id = ? AND grant_version = ?")
             .bind(ev.version as i64)
             .bind(ev.key_epoch as i64)
