@@ -41,10 +41,46 @@ export function noteTaskId(marker: string) {
   return `note-${marker}`;
 }
 
+const EMPTY_TASKS: PlannerTask[] = [];
+// Задачи из заметок по id заметки — один проход по задачам на состояние «Плана» (ключ — массив задач:
+// он новый при каждой правке состояния)
+const tasksBySourceCache = new WeakMap<PlannerTask[], Map<string, PlannerTask[]>>();
+const signatureCache = new WeakMap<PlannerTask[], string>();
+
+/** Задачи «Плана» из заметок, по id заметки-источника. */
+export function noteTasksBySource(state: PlannerState): Map<string, PlannerTask[]> {
+  let index = tasksBySourceCache.get(state.tasks);
+  if (index) return index;
+  index = new Map();
+  state.tasks.forEach((task) => {
+    const chat = task.source?.chat;
+    if (!chat?.startsWith(NOTE_SOURCE_PREFIX)) return;
+    const noteId = chat.slice(NOTE_SOURCE_PREFIX.length);
+    const list = index!.get(noteId);
+    if (list) list.push(task);
+    else index!.set(noteId, [task]);
+  });
+  tasksBySourceCache.set(state.tasks, index);
+  return index;
+}
+
 /** Задачи «Плана», пришедшие из этой заметки. */
 export function getNoteTasks(state: PlannerState, noteId: string) {
-  const source = noteSourceOf(noteId);
-  return state.tasks.filter((task) => task.source?.chat === source);
+  return noteTasksBySource(state).get(noteId) || EMPTY_TASKS;
+}
+
+/** Подпись задач из заметок: та же строка — в заметках править нечего (галочки и удаления не менялись).
+ * Считается один раз на состояние «Плана». */
+export function noteTasksSignature(state: PlannerState) {
+  const cached = signatureCache.get(state.tasks);
+  if (cached !== undefined) return cached;
+  const parts: string[] = [];
+  state.tasks.forEach((task) => {
+    if (task.source?.chat?.startsWith(NOTE_SOURCE_PREFIX)) parts.push(`${task.id}:${task.status}`);
+  });
+  const signature = parts.join('\n');
+  signatureCache.set(state.tasks, signature);
+  return signature;
 }
 
 /** Пункты заметки с датой: текст с проставленными метками и план задач по ним. */
@@ -71,36 +107,72 @@ export function planNoteTasks(text: string, ctx: QuickContext, makeId?: () => st
   return { text: next, tasks };
 }
 
+const PLAN_FIELDS = ['name', 'day', 'start', 'minutes', 'due'] as const;
+
+function fieldsOf(plan: NoteTaskPlan): Pick<PlannerTask, typeof PLAN_FIELDS[number]> {
+  return {
+    name: plan.name, day: plan.day, start: plan.start, minutes: plan.minutes, due: plan.due,
+  };
+}
+
+/** Есть ли что править в «Плане» по пунктам заметки: без копии состояния (прежде — `structuredClone` всего
+ * плана и два `JSON.stringify` задач на каждое сохранение). */
+export function hasNoteTaskChanges(state: PlannerState, noteId: string, tasks: NoteTaskPlan[]) {
+  const existing = getNoteTasks(state, noteId);
+  const markers = new Set(tasks.map(({ marker }) => marker));
+  if (existing.some((task) => !markers.has(markerOfTask(task)))) return true;
+  const byId = new Map(state.tasks.map((task) => [task.id, task]));
+  return tasks.some((plan) => {
+    const task = byId.get(noteTaskId(plan.marker));
+    if (!task) return true;
+    const fields = fieldsOf(plan);
+    return PLAN_FIELDS.some((key) => task[key] !== fields[key]) || (task.status === 'done') !== plan.isDone;
+  });
+}
+
 /** Привести задачи «Плана» к пунктам заметки: создать, поправить, убрать исчезнувшие. `true` — были правки. */
 export function applyNoteTasks(state: PlannerState, noteId: string, tasks: NoteTaskPlan[]) {
   const source = noteSourceOf(noteId);
   const markers = new Set(tasks.map(({ marker }) => marker));
-  const before = JSON.stringify(state.tasks);
-  state.tasks = state.tasks.filter((task) => task.source?.chat !== source || markers.has(markerOfTask(task)));
+  const kept = state.tasks.filter((task) => task.source?.chat !== source || markers.has(markerOfTask(task)));
+  let hasChanges = kept.length !== state.tasks.length;
+  // Массив задач всегда новый: индексы по прежнему массиву (`noteTasksBySource`) не устаревают
+  state.tasks = kept;
+  const byId = new Map(state.tasks.map((task) => [task.id, task]));
+  let minRank = Math.min(0, ...state.tasks.map(({ rank }) => rank));
   tasks.forEach((plan) => {
     const id = noteTaskId(plan.marker);
-    const existing = state.tasks.find((task) => task.id === id);
-    const fields: Partial<PlannerTask> = {
-      name: plan.name, day: plan.day, start: plan.start, minutes: plan.minutes, due: plan.due,
-    };
+    const existing = byId.get(id);
+    const fields = fieldsOf(plan);
     if (existing) {
-      Object.assign(existing, fields);
-      if ((existing.status === 'done') !== plan.isDone) existing.status = plan.isDone ? 'done' : 'queue';
+      PLAN_FIELDS.forEach((key) => {
+        if (existing[key] === fields[key]) return;
+        (existing as Record<string, unknown>)[key] = fields[key];
+        hasChanges = true;
+      });
+      if ((existing.status === 'done') !== plan.isDone) {
+        existing.status = plan.isDone ? 'done' : 'queue';
+        hasChanges = true;
+      }
       return;
     }
-    state.tasks.push({
+    minRank -= 1;
+    const created: PlannerTask = {
       id,
       description: '',
       steps: [],
       status: plan.isDone ? 'done' : 'queue',
       project: '',
-      rank: Math.min(0, ...state.tasks.map(({ rank }) => rank)) - 1,
+      rank: minRank,
       source: { chat: source, opId: markerToOpId(plan.marker) },
       ...fields,
       name: plan.name,
-    });
+    };
+    state.tasks.push(created);
+    byId.set(id, created);
+    hasChanges = true;
   });
-  return JSON.stringify(state.tasks) !== before;
+  return hasChanges;
 }
 
 /** Обратная сторона: галочки пунктов по задачам «Плана»; пункт задачи, удалённой в «Плане», убирается.

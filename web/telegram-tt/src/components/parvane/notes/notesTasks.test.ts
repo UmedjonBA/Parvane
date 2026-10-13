@@ -4,7 +4,8 @@ import type { QuickContext } from '../planner/plannerQuick';
 
 import { createEmptyPlannerState } from '../planner/plannerModel';
 import {
-  applyNoteTasks, applyPlannerToNote, getNoteTasks, markerOfTask, noteTaskId, planNoteTasks,
+  applyNoteTasks, applyPlannerToNote, getNoteTasks, hasNoteTaskChanges, markerOfTask, noteTaskId, noteTasksBySource,
+  noteTasksSignature, planNoteTasks,
 } from './notesTasks';
 
 const CTX: QuickContext = {
@@ -89,5 +90,42 @@ describe('заметки: задачи плана → пункты', () => {
     expect(afterDelete).toContain('проверить обе GPU');
     // Метка, которой задача ещё не выдавалась, удалением не считается
     expect(applyPlannerToNote(text, [], new Set())).toBe(text);
+  });
+});
+
+describe('заметки: индекс задач и сухая проверка правок', () => {
+  const plans = () => planNoteTasks(NOTE, CTX, ids()).tasks;
+
+  it('индекс по заметке считается один раз на массив задач, подпись меняется только от задач из заметок', () => {
+    const state = createEmptyPlannerState();
+    applyNoteTasks(state, 'n1', plans());
+    const first = noteTasksBySource(state);
+    expect(first.get('n1')!.map(({ id }) => id)).toEqual(['note-ta001', 'note-ta002']);
+    expect(noteTasksBySource(state)).toBe(first);
+    const signature = noteTasksSignature(state);
+    expect(noteTasksSignature(state)).toBe(signature);
+    // Чужая задача подпись не трогает
+    state.tasks = [...state.tasks, {
+      id: 'x', name: 'своя', description: '', steps: [], status: 'queue', project: '', rank: 0,
+    }];
+    expect(noteTasksSignature(state)).toBe(signature);
+    expect(getNoteTasks(state, 'n1')).toHaveLength(2);
+    state.tasks = state.tasks.map((task) => (task.id === 'note-ta001' ? { ...task, status: 'done' } : task));
+    expect(noteTasksSignature(state)).not.toBe(signature);
+  });
+
+  it('есть ли что править — без копии состояния, тот же ответ, что у применения', () => {
+    const state = createEmptyPlannerState();
+    const tasks = plans();
+    expect(hasNoteTaskChanges(state, 'n1', tasks)).toBe(true);
+    expect(applyNoteTasks(state, 'n1', tasks)).toBe(true);
+    expect(hasNoteTaskChanges(state, 'n1', tasks)).toBe(false);
+    expect(applyNoteTasks(state, 'n1', tasks)).toBe(false);
+    const done = tasks.map((task) => (task.marker === 'ta001' ? { ...task, isDone: true } : task));
+    expect(hasNoteTaskChanges(state, 'n1', done)).toBe(true);
+    expect(applyNoteTasks(state, 'n1', done)).toBe(true);
+    expect(hasNoteTaskChanges(state, 'n1', done.slice(1))).toBe(true);
+    expect(applyNoteTasks(state, 'n1', done.slice(1))).toBe(true);
+    expect(state.tasks.map(({ id }) => id)).toEqual(['note-ta002']);
   });
 });
