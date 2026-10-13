@@ -36,6 +36,7 @@ import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
+import { loadProtocol } from './v2/engine';
 import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
 import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
 import { createMessageIndex } from './v2/messageIndex';
@@ -679,6 +680,9 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
   onUpdate = _onUpdate;
   // eslint-disable-next-line no-console
   console.info('[parvane] initApi вызван');
+  // perf B1: WASM-движок (2,6 МБ) качается и инициализируется параллельно
+  // чтению хранилища и входу, а не на первом вызове движка
+  void loadProtocol().catch(() => undefined);
 
   sendUpdate({ '@type': 'updateApiReady' });
   sendUpdate({ '@type': 'updateConnectionState', connectionState: 'connectionStateConnecting' });
@@ -963,7 +967,12 @@ const BUNDLE_HISTORY_MIN_MS = 30 * 60 * 1000;
 // кладёт туда свежий снимок истории
 const BUNDLE_RECHECK_DELAYS_MS = [60 * 1000, 5 * 60 * 1000];
 const BUNDLE_APPLIED_KEY = 'parvane:bundle-history:';
+// Опрос ответа владельца из Telegram: первый через 3 с, дальше интервал растёт
+// ×1,5 до 30 с (вместо запроса каждые 3 с четверть часа); по истечении
+// TELEGRAM_KEY_WAIT_MS опрос останавливается («истекло», можно попросить снова)
 const TELEGRAM_KEY_POLL_MS = 3000;
+const TELEGRAM_KEY_POLL_MAX_MS = 30000;
+const TELEGRAM_KEY_POLL_GROWTH = 1.5;
 const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
 
 type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
@@ -1085,9 +1094,21 @@ function setTelegramRecoveryState(state: TelegramRecoveryState) {
 
 function stopTelegramRecovery(state: TelegramRecoveryState) {
   telegramRecovery.generation++;
-  window.clearInterval(telegramRecovery.timer);
+  window.clearTimeout(telegramRecovery.timer);
   telegramRecovery.timer = undefined;
   setTelegramRecoveryState(state);
+}
+
+/** Следующий опрос через `delayMs`; пока ждём ответа — интервал растёт. */
+function scheduleTelegramPoll(generation: number, startedAt: number, delayMs: number) {
+  telegramRecovery.timer = window.setTimeout(() => {
+    telegramRecovery.timer = undefined;
+    void pollTelegramRecovery(generation, startedAt).then(() => {
+      if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting') return;
+      const next = Math.min(TELEGRAM_KEY_POLL_MAX_MS, Math.round(delayMs * TELEGRAM_KEY_POLL_GROWTH));
+      scheduleTelegramPoll(generation, startedAt, next);
+    });
+  }, delayMs);
 }
 
 // Новое устройство: бот просит владельца ответить ключом восстановления, ответ
@@ -1106,9 +1127,7 @@ async function startTelegramRecovery(again: boolean) {
   logDebug('ключ восстановления: бот спросит владельца в Telegram');
   const startedAt = Date.now();
   setTelegramRecoveryState('waiting');
-  telegramRecovery.timer = window.setInterval(() => {
-    void pollTelegramRecovery(generation, startedAt);
-  }, TELEGRAM_KEY_POLL_MS);
+  scheduleTelegramPoll(generation, startedAt, TELEGRAM_KEY_POLL_MS);
 }
 
 async function pollTelegramRecovery(generation: number, startedAt: number) {
@@ -1129,7 +1148,7 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
     if (!reply.pending) void v2Controller.requestTelegramKey(false);
     return;
   }
-  window.clearInterval(telegramRecovery.timer);
+  window.clearTimeout(telegramRecovery.timer);
   telegramRecovery.timer = undefined;
   setTelegramRecoveryState('joining');
   logDebug('ключ восстановления: получен ответ владельца из Telegram');
