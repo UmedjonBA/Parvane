@@ -217,8 +217,62 @@ function healthGoalsChange(goals: PlannerHealthGoals): PlannerChange {
   };
 }
 
-/** JSON движка → состояние для экранов. */
-export function fromEngineState(engine: EngineState): PlannerState {
+// JSON записи считается один раз на объект: записи состояния не меняются на месте (правка идёт по глубокой
+// копии), поэтому по нему и сравниваются версии одной записи — при разборе состояния движка и в `diffChanges`
+const jsonByObject = new WeakMap<object, string>();
+
+/** `JSON.stringify` объекта записи с кэшем по самому объекту. */
+export function stableJson(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value);
+  let json = jsonByObject.get(value);
+  if (json === undefined) {
+    json = JSON.stringify(value);
+    jsonByObject.set(value, json);
+  }
+  return json;
+}
+
+// Записи с тем же id и тем же JSON берутся из прежнего состояния: строки и клетки, обёрнутые в `memo`, после эха
+// движка не перерисовываются, а индексы по записям (`WeakMap`) продолжают действовать
+function reuseById<T extends { id: string }>(next: T[], previous: T[] | undefined): T[] {
+  if (!previous) return next;
+  if (!next.length || !previous.length) return next.length === previous.length ? previous : next;
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  let isSame = previous.length === next.length;
+  const result = next.map((item, index) => {
+    const before = byId.get(item.id);
+    const kept = before && stableJson(before) === stableJson(item) ? before : item;
+    if (kept !== previous[index]) isSame = false;
+    return kept;
+  });
+  return isSame ? previous : result;
+}
+
+function reuseByKey<T extends object>(
+  next: Record<string, T>, previous: Record<string, T> | undefined,
+): Record<string, T> {
+  if (!previous) return next;
+  const nextKeys = Object.keys(next);
+  let isSame = nextKeys.length === Object.keys(previous).length;
+  const result: Record<string, T> = {};
+  nextKeys.forEach((key) => {
+    const before = previous[key];
+    const kept = before && stableJson(before) === stableJson(next[key]) ? before : next[key];
+    if (kept !== before) isSame = false;
+    result[key] = kept;
+  });
+  return isSame ? previous : result;
+}
+
+function reuseValue<T>(next: T, previous: T | undefined): T {
+  return previous !== undefined && stableJson(previous) === stableJson(next) ? previous : next;
+}
+
+/**
+ * JSON движка → состояние для экранов. `previous` — прежнее состояние экранов: записи, не изменившиеся по
+ * JSON, берутся из него теми же объектами.
+ */
+export function fromEngineState(engine: EngineState, previous?: PlannerState): PlannerState {
   const empty = createEmptyPlannerState();
   const sorted = [...engine.lists].sort((a, b) => a.order - b.order || (a.name < b.name ? -1 : 1));
   // Задачи находят список по id, поэтому одноимённые списки (созданы на двух устройствах
@@ -260,7 +314,7 @@ export function fromEngineState(engine: EngineState): PlannerState {
   const s = engine.settings;
   const goals = goalValuesFrom(engine.goals);
   const healthGoalsRecord = engine.health?.find((record) => record.id === HEALTH_GOALS_ID);
-  return {
+  const built: PlannerState = {
     version: 1,
     tasks,
     events: engine.events.map((e): PlannerEvent => {
@@ -301,6 +355,22 @@ export function fromEngineState(engine: EngineState): PlannerState {
     quickLines: normalizeQuickLines((engine.quickLines || []).map(({ hidden, ...line }) => ({
       ...line, isHidden: hidden,
     }))),
+  };
+  if (!previous) return built;
+  return {
+    ...built,
+    tasks: reuseById(built.tasks, previous.tasks),
+    events: reuseById(built.events, previous.events),
+    lists: reuseById(built.lists, previous.lists),
+    projects: reuseValue(built.projects, previous.projects),
+    nutrition: reuseByKey(built.nutrition, previous.nutrition),
+    goals: reuseValue(built.goals, previous.goals),
+    goalPeriods: reuseById(built.goalPeriods, previous.goalPeriods),
+    settings: reuseValue(built.settings, previous.settings),
+    health: reuseById(built.health, previous.health),
+    healthGoals: reuseValue(built.healthGoals, previous.healthGoals),
+    learned: reuseById(built.learned, previous.learned),
+    quickLines: reuseById(built.quickLines, previous.quickLines),
   };
 }
 

@@ -327,6 +327,46 @@ describe('планировщик ↔ движок (spec 010)', () => {
   });
 });
 
+describe('планировщик ↔ движок: повторный разбор переиспользует объекты (C1)', () => {
+  it('записи с тем же JSON — те же объекты, изменённые — новые; нетронутые коллекции — те же массивы', () => {
+    const previous = fromEngineState(ENGINE);
+    const same = fromEngineState(structuredClone(ENGINE), previous);
+    expect(same).not.toBe(previous);
+    expect(same.tasks).toBe(previous.tasks);
+    expect(same.events).toBe(previous.events);
+    expect(same.lists).toBe(previous.lists);
+    expect(same.nutrition).toBe(previous.nutrition);
+    expect(same.goals).toBe(previous.goals);
+    expect(same.goalPeriods).toBe(previous.goalPeriods);
+    expect(same.settings).toBe(previous.settings);
+    expect(same.health).toBe(previous.health);
+    expect(same.healthGoals).toBe(previous.healthGoals);
+    expect(same.projects).toBe(previous.projects);
+
+    const engine = structuredClone(ENGINE);
+    engine.tasks[0].status = 'done';
+    engine.tasks.push({ ...engine.tasks[1], id: 't9', name: 'Новая' });
+    engine.nutrition[0].waterMl = 750;
+    const next = fromEngineState(engine, previous);
+    expect(next.tasks).not.toBe(previous.tasks);
+    expect(next.tasks[0]).not.toBe(previous.tasks[0]);
+    expect(next.tasks[0].status).toBe('done');
+    expect(next.tasks[1]).toBe(previous.tasks[1]);
+    expect(next.tasks[2].id).toBe('t9');
+    expect(next.events).toBe(previous.events);
+    expect(next.nutrition).not.toBe(previous.nutrition);
+    expect(next.nutrition['2026-10-08'].waterMl).toBe(750);
+    // Разбор с прежним состоянием даёт то же, что разбор без него
+    expect(next).toEqual(fromEngineState(engine));
+    // Пропавшая запись — массив новый, оставшиеся объекты прежние
+    const shorter = structuredClone(ENGINE);
+    shorter.tasks.pop();
+    const dropped = fromEngineState(shorter, previous);
+    expect(dropped.tasks).toHaveLength(previous.tasks.length - 1);
+    expect(dropped.tasks[0]).toBe(previous.tasks[0]);
+  });
+});
+
 describe('планировщик ↔ движок: здоровье (spec 020)', () => {
   const ENGINE_EMPTY: EngineState = {
     tasks: [], events: [], lists: [], nutrition: [], settings: null, goals: null, headSeq: 0, sizeBytes: 0,

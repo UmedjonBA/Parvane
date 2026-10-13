@@ -25,7 +25,7 @@ import {
 } from './plannerModel';
 import {
   getHasQuickLines, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus,
-  loadPlanner, undoPlanner, updatePlanner,
+  loadPlanner, setPlannerActive, undoPlanner, updatePlanner,
 } from './plannerStore';
 import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
 
@@ -154,6 +154,12 @@ const Planner = () => {
   useEffect(() => {
     void loadPlanner(currentUserId);
   }, [currentUserId]);
+
+  // Раздел на экране: провайдер опрашивает движок чаще, скрыт — реже
+  useEffect(() => {
+    setPlannerActive(true);
+    return () => setPlannerActive(false);
+  }, []);
 
   // Смена суток при открытом «Плане»: «сегодня» и завершённость вчерашнего дня обновляются сами
   useEffect(() => {

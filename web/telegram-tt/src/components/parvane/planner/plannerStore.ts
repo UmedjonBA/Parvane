@@ -27,6 +27,10 @@ type StateResult = {
   sizeBytes: number;
   hasPending: boolean;
   error?: string;
+  // Провайдер новой сборки отдаёт сырую строку JSON состояния и номер ревизии: по ним без разбора видно,
+  // что состояние не изменилось. У провайдера прежней сборки полей нет — сравнивается отпечаток
+  raw?: string;
+  revision?: number;
 };
 type LegacyResult = { status: 'ok'; state?: unknown } | { status: 'not-ready' };
 
@@ -48,6 +52,10 @@ const [getHasQuickLines, setHasQuickLines] = createSignal(false);
 let loadPromise: Promise<void> | undefined;
 let loadedUserId: string | undefined;
 let stateBeforeLastChange: PlannerState | undefined;
+// Чем было состояние движка, которое показано сейчас: та же строка / ревизия / отпечаток — перечитка (раз в
+// 8 с по синку, при открытии раздела) не трогает сигнал состояния, экраны не перерисовываются. Сбрасывается
+// своей правкой: после неё показан черновик, и следующий ответ движка применяется в любом случае
+let appliedEngine: { raw?: string; revision?: number; fingerprint?: string } | undefined;
 let isListening = false;
 let isMigrating = false;
 // Запись словаря правок на устройстве проверяется один раз за загрузку, когда «План» готов
@@ -80,11 +88,14 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
   if (result.state && result.status !== 'needs-linking' && !result.hasPending) {
     // Пока у провайдера есть непревращённые в операцию правки, состояние движка
     // отстаёт от черновика экрана — не затираем его
-    try {
-      setPlannerState(fromEngineState(result.state));
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[parvane] планировщик: состояние движка не разобрано', err);
+    if (!isAppliedEngineState(result)) {
+      try {
+        setPlannerState(fromEngineState(result.state, getPlannerState()));
+        appliedEngine = engineMarkOf(result);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[parvane] планировщик: состояние движка не разобрано', err);
+      }
     }
     setIsPlannerLoaded(true);
   } else if (result.status === 'ready' || result.status === 'offline' || result.status === 'no-key') {
@@ -108,6 +119,33 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
     }, LINKING_POLL_MS);
   }
   return result;
+}
+
+// Отметка состояния движка: строка JSON либо ревизия, иначе — отпечаток разобранного JSON (одна сериализация
+// дешевле разбора состояния и перерисовки экранов)
+function engineMarkOf(result: StateResult): NonNullable<typeof appliedEngine> {
+  if (result.raw !== undefined) return { raw: result.raw };
+  if (result.revision !== undefined) return { revision: result.revision };
+  return { fingerprint: JSON.stringify(result.state) };
+}
+
+function isAppliedEngineState(result: StateResult) {
+  if (!appliedEngine || !getIsPlannerLoaded()) return false;
+  if (result.raw !== undefined) return result.raw === appliedEngine.raw;
+  if (result.revision !== undefined) return result.revision === appliedEngine.revision;
+  return appliedEngine.fingerprint !== undefined && JSON.stringify(result.state) === appliedEngine.fingerprint;
+}
+
+/**
+ * Раздел «План» на экране либо нет: провайдер новой сборки реже опрашивает движок, пока раздел скрыт.
+ * У провайдера прежней сборки метода нет — вызов просто не удаётся.
+ */
+export function setPlannerActive(isActive: boolean) {
+  try {
+    void callParvane('parvanePlannerSetActive', isActive).catch(() => undefined);
+  } catch {
+    // Метода нет
+  }
 }
 
 // Данные этапа 1 (FR-008): запись устройства → изменения одной партией, затем маркер
@@ -148,7 +186,7 @@ function migrateLearned() {
   draft.learned = learnStoreToWords(mergeLearnStores(learnStoreFromWords(previous.learned), local));
   // «Отменить» прежней правки вернуло бы и состояние без словаря
   stateBeforeLastChange = undefined;
-  setPlannerState(draft);
+  setLocalState(draft);
   sendChanges(diffChanges(previous, draft));
   resetLearned(loadedUserId);
 }
@@ -174,7 +212,7 @@ function migrateQuickHistory() {
   draft.quickLines = historyToLines(mergeHistories(historyFromLines(previous.quickLines), local), previous.quickLines);
   // «Отменить» прежней правки вернуло бы и состояние без истории
   stateBeforeLastChange = undefined;
-  setPlannerState(draft);
+  setLocalState(draft);
   sendChanges(diffChanges(previous, draft));
   resetHistory(loadedUserId);
 }
@@ -210,6 +248,12 @@ export function loadPlanner(userId?: string) {
   return loadPromise;
 }
 
+// Черновик экрана: показан он, а не состояние движка — следующий ответ движка применяется обязательно
+function setLocalState(state: PlannerState) {
+  appliedEngine = undefined;
+  setPlannerState(state);
+}
+
 function sendChanges(changes: PlannerChange[]) {
   if (!changes.length) return;
   void callParvane('parvanePlannerApply', { changes }).catch((err: unknown) => {
@@ -224,7 +268,7 @@ export function updatePlanner(mutate: (draft: PlannerState) => void, noticeText?
   const draft = structuredClone(previous);
   mutate(draft);
   stateBeforeLastChange = previous;
-  setPlannerState(draft);
+  setLocalState(draft);
   if (noticeText) publishNotice({ text: noticeText, canUndo: true });
   sendChanges(diffChanges(previous, draft));
 }
@@ -234,7 +278,7 @@ export function undoPlanner(noticeText: string) {
   const current = getPlannerState();
   const target = stateBeforeLastChange;
   stateBeforeLastChange = undefined;
-  setPlannerState(target);
+  setLocalState(target);
   publishNotice({ text: noticeText, canUndo: false });
   sendChanges(diffChanges(current, target));
 }
@@ -262,6 +306,7 @@ function resetPlanner() {
   linkingTimer = undefined;
   loadPromise = undefined;
   stateBeforeLastChange = undefined;
+  appliedEngine = undefined;
   isLearnedMigrated = false;
   setHasQuickLines(false);
   setIsPlannerLoaded(false);
