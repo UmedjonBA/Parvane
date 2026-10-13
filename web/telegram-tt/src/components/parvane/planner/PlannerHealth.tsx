@@ -10,9 +10,9 @@ import {
   formatDayShort, formatDuration, formatHours, formatSpan, formatWeekday,
 } from './plannerFormat';
 import {
-  applyQuickDraft, clockDifference, formatPace, getActiveMinutes, getClockGoal, getDailyRecord, getDailySeries,
-  getLastDays, getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES,
-  SLEEP_ROUTINE_DRIFTING_SPREAD, SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, wrapClock,
+  applyQuickDraft, clockDifference, formatPace, getClockGoal, getDailyRecord, getDailySeries, getLastDays,
+  getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES, SLEEP_ROUTINE_DRIFTING_SPREAD,
+  SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, sumActiveMinutes, wrapClock,
 } from './plannerHealth';
 import {
   addDays, fromDayKey, getGoalsForDay, getNutrientTotal, toTime,
@@ -108,14 +108,54 @@ function share(value: number, goal?: number) {
   return goal ? Math.min(1, value / goal) * PERCENT : 0;
 }
 
+type TextFormProps = {
+  id: string;
+  placeholder: string;
+  label: string;
+  buttonText: string;
+  buttonClassName: string;
+  // `true` — строка принята, поле очищается
+  onSubmit: (text: string) => boolean;
+};
+
+// Строка ввода с кнопкой («сон дня», «цели»): набираемый текст — состояние поля, а не экрана, иначе каждый
+// символ перерисовывал бы весь экран «Здоровья»
+const HealthTextForm = memo(({
+  id, placeholder, label, buttonText, buttonClassName, onSubmit,
+}: TextFormProps) => {
+  const [text, setText] = useState('');
+
+  const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setText(e.currentTarget.value);
+  });
+
+  const handleSubmit = useLastCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    if (onSubmit(text)) setText('');
+  });
+
+  return (
+    <form className={styles.healthGoalForm} onSubmit={handleSubmit}>
+      <input
+        id={id}
+        className={buildClassName('form-control', styles.fieldInput)}
+        type="text"
+        value={text}
+        placeholder={placeholder}
+        aria-label={label}
+        autoComplete="off"
+        onChange={handleChange}
+      />
+      <button type="submit" className={buttonClassName} disabled={!text.trim()}>{buttonText}</button>
+    </form>
+  );
+});
+
 // «Здоровье» (spec 020): питание, вода и тело, сон, активность, калории недели и цели — сводкой дня; всё
 // вводится текстом
 const PlannerHealth = ({
   state, day, today, onExample, onOpenSettings,
 }: OwnProps) => {
-  const [goalText, setGoalText] = useState('');
-  const [sleepText, setSleepText] = useState('');
-
   const lang = useLang();
 
   // Примеры строк — на языке интерфейса: их разбирает словарь того же языка
@@ -144,14 +184,21 @@ const PlannerHealth = ({
   const knownKcal = kcalSeries.filter((value): value is number => value !== undefined);
   const kcalAverage = knownKcal.length ? knownKcal.reduce((a, b) => a + b, 0) / knownKcal.length : undefined;
 
-  const weight = getLatestRecord(state, 'weight', day);
-  const weightBefore = weight && getLatestRecord(state, 'weight', addDays(weight.day, -WEEK));
-  const weightChange = weight && weightBefore && weightBefore.id !== weight.id
-    ? weight.value - weightBefore.value : undefined;
+  // Последние записи тела — одним вычислением на состояние и день
+  const {
+    weight, weightChange, pressure, pulse,
+  } = useMemo(() => {
+    const latest = getLatestRecord(state, 'weight', day);
+    const before = latest && getLatestRecord(state, 'weight', addDays(latest.day, -WEEK));
+    return {
+      weight: latest,
+      weightChange: latest && before && before.id !== latest.id ? latest.value - before.value : undefined,
+      pressure: getLatestRecord(state, 'pressure', day),
+      pulse: getLatestRecord(state, 'pulse', day),
+    };
+  }, [state, day]);
   const weightDays = useMemo(() => getLastDays(day, WEIGHT_DAYS), [day]);
   const weightSeries = useMemo(() => getDailySeries(state, 'weight', weightDays), [state, weightDays]);
-  const pressure = getLatestRecord(state, 'pressure', day);
-  const pulse = getLatestRecord(state, 'pulse', day);
   const mood = getDailyRecord(state, 'mood', day);
 
   const sleep = getDailyRecord(state, 'sleep', day);
@@ -169,7 +216,7 @@ const PlannerHealth = ({
   const steps = getDailyRecord(state, 'steps', day)?.value || 0;
   const stepSeries = useMemo(() => getDailySeries(state, 'steps', week), [state, week]);
   const workouts = useMemo(() => getWorkouts(state, week), [state, week]);
-  const activeMinutes = useMemo(() => getActiveMinutes(state, week), [state, week]);
+  const activeMinutes = useMemo(() => sumActiveMinutes(workouts), [workouts]);
 
   const handleExample = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     onExample(e.currentTarget.dataset.text!);
@@ -183,13 +230,8 @@ const PlannerHealth = ({
     onExample(lang('PlannerSleepRoutineGoalExample'));
   });
 
-  const handleSleepText = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setSleepText(e.currentTarget.value);
-  });
-
   // Сон дня экрана: ввод через «+» пишет в сегодняшний день, а режим складывается и из прошлых ночей
-  const handleSleepSubmit = useLastCallback((e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSleepSubmit = useLastCallback((sleepText: string) => {
     const draft = parseQuickInput(sleepText, {
       today: day,
       nowMinutes: 0,
@@ -200,12 +242,12 @@ const PlannerHealth = ({
     });
     if (draft.error || draft.kind !== 'sleep') {
       showPlannerNotice(lang('PlannerHealthSleepDayBad'));
-      return;
+      return false;
     }
     updatePlanner((next) => {
       applyQuickDraft(next, draft, day);
     }, lang('PlannerNoticeAdded', { name: lang('PlannerHealthSleep') }));
-    setSleepText('');
+    return true;
   });
 
   const handleAddWorkout = useLastCallback(() => {
@@ -243,13 +285,8 @@ const PlannerHealth = ({
     }, lang('PlannerNoticeHealthDeleted'));
   });
 
-  const handleGoalText = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setGoalText(e.currentTarget.value);
-  });
-
   // Та же грамматика, что у строки «цель …» в окне ввода
-  const handleGoalSubmit = useLastCallback((e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoalSubmit = useLastCallback((goalText: string) => {
     const draft = parseQuickInput(goalText, {
       today,
       nowMinutes: 0,
@@ -260,12 +297,12 @@ const PlannerHealth = ({
     });
     if (draft.error) {
       showPlannerNotice(lang('PlannerHealthGoalsBad'));
-      return;
+      return false;
     }
     updatePlanner((next) => {
       applyQuickDraft(next, draft, today);
     }, lang('PlannerNoticeGoalsSaved'));
-    setGoalText('');
+    return true;
   });
 
   // Столбики недели: значение над столбиком, пунктир цели, день экрана обведён
@@ -811,19 +848,14 @@ const PlannerHealth = ({
             {lang('PlannerHealthSleepAdd')}
           </button>
         )}
-        <form className={styles.healthGoalForm} onSubmit={handleSleepSubmit}>
-          <input
-            id="planner-health-sleep"
-            className={buildClassName('form-control', styles.fieldInput)}
-            type="text"
-            value={sleepText}
-            placeholder={lang('PlannerHealthSleepDayPlaceholder')}
-            aria-label={lang('PlannerHealthSleepDayLabel')}
-            autoComplete="off"
-            onChange={handleSleepText}
-          />
-          <button type="submit" className={styles.btn} disabled={!sleepText.trim()}>{lang('Save')}</button>
-        </form>
+        <HealthTextForm
+          id="planner-health-sleep"
+          placeholder={lang('PlannerHealthSleepDayPlaceholder')}
+          label={lang('PlannerHealthSleepDayLabel')}
+          buttonText={lang('Save')}
+          buttonClassName={styles.btn}
+          onSubmit={handleSleepSubmit}
+        />
         {renderBars(
           sleepSeries, formatSpan, 'sleep', styles.kindSleep, healthGoals.sleepMinutes,
           (value) => value < SHORT_SLEEP_MINUTES,
@@ -909,21 +941,14 @@ const PlannerHealth = ({
             }),
           ].filter(Boolean).join(' · ')}
         </p>
-        <form className={styles.healthGoalForm} onSubmit={handleGoalSubmit}>
-          <input
-            id="planner-health-goals"
-            className={buildClassName('form-control', styles.fieldInput)}
-            type="text"
-            value={goalText}
-            placeholder={lang('PlannerHealthGoalsPlaceholder')}
-            aria-label={lang('PlannerHealthGoalsText')}
-            autoComplete="off"
-            onChange={handleGoalText}
-          />
-          <button type="submit" className={buildClassName(styles.btn, styles.btnAccent)} disabled={!goalText.trim()}>
-            {lang('PlannerHealthGoalsApply')}
-          </button>
-        </form>
+        <HealthTextForm
+          id="planner-health-goals"
+          placeholder={lang('PlannerHealthGoalsPlaceholder')}
+          label={lang('PlannerHealthGoalsText')}
+          buttonText={lang('PlannerHealthGoalsApply')}
+          buttonClassName={buildClassName(styles.btn, styles.btnAccent)}
+          onSubmit={handleGoalSubmit}
+        />
       </section>
     </div>
   );
