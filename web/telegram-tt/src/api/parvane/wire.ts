@@ -55,6 +55,9 @@ export type WireMessageContent = {
   // SHA-256, получатель качает блоб анонимным каналом без гранта на себя
   capability?: string;
   file_nonce?: string;
+  // Миниатюра фото/видео (perf A10): JPEG ≤ 320 px и ≤ 16 КиБ, base64 —
+  // `Media.thumbnail` схемы v2, внутри шифрования; старые сообщения — без неё
+  thumbnail?: string;
   group?: string;
   session_key?: string;
   epoch?: number;
