@@ -128,10 +128,14 @@ export function canMoveInto(nodes: CloudNode[], movedIds: string[], target?: str
   return !movedIds.some((id) => targetPath.has(id));
 }
 
+// Сравнение имён с числами по значению («Фото 2» раньше «Фото 10»); один сравниватель на модуль —
+// `localeCompare` с параметрами создавал бы его на каждое сравнение
+const nameCollator = new Intl.Collator(undefined, { numeric: true });
+
 /** Папки выше файлов; дальше — по выбранному полю, при равенстве — по имени. */
 export function sortNodes(nodes: CloudNode[], sort: CloudSort) {
   const direction = sort.isDescending ? -1 : 1;
-  const compareName = (a: CloudNode, b: CloudNode) => a.name.localeCompare(b.name, undefined, { numeric: true });
+  const compareName = (a: CloudNode, b: CloudNode) => nameCollator.compare(a.name, b.name);
   return nodes.slice().sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
     let result = 0;
@@ -180,6 +184,35 @@ export function usageOf(nodes: CloudNode[]) {
 /** Размер папки со всем вложенным. */
 export function sizeOf(nodes: CloudNode[], id: string) {
   return subtreeOf(nodes, id).reduce((sum, n) => sum + n.size, 0);
+}
+
+export type FolderStats = { count: number; size: number };
+
+/** Счётчики всех папок одним проходом: `count` — показываемые дети (как `childrenOf(listedNodes())`),
+ * `size` — всё поддерево, с корзиной и служебными файлами (как `sizeOf`). Папки без детей в ответе нет. */
+export function folderStats(nodes: CloudNode[]): Map<string, FolderStats> {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const stats = new Map<string, FolderStats>();
+  const statsOf = (id: string) => {
+    let known = stats.get(id);
+    if (!known) {
+      known = { count: 0, size: 0 };
+      stats.set(id, known);
+    }
+    return known;
+  };
+  const hasService = nodes.some(isServiceNode);
+  nodes.forEach((n) => {
+    if (!n.parent) return;
+    if (!n.trashed && !(hasService && isServiceNode(n))) statsOf(n.parent).count += 1;
+    if (!n.size) return;
+    let ancestor = byId.get(n.parent);
+    for (let guard = 0; ancestor && guard <= nodes.length; guard++) {
+      statsOf(ancestor.id).size += n.size;
+      ancestor = ancestor.parent ? byId.get(ancestor.parent) : undefined;
+    }
+  });
+  return stats;
 }
 
 export function kindOfFile(mime: string, name: string): CloudFileKind {

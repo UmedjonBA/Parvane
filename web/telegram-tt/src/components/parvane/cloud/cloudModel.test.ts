@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf, fileTypeLabel,
-  freeName, isServiceNode, kindOfFile, listedNodes, namesIn, pathOf, searchNodes, sizeOf, sortNodes, subtreeOf,
-  trashDaysLeft, trashOf, usageOf, validateName,
+  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, pathOf, searchNodes, sizeOf, sortNodes,
+  subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
 function node(
@@ -53,6 +53,21 @@ describe('облако: модель дерева', () => {
     expect(freeName(['отчёт.pdf', 'отчёт (2).pdf'], 'отчёт.pdf')).toBe('отчёт (3).pdf');
     expect(freeName(['Папка'], 'Папка')).toBe('Папка (2)');
     expect(freeName(['.profile'], '.profile')).toBe('.profile (2)');
+  });
+
+  it('счётчики папок одним проходом совпадают с подсчётом по каждой', () => {
+    const tree = [...TREE, node('s', 'file', '.parvane-guide', 'a', { size: 4 })];
+    const stats = folderStats(tree);
+    tree.filter((n) => n.kind === 'folder').forEach((folder) => {
+      const expected = {
+        count: childrenOf(listedNodes(tree), folder.id).length,
+        size: sizeOf(tree, folder.id),
+      };
+      expect(stats.get(folder.id) || { count: 0, size: 0 }).toEqual(expected);
+    });
+    expect(stats.get('a')).toEqual({ count: 1, size: 307 });
+    expect(stats.get('b')).toEqual({ count: 1, size: 300 });
+    expect(stats.get('f')).toEqual({ count: 0, size: 7 });
   });
 
   it('содержимое папки, путь и поддерево без корзины', () => {

@@ -66,7 +66,10 @@ const CloudItem = ({
     if (!thumbId) return undefined;
     let isActual = true;
     const load = () => {
-      void callParvane('parvaneCloudThumb', { container, node: node.id }).then((url) => {
+      // Ключи блоба и миниатюры — из строки: провайдер не ищет узел в дереве
+      void callParvane('parvaneCloudThumb', {
+        container, node: node.id, blob: node.blob, thumb: node.thumb,
+      }).then((url) => {
         if (isActual && typeof url === 'string') setThumbUrl(url);
       }).catch(() => undefined);
     };
@@ -87,6 +90,8 @@ const CloudItem = ({
       isActual = false;
       observer.disconnect();
     };
+    // Ключи блоба и миниатюры меняются только вместе с идентификатором миниатюры
+    // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [container, node.id, thumbId]);
 
   const handleOpen = useLastCallback(() => {
