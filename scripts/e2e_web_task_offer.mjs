@@ -63,7 +63,8 @@ function cardOf(page, name) {
 
 async function openPlanner(page) {
   const planner = page.locator('#ParvanePlanner');
-  if (!(await planner.count())) {
+  // «План» после первого показа остаётся в DOM скрытым (E1) — решаем по видимости, не по наличию
+  if (!(await planner.isVisible().catch(() => false))) {
     await openPlannerScreen(page, 'calendar');
   }
   await planner.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

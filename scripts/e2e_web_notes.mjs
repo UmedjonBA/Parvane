@@ -50,7 +50,8 @@ try {
   const visible = (locator, what) => locator.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail(`не появилось: ${what}`));
   const openTab = async (name) => {
-    const header = (await knowledge.count()) ? knowledge : cloud;
+    // Скрытый раздел остаётся в DOM (E1) — шапку берём у показанного
+    const header = (await knowledge.isVisible().catch(() => false)) ? knowledge : cloud;
     await header.locator('header').getByText(name, { exact: true }).first().click();
   };
 

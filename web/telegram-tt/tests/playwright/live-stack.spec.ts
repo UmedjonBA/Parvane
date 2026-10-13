@@ -30,14 +30,15 @@ test('registers and signs in through the live production stack', async ({ page }
       request.onsuccess = () => resolve(request.result as T | undefined);
       request.onerror = () => reject(request.error);
     });
-    // Состояние движка v2 — именованная запись под non-extractable ключом
-    // (secureStorage.ts: `rec:<адрес>:<имя>`, v2/controller.ts: STATE_RECORD).
+    // Состояние движка v2 — именованная запись под non-extractable ключом: байтами `v2-engine-bin`
+    // (secureStorage.ts: `rec:<адрес>:<имя>`, v2/controller.ts: STATE_BYTES_RECORD; прежняя `v2-engine` — JSON).
     // Пишется после подъёма движка, уже за экраном входа — ждём её появления
     const key = await read<CryptoKey>(`key:${address}`);
     let state: { version: number; ciphertext: ArrayBuffer } | undefined;
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      state = await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine`);
+      state = await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine-bin`)
+        ?? await read<{ version: number; ciphertext: ArrayBuffer }>(`rec:${address}:v2-engine`);
       if (state || Date.now() > deadline) break;
       await new Promise((resolve) => {
         setTimeout(resolve, 250);

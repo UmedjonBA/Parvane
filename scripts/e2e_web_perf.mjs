@@ -216,8 +216,10 @@ try {
   const openSection = (name) => sidebar.getByRole('tab', { name, exact: true }).click();
   const openTab = async (name) => {
     // Раздел появляется после переключения не сразу — шапка берётся у того, что показан
-    await page.locator('#ParvaneKnowledge, #ParvaneCloud').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    const header = (await knowledge.count()) ? knowledge : cloud;
+    // Разделы после первого показа остаются в DOM скрытыми (E1): берём тот, что виден
+    const shown = page.locator('#ParvaneKnowledge:visible, #ParvaneCloud:visible');
+    await shown.first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    const header = (await knowledge.isVisible().catch(() => false)) ? knowledge : cloud;
     await header.locator('header').getByText(name, { exact: true }).first().click();
   };
 
