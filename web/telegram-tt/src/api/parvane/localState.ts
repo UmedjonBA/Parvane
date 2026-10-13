@@ -349,6 +349,15 @@ export function createLocalState(deps: LocalStateDependencies) {
     return storage.loadRecordsByPrefix<WireStoredMessage>('m:');
   }
 
+  // Одна строка кэша по uuid (perf A2): промах индекса мутаций стоит одного
+  // чтения, а не всей истории. Ещё не записанная — из очереди
+  async function loadHistoryRecord(uuid: string): Promise<WireStoredMessage | undefined> {
+    if (historyWriteQueue.has(uuid)) return historyWriteQueue.get(uuid);
+    const storage = await secureStorage();
+    if (!storage) return undefined;
+    return storage.loadRecord<WireStoredMessage>(`m:${uuid}`);
+  }
+
   function resetSecureCaches() {
     historyWriteQueue.clear();
     if (historyFlushTimer) clearTimeout(historyFlushTimer);
@@ -939,6 +948,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveHistoryRecord,
     deleteHistoryRecord,
     loadHistoryRecords,
+    loadHistoryRecord,
     appendOwnJournal,
     updateOwnJournalEntry,
     clearUserData,

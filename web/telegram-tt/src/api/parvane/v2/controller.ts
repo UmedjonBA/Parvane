@@ -33,6 +33,7 @@ import {
   withBundleKey, withFreshLog,
 } from './keyBundle';
 import { createL2Gate, type L2State, parseL2State } from './l2';
+import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createPlannerSync } from './planner';
 import { CHANNEL_ANONYMOUS, CHANNEL_IDENTIFIED, V2Connection, V2Error } from './transport';
 
@@ -44,6 +45,9 @@ type Deps = {
   applyExternal: (stored: WireStoredMessage) => Promise<void>;
   /** История (расшифрованные строки) — чтобы мутации находили сообщения после перезагрузки. */
   loadHistory: () => Promise<WireStoredMessage[]>;
+  /** Индекс строк истории по uuid (perf A2): общий с конвейером отображения,
+   * который наполняет его при восстановлении из кэша и на каждую строку. */
+  index?: MessageIndex;
   /** В журнале устройств появились новые свои устройства (T119). */
   onNewOwnDevices: (deviceIds: string[]) => void;
   /** Состав своих устройств изменился (появилось, вышло, отозвано). */
@@ -381,7 +385,8 @@ export function createV2Controller(deps: Deps) {
   const peers = new Map<string, { v2: boolean; at: number }>();
   // Чаты, на эфемерные каналы которых подписываемся (переживает переподключение)
   const ephChats = new Set<string>();
-  const messages = new Map<string, WireStoredMessage>();
+  // Строки истории по uuid: цели мутаций (perf A2 — без чтения всей истории)
+  const messages = deps.index || createMessageIndex({ loadAll: deps.loadHistory });
   const reactions = new Map<string, Map<string, string>>();
   // Домен сервера из описателя (группы v2 живут на нём)
   let serverDomain = '';
@@ -871,20 +876,18 @@ export function createV2Controller(deps: Deps) {
 
   // ── приём: событие движка → строка конвейера UI ──────────────────────────
 
-  async function knownMessage(uuid: string): Promise<WireStoredMessage | undefined> {
-    const hit = messages.get(uuid);
-    if (hit) return hit;
-    const history = await deps.loadHistory();
-    const found = history.find((h) => h.id === uuid);
-    if (found) messages.set(uuid, found);
-    return found;
+  function knownMessage(uuid: string): Promise<WireStoredMessage | undefined> {
+    return messages.find(uuid);
   }
 
   async function update(uuid: string, patch: (m: WireStoredMessage) => WireStoredMessage) {
     const m = await knownMessage(uuid);
     if (!m) return;
     const next = patch(m);
-    messages.set(uuid, next);
+    // Патч ничего не изменил (цель из другого чата, чужая квитанция) — запись
+    // не переписываем и UI не трогаем
+    if (next === m) return;
+    messages.set(next);
     await deps.applyExternal(next);
   }
 
@@ -1019,7 +1022,7 @@ export function createV2Controller(deps: Deps) {
         const stub: WireStoredMessage = {
           id: ev.opId, from: author, to, ts: Math.floor((ev.tsMs || 0) / 1000), content: { kind: 'unsupported' },
         };
-        messages.set(ev.opId, stub);
+        messages.set(stub);
         await deps.applyExternal(stub);
         return;
       }
@@ -1069,7 +1072,9 @@ export function createV2Controller(deps: Deps) {
         return;
       }
       if (c.receipt?.messages) {
-        if (c.receipt.kind === 'RECEIPT_KIND_READ') {
+        // Своя квитанция (копия с другого своего устройства) меняет только
+        // исходящие, а помечает она чужие сообщения — применять нечего
+        if (c.receipt.kind === 'RECEIPT_KIND_READ' && author !== self) {
           for (const t of c.receipt.messages) {
             const target = b64ToUuid(t.op_id);
 
@@ -1093,7 +1098,7 @@ export function createV2Controller(deps: Deps) {
         content: wire,
         reply_to: b64ToUuid(c.reply_to?.op_id),
       };
-      messages.set(ev.opId, stored);
+      messages.set(stored);
       await deps.applyExternal(stored);
       // Собеседник (или своё другое устройство) сменил режим L2 личного чата
       if (c.chat_mode) announceL2(author === self ? chat : author);
@@ -2264,7 +2269,7 @@ export function createV2Controller(deps: Deps) {
     const stored: WireStoredMessage = {
       id: uuid, from: deps.getSelf(), to, ts: Math.floor(Date.now() / 1000), content: wire, reply_to: replyTo,
     };
-    messages.set(uuid, stored);
+    messages.set(stored);
     return true;
   }
 
@@ -2355,7 +2360,7 @@ export function createV2Controller(deps: Deps) {
       ts: Math.floor(Date.now() / 1000),
       content: { kind: 'chat_mode', l2: enabled },
     };
-    messages.set(opId, stored);
+    messages.set(stored);
     await deps.applyExternal(stored);
     deps.recordOwn?.(stored);
     return true;
@@ -2381,7 +2386,7 @@ export function createV2Controller(deps: Deps) {
       ts: Math.floor(Date.now() / 1000),
       content: { kind: 'chat_mode', l2: isEnabled },
     };
-    messages.set(stored.id, stored);
+    messages.set(stored);
     void deps.applyExternal(stored)
       .then(() => {
         if (stored.from === deps.getSelf()) deps.recordOwn?.(stored);

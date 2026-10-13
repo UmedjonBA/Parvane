@@ -54,6 +54,8 @@ type SyncDependencies = {
   taskOffers: TaskOfferStore;
   refreshTaskOfferMessage: (uuid: string) => void;
   rememberSavedGif: (gif: ApiVideo) => void;
+  // perf A2: индекс строк истории по uuid для мутаций v2 — наполняется здесь
+  rememberStored?: (stored: WireStoredMessage) => void;
   sendUpdate: (update: ApiUpdate) => void;
   log: (message: string) => void;
 };
@@ -463,6 +465,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
     handleTaskOfferContent(stored);
     deps.media.rememberKeys(stored.content);
+    deps.rememberStored?.(stored);
     const previousFlags = wireFlagsByUuid.get(stored.id);
     const flags = buildWireFlags(stored);
     wireFlagsByUuid.set(stored.id, flags);

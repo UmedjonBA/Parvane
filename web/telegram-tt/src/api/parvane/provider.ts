@@ -38,6 +38,7 @@ import {
 } from './v2/controller';
 import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
 import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
+import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import {
   clearLoginStorage,
@@ -444,6 +445,16 @@ if (draftsChannel) {
   };
 }
 
+// perf A2: строки истории по uuid — общий индекс конвейера отображения и
+// контроллера v2 (цели мутаций без чтения всей истории)
+const messageIndex = createMessageIndex({
+  loadAll: async () => [
+    ...await localState.loadHistoryRecords(),
+    ...await localState.readOwnJournal(),
+  ],
+  loadOne: (uuid) => localState.loadHistoryRecord(uuid),
+});
+
 const syncController = createSyncController({
   getConnection: () => connection,
   getStore: () => store,
@@ -456,6 +467,7 @@ const syncController = createSyncController({
   taskOffers,
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
+  rememberStored: messageIndex.set,
   sendUpdate,
   log: logDebug,
 });
@@ -566,6 +578,7 @@ const v2Controller = createV2Controller({
     ...await localState.loadHistoryRecords(),
     ...await localState.readOwnJournal(),
   ],
+  index: messageIndex,
   log: logDebug,
 });
 // ID-01: вход привязанного устройства несёт доказательство его ключа
