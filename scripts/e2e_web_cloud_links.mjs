@@ -23,6 +23,8 @@ const LINK_TIMEOUT_MS = 60000;
 const BASE_URL = process.env.PARVANE_E2E_BASE_URL;
 const GATEWAY_URL = process.env.PARVANE_E2E_GATEWAY_URL;
 const BACKEND_DIR = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+// Снимки для проверки вида глазами
+const SHOT_DIR = process.env.PARVANE_E2E_SHOT_DIR;
 assert.ok(BASE_URL && GATEWAY_URL, 'нужны PARVANE_E2E_BASE_URL и PARVANE_E2E_GATEWAY_URL');
 assert.ok(BACKEND_DIR, 'нужен PARVANE_E2E_BACKEND_LOG_DIR (каталог баз стенда)');
 
@@ -205,6 +207,7 @@ try {
   const fileCopyBytes = await pollUntil(linksBytes, (n) => n > fileBytes.length, 'место копий ссылки');
   const usedWithLink = await pollUntil(used, (n) => n >= usedBefore + fileCopyBytes, 'копия занимает место владельца');
   await usage.getByText(/Links: /).waitFor({ state: 'visible' });
+  if (SHOT_DIR) await session.page.screenshot({ path: `${SHOT_DIR}/links-sheet.png` });
   console.log('OK: ссылка на файл создана, копия учтена в занятом месте');
 
   // ── Посетитель без аккаунта: название, скачивание байт в байт ─────────────
@@ -302,6 +305,7 @@ try {
   assert.equal((await visitor.download(INNER_NAME)).bytes.toString(), INNER_TEXT);
   assert.deepEqual(visitor.errors, [], `ошибки публичной страницы: ${visitor.errors.join('; ')}`);
   await visitor.close();
+  if (SHOT_DIR && visitorPage && !visitorPage.isClosed()) await visitorPage.screenshot({ path: `${SHOT_DIR}/links-page.png` });
   console.log('OK: ссылка на папку — структура, сворачивание, просмотр и скачивание');
 
   // ── «Мои ссылки»: строки, размер, полный адрес, продление ─────────────────
@@ -340,6 +344,7 @@ try {
   await popup.locator('[data-link-page][data-state="ready"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await popup.locator('[data-link-name]').innerText(), FILE_NAME);
   await popup.close();
+  if (SHOT_DIR) await session.page.screenshot({ path: `${SHOT_DIR}/links-list.png` });
   console.log('OK: «Мои ссылки» — строки, размер, адрес, продление, «Как увидит получатель»');
 
   // ── На сервере нет ни названий, ни ключа ссылки ───────────────────────────

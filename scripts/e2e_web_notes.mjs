@@ -545,6 +545,8 @@ try {
   await folderName.press('Enter');
   await folderOf(GRAPH_FOLDER).locator('[data-folder-add]').click();
   await visible(chipOf(GRAPH_FOLDER), 'папка заметки для графа');
+  // Название меняется у заметки, которая уже записана: строка в списке — знак, что запись дошла
+  await visible(rowsIn(GRAPH_FOLDER).and(row('New note')), 'новая заметка в папке для графа');
   await note.getByLabel('Note title').fill(FOLDER_NOTE);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(GRAPH_FOLDER).and(row(FOLDER_NOTE)), 'заметка в папке для графа');
