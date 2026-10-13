@@ -43,6 +43,8 @@ vi.mock('../../../global', () => ({
   getActions: () => ({ showNotification: (store.showNotification ||= vi.fn()) }),
 }));
 vi.mock('../../../hooks/useLang', () => ({ default: () => (key: string) => key }));
+// Раздел «Знания» показан: слушатели клавиш холста работают (в скрытом разделе они молчат)
+vi.mock('../../../util/parvaneSection', () => ({ getIsParvaneScreenShown: () => true }));
 vi.mock('../cloud/CloudPreview', () => NO_COMPONENT);
 vi.mock('../../ui/ConfirmDialog', () => NO_COMPONENT);
 vi.mock('./CanvasFilePicker', () => NO_COMPONENT);

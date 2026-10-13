@@ -276,7 +276,7 @@ async function readText(node: CloudNode): Promise<TextContent | undefined> {
     return stored;
   }
   const container = rootIdOf();
-  const result = await callParvane('parvaneCloudReadText', { container, node: node.id })
+  const result = await callParvane('parvaneCloudReadText', { container, node: node.id, blob: node.blob })
     .catch(() => undefined) as TextResult;
   if (!result) return cached;
   rememberText(node.id, result);
@@ -304,7 +304,7 @@ async function readTextsOf(nodes: CloudNode[]): Promise<Map<string, TextContent>
   }
   for (let i = 0; i < nodes.length; i += LOAD_PARALLEL) {
     await Promise.all(nodes.slice(i, i + LOAD_PARALLEL).map(async (node) => {
-      const got = await callParvane('parvaneCloudReadText', { container, node: node.id })
+      const got = await callParvane('parvaneCloudReadText', { container, node: node.id, blob: node.blob })
         .catch(() => undefined) as TextResult;
       if (got) result.set(node.id, got);
     }));

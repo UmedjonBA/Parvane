@@ -18,6 +18,7 @@ import type { CanvasEntry, NoteEntry } from './notesStore';
 import { requestMeasure, requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
+import { getIsParvaneScreenShown } from '../../../util/parvaneSection';
 import { debounce } from '../../../util/schedulers';
 import { downloadCloudNode, getCloudData, getNodes } from '../cloud/cloudStore';
 import {
@@ -116,7 +117,7 @@ type Inline = {
 };
 // Начало стрелки, брошенной на пустом месте: карточка, которую там создадут, будет связана с этой
 type EdgeStart = { id: string; side: CanvasSide };
-type Pending = { id: string; title: string; doc: CanvasDoc };
+type Pending = { id: string; title: string; doc: CanvasDoc; since: number };
 type InlineField = HTMLTextAreaElement | HTMLInputElement;
 // `drop` — меню стрелки, брошенной на пустом месте: что создать на её конце
 type Menu = { x: number; y: number; point: CanvasPoint; kind: 'selection' | 'board' | 'drop'; from?: EdgeStart };
@@ -125,7 +126,9 @@ type NoteDraft = { title: string; at?: CanvasPoint; from?: EdgeStart };
 type LinkDraft = { id?: string; url: string; at?: CanvasPoint };
 type Tap = { key: string; at: number; x: number; y: number };
 
-const SAVE_DELAY_MS = 1200;
+// Запись холста в облако: через паузу после последней правки, но не позже потолка от первой несохранённой
+const SAVE_DELAY_MS = 4000;
+const SAVE_MAX_WAIT_MS = 15000;
 const GROUP_WIDTH = 420;
 const GROUP_HEIGHT = 280;
 const NOTE_HEIGHT = 140;
@@ -378,11 +381,14 @@ const NotesCanvas = ({
     docRef.current = next;
     setDoc(next);
     if (!entry) return;
-    pendingRef.current = { id: entry.id, title: entry.title, doc: next };
+    const since = pendingRef.current?.since ?? Date.now();
+    pendingRef.current = {
+      id: entry.id, title: entry.title, doc: next, since,
+    };
     window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       void flushSave();
-    }, SAVE_DELAY_MS);
+    }, Math.max(0, Math.min(SAVE_DELAY_MS, since + SAVE_MAX_WAIT_MS - Date.now())));
   };
 
   // Правка документа — один шаг истории. `isAmend` — продолжение предыдущего шага (текст только что
@@ -600,7 +606,11 @@ const NotesCanvas = ({
   useEffect(() => saveNoteOnLeave, [saveNoteOnLeave]);
 
   // Escape перехватывают общие слушатели приложения раньше поля — отмена правки встаёт в их очередь
-  useEffect(() => (inline ? captureEscKeyListener(() => finishInline(true)) : undefined), [inline]);
+  useEffect(() => (inline ? captureEscKeyListener(() => {
+    if (!getIsParvaneScreenShown('knowledge')) return false;
+    finishInline(true);
+    return undefined;
+  }) : undefined), [inline]);
 
   // Стрелка, оставленная на экране меню её конца, уходит вместе с меню
   useEffect(() => {
@@ -613,6 +623,8 @@ const NotesCanvas = ({
   // (нечего снимать — клавиша уходит дальше): поставленный эффектом лишь при появлении цели, он пропускал
   // нажатие, пришедшее в том же кадре, что и меню либо выделение
   const handleEscape = useLastCallback(() => {
+    // Скрытый раздел (смонтирован, но не показан) клавишу не берёт
+    if (!getIsParvaneScreenShown('knowledge')) return false;
     // Правка началась в этом же кадре — её слушатель ещё не встал в очередь
     if (inlineRef.current) finishInline(true);
     else if (menu) setMenu(undefined);
@@ -1747,8 +1759,9 @@ const NotesCanvas = ({
   });
 
   // ── клавиши и буфер обмена ──
-  // Клавиши холста молчат, пока открыта шторка или окно, идёт правка на месте либо фокус в чужом поле
-  const isKeyboardBusy = () => Boolean(inlineRef.current || editing || linkDraft || noteDraft || filePreview
+  // Клавиши холста молчат, пока раздел скрыт, открыта шторка или окно, идёт правка на месте либо фокус в чужом поле
+  const isKeyboardBusy = () => Boolean(!getIsParvaneScreenShown('knowledge')
+    || inlineRef.current || editing || linkDraft || noteDraft || filePreview
     || isPickingNote
     || isPickingFile || isMenuOpen || isDeleteOpen || document.body.classList.contains('has-open-dialog')
     || isTypingElement(document.activeElement || undefined));

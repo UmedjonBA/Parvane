@@ -13,6 +13,7 @@ import type { NoteEntry } from './notesStore';
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
+import { getIsParvaneScreenShown } from '../../../util/parvaneSection';
 import { debounce } from '../../../util/schedulers';
 import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import {
@@ -841,6 +842,8 @@ const NotesGraph = ({
   // точки. Панель не закрывается, пока в ней правят заметку или набирают текст в поле: там Escape — дело поля.
   // Общие слушатели приложения перехватывают Escape раньше — обработчик встаёт в их очередь
   const handleEscape = useLastCallback(() => {
+    // Скрытый раздел (смонтирован, но не показан) клавишу не берёт
+    if (!getIsParvaneScreenShown('knowledge')) return false;
     if (newAt) cancelNew();
     else if (isFolderMenuOpen) setIsFolderMenuOpen(false);
     else if (linkFromId) onLinkModeEnd();
@@ -854,6 +857,7 @@ const NotesGraph = ({
 
   // Delete убирает выбранную связь
   const handleKey = useLastCallback((e: KeyboardEvent) => {
+    if (!getIsParvaneScreenShown('knowledge')) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && pickedEdge && !isTyping(e.target)) {
       e.preventDefault();
       removeLink();

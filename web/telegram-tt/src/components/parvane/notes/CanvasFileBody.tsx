@@ -47,8 +47,10 @@ const CanvasFileBody = ({
   const [thumbUrl, setThumbUrl] = useState<string>();
   const [fullUrl, setFullUrl] = useState<string>();
   const nodeId = node?.id;
-  const thumbId = node?.thumb?.fileId;
-  const fileId = node?.blob?.fileId;
+  const nodeBlob = node?.blob;
+  const nodeThumb = node?.thumb;
+  const thumbId = nodeThumb?.fileId;
+  const fileId = nodeBlob?.fileId;
   const isFull = isLarge && canvasImageSource(node, quality) === 'full';
 
   // Наблюдатель живёт всё время: `isSeen` — карточка показывалась хоть раз (миниатюра остаётся), `isOnScreen` —
@@ -82,13 +84,16 @@ const CanvasFileBody = ({
     setThumbUrl(undefined);
     if (!isSeen || !container || !nodeId || !thumbId) return undefined;
     let isActual = true;
-    void callParvane('parvaneCloudThumb', { container, node: nodeId }).then((url) => {
+    // Блоб и миниатюра узла — провайдеру сразу: ему не нужно искать узел по дереву облака
+    void callParvane('parvaneCloudThumb', {
+      container, node: nodeId, blob: nodeBlob, thumb: nodeThumb,
+    }).then((url) => {
       if (isActual && typeof url === 'string') setThumbUrl(url);
     }).catch(() => undefined);
     return () => {
       isActual = false;
     };
-  }, [isSeen, container, nodeId, thumbId]);
+  }, [isSeen, container, nodeId, thumbId, nodeBlob, nodeThumb]);
 
   useEffect(() => {
     setFullUrl(undefined);
@@ -96,7 +101,7 @@ const CanvasFileBody = ({
     let isActual = true;
     const cache = getCanvasImageCache();
     void cache.acquire(fileId, async () => {
-      const blob = await callParvane('parvaneCloudOpenBlob', { container, node: nodeId });
+      const blob = await callParvane('parvaneCloudOpenBlob', { container, node: nodeId, blob: nodeBlob });
       return blob instanceof Blob ? blob : undefined;
     }).then((url) => {
       if (isActual && url) setFullUrl(url);
@@ -105,7 +110,7 @@ const CanvasFileBody = ({
       isActual = false;
       cache.release(fileId);
     };
-  }, [isOnScreen, isFull, container, nodeId, fileId]);
+  }, [isOnScreen, isFull, container, nodeId, fileId, nodeBlob]);
 
   // Не прочитавшаяся картинка (нет связи) остаётся миниатюрой
   const imageUrl = fullUrl || thumbUrl;
