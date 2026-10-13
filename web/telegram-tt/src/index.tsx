@@ -16,12 +16,13 @@ import { selectSharedSettings } from './global/selectors/sharedState';
 import { betterView } from './util/betterView';
 import { IS_TAURI } from './util/browser/globalEnvironment';
 import listenOtherClients from './util/browser/listenOtherClients';
-import { requestGlobal, subscribeToMultitabBroadcastChannel } from './util/browser/multitab';
+import {
+  getIsAloneTab, listenTabLifecycle, markTabOpen, requestGlobal, subscribeToMultitabBroadcastChannel,
+} from './util/browser/multitab';
 import { applyColorSchemeClass, readStoredColorScheme } from './util/colorScheme';
 import { establishMultitabRole, subscribeToMasterChange } from './util/establishMultitabRole';
 import { initGlobal } from './util/init';
 import { initLocalization } from './util/localization';
-import { MULTITAB_STORAGE_KEY } from './util/multiaccount';
 import { onBeforeUnload } from './util/schedulers';
 import initTauriApi from './util/tauri/initTauriApi';
 import setupTauriListeners from './util/tauri/setupTauriListeners';
@@ -59,13 +60,10 @@ async function init() {
 
   subscribeToMultitabBroadcastChannel();
   await requestGlobal(APP_VERSION);
-  localStorage.setItem(MULTITAB_STORAGE_KEY, '1');
-  onBeforeUnload(() => {
-    const global = getGlobal();
-    if (Object.keys(global.byTabId).length === 1) {
-      localStorage.removeItem(MULTITAB_STORAGE_KEY);
-    }
-  });
+  markTabOpen();
+  // Ключ вкладки снимается и в `pagehide` (B1): на телефоне `beforeunload` почти не приходит, и каждый
+  // следующий запуск ждал ответа несуществующей вкладки
+  onBeforeUnload(listenTabLifecycle());
 
   await initGlobal();
   getActions().init();
@@ -82,7 +80,7 @@ async function init() {
       .switchMultitabRole({ isMasterTab }, { forceSyncOnIOs: true });
   });
   const shouldReestablishMasterToSelf = getGlobal().auth.state !== 'authorizationStateReady';
-  establishMultitabRole(shouldReestablishMasterToSelf);
+  establishMultitabRole(shouldReestablishMasterToSelf, getIsAloneTab());
 
   if (DEBUG) {
     // eslint-disable-next-line no-console

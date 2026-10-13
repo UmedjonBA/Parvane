@@ -1,4 +1,5 @@
 import type { FC } from '../../lib/teact/teact';
+import { useEffect, useRef } from '../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../global';
 
 import type { TabState } from '../../global/types';
@@ -42,6 +43,9 @@ type OwnProps = {
   page?: UiLoaderPage;
   children: React.ReactNode;
   isMobile?: boolean;
+  // Parvane (B1): держать маску-каркас после предзагрузки, пока не решится, что показывать (сессия
+  // возобновляется по сохранённому JWT)
+  isPending?: boolean;
 };
 
 type StateProps = Pick<TabState, 'uiReadyState' | 'shouldSkipHistoryAnimations'> & {
@@ -106,17 +110,18 @@ const UiLoader: FC<OwnProps & StateProps> = ({
   shouldSkipHistoryAnimations,
   leftColumnWidth,
   isFoldersSidebarShown,
+  isPending,
 }) => {
   const { setIsUiReady } = getActions();
 
+  const [isPreloaded, markPreloaded] = useFlag();
   const [isReady, markReady] = useFlag();
+  const secondStateTimeoutRef = useRef<number>();
   const {
     shouldRender: shouldRenderMask, transitionClassNames,
   } = useShowTransitionDeprecated(!isReady, undefined, true);
 
   useEffectOnce(() => {
-    let timeout: number | undefined;
-
     const safePreload = async () => {
       try {
         await preloadTasks[page!]();
@@ -128,24 +133,28 @@ const UiLoader: FC<OwnProps & StateProps> = ({
     Promise.race([
       pause(MAX_PRELOAD_DELAY),
       page ? safePreload() : Promise.resolve(),
-    ]).then(() => {
-      markReady();
-      setIsUiReady({ uiReadyState: 1 });
-
-      timeout = window.setTimeout(() => {
-        setIsUiReady({ uiReadyState: 2 });
-      }, SECOND_STATE_DELAY);
-    });
+    ]).then(markPreloaded);
 
     return () => {
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = undefined;
+      if (secondStateTimeoutRef.current) {
+        clearTimeout(secondStateTimeoutRef.current);
+        secondStateTimeoutRef.current = undefined;
       }
 
       setIsUiReady({ uiReadyState: 0 });
     };
   });
+
+  // Маска снимается после предзагрузки, но не раньше, чем под ней есть что показывать (B1)
+  useEffect(() => {
+    if (!isPreloaded || isPending || isReady) return;
+    markReady();
+    setIsUiReady({ uiReadyState: 1 });
+
+    secondStateTimeoutRef.current = window.setTimeout(() => {
+      setIsUiReady({ uiReadyState: 2 });
+    }, SECOND_STATE_DELAY);
+  }, [isPreloaded, isPending, isReady]);
 
   return (
     <>

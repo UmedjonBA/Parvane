@@ -137,23 +137,32 @@ const handleMessage = ({ data }: { data: EstablishMessage }) => {
   }
 };
 
-export function establishMultitabRole(shouldReestablishMasterToSelf?: boolean) {
+export function establishMultitabRole(shouldReestablishMasterToSelf?: boolean, isAloneTab?: boolean) {
   if (isChannelClosed) return;
   channel.addEventListener('message', handleMessage);
 
   channel.postMessage({ collectedTokens });
 
-  // To make the connection faster, we can ignore the waiting and connect right away,
-  // and then if we realize we're not master, drop the connection
-  setTimeout(() => {
-    if (masterToken === undefined) {
-      masterToken = token;
-      initialEstablishment.resolve();
-      runCallbacks(true);
-    } else if (shouldReestablishMasterToSelf) {
-      reestablishMasterToSelf();
-    }
-  }, ESTABLISH_TIMEOUT);
+  // Единственная вкладка (замок Web Locks, B1) — хозяин сразу, без ожидания ответа: `switchMultitabRole`
+  // запускает `initApi`, и соединение начинается на 100 мс раньше. Слушатель канала остаётся: вкладка,
+  // открытая в тот же миг, договорится обычным путём
+  if (isAloneTab) {
+    masterToken = token;
+    initialEstablishment.resolve();
+    runCallbacks(true);
+  } else {
+    // Пауза — время на ответ других вкладок по BroadcastChannel: без ответа за это время мы хозяин.
+    // Соединение можно открывать и сразу, а при проигрыше — рвать, но это дороже паузы
+    setTimeout(() => {
+      if (masterToken === undefined) {
+        masterToken = token;
+        initialEstablishment.resolve();
+        runCallbacks(true);
+      } else if (shouldReestablishMasterToSelf) {
+        reestablishMasterToSelf();
+      }
+    }, ESTABLISH_TIMEOUT);
+  }
 
   window.addEventListener('beforeunload', signalTokenDead);
   if (IS_TAURI) window.addEventListener('unload', signalTokenDead);
