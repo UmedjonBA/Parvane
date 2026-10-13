@@ -804,12 +804,13 @@
 }
 
 .world {
+  // Сдвиг и масштаб поля идут жестом — свой слой композитора
+  will-change: transform;
+
   position: absolute;
   top: 0;
   left: 0;
   transform-origin: 0 0;
-  // Сдвиг и масштаб поля идут жестом — свой слой композитора
-  will-change: transform;
 }
 
 .boardTools {
