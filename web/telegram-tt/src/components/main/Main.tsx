@@ -14,7 +14,7 @@ import type { ThemeKey } from '../../types';
 import { LeftColumnContent, SettingsScreens } from '../../types';
 
 import {
-  BASE_EMOJI_KEYWORD_LANG, DARK_THEME_PATTERN_COLOR, DEBUG, DEFAULT_PATTERN_COLOR, FOLDERS_POSITION_LEFT,
+  DARK_THEME_PATTERN_COLOR, DEBUG, DEFAULT_PATTERN_COLOR, FOLDERS_POSITION_LEFT,
   INACTIVE_MARKER,
 } from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
@@ -264,25 +264,17 @@ const Main = ({
 }: OwnProps & StateProps) => {
   const {
     initMain,
-    loadAnimatedEmojis,
     loadBirthdayNumbersStickers,
     loadRestrictedEmojiStickers,
     loadNotificationSettings,
-    loadNotificationExceptions,
     updateIsOnline,
     onTabFocusChange,
-    loadTopPeers,
     openSettingsScreen,
-    loadEmojiKeywords,
     loadCountryList,
     loadAvailableReactions,
     loadStickerSets,
     loadDiceStickers,
-    loadPremiumGifts,
-    loadTonGifts,
-    loadStarGifts,
     loadMyUniqueGifts,
-    loadDefaultTopicIcons,
     loadAddedStickers,
     loadFavoriteStickers,
     loadDefaultStatusIcons,
@@ -290,41 +282,20 @@ const Main = ({
     closeStickerSetModal,
     closeCustomEmojiSets,
     checkVersionNotification,
-    loadConfig,
     loadAppConfig,
-    loadAttachBots,
     loadContactList,
     loadCustomEmojis,
-    loadGenericEmojiEffects,
     closePaymentModal,
     clearReceipt,
     checkAppVersion,
     openThread,
     toggleLeftColumn,
     loadRecentEmojiStatuses,
-    loadUserCollectibleStatuses,
     updatePageTitle,
-    loadTopReactions,
-    loadRecentReactions,
-    loadDefaultTagReactions,
-    loadFeaturedEmojiStickers,
     loadAuthorizations,
-    loadPeerColors,
-    loadSavedReactionTags,
-    loadTimezones,
-    loadAiComposeTones,
-    loadQuickReplies,
-    loadStarStatus,
-    loadAvailableEffects,
-    loadPaidReactionPrivacy,
     loadPasswordInfo,
     loadBotFreezeAppeal,
-    loadAllStories,
-    loadAllHiddenStories,
-    loadContentSettings,
     loadGiftAuction,
-    loadPromoData,
-    loadActiveGiftAuctions,
     openChatByUsername,
     checkChatInvite,
     showNotification,
@@ -371,12 +342,13 @@ const Main = ({
   useInterval(checkAppVersion, isMasterTab ? APP_OUTDATED_TIMEOUT_MS : undefined, true);
 
   // Initial API calls
+  // Parvane (B5): после синка tt запускал ~40 загрузчиков Telegram (stories, промо, подарки, Stars, реакции-теги,
+  // боты, эффекты, часовые пояса…) — у провайдера Parvane этих методов нет, каждый вызов был холостым проходом
+  // через `callApi` с записью «метод не реализован» в журнал. Остались только те, что провайдер отвечает
   useEffect(() => {
     if (isMasterTab && isSynced) {
       updateIsOnline({ isOnline: true });
-      loadConfig();
       loadAppConfig();
-      loadPeerColors();
       initMain();
       loadContactList();
       checkAppVersion();
@@ -385,43 +357,13 @@ const Main = ({
     }
   }, [isMasterTab, isSynced]);
 
-  // Initial API calls
   useEffect(() => {
     if (isMasterTab && isSynced && isAppConfigLoaded && !isAccountFrozen) {
-      loadAllStories();
-      loadAllHiddenStories();
-      loadPromoData();
-      loadContentSettings();
-      loadRecentReactions();
-      loadDefaultTagReactions();
-      loadAttachBots();
       loadNotificationSettings();
-      loadNotificationExceptions();
-      loadTopPeers({ category: 'botsInline' });
-      loadTopReactions();
-      loadStarStatus();
-      loadEmojiKeywords({ language: BASE_EMOJI_KEYWORD_LANG });
-      loadFeaturedEmojiStickers();
-      loadSavedReactionTags();
-      loadTopPeers({ category: 'botsApp' });
-      loadTopPeers({ category: 'botsGuestChat' });
-      loadPaidReactionPrivacy();
-      loadDefaultTopicIcons();
-      loadAnimatedEmojis();
       loadAvailableReactions();
-      loadUserCollectibleStatuses();
-      loadGenericEmojiEffects();
-      loadPremiumGifts();
-      loadTonGifts();
-      loadStarGifts();
       loadMyUniqueGifts();
-      loadAvailableEffects();
       loadBirthdayNumbersStickers();
       loadRestrictedEmojiStickers();
-      loadQuickReplies();
-      loadTimezones();
-      loadAiComposeTones();
-      loadActiveGiftAuctions();
     }
   }, [isMasterTab, isSynced, isAppConfigLoaded, isAccountFrozen]);
 
@@ -433,13 +375,9 @@ const Main = ({
     }
   }, [isCurrentUserPremium, isMasterTab, isAppConfigLoaded, isAccountFrozen]);
 
-  // Language-based API calls
+  // Language-based API calls (B5: словарь эмодзи `loadEmojiKeywords` провайдер не отдаёт — не запрашиваем)
   useEffect(() => {
     if (isMasterTab) {
-      if (lang.code !== BASE_EMOJI_KEYWORD_LANG) {
-        loadEmojiKeywords({ language: lang.code });
-      }
-
       loadCountryList({ langCode: lang.code });
     }
   }, [lang.code, isMasterTab]);
