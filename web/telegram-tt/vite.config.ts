@@ -31,6 +31,7 @@ const DEV_BUNDLE_WARMUP_CLIENT_FILES = [
   'src/bundles/calls.ts',
   'src/bundles/stars.ts',
 ];
+const LINK_PAGE_SHARED_RE = /\/src\/api\/parvane\/(blobcrypt|cloudBlobs|cloudLinks|v2\/transport)\.ts$/;
 const IMAGE_ASSET_RE = /\.(?:avif|gif|jpe?g|png|svg|webp)$/i;
 const STATIC_COPY_TARGETS: Target[] = [
   {
@@ -231,6 +232,11 @@ export default defineConfig(({ mode }): UserConfig => {
         },
         output: {
           manualChunks(id) {
+            // Модули, общие у приложения и публичной страницы ссылки, — своим малым куском: иначе они
+            // попадают в `shared-components`, и страница тянет мегабайт кода и стили приложения (её CSP их режет)
+            if (LINK_PAGE_SHARED_RE.test(id)) {
+              return 'link-shared';
+            }
             if (id.includes('/src/components/ui/')) {
               return 'shared-components';
             }
