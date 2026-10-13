@@ -278,7 +278,6 @@ describe('холст: перерисовки во время жеста', () => 
     fire('pointerdown', IN_CORNER);
     for (let step = 1; step <= 8; step++) {
       fire('pointermove', { x: IN_CORNER.x + step * 15, y: IN_CORNER.y - step * 10 });
-      // eslint-disable-next-line no-await-in-loop
       await frame();
     }
     // Сдвинутые карточки отрисовались по шагам, несдвинутая — ни разу
@@ -308,7 +307,6 @@ describe('холст: перерисовки во время жеста', () => 
     fireAt('pointerdown', 0, 0);
     for (let step = 1; step <= 6; step++) {
       fireAt('pointermove', step * 10, step * 5);
-      // eslint-disable-next-line no-await-in-loop
       await frame();
     }
     fireAt('pointerup', 60, 30);
