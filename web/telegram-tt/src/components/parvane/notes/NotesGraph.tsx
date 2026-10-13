@@ -5,7 +5,9 @@ import {
 import type { PlannerState } from '../planner/plannerModel';
 import type { BoardView } from './boardView';
 import type { GraphCanvasScope } from './notesCanvasGraph';
-import type { GraphEdge, GraphNode, GraphPoint } from './notesGraph';
+import type {
+  GraphEdge, GraphLayoutRun, GraphNode, GraphPoint, GraphRecordInput,
+} from './notesGraph';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
@@ -16,11 +18,11 @@ import {
 } from './boardView';
 import { folderCaption, ROOT_FOLDER } from './notesFolders';
 import {
-  buildGraph, canLinkFrom, canLinkTo, edgeShape, isNoteInGraph, listGraphFolders, MISSING_NODE_PREFIX, neighboursOf,
-  nodeAt, nodeRadius, placeGraph, resolveGraphFolders,
+  buildGraph, canLinkFrom, canLinkTo, edgeShape, GRAPH_FRAME_WORK, GRAPH_SYNC_WORK, isNoteInGraph, listGraphFolders,
+  MISSING_NODE_PREFIX, neighboursOf, nodeAt, nodeRadius, resolveGraphFolders, startGraphLayout,
 } from './notesGraph';
 import { displayTitle, folderColor } from './notesLook';
-import { normalizeNoteTitle, parseNote } from './notesModel';
+import { normalizeNoteTitle, parseNoteCached } from './notesModel';
 import { readGraphFolders, writeGraphFolders } from './notesPrefs';
 
 import useLang from '../../../hooks/useLang';
@@ -104,6 +106,44 @@ const PANEL_EDITOR = '[data-graph-panel] #knowledge-note-editor';
 
 // Места точек переживают уход с вкладки: граф не перетряхивается, пока его не попросят разложить заново
 const placedById = new Map<string, GraphPoint>();
+const NO_RECORDS: GraphRecordInput[] = [];
+
+// Записи «Плана» для графа: события и задачи со ссылками в названии
+function recordsOf(planner: PlannerState): GraphRecordInput[] {
+  return [
+    ...planner.events.map((event) => ({
+      id: `e${event.id}`, title: event.name, links: linksIn(event.name), type: 'event',
+    })),
+    ...planner.tasks.map((task) => ({
+      id: `t${task.id}`, title: task.name, links: linksIn(task.name), type: 'task',
+    })),
+  ];
+}
+
+// Остаток долгой раскладки идёт порциями в свободное время: `tick` зовётся после каждой порции, пока не кончится
+// работа или её не отменят
+function continueLayout(run: GraphLayoutRun, tick: (isDone: boolean) => void) {
+  const hasIdle = 'requestIdleCallback' in self;
+  let isCancelled = false;
+  let handle: number | undefined;
+  const chunk = () => {
+    handle = undefined;
+    if (isCancelled) return;
+    const isDone = run.step(GRAPH_FRAME_WORK);
+    tick(isDone);
+    if (!isDone) schedule();
+  };
+  const schedule = () => {
+    handle = hasIdle ? self.requestIdleCallback(chunk, { timeout: 200 }) : self.setTimeout(chunk, 16);
+  };
+  schedule();
+  return () => {
+    isCancelled = true;
+    if (handle === undefined) return;
+    if (hasIdle) self.cancelIdleCallback(handle);
+    else self.clearTimeout(handle);
+  };
+}
 
 function linksIn(text: string) {
   return [...text.matchAll(LINK)].map((match) => match[1].trim());
@@ -164,6 +204,7 @@ const NotesGraph = ({
   const lastTapRef = useRef<{ id?: string; at: number }>({ at: 0 });
   const sizeRef = useRef<{ width: number; height: number }>();
   const fitKeyRef = useRef<string>();
+  const fitRef = useRef<NoneToVoidFunction>();
 
   const lang = useLang();
 
@@ -172,30 +213,53 @@ const NotesGraph = ({
   const folders = useMemo(() => resolveGraphFolders(savedFolders, folderOptions), [savedFolders, folderOptions]);
   const foldersKey = folders ? folders.join('\n') : undefined;
 
-  const graph = useMemo(() => {
-    const built = buildGraph({
+  // Записи «Плана» нужны графу только при включённых «Записях»: без них изменения плана граф не трогают
+  const plannerForGraph = withRecords ? planner : undefined;
+  const records = useMemo(() => (plannerForGraph ? recordsOf(plannerForGraph) : NO_RECORDS), [plannerForGraph]);
+
+  // Сборка графа и начало раскладки. Точки, у которых уже есть место, стоят на нём: новая связь, заметка или
+  // смена папок граф не перетряхивают. Первая порция работы — сразу, остаток — порциями в свободное время
+  const built = useMemo(() => {
+    const graph = buildGraph({
       notes: notes.map((note) => ({
         id: note.id,
         title: note.title,
         folder: note.folder,
-        links: parseNote(note.text).links,
+        links: parseNoteCached(note).links,
         isDaily: note.isDaily,
       })),
-      records: [
-        ...planner.events.map((event) => ({
-          id: `e${event.id}`, title: event.name, links: linksIn(event.name), type: 'event',
-        })),
-        ...planner.tasks.map((task) => ({
-          id: `t${task.id}`, title: task.name, links: linksIn(task.name), type: 'task',
-        })),
-      ],
+      records,
     }, { withDays, withRecords, folders });
-    // Точки, у которых уже есть место, стоят на нём: новая связь, заметка или смена папок граф не перетряхивают
-    const placed = placeGraph(built.nodes, built.edges, placedById, LAYOUT);
-    placed.forEach((node) => placedById.set(node.id, { x: node.x, y: node.y }));
-    return { nodes: placed, edges: built.edges };
+    const run = startGraphLayout(graph.nodes, graph.edges, placedById, LAYOUT);
+    run.step(GRAPH_SYNC_WORK);
+    return { run, edges: graph.edges };
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
-  }, [notes, planner, withDays, withRecords, foldersKey, layoutRound]);
+  }, [notes, records, withDays, withRecords, foldersKey, layoutRound]);
+  const [layoutTick, setLayoutTick] = useState(0);
+  // `layoutTick` растёт после каждой порции раскладки — места точек перечитываются
+  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  const graph = useMemo(() => ({ nodes: built.run.nodes(), edges: built.edges }), [built, layoutTick]);
+  // Законченная раскладка запоминает места точек; если граф вписывали, он вписывается снова по готовым местам
+  const refitRef = useRef(false);
+  const rememberPlaces = (run: GraphLayoutRun) => {
+    run.nodes().forEach((node) => placedById.set(node.id, { x: node.x, y: node.y }));
+  };
+  useEffect(() => {
+    const { run } = built;
+    if (run.isDone) {
+      rememberPlaces(run);
+      return undefined;
+    }
+    return continueLayout(run, (isDone) => {
+      setLayoutTick((tick) => tick + 1);
+      if (!isDone) return;
+      rememberPlaces(run);
+      if (refitRef.current) {
+        refitRef.current = false;
+        fitRef.current?.();
+      }
+    });
+  }, [built]);
 
   const nodes = useMemo(() => graph.nodes.map((node) => ({ ...node, ...moved[node.id] })), [graph, moved]);
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
@@ -228,6 +292,8 @@ const NotesGraph = ({
   const fit = useLastCallback(() => {
     const box = boardRef.current?.getBoundingClientRect();
     if (!box) return;
+    // Пока раскладка не закончена, вписывается промежуточный граф — по готовому вписывание повторится
+    refitRef.current = !built.run.isDone;
     setView(fitRects(
       nodes.map((node) => ({
         x: node.x - FIT_BOX_WIDTH / 2, y: node.y - FIT_BOX_HEIGHT / 2, width: FIT_BOX_WIDTH, height: FIT_BOX_HEIGHT,
@@ -238,6 +304,7 @@ const NotesGraph = ({
       FIT_BOTTOM,
     ));
   });
+  fitRef.current = fit;
 
   // Граф вписывается в поле при открытии, при смене фильтра и когда его раскладывают заново. Новая заметка
   // или связь вид не трогают: масштаб и место выбирает пользователь

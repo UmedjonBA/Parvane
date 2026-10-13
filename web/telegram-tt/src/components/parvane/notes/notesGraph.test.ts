@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { GraphEdge, GraphInput, GraphNode } from './notesGraph';
 
 import {
-  buildGraph, canLinkFrom, canLinkTo, createSeededRandom, edgeShape, getLayoutIterations, GRAPH_ARROW,
-  GRAPH_EDGE_GAP, GRAPH_ITERATIONS, GRAPH_MARGIN, GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS, GRAPH_SPRING_LENGTH,
-  GRAPH_WORK_BUDGET, isNoteInGraph, layoutGraph, listGraphFolders, neighboursOf, nodeAt, nodeRadius, placeGraph,
-  resolveGraphFolders,
+  buildGraph, canLinkFrom, canLinkTo, createSeededRandom, edgeShape, getLayoutIterations, getPlaceIterations,
+  GRAPH_ARROW, GRAPH_EDGE_GAP, GRAPH_GRID_FROM, GRAPH_ITERATIONS, GRAPH_MARGIN, GRAPH_MAX_RADIUS, GRAPH_MIN_RADIUS,
+  GRAPH_PLACE_ITERATIONS, GRAPH_PLACE_WORK_BUDGET, GRAPH_SPRING_LENGTH, GRAPH_WORK_BUDGET, isNoteInGraph, layoutGraph,
+  listGraphFolders, neighboursOf, nodeAt, nodeRadius, placeGraph, resolveGraphFolders, startGraphLayout,
 } from './notesGraph';
 
 const ALL = { withDays: true, withRecords: true };
@@ -46,6 +46,45 @@ function node(nodes: GraphNode[], id: string) {
 
 function pairs(edges: GraphEdge[]) {
   return edges.map((edge) => [edge.from, edge.to].sort().join(' — ')).sort();
+}
+
+// Случайное дерево с лишними связями на `count` узлов — синтетика большого графа
+function synth(count: number, seed = 3): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  const random = createSeededRandom(seed);
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  for (let i = 0; i < count; i++) {
+    nodes.push({
+      id: `n${i}`, title: `Заметка ${i}`, kind: 'note', degree: 0, x: 0, y: 0,
+    });
+  }
+  for (let i = 1; i < count; i++) {
+    edges.push({ from: `n${i}`, to: `n${Math.floor(random() * i)}` });
+    if (random() < 0.5) edges.push({ from: `n${i}`, to: `n${Math.floor(random() * i)}` });
+  }
+  const degree = new Map<string, number>();
+  edges.forEach((edge) => {
+    degree.set(edge.from, (degree.get(edge.from) || 0) + 1);
+    degree.set(edge.to, (degree.get(edge.to) || 0) + 1);
+  });
+  nodes.forEach((item) => {
+    item.degree = degree.get(item.id) || 0;
+  });
+  return { nodes, edges };
+}
+
+// Доля пар узлов, чьи кружки наложились, — простая метрика качества раскладки
+function overlapShare(nodes: GraphNode[]) {
+  let bad = 0;
+  let total = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      total++;
+      const distance = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+      if (distance < nodeRadius(nodes[i].degree) + nodeRadius(nodes[j].degree)) bad++;
+    }
+  }
+  return bad / total;
 }
 
 function chain(count: number): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -355,6 +394,83 @@ describe('граф заметок: раскладка', () => {
     });
   });
 
+  it('потолок работы расстановки: до ~200 новых на 1 000 все шаги, дальше меньше', () => {
+    expect(getPlaceIterations(0, 10)).toBe(GRAPH_PLACE_ITERATIONS);
+    expect(getPlaceIterations(5, 1)).toBe(GRAPH_PLACE_ITERATIONS);
+    expect(getPlaceIterations(200, 1000)).toBe(GRAPH_PLACE_ITERATIONS);
+    expect(getPlaceIterations(365, 1000)).toBe(68);
+    expect(getPlaceIterations(500, 1000)).toBe(50);
+    expect(getPlaceIterations(100_000, 100_000)).toBe(1);
+    expect(getPlaceIterations(10, 100, 7)).toBe(7);
+    expect(getPlaceIterations(10, 100, 0)).toBe(0);
+    [365, 1000, 5000].forEach((free) => {
+      expect(getPlaceIterations(free, 5000) * free * 4999).toBeLessThanOrEqual(GRAPH_PLACE_WORK_BUDGET);
+    });
+  });
+
+  it('большой граф по сетке: повторяем по зерну, в области, без наложений не хуже точного счёта', () => {
+    const { nodes, edges } = synth(500);
+    expect(nodes.length).toBeGreaterThanOrEqual(GRAPH_GRID_FROM);
+    const first = layoutGraph(nodes, edges, { ...BOX, seed: 5 });
+    expect(layoutGraph(nodes, edges, { ...BOX, seed: 5 })).toEqual(first);
+    expect(layoutGraph(nodes, edges, { ...BOX, seed: 6 }).map(({ x, y }) => [x, y]))
+      .not.toEqual(first.map(({ x, y }) => [x, y]));
+    first.forEach((item) => {
+      expect(item.x).toBeGreaterThanOrEqual(GRAPH_MARGIN - 1e-6);
+      expect(item.x).toBeLessThanOrEqual(BOX.width - GRAPH_MARGIN + 1e-6);
+      expect(item.y).toBeGreaterThanOrEqual(GRAPH_MARGIN - 1e-6);
+      expect(item.y).toBeLessThanOrEqual(BOX.height - GRAPH_MARGIN + 1e-6);
+    });
+    // Точный счёт всех пар на 500 узлах давал 0 наложений (замер 13 окт 2026); по сетке — не больше 1 на 10 000 пар
+    const loose = layoutGraph(nodes, edges, { ...BOX, isLoose: true });
+    expect(overlapShare(loose)).toBeLessThanOrEqual(0.0001);
+    // Размер графа тот же, что при точном счёте: медиана связи 320 ± 15 %
+    const byId = new Map(loose.map((item) => [item.id, item]));
+    const lengths = edges.map((edge) => {
+      const a = byId.get(edge.from)!;
+      const b = byId.get(edge.to)!;
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }).sort((a, b) => a - b);
+    const median = lengths[lengths.length >> 1];
+    expect(median).toBeGreaterThan(320 * 0.85);
+    expect(median).toBeLessThan(320 * 1.15);
+  });
+
+  it('раскладка по шагам: порции дают тот же результат, что разом; работа растёт, конец отмечен', () => {
+    const { nodes, edges } = synth(300);
+    const whole = layoutGraph(nodes, edges, BOX);
+    const run = startGraphLayout(nodes, edges, undefined, BOX);
+    expect(run.isDone).toBe(false);
+    expect(run.work).toBe(0);
+    let steps = 0;
+    let lastWork = 0;
+    while (!run.step(20_000)) {
+      steps++;
+      expect(run.work).toBeGreaterThan(lastWork);
+      lastWork = run.work;
+      // Промежуточные места — тоже внутри области
+      run.nodes().forEach((item) => {
+        expect(item.x).toBeGreaterThanOrEqual(GRAPH_MARGIN - 1e-6);
+        expect(item.x).toBeLessThanOrEqual(BOX.width - GRAPH_MARGIN + 1e-6);
+      });
+      if (steps > 100_000) throw new Error('раскладка не кончается');
+    }
+    expect(steps).toBeGreaterThan(1);
+    expect(run.isDone).toBe(true);
+    expect(run.nodes()).toEqual(whole);
+    // После конца шаг ничего не делает
+    const work = run.work;
+    expect(run.step(1000)).toBe(true);
+    expect(run.work).toBe(work);
+  });
+
+  it('пустой граф и один узел по шагам — сразу готовы', () => {
+    expect(startGraphLayout([], [], undefined, BOX).isDone).toBe(true);
+    const single = startGraphLayout([chain(1).nodes[0]], [], undefined, BOX);
+    expect(single.isDone).toBe(true);
+    expect(single.nodes()).toEqual([{ ...chain(1).nodes[0], x: 400, y: 300 }]);
+  });
+
   it('генератор с зерном повторяем и даёт числа в [0, 1)', () => {
     const a = createSeededRandom(42);
     const b = createSeededRandom(42);
@@ -468,6 +584,23 @@ describe('граф заметок: место новых узлов', () => {
     const p = node(next, 'p');
     const q = node(next, 'q');
     expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(GRAPH_SPRING_LENGTH / 3);
+  });
+
+  it('большой граф по сетке: стоящие узлы не двигаются, новые встают без наложений и повторяемо', () => {
+    const base = synth(400);
+    const placed = layoutGraph(base.nodes, base.edges, { ...OPTIONS, isLoose: true });
+    const previous = positions(placed);
+    const grown = synth(400 + 365, 5);
+    const next = placeGraph(grown.nodes, grown.edges, previous, { ...OPTIONS, isLoose: true });
+    expect(next.length).toBe(765);
+    placed.forEach((item) => expect(node(next, item.id)).toMatchObject({ x: item.x, y: item.y }));
+    expect(placeGraph(grown.nodes, grown.edges, previous, { ...OPTIONS, isLoose: true })).toEqual(next);
+    // Точный счёт на тех же данных давал до 1 наложения на 10 000 пар (замер 13 окт 2026)
+    expect(overlapShare(next)).toBeLessThanOrEqual(0.0002);
+    // Шагами — то же самое
+    const run = startGraphLayout(grown.nodes, grown.edges, previous, { ...OPTIONS, isLoose: true });
+    while (!run.step(50_000)) { /* порциями */ }
+    expect(run.nodes()).toEqual(next);
   });
 
   it('созданная заметка занимает место «заметки, которой ещё нет»', () => {
