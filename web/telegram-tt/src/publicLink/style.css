@@ -1,0 +1,467 @@
+/* Parvane (spec 022): публичная страница ссылки. Тона — как в приложении
+   (палитра прототипа), тёмная либо светлая — по настройке системы. */
+
+:root {
+
+  --bg: #1d2021;
+  --panel: #282828;
+  --raised: #32302f;
+  --hover: #3c3836;
+  --line: #504945;
+  --fg: #ebdbb2;
+  --muted: #a89984;
+  --accent: #fabd2f;
+  --accent-ink: #1d2021;
+  --blue: #83a598;
+  --purple: #d3869b;
+  --aqua: #8ec07c;
+  --red: #fb4934;
+  --green: #b8bb26;
+
+  color-scheme: dark light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ebdbb2;
+    --panel: #fbf1c7;
+    --raised: #f2e5bc;
+    --hover: #ebdbb2;
+    --line: #d5c4a1;
+    --fg: #3c3836;
+    --muted: #7c6f64;
+    --accent: #b57614;
+    --accent-ink: #fbf1c7;
+    --blue: #076678;
+    --purple: #8f3f71;
+    --aqua: #427b58;
+    --red: #9d0006;
+    --green: #79740e;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  padding: 1.5rem 1rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
+
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  color: var(--fg);
+
+  background: var(--bg);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  width: 100%;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 1.25rem;
+  border-radius: 1.125rem;
+
+  background: var(--panel);
+}
+
+.brand {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+
+  padding: 1.5rem 0;
+}
+
+.status-title,
+.title {
+  margin: 0;
+
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.status-text {
+  margin: 0;
+  color: var(--muted);
+}
+
+.page[data-state="loading"] .status-title {
+  font-size: 1rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.lead,
+.empty {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.titles {
+  min-width: 0;
+}
+
+.facts {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* ── плитка значка ── */
+
+.tile {
+  --c: var(--muted);
+
+  position: relative;
+
+  flex: none;
+
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+
+.tile::before {
+  content: "";
+
+  position: absolute;
+  inset: 0.375rem;
+
+  background: var(--c);
+
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.tile.big {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+}
+
+.tile.big::before {
+  inset: 0.625rem;
+}
+
+.tone-folder {
+  --c: var(--blue);
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+}
+
+.tone-file {
+  --c: var(--muted);
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 3h9l4 4v14H6z'/%3E%3C/svg%3E");
+}
+
+.tone-text {
+  --c: var(--aqua);
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 3h9l4 4v14H6z'/%3E%3C/svg%3E");
+}
+
+.tone-image {
+  --c: var(--purple);
+  --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm11 7-8 9h11v-6z'/%3E%3C/svg%3E");
+}
+
+/* ── дерево ── */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  margin: 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.tree.nested {
+  margin-inline-start: 1rem;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 1px solid var(--line);
+}
+
+.line {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.5rem;
+}
+
+.name {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  min-width: 0;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: none;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+}
+
+button {
+  cursor: pointer;
+
+  margin: 0;
+  border: 0;
+
+  font: inherit;
+  color: inherit;
+
+  background: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.dir-toggle {
+  text-align: start;
+}
+
+.dir-toggle:hover {
+  background: var(--hover);
+}
+
+.chevron {
+  transform: rotate(45deg);
+
+  flex: none;
+
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-inline: 0.25rem;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+
+  transition: transform 0.15s;
+}
+
+.dir-toggle[aria-expanded="false"] .chevron {
+  transform: rotate(-45deg);
+}
+
+.btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  border-radius: 0.5rem;
+
+  font-size: 0.875rem;
+  white-space: nowrap;
+
+  background: var(--hover);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--line);
+}
+
+.btn.acc {
+  font-weight: 500;
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.btn.acc:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.btn.ghost {
+  background: none;
+}
+
+.btn.small {
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.progress {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  padding: 0 0.5rem 0.375rem 3.125rem;
+
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.progress-bar {
+  overflow: hidden;
+  flex: 1 1 auto;
+
+  height: 0.25rem;
+  border-radius: 0.125rem;
+
+  background: var(--hover);
+}
+
+.progress-fill {
+  transform-origin: left center;
+  transform: scaleX(0);
+
+  width: 100%;
+  height: 100%;
+
+  background: var(--accent);
+
+  transition: transform 0.2s;
+}
+
+.note {
+  padding: 0 0.5rem 0.5rem 3.125rem;
+  font-size: 0.8125rem;
+  color: var(--red);
+}
+
+.note.ok {
+  color: var(--green);
+}
+
+.preview {
+  margin: 0 0.5rem 0.625rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+
+  background: var(--bg);
+}
+
+.preview-image {
+  display: block;
+
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  border-radius: 0.375rem;
+}
+
+.preview-text {
+  overflow: auto;
+
+  max-height: 60vh;
+  margin: 0;
+
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 0;
+    background: var(--panel);
+  }
+
+  .page {
+    min-height: 100vh;
+    padding: 1rem;
+    border-radius: 0;
+  }
+
+  /* Кнопки файла — второй строкой, под названием */
+  .file .line {
+    flex-wrap: wrap;
+  }
+
+  .file .name {
+    flex-basis: calc(100% - 7rem);
+  }
+
+  .file .actions {
+    width: 100%;
+    padding-inline-start: 2.625rem;
+  }
+
+  .file .actions .btn {
+    flex: 1 1 0;
+    height: 2.5rem;
+  }
+
+  .progress,
+  .note {
+    padding-inline-start: 0.5rem;
+  }
+}

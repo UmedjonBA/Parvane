@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" translate="no" class="notranslate">
+
+<head>
+  <meta charset="UTF-8">
+
+  <title>Parvane</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="referrer" content="no-referrer">
+  <meta name="google" content="notranslate">
+  <meta name="color-scheme" content="dark light">
+
+  <!-- Parvane (spec 022): публичная страница ссылки на файлы облака. Свой строгий CSP: скрипты и стили
+       только свои, соединения — только со своим сервером (gateway), встроенных скриптов нет. -->
+  <meta http-equiv="Content-Security-Policy" content="%TG_LINK_CSP%">
+
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="./favicon.ico" type="image/x-icon">
+</head>
+
+<body>
+  <main id="page" class="page" data-link-page data-state="loading">
+    <header class="brand">parvane</header>
+    <section id="status" class="status" role="status"></section>
+    <section id="content" class="content" hidden></section>
+    <noscript>
+      <p>Turn on JavaScript to open the files: they are decrypted in your browser.</p>
+      <p>Включите JavaScript, чтобы открыть файлы: они расшифровываются в вашем браузере.</p>
+    </noscript>
+    <footer class="foot">
+      <span id="foot-note"></span>
+      <span id="foot-key"></span>
+    </footer>
+  </main>
+  <script type="module" src="./src/publicLink/index.ts"></script>
+</body>
+
+</html>

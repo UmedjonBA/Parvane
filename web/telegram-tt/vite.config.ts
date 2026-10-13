@@ -90,6 +90,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const workerReportBundles: ReportOutputBundle[] = [];
   const plugins: PluginOption[] = [
     v2InviteRedirectPlugin(),
+    cloudLinkRedirectPlugin(),
     buildGitInfoPlugin({
       appEnv,
       head: HEAD,
@@ -168,6 +169,7 @@ export default defineConfig(({ mode }): UserConfig => {
     TG_APP_TITLE: appTitle,
     TG_PUBLIC_URL: baseUrl,
     TG_CSP: csp,
+    TG_LINK_CSP: buildLinkCsp(appEnv),
     TG_APPLE_ICON: appleIcon,
     TG_MAIN_ICON: mainIcon,
     TG_MANIFEST: manifest,
@@ -222,6 +224,11 @@ export default defineConfig(({ mode }): UserConfig => {
       sourcemap: true,
       assetsInlineLimit: (filePath) => (IMAGE_ASSET_RE.test(filePath) ? false : undefined),
       rolldownOptions: {
+        // Два входа: приложение и лёгкая публичная страница ссылки облака (spec 022)
+        input: {
+          index: resolve(DIR_NAME, 'index.html'),
+          s: resolve(DIR_NAME, 's.html'),
+        },
         output: {
           manualChunks(id) {
             if (id.includes('/src/components/ui/')) {
@@ -332,6 +339,53 @@ function v2InviteRedirectPlugin(): Plugin {
       install(server.middlewares);
     },
   };
+}
+
+// Ссылка на файлы облака `https://<домен>/s/<link_id>#k=<ключ>` (spec 022): публичная страница —
+// отдельный вход `s.html` с относительными путями ассетов, поэтому сервер переводит адрес на
+// `/s.html?id=<link_id>`; фрагмент с ключом браузер переносит сам. То же правило — в Caddyfile прода.
+const CLOUD_LINK_PATH = /^\/s\/([A-Za-z0-9_-]{16,32})$/;
+
+function cloudLinkRedirectPlugin(): Plugin {
+  type Middlewares = { use: (fn: (req: { url?: string }, res: {
+    statusCode: number; setHeader: (name: string, value: string) => void; end: () => void;
+  }, next: () => void) => void) => void; };
+  const install = (middlewares: Middlewares) => middlewares.use((req, res, next) => {
+    const linkId = (req.url || '').split('?')[0].match(CLOUD_LINK_PATH)?.[1];
+    if (!linkId) {
+      next();
+      return;
+    }
+    res.statusCode = 302;
+    res.setHeader('Location', `/s.html?id=${linkId}`);
+    res.end();
+  });
+  return {
+    name: 'parvane-cloud-link-redirect',
+    configureServer: (server) => {
+      install(server.middlewares);
+    },
+    configurePreviewServer: (server) => {
+      install(server.middlewares);
+    },
+  };
+}
+
+// CSP публичной страницы ссылки: только свои скрипты и стили (встроенных нет), соединения — только
+// со своим origin (gateway по /ws) и явно заданным PARVANE_GATEWAY_ORIGIN (стенды). Картинки —
+// свои, `blob:` (просмотр расшифрованного) и `data:` (значки в таблице стилей).
+function buildLinkCsp(appEnv: string) {
+  return `
+  default-src 'none';
+  connect-src 'self' ${gatewayOrigins(appEnv)};
+  script-src 'self';
+  style-src 'self';
+  img-src 'self' blob: data:;
+  object-src 'none';
+  frame-src 'none';
+  base-uri 'none';
+  form-action 'none';`
+    .replace(/\s+/g, ' ').trim();
 }
 
 function buildCsp(appEnv: string) {
