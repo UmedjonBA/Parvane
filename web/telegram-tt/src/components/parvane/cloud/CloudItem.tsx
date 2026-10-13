@@ -18,7 +18,7 @@ import kit from '../notes/PvKit.module.scss';
 import styles from './Cloud.module.scss';
 
 export type CloudItemAction = 'open' | 'download' | 'rename' | 'move' | 'delete' | 'restore' | 'purge' | 'send'
-  | 'share' | 'select';
+  | 'share' | 'select' | 'link';
 
 type OwnProps = {
   container: string;

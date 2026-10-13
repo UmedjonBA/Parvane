@@ -2315,6 +2315,9 @@ export interface LangPair {
   'ParvaneCloudErrorRejected': undefined;
   'ParvaneCloudErrorTooMany': undefined;
   'ParvaneCloudErrorNotFound': undefined;
+  'ParvaneCloudLinkErrorTooMany': undefined;
+  'ParvaneCloudLinkErrorLimit': undefined;
+  'ParvaneCloudLinkErrorDisabled': undefined;
   'ParvaneCloudRetry': undefined;
   'ParvaneCloudDropHere': undefined;
   'ParvaneCloudFolder': undefined;
@@ -2355,6 +2358,35 @@ export interface LangPair {
   'ParvaneCloudNoMembers': undefined;
   'ParvaneCloudSharedFolder': undefined;
   'ParvaneCloudInviteGone': undefined;
+  'ParvaneCloudLink': undefined;
+  'ParvaneCloudLinkHeading': undefined;
+  'ParvaneCloudLinkNote': undefined;
+  'ParvaneCloudLinkKeyNote': undefined;
+  'ParvaneCloudLinkTtl': undefined;
+  'ParvaneCloudLinkTtlDay': undefined;
+  'ParvaneCloudLinkTtlWeek': undefined;
+  'ParvaneCloudLinkTtlMonth': undefined;
+  'ParvaneCloudLinkTtlForever': undefined;
+  'ParvaneCloudLinkCreate': undefined;
+  'ParvaneCloudLinkPreparingStart': undefined;
+  'ParvaneCloudLinkCopy': undefined;
+  'ParvaneCloudLinkCopied': undefined;
+  'ParvaneCloudLinkForever': undefined;
+  'ParvaneCloudLinkExtend': undefined;
+  'ParvaneCloudLinkExtendHint': undefined;
+  'ParvaneCloudLinkRevoke': undefined;
+  'ParvaneCloudLinkRevokeConfirm': undefined;
+  'ParvaneCloudLinkPreview': undefined;
+  'ParvaneCloudLinkUnfinished': undefined;
+  'ParvaneCloudLinkUnfinishedNote': undefined;
+  'ParvaneCloudLinkNoName': undefined;
+  'ParvaneCloudLinkKindFile': undefined;
+  'ParvaneCloudLinkStateForever': undefined;
+  'ParvaneCloudLinkStateExpired': undefined;
+  'ParvaneCloudLinks': undefined;
+  'ParvaneCloudLinksNone': undefined;
+  'ParvaneCloudLinksEmpty': undefined;
+  'ParvaneCloudLinksEmptyHint': undefined;
   'ParvaneCloudView': undefined;
   'ParvaneCloudToTrash': undefined;
   'ParvaneCloudSharedNone': undefined;
@@ -4657,6 +4689,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneCloudUsageTrash': {
     'size': V;
   };
+  'ParvaneCloudUsageLinks': {
+    'size': V;
+  };
   'ParvaneCloudPreviewNoViewer': {
     'type': V;
   };
@@ -4672,6 +4707,28 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneCloudSharedBy': {
     'name': V;
+  };
+  'ParvaneCloudLinkTitle': {
+    'name': V;
+  };
+  'ParvaneCloudLinkPreparing': {
+    'done': V;
+    'total': V;
+  };
+  'ParvaneCloudLinkUntil': {
+    'date': V;
+  };
+  'ParvaneCloudLinkExpired': {
+    'date': V;
+  };
+  'ParvaneCloudLinkCreated': {
+    'date': V;
+  };
+  'ParvaneCloudLinkStateUntil': {
+    'date': V;
+  };
+  'ParvaneCloudLinksCount': {
+    'count': V;
   };
   'ParvaneCloudFound': {
     'count': V;

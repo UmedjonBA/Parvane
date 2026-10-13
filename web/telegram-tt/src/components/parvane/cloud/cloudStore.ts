@@ -1,5 +1,5 @@
 import type {
-  CloudDriveState, CloudErrorCode, CloudResult, CloudTransferEvent, CloudUsage,
+  CloudDriveState, CloudErrorCode, CloudLinkInfo, CloudLinkProgress, CloudResult, CloudTransferEvent, CloudUsage,
 } from '../../../api/parvane/cloudDrive';
 import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 
@@ -16,8 +16,8 @@ import {
 // ход — событиями `parvane-cloud-transfer`. Сортировка — настройка устройства.
 
 export type CloudStatus = CloudDriveState['status'];
-// Строки-папки в конце корня: принятые чужие папки и корзина
-export type CloudVirtualFolder = 'shared' | 'trash';
+// Строки-папки в конце корня: принятые чужие папки, свои ссылки (spec 022) и корзина
+export type CloudVirtualFolder = 'shared' | 'links' | 'trash';
 // Место в едином списке: корень, строка-папка корня, контейнер (совместная папка), папка внутри
 export type CloudPlace = { view?: CloudVirtualFolder; container?: string; folder?: string };
 export type CloudPrefs = { sort: CloudSort };
@@ -38,6 +38,7 @@ const callParvane = callApi as unknown as (method: string, args?: unknown) => Pr
 
 const CLOUD_EVENT = 'parvane-cloud-changed';
 const TRANSFER_EVENT = 'parvane-cloud-transfer';
+const LINK_EVENT = 'parvane-cloud-link';
 const PREFS_KEY = 'parvane:cloud-prefs';
 const LOAD_RETRY_MS = 1000;
 const LOAD_ATTEMPTS = 60;
@@ -58,10 +59,15 @@ const [getCloudTransfers, setCloudTransfers] = createSignal<CloudTransfer[]>([])
 const [getCloudUsage, setCloudUsage] = createSignal<CloudUsage | undefined>(undefined);
 const [getCloudPrefs, setCloudPrefsSignal] = createSignal<CloudPrefs>(readPrefs());
 const [getCloudNotice, setCloudNotice] = createSignal<CloudNotice | undefined>(undefined);
+// Свои ссылки (не загружены — undefined) и ход создаваемой сейчас ссылки: «N из M» файлов
+const [getCloudLinks, setCloudLinks] = createSignal<CloudLinkInfo[] | undefined>(undefined);
+const [getCloudLinkProgress, setCloudLinkProgress] = createSignal<
+  (CloudLinkProgress & { container: string; node: string }) | undefined
+>(undefined);
 
 export {
   getCloudData, getIsCloudLoaded, getCloudStatus, getCloudPlace, getCloudTransfers, getCloudUsage, getCloudPrefs,
-  getCloudNotice,
+  getCloudNotice, getCloudLinks, getCloudLinkProgress,
 };
 
 let loadedUserId: string | undefined;
@@ -72,6 +78,7 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let usageTimer: ReturnType<typeof setTimeout> | undefined;
 let transferSeq = 0;
 const uploadSpecs = new Map<string, UploadSpec>();
+const canceledLinks = new Set<string>();
 
 function readPrefs(): CloudPrefs {
   try {
@@ -124,6 +131,11 @@ function listen() {
   });
   window.addEventListener(TRANSFER_EVENT, (e) => {
     applyTransferEvent((e as CustomEvent<CloudTransferEvent>).detail);
+  });
+  window.addEventListener(LINK_EVENT, (e) => {
+    const { id, done, total } = (e as CustomEvent<CloudLinkProgress>).detail;
+    const known = getCloudLinkProgress();
+    if (known?.id === id) setCloudLinkProgress({ ...known, done, total });
   });
 }
 
@@ -182,6 +194,8 @@ export function loadCloud(userId?: string) {
       });
     }
     void refreshCloudUsage();
+    // Непривязанному устройству методы ссылок недоступны — список остаётся незагруженным
+    if (getCloudStatus() !== 'needs-linking') void refreshCloudLinks();
   })();
   return loadPromise;
 }
@@ -194,6 +208,8 @@ function resetCloud() {
   setCloudPlaceSignal({});
   setCloudTransfers([]);
   setCloudUsage(undefined);
+  setCloudLinks(undefined);
+  setCloudLinkProgress(undefined);
   uploadSpecs.clear();
   if (linkingTimer !== undefined) {
     window.clearInterval(linkingTimer);
@@ -523,6 +539,75 @@ export async function downloadCloudNode(container: string, node: CloudNode, maxM
   link.download = result.name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ── ссылки для людей без аккаунта (spec 022) ─────────────────────────────────
+
+/** Чья ссылка создаётся: узел контейнера либо совместная папка целиком (`node` не задан). */
+export type CloudLinkSource = { container: string; node?: string; name: string };
+
+/** Последняя готовая ссылка на узел (источник — в записи владельца). */
+export function linkOfSource(links: CloudLinkInfo[] | undefined, source: { container: string; node?: string }) {
+  return (links || []).find((l) => (
+    l.state !== 'preparing' && l.source?.container === source.container && l.source.node === (source.node || '')
+  ));
+}
+
+export async function refreshCloudLinks() {
+  const result = await callParvane('parvaneCloudLinks').catch(() => undefined) as
+    CloudResult<{ links: CloudLinkInfo[] }> | undefined;
+  if (result?.ok) setCloudLinks(result.links);
+  return result?.ok ? result.links : undefined;
+}
+
+/** Создать ссылку; ход подготовки — `getCloudLinkProgress`. Одновременно готовится одна ссылка. */
+export async function createCloudLink(source: CloudLinkSource, ttlDays: number) {
+  if (getCloudLinkProgress()) return undefined;
+  const id = `link-${Date.now()}-${++transferSeq}`;
+  setCloudLinkProgress({
+    id, done: 0, total: 0, container: source.container, node: source.node || '',
+  });
+  try {
+    const result = await callParvane('parvaneCloudLinkCreate', {
+      container: source.container, node: source.node, name: source.name, ttlDays, transferId: id,
+    }).catch(() => undefined) as CloudResult<{ link: CloudLinkInfo }> | undefined;
+    if (!result?.ok) {
+      // Отмена самим пользователем — не ошибка
+      if (!canceledLinks.delete(id)) showCloudNotice(result?.error || 'rejected');
+      return undefined;
+    }
+    setCloudLinks([result.link, ...(getCloudLinks() || []).filter((l) => l.id !== result.link.id)]);
+    return result.link;
+  } finally {
+    setCloudLinkProgress(undefined);
+    void refreshCloudLinks();
+    void refreshCloudUsage();
+  }
+}
+
+export function cancelCloudLinkCreate() {
+  const progress = getCloudLinkProgress();
+  if (!progress) return;
+  canceledLinks.add(progress.id);
+  void callParvane('parvaneCloudLinkCancel', { transferId: progress.id }).catch(() => undefined);
+}
+
+export async function revokeCloudLink(linkId: string) {
+  const result = await callParvane('parvaneCloudLinkRevoke', { linkId }).catch(() => undefined) as
+    CloudResult | undefined;
+  if (!result?.ok) showCloudNotice(result?.error || 'rejected');
+  else setCloudLinks((getCloudLinks() || []).filter((l) => l.id !== linkId));
+  void refreshCloudLinks();
+  void refreshCloudUsage();
+  return Boolean(result?.ok);
+}
+
+export async function extendCloudLink(linkId: string, ttlDays: number) {
+  const result = await callParvane('parvaneCloudLinkExtend', { linkId, ttlDays }).catch(() => undefined) as
+    CloudResult<{ expiresAt: number }> | undefined;
+  if (!result?.ok) showCloudNotice(result?.error || 'rejected');
+  await refreshCloudLinks();
+  return Boolean(result?.ok);
 }
 
 /** Все файлы узлов с вложенными (для отчёта «сколько освободится»). */

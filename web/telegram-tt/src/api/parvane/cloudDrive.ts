@@ -9,6 +9,10 @@ import {
   CloudAbortError, cloudCipherSize, cloudPlainSize, createBlobSink, createFileSink, downloadCloudBlob,
   uploadCloudBlob, withRetry,
 } from './cloudBlobs';
+import {
+  base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, LINK_MANIFEST_MAX_BYTES,
+  LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, newLinkKey, openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
+} from './cloudLinks';
 
 // Parvane (spec 016): методы провайдера раздела «Облако». Дерево и доступ — в
 // движке (`v2/cloud.ts`), содержимое файлов — потоковые блобы (`cloudBlobs.ts`);
@@ -44,7 +48,28 @@ export type CloudDriveState = {
   trees: Record<string, CloudStateJson>;
   error?: string;
 };
-export type CloudUsage = { used: number; quota: number; maxFile: number };
+export type CloudUsage = {
+  used: number; quota: number; maxFile: number;
+  /** Байты копий всех ссылок (входят в `used`). */
+  linksBytes: number;
+};
+export type CloudLinkState = 'preparing' | 'active' | 'expired';
+/** Ссылка для людей без аккаунта (spec 022), как её видит владелец. */
+export type CloudLinkInfo = {
+  id: string;
+  state: CloudLinkState;
+  /** Unix-секунды; `expiresAt = 0` — без срока. */
+  createdAt: number;
+  expiresAt: number;
+  bytes: number;
+  files: number;
+  /** Из записи владельца; у готовящейся ссылки и при недоступном ключе диска их нет. */
+  name?: string;
+  kind?: LinkKind;
+  url?: string;
+  source?: { container: string; node: string };
+};
+export type CloudLinkProgress = { id: string; done: number; total: number };
 export type CloudTransferEvent = {
   id: string;
   kind: 'upload' | 'download' | 'move';
@@ -54,7 +79,7 @@ export type CloudTransferEvent = {
   error?: CloudErrorCode;
 };
 export type CloudErrorCode = 'offline' | 'no-space' | 'too-large' | 'forbidden' | 'rejected' | 'not-found'
-  | 'too-many';
+  | 'too-many' | 'link-too-many' | 'link-limit' | 'link-disabled';
 export type CloudResult<T = object> = ({ ok: true } & T) | { ok: false; error: CloudErrorCode };
 
 export type CloudMoveItem = { id: string; name: string };
@@ -74,6 +99,18 @@ type Deps = {
   sendFile: (chatId: string, file: SentFile) => Promise<boolean>;
   /** Адрес пользователя по id чата. */
   addressOf: (chatId: string) => string | undefined;
+};
+
+// Ответы методов ссылок: имена полей — оба написания, числа u64 — строками
+type LinkInfoReply = {
+  linkId?: string; link_id?: string; state?: string | number;
+  createdAt?: string | number; created_at?: string | number;
+  expiresAt?: string | number; expires_at?: string | number;
+  bytes?: string | number; files?: number;
+  ownerRecord?: string; owner_record?: string;
+};
+type LinkAddReply = {
+  fileId?: string; file_id?: string; size?: string | number; chunks?: number;
 };
 
 // Ответ копии блоба: имена полей — как отдаёт кодек реестра (оба написания)
@@ -103,6 +140,18 @@ const NODE_ID_BYTES = 16;
 const MOVE_CHUNK_FILES = 20;
 const MOVE_CHUNK_BYTES = 64 * 1024 * 1024;
 const MAX_NODES = 8000;
+// Ссылки (spec 022): копии файлов идут несколькими запросами сразу; большая
+// копия на сервере дольше одного запроса — повторять, пока сервер отвечает «ещё идёт»
+const LINK_ADD_WINDOW = 4;
+const LINK_ADD_ROUNDS = 6;
+const LINK_STATES: Record<string, CloudLinkState> = {
+  LINK_STATE_PREPARING: 'preparing',
+  1: 'preparing',
+  LINK_STATE_ACTIVE: 'active',
+  2: 'active',
+  LINK_STATE_EXPIRED: 'expired',
+  3: 'expired',
+};
 
 export function newCloudNodeId() {
   const bytes = crypto.getRandomValues(new Uint8Array(NODE_ID_BYTES));
@@ -111,6 +160,9 @@ export function newCloudNodeId() {
 
 function errorOf(e: unknown): CloudErrorCode {
   const code = e instanceof V2Error ? e.code : String(e);
+  if (code === 'LINK_TOO_MANY') return 'link-too-many';
+  if (code === 'LINK_LIMIT') return 'link-limit';
+  if (code === 'LINK_DISABLED') return 'link-disabled';
   if (code.includes('FieldLimit')) return 'too-many';
   if (code.includes('LIMIT')) return 'no-space';
   if (code.includes('FORBIDDEN') || code.includes('Forbidden')) return 'forbidden';
@@ -141,6 +193,7 @@ export function createCloudDrive(deps: Deps) {
   const uploads = new Map<string, UploadJob>();
   const downloads = new Map<string, AbortController>();
   const moves = new Map<string, AbortController>();
+  const links = new Map<string, AbortController>();
   const thumbs = new Map<string, Promise<string | undefined>>();
   const previews = new Map<string, Promise<Blob | undefined>>();
   let isEnsureStarted = false;
@@ -161,12 +214,14 @@ export function createCloudDrive(deps: Deps) {
       buckets?: {
         bucket?: string | number; used?: string; quota?: string; maxFile?: string; max_file?: string;
       }[];
+      linksBytes?: string; links_bytes?: string;
     }>('cloud.blob.usage', {});
     const drive = got.buckets?.find((b) => b.bucket === DRIVE_BUCKET || b.bucket === 1);
     const value = {
       used: Number(drive?.used || 0),
       quota: Number(drive?.quota || 0),
       maxFile: Number(drive?.maxFile || drive?.max_file || 0),
+      linksBytes: Number(got.linksBytes || got.links_bytes || 0),
     };
     usage = { at: Date.now(), value };
     return value;
@@ -456,6 +511,145 @@ export function createCloudDrive(deps: Deps) {
     }
   }
 
+  // ── ссылки для людей без аккаунта (spec 022) ───────────────────────────────
+
+  /** Ключи личного диска по эпохам (base64): ими шифруются записи владельца. */
+  function driveKeys(): Map<number, string> {
+    const cloud = deps.cloud();
+    const root = cloud.rootId();
+    try {
+      const exported = JSON.parse(cloud.keysExport() || '[]') as { id: string; keys: [number, string][] }[];
+      return new Map(exported.find((c) => c.id === root)?.keys || []);
+    } catch {
+      return new Map();
+    }
+  }
+
+  async function readLink(reply: LinkInfoReply, keys: Map<number, string>): Promise<CloudLinkInfo | undefined> {
+    const id = reply.linkId || reply.link_id;
+    if (!id) return undefined;
+    const info: CloudLinkInfo = {
+      id,
+      state: LINK_STATES[String(reply.state)] || 'preparing',
+      createdAt: Number(reply.createdAt || reply.created_at || 0),
+      expiresAt: Number(reply.expiresAt || reply.expires_at || 0),
+      bytes: Number(reply.bytes || 0),
+      files: reply.files || 0,
+    };
+    const wire = reply.ownerRecord || reply.owner_record;
+    const record = wire ? await openOwnerRecord(base64ToBytes(wire), keys, id).catch(() => undefined) : undefined;
+    if (!record) return info;
+    return {
+      ...info,
+      name: record.name,
+      kind: record.kind,
+      source: record.source,
+      url: buildLinkUrl(window.location.origin, id, record.key),
+    };
+  }
+
+  async function revokeLink(linkId: string) {
+    await withRetry(() => deps.transport().blobCall('cloud.link.revoke', { link_id: linkId }));
+    usage = undefined;
+  }
+
+  /** Создать ссылку: копии файлов на сервере, зашифрованный список, запись владельца. */
+  async function createLink(args: {
+    container: string; node?: string; name?: string; ttlDays: number; signal: AbortSignal;
+    onProgress: (done: number, total: number) => void;
+  }): Promise<CloudLinkInfo> {
+    const { signal } = args;
+    const transport = deps.transport();
+    const plan = buildLinkPlan(readTree(args.container)?.nodes || [], args.node || undefined, args.name);
+    if ('error' in plan) throw new V2Error(plan.error === 'too-many' ? 'LINK_TOO_MANY' : 'ERROR_CODE_NOT_FOUND');
+    // Отказ до начала: места должно хватить на все копии
+    const limits = await fetchUsage(true);
+    const copyBytes = plan.files.reduce((sum, f) => sum + cloudCipherSize(f.node.blob!.size), 0);
+    if (limits.quota && limits.used + copyBytes > limits.quota) throw new V2Error('ERROR_CODE_LIMIT');
+    const keys = driveKeys();
+    const epoch = Math.max(-1, ...keys.keys());
+    const driveKey = keys.get(epoch);
+    // Запись владельца шифруется ключом личного диска: без него ссылку потом не показать
+    if (!driveKey) throw new V2Error('ERROR_CODE_INVALID');
+
+    // Место и число файлов проверены выше: отказ `LIMIT` здесь — предел числа ссылок аккаунта,
+    // `FORBIDDEN` — ссылки выключены на сервере. Запрос без повтора: он не идемпотентен, повтор после
+    // потерянного ответа оставил бы вторую, недоделанную ссылку
+    const created = await transport.blobCall<{ linkId?: string; link_id?: string }>(
+      'cloud.link.create', { ttl_days: args.ttlDays },
+    ).catch((e: unknown) => {
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_LIMIT') throw new V2Error('LINK_LIMIT');
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_FORBIDDEN') throw new V2Error('LINK_DISABLED');
+      throw e;
+    });
+    const linkId = created.linkId || created.link_id;
+    if (!linkId) throw new V2Error('ERROR_CODE_INVALID');
+    try {
+      const copies = new Map<string, { fileId: string; blobSize: number; chunks: number }>();
+      let done = 0;
+      args.onProgress(0, plan.files.length);
+      await runPool(plan.files, LINK_ADD_WINDOW, async ({ node }) => {
+        const blob = node.blob!;
+        const request = { link_id: linkId, file_id: blob.fileId, capability: blob.capability };
+        let copy: LinkAddReply | undefined;
+        // Метод идемпотентен: повтор с тем же источником отдаёт уже сделанную копию
+        for (let round = 1; !copy; round++) {
+          try {
+            copy = await withRetry(() => transport.blobCall<LinkAddReply>('cloud.link.add', request), signal);
+          } catch (e) {
+            const isStillCopying = e instanceof V2Error && e.code === 'ERROR_CODE_UNAVAILABLE';
+            if (!isStillCopying || round >= LINK_ADD_ROUNDS) throw e;
+          }
+        }
+        const fileId = copy.fileId || copy.file_id;
+        if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
+        copies.set(node.id, {
+          fileId,
+          blobSize: Number(copy.size || 0) || cloudCipherSize(blob.size),
+          chunks: copy.chunks || blob.chunks,
+        });
+        done += 1;
+        args.onProgress(done, plan.files.length);
+      });
+      if (signal.aborted) throw new CloudAbortError();
+
+      const linkKey = newLinkKey();
+      const createdAt = Math.floor(Date.now() / 1000);
+      const manifest = await sealManifest(buildManifest(plan, copies, createdAt), linkKey, linkId);
+      if (manifest.length > LINK_MANIFEST_MAX_BYTES) throw new V2Error('LINK_TOO_MANY');
+      const key = bytesToBase64Url(linkKey);
+      const source = { container: args.container, node: args.node || '' };
+      const ownerRecord = await sealOwnerRecord({
+        name: plan.name, kind: plan.kind, key, epoch, source,
+      }, base64ToBytes(driveKey), linkId);
+      if (ownerRecord.length > LINK_OWNER_RECORD_MAX_BYTES) throw new V2Error('ERROR_CODE_INVALID');
+      const published = await withRetry(() => transport.blobCall<{
+        expiresAt?: string | number; expires_at?: string | number;
+      }>('cloud.link.publish', {
+        link_id: linkId, manifest: bytesToBase64(manifest), owner_record: bytesToBase64(ownerRecord),
+      }), signal);
+      usage = undefined;
+      return {
+        id: linkId,
+        state: 'active',
+        createdAt,
+        expiresAt: Number(published.expiresAt || published.expires_at || 0),
+        bytes: Array.from(copies.values()).reduce((sum, c) => sum + c.blobSize, 0),
+        files: plan.files.length,
+        name: plan.name,
+        kind: plan.kind,
+        source,
+        url: buildLinkUrl(window.location.origin, linkId, key),
+      };
+    } catch (e) {
+      // Недоделанная ссылка не должна занимать место: её копии убирает отзыв
+      await revokeLink(linkId).catch((err: unknown) => {
+        deps.log(`облако: недоделанная ссылка не отозвана: ${String(err)}`);
+      });
+      throw e;
+    }
+  }
+
   return {
     /** Состояние раздела; первый вызов запускает подключение и синхронизацию. */
     parvaneCloudState(): Promise<CloudDriveState> {
@@ -705,6 +899,86 @@ export function createCloudDrive(deps: Deps) {
 
     async parvaneCloudUsage(): Promise<CloudUsage | undefined> {
       return fetchUsage().catch(() => undefined);
+    },
+
+    // ── ссылки для людей без аккаунта (spec 022) ─────────────────────────────
+
+    /** Создать ссылку на файл либо папку; ход «N из M» — событием `parvane-cloud-link`. */
+    async parvaneCloudLinkCreate({
+      container, node, name, ttlDays, transferId,
+    }: {
+      container: string; node?: string; name?: string; ttlDays: number; transferId: string;
+    }): Promise<CloudResult<{ link: CloudLinkInfo }>> {
+      const abort = new AbortController();
+      links.set(transferId, abort);
+      try {
+        const link = await createLink({
+          container,
+          node,
+          name,
+          ttlDays,
+          signal: abort.signal,
+          onProgress: (done, total) => {
+            if (typeof window === 'undefined') return;
+            const detail: CloudLinkProgress = { id: transferId, done, total };
+            window.dispatchEvent(new CustomEvent('parvane-cloud-link', { detail }));
+          },
+        });
+        return { ok: true, link };
+      } catch (e) {
+        if (e instanceof CloudAbortError) return { ok: false, error: 'rejected' };
+        deps.log(`облако: ссылка не создана: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      } finally {
+        links.delete(transferId);
+      }
+    },
+
+    parvaneCloudLinkCancel({ transferId }: { transferId: string }) {
+      links.get(transferId)?.abort();
+      return Promise.resolve(true);
+    },
+
+    /** Свои ссылки: названия и адреса — из записей владельца. */
+    async parvaneCloudLinks(): Promise<CloudResult<{ links: CloudLinkInfo[] }>> {
+      try {
+        const got = await deps.transport().blobCall<{ links?: LinkInfoReply[] }>('cloud.link.list', {});
+        const keys = driveKeys();
+        const list = await Promise.all((got.links || []).map((reply) => readLink(reply, keys)));
+        return {
+          ok: true,
+          links: list.filter((l): l is CloudLinkInfo => Boolean(l)).sort((a, b) => b.createdAt - a.createdAt),
+        };
+      } catch (e) {
+        deps.log(`облако: список ссылок не получен: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Отозвать ссылку: копии удаляются, место возвращается. */
+    async parvaneCloudLinkRevoke({ linkId }: { linkId: string }): Promise<CloudResult> {
+      try {
+        await revokeLink(linkId);
+        return { ok: true };
+      } catch (e) {
+        deps.log(`облако: ссылка не отозвана: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
+    },
+
+    /** Новый срок действующей либо истёкшей ссылки (0 — без срока). */
+    async parvaneCloudLinkExtend(
+      { linkId, ttlDays }: { linkId: string; ttlDays: number },
+    ): Promise<CloudResult<{ expiresAt: number }>> {
+      try {
+        const got = await withRetry(() => deps.transport().blobCall<{
+          expiresAt?: string | number; expires_at?: string | number;
+        }>('cloud.link.extend', { link_id: linkId, ttl_days: ttlDays }));
+        return { ok: true, expiresAt: Number(got.expiresAt || got.expires_at || 0) };
+      } catch (e) {
+        deps.log(`облако: срок ссылки не изменён: ${String(e)}`);
+        return { ok: false, error: errorOf(e) };
+      }
     },
 
     // ── облако и чаты ────────────────────────────────────────────────────────

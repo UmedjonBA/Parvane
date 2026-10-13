@@ -199,6 +199,7 @@ log "Gateway rate limit e2e"
 "$ROOT/scripts/run_web_cloud_sync_e2e.sh"
 "$ROOT/scripts/run_web_cloud_chat_e2e.sh"
 "$ROOT/scripts/run_web_cloud_share_e2e.sh"
+"$ROOT/scripts/run_web_cloud_links_e2e.sh"
 
 log "Cross-client features Web <-> desktop e2e (readers, live location, revoke)"
 "$ROOT/scripts/run_web_cross_features_e2e.sh"
