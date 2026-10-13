@@ -623,6 +623,8 @@ const connectionController = createConnectionController({
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
     localState.clearUserData(user);
+    // Отложенная запись состояния движка (perf A1) не должна лечь поверх стирания
+    await v2Controller.settleState().catch(() => undefined);
     await SecureE2eStorage.clear(user);
     await clearSecureSession(user).catch(() => undefined);
   },
