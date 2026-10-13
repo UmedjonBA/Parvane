@@ -1030,6 +1030,22 @@ pub fn decode_method_response(method: &str, bytes: &[u8]) -> Result<String, Stri
     crate::schema::method_codec::decode_response(method, bytes).unwrap_or(Err(ProtoError::UnknownMethod)).map_err(err)
 }
 
+/// Тело `cloud.blob.upload_chunk` из уже зашифрованных байт чанка (A7): без
+/// base64 и JSON на горячем пути загрузки. `bucket` — `BlobBucket` (0 — медиа
+/// чатов, 1 — диск «Облака»; учитывается сервером только на первом чанке).
+/// Байты равны тем, что даёт `encode_method_request` с base64 в JSON. Чанк
+/// длиннее предела схемы — `FieldLimit`.
+pub fn encode_upload_chunk(upload_id: &str, index: u32, bucket: i32, data: &[u8]) -> Result<Vec<u8>, String> {
+    use crate::pb::parvane::cloud::v1::{BlobBucket, UploadChunkRequest};
+    if BlobBucket::try_from(bucket).is_err() {
+        return Err(err(ProtoError::InvalidField("bucket")));
+    }
+    let bytes = UploadChunkRequest { upload_id: upload_id.to_string(), index, data: data.to_vec(), bucket }.encode_to_vec();
+    // Те же пределы схемы, что у JSON-пути (`data` ≤ 716 800, `upload_id` ≤ 64).
+    crate::limits::check_named("parvane.cloud.v1.UploadChunkRequest", &bytes, Origin::Client).map_err(err)?;
+    Ok(bytes)
+}
+
 /// Тело запроса из proto3-JSON по имени типа (для методов, которые хост
 /// вызывает сам: вход, профиль, журналы, бандлы, облако).
 pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, String> {
@@ -1141,4 +1157,23 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
 /// base64 → байты (помощник для хостов без своей base64).
 pub fn from_b64(s: &str) -> Result<Vec<u8>, String> {
     unb64(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A7: тело чанка из байт совпадает с прежним путём (JSON + base64).
+    #[test]
+    fn upload_chunk_bytes_match_json_path() {
+        let data: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+        let json = json!({"upload_id": "up-1", "index": 3, "data": b64(&data), "bucket": "BLOB_BUCKET_DRIVE"}).to_string();
+        let via_json = encode_method_request("cloud.blob.upload_chunk", &json).unwrap();
+        assert_eq!(encode_upload_chunk("up-1", 3, 1, &data).unwrap(), via_json);
+        // Первый чанк без bucket и с пустым upload_id.
+        let json0 = json!({"upload_id": "", "index": 0, "data": b64(&data[..10])}).to_string();
+        assert_eq!(encode_upload_chunk("", 0, 0, &data[..10]).unwrap(), encode_method_request("cloud.blob.upload_chunk", &json0).unwrap());
+        assert!(encode_upload_chunk("up-1", 1, 7, &data).is_err(), "неизвестный bucket");
+        assert!(encode_upload_chunk("up-1", 1, 0, &vec![0u8; 716_801]).is_err(), "чанк больше предела схемы");
+    }
 }

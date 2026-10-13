@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use prost::Message;
 
-use super::{LamportGuard, Stamp};
+use super::{LamportGuard, Stamp, StateCache};
 use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
@@ -184,6 +184,8 @@ pub struct PurgedBlob {
 pub struct CloudState {
     nodes: BTreeMap<NodeId, Node>,
     meta: Option<(Stamp, String)>,
+    /// Ревизия состояния (C1, кэш JSON у клиента); в сравнении не участвует.
+    cache: StateCache,
 }
 
 /// Вставить номер перед расширением: «отчёт.pdf» → «отчёт (2).pdf».
@@ -224,6 +226,7 @@ impl CloudState {
 
     /// Применить одну операцию (идемпотентно и независимо от порядка).
     pub fn apply(&mut self, op: &CloudOp) -> Result<()> {
+        self.cache.touch();
         match op.op.as_ref().ok_or(ProtoError::InvalidField("op"))? {
             cloud_op::Op::Create(c) => self.apply_create(c)?,
             cloud_op::Op::Move(m) => {
@@ -514,6 +517,7 @@ impl CloudState {
 
     /// Слить снимок (идемпотентно, как применение тех же регистров).
     pub fn merge_snapshot(&mut self, s: &CloudSnapshot) -> Result<()> {
+        self.cache.touch();
         let stamp = |lamport: u64, dev: u32| -> Result<Stamp> {
             let device = s.devices.get(dev as usize).ok_or(ProtoError::InvalidField("devices"))?;
             if lamport == 0 || !crate::address::is_valid_device_id(device) {
@@ -594,6 +598,11 @@ impl CloudState {
     /// Размер открытого текста снимка.
     pub fn size_estimate(&self, now_ms: u64) -> usize {
         self.to_snapshot(now_ms).encoded_len()
+    }
+
+    /// Ревизия состояния: растёт при каждой правке и слиянии снимка.
+    pub fn rev(&self) -> u64 {
+        self.cache.rev()
     }
 
     /// Проверка локальной правки перед отправкой: предел узлов, родитель —

@@ -32,6 +32,8 @@ struct CloudLocal {
     snapshot_seq: u64,
     /// Операции журнала, ждущие ключа своей эпохи (в порядке seq).
     pending_ops: Vec<ContainerOp>,
+    /// JSON дерева для хоста по ревизии состояния — C1/A8.
+    json_cache: JsonCache,
 }
 
 /// Итог приёма страницы журнала контейнера облака (`domain.op.sync`).
@@ -181,9 +183,10 @@ impl Client {
         self.cloud.get(id).and_then(|c| cloud_role_of(&c.access, &self.user))
     }
 
-    /// Видимое дерево контейнера для хоста (JSON).
+    /// Видимое дерево контейнера для хоста (JSON). Пока ревизия состояния не
+    /// менялась — та же строка из кэша (хост зовёт это на каждый узел).
     pub fn cloud_state_json(&self, id: &[u8]) -> Option<String> {
-        self.cloud.get(id).map(|c| cloud_json::state_json(&c.state))
+        self.cloud.get(id).map(|c| c.json_cache.get_or(c.state.rev(), 0, || cloud_json::state_json(&c.state)))
     }
 
     /// Сводка контейнеров для хоста:
@@ -240,6 +243,7 @@ impl Client {
                 head_seq: 0,
                 snapshot_seq: 0,
                 pending_ops: vec![],
+                json_cache: JsonCache::default(),
             },
         );
         Ok((id, OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) })))
@@ -277,6 +281,7 @@ impl Client {
             head_seq: existing.as_ref().map_or(0, |c| c.head_seq),
             snapshot_seq: existing.as_ref().map_or(0, |c| c.snapshot_seq),
             pending_ops: existing.map(|c| c.pending_ops).unwrap_or_default(),
+            json_cache: JsonCache::default(),
         };
         self.cloud.insert(id.clone(), local);
         self.cloud_absorb_pending_keys();
@@ -731,8 +736,8 @@ impl Client {
                 genesis: b64(&c.genesis.encode_to_vec()),
                 grants: c.grants.iter().map(|g| b64(&g.encode_to_vec())).collect(),
                 keys: (dom::FIRST_EPOCH..=c.access.epoch).filter_map(|e| c.keys.get(e).map(|k| (e, b64(k)))).collect(),
-                // Локальная копия хранит все надгробия (момент 0 — ничего не отбрасывать).
-                snapshot: b64(&c.state.to_snapshot(0).encode_to_vec()),
+                // Надгробия старше `PURGED_KEEP_MS` — как в снимке на сервере (A1(в)).
+                snapshot: b64(&c.state.to_snapshot(now_ms().max(0) as u64).encode_to_vec()),
                 head_seq: c.head_seq,
                 snapshot_seq: c.snapshot_seq,
                 guard_max: c.guard.max_seen(),
@@ -757,7 +762,7 @@ impl Client {
         let id = access.container_ref()?.id.clone();
         self.cloud.insert(
             id,
-            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops },
+            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, json_cache: JsonCache::default() },
         );
         Ok(())
     }
