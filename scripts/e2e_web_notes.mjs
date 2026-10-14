@@ -1541,7 +1541,7 @@ try {
   await visible(phoneGraph.locator('[data-node][data-kind="day"]'), 'граф после закрытия листа отвечает на нажатия');
   console.log('OK: граф на телефоне — лист заметки, режим «Связать»');
 
-  // ── Телефон: шапка графа — одна строка (не помещается — листается вбок), поиск в той же строке ──
+  // ── Телефон: шапка графа — одна строка (не помещается — листается вбок) ──
   const graphRow = phoneGraph.locator('[data-board-tools]').first().locator(':scope > div').first();
   const rowTops = await graphRow.evaluate((el) => [...el.children].map((child) => {
     const target = child.tagName === 'FORM' ? child.firstElementChild : child;
@@ -1556,12 +1556,47 @@ try {
       + ` a=${css.alignSelf} d=${css.display} p=${getComputedStyle(child).display}`;
   }).join('; '));
   assert.ok(Math.max(...rowTops) - Math.min(...rowTops) <= 2, `шапка графа в одну строку: ${rowDebug}`);
-  const isScrollable = await graphRow.evaluate((el) => el.scrollWidth > el.clientWidth);
-  assert.ok(isScrollable, 'шапка графа на телефоне листается вбок');
+  const rowOverflow = await graphRow.evaluate((el) => getComputedStyle(el).overflowX);
+  assert.ok(['auto', 'scroll'].includes(rowOverflow), `шапка графа листается вбок: overflow-x=${rowOverflow}`);
+  assert.equal(await phoneGraph.locator('[data-board-tools] input').count(), 0, 'своего поля поиска у графа нет');
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-phone-graph.png` });
   }
   console.log('OK: шапка графа на телефоне — одна строка');
+
+  // ── Телефон: лупа в шапке ищет по текущей вкладке — поле на месте вкладок ──
+  const knowledgeHeader = knowledge.locator('header').first();
+  const headerTabs = knowledgeHeader.locator('[role="tablist"]');
+  const headerSearch = knowledgeHeader.locator('[data-section-search]');
+  await knowledgeHeader.locator('[data-section-search-open]').click();
+  await visible(headerSearch, 'поле поиска в шапке по лупе');
+  await headerTabs.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  await headerSearch.fill('X99');
+  await visible(phoneGraph.locator('[data-node][data-found][data-title*="X99"]').first(), 'граф подсветил найденную точку');
+  await knowledgeHeader.locator('[data-section-search-close]').click();
+  await visible(headerTabs, 'вкладки после закрытия поиска');
+  assert.equal(await phoneGraph.locator('[data-node][data-found]').count(), 0, 'подсветка осталась после закрытия поиска');
+  // «Назад» сначала закрывает поиск, раздел остаётся на месте
+  await knowledgeHeader.locator('[data-section-search-open]').click();
+  await headerSearch.fill('X99');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.history.back());
+  await visible(headerTabs, '«назад» не закрыл поиск');
+  await visible(phoneGraph, '«назад» с открытым поиском увёл с графа');
+  // Холст: та же лупа ищет карточки холста
+  await openTab('Canvas');
+  const phoneBoard = knowledge.locator('[data-canvas-board]');
+  await visible(phoneBoard, 'холст на телефоне');
+  const hasX99Card = await phoneBoard.locator('[data-canvas-node]', { hasText: 'X99' }).count();
+  await knowledgeHeader.locator('[data-section-search-open]').click();
+  await headerSearch.fill('X99');
+  if (hasX99Card) {
+    await visible(phoneBoard.locator('[data-search="found"]').first(), 'холст подсветил найденную карточку');
+  }
+  await knowledgeHeader.locator('[data-section-search-close]').click();
+  await openTab('Graph');
+  await visible(phoneGraph, 'граф после поиска на холсте');
+  console.log(`OK: лупа в шапке ищет по вкладке (граф, холст${hasX99Card ? ' с находкой' : ''}), «назад» закрывает поиск`);
 
   // ── Системное «назад»: заметка → список, папка → родительская, корень раздела → чаты ──
   // Раздел ставит свою запись истории заново через пару кадров после шага — жест человека не быстрее

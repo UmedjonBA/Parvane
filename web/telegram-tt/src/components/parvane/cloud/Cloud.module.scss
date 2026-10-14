@@ -65,7 +65,7 @@
 .tools {
   display: flex;
   gap: 0.5rem;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 0.625rem;
 }
 
@@ -161,6 +161,13 @@
   margin-bottom: 0.375rem;
   font-size: 0.8125rem;
   color: var(--pv-muted);
+}
+
+// Путь либо число найденного — слева, сортировка — справа в той же строке
+.toolsMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-block: 0;
 }
 
 // Полоса совместной папки: чья она и у кого доступ

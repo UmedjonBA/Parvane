@@ -1844,6 +1844,7 @@
 "PlannerHealthKcalWeek" = "Калории за неделю";
 "ParvanePalettePlaceholder" = "Заметка, событие или команда";
 "ParvanePaletteCommands" = "Команды";
+"ParvanePaletteSearchPlan" = "Поиск по плану";
 "ParvanePaletteRecords" = "Записи";
 "ParvanePaletteLogSleep" = "Записать сон";
 "ParvanePaletteLogFood" = "Записать еду";
@@ -1961,6 +1962,7 @@
 "KnowledgeGraphCreate" = "Создать заметку";
 "KnowledgeGraphHint" = "нажмите заметку — она откроется справа · потяните от кольца вокруг заметки, чтобы связать · нажмите линию, чтобы убрать связь";
 "KnowledgeGraphSearch" = "Найти на графе";
+"KnowledgeCanvasSearch" = "Найти на холсте";
 "KnowledgeGraphOpenInNotes" = "Открыть в заметках";
 "KnowledgeGraphOpenInPlan" = "Открыть в плане";
 "KnowledgeGraphMissingText" = "На эту заметку ссылаются другие, но самой её ещё нет.";

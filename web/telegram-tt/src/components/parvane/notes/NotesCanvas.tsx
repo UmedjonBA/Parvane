@@ -4,7 +4,7 @@ import {
 import { getActions } from '../../../global';
 
 import type { CloudNode } from '../cloud/cloudModel';
-import type { BoardView } from './boardView';
+import type { BoardRect, BoardView } from './boardView';
 import type { CanvasCommand, CanvasMenuItem } from './CanvasContextMenu';
 import type {
   CanvasDoc, CanvasEdge, CanvasNode, CanvasPoint, CanvasRect, CanvasSide,
@@ -22,7 +22,7 @@ import { getIsParvaneScreenShown } from '../../../util/parvaneSection';
 import { debounce } from '../../../util/schedulers';
 import { downloadCloudNode, getCloudData, getNodes } from '../cloud/cloudStore';
 import {
-  BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, revealRects, zoomAround,
+  BOARD_ZOOM_STEP, boardBackgroundStyle, clampBoardScale, createPinch, fitRects, revealRects, zoomAround,
   zoomByWheel,
 } from './boardView';
 import {
@@ -86,6 +86,10 @@ type OwnProps = {
   isNarrow: boolean;
   // Холст, на котором открыть вкладку (созданный с графа); нет такого — первый
   openId?: string;
+  // Поиск из шапки раздела: найденные карточки подсвечены, к первой холст едет сам; рост `searchStep`
+  // (Enter в поле) — к следующей
+  query: string;
+  searchStep: number;
   onOpenTitle: (title: string) => void;
 };
 
@@ -166,6 +170,9 @@ const INLINE_SELECTOR = '[data-canvas-inline]';
 const PASSIVE_SELECTOR = `[data-board-tools], ${INLINE_SELECTOR}, [data-canvas-open], [data-canvas-open-note]`;
 const NOTE_HEAD_SELECTOR = '[data-canvas-note-head]';
 const TAP_BOARD = 'board';
+// Найденная карточка показывается не мельче этого масштаба; холст едет к ней после паузы в наборе
+const FOUND_MIN_SCALE = 0.8;
+const FOUND_DELAY_MS = 400;
 const IMAGE_QUALITIES: CanvasImageQuality[] = ['full', 'thumb'];
 // Последнее скопированное на холсте — запасной путь для «Вставить» из меню, когда буфер обмена браузера
 // прочитать нельзя
@@ -185,7 +192,7 @@ function isTypingElement(element: Element | undefined) {
 // Холст (JSON Canvas): карточки заметок, файлов и ссылок, текстовые карточки, группы и стрелки с подписями.
 // Файл `.canvas` лежит в папке «Знания»; правки сохраняются сами через паузу
 const NotesCanvas = ({
-  canvases: allCanvases, notes, isNarrow, openId, onOpenTitle,
+  canvases: allCanvases, notes, isNarrow, openId, query, searchStep, onOpenTitle,
 }: OwnProps) => {
   const { showNotification } = getActions();
   const boardRef = useRef<HTMLDivElement>();
@@ -1880,6 +1887,41 @@ const NotesCanvas = ({
   // масштабу, так что сам по себе жест карточки не перерисовывает
   const isLargeImage = (node: CanvasNode) => node.width * view.scale >= CANVAS_FULL_IMAGE_MIN_PX;
 
+  // Поиск: текст карточки, подпись группы, название и текст заметки, адрес ссылки, путь файла
+  const found = useMemo(() => {
+    const wanted = normalizeSearch(query);
+    if (!wanted) return undefined;
+    return new Set(doc.nodes.filter((node) => {
+      const title = noteTitleOfPath(node.file);
+      const noteText = title !== undefined ? noteByTitle.get(title.toLowerCase())?.text : undefined;
+      return [node.text, node.label, node.url, node.file, noteText]
+        .some((text) => text && normalizeSearch(text).includes(wanted));
+    }).map(({ id }) => id));
+  }, [query, doc, noteByTitle]);
+  const foundAtRef = useRef(-1);
+  const searchStepRef = useRef(searchStep);
+
+  const showNextFound = useLastCallback(() => {
+    const hits = doc.nodes.filter(({ id }) => found?.has(id));
+    if (!hits.length) return;
+    foundAtRef.current = (foundAtRef.current + 1) % hits.length;
+    const size = viewport();
+    applyView(centerOn(viewRef.current, hits[foundAtRef.current], size.width, size.height), true);
+  });
+
+  useEffect(() => {
+    foundAtRef.current = -1;
+    if (!query.trim()) return undefined;
+    const timer = setTimeout(showNextFound, FOUND_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [query, showNextFound]);
+
+  useEffect(() => {
+    if (searchStep === searchStepRef.current) return;
+    searchStepRef.current = searchStep;
+    showNextFound();
+  }, [searchStep, showNextFound]);
+
   // Карточка холста — memo-компонент: перерисовывается только при смене своих данных
   const renderNode = (node: CanvasNode) => {
     const title = node.type === 'file' ? noteTitleOf(node) : undefined;
@@ -1890,6 +1932,7 @@ const NotesCanvas = ({
         key={node.id}
         node={node}
         isSelected={selection.nodes.includes(node.id) || linkFrom === node.id}
+        searchMark={!found ? undefined : found.has(node.id) ? 'found' : 'dim'}
         isLinkable={Boolean(linkFrom) && linkFrom !== node.id}
         isHover={hoverGroup === node.id}
         hasGrips={hasGrips(node)}
@@ -2588,3 +2631,17 @@ const NotesCanvas = ({
 };
 
 export default memo(NotesCanvas);
+
+function normalizeSearch(value: string) {
+  return value.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
+// Вид с прямоугольником посередине экрана; мелкий масштаб подрастает, чтобы находку было видно
+function centerOn(view: BoardView, rect: BoardRect, width: number, height: number): BoardView {
+  const scale = clampBoardScale(Math.max(view.scale, FOUND_MIN_SCALE));
+  return {
+    scale,
+    x: width / 2 - (rect.x + rect.width / 2) * scale,
+    y: height / 2 - (rect.y + rect.height / 2) * scale,
+  };
+}

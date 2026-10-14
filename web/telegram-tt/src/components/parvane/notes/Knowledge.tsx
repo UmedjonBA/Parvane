@@ -16,8 +16,6 @@ import {
   consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getNoteRequest, getParvaneSection,
   setKnowledgeView, setParvaneSection,
 } from '../../../util/parvaneSection';
-import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
-import { openPalette } from '../palette/paletteOpen';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
@@ -53,7 +51,6 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
-import SearchForm from '../../ui/SearchForm';
 import PlannerQuickHost from '../planner/PlannerQuickHost';
 import SectionHistoryBack from '../SectionHistoryBack';
 import GraphPanel from './GraphPanel';
@@ -64,6 +61,7 @@ import NoteLinks from './NoteLinks';
 import NotesCanvas from './NotesCanvas';
 import NotesGraph from './NotesGraph';
 import NoteView from './NoteView';
+import PvHeaderSearch from './PvHeaderSearch';
 import PvIcon from './PvIcon';
 import PvResizer from './PvResizer';
 
@@ -82,6 +80,11 @@ const SIDE_MIN_WIDTH = 1241;
 const NOTICE_HIDE_MS = 6000;
 // Пауза между набором в поиске и самим поиском
 const SEARCH_DELAY_MS = 150;
+const SEARCH_LABELS = {
+  notes: 'KnowledgeSearch',
+  graph: 'KnowledgeGraphSearch',
+  canvas: 'KnowledgeCanvasSearch',
+} as const;
 // Столько последних заметок дня видно в списке, пока не попросили все
 const DAILY_SHOWN = 5;
 const NOTE_LINK = /(\[\[[^\]\n]+\]\])/;
@@ -122,6 +125,11 @@ const Knowledge = () => {
   const [query, setQuery] = useState('');
   // Поиск идёт с задержкой после набора: список не перебирается на каждую букву
   const [searchQuery, setSearchQuery] = useState('');
+  // Поиск в шапке ищет по текущей вкладке: у графа и холста свои строки. Enter в поле — следующая находка
+  const [graphQuery, setGraphQuery] = useState('');
+  const [canvasQuery, setCanvasQuery] = useState('');
+  const [searchStep, setSearchStep] = useState(0);
+  const [isSearchOpen, openSearch, closeSearch] = useFlag();
   const [isNoticeShown, setIsNoticeShown] = useState(false);
   const [areAllDailyShown, setAreAllDailyShown] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsedFolders);
@@ -146,6 +154,8 @@ const Knowledge = () => {
   // Холст, созданный с графа: вкладка «Холст» открывается на нём
   const [graphCanvasId, setGraphCanvasId] = useState<string>();
   const isMakingCanvasRef = useRef(false);
+  // Человек уже открыл либо создал заметку: «Обзор» справки, дописанной позже, его не перебивает
+  const hasPickedNoteRef = useRef(false);
 
   const lang = useLang();
   const { width: windowWidth } = useWindowSize();
@@ -177,7 +187,7 @@ const Knowledge = () => {
   useEffect(() => {
     if (!guideOpenId || !notes.some(({ id }) => id === guideOpenId)) return;
     consumeGuideOpen();
-    if (openId || isNarrow) return;
+    if (openId || isNarrow || hasPickedNoteRef.current) return;
     setOpenId(guideOpenId);
     markGuide();
   }, [guideOpenId, notes, openId, isNarrow]);
@@ -246,6 +256,7 @@ const Knowledge = () => {
   });
 
   const createIn = useLastCallback(async (folderId?: string) => {
+    hasPickedNoteRef.current = true;
     const id = await createNote(lang('KnowledgeNewNote'), vaultName, { folderId });
     if (id) setOpenId(id);
   });
@@ -283,15 +294,41 @@ const Knowledge = () => {
   });
 
   const searchSoon = useDebouncedCallback((value: string) => setSearchQuery(value), [], SEARCH_DELAY_MS, true);
-  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const { value } = e.currentTarget;
+  const handleQuery = useLastCallback((value: string) => {
+    if (view === 'graph') {
+      setGraphQuery(value);
+      return;
+    }
+    if (view === 'canvas') {
+      setCanvasQuery(value);
+      return;
+    }
     setQuery(value);
     // Очищенное поле показывает весь список сразу
     if (!value.trim()) setSearchQuery('');
     else searchSoon(value);
   });
 
+  const viewQuery = view === 'graph' ? graphQuery : view === 'canvas' ? canvasQuery : query;
+  // Телефон: поле раскрыто лупой либо в нём осталась строка этой вкладки
+  const isSearchShown = isSearchOpen || Boolean(viewQuery);
+
+  const handleSearchClose = useLastCallback(() => {
+    handleQuery('');
+    closeSearch();
+  });
+
+  const handleSearchEnter = useLastCallback(() => {
+    setSearchStep((step) => step + 1);
+  });
+
+  // Другая вкладка — поле на телефоне сворачивается (строка вкладки остаётся при ней)
+  useEffect(() => {
+    closeSearch();
+  }, [view, closeSearch]);
+
   const handlePick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    hasPickedNoteRef.current = true;
     setOpenId(e.currentTarget.dataset.id);
   });
 
@@ -699,20 +736,6 @@ const Knowledge = () => {
   function renderList() {
     return (
       <aside className={buildClassName(styles.list, 'custom-scroll')} data-notes-list>
-        <SearchForm>
-          <label className={buildClassName(kit.search, styles.listSearch)}>
-            <PvIcon name="search" isSmall className={kit.searchIcon} />
-            <input
-              {...SEARCH_FIELD_PROPS}
-              id="knowledge-search"
-              className={kit.searchInput}
-              value={query}
-              placeholder={lang('KnowledgeSearch')}
-              aria-label={lang('KnowledgeSearch')}
-              onChange={handleQuery}
-            />
-          </label>
-        </SearchForm>
         {isGuideNew && (
           <div className={styles.guideNotice} role="status" data-notes-guide-notice>
             <span className={styles.guideNoticeText}>{lang('KnowledgeGuideAdded', { name: guideFolderName })}</span>
@@ -777,7 +800,9 @@ const Knowledge = () => {
   // компьютере; на телефоне это шторка со своей записью) — закрыть, иначе — к чатам
   const isPanelLevel = !isNarrow && Boolean(shownPick);
   const handleHistoryBack = useLastCallback(() => {
-    if (isNoteAlone) {
+    if (isSearchShown && !isNoteAlone) {
+      handleSearchClose();
+    } else if (isNoteAlone) {
       handleBack();
     } else if (isPanelLevel) {
       handleGraphClose();
@@ -795,18 +820,19 @@ const Knowledge = () => {
       )}
       <div className={buildClassName(kit.island, styles.page)}>
         {!isNoteAlone && (
-          <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
+          <header className={buildClassName(kit.hdr, kit.hdrTabs, isSearchShown && kit.hdrSearching)}>
             <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>
             <KnowledgeTabs />
-            <button
-              type="button"
-              className={buildClassName(kit.ib, kit.onlyM)}
-              aria-label={lang('Search')}
-              data-palette-open
-              onClick={openPalette}
-            >
-              <PvIcon name="search" />
-            </button>
+            <PvHeaderSearch
+              value={viewQuery}
+              label={lang(SEARCH_LABELS[view === 'files' ? 'notes' : view])}
+              id={view === 'notes' ? 'knowledge-search' : undefined}
+              isOpen={isSearchShown}
+              onOpen={openSearch}
+              onClose={handleSearchClose}
+              onChange={handleQuery}
+              onEnter={handleSearchEnter}
+            />
             {isNoteShown && (
               <span className={buildClassName(kit.muted, kit.hideM, styles.crumb)}>
                 {`/ ${openFolder || lang('KnowledgeRoot')}`}
@@ -857,6 +883,8 @@ const Knowledge = () => {
               onLinkModeEnd={handleLinkModeEnd}
               onClose={handleGraphClose}
               onMakeCanvas={makeGraphCanvas}
+              query={graphQuery}
+              searchStep={searchStep}
             />
           ) : view === 'canvas' ? (
             <NotesCanvas
@@ -865,6 +893,8 @@ const Knowledge = () => {
               isNarrow={isNarrow}
               openId={graphCanvasId}
               onOpenTitle={pickTitleInGraph}
+              query={canvasQuery}
+              searchStep={searchStep}
             />
           ) : (
             <div className={styles.layout}>

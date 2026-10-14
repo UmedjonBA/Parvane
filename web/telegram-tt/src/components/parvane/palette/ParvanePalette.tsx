@@ -28,7 +28,7 @@ import {
   getIsPlannerLoaded, getPlannerState, getPlannerStatus, loadPlanner,
 } from '../planner/plannerStore';
 import {
-  closePalette, getIsPaletteOpen, openRecordInPlan,
+  closePalette, getIsPaletteOpen, getPaletteScope, openRecordInPlan,
 } from './paletteOpen';
 import { collectPlannerRecords } from './paletteRecords';
 import {
@@ -115,6 +115,8 @@ const ParvanePalette = () => {
 
   const lang = useLang();
   const isOpen = useDerivedState(getIsPaletteOpen);
+  const scope = useDerivedState(getPaletteScope);
+  const isPlanScope = scope === 'plan';
   const notes = useDerivedState(getNotes);
   const notesStatus = useDerivedState(getNotesStatus);
   const cloudStatus = useDerivedState(getCloudStatus);
@@ -222,8 +224,8 @@ const ParvanePalette = () => {
   }, [isOpen, isPlannerLoaded, planner, lang]);
 
   const items = useMemo(
-    () => [...commands, ...chats, ...noteEntries, ...recordEntries],
-    [commands, chats, noteEntries, recordEntries],
+    () => (isPlanScope ? recordEntries : [...commands, ...chats, ...noteEntries, ...recordEntries]),
+    [isPlanScope, commands, chats, noteEntries, recordEntries],
   );
 
   // Поиск идёт с задержкой после последнего нажатия (E2): ввод не ждёт перебора списка. Пока задержка не
@@ -249,7 +251,7 @@ const ParvanePalette = () => {
 
   // Идёт первое чтение: заметок (облако ещё отвечает либо тексты читаются) или «Плана»
   const isNotesLoading = notesStatus === 'loading' && (cloudStatus === 'loading' || cloudStatus === 'ready');
-  const isLoading = isOpen && (isNotesLoading || (!isPlannerLoaded && plannerStatus === 'loading'));
+  const isLoading = isOpen && ((!isPlanScope && isNotesLoading) || (!isPlannerLoaded && plannerStatus === 'loading'));
 
   useEffect(() => {
     if (!isOpen || !selectedKey) return;
@@ -319,7 +321,7 @@ const ParvanePalette = () => {
             className={kit.searchInput}
             type="search"
             value={query}
-            placeholder={lang('ParvanePalettePlaceholder')}
+            placeholder={lang(isPlanScope ? 'ParvanePaletteSearchPlan' : 'ParvanePalettePlaceholder')}
             aria-label={lang('Search')}
             aria-controls="parvane-palette-list"
             autoComplete="off"
@@ -330,7 +332,14 @@ const ParvanePalette = () => {
           />
         </label>
       </form>
-      <div ref={listRef} id="parvane-palette-list" className={styles.list} role="listbox" data-palette-list>
+      <div
+        ref={listRef}
+        id="parvane-palette-list"
+        className={styles.list}
+        role="listbox"
+        data-palette-list
+        data-palette-scope={scope}
+      >
         {sections.map(({ group, results }) => (
           <div key={group} className={styles.group} role="group" data-palette-group={group}>
             <h3 className={kit.grp}>{lang(GROUP_KEYS[group])}</h3>
@@ -363,7 +372,8 @@ const ParvanePalette = () => {
             })}
           </div>
         ))}
-        {!flat.length && !isLoading && (
+        {/* Поиск по плану без запроса пуст — это не «ничего не найдено» */}
+        {!flat.length && !isLoading && Boolean(searchQuery.trim()) && (
           <div className={buildClassName(kit.muted, styles.note)} data-palette-empty>{lang('NothingFound')}</div>
         )}
         {isLoading && (

@@ -2780,6 +2780,7 @@ export interface LangPair {
   'PlannerHealthKcalWeek': undefined;
   'ParvanePalettePlaceholder': undefined;
   'ParvanePaletteCommands': undefined;
+  'ParvanePaletteSearchPlan': undefined;
   'ParvanePaletteRecords': undefined;
   'ParvanePaletteLogSleep': undefined;
   'ParvanePaletteLogFood': undefined;
@@ -2877,6 +2878,7 @@ export interface LangPair {
   'KnowledgeGraphCreate': undefined;
   'KnowledgeGraphHint': undefined;
   'KnowledgeGraphSearch': undefined;
+  'KnowledgeCanvasSearch': undefined;
   'KnowledgeGraphOpenInNotes': undefined;
   'KnowledgeGraphOpenInPlan': undefined;
   'KnowledgeGraphMissingText': undefined;

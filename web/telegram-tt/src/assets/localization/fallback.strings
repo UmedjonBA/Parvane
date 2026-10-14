@@ -3758,6 +3758,7 @@
 "PlannerHealthKcalWeek" = "Calories this week";
 "ParvanePalettePlaceholder" = "Note, event or command";
 "ParvanePaletteCommands" = "Commands";
+"ParvanePaletteSearchPlan" = "Search the plan";
 "ParvanePaletteRecords" = "Planner entries";
 "ParvanePaletteLogSleep" = "Log sleep";
 "ParvanePaletteLogFood" = "Log a meal";
@@ -3875,6 +3876,7 @@
 "KnowledgeGraphCreate" = "Create note";
 "KnowledgeGraphHint" = "click a note to read it here · drag from the ring around a note to link it · click a line to remove the link";
 "KnowledgeGraphSearch" = "Find in graph";
+"KnowledgeCanvasSearch" = "Find on canvas";
 "KnowledgeGraphOpenInNotes" = "Open in Notes";
 "KnowledgeGraphOpenInPlan" = "Open in plan";
 "KnowledgeGraphMissingText" = "Other notes link here, but the note itself does not exist yet.";

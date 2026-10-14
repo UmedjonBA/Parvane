@@ -15,7 +15,6 @@ import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import { getIsParvaneScreenShown } from '../../../util/parvaneSection';
 import { debounce } from '../../../util/schedulers';
-import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import {
   BOARD_ZOOM_STEP, boardBackgroundStyle, createPinch, fitRects, zoomAround, zoomByWheel,
 } from './boardView';
@@ -32,7 +31,6 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useResizeObserver from '../../../hooks/useResizeObserver';
 
-import SearchForm from '../../ui/SearchForm';
 import PvIcon from './PvIcon';
 
 import styles from './Knowledge.module.scss';
@@ -48,6 +46,9 @@ type OwnProps = {
   pickedId?: string;
   // Режим «Связать»: следующая нажатая заметка получает ссылку из этой
   linkFromId?: string;
+  // Поиск из шапки раздела: найденные точки подсвечены; рост `searchStep` (Enter в поле) выбирает следующую
+  query: string;
+  searchStep: number;
   onPick: (node: GraphPick) => void;
   // Двойное нажатие: заметка открывается на вкладке «Заметки»
   onOpen: (node: GraphPick) => void;
@@ -266,6 +267,7 @@ const GraphNodes = memo(({
           data-node={node.id}
           data-kind={node.kind}
           data-title={node.title}
+          data-found={isFound ? '' : undefined}
         >
           <circle cx={node.x} cy={node.y} r={radius} />
           {canLinkFrom(node) && (
@@ -346,8 +348,8 @@ function isTyping(target: EventTarget | null) {
 // её показывает панель справа; двойное открывает заметку на вкладке «Заметки». Связь — это ссылка в тексте:
 // её ведут от кольца вокруг заметки к другой заметке (или на пустое место — к новой), а убирают, выбрав линию
 const NotesGraph = ({
-  notes, planner, pickedId, linkFromId, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd, onClose,
-  onMakeCanvas,
+  notes, planner, pickedId, linkFromId, query, searchStep, onPick, onOpen, onLink, onLinkNew, onUnlink, onLinkModeEnd,
+  onClose, onMakeCanvas,
 }: OwnProps) => {
   const boardRef = useRef<HTMLDivElement>();
   const worldRef = useRef<HTMLDivElement>();
@@ -371,7 +373,7 @@ const NotesGraph = ({
   const [newAt, setNewAt] = useState<Draft>();
   const [pickedEdge, setPickedEdge] = useState<string>();
   const [flash, setFlash] = useState<string>();
-  const [query, setQuery] = useState('');
+  const searchStepRef = useRef(searchStep);
   const dragRef = useRef<Drag>();
   const draftRef = useRef<Draft>();
   const pinchRef = useRef(createPinch());
@@ -931,14 +933,16 @@ const NotesGraph = ({
   const handleMakeCanvas = useLastCallback(() => {
     onMakeCanvas({ folders, days: withDays });
   });
-  const handleQuery = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.currentTarget.value));
 
-  // Enter в поиске выбирает первую найденную точку
-  const handleQueryKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== 'Enter') return;
-    const first = nodes.find(({ id }) => found?.has(id));
-    if (first) onPick(pickOf(first));
-  });
+  // Enter в поиске шапки выбирает следующую найденную точку (после выбранной, по кругу)
+  useEffect(() => {
+    if (searchStep === searchStepRef.current) return;
+    searchStepRef.current = searchStep;
+    const hits = nodes.filter(({ id }) => found?.has(id));
+    if (!hits.length) return;
+    const at = hits.findIndex(({ id }) => id === pickedId);
+    onPick(pickOf(hits[(at + 1) % hits.length]));
+  }, [searchStep, nodes, found, pickedId, onPick]);
 
   const handleNewKey = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') void submitNew(e.currentTarget.value);
@@ -1071,21 +1075,6 @@ const NotesGraph = ({
             <PvIcon name="board" isSmall />
             {lang('KnowledgeGraphToCanvas')}
           </button>
-          <SearchForm>
-            <label className={styles.graphSearch}>
-              <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
-              <input
-                {...SEARCH_FIELD_PROPS}
-                className={styles.graphSearchInput}
-                value={query}
-                placeholder={lang('KnowledgeGraphSearch')}
-                aria-label={lang('KnowledgeGraphSearch')}
-                data-graph-search
-                onChange={handleQuery}
-                onKeyDown={handleQueryKey}
-              />
-            </label>
-          </SearchForm>
         </div>
         {isFolderMenuOpen && (
           <div

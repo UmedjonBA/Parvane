@@ -3,13 +3,22 @@ import type { PaletteRecordKind } from './paletteRecords';
 import { openPlannerView } from '../../../util/parvaneSection';
 import { createSignal } from '../../../util/signals';
 
-// Parvane: общий поиск (палитра) — открыт ли он. Открывают Ctrl+K, кнопка «Поиск» боковой панели
-// и кнопки-лупы в шапках разделов на телефоне
+// Parvane: общий поиск (палитра) — открыт ли он. Открывают Ctrl+K и кнопка «Поиск» боковой панели;
+// лупа в шапке «Плана» открывает её только по записям плана
 const [getIsPaletteOpen, setIsPaletteOpen] = createSignal(false);
+// Что ищет открытая палитра: всё либо только записи «Плана» (лупа в шапке «Плана» ищет по разделу)
+export type PaletteScope = 'all' | 'plan';
+const [getPaletteScope, setPaletteScope] = createSignal<PaletteScope>('all');
 
-export { getIsPaletteOpen };
+export { getIsPaletteOpen, getPaletteScope };
 
 export function openPalette() {
+  setPaletteScope('all');
+  setIsPaletteOpen(true);
+}
+
+export function openPlanSearch() {
+  setPaletteScope('plan');
   setIsPaletteOpen(true);
 }
 

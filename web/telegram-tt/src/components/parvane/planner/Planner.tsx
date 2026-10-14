@@ -15,7 +15,7 @@ import {
   setParvaneSection, setPlannerCalendarView, setPlannerPickedDay,
   setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
-import { consumePlannerRecordRequest, getPlannerRecordRequest, openPalette } from '../palette/paletteOpen';
+import { consumePlannerRecordRequest, getPlannerRecordRequest, openPlanSearch } from '../palette/paletteOpen';
 import { consumePlannerDayRequest, getPlannerDayRequest } from '../taskOffer/taskOfferOpen';
 import {
   formatDay, formatDayLabel, formatPeriod, formatWeekRange,
@@ -747,9 +747,9 @@ const Planner = () => {
               <button
                 type="button"
                 className={styles.ib}
-                aria-label={lang('Search')}
+                aria-label={lang('ParvanePaletteSearchPlan')}
                 data-palette-open
-                onClick={openPalette}
+                onClick={openPlanSearch}
               >
                 <Icon name="search" />
               </button>

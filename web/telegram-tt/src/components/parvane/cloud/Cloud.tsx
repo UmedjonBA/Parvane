@@ -17,9 +17,7 @@ import buildClassName from '../../../util/buildClassName';
 import {
   getIsParvaneScreenShown, getKnowledgeView, getParvaneSection, setParvaneSection,
 } from '../../../util/parvaneSection';
-import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { formatFileSize } from '../../../util/textFormat';
-import { openPalette } from '../palette/paletteOpen';
 import {
   childrenOf, folderStats, listedNodes, pathOf, searchNodes, sortNodes, trashDaysLeft, usageOf,
 } from './cloudModel';
@@ -33,6 +31,7 @@ import {
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -40,8 +39,8 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import Loading from '../../ui/Loading';
 import MenuItem from '../../ui/MenuItem';
-import SearchForm from '../../ui/SearchForm';
 import KnowledgeTabs from '../notes/KnowledgeTabs';
+import PvHeaderSearch from '../notes/PvHeaderSearch';
 import PvIcon from '../notes/PvIcon';
 import SectionHistoryBack from '../SectionHistoryBack';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
@@ -123,6 +122,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
   const links = useDerivedState(getCloudLinks);
 
   const [query, setQuery] = useState('');
+  const [isSearchOpen, openSearch, closeSearch] = useFlag();
   // Запрос, по которому строится список: с задержкой после ввода, очистка — сразу
   const [appliedQuery, setAppliedQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -262,8 +262,12 @@ const Cloud = ({ isMobile }: OwnProps) => {
     setCloudPlace(next);
   };
 
-  const handleQueryChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.target.value);
+  // Телефон: поле поиска раскрыто лупой в шапке либо в нём осталась строка
+  const isSearchShown = isSearchOpen || Boolean(query);
+
+  const handleSearchClose = useLastCallback(() => {
+    setQuery('');
+    closeSearch();
   });
 
   const handleOpenRoot = useLastCallback(() => goTo({}));
@@ -276,7 +280,9 @@ const Cloud = ({ isMobile }: OwnProps) => {
 
   // Системное «назад»: из папки — в родительскую, из корня — к чатам
   const handleHistoryBack = useLastCallback(() => {
-    if (path.length) {
+    if (isSearchShown) {
+      handleSearchClose();
+    } else if (path.length) {
       handleOpenFolder(path[path.length - 2]?.id);
     } else if (place.container) {
       goTo({ view: place.view });
@@ -779,18 +785,19 @@ const Cloud = ({ isMobile }: OwnProps) => {
     >
       {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={buildClassName(kit.island, styles.page)}>
-        <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
+        <header className={buildClassName(kit.hdr, kit.hdrTabs, isSearchShown && kit.hdrSearching)}>
           {!isMobile && <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>}
           <KnowledgeTabs />
-          <button
-            type="button"
-            className={buildClassName(kit.ib, kit.onlyM)}
-            aria-label={lang('Search')}
-            data-palette-open
-            onClick={openPalette}
-          >
-            <PvIcon name="search" />
-          </button>
+          {!isBlocked && (
+            <PvHeaderSearch
+              value={query}
+              label={lang('ParvaneCloudSearch')}
+              isOpen={isSearchShown}
+              onOpen={openSearch}
+              onClose={handleSearchClose}
+              onChange={setQuery}
+            />
+          )}
           <span className={buildClassName(kit.grow, kit.hideM)} />
           {canAdd && isPersonalRoot && (
             <button
@@ -833,19 +840,18 @@ const Cloud = ({ isMobile }: OwnProps) => {
         <div className={buildClassName(styles.content, 'custom-scroll')}>
           {!isBlocked && (
             <div className={styles.tools}>
-              <SearchForm>
-                <label className={kit.search}>
-                  <PvIcon name="search" isSmall className={kit.searchIcon} />
-                  <input
-                    {...SEARCH_FIELD_PROPS}
-                    className={kit.searchInput}
-                    value={query}
-                    placeholder={lang('ParvaneCloudSearch')}
-                    aria-label={lang('ParvaneCloudSearch')}
-                    onChange={handleQueryChange}
-                  />
-                </label>
-              </SearchForm>
+              {isSearch ? (
+                <div className={buildClassName(styles.found, styles.toolsMain)} data-found={entries.length}>
+                  {lang('ParvaneCloudFound', { count: entries.length })}
+                </div>
+              ) : (
+                <nav className={buildClassName(styles.path, styles.toolsMain)} aria-label={lang('ParvaneSectionCloud')}>
+                  {renderCrumb('root', lang('ParvaneSectionCloud'), handleOpenRoot, true)}
+                  {place.view && renderCrumb(place.view, virtualName(place.view), () => goTo({ view: place.view }))}
+                  {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
+                  {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
+                </nav>
+              )}
               {!isTrash && !isSharedList && !isLinksList && (
                 <DropdownMenu trigger={SortButton} positionX="right">
                   {SORT_KEYS.map((key) => (
@@ -860,19 +866,6 @@ const Cloud = ({ isMobile }: OwnProps) => {
                 </DropdownMenu>
               )}
             </div>
-          )}
-          {!isBlocked && isSearch && (
-            <div className={styles.found} data-found={entries.length}>
-              {lang('ParvaneCloudFound', { count: entries.length })}
-            </div>
-          )}
-          {!isBlocked && !isSearch && (
-            <nav className={styles.path} aria-label={lang('ParvaneSectionCloud')}>
-              {renderCrumb('root', lang('ParvaneSectionCloud'), handleOpenRoot, true)}
-              {place.view && renderCrumb(place.view, virtualName(place.view), () => goTo({ view: place.view }))}
-              {container && renderCrumb(container.id, containerName(container), () => handleOpenFolder())}
-              {path.map((n) => renderCrumb(n.id, n.name, () => handleOpenFolder(n.id)))}
-            </nav>
           )}
           {!isBlocked && !isSearch && container && (container.kind === 'owned' ? (
             <button type="button" className={styles.banner} data-share-banner="owned" onClick={handleAccess}>

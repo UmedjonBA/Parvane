@@ -236,21 +236,35 @@ try {
   await page.setViewportSize(PHONE);
   await page.waitForTimeout(800);
   await openPlannerScreen(page, 'calendar');
+  // Лупа «Плана» ищет только по записям плана: команд и чатов в ней нет
   await planner.locator('[data-palette-open]').click();
   await visible(input, 'палитра по лупе «Плана» на телефоне');
+  // Пустой список без запроса места не занимает — проверяем, что он есть, а не виден
+  await page.locator('[data-palette-scope="plan"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await input.getAttribute('placeholder'), 'Search the plan', 'подпись поля поиска по плану');
+  await input.fill('cloud');
+  await page.waitForTimeout(400);
+  assert.equal(await group('command').count(), 0, 'в поиске по плану есть команды');
+  await page.keyboard.press('Escape');
+  await hidden(input, 'Escape не закрыл поиск по плану');
+  // Ctrl+K — по-прежнему общий поиск
+  await page.keyboard.press('Control+k');
+  await page.locator('[data-palette-scope="all"]').waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS });
   await input.fill('cloud');
   await found('command', 'Cloud').click();
-  // Команда «Облако» — вкладка «Файлы» раздела «Знания»; лупа стоит рядом с вкладками
+  // Команда «Облако» — вкладка «Файлы» раздела «Знания»; лупа в шапке ищет по файлам
   const cloud = page.locator('#ParvaneCloud');
   await visible(cloud, '«Файлы» по команде на телефоне');
-  await cloud.locator('header [data-palette-open]').click();
-  await visible(input, 'палитра по лупе «Файлов» на телефоне');
+  const cloudHeader = cloud.locator('header');
+  await cloudHeader.locator('[data-section-search-open]').click();
+  await visible(cloudHeader.locator('[data-section-search]'), 'поле поиска по файлам в шапке');
+  await cloudHeader.locator('[role="tablist"]').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   if (process.env.PARVANE_E2E_SHOT_DIR) {
     await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/palette-phone.png` });
   }
-  await page.keyboard.press('Escape');
-  await hidden(input, 'Escape не закрыл палитру на телефоне');
-  console.log('OK: на телефоне палитру открывает лупа в шапке раздела');
+  await cloudHeader.locator('[data-section-search-close]').click();
+  await visible(cloudHeader.locator('[role="tablist"]'), 'вкладки «Файлов» после закрытия поиска');
+  console.log('OK: на телефоне лупа «Плана» ищет по плану, лупа «Файлов» — по файлам, Ctrl+K — везде');
 
   assert.deepEqual(session.errors, [], `ошибки страницы: ${session.errors.join('; ')}`);
   console.log('e2e_web_palette: OK');
