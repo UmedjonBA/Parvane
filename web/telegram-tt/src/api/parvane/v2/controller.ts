@@ -34,6 +34,7 @@ import {
 } from './control';
 import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
+import { pickEscrowKey } from './escrowKey';
 import {
   buildBundleMark, deriveBundleKey, type KeyBundleHistory, openKeyBundle, readGrantBundleKey, sealKeyBundle,
   withBundleKey, withFreshLog,
@@ -318,6 +319,9 @@ const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
 // Копия корня, запечатанная ключом администратора сервера (страховка: потеряны
 // и устройства, и ключ восстановления)
 const ROOT_ESCROW_RECORD = 'v2-root-escrow';
+// ID-03: ключ администратора для копии корня закрепляется в сборке; объявленный сервером без совпадения не
+// принимается — иначе тот, кто управляет сервером, подставил бы свой ключ и получил корни личности
+const PINNED_ESCROW_KEY = import.meta.env.VITE_PARVANE_ESCROW_PUBLIC_KEY || '';
 const ESCROW_CHECK_TTL_MS = 60000;
 const KEY_RECORD = 'v2-storage-key';
 // Копия ключей аккаунта под ключом восстановления (spec 015): ключ копии (сам
@@ -440,7 +444,11 @@ export function createV2Controller(deps: Deps) {
   }
 
   // perf A1: состояние движка пишется отложенно; `persist()` только помечает
-  // изменение (прежние вызывающие ничего не ждут), `persistNow()` — запись сейчас
+  // изменение (прежние вызывающие ничего не ждут), `persistNow()` — дописать уже
+  // помеченное (перед чтением с диска, остановкой, экспортом), `persistUrgent()` —
+  // движок только что изменён и снимок нужен на диске сейчас. `persistNow()` после
+  // изменения без пометки не пишет ничего: так сброс личности на месте оставлял на
+  // диске прежнюю, и перезапуск принимал её за сброс «другим устройством»
   let hasLegacyState = false;
   const stateWriter = createDeferredWrite<{ owner: PvClient; target: SecureE2eStorage; bytes: Uint8Array }>({
     debounceMs: PERSIST_DEBOUNCE_MS,
@@ -841,13 +849,13 @@ export function createV2Controller(deps: Deps) {
           created.rootSecret.fill(0);
           await rememberBundleKey(recoveryKey);
           await queueRecoveryKey(recoveryKey);
-          await persistNow();
+          await persistUrgent();
         }
       }
       // Ключ личного состояния (T098): первое v2-устройство создаёт его;
       // связанное получает от своего устройства (StateKeyShare)
       const ownDevices = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
-      if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persistNow();
+      if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persistUrgent();
       rootBackupB64 = rootBackupB64 || await storage.loadRecord<string>(ROOT_BACKUP_RECORD);
       await goLive(false);
     })().then(() => {
@@ -934,7 +942,7 @@ export function createV2Controller(deps: Deps) {
     needsLinking = false;
     isJustJoined = true;
     // Запись в журнале принята: ключи устройства — на диск до снятия отметки вступления
-    await persistNow();
+    await persistUrgent();
     await storage.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
     deps.log('v2: устройство привязано грантом линковки');
     return true;
@@ -955,7 +963,7 @@ export function createV2Controller(deps: Deps) {
     // Порядок: строки истории уже на диске (`applyExternal` сбрасывает кэш на
     // каждую), состояние движка с курсором — перед ack, после которого сервер
     // записи повторно не отдаст
-    await persistNow();
+    await persistUrgent();
     const ack = client.ackRequest() as OutReq;
     await call(ack.chan, ack.method, ack.body).catch(() => undefined);
   }
@@ -1405,8 +1413,10 @@ export function createV2Controller(deps: Deps) {
   function loadEscrowKey() {
     if (!escrowKey) {
       escrowKey = preauth(deps.gatewayUrl(), 'server.describe', {}).then((described) => {
-        const key = typeof described.escrow_public_key === 'string' ? described.escrow_public_key : '';
-        deps.log(`v2: копия корня для администратора — ${key ? 'сервер объявил ключ' : 'сервер ключ не объявил'}`);
+        const announced = typeof described.escrow_public_key === 'string' ? described.escrow_public_key : '';
+        const key = pickEscrowKey(PINNED_ESCROW_KEY, announced);
+        deps.log(`v2: копия корня для администратора — ${key ? 'ключ совпал с закреплённым'
+          : announced ? 'сервер объявил ключ, но он не закреплён в сборке — копии нет' : 'сервер ключ не объявил'}`);
         return key ? unb64(key) : undefined;
       }).catch((e: unknown) => {
         escrowKey = undefined;
@@ -1883,7 +1893,7 @@ export function createV2Controller(deps: Deps) {
         await call(r.chan, r.method, r.body)
           .catch((e: unknown) => deps.log(`v2: ротация после отзыва (${r.method}): ${String(e)}`));
       }
-      await persistNow();
+      await persistUrgent();
       // Отложенное: собеседники, которым новый ключ доступа не ушёл, и группы,
       // где эпоху сменить не удалось (добор данных/частота)
       for (const peer of outcome.pendingKeyShares) {
@@ -1897,7 +1907,7 @@ export function createV2Controller(deps: Deps) {
         await rotateEpoch(hex).then(() => publishGroup(hex))
           .catch((e: unknown) => deps.log(`v2: новая эпоха группы ${hex} после отзыва: ${String(e)}`));
       }
-      await persistNow();
+      await persistUrgent();
       deps.log(`v2: устройство отозвано (ротаций ${rotations.length}, эпох ждут админа ${
         outcome.epochsNeedAdmin.length})`);
       // Ключ личного состояния сменён — журнал состояния заново под новым ключом
@@ -1932,7 +1942,7 @@ export function createV2Controller(deps: Deps) {
         await call(r.chan, r.method, r.body)
           .catch((e: unknown) => deps.log(`v2: раздача ключа доступа (${r.method}): ${String(e)}`));
       }
-      await persistNow();
+      await persistUrgent();
       for (const other of outcome.pendingKeyShares) {
         try {
           await run(await withNeeds(() => client!.shareDeliveryKey(other) as OutReq[]));
@@ -1940,7 +1950,7 @@ export function createV2Controller(deps: Deps) {
           deps.log(`v2: ключ доступа ${other} не роздан: ${String(e)}`);
         }
       }
-      await persistNow();
+      await persistUrgent();
       deps.log(`v2: доступ собеседника отозван — ключ доступа сменён (раздач ${shares.length})`);
       return true;
     });
@@ -1972,7 +1982,7 @@ export function createV2Controller(deps: Deps) {
         await sealRootEscrow(client!);
         client!.forgetRoot();
         created.rootSecret.fill(0);
-        await persistNow();
+        await persistUrgent();
       });
       await target.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
@@ -2054,7 +2064,7 @@ export function createV2Controller(deps: Deps) {
           idConn?.close();
           throw e;
         }
-        await persistNow();
+        await persistUrgent();
       });
       deps.log('v2: SSK сменён корнем');
       // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
@@ -2302,12 +2312,12 @@ export function createV2Controller(deps: Deps) {
   // блоб анонимным каналом — записи «отправитель → получатель» в cloud нет
 
   /** Загрузить шифртекст блоба; возвращает file_id. */
-  /** Чанк загрузки вложения чата (bucket медиа) байтами по соединению блобов;
+  /** Чанк загрузки байтами по соединению блобов (bucket 0 — медиа чатов, 1 — диск «Облака»);
    * пустой `uploadId` заводит загрузку. Возвращает uploadId. */
-  async function uploadBlobChunk(uploadId: string, index: number, data: Uint8Array): Promise<string> {
+  async function uploadBlobChunk(uploadId: string, index: number, data: Uint8Array, bucket = 0): Promise<string> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const method = 'cloud.blob.upload_chunk';
-    const body = encodeUploadChunkBody(pv, uploadId, index, 0, data);
+    const body = encodeUploadChunkBody(pv, uploadId, index, bucket, data);
     const resp = await blobControl.requestBytes(method, body, BLOB_TIMEOUT_MS);
     const got = JSON.parse(pv.decodeMethodResponse(method, resp)) as { uploadId?: string; upload_id?: string };
     return got.uploadId || got.upload_id || uploadId;
@@ -2763,7 +2773,7 @@ export function createV2Controller(deps: Deps) {
       // Срок следующей партии движок уже сдвинул — «дозапроса» не будет (D-06)
       deps.log(`v2: жетоны — партия по расписанию не получена: ${String(err)}`);
     }
-    await persistNow();
+    await persistUrgent();
   }
 
   /** Жетоны на раздачу ключей незнакомым участникам — до операции движка. */
@@ -2800,7 +2810,7 @@ export function createV2Controller(deps: Deps) {
       await call(r.chan, r.method, r.body)
         .catch((e: unknown) => deps.log(`v2: ключи эпохи не доставлены: ${String(e)}`));
     }
-    await persistNow();
+    await persistUrgent();
     deps.log(`v2: новая эпоха группы ${hex}: ${readGroup(hex)?.epoch}`);
   }
 
@@ -2853,7 +2863,7 @@ export function createV2Controller(deps: Deps) {
         deps.log(`v2: первая эпоха группы не начата: ${String(e)}`);
         scheduleRotate(hex, EPOCH_RETRY_MS);
       });
-      await persistNow();
+      await persistUrgent();
       deps.log(`v2: группа создана ${hex} (${members.length + 1} участников)`);
       const g = readGroup(hex)!;
       publishedGroups.add(groupAddress(hex));
@@ -2916,7 +2926,7 @@ export function createV2Controller(deps: Deps) {
         scheduleRotate(hex, EPOCH_RETRY_MS);
       });
     }
-    await persistNow();
+    await persistUrgent();
     publishGroup(hex);
     return true;
   }
@@ -3148,7 +3158,7 @@ export function createV2Controller(deps: Deps) {
       const all = await loadInvites();
       all[address] = [...(all[address] || []), record];
       await storage?.saveRecord(INVITES_RECORD, all);
-      await persistNow();
+      await persistUrgent();
       publishGroup(hex);
       deps.onInviteCreated?.(address, record);
       return record;
@@ -3292,7 +3302,7 @@ export function createV2Controller(deps: Deps) {
           scheduleRotate(hex, EPOCH_RETRY_MS);
         });
       }
-      await persistNow();
+      await persistUrgent();
       pendingRequests.set(hex, Math.max(0, (pendingRequests.get(hex) || 1) - 1));
       publishGroup(hex);
       return true;
@@ -3390,7 +3400,7 @@ export function createV2Controller(deps: Deps) {
           client!.groupForget(hex);
           return { status: 'requested' as const };
         }
-        await persistNow();
+        await persistUrgent();
         deps.log(`v2: вступление в группу ${hex} по ссылке`);
         publishedGroups.add(groupAddress(hex));
         const info = toWireGroupInfo(hex, readGroup(hex)!);

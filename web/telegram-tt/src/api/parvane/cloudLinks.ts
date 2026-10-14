@@ -12,6 +12,9 @@ import { decryptBlob, encryptBlobWithKey } from './blobcrypt';
 // Форматы — `specs/022-public-links/contracts/links.md`.
 
 export const LINK_MAX_FILES = 500;
+// Миниатюр картинок в ссылке не больше: каждая — отдельная копия в пределе `LINK_MAX_FILES` блобов ссылки и
+// отдельное обращение страницы (сервер пускает к ссылке 120 обращений в минуту)
+export const LINK_MAX_THUMBS = 60;
 export const LINK_MANIFEST_MAX_BYTES = 1024 * 1024;
 export const LINK_OWNER_RECORD_MAX_BYTES = 4096;
 export const LINK_TTL_DAYS = [1, 7, 30, 0] as const;
@@ -34,6 +37,8 @@ export type LinkTtlDays = typeof LINK_TTL_DAYS[number];
 export type LinkKind = 'file' | 'folder';
 
 export type LinkManifestDir = { path: string; dir: true };
+/** Миниатюра картинки: копия блоба миниатюры, зашифрована ключом файла со своим nonce; один чанк. */
+export type LinkManifestThumb = { fileId: string; nonce: string; blobSize: number };
 export type LinkManifestFile = {
   path: string;
   /** Открытый размер файла. */
@@ -47,6 +52,7 @@ export type LinkManifestFile = {
   /** Число чанков сервера и размер шифртекста — для сверки при скачивании. */
   chunks: number;
   blobSize: number;
+  thumb?: LinkManifestThumb;
 };
 export type LinkManifestItem = LinkManifestDir | LinkManifestFile;
 export type LinkManifest = {
@@ -81,6 +87,8 @@ export type LinkSourceNode = {
   blob?: {
     fileId: string; key: string; nonce: string; capability: string; size: number; chunks: number; mime: string;
   };
+  /** Миниатюра картинки (шифруется ключом файла). */
+  thumb?: { fileId: string; nonce: string; capability: string };
 };
 
 export type LinkPlanFile = { path: string; node: LinkSourceNode };
@@ -208,7 +216,7 @@ export function buildLinkPlan(
 /** Список ссылки: папки и файлы плана с указателями на блобы-копии. */
 export function buildManifest(
   plan: LinkPlan,
-  copies: Map<string, { fileId: string; blobSize: number; chunks: number }>,
+  copies: Map<string, { fileId: string; blobSize: number; chunks: number; thumb?: LinkManifestThumb }>,
   createdSec: number,
 ): LinkManifest {
   const items: LinkManifestItem[] = plan.dirs.map((path) => ({ path, dir: true }));
@@ -225,6 +233,7 @@ export function buildManifest(
       nonce: blob.nonce,
       chunks: copy.chunks,
       blobSize: copy.blobSize,
+      ...(copy.thumb && { thumb: copy.thumb }),
     });
   });
   return {
@@ -253,6 +262,13 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+// Негодная миниатюра не портит список: файл просто остаётся без неё
+function isThumb(value: unknown): value is LinkManifestThumb {
+  const thumb = value as Partial<LinkManifestThumb> | undefined;
+  return Boolean(thumb) && typeof thumb === 'object' && typeof thumb.fileId === 'string' && Boolean(thumb.fileId)
+    && typeof thumb.nonce === 'string' && isCount(thumb.blobSize) && thumb.blobSize > 0;
+}
+
 /** Разобрать открытый текст списка; всё, что не по контракту, — undefined. */
 export function parseManifest(json: string): LinkManifest | undefined {
   let raw: Partial<LinkManifest> | undefined;
@@ -268,6 +284,7 @@ export function parseManifest(json: string): LinkManifest | undefined {
   const items: LinkManifestItem[] = [];
   const paths = new Set<string>();
   let files = 0;
+  let thumbs = 0;
   for (const entry of raw.items as Partial<LinkManifestFile & LinkManifestDir>[]) {
     if (!entry || typeof entry !== 'object' || !isSafePath(entry.path) || paths.has(entry.path)) return undefined;
     paths.add(entry.path);
@@ -281,6 +298,10 @@ export function parseManifest(json: string): LinkManifest | undefined {
     if (typeof entry.fileId !== 'string' || !entry.fileId) return undefined;
     if (typeof entry.key !== 'string' || typeof entry.nonce !== 'string') return undefined;
     if (++files > LINK_MAX_FILES) return undefined;
+    const thumb = thumbs < LINK_MAX_THUMBS && isThumb(entry.thumb)
+      ? { fileId: entry.thumb.fileId, nonce: entry.thumb.nonce, blobSize: entry.thumb.blobSize }
+      : undefined;
+    if (thumb) thumbs += 1;
     items.push({
       path: entry.path,
       size: entry.size,
@@ -290,6 +311,7 @@ export function parseManifest(json: string): LinkManifest | undefined {
       nonce: entry.nonce,
       chunks: entry.chunks,
       blobSize: entry.blobSize,
+      ...(thumb && { thumb }),
     });
   }
   return {

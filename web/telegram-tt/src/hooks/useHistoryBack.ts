@@ -9,7 +9,14 @@ import useEffectOnce from './useEffectOnce';
 import useLastCallback from './useLastCallback';
 import useSyncEffect from './useSyncEffect';
 
-const PATH_BASE = `${window.location.pathname}${window.location.search}`;
+// Parvane: параметр ярлыка приложения `?open=` разбирает `util/parvaneSection.ts` — в базовый адрес истории он не
+// входит, иначе сброс истории возвращал бы его в адрес
+const PATH_BASE = (() => {
+  const params = new URLSearchParams(window.location.search);
+  params.delete('open');
+  const search = params.toString();
+  return `${window.location.pathname}${search ? `?${search}` : ''}`;
+})();
 // Carefully selected by swiping and observing visual changes
 // TODO: may be different on other devices such as iPad, maybe take dpi into account?
 const SAFARI_EDGE_BACK_GESTURE_LIMIT = 300;

@@ -24,7 +24,7 @@ import {
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, updatePlanner } from '../planner/plannerStore';
 import { parseCanvas, serializeCanvas } from './notesCanvas';
-import { freeCanvasTitle, renameCanvasNote } from './notesCanvasGraph';
+import { freeCanvasTitle, renameCanvasFolder, renameCanvasNote } from './notesCanvasGraph';
 import { checkFolderName, folderContents, listNoteFolders } from './notesFolders';
 import {
   buildGuideMarker, findGuideOverview, GUIDE_MARKER_MIME, GUIDE_MARKER_NAME, GUIDE_MARKER_NODE_ID, hasGuideMarker,
@@ -905,9 +905,10 @@ export async function moveNote(noteId: string, folderId?: string) {
   return isDone;
 }
 
-/** Переименовать папку заметок. Заметки остаются в ней; ссылки на них идут по названиям заметок. */
+/** Переименовать папку заметок. Заметки остаются в ней; ссылки на них идут по названиям заметок. Холсты, собранные
+ * из графа, помнят папку путём (набор заметок, группы папок) — путь в них меняется вместе с папкой. */
 export async function renameNoteFolder(
-  folderId: string, name: string,
+  folderId: string, name: string, vaultName: string,
 ): Promise<FolderSubmitError | undefined> {
   const rootId = rootIdOf();
   const nodes = getNodes(rootId);
@@ -920,8 +921,17 @@ export async function renameNoteFolder(
   )).map((other) => other.name);
   const error = checkFolderName(clean, siblings);
   if (error) return error;
+  const oldPath = getNoteFolders().find(({ id }) => id === folderId)!.path;
+  const newPath = [...oldPath.split('/').slice(0, -1), clean].join('/');
   if (!(await renameCloudNode(rootId, node, clean))) return 'failed';
   await queueSync();
+  await withSyncSuspended(async () => {
+    for (const canvas of getCanvases()) {
+      const parsed = parseCanvas(canvas.text);
+      const doc = parsed.error ? parsed.doc : renameCanvasFolder(parsed.doc, oldPath, newPath);
+      if (doc !== parsed.doc) await saveCanvas(canvas.title, serializeCanvas(doc), vaultName, canvas.id);
+    }
+  });
   return undefined;
 }
 

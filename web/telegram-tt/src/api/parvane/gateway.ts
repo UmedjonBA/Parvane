@@ -34,9 +34,11 @@ export function getGatewayUrl() {
   // блокируется браузером); prod-раскладка — wss на том же origin за
   // реверс-прокси по пути /ws (наружу проброшен один порт)
   const isSecurePage = window.location.protocol === 'https:';
-  // Переопределение из localStorage — только wss на https-странице: иначе
-  // запись в localStorage (расширение/XSS) уводила бы логин на чужой ws://
-  const override = localStorage.getItem(GATEWAY_URL_STORAGE_KEY);
+  // Переопределение из localStorage — только в диагностической сборке (сценарии
+  // указывают стенд; WEB-09) и только wss на https-странице: иначе запись в
+  // localStorage (расширение/XSS) уводила бы логин на чужой gateway
+  const override = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1'
+    ? localStorage.getItem(GATEWAY_URL_STORAGE_KEY) : undefined;
   const isOverrideAllowed = Boolean(override) && (!isSecurePage || override.startsWith('wss://'));
   return (isOverrideAllowed ? override : undefined)
     || (isSecurePage

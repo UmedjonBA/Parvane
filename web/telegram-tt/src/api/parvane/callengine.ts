@@ -51,9 +51,9 @@ type CallCallbacks = {
   log?: (text: string) => void;
 };
 
-export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-];
+// Сервер не отдал ICE-конфигурацию: только адреса устройства (локальная сеть). Сторонний STUN (раньше — Google)
+// не используется: он видел бы, кто и когда звонит (WEB-14)
+export const FALLBACK_ICE_SERVERS: RTCIceServer[] = [];
 
 const SAS_EMOJI = [
   '🐱', '🐶', '🦊', '🐻', '🐼', '🐨', '🦁', '🐯',

@@ -64,9 +64,9 @@ test('logs out through settings and clears the local session state', async ({ pa
   });
 
   await openProfile(page);
-  await page.getByRole('button', { name: 'More actions' }).click();
-  await page.getByRole('menuitem', { name: 'Log Out' }).click();
-  await page.getByRole('button', { name: 'Log Out', exact: true }).click();
+  // «Log Out» — последняя строка экрана «Профиль», затем подтверждение в диалоге
+  await page.locator('#Settings .settings-main-scroll .ListItem-button').filter({ hasText: /^Log Out$/ }).click();
+  await page.locator('.Modal').getByRole('button', { name: 'Log Out', exact: true }).click();
 
   // Инвариант logout — очистка локального состояния; вид переходного экрана
   // авторизации отличается между движками и проверяется после reload

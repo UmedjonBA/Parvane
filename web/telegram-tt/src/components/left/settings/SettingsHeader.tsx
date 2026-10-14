@@ -1,12 +1,10 @@
 import type { FC } from '../../../lib/teact/teact';
 import {
-  memo, useCallback, useMemo, useState,
+  memo, useCallback, useMemo,
 } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
 import { SettingsScreens } from '../../../types';
-
-import { callApi } from '../../../api/gramjs';
 
 import useAppLayout from '../../../hooks/useAppLayout';
 import useLang from '../../../hooks/useLang';
@@ -14,7 +12,6 @@ import useMultiClick from '../../../hooks/useMultiClick';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
-import ConfirmDialog from '../../ui/ConfirmDialog';
 import DropdownMenu from '../../ui/DropdownMenu';
 import MenuItem from '../../ui/MenuItem';
 
@@ -32,43 +29,21 @@ const SettingsHeader: FC<OwnProps> = ({
   onReset,
 }) => {
   const {
-    signOut,
     openDeleteChatFolderModal,
     openSettingsScreen,
   } = getActions();
 
   const { isMobile } = useAppLayout();
-  const [isSignOutDialogOpen, setIsSignOutDialogOpen] = useState(false);
 
   const handleMultiClick = useMultiClick(5, () => {
     openSettingsScreen({ screen: SettingsScreens.Experimental });
   });
-
-  // Parvane: выход с единственного устройства стирает ключи — предупреждаем про
-  // ключ восстановления до подтверждения
-  const [isLastDevice, setIsLastDevice] = useState(false);
-
-  const openSignOutConfirmation = useCallback(() => {
-    setIsLastDevice(false);
-    setIsSignOutDialogOpen(true);
-    void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsLastDevice')
-      .then((isLast) => setIsLastDevice(Boolean(isLast)));
-  }, []);
-
-  const closeSignOutConfirmation = useCallback(() => {
-    setIsSignOutDialogOpen(false);
-  }, []);
 
   const openDeleteFolderConfirmation = useCallback(() => {
     if (!editedFolderId) return;
 
     openDeleteChatFolderModal({ folderId: editedFolderId });
   }, [editedFolderId, openDeleteChatFolderModal]);
-
-  const handleSignOutMessage = useCallback(() => {
-    closeSignOutConfirmation();
-    signOut({ forceInitApi: true });
-  }, [closeSignOutConfirmation, signOut]);
 
   const SettingsMenuButton: FC<{ onTrigger: () => void; isOpen?: boolean }> = useMemo(() => {
     return ({ onTrigger, isOpen }) => (
@@ -272,18 +247,11 @@ const SettingsHeader: FC<OwnProps> = ({
         return (
           <div className="settings-main-header">
             {/* Parvane: главный экран настроек — раздел «Профиль» (так он назван в боковой и нижней панели).
-                Карандаша в шапке нет, как в прототипе: правка профиля — из карточки аккаунта («Мой профиль») */}
+                Карандаша и меню «⋯» в шапке нет, как в прототипе: правка профиля — из карточки аккаунта («Мой профиль»),
+                выход — последней строкой экрана (SettingsSignOut) */}
             <h3 onClick={handleMultiClick}>
               {lang('ParvaneProfileTitle')}
             </h3>
-
-            <DropdownMenu
-              className="settings-more-menu"
-              trigger={SettingsMenuButton}
-              positionX="right"
-            >
-              <MenuItem icon="logout" onClick={openSignOutConfirmation}>{oldLang('LogOutTitle')}</MenuItem>
-            </DropdownMenu>
           </div>
         );
     }
@@ -302,14 +270,6 @@ const SettingsHeader: FC<OwnProps> = ({
         iconName="arrow-left"
       />
       {renderHeaderContent()}
-      <ConfirmDialog
-        isOpen={isSignOutDialogOpen}
-        onClose={closeSignOutConfirmation}
-        text={oldLang(isLastDevice ? 'ParvaneLogoutLastDevice' : 'lng_sure_logout')}
-        confirmLabel={oldLang('AccountSettings.Logout')}
-        confirmHandler={handleSignOutMessage}
-        confirmIsDestructive
-      />
     </div>
   );
 };

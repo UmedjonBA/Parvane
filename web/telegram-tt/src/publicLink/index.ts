@@ -1,8 +1,9 @@
 import type { CloudBlobTransport } from '../api/parvane/cloudBlobs';
 import type { LinkManifest, LinkManifestFile, LinkTreeNode } from '../api/parvane/cloudLinks';
 
+import { decryptBlob } from '../api/parvane/blobcrypt';
 import {
-  CloudAbortError, createBlobSink, createFileSink, downloadCloudBlob,
+  CloudAbortError, createBlobSink, createFileSink, createLimiter, downloadCloudBlob,
 } from '../api/parvane/cloudBlobs';
 import {
   buildLinkTree, isLinkDir, isLinkId, openManifest, parseLinkKey,
@@ -12,6 +13,7 @@ import { createLinkClient } from './client';
 import {
   filesText, fill, pickLang, sizeText, stringsFor,
 } from './strings';
+import { canZip, createZipWriter } from './zip';
 
 import './style.css';
 
@@ -33,6 +35,8 @@ const MEMORY_DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 const IMAGE_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
 const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const OBJECT_URL_LIFETIME_MS = 60000;
+// Миниатюры качаются, когда строка видна, не больше двух разом: у ссылки предел обращений в минуту
+const THUMB_PARALLEL = 2;
 const IMAGE_MIMES = new Set([
   'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/svg+xml',
 ]);
@@ -145,6 +149,40 @@ function makeTransport(linkId: string, file: LinkManifestFile): CloudBlobTranspo
   };
 }
 
+const thumbLimiter = createLimiter(THUMB_PARALLEL);
+const thumbObserver = 'IntersectionObserver' in window ? new IntersectionObserver((entries) => {
+  entries.forEach(({ isIntersecting, target }) => {
+    if (!isIntersecting) return;
+    thumbObserver!.unobserve(target);
+    (target as HTMLElement & { loadThumb?: () => void }).loadThumb?.();
+  });
+}, { rootMargin: '200px' }) : undefined;
+
+// Миниатюра картинки в плитке строки: копия в ссылке, ключ — ключ файла, nonce — свой. Не вышло — плитка-значок
+function attachThumb(tile: HTMLElement, linkId: string, file: LinkManifestFile) {
+  const { thumb } = file;
+  if (!thumb) return;
+  const load = () => thumbLimiter(async () => {
+    const got = await createLinkClient(getGatewayUrl(), APP_VERSION).download(linkId, thumb.fileId, 0, 1);
+    const cipher = got.parts.get(0);
+    if (got.size !== thumb.blobSize || !cipher) return;
+    const plain = await decryptBlob(cipher, file.key, thumb.nonce);
+    if (!plain) return;
+    const image = el('img', 'thumb', undefined, {
+      alt: '', src: URL.createObjectURL(new Blob([plain as BlobPart], { type: 'image/jpeg' })),
+    });
+    image.addEventListener('error', () => image.remove());
+    tile.append(image);
+    tile.classList.add('has-thumb');
+  }).catch(() => undefined);
+  if (!thumbObserver) {
+    void load();
+    return;
+  }
+  (tile as HTMLElement & { loadThumb?: () => void }).loadThumb = () => void load();
+  thumbObserver.observe(tile);
+}
+
 function fileErrorText(e: unknown) {
   const code = errorCode(e);
   if (code === 'ERROR_CODE_INVALID') return strings.integrityError;
@@ -166,8 +204,10 @@ function saveBlob(blob: Blob, name: string) {
 function renderFileRow(linkId: string, node: LinkTreeNode, file: LinkManifestFile) {
   const row = el('li', 'item file', undefined, { 'data-file-path': file.path, 'data-file-state': 'idle' });
   const line = el('div', 'line');
+  const tile = el('span', `tile tone-${toneOf(file)}`, undefined, { 'aria-hidden': 'true' });
+  attachThumb(tile, linkId, file);
   line.append(
-    el('span', `tile tone-${toneOf(file)}`, undefined, { 'aria-hidden': 'true' }),
+    tile,
     el('span', 'name', node.name, { dir: 'auto' }),
     el('span', 'meta', sizeText(strings, file.size)),
   );
@@ -329,6 +369,98 @@ function countFiles(node: LinkTreeNode): number {
   return node.file ? 1 : node.children.reduce((sum, child) => sum + countFiles(child), 0);
 }
 
+// «Скачать всё»: ZIP пишется потоком — файлы по одному, каждый прямо в архив (на диск, где браузер умеет)
+function renderDownloadAll(linkId: string, manifest: LinkManifest, files: LinkManifestFile[]) {
+  const box = el('div', 'download-all');
+  const button = el('button', 'btn acc', strings.downloadAll, { type: 'button', 'data-download-all': '' });
+  const progress = el('div', 'progress');
+  progress.hidden = true;
+  const bar = el('div', 'progress-bar');
+  const barFill = el('div', 'progress-fill');
+  bar.append(barFill);
+  const progressText = el('span', 'progress-text', undefined, { role: 'status' });
+  const cancelButton = el('button', 'btn ghost small', strings.cancel, { type: 'button' });
+  progress.append(bar, progressText, cancelButton);
+  const note = el('div', 'note', undefined, { role: 'alert' });
+  note.hidden = true;
+  box.append(button, progress, note);
+  let abort: AbortController | undefined;
+
+  const showNote = (text?: string, isError = true) => {
+    note.hidden = !text;
+    note.textContent = text || '';
+    note.classList.toggle('ok', !isError);
+  };
+  const report = (done: number, total: number) => {
+    const percent = total ? Math.min(100, Math.floor((done / total) * 100)) : 100;
+    barFill.style.transform = `scaleX(${percent / 100})`;
+    progressText.textContent = fill(strings.downloadingAll, { percent });
+  };
+  const dirs = manifest.items.filter(isLinkDir).map(({ path }) => path);
+  const archiveName = `${manifest.name}.zip`;
+
+  cancelButton.addEventListener('click', () => abort?.abort());
+  button.addEventListener('click', async () => {
+    showNote();
+    const entries = [
+      ...files.map(({ path, size }) => ({ name: path, size })),
+      ...dirs.map((dir) => ({ name: dir, size: 0 })),
+    ];
+    if (!canZip(entries)) {
+      box.dataset.downloadState = 'failed';
+      showNote(strings.archiveTooLarge);
+      return;
+    }
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    const picker = (window as unknown as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
+    let handle: FileSystemFileHandle | undefined;
+    if (picker && total > STREAM_DOWNLOAD_BYTES) {
+      try {
+        handle = await picker({ suggestedName: archiveName });
+      } catch {
+        return;
+      }
+    }
+    if (!handle && total > MEMORY_DOWNLOAD_MAX_BYTES) {
+      box.dataset.downloadState = 'failed';
+      showNote(strings.tooLargeForBrowser);
+      return;
+    }
+    abort = new AbortController();
+    button.disabled = true;
+    progress.hidden = false;
+    box.dataset.downloadState = 'loading';
+    report(0, total);
+    const memory = handle ? undefined : createBlobSink('application/zip');
+    try {
+      const zip = createZipWriter(handle ? await createFileSink(handle) : memory!.sink);
+      for (const dir of dirs) await zip.addDir(dir);
+      let base = 0;
+      for (const file of files) {
+        await downloadCloudBlob(makeTransport(linkId, file), {
+          fileId: file.fileId, key: file.key, nonce: file.nonce, capability: '', size: file.size, chunks: file.chunks,
+        }, await zip.file(file.path), {
+          signal: abort.signal, onProgress: (done) => report(base + done, total),
+        });
+        base += file.size;
+      }
+      await zip.finish();
+      box.dataset.downloadState = 'done';
+      if (memory) saveBlob(memory.getBlob()!, archiveName);
+      else showNote(strings.saved, false);
+    } catch (e) {
+      const isCanceled = e instanceof CloudAbortError;
+      box.dataset.downloadState = isCanceled ? 'idle' : 'failed';
+      if (!isCanceled) showNote(fileErrorText(e));
+    } finally {
+      abort = undefined;
+      button.disabled = false;
+      progress.hidden = true;
+    }
+  });
+  return box;
+}
+
 function showManifest(linkId: string, manifest: LinkManifest, expiresAt: number) {
   const files = manifest.items.filter((item): item is LinkManifestFile => !isLinkDir(item));
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -359,6 +491,7 @@ function showManifest(linkId: string, manifest: LinkManifest, expiresAt: number)
   contentBox.replaceChildren(
     el('p', 'lead', isFolder ? strings.sharedFolder : strings.sharedFile),
     head,
+    ...(isFolder && files.length > 1 ? [renderDownloadAll(linkId, manifest, files)] : []),
     tree.length ? renderTree(linkId, tree, false) : el('p', 'empty', strings.emptyFolder),
   );
   statusBox.hidden = true;

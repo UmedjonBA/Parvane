@@ -106,11 +106,11 @@ import {
 } from './stickerPacks';
 import {
   buildBuiltinCustomEmojiSet,
-  buildBuiltinStickerSet,
   getBuiltinLegacyEmojiIds,
-  getBuiltinSetId,
+  getBuiltinStickerSet,
   getStickerBlobMime,
   isBuiltinStickerId,
+  renderBuiltinStickerBlob,
 } from './stickers';
 import { ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
@@ -210,6 +210,8 @@ let startupCredentials = consumeStartupCredentials();
 // Активность для «оставаться в системе»: отметка обновляется, пока вкладка
 // видима (раз в минуту), при возвращении на вкладку и при уходе со страницы
 const SESSION_ACTIVITY_INTERVAL_MS = 60 * 1000;
+// Полный выход: запись «устройство вышло» в журнал — сетевой шаг; стирание на устройстве его дольше не ждёт
+const LEAVE_TIMEOUT_MS = 5000;
 const MS_IN_SECOND = 1000;
 if (typeof window !== 'undefined') {
   const touchIfVisible = () => {
@@ -257,6 +259,12 @@ function readStrangersAllowed() {
 // «никто» отклоняется без звонка, присутствие при «никто» не публикуется
 function callsPolicyKey(user: string) {
   return `parvane:calls_from:${user}`;
+}
+
+// WEB-14: «звонки только через сервер» — настройка устройства (свой транспорт), на сервер не уходит;
+// «nobody» — прямых соединений нет ни с кем
+function callsRelayKey(user: string) {
+  return `parvane:calls_p2p:${user}`;
 }
 
 function presencePolicyKey(user: string) {
@@ -412,6 +420,7 @@ const callController = createCallController({
   isIdentityReady: () => isCallIdentityReady,
   // «Звонки — никто» (FR-040): входящий отклоняется так же, как от заблокированного
   isBlocked: (address) => localState.isBlocked(address) || readAudience(callsPolicyKey(store.self)) === 'nobody',
+  isRelayOnly: () => readAudience(callsRelayKey(store.self)) === 'nobody',
   sendUpdate,
   pushReadState: (chatId) => syncController.pushReadState(chatId),
   // v2Controller создаётся ниже; вызывается только во время звонка
@@ -877,9 +886,12 @@ function registerPackBlobs(blobs: Map<string, { blob: Blob; mime: string }>) {
 const restoringStickerSets = new Map<string, Promise<void>>();
 
 function restoreStickerBlob(fileId: string): Promise<void> | undefined {
-  const setId = isBuiltinStickerId(fileId)
-    ? getBuiltinSetId()
-    : getPackSetIdOfStickerId(fileId) || getEmojiSetIdForDocId(fileId);
+  // Встроенный стикер рисуется сам по себе — набор целиком не нужен
+  const builtin = isBuiltinStickerId(fileId) ? renderBuiltinStickerBlob(fileId) : undefined;
+  if (builtin) {
+    return builtin.then((blob) => mediaService.cacheBlobIfAbsent(fileId, blob, getStickerBlobMime(fileId)));
+  }
+  const setId = getPackSetIdOfStickerId(fileId) || getEmojiSetIdForDocId(fileId);
   if (!setId) return undefined;
   // Плитки одного набора просят картинки разом — набор собираем один раз
   let restoring = restoringStickerSets.get(setId);
@@ -2378,11 +2390,8 @@ const methods = {
 
   // ── стикеры (встроенный набор + кастомные паки) ─────────────────────────────
   async fetchStickerSets() {
-    const { set, blobs } = await buildBuiltinStickerSet();
-    // Регистрируем картинки/видео стикеров в media-кэше (хэш document<id>)
-    blobs.forEach((blob, id) => {
-      mediaService.cacheBlobIfAbsent(id, blob, getStickerBlobMime(id));
-    });
+    // Картинки встроенных стикеров рисуются по запросу медиа (`restoreStickerBlob`)
+    const set = getBuiltinStickerSet();
     // Наборы эмодзи сюда не входят (их отдаёт `fetchCustomEmojiSets`), а поле
     // `stickers` у набора без содержимого опускается целиком: tt сливает ответ с
     // уже загруженным набором (`{ ...existing, ...set }`), и явное `undefined`
@@ -2413,7 +2422,11 @@ const methods = {
       return { set: built.set, stickers: built.set.stickers };
     }
     const wantsEmoji = info?.id === 'parvane-emoji' || info?.shortName === 'ParvaneEmoji';
-    const { set, blobs } = wantsEmoji ? await buildBuiltinCustomEmojiSet() : await buildBuiltinStickerSet();
+    if (!wantsEmoji) {
+      const set = getBuiltinStickerSet();
+      return { set, stickers: set.stickers };
+    }
+    const { set, blobs } = await buildBuiltinCustomEmojiSet();
     blobs.forEach((blob, id) => {
       mediaService.cacheBlobIfAbsent(id, blob, getStickerBlobMime(id));
     });
@@ -2790,9 +2803,9 @@ const methods = {
     return { set: result.set, stickers: result.stickers || [], packs };
   },
 
-  async fetchRecentStickers() {
-    const { set } = await buildBuiltinStickerSet();
-    return { hash: '1', stickers: (set.stickers || []).slice(0, 6) };
+  fetchRecentStickers() {
+    const set = getBuiltinStickerSet();
+    return Promise.resolve({ hash: '1', stickers: (set.stickers || []).slice(0, 6) });
   },
 
   fetchFeaturedStickers() {
@@ -3032,8 +3045,14 @@ const methods = {
     return {
       isAvailable: v2Controller.isReady(),
       areCallsAllowed: readAudience(callsPolicyKey(store.self)) !== 'nobody',
+      isRelayOnly: readAudience(callsRelayKey(store.self)) === 'nobody',
       isPresenceShown: readAudience(presencePolicyKey(store.self)) !== 'nobody',
     };
+  },
+
+  parvaneSetCallsRelay({ isRelayOnly }: { isRelayOnly: boolean }) {
+    writeAudience(callsRelayKey(store.self), isRelayOnly ? 'nobody' : 'anyone');
+    return Promise.resolve(true);
   },
 
   parvaneSetCallsPolicy({ isAllowed }: { isAllowed: boolean }) {
@@ -3493,8 +3512,16 @@ const methods = {
   async destroy(noSessionClear?: boolean) {
     const user = store.self || pendingLoginAddress || readLoginAddress();
     // Полный выход: устройство убирает себя из аккаунта, пока соединение живо, —
-    // иначе у остальных устройств оставался бы «призрак» в списке
-    if (!noSessionClear) await v2Controller.leave();
+    // иначе у остальных устройств оставался бы «призрак» в списке. Нет связи —
+    // не дольше LEAVE_TIMEOUT_MS: локальное стирание идёт в любом случае (WEB-11)
+    if (!noSessionClear) {
+      await Promise.race([
+        v2Controller.leave(),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, LEAVE_TIMEOUT_MS);
+        }),
+      ]);
+    }
     connectionController.shutdown();
     mediaService.clearCache();
     // Стор прежнего аккаунта не должен отвечать на запросы между logout и

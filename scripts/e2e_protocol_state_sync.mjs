@@ -23,6 +23,7 @@ import {
   findMessage,
   findMessageContainer,
   LOGIN_TIMEOUT_MS,
+  logOutRow,
   openGroupChatByTitle,
   openPrivateChatStrict,
   preparePage,
@@ -41,12 +42,10 @@ const STATE_SYNC_BUDGET_MS = 10000;
 // Текст подтверждения выхода (диалог закрывается без выхода)
 async function readLogoutWarning(page) {
   await openProfile(page);
-  // «More actions» есть и в шапке чата — ждём сам экран настроек
+  // Ждём сам экран настроек, затем строку «Log Out» внизу него
   await page.locator('#Settings .settings-main-header').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.locator('#LeftColumn').getByRole('button', { name: 'More actions' }).first().click();
-  await page.getByRole('menuitem', { name: 'Log Out' }).click();
+  await logOutRow(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await logOutRow(page).click();
   const dialog = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: 'Log Out' }) }).first();
   await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1500); // признак «единственное устройство» приходит ответом провайдера

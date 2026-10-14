@@ -139,15 +139,18 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   return planner;
 }
 
-// Полный выход из аккаунта (не reload): «Профиль» → «More actions» → «Log Out»
+// Строка «Log Out» внизу экрана «Профиль» (меню «⋯» в шапке нет)
+export function logOutRow(page) {
+  return page.locator('#Settings .settings-main-scroll .ListItem-button').filter({ hasText: /^Log Out$/ }).first();
+}
+
+// Полный выход из аккаунта (не reload): «Профиль» → строка «Log Out» → подтверждение
 export async function logOut(page) {
   await openProfile(page);
-  await page.getByRole('button', { name: 'More actions' }).first()
-    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await page.getByRole('button', { name: 'More actions' }).first().click();
-  await page.getByRole('menuitem', { name: 'Log Out' }).click();
+  await logOutRow(page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await logOutRow(page).click();
   await clickUntil(
-    page.getByRole('button', { name: 'Log Out' }).last(),
+    page.locator('.Modal').getByRole('button', { name: 'Log Out' }).last(),
     () => page.locator('.Transition_slide-active > #auth-phone-number-form')
       .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }),
     { settleMs: 15000 },

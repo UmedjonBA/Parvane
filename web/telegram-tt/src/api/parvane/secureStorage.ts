@@ -282,6 +282,9 @@ export class SecureE2eStorage {
 // памяти вкладки после разблокировки; в IndexedDB остаётся лишь соль и
 // проверочная запись. Ключ из IndexedDB при этом удаляется.
 const PIN_ITERATIONS = 310_000;
+// Новый PIN — не короче: копию профиля перебирают офлайн, и 4 символа × PBKDF2 — часы на видеокарте (WEB-15).
+// Прежние короткие PIN по-прежнему открывают хранилище; сменить на короткий нельзя
+export const STORAGE_PIN_MIN_LENGTH = 8;
 const PIN_CHECK_PLAINTEXT = 'parvane-pin-check-v1';
 
 type PinRecord = { version: number; salt: ArrayBuffer; check: EncryptedRecord };
@@ -401,6 +404,7 @@ async function rekeyAll(user: string, from: CryptoKey, to: CryptoKey) {
 export async function setStoragePin(user: string, pin: string) {
   const current = await resolveProtectionKey(user);
   if (!current) throw new Error('Storage is locked: unlock with the current PIN first.');
+  if (pin && pin.length < STORAGE_PIN_MIN_LENGTH) throw new Error('Storage PIN is too short.');
   if (!pin) {
     // Снятие PIN: обратно на IndexedDB-ключ
     const fresh = await generateProtectionKey();

@@ -23,7 +23,9 @@ export async function respondWithCacheNetworkFirst(e: FetchEvent) {
 export async function respondWithCache(e: FetchEvent) {
   const cacheResult = await withTimeout(async () => {
     const cache = await self.caches.open(ASSET_CACHE_NAME);
-    const cached = await cache.match(e.request);
+    // Запуск без сети по ярлыку приложения (`/?open=…`) либо по ссылке (`/?join=…`): страница одна — из кэша
+    // берётся оболочка, запрос сам разбирается при загрузке
+    const cached = await cache.match(e.request, { ignoreSearch: e.request.mode === 'navigate' });
 
     return { cache, cached };
   }, TIMEOUT);

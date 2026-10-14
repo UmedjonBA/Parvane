@@ -385,6 +385,15 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
   return out;
 }
 
+export function isWebUrl(value: string) {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 /// Content движка → внутреннее содержимое UI; undefined — не «сообщение»
 /// (мутация/служебное — обрабатываются отдельно).
 export function v2ToWire(c: V2Content): WireMessageContent | undefined {
@@ -394,7 +403,8 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       kind: 'text',
       text: c.text.text || '',
       entities: entitiesFromV2(c.text.entities),
-      webpage: c.text.preview?.url ? {
+      // Карточку превью собирает отправитель: адрес — только http(s), иначе карточки нет (WEB-13)
+      webpage: c.text.preview?.url && isWebUrl(c.text.preview.url) ? {
         url: c.text.preview.url,
         site_name: c.text.preview.site_name,
         title: c.text.preview.title,

@@ -9,7 +9,7 @@ import type { PlannedItem } from './notesPlanned';
 import type { NoteEntry } from './notesStore';
 
 import buildClassName from '../../../util/buildClassName';
-import { requestPlannerAddInPlace } from '../../../util/parvaneSection';
+import { openPlannerDay, requestPlannerAddInPlace } from '../../../util/parvaneSection';
 import { formatRepeat } from '../planner/plannerFormat';
 import { toDayKey } from '../planner/plannerModel';
 import { nextNoteTitle, NOTE_TITLE_MAX } from './notesCanvasNote';
@@ -178,6 +178,11 @@ const NoteView = ({
   // «Запланировать»: окно ввода текстом «Плана» со ссылкой на заметку — запись с ней встаёт в «Запланировано»
   const handlePlan = useLastCallback(() => {
     requestPlannerAddInPlace(notePlanLine(note.title));
+  });
+
+  // Заметка дня: её день в «Плане» на экране «Сегодня» (название заметки — ключ дня)
+  const handleOpenDay = useLastCallback(() => {
+    openPlannerDay(note.title);
   });
 
   const handleFolder = useLastCallback(() => {
@@ -405,7 +410,12 @@ const NoteView = ({
                 <PvIcon name="edit" isSmall />
                 {lang('KnowledgeEdit')}
               </button>
-              {!isDaily && (
+              {isDaily ? (
+                <button type="button" className={kit.btn} data-note-open-day onClick={handleOpenDay}>
+                  <PvIcon name="cal" isSmall />
+                  {lang('KnowledgeOpenDay')}
+                </button>
+              ) : (
                 <button type="button" className={kit.btn} data-note-plan onClick={handlePlan}>
                   <PvIcon name="cal" isSmall />
                   {lang('KnowledgePlan')}

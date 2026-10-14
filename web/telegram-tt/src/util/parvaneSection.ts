@@ -106,6 +106,12 @@ export function openPlannerView(view: PlannerView) {
   setParvaneSection('planner');
 }
 
+/** «Открыть день» у заметки дня: «План» на экране «Сегодня» этого дня. */
+export function openPlannerDay(day: string) {
+  setPlannerPickedDay(day);
+  openPlannerView('today');
+}
+
 /** Кнопка «Календарь» боковой панели: раздел «План» на последнем виде календаря. */
 export function openPlannerCalendar() {
   showPlannerCalendar();
@@ -239,3 +245,36 @@ export function markContactsFromProfile(isFromProfile: boolean) {
 export function getIsContactsFromProfile() {
   return isContactsFromProfile;
 }
+
+// Ярлыки установленного приложения (долгое нажатие на значок, `shortcuts` манифеста): `?open=<куда>` в адресе
+// запуска. Разбирается один раз при загрузке и убирается из адреса, чтобы перезагрузка не повторяла переход
+const LAUNCH_PARAM = 'open';
+
+function applyLaunchTarget() {
+  const url = new URL(window.location.href);
+  const target = url.searchParams.get(LAUNCH_PARAM);
+  if (!target) return;
+  url.searchParams.delete(LAUNCH_PARAM);
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  switch (target) {
+    case 'chats':
+      setParvaneSection('messenger');
+      break;
+    case 'today':
+    case 'calendar':
+    case 'health':
+      openPlannerView(target);
+      break;
+    case 'entry':
+      requestPlannerAdd();
+      break;
+    case 'notes':
+    case 'files':
+      openKnowledgeView(target);
+      break;
+    default:
+      break;
+  }
+}
+
+applyLaunchTarget();

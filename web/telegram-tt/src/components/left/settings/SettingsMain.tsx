@@ -32,6 +32,7 @@ import ListItem from '../../ui/ListItem';
 import SettingsAccounts from './SettingsAccounts';
 import SettingsAppearanceModal from './SettingsAppearanceModal';
 import SettingsMore from './SettingsMore';
+import SettingsSignOut from './SettingsSignOut';
 
 import styles from './SettingsMain.module.scss';
 
@@ -232,6 +233,7 @@ const SettingsMain: FC<OwnProps & StateProps> = ({
         </div>
 
         <SettingsMore />
+        <SettingsSignOut />
         <div className={styles.version}>{`${APP_NAME} ${VERSION}`}</div>
       </div>
       <SettingsAppearanceModal

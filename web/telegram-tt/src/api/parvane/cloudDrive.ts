@@ -13,7 +13,8 @@ import {
 } from './cloudBlobs';
 import {
   base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, LINK_MANIFEST_MAX_BYTES,
-  LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, newLinkKey, openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
+  LINK_MAX_FILES, LINK_MAX_THUMBS, LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, type LinkManifestThumb, newLinkKey,
+  openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
 
 // Parvane (spec 016): методы провайдера раздела «Облако». Дерево и доступ — в
@@ -709,28 +710,46 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     const linkId = created.linkId || created.link_id;
     if (!linkId) throw new V2Error('ERROR_CODE_INVALID');
     try {
-      const copies = new Map<string, { fileId: string; blobSize: number; chunks: number }>();
-      let done = 0;
-      args.onProgress(0, plan.files.length);
-      await runPool(plan.files, LINK_ADD_WINDOW, async ({ node }) => {
-        const blob = node.blob!;
-        const request = { link_id: linkId, file_id: blob.fileId, capability: blob.capability };
-        let copy: LinkAddReply | undefined;
+      const copies = new Map<string, {
+        fileId: string; blobSize: number; chunks: number; thumb?: LinkManifestThumb;
+      }>();
+      // Миниатюры — копиями в том же пределе блобов ссылки, сколько останется после самих файлов
+      const thumbIds = new Set(plan.files.filter(({ node }) => node.thumb).map(({ node }) => node.id)
+        .slice(0, Math.min(LINK_MAX_THUMBS, LINK_MAX_FILES - plan.files.length)));
+      const addCopy = async (fileId: string, capability: string) => {
+        const request = { link_id: linkId, file_id: fileId, capability };
         // Метод идемпотентен: повтор с тем же источником отдаёт уже сделанную копию
-        for (let round = 1; !copy; round++) {
+        for (let round = 1; ; round++) {
           try {
-            copy = await withRetry(() => transport.blobCall<LinkAddReply>('cloud.link.add', request), signal);
+            const copy = await withRetry(() => transport.blobCall<LinkAddReply>('cloud.link.add', request), signal);
+            const copyId = copy.fileId || copy.file_id;
+            if (!copyId) throw new V2Error('ERROR_CODE_INVALID');
+            return { fileId: copyId, size: Number(copy.size || 0), chunks: copy.chunks };
           } catch (e) {
             const isStillCopying = e instanceof V2Error && e.code === 'ERROR_CODE_UNAVAILABLE';
             if (!isStillCopying || round >= LINK_ADD_ROUNDS) throw e;
           }
         }
-        const fileId = copy.fileId || copy.file_id;
-        if (!fileId) throw new V2Error('ERROR_CODE_INVALID');
+      };
+      let done = 0;
+      args.onProgress(0, plan.files.length);
+      await runPool(plan.files, LINK_ADD_WINDOW, async ({ node }) => {
+        const blob = node.blob!;
+        const copy = await addCopy(blob.fileId, blob.capability);
+        // Миниатюра необязательна: не скопировалась — файл в ссылке без неё
+        const thumbCopy = node.thumb && thumbIds.has(node.id)
+          ? await addCopy(node.thumb.fileId, node.thumb.capability).catch((e: unknown) => {
+            if (e instanceof CloudAbortError) throw e;
+            return undefined;
+          })
+          : undefined;
         copies.set(node.id, {
-          fileId,
-          blobSize: Number(copy.size || 0) || cloudCipherSize(blob.size),
+          fileId: copy.fileId,
+          blobSize: copy.size || cloudCipherSize(blob.size),
           chunks: copy.chunks || blob.chunks,
+          ...(thumbCopy?.size && {
+            thumb: { fileId: thumbCopy.fileId, nonce: node.thumb!.nonce, blobSize: thumbCopy.size },
+          }),
         });
         done += 1;
         args.onProgress(done, plan.files.length);

@@ -51,7 +51,7 @@ use tracing::{debug, error, info, warn};
 pub(crate) mod links;
 
 use super::{
-    delete_blob_any, delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency,
+    delete_blob_any, delete_file, file_meta_any, file_meta_for_user, finalize_upload, handler_concurrency, handler_per_user,
     max_chunk_bytes, max_download_chunks, max_file_bytes, max_total_chunks, now_unix,
     owner_quota_bytes, release_free_pages, store_chunk_raw, used_bytes, FileMeta, Finalize, RejectKind,
     Rejected, BUCKETS, BUCKET_DRIVE, BUCKET_MEDIA,
@@ -117,6 +117,8 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     }
     let mut all = futures::stream::select_all(streams);
     let sem = Arc::new(tokio::sync::Semaphore::new(handler_concurrency().max(1)));
+    // CLD-05: доля одного аккаунта — загрузка идёт окном в три чанка на файл, несколько файлов разом
+    let owner_slots = parvane_v2rt::OwnerSlots::new(handler_per_user());
     tokio::spawn(async move {
         while let Some((m, msg)) = all.next().await {
             let Some(reply) = msg.reply.clone() else {
@@ -124,7 +126,7 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                 continue;
             };
             let Ok(permit) = sem.clone().acquire_owned().await else { break };
-            let (nc, ctx) = (nc.clone(), ctx.clone());
+            let (nc, ctx, owner_slots) = (nc.clone(), ctx.clone(), owner_slots.clone());
             tokio::spawn(async move {
                 let _permit = permit;
                 let emit = |bytes: Vec<u8>| {
@@ -150,6 +152,10 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                         emit(error_reply(ErrorCode::Invalid)).await;
                         return;
                     }
+                };
+                let Some(_owner_slot) = owner_slots.try_acquire(&req.user) else {
+                    emit(parvane_v2rt::rate_limited_reply(parvane_v2rt::OWNER_BUSY_RETRY_MS)).await;
+                    return;
                 };
                 if m.kind == MethodKind::Stream as i32 {
                     // Анонимные скачивания по ссылкам — не больше своего числа

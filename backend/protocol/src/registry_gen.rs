@@ -20,7 +20,8 @@ pub const EPH_PREFIX: &str = "v2.eph.";
 pub const EPH_WILDCARD: &str = "v2.eph.>";
 /// Отзыв устройства → gateway закрывает сессии (класс 5).
 pub const REVOKED_SUBJECT: &str = "v2.revoked";
-pub const REQUEST_INBOX: &str = "_INBOX.>";
+/// Ответы на запросы identity — только в её почтовый ящик (GW-05; клиент NATS роли — префикс `_INBOX.<роль>`).
+pub const IDENTITY_REPLY_INBOX: &str = "_INBOX.identity.>";
 /// Внутренние запросы шардов к identity (не клиентские).
 pub const INTERNAL_IDENTITY_WILDCARD: &str = "v2.internal.identity.>";
 pub const INTERNAL_DEVICES_OF: &str = "v2.internal.identity.devices_of";
@@ -87,7 +88,7 @@ pub fn acl() -> BTreeMap<&'static str, RoleAcl> {
             r.publish.extend(publ.iter().map(|s| s.to_string()));
         }
     };
-    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, REQUEST_INBOX], &[REVOKED_SUBJECT, INBOX_WILDCARD]);
+    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, IDENTITY_REPLY_INBOX], &[REVOKED_SUBJECT, INBOX_WILDCARD]);
     add(&mut m, "messenger", &[INTERNAL_GROUP_EPOCH], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
     // call.signal_sealed: право доставки (ключ доступа) и устройства адресата —
     // через identity; сигналы — живыми событиями в журналы устройств.
@@ -159,7 +160,7 @@ mod tests {
         assert!(eph_subject(&[1; 15]).is_err());
         for (_, r) in acl() {
             for s in r.subscribe.iter().chain(r.publish.iter()) {
-                assert!(s.starts_with("v2.") || s == REQUEST_INBOX, "{s}");
+                assert!(s.starts_with("v2.") || s == IDENTITY_REPLY_INBOX, "{s}");
             }
         }
     }

@@ -518,7 +518,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneStoragePinTitle: 'Storage PIN',
   ParvaneStoragePinInfo: 'Optional PIN that protects the local E2E keys and the saved session in this browser. '
     + 'You will be asked for it on every reload. Your account password is never stored.',
-  ParvaneStoragePinPlaceholder: 'PIN (at least 4 characters)',
+  ParvaneStoragePinPlaceholder: 'PIN (at least 8 characters)',
   ParvaneStoragePinRepeat: 'Repeat PIN',
   ParvaneStoragePinSet: 'Set PIN',
   ParvaneStoragePinRemove: 'Remove PIN',
@@ -542,6 +542,9 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneStrangersInfo: 'When off, only people you have written to can message you.',
   ParvaneCallsToggle: 'Incoming calls',
   ParvaneCallsInfo: 'When off, nobody can call you: calls are declined without ringing.',
+  ParvaneCallsRelayToggle: 'Calls only through the server',
+  ParvaneCallsRelayInfo: 'Your IP address is hidden from the other side; the call may sound a bit worse. '
+    + 'This device only.',
   ParvanePresenceToggle: 'Show when I am online',
   ParvanePresenceInfo: 'When off, others do not see whether you are online.',
   ParvaneL2Toggle: 'Enhanced privacy',
@@ -1182,7 +1185,7 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneStoragePinTitle: 'PIN хранилища',
   ParvaneStoragePinInfo: 'Необязательный PIN, защищающий локальные E2E-ключи и сохранённую сессию в этом браузере. '
     + 'Его спросят при каждой перезагрузке. Пароль аккаунта не сохраняется.',
-  ParvaneStoragePinPlaceholder: 'PIN (не короче 4 символов)',
+  ParvaneStoragePinPlaceholder: 'PIN (не короче 8 символов)',
   ParvaneStoragePinRepeat: 'Повторите PIN',
   ParvaneStoragePinSet: 'Установить PIN',
   ParvaneStoragePinRemove: 'Снять PIN',
@@ -1205,6 +1208,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneStrangersInfo: 'Если выключено, писать вам могут только те, кому писали вы.',
   ParvaneCallsToggle: 'Входящие звонки',
   ParvaneCallsInfo: 'Если выключено, вам никто не может позвонить: вызовы отклоняются без звонка.',
+  ParvaneCallsRelayToggle: 'Звонки только через сервер',
+  ParvaneCallsRelayInfo: 'Собеседник не видит ваш IP-адрес; звук может стать чуть хуже. Только на этом устройстве.',
   ParvanePresenceToggle: 'Показывать, что я в сети',
   ParvanePresenceInfo: 'Если выключено, другие не видят, в сети ли вы.',
   ParvaneL2Toggle: 'Усиленная приватность',

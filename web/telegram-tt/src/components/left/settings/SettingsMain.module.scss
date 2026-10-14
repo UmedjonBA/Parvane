@@ -185,3 +185,23 @@
   color: var(--pv-muted);
   text-align: center;
 }
+
+// Выход — красная строка внизу «Профиля»
+.dangerTile {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.625rem;
+
+  color: var(--pv-red);
+
+  background: color-mix(in srgb, var(--pv-red) 18%, transparent);
+}
+
+.dangerTitle {
+  color: var(--pv-red);
+}

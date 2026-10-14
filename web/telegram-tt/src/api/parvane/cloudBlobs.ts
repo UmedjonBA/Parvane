@@ -16,6 +16,8 @@ import {
 
 /** Размер чанка облака, байт шифртекста. */
 export const CLOUD_CHUNK_BYTES = 512 * 1024;
+/** `BLOB_BUCKET_DRIVE` схемы `cloud.v1` — квота «Облака» отдельно от медиа чатов. */
+const BUCKET_DRIVE = 1;
 const UPLOAD_WINDOW = 3;
 const DOWNLOAD_WINDOW_CHUNKS = 32;
 const MAX_ATTEMPTS = 8;
@@ -51,6 +53,8 @@ export type BlobSession = {
 export type CloudBlobTransport = BlobSession & {
   /** Метод блобов шарда cloud по имени: proto3-JSON запроса → proto3-JSON ответа. */
   blobCall: <T>(method: string, request: unknown) => Promise<T>;
+  /** Чанк загрузки двоичным телом (без base64 в JSON); нет — через `blobCall`. */
+  uploadBlobChunk?: (uploadId: string, index: number, data: Uint8Array, bucket?: number) => Promise<string>;
   /** Серия: все `session.downloadBlobCap` внутри `fn` — по одному соединению
    * (миниатюры папки, тексты заметок); без серии — соединение на каждый блоб. */
   withBlobSession?: <T>(fn: (session: BlobSession) => Promise<T>) => Promise<T>;
@@ -224,15 +228,20 @@ export async function uploadCloudBlob(
 
   async function sendChunk(uploadId: string, index: number) {
     const data = await source.range(index * CLOUD_CHUNK_BYTES, (index + 1) * CLOUD_CHUNK_BYTES);
-    const got = await withRetry(() => transport.blobCall<{ uploadId?: string; upload_id?: string }>(
-      'cloud.blob.upload_chunk',
-      {
-        upload_id: uploadId, index, data: toBase64(data), bucket: 'BLOB_BUCKET_DRIVE',
-      },
-    ), signal);
+    const sendBinary = transport.uploadBlobChunk;
+    const nextId = await withRetry(async () => {
+      if (sendBinary) return sendBinary(uploadId, index, data, BUCKET_DRIVE);
+      const got = await transport.blobCall<{ uploadId?: string; upload_id?: string }>(
+        'cloud.blob.upload_chunk',
+        {
+          upload_id: uploadId, index, data: toBase64(data), bucket: 'BLOB_BUCKET_DRIVE',
+        },
+      );
+      return got.uploadId || got.upload_id || uploadId;
+    }, signal);
     sent += data.length;
     options.onProgress?.(Math.min(sent, source.cipherSize), source.cipherSize);
-    return got.uploadId || got.upload_id || uploadId;
+    return nextId;
   }
 
   let uploadId = resume?.uploadId || '';

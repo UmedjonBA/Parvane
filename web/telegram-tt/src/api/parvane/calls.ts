@@ -19,6 +19,8 @@ type CallDependencies = {
   getToken: () => string;
   isIdentityReady: () => boolean;
   isBlocked: (address: string) => boolean;
+  // «Звонки только через сервер» включены на этом устройстве
+  isRelayOnly?: () => boolean;
   sendUpdate: (update: ApiUpdate) => void;
   // Пересчёт непрочитанного чата после инъекции входящей записи о звонке
   pushReadState: (chatId: string) => void;
@@ -77,6 +79,12 @@ type CallWindowState = {
   };
   groupStreams?: Record<string, MediaStream>;
 };
+
+/** «Звонки только через сервер» (WEB-14) либо тестовое переопределение: кандидаты — только TURN, свой IP
+ * собеседнику не уходит. Иначе — по умолчанию браузера (прямое соединение, если получится). */
+export function pickIceTransportPolicy(isRelayOnly: boolean, isForcedForTest: boolean) {
+  return isRelayOnly || isForcedForTest ? 'relay' as const : undefined;
+}
 
 export function createCallController(deps: CallDependencies) {
   let engine: CallEngine | undefined;
@@ -150,13 +158,17 @@ export function createCallController(deps: CallDependencies) {
   }
 
   function getIceTransportPolicy(): RTCIceTransportPolicy | undefined {
+    return pickIceTransportPolicy(Boolean(deps.isRelayOnly?.()), isRelayForcedForTest());
+  }
+
+  function isRelayForcedForTest() {
     // Тестовое переопределение — только в диаг-сборке: в проде выставленный
     // ключ иначе перевёл бы все звонки в relay-only
-    if (!ARE_DIAG_HOOKS_ENABLED) return undefined;
+    if (!ARE_DIAG_HOOKS_ENABLED) return false;
     try {
-      return localStorage.getItem(FORCE_RELAY_STORAGE_KEY) ? 'relay' : undefined;
+      return Boolean(localStorage.getItem(FORCE_RELAY_STORAGE_KEY));
     } catch {
-      return undefined;
+      return false;
     }
   }
 

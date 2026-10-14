@@ -152,6 +152,29 @@ describe('блобы облака: потоковый PVB2', () => {
     expect(server.calls.filter((c) => c.method === 'download').map((c) => c.index)).toEqual([0, 32]);
   }, 60000);
 
+  it('чанки уходят двоичным телом в bucket «Облака», без base64 в JSON', async () => {
+    const server = createServer();
+    const binary: { index: number; bucket?: number }[] = [];
+    const json = server.transport.blobCall;
+    server.transport.uploadBlobChunk = (uploadId, index, data, bucket) => {
+      binary.push({ index, bucket });
+      // Тот же мини-шард, но байты приходят как есть
+      return json<{ uploadId: string }>('cloud.blob.upload_chunk', {
+        upload_id: uploadId, index, data: b64(data), bucket: bucket === 1 ? 'BLOB_BUCKET_DRIVE' : 'other',
+      }).then((got) => got.uploadId);
+    };
+    server.transport.blobCall = <T>(method: string, request: unknown) => {
+      expect(method).not.toBe('cloud.blob.upload_chunk');
+      return json<T>(method, request);
+    };
+    const plain = bytesOf(3 * CLOUD_CHUNK_BYTES);
+    const up = await uploadCloudBlob(server.transport, new Blob([plain]));
+    expect(binary.map((c) => c.index).sort((a, b) => a - b)).toEqual(Array.from({ length: up.chunks }, (_, i) => i));
+    expect(binary.every((c) => c.bucket === 1)).toBe(true);
+    const got = await download(server, up);
+    expect(Buffer.compare(Buffer.from(got), Buffer.from(plain))).toBe(0);
+  });
+
   it('следующее окно запрашивается, пока предыдущее пишется в приёмник', async () => {
     const server = createServer();
     // Три окна: 70 чанков облака

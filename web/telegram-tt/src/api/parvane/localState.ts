@@ -907,13 +907,17 @@ export function createLocalState(deps: LocalStateDependencies) {
   // `invites` намеренно НЕ стирается: сервер не умеет отзывать ссылки, и на
   // каждый новый вход создавал бы новый вечный токен группы. FR-011 требует
   // переиспользовать ссылку и между повторными входами на устройстве
+  // Полный выход: все записи этого аккаунта в localStorage — `parvane:<что>:<адрес>` и с адресом посередине.
+  // Раньше стирался перечень из двенадцати видов, и после выхода оставались названия групп, собеседники,
+  // ссылки-приглашения, отметки прочтения (WEB-10). Адрес двоеточий не содержит — граница записи надёжна
   function clearUserData(user: string) {
-    [
-      'scheduled', 'hist', 'ttl', 'blocked', 'contacts', 'noncontacts', 'folders', 'drafts', 'pinned', 'archived',
-      'notify', 'notifydefaults',
-    ].forEach((part) => {
-      localStorage.removeItem(`parvane:${part}:${user}`);
-    });
+    const suffix = `:${user}`;
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('parvane:') && (key.endsWith(suffix) || key.includes(`${suffix}:`))) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
     resetSecureCaches();
     void SecureE2eStorage.clearRecords(user).catch(() => undefined);
   }

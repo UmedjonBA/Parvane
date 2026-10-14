@@ -1679,8 +1679,23 @@
   outline-offset: 3px;
 }
 
+// Приглушение — подложкой поверх карточки, а не `opacity`: прозрачность делала каждую карточку с размытой тенью
+// отдельным слоем отрисовки, и выбор карточки (подсветка связей приглушает все остальные) стоил долгого кадра
 .canvasDim {
-  opacity: 0.35;
+  box-shadow: none;
+
+  &::after {
+    pointer-events: none;
+    content: "";
+
+    position: absolute;
+    z-index: 1;
+    inset: -1px;
+
+    border-radius: inherit;
+
+    background: color-mix(in srgb, var(--pv-bg) 65%, transparent);
+  }
 }
 
 .canvasLinked:not(.canvasSelected) {

@@ -67,6 +67,8 @@ async fn main() -> Result<()> {
         .retry_on_initial_connect()
         .subscription_capacity(env("PARVANE_GATEWAY_SUB_CAPACITY", "1024").parse().unwrap_or(1024));
     if !pass.is_empty() {
+        // GW-05: ответы gateway — в свой почтовый ящик `_INBOX.gateway` (ACL роли подписан только на него)
+        opts = opts.custom_inbox_prefix(parvane_types::topic_contract::reply_inbox_prefix(&user));
         opts = opts.user_and_password(user, pass);
     }
     let nats = Arc::new(opts.connect(&nats_url).await.context("подключение к NATS")?);

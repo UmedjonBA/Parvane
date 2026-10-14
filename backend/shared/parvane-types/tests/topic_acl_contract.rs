@@ -258,7 +258,7 @@ fn shard_subscriptions_match_the_contract() {
         let acl_subjects: BTreeSet<String> = shard
             .nats_subscribe
             .iter()
-            .filter(|subject| **subject != REQUEST_INBOX)
+            .filter(|subject| !subject.starts_with("_INBOX."))
             .map(|subject| (*subject).to_string())
             .collect();
         assert_eq!(
@@ -283,6 +283,33 @@ fn dev_and_production_acl_match_the_contract() {
     assert!(user_block(PROD_NATS, "dev").is_none());
 }
 
+
+/// GW-05: ни одна роль шины (кроме dev-пользователя стенда) не подписана на все ответы `_INBOX.>` — только
+/// на свой почтовый ящик `_INBOX.<роль>.>`, иначе взломанный шард читал бы ответы identity с токенами.
+#[test]
+fn roles_see_only_their_own_replies() {
+    for (name, text) in [("server.conf", DEV_NATS), ("server.prod.conf", PROD_NATS)] {
+        for role in parvane_protocol::registry_gen::ROLES.iter().chain(["notes", "calendar"].iter()) {
+            let Some(block) = user_block(text, role) else { continue };
+            let subscribe = permission_set_all(block, "subscribe");
+            assert!(!subscribe.contains("_INBOX.>"), "{name}: роль {role} подписана на все ответы `_INBOX.>`");
+            assert!(
+                subscribe.contains(&format!("_INBOX.{role}.>")),
+                "{name}: роль {role} не подписана на свой почтовый ящик"
+            );
+        }
+    }
+    assert_eq!(parvane_types::topic_contract::reply_inbox_prefix("cloud"), "_INBOX.cloud");
+}
+
+/// Все subject'ы права, включая сгенерированные v2-блоки.
+fn permission_set_all(block: &str, permission: &str) -> BTreeSet<String> {
+    let marker = format!("{permission}:");
+    let tail = &block[block.find(&marker).expect("право в блоке") + marker.len()..];
+    let array = &tail[tail.find('[').expect("начало массива ACL") + 1..];
+    let array = &array[..array.find(']').expect("конец массива ACL")];
+    array.split('"').skip(1).step_by(2).map(str::to_string).collect()
+}
 
 /// Протокол v2 (T031): блоки ACL между маркерами `# >>> v2 …` в обоих
 /// конфигах NATS совпадают с тем, что генерирует реестр методов.

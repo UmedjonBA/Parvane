@@ -3385,6 +3385,14 @@
 "PlannerMetricProteinShort" = "P";
 "PlannerMetricWater" = "Water";
 "PlannerMinutesValue" = "{minutes} min";
+"PlannerRemindAtStart" = "Remind at the start";
+"PlannerRemindBefore" = "Remind {amount} before";
+"PlannerDaysValue_one" = "{days} day";
+"PlannerDaysValue_other" = "{days} days";
+"PlannerRemind" = "Remind";
+"PlannerRemindNone" = "No reminder";
+"PlannerReminderTitle" = "Reminder";
+"PlannerReminderMessage" = "⏰ {title} — {when}";
 "PlannerMore" = "+{count} more";
 "PlannerNearLimit" = "The planner is close to its size limit. Delete old entries to keep syncing.";
 "PlannerNeedsLinking" = "Planner data will appear after this device is linked to your account: reply to the Parvane bot in Telegram with your recovery key or confirm this device on another one.";
@@ -3704,6 +3712,8 @@
 "PlannerDailyNote" = "Daily note";
 "PlannerDailyNoteHint" = "Thoughts, checklist items and links for the day live in «Knowledge».";
 "PlannerDailyNoteWrite" = "Write the daily note";
+"KnowledgeOpenDay" = "Open the day";
+"PlannerDailyNotePlaceholder" = "Thoughts, - [ ] items, [[links]]";
 "PlannerKcalLeftOf" = "{left} left of {goal}";
 "PlannerLayers" = "Calendar layers";
 "PlannerLayerWork" = "Plans";

@@ -106,6 +106,11 @@ pub(crate) fn handler_concurrency() -> usize {
     env_usize("PARVANE_HANDLER_CONCURRENCY", 32)
 }
 
+/// CLD-05: запросов одного пользователя разом (доля от `handler_concurrency`).
+pub(crate) fn handler_per_user() -> usize {
+    env_usize("PARVANE_HANDLER_PER_USER", 12)
+}
+
 /// P-28: максимум чанков за один download (окно range-стриминга). Целый файл
 /// в 512 МиБ больше не поднимается в память: чанки читаются и отдаются по
 /// одному, а клиент запрашивает окнами.
@@ -170,6 +175,16 @@ pub(crate) fn owner_quota_bytes(bucket: i64) -> i64 {
     } else {
         env_usize("PARVANE_CLOUD_OWNER_QUOTA_BYTES", 4 * 1024 * 1024 * 1024) as i64
     }
+}
+
+/// CLD-02: потолок числа готовых файлов владельца (все bucket'ы вместе; 0 — без лимита). Квота в байтах не
+/// мешала завести миллионы крошечных файлов: база и подсчёт занятого места росли без предела.
+pub(crate) fn max_owner_files() -> i64 {
+    #[cfg(test)]
+    if let Some(n) = tests::FILE_COUNT_OVERRIDE.with(|c| c.get()) {
+        return n;
+    }
+    env_usize("PARVANE_CLOUD_MAX_FILES", 200_000) as i64
 }
 
 /// Занятое владельцем в bucket'е: готовые файлы и незавершённые загрузки.
@@ -431,6 +446,17 @@ pub(crate) async fn finalize_upload(pool: &SqlitePool, owner: &str, p: &Finalize
             RejectKind::Limit,
             format!("превышена квота хранилища владельца ({} байт)", quota),
         ));
+    }
+
+    let max_files = max_owner_files();
+    if max_files > 0 {
+        let (files,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM files WHERE owner = ?")
+            .bind(owner)
+            .fetch_one(&mut *tx)
+            .await?;
+        if files >= max_files {
+            return Err(reject(RejectKind::Limit, format!("слишком много файлов (лимит {max_files})")));
+        }
     }
 
     sqlx::query(
@@ -731,6 +757,7 @@ mod tests {
         /// однопоточный рантайм на тест).
         pub(crate) static QUOTA_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
         pub(crate) static FILE_MAX_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+        pub(crate) static FILE_COUNT_OVERRIDE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
     }
 
     async fn test_pool() -> SqlitePool {
@@ -1069,6 +1096,21 @@ mod tests {
         let (m,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chunks WHERE file_id = ?")
             .bind(fresh.to_string()).fetch_one(&pool).await.unwrap();
         assert_eq!(m, 1);
+    }
+
+    #[tokio::test]
+    async fn owner_file_count_is_capped() {
+        // CLD-02: третий готовый файл при потолке 2 — отказ, у другого владельца — можно
+        FILE_COUNT_OVERRIDE.with(|c| c.set(Some(2)));
+        let pool = test_pool().await;
+        let mut results = Vec::new();
+        for owner in ["cap@local", "cap@local", "cap@local", "other@local"] {
+            let id = Uuid::now_v7();
+            store_chunk(&pool, owner, &chunk(id, 0, 1, b"x")).await.unwrap();
+            results.push(finalize_file(&pool, owner, &complete(id, 1, 1)).await.is_ok());
+        }
+        FILE_COUNT_OVERRIDE.with(|c| c.set(None));
+        assert_eq!(results, [true, true, false, true]);
     }
 
     #[tokio::test]

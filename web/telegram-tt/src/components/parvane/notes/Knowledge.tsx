@@ -156,7 +156,10 @@ const Knowledge = () => {
   // Холст, созданный с графа: вкладка «Холст» открывается на нём
   const [graphCanvasId, setGraphCanvasId] = useState<string>();
   const isMakingCanvasRef = useRef(false);
-  // Человек уже открыл либо создал заметку: «Обзор» справки, дописанной позже, его не перебивает
+  // Человек уже открыл либо создал заметку: «Обзор» справки, дописанной позже, его не перебивает. Окно гонки
+  // закономерно: в новом хранилище `createNote` → `ensureFolder` ждёт `guideRun` (папку хранилища создаёт
+  // справка), а `createIn` ставит `openId` лишь после ответа `createNote` — справка всегда успевает раньше,
+  // и без отметки эффект ниже видел пустой `openId` и открывал «Обзор» поверх создаваемой заметки
   const hasPickedNoteRef = useRef(false);
 
   const lang = useLang();
@@ -363,7 +366,7 @@ const Knowledge = () => {
   });
 
   const handleFolderSubmit = useLastCallback(async (name: string): Promise<FolderSubmitError | undefined> => {
-    if (sheetFolder) return renameNoteFolder(sheetFolder.id, name);
+    if (sheetFolder) return renameNoteFolder(sheetFolder.id, name, vaultName);
     return (await createNoteFolder(name, vaultName)).error;
   });
 

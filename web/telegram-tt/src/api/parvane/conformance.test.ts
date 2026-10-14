@@ -1182,7 +1182,11 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     // V2Control, не очередь соединения движка), чанк — байтами от движка
     r.uploadMethods.forEach((method) => expect(controller, method).toContain(`'${method}'`));
     expect(controller).toContain('blobControl.requestBytes(method, body, BLOB_TIMEOUT_MS)');
-    expect(controller).toContain('encodeUploadChunkBody(pv, uploadId, index, 0, data)');
+    // Bucket по умолчанию 0 (медиа чатов); 1 («Облако») передаёт только cloudBlobs.ts
+    expect(controller).toContain('uploadBlobChunk(uploadId: string, index: number, data: Uint8Array, bucket = 0)');
+    expect(controller).toContain('encodeUploadChunkBody(pv, uploadId, index, bucket, data)');
+    expect(readRepo('web/telegram-tt/src/api/parvane/attachmentUpload.ts'))
+      .toContain('transport.uploadBlobChunk(uploadId, index, data))');
     expect(controller).toContain(`const method = '${r.downloadMethod}';`);
     // Скачивание по секрету — анонимным каналом: пул соединений блобов (A9) открывает их только так
     const blobPool = controller.slice(

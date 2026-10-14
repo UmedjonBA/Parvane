@@ -1434,6 +1434,16 @@
 "PlannerMetricProteinShort" = "Б";
 "PlannerMetricWater" = "Вода";
 "PlannerMinutesValue" = "{minutes} мин";
+"PlannerRemindAtStart" = "Напомнить в начале";
+"PlannerRemindBefore" = "Напомнить за {amount}";
+"PlannerDaysValue_one" = "{days} день";
+"PlannerDaysValue_few" = "{days} дня";
+"PlannerDaysValue_many" = "{days} дней";
+"PlannerDaysValue_other" = "{days} дня";
+"PlannerRemind" = "Напомнить";
+"PlannerRemindNone" = "Без напоминания";
+"PlannerReminderTitle" = "Напоминание";
+"PlannerReminderMessage" = "⏰ {title} — {when}";
 "PlannerMore" = "+{count} ещё";
 "PlannerNearLimit" = "Планировщик близок к потолку размера. Удалите старые записи, чтобы синхронизация продолжалась.";
 "PlannerNeedsLinking" = "Данные планировщика появятся после привязки этого устройства к аккаунту: ответьте боту Parvane в Telegram ключом восстановления или подтвердите устройство на другом.";
@@ -1790,6 +1800,8 @@
 "PlannerDailyNote" = "Заметка дня";
 "PlannerDailyNoteHint" = "Мысли, пункты и ссылки дня — в «Знаниях».";
 "PlannerDailyNoteWrite" = "Написать заметку дня";
+"KnowledgeOpenDay" = "Открыть день";
+"PlannerDailyNotePlaceholder" = "Мысли, - [ ] пункты, [[ссылки]]";
 "PlannerKcalLeftOf" = "осталось {left} из {goal}";
 "PlannerLayers" = "Слои календаря";
 "PlannerLayerWork" = "Дела";

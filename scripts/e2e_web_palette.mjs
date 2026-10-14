@@ -212,6 +212,20 @@ try {
   await page.keyboard.press('Control+a');
   await page.keyboard.press('Backspace');
   console.log('OK: чат открывается из палитры; Ctrl+K с выделением в поле сообщения остаётся редактору');
+  // «/» в поле сообщения печатается, вне поля — открывает палитру (как в прототипе)
+  await composer.click();
+  await page.keyboard.type('/');
+  await page.waitForTimeout(500);
+  assert.equal(await input.isVisible(), false, '«/» в поле сообщения открыл палитру');
+  assert.ok((await composer.innerText()).includes('/'), '«/» не напечатался в поле сообщения');
+  await page.keyboard.press('Backspace');
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await page.keyboard.press('/');
+  await visible(input, 'палитра по «/» вне поля ввода');
+  assert.equal(await input.inputValue(), '', '«/» попал в поле палитры');
+  await page.keyboard.press('Escape');
+  await hidden(input, 'Escape не закрыл палитру, открытую «/»');
+  console.log('OK: «/» открывает палитру вне поля ввода и печатается в поле сообщения');
 
   // ── После перезагрузки заметки догружаются палитрой, «Знания» не открывались ──
   await sidebar.getByRole('tab', { name: /^Chats/ }).click();

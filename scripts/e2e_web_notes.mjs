@@ -35,6 +35,8 @@ const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: WIDE });
 let session;
 
+
+
 try {
   const user = `notes-${Date.now().toString(36)}@local`;
   session = await preparePage(context, user, PASSWORD);
@@ -291,10 +293,17 @@ try {
   await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня');
   await visible(knowledge.locator('[data-folder="Daily"]'), 'папка ежедневных заметок');
   await openPlannerScreen(page, 'today');
-  // Заметка по шаблону пуста: приглашение остаётся, кнопка «Изменить» открывает ту же заметку
+  // Заметка по шаблону пуста: приглашение остаётся; «Изменить» — правка на месте (как в прототипе), Escape отменяет
   await visible(planner.locator('[data-today-note="empty"]'), 'карточка пустой заметки дня');
+  const dailyEditor = planner.locator('[data-today-note-editor]');
   await planner.locator('[data-today-daily]').click();
-  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по кнопке «Изменить»');
+  await visible(dailyEditor, 'поле заметки дня на «Сегодня»');
+  assert.ok((await dailyEditor.inputValue()).startsWith(`# ${dayKey}`), 'в поле не текст заметки дня');
+  await dailyEditor.press('Escape');
+  await dailyEditor.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  // Нажатие на приглашение по-прежнему открывает саму заметку в «Знаниях»
+  await planner.locator('[data-today-note-empty]').click();
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня по нажатию на приглашение');
   console.log('OK: заметка дня создаётся с экрана «Сегодня»');
 
   // ── Текст заметки дня виден на «Сегодня»; нажатие на него открывает заметку ──
@@ -317,6 +326,24 @@ try {
   await openPlannerScreen(page, 'today');
   await visible(dailyCard.getByText(DAILY_TEXT), 'текст заметки дня после возврата на «Сегодня»');
   console.log('OK: текст заметки дня на «Сегодня», нажатие открывает заметку');
+
+  // ── Правка заметки дня прямо на «Сегодня»; «Открыть день» у заметки дня ───
+  const ADDED_LINE = 'дописано на экране Сегодня';
+  await planner.locator('[data-today-daily]').click();
+  await visible(dailyEditor, 'поле заметки дня с текстом');
+  assert.ok((await dailyEditor.inputValue()).includes('разобрать почту'), 'в поле не прежний текст заметки');
+  await dailyEditor.press('Control+End');
+  await dailyEditor.pressSequentially(`\n${ADDED_LINE}`);
+  await planner.locator('[data-today-daily-done]').click();
+  await dailyEditor.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await visible(dailyCard.getByText(ADDED_LINE), 'дописанная строка на карточке');
+  await dailyCard.locator('[data-today-note-text]').click();
+  await visible(knowledge.locator(`[data-note-title="${dayKey}"]`), 'заметка дня после правки на «Сегодня»');
+  await visible(body.getByText(ADDED_LINE), 'правка с «Сегодня» в самой заметке');
+  await visible(body.getByText('разобрать почту'), 'прежний текст заметки после правки на «Сегодня»');
+  await note.locator('[data-note-open-day]').click();
+  await visible(planner.locator('[data-today-note="text"]').getByText(ADDED_LINE), '«Открыть день» — «Сегодня» этого дня');
+  console.log('OK: заметка дня правится на «Сегодня»; «Открыть день» ведёт в «План»');
 
   // ── «Запланировано»: событие со ссылкой на заметку ────────────────────────
   await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
@@ -1503,6 +1530,38 @@ try {
   await visible(board.locator('[data-canvas-group-label]').filter({ hasText: 'Сервер' }), 'название группы после перезагрузки');
   assert.equal(await chip('Карта проекта').count(), 0, 'удалённый холст не вернулся после перезагрузки');
   console.log('OK: заметки и холст пережили перезагрузку');
+
+  // ── Поиск по холсту: подсветка, приглушение и переезд к находке ──────────
+  // Поле приближается колесом в углу, дальнем от карточки «Идея 2», — карточка уходит с экрана; поиск в шапке
+  // подсвечивает её, гасит остальные и сам возвращает её на экран
+  const ideaCard = board.locator('[data-canvas-type="text"]').filter({ hasText: 'Идея 2' }).first();
+  const searchBoard = await board.boundingBox();
+  const inSearchBoard = (box) => Boolean(box) && box.x + box.width > searchBoard.x
+    && box.x < searchBoard.x + searchBoard.width && box.y + box.height > searchBoard.y
+    && box.y < searchBoard.y + searchBoard.height;
+  const ideaBox = await ideaCard.boundingBox();
+  const ideaX = ideaBox.x + ideaBox.width / 2;
+  const ideaY = ideaBox.y + ideaBox.height / 2;
+  const cornerX = ideaX > searchBoard.x + searchBoard.width / 2 ? searchBoard.x + 8 : searchBoard.x + searchBoard.width - 8;
+  const cornerY = ideaY > searchBoard.y + searchBoard.height / 2 ? searchBoard.y + 8 : searchBoard.y + searchBoard.height - 8;
+  await page.mouse.move(cornerX, cornerY);
+  for (let i = 0; i < 12 && inSearchBoard(await ideaCard.boundingBox()); i++) {
+    await page.mouse.wheel(0, -400);
+    await page.waitForTimeout(150);
+  }
+  assert.equal(inSearchBoard(await ideaCard.boundingBox()), false, 'карточка не ушла с экрана перед поиском');
+  const canvasSearch = knowledge.locator('header').first().locator('[data-section-search]');
+  await canvasSearch.fill('Идея 2');
+  await visible(board.locator('[data-search="found"]').filter({ hasText: 'Идея 2' }), 'холст подсветил находку');
+  assert.ok(await board.locator('[data-search="dim"]').count() > 0, 'остальные карточки не приглушены');
+  for (let deadline = Date.now() + STEP_TIMEOUT_MS; !inSearchBoard(await ideaCard.boundingBox());) {
+    assert.ok(Date.now() < deadline, 'холст не переехал к найденной карточке');
+    await page.waitForTimeout(200);
+  }
+  await canvasSearch.fill('');
+  await board.locator('[data-search]').first().waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('подсветка поиска осталась на холсте'));
+  console.log('OK: поиск по холсту — подсветка, приглушение, переезд к находке');
 
   // ── Телефон: список либо заметка, со стрелкой назад ───────────────────────
   await page.setViewportSize(PHONE);

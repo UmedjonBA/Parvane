@@ -17,6 +17,9 @@ pub async fn connect(url: &str) -> Result<async_nats::Client, async_nats::Connec
         std::env::var("PARVANE_NATS_PASS"),
     ) {
         if !user.is_empty() && !pass.is_empty() {
+            // GW-05: ответы на запросы роли — в её почтовый ящик `_INBOX.<роль>`; подписка роли в ACL только
+            // на свой префикс, чужие ответы ей не видны
+            opts = opts.custom_inbox_prefix(crate::topic_contract::reply_inbox_prefix(&user));
             opts = opts.user_and_password(user, pass);
         }
     }

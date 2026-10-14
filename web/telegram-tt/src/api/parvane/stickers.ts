@@ -21,10 +21,14 @@ const SET_SHORT = 'ParvaneStickers';
 const EMOJIS = ['😀', '😂', '😍', '👍', '🔥', '🎉', '❤️', '😎', '🙈', '🤔', '👋', '🚀'];
 const SIZE = 256;
 
-let cachedSet: { set: ApiStickerSet; blobs: Map<string, Blob> } | undefined;
+let cachedMeta: ApiStickerSet | undefined;
+const renderedBlobs = new Map<string, Promise<Blob>>();
+
+const STATIC_PREFIX = 'pvst';
+const ANIM_PREFIX = 'pvstA';
 
 function stickerId(index: number) {
-  return `pvst${index}`;
+  return `${STATIC_PREFIX}${index}`;
 }
 
 async function renderEmoji(emoji: string): Promise<Blob> {
@@ -61,7 +65,7 @@ const ANIM_MS = 1200;
 const ANIM_FPS = 30;
 
 function animStickerId(index: number) {
-  return `pvstA${index}`;
+  return `${ANIM_PREFIX}${index}`;
 }
 
 function pickStickerWebmMime(): string {
@@ -121,21 +125,17 @@ function buildApiAnimSticker(index: number, emoji: string): ApiSticker {
   });
 }
 
-// Строит встроенный набор + карту id→Blob (для регистрации в media-кэше).
-// mimes — video/webm для анимированных, остальные image/png
-export async function buildBuiltinStickerSet() {
-  if (cachedSet) return cachedSet;
-  const stickers: ApiSticker[] = [];
-  const blobs = new Map<string, Blob>();
-  for (let i = 0; i < EMOJIS.length; i++) {
-    stickers.push(buildApiSticker(i, EMOJIS[i]));
-    blobs.set(stickerId(i), await renderEmoji(EMOJIS[i]));
-  }
-  for (let i = 0; i < ANIM_EMOJIS.length; i++) {
-    stickers.push(buildApiAnimSticker(i, ANIM_EMOJIS[i]));
-    blobs.set(animStickerId(i), await recordAnimatedSticker(ANIM_EMOJIS[i]));
-  }
-  const set: ApiStickerSet = {
+// Метаданные встроенного набора — без картинок: картинку стикера рисует `renderBuiltinStickerBlob`, когда её
+// впервые запросили (панель стикеров, стикер в ленте). Раньше набор целиком рисовался при первом же
+// `fetchStickerSets` после входа: 12 PNG и запись трёх анимированных по 1,2 с через MediaRecorder — ~4 с
+// отрисовки на главном потоке (perf, 15 окт 2026: провал кадра 650–730 мс на CPU×4)
+export function getBuiltinStickerSet(): ApiStickerSet {
+  if (cachedMeta) return cachedMeta;
+  const stickers = [
+    ...EMOJIS.map((emoji, i) => buildApiSticker(i, emoji)),
+    ...ANIM_EMOJIS.map((emoji, i) => buildApiAnimSticker(i, emoji)),
+  ];
+  cachedMeta = {
     id: SET_ID,
     accessHash: SET_ACCESS,
     title: 'Parvane',
@@ -144,12 +144,32 @@ export async function buildBuiltinStickerSet() {
     installedDate: Math.floor(Date.now() / 1000),
     stickers,
   };
-  cachedSet = { set, blobs };
-  return cachedSet;
+  return cachedMeta;
+}
+
+// Картинка (PNG) либо видео (webm) одного встроенного стикера; рисуется один раз. Не наш id — `undefined`
+export function renderBuiltinStickerBlob(id: string): Promise<Blob> | undefined {
+  const cached = renderedBlobs.get(id);
+  if (cached) return cached;
+  const isAnimated = id.startsWith(ANIM_PREFIX);
+  const index = Number(id.slice(isAnimated ? ANIM_PREFIX.length : STATIC_PREFIX.length));
+  const emoji = id.startsWith(STATIC_PREFIX) ? (isAnimated ? ANIM_EMOJIS : EMOJIS)[index] : undefined;
+  if (!emoji || !Number.isInteger(index)) return undefined;
+  const rendering = isAnimated ? recordAnimatedSticker(emoji) : renderEmoji(emoji);
+  renderedBlobs.set(id, rendering);
+  return rendering;
+}
+
+// Набор вместе со всеми картинками (сценарии и тесты); приложение берёт картинки по одной
+export async function buildBuiltinStickerSet() {
+  const set = getBuiltinStickerSet();
+  const blobs = new Map<string, Blob>();
+  for (const { id } of set.stickers!) blobs.set(id, (await renderBuiltinStickerBlob(id))!);
+  return { set, blobs };
 }
 
 export function getStickerBlobMime(id: string) {
-  return id.startsWith('pvstA') ? 'video/webm' : 'image/png';
+  return id.startsWith(ANIM_PREFIX) ? 'video/webm' : 'image/png';
 }
 
 export function getBuiltinSetId() {
@@ -157,7 +177,7 @@ export function getBuiltinSetId() {
 }
 
 export function isBuiltinStickerId(id: string) {
-  return id.startsWith('pvst');
+  return id.startsWith(STATIC_PREFIX);
 }
 
 // ── кастом-эмодзи (встроенный набор) ─────────────────────────────────────────

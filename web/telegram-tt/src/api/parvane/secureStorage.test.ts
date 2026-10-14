@@ -88,13 +88,20 @@ describe('secure E2E storage batches (perf A6)', () => {
     expect(await storage.loadRecord('j:1')).toBeUndefined();
   });
 
+  it('a new PIN shorter than 8 characters is rejected (WEB-15)', async () => {
+    const user = 'gina@local';
+    await SecureE2eStorage.open(user);
+    await expect(setStoragePin(user, '1234')).rejects.toThrow(/too short/);
+    await SecureE2eStorage.clear(user);
+  });
+
   it('re-keys binary records together with JSON records when a PIN is set', async () => {
     const user = 'frank@local';
     const storage = await SecureE2eStorage.open(user);
     const bytes = new Uint8Array([1, 2, 3, 250, 251]);
     await storage.saveBytesRecord('v2-engine-bin', bytes);
     await storage.saveRecord('m:1', { id: 1 });
-    await setStoragePin(user, '4321');
+    await setStoragePin(user, '4321-pin-x');
     const pinned = await SecureE2eStorage.open(user);
     expect(await pinned.loadBytesRecord('v2-engine-bin')).toEqual(bytes);
     expect(await pinned.loadRecord('m:1')).toEqual({ id: 1 });
@@ -150,7 +157,7 @@ describe('P-39: optional storage PIN', () => {
     await saveSecureSession(USER3, 'jwt-pin');
     expect(await hasStoragePin(USER3)).toBe(false);
 
-    await setStoragePin(USER3, '1234');
+    await setStoragePin(USER3, '1234-pin-x');
     expect(await hasStoragePin(USER3)).toBe(true);
     expect(isStorageUnlocked(USER3)).toBe(true);
     expect(await get(secureStorageInternals.keyId(USER3), secureStorageInternals.store)).toBeUndefined();
@@ -165,7 +172,7 @@ describe('P-39: optional storage PIN', () => {
     expect(await loadSecureSession(USER3)).toBeUndefined();
     expect(await unlockStorageWithPin(USER3, '0000')).toBe(false);
     expect(isStorageUnlocked(USER3)).toBe(false);
-    expect(await unlockStorageWithPin(USER3, '1234')).toBe(true);
+    expect(await unlockStorageWithPin(USER3, '1234-pin-x')).toBe(true);
     await expect((await SecureE2eStorage.open(USER3)).load()).resolves.toEqual({ pickleKey: 'pin-secret' });
     expect(await loadSecureSession(USER3)).toBe('jwt-pin');
 
@@ -179,8 +186,8 @@ describe('P-39: optional storage PIN', () => {
   it('refuses to set a PIN while locked', async () => {
     const storage = await SecureE2eStorage.open(USER3);
     await storage.save({ x: 1 });
-    await setStoragePin(USER3, '9999');
+    await setStoragePin(USER3, '9999-pin-x');
     lockStorage(USER3);
-    await expect(setStoragePin(USER3, '1111')).rejects.toThrow(/locked/);
+    await expect(setStoragePin(USER3, '1111-pin-x')).rejects.toThrow(/locked/);
   });
 });

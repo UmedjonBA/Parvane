@@ -5,8 +5,8 @@ import type { LinkManifestFile, LinkSourceNode } from './cloudLinks';
 import { decryptBlob } from './blobcrypt';
 import {
   base64UrlToBytes, buildLinkPlan, buildLinkTree, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url,
-  isLinkDir, isLinkId, LINK_MAX_FILES, newLinkKey, openManifest, openOwnerRecord, parseLinkKey, parseManifest,
-  runPool, sealManifest, sealOwnerRecord,
+  isLinkDir, isLinkId, LINK_MAX_FILES, LINK_MAX_THUMBS, newLinkKey, openManifest, openOwnerRecord, parseLinkKey,
+  parseManifest, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
 
 // Parvane (spec 022): ссылка на файлы облака — план, список, запись владельца, адрес.
@@ -182,6 +182,30 @@ describe('ссылка облака: список', () => {
     expect(parseManifest(bad({}, { chunks: 0 }))).toBeUndefined();
     expect(parseManifest(bad({}, { fileId: '' }))).toBeUndefined();
     expect(parseManifest(bad({ items: [good.items[0], good.items[0]] }))).toBeUndefined();
+  });
+
+  it('миниатюра картинки: копия с nonce миниатюры; негодная либо сверх предела — файл без неё', async () => {
+    const withThumb = new Map(copies);
+    withThumb.set('f1', { ...copies.get('f1')!, thumb: { fileId: 'copy-t1', nonce: 'nonce-t1', blobSize: 300 } });
+    const manifest = buildManifest(plan, withThumb, 1);
+    const item = manifest.items.find((i) => i.path === 'итог.pdf') as LinkManifestFile;
+    expect(item.thumb).toEqual({ fileId: 'copy-t1', nonce: 'nonce-t1', blobSize: 300 });
+    const key = newLinkKey();
+    expect(await openManifest(await sealManifest(manifest, key, LINK_ID), key, LINK_ID)).toEqual(manifest);
+
+    const entry = (i: number, thumb?: unknown) => ({
+      path: `f${i}`, size: 1, mime: 'image/png', fileId: `f${i}`, key: 'k', nonce: 'n', chunks: 1, blobSize: 25, thumb,
+    });
+    const parse = (items: object[]) => parseManifest(JSON.stringify({
+      v: 1, name: 'a', kind: 'folder', created: 1, items,
+    }))!.items as LinkManifestFile[];
+    expect(parse([entry(0, { fileId: '', nonce: 'n', blobSize: 1 })])[0].thumb).toBeUndefined();
+    expect(parse([entry(0, { fileId: 't', nonce: 'n', blobSize: 0 })])[0].thumb).toBeUndefined();
+    expect(parse([entry(0, 'x')])[0].thumb).toBeUndefined();
+    const many = parse(Array.from({ length: LINK_MAX_THUMBS + 5 }, (_, i) => entry(i, {
+      fileId: `t${i}`, nonce: 'n', blobSize: 40,
+    })));
+    expect(many.filter((f) => f.thumb).length).toBe(LINK_MAX_THUMBS);
   });
 
   it('дерево для показа: папки первыми, пустые папки остаются', () => {

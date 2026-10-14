@@ -14,7 +14,7 @@ import type { GraphNoteInput } from './notesGraph';
 import { boundsOf, CANVAS_DEFAULT_NODE_WIDTH, newCanvasId } from './notesCanvas';
 import { CANVAS_GRID, CANVAS_GROUP_PADDING } from './notesCanvasEdit';
 import { noteTitleOfPath } from './notesCanvasFiles';
-import { folderCaption, ROOT_FOLDER } from './notesFolders';
+import { folderCaption, isInFolder, ROOT_FOLDER } from './notesFolders';
 import { buildGraph, GRAPH_DEFAULT_SEED, layoutGraph } from './notesGraph';
 
 // Набор заметок холста из графа: папки (точный путь, корень — пустая строка; не заданы — все) и заметки дней
@@ -402,6 +402,32 @@ export function renameCanvasNote(doc: CanvasDoc, oldTitle: string, newTitle: str
       cardKey(node) === oldKey ? { ...node, file: withTitle(node.file!, newTitle) } : node
     )),
   };
+}
+
+// Переименованная (либо перенесённая) папка `oldPath` → `newPath`: путь в наборе заметок холста и у групп папки
+// и её подпапок. Подпись группы меняется, только если это прежнее название папки — свою подпись человек сохраняет.
+// Нечего менять — прежний документ
+export function renameCanvasFolder(doc: CanvasDoc, oldPath: string, newPath: string): CanvasDoc {
+  if (!oldPath || !newPath || oldPath === newPath) return doc;
+  const moved = (path: string) => (isInFolder(path, oldPath) ? `${newPath}${path.slice(oldPath.length)}` : path);
+  let isChanged = false;
+  const nodes = doc.nodes.map((node) => {
+    const folder = node[GRAPH_FOLDER_FIELD];
+    if (node.type !== 'group' || typeof folder !== 'string' || moved(folder) === folder) return node;
+    isChanged = true;
+    const next = moved(folder);
+    return {
+      ...node,
+      [GRAPH_FOLDER_FIELD]: next,
+      ...(node.label === folderCaption(folder) && { label: folderCaption(next) }),
+    };
+  });
+  const scope = scopeOfCanvas(doc);
+  const folders = scope?.folders?.map(moved);
+  const isScopeChanged = Boolean(folders?.some((path, i) => path !== scope!.folders![i]));
+  if (!isChanged && !isScopeChanged) return doc;
+  const next = { ...doc, nodes };
+  return isScopeChanged ? withScope(next, cleanScope({ ...scope, folders })) : next;
 }
 
 function snapUp(value: number) {

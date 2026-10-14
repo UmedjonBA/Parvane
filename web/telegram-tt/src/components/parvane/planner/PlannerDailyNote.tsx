@@ -8,8 +8,10 @@ import buildClassName from '../../../util/buildClassName';
 import { openNote } from '../../../util/parvaneSection';
 import { getCloudData, loadCloud } from '../cloud/cloudStore';
 import { previewLines } from '../notes/notesLook';
-import { dailyNoteTitle } from '../notes/notesModel';
-import { readDailyNote } from '../notes/notesStore';
+import { dailyNoteTemplate, dailyNoteTitle } from '../notes/notesModel';
+import {
+  loadNotes, openDailyNote, readDailyNote, saveNote,
+} from '../notes/notesStore';
 
 import useSelector from '../../../hooks/data/useSelector';
 import useDerivedState from '../../../hooks/useDerivedState';
@@ -35,8 +37,9 @@ function selectCurrentUserId(global: GlobalState) {
 }
 
 // Карточка «Заметка дня» на «Сегодня»: начало текста заметки выбранного дня. Хранилище «Знаний» ради неё
-// не открывается: по дереву облака читается один файл, экран его не ждёт. Нажатие открывает заметку в
-// «Знаниях» (нет заметки — раздел создаст её по шаблону). Правка заметки меняет дерево облака — текст
+// не открывается: по дереву облака читается один файл, экран его не ждёт. Нажатие на текст открывает
+// заметку в «Знаниях»; «Изменить» — правка прямо здесь, как в прототипе (тогда хранилище читается: запись
+// идёт тем же путём, что в «Знаниях», со сведением чужой версии). Правка меняет дерево облака — текст
 // перечитывается
 const PlannerDailyNote = ({ day }: OwnProps) => {
   const cloudData = useDerivedState(getCloudData);
@@ -72,22 +75,97 @@ const PlannerDailyNote = ({ day }: OwnProps) => {
     openNote(dailyNoteTitle(day));
   });
 
+  // Правка на месте: черновик от текста, который был на экране, — он же основа сведения с чужой версией
+  const [edit, setEdit] = useState<{ day: string; base?: string; draft: string }>();
+  const [isSaving, setIsSaving] = useState(false);
+  const editing = edit?.day === day ? edit : undefined;
+
+  const handleEdit = useLastCallback(() => {
+    if (!known) return;
+    void loadNotes(currentUserId);
+    setEdit({ day, base: known.text, draft: known.text ?? dailyNoteTemplate(day) });
+  });
+
+  const handleDraft = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const { value } = e.currentTarget;
+    setEdit((current) => (current ? { ...current, draft: value } : current));
+  });
+
+  const handleDone = useLastCallback(async () => {
+    if (!editing || isSaving) return;
+    const isUntouched = editing.base === undefined
+      ? editing.draft === dailyNoteTemplate(day) || !editing.draft.trim()
+      : editing.draft === editing.base;
+    if (isUntouched) {
+      setEdit(undefined);
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await loadNotes(currentUserId);
+      const vaultName = lang('KnowledgeVaultName');
+      const id = await openDailyNote(day, vaultName, lang('KnowledgeDailyFolder'));
+      const isSaved = Boolean(id) && await saveNote(id, editing.draft, vaultName, editing.base);
+      if (isSaved) {
+        setPeek({ day, text: editing.draft });
+        setEdit(undefined);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  });
+
+  const handleEditorKey = useLastCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      setEdit(undefined);
+    } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      void handleDone();
+    }
+  });
+
   return (
     <section className={styles.card} data-today-note={hasText ? 'text' : known ? 'empty' : 'loading'}>
       <div className={styles.cardHead}>
         <h3 className={styles.cardTitle}>{lang('PlannerDailyNote')}</h3>
         <span className={styles.grow} />
-        <button
-          type="button"
-          className={buildClassName(styles.btn, styles.btnGhost)}
-          data-today-daily
-          onClick={handleOpen}
-        >
-          <Icon name="edit" />
-          {lang('Edit')}
-        </button>
+        {editing ? (
+          <button
+            type="button"
+            className={buildClassName(styles.btn, styles.btnGhost)}
+            data-today-daily-done
+            disabled={isSaving}
+            onClick={handleDone}
+          >
+            <Icon name="check" />
+            {lang('Done')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={buildClassName(styles.btn, styles.btnGhost)}
+            data-today-daily
+            disabled={!known}
+            onClick={handleEdit}
+          >
+            <Icon name="edit" />
+            {lang('Edit')}
+          </button>
+        )}
       </div>
-      {hasText ? (
+      {editing ? (
+        <textarea
+          className={styles.dailyEditor}
+          data-today-note-editor
+          value={editing.draft}
+          aria-label={lang('PlannerDailyNote')}
+          placeholder={lang('PlannerDailyNotePlaceholder')}
+          autoFocus
+          onChange={handleDraft}
+          onKeyDown={handleEditorKey}
+        />
+      ) : hasText ? (
         <button type="button" className={styles.dailyText} data-today-note-text onClick={handleOpen}>
           {lines.map((line, i) => (
             <span

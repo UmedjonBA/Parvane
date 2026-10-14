@@ -1079,6 +1079,28 @@
   color: var(--pv-faint);
 }
 
+.dailyEditor {
+  resize: vertical;
+
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 8rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--pv-line2);
+  border-radius: 0.5rem;
+
+  font: inherit;
+  line-height: 1.375rem;
+  color: var(--pv-fg);
+
+  background: var(--pv-bg);
+  outline: none;
+
+  &:focus {
+    border-color: var(--pv-accent);
+  }
+}
+
 .dailyEmpty {
   cursor: var(--custom-cursor, pointer);
 

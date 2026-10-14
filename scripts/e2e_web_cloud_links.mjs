@@ -14,7 +14,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import { cloudDriver } from './e2e_web_cloud_lib.mjs';
-import { dismissRecoveryKeyDialog, preparePage } from './e2e_web_helpers.mjs';
+import { buildPngBuffer, dismissRecoveryKeyDialog, preparePage } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-links-e2e-1';
 const WIDE = { width: 1440, height: 900 };
@@ -34,6 +34,7 @@ const FOLDER_NAME = 'Альбом 9d2f';
 const INNER_NAME = 'внутри.txt';
 const SUB_NAME = 'Вложенная';
 const DEEP_NAME = 'глубоко.txt';
+const PHOTO_NAME = 'фото 2b7c.png';
 const NOTE_TEXT = 'Текст записки для ссылки 5a7b';
 const INNER_TEXT = 'Содержимое файла в папке 3e8d';
 const DEEP_TEXT = 'Содержимое вложенного файла 6f0a';
@@ -88,6 +89,26 @@ function serverLeaks(words) {
     }
   }
   return found;
+}
+
+/** Файлы архива «Скачать всё» по оглавлению (ZIP без сжатия): имя → байты. */
+function readStoredZip(bytes) {
+  const end = bytes.length - 22;
+  assert.equal(bytes.readUInt32LE(end), 0x06054b50, 'конец архива');
+  const files = new Map();
+  let at = bytes.readUInt32LE(end + 16);
+  for (let i = bytes.readUInt16LE(end + 10); i > 0; i--) {
+    assert.equal(bytes.readUInt32LE(at), 0x02014b50, 'запись оглавления');
+    assert.equal(bytes.readUInt16LE(at + 10), 0, 'без сжатия');
+    const size = bytes.readUInt32LE(at + 24);
+    const nameLength = bytes.readUInt16LE(at + 28);
+    const local = bytes.readUInt32LE(at + 42);
+    const name = bytes.subarray(at + 46, at + 46 + nameLength).toString('utf8');
+    const data = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
+    files.set(name, bytes.subarray(data, data + size));
+    at += 46 + nameLength;
+  }
+  return files;
 }
 
 const browser = await chromium.launch();
@@ -181,6 +202,11 @@ try {
   await createFolder(FOLDER_NAME);
   await drive.item(FOLDER_NAME).click();
   await drive.upload(INNER_NAME, INNER_TEXT);
+  const photoBytes = buildPngBuffer(96, [0x30, 0x80, 0xc0]);
+  await cloud.locator('input[type="file"]').setInputFiles([
+    { name: PHOTO_NAME, mimeType: 'image/png', buffer: photoBytes },
+  ]);
+  await drive.item(PHOTO_NAME).locator('img[data-thumb]').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
   await createFolder(SUB_NAME);
   await drive.item(SUB_NAME).click();
   await drive.upload(DEEP_NAME, DEEP_TEXT);
@@ -284,14 +310,14 @@ try {
   await visitor.waitState('ready');
   assert.equal(await visitor.page.locator('[data-link-name]').innerText(), FOLDER_NAME);
   assert.equal(await visitor.page.locator('#content').getAttribute('data-link-kind'), 'folder');
-  assert.equal(await visitor.page.locator('#content').getAttribute('data-link-files'), '2');
+  assert.equal(await visitor.page.locator('#content').getAttribute('data-link-files'), '3');
   assert.deepEqual(
     await visitor.page.locator('[data-dir-path]').evaluateAll((els) => els.map((el) => el.dataset.dirPath)),
     [SUB_NAME], 'вложенная папка на месте',
   );
   assert.deepEqual(
     await visitor.page.locator('[data-file-path]').evaluateAll((els) => els.map((el) => el.dataset.filePath).sort()),
-    [`${SUB_NAME}/${DEEP_NAME}`, INNER_NAME].sort(), 'файлы — с путями относительно корня ссылки',
+    [`${SUB_NAME}/${DEEP_NAME}`, INNER_NAME, PHOTO_NAME].sort(), 'файлы — с путями относительно корня ссылки',
   );
   const deepRow = visitor.fileRow(`${SUB_NAME}/${DEEP_NAME}`);
   const dirToggle = visitor.page.locator(`[data-dir-path="${SUB_NAME}"] > button`);
@@ -303,10 +329,30 @@ try {
   await deepRow.locator('[data-preview] pre').waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
   assert.equal(await deepRow.locator('[data-preview] pre').innerText(), DEEP_TEXT);
   assert.equal((await visitor.download(INNER_NAME)).bytes.toString(), INNER_TEXT);
+  // Миниатюра картинки — копией в ссылке, расшифрована на странице
+  await visitor.fileRow(PHOTO_NAME).locator('.tile.has-thumb img.thumb')
+    .waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+  assert.ok(
+    await visitor.fileRow(PHOTO_NAME).locator('img.thumb').evaluate((img) => img.naturalWidth > 0),
+    'миниатюра открылась картинкой',
+  );
+  assert.equal(await visitor.fileRow(INNER_NAME).locator('img.thumb').count(), 0, 'у текста миниатюры нет');
+  // «Скачать всё» — один ZIP со всеми файлами по путям и пустыми папками
+  const [archive] = await Promise.all([
+    visitor.page.waitForEvent('download', { timeout: LINK_TIMEOUT_MS }),
+    visitor.page.locator('[data-download-all]').click(),
+  ]);
+  assert.equal(archive.suggestedFilename(), `${FOLDER_NAME}.zip`);
+  const zipped = readStoredZip(readFileSync(await archive.path()));
+  assert.equal(zipped.get(INNER_NAME)?.toString(), INNER_TEXT);
+  assert.equal(zipped.get(`${SUB_NAME}/${DEEP_NAME}`)?.toString(), DEEP_TEXT);
+  assert.ok(zipped.get(PHOTO_NAME)?.equals(photoBytes), 'картинка в архиве байт в байт');
+  assert.ok(zipped.has(`${SUB_NAME}/`), 'папка в архиве');
+  await visitor.page.locator('.download-all[data-download-state="done"]').waitFor({ state: 'attached' });
   assert.deepEqual(visitor.errors, [], `ошибки публичной страницы: ${visitor.errors.join('; ')}`);
   await visitor.close();
   if (SHOT_DIR && visitorPage && !visitorPage.isClosed()) await visitorPage.screenshot({ path: `${SHOT_DIR}/links-page.png` });
-  console.log('OK: ссылка на папку — структура, сворачивание, просмотр и скачивание');
+  console.log('OK: ссылка на папку — структура, сворачивание, просмотр, миниатюра, скачивание файла и всей папки ZIP');
 
   // ── «Мои ссылки»: строки, размер, полный адрес, продление ─────────────────
   await cloud.locator('[data-virtual="links"]').getByText('Links: 2').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });

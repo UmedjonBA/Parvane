@@ -24,6 +24,9 @@ const NOTES = 24 * SCALE;
 const ENTRIES = 30 * SCALE;
 const MESSAGES = 25 * SCALE;
 const OUT_DIR = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR || '.';
+// PARVANE_E2E_PERF_PROFILE=<часть имени шага> — CPU-профиль таких шагов в OUT_DIR/<шаг>.cpuprofile
+// (открывается во вкладке Performance DevTools)
+const PROFILE_MATCH = process.env.PARVANE_E2E_PERF_PROFILE || '';
 
 const results = [];
 const record = (name, data) => {
@@ -176,10 +179,20 @@ async function framed(name, action) {
     const tick = (now) => { p.frames += 1; p.frameGaps.push(now - last); last = now; if (p.framing) requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
   });
+  const isProfiled = Boolean(PROFILE_MATCH) && name.includes(PROFILE_MATCH);
+  if (isProfiled) {
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
+    await cdp.send('Profiler.start');
+  }
   const startedAt = Date.now();
   await resetMarks();
   await action();
   const ms = Date.now() - startedAt;
+  if (isProfiled) {
+    const { profile } = await cdp.send('Profiler.stop');
+    writeFileSync(`${OUT_DIR}/${name.replace(/[^\p{L}\d]+/gu, '_')}.cpuprofile`, JSON.stringify(profile));
+  }
   const f = await page.evaluate(() => {
     const p = globalThis.__perf; p.framing = false;
     const gaps = p.frameGaps.slice(1).sort((a, b) => a - b);
@@ -188,7 +201,7 @@ async function framed(name, action) {
   const s = await snap();
   record(name, {
     ms, fps: f.frames / (ms / 1000), worstGapMs: f.worstGapMs, p95GapMs: f.p95GapMs,
-    scriptMs: s.scriptMs, layoutMs: s.layoutMs, styleMs: s.styleMs, layouts: s.layouts, longTasks: s.longTasks, longestMs: s.longestMs,
+    scriptMs: s.scriptMs, layoutMs: s.layoutMs, styleMs: s.styleMs, taskMs: s.taskMs, layouts: s.layouts, longTasks: s.longTasks, longestMs: s.longestMs,
   });
 }
 

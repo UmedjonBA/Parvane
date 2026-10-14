@@ -7,6 +7,11 @@ import { getIsPaletteOpen, openPalette } from './paletteOpen';
 import useDerivedState from '../../../hooks/useDerivedState';
 import useModuleLoader from '../../../hooks/useModuleLoader';
 
+function isEditable(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
+
 // Parvane (B2): палитра смонтирована всегда, но её код — в бандле `Parvane`: сочетание клавиш слушает эта
 // обёртка, сама палитра грузится при первом открытии (кнопкой боковой панели либо Ctrl+K)
 const ParvanePaletteAsync = () => {
@@ -16,9 +21,15 @@ const ParvanePaletteAsync = () => {
   const ParvanePalette = useModuleLoader(Bundles.Parvane, 'ParvanePalette', !wasOpenedRef.current);
 
   // Ctrl+K (Cmd+K) из любого раздела и любого поля. Исключение — выделенный текст в поле сообщения:
-  // там это «вставить ссылку» редактора (`TextFormatter`)
+  // там это «вставить ссылку» редактора (`TextFormatter`). Клавиша «/» без модификаторов — как в прототипе,
+  // только когда фокус не в поле ввода (там «/» печатается)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditable(e.target) && !getIsPaletteOpen()) {
+        e.preventDefault();
+        openPalette();
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
       // `code` — чтобы сочетание работало и в русской раскладке
       if (e.code !== 'KeyK' && e.key.toLowerCase() !== 'k') return;

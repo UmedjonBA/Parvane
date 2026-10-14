@@ -52,7 +52,10 @@ export const setGlobal = typed.setGlobal;
 // ленты (viewportIds/lastMessageId) в реальном браузере. Без setGlobal.
 // Read-only доступ к global для пробников и читалки отчётов о багах. Стейт
 // и так виден на странице; опасный хук (callApi) — только в e2e-сборках
-(window as unknown as { __parvaneGetGlobal?: typeof getGlobal }).__parvaneGetGlobal = getGlobal;
+// WEB-09: только в диагностических сборках (сценарии, демо) — прод-сборка не выставляет состояние наружу
+if (import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1') {
+  (window as unknown as { __parvaneGetGlobal?: typeof getGlobal }).__parvaneGetGlobal = getGlobal;
+}
 export const getActions = typed.getActions;
 export const getPromiseActions = typed.getPromiseActions;
 // parvaneDiag: временный журнал действий (см. util/parvaneDiag.ts) — каждое

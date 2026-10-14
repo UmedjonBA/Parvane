@@ -7,7 +7,7 @@ import { parseCanvas, serializeCanvas } from './notesCanvas';
 import {
   canvasFromGraph, freeCanvasTitle, GRAPH_CANVAS_CARD_HEIGHT, GRAPH_CANVAS_GAP, GRAPH_EDGE_PREFIX,
   GRAPH_FOLDER_FIELD, GRAPH_GROUP_HEAD, GRAPH_NOTE_FIELD, GRAPH_SCOPE_FIELD, isCustomizedEdge, isGraphEdge,
-  isInCanvasScope, refreshCanvasFromGraph, renameCanvasNote, scopeOfCanvas,
+  isInCanvasScope, refreshCanvasFromGraph, renameCanvasFolder, renameCanvasNote, scopeOfCanvas,
 } from './notesCanvasGraph';
 
 function note(title: string, links: string[] = [], extra: Partial<GraphNoteInput> = {}): GraphNoteInput {
@@ -722,6 +722,34 @@ describe('refreshCanvasFromGraph', () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.dropped).toEqual({ nodes: 0, edges: 0 });
     expect(parsed.doc).toEqual(result.doc);
+  });
+});
+
+describe('renameCanvasFolder', () => {
+  const made = () => canvasFromGraph([
+    note('A', [], { folder: 'Дом' }), note('B', [], { folder: 'Дом/Кухня' }), note('C', [], { folder: 'Домики' }),
+  ], { scope: { folders: ['Дом', 'Дом/Кухня', 'Домики'] }, makeId: counter() });
+
+  it('путь папки и подпапок меняется в наборе заметок и у групп, соседняя папка с тем же началом — нет', () => {
+    const doc = renameCanvasFolder(made(), 'Дом', 'Квартира');
+    expect(scopeOfCanvas(doc)?.folders).toEqual(['Домики', 'Квартира', 'Квартира/Кухня']);
+    const groups = doc.nodes.filter(({ type }) => type === 'group');
+    expect(groups.map((group) => group[GRAPH_FOLDER_FIELD]).sort()).toEqual(['Домики', 'Квартира', 'Квартира/Кухня']);
+    expect(groups.map(({ label }) => label).sort()).toEqual(['Домики', 'Квартира', 'Квартира / Кухня']);
+    // Новая заметка переименованной папки после обновления попадает в набор
+    expect(isInCanvasScope({ folder: 'Квартира', isDaily: false }, scopeOfCanvas(doc))).toBe(true);
+  });
+
+  it('свою подпись группы человек сохраняет; нечего менять — прежний документ', () => {
+    const base = made();
+    const custom = {
+      ...base,
+      nodes: base.nodes.map((node) => (node[GRAPH_FOLDER_FIELD] === 'Дом' ? { ...node, label: 'Моё' } : node)),
+    };
+    const doc = renameCanvasFolder(custom, 'Дом', 'Квартира');
+    expect(doc.nodes.find((node) => node[GRAPH_FOLDER_FIELD] === 'Квартира')?.label).toBe('Моё');
+    expect(renameCanvasFolder(base, 'Нет такой', 'Другая')).toBe(base);
+    expect(renameCanvasFolder(base, 'Дом', 'Дом')).toBe(base);
   });
 });
 

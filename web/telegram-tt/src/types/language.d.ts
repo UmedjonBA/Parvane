@@ -2502,6 +2502,10 @@ export interface LangPair {
   'PlannerMetricProtein': undefined;
   'PlannerMetricProteinShort': undefined;
   'PlannerMetricWater': undefined;
+  'PlannerRemindAtStart': undefined;
+  'PlannerRemind': undefined;
+  'PlannerRemindNone': undefined;
+  'PlannerReminderTitle': undefined;
   'PlannerNearLimit': undefined;
   'PlannerNeedsLinking': undefined;
   'PlannerNewList': undefined;
@@ -2744,6 +2748,8 @@ export interface LangPair {
   'PlannerDailyNote': undefined;
   'PlannerDailyNoteHint': undefined;
   'PlannerDailyNoteWrite': undefined;
+  'KnowledgeOpenDay': undefined;
+  'PlannerDailyNotePlaceholder': undefined;
   'PlannerLayers': undefined;
   'PlannerLayerWork': undefined;
   'PlannerCalMonthShort': undefined;
@@ -4867,6 +4873,13 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerMinutesValue': {
     'minutes': V;
   };
+  'PlannerRemindBefore': {
+    'amount': V;
+  };
+  'PlannerReminderMessage': {
+    'title': V;
+    'when': V;
+  };
   'PlannerMore': {
     'count': V;
   };
@@ -5842,6 +5855,9 @@ export interface LangPairPluralWithVariables<V = LangVariable> {
   };
   'ParvaneCloudTrashDaysLeft': {
     'count': V;
+  };
+  'PlannerDaysValue': {
+    'days': V;
   };
   'KnowledgeFilesItems': {
     'count': V;

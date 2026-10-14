@@ -19,7 +19,10 @@ import {
   getPackSetIdOfStickerId,
   resetPackRegistries,
 } from './stickerPacks';
-import { buildBuiltinCustomEmojiSet, buildBuiltinStickerSet } from './stickers';
+import {
+  buildBuiltinCustomEmojiSet, buildBuiltinStickerSet, getBuiltinStickerSet, getStickerBlobMime,
+  renderBuiltinStickerBlob,
+} from './stickers';
 import { ParvaneStore } from './store';
 
 // `util/browser/windowEnvironment.ts` (его тянут помощники tt) опрашивает на
@@ -166,6 +169,23 @@ describe('объекты стикеров и кастом-эмодзи', () => {
     expect(alias).toBeDefined();
     expectFree(alias!);
     await expectPicture(service, alias!, blobs.get(alias!.id)!.blob);
+  });
+
+  // Идёт раньше теста, рисующего наборы целиком: картинки встроенного набора рисуются один раз за модуль
+  it('встроенный набор: метаданные без отрисовки, картинка — одна и по запросу медиа', async () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext');
+    const set = getBuiltinStickerSet();
+    expect(set.stickers!.length).toBeGreaterThan(0);
+    expect(getContext).not.toHaveBeenCalled();
+    const animated = set.stickers!.find(({ isVideo }) => isVideo)!;
+    const service = createService((fileId) => renderBuiltinStickerBlob(fileId)
+      ?.then((blob) => service.cacheBlobIfAbsent(fileId, blob, getStickerBlobMime(fileId))));
+    const full = await download(service, getStickerMediaHash(animated, 'inline'));
+    expect(full?.dataBlob).toBe(await renderBuiltinStickerBlob(animated.id));
+    // Нарисован только запрошенный стикер
+    expect(getContext).toHaveBeenCalledTimes(1);
+    expect(renderBuiltinStickerBlob('pvst999')).toBeUndefined();
+    getContext.mockRestore();
   });
 
   it('встроенные наборы: стикеры и эмодзи бесплатны, картинки отдаются', async () => {

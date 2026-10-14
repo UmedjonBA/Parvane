@@ -53,6 +53,19 @@ function packSection(page, packName) {
   return page.locator('.SymbolMenu .symbol-set').filter({ hasText: packName });
 }
 
+// Секция пака в панели стикеров: панель рисует плитки только видимых наборов, а наборы выше (недавние,
+// встроенный) занимают место сразу — сначала прокрутка к секции, затем ожидание плиток
+async function showPackSection(page, packName) {
+  const section = packSection(page, packName);
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  for (;;) {
+    await section.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+    if (await section.locator('.StickerButton').first().isVisible().catch(() => false)) return section;
+    assert.ok(Date.now() < deadline, `секция пака ${packName} не показала плиток`);
+    await page.waitForTimeout(250);
+  }
+}
+
 async function closeStickerMenu(page) {
   const menu = page.locator('.SymbolMenu');
   if (await menu.isVisible().catch(() => false)) {
@@ -99,6 +112,9 @@ async function assertPackTiles(scope, label) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   let tiles = [];
   for (;;) {
+    // Панель рисует плитки только видимых наборов, а наборы выше (недавние, встроенный) могут дорисоваться
+    // позже и сдвинуть секцию — возвращаем её в видимую область на каждом шаге
+    await scope.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => undefined);
     tiles = await readTiles(scope);
     if (tiles.length === 3 && STICKER_COLORS.every((color, index) => isStickerPicture(tiles[index], color))) break;
     assert.ok(
@@ -187,10 +203,8 @@ try {
 
   // ── Стикер из пака: отправка Бобу ──────────────────────────────────────────
   await openStickerTab(aliceSession.page);
-  const aliceSetStickers = packSection(aliceSession.page, packName).locator('.StickerButton');
-  await aliceSetStickers.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const aliceSetStickers = (await showPackSection(aliceSession.page, packName)).locator('.StickerButton');
   assert.equal(await aliceSetStickers.count(), 3, 'pack in picker must contain all 3 stickers');
-  await packSection(aliceSession.page, packName).scrollIntoViewIfNeeded();
   await assertPackTiles(packSection(aliceSession.page, packName), 'панель автора пака');
 
   // ── Окно своего набора из панели (меню стикера → «Показать набор») ─────────
@@ -226,10 +240,8 @@ try {
 
   // ── Боб шлёт стикер из установленного пака обратно ─────────────────────────
   await openStickerTab(bobSession.page);
-  const bobSetStickers = packSection(bobSession.page, packName).locator('.StickerButton');
-  await bobSetStickers.first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const bobSetStickers = (await showPackSection(bobSession.page, packName)).locator('.StickerButton');
   assert.equal(await bobSetStickers.count(), 3, 'installed pack must contain all 3 stickers');
-  await packSection(bobSession.page, packName).scrollIntoViewIfNeeded();
   await assertPackTiles(packSection(bobSession.page, packName), 'панель получателя после установки');
   await bobSetStickers.first().click();
   // Escape, которым закрывалось меню стикеров, мог закрыть и чат автора — открываем его заново
@@ -241,9 +253,7 @@ try {
   await relogin(bobSession.page, PASSWORD);
   await openPrivateChat(bobSession.page, alice);
   await openStickerTab(bobSession.page);
-  await packSection(bobSession.page, packName).locator('.StickerButton')
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await packSection(bobSession.page, packName).scrollIntoViewIfNeeded();
+  await showPackSection(bobSession.page, packName);
   await assertPackTiles(packSection(bobSession.page, packName), 'панель получателя после перезагрузки');
 
   // ── Удаление пака: модалка набора → Remove, секция уходит из панели ────────
@@ -286,9 +296,7 @@ try {
     'окно своего набора из пузыря после перезагрузки',
   ));
   await openStickerTab(aliceSession.page);
-  await packSection(aliceSession.page, packName).locator('.StickerButton')
-    .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await packSection(aliceSession.page, packName).scrollIntoViewIfNeeded();
+  await showPackSection(aliceSession.page, packName);
   await assertPackTiles(packSection(aliceSession.page, packName), 'панель автора пака после перезагрузки');
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);

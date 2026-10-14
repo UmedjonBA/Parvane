@@ -31,6 +31,9 @@ const IS_SERVER_SECURITY_SECTIONS_SUPPORTED = false as boolean;
 
 const callParvane = callApi as unknown as (method: string, args: unknown) => Promise<unknown>;
 
+// Новый PIN хранилища не короче (WEB-15; та же проверка — в `secureStorage.setStoragePin`)
+const STORAGE_PIN_MIN_LENGTH = 8;
+
 type OwnProps = {
   isActive?: boolean;
   onReset: () => void;
@@ -234,19 +237,25 @@ const SettingsPrivacy = ({
       .then(setStrangers);
   }, []);
   // Parvane: «кто может звонить» и «кто видит, что я в сети» (FR-040)
-  type CallPresencePolicy = { isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean };
+  type CallPresencePolicy = {
+    isAvailable: boolean; areCallsAllowed: boolean; isPresenceShown: boolean; isRelayOnly?: boolean;
+  };
   const [callPresence, setCallPresence] = useState<CallPresencePolicy>();
   useEffect(() => {
     void (callParvane('parvaneGetCallPresencePolicy', {}) as Promise<CallPresencePolicy>).then(setCallPresence);
   }, []);
   const handleCallsChange = useLastCallback((isAllowed: boolean) => {
     const isPresenceShown = callPresence?.isPresenceShown ?? true;
-    setCallPresence({ isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed });
+    setCallPresence((current) => ({ ...current, isAvailable: true, isPresenceShown, areCallsAllowed: isAllowed }));
     void callParvane('parvaneSetCallsPolicy', { isAllowed });
+  });
+  const handleRelayChange = useLastCallback((isRelayOnly: boolean) => {
+    setCallPresence((current) => (current ? { ...current, isRelayOnly } : current));
+    void callParvane('parvaneSetCallsRelay', { isRelayOnly });
   });
   const handlePresenceChange = useLastCallback((isShown: boolean) => {
     const areCallsAllowed = callPresence?.areCallsAllowed ?? true;
-    setCallPresence({ isAvailable: true, areCallsAllowed, isPresenceShown: isShown });
+    setCallPresence((current) => ({ ...current, isAvailable: true, areCallsAllowed, isPresenceShown: isShown }));
     void callParvane('parvaneSetPresencePolicy', { isShown });
   });
   const handleStrangersChange = useLastCallback((isAllowed: boolean) => {
@@ -263,7 +272,7 @@ const SettingsPrivacy = ({
     void (callParvane('parvaneGetStoragePin', {}) as Promise<{ enabled: boolean } | undefined>)
       .then((state) => setIsPinEnabled(Boolean(state?.enabled)));
   }, []);
-  const canSetPin = storagePin.length >= 4 && storagePin === storagePinRepeat;
+  const canSetPin = storagePin.length >= STORAGE_PIN_MIN_LENGTH && storagePin === storagePinRepeat;
 
   const applyStoragePin = useLastCallback(async (pin: string) => {
     setIsPinBusy(true);
@@ -452,6 +461,14 @@ const SettingsPrivacy = ({
             subLabel={oldLang('ParvaneCallsInfo')}
             checked={callPresence.areCallsAllowed}
             onCheck={handleCallsChange}
+          />
+        )}
+        {callPresence?.isAvailable && (
+          <Checkbox
+            label={oldLang('ParvaneCallsRelayToggle')}
+            subLabel={oldLang('ParvaneCallsRelayInfo')}
+            checked={Boolean(callPresence.isRelayOnly)}
+            onCheck={handleRelayChange}
           />
         )}
         {callPresence?.isAvailable && (

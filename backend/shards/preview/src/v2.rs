@@ -37,7 +37,10 @@ pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool) -> anyhow::Res
         let pool = pool.clone();
         Box::pin(async move { dispatch(&pool, m, req).await })
     });
-    parvane_v2rt::serve(nc, "preview", handler_concurrency(), handler).await?;
+    // CLD-05: один аккаунт не занимает все обработчики превью
+    let per_user = std::env::var("PARVANE_HANDLER_PER_USER").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    parvane_v2rt::serve_with(nc, "preview", handler_concurrency(), Some(parvane_v2rt::OwnerSlots::new(per_user)), handler)
+        .await?;
     info!("preview: методы v2 подключены");
     Ok(())
 }
