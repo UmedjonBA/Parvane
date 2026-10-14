@@ -77,7 +77,8 @@ try {
   await visible(knowledge.locator('[data-note-row="Overview"]'), '«Обзор» справки нового хранилища');
   await knowledge.getByRole('button', { name: 'New note' }).click();
   const note = knowledge.locator('[data-note-id]');
-  await visible(note, 'открытая заметка');
+  // «Обзор» справки открывается сам: ждём именно новую заметку, иначе название достаётся «Обзору»
+  await visible(knowledge.locator('[data-note-title="New note"]'), 'новая заметка открыта');
   const title = note.getByLabel('Note title');
   await title.fill(NOTE);
   await title.blur();

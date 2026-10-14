@@ -1053,7 +1053,7 @@ try {
   escLog.push(await escProbe('после первого'));
   console.log('OK: подпись стрелки правится на месте');
 
-  // ── Группа двигается за пустое место внутри; поле двигается только вне групп ──
+  // ── Группа двигается за шапку и рамку; пустое место двигает поле — и внутри группы ──
   const world = board.locator('[data-canvas-world]');
   // Вид поля числами: сдвиг и масштаб из преобразования слоя с узлами
   const viewOf = () => world.evaluate((element) => (
@@ -1113,18 +1113,14 @@ try {
   const alphaBefore = await rectOf(cardNamed('Альфа'));
   const betaBefore = await rectOf(cardNamed('Бета'));
   const viewBefore = await viewOf();
-  const insidePair = await emptyPoint('Пара');
-  assert.ok(insidePair, 'внутри группы нет пустого места для перетаскивания');
-  console.log('DEBUG group drag', JSON.stringify(insidePair), JSON.stringify(pairBefore), await page.evaluate(({ x, y }) => {
-    const hit = document.elementFromPoint(x, y);
-    return `${hit?.tagName}.${hit?.className} | ${hit?.closest('[data-canvas-type]')?.getAttribute('data-canvas-type')} | sel=${document.querySelectorAll('[data-canvas-selection-bar]').length}`;
-  }, insidePair));
-  await drag(insidePair, { x: insidePair.x + 130, y: insidePair.y - 90 });
+  // Группу берут за шапку с названием: она едет вместе с карточками, поле стоит
+  const headBox = await pairGroup.locator('[data-canvas-group-head]').boundingBox();
+  const headPoint = { x: headBox.x + headBox.width / 2, y: headBox.y + headBox.height / 2 };
+  await drag(headPoint, { x: headPoint.x + 130, y: headPoint.y - 90 });
   const pairDelta = deltaOf(pairBefore, await rectOf(pairGroup));
-  console.log('DEBUG after drag', JSON.stringify(await rectOf(pairGroup)), JSON.stringify(await viewOf()), JSON.stringify(viewBefore));
   assert.ok(
     Math.abs(pairDelta[0]) >= 100 && Math.abs(pairDelta[1]) >= 60,
-    `группа не сдвинулась за пустое место внутри: ${JSON.stringify(pairDelta)}`,
+    `группа не сдвинулась за шапку: ${JSON.stringify(pairDelta)}`,
   );
   assert.deepEqual(deltaOf(alphaBefore, await rectOf(cardNamed('Альфа'))), pairDelta, 'первая карточка не поехала вместе с группой');
   assert.deepEqual(deltaOf(betaBefore, await rectOf(cardNamed('Бета'))), pairDelta, 'вторая карточка не поехала вместе с группой');
@@ -1133,28 +1129,27 @@ try {
   await page.keyboard.press('Control+z');
   assert.deepEqual(await rectOf(pairGroup), pairBefore, 'отмена не вернула группу на место');
   assert.deepEqual(await rectOf(cardNamed('Альфа')), alphaBefore, 'отмена не вернула карточку группы на место');
-  // То же из середины свободного места внутри рамки, когда оно есть
-  const roomyPair = await emptyPoint('Пара', true);
-  if (roomyPair && (roomyPair.x !== insidePair.x || roomyPair.y !== insidePair.y)) {
-    await page.keyboard.press('Escape');
-    await drag(roomyPair, { x: roomyPair.x - 110, y: roomyPair.y - 80 });
-    const roomyDelta = deltaOf(pairBefore, await rectOf(pairGroup));
-    assert.ok(
-      Math.abs(roomyDelta[0]) >= 80 && Math.abs(roomyDelta[1]) >= 50,
-      `группа не сдвинулась из середины свободного места: ${JSON.stringify(roomyDelta)}`,
-    );
-    assert.deepEqual(deltaOf(alphaBefore, await rectOf(cardNamed('Альфа'))), roomyDelta, 'карточка не поехала вместе с группой');
-    assert.deepEqual(await viewOf(), viewBefore, 'вместо группы сдвинулось поле');
-    await page.keyboard.press('Control+z');
-    assert.deepEqual(await rectOf(pairGroup), pairBefore, 'отмена не вернула группу на место');
-  }
-  // Нажатие без сдвига внутри группы её выделяет
   await page.keyboard.press('Escape');
   await bar.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS }).catch(() => assert.fail('выделение не снято'));
+  // Пустое место внутри группы двигает поле, а не группу: большая группа не мешает листать холст
+  const insidePair = await emptyPoint('Пара', true) || await emptyPoint('Пара');
+  assert.ok(insidePair, 'внутри группы нет пустого места для перетаскивания');
+  const placesInGroupPan = await places();
+  await drag(insidePair, { x: insidePair.x + 60, y: insidePair.y + 40 });
+  const viewInGroup = await viewOf();
+  assert.ok(
+    Math.abs(viewInGroup[0] - viewBefore[0] - 60) < 1 && Math.abs(viewInGroup[1] - viewBefore[1] - 40) < 1,
+    `перетаскивание пустого места внутри группы не сдвинуло поле: ${viewBefore} → ${viewInGroup}`,
+  );
+  samePlaces(placesInGroupPan, await places(), 'после сдвига поля из группы');
+  assert.equal(await bar.count(), 0, 'сдвиг поля из середины группы её выделил');
+  await drag({ x: insidePair.x + 60, y: insidePair.y + 40 }, insidePair);
+  assert.ok(sameView(await viewOf(), viewBefore), 'поле не вернулось обратным перетаскиванием');
+  // Нажатие без сдвига внутри группы её не выделяет
   await page.mouse.click(insidePair.x, insidePair.y);
-  await visible(bar.locator('[data-canvas-action="fit"]'), 'группа выделена нажатием внутри неё');
-  await page.keyboard.press('Escape');
-  console.log('OK: группа двигается за пустое место внутри вместе с карточками, поле стоит');
+  await settle();
+  assert.equal(await bar.count(), 0, 'нажатие внутри группы её выделило');
+  console.log('OK: группа двигается за шапку вместе с карточками; пустое место внутри неё двигает поле');
 
   const outside = await emptyPoint();
   assert.ok(outside, 'на поле нет пустого места вне групп');
@@ -1223,8 +1218,30 @@ try {
   await page.keyboard.press('Escape');
   // Холст пишется с задержкой — дождаться записи перед уходом с вкладки
   await page.waitForTimeout(2000);
+  // Кнопка карточки открывает заметку в панели рядом с холстом, как на графе; холст остаётся на экране
   await noteCard.locator('[data-canvas-open-note]').click();
-  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка, открытая кнопкой на карточке');
+  await visible(panel.locator(`[data-note-title="${NOTE}"]`), 'заметка в панели рядом с холстом');
+  await visible(board, 'холст остался на экране рядом с панелью заметки');
+  await visible(panel.getByText('Строка с холста'), 'правка с холста в панели заметки');
+  assert.equal(await panel.locator('[data-graph-link-start]').count(), 0, 'рядом с холстом в панели есть «Связать»');
+  // Ширину панели меняют ручкой на её границе; двойное нажатие возвращает прежнюю
+  const panelResizer = panel.locator('[data-pv-resizer="graph-note"]');
+  const panelWidth = async () => Math.round((await panel.boundingBox()).width);
+  const widthBefore = await panelWidth();
+  const gripBox = await panelResizer.boundingBox();
+  const grip = { x: gripBox.x + gripBox.width / 2, y: gripBox.y + gripBox.height / 2 };
+  await drag(grip, { x: grip.x - 120, y: grip.y });
+  assert.ok(Math.abs(await panelWidth() - widthBefore - 120) <= 2, `панель не стала шире на 120: ${widthBefore} → ${await panelWidth()}`);
+  assert.ok(
+    (await page.evaluate(() => localStorage.getItem('parvane:panel-widths')) || '').includes('graph-note'),
+    'ширина панели не запомнена',
+  );
+  await panelResizer.dblclick();
+  await settle();
+  assert.equal(await panelWidth(), widthBefore, 'двойное нажатие не вернуло ширину панели');
+  console.log('OK: заметка открывается рядом с холстом, ширина панели меняется ручкой и возвращается');
+  await panel.locator('[data-graph-panel-open]').click();
+  await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка, открытая из панели на вкладке «Заметки»');
   await visible(body.getByText('Строка с холста'), 'правка с холста на экране заметки');
   assert.equal(await body.getByText('вторая строка').count(), 0, 'убранная на холсте строка осталась в заметке');
   assert.equal(await body.getByText('Не сохранится').count(), 0, 'отменённая правка попала в заметку');
