@@ -480,6 +480,12 @@ export function createV2Controller(deps: Deps) {
     return stateWriter.flush();
   }
 
+  /** Состояние изменилось и должно лечь на диск до возврата (правки пользователя в облаке и плане). */
+  function persistUrgent(): Promise<void> {
+    if (client && storage && storageKey) stateWriter.mark();
+    return stateWriter.flush();
+  }
+
   /** Состояние движка с диска: байтами либо прежней записью base64. */
   async function loadEngineState(target: SecureE2eStorage): Promise<Uint8Array | undefined> {
     const bytes = await target.loadBytesRecord(STATE_BYTES_RECORD);
@@ -1058,7 +1064,7 @@ export function createV2Controller(deps: Deps) {
     withNeeds,
     // Правки пользователя (дерево, записи плана) видны на экране сразу — на диске они должны быть
     // раньше, чем экран их покажет (perf A1): иначе перезагрузка в ближайшие 2 с их теряет
-    persist: persistNow,
+    persist: persistUrgent,
     loadRecord: async (key) => storage?.loadRecord(key),
     saveRecord: async (key, value) => {
       await storage?.saveRecord(key, value);
@@ -1085,7 +1091,7 @@ export function createV2Controller(deps: Deps) {
     refreshPeerLog,
     // Правки пользователя (дерево, записи плана) видны на экране сразу — на диске они должны быть
     // раньше, чем экран их покажет (perf A1): иначе перезагрузка в ближайшие 2 с их теряет
-    persist: persistNow,
+    persist: persistUrgent,
     loadRecord: async (key) => storage?.loadRecord(key),
     saveRecord: async (key, value) => {
       await storage?.saveRecord(key, value);

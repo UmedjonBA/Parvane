@@ -111,4 +111,13 @@ describe('deferred state write (perf A1)', () => {
     expect(order).toEqual(['snap', 'snap']);
     expect(onError).toHaveBeenCalledTimes(1);
   });
+
+  it('flush() without a mark writes nothing: an urgent write must mark first', async () => {
+    const { writer, store, bump } = makeWriter();
+    await writer.flush();
+    expect(store).not.toHaveBeenCalled();
+    bump();
+    await writer.flush();
+    expect(store).toHaveBeenCalledTimes(1);
+  });
 });
