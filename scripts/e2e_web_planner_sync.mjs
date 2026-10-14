@@ -27,7 +27,9 @@ const PASSWORD = 'Parvane-planner-sync-e2e-1';
 const WIDE = { width: 1440, height: 900 };
 const STEP_TIMEOUT_MS = 20000;
 // Опрос журнала контейнера раз в 8 с + отправка по тишине 1,5 с + запас
-const SYNC_TIMEOUT_MS = 45000;
+// Скрытый «План» опрашивает сервер раз в минуту: сходимость, которую шаг ждёт при закрытом разделе, укладывается
+// в этот срок с запасом
+const SYNC_TIMEOUT_MS = 80000;
 const BACKEND_DIR = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
 assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
 
