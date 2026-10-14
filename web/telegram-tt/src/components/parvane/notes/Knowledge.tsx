@@ -459,6 +459,8 @@ const Knowledge = () => {
   });
 
   const handleOpenInNotes = useLastCallback((noteId: string) => {
+    // С холста заметку увели на вкладку «Заметки» — панель рядом с холстом больше не нужна
+    if (getKnowledgeView() === 'canvas') setGraphPick(undefined);
     setOpenId(noteId);
     setKnowledgeView('notes');
   });
