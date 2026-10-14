@@ -177,6 +177,8 @@ async function mount(doc: unknown = DOC, notes: unknown[] = []) {
     }],
     notes,
     isNarrow: false,
+    query: '',
+    searchStep: 0,
     onOpenTitle: () => undefined,
   }) as Parameters<typeof TeactDOM.render>[0], root);
   await frame();

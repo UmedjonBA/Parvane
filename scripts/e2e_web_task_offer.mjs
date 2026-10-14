@@ -42,7 +42,7 @@ function todayKey() {
 
 async function sendTaskOffer(page, name, { day, start, minutes, steps } = {}) {
   await page.getByRole('button', { name: 'Add an attachment' }).click();
-  await page.getByRole('menuitem', { name: 'Task', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Suggest for plan', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.locator('#task-offer-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await dialog.locator('#task-offer-name').fill(name);

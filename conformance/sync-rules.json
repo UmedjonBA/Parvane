@@ -1218,9 +1218,19 @@
     {
       "id": "TASK-1",
       "title": "Задание в чат: task_offer/task_response — видимые сообщения; клиент без планировщика показывает text, принятие создаёт задачу один раз на аккаунт",
-      "kinds": ["task_offer", "task_response"],
-      "fieldNumbers": { "task_offer": 20, "task_response": 21 },
-      "vectors": ["task-offer", "task-response-accepted", "task-response-declined"],
+      "kinds": [
+        "task_offer",
+        "task_response"
+      ],
+      "fieldNumbers": {
+        "task_offer": 20,
+        "task_response": 21
+      },
+      "vectors": [
+        "task-offer",
+        "task-response-accepted",
+        "task-response-declined"
+      ],
       "fallbackField": "text",
       "sourceField": "source",
       "clients": {
@@ -1251,9 +1261,15 @@
     {
       "id": "CLOUD-1",
       "title": "Приглашение в совместную папку облака: cloud_invite — видимое сообщение; клиент без раздела «Облако» показывает text",
-      "kinds": ["cloud_invite"],
-      "fieldNumbers": { "cloud_invite": 22 },
-      "vectors": ["cloud-invite"],
+      "kinds": [
+        "cloud_invite"
+      ],
+      "fieldNumbers": {
+        "cloud_invite": 22
+      },
+      "vectors": [
+        "cloud-invite"
+      ],
       "fallbackField": "text",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (cloud_invite), store.ts (текст сообщения), v2/cloud.ts (answerInvite); тест protocol.vectors.test.ts; сценарий scripts/e2e_web_cloud_share.mjs",
@@ -1264,17 +1280,51 @@
     {
       "id": "CLOUD-2",
       "title": "Ссылки облака для людей без аккаунта: создаёт и ведёт только web; desktop и android методов cloud.link.* не вызывают и раздел не показывают; общий движок от новых методов и поля не ломается",
-      "ownerMethods": ["cloud.link.create", "cloud.link.add", "cloud.link.publish", "cloud.link.list", "cloud.link.revoke", "cloud.link.extend"],
-      "anonMethods": ["cloud.link.get", "cloud.link.download"],
+      "ownerMethods": [
+        "cloud.link.create",
+        "cloud.link.add",
+        "cloud.link.publish",
+        "cloud.link.list",
+        "cloud.link.revoke",
+        "cloud.link.extend"
+      ],
+      "anonMethods": [
+        "cloud.link.get",
+        "cloud.link.download"
+      ],
       "usageField": "links_bytes",
       "usageFieldNumber": 2,
       "linkIdChars": 22,
-      "ttlDays": [0, 1, 7, 30],
+      "ttlDays": [
+        0,
+        1,
+        7,
+        30
+      ],
       "pagePath": "/s/",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/cloudDrive.ts (создание, список, отзыв, продление), публичная страница s.html (src/publicLink/, свой кодек кадров v2 — сверяется с движком тестом vitest); сценарий scripts/e2e_web_cloud_links.mjs",
         "desktop": "движок общий: методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет; новые методы реестра и поле UsageResponse.links_bytes клиенту не мешают (тесты backend/shards/cloud/src/v2.rs registry_methods_are_known, backend/tests/integration/tests/v2_links_live.rs)",
         "android": "движок общий (те же тесты): методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет"
+      }
+    },
+    {
+      "id": "ARTICLE-1",
+      "title": "Статья (замена «Статьи» Telegram): article — видимое сообщение с заметкой в Markdown; клиент без окна чтения показывает text",
+      "kinds": [
+        "article"
+      ],
+      "fieldNumbers": {
+        "article": 23
+      },
+      "vectors": [
+        "article"
+      ],
+      "fallbackField": "text",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (article), store.ts (карточка), components/middle/message/ArticleCard.tsx, components/parvane/article/*; тест protocol.vectors.test.ts, articleMarkdown.test.ts",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (v2Kind: article; fromV2 → kind text из поля text); тест tests/v2_tests.cpp (article ← v2: текст); без сборки tdesktop — проверить при следующей сборке очереди desktop",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: article → MessageText); тест ProtocolV2SeamTest.kt articleShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
       }
     },
     {
@@ -1295,7 +1345,13 @@
       "bundleMagic": "PVKB",
       "bundleKdfSalt": "parvane/v2/key-bundle",
       "grantBundleKeyField": "bk",
-      "methods": ["identity.recovery.tg_send", "identity.recovery.tg_request", "identity.recovery.tg_poll", "identity.telegram.pull", "identity.telegram.reply"],
+      "methods": [
+        "identity.recovery.tg_send",
+        "identity.recovery.tg_request",
+        "identity.recovery.tg_poll",
+        "identity.telegram.pull",
+        "identity.telegram.reply"
+      ],
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (buildBundleHistory, startTelegramRecovery); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
         "desktop": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу — прежним путём RECOVER-1 (корень, отзыв прежних устройств); копию ключей не пишет и не читает",

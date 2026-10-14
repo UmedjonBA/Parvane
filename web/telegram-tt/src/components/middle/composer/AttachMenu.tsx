@@ -4,7 +4,7 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
 
-import type { ApiAttachMenuPeerType, ApiFormattedText, ApiMessage } from '../../../api/types';
+import type { ApiAttachMenuPeerType, ApiMessage } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
 import type { MessageListType, ThemeKey, ThreadId } from '../../../types';
 
@@ -33,13 +33,13 @@ import useMouseInside from '../../../hooks/useMouseInside';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Icon from '../../common/icons/Icon';
+import ArticlePickerModal from '../../parvane/article/ArticlePickerModal';
 import TaskOfferModal from '../../parvane/taskOffer/TaskOfferModal';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
 import NestedMenuItem from '../../ui/NestedMenuItem';
 import ResponsiveHoverButton from '../../ui/ResponsiveHoverButton';
 import AttachBotItem from './AttachBotItem';
-import FormattedDateModal from './FormattedDateModal';
 
 import './AttachMenu.scss';
 
@@ -63,10 +63,8 @@ export type OwnProps = {
   editingMessage?: ApiMessage;
   messageListType: MessageListType;
   paidMessagesStars?: number;
-  canInsertDate?: boolean;
   menuPositionX: 'left' | 'right';
   onFileSelect: (files: File[]) => void;
-  onDateInsert: (text: ApiFormattedText) => void;
   onTodoListCreate: NoneToVoidFunction;
   onMenuOpen: NoneToVoidFunction;
   onMenuClose: NoneToVoidFunction;
@@ -95,10 +93,8 @@ const AttachMenu = ({
   editingMessage,
   messageListType,
   paidMessagesStars,
-  canInsertDate,
   menuPositionX,
   onFileSelect,
-  onDateInsert,
   onMenuOpen,
   onMenuClose,
   onTodoListCreate,
@@ -109,9 +105,9 @@ const AttachMenu = ({
   } = getActions();
   const [isAttachMenuOpen, openAttachMenu, closeAttachMenu] = useFlag();
   const [handleMouseEnter, handleMouseLeave, markMouseInside] = useMouseInside(isAttachMenuOpen, closeAttachMenu);
-  const [isDateModalOpen, openDateModal, closeDateModal] = useFlag();
   // Parvane (spec 011): задание в чат — форма открывается из меню вложений
   const [isTaskOfferOpen, openTaskOffer, closeTaskOffer] = useFlag();
+  const [isArticleOpen, openArticle, closeArticle] = useFlag();
 
   const canSendVideoAndPhoto = canSendPhotos && canSendVideos;
   const canSendVideoOrPhoto = canSendPhotos || canSendVideos;
@@ -218,11 +214,6 @@ const AttachMenu = ({
   const oldLang = useOldLang();
   const lang = useLang();
 
-  const handleDateMenuClick = useLastCallback(() => {
-    closeAttachMenu();
-    openDateModal();
-  });
-
   const handlePollCreate = useLastCallback(() => {
     closeAttachMenu();
     openPollModal({ chatId, threadId, messageListType });
@@ -239,7 +230,13 @@ const AttachMenu = ({
     openTaskOffer();
   });
 
-  if (!isButtonVisible && !isDateModalOpen && !isTaskOfferOpen) {
+  // Статья (ARTICLE-1): заметка «Знаний» целиком, читается в окне
+  const handleArticlePick = useLastCallback(() => {
+    closeAttachMenu();
+    openArticle();
+  });
+
+  if (!isButtonVisible && !isTaskOfferOpen && !isArticleOpen) {
     return undefined;
   }
 
@@ -327,20 +324,18 @@ const AttachMenu = ({
               <MenuItem icon="poll" onClick={handlePollCreate}>{lang('Poll')}</MenuItem>
             )}
             {!editingMessage && (
-              <MenuItem icon="location" onClick={handleParvaneLocation}>{lang('AttachLocation')}</MenuItem>
-            )}
-            {!editingMessage && (
               <NestedMenuItem
                 icon="location"
                 submenu={(
                   <>
-                    <MenuItem onClick={handleParvaneLiveLocation15}>15 min</MenuItem>
-                    <MenuItem onClick={handleParvaneLiveLocation1h}>1 hour</MenuItem>
-                    <MenuItem onClick={handleParvaneLiveLocation8h}>8 hours</MenuItem>
+                    <MenuItem onClick={handleParvaneLocation}>{lang('ParvaneLocationCurrent')}</MenuItem>
+                    <MenuItem onClick={handleParvaneLiveLocation15}>{lang('ParvaneLiveLocation15Min')}</MenuItem>
+                    <MenuItem onClick={handleParvaneLiveLocation1h}>{lang('ParvaneLiveLocation1Hour')}</MenuItem>
+                    <MenuItem onClick={handleParvaneLiveLocation8h}>{lang('ParvaneLiveLocation8Hours')}</MenuItem>
                   </>
                 )}
               >
-                {lang('AttachLiveLocation')}
+                {lang('AttachLocation')}
               </NestedMenuItem>
             )}
             {canAttachToDoLists && !editingMessage && (
@@ -350,10 +345,10 @@ const AttachMenu = ({
               <MenuItem icon="folder" onClick={handleCloudAttach}>{lang('ParvaneCloudAttachFromCloud')}</MenuItem>
             )}
             {!editingMessage && !isScheduled && (
-              <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>
+              <MenuItem icon="document" onClick={handleArticlePick}>{lang('ArticleMenuItem')}</MenuItem>
             )}
-            {canInsertDate && !editingMessage && (
-              <MenuItem icon="calendar" onClick={handleDateMenuClick}>{lang('GiftInfoDate')}</MenuItem>
+            {!editingMessage && !isScheduled && (
+              <MenuItem icon="check" onClick={handleTaskOfferCreate}>{lang('TaskOfferMenuItem')}</MenuItem>
             )}
 
             {!editingMessage && !canEditMedia && !isScheduled && bots?.map((bot) => (
@@ -369,12 +364,8 @@ const AttachMenu = ({
           </Menu>
         </>
       )}
-      <FormattedDateModal
-        isOpen={isDateModalOpen}
-        onClose={closeDateModal}
-        onSubmit={onDateInsert}
-      />
       <TaskOfferModal isOpen={isTaskOfferOpen} chatId={chatId} onClose={closeTaskOffer} />
+      <ArticlePickerModal isOpen={isArticleOpen} chatId={chatId} onClose={closeArticle} />
     </div>
   );
 };

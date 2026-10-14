@@ -215,7 +215,8 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   await bobSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await bobSession.page.getByRole('menuitem', { name: 'Location', exact: true }).click();
+  await bobSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
+  await bobSession.page.getByRole('menuitem', { name: 'Current location' }).click();
   await aliceList.locator('.Message .Location').first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 

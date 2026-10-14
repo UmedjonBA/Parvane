@@ -125,6 +125,11 @@ export function createSyncController(deps: SyncDependencies) {
           isQuiz: fields.isQuiz,
           correct: fields.correct,
           solution: fields.solution,
+          closeAt: fields.closeAt,
+          createdAt: stored.ts * 1000,
+          noRevote: fields.noRevote,
+          shuffle: fields.shuffle,
+          hideResults: fields.hideResults,
         },
       );
       return false;
@@ -135,7 +140,7 @@ export function createSyncController(deps: SyncDependencies) {
       // P-44: голос — только из чата опроса (иначе участник другого чата
       // голосовал бы в чужом опросе по uuid)
       if (pollUuid && stored.from && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
-        deps.polls.applyVote(pollUuid, stored.from, options);
+        deps.polls.applyVote(pollUuid, stored.from, options, stored.ts ? stored.ts * 1000 : undefined);
         deps.refreshPollMessage(pollUuid);
       }
       return true;

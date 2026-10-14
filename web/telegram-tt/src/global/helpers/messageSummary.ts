@@ -163,6 +163,7 @@ function getSummaryDescription(
     dice,
     richMessage,
     taskOffer,
+    article,
   } = mediaContent;
   const { poll } = statefulContent || {};
 
@@ -275,6 +276,10 @@ function getSummaryDescription(
     summary = lang(getTaskOfferKind(taskOffer) === 'event' ? 'TaskOfferEventSummary' : 'TaskOfferSummary', {
       name: taskOffer.name,
     });
+  }
+
+  if (article) {
+    summary = lang('ArticleSummary', { title: article.title });
   }
 
   if (richMessage) {

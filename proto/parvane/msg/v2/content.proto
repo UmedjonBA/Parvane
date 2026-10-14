@@ -47,6 +47,9 @@ message Content {
     TaskOffer task_offer = 20;
     TaskResponse task_response = 21;
     CloudInvite cloud_invite = 22;
+    // Статья (ARTICLE-1): заметка «Знаний» в Markdown, открывается окном чтения.
+    // Клиент без чтения статей показывает поле `text`.
+    Article article = 23;
   }
   // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
   // только записью журнала LegacyV1Record (msg.proto).
@@ -238,6 +241,12 @@ message Poll {
   repeated uint32 correct = 6 [(parvane.core.v2.max_items) = 12];
   string solution = 7 [(parvane.core.v2.max_len) = 800];
   int64 close_ms = 8;
+  // Голос нельзя изменить (по умолчанию переголосовать можно).
+  bool no_revote = 9;
+  // Каждый видит варианты в своём случайном порядке.
+  bool shuffle = 10;
+  // Число голосов скрыто до закрытия (`close_ms`); автор видит всегда.
+  bool hide_results = 11;
 }
 
 message PollVote {
@@ -362,4 +371,13 @@ message CloudInvite {
   // 1 — читатель, 2 — редактор.
   uint32 role = 3;
   string text = 4 [(parvane.core.v2.max_len) = 600];
+}
+
+// Статья (ARTICLE-1, замена «Статьи» Telegram): заметка в Markdown целиком.
+// Картинки заметки в статью не входят — вместо них подпись.
+message Article {
+  string title = 1 [(parvane.core.v2.max_len) = 200];
+  string markdown = 2 [(parvane.core.v2.max_len) = 65536];
+  // Название и начало текста для клиентов без чтения статей.
+  string text = 3 [(parvane.core.v2.max_len) = 600];
 }

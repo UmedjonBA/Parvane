@@ -312,6 +312,9 @@ fn poll(m: &Map<String, Value>) -> Poll {
         correct: indexes(m.get("correct")),
         solution: s(m, "solution").to_string(),
         close_ms: 0,
+        no_revote: false,
+        shuffle: false,
+        hide_results: false,
     }
 }
 

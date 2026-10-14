@@ -146,8 +146,8 @@ try {
   // ── live-локация web→desktop ───────────────────────────────────────────────
   const logBeforeLive = readDesktopLog(desktopWorkdir).length;
   await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Live Location' }).hover();
-  await aliceSession.page.getByRole('menuitem', { name: '15 min' }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
+  await aliceSession.page.getByRole('menuitem', { name: 'Share live for 15 minutes' }).click();
   const live = await waitDesktopLog(
     desktopWorkdir, /live-локация live_period=(\d+) lat=([\d.]+) long=([\d.]+)/, 60000, desktop, { after: logBeforeLive },
   );

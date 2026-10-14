@@ -1318,6 +1318,15 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 Сервер: `backend/shards/cloud/src/v2/links.rs` (тесты там же и `backend/tests/integration/tests/v2_links_live.rs`),
 схема `proto/parvane/cloud/v1/cloud.proto` (`service LinkService`). Контракт — `specs/022-public-links/contracts/links.md`.
 
+
+## ARTICLE-1. Статья (`article`)
+
+`Content.article = 23` — видимое сообщение: `title` (≤ 200), `markdown` — текст заметки «Знаний» целиком (≤ 65 536,
+без свойств заметки; картинки в статью не входят), `text` (≤ 600) — название и начало текста для клиентов без окна
+чтения. Замена «Статьи» Telegram (там — редактор статей; у нас статья — это заметка). Web показывает карточку с
+началом текста и окно чтения с «Сохранить в заметки»; клиент без окна чтения показывает `text` обычным текстом и
+не падает.
+
 ## ORDER-1. Порядок сообщений в ленте
 
 **Spec 012 (9 окт 2026), правило открыто: web — сделано, desktop и android — нет.**

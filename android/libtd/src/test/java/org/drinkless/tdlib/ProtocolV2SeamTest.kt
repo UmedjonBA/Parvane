@@ -151,6 +151,14 @@ class ProtocolV2SeamTest {
     }
 
     @Test
+    fun articleShowsAsText() {
+        // ARTICLE-1: статья — обычный текст из поля text
+        val article = store().contentFrom(JSONObject("""{"kind":"article","title":"Поход","text":"Статья «Поход»"}"""))
+        assertTrue(article is TdApi.MessageText)
+        assertEquals("Статья «Поход»", (article as TdApi.MessageText).text.text)
+    }
+
+    @Test
     fun storeMapsUnknownKindsToUnsupportedButKeepsLegacyText() {
         val s = store()
         assertTrue(s.contentFrom(JSONObject("""{"kind":"unsupported"}""")) is TdApi.MessageUnsupported)

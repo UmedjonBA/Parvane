@@ -1142,6 +1142,65 @@
     },
     {
       "client": {
+        "class": "message",
+        "v1": {
+          "kind": "article",
+          "text": "Статья «Поход»",
+          "title": "Поход"
+        }
+      },
+      "expect": {
+        "content": {
+          "article": {
+            "markdown": "# Поход\n\n- палатка\n- [[Маршрут]]",
+            "text": "Статья «Поход»",
+            "title": "Поход"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "ba015e0a0ad09fd0bed185d0bed0b412332320d09fd0bed185d0bed0b40a0a2d20d0bfd0b0d0bbd0b0d182d0bad0b00a2d205b5bd09cd0b0d180d188d180d183d1825d5d1a1bd0a1d182d0b0d182d18cd18f20c2abd09fd0bed185d0bed0b4c2bb"
+      },
+      "name": "article"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
+          "kind": "poll",
+          "question": "Когда?"
+        }
+      },
+      "expect": {
+        "content": {
+          "poll": {
+            "close_ms": "1767225600000",
+            "hide_results": true,
+            "no_revote": true,
+            "options": [
+              {
+                "text": "утро"
+              },
+              {
+                "text": "вечер"
+              }
+            ],
+            "question": "Когда?",
+            "shuffle": true
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "2a340a0bd09ad0bed0b3d0b4d0b03f120a0a08d183d182d180d0be120c0a0ad0b2d0b5d187d0b5d1804080d0eab6b733480150015801"
+      },
+      "name": "poll-options"
+    },
+    {
+      "client": {
         "class": "stub"
       },
       "expect": {

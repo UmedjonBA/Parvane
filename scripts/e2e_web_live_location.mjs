@@ -37,7 +37,8 @@ try {
 
   console.log('[live-location] статичная точка + карта');
   await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).click();
+  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
+  await aliceSession.page.getByRole('menuitem', { name: 'Current location' }).click();
   const bobStatic = locationBubbles(bobSession.page).first();
   await bobStatic.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobStatic.locator('img.map[src^="blob:"]').waitFor({ state: 'visible', timeout: LIVE_UPDATE_TIMEOUT_MS });
@@ -46,8 +47,8 @@ try {
 
   console.log('[live-location] live на 15 минут');
   await aliceSession.page.getByRole('button', { name: 'Add an attachment' }).click();
-  await aliceSession.page.getByRole('menuitem', { name: 'Live Location' }).hover();
-  const period = aliceSession.page.getByRole('menuitem', { name: '15 min' });
+  await aliceSession.page.getByRole('menuitem', { name: 'Location', exact: true }).hover();
+  const period = aliceSession.page.getByRole('menuitem', { name: 'Share live for 15 minutes' });
   await period.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await period.click();
   const bobLive = locationBubbles(bobSession.page).nth(1);

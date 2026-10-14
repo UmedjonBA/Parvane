@@ -153,6 +153,9 @@ log "Planner server sync on two devices e2e (spec 010)"
 log "Task offer in chat e2e (spec 011, TASK-1)"
 "$ROOT/scripts/run_web_task_offer_e2e.sh"
 
+log "Article in chat e2e (ARTICLE-1)"
+"$ROOT/scripts/run_web_article_e2e.sh"
+
 log "Offline device catch-up e2e (conformance: device was absent)"
 "$ROOT/scripts/run_web_offline_device_e2e.sh"
 

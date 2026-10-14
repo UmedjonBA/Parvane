@@ -2967,6 +2967,24 @@ export interface LangPair {
   'KnowledgeFilesShareNote': undefined;
   'KnowledgeFilesRole': undefined;
   'ParvaneResizePanel': undefined;
+  'ParvaneLocationCurrent': undefined;
+  'ParvaneLiveLocation15Min': undefined;
+  'ParvaneLiveLocation1Hour': undefined;
+  'ParvaneLiveLocation8Hours': undefined;
+  'KnowledgeFolderDeleteTitle': undefined;
+  'KnowledgeFolderDeleteWithNotes': undefined;
+  'KnowledgeGuideReturn': undefined;
+  'ArticleMenuItem': undefined;
+  'ArticleLabel': undefined;
+  'ArticleRead': undefined;
+  'ArticleSaveToNotes': undefined;
+  'ArticleSaveFailed': undefined;
+  'ArticlePickTitle': undefined;
+  'ArticlePickHint': undefined;
+  'ArticleSearch': undefined;
+  'ArticleNoNotes': undefined;
+  'ArticleTooLong': undefined;
+  'ArticleSendFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5290,6 +5308,15 @@ export interface LangPairWithVariables<V = LangVariable> {
     'size': V;
   };
   'KnowledgeFilesMoveTitle': {
+    'name': V;
+  };
+  'ArticleSummary': {
+    'title': V;
+  };
+  'ArticleSaved': {
+    'title': V;
+  };
+  'ArticleImageOmitted': {
     'name': V;
   };
 }

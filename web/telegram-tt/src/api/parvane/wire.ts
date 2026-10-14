@@ -84,10 +84,19 @@ export type WireMessageContent = {
   is_quiz?: boolean;
   correct?: number[];
   solution?: string;
+  // Срок опроса (мс эпохи), запрет переголосования, перемешивание, итоги скрыты до срока
+  close_ms?: number;
+  no_revote?: boolean;
+  shuffle?: boolean;
+  hide_results?: boolean;
   poll?: string;
   // kind=chat_mode (протокол v2, FR-036): участник включил/выключил режим
   // «усиленная приватность» (L2) — служебное сообщение чата
   l2?: boolean;
+  // kind=article (ARTICLE-1): статья — название и текст заметки в Markdown;
+  // `text` — для клиентов без чтения статей
+  title?: string;
+  markdown?: string;
   // kind=cloud_invite (spec 016, CLOUD-1): приглашение в совместную папку
   // облака — `container` (ссылка на контейнер, id в base64), `name`, `role`
   // (1 — читатель, 2 — редактор), `text` — для клиентов без раздела

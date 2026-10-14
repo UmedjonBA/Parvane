@@ -191,6 +191,7 @@ import InputText from '../../ui/InputText';
 import Album from './Album';
 import AnimatedCustomEmoji from './AnimatedCustomEmoji';
 import AnimatedEmoji from './AnimatedEmoji';
+import ArticleCard from './ArticleCard';
 import CommentButton from './CommentButton';
 import Contact from './Contact';
 import ContextMenuContainer from './ContextMenuContainer.async';
@@ -604,7 +605,7 @@ const Message = ({
     voice, document, sticker, contact,
     invoice, location,
     action, game, storyData, giveaway,
-    giveawayResults, todo, dice, taskOffer,
+    giveawayResults, todo, dice, taskOffer, article,
   } = getMessageContent(message);
 
   const messageReplyInfo = getMessageReplyInfo(message);
@@ -1492,6 +1493,9 @@ const Message = ({
         )}
         {taskOffer && (
           <TaskOffer message={message} taskOffer={taskOffer} />
+        )}
+        {article && (
+          <ArticleCard article={article} />
         )}
         {(giveaway || giveawayResults) && (
           <Giveaway message={message} />

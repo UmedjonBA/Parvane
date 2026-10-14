@@ -78,6 +78,11 @@ const MAX_QUESTION_LENGTH = 255;
 const MAX_SOLUTION_LENGTH = 200;
 const MIN_OPTIONS_COUNT = 1;
 const MIN_QUIZ_OPTIONS_COUNT = 2;
+// Parvane: подписи к опросу и вариантов от голосующих в схеме нет; подписчики со стажем и страны — данные,
+// которых у сервера нет (содержимое зашифровано, телефонов нет)
+const IS_DESCRIPTION_SUPPORTED = false;
+const IS_ADDING_ANSWERS_SUPPORTED = false;
+const IS_AUDIENCE_LIMIT_SUPPORTED = false;
 
 const CLOSE_PERIOD_OPTIONS = [
   HOUR,
@@ -639,12 +644,14 @@ const PollModal = ({
             error={hasSubmitted && !trimmedQuestion ? lang('PollsChooseQuestion') : undefined}
             onChange={handleQuestionChange}
           />
-          <InputText
-            className={styles.input}
-            label={lang('DescriptionOptionalPlaceholder')}
-            value={description}
-            onChange={handleDescriptionChange}
-          />
+          {IS_DESCRIPTION_SUPPORTED && (
+            <InputText
+              className={styles.input}
+              label={lang('DescriptionOptionalPlaceholder')}
+              value={description}
+              onChange={handleDescriptionChange}
+            />
+          )}
         </Island>
 
         <IslandTitle>{lang('PollModalOptionsTitle')}</IslandTitle>
@@ -778,7 +785,7 @@ const PollModal = ({
             checked={isMultipleAnswers}
             onChange={handleMultipleAnswersChange}
           />
-          {!isChannel && (
+          {IS_ADDING_ANSWERS_SUPPORTED && !isChannel && (
             <SettingRow
               iconName="add-filled"
               iconBackgroundColor={ICON_COLORS.addAnswers}
@@ -860,7 +867,7 @@ const PollModal = ({
               />
             </>
           ) : undefined}
-          {isChannel && (
+          {IS_AUDIENCE_LIMIT_SUPPORTED && isChannel && (
             <>
               <SettingRow
                 iconName="user-filled"

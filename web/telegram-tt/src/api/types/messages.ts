@@ -414,6 +414,13 @@ export interface ApiTaskOffer {
   myDecision?: boolean;
 }
 
+// Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown
+export interface ApiArticle {
+  mediaType: 'article';
+  title: string;
+  markdown: string;
+}
+
 export type ApiNewMediaTodo = {
   todo: ApiTodoList;
 };
@@ -740,6 +747,7 @@ export type MediaContent = {
   pollId?: string;
   todo?: ApiMediaTodo;
   taskOffer?: ApiTaskOffer;
+  article?: ApiArticle;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;
   audio?: ApiAudio;

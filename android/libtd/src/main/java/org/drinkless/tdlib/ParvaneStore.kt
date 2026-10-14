@@ -351,6 +351,8 @@ class ParvaneStore {
             "task_offer", "task_response" -> textContent(c)
             // Приглашение в совместную папку облака (spec 016, CLOUD-1): раздела «Облако» нет — текст
             "cloud_invite" -> textContent(c)
+            // Статья (ARTICLE-1): окна чтения нет — текст из поля text
+            "article" -> textContent(c)
             // Служебное сообщение шва в чате (T080: участник группы v2 без записи администратора)
             "service" -> TdApi.MessageCustomServiceAction(c.optString("text"))
             // Режим «усиленная приватность» (L2-1): смена режима — видимое служебное сообщение чата,

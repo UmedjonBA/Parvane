@@ -1656,6 +1656,39 @@ describe('CLOUD-1: приглашение в папку облака — вид�
   });
 });
 
+describe('ARTICLE-1: статья — видимое сообщение, клиент без окна чтения показывает текст', () => {
+  const r = rule('ARTICLE-1') as unknown as {
+    kinds: string[];
+    fieldNumbers: Record<string, number>;
+    vectors: string[];
+    fallbackField: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема и вектора: поле 23, случай в content/kinds.json', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`Article article = ${r.fieldNumbers.article};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 3 [(parvane.core.v2.max_len) = 600];`);
+    const vectors = readRepo('proto/parvane/vectors/content/kinds.json');
+    r.vectors.forEach((name) => expect(vectors).toContain(`"name": "${name}"`));
+  });
+
+  it('web, desktop и android: статья разбирается и показывается', () => {
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'article\':');
+    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    expect(core).toContain('} else if (c.contains("article")) {');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article ← v2');
+    expect(r.clients.desktop).toContain('v2_tests.cpp');
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
+    expect(store).toContain('"article" -> textContent(c)');
+    expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
+      .toContain('articleShowsAsText');
+    expect(r.clients.android).toContain('articleShowsAsText');
+  });
+});
+
 describe('CLOUD-2: ссылки облака для людей без аккаунта — только web', () => {
   const r = rule('CLOUD-2') as unknown as {
     ownerMethods: string[];

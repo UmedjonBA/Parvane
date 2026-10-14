@@ -49,8 +49,10 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useWindowSize from '../../../hooks/window/useWindowSize';
 
+import Button from '../../ui/Button';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
+import Modal from '../../ui/Modal';
 import PlannerQuickHost from '../planner/PlannerQuickHost';
 import SectionHistoryBack from '../SectionHistoryBack';
 import GraphPanel from './GraphPanel';
@@ -365,7 +367,7 @@ const Knowledge = () => {
     return (await createNoteFolder(name, vaultName)).error;
   });
 
-  // Пустая папка удаляется сразу; с заметками — после вопроса, заметки переезжают в «Без папки»
+  // Пустая папка удаляется сразу; с заметками — после вопроса: заметки в «Без папки» либо вместе с папкой в корзину
   const handleFolderDelete = useLastCallback(() => {
     closeFolderSheet();
     if (!sheetFolder) return;
@@ -378,9 +380,15 @@ const Knowledge = () => {
     openRemoval();
   });
 
-  const handleRemovalConfirm = useLastCallback(() => {
+  const handleRemovalMove = useLastCallback(() => {
     closeRemoval();
-    if (removal) void deleteNoteFolder(removal.id, true);
+    if (removal) void deleteNoteFolder(removal.id, 'move');
+  });
+
+  // Папка уходит в корзину «Файлов» вместе с заметками — их можно вернуть оттуда
+  const handleRemovalWithNotes = useLastCallback(() => {
+    closeRemoval();
+    if (removal) void deleteNoteFolder(removal.id, 'with-notes');
   });
 
   const handleAskMove = useLastCallback((noteId: string) => {
@@ -784,14 +792,17 @@ const Knowledge = () => {
             {lang('KnowledgeNewFolder')}
           </button>
         </div>
-        <button
-          type="button"
-          className={buildClassName(kit.btn, kit.btnGhost, kit.btnWide)}
-          data-notes-guide
-          onClick={handleGuide}
-        >
-          {lang('KnowledgeGuide')}
-        </button>
+        {/* Справка есть у всех с первого открытия; кнопка нужна, только чтобы вернуть удалённую */}
+        {!guideOverview && (
+          <button
+            type="button"
+            className={buildClassName(kit.btn, kit.btnGhost, kit.btnWide)}
+            data-notes-guide
+            onClick={handleGuide}
+          >
+            {lang('KnowledgeGuideReturn')}
+          </button>
+        )}
       </aside>
     );
   }
@@ -1006,14 +1017,33 @@ const Knowledge = () => {
         onCreate={handleMoveToNew}
         onClose={closePicker}
       />
-      <ConfirmDialog
+      <Modal
+        className="confirm"
+        title={lang('KnowledgeFolderDeleteTitle')}
         isOpen={isRemovalOpen}
-        text={lang('KnowledgeFolderDeleteConfirm', { name: removal?.name || '', count: removal?.count || 0 })}
-        confirmLabel={lang('KnowledgeFolderDeleteAction')}
-        confirmIsDestructive
-        confirmHandler={handleRemovalConfirm}
         onClose={closeRemoval}
-      />
+        isNativeDialog
+        noTitleAutoFocus
+      >
+        <p>{lang('KnowledgeFolderDeleteConfirm', { name: removal?.name || '', count: removal?.count || 0 })}</p>
+        <div className="dialog-buttons-column">
+          <Button className="confirm-dialog-button" isText id="knowledge-folder-delete-move" onClick={handleRemovalMove}>
+            {lang('KnowledgeFolderDeleteAction')}
+          </Button>
+          <Button
+            className="confirm-dialog-button"
+            isText
+            color="danger"
+            id="knowledge-folder-delete-all"
+            onClick={handleRemovalWithNotes}
+          >
+            {lang('KnowledgeFolderDeleteWithNotes')}
+          </Button>
+          <Button className="confirm-dialog-button" isText onClick={closeRemoval}>
+            {lang('Cancel')}
+          </Button>
+        </div>
+      </Modal>
       <ConfirmDialog
         isOpen={isRestoreOpen}
         text={lang('KnowledgeGuideRestoreText', { name: buildGuide(guideLang).folderName })}

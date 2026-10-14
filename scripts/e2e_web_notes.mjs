@@ -189,7 +189,12 @@ try {
   // Удаление папки с заметкой: после вопроса заметка переезжает в «Без папки»
   await folderOf(FOLDER_RENAMED).locator('[data-folder-menu]').click();
   await page.locator('[data-folder-delete]').click();
-  await page.locator('.confirm-dialog-button').filter({ hasText: 'Move and delete' }).click();
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.locator('#knowledge-folder-delete-move').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-folder-delete.png` });
+  }
+  await page.locator('#knowledge-folder-delete-move').click();
   await gone(folderOf(FOLDER_RENAMED), 'удалённая папка осталась в списке');
   await visible(rowsIn('').and(row(DRAFT)), 'заметка удалённой папки — в «Без папки»');
   // Пустая папка удаляется без вопроса
@@ -202,7 +207,8 @@ try {
   await gone(row(DRAFT), 'заметка-черновик не удалена');
   console.log('OK: папки — сворачивание, создание, заметка в папке, перенос, переименование, удаление');
 
-  // ── Справка по кнопке: удалённая заметка создаётся заново, остальные не трогаются ──
+  // ── Кнопка справки — только когда справки нет: удалённая заметка создаётся заново, остальные не трогаются ──
+  assert.equal(await knowledge.locator('[data-notes-guide]').count(), 0, 'кнопка справки при живой справке');
   await row(GUIDE_OVERVIEW).click();
   await visible(knowledge.locator(`[data-note-title="${GUIDE_OVERVIEW}"]`), '«Обзор» перед удалением');
   await trashOpenNote();
@@ -211,10 +217,8 @@ try {
   await page.locator('.confirm-dialog-button').filter({ hasText: 'Create' }).click();
   await visible(knowledge.locator(`[data-note-title="${GUIDE_OVERVIEW}"]`), '«Обзор» создан заново и открыт');
   await waitRows(GUIDE_ROWS, GUIDE_NOTES, 'восстановление справки изменило число заметок');
-  await knowledge.locator('[data-notes-guide]').click();
-  await visible(knowledge.locator(`[data-note-title="${GUIDE_OVERVIEW}"]`), '«Обзор» по кнопке справки');
-  assert.equal(await page.locator('.confirm-dialog-button').filter({ hasText: 'Create' }).count(), 0, 'кнопка справки спросила о создании при живой справке');
-  console.log('OK: кнопка «Справка Parvane» открывает «Обзор», удалённый — создаёт заново');
+  await gone(knowledge.locator('[data-notes-guide]'), 'кнопка справки осталась после восстановления');
+  console.log('OK: кнопка «Вернуть справку» есть только без справки и создаёт удалённое заново');
 
   // ── Удалённая справка сама не возвращается ────────────────────────────────
   for (let left = GUIDE_NOTES; left > 0; left--) {
@@ -678,13 +682,14 @@ try {
     await gone(graphChip(renamed), 'холст с графа не удалён');
   }
   await openTab('Notes');
-  await row(FOLDER_NOTE).click();
-  await visible(knowledge.locator(`[data-note-title="${FOLDER_NOTE}"]`), 'заметка папки перед удалением');
-  await trashOpenNote();
-  await gone(row(FOLDER_NOTE), 'заметка папки не удалена');
+  // Папка с заметкой — «Удалить вместе с заметками»: в списке нет ни папки, ни заметки
+  await visible(row(FOLDER_NOTE), 'заметка папки перед удалением');
   await folderOf(GRAPH_FOLDER).locator('[data-folder-menu]').click();
   await page.locator('[data-folder-delete]').click();
+  await page.locator('#knowledge-folder-delete-all').click();
   await gone(folderOf(GRAPH_FOLDER), 'папка для графа не удалена');
+  await gone(row(FOLDER_NOTE), 'заметка не удалена вместе с папкой');
+  console.log('OK: папка удаляется вместе с заметками');
 
   // ── Холст из графа: карточка на каждую заметку, стрелка на каждую ссылку ──
   await openTab('Canvas');

@@ -220,11 +220,14 @@ try {
   assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 0, 'header: Translate must be hidden');
   assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 0, 'header: Report must be hidden');
   await page.keyboard.press('Escape');
-  // Меню вложений: списка задач Telegram нет, «Задание» есть (spec 012, A4)
+  // Меню вложений: списка задач Telegram нет, «Предложить в план» есть (spec 012, A4)
   await page.waitForTimeout(400);
   await page.getByRole('button', { name: 'Add an attachment' }).click();
-  await page.getByRole('menuitem', { name: 'Task', exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await page.getByRole('menuitem', { name: 'Suggest for plan', exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await page.getByRole('menuitem', { name: /Checklist|To-?Do/i }).count(), 0, 'attach: Checklist must be hidden');
+  // Геопозиция — один пункт с подменю, «Date» нет (отзыв 14 окт 2026)
+  assert.equal(await page.getByRole('menuitem', { name: 'Live Location' }).count(), 0, 'attach: Live Location is a submenu item');
+  assert.equal(await page.getByRole('menuitem', { name: 'Date', exact: true }).count(), 0, 'attach: Date must be hidden');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
   const message = page.locator('.Transition_slide-active > .MessageList .Message').filter({ hasText: `hello-${suffix}` }).first();

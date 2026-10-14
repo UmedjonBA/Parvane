@@ -238,6 +238,13 @@ int main() {
         const auto bare = v2::fromV2(json{{"cloud_invite", {{"name", "Проект"}}}});
         check(bare && (*bare)["kind"] == "text" && (*bare)["text"] == "📁 Проект", "cloud_invite без text — имя");
         check(v2::v2Kind(json{{"cloud_invite", json::object()}}) == "cloud_invite", "v2Kind: cloud_invite");
+        // Статья (ARTICLE-1): текст из поля text, без него — название
+        const auto article = v2::fromV2(json{{"article", {{"title", "Поход"}, {"markdown", "# Поход"},
+                                                          {"text", "Статья «Поход»"}}}});
+        check(article && (*article)["kind"] == "text" && (*article)["text"] == "Статья «Поход»", "article ← v2: текст");
+        const auto bareArticle = v2::fromV2(json{{"article", {{"title", "Поход"}}}});
+        check(bareArticle && (*bareArticle)["text"] == "📄 Поход", "article без text — название");
+        check(v2::v2Kind(json{{"article", json::object()}}) == "article", "v2Kind: article");
     }
 
     // ── события "direct" ───────────────────────────────────────────────────

@@ -645,6 +645,11 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
     // его можно в разделе «Облако» («Доступные мне»)
     case 'cloud_invite':
       return { text: { text: content.text || `📁 ${content.name || ''}` } };
+    // ARTICLE-1: статья — карточка с окном чтения
+    case 'article':
+      return content.markdown !== undefined
+        ? { article: { mediaType: 'article', title: content.title || '', markdown: content.markdown } }
+        : { text: { text: content.text || `📄 ${content.title || ''}` } };
     case 'location': {
       const geo = {
         lat: content.lat || 0, long: content.long || 0, accessHash: '0', accuracyRadius: content.accuracy,

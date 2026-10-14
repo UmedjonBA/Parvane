@@ -188,6 +188,19 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
                 "text": "Приглашение в папку «Проект» (редактор)"}}),
             msg(json!({"kind": "cloud_invite", "name": "Проект", "role": 2, "text": "Приглашение в папку «Проект» (редактор)"})),
         ),
+        // Статья (ARTICLE-1): заметка в Markdown; клиент без чтения статей
+        // показывает поле `text`.
+        (
+            "article",
+            json!({"article": {"title": "Поход", "markdown": "# Поход\n\n- палатка\n- [[Маршрут]]", "text": "Статья «Поход»"}}),
+            msg(json!({"kind": "article", "title": "Поход", "text": "Статья «Поход»"})),
+        ),
+        (
+            "poll-options",
+            json!({"poll": {"question": "Когда?", "options": [{"text": "утро"}, {"text": "вечер"}], "close_ms": "1767225600000",
+                "no_revote": true, "shuffle": true, "hide_results": true}}),
+            msg(json!({"kind": "poll", "question": "Когда?"})),
+        ),
     ]
 }
 

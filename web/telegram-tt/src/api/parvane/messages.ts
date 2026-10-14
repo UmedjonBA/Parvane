@@ -105,9 +105,31 @@ const EXT_BY_STICKER_MIME: Record<string, string> = {
 const LIVE_LOCATION_UPDATE_MS = 15000;
 const EMOJI_PACKS_PER_MESSAGE = 4;
 const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
+// Статья (ARTICLE-1): пределы полей схемы `Article`
+const ARTICLE_MAX_LENGTH = 65536;
+const ARTICLE_TITLE_MAX = 200;
+const ARTICLE_TEXT_MAX = 600;
 
 // Собеседник без журнала устройств v2 (протокол v1 отключён, T110) — доставить нечем
 const V2_PEER_REQUIRED = 'The recipient has no devices on protocol v2.';
+
+// Поля статьи: название в пределах схемы и `text` — для клиентов без окна чтения
+function articleFields(title: string, markdown: string) {
+  const cleanTitle = title.trim().slice(0, ARTICLE_TITLE_MAX);
+  return { title: cleanTitle, markdown, text: articleText(cleanTitle, markdown) };
+}
+
+// Представление статьи для клиентов без чтения статей: название и начало текста без разметки
+function articleText(title: string, markdown: string) {
+  const plain = markdown
+    .replace(/^---\n[\s\S]*?\n---\n/, '')
+    .replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, alias?: string) => alias || target)
+    .replace(/[#>*_`]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const head = `Статья «${title}»`;
+  return `${head}\n${plain}`.slice(0, ARTICLE_TEXT_MAX);
+}
 
 export function createMessageController(deps: MessageDependencies) {
   // Чат, мутации которого может взять v2: личный или группа v2 (группы v1 —
@@ -529,6 +551,11 @@ export function createMessageController(deps: MessageDependencies) {
       isPublic?: true;
       isMultipleChoice?: true;
       isQuiz?: true;
+      isRevoteDisabled?: true;
+      shouldShuffleAnswers?: true;
+      shouldHideResultsUntilClose?: true;
+      closePeriod?: number;
+      closeDate?: number;
     };
     correctAnswers?: number[];
     solution?: string;
@@ -540,7 +567,21 @@ export function createMessageController(deps: MessageDependencies) {
     const options = newPoll.summary.answers.map((answer) => answer.text.text);
     const isQuiz = Boolean(newPoll.summary.isQuiz);
     const uuid = newMessageId();
+    const { summary } = newPoll;
+    const now = Date.now();
+    // Срок: точная дата либо длительность от момента отправки
+    const closeAt = summary.closeDate ? summary.closeDate * 1000
+      : summary.closePeriod ? now + summary.closePeriod * 1000 : undefined;
+    const hasCloseAt = Boolean(closeAt && closeAt > now);
+    const flags = {
+      noRevote: Boolean(summary.isRevoteDisabled),
+      shuffle: Boolean(summary.shouldShuffleAnswers),
+      hideResults: hasCloseAt && Boolean(summary.shouldHideResultsUntilClose),
+    };
     deps.polls.register(uuid, chat.id, question, options, {
+      ...flags,
+      closeAt: hasCloseAt ? closeAt : undefined,
+      createdAt: now,
       author: currentStore.self,
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
@@ -557,6 +598,10 @@ export function createMessageController(deps: MessageDependencies) {
       is_quiz: isQuiz || undefined,
       correct: isQuiz ? newPoll.correctAnswers : undefined,
       solution: isQuiz ? newPoll.solution : undefined,
+      close_ms: hasCloseAt ? closeAt : undefined,
+      no_revote: flags.noRevote || undefined,
+      shuffle: flags.shuffle || undefined,
+      hide_results: flags.hideResults || undefined,
     }, uuid);
     const id = currentStore.allocateMessageId(chat.id, uuid);
     const message: ApiMessage = {
@@ -1330,7 +1375,10 @@ export function createMessageController(deps: MessageDependencies) {
       const fromAddress = currentStore.getAddressForId(fromChat.id) || '';
       const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
       for (const message of messages) {
-        const wireContent = deps.media.messageToWireContent(message);
+        const { article } = message.content;
+        const wireContent = article
+          ? { kind: 'article', ...articleFields(article.title, article.markdown) }
+          : deps.media.messageToWireContent(message);
         if (!wireContent) continue;
         // Зашифрованное медиа: файл в облаке выдан только участникам исходного
         // чата, у нового получателя доступа нет (грант только при загрузке) —
@@ -1424,6 +1472,27 @@ export function createMessageController(deps: MessageDependencies) {
       await publishInner(toAddress, content, uuid);
       // v2 свою операцию назад не присылает: строка идёт обычным конвейером сама
       // (как `chat_mode`) — так карточка попадает в кэш истории и переживает reload
+      await deps.sync.applyExternal({
+        id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
+    // Статья (ARTICLE-1): заметка «Знаний» целиком; картинки заметки не входят
+    async parvaneSendArticle({ chat, title, markdown }: { chat: ApiChat; title: string; markdown: string }) {
+      const currentStore = store();
+      const toAddress = currentStore.getAddressForId(chat.id);
+      if (!toAddress) return undefined;
+      if (markdown.length > ARTICLE_MAX_LENGTH) return 'too-long' as const;
+      const ttlSecs = deps.localState.loadPeerTtl()[toAddress];
+      const uuid = newMessageId();
+      const content: WireMessageContent = {
+        kind: 'article',
+        ...articleFields(title, markdown),
+        ttl_secs: ttlSecs || undefined,
+      };
+      await publishInner(toAddress, content, uuid);
+      // v2 свою операцию назад не присылает: строка идёт обычным конвейером (как задание в чат)
       await deps.sync.applyExternal({
         id: uuid, from: currentStore.self, to: toAddress, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
       });

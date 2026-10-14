@@ -344,6 +344,8 @@ function refreshPollMessageFromSync(uuid: string) {
   messageController.refreshPollMessage(uuid);
 }
 
+polls.setExpireHandler(refreshPollMessageFromSync);
+
 function refreshTaskOfferMessageFromSync(uuid: string) {
   messageController.refreshTaskOfferMessage(uuid);
 }

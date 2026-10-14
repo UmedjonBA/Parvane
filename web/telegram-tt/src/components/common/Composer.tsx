@@ -1821,11 +1821,6 @@ const Composer = ({
     insertTextAndUpdateCursor(text, EDITABLE_INPUT_MODAL_ID);
   });
 
-  const handleFormattedDateInsert = useLastCallback((text: ApiFormattedText) => {
-    const targetInputId = attachments.length ? EDITABLE_INPUT_MODAL_ID : editableInputId;
-    insertFormattedTextAndUpdateCursor(text, targetInputId);
-  });
-
   const removeSymbol = useLastCallback((inInputId = editableInputId) => {
     const selection = window.getSelection()!;
 
@@ -2487,9 +2482,7 @@ const Composer = ({
               canSendVideos={canSendVideos}
               canSendDocuments={canSendDocuments}
               canSendAudios={canSendAudios}
-              canInsertDate={!isComposerBlocked}
               onFileSelect={handleFileSelect}
-              onDateInsert={handleFormattedDateInsert}
               onTodoListCreate={handleTodoListCreate}
               isScheduled={isInScheduledList}
               attachBots={isInMessageList ? attachBots : undefined}

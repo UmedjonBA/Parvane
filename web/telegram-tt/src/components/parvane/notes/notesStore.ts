@@ -153,8 +153,8 @@ function isSameFolders(a: NoteFolder[], b: NoteFolder[]) {
   ));
 }
 
-// Пути папок от хранилища по id папки (`''` — само хранилище, `undefined` — папка вне хранилища): узлы по
-// `Map`, каждая папка разбирается один раз на проход, а не заново от каждого файла
+// Пути папок от хранилища по id папки (`''` — само хранилище, `undefined` — папка вне хранилища либо в
+// корзине): узлы по `Map`, каждая папка разбирается один раз на проход, а не заново от каждого файла
 function folderPathsOf(nodes: CloudNode[], vaultId: string) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const paths = new Map<string, string | undefined>([[vaultId, '']]);
@@ -162,8 +162,8 @@ function folderPathsOf(nodes: CloudNode[], vaultId: string) {
     if (paths.has(id)) return paths.get(id);
     const node = byId.get(id);
     let result: string | undefined;
-    // Предел глубины — защита от цикла в повреждённом дереве
-    if (node?.parent && depth <= nodes.length) {
+    // Предел глубины — защита от цикла в повреждённом дереве; заметки папки в корзине в хранилище не входят
+    if (node?.parent && !node.trashed && depth <= nodes.length) {
       const parent = pathOf(node.parent, depth + 1);
       if (parent !== undefined) result = parent ? `${parent}/${node.name}` : node.name;
     }
@@ -927,19 +927,22 @@ export async function renameNoteFolder(
 
 /** Удалить папку заметок: пустая уходит в корзину облака. С заметками — только с `shouldMoveNotes`: заметки
  * сначала переносятся в «Без папки». Папка с файлами, которые не заметки, не удаляется — это делают в «Файлах». */
-export async function deleteNoteFolder(folderId: string, shouldMoveNotes?: boolean): Promise<FolderDeleteResult> {
+/** Папка с заметками: `move` — заметки в «Без папки», `with-notes` — в корзину вместе с папкой */
+export async function deleteNoteFolder(
+  folderId: string, notesMode?: 'move' | 'with-notes',
+): Promise<FolderDeleteResult> {
   const rootId = rootIdOf();
   const nodes = getNodes(rootId);
   const node = nodes.find(({ id }) => id === folderId);
   const vault = findVault(nodes);
   if (!rootId || !node || !vault || !getNoteFolders().some(({ id }) => id === folderId)) return 'failed';
   const inside = folderContents(nodes, folderId);
-  if (inside.others.length) {
+  if (inside.others.length && notesMode !== 'with-notes') {
     notify('folder-files', node.name);
     return 'has-files';
   }
-  if (inside.notes.length) {
-    if (!shouldMoveNotes) return 'has-notes';
+  if (inside.notes.length && notesMode !== 'with-notes') {
+    if (!notesMode) return 'has-notes';
     if (!(await moveCloudNodes(rootId, inside.notes, vault.id))) {
       notify('failed', node.name);
       return 'failed';

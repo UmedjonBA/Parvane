@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  callProviderForChat,
   relogin,
   LOGIN_TIMEOUT_MS,
   findMessageContainers,
@@ -158,12 +159,98 @@ try {
   await bobSession.page.getByText(quizSolution).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  // ── Окно опроса: только работающие настройки (отзыв 14 окт 2026) ──────────
+  const revoteQuestion = `no-revote-${suffix}`;
+  const revoteInput = await openPollModal(aliceSession.page);
+  const settings = aliceSession.page.getByRole('dialog');
+  for (const hidden of ['Allow Adding Options', 'Restrict to Subscribers', 'Limit by Country']) {
+    assert.equal(await settings.getByText(hidden, { exact: true }).count(), 0, `в окне опроса нет «${hidden}»`);
+  }
+  assert.equal(await settings.getByLabel('Description (optional)').count(), 0, 'подписи к опросу нет');
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await settings.getByText('Shuffle Options', { exact: true }).scrollIntoViewIfNeeded();
+    await aliceSession.page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/polls-settings.png` });
+  }
+  await revoteInput.fill(revoteQuestion);
+  await fillPollOptions(aliceSession.page, ['Da', 'Net', 'Mozhet']);
+  await settings.getByText('Allow Revoting', { exact: true }).click();
+  await settings.getByText('Shuffle Options', { exact: true }).click();
+  await settings.getByRole('button', { name: 'Send', exact: true }).click();
+  const bobRevote = findMessageContainers(bobSession.page, revoteQuestion).first();
+  await bobRevote.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Флаги доехали до получателя
+  const flagsOf = (page, question) => page.evaluate((q) => {
+    const poll = Object.values(window.__parvaneGetGlobal().messages.pollById)
+      .find((candidate) => candidate.summary.question.text === q);
+    return poll && {
+      noRevote: Boolean(poll.summary.isRevoteDisabled),
+      shuffle: Boolean(poll.summary.shouldShuffleAnswers),
+      hide: Boolean(poll.summary.shouldHideResultsUntilClose),
+      closeDate: poll.summary.closeDate,
+      isClosed: Boolean(poll.summary.isClosed),
+      isCreator: Boolean(poll.summary.isCreator),
+    };
+  }, question);
+  const bobFlags = await flagsOf(bobSession.page, revoteQuestion);
+  assert.equal(bobFlags?.noRevote, true, 'запрет переголосования не доехал');
+  assert.equal(bobFlags?.shuffle, true, 'перемешивание не доехало');
+  await voteInPoll(bobRevote, 'Da');
+  await bobRevote.getByText('Da', { exact: true }).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // У обычного опроса голос можно отозвать, у этого — нет
+  await findMessageContainers(bobSession.page, publicQuestion).first().click({ button: 'right' });
+  await bobSession.page.getByRole('menuitem', { name: 'Retract vote' })
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await bobSession.page.keyboard.press('Escape');
+  await bobSession.page.waitForTimeout(400);
+  await bobRevote.click({ button: 'right' });
+  await bobSession.page.getByRole('menuitem', { name: 'Reply' }).first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await bobSession.page.getByRole('menuitem', { name: 'Retract vote' }).count(), 0,
+    'голос в опросе без переголосования можно отозвать');
+  await bobSession.page.keyboard.press('Escape');
+  console.log('OK: окно опроса без неработающих настроек; запрет переголосования и перемешивание доходят');
+
+  // ── Срок опроса и итоги до срока скрыты; опрос закрывается сам ────────────
+  const timedQuestion = `timed-${suffix}`;
+  const closeDate = Math.floor(Date.now() / 1000) + 20;
+  const sent = await callProviderForChat(aliceSession.page, 'sendMessage', groupTitle, undefined, {
+    chat: '$chat',
+    poll: {
+      summary: {
+        id: '1',
+        hash: '0',
+        question: { text: timedQuestion },
+        answers: [{ text: { text: 'Da' }, option: '0' }, { text: { text: 'Net' }, option: '1' }],
+        closeDate,
+        shouldHideResultsUntilClose: true,
+      },
+    },
+  });
+  assert.ok(!sent.error, `опрос со сроком не отправлен: ${sent.error}`);
+  const bobTimed = findMessageContainers(bobSession.page, timedQuestion).first();
+  await bobTimed.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const timedFlags = await flagsOf(bobSession.page, timedQuestion);
+  assert.equal(timedFlags?.closeDate, closeDate, 'срок опроса не доехал');
+  assert.equal(timedFlags?.hide, true, 'скрытие итогов не доехало');
+  assert.equal(timedFlags?.isCreator, false, 'Боб помечен автором');
+  assert.equal((await flagsOf(aliceSession.page, timedQuestion))?.isCreator, true, 'Алиса не помечена автором');
+  await voteInPoll(bobTimed, 'Net');
+  await bobTimed.getByText('Final Results', { exact: true })
+    .waitFor({ state: 'visible', timeout: 40_000 });
+  await findMessageContainers(aliceSession.page, timedQuestion).first().getByText('Final Results', { exact: true })
+    .waitFor({ state: 'visible', timeout: 20_000 });
+  console.log('OK: опрос со сроком закрылся сам у обоих, итоги до срока скрыты флагом');
+
   // ── Персист: после reload Боб видит агрегат (View Results у публичного) ────
   await relogin(bobSession.page, PASSWORD);
   await openGroupChat(bobSession.page, groupTitle);
   await findMessageContainers(bobSession.page, publicQuestion).first()
     .getByText('View Results', { exact: true }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Флаги и закрытие по сроку переживают reload
+  const afterReload = await flagsOf(bobSession.page, revoteQuestion);
+  assert.equal(afterReload?.noRevote, true, 'запрет переголосования потерян после reload');
+  assert.equal((await flagsOf(bobSession.page, timedQuestion))?.isClosed, true, 'опрос со сроком открыт после reload');
 
   assert.deepEqual(aliceSession.errors, [], `Alice page errors: ${aliceSession.errors.join('; ')}`);
   assert.deepEqual(bobSession.errors, [], `Bob page errors: ${bobSession.errors.join('; ')}`);

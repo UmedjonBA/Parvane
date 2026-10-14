@@ -3,6 +3,8 @@
 // закрытие kind=poll_close. Синтез ApiMessagePoll из накопленного состояния.
 // Quiz: correct-индексы и solution едут в kind=poll и раскрываются клиентом
 // только после собственного голоса или закрытия (как в Telegram).
+// Срок (`close_ms`), запрет переголосования, перемешивание и скрытые до срока
+// итоги тоже едут в kind=poll и соблюдаются клиентами.
 
 import type { ApiMessagePoll } from '../types';
 
@@ -17,10 +19,27 @@ type PollEntry = {
   isQuiz: boolean;
   correct: number[];
   solution?: string;
+  // Срок опроса (мс) и момент создания (мс) — для кольца оставшегося времени
+  closeAt?: number;
+  createdAt?: number;
+  noRevote: boolean;
+  shuffle: boolean;
+  hideResults: boolean;
   votes: Map<string, number[]>; // адрес голосующего → выбранные индексы
 };
 
+type PollOptions = {
+  isPublic?: boolean; isMultiple?: boolean; isQuiz?: boolean; correct?: number[]; solution?: string;
+  // P-44: автор опроса — только он может закрыть
+  author?: string;
+  closeAt?: number; createdAt?: number; noRevote?: boolean; shuffle?: boolean; hideResults?: boolean;
+};
+
 const RECENT_VOTERS_LIMIT = 3;
+// Голос, отправленный чуть позже срока (расхождение часов), ещё принимается
+const CLOSE_GRACE_MS = 60_000;
+// setTimeout не ждёт дольше ~24,8 суток — дальний срок досматривается повторно
+const MAX_TIMER_MS = 2_147_000_000;
 
 export class PollStore {
   private byUuid = new Map<string, PollEntry>();
@@ -29,8 +48,19 @@ export class PollStore {
 
   private resolvePeerId: (address: string) => string = (address) => address;
 
+  private onExpire?: (uuid: string) => void;
+
+  private timers = new Map<string, number>();
+
   reset() {
     this.byUuid.clear();
+    this.timers.forEach((timer) => clearTimeout(timer));
+    this.timers.clear();
+  }
+
+  // Опрос со сроком перерисовывается в момент закрытия
+  setExpireHandler(handler: (uuid: string) => void) {
+    this.onExpire = handler;
   }
 
   setSelf(self: string) {
@@ -42,11 +72,7 @@ export class PollStore {
     this.resolvePeerId = resolve;
   }
 
-  register(uuid: string, chatId: string, question: string, options: string[], opts?: {
-    isPublic?: boolean; isMultiple?: boolean; isQuiz?: boolean; correct?: number[]; solution?: string;
-    // P-44: автор опроса — только он может закрыть
-    author?: string;
-  }) {
+  register(uuid: string, chatId: string, question: string, options: string[], opts?: PollOptions) {
     if (this.byUuid.has(uuid)) return;
     this.byUuid.set(uuid, {
       question,
@@ -59,8 +85,14 @@ export class PollStore {
       isQuiz: Boolean(opts?.isQuiz),
       correct: opts?.correct || [],
       solution: opts?.solution,
+      closeAt: opts?.closeAt || undefined,
+      createdAt: opts?.createdAt,
+      noRevote: Boolean(opts?.noRevote),
+      shuffle: Boolean(opts?.shuffle),
+      hideResults: Boolean(opts?.hideResults),
       votes: new Map(),
     });
+    this.scheduleExpire(uuid);
   }
 
   has(uuid: string) {
@@ -83,11 +115,13 @@ export class PollStore {
     return Boolean(entry && entry.chatId === chatId);
   }
 
-  applyVote(uuid: string, voter: string, options: number[]) {
+  // `atMs` — время голоса (у истории — время отправки), чтобы срок не отбрасывал старые голоса после reload
+  applyVote(uuid: string, voter: string, options: number[], atMs = Date.now()) {
     const entry = this.byUuid.get(uuid);
     if (!entry || entry.closed) return;
-    // Quiz: голос финален, отзыв и переголосование запрещены
-    if (entry.isQuiz && entry.votes.has(voter)) return;
+    if (entry.closeAt && atMs > entry.closeAt + CLOSE_GRACE_MS) return;
+    // Quiz и опрос без переголосования: голос финален
+    if ((entry.isQuiz || entry.noRevote) && entry.votes.has(voter)) return;
     if (options.length) entry.votes.set(voter, options);
     else entry.votes.delete(voter); // пустой = отзыв голоса
   }
@@ -95,6 +129,25 @@ export class PollStore {
   close(uuid: string) {
     const entry = this.byUuid.get(uuid);
     if (entry) entry.closed = true;
+  }
+
+  private isClosed(entry: PollEntry) {
+    return entry.closed || Boolean(entry.closeAt && Date.now() >= entry.closeAt);
+  }
+
+  private scheduleExpire(uuid: string) {
+    const entry = this.byUuid.get(uuid);
+    if (!entry?.closeAt || this.timers.has(uuid)) return;
+    const delay = entry.closeAt - Date.now();
+    if (delay <= 0) return;
+    this.timers.set(uuid, window.setTimeout(() => {
+      this.timers.delete(uuid);
+      if (delay > MAX_TIMER_MS) {
+        this.scheduleExpire(uuid);
+        return;
+      }
+      this.onExpire?.(uuid);
+    }, Math.min(delay, MAX_TIMER_MS)));
   }
 
   // Адреса проголосовавших за конкретный вариант (для «кто голосовал»)
@@ -129,7 +182,8 @@ export class PollStore {
 
     // Правильные ответы и пояснение раскрываются только после собственного
     // голоса или закрытия — до того quiz выглядит как обычный опрос
-    const isRevealed = entry.closed || myChoices.length > 0;
+    const isClosed = this.isClosed(entry);
+    const isRevealed = isClosed || myChoices.length > 0;
 
     const answers = entry.options.map((text, idx) => ({
       text: { text },
@@ -154,10 +208,17 @@ export class PollStore {
         hash: '0',
         question: { text: entry.question },
         answers,
-        isClosed: entry.closed ? true : undefined,
+        isClosed: isClosed ? true : undefined,
         isPublic: entry.isPublic ? true : undefined,
         isMultipleChoice: entry.isMultiple ? true : undefined,
         isQuiz: entry.isQuiz ? true : undefined,
+        isCreator: entry.author && entry.author === this.self ? true : undefined,
+        isRevoteDisabled: entry.noRevote ? true : undefined,
+        shouldShuffleAnswers: entry.shuffle ? true : undefined,
+        shouldHideResultsUntilClose: entry.hideResults ? true : undefined,
+        closeDate: entry.closeAt ? Math.floor(entry.closeAt / 1000) : undefined,
+        closePeriod: entry.closeAt && entry.createdAt
+          ? Math.max(1, Math.round((entry.closeAt - entry.createdAt) / 1000)) : undefined,
       },
       results: {
         totalVoters,
@@ -186,5 +247,9 @@ export function readPollFields(content: Record<string, unknown>) {
     isQuiz: flag('is_quiz', 'quiz'),
     correct: Array.isArray(content.correct) ? (content.correct as number[]) : undefined,
     solution: typeof content.solution === 'string' ? content.solution : undefined,
+    closeAt: Number(content.close_ms) || undefined,
+    noRevote: Boolean(content.no_revote),
+    shuffle: Boolean(content.shuffle),
+    hideResults: Boolean(content.hide_results),
   };
 }

@@ -71,7 +71,7 @@ export function getMessageTranscription(message: ApiMessage) {
 export function hasMessageText(message: MediaContainer) {
   const {
     action, text, sticker, photo, video, audio, voice, document, pollId, todo, dice,
-    webPage, contact, invoice, location, game, storyData, giveaway, giveawayResults, paidMedia, taskOffer,
+    webPage, contact, invoice, location, game, storyData, giveaway, giveawayResults, paidMedia, taskOffer, article,
   } = message.content;
 
   if (pollId) return false;
@@ -79,7 +79,7 @@ export function hasMessageText(message: MediaContainer) {
   return Boolean(text) || !(
     sticker || photo || video || audio || voice || document || contact || pollId || todo || webPage
     || invoice || location || game || storyData || giveaway || giveawayResults || dice
-    || paidMedia || taskOffer || action?.type === 'phoneCall'
+    || paidMedia || taskOffer || article || action?.type === 'phoneCall'
   );
 }
 

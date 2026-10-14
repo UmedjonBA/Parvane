@@ -63,6 +63,8 @@ export type V2Content = {
   poll?: {
     question?: string; options?: { text?: string }[]; is_public?: boolean; is_multiple?: boolean;
     is_quiz?: boolean; correct?: number[]; solution?: string;
+    // int64 в JSON движка — строкой
+    close_ms?: string | number; no_revote?: boolean; shuffle?: boolean; hide_results?: boolean;
   };
   poll_vote?: { poll?: V2MessageRef; option_indexes?: number[] };
   poll_close?: { poll?: V2MessageRef };
@@ -77,6 +79,8 @@ export type V2Content = {
   task_response?: { offer?: V2MessageRef; decision?: string; text?: string };
   // spec 016 (CLOUD-1): приглашение в совместную папку облака
   cloud_invite?: { container?: { domain?: string; id?: string }; name?: string; role?: number; text?: string };
+  // ARTICLE-1: статья — заметка в Markdown
+  article?: { title?: string; markdown?: string; text?: string };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
   chat_mode?: { l2?: boolean };
@@ -313,6 +317,10 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
           is_quiz: c.is_quiz,
           correct: c.correct,
           solution: c.solution,
+          close_ms: c.close_ms ? String(c.close_ms) : undefined,
+          no_revote: c.no_revote,
+          shuffle: c.shuffle,
+          hide_results: c.hide_results,
         },
       };
       break;
@@ -350,6 +358,9 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
           text: c.text || undefined,
         },
       };
+      break;
+    case 'article':
+      out = { article: { title: c.title, markdown: c.markdown, text: c.text || undefined } };
       break;
     case 'task_response':
       out = {
@@ -417,6 +428,10 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       is_quiz: c.poll.is_quiz || undefined,
       correct: c.poll.correct,
       solution: c.poll.solution || undefined,
+      close_ms: Number(c.poll.close_ms) || undefined,
+      no_revote: c.poll.no_revote || undefined,
+      shuffle: c.poll.shuffle || undefined,
+      hide_results: c.poll.hide_results || undefined,
     };
   } else if (c.poll_vote) {
     out = { kind: 'poll_vote', poll: b64ToUuid(c.poll_vote.poll?.op_id), options: c.poll_vote.option_indexes || [] };
@@ -445,6 +460,13 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       name: c.cloud_invite.name || '',
       role: c.cloud_invite.role || undefined,
       text: c.cloud_invite.text || undefined,
+    };
+  } else if (c.article) {
+    out = {
+      kind: 'article',
+      title: c.article.title || '',
+      markdown: c.article.markdown || '',
+      text: c.article.text || undefined,
     };
   } else if (c.task_response) {
     out = {

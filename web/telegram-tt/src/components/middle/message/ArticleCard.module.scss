@@ -1,0 +1,65 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 14rem;
+  max-width: 24rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.head {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+}
+
+.badge {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.75rem;
+
+  font-size: 1.25rem;
+  color: var(--color-white);
+
+  background: var(--color-primary);
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.label {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.title {
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.preview {
+  margin: 0;
+
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.actions {
+  display: flex;
+
+  :global(.Button) {
+    width: auto;
+  }
+}
