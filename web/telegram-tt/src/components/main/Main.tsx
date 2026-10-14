@@ -200,7 +200,8 @@ const INVITE_OFFLINE_NOTICE_MS = 15000;
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
 // Parvane (B2): разделы и палитра — вне критического пути старта, но заранее: первый переход без ожидания
-const PARVANE_BUNDLE_LOADING_DELAY_MS = 3000;
+// Куски разделов нужны при первом же нажатии в боковой панели — грузим сразу после оболочки
+const PARVANE_BUNDLE_LOADING_DELAY_MS = 300;
 const OWN_PROFILE_CLOSE_DURATION = 450;
 
 let DEBUG_isLogged = false;

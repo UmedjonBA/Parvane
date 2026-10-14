@@ -12,7 +12,8 @@ import type { NoteEditRequest } from './NoteView';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumeNoteRequest, getKnowledgeView, getNoteRequest, setKnowledgeView,
+  consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getNoteRequest, getParvaneSection,
+  setKnowledgeView,
 } from '../../../util/parvaneSection';
 import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { openPalette } from '../palette/paletteOpen';
@@ -152,7 +153,10 @@ const Knowledge = () => {
   const guideLang = getGuideLang(lang.code);
 
   // Пока раздел открыт, изменения облака применяются к заметкам сразу; закрыт — при следующем открытии
-  useEffect(() => retainNotes(), []);
+  // Зависимости — сигналы раздела: по ним значение пересчитывается
+  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  const isShown = useDerivedState(() => getIsParvaneScreenShown('knowledge'), [getParvaneSection, getKnowledgeView]);
+  useEffect(() => (isShown ? retainNotes() : undefined), [isShown]);
 
   useEffect(() => {
     void loadNotes(currentUserId, { guideLang, vaultName });

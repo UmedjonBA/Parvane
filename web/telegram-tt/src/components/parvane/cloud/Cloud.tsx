@@ -14,6 +14,7 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
+import { getIsParvaneScreenShown, getKnowledgeView, getParvaneSection } from '../../../util/parvaneSection';
 import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { formatFileSize } from '../../../util/textFormat';
 import { openPalette } from '../palette/paletteOpen';
@@ -135,11 +136,15 @@ const Cloud = ({ isMobile }: OwnProps) => {
     void loadCloud(currentUserId);
   }, [currentUserId]);
 
-  // Пока раздел открыт, сервер опрашивается часто; закрыт — редко
+  // Пока раздел на экране, сервер опрашивается часто; скрыт (раздел остаётся смонтированным) — редко
+  // Зависимости — сигналы раздела: по ним значение пересчитывается
+  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  const isShown = useDerivedState(() => getIsParvaneScreenShown('files'), [getParvaneSection, getKnowledgeView]);
   useEffect(() => {
+    if (!isShown) return undefined;
     setCloudActive(true);
     return () => setCloudActive(false);
-  }, []);
+  }, [isShown]);
 
   useEffect(() => {
     if (!query.trim()) {

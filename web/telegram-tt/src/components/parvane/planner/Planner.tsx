@@ -10,7 +10,8 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  consumePlannerAddRequest, consumePlannerSettingsRequest, getPlannerAddRequest, getPlannerCalendarView,
+  consumePlannerAddRequest, consumePlannerSettingsRequest, getIsParvaneScreenShown, getParvaneSection,
+  getPlannerAddRequest, getPlannerCalendarView,
   getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView, setPlannerCalendarView, setPlannerPickedDay,
   setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
@@ -164,10 +165,14 @@ const Planner = () => {
   }, [currentUserId]);
 
   // Раздел на экране: провайдер опрашивает движок чаще, скрыт — реже
+  // Зависимости — сигналы раздела: по ним значение пересчитывается
+  // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
+  const isShown = useDerivedState(() => getIsParvaneScreenShown('planner'), [getParvaneSection]);
   useEffect(() => {
+    if (!isShown) return undefined;
     setPlannerActive(true);
     return () => setPlannerActive(false);
-  }, []);
+  }, [isShown]);
 
   // Смена суток при открытом «Плане»: «сегодня» и завершённость вчерашнего дня обновляются сами
   useEffect(() => {

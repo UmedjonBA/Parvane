@@ -691,6 +691,11 @@ export function createCloudSync(deps: Deps) {
   }
 
   function setActive(active: boolean) {
+    // Открытый раздел — потребитель облака: после сброса сессии (привязка устройства) опрос иначе не возобновлялся
+    if (active) {
+      isWanted = true;
+      setListeners();
+    }
     if (isActive === active) return;
     isActive = active;
     if (active && !isHidden()) void syncNow(true);

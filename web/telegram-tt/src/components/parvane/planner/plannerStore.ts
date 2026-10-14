@@ -142,7 +142,7 @@ function isAppliedEngineState(result: StateResult) {
  */
 export function setPlannerActive(isActive: boolean) {
   try {
-    void callParvane('parvanePlannerSetActive', isActive).catch(() => undefined);
+    void callParvane('parvanePlannerSetActive', { isActive }).catch(() => undefined);
   } catch {
     // Метода нет
   }
