@@ -300,6 +300,9 @@ try {
     });
     await window.__parvaneDiagCallApi('parvanePlannerFlush');
   }, { day: todayKey() });
+  // Скрытый раздел опрашивает сервер редко (раз в минуту) — сходимость ждём при открытом «Плане»
+  await openPlanner(sessions.bob1.page);
+  await openPlanner(sessions.bob2.page);
   await waitFor(async () => {
     const state = await sessions.bob1.page.evaluate(() => window.__parvaneDiagCallApi('parvanePlannerState'));
     const task = state?.state?.tasks?.find((t) => t.name === seriesName);

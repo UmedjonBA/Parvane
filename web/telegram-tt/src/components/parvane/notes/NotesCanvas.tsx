@@ -1283,13 +1283,21 @@ const NotesCanvas = ({
 
   // ── меню по правой кнопке и долгому нажатию ──
   // Меню в точке экрана: для того, что под ней (оно становится выделенным), либо для пустого места
+  // Узел под указателем. Полоса захвата вдоль рамки группы широкая и накрывает стрелки у края группы:
+  // на самой линии стрелки нажатие достаётся стрелке, а не группе
+  const nodeUnder = (hit: Element, point: CanvasPoint, edgeHit: number) => {
+    const nodeId = hit.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    if (!nodeId || !hit.closest('[data-canvas-group-band]')) return nodeId;
+    return edgeAt(docRef.current, point, edgeHit) ? undefined : nodeId;
+  };
+
   const openMenuAt = (clientX: number, clientY: number) => {
     finishInline();
     dropGesture();
     const box = boardRef.current!.getBoundingClientRect();
     const point = toCanvas({ clientX, clientY });
     const hit = document.elementFromPoint(clientX, clientY);
-    const nodeId = hit?.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    const nodeId = hit ? nodeUnder(hit, point, EDGE_HIT_TOUCH / viewRef.current.scale) : undefined;
     const edgeId = nodeId ? undefined : edgeAt(docRef.current, point, EDGE_HIT_TOUCH / viewRef.current.scale);
     const current = selectionRef.current;
     if (nodeId && !current.nodes.includes(nodeId)) selectNodes([nodeId]);
@@ -1460,7 +1468,8 @@ const NotesCanvas = ({
     const pan = (tapKey?: string): Gesture => ({
       kind: 'pan', x: e.clientX, y: e.clientY, hasMoved: false, tapKey,
     });
-    const nodeId = target.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    const edgeHit = (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / viewRef.current.scale;
+    const nodeId = nodeUnder(target, point, edgeHit);
     const port = target.closest<HTMLElement>('[data-canvas-port]')?.dataset.canvasPort as CanvasSide | undefined;
     const handle = target.closest<HTMLElement>('[data-canvas-handle]')?.dataset.canvasHandle as
       CanvasHandle | undefined;
@@ -1473,9 +1482,7 @@ const NotesCanvas = ({
       nodeId,
       port: port && CANVAS_SIDES.includes(port) ? port : undefined,
       handle,
-      edgeId: nodeId ? undefined : edgeAt(
-        docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / viewRef.current.scale,
-      ),
+      edgeId: nodeId ? undefined : edgeAt(docRef.current, point, edgeHit),
     });
     switch (action.kind) {
       // Средняя кнопка и пробел двигают поле, что бы ни было под указателем
@@ -1735,12 +1742,12 @@ const NotesCanvas = ({
     // Указатель захвачен полем холста: целью события бывает само поле, а не карточка под курсором
     const hit = document.elementFromPoint(e.clientX, e.clientY) || target;
     if (hit.closest(`${PASSIVE_SELECTOR}, [data-canvas-handle], [data-canvas-port]`)) return;
-    const nodeId = hit.closest<HTMLElement>('[data-canvas-node]')?.dataset.canvasNode;
+    const point = toCanvas(e);
+    const nodeId = nodeUnder(hit, point, EDGE_HIT / viewRef.current.scale);
     if (nodeId) {
       activate(nodeId, notePartAt(hit));
       return;
     }
-    const point = toCanvas(e);
     const edgeId = edgeAt(docRef.current, point, EDGE_HIT / viewRef.current.scale);
     activateKey(edgeId ? `edge:${edgeId}` : TAP_BOARD, point);
   });

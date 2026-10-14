@@ -134,10 +134,10 @@ const CanvasCard = ({
         )}
         style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
       >
-        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeTop)} />
-        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeRight)} />
-        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeBottom)} />
-        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeLeft)} />
+        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeTop)} data-canvas-group-band />
+        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeRight)} data-canvas-group-band />
+        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeBottom)} data-canvas-group-band />
+        <i className={buildClassName(styles.canvasGroupEdge, styles.canvasGroupEdgeLeft)} data-canvas-group-band />
         {/* Шапка вдоль верхнего края: за неё группу берут, по двойному нажатию называют */}
         <div className={styles.canvasGroupHead} data-canvas-group-head>
           {inline ? (
