@@ -1951,7 +1951,7 @@
 "KnowledgeLinks" = "Связи";
 "KnowledgeNearest" = "ближайшее";
 "KnowledgePlannedHint" = "со ссылкой сюда";
-"KnowledgeCanvasHint" = "двойной клик — новая карточка, правка текста и заметок · группу двигают за любое место внутри · Shift и рамка — выделить несколько · правая кнопка — меню";
+"KnowledgeCanvasHint" = "двойной клик — новая карточка, правка текста и заметок · группу двигают за полосу с названием или за рамку · Shift и рамка — выделить несколько · правая кнопка — меню";
 "KnowledgeGraphKindNote" = "заметка";
 "KnowledgeGraphKindDay" = "ежедневная заметка";
 "KnowledgeGraphKindMissing" = "заметки ещё нет";

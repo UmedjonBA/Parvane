@@ -3,6 +3,7 @@ import {
 } from '../../../lib/teact/teact';
 
 import type { GlobalState } from '../../../global/types';
+import type { KnowledgeView } from '../../../util/parvaneSection';
 import type { GraphCanvasScope } from './notesCanvasGraph';
 import type { FolderSubmitError, NoteGroup } from './notesFolders';
 import type { GraphLinkOutcome, GraphPick } from './NotesGraph';
@@ -136,6 +137,8 @@ const Knowledge = () => {
   const [isRestoreOpen, openRestore, closeRestore] = useFlag();
   // Граф: точка, открытая в панели справа, заметка-источник режима «Связать», просьба о правке, сообщение
   const [graphPick, setGraphPick] = useState<GraphPick>();
+  // Вкладка, на которой заметку выбрали: панель графа не переезжает на холст и обратно
+  const [pickView, setPickView] = useState<KnowledgeView>();
   const [linkFromId, setLinkFromId] = useState<string>();
   const [editRequest, setEditRequest] = useState<NoteEditRequest>();
   const [graphNotice, setGraphNotice] = useState<GraphNotice>();
@@ -413,7 +416,7 @@ const Knowledge = () => {
   // Точка, чья заметка или запись исчезла, панель не держит
   // Панель заметки стоит рядом с графом и рядом с холстом (там её открывает кнопка карточки)
   const isPanelView = view === 'graph' || view === 'canvas';
-  const shownPick = isPanelView && status === 'ready' && graphPick
+  const shownPick = isPanelView && pickView === view && status === 'ready' && graphPick
     && (graphPick.kind === 'missing' || pickNote || pickRecord) ? graphPick : undefined;
 
   const showGraphNotice = useLastCallback((text: string, undo?: NoneToVoidFunction) => {
@@ -424,6 +427,7 @@ const Knowledge = () => {
     const note = noteId ? getNotes().find(({ id }) => id === noteId) : undefined;
     if (!note) return;
     setEditRequest(undefined);
+    setPickView(getKnowledgeView());
     setGraphPick({
       id: note.id, kind: note.isDaily ? 'day' : 'note', title: note.title, group: note.folder,
     });
@@ -436,6 +440,7 @@ const Knowledge = () => {
 
   const handleGraphPick = useLastCallback((node: GraphPick) => {
     setEditRequest(undefined);
+    setPickView(getKnowledgeView());
     setGraphPick(node);
   });
 

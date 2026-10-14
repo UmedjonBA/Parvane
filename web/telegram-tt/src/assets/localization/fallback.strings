@@ -3865,7 +3865,7 @@
 "KnowledgeLinks" = "Links";
 "KnowledgeNearest" = "next";
 "KnowledgePlannedHint" = "linking here";
-"KnowledgeCanvasHint" = "double-click: new card, edit text and notes · drag a group by its inside · Shift+drag: select several · right-click: menu";
+"KnowledgeCanvasHint" = "double-click: new card, edit text and notes · drag a group by its title bar or border · Shift+drag: select several · right-click: menu";
 "KnowledgeGraphKindNote" = "note";
 "KnowledgeGraphKindDay" = "daily note";
 "KnowledgeGraphKindMissing" = "no such note yet";
