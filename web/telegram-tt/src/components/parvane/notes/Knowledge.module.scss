@@ -1363,6 +1363,8 @@
 // Рамка группы пропускает нажатия до поля, и что начнёт нажатие внутри неё, решает поле: сдвиг группы, с Shift —
 // рамку выделения, двойное — новую карточку. Шапка, граница и ручки ловят нажатия сами
 .canvasGroup {
+  --canvas-group-grab: 1.5rem;
+
   pointer-events: none;
 
   position: absolute;
@@ -1374,9 +1376,13 @@
   background: color-mix(in srgb, var(--gc, var(--pv-line2)) 7%, transparent);
 
   transition: background-color 0.15s;
+
+  @media (pointer: coarse) {
+    --canvas-group-grab: 2.25rem;
+  }
 }
 
-// Указатель над группой (над шапкой, границей либо пустым местом внутри): перетаскивание возьмёт её
+// Указатель над шапкой либо границей группы: перетаскивание возьмёт её
 .canvasGroupHover {
   background: color-mix(in srgb, var(--gc, var(--pv-line2)) 13%, transparent);
 
@@ -1424,34 +1430,36 @@
   }
 }
 
+// Полоса захвата вдоль границы — широкая и в основном внутри рамки: попасть легко, а середина группы
+// остаётся полю (сдвиг холста). Под пальцем полоса шире
 .canvasGroupEdgeTop,
 .canvasGroupEdgeBottom {
   right: 0;
   left: 0;
-  height: 0.875rem;
+  height: var(--canvas-group-grab);
 }
 
 .canvasGroupEdgeLeft,
 .canvasGroupEdgeRight {
   top: 0;
   bottom: 0;
-  width: 0.875rem;
+  width: var(--canvas-group-grab);
 }
 
 .canvasGroupEdgeTop {
-  top: -0.5rem;
+  top: -0.375rem;
 }
 
 .canvasGroupEdgeBottom {
-  bottom: -0.5rem;
+  bottom: -0.375rem;
 }
 
 .canvasGroupEdgeLeft {
-  left: -0.5rem;
+  left: -0.375rem;
 }
 
 .canvasGroupEdgeRight {
-  right: -0.5rem;
+  right: -0.375rem;
 }
 
 .canvasGroupLabel {

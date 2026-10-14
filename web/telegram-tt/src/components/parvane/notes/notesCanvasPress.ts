@@ -1,13 +1,11 @@
 // Parvane, раздел «Знания»: что начинает нажатие на поле холста — сдвиг поля, сдвиг группы или карточки,
 // рамку выделения, размер, стрелку. Чистые функции: решение по тому, что лежит под указателем.
 
-import type {
-  CanvasDoc, CanvasNode, CanvasPoint, CanvasSide,
-} from './notesCanvas';
+import type { CanvasSide } from './notesCanvas';
 import type { CanvasHandle } from './notesCanvasEdit';
 
 // Нажатие: клавиши и режимы плюс то, что под указателем. `nodeId` — узел, найденный по элементу страницы
-// (карточка, а у группы — шапка, граница и ручки); `groupId` — группа, внутри которой лежит точка
+// (карточка, а у группы — шапка, граница и ручки)
 export type CanvasPress = {
   // Средняя кнопка либо зажатый пробел: поле двигается, что бы ни было под указателем
   isPanForced?: boolean;
@@ -19,7 +17,6 @@ export type CanvasPress = {
   port?: CanvasSide;
   handle?: CanvasHandle;
   edgeId?: string;
-  groupId?: string;
 };
 
 export type CanvasPressAction =
@@ -30,30 +27,15 @@ export type CanvasPressAction =
   | { kind: 'node'; id: string }
   | { kind: 'edge'; id: string }
   | { kind: 'marquee' }
-  | { kind: 'group'; id: string }
   | { kind: 'board' };
-
-// Группа, внутри которой лежит точка (граница считается). Из вложенных — самая внутренняя: наименьшая по
-// площади, при равенстве — та, что нарисована выше
-export function groupAtPoint(doc: CanvasDoc, point: CanvasPoint): CanvasNode | undefined {
-  let found: CanvasNode | undefined;
-  doc.nodes.forEach((node) => {
-    if (node.type !== 'group') return;
-    if (point.x < node.x || point.y < node.y || point.x > node.x + node.width || point.y > node.y + node.height) {
-      return;
-    }
-    if (!found || node.width * node.height <= found.width * found.height) found = node;
-  });
-  return found;
-}
 
 // Что начинает нажатие. По старшинству: сдвиг поля средней кнопкой и пробелом; точка стрелки и ручка
 // размера (они лежат поверх узла); выбор второй карточки в режиме «Связать»; узел под указателем; стрелка;
-// рамка выделения (с Shift она рисуется и внутри группы); пустое место внутри группы — сдвиг этой группы;
-// пустое место вне групп — сдвиг поля
+// рамка выделения (с Shift она рисуется и внутри группы); пустое место — сдвиг поля, и внутри группы тоже:
+// группу берут только за шапку и границу (на телефоне большая группа иначе не давала двигаться по холсту)
 export function pressAction(press: CanvasPress): CanvasPressAction {
   const {
-    isPanForced, isAdditive, isLinking, nodeId, port, handle, edgeId, groupId,
+    isPanForced, isAdditive, isLinking, nodeId, port, handle, edgeId,
   } = press;
   if (isPanForced) return { kind: 'pan' };
   if (nodeId && port) return { kind: 'arrow', id: nodeId, side: port };
@@ -62,6 +44,5 @@ export function pressAction(press: CanvasPress): CanvasPressAction {
   if (nodeId) return { kind: 'node', id: nodeId };
   if (edgeId) return { kind: 'edge', id: edgeId };
   if (isAdditive) return { kind: 'marquee' };
-  if (groupId) return { kind: 'group', id: groupId };
   return { kind: 'board' };
 }

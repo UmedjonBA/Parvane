@@ -140,6 +140,17 @@ function fireOn(element: Element, type: string, at: Point) {
   element.dispatchEvent(event);
 }
 
+// Группу берут за шапку (полоса с названием над рамкой): нажатие на самом элементе, дальше — движения по полю
+const HEAD = { x: -400, y: 90 };
+async function dragGroup(dx: number, dy: number) {
+  const head = find('[data-canvas-node="pair"] [data-canvas-group-head]');
+  fireOn(head, 'pointermove', HEAD);
+  fireOn(head, 'pointerdown', HEAD);
+  fire('pointermove', { x: HEAD.x + dx / 2, y: HEAD.y + dy / 2 });
+  fire('pointermove', { x: HEAD.x + dx, y: HEAD.y + dy });
+  await frame();
+}
+
 // Стрелка от правой стороны карточки «Альфа», брошенная в точке холста
 async function dragArrow(to: Point) {
   const start = { x: -430, y: 150 };
@@ -187,11 +198,11 @@ afterEach(() => {
 });
 
 describe('холст: нажатия мыши', () => {
-  it('пустое место внутри группы двигает её вместе с карточками, поле стоит', async () => {
+  it('шапка группы двигает её вместе с карточками, поле стоит', async () => {
     await mount();
     const view = viewOf();
-    await drag(IN_CORNER, 120, -80);
-    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    await dragGroup(120, -80);
+    await drop({ x: HEAD.x + 120, y: HEAD.y - 80 });
     expect(placeOf('pair')).toEqual([-580, 20]);
     expect(placeOf('alpha')).toEqual([-560, 40]);
     expect(placeOf('beta')).toEqual([-240, 40]);
@@ -200,14 +211,26 @@ describe('холст: нажатия мыши', () => {
     expect(barActions()).toContain('fit');
   });
 
+  it('пустое место внутри группы двигает поле, группа и карточки стоят', async () => {
+    await mount();
+    const view = viewOf();
+    await drag(IN_CORNER, 120, -80);
+    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    expect(viewOf()[0]).not.toBe(view[0]);
+    expect(viewOf()[1]).not.toBe(view[1]);
+    expect(placeOf('pair')).toEqual([-700, 100]);
+    expect(placeOf('alpha')).toEqual([-680, 120]);
+    expect(root.querySelector('[data-canvas-selection-bar]')).toBeNull();
+  });
+
   it('снятое со стрелки выделение не роняет отрисовку: следующий жест работает', async () => {
     const onError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await mount();
     await press(ON_EDGE);
     expect(barActions()).toContain('direction');
-    // Нажатие в стороне от линии, внутри группы: выделение переходит со стрелки на группу
-    await drag(IN_CORNER, 120, -80);
-    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    // Группу берут за шапку: выделение переходит со стрелки на группу
+    await dragGroup(120, -80);
+    await drop({ x: HEAD.x + 120, y: HEAD.y - 80 });
     expect(onError).not.toHaveBeenCalled();
     expect(placeOf('pair')).toEqual([-580, 20]);
     expect(barActions()).not.toContain('direction');
@@ -222,15 +245,16 @@ describe('холст: нажатия мыши', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     await frame();
     expect(root.querySelector('[data-canvas-selection-bar]')).toBeNull();
-    await drag(IN_CORNER, 120, -80);
-    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    await dragGroup(120, -80);
+    await drop({ x: HEAD.x + 120, y: HEAD.y - 80 });
     expect(placeOf('pair')).toEqual([-580, 20]);
   });
 
-  it('нажатие без сдвига внутри группы её выделяет', async () => {
+  it('нажатие без сдвига внутри группы снимает выделение, группа стоит', async () => {
     await mount();
+    await press(ON_EDGE);
     await press(IN_CORNER);
-    expect(barActions()).toContain('fit');
+    expect(root.querySelector('[data-canvas-selection-bar]')).toBeNull();
     expect(placeOf('pair')).toEqual([-700, 100]);
   });
 
@@ -274,16 +298,17 @@ describe('холст: перерисовки во время жеста', () => 
     await mount({ ...DOC, nodes: [...DOC.nodes, FAR] });
     const farBefore = getCanvasCardRenders('far');
     const alphaBefore = getCanvasCardRenders('alpha');
-    fire('pointermove', IN_CORNER);
-    fire('pointerdown', IN_CORNER);
+    const head = find('[data-canvas-node="pair"] [data-canvas-group-head]');
+    fireOn(head, 'pointermove', HEAD);
+    fireOn(head, 'pointerdown', HEAD);
     for (let step = 1; step <= 8; step++) {
-      fire('pointermove', { x: IN_CORNER.x + step * 15, y: IN_CORNER.y - step * 10 });
+      fire('pointermove', { x: HEAD.x + step * 15, y: HEAD.y - step * 10 });
       await frame();
     }
     // Сдвинутые карточки отрисовались по шагам, несдвинутая — ни разу
     expect(getCanvasCardRenders('alpha')).toBeGreaterThan(alphaBefore);
     expect(getCanvasCardRenders('far')).toBe(farBefore);
-    await drop({ x: IN_CORNER.x + 120, y: IN_CORNER.y - 80 });
+    await drop({ x: HEAD.x + 120, y: HEAD.y - 80 });
     expect(placeOf('pair')).toEqual([-580, 20]);
     expect(placeOf('far')).toEqual([900, 900]);
     expect(getCanvasCardRenders('far')).toBe(farBefore);

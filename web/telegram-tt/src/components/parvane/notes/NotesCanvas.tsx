@@ -53,7 +53,7 @@ import { arrowPath, CANVAS_TONES, curvePath } from './notesCanvasLook';
 import {
   droppedCardPlace, inlineKeyAction, nextNoteTitle, NOTE_TITLE_MAX, noteCardAction, relinkNoteCards,
 } from './notesCanvasNote';
-import { groupAtPoint, pressAction } from './notesCanvasPress';
+import { pressAction } from './notesCanvasPress';
 import { folderColor, isDayTitle } from './notesLook';
 import { parseNote } from './notesModel';
 import { readCanvasImageQuality, writeCanvasImageQuality } from './notesPrefs';
@@ -1466,7 +1466,6 @@ const NotesCanvas = ({
       CanvasHandle | undefined;
     const isAdditive = e.shiftKey || e.ctrlKey || e.metaKey || isSelectMode;
     const current = selectionRef.current;
-    // Пустое место: под указателем нет ни карточки, ни шапки или границы группы
     const action = pressAction({
       isPanForced: e.button === 1 || isSpaceDownRef.current,
       isAdditive,
@@ -1477,7 +1476,6 @@ const NotesCanvas = ({
       edgeId: nodeId ? undefined : edgeAt(
         docRef.current, point, (e.pointerType === 'touch' ? EDGE_HIT_TOUCH : EDGE_HIT) / viewRef.current.scale,
       ),
-      groupId: nodeId ? undefined : groupAtPoint(docRef.current, point)?.id,
     });
     switch (action.kind) {
       // Средняя кнопка и пробел двигают поле, что бы ни было под указателем
@@ -1538,17 +1536,7 @@ const NotesCanvas = ({
           kind: 'marquee', origin: point, base: current, hasMoved: false,
         };
         break;
-      // Пустое место внутри группы двигает группу со всем, что в ней лежит; нажатие без сдвига её выделяет.
-      // Двойное нажатие там же — новая текстовая карточка, как на пустом поле
-      case 'group': {
-        const isIn = current.nodes.includes(action.id);
-        const next = isIn ? current : { nodes: [action.id], edges: [] };
-        select(next);
-        setHoverGroup(action.id);
-        startMove(action.id, next.nodes, point, isIn && next.nodes.length > 1 ? action.id : undefined, TAP_BOARD);
-        break;
-      }
-      // Пустое место вне групп двигает поле
+      // Пустое место двигает поле — и вне групп, и внутри группы (группу берут за шапку и границу)
       default:
         select(CANVAS_EMPTY_SELECTION);
         gestureRef.current = pan(TAP_BOARD);
@@ -1560,13 +1548,12 @@ const NotesCanvas = ({
     setLive(liveRef.current);
   };
 
-  // Группа, которую возьмёт перетаскивание из-под указателя: её шапка и граница либо пустое место внутри
+  // Группа, которую возьмёт перетаскивание из-под указателя: её шапка и граница
   const hoverGroupAt = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as Element;
     if (target.closest(PASSIVE_SELECTOR)) return undefined;
     const element = target.closest<HTMLElement>('[data-canvas-node]');
-    if (element) return element.dataset.canvasType === 'group' ? element.dataset.canvasNode : undefined;
-    return groupAtPoint(docRef.current, toCanvas(e))?.id;
+    return element?.dataset.canvasType === 'group' ? element.dataset.canvasNode : undefined;
   };
 
   const handlePointerLeave = useLastCallback(() => setHoverGroup(undefined));
