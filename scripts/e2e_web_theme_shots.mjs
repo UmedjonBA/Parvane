@@ -46,7 +46,17 @@ try {
         await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
         await page.locator('#planner-quick-input').fill(line);
         await page.locator('#planner-quick-input').press('Enter');
-        await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+        await page.locator('#planner-quick-input').waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+          .catch(async (error) => {
+            const failDir = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+            if (failDir) await page.screenshot({ path: `${failDir}/theme-quick-failure.png` });
+            console.log(`окно ввода не закрылось после «${line}»; история ${await page.evaluate(() => JSON.stringify({
+              cursor: window.TEST_getHistoryCursor?.(),
+              state: window.TEST_getHistoryState?.()?.map((r) => (r ? { i: r.index, c: r.isClosed } : r)),
+              real: window.history.state,
+            }))}`);
+            throw error;
+          });
       }
       await shot('today');
       await planner.getByRole('button', { name: '+ Entry', exact: true }).click();

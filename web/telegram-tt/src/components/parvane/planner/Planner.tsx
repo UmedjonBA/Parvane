@@ -11,8 +11,8 @@ import type { PlannerFormParams } from './PlannerTaskForm';
 import buildClassName from '../../../util/buildClassName';
 import {
   consumePlannerAddRequest, consumePlannerSettingsRequest, getIsParvaneScreenShown, getParvaneSection,
-  getPlannerAddRequest, getPlannerCalendarView,
-  getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView, setPlannerCalendarView, setPlannerPickedDay,
+  getPlannerAddRequest, getPlannerCalendarView, getPlannerPickedDay, getPlannerSettingsRequest, getPlannerView,
+  setParvaneSection, setPlannerCalendarView, setPlannerPickedDay,
   setPlannerView, showPlannerCalendar,
 } from '../../../util/parvaneSection';
 import { consumePlannerRecordRequest, getPlannerRecordRequest, openPalette } from '../palette/paletteOpen';
@@ -42,6 +42,7 @@ import Icon from '../../common/icons/Icon';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
 import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
+import SectionHistoryBack from '../SectionHistoryBack';
 import PlannerAgenda from './PlannerAgenda';
 import PlannerDateNav from './PlannerDateNav';
 import PlannerDayPanel from './PlannerDayPanel';
@@ -712,6 +713,16 @@ const Planner = () => {
     );
   }
 
+  // Системное «назад»: открытая форма, карточка записи либо настройки — закрыть, иначе — к чатам
+  const handleHistoryBack = useLastCallback(() => {
+    if (!side) {
+      setParvaneSection('messenger');
+      return false;
+    }
+    handleCloseSide();
+    return true;
+  });
+
   return (
     <div
       id="ParvanePlanner"
@@ -721,6 +732,7 @@ const Planner = () => {
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
+      {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={styles.body}>
         <main className={styles.page}>
           {/* Компьютер: экраны «Плана» — кнопки боковой панели, вкладок в шапке нет */}

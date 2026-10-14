@@ -14,7 +14,9 @@ import type { CloudPlace, CloudVirtualFolder } from './cloudStore';
 
 import { IS_TOUCH_ENV, MAX_BUFFER_SIZE } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
-import { getIsParvaneScreenShown, getKnowledgeView, getParvaneSection } from '../../../util/parvaneSection';
+import {
+  getIsParvaneScreenShown, getKnowledgeView, getParvaneSection, setParvaneSection,
+} from '../../../util/parvaneSection';
 import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { formatFileSize } from '../../../util/textFormat';
 import { openPalette } from '../palette/paletteOpen';
@@ -41,6 +43,7 @@ import MenuItem from '../../ui/MenuItem';
 import SearchForm from '../../ui/SearchForm';
 import KnowledgeTabs from '../notes/KnowledgeTabs';
 import PvIcon from '../notes/PvIcon';
+import SectionHistoryBack from '../SectionHistoryBack';
 import { CloudFolderDialog, CloudNameDialog } from './CloudDialogs';
 import CloudItem from './CloudItem';
 import CloudLinkDialog from './CloudLinkDialog';
@@ -270,6 +273,21 @@ const Cloud = ({ isMobile }: OwnProps) => {
   });
 
   const handleOpenContainer = useLastCallback((id: string) => goTo(placeOf(id)));
+
+  // Системное «назад»: из папки — в родительскую, из корня — к чатам
+  const handleHistoryBack = useLastCallback(() => {
+    if (path.length) {
+      handleOpenFolder(path[path.length - 2]?.id);
+    } else if (place.container) {
+      goTo({ view: place.view });
+    } else if (place.view) {
+      goTo({});
+    } else {
+      setParvaneSection('messenger');
+      return false;
+    }
+    return true;
+  });
 
   const handleOpen = useLastCallback((entryContainer: string, node: CloudNode) => {
     if (node.kind === 'folder') {
@@ -759,6 +777,7 @@ const Cloud = ({ isMobile }: OwnProps) => {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {isShown && <SectionHistoryBack onBack={handleHistoryBack} />}
       <div className={buildClassName(kit.island, styles.page)}>
         <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
           {!isMobile && <h1 className={buildClassName(kit.hdrTitle, kit.hideM)}>{lang('ParvaneSectionKnowledge')}</h1>}

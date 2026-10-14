@@ -55,8 +55,8 @@ let deferredPopstateOperations: HistoryOperationState[] = [];
 let isSafariGestureAnimation = false;
 let isHistoryInitialized = false;
 
-// Do not remove: used for history unit tests
-if (IS_TEST) {
+// Do not remove: used for history unit tests (Parvane: и в диагностической сборке сценариев)
+if (IS_TEST || import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1') {
   (window as any).TEST_getHistoryState = () => historyState;
   (window as any).TEST_getHistoryCursor = () => historyCursor;
 }

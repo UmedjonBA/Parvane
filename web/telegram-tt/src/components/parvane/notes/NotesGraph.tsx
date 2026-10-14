@@ -353,6 +353,7 @@ const NotesGraph = ({
   const worldRef = useRef<HTMLDivElement>();
   const newInputRef = useRef<HTMLInputElement>();
   const foldersRef = useRef<HTMLSpanElement>();
+  const folderMenuRef = useRef<HTMLDivElement>();
   const [withDays, setWithDays] = useState(false);
   const [withRecords, setWithRecords] = useState(false);
   // Выбор папок запоминается на устройстве; `undefined` — все папки
@@ -894,7 +895,9 @@ const NotesGraph = ({
   useEffect(() => {
     if (!isFolderMenuOpen) return undefined;
     const handleOutside = (e: PointerEvent) => {
-      if (!foldersRef.current?.contains(e.target as Node)) setIsFolderMenuOpen(false);
+      const target = e.target as Node;
+      if (foldersRef.current?.contains(target) || folderMenuRef.current?.contains(target)) return;
+      setIsFolderMenuOpen(false);
     };
     document.addEventListener('pointerdown', handleOutside, true);
     return () => document.removeEventListener('pointerdown', handleOutside, true);
@@ -1008,117 +1011,123 @@ const NotesGraph = ({
         </svg>
       </div>
       <div className={styles.boardTools} data-board-tools>
-        <span
-          className={buildClassName(kit.chip, kit.chipOn, styles.boardChip, styles.boardChipOn)}
-          style="--c: var(--pv-note)"
-        >
-          {lang('KnowledgeGraphNotes', { count: noteCount })}
-        </span>
-        <button
-          type="button"
-          className={buildClassName(kit.chip, styles.boardChip, withDays && kit.chipOn, withDays && styles.boardChipOn)}
-          style="--c: var(--pv-note)"
-          aria-pressed={withDays}
-          onClick={handleToggleDays}
-        >
-          {lang('KnowledgeGraphDays')}
-        </button>
-        <button
-          type="button"
-          className={buildClassName(
-            kit.chip, styles.boardChip, withRecords && kit.chipOn, withRecords && styles.boardChipOn,
+        {/* Одна строка, как на холсте: не помещается — листается вбок */}
+        <div className={buildClassName(styles.boardScroll, styles.graphToolRow)}>
+          <span
+            className={buildClassName(kit.chip, kit.chipOn, styles.boardChip, styles.boardChipOn)}
+            style="--c: var(--pv-note)"
+          >
+            {lang('KnowledgeGraphNotes', { count: noteCount })}
+          </span>
+          <button
+            type="button"
+            className={buildClassName(
+              kit.chip, styles.boardChip, withDays && kit.chipOn, withDays && styles.boardChipOn,
+            )}
+            style="--c: var(--pv-note)"
+            aria-pressed={withDays}
+            onClick={handleToggleDays}
+          >
+            {lang('KnowledgeGraphDays')}
+          </button>
+          <button
+            type="button"
+            className={buildClassName(
+              kit.chip, styles.boardChip, withRecords && kit.chipOn, withRecords && styles.boardChipOn,
+            )}
+            style="--c: var(--pv-event)"
+            aria-pressed={withRecords}
+            onClick={handleToggleRecords}
+          >
+            {lang('KnowledgeGraphRecords')}
+          </button>
+          {hasFolderChoice && (
+            <span ref={foldersRef} className={styles.graphFolders}>
+              <button
+                type="button"
+                className={buildClassName(
+                  kit.chip, styles.boardChip, folders && kit.chipOn, folders && styles.boardChipOn,
+                )}
+                aria-haspopup="menu"
+                aria-expanded={isFolderMenuOpen}
+                title={lang('KnowledgeGraphFolders')}
+                data-graph-folders={folders ? folders.length : 'all'}
+                onClick={handleToggleFolderMenu}
+              >
+                <PvIcon name="folder" isSmall />
+                <span className={styles.graphFoldersLabel}>{foldersLabel}</span>
+                <PvIcon name={isFolderMenuOpen ? 'up' : 'down'} isSmall />
+              </button>
+            </span>
           )}
-          style="--c: var(--pv-event)"
-          aria-pressed={withRecords}
-          onClick={handleToggleRecords}
-        >
-          {lang('KnowledgeGraphRecords')}
-        </button>
-        {hasFolderChoice && (
-          <span ref={foldersRef} className={styles.graphFolders}>
+          <button
+            type="button"
+            className={buildClassName(kit.chip, styles.boardChip)}
+            title={lang('KnowledgeGraphToCanvasTitle')}
+            disabled={!hasCanvasNotes}
+            data-graph-to-canvas
+            onClick={handleMakeCanvas}
+          >
+            <PvIcon name="board" isSmall />
+            {lang('KnowledgeGraphToCanvas')}
+          </button>
+          <SearchForm>
+            <label className={styles.graphSearch}>
+              <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
+              <input
+                {...SEARCH_FIELD_PROPS}
+                className={styles.graphSearchInput}
+                value={query}
+                placeholder={lang('KnowledgeGraphSearch')}
+                aria-label={lang('KnowledgeGraphSearch')}
+                data-graph-search
+                onChange={handleQuery}
+                onKeyDown={handleQueryKey}
+              />
+            </label>
+          </SearchForm>
+        </div>
+        {isFolderMenuOpen && (
+          <div
+            ref={folderMenuRef}
+            className={buildClassName(styles.graphFoldersMenu, 'custom-scroll')}
+            role="menu"
+            aria-label={lang('KnowledgeGraphFolders')}
+            data-graph-folders-menu
+          >
             <button
               type="button"
-              className={buildClassName(
-                kit.chip, styles.boardChip, folders && kit.chipOn, folders && styles.boardChipOn,
-              )}
-              aria-haspopup="menu"
-              aria-expanded={isFolderMenuOpen}
-              title={lang('KnowledgeGraphFolders')}
-              data-graph-folders={folders ? folders.length : 'all'}
-              onClick={handleToggleFolderMenu}
+              className={styles.canvasMenuItem}
+              role="menuitemradio"
+              aria-checked={!folders}
+              data-graph-folder-all
+              onClick={handleAllFolders}
             >
-              <PvIcon name="folder" isSmall />
-              <span className={styles.graphFoldersLabel}>{foldersLabel}</span>
-              <PvIcon name={isFolderMenuOpen ? 'up' : 'down'} isSmall />
+              <PvIcon name="check" isSmall className={buildClassName(folders && styles.graphFolderOff)} />
+              <span className={styles.graphFolderName}>{lang('KnowledgeGraphFoldersAll')}</span>
             </button>
-            {isFolderMenuOpen && (
-              <div
-                className={buildClassName(styles.graphFoldersMenu, 'custom-scroll')}
-                role="menu"
-                aria-label={lang('KnowledgeGraphFolders')}
-                data-graph-folders-menu
-              >
+            {folderOptions.map(({ path, count }) => {
+              const isOn = Boolean(folders?.includes(path));
+              return (
                 <button
+                  key={path}
                   type="button"
                   className={styles.canvasMenuItem}
-                  role="menuitemradio"
-                  aria-checked={!folders}
-                  data-graph-folder-all
-                  onClick={handleAllFolders}
+                  role="menuitemcheckbox"
+                  aria-checked={isOn}
+                  data-graph-folder={path}
+                  onClick={handleFolder}
                 >
-                  <PvIcon name="check" isSmall className={buildClassName(folders && styles.graphFolderOff)} />
-                  <span className={styles.graphFolderName}>{lang('KnowledgeGraphFoldersAll')}</span>
+                  <PvIcon name="check" isSmall className={buildClassName(!isOn && styles.graphFolderOff)} />
+                  <span className={styles.graphFolderName} style={`--c: ${folderColor(path)}`}>
+                    {captionOf(path)}
+                  </span>
+                  <span className={styles.graphFolderCount}>{count}</span>
                 </button>
-                {folderOptions.map(({ path, count }) => {
-                  const isOn = Boolean(folders?.includes(path));
-                  return (
-                    <button
-                      key={path}
-                      type="button"
-                      className={styles.canvasMenuItem}
-                      role="menuitemcheckbox"
-                      aria-checked={isOn}
-                      data-graph-folder={path}
-                      onClick={handleFolder}
-                    >
-                      <PvIcon name="check" isSmall className={buildClassName(!isOn && styles.graphFolderOff)} />
-                      <span className={styles.graphFolderName} style={`--c: ${folderColor(path)}`}>
-                        {captionOf(path)}
-                      </span>
-                      <span className={styles.graphFolderCount}>{count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </span>
+              );
+            })}
+          </div>
         )}
-        <button
-          type="button"
-          className={buildClassName(kit.chip, styles.boardChip)}
-          title={lang('KnowledgeGraphToCanvasTitle')}
-          disabled={!hasCanvasNotes}
-          data-graph-to-canvas
-          onClick={handleMakeCanvas}
-        >
-          <PvIcon name="board" isSmall />
-          {lang('KnowledgeGraphToCanvas')}
-        </button>
-        <SearchForm>
-          <label className={styles.graphSearch}>
-            <PvIcon name="search" isSmall className={styles.graphSearchIcon} />
-            <input
-              {...SEARCH_FIELD_PROPS}
-              className={styles.graphSearchInput}
-              value={query}
-              placeholder={lang('KnowledgeGraphSearch')}
-              aria-label={lang('KnowledgeGraphSearch')}
-              data-graph-search
-              onChange={handleQuery}
-              onKeyDown={handleQueryKey}
-            />
-          </label>
-        </SearchForm>
       </div>
       {linkFrom && (
         <div

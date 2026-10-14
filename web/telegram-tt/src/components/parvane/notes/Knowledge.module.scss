@@ -1206,11 +1206,19 @@
 }
 
 // Выбор папок графа: чип и список с галочками под ним
+.graphToolRow {
+  pointer-events: none;
+  flex: 1 1 auto;
+  align-items: center;
+
+  > * {
+    pointer-events: auto;
+  }
+}
+
 .graphFolders {
-  position: relative;
   display: inline-flex;
   flex: none;
-  max-width: 100%;
 }
 
 .graphFoldersLabel {
@@ -1263,8 +1271,13 @@
 
 .graphSearch {
   position: relative;
-  flex: 0 1 13rem;
-  min-width: 8rem;
+
+  display: flex;
+  flex: none;
+  align-items: center;
+
+  width: 12rem;
+  margin: 0;
   margin-inline-start: auto;
 }
 

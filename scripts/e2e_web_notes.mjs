@@ -1541,6 +1541,85 @@ try {
   await visible(phoneGraph.locator('[data-node][data-kind="day"]'), 'граф после закрытия листа отвечает на нажатия');
   console.log('OK: граф на телефоне — лист заметки, режим «Связать»');
 
+  // ── Телефон: шапка графа — одна строка (не помещается — листается вбок), поиск в той же строке ──
+  const graphRow = phoneGraph.locator('[data-board-tools]').first().locator(':scope > div').first();
+  const rowTops = await graphRow.evaluate((el) => [...el.children].map((child) => {
+    const target = child.tagName === 'FORM' ? child.firstElementChild : child;
+    const box = target.getBoundingClientRect();
+    return Math.round(box.top + box.height / 2);
+  }));
+  const rowDebug = await graphRow.evaluate((el) => [...el.children].map((child) => {
+    const target = child.tagName === 'FORM' ? child.firstElementChild : child;
+    const box = target.getBoundingClientRect();
+    const css = getComputedStyle(target);
+    return `${target.tagName}:${Math.round(box.top)}+${Math.round(box.height)} m=${css.marginTop}/${css.marginBottom}`
+      + ` a=${css.alignSelf} d=${css.display} p=${getComputedStyle(child).display}`;
+  }).join('; '));
+  assert.ok(Math.max(...rowTops) - Math.min(...rowTops) <= 2, `шапка графа в одну строку: ${rowDebug}`);
+  const isScrollable = await graphRow.evaluate((el) => el.scrollWidth > el.clientWidth);
+  assert.ok(isScrollable, 'шапка графа на телефоне листается вбок');
+  if (process.env.PARVANE_E2E_SHOT_DIR) {
+    await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/notes-phone-graph.png` });
+  }
+  console.log('OK: шапка графа на телефоне — одна строка');
+
+  // ── Системное «назад»: заметка → список, папка → родительская, корень раздела → чаты ──
+  // Раздел ставит свою запись истории заново через пару кадров после шага — жест человека не быстрее
+  const historyBack = async () => {
+    await page.waitForTimeout(300);
+    await page.evaluate(() => window.history.back());
+  };
+  // Записи истории приложения (`useHistoryBack`) — видны в диагностической сборке
+  const historyDump = () => page.evaluate(() => JSON.stringify({
+    cursor: window.TEST_getHistoryCursor?.(),
+    state: window.TEST_getHistoryState?.()?.map((r) => (r ? { i: r.index, c: r.isClosed } : r)),
+    real: window.history.state,
+  }));
+  await openTab('Notes');
+  await row(NOTE).click();
+  await visible(knowledge.locator(`[data-note-id][data-note-title="${NOTE}"]`), 'заметка на весь экран телефона');
+  await historyBack();
+  await visible(row(NOTE), '«назад» из заметки — список заметок');
+  await openTab('Files');
+  await visible(cloud, 'вкладка «Файлы» на телефоне');
+  const cloudRow = (name) => cloud.locator(`[data-node-id][data-name="${name}"]`);
+  const crumbTexts = () => cloud.locator('nav span > button').allInnerTexts();
+  const waitCrumbs = (count, what) => page.waitForFunction(
+    (wanted) => document.querySelectorAll('#ParvaneCloud nav span > button').length === wanted, count,
+    { timeout: STEP_TIMEOUT_MS },
+  ).catch(async () => {
+    assert.fail(`${what}: ${(await crumbTexts()).join(' / ')}; история ${await historyDump()}`);
+  });
+  await cloudRow('Knowledge').click();
+  await waitCrumbs(2, 'папка хранилища открыта');
+  await cloud.locator('[data-node-id][data-kind="folder"]').first().click();
+  await waitCrumbs(3, 'вложенная папка открыта');
+  await historyBack();
+  await waitCrumbs(2, '«назад» из папки — в родительскую');
+  await historyBack();
+  await waitCrumbs(1, '«назад» — в корень облака');
+  assert.ok(await cloud.isVisible(), 'раздел остаётся открытым после «назад» из папки');
+  await historyBack();
+  await cloud.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+    .catch(async () => assert.fail(`«назад» из корня раздела не вернуло к чатам; история ${await historyDump()}`));
+  await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('после «назад» не видно списка чатов'));
+  console.log('OK: системное «назад» — заметка, папки, раздел');
+
+  // «План»: открытые настройки закрываются «назад», следующее «назад» — к чатам
+  const phonePlanner = await openPlannerScreen(page, 'calendar');
+  await phonePlanner.getByRole('button', { name: 'Planner settings' }).first().click();
+  const plannerSide = phonePlanner.locator('[data-planner-side="settings"]');
+  await visible(plannerSide, 'настройки «Плана»');
+  await historyBack();
+  await plannerSide.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('«назад» не закрыло настройки «Плана»'));
+  assert.ok(await phonePlanner.isVisible(), '«План» остаётся открытым после «назад» из настроек');
+  await historyBack();
+  await phonePlanner.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('«назад» из «Плана» не вернуло к чатам'));
+  console.log('OK: системное «назад» в «Плане»');
+
   console.log('e2e_web_notes: OK');
 } catch (error) {
   const dir = process.env.PARVANE_E2E_SHOT_DIR || process.env.PARVANE_E2E_BACKEND_LOG_DIR;

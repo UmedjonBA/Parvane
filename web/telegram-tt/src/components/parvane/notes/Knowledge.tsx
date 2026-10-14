@@ -14,7 +14,7 @@ import type { NoteEditRequest } from './NoteView';
 import buildClassName from '../../../util/buildClassName';
 import {
   consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getNoteRequest, getParvaneSection,
-  setKnowledgeView,
+  setKnowledgeView, setParvaneSection,
 } from '../../../util/parvaneSection';
 import { SEARCH_FIELD_PROPS } from '../../../util/searchField';
 import { openPalette } from '../palette/paletteOpen';
@@ -55,6 +55,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import Loading from '../../ui/Loading';
 import SearchForm from '../../ui/SearchForm';
 import PlannerQuickHost from '../planner/PlannerQuickHost';
+import SectionHistoryBack from '../SectionHistoryBack';
 import GraphPanel from './GraphPanel';
 import KnowledgeTabs from './KnowledgeTabs';
 import NoteFolderPicker from './NoteFolderPicker';
@@ -772,8 +773,26 @@ const Knowledge = () => {
     );
   }
 
+  // Системное «назад»: открытая на телефоне заметка — к списку, панель рядом с графом либо холстом (на
+  // компьютере; на телефоне это шторка со своей записью) — закрыть, иначе — к чатам
+  const isPanelLevel = !isNarrow && Boolean(shownPick);
+  const handleHistoryBack = useLastCallback(() => {
+    if (isNoteAlone) {
+      handleBack();
+    } else if (isPanelLevel) {
+      handleGraphClose();
+    } else {
+      setParvaneSection('messenger');
+      return false;
+    }
+    return true;
+  });
+
   return (
     <div id="ParvaneKnowledge" className={styles.root} data-knowledge-view={view} data-status={status}>
+      {isShown && (
+        <SectionHistoryBack onBack={handleHistoryBack} />
+      )}
       <div className={buildClassName(kit.island, styles.page)}>
         {!isNoteAlone && (
           <header className={buildClassName(kit.hdr, kit.hdrTabs)}>
