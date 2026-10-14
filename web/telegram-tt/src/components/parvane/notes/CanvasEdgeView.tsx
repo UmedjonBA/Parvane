@@ -13,6 +13,8 @@ type OwnProps = {
   from: CanvasNode;
   to: CanvasNode;
   isOn: boolean;
+  // Связь выбранной карточки — подсвечена, остальные — приглушены
+  linkMark?: 'linked' | 'dim';
   // Подпись правится на месте — в самой стрелке её не видно
   isLabelHidden: boolean;
 };
@@ -22,7 +24,7 @@ const EDGE_LABEL_SHIFT = 4;
 // Стрелка холста. Перерисовывается, только когда сменились она сама, один из её узлов или выделение:
 // сдвиг и масштаб поля, движение других карточек её не трогают
 const CanvasEdgeView = ({
-  edge, from, to, isOn, isLabelHidden,
+  edge, from, to, isOn, linkMark, isLabelHidden,
 }: OwnProps) => {
   const anchors = edgeAnchors(from, to, edge);
   const curve = curveBetween(anchors.from, anchors.to);
@@ -36,7 +38,9 @@ const CanvasEdgeView = ({
       data-canvas-ends={`${hasStartArrow ? 'arrow' : 'none'}-${hasEndArrow ? 'arrow' : 'none'}`}
       // Класс у узла SVG всегда строка: снять его совсем Teact не умеет (свойство `className` там только
       // для чтения) — отрисовка падала, и холст замирал, стоило снять выделение со стрелки
-      className={isOn ? styles.canvasEdgeOn : ''}
+      className={isOn ? styles.canvasEdgeOn
+        : linkMark === 'linked' ? styles.canvasEdgeLinked : linkMark === 'dim' ? styles.canvasEdgeDim : ''}
+      data-link-mark={linkMark}
       style={colorStyle(edge.color) || undefined}
     >
       <path className={styles.canvasEdgeHit} d={path} />

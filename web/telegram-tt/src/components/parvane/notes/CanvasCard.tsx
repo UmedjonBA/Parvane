@@ -34,6 +34,8 @@ type OwnProps = {
   isSelected: boolean;
   // Поиск по холсту: карточка найдена либо приглушена среди найденных
   searchMark?: 'found' | 'dim';
+  // Карточка, связанная с выбранной, подсвечена; несвязанные приглушены
+  linkMark?: 'linked' | 'dim';
   // Режим связи: карточка — возможная цель стрелки
   isLinkable: boolean;
   // Группа под указателем: её возьмёт перетаскивание
@@ -95,8 +97,9 @@ export function getCanvasCardRenders(id: string) {
 // Карточка или группа холста. Перерисовывается только при смене своих данных: сдвиг и масштаб поля, движение
 // других карточек, ход правки в другой карточке её не трогают (все обработчики — постоянные)
 const CanvasCard = ({
-  node, isSelected, searchMark, isLinkable, isHover, hasGrips, arePortsShown, inline, noteTitle, note, noteState,
-  savingText, driveId, driveNode, imageQuality, isLargeImage, onInlineChange, onInlineBlur, onInlineKey, onOpenNote,
+  node, isSelected, searchMark, linkMark, isLinkable, isHover, hasGrips, arePortsShown, inline, noteTitle, note,
+  noteState, savingText, driveId, driveNode, imageQuality, isLargeImage, onInlineChange, onInlineBlur, onInlineKey,
+  onOpenNote,
 }: OwnProps) => {
   const lang = useLang();
   rendersById.set(node.id, getCanvasCardRenders(node.id) + 1);
@@ -175,6 +178,7 @@ const CanvasCard = ({
   const cardClass = buildClassName(
     styles.canvasCard, isSelected && styles.canvasSelected, isLinkable && styles.canvasLinkable,
     searchMark === 'found' && styles.canvasFound, searchMark === 'dim' && styles.canvasDim,
+    linkMark === 'linked' && styles.canvasLinked, linkMark === 'dim' && styles.canvasDim,
   );
   if (node.type === 'link') {
     return (
@@ -182,6 +186,7 @@ const CanvasCard = ({
         data-canvas-node={node.id}
         data-canvas-type={node.type}
         data-search={searchMark}
+        data-link-mark={linkMark}
         className={buildClassName(cardClass, styles.canvasCardText)}
         style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
       >
@@ -199,6 +204,7 @@ const CanvasCard = ({
         data-canvas-node={node.id}
         data-canvas-type={node.type}
         data-search={searchMark}
+        data-link-mark={linkMark}
         className={buildClassName(cardClass, styles.canvasCardText)}
         style={`${colorStyle(node.color)}${place}; ${isAuto ? 'min-height' : 'height'}: ${node.height}px`}
       >
@@ -235,6 +241,7 @@ const CanvasCard = ({
         data-canvas-node={node.id}
         data-canvas-type={node.type}
         data-search={searchMark}
+        data-link-mark={linkMark}
         className={cardClass}
         style={`${colorStyle(node.color)}${place}; height: ${node.height}px`}
       >
@@ -258,6 +265,7 @@ const CanvasCard = ({
       data-canvas-node={node.id}
       data-canvas-type={node.type}
       data-search={searchMark}
+      data-link-mark={linkMark}
       data-canvas-note={noteState}
       className={buildClassName(cardClass, isEditingText && styles.canvasCardEditing)}
       // Пока правится текст, карточка растёт за ним; размер узла в файле от этого не меняется

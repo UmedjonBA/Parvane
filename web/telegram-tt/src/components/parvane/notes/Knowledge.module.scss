@@ -1296,6 +1296,19 @@
   fill: var(--pv-accent);
 }
 
+.canvasEdgeLinked .canvasEdge {
+  stroke: var(--pv-accent);
+  stroke-width: 3;
+}
+
+.canvasEdgeLinked .canvasArrow {
+  fill: var(--pv-accent);
+}
+
+.canvasEdgeDim {
+  opacity: 0.2;
+}
+
 .canvasEdgeDraft {
   fill: none;
   stroke: var(--pv-accent);
@@ -1668,6 +1681,11 @@
 
 .canvasDim {
   opacity: 0.35;
+}
+
+.canvasLinked:not(.canvasSelected) {
+  outline: 2px solid var(--pv-accent);
+  outline-offset: 2px;
 }
 
 .canvasLinkable {

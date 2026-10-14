@@ -1898,6 +1898,15 @@ const NotesCanvas = ({
         .some((text) => text && normalizeSearch(text).includes(wanted));
     }).map(({ id }) => id));
   }, [query, doc, noteByTitle]);
+
+  // Выбрана одна карточка (не группа) — её стрелки и связанные карточки подсвечены, остальное приглушено, как на
+  // графе. Поиск важнее: пока он идёт, подсветки связей нет
+  const linkFocus = useMemo(() => {
+    if (found || !selectedNode || selectedNode.type === 'group') return undefined;
+    const edges = new Set(nodeEdges.map(({ id }) => id));
+    const nodes = new Set(nodeEdges.map((edge) => (edge.fromNode === selectedNode.id ? edge.toNode : edge.fromNode)));
+    return { id: selectedNode.id, edges, nodes };
+  }, [found, selectedNode, nodeEdges]);
   const foundAtRef = useRef(-1);
   const searchStepRef = useRef(searchStep);
 
@@ -1933,6 +1942,8 @@ const NotesCanvas = ({
         node={node}
         isSelected={selection.nodes.includes(node.id) || linkFrom === node.id}
         searchMark={!found ? undefined : found.has(node.id) ? 'found' : 'dim'}
+        linkMark={!linkFocus || node.id === linkFocus.id || node.type === 'group' ? undefined
+          : linkFocus.nodes.has(node.id) ? 'linked' : 'dim'}
         isLinkable={Boolean(linkFrom) && linkFrom !== node.id}
         isHover={hoverGroup === node.id}
         hasGrips={hasGrips(node)}
@@ -1965,6 +1976,7 @@ const NotesCanvas = ({
         from={from}
         to={to}
         isOn={selection.edges.includes(edge.id)}
+        linkMark={!linkFocus ? undefined : linkFocus.edges.has(edge.id) ? 'linked' : 'dim'}
         isLabelHidden={inline?.id === edge.id}
       />
     );

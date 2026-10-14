@@ -289,6 +289,38 @@ describe('холст: нажатия мыши', () => {
   });
 });
 
+describe('холст: связи выбранной карточки', () => {
+  it('стрелки и связанные карточки подсвечены, несвязанное приглушено; снятое выделение всё возвращает', async () => {
+    const doc = {
+      nodes: [
+        ...DOC.nodes,
+        {
+          id: 'gamma', type: 'text', x: 0, y: 300, width: 250, height: 60, text: 'Гамма',
+        },
+        {
+          id: 'delta', type: 'text', x: 400, y: 300, width: 250, height: 60, text: 'Дельта',
+        },
+      ],
+      edges: [...DOC.edges, { id: 'far', fromNode: 'gamma', toNode: 'delta' }],
+    };
+    await mount(doc);
+    const mark = (selector: string) => find(selector).dataset.linkMark;
+    const alpha = find('[data-canvas-node="alpha"]');
+    fireOn(alpha, 'pointerdown', { x: -550, y: 150 });
+    fireOn(alpha, 'pointerup', { x: -550, y: 150 });
+    await frame();
+    expect(mark('[data-canvas-edge="edge"]')).toBe('linked');
+    expect(mark('[data-canvas-edge="far"]')).toBe('dim');
+    expect(mark('[data-canvas-node="beta"]')).toBe('linked');
+    expect(mark('[data-canvas-node="gamma"]')).toBe('dim');
+    expect(mark('[data-canvas-node="alpha"]')).toBeUndefined();
+    expect(mark('[data-canvas-node="pair"]')).toBeUndefined();
+    await press(OUTSIDE);
+    expect(mark('[data-canvas-edge="edge"]')).toBeUndefined();
+    expect(mark('[data-canvas-node="gamma"]')).toBeUndefined();
+  });
+});
+
 describe('холст: перерисовки во время жеста', () => {
   // Карточка далеко от группы: жест группы её не касается
   const FAR = {
