@@ -1027,7 +1027,12 @@ const Knowledge = () => {
       >
         <p>{lang('KnowledgeFolderDeleteConfirm', { name: removal?.name || '', count: removal?.count || 0 })}</p>
         <div className="dialog-buttons-column">
-          <Button className="confirm-dialog-button" isText id="knowledge-folder-delete-move" onClick={handleRemovalMove}>
+          <Button
+            className="confirm-dialog-button"
+            isText
+            id="knowledge-folder-delete-move"
+            onClick={handleRemovalMove}
+          >
             {lang('KnowledgeFolderDeleteAction')}
           </Button>
           <Button

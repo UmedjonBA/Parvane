@@ -70,9 +70,9 @@ describe('canvasFromGraph', () => {
     expect(doc.nodes.map((node) => [node.type, node.file])).toEqual([
       ['file', 'Сервер.md'], ['file', 'Курс.md'], ['file', 'Блок питания.md'], ['file', 'Одна.md'],
     ]);
-    expect(edgeTitles(doc)).toEqual([
-      'Сервер.md → Курс.md', 'Сервер.md → Блок питания.md', 'Курс.md → Сервер.md',
-    ]);
+    // Взаимная ссылка Сервер ↔ Курс — одна стрелка с наконечниками с обеих сторон
+    expect(edgeTitles(doc)).toEqual(['Сервер.md → Курс.md', 'Сервер.md → Блок питания.md']);
+    expect(doc.edges.map(({ fromEnd }) => fromEnd)).toEqual(['arrow', undefined]);
   });
 
   it('ссылки на несуществующую заметку, на себя и повторные стрелок не дают; регистр названия не важен', () => {
@@ -560,6 +560,29 @@ describe('refreshCanvasFromGraph', () => {
     expect(result.added).toEqual({ cards: [], edges: [] });
   });
 
+  it('встречные свои стрелки сливаются в одну двустороннюю; ответная ссылка делает стрелку двусторонней', () => {
+    const base = canvasFromGraph([note('A', ['B']), note('B')], { makeId: counter() });
+    const [a, b] = base.nodes;
+    const doc = {
+      ...base,
+      edges: [...base.edges, { id: `${GRAPH_EDGE_PREFIX}back`, fromNode: b.id, toNode: a.id }],
+    };
+    const result = refreshCanvasFromGraph(doc, [note('A', ['B']), note('B', ['A'])], { makeId: counter() });
+    expect(result.removed.edges).toEqual([`${GRAPH_EDGE_PREFIX}back`]);
+    expect(result.doc.edges).toEqual([{ ...base.edges[0], fromEnd: 'arrow' }]);
+
+    const answered = refreshCanvasFromGraph(base, [note('A', ['B']), note('B', ['A'])], { makeId: counter() });
+    expect(answered.added.edges).toEqual([]);
+    expect(answered.doc.edges).toEqual([{ ...base.edges[0], fromEnd: 'arrow' }]);
+
+    // Обратную ссылку убрали — наконечник в начале снимается; убрали прямую — стрелка разворачивается
+    const oneWay = refreshCanvasFromGraph(result.doc, [note('A', ['B']), note('B')], { makeId: counter() });
+    expect(oneWay.doc.edges).toEqual([{ ...base.edges[0], fromEnd: undefined }]);
+    const reversed = refreshCanvasFromGraph(result.doc, [note('A'), note('B', ['A'])], { makeId: counter() });
+    expect(edgeTitles(reversed.doc)).toEqual(['B.md → A.md']);
+    expect(reversed.doc.edges[0].fromEnd).toBeUndefined();
+  });
+
   it('правленая своя стрелка и нарисованная руками не убираются', () => {
     const base = canvasFromGraph([note('A', ['B']), note('B')], { makeId: counter() });
     const [a, b] = base.nodes;
@@ -569,7 +592,6 @@ describe('refreshCanvasFromGraph', () => {
       { ...auto, id: `${GRAPH_EDGE_PREFIX}color`, color: '3' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}side`, fromSide: 'top' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}to-side`, toSide: 'left' },
-      { ...auto, id: `${GRAPH_EDGE_PREFIX}ends`, fromEnd: 'arrow' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}no-ends`, toEnd: 'none' },
       { ...auto, id: `${GRAPH_EDGE_PREFIX}extra`, weight: 2 },
       { id: 'drawn', fromNode: a.id, toNode: b.id },
@@ -580,13 +602,16 @@ describe('refreshCanvasFromGraph', () => {
     const plain: CanvasEdge = {
       ...auto, id: `${GRAPH_EDGE_PREFIX}plain`, toEnd: 'arrow', fromEnd: 'none', label: '',
     };
-    const doc = { ...base, edges: [...kept, plain] };
+    // Наконечник в начале у своей стрелки — знак взаимной ссылки, не правка: без ссылок стрелка уходит
+    const mutual: CanvasEdge = { ...auto, id: `${GRAPH_EDGE_PREFIX}mutual`, fromEnd: 'arrow' };
+    const doc = { ...base, edges: [...kept, plain, mutual] };
     const result = refreshCanvasFromGraph(doc, [note('A'), note('B')], { makeId: counter() });
 
     expect(kept.filter((edge) => isGraphEdge(edge)).every(isCustomizedEdge)).toBe(true);
     expect(isCustomizedEdge(plain)).toBe(false);
     expect(isCustomizedEdge(auto)).toBe(false);
-    expect(result.removed.edges).toEqual([plain.id]);
+    expect(isCustomizedEdge(mutual)).toBe(false);
+    expect(result.removed.edges).toEqual([plain.id, mutual.id]);
     expect(result.doc.edges).toEqual(kept);
   });
 
@@ -689,7 +714,8 @@ describe('refreshCanvasFromGraph', () => {
       makeId: () => 'same',
     });
     const ids = [...result.doc.nodes, ...result.doc.edges].map(({ id }) => id);
-    expect(ids.length).toBe(7);
+    // A, B, C, петля, A ↔ B одной стрелкой, A → C
+    expect(ids.length).toBe(6);
     expect(new Set(ids).size).toBe(ids.length);
     expect(result.added.edges.every((id) => id.startsWith(GRAPH_EDGE_PREFIX))).toBe(true);
     const parsed = parseCanvas(serializeCanvas(result.doc));

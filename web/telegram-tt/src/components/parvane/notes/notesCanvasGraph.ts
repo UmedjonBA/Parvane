@@ -318,19 +318,27 @@ export function canvasFromGraph(notes: GraphNoteInput[], options: GraphCanvasOpt
     return noteCard(note, id, spots[i], width, height);
   });
 
+  // Взаимные ссылки — одна стрелка с наконечниками с обеих сторон, а не две встречные поверх друг друга
   const edges: CanvasEdge[] = [];
-  const edgeKeys = new Set<string>();
+  const edgeByKey = new Map<string, CanvasEdge>();
   linked.forEach((note) => {
     note.links.forEach((link) => {
       const targetId = noteIdByTitle.get(titleKey(link))!;
       const key = `${note.id}${PAIR_SEPARATOR}${targetId}`;
-      if (targetId === note.id || edgeKeys.has(key)) return;
-      edgeKeys.add(key);
-      edges.push({
+      if (targetId === note.id || edgeByKey.has(key)) return;
+      const reverse = edgeByKey.get(`${targetId}${PAIR_SEPARATOR}${note.id}`);
+      if (reverse) {
+        reverse.fromEnd = 'arrow';
+        edgeByKey.set(key, reverse);
+        return;
+      }
+      const edge: CanvasEdge = {
         id: uniqueId(usedIds, makeId, GRAPH_EDGE_PREFIX),
         fromNode: cardIdByNote.get(note.id)!,
         toNode: cardIdByNote.get(targetId)!,
-      });
+      };
+      edgeByKey.set(key, edge);
+      edges.push(edge);
     });
   });
 
@@ -368,7 +376,8 @@ export function isCustomizedEdge(edge: CanvasEdge) {
     if (EDGE_OWN_KEYS.includes(key) || value === undefined) return false;
     if (key === 'label') return value !== '';
     if (key === 'toEnd') return value !== 'arrow';
-    if (key === 'fromEnd') return value !== 'none';
+    // Наконечник в начале у своей стрелки — знак взаимной ссылки, а не правка
+    if (key === 'fromEnd') return value !== 'none' && value !== 'arrow';
     return true;
   });
 }
@@ -473,7 +482,8 @@ function blockSpots(count: number, bounds: CanvasRect, width: number, height: nu
 //    с карточками заметок, с которыми она связана ссылкой в любую сторону; несвязанные — блоком справа от
 //    холста либо под ним. Новые карточки ложатся поверх остальных (в конец списка узлов).
 // 3. На каждую ссылку между заметками, у которых есть карточки, ставится стрелка — если между их карточками
-//    ещё нет стрелки в эту сторону (нарисованной или своей).
+//    ещё нет стрелки в эту сторону (нарисованной или своей). Взаимные ссылки — одна своя стрелка с
+//    наконечниками с обеих сторон (`fromEnd: 'arrow'`); встречные свои стрелки прежних холстов сливаются.
 // 4. Своя стрелка (`isGraphEdge`), ссылки для которой в заметке-источнике больше нет, убирается — кроме
 //    правленой (`isCustomizedEdge`) и той, чья заметка-источник пропала (её ссылки неизвестны).
 //    Заметка папки, у которой на холсте есть группа (`GRAPH_FOLDER_FIELD`), встаёт в эту группу: на свободное
@@ -633,21 +643,75 @@ export function refreshCanvasFromGraph(
 
   // ── стрелки ──
   const nodeById = new Map(taken.map((node) => [node.id, node]));
-  const edges = doc.edges.filter((edge) => {
-    if (!isGraphEdge(edge) || isCustomizedEdge(edge)) return true;
-    const source = noteOfCard.get(edge.fromNode);
-    const target = nodeById.get(edge.toNode);
+  const linksTo = (sourceCard: string, targetCard: string) => {
+    const source = noteOfCard.get(sourceCard);
+    const target = nodeById.get(targetCard);
     const targetKey = target && cardKey(target);
-    if (!source || !targetKey) return true;
-    if (source.links.some((link) => titleKey(link) === targetKey)) return true;
-    result.removed.edges.push(edge.id);
-    return false;
+    return Boolean(source && targetKey && source.links.some((link) => titleKey(link) === targetKey));
+  };
+  const isOwnEdge = (edge: CanvasEdge) => isGraphEdge(edge) && !isCustomizedEdge(edge);
+  let hasEdgeChanges = false;
+  const edges: CanvasEdge[] = [];
+  doc.edges.forEach((edge) => {
+    if (!isOwnEdge(edge) || !noteOfCard.get(edge.fromNode) || !nodeById.get(edge.toNode)) {
+      edges.push(edge);
+      return;
+    }
+    const isForward = linksTo(edge.fromNode, edge.toNode);
+    // Ссылки пропавшей заметки неизвестны — её сторона двусторонней стрелки остаётся
+    const isTargetKnown = Boolean(noteOfCard.get(edge.toNode));
+    const isBackward = edge.fromEnd === 'arrow' && (!isTargetKnown || linksTo(edge.toNode, edge.fromNode));
+    if (isForward && (isBackward || edge.fromEnd !== 'arrow')) {
+      edges.push(edge);
+    } else if (isForward) {
+      // Обратной ссылки больше нет — наконечник в начале снимается
+      edges.push({ ...edge, fromEnd: undefined });
+      hasEdgeChanges = true;
+    } else if (isBackward) {
+      edges.push({
+        ...edge,
+        fromNode: edge.toNode,
+        toNode: edge.fromNode,
+        fromSide: edge.toSide,
+        toSide: edge.fromSide,
+        fromEnd: undefined,
+      });
+      hasEdgeChanges = true;
+    } else {
+      result.removed.edges.push(edge.id);
+    }
+  });
+  // Встречные свои стрелки прежних холстов сливаются в одну двустороннюю. Пара — по заметкам, а не по
+  // карточкам: у копии карточки той же заметки вторая стрелка не нужна
+  const notePair = (from: string, to: string) => {
+    const source = noteOfCard.get(from);
+    const target = noteOfCard.get(to);
+    return source && target ? `${source.id}${PAIR_SEPARATOR}${target.id}` : undefined;
+  };
+  const ownByPair = new Map<string, number>();
+  const merged: CanvasEdge[] = [];
+  edges.forEach((edge) => {
+    const pair = notePair(edge.fromNode, edge.toNode);
+    const reversePair = notePair(edge.toNode, edge.fromNode);
+    if (!isOwnEdge(edge) || !pair || !reversePair) {
+      merged.push(edge);
+      return;
+    }
+    const reverseAt = ownByPair.get(reversePair);
+    if (reverseAt !== undefined) {
+      if (merged[reverseAt].fromEnd !== 'arrow') merged[reverseAt] = { ...merged[reverseAt], fromEnd: 'arrow' };
+      result.removed.edges.push(edge.id);
+      return;
+    }
+    ownByPair.set(pair, merged.length);
+    merged.push(edge);
   });
   const pairs = new Set<string>();
-  edges.forEach((edge) => {
-    const source = noteOfCard.get(edge.fromNode);
-    const target = noteOfCard.get(edge.toNode);
-    if (source && target) pairs.add(`${source.id}${PAIR_SEPARATOR}${target.id}`);
+  merged.forEach((edge) => {
+    const pair = notePair(edge.fromNode, edge.toNode);
+    if (pair) pairs.add(pair);
+    const reversePair = notePair(edge.toNode, edge.fromNode);
+    if (reversePair && edge.fromEnd === 'arrow') pairs.add(reversePair);
   });
   const addedEdges: CanvasEdge[] = [];
   shown.forEach((note) => {
@@ -657,14 +721,26 @@ export function refreshCanvasFromGraph(
       const to = cardOfNote.get(targetId);
       if (!from || !to || pairs.has(pair)) return;
       pairs.add(pair);
+      // Есть своя встречная стрелка — она становится двусторонней
+      const reverseAt = ownByPair.get(`${targetId}${PAIR_SEPARATOR}${note.id}`);
+      if (reverseAt !== undefined) {
+        merged[reverseAt] = { ...merged[reverseAt], fromEnd: 'arrow' };
+        hasEdgeChanges = true;
+        return;
+      }
+      const reverseAdded = addedEdges.find((edge) => edge.fromNode === to.id && edge.toNode === from.id);
+      if (reverseAdded) {
+        reverseAdded.fromEnd = 'arrow';
+        return;
+      }
       addedEdges.push({ id: uniqueId(usedIds, makeId, GRAPH_EDGE_PREFIX), fromNode: from.id, toNode: to.id });
     });
   });
   result.added.edges = addedEdges.map(({ id }) => id);
 
   const hasChanged = result.renamed.cards.length || addedCards.length || addedEdges.length
-    || result.removed.edges.length;
-  if (hasChanged) result.doc = { ...doc, nodes: taken, edges: [...edges, ...addedEdges] };
+    || result.removed.edges.length || hasEdgeChanges;
+  if (hasChanged) result.doc = { ...doc, nodes: taken, edges: [...merged, ...addedEdges] };
   return result;
 }
 
