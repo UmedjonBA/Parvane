@@ -19,6 +19,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
+import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import PlannerDailyNote from './PlannerDailyNote';
 import PlannerDayFeed from './PlannerDayFeed';
 import PlannerTaskRow from './PlannerTaskRow';
@@ -240,7 +241,18 @@ const PlannerToday = ({
         </section>
         <PlannerDailyNote day={day} />
       </div>
-      {!isNarrow && <div className={styles.stack}>{feedCard}</div>}
+      {!isNarrow && (
+        <div className={buildClassName(styles.stack, styles.todaySide)}>
+          <PvResizer
+            panel="planner-today"
+            edge="start"
+            min={PLANNER_SIDE_MIN}
+            max={PLANNER_SIDE_MAX}
+            className={styles.todayResizer}
+          />
+          {feedCard}
+        </div>
+      )}
       <PlannerUndated
         isOpen={isUndatedOpen}
         state={state}

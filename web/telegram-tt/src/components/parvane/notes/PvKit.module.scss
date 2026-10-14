@@ -755,3 +755,51 @@
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+// ── ручка ширины панели (`PvResizer`) ────────────────────────────────────────
+
+.resizer {
+  touch-action: none;
+  cursor: ew-resize;
+
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+
+  width: 0.625rem;
+
+  outline: none;
+
+  &::after {
+    content: "";
+
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+
+    width: 0.125rem;
+    border-radius: 0.125rem;
+
+    opacity: 0;
+    background: var(--pv-accent);
+
+    transition: opacity 0.15s;
+  }
+
+  &:hover::after,
+  &:active::after,
+  &:focus-visible::after {
+    opacity: 0.7;
+  }
+}
+
+.resizerStart {
+  inset-inline-start: 0;
+}
+
+.resizerEnd {
+  inset-inline-end: 0;
+}

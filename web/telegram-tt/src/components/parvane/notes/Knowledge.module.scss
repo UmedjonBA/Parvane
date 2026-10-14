@@ -32,7 +32,8 @@
 }
 
 .side {
-  flex: 0 0 23.75rem;
+  position: relative;
+  flex: 0 0 var(--pv-panel-notes-links, 23.75rem);
 }
 
 .sideContent {
@@ -44,7 +45,8 @@
 
 // Панель графа: выбранная заметка читается и правится рядом с графом
 .graphPanel {
-  flex: 0 0 clamp(22rem, 38%, 30rem);
+  position: relative;
+  flex: 0 0 var(--pv-panel-graph-note, clamp(22rem, 38%, 30rem));
 }
 
 .graphPanel .graphPanelHead {
@@ -188,14 +190,22 @@
 // ── список и заметка ─────────────────────────────────────────────────────────
 
 .layout {
+  position: relative;
+
   display: grid;
-  grid-template-columns: 20rem minmax(0, 1fr);
+  grid-template-columns: var(--pv-panel-notes-list, 20rem) minmax(0, 1fr);
   flex: 1 1 auto;
+
   min-height: 0;
 
   @media (max-width: 760px) {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+// Ручка ширины списка лежит рядом с ним (сам список прокручивается), на его правой границе
+.listResizer {
+  inset-inline-start: calc(var(--pv-panel-notes-list, 20rem) - 0.3125rem);
 }
 
 .list {

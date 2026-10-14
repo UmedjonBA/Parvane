@@ -18,6 +18,7 @@ import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import Icon from '../../common/icons/Icon';
+import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import PlannerDayFeed from './PlannerDayFeed';
 import PlannerTaskRow from './PlannerTaskRow';
 
@@ -154,6 +155,7 @@ const PlannerDayPanel = ({
 
   return (
     <aside className={styles.side} data-planner-day={day}>
+      <PvResizer panel="planner-side" edge="start" min={PLANNER_SIDE_MIN} max={PLANNER_SIDE_MAX} />
       <div className={styles.hdr}>
         <div className={styles.hdrText}>
           <span className={styles.hdrOver}>{relative}</span>

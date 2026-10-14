@@ -40,6 +40,7 @@ import useWindowSize from '../../../hooks/window/useWindowSize';
 import Icon from '../../common/icons/Icon';
 import Loading from '../../ui/Loading';
 import TabList from '../../ui/TabList';
+import PvResizer, { PLANNER_SIDE_MAX, PLANNER_SIDE_MIN } from '../notes/PvResizer';
 import PlannerAgenda from './PlannerAgenda';
 import PlannerDateNav from './PlannerDateNav';
 import PlannerDayPanel from './PlannerDayPanel';
@@ -652,6 +653,7 @@ const Planner = () => {
         data-planner-side={side}
       >
         {isNarrow && <span className={styles.grab} />}
+        {!isSheet && <PvResizer panel="planner-side" edge="start" min={PLANNER_SIDE_MIN} max={PLANNER_SIDE_MAX} />}
         <div className={buildClassName(styles.hdr, styles.sideHdr)}>
           {side === 'task' || side === 'event' ? (
             <>

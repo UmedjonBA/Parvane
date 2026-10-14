@@ -2964,6 +2964,7 @@ export interface LangPair {
   'KnowledgeFilesDecryptedHere': undefined;
   'KnowledgeFilesShareNote': undefined;
   'KnowledgeFilesRole': undefined;
+  'ParvaneResizePanel': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

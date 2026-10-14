@@ -17,10 +17,15 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import NoteView from './NoteView';
 import PvIcon from './PvIcon';
+import PvResizer from './PvResizer';
 import PvSheet from './PvSheet';
 
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
+
+// Пределы ширины панели, которую меняет пользователь (px)
+const PANEL_MIN = 320;
+const PANEL_MAX = 900;
 
 type OwnProps = {
   // Выбранная точка графа; без неё панель закрыта (лист на телефоне доигрывает закрытие с прежним содержимым)
@@ -38,7 +43,8 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
   onOpenInNotes: (noteId: string) => void;
   // «Связать»: следующая нажатая на графе заметка получит ссылку из этой
-  onLinkStart: (noteId: string) => void;
+  // Режим «Связать» есть только на графе; рядом с холстом кнопки нет
+  onLinkStart?: (noteId: string) => void;
   onCreate: (title: string) => void;
   onOpenInPlan: (record: PlannedItem) => void;
   onOpenTitle: (title: string) => void;
@@ -69,7 +75,7 @@ const GraphPanel = ({
   });
 
   const handleLinkStart = useLastCallback(() => {
-    if (shownNote) onLinkStart(shownNote.id);
+    if (shownNote) onLinkStart?.(shownNote.id);
   });
 
   const handleCreate = useLastCallback(() => {
@@ -149,7 +155,7 @@ const GraphPanel = ({
 
   const buttons = shownNote && (
     <>
-      {isLinkable && (
+      {isLinkable && onLinkStart && (
         <button
           type="button"
           className={buildClassName(kit.pill, styles.graphPanelLink)}
@@ -195,6 +201,7 @@ const GraphPanel = ({
       data-graph-panel={shown.pick.id}
       data-graph-panel-kind={kind}
     >
+      <PvResizer panel="graph-note" edge="start" min={PANEL_MIN} max={PANEL_MAX} />
       <header className={buildClassName(kit.hdr, styles.graphPanelHead)}>
         <h1 className={buildClassName(kit.hdrSmall, kit.grow, styles.graphPanelTitle)}>{title}</h1>
         {buttons}

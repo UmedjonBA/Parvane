@@ -12,7 +12,7 @@
   --planner-radius: 0.75rem;
   --planner-radius-small: 0.5rem;
   --planner-island-radius: 1.125rem;
-  --planner-side-width: 23.75rem;
+  --planner-side-width: var(--pv-panel-planner-side, 23.75rem);
 }
 
 .root {
@@ -36,7 +36,7 @@
   outline: none;
 
   @media (max-width: 1240px) {
-    --planner-side-width: 20rem;
+    --planner-side-width: var(--pv-panel-planner-side, 20rem);
   }
 
   @media (max-width: 600px) {
@@ -78,6 +78,7 @@
 }
 
 .side {
+  position: relative;
   flex: 0 0 var(--planner-side-width);
   width: var(--planner-side-width);
 }
@@ -1128,9 +1129,29 @@
 
 // ── «Сегодня» ────────────────────────────────────────────────────────────────
 
+// Правая колонка с ручкой ширины в промежутке между колонками
+.todaySide {
+  position: relative;
+}
+
+.todayResizer {
+  inset-inline-start: -0.8125rem;
+
+  // Колонки встали одна под другой — менять нечего
+  @media (max-width: 1240px) {
+    display: none;
+  }
+
+  @media (max-width: 1640px) {
+    .withSide & {
+      display: none;
+    }
+  }
+}
+
 .todayGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 21.25rem;
+  grid-template-columns: minmax(0, 1fr) var(--pv-panel-planner-today, 21.25rem);
   gap: 1rem;
   align-items: start;
 

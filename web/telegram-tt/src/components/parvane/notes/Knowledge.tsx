@@ -62,12 +62,18 @@ import NotesCanvas from './NotesCanvas';
 import NotesGraph from './NotesGraph';
 import NoteView from './NoteView';
 import PvIcon from './PvIcon';
+import PvResizer from './PvResizer';
 
 import styles from './Knowledge.module.scss';
 import kit from './PvKit.module.scss';
 
 // Узкий экран: виден либо список, либо заметка; вкладки раздела — подчёркнутой строкой
 const NARROW_WIDTH = 760;
+// Пределы ширины панелей, которые меняет пользователь (px)
+const NOTES_LIST_MIN = 220;
+const NOTES_LIST_MAX = 560;
+const NOTES_LINKS_MIN = 280;
+const NOTES_LINKS_MAX = 640;
 // Широкий экран: «Связи» открытой заметки — отдельный остров справа
 const SIDE_MIN_WIDTH = 1241;
 const NOTICE_HIDE_MS = 6000;
@@ -216,12 +222,6 @@ const Knowledge = () => {
   const openTitle = useLastCallback(async (title: string) => {
     const id = await ensureNote(title);
     if (id) setOpenId(id);
-  });
-
-  // С холста заметка открывается на вкладке «Заметки»
-  const openFromCanvas = useLastCallback(async (title: string) => {
-    await openTitle(title);
-    setKnowledgeView('notes');
   });
 
   useEffect(() => {
@@ -407,7 +407,9 @@ const Knowledge = () => {
     pickNote ? plannedOf(plannedIndex, pickNote) : []
   ), [plannedIndex, pickNote]);
   // Точка, чья заметка или запись исчезла, панель не держит
-  const shownPick = view === 'graph' && status === 'ready' && graphPick
+  // Панель заметки стоит рядом с графом и рядом с холстом (там её открывает кнопка карточки)
+  const isPanelView = view === 'graph' || view === 'canvas';
+  const shownPick = isPanelView && status === 'ready' && graphPick
     && (graphPick.kind === 'missing' || pickNote || pickRecord) ? graphPick : undefined;
 
   const showGraphNotice = useLastCallback((text: string, undo?: NoneToVoidFunction) => {
@@ -832,11 +834,21 @@ const Knowledge = () => {
               notes={notes}
               isNarrow={isNarrow}
               openId={graphCanvasId}
-              onOpenTitle={openFromCanvas}
+              onOpenTitle={pickTitleInGraph}
             />
           ) : (
             <div className={styles.layout}>
               {!isNoteAlone && renderList()}
+              {!isNoteAlone && !isNarrow && (
+                <PvResizer
+                  panel="notes-list"
+                  edge="end"
+                  target="previous"
+                  min={NOTES_LIST_MIN}
+                  max={NOTES_LIST_MAX}
+                  className={styles.listResizer}
+                />
+              )}
               {(!isNarrow || isNoteShown) && (
                 <div className={buildClassName(styles.pane, 'custom-scroll')}>
                   {openNote ? (
@@ -886,6 +898,7 @@ const Knowledge = () => {
       </div>
       {hasSide && isNoteShown && openNote && (
         <aside className={buildClassName(kit.island, styles.side)} aria-label={lang('KnowledgeLinks')}>
+          <PvResizer panel="notes-links" edge="start" min={NOTES_LINKS_MIN} max={NOTES_LINKS_MAX} />
           <header className={kit.hdr}>
             <h1 className={kit.hdrSmall}>{lang('KnowledgeLinks')}</h1>
           </header>
@@ -894,7 +907,7 @@ const Knowledge = () => {
           </div>
         </aside>
       )}
-      {(isNarrow ? view === 'graph' : Boolean(shownPick)) && (
+      {(isNarrow ? isPanelView : Boolean(shownPick)) && (
         <GraphPanel
           // На телефоне лист уходит, пока в режиме «Связать» выбирают цель на графе
           pick={isNarrow && linkFromId ? undefined : shownPick}
@@ -907,7 +920,7 @@ const Knowledge = () => {
           editRequest={editRequest}
           onClose={handleGraphClose}
           onOpenInNotes={handleOpenInNotes}
-          onLinkStart={setLinkFromId}
+          onLinkStart={view === 'graph' ? setLinkFromId : undefined}
           onCreate={pickTitleInGraph}
           onOpenInPlan={handleOpenInPlan}
           onOpenTitle={pickTitleInGraph}

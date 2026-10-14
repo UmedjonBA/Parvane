@@ -3981,3 +3981,4 @@
 "KnowledgeFilesDecryptedHere" = "The file is decrypted here, on this device.";
 "KnowledgeFilesShareNote" = "Everything inside becomes shared. Members get the key to the files — the server still cannot see them.";
 "KnowledgeFilesRole" = "Rights";
+"ParvaneResizePanel" = "Drag to resize, double-click to reset";
