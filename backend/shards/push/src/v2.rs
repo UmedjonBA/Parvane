@@ -18,7 +18,8 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use parvane_protocol::pb::parvane::core::v2::{ErrorCode, ShardRequest};
 use parvane_protocol::pb::parvane::push::v1::{
-    DescribeResponse, RegisterRequest, RegisterResponse, UnregisterRequest, UnregisterResponse, WakeKind,
+    DescribeResponse, RegisterRequest, RegisterResponse, SetAlarmsRequest, SetAlarmsResponse, UnregisterRequest,
+    UnregisterResponse, WakeKind,
 };
 use parvane_protocol::registry_gen::INBOX_WILDCARD;
 use parvane_protocol::schema::MethodInfo;
@@ -55,6 +56,7 @@ pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool, vapid: Arc<Vap
 
     let mut inbox = nc.subscribe(INBOX_WILDCARD).await?;
     let collapser = Arc::new(Mutex::new(Collapser::default()));
+    spawn_alarm_loop(ctx.clone(), collapser.clone());
     let sem = Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
     tokio::spawn(async move {
         while let Some(msg) = inbox.next().await {
@@ -81,6 +83,7 @@ async fn dispatch(ctx: &Ctx, m: &'static MethodInfo, req: ShardRequest) -> Reply
         "push.wake.describe" => describe(ctx, &req),
         "push.wake.register" => register(ctx, &req).await,
         "push.wake.unregister" => unregister(ctx, &req).await,
+        "push.alarm.set" => set_alarms(ctx, &req, now_ms()).await,
         _ => Err(ErrorCode::Unavailable),
     }
 }
@@ -97,6 +100,10 @@ fn me(req: &ShardRequest) -> Result<(&str, &str), ErrorCode> {
 fn db_err(e: sqlx::Error) -> ErrorCode {
     error!("v2 push: SQLite: {e}");
     ErrorCode::Unavailable
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 fn now_unix() -> i64 {
@@ -180,6 +187,74 @@ async fn unregister(ctx: &Ctx, req: &ShardRequest) -> Reply {
     Ok(UnregisterResponse {}.encode_to_vec())
 }
 
+/// Будильник не дальше месяца вперёд (31 день, мс).
+const ALARM_HORIZON_MS: i64 = 31 * 24 * 60 * 60 * 1000;
+/// Как часто проверять наступившие будильники.
+const ALARM_TICK: Duration = Duration::from_secs(15);
+
+/// `push.alarm.set`: моменты пробуждения этого устройства (заменяют прежние). Прошедшие отбрасываются, дальше
+/// месяца — отказ: устройство пересылает список, когда тот меняется, и при каждом запуске.
+async fn set_alarms(ctx: &Ctx, req: &ShardRequest, now: i64) -> Reply {
+    let (user, device) = me(req)?;
+    let r: SetAlarmsRequest = body(req)?;
+    if r.at_ms.iter().any(|&at| at as i64 > now + ALARM_HORIZON_MS) {
+        return Err(ErrorCode::Invalid);
+    }
+    let token = wake::device_token(user, device)?;
+    let mut at: Vec<i64> = r.at_ms.iter().map(|&a| a as i64).filter(|&a| a > now).collect();
+    at.sort_unstable();
+    at.dedup();
+    let mut tx = ctx.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
+    sqlx::query("DELETE FROM wake_alarms WHERE inbox_token = ?").bind(&token).execute(&mut *tx).await.map_err(db_err)?;
+    for a in &at {
+        sqlx::query("INSERT OR IGNORE INTO wake_alarms (inbox_token, at_ms) VALUES (?, ?)")
+            .bind(&token)
+            .bind(a)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+    }
+    tx.commit().await.map_err(db_err)?;
+    debug!("v2 push: будильников устройства {}", at.len());
+    Ok(SetAlarmsResponse {}.encode_to_vec())
+}
+
+/// Наступившие будильники: забрать (строки удаляются) токены устройств, которые пора будить.
+async fn take_due_alarms(pool: &SqlitePool, now: i64) -> sqlx::Result<Vec<String>> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let tokens: Vec<(String,)> = sqlx::query_as("SELECT DISTINCT inbox_token FROM wake_alarms WHERE at_ms <= ?")
+        .bind(now)
+        .fetch_all(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM wake_alarms WHERE at_ms <= ?").bind(now).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(tokens.into_iter().map(|(t,)| t).collect())
+}
+
+/// Цикл будильника: раз в `ALARM_TICK` будит устройства с наступившим моментом (через то же схлопывание, что
+/// пробуждение по записи: недавно разбуженное устройство само проверит напоминания).
+fn spawn_alarm_loop(ctx: Arc<Ctx>, collapser: Arc<Mutex<Collapser>>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(ALARM_TICK);
+        loop {
+            tick.tick().await;
+            let tokens = match take_due_alarms(&ctx.pool, now_ms()).await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("v2 push: будильники не прочитаны: {e}");
+                    continue;
+                }
+            };
+            for token in tokens {
+                let admitted = collapser.lock().unwrap_or_else(|e| e.into_inner()).admit(&token, Instant::now());
+                if admitted {
+                    wake_device(&ctx, &token).await;
+                }
+            }
+        }
+    });
+}
+
 /// Разбудить все каналы устройства `token` (схлопывание уже пройдено).
 async fn wake_device(ctx: &Ctx, token: &str) {
     let rows = match sqlx::query("SELECT endpoint, kind, p256dh, auth FROM wake_registrations WHERE inbox_token = ?")
@@ -254,6 +329,35 @@ mod tests {
             }),
         }
         .encode_to_vec()
+    }
+
+    #[tokio::test]
+    async fn alarms_replace_device_list_and_fire_once() {
+        let ctx = test_ctx().await;
+        let now = 1_800_000_000_000_i64;
+        let set = |device: &str, at: Vec<u64>| req("alice@local", device, "push.alarm.set", SetAlarmsRequest { at_ms: at }.encode_to_vec());
+        let soon = (now + 60_000) as u64;
+        let later = (now + 3_600_000) as u64;
+        // Прошедшее отброшено, повтор схлопнут
+        set_alarms(&ctx, &set("d1", vec![(now - 1) as u64, soon, soon, later]), now).await.unwrap();
+        set_alarms(&ctx, &set("d2", vec![later]), now).await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wake_alarms").fetch_one(&ctx.pool).await.unwrap();
+        assert_eq!(n, 3);
+        // Новый список заменяет прежний список устройства, чужой не трогает
+        set_alarms(&ctx, &set("d1", vec![soon]), now).await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wake_alarms").fetch_one(&ctx.pool).await.unwrap();
+        assert_eq!(n, 2);
+        // Дальше месяца — отказ; без сессии — отказ
+        let far = (now + ALARM_HORIZON_MS + 1) as u64;
+        assert_eq!(set_alarms(&ctx, &set("d1", vec![far]), now).await.err(), Some(ErrorCode::Invalid));
+        let anon = req("", "", "push.alarm.set", SetAlarmsRequest { at_ms: vec![soon] }.encode_to_vec());
+        assert_eq!(set_alarms(&ctx, &anon, now).await.err(), Some(ErrorCode::Forbidden));
+        // В срок будится только устройство с наступившим моментом, и один раз
+        let d1 = wake::device_token("alice@local", "d1").unwrap();
+        assert_eq!(take_due_alarms(&ctx.pool, now + 120_000).await.unwrap(), vec![d1]);
+        assert!(take_due_alarms(&ctx.pool, now + 120_000).await.unwrap().is_empty());
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wake_alarms").fetch_one(&ctx.pool).await.unwrap();
+        assert_eq!(n, 1, "будильник второго устройства ждёт своего часа");
     }
 
     #[tokio::test]

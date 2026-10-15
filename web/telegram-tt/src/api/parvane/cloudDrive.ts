@@ -4,6 +4,7 @@ import type {
 import type {
   CloudContainerInfo, CloudDriveCheck, CloudSync, CloudSyncStatus,
 } from './v2/cloud';
+import type { WireMessageContent } from './wire';
 
 import { V2Error } from './v2/transport';
 import { decryptBlob } from './blobcrypt';
@@ -1257,6 +1258,44 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       } catch (e) {
         deps.log(`облако: файл в чат не отправлен: ${String(e)}`);
         // Медиа чатов ограничено своим пределом файла и своей квотой
+        const error = e instanceof V2Error && e.code === 'ERROR_CODE_LIMIT' ? 'too-large' : errorOf(e);
+        return { ok: false, error };
+      }
+    },
+
+    /** Файлы облака, встроенные в статью (этап 6 плана 15 окт 2026): копии блобов в медиа чатов со своими
+     * секретами доступа; `name` — имя файла в тексте статьи. Нет файла — пропускается. */
+    async parvaneCloudArticleMedia({ container, items }: {
+      container: string; items: { node: string; name: string }[];
+    }): Promise<CloudResult<{ media: WireMessageContent[] }>> {
+      const media: WireMessageContent[] = [];
+      try {
+        for (const item of items) {
+          const found = findNode(container, item.node);
+          if (!found?.blob) continue;
+          const fresh = await newCapability();
+          const copy = await deps.transport().blobCall<CopyReply>('cloud.blob.copy', {
+            file_id: found.blob.fileId,
+            capability: found.blob.capability,
+            bucket: MEDIA_BUCKET,
+            capability_hash: fresh.hash,
+          });
+          const copyId = copy.fileId || copy.file_id;
+          if (!copyId) throw new V2Error('ERROR_CODE_INVALID');
+          media.push({
+            kind: 'file',
+            file_id: copyId,
+            file_key: found.blob.key,
+            file_nonce: found.blob.nonce,
+            capability: fresh.capability,
+            mime: found.mime || 'application/octet-stream',
+            size_bytes: found.size,
+            filename: item.name,
+          });
+        }
+        return { ok: true, media };
+      } catch (e) {
+        deps.log(`облако: файлы статьи не скопированы: ${String(e)}`);
         const error = e instanceof V2Error && e.code === 'ERROR_CODE_LIMIT' ? 'too-large' : errorOf(e);
         return { ok: false, error };
       }

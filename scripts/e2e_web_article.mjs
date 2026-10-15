@@ -1,15 +1,20 @@
 // Статья (ARTICLE-1, замена «Статьи» Telegram): заметка «Знаний» уходит в чат пунктом «Статья» меню вложений,
+// картинка и видео, вставленные в заметку («Вставить файл» → облако рядом с заметкой, `![[имя]]`), показываются в
+// заметке и после перезагрузки, едут в статье вложениями и сохраняются в облако получателя (этап 6 плана 15 окт);
 // у обоих — карточка с началом текста, «Читать» открывает окно чтения с разметкой (заголовок, список, жирный,
 // ссылка), «Сохранить в заметки» кладёт копию в «Знания» получателя; пересылка — тоже статья; карточка переживает
 // перезагрузку; открытого текста статьи нет в базах шардов.
 // Запуск: scripts/run_web_article_e2e.sh
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import {
+  buildPngBuffer,
   dismissRecoveryKeyDialog,
   exchangeMessages,
   forwardMessage,
@@ -44,6 +49,35 @@ function plaintextLeaks(words) {
   return [...leaks];
 }
 
+// Короткое видео VP9 в WebM: Chromium Playwright без H.264
+function makeWebm() {
+  const path = join(mkdtempSync(join(tmpdir(), 'pv-article-')), 'clip.webm');
+  execFileSync('ffmpeg', [
+    '-y', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=15',
+    '-c:v', 'libvpx-vp9', '-b:v', '120k', '-pix_fmt', 'yuv420p', path,
+  ], { stdio: 'ignore' });
+  return readFileSync(path);
+}
+
+// Встроенный файл показан: картинка — `<img>` с декодированным изображением, видео — проигрыватель по нажатию
+async function expectImageEmbed(root, name) {
+  const image = root.locator(`[data-md-embed="${name}"] [data-embed-state="image"] img`);
+  await image.waitFor({ state: 'visible', timeout: 60000 });
+  await root.page().waitForFunction((el) => el.complete && el.naturalWidth > 0, await image.elementHandle(), {
+    timeout: STEP_TIMEOUT_MS,
+  });
+}
+
+async function expectVideoEmbed(root, name) {
+  const embed = root.locator(`[data-md-embed="${name}"]`);
+  await embed.getByRole('button', { name: /Play/ }).click();
+  const video = embed.locator('[data-embed-state="player"] video');
+  await video.waitFor({ state: 'attached', timeout: 60000 });
+  await root.page().waitForFunction((el) => el.readyState >= 1 && el.videoWidth > 0, await video.elementHandle(), {
+    timeout: STEP_TIMEOUT_MS,
+  });
+}
+
 const browser = await chromium.launch();
 const aliceContext = await browser.newContext({ viewport: WIDE });
 const bobContext = await browser.newContext({ viewport: WIDE });
@@ -57,7 +91,7 @@ try {
   const secret = `костёр-${suffix}`;
   const markdown = [
     `# ${title}`, '', '## Вещи', '- палатка', '- **спальник**', '', `Сбор у [вокзала](https://example.org/map) — ${secret}`,
-    '', '> не опаздывать', '', '![[карта.png]]',
+    '', '> не опаздывать', '', '| Что | Сколько |', '|---|---:|', '| вода | 2 л |',
   ].join('\n');
 
   sessions.alice = await preparePage(aliceContext, alice, PASSWORD);
@@ -79,11 +113,33 @@ try {
   await note.getByLabel('Note title').blur();
   await knowledge.locator(`[data-note-row="${title}"]`).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await note.getByRole('button', { name: 'Edit' }).click();
-  await page.locator('#knowledge-note-editor').fill(markdown);
+  const editor = page.locator('#knowledge-note-editor');
+  await editor.fill(markdown);
+  // Картинка и видео — «Вставить файл»: файлы ложатся в облако рядом с заметкой, в текст — `![[имя]]`
+  await editor.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
+  await note.locator('[data-note-insert-input]').setInputFiles([
+    { name: 'карта.png', mimeType: 'image/png', buffer: buildPngBuffer(96, [200, 120, 40]) },
+    { name: 'клип.webm', mimeType: 'video/webm', buffer: makeWebm() },
+  ]);
+  await page.waitForFunction(() => {
+    const value = document.querySelector('#knowledge-note-editor')?.value || '';
+    return value.includes('![[карта.png]]') && value.includes('![[клип.webm]]');
+  }, undefined, { timeout: 60000 }).catch(() => assert.fail('файлы не вставились в текст заметки'));
   await note.getByRole('button', { name: 'Save' }).click();
   await knowledge.locator(`[data-note-row="${title}"]`).getByText('Вещи').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: заметка для статьи создана');
+  const noteBody = note.locator('[data-note-body]');
+  await expectImageEmbed(noteBody, 'карта.png');
+  await expectVideoEmbed(noteBody, 'клип.webm');
+  assert.equal(await noteBody.locator('table td').filter({ hasText: '2 л' }).count(), 1, 'таблица в заметке');
+  await shoot(page, 'note-media');
+  // Перезагрузка: файлы берутся из облака заново. Раздел переживает перезагрузку — хелпер ждёт список чатов
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  await relogin(page, PASSWORD);
+  await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
+  await knowledge.locator(`[data-note-row="${title}"]`).first().click();
+  await expectImageEmbed(note.locator('[data-note-body]'), 'карта.png');
+  console.log('OK: заметка с картинкой, видео и таблицей; картинка после перезагрузки');
 
   // ── «Статья» в меню вложений: выбор заметки → карточка у обоих ─────────────
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
@@ -120,7 +176,9 @@ try {
   assert.equal(await articleBody.locator('strong').filter({ hasText: 'спальник' }).count(), 1, 'жирный');
   assert.equal(await articleBody.locator('a[href="https://example.org/map"]').count(), 1, 'ссылка');
   assert.equal(await articleBody.locator('blockquote').count(), 1, 'цитата');
-  assert.match(await articleBody.innerText(), /карта\.png/, 'картинка — подписью');
+  await expectImageEmbed(articleBody, 'карта.png');
+  await expectVideoEmbed(articleBody, 'клип.webm');
+  assert.equal(await articleBody.locator('table td').filter({ hasText: '2 л' }).count(), 1, 'таблица в статье');
   assert.equal(await articleBody.getByRole('heading', { name: title }).count(), 0, 'заголовок-название не повторяется');
   await shoot(bobPage, 'viewer');
   await viewer.locator('[data-article-save] button').click();
@@ -134,7 +192,9 @@ try {
   await bobRow.click();
   await bobPage.locator('#ParvaneKnowledge [data-note-body]').getByText(secret, { exact: false }).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  console.log('OK: окно чтения с разметкой, статья сохранена в заметки получателя');
+  // Файлы статьи — в облаке получателя: картинка заметки читается с его диска
+  await expectImageEmbed(bobPage.locator('#ParvaneKnowledge [data-note-body]'), 'карта.png');
+  console.log('OK: окно чтения с разметкой и файлами, статья с файлами сохранена в заметки получателя');
 
   // ── Пересылка: статья уходит статьёй, а не пропадает ─────────────────────
   await forwardMessage(page, title, bob);

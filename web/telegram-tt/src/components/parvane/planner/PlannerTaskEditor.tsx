@@ -30,6 +30,7 @@ import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
 import PlannerName from './PlannerName';
+import PlannerRemindSelect from './PlannerRemindSelect';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
@@ -150,6 +151,10 @@ const PlannerTaskEditor = ({
 
   const handleDue = useLastCallback((value: string) => {
     patch({ due: value || undefined }, lang('PlannerNoticeDueUpdated', { name: task.name }));
+  });
+
+  const handleRemind = useLastCallback((value: number | undefined) => {
+    patch({ remind: value }, lang('PlannerNoticeRemindUpdated', { name: task.name }));
   });
 
   const handleStart = useLastCallback((value: string) => {
@@ -372,6 +377,7 @@ const PlannerTaskEditor = ({
           onCommit={handleMinutes}
         />
       </div>
+      <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
       <PlannerDetailsFold summary={detailsSummary}>
         {!task.repeat && (
           <div className={styles.fields}>

@@ -30,6 +30,7 @@ import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerName from './PlannerName';
+import PlannerRemindSelect from './PlannerRemindSelect';
 import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 
@@ -82,6 +83,7 @@ const PlannerEventEditor = ({
   const [isAllDay, setIsAllDay] = useState(Boolean(event.isAllDay));
   const [isHoliday, setIsHoliday] = useState(Boolean(event.isHoliday));
   const [color, setColor] = useState(event.color || 0);
+  const [remind, setRemind] = useState(event.remind);
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(event.repeat, event.day || ''),
   );
@@ -168,6 +170,7 @@ const PlannerEventEditor = ({
       isAllDay: isAllDay || undefined,
       isHoliday: isHoliday || undefined,
       color: color || undefined,
+      remind,
     };
     const eventError = validateEvent(next);
     if (eventError) {
@@ -181,7 +184,8 @@ const PlannerEventEditor = ({
       const isDescriptionChanged = nextDescription !== (event.description || '');
       const hasOtherChanges = next.name !== event.name || next.start !== event.start || next.end !== event.end
         || Boolean(next.isAllDay) !== Boolean(event.isAllDay) || Boolean(next.isHoliday) !== Boolean(event.isHoliday)
-        || (next.color || 0) !== (event.color || 0) || (day || instanceDay) !== instanceDay;
+        || (next.color || 0) !== (event.color || 0) || (day || instanceDay) !== instanceDay
+        || next.remind !== event.remind;
       const isOwnDescription = isDescriptionChanged && descriptionScope === 'one';
       const patch = {
         name: next.name,
@@ -191,6 +195,7 @@ const PlannerEventEditor = ({
         isAllDay: next.isAllDay,
         isHoliday: next.isHoliday,
         color: next.color,
+        remind: next.remind,
       };
       const ownDescription = isOwnDescription ? nextDescription : undefined;
       // Новое правило повтора (сравнение — с правилом в том виде, в каком его показывает форма): объём —
@@ -289,6 +294,7 @@ const PlannerEventEditor = ({
         noReplaceNewlines
         onChange={handleDescriptionChange}
       />
+      <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
       {descriptionScope && (
         <PlannerDescriptionScope
           scope={descriptionScope}

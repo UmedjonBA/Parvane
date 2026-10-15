@@ -331,6 +331,7 @@ const EXPECTED: Record<string, unknown[]> = {
         occurrences: [],
         origin: null,
         source: null,
+        remind: null,
       },
     },
     {
@@ -493,6 +494,7 @@ const EXPECTED: Record<string, unknown[]> = {
         isHoliday: false,
         color: 4,
         description: 'взять полис',
+        remind: null,
       },
     },
     {
@@ -547,6 +549,7 @@ const EXPECTED: Record<string, unknown[]> = {
         isHoliday: false,
         color: 0,
         description: '',
+        remind: null,
       },
     },
   ],

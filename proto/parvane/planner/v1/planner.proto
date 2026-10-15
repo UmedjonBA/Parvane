@@ -146,6 +146,9 @@ message Task {
   repeated Occurrence occurrences = 14 [(parvane.core.v2.max_items) = 2000];
   Origin origin = 15;
   Source source = 16;
+  // 15 окт 2026, этап 4 плана: напомнить за столько минут до начала (без времени — до начала дня окна);
+  // unset — без напоминания. Не больше недели
+  U32 remind = 17;
 }
 
 message Event {
@@ -171,6 +174,8 @@ message Event {
   // 12 окт 2026: описание события, как у задачи (пустая строка — нет); название — короткая
   // строка для календаря, подробности — здесь
   Str description = 14;
+  // 15 окт 2026: напомнить за столько минут до начала, как у задачи
+  U32 remind = 15;
 }
 
 message List {
@@ -302,6 +307,14 @@ message QuickLine {
   parvane.core.v2.LwwStamp deleted = 7;
 }
 
+// 15 окт 2026, этап 4 плана: напоминание уже отправлено — два устройства не пишут его в «Избранное» дважды.
+// Ключ — `<id записи>@<день>@<минут до>`; регистр по `stamp` и надгробие, как у строк истории ввода
+message Reminded {
+  string id = 1 [(parvane.core.v2.max_len) = 96];
+  parvane.core.v2.LwwStamp stamp = 2;
+  parvane.core.v2.LwwStamp deleted = 3;
+}
+
 message NutritionDay {
   string day = 1 [(parvane.core.v2.max_len) = 10];
   repeated FoodEntry entries = 2 [(parvane.core.v2.max_items) = 200];
@@ -344,6 +357,7 @@ message Change {
     HealthRecord health = 9;
     LearnedWord learned = 10;
     QuickLine quick_line = 11;
+    Reminded reminded = 12;
   }
 }
 
@@ -366,4 +380,5 @@ message PlannerSnapshot {
   repeated LearnedWord learned = 9 [(parvane.core.v2.max_items) = 2000];
   // история ввода текстом: живые строки и надгробия вместе, не больше `MAX_QUICK_STORED` (planner.rs)
   repeated QuickLine quick_lines = 10 [(parvane.core.v2.max_items) = 2000];
+  repeated Reminded reminded = 11 [(parvane.core.v2.max_items) = 4000];
 }

@@ -419,6 +419,15 @@ export interface ApiArticle {
   mediaType: 'article';
   title: string;
   markdown: string;
+  // Файлы, встроенные в текст: `name` — имя в `![[…]]`, скачивание — по `fileId` (ключи помнит провайдер)
+  media?: ApiArticleMedia[];
+}
+
+export interface ApiArticleMedia {
+  name: string;
+  fileId: string;
+  mimeType: string;
+  size: number;
 }
 
 export type ApiNewMediaTodo = {

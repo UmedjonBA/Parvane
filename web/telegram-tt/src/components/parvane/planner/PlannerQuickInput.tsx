@@ -16,7 +16,7 @@ import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import {
-  formatDay, formatDayLabel, formatDuration, formatRepeat, formatSpan,
+  formatDay, formatDayLabel, formatDuration, formatRemind, formatRepeat, formatSpan,
 } from './plannerFormat';
 import { applyQuickDraft, formatPace } from './plannerHealth';
 import { toMinutes, toTime } from './plannerModel';
@@ -764,6 +764,7 @@ function buildChips(lang: ReturnType<typeof useLang>, draft: QuickDraft): Chip[]
   if (draft.list) chips.push({ field: 'list', text: `#${draft.list}` });
   if (draft.place) chips.push({ field: 'place', text: `@${draft.place}` });
   if (draft.isImportant) chips.push({ field: 'important', text: `! ${lang('PlannerStatusActive')}` });
+  if (draft.remind !== undefined) chips.push({ field: 'remind', text: formatRemind(lang, draft.remind) });
   return chips;
 }
 

@@ -26,7 +26,7 @@ export type QuickKind = 'task' | 'event' | 'food' | 'water' | 'sleep' | 'workout
 export type QuickNutrient = PlannerNutrient | 'sugar' | 'salt';
 export type QuickField =
   'kind' | 'day' | 'time' | 'minutes' | 'due' | 'repeat' | 'meal' | 'grams' | 'water' | 'health' | 'description'
-  | 'list' | 'place' | 'important' | QuickNutrient;
+  | 'list' | 'place' | 'important' | 'remind' | QuickNutrient;
 // Показатель здоровья одной строкой: «вес 72,4», «давление 120/80», «пульс 64», «шаги 9500», «самочувствие 4»
 export type QuickMetric = Exclude<PlannerHealthKind, 'sleep' | 'workout'>;
 export type QuickGoalChanges = {
@@ -61,6 +61,8 @@ export type QuickDraft = {
   list?: string;
   place?: string;
   isImportant?: boolean;
+  // Напомнить за столько минут до начала (0 — в момент начала): «напомнить за 15 мин», «remind 1 hour before»
+  remind?: number;
   day?: string;
   // День не назван: взят сегодняшний либо завтрашний (время уже прошло)
   isDayAssumed?: boolean;
@@ -876,12 +878,63 @@ function mealByTime(minutes: number): PlannerMeal {
 // Ссылки на заметки `[[…]]` разбор не читает: на время разбора они закрыты заглушками (`maskNameLinks`) и
 // целиком остаются в названии либо описании — «[[Встреча завтра]] сб 15:00» ставится на субботу
 export function parseQuickInput(typed: string, ctx: QuickContext): QuickDraft {
-  const { text, links } = maskNameLinks(typed);
+  const { text: linked, links } = maskNameLinks(typed);
+  const remind = ctx.skip?.includes('remind') ? undefined : findRemind(linked);
+  // Слова напоминания закрыты пробелами той же длины: участки остальных полей остаются на местах
+  const text = remind
+    ? `${linked.slice(0, remind.from)}${' '.repeat(remind.to - remind.from)}${linked.slice(remind.to)}`
+    : linked;
   const draft = parseMasked(text, ctx);
+  if (remind && (draft.kind === 'task' || draft.kind === 'event')) {
+    draft.remind = remind.minutes;
+    const span: QuickSpan = { field: 'remind', from: remind.from, to: remind.to };
+    draft.spans = [...draft.spans, span].sort((a, b) => a.from - b.from);
+  }
   if (!links.length) return draft;
   draft.name = unmaskNameLinks(draft.name, links);
   if (draft.description) draft.description = unmaskNameLinks(draft.description, links);
   return draft;
+}
+
+// «напомнить», «напомни мне за 15 мин», «напоминание за час», «remind me 10 min before», «reminder 1 day before»;
+// без срока — в момент начала. Срок — число с единицей либо «полчаса / час / день / сутки / неделю» и
+// «an hour / a day / a week»
+const REMIND_HEAD = /(^|[\s,;])(напомнить|напомни|напоминание|remind(?:\s+me)?|reminder)(?=$|[\s,;])/i;
+const REMIND_RU = new RegExp('^\\s+(?:мне\\s+)?за\\s+(?:(\\d+)\\s*'
+  + '(минут[уы]?|мин|м|час(?:а|ов)?|ч|дн(?:я|ей)|день|д|недел[юи]|нед)|(полчаса|час|день|сутки|неделю))'
+  + '(?=$|[\\s,;.])', 'i');
+const REMIND_EN = new RegExp('^\\s+(?:(\\d+)\\s*(minutes?|mins?|m|hours?|h|days?|d|weeks?|w)'
+  + '|(half an hour|an hour|a day|a week))\\s+(?:before|earlier|ahead)(?=$|[\\s,;.])', 'i');
+const REMIND_WORD_MINUTES: Record<string, number> = {
+  полчаса: 30, час: 60, день: 24 * 60, сутки: 24 * 60, неделю: 7 * 24 * 60,
+  'half an hour': 30, 'an hour': 60, 'a day': 24 * 60, 'a week': 7 * 24 * 60,
+};
+const REMIND_MAX_MINUTES = 7 * 24 * 60;
+
+function remindUnitMinutes(unit: string) {
+  const u = unit.toLowerCase();
+  if (/^(м|мин|минут|m|min)/.test(u)) return 1;
+  if (/^(ч|час|h|hour)/.test(u)) return 60;
+  if (/^(д|дн|день|d|day)/.test(u)) return 24 * 60;
+  return 7 * 24 * 60;
+}
+
+function findRemind(text: string): { minutes: number; from: number; to: number } | undefined {
+  const head = REMIND_HEAD.exec(text);
+  if (!head) return undefined;
+  const from = head.index + head[1].length;
+  let to = from + head[2].length;
+  const rest = text.slice(to);
+  const amount = REMIND_RU.exec(rest) || REMIND_EN.exec(rest);
+  let minutes = 0;
+  if (amount) {
+    minutes = amount[1]
+      ? Number(amount[1]) * remindUnitMinutes(amount[2])
+      : REMIND_WORD_MINUTES[amount[3].toLowerCase()];
+    to += amount[0].length;
+  }
+  if (!Number.isFinite(minutes) || minutes > REMIND_MAX_MINUTES) return undefined;
+  return { minutes, from, to };
 }
 
 function parseMasked(text: string, ctx: QuickContext): QuickDraft {

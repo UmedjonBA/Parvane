@@ -109,6 +109,7 @@ const LIVE_LOCATION_POSITION_TIMEOUT_MS = 10000;
 const ARTICLE_MAX_LENGTH = 65536;
 const ARTICLE_TITLE_MAX = 200;
 const ARTICLE_TEXT_MAX = 600;
+const ARTICLE_MEDIA_MAX = 32;
 
 // Собеседник без журнала устройств v2 (протокол v1 отключён, T110) — доставить нечем
 const V2_PEER_REQUIRED = 'The recipient has no devices on protocol v2.';
@@ -1478,8 +1479,24 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
+    // Напоминание «Плана» (этап 4): обычный текст в «Избранное» — история напоминаний и копия на всех устройствах
+    async parvaneSendSelfText({ text }: { text: string }) {
+      const currentStore = store();
+      const self = currentStore.self;
+      if (!self) return undefined;
+      const uuid = newMessageId();
+      const content: WireMessageContent = { kind: 'text', text };
+      await publishInner(self, content, uuid);
+      await deps.sync.applyExternal({
+        id: uuid, from: self, to: self, content, ts: Math.floor(Date.now() / 1000), origin: 'v2',
+      });
+      return true;
+    },
+
     // Статья (ARTICLE-1): заметка «Знаний» целиком; картинки заметки не входят
-    async parvaneSendArticle({ chat, title, markdown }: { chat: ApiChat; title: string; markdown: string }) {
+    async parvaneSendArticle({
+      chat, title, markdown, media,
+    }: { chat: ApiChat; title: string; markdown: string; media?: WireMessageContent[] }) {
       const currentStore = store();
       const toAddress = currentStore.getAddressForId(chat.id);
       if (!toAddress) return undefined;
@@ -1489,8 +1506,11 @@ export function createMessageController(deps: MessageDependencies) {
       const content: WireMessageContent = {
         kind: 'article',
         ...articleFields(title, markdown),
+        // Файлы, встроенные в текст: копии блобов облака в медиа чатов (этап 6 плана 15 окт 2026)
+        article_media: media?.length ? media.slice(0, ARTICLE_MEDIA_MAX) : undefined,
         ttl_secs: ttlSecs || undefined,
       };
+      deps.media.rememberKeys(content);
       await publishInner(toAddress, content, uuid);
       // v2 свою операцию назад не присылает: строка идёт обычным конвейером (как задание в чат)
       await deps.sync.applyExternal({

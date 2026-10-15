@@ -1441,6 +1441,7 @@
 "PlannerDaysValue_many" = "{days} дней";
 "PlannerDaysValue_other" = "{days} дня";
 "PlannerRemind" = "Напомнить";
+"PlannerNoticeRemindUpdated" = "Напоминание изменено: {name}";
 "PlannerRemindNone" = "Без напоминания";
 "PlannerReminderTitle" = "Напоминание";
 "PlannerReminderMessage" = "⏰ {title} — {when}";
@@ -2037,6 +2038,12 @@
 "KnowledgeCanvasLinkOpen" = "Открыть в новой вкладке";
 "KnowledgeCanvasFileChoose" = "Файл на холст";
 "KnowledgeCanvasFileMissing" = "Файл не найден";
+"KnowledgeEmbedPlay" = "Воспроизвести";
+"KnowledgeEmbedFailed" = "Не удалось открыть файл";
+"KnowledgeEmbedDownload" = "Скачать";
+"KnowledgeInsertFile" = "Вставить файл";
+"KnowledgeInsertFromCloud" = "Из облака";
+"KnowledgeInsertFailed" = "Не все файлы удалось загрузить";
 "KnowledgeCanvasFileEmpty" = "Здесь пока пусто";
 "KnowledgeCanvasOpenFile" = "Открыть файл";
 "KnowledgeCanvasEditNote" = "Изменить текст заметки";
@@ -2098,7 +2105,6 @@
 "ArticleSaveToNotes" = "Сохранить в заметки";
 "ArticleSaved" = "Сохранено в заметки: «{title}»";
 "ArticleSaveFailed" = "Не удалось сохранить статью";
-"ArticleImageOmitted" = "Картинка «{name}» в статью не входит";
 "ArticlePickTitle" = "Отправить заметку статьёй";
 "ArticlePickHint" = "Заметка уходит целиком и открывается окном чтения. Картинки в статью не входят.";
 "ArticleSearch" = "Поиск заметок";

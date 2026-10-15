@@ -36,6 +36,18 @@ service WakeService {
       shard: "push"
     };
   }
+  // 15 окт 2026, этап 4 плана: будильник напоминаний. Устройство отдаёт серверу только моменты времени — в срок
+  // сервер шлёт обычное пустое пробуждение; что напомнить, знает только устройство (текст лежит у него).
+  // Список заменяет прежний список этого устройства; пустой — будильников нет
+  rpc SetAlarms(SetAlarmsRequest) returns (SetAlarmsResponse) {
+    option (parvane.core.v2.method) = {
+      name: "push.alarm.set"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "push"
+    };
+  }
 }
 
 enum WakeKind {
@@ -70,3 +82,9 @@ message UnregisterRequest {
   string endpoint = 1 [(parvane.core.v2.max_len) = 2048];
 }
 message UnregisterResponse {}
+
+message SetAlarmsRequest {
+  // Моменты пробуждения, мс unix; не дальше 31 дня вперёд, прошедшие отбрасываются
+  repeated uint64 at_ms = 1 [(parvane.core.v2.max_items) = 64];
+}
+message SetAlarmsResponse {}

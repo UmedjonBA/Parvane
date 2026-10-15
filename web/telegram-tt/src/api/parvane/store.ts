@@ -648,7 +648,19 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
     // ARTICLE-1: статья — карточка с окном чтения
     case 'article':
       return content.markdown !== undefined
-        ? { article: { mediaType: 'article', title: content.title || '', markdown: content.markdown } }
+        ? {
+          article: {
+            mediaType: 'article',
+            title: content.title || '',
+            markdown: content.markdown,
+            media: content.article_media?.filter((item) => item.file_id).map((item) => ({
+              name: item.filename || '',
+              fileId: item.file_id!,
+              mimeType: item.mime || 'application/octet-stream',
+              size: item.size_bytes || 0,
+            })),
+          },
+        }
         : { text: { text: content.text || `📄 ${content.title || ''}` } };
     case 'location': {
       const geo = {

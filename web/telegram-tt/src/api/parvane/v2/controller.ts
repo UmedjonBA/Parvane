@@ -3448,6 +3448,15 @@ export function createV2Controller(deps: Deps) {
     return true;
   }
 
+  // Будильник напоминаний (этап 4 плана 15 окт 2026): серверу — только моменты (мс), список заменяет прежний
+  async function pushSetAlarms(atMs: number[]) {
+    if (!pv || !ready) return false;
+    await call('id', 'push.alarm.set', pv.encodeMethodRequest('push.alarm.set', JSON.stringify({
+      at_ms: atMs.map(String),
+    })));
+    return true;
+  }
+
   // Приватность v2 (T079): сервер хранит её в identity и применяет к
   // доставке (жетоны незнакомцев) и добавлению в группы
   async function setPrivacy(settings: {
@@ -3640,6 +3649,7 @@ export function createV2Controller(deps: Deps) {
     isV2InviteUrl: (url: string) => Boolean(parseV2Invite(url)) || V2_INVITE_REGEX.test(url.trim()),
     logDevices,
     pushRegister,
+    pushSetAlarms,
     pushUnregister,
     setPrivacy,
     getPrivacy,

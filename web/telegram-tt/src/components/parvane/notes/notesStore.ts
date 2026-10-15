@@ -18,6 +18,7 @@ import type { NotesIndex, NoteSource } from './notesModel';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import { SecureE2eStorage } from '../../../api/parvane/secureStorage';
+import { freeName } from '../cloud/cloudModel';
 import {
   getCloudData, getNodes, loadCloud, moveCloudNodes, refreshCloud, renameCloudNode, trashCloudNodes,
 } from '../cloud/cloudStore';
@@ -690,6 +691,30 @@ export async function createNote(
   await refreshCloud();
   await queueSync();
   return result.node;
+}
+
+/** Файлы чата (вложения статьи) — в корень хранилища рядом с заметкой: копии блобов на сервере. Возвращает
+ * новые имена занятых (`имя в тексте` → `имя в облаке`); `undefined` — хранилища нет либо копия не удалась. */
+export async function saveChatFilesToVault(
+  vaultName: string, files: { fileId: string; name: string; mime: string; size: number }[],
+): Promise<Map<string, string> | undefined> {
+  const vault = await ensureFolder(vaultName);
+  if (!vault) return undefined;
+  const taken = new Set(getNodes(rootIdOf())
+    .filter((node) => !node.trashed && node.parent === vault)
+    .map((node) => node.name));
+  const renamed = new Map<string, string>();
+  for (const file of files) {
+    const name = freeName(taken, file.name || 'file');
+    taken.add(name);
+    const result = await callParvane('parvaneCloudSaveFromChat', {
+      file: { ...file, name }, container: ROOT, parent: vault,
+    }).catch(() => undefined) as { ok: boolean } | undefined;
+    if (!result?.ok) return undefined;
+    if (name !== file.name) renamed.set(file.name, name);
+  }
+  await refreshCloud();
+  return renamed;
 }
 
 /** Заметка дня: открыть существующую либо создать по шаблону. */

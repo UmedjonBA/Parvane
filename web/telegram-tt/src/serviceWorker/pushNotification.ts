@@ -1,4 +1,7 @@
+import type { WorkerReminder } from '../util/reminderStore';
+
 import { APP_NAME, DEBUG, DEBUG_MORE } from '../config';
+import { takeDueWorkerReminders } from '../util/reminderStore';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -201,8 +204,26 @@ export function handlePush(e: PushEvent) {
   e.waitUntil((async () => {
     const clients = await getClients();
     if (clients.length) return;
+    // Пробуждение без данных бывает и будильником напоминания «Плана» (этап 4 плана 15 окт 2026):
+    // наступившее напоминание показывается вместо общего «новое сообщение»
+    const reminders = await takeDueWorkerReminders(Date.now()).catch(() => []);
+    if (reminders.length) {
+      await Promise.all(reminders.map(showReminder));
+      return;
+    }
     await showNotification(notification);
   })());
+}
+
+function showReminder(reminder: WorkerReminder) {
+  const isRu = self.navigator.language.toLowerCase().startsWith('ru');
+  const heading = isRu ? 'Напоминание' : 'Reminder';
+  return self.registration.showNotification(reminder.title ? `⏰ ${reminder.title}` : `⏰ ${heading}`, {
+    body: reminder.title ? heading : (isRu ? 'Откройте «План»' : 'Open the Planner'),
+    icon: 'icon-192x192.png',
+    badge: 'icon-192x192.png',
+    tag: `reminder:${reminder.key}`,
+  });
 }
 
 async function focusChatMessage(client: WindowClient, data: FocusMessageData) {

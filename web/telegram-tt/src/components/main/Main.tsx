@@ -466,6 +466,16 @@ const Main = ({
     return () => window.removeEventListener('parvane-ssk-rotation', handleSskRotation);
   }, [showNotification]);
 
+  // Напоминание «Плана» наступило, приложение открыто (этап 4 плана 15 окт 2026)
+  useEffect(() => {
+    const handleReminder = (event: Event) => {
+      const { text } = (event as CustomEvent<{ text: string }>).detail;
+      showNotification({ message: text, duration: 15000 });
+    };
+    window.addEventListener('parvane-reminder', handleReminder);
+    return () => window.removeEventListener('parvane-reminder', handleReminder);
+  }, [showNotification]);
+
   // Parvane: это устройство ещё не привязано к аккаунту (вход с нового устройства
   // или после полного выхода): без привязки оно не получает сообщений — сразу
   // ведём на экран «Устройства» (код для другого устройства, ключ восстановления)

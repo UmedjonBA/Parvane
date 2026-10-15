@@ -75,6 +75,8 @@ export type PlannerTask = {
   occurrences?: PlannerOccurrence[];
   origin?: PlannerOrigin;
   source?: PlannerSource;
+  // Напомнить за столько минут до начала (0 — в момент начала); нет значения — без напоминания
+  remind?: number;
   // У экземпляра ряда (результат разворачивания, не хранится): день экземпляра
   instanceDay?: string;
 };
@@ -98,6 +100,8 @@ export type PlannerEvent = {
   isHoliday?: boolean;
   // Цвет из палитры списков (0 или нет — без цвета): событие в список не входит
   color?: number;
+  // Напомнить за столько минут до начала, как у задачи
+  remind?: number;
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -243,6 +247,8 @@ export type PlannerState = {
   learned: PlannerLearnedWord[];
   // История ввода текстом (строки-подсказки и забытые шаблоны): тоже в данных «Плана»
   quickLines: PlannerQuickLine[];
+  // Напоминания, уже записанные в «Избранное» (`<id>@<день>@<минут>`): второе устройство их не повторит
+  reminded: string[];
 };
 
 export type PlannerTimed = {
@@ -293,6 +299,7 @@ export function createEmptyPlannerState(): PlannerState {
     healthGoals: { ...DEFAULT_HEALTH_GOALS },
     learned: [],
     quickLines: [],
+    reminded: [],
   };
 }
 
@@ -1812,6 +1819,7 @@ export function normalizePlannerState(raw: unknown): PlannerState {
       ? { ...saved.healthGoals } : empty.healthGoals,
     learned: normalizeLearned(saved.learned),
     quickLines: normalizeQuickLines(saved.quickLines),
+    reminded: Array.isArray(saved.reminded) ? saved.reminded.filter((id) => typeof id === 'string') : [],
   };
 }
 

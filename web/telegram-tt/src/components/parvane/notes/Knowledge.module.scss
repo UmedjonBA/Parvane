@@ -2240,3 +2240,15 @@
 .edgeInput {
   flex: 1 1 auto;
 }
+
+// Правка заметки: вставка файлов (этап 6 плана 15 окт 2026)
+.editorTools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.hiddenInput {
+  display: none;
+}

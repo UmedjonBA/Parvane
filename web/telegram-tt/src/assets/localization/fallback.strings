@@ -3390,6 +3390,7 @@
 "PlannerDaysValue_one" = "{days} day";
 "PlannerDaysValue_other" = "{days} days";
 "PlannerRemind" = "Remind";
+"PlannerNoticeRemindUpdated" = "Reminder changed: {name}";
 "PlannerRemindNone" = "No reminder";
 "PlannerReminderTitle" = "Reminder";
 "PlannerReminderMessage" = "⏰ {title} — {when}";
@@ -3949,6 +3950,12 @@
 "KnowledgeCanvasLinkOpen" = "Open in a new tab";
 "KnowledgeCanvasFileChoose" = "Add a file to the canvas";
 "KnowledgeCanvasFileMissing" = "File not found";
+"KnowledgeEmbedPlay" = "Play";
+"KnowledgeEmbedFailed" = "Could not open the file";
+"KnowledgeEmbedDownload" = "Download";
+"KnowledgeInsertFile" = "Insert file";
+"KnowledgeInsertFromCloud" = "From cloud";
+"KnowledgeInsertFailed" = "Some files could not be uploaded";
 "KnowledgeCanvasFileEmpty" = "There is nothing here yet";
 "KnowledgeCanvasOpenFile" = "Open file";
 "KnowledgeCanvasEditNote" = "Edit note text";
@@ -4008,7 +4015,6 @@
 "ArticleSaveToNotes" = "Save to notes";
 "ArticleSaved" = "Saved to notes: «{title}»";
 "ArticleSaveFailed" = "Could not save the article";
-"ArticleImageOmitted" = "Picture «{name}» is not included in the article";
 "ArticlePickTitle" = "Send a note as an article";
 "ArticlePickHint" = "The note is sent whole and opens in a reading window. Pictures are not included.";
 "ArticleSearch" = "Search notes";

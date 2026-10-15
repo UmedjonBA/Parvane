@@ -39,7 +39,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::LwwStamp;
 use crate::pb::parvane::planner::v1::{
     change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, NutritionDay, Occurrence, Origin as TaskOrigin,
-    PlannerOp, PlannerSnapshot, QuickLine, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
+    PlannerOp, PlannerSnapshot, QuickLine, Reminded, Repeat, RepeatKind, Settings, Source, Steps, Str, Task, Weekdays, I32, U32,
 };
 
 pub const DOMAIN_NAME: &str = "parvane.planner.v1";
@@ -80,6 +80,10 @@ pub const MAX_LEARNED_STORED: usize = 2000;
 pub const MAX_QUICK_TEXT: usize = 1200;
 pub const MAX_QUICK_LIVE: usize = 200;
 pub const MAX_QUICK_STORED: usize = 2000;
+/// Напомнить не раньше чем за неделю до начала (минуты).
+pub const MAX_REMIND_MINUTES: u32 = 7 * 24 * 60;
+/// Отметок «напомнено» в снимке не больше (свежие по метке); старые устройство стирает надгробием.
+pub const MAX_REMINDED_STORED: usize = 4000;
 
 pub fn decode_op(bytes: &[u8]) -> Result<PlannerOp> {
     decode_checked(bytes, Origin::Client)
@@ -169,6 +173,7 @@ fn check_task(t: &Task) -> Result<()> {
             return Err(ProtoError::InvalidField("minutes"));
         }
     }
+    check_remind(t.remind.as_ref())?;
     if let Some(steps) = &t.steps {
         if steps.items.len() > 100 || steps.items.iter().any(|s| s.text.is_empty() || s.text.len() > 160) {
             return Err(ProtoError::InvalidField("steps"));
@@ -285,6 +290,24 @@ fn check_event(e: &Event) -> Result<()> {
     }
     if e.color.as_ref().is_some_and(|c| c.value > MAX_LIST_COLOR) {
         return Err(ProtoError::InvalidField("color"));
+    }
+    check_remind(e.remind.as_ref())
+}
+
+fn check_remind(r: Option<&U32>) -> Result<()> {
+    if r.is_some_and(|r| !r.unset && r.value > MAX_REMIND_MINUTES) {
+        return Err(ProtoError::InvalidField("remind"));
+    }
+    Ok(())
+}
+
+/// Отметка «напомнено»: ключ `<id записи>@<день>@<минут до>`.
+fn check_reminded(r: &Reminded) -> Result<()> {
+    let mut parts = r.id.split('@');
+    let ok = matches!((parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(id), Some(day), Some(min), None) if is_id(id) && is_day(day) && min.parse::<u32>().is_ok_and(|m| m <= MAX_REMIND_MINUTES));
+    if !ok {
+        return Err(ProtoError::InvalidField("reminded"));
     }
     Ok(())
 }
@@ -438,6 +461,8 @@ pub struct PlannerState {
     pub learned: BTreeMap<String, LearnedWord>,
     /// История ввода текстом: строки и забытые шаблоны (ключ — id).
     pub quick_lines: BTreeMap<String, QuickLine>,
+    /// Отметки «напоминание отправлено» (ключ — `<id>@<день>@<минут>`).
+    pub reminded: BTreeMap<String, Reminded>,
     /// Ревизия и кэш размера снимка (C1); в сравнении не участвует.
     cache: StateCache,
 }
@@ -582,6 +607,10 @@ impl PlannerState {
         all.into_iter().cloned().collect()
     }
 
+    pub fn is_reminded_alive(r: &Reminded) -> bool {
+        stamp_key(r.stamp.as_ref()) > stamp_key(r.deleted.as_ref())
+    }
+
     pub fn is_quick_line_alive(l: &QuickLine) -> bool {
         stamp_key(l.stamp.as_ref()) > stamp_key(l.deleted.as_ref())
     }
@@ -660,6 +689,7 @@ impl PlannerState {
         merge_reg!(cur.repeat, inc.repeat, Repeat);
         merge_reg!(cur.origin, inc.origin, TaskOrigin);
         merge_reg!(cur.source, inc.source, Source);
+        merge_reg!(cur.remind, inc.remind, U32);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -677,7 +707,16 @@ impl PlannerState {
         merge_reg!(cur.is_holiday, inc.is_holiday, Bool);
         merge_reg!(cur.color, inc.color, U32);
         merge_reg!(cur.description, inc.description, Str);
+        merge_reg!(cur.remind, inc.remind, U32);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
+        merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
+    }
+
+    fn merge_reminded(&mut self, inc: &Reminded) {
+        let cur = self.reminded.entry(inc.id.clone()).or_insert_with(|| Reminded { id: inc.id.clone(), ..Default::default() });
+        if stamp_key(inc.stamp.as_ref()) > stamp_key(cur.stamp.as_ref()) {
+            cur.stamp = inc.stamp.clone();
+        }
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
 
@@ -829,6 +868,10 @@ impl PlannerState {
                 check_quick_line(l)?;
                 self.merge_quick_line(l);
             }
+            Some(change::Change::Reminded(r)) => {
+                check_reminded(r)?;
+                self.merge_reminded(r);
+            }
             Some(change::Change::Migration(_)) | None => {}
         }
         Ok(())
@@ -894,6 +937,10 @@ impl PlannerState {
             check_quick_line(l)?;
             self.merge_quick_line(l);
         }
+        for r in &s.reminded {
+            check_reminded(r)?;
+            self.merge_reminded(r);
+        }
         Ok(())
     }
 
@@ -910,7 +957,22 @@ impl PlannerState {
             health: self.health.values().cloned().collect(),
             learned: self.learned_stored(),
             quick_lines: self.quick_stored(),
+            reminded: self.reminded_stored(),
         }
+    }
+
+    /// Отметки для снимка: свежие по метке, не больше `MAX_REMINDED_STORED`.
+    fn reminded_stored(&self) -> Vec<Reminded> {
+        let mut all: Vec<&Reminded> = self.reminded.values().collect();
+        if all.len() > MAX_REMINDED_STORED {
+            fn key(r: &Reminded) -> (u64, &str) {
+                stamp_key(r.stamp.as_ref()).max(stamp_key(r.deleted.as_ref()))
+            }
+            all.sort_by(|a, b| key(b).cmp(&key(a)).then_with(|| a.id.cmp(&b.id)));
+            all.truncate(MAX_REMINDED_STORED);
+            all.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        all.into_iter().cloned().collect()
     }
 
     pub fn from_snapshot(s: &PlannerSnapshot) -> Result<Self> {
@@ -957,6 +1019,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(t.repeat.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(t.origin.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(t.source.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(t.remind.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &t.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -972,6 +1035,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 push(e.color.as_ref().and_then(|f| f.stamp.as_ref()))?;
+                push(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))?;
                 for o in &e.occurrences {
                     push(o.stamp.as_ref())?;
                 }
@@ -1011,6 +1075,10 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
             Some(change::Change::QuickLine(l)) => {
                 push(l.stamp.as_ref())?;
                 push(l.deleted.as_ref())?;
+            }
+            Some(change::Change::Reminded(r)) => {
+                push(r.stamp.as_ref())?;
+                push(r.deleted.as_ref())?;
             }
             Some(change::Change::Migration(_)) | None => {}
         }
@@ -1062,6 +1130,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 if let Some(f) = &mut t.source {
                     f.stamp = Some(pb.clone());
                 }
+                if let Some(f) = &mut t.remind {
+                    f.stamp = Some(pb.clone());
+                }
                 for o in &mut t.occurrences {
                     o.stamp = Some(pb.clone());
                 }
@@ -1089,6 +1160,9 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     f.stamp = Some(pb.clone());
                 }
                 if let Some(f) = &mut e.color {
+                    f.stamp = Some(pb.clone());
+                }
+                if let Some(f) = &mut e.remind {
                     f.stamp = Some(pb.clone());
                 }
                 for o in &mut e.occurrences {
@@ -1158,6 +1232,13 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                     l.deleted = Some(pb.clone());
                 } else {
                     l.stamp = Some(pb.clone());
+                }
+            }
+            Some(change::Change::Reminded(r)) => {
+                if r.deleted.is_some() {
+                    r.deleted = Some(pb.clone());
+                } else {
+                    r.stamp = Some(pb.clone());
                 }
             }
             Some(change::Change::Migration(_)) | None => {}

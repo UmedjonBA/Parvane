@@ -2,7 +2,7 @@ import { memo, useMemo } from '../../../lib/teact/teact';
 
 import type { ApiArticle } from '../../../api/types';
 
-import { parseArticle } from '../../parvane/article/articleMarkdown';
+import { parseMarkdown } from '../../parvane/markdown/markdown';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -43,7 +43,13 @@ const ArticleCard = ({ article }: OwnProps) => {
       <div className={styles.actions} data-article-read>
         <Button size="tiny" noForcedUpperCase onClick={open}>{lang('ArticleRead')}</Button>
       </div>
-      <ArticleViewer isOpen={isOpen} title={article.title} markdown={article.markdown} onClose={close} />
+      <ArticleViewer
+        isOpen={isOpen}
+        title={article.title}
+        markdown={article.markdown}
+        media={article.media}
+        onClose={close}
+      />
     </div>
   );
 };
@@ -51,7 +57,7 @@ const ArticleCard = ({ article }: OwnProps) => {
 // Начало текста без разметки: первые строки абзацев, списков и цитат
 function buildPreview(article: ApiArticle) {
   const lines: string[] = [];
-  for (const block of parseArticle(article.markdown, article.title)) {
+  for (const block of parseMarkdown(article.markdown, article.title)) {
     if (lines.length >= PREVIEW_LINES) break;
     if (block.type === 'paragraph' || block.type === 'quote' || block.type === 'heading') {
       lines.push(...block.text.split('\n'));

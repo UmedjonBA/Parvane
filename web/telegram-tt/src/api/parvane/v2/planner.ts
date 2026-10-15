@@ -108,6 +108,8 @@ export function createPlannerSync(deps: Deps) {
   let isWanted = false;
   // Есть потребители состояния (раздел, палитра, карточки задания в чате): частый опрос
   let isActive = true;
+  // Запущен только фоном (напоминания): первый вызов из UI возвращает частый опрос
+  let isBackgroundOnly = false;
   let isSnapshotTried = false;
   let isNoContainerAnnounced = false;
   let areListenersSet = false;
@@ -540,8 +542,17 @@ export function createPlannerSync(deps: Deps) {
 
   // ── API ────────────────────────────────────────────────────────────────────
 
-  /** UI открыл планировщик: подключить контейнер и синхронизировать. */
-  async function ensure() {
+  /** UI открыл планировщик: подключить контейнер и синхронизировать. `isBackground` — запуск без потребителей
+   * (напоминания): опрос редкий, пока UI сам не позовёт `ensure`; уже запущенный планировщик он не трогает. */
+  async function ensure(isBackground = false) {
+    if (isBackground) {
+      if (isWanted) return;
+      isActive = false;
+      isBackgroundOnly = true;
+    } else if (isBackgroundOnly) {
+      isBackgroundOnly = false;
+      isActive = true;
+    }
     isWanted = true;
     startTimers();
     const client = deps.client();
@@ -573,6 +584,7 @@ export function createPlannerSync(deps: Deps) {
   /** Есть ли потребители состояния (раздел «План», палитра, карточки задания в
    * чате): без них опрос редкий, с первым — немедленный синк. */
   function setActive(active: boolean) {
+    isBackgroundOnly = false;
     if (isActive === active) return;
     isActive = active;
     if (!isWanted) return;
@@ -624,6 +636,7 @@ export function createPlannerSync(deps: Deps) {
     pendingChanges = [];
     isWanted = false;
     isActive = true;
+    isBackgroundOnly = false;
     isSnapshotTried = false;
     isNoContainerAnnounced = false;
     lastError = undefined;

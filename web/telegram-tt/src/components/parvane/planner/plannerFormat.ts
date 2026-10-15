@@ -65,6 +65,15 @@ export function formatDuration(lang: LangFn, minutes: number) {
   return minutes % 60 ? `${hours} ${lang('PlannerMinutesValue', { minutes: minutes % 60 })}` : hours;
 }
 
+/** «Напомнить в начале» / «Напомнить за 15 мин» (сутки и неделя — днями). */
+export function formatRemind(lang: LangFn, minutes: number) {
+  if (!minutes) return lang('PlannerRemindAtStart');
+  const day = 24 * 60;
+  const amount = minutes % day === 0 ? lang('PlannerDaysValue', { days: minutes / day }, { pluralValue: minutes / day })
+    : formatDuration(lang, minutes);
+  return lang('PlannerRemindBefore', { amount });
+}
+
 // Граница окна: ровный час — «09», иначе «08:30»
 export function formatClock(minutes: number) {
   const clock = toTime(minutes);

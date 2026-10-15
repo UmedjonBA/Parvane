@@ -80,7 +80,7 @@ export type V2Content = {
   // spec 016 (CLOUD-1): приглашение в совместную папку облака
   cloud_invite?: { container?: { domain?: string; id?: string }; name?: string; role?: number; text?: string };
   // ARTICLE-1: статья — заметка в Markdown
-  article?: { title?: string; markdown?: string; text?: string };
+  article?: { title?: string; markdown?: string; text?: string; media?: V2Media[] };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
   chat_mode?: { l2?: boolean };
@@ -360,7 +360,14 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
       };
       break;
     case 'article':
-      out = { article: { title: c.title, markdown: c.markdown, text: c.text || undefined } };
+      out = {
+        article: {
+          title: c.title,
+          markdown: c.markdown,
+          text: c.text || undefined,
+          media: c.article_media?.length ? c.article_media.map(mediaToV2) : undefined,
+        },
+      };
       break;
     case 'task_response':
       out = {
@@ -477,6 +484,7 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       title: c.article.title || '',
       markdown: c.article.markdown || '',
       text: c.article.text || undefined,
+      article_media: c.article.media?.length ? c.article.media.map(mediaFromV2) : undefined,
     };
   } else if (c.task_response) {
     out = {

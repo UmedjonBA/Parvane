@@ -453,9 +453,9 @@ export function dismissCloudTransfer(id: string) {
   uploadSpecs.delete(id);
 }
 
-async function runUpload(id: string) {
+async function runUpload(id: string): Promise<boolean> {
   const spec = uploadSpecs.get(id);
-  if (!spec) return;
+  if (!spec) return false;
   const result = await callParvane('parvaneCloudUpload', {
     uploadId: id,
     container: spec.container,
@@ -469,16 +469,24 @@ async function runUpload(id: string) {
     await refreshCloud();
     void refreshCloudUsage();
   }
+  return Boolean(result?.ok);
 }
 
 /** Загрузить файлы в текущую папку: каждый — своей строкой хода; имена не затирают соседей. */
 export function uploadCloudFiles(files: File[]) {
   const place = getCloudPlace();
-  const container = getActiveContainerId(place) || ROOT;
-  const taken = new Set(namesIn(getNodes(container === ROOT ? undefined : container), place.folder));
+  void uploadCloudFilesTo(getActiveContainerId(place) || ROOT, place.folder, files);
+}
+
+/** Загрузить файлы в папку `parent` контейнера (вставка в заметку): итог — имена в облаке по порядку файлов;
+ * не загрузившийся — `undefined` на его месте. Ход виден в панели переводов, как у обычной загрузки. */
+export async function uploadCloudFilesTo(
+  container: string, parent: string | undefined, files: File[],
+): Promise<(string | undefined)[]> {
+  const taken = new Set(namesIn(getNodes(container === ROOT ? undefined : container), parent));
   getCloudTransfers().forEach((t) => {
     const spec = uploadSpecs.get(t.id);
-    if (spec && spec.container === container && spec.parent === place.folder) taken.add(spec.name);
+    if (spec && spec.container === container && spec.parent === parent) taken.add(spec.name);
   });
   const added: CloudTransfer[] = [];
   files.forEach((file) => {
@@ -486,7 +494,7 @@ export function uploadCloudFiles(files: File[]) {
     const name = freeName(taken, file.name || 'file');
     taken.add(name);
     uploadSpecs.set(id, {
-      container, parent: place.folder, name, file,
+      container, parent, name, file,
     });
     added.push({
       id, kind: 'upload', name, done: 0, total: file.size, state: 'active',
@@ -494,7 +502,11 @@ export function uploadCloudFiles(files: File[]) {
   });
   setCloudTransfers([...getCloudTransfers(), ...added]);
   // По очереди: параллельные большие файлы делили бы одно окно запросов
-  void added.reduce((chain, t) => chain.then(() => runUpload(t.id)), Promise.resolve());
+  const names: (string | undefined)[] = [];
+  for (const t of added) {
+    names.push(await runUpload(t.id) ? t.name : undefined);
+  }
+  return names;
 }
 
 export function retryCloudUpload(id: string) {

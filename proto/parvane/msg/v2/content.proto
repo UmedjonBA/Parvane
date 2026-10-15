@@ -380,4 +380,6 @@ message Article {
   string markdown = 2 [(parvane.core.v2.max_len) = 65536];
   // Название и начало текста для клиентов без чтения статей.
   string text = 3 [(parvane.core.v2.max_len) = 600];
+  // Файлы, встроенные в текст (`![[имя]]`): блобы вложений по секрету доступа (CAP-1), `name` — имя в тексте.
+  repeated Media media = 4 [(parvane.core.v2.max_items) = 32];
 }

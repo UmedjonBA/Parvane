@@ -150,6 +150,7 @@ pub fn sanitize_content(c: &mut Content) {
                 sanitize_text(t);
             }
         }
+        Some(content::Kind::Article(a)) => a.media.iter_mut().for_each(sanitize_media),
         _ => {}
     }
 }
@@ -173,6 +174,19 @@ mod tests {
         for bad in ["javascript:alert(1)", "tg://resolve", "file:///etc/passwd", "data:text/html,x", "https://", "http:///x", "https://a b", "https://a\u{0}"] {
             assert!(safe_url(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn article_media_sanitized() {
+        let article = crate::pb::parvane::msg::v2::Article {
+            media: vec![Media { mime: "text/html".into(), name: "../папка/x.png".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let mut c = Content { kind: Some(content::Kind::Article(article)), ..Default::default() };
+        sanitize_content(&mut c);
+        let Some(content::Kind::Article(a)) = c.kind else { panic!("не статья") };
+        assert_eq!(a.media[0].mime, OCTET_STREAM);
+        assert!(!a.media[0].name.contains('/'), "{}", a.media[0].name);
     }
 
     #[test]

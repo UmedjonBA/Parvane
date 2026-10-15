@@ -2,6 +2,7 @@
 // (initApi/callApi + поток ApiUpdate), но вместо MTProto — шина Parvane через
 // gateway (WebSocket, JSON-кадры). Работает в главном потоке, без воркера.
 
+import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { SendMessageParams, ThreadReadState } from '../../types';
 import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
 import type {
@@ -30,8 +31,9 @@ import { MAIN_THREAD_ID } from '../types';
 import {
   ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
 } from '../../config';
-import { getLangStringByKey } from '../../util/localization';
+import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
+import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
@@ -75,6 +77,7 @@ import { createMediaService } from './media';
 import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
+import { createReminderScheduler } from './reminders';
 import {
   clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
@@ -569,6 +572,7 @@ const v2Controller = createV2Controller({
   plannerContainerFromState: () => stateJournal.plannerContainer(),
   recordPlannerContainer: (ref) => stateJournal.recordPlannerContainer(ref),
   onPlannerChanged: () => {
+    reminderScheduler.onPlannerChanged();
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-planner-changed'));
   },
   // Облако (spec 016): контейнеры объявляются в журнале состояния
@@ -579,6 +583,8 @@ const v2Controller = createV2Controller({
   },
   onStateReady: (host, rekey) => {
     void refreshV2Privacy();
+    // Устройство, привязанное после входа, готово только теперь — напоминания запускаются и здесь
+    startReminders();
     return stateJournal.attach(host, rekey);
   },
   onL2Changed: (address) => applyL2Change(address),
@@ -667,7 +673,7 @@ const connectionController = createConnectionController({
   },
   onSessionReady: () => {
     void startHistoryLinkOffer();
-    void v2Controller.start().then(registerV2Wake);
+    void v2Controller.start().then(registerV2Wake).then(startReminders);
   },
   resetSyncPromise: syncController.resetPromise,
   resolveDisplayNames: syncController.resolveDisplayNames,
@@ -954,6 +960,60 @@ async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isI
 // Метаданных об устройствах сервер не хранит (только ключи и updated_at) —
 // человекочитаемые поля синтезируем: для текущего устройства из UA, для
 // остальных по device_id ('' — legacy-primary: desktop или прежний web)
+// ── Напоминания «Плана» (этап 4 плана 15 окт 2026) ─────────────────────────────
+function formatReminderWhen(reminder: PlannerReminder) {
+  const langCode = getTranslationFn().code || 'en';
+  const startsAt = new Date(reminder.startsAt);
+  const isToday = startsAt.toDateString() === new Date().toDateString();
+  const parts: string[] = [];
+  if (!isToday || !reminder.start) {
+    parts.push(new Intl.DateTimeFormat(langCode, { day: 'numeric', month: 'long' }).format(startsAt));
+  }
+  if (reminder.start) {
+    parts.push(new Intl.DateTimeFormat(langCode, { hour: '2-digit', minute: '2-digit' }).format(startsAt));
+  }
+  return parts.join(', ');
+}
+
+function formatReminderMessage(reminder: PlannerReminder) {
+  return (getLangStringByKey('PlannerReminderMessage') || '⏰ {title} — {when}')
+    .replace('{title}', reminder.title)
+    .replace('{when}', formatReminderWhen(reminder));
+}
+
+const reminderScheduler = createReminderScheduler({
+  stateJson: () => v2Controller.planner.stateJson(),
+  isReady: () => v2Controller.planner.status() === 'ready',
+  apply: (changes) => v2Controller.planner.apply(changes),
+  flush: () => v2Controller.planner.flush(),
+  syncNow: () => v2Controller.planner.syncNow(),
+  sendToSelf: (text) => messageController.methods.parvaneSendSelfText({ text }),
+  ring: (reminder) => {
+    const text = formatReminderMessage(reminder);
+    window.dispatchEvent(new CustomEvent('parvane-reminder', { detail: { text, key: reminder.key } }));
+    if (document.visibilityState === 'visible' || typeof Notification === 'undefined'
+      || Notification.permission !== 'granted') return;
+    void navigator.serviceWorker?.getRegistration()
+      .then((registration) => registration?.showNotification('Parvane', {
+        body: text, tag: `reminder:${reminder.key}`,
+      }))
+      .catch(() => undefined);
+  },
+  setAlarms: (atMs) => v2Controller.pushSetAlarms(atMs),
+  saveForWorker: (items) => saveWorkerReminders(items),
+  markShown: (key) => markWorkerReminderShown(key),
+  canKeepText: async () => !store.self || !(await hasStoragePin(store.self).catch(() => true)),
+  formatMessage: formatReminderMessage,
+  log: logDebug,
+});
+
+// Напоминаниям нужен «План» и без открытого раздела: контейнер подключается в фоне (опрос — редкий)
+function startReminders() {
+  if (!v2Controller.isReady()) return;
+  void v2Controller.planner.ensure(true).catch(() => undefined);
+  reminderScheduler.start();
+}
+
 // Уже выданная подписка web-push → регистрация пробуждения v2 (T102):
 // registerDevice мог отработать раньше, чем поднялся v2-стек
 async function registerV2Wake() {
@@ -2309,6 +2369,16 @@ const methods = {
     }
   },
 
+  /** Файл, встроенный в статью (этап 6 плана 15 окт 2026): расшифрованное содержимое по id вложения. */
+  async parvaneArticleMediaBlob({ fileId }: { fileId: string }) {
+    try {
+      return (await mediaService.downloadBlob(fileId))?.blob;
+    } catch (err) {
+      logDebug(`статья: файл ${fileId} не скачан: ${String(err)}`);
+      return undefined;
+    }
+  },
+
   /** Явный синк (раздел открыт заново): не чаще, чем позволяет модуль. */
   async parvanePlannerSync() {
     await v2Controller.planner.syncNow();
@@ -3521,6 +3591,16 @@ const methods = {
           setTimeout(resolve, LEAVE_TIMEOUT_MS);
         }),
       ]);
+    }
+    reminderScheduler.stop();
+    if (!noSessionClear) {
+      await Promise.race([
+        v2Controller.pushSetAlarms([]).catch(() => undefined),
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, LEAVE_TIMEOUT_MS);
+        }),
+      ]);
+      await clearWorkerReminders().catch(() => undefined);
     }
     connectionController.shutdown();
     mediaService.clearCache();

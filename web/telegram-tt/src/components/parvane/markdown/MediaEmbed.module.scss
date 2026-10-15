@@ -1,0 +1,171 @@
+// Встроенный файл заметки и статьи
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+
+  max-width: 100%;
+  margin: 0;
+}
+
+.image,
+.video {
+  display: block;
+
+  max-width: 100%;
+  max-height: 32rem;
+  border-radius: 0.5rem;
+
+  background: var(--pv-raised);
+}
+
+.audio {
+  width: min(100%, 24rem);
+}
+
+.caption {
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.poster {
+  cursor: var(--custom-cursor, pointer);
+
+  position: relative;
+
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+
+  width: min(100%, 24rem);
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.5rem;
+
+  color: var(--pv-fg);
+
+  background: var(--pv-raised);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-accent);
+    outline-offset: 2px;
+  }
+}
+
+.posterAudio {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-start;
+
+  aspect-ratio: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.posterImage {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+
+  object-fit: cover;
+}
+
+.playButton {
+  position: relative;
+
+  display: grid;
+  place-items: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+}
+
+.card {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+
+  width: min(100%, 24rem);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.5rem;
+
+  background: var(--pv-raised);
+}
+
+.missing {
+  color: var(--pv-red);
+}
+
+.cardIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--pv-muted);
+}
+
+.cardType {
+  font-size: 0.625rem;
+  font-weight: var(--font-weight-semibold);
+}
+
+.cardName {
+  overflow: hidden;
+  flex: 1;
+
+  min-width: 0;
+
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardMeta {
+  flex: none;
+  font-size: 0.8125rem;
+  color: var(--pv-muted);
+}
+
+.cardButton {
+  cursor: var(--custom-cursor, pointer);
+
+  display: grid;
+  flex: none;
+  place-items: center;
+
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+
+  color: var(--pv-fg);
+
+  background: none;
+
+  &:hover {
+    background: var(--pv-hover);
+  }
+}
+
+.root {
+  max-width: 100%;
+}
+
+.placeholder {
+  display: block;
+
+  width: min(100%, 24rem);
+  aspect-ratio: 4 / 3;
+  border-radius: 0.5rem;
+
+  background: var(--pv-raised);
+}

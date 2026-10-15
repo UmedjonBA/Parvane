@@ -97,6 +97,9 @@ export type WireMessageContent = {
   // `text` — для клиентов без чтения статей
   title?: string;
   markdown?: string;
+  // Файлы, встроенные в статью (`![[имя]]`, этап 6 плана 15 окт 2026): вложения по секрету доступа, `filename` —
+  // имя в тексте
+  article_media?: WireMessageContent[];
   // kind=cloud_invite (spec 016, CLOUD-1): приглашение в совместную папку
   // облака — `container` (ссылка на контейнер, id в base64), `name`, `role`
   // (1 — читатель, 2 — редактор), `text` — для клиентов без раздела

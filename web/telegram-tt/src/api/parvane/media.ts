@@ -986,6 +986,8 @@ export function createMediaService(deps: MediaDependencies) {
     content.emoji_packs?.forEach((ref) => {
       if (ref.file_id && ref.capability) capByFileId.set(ref.file_id, ref.capability);
     });
+    // Статья: файлы, встроенные в текст
+    content.article_media?.forEach(rememberKeys);
   }
 
   // Секрет скачивания блоба, выданный с содержимым (паки приходят и мимо

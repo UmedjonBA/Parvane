@@ -1322,7 +1322,7 @@
       ],
       "fallbackField": "text",
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (article), store.ts (карточка), components/middle/message/ArticleCard.tsx, components/parvane/article/*; тест protocol.vectors.test.ts, articleMarkdown.test.ts",
+        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (article), store.ts (карточка), components/middle/message/ArticleCard.tsx, components/parvane/article/*, components/parvane/markdown/* (разбор и показ, общие с заметками; встроенные файлы — `article.media`); тест protocol.vectors.test.ts, markdown.test.ts; сценарий scripts/e2e_web_article.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (v2Kind: article; fromV2 → kind text из поля text); тест tests/v2_tests.cpp (article ← v2: текст); без сборки tdesktop — проверить при следующей сборке очереди desktop",
         "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: article → MessageText); тест ProtocolV2SeamTest.kt articleShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
       }

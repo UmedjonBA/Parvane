@@ -25,6 +25,7 @@ import TextArea from '../../ui/TextArea';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
+import PlannerRemindSelect from './PlannerRemindSelect';
 import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
@@ -96,6 +97,7 @@ const PlannerTaskForm = ({
   const [isAllDay, setIsAllDay] = useState(false);
   const [isHoliday, setIsHoliday] = useState(false);
   const [eventColor, setEventColor] = useState(0);
+  const [remind, setRemind] = useState<number>();
   // Конец события следует за началом (+1 ч), пока пользователь не задал его сам
   const [isEndTouched, setIsEndTouched] = useState(Boolean(slot));
   const [error, setError] = useState<string>();
@@ -150,6 +152,7 @@ const PlannerTaskForm = ({
         isAllDay: isAllDay || undefined,
         isHoliday: isHoliday || undefined,
         color: eventColor || undefined,
+        remind,
       };
       const eventError = validateEvent(event);
       if (eventError) {
@@ -170,6 +173,7 @@ const PlannerTaskForm = ({
       day: repeat ? undefined : (day || undefined),
       start: start || undefined,
       due: repeat ? undefined : (due || undefined),
+      remind,
     };
     const taskError = validateTask(repeat && start ? { ...task, day: repeat.startDay || day } : task);
     if (taskError) {
@@ -266,6 +270,7 @@ const PlannerTaskForm = ({
             </Select>
           </div>
           <PlannerListPicker id="planner-new-list" state={state} value={project} onChange={setProject} />
+          <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
         </>
       ) : (
         <>
@@ -284,6 +289,7 @@ const PlannerTaskForm = ({
             <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
           )}
           <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
+          <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
         </>
       )}
       {error && <p className={styles.error} role="alert">{error}</p>}

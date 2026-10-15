@@ -39,11 +39,12 @@ type EngineTask = {
   occurrences?: EngineOccurrence[];
   origin?: EngineOrigin;
   source?: EngineSource;
+  remind?: number | null;
 };
 type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
-  allDay?: boolean; isHoliday?: boolean; color?: number; description?: string;
+  allDay?: boolean; isHoliday?: boolean; color?: number; description?: string; remind?: number | null;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 type EngineGoal = { target: number; tolerance: number } | null;
@@ -95,6 +96,8 @@ export type EngineState = {
   learned?: EngineLearned[];
   // История ввода текстом; движок прежней сборки её не знает — и не принимает правку `quickLine`
   quickLines?: EngineQuickLine[];
+  // Отметки «напоминание отправлено»
+  reminded?: string[];
   headSeq: number; sizeBytes: number;
 };
 
@@ -298,6 +301,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     repeat: repeatFrom(t.repeat),
     occurrences: occurrencesFrom(t.occurrences),
     origin: t.origin ? { seriesId: t.origin.seriesId, day: t.origin.day } : undefined,
+    remind: t.remind ?? undefined,
     source: t.source ? { chat: t.source.chat, opId: t.source.opId } : undefined,
   }));
   const nutrition: Record<string, PlannerNutritionDay> = {};
@@ -333,6 +337,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
         isAllDay: e.allDay || undefined,
         isHoliday: e.isHoliday || undefined,
         color: e.color || undefined,
+        remind: e.remind ?? undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
@@ -355,6 +360,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     quickLines: normalizeQuickLines((engine.quickLines || []).map(({ hidden, ...line }) => ({
       ...line, isHidden: hidden,
     }))),
+    reminded: [...(engine.reminded || [])].sort(),
   };
   if (!previous) return built;
   return {
@@ -371,6 +377,7 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
     healthGoals: reuseValue(built.healthGoals, previous.healthGoals),
     learned: reuseById(built.learned, previous.learned),
     quickLines: reuseById(built.quickLines, previous.quickLines),
+    reminded: reuseValue(built.reminded, previous.reminded),
   };
 }
 
@@ -435,6 +442,7 @@ function taskChange(state: PlannerState, t: PlannerTask, previous?: PlannerTask)
       minutes: t.minutes === undefined ? null : t.minutes,
       ...seriesFields(t, previous),
       source: t.source ? { chat: t.source.chat, opId: t.source.opId } : null,
+      remind: t.remind === undefined ? null : t.remind,
     },
   };
 }
@@ -453,6 +461,7 @@ function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
       isHoliday: Boolean(e.isHoliday),
       color: e.color || 0,
       description: e.description || '',
+      remind: e.remind === undefined ? null : e.remind,
     },
   };
 }
@@ -630,6 +639,18 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
   diffById(next.quickLines, previous.quickLines, (line) => {
     changes.push(quickLineChange(line));
   }, (line) => changes.push({ quickLine: { id: line.id, deleted: true } }));
+
+  // Отметки «напомнено»: новая — регистр, снятая — надгробие
+  if (next.reminded !== previous.reminded) {
+    const before = new Set(previous.reminded);
+    const after = new Set(next.reminded);
+    next.reminded.forEach((id) => {
+      if (!before.has(id)) changes.push({ reminded: { id } });
+    });
+    previous.reminded.forEach((id) => {
+      if (!after.has(id)) changes.push({ reminded: { id, deleted: true } });
+    });
+  }
   return changes;
 }
 

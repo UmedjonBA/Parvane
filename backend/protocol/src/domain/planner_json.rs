@@ -19,7 +19,9 @@
 //! `sugar|null,salt|null,time`; `learned` — словарь правок ввода текстом, не более 200 самых свежих слов;
 //! `quickLines` — история ввода текстом: не более 200 самых свежих строк и 200 забытых шаблонов (`hidden`)),
 //! где `repeat = {kind:"daily|weekly|monthly|yearly",interval,weekdays,monthDay,startDay,endDay,count}`,
-//! `origin = {seriesId,day}`, `source = {chat,opId}` (spec 011).
+//! `origin = {seriesId,day}`, `source = {chat,opId}` (spec 011). С 15 окт 2026 у задачи и события ещё
+//! `remind|null` (минут до начала), в состоянии — `reminded:[id]` (отметки «напоминание отправлено»,
+//! `<id>@<день>@<минут>`), изменение `{reminded:{id[,deleted:true]}}`.
 //! Изменения: `{changes:[{task:{…}}|{event:{…}}|{list:{…}}|{nutritionDay:{…}}|{settings:{…}}|{goals:{…}}|
 //! {goalPeriod:{…}}|{health:{…}}|{learned:{…}}|{quickLine:{…}}|{migration:{…}}]}`; `occurrences` в правке — только
 //! изменённые дни; `quickLine` — запись целиком.
@@ -30,7 +32,7 @@ use super::planner::PlannerState;
 use crate::error::{ProtoError, Result};
 use crate::pb::parvane::planner::v1::{
     change, Bool, Change, Event, FoodEntry, Goal, GoalPeriod, GoalSet, HealthRecord, LearnedWord, List, Migration, NutritionDay, Occurrence, Origin,
-    PlannerOp, QuickLine, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
+    PlannerOp, QuickLine, Reminded, Repeat, RepeatKind, Settings, Source, Step, Steps, Str, Task, Weekdays, I32, U32,
 };
 
 const KNOWN_KCAL: u32 = 1;
@@ -43,6 +45,11 @@ const KNOWN_SUGAR: u32 = 64;
 const KNOWN_SALT: u32 = 128;
 
 // ── состояние → JSON ────────────────────────────────────────────────────────
+
+/// Число либо `null` («не задано»).
+fn u32_json(f: &Option<U32>) -> Value {
+    f.as_ref().filter(|m| !m.unset).map(|m| json!(m.value)).unwrap_or(Value::Null)
+}
 
 fn sv(f: &Option<Str>) -> Value {
     Value::String(f.as_ref().map(|s| s.value.clone()).unwrap_or_default())
@@ -125,6 +132,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "minutes": t.minutes.as_ref().filter(|m| !m.unset).map(|m| json!(m.value)).unwrap_or(Value::Null),
                 "repeat": repeat_json(&t.repeat), "occurrences": occurrences_json(&t.occurrences),
                 "origin": origin_json(&t.origin), "source": source_json(&t.source),
+                "remind": u32_json(&t.remind),
             })
         })
         .collect();
@@ -141,6 +149,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "isHoliday": e.is_holiday.as_ref().map(|b| b.value).unwrap_or(false),
                 "color": e.color.as_ref().filter(|c| !c.unset).map(|c| c.value).unwrap_or(0),
                 "description": sv(&e.description),
+                "remind": u32_json(&e.remind),
             })
         })
         .collect();
@@ -211,8 +220,14 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
         .into_iter()
         .map(|l| json!({"id": l.id, "text": l.text, "count": l.count, "touched": l.touched, "hidden": l.hidden}))
         .collect();
+    let reminded: Vec<Value> = state
+        .reminded
+        .values()
+        .filter(|r| PlannerState::is_reminded_alive(r))
+        .map(|r| json!(r.id))
+        .collect();
     json!({
-        "tasks": tasks, "events": events, "lists": lists, "nutrition": nutrition,
+        "tasks": tasks, "events": events, "lists": lists, "nutrition": nutrition, "reminded": reminded,
         "settings": settings.unwrap_or(Value::Null), "goals": state.goals.as_ref().map(goals_json).unwrap_or(Value::Null),
         "goalPeriods": goal_periods, "health": health, "learned": learned, "quickLines": quick_lines,
         "headSeq": head_seq, "sizeBytes": state.size_estimate(),
@@ -429,6 +444,7 @@ fn task_of(o: &Map<String, Value>) -> Result<Task> {
         occurrences: occurrences_of(o)?,
         origin: origin_of(o)?,
         source: source_of(o)?,
+        remind: u32_field(o, "remind")?,
     })
 }
 
@@ -454,6 +470,16 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         is_holiday: bool_field(o, "isHoliday")?,
         color: u32_field(o, "color")?,
         description: str_field(o, "description")?,
+        remind: u32_field(o, "remind")?,
+    })
+}
+
+/// Отметка «напомнено»: `{id}` либо `{id, deleted: true}`.
+fn reminded_of(o: &Map<String, Value>) -> Result<Reminded> {
+    let id = id_of(o)?;
+    Ok(match deleted_of(o) {
+        Some(d) => Reminded { id, stamp: None, deleted: Some(d) },
+        None => Reminded { id, stamp: Some(Default::default()), deleted: None },
     })
 }
 
@@ -628,6 +654,7 @@ pub fn op_from_json(text: &str) -> Result<PlannerOp> {
             "health" => change::Change::Health(health_of(obj()?)?),
             "learned" => change::Change::Learned(learned_of(obj()?)?),
             "quickLine" => change::Change::QuickLine(quick_line_of(obj()?)?),
+            "reminded" => change::Change::Reminded(reminded_of(obj()?)?),
             "migration" => change::Change::Migration(Migration {
                 source_device: body.get("sourceDevice").and_then(Value::as_str).unwrap_or_default().to_string(),
                 count: body.get("count").and_then(Value::as_u64).unwrap_or(0) as u32,
@@ -670,6 +697,48 @@ mod tests {
         assert_ne!(st.rev(), rev);
         assert_eq!(st.size_cached(), None, "правка сбрасывает кэш");
         assert!(st.size_estimate() > size);
+    }
+
+    #[test]
+    fn reminders_roundtrip_and_marks_merge_across_devices() {
+        // «Напомнить за» у задачи и события; отметка «напомнено» с двух устройств — одна, надгробие её снимает
+        let text = r#"{"changes":[
+          {"task":{"id":"t1","name":"Отчёт","day":"2026-10-20","start":"10:00","remind":15}},
+          {"event":{"id":"e1","name":"Созвон","start":"16:00","end":"16:30","day":"2026-10-20","remind":60}},
+          {"task":{"id":"t2","name":"Без напоминания","remind":null}}
+        ]}"#;
+        let mut op = op_from_json(text).unwrap();
+        planner::stamp_op(&mut op, &Stamp::new(1, "d1"));
+        let mut a = PlannerState::default();
+        a.apply_op(&op, "d1").unwrap();
+        let mut b = a.clone();
+        let mark = |device: &str, at: u64, body: &str| {
+            let mut op = op_from_json(body).unwrap();
+            planner::stamp_op(&mut op, &Stamp::new(at, device));
+            op
+        };
+        a.apply_op(&mark("d1", 2, r#"{"changes":[{"reminded":{"id":"t1@2026-10-20@15"}}]}"#), "d1").unwrap();
+        let from_b = mark("d2", 3, r#"{"changes":[{"reminded":{"id":"t1@2026-10-20@15"}}]}"#);
+        b.apply_op(&from_b, "d2").unwrap();
+        a.apply_op(&from_b, "d2").unwrap();
+        let parsed: Value = serde_json::from_str(&state_json(&a, 0)).unwrap();
+        assert_eq!(parsed["reminded"], json!(["t1@2026-10-20@15"]));
+        let task = parsed["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t1").unwrap();
+        assert_eq!(task["remind"], json!(15));
+        let free = parsed["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "t2").unwrap();
+        assert_eq!(free["remind"], Value::Null);
+        assert_eq!(parsed["events"][0]["remind"], json!(60));
+        a.apply_op(&mark("d1", 4, r#"{"changes":[{"reminded":{"id":"t1@2026-10-20@15","deleted":true}}]}"#), "d1").unwrap();
+        let parsed: Value = serde_json::from_str(&state_json(&a, 0)).unwrap();
+        assert_eq!(parsed["reminded"], json!([]));
+        // Снимок переносит отметки и поля
+        let restored = PlannerState::from_snapshot(&b.to_snapshot()).unwrap();
+        assert_eq!(restored.reminded.len(), 1);
+        // Негодный ключ отметки и напоминание дальше недели — отказ
+        for bad in [r#"{"changes":[{"reminded":{"id":"t1@2026-10-20"}}]}"#, r#"{"changes":[{"reminded":{"id":"t1@день@15"}}]}"#,
+            r#"{"changes":[{"task":{"id":"t3","name":"x","remind":20000}}]}"#] {
+            assert_eq!(PlannerState::default().apply_op(&mark("d1", 5, bad), "d1").unwrap(), 0, "{bad}");
+        }
     }
 
     #[test]

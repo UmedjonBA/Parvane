@@ -2940,6 +2940,12 @@ export interface LangPair {
   'KnowledgeCanvasLinkOpen': undefined;
   'KnowledgeCanvasFileChoose': undefined;
   'KnowledgeCanvasFileMissing': undefined;
+  'KnowledgeEmbedPlay': undefined;
+  'KnowledgeEmbedFailed': undefined;
+  'KnowledgeEmbedDownload': undefined;
+  'KnowledgeInsertFile': undefined;
+  'KnowledgeInsertFromCloud': undefined;
+  'KnowledgeInsertFailed': undefined;
   'KnowledgeCanvasFileEmpty': undefined;
   'KnowledgeCanvasOpenFile': undefined;
   'KnowledgeCanvasEditNote': undefined;
@@ -4876,6 +4882,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerRemindBefore': {
     'amount': V;
   };
+  'PlannerNoticeRemindUpdated': {
+    'name': V;
+  };
   'PlannerReminderMessage': {
     'title': V;
     'when': V;
@@ -5328,9 +5337,6 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ArticleSaved': {
     'title': V;
-  };
-  'ArticleImageOmitted': {
-    'name': V;
   };
 }
 
