@@ -359,6 +359,9 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
 | `PARVANE_PREKEY_FETCH_RATE` (20) / `PARVANE_PREKEY_FETCH_DAILY` (200) | identity | фетчей prekey-бандла на пару запросивший→цель за минуту / за сутки (P-21) |
 | `PARVANE_PREKEY_REUSE_SECS` (600) | identity | окно, в котором повторный фетч той же пары отдаёт тот же one-time prekey (P-21) |
 | `PARVANE_REGISTER_RATE_IP` (30) / `PARVANE_LOGIN_RATE_IP` (120) | identity | лимиты по IP за минуту (P-43) |
+| `PARVANE_CLOUD_MAX_FILES` (200000) | cloud | готовых файлов на владельца во всех bucket'ах, копии тоже (CLD-02, 15 окт 2026) |
+| `PARVANE_HANDLER_PER_USER` (cloud 12, preview 4) | cloud, preview | сколько обработчиков одновременно занимает один пользователь; сверх — `RATE_LIMITED` (CLD-05) |
+| `PARVANE_RESERVED_NAMES` (пусто) | identity | дополнительные запрещённые публичные имена групп и ники, через запятую (spec 023; встроенный список — `admin`, `parvane`, `support`…) |
 | `PARVANE_CLOUD_MAX_DOWNLOAD_CHUNKS` (256) | cloud | верхняя граница чанков одного download-запроса (P-28) |
 | `PARVANE_CLOUD_LINKS_ENABLED` (1) | cloud | `0` — новые ссылки облака не создаются (spec 022); прежние живут до срока либо отзыва |
 | `PARVANE_CLOUD_LINK_MAX_FILES` (500) / `PARVANE_CLOUD_LINKS_PER_OWNER` (100, не больше 256) | cloud | файлов в одной ссылке / ссылок на аккаунт (готовящиеся, действующие, истёкшие) |
