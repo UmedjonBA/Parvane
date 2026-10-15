@@ -8,7 +8,8 @@ import {
   createEmptyPlannerState, detachInstance, eventInstance, getEventsForDay, getTasksForDay, taskInstance,
 } from './plannerModel';
 import {
-  addEntry, detachWithDescription, firstSeriesDay, getDescriptionScope, setDescription, shareDescription,
+  addEntry, changedFields, detachWithDescription, firstSeriesDay, getDescriptionScope, patchCopies, seriesOfCopy,
+  setDescription, shareDescription, updateFromCopy,
 } from './plannerSeriesEdit';
 
 // 12 октября 2026 — понедельник
@@ -183,5 +184,53 @@ describe('планировщик: описание ряда — всех пов�
     });
     expect(detachWithDescription(state, 'event', 'e1', '2026-10-20', 'Нет экземпляра')).toBeUndefined();
     expect(state.events).toHaveLength(2);
+  });
+});
+
+describe('планировщик: правка отделённого дня и правка «для всех»', () => {
+  const MOVED = '2026-10-13';
+  const LATER_MONDAY = '2026-10-26';
+
+  function seriesWithCopies() {
+    const state = stateWith({ events: [event()] });
+    // Первый понедельник перенесён на вторник, третий — со своим временем
+    const moved = detachInstance(state, 'event', 'e1', MONDAY, { day: MOVED })!;
+    const late = detachInstance(state, 'event', 'e1', LATER_MONDAY, { start: '20:00', end: '21:00' })!;
+    return { state, moved, late };
+  }
+
+  it('изменённые поля — только то, что отличается, без своего дня и отметки', () => {
+    const before = event({ day: MONDAY });
+    expect(changedFields(before, {
+      name: 'Пилатес', start: '18:00', day: MOVED, end: '19:00',
+    })).toEqual({ name: 'Пилатес' });
+    expect(changedFields(task(), { status: 'done', minutes: 30 })).toEqual({ minutes: 30 });
+  });
+
+  it('отделённый день знает свой ряд, пока тот повторяется', () => {
+    const { state, moved } = seriesWithCopies();
+    expect(seriesOfCopy(state, 'event', moved)?.id).toBe('e1');
+    state.events[0].repeat = undefined;
+    expect(seriesOfCopy(state, 'event', moved)).toBeUndefined();
+  });
+
+  it('правка копии «для всех»: ряд и все отделённые дни, у каждого свой день остаётся', () => {
+    const { state, moved, late } = seriesWithCopies();
+    updateFromCopy(state, 'event', moved, { name: 'Пилатес' });
+    expect(getEventsForDay(state, MOVED).map((item) => item.name)).toEqual(['Пилатес']);
+    expect(getEventsForDay(state, NEXT_MONDAY).map((item) => item.name)).toEqual(['Пилатес']);
+    const lateDay = getEventsForDay(state, LATER_MONDAY);
+    expect(lateDay.map((item) => [item.name, item.start])).toEqual([['Пилатес', '20:00']]);
+    expect(state.events.find(({ id }) => id === late.id)!.day).toBe(LATER_MONDAY);
+    expect(getEventsForDay(state, MONDAY)).toHaveLength(0);
+  });
+
+  it('правка ряда «для всех» доходит до отделённых дней; «с этого дня» — только до поздних', () => {
+    const { state, moved, late } = seriesWithCopies();
+    expect(patchCopies(state, 'event', 'e1', { name: 'Пилатес' }, NEXT_MONDAY)).toBe(1);
+    expect(state.events.find(({ id }) => id === moved.id)!.name).toBe('Йога');
+    expect(state.events.find(({ id }) => id === late.id)!.name).toBe('Пилатес');
+    expect(patchCopies(state, 'event', 'e1', { color: 3 })).toBe(2);
+    expect(patchCopies(state, 'event', 'e1', {})).toBe(0);
   });
 });

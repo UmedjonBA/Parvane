@@ -13,8 +13,9 @@ export type PlannerSeriesScope = 'one' | 'following' | 'all';
 export type PlannerPromptScope = PlannerSeriesScope | 'stop';
 
 // О чём вопрос: правка полей, удаление, новое правило повтора, снятие повтора («Не повторяется»).
-// Правило одному дню не задать, поэтому у него нет «только это»
-export type PlannerSeriesPromptMode = 'edit' | 'delete' | 'rule' | 'stop';
+// Правило одному дню не задать, поэтому у него нет «только это». `copy` — правка отделённого дня ряда: только
+// он либо весь ряд вместе с остальными отделёнными днями
+export type PlannerSeriesPromptMode = 'edit' | 'delete' | 'rule' | 'stop' | 'copy';
 
 type OwnProps = {
   mode: PlannerSeriesPromptMode;
@@ -27,6 +28,7 @@ const TITLE_KEYS = {
   delete: 'PlannerSeriesDeleteTitle',
   rule: 'PlannerSeriesRuleTitle',
   stop: 'PlannerSeriesStopTitle',
+  copy: 'PlannerSeriesEditTitle',
 } as const satisfies Record<PlannerSeriesPromptMode, string>;
 
 const SCOPES: Record<PlannerSeriesPromptMode, PlannerPromptScope[]> = {
@@ -34,6 +36,7 @@ const SCOPES: Record<PlannerSeriesPromptMode, PlannerPromptScope[]> = {
   delete: ['one', 'following', 'all'],
   rule: ['following', 'all'],
   stop: ['stop', 'one'],
+  copy: ['one', 'all'],
 };
 
 const SCOPE_KEYS = {

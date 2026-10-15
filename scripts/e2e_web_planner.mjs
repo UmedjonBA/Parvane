@@ -459,8 +459,40 @@ try {
   await aside.getByText('12:00–12:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   aside = await openDay(today);
   await aside.getByText('10:00–10:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Отделённый день (завтра, 10:30) правится «для всех»: меняется и ряд, от которого он отделён (сегодня)
+  aside = await openDay(addDays(today, 1));
+  await aside.getByRole('button', { name: /Зарядка/ }).first().click();
+  await planner.getByText('Detached from a series').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByLabel('Start', { exact: true }).fill('09:30');
+  const copyPrompt = planner.locator('[data-series-prompt="copy"]');
+  await copyPrompt.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.deepEqual(
+    await copyPrompt.locator('[data-series-scope]').evaluateAll((items) => items.map((el) => el.dataset.seriesScope)),
+    ['one', 'all'], 'у отделённого дня выбор — только он либо весь ряд',
+  );
+  await copyPrompt.getByRole('button', { name: 'All in series', exact: true }).click();
+  await copyPrompt.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  aside = await openDay(addDays(today, 1));
+  await aside.getByText('09:30–09:45').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  aside = await openDay(today);
+  await aside.getByText('09:30–09:45').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Другой ряд (с послезавтра) правка не задела
+  aside = await openDay(addDays(today, 3));
+  await aside.getByText('12:00–12:15').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Правка ряда «все в серии» доходит и до отделённого дня
+  aside = await openDay(today);
+  await aside.getByRole('button', { name: /Зарядка/ }).first().click();
+  await planner.getByLabel('Start', { exact: true }).fill('08:30');
+  await planner.getByRole('button', { name: 'All in series', exact: true }).click();
+  await planner.getByRole('button', { name: 'All in series', exact: true }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
+  aside = await openDay(addDays(today, 1));
+  await aside.getByText('08:30–08:45').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await aside.getByRole('button', { name: /Зарядка/ }).count(), 1, 'отделённый день остался один');
   await backToThisMonth();
-  console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», «все в серии»');
+  console.log('OK: задача-ряд — выполнение по дню, «только это», «это и последующие», «все в серии», '
+    + 'правка отделённого дня «для всех» и правка ряда до отделённых дней');
 
   // ── Описание ряда: всех повторов или только первого дня ───────────────────
   const scopeBox = sidePane.locator('[data-description-scope]');

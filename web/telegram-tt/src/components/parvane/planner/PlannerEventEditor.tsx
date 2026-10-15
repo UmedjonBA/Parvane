@@ -13,7 +13,10 @@ import {
   ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
   validateEvent,
 } from './plannerModel';
-import { detachWithDescription, getDescriptionScope, setDescription as writeDescription } from './plannerSeriesEdit';
+import {
+  changedFields, detachWithDescription, getDescriptionScope, patchCopies, seriesOfCopy,
+  setDescription as writeDescription, updateFromCopy,
+} from './plannerSeriesEdit';
 import { changeSeriesRule, sameRepeat } from './plannerSeriesRule';
 import { updatePlanner } from './plannerStore';
 
@@ -63,7 +66,9 @@ const DESCRIPTION_MAX_LENGTH = 2000;
 // `rule` — вместе с полями меняется правило повтора; без правила — «Не повторяется»
 type Pending = { kind: 'save'; patch: Partial<PlannerEvent>; ownDescription?: string }
   | { kind: 'rule'; repeat?: PlannerRepeat; patch: Partial<PlannerEvent>; ownDescription?: string }
-  | { kind: 'delete' };
+  | { kind: 'delete' }
+  // Отделённый день ряда: `next` — вся карточка, `fields` — изменённое, что можно отдать всему ряду
+  | { kind: 'copy'; next: Partial<PlannerEvent>; fields: Partial<PlannerEvent> };
 
 // Правка события (spec 011): поля, правило повтора; у экземпляра ряда — выбор объёма правки
 const PlannerEventEditor = ({
@@ -111,6 +116,14 @@ const PlannerEventEditor = ({
       onBack();
       return;
     }
+    if (action.kind === 'copy') {
+      updatePlanner((draft) => {
+        const target = saveOwn(draft, action.next);
+        if (target && scope === 'all') updateFromCopy(draft, 'event', target, action.fields);
+      }, lang('PlannerNoticeEventUpdated', { name: action.next.name || event.name }));
+      onBack();
+      return;
+    }
     const { patch, ownDescription } = action;
     const targetDay = day || instanceDay;
     const own = ownDescription === undefined ? {} : { description: ownDescription || undefined };
@@ -146,6 +159,10 @@ const PlannerEventEditor = ({
       const seriesId = scope === 'following'
         ? splitSeries(draft, 'event', event.id, instanceDay, patch)?.id || event.id : event.id;
       updateSeries(draft, 'event', seriesId, instanceDay, { ...patch, day: targetDay });
+      // Уже отделённые дни ряда (всего либо с этого дня) получают те же изменённые поля
+      patchCopies(
+        draft, 'event', event.id, changedFields(event, patch), scope === 'following' ? instanceDay : undefined,
+      );
       if (ownDescription !== undefined) detachWithDescription(draft, 'event', seriesId, targetDay, ownDescription);
     }, lang('PlannerNoticeEventUpdated', { name: patch.name || event.name }));
     onBack();
@@ -217,16 +234,31 @@ const PlannerEventEditor = ({
       setPending({ kind: 'save', patch, ownDescription });
       return;
     }
+    // Отделённый день ряда: правку можно отдать всему ряду; описание — только если галочка «для всех»
+    if (!repeat && seriesOfCopy(state, 'event', event)) {
+      const fields = changedFields(event, next);
+      if (descriptionScope === 'one') delete fields.description;
+      if (Object.keys(fields).length) {
+        setPending({ kind: 'copy', next, fields });
+        return;
+      }
+    }
     updatePlanner((draft) => {
-      const target = draft.events.find(({ id }) => id === event.id);
-      if (!target) return;
-      Object.assign(target, next);
-      if (repeat) target.occurrences = undefined;
-      // Отделённый день с галочкой «для всех» пишет описание и в свой ряд
-      else if (descriptionScope === 'all') writeDescription(draft, 'event', target, next.description || '', 'all');
+      saveOwn(draft, next);
     }, lang('PlannerNoticeEventUpdated', { name: next.name }));
     onBack();
   });
+
+  // Правка самой записи (разовой, шаблона ряда либо отделённого дня)
+  function saveOwn(draft: PlannerState, next: Partial<PlannerEvent>) {
+    const target = draft.events.find(({ id }) => id === event.id);
+    if (!target) return undefined;
+    Object.assign(target, next);
+    if (next.repeat) target.occurrences = undefined;
+    // Отделённый день с галочкой «для всех» пишет описание и в свой ряд
+    else if (descriptionScope === 'all') writeDescription(draft, 'event', target, next.description || '', 'all');
+    return target;
+  }
 
   const handleDelete = useLastCallback(() => {
     if (isInstance) {
@@ -252,7 +284,7 @@ const PlannerEventEditor = ({
   // О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
   const promptMode = !pending ? undefined
     : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
-      : pending.kind === 'delete' ? 'delete' : 'edit';
+      : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
 
   const detailsSummary = [
     event.repeat ? formatRepeat(lang, event.repeat) : undefined,

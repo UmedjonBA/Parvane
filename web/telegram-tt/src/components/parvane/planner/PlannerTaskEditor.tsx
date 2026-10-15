@@ -15,7 +15,9 @@ import {
   detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
   removeSeries, setTaskDone, setTaskStepDone, splitSeries, toMinutes, truncateSeries, updateSeries, validateRepeat,
 } from './plannerModel';
-import { getDescriptionScope, setDescription, shareDescription } from './plannerSeriesEdit';
+import {
+  changedFields, getDescriptionScope, patchCopies, seriesOfCopy, setDescription, shareDescription, updateFromCopy,
+} from './plannerSeriesEdit';
 import { changeSeriesRule, nearestSeriesDay, sameRepeat } from './plannerSeriesRule';
 import { showPlannerNotice, updatePlanner } from './plannerStore';
 
@@ -50,7 +52,8 @@ type OwnProps = {
 
 type Slot = { day: string; start: string; end: string };
 // `rule` — новое правило повтора у экземпляра; без правила — «Не повторяется»
-type Pending = { kind: 'patch'; changes: Partial<PlannerTask>; notice: string }
+// `copy` — правка отделённого дня ряда: только он либо весь ряд с остальными отделёнными днями
+type Pending = { kind: 'patch' | 'copy'; changes: Partial<PlannerTask>; notice: string }
   | { kind: 'delete' }
   | { kind: 'rule'; repeat?: PlannerRepeat };
 
@@ -86,10 +89,15 @@ const PlannerTaskEditor = ({
     setSlots(undefined);
   });
 
-  // У экземпляра ряда правка полей требует выбора объёма (FR-004)
+  // У экземпляра ряда правка полей требует выбора объёма (FR-004); у отделённого дня — тоже, если изменённое
+  // можно отдать ряду (свой день и отметка выполнения остаются у дня)
   const patch = useLastCallback((changes: Partial<PlannerTask>, notice: string) => {
     if (isInstance) {
       setPending({ kind: 'patch', changes, notice });
+      return true;
+    }
+    if (seriesOfCopy(state, 'task', task) && Object.keys(changedFields(task, changes)).length) {
+      setPending({ kind: 'copy', changes, notice });
       return true;
     }
     patchTemplate(changes, notice);
@@ -100,6 +108,19 @@ const PlannerTaskEditor = ({
     const action = pending!;
     const instanceDay = task.instanceDay!;
     setPending(undefined);
+    if (action.kind === 'copy') {
+      if (scope === 'one') {
+        patchTemplate(action.changes, action.notice);
+        return;
+      }
+      updatePlanner((draft) => {
+        const target = draft.tasks.find(({ id }) => id === task.id);
+        if (target) Object.assign(target, action.changes);
+        updateFromCopy(draft, 'task', task, changedFields(task, action.changes));
+      }, action.notice);
+      setSlots(undefined);
+      return;
+    }
     if (action.kind === 'rule') {
       const { repeat } = action;
       let result: PlannerSeriesItem | undefined;
@@ -134,6 +155,10 @@ const PlannerTaskEditor = ({
         seriesId = splitSeries(draft, 'task', task.id, instanceDay, fields)?.id || seriesId;
       }
       updateSeries(draft, 'task', seriesId, instanceDay, action.changes);
+      // Уже отделённые дни ряда (всего либо с этого дня) получают те же изменённые поля
+      patchCopies(
+        draft, 'task', task.id, changedFields(task, action.changes), scope === 'following' ? instanceDay : undefined,
+      );
     }, action.notice);
     if (detachedId) onOpenTask(detachedId);
     else if (seriesId !== task.id || action.changes.day) onOpenTask(seriesId, action.changes.day || instanceDay);
@@ -325,7 +350,7 @@ const PlannerTaskEditor = ({
   // О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
   const promptMode = !pending ? undefined
     : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
-      : pending.kind === 'delete' ? 'delete' : 'edit';
+      : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
 
   const isDone = task.status === 'done';
 
