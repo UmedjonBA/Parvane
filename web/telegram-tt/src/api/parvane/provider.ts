@@ -120,6 +120,7 @@ import { createSyncController } from './sync';
 import { TaskOfferStore } from './taskOffers';
 import { buildThumbnailDataUri, renderBackgroundBlob, UPLOADED_SLUG_PREFIX } from './wallpapers';
 import {
+  newMessageId,
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
   TOPIC_IDENTITY_PASSWORD_CHANGE,
@@ -2405,6 +2406,25 @@ const methods = {
       logDebug(`статья: файл ${fileId} не скачан: ${String(err)}`);
       return undefined;
     }
+  },
+
+  /** Замер п. 21 плана 15 окт (только диаг-сборка): `count` строк истории «Избранного» прямо в кэш истории. */
+  async parvaneDiagSeedHistory({ count }: { count: number }) {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return false;
+    const self = store.self;
+    const startSecs = Math.floor(Date.now() / 1000) - count;
+    for (let i = 0; i < count; i++) {
+      localState.saveHistoryRecord({
+        id: newMessageId(),
+        from: self,
+        to: self,
+        content: { kind: 'text', text: `история ${i} для замера окна истории чата` },
+        ts: startSecs + i,
+        origin: 'v2',
+      });
+    }
+    await localState.flushHistoryNow();
+    return true;
   },
 
   /** Явный синк (раздел открыт заново): не чаще, чем позволяет модуль. */
