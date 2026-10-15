@@ -580,12 +580,12 @@ mod msgv2 {
         f.check("group-add", a.c.call("group.state.append", parvane_protocol::pb::parvane::group::v2::StateAppendRequest { entry: Some(add.clone()) }.encode_to_vec()).is_ok(), "");
         let s2 = group::apply(Some(&s1), &add, &resolve).unwrap();
         let send = parvane_protocol::sign::generate_signing_key();
-        let ep = group::build_entry(&a.acc, Some(&s2), "local", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec() }), 100_000).unwrap();
+        let ep = group::build_entry(&a.acc, Some(&s2), "local", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), ..Default::default() }), 100_000).unwrap();
         let r = a.c.call("group.epoch.publish_send_key", parvane_protocol::pb::parvane::group::v2::EpochPublishSendKeyRequest { entry: Some(ep.clone()) }.encode_to_vec());
         f.check("group-epoch", r.is_ok(), &r);
         let s3 = group::apply(Some(&s2), &ep, &resolve).unwrap();
         // Групповой конверт через анонимный канал.
-        let env = group::seal_envelope(&send, &[9; 32], &s3.group, 1, &GroupEnvelopeInner { megolm_session_id: b"s".to_vec(), megolm_message: b"m".to_vec(), padding: vec![] }).unwrap();
+        let env = group::seal_envelope(&send, &[9; 32], &s3.group, 1, &GroupEnvelopeInner { megolm_session_id: b"s".to_vec(), megolm_message: b"m".to_vec(), padding: vec![], public_session: vec![] }).unwrap();
         let (mut an, _) = V2::connect(addr, Channel::AnonymousDelivery);
         let r = an.call("msg.deliver_group", mpb::DeliverGroupRequest { envelope: Some(env.clone()) }.encode_to_vec());
         f.check("group-deliver", r.is_ok(), &r);

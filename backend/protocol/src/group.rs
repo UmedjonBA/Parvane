@@ -118,6 +118,23 @@ pub struct GroupState {
     /// Политика «усиленная приватность» (L2) группы и кто её задал последним.
     pub l2: bool,
     pub l2_by: String,
+    /// Публичная группа (spec 023); `None` — частная.
+    pub public: Option<PublicInfo>,
+    /// Комплекты эпох публичной группы (эпоха → комплект), последние `MAX_PUBLIC_BUNDLES`.
+    pub public_bundles: BTreeMap<u64, Vec<u8>>,
+}
+
+/// Сколько комплектов эпох помнит состояние: столько эпох назад читается история публичной группы.
+pub const MAX_PUBLIC_BUNDLES: usize = 256;
+
+/// Публичная группа: имя, открытый секрет и выведенный из него ключ публичной ссылки.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublicInfo {
+    pub name: String,
+    pub secret: [u8; 32],
+    pub preview: bool,
+    pub history: bool,
+    pub link_public_key: [u8; 32],
 }
 
 /// Сколько отозванных ссылок группа помнит (остальные неотличимы от несуществующих).
@@ -344,6 +361,8 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 deleted: false,
                 l2: false,
                 l2_by: String::new(),
+                public: None,
+                public_bundles: BTreeMap::new(),
             };
             return Ok(s);
         }
@@ -490,6 +509,28 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             s.l2 = m.l2;
             s.l2_by = actor.clone();
         }
+        Change::SetPublic(p) => {
+            if !s.admin_can(&actor, |r| r.change_info) {
+                return forbid();
+            }
+            if p.public {
+                let name = normalize_public_name(&p.name).ok_or(ProtoError::InvalidField("name"))?;
+                let secret: [u8; 32] = p.secret.as_slice().try_into().map_err(|_| ProtoError::InvalidField("secret"))?;
+                let link_public_key = public_link_key(&secret).verifying_key().to_bytes();
+                // Новый секрет — новая эпоха с комплектом; смена имени или настроек ключей не трогает
+                if s.public.as_ref().is_none_or(|old| old.secret != secret) {
+                    s.epoch_stale = true;
+                }
+                s.public = Some(PublicInfo { name, secret, preview: p.preview, history: p.history, link_public_key });
+            } else {
+                if s.public.is_none() {
+                    return Err(ProtoError::InvalidField("public"));
+                }
+                // Снова частная: прежний секрет к новым сообщениям подходить не должен
+                s.public = None;
+                s.epoch_stale = true;
+            }
+        }
         Change::SetPermissions(p) => {
             if !s.admin_can(&actor, |r| r.ban_users) {
                 return forbid();
@@ -513,6 +554,12 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             let k: [u8; 32] = e.send_public_key.as_slice().try_into().map_err(|_| ProtoError::InvalidField("send_public_key"))?;
             s.epoch = e.epoch;
             s.send_public_key = Some(k);
+            if s.public.is_some() && !e.public_bundle.is_empty() {
+                s.public_bundles.insert(e.epoch, e.public_bundle.clone());
+                while s.public_bundles.len() > MAX_PUBLIC_BUNDLES {
+                    s.public_bundles.pop_first();
+                }
+            }
             s.last_epoch_ms = now;
             s.epoch_stale = false;
         }
@@ -535,6 +582,19 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                     s.revoked_links.insert(id, link);
                 }
             }
+        }
+        Change::JoinByInvite(j) if s.public.as_ref().is_some_and(|p| p.link_public_key.as_slice() == j.link_public_key.as_slice()) => {
+            // Публичная ссылка (spec 023): без лимитов; секрет открыт, поэтому новая эпоха на каждого вступившего
+            // ничего не защищает — эпоха остаётся, ключи вступивший берёт из комплекта
+            if j.joiner_root_key.as_slice() != signer.root_key || s.members.contains_key(&actor) || s.banned.contains(&actor) {
+                return forbid();
+            }
+            if s.members.len() >= MAX_MEMBERS {
+                return Err(ProtoError::FieldLimit("members"));
+            }
+            let parts = join_signing_parts(&s.group, entry.version, &entry.prev_hash, &j.joiner_root_key);
+            sign::verify_ctx(&j.link_public_key, &j.link_signature, ctx::GROUP_JOIN, &[&parts])?;
+            s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
         }
         Change::JoinByInvite(j) => {
             let id = link_id(&j.link_public_key);
@@ -609,6 +669,76 @@ pub fn build_entry(signer: &dyn OpSigner, state: Option<&GroupState>, domain: &s
 pub fn sign_join(link_secret: &ed25519_dalek::SigningKey, state: &GroupState, joiner_root: &[u8; 32]) -> Vec<u8> {
     let parts = join_signing_parts(&state.group, state.version + 1, &state.head_hash(), joiner_root);
     sign::sign_ctx(link_secret, ctx::GROUP_JOIN, &[&parts])
+}
+
+// ── публичные группы (spec 023) ─────────────────────────────────────────────
+
+const PUBLIC_NAME_MIN: usize = 5;
+const PUBLIC_NAME_MAX: usize = 32;
+
+/// Публичное имя: 5–32 знака, латиница/цифры/`_`, с буквы; хранится в нижнем регистре.
+pub fn normalize_public_name(name: &str) -> Option<String> {
+    let n = name.trim().trim_start_matches('@').to_ascii_lowercase();
+    let ok = (PUBLIC_NAME_MIN..=PUBLIC_NAME_MAX).contains(&n.len())
+        && n.starts_with(|c: char| c.is_ascii_lowercase())
+        && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    ok.then_some(n)
+}
+
+fn public_derive(secret: &[u8; 32], info: &[u8]) -> Zeroizing<[u8; 32]> {
+    let hk = hkdf::Hkdf::<Sha256>::new(None, secret);
+    let mut out = Zeroizing::new([0u8; 32]);
+    // Длина 32 у HKDF-SHA256 допустима всегда
+    let _ = hk.expand(info, out.as_mut());
+    out
+}
+
+/// Ключ публичной ссылки: вступление по ней подписывается им (тот же `JoinByInvite`).
+pub fn public_link_key(secret: &[u8; 32]) -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&public_derive(secret, b"parvane/v2/public-link"))
+}
+
+fn bundle_key(secret: &[u8; 32], group: &Ref, epoch: u64) -> Zeroizing<[u8; 32]> {
+    let mut info = b"parvane/v2/public-epoch\0".to_vec();
+    info.extend_from_slice(&group.id);
+    info.extend_from_slice(&epoch.to_be_bytes());
+    public_derive(secret, &info)
+}
+
+/// Комплект эпохи публичной группы: ключ конверта ‖ закрытый ключ отправки под ключом от секрета и эпохи.
+pub fn seal_public_bundle(secret: &[u8; 32], group: &Ref, epoch: u64, envelope_key: &[u8; 32], send_sk: &[u8; 32]) -> Result<Vec<u8>> {
+    let key = bundle_key(secret, group, epoch);
+    let mut nonce = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    let mut plain = Zeroizing::new(envelope_key.to_vec());
+    plain.extend_from_slice(send_sk);
+    let ct = ChaCha20Poly1305::new(Key::from_slice(key.as_ref()))
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: &plain, aad: &group.id })
+        .map_err(|_| ProtoError::Crypto)?;
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Открыть комплект эпохи: (ключ конверта, закрытый ключ отправки).
+pub fn open_public_bundle(secret: &[u8; 32], group: &Ref, epoch: u64, bundle: &[u8]) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
+    if bundle.len() < 12 {
+        return Err(ProtoError::Crypto);
+    }
+    let key = bundle_key(secret, group, epoch);
+    let plain = Zeroizing::new(
+        ChaCha20Poly1305::new(Key::from_slice(key.as_ref()))
+            .decrypt(Nonce::from_slice(&bundle[..12]), Payload { msg: &bundle[12..], aad: &group.id })
+            .map_err(|_| ProtoError::Crypto)?,
+    );
+    if plain.len() != 64 {
+        return Err(ProtoError::Crypto);
+    }
+    let mut envelope = Zeroizing::new([0u8; 32]);
+    let mut send = Zeroizing::new([0u8; 32]);
+    envelope.copy_from_slice(&plain[..32]);
+    send.copy_from_slice(&plain[32..]);
+    Ok((envelope, send))
 }
 
 // ── конверты групповых сообщений (D-07) ─────────────────────────────────────
@@ -812,14 +942,14 @@ mod tests {
         let w = World::new(&["alice@x", "bob@x"]);
         let s = genesis(&w);
         let send1 = sign::generate_signing_key();
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send1.verifying_key().to_bytes().to_vec() }), 1_000).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send1.verifying_key().to_bytes().to_vec(), ..Default::default() }), 1_000).unwrap();
         let s1 = apply(Some(&s), &e, &w.resolve()).unwrap();
         let send2 = sign::generate_signing_key();
-        let fast = build_entry(w.k("alice@x"), Some(&s1), "x", Change::NewEpoch(NewEpoch { epoch: 2, send_public_key: send2.verifying_key().to_bytes().to_vec() }), 5_000).unwrap();
+        let fast = build_entry(w.k("alice@x"), Some(&s1), "x", Change::NewEpoch(NewEpoch { epoch: 2, send_public_key: send2.verifying_key().to_bytes().to_vec(), ..Default::default() }), 5_000).unwrap();
         assert_eq!(apply(Some(&s1), &fast, &w.resolve()), Err(ProtoError::RateLimited));
 
         let ek = [4u8; 32];
-        let inner = GroupEnvelopeInner { megolm_session_id: b"sid".to_vec(), megolm_message: b"m".to_vec(), padding: vec![] };
+        let inner = GroupEnvelopeInner { megolm_session_id: b"sid".to_vec(), megolm_message: b"m".to_vec(), padding: vec![], public_session: vec![] };
         let env = seal_envelope(&send1, &ek, &s1.group, 1, &inner).unwrap();
         verify_envelope(&env, 1, &send1.verifying_key().to_bytes()).unwrap();
         assert_eq!(open_envelope(&env, &ek).unwrap(), inner);
@@ -868,6 +998,45 @@ mod tests {
         assert!(apply(Some(&s2), &e, &w.resolve()).is_err());
     }
 
+    /// spec 023: публичная группа — имя и секрет в журнале, вступление по ключу из секрета без новой эпохи,
+    /// ключи эпохи — из комплекта; участник без `change_info` публичной её не сделает; выключение — новая эпоха.
+    #[test]
+    fn public_groups() {
+        use crate::pb::parvane::group::v2::{JoinByInvite, NewEpoch, SetPublic};
+        let w = World::new(&["alice@x", "bob@x", "dave@x"]);
+        let s = genesis(&w);
+        let secret = [7u8; 32];
+        let set = |name: &str| SetPublic { public: true, name: name.into(), secret: secret.to_vec(), preview: true, history: false };
+        let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::SetPublic(set("Hiking")), 2).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "участник без прав");
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetPublic(set("1bad")), 2).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "имя с цифры");
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetPublic(set("@Hiking")), 2).unwrap();
+        let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert_eq!(s2.public.as_ref().unwrap().name, "hiking");
+        assert!(s2.epoch_stale);
+        // Новая эпоха с комплектом: держатель секрета открывает ключи
+        let send = sign::generate_signing_key();
+        let bundle = seal_public_bundle(&secret, &s2.group, 1, &[5; 32], &send.to_bytes()).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s2), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), public_bundle: bundle }), 1_000).unwrap();
+        let s3 = apply(Some(&s2), &e, &w.resolve()).unwrap();
+        let (env, sk) = open_public_bundle(&secret, &s3.group, 1, &s3.public_bundles[&1]).unwrap();
+        assert_eq!(*env, [5; 32]);
+        assert_eq!(*sk, send.to_bytes());
+        assert!(open_public_bundle(&[8; 32], &s3.group, 1, &s3.public_bundles[&1]).is_err(), "чужой секрет");
+        // Вступление по публичной ссылке: эпоха не устаревает
+        let link = public_link_key(&secret);
+        let root = w.roots["dave@x"];
+        let join = JoinByInvite { link_public_key: link.verifying_key().to_bytes().to_vec(), joiner_root_key: root.to_vec(), link_signature: sign_join(&link, &s3, &root) };
+        let e = build_entry(w.k("dave@x"), Some(&s3), "x", Change::JoinByInvite(join), 2_000).unwrap();
+        let s4 = apply(Some(&s3), &e, &w.resolve()).unwrap();
+        assert!(s4.members.contains_key("dave@x") && !s4.epoch_stale);
+        // Снова частная — новая эпоха обязательна
+        let e = build_entry(w.k("alice@x"), Some(&s4), "x", Change::SetPublic(SetPublic::default()), 3_000).unwrap();
+        let s5 = apply(Some(&s4), &e, &w.resolve()).unwrap();
+        assert!(s5.public.is_none() && s5.epoch_stale);
+    }
+
     /// T079: политика L2 группы — право как у изменения сведений (`change_info`),
     /// проверяется по состоянию до записи; эпоха не устаревает.
     #[test]
@@ -876,7 +1045,7 @@ mod tests {
         let w = World::new(&["alice@x", "bob@x", "carol@x"]);
         let s = genesis(&w);
         let send = sign::generate_signing_key();
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec() }), 1_000).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), ..Default::default() }), 1_000).unwrap();
         let s = apply(Some(&s), &e, &w.resolve()).unwrap();
         assert!(!s.l2 && !s.epoch_stale);
         // Участник без права менять сведения — отказ.

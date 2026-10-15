@@ -292,6 +292,14 @@ pub fn group_context_version(plaintext: &[u8]) -> Option<u64> {
     }
 }
 
+/// Автор группового plaintext по сертификату внутри (публичная группа: сеанс пришёл в конверте, владельца заранее
+/// не знаем — его журнал устройств нужен до проверки).
+pub fn group_plaintext_author(plaintext: &[u8]) -> Option<String> {
+    let gp: GroupPlaintext = decode_checked(plaintext, Origin::Client).ok()?;
+    let cert = gp.sender.as_ref()?;
+    verify_certificate(cert, None).ok().map(|d| d.user().to_string())
+}
+
 /// Групповой plaintext (до Megolm).
 pub fn group_plaintext(sender_cert: &SignedDeviceCertificate, op: SignedOp) -> Vec<u8> {
     GroupPlaintext { sender: Some(sender_cert.clone()), op: Some(op) }.encode_to_vec()

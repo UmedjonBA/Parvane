@@ -469,7 +469,7 @@ fn deliver_group(addr: &str, env: &parvane_protocol::pb::parvane::core::v2::Grou
 }
 
 fn inner_of(n: u8) -> GroupEnvelopeInner {
-    GroupEnvelopeInner { megolm_session_id: vec![n; 43], megolm_message: vec![n; 64], padding: vec![] }
+    GroupEnvelopeInner { megolm_session_id: vec![n; 43], megolm_message: vec![n; 64], padding: vec![], public_session: vec![] }
 }
 
 fn group_typing_req(send_key: &ed25519_dalek::SigningKey, g: &Ref, epoch: u64, ch: &EphChannel, from: &str) -> mpb::EphemeralGroupTypingRequest {
@@ -621,7 +621,7 @@ async fn us2_ephemeral_live() {
         // 3) «Печатает» в группе: ANON, подпись ключом отправки эпохи (D-07).
         let mut g = create_group(&mut a, &[&b]);
         let send = parvane_protocol::sign::generate_signing_key();
-        g.append(&mut a, Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec() }), 100_000).expect("epoch 1");
+        g.append(&mut a, Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), ..Default::default() }), 100_000).expect("epoch 1");
         let env_key = [9u8; 32];
         let gch = EphChannel::group_typing(&env_key, &g.state.group, 1).unwrap();
         f.check("group-typing-subscribe", b.c.call("ephemeral.subscribe", mpb::EphemeralSubscribeRequest { channel_ids: vec![gch.id.to_vec()] }.encode_to_vec()).is_ok(), "");
@@ -665,7 +665,7 @@ fn next_epoch(g: &mut G, a: &mut Dev, f: &mut Failures, name: &str, epoch: &mut 
     *epoch += 1;
     *ts += 20_000;
     let k = parvane_protocol::sign::generate_signing_key();
-    let r = g.append(a, Change::NewEpoch(NewEpoch { epoch: *epoch, send_public_key: k.verifying_key().to_bytes().to_vec() }), *ts);
+    let r = g.append(a, Change::NewEpoch(NewEpoch { epoch: *epoch, send_public_key: k.verifying_key().to_bytes().to_vec(), ..Default::default() }), *ts);
     f.check(name, r.is_ok(), &r);
     k
 }
@@ -855,7 +855,7 @@ async fn leak_generate() {
         let mut owner = device(&addr, &format!("leakowner{p}@local"));
         let mut g = create_group(&mut owner, &[&carol, &bob]);
         let send = parvane_protocol::sign::generate_signing_key();
-        g.append(&mut owner, Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec() }), 100_000).expect("epoch");
+        g.append(&mut owner, Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), ..Default::default() }), 100_000).expect("epoch");
         let env_key = [0x5a_u8; 32];
         let bob_dk = bob.delivery_key.clone();
         let bun = bundle(&addr, &bob.user);
@@ -922,7 +922,7 @@ async fn leak_generate() {
             for i in 0..10 {
                 let op = emsg::sign_group(&carol.acc, &text(&format!("группа {chunk}-{i}")), g.state.context(), now_ms()).unwrap();
                 let pt = emsg::group_plaintext(&carol.cert, op);
-                let inner = GroupEnvelopeInner { megolm_session_id: session_id.as_bytes().to_vec(), megolm_message: megolm.encrypt(&pt), padding: vec![] };
+                let inner = GroupEnvelopeInner { megolm_session_id: session_id.as_bytes().to_vec(), megolm_message: megolm.encrypt(&pt), padding: vec![], public_session: vec![] };
                 let env = group::seal_envelope(&send, &env_key, &g.state.group, 1, &inner).unwrap();
                 if an.call("msg.deliver_group", mpb::DeliverGroupRequest { envelope: Some(env) }.encode_to_vec()).is_ok() {
                     grp += 1;

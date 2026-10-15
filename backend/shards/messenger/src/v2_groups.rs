@@ -191,6 +191,8 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     if signer.user != actor {
         return Err(ErrorCode::Forbidden);
     }
+    // Публичное имя (spec 023) занимается до записи: занятое — запись не принимается
+    crate::v2_public::before_append(ctx, prev.as_ref(), &next).await?;
     // C1-07 (D-17): потолок участников — рассылка множит запись на участников.
     let grew = next.members.len() > prev.as_ref().map(|p| p.members.len()).unwrap_or(0);
     if grew && next.members.len() > max_members() {
@@ -263,6 +265,7 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     if let Ok(mut c) = ctx.groups.states.lock() {
         c.insert(g.id.clone(), next.clone());
     }
+    crate::v2_public::after_append(ctx, prev.as_ref(), &next, actor).await;
     // Уведомление всем участникам (и исключённым этой записью).
     let mut notify: BTreeSet<String> = next.members.keys().cloned().collect();
     if let Some(p) = &prev {
@@ -379,6 +382,7 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
     }
     let user = req.user.clone();
     match m.name {
+        name if name.starts_with("group.public.") => crate::v2_public::dispatch(ctx, name, req).await,
         "group.state.append" => {
             let r: gpb::StateAppendRequest = body(&req)?;
             let s = append(ctx, &user, r.entry.ok_or(ErrorCode::Invalid)?).await?;
@@ -408,7 +412,10 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             // Вступающий по ссылке (D-04): журнал нужен до вступления, чтобы
             // подписать JoinByInvite над головой. link_id — только у держателя
             // ссылки; забаненному и по недействительной ссылке — отказ.
-            let by_link = !r.invite_link_id.is_empty() && !s.banned.contains(&user) && invite_link_valid(&s, &r.invite_link_id);
+            let is_public_link = crate::v2_public::public_link_id(&s).is_some_and(|id| id.as_slice() == r.invite_link_id.as_slice());
+            let by_link = !r.invite_link_id.is_empty()
+                && !s.banned.contains(&user)
+                && (is_public_link || invite_link_valid(&s, &r.invite_link_id));
             if !is_member(&s, &user) && was.is_none() && !s.banned.contains(&user) && !by_link {
                 return Err(ErrorCode::Forbidden);
             }
@@ -517,10 +524,15 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             let g = e.group.clone().ok_or(ErrorCode::Invalid)?;
             let s = load(ctx, &g.id).await?.ok_or(ErrorCode::NotFound)?;
             let id = group::link_id(&j.link_public_key);
-            let l = s.invite_links.get(&id).ok_or(ErrorCode::NotFound)?;
             if s.banned.contains(&user) {
                 return Err(ErrorCode::Banned);
             }
+            // Публичная ссылка (spec 023): вступление сразу, проверки — в движке
+            if crate::v2_public::public_link_id(&s) == Some(id) {
+                let s2 = append(ctx, &user, e).await?;
+                return Ok(gpb::JoinResponse { pending: false, version: s2.version }.encode_to_vec());
+            }
+            let l = s.invite_links.get(&id).ok_or(ErrorCode::NotFound)?;
             if l.announce.requires_approval {
                 // Заявка: админ одобрит записью AddMember. Секрет ссылки
                 // подтверждается подписью вступления (сервер без секрета её не сделает).
@@ -583,6 +595,11 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
     }
 }
 
+/// Состояние группы для методов публичных групп; нет — `NOT_FOUND`.
+pub(crate) async fn load_public(ctx: &V2, group_id: &[u8]) -> Result<GroupState, ErrorCode> {
+    load(ctx, group_id).await?.filter(|s| !s.deleted).ok_or(ErrorCode::NotFound)
+}
+
 /// Групповое сообщение (анонимный канал): подпись ключом текущей эпохи,
 /// одноразовый nonce, рассылка всем участникам (включая автора).
 pub(crate) async fn deliver_group(ctx: &V2, r: mpb::DeliverGroupRequest) -> Reply {
@@ -611,6 +628,7 @@ pub(crate) async fn deliver_group(ctx: &V2, r: mpb::DeliverGroupRequest) -> Repl
         .execute(&ctx.v2)
         .await
         .map_err(|_| ErrorCode::Duplicate)?;
+    crate::v2_public::keep_envelope(ctx, &s, &env).await;
     for u in s.members.keys() {
         let Ok(devs) = ctx.devices_of(u).await else { continue };
         for d in &devs.v2_device_ids {

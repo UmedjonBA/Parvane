@@ -75,6 +75,10 @@ pub(crate) async fn do_register(
         anyhow::bail!("слишком длинный логин");
     }
     validate_new_user(&user, &domain)?;
+    // Общее пространство имён с публичными группами (spec 023)
+    if crate::v2::public_name_taken(user.split('@').next().unwrap_or_default()).await {
+        anyhow::bail!("логин занят");
+    }
     // По источнику (IP от gateway): пер-логин лимит не мешает спаму разными
     // логинами с одного адреса. Пусто — прямой NATS (dev), лимита по IP нет.
     // Дефолты с запасом на NAT (много людей за одним адресом). Идёт ПЕРЕД

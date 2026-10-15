@@ -118,3 +118,16 @@ message PrivacyOfResponse {
   uint32 calls_from = 4;
   uint32 presence_visibility = 5;
 }
+
+// Публичное имя группы (spec 023): messenger занимает/освобождает имя в общем пространстве с никами пользователей.
+message NameClaimRequest {
+  string name = 1 [(max_len) = 32];
+  // id группы-владельца
+  bytes owner = 2 [(max_len) = 64];
+  bool release = 3;
+}
+message NameClaimResponse {
+  bool ok = 1;
+  // taken | format | reserved
+  string reason = 2 [(max_len) = 16];
+}

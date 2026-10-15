@@ -1119,6 +1119,31 @@ export class PvClient {
         }
     }
     /**
+     * Вступить в публичную группу по открытому секрету (hex) → запрос `group.join`.
+     * @param {string} group
+     * @param {string} secret_hex
+     * @returns {any}
+     */
+    groupJoinPublic(group, secret_hex) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(secret_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupJoinPublic(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Группы, журнал которых известен устройству (hex id).
      * @returns {string[]}
      */
@@ -1133,6 +1158,37 @@ export class PvClient {
             return v1;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Конверт из истории публичной группы → JSON-массив событий (курсор инбокса не двигается).
+     * @param {Uint8Array} envelope
+     * @returns {string}
+     */
+    groupOpenEnvelope(envelope) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(envelope, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupOpenEnvelope(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
         }
     }
     /**
@@ -1171,6 +1227,34 @@ export class PvClient {
             const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.pvclient_groupRotateEpoch(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
+     * @param {string} group
+     * @param {boolean} _public
+     * @param {string} name
+     * @param {boolean} preview
+     * @param {boolean} history
+     * @returns {any}
+     */
+    groupSetPublic(group, _public, name, preview, history) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupSetPublic(retptr, this.__wbg_ptr, ptr0, len0, _public, ptr1, len1, preview, history);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -2130,6 +2214,28 @@ export class PvClient {
     presenceAllowed() {
         const ret = wasm.pvclient_presenceAllowed(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Ответ `group.public.history` → массив `{seq, envelope}` (конверт — байты для `groupOpenEnvelope`).
+     * @param {Uint8Array} response
+     * @returns {Array<any>}
+     */
+    publicHistoryItems(response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_publicHistoryItems(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив

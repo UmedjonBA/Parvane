@@ -2299,6 +2299,36 @@ impl Client {
 
     /// Новая ссылка-приглашение: запись `GroupInviteKeyAnnounce` и части
     /// ссылки (секрет — только в URL, серверу не уходит).
+    /// Публичная группа (spec 023): включить (имя, настройки; секрет прежний либо новый) или выключить. После
+    /// смены секрета эпоха устаревает — хост делает `group_rotate_epoch` (комплект ляжет в журнал).
+    pub fn group_set_public(&mut self, group_id: &[u8], public: bool, name: &str, preview: bool, history: bool) -> Result<OutRequest> {
+        let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
+        let change = if public {
+            let name = group::normalize_public_name(name).ok_or(ProtoError::InvalidField("name"))?;
+            let secret = state.public.as_ref().map(|p| p.secret).unwrap_or_else(rand32);
+            gpb::SetPublic { public: true, name, secret: secret.to_vec(), preview, history }
+        } else {
+            gpb::SetPublic::default()
+        };
+        self.group_change(group_id, Change::SetPublic(change))
+    }
+
+    /// Вступить в публичную группу по открытому секрету (журнал группы уже загружен по публичной ссылке).
+    pub fn group_join_public(&mut self, group_id: &[u8], secret: &[u8; 32]) -> Result<OutRequest> {
+        let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
+        let link = group::public_link_key(secret);
+        if state.public.as_ref().is_none_or(|p| p.link_public_key != link.verifying_key().to_bytes()) {
+            return Err(ProtoError::Forbidden);
+        }
+        let root = self.own_log.root_key;
+        let join = gpb::JoinByInvite {
+            link_public_key: link.verifying_key().to_bytes().to_vec(),
+            joiner_root_key: root.to_vec(),
+            link_signature: group::sign_join(&link, &state, &root),
+        };
+        self.group_change(group_id, Change::JoinByInvite(join))
+    }
+
     pub fn group_invite_create(&mut self, group_id: &[u8], title: &str, expires_ms: i64, usage_limit: u32, requires_approval: bool) -> Result<(OutRequest, gpb::InviteLinkParts)> {
         let (key, parts) = crate::invite::generate(&self.domain)?;
         let announce = crate::pb::parvane::core::v2::GroupInviteKeyAnnounce {
@@ -2415,12 +2445,21 @@ impl Client {
         }
         let send = sign::generate_signing_key();
         let epoch = state.epoch + 1;
-        let req = self.group_change(group_id, Change::NewEpoch(gpb::NewEpoch { epoch, send_public_key: send.verifying_key().to_bytes().to_vec() }))?;
         let envelope_key = rand32();
+        // Публичная группа (spec 023): ключи эпохи — комплектом в журнале под ключом от открытого секрета
+        let public_bundle = match &state.public {
+            Some(p) => group::seal_public_bundle(&p.secret, &state.group, epoch, &envelope_key, &send.to_bytes())?,
+            None => vec![],
+        };
+        let is_public = !public_bundle.is_empty();
+        let req = self.group_change(group_id, Change::NewEpoch(gpb::NewEpoch { epoch, send_public_key: send.verifying_key().to_bytes().to_vec(), public_bundle }))?;
         let next = self.group_state(group_id).cloned().ok_or(ClientError::Proto(ProtoError::NotFound))?;
         let writers: BTreeSet<String> = next.writers(now_ms()).into_iter().collect();
         self.epoch_keys.insert((group_id.to_vec(), epoch), EpochKeys { envelope_key: Zeroizing::new(envelope_key), send_sk: writers.contains(&self.user).then(|| SigningKey::from_bytes(&send.to_bytes())) });
         let mut out = vec![req];
+        if is_public {
+            return Ok(out);
+        }
         // L2-группа: раздача ключей эпохи тоже выровнена.
         let pad = self.group_l2_state(group_id, &next).must_pad(&self.user, &[]);
         for m in &members {
@@ -2686,6 +2725,7 @@ impl Client {
         }
         let epoch = state.epoch;
         let key = (group_id.to_vec(), epoch);
+        self.take_public_epoch_keys(&state, epoch);
         let Some(ek) = self.epoch_keys.get(&key) else { return need(Need::GroupKeys { group: group_id.to_vec(), epoch }) };
         let Some(send) = ek.send_sk.as_ref().map(|k| SigningKey::from_bytes(&k.to_bytes())) else { return need(Need::Forbidden) };
         let envelope_key = *ek.envelope_key;
@@ -2699,7 +2739,9 @@ impl Client {
                 self.megolm_in.insert(session_id.clone(), Inbound { group: group_id.to_vec(), epoch, sender: self.user.clone(), session: inb });
             }
         }
-        let members: Vec<String> = state.members.keys().cloned().collect();
+        // Публичная группа: сеанс едет в самом конверте — раздавать его участникам по E2E не нужно
+        let is_public = state.public.is_some();
+        let members: Vec<String> = if is_public { vec![] } else { state.members.keys().cloned().collect() };
         // Сессии со всеми, кому раздавать, — до раздачи (иначе при добор-повторе
         // часть участников отмечена «получил», а запросы к ним отброшены).
         for m in &members {
@@ -2728,13 +2770,40 @@ impl Client {
         let plain = msg::group_plaintext(&cert, op);
         let session = self.megolm_out.get_mut(&key).ok_or(ProtoError::Crypto)?;
         let megolm_message = session.encrypt(&plain);
-        let mut inner = GroupEnvelopeInner { megolm_session_id: session_id.into_bytes(), megolm_message, padding: vec![] };
+        let public_session = if is_public { session_key.to_vec() } else { vec![] };
+        let mut inner = GroupEnvelopeInner { megolm_session_id: session_id.into_bytes(), megolm_message, padding: vec![], public_session };
         if pad {
             l2::pad_group(&mut inner);
         }
         let env = group::seal_envelope(&send, &envelope_key, &state.group, epoch, &inner)?;
         out.push(OutRequest::anon("msg.deliver_group", &mpb::DeliverGroupRequest { envelope: Some(env) }));
         Ok(out)
+    }
+
+    /// История публичной группы (`group.public.history`): конверт → события (без курсора инбокса, seq = 0).
+    pub fn open_group_envelope(&mut self, envelope: &[u8]) -> CResult<Vec<Event>> {
+        let env: GroupEnvelope = decode_checked(envelope, Origin::Server)?;
+        self.open_group(0, &env)
+    }
+
+    /// Публичная группа (spec 023): ключи эпохи из комплекта журнала, если своих нет.
+    fn take_public_epoch_keys(&mut self, state: &GroupState, epoch: u64) {
+        let key = (state.group.id.clone(), epoch);
+        if self.epoch_keys.contains_key(&key) {
+            return;
+        }
+        let (Some(p), Some(bundle)) = (state.public.as_ref(), state.public_bundles.get(&epoch)) else { return };
+        if let Ok((envelope_key, send)) = group::open_public_bundle(&p.secret, &state.group, epoch, bundle) {
+            self.epoch_keys.insert(key, EpochKeys { envelope_key, send_sk: Some(SigningKey::from_bytes(&send)) });
+        }
+    }
+
+    /// Сообщение публичной группы сеансом из конверта: (plaintext, индекс, автор по сертификату).
+    fn open_public_session(&self, inner: &GroupEnvelopeInner) -> CResult<(Vec<u8>, u32, String)> {
+        let mut inb = MegolmInbound::from_session_key(&inner.public_session)?;
+        let (pt, index) = inb.decrypt(&inner.megolm_message)?;
+        let author = msg::group_plaintext_author(&pt).ok_or(ProtoError::BadCertificate)?;
+        Ok((pt, index, author))
     }
 
     fn open_group(&mut self, seq: u64, env: &GroupEnvelope) -> CResult<Vec<Event>> {
@@ -2746,19 +2815,33 @@ impl Client {
         if env.epoch > state.epoch {
             return need(Need::GroupLog { group: g.id.clone(), after: state.version });
         }
+        self.take_public_epoch_keys(&state, env.epoch);
         let Some(ek) = self.epoch_keys.get(&(g.id.clone(), env.epoch)) else {
             return need(Need::GroupKeys { group: g.id.clone(), epoch: env.epoch });
         };
         let inner = group::open_envelope(env, &ek.envelope_key)?;
         let sid = String::from_utf8(inner.megolm_session_id.clone()).map_err(|_| ProtoError::InvalidField("session"))?;
-        let Some(inb) = self.megolm_in.get_mut(&sid) else {
-            return need(Need::GroupKeys { group: g.id.clone(), epoch: env.epoch });
+        let (pt, index, expected_sender) = match self.megolm_in.get_mut(&sid) {
+            Some(inb) => {
+                if inb.group != g.id || inb.epoch != env.epoch {
+                    return Err(ClientError::Proto(ProtoError::ContextMismatch));
+                }
+                match inb.session.decrypt(&inner.megolm_message) {
+                    Ok((pt, index)) => (pt, index, inb.sender.clone()),
+                    // Публичная группа: сообщение старше известного индекса (история) — сеанс из конверта
+                    Err(_) if !inner.public_session.is_empty() => self.open_public_session(&inner)?,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            None if !inner.public_session.is_empty() => {
+                let opened = self.open_public_session(&inner)?;
+                if let Ok(inb) = MegolmInbound::from_session_key(&inner.public_session) {
+                    self.megolm_in.insert(sid.clone(), Inbound { group: g.id.clone(), epoch: env.epoch, sender: opened.2.clone(), session: inb });
+                }
+                opened
+            }
+            None => return need(Need::GroupKeys { group: g.id.clone(), epoch: env.epoch }),
         };
-        if inb.group != g.id || inb.epoch != env.epoch {
-            return Err(ClientError::Proto(ProtoError::ContextMismatch));
-        }
-        let (pt, index) = inb.session.decrypt(&inner.megolm_message)?;
-        let expected_sender = inb.sender.clone();
         // Журнал автора — до отметки индекса «виденным» (повтор после добора).
         if expected_sender != self.user && self.peers.get(&expected_sender).and_then(|p| p.log.as_ref()).is_none() {
             return need(Need::PeerLog { user: expected_sender, after: 0 });

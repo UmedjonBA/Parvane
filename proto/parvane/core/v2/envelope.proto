@@ -275,6 +275,9 @@ message GroupEnvelopeInner {
   bytes megolm_message = 2 [(max_len) = 300000];
   // Заполнение до сетки L2 (запас — как у SealedInner.padding).
   bytes padding = 3 [(max_len) = 65536];
+  // Публичная группа (spec 023): экспорт Megolm-сеанса автора с индекса этого сообщения — держатель ключа конверта
+  // читает сообщение без раздачи ключа (история, чтение без вступления).
+  bytes public_session = 4 [(max_len) = 512];
 }
 
 // Расшифрованное Megolm-сообщение группы.

@@ -210,7 +210,7 @@ fn l2_case(case: &Value) -> Result<(), String> {
             Ok(())
         }
         Some("pad_group") => {
-            let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; num(input, "session_id_len")?], megolm_message: vec![7; num(input, "message_len")?], padding: vec![] };
+            let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; num(input, "session_id_len")?], megolm_message: vec![7; num(input, "message_len")?], padding: vec![], public_session: vec![] };
             l2::pad_group(&mut inner);
             let (got, want) = (inner.encoded_len(), num(expect, "len")?);
             if got != want {

@@ -14,13 +14,14 @@ use parvane_protocol::identity::{DeviceLog, VerifiedDevice};
 use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{
     user_device_log_entry::Change, DeliveryKeyCheckRequest, DeliveryKeyCheckResponse, DevicesOfRequest,
-    DevicesOfResponse, ErrorCode, KeyOwnerRequest, KeyOwnerResponse, PrivacyOfRequest, PrivacyOfResponse, RevokedNotice,
+    DevicesOfResponse, ErrorCode, KeyOwnerRequest, KeyOwnerResponse, NameClaimRequest, NameClaimResponse, PrivacyOfRequest,
+    PrivacyOfResponse, RevokedNotice,
     ShardRequest, SignedOp, TokenCheckRequest, TokenCheckResponse, UserDeviceLogEntry, UserRef,
 };
 use parvane_protocol::pb::parvane::identity::v2 as pb;
 use parvane_protocol::registry_gen::{
-    INTERNAL_DELIVERY_KEY_CHECK, INTERNAL_DEVICES_OF, INTERNAL_KEY_OWNER, INTERNAL_PRIVACY_OF, INTERNAL_TOKEN_CHECK,
-    REVOKED_SUBJECT,
+    INTERNAL_DELIVERY_KEY_CHECK, INTERNAL_DEVICES_OF, INTERNAL_KEY_OWNER, INTERNAL_NAME_CLAIM, INTERNAL_PRIVACY_OF,
+    INTERNAL_TOKEN_CHECK, REVOKED_SUBJECT,
 };
 use parvane_protocol::schema::MethodInfo;
 use parvane_protocol::tokens::Issuer;
@@ -107,6 +108,7 @@ async fn internal(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     let mut ko = nc.subscribe(INTERNAL_KEY_OWNER.to_string()).await?;
     let mut tc = nc.subscribe(INTERNAL_TOKEN_CHECK.to_string()).await?;
     let mut pv = nc.subscribe(INTERNAL_PRIVACY_OF.to_string()).await?;
+    let mut nm = nc.subscribe(INTERNAL_NAME_CLAIM.to_string()).await?;
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -177,11 +179,122 @@ async fn internal(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                         let _ = nc.publish(reply, out.encode_to_vec().into()).await;
                     });
                 }
+                Some(m) = nm.next() => {
+                    let (ctx, nc) = (ctx.clone(), nc.clone());
+                    tokio::spawn(async move {
+                        let Some(reply) = m.reply.clone() else { return };
+                        // Ошибка БД — без ответа: messenger получит таймаут и запись не примет
+                        let out = match decode_checked::<NameClaimRequest>(&m.payload, Origin::Server) {
+                            Ok(r) => match name_claim(&ctx, &r).await {
+                                Some(o) => o,
+                                None => return,
+                            },
+                            Err(_) => NameClaimResponse { ok: false, reason: "format".into() },
+                        };
+                        let _ = nc.publish(reply, out.encode_to_vec().into()).await;
+                    });
+                }
                 else => break,
             }
         }
     });
     Ok(())
+}
+
+/// Слова, которые не занять ни группе, ни (через `public_name_taken`) пользователю; плюс `PARVANE_RESERVED_NAMES`
+/// (через запятую).
+const RESERVED_NAMES: &[&str] = &[
+    "admin", "administrator", "parvane", "support", "settings", "telegram", "system", "server", "official",
+    "moderator", "security", "notifications", "service", "everyone", "channel", "group",
+];
+
+fn is_reserved_name(name: &str) -> bool {
+    RESERVED_NAMES.contains(&name)
+        || std::env::var("PARVANE_RESERVED_NAMES")
+            .map(|v| v.split(',').any(|r| r.trim().eq_ignore_ascii_case(name)))
+            .unwrap_or(false)
+}
+
+/// Публичное имя группы (spec 023): занять (одно имя на группу — прежнее освобождается) либо освободить. Имя не
+/// должно совпадать с ником пользователя этого сервера (общее пространство). `None` — ошибка БД.
+async fn name_claim(ctx: &V2Ctx, r: &NameClaimRequest) -> Option<NameClaimResponse> {
+    let reject = |reason: &str| Some(NameClaimResponse { ok: false, reason: reason.into() });
+    if r.release {
+        let done = sqlx::query("DELETE FROM public_names WHERE owner = ?").bind(&r.owner).execute(&ctx.v2).await;
+        if let Err(e) = done {
+            error!("identity v2: name_claim release: {}", e);
+            return None;
+        }
+        return Some(NameClaimResponse { ok: true, reason: String::new() });
+    }
+    let Some(name) = parvane_protocol::group::normalize_public_name(&r.name) else { return reject("format") };
+    if is_reserved_name(&name) {
+        return reject("reserved");
+    }
+    // Пустой владелец — только проверка (экран выбора имени), ничего не занимается
+    let is_check = r.owner.is_empty();
+    let user = format!("{}@{}", name, crate::server_domain());
+    let as_user: Result<Option<(i64,)>, _> =
+        sqlx::query_as("SELECT 1 FROM users WHERE username = ?").bind(&user).fetch_optional(&ctx.pool).await;
+    match as_user {
+        Ok(Some(_)) => return reject("taken"),
+        Ok(None) => {}
+        Err(e) => {
+            error!("identity v2: name_claim users: {}", e);
+            return None;
+        }
+    }
+    if is_check {
+        let held: Result<Option<(i64,)>, _> =
+            sqlx::query_as("SELECT 1 FROM public_names WHERE name = ?").bind(&name).fetch_optional(&ctx.v2).await;
+        return match held {
+            Ok(Some(_)) => reject("taken"),
+            Ok(None) => Some(NameClaimResponse { ok: true, reason: String::new() }),
+            Err(e) => {
+                error!("identity v2: name_claim check: {}", e);
+                None
+            }
+        };
+    }
+    let result: Result<bool, sqlx::Error> = async {
+        let mut tx = ctx.v2.begin().await?;
+        let held: Option<(Vec<u8>,)> =
+            sqlx::query_as("SELECT owner FROM public_names WHERE name = ?").bind(&name).fetch_optional(&mut *tx).await?;
+        if held.is_some_and(|(owner,)| owner != r.owner) {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM public_names WHERE owner = ? AND name != ?").bind(&r.owner).bind(&name).execute(&mut *tx).await?;
+        sqlx::query("INSERT OR IGNORE INTO public_names (name, owner, claimed_at) VALUES (?, ?, ?)")
+            .bind(&name)
+            .bind(&r.owner)
+            .bind(now_unix())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+    .await;
+    match result {
+        Ok(true) => Some(NameClaimResponse { ok: true, reason: String::new() }),
+        Ok(false) => reject("taken"),
+        Err(e) => {
+            error!("identity v2: name_claim: {}", e);
+            None
+        }
+    }
+}
+
+/// Ник занят публичной группой либо зарезервирован (регистрация пользователя, spec 023).
+pub(crate) async fn public_name_taken(nick: &str) -> bool {
+    let nick = nick.to_ascii_lowercase();
+    if is_reserved_name(&nick) {
+        return true;
+    }
+    let Some(pool) = V2_POOL.get() else { return false };
+    matches!(
+        sqlx::query_as::<_, (i64,)>("SELECT 1 FROM public_names WHERE name = ?").bind(&nick).fetch_optional(pool).await,
+        Ok(Some(_))
+    )
 }
 
 /// Настройки приватности, выставленные через `identity.privacy.set`

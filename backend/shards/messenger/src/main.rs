@@ -12,6 +12,7 @@ use tracing::{error, info, warn};
 
 mod v2;
 mod v2_groups;
+mod v2_public;
 mod v2_state;
 
 #[tokio::main]

@@ -227,14 +227,26 @@ export class PvClient {
      */
     groupJoin(url: string): any;
     /**
+     * Вступить в публичную группу по открытому секрету (hex) → запрос `group.join`.
+     */
+    groupJoinPublic(group: string, secret_hex: string): any;
+    /**
      * Группы, журнал которых известен устройству (hex id).
      */
     groupList(): string[];
+    /**
+     * Конверт из истории публичной группы → JSON-массив событий (курсор инбокса не двигается).
+     */
+    groupOpenEnvelope(envelope: Uint8Array): string;
     /**
      * Решение по заявке на вступление (одобрение — запись `AddMember`).
      */
     groupRequestDecide(group: string, user: string, approve: boolean): any;
     groupRotateEpoch(group: string): Array<any>;
+    /**
+     * Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
+     */
+    groupSetPublic(group: string, _public: boolean, name: string, preview: boolean, history: boolean): any;
     /**
      * FR-028 (T080): участники по данным сервера (`claimed`) без
      * подтверждённой записи журнала + добавленные отвергнутыми записями.
@@ -417,6 +429,10 @@ export class PvClient {
      * Публиковать ли своё присутствие: false, пока L2 активен хотя бы в одном чате.
      */
     presenceAllowed(): boolean;
+    /**
+     * Ответ `group.public.history` → массив `{seq, envelope}` (конверт — байты для `groupOpenEnvelope`).
+     */
+    publicHistoryItems(response: Uint8Array): Array<any>;
     /**
      * Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
      * `[{"user","tsMs"}]`. Серверу v2 это неизвестно («Просмотрено», T151).
@@ -757,9 +773,12 @@ export interface InitOutput {
     readonly pvclient_groupIngest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_groupInviteCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupJoin: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupList: (a: number, b: number) => void;
+    readonly pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
@@ -807,6 +826,7 @@ export interface InitOutput {
     readonly pvclient_prepareDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_prepareGroup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_presenceAllowed: (a: number) => number;
+    readonly pvclient_publicHistoryItems: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_readers: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_recoverWithRoot: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_resetIdentity: (a: number, b: number, c: number) => void;

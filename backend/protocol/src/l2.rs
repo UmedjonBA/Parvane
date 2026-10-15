@@ -212,7 +212,7 @@ mod tests {
         use crate::pb::parvane::core::v2::Ref;
         let on_grid = |len: usize| seal::L2_BUCKETS.contains(&len) || (len > 32768 && len % 32768 == 0);
         for n in (0usize..700).chain(1800..2100).chain(7900..8300).chain(16000..16500).chain(32500..33000).chain([40000, 65400, 300000]) {
-            let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![7; n], padding: vec![] };
+            let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![7; n], padding: vec![], public_session: vec![] };
             pad_group(&mut inner);
             let len = inner.encoded_len();
             assert!(on_grid(len), "{n} → {len}");
@@ -221,8 +221,8 @@ mod tests {
         // Два сообщения разной длины в одной корзине — один размер шифртекста.
         let key = crate::sign::generate_signing_key();
         let g = Ref { domain: "local".into(), id: vec![3; 16] };
-        let mut a = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![1; 20], padding: vec![] };
-        let mut b = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![1; 350], padding: vec![] };
+        let mut a = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![1; 20], padding: vec![], public_session: vec![] };
+        let mut b = GroupEnvelopeInner { megolm_session_id: vec![1; 43], megolm_message: vec![1; 350], padding: vec![], public_session: vec![] };
         pad_group(&mut a);
         pad_group(&mut b);
         let ea = seal_envelope(&key, &[9; 32], &g, 1, &a).unwrap();

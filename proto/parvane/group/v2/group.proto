@@ -104,6 +104,42 @@ service GroupService {
       shard: "messenger"
     };
   }
+  rpc PublicCheckName(PublicCheckNameRequest) returns (PublicCheckNameResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.public.check_name"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc PublicSearch(PublicSearchRequest) returns (PublicSearchResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.public.search"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc PublicResolve(PublicResolveRequest) returns (PublicResolveResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.public.resolve"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc PublicHistory(PublicHistoryRequest) returns (PublicHistoryResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.public.history"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
   rpc RequestDecide(RequestDecideRequest) returns (RequestDecideResponse) {
     option (parvane.core.v2.method) = {
       name: "group.request.decide"
@@ -176,7 +212,21 @@ message GroupChange {
     parvane.core.v2.GroupInviteKeyAnnounce invite_key = 14;
     InviteKeyRevoke invite_key_revoke = 15;
     SetPrivacyMode set_privacy_mode = 16;
+    SetPublic set_public = 17;
   }
+}
+
+// Публичная группа (spec 023): имя в общем пространстве с никами, открытый секрет `secret` (решение пользователя
+// 15 окт 2026 — вступление без участников в сети). Из секрета выводятся ключ публичной ссылки и ключ комплектов
+// эпох (`NewEpoch.public_bundle`). `public = false` — снова частная (остальные поля пусты; следом — новая эпоха).
+message SetPublic {
+  bool public = 1;
+  string name = 2 [(parvane.core.v2.max_len) = 32];
+  bytes secret = 3 [(parvane.core.v2.max_len) = 32];
+  // Посторонний видит ленту до вступления.
+  bool preview = 4;
+  // Вступивший видит прежнюю переписку.
+  bool history = 5;
 }
 
 // Отзыв ссылки: link_id = SHA-256(link_public_key).
@@ -249,6 +299,8 @@ message SetPrivacyMode {
 message NewEpoch {
   uint64 epoch = 1;
   bytes send_public_key = 2 [(parvane.core.v2.max_len) = 32];
+  // Публичная группа: AEAD(ключ от секрета и эпохи, ключ конверта ‖ ключ отправки) — новичок берёт ключи сам.
+  bytes public_bundle = 3 [(parvane.core.v2.max_len) = 160];
 }
 
 // Вступление по ссылке (D-04): запись подписана устройством вступающего;
@@ -380,3 +432,58 @@ message RequestDecideRequest {
   parvane.core.v2.GroupStateEntry entry = 4;
 }
 message RequestDecideResponse {}
+
+// ── публичные группы (spec 023) ─────────────────────────────────────────────
+
+// Карточка каталога: открытые сведения публичной группы.
+message PublicGroupCard {
+  string name = 1 [(parvane.core.v2.max_len) = 32];
+  GroupKind kind = 2;
+  string title = 3 [(parvane.core.v2.max_len) = 255];
+  string about = 4 [(parvane.core.v2.max_len) = 1024];
+  string avatar_file_id = 5 [(parvane.core.v2.max_len) = 64];
+  uint32 members = 6;
+  bool preview = 7;
+  bool history = 8;
+  parvane.core.v2.Ref group = 9;
+}
+
+message PublicCheckNameRequest {
+  string name = 1 [(parvane.core.v2.max_len) = 64];
+}
+message PublicCheckNameResponse {
+  bool available = 1;
+  // taken | format | reserved
+  string reason = 2 [(parvane.core.v2.max_len) = 16];
+}
+
+message PublicSearchRequest {
+  string query = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 limit = 2;
+}
+message PublicSearchResponse {
+  repeated PublicGroupCard groups = 1 [(parvane.core.v2.max_items) = 20];
+}
+
+message PublicResolveRequest {
+  string name = 1 [(parvane.core.v2.max_len) = 64];
+}
+message PublicResolveResponse {
+  PublicGroupCard card = 1;
+  bytes secret = 2 [(parvane.core.v2.max_len) = 32];
+}
+
+message PublicHistoryRequest {
+  parvane.core.v2.Ref group = 1;
+  // 0 — с конца.
+  uint64 before_seq = 2;
+  uint32 limit = 3;
+}
+message PublicHistoryItem {
+  uint64 seq = 1;
+  parvane.core.v2.GroupEnvelope envelope = 2;
+}
+message PublicHistoryResponse {
+  repeated PublicHistoryItem items = 1 [(parvane.core.v2.max_items) = 100];
+  bool more = 2;
+}

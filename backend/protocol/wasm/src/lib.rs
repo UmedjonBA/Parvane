@@ -1011,6 +1011,40 @@ impl PvClient {
         self.inner.group_join(&parts).map(|r| req_js(&r)).map_err(err_proto)
     }
 
+    /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
+    #[wasm_bindgen(js_name = groupSetPublic)]
+    pub fn group_set_public(&mut self, group: &str, public: bool, name: &str, preview: bool, history: bool) -> Result<JsValue, JsValue> {
+        self.inner.group_set_public(&group_id(group)?, public, name, preview, history).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Вступить в публичную группу по открытому секрету (hex) → запрос `group.join`.
+    #[wasm_bindgen(js_name = groupJoinPublic)]
+    pub fn group_join_public(&mut self, group: &str, secret_hex: &str) -> Result<JsValue, JsValue> {
+        let secret: [u8; 32] = hex::decode(secret_hex).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| err_proto(ProtoError::InvalidField("secret")))?;
+        self.inner.group_join_public(&group_id(group)?, &secret).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Ответ `group.public.history` → массив `{seq, envelope}` (конверт — байты для `groupOpenEnvelope`).
+    #[wasm_bindgen(js_name = publicHistoryItems)]
+    pub fn public_history_items(&self, response: &[u8]) -> Result<Array, JsValue> {
+        let r: gpb::PublicHistoryResponse = decode_checked(response, Origin::Server).map_err(err_proto)?;
+        let out = Array::new();
+        for item in r.items {
+            let Some(env) = item.envelope else { continue };
+            let o = Object::new();
+            set(&o, "seq", &JsValue::from_f64(item.seq as f64));
+            set(&o, "envelope", &Uint8Array::from(env.encode_to_vec().as_slice()).into());
+            out.push(&o.into());
+        }
+        Ok(out)
+    }
+
+    /// Конверт из истории публичной группы → JSON-массив событий (курсор инбокса не двигается).
+    #[wasm_bindgen(js_name = groupOpenEnvelope)]
+    pub fn group_open_envelope(&mut self, envelope: &[u8]) -> Result<String, JsValue> {
+        self.inner.open_group_envelope(envelope).map(|e| events_js(&e)).map_err(err_client)
+    }
+
     /// Изменение группы: proto3-JSON `group.v2.GroupChange`.
     #[wasm_bindgen(js_name = groupChange)]
     pub fn group_change(&mut self, group: &str, change_json: &str) -> Result<JsValue, JsValue> {
@@ -1056,6 +1090,10 @@ impl PvClient {
             // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
             "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
             "l2": s.l2, "l2By": s.l2_by,
+            // Публичная группа (spec 023): имя и настройки админа; секрет хост не получает
+            "publicName": s.public.as_ref().map(|p| p.name.clone()),
+            "publicPreview": s.public.as_ref().is_some_and(|p| p.preview),
+            "publicHistory": s.public.as_ref().is_some_and(|p| p.history),
         })
         .to_string())
     }

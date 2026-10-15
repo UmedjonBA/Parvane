@@ -553,6 +553,10 @@ impl HostClient {
             // Число вступивших по каждой ссылке (счёт по журналу группы) — для экрана ссылок
             "inviteUses": s.invite_links.iter().map(|(id, l)| (hex::encode(id), l.uses)).collect::<std::collections::BTreeMap<_, _>>(),
             "l2": s.l2, "l2By": s.l2_by,
+            // Публичная группа (spec 023): имя и настройки админа; секрет хост не получает
+            "publicName": s.public.as_ref().map(|p| p.name.clone()),
+            "publicPreview": s.public.as_ref().is_some_and(|p| p.preview),
+            "publicHistory": s.public.as_ref().is_some_and(|p| p.history),
         })
         .to_string())
     }
@@ -608,6 +612,17 @@ impl HostClient {
             return Err(err(ProtoError::InvalidField("invite")));
         };
         self.inner.group_join(&parts).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
+    pub fn group_set_public(&mut self, group_hex: &str, public: bool, name: &str, preview: bool, history: bool) -> Result<String, String> {
+        self.inner.group_set_public(&group_id(group_hex)?, public, name, preview, history).map(|r| req_json(&r).to_string()).map_err(err)
+    }
+
+    /// Вступить в публичную группу по открытому секрету (hex) → запрос `group.join`.
+    pub fn group_join_public(&mut self, group_hex: &str, secret_hex: &str) -> Result<String, String> {
+        let secret: [u8; 32] = hex::decode(secret_hex).ok().and_then(|b| b.try_into().ok()).ok_or_else(|| err(ProtoError::InvalidField("secret")))?;
+        self.inner.group_join_public(&group_id(group_hex)?, &secret).map(|r| req_json(&r).to_string()).map_err(err)
     }
 
     /// Устройства пользователя по журналу → `{"v2": [...], "legacy": [...]}`.

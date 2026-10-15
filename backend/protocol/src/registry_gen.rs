@@ -30,6 +30,8 @@ pub const INTERNAL_KEY_OWNER: &str = "v2.internal.identity.key_owner";
 pub const INTERNAL_TOKEN_CHECK: &str = "v2.internal.identity.token_check";
 /// Настройки приватности пользователя (messenger: согласие на добавление в группы).
 pub const INTERNAL_PRIVACY_OF: &str = "v2.internal.identity.privacy_of";
+/// Публичное имя группы (spec 023): messenger занимает/освобождает имя в общем пространстве с никами.
+pub const INTERNAL_NAME_CLAIM: &str = "v2.internal.identity.name_claim";
 /// Внутренний запрос gateway → messenger: текущая эпоха группы и её ключ
 /// отправки (проверка `ephemeral.group_typing`, D-07).
 pub const INTERNAL_GROUP_EPOCH: &str = "v2.internal.messenger.group_epoch";
