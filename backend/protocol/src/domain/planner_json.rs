@@ -8,7 +8,7 @@
 //! `{tasks:[{id,name,description,steps:[{text,isDone}],status,listId,rank,day,start,due,minutes|null,
 //!     repeat|null,occurrences:[{day,excluded,done,doneSteps}],origin|null,source|null}],
 //!   events:[{id,name,start,end,weekdays:[…]|null,day,repeat|null,occurrences,origin|null,allDay,isHoliday,color,
-//!     description}],
+//!     description,listId}],
 //!   lists:[{id,name,order,color}],
 //!   nutrition:[{day,entries:[{id,name,meal,kcal,protein|null,fat|null,carbs|null,fiber|null,grams|null,per100}],
 //!     isComplete,fixedGoals|null,waterMl|null}], settings|null, goals|null,
@@ -150,6 +150,7 @@ pub fn state_json(state: &PlannerState, head_seq: u64) -> String {
                 "color": e.color.as_ref().filter(|c| !c.unset).map(|c| c.value).unwrap_or(0),
                 "description": sv(&e.description),
                 "remind": u32_json(&e.remind),
+                "listId": sv(&e.list_id),
             })
         })
         .collect();
@@ -471,6 +472,7 @@ fn event_of(o: &Map<String, Value>) -> Result<Event> {
         color: u32_field(o, "color")?,
         description: str_field(o, "description")?,
         remind: u32_field(o, "remind")?,
+        list_id: str_field(o, "listId")?,
     })
 }
 
@@ -748,7 +750,7 @@ mod tests {
           {"task":{"id":"t2","name":"Без оценки","minutes":null}},
           {"event":{"id":"e1","name":"Стендап","start":"09:30","end":"09:45","weekdays":[1,2,3,4,5],"day":""}},
           {"list":{"id":"l1","name":"Работа","order":1,"color":4}},
-          {"event":{"id":"e3","name":"Новый год","start":"00:00","end":"23:59","day":"2027-01-01","allDay":true,"isHoliday":true,"color":3,"description":"Ёлка\nи подарки"}},
+          {"event":{"id":"e3","name":"Новый год","start":"00:00","end":"23:59","day":"2027-01-01","allDay":true,"isHoliday":true,"color":3,"description":"Ёлка\nи подарки","listId":"l1"}},
           {"nutritionDay":{"day":"2026-10-08","entries":[{"id":"f1","name":"Суп","meal":"lunch","kcal":300,"protein":12}],"isComplete":true,"waterMl":500}},
           {"settings":{"dayStart":480,"dayEnd":1200,"lunchStart":0,"lunchEnd":0,"margin":10,"budget":480}},
           {"goals":{"kcal":{"target":2000,"tolerance":100},"protein":{"target":120,"tolerance":20},"water":{"target":2000,"tolerance":300}}},
@@ -769,6 +771,7 @@ mod tests {
         assert_eq!(e3["isHoliday"], json!(true));
         assert_eq!(e3["color"], json!(3));
         assert_eq!(e3["description"], json!("Ёлка\nи подарки"));
+        assert_eq!(e3["listId"], json!("l1"));
         let e1 = parsed["events"].as_array().unwrap().iter().find(|e| e["id"] == "e1").unwrap();
         assert_eq!(e1["allDay"], json!(false));
         assert_eq!(e1["description"], json!(""));

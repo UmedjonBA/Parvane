@@ -10,7 +10,7 @@ import {
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatPlainName } from './plannerLinks';
 import {
-  fromDayKey, getDayRange, getListColor, getMonthGridKeys, instanceKey, toDayKey,
+  fromDayKey, getDayRange, getEventColor, getListColor, getMonthGridKeys, instanceKey, toDayKey,
 } from './plannerModel';
 
 import useLang from '../../../hooks/useLang';
@@ -109,8 +109,8 @@ const PlannerMonth = ({
         ...events.map((event): Entry => ({
           key: `event${instanceKey(event)}`,
           label: formatPlainName(event.name),
-          kind: event.isHoliday && !event.color ? 'due' : 'event',
-          color: event.color || 0,
+          kind: event.isHoliday && !getEventColor(state, event) ? 'due' : 'event',
+          color: getEventColor(state, event),
           order: event.isAllDay ? '' : event.start,
         })),
         ...entry.tasks.map((task): Entry => ({

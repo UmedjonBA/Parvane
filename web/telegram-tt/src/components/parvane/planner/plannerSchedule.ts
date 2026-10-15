@@ -62,11 +62,14 @@ export function parseSchedule(text: string): ParsedSchedule {
   return { items, endDay: findEndDay(text), skipped };
 }
 
-/** События расписания: каждое — еженедельный ряд в свой день с `startDay` по `endDay` включительно. */
-export function buildScheduleEvents(items: ScheduleItem[], startDay: string, endDay: string): PlannerEvent[] {
+/** События расписания: каждое — еженедельный ряд в свой день с `startDay` по `endDay` включительно, в группе `project`. */
+export function buildScheduleEvents(
+  items: ScheduleItem[], startDay: string, endDay: string, project?: string,
+): PlannerEvent[] {
   return items.map((item) => ({
     id: newId(),
     name: item.name,
+    project: project || undefined,
     description: item.description,
     start: item.start,
     end: item.end,

@@ -273,6 +273,7 @@ fn check_event(e: &Event) -> Result<()> {
     }
     check_str(&e.name, MAX_NAME, |s| !s.trim().is_empty())?;
     check_str(&e.description, MAX_DESCRIPTION, |_| true)?;
+    check_str(&e.list_id, MAX_ID, |s| s.is_empty() || is_id(s))?;
     check_str(&e.start, 5, is_time)?;
     check_str(&e.end, 5, is_time)?;
     check_str(&e.day, 10, |s| s.is_empty() || is_day(s))?;
@@ -536,7 +537,7 @@ impl PlannerState {
 
     pub fn is_event_alive(e: &Event) -> bool {
         let mut best = (0u64, String::new());
-        for s in [&e.name, &e.start, &e.end, &e.day, &e.description]
+        for s in [&e.name, &e.start, &e.end, &e.day, &e.description, &e.list_id]
             .into_iter()
             .flatten()
             .filter_map(|f| f.stamp.as_ref())
@@ -708,6 +709,7 @@ impl PlannerState {
         merge_reg!(cur.color, inc.color, U32);
         merge_reg!(cur.description, inc.description, Str);
         merge_reg!(cur.remind, inc.remind, U32);
+        merge_reg!(cur.list_id, inc.list_id, Str);
         merge_occurrences(&mut cur.occurrences, &inc.occurrences);
         merge_deleted(&mut cur.deleted, inc.deleted.as_ref());
     }
@@ -1026,7 +1028,7 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
                 push(t.deleted.as_ref())?;
             }
             Some(change::Change::Event(e)) => {
-                for s in [&e.name, &e.start, &e.end, &e.day, &e.description].into_iter().flatten() {
+                for s in [&e.name, &e.start, &e.end, &e.day, &e.description, &e.list_id].into_iter().flatten() {
                     push(s.stamp.as_ref())?;
                 }
                 push(e.weekdays.as_ref().and_then(|f| f.stamp.as_ref()))?;
@@ -1141,7 +1143,7 @@ pub fn stamp_op(op: &mut PlannerOp, stamp: &Stamp) {
                 }
             }
             Some(change::Change::Event(e)) => {
-                for f in [&mut e.name, &mut e.start, &mut e.end, &mut e.day, &mut e.description] {
+                for f in [&mut e.name, &mut e.start, &mut e.end, &mut e.day, &mut e.description, &mut e.list_id] {
                     st(f);
                 }
                 if let Some(f) = &mut e.weekdays {

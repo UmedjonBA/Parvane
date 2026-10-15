@@ -12,8 +12,8 @@ import {
 import { getDailyRecord, getDayBudget, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine, formatPlainName } from './plannerLinks';
 import {
-  addDays, fromDayKey, getDayRange, getListColor, getNutrientTotal, instanceKey, layoutTimed, MINUTES_IN_DAY,
-  toMinutes, toTime,
+  addDays, fromDayKey, getDayRange, getEventColor, getListColor, getNutrientTotal, instanceKey, layoutTimed,
+  MINUTES_IN_DAY, toMinutes, toTime,
 } from './plannerModel';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
@@ -70,11 +70,12 @@ function getNowMinutes() {
 // полосой до подъёма, блоки дел цветом вида записи, отметки приёмов пищи, черта «сейчас»
 // Заливка события на весь день — один тон на строку «весь день» и на колонку дня; несколько событий
 // делят ширину поровну
-function allDayFillStyle(events: PlannerEvent[]) {
+function allDayFillStyle(state: PlannerState, events: PlannerEvent[]) {
   const share = PERCENT / events.length;
   const stops = events.map((event, index) => {
-    const color = event.color
-      ? `var(--color-peer-${event.color - 1})` : `var(--pv-${event.isHoliday ? 'red' : 'event'})`;
+    const eventColor = getEventColor(state, event);
+    const color = eventColor
+      ? `var(--color-peer-${eventColor - 1})` : `var(--pv-${event.isHoliday ? 'red' : 'event'})`;
     const tone = `color-mix(in srgb, ${color} ${ALL_DAY_FILL_PERCENT}%, transparent)`;
     return `${tone} ${index * share}% ${(index + 1) * share}%`;
   });
@@ -246,7 +247,7 @@ const PlannerWeek = ({
               className={buildClassName(
                 styles.weekAllDayCell, !allDay.length && hasMorningSleep(sleep) && styles.weekAllDayCellSleep,
               )}
-              style={allDay.length ? allDayFillStyle(allDay) : undefined}
+              style={allDay.length ? allDayFillStyle(state, allDay) : undefined}
               data-day={day}
             >
               {sleep && (
@@ -268,7 +269,7 @@ const PlannerWeek = ({
                   className={buildClassName(
                     styles.tag, styles.tagButton, event.isHoliday ? styles.kindDue : styles.kindEvent,
                   )}
-                  style={listColorStyle(event.color)}
+                  style={listColorStyle(getEventColor(state, event))}
                   title={event.isHoliday
                     ? `${lang('PlannerHoliday')}: ${formatPlainName(event.name)}` : formatPlainName(event.name)}
                   data-kind="event"
@@ -346,7 +347,7 @@ const PlannerWeek = ({
               {Boolean(allDay.length) && (
                 <span
                   className={styles.weekAllDayFill}
-                  style={allDayFillStyle(allDay)}
+                  style={allDayFillStyle(state, allDay)}
                   data-all-day-fill={allDay[0].id}
                 />
               )}
@@ -382,7 +383,9 @@ const PlannerWeek = ({
                 // Колонки пересечения; блок тянется вправо, пока не закрыл бы чужой заголовок (`layoutTimed`)
                 const position = `top: ${top}rem; height: ${height}rem; z-index: ${lane + 1}; `
                   + `inset-inline-start: ${(lane / lanes) * PERCENT}%; width: ${((right - lane) / lanes) * PERCENT}%`;
-                const color = listColorStyle(item.task ? getListColor(state, item.task.project) : item.event!.color);
+                const color = listColorStyle(
+                  item.task ? getListColor(state, item.task.project) : getEventColor(state, item.event!),
+                );
                 const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
                 // Описание — третьей строкой: видно, когда блок достаточно высок, иначе обрезается
                 const note = formatDescriptionLine(item.task ? item.task.description : item.event!.description);

@@ -102,6 +102,8 @@ export type PlannerEvent = {
   color?: number;
   // Напомнить за столько минут до начала, как у задачи
   remind?: number;
+  // Группа (имя списка), как `PlannerTask.project`; цвет события — цвет группы, `color` — только без группы
+  project?: string;
 };
 
 export type PlannerSeriesItem = PlannerTask | PlannerEvent;
@@ -321,6 +323,11 @@ export function ensureList(state: PlannerState, name: string): PlannerList | und
 
 export function getListColor(state: PlannerState, name: string) {
   return (name && state.lists.find((list) => list.name === name)?.color) || 0;
+}
+
+// Цвет события: цвет его группы, без группы — свой цвет события
+export function getEventColor(state: PlannerState, event: PlannerEvent) {
+  return getListColor(state, event.project || '') || event.color || 0;
 }
 
 export function hasLunchBreak(settings: PlannerSettings) {
@@ -1740,6 +1747,7 @@ export function normalizePlannerState(raw: unknown): PlannerState {
         isHoliday: event.isHoliday ? true : undefined,
         color: Number.isInteger(event.color) && event.color! > 0 && event.color! <= LIST_COLOR_COUNT
           ? event.color : undefined,
+        project: typeof event.project === 'string' && event.project ? event.project : undefined,
       };
     });
 

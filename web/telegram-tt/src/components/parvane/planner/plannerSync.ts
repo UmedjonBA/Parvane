@@ -45,6 +45,7 @@ type EngineEvent = {
   id: string; name: string; start: string; end: string; weekdays: number[] | null; day: string;
   repeat?: EngineRepeat; occurrences?: EngineOccurrence[]; origin?: EngineOrigin;
   allDay?: boolean; isHoliday?: boolean; color?: number; description?: string; remind?: number | null;
+  listId?: string;
 };
 type EngineList = { id: string; name: string; order: number; color?: number };
 type EngineGoal = { target: number; tolerance: number } | null;
@@ -338,6 +339,8 @@ export function fromEngineState(engine: EngineState, previous?: PlannerState): P
         isHoliday: e.isHoliday || undefined,
         color: e.color || undefined,
         remind: e.remind ?? undefined,
+        // Группа — по id списка, как у задачи; движок прежней сборки поля не отдаёт
+        project: (e.listId && nameById.get(e.listId)) || undefined,
       };
     }),
     projects: ['', ...lists.map((list) => list.name)],
@@ -447,7 +450,7 @@ function taskChange(state: PlannerState, t: PlannerTask, previous?: PlannerTask)
   };
 }
 
-function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
+function eventChange(state: PlannerState, e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
   return {
     event: {
       id: e.id,
@@ -462,6 +465,7 @@ function eventChange(e: PlannerEvent, previous?: PlannerEvent): PlannerChange {
       color: e.color || 0,
       description: e.description || '',
       remind: e.remind === undefined ? null : e.remind,
+      listId: listIdOf(state, e.project || ''),
     },
   };
 }
@@ -604,7 +608,7 @@ export function diffChanges(previous: PlannerState, next: PlannerState): Planner
   }, (task) => changes.push({ task: { id: task.id, deleted: true } }));
 
   diffById(next.events, previous.events, (event, before) => {
-    changes.push(onlyChanged('event', eventChange(event, before), before && eventChange(before)));
+    changes.push(onlyChanged('event', eventChange(next, event, before), before && eventChange(previous, before)));
   }, (event) => changes.push({ event: { id: event.id, deleted: true } }));
 
   if (next.nutrition !== previous.nutrition) {

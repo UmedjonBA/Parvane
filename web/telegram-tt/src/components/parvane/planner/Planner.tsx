@@ -805,7 +805,7 @@ const Planner = () => {
           </div>
         </main>
         {side && !isSheet && renderSide()}
-        {isLoaded && isCalendar && !isNarrow && !(side && !isSheet) && (
+        {isLoaded && isCalendar && !isNarrow && calendarView !== 'agenda' && !(side && !isSheet) && (
           <PlannerDayPanel
             state={state}
             day={picked}

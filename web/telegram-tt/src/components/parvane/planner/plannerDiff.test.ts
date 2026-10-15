@@ -495,6 +495,7 @@ const EXPECTED: Record<string, unknown[]> = {
         color: 4,
         description: 'взять полис',
         remind: null,
+        listId: '',
       },
     },
     {
@@ -550,6 +551,7 @@ const EXPECTED: Record<string, unknown[]> = {
         color: 0,
         description: '',
         remind: null,
+        listId: '',
       },
     },
   ],

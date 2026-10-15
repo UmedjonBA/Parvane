@@ -9,7 +9,7 @@ import { formatDuration, formatSpan, listColorStyle } from './plannerFormat';
 import { getDailyRecord, getWorkouts, isShortSleep } from './plannerHealth';
 import { formatDescriptionLine } from './plannerLinks';
 import {
-  getDayEntry, getListColor, instanceKey, setTaskDone, toMinutes, toTime,
+  getDayEntry, getEventColor, getListColor, instanceKey, setTaskDone, toMinutes, toTime,
 } from './plannerModel';
 import { updatePlanner } from './plannerStore';
 
@@ -123,7 +123,7 @@ const PlannerDayFeed = ({
   if (layers.work) {
     entry.timed.forEach((item) => {
       const itemKey = item.task ? `t${instanceKey(item.task)}` : `e${instanceKey(item.event!)}`;
-      const color = item.task ? getListColor(state, item.task.project) : item.event!.color;
+      const color = item.task ? getListColor(state, item.task.project) : getEventColor(state, item.event!);
       const note = formatDescriptionLine(item.task ? item.task.description : item.event!.description);
       rows.push({
         minutes: toMinutes(item.start),
@@ -214,7 +214,7 @@ const PlannerDayFeed = ({
           <span className={styles.feedTime}>{lang('PlannerAllDayTiny')}</span>
           <div
             className={buildClassName(styles.feedBlock, event.isHoliday ? styles.kindDue : styles.kindEvent)}
-            style={listColorStyle(event.color)}
+            style={listColorStyle(getEventColor(state, event))}
             data-all-day={event.id}
             data-holiday={event.isHoliday ? '1' : undefined}
           >

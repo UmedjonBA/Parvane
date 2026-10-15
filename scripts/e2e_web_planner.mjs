@@ -699,16 +699,18 @@ try {
   await listToday.getByText('Подготовить макет').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const listDays = await listView.locator('section[data-day]').evaluateAll((items) => items.map((el) => el.dataset.day));
   assert.deepEqual(listDays, [...listDays].sort(), 'дни списка идут по порядку');
-  // Карточка записи: блок «Повтор и детали» сворачивается, в свёрнутом виде поля скрыты
+  // Карточка события (16 окт 2026): строки «когда / повтор / группа / напомнить / описание»; настройки повтора
+  // раскрываются по строке-сводке, «Весь день» и «Праздник» — в строке времени
   await listToday.getByRole('button', { name: /Созвон команды/ }).first().click();
-  const fold = sidePane.locator('[data-planner-details]');
-  await fold.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await fold.getAttribute('data-planner-details'), 'open');
-  await fold.getByRole('button', { name: /Repeat and details/ }).click();
-  await sidePane.locator('[data-planner-details="closed"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.equal(await sidePane.getByText('Holiday', { exact: true }).count(), 0, 'в свёрнутом блоке полей нет');
-  await fold.getByRole('button', { name: /Repeat and details/ }).click();
+  const repeatToggle = sidePane.locator('[data-repeat-toggle]');
+  await repeatToggle.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  for (const row of ['when', 'repeat', 'group', 'remind', 'description']) {
+    assert.equal(await sidePane.locator(`[data-card-row="${row}"]`).count(), 1, `строка карточки ${row}`);
+  }
   await sidePane.getByText('Holiday', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await sidePane.locator('[data-repeat-kind]').count(), 0, 'настройки повтора свёрнуты');
+  await repeatToggle.click();
+  await sidePane.locator('[data-repeat-kind]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closeSide();
   // Вид — настройка устройства: переживает перезагрузку (проверяется ниже)
   await viewButton('Week').click();
@@ -744,13 +746,13 @@ try {
   assert.equal((await todayCell.innerText()).match(/[\d.]+ h/)?.[0], loadBefore, 'событие на весь день не входит в загрузку дня');
   await openFullForm();
   await page.locator('#planner-new-name').fill('Цветная задача');
-  await page.locator('#planner-new-list').selectOption({ label: 'Create a list…' });
-  await sidePane.getByLabel('New list').fill('Дом');
+  await page.locator('#planner-new-list').selectOption({ label: 'Create a group…' });
+  await sidePane.getByLabel('New group').fill('Дом');
   await sidePane.getByRole('radio', { name: 'Color 3' }).click();
-  await sidePane.getByRole('button', { name: 'Create list' }).click();
+  await sidePane.getByRole('button', { name: 'Create group' }).click();
   await page.locator('#planner-new-list').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.waitForFunction(() => document.querySelector('#planner-new-list')?.value === 'Дом', undefined, { timeout: STEP_TIMEOUT_MS });
-  assert.equal(await page.locator('#planner-new-list option').filter({ hasText: 'No list' }).count(), 1, '«Без списка» — один');
+  assert.equal(await page.locator('#planner-new-list option').filter({ hasText: 'No group' }).count(), 1, '«Без списка» — один');
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByRole('heading', { name: 'Цветная задача' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closeSide();

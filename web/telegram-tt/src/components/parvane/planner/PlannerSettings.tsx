@@ -21,6 +21,7 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import PlannerField from './PlannerField';
+import PlannerListPicker from './PlannerListPicker';
 
 import styles from './Planner.module.scss';
 
@@ -48,6 +49,7 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
   const [scheduleText, setScheduleText] = useState('');
   // Дата конца, выбранная полем; нет — из текста («до 15.12.2026»)
   const [scheduleUntil, setScheduleUntil] = useState<string>();
+  const [scheduleGroup, setScheduleGroup] = useState('');
   const [isClearOpen, openClear, closeClear] = useFlag();
   const schedule = useMemo(() => parseSchedule(scheduleText), [scheduleText]);
   const until = scheduleUntil || schedule.endDay;
@@ -124,7 +126,7 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
       showPlannerNotice(lang('PlannerErrorScheduleUntil'));
       return;
     }
-    const events = buildScheduleEvents(schedule.items, today, until);
+    const events = buildScheduleEvents(schedule.items, today, until, scheduleGroup);
     updatePlanner((draft) => {
       draft.events.push(...events);
     }, lang('PlannerNoticeScheduleAdded', { count: events.length }));
@@ -191,6 +193,7 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
         placeholder={lang('PlannerSchedulePlaceholder')}
         onChange={handleScheduleText}
       />
+      <PlannerListPicker id="planner-schedule-list" state={state} value={scheduleGroup} onChange={setScheduleGroup} />
       <div className={styles.fields}>
         <PlannerField
           label={lang('PlannerScheduleUntil')}

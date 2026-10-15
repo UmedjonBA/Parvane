@@ -1,5 +1,6 @@
-import { memo, useMemo } from '../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../lib/teact/teact';
 
+import type { GroupPick } from './plannerGroups';
 import type {
   PlannerDayIndexEntry, PlannerEvent, PlannerState, PlannerTask,
 } from './plannerModel';
@@ -8,14 +9,19 @@ import buildClassName from '../../../util/buildClassName';
 import {
   formatDay, formatDuration, formatProject, formatRelativeDay, listColorStyle,
 } from './plannerFormat';
+import { assignToGroup } from './plannerGroups';
 import { formatDescriptionLine } from './plannerLinks';
 import {
-  addDays, AGENDA_DAYS, getDayIndex, getListColor, instanceKey, toMinutes, toTime,
+  addDays, AGENDA_DAYS, getDayIndex, getEventColor, getListColor, instanceKey, toMinutes, toTime,
 } from './plannerModel';
+import { updatePlanner } from './plannerStore';
 
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import Checkbox from '../../ui/Checkbox';
+import Select from '../../ui/Select';
+import PlannerGroupBar from './PlannerGroupBar';
 import PlannerName from './PlannerName';
 
 import styles from './Planner.module.scss';
@@ -30,12 +36,21 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
 };
 
+// Отмеченная запись: что добавить и как показать в предварительном списке
+type Picked = GroupPick & { name: string };
+
 // Вид «Список» (spec 018): повестка на 30 дней от выбранного дня, пустые дни пропущены. Строка — время и
-// блок цвета записи; срок задачи — красной строкой
+// блок цвета записи; срок задачи — красной строкой. Сверху — группы (16 окт 2026): правка группы и режим
+// «Добавить в группу» — галочки у записей, предварительный список, «вместе с повторами»
 const PlannerAgenda = ({
   state, day, today, onPickDay, onOpenTask, onOpenEvent,
 }: OwnProps) => {
   const lang = useLang();
+
+  const [isPicking, setIsPicking] = useState(false);
+  const [picks, setPicks] = useState<Record<string, Picked>>({});
+  const [target, setTarget] = useState('');
+  const [withRepeats, setWithRepeats] = useState(true);
 
   const days = useMemo(() => {
     const lastDay = addDays(day, AGENDA_DAYS - 1);
@@ -49,20 +64,89 @@ const PlannerAgenda = ({
     onPickDay(e.currentTarget.dataset.day!);
   });
 
+  // В режиме выбора нажатие на запись отмечает её, а не открывает
+  const togglePick = (key: string, pick: Picked) => {
+    setPicks((current) => {
+      const next = { ...current };
+      if (next[key]) delete next[key];
+      else next[key] = pick;
+      return next;
+    });
+  };
+
   const handleEventClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onOpenEvent(e.currentTarget.dataset.eventId!, e.currentTarget.dataset.day!);
+    const { eventId, day: eventDay } = e.currentTarget.dataset;
+    if (!isPicking) {
+      onOpenEvent(eventId!, eventDay!);
+      return;
+    }
+    const event = state.events.find(({ id }) => id === eventId);
+    if (!event) return;
+    togglePick(`e:${eventId}:${eventDay}`, {
+      kind: 'event', id: eventId!, day: eventDay, isRepeat: Boolean(event.repeat), name: event.name,
+    });
   });
 
   const handleTaskClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onOpenTask(e.currentTarget.dataset.taskId!, e.currentTarget.dataset.instanceDay);
+    const { taskId, instanceDay } = e.currentTarget.dataset;
+    if (!isPicking) {
+      onOpenTask(taskId!, instanceDay);
+      return;
+    }
+    const task = state.tasks.find(({ id }) => id === taskId);
+    if (!task) return;
+    togglePick(`t:${taskId}:${instanceDay || ''}`, {
+      kind: 'task', id: taskId!, day: instanceDay, isRepeat: Boolean(task.repeat), name: task.name,
+    });
   });
 
+  const handleStartPick = useLastCallback(() => {
+    setIsPicking(true);
+    setPicks({});
+    setWithRepeats(true);
+    setTarget((current) => (state.lists.some((list) => list.name === current) ? current : state.lists[0]?.name || ''));
+  });
+
+  const handleCancelPick = useLastCallback(() => {
+    setIsPicking(false);
+    setPicks({});
+  });
+
+  const handleTarget = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setTarget(e.currentTarget.value);
+  });
+
+  const handleApply = useLastCallback(() => {
+    const list = Object.values(picks);
+    if (!list.length || !target) return;
+    updatePlanner((draft) => {
+      assignToGroup(draft, list, target, withRepeats);
+    }, lang('PlannerNoticeGroupAdded', { name: target, count: list.length }));
+    setIsPicking(false);
+    setPicks({});
+  });
+
+  const pickedList = Object.values(picks);
+  const hasRepeatPicked = pickedList.some((pick) => pick.isRepeat);
+  // Ряд, отмеченный в нескольких днях, — одна строка предварительного списка, когда он идёт целиком
+  const previewNames = [...new Set(pickedList.map((pick) => (
+    pick.isRepeat && withRepeats ? `${pick.name} · ${lang('PlannerRepeatMark')}` : pick.name
+  )))];
+  const isPicked = (key: string) => Boolean(picks[key]);
+
   const renderEvent = (event: PlannerEvent, dayKey: string) => (
-    <div key={`e${instanceKey(event)}`} className={styles.feedLine}>
+    <div
+      key={`e${instanceKey(event)}`}
+      className={buildClassName(
+        styles.feedLine,
+        isPicking && styles.feedLinePicking,
+        isPicked(`e:${event.id}:${dayKey}`) && styles.feedLinePicked,
+      )}
+    >
       <span className={styles.feedTime}>{event.isAllDay ? lang('PlannerAllDayTiny') : event.start}</span>
       <div
         className={buildClassName(styles.feedBlock, event.isHoliday ? styles.kindDue : styles.kindEvent)}
-        style={listColorStyle(event.color)}
+        style={listColorStyle(getEventColor(state, event))}
       >
         <button
           type="button"
@@ -88,7 +172,14 @@ const PlannerAgenda = ({
   const renderTask = (task: PlannerTask) => {
     const isTimed = Boolean(task.start) && task.minutes !== undefined;
     return (
-      <div key={`t${instanceKey(task)}`} className={styles.feedLine}>
+      <div
+        key={`t${instanceKey(task)}`}
+        className={buildClassName(
+          styles.feedLine,
+          isPicking && styles.feedLinePicking,
+          isPicked(`t:${task.id}:${task.instanceDay || ''}`) && styles.feedLinePicked,
+        )}
+      >
         <span className={styles.feedTime}>{task.start || '—'}</span>
         <div
           className={buildClassName(
@@ -129,6 +220,46 @@ const PlannerAgenda = ({
 
   return (
     <div className={styles.agenda} data-planner-view="agenda">
+      <PlannerGroupBar state={state} isPicking={isPicking} onStartPick={handleStartPick} />
+      {isPicking && (
+        <div className={styles.groupPick} data-group-picking>
+          <p className={styles.sheetHint}>{lang('PlannerGroupPickHint')}</p>
+          {Boolean(previewNames.length) && (
+            <ul className={styles.groupPreview} data-group-preview>
+              {previewNames.map((name) => <li key={name} className={styles.groupPreviewItem}>{name}</li>)}
+            </ul>
+          )}
+          <div className={styles.groupPickControls}>
+            <span className={styles.small}>{lang('PlannerGroupPicked', { count: pickedList.length })}</span>
+            <Select
+              id="planner-group-target"
+              label={lang('PlannerFieldList')}
+              value={target}
+              hasArrow
+              onChange={handleTarget}
+            >
+              {state.lists.map((list) => <option key={list.id} value={list.name}>{list.name}</option>)}
+            </Select>
+            {hasRepeatPicked && (
+              <Checkbox label={lang('PlannerGroupWithRepeats')} checked={withRepeats} onCheck={setWithRepeats} />
+            )}
+            <div className={styles.actions}>
+              <button
+                type="button"
+                className={buildClassName(styles.btn, styles.btnAccent)}
+                data-group-apply
+                disabled={!pickedList.length || !target}
+                onClick={handleApply}
+              >
+                {lang('PlannerGroupApply')}
+              </button>
+              <button type="button" className={buildClassName(styles.btn, styles.btnGhost)} onClick={handleCancelPick}>
+                {lang('Cancel')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {!days.length && <p className={styles.empty}>{lang('PlannerAgendaEmpty')}</p>}
       {days.map(([key, entry]) => (
         <section key={key} className={styles.agendaDay} data-day={key}>

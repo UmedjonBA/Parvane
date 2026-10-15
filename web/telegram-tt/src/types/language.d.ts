@@ -2571,6 +2571,18 @@ export interface LangPair {
   'PlannerSettingsMargin': undefined;
   'PlannerSettingsReset': undefined;
   'PlannerSettingsLearnedReset': undefined;
+  'PlannerGroups': undefined;
+  'PlannerGroupAdd': undefined;
+  'PlannerGroupPick': undefined;
+  'PlannerGroupPickHint': undefined;
+  'PlannerGroupWithRepeats': undefined;
+  'PlannerGroupApply': undefined;
+  'PlannerGroupName': undefined;
+  'PlannerGroupDelete': undefined;
+  'PlannerNoticeGroupSaved': undefined;
+  'PlannerNoticeGroupDeleted': undefined;
+  'PlannerErrorGroupDuplicate': undefined;
+  'PlannerScheduleGroup': undefined;
   'PlannerScheduleTitle': undefined;
   'PlannerScheduleHint': undefined;
   'PlannerSchedulePlaceholder': undefined;
@@ -5004,6 +5016,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerNoticeDescriptionUpdated': {
     'name': V;
+  };
+  'PlannerGroupPicked': {
+    'count': V;
+  };
+  'PlannerGroupDeleteConfirm': {
+    'name': V;
+  };
+  'PlannerNoticeGroupAdded': {
+    'name': V;
+    'count': V;
   };
   'PlannerSchedulePreview': {
     'count': V;
