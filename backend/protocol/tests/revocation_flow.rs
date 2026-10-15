@@ -1158,3 +1158,53 @@ fn left_device_reported_stolen_exposes_ssk() {
     sync_peer_log(&srv, &mut bob, "alice@local");
     assert!(!bob.ssk_pending("alice@local"));
 }
+
+/// «Завершить сеансы» без смены ключей: запись отзыва подписью SSK с признаком `sign_out` — SSK не раскрыт,
+/// ключи не меняются, новое устройство привязывается; устройство среди вышедших держателей и может быть
+/// позже отмечено украденным. Признак на уже ушедшем устройстве «украдено» не снимает.
+#[test]
+fn owner_sign_out_keeps_keys_and_allows_stolen_later() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let _alice2 = link(&mut srv, &mut alice, "d2");
+    sync_own_log(&srv, &mut alice);
+    let dk_before = alice.delivery_key().to_vec();
+    let o = alice.sign_out_device("d2").unwrap();
+    assert_eq!(o.requests.len(), 1, "только запись журнала");
+    assert!(!o.ssk_rotation_required);
+    exec(&mut srv, &alice, &o.requests);
+    assert!(!alice.own_ssk_exposed());
+    assert_eq!(alice.delivery_key().to_vec(), dk_before, "ключ доставки прежний");
+    assert_eq!(alice.left_ssk_holders(), vec!["d2".to_string()]);
+    assert!(alice.sign_out_device("d2").is_err(), "ушедшее устройство повторно не выходит");
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(!bob.ssk_pending("alice@local"));
+    assert!(!srv.log("alice@local").ssk_exposed, "сервер тоже не считает SSK раскрытым");
+    let (v2, _) = bob.log_devices("alice@local");
+    assert_eq!(v2, vec!["d1".to_string()]);
+    // Новое устройство после обычного выхода привязывается без ключа восстановления
+    let _alice3 = link(&mut srv, &mut alice, "d3");
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    let (v2, _) = bob.log_devices("alice@local");
+    assert_eq!(v2, vec!["d1".to_string(), "d3".to_string()]);
+    // Потом владелец понял, что d2 украден
+    let mut o = None;
+    for _ in 0..10 {
+        match alice.report_device_stolen("d2") {
+            Ok(x) => {
+                o = Some(x);
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    let o = o.unwrap();
+    exec(&mut srv, &alice, &o.requests);
+    assert!(o.ssk_rotation_required);
+    assert!(alice.own_ssk_exposed());
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(bob.ssk_pending("alice@local"));
+}

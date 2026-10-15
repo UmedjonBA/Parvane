@@ -157,20 +157,20 @@ try {
   dev1Screen = await openDevicesScreen(bob1Page);
   const otherSession = dev1Screen.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD);
+  await terminateSessionWithPassword(bob1Page, otherSession, PASSWORD, { rotateKeys: true });
   await waitLog('bob1', 'v2: устройство отозвано');
   assert.ok(!logs.bob1.some((l) => l.includes('отзыв устройства в журнале не выполнен')), logs.bob1.join(' | '));
 
   // ── (3) bob2 держал SSK: блок обновления ключа, неверный и верный ключ ─────
-  await dev1Screen.getByText('Device signing key').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const wrongKey = recoveryKey.replace(/.$/, (c) => (c === '2' ? '3' : '2'));
   await submitRecoveryKey(bob1Page, dev1Screen, wrongKey);
   await expectToast(bob1Page, 'This recovery key does not match');
-  await dev1Screen.getByText('Device signing key').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await submitRecoveryKey(bob1Page, dev1Screen, recoveryKey);
   await expectToast(bob1Page, 'Device signing key renewed');
   await waitLog('bob1', 'v2: SSK сменён корнем');
-  await dev1Screen.getByText('Device signing key').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await dev1Screen.getByText('Device signing key', { exact: true }).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   await closeSettings(bob1Page);
 
   // ── (2)+(4) После отзыва и смены SSK: живое устройство читает, отозванное — нет

@@ -306,11 +306,12 @@ export async function fetchAuthorizations() {
 }
 
 // `password` использует только провайдер Parvane (отзыв устройства требует пароль)
-export function terminateAuthorization(hash: string, password?: string) {
+// Parvane: `password` и `shouldRotateKeys` — параметры провайдера Parvane (подпись общая)
+export function terminateAuthorization(hash: string, password?: string, shouldRotateKeys?: boolean) {
   return invokeRequest(new GramJs.account.ResetAuthorization({ hash: BigInt(hash) }));
 }
 
-export function terminateAllAuthorizations(password?: string) {
+export function terminateAllAuthorizations(password?: string, shouldRotateKeys?: boolean) {
   return invokeRequest(new GramJs.auth.ResetAuthorizations());
 }
 

@@ -398,17 +398,20 @@ impl DeviceLog {
                     if !by_itself && v.signer != self.ssk && v.signer != self.root_key {
                         return Err(ProtoError::BadSignature);
                     }
+                    // Обычный выход по просьбе владельца (подпись SSK, `sign_out`) — как выход самого
+                    // устройства; к уже ушедшему устройству не применяется (иначе снимал бы «украдено»).
+                    let left = by_itself || (entry.sign_out && v.signer == self.ssk && self.devices.contains_key(id));
                     // ENG-04: держатель SSK — по любому сертификату текущего SSK, а не по последнему
                     // (его `no-ssk` мог поставить сам держатель). Повторный отзыв уже вышедшего
                     // держателя чужой рукой — «устройство украдено»: SSK раскрыт.
                     let held = self.devices.remove(id).is_some_and(|d| holds_ssk(&d.cert)) || self.ssk_holders.contains(id);
-                    if held && by_itself {
+                    if held && left {
                         self.left_holders.insert(id.clone());
                     } else if held {
                         self.ssk_exposed = true;
                         self.left_holders.remove(id);
                     }
-                    self.close_eras(Some(id), entry.version, !by_itself);
+                    self.close_eras(Some(id), entry.version, !left);
                     self.revoked.insert(id.clone());
                     if let Some(l) = &mut self.legacy {
                         l.retain(|d| &d.device_id != id);
@@ -513,6 +516,7 @@ pub fn device_log_entry(user: &str, version: u64, prev_hash: [u8; 32], change: C
         prev_hash: prev_hash.to_vec(),
         change: Some(change),
         root_key: root_key.map(|k| k.to_vec()).unwrap_or_default(),
+        sign_out: false,
     }
 }
 

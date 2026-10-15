@@ -251,8 +251,14 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneResetBadPassword: 'Wrong password.',
   ParvaneResetFailed: 'Could not reset the secure identity. Try again later.',
   ParvaneLinkOfferWait: 'Waiting for the device to reveal its key…',
+  ParvaneSignOutKeep: 'Just sign out',
+  ParvaneSignOutKeepHint: 'The device leaves the account; your keys stay the same. Choose this if the device is '
+    + 'still yours.',
+  ParvaneSignOutRotate: 'Sign out and change keys',
+  ParvaneSignOutRotateHint: 'If the device was lost or stolen: the keys it held are replaced. To add new devices '
+    + 'you may need your recovery key.',
   ParvaneLeftDevices: 'Signed-out devices',
-  ParvaneLeftDevicesHint: 'These devices signed themselves out. If one of them was stolen, mark '
+  ParvaneLeftDevicesHint: 'These devices signed out without changing keys. If one of them was stolen, mark '
     + 'it — the device signing key will be replaced with your recovery key.',
   ParvaneLeftDeviceStolen: 'This device was stolen',
   ParvaneLeftDeviceStolenConfirm: 'Mark %@ as stolen? You will need your recovery key to replace the device signing '
@@ -895,8 +901,14 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneResetBadPassword: 'Неверный пароль.',
   ParvaneResetFailed: 'Не удалось сбросить защищённую личность. Попробуйте позже.',
   ParvaneLinkOfferWait: 'Ждём, пока устройство раскроет ключ…',
+  ParvaneSignOutKeep: 'Просто выйти',
+  ParvaneSignOutKeepHint: 'Устройство выйдет из аккаунта, ключи останутся прежними. Подходит, если устройство '
+    + 'у вас.',
+  ParvaneSignOutRotate: 'Выйти и сменить ключи',
+  ParvaneSignOutRotateHint: 'Если устройство потеряно или украдено: ключи, которые оно хранило, сменятся. Чтобы '
+    + 'добавлять новые устройства, может понадобиться ключ восстановления.',
   ParvaneLeftDevices: 'Вышедшие устройства',
-  ParvaneLeftDevicesHint: 'Эти устройства вышли из аккаунта сами. Если одно из них украли, отметьте '
+  ParvaneLeftDevicesHint: 'Эти устройства вышли из аккаунта без смены ключей. Если одно из них украли, отметьте '
     + 'его — ключ подписи устройств сменится по ключу восстановления.',
   ParvaneLeftDeviceStolen: 'Это устройство украли',
   ParvaneLeftDeviceStolenConfirm: 'Отметить %@ украденным? Для смены ключа подписи устройств понадобится '

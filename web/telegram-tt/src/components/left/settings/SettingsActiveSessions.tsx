@@ -23,6 +23,7 @@ import ConfirmDialog from '../../ui/ConfirmDialog';
 import ListItem from '../../ui/ListItem';
 import RadioGroup from '../../ui/RadioGroup';
 import SecretForm from '../../ui/SecretForm';
+import SessionSignOutMode, { type SignOutMode } from './SessionSignOutMode';
 import SettingsActiveSession from './SettingsActiveSession';
 
 import './SettingsActiveSessions.scss';
@@ -329,6 +330,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   // Parvane (P-07): отзыв устройства требует текущий пароль — «завершить все»
   // спрашивает его в диалоге подтверждения, отзыв одного — в модалке сеанса
   const [terminateAllPassword, setTerminateAllPassword] = useState('');
+  const [terminateAllMode, setTerminateAllMode] = useState<SignOutMode>('keep');
 
   const handleTerminateAllPasswordChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setTerminateAllPassword(e.currentTarget.value);
@@ -336,14 +338,15 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
 
   const handleCloseTerminateAllDialog = useCallback(() => {
     setTerminateAllPassword('');
+    setTerminateAllMode('keep');
     closeConfirmTerminateAllDialog();
   }, [closeConfirmTerminateAllDialog]);
 
   const handleTerminateAllSessions = useCallback(() => {
     if (!terminateAllPassword) return;
-    terminateAllAuthorizations({ password: terminateAllPassword });
+    terminateAllAuthorizations({ password: terminateAllPassword, shouldRotateKeys: terminateAllMode === 'rotate' });
     handleCloseTerminateAllDialog();
-  }, [handleCloseTerminateAllDialog, terminateAllAuthorizations, terminateAllPassword]);
+  }, [handleCloseTerminateAllDialog, terminateAllAuthorizations, terminateAllPassword, terminateAllMode]);
 
   const handleOpenSessionModal = useCallback((hash: string) => {
     setOpenedSessionHash(hash);
@@ -690,6 +693,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           isConfirmDisabled={!terminateAllPassword}
           areButtonsInColumn
         >
+          <SessionSignOutMode name="terminate_all_mode" selected={terminateAllMode} onChange={setTerminateAllMode} />
           <SecretForm>
             <input
               type="password"

@@ -2557,6 +2557,29 @@ export class PvClient {
         }
     }
     /**
+     * Обычный выход своего другого устройства без смены ключей — итог как у `revokeDevice`
+     * (один запрос — запись журнала).
+     * @param {string} device_id
+     * @returns {any}
+     */
+    signOutDevice(device_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(device_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_signOutDevice(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      * @returns {PvState | undefined}
      */

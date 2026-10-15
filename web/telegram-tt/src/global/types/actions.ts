@@ -2439,9 +2439,11 @@ export interface ActionPayloads {
   terminateAuthorization: {
     hash: string;
     password?: string;
+    shouldRotateKeys?: boolean;
   } & WithTabId;
   terminateAllAuthorizations: ({
     password?: string;
+    shouldRotateKeys?: boolean;
   } & WithTabId) | undefined;
 
   loadWebAuthorizations: undefined;

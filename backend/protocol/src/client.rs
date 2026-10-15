@@ -743,6 +743,21 @@ impl Client {
         Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
     }
 
+    /// Обычный выход своего другого устройства по просьбе владельца («Завершить сеансы» без смены
+    /// ключей): запись отзыва подписью SSK с признаком `sign_out` — SSK раскрытым не считается.
+    pub fn sign_out_device_request(&mut self, device_id: &str) -> Result<OutRequest> {
+        if device_id == self.device_id || self.own_log.active(device_id).is_none() {
+            return Err(ProtoError::NotFound);
+        }
+        let ssk = self.ssk.as_ref().ok_or(ProtoError::Forbidden)?;
+        let mut entry = identity::device_log_entry(&self.user, self.own_log.version + 1, self.own_log.head_hash, DevChange::RevokeDeviceId(device_id.into()), None);
+        entry.sign_out = true;
+        let op = identity::sign_device_log_entry(ssk, &entry)?;
+        self.own_log.apply(&op)?;
+        self.own_entries.push(op.clone());
+        Ok(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }))
+    }
+
     /// Выход: устройство убирает себя из журнала записью, подписанной СВОИМ
     /// ключом (не SSK) — оставшимся устройствам не нужен ключ восстановления.
     /// После этого состояние движка хост стирает.
@@ -1740,17 +1755,33 @@ impl Client {
     /// Отозвать своё другое устройство и выполнить последствия: запись
     /// журнала первой, затем ротации (см. [`RevocationOutcome`]).
     pub fn revoke_device(&mut self, device_id: &str) -> CResult<RevocationOutcome> {
-        // Сессии со своими оставшимися устройствами — до изменения журнала.
-        let log = self.own_log.clone();
-        for id in log.devices.keys() {
-            if id != &self.device_id && id != device_id && !self.sessions.contains_key(&(self.user.clone(), id.clone())) {
-                return need(Need::Bundle { user: self.user.clone() });
-            }
-        }
+        self.own_sessions_ready(device_id)?;
         let req = self.revoke_device_request(device_id)?;
         let mut o = self.on_own_device_revoked(device_id)?;
         o.requests.insert(0, req);
         Ok(o)
+    }
+
+    /// Обычный выход своего другого устройства без смены ключей: только запись журнала и то же, что
+    /// при выходе устройства самим (его Olm- и свои Megolm-сессии забываются, группам — новая эпоха
+    /// по ENG-06). Ключи доставки, состояния и доменов не меняются. Позже устройство можно отметить
+    /// украденным ([`Client::report_device_stolen`]) — тогда ключи сменятся.
+    pub fn sign_out_device(&mut self, device_id: &str) -> CResult<RevocationOutcome> {
+        let req = self.sign_out_device_request(device_id)?;
+        self.forget_revoked_device(device_id);
+        self.on_devices_removed(&self.user.clone());
+        Ok(RevocationOutcome { requests: vec![req], ..Default::default() })
+    }
+
+    /// Сессии со всеми своими оставшимися устройствами (кроме `except`) — до изменения журнала: ротации
+    /// после отзыва раздаются им по E2E.
+    fn own_sessions_ready(&self, except: &str) -> CResult<()> {
+        for id in self.own_log.devices.keys() {
+            if id != &self.device_id && id != except && !self.sessions.contains_key(&(self.user.clone(), id.clone())) {
+                return need(Need::Bundle { user: self.user.clone() });
+            }
+        }
+        Ok(())
     }
 
     /// ENG-04: свои устройства, державшие SSK и вышедшие сами. Выход украденного устройства выглядит
@@ -1766,6 +1797,8 @@ impl Client {
         if !self.own_log.left_holders.contains(device_id) {
             return Err(ClientError::Proto(ProtoError::NotFound));
         }
+        // Запись журнала применяется сразу — добор после неё повтором уже не пройдёт проверку выше
+        self.own_sessions_ready(device_id)?;
         let req = self.revoke_device_request(device_id)?;
         self.revocations_done.remove(device_id);
         let mut o = self.on_own_device_revoked(device_id)?;

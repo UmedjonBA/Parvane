@@ -309,6 +309,10 @@ const DEFAULT_GROUP_PERMISSIONS: WireDefaultPermissions = {
 const EPOCH_RETRY_MS = 11000;
 // ENG-06: админ (не владелец) начинает новую эпоху после ухода устройства участника, если владелец не успел
 const REKEY_ADMIN_DELAY_MS = 30000;
+// ENG-07: случайная пауза между раздачей Megolm-ключа группы и первым конвертом новой сессии — иначе сервер
+// по времени связывал доставки раздачи (анонимный канал, но одно соединение) с автором конверта
+const GROUP_SHARE_GAP_MIN_MS = 800;
+const GROUP_SHARE_GAP_SPREAD_MS = 1700;
 // T185: сколько ждать встречный ключ доступа участника группового звонка
 const CALL_KEY_WAIT_MS = 8000;
 const CALL_KEY_POLL_MS = 300;
@@ -1912,6 +1916,28 @@ export function createV2Controller(deps: Deps) {
     return true;
   }
 
+  /** Обычный выход своего другого устройства без смены ключей («Завершить сеанс» по умолчанию): только запись
+   * журнала устройств; группам — новая эпоха, как после выхода устройства самим (ENG-06). Позже устройство можно
+   * отметить украденным — тогда ключи сменятся. false — устройства нет в журнале v2. */
+  async function signOutDevice(deviceId: string): Promise<boolean> {
+    if (!client || !ready) return false;
+    if (!logDevices(deps.getSelf())?.v2.includes(deviceId) || deviceId === ownDeviceId) return false;
+    await serial(async () => {
+      const [entry] = (client!.signOutDevice(deviceId) as RevokeOutcome).requests;
+      try {
+        await call(entry.chan, entry.method, entry.body);
+      } catch (e) {
+        // Сервер запись не принял, а движок её уже применил — поднять состояние заново из сохранённого
+        idConn?.close();
+        throw e;
+      }
+      await persistUrgent();
+      deps.log('v2: устройство вышло по просьбе владельца (ключи прежние)');
+    });
+    rekeyAfterDeviceRemoval();
+    return true;
+  }
+
   /** ENG-04: свои устройства, державшие ключ подписи и вышедшие сами (выход украденного выглядит так же). */
   function leftSskHolders(): string[] {
     if (!client || !ready) return [];
@@ -2230,7 +2256,14 @@ export function createV2Controller(deps: Deps) {
         const hex = groupHex(to);
         await ensureTokens(groupMembers(hex).length);
         const reqs = await withNeeds(() => client!.prepareGroup(hex, JSON.stringify(content), uuid) as OutReq[]);
-        await run(reqs);
+        const envelope = reqs[reqs.length - 1];
+        if (reqs.length > 1 && envelope.method === 'msg.deliver_group') {
+          await run(reqs.slice(0, -1));
+          await pause(GROUP_SHARE_GAP_MIN_MS + Math.floor(Math.random() * GROUP_SHARE_GAP_SPREAD_MS));
+          await run([envelope]);
+        } else {
+          await run(reqs);
+        }
       } else {
         await runDirect(to, () => client!.prepareDirect(to, JSON.stringify(content), uuid) as OutReq[]);
       }
@@ -3789,6 +3822,7 @@ export function createV2Controller(deps: Deps) {
     linkGrantMaterial,
     joinWithGrant,
     revokeDevice,
+    signOutDevice,
     revokeContactAccess,
     sskState,
     rotateSsk,

@@ -1058,10 +1058,12 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
   it('web: список с устройствами журнала v2; v1-отзыв, затем журнал и ротации; SSK — ключом восстановления', () => {
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toContain('(v2Devices?.v2 || []).forEach((deviceId) => {');
-    expect(provider).toMatch(/TOPIC_DEVICE_REVOKE[\s\S]{0,700}await v2Controller\.revokeDevice\(deviceId\)/);
+    // «Сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`, ключи прежние)
+    expect(provider).toMatch(/TOPIC_DEVICE_REVOKE[\s\S]{0,900}shouldRotateKeys \? v2Controller\.revokeDevice : v2Controller\.signOutDevice;\s*const isJournaled = await revoke\(deviceId\)/);
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     // Первый запрос — запись журнала: отказ поднимает состояние заново
     expect(controller).toContain('const [entry, ...rotations] = outcome.requests;');
+    expect(controller).toContain('const [entry] = (client!.signOutDevice(deviceId) as RevokeOutcome).requests;');
     expect(controller).toMatch(/await call\(entry\.chan[\s\S]{0,400}idConn\?\.close\(\);\s*throw e;/);
     expect(controller).toContain('client.importRootBackup(unb64(rootBackupB64), recoveryKey.trim()).fill(0);');
     expect(controller).toContain('client?.forgetRoot();');

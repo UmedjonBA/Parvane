@@ -510,6 +510,11 @@ export class PvClient {
      */
     sharePlannerWithOwnDevices(): Array<any>;
     /**
+     * Обычный выход своего другого устройства без смены ключей — итог как у `revokeDevice`
+     * (один запрос — запись журнала).
+     */
+    signOutDevice(device_id: string): any;
+    /**
      * Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
      */
     stateSession(): PvState | undefined;
@@ -860,6 +865,7 @@ export interface InitOutput {
     readonly pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_shareInviteLinks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_sharePlannerWithOwnDevices: (a: number, b: number) => void;
+    readonly pvclient_signOutDevice: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_stateSession: (a: number) => number;
     readonly pvclient_syncRequest: (a: number) => number;
     readonly pvclient_takeSharedInvites: (a: number, b: number) => void;

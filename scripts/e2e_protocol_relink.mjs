@@ -156,7 +156,7 @@ try {
   assert.equal(await otherRows.count(), 1, `bob2: в списке устройств остался «призрак»: ${await otherRows.allTextContents()}`);
   const rowText = await otherRows.first().textContent();
   assert.doesNotMatch(rowText, /Web [0-9a-f]{8}/, `bob2: сеанс подписан кодом, а не браузером: ${rowText}`);
-  assert.equal(await devAfterRelink.getByText('Device signing key').count(), 0,
+  assert.equal(await devAfterRelink.getByText('Device signing key', { exact: true }).count(), 0,
     'bob2: после добровольного выхода bob1 просят обновить ключ подписи устройств');
   await closeSettings(bob2Page);
 
@@ -165,8 +165,8 @@ try {
   const dev2 = await openDevicesScreen(bob2Page);
   const otherSession = dev2.locator('.ListItem:has(.title-with-date)').first();
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateSessionWithPassword(bob2Page, otherSession, PASSWORD);
-  await dev2.getByText('Device signing key').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await terminateSessionWithPassword(bob2Page, otherSession, PASSWORD, { rotateKeys: true });
+  await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await dev2.locator('.ListItem').filter({ hasText: 'Reset secure identity' }).locator('.ListItem-button').click();
   const resetInput = bob2Page.locator('.Modal input[aria-label="Current password"]');
   await resetInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -176,7 +176,7 @@ try {
   await waitLog('bob2', 'v2: готов', resetMark);
   const newKey = await dismissRecoveryKeyDialog(bob2Page);
   assert.ok(newKey, 'bob2: после сброса не показан новый ключ восстановления');
-  await dev2.getByText('Device signing key').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  await dev2.getByText('Device signing key', { exact: true }).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
   await closeSettings(bob2Page);
   await openPrivateChatStrict(bob2Page, alice);
   await expectMessages(bob2Page, 'bob2 после сброса личности', [early, earlyIn, own, incoming, after, afterIn]);

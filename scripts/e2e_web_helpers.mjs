@@ -1158,14 +1158,29 @@ export async function callProviderForChat(page, method, chatTitle, userName, ext
 // Settings → Devices: строка устройства → модалка сеанса → пароль →
 // «Terminate Session». Отзыв устройства сервер выполняет только с текущим
 // паролем (P-07), поэтому без него кнопка выключена
-export async function terminateSessionWithPassword(page, sessionRow, password) {
+// `rotateKeys` — режим «Sign out and change keys» (отзыв со сменой ключей); по умолчанию — «Just sign out»
+export async function terminateSessionWithPassword(page, sessionRow, password, { rotateKeys } = {}) {
   await sessionRow.locator('.ListItem-button').click();
   const terminateButton = page.getByRole('button', { name: 'Terminate Session' });
   await terminateButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await terminateButton.isDisabled(), true, 'Terminate Session is enabled without the password');
+  if (rotateKeys) await page.locator('.Modal').getByText('Sign out and change keys', { exact: true }).click();
   await page.locator('.Modal input[type="password"]:visible').first().fill(password);
   await terminateButton.click();
   await terminateButton.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+}
+
+// «Terminate All Other Sessions» → выбор режима → пароль → подтверждение
+export async function terminateAllSessionsWithPassword(page, password, { rotateKeys } = {}) {
+  await page.locator('.SettingsActiveSessions .ListItem').filter({ hasText: 'Terminate All Other Sessions' })
+    .locator('.ListItem-button').click();
+  const dialog = page.locator('.Modal').filter({ hasText: 'terminate all other sessions' });
+  await dialog.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (rotateKeys) await dialog.getByText('Sign out and change keys', { exact: true }).click();
+  await dialog.locator('input[type="password"]').fill(password);
+  const confirm = dialog.getByRole('button', { name: 'Terminate All Other Sessions' });
+  await confirm.click();
+  await dialog.waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 }
 
 // Тост (`.Notification-container`) с текстом

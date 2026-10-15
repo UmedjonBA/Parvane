@@ -501,6 +501,14 @@ impl PvClient {
         Ok(revocation_js(&out))
     }
 
+    /// Обычный выход своего другого устройства без смены ключей — итог как у `revokeDevice`
+    /// (один запрос — запись журнала).
+    #[wasm_bindgen(js_name = signOutDevice)]
+    pub fn sign_out_device(&mut self, device_id: &str) -> Result<JsValue, JsValue> {
+        let out = self.inner.sign_out_device(device_id).map_err(err_client)?;
+        Ok(revocation_js(&out))
+    }
+
     /// ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
     /// `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
     #[wasm_bindgen(js_name = reportDeviceStolen)]

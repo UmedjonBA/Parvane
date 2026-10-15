@@ -1581,7 +1581,9 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
 
 // Отзыв устройства: пароль проверяет мост (identity.device.revoke), сам отзыв —
 // запись журнала устройств v2 и ротации ключей (T128)
-async function revokeOwnDevice(deviceId: string, password?: string) {
+// `shouldRotateKeys` — «устройство потеряно или украдено»: отзыв со сменой ключей, которые оно держало (для новых
+// устройств потом нужен ключ восстановления). Иначе обычный выход: ключи прежние
+async function revokeOwnDevice(deviceId: string, password?: string, shouldRotateKeys?: boolean) {
   if (!connection) return undefined;
   try {
     // P-07: отзыв устройства требует текущий пароль. P-39: сохранённого
@@ -1592,7 +1594,8 @@ async function revokeOwnDevice(deviceId: string, password?: string) {
     if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     // Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и ротации
     // ключей, которые устройство держало (пароль проверил мост выше)
-    const isJournaled = await v2Controller.revokeDevice(deviceId).catch((e: unknown) => {
+    const revoke = shouldRotateKeys ? v2Controller.revokeDevice : v2Controller.signOutDevice;
+    const isJournaled = await revoke(deviceId).catch((e: unknown) => {
       logDebug(`v2: отзыв устройства в журнале не выполнен: ${String(e)}`);
       return false;
     });
@@ -2646,18 +2649,18 @@ const methods = {
   // Текущее устройство не отзываем — UI его и не предлагает
   // P-07: сервер отзывает устройство только с текущим паролем — UI спрашивает
   // его перед отзывом (сохранённого пароля нет, P-39)
-  async terminateAuthorization(hash: string, password?: string) {
+  async terminateAuthorization(hash: string, password?: string, shouldRotateKeys?: boolean) {
     if (hash === ownDeviceId()) return undefined;
-    return revokeOwnDevice(hash, password);
+    return revokeOwnDevice(hash, password, shouldRotateKeys);
   },
 
-  async terminateAllAuthorizations(password?: string) {
+  async terminateAllAuthorizations(password?: string, shouldRotateKeys?: boolean) {
     if (!connection) return undefined;
     const list = await methods.fetchAuthorizations();
     if (!list) return undefined;
     const current = ownDeviceId();
     const others = Object.keys(list.authorizations).filter((deviceId) => deviceId !== current);
-    const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId, password)));
+    const results = await Promise.all(others.map((deviceId) => revokeOwnDevice(deviceId, password, shouldRotateKeys)));
     return results.every(Boolean) ? true : undefined;
   },
 

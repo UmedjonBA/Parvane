@@ -16,6 +16,7 @@ import useOldLang from '../../../hooks/useOldLang';
 import Button from '../../ui/Button';
 import Modal from '../../ui/Modal';
 import SecretForm from '../../ui/SecretForm';
+import SessionSignOutMode, { type SignOutMode } from './SessionSignOutMode';
 
 import styles from './SettingsActiveSession.module.scss';
 
@@ -40,6 +41,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
   // Parvane (P-07): сервер отзывает устройство только с текущим паролем
   const [password, setPassword] = useState('');
+  const [mode, setMode] = useState<SignOutMode>('keep');
 
   const handlePasswordChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setPassword(e.currentTarget.value);
@@ -47,14 +49,15 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
   const handleClose = useCallback(() => {
     setPassword('');
+    setMode('keep');
     onClose();
   }, [onClose]);
 
   const handleTerminateSessionClick = useCallback(() => {
     if (!password) return;
-    terminateAuthorization({ hash: session!.hash, password });
+    terminateAuthorization({ hash: session!.hash, password, shouldRotateKeys: mode === 'rotate' });
     handleClose();
-  }, [handleClose, password, session, terminateAuthorization]);
+  }, [handleClose, mode, password, session, terminateAuthorization]);
 
   if (!renderingSession) {
     return undefined;
@@ -114,6 +117,7 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
 
       {/* Parvane: IP/гео сервер не хранит, per-session тумблеры звонков и
           секретных чатов не поддерживаются — примечание и переключатели скрыты */}
+      <SessionSignOutMode name="terminate_session_mode" selected={mode} onChange={setMode} />
       <p className={buildClassName(styles.note, 'mb-2')}>{oldLang('ParvaneSessionPasswordHint')}</p>
       <SecretForm>
         <input

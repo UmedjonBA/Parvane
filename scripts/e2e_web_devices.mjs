@@ -20,6 +20,7 @@ import {
   openPrivateChatStrict,
   preparePage,
   sendText,
+  terminateAllSessionsWithPassword,
   terminateSessionWithPassword,
   linkSecondDevice,
   openProfile,
@@ -150,10 +151,15 @@ try {
   await terminateSessionWithPassword(bobDevice1.page, otherSession, `${PASSWORD}-wrong`);
   await expectToast(bobDevice1.page, 'Could not terminate the session');
   await otherSession.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await terminateSessionWithPassword(bobDevice1.page, otherSession, PASSWORD);
+  // «Завершить все другие сеансы» в режиме по умолчанию «Just sign out» (решение владельца 15 окт 2026)
+  await terminateAllSessionsWithPassword(bobDevice1.page, PASSWORD);
   // Второе устройство исчезло из списка (секция Active sessions скрывается)
   await sessionsScreen.getByText('Active sessions')
     .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
+  // Ключи прежние: смену ключа подписи не просят, устройство — среди вышедших (его можно отметить украденным)
+  await sessionsScreen.locator('[data-left-device]').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  assert.equal(await sessionsScreen.getByText('Device signing key', { exact: true }).count(), 0,
+    'simple sign-out must not require replacing the device signing key');
 
   // Обратно в чаты (и заодно проверяем персист после revoke)
   await relogin(bobDevice1.page, PASSWORD);

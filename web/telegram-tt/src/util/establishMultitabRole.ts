@@ -19,6 +19,7 @@ let masterToken: number | undefined;
 let isWaitingForMaster = false;
 let reestablishToken: number | undefined;
 let isChannelClosed = false;
+let isTokenDeadAnnounced = false;
 
 type EstablishMessage = {
   collectedTokens: Set<number>;
@@ -164,15 +165,33 @@ export function establishMultitabRole(shouldReestablishMasterToSelf?: boolean, i
     }, ESTABLISH_TIMEOUT);
   }
 
-  window.addEventListener('beforeunload', signalTokenDead);
+  // Parvane: Firefox при перезагрузке теряет сообщение, отправленное в `beforeunload`, и доставляет
+  // отправленное в `pagehide`. Без повтора соседняя вкладка считала главной ушедшую, и перезагруженная
+  // ждала её вечно (список чатов не загружался до закрытия соседней вкладки)
+  window.addEventListener('beforeunload', announceTokenDead);
+  window.addEventListener('pagehide', signalTokenDead);
+  // Страница вернулась из кэша «назад/вперёд» после `pagehide`: для соседей она ушла — запуск заново
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && isChannelClosed) window.location.reload();
+  });
   if (IS_TAURI) window.addEventListener('unload', signalTokenDead);
 }
 
-export function signalTokenDead() {
+// Отписка от общего состояния — сразу, в первом из событий ухода: уходящая вкладка не должна успеть разослать
+// соседям своё состояние при выгрузке (выход из сессии), когда главной уже стала другая
+function announceTokenDead() {
   if (isChannelClosed) return;
-  runCallbacksTokenDied(token);
-  channel.removeEventListener('message', handleMessage);
+  if (!isTokenDeadAnnounced) {
+    isTokenDeadAnnounced = true;
+    runCallbacksTokenDied(token);
+    channel.removeEventListener('message', handleMessage);
+  }
   channel.postMessage({ tokenDied: token, currentPasscodeHash: getPasscodeHash() });
+}
+
+function signalTokenDead() {
+  if (isChannelClosed) return;
+  announceTokenDead();
   channel.close();
   isChannelClosed = true;
 }

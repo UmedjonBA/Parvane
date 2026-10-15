@@ -144,6 +144,7 @@ export const pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: num
 export const pvclient_shareGroupsWithOwnDevices: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_shareInviteLinks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
 export const pvclient_sharePlannerWithOwnDevices: (a: number, b: number) => void;
+export const pvclient_signOutDevice: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_stateSession: (a: number) => number;
 export const pvclient_syncRequest: (a: number) => number;
 export const pvclient_takeSharedInvites: (a: number, b: number) => void;
