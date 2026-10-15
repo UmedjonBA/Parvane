@@ -90,6 +90,12 @@ export function createSyncController(deps: SyncDependencies) {
     snapshot: JSON.stringify([stored.content, stored.reactions, stored.pinned, stored.edited]),
   });
 
+  function rememberWebPage(stored: WireStoredMessage) {
+    const webPage = buildWebPage(stored);
+    if (webPage) deps.getStore().rememberWebPage(webPage);
+    return webPage;
+  }
+
   function reset() {
     isSynced = false;
     syncPromise = undefined;
@@ -536,7 +542,7 @@ export function createSyncController(deps: SyncDependencies) {
 
     if (!isKnown) {
       if (!message.isOutgoing && stored.from) announcePeer(stored.from);
-      const webPage = buildWebPage(stored);
+      const webPage = rememberWebPage(stored);
       deps.sendUpdate({
         '@type': 'newMessage',
         chatId: message.chatId,
@@ -647,6 +653,7 @@ export function createSyncController(deps: SyncDependencies) {
     }
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
+    rememberWebPage(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
     if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
       const current = readOutboxMaxByChatId.get(message.chatId) || 0;
@@ -689,6 +696,7 @@ export function createSyncController(deps: SyncDependencies) {
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
+      rememberWebPage(stored);
       persistHistory(stored);
       if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
         const current = readOutboxMaxByChatId.get(message.chatId) || 0;

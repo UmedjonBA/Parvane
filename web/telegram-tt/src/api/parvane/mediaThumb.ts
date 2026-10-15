@@ -81,3 +81,29 @@ export async function encodeThumbnail(source: Blob): Promise<string | undefined>
     return undefined;
   }
 }
+
+/** Картинка, вписанная в квадрат `maxSide`, — JPEG (картинка превью ссылки перед загрузкой в чат). */
+export async function shrinkImage(source: Blob, maxSide: number, quality: number) {
+  if (!source.size || source.size > THUMB_SOURCE_MAX_BYTES) return undefined;
+  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return undefined;
+  try {
+    const bitmap = await createImageBitmap(source);
+    const { width, height } = fitThumbSize(bitmap.width, bitmap.height, maxSide);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      return undefined;
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const blob = await new Promise<Blob | undefined>((resolve) => {
+      canvas.toBlob((b) => resolve(b || undefined), THUMB_MIME, quality);
+    });
+    return blob ? { blob, width, height } : undefined;
+  } catch {
+    return undefined;
+  }
+}

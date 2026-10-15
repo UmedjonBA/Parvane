@@ -1059,7 +1059,9 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toContain('(v2Devices?.v2 || []).forEach((deviceId) => {');
     // «Сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`, ключи прежние)
-    expect(provider).toMatch(/TOPIC_DEVICE_REVOKE[\s\S]{0,900}shouldRotateKeys \? v2Controller\.revokeDevice : v2Controller\.signOutDevice;\s*const isJournaled = await revoke\(deviceId\)/);
+    expect(provider).toMatch(new RegExp('TOPIC_DEVICE_REVOKE[\\s\\S]{0,900}'
+      + 'shouldRotateKeys \\? v2Controller\\.revokeDevice : v2Controller\\.signOutDevice;'
+      + '\\s*const isJournaled = await revoke\\(deviceId\\)'));
     const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
     // Первый запрос — запись журнала: отказ поднимает состояние заново
     expect(controller).toContain('const [entry, ...rotations] = outcome.requests;');

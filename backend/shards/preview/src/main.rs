@@ -41,8 +41,8 @@ const TILE_MAX_BYTES: usize = 512 * 1024;
 const TILE_CACHE_TTL_SECS: i64 = 7 * 24 * 3600;
 const SITE_MAX: usize = 64;
 /// Картинка превью: потолок размера = `max_len` поля `LinkResponse.image` схемы
-/// (preview.proto, 256 КиБ); больше — картинки нет, тело не обрезается.
-pub(crate) const IMAGE_MAX_BYTES: usize = 262_144;
+/// (preview.proto, 1 МиБ; клиент уменьшает её перед отправкой в чат); больше — картинки нет, тело не обрезается.
+pub(crate) const IMAGE_MAX_BYTES: usize = 1_048_576;
 /// Разрешённые типы картинки превью (SVG и прочее — отказ).
 const IMAGE_MIMES: [&str; 4] = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 /// Мета-теги с адресом картинки, по убыванию приоритета.

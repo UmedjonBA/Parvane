@@ -31,6 +31,7 @@ import {
   isEmojiPackSetId,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
+import { buildWebPage } from './store';
 import {
   buildOfferEvent, findOfferInPlan, getTaskOfferKind, taskOfferText, taskResponseText,
 } from './taskOffers';
@@ -886,6 +887,14 @@ export function createMessageController(deps: MessageDependencies) {
         origin: 'v2',
       });
     }
+    // Карточка превью ссылки (с картинкой) — и у отправителя: в локальном эхе её нет, превью получено при отправке
+    const webPage = !attachment && webpage ? buildWebPage({
+      id: uuid, from: currentStore.self, to: toAddress, ts, content: plainContent as unknown as WireMessageContent,
+    }) : undefined;
+    if (webPage) {
+      sentContent = { ...sentContent, webPage: { id: webPage.id } };
+      currentStore.rememberWebPage(webPage);
+    }
     const sentMessage: ApiMessage = { ...localMessage, content: sentContent, sendingState: undefined };
     currentStore.putMessage(sentMessage);
     deps.sendUpdate({
@@ -893,6 +902,7 @@ export function createMessageController(deps: MessageDependencies) {
       chatId: chat.id,
       localId: localMessage.id,
       message: sentMessage,
+      webPages: webPage ? [webPage] : undefined,
     });
     if (ttlSecs) deps.localState.scheduleTtlDeletion(chat.id, localMessage.id, ttlSecs);
   }

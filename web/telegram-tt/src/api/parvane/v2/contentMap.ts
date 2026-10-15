@@ -43,7 +43,7 @@ export type V2Media = {
 export type V2Text = {
   text?: string;
   entities?: V2Entity[];
-  preview?: { url?: string; site_name?: string; title?: string; description?: string };
+  preview?: { url?: string; site_name?: string; title?: string; description?: string; image?: V2Media };
   emoji_packs?: V2PackRef[];
 };
 export type V2Location = {
@@ -281,6 +281,7 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
             site_name: c.webpage.site_name,
             title: c.webpage.title,
             description: c.webpage.description,
+            image: c.webpage.photo ? mediaToV2(c.webpage.photo) : undefined,
           } : undefined,
           emoji_packs: c.emoji_packs?.map(packToV2).filter(Boolean),
         },
@@ -416,6 +417,9 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
         site_name: c.text.preview.site_name,
         title: c.text.preview.title,
         description: c.text.preview.description,
+        // Картинка — только фото с ключами (иначе показать нечего)
+        photo: c.text.preview.image?.file_id && c.text.preview.image.file_key
+          && MEDIA_WIRE[c.text.preview.image.kind] === 'photo' ? mediaFromV2(c.text.preview.image) : undefined,
       } : undefined,
       emoji_packs: c.text.emoji_packs?.map(packFromV2).filter(Boolean),
     };

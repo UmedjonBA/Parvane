@@ -1883,6 +1883,9 @@ const methods = {
     const messages = newestFirst.slice(start, start + Math.max(limit, 1));
     // Опросы: poll-объект не в content, доотдаём отдельными апдейтами после
     // того как сообщения окажутся в global (следующий тик)
+    // Карточки превью ссылок — в global до сообщений, которые на них ссылаются
+    const webPages = store.getWebPagesFor(messages);
+    if (webPages.length) sendUpdate({ '@type': 'updateEntities', webPages });
     const pollMessages = messages.filter((m) => m.content.pollId);
     if (pollMessages.length) {
       window.setTimeout(() => {

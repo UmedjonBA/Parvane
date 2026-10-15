@@ -37,7 +37,7 @@ message LinkResponse {
   string site_name = 2 [(parvane.core.v2.max_len) = 256];
   string title = 3 [(parvane.core.v2.max_len) = 512];
   string description = 4 [(parvane.core.v2.max_len) = 2048];
-  bytes image = 5 [(parvane.core.v2.max_len) = 262144];
+  bytes image = 5 [(parvane.core.v2.max_len) = 1048576];
   string image_mime = 6 [(parvane.core.v2.max_len) = 64];
 }
 

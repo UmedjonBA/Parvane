@@ -15,6 +15,8 @@ export type WireWebPage = {
   site_name?: string;
   title?: string;
   description?: string;
+  // Картинка превью — вложение-фото с секретом (`LinkPreview.image`); отправитель уменьшает её до загрузки
+  photo?: WireMessageContent;
 };
 
 // Ссылка на стикер-пак при отправке стикера из кастомного набора: архив PVPK1

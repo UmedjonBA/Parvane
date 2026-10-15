@@ -3,7 +3,7 @@
 // из наших NATS-событий и кормим ими нативный UI.
 
 import type {
-  ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiMessage, ApiUser,
+  ApiChat, ApiChatAdminRights, ApiChatBannedRights, ApiMessage, ApiUser, ApiWebPage,
 } from '../types';
 import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireStoredMessage,
@@ -50,6 +50,10 @@ const CHAT_MODE_FALLBACK: Record<string, string> = {
 
 export class ParvaneStore {
   self = '';
+
+  // Карточки превью ссылок по id (`wp<uuid>`): история из кэша отдаёт их вместе с сообщениями (`fetchMessages`),
+  // иначе после перезагрузки сообщение ссылалось на карточку, которой нет в global
+  private webPages = new Map<string, ApiWebPage>();
 
   private addressById = new Map<string, string>();
 
@@ -298,6 +302,17 @@ export class ParvaneStore {
     return id;
   }
 
+  rememberWebPage(webPage: ApiWebPage) {
+    this.webPages.set(webPage.id, webPage);
+  }
+
+  getWebPagesFor(messages: ApiMessage[]) {
+    return messages.flatMap((m) => {
+      const page = m.content.webPage && this.webPages.get(m.content.webPage.id);
+      return page ? [page] : [];
+    });
+  }
+
   putMessage(message: ApiMessage) {
     const uuid = this.uuidByMsgKey.get(`${message.chatId}:${message.id}`);
     if (uuid) this.storedUuids.add(uuid);
@@ -542,6 +557,16 @@ export function buildWebPage(stored: WireStoredMessage) {
     siteName: wp.site_name,
     title: wp.title,
     description: wp.description,
+    photo: wp.photo?.file_id ? {
+      mediaType: 'photo' as const,
+      id: wp.photo.file_id,
+      date: stored.ts,
+      thumbnail: thumbnailFromWire(wp.photo),
+      sizes: [
+        { type: 'x' as const, width: wp.photo.width || 800, height: wp.photo.height || 600 },
+        { type: 'y' as const, width: wp.photo.width || 800, height: wp.photo.height || 600 },
+      ],
+    } : undefined,
   };
 }
 

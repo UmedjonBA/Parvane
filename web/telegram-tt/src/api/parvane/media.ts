@@ -25,7 +25,7 @@ import {
 import { createCipherSource } from './cloudBlobs';
 import { apiEntitiesToWire } from './entities';
 import { getV2Bridge } from './gateway';
-import { encodeThumbnail, thumbBytes } from './mediaThumb';
+import { encodeThumbnail, shrinkImage, thumbBytes } from './mediaThumb';
 import {
   buildWireEvent,
   TOPIC_FILE_DELETE,
@@ -133,6 +133,11 @@ const THUMB_DRAW_RETRY_MS = 150;
 const MAP_TILE_RETRY_MS = 1500;
 const URL_REGEX = /https?:\/\/[^\s]+/;
 const LINK_PREVIEW_TIMEOUT_MS = 10000;
+// Картинка превью ссылки в чате: уменьшается на устройстве отправителя и уходит вложением с секретом (CAP-1);
+// загрузка дольше — сообщение уходит без картинки
+const PREVIEW_PHOTO_MAX_SIDE = 960;
+const PREVIEW_PHOTO_QUALITY = 0.82;
+const PREVIEW_PHOTO_TIMEOUT_MS = 5000;
 
 const encodeBase64 = bytesToBase64;
 const decodeBase64 = base64ToBytes;
@@ -988,6 +993,8 @@ export function createMediaService(deps: MediaDependencies) {
     });
     // Статья: файлы, встроенные в текст
     content.article_media?.forEach(rememberKeys);
+    // Картинка превью ссылки
+    if (content.webpage?.photo) rememberKeys(content.webpage.photo);
   }
 
   // Секрет скачивания блоба, выданный с содержимым (паки приходят и мимо
@@ -1112,21 +1119,55 @@ export function createMediaService(deps: MediaDependencies) {
       ]);
       const response = JSON.parse(raw) as {
         ok?: boolean;
-        webpage?: { url: string; site_name?: string; title?: string; description?: string };
+        webpage?: {
+          url: string; site_name?: string; title?: string; description?: string; image?: string; image_mime?: string;
+        };
       };
       const wp = response.webpage;
       if (response.ok && wp) {
+        const photo = wp.image && wp.image_mime
+          ? await withTimeout(uploadPreviewPhoto(wp.image, wp.image_mime), PREVIEW_PHOTO_TIMEOUT_MS)
+          : undefined;
         return {
           url: wp.url,
           site_name: wp.site_name || fallback.site_name,
           title: wp.title,
           description: wp.description,
+          photo,
         };
       }
     } catch {
       // Таймаут/ошибка — деградируем к hostname
     }
     return fallback;
+  }
+
+  // Картинка превью → вложение-фото чата: уменьшить, зашифровать и загрузить под секретом. undefined — без картинки
+  async function uploadPreviewPhoto(imageB64: string, mime: string): Promise<WireMessageContent | undefined> {
+    try {
+      const shrunk = await shrinkImage(
+        new Blob([decodeBase64(imageB64)], { type: mime }), PREVIEW_PHOTO_MAX_SIDE, PREVIEW_PHOTO_QUALITY,
+      );
+      if (!shrunk) return undefined;
+      const thumbnailPending = encodeThumbnail(shrunk.blob);
+      const {
+        fileId, size, mediaKeys, capability,
+      } = await uploadBlob(shrunk.blob, 'preview.jpg', 'image/jpeg', { encrypt: true, withCapability: true });
+      return {
+        kind: 'photo',
+        file_id: fileId,
+        mime: 'image/jpeg',
+        size_bytes: size,
+        width: shrunk.width,
+        height: shrunk.height,
+        file_key: mediaKeys?.keyB64,
+        file_nonce: mediaKeys?.nonceB64,
+        capability,
+        thumbnail: await thumbnailPending,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   // Превью страницы для карточки-ссылки на холсте: те же метаданные шарда `preview` и картинка, если
@@ -1405,4 +1446,11 @@ export function createMediaService(deps: MediaDependencies) {
     rememberCapability,
     uploadBlob,
   };
+}
+
+// Результат обещания либо undefined, если не успело за `ms` (само обещание не отменяется)
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([promise, new Promise<undefined>((resolve) => {
+    window.setTimeout(() => resolve(undefined), ms);
+  })]);
 }
