@@ -2571,6 +2571,17 @@ export interface LangPair {
   'PlannerSettingsMargin': undefined;
   'PlannerSettingsReset': undefined;
   'PlannerSettingsLearnedReset': undefined;
+  'PlannerScheduleTitle': undefined;
+  'PlannerScheduleHint': undefined;
+  'PlannerSchedulePlaceholder': undefined;
+  'PlannerScheduleUntil': undefined;
+  'PlannerScheduleAdd': undefined;
+  'PlannerErrorScheduleEmpty': undefined;
+  'PlannerErrorScheduleUntil': undefined;
+  'PlannerClearTitle': undefined;
+  'PlannerClearHint': undefined;
+  'PlannerClearConfirm': undefined;
+  'PlannerNoticeCleared': undefined;
   'PlannerSettingsLearnedHint': undefined;
   'PlannerSlotsNone': undefined;
   'PlannerStatAverage': undefined;
@@ -4993,6 +5004,16 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerNoticeDescriptionUpdated': {
     'name': V;
+  };
+  'PlannerSchedulePreview': {
+    'count': V;
+    'date': V;
+  };
+  'PlannerScheduleSkipped': {
+    'count': V;
+  };
+  'PlannerNoticeScheduleAdded': {
+    'count': V;
   };
   'PlannerSlotsHint': {
     'window': V;

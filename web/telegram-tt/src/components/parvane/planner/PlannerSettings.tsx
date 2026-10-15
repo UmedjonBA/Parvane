@@ -1,21 +1,25 @@
-import { memo } from '../../../lib/teact/teact';
+import { memo, useMemo, useState } from '../../../lib/teact/teact';
 
 import type { PlannerSettings as Settings, PlannerSettingsError, PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
+import { formatDate } from './plannerFormat';
 import {
-  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
-  toMinutes, toTime, validateBudget, validateSettings,
+  createEmptyPlannerState, DEFAULT_PLANNER_SETTINGS, fromDayKey, MIN_BUDGET_MINUTES, MINUTES_IN_DAY,
+  toDayKey, toMinutes, toTime, validateBudget, validateSettings,
 } from './plannerModel';
 import { resetLearned } from './plannerQuickLearn';
 import { resetHistory } from './plannerQuickSuggest';
+import { buildScheduleEvents, parseSchedule } from './plannerSchedule';
 import {
   canSyncLearned, canSyncQuickHistory, showPlannerNotice, updatePlanner,
 } from './plannerStore';
 
+import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
+import ConfirmDialog from '../../ui/ConfirmDialog';
 import PlannerField from './PlannerField';
 
 import styles from './Planner.module.scss';
@@ -40,6 +44,13 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
   const lang = useLang();
 
   const { settings, budget } = state;
+
+  const [scheduleText, setScheduleText] = useState('');
+  // Дата конца, выбранная полем; нет — из текста («до 15.12.2026»)
+  const [scheduleUntil, setScheduleUntil] = useState<string>();
+  const [isClearOpen, openClear, closeClear] = useFlag();
+  const schedule = useMemo(() => parseSchedule(scheduleText), [scheduleText]);
+  const until = scheduleUntil || schedule.endDay;
 
   const applySettings = useLastCallback((changes: Partial<Settings>) => {
     const next = { ...settings, ...changes };
@@ -98,6 +109,37 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
     }
   });
 
+  const handleScheduleText = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setScheduleText(e.currentTarget.value);
+  });
+
+  // Каждая строка — еженедельный ряд с сегодняшнего дня до даты конца включительно
+  const handleScheduleAdd = useLastCallback(() => {
+    const today = toDayKey(new Date());
+    if (!schedule.items.length) {
+      showPlannerNotice(lang('PlannerErrorScheduleEmpty'));
+      return;
+    }
+    if (!until || until < today) {
+      showPlannerNotice(lang('PlannerErrorScheduleUntil'));
+      return;
+    }
+    const events = buildScheduleEvents(schedule.items, today, until);
+    updatePlanner((draft) => {
+      draft.events.push(...events);
+    }, lang('PlannerNoticeScheduleAdded', { count: events.length }));
+    setScheduleText('');
+    setScheduleUntil(undefined);
+  });
+
+  const handleClear = useLastCallback(() => {
+    closeClear();
+    updatePlanner((draft) => {
+      draft.tasks = [];
+      draft.events = [];
+    }, lang('PlannerNoticeCleared'));
+  });
+
   return (
     <div className={styles.editor}>
       <h3 className={buildClassName(styles.groupTitle, styles.groupTitleFirst)}>{lang('ParvaneSectionPlanner')}</h3>
@@ -138,6 +180,66 @@ const PlannerSettings = ({ state, userId }: OwnProps) => {
       >
         {lang('PlannerSettingsLearnedReset')}
       </button>
+
+      <h3 className={styles.groupTitle}>{lang('PlannerScheduleTitle')}</h3>
+      <p className={styles.sheetHint}>{lang('PlannerScheduleHint')}</p>
+      <textarea
+        className={buildClassName(styles.dailyEditor, styles.scheduleInput)}
+        data-schedule-input
+        value={scheduleText}
+        aria-label={lang('PlannerScheduleTitle')}
+        placeholder={lang('PlannerSchedulePlaceholder')}
+        onChange={handleScheduleText}
+      />
+      <div className={styles.fields}>
+        <PlannerField
+          label={lang('PlannerScheduleUntil')}
+          type="date"
+          value={until}
+          onCommit={setScheduleUntil}
+        />
+      </div>
+      {Boolean(schedule.items.length) && (
+        <p className={styles.sheetHint} data-schedule-preview>
+          {lang('PlannerSchedulePreview', {
+            count: schedule.items.length,
+            date: until
+              ? formatDate(lang.code, fromDayKey(until), { day: 'numeric', month: 'long', year: 'numeric' })
+              : '—',
+          })}
+        </p>
+      )}
+      {Boolean(schedule.skipped.length) && (
+        <p className={styles.sheetHint}>{lang('PlannerScheduleSkipped', { count: schedule.skipped.length })}</p>
+      )}
+      <button
+        type="button"
+        className={buildClassName(styles.btn, styles.btnAccent)}
+        data-schedule-add
+        disabled={!schedule.items.length}
+        onClick={handleScheduleAdd}
+      >
+        {lang('PlannerScheduleAdd')}
+      </button>
+
+      <h3 className={styles.groupTitle}>{lang('PlannerClearTitle')}</h3>
+      <p className={styles.sheetHint}>{lang('PlannerClearHint')}</p>
+      <button
+        type="button"
+        className={buildClassName(styles.btn, styles.btnDanger)}
+        data-planner-clear
+        onClick={openClear}
+      >
+        {lang('PlannerClearTitle')}
+      </button>
+      <ConfirmDialog
+        isOpen={isClearOpen}
+        onClose={closeClear}
+        text={lang('PlannerClearConfirm')}
+        confirmLabel={lang('PlannerClearTitle')}
+        confirmHandler={handleClear}
+        confirmIsDestructive
+      />
     </div>
   );
 };

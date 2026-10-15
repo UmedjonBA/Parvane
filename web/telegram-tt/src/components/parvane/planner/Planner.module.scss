@@ -1101,6 +1101,11 @@
   }
 }
 
+.scheduleInput {
+  min-height: 12rem;
+  margin-block: 0.5rem 0.75rem;
+}
+
 .dailyEmpty {
   cursor: var(--custom-cursor, pointer);
 
