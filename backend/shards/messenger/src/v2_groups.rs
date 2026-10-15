@@ -86,7 +86,8 @@ async fn apply_one(ctx: &V2, state: Option<&GroupState>, entry: &GroupStateEntry
         None => key_owner(ctx, &hint).await?.ok_or(ErrorCode::Forbidden)?,
     };
     let i2 = info.clone();
-    let resolve = move |k: &[u8; 32]| (k == &hint).then(|| i2.clone());
+    // Версию журнала устройств подписанта (ENG-08) проверяют клиенты; сервер — владельца ключа
+    let resolve = move |k: &[u8; 32], _: u64| (k == &hint).then(|| i2.clone());
     let s = group::apply(state, entry, &resolve).map_err(|e| e.code())?;
     Ok((s, info))
 }

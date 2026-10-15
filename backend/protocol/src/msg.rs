@@ -68,6 +68,19 @@ pub fn sign_direct(device: &OlmAccount, content: &Content, peer: &str, audience:
 
 /// То же с заданным `op_id` (UUIDv7 хоста — id сообщения в UI).
 pub fn sign_direct_with_id(device: &OlmAccount, content: &Content, peer: &str, audience: Vec<DeviceRef>, ts_ms: i64, op_id: Vec<u8>) -> Result<SignedOp> {
+    sign_direct_at(device, content, peer, audience, ts_ms, op_id, 0)
+}
+
+/// То же с версией журнала устройств автора (ENG-05).
+pub fn sign_direct_at(
+    device: &OlmAccount,
+    content: &Content,
+    peer: &str,
+    audience: Vec<DeviceRef>,
+    ts_ms: i64,
+    op_id: Vec<u8>,
+    author_log_version: u64,
+) -> Result<SignedOp> {
     if !sign::is_valid_op_id(&op_id) {
         return Err(ProtoError::InvalidField("op_id"));
     }
@@ -78,6 +91,7 @@ pub fn sign_direct_with_id(device: &OlmAccount, content: &Content, peer: &str, a
         audience,
         ts_ms,
         conversation: Some(Conversation::DirectPeer(UserRef { address: peer.to_string() })),
+        author_log_version,
         ..Default::default()
     };
     sign::sign_op(device, header, content.encode_to_vec())
@@ -222,6 +236,11 @@ pub fn sign_group(device: &OlmAccount, content: &Content, ctx: GroupContext, ts_
 }
 
 pub fn sign_group_with_id(device: &OlmAccount, content: &Content, ctx: GroupContext, ts_ms: i64, op_id: Vec<u8>) -> Result<SignedOp> {
+    sign_group_at(device, content, ctx, ts_ms, op_id, 0)
+}
+
+/// То же с версией журнала устройств автора (ENG-05).
+pub fn sign_group_at(device: &OlmAccount, content: &Content, ctx: GroupContext, ts_ms: i64, op_id: Vec<u8>, author_log_version: u64) -> Result<SignedOp> {
     if !sign::is_valid_op_id(&op_id) {
         return Err(ProtoError::InvalidField("op_id"));
     }
@@ -232,6 +251,7 @@ pub fn sign_group_with_id(device: &OlmAccount, content: &Content, ctx: GroupCont
         target: ctx.group.clone(),
         ts_ms,
         conversation: Some(Conversation::Group(ctx)),
+        author_log_version,
         ..Default::default()
     };
     sign::sign_op(device, header, content.encode_to_vec())

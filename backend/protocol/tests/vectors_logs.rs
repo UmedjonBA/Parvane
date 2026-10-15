@@ -151,14 +151,14 @@ fn gen_group_log() -> Value {
     })
 }
 
-fn resolver(signers: &Value) -> impl Fn(&[u8; 32]) -> Option<SignerInfo> {
+fn resolver(signers: &Value) -> impl Fn(&[u8; 32], u64) -> Option<SignerInfo> {
     let map: HashMap<String, SignerInfo> = signers
         .as_object()
         .unwrap()
         .iter()
         .map(|(k, v)| (k.clone(), SignerInfo { user: v["user"].as_str().unwrap().into(), root_key: unhex(v, "root_hex").try_into().unwrap() }))
         .collect();
-    move |k: &[u8; 32]| map.get(&hexs(k)).cloned()
+    move |k: &[u8; 32], _: u64| map.get(&hexs(k)).cloned()
 }
 
 #[test]

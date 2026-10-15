@@ -261,6 +261,13 @@ impl GroupLocal {
     }
 }
 
+/// ENG-08: версия журнала устройств подписанта, на которую ссылается запись (0 — нет).
+fn entry_signer_version(e: &GroupStateEntry) -> u64 {
+    let Some(op) = e.change.as_ref() else { return 0 };
+    let Ok(body) = crate::pb::parvane::core::v2::OpBody::decode(op.body.as_slice()) else { return 0 };
+    gpb::GroupStateChange::decode(body.payload.as_slice()).map(|sc| sc.signer_log_version).unwrap_or(0)
+}
+
 /// Кого добавляет запись журнала (для предупреждения FR-028 при отказе).
 fn entry_added_member(e: &GroupStateEntry) -> Option<String> {
     let op = e.change.as_ref()?;
@@ -313,6 +320,12 @@ pub struct Client {
     seen_list: VecDeque<(SeenHash, i64)>,
     cursor: Cursor,
     pending_group: Vec<(u64, GroupEnvelope)>,
+    /// ENG-05: проверенное сообщение автора ссылается на версию его журнала устройств новее
+    /// известной — до догона журнала этому пользователю не отправлять (Need::PeerLog). Не сохраняется.
+    log_behind: BTreeMap<String, u64>,
+    /// ENG-06: группы, где у участника ушло устройство (выход или отзыв) в эпохе (значение): своя
+    /// Megolm-сессия группы уже сброшена, новую эпоху начинает тот, кто вправе. Не сохраняется.
+    rekey: BTreeMap<Vec<u8>, u64>,
     /// Расшифрованные ключи группы, для которых ещё нет журнала группы
     /// (Olm-сообщение повторно не расшифровать — держим здесь).
     pending_keys: Vec<(String, GroupKeyShare)>,
@@ -434,6 +447,8 @@ impl Client {
             seen_list: VecDeque::new(),
             cursor: Cursor::default(),
             pending_group: vec![],
+            log_behind: BTreeMap::new(),
+            rekey: BTreeMap::new(),
             pending_keys: vec![],
             shared_invites: vec![],
             token_req: None,
@@ -823,11 +838,15 @@ impl Client {
     /// Принять записи журнала устройств (после `log_sync(_anon)` с after = log_version).
     pub fn ingest_log(&mut self, user: &str, entries: Vec<SignedOp>) -> Result<LogVerdict> {
         if user == self.user {
+            let before: Vec<String> = self.own_log.devices.keys().cloned().collect();
             for e in entries {
                 self.own_log.apply(&e)?;
                 self.own_entries.push(e);
             }
             self.refresh_own_after_log();
+            if before.iter().any(|d| !self.own_log.devices.contains_key(d)) {
+                self.on_devices_removed(&user.to_string());
+            }
             return Ok(LogVerdict::Known);
         }
         let current = self.peers.get(user).and_then(|p| p.log.clone());
@@ -868,7 +887,11 @@ impl Client {
         if log.version > 0 {
             self.sticky.mark(user);
         }
+        let removed = peer.log.as_ref().is_some_and(|old| old.devices.keys().any(|d| !log.devices.contains_key(d)));
         peer.log = Some(log);
+        if removed {
+            self.on_devices_removed(user);
+        }
         Ok(verdict)
     }
 
@@ -976,6 +999,13 @@ impl Client {
 
     /// Готовность отправки пользователю: чего не хватает.
     pub fn check_peer(&self, user: &str) -> CResult<()> {
+        // ENG-05: автор сослался на более новый журнал устройств — сначала догнать (в нём может быть отзыв)
+        if let Some(&claimed) = self.log_behind.get(user) {
+            let have = self.log_version(user);
+            if claimed > have {
+                return need(Need::PeerLog { user: user.into(), after: have });
+            }
+        }
         if user != self.user {
             let Some(p) = self.peers.get(user) else { return need(Need::PeerLog { user: user.into(), after: 0 }) };
             if p.pending_root.is_some() {
@@ -1105,7 +1135,7 @@ impl Client {
         let log = self.peer_log(user).cloned().ok_or(ProtoError::BadCertificate)?;
         let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
         let audience: Vec<DeviceRef> = devices.iter().map(|d| DeviceRef { address: user.into(), device_id: d.clone() }).collect();
-        let op = msg::sign_direct_with_id(&self.acc, content, chat, audience, o.ts_ms, o.op_id)?;
+        let op = msg::sign_direct_at(&self.acc, content, chat, audience, o.ts_ms, o.op_id, self.own_log.version)?;
         let mut envelopes = vec![];
         for d in devices {
             let Some(dev) = log.active(d) else { continue };
@@ -1723,6 +1753,27 @@ impl Client {
         Ok(o)
     }
 
+    /// ENG-04: свои устройства, державшие SSK и вышедшие сами. Выход украденного устройства выглядит
+    /// так же — владелец может отметить его украденным ([`Client::report_device_stolen`]).
+    pub fn left_ssk_holders(&self) -> Vec<String> {
+        self.own_log.left_holders.iter().cloned().collect()
+    }
+
+    /// ENG-04: вышедшее само устройство украдено — повторный отзыв подписью SSK: SSK считается
+    /// раскрытым (новые устройства — только после смены SSK корнем), ключи, которые устройство
+    /// могло держать, меняются как при отзыве.
+    pub fn report_device_stolen(&mut self, device_id: &str) -> CResult<RevocationOutcome> {
+        if !self.own_log.left_holders.contains(device_id) {
+            return Err(ClientError::Proto(ProtoError::NotFound));
+        }
+        let req = self.revoke_device_request(device_id)?;
+        self.revocations_done.remove(device_id);
+        let mut o = self.on_own_device_revoked(device_id)?;
+        o.requests.insert(0, req);
+        o.ssk_rotation_required = self.own_log.ssk_exposed;
+        Ok(o)
+    }
+
     /// Последствия отзыва своего устройства (запись отзыва уже в своём
     /// журнале). Выполняет устройство, которое отзывало (одно — иначе ключи
     /// разойдутся); остальные свои устройства получают новые ключи по E2E.
@@ -1985,6 +2036,10 @@ impl Client {
         }
         let log = self.peer_log(&sender).cloned().ok_or_else(|| ClientError::Need(Need::PeerLog { user: sender.clone(), after: 0 }))?;
         let dev_id = v.cert.device_id.clone();
+        // ENG-07: копия-обманка раздачи ключа, отправленная этим же устройством самому себе
+        if sender == self.user && dev_id == self.device_id {
+            return Ok(vec![Event::Internal { seq }]);
+        }
         if log.active(&dev_id).map(|d| d.cert != v.cert).unwrap_or(true) {
             // Устройство не в журнале: журнал мог устареть — догнать.
             let after = log.version;
@@ -2054,6 +2109,7 @@ impl Client {
                 }]);
             }
         };
+        self.note_author_log(&sender, opened.op.header.author_log_version);
         let chat = match &opened.op.header.conversation {
             Some(crate::pb::parvane::core::v2::op_header::Conversation::DirectPeer(p)) if sender == self.user => p.address.clone(),
             _ => sender.clone(),
@@ -2132,10 +2188,14 @@ impl Client {
 
     // ── группы ──────────────────────────────────────────────────────────────
 
-    fn signer_resolver(&self) -> impl Fn(&[u8; 32]) -> Option<SignerInfo> + '_ {
-        move |k: &[u8; 32]| {
+    /// Подписант записи группы по ключу устройства и версии журнала устройств, на которую
+    /// ссылается запись (ENG-08): ключ действовал в этой версии; запись без версии — ключ
+    /// действует либо перестал действовать без чужого отзыва.
+    fn signer_resolver(&self) -> impl Fn(&[u8; 32], u64) -> Option<SignerInfo> + '_ {
+        move |k: &[u8; 32], version: u64| {
             let check = |user: &str, log: &DeviceLog| {
-                log.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: user.to_string(), root_key: log.root_key })
+                let valid = if version > 0 { log.key_active_at(k, version) } else { log.key_known_unrevoked(k) };
+                (log.key_ever(k) && valid).then(|| SignerInfo { user: user.to_string(), root_key: log.root_key })
             };
             // C1-01: ключ однозначно принадлежит одному пользователю (доказательство
             // владения в сертификате); совпадение в двух журналах — отказ.
@@ -2146,6 +2206,62 @@ impl Client {
             }
             Some(first)
         }
+    }
+
+    /// ENG-06: у пользователя ушло устройство — в его группах своя Megolm-сессия начинается заново
+    /// (раздаётся только действующим устройствам), а группа ждёт новой эпохи от того, кто вправе.
+    fn on_devices_removed(&mut self, user: &str) {
+        let groups: Vec<(Vec<u8>, u64)> = self
+            .groups
+            .iter()
+            .filter_map(|(id, g)| g.state.as_ref().filter(|s| s.members.contains_key(user) && !s.deleted).map(|s| (id.clone(), s.epoch)))
+            .collect();
+        for (id, epoch) in groups {
+            self.megolm_out.retain(|(g, _), _| g != &id);
+            self.megolm_shared.retain(|(g, _, _)| g != &id);
+            self.rekey.insert(id, epoch);
+        }
+    }
+
+    /// ENG-06: группе нужна новая эпоха — у участника ушло устройство, а эпоха с тех пор не сменилась.
+    pub fn group_rekey_pending(&self, group_id: &[u8]) -> bool {
+        self.rekey.get(group_id).is_some_and(|&epoch| self.group_state(group_id).is_some_and(|s| s.epoch == epoch && !s.deleted))
+    }
+
+    /// Группы, ждущие новой эпохи после ухода устройства участника (ENG-06).
+    pub fn groups_rekey_pending(&self) -> Vec<Vec<u8>> {
+        self.rekey.keys().filter(|g| self.group_rekey_pending(g)).cloned().collect()
+    }
+
+    /// ENG-05: версия журнала устройств, на которую сослалось проверенное сообщение автора.
+    fn note_author_log(&mut self, user: &str, version: u64) {
+        if version > self.log_version(user) {
+            let v = self.log_behind.entry(user.to_string()).or_default();
+            *v = (*v).max(version);
+        } else {
+            self.log_behind.remove(user);
+        }
+    }
+
+    /// Пользователи, чей журнал устройств отстаёт от версии, на которую сослались их сообщения
+    /// (ENG-05): хост добирает журналы, а если сервер их не отдаёт — показывает предупреждение.
+    pub fn logs_behind(&self) -> Vec<(String, u64)> {
+        self.log_behind.iter().filter(|(u, v)| **v > self.log_version(u)).map(|(u, v)| (u.clone(), *v)).collect()
+    }
+
+    /// Чей это ключ устройства (когда-либо): пользователь с этим ключом в журнале.
+    fn key_owner(&self, key: &[u8; 32]) -> Option<String> {
+        if self.own_log.key_ever(key) {
+            return Some(self.user.clone());
+        }
+        self.peers.iter().find(|(_, p)| p.log.as_ref().is_some_and(|l| l.key_ever(key))).map(|(u, _)| u.clone())
+    }
+
+    /// ENG-08: версия своего журнала устройств для новой записи группы — не меньше той, на которую
+    /// уже ссылались свои записи в этой группе (другое устройство могло знать журнал новее).
+    fn own_signer_version(&self, state: Option<&GroupState>) -> u64 {
+        let seen = state.and_then(|s| s.signer_versions.get(&self.user)).copied().unwrap_or(0);
+        self.own_log.version.max(seen)
     }
 
     /// Состояние группы (после `group_ingest`).
@@ -2200,7 +2316,17 @@ impl Client {
         let mut accepted = vec![];
         for (i, e) in entries.into_iter().enumerate() {
             let hint: [u8; 32] = e.change.as_ref().and_then(|c| c.signer_key.as_slice().try_into().ok()).ok_or(ProtoError::InvalidField("signer"))?;
-            let known = self.signer_resolver()(&hint).is_some();
+            let claimed = entry_signer_version(&e);
+            // ENG-08: запись ссылается на более новый журнал устройств подписанта — догнать его
+            // (в нём может быть и отзыв этого устройства)
+            let owner = self.key_owner(&hint).or_else(|| hints.get(i).filter(|u| self.peer_log(u).is_some()).cloned());
+            if let Some(u) = owner {
+                let have = self.log_version(&u);
+                if claimed > have {
+                    return need(Need::PeerLog { user: u, after: have });
+                }
+            }
+            let known = self.signer_resolver()(&hint, claimed).is_some();
             if !known {
                 // Подписант неизвестен: чей это ключ, узнаём из журналов —
                 // сначала того, на кого указал сервер, затем участников.
@@ -2291,7 +2417,7 @@ impl Client {
         // и ответит `pending`.
         let link_id = group::link_id(&join.link_public_key);
         if state.invite_links.get(&link_id).is_some_and(|l| l.announce.requires_approval) {
-            let entry = group::build_entry(&self.acc, Some(&state), &self.domain, Change::JoinByInvite(join), now_ms())?;
+            let entry = group::build_entry_at(&self.acc, Some(&state), &self.domain, Change::JoinByInvite(join), now_ms(), self.own_signer_version(Some(&state)))?;
             return Ok(OutRequest::id("group.join", &gpb::JoinRequest { entry: Some(entry) }));
         }
         self.group_change(&gid, Change::JoinByInvite(join))
@@ -2362,7 +2488,7 @@ impl Client {
             members: members.iter().map(|m| UserRef { address: m.clone() }).collect(),
             migrated_from: migrated_from.into(),
         };
-        let entry = group::build_entry(&self.acc, None, &self.domain, Change::Create(create), now_ms())?;
+        let entry = group::build_entry_at(&self.acc, None, &self.domain, Change::Create(create), now_ms(), self.own_signer_version(None))?;
         let g = entry.group.clone().ok_or(ProtoError::InvalidField("group"))?;
         let st = {
             let resolve = self.signer_resolver();
@@ -2376,7 +2502,7 @@ impl Client {
     /// применить локально (отказ сервера хост лечит пересинхронизацией).
     fn group_entry(&mut self, group_id: &[u8], change: Change) -> Result<GroupStateEntry> {
         let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
-        let entry = group::build_entry(&self.acc, Some(&state), &self.domain, change, now_ms())?;
+        let entry = group::build_entry_at(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)))?;
         let next = {
             let resolve = self.signer_resolver();
             group::apply(Some(&state), &entry, &resolve)?
@@ -2428,7 +2554,7 @@ impl Client {
     #[cfg(feature = "test-inject")]
     pub fn group_change_raw(&mut self, group_id: &[u8], change: Change) -> Result<OutRequest> {
         let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
-        let entry = group::build_entry(&self.acc, Some(&state), &self.domain, change, now_ms())?;
+        let entry = group::build_entry_at(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)))?;
         Ok(OutRequest::id("group.state.append", &gpb::StateAppendRequest { entry: Some(entry) }))
     }
 
@@ -2483,13 +2609,31 @@ impl Client {
             return self.prepare_direct_opts(m, c, DirectOpts { op_id: sign::new_op_id(), share_dk: true, force_l2: pad, ts_ms: now_ms() });
         }
         let own: Vec<String> = self.own_log.devices.keys().filter(|d| **d != self.device_id).cloned().collect();
-        if own.is_empty() {
-            return Ok(vec![]);
-        }
         let me = self.user.clone();
-        let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: pad || self.direct_must_pad(&me) };
-        let r = self.seal_for_opts(&me, &own, &me, c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
+        let l2 = pad || self.direct_must_pad(&me);
+        let mut r = if own.is_empty() {
+            mpb::DeliverSealedRequest { envelopes: vec![] }
+        } else {
+            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2 };
+            self.seal_for_opts(&me, &own, &me, c, Access::DeliveryKey(self.dk.key().to_vec()), o)?
+        };
+        // ENG-07: раздача уходит и этому устройству (копия-обманка) — иначе сервер видит доставки
+        // всем устройствам участников, кроме одного, и вычисляет автора следующего конверта
+        r.envelopes.push(self.cover_envelope(c, l2)?);
         Ok(vec![OutRequest::anon("msg.deliver_sealed", &r)])
+    }
+
+    /// ENG-07: конверт этому же устройству того же размера, что раздача ключа; получив его, устройство
+    /// его отбрасывает (Olm-сессии с самим собой нет).
+    fn cover_envelope(&self, c: &Content, l2: bool) -> Result<crate::pb::parvane::core::v2::SealedEnvelope> {
+        let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
+        let me = DeviceRef { address: self.user.clone(), device_id: self.device_id.clone() };
+        let op = msg::sign_direct_at(&self.acc, c, &self.user, vec![me.clone()], now_ms(), sign::new_op_id(), self.own_log.version)?;
+        // Olm-шифртекст длиннее открытого текста на заголовок и MAC
+        let mut olm_message = vec![0u8; op.encoded_len() + 96];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut olm_message);
+        let inner = SealedInner { sender: Some(cert), olm_message, olm_type: 1, padding: vec![] };
+        seal::seal(&me, &self.hpke_pk, Access::DeliveryKey(self.dk.key().to_vec()), inner, l2)
     }
 
     fn accept_group_key(&mut self, sender: &str, gk: &GroupKeyShare) -> CResult<()> {
@@ -2765,7 +2909,7 @@ impl Client {
         if msg::is_trackable(c) {
             self.reads.track(&op_id, msg::ChatKey::Group(group_id.to_vec()));
         }
-        let op = msg::sign_group_with_id(&self.acc, c, state.context(), now_ms(), op_id)?;
+        let op = msg::sign_group_at(&self.acc, c, state.context(), now_ms(), op_id, self.own_log.version)?;
         let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
         let plain = msg::group_plaintext(&cert, op);
         let session = self.megolm_out.get_mut(&key).ok_or(ProtoError::Crypto)?;
@@ -2866,6 +3010,7 @@ impl Client {
         if opened.sender.user() != expected_sender {
             return Err(ClientError::Proto(ProtoError::BadCertificate));
         }
+        self.note_author_log(&expected_sender, opened.op.header.author_log_version);
         if let Some(content::Kind::Receipt(r)) = &opened.content.kind {
             let me = self.user.clone();
             self.reads.apply(&me, &msg::ChatKey::Group(g.id.clone()), opened.sender.user(), r, opened.op.header.ts_ms);
@@ -3035,7 +3180,15 @@ impl Client {
                 list.push(GroupStateEntry::decode(d(&e)?.as_slice()).map_err(|_| ProtoError::Malformed)?);
             }
             let g = Ref { domain: c.domain.clone(), id: gid };
-            let _ = c.group_ingest(&g, list);
+            // ENG-08: запись, которая теперь не проверяется, не стирает группу — остаётся проверенная
+            // часть журнала, остальное группа добирает синком (и показывает причину отказа)
+            if c.group_ingest(&g, list.clone()).is_err() {
+                for e in list {
+                    if c.group_ingest(&g, vec![e]).is_err() {
+                        break;
+                    }
+                }
+            }
         }
         for (gid, v) in &p.group_behind {
             let gid = d(gid)?;

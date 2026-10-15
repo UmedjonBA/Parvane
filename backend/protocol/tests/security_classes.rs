@@ -324,7 +324,7 @@ fn c19_member_injected_by_server_rejected() {
         (server.verifying_key().to_bytes(), SignerInfo { user: "srv@x".into(), root_key: [2; 32] }),
     ]
     .into();
-    let resolve = |k: &[u8; 32]| map.get(k).cloned();
+    let resolve = |k: &[u8; 32], _: u64| map.get(k).cloned();
     let g = group::build_entry(&owner, None, "x", Change::Create(Create { kind: GroupKind::Group as i32, default_permissions: Some(Permissions::default()), ..Default::default() }), 1).unwrap();
     let s = group::apply(None, &g, &resolve).unwrap();
     // Сервер (не участник) добавляет участника.
@@ -369,11 +369,11 @@ fn c22_c23_group_log_position_and_fork() {
     let owner = sign::generate_signing_key();
     let map: HashMap<[u8; 32], SignerInfo> =
         [(owner.verifying_key().to_bytes(), SignerInfo { user: "alice@x".into(), root_key: [1; 32] })].into();
-    let resolve = |k: &[u8; 32]| map.get(k).cloned();
+    let resolve = |k: &[u8; 32], _: u64| map.get(k).cloned();
     let g = group::build_entry(&owner, None, "x", Change::Create(Create { kind: GroupKind::Group as i32, ..Default::default() }), 1).unwrap();
     let s = group::apply(None, &g, &resolve).unwrap();
     let send = sign::generate_signing_key();
-    let e = group::build_entry(&owner, Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec() }), 100).unwrap();
+    let e = group::build_entry(&owner, Some(&s), "x", Change::NewEpoch(NewEpoch { epoch: 1, send_public_key: send.verifying_key().to_bytes().to_vec(), ..Default::default() }), 100).unwrap();
     let s1 = group::apply(Some(&s), &e, &resolve).unwrap();
     // Та же запись на другой позиции.
     let mut moved = e.clone();
@@ -418,7 +418,7 @@ fn c26_token_key_consistency() {
 fn c27_group_envelope_hides_session() {
     let send = sign::generate_signing_key();
     let g = parvane_protocol::pb::parvane::core::v2::Ref { domain: "x".into(), id: vec![1; 16] };
-    let inner = GroupEnvelopeInner { megolm_session_id: b"SESSION-ID-XYZ".to_vec(), megolm_message: vec![1; 40], padding: vec![] };
+    let inner = GroupEnvelopeInner { megolm_session_id: b"SESSION-ID-XYZ".to_vec(), megolm_message: vec![1; 40], padding: vec![], public_session: vec![] };
     let a = group::seal_envelope(&send, &[1; 32], &g, 1, &inner).unwrap();
     let b = group::seal_envelope(&send, &[1; 32], &g, 1, &inner).unwrap();
     let (ab, bb) = (a.encode_to_vec(), b.encode_to_vec());

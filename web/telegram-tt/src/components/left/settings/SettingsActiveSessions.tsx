@@ -130,6 +130,9 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   const [confirmingOffer, setConfirmingOffer] = useState<LinkOffer | undefined>();
 
   const [sskState, setSskState] = useState<SskState | undefined>();
+  // ENG-04: вышедшие сами устройства, державшие ключ подписи устройств
+  const [leftDevices, setLeftDevices] = useState<string[]>([]);
+  const [stolenDevice, setStolenDevice] = useState<string | undefined>();
   const [isSskDialogOpen, openSskDialog, closeSskDialog] = useFlag();
   const [recoveryKey, setRecoveryKey] = useState('');
 
@@ -139,6 +142,8 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     const offers = await callParvane('parvaneListLinkOffers') as { offers: LinkOffer[] } | undefined;
     setLinkOffers(offers?.offers || []);
     setSskState(await callParvane('parvaneGetSskState') as SskState | undefined);
+    const left = await callParvane('parvaneGetLeftDevices') as { deviceIds: string[] } | undefined;
+    setLeftDevices(left?.deviceIds || []);
     // Другое устройство могло выйти само — список перечитается по событию провайдера
     void callParvane('parvanePollOwnDevices');
   });
@@ -254,6 +259,17 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     const result = await callParvane('parvaneGrantLink', { deviceId: offer.deviceId });
     showNotification({
       message: oldLang(result ? 'ParvaneLinkGranted' : 'ParvaneLinkFailed'),
+    });
+    void refreshLinkState();
+  });
+
+  const handleReportStolen = useLastCallback(async () => {
+    const deviceId = stolenDevice;
+    setStolenDevice(undefined);
+    if (!deviceId) return;
+    const isDone = await callParvane('parvaneReportDeviceStolen', { deviceId });
+    showNotification({
+      message: oldLang(isDone ? 'ParvaneLeftDeviceStolenDone' : 'ParvaneLeftDeviceStolenFailed'),
     });
     void refreshLinkState();
   });
@@ -552,6 +568,34 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   }
 
   // Parvane: запросы истории от других устройств аккаунта
+  function renderLeftDevices() {
+    return (
+      <>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {oldLang('ParvaneLeftDevices')}
+        </IslandTitle>
+        <Island>
+          {leftDevices.map((deviceId) => (
+            <ListItem
+              key={deviceId}
+              icon="delete-user"
+              narrow
+              ripple
+              destructive
+              onClick={() => setStolenDevice(deviceId)}
+            >
+              <div className="multiline-item full-size" dir="auto" data-left-device={deviceId}>
+                <span className="title">{`Web ${deviceId.slice(0, 8)}`}</span>
+                <span className="subtitle">{oldLang('ParvaneLeftDeviceStolen')}</span>
+              </div>
+            </ListItem>
+          ))}
+        </Island>
+        <p className="settings-item-description-larger">{oldLang('ParvaneLeftDevicesHint')}</p>
+      </>
+    );
+  }
+
   function renderLinkOffers() {
     return (
       <>
@@ -631,6 +675,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
       {Boolean(sskState?.isEscrowCopyMissing) && !sskState?.isRotationNeeded && renderEscrowMissing()}
       {Boolean(sskState?.canSendKeyToTelegram) && !sskState?.isRotationNeeded && renderTelegramSend()}
       {hasOtherSessions && renderOtherSessions(otherSessionHashes)}
+      {Boolean(leftDevices.length) && renderLeftDevices()}
       {/* Parvane: авто-терминация по TTL не поддерживается сервером — секция
           показывается только когда бэкенд отдал ttlDays */}
       {ttlDays !== undefined && renderAutoTerminate()}
@@ -658,6 +703,14 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           </SecretForm>
         </ConfirmDialog>
       )}
+      <ConfirmDialog
+        isOpen={Boolean(stolenDevice)}
+        onClose={() => setStolenDevice(undefined)}
+        text={stolenDevice ? oldLang('ParvaneLeftDeviceStolenConfirm', `Web ${stolenDevice.slice(0, 8)}`) : ''}
+        confirmLabel={oldLang('ParvaneLeftDeviceStolen')}
+        confirmHandler={handleReportStolen}
+        confirmIsDestructive
+      />
       <ConfirmDialog
         isOpen={Boolean(confirmingOffer)}
         onClose={() => setConfirmingOffer(undefined)}

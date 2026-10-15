@@ -45,7 +45,7 @@ fn envelope_open(data: &[u8]) {
 
 fn group_state(data: &[u8]) {
     if let Ok(e) = decode_checked::<GroupStateEntry>(data, Origin::Client) {
-        let resolve = |_: &[u8; 32]| Some(SignerInfo { user: "alice@x".into(), root_key: [1; 32] });
+        let resolve = |_: &[u8; 32], _: u64| Some(SignerInfo { user: "alice@x".into(), root_key: [1; 32] });
         let _ = group::apply(None, &e, &resolve);
     }
 }

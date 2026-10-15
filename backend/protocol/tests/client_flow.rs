@@ -100,7 +100,7 @@ impl Server {
                     _ => decode_checked::<gpb::EpochPublishSendKeyRequest>(&r.body, Origin::Client).unwrap().entry.unwrap(),
                 };
                 let gid = entry.group.clone().unwrap().id;
-                let resolve = |k: &[u8; 32]| {
+                let resolve = |k: &[u8; 32], _: u64| {
                     self.logs.keys().find_map(|u| {
                         let l = self.log(u);
                         l.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })
@@ -130,7 +130,7 @@ impl Server {
                 let env = q.envelope.unwrap();
                 let gid = env.group.clone().unwrap().id;
                 // Всем участникам последнего состояния — всем устройствам.
-                let resolve = |k: &[u8; 32]| {
+                let resolve = |k: &[u8; 32], _: u64| {
                     self.logs.keys().find_map(|u| {
                         let l = self.log(u);
                         l.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })

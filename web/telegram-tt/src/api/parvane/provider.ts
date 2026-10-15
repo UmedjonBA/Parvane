@@ -2671,6 +2671,18 @@ const methods = {
     return true;
   },
 
+  // ENG-04: свои устройства, державшие ключ подписи и вышедшие сами; выход украденного выглядит так же
+  parvaneGetLeftDevices() {
+    return Promise.resolve({ deviceIds: v2Controller.leftSskHolders() });
+  },
+
+  async parvaneReportDeviceStolen({ deviceId }: { deviceId: string }) {
+    return v2Controller.reportDeviceStolen(deviceId).catch((e: unknown) => {
+      logDebug(`v2: отметка «устройство украдено» не выполнена: ${String(e)}`);
+      return false;
+    });
+  },
+
   async parvaneGetSskState() {
     return {
       ...v2Controller.sskState(),

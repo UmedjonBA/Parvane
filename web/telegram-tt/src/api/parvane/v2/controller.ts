@@ -307,6 +307,8 @@ const DEFAULT_GROUP_PERMISSIONS: WireDefaultPermissions = {
 };
 // Смена эпохи — не чаще раза в 10 с (R8): повтор после отказа по частоте
 const EPOCH_RETRY_MS = 11000;
+// ENG-06: админ (не владелец) начинает новую эпоху после ухода устройства участника, если владелец не успел
+const REKEY_ADMIN_DELAY_MS = 30000;
 // T185: сколько ждать встречный ключ доступа участника группового звонка
 const CALL_KEY_WAIT_MS = 8000;
 const CALL_KEY_POLL_MS = 300;
@@ -620,6 +622,7 @@ export function createV2Controller(deps: Deps) {
         // Журнал на сервере начат заново (другой генезис) — перечитать целиком
         if (verdict === 'replaced') verdict = client.ingestLog(user, await syncFrom('0'));
         if (verdict === 'rootChanged') return acceptPeerRoot(user);
+        rekeyAfterDeviceRemoval();
         // Журнал не продвинулся, а движок просит его снова: собеседник прямо сейчас
         // публикует первое устройство (корень записан, сертификат ещё нет) — дать
         // ему дописать, а не сжечь все попытки за миллисекунды
@@ -1133,6 +1136,18 @@ export function createV2Controller(deps: Deps) {
       JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
     ));
     if (client.ingestLog(user, resp) === 'rootChanged') await acceptPeerRoot(user);
+    rekeyAfterDeviceRemoval();
+  }
+
+  // ENG-06: у участника ушло устройство (выход или отзыв) — группе нужна новая эпоха. Начинает владелец,
+  // остальные админы — позже, если эпоха к тому времени не сменилась
+  function rekeyAfterDeviceRemoval() {
+    if (!client) return;
+    const self = deps.getSelf();
+    for (const hex of client.groupsRekeyPending() as string[]) {
+      if (!canRotate(hex)) continue;
+      scheduleRotate(hex, readGroup(hex)?.owner === self ? 0 : REKEY_ADMIN_DELAY_MS);
+    }
   }
 
   /** Метод блобов шарда cloud по имени метода реестра: proto3-JSON → proto3-JSON. */
@@ -1306,13 +1321,18 @@ export function createV2Controller(deps: Deps) {
       await dropIdentity();
       return;
     }
+    rekeyAfterDeviceRemoval();
     const current = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
     const known = await storage.loadRecord<string[]>(OWN_DEVICES_RECORD);
     await storage.saveRecord(OWN_DEVICES_RECORD, current);
     await persist();
     // Первая проверка на этом устройстве — запоминаем, не уведомляем
     if (!known) return;
-    if (known.length !== current.length || current.some((id) => !known.includes(id))) deps.onOwnDevicesChanged?.();
+    if (known.length !== current.length || current.some((id) => !known.includes(id))) {
+      deps.log(`v2: состав своих устройств изменился (журнал v${client.logVersion(self)}, устройств ${
+        current.length}, вышедших держателей ключа ${leftSskHolders().length})`);
+      deps.onOwnDevicesChanged?.();
+    }
     const added = current.filter((id) => !known.includes(id) && id !== ownDeviceId);
     if (!added.length) return;
     deps.onNewOwnDevices(added);
@@ -1888,8 +1908,28 @@ export function createV2Controller(deps: Deps) {
   async function revokeDevice(deviceId: string): Promise<boolean> {
     if (!client || !ready) return false;
     if (!logDevices(deps.getSelf())?.v2.includes(deviceId) || deviceId === ownDeviceId) return false;
+    await applyRevocation(() => client!.revokeDevice(deviceId) as RevokeOutcome);
+    return true;
+  }
+
+  /** ENG-04: свои устройства, державшие ключ подписи и вышедшие сами (выход украденного выглядит так же). */
+  function leftSskHolders(): string[] {
+    if (!client || !ready) return [];
+    return client.leftSskHolders() as string[];
+  }
+
+  /** ENG-04: вышедшее устройство украдено — повторный отзыв своей рукой: ключ подписи устройств считается
+   * раскрытым (новые устройства — после смены по ключу восстановления), ключи, которые оно держало, меняются. */
+  async function reportDeviceStolen(deviceId: string): Promise<boolean> {
+    if (!client || !ready || !leftSskHolders().includes(deviceId)) return false;
+    await applyRevocation(() => client!.reportDeviceStolen(deviceId) as RevokeOutcome);
+    return true;
+  }
+
+  // Запись отзыва в журнал устройств, затем ротации ключей (отзыв и отметка «украдено»)
+  async function applyRevocation(make: () => RevokeOutcome) {
     await serial(async () => {
-      const outcome = await withNeeds(() => client!.revokeDevice(deviceId) as RevokeOutcome);
+      const outcome = await withNeeds(make);
       const [entry, ...rotations] = outcome.requests;
       try {
         await call(entry.chan, entry.method, entry.body);
@@ -1924,7 +1964,6 @@ export function createV2Controller(deps: Deps) {
       if (outcome.stateKeyVersion !== undefined) deps.onStateReady?.(stateHost, 'self');
     });
     if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
-    return true;
   }
 
   /**
@@ -3765,6 +3804,8 @@ export function createV2Controller(deps: Deps) {
     resetIdentity,
     leave,
     pollOwnDevices,
+    leftSskHolders,
+    reportDeviceStolen,
     hasEscrow,
     isEscrowCopyMissing,
     storeEscrowCopy,

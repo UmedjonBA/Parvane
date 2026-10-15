@@ -251,6 +251,14 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneResetBadPassword: 'Wrong password.',
   ParvaneResetFailed: 'Could not reset the secure identity. Try again later.',
   ParvaneLinkOfferWait: 'Waiting for the device to reveal its key…',
+  ParvaneLeftDevices: 'Signed-out devices',
+  ParvaneLeftDevicesHint: 'These devices signed themselves out. If one of them was stolen, mark '
+    + 'it — the device signing key will be replaced with your recovery key.',
+  ParvaneLeftDeviceStolen: 'This device was stolen',
+  ParvaneLeftDeviceStolenConfirm: 'Mark %@ as stolen? You will need your recovery key to replace the device signing '
+    + 'key; until then new devices can\'t be added and contacts see a warning.',
+  ParvaneLeftDeviceStolenDone: 'Device marked as stolen',
+  ParvaneLeftDeviceStolenFailed: 'Could not mark the device as stolen',
   ParvaneLinkRequests: 'History transfer requests',
   ParvaneLinkOfferCode: 'Code: %@',
   ParvaneLinkConfirm: 'Transfer message history to this device? Make sure it shows code %@.',
@@ -887,6 +895,14 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneResetBadPassword: 'Неверный пароль.',
   ParvaneResetFailed: 'Не удалось сбросить защищённую личность. Попробуйте позже.',
   ParvaneLinkOfferWait: 'Ждём, пока устройство раскроет ключ…',
+  ParvaneLeftDevices: 'Вышедшие устройства',
+  ParvaneLeftDevicesHint: 'Эти устройства вышли из аккаунта сами. Если одно из них украли, отметьте '
+    + 'его — ключ подписи устройств сменится по ключу восстановления.',
+  ParvaneLeftDeviceStolen: 'Это устройство украли',
+  ParvaneLeftDeviceStolenConfirm: 'Отметить %@ украденным? Для смены ключа подписи устройств понадобится '
+    + 'ключ восстановления; до смены новые устройства не добавляются, а собеседники видят предупреждение.',
+  ParvaneLeftDeviceStolenDone: 'Устройство отмечено украденным',
+  ParvaneLeftDeviceStolenFailed: 'Не удалось отметить устройство украденным',
   ParvaneLinkRequests: 'Запросы на перенос истории',
   ParvaneLinkOfferCode: 'Код: %@',
   ParvaneLinkConfirm: 'Перенести историю сообщений на это устройство? Убедитесь, что на нём показан код %@.',

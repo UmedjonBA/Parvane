@@ -423,8 +423,8 @@ struct G {
 }
 
 impl G {
-    fn resolve(&self) -> impl Fn(&[u8; 32]) -> Option<SignerInfo> + '_ {
-        |k| self.owners.get(k).cloned()
+    fn resolve(&self) -> impl Fn(&[u8; 32], u64) -> Option<SignerInfo> + '_ {
+        |k, _| self.owners.get(k).cloned()
     }
     /// Запись журнала от `who` (через его ID-сессию) → новое состояние.
     fn append(&mut self, who: &mut Dev, change: Change, ts_ms: i64) -> Result<(), ErrorCode> {
@@ -455,7 +455,7 @@ fn create_group(owner: &mut Dev, members: &[&Dev]) -> G {
     }
     let genesis = group::build_entry(&owner.acc, None, "local", Change::Create(Create { kind: GroupKind::Group as i32, name: "G".into(), default_permissions: Some(perms()), ..Default::default() }), 1).unwrap();
     owner.c.call("group.state.append", gpb::StateAppendRequest { entry: Some(genesis.clone()) }.encode_to_vec()).expect("genesis группы");
-    let state = group::apply(None, &genesis, &|k: &[u8; 32]| owners.get(k).cloned()).unwrap();
+    let state = group::apply(None, &genesis, &|k: &[u8; 32], _: u64| owners.get(k).cloned()).unwrap();
     let mut g = G { state, owners };
     for (i, m) in members.iter().enumerate() {
         g.append(owner, Change::AddMember(AddMember { member: Some(UserRef { address: m.user.clone() }) }), 2 + i as i64).expect("add");

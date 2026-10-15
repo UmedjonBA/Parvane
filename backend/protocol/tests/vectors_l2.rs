@@ -20,7 +20,7 @@ fn direct_len(olm_len: usize) -> usize {
 }
 
 fn group_len(session_id_len: usize, message_len: usize) -> usize {
-    let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; session_id_len], megolm_message: vec![7; message_len], padding: vec![] };
+    let mut inner = GroupEnvelopeInner { megolm_session_id: vec![1; session_id_len], megolm_message: vec![7; message_len], padding: vec![], public_session: vec![] };
     l2::pad_group(&mut inner);
     inner.encoded_len()
 }

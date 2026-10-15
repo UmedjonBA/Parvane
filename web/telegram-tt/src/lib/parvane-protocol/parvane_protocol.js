@@ -1317,6 +1317,14 @@ export class PvClient {
         }
     }
     /**
+     * ENG-06: группы (hex), которым нужна новая эпоха после ухода устройства участника.
+     * @returns {Array<any>}
+     */
+    groupsRekeyPending() {
+        const ret = wasm.pvclient_groupsRekeyPending(this.__wbg_ptr);
+        return takeObject(ret);
+    }
+    /**
      * Известен ли ключ доступа собеседника: сигнал звонка сервер принимает
      * только с ним (слепой жетон для звонков не годится).
      * @param {string} peer
@@ -1650,6 +1658,14 @@ export class PvClient {
         }
     }
     /**
+     * ENG-04: свои вышедшие сами устройства, державшие SSK (id).
+     * @returns {Array<any>}
+     */
+    leftSskHolders() {
+        const ret = wasm.pvclient_leftSskHolders(this.__wbg_ptr);
+        return takeObject(ret);
+    }
+    /**
      * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
      * для v1-устройств из подписанных списков собеседника и своего.
      * @param {string} message_id
@@ -1753,6 +1769,14 @@ export class PvClient {
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.pvclient_logVersion(this.__wbg_ptr, ptr0, len0);
         return BigInt.asUintN(64, ret);
+    }
+    /**
+     * ENG-05: пользователи, чьи сообщения сослались на журнал устройств новее известного.
+     * @returns {Array<any>}
+     */
+    logsBehind() {
+        const ret = wasm.pvclient_logsBehind(this.__wbg_ptr);
+        return takeObject(ret);
     }
     /**
      * Новое устройство.
@@ -2283,6 +2307,29 @@ export class PvClient {
             const ptr0 = passArray8ToWasm0(log_response, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
             wasm.pvclient_recoverWithRoot(retptr, this.__wbg_ptr, ptr0, len0, otk_count);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
+     * `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
+     * @param {string} device_id
+     * @returns {any}
+     */
+    reportDeviceStolen(device_id) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(device_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_reportDeviceStolen(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);

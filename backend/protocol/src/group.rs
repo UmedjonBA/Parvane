@@ -122,6 +122,9 @@ pub struct GroupState {
     pub public: Option<PublicInfo>,
     /// Комплекты эпох публичной группы (эпоха → комплект), последние `MAX_PUBLIC_BUNDLES`.
     pub public_bundles: BTreeMap<u64, Vec<u8>>,
+    /// ENG-08: наибольшая версия журнала устройств, на которую сослалась запись пользователя; его следующие
+    /// записи не ссылаются на меньшую.
+    pub signer_versions: BTreeMap<String, u64>,
 }
 
 /// Сколько комплектов эпох помнит состояние: столько эпох назад читается история публичной группы.
@@ -296,18 +299,23 @@ pub enum ContextVerdict {
 }
 
 /// Применить запись журнала. `state` — None для генезиса. `resolve` —
-/// пользователь и корень по ключу подписи устройства (из проверенных
-/// сертификатов); неизвестный ключ — отказ.
-pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn Fn(&[u8; 32]) -> Option<SignerInfo>) -> Result<GroupState> {
+/// пользователь и корень по ключу подписи устройства и версии журнала устройств
+/// подписанта, на которую ссылается запись (ENG-08: ключ действовал в этой версии);
+/// неизвестный ключ — отказ.
+pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn Fn(&[u8; 32], u64) -> Option<SignerInfo>) -> Result<GroupState> {
     let group = entry.group.as_ref().ok_or(ProtoError::InvalidField("group"))?;
     address::check_ref(group)?;
     let op = entry.change.as_ref().ok_or(ProtoError::InvalidField("change"))?;
     let hint = sign::verifying_key(&op.signer_key)?.to_bytes();
-    let signer = resolve(&hint).ok_or(ProtoError::Forbidden)?;
     let v = sign::verify_op(op, GROUP_DOMAIN, GROUP_OP, Some(&hint))?;
     let sc: GroupStateChange = decode_checked(&v.payload, Origin::Client)?;
+    let signer = resolve(&hint, sc.signer_log_version).ok_or(ProtoError::Forbidden)?;
     if sc.version != entry.version || sc.prev_hash != entry.prev_hash {
         return Err(ProtoError::ContextMismatch);
+    }
+    // ENG-08: версии журнала устройств у пользователя не убывают
+    if state.and_then(|s| s.signer_versions.get(&signer.user)).is_some_and(|&max| sc.signer_log_version < max) {
+        return Err(ProtoError::Forbidden);
     }
     let change = sc.change.as_ref().and_then(|c| c.change.as_ref()).ok_or(ProtoError::InvalidField("change"))?;
     let now = v.header.ts_ms;
@@ -349,7 +357,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 avatar_file_id: String::new(),
                 migrated_from: cr.migrated_from.clone(),
                 default_permissions: cr.default_permissions.unwrap_or_default(),
-                owner: signer.user,
+                owner: signer.user.clone(),
                 members,
                 banned: BTreeSet::new(),
                 epoch: 0,
@@ -363,6 +371,11 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 l2_by: String::new(),
                 public: None,
                 public_bundles: BTreeMap::new(),
+                signer_versions: if sc.signer_log_version > 0 {
+                    BTreeMap::from([(signer.user.clone(), sc.signer_log_version)])
+                } else {
+                    BTreeMap::new()
+                },
             };
             return Ok(s);
         }
@@ -635,12 +648,28 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
     }
     s.version = entry.version;
     s.hashes.push(entry_hash(op));
+    if sc.signer_log_version > 0 {
+        let max = s.signer_versions.entry(signer.user.clone()).or_default();
+        *max = (*max).max(sc.signer_log_version);
+    }
     Ok(s)
 }
 
 /// Собрать и подписать запись журнала. Для генезиса `state = None`, а `group`
 /// несёт только домен — id вычисляется из тела.
 pub fn build_entry(signer: &dyn OpSigner, state: Option<&GroupState>, domain: &str, change: Change, ts_ms: i64) -> Result<GroupStateEntry> {
+    build_entry_at(signer, state, domain, change, ts_ms, 0)
+}
+
+/// То же со ссылкой на версию журнала устройств подписанта (ENG-08).
+pub fn build_entry_at(
+    signer: &dyn OpSigner,
+    state: Option<&GroupState>,
+    domain: &str,
+    change: Change,
+    ts_ms: i64,
+    signer_log_version: u64,
+) -> Result<GroupStateEntry> {
     if !address::is_valid_domain(domain) {
         return Err(ProtoError::BadAddress);
     }
@@ -648,7 +677,13 @@ pub fn build_entry(signer: &dyn OpSigner, state: Option<&GroupState>, domain: &s
         None => (1, ZERO_HASH, Ref { domain: domain.to_string(), id: vec![] }, None),
         Some(s) => (s.version + 1, s.head_hash(), s.group.clone(), Some(s.group.clone())),
     };
-    let sc = GroupStateChange { group: Some(sc_group), version, prev_hash: prev_hash.to_vec(), change: Some(GroupChange { change: Some(change) }) };
+    let sc = GroupStateChange {
+        group: Some(sc_group),
+        version,
+        prev_hash: prev_hash.to_vec(),
+        change: Some(GroupChange { change: Some(change) }),
+        signer_log_version,
+    };
     let header = OpHeader {
         domain: GROUP_DOMAIN.into(),
         op_type: GROUP_OP.into(),
@@ -821,7 +856,7 @@ pub fn verify_group_typing(send_public_key: &[u8; 32], group: &Ref, epoch: u64, 
 mod tests {
     use super::*;
     use crate::pb::parvane::core::v2::UserRef;
-    use crate::pb::parvane::group::v2::{AddMember, Ban, Create, Mute, NewEpoch, SetRole};
+    use crate::pb::parvane::group::v2::{AddMember, Ban, Create, Mute, NewEpoch, SetInfo, SetRole};
     use ed25519_dalek::SigningKey;
     use std::collections::HashMap;
 
@@ -840,8 +875,8 @@ mod tests {
             }
             Self { keys, roots }
         }
-        fn resolve(&self) -> impl Fn(&[u8; 32]) -> Option<SignerInfo> + '_ {
-            move |k| {
+        fn resolve(&self) -> impl Fn(&[u8; 32], u64) -> Option<SignerInfo> + '_ {
+            move |k, _| {
                 self.keys
                     .iter()
                     .find(|(_, sk)| &sk.verifying_key().to_bytes() == k)
@@ -851,6 +886,27 @@ mod tests {
         fn k(&self, u: &str) -> &SigningKey {
             &self.keys[u]
         }
+    }
+
+    /// ENG-08: запись проверяется по ключу, действовавшему в версии журнала устройств подписанта, и
+    /// версии одного пользователя в журнале группы не убывают.
+    #[test]
+    fn signer_log_version_is_checked_and_monotonic() {
+        let w = World::new(&["alice@x", "bob@x"]);
+        let alice = w.keys["alice@x"].verifying_key().to_bytes();
+        // Ключ Алисы действует в версиях 1..=4 её журнала (в 5-й — отзыв)
+        let resolve = |k: &[u8; 32], v: u64| (k == &alice && (v == 0 || v < 5)).then(|| SignerInfo { user: "alice@x".into(), root_key: w.roots["alice@x"] });
+        let create = Create { kind: GroupKind::Group as i32, members: vec![UserRef { address: "bob@x".into() }], ..Default::default() };
+        let g = build_entry_at(w.k("alice@x"), None, "x", Change::Create(create), 1, 3).unwrap();
+        let s = apply(None, &g, &resolve).unwrap();
+        assert_eq!(s.signer_versions.get("alice@x"), Some(&3));
+        // Ссылка на версию, где ключ уже отозван, — отказ
+        let late = build_entry_at(w.k("alice@x"), Some(&s), "x", Change::SetInfo(SetInfo { name: "n".into(), ..Default::default() }), 2, 5).unwrap();
+        assert_eq!(apply(Some(&s), &late, &resolve).err(), Some(ProtoError::Forbidden));
+        let s2 = apply(Some(&s), &build_entry_at(w.k("alice@x"), Some(&s), "x", Change::SetInfo(SetInfo { name: "n".into(), ..Default::default() }), 2, 4).unwrap(), &resolve).unwrap();
+        // Версия меньше уже упомянутой — отказ (отозванное устройство не «откатывается» на старую)
+        let back = build_entry_at(w.k("alice@x"), Some(&s2), "x", Change::SetInfo(SetInfo { name: "m".into(), ..Default::default() }), 3, 3).unwrap();
+        assert_eq!(apply(Some(&s2), &back, &resolve).err(), Some(ProtoError::Forbidden));
     }
 
     fn ur(a: &str) -> Option<UserRef> {

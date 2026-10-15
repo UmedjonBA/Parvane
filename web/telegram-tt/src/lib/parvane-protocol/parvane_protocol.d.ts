@@ -254,6 +254,10 @@ export class PvClient {
     groupUnconfirmed(group: string, claimed: string[]): string[];
     groupVersion(group: string): bigint;
     /**
+     * ENG-06: группы (hex), которым нужна новая эпоха после ухода устройства участника.
+     */
+    groupsRekeyPending(): Array<any>;
+    /**
      * Известен ли ключ доступа собеседника: сигнал звонка сервер принимает
      * только с ним (слепой жетон для звонков не годится).
      */
@@ -322,6 +326,10 @@ export class PvClient {
      */
     leave(): Array<any>;
     /**
+     * ENG-04: свои вышедшие сами устройства, державшие SSK (id).
+     */
+    leftSskHolders(): Array<any>;
+    /**
      * Запрос `msg.deliver_legacy` (FR-054): v1 `SendPayload` (JSON) с копиями
      * для v1-устройств из подписанных списков собеседника и своего.
      */
@@ -341,6 +349,10 @@ export class PvClient {
      */
     logDevices(user: string): string;
     logVersion(user: string): bigint;
+    /**
+     * ENG-05: пользователи, чьи сообщения сослались на журнал устройств новее известного.
+     */
+    logsBehind(): Array<any>;
     /**
      * Новое устройство.
      */
@@ -444,6 +456,11 @@ export class PvClient {
      * с версии 0. Запросы выполнять по порядку.
      */
     recoverWithRoot(log_response: Uint8Array, otk_count: number): Array<any>;
+    /**
+     * ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
+     * `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
+     */
+    reportDeviceStolen(device_id: string): any;
     /**
      * T130: сброс личности — новый корень взамен прежнего. Как
      * `createIdentity`; первый запрос — `identity.root.rotate` (нужна свежая
@@ -781,6 +798,7 @@ export interface InitOutput {
     readonly pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupVersion: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_groupsRekeyPending: (a: number) => number;
     readonly pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
     readonly pvclient_hasRoot: (a: number) => number;
     readonly pvclient_hasStateKey: (a: number) => number;
@@ -796,11 +814,13 @@ export interface InitOutput {
     readonly pvclient_l2SetGroupPref: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly pvclient_lastError: (a: number, b: number) => void;
     readonly pvclient_leave: (a: number, b: number) => void;
+    readonly pvclient_leftSskHolders: (a: number) => number;
     readonly pvclient_legacyDeliverRequest: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_legacyDevicesRequest: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_linkGrantMaterial: (a: number, b: number) => void;
     readonly pvclient_logDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_logVersion: (a: number, b: number, c: number) => bigint;
+    readonly pvclient_logsBehind: (a: number) => number;
     readonly pvclient_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_openRecord: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_otkRequest: (a: number, b: number) => number;
@@ -829,6 +849,7 @@ export interface InitOutput {
     readonly pvclient_publicHistoryItems: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_readers: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_recoverWithRoot: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_reportDeviceStolen: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_resetIdentity: (a: number, b: number, c: number) => void;
     readonly pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_revokeDevice: (a: number, b: number, c: number, d: number) => void;

@@ -567,7 +567,7 @@ mod msgv2 {
             (b.acc.ed25519(), SignerInfo { user: b.user.clone(), root_key: b.root.root_pub() }),
         ]
         .into();
-        let resolve = |k: &[u8; 32]| owners.get(k).cloned();
+        let resolve = |k: &[u8; 32], _: u64| owners.get(k).cloned();
         let perms = Permissions { send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true, invite_users: false, pin_messages: false, change_info: false };
         let g = group::build_entry(&a.acc, None, "local", Change::Create(Create { kind: GroupKind::Group as i32, name: "G".into(), default_permissions: Some(perms), ..Default::default() }), 1).unwrap();
         let r = a.c.call("group.state.append", parvane_protocol::pb::parvane::group::v2::StateAppendRequest { entry: Some(g.clone()) }.encode_to_vec());

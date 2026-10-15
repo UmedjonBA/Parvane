@@ -74,11 +74,12 @@ impl Server {
     }
 
     fn resolve_group(&self, gid: &[u8]) -> Option<group::GroupState> {
-        let resolve = |k: &[u8; 32]| {
+        let resolve = |k: &[u8; 32], _: u64| {
             self.logs.keys().find_map(|u| {
                 let l = self.log(u);
-                // Подписант — любое когда-либо сертифицированное устройство (упрощённо).
-                l.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })
+                // Подписант — любое когда-либо сертифицированное устройство (упрощённо; так сервер
+                // проводит и запись отозванного устройства — проверка остаётся клиентам).
+                l.key_ever(k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })
             })
         };
         let mut st = None;
@@ -942,4 +943,218 @@ fn contact_access_revocation_excludes_one_peer() {
         matches!(bob.prepare_direct("alice@local", &text("ещё раз")), Err(ClientError::Need(Need::Token { .. }))),
         "без ключа доступа — только анонимный жетон"
     );
+}
+
+// ── ревью движка 7 окт 2026: ENG-04…08 ─────────────────────────────────────────
+
+fn group_perms() -> Permissions {
+    Permissions { send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true, ..Default::default() }
+}
+
+fn rename(name: &str) -> gpb::group_change::Change {
+    gpb::group_change::Change::SetInfo(gpb::SetInfo { name: name.into(), ..Default::default() })
+}
+
+/// Запросы операции (с добором недостающего), без выполнения.
+fn prepare(srv: &mut Server, c: &mut Client, op: &mut dyn FnMut(&mut Client) -> Result<Vec<OutRequest>, ClientError>) -> Vec<OutRequest> {
+    for _ in 0..10 {
+        match op(c) {
+            Ok(reqs) => return reqs,
+            Err(ClientError::Need(n)) => satisfy(srv, c, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    panic!("не сошлось");
+}
+
+/// ENG-08: группа, чьи записи подписало вышедшее устройство, проверяется дальше — и у нового
+/// участника (журнал с нуля), и у участника после экспорта/импорта состояния.
+#[test]
+fn group_survives_signer_device_leaving() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let (mut carol, _) = setup(&mut srv, "carol@local");
+    let mut alice2 = link(&mut srv, &mut alice, "d2");
+    // Группу создаёт и ведёт второе устройство Алисы
+    let (g, req) = alice2.group_create(GroupKind::Group, "Поход", &["bob@local".to_string()], group_perms()).unwrap();
+    exec(&mut srv, &alice2, &[req]);
+    run(&mut srv, &mut alice2, &mut |c| c.group_change(&g.id, rename("Поход в горы")).map(|r| vec![r]).map_err(ClientError::Proto));
+    // Подсказку «чей журнал добрать» для генезиса даёт сервер — здесь журнал добираем сами
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    sync_group(&mut srv, &mut bob, &g.id);
+    assert_eq!(bob.group_state(&g.id).unwrap().name, "Поход в горы");
+    // Устройство выходит из аккаунта
+    let leave = alice2.leave_request().unwrap();
+    exec(&mut srv, &alice2, &[leave]);
+    sync_own_log(&srv, &mut alice);
+    // Первое устройство Алисы добавляет Кэрол: та читает журнал с генезиса
+    sync_group(&mut srv, &mut alice, &g.id);
+    run(&mut srv, &mut alice, &mut |c| c.group_change(&g.id, gpb::group_change::Change::AddMember(gpb::AddMember { member: Some(parvane_protocol::pb::parvane::core::v2::UserRef { address: "carol@local".into() }) })).map(|r| vec![r]).map_err(ClientError::Proto));
+    sync_peer_log(&srv, &mut carol, "alice@local");
+    sync_group(&mut srv, &mut carol, &g.id);
+    let st = carol.group_state(&g.id).expect("новый участник проверил журнал с записями вышедшего устройства");
+    assert!(st.members.contains_key("carol@local"));
+    // Боб узнаёт о выходе устройства, затем восстанавливает состояние из экспорта — группа на месте
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    sync_group(&mut srv, &mut bob, &g.id);
+    let key = [7u8; 32];
+    let restored = Client::import(&bob.export(&key).unwrap(), &key).unwrap();
+    assert_eq!(restored.group_version(&g.id), bob.group_version(&g.id));
+}
+
+/// ENG-08: отозванное устройство не пишет в группу после записи, сославшейся на его отзыв.
+#[test]
+fn revoked_device_cannot_write_after_newer_reference() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    alice.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), 1);
+    let mut alice2 = link(&mut srv, &mut alice, "d2");
+    sync_own_log(&srv, &mut alice2);
+    let (g, req) = alice.group_create(GroupKind::Group, "Семья", &["bob@local".to_string()], group_perms()).unwrap();
+    exec(&mut srv, &alice, &[req]);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    sync_group(&mut srv, &mut alice2, &g.id);
+    // d1 отзывает d2: запись журнала и новая эпоха, сославшаяся на журнал с отзывом
+    advance(11_000);
+    revoke(&mut srv, &mut alice, "d2");
+    // d2 догоняет журнал группы: запись d1 ссылается на журнал с отзывом — d2 узнаёт о нём и
+    // писать в группу не может (ключ в этой версии журнала уже не действует)
+    sync_group(&mut srv, &mut alice2, &g.id);
+    assert!(alice2.group_change(&g.id, rename("Чужое")).is_err());
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    sync_group(&mut srv, &mut bob, &g.id);
+    assert_eq!(bob.group_state(&g.id).unwrap().epoch, 2);
+}
+
+/// ENG-05: сообщение автора ссылается на журнал устройств новее известного — до догона журнала
+/// получатель ему не пишет (сервер не скроет запись отзыва).
+#[test]
+fn author_log_version_forces_catch_up() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let _alice2 = link(&mut srv, &mut alice, "d2");
+    bob.set_peer_delivery_key("alice@local", alice.delivery_key().to_vec(), 1);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("привет")));
+    drain(&mut srv, &mut alice);
+    let known = bob.log_version("alice@local");
+    // Алиса отзывает d2 и пишет Бобу; запись отзыва серверу «не отдаётся» (Боб журнал не синкает)
+    revoke(&mut srv, &mut alice, "d2");
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("я отозвала d2")));
+    let key = (bob.user.clone(), bob.device_id.clone());
+    let recs = srv.inbox.get(&key).cloned().unwrap_or_default();
+    let from = srv.read_upto.get(&key).copied().unwrap_or(0);
+    srv.read_upto.insert(key, recs.len());
+    for r in &recs[from..] {
+        bob.open_record(&r.encode_to_vec()).unwrap();
+    }
+    assert_eq!(bob.log_version("alice@local"), known, "журнал Боб не догонял");
+    assert_eq!(bob.logs_behind().len(), 1);
+    match bob.prepare_direct("alice@local", &text("ответ")) {
+        Err(ClientError::Need(Need::PeerLog { user, after })) => {
+            assert_eq!(user, "alice@local");
+            assert_eq!(after, known);
+        }
+        other => panic!("ждали добора журнала: {other:?}"),
+    }
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(bob.logs_behind().is_empty());
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("ответ")));
+}
+
+/// ENG-06: у участника ушло устройство — своя Megolm-сессия группы сбрасывается, группе нужна
+/// новая эпоха; после неё флаг снимается.
+#[test]
+fn member_device_removal_requires_new_epoch() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    alice.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), 1);
+    let _bob2 = link(&mut srv, &mut bob, "d2");
+    let (g, req) = alice.group_create(GroupKind::Group, "Клуб", &["bob@local".to_string()], group_perms()).unwrap();
+    exec(&mut srv, &alice, &[req]);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("эпоха 1")));
+    assert!(!alice.group_rekey_pending(&g.id));
+    advance(11_000);
+    revoke(&mut srv, &mut bob, "d2");
+    alice.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), bob.delivery_key_generation());
+    sync_peer_log(&srv, &mut alice, "bob@local");
+    assert!(alice.group_rekey_pending(&g.id));
+    assert_eq!(alice.groups_rekey_pending(), vec![g.id.clone()]);
+    // Следующее сообщение раздаёт новую Megolm-сессию (ключ — снова Бобу)
+    let reqs = prepare(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("новая сессия")));
+    assert!(reqs.iter().any(|r| r.method == "msg.deliver_sealed"), "новая сессия раздаётся заново");
+    exec(&mut srv, &alice, &reqs);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    assert!(!alice.group_rekey_pending(&g.id));
+}
+
+/// ENG-07: раздача ключа группы уходит и самому отправителю (даже с одним устройством), а копию
+/// отправитель молча отбрасывает.
+#[test]
+fn group_key_share_includes_cover_to_sender() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, _) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    alice.set_peer_delivery_key("bob@local", bob.delivery_key().to_vec(), 1);
+    let (g, req) = alice.group_create(GroupKind::Group, "Двое", &["bob@local".to_string()], group_perms()).unwrap();
+    exec(&mut srv, &alice, &[req]);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    drain(&mut srv, &mut alice);
+    let reqs = prepare(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("первое")));
+    let to_self = reqs.iter().filter(|r| r.method == "msg.deliver_sealed").any(|r| {
+        let q: mpb::DeliverSealedRequest = decode_checked(&r.body, Origin::Client).unwrap();
+        q.envelopes.iter().any(|e| e.recipient.as_ref().is_some_and(|d| d.address == "alice@local" && d.device_id == "d1"))
+    });
+    assert!(to_self, "копия раздачи этому устройству");
+    exec(&mut srv, &alice, &reqs);
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).iter().all(|(_, t)| t != "первое") || texts(&ev).len() <= 1, "{ev:?}");
+    assert!(texts(&drain(&mut srv, &mut bob)).contains(&("group:alice@local".into(), "первое".into())));
+}
+
+/// ENG-04: вышедшее само устройство-держатель SSK владелец отмечает украденным — SSK раскрыт,
+/// собеседники видят KEY-1 до смены.
+#[test]
+fn left_device_reported_stolen_exposes_ssk() {
+    init_clock();
+    let mut srv = Server::default();
+    let (mut alice, root) = setup(&mut srv, "alice@local");
+    let (mut bob, _) = setup(&mut srv, "bob@local");
+    let mut alice2 = link(&mut srv, &mut alice, "d2");
+    let leave = alice2.leave_request().unwrap();
+    exec(&mut srv, &alice2, &[leave]);
+    sync_own_log(&srv, &mut alice);
+    assert!(!alice.own_ssk_exposed(), "обычный выход SSK не раскрывает");
+    assert_eq!(alice.left_ssk_holders(), vec!["d2".to_string()]);
+    let mut o = None;
+    for _ in 0..10 {
+        match alice.report_device_stolen("d2") {
+            Ok(x) => {
+                o = Some(x);
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            Err(e) => panic!("{e:?}"),
+        }
+    }
+    let o = o.unwrap();
+    exec(&mut srv, &alice, &o.requests);
+    assert!(o.ssk_rotation_required);
+    assert!(alice.own_ssk_exposed());
+    assert!(alice.left_ssk_holders().is_empty());
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(bob.ssk_pending("alice@local"));
+    let reqs = alice.rotate_ssk(&root).unwrap();
+    exec(&mut srv, &alice, &reqs);
+    sync_peer_log(&srv, &mut bob, "alice@local");
+    assert!(!bob.ssk_pending("alice@local"));
 }

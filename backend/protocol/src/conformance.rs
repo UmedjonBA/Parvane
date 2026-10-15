@@ -389,7 +389,7 @@ fn group_log_case(v: &Value, case: &Value) -> Result<(), String> {
     for (key, info) in v.get("signers").and_then(Value::as_object).ok_or("нет signers")? {
         signers.insert(key.clone(), SignerInfo { user: str_field(info, "user")?.into(), root_key: key32(info, "root_hex")? });
     }
-    let resolve = |k: &[u8; 32]| signers.get(&hex::encode(k)).cloned();
+    let resolve = |k: &[u8; 32], _: u64| signers.get(&hex::encode(k)).cloned();
     let mut state: Option<group::GroupState> = None;
     for (i, step) in steps_of(case)?.iter().enumerate() {
         let entry: GroupStateEntry =

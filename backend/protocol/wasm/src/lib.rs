@@ -498,7 +498,38 @@ impl PvClient {
     #[wasm_bindgen(js_name = revokeDevice)]
     pub fn revoke_device(&mut self, device_id: &str) -> Result<JsValue, JsValue> {
         let out = self.inner.revoke_device(device_id).map_err(err_client)?;
-        let strings = |items: Vec<String>| -> JsValue { items.iter().map(|s| JsValue::from_str(s)).collect::<Array>().into() };
+        Ok(revocation_js(&out))
+    }
+
+    /// ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
+    /// `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
+    #[wasm_bindgen(js_name = reportDeviceStolen)]
+    pub fn report_device_stolen(&mut self, device_id: &str) -> Result<JsValue, JsValue> {
+        let out = self.inner.report_device_stolen(device_id).map_err(err_client)?;
+        Ok(revocation_js(&out))
+    }
+
+    /// ENG-04: свои вышедшие сами устройства, державшие SSK (id).
+    #[wasm_bindgen(js_name = leftSskHolders)]
+    pub fn left_ssk_holders(&self) -> Array {
+        self.inner.left_ssk_holders().iter().map(|s| JsValue::from_str(s)).collect()
+    }
+
+    /// ENG-05: пользователи, чьи сообщения сослались на журнал устройств новее известного.
+    #[wasm_bindgen(js_name = logsBehind)]
+    pub fn logs_behind(&self) -> Array {
+        self.inner.logs_behind().into_iter().map(|(u, _)| JsValue::from_str(&u)).collect()
+    }
+
+    /// ENG-06: группы (hex), которым нужна новая эпоха после ухода устройства участника.
+    #[wasm_bindgen(js_name = groupsRekeyPending)]
+    pub fn groups_rekey_pending(&self) -> Array {
+        self.inner.groups_rekey_pending().iter().map(|g| JsValue::from_str(&hex::encode(g))).collect()
+    }
+}
+
+fn revocation_js(out: &parvane_protocol::client::RevocationOutcome) -> JsValue {
+    let strings = |items: Vec<String>| -> JsValue { items.iter().map(|s| JsValue::from_str(s)).collect::<Array>().into() };
         let o = Object::new();
         set(&o, "requests", &reqs_js(&out.requests).into());
         set(&o, "pendingKeyShares", &strings(out.pending_key_shares.clone()));
@@ -508,9 +539,11 @@ impl PvClient {
         if let Some(v) = out.state_key_version {
             set(&o, "stateKeyVersion", &JsValue::from_f64(f64::from(v)));
         }
-        Ok(o.into())
-    }
+    o.into()
+}
 
+#[wasm_bindgen]
+impl PvClient {
     /// Отозвать ключ доступа у собеседника (FR-033; блокировка) →
     /// `{requests, pendingKeyShares: [адрес]}`; пустой `requests` — ключа у
     /// собеседника не было.
@@ -1082,7 +1115,9 @@ impl PvClient {
             .collect();
         Ok(json!({
             "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "migratedFrom": s.migrated_from,
-            "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
+            "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch,
+            // ENG-06: и после ухода устройства участника — новую эпоху начинает тот, кто вправе
+            "epochStale": s.epoch_stale || self.inner.group_rekey_pending(&s.group.id),
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
             // Действующие ссылки с метаданными из журнала (секреты хост хранит сам)

@@ -254,6 +254,30 @@ pub struct DeviceLog {
     /// D-12: отозвано устройство, державшее SSK, а SSK с тех пор не сменён —
     /// собеседники показывают предупреждение KEY-1 до смены.
     pub ssk_exposed: bool,
+    /// ENG-08: когда действовал ключ подписи каждого устройства (по версиям журнала) —
+    /// записи групп проверяются по ключу, действовавшему в версии, на которую они ссылаются.
+    pub eras: Vec<KeyEra>,
+    /// ENG-04: устройства, державшие текущий SSK хотя бы по одному сертификату. Признак
+    /// `no-ssk` в более позднем сертификате (его подписывает тот же держатель) его не снимает.
+    /// Сбрасывается сменой SSK корнем.
+    pub ssk_holders: BTreeSet<String>,
+    /// ENG-04: держатели текущего SSK, вышедшие сами. Выход украденного устройства выглядит так
+    /// же — владелец может повторно отозвать его своей рукой («устройство украдено»), тогда
+    /// SSK считается раскрытым.
+    pub left_holders: BTreeSet<String>,
+}
+
+/// Срок действия ключа подписи устройства: с версии журнала `from` (запись, добавившая
+/// сертификат) до `until` (запись выхода, отзыва или смены SSK), не включая её.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyEra {
+    pub device_id: String,
+    pub key: [u8; 32],
+    pub from: u64,
+    pub until: Option<u64>,
+    /// Ключ перестал действовать по чужой руке (отзыв SSK/корнем), а не выходом самого
+    /// устройства и не сменой SSK.
+    pub revoked: bool,
 }
 
 /// Подписать запись журнала устройств.
@@ -325,6 +349,9 @@ impl DeviceLog {
                     // Сертификаты старого SSK недействительны.
                     self.devices.clear();
                     self.ssk_exposed = false;
+                    self.close_eras(None, entry.version, false);
+                    self.ssk_holders.clear();
+                    self.left_holders.clear();
                 }
                 Change::AddDevice(signed) => {
                     if v.signer != self.ssk {
@@ -354,6 +381,11 @@ impl DeviceLog {
                         return Err(ProtoError::BrokenChain);
                     }
                     self.max_serial.insert(id.clone(), dev.cert.serial);
+                    if holds_ssk(&dev.cert) {
+                        self.ssk_holders.insert(id.clone());
+                    }
+                    self.close_eras(Some(&id), entry.version, false);
+                    self.eras.push(KeyEra { device_id: id.clone(), key: key32(&dev.cert.olm_ed25519)?, from: entry.version, until: None, revoked: false });
                     self.devices.insert(id, dev);
                 }
                 Change::RevokeDeviceId(id) => {
@@ -366,9 +398,17 @@ impl DeviceLog {
                     if !by_itself && v.signer != self.ssk && v.signer != self.root_key {
                         return Err(ProtoError::BadSignature);
                     }
-                    if self.devices.remove(id).is_some_and(|d| holds_ssk(&d.cert)) && !by_itself {
+                    // ENG-04: держатель SSK — по любому сертификату текущего SSK, а не по последнему
+                    // (его `no-ssk` мог поставить сам держатель). Повторный отзыв уже вышедшего
+                    // держателя чужой рукой — «устройство украдено»: SSK раскрыт.
+                    let held = self.devices.remove(id).is_some_and(|d| holds_ssk(&d.cert)) || self.ssk_holders.contains(id);
+                    if held && by_itself {
+                        self.left_holders.insert(id.clone());
+                    } else if held {
                         self.ssk_exposed = true;
+                        self.left_holders.remove(id);
                     }
+                    self.close_eras(Some(id), entry.version, !by_itself);
                     self.revoked.insert(id.clone());
                     if let Some(l) = &mut self.legacy {
                         l.retain(|d| &d.device_id != id);
@@ -398,6 +438,29 @@ impl DeviceLog {
         self.version = entry.version;
         self.head_hash = device_log_hash(op);
         Ok(())
+    }
+
+    fn close_eras(&mut self, device_id: Option<&str>, version: u64, revoked: bool) {
+        for era in self.eras.iter_mut().filter(|e| e.until.is_none() && device_id.is_none_or(|d| d == e.device_id)) {
+            era.until = Some(version);
+            era.revoked = revoked;
+        }
+    }
+
+    /// ENG-08: ключ подписи устройства действовал в версии журнала `version`.
+    pub fn key_active_at(&self, key: &[u8], version: u64) -> bool {
+        self.eras.iter().any(|e| e.key.as_slice() == key && e.from <= version && e.until.is_none_or(|u| version < u))
+    }
+
+    /// ENG-08: запись без версии журнала (до поля `signer_log_version`) — ключ действует сейчас либо
+    /// перестал действовать без чужого отзыва (выход устройства, смена SSK).
+    pub fn key_known_unrevoked(&self, key: &[u8]) -> bool {
+        self.eras.iter().any(|e| e.key.as_slice() == key && !e.revoked)
+    }
+
+    /// Ключ подписи когда-либо принадлежал устройству этого журнала.
+    pub fn key_ever(&self, key: &[u8]) -> bool {
+        self.eras.iter().any(|e| e.key.as_slice() == key)
     }
 
     /// Устройство активно (есть сертификат текущего SSK и не отозвано).
