@@ -2997,6 +2997,16 @@ export interface LangPair {
   'ArticleNoNotes': undefined;
   'ArticleTooLong': undefined;
   'ArticleSendFailed': undefined;
+  'ParvanePrivateGroupInfo': undefined;
+  'ParvanePublicGroupWarning': undefined;
+  'ParvanePublicPreview': undefined;
+  'ParvanePublicHistory': undefined;
+  'ParvanePublicOptionsInfo': undefined;
+  'ParvanePublicNameTaken': undefined;
+  'ParvanePublicNameInvalid': undefined;
+  'ParvanePublicLinkHelp': undefined;
+  'ParvanePublicNameOptional': undefined;
+  'ParvanePublicNameInfo': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

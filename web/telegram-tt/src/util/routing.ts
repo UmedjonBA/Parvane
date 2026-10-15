@@ -56,7 +56,27 @@ function rememberV2InviteFromLocation() {
   window.history.replaceState(window.history.state, '', '/');
 }
 
+// Публичная группа (spec 023): сервер переводит `/@имя` на `/?resolve=<имя>`; имя ждёт синка
+const PUBLIC_NAME_REGEX = /^[A-Za-z][A-Za-z0-9_]{4,31}$/;
+let pendingPublicName: string | undefined;
+
+function rememberPublicNameFromLocation() {
+  const params = new URLSearchParams(window.location.search);
+  const name = params.get('resolve');
+  if (!name || !PUBLIC_NAME_REGEX.test(name)) return;
+  pendingPublicName = name;
+  window.history.replaceState(window.history.state, '', '/');
+}
+
+/** Имя публичной группы из адресной строки — один раз. */
+export function consumePendingPublicName() {
+  const name = pendingPublicName;
+  pendingPublicName = undefined;
+  return name;
+}
+
 rememberV2InviteFromLocation();
+rememberPublicNameFromLocation();
 rememberPendingInvite(initialLocationHash);
 
 // Вставка `#+<токен>` в адрес уже открытой вкладки меняет только хэш —

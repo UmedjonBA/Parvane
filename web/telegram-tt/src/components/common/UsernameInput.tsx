@@ -21,10 +21,10 @@ type OwnProps = {
   isLoading?: boolean;
   isUsernameAvailable?: boolean;
   checkedUsername?: string;
+  // Parvane (spec 023): начало публичной ссылки вместо `https://t.me/`
+  linkPrefix?: string;
   onChange: (value: string) => void;
 };
-
-const LINK_PREFIX_REGEX = /https:\/\/t\.me\/?/i;
 
 const runDebouncedForCheckUsername = debounce((cb) => cb(), 250, false);
 
@@ -34,11 +34,15 @@ const UsernameInput: FC<OwnProps> = ({
   isLoading,
   isUsernameAvailable,
   checkedUsername,
+  linkPrefix = TME_LINK_PREFIX,
   onChange,
 }) => {
   const { checkUsername, checkPublicLink } = getActions();
   const [username, setUsername] = useState(currentUsername || '');
 
+  const linkPrefixRegex = useMemo(() => (
+    new RegExp(`^${linkPrefix.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}?`, 'i')
+  ), [linkPrefix]);
   const lang = useOldLang();
   const langPrefix = asLink ? 'SetUrl' : 'Username';
   const label = asLink ? lang('SetUrlPlaceholder') : lang('Username');
@@ -81,14 +85,14 @@ const UsernameInput: FC<OwnProps> = ({
   const handleUsernameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.trim();
     // Prevent prefix editing
-    if (asLink && !value.match(LINK_PREFIX_REGEX)) {
+    if (asLink && !value.match(linkPrefixRegex)) {
       if (!value.length) {
         setUsername('');
         onChange?.('');
       }
       return;
     }
-    const newUsername = value.replace(LINK_PREFIX_REGEX, '');
+    const newUsername = value.replace(linkPrefixRegex, '');
 
     setUsername(newUsername);
 
@@ -103,11 +107,11 @@ const UsernameInput: FC<OwnProps> = ({
         check({ username: newUsername });
       }
     });
-  }, [asLink, checkPublicLink, checkUsername, currentUsername, onChange]);
+  }, [asLink, checkPublicLink, checkUsername, currentUsername, linkPrefixRegex, onChange]);
 
   return (
     <InputText
-      value={`${asLink ? TME_LINK_PREFIX : ''}${username}`}
+      value={`${asLink ? linkPrefix : ''}${username}`}
       onChange={handleUsernameChange}
       label={isChecking ? lang('Checking') : label}
       error={usernameError}

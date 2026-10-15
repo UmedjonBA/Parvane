@@ -61,6 +61,10 @@
 	@v2invite path_regexp v2invite ^/join/([A-Za-z0-9_-]{43})$
 	redir @v2invite /?join={re.v2invite.1} 302
 
+	# Публичная группа `/@имя` (spec 023): приложение откроет её по `?resolve=` (то же — плагин vite)
+	@publicname path_regexp publicname ^/@([A-Za-z][A-Za-z0-9_]{4,31})$
+	redir @publicname /?resolve={re.publicname.1} 302
+
 	# Ссылка на файлы облака для людей без аккаунта `/s/<link_id>#k=<ключ>`
 	# (spec 022): публичная страница — отдельный вход сборки `s.html`.
 	# Идентификатор — ровно 22 знака base64url, иное сюда не попадает; ключ во

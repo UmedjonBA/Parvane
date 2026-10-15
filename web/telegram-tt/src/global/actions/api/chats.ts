@@ -782,7 +782,7 @@ addActionHandler('updateTopicMutedState', (global, actions, payload): ActionRetu
 
 addActionHandler('createChannel', async (global, actions, payload): Promise<void> => {
   const {
-    title, about, photo, memberIds, discussionChannelId, isJoinRequestNeeded, tabId = getCurrentTabId(),
+    title, about, photo, memberIds, discussionChannelId, isJoinRequestNeeded, publicName, tabId = getCurrentTabId(),
   } = payload;
   const isChannel = 'isChannel' in payload ? payload.isChannel : undefined;
   const isSuperGroup = 'isSuperGroup' in payload ? payload.isSuperGroup : undefined;
@@ -807,6 +807,7 @@ addActionHandler('createChannel', async (global, actions, payload): Promise<void
       isBroadcast: isChannel,
       isMegagroup: isSuperGroup,
       isJoinRequestNeeded,
+      publicName,
     });
     createdChannel = result?.channel;
     missingInvitedUsers = result?.missingUsers;
@@ -1124,7 +1125,7 @@ addActionHandler('deleteChannel', (global, actions, payload): ActionReturnType =
 
 addActionHandler('createGroupChat', async (global, actions, payload): Promise<void> => {
   const {
-    title, memberIds, photo, isJoinRequestNeeded, tabId = getCurrentTabId(),
+    title, memberIds, photo, isJoinRequestNeeded, publicName, tabId = getCurrentTabId(),
   } = payload;
   const users = (memberIds)
     .map((id) => selectUser(global, id))
@@ -1142,6 +1143,7 @@ addActionHandler('createGroupChat', async (global, actions, payload): Promise<vo
       title,
       users,
       isJoinRequestNeeded,
+      publicName,
     }) ?? {};
 
     if (!createdChat) {

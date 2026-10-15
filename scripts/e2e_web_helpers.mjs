@@ -1076,6 +1076,10 @@ export async function createGroupViaUi(page, title, memberNames, options = {}) {
   const nameInput = page.getByLabel('Group name').locator('visible=true').first();
   await nameInput.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await nameInput.fill(title);
+  if (options.publicName) {
+    // Публичное имя (spec 023): группа сразу публичная
+    await page.locator('#new-chat-public-name').locator('visible=true').first().fill(options.publicName);
+  }
   if (options.isJoinRequestNeeded) {
     // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи
     await page.getByText('Join by request', { exact: true }).locator('visible=true').first().click();

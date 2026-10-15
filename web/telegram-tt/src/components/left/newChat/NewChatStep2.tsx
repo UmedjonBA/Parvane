@@ -21,7 +21,10 @@ import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
 import ListItem from '../../ui/ListItem';
 
-export type OwnProps = {
+export // Публичное имя группы (spec 023): как ник — 5–32, латиница, цифры, `_`, с буквы
+const PUBLIC_NAME_REGEX = /^[A-Za-z][A-Za-z0-9_]{4,31}$/;
+
+type OwnProps = {
   isChannel?: boolean;
   isActive: boolean;
   memberIds: string[];
@@ -66,6 +69,8 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
   const [about, setAbout] = useState('');
   // Parvane: как вступают в новую группу или канал — по ссылке сразу либо по заявке
   const [isJoinRequestNeeded, setIsJoinRequestNeeded] = useState(false);
+  // Parvane (spec 023): публичное имя — группа сразу публичная (пусто — частная)
+  const [publicName, setPublicName] = useState('');
   const [photo, setPhoto] = useState<File | undefined>();
   const [error, setError] = useState<string | undefined>();
 
@@ -113,6 +118,10 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
     setAbout(e.currentTarget.value);
   }, []);
 
+  const handlePublicNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setPublicName(e.currentTarget.value.trim().replace(/^@/, ''));
+  }, []);
+
   const handleCreateGroup = useCallback(() => {
     if (!title.length) {
       setError(chatTitleEmptyError);
@@ -129,8 +138,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
       photo,
       memberIds,
       isJoinRequestNeeded,
+      publicName: publicName || undefined,
     });
-  }, [title, memberIds, maxGroupSize, createGroupChat, photo, isJoinRequestNeeded]);
+  }, [title, memberIds, maxGroupSize, createGroupChat, photo, isJoinRequestNeeded, publicName]);
 
   const handleCreateChannel = useCallback(() => {
     if (!title.length) {
@@ -145,8 +155,9 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
       memberIds,
       isChannel: true,
       isJoinRequestNeeded,
+      publicName: publicName || undefined,
     });
-  }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded]);
+  }, [title, createChannel, about, photo, memberIds, channelTitleEmptyError, isJoinRequestNeeded, publicName]);
 
   // Parvane: отметка «создано» снимается здесь же, а колонка сбрасывается, только пока мастер на экране:
   // иначе подтверждение, пришедшее позже, закрывало только что открытый «Профиль»
@@ -199,6 +210,15 @@ const NewChatStep2: FC<OwnProps & StateProps> = ({
             <p className="note">{lang('DescriptionInfo')}</p>
           </>
         )}
+
+        <InputText
+          id="new-chat-public-name"
+          value={publicName}
+          onChange={handlePublicNameChange}
+          label={lang('ParvanePublicNameOptional')}
+          error={publicName && !PUBLIC_NAME_REGEX.test(publicName) ? lang('ParvanePublicNameInvalid') : undefined}
+        />
+        <p className="note">{lang(publicName ? 'ParvanePublicGroupWarning' : 'ParvanePublicNameInfo')}</p>
 
         <Checkbox
           label={lang('ParvaneJoinByRequest')}

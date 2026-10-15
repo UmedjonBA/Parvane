@@ -1701,6 +1701,8 @@ const methods = {
       chats.push(store.buildApiChatForUser(address));
     });
     store.getGroupAddresses().forEach((address) => {
+      // Превью публичной группы (не участник) в список чатов не входит
+      if (store.isPublicPreview(store.getGroupInfo(address)!)) return;
       chats.push(store.buildApiChatForGroup(store.getGroupInfo(address)!));
     });
 
@@ -1859,6 +1861,8 @@ const methods = {
     chat, limit, offsetId, addOffset,
   }: { chat: ApiChat; limit: number; offsetId?: number; addOffset?: number }) {
     await syncController.ensureSynced();
+    // Превью публичной группы (spec 023): лента приходит событиями после загрузки
+    if (groupController.isPublicPreview(chat.id)) void groupController.loadPublicPreview(chat.id);
     const history = store.getMessages(chat.id);
     const newestFirst = history.slice().reverse();
     let start = 0;
@@ -2250,7 +2254,31 @@ const methods = {
       syncController.announcePeer(u.username);
       globalResultIds.push(store.getIdForAddress(u.username));
     });
+    // Публичные группы и каналы каталога (spec 023)
+    globalResultIds.push(...await groupController.searchPublicGroups(query));
     return { accountResultIds: [], globalResultIds };
+  },
+
+  // ── публичные группы (spec 023) ──
+  checkChatUsername: ({ username }: { username: string }) => groupController.checkChatUsername({ username }),
+  setChatUsername: ({ chat, username }: { chat: ApiChat; username: string }) => (
+    groupController.setChatUsername({ chat, username })
+  ),
+  // Имя у группы одно — снимает его `setChatUsername('')`
+  deactivateAllUsernames: () => Promise.resolve(true),
+  parvaneGetPublicOptions: (args: { chatId: string }) => groupController.getPublicOptions(args),
+  parvaneSetPublicOptions: (args: { chatId: string; isPreview: boolean; isHistory: boolean }) => (
+    groupController.setPublicOptions(args)
+  ),
+  // «Вступить / Подписаться» в превью публичной группы
+  async joinChannel({ channelId }: { channelId: string; accessHash?: string }) {
+    await groupController.joinPublicGroup(channelId);
+    return undefined;
+  },
+  // `@имя` публичной группы: чат участника либо превью с «Вступить»
+  async getChatByUsername(username: string) {
+    const chat = await groupController.resolvePublicChat(username);
+    return chat ? { chat, user: undefined } : undefined;
   },
 
   // chatId пользователя по ТОЧНОМУ адресу (поиск identity — подстрочный, и

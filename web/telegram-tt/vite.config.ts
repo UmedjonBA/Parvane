@@ -356,6 +356,7 @@ function gatewayOrigins(appEnv: string) {
 // сервер переводит её на корень — `/?join=<link_id>`; фрагмент с секретом
 // браузер переносит сам, серверу он не уходит. То же правило — в Caddyfile прода.
 const V2_INVITE_PATH = /^\/join\/([A-Za-z0-9_-]{43})$/;
+const PUBLIC_NAME_PATH = /^\/@([A-Za-z][A-Za-z0-9_]{4,31})$/;
 
 function buildAppBuildId() {
   try {
@@ -397,13 +398,16 @@ function v2InviteRedirectPlugin(): Plugin {
     statusCode: number; setHeader: (name: string, value: string) => void; end: () => void;
   }, next: () => void) => void) => void; };
   const install = (middlewares: Middlewares) => middlewares.use((req, res, next) => {
-    const linkId = (req.url || '').split('?')[0].match(V2_INVITE_PATH)?.[1];
-    if (!linkId) {
+    const path = (req.url || '').split('?')[0];
+    const linkId = path.match(V2_INVITE_PATH)?.[1];
+    // Публичная группа (spec 023): `/@имя` → `/?resolve=<имя>` (как в Caddyfile)
+    const publicName = path.match(PUBLIC_NAME_PATH)?.[1];
+    if (!linkId && !publicName) {
       next();
       return;
     }
     res.statusCode = 302;
-    res.setHeader('Location', `/?join=${linkId}`);
+    res.setHeader('Location', linkId ? `/?join=${linkId}` : `/?resolve=${publicName}`);
     res.end();
   });
   return {

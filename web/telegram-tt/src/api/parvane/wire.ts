@@ -186,6 +186,10 @@ export type WireGroupInfo = {
   pending_requests?: number;
   // Группа v2, переведённая из v1 (T180): прежний `group_id` — тот же чат в UI
   migrated_from?: string;
+  // Публичная группа (spec 023): имя и настройки админа
+  public_name?: string;
+  public_preview?: boolean;
+  public_history?: boolean;
 };
 
 // Инвайт-ссылка группы (group.invite.list / group.invite.create)

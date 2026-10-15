@@ -412,10 +412,9 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             // Вступающий по ссылке (D-04): журнал нужен до вступления, чтобы
             // подписать JoinByInvite над головой. link_id — только у держателя
             // ссылки; забаненному и по недействительной ссылке — отказ.
-            let is_public_link = crate::v2_public::public_link_id(&s).is_some_and(|id| id.as_slice() == r.invite_link_id.as_slice());
-            let by_link = !r.invite_link_id.is_empty()
-                && !s.banned.contains(&user)
-                && (is_public_link || invite_link_valid(&s, &r.invite_link_id));
+            // Публичная группа (spec 023): журнал открыт любому незабаненному — секрет и так в каталоге
+            let by_link = !s.banned.contains(&user)
+                && (s.public.is_some() || (!r.invite_link_id.is_empty() && invite_link_valid(&s, &r.invite_link_id)));
             if !is_member(&s, &user) && was.is_none() && !s.banned.contains(&user) && !by_link {
                 return Err(ErrorCode::Forbidden);
             }

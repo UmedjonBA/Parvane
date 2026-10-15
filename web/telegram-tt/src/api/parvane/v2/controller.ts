@@ -146,6 +146,16 @@ type EngineGroupInfo = {
   // Политика «усиленная приватность» (L2) и кто задал её последним
   l2?: boolean;
   l2By?: string;
+  // Публичная группа (spec 023): имя и настройки админа
+  publicName?: string | null;
+  publicPreview?: boolean;
+  publicHistory?: boolean;
+};
+
+/** Карточка каталога публичных групп (`group.public.*`). */
+export type V2PublicCard = {
+  name: string; kind?: string; title?: string; about?: string; avatar_file_id?: string; members?: number;
+  preview?: boolean; history?: boolean; group?: { domain?: string; id?: string };
 };
 
 /** Устройство v2 в ручной копии ключей (перенос устройства на другой браузер). */
@@ -2695,6 +2705,9 @@ export function createV2Controller(deps: Deps) {
       version: Number(g.version),
       pending_requests: pendingRequests.get(hex) || undefined,
       migrated_from: g.migratedFrom || undefined,
+      public_name: g.publicName || undefined,
+      public_preview: g.publicName ? Boolean(g.publicPreview) : undefined,
+      public_history: g.publicName ? Boolean(g.publicHistory) : undefined,
     };
   }
 
@@ -3295,10 +3308,11 @@ export function createV2Controller(deps: Deps) {
         return false;
       }
       deps.log(`v2: заявка ${user} в группу ${hex} — ${approve ? 'одобрена' : 'отклонена'}`);
-      // Новый участник — ключи прежней эпохи ему не отдаются, нужна новая
+      // Новый участник — ключи прежней эпохи ему не отдаются, нужна новая. «Рано» (эпоха меньше 10 с назад) —
+      // эпоха откладывается в фон: ждать её здесь значило бы держать решение по заявке 11 с
       if (approve && readGroup(hex)?.epochStale && canRotate(hex)) {
-        await rotateEpoch(hex).catch((e: unknown) => {
-          deps.log(`v2: новая эпоха после одобрения заявки не начата: ${String(e)}`);
+        await rotateEpochOnce(hex).catch((e: unknown) => {
+          deps.log(`v2: новая эпоха после одобрения заявки отложена: ${String(e)}`);
           scheduleRotate(hex, EPOCH_RETRY_MS);
         });
       }
@@ -3411,6 +3425,140 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: вступление по ссылке не удалось: ${String(e)}`);
       return { status: 'error', code: inviteErrorCode(e) };
     }
+  }
+
+  // ── публичные группы (spec 023) ───────────────────────────────────────────
+
+  async function publicCall<T>(method: string, request: Record<string, unknown>): Promise<T> {
+    // `@имя` из адресной строки обрабатывается сразу после синка — движок может ещё подниматься
+    if (!ready && starting) await starting.catch(() => undefined);
+    if (!ready || !pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify(request)));
+    return JSON.parse(pv.decodeMethodResponse(method, resp)) as T;
+  }
+
+  /** Свободно ли публичное имя: `reason` — taken | format | reserved. */
+  async function checkPublicName(name: string) {
+    return publicCall<{ available?: boolean; reason?: string }>('group.public.check_name', { name });
+  }
+
+  async function searchPublic(query: string) {
+    const r = await publicCall<{ groups?: V2PublicCard[] }>('group.public.search', { query, limit: 20 });
+    return r.groups || [];
+  }
+
+  /** Публичная группа по имени: карточка и открытый секрет (hex). */
+  async function resolvePublic(name: string) {
+    try {
+      const r = await publicCall<{ card?: V2PublicCard; secret?: string }>('group.public.resolve', { name });
+      if (!r.card?.group?.id || !r.secret) return undefined;
+      return { card: r.card, hex: b64ToHex(r.card.group.id), secretHex: b64ToHex(r.secret) };
+    } catch (e) {
+      if (e instanceof V2Error && e.code === 'ERROR_CODE_NOT_FOUND') return undefined;
+      throw e;
+    }
+  }
+
+  /**
+   * Сделать группу публичной (имя, настройки) либо снова частной. Новый секрет устаревает эпоху — владелец
+   * (админ) сразу начинает новую: её ключи ложатся комплектом в журнал.
+   */
+  async function setGroupPublic(address: string, params: {
+    isPublic: boolean; name?: string; preview?: boolean; history?: boolean;
+  }): Promise<'ok' | 'taken' | 'invalid' | 'failed'> {
+    if (!ready || !client || !isV2GroupAddress(address)) return 'failed';
+    const hex = groupHex(address);
+    return serial(async () => {
+      let req: OutReq;
+      try {
+        req = client!.groupSetPublic(
+          hex, params.isPublic, params.name || '', Boolean(params.preview), Boolean(params.history),
+        ) as OutReq;
+      } catch (e) {
+        deps.log(`v2: публичность группы отклонена движком: ${String(e)}`);
+        return 'invalid';
+      }
+      try {
+        await call(req.chan, req.method, req.body);
+      } catch (e) {
+        deps.log(`v2: публичность группы отклонена сервером: ${String(e)}`);
+        await resyncGroup(hex);
+        if (e instanceof V2Error && e.code === 'ERROR_CODE_DUPLICATE') return 'taken';
+        return e instanceof V2Error && e.code === 'ERROR_CODE_INVALID' ? 'invalid' : 'failed';
+      }
+      if (readGroup(hex)?.epochStale && canRotate(hex)) {
+        await rotateEpoch(hex).catch((e: unknown) => {
+          deps.log(`v2: новая эпоха публичной группы не начата: ${String(e)}`);
+          scheduleRotate(hex, EPOCH_RETRY_MS);
+        });
+      }
+      await persistUrgent();
+      publishGroup(hex);
+      return 'ok';
+    });
+  }
+
+  /** Журнал публичной группы для не-участника (превью); сведения — из подписанного журнала. */
+  async function loadPublicGroup(hex: string) {
+    return serial(async () => {
+      await syncGroup(hex);
+      const g = readGroup(hex);
+      return g ? toWireGroupInfo(hex, g) : undefined;
+    });
+  }
+
+  /** Вступить в публичную группу по открытому секрету из каталога. */
+  async function joinPublic(hex: string, secretHex: string): Promise<WireGroupInfo | undefined> {
+    if (!ready || !client) return undefined;
+    return serial(async () => {
+      await syncGroup(hex);
+      const req = client!.groupJoinPublic(hex, secretHex) as OutReq;
+      try {
+        await call(req.chan, req.method, req.body);
+      } catch (e) {
+        await resyncGroup(hex).catch(() => undefined);
+        throw e;
+      }
+      await persistUrgent();
+      deps.log(`v2: вступление в публичную группу ${hex}`);
+      publishedGroups.add(groupAddress(hex));
+      const info = toWireGroupInfo(hex, readGroup(hex)!);
+      saveGroupCache(info, true);
+      return info;
+    });
+  }
+
+  /**
+   * История публичной группы (участнику — по настройке «История», постороннему — превью): конверты открываются
+   * движком и идут в UI обычными событиями. Возвращает, есть ли ещё и самый старый seq.
+   */
+  async function publicHistory(address: string, beforeSeq = 0) {
+    if (!ready || !client || !pv || !isV2GroupAddress(address)) return undefined;
+    const hex = groupHex(address);
+    const method = 'group.public.history';
+    const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify({
+      group: { domain: serverDomain, id: hexToB64(hex) }, before_seq: String(beforeSeq), limit: 50,
+    })));
+    const more = Boolean((JSON.parse(pv.decodeMethodResponse(method, resp)) as { more?: boolean }).more);
+    const items = client.publicHistoryItems(resp) as { seq: number; envelope: Uint8Array }[];
+    let opened = 0;
+    // Старые раньше: место сообщения в ленте задаёт время, но так меньше перестановок
+    for (const item of [...items].reverse()) {
+      try {
+        const events = await serial(() => withNeeds(() => {
+          if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+          return JSON.parse(client.groupOpenEnvelope(item.envelope)) as EngineEvent[];
+        }));
+        for (const ev of events) {
+          await applyEvent(ev);
+          opened++;
+        }
+      } catch (e) {
+        deps.log(`v2: сообщение истории публичной группы не открыто: ${String(e)}`);
+      }
+    }
+    const oldest = items.length ? Math.min(...items.map(({ seq }) => seq)) : 0;
+    return { opened, more, oldest };
   }
 
   // ── журнал личного состояния (T098): хост — stateJournal.ts ─────────────────
@@ -3632,6 +3780,13 @@ export function createV2Controller(deps: Deps) {
     createInvite,
     groupInfo,
     joinByInvite,
+    checkPublicName,
+    searchPublic,
+    resolvePublic,
+    setGroupPublic,
+    loadPublicGroup,
+    joinPublic,
+    publicHistory,
     listInvites,
     allInvites,
     mergeSharedInvites,

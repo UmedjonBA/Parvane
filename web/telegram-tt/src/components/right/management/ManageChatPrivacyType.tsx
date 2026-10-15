@@ -15,6 +15,7 @@ import {
   selectManagement, selectTabState, selectUser,
 } from '../../../global/selectors';
 import { selectCurrentLimit } from '../../../global/selectors/limits';
+import { callApi } from '../../../api/gramjs';
 
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
@@ -36,6 +37,19 @@ import ListItem from '../../ui/ListItem';
 import Loading from '../../ui/Loading';
 import Modal from '../../ui/Modal';
 import RadioGroup from '../../ui/RadioGroup';
+
+// Parvane (spec 023): приватной ссылки на этом экране нет (ссылки — экран «Ссылки-приглашения»), коллекционных
+// имён, бота-привратника и запрета пересылки — тоже
+const IS_PRIVATE_LINK_SUPPORTED = false;
+const IS_USERNAMES_MANAGE_SUPPORTED = false;
+const IS_JOIN_GUARD_SUPPORTED = false;
+const IS_FORWARDING_SUPPORTED = false;
+// Публичная ссылка группы: адрес этого сервера и `@имя`
+const PUBLIC_LINK_PREFIX = `${window.location.origin}/@`;
+
+type PublicOptions = { isPreview?: boolean; isHistory?: boolean };
+
+const callParvane = callApi as unknown as (method: string, args?: unknown) => Promise<unknown>;
 
 type PrivacyType = 'private' | 'public';
 
@@ -131,10 +145,36 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   }, [chat.id, areInvitesLoaded]);
 
   useEffect(() => {
-    if (privacyType && !privateInviteLink) {
+    if (IS_PRIVATE_LINK_SUPPORTED && privacyType && !privateInviteLink) {
       updatePrivateLink();
     }
   }, [privacyType, privateInviteLink, updatePrivateLink]);
+
+  // Настройки публичной группы (spec 023): «Читать без вступления», «История для новых участников»
+  const [publicOptions, setPublicOptions] = useState<PublicOptions>({});
+  useEffect(() => {
+    if (!isPublic) return;
+    void (callParvane('parvaneGetPublicOptions', { chatId: chat.id }) as Promise<PublicOptions | undefined>)
+      .then((options) => setPublicOptions(options || {}));
+  }, [chat.id, isPublic]);
+
+  const savePublicOptions = useLastCallback((next: PublicOptions) => {
+    const previous = publicOptions;
+    setPublicOptions(next);
+    void (callParvane('parvaneSetPublicOptions', {
+      chatId: chat.id, isPreview: Boolean(next.isPreview), isHistory: Boolean(next.isHistory),
+    }) as Promise<boolean>).then((isDone) => {
+      if (!isDone) setPublicOptions(previous);
+    });
+  });
+
+  const handlePreviewChange = useLastCallback((isChecked: boolean) => {
+    savePublicOptions({ ...publicOptions, isPreview: isChecked });
+  });
+
+  const handleHistoryChange = useLastCallback((isChecked: boolean) => {
+    savePublicOptions({ ...publicOptions, isHistory: isChecked });
+  });
 
   const handleUsernameChange = useCallback((value: string) => {
     setEditableUsername(value);
@@ -270,7 +310,11 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             onChange={handleOptionChange}
           />
         </Island>
-        {privacyType === 'private' ? (
+        {privacyType === 'private' && !IS_PRIVATE_LINK_SUPPORTED ? (
+          <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+            {lang('ParvanePrivateGroupInfo')}
+          </IslandDescription>
+        ) : privacyType === 'private' ? (
           <>
             <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
               {oldLang('InviteLink.InviteLink')}
@@ -305,6 +349,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
               <div className="settings-input">
                 <UsernameInput
                   asLink
+                  linkPrefix={PUBLIC_LINK_PREFIX}
                   currentUsername={currentUsername}
                   isLoading={isLoading}
                   isUsernameAvailable={isUsernameAvailable}
@@ -315,18 +360,44 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             </Island>
             {error === USERNAME_PURCHASE_ERROR && renderPurchaseLink()}
             <IslandDescription dir="auto">
-              {oldLang(`${langPrefix2}.Username.CreatePublicLinkHelp`)}
+              {lang('ParvanePublicLinkHelp')}
             </IslandDescription>
+            <IslandDescription dir="auto" data-public-warning>
+              {lang('ParvanePublicGroupWarning')}
+            </IslandDescription>
+            {isPublic && (
+              <>
+                <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+                  <SwitchField
+                    checked={Boolean(publicOptions.isPreview)}
+                    onChange={handlePreviewChange}
+                    label={lang('ParvanePublicPreview')}
+                    data-public-option="preview"
+                    teactExperimentControlled
+                  />
+                  <SwitchField
+                    checked={Boolean(publicOptions.isHistory)}
+                    onChange={handleHistoryChange}
+                    label={lang('ParvanePublicHistory')}
+                    data-public-option="history"
+                    teactExperimentControlled
+                  />
+                </Island>
+                <IslandDescription dir="auto">
+                  {lang('ParvanePublicOptionsInfo')}
+                </IslandDescription>
+              </>
+            )}
           </>
         )}
-        {shouldRenderUsernamesManage && (
+        {IS_USERNAMES_MANAGE_SUPPORTED && shouldRenderUsernamesManage && (
           <ManageUsernames
             chatId={chat.id}
             usernames={chat.usernames!}
             onEditUsername={handleUsernameChange}
           />
         )}
-        {!(isChannel && isPublic) && (
+        {IS_JOIN_GUARD_SUPPORTED && !(isChannel && isPublic) && (
           <>
             <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
               {oldLang('MemberRequests')}
@@ -349,22 +420,28 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             </IslandDescription>
           </>
         )}
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
-          {oldLang(isChannel ? 'ChannelVisibility.Forwarding.ChannelTitle' : 'ChannelVisibility.Forwarding.GroupTitle')}
-        </IslandTitle>
-        <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
-          <RadioGroup
-            selected={isProtected ? 'protected' : 'allowed'}
-            name="forwarding-type"
-            options={forwardingOptions}
-            onChange={handleForwardingOptionChange}
-          />
-        </Island>
-        <IslandDescription>
-          {isChannel
-            ? oldLang('ChannelVisibility.Forwarding.ChannelInfo')
-            : oldLang('ChannelVisibility.Forwarding.GroupInfo')}
-        </IslandDescription>
+        {IS_FORWARDING_SUPPORTED && (
+          <>
+            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
+              {oldLang(isChannel
+                ? 'ChannelVisibility.Forwarding.ChannelTitle'
+                : 'ChannelVisibility.Forwarding.GroupTitle')}
+            </IslandTitle>
+            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+              <RadioGroup
+                selected={isProtected ? 'protected' : 'allowed'}
+                name="forwarding-type"
+                options={forwardingOptions}
+                onChange={handleForwardingOptionChange}
+              />
+            </Island>
+            <IslandDescription>
+              {isChannel
+                ? oldLang('ChannelVisibility.Forwarding.ChannelInfo')
+                : oldLang('ChannelVisibility.Forwarding.GroupInfo')}
+            </IslandDescription>
+          </>
+        )}
       </div>
       <FloatingActionButton
         isShown={canUpdate}

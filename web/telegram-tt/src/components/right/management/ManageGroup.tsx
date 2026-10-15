@@ -46,6 +46,8 @@ import './Management.scss';
 // вступление — на сервере; тип группы, привязанный канал, реакции, форумы и
 // скрытие истории — вне контракта, эти пункты остаются скрытыми
 const IS_GROUP_EXTRA_SETTINGS_SUPPORTED = false;
+// Публичная группа (spec 023): тип «Публичная/Частная» с именем
+const IS_GROUP_TYPE_SUPPORTED = true;
 const IS_GROUP_PHOTO_SUPPORTED = true;
 const IS_GROUP_DESCRIPTION_SUPPORTED = true;
 const IS_GROUP_PERMISSIONS_SUPPORTED = true;
@@ -385,7 +387,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               />
             )}
           </div>
-          {IS_GROUP_EXTRA_SETTINGS_SUPPORTED && chat.isCreator && (
+          {IS_GROUP_TYPE_SUPPORTED && chat.isCreator && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('GroupType')}</span>
               <span className="subtitle">{isPublicGroup ? lang('TypePublic') : lang('TypePrivate')}</span>

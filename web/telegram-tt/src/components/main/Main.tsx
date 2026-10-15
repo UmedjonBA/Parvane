@@ -59,6 +59,7 @@ import { getKnowledgeView, getParvaneSection } from '../../util/parvaneSection';
 import { isUploadedWallpaper } from '../../util/parvaneWallpaper';
 import {
   consumePendingInvite,
+  consumePendingPublicName,
   getInitialLocationHash,
   parseInitialLocationHash,
   parseLocationHash,
@@ -466,6 +467,16 @@ const Main = ({
     return () => window.removeEventListener('parvane-ssk-rotation', handleSskRotation);
   }, [showNotification]);
 
+  // Публичное имя группы не сохранено (spec 023): занято либо недопустимо
+  useEffect(() => {
+    const handlePublicNameError = (event: Event) => {
+      const { reason } = (event as CustomEvent<{ reason: string }>).detail;
+      showNotification({ message: lang(reason === 'taken' ? 'ParvanePublicNameTaken' : 'ParvanePublicNameInvalid') });
+    };
+    window.addEventListener('parvane-public-name-error', handlePublicNameError);
+    return () => window.removeEventListener('parvane-public-name-error', handlePublicNameError);
+  }, [lang, showNotification]);
+
   // Напоминание «Плана» наступило, приложение открыто (этап 4 плана 15 окт 2026)
   useEffect(() => {
     const handleReminder = (event: Event) => {
@@ -675,6 +686,13 @@ const Main = ({
     if (pendingInvite) {
       resetLocationHash();
       checkChatInvite({ hash: pendingInvite });
+      return;
+    }
+
+    // Parvane: `<origin>/@имя` — публичная группа (spec 023)
+    const publicName = consumePendingPublicName();
+    if (publicName) {
+      openChatByUsername({ username: publicName });
       return;
     }
 

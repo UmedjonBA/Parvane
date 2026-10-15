@@ -4021,3 +4021,13 @@
 "ArticleNoNotes" = "No notes yet — create them in Knowledge";
 "ArticleTooLong" = "The note is too long for an article (over 65,000 characters)";
 "ArticleSendFailed" = "Could not send the article";
+"ParvanePrivateGroupInfo" = "Only people with an invite link can join. Links are on the «Invite Links» screen.";
+"ParvanePublicGroupWarning" = "Anyone can find a public group by its name and join it. Its messages can be read by anyone who joins, including technically the server: do not post anything private here. Personal chats and private groups stay end-to-end encrypted.";
+"ParvanePublicPreview" = "Read without joining";
+"ParvanePublicHistory" = "History for new members";
+"ParvanePublicOptionsInfo" = "These settings decide what Parvane shows: the feed before joining and earlier messages to those who join.";
+"ParvanePublicNameTaken" = "This name is already taken";
+"ParvanePublicNameInvalid" = "This name can't be used";
+"ParvanePublicLinkHelp" = "People can find the group by this name in search and open it at this link.";
+"ParvanePublicNameOptional" = "Public name (optional)";
+"ParvanePublicNameInfo" = "With a public name the group can be found in search and joined without an invitation. You can set it later in the group settings.";

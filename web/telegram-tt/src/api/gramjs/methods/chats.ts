@@ -886,6 +886,8 @@ export async function createChannel({
   title: string; about?: string; users?: ApiUser[]; isBroadcast?: true; isMegagroup?: true;
   // Parvane: вступление по заявке — читает провайдер Parvane
   isJoinRequestNeeded?: boolean;
+  // Parvane (spec 023): публичное имя — провайдер Parvane делает группу публичной
+  publicName?: string;
 }) {
   const result = await invokeRequest(new GramJs.channels.CreateChannel({
     broadcast: isBroadcast,
@@ -1083,6 +1085,8 @@ export async function createGroupChat({
   title: string; users: ApiUser[];
   // Parvane: вступление по заявке — читает провайдер Parvane
   isJoinRequestNeeded?: boolean;
+  // Parvane (spec 023): публичное имя — провайдер Parvane делает группу публичной
+  publicName?: string;
 }) {
   const invitedUsers = await invokeRequest(new GramJs.messages.CreateChat({
     title,

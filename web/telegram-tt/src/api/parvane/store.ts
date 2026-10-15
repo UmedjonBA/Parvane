@@ -75,6 +75,7 @@ export class ParvaneStore {
   private contactAddresses = new Set<string>();
 
   private groupInfoByAddress = new Map<string, WireGroupInfo>();
+  private publicMembers = new Map<string, number>();
 
   // Ревизия сведений группы (GROUP-1): применять только не старее известной
   private groupVersionByAddress = new Map<string, number>();
@@ -411,6 +412,7 @@ export class ParvaneStore {
     const isChannel = info.kind === 'channel';
     const selfMember = info.members.find(({ address }) => address === this.self);
     const selfRole = selfMember?.role;
+    if (this.isPublicPreview(info)) return this.buildPublicPreviewChat(info);
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
@@ -427,7 +429,40 @@ export class ParvaneStore {
       // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
       avatarPhotoId: info.avatar || undefined,
       membersCount: info.members.filter(({ role }) => role !== 'banned').length,
+      // Публичная группа (spec 023): `@имя` — как публичная ссылка Telegram
+      usernames: info.public_name ? [{ username: info.public_name, isActive: true, isEditable: true }] : undefined,
+      hasUsername: info.public_name ? true : undefined,
     };
+  }
+
+  // Публичная группа, где мы не участник (поиск, `@имя`; spec 023): превью — не в списке чатов, с «Вступить»
+  isPublicPreview(info: WireGroupInfo) {
+    return Boolean(info.public_name)
+      && !info.members.some(({ address, role }) => address === this.self && role !== 'banned');
+  }
+
+  private buildPublicPreviewChat(info: WireGroupInfo): ApiChat {
+    const isChannel = info.kind === 'channel';
+    return {
+      id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
+      // Кнопку «Вступить/Подписаться» tt рисует каналам и супергруппам с `isNotJoined`
+      type: isChannel ? 'chatTypeChannel' : 'chatTypeSuperGroup',
+      title: info.name,
+      isListed: false,
+      isNotJoined: true,
+      // `joinChannel` в tt требует `accessHash`; у нас он не нужен
+      accessHash: '0',
+      avatarPhotoId: info.avatar || undefined,
+      membersCount: this.publicMembers.get(info.group_id)
+        ?? info.members.filter(({ role }) => role !== 'banned').length,
+      usernames: [{ username: info.public_name!, isActive: true, isEditable: false }],
+      hasUsername: true,
+    };
+  }
+
+  // Число участников публичной группы из каталога (до вступления журнал не читается)
+  setPublicMembers(address: string, count: number) {
+    this.publicMembers.set(address, count);
   }
 
   unregisterGroup(address: string) {

@@ -36,6 +36,8 @@ import './Management.scss';
 // Parvane (spec 003): фото, описание и заявки — на сервере; тип канала,
 // обсуждения (треды вне продукта), реакции и автоперевод — вне контракта
 const IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED = false;
+// Публичная группа (spec 023): тип «Публичная/Частная» с именем
+const IS_CHANNEL_TYPE_SUPPORTED = true;
 const IS_CHANNEL_PHOTO_SUPPORTED = true;
 const IS_CHANNEL_DESCRIPTION_SUPPORTED = true;
 const IS_CHANNEL_REQUESTS_SUPPORTED = true;
@@ -282,7 +284,7 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               />
             )}
           </div>
-          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && chat.isCreator && (
+          {IS_CHANNEL_TYPE_SUPPORTED && chat.isCreator && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('ChannelType')}</span>
               <span className="subtitle">{isChannelPublic ? lang('TypePublic') : lang('TypePrivate')}</span>

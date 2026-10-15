@@ -4,7 +4,7 @@ import type {
 } from '../types';
 import type { GatewayConnection } from './gateway';
 import type { ParvaneStore } from './store';
-import type { createV2Controller, V2InviteRecord } from './v2/controller';
+import type { createV2Controller, V2InviteRecord, V2PublicCard } from './v2/controller';
 import type {
   WireDefaultPermissions, WireGroupInfo, WireGroupMember, WireMessageContent,
 } from './wire';
@@ -14,6 +14,20 @@ import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import {
   fromBannedRights, normalizePermissions, toAdminRights, toWireAdminRights,
 } from './store';
+
+const V2_GROUP_PREFIX = 'v2g:';
+
+// id группы из каталога (base64) → hex адреса `v2g:<hex>`
+function b64ToHexId(b64: string) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Причина отказа имени → ошибка экрана имени tt
+function publicNameError(reason?: string) {
+  if (reason === 'taken') return 'USERNAME_OCCUPIED';
+  return 'USERNAME_INVALID';
+}
 
 // Сколько ждать секрет основной ссылки, созданной другим ведущим приглашения
 const V2_PRIMARY_WAIT_MS = 10000;
@@ -221,18 +235,31 @@ export function createGroupController(deps: GroupDependencies) {
     }
   }
 
-  async function createGroupChat({ title, users, isJoinRequestNeeded }: {
-    title: string; users: ApiUser[]; isJoinRequestNeeded?: boolean;
+  async function createGroupChat({
+    title, users, isJoinRequestNeeded, publicName,
+  }: {
+    title: string; users: ApiUser[]; isJoinRequestNeeded?: boolean; publicName?: string;
   }) {
     const chat = await createGroupKind(title, users, 'group', undefined, isJoinRequestNeeded);
-    return chat ? { chat, missingUsers: [] } : undefined;
+    return chat ? { chat: await makePublicAfterCreate(chat, publicName), missingUsers: [] } : undefined;
   }
 
   async function createChannel({
-    title, about, users, isJoinRequestNeeded,
-  }: { title: string; about?: string; users?: ApiUser[]; isJoinRequestNeeded?: boolean }) {
+    title, about, users, isJoinRequestNeeded, publicName,
+  }: { title: string; about?: string; users?: ApiUser[]; isJoinRequestNeeded?: boolean; publicName?: string }) {
     const channel = await createGroupKind(title, users || [], 'channel', about, isJoinRequestNeeded);
-    return channel ? { channel, missingUsers: [] } : undefined;
+    return channel ? { channel: await makePublicAfterCreate(channel, publicName), missingUsers: [] } : undefined;
+  }
+
+  // Публичное имя из мастера создания (spec 023): группа сразу публичная; занятое имя — тост, группа остаётся
+  // частной (имя можно задать потом в «Тип группы»)
+  async function makePublicAfterCreate(chat: ApiChat, publicName?: string) {
+    const name = publicName?.trim().replace(/^@/, '');
+    if (!name) return chat;
+    await setChatUsername({ chat, username: name });
+    const address = deps.getStore().getAddressForId(chat.id);
+    const info = address ? v2Of(address)?.groupInfo(address) : undefined;
+    return info ? deps.getStore().buildApiChatForGroup(info) : chat;
   }
 
   // Гранулярные права админа (spec 003): пустой набор — снять админа
@@ -796,7 +823,190 @@ export function createGroupController(deps: GroupDependencies) {
     return { type: 'ok' as const, chat: groupChat };
   }
 
+  // ── публичные группы (spec 023) ─────────────────────────────────────────────
+
+  // Публичные группы, показанные не-участнику (поиск, `@имя`): адрес → имя и настройки каталога
+  const publicPreviews = new Map<string, { name: string; isPreview: boolean; isHistory: boolean }>();
+  // Превью ленты не-участника уже загружено
+  const loadedPreviews = new Set<string>();
+
+  function cardInfo(card: V2PublicCard, address: string): WireGroupInfo {
+    return {
+      group_id: address,
+      name: card.title || card.name,
+      kind: card.kind === 'GROUP_KIND_CHANNEL' ? 'channel' : 'group',
+      created_by: '',
+      members: [],
+      avatar: card.avatar_file_id || undefined,
+      about: card.about || undefined,
+      version: 0,
+      public_name: card.name,
+      public_preview: Boolean(card.preview),
+      public_history: Boolean(card.history),
+    };
+  }
+
+  /** Чат публичной группы из карточки каталога: участнику — обычный, иначе превью с «Вступить». */
+  function announcePublicCard(card: V2PublicCard, v2: V2Groups) {
+    const hex = card.group?.id ? b64ToHexId(card.group.id) : undefined;
+    if (!hex) return undefined;
+    const address = `${V2_GROUP_PREFIX}${hex}`;
+    const store = deps.getStore();
+    const known = v2.groupInfo(address);
+    const self = store.self;
+    if (known?.members.some(({ address: member }) => member === self)) {
+      register(known, true);
+      return store.buildApiChatForGroup(known);
+    }
+    publicPreviews.set(address, {
+      name: card.name, isPreview: Boolean(card.preview), isHistory: Boolean(card.history),
+    });
+    const info = cardInfo(card, address);
+    store.registerGroup(info);
+    store.setPublicMembers(address, card.members || 0);
+    const chat = store.buildApiChatForGroup(info);
+    deps.sendUpdate({ '@type': 'updateChat', id: chat.id, chat });
+    deps.sendUpdate({ '@type': 'updateChatFullInfo', id: chat.id, fullInfo: { about: info.about, members: [] } });
+    return chat;
+  }
+
+  async function checkChatUsername({ username }: { username: string }) {
+    const v2 = deps.getV2?.();
+    if (!v2) return { result: false };
+    try {
+      const r = await v2.checkPublicName(username);
+      return { result: Boolean(r.available), error: r.available ? undefined : publicNameError(r.reason) };
+    } catch {
+      return { result: false };
+    }
+  }
+
+  // Имя (пусто — снова частная); настройки «Читать без вступления» и «История» сохраняются
+  async function setChatUsername({ chat, username }: { chat: ApiChat; username: string }) {
+    const store = deps.getStore();
+    const address = store.getAddressForId(chat.id);
+    const v2 = address ? v2Of(address) : undefined;
+    deps.log(`публичные группы: имя «${username}» для ${address || chat.id}${v2 ? '' : ' (не группа v2)'}`);
+    if (!address || !v2) return undefined;
+    const info = v2.groupInfo(address);
+    const result = await v2.setGroupPublic(address, {
+      isPublic: Boolean(username),
+      name: username,
+      preview: info?.public_preview,
+      history: info?.public_history,
+    });
+    if (result !== 'ok') {
+      window.dispatchEvent(new CustomEvent('parvane-public-name-error', { detail: { reason: result } }));
+      return undefined;
+    }
+    const verified = v2.groupInfo(address);
+    if (verified) pushGroupUpdates(verified);
+    return true;
+  }
+
+  async function setPublicOptions({ chatId, isPreview, isHistory }: {
+    chatId: string; isPreview: boolean; isHistory: boolean;
+  }) {
+    const address = deps.getStore().getAddressForId(chatId);
+    const v2 = address ? v2Of(address) : undefined;
+    const info = address ? v2?.groupInfo(address) : undefined;
+    if (!address || !v2 || !info?.public_name) return false;
+    const result = await v2.setGroupPublic(address, {
+      isPublic: true, name: info.public_name, preview: isPreview, history: isHistory,
+    });
+    const verified = v2.groupInfo(address);
+    if (verified) pushGroupUpdates(verified);
+    return result === 'ok';
+  }
+
+  function getPublicOptions({ chatId }: { chatId: string }) {
+    const address = deps.getStore().getAddressForId(chatId);
+    const info = address ? v2Of(address)?.groupInfo(address) : undefined;
+    return Promise.resolve(info?.public_name
+      ? { isPreview: Boolean(info.public_preview), isHistory: Boolean(info.public_history) } : undefined);
+  }
+
+  async function searchPublicGroups(query: string): Promise<string[]> {
+    const v2 = deps.getV2?.();
+    if (!v2 || query.trim().replace(/^@/, '').length < 2) return [];
+    try {
+      const cards = await v2.searchPublic(query.trim());
+      return cards.map((card) => announcePublicCard(card, v2)?.id).filter((id): id is string => Boolean(id));
+    } catch (e) {
+      deps.log(`публичные группы: поиск не удался: ${String(e)}`);
+      return [];
+    }
+  }
+
+  /** `@имя`: публичная группа (чат либо превью); не найдено — `undefined`. */
+  async function resolvePublicChat(name: string) {
+    const v2 = deps.getV2?.();
+    if (!v2) return undefined;
+    const found = await v2.resolvePublic(name.replace(/^@/, '')).catch(() => undefined);
+    return found ? announcePublicCard(found.card, v2) : undefined;
+  }
+
+  function isPublicPreview(chatId: string) {
+    const address = deps.getStore().getAddressForId(chatId);
+    return Boolean(address && publicPreviews.has(address));
+  }
+
+  /** Лента превью (настройка «Читать без вступления»): журнал группы и последние сообщения. */
+  async function loadPublicPreview(chatId: string) {
+    const address = deps.getStore().getAddressForId(chatId);
+    const preview = address ? publicPreviews.get(address) : undefined;
+    const v2 = deps.getV2?.();
+    if (!address || !preview?.isPreview || !v2 || loadedPreviews.has(address)) return;
+    loadedPreviews.add(address);
+    try {
+      await v2.loadPublicGroup(address.slice(V2_GROUP_PREFIX.length));
+      await v2.publicHistory(address);
+    } catch (e) {
+      loadedPreviews.delete(address);
+      deps.log(`публичные группы: превью не загружено: ${String(e)}`);
+    }
+  }
+
+  /** «Вступить» / «Подписаться» в публичной группе: секрет — из каталога, вступление сразу. */
+  async function joinPublicGroup(chatId: string) {
+    const store = deps.getStore();
+    const address = store.getAddressForId(chatId);
+    const preview = address ? publicPreviews.get(address) : undefined;
+    const v2 = deps.getV2?.();
+    if (!address || !preview || !v2) return false;
+    const found = await v2.resolvePublic(preview.name);
+    if (!found) {
+      reportInviteError('invalid');
+      return false;
+    }
+    let info: WireGroupInfo | undefined;
+    try {
+      info = await v2.joinPublic(found.hex, found.secretHex);
+    } catch (e) {
+      deps.log(`публичные группы: вступление не удалось: ${String(e)}`);
+      const code = e instanceof Error && e.message.includes('BANNED') ? 'banned' : 'failed';
+      reportInviteError(code);
+      return false;
+    }
+    if (!info) return false;
+    publicPreviews.delete(address);
+    register(info, true);
+    pushGroupUpdates(info, true);
+    // Настройка «История для новых участников»: прежняя переписка
+    if (info.public_history) void v2.publicHistory(address);
+    return true;
+  }
+
   return {
+    checkChatUsername,
+    setChatUsername,
+    setPublicOptions,
+    getPublicOptions,
+    searchPublicGroups,
+    resolvePublicChat,
+    isPublicPreview,
+    loadPublicPreview,
+    joinPublicGroup,
     announceUnconfirmed,
     applyV2Group,
     registerCachedV2,

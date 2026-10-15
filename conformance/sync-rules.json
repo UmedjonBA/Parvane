@@ -1357,6 +1357,24 @@
         "desktop": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу — прежним путём RECOVER-1 (корень, отзыв прежних устройств); копию ключей не пишет и не читает",
         "android": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу не сделан; копию ключей не пишет и не читает"
       }
+    },
+    {
+      "id": "PUBLIC-1",
+      "title": "Публичная группа: запись журнала SetPublic (имя, открытый секрет, настройки), комплекты эпох NewEpoch.public_bundle и сеанс Megolm в конверте; клиент без поддержки пропускает такую группу без падения",
+      "groupChange": "set_public",
+      "groupChangeNumber": 17,
+      "methods": [
+        "group.public.check_name",
+        "group.public.search",
+        "group.public.resolve",
+        "group.public.history"
+      ],
+      "linkPath": "/@",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupPublic, joinPublic, publicHistory), groups.ts (превью, вступление, поиск), components/right/management/ManageChatPrivacyType.tsx; сценарий scripts/e2e_web_public_groups.mjs",
+        "desktop": "ОТКРЫТО: движок общий, но сборка не обновлялась (решение пользователя 15 окт 2026 — desktop не трогать); старый движок отвергнет журнал публичной группы, частные группы не затронуты",
+        "android": "ОТКРЫТО: как desktop"
+      }
     }
   ]
 }
