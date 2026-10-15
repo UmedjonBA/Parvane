@@ -1,4 +1,4 @@
-# P-51: конфигурация `cargo audit` (см. SECURITY-REVIEW.md, раздел 5).
+# P-51: конфигурация `cargo audit`.
 [advisories]
 ignore = [
     # RUSTSEC-2023-0071 (rsa, Marvin). Крейт `rsa` попадает в Cargo.lock только через

@@ -30,6 +30,9 @@ CLAUDE.md
 /ARCHITECTURE.md
 /ROADMAP.md
 /specs/
+# Отчёты ревью безопасности — локальные (перечень уязвимостей не публикуем)
+/SECURITY-REVIEW.md
+/desktop/SECURITY-review-*.md
 
 # Node-зависимости корневых e2e-скриптов
 node_modules/

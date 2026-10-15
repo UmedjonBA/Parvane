@@ -240,7 +240,7 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
 
 ```
 Parvane/
-├── README.md · SECURITY-REVIEW.md
+├── README.md
 ├── proto/parvane/              ← схема протокола v2 (protobuf, `buf.yaml`) + тест-векторы
 ├── conformance/                ← правила, обязательные для всех клиентов (README + sync-rules.json)
 ├── backend/                    ← БЭКЕНД: Rust-шарды на NATS + инфраструктура
