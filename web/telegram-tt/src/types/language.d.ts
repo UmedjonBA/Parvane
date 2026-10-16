@@ -2518,6 +2518,7 @@ export interface LangPair {
   'PlannerNoticeFoodUpdated': undefined;
   'PlannerNoticeGoalDeleted': undefined;
   'PlannerNoticeGoalsUpdated': undefined;
+  'PlannerRenameHint': undefined;
   'PlannerNoticeReordered': undefined;
   'PlannerNoticeSettingsSaved': undefined;
   'PlannerNoticeLearnedReset': undefined;
@@ -4962,6 +4963,9 @@ export interface LangPairWithVariables<V = LangVariable> {
     'name': V;
   };
   'PlannerNoticeListUpdated': {
+    'name': V;
+  };
+  'PlannerNoticeNameUpdated': {
     'name': V;
   };
   'PlannerNoticeMoved': {

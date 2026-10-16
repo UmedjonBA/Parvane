@@ -3415,6 +3415,8 @@
 "PlannerNoticeGoalsUpdated" = "Nutrition goals updated";
 "PlannerNoticeListCreated" = "Group created: {name}";
 "PlannerNoticeListUpdated" = "List updated: {name}";
+"PlannerNoticeNameUpdated" = "Name changed: {name}";
+"PlannerRenameHint" = "Click to rename";
 "PlannerNoticeMoved" = "Moved to {date}: {name}";
 "PlannerNoticeReopened" = "{name} · Queue";
 "PlannerNoticeReordered" = "Order changed";

@@ -978,6 +978,20 @@ try {
   await sidePane.locator('#planner-new-name').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.ok(await sidePane.getByLabel('Start', { exact: true }).inputValue(), 'нажатие на свободное время дня задаёт начало');
   await planner.getByRole('button', { name: 'Cancel' }).click();
+  // Название задачи правится нажатием на него (17 окт 2026: на телефоне нажатие ничего не делало)
+  await phoneWeek.locator(`[data-day-summary="${today}"]`).getByText('С телефона').first().click();
+  await sidePane.locator('[data-task-name]').click();
+  const renameInput = sidePane.locator('#planner-task-name');
+  await renameInput.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await renameInput.inputValue(), 'С телефона', 'в поле — прежнее название');
+  await renameInput.fill('Позвонить с телефона');
+  await renameInput.press('Enter');
+  await sidePane.getByRole('heading', { name: 'Позвонить с телефона' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/planner-phone-rename.png` });
+  await closeSide();
+  await phoneWeek.locator(`[data-day-summary="${today}"]`).getByText('Позвонить с телефона').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — название задачи меняется нажатием на него');
   await phoneViews.getByRole('button', { name: 'Month', exact: true }).click();
   await todayCell.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Настройки — кнопкой в шапке календаря, окном снизу

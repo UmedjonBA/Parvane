@@ -2703,6 +2703,31 @@
   overflow-wrap: anywhere;
 }
 
+.editorTitleEditable {
+  cursor: var(--custom-cursor, text);
+  border-radius: 0.25rem;
+  outline: none;
+
+  &:hover .editorTitleIcon,
+  &:focus-visible .editorTitleIcon {
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--pv-accent);
+  }
+}
+
+.editorTitleIcon {
+  margin-inline-start: 0.375rem;
+
+  font-size: 1rem;
+  color: var(--pv-muted);
+  vertical-align: middle;
+
+  opacity: 0.55;
+}
+
 .field {
   display: block;
   min-width: 0;

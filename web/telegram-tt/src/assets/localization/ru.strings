@@ -1466,6 +1466,8 @@
 "PlannerNoticeGoalsUpdated" = "Цели питания обновлены";
 "PlannerNoticeListCreated" = "Группа создана: {name}";
 "PlannerNoticeListUpdated" = "Список обновлён: {name}";
+"PlannerNoticeNameUpdated" = "Название изменено: {name}";
+"PlannerRenameHint" = "Нажмите, чтобы переименовать";
 "PlannerNoticeMoved" = "Перенесено на {date}: {name}";
 "PlannerNoticeReopened" = "{name} · Очередь";
 "PlannerNoticeReordered" = "Порядок изменён";

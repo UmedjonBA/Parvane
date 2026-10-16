@@ -1,4 +1,6 @@
-import { memo, useRef, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useRef, useState,
+} from '../../../lib/teact/teact';
 
 import type {
   PlannerRepeat, PlannerSeriesItem, PlannerState, PlannerStatus, PlannerTask,
@@ -60,6 +62,7 @@ type Pending = { kind: 'patch' | 'copy'; changes: Partial<PlannerTask>; notice: 
   | { kind: 'rule'; repeat?: PlannerRepeat };
 
 const STEP_MAX_LENGTH = 160;
+const NAME_MAX_LENGTH = 160;
 
 const PlannerTaskEditor = ({
   state, task, today, picked, onBack, onPickDay, onOpenTask,
@@ -74,6 +77,13 @@ const PlannerTaskEditor = ({
     window.clearTimeout(savedTimerRef.current);
     savedTimerRef.current = window.setTimeout(() => setIsSaved(false), SAVED_SHOWN_MS);
   };
+
+  // Название правится в поле и записывается по Enter или уходу из поля; пустое — возвращается прежнее
+  const [isNameEditing, setIsNameEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState(task.name);
+  useEffect(() => {
+    setIsNameEditing(false);
+  }, [task.id]);
 
   const [stepText, setStepText] = useState('');
   const [slots, setSlots] = useState<Slot[]>();
@@ -222,6 +232,40 @@ const PlannerTaskEditor = ({
     );
   });
 
+  const handleNameChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setNameDraft(e.currentTarget.value);
+  });
+
+  const handleNameEdit = useLastCallback(() => {
+    setNameDraft(task.name);
+    setIsNameEditing(true);
+  });
+
+  const handleNameTitleKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLHeadingElement>) => {
+    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    handleNameEdit();
+  });
+
+  // Значение — из поля: состояние обновится только к следующему кадру, а Enter приходит сразу после ввода
+  const handleNameCommit = useLastCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    setIsNameEditing(false);
+    const name = e.currentTarget.value.trim();
+    if (!name || name === task.name) return;
+    patch({ name }, lang('PlannerNoticeNameUpdated', { name }));
+  });
+
+  const handleNameKeyDown = useLastCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.currentTarget.blur();
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      setNameDraft(task.name);
+      setIsNameEditing(false);
+    }
+  });
+
   const handleDescription = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const description = e.currentTarget.value;
     if (isInstance) {
@@ -365,7 +409,33 @@ const PlannerTaskEditor = ({
   const doneSteps = task.steps.filter((step) => step.isDone).length;
   return (
     <div className={buildClassName(styles.editor, styles.eventCard)}>
-      <h2 className={styles.editorTitle}><PlannerName name={task.name} /></h2>
+      {isNameEditing ? (
+        <input
+          id="planner-task-name"
+          className={styles.cardTitleInput}
+          value={nameDraft}
+          maxLength={NAME_MAX_LENGTH}
+          autoFocus
+          aria-label={lang('PlannerFieldTaskName')}
+          placeholder={lang('PlannerFieldTaskName')}
+          onChange={handleNameChange}
+          onBlur={handleNameCommit}
+          onKeyDown={handleNameKeyDown}
+        />
+      ) : (
+        // Нажатие на название (кроме ссылок на заметки) открывает его правку
+        <h2
+          className={buildClassName(styles.editorTitle, styles.editorTitleEditable)}
+          tabIndex={0}
+          title={lang('PlannerRenameHint')}
+          data-task-name
+          onClick={handleNameEdit}
+          onKeyDown={handleNameTitleKeyDown}
+        >
+          <PlannerName name={task.name} />
+          <Icon name="edit" className={styles.editorTitleIcon} />
+        </h2>
+      )}
       {/* Поля задачи пишутся сразу (у события — кнопка «Сохранить»): об этом нужно сказать */}
       <p className={styles.small} data-task-autosave>
         {isSaved ? lang('PlannerSaved') : lang('PlannerAutoSaved')}
