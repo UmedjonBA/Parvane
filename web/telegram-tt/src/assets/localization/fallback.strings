@@ -3269,6 +3269,7 @@
 "PlannerDayNutrition" = "Nutrition";
 "PlannerDayOverload" = "overload {minutes} min";
 "PlannerDayPlan" = "Plan: {planned} / {budget}";
+"PlannerDayPlanShort" = "{planned} / {budget}";
 "PlannerDaySchedule" = "Schedule";
 "PlannerDayUnrated" = "{count} unrated";
 "PlannerDayWindows" = "free {from}–{to}: {free}";

@@ -1,5 +1,5 @@
 import type { TeactNode } from '../../../lib/teact/teact';
-import { memo } from '../../../lib/teact/teact';
+import { memo, useEffect, useState } from '../../../lib/teact/teact';
 
 import type { PlannerLayers } from './plannerLayers';
 import type { PlannerState } from './plannerModel';
@@ -24,6 +24,10 @@ import PlannerTaskRow from './PlannerTaskRow';
 
 import styles from './Planner.module.scss';
 
+function stopPropagation(e: React.PointerEvent) {
+  e.stopPropagation();
+}
+
 type OwnProps = {
   state: PlannerState;
   day: string;
@@ -38,13 +42,29 @@ type OwnProps = {
   onOpenEvent: (eventId: string, day: string) => void;
   // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
   onOpenSleep?: (day: string) => void;
+  // Начало строки сводки (на телефоне — плашки слоёв, чтобы слои и сводка шли одной строкой)
+  leading?: TeactNode;
 };
 
-// День календаря: предупреждение о недосыпе, сводка плашками, задачи без времени и расписание списком
+// День календаря: сводка плашками (недосып — красная плашка сна с подсказкой по нажатию), задачи без времени и расписание списком
 const PlannerDayPanel = ({
-  state, day, today, layers, variant, onShiftDay, onAdd, onOpenTask, onOpenEvent, onOpenSleep,
+  state, day, today, layers, variant, onShiftDay, onAdd, onOpenTask, onOpenEvent, onOpenSleep, leading,
 }: OwnProps) => {
   const lang = useLang();
+  const [isSleepHintShown, setIsSleepHintShown] = useState(false);
+
+  // Подсказка закрывается при смене дня и нажатием в любом месте
+  useEffect(() => {
+    setIsSleepHintShown(false);
+  }, [day]);
+  useEffect(() => {
+    if (!isSleepHintShown) return undefined;
+    const close = () => setIsSleepHintShown(false);
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [isSleepHintShown]);
+
+  const handleSleepClick = useLastCallback(() => setIsSleepHintShown((shown) => !shown));
 
   const handlePrev = useLastCallback(() => onShiftDay!(-1));
   const handleNext = useLastCallback(() => onShiftDay!(1));
@@ -63,33 +83,49 @@ const PlannerDayPanel = ({
   const kcal = Math.round(getNutrientTotal(state, day, 'kcal').value);
   const untimed = layers.work ? entry.untimed : [];
   const deadlines = layers.work ? entry.deadlines : [];
+  const planArgs = { planned: formatHoursNumber(lang, load), budget: formatHours(lang, budget) };
+  const planText = lang('PlannerDayPlan', planArgs);
+  const isLine = Boolean(leading);
   const title = formatDay(lang, day);
   const relative = formatRelativeDay(lang, day, today);
 
   const body: TeactNode = (
     <>
-      {isShort && (
-        <div className={styles.warn} role="note">
-          <Icon name="warning" />
-          {lang('PlannerSleepWarn', { sleep: formatSpan(sleep!.value), budget: formatHours(lang, budget) })}
-        </div>
-      )}
-      <div className={styles.sumRow}>
+      <div className={buildClassName(styles.sumRow, isLine && styles.sumRowLine)}>
+        {leading}
+        {/* В строке со слоями на телефоне — коротко, значком вместо слова «План» */}
         <span
           className={buildClassName(styles.tag, styles.tagLarge, load > budget ? styles.kindDue : styles.kindEvent)}
+          title={isLine ? planText : undefined}
+          data-day-plan
         >
-          {lang('PlannerDayPlan', { planned: formatHoursNumber(lang, load), budget: formatHours(lang, budget) })}
+          {isLine && <Icon name="clock" />}
+          {isLine ? lang('PlannerDayPlanShort', planArgs) : planText}
         </span>
         {Boolean(unrated) && (
           <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindMuted)}>
             {lang('PlannerDayUnrated', { count: unrated })}
           </span>
         )}
-        {layers.sleep && sleep && variant === 'summary' && (
-          <span className={buildClassName(styles.tag, styles.tagLarge, isShort ? styles.kindDue : styles.kindSleep)}>
-            <Icon name="darkmode" />
-            {formatSpan(sleep.value)}
-          </span>
+        {layers.sleep && sleep && (variant === 'summary' || isShort) && (
+          isShort ? (
+            <button
+              type="button"
+              className={buildClassName(styles.tag, styles.tagLarge, styles.tagButton, styles.kindDue)}
+              aria-expanded={isSleepHintShown}
+              data-sleep-short={day}
+              onPointerDown={stopPropagation}
+              onClick={handleSleepClick}
+            >
+              <Icon name="darkmode" />
+              {formatSpan(sleep.value)}
+            </button>
+          ) : (
+            <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindSleep)}>
+              <Icon name="darkmode" />
+              {formatSpan(sleep.value)}
+            </span>
+          )
         )}
         {layers.food && Boolean(kcal) && (
           <span className={buildClassName(styles.tag, styles.tagLarge, styles.kindFood)}>
@@ -110,6 +146,11 @@ const PlannerDayPanel = ({
           </button>
         ))}
       </div>
+      {isShort && isSleepHintShown && (
+        <div className={styles.sleepHint} role="tooltip" data-sleep-hint>
+          {lang('PlannerSleepWarn', { sleep: formatSpan(sleep!.value), budget: formatHours(lang, budget) })}
+        </div>
+      )}
       {Boolean(untimed.length) && (
         <div className={styles.rows}>
           {untimed.map((task) => (

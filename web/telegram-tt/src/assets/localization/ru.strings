@@ -1318,6 +1318,7 @@
 "PlannerDayNutrition" = "Питание";
 "PlannerDayOverload" = "перегруз {minutes} мин";
 "PlannerDayPlan" = "План: {planned} / {budget}";
+"PlannerDayPlanShort" = "{planned} / {budget}";
 "PlannerDaySchedule" = "Расписание";
 "PlannerDayUnrated" = "{count} без оценки";
 "PlannerDayWindows" = "окна {from}–{to}: {free}";

@@ -4876,6 +4876,10 @@ export interface LangPairWithVariables<V = LangVariable> {
     'planned': V;
     'budget': V;
   };
+  'PlannerDayPlanShort': {
+    'planned': V;
+    'budget': V;
+  };
   'PlannerDayUnrated': {
     'count': V;
   };

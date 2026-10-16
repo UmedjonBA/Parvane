@@ -616,13 +616,13 @@ const Planner = () => {
             <PlannerDayStrip state={state} weekStart={weekDays[0]} picked={picked} today={today} onPickDay={pickDay} />
           </div>
           <div className={buildClassName(styles.content, styles.phoneWeekDay, 'custom-scroll')} data-swipe="day">
-            <div className={styles.layerRow}><PlannerLayerChips layers={layers} onToggle={handleToggleLayer} /></div>
             <PlannerDayPanel
               state={state}
               day={picked}
               today={today}
               layers={layers}
               variant="summary"
+              leading={<PlannerLayerChips layers={layers} onToggle={handleToggleLayer} />}
               onOpenTask={handleOpenTask}
               onOpenEvent={handleOpenEvent}
               onOpenSleep={handleOpenSleep}
