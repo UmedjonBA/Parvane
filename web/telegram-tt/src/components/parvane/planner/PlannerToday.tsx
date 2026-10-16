@@ -214,7 +214,9 @@ const PlannerToday = ({
               <Icon name="add" />
             </button>
           </div>
-          {!tasks.length && !active.length && !queued.length && <p className={styles.muted}>{lang('PlannerTodayNoTasks')}</p>}
+          {!tasks.length && !active.length && !queued.length && (
+            <p className={styles.muted}>{lang('PlannerTodayNoTasks')}</p>
+          )}
           {tasks.map((task) => (
             <PlannerTaskRow
               key={instanceKey(task)}

@@ -269,7 +269,7 @@ describe('заметки: индекс', () => {
     },
     {
       id: 'py8', title: 'Python, 8 класс', folder: 'Курсы', updatedAt: 20,
-      text: 'Курс «Python для начинающих».\n- Опора: [[Python: основы|основы]] и [[Python: основы]]\n- [[банк задач]] #огэ',
+      text: 'Курс «Python новичкам».\n- Опора: [[Python: основы|основы]] и [[Python: основы]]\n- [[банк задач]] #огэ',
     },
     { id: 'x99', title: 'Сервер X99', folder: '', updatedAt: 40, text: 'Бюджетный сервер. `[[Курс ОГЭ]]` #железо' },
     { id: 'py-copy', title: ' python: ОСНОВЫ ', folder: 'Архив', updatedAt: 50, text: 'Одноимённая копия' },
