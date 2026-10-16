@@ -26,7 +26,8 @@ import {
   taskInstance, toDayKey,
 } from './plannerModel';
 import {
-  getHasQuickLines, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState, getPlannerStatus,
+  getHasQuickLines, getIsPlannerCached, getIsPlannerLoaded, getPlannerNotice, getPlannerSizeBytes, getPlannerState,
+  getPlannerStatus,
   loadPlanner, setPlannerActive, undoPlanner, updatePlanner,
 } from './plannerStore';
 import { getSwipeDelta, isSwipeBlocked } from './plannerSwipe';
@@ -129,6 +130,9 @@ const Planner = () => {
 
   const state = useDerivedState(getPlannerState);
   const isLoaded = useDerivedState(getIsPlannerLoaded);
+  // Снимок с устройства, пока движок не поднялся: показывается, правки ждут загрузки
+  const isCached = useDerivedState(getIsPlannerCached);
+  const hasContent = isLoaded || isCached;
   const notice = useDerivedState(getPlannerNotice);
   const syncStatus = useDerivedState(getPlannerStatus);
   const sizeBytes = useDerivedState(getPlannerSizeBytes);
@@ -387,10 +391,11 @@ const Planner = () => {
     // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   }, [monthKey]);
   // spec 010: строка состояния синхронизации — только когда есть что сказать
-  const syncNoticeKey = syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
-    : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
-      : syncStatus === 'no-key' ? 'PlannerSyncPending'
-        : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
+  const syncNoticeKey = !isLoaded && isCached ? 'PlannerShowingSaved'
+    : syncStatus === 'needs-linking' ? 'PlannerNeedsLinking'
+      : syncStatus === 'offline' ? 'PlannerSyncUnavailable'
+        : syncStatus === 'no-key' ? 'PlannerSyncPending'
+          : sizeBytes > SNAPSHOT_WARN_BYTES ? 'PlannerNearLimit' : undefined;
   const viewTabs = [
     { title: lang('PlannerViewCalendar') },
     { title: lang('PlannerHealth') },
@@ -402,7 +407,7 @@ const Planner = () => {
   const isWeekView = calendarView === 'week';
   // Сетка недели на компьютере листается сама, а шапки дней стоят на месте; на телефоне под полосой дней
   // листается день
-  const isFlush = isCalendar && isWeekView && isLoaded;
+  const isFlush = isCalendar && isWeekView && hasContent;
   const calendarSegments = [
     { value: SEGMENT_TODAY, label: lang('PlannerToday') },
     ...PLANNER_CALENDAR_VIEWS.map((item) => ({
@@ -795,7 +800,7 @@ const Planner = () => {
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
           >
-            {!isLoaded ? <Loading /> : isCalendar ? renderCalendar() : (
+            {!hasContent ? <Loading /> : isCalendar ? renderCalendar() : (
               <>
                 <PlannerDateNav
                   day={picked}
@@ -830,7 +835,7 @@ const Planner = () => {
           </div>
         </main>
         {side && !isSheet && renderSide()}
-        {isLoaded && isCalendar && !isNarrow && calendarView !== 'agenda' && !(side && !isSheet) && (
+        {hasContent && isCalendar && !isNarrow && calendarView !== 'agenda' && !(side && !isSheet) && (
           <PlannerDayPanel
             state={state}
             day={picked}

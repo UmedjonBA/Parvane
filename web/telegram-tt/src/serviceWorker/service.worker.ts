@@ -14,8 +14,9 @@ declare const self: ServiceWorkerGlobalScope;
 
 const CACHE_FIRST_ASSET_EXTENSIONS = 'js|css|woff2?|svg|png|jpe?g|tgs|json|wasm';
 // B3: WASM (движок протокола 2,7 МБ) больше не «сначала сеть» — имя файла с хешем, он в кэше навсегда,
-// как и остальные хешированные ассеты; «сначала сеть» остаётся только для HTML
-const RE_NETWORK_FIRST_ASSETS = /\.html$/;
+// как и остальные хешированные ассеты; «сначала сеть» остаётся для HTML и `compatTest.js` (без хеша в имени;
+// без него приложение не запускается — без сети раньше оставался белый экран)
+const RE_NETWORK_FIRST_ASSETS = /(?:\.html|\/compatTest\.js)$/;
 const RE_CACHE_FIRST_ASSETS = new RegExp(
   `(?:/assets/[^/]+|/(?:[^/]+\\.)?worker|/index)-[\\w-]{8}`
   + `\\.(${CACHE_FIRST_ASSET_EXTENSIONS})$`,

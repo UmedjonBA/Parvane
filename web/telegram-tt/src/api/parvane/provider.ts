@@ -141,6 +141,32 @@ const PLANNER_RECORD = 'planner';
 // Подключение контейнера планировщика запускается один раз за сессию (spec 010)
 let plannerEnsureStarted = false;
 
+// Снимок «Плана» для запуска без сети: показывается, пока движок не поднялся (на медленной сети движок ждёт
+// сервер, без сети не поднимается вовсе), в шифрованном хранилище устройства
+const PLANNER_VIEW_RECORD = 'planner-view';
+const PLANNER_VIEW_SAVE_DELAY_MS = 2000;
+let plannerViewSaved: string | undefined;
+let plannerViewTimer: ReturnType<typeof setTimeout> | undefined;
+let plannerViewLogged = false;
+
+function rememberPlannerView(json: string) {
+  if (json === plannerViewSaved) return;
+  plannerViewSaved = json;
+  if (plannerViewTimer) clearTimeout(plannerViewTimer);
+  plannerViewTimer = setTimeout(async () => {
+    plannerViewTimer = undefined;
+    const self = store.self;
+    if (!self) return;
+    const storage = await SecureE2eStorage.open(self).catch(() => undefined);
+    await storage?.saveRecord(PLANNER_VIEW_RECORD, plannerViewSaved).then(() => {
+      if (!plannerViewLogged) logDebug('планировщик: снимок для запуска без сети сохранён');
+      plannerViewLogged = true;
+    }).catch((err: unknown) => {
+      logDebug(`планировщик: снимок для запуска без сети не сохранён: ${String(err)}`);
+    });
+  }, PLANNER_VIEW_SAVE_DELAY_MS);
+}
+
 function readPlannerState() {
   const { planner } = v2Controller;
   const status = planner.status();
@@ -155,11 +181,13 @@ function readPlannerState() {
   // полная protobuf-копия состояния. `raw` — та же строка: по ней экран
   // пропускает равные состояния, не разбирая их заново
   const state = json ? JSON.parse(json) as { sizeBytes?: number; headSeq?: number } : undefined;
+  const hasPending = planner.hasPending();
+  if (json && status === 'ready' && !hasPending) rememberPlannerView(json);
   return {
     status,
     state: state as unknown,
     sizeBytes: state?.sizeBytes ?? 0,
-    hasPending: planner.hasPending(),
+    hasPending,
     error: planner.lastError(),
     raw: json,
     revision: state?.headSeq,
@@ -2445,6 +2473,14 @@ const methods = {
   async parvanePlannerSetActive({ isActive }: { isActive: boolean }) {
     v2Controller.planner.setActive(isActive);
     return true;
+  },
+
+  /** Последний сохранённый снимок «Плана» (только показ, пока движок не поднялся). */
+  async parvanePlannerCachedState() {
+    if (!store.self) return undefined;
+    const storage = await SecureE2eStorage.open(store.self).catch(() => undefined);
+    const json = await storage?.loadRecord<string>(PLANNER_VIEW_RECORD).catch(() => undefined);
+    return json ? JSON.parse(json) as unknown : undefined;
   },
 
   // eslint-disable-next-line @typescript-eslint/require-await

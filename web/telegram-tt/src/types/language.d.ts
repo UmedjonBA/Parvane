@@ -2621,6 +2621,7 @@ export interface LangPair {
   'PlannerStepNew': undefined;
   'PlannerSyncPending': undefined;
   'PlannerSyncUnavailable': undefined;
+  'PlannerShowingSaved': undefined;
   'PlannerTimeConflict': undefined;
   'PlannerTitleNew': undefined;
   'PlannerToday': undefined;

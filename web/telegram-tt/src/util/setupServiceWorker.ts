@@ -31,6 +31,10 @@ function handleWorkerMessage(e: MessageEvent) {
     case 'focusMessage':
       dispatch.focusMessage?.(payload as any);
       break;
+    // Service worker спрашивает перед показом push, жива ли страница (иначе покажет уведомление сам)
+    case 'parvanePing':
+      e.ports[0]?.postMessage(true);
+      break;
     case 'playNotificationSound':
       playNotifySoundDebounced(action.payload.id);
       break;

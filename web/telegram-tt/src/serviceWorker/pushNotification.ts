@@ -53,6 +53,8 @@ type CloseNotificationData = {
 let lastSyncAt = new Date().valueOf();
 // Текст пробуждения v2 — как у v1-пуша шарда push (содержимого сервер не знает)
 const WAKE_DESCRIPTION = 'New message';
+// Сколько ждать ответа окна: замороженная страница не ответит вовсе
+const CLIENT_PING_TIMEOUT_MS = 1000;
 const shownNotifications = new Set();
 const clickBuffer: Record<string, NotificationData> = {};
 
@@ -113,6 +115,20 @@ async function getClients() {
   return clients.filter((client) => {
     return new URL(client.url).origin === appUrl;
   });
+}
+
+async function hasLiveClient() {
+  const clients = await getClients();
+  if (!clients.length) return false;
+  const answers = clients.map((client) => new Promise<boolean>((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => resolve(true);
+    client.postMessage({ type: 'parvanePing' }, [channel.port2]);
+  }));
+  const timeout = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(false), CLIENT_PING_TIMEOUT_MS);
+  });
+  return Promise.race([...answers, timeout]);
 }
 
 async function playNotificationSound(id: string) {
@@ -199,11 +215,10 @@ export function handlePush(e: PushEvent) {
     return;
   }
 
-  // Parvane: пуш будит только закрытое приложение — при открытой вкладке
-  // foreground-уведомления показывает сама страница
+  // Parvane: пуш будит только закрытое приложение — живая вкладка показывает уведомления сама. Свёрнутое PWA на
+  // Android окно сохраняет, но страница заморожена и ничего не покажет, поэтому окно спрашивается, живо ли оно
   e.waitUntil((async () => {
-    const clients = await getClients();
-    if (clients.length) return;
+    if (await hasLiveClient()) return;
     // Пробуждение без данных бывает и будильником напоминания «Плана» (этап 4 плана 15 окт 2026):
     // наступившее напоминание показывается вместо общего «новое сообщение»
     const reminders = await takeDueWorkerReminders(Date.now()).catch(() => []);

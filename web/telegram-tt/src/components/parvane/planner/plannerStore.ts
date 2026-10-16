@@ -42,6 +42,8 @@ const PLANNER_EVENT = 'parvane-planner-changed';
 
 const [getPlannerState, setPlannerState] = createSignal<PlannerState>(createEmptyPlannerState());
 const [getIsPlannerLoaded, setIsPlannerLoaded] = createSignal(false);
+// Показан сохранённый на устройстве снимок, движок ещё не поднялся: только просмотр
+const [getIsPlannerCached, setIsPlannerCached] = createSignal(false);
 const [getPlannerStatus, setPlannerStatus] = createSignal<PlannerStatus>('loading');
 const [getPlannerNotice, setPlannerNotice] = createSignal<PlannerNotice | undefined>(undefined);
 const [getPlannerSizeBytes, setPlannerSizeBytes] = createSignal(0);
@@ -67,7 +69,8 @@ const NOTICE_HIDE_MS = 3000;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 export {
-  getPlannerState, getIsPlannerLoaded, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes, getHasQuickLines,
+  getPlannerState, getIsPlannerLoaded, getIsPlannerCached, getPlannerStatus, getPlannerNotice, getPlannerSizeBytes,
+  getHasQuickLines,
 };
 
 function listen() {
@@ -97,10 +100,11 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
         console.warn('[parvane] планировщик: состояние движка не разобрано', err);
       }
     }
-    setIsPlannerLoaded(true);
+    markLoaded();
   } else if (result.status === 'ready' || result.status === 'offline' || result.status === 'no-key') {
     // Контейнера ещё нет (создастся первой правкой) — пустой планировщик
-    setIsPlannerLoaded(true);
+    if (getIsPlannerCached()) setPlannerState(createEmptyPlannerState());
+    markLoaded();
   }
   // Словарь на экране — весь словарь из «Плана» (нет непревращённых правок): можно вливать запись устройства
   if (result.status === 'ready' && !result.hasPending) {
@@ -119,6 +123,24 @@ async function refreshFromEngine(): Promise<StateResult | undefined> {
     }, LINKING_POLL_MS);
   }
   return result;
+}
+
+function markLoaded() {
+  setIsPlannerCached(false);
+  setIsPlannerLoaded(true);
+}
+
+// Снимок с устройства — сразу, до движка: на медленной сети и без сети «План» не стоит на загрузке
+async function showCachedPlanner() {
+  const cached = await callParvane('parvanePlannerCachedState').catch(() => undefined) as EngineState | undefined;
+  if (!cached || getIsPlannerLoaded()) return;
+  try {
+    setPlannerState(fromEngineState(cached, getPlannerState()));
+    setIsPlannerCached(true);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[parvane] планировщик: сохранённый снимок не разобран', err);
+  }
 }
 
 // Отметка состояния движка: строка JSON либо ревизия, иначе — отпечаток разобранного JSON (одна сериализация
@@ -234,6 +256,8 @@ export function loadPlanner(userId?: string) {
   if (loadPromise) void refreshFromEngine();
   loadPromise ??= (async () => {
     for (let attempt = 0; attempt < LOAD_ATTEMPTS; attempt++) {
+      // Аккаунт провайдеру может быть ещё не известен — снимок спрашивается, пока его нет
+      if (!getIsPlannerLoaded() && !getIsPlannerCached()) await showCachedPlanner();
       const result = await refreshFromEngine();
       if (result && result.status !== 'loading') {
         await migrateLegacy(result);
@@ -310,6 +334,7 @@ function resetPlanner() {
   isLearnedMigrated = false;
   setHasQuickLines(false);
   setIsPlannerLoaded(false);
+  setIsPlannerCached(false);
   setPlannerStatus('loading');
   publishNotice(undefined);
   setPlannerSizeBytes(0);

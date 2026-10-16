@@ -3555,6 +3555,7 @@
 "PlannerSteps" = "Steps · {done}/{total}";
 "PlannerSyncPending" = "Waiting for the planner key from your other device. Some data has not arrived yet.";
 "PlannerSyncUnavailable" = "Planner sync is unavailable right now. Changes are saved on this device and will be sent later.";
+"PlannerShowingSaved" = "No connection yet: showing the plan saved on this device. Editing will be available once it connects.";
 "PlannerTimeConflict" = "Time conflict";
 "PlannerTitleNew" = "New entry";
 "PlannerToday" = "Today";
