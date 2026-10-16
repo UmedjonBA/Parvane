@@ -255,7 +255,14 @@ try {
   await input.fill(`купить валик #${LIST_NAME.toLowerCase()}`);
   await expectKind('task');
   await submit('купить валик');
-  console.log('OK: «в пять вечера» — время, #список, @место и ! — чипами');
+  // Группа и у события (16 окт 2026): метка уходит из названия, событие — в ту же группу
+  await openQuick();
+  await input.fill(`пара завтра 10:00 #${LIST_NAME.toLowerCase()}`);
+  await expectKind('event');
+  assert.equal((await chip('list').innerText()).trim(), `#${LIST_NAME.toLowerCase()}`);
+  assert.equal((await namePart.innerText()).trim(), 'пара');
+  await submit('пара');
+  console.log('OK: «в пять вечера» — время, #группа (у задачи и события), @место и ! — чипами');
 
   // ── Словарь правок: одна и та же длительность трижды — на четвёртый раз подставляется сама ──
   const learnedChip = form.locator('[data-quick-chip="minutes"][data-learned="1"]');

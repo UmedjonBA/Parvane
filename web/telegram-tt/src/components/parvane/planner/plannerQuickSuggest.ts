@@ -364,6 +364,7 @@ function collectEntries({ tasks, events }: QuickSuggestSources, uiLang: QuickLan
     end: event.isAllDay ? undefined : event.end,
     isAllDay: event.isAllDay,
     repeat: event.repeat,
+    list: event.project || undefined,
   }, -index));
   return [...byKey.values()];
 }
@@ -379,7 +380,7 @@ function verifiedLine(draft: QuickLineDraft, lang: QuickLang, ctx: QuickContext)
 function isSameEntry(parsed: QuickDraft, draft: QuickLineDraft) {
   if (parsed.error || parsed.kind !== draft.kind || parsed.name !== draft.name) return false;
   if (parsed.description || parsed.due || parsed.place || parsed.isImportant) return false;
-  if ((parsed.list || '').toLowerCase() !== (draft.kind === 'task' ? lineList(draft.list) || '' : '').toLowerCase()) {
+  if ((parsed.list || '').toLowerCase() !== (lineList(draft.list) || '').toLowerCase()) {
     return false;
   }
   if (!isSameRepeat(parsed.repeat, draft.repeat)) return false;
@@ -402,13 +403,13 @@ function isSameRepeat(parsed?: PlannerRepeat, repeat?: QuickLineDraft['repeat'])
 
 /**
  * Разбор наоборот: строка, которую `parseQuickInput` прочитает как эту задачу либо событие. Порядок слов —
- * [тип] название [дни недели] [время] [длительность] [повтор] [#список]. В строку попадает:
+ * [тип] название [дни недели] [время] [длительность] [повтор] [#группа]. В строку попадает:
  *   слово типа — только когда разбор сам выбрал бы другой тип (задача со временем, событие без времени);
  *   длительность — у события, когда она не обычная для первого слова названия («созвон» — 30 мин, «пара» —
  *     1 ч 45 мин, прочее — час), у задачи — оценка (у задачи со временем — когда она не полчаса);
  *   повтор — самой простой записью: «каждый день», «пн … каждую неделю», «по пн, ср», «по будням»,
  *     «каждые 2 недели»; число месяца, конец ряда и число повторов не пишутся;
- *   список задачи — меткой `#список` (пробел в названии — «_»), если название годится в метку.
+ *   группа задачи либо события — меткой `#группа` (пробел в названии — «_»), если название годится в метку.
  * Не попадает: дата (подсказка — шаблон новой записи), срок, описание, место, «важное», цвет, шаги.
  * `isExplicit` — полная запись: слово типа и длительность названы всегда, один день недели — словами
  * повтора («по пн»); нужна, когда обычную запись разбор читает иначе.
@@ -419,7 +420,7 @@ export function draftToLine(draft: QuickLineDraft, lang: QuickLang, isExplicit?:
   const hasTime = Boolean(draft.start) && !draft.isAllDay;
   const [days, every] = draft.repeat ? formatLineRepeat(draft.repeat, words, isExplicit) : [];
   const minutes = getLineMinutes(draft, lang, hasTime, isExplicit);
-  const list = isEvent ? undefined : lineList(draft.list);
+  const list = lineList(draft.list);
   return [
     isExplicit || isEvent !== hasTime ? (isEvent ? words.event : words.task) : undefined,
     normalizeLine(draft.name),

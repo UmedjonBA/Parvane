@@ -1194,7 +1194,8 @@ describe('ввод текстом: явные метки', () => {
     ['купить молоко #мой_дом, хлеб', { name: 'купить молоко, хлеб', list: 'мой дом' }],
     ['отчёт #пт', { name: 'отчёт', list: 'пт', day: undefined }],
     ['отчёт #работа #дом', { name: 'отчёт #дом', list: 'работа' }],
-    ['созвон 16:00 #работа', { kind: 'event', name: 'созвон #работа', list: undefined }],
+    // Группа — и у события (16 окт 2026)
+    ['созвон 16:00 #работа', { kind: 'event', name: 'созвон', list: 'работа' }],
     ['купить молоко #дом', { name: 'купить молоко #дом', list: undefined }, { skip: ['list'] }],
     // @место — у задачи и у события
     ['пара вт 15:00 @301ГК', { kind: 'event', name: 'пара', place: '301ГК', start: '15:00' }],
@@ -1237,7 +1238,7 @@ describe('quick input (en): explicit markers', () => {
     ['buy milk #home', { kind: 'task', name: 'buy milk', list: 'home' }],
     ['#Work send the report by fri', { name: 'send the report', list: 'Work', due: '2026-10-09' }],
     ['report #fri', { name: 'report', list: 'fri', day: undefined }],
-    ['call 4pm #work', { kind: 'event', name: 'call #work', list: undefined }],
+    ['call 4pm #work', { kind: 'event', name: 'call', list: 'work' }],
     ['lesson tue 3pm @room-301', { kind: 'event', name: 'lesson', place: 'room-301', start: '15:00' }],
     ['@Mall buy milk', { kind: 'task', name: 'buy milk', place: 'Mall' }],
     ['send the report !', { kind: 'task', name: 'send the report', isImportant: true }],

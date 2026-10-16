@@ -5,6 +5,7 @@ import type { PlannerEvent, PlannerState } from './plannerModel';
 import {
   assignToGroup, createGroup, deleteGroup, renameGroup, setGroupColor,
 } from './plannerGroups';
+import { applyQuickDraft } from './plannerHealth';
 import { createEmptyPlannerState, getEventColor } from './plannerModel';
 
 const weekly = (id: string, name: string): PlannerEvent => ({
@@ -87,5 +88,23 @@ describe('группы «Плана»', () => {
     expect(state.tasks[0].project).toBe('');
     // Без группы событие снова своего цвета
     expect(getEventColor(state, state.events.find((e) => e.id === 'once')!)).toBe(3);
+  });
+});
+
+describe('группа из ввода текстом', () => {
+  it('событие с меткой #группа попадает в существующую группу без учёта регистра, новая — создаётся', () => {
+    const state = makeState();
+    createGroup(state, 'Учёба', 5);
+    applyQuickDraft(state, {
+      kind: 'event', name: 'пара', start: '10:00', end: '11:30', day: '2026-10-19', list: 'учёба',
+    } as QuickDraft, '2026-10-16');
+    const added = state.events[state.events.length - 1];
+    expect(added.project).toBe('Учёба');
+    expect(getEventColor(state, added)).toBe(5);
+    applyQuickDraft(state, {
+      kind: 'event', name: 'зал', start: '19:00', end: '20:00', day: '2026-10-19', list: 'Спорт',
+    } as QuickDraft, '2026-10-16');
+    expect(state.events[state.events.length - 1].project).toBe('Спорт');
+    expect(state.lists.map((l) => l.name)).toContain('Спорт');
   });
 });

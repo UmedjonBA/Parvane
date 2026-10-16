@@ -29,6 +29,13 @@ function putDaily(state: PlannerState, record: PlannerHealthRecord) {
   state.health = [...state.health.filter(({ id }) => id !== record.id), record];
 }
 
+// Группа из метки `#…`: существующая — по названию без учёта регистра, иначе новая — тем же путём, что у полной формы
+function quickGroup(state: PlannerState, list?: string) {
+  const listName = list?.trim().toLowerCase();
+  const known = listName ? state.lists.find(({ name }) => name.toLowerCase() === listName) : undefined;
+  return known?.name || ensureList(state, list?.trim() || '')?.name || '';
+}
+
 /** Записать черновик ввода текстом в состояние; возвращает подпись для уведомления либо `undefined`. */
 export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: string): string | undefined {
   if (draft.error) return undefined;
@@ -39,6 +46,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       state.events.push({
         id: newId(),
         name: draft.name,
+        project: quickGroup(state, draft.list) || undefined,
         description: quickDescription(draft),
         remind: draft.remind,
         start: draft.isAllDay ? ALL_DAY_START : draft.start!,
@@ -49,11 +57,7 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       });
       return draft.name;
     case 'task': {
-      // Список из метки `#…`: существующий — по названию без учёта регистра, иначе новый — тем же путём,
-      // что у полной формы
-      const listName = draft.list?.trim().toLowerCase();
-      const known = listName ? state.lists.find(({ name }) => name.toLowerCase() === listName) : undefined;
-      const project = known?.name || ensureList(state, draft.list?.trim() || '')?.name || '';
+      const project = quickGroup(state, draft.list);
       state.tasks.push({
         id: newId(),
         name: draft.name,

@@ -3620,7 +3620,7 @@
 "PlannerQuickTitle" = "New entry";
 "PlannerQuickAuto" = "Auto";
 "PlannerQuickPlaceholder" = "call tomorrow 16:00 45 min";
-"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. Put a description after “--”: “English lesson tue 15:00 -- listening test”. Numbers can be words (“at five pm”). Markers #list, @place and a final ! set the list, the place and “in progress”.";
+"PlannerQuickHint" = "Type as you would in a note: date, time, duration, deadline and repeat are recognised. Put a description after “--”: “English lesson tue 15:00 -- listening test”. Numbers can be words (“at five pm”). Markers #group, @place and a final ! set the group (task or event), the place and “in progress” (task).";
 "PlannerQuickMore" = "More options";
 "PlannerQuickDue" = "due {date}";
 "PlannerQuickRemove" = "Remove: {value}";
