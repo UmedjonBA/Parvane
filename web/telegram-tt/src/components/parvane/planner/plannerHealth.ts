@@ -400,6 +400,41 @@ export function parseClock(time?: string) {
   return hours < 24 && minutes < MINUTES_IN_HOUR ? hours * MINUTES_IN_HOUR + minutes : undefined;
 }
 
+/** Сон на оси своего дня, минуты от его полуночи: сон через полночь начался накануне вечером (как в «Неделе»),
+ * иначе весь — в этот день (утренний, дневной, вечерний). Без времени — `undefined`. */
+export function getSleepSpan(record: Pick<PlannerHealthRecord, 'time' | 'endTime'>) {
+  const bed = parseClock(record.time);
+  const wake = parseClock(record.endTime);
+  if (bed === undefined || wake === undefined || bed === wake) return undefined;
+  return { from: bed < wake ? bed : bed - MINUTES_IN_DAY, to: wake };
+}
+
+/** Время отхода ко сну на оси дня подъёма: после полудня — накануне вечером. */
+export function getBedOffset(clock: number) {
+  return clock >= HALF_DAY ? clock - MINUTES_IN_DAY : clock;
+}
+
+// Шаг подписей оси графика режима: на длинной оси реже
+const SLEEP_AXIS_STEPS = [MINUTES_IN_HOUR, 2 * MINUTES_IN_HOUR, 3 * MINUTES_IN_HOUR, 4 * MINUTES_IN_HOUR];
+const SLEEP_AXIS_MAX_TICKS = 8;
+const SLEEP_AXIS_PAD = 30;
+// Ось без снов со временем: 22:00 накануне — 08:00
+const SLEEP_AXIS_EMPTY = { from: -2 * MINUTES_IN_HOUR, to: 8 * MINUTES_IN_HOUR };
+
+/** Ось графика режима по отметкам (минуты от полуночи дня): границы — на целых шагах, подписи — каждый шаг. */
+export function getSleepAxis(marks: number[]) {
+  const from = marks.length ? Math.min(...marks) - SLEEP_AXIS_PAD : SLEEP_AXIS_EMPTY.from;
+  const to = marks.length ? Math.max(...marks) + SLEEP_AXIS_PAD : SLEEP_AXIS_EMPTY.to;
+  const step = SLEEP_AXIS_STEPS.find((value) => (to - from) / value <= SLEEP_AXIS_MAX_TICKS)
+    || SLEEP_AXIS_STEPS[SLEEP_AXIS_STEPS.length - 1];
+  const low = Math.floor(from / step) * step;
+  const high = Math.ceil(to / step) * step;
+  const ticks = Array.from({ length: (high - low) / step + 1 }, (_, index) => low + index * step);
+  return {
+    low, high, step, ticks,
+  };
+}
+
 /** Цель режима (минуты от полуночи) из сохранённых целей: значение приходит из JSON, негодное — не цель. */
 export function getClockGoal(value?: number) {
   return isKnownNumber(value) && value >= 0 && value < MINUTES_IN_DAY ? value : undefined;

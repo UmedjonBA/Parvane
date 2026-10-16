@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { QuickContext } from './plannerQuick';
 
 import {
-  applyQuickDraft, clockDifference, dailyRecordId, formatPace, getActiveMinutes, getClockGoal, getClockStat,
-  getDailyRecord, getDailySeries, getDayBudget, getLastDays, getLatestRecord, getLimitTotal, getSleepRecords,
-  getSleepRoutine,
-  getSleepRoutineLevel, getWorkouts, isShortSleep, parseClock, SLEEP_ROUTINE_DAYS, SLEEP_ROUTINE_DRIFTING_SPREAD,
+  applyQuickDraft, clockDifference, dailyRecordId, formatPace, getActiveMinutes, getBedOffset, getClockGoal,
+  getClockStat, getDailyRecord, getDailySeries, getDayBudget, getLastDays, getLatestRecord, getLimitTotal,
+  getSleepAxis, getSleepRecords, getSleepRoutine, getSleepRoutineLevel, getSleepSpan,
+  getWorkouts, isShortSleep, parseClock, SLEEP_ROUTINE_DAYS, SLEEP_ROUTINE_DRIFTING_SPREAD,
   SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, wrapClock,
 } from './plannerHealth';
 import { createEmptyPlannerState } from './plannerModel';
@@ -140,6 +140,31 @@ function lastNights(nights: Night[]) {
   const days = getLastDays(TODAY, nights.length);
   return stateWithSleep(Object.fromEntries(nights.map((night, index) => [days[index], night])));
 }
+
+describe('здоровье: шкала графика режима', () => {
+  it('сон через полночь начинается накануне, остальные — в свой день', () => {
+    expect(getSleepSpan({ time: '23:15', endTime: '06:45' })).toEqual({ from: -45, to: 405 });
+    expect(getSleepSpan({ time: '04:10', endTime: '09:20' })).toEqual({ from: 250, to: 560 });
+    expect(getSleepSpan({ time: '14:00', endTime: '15:30' })).toEqual({ from: 840, to: 930 });
+    expect(getSleepSpan({ time: '19:30', endTime: '20:40' })).toEqual({ from: 1170, to: 1240 });
+    expect(getSleepSpan({ time: '07:00', endTime: '07:00' })).toBeUndefined();
+    expect(getSleepSpan({ endTime: '07:00' })).toBeUndefined();
+    expect(getBedOffset(23 * 60 + 30)).toBe(-30);
+    expect(getBedOffset(60)).toBe(60);
+  });
+
+  it('границы оси — на целых шагах, подписи — каждый шаг', () => {
+    // Ночь 23:15–06:45: от 22:00 до 08:00, подпись каждые два часа
+    expect(getSleepAxis([-45, 405])).toMatchObject({ low: -120, high: 480, step: 120 });
+    // Ночь и вечерний сон того же дня — длинная ось, шаг реже
+    const axis = getSleepAxis([-45, 405, 1170, 1240]);
+    expect(axis.step).toBe(180);
+    expect(axis.low).toBe(-180);
+    expect(axis.high).toBe(1440);
+    expect(axis.ticks).toHaveLength(10);
+    expect(getSleepAxis([])).toMatchObject({ low: -120, high: 480 });
+  });
+});
 
 describe('здоровье: режим сна', () => {
   it('время суток — круг: среднее через полночь, разница и приведение', () => {

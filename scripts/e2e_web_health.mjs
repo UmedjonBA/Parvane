@@ -286,6 +286,24 @@ try {
   assert.equal(await nights('timed'), 6, 'шесть ночей со временем');
   console.log('OK: режим сна — сбит поздней ночью, ночь без времени, «плавает»');
 
+  // Второй сон дня (днём) — отдельный бледный столбик на шкале часов; режим считается по основному сну.
+  // Под графиком — сны выбранного дня с временем, нажатие на другой день показывает его
+  await saveSleep(-2, '14:00-15:10', 'nap');
+  const detail = routine.locator('[data-sleep-routine-detail]');
+  await expectText(detail, /23:35 → 07:25 \(7:50\), 14:00 → 15:10 \(1:10\) · total 9:00/, 'сны дня под графиком');
+  await goToDay(0);
+  assert.equal(await nights('nap'), 1, 'дневной сон — отдельный столбик');
+  assert.equal(await nights('timed'), 6, 'основных снов по-прежнему шесть');
+  await expectLevel('drifting', 'дневной сон режим не меняет');
+  await expectText(routine.locator('[data-sleep-routine-chart]'), /00:00/, 'подписи часов на шкале');
+  await expectText(detail, /01:00 → 06:00 \(5:00\)$/, 'по умолчанию — день экрана');
+  await routine.locator(`[data-sleep-pick="${dayKey(-1)}"]`).click();
+  await expectText(detail, /7:30 without times/, 'сны другого дня по нажатию');
+  await routine.locator(`[data-sleep-pick="${dayKey(-2)}"]`).click();
+  await expectText(detail, /14:00 → 15:10/, 'день с двумя снами по нажатию');
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/health-routine-naps.png` });
+  console.log('OK: режим сна — несколько снов за день, время по нажатию');
+
   await page.waitForTimeout(1500);
   await reloadPage(page);
   await relogin(page, PASSWORD).catch(() => undefined);
@@ -295,6 +313,7 @@ try {
   await expectLevel('drifting', 'после перезагрузки');
   assert.equal(await nights('timed'), 6, 'ночи со временем после перезагрузки');
   assert.equal(await nights('untimed'), 1, 'ночь без времени после перезагрузки');
+  assert.equal(await nights('nap'), 1, 'дневной сон после перезагрузки');
   await expectText(routine.locator('[data-sleep-routine-goal]'), /goal 23:30–07:00/, 'цель режима после перезагрузки');
   await expectText(routine.locator('[data-sleep-routine-untimed]'), /Nights without times: 1/, 'счёт без времени');
   await openPlannerScreen(page, 'today');
@@ -317,6 +336,8 @@ try {
   const columns = await health.evaluate((el) => new Set([...el.children].map((child) => Math.round(child.getBoundingClientRect().left))).size);
   assert.equal(columns, 1, 'на телефоне блоки стоят одной колонкой');
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/health-phone.png` });
+  await routine.scrollIntoViewIfNeeded();
+  if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/health-phone-routine.png` });
   console.log('OK: «Здоровье» на телефоне');
 
   console.log('e2e_web_health: OK');

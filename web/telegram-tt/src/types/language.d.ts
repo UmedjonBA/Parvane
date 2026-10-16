@@ -5281,6 +5281,21 @@ export interface LangPairWithVariables<V = LangVariable> {
   'PlannerSleepRoutineJetlagEarlier': {
     'value': V;
   };
+  'PlannerSleepRoutineDetail': {
+    'day': V;
+    'sleeps': V;
+  };
+  'PlannerSleepRoutineDetailTotal': {
+    'day': V;
+    'sleeps': V;
+    'total': V;
+  };
+  'PlannerSleepRoutineDetailNone': {
+    'day': V;
+  };
+  'PlannerSleepRoutineDetailUntimed': {
+    'value': V;
+  };
   'PlannerSleepRoutineDriftingShort': {
     'value': V;
   };

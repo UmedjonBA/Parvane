@@ -3809,7 +3809,11 @@
 "PlannerSleepRoutineJetlagLater" = "On days off the middle of sleep is {value} later than on workdays.";
 "PlannerSleepRoutineJetlagEarlier" = "On days off the middle of sleep is {value} earlier than on workdays.";
 "PlannerSleepRoutineChart" = "Bedtime and wake-up over two weeks";
-"PlannerSleepRoutineLegend" = "A bar is a night from bedtime to wake-up. Solid lines are the average, dashed ones the goal. A dot is a night without times.";
+"PlannerSleepRoutineLegend" = "A bar is a sleep from bedtime to wake-up: bright is the main sleep of the day, pale is a nap. Tap a day to see the times below the chart. Solid lines are the average, dashed ones the goal, a dot is a sleep without times.";
+"PlannerSleepRoutineDetail" = "{day}: {sleeps}";
+"PlannerSleepRoutineDetailTotal" = "{day}: {sleeps} · total {total}";
+"PlannerSleepRoutineDetailNone" = "{day}: no sleep logged";
+"PlannerSleepRoutineDetailUntimed" = "{value} without times";
 "PlannerSleepRoutineDriftingShort" = "routine drifting: ±{value}";
 "PlannerSleepRoutineBrokenShort" = "routine off track: ±{value}";
 "PlannerHealthWorkoutExample" = "run 5 km 30 min";

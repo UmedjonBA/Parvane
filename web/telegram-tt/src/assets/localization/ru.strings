@@ -1897,7 +1897,11 @@
 "PlannerSleepRoutineJetlagLater" = "В выходные середина сна на {value} позже, чем в будни.";
 "PlannerSleepRoutineJetlagEarlier" = "В выходные середина сна на {value} раньше, чем в будни.";
 "PlannerSleepRoutineChart" = "Отход ко сну и подъём за две недели";
-"PlannerSleepRoutineLegend" = "Столбик — ночь от отхода ко сну до подъёма. Сплошные линии — среднее, пунктир — цель. Точка — ночь без времени.";
+"PlannerSleepRoutineLegend" = "Столбик — сон от отхода до подъёма: яркий — основной сон дня, бледный — дневной. Нажмите на день — под графиком появится время. Сплошные линии — среднее, пунктир — цель, точка — сон без времени.";
+"PlannerSleepRoutineDetail" = "{day}: {sleeps}";
+"PlannerSleepRoutineDetailTotal" = "{day}: {sleeps} · всего {total}";
+"PlannerSleepRoutineDetailNone" = "{day}: сон не записан";
+"PlannerSleepRoutineDetailUntimed" = "{value} без времени";
 "PlannerSleepRoutineDriftingShort" = "режим плавает: ±{value}";
 "PlannerSleepRoutineBrokenShort" = "режим сбит: ±{value}";
 "PlannerHealthWorkoutExample" = "бег 5 км 30 мин";
