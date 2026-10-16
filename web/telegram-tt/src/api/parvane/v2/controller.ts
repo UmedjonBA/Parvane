@@ -210,6 +210,8 @@ type PendingJoin = {
   requests: { chan: Chan; method: string; body: string }[];
   rootBackup?: string;
   bundleKey?: string;
+  // Первое устройство аккаунта: новый корень, ключ восстановления ещё не у владельца
+  recoveryKey?: string;
 };
 export type KeyJoinOutcome = {
   result: SskRotationResult;
@@ -360,6 +362,13 @@ const LEGACY_BUNDLE_POLL_MS = 3000;
 // хранилище устройства, пока сервер не подтвердит запись в журнале
 const PENDING_GRANT_RECORD = 'v2-pending-grant';
 const PENDING_JOIN_RECORD = 'v2-pending-join';
+// Ключ восстановления нового корня, ещё не дошедший до владельца (Telegram либо
+// окно): переживает перезагрузку вкладки — иначе он потерян навсегда
+const PENDING_RECOVERY_KEY_RECORD = 'v2-pending-recovery-key';
+// e2e-хук (только диаг-сборка): перезагрузить вкладку сразу после того, как сервер
+// принял журнал нового корня, — как телефон, выгрузивший вкладку в этот момент
+const RELOAD_AFTER_CREATE_KEY = 'parvane:e2e:reloadAfterCreate';
+const ARE_DIAG_HOOKS_ENABLED = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1';
 // Отказы, после которых повтор того же запроса имеет смысл (связь, частота)
 const TRANSIENT_CODES = new Set([
   'ERROR_CODE_UNAVAILABLE', 'ERROR_CODE_RATE_LIMITED', 'ERROR_CODE_UNSPECIFIED', 'ERROR_CODE_EXPIRED',
@@ -853,20 +862,26 @@ export function createV2Controller(deps: Deps) {
           if (!(await finishJoin(join))) return;
         } else {
           const created = client.createIdentity(OTK_COUNT) as { requests: OutReq[]; rootSecret: Uint8Array };
-          await run(created.requests);
           // C1-06 / D-12: корень не лежит на устройстве — только копия под ключом
           // восстановления (≥ 128 бит, без парольной фразы), ключ показывается
           // пользователю один раз
           const recoveryKey = pv.generateRecoveryKey();
-          const backup = client.exportRootBackup(recoveryKey, created.rootSecret);
-          rootBackupB64 = b64(backup);
-          await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+          const rootBackup = b64(client.exportRootBackup(recoveryKey, created.rootSecret));
           await sealRootEscrow(client);
           client.forgetRoot();
           created.rootSecret.fill(0);
-          await rememberBundleKey(recoveryKey);
-          await queueRecoveryKey(recoveryKey);
-          await persistUrgent();
+          // Ключи устройства и ключ восстановления — на диск ДО записи журнала на
+          // сервере: вкладка, выгруженная после записи (телефон, вернувшийся из
+          // Telegram после подтверждения), иначе теряла их, и аккаунт оставался с
+          // журналом, к которому не привязать ни одно устройство
+          const join: PendingJoin = {
+            state: b64(client.export(storageKey)),
+            requests: created.requests.map((r) => ({ chan: r.chan, method: r.method, body: b64(r.body) })),
+            rootBackup,
+            recoveryKey,
+          };
+          await storage.saveRecord(PENDING_JOIN_RECORD, join);
+          if (!(await finishJoin(join))) return;
         }
       }
       // Ключ личного состояния (T098): первое v2-устройство создаёт его;
@@ -957,12 +972,34 @@ export function createV2Controller(deps: Deps) {
       await storage.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
     }
     needsLinking = false;
-    isJustJoined = true;
+    if (join.recoveryKey) {
+      await reloadAfterCreateForTest();
+      await rememberBundleKey(join.recoveryKey);
+      await queueRecoveryKey(join.recoveryKey);
+    } else {
+      isJustJoined = true;
+    }
     // Запись в журнале принята: ключи устройства — на диск до снятия отметки вступления
     await persistUrgent();
     await storage.deleteRecord(PENDING_JOIN_RECORD).catch(() => undefined);
-    deps.log('v2: устройство привязано грантом линковки');
+    deps.log(join.recoveryKey
+      ? 'v2: создан корень и журнал устройств'
+      : 'v2: устройство привязано грантом линковки');
     return true;
+  }
+
+  async function reloadAfterCreateForTest() {
+    if (!ARE_DIAG_HOOKS_ENABLED) return;
+    try {
+      if (!localStorage.getItem(RELOAD_AFTER_CREATE_KEY)) return;
+      localStorage.removeItem(RELOAD_AFTER_CREATE_KEY);
+    } catch {
+      return;
+    }
+    deps.log('v2: e2e — перезагрузка сразу после записи журнала нового корня');
+    window.location.reload();
+    // Дальше вкладка не идёт: ни записи на диск, ни отправки ключа
+    await new Promise(() => undefined);
   }
 
   async function syncAll() {
@@ -1632,6 +1669,7 @@ export function createV2Controller(deps: Deps) {
       return;
     }
     telegramKey = recoveryKey;
+    await storage?.saveRecord(PENDING_RECOVERY_KEY_RECORD, recoveryKey);
   }
 
   /** Сервер подтверждает регистрацию через Telegram-бота (`server.describe`). */
@@ -1648,11 +1686,14 @@ export function createV2Controller(deps: Deps) {
   }
 
   async function flushTelegramKey() {
+    // Ключ, не дошедший до владельца до перезагрузки вкладки
+    telegramKey = telegramKey || await storage?.loadRecord<string>(PENDING_RECOVERY_KEY_RECORD);
     if (!telegramKey) return;
     const key = telegramKey;
     const result = await sendKeyToTelegram(key);
     if (result === 'ok') {
       telegramKey = undefined;
+      await storage?.deleteRecord(PENDING_RECOVERY_KEY_RECORD).catch(() => undefined);
       deps.log('v2: ключ восстановления отправлен владельцу в Telegram');
       return;
     }
@@ -1662,7 +1703,10 @@ export function createV2Controller(deps: Deps) {
       isRecoveryKeyShown = true;
       deps.onRecoveryKey(key);
     }
-    if (result !== 'failed') telegramKey = undefined;
+    if (result !== 'failed') {
+      telegramKey = undefined;
+      await storage?.deleteRecord(PENDING_RECOVERY_KEY_RECORD).catch(() => undefined);
+    }
   }
 
   /** К аккаунту привязан Telegram и сервер работает с ботом. Экран «Устройства»

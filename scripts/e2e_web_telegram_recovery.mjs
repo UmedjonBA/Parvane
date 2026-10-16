@@ -94,10 +94,13 @@ function waitLog(session, pattern, timeout = STEP_TIMEOUT_MS) {
   });
 }
 
-/** Регистрация через форму с подтверждением «ботом»; возвращает сессию и ключ из диалога. */
-async function register(context, nick, telegramId) {
+/** Регистрация через форму с подтверждением «ботом»; возвращает сессию и ключ из диалога.
+ * `isReloadedAfterCreate` — вкладка перезагружается сразу после того, как сервер принял журнал нового
+ * корня (хук диаг-сборки): так телефон выгружает вкладку, когда человек возвращается из Telegram. */
+async function register(context, nick, telegramId, { isReloadedAfterCreate } = {}) {
   const session = await openStartPage(context);
   const { page, startScreen } = session;
+  if (isReloadedAfterCreate) await page.evaluate(() => localStorage.setItem('parvane:e2e:reloadAfterCreate', '1'));
   await pressAuthButton(page, startScreen, 'Create account', '#auth-registration-form');
   const form = page.locator('.Transition_slide-active > #auth-registration-form');
   await form.locator('#sign-up-parvane-nick').fill(nick);
@@ -109,6 +112,15 @@ async function register(context, nick, telegramId) {
   const confirm = await botConfirmV2(gatewayUrl, SECRET, token, telegramId, `tg${telegramId}`);
   assert.equal(confirm.ok, true, `подтверждение: ${JSON.stringify(confirm)}`);
   await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  if (isReloadedAfterCreate) {
+    await waitLog(session, /перезагрузка сразу после записи журнала нового корня/);
+    // Строка появляется только после перезагрузки: первый запуск до неё не дошёл
+    await waitLog(session, /v2: создан корень и журнал устройств/, LOGIN_TIMEOUT_MS);
+    await page.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await waitLog(session, /v2: готов/);
+    assert(!session.logs.some((line) => line.includes('нужна линковка')),
+      `${nick}: после перезагрузки устройство себя не узнало:\n${session.logs.slice(-20).join('\n')}`);
+  }
   // Ключ уходит владельцу в Telegram — окна с ключом в приложении нет
   const [message] = await pullFor(telegramId, 'key');
   assert.equal(message.user, `${nick}@local`);
@@ -225,7 +237,11 @@ try {
   console.log('OK: ключ восстановления ушёл владельцу в Telegram, окна с ключом в приложении нет');
 
   const bobContext = await browser.newContext({ viewport: WIDE });
-  const bob = await register(bobContext, bobNick, TG_BOB);
+  // Боб — первое устройство, выгруженное сразу после записи журнала на сервере (прод, 16 окт 2026):
+  // ключи устройства и ключ восстановления переживают перезагрузку, переписка ниже это проверяет
+  const bob = await register(bobContext, bobNick, TG_BOB, { isReloadedAfterCreate: true });
+  sessions.bob = bob;
+  console.log('OK: перезагрузка сразу после записи журнала — устройство поднялось само, ключ ушёл в Telegram');
 
   // ── Переписка и задача планировщика на первом устройстве ──
   const fromAlice = `from-alice-${suffix}`;
