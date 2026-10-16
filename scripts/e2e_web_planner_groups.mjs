@@ -91,7 +91,21 @@ try {
   await rowsOf('Лекция').first().click();
   await page.locator('#planner-event-list').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await page.locator('#planner-event-list').inputValue(), 'Учёба', 'группа в карточке события');
+  // Туда и обратно на «Без группы»: пункт один, кружки цвета возвращаются (раньше пустой `value` пункта снимался
+  // при перерисовке — выбиралась «группа» с именем «Без группы»)
+  await page.locator('#planner-event-list').selectOption({ label: 'No group' });
+  await sidePane.getByRole('radiogroup', { name: 'Group color' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#planner-event-list').selectOption({ label: 'Учёба' });
+  await sidePane.getByRole('radiogroup', { name: 'Group color' }).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  await page.locator('#planner-event-list').selectOption({ label: 'No group' });
+  await sidePane.getByRole('radiogroup', { name: 'Group color' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await page.locator('#planner-event-list option').filter({ hasText: 'No group' }).count(), 1, '«Без группы» — один');
+  assert.equal(await page.locator('#planner-event-remind').evaluate((el) => el.selectedOptions[0]?.textContent), 'No reminder');
   await closeSide();
+  // Панель групп справа от ленты, кнопка «Добавить в группу» — в её шапке
+  const sideBox = await agenda.locator('aside').boundingBox();
+  const feedBox = await rowsOf('Лекция').first().boundingBox();
+  assert(sideBox && feedBox && sideBox.x > feedBox.x + feedBox.width, 'панель групп справа от ленты');
 
   // Переименование и цвет — у всех записей; после перезагрузки на месте
   await groupBar.locator('[data-group="Учёба"]').click();
@@ -117,6 +131,25 @@ try {
   await rowsOf('Лекция').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await colorOf(rowsOf('Лекция').first()), '', 'после удаления группы записи без цвета');
   console.log('OK: группа удалена, записи остались');
+
+  // Телефон: группы — одной строкой со свайпом, кнопка — в шапке панели
+  for (const name of ['Альфа', 'Бета', 'Гамма', 'Дельта', 'Эпсилон', 'Зета']) {
+    await groupBar.locator('[data-group-new]').click();
+    await editor.getByLabel('New group').fill(name);
+    await editor.getByRole('button', { name: 'Create group' }).click();
+    await groupBar.locator(`[data-group="${name}"]`).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openList();
+  const chipTops = await groupBar.locator('[data-group]').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+  assert.equal(new Set(chipTops.map(Math.round)).size, 1, `группы на телефоне одной строкой: ${chipTops}`);
+  const row = await groupBar.locator('[data-group]').first().evaluate((el) => {
+    const box = el.parentElement;
+    return { scroll: box.scrollWidth, client: box.clientWidth, overflow: getComputedStyle(box).overflowX };
+  });
+  assert(row.scroll > row.client && row.overflow === 'auto', `строка групп прокручивается: ${JSON.stringify(row)}`);
+  await groupBar.locator('[data-group-pick]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: телефон — группы одной строкой со свайпом');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_groups: OK');
 } finally {

@@ -30,6 +30,9 @@ type OwnProps = {
 };
 
 const NEW_LIST_VALUE = '\u0000new';
+// «Без группы» — непустым значением: пустой `value` пункта при перерисовке снимается, и браузер берёт вместо него
+// текст пункта — выбор «Без группы» становился группой с таким именем (вторым пунктом в списке)
+const NO_LIST_VALUE = '\u0000none';
 const LIST_NAME_MAX_LENGTH = 60;
 const COLORS = Array.from({ length: LIST_COLOR_COUNT + 1 }, (_, index) => index);
 
@@ -78,7 +81,8 @@ const PlannerListPicker = ({
       setIsCreating(true);
       return;
     }
-    onChange(e.currentTarget.value);
+    const selected = e.currentTarget.value;
+    onChange(selected === NO_LIST_VALUE ? '' : selected);
   });
 
   const handleCancel = useLastCallback(() => {
@@ -131,11 +135,13 @@ const PlannerListPicker = ({
     <Select
       id={id}
       label={lang('PlannerFieldList')}
-      value={value}
+      value={value || NO_LIST_VALUE}
       hasArrow
       onChange={handleSelect}
     >
-      {projects.map((item) => <option key={item} value={item}>{formatProject(lang, item)}</option>)}
+      {projects.map((item) => (
+        <option key={item || NO_LIST_VALUE} value={item || NO_LIST_VALUE}>{formatProject(lang, item)}</option>
+      ))}
       <option value={NEW_LIST_VALUE}>{lang('PlannerCreateListOption')}</option>
     </Select>
   );

@@ -1541,6 +1541,7 @@
 "PlannerSettingsReset" = "Сбросить по умолчанию";
 "PlannerSettingsLearnedReset" = "Сбросить выученное";
 "PlannerGroups" = "Группы";
+"PlannerGroupsPeriod" = "записей · часов за 30 дней";
 "PlannerGroupAdd" = "Группа";
 "PlannerGroupPick" = "Добавить в группу";
 "PlannerGroupPickHint" = "Отметьте записи, которые добавить, и выберите группу.";

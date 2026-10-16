@@ -3490,6 +3490,7 @@
 "PlannerSettingsReset" = "Reset to defaults";
 "PlannerSettingsLearnedReset" = "Reset learned defaults";
 "PlannerGroups" = "Groups";
+"PlannerGroupsPeriod" = "count · hours, next 30 days";
 "PlannerGroupAdd" = "Group";
 "PlannerGroupPick" = "Add to group";
 "PlannerGroupPickHint" = "Tick the entries to add, then choose the group.";

@@ -4,7 +4,7 @@ import type { GroupError } from './plannerGroups';
 import type { PlannerState } from './plannerModel';
 
 import buildClassName from '../../../util/buildClassName';
-import { listColorStyle } from './plannerFormat';
+import { formatHours, listColorStyle } from './plannerFormat';
 import {
   createGroup, deleteGroup, normalizeGroupName, renameGroup, setGroupColor,
 } from './plannerGroups';
@@ -21,8 +21,12 @@ import { PlannerColorSwatches } from './PlannerListPicker';
 
 import styles from './Planner.module.scss';
 
+// Сколько записей и времени у группы в показанных днях ('' — без группы)
+export type GroupStats = Record<string, { count: number; minutes: number }>;
+
 type OwnProps = {
   state: PlannerState;
+  stats: GroupStats;
   isPicking: boolean;
   onStartPick: NoneToVoidFunction;
 };
@@ -35,8 +39,11 @@ const ERROR_KEYS = {
 // Редактор группы: новой (`name` пусто) либо существующей
 type Editing = { from?: string; name: string; color: number };
 
-// Ряд групп над видом «Список»: группы цветом, правка группы на месте, «+ Группа», «Добавить в группу»
-const PlannerGroupBar = ({ state, isPicking, onStartPick }: OwnProps) => {
+// Панель групп вида «Список»: группы цветом с числом записей и часов за показанные дни, правка группы на месте,
+// «+ Группа», «Добавить в группу»
+const PlannerGroupBar = ({
+  state, stats, isPicking, onStartPick,
+}: OwnProps) => {
   const lang = useLang();
 
   const [editing, setEditing] = useState<Editing>();
@@ -95,8 +102,33 @@ const PlannerGroupBar = ({ state, isPicking, onStartPick }: OwnProps) => {
     setEditing(undefined);
   });
 
+  const renderStats = (name: string) => {
+    const item = stats[name];
+    return (
+      <span className={styles.groupStats}>
+        {item ? `${item.count} · ${formatHours(lang, item.minutes)}` : '—'}
+      </span>
+    );
+  };
+
   return (
     <div className={styles.groupBar} data-group-bar>
+      <div className={styles.groupHead}>
+        <div className={styles.groupHeadText}>
+          <h3 className={styles.groupPanelTitle}>{lang('PlannerGroups')}</h3>
+          <span className={styles.groupPeriod}>{lang('PlannerGroupsPeriod')}</span>
+        </div>
+        {!isPicking && (
+          <button
+            type="button"
+            className={buildClassName(styles.btn, styles.btnAccent, styles.groupPickButton)}
+            data-group-pick
+            onClick={onStartPick}
+          >
+            {lang('PlannerGroupPick')}
+          </button>
+        )}
+      </div>
       <div className={styles.groupChips}>
         {state.lists.map((list) => (
           <button
@@ -108,24 +140,26 @@ const PlannerGroupBar = ({ state, isPicking, onStartPick }: OwnProps) => {
             onClick={handleOpenGroup}
           >
             <span className={styles.groupDot} />
-            {list.name}
+            <span className={styles.groupName}>{list.name}</span>
+            {renderStats(list.name)}
           </button>
         ))}
-        <button type="button" className={styles.groupChip} data-group-new onClick={handleNew}>
+        {Boolean(stats['']) && (
+          <div className={buildClassName(styles.groupChip, styles.groupChipStatic)} data-group-none>
+            <span className={styles.groupDot} />
+            <span className={styles.groupName}>{lang('PlannerNoList')}</span>
+            {renderStats('')}
+          </div>
+        )}
+        <button
+          type="button"
+          className={buildClassName(styles.groupChip, styles.groupChipAdd)}
+          data-group-new
+          onClick={handleNew}
+        >
           <Icon name="add" />
           {lang('PlannerGroupAdd')}
         </button>
-        <span className={styles.grow} />
-        {!isPicking && (
-          <button
-            type="button"
-            className={buildClassName(styles.btn, styles.btnAccent)}
-            data-group-pick
-            onClick={onStartPick}
-          >
-            {lang('PlannerGroupPick')}
-          </button>
-        )}
       </div>
       {editing && (
         <div className={styles.groupEditor} data-group-editor>

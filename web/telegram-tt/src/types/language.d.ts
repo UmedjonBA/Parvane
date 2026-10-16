@@ -2572,6 +2572,7 @@ export interface LangPair {
   'PlannerSettingsReset': undefined;
   'PlannerSettingsLearnedReset': undefined;
   'PlannerGroups': undefined;
+  'PlannerGroupsPeriod': undefined;
   'PlannerGroupAdd': undefined;
   'PlannerGroupPick': undefined;
   'PlannerGroupPickHint': undefined;
