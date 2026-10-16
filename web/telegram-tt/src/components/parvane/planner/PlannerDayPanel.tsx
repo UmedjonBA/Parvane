@@ -36,11 +36,13 @@ type OwnProps = {
   onAdd?: NoneToVoidFunction;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
+  // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
+  onOpenSleep?: (day: string) => void;
 };
 
 // День календаря: предупреждение о недосыпе, сводка плашками, задачи без времени и расписание списком
 const PlannerDayPanel = ({
-  state, day, today, layers, variant, onShiftDay, onAdd, onOpenTask, onOpenEvent,
+  state, day, today, layers, variant, onShiftDay, onAdd, onOpenTask, onOpenEvent, onOpenSleep,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -129,6 +131,7 @@ const PlannerDayPanel = ({
           layers={layers}
           onOpenTask={onOpenTask}
           onOpenEvent={onOpenEvent}
+          onOpenSleep={onOpenSleep}
         />
       )}
       {onAdd && (

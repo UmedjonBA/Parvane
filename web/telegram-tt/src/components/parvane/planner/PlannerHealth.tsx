@@ -1,4 +1,6 @@
-import { memo, useMemo, useState } from '../../../lib/teact/teact';
+import {
+  memo, useEffect, useMemo, useRef, useState,
+} from '../../../lib/teact/teact';
 
 import type { SleepNight } from './plannerHealth';
 import type {
@@ -7,12 +9,12 @@ import type {
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatDayShort, formatDuration, formatHours, formatSpan, formatWeekday,
+  formatDayShort, formatDuration, formatHours, formatNumber, formatSpan, formatWeekday,
 } from './plannerFormat';
 import {
-  applyQuickDraft, clockDifference, formatPace, getClockGoal, getDailyRecord, getDailySeries, getLastDays,
-  getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES, SLEEP_ROUTINE_DRIFTING_SPREAD,
-  SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, sumActiveMinutes, wrapClock,
+  applyQuickDraft, clockDifference, dailyRecordId, formatPace, getClockGoal, getDailyRecord, getDailySeries,
+  getLastDays, getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES,
+  SLEEP_ROUTINE_DRIFTING_SPREAD, SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, sumActiveMinutes, wrapClock,
 } from './plannerHealth';
 import {
   addDays, fromDayKey, getGoalsForDay, getNutrientTotal, toTime,
@@ -114,6 +116,8 @@ type TextFormProps = {
   label: string;
   buttonText: string;
   buttonClassName: string;
+  // Подставить текст в поле (правка записанного): подставляется при каждом новом `fill.key`
+  fill?: { key: number; text: string };
   // `true` — строка принята, поле очищается
   onSubmit: (text: string) => boolean;
 };
@@ -121,9 +125,16 @@ type TextFormProps = {
 // Строка ввода с кнопкой («сон дня», «цели»): набираемый текст — состояние поля, а не экрана, иначе каждый
 // символ перерисовывал бы весь экран «Здоровья»
 const HealthTextForm = memo(({
-  id, placeholder, label, buttonText, buttonClassName, onSubmit,
+  id, placeholder, label, buttonText, buttonClassName, fill, onSubmit,
 }: TextFormProps) => {
   const [text, setText] = useState('');
+  const inputRef = useRef<HTMLInputElement>();
+
+  useEffect(() => {
+    if (!fill) return;
+    setText(fill.text);
+    inputRef.current?.focus();
+  }, [fill]);
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setText(e.currentTarget.value);
@@ -137,6 +148,7 @@ const HealthTextForm = memo(({
   return (
     <form className={styles.healthGoalForm} onSubmit={handleSubmit}>
       <input
+        ref={inputRef}
         id={id}
         className={buildClassName('form-control', styles.fieldInput)}
         type="text"
@@ -248,6 +260,23 @@ const PlannerHealth = ({
       applyQuickDraft(next, draft, day);
     }, lang('PlannerNoticeAdded', { name: lang('PlannerHealthSleep') }));
     return true;
+  });
+
+  // Правка сна дня: строка записанного сна — в поле ввода; удаление — вся запись дня
+  const [sleepFill, setSleepFill] = useState<{ key: number; text: string }>();
+
+  const handleEditSleep = useLastCallback(() => {
+    if (!sleep) return;
+    const text = sleep.time && sleep.endTime
+      ? `${sleep.time}–${sleep.endTime}`
+      : lang('PlannerHealthSleepHours', { hours: formatNumber(lang, sleep.value / MINUTES_IN_HOUR, 2) });
+    setSleepFill({ key: Date.now(), text });
+  });
+
+  const handleDeleteSleep = useLastCallback(() => {
+    updatePlanner((draft) => {
+      draft.health = draft.health.filter(({ id }) => id !== dailyRecordId('sleep', day));
+    }, lang('PlannerNoticeSleepDeleted'));
   });
 
   const handleAddWorkout = useLastCallback(() => {
@@ -842,6 +871,25 @@ const PlannerHealth = ({
             <span className={styles.muted}>
               {sleep.time && sleep.endTime ? `${sleep.time} → ${sleep.endTime}` : ''}
             </span>
+            <span className={styles.grow} />
+            <button
+              type="button"
+              className={buildClassName(styles.btn, styles.btnGhost)}
+              data-sleep-edit
+              onClick={handleEditSleep}
+            >
+              <Icon name="edit" />
+              {lang('Edit')}
+            </button>
+            <button
+              type="button"
+              className={buildClassName(styles.btn, styles.btnDanger)}
+              data-sleep-delete
+              onClick={handleDeleteSleep}
+            >
+              <Icon name="delete" />
+              {lang('Delete')}
+            </button>
           </div>
         ) : (
           <button type="button" className={styles.btn} onClick={handleAddSleep}>
@@ -850,6 +898,7 @@ const PlannerHealth = ({
         )}
         <HealthTextForm
           id="planner-health-sleep"
+          fill={sleepFill}
           placeholder={lang('PlannerHealthSleepDayPlaceholder')}
           label={lang('PlannerHealthSleepDayLabel')}
           buttonText={lang('Save')}

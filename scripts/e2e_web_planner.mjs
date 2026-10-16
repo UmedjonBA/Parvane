@@ -176,7 +176,7 @@ try {
 
   // ── Событие, пересекающееся с задачей ─────────────────────────────────────
   await openFullForm();
-  await page.locator('#planner-new-kind').selectOption('event');
+  await sidePane.locator('[data-new-kind="event"]').click();
   await page.locator('#planner-new-name').fill('Созвон команды');
   await planner.getByLabel('Start', { exact: true }).fill('14:30');
   await planner.getByLabel('End', { exact: true }).fill('15:00');
@@ -299,8 +299,10 @@ try {
   await planner.getByText('Added: Вторая задача').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const undatedRow = todayView.locator('[data-today-undated]');
   await undatedRow.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  assert.match(await undatedRow.innerText(), /No date\s+\d+/);
-  assert.equal(await todayView.locator('[data-today-tasks]').getByText('Вторая задача').count(), 0, 'без даты — не в задачах дня');
+  assert.match(await undatedRow.innerText(), /All without a date\s+\d+/);
+  // Задачи без даты видны прямо в карточке «Задачи» под «Без даты» (16 окт 2026)
+  await todayView.locator('[data-today-tasks]').getByText('Вторая задача').first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await undatedRow.click();
   const undatedSheet = page.locator('[data-planner-undated]');
   await undatedSheet.getByText('Вторая задача').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -311,6 +313,17 @@ try {
   await undatedSheet.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await todayView.locator('[data-today-tasks]').getByText('Вторая задача').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // «+» карточки «Задачи» — задача на этот день, а не «без даты»
+  await todayView.locator('[data-today-tasks]').getByRole('button', { name: 'New task' }).click();
+  await page.waitForFunction(() => document.querySelector('#planner-quick-input')?.value === 'task today ', undefined, {
+    timeout: STEP_TIMEOUT_MS,
+  });
+  await page.locator('#planner-quick-input').press('End');
+  await page.locator('#planner-quick-input').pressSequentially('Задача с плюса');
+  await page.locator('#planner-quick-input').press('Enter');
+  await planner.getByText('Added: Задача с плюса').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const plusTask = todayView.locator('[data-today-tasks]').getByText('Задача с плюса').first();
+  await plusTask.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Стрелки периода листают дни
   await planner.getByRole('button', { name: 'Next period' }).click();
   await planner.locator('[data-planner-today]').getByText('No tasks for this day').first()
@@ -345,6 +358,12 @@ try {
   };
   const weekdayShort = new Date().toLocaleDateString('en-US', { weekday: 'short' });
   const repeatSelect = () => planner.locator('[data-repeat-kind] select').first();
+  // Повтор в карточках (16 окт 2026) — строкой-сводкой: настройки раскрываются по нажатию
+  const openRepeat = async () => {
+    if (await sidePane.locator('[data-repeat-kind]').count()) return;
+    await sidePane.locator('[data-repeat-toggle]').first().click();
+    await sidePane.locator('[data-repeat-kind]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  };
   const openDay = async (day) => {
     await openPlannerScreen(page, 'calendar');
     const cell = planner.locator(`[role="gridcell"][data-day="${day}"]`);
@@ -365,7 +384,7 @@ try {
   // Еженедельное событие по сегодняшнему дню недели — стоит и через неделю
   await openPlannerScreen(page, 'calendar');
   await openFullForm();
-  await page.locator('#planner-new-kind').selectOption('event');
+  await sidePane.locator('[data-new-kind="event"]').click();
   // Форма перестраивается под событие: поля времени заполняются уже в новой раскладке
   await sidePane.getByText('All day', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await page.locator('#planner-new-name').fill('Йога');
@@ -375,6 +394,7 @@ try {
   for (let attempt = 0; attempt < 15 && await endField.inputValue() !== '19:00'; attempt++) await page.waitForTimeout(200);
   assert.equal(await endField.inputValue(), '19:00', 'конец события по умолчанию');
   // У селектов есть подписи (B7)
+  await openRepeat();
   assert.ok(await sidePane.getByLabel('Repeat', { exact: true }).count(), 'у выбора повтора нет подписи');
   await repeatSelect().selectOption('weekly');
   // Чекбокс форка перехватывает клик своей подписью — кликаем по подписи
@@ -392,10 +412,11 @@ try {
   const lastDay = new Date(year, month, 0).getDate();
   const lastKey = `${today.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
   await openFullForm();
-  await page.locator('#planner-new-kind').selectOption('event');
+  await sidePane.locator('[data-new-kind="event"]').click();
   await page.locator('#planner-new-name').fill('Аренда');
   await planner.getByLabel('Start', { exact: true }).fill('12:00');
   await planner.getByLabel('End', { exact: true }).fill('12:30');
+  await openRepeat();
   await repeatSelect().selectOption('monthly');
   await planner.getByLabel('Day of month').fill('31');
   await planner.getByLabel('Starts on').fill(`${today.slice(0, 7)}-01`);
@@ -413,6 +434,7 @@ try {
   await planner.getByLabel('Duration, min').fill('15');
   // Внутри окон дня (после шага настроек — с 08:00), иначе задача в панели дня не показывается
   await planner.getByLabel('Start', { exact: true }).fill('10:00');
+  await openRepeat();
   await repeatSelect().selectOption('daily');
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
   await planner.getByRole('heading', { name: 'Зарядка' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -500,14 +522,15 @@ try {
     // Дата начала ряда берётся из выбранного дня
     await backToThisMonth();
     await openFullForm();
-    await page.locator('#planner-new-kind').selectOption('event');
+    await sidePane.locator('[data-new-kind="event"]').click();
     await sidePane.getByText('All day', { exact: true }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     await page.locator('#planner-new-name').fill(name);
     await page.locator('#planner-new-description').fill(text);
     await planner.getByLabel('Start', { exact: true }).fill(start);
     // Галочки нет, пока запись не повторяется
     assert.equal(await scopeBox.count(), 0, 'у разовой записи галочки описания нет');
-    await repeatSelect().selectOption('weekly');
+    await openRepeat();
+  await repeatSelect().selectOption('weekly');
     await sidePane.getByText(weekdayShort, { exact: true }).click();
     await scopeBox.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
     assert.equal(await scopeBox.getAttribute('data-description-scope'), 'all', 'по умолчанию описание — всех повторов');
@@ -563,14 +586,7 @@ try {
     return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short' });
   };
   const repeatBox = sidePane.locator('[data-repeat-kind]');
-  const openDetails = async () => {
-    const details = sidePane.locator('[data-planner-details]');
-    await details.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-    if (await details.getAttribute('data-planner-details') === 'closed') {
-      await details.getByRole('button', { name: /Repeat and details/ }).click();
-    }
-    await sidePane.locator('[data-planner-details="open"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  };
+  const openDetails = openRepeat;
   const countTasksOn = async (day, name) => {
     await backToThisMonth();
     const pane = await openDay(day);
@@ -591,6 +607,7 @@ try {
   await page.locator('#planner-new-name').fill('Бассейн');
   await planner.getByLabel('Duration, min').fill('20');
   await planner.getByLabel('Start', { exact: true }).fill('13:00');
+  await openRepeat();
   await repeatSelect().selectOption('weekly');
   await sidePane.getByText(weekdayShort, { exact: true }).click();
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
@@ -613,8 +630,8 @@ try {
   assert.deepEqual(await scopesOf(rulePrompt), ['following', 'all'], 'одному дню своё правило не предлагается');
   await rulePrompt.getByRole('button', { name: 'This and following', exact: true }).click();
   await rulePrompt.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
-  // Сводка блока «Повтор и детали» сразу называет новое правило
-  await sidePane.locator('[data-planner-details]').getByText(`Every week: ${nextWeekdayShort}`).first()
+  // Строка-сводка повтора сразу называет новое правило
+  await sidePane.locator('[data-repeat-toggle]').getByText(`Every week: ${nextWeekdayShort}`).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closeSide();
   assert.equal(await countTasksOn(today, 'Бассейн'), 1, 'прежний экземпляр остался на месте');
@@ -623,6 +640,7 @@ try {
   assert.equal(await countTasksOn(addDays(today, 8), 'Бассейн'), 1, 'последующие идут по новому правилу');
   // «Не повторяется» у экземпляра: ряд кончается этим днём, сам день остаётся разовой задачей
   await openTaskOn(addDays(today, 15), 'Бассейн');
+  await openRepeat();
   await repeatSelect().selectOption('none');
   await sidePane.locator('[data-repeat-save]').click();
   const stopPrompt = planner.locator('[data-series-prompt="stop"]');
@@ -721,7 +739,7 @@ try {
   await openFullForm();
   await viewButton('Month').click();
   const loadBefore = (await todayCell.innerText()).match(/[\d.]+ h/)?.[0];
-  await page.locator('#planner-new-kind').selectOption('event');
+  await sidePane.locator('[data-new-kind="event"]').click();
   await page.locator('#planner-new-name').fill('День города');
   await sidePane.getByText('All day', { exact: true }).click();
   await sidePane.getByText('Holiday', { exact: true }).click();
@@ -874,9 +892,21 @@ try {
   assert.equal(await dayPane.count(), 0, 'в виде «День» на телефоне отдельной панели дня нет');
   const stripDays = phoneWeek.locator('[data-day-strip] button');
   const pickedStripDay = phoneWeek.locator('[data-day-strip] button[aria-pressed="true"]');
-  assert.equal(await stripDays.count(), 7, 'в полосе недели семь дней');
+  // Лента дней (16 окт 2026): несколько недель, на экране — семь дней
+  const stripCount = await stripDays.count();
+  assert.ok(stripCount > 7, `в ленте больше недели: ${stripCount}`);
   assert.equal(await pickedStripDay.getAttribute('data-day'), today, 'в полосе выбран сегодняшний день');
-  assert.equal(await stripDays.locator('[data-load]').count(), 7, 'у каждого дня полосы — полоска загрузки');
+  assert.equal(await stripDays.locator('[data-load]').count(), stripCount, 'у каждого дня ленты — полоска загрузки');
+  const visibleStripDays = () => phoneWeek.locator('[data-day-strip]').evaluate((strip) => {
+    const box = strip.getBoundingClientRect();
+    return [...strip.querySelectorAll('button')].filter((item) => {
+      const rect = item.getBoundingClientRect();
+      return rect.left >= box.left - 1 && rect.right <= box.right + 1;
+    }).map((item) => item.dataset.day);
+  });
+  const shownDays = await visibleStripDays();
+  assert.equal(shownDays.length, 7, `на экране семь дней ленты: ${shownDays}`);
+  assert.ok(shownDays.includes(today), 'выбранный день виден в ленте');
   const phoneDayGrid = phoneWeek.locator('[data-day-grid]');
   await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Задача без времени — строкой над сеткой, дела со временем — блоками в сетке
@@ -897,11 +927,18 @@ try {
   assert.equal(weekGeometry.columns, 1, `в сетке должен быть один день: ${JSON.stringify(weekGeometry)}`);
   assert.ok(weekGeometry.gridOverflow <= 1 && weekGeometry.pageOverflow <= 0, `вбок ничего не должно листаться: ${JSON.stringify(weekGeometry)}`);
   // Нажатие на день полосы выбирает его
-  const otherDay = (await stripDays.evaluateAll((items) => items.map((item) => item.dataset.day))).find((day) => day !== today);
+  const otherDay = shownDays.find((day) => day !== today);
   await phoneWeek.locator(`[data-day-strip] button[data-day="${otherDay}"]`).click();
   await phoneDayGrid.locator(`div[data-day="${otherDay}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(await pickedStripDay.getAttribute('data-day'), otherDay, 'нажатие на день полосы выбирает его');
   await phoneWeek.locator(`[data-day-strip] button[data-day="${today}"]`).click();
+  await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Прокрутка ленты листает дни, но выбранный день не меняет
+  await phoneWeek.locator('[data-day-strip]').evaluate((strip) => { strip.scrollLeft += strip.clientWidth; });
+  await page.waitForTimeout(500);
+  const scrolledDays = await visibleStripDays();
+  assert.ok(!scrolledDays.includes(today), `лента пролистана на неделю: ${scrolledDays}`);
+  assert.equal(await pickedStripDay.getAttribute('data-day'), today, 'прокрутка ленты не меняет выбранный день');
   await phoneDayGrid.locator(`div[data-day="${today}"]`).last().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   // Горизонтальный жест по сетке дня листает дни (жест собирается из событий касания: мыши он не слушается)
   const swipe = (selector, fromX, toX) => page.evaluate(([target, from, to]) => {

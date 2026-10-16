@@ -3738,6 +3738,9 @@
 "PlannerNextDay" = "Next day";
 "PlannerSchedule" = "Schedule";
 "PlannerNewTask" = "New task";
+"PlannerUndatedAll" = "All without a date";
+"PlannerAutoSaved" = "Changes are saved as you type";
+"PlannerSaved" = "Saved";
 "PlannerUndatedShort" = "No date";
 "PlannerUndatedHint" = "Tasks without a day. Those «in progress» show up on «Today», the button on the right schedules a task for the selected day.";
 "PlannerDailyNote" = "Daily note";
@@ -3768,6 +3771,8 @@
 "PlannerHealthWeightChart" = "Weight over three weeks";
 "PlannerHealthSleepAdd" = "Record sleep for last night";
 "PlannerHealthSleepExample" = "sleep 23:30-07:30";
+"PlannerHealthSleepHours" = "{hours} h";
+"PlannerNoticeSleepDeleted" = "Sleep deleted";
 "PlannerHealthSleepDayLabel" = "Sleep for this day";
 "PlannerHealthSleepDayPlaceholder" = "23:40-07:30 or 7.5 h";
 "PlannerHealthSleepDayBad" = "Not recognised. Example: 23:40-07:30";

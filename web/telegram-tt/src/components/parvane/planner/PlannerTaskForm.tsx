@@ -6,6 +6,7 @@ import type {
 import type { PlannerRepeatDraft } from './PlannerRepeatFields';
 import type { PlannerDescriptionScope as DescriptionScope } from './plannerSeriesEdit';
 
+import buildClassName from '../../../util/buildClassName';
 import { formatStatus } from './plannerFormat';
 import {
   ALL_DAY_END, ALL_DAY_START, ensureList, getDefaultEventEnd, newId, PLANNER_STATUSES, toDayKey, toTime,
@@ -19,14 +20,14 @@ import useLastCallback from '../../../hooks/useLastCallback';
 
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
-import InputText from '../../ui/InputText';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
+import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRemindSelect from './PlannerRemindSelect';
-import PlannerRepeatFields, { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
+import { draftToRepeat, emptyRepeatDraft } from './PlannerRepeatFields';
 
 import styles from './Planner.module.scss';
 
@@ -125,8 +126,8 @@ const PlannerTaskForm = ({
     setDescription(e.currentTarget.value);
   });
 
-  const handleKindChange = useLastCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const next = e.currentTarget.value as 'task' | 'event';
+  const handleKindChange = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const next = e.currentTarget.dataset.newKind as 'task' | 'event';
     setKind(next);
     if (next === 'event' && start && !isEndTouched) setEnd(getDefaultEventEnd(start));
     setError(undefined);
@@ -151,7 +152,9 @@ const PlannerTaskForm = ({
         day: repeat ? undefined : (day || undefined),
         isAllDay: isAllDay || undefined,
         isHoliday: isHoliday || undefined,
-        color: eventColor || undefined,
+        // Цвет — у группы; свой цвет события — только без группы
+        color: project ? undefined : eventColor || undefined,
+        project: project || undefined,
         remind,
       };
       const eventError = validateEvent(event);
@@ -160,6 +163,7 @@ const PlannerTaskForm = ({
         return;
       }
       updatePlanner((draft) => {
+        ensureList(draft, project);
         addEntry(draft, 'event', { ...event, id: newId() }, descriptionScope, fallbackDay);
       }, lang('PlannerNoticeAdded', { name: event.name }));
       onCreated();
@@ -206,40 +210,40 @@ const PlannerTaskForm = ({
     else onCreated(taskId, repeat?.startDay || undefined);
   });
 
+  const hasDate = repeatDraft.kind === 'none';
+
   return (
-    <form className={styles.form} onSubmit={handleSubmit}>
-      <Select
-        id="planner-new-kind"
-        label={lang('PlannerFieldKind')}
-        value={kind}
-        hasArrow
-        onChange={handleKindChange}
-      >
-        <option value="task">{lang('PlannerKindTask')}</option>
-        <option value="event">{lang('PlannerKindEvent')}</option>
-      </Select>
-      <InputText
+    <form className={buildClassName(styles.form, styles.eventCard)} onSubmit={handleSubmit}>
+      <div className={styles.kindSwitch} role="radiogroup" aria-label={lang('PlannerFieldKind')}>
+        {(['task', 'event'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="radio"
+            aria-checked={kind === item}
+            className={buildClassName(styles.kindSwitchButton, kind === item && styles.kindSwitchActive)}
+            data-new-kind={item}
+            onClick={handleKindChange}
+          >
+            {lang(item === 'task' ? 'PlannerKindTask' : 'PlannerKindEvent')}
+          </button>
+        ))}
+      </div>
+      <input
         id="planner-new-name"
-        label={lang(kind === 'task' ? 'PlannerFieldTaskName' : 'PlannerFieldEventName')}
+        className={styles.cardTitleInput}
         value={name}
         maxLength={NAME_MAX_LENGTH}
         autoFocus
+        aria-label={lang(kind === 'task' ? 'PlannerFieldTaskName' : 'PlannerFieldEventName')}
+        placeholder={lang(kind === 'task' ? 'PlannerFieldTaskName' : 'PlannerFieldEventName')}
         onChange={handleNameChange}
       />
-      <TextArea
-        id="planner-new-description"
-        label={lang('PlannerFieldDescription')}
-        value={description}
-        onChange={handleDescriptionChange}
-        noReplaceNewlines
-      />
-      {repeatDraft.kind !== 'none' && (
-        <PlannerDescriptionScope scope={descriptionScope} onChange={setDescriptionScope} />
-      )}
+
       {kind === 'task' ? (
-        <>
-          <div className={styles.fields}>
-            {repeatDraft.kind === 'none' && (
+        <PlannerCardRow icon="clock" row="when">
+          <div className={buildClassName(styles.fields, hasDate && styles.fieldsThree)}>
+            {hasDate && (
               <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={day} onInput={setDay} />
             )}
             <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
@@ -253,12 +257,43 @@ const PlannerTaskForm = ({
               placeholder={lang('PlannerNoEstimate')}
               onInput={setMinutes}
             />
-            {repeatDraft.kind === 'none' && (
+          </div>
+          {hasDate && (
+            <div className={styles.fields}>
               <PlannerField label={lang('PlannerFieldDue')} type="date" value={due} onInput={setDue} />
+            </div>
+          )}
+        </PlannerCardRow>
+      ) : (
+        <PlannerCardRow icon="clock" row="when">
+          <div className={buildClassName(styles.fields, hasDate && !isAllDay && styles.fieldsThree)}>
+            {hasDate && (
+              <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
+            )}
+            {!isAllDay && (
+              <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={handleStart} />
+            )}
+            {!isAllDay && (
+              <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={handleEnd} />
             )}
           </div>
-          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
-          <div className={styles.fields}>
+          <div className={styles.checks}>
+            <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
+            <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
+          </div>
+        </PlannerCardRow>
+      )}
+
+      <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
+
+      <PlannerCardRow icon="folder" row="group">
+        <PlannerListPicker id="planner-new-list" state={state} value={project} onChange={setProject} />
+        {kind === 'event' && !project && <PlannerColorSwatches value={eventColor} onChange={setEventColor} />}
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="schedule" row="remind">
+        <div className={buildClassName(kind === 'task' && styles.fields)}>
+          {kind === 'task' && (
             <Select
               id="planner-new-status"
               label={lang('PlannerFieldStatus')}
@@ -268,30 +303,24 @@ const PlannerTaskForm = ({
             >
               {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
             </Select>
-          </div>
-          <PlannerListPicker id="planner-new-list" state={state} value={project} onChange={setProject} />
-          <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
-        </>
-      ) : (
-        <>
-          <div className={styles.checks}>
-            <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
-            <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
-          </div>
-          <PlannerColorSwatches value={eventColor} onChange={setEventColor} />
-          {!isAllDay && (
-            <div className={styles.fields}>
-              <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={handleStart} />
-              <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={handleEnd} />
-            </div>
           )}
-          {repeatDraft.kind === 'none' && (
-            <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
-          )}
-          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
           <PlannerRemindSelect id="planner-new-remind" value={remind} onChange={setRemind} />
-        </>
-      )}
+        </div>
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="info" row="description">
+        <TextArea
+          id="planner-new-description"
+          label={lang('PlannerFieldDescription')}
+          value={description}
+          onChange={handleDescriptionChange}
+          noReplaceNewlines
+        />
+        {repeatDraft.kind !== 'none' && (
+          <PlannerDescriptionScope scope={descriptionScope} onChange={setDescriptionScope} />
+        )}
+      </PlannerCardRow>
+
       {error && <p className={styles.error} role="alert">{error}</p>}
       <div className={styles.actions}>
         <Button type="submit" size="smaller">{lang('PlannerCreate')}</Button>

@@ -1,4 +1,4 @@
-import { memo, useState } from '../../../lib/teact/teact';
+import { memo, useRef, useState } from '../../../lib/teact/teact';
 
 import type {
   PlannerRepeat, PlannerSeriesItem, PlannerState, PlannerStatus, PlannerTask,
@@ -9,7 +9,7 @@ import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
 import {
-  formatClock, formatDay, formatRepeat, formatStatus,
+  formatClock, formatDay, formatStatus,
 } from './plannerFormat';
 import {
   detachInstance, excludeInstance, findSlots, MIN_TASK_MINUTES, MINUTES_IN_DAY, PLANNER_STATUSES,
@@ -27,17 +27,19 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import Icon from '../../common/icons/Icon';
 import Select from '../../ui/Select';
 import TextArea from '../../ui/TextArea';
+import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
-import PlannerDetailsFold from './PlannerDetailsFold';
 import PlannerField from './PlannerField';
 import PlannerListPicker from './PlannerListPicker';
 import PlannerName from './PlannerName';
 import PlannerRemindSelect from './PlannerRemindSelect';
-import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
+import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 import { REPEAT_ERROR_KEYS } from './PlannerTaskForm';
 
 import styles from './Planner.module.scss';
+
+const SAVED_SHOWN_MS = 2000;
 
 type OwnProps = {
   state: PlannerState;
@@ -63,6 +65,15 @@ const PlannerTaskEditor = ({
   state, task, today, picked, onBack, onPickDay, onOpenTask,
 }: OwnProps) => {
   const lang = useLang();
+
+  // «Сохранено» на пару секунд после правки описания
+  const [isSaved, setIsSaved] = useState(false);
+  const savedTimerRef = useRef<number>();
+  const markSaved = () => {
+    setIsSaved(true);
+    window.clearTimeout(savedTimerRef.current);
+    savedTimerRef.current = window.setTimeout(() => setIsSaved(false), SAVED_SHOWN_MS);
+  };
 
   const [stepText, setStepText] = useState('');
   const [slots, setSlots] = useState<Slot[]>();
@@ -225,6 +236,7 @@ const PlannerTaskEditor = ({
     updatePlanner((draft) => {
       setDescription(draft, 'task', task, description, descriptionScope || 'one');
     });
+    markSaved();
   });
 
   // «Для всех» — описание ряда (отделённые дни хранят своё); «только этот день» — день отделяется без вопроса
@@ -355,30 +367,13 @@ const PlannerTaskEditor = ({
   const isDone = task.status === 'done';
 
   const doneSteps = task.steps.filter((step) => step.isDone).length;
-  const detailsSummary = [
-    task.repeat ? formatRepeat(lang, task.repeat) : undefined,
-    task.status === 'queue' ? undefined : formatStatus(lang, task.status),
-    task.project || undefined,
-    task.due ? lang('PlannerDueValue', { date: formatDay(lang, task.due) }) : undefined,
-    task.steps.length ? lang('PlannerSteps', { done: doneSteps, total: task.steps.length }) : undefined,
-  ].filter(Boolean).join(' · ');
-
   return (
-    <div className={styles.editor}>
+    <div className={buildClassName(styles.editor, styles.eventCard)}>
       <h2 className={styles.editorTitle}><PlannerName name={task.name} /></h2>
-      {task.repeat && (
-        <p className={styles.seriesBox}>
-          <Icon name="loop" />
-          {isInstance
-            ? lang('PlannerSeriesInstanceHint', { rule: formatRepeat(lang, task.repeat) })
-            : lang('PlannerSeriesTemplateHint', { rule: formatRepeat(lang, task.repeat) })}
-          {isInstance && (
-            <button type="button" className={styles.linkButton} onClick={handleOpenSeries}>
-              {lang('PlannerSeriesOpen')}
-            </button>
-          )}
-        </p>
-      )}
+      {/* Поля задачи пишутся сразу (у события — кнопка «Сохранить»): об этом нужно сказать */}
+      <p className={styles.small} data-task-autosave>
+        {isSaved ? lang('PlannerSaved') : lang('PlannerAutoSaved')}
+      </p>
       {task.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
       {(!task.repeat || isInstance) && (
         <label className={buildClassName(styles.row, styles.rowButton, isDone && styles.rowDone)}>
@@ -386,29 +381,64 @@ const PlannerTaskEditor = ({
           <span>{lang(isDone ? 'PlannerStatusDone' : 'PlannerMarkDone')}</span>
         </label>
       )}
-      <div className={styles.fields}>
-        {(!task.repeat || isInstance) && (
-          <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
-        )}
-        <PlannerField label={lang('PlannerFieldStart')} type="time" value={task.start} onCommit={handleStart} />
-        <PlannerField
-          label={lang('PlannerFieldMinutes')}
-          type="number"
-          value={task.minutes === undefined ? '' : String(task.minutes)}
-          min={MIN_TASK_MINUTES}
-          max={MINUTES_IN_DAY}
-          step={5}
-          placeholder={lang('PlannerNoEstimate')}
-          onCommit={handleMinutes}
-        />
-      </div>
-      <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
-      <PlannerDetailsFold summary={detailsSummary}>
+
+      <PlannerCardRow icon="clock" row="when">
+        <div className={buildClassName(styles.fields, (!task.repeat || isInstance) && styles.fieldsThree)}>
+          {(!task.repeat || isInstance) && (
+            <PlannerField label={lang('PlannerFieldWorkDate')} type="date" value={task.day} onCommit={handleDay} />
+          )}
+          <PlannerField label={lang('PlannerFieldStart')} type="time" value={task.start} onCommit={handleStart} />
+          <PlannerField
+            label={lang('PlannerFieldMinutes')}
+            type="number"
+            value={task.minutes === undefined ? '' : String(task.minutes)}
+            min={MIN_TASK_MINUTES}
+            max={MINUTES_IN_DAY}
+            step={5}
+            placeholder={lang('PlannerNoEstimate')}
+            onCommit={handleMinutes}
+          />
+        </div>
         {!task.repeat && (
           <div className={styles.fields}>
             <PlannerField label={lang('PlannerFieldDue')} type="date" value={task.due} onCommit={handleDue} />
           </div>
         )}
+      </PlannerCardRow>
+
+      <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft}>
+        {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
+        <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
+          <Icon name="loop" />
+          {lang('PlannerRepeatSave')}
+        </button>
+      </PlannerRepeatRow>
+      {isInstance && (
+        <button type="button" className={styles.linkButton} onClick={handleOpenSeries}>
+          {lang('PlannerSeriesOpen')}
+        </button>
+      )}
+
+      <PlannerCardRow icon="folder" row="group">
+        <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="schedule" row="status">
+        <div className={styles.fields}>
+          <Select
+            id="planner-task-status"
+            label={lang('PlannerFieldStatus')}
+            value={task.status}
+            hasArrow
+            onChange={handleStatus}
+          >
+            {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
+          </Select>
+          <PlannerRemindSelect id="planner-task-remind" value={task.remind} onChange={handleRemind} />
+        </div>
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="info" row="description">
         <TextArea
           label={lang('PlannerFieldDescription')}
           value={isInstance ? descriptionDraft : task.description}
@@ -426,7 +456,10 @@ const PlannerTaskEditor = ({
             {lang('PlannerDescriptionSave')}
           </button>
         )}
-        <h3 className={styles.fieldLabel}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</h3>
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="check" row="steps">
+        <span className={styles.fieldLabel}>{lang('PlannerSteps', { done: doneSteps, total: task.steps.length })}</span>
         {task.steps.map((step, index) => (
           <label
             key={`${index}${step.text}`}
@@ -454,26 +487,9 @@ const PlannerTaskEditor = ({
             <Icon name="add" />
           </button>
         </form>
-        <div className={styles.fields}>
-          <Select
-            id="planner-task-status"
-            label={lang('PlannerFieldStatus')}
-            value={task.status}
-            hasArrow
-            onChange={handleStatus}
-          >
-            {PLANNER_STATUSES.map((item) => <option key={item} value={item}>{formatStatus(lang, item)}</option>)}
-          </Select>
-        </div>
-        <PlannerListPicker id="planner-task-list" state={state} value={task.project} onChange={handleProject} />
-        <div className={styles.repeatBlock}>
-          <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />
-          {repeatError && <p className={styles.error} role="alert">{repeatError}</p>}
-          <button type="button" className={styles.btn} data-repeat-save onClick={handleRepeatSave}>
-            <Icon name="loop" />
-            {lang('PlannerRepeatSave')}
-          </button>
-        </div>
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="search" row="slots">
         <button type="button" className={styles.btn} onClick={handleFindSlots}>{lang('PlannerFindSlots')}</button>
         <div className={styles.slots} aria-live="polite">
           {slotHint && <span className={styles.small}>{slotHint}</span>}
@@ -489,7 +505,8 @@ const PlannerTaskEditor = ({
             </button>
           ))}
         </div>
-      </PlannerDetailsFold>
+      </PlannerCardRow>
+
       {promptMode ? (
         <PlannerSeriesPrompt
           mode={promptMode}

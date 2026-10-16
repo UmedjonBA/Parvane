@@ -29,6 +29,8 @@ type OwnProps = {
   layers: PlannerLayers;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
+  // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
+  onOpenSleep?: (day: string) => void;
 };
 
 type FeedRow = { minutes: number; node: TeactNode };
@@ -50,7 +52,7 @@ function getNowMinutes() {
 // Расписание дня списком по времени: подъём, приёмы пищи, события, задачи и тренировки; сегодня — красная
 // черта «сейчас» между прошедшим и предстоящим
 const PlannerDayFeed = ({
-  state, day, today, layers, onOpenTask, onOpenEvent,
+  state, day, today, layers, onOpenTask, onOpenEvent, onOpenSleep,
 }: OwnProps) => {
   const [nowMinutes, setNowMinutes] = useState(getNowMinutes);
 
@@ -82,6 +84,7 @@ const PlannerDayFeed = ({
   const rows: FeedRow[] = [];
   const allDay = layers.work ? entry.allDay : [];
 
+  const handleOpenSleep = () => onOpenSleep?.(day);
   const sleep = layers.sleep ? getDailyRecord(state, 'sleep', day) : undefined;
   if (sleep?.endTime) {
     rows.push({
@@ -90,12 +93,18 @@ const PlannerDayFeed = ({
       node: (
         <div key="sleep" className={styles.feedLine} data-feed="sleep">
           <span className={styles.feedTime}>{sleep.endTime}</span>
-          <span
-            className={buildClassName(styles.feedMark, isShortSleep(state, day) ? styles.kindDue : styles.kindSleep)}
+          <button
+            type="button"
+            className={buildClassName(
+              styles.feedMark, styles.feedMarkButton, isShortSleep(state, day) ? styles.kindDue : styles.kindSleep,
+            )}
+            data-sleep-open
+            disabled={!onOpenSleep}
+            onClick={handleOpenSleep}
           >
             <Icon name="darkmode" />
             <span className={styles.feedMarkText}>{lang('PlannerFeedWake', { sleep: formatSpan(sleep.value) })}</span>
-          </span>
+          </button>
         </div>
       ),
     });

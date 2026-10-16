@@ -8,7 +8,6 @@ import type { PlannerDescriptionScope as DescriptionScope } from './plannerSerie
 import type { PlannerPromptScope } from './PlannerSeriesPrompt';
 
 import buildClassName from '../../../util/buildClassName';
-import { formatRepeat } from './plannerFormat';
 import {
   ALL_DAY_END, ALL_DAY_START, detachInstance, excludeInstance, removeSeries, splitSeries, truncateSeries, updateSeries,
   validateEvent,
@@ -27,11 +26,12 @@ import Icon from '../../common/icons/Icon';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import TextArea from '../../ui/TextArea';
+import { PlannerCardRow, PlannerRepeatRow } from './PlannerCardRow';
 import PlannerDescriptionScope from './PlannerDescriptionScope';
 import PlannerField from './PlannerField';
 import PlannerListPicker, { PlannerColorSwatches } from './PlannerListPicker';
 import PlannerRemindSelect from './PlannerRemindSelect';
-import PlannerRepeatFields, { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
+import { draftToRepeat, repeatToDraft } from './PlannerRepeatFields';
 import PlannerSeriesPrompt from './PlannerSeriesPrompt';
 
 import styles from './Planner.module.scss';
@@ -86,8 +86,7 @@ const PlannerEventEditor = ({
   const [isHoliday, setIsHoliday] = useState(Boolean(event.isHoliday));
   const [color, setColor] = useState(event.color || 0);
   const [project, setProject] = useState(event.project || '');
-  // Настройки повтора раскрываются по строке-сводке
-  const [isRepeatOpen, setIsRepeatOpen] = useState(false);
+
   const [remind, setRemind] = useState(event.remind);
   const [repeatDraft, setRepeatDraft] = useState<PlannerRepeatDraft>(
     () => repeatToDraft(event.repeat, event.day || ''),
@@ -289,12 +288,6 @@ const PlannerEventEditor = ({
     : pending.kind === 'rule' ? (pending.repeat ? 'rule' : 'stop')
       : pending.kind === 'delete' ? 'delete' : pending.kind === 'copy' ? 'copy' : 'edit';
 
-  const handleToggleRepeat = useLastCallback(() => {
-    setIsRepeatOpen((isOpen) => !isOpen);
-  });
-
-  const draftRepeat = draftToRepeat(repeatDraft);
-  const repeatSummary = draftRepeat ? formatRepeat(lang, draftRepeat) : lang('PlannerRepeatKindNone');
   const hasDate = !event.repeat || isInstance;
 
   return (
@@ -310,77 +303,50 @@ const PlannerEventEditor = ({
       />
       {event.origin && <p className={styles.small}>{lang('PlannerSeriesDetachedHint')}</p>}
 
-      <div className={styles.cardRow} data-card-row="when">
-        <Icon name="clock" className={styles.cardRowIcon} />
-        <div className={styles.cardRowBody}>
-          <div className={buildClassName(styles.fields, hasDate && !isAllDay && styles.fieldsThree)}>
-            {hasDate && (
-              <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
-            )}
-            {!isAllDay && (
-              <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
-            )}
-            {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}
-          </div>
-          <div className={styles.checks}>
-            <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
-            <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
-          </div>
-        </div>
-      </div>
-
-      <div className={styles.cardRow} data-card-row="repeat">
-        <Icon name="loop" className={styles.cardRowIcon} />
-        <div className={styles.cardRowBody}>
-          <button
-            type="button"
-            className={styles.cardRowButton}
-            aria-expanded={isRepeatOpen}
-            data-repeat-toggle
-            onClick={handleToggleRepeat}
-          >
-            <span className={styles.cardRowButtonText}>{repeatSummary}</span>
-            <Icon name={isRepeatOpen ? 'up' : 'down'} />
-          </button>
-          {isRepeatOpen && <PlannerRepeatFields value={repeatDraft} onChange={setRepeatDraft} />}
-        </div>
-      </div>
-
-      <div className={styles.cardRow} data-card-row="group">
-        <Icon name="folder" className={styles.cardRowIcon} />
-        <div className={styles.cardRowBody}>
-          <PlannerListPicker id="planner-event-list" state={state} value={project} onChange={setProject} />
-          {!project && <PlannerColorSwatches value={color} onChange={setColor} />}
-        </div>
-      </div>
-
-      <div className={styles.cardRow} data-card-row="remind">
-        <Icon name="schedule" className={styles.cardRowIcon} />
-        <div className={styles.cardRowBody}>
-          <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
-        </div>
-      </div>
-
-      <div className={styles.cardRow} data-card-row="description">
-        <Icon name="info" className={styles.cardRowIcon} />
-        <div className={styles.cardRowBody}>
-          <TextArea
-            id="planner-event-description"
-            label={lang('PlannerFieldDescription')}
-            value={description}
-            maxLength={DESCRIPTION_MAX_LENGTH}
-            noReplaceNewlines
-            onChange={handleDescriptionChange}
-          />
-          {descriptionScope && (
-            <PlannerDescriptionScope
-              scope={descriptionScope}
-              shouldConfirmAll={!isInstance}
-              onChange={setDescriptionScope}
-            />
+      <PlannerCardRow icon="clock" row="when">
+        <div className={buildClassName(styles.fields, hasDate && !isAllDay && styles.fieldsThree)}>
+          {hasDate && (
+            <PlannerField label={lang('PlannerFieldEventDate')} type="date" value={day} onInput={setDay} />
           )}
+          {!isAllDay && (
+            <PlannerField label={lang('PlannerFieldStart')} type="time" value={start} onInput={setStart} />
+          )}
+          {!isAllDay && <PlannerField label={lang('PlannerFieldEnd')} type="time" value={end} onInput={setEnd} />}
         </div>
-      </div>
+        <div className={styles.checks}>
+          <Checkbox label={lang('PlannerAllDay')} checked={isAllDay} onCheck={setIsAllDay} />
+          <Checkbox label={lang('PlannerHoliday')} checked={isHoliday} onCheck={setIsHoliday} />
+        </div>
+      </PlannerCardRow>
+
+      <PlannerRepeatRow value={repeatDraft} onChange={setRepeatDraft} />
+
+      <PlannerCardRow icon="folder" row="group">
+        <PlannerListPicker id="planner-event-list" state={state} value={project} onChange={setProject} />
+        {!project && <PlannerColorSwatches value={color} onChange={setColor} />}
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="schedule" row="remind">
+        <PlannerRemindSelect id="planner-event-remind" value={remind} onChange={setRemind} />
+      </PlannerCardRow>
+
+      <PlannerCardRow icon="info" row="description">
+        <TextArea
+          id="planner-event-description"
+          label={lang('PlannerFieldDescription')}
+          value={description}
+          maxLength={DESCRIPTION_MAX_LENGTH}
+          noReplaceNewlines
+          onChange={handleDescriptionChange}
+        />
+        {descriptionScope && (
+          <PlannerDescriptionScope
+            scope={descriptionScope}
+            shouldConfirmAll={!isInstance}
+            onChange={setDescriptionScope}
+          />
+        )}
+      </PlannerCardRow>
 
       {error && <p className={styles.error} role="alert">{error}</p>}
       {promptMode ? (

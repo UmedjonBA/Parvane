@@ -894,11 +894,16 @@
   background: none;
 }
 
+// Название задачи в строке — до двух строк, дальше многоточие (одной строкой длинное не читалось)
 .rowTitle {
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+
   min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+
+  overflow-wrap: anywhere;
 
   .rowDone & {
     color: var(--pv-faint);
@@ -1297,6 +1302,36 @@
   :global(.icon) {
     flex: none;
     font-size: 1.125rem;
+  }
+}
+
+// Строка подъёма в ленте дня — кнопка: открывает сон в «Здоровье»
+.feedMarkButton {
+  cursor: var(--custom-cursor, pointer);
+
+  border: none;
+
+  font-family: inherit;
+  text-align: start;
+
+  background: none;
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+.tagButton {
+  cursor: var(--custom-cursor, pointer);
+  font-family: inherit;
+
+  &:hover {
+    filter: brightness(1.15);
+  }
+
+  &:disabled {
+    cursor: default;
+    filter: none;
   }
 }
 
@@ -1918,13 +1953,19 @@
 }
 
 .dayStrip {
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+
+  overflow-x: auto;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-columns: calc((100% - 6 * 0.25rem) / 7);
+  grid-auto-flow: column;
   gap: 0.25rem;
 }
 
 .dayStripDay {
   cursor: var(--custom-cursor, pointer);
+  scroll-snap-align: start;
 
   display: flex;
   flex-direction: column;
@@ -2667,6 +2708,37 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.625rem;
+}
+
+.kindSwitch {
+  display: flex;
+  gap: 0.25rem;
+  align-self: flex-start;
+
+  padding: 0.1875rem;
+  border-radius: 1.25rem;
+
+  background: var(--pv-bg);
+}
+
+.kindSwitchButton {
+  cursor: var(--custom-cursor, pointer);
+
+  height: 2rem;
+  padding: 0 1rem;
+  border: none;
+  border-radius: 1rem;
+
+  font-family: inherit;
+  font-size: 0.875rem;
+  color: var(--pv-muted);
+
+  background: transparent;
+}
+
+.kindSwitchActive {
+  color: var(--pv-fg);
+  background: var(--pv-panel);
 }
 
 .fieldsThree {

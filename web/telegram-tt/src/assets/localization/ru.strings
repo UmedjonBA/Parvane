@@ -1826,6 +1826,9 @@
 "PlannerNextDay" = "Следующий день";
 "PlannerSchedule" = "Расписание";
 "PlannerNewTask" = "Новая задача";
+"PlannerUndatedAll" = "Все без даты";
+"PlannerAutoSaved" = "Изменения сохраняются сразу";
+"PlannerSaved" = "Сохранено";
 "PlannerUndatedShort" = "Без даты";
 "PlannerUndatedHint" = "Задачи без дня. «В работе» видны в «Сегодня», кнопка справа ставит задачу на выбранный день.";
 "PlannerDailyNote" = "Заметка дня";
@@ -1856,6 +1859,8 @@
 "PlannerHealthWeightChart" = "Вес за три недели";
 "PlannerHealthSleepAdd" = "Записать сон за эту ночь";
 "PlannerHealthSleepExample" = "сон 23:30-07:30";
+"PlannerHealthSleepHours" = "{hours} ч";
+"PlannerNoticeSleepDeleted" = "Сон удалён";
 "PlannerHealthSleepDayLabel" = "Сон за этот день";
 "PlannerHealthSleepDayPlaceholder" = "23:40-07:30 или 7,5 ч";
 "PlannerHealthSleepDayBad" = "Не распознано. Пример: 23:40-07:30";

@@ -435,6 +435,14 @@ describe('ввод текстом: здоровье (spec 020)', () => {
     ['спал с 11 до 7', { kind: 'sleep', start: '23:00', end: '07:00', minutes: 480 }],
     ['я спал 6 ч', { kind: 'sleep', minutes: 360, start: undefined }],
     ['я спал плохо', { kind: 'task', name: 'я спал плохо' }],
+    // Сон за прошедший день — на день подъёма (16 окт 2026)
+    ['вчера спал с 5:00 до 15:00', {
+      kind: 'sleep', start: '05:00', end: '15:00', minutes: 600, day: '2026-10-07',
+    }],
+    ['спал вчера 8 ч', { kind: 'sleep', minutes: 480, day: '2026-10-07' }],
+    ['позавчера спала с 23 до 7', { kind: 'sleep', start: '23:00', end: '07:00', day: '2026-10-06' }],
+    ['вчера лёг в 1 встал в 9', { kind: 'sleep', start: '01:00', end: '09:00', day: '2026-10-07' }],
+    ['спал с 4 до 12', { kind: 'sleep', day: '2026-10-08' }],
     ['сон 7 ч 30 мин', { kind: 'sleep', minutes: 450 }],
     ['сон', { kind: 'sleep', error: 'time' }],
     ['сон 25:00-07:00', { kind: 'sleep', error: 'time' }],
@@ -893,6 +901,7 @@ describe('quick input (en): health', () => {
     ['slept 7.5 h', { kind: 'sleep', minutes: 450, start: undefined }],
     ['today i slept from 4:00 to 12:00', { kind: 'sleep', start: '04:00', end: '12:00', minutes: 480 }],
     ['slept from 11 to 7', { kind: 'sleep', start: '23:00', end: '07:00', minutes: 480 }],
+    ['yesterday slept from 5:00 to 15:00', { kind: 'sleep', start: '05:00', end: '15:00', day: '2026-10-07' }],
     ['went to bed at 1:30, woke up at 9', { kind: 'sleep', start: '01:30', end: '09:00', minutes: 450 }],
     ['sleep 7 hours 30 min', { kind: 'sleep', minutes: 450 }],
     ['slept', { kind: 'sleep', error: 'time' }],

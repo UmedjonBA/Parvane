@@ -2767,6 +2767,9 @@ export interface LangPair {
   'PlannerNextDay': undefined;
   'PlannerSchedule': undefined;
   'PlannerNewTask': undefined;
+  'PlannerUndatedAll': undefined;
+  'PlannerAutoSaved': undefined;
+  'PlannerSaved': undefined;
   'PlannerUndatedShort': undefined;
   'PlannerUndatedHint': undefined;
   'PlannerDailyNote': undefined;
@@ -2793,6 +2796,7 @@ export interface LangPair {
   'PlannerHealthWeightChart': undefined;
   'PlannerHealthSleepAdd': undefined;
   'PlannerHealthSleepExample': undefined;
+  'PlannerNoticeSleepDeleted': undefined;
   'PlannerHealthSleepDayLabel': undefined;
   'PlannerHealthSleepDayPlaceholder': undefined;
   'PlannerHealthSleepDayBad': undefined;
@@ -5212,6 +5216,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'PlannerQuickDefault': {
     'date': V;
+  };
+  'PlannerHealthSleepHours': {
+    'hours': V;
   };
   'PlannerSleepRoutineSummary': {
     'bed': V;

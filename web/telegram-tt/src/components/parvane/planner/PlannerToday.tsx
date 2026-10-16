@@ -27,6 +27,9 @@ import PlannerUndated from './PlannerUndated';
 
 import styles from './Planner.module.scss';
 
+// Сколько задач без даты показывать прямо в карточке «Задачи»
+const UNDATED_SHOWN = 5;
+
 type OwnProps = {
   state: PlannerState;
   day: string;
@@ -63,6 +66,9 @@ const PlannerToday = ({
   )), [entry]);
   const undated = useMemo(() => getUndatedTasks(state), [state]);
   const active = useMemo(() => undated.filter(({ status }) => status === 'active'), [undated]);
+  // Задачи без даты в очереди — видны сразу (первые несколько), остальные — в окне «Без даты»
+  const queued = useMemo(() => undated.filter(({ status }) => status === 'queue'), [undated]);
+  const shownQueued = queued.slice(0, UNDATED_SHOWN);
   const doneCount = tasks.filter(({ status }) => status === 'done').length;
   const leftCount = tasks.length - doneCount;
   const load = entry.minutes;
@@ -84,8 +90,11 @@ const PlannerToday = ({
     tasksRef.current?.scrollIntoView({ block: 'start' });
   });
 
+  // «+» карточки «Задачи» — задача на показанный день: без даты в строке она ушла бы в «Без даты»
   const handleAddTask = useLastCallback(() => {
-    onQuick(`${lang('PlannerKindTask').toLowerCase()} `);
+    const [, month, date] = day.split('-');
+    const dayWord = day === today ? lang('PlannerToday').toLowerCase() : `${date}.${month}`;
+    onQuick(`${lang('PlannerKindTask').toLowerCase()} ${dayWord} `);
   });
 
   const handleAddMeal = useLastCallback(() => {
@@ -205,7 +214,7 @@ const PlannerToday = ({
               <Icon name="add" />
             </button>
           </div>
-          {!tasks.length && !active.length && <p className={styles.muted}>{lang('PlannerTodayNoTasks')}</p>}
+          {!tasks.length && !active.length && !queued.length && <p className={styles.muted}>{lang('PlannerTodayNoTasks')}</p>}
           {tasks.map((task) => (
             <PlannerTaskRow
               key={instanceKey(task)}
@@ -225,6 +234,16 @@ const PlannerToday = ({
               onOpen={onOpenTask}
             />
           ))}
+          {Boolean(shownQueued.length) && <h4 className={styles.groupTitle}>{lang('PlannerUndatedShort')}</h4>}
+          {shownQueued.map((task) => (
+            <PlannerTaskRow
+              key={task.id}
+              task={task}
+              context="day"
+              color={getListColor(state, task.project)}
+              onOpen={onOpenTask}
+            />
+          ))}
           {Boolean(undated.length) && (
             <button
               type="button"
@@ -233,7 +252,7 @@ const PlannerToday = ({
               onClick={openUndated}
             >
               <span className={styles.rowIcon}><Icon name="archive" /></span>
-              <span className={buildClassName(styles.grow, styles.rowTitle)}>{lang('PlannerUndatedShort')}</span>
+              <span className={buildClassName(styles.grow, styles.rowTitle)}>{lang('PlannerUndatedAll')}</span>
               <span className={styles.rowMeta}>{undated.length}</span>
               <Icon name="next" />
             </button>

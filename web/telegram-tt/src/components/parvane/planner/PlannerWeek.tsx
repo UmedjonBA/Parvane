@@ -38,6 +38,8 @@ type OwnProps = {
   onCreateAt: (day: string, start: number) => void;
   onOpenTask: (taskId: string, day?: string) => void;
   onOpenEvent: (eventId: string, day: string) => void;
+  // Сон дня: открыть «Здоровье» на этом дне (правка и удаление сна)
+  onOpenSleep?: (day: string) => void;
 };
 
 const ALL_DAY_FILL_PERCENT = 14;
@@ -83,9 +85,14 @@ function allDayFillStyle(state: PlannerState, events: PlannerEvent[]) {
 }
 
 const PlannerWeek = ({
-  state, days, picked, today, layers, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent,
+  state, days, picked, today, layers, onPickDay, onCreateForDay, onCreateAt, onOpenTask, onOpenEvent, onOpenSleep,
 }: OwnProps) => {
   const lang = useLang();
+
+  const handleSleepClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    onOpenSleep?.(e.currentTarget.dataset.sleepOpen!);
+  });
 
   const scrollRef = useRef<HTMLDivElement>();
   const [nowMinutes, setNowMinutes] = useState(getNowMinutes);
@@ -251,10 +258,16 @@ const PlannerWeek = ({
               data-day={day}
             >
               {sleep && (
-                <span className={buildClassName(styles.tag, isShort ? styles.kindDue : styles.kindSleep)}>
+                <button
+                  type="button"
+                  className={buildClassName(styles.tag, styles.tagButton, isShort ? styles.kindDue : styles.kindSleep)}
+                  data-sleep-open={day}
+                  disabled={!onOpenSleep}
+                  onClick={handleSleepClick}
+                >
                   <Icon name="darkmode" />
                   {formatSpan(sleep.value)}
-                </span>
+                </button>
               )}
               {Boolean(kcal) && (
                 <span className={buildClassName(styles.tag, styles.kindFood)}>

@@ -277,6 +277,15 @@ const Planner = () => {
     setPlannerView('health');
   });
 
+  // Значок сна в календаре: «Здоровье» на этом дне, к карточке сна
+  const handleOpenSleep = useLastCallback((sleepDay: string) => {
+    pickDay(sleepDay);
+    setPlannerView('health');
+    requestAnimationFrame(() => {
+      document.querySelector('[data-health="sleep"]')?.scrollIntoView({ block: 'start' });
+    });
+  });
+
   const handleOpenSettings = useLastCallback(() => {
     setIsSettingsOpen(true);
   });
@@ -592,6 +601,7 @@ const Planner = () => {
                 onAdd={handleAddToDay}
                 onOpenTask={handleOpenTask}
                 onOpenEvent={handleOpenEvent}
+                onOpenSleep={handleOpenSleep}
               />
             </div>
           )}
@@ -603,7 +613,7 @@ const Planner = () => {
       return (
         <div className={styles.phoneWeek} data-planner-view="week">
           <div className={styles.stripBar}>
-            <PlannerDayStrip state={state} days={weekDays} picked={picked} today={today} onPickDay={pickDay} />
+            <PlannerDayStrip state={state} weekStart={weekDays[0]} picked={picked} today={today} onPickDay={pickDay} />
           </div>
           <div className={buildClassName(styles.content, styles.phoneWeekDay, 'custom-scroll')} data-swipe="day">
             <div className={styles.layerRow}><PlannerLayerChips layers={layers} onToggle={handleToggleLayer} /></div>
@@ -615,6 +625,7 @@ const Planner = () => {
               variant="summary"
               onOpenTask={handleOpenTask}
               onOpenEvent={handleOpenEvent}
+              onOpenSleep={handleOpenSleep}
             />
             <PlannerWeek
               state={state}
@@ -627,6 +638,7 @@ const Planner = () => {
               onCreateAt={handleCreateAt}
               onOpenTask={handleOpenTask}
               onOpenEvent={handleOpenEvent}
+              onOpenSleep={handleOpenSleep}
             />
           </div>
         </div>
@@ -644,6 +656,7 @@ const Planner = () => {
         onCreateAt={handleCreateAt}
         onOpenTask={handleOpenTask}
         onOpenEvent={handleOpenEvent}
+        onOpenSleep={handleOpenSleep}
       />
     );
   }
@@ -816,6 +829,7 @@ const Planner = () => {
             onAdd={handleAddToDay}
             onOpenTask={handleOpenTask}
             onOpenEvent={handleOpenEvent}
+            onOpenSleep={handleOpenSleep}
           />
         )}
       </div>
