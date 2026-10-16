@@ -3300,7 +3300,7 @@
 "PlannerErrorSettingsLunch" = "The break must fit inside the day window";
 "PlannerErrorSettingsMargin" = "Gap: 0–180 minutes";
 "PlannerErrorSettingsWindow" = "The day must end after it starts";
-"PlannerErrorStartNeeds" = "A start time needs a work date and a duration";
+"PlannerErrorStartNeeds" = "A start time needs a work date";
 "PlannerErrorWater" = "Water must be a number from zero";
 "PlannerEventOnce" = "One-time event";
 "PlannerFieldDate" = "Date";
@@ -3758,7 +3758,7 @@
 "PlannerQuickRecentTitle" = "Recent";
 "PlannerQuickSuggestionsTitle" = "Suggestions";
 "PlannerQuickForget" = "Forget: {value}";
-"PlannerQuickExamples" = "call tomorrow 16:00 45 min | English lesson tue 15:00 -- listening test | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml";
+"PlannerQuickExamples" = "call tomorrow 16:00 45 min | English lesson tue 15:00 -- listening test | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml | slept from 14 to 15 | didn't sleep yesterday | gym squat 4x8x80, bench 3x10x60 | yoga 40 min | breakfast oatmeal 350 kcal | snack apple 80 kcal | water 300 ml | pressure 120/80 | pulse 64 | mood 4 | steps 9500";
 "PlannerQuickDefault" = "Default: {date}";
 "PlannerSettingsGoalsHint" = "Goals change with text too: start a line in «+» with the word «goal».";
 "PlannerHealthGoalsShort" = "Goals";
@@ -3770,9 +3770,18 @@
 "PlannerHealthNoRecords" = "No records";
 "PlannerHealthWeightChart" = "Weight over three weeks";
 "PlannerHealthSleepAdd" = "Record sleep for last night";
+"PlannerHealthWaterExample" = "water 300 ml";
+"PlannerHealthWeightExample" = "weight 72.4";
+"PlannerHealthPressureExample" = "pressure 120/80";
+"PlannerHealthPulseExample" = "pulse 64";
+"PlannerHealthMoodExample" = "mood 4";
 "PlannerHealthSleepExample" = "sleep 23:30-07:30";
 "PlannerHealthSleepHours" = "{hours} h";
 "PlannerNoticeSleepDeleted" = "Sleep deleted";
+"PlannerHealthSleepAddShort" = "Add";
+"PlannerHealthSleepEditLabel" = "Edit this sleep";
+"PlannerNoticeSleepUpdated" = "Sleep updated";
+"PlannerHealthSettings" = "Health settings";
 "PlannerHealthSleepDayLabel" = "Sleep for this day";
 "PlannerHealthSleepDayPlaceholder" = "23:40-07:30 or 7.5 h";
 "PlannerHealthSleepDayBad" = "Not recognised. Example: 23:40-07:30";

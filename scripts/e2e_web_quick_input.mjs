@@ -121,7 +121,9 @@ try {
   await expectKind('event');
   assert.equal((await chip('time').innerText()).trim(), '16:00–16:45');
   assert.equal(await chip('day').count(), 1, 'дата распознана');
-  assert.equal((await form.locator('[dir="auto"]').first().innerText()).trim(), 'Быстрый созвон');
+  await form.locator('[dir="auto"]').first().filter({ hasText: /^\s*Быстрый созвон\s*$/ })
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(async () => assert.fail(`название: ${await form.locator('[dir="auto"]').first().innerText()}`));
   if (process.env.PARVANE_E2E_SHOT_DIR) await page.screenshot({ path: `${process.env.PARVANE_E2E_SHOT_DIR}/quick-input-phone.png` });
   await submit('Быстрый созвон');
   console.log('OK: событие одной строкой — время и длительность распознаны');

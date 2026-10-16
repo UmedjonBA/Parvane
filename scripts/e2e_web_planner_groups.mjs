@@ -20,7 +20,9 @@ const WEEKDAYS = ['Воскресенье', 'Понедельник', 'Втор�
 const tomorrow = new Date();
 tomorrow.setDate(tomorrow.getDate() + 1);
 // Оба занятия — в ближайшие дни (повтор с сегодняшнего дня), чтобы список их показал
-const SCHEDULE = `${WEEKDAYS[new Date().getDay()]}\n23:00–23:30 Лекция, ауд. 1\n\n${WEEKDAYS[tomorrow.getDay()]}\n`
+const LONG_NAME = 'Очень длинное название занятия, которое на телефоне никак не помещается в одну строку';
+const SCHEDULE = `${WEEKDAYS[new Date().getDay()]}\n23:00–23:30 Лекция, ауд. 1\n23:40–23:50 ${LONG_NAME}\n\n`
+  + `${WEEKDAYS[tomorrow.getDay()]}\n`
   + `22:00–22:30 Спортзал\n\nдо ${untilText}`;
 
 const browser = await chromium.launch();
@@ -51,7 +53,7 @@ try {
   await planner.getByRole('button', { name: 'Planner settings' }).click();
   await sidePane.locator('[data-schedule-input]').fill(SCHEDULE);
   await sidePane.locator('[data-schedule-add]').click();
-  await planner.getByText('Schedule added: 2').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await planner.getByText('Schedule added: 3').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await closeSide();
 
   // Вид «Список»: панели дня нет, ряд групп есть
@@ -150,6 +152,18 @@ try {
   assert(row.scroll > row.client && row.overflow === 'auto', `строка групп прокручивается: ${JSON.stringify(row)}`);
   await groupBar.locator('[data-group-pick]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: телефон — группы одной строкой со свайпом');
+  // Длинное название на «Сегодня» не уходит за край блока
+  await openPlannerScreen(page, 'today');
+  const longBlock = planner.locator('button[data-kind="event"]').filter({ hasText: 'Очень длинное название' }).first();
+  await longBlock.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  const fit = await longBlock.evaluate((el) => {
+    const block = el.parentElement.getBoundingClientRect();
+    const spans = [...el.querySelectorAll('span')].map((span) => span.getBoundingClientRect().right);
+    return { blockRight: block.right, textRight: Math.max(...spans), screen: window.innerWidth };
+  });
+  assert(fit.textRight <= fit.blockRight + 1 && fit.blockRight <= fit.screen,
+    `длинное название в пределах блока: ${JSON.stringify(fit)}`);
+  console.log('OK: длинное название переносится, а не уходит за край');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_groups: OK');
 } finally {

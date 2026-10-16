@@ -98,6 +98,8 @@ describe('планировщик: поиск окна и проверки вво
     expect(validateTask({ name: 'a', day: TODAY, start: '23:30', minutes: 60 })).toBe('pastMidnight');
     expect(validateTask({ name: 'a', day: '2026-10-10', due: TODAY })).toBe('dayAfterDue');
     expect(validateTask({ name: 'a', day: TODAY, start: '10:00', minutes: 60 })).toBeUndefined();
+    // Время начала без оценки — можно (16 окт 2026)
+    expect(validateTask({ name: 'a', day: TODAY, start: '23:30' })).toBeUndefined();
   });
 
   it('проверки события', () => {

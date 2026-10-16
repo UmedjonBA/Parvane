@@ -4,7 +4,8 @@ import type { QuickContext } from './plannerQuick';
 
 import {
   applyQuickDraft, clockDifference, dailyRecordId, formatPace, getActiveMinutes, getClockGoal, getClockStat,
-  getDailyRecord, getDailySeries, getDayBudget, getLastDays, getLatestRecord, getLimitTotal, getSleepRoutine,
+  getDailyRecord, getDailySeries, getDayBudget, getLastDays, getLatestRecord, getLimitTotal, getSleepRecords,
+  getSleepRoutine,
   getSleepRoutineLevel, getWorkouts, isShortSleep, parseClock, SLEEP_ROUTINE_DAYS, SLEEP_ROUTINE_DRIFTING_SPREAD,
   SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, wrapClock,
 } from './plannerHealth';
@@ -73,8 +74,8 @@ describe('здоровье: черновик ввода → состояние',
     expect(getLimitTotal(state, TODAY, 'salt')).toBe(0);
   });
 
-  it('показатель и сон — одна запись на день, новая заменяет прежнюю', () => {
-    const state = stateAfter(['вес 72,4', 'вес 72,1', 'сон 23:40-07:30', 'сон 01:00-06:00', 'давление 120/80']);
+  it('показатель — одна запись на день, новая заменяет прежнюю; сон дня — сумма снов', () => {
+    const state = stateAfter(['вес 72,4', 'вес 72,1', 'сон 01:00-06:00', 'давление 120/80']);
     expect(state.health.filter(({ kind }) => kind === 'weight')).toHaveLength(1);
     expect(getDailyRecord(state, 'weight', TODAY)?.value).toBe(72.1);
     expect(getDailyRecord(state, 'sleep', TODAY)).toMatchObject({ time: '01:00', endTime: '06:00', value: 300 });
@@ -411,5 +412,43 @@ describe('здоровье: режим сна', () => {
     const state = lastNights([['22:00', '07:00'], ['02:00', '09:00'], ['22:00', '07:00'], ['02:00', '09:00']]);
     expect(getSleepRoutine(state, TODAY).level).toBe('broken');
     expect(getDayBudget(state, TODAY)).toBe(state.budget);
+  });
+});
+
+describe('здоровье: несколько снов за день и «не спал» (16 окт 2026)', () => {
+  it('ночь и дневной сон: сумма за день, время — по ночи; повтор не добавляется', () => {
+    const state = stateAfter(['сон 23:00-07:00', 'спал с 14 до 15:30', 'спал с 14 до 15:30']);
+    expect(getSleepRecords(state, TODAY)).toHaveLength(2);
+    expect(getDailyRecord(state, 'sleep', TODAY)).toMatchObject({ value: 570, time: '23:00', endTime: '07:00' });
+  });
+
+  it('«не спал» — 0 ч; настоящий сон его убирает; при сне «не спал» не добавляется', () => {
+    const state = stateAfter(['не спал']);
+    expect(getDailyRecord(state, 'sleep', TODAY)?.value).toBe(0);
+    applyQuickDraft(state, parseQuickInput('спал с 14 до 15', CTX), TODAY);
+    expect(getSleepRecords(state, TODAY).map(({ value }) => value)).toEqual([60]);
+    applyQuickDraft(state, parseQuickInput('не спал', CTX), TODAY);
+    expect(getSleepRecords(state, TODAY).map(({ value }) => value)).toEqual([60]);
+  });
+
+  it('правка меняет только свой сон', () => {
+    const state = stateAfter(['сон 23:00-07:00', 'спал с 14 до 15']);
+    const nap = getSleepRecords(state, TODAY)[1];
+    applyQuickDraft(state, parseQuickInput('сон 13:00-14:00', { ...CTX, kind: 'sleep' }), TODAY, nap.id);
+    expect(getSleepRecords(state, TODAY).map(({ id, time }) => [id, time])).toEqual([
+      [dailyRecordId('sleep', TODAY), '23:00'], [nap.id, '13:00'],
+    ]);
+  });
+});
+
+describe('здоровье: ноль часов сна', () => {
+  it.each(['0', '0ч', '0 ч', 'не спал'])('«%s» в поле сна — 0 ч', (line) => {
+    const draft = parseQuickInput(line, { ...CTX, kind: 'sleep' });
+    expect(draft).toMatchObject({ kind: 'sleep', minutes: 0 });
+    expect(draft.error).toBeUndefined();
+  });
+
+  it('«сон 0 ч» в общем вводе — 0 ч', () => {
+    expect(parseQuickInput('сон 0 ч', CTX)).toMatchObject({ kind: 'sleep', minutes: 0 });
   });
 });

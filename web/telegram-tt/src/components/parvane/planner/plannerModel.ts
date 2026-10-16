@@ -1452,8 +1452,12 @@ export function validateTask(
     && (!Number.isFinite(task.minutes) || task.minutes < MIN_TASK_MINUTES || task.minutes > MINUTES_IN_DAY)) {
     return 'minutes';
   }
-  if (task.start && (!task.day || !task.minutes)) return 'startNeedsDayAndMinutes';
-  if (task.start && toMinutes(task.start) + task.minutes! > MINUTES_IN_DAY) return 'pastMidnight';
+  // Время начала — только у задачи с датой; оценка не обязательна (16 окт 2026: «если не вписал — не знаю»):
+  // такая задача стоит строкой со временем, а не блоком сетки
+  if (task.start && !task.day) return 'startNeedsDayAndMinutes';
+  if (task.start && task.minutes !== undefined && toMinutes(task.start) + task.minutes > MINUTES_IN_DAY) {
+    return 'pastMidnight';
+  }
   if (task.day && task.due && task.day > task.due) return 'dayAfterDue';
   return undefined;
 }

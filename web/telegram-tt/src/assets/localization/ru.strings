@@ -1349,7 +1349,7 @@
 "PlannerErrorSettingsLunch" = "Перерыв должен укладываться в окна дня";
 "PlannerErrorSettingsMargin" = "Запас: 0–180 минут";
 "PlannerErrorSettingsWindow" = "Конец дня должен быть позже начала";
-"PlannerErrorStartNeeds" = "Для точного времени нужны дата работы и длительность";
+"PlannerErrorStartNeeds" = "Для времени начала нужна дата работы";
 "PlannerErrorWater" = "Вода — число от нуля";
 "PlannerEventOnce" = "Разовое событие";
 "PlannerFieldDate" = "Дата";
@@ -1846,7 +1846,7 @@
 "PlannerQuickRecentTitle" = "Недавние";
 "PlannerQuickSuggestionsTitle" = "Подсказки";
 "PlannerQuickForget" = "Забыть: {value}";
-"PlannerQuickExamples" = "созвон завтра 16:00 45 мин | пара по английскому вт 15:00 -- тест по лисенингу | задача проверить работы до пт | обед гречка 13:00 650 ккал | сон 23:40-07:30 | бег 5 км 28 мин | вес 72,4 | вода 500 мл";
+"PlannerQuickExamples" = "созвон завтра 16:00 45 мин | пара по английскому вт 15:00 -- тест по лисенингу | задача проверить работы до пт | обед гречка 13:00 650 ккал | сон 23:40-07:30 | бег 5 км 28 мин | вес 72,4 | вода 500 мл | спал с 14 до 15 | вчера не спал | зал присед 4x8x80, жим 3x10x60 | йога 40 мин | завтрак овсянка 350 ккал | перекус яблоко 80 ккал | вода 300 мл | давление 120/80 | пульс 64 | самочувствие 4 | шаги 9500";
 "PlannerQuickDefault" = "По умолчанию: {date}";
 "PlannerSettingsGoalsHint" = "Цели меняются и текстом: начните строку в «+» со слова «цель».";
 "PlannerHealthGoalsShort" = "Цели";
@@ -1858,9 +1858,18 @@
 "PlannerHealthNoRecords" = "Нет записей";
 "PlannerHealthWeightChart" = "Вес за три недели";
 "PlannerHealthSleepAdd" = "Записать сон за эту ночь";
+"PlannerHealthWaterExample" = "вода 300 мл";
+"PlannerHealthWeightExample" = "вес 72,4";
+"PlannerHealthPressureExample" = "давление 120/80";
+"PlannerHealthPulseExample" = "пульс 64";
+"PlannerHealthMoodExample" = "самочувствие 4";
 "PlannerHealthSleepExample" = "сон 23:30-07:30";
 "PlannerHealthSleepHours" = "{hours} ч";
 "PlannerNoticeSleepDeleted" = "Сон удалён";
+"PlannerHealthSleepAddShort" = "Добавить";
+"PlannerHealthSleepEditLabel" = "Правка этого сна";
+"PlannerNoticeSleepUpdated" = "Сон изменён";
+"PlannerHealthSettings" = "Настройки здоровья";
 "PlannerHealthSleepDayLabel" = "Сон за этот день";
 "PlannerHealthSleepDayPlaceholder" = "23:40-07:30 или 7,5 ч";
 "PlannerHealthSleepDayBad" = "Не распознано. Пример: 23:40-07:30";

@@ -692,3 +692,18 @@ describe('подсказки: история в данных «Плана»', ()
     ])).toEqual({ tick: 9, lines: [{ text: 'Дело', count: 1, at: 7 }], hidden: [] });
   });
 });
+
+describe('подсказки окна, открытого под вид (16 окт 2026)', () => {
+  it('выбран вид — только строки этого вида: свои первыми, затем примеры', () => {
+    const candidates = buildCandidates(sources({
+      history: history('спал с 14 до 15', 'созвон завтра 16:00', 'бег 3 км 20 мин'),
+      examples: [...EXAMPLES, 'сон 23:40-07:30', 'бег 5 км 28 мин'],
+    }), CTX);
+    expect(filterSuggestions('', candidates, 8, ['sleep'])).toEqual([
+      { text: 'спал с 14 до 15', source: 'history' }, { text: 'сон 23:40-07:30', source: 'example' },
+    ]);
+    expect(filterSuggestions('', candidates, 8, ['workout']).map(({ text }) => text))
+      .toEqual(['бег 3 км 20 мин', 'бег 5 км 28 мин']);
+    expect(filterSuggestions('', candidates, 8, ['water']).map(({ text }) => text)).toEqual(['вода 500 мл']);
+  });
+});

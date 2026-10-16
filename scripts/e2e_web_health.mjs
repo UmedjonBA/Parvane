@@ -37,7 +37,16 @@ try {
     (expected) => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === expected,
     kind,
     { timeout: STEP_TIMEOUT_MS },
-  );
+  ).catch(async (err) => {
+    const state = await page.evaluate(() => ({
+      kind: document.querySelector('form[data-quick-kind]')?.dataset.quickKind,
+      value: document.querySelector('#planner-quick-input')?.value,
+      placeholder: document.querySelector('#planner-quick-input')?.placeholder,
+      error: document.querySelector('form[data-quick-kind] [data-quick-error]')?.textContent,
+    }));
+    console.log(`--- вид ввода не ${kind}: ${JSON.stringify(state)}`);
+    throw err;
+  });
   const enter = async (line, kind) => {
     await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
     await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -46,6 +55,17 @@ try {
     await input.press('Enter');
     await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   };
+  // Цели — в «Настройках здоровья» за шестерёнкой «Здоровья» (16 окт 2026)
+  const goalsCard = page.locator('[data-planner-side="settings"] [data-health="goals"]');
+  const openHealthSettings = async () => {
+    if (await goalsCard.count()) return;
+    await card('hint').getByRole('button', { name: /Goals/ }).click();
+    await goalsCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  };
+  const closeHealthSettings = async () => {
+    await page.locator('[data-planner-side="settings"]').getByRole('button', { name: 'Close' }).first().click();
+    await goalsCard.waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS });
+  };
   const expectText = (locator, pattern, what) => locator.filter({ hasText: pattern }).first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail(`${what}: нет текста ${pattern}`));
@@ -53,18 +73,33 @@ try {
   // ── Раздел «Здоровье» в боковой панели; пример открывает ввод с готовой строкой ──
   await sidebar.getByRole('tab', { name: 'Health' }).click();
   await health.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  for (const name of ['hint', 'nutrition', 'water', 'body', 'sleep', 'activity', 'goals']) {
+  for (const name of ['hint', 'nutrition', 'water', 'body', 'sleep', 'activity']) {
     assert.equal(await card(name).count(), 1, `нет блока ${name}`);
   }
   await card('hint').getByRole('button', { name: 'weight 72.4' }).click();
   await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.waitForFunction(() => document.querySelector('#planner-quick-input')?.value === 'weight 72.4', undefined, {
+  await page.waitForFunction(() => document.querySelector('#planner-quick-input')?.value.trim() === 'weight 72.4', undefined, {
     timeout: STEP_TIMEOUT_MS,
   }).catch(() => assert.fail('пример не подставился в строку ввода'));
   await expectKind('metric');
   await form.getByRole('button', { name: 'Add', exact: true }).click();
+  await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
   await expectText(card('body'), /72\.4/, 'вес');
   console.log('OK: «Здоровье» открыто, пример записал вес');
+  // Значение показателя открывает ввод под него: поле пустое, пример — подсказкой, подсказки этого показателя
+  await card('body').locator('[data-health-value="weight"]').click();
+  await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await page.waitForFunction(() => {
+    const field = document.querySelector('#planner-quick-input');
+    return field?.value === '' && field.placeholder === 'weight 72.4';
+  }, undefined, { timeout: STEP_TIMEOUT_MS }).catch(async () => assert.fail(
+    `поле не пустое либо пример не подсказкой: ${JSON.stringify(await input.inputValue())}`,
+  ));
+  const weightSuggestions = await form.locator('[data-quick-suggestion]').evaluateAll((items) => items.map((i) => i.dataset.text));
+  assert.ok(weightSuggestions.length && weightSuggestions.every((t) => /^weight/i.test(t)), `подсказки веса: ${weightSuggestions}`);
+  await page.keyboard.press('Escape');
+  await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: значение показателя — ввод под него с подсказками');
 
   // ── Еда с КБЖУ, сахар сверх предела, вода кнопкой и текстом ───────────────
   await enter('обед гречка 150г б30 ж10 у60 кл6 сахар 60 13:30 520 ккал', 'food');
@@ -98,16 +133,19 @@ try {
   console.log('OK: показатели, сон, кардио и силовая тренировка');
 
   // ── Цели текстом на экране «Здоровье» ─────────────────────────────────────
+  await openHealthSettings();
   await page.locator('#planner-health-goals').fill('белок 140 вода 2,5л шаги 10000');
-  await card('goals').getByRole('button', { name: 'Apply' }).click();
+  await goalsCard.getByRole('button', { name: 'Apply' }).click();
   await planner.getByText('Goals updated').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectText(card('nutrition'), /30 \/ 140 g/, 'новая цель белка');
   await expectText(card('activity'), /9,500 \/ 10,000/, 'новая цель шагов');
   await expectText(card('water'), /0\.75/, 'вода после смены целей');
   await expectText(card('water'), /goal 2\.5 L/, 'цель воды');
+  await openHealthSettings();
   await page.locator('#planner-health-goals').fill('ничего');
-  await card('goals').getByRole('button', { name: 'Apply' }).click();
+  await goalsCard.getByRole('button', { name: 'Apply' }).click();
   await planner.getByText('Nothing recognised').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeHealthSettings();
   console.log('OK: цели меняются текстом, негодная строка объясняется');
 
   // ── «Сегодня»: карточки сна и еды; короткий сон снижает бюджет дня ────────
@@ -162,10 +200,18 @@ try {
     }
     assert.fail(`экран «Здоровье» не дошёл до дня ${key}`);
   };
-  const saveSleep = async (shift, line, kind = 'timed') => {
+  // `isEdit` — правка уже записанного сна дня («Изменить» у него), иначе сон добавляется (снов за день несколько)
+  const saveSleep = async (shift, line, kind = 'timed', isEdit = false) => {
     await goToDay(shift);
+    if (isEdit) {
+      await card('sleep').locator('[data-sleep-edit]').first().click();
+      // Поле получает строку этого сна эффектом — ввод раньше него затёрся бы
+      await page.waitForFunction(() => document.querySelector('#planner-health-sleep')?.value, undefined, {
+        timeout: STEP_TIMEOUT_MS,
+      });
+    }
     await page.locator('#planner-health-sleep').fill(line);
-    await card('sleep').getByRole('button', { name: 'Save', exact: true }).click();
+    await card('sleep').getByRole('button', { name: isEdit ? 'Save' : 'Add', exact: true }).click();
     await routine.locator(`[data-sleep-night="${dayKey(shift)}"][data-sleep-night-kind="${kind}"]`)
       .waitFor({ state: 'attached', timeout: STEP_TIMEOUT_MS })
       .catch(() => assert.fail(`ночь ${dayKey(shift)} (${line}) не появилась на графике режима`));
@@ -201,8 +247,9 @@ try {
 
   // Цель режима текстом: отклонение среднего от цели и линии цели на графике
   await routine.locator('[data-sleep-routine-goal-example]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await openHealthSettings();
   await page.locator('#planner-health-goals').fill('sleep 23:30-07:00');
-  await card('goals').getByRole('button', { name: 'Apply' }).click();
+  await goalsCard.getByRole('button', { name: 'Apply' }).click();
   await planner.getByText('Goals updated').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   await expectText(routine.locator('[data-sleep-routine-goal]'), /goal 23:30–07:00/, 'цель режима');
   await expectText(
@@ -212,19 +259,20 @@ try {
   );
   assert.equal(await routine.locator('[data-sleep-routine-goal-line]').count(), 2, 'две линии цели');
   assert.equal(await routine.locator('[data-sleep-routine-goal-example]').count(), 0, 'пример цели убран');
-  await expectText(card('goals'), /Routine 23:30–07:00/, 'цель режима в сводке целей');
-  await expectText(card('goals'), /Sleep 8:00/, 'цель длительности сна не тронута');
+  await expectText(goalsCard, /Routine 23:30–07:00/, 'цель режима в сводке целей');
+  await expectText(goalsCard, /Sleep 8:00/, 'цель длительности сна не тронута');
+  await closeHealthSettings();
   console.log('OK: режим сна — мало данных, стабильный, цель и отклонение от неё');
 
   // Ночь на три часа позже — режим сбит, ночь названа
-  await saveSleep(-1, '02:40-10:30');
+  await saveSleep(-1, '02:40-10:30', 'timed');
   await expectLevel('broken', 'ночь на три часа позже');
   await expectText(routine, /Off track/, 'плашка «сбит»');
   await expectText(routine.locator('[data-sleep-routine-outliers]'), /02:40 → 10:30/, 'выбившаяся ночь');
   assert.equal(await nights('timed'), 6, 'на графике шесть ночей');
 
   // Та же ночь одной длительностью — «без времени»: в расчёт не идёт, режим снова стабильный
-  await saveSleep(-1, '7.5 h', 'untimed');
+  await saveSleep(-1, '7.5 h', 'untimed', true);
   await expectLevel('stable', 'ночь без времени в расчёт не идёт');
   await expectText(routine.locator('[data-sleep-routine-untimed]'), /Nights without times: 1/, 'ночь без времени');
   assert.equal(await nights('timed'), 5, 'ночей со временем снова пять');

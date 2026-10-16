@@ -165,14 +165,14 @@ try {
   await createTask('Подготовить макет', 90, '14:00');
   console.log('OK: задача создаётся, отменяется и создаётся снова');
 
-  // Ошибка ввода: время без длительности
+  // Время начала без длительности — можно (16 окт 2026): «не вписал — не знаю»
   await openFullForm();
   await page.locator('#planner-new-name').fill('Без оценки');
   await planner.getByLabel('Start', { exact: true }).fill('09:00');
   await planner.getByLabel('Duration, min').fill('');
   await planner.getByRole('button', { name: 'Create', exact: true }).click();
-  await planner.getByRole('alert').getByText('needs a work date and a duration').waitFor({ timeout: STEP_TIMEOUT_MS });
-  await planner.getByRole('button', { name: 'Cancel' }).click();
+  await planner.getByRole('heading', { name: 'Без оценки' }).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await closeSide();
 
   // ── Событие, пересекающееся с задачей ─────────────────────────────────────
   await openFullForm();

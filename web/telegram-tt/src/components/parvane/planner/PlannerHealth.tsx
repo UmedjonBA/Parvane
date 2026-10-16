@@ -12,8 +12,8 @@ import {
   formatDayShort, formatDuration, formatHours, formatNumber, formatSpan, formatWeekday,
 } from './plannerFormat';
 import {
-  applyQuickDraft, clockDifference, dailyRecordId, formatPace, getClockGoal, getDailyRecord, getDailySeries,
-  getLastDays, getLatestRecord, getLimitTotal, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES,
+  applyQuickDraft, clockDifference, formatPace, getClockGoal, getDailyRecord, getDailySeries,
+  getLastDays, getLatestRecord, getLimitTotal, getSleepRecords, getSleepRoutine, getWorkouts, SHORT_SLEEP_MINUTES,
   SLEEP_ROUTINE_DRIFTING_SPREAD, SLEEP_ROUTINE_MIN_NIGHTS, SLEEP_ROUTINE_STABLE_SPREAD, sumActiveMinutes, wrapClock,
 } from './plannerHealth';
 import {
@@ -36,6 +36,8 @@ type OwnProps = {
   // Пример строки открывает ввод текстом с готовым текстом
   onExample: (text: string) => void;
   onOpenSettings: NoneToVoidFunction;
+  // `goals` — только цели и их правка текстом (окно «Настройки здоровья» за шестерёнкой экрана), иначе экран
+  mode?: 'goals';
 };
 
 // Цвет строки нутриента — как у прототипа: белки, жиры, углеводы, клетчатка, сахар, соль
@@ -166,7 +168,7 @@ const HealthTextForm = memo(({
 // «Здоровье» (spec 020): питание, вода и тело, сон, активность, калории недели и цели — сводкой дня; всё
 // вводится текстом
 const PlannerHealth = ({
-  state, day, today, onExample, onOpenSettings,
+  state, day, today, onExample, onOpenSettings, mode,
 }: OwnProps) => {
   const lang = useLang();
 
@@ -214,6 +216,7 @@ const PlannerHealth = ({
   const mood = getDailyRecord(state, 'mood', day);
 
   const sleep = getDailyRecord(state, 'sleep', day);
+  const sleeps = getSleepRecords(state, day);
   const isShortNight = sleep ? sleep.value < SHORT_SLEEP_MINUTES : false;
   const sleepSeries = useMemo(() => getDailySeries(state, 'sleep', week), [state, week]);
   const knownSleep = sleepSeries.filter((value): value is number => value !== undefined);
@@ -230,8 +233,9 @@ const PlannerHealth = ({
   const workouts = useMemo(() => getWorkouts(state, week), [state, week]);
   const activeMinutes = useMemo(() => sumActiveMinutes(workouts), [workouts]);
 
+  // Чип-пример вставляется в поле как текст (пробел в конце — признак начала строки, а не примера вида)
   const handleExample = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    onExample(e.currentTarget.dataset.text!);
+    onExample(`${e.currentTarget.dataset.text!} `);
   });
 
   const handleAddSleep = useLastCallback(() => {
@@ -256,27 +260,41 @@ const PlannerHealth = ({
       showPlannerNotice(lang('PlannerHealthSleepDayBad'));
       return false;
     }
+    const replaceId = editingSleepId;
     updatePlanner((next) => {
-      applyQuickDraft(next, draft, day);
-    }, lang('PlannerNoticeAdded', { name: lang('PlannerHealthSleep') }));
+      applyQuickDraft(next, draft, day, replaceId);
+    }, replaceId
+      ? lang('PlannerNoticeSleepUpdated')
+      : lang('PlannerNoticeAdded', { name: lang('PlannerHealthSleep') }));
+    setEditingSleepId(undefined);
     return true;
   });
 
-  // Правка сна дня: строка записанного сна — в поле ввода; удаление — вся запись дня
+  // Сны дня (ночь и дневной): «Изменить» — строка этого сна в поле, сохранение меняет его; «Удалить» — только его
   const [sleepFill, setSleepFill] = useState<{ key: number; text: string }>();
+  const [editingSleepId, setEditingSleepId] = useState<string>();
 
-  const handleEditSleep = useLastCallback(() => {
-    if (!sleep) return;
-    const text = sleep.time && sleep.endTime
-      ? `${sleep.time}–${sleep.endTime}`
-      : lang('PlannerHealthSleepHours', { hours: formatNumber(lang, sleep.value / MINUTES_IN_HOUR, 2) });
+  const handleEditSleep = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const record = sleeps.find(({ id }) => id === e.currentTarget.dataset.sleepId);
+    if (!record) return;
+    const text = record.time && record.endTime
+      ? `${record.time}–${record.endTime}`
+      : lang('PlannerHealthSleepHours', { hours: formatNumber(lang, record.value / MINUTES_IN_HOUR, 2) });
+    setEditingSleepId(record.id);
     setSleepFill({ key: Date.now(), text });
   });
 
-  const handleDeleteSleep = useLastCallback(() => {
+  const handleDeleteSleep = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    const { sleepId } = e.currentTarget.dataset;
     updatePlanner((draft) => {
-      draft.health = draft.health.filter(({ id }) => id !== dailyRecordId('sleep', day));
+      draft.health = draft.health.filter(({ id }) => id !== sleepId);
     }, lang('PlannerNoticeSleepDeleted'));
+    if (editingSleepId === sleepId) setEditingSleepId(undefined);
+  });
+
+  // Нажатие на значение (вода, вес, давление…) — ввод текстом для этого показателя
+  const handleValueClick = useLastCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    onExample(e.currentTarget.dataset.example!);
   });
 
   const handleAddWorkout = useLastCallback(() => {
@@ -354,10 +372,13 @@ const PlannerHealth = ({
               className={buildClassName(
                 styles.barsColumn,
                 value !== undefined && isLow?.(value) && styles.barsColumnLow,
+                value === 0 && styles.barsColumnZero,
                 week[index] === day && styles.barsColumnCurrent,
               )}
+              data-bar-zero={value === 0 ? '' : undefined}
             >
-              <span className={styles.barsValue}>{value ? format(value) : '—'}</span>
+              {/* Записанный ноль («не спал») — красная отметка с подписью, нет данных — прочерк */}
+              <span className={styles.barsValue}>{value !== undefined ? format(value) : '—'}</span>
               <span className={styles.barsFill} style={`height: ${((value || 0) / max) * BAR_AREA}%`} />
             </div>
           ))}
@@ -703,14 +724,56 @@ const PlannerHealth = ({
     );
   };
 
-  const renderFact = (label: string, value: string | undefined, isAccent?: boolean) => (
-    <span className={styles.healthFact}>
+  // Показатель — кнопка: ввод текстом под него (пример — подсказкой, подсказки — этого показателя)
+  const renderFact = (label: string, value: string | undefined, example: string, isAccent?: boolean) => (
+    <button
+      type="button"
+      className={buildClassName(styles.healthFact, styles.healthValueButton)}
+      data-example={example}
+      onClick={handleValueClick}
+    >
       <span className={styles.healthFactLabel}>{label}</span>
       <span className={buildClassName(styles.healthFactValue, !value && styles.faint, isAccent && styles.kindNote)}>
         {value || '—'}
       </span>
-    </span>
+    </button>
   );
+
+  const goalsSection = (
+    <section className={buildClassName(styles.card, styles.stack)} data-health="goals">
+      <div className={styles.cardHead}>
+        <h3 className={styles.cardTitle}>{lang('PlannerHealthGoals')}</h3>
+      </div>
+      <p className={styles.cardText} data-health-goals-summary>
+        {[
+          kcalGoal ? lang('PlannerHealthKcal', { value: number(kcalGoal) }) : undefined,
+          ...MACROS.map(({ nutrient, label }) => (
+            goals[nutrient] ? `${lang(label)} ${number(goals[nutrient].target)}` : undefined
+          )),
+          waterGoal ? `${lang('PlannerHealthWater')} ${litres(waterGoal)}` : undefined,
+          healthGoals.sleepMinutes
+            ? `${lang('PlannerHealthSleep')} ${formatSpan(healthGoals.sleepMinutes)}` : undefined,
+          routineGoal ? lang('PlannerSleepRoutineGoalShort', routineGoal) : undefined,
+          healthGoals.steps ? `${lang('PlannerHealthStepsShort')} ${number(healthGoals.steps)}` : undefined,
+          lang('PlannerHealthDayWindow', {
+            from: toTime(state.settings.dayStart),
+            to: toTime(state.settings.dayEnd),
+            budget: formatHours(lang, state.budget),
+          }),
+        ].filter(Boolean).join(' · ')}
+      </p>
+      <HealthTextForm
+        id="planner-health-goals"
+        placeholder={lang('PlannerHealthGoalsPlaceholder')}
+        label={lang('PlannerHealthGoalsText')}
+        buttonText={lang('PlannerHealthGoalsApply')}
+        buttonClassName={buildClassName(styles.btn, styles.btnAccent)}
+        onSubmit={handleGoalSubmit}
+      />
+    </section>
+  );
+
+  if (mode === 'goals') return goalsSection;
 
   return (
     <div className={styles.health} data-planner-health={day}>
@@ -803,10 +866,16 @@ const PlannerHealth = ({
             <span className={styles.grow} />
             {Boolean(waterGoal) && <span className={styles.cardNote}>{goalLabel(litres(waterGoal))}</span>}
           </div>
-          <div className={styles.healthBig}>
+          <button
+            type="button"
+            className={buildClassName(styles.healthBig, styles.healthValueButton)}
+            data-health-value="water"
+            data-example={lang('PlannerHealthWaterExample')}
+            onClick={handleValueClick}
+          >
             <span className={buildClassName(styles.big, styles.kindEvent)}>{number(waterMl / ML_IN_LITRE, 2)}</span>
             <span className={styles.muted}>{lang('PlannerHealthLitres', { value: '' }).trim()}</span>
-          </div>
+          </button>
           <span className={buildClassName(styles.prog, styles.progThick, styles.kindEvent)}>
             <span className={styles.progFill} style={`width: ${share(waterMl, waterGoal)}%`} />
           </span>
@@ -829,7 +898,13 @@ const PlannerHealth = ({
               </span>
             )}
           </div>
-          <div className={styles.healthBig}>
+          <button
+            type="button"
+            className={buildClassName(styles.healthBig, styles.healthValueButton)}
+            data-health-value="weight"
+            data-example={lang('PlannerHealthWeightExample')}
+            onClick={handleValueClick}
+          >
             <span className={buildClassName(styles.big, styles.kindWorkout)}>
               {weight ? number(weight.value, 1) : '—'}
             </span>
@@ -839,16 +914,20 @@ const PlannerHealth = ({
                 value: `${weightChange > 0 ? '+' : ''}${number(weightChange, 1)}`,
               })}` : ''}
             </span>
-          </div>
+          </button>
           {renderWeight()}
           <div className={styles.healthFacts}>
             {renderFact(
               lang('PlannerHealthPressure'), pressure ? `${pressure.value}/${pressure.value2 || 0}` : undefined,
+              lang('PlannerHealthPressureExample'),
             )}
             {renderFact(
               lang('PlannerHealthPulse'), pulse ? lang('PlannerHealthBpm', { value: number(pulse.value) }) : undefined,
+              lang('PlannerHealthPulseExample'),
             )}
-            {renderFact(lang('PlannerHealthMood'), mood ? number(mood.value) : undefined, true)}
+            {renderFact(
+              lang('PlannerHealthMood'), mood ? number(mood.value) : undefined, lang('PlannerHealthMoodExample'), true,
+            )}
           </div>
         </div>
       </section>
@@ -864,33 +943,42 @@ const PlannerHealth = ({
           )}
         </div>
         {sleep ? (
-          <div className={styles.healthBig}>
-            <span className={buildClassName(styles.big, isShortNight ? styles.kindDue : styles.kindSleep)}>
-              {formatSpan(sleep.value)}
-            </span>
-            <span className={styles.muted}>
-              {sleep.time && sleep.endTime ? `${sleep.time} → ${sleep.endTime}` : ''}
-            </span>
-            <span className={styles.grow} />
-            <button
-              type="button"
-              className={buildClassName(styles.btn, styles.btnGhost)}
-              data-sleep-edit
-              onClick={handleEditSleep}
-            >
-              <Icon name="edit" />
-              {lang('Edit')}
-            </button>
-            <button
-              type="button"
-              className={buildClassName(styles.btn, styles.btnDanger)}
-              data-sleep-delete
-              onClick={handleDeleteSleep}
-            >
-              <Icon name="delete" />
-              {lang('Delete')}
-            </button>
-          </div>
+          <>
+            <div className={styles.healthBig}>
+              <span className={buildClassName(styles.big, isShortNight ? styles.kindDue : styles.kindSleep)}>
+                {formatSpan(sleep.value)}
+              </span>
+            </div>
+            {sleeps.map((record) => (
+              <div key={record.id} className={styles.sleepRow} data-sleep-record={record.id}>
+                <span className={styles.sleepRowTime}>
+                  {record.time && record.endTime ? `${record.time} → ${record.endTime}` : '—'}
+                </span>
+                <span className={styles.muted}>{formatSpan(record.value)}</span>
+                <span className={styles.grow} />
+                <button
+                  type="button"
+                  className={buildClassName(styles.ib, editingSleepId === record.id && styles.ibActive)}
+                  aria-label={lang('Edit')}
+                  data-sleep-edit
+                  data-sleep-id={record.id}
+                  onClick={handleEditSleep}
+                >
+                  <Icon name="edit" />
+                </button>
+                <button
+                  type="button"
+                  className={styles.ib}
+                  aria-label={lang('Delete')}
+                  data-sleep-delete
+                  data-sleep-id={record.id}
+                  onClick={handleDeleteSleep}
+                >
+                  <Icon name="delete" />
+                </button>
+              </div>
+            ))}
+          </>
         ) : (
           <button type="button" className={styles.btn} onClick={handleAddSleep}>
             {lang('PlannerHealthSleepAdd')}
@@ -900,8 +988,8 @@ const PlannerHealth = ({
           id="planner-health-sleep"
           fill={sleepFill}
           placeholder={lang('PlannerHealthSleepDayPlaceholder')}
-          label={lang('PlannerHealthSleepDayLabel')}
-          buttonText={lang('Save')}
+          label={lang(editingSleepId ? 'PlannerHealthSleepEditLabel' : 'PlannerHealthSleepDayLabel')}
+          buttonText={lang(editingSleepId ? 'Save' : 'PlannerHealthSleepAddShort')}
           buttonClassName={styles.btn}
           onSubmit={handleSleepSubmit}
         />
@@ -968,37 +1056,6 @@ const PlannerHealth = ({
         {renderBars(kcalSeries, (value) => number(value), 'kcal', styles.kindFood, kcalGoal)}
       </section>
 
-      <section className={buildClassName(styles.card, styles.stack)} data-health="goals">
-        <div className={styles.cardHead}>
-          <h3 className={styles.cardTitle}>{lang('PlannerHealthGoals')}</h3>
-        </div>
-        <p className={styles.cardText} data-health-goals-summary>
-          {[
-            kcalGoal ? lang('PlannerHealthKcal', { value: number(kcalGoal) }) : undefined,
-            ...MACROS.map(({ nutrient, label }) => (
-              goals[nutrient] ? `${lang(label)} ${number(goals[nutrient].target)}` : undefined
-            )),
-            waterGoal ? `${lang('PlannerHealthWater')} ${litres(waterGoal)}` : undefined,
-            healthGoals.sleepMinutes
-              ? `${lang('PlannerHealthSleep')} ${formatSpan(healthGoals.sleepMinutes)}` : undefined,
-            routineGoal ? lang('PlannerSleepRoutineGoalShort', routineGoal) : undefined,
-            healthGoals.steps ? `${lang('PlannerHealthStepsShort')} ${number(healthGoals.steps)}` : undefined,
-            lang('PlannerHealthDayWindow', {
-              from: toTime(state.settings.dayStart),
-              to: toTime(state.settings.dayEnd),
-              budget: formatHours(lang, state.budget),
-            }),
-          ].filter(Boolean).join(' · ')}
-        </p>
-        <HealthTextForm
-          id="planner-health-goals"
-          placeholder={lang('PlannerHealthGoalsPlaceholder')}
-          label={lang('PlannerHealthGoalsText')}
-          buttonText={lang('PlannerHealthGoalsApply')}
-          buttonClassName={buildClassName(styles.btn, styles.btnAccent)}
-          onSubmit={handleGoalSubmit}
-        />
-      </section>
     </div>
   );
 };

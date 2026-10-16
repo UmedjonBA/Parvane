@@ -357,8 +357,15 @@ describe('индекс здоровья (C2) совпадает с перебо�
     const kinds = ['weight', 'sleep', 'steps', 'pressure'] as const;
     allDays('2025-12-20', '2027-02-20').forEach((day) => {
       kinds.forEach((kind) => {
-        expect(getDailyRecord(state, kind, day))
-          .toBe(state.health.find((record) => record.kind === kind && record.day === day));
+        const dayRecords = state.health.filter((record) => record.kind === kind && record.day === day);
+        if (kind === 'sleep' && dayRecords.length > 1) {
+          // Несколько снов дня (16 окт 2026): сумма, время — самого долгого
+          const main = dayRecords.reduce((best, item) => (item.value > best.value ? item : best));
+          expect(getDailyRecord(state, kind, day))
+            .toEqual({ ...main, value: dayRecords.reduce((sum, item) => sum + item.value, 0) });
+        } else {
+          expect(getDailyRecord(state, kind, day)).toBe(dayRecords[0]);
+        }
         const latest = state.health.filter((record) => record.kind === kind && record.day <= day)
           .sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0))[0];
         expect(getLatestRecord(state, kind, day)).toBe(latest);

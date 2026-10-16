@@ -36,8 +36,13 @@ function quickGroup(state: PlannerState, list?: string) {
   return known?.name || ensureList(state, list?.trim() || '')?.name || '';
 }
 
-/** Записать черновик ввода текстом в состояние; возвращает подпись для уведомления либо `undefined`. */
-export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: string): string | undefined {
+/**
+ * Записать черновик ввода текстом в состояние; возвращает подпись для уведомления либо `undefined`.
+ * `replaceId` — правка уже записанного сна (его запись меняется на месте), без него сон добавляется к дню.
+ */
+export function applyQuickDraft(
+  state: PlannerState, draft: QuickDraft, today: string, replaceId?: string,
+): string | undefined {
   if (draft.error) return undefined;
   const day = draft.day || today;
   const repeat = draft.repeat;
@@ -105,17 +110,30 @@ export function applyQuickDraft(state: PlannerState, draft: QuickDraft, today: s
       state.nutrition[day] = { ...record, waterMl: (record.waterMl || 0) + draft.waterMl! };
       return String(draft.waterMl);
     }
-    case 'sleep':
-      // Сон дня один: новая запись заменяет прежнюю
-      putDaily(state, {
-        id: dailyRecordId('sleep', day),
-        day,
-        kind: 'sleep',
-        time: draft.start,
-        endTime: draft.end,
-        value: draft.minutes!,
-      });
+    case 'sleep': {
+      // Снов за день может быть несколько (ночь и дневной, 16 окт 2026): новый добавляется, правка меняет свой.
+      // Первый сон дня — с прежним id дня; ровно такой же сон дня второй раз не добавляется (повторное нажатие)
+      const record = {
+        day, kind: 'sleep' as const, time: draft.start, endTime: draft.end, value: draft.minutes!,
+      };
+      const sameDay = state.health.filter((item) => item.kind === 'sleep' && item.day === day);
+      if (replaceId) {
+        state.health = state.health.map((item) => (item.id === replaceId ? { ...record, id: replaceId } : item));
+        return 'sleep';
+      }
+      const isDuplicate = sameDay.some((item) => item.time === record.time && item.endTime === record.endTime
+        && item.value === record.value);
+      if (isDuplicate) return 'sleep';
+      // «Не спал» (0 ч) — отметка дня без сна: при любом сне дня не нужна; настоящий сон её убирает
+      if (record.value === 0 && sameDay.length) return 'sleep';
+      const kept = record.value > 0
+        ? state.health.filter((item) => !(item.kind === 'sleep' && item.day === day && item.value === 0))
+        : state.health;
+      const dayId = dailyRecordId('sleep', day);
+      const id = kept.some((item) => item.id === dayId) ? newId() : dayId;
+      state.health = [...kept, { ...record, id }];
       return 'sleep';
+    }
     case 'metric':
       putDaily(state, {
         id: dailyRecordId(draft.metric!, day), day, kind: draft.metric!, value: draft.value!, value2: draft.value2,
@@ -166,6 +184,8 @@ type HealthIndex = {
   byKind: Map<string, PlannerHealthRecord[]>;
   // Записи вида по дню по возрастанию (устойчиво: тот же день — в порядке данных)
   sortedByKind: Map<string, PlannerHealthRecord[]>;
+  // Сны дня по порядку данных (их может быть несколько)
+  sleeps: Map<string, PlannerHealthRecord[]>;
 };
 
 const healthIndexes = new WeakMap<PlannerHealthRecord[], HealthIndex>();
@@ -176,8 +196,14 @@ function getHealthIndex(state: PlannerState): HealthIndex {
   if (index && index.size === health.length) return index;
   const daily = new Map<string, PlannerHealthRecord>();
   const byKind = new Map<string, PlannerHealthRecord[]>();
+  const sleeps = new Map<string, PlannerHealthRecord[]>();
   health.forEach((record) => {
     const key = `${record.kind}|${record.day}`;
+    if (record.kind === 'sleep') {
+      const list = sleeps.get(record.day);
+      if (list) list.push(record);
+      else sleeps.set(record.day, [record]);
+    }
     if (!daily.has(key)) daily.set(key, record);
     const list = byKind.get(record.kind);
     if (list) list.push(record);
@@ -187,14 +213,25 @@ function getHealthIndex(state: PlannerState): HealthIndex {
   byKind.forEach((list, kind) => {
     sortedByKind.set(kind, [...list].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0)));
   });
+  // Сон дня — сумма снов; время «лёг → встал» — самого долгого (ночь), им же меряется режим
+  sleeps.forEach((list, day) => {
+    if (list.length < 2) return;
+    const main = list.reduce((best, item) => (item.value > best.value ? item : best));
+    daily.set(`sleep|${day}`, { ...main, value: list.reduce((sum, item) => sum + item.value, 0) });
+  });
   index = {
-    size: health.length, daily, byKind, sortedByKind,
+    size: health.length, daily, byKind, sortedByKind, sleeps,
   };
   healthIndexes.set(health, index);
   return index;
 }
 
-/** Запись показателя дня (одна на день). */
+/** Сны дня (ночь и дневной), по порядку записи. */
+export function getSleepRecords(state: PlannerState, day: string): PlannerHealthRecord[] {
+  return getHealthIndex(state).sleeps.get(day) || [];
+}
+
+/** Запись показателя дня (одна на день; сон — сумма снов дня со временем самого долгого). */
 export function getDailyRecord(state: PlannerState, kind: PlannerHealthKind, day: string) {
   return getHealthIndex(state).daily.get(`${kind}|${day}`);
 }

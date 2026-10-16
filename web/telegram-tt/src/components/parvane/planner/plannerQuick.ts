@@ -184,6 +184,8 @@ type QuickWords = {
   // «вчера» / «позавчера» у записи сна: сон записывается на этот день (день подъёма)
   sleepYesterday?: string;
   sleepDayBefore?: string;
+  // «не спал» — отметка дня без сна (0 ч)
+  sleepNone?: string;
   sleepBed?: string;
   sleepWake?: string;
   workout: string;
@@ -288,6 +290,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
     sleepPrefix: 'сегодня|ночью|сейчас|я',
     sleepYesterday: 'вчера',
     sleepDayBefore: 'позавчера',
+    sleepNone: 'не\\s+(?:по)?спал[аи]?|без\\s+сна',
     sleepBed: 'л[её]г(?:ла)?|уснул[а]?|заснул[а]?',
     sleepWake: 'встал[а]?|проснул(?:ся|ась)',
     workout: 'зал|бег|тренировк[аиу]|кардио|плавание|йога|велосипед|прогулк[аиу]|спорт',
@@ -386,6 +389,7 @@ const WORDS: Record<QuickLang, QuickWords> = {
     sleep: 'sleep|slept',
     sleepPrefix: 'today|tonight|last\\s+night|i',
     sleepYesterday: 'yesterday',
+    sleepNone: 'didn\'?t\\s+sleep|did\\s+not\\s+sleep|no\\s+sleep',
     sleepDayBefore: '(?:the\\s+)?day\\s+before\\s+yesterday',
     sleepBed: 'went\\s+to\\s+bed|fell\\s+asleep',
     sleepWake: 'woke(?:\\s+up)?|got\\s+up',
@@ -666,6 +670,8 @@ function compile(id: QuickLang, words: QuickWords) {
   const lead = (body: string) => new RegExp(`^\\s*(?:${body})${SEPARATOR}\\s*`);
   const whole = (body: string) => new RegExp(`^(?:${body})$`);
   const anywhere = (body: string) => new RegExp(`(?:^|[^${ALNUM}])(?:${body})${SEPARATOR}`);
+  const sleepDays = [words.sleepDayBefore, words.sleepYesterday].filter(Boolean).join('|');
+  const sleepPrefixes = [words.sleepPrefix, sleepDays].filter(Boolean).join('|');
   return {
     id,
     words,
@@ -703,9 +709,12 @@ function compile(id: QuickLang, words: QuickWords) {
     abbreviationTail: new RegExp(`(?:^|[^${ALNUM}])(?:${words.abbreviations}|[${LETTER}])$`),
     typoWords: words.typoWords.split(' '),
     typoSafe: new Set([...words.typoWords.split(' '), ...(words.typoSafe || '').split(' ')]),
-    sleepLead: lead(`(?:(?:${[words.sleepPrefix, words.sleepDayBefore, words.sleepYesterday]
-      .filter(Boolean).join('|') || '(?!)'})\\s+)*(?:${words.sleep})`),
+    sleepLead: lead(`(?:(?:${sleepPrefixes || '(?!)'})\\s+)*(?:${words.sleep})`),
     sleepDayBefore: words.sleepDayBefore ? anywhere(words.sleepDayBefore) : undefined,
+    // Вся строка — «[вчера] [я] не спал [вчера]»
+    sleepNone: words.sleepNone ? new RegExp(
+      `^\\s*(?:(?:${sleepPrefixes})\\s+)*(?:${words.sleepNone})(?:\\s+(?:${sleepDays}))?\\s*[.!]?\\s*$`,
+    ) : undefined,
     sleepYesterday: words.sleepYesterday ? anywhere(words.sleepYesterday) : undefined,
     plainSleepLead: lead(words.sleep),
     bedWake: words.sleepBed && words.sleepWake ? new RegExp(
@@ -1674,6 +1683,9 @@ function parseHealth(
     }
     const metric = can('metric') && lang.metricLead.exec(lower);
     if (metric) return settle(parseMetric(lang.metricOf(metric[1])!, metric[2], ctx, lang));
+    if (can('sleep') && lang.sleepNone?.test(lower)) {
+      return sleepOnDay(healthDraft('sleep', ctx, { minutes: 0 }), lower, ctx, lang);
+    }
     if (can('sleep') && lang.sleepLead.test(lower)) {
       const sleep = sleepOnDay(parseSleep(lower.replace(lang.sleepLead, ''), ctx, lang), lower, ctx, lang);
       // «я спал плохо» без времени — не запись сна, а обычная строка
@@ -1681,6 +1693,9 @@ function parseHealth(
     }
     const bedWake = can('sleep') && lang.bedWake?.exec(lower);
     if (bedWake) return sleepOnDay(sleepRange(bedWake, ctx), lower, ctx, lang);
+  }
+  if (ctx.kind === 'sleep' && lang.sleepNone?.test(lower)) {
+    return sleepOnDay(healthDraft('sleep', ctx, { minutes: 0 }), lower, ctx, lang);
   }
   if (ctx.kind === 'sleep') return sleepOnDay(parseSleep(lower, ctx, lang), lower, ctx, lang);
   // Тип «цель» выбран вызывающим: слово «цель» в начале не обязательно
@@ -1726,6 +1741,8 @@ function parseSleep(rest: string, ctx: QuickContext, lang: Lang): QuickDraft {
     `(${NUM})\\s*(?:${words.hour})${SEPARATOR}(?:\\s*(\\d{1,2})${lang.minutes}${SEPARATOR})?`,
   ).exec(rest);
   const minutes = duration ? Math.round(toNumber(duration[1]) * MINUTES_IN_HOUR) + Number(duration[2] || 0) : 0;
+  // «0», «0 ч», «0ч» — записанный ноль, как «не спал»
+  if ((duration && minutes === 0) || /^\s*0\s*$/.test(rest)) return healthDraft('sleep', ctx, { minutes: 0 });
   return minutes > 0 && minutes < MINUTES_IN_DAY
     ? healthDraft('sleep', ctx, { minutes }) : healthDraft('sleep', ctx, { error: 'time' });
 }

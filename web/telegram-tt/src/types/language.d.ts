@@ -2795,8 +2795,17 @@ export interface LangPair {
   'PlannerHealthNoRecords': undefined;
   'PlannerHealthWeightChart': undefined;
   'PlannerHealthSleepAdd': undefined;
+  'PlannerHealthWaterExample': undefined;
+  'PlannerHealthWeightExample': undefined;
+  'PlannerHealthPressureExample': undefined;
+  'PlannerHealthPulseExample': undefined;
+  'PlannerHealthMoodExample': undefined;
   'PlannerHealthSleepExample': undefined;
   'PlannerNoticeSleepDeleted': undefined;
+  'PlannerHealthSleepAddShort': undefined;
+  'PlannerHealthSleepEditLabel': undefined;
+  'PlannerNoticeSleepUpdated': undefined;
+  'PlannerHealthSettings': undefined;
   'PlannerHealthSleepDayLabel': undefined;
   'PlannerHealthSleepDayPlaceholder': undefined;
   'PlannerHealthSleepDayBad': undefined;

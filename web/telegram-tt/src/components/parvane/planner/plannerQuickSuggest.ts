@@ -26,7 +26,9 @@
 import type {
   PlannerEvent, PlannerQuickLine, PlannerRepeat, PlannerRepeatKind, PlannerTask,
 } from './plannerModel';
-import type { QuickContext, QuickDraft, QuickLang } from './plannerQuick';
+import type {
+  QuickContext, QuickDraft, QuickKind, QuickLang,
+} from './plannerQuick';
 
 import { toMinutes } from './plannerModel';
 import { parseQuickInput, QUICK_TASK_MINUTES, quickUsualMinutes } from './plannerQuick';
@@ -45,6 +47,8 @@ export type QuickCandidate = QuickSuggestion & {
   at: number;
   // Строки истории, которые кандидат представляет: «Забыть» стирает их все
   texts: string[];
+  // Вид записи строки — подсказки окна, открытого под вид (сон, спорт, еда…), только этого вида
+  kind: QuickKind;
 };
 
 export type QuickHistoryLine = { text: string; count: number; at: number };
@@ -215,7 +219,7 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
       known.texts.push(text);
       return;
     }
-    add(makeCandidate(text, 'history', key, draft.name, count, at, [text]));
+    add(makeCandidate(text, 'history', key, draft.name, count, at, [text], draft.kind));
   });
 
   const hidden = new Set(sources.history.hidden);
@@ -233,7 +237,9 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
     const cacheKey = `${key}\u0001${draft.name}`;
     const text = verifiedLines.has(cacheKey) ? verifiedLines.get(cacheKey) : verifiedLine(draft, lang, ctx);
     verifiedLines.set(cacheKey, text);
-    if (text && !lines.has(foldLine(text))) add(makeCandidate(text, 'data', key, draft.name, count, at, []));
+    if (text && !lines.has(foldLine(text))) {
+      add(makeCandidate(text, 'data', key, draft.name, count, at, [], draft.kind));
+    }
   });
 
   sources.examples.forEach((example, index) => {
@@ -241,7 +247,9 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
     const key = foldLine(text);
     if (!text || lines.has(key) || byKey.has(key)) return;
     const draft = parseCached(text, ctx);
-    if (!draft.error) add(makeCandidate(text, 'example', key, draft.name, 0, -MAX_DATA_ENTRIES - 1 - index, []));
+    if (!draft.error) {
+      add(makeCandidate(text, 'example', key, draft.name, 0, -MAX_DATA_ENTRIES - 1 - index, [], draft.kind));
+    }
   });
 
   return [...byKey.values()].sort(compareCandidates);
@@ -253,8 +261,10 @@ export function buildCandidates(sources: QuickSuggestSources, ctx: QuickContext)
  * Строка, равная набранной, не предлагается; ничего не подошло — список пуст.
  */
 export function filterSuggestions(
-  input: string, candidates: QuickCandidate[], limit = MAX_SUGGESTIONS,
+  input: string, allCandidates: QuickCandidate[], limit = MAX_SUGGESTIONS, kinds?: QuickKind[],
 ): QuickSuggestion[] {
+  // Окно под вид: только строки этого вида (свои — первыми, затем примеры)
+  const candidates = kinds ? allCandidates.filter(({ kind }) => kinds.includes(kind)) : allCandidates;
   const typed = foldLine(input.replace(/\s+/g, ' ').trimStart());
   const whole = typed.trimEnd();
   const picked: QuickCandidate[] = [];
@@ -316,13 +326,14 @@ function compareCandidates(a: QuickCandidate, b: QuickCandidate) {
 
 function makeCandidate(
   text: string, source: QuickSuggestionSource, key: string, name: string, count: number, at: number, texts: string[],
+  kind: QuickKind,
 ): QuickCandidate {
   const line = foldLine(normalizeLine(text));
   const words = tokenize(line);
   const nameWords = tokenize(foldLine(name));
   // У записей здоровья названия нет: строка ищется по своим словам
   return {
-    text, source, key, line, words, nameWords: nameWords.length ? nameWords : words, count, at, texts,
+    text, source, key, line, words, nameWords: nameWords.length ? nameWords : words, count, at, texts, kind,
   };
 }
 

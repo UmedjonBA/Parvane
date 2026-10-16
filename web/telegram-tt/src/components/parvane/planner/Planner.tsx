@@ -685,7 +685,9 @@ const Planner = () => {
               </span>
             </>
           ) : (
-            <h2 className={styles.sideTitle}>{lang(side === 'settings' ? 'PlannerSettings' : 'PlannerTitleNew')}</h2>
+            <h2 className={styles.sideTitle}>
+              {lang(side === 'settings' ? (isHealth ? 'PlannerHealthSettings' : 'PlannerSettings') : 'PlannerTitleNew')}
+            </h2>
           )}
           <span className={styles.grow} />
           <button type="button" className={styles.ib} aria-label={lang('Close')} onClick={handleCloseSide}>
@@ -693,7 +695,17 @@ const Planner = () => {
           </button>
         </div>
         <div className={buildClassName(styles.content, styles.sideContent, 'custom-scroll')}>
-          {side === 'settings' ? (
+          {side === 'settings' && isHealth ? (
+            // Шестерёнка «Здоровья» — его цели (16 окт 2026; раньше — настройки плана и цели в конце экрана)
+            <PlannerHealth
+              state={state}
+              day={picked}
+              today={today}
+              mode="goals"
+              onExample={handleQuickText}
+              onOpenSettings={handleOpenSettings}
+            />
+          ) : side === 'settings' ? (
             <PlannerSettings state={state} userId={currentUserId} />
           ) : side === 'form' ? (
             <PlannerTaskForm

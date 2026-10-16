@@ -198,11 +198,7 @@ const PlannerTaskEditor = ({
       showPlannerNotice(lang('PlannerErrorNeedDay'));
       return false;
     }
-    if (value && !task.minutes) {
-      showPlannerNotice(lang('PlannerErrorNeedMinutes'));
-      return false;
-    }
-    if (value && toMinutes(value) + task.minutes! > MINUTES_IN_DAY) {
+    if (value && task.minutes !== undefined && toMinutes(value) + task.minutes > MINUTES_IN_DAY) {
       showPlannerNotice(lang('PlannerErrorPastMidnight'));
       return false;
     }

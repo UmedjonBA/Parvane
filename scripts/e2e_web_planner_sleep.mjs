@@ -71,6 +71,33 @@ try {
   await page.waitForTimeout(1000);
   assert.equal(await planner.locator(`[data-sleep-open="${yesterday}"]`).count(), 0, 'сон удалён из календаря');
   console.log('OK: сон удалён');
+
+  // «не спал» — 0 ч: красная отметка на графике; дневной сон убирает ноль; два сна за день складываются
+  const enterQuick = async (line) => {
+    await planner.getByRole('button', { name: '+ Entry', exact: true }).click();
+    await input.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await input.fill(line);
+    await page.waitForFunction(() => document.querySelector('form[data-quick-kind]')?.dataset.quickKind === 'sleep',
+      undefined, { timeout: STEP_TIMEOUT_MS });
+    await input.press('Enter');
+    await input.waitFor({ state: 'hidden', timeout: STEP_TIMEOUT_MS });
+  };
+  await enterQuick('вчера я не спал');
+  await tag.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.match(await tag.innerText(), /0:00/, 'не спал — 0:00');
+  await tag.click();
+  await health.locator('[data-health-bars="sleep"] [data-bar-zero]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: «не спал» — 0 ч и красная отметка на графике');
+  await openPlannerScreen(page, 'calendar');
+  if (new Date().getDay() === 1) await planner.getByRole('button', { name: 'Previous period' }).click();
+  await enterQuick('вчера спал с 14 до 15');
+  await enterQuick('вчера спал с 23 до 7');
+  await page.waitForFunction((day) => /9:00/.test(document.querySelector(`[data-sleep-open="${day}"]`)?.textContent || ''),
+    yesterday, { timeout: STEP_TIMEOUT_MS });
+  await tag.click();
+  await sleepCard.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  assert.equal(await sleepCard.locator('[data-sleep-record]').count(), 2, 'два сна дня, ноль убран');
+  console.log('OK: дневной сон убрал «0 ч», два сна за день складываются (9:00)');
   assert.deepEqual(errors, [], `ошибки страницы: ${errors.join('; ')}`);
   console.log('e2e_web_planner_sleep: OK');
 } finally {

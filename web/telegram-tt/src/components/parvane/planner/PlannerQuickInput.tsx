@@ -7,7 +7,7 @@ import type {
   PlannerEvent, PlannerLearnedWord, PlannerQuickLine, PlannerSettings, PlannerTask,
 } from './plannerModel';
 import type {
-  QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickPick,
+  QuickAlt, QuickAltField, QuickContext, QuickDraft, QuickField, QuickKind, QuickLang, QuickPick,
 } from './plannerQuick';
 import type { LearnStore } from './plannerQuickLearn';
 import type { QuickCandidate, QuickHistory } from './plannerQuickSuggest';
@@ -117,6 +117,15 @@ const KIND_ICONS = {
 } as const satisfies Record<QuickKind, IconName>;
 // Виды, которые в переключателе стоят под одной кнопкой
 const CHOICE_OF: Partial<Record<QuickKind, KindChoice>> = { water: 'food', metric: 'auto', goal: 'auto' };
+// Какие виды строк подсказывать при выбранном виде окна ('auto' — все)
+const CHOICE_KINDS: Record<KindChoice, QuickKind[] | undefined> = {
+  auto: undefined,
+  task: ['task'],
+  event: ['event'],
+  food: ['food', 'water'],
+  sleep: ['sleep'],
+  workout: ['workout'],
+};
 const METRIC_LABELS = {
   weight: 'PlannerHealthWeight',
   pressure: 'PlannerHealthPressure',
@@ -138,7 +147,26 @@ const SUGGESTION_SELECTOR = '[data-quick-suggestion]';
 // Столько строк истории и записей «Плана» разбираются сразу при открытии; больше — сначала показываются
 // примеры, полный список собирается, когда окно показано и браузер свободен
 const SYNC_CANDIDATES_LIMIT = 120;
+const MINUTES_IN_DAY_FULL = 1440;
 const EMPTY_HISTORY: QuickHistory = { tick: 0, lines: [], hidden: [] };
+
+// Пример с экрана «Здоровье» («бег 5 км 30 мин», «вес 72,4»): вид окна и подсказки только этого вида (у
+// показателя — того же показателя, по первому слову строки); иное — не пример
+const EXAMPLE_KINDS: Partial<Record<QuickKind, KindChoice>> = {
+  food: 'food', water: 'food', sleep: 'sleep', workout: 'workout', metric: 'auto',
+};
+type ExampleFilter = { choice: KindChoice; kinds: QuickKind[]; lead?: string };
+
+function exampleFilterOf(text: string, today: string, quickLang: QuickLang): ExampleFilter | undefined {
+  const draft = parseQuickInput(text, {
+    today, nowMinutes: 0, dayStart: 0, dayEnd: MINUTES_IN_DAY_FULL, lang: quickLang,
+  });
+  const choice = draft.error ? undefined : EXAMPLE_KINDS[draft.kind];
+  if (!choice) return undefined;
+  const isMetric = draft.kind === 'metric' || draft.kind === 'water';
+  const lead = isMetric ? text.trim().split(/\s+/)[0].toLowerCase() : undefined;
+  return { choice, kinds: [draft.kind], lead };
+}
 
 // Ввод текстом (spec 017): строка → черновик записи, распознанное видно чипами под полем
 const PlannerQuickInput = ({
@@ -149,6 +177,10 @@ const PlannerQuickInput = ({
   const suggestionsRef = useRef<HTMLDivElement>();
   const [text, setText] = useState('');
   const [choice, setChoice] = useState<KindChoice>('auto');
+  // Окно открыто кнопкой вида («+ Спорт», «Записать сон», значение показателя): пример — подсказкой в пустом
+  // поле, вид выбран, подсказки — этого вида
+  const [examplePlaceholder, setExamplePlaceholder] = useState<string>();
+  const [exampleFilter, setExampleFilter] = useState<ExampleFilter>();
   const [skip, setSkip] = useState<QuickField[]>([]);
   // Чтения, выбранные из вариантов чипа, и чип, у которого варианты сейчас показаны
   const [pick, setPick] = useState<QuickPick>({});
@@ -169,10 +201,25 @@ const PlannerQuickInput = ({
   const lang = useLang();
   const learned = useMemo(() => learnStore && learnedDefaults(learnStore), [learnStore]);
 
+  // Строку успели набрать до эффекта открытия (быстрый набор, вставка): эффект её не затирает
+  const typedRef = useRef(false);
+
   useEffect(() => {
-    if (!isOpen) return undefined;
-    setText(initialText || '');
-    setChoice('auto');
+    if (!isOpen) {
+      // Закрытое окно не хранит прежнюю строку: иначе при следующем открытии она мелькнёт на кадр
+      typedRef.current = false;
+      setText('');
+      setExamplePlaceholder(undefined);
+      return undefined;
+    }
+    // Начало строки («задача сегодня ») — в поле; готовый пример вида — подсказкой, поле пустое
+    const quickLang = getQuickLang(lang.code);
+    const isExample = Boolean(initialText) && !initialText.endsWith(' ');
+    const example = isExample ? exampleFilterOf(initialText, today, quickLang) : undefined;
+    if (!typedRef.current) setText(example ? '' : initialText || '');
+    setExamplePlaceholder(example ? initialText : undefined);
+    setExampleFilter(example);
+    setChoice(example?.choice || 'auto');
     setSkip([]);
     setPick({});
     setAltField(undefined);
@@ -180,7 +227,7 @@ const PlannerQuickInput = ({
     // Поле появляется вместе с окном: фокус — после его показа
     const timeout = window.setTimeout(() => inputRef.current?.focus(), FOCUS_DELAY_MS);
     return () => window.clearTimeout(timeout);
-  }, [isOpen, initialText, userId]);
+  }, [isOpen, initialText, userId, today, lang.code]);
 
   // Разбор без участия пользователя: с ним сравнивается добавленная запись (словарь правок)
   const baseContext = useLastCallback((): QuickContext => {
@@ -244,6 +291,7 @@ const PlannerQuickInput = ({
   }
 
   const handleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    typedRef.current = true;
     setText(e.currentTarget.value);
     // Правка строки возвращает снятые значения и выбранные чтения: слова могли измениться
     if (skip.length) setSkip([]);
@@ -365,7 +413,13 @@ const PlannerQuickInput = ({
     };
   }, [sources]);
   const candidates = idleCandidates || quickCandidates;
-  const suggestions = useMemo(() => (candidates ? filterSuggestions(text, candidates) : []), [candidates, text]);
+  const suggestions = useMemo(() => {
+    if (!candidates) return [];
+    // Пример показателя сужает подсказки до него, пока вид окна не сменён вручную
+    const filter = exampleFilter && exampleFilter.choice === choice ? exampleFilter : undefined;
+    const pool = filter?.lead ? candidates.filter(({ line }) => line.startsWith(filter.lead!)) : candidates;
+    return filterSuggestions(text, pool, undefined, filter?.kinds || CHOICE_KINDS[choice]);
+  }, [candidates, text, choice, exampleFilter]);
   const hasExamples = suggestions.some(({ source }) => source === 'example');
   const hasOwnSuggestions = suggestions.some(({ source }) => source !== 'example');
 
@@ -457,7 +511,7 @@ const PlannerQuickInput = ({
           type="text"
           value={text}
           maxLength={INPUT_MAX_LENGTH}
-          placeholder={lang('PlannerQuickPlaceholder')}
+          placeholder={examplePlaceholder || lang('PlannerQuickPlaceholder')}
           aria-label={lang('PlannerQuickTitle')}
           autoComplete="off"
           enterKeyHint="done"
