@@ -64,9 +64,14 @@ impl Conn {
     }
     /// Запрос → Ok(тело) | Err(код); события по дороге копятся в `events`.
     pub fn call(&mut self, method: &str, body: Vec<u8>) -> Result<Vec<u8>, ErrorCode> {
+        self.call_to(method, body, "")
+    }
+
+    /// Запрос объекту сервера `dest` (spec 028); пусто — свой сервер.
+    pub fn call_to(&mut self, method: &str, body: Vec<u8>, dest: &str) -> Result<Vec<u8>, ErrorCode> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![], dest_domain: String::new() }));
+        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: if dest.is_empty() { 5000 } else { 9000 }, padding: vec![], dest_domain: dest.into() }));
         loop {
             let f = self.recv().ok_or(ErrorCode::Unavailable)?;
             match f.kind {
