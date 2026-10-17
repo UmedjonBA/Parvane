@@ -375,7 +375,7 @@ async fn v2_identity_live() {
             ..Default::default()
         };
         // Версия и hash головы — из log_sync.
-        let sync = ok_of::<ipb::DeviceLogSyncResponse>(c.call("identity.device.log_sync", ipb::DeviceLogSyncRequest { user: Some(UserRef { address: user.clone() }), after_version: 0 }.encode_to_vec()), "log-sync", &mut f);
+        let sync = ok_of::<ipb::DeviceLogSyncResponse>(c.call("identity.device.log_sync", ipb::DeviceLogSyncRequest { user: Some(UserRef { address: user.clone() }), after_version: 0, ..Default::default() }.encode_to_vec()), "log-sync", &mut f);
         let mut log = parvane_protocol::identity::DeviceLog::new(&user).unwrap();
         for e in sync.map(|s| s.entries).unwrap_or_default() {
             log.apply(&e).unwrap();
@@ -409,7 +409,7 @@ async fn v2_identity_live() {
         f.check("bundle-cert-verifies", devs.len() == 1 && cert_ok, devs.len());
         f.check("bundle-otk", devs.first().is_some_and(|d| d.one_time_key.is_some()), "");
         // Журнал анонимно.
-        let ls = ok_of::<ipb::DeviceLogSyncAnonResponse>(an.call("identity.device.log_sync_anon", ipb::DeviceLogSyncAnonRequest { user: Some(UserRef { address: user.clone() }), after_version: 0 }.encode_to_vec()), "log-sync-anon", &mut f);
+        let ls = ok_of::<ipb::DeviceLogSyncAnonResponse>(an.call("identity.device.log_sync_anon", ipb::DeviceLogSyncAnonRequest { user: Some(UserRef { address: user.clone() }), after_version: 0, ..Default::default() }.encode_to_vec()), "log-sync-anon", &mut f);
         f.check("log-sync-anon-2", ls.map(|l| l.entries.len()).unwrap_or(0) == 2, "");
 
         // Ключ доставки и приватность.

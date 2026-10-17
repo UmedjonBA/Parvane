@@ -43,7 +43,8 @@ message ShardStreamChunk {
   Error error = 4;
 }
 
-// Отзыв устройства: gateway закрывает идентифицированные сессии ≤ 1 с (класс 5).
+// Отзыв устройства: gateway закрывает идентифицированные сессии ≤ 1 с (класс 5). Пустой `device_id` — адрес
+// выведен из обращения (смена ника, spec 026): gateway освобождает его каналы присутствия.
 message RevokedNotice {
   string user = 1 [(max_len) = 255];
   string device_id = 2 [(max_len) = 64];
@@ -71,6 +72,8 @@ message DevicesOfResponse {
     (max_items) = 64,
     (max_len) = 32
   ];
+  // Адрес аккаунта (spec 026): прежний ник 30 дней ведёт на новый — доставка идёт в журналы нового адреса.
+  string address = 5 [(max_len) = 255];
 }
 
 // Проверка права доставки по ключу доступа (сервер хранит только SHA-256).
@@ -93,6 +96,11 @@ message KeyOwnerResponse {
   string user = 2 [(max_len) = 255];
   string device_id = 3 [(max_len) = 64];
   bytes root_key = 4 [(max_len) = 32];
+  // Прежние адреса той же личности (смена ника, spec 026): права, выданные им, — права владельца ключа.
+  repeated string aliases = 5 [
+    (max_items) = 16,
+    (max_len) = 255
+  ];
 }
 
 // Проверка слепого жетона ключами выпуска identity (одноразовость — в messenger).
@@ -130,4 +138,20 @@ message NameClaimResponse {
   bool ok = 1;
   // taken | format | reserved
   string reason = 2 [(max_len) = 16];
+}
+
+// ── смена ника (spec 026): identity → шарды (subject'ы v2.internal.rename.<шард>) ──
+// Запрос с ответом: шард переносит свои строки прежнего адреса на новый (идемпотентно); identity повторяет до
+// ответа `ok`.
+message RenameNotice {
+  string old_address = 1 [(max_len) = 255];
+  string new_address = 2 [(max_len) = 255];
+  // Устройства аккаунта — для ключей, выведенных из адреса и устройства (журналы инбокса, push).
+  repeated string device_ids = 3 [
+    (max_items) = 64,
+    (max_len) = 64
+  ];
+}
+message RenameAck {
+  bool ok = 1;
 }

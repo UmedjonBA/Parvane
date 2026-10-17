@@ -1394,6 +1394,24 @@
         "desktop": "ОТКРЫТО: движок общий, но сборка не обновлялась (решение пользователя 15 окт 2026 — desktop не трогать); старый движок отвергнет журнал публичной группы, частные группы не затронуты",
         "android": "ОТКРЫТО: как desktop"
       }
+    },
+    {
+      "id": "RENAME-1",
+      "title": "Смена ника: Rename закрывает журнал прежнего адреса, журнал нового — продолжение (тот же корень); перенос собеседника без KEY-1, RenameMember в группах",
+      "logFields": {
+        "rename": 10,
+        "renamed_from": 11
+      },
+      "groupChange": {
+        "rename_member": 19,
+        "signer_address": 6
+      },
+      "aliasDays": 30,
+      "clients": {
+        "web": "backend/protocol/src/client_rename.rs (движок), web/telegram-tt/src/api/parvane/v2/controller.ts (renameAccount, followPeerRename, followOwnRename, renameGroupsPending), store.ts (registerUserRename), secureStorage.ts (migrateStorageUser), components/parvane/rename/UsernameChangeModal.tsx; сценарий scripts/e2e_web_rename.mjs",
+        "desktop": "ОТКРЫТО (решение пользователя 15–17 окт 2026: desktop не трогаем, пока web не доделан)",
+        "android": "ОТКРЫТО (то же решение)"
+      }
     }
   ]
 }

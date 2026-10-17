@@ -219,10 +219,18 @@ pub enum LogVerdict {
     RootChanged,
     /// На сервере — другой журнал (другой генезис): перечитать с версии 0.
     Replaced,
+    /// spec 026: журнал закрыт сменой ника — дочитать журнал нового адреса (`peer_renamed_to` /
+    /// `own_renamed_to`).
+    Moved,
+    /// spec 026: журнал — продолжение прежнего адреса собеседника (тот же корень); всё о нём перенесено на
+    /// этот адрес (`peer_renamed_from`).
+    Renamed,
 }
 
 #[derive(Default)]
 struct Peer {
+    /// spec 026: перенос с прежнего адреса уже сообщён хосту (вердикт "renamed" — один раз за сеанс).
+    rename_linked: bool,
     entries: Vec<SignedOp>,
     log: Option<DeviceLog>,
     pin: LogPin,
@@ -266,6 +274,22 @@ fn entry_signer_version(e: &GroupStateEntry) -> u64 {
     let Some(op) = e.change.as_ref() else { return 0 };
     let Ok(body) = crate::pb::parvane::core::v2::OpBody::decode(op.body.as_slice()) else { return 0 };
     gpb::GroupStateChange::decode(body.payload.as_slice()).map(|sc| sc.signer_log_version).unwrap_or(0)
+}
+
+/// spec 026: адрес-подсказка подписанта и прежний адрес из `RenameMember` — их журналы нужны для проверки.
+fn entry_rename_addresses(e: &GroupStateEntry) -> (Option<String>, Option<String>) {
+    let Some(op) = e.change.as_ref() else { return (None, None) };
+    let Ok(body) = crate::pb::parvane::core::v2::OpBody::decode(op.body.as_slice()) else { return (None, None) };
+    let Ok(sc) = gpb::GroupStateChange::decode(body.payload.as_slice()) else { return (None, None) };
+    let hinted = Some(sc.signer_address).filter(|a| !a.is_empty());
+    let old = match sc.change.and_then(|c| c.change) {
+        Some(Change::RenameMember(r)) => r.rename.and_then(|op| {
+            let b = crate::pb::parvane::core::v2::OpBody::decode(op.body.as_slice()).ok()?;
+            crate::pb::parvane::core::v2::UserDeviceLogEntry::decode(b.payload.as_slice()).ok()?.user.map(|u| u.address)
+        }),
+        _ => None,
+    };
+    (hinted, old)
 }
 
 /// Кого добавляет запись журнала (для предупреждения FR-028 при отказе).
@@ -360,6 +384,8 @@ pub struct Client {
     cloud_authors: BTreeMap<[u8; 32], (String, String)>,
     /// Последняя ошибка разбора записи (диагностика хоста; клиенту не показывается).
     pub last_error: Option<ProtoError>,
+    /// spec 026: свои прежние адреса — записи и журнал каждого (закрыт `Rename`).
+    former_own: Vec<(Vec<SignedOp>, DeviceLog)>,
 }
 
 /// Чей это эфемерный канал (T127).
@@ -464,6 +490,7 @@ impl Client {
             cloud_trusted_keys: vec![],
             cloud_authors: BTreeMap::new(),
             last_error: None,
+            former_own: vec![],
         })
     }
 
@@ -858,6 +885,10 @@ impl Client {
                 self.own_log.apply(&e)?;
                 self.own_entries.push(e);
             }
+            // spec 026: ник сменён на другом своём устройстве — хост дочитывает журнал нового адреса
+            if self.own_log.renamed_to.is_some() {
+                return Ok(LogVerdict::Moved);
+            }
             self.refresh_own_after_log();
             if before.iter().any(|d| !self.own_log.devices.contains_key(d)) {
                 self.on_devices_removed(&user.to_string());
@@ -902,12 +933,26 @@ impl Client {
         if log.version > 0 {
             self.sticky.mark(user);
         }
-        let removed = peer.log.as_ref().is_some_and(|old| old.devices.keys().any(|d| !log.devices.contains_key(d)));
+        let is_moved = log.renamed_to.is_some();
+        let is_continuation = log.renamed_from.is_some();
+        let removed = !is_moved && peer.log.as_ref().is_some_and(|old| old.devices.keys().any(|d| !log.devices.contains_key(d)));
         peer.log = Some(log);
         if removed {
             self.on_devices_removed(user);
         }
+        // spec 026: смена ника собеседником
+        if is_moved {
+            return Ok(LogVerdict::Moved);
+        }
+        if is_continuation && self.link_peer_rename(user).is_some() {
+            return Ok(LogVerdict::Renamed);
+        }
         Ok(verdict)
+    }
+
+    /// spec 026: прежний адрес собеседника, чей журнал продолжает этот (после `Renamed`).
+    pub fn peer_renamed_from(&self, user: &str) -> Option<String> {
+        self.peer_log(user).and_then(|l| l.renamed_from.clone())
     }
 
     /// SHA-256 первой записи известного журнала пользователя («отпечаток
@@ -1201,6 +1246,9 @@ impl Client {
     /// устройства), остальное — `call.signal_sealed`. В журнал не пишется, своим
     /// устройствам копия не идёт. `Need` — как у личного сообщения.
     pub fn prepare_call(&mut self, peer: &str, signal: &cpb::CallSignal) -> CResult<Vec<OutRequest>> {
+        // spec 026: прежний ник собеседника — по новому адресу
+        let current = self.current_address(peer);
+        let peer = current.as_str();
         if peer == self.user
             || signal.call_id.len() != msg::CALL_ID_LEN
             || !(signal.group_call_id.is_empty() || signal.group_call_id.len() == msg::CALL_ID_LEN)
@@ -1310,6 +1358,9 @@ impl Client {
 
     /// То же с `op_id` хоста (id сообщения в UI; один на все копии).
     pub fn prepare_direct_id(&mut self, peer: &str, content: &Content, op_id: Vec<u8>) -> CResult<Vec<OutRequest>> {
+        // spec 026: прежний ник собеседника — по новому адресу
+        let current = self.current_address(peer);
+        let peer = current.as_str();
         let ts_ms = now_ms();
         let out = self.prepare_direct_opts(peer, content, DirectOpts { op_id: op_id.clone(), share_dk: true, force_l2: false, ts_ms })?;
         if msg::is_trackable(content) && peer != self.user {
@@ -1393,6 +1444,9 @@ impl Client {
     /// без копий своим устройствам и без раздачи своего ключа доступа.
     #[cfg(feature = "test-inject")]
     pub fn prepare_direct_raw(&mut self, peer: &str, content_bytes: &[u8]) -> CResult<Vec<OutRequest>> {
+        // spec 026: прежний ник собеседника — по новому адресу
+        let current = self.current_address(peer);
+        let peer = current.as_str();
         use crate::pb::parvane::core::v2::{op_header::Conversation, OpHeader};
         self.check_peer(peer)?;
         let log = self.peer_log(peer).cloned().ok_or(ProtoError::BadCertificate)?;
@@ -1431,6 +1485,9 @@ impl Client {
     /// Раздать текущий ключ доступа собеседнику (T075): после ротации — тем,
     /// кому раздавался прежний. Без повторной раздачи, если уже получил.
     pub fn share_delivery_key(&mut self, peer: &str) -> CResult<Vec<OutRequest>> {
+        // spec 026: прежний ник собеседника — по новому адресу
+        let current = self.current_address(peer);
+        let peer = current.as_str();
         if peer == self.user || !self.dk.needs_share(peer) {
             return Ok(vec![]);
         }
@@ -1737,6 +1794,9 @@ impl Client {
     /// синхронизация прочитанного). D-15: незнакомцу (нет его ключа доступа)
     /// квитанции не шлются — ни жетонов, ни раздачи своего ключа.
     pub fn prepare_receipt(&mut self, peer: &str, kind: mpb::ReceiptKind, messages: &[Vec<u8>]) -> CResult<Vec<OutRequest>> {
+        // spec 026: прежний ник собеседника — по новому адресу
+        let current = self.current_address(peer);
+        let peer = current.as_str();
         let c = msg::receipt(kind, messages)?;
         if peer != self.user && !self.has_peer_delivery_key(peer) {
             return Ok(self.seal_to_own_devices_chat(peer, &c)?.into_iter().collect());
@@ -2087,11 +2147,19 @@ impl Client {
     }
 
     fn open_sealed(&mut self, seq: u64, env: &crate::pb::parvane::core::v2::SealedEnvelope) -> CResult<Vec<Event>> {
-        let me = self.my_device();
+        // spec 026: конверт, запечатанный на свой прежний адрес (отправитель ещё не знал о смене ника)
+        let me = match env.recipient.as_ref() {
+            Some(r) if r.device_id == self.device_id && r.address != self.user && self.is_own_address(&r.address) => r.clone(),
+            _ => self.my_device(),
+        };
         let inner: SealedInner = seal::open(env, &me, &self.hpke_sk)?;
         let cert = inner.sender.as_ref().ok_or(ProtoError::InvalidField("sender"))?;
         let v = identity::verify_certificate(cert, None)?;
         let sender = v.user().to_string();
+        // spec 026: устройства прежнего своего адреса закрыты сменой ника
+        if sender != self.user && self.is_own_address(&sender) {
+            return Err(ClientError::Proto(ProtoError::Forbidden));
+        }
         // Журнал отправителя обязателен (fail-closed): устройство активно.
         if sender != self.user {
             match self.peers.get(&sender) {
@@ -2260,21 +2328,64 @@ impl Client {
     /// Подписант записи группы по ключу устройства и версии журнала устройств, на которую
     /// ссылается запись (ENG-08): ключ действовал в этой версии; запись без версии — ключ
     /// действует либо перестал действовать без чужого отзыва.
+    /// Журналы, где ключ `k` действовал в версии `version` (0 — без версии): (адрес, корень, журнал закрыт
+    /// сменой ника на адрес).
+    fn signer_candidates(&self, k: &[u8; 32], version: u64) -> Vec<(SignerInfo, Option<String>)> {
+        let check = |user: &str, log: &DeviceLog| {
+            let valid = if version > 0 { log.key_active_at(k, version) } else { log.key_known_unrevoked(k) };
+            (log.key_ever(k) && valid).then(|| (SignerInfo { user: user.to_string(), root_key: log.root_key }, log.renamed_to.clone()))
+        };
+        check(&self.user, &self.own_log)
+            .into_iter()
+            .chain(self.former_own.iter().filter_map(|(_, l)| check(&l.user, l)))
+            .chain(self.peers.iter().filter_map(|(u, p)| p.log.as_ref().and_then(|l| check(u, l))))
+            .collect()
+    }
+
     fn signer_resolver(&self) -> impl Fn(&[u8; 32], u64) -> Option<SignerInfo> + '_ {
         move |k: &[u8; 32], version: u64| {
-            let check = |user: &str, log: &DeviceLog| {
-                let valid = if version > 0 { log.key_active_at(k, version) } else { log.key_known_unrevoked(k) };
-                (log.key_ever(k) && valid).then(|| SignerInfo { user: user.to_string(), root_key: log.root_key })
-            };
             // C1-01: ключ однозначно принадлежит одному пользователю (доказательство
-            // владения в сертификате); совпадение в двух журналах — отказ.
-            let mut found = check(&self.user, &self.own_log).into_iter().chain(self.peers.iter().filter_map(|(u, p)| p.log.as_ref().and_then(|l| check(u, l))));
-            let first = found.next()?;
-            if found.next().is_some() {
-                return None;
+            // владения в сертификате); совпадение в двух журналах — отказ. Исключение (spec 026) — прежний и
+            // новый адрес одной личности после смены ника: без подсказки адреса запись — прежнего (так
+            // подписана история до смены)
+            let mut found = self.signer_candidates(k, version);
+            match found.len() {
+                1 => found.pop().map(|(s, _)| s),
+                2 => {
+                    let (a, b) = (&found[0], &found[1]);
+                    let pair = a.0.root_key == b.0.root_key
+                        && (a.1.as_deref() == Some(b.0.user.as_str()) || b.1.as_deref() == Some(a.0.user.as_str()));
+                    if !pair {
+                        return None;
+                    }
+                    found.into_iter().find(|(_, moved)| moved.is_some()).map(|(s, _)| s)
+                }
+                _ => None,
             }
-            Some(first)
         }
+    }
+
+    /// Резолвер по подсказке адреса подписанта (записи после смены ника, spec 026).
+    fn signer_resolver_as(&self) -> impl Fn(&[u8; 32], u64, &str) -> Option<SignerInfo> + '_ {
+        move |k: &[u8; 32], version: u64, address: &str| {
+            let mut found: Vec<SignerInfo> = self.signer_candidates(k, version).into_iter().map(|(s, _)| s).filter(|s| s.user == address).collect();
+            (found.len() == 1).then(|| found.pop()).flatten()
+        }
+    }
+
+    /// Корень известного журнала адреса (свой текущий и прежние, собеседники).
+    fn root_resolver(&self) -> impl Fn(&str) -> Option<[u8; 32]> + '_ {
+        move |user: &str| {
+            if user == self.user {
+                return Some(self.own_log.root_key);
+            }
+            self.former_own.iter().find(|(_, l)| l.user == user).map(|(_, l)| l.root_key).or_else(|| self.peer_log(user).map(|l| l.root_key))
+        }
+    }
+
+    /// Подсказка адреса для своих записей групп: после смены ника ключ этого устройства есть и в прежнем журнале.
+    fn own_signer_hint(&self) -> &str {
+        if self.former_own.is_empty() { "" } else { &self.user }
     }
 
     /// ENG-06: у пользователя ушло устройство — в его группах своя Megolm-сессия начинается заново
@@ -2386,16 +2497,26 @@ impl Client {
         for (i, e) in entries.into_iter().enumerate() {
             let hint: [u8; 32] = e.change.as_ref().and_then(|c| c.signer_key.as_slice().try_into().ok()).ok_or(ProtoError::InvalidField("signer"))?;
             let claimed = entry_signer_version(&e);
+            // spec 026: журналы адреса-подсказки и прежнего адреса (`RenameMember`) — прочитать
+            let (hinted_as, renamed_old) = entry_rename_addresses(&e);
+            for u in hinted_as.iter().chain(renamed_old.iter()) {
+                if crate::address::is_valid_address(u) && !self.is_own_address(u) && self.peer_log(u).is_none() {
+                    return need(Need::PeerLog { user: u.clone(), after: 0 });
+                }
+            }
             // ENG-08: запись ссылается на более новый журнал устройств подписанта — догнать его
             // (в нём может быть и отзыв этого устройства)
-            let owner = self.key_owner(&hint).or_else(|| hints.get(i).filter(|u| self.peer_log(u).is_some()).cloned());
+            let owner = hinted_as.clone().or_else(|| self.key_owner(&hint)).or_else(|| hints.get(i).filter(|u| self.peer_log(u).is_some()).cloned());
             if let Some(u) = owner {
                 let have = self.log_version(&u);
                 if claimed > have {
                     return need(Need::PeerLog { user: u, after: have });
                 }
             }
-            let known = self.signer_resolver()(&hint, claimed).is_some();
+            let known = match &hinted_as {
+                Some(a) => self.signer_resolver_as()(&hint, claimed, a).is_some(),
+                None => self.signer_resolver()(&hint, claimed).is_some(),
+            };
             if !known {
                 // Подписант неизвестен: чей это ключ, узнаём из журналов —
                 // сначала того, на кого указал сервер, затем участников.
@@ -2410,7 +2531,9 @@ impl Client {
             }
             let applied = {
                 let resolve = self.signer_resolver();
-                group::apply(state.as_ref(), &e, &resolve)
+                let (signer_as, root_of) = (self.signer_resolver_as(), self.root_resolver());
+                let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+                group::apply_with(state.as_ref(), &e, &resolve, Some(&lookup))
             };
             let next = match applied {
                 Ok(n) => n,
@@ -2561,7 +2684,9 @@ impl Client {
         let g = entry.group.clone().ok_or(ProtoError::InvalidField("group"))?;
         let st = {
             let resolve = self.signer_resolver();
-            group::apply(None, &entry, &resolve)?
+            let (signer_as, root_of) = (self.signer_resolver_as(), self.root_resolver());
+                let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+            group::apply_with(None, &entry, &resolve, Some(&lookup))?
         };
         self.groups.insert(g.id.clone(), GroupLocal::new(vec![entry.clone()], Some(st)));
         Ok((g, OutRequest::id("group.state.append", &gpb::StateAppendRequest { entry: Some(entry) })))
@@ -2571,10 +2696,12 @@ impl Client {
     /// применить локально (отказ сервера хост лечит пересинхронизацией).
     fn group_entry(&mut self, group_id: &[u8], change: Change) -> Result<GroupStateEntry> {
         let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
-        let entry = group::build_entry_at(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)))?;
+        let entry = group::build_entry_as(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)), self.own_signer_hint())?;
         let next = {
             let resolve = self.signer_resolver();
-            group::apply(Some(&state), &entry, &resolve)?
+            let (signer_as, root_of) = (self.signer_resolver_as(), self.root_resolver());
+                let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+            group::apply_with(Some(&state), &entry, &resolve, Some(&lookup))?
         };
         if let Some(g) = self.groups.get_mut(group_id) {
             g.entries.push(entry.clone());
@@ -3091,7 +3218,7 @@ impl Client {
             Err(e) => return Err(e.into()),
         };
         // Автор сообщения = владелец Megolm-сессии (ключ раздавал он сам).
-        if opened.sender.user() != expected_sender {
+        if opened.sender.user() != expected_sender && !self.aliases_of(&expected_sender).iter().any(|a| a == opened.sender.user()) {
             return Err(ClientError::Proto(ProtoError::BadCertificate));
         }
         self.note_author_log(&expected_sender, opened.op.header.author_log_version);
@@ -3130,6 +3257,7 @@ impl Client {
             hpke_sk: b(&*self.hpke_sk),
             ssk: self.ssk.as_ref().map(|k| b(&k.to_bytes())),
             own_entries: self.own_entries.iter().map(|e| b(&e.encode_to_vec())).collect(),
+            former_own: self.former_own.iter().map(|(entries, log)| (log.user.clone(), entries.iter().map(|e| b(&e.encode_to_vec())).collect())).collect(),
             my_cert: self.my_cert.as_ref().map(|c| b(&c.encode_to_vec())),
             cert_serial: self.cert_serial,
             peers: self
@@ -3226,6 +3354,16 @@ impl Client {
             c.own_log.apply(&o)?;
             c.own_entries.push(o);
         }
+        for (addr, entries) in &p.former_own {
+            let mut log = DeviceLog::new(addr)?;
+            let mut ops = vec![];
+            for e in entries {
+                let o = op(e)?;
+                log.apply(&o)?;
+                ops.push(o);
+            }
+            c.former_own.push((ops, log));
+        }
         c.my_cert = p.my_cert.as_deref().map(|s| d(s).and_then(|b| SignedDeviceCertificate::decode(b.as_slice()).map_err(|_| ProtoError::Malformed))).transpose()?;
         c.cert_serial = p.cert_serial;
         for (u, r) in &p.trust {
@@ -3240,6 +3378,7 @@ impl Client {
                 entries.push(o);
             }
             let peer = Peer {
+                rename_linked: false,
                 entries,
                 log: (log.version > 0).then_some(log),
                 pin: LogPin { version: pp.pin_version, head_hash: d32(&pp.pin_hash)? },
@@ -3441,6 +3580,9 @@ struct Persisted {
     hpke_sk: String,
     ssk: Option<String>,
     own_entries: Vec<String>,
+    /// spec 026: свои прежние адреса и их журналы.
+    #[serde(default)]
+    former_own: Vec<(String, Vec<String>)>,
     my_cert: Option<String>,
     cert_serial: u64,
     peers: Vec<PersistedPeer>,
@@ -3778,3 +3920,4 @@ mod state_json_cache_tests {
 // Контейнер планировщика (spec 010) — отдельный файл той же области видимости.
 include!("client_planner.rs");
 include!("client_cloud.rs");
+include!("client_rename.rs");

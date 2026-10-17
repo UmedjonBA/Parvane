@@ -79,7 +79,8 @@ import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
 import { createReminderScheduler } from './reminders';
 import {
-  clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, saveSecureSession,
+  clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, migrateStorageUser,
+  saveSecureSession,
   SecureE2eStorage, setStoragePin, unlockStorageWithPin,
 } from './secureStorage';
 import {
@@ -631,6 +632,11 @@ const v2Controller = createV2Controller({
   // KEY-1 v2: корень личности собеседника сменился — то же служебное
   // сообщение, что при смене ключа устройства в v1
   onPeerRootChanged: (user) => syncController.announceKeyChange(user),
+  onPeerRenamed: (oldAddress, newAddress) => {
+    if (!store.registerUserRename(oldAddress, newAddress)) return;
+    localState.saveRename(oldAddress, newAddress);
+    syncController.announceRename(oldAddress, newAddress);
+  },
   onSskRotationNeeded: () => {
     window.dispatchEvent(new CustomEvent('parvane-ssk-rotation'));
   },
@@ -681,6 +687,8 @@ const connectionController = createConnectionController({
     // P-18: presence — по конкретным собеседникам, подписка при появлении адреса
     store.onUserRegistered = (peerId) => subscribePresence(peerId);
     store.getLangString = getLangStringByKey;
+    // Смена ника (spec 026): прежние адреса ведут в прежние чаты
+    for (const [from, to] of localState.loadRenames()) store.registerUserRename(from, to);
   },
   unlockStorage: (user) => ensureStorageUnlocked(user),
   describeDevice: describeThisDevice,
@@ -691,6 +699,7 @@ const connectionController = createConnectionController({
     await SecureE2eStorage.clear(user);
     await clearSecureSession(user).catch(() => undefined);
   },
+  onAccountRenamed: (oldAddress, newAddress) => moveAccountLocal(oldAddress, newAddress),
   getToken: () => token,
   setToken: (nextToken) => { token = nextToken; },
   setCallIdentityReady: (isReady) => { isCallIdentityReady = isReady; },
@@ -914,6 +923,20 @@ async function persistSessionCredential(user: string, _password: string) {
   } catch {
     // Хранилище недоступно (приватный режим) — просто будем спрашивать пароль
   }
+}
+
+// Смена ника (spec 026): всё локальное устройства — под новым адресом (localStorage, шифрованное хранилище,
+// адрес входа); прежний адрес ведёт в те же чаты (список переносов адресов)
+async function moveAccountLocal(oldAddress: string, newAddress: string) {
+  await v2Controller.settleState().catch(() => undefined);
+  localState.moveUserData(oldAddress, newAddress);
+  localState.saveRename(oldAddress, newAddress, newAddress);
+  try {
+    await migrateStorageUser(oldAddress, newAddress);
+  } catch (e) {
+    logDebug(`хранилище не перенесено на новый адрес: ${String(e)}`);
+  }
+  saveLoginAddress(newAddress);
 }
 
 // ── методы (подмножество Methods, остальное — заглушки) ──────────────────────
@@ -2774,6 +2797,25 @@ const methods = {
 
   parvaneRotateSsk({ recoveryKey }: { recoveryKey: string }) {
     return v2Controller.rotateSsk(pickRecoveryKey(recoveryKey));
+  },
+
+  // Смена ника (spec 026): после успеха локальное переезжает под новый адрес, вкладка перезагружается с токеном
+  // нового адреса (сессия прежнего сервер закрывает)
+  async parvaneRenameAccount({ nick, password, recoveryKey }: { nick: string; password: string; recoveryKey: string }) {
+    const oldAddress = store.self;
+    const out = await v2Controller.renameAccount(nick.trim().toLowerCase(), password, pickRecoveryKey(recoveryKey));
+    if (out.result !== 'ok') return { result: out.result };
+    token = out.token;
+    await moveAccountLocal(oldAddress, out.address);
+    if (out.token) await persistSessionCredential(out.address, '');
+    window.setTimeout(() => window.location.reload(), 400);
+    return { result: 'ok', address: out.address };
+  },
+
+  // Проверка ника до смены: формат и занятость (поиск в каталоге не выдаёт занятые прежние ники — их держит сервер)
+  parvaneCheckNick({ nick }: { nick: string }) {
+    const value = nick.trim().toLowerCase();
+    return { isValid: /^[a-z0-9][a-z0-9_.-]{1,63}$/.test(value), current: store.self.split('@')[0] };
   },
 
   // ── Авто-линковка истории: методы для Settings → Devices ────────────────────

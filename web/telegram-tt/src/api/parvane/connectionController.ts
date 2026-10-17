@@ -29,6 +29,8 @@ type ConnectionDependencies = {
   describeDevice?: () => string;
   /** Стереть локальные данные устройства (ключи, историю): оно отозвано. */
   wipeDevice?: (user: string) => Promise<void>;
+  /** spec 026: ник аккаунта сменён — локальное устройства переезжает с прежнего адреса на новый. */
+  onAccountRenamed?: (oldAddress: string, newAddress: string) => Promise<void>;
   getToken: () => string;
   setToken: (token: string) => void;
   setCallIdentityReady: (isReady: boolean) => void;
@@ -188,9 +190,13 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // регистрируется прямо при входе. С подтверждением (почта/Telegram) вход
   // только для существующих аккаунтов — иначе опечатка в нике заводила бы
   // pending-аккаунт и вела на экран подтверждения чужого ника
+  // Адрес аккаунта из последнего ответа выдачи токена (spec 026: прежний ник ведёт на новый)
+  let lastIssuedAddress: string | undefined;
+
   async function issueToken(
     activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean, loginToken = '',
   ) {
+    lastIssuedAddress = undefined;
     const issue = async () => {
       // device_id — из зеркала localStorage, а для свежей установки генерируется
       // прямо здесь: уже ПЕРВЫЙ JWT несёт claim dev, и отзыв устройства гасит его
@@ -219,8 +225,10 @@ export function createConnectionController(deps: ConnectionDependencies) {
         login_token?: string;
         telegram_bot?: string;
         trust_secret?: string;
+        address?: string;
       };
       if (parsed.trust_secret) await writeTrustSecretAsync(user, parsed.trust_secret);
+      lastIssuedAddress = parsed.address;
       return parsed;
     };
 
@@ -374,10 +382,17 @@ export function createConnectionController(deps: ConnectionDependencies) {
       const isTokenResume = Boolean(savedToken) && input.includes('@');
       const info = isTokenResume ? knownServerInfo(input) : await requestServerInfo(activeConnection);
       lastServerInfo = info;
-      const user = canonicalAddress(input, info.domain);
+      let user = canonicalAddress(input, info.domain);
 
       const nextToken = savedToken
         || await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
+      // spec 026: ник сменён (на другом устройстве) — вход прежним ником выписал токен нового адреса;
+      // локальное этого устройства переезжает под новый адрес до запуска движка
+      if (!savedToken && lastIssuedAddress && lastIssuedAddress !== user) {
+        deps.log(`ник аккаунта сменён — устройство переходит на новый адрес`);
+        await deps.onAccountRenamed?.(user, lastIssuedAddress);
+        user = lastIssuedAddress;
+      }
       deps.setToken(nextToken);
       deps.log('JWT получен');
       activeConnection.authorize(nextToken);

@@ -32,6 +32,12 @@ pub const INTERNAL_TOKEN_CHECK: &str = "v2.internal.identity.token_check";
 pub const INTERNAL_PRIVACY_OF: &str = "v2.internal.identity.privacy_of";
 /// Публичное имя группы (spec 023): messenger занимает/освобождает имя в общем пространстве с никами.
 pub const INTERNAL_NAME_CLAIM: &str = "v2.internal.identity.name_claim";
+/// Смена ника (spec 026): identity → шард `v2.internal.rename.<шард>` (запрос с ответом).
+pub const INTERNAL_RENAME_WILDCARD: &str = "v2.internal.rename.>";
+pub const INTERNAL_RENAME_MESSENGER: &str = "v2.internal.rename.messenger";
+pub const INTERNAL_RENAME_DOMAINS: &str = "v2.internal.rename.domains";
+pub const INTERNAL_RENAME_CLOUD: &str = "v2.internal.rename.cloud";
+pub const INTERNAL_RENAME_PUSH: &str = "v2.internal.rename.push";
 /// Внутренний запрос gateway → messenger: текущая эпоха группы и её ключ
 /// отправки (проверка `ephemeral.group_typing`, D-07).
 pub const INTERNAL_GROUP_EPOCH: &str = "v2.internal.messenger.group_epoch";
@@ -90,14 +96,15 @@ pub fn acl() -> BTreeMap<&'static str, RoleAcl> {
             r.publish.extend(publ.iter().map(|s| s.to_string()));
         }
     };
-    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, IDENTITY_REPLY_INBOX], &[REVOKED_SUBJECT, INBOX_WILDCARD]);
-    add(&mut m, "messenger", &[INTERNAL_GROUP_EPOCH], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
+    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, IDENTITY_REPLY_INBOX], &[REVOKED_SUBJECT, INBOX_WILDCARD, INTERNAL_RENAME_WILDCARD]);
+    add(&mut m, "messenger", &[INTERNAL_GROUP_EPOCH, INTERNAL_RENAME_MESSENGER], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
     // call.signal_sealed: право доставки (ключ доступа) и устройства адресата —
     // через identity; сигналы — живыми событиями в журналы устройств.
     add(&mut m, "call", &[], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
-    add(&mut m, "push", &[INBOX_WILDCARD], &[]);
+    add(&mut m, "push", &[INBOX_WILDCARD, INTERNAL_RENAME_PUSH], &[]);
+    add(&mut m, "cloud", &[INTERNAL_RENAME_CLOUD], &[]);
     // domains: владелец ключа подписи — через identity (key_owner).
-    add(&mut m, "domains", &[], &[INTERNAL_IDENTITY_WILDCARD]);
+    add(&mut m, "domains", &[INTERNAL_RENAME_DOMAINS], &[INTERNAL_IDENTITY_WILDCARD]);
     add(&mut m, "gateway", &[INBOX_WILDCARD, EPH_WILDCARD, REVOKED_SUBJECT], &[EPH_WILDCARD, INTERNAL_GROUP_EPOCH]);
     for r in m.values_mut() {
         r.subscribe.sort();

@@ -33,7 +33,7 @@ async fn setup() -> Domains {
 
 fn device(d: &Domains, user: &str, id: &str) -> SigningKey {
     let k = sign::generate_signing_key();
-    d.remember_key(k.verifying_key().to_bytes(), Author { user: user.into(), device_id: id.into() });
+    d.remember_key(k.verifying_key().to_bytes(), Author { user: user.into(), device_id: id.into(), aliases: vec![] });
     k
 }
 
@@ -63,7 +63,7 @@ async fn sync(d: &Domains, user: &str, c: &Ref, after: u64, max_bytes: u32) -> R
 async fn access_of(d: &Domains, user: &str, c: &Ref, keys: &[(&SigningKey, &str)]) -> ContainerAccess {
     let r: DomainGrantListResponse = resp(call(d, user, "domain.grant.list", &DomainGrantListRequest { container: Some(c.clone()), after_version: 0 }).await.unwrap());
     let map: Vec<([u8; 32], String)> = keys.iter().map(|(k, u)| (k.verifying_key().to_bytes(), u.to_string())).collect();
-    let resolve = |k: &[u8; 32]| map.iter().find(|(x, _)| x == k).map(|(_, u)| Author { user: u.clone(), device_id: String::new() });
+    let resolve = |k: &[u8; 32]| map.iter().find(|(x, _)| x == k).map(|(_, u)| Author { user: u.clone(), device_id: String::new(), aliases: vec![] });
     ContainerAccess::replay(r.genesis.as_ref().unwrap(), &r.entries, &resolve, &no_groups).unwrap()
 }
 

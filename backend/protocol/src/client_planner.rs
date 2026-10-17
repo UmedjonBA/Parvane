@@ -95,7 +95,11 @@ impl Client {
             }
         }
         let me = self.user.clone();
-        self.planner_authors.iter().map(|(k, d)| (*k, DomainAuthor { user: me.clone(), device_id: d.clone() })).collect()
+        let aliases = self.former_addresses();
+        self.planner_authors
+            .iter()
+            .map(|(k, d)| (*k, DomainAuthor { user: me.clone(), device_id: d.clone(), aliases: aliases.clone() }))
+            .collect()
     }
 
     pub fn planner_container(&self) -> Option<Ref> {
@@ -159,7 +163,7 @@ impl Client {
         let authors = self.planner_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
         let access = ContainerAccess::replay(&genesis, &grants.entries, &resolve, &no_groups)?;
-        if access.container.domain != planner::DOMAIN_NAME || access.owner != self.user {
+        if access.container.domain != planner::DOMAIN_NAME || !self.is_own_address(&access.owner) {
             return Err(ClientError::Proto(ProtoError::ContextMismatch));
         }
         if let Some(p) = &self.planner {
@@ -189,7 +193,7 @@ impl Client {
     /// экспорта линковки) и присланные своими устройствами (`container_key`,
     /// чья голова журнала грантов была новее нашей). Непринятые остаются ждать.
     fn planner_absorb_pending_keys(&mut self) {
-        let me = self.user.clone();
+        let me = self.identity_names(&self.user.clone());
         let Some(p) = self.planner.as_mut() else { return };
         let trusted = std::mem::take(&mut self.planner_trusted_keys);
         for (d, id, epoch, key) in trusted {
@@ -202,7 +206,7 @@ impl Client {
         }
         let shares = std::mem::take(&mut self.planner_pending_keys);
         for share in shares {
-            match p.access.accept_key_share(&share, &me, &no_groups) {
+            match p.access.accept_key_share_any(&share, &me, &no_groups) {
                 Ok((epoch, key)) => {
                     p.keys.insert(epoch, key);
                 }
@@ -394,12 +398,12 @@ impl Client {
 
     /// Ключ контейнера от своего устройства (`Content.container_key`).
     fn planner_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64) -> Vec<Event> {
-        if sender != self.user || share.domain != planner::DOMAIN_NAME {
+        if !self.is_own_address(sender) || share.domain != planner::DOMAIN_NAME {
             return vec![Event::Skipped { seq }];
         }
-        let me = self.user.clone();
+        let me = self.identity_names(&self.user.clone());
         if let Some(p) = self.planner.as_mut() {
-            match p.access.accept_key_share(share, &me, &no_groups) {
+            match p.access.accept_key_share_any(share, &me, &no_groups) {
                 Ok((epoch, key)) => {
                     p.keys.insert(epoch, key);
                     self.planner_retry_pending();

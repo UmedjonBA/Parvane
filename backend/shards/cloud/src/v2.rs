@@ -107,7 +107,48 @@ pub(crate) fn db_path(v1_path: &str) -> String {
 }
 
 /// Подписаться на все методы роли `cloud` из реестра и обслуживать их.
+/// Смена ника (spec 026): `v2.internal.rename.cloud` от identity — владелец блобов, загрузок и ссылок — новый
+/// адрес. Запрос с ответом; повтор ничего не меняет.
+async fn serve_rename(nc: Client, ctx: Arc<V2Ctx>) {
+    use parvane_protocol::pb::parvane::core::v2::{RenameAck, RenameNotice};
+    use parvane_protocol::registry_gen::INTERNAL_RENAME_CLOUD;
+    let mut sub = match nc.subscribe(INTERNAL_RENAME_CLOUD.to_string()).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("cloud: подписка {} не удалась: {}", INTERNAL_RENAME_CLOUD, e);
+            return;
+        }
+    };
+    while let Some(msg) = sub.next().await {
+        let Some(reply) = msg.reply.clone() else { continue };
+        let ok = match parvane_protocol::codec::decode_checked::<RenameNotice>(&msg.payload, parvane_protocol::limits::Origin::Server) {
+            Ok(n) => match rename(&ctx, &n.old_address, &n.new_address).await {
+                Ok(()) => true,
+                Err(e) => {
+                    error!("cloud: перенос ника: {}", e);
+                    false
+                }
+            },
+            Err(_) => false,
+        };
+        let _ = nc.publish(reply, RenameAck { ok }.encode_to_vec().into()).await;
+    }
+}
+
+async fn rename(ctx: &V2Ctx, old: &str, new: &str) -> Result<(), sqlx::Error> {
+    let mut tx = ctx.pool.begin().await?;
+    sqlx::query("UPDATE files SET owner = ? WHERE owner = ?").bind(new).bind(old).execute(&mut *tx).await?;
+    sqlx::query("UPDATE uploads SET owner = ? WHERE owner = ?").bind(new).bind(old).execute(&mut *tx).await?;
+    sqlx::query("UPDATE OR IGNORE file_grants SET principal = ? WHERE principal = ?").bind(new).bind(old).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM file_grants WHERE principal = ?").bind(old).execute(&mut *tx).await?;
+    tx.commit().await?;
+    sqlx::query("UPDATE links SET owner = ? WHERE owner = ?").bind(new).bind(old).execute(&ctx.pool_v2).await?;
+    info!("cloud: ник перенесён");
+    Ok(())
+}
+
 pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
+    tokio::spawn(serve_rename(nc.clone(), ctx.clone()));
     let methods = parvane_v2rt::methods_of("cloud");
     let mut streams = Vec::new();
     for m in &methods {

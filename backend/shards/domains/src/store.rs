@@ -72,12 +72,39 @@ pub async fn open_store(db_path: &str) -> Result<SqlitePool> {
 
 /// Подписаться на методы роли "domains" из реестра.
 pub async fn run(nc: Client, d: Arc<Domains>, concurrency: usize) -> Result<()> {
+    let d2 = d.clone();
     let handler: parvane_v2rt::Handler = Arc::new(move |m: &'static MethodInfo, req: ShardRequest| -> BoxFut {
         let d = d.clone();
         Box::pin(async move { d.dispatch(m.name, req).await })
     });
-    parvane_v2rt::serve(nc, "domains", concurrency, handler).await?;
+    parvane_v2rt::serve(nc.clone(), "domains", concurrency, handler).await?;
+    tokio::spawn(serve_rename(nc, d2));
     Ok(())
+}
+
+/// Смена ника (spec 026): `v2.internal.rename.domains` от identity — запрос с ответом.
+async fn serve_rename(nc: Client, d: Arc<Domains>) {
+    use futures::StreamExt as _;
+    use parvane_protocol::pb::parvane::core::v2::{RenameAck, RenameNotice};
+    use parvane_protocol::registry_gen::INTERNAL_RENAME_DOMAINS;
+    let mut sub = match nc.subscribe(INTERNAL_RENAME_DOMAINS.to_string()).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("domains: подписка {} не удалась: {}", INTERNAL_RENAME_DOMAINS, e);
+            return;
+        }
+    };
+    while let Some(msg) = sub.next().await {
+        let Some(reply) = msg.reply.clone() else { continue };
+        let ok = match decode_checked::<RenameNotice>(&msg.payload, Origin::Server) {
+            Ok(n) => d.rename(&n.old_address, &n.new_address).await.is_ok(),
+            Err(_) => false,
+        };
+        if ok {
+            info!("domains: ник перенесён");
+        }
+        let _ = nc.publish(reply, RenameAck { ok }.encode_to_vec().into()).await;
+    }
 }
 
 fn db_err<E: std::fmt::Display>(e: E) -> ErrorCode {
@@ -157,7 +184,9 @@ impl Domains {
         if !o.found {
             return Ok(None);
         }
-        let a = Author { user: o.user, device_id: o.device_id };
+        let mut aliases = self.former(&o.user).await?;
+        aliases.extend(o.aliases.into_iter().filter(|a| !aliases.contains(a)).collect::<Vec<_>>());
+        let a = Author { user: o.user, device_id: o.device_id, aliases };
         self.remember_key(*key, a.clone());
         Ok(Some(a))
     }
@@ -168,6 +197,38 @@ impl Domains {
             Some(a) if a.user == user => Ok(a),
             _ => Err(ErrorCode::Forbidden),
         }
+    }
+
+    /// Прежние адреса пользователя (смена ника, spec 026), вся цепочка.
+    async fn former(&self, user: &str) -> Result<Vec<String>, ErrorCode> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT old_address FROM renamed WHERE new_address = ? LIMIT 64")
+            .bind(user)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(rows.into_iter().map(|(a,)| a).collect())
+    }
+
+    /// Смена ника (`v2.internal.rename.domains`): владелец и получатели грантов — под новым адресом; прежний
+    /// запоминается (подписи истории). Повтор ничего не меняет.
+    pub async fn rename(&self, old: &str, new: &str) -> Result<(), ErrorCode> {
+        let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
+        sqlx::query("UPDATE renamed SET new_address = ? WHERE new_address = ?").bind(new).bind(old).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("DELETE FROM renamed WHERE old_address = ?").bind(new).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("INSERT OR REPLACE INTO renamed (old_address, new_address) VALUES (?, ?)").bind(old).bind(new).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("UPDATE containers SET owner = ? WHERE owner = ?").bind(new).bind(old).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("UPDATE OR IGNORE container_grants SET grantee = ? WHERE kind = 0 AND grantee = ?")
+            .bind(new)
+            .bind(old)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("DELETE FROM container_grants WHERE kind = 0 AND grantee = ?").bind(old).execute(&mut *tx).await.map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        if let Ok(mut g) = self.owners.lock() {
+            g.clear();
+        }
+        Ok(())
     }
 
     /// Ссылка контейнера этого сервера → id.
@@ -419,11 +480,23 @@ impl Domains {
                 .map_err(db_err)?;
         let mut keys: HashMap<[u8; 32], Author> = HashMap::new();
         let gk: [u8; 32] = m.genesis_key.as_slice().try_into().map_err(db_err_str)?;
-        keys.insert(gk, Author { user: m.owner.clone(), device_id: String::new() });
+        // Прежние адреса (смена ника): владелец и подписанты истории — под тем адресом, что в подписи
+        let mut formers: HashMap<String, Vec<String>> = HashMap::new();
+        let owner_aliases = self.former(&m.owner).await?;
+        formers.insert(m.owner.clone(), owner_aliases.clone());
+        keys.insert(gk, Author { user: m.owner.clone(), device_id: String::new(), aliases: owner_aliases });
         let mut entries = Vec::with_capacity(rows.len());
         for (entry, key, signer_user) in rows {
             let k: [u8; 32] = key.as_slice().try_into().map_err(db_err_str)?;
-            keys.insert(k, Author { user: signer_user, device_id: String::new() });
+            let aliases = match formers.get(&signer_user) {
+                Some(a) => a.clone(),
+                None => {
+                    let a = self.former(&signer_user).await?;
+                    formers.insert(signer_user.clone(), a.clone());
+                    a
+                }
+            };
+            keys.insert(k, Author { user: signer_user, device_id: String::new(), aliases });
             entries.push(SignedOp::decode(entry.as_slice()).map_err(db_err)?);
         }
         keys.insert(signer, author.clone());

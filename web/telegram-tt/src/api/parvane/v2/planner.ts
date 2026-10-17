@@ -1,8 +1,8 @@
 import type { Protocol, PvClient } from './engine';
 
+import { pollDelay } from './l2';
 import { coalesceChanges } from './plannerCoalesce';
 import { V2Error } from './transport';
-import { pollDelay } from './l2';
 
 // Parvane (spec 010): планировщик на сервере — контейнер домена
 // `parvane.planner.v1` (шард domains). Движок держит сведённое состояние,

@@ -267,6 +267,18 @@ service IdentityService {
       shard: "identity"
     };
   }
+  // Смена ника (spec 026): запись `Rename` в журнал прежнего адреса и журнал нового адреса (генезис с тем же
+  // корнем и сертификат устройства) — одним запросом; прежний ник 30 дней ведёт на новый.
+  rpc AccountRename(AccountRenameRequest) returns (AccountRenameResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.rename"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
   rpc AccountChangePassword(AccountChangePasswordRequest) returns (AccountChangePasswordResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.account.change_password"
@@ -450,6 +462,9 @@ message SessionIssueResponse {
   // пользователя на шаг подтверждения. Текста ошибок в протоколе нет, а кодом
   // FORBIDDEN этот случай не отличить от неверного пароля (T134).
   bool confirm_required = 6;
+  // Адрес аккаунта, на который выписан токен (spec 026): после смены ника вход прежним ником 30 дней ведёт на
+  // новый адрес — клиент переносит своё локальное под него.
+  string address = 7 [(parvane.core.v2.max_len) = 128];
 }
 
 message AccountRegisterRequest {
@@ -578,6 +593,8 @@ message DeviceFetchBundleAnonResponse {
 message DeviceLogSyncRequest {
   parvane.core.v2.UserRef user = 1;
   uint64 after_version = 2;
+  // Прежний (закрытый сменой ника) журнал по SHA-256 его первой записи (spec 026); пусто — текущий журнал.
+  bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
 }
 message DeviceLogSyncResponse {
   // Записи журнала устройств — SignedOp c payload UserDeviceLogEntry.
@@ -591,6 +608,8 @@ message DeviceLogSyncResponse {
 message DeviceLogSyncAnonRequest {
   parvane.core.v2.UserRef user = 1;
   uint64 after_version = 2;
+  // Как в DeviceLogSyncRequest (spec 026).
+  bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
 }
 message DeviceLogSyncAnonResponse {
   repeated parvane.core.v2.SignedOp entries = 1 [(parvane.core.v2.max_items) = 256];
@@ -753,6 +772,20 @@ message AccountChangePasswordRequest {
   string new_password = 2 [(parvane.core.v2.max_len) = 1024];
 }
 message AccountChangePasswordResponse {}
+
+message AccountRenameRequest {
+  string new_login = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.core.v2.SignedOp rename = 2;
+  repeated parvane.core.v2.SignedOp new_log = 3 [(parvane.core.v2.max_items) = 8];
+  // Копия корня под ключом восстановления, привязанная к новому адресу (прежняя открывается только под
+  // прежним): сервер заменяет ею копию аккаунта в той же транзакции.
+  bytes root_backup = 4 [(parvane.core.v2.max_len) = 1024];
+}
+message AccountRenameResponse {
+  // JWT нового адреса (прежний недействителен).
+  string token = 1 [(parvane.core.v2.max_len) = 4096];
+  string address = 2 [(parvane.core.v2.max_len) = 128];
+}
 
 // ── линковка (LINK-1 v2) ────────────────────────────────────────────────────
 // Смысл LINK-1 сохраняется: обязательство, challenge, SAS 12 цифр от пары

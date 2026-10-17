@@ -239,6 +239,9 @@ export class V2Bridge {
         }
         if (flag(r, 'confirmRequired', 'confirm_required')) return fail('почта не подтверждена');
         const out: V2Json = { ok: true, token: str(r, 'token') };
+        // spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый)
+        const address = str(r, 'address');
+        if (address) out.address = address;
         const secret = str(r, 'trustSecret', 'trust_secret');
         if (secret) out.trust_secret = secret;
         return out;

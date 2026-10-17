@@ -2,8 +2,8 @@ import type { CloudNode } from '../../../components/parvane/cloud/cloudModel';
 import type { Protocol, PvClient } from './engine';
 
 import { expiredTrashOf } from '../../../components/parvane/cloud/cloudModel';
-import { V2Error } from './transport';
 import { pollDelay } from './l2';
+import { V2Error } from './transport';
 
 // Parvane (spec 016): раздел «Облако» — контейнеры домена `cloud.v1` (шард
 // domains): личный диск и совместные папки, свои и чужие. Движок держит дерево,

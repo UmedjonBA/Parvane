@@ -84,6 +84,7 @@ pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
     let concurrency = std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
     parvane_v2rt::serve(nc, "messenger", concurrency, handler).await?;
     tokio::spawn(crate::v2_groups::serve_group_epoch(ctx.clone()));
+    tokio::spawn(crate::v2_rename::serve(ctx.clone()));
     let c4 = ctx.clone();
     tokio::spawn(async move { crate::v2_groups::rebuild_link_index(&c4).await });
     let c3 = ctx.clone();
@@ -175,6 +176,15 @@ fn me(req: &ShardRequest) -> Result<(String, String), ErrorCode> {
         Err(ErrorCode::Forbidden)
     } else {
         Ok((req.user.clone(), req.device_id.clone()))
+    }
+}
+
+/// Чьи журналы устройств: прежний ник 30 дней ведёт на новый адрес (spec 026, адрес — из identity).
+pub(crate) fn inbox_owner<'a>(user: &'a str, devs: &'a DevicesOfResponse) -> &'a str {
+    if devs.address.is_empty() {
+        user
+    } else {
+        &devs.address
     }
 }
 
@@ -344,7 +354,7 @@ impl V2 {
             // в журнал и живое событие конверт уходит без ключа доставки/жетона.
             e.access = None;
             let item = inbox_record::Item::Sealed(e);
-            match append_in(&mut tx, &user, &rc.device_id, &item).await {
+            match append_in(&mut tx, inbox_owner(&user, &devs), &rc.device_id, &item).await {
                 Ok(a) => done.push((a, item)),
                 // Журнал устройства переполнен (C1-07) — другим устройствам доставить.
                 Err(ErrorCode::Limit) => continue,

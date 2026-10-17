@@ -922,6 +922,50 @@ export function createLocalState(deps: LocalStateDependencies) {
     void SecureE2eStorage.clearRecords(user).catch(() => undefined);
   }
 
+  // Смена ника (spec 026): переносы адресов «прежний → новый» (свои и собеседников). Чат остаётся прежним:
+  // стор сводит адреса цепочки к одному id
+  function loadRenames(): [string, string][] {
+    try {
+      const list = JSON.parse(localStorage.getItem(storageKey('renames')) || '[]');
+      return Array.isArray(list) ? list.filter((p): p is [string, string] => Array.isArray(p)
+        && typeof p[0] === 'string' && typeof p[1] === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // `owner` — чей список (по умолчанию текущий пользователь; при своей смене ника — новый адрес)
+  function saveRename(oldAddress: string, newAddress: string, owner?: string) {
+    const key = owner ? `parvane:renames:${owner}` : storageKey('renames');
+    let list: [string, string][];
+    try {
+      list = (JSON.parse(localStorage.getItem(key) || '[]') as [string, string][])
+        .filter(([from]) => from !== oldAddress);
+    } catch {
+      list = [];
+    }
+    list.push([oldAddress, newAddress]);
+    localStorage.setItem(key, JSON.stringify(list));
+  }
+
+  // Своя смена ника: записи localStorage `parvane:<что>:<прежний адрес>` — под новым адресом
+  function moveUserData(oldUser: string, newUser: string) {
+    const suffix = `:${oldUser}`;
+    const moves: [string, string][] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith('parvane:')) continue;
+      if (key.endsWith(suffix)) moves.push([key, `${key.slice(0, -suffix.length)}:${newUser}`]);
+      else if (key.includes(`${suffix}:`)) moves.push([key, key.replace(`${suffix}:`, `:${newUser}:`)]);
+    }
+    for (const [from, to] of moves) {
+      const value = localStorage.getItem(from);
+      if (typeof value === 'string') localStorage.setItem(to, value);
+      localStorage.removeItem(from);
+    }
+    resetSecureCaches();
+  }
+
   // Смена аккаунта: очереди/кэши прежнего пользователя не должны утечь в
   // ключи нового (persist считается от текущего self)
   function reset() {
@@ -991,6 +1035,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     appendOwnJournal,
     updateOwnJournalEntry,
     clearUserData,
+    loadRenames,
+    saveRename,
+    moveUserData,
     deleteScheduledMessages: removeScheduled,
     fetchScheduledHistory,
     loadArchived,

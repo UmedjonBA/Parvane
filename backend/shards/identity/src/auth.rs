@@ -370,6 +370,10 @@ pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Resul
             .fetch_optional(pool)
             .await
             .context("проверка смены пароля")?;
+    // Ник сменён (spec 026): токены прежнего адреса недействительны
+    if row.is_none() && crate::v2::alias_held(&claims.sub).await {
+        return Ok(Some("ник сменён — войдите заново"));
+    }
     if let Some((changed_at, keep_dev)) = row {
         let issued_before = (claims.iat as i64) < changed_at;
         let is_keeper = !keep_dev.is_empty() && claims.dev.as_deref() == Some(keep_dev.as_str());

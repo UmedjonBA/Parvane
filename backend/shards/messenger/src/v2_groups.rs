@@ -29,8 +29,17 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub(crate) struct GroupCache {
     states: Mutex<HashMap<Vec<u8>, GroupState>>,
-    owners: Mutex<HashMap<[u8; 32], (Instant, SignerInfo)>>,
+    owners: Mutex<HashMap<[u8; 32], (Instant, SignerInfo, Vec<String>)>>,
     last_epoch: Mutex<HashMap<Vec<u8>, Instant>>,
+}
+
+impl GroupCache {
+    /// Смена ника (spec 026): владельцы ключей перечитываются у identity (ключи устройств — у нового адреса).
+    pub(crate) fn forget_key_owners(&self) {
+        if let Ok(mut g) = self.owners.lock() {
+            g.clear();
+        }
+    }
 }
 
 fn db_err<E: std::fmt::Display>(e: E) -> ErrorCode {
@@ -42,11 +51,12 @@ fn now_ms() -> i64 {
     now_unix() * 1000
 }
 
-async fn key_owner(ctx: &V2, key: &[u8; 32]) -> Result<Option<SignerInfo>, ErrorCode> {
+/// Владелец ключа подписи и его прежние адреса (смена ника, spec 026).
+async fn key_owner(ctx: &V2, key: &[u8; 32]) -> Result<Option<(SignerInfo, Vec<String>)>, ErrorCode> {
     if let Ok(g) = ctx.groups.owners.lock() {
-        if let Some((at, s)) = g.get(key) {
+        if let Some((at, s, aliases)) = g.get(key) {
             if at.elapsed() < Duration::from_secs(60) {
-                return Ok(Some(s.clone()));
+                return Ok(Some((s.clone(), aliases.clone())));
             }
         }
     }
@@ -61,9 +71,9 @@ async fn key_owner(ctx: &V2, key: &[u8; 32]) -> Result<Option<SignerInfo>, Error
     }
     let info = SignerInfo { user: o.user, root_key: o.root_key.as_slice().try_into().unwrap_or([0u8; 32]) };
     if let Ok(mut g) = ctx.groups.owners.lock() {
-        g.insert(*key, (Instant::now(), info.clone()));
+        g.insert(*key, (Instant::now(), info.clone(), o.aliases.clone()));
     }
-    Ok(Some(info))
+    Ok(Some((info, o.aliases)))
 }
 
 fn signer_hint(entry: &GroupStateEntry) -> Result<[u8; 32], ErrorCode> {
@@ -81,14 +91,24 @@ fn max_members() -> usize {
 /// (`stored`, C1-04) или, для новой записи, владелец ключа по identity.
 async fn apply_one(ctx: &V2, state: Option<&GroupState>, entry: &GroupStateEntry, stored: Option<SignerInfo>) -> Result<(GroupState, SignerInfo), ErrorCode> {
     let hint = signer_hint(entry)?;
-    let info = match stored {
-        Some(s) => s,
-        None => key_owner(ctx, &hint).await?.ok_or(ErrorCode::Forbidden)?,
+    // Записи журнала, принятые раньше, проверены при приёме (C1-04): прежний адрес `RenameMember` не
+    // перепроверяется (переадресация к тому времени могла истечь)
+    let (info, aliases, is_stored) = match stored {
+        Some(s) => (s, vec![], true),
+        None => {
+            let (s, a) = key_owner(ctx, &hint).await?.ok_or(ErrorCode::Forbidden)?;
+            (s, a, false)
+        }
     };
     let i2 = info.clone();
     // Версию журнала устройств подписанта (ENG-08) проверяют клиенты; сервер — владельца ключа
     let resolve = move |k: &[u8; 32], _: u64| (k == &hint).then(|| i2.clone());
-    let s = group::apply(state, entry, &resolve).map_err(|e| e.code())?;
+    // spec 026: подсказка адреса — тот же владелец ключа; корень прежнего адреса — корень подписанта, если этот
+    // адрес — его прежний ник
+    let signer_as = |k: &[u8; 32], v: u64, a: &str| resolve(k, v).filter(|s| s.user == a);
+    let root_of = |a: &str| (is_stored || aliases.iter().any(|x| x == a)).then_some(info.root_key);
+    let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+    let s = group::apply_with(state, entry, &resolve, Some(&lookup)).map_err(|e| e.code())?;
     Ok((s, info))
 }
 
@@ -273,10 +293,15 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
         notify.extend(p.members.keys().cloned());
     }
     let notice = GroupStateNotice { group: Some(g.clone()), version: next.version };
+    let mut done = BTreeSet::new();
     for u in notify {
         if let Ok(devs) = ctx.devices_of(&u).await {
+            let owner = crate::v2::inbox_owner(&u, &devs).to_string();
+            if !done.insert(owner.clone()) {
+                continue;
+            }
             for d in &devs.v2_device_ids {
-                let _ = ctx.append(&u, d, inbox_record::Item::GroupState(notice.clone())).await;
+                let _ = ctx.append(&owner, d, inbox_record::Item::GroupState(notice.clone())).await;
             }
         }
     }
@@ -291,7 +316,7 @@ async fn notify_invite_admins(ctx: &V2, s: &GroupState) {
     for u in s.members.keys().filter(|u| invite_admin(s, u)) {
         if let Ok(devs) = ctx.devices_of(u).await {
             for d in &devs.v2_device_ids {
-                let _ = ctx.append(u, d, inbox_record::Item::GroupState(notice.clone())).await;
+                let _ = ctx.append(crate::v2::inbox_owner(u, &devs), d, inbox_record::Item::GroupState(notice.clone())).await;
             }
         }
     }
@@ -640,9 +665,10 @@ pub(crate) async fn deliver_group(ctx: &V2, r: mpb::DeliverGroupRequest) -> Repl
     crate::v2_public::keep_envelope(ctx, &s, &env).await;
     for u in s.members.keys() {
         let Ok(devs) = ctx.devices_of(u).await else { continue };
+        let owner = crate::v2::inbox_owner(u, &devs);
         for d in &devs.v2_device_ids {
-            if device_key(u, d).is_ok() {
-                let _ = ctx.append(u, d, inbox_record::Item::Group(env.clone())).await;
+            if device_key(owner, d).is_ok() {
+                let _ = ctx.append(owner, d, inbox_record::Item::Group(env.clone())).await;
             }
         }
     }

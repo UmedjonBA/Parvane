@@ -76,7 +76,7 @@ pub(crate) async fn do_register(
     }
     validate_new_user(&user, &domain)?;
     // Общее пространство имён с публичными группами (spec 023)
-    if crate::v2::public_name_taken(user.split('@').next().unwrap_or_default()).await {
+    if crate::v2::public_name_taken(user.split('@').next().unwrap_or_default()).await || crate::v2::alias_held(&user).await {
         anyhow::bail!("логин занят");
     }
     // По источнику (IP от gateway): пер-логин лимит не мешает спаму разными

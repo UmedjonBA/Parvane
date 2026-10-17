@@ -139,7 +139,10 @@ impl Client {
         for (k, user, id) in fresh {
             self.cloud_authors.insert(k, (user, id));
         }
-        self.cloud_authors.iter().map(|(k, (u, d))| (*k, DomainAuthor { user: u.clone(), device_id: d.clone() })).collect()
+        self.cloud_authors
+            .iter()
+            .map(|(k, (u, d))| (*k, DomainAuthor { user: u.clone(), device_id: d.clone(), aliases: self.aliases_of(u) }))
+            .collect()
     }
 
     /// Журналы устройств всех `users` известны; иначе — `Need::PeerLog`.
@@ -180,7 +183,7 @@ impl Client {
 
     /// Роль своего пользователя (`None` — контейнер не подключён либо доступа уже нет).
     pub fn cloud_role(&self, id: &[u8]) -> Option<CloudRole> {
-        self.cloud.get(id).and_then(|c| cloud_role_of(&c.access, &self.user))
+        self.cloud.get(id).and_then(|c| cloud_role_of(&c.access, &self.my_name_in(&c.access)))
     }
 
     /// Видимое дерево контейнера для хоста (JSON). Пока ревизия состояния не
@@ -208,7 +211,7 @@ impl Client {
                 serde_json::json!({
                     "id": hex::encode(id),
                     "owner": c.access.owner,
-                    "role": cloud_role_of(&c.access, &self.user).map(CloudRole::name),
+                    "role": cloud_role_of(&c.access, &self.my_name_in(&c.access)).map(CloudRole::name),
                     "name": c.state.name(),
                     "hasKey": c.keys.get(c.access.epoch).is_some(),
                     "headSeq": c.head_seq,
@@ -306,11 +309,12 @@ impl Client {
         }
         let shares = std::mem::take(&mut self.cloud_pending_keys);
         for (sender, share) in shares {
+            let names = self.identity_names(&sender);
             let Some(c) = share.container.as_ref().and_then(|r| self.cloud.get_mut(&r.id)) else {
                 self.cloud_pending_keys.push((sender, share));
                 continue;
             };
-            match c.access.accept_key_share(&share, &sender, &no_groups) {
+            match c.access.accept_key_share_any(&share, &names, &no_groups) {
                 Ok((epoch, key)) => c.keys.insert(epoch, key),
                 Err(ProtoError::Expired) | Err(ProtoError::BrokenChain) => self.cloud_pending_keys.push((sender, share)),
                 Err(_) => {}
@@ -456,7 +460,7 @@ impl Client {
     pub fn cloud_prepare_local(&mut self, id: &[u8], ops_json: &str) -> CResult<PlannerLocalOp> {
         let mut batch = cloud_json::batch_from_json(ops_json)?;
         let dev = self.device_id.clone();
-        let me = self.user.clone();
+        let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         if !c.access.can_write(&me, &no_groups) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
@@ -492,7 +496,7 @@ impl Client {
     /// Снимок по порогу: после `SNAPSHOT_EVERY` операций с прошлого снимка
     /// (пишет тот, у кого право записи).
     pub fn cloud_snapshot_request(&mut self, id: &[u8], ts_ms: i64) -> CResult<Option<OutRequest>> {
-        let me = self.user.clone();
+        let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         if c.head_seq < c.snapshot_seq.saturating_add(cloud::SNAPSHOT_EVERY) || !c.access.can_write(&me, &no_groups) || !c.pending_ops.is_empty() {
             return Ok(None);
@@ -565,7 +569,7 @@ impl Client {
         self.check_peer(user)?;
         let authors = self.cloud_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let me = self.user.clone();
+        let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         if !c.access.can_admin(&me, &no_groups) || c.keys.get(c.access.epoch).is_none() {
             return Err(ClientError::Proto(ProtoError::Forbidden));
@@ -600,7 +604,7 @@ impl Client {
     pub fn cloud_revoke(&mut self, id: &[u8], user: &str, ts_ms: i64) -> CResult<Vec<OutRequest>> {
         let authors = self.cloud_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let me = self.user.clone();
+        let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         if !c.access.can_admin(&me, &no_groups) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
@@ -619,7 +623,7 @@ impl Client {
     pub fn cloud_rotate(&mut self, id: &[u8], ts_ms: i64) -> CResult<Vec<OutRequest>> {
         let authors = self.cloud_author_map();
         let resolve = |k: &[u8; 32]| authors.get(k).cloned();
-        let me = self.user.clone();
+        let me = self.cloud.get(id).map(|c| self.my_name_in(&c.access)).unwrap_or_else(|| self.user.clone());
         let c = self.cloud.get_mut(id).ok_or(ClientError::Proto(ProtoError::NotFound))?;
         if !c.access.can_admin(&me, &no_groups) || c.keys.get(c.access.epoch).is_none() {
             return Err(ClientError::Proto(ProtoError::Forbidden));
@@ -651,7 +655,7 @@ impl Client {
     /// локальное состояние контейнера удаляется.
     pub fn cloud_leave(&mut self, id: &[u8], ts_ms: i64) -> CResult<OutRequest> {
         let c = self.cloud_get(id)?;
-        let me = dom::Grantee::User(self.user.clone());
+        let me = dom::Grantee::User(self.my_name_in(&c.access));
         let leave = dom::sign_leave(&self.acc, &c.access, &me, ts_ms)?;
         self.cloud_forget(id);
         Ok(OutRequest::id("domain.grant.leave", &DomainGrantLeaveRequest { leave: Some(leave) }))
@@ -664,8 +668,9 @@ impl Client {
         let Some(id) = share.container.as_ref().filter(|r| r.domain == self.domain).map(|r| r.id.clone()) else {
             return vec![Event::Skipped { seq }];
         };
+        let names = self.identity_names(sender);
         if let Some(c) = self.cloud.get_mut(&id) {
-            match c.access.accept_key_share(share, sender, &no_groups) {
+            match c.access.accept_key_share_any(share, &names, &no_groups) {
                 Ok((epoch, key)) => {
                     c.keys.insert(epoch, key);
                     self.cloud_retry_pending(&id);

@@ -210,6 +210,18 @@ mod eph {
     }
 
     #[test]
+    fn presence_released_on_revoke() {
+        let s = EphState::default();
+        let now = Instant::now();
+        let ch = [7u8; 16];
+        s.presence_publish(&ch, "alice@local", now).unwrap();
+        assert_eq!(s.presence_publish(&ch, "alicia@local", now), Err(ErrorCode::Forbidden));
+        // Смена ника: отзыв прежнего адреса освобождает его каналы
+        s.release_presence("alice@local");
+        assert_eq!(s.presence_publish(&ch, "alicia@local", now), Ok(()));
+    }
+
+    #[test]
     fn presence_cap_per_user() {
         let s = EphState::default();
         let now = Instant::now();

@@ -423,6 +423,53 @@ export async function setStoragePin(user: string, pin: string) {
   unlockedKeys.set(user, next);
 }
 
+// Смена ника (spec 026): всё хранилище пользователя — под новым адресом. Адрес входит в AAD записей, поэтому
+// записи перешифровываются тем же ключом с новым AAD; ключ (либо PIN) переходит к новому адресу. Прежние
+// записи стираются после записи новых. Требует разблокированного хранилища
+export async function migrateStorageUser(oldUser: string, newUser: string) {
+  if (oldUser === newUser) return;
+  const key = await resolveProtectionKey(oldUser);
+  if (!key) throw new Error('Storage is locked: unlock with the PIN first.');
+  const reseal = async (aadFrom: ArrayBuffer, aadTo: ArrayBuffer, record: EncryptedRecord) => {
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: record.iv, additionalData: aadFrom }, key, record.ciphertext,
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aadTo }, key, plain);
+    return { version: STORAGE_VERSION, iv: iv.buffer, ciphertext } satisfies EncryptedRecord;
+  };
+  const state = await get<EncryptedRecord>(stateId(oldUser), STORAGE);
+  if (state && state.version === STORAGE_VERSION) {
+    await set(stateId(newUser), await reseal(additionalData(oldUser), additionalData(newUser), state), STORAGE);
+  }
+  const prefix = recordId(oldUser, '');
+  const { keys: oldKeys, values: records } = await entriesByPrefix<EncryptedRecord>(prefix);
+  const moved = await mapInBatches(records, CRYPTO_BATCH, async (record, index) => {
+    if (!record || record.version !== STORAGE_VERSION) return undefined;
+    const name = oldKeys[index].slice(prefix.length);
+    try {
+      const sealed = await reseal(additionalData(oldUser, name), additionalData(newUser, name), record);
+      return [recordId(newUser, name), sealed] as [string, EncryptedRecord];
+    } catch {
+      return undefined;
+    }
+  });
+  const entries = moved.filter((entry): entry is [string, EncryptedRecord] => entry !== undefined);
+  for (let start = 0; start < entries.length; start += WRITE_BATCH) {
+    await setMany(entries.slice(start, start + WRITE_BATCH), STORAGE);
+  }
+  const pin = await get<PinRecord>(pinId(oldUser), STORAGE);
+  if (pin) {
+    const check = await encryptWith(key, additionalData(newUser, 'pin-check'), PIN_CHECK_PLAINTEXT);
+    await set(pinId(newUser), { version: STORAGE_VERSION, salt: pin.salt, check } satisfies PinRecord, STORAGE);
+    unlockedKeys.set(newUser, key);
+  } else {
+    await set(keyId(newUser), key, STORAGE);
+  }
+  await delMany([stateId(oldUser), keyId(oldUser), pinId(oldUser), ...oldKeys], STORAGE);
+  unlockedKeys.delete(oldUser);
+}
+
 // ── Именованные секреты сессии под тем же ключом хранилища ─────────────────
 // P-14: секрет доверия 2FA — раньше лежал в localStorage открытым текстом.
 // P-39: пароль аккаунта НЕ сохраняется вовсе; «keep me signed in» держит

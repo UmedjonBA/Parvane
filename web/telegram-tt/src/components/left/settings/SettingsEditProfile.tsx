@@ -28,6 +28,7 @@ import ManageUsernames from '../../common/ManageUsernames';
 import ChatOrUserPicker from '../../common/pickers/ChatOrUserPicker';
 import Island, { IslandDescription, IslandOutside, IslandTitle } from '../../gili/layout/Island';
 import Surface from '../../gili/layout/Surface';
+import UsernameChangeModal from '../../parvane/rename/UsernameChangeModal';
 import AvatarEditable from '../../ui/AvatarEditable';
 import FloatingActionButton from '../../ui/FloatingActionButton';
 import InputText from '../../ui/InputText';
@@ -128,6 +129,10 @@ const SettingsEditProfile = ({
   const [isChannelPickerOpen, setIsChannelPickerOpen] = useState(false);
   const [channelSearch, setChannelSearch] = useState('');
   const readOnlyUsername = usernames?.[0]?.username;
+  // Смена ника (spec 026) — отдельным окном: нужен пароль и ключ восстановления
+  const [isRenameOpen, setIsRenameOpen] = useState(false);
+  const openRename = useLastCallback(() => setIsRenameOpen(true));
+  const closeRename = useLastCallback(() => setIsRenameOpen(false));
 
   const currentAvatarBlobUrl = useMedia(currentAvatarHash, false, ApiMediaFormat.BlobUrl);
 
@@ -417,6 +422,14 @@ const SettingsEditProfile = ({
             <span className="username-link">{buildParvaneUserLink(readOnlyUsername)}</span>
           </IslandDescription>
         )}
+        {readOnlyUsername && (
+          <Island>
+            <div data-rename-open>
+              <ListItem icon="edit" onClick={openRename}>{lang('ParvaneChangeUsername')}</ListItem>
+            </div>
+          </Island>
+        )}
+        <UsernameChangeModal isOpen={isRenameOpen} currentNick={readOnlyUsername} onClose={closeRename} />
 
         {shouldRenderUsernamesManage && (
           <ManageUsernames

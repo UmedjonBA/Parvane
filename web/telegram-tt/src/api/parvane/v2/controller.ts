@@ -105,6 +105,9 @@ type Deps = {
   /** У собеседника сменился корень личности (KEY-1 v2, T129): служебное
    * сообщение «ключ безопасности изменился» в чате с ним. */
   onPeerRootChanged?: (user: string) => void;
+  /** Собеседник сменил ник (spec 026): журнал прежнего адреса закрыт, журнал нового — его продолжение.
+   * Чат и всё о собеседнике переходят на новый адрес. */
+  onPeerRenamed?: (oldAddress: string, newAddress: string) => void;
   /** Отозвано устройство, державшее SSK (T128, D-12): до смены SSK корнем
    * (ключ восстановления) новые устройства в журнал не принимаются. */
   onSskRotationNeeded?: () => void;
@@ -242,6 +245,10 @@ type RevokeOutcome = {
   stateKeyVersion?: number;
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
+/** Смена ника (spec 026): `ok` несёт новый адрес и токен — провайдер переносит локальное и перезагружает. */
+export type RenameResult =
+  | { result: 'ok'; address: string; token: string }
+  | { result: 'bad_password' | 'bad_key' | 'no_backup' | 'taken' | 'invalid' | 'failed' };
 // Скачивание/загрузка блобов (чанки до 700 КиБ)
 // parvane.msg.v2.TypingAction
 const TYPING_ACTION_TYPING = 1;
@@ -697,6 +704,10 @@ export function createV2Controller(deps: Deps) {
         // Журнал на сервере начат заново (другой генезис) — перечитать целиком
         if (verdict === 'replaced') verdict = client.ingestLog(user, await syncFrom('0'));
         if (verdict === 'rootChanged') return acceptPeerRoot(user);
+        if (verdict === 'moved' || verdict === 'renamed') await followPeerRename(user, verdict);
+        // spec 026: журнал — продолжение прежнего адреса знакомого собеседника, а о смене ника мы ещё не знаем
+        // (сообщение с нового адреса пришло раньше) — перечитать прежний, чтобы чат остался прежним
+        if (verdict === 'new') await checkPeerRenamedFrom(user);
         rekeyAfterDeviceRemoval();
         // Журнал не продвинулся, а движок просит его снова: собеседник прямо сейчас
         // публикует первое устройство (корень записан, сертификат ещё нет) — дать
@@ -854,6 +865,15 @@ export function createV2Controller(deps: Deps) {
       if (saved) {
         client?.free();
         client = pv.PvClient.importState(saved, storageKey);
+        // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес
+        const engineSelf = client.selfAddress();
+        if (engineSelf !== self && !(await followOwnRename(engineSelf, self))) {
+          client.free();
+          client = undefined;
+          needsLinking = true;
+          deps.onNeedsLinking?.();
+          return;
+        }
         // Пока устройство было выключено, личность аккаунта могли сбросить
         // (новый корень и журнал, T130): тогда оно вне неё — только линковка
         const ownLog = await call('id', 'identity.device.log_sync', pv.encodeMessage(
@@ -1237,8 +1257,47 @@ export function createV2Controller(deps: Deps) {
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
     ));
-    if (client.ingestLog(user, resp) === 'rootChanged') await acceptPeerRoot(user);
+    const verdict = client.ingestLog(user, resp);
+    if (verdict === 'rootChanged') await acceptPeerRoot(user);
+    if (verdict === 'moved' || verdict === 'renamed') await followPeerRename(user, verdict);
     rekeyAfterDeviceRemoval();
+  }
+
+  async function checkPeerRenamedFrom(user: string) {
+    if (!pv || !client) return;
+    const previous = client.peerRenamedFrom(user);
+    if (!previous || client.logVersion(previous) === 0n || client.peerRenamedTo(previous)) return;
+    const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncAnonRequest',
+      JSON.stringify({ user: { address: previous }, after_version: String(client.logVersion(previous)) }),
+    ));
+    const verdict = client.ingestLog(previous, resp);
+    if (verdict === 'moved') await followPeerRename(previous, verdict);
+  }
+
+  /** spec 026: журнал собеседника закрыт сменой ника ('moved') — дочитать журнал нового адреса; журнал —
+   * продолжение прежнего адреса ('renamed') — перенести чат. Ключ безопасности прежний: предупреждения нет. */
+  async function followPeerRename(user: string, verdict: string) {
+    if (!pv || !client) return;
+    let from = verdict === 'renamed' ? client.peerRenamedFrom(user) : user;
+    const to = verdict === 'renamed' ? user : client.peerRenamedTo(user);
+    if (!from || !to) return;
+    if (verdict === 'moved') {
+      const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+        'parvane.identity.v2.DeviceLogSyncAnonRequest',
+        JSON.stringify({ user: { address: to }, after_version: String(client.logVersion(to)) }),
+      ));
+      if (client.ingestLog(to, resp) !== 'renamed') {
+        // Перенос уже был (повторное чтение) либо журналы не связаны
+        if (client.peerRenamedFrom(to) !== from) return;
+      }
+      from = client.peerRenamedFrom(to) || from;
+    }
+    if (loadStickyPeers().has(from)) rememberStickyPeer(to);
+    peers.delete(from);
+    await persistUrgent();
+    deps.log(`v2: собеседник сменил ник (журнал v${client.logVersion(to)})`);
+    deps.onPeerRenamed?.(from, to);
   }
 
   // ENG-06: у участника ушло устройство (выход или отзыв) — группе нужна новая эпоха. Начинает владелец,
@@ -1439,6 +1498,7 @@ export function createV2Controller(deps: Deps) {
       return;
     }
     rekeyAfterDeviceRemoval();
+    void renameGroupsPending();
     const current = (JSON.parse(client.logDevices(self)) as { v2: string[] }).v2;
     const known = await storage.loadRecord<string[]>(OWN_DEVICES_RECORD);
     await storage.saveRecord(OWN_DEVICES_RECORD, current);
@@ -2307,6 +2367,119 @@ export function createV2Controller(deps: Deps) {
     } finally {
       client?.forgetRoot();
     }
+  }
+
+  // ── смена ника (spec 026) ─────────────────────────────────────────────────
+
+  /** Сменить ник: подтверждение паролем, корень из копии под ключом восстановления, записи двух журналов на
+   * сервер одним запросом. После `ok` движок уже живёт под новым адресом (состояние на диске); группам
+   * `RenameMember` уходит после перезагрузки (`renameGroupsPending`) — сессия прежнего адреса закрывается. */
+  async function renameAccount(nick: string, password: string, recoveryKey: string): Promise<RenameResult> {
+    if (!pv || !client || !ready || !storage) return { result: 'failed' };
+    const codec = pv;
+    const newAddress = `${nick}@${serverDomain}`;
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+    } catch {
+      return { result: 'bad_password' };
+    }
+    const backup = rootBackupB64 || await fetchServerRootBackup().catch(() => undefined);
+    if (!backup) return { result: 'no_backup' };
+    try {
+      client.importRootBackup(unb64(backup), recoveryKey.trim()).fill(0);
+    } catch {
+      const serverBackup = await fetchServerRootBackup().catch(() => undefined);
+      if (!serverBackup || serverBackup === backup) return { result: 'bad_key' };
+      try {
+        client.importRootBackup(unb64(serverBackup), recoveryKey.trim()).fill(0);
+      } catch {
+        return { result: 'bad_key' };
+      }
+    }
+    try {
+      return await serial(async (): Promise<RenameResult> => {
+        let body: Uint8Array;
+        try {
+          body = client!.renamePrepare(newAddress, nick, recoveryKey.trim());
+        } catch {
+          return { result: 'invalid' };
+        }
+        let resp: Uint8Array;
+        try {
+          resp = await call('id', 'identity.account.rename', body);
+        } catch (e) {
+          const code = String(e);
+          if (code.includes('DUPLICATE')) return { result: 'taken' };
+          if (code.includes('INVALID')) return { result: 'invalid' };
+          deps.log(`v2: смена ника не принята: ${code}`);
+          return { result: 'failed' };
+        }
+        const r = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameResponse', resp)) as
+          { token?: string; address?: string };
+        client!.renameApply();
+        // Копия корня под новым адресом уже на сервере (в том же запросе); ключ копии ключей аккаунта — от
+        // нового адреса, копия отправится заново
+        const sent = JSON.parse(codec.decodeMessage('parvane.identity.v2.AccountRenameRequest', body)) as
+          { root_backup?: string };
+        if (sent.root_backup) {
+          rootBackupB64 = sent.root_backup;
+          await storage!.saveRecord(ROOT_BACKUP_RECORD, sent.root_backup);
+          await storage!.saveRecord(ROOT_BACKUP_SENT_RECORD, sent.root_backup);
+        }
+        const bundleKey = await deriveBundleKey(recoveryKey.trim(), newAddress).catch(() => undefined);
+        if (bundleKey) {
+          bundleKeyB64 = b64(bundleKey);
+          await storage!.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
+        }
+        await storage!.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+        await persistUrgent();
+        deps.log('v2: ник сменён');
+        return { result: 'ok', address: r.address || newAddress, token: r.token || '' };
+      });
+    } finally {
+      client?.forgetRoot();
+    }
+  }
+
+  /** Ник сменён другим своим устройством, пока это было выключено: движок живёт под прежним адресом — журнал
+   * прежнего (закрыт `Rename`) и нового адреса, затем этот — под новым (сертификат в журнал нового адреса). */
+  async function followOwnRename(engineSelf: string, self: string): Promise<boolean> {
+    if (!pv || !client) return false;
+    const old = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncAnonRequest',
+      JSON.stringify({ user: { address: engineSelf }, after_version: String(client.logVersion(engineSelf)) }),
+    ));
+    client.ingestLog(engineSelf, old);
+    if (client.ownRenamedTo() !== self) {
+      deps.log('v2: ник аккаунта сменён, но журнал прежнего адреса не ведёт на новый — нужна привязка');
+      return false;
+    }
+    const fresh = await call('id', 'identity.device.log_sync', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncRequest', JSON.stringify({ user: { address: self }, after_version: '0' }),
+    ));
+    await run(client.renameFollow(fresh) as OutReq[]);
+    await storage?.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
+    await persistUrgent();
+    deps.log('v2: ник сменён на другом устройстве — устройство перешло на новый адрес');
+    return true;
+  }
+
+  /** Группы, где участником ещё значится свой прежний адрес (ник сменён) — перенести. */
+  async function renameGroupsPending() {
+    if (!client || !ready || !client.formerAddresses().length) return;
+    await serial(async () => {
+      try {
+        const reqs = await withNeeds(() => client!.renameGroupsPending() as OutReq[]);
+        if (!reqs.length) return;
+        await run(reqs);
+        await persist();
+        deps.log(`v2: участие в группах перенесено на новый ник (${reqs.length})`);
+      } catch (e) {
+        deps.log(`v2: перенос ника в группах отложен: ${String(e)}`);
+      }
+    });
   }
 
   /** Журнал своих устройств и список v1-устройств — после запуска и по событию. */
@@ -4001,7 +4174,10 @@ export function createV2Controller(deps: Deps) {
       const pvm = await loadProtocol();
       const st = await SecureE2eStorage.open(user);
       const savedKey = await st.loadRecord<string>(KEY_RECORD);
-      const saved = await loadEngineState(st);
+      // Вступление в журнал, прерванное перезагрузкой (запись на сервере могла пройти): ключи устройства — в
+      // записи незавершённого вступления, устройство уже в журнале и без доказательства не войдёт
+      const pending = await st.loadRecord<PendingJoin>(PENDING_JOIN_RECORD);
+      const saved = pending ? unb64(pending.state) : await loadEngineState(st);
       if (!savedKey || !saved) {
         deps.log('v2: доказательство устройства — нет ключа или состояния на диске');
         return undefined;
@@ -4040,6 +4216,7 @@ export function createV2Controller(deps: Deps) {
     revokeContactAccess,
     sskState,
     rotateSsk,
+    renameAccount,
     recoverWithKey,
     joinWithRecoveryKey,
     refreshKeyBundle,

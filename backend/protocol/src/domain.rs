@@ -404,6 +404,25 @@ impl Grantee {
 pub struct Author {
     pub user: String,
     pub device_id: String,
+    /// Прочие адреса той же личности (смена ника, spec 026): прежние и новый. Права, выданные любому из них, —
+    /// права автора.
+    pub aliases: Vec<String>,
+}
+
+impl Author {
+    pub fn new(user: impl Into<String>, device_id: impl Into<String>) -> Self {
+        Self { user: user.into(), device_id: device_id.into(), aliases: vec![] }
+    }
+
+    /// Адрес `user` — это автор (текущий либо другой адрес той же личности).
+    pub fn is(&self, user: &str) -> bool {
+        self.user == user || self.aliases.iter().any(|a| a == user)
+    }
+
+    /// Все адреса автора.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.user.as_str()).chain(self.aliases.iter().map(String::as_str))
+    }
 }
 
 /// Ключ устройства → автор.
@@ -499,7 +518,7 @@ impl ContainerAccess {
         let (container, signer) = verify_genesis(genesis)?;
         let owner = container.owner.as_ref().map(|u| u.address.clone()).ok_or(ProtoError::InvalidField("owner"))?;
         match resolve(&signer) {
-            Some(a) if a.user == owner => {}
+            Some(a) if a.is(&owner) => {}
             _ => return Err(ProtoError::Forbidden),
         }
         let mut writers = BTreeMap::new();
@@ -590,7 +609,7 @@ impl ContainerAccess {
             // Выход: подписант — сам получатель действующего гранта; эпоха и
             // писатели текущей эпохи прежние (его прошлые операции остаются в силе).
             let grantee = Grantee::from_pb(g.grantee.as_ref())?;
-            if grantee != Grantee::User(signer.user.clone()) || g.level != GrantLevel::Unspecified as i32 {
+            if !matches!(&grantee, Grantee::User(u) if signer.is(u)) || g.level != GrantLevel::Unspecified as i32 {
                 return Err(ProtoError::Forbidden);
             }
             if g.key_epoch != self.epoch {
@@ -603,7 +622,7 @@ impl ContainerAccess {
             self.hashes.push(entry_hash(op));
             return Ok(GrantEvent { version: self.version, key_epoch: self.epoch, grantee, level: None, signer, rotate: false, leave: true });
         }
-        if !self.can_admin(&signer.user, groups) {
+        if !signer.names().any(|u| self.can_admin(u, groups)) {
             return Err(ProtoError::Forbidden);
         }
         if rotate {
@@ -681,7 +700,7 @@ impl ContainerAccess {
             return Err(ProtoError::Expired);
         }
         let a = resolve(&seal.signer).ok_or(ProtoError::Forbidden)?;
-        if !self.could_write_at(&a.user, epoch, groups) {
+        if !a.names().any(|u| self.could_write_at(u, epoch, groups)) {
             return Err(ProtoError::Forbidden);
         }
         Ok(a)
@@ -700,6 +719,19 @@ impl ContainerAccess {
             grant_version: self.version,
             grant_head_hash: self.head_hash().to_vec(),
         })
+    }
+
+    /// То же, что `accept_key_share`, для отправителя с несколькими адресами (смена ника, spec 026).
+    pub fn accept_key_share_any(&self, share: &ContainerKeyShare, senders: &[String], groups: Membership) -> Result<(u64, EpochKey)> {
+        let mut last = ProtoError::Forbidden;
+        for s in senders {
+            match self.accept_key_share(share, s, groups) {
+                Ok(r) => return Ok(r),
+                Err(ProtoError::Forbidden) => {}
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     /// Принять ключ эпохи от `sender` (пользователь — из Olm-сессии). Ключ
@@ -1024,7 +1056,7 @@ mod tests {
         }
         fn device(&mut self, user: &str, device: &str) -> SigningKey {
             let k = sign::generate_signing_key();
-            self.keys.insert(k.verifying_key().to_bytes(), Author { user: user.into(), device_id: device.into() });
+            self.keys.insert(k.verifying_key().to_bytes(), Author::new(user, device));
             k
         }
         fn resolve(&self) -> impl Fn(&[u8; 32]) -> Option<Author> + '_ {

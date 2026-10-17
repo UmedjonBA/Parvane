@@ -137,6 +137,26 @@ export class PvClient {
         return takeObject(ret);
     }
     /**
+     * Прочие адреса личности `user` (свои — прежние, собеседника — по проверенным журналам).
+     * @param {string} user
+     * @returns {string[]}
+     */
+    aliasesOf(user) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_aliasesOf(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v2 = getArrayJsValueFromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Повторно применить помеченный пакет из очереди отправки (после перезапуска).
      * @param {string} id_hex
      * @param {Uint8Array} op
@@ -907,6 +927,23 @@ export class PvClient {
      */
     forgetRoot() {
         wasm.pvclient_forgetRoot(this.__wbg_ptr);
+    }
+    /**
+     * Свои прежние адреса.
+     * @returns {string[]}
+     */
+    formerAddresses() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_formerAddresses(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayJsValueFromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 4, 4);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * D-03 (C1-03): версия журнала группы, на которую сослался участник, а у
@@ -1850,12 +1887,78 @@ export class PvClient {
         return takeObject(ret);
     }
     /**
+     * Свой журнал закрыт сменой ника — новый адрес (undefined — нет).
+     * @returns {string | undefined}
+     */
+    ownRenamedTo() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_ownRenamedTo(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v1;
+            if (r0 !== 0) {
+                v1 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
      * @returns {boolean}
      */
     ownSskExposed() {
         const ret = wasm.pvclient_ownSskExposed(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Журнал собеседника — продолжение прежнего адреса (после вердикта "renamed").
+     * @param {string} user
+     * @returns {string | undefined}
+     */
+    peerRenamedFrom(user) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_peerRenamedFrom(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v2;
+            if (r0 !== 0) {
+                v2 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Журнал собеседника закрыт сменой ника — новый адрес.
+     * @param {string} user
+     * @returns {string | undefined}
+     */
+    peerRenamedTo(user) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_peerRenamedTo(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            let v2;
+            if (r0 !== 0) {
+                v2 = getStringFromWasm0(r0, r1).slice();
+                wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            }
+            return v2;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * Повторно применить помеченную операцию из очереди отправки (после перезапуска).
@@ -2363,6 +2466,95 @@ export class PvClient {
         }
     }
     /**
+     * Сервер принял смену ника: устройство переходит на новый адрес (группы — `renameGroupsPending` сессией
+     * нового адреса).
+     */
+    renameApply() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_renameApply(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Ник сменён другим своим устройством: ответ `log_sync` журнала нового адреса → переход; запросы —
+     * сертификат под новым адресом (если нужен).
+     * @param {Uint8Array} log_response
+     * @returns {Array<any>}
+     */
+    renameFollow(log_response) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(log_response, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_renameFollow(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Группы, где участником всё ещё значится свой прежний адрес, — запросы `RenameMember`.
+     * @returns {Array<any>}
+     */
+    renameGroupsPending() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_renameGroupsPending(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * spec 026: подготовить смену ника на `new_address` (корень — из `importRootBackup`, `recovery_key` — для
+     * копии корня под новым адресом). Возвращает тело `identity.account.rename`; состояние движка меняется
+     * только в `renameApply` после ответа сервера.
+     * @param {string} new_address
+     * @param {string} new_login
+     * @param {string} recovery_key
+     * @returns {Uint8Array}
+     */
+    renamePrepare(new_address, new_login, recovery_key) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(new_address, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(new_login, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(recovery_key, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.pvclient_renamePrepare(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
      * `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
      * @param {string} device_id
@@ -2474,6 +2666,26 @@ export class PvClient {
             return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Адрес, под которым живёт движок (после смены ника на другом устройстве — прежний, до `renameFollow`).
+     * @returns {string}
+     */
+    selfAddress() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_selfAddress(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred1_0 = r0;
+            deferred1_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
         }
     }
     /**

@@ -319,13 +319,40 @@ pub enum ContextVerdict {
 /// подписанта, на которую ссылается запись (ENG-08: ключ действовал в этой версии);
 /// неизвестный ключ — отказ.
 pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn Fn(&[u8; 32], u64) -> Option<SignerInfo>) -> Result<GroupState> {
+    apply_with(state, entry, resolve, None)
+}
+
+/// Сведения о журналах устройств для записей после смены ника (spec 026).
+pub struct Lookup<'a> {
+    /// Подписант по ключу, версии журнала и подсказке адреса: ключ устройства после смены ника есть в двух
+    /// журналах (прежнего и нового адреса).
+    pub signer_as: &'a dyn Fn(&[u8; 32], u64, &str) -> Option<SignerInfo>,
+    /// Корень журнала адреса (для прежнего адреса — закрытого сменой ника).
+    pub root_of: &'a dyn Fn(&str) -> Option<[u8; 32]>,
+}
+
+/// `apply` со сведениями о журналах (записи после смены ника). Без них подсказка адреса не учитывается, а
+/// `RenameMember` не принимается.
+pub fn apply_with(
+    state: Option<&GroupState>,
+    entry: &GroupStateEntry,
+    resolve: &dyn Fn(&[u8; 32], u64) -> Option<SignerInfo>,
+    lookup: Option<&Lookup<'_>>,
+) -> Result<GroupState> {
     let group = entry.group.as_ref().ok_or(ProtoError::InvalidField("group"))?;
     address::check_ref(group)?;
     let op = entry.change.as_ref().ok_or(ProtoError::InvalidField("change"))?;
     let hint = sign::verifying_key(&op.signer_key)?.to_bytes();
     let v = sign::verify_op(op, GROUP_DOMAIN, GROUP_OP, Some(&hint))?;
     let sc: GroupStateChange = decode_checked(&v.payload, Origin::Client)?;
-    let signer = resolve(&hint, sc.signer_log_version).ok_or(ProtoError::Forbidden)?;
+    let signer = match lookup {
+        Some(l) if !sc.signer_address.is_empty() => (l.signer_as)(&hint, sc.signer_log_version, &sc.signer_address),
+        _ => resolve(&hint, sc.signer_log_version),
+    }
+    .ok_or(ProtoError::Forbidden)?;
+    if !sc.signer_address.is_empty() && lookup.is_some() && signer.user != sc.signer_address {
+        return Err(ProtoError::Forbidden);
+    }
     if sc.version != entry.version || sc.prev_hash != entry.prev_hash {
         return Err(ProtoError::ContextMismatch);
     }
@@ -620,6 +647,30 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 }
             }
         }
+        Change::RenameMember(r) => {
+            // spec 026: участник сменил ник — пишет он сам новым адресом; доказательство — запись `Rename`
+            // журнала устройств прежнего адреса, подписанная тем же корнем, что у подписанта
+            let op = r.rename.as_ref().ok_or(ProtoError::InvalidField("rename"))?;
+            let (old, root) = crate::identity::verify_rename_op(op, &actor)?;
+            // Корень записи — корень журнала прежнего адреса (иначе чужим корнем «переименовали» бы любого)
+            let old_root = lookup.and_then(|l| (l.root_of)(&old)).ok_or(ProtoError::Forbidden)?;
+            if root != signer.root_key || root != old_root {
+                return Err(ProtoError::BadSignature);
+            }
+            if s.members.contains_key(&actor) || s.banned.contains(&actor) {
+                return forbid();
+            }
+            let member = s.members.remove(&old).ok_or(ProtoError::Forbidden)?;
+            s.members.insert(actor.clone(), member);
+            if s.owner == old {
+                s.owner = actor.clone();
+            }
+            for link in s.invite_links.values_mut() {
+                if link.creator == old {
+                    link.creator = actor.clone();
+                }
+            }
+        }
         Change::InviteEdit(e) => {
             let id: [u8; 32] = e.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
             // Только действующая ссылка: отозванную вернуть правкой нельзя
@@ -710,6 +761,19 @@ pub fn build_entry_at(
     ts_ms: i64,
     signer_log_version: u64,
 ) -> Result<GroupStateEntry> {
+    build_entry_as(signer, state, domain, change, ts_ms, signer_log_version, "")
+}
+
+/// То же с подсказкой адреса подписанта (spec 026: после смены ника).
+pub fn build_entry_as(
+    signer: &dyn OpSigner,
+    state: Option<&GroupState>,
+    domain: &str,
+    change: Change,
+    ts_ms: i64,
+    signer_log_version: u64,
+    signer_address: &str,
+) -> Result<GroupStateEntry> {
     if !address::is_valid_domain(domain) {
         return Err(ProtoError::BadAddress);
     }
@@ -723,6 +787,7 @@ pub fn build_entry_at(
         prev_hash: prev_hash.to_vec(),
         change: Some(GroupChange { change: Some(change) }),
         signer_log_version,
+        signer_address: signer_address.to_string(),
     };
     let header = OpHeader {
         domain: GROUP_DOMAIN.into(),

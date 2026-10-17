@@ -40,6 +40,9 @@ fn bundle_rate() -> usize {
     env_u64("PARVANE_V2_BUNDLE_RATE", 60) as usize
 }
 
+mod rename;
+pub(crate) use rename::alias_held;
+
 pub(crate) struct V2Ctx {
     pub pool: SqlitePool,
     pub v2: SqlitePool,
@@ -88,6 +91,8 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     });
     parvane_v2rt::serve(nc.clone(), "identity", handler_concurrency(), handler).await?;
     internal(nc.clone(), ctx.clone()).await?;
+    // Смена ника (spec 026): повтор переносов в шардах, освобождение прежних ников
+    rename::spawn_upkeep(nc.clone(), ctx.v2.clone());
     // Суточная ротация ключей выпуска жетонов.
     let c3 = ctx.clone();
     tokio::spawn(async move {
@@ -300,6 +305,8 @@ pub(crate) async fn public_name_taken(nick: &str) -> bool {
 /// Настройки приватности, выставленные через `identity.privacy.set`
 /// (None — ошибка БД).
 async fn privacy_of(ctx: &V2Ctx, user: &str) -> Option<PrivacyOfResponse> {
+    let canonical = rename::canonical_address(&ctx.v2, user).await;
+    let user = canonical.as_str();
     let row: Option<(i64, i64, i64, i64)> = match sqlx::query_as(
         "SELECT group_add, messages_from_strangers, calls_from, presence_visibility FROM privacy WHERE user = ?",
     )
@@ -339,7 +346,13 @@ async fn key_owner(ctx: &V2Ctx, ed25519: &[u8]) -> KeyOwnerResponse {
             }
         };
     match rows.as_slice() {
-        [(user, device_id)] => KeyOwnerResponse { found: true, root_key: root_key_of(ctx, user).await, user: user.clone(), device_id: device_id.clone() },
+        [(user, device_id)] => KeyOwnerResponse {
+            found: true,
+            root_key: root_key_of(ctx, user).await,
+            user: user.clone(),
+            device_id: device_id.clone(),
+            aliases: rename::former_addresses(&ctx.v2, user).await,
+        },
         [] => KeyOwnerResponse::default(),
         _ => {
             error!("identity v2: ключ устройства у нескольких устройств — владелец не выдаётся");
@@ -479,7 +492,9 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             // ID-01: устройство, действующее в журнале, доказывает владение
             // своим ключом — иначе знающий пароль входил «как» оно (чистил его
             // инбокс, затирал копию корня, забирал грант линковки).
-            let login = canonical_user(&r.login, &server_domain());
+            let typed = canonical_user(&r.login, &server_domain());
+            // Прежний ник 30 дней ведёт на новый адрес (spec 026)
+            let login = rename::canonical_address(&ctx.v2, &typed).await;
             if device_proof_required() && log_has_active_device(&login, &r.device_id).await {
                 let log = load_log(&ctx, &login).await?;
                 let dev = log.active(&r.device_id).ok_or(ErrorCode::Forbidden)?;
@@ -488,7 +503,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     Some("нет доказательства")
                 } else if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000) {
                     Some("доказательство несвежее")
-                } else if !parvane_protocol::client::verify_session_proof(&ed, &login, &r.device_id, r.proof_ts_ms, &r.device_proof) {
+                } else if ![&login, &typed].iter().any(|a| parvane_protocol::client::verify_session_proof(&ed, a, &r.device_id, r.proof_ts_ms, &r.device_proof)) {
                     Some("подпись не сошлась")
                 } else {
                     None
@@ -498,7 +513,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     return Err(ErrorCode::Forbidden);
                 }
             }
-            let mut p = json!({"user": r.login, "password": r.password, "device_id": r.device_id, "client_ip": req.client_ip});
+            let mut p = json!({"user": login, "password": r.password, "device_id": r.device_id, "client_ip": req.client_ip});
             if !r.login_token.is_empty() {
                 p["login_token"] = json!(r.login_token);
             }
@@ -524,7 +539,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 return Ok(pb::SessionIssueResponse { confirm_required: true, ..Default::default() }.encode_to_vec());
             }
             v1_ok(&v)?;
-            Ok(pb::SessionIssueResponse { token: s(&v, "token"), trust_secret: s(&v, "trust_secret"), ..Default::default() }.encode_to_vec())
+            Ok(pb::SessionIssueResponse { token: s(&v, "token"), trust_secret: s(&v, "trust_secret"), address: login, ..Default::default() }.encode_to_vec())
         }
         "identity.account.register" => {
             let r: pb::AccountRegisterRequest = body(&req)?;
@@ -585,6 +600,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 telegram_bot: telegram_bot().unwrap_or_default(),
             }
             .encode_to_vec())
+        }
+        "identity.account.rename" => {
+            let r: pb::AccountRenameRequest = body(&req)?;
+            rename::account_rename(ctx, &req, r).await
         }
         "identity.account.change_password" => {
             require_user(&req)?;
@@ -711,6 +730,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             require_user(&req)?;
             let r: pb::DeviceLogSyncRequest = body(&req)?;
             let user = r.user.map(|u| u.address).unwrap_or_default();
+            if !r.genesis_hash.is_empty() && log_genesis_hash(ctx, &user).await != r.genesis_hash {
+                // Прежний журнал адреса (spec 026: закрытый сменой ника и ушедший в архив)
+                let entries = rename::archived_log(&ctx.v2, &user, &r.genesis_hash, r.after_version).await?;
+                return Ok(pb::DeviceLogSyncResponse { entries, more: false, genesis_hash: r.genesis_hash }.encode_to_vec());
+            }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
             Ok(pb::DeviceLogSyncResponse { entries, more, genesis_hash }.encode_to_vec())
@@ -718,6 +742,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.device.log_sync_anon" => {
             let r: pb::DeviceLogSyncAnonRequest = body(&req)?;
             let user = r.user.map(|u| u.address).unwrap_or_default();
+            if !r.genesis_hash.is_empty() && log_genesis_hash(ctx, &user).await != r.genesis_hash {
+                let entries = rename::archived_log(&ctx.v2, &user, &r.genesis_hash, r.after_version).await?;
+                return Ok(pb::DeviceLogSyncAnonResponse { entries, more: false, genesis_hash: r.genesis_hash }.encode_to_vec());
+            }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
             Ok(pb::DeviceLogSyncAnonResponse { entries, more, genesis_hash }.encode_to_vec())
@@ -1356,8 +1384,12 @@ async fn legacy_devices(ctx: &V2Ctx, user: &str, log: &DeviceLog) -> Result<Vec<
 }
 
 async fn devices_of(ctx: &V2Ctx, user: &str) -> Result<DevicesOfResponse, ErrorCode> {
+    // Прежний ник ведёт на новый адрес (spec 026): доставка — в журналы нового
+    let canonical = rename::canonical_address(&ctx.v2, user).await;
+    let user = canonical.as_str();
     let log = load_log(ctx, user).await?;
     Ok(DevicesOfResponse {
+        address: canonical.clone(),
         v2_device_ids: log.devices.keys().take(64).cloned().collect(),
         v2_ed25519: log.devices.values().take(64).map(|d| d.cert.olm_ed25519.clone()).collect(),
         legacy_device_ids: legacy_devices(ctx, user, &log).await?,
@@ -1366,6 +1398,7 @@ async fn devices_of(ctx: &V2Ctx, user: &str) -> Result<DevicesOfResponse, ErrorC
 }
 
 async fn delivery_key_check(ctx: &V2Ctx, r: &DeliveryKeyCheckRequest) -> DeliveryKeyCheckResponse {
+    let r = &DeliveryKeyCheckRequest { user: rename::canonical_address(&ctx.v2, &r.user).await, ..r.clone() };
     let stored: Option<(Vec<u8>,)> = sqlx::query_as("SELECT key_hash FROM delivery_keys WHERE user = ?")
         .bind(&r.user)
         .fetch_optional(&ctx.v2)

@@ -156,6 +156,8 @@ pub fn ingest_log_verdict(c: &mut Client, user: &str, resp: &[u8]) -> Result<&'s
         LogVerdict::Known => "known",
         LogVerdict::RootChanged => "rootChanged",
         LogVerdict::Replaced => "replaced",
+        LogVerdict::Moved => "moved",
+        LogVerdict::Renamed => "renamed",
     })
 }
 
@@ -765,6 +767,7 @@ impl HostClient {
         let (k, _) = self.inner.state_key()?;
         Some(HostState {
             user: self.inner.user.clone(),
+            former: self.inner.former_addresses(),
             device_id: self.inner.device_id.clone(),
             key: k.clone(),
             state: crate::state::PersonalState::new(),
@@ -802,6 +805,8 @@ pub fn parse_invite(url: &str) -> Result<String, String> {
 /// `AppendRequest`, наружу — JSON-массив base64.
 pub struct HostState {
     user: String,
+    /// Прежние адреса (смена ника, spec 026): записи, запечатанные до смены, открываются под ними.
+    former: Vec<String>,
     device_id: String,
     key: crate::state::StateKey,
     state: crate::state::PersonalState,
@@ -824,7 +829,10 @@ impl HostState {
         let (mut applied, mut rejected) = (0usize, 0usize);
         for rec in &r.records {
             self.cursor = self.cursor.max(rec.seq);
-            match crate::state::open_state_record(&self.key, &self.user, rec) {
+            let opened = std::iter::once(&self.user)
+                .chain(self.former.iter())
+                .find_map(|u| crate::state::open_state_record(&self.key, u, rec).ok());
+            match opened.ok_or(crate::error::ProtoError::Crypto) {
                 Ok(op) if self.state.apply(&op).is_ok() => applied += 1,
                 _ => rejected += 1,
             }
@@ -1083,6 +1091,7 @@ pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, Strin
         "parvane.identity.v2.SessionReauthRequest" => ipb::SessionReauthRequest,
         "parvane.identity.v2.AccountSet2faRequest" => ipb::AccountSet2faRequest,
         "parvane.identity.v2.AccountChangePasswordRequest" => ipb::AccountChangePasswordRequest,
+        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
         "parvane.identity.v2.ProfileResolveRequest" => ipb::ProfileResolveRequest,
         "parvane.identity.v2.ProfileSetNameRequest" => ipb::ProfileSetNameRequest,
         "parvane.identity.v2.ProfileSetAvatarRequest" => ipb::ProfileSetAvatarRequest,
@@ -1134,6 +1143,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
     }
     dec! {
         "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
+        "parvane.identity.v2.AccountRenameResponse" => ipb::AccountRenameResponse,
         "parvane.identity.v2.AccountRegisterResponse" => ipb::AccountRegisterResponse,
         "parvane.identity.v2.AccountRegisterStatusResponse" => ipb::AccountRegisterStatusResponse,
         "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,

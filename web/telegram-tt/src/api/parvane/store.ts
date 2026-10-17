@@ -116,6 +116,32 @@ export class ParvaneStore {
     return this.migratedTo.get(address) ?? address;
   }
 
+  // Смена ника (spec 026): прежний адрес пользователя ведёт на новый, чат остаётся прежним (id — от самого
+  // первого адреса цепочки). Возвращает false, если перенос уже известен
+  registerUserRename(oldAddress: string, newAddress: string): boolean {
+    if (!oldAddress || !newAddress || oldAddress === newAddress) return false;
+    if (this.migratedTo.get(oldAddress) === newAddress) return false;
+    const seed = this.migratedFrom.get(oldAddress) ?? oldAddress;
+    this.migratedFrom.set(newAddress, seed);
+    for (const [from, to] of this.migratedTo) {
+      if (to === oldAddress) this.migratedTo.set(from, newAddress);
+    }
+    this.migratedTo.set(oldAddress, newAddress);
+    this.kindByAddress.set(newAddress, 'user');
+    const maps: Map<string, unknown>[] = [this.displayNameByAddress, this.avatarByAddress, this.profileByAddress];
+    for (const map of maps) {
+      if (map.has(oldAddress) && !map.has(newAddress)) map.set(newAddress, map.get(oldAddress));
+    }
+    if (this.contactAddresses.delete(oldAddress)) this.contactAddresses.add(newAddress);
+    this.getIdForAddress(newAddress, 'user');
+    return true;
+  }
+
+  // Прежние адреса пользователя (spec 026), включая цепочку
+  formerAddresses(address: string) {
+    return [...this.migratedTo].filter(([, to]) => to === address).map(([from]) => from);
+  }
+
   isMigratedGroup(address: string) {
     return this.migratedTo.has(address);
   }
@@ -263,8 +289,14 @@ export class ParvaneStore {
   // Куда (в какой чат) кладётся сообщение с точки зрения этого клиента
   resolveChatAddress(message: WireStoredMessage): string {
     if (this.isGroupAddress(message.to)) return this.canonicalAddress(message.to);
-    if (message.from && message.from !== this.self) return message.from;
-    return message.to;
+    if (message.from && !this.isSelfAddress(message.from)) return this.canonicalAddress(message.from);
+    return this.canonicalAddress(message.to);
+  }
+
+  // Свой адрес — текущий либо прежний (смена ника, spec 026)
+  isSelfAddress(address: string | undefined) {
+    if (!address) return false;
+    return address === this.self || this.canonicalAddress(address) === this.self;
   }
 
   hasMessage(uuid: string) {
@@ -398,7 +430,8 @@ export class ParvaneStore {
       .map(([address]) => address);
   }
 
-  buildApiUser(address: string): ApiUser {
+  buildApiUser(rawAddress: string): ApiUser {
+    const address = this.canonicalAddress(rawAddress);
     const isSelf = address === this.self;
     const id = this.getIdForAddress(address);
     return {
@@ -509,7 +542,7 @@ export class ParvaneStore {
     const chatKind = this.kindByAddress.get(chatAddress) || 'user';
     const chatId = this.getIdForAddress(chatAddress, chatKind);
     const id = this.allocateMessageId(chatId, stored.id, stored.ts, stored.order);
-    const isOutgoing = stored.from === this.self;
+    const isOutgoing = this.isSelfAddress(stored.from);
 
     const replyKey = stored.reply_to ? this.msgKeyByUuid.get(stored.reply_to) : undefined;
     const isChatMode = stored.content.kind === 'chat_mode';

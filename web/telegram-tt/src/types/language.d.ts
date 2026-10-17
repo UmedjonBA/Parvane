@@ -3073,6 +3073,22 @@ export interface LangPair {
   'ParvaneModBanned': undefined;
   'ParvaneModFailed': undefined;
   'ParvaneReportFailed': undefined;
+  'ParvaneCallTorUnavailable': undefined;
+  'ParvaneChangeUsername': undefined;
+  'ParvaneRenameTitle': undefined;
+  'ParvaneRenameHint': undefined;
+  'ParvaneRenameNick': undefined;
+  'ParvaneRenameNickRule': undefined;
+  'ParvaneRenamePassword': undefined;
+  'ParvaneRenameRecoveryKey': undefined;
+  'ParvaneRenameSubmit': undefined;
+  'ParvaneRenameDone': undefined;
+  'ParvaneRenameErrorPassword': undefined;
+  'ParvaneRenameErrorKey': undefined;
+  'ParvaneRenameErrorNoBackup': undefined;
+  'ParvaneRenameErrorTaken': undefined;
+  'ParvaneRenameErrorInvalid': undefined;
+  'ParvaneRenameErrorFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5461,6 +5477,10 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ParvaneModReportTitle': {
     'group': V;
+  };
+  'ParvaneUserRenamed': {
+    'user': V;
+    'nick': V;
   };
 }
 

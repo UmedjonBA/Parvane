@@ -172,7 +172,7 @@ impl Device {
                 let after = self.client.log_version(user);
                 let r = self.anon.call(
                     "identity.device.log_sync_anon",
-                    ipb::DeviceLogSyncAnonRequest { user: Some(UserRef { address: user.clone() }), after_version: after }.encode_to_vec(),
+                    ipb::DeviceLogSyncAnonRequest { user: Some(UserRef { address: user.clone() }), after_version: after, ..Default::default() }.encode_to_vec(),
                 );
                 let Ok(b) = r else { return false };
                 let entries = ipb::DeviceLogSyncAnonResponse::decode(b.as_slice()).unwrap_or_default().entries;

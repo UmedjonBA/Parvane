@@ -901,7 +901,7 @@ describe('PROTO-1: в клиенте нет собственного разбо�
       parses.forEach((call) => {
         // (журнал состояния: `session` — сессия движка, `host.decode` — движок)
         expect(call, `${file}: ${call}`)
-          .toMatch(/JSON\.parse\((pv\.|client\.|session\.|host\.decode|String\(e$|localStorage\.)/);
+          .toMatch(/JSON\.parse\((pv\.|codec\.decode|client\.|session\.|host\.decode|String\(e$|localStorage\.)/);
       });
     });
   });
@@ -1383,7 +1383,8 @@ describe('GROUP-3: группа v2 — сведения только из жур
     const client = readRepo('backend/protocol/src/client.rs');
     expect(client).toContain(`OutRequest::id("${r.requestDecideMethod}"`);
     // spec 024: одобрение несёт ссылку заявки (`via_link_id`)
-    expect(client).toContain(`Change::${r.approveEntry}(gpb::${r.approveEntry} { via_link_id: via_link_id.to_vec(), member: Some(member.clone()) })`);
+    const approve = `Change::${r.approveEntry}(gpb::${r.approveEntry} { via_link_id: via_link_id.to_vec(), `;
+    expect(client).toContain(`${approve}member: Some(member.clone()) })`);
     expect(client).toMatch(/requires_approval\)\s*\{[\s\S]{0,260}return Ok\(OutRequest::id\("group\.join"/);
     const server = readRepo('backend/shards/messenger/src/v2_groups.rs');
     expect(server).toContain('notify_invite_admins(ctx, &s).await;');
@@ -1503,7 +1504,8 @@ describe('DOMAIN-1: планировщик parvane.planner.v1 — ключи к�
     const client = readRepo('backend/protocol/src/client_planner.rs');
     expect(client).toContain(`OutRequest::id("${r.rotateMethod}"`);
     expect(client).toContain('fn planner_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64)');
-    expect(client).toContain('if sender != self.user || share.domain != planner::DOMAIN_NAME {');
+    // spec 026: «своё устройство» — и под прежним ником
+    expect(client).toContain('if !self.is_own_address(sender) || share.domain != planner::DOMAIN_NAME {');
     const core = readRepo('backend/protocol/src/client.rs');
     const kind = r.keyShareKind.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase());
     expect(core).toContain(`Some(content::Kind::${kind}(share)) => {`);
@@ -1597,7 +1599,8 @@ describe('DOMAIN-2: облако cloud.v1 — контейнеры, ключи �
     expect(domain).toContain('pub const OP_LEAVE: &str = "leave";');
     const client = readRepo('backend/protocol/src/client_cloud.rs');
     expect(client).toContain(`OutRequest::id("${r.leaveMethod}"`);
-    expect(client).toContain('match c.access.accept_key_share(share, sender, &no_groups) {');
+    // spec 026: отправитель — с прежними адресами (смена ника); право админа проверяет движок домена
+    expect(client).toContain('match c.access.accept_key_share_any(share, &names, &no_groups) {');
     expect(client).toContain('if !c.access.can_write(&me, &no_groups) {');
     const core = readRepo('backend/protocol/src/client.rs');
     expect(core).toContain('if share.domain == crate::domain::cloud::DOMAIN_NAME {');
@@ -1722,6 +1725,51 @@ describe('REPORT-1: жалоба админам группы — карточк�
     expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('async reportMessages(');
     expect(r.clients.web).toContain('e2e_web_reports.mjs');
     // Desktop и android — открыто до их очереди (решение «только web»)
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+});
+
+describe('RENAME-1: смена ника — журнал прежнего адреса закрыт, новый продолжает личность', () => {
+  const r = rule('RENAME-1') as unknown as {
+    logFields: Record<string, number>;
+    groupChange: Record<string, number>;
+    aliasDays: number;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема: Rename и renamed_from в журнале устройств, RenameMember и подсказка адреса в журнале группы', () => {
+    const envelope = readRepo('proto/parvane/core/v2/envelope.proto');
+    expect(envelope).toContain(`Rename rename = ${r.logFields.rename};`);
+    expect(envelope).toContain(`string renamed_from = ${r.logFields.renamed_from} [(max_len) = 128];`);
+    const group = readRepo('proto/parvane/group/v2/group.proto');
+    expect(group).toContain(`RenameMember rename_member = ${r.groupChange.rename_member};`);
+    expect(group).toContain(`string signer_address = ${r.groupChange.signer_address}`);
+  });
+
+  it('движок: Rename только корнем, журнал закрыт; RenameMember сверяет корень прежнего адреса', () => {
+    const identity = readRepo('backend/protocol/src/identity.rs');
+    expect(identity).toContain('Change::Rename(r) => {');
+    expect(identity).toContain('if self.renamed_to.is_some() {');
+    const group = readRepo('backend/protocol/src/group.rs');
+    expect(group).toContain('let old_root = lookup.and_then(|l| (l.root_of)(&old)).ok_or(ProtoError::Forbidden)?;');
+    const client = readRepo('backend/protocol/src/client_rename.rs');
+    ['pub fn rename_prepare(', 'pub fn rename_apply(', 'pub fn rename_follow(', 'fn link_peer_rename(']
+      .forEach((f) => expect(client).toContain(f));
+    const identityShard = readRepo('backend/shards/identity/src/v2/rename.rs');
+    expect(identityShard).toContain(`pub(crate) const ALIAS_TTL_MS: i64 = ${r.aliasDays} * 24 * 60 * 60 * 1000;`);
+  });
+
+  it('web: смена ника, перенос собеседника без KEY-1, своё другое устройство', () => {
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    ['async function renameAccount(', 'async function followPeerRename(', 'async function followOwnRename(',
+      'async function renameGroupsPending(']
+      .forEach((f) => expect(controller).toContain(f));
+    expect(controller).toMatch(/'renamed'\) await followPeerRename\(user, verdict\)/);
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('registerUserRename(');
+    expect(readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts'))
+      .toContain('export async function migrateStorageUser(');
+    expect(r.clients.web).toContain('e2e_web_rename.mjs');
     expect(r.clients.desktop).toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');
   });

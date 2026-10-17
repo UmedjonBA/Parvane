@@ -1,0 +1,55 @@
+.root :global(.modal-dialog) {
+  max-width: 26rem;
+}
+
+.hint,
+.note {
+  margin: 0 0 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+
+.label {
+  display: block;
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+}
+
+.nickRow {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.at {
+  color: var(--color-text-secondary);
+}
+
+.secrets {
+  margin: 0;
+}
+
+.error {
+  margin: 0.75rem 0 0;
+  color: var(--color-error);
+  font-size: 0.875rem;
+}
+
+.done {
+  margin: 0.75rem 0 0;
+  color: var(--color-text-green);
+  font-size: 0.875rem;
+}
+
+.buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+
+  :global(.Button) {
+    width: auto;
+  }
+}

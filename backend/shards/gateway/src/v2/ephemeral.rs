@@ -92,6 +92,14 @@ impl EphState {
         Ok(())
     }
 
+    /// Освободить каналы присутствия пользователя (отзыв устройства, смена ника).
+    pub(crate) fn release_presence(&self, user: &str) {
+        let me = self.keyed.hash_one(user);
+        if let Ok(mut g) = self.inner.lock() {
+            g.presence.retain(|_, (o, _)| *o != me);
+        }
+    }
+
     /// Публикация «печатает» в канал `id`: не в чужой канал присутствия.
     pub(crate) fn typing_publish(&self, id: &[u8], now: Instant) -> Result<(), ErrorCode> {
         let id = channel(id)?;

@@ -53,6 +53,7 @@ pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool, vapid: Arc<Vap
         Box::pin(async move { dispatch(&ctx, m, req).await })
     });
     parvane_v2rt::serve(nc.clone(), "push", handler_concurrency(), handler).await?;
+    tokio::spawn(serve_rename(nc.clone(), ctx.pool.clone()));
 
     let mut inbox = nc.subscribe(INBOX_WILDCARD).await?;
     let collapser = Arc::new(Mutex::new(Collapser::default()));
@@ -415,3 +416,46 @@ mod tests {
         assert_eq!(n, 7);
     }
 }
+
+/// Смена ника (spec 026): `v2.internal.rename.push` от identity — регистрации пробуждения и будильники идут по
+/// токенам журналов устройств, выведенным из адреса. Запрос с ответом; повтор ничего не меняет.
+async fn serve_rename(nc: async_nats::Client, pool: SqlitePool) {
+    use parvane_protocol::pb::parvane::core::v2::{RenameAck, RenameNotice};
+    use parvane_protocol::registry_gen::INTERNAL_RENAME_PUSH;
+    let mut sub = match nc.subscribe(INTERNAL_RENAME_PUSH.to_string()).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("push: подписка {} не удалась: {}", INTERNAL_RENAME_PUSH, e);
+            return;
+        }
+    };
+    while let Some(msg) = sub.next().await {
+        let Some(reply) = msg.reply.clone() else { continue };
+        let ok = match parvane_protocol::codec::decode_checked::<RenameNotice>(&msg.payload, parvane_protocol::limits::Origin::Server) {
+            Ok(n) => match rename(&pool, &n).await {
+                Ok(()) => true,
+                Err(e) => {
+                    error!("push: перенос ника: {}", e);
+                    false
+                }
+            },
+            Err(_) => false,
+        };
+        let _ = nc.publish(reply, RenameAck { ok }.encode_to_vec().into()).await;
+    }
+}
+
+async fn rename(pool: &SqlitePool, n: &parvane_protocol::pb::parvane::core::v2::RenameNotice) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for d in &n.device_ids {
+        let (Ok(from), Ok(to)) = (wake::device_token(&n.old_address, d), wake::device_token(&n.new_address, d)) else { continue };
+        sqlx::query("UPDATE wake_registrations SET user = ?, inbox_token = ? WHERE inbox_token = ?").bind(&n.new_address).bind(&to).bind(&from).execute(&mut *tx).await?;
+        sqlx::query("UPDATE OR IGNORE wake_alarms SET inbox_token = ? WHERE inbox_token = ?").bind(&to).bind(&from).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM wake_alarms WHERE inbox_token = ?").bind(&from).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE wake_registrations SET user = ? WHERE user = ?").bind(&n.new_address).bind(&n.old_address).execute(&mut *tx).await?;
+    tx.commit().await?;
+    info!("push: ник перенесён");
+    Ok(())
+}
+

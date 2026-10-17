@@ -83,9 +83,16 @@ impl Shared {
             anon_ip: AnonIpLimits::from_env(),
         });
         let mut sub = nats.subscribe(REVOKED_SUBJECT.to_string()).await?;
+        let shared = sh.clone();
         tokio::spawn(async move {
             while let Some(m) = sub.next().await {
                 if let Ok(n) = decode_checked::<RevokedNotice>(&m.payload, Origin::Server) {
+                    // Пустое устройство — адрес выведен из обращения (смена ника): его каналы присутствия
+                    // освобождаются — канал тот же (ключ доступа прежний), занимает его новый адрес
+                    if n.device_id.is_empty() {
+                        shared.eph.release_presence(&n.user);
+                        continue;
+                    }
                     let _ = tx.send((n.user, n.device_id));
                 }
             }

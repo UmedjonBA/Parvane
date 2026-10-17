@@ -24,6 +24,10 @@ struct Server {
     dk: HashMap<String, [u8; 32]>,
     inbox: HashMap<(String, String), Vec<InboxRecord>>,
     groups: HashMap<Vec<u8>, Vec<GroupStateEntry>>,
+    /// Состояние групп по мере записи (как шард: прежние записи не перепроверяются по нынешним журналам).
+    gstate: HashMap<Vec<u8>, group::GroupState>,
+    /// Прежний ник → новый (spec 026).
+    alias: HashMap<String, String>,
 }
 
 impl Server {
@@ -74,14 +78,16 @@ impl Server {
                 let q: mpb::DeliverSealedRequest = decode_checked(&r.body, Origin::Client).unwrap();
                 for e in q.envelopes {
                     let rc = e.recipient.clone().unwrap();
+                    // Прежний ник ведёт на новый (spec 026)
+                    let to = self.alias.get(&rc.address).cloned().unwrap_or(rc.address.clone());
                     match e.access.as_ref().unwrap() {
                         Access::DeliveryKey(k) => {
                             let h: [u8; 32] = Sha256::digest(k).into();
-                            assert_eq!(Some(&h), self.dk.get(&rc.address), "ключ доступа");
+                            assert_eq!(Some(&h), self.dk.get(&to), "ключ доступа");
                         }
                         Access::AnonToken(_) => {}
                     }
-                    self.push(&rc.address, &rc.device_id, inbox_record::Item::Sealed(e));
+                    self.push(&to, &rc.device_id, inbox_record::Item::Sealed(e));
                 }
             }
             // Отказ по заявке: записи журнала нет, шард только снимает заявку.
@@ -106,13 +112,14 @@ impl Server {
                         l.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })
                     })
                 };
-                let mut st = None;
-                for e in self.groups.get(&gid).into_iter().flatten() {
-                    st = Some(group::apply(st.as_ref(), e, &resolve).unwrap());
-                }
-                let next = group::apply(st.as_ref(), &entry, &resolve).expect("запись группы");
+                let signer_as = |k: &[u8; 32], v: u64, a: &str| resolve(k, v).filter(|s| s.user == a);
+                let root_of = |a: &str| self.logs.contains_key(a).then(|| self.log(a).root_key);
+                let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+                let st = self.gstate.get(&gid).cloned();
+                let next = group::apply_with(st.as_ref(), &entry, &resolve, Some(&lookup)).expect("запись группы");
                 let before: Vec<String> = st.map(|s| s.members.keys().cloned().collect()).unwrap_or_default();
                 self.groups.entry(gid.clone()).or_default().push(entry);
+                self.gstate.insert(gid.clone(), next.clone());
                 // Нотис всем участникам (и исключённым этой записью), как шард.
                 let mut notify: Vec<String> = next.members.keys().cloned().collect();
                 notify.extend(before);
@@ -130,17 +137,7 @@ impl Server {
                 let env = q.envelope.unwrap();
                 let gid = env.group.clone().unwrap().id;
                 // Всем участникам последнего состояния — всем устройствам.
-                let resolve = |k: &[u8; 32], _: u64| {
-                    self.logs.keys().find_map(|u| {
-                        let l = self.log(u);
-                        l.devices.values().any(|d| d.cert.olm_ed25519.as_slice() == k).then(|| SignerInfo { user: u.clone(), root_key: l.root_key })
-                    })
-                };
-                let mut st = None;
-                for e in self.groups.get(&gid).into_iter().flatten() {
-                    st = Some(group::apply(st.as_ref(), e, &resolve).unwrap());
-                }
-                let st = st.unwrap();
+                let st = self.gstate.get(&gid).cloned().unwrap();
                 group::verify_envelope(&env, st.epoch, &st.send_public_key.unwrap()).expect("подпись эпохи");
                 for m in st.members.keys() {
                     for d in self.log(m).devices.keys() {
@@ -1913,4 +1910,178 @@ fn cloud_shared_folder_roles_revoke_and_leave() {
     let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
     assert_eq!(restored.cloud_containers_json(), alice.cloud_containers_json());
     assert_eq!(restored.cloud_state_json(&id), alice.cloud_state_json(&id));
+}
+
+/// spec 026: смена ника. Личные чаты, ключи и группы переезжают на новый адрес; конверт на прежний адрес
+/// открывается; собеседник узнаёт о смене по журналу прежнего адреса без предупреждения о смене ключа; своё
+/// второе устройство переходит само.
+#[test]
+fn rename_moves_chats_groups_and_own_devices() {
+    let mut srv = Server::default();
+    let mut alice = Client::new("alice@local", "d1", "local").unwrap();
+    let (reqs, root) = alice.create_identity(10).unwrap();
+    for r in &reqs {
+        srv.handle("alice@local", "d1", r);
+    }
+    let mut bob = setup(&mut srv, "bob@local");
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("до смены")));
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut alice2);
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Клуб", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("группа до смены")));
+    drain(&mut srv, &mut bob);
+    drain(&mut srv, &mut alice2);
+    let owner_before = bob.group_state(&g.id).unwrap().owner.clone();
+    assert_eq!(owner_before, "alice@local");
+
+    // Чужой ник, другой домен, без корня — отказ
+    let wrong_root = parvane_protocol::sign::generate_signing_key().to_bytes();
+    assert!(alice.rename_prepare(&wrong_root, "alicia@local").is_err());
+    assert!(alice.rename_prepare(&root.root.to_bytes(), "alicia@other").is_err());
+
+    // Смена ника: сервер пишет `Rename` в прежний журнал и заводит журнал нового адреса
+    let plan = alice.rename_prepare(&root.root.to_bytes(), "alicia@local").unwrap();
+    srv.logs.get_mut("alice@local").unwrap().push(plan.rename.clone());
+    srv.logs.insert("alicia@local".into(), plan.new_log.clone());
+    let dk_old = srv.dk.remove("alice@local").unwrap();
+    srv.dk.insert("alicia@local".into(), dk_old);
+    srv.alias.insert("alice@local".into(), "alicia@local".into());
+    // Очереди инбокса устройств переезжают на новый адрес (нумерация продолжается)
+    for d in ["d1", "d2"] {
+        if let Some(q) = srv.inbox.remove(&("alice@local".to_string(), d.to_string())) {
+            srv.inbox.insert(("alicia@local".into(), d.into()), q);
+        }
+    }
+    alice.rename_apply(&plan).unwrap();
+    let group_reqs = alice.rename_groups_pending().unwrap();
+    assert_eq!(alice.user, "alicia@local");
+    assert_eq!(alice.former_addresses(), vec!["alice@local".to_string()]);
+    assert_eq!(group_reqs.len(), 1, "RenameMember в группу");
+    for r in &group_reqs {
+        srv.handle("alicia@local", "d1", r);
+    }
+    // Журнал прежнего адреса закрыт
+    assert!(srv.log("alice@local").renamed_to.is_some() && srv.log("alice@local").devices.is_empty());
+
+    // Боб ещё не знает о смене: пишет на прежний адрес — доходит
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("на старый адрес")));
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).iter().any(|(_, f, t)| f == "bob@local" && t == "на старый адрес"), "{ev:?} {:?}", alice.last_error);
+
+    // Боб перечитывает журнал прежнего адреса: «переехал» → журнал нового адреса → «переименован»
+    let after = bob.log_version("alice@local") as usize;
+    let v = bob.ingest_log("alice@local", srv.logs["alice@local"][after..].to_vec()).unwrap();
+    assert_eq!(v, parvane_protocol::client::LogVerdict::Moved);
+    assert_eq!(bob.peer_renamed_to("alice@local").as_deref(), Some("alicia@local"));
+    let v = bob.ingest_log("alicia@local", srv.logs["alicia@local"].clone()).unwrap();
+    assert_eq!(v, parvane_protocol::client::LogVerdict::Renamed);
+    assert_eq!(bob.peer_renamed_from("alicia@local").as_deref(), Some("alice@local"));
+    assert_eq!(bob.aliases_of("alicia@local"), vec!["alice@local".to_string()]);
+    // Повторное чтение — без повторного «переименован»
+    assert_eq!(bob.ingest_log("alicia@local", vec![]).unwrap(), parvane_protocol::client::LogVerdict::Known);
+
+    // Отправка, начатая по прежнему адресу после переноса, уходит на новый
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alice@local", &text("по прежнему адресу")));
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).contains(&("bob@local".into(), "bob@local".into(), "по прежнему адресу".into())), "{ev:?} {:?}", alice.last_error);
+    assert_eq!(bob.current_address("alice@local"), "alicia@local");
+
+    // Переписка по новому адресу в обе стороны (сессия и ключ доступа перенесены)
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alicia@local", &text("на новый адрес")));
+    let ev = drain(&mut srv, &mut alice);
+    assert!(texts(&ev).contains(&("bob@local".into(), "bob@local".into(), "на новый адрес".into())), "{ev:?} {:?}", alice.last_error);
+    run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("ответ с нового")));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).contains(&("alicia@local".into(), "alicia@local".into(), "ответ с нового".into())), "{ev:?} {:?}", bob.last_error);
+
+    // Группа: участник и владелец переехали
+    let st = bob.group_state(&g.id).unwrap();
+    assert_eq!(st.owner, "alicia@local", "{:?}", bob.last_error);
+    assert!(st.members.contains_key("alicia@local") && !st.members.contains_key("alice@local"));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("группа после смены")));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).contains(&("group".into(), "alicia@local".into(), "группа после смены".into())), "{ev:?} {:?}", bob.last_error);
+
+    // Своё второе устройство: журнал своего адреса закрыт → переход
+    let after = alice2.log_version("alice@local") as usize;
+    let v = alice2.ingest_log("alice@local", srv.logs["alice@local"][after..].to_vec()).unwrap();
+    assert_eq!(v, parvane_protocol::client::LogVerdict::Moved);
+    assert_eq!(alice2.own_renamed_to().as_deref(), Some("alicia@local"));
+    let reqs = alice2.rename_follow(srv.logs["alicia@local"].clone()).unwrap();
+    assert_eq!(alice2.user, "alicia@local");
+    for r in &reqs {
+        srv.handle("alicia@local", "d2", r);
+    }
+    assert!(srv.log("alicia@local").devices.contains_key("d2"), "второе устройство в журнале нового адреса");
+    alice.ingest_log("alicia@local", srv.logs["alicia@local"][alice.log_version("alicia@local") as usize..].to_vec()).unwrap();
+    bob.ingest_log("alicia@local", srv.logs["alicia@local"][bob.log_version("alicia@local") as usize..].to_vec()).unwrap();
+    // Журналы групп догнаны (нотис записи ушёл устройствам нового адреса до входа d2 — догоняем сами) —
+    // переносить в группах нечего (сделало первое устройство)
+    let v = alice2.group_version(&g.id);
+    satisfy(&mut srv, &mut alice2, Need::GroupLog { group: g.id.clone(), after: v });
+    assert!(alice2.rename_groups_pending().unwrap().is_empty(), "{:?}", alice2.last_error);
+    assert_eq!(alice2.group_state(&g.id).unwrap().owner, "alicia@local");
+    run(&mut srv, &mut bob, &mut |c| c.prepare_direct("alicia@local", &text("обоим устройствам")));
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(texts(&ev).iter().any(|(_, _, t)| t == "обоим устройствам"), "{ev:?} {:?}", alice2.last_error);
+
+    // Состояние переживает экспорт: прежний адрес помнится
+    let blob = alice.export(&[3u8; 32]).unwrap();
+    let back = Client::import(&blob, &[3u8; 32]).unwrap();
+    assert_eq!(back.former_addresses(), vec!["alice@local".to_string()]);
+}
+
+/// spec 026: `RenameMember` с записью `Rename`, подписанной чужим корнем, не переносит участника.
+#[test]
+fn rename_member_with_foreign_root_is_rejected() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let mut mallory = Client::new("mallory@local", "d1", "local").unwrap();
+    let (reqs, mroot) = mallory.create_identity(10).unwrap();
+    for r in &reqs {
+        srv.handle("mallory@local", "d1", r);
+    }
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Клуб", &["bob@local".to_string(), "mallory@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    // Mallory подделывает «Rename bob → mallory» своим корнем
+    let forged = parvane_protocol::identity::device_log_entry(
+        "bob@local",
+        2,
+        [0u8; 32],
+        parvane_protocol::pb::parvane::core::v2::user_device_log_entry::Change::Rename(parvane_protocol::pb::parvane::core::v2::Rename {
+            new_address: "mallory@local".into(),
+            new_genesis_hash: vec![0u8; 32],
+        }),
+        None,
+    );
+    let op = parvane_protocol::identity::sign_device_log_entry(&mroot.root, &forged).unwrap();
+    let state = alice.group_state(&g.id).unwrap().clone();
+    let change = gpb::group_change::Change::RenameMember(gpb::RenameMember { rename: Some(op) });
+    // Подписант записи — ключ Mallory (корень вместо ключа устройства: резолвер теста знает его)
+    let entry = group::build_entry_at(&mroot.root, Some(&state), "local", change, 1, 1).unwrap();
+    let mkey = mroot.root.verifying_key().to_bytes();
+    let mlog_root = srv.log("mallory@local").root_key;
+    let resolve = |k: &[u8; 32], _: u64| (*k == mkey).then(|| SignerInfo { user: "mallory@local".into(), root_key: mlog_root });
+    let signer_as = |k: &[u8; 32], v: u64, a: &str| resolve(k, v).filter(|s| s.user == a);
+    let root_of = |a: &str| Some(srv.log(a).root_key);
+    let lookup = group::Lookup { signer_as: &signer_as, root_of: &root_of };
+    assert_eq!(group::apply_with(Some(&state), &entry, &resolve, Some(&lookup)).err(), Some(parvane_protocol::ProtoError::BadSignature));
+    // Без сведений о журналах `RenameMember` не принимается вовсе
+    assert_eq!(group::apply(Some(&state), &entry, &resolve).err(), Some(parvane_protocol::ProtoError::Forbidden));
+    let _ = &mut mallory;
 }

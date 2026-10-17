@@ -27,7 +27,7 @@ struct Directory {
 impl Directory {
     fn device(&mut self, user: &str, device_id: &str) -> Device {
         let key = sign::generate_signing_key();
-        self.keys.insert(key.verifying_key().to_bytes(), Author { user: user.into(), device_id: device_id.into() });
+        self.keys.insert(key.verifying_key().to_bytes(), Author::new(user, device_id));
         Device { id: device_id.into(), key, keys: KeyRing::default(), clock: LamportGuard::default() }
     }
     fn resolve(&self) -> impl Fn(&[u8; 32]) -> Option<Author> + '_ {

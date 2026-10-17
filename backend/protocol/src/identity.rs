@@ -265,6 +265,14 @@ pub struct DeviceLog {
     /// же — владелец может повторно отозвать его своей рукой («устройство украдено»), тогда
     /// SSK считается раскрытым.
     pub left_holders: BTreeSet<String>,
+    /// Смена ника (spec 026): журнал закрыт записью `Rename` — личность продолжается под новым адресом, чей
+    /// журнал начинается записью с хешем `rename_genesis`. Ключи устройств этого журнала действуют до неё.
+    pub renamed_to: Option<String>,
+    pub rename_genesis: Option<[u8; 32]>,
+    /// Запись `Rename` (доказательство смены ника для журналов групп, `RenameMember`).
+    pub rename_op: Option<SignedOp>,
+    /// Генезис журнала после смены ника: прежний адрес (тот же корень).
+    pub renamed_from: Option<String>,
 }
 
 /// Срок действия ключа подписи устройства: с версии журнала `from` (запись, добавившая
@@ -319,6 +327,10 @@ impl DeviceLog {
         if entry.version != self.version + 1 {
             return Err(ProtoError::BrokenChain);
         }
+        // spec 026: после смены ника журнал прежнего адреса не растёт
+        if self.renamed_to.is_some() {
+            return Err(ProtoError::Forbidden);
+        }
         if entry.prev_hash.as_slice() != self.head_hash {
             return Err(ProtoError::BrokenChain);
         }
@@ -335,6 +347,12 @@ impl DeviceLog {
             verify_self_signing(&root, &self.user, self_signing_key, root_signature)?;
             self.root_key = root;
             self.ssk = key32(self_signing_key)?;
+            if !entry.renamed_from.is_empty() {
+                if !address::is_valid_address(&entry.renamed_from) || entry.renamed_from == self.user {
+                    return Err(ProtoError::InvalidField("renamed_from"));
+                }
+                self.renamed_from = Some(entry.renamed_from.clone());
+            }
         } else {
             if !entry.root_key.is_empty() && entry.root_key.as_slice() != self.root_key {
                 return Err(ProtoError::RootMismatch);
@@ -416,6 +434,24 @@ impl DeviceLog {
                     if let Some(l) = &mut self.legacy {
                         l.retain(|d| &d.device_id != id);
                     }
+                }
+                Change::Rename(r) => {
+                    // Только корень: смена ника — решение владельца личности, не устройства
+                    if v.signer != self.root_key {
+                        return Err(ProtoError::BadSignature);
+                    }
+                    if !address::is_valid_address(&r.new_address)
+                        || r.new_address == self.user
+                        || address::address_domain(&r.new_address) != address::address_domain(&self.user)
+                    {
+                        return Err(ProtoError::InvalidField("new_address"));
+                    }
+                    self.renamed_to = Some(r.new_address.clone());
+                    self.rename_genesis = Some(key32(&r.new_genesis_hash)?);
+                    self.rename_op = Some(op.clone());
+                    // Ключи устройств под прежним адресом больше не действуют (прошлые подписи — проверяемы)
+                    self.close_eras(None, entry.version, false);
+                    self.devices.clear();
                 }
                 Change::LegacyDevices(set) => {
                     if v.signer != self.ssk {
@@ -508,6 +544,22 @@ impl LogPin {
     }
 }
 
+/// spec 026: запись `Rename` журнала устройств (доказательство смены ника в журналах групп): прежний адрес и
+/// ключ подписавшего её (корень прежнего журнала). Новый адрес обязан совпасть с `new_address`.
+pub fn verify_rename_op(op: &SignedOp, new_address: &str) -> Result<(String, [u8; 32])> {
+    let hint = sign::verifying_key(&op.signer_key)?.to_bytes();
+    let v = sign::verify_op(op, DEVICE_LOG_DOMAIN, DEVICE_LOG_OP, Some(&hint))?;
+    let entry: UserDeviceLogEntry = decode_checked(&v.payload, Origin::Client)?;
+    let Some(Change::Rename(r)) = entry.change.as_ref() else {
+        return Err(ProtoError::InvalidField("rename"));
+    };
+    let old = entry.user.map(|u| u.address).ok_or(ProtoError::InvalidField("user"))?;
+    if r.new_address != new_address || !address::is_valid_address(&old) || old == new_address {
+        return Err(ProtoError::InvalidField("rename"));
+    }
+    Ok((old, v.signer))
+}
+
 /// Помощник: запись журнала для пользователя.
 pub fn device_log_entry(user: &str, version: u64, prev_hash: [u8; 32], change: Change, root_key: Option<[u8; 32]>) -> UserDeviceLogEntry {
     UserDeviceLogEntry {
@@ -517,6 +569,7 @@ pub fn device_log_entry(user: &str, version: u64, prev_hash: [u8; 32], change: C
         change: Some(change),
         root_key: root_key.map(|k| k.to_vec()).unwrap_or_default(),
         sign_out: false,
+        renamed_from: String::new(),
     }
 }
 
@@ -795,5 +848,49 @@ mod tests {
         // Старый SSK после смены — чужая подпись.
         let stale = a.add_device_entry(6, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "evil", 1)).unwrap();
         assert_eq!(log.apply(&stale), Err(ProtoError::BadSignature));
+    }
+
+    #[test]
+    fn rename_closes_log_and_needs_root() {
+        let a = RootIdentity::generate("alice@x").unwrap();
+        let mut log = DeviceLog::new("alice@x").unwrap();
+        log.apply(&a.genesis_entry().unwrap()).unwrap();
+        log.apply(&a.add_device_entry(2, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d1", 1)).unwrap()).unwrap();
+        let rename = |to: &str| Change::Rename(crate::pb::parvane::core::v2::Rename { new_address: to.into(), new_genesis_hash: vec![9; 32] });
+        let e = device_log_entry("alice@x", 3, log.head_hash, rename("alicia@x"), None);
+        // SSK и ключ устройства ник не меняют; чужой домен и тот же адрес — отказ
+        assert_eq!(log.clone().apply(&sign_device_log_entry(&a.self_signing, &e).unwrap()), Err(ProtoError::BadSignature));
+        assert_eq!(log.clone().apply(&sign_device_log_entry(&dev_key("d1"), &e).unwrap()), Err(ProtoError::BadSignature));
+        for bad in ["alicia@y", "alice@x", "не адрес"] {
+            let e = device_log_entry("alice@x", 3, log.head_hash, rename(bad), None);
+            assert_eq!(log.clone().apply(&sign_device_log_entry(&a.root, &e).unwrap()), Err(ProtoError::InvalidField("new_address")), "{bad}");
+        }
+        let op = sign_device_log_entry(&a.root, &e).unwrap();
+        log.apply(&op).unwrap();
+        assert_eq!(log.renamed_to.as_deref(), Some("alicia@x"));
+        assert_eq!(log.rename_genesis, Some([9; 32]));
+        assert!(log.devices.is_empty(), "ключи прежнего адреса больше не действуют");
+        // Прошлые подписи d1 проверяемы по версии журнала
+        assert!(log.key_active_at(&dev_key("d1").verifying_key().to_bytes(), 2));
+        // Журнал закрыт
+        let after = a.add_device_entry(4, log.head_hash, &cert_for(&a.root_pub(), "alice@x", "d2", 1)).unwrap();
+        assert_eq!(log.apply(&after), Err(ProtoError::Forbidden));
+        // Доказательство для групп: прежний адрес и корень
+        assert_eq!(verify_rename_op(&op, "alicia@x").unwrap(), ("alice@x".to_string(), a.root_pub()));
+        assert!(verify_rename_op(&op, "mallory@x").is_err());
+    }
+
+    #[test]
+    fn genesis_after_rename_records_previous_address() {
+        let a = RootIdentity::generate("alicia@x").unwrap();
+        let g = a.genesis_entry().unwrap();
+        let body = crate::pb::parvane::core::v2::OpBody::decode(g.body.as_slice()).unwrap();
+        let mut e = UserDeviceLogEntry::decode(body.payload.as_slice()).unwrap();
+        e.renamed_from = "alice@x".into();
+        let mut log = DeviceLog::new("alicia@x").unwrap();
+        log.apply(&sign_device_log_entry(&a.root, &e).unwrap()).unwrap();
+        assert_eq!(log.renamed_from.as_deref(), Some("alice@x"));
+        e.renamed_from = "alicia@x".into();
+        assert_eq!(DeviceLog::new("alicia@x").unwrap().apply(&sign_device_log_entry(&a.root, &e).unwrap()), Err(ProtoError::InvalidField("renamed_from")));
     }
 }

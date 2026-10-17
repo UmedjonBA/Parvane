@@ -290,6 +290,36 @@ export function createSyncController(deps: SyncDependencies) {
     deps.log(`ключ безопасности ${address} изменился`);
   }
 
+  // Смена ника собеседником (spec 026): чат прежний (стор свёл адреса к одному id), в UI — новый ник и
+  // служебное сообщение
+  function announceRename(oldAddress: string, newAddress: string) {
+    const store = deps.getStore();
+    const chatId = store.getIdForAddress(newAddress);
+    announcedPeers.delete(newAddress);
+    announcePeer(newAddress);
+    const ts = Math.floor(Date.now() / 1000);
+    const id = store.allocateMessageId(chatId, `rename:${newAddress}:${ts}`, ts);
+    const template = getLangStringByKey('ParvaneUserRenamed') || '{user} changed username to @{nick}';
+    const message: ApiMessage = {
+      id,
+      chatId,
+      date: ts,
+      isOutgoing: false,
+      senderId: chatId,
+      content: {
+        action: {
+          mediaType: 'action',
+          type: 'customAction',
+          message: template.replace('{user}', store.getDisplayName(newAddress))
+            .replace('{nick}', newAddress.split('@')[0]),
+        },
+      },
+    };
+    store.putMessage(message);
+    deps.sendUpdate({ '@type': 'newMessage', chatId, id, message });
+    deps.log(`собеседник сменил ник: ${oldAddress.split('@')[0]} → ${newAddress.split('@')[0]}`);
+  }
+
   // Собеседник в UI: объекты пользователя и чата, тред — один раз за сессию
   // (perf A3; раньше — на каждое входящее, с запросом имени по сети)
   function announcePeer(address: string) {
@@ -768,6 +798,7 @@ export function createSyncController(deps: SyncDependencies) {
     forgetMessages,
     pushMentionState,
     announceKeyChange,
+    announceRename,
     getFlags: (uuid: string) => wireFlagsByUuid.get(uuid),
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
     hasReportedRead: (uuid: string) => reportedReadUuids.has(uuid),

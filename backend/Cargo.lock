@@ -879,6 +879,7 @@ dependencies = [
  "async-nats",
  "dotenvy",
  "ed25519-dalek 2.2.0",
+ "futures",
  "parvane-db",
  "parvane-protocol",
  "parvane-types",

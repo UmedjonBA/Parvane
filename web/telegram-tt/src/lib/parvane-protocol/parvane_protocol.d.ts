@@ -41,6 +41,10 @@ export class PvClient {
     acceptRootChange(user: string): boolean;
     ackRequest(): any;
     /**
+     * Прочие адреса личности `user` (свои — прежние, собеседника — по проверенным журналам).
+     */
+    aliasesOf(user: string): string[];
+    /**
      * Повторно применить помеченный пакет из очереди отправки (после перезапуска).
      */
     cloudApplyLocal(id_hex: string, op: Uint8Array): number;
@@ -192,6 +196,10 @@ export class PvClient {
      * Стереть корень из памяти движка.
      */
     forgetRoot(): void;
+    /**
+     * Свои прежние адреса.
+     */
+    formerAddresses(): string[];
     /**
      * D-03 (C1-03): версия журнала группы, на которую сослался участник, а у
      * нас её нет (undefined — не отстаём). Пока отстаём, prepareGroup и
@@ -363,9 +371,21 @@ export class PvClient {
     openRecord(record: Uint8Array): string;
     otkRequest(n: number): any;
     /**
+     * Свой журнал закрыт сменой ника — новый адрес (undefined — нет).
+     */
+    ownRenamedTo(): string | undefined;
+    /**
      * Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
      */
     ownSskExposed(): boolean;
+    /**
+     * Журнал собеседника — продолжение прежнего адреса (после вердикта "renamed").
+     */
+    peerRenamedFrom(user: string): string | undefined;
+    /**
+     * Журнал собеседника закрыт сменой ника — новый адрес.
+     */
+    peerRenamedTo(user: string): string | undefined;
     /**
      * Повторно применить помеченную операцию из очереди отправки (после перезапуска).
      */
@@ -465,6 +485,26 @@ export class PvClient {
      */
     recoverWithRoot(log_response: Uint8Array, otk_count: number): Array<any>;
     /**
+     * Сервер принял смену ника: устройство переходит на новый адрес (группы — `renameGroupsPending` сессией
+     * нового адреса).
+     */
+    renameApply(): void;
+    /**
+     * Ник сменён другим своим устройством: ответ `log_sync` журнала нового адреса → переход; запросы —
+     * сертификат под новым адресом (если нужен).
+     */
+    renameFollow(log_response: Uint8Array): Array<any>;
+    /**
+     * Группы, где участником всё ещё значится свой прежний адрес, — запросы `RenameMember`.
+     */
+    renameGroupsPending(): Array<any>;
+    /**
+     * spec 026: подготовить смену ника на `new_address` (корень — из `importRootBackup`, `recovery_key` — для
+     * копии корня под новым адресом). Возвращает тело `identity.account.rename`; состояние движка меняется
+     * только в `renameApply` после ответа сервера.
+     */
+    renamePrepare(new_address: string, new_login: string, recovery_key: string): Uint8Array;
+    /**
      * ENG-04: отметить своё вышедшее устройство, державшее SSK, украденным — итог как у
      * `revokeDevice` (`sskRotationRequired` — нужна смена SSK ключом восстановления).
      */
@@ -493,6 +533,10 @@ export class PvClient {
      * после успеха хост зовёт `forgetRoot()`.
      */
     rotateSsk(): Array<any>;
+    /**
+     * Адрес, под которым живёт движок (после смены ника на другом устройстве — прежний, до `renameFollow`).
+     */
+    selfAddress(): string;
     /**
      * ID-01: доказательство устройства для `identity.session.issue`
      * (`ts_ms` — миллисекунды Unix, как `Date.now()`).
@@ -764,6 +808,7 @@ export interface InitOutput {
     readonly pvanonplanner_openCount: (a: number) => number;
     readonly pvclient_acceptRootChange: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_ackRequest: (a: number) => number;
+    readonly pvclient_aliasesOf: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_cloudApplyLocal: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_cloudAttach: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_cloudContainers: (a: number, b: number) => void;
@@ -802,6 +847,7 @@ export interface InitOutput {
     readonly pvclient_exportRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_exportRootEscrow: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_forgetRoot: (a: number) => void;
+    readonly pvclient_formerAddresses: (a: number, b: number) => void;
     readonly pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
@@ -844,7 +890,10 @@ export interface InitOutput {
     readonly pvclient_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly pvclient_openRecord: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_otkRequest: (a: number, b: number) => number;
+    readonly pvclient_ownRenamedTo: (a: number, b: number) => void;
     readonly pvclient_ownSskExposed: (a: number) => number;
+    readonly pvclient_peerRenamedFrom: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_peerRenamedTo: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_plannerApplyLocal: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_plannerAttach: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_plannerContainer: (a: number) => number;
@@ -871,11 +920,16 @@ export interface InitOutput {
     readonly pvclient_publicHistoryItems: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_readers: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_recoverWithRoot: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly pvclient_renameApply: (a: number, b: number) => void;
+    readonly pvclient_renameFollow: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_renameGroupsPending: (a: number, b: number) => void;
+    readonly pvclient_renamePrepare: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_reportDeviceStolen: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_resetIdentity: (a: number, b: number, c: number) => void;
     readonly pvclient_revokeContactAccess: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_revokeDevice: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_rotateSsk: (a: number, b: number) => void;
+    readonly pvclient_selfAddress: (a: number, b: number) => void;
     readonly pvclient_sessionProof: (a: number, b: number, c: number) => void;
     readonly pvclient_setPeerDeliveryKey: (a: number, b: number, c: number, d: number, e: number, f: bigint) => void;
     readonly pvclient_shareDeliveryKey: (a: number, b: number, c: number, d: number) => void;

@@ -170,6 +170,8 @@ pub struct PvClient {
     /// Корень после createIdentity/importRootBackup — только в памяти (не в
     /// export): для exportRootBackup, затем forgetRoot (C1-06).
     root: Option<zeroize::Zeroizing<[u8; 32]>>,
+    /// Подготовленная смена ника (spec 026) до ответа сервера.
+    rename_plan: Option<parvane_protocol::client::RenamePlan>,
 }
 
 #[wasm_bindgen]
@@ -177,13 +179,13 @@ impl PvClient {
     /// Новое устройство.
     #[wasm_bindgen(constructor)]
     pub fn new(user: &str, device_id: &str, domain: &str) -> Result<PvClient, JsValue> {
-        Client::new(user, device_id, domain).map(|inner| PvClient { inner, root: None }).map_err(err_proto)
+        Client::new(user, device_id, domain).map(|inner| PvClient { inner, root: None, rename_plan: None }).map_err(err_proto)
     }
 
     /// Восстановить из зашифрованного состояния.
     #[wasm_bindgen(js_name = importState)]
     pub fn import_state(blob: &[u8], key: &[u8]) -> Result<PvClient, JsValue> {
-        Client::import(blob, &key32(key)?).map(|inner| PvClient { inner, root: None }).map_err(err_proto)
+        Client::import(blob, &key32(key)?).map(|inner| PvClient { inner, root: None, rename_plan: None }).map_err(err_proto)
     }
 
     /// Экспорт состояния (шифруется ключом хранилища, 32 байта).
@@ -351,6 +353,84 @@ impl PvClient {
     #[wasm_bindgen(js_name = ingestLog)]
     pub fn ingest_log(&mut self, user: &str, sync_response: &[u8]) -> Result<String, JsValue> {
         parvane_protocol::host::ingest_log_verdict(&mut self.inner, user, sync_response).map(str::to_string).map_err(err_proto)
+    }
+
+    /// spec 026: подготовить смену ника на `new_address` (корень — из `importRootBackup`, `recovery_key` — для
+    /// копии корня под новым адресом). Возвращает тело `identity.account.rename`; состояние движка меняется
+    /// только в `renameApply` после ответа сервера.
+    #[wasm_bindgen(js_name = renamePrepare)]
+    pub fn rename_prepare(&mut self, new_address: &str, new_login: &str, recovery_key: &str) -> Result<Uint8Array, JsValue> {
+        let root = self.root.clone().ok_or_else(|| err_proto(ProtoError::NotFound))?;
+        let key = parvane_protocol::recovery::RecoveryKey::parse(recovery_key).map_err(err_proto)?;
+        let plan = self.inner.rename_prepare(&root, new_address).map_err(err_proto)?;
+        // Копия корня под новым адресом (прежняя к нему не подходит)
+        let root_backup = parvane_protocol::recovery::export_root_backup(&root, new_address, &key).map_err(err_proto)?;
+        let body = ipb::AccountRenameRequest {
+            new_login: new_login.to_string(),
+            rename: Some(plan.rename.clone()),
+            new_log: plan.new_log.clone(),
+            root_backup,
+        };
+        self.rename_plan = Some(plan);
+        Ok(Uint8Array::from(body.encode_to_vec().as_slice()))
+    }
+
+    /// Сервер принял смену ника: устройство переходит на новый адрес (группы — `renameGroupsPending` сессией
+    /// нового адреса).
+    #[wasm_bindgen(js_name = renameApply)]
+    pub fn rename_apply(&mut self) -> Result<(), JsValue> {
+        let plan = self.rename_plan.take().ok_or_else(|| err_proto(ProtoError::NotFound))?;
+        self.inner.rename_apply(&plan).map_err(err_proto)
+    }
+
+    /// Ник сменён другим своим устройством: ответ `log_sync` журнала нового адреса → переход; запросы —
+    /// сертификат под новым адресом (если нужен).
+    #[wasm_bindgen(js_name = renameFollow)]
+    pub fn rename_follow(&mut self, log_response: &[u8]) -> Result<Array, JsValue> {
+        let r: ipb::DeviceLogSyncResponse = decode_checked(log_response, Origin::Server).map_err(err_proto)?;
+        self.inner.rename_follow(r.entries).map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Группы, где участником всё ещё значится свой прежний адрес, — запросы `RenameMember`.
+    #[wasm_bindgen(js_name = renameGroupsPending)]
+    pub fn rename_groups_pending(&mut self) -> Result<Array, JsValue> {
+        self.inner.rename_groups_pending().map(|r| reqs_js(&r)).map_err(err_proto)
+    }
+
+    /// Свой журнал закрыт сменой ника — новый адрес (undefined — нет).
+    #[wasm_bindgen(js_name = ownRenamedTo)]
+    pub fn own_renamed_to(&self) -> Option<String> {
+        self.inner.own_renamed_to()
+    }
+
+    /// Журнал собеседника закрыт сменой ника — новый адрес.
+    #[wasm_bindgen(js_name = peerRenamedTo)]
+    pub fn peer_renamed_to(&self, user: &str) -> Option<String> {
+        self.inner.peer_renamed_to(user)
+    }
+
+    /// Журнал собеседника — продолжение прежнего адреса (после вердикта "renamed").
+    #[wasm_bindgen(js_name = peerRenamedFrom)]
+    pub fn peer_renamed_from(&self, user: &str) -> Option<String> {
+        self.inner.peer_renamed_from(user)
+    }
+
+    /// Адрес, под которым живёт движок (после смены ника на другом устройстве — прежний, до `renameFollow`).
+    #[wasm_bindgen(js_name = selfAddress)]
+    pub fn self_address(&self) -> String {
+        self.inner.user.clone()
+    }
+
+    /// Свои прежние адреса.
+    #[wasm_bindgen(js_name = formerAddresses)]
+    pub fn former_addresses(&self) -> Vec<String> {
+        self.inner.former_addresses()
+    }
+
+    /// Прочие адреса личности `user` (свои — прежние, собеседника — по проверенным журналам).
+    #[wasm_bindgen(js_name = aliasesOf)]
+    pub fn aliases_of(&self, user: &str) -> Vec<String> {
+        self.inner.aliases_of(user)
     }
 
     /// KEY-1 v2: принять смену корня собеседника (после предупреждения).
@@ -1214,6 +1294,8 @@ pub fn parse_invite(url: &str) -> Result<String, JsValue> {
 #[wasm_bindgen]
 pub struct PvState {
     user: String,
+    /// Прежние адреса (смена ника, spec 026): записи, запечатанные до смены, открываются под ними.
+    former: Vec<String>,
     device_id: String,
     key: parvane_protocol::state::StateKey,
     state: parvane_protocol::state::PersonalState,
@@ -1250,6 +1332,7 @@ impl PvClient {
         let (k, _) = self.inner.state_key()?;
         Some(PvState {
             user: self.inner.user.clone(),
+            former: self.inner.former_addresses(),
             device_id: self.inner.device_id.clone(),
             key: k.clone(),
             state: parvane_protocol::state::PersonalState::new(),
@@ -1276,7 +1359,10 @@ impl PvState {
         let (mut applied, mut rejected) = (0usize, 0usize);
         for rec in &r.records {
             self.cursor = self.cursor.max(rec.seq);
-            match parvane_protocol::state::open_state_record(&self.key, &self.user, rec) {
+            let opened = std::iter::once(&self.user)
+                .chain(self.former.iter())
+                .find_map(|u| parvane_protocol::state::open_state_record(&self.key, u, rec).ok());
+            match opened.ok_or(parvane_protocol::error::ProtoError::Crypto) {
                 Ok(op) if self.state.apply(&op).is_ok() => applied += 1,
                 _ => rejected += 1,
             }
@@ -1642,6 +1728,7 @@ pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {
         "parvane.identity.v2.SessionReauthRequest" => ipb::SessionReauthRequest,
         "parvane.identity.v2.AccountSet2faRequest" => ipb::AccountSet2faRequest,
         "parvane.identity.v2.AccountChangePasswordRequest" => ipb::AccountChangePasswordRequest,
+        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
         "parvane.identity.v2.ProfileResolveRequest" => ipb::ProfileResolveRequest,
         "parvane.identity.v2.ProfileSetNameRequest" => ipb::ProfileSetNameRequest,
         "parvane.identity.v2.ProfileSetAvatarRequest" => ipb::ProfileSetAvatarRequest,
@@ -1693,6 +1780,8 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
     }
     dec! {
         "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
+        "parvane.identity.v2.AccountRenameResponse" => ipb::AccountRenameResponse,
+        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
         "parvane.identity.v2.AccountRegisterResponse" => ipb::AccountRegisterResponse,
         "parvane.identity.v2.AccountRegisterStatusResponse" => ipb::AccountRegisterStatusResponse,
         "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,
