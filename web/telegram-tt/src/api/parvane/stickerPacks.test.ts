@@ -10,8 +10,10 @@ import {
   getReceivedPackRef,
   getSetIdForPackName,
   loadInstalledPacks,
+  packContentHash,
   parsePvpkArchive,
   registerReceivedEmojiPackRef,
+  registerReceivedPackRef,
   removeInstalledPack,
   resetPackRegistries,
   sanitizePackName,
@@ -224,5 +226,40 @@ describe('emoji pack names (EMOJI-1)', () => {
     const again = registerReceivedEmojiPackRef({ file_id: 'f9', name: 'PvEmoji123', count: 1 }, 'alice@bubble');
     expect(again).toBe(first);
     expect(getEmojiPackNames(first)).toEqual(expect.arrayContaining(['Pv.Emoji!123', 'PvEmoji123']));
+  });
+});
+
+// PACK-2: один и тот же набор от двух людей — один набор, разный с тем же именем — два
+describe('pack content hash (PACK-2)', () => {
+  const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
+  const a = { name: 'a.webp', data: bytesOf(1, 2, 3) };
+  const b = { name: 'b.webp', data: bytesOf(4, 5) };
+
+  it('does not depend on file order and changes with any byte or name', async () => {
+    const one = b64(await packContentHash([a, b]));
+    expect(b64(await packContentHash([b, a]))).toBe(one);
+    expect(b64(await packContentHash([a, { ...b, data: bytesOf(4, 6) }]))).not.toBe(one);
+    expect(b64(await packContentHash([a, { ...b, name: 'c.webp' }]))).not.toBe(one);
+    // Отпечаток считается по распакованному архиву — тот же, что у файлов
+    expect(b64(await packContentHash(parsePvpkArchive(buildPvpkArchive([b, a])!)!))).toBe(one);
+  });
+
+  it('merges refs with the same hash from different senders, keeps others apart', async () => {
+    resetPackRegistries();
+    const hash = b64(await packContentHash([a, b]));
+    const ref = (file: string, contentHash?: string) => ({
+      file_id: file, name: 'Котики', count: 2, ...(contentHash && { content_hash: contentHash }),
+    });
+    const first = registerReceivedPackRef(ref('f1', hash), 'alice@local');
+    expect(registerReceivedPackRef(ref('f2', hash), 'bob@local')).toBe(first);
+    // Тот же набор под другим именем — тоже он
+    expect(registerReceivedPackRef({ ...ref('f3', hash), name: 'Cats' }, 'carol@local')).toBe(first);
+    // Другое содержимое с тем же именем от другого человека — отдельный набор
+    const other = registerReceivedPackRef(ref('f4', b64(await packContentHash([a]))), 'dave@local');
+    expect(other).not.toBe(first);
+    // Старый клиент без отпечатка — по отправителю, как раньше
+    expect(registerReceivedPackRef(ref('f5'), 'erin@local')).not.toBe(first);
+    expect(getReceivedPackRef(first)?.file_id).toBe('f1');
+    resetPackRegistries();
   });
 });

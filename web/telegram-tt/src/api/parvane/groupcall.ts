@@ -17,7 +17,24 @@ export type WireGroupInvite = {
   group_call_id: string;
   participants: string[];
   media: CallMedia;
+  // Группа звонка (`v2g:<hex>`) и её название — для того, кто группу не знает
+  group?: string;
+  title?: string;
 };
+
+/**
+ * Название группы для входящего приглашения: известная группа — своё название из её журнала
+ * (приглашению не верим); группа указана, но неизвестна (новое устройство, не участник) —
+ * название из приглашения; старый клиент без группы — подбор по участникам, затем название.
+ */
+export function inviteGroupTitle(
+  invite: WireGroupInvite, nameOf: (group: string) => string | undefined, guess: () => string | undefined,
+): string | undefined {
+  const known = invite.group ? nameOf(invite.group) : undefined;
+  if (known) return known;
+  if (invite.group && invite.title) return invite.title;
+  return guess() || invite.title;
+}
 
 export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_failed' | 'busy' | 'declined';
 
@@ -48,6 +65,8 @@ type GroupCallCallbacks = {
 // допускает до 32, но аудио-mesh больше восьми деградирует
 export const GROUP_CALL_MAX_PARTICIPANTS = 8;
 const PEER_CONNECT_TIMEOUT_MS = 45000;
+// Сколько ждать восстановления попарного соединения после `disconnected`
+export const PEER_DISCONNECT_GRACE_MS = 10000;
 
 function buildSignedData(callId: string, sdp: string) {
   return `${callId}\n${sdp}`;
@@ -67,6 +86,8 @@ class MeshPeerSession {
   private isEnded = false;
 
   private connectTimer?: number;
+
+  private disconnectTimer?: number;
 
   constructor(
     private peer: string,
@@ -242,8 +263,17 @@ class MeshPeerSession {
       const s = pc.connectionState;
       if (s === 'connected') {
         window.clearTimeout(this.connectTimer);
+        window.clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = undefined;
         this.cb.onPeerState(this.peer, 'active');
-      } else if (s === 'failed' || s === 'disconnected' || s === 'closed') this.end(false);
+      } else if (s === 'disconnected') {
+        // Кратковременный провал сети: WebRTC часто восстанавливается сам — как у
+        // личного звонка, участника не выбрасываем сразу
+        window.clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = window.setTimeout(() => {
+          if (this.pc === pc && pc.connectionState === 'disconnected') this.end(false);
+        }, PEER_DISCONNECT_GRACE_MS);
+      } else if (s === 'failed' || s === 'closed') this.end(false);
     };
     return pc;
   }
@@ -292,6 +322,7 @@ class MeshPeerSession {
 
   private close() {
     window.clearTimeout(this.connectTimer);
+    window.clearTimeout(this.disconnectTimer);
     this.isEnded = true;
     const pc = this.pc;
     this.pc = undefined;
@@ -322,11 +353,17 @@ export class GroupCallEngine {
     return this.localStream;
   }
 
-  startCall(groupCallId: string, participants: string[], media: CallMedia) {
+  startCall(
+    groupCallId: string, participants: string[], media: CallMedia, group?: { address: string; title: string },
+  ) {
     participants.forEach((peer) => {
       if (peer !== this.self) {
         this.cb.sendSignal(peer, {
-          type: 'group_invite', group_call_id: groupCallId, participants, media,
+          type: 'group_invite',
+          group_call_id: groupCallId,
+          participants,
+          media,
+          ...(group && { group: group.address, title: group.title }),
         });
       }
     });

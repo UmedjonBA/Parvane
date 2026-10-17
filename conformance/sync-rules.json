@@ -1428,6 +1428,31 @@
         "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
         "android": "ОТКРЫТО (то же решение)"
       }
+    },
+    {
+      "id": "PACK-2",
+      "title": "Один набор стикеров от разных отправителей — один набор: отпечаток содержимого в PackRef, скачанный архив сверяется с ним",
+      "fields": {
+        "pack_ref_content_hash": 7
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/stickerPacks.ts (packContentHash, registerReceivedPackRef), messages.ts (buildPackRefForSet), provider.ts (resolveCustomPack)",
+        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "android": "ОТКРЫТО (то же решение)"
+      }
+    },
+    {
+      "id": "CALL-2",
+      "title": "Приглашение в групповой звонок несёт ссылку на группу и её название; известная группа — своё название, неизвестная — из приглашения",
+      "fields": {
+        "group_ring_group": 3,
+        "group_ring_title": 4
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/callMap.ts (callSignalToV2, groupInviteFromV2, cleanGroupTitle), groupcall.ts (inviteGroupTitle, startCall), calls.ts (startPendingGroupInvite)",
+        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "android": "ОТКРЫТО (то же решение)"
+      }
     }
   ]
 }

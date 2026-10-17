@@ -218,8 +218,10 @@ const SettingsPrivacy = ({
       setNewPasswordRepeat('');
       showNotification({ message: oldLang('ParvaneChangePasswordDone') });
     } catch (error) {
-      const reason = String((error as Error)?.message || error);
-      showNotification({ message: `${oldLang('ParvaneChangePasswordFailed')}: ${reason}` });
+      // Провайдер отдаёт причину ключом словаря (пусто — причина неизвестна)
+      const reasonKey = (error as Error)?.message;
+      const failed = oldLang('ParvaneChangePasswordFailed');
+      showNotification({ message: reasonKey ? `${failed}: ${oldLang(reasonKey)}` : failed });
     } finally {
       setIsPasswordBusy(false);
     }

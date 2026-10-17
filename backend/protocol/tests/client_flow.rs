@@ -1050,12 +1050,14 @@ fn call_signal_sealed_roundtrip() {
             participants: ["alice@local", "bob@local", "carol@local"].iter().map(|a| UserRef { address: a.to_string() }).collect(),
             video: true,
             group: None,
+            title: "Kruzhok po sredam".into(),
         })),
         group_call_id: vec![],
     };
     let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@local", &ring));
     assert_eq!((reqs[0].chan, reqs[0].method), (Chan::Anon, "call.ring_sealed"));
     assert!(!reqs[0].body.windows(11).any(|w| w == b"carol@local"), "состав звонка виден серверу");
+    assert!(!reqs[0].body.windows(17).any(|w| w == b"Kruzhok po sredam"), "название группы видно серверу");
     let ev = bob.open_record(&live_records(&reqs[0])[0]).unwrap();
     assert!(matches!(ev.as_slice(), [Event::Call { from, call_id: id, signal, .. }] if from == "alice@local" && id.as_slice() == group_call && signal == &ring), "{ev:?}");
 

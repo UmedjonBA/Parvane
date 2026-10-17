@@ -192,7 +192,8 @@ try {
   await page.getByRole('menuitem').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   const channelMenu = await page.getByRole('menuitem').allInnerTexts();
   assert.deepEqual(
-    channelMenu.filter((text) => /Boost|^lng_|^[A-Z][a-z]+[A-Z][A-Za-z]+$/.test(text.trim())), [],
+    channelMenu.filter((text) => /Boost|Video chat|Live stream|^lng_|^[A-Z][a-z]+[A-Z][A-Za-z]+$/.test(text.trim())),
+    [],
     `channel menu: boost or raw key items: ${JSON.stringify(channelMenu)}`,
   );
   await page.keyboard.press('Escape');

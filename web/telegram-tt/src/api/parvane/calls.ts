@@ -7,7 +7,7 @@ import {
 } from './callengine';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import {
-  GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, type WireGroupInvite,
+  GROUP_CALL_MAX_PARTICIPANTS, GroupCallEngine, type GroupPeerState, inviteGroupTitle, type WireGroupInvite,
 } from './groupcall';
 import {
   buildWireEvent, TOPIC_CALL_ICE_REQUEST, type WireCallRecord, type WireIceServer,
@@ -103,6 +103,8 @@ export function createCallController(deps: CallDependencies) {
     groupCallId: string;
     participants: string[];
     media: CallMedia;
+    // Название для окна звонка (своё по группе, иначе из приглашения)
+    title?: string;
     // `isAuthenticated` — сигнал пришёл по v2 (отправителя проверил движок)
     buffered: Array<{ from: string; signal: WireCallSignal; isAuthenticated?: boolean }>;
     timer?: number;
@@ -666,7 +668,7 @@ export function createCallController(deps: CallDependencies) {
     }
     clearPendingGroupInvite();
     notifyOwnDevices(pending.groupCallId, 'answered_elsewhere');
-    ensureGroupWindowState(pending.groupCallId, pending.participants);
+    ensureGroupWindowState(pending.groupCallId, pending.participants, pending.title);
     groupEngine.joinMesh(pending.groupCallId, pending.participants, pending.media);
     pending.buffered.forEach(({ from, signal, isAuthenticated }) => {
       void groupEngine?.handleSignal(from, signal, isAuthenticated).catch((error) => {
@@ -708,7 +710,12 @@ export function createCallController(deps: CallDependencies) {
     }, getRingTimeoutMs());
     const others = invite.participants.filter((peer) => peer !== store.self);
     callWindow.pendingGroup = true;
-    callWindow.pendingGroupTitle = findGroupTitleForParticipants(invite.participants);
+    callWindow.pendingGroupTitle = inviteGroupTitle(
+      invite,
+      (group) => store.getGroupInfo(group)?.name,
+      () => findGroupTitleForParticipants(invite.participants),
+    );
+    pendingGroupInvite.title = callWindow.pendingGroupTitle;
     callWindow.incoming = { from, callId: invite.group_call_id, media: invite.media };
     callWindow.peerName = others.map((peer) => store.getDisplayName(peer)).join(', ');
     callWindow.state = 'incoming';
@@ -793,7 +800,9 @@ export function createCallController(deps: CallDependencies) {
     }
     const groupCallId = crypto.randomUUID();
     ensureGroupWindowState(groupCallId, members, info.name);
-    groupEngine.startCall(groupCallId, members, isVideo ? 'video' : 'audio');
+    groupEngine.startCall(
+      groupCallId, members, isVideo ? 'video' : 'audio', { address: groupAddress, title: info.name },
+    );
     return true;
   }
 

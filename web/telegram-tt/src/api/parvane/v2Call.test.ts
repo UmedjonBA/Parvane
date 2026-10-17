@@ -86,6 +86,31 @@ describe('v2: сигнал звонка', () => {
     expect(callSignalToV2({ ...invite, group_call_id: 'not-a-uuid' })).toBeUndefined();
   });
 
+  // Название группы — тому, кто её не знает (новое устройство, не участник)
+  it('приглашение несёт группу и её название; название очищено и не длиннее 255 байт', () => {
+    const invite = {
+      type: 'group_invite' as const,
+      group_call_id: GROUP_CALL_ID,
+      participants: ['alice@local', 'bob@local'],
+      media: 'audio' as const,
+      group: `v2g:${'ab'.repeat(32)}`,
+      title: 'Хор по средам',
+    };
+    const v2 = callSignalToV2(invite, undefined, 'local');
+    expect(v2?.group_ring).toMatchObject({ group: { domain: 'local' }, title: 'Хор по средам' });
+    expect(groupInviteFromV2(v2!)).toEqual(invite);
+    // Без домена ссылку на группу не собрать — название всё равно едет
+    expect(callSignalToV2(invite)?.group_ring).not.toHaveProperty('group');
+    // Управляющие и bidi-символы убраны, длина — по байтам UTF-8 (кириллица — 2 байта)
+    const dirty = callSignalToV2({ ...invite, title: `\u202eЖ\u0007${'ж'.repeat(300)}` }, undefined, 'local');
+    const title = dirty!.group_ring!.title!;
+    expect(title.startsWith('Ж ж')).toBe(true);
+    expect(new TextEncoder().encode(title).length).toBeLessThanOrEqual(255);
+    // Пустое после очистки название не отправляется; чужой мусор в адресе группы — тоже
+    expect(callSignalToV2({ ...invite, title: '\u0000 ', group: 'v2g:zz' }, undefined, 'local')?.group_ring)
+      .toEqual({ participants: [{ address: 'alice@local' }, { address: 'bob@local' }], video: false });
+  });
+
   it('попарный сигнал mesh несёт id группового звонка', () => {
     const offer = callSignalToV2({
       type: 'invite', call_id: CALL_ID, media: 'audio', sdp: 'v=0', sig: 'signature',

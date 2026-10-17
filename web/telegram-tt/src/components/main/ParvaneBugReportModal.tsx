@@ -25,6 +25,7 @@ import {
 import { callApi } from '../../api/gramjs';
 import buildAttachment from '../middle/composer/helpers/buildAttachment';
 
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
 import Button from '../ui/Button';
@@ -87,6 +88,7 @@ if (ARE_DIAG_HOOKS_ENABLED) {
 
 const ParvaneBugReportModal: FC = () => {
   const { sendMessage, showNotification } = getActions();
+  const lang = useLang();
   const [isOpen, setIsOpen] = useState(false);
   const [description, setDescription] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -138,11 +140,11 @@ const ParvaneBugReportModal: FC = () => {
         text: `🐞 ${text}`,
         attachments: [attachment],
       });
-      showNotification({ message: 'Bug report sent. Thank you!' });
+      showNotification({ message: lang('ParvaneBugReportSent') });
       setDescription('');
       setIsOpen(false);
-    } catch (error) {
-      showNotification({ message: `Bug report failed: ${error instanceof Error ? error.message : String(error)}` });
+    } catch {
+      showNotification({ message: lang('ParvaneBugReportFailed') });
     } finally {
       setIsSending(false);
     }
@@ -152,16 +154,13 @@ const ParvaneBugReportModal: FC = () => {
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title="Report a Bug"
+      title={lang('MenuReportBug')}
       className="narrow"
     >
-      <p>
-        Describe what happened and what you did right before it. Your last actions in the app
-        (without message contents) will be attached automatically.
-      </p>
+      <p>{lang('ParvaneBugReportAbout')}</p>
       <TextArea
         value={description}
-        placeholder="What went wrong?"
+        placeholder={lang('ParvaneBugReportPlaceholder')}
         onChange={(e) => setDescription(e.currentTarget.value)}
         maxLength={2000}
       />
@@ -172,9 +171,9 @@ const ParvaneBugReportModal: FC = () => {
           disabled={!description.trim() || isSending}
           onClick={handleSend}
         >
-          {isSending ? 'Sending…' : 'Send'}
+          {isSending ? lang('ParvaneBugReportSending') : lang('Send')}
         </Button>
-        <Button className="confirm-dialog-button" isText onClick={handleClose}>Cancel</Button>
+        <Button className="confirm-dialog-button" isText onClick={handleClose}>{lang('Cancel')}</Button>
       </div>
     </Modal>
   );

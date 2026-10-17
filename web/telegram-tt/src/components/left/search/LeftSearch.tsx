@@ -55,8 +55,7 @@ type TabInfo = {
 const TABS: TabInfo[] = [
   { type: GlobalSearchContent.ChatList, key: 'SearchTabChats' },
   { type: GlobalSearchContent.ChannelList, key: 'SearchTabChannels' },
-  { type: GlobalSearchContent.BotApps, key: 'SearchTabApps' },
-  { type: GlobalSearchContent.PublicPosts, key: 'SearchTabPublicPosts' },
+  // Parvane: вкладок «Приложения» (мини-приложения ботов) и «Публичные посты» нет — этих функций нет
   { type: GlobalSearchContent.Media, key: 'SearchTabMedia' },
   { type: GlobalSearchContent.Links, key: 'SearchTabLinks' },
   { type: GlobalSearchContent.Files, key: 'SearchTabFiles' },
@@ -66,7 +65,7 @@ const TABS: TabInfo[] = [
 
 const CHAT_TABS: TabInfo[] = [
   { type: GlobalSearchContent.ChatList, key: 'SearchTabMessages' },
-  ...TABS.slice(3), // Skip ChatList, ChannelList and BotApps, replaced with All Messages
+  ...TABS.slice(2), // Skip ChatList and ChannelList, replaced with All Messages
 ];
 
 const LeftSearch: FC<OwnProps & StateProps> = ({

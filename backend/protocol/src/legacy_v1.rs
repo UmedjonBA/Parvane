@@ -257,6 +257,7 @@ fn pack_ref(v: Option<&Value>) -> Option<PackRef> {
         nonce: b64(s(p, "nonce")).unwrap_or_default(),
         // v1 качает наборы по гранту/публично — capability нет.
         capability: Vec::new(),
+        content_hash: Vec::new(),
     })
 }
 

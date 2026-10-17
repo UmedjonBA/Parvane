@@ -30,6 +30,8 @@ export type WirePackRef = {
   nonce?: string;
   // Секрет скачивания блоба (v2, D-08): только в E2E-содержимом v2-чата
   capability?: string;
+  // Отпечаток содержимого набора, base64 (PACK-2)
+  content_hash?: string;
 };
 
 export type WireMessageContent = {

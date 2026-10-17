@@ -201,8 +201,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
     enterMessageSelectMode,
     sendBotCommand,
     restartBot,
-    requestMasterAndJoinGroupCall,
-    createGroupCall,
     openLinkedChat,
     openAddContactDialog,
     openFrozenAccountModal,
@@ -361,22 +359,6 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
   const handleViewAsTopicsClick = useLastCallback(() => {
     openChat({ id: undefined });
     setViewForumAsMessages({ chatId, isEnabled: false });
-    closeMenu();
-  });
-
-  const handleEnterVoiceChatClick = useLastCallback(() => {
-    if (isAccountFrozen) {
-      openFrozenAccountModal();
-    } else if (canCreateVoiceChat) {
-      // TODO Show popup to schedule
-      createGroupCall({
-        chatId,
-      });
-    } else {
-      requestMasterAndJoinGroupCall({
-        chatId,
-      });
-    }
     closeMenu();
   });
 
@@ -725,14 +707,7 @@ const HeaderMenuContainer: FC<OwnProps & StateProps> = ({
               </MenuItem>
             )
           )}
-          {(canEnterVoiceChat || canCreateVoiceChat) && (
-            <MenuItem
-              icon="voice-chat"
-              onClick={handleEnterVoiceChatClick}
-            >
-              {oldLang(canCreateVoiceChat ? 'StartVoipChat' : 'VoipGroupJoinCall')}
-            </MenuItem>
-          )}
+          {/* Parvane: видеочатов-трансляций Telegram нет (вне копии) — групповой звонок кнопкой в шапке */}
           {hasLinkedChat && (
             <MenuItem
               icon={isChannel ? 'comments' : 'channel'}

@@ -87,8 +87,12 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
           />
           {Boolean(chat?.joinRequests?.length) && (
             <div className="bulk-actions">
-              <Button className="bulk-action-button" onClick={openAcceptAllDialog}>Accept all</Button>
-              <Button className="bulk-action-button" onClick={openRejectAllDialog} isText>Dismiss all</Button>
+              <Button className="bulk-action-button" onClick={openAcceptAllDialog}>
+                {lang('ParvaneJoinRequestsAcceptAll')}
+              </Button>
+              <Button className="bulk-action-button" onClick={openRejectAllDialog} isText>
+                {lang('ParvaneJoinRequestsDismissAll')}
+              </Button>
             </div>
           )}
         </Island>
@@ -120,15 +124,15 @@ const ManageJoinRequests: FC<OwnProps & StateProps> = ({
       <ConfirmDialog
         isOpen={isAcceptAllDialogOpen}
         onClose={closeAcceptAllDialog}
-        title="Accept all requests?"
-        text="Are you sure you want to accept all requests?"
+        title={lang('ParvaneJoinRequestsAcceptAllTitle')}
+        text={lang('ParvaneJoinRequestsAcceptAllText')}
         confirmHandler={handleAcceptAllRequests}
       />
       <ConfirmDialog
         isOpen={isRejectAllDialogOpen}
         onClose={closeRejectAllDialog}
-        title="Reject all requests?"
-        text="Are you sure you want to reject all requests?"
+        title={lang('ParvaneJoinRequestsRejectAllTitle')}
+        text={lang('ParvaneJoinRequestsRejectAllText')}
         confirmHandler={handleRejectAllRequests}
       />
     </div>

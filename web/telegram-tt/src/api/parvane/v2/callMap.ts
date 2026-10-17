@@ -8,6 +8,7 @@ import type { WireCallSignal } from '../callengine';
 import type { WireGroupInvite } from '../groupcall';
 
 import { decodeIceCandidate, encodeIceCandidate } from '../iceCandidate';
+import { base64ToBytes, bytesToBase64 } from './base64';
 import { b64ToUuid, uuidToB64 } from './contentMap';
 
 type V2Hangup = { reason?: string | number; durationS?: number; duration_s?: number };
@@ -36,7 +37,29 @@ export type V2CallSignal = {
 
 type V2MediaState = { audioMuted?: boolean; audio_muted?: boolean; videoMuted?: boolean; video_muted?: boolean };
 
-type V2GroupRing = { participants?: { address?: string }[]; video?: boolean };
+type V2GroupRing = {
+  participants?: { address?: string }[];
+  video?: boolean;
+  group?: { domain?: string; id?: string };
+  title?: string;
+};
+
+const GROUP_ADDRESS_REGEX = /^v2g:([0-9a-f]{2}){1,64}$/;
+const GROUP_TITLE_MAX_BYTES = 255;
+
+/** Название группы из сигнала: без управляющих и bidi-символов, ≤ 255 байт UTF-8 (`max_len` схемы). */
+export function cleanGroupTitle(title: string | undefined): string {
+  // eslint-disable-next-line no-control-regex
+  const plain = (title || '').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const encoder = new TextEncoder();
+  let out = '';
+  for (const ch of plain) {
+    if (encoder.encode(out + ch).length > GROUP_TITLE_MAX_BYTES) break;
+    out += ch;
+  }
+  return out.trim();
+}
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REASON_NORMAL = 'HANGUP_REASON_NORMAL';
@@ -63,15 +86,20 @@ const REASON_BY_NUMBER = [
  * `groupCallId` — сигнал попарного соединения внутри группового звонка.
  */
 export function callSignalToV2(
-  signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
+  signal: WireCallSignal | WireGroupInvite, groupCallId?: string, domain?: string,
 ): V2CallSignal | undefined {
   if (signal.type === 'group_invite') {
     if (!UUID_REGEX.test(signal.group_call_id)) return undefined;
+    const title = cleanGroupTitle(signal.title);
+    const group = domain && signal.group && GROUP_ADDRESS_REGEX.test(signal.group)
+      ? { domain, id: bytesToBase64(hexToBytes(signal.group.slice(4))) } : undefined;
     return {
       call_id: uuidToB64(signal.group_call_id),
       group_ring: {
         participants: signal.participants.map((address) => ({ address })),
         video: signal.media === 'video',
+        ...(group && { group }),
+        ...(title && { title }),
       },
     };
   }
@@ -124,11 +152,15 @@ export function groupInviteFromV2(signal: V2CallSignal): WireGroupInvite | undef
   const ring = signal.groupRing || signal.group_ring;
   const groupCallId = b64ToUuid(signal.callId || signal.call_id);
   if (!ring || !groupCallId) return undefined;
+  const groupId = ring.group?.id ? base64ToBytes(ring.group.id) : undefined;
+  const title = cleanGroupTitle(ring.title);
   return {
     type: 'group_invite',
     group_call_id: groupCallId,
     participants: (ring.participants || []).map(({ address }) => address || '').filter(Boolean),
     media: ring.video ? 'video' : 'audio',
+    ...(groupId?.length && groupId.length <= 64 && { group: `v2g:${bytesToHex(groupId)}` }),
+    ...(title && { title }),
   };
 }
 
@@ -175,4 +207,12 @@ export function callSignalFromV2(signal: V2CallSignal): WireCallSignal | undefin
     return { type: 'hangup', call_id: callId };
   }
   return undefined;
+}
+
+function hexToBytes(hex: string) {
+  return Uint8Array.from(hex.match(/../g) || [], (byte) => parseInt(byte, 16));
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }

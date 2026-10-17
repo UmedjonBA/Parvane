@@ -13,6 +13,7 @@ import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
+import { bytesToBase64 } from './v2/base64';
 import { withAutoEntities } from './autoEntities';
 import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
@@ -30,6 +31,8 @@ import {
   getPendingFiles,
   isCustomPackSetId,
   isEmojiPackSetId,
+  packContentHash,
+  parsePvpkArchive,
 } from './stickerPacks';
 import { buildBuiltinEmojiPack, getBuiltinEmojiSetId } from './stickers';
 import { buildWebPage } from './store';
@@ -439,6 +442,9 @@ export function createMessageController(deps: MessageDependencies) {
     if (reusable) return reusable.ref;
     const archive = buildPvpkArchive(pack.files);
     if (!archive) return undefined;
+    // PACK-2: отпечаток — по тому, что получатель распакует из архива
+    const packed = parsePvpkArchive(archive);
+    const contentHash = packed ? bytesToBase64(await packContentHash(packed)) : undefined;
     const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
       new Blob([archive as BlobPart], { type: 'application/octet-stream' }),
       'pack.pvpk',
@@ -455,6 +461,7 @@ export function createMessageController(deps: MessageDependencies) {
       key: mediaKeys?.keyB64,
       nonce: mediaKeys?.nonceB64,
       capability,
+      ...(contentHash && { content_hash: contentHash }),
     };
     uploadedPackRefs.delete(cacheKey);
     uploadedPackRefs.set(cacheKey, [...cachedRefs, { recipients, ref }]);

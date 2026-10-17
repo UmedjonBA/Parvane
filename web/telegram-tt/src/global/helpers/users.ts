@@ -5,6 +5,7 @@ import { ANONYMOUS_USER_ID, SERVICE_NOTIFICATIONS_USER_ID } from '../../config';
 import { formatFullDate, formatTime } from '../../util/dates/oldDateFormat';
 import { DAY } from '../../util/dates/units';
 import { orderBy } from '../../util/iteratees';
+import { getTranslationFn } from '../../util/localization';
 import { formatPhoneNumber } from '../../util/phoneNumber';
 import { getServerTime, getServerTimeOffset } from '../../util/serverTime';
 
@@ -36,7 +37,7 @@ export function getUserFullName(user?: ApiUser) {
   }
 
   if (isDeletedUser(user)) {
-    return 'Deleted Account';
+    return getTranslationFn()('HiddenName');
   }
 
   switch (user.type) {

@@ -67,6 +67,25 @@ describe('ParvaneStore messages', () => {
     expect(store.allocateMessageId('c1', 'uuid-saved', now - 30, mine + 7)).toBe(mine + 7);
   });
 
+  it('takes placeholder texts for deleted and undecryptable messages from the dictionary', () => {
+    const store = new ParvaneStore();
+    store.self = 'me@local';
+    const row = (id: string, extra: Partial<WireStoredMessage>) => ({
+      id, from: 'peer@local', to: 'me@local', content: { kind: 'text', text: 'x' }, ts: 100, ...extra,
+    });
+    const textOf = (m: ApiMessage) => m.content.text?.text;
+    // Словарь ещё не подгружен — английский запасной текст, не русская строка в коде
+    expect(textOf(store.buildApiMessage(row('a', { deleted: true })))).toBe('🗑 Message deleted');
+    const ru: Record<string, string> = {
+      ParvaneMessageDeleted: '🗑 Сообщение удалено',
+      ParvaneUndecryptable: '🔒 Не удалось расшифровать сообщение',
+    };
+    store.getLangString = (key) => ru[key];
+    expect(textOf(store.buildApiMessage(row('b', { deleted: true })))).toBe('🗑 Сообщение удалено');
+    const encrypted = row('c', { content: { kind: 'encrypted' } });
+    expect(textOf(store.buildApiMessage(encrypted))).toBe('🔒 Не удалось расшифровать сообщение');
+  });
+
   it('sorts restored rows by the saved place, then by time', () => {
     const row = (id: string, ts: number, order?: number) => ({
       id, from: 'a', to: 'b', content: { kind: 'text', text: id }, ts, order,

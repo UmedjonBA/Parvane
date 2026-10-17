@@ -53,6 +53,10 @@ function classifyTexts(text, found) {
 async function walkSettingsScreens(page) {
   const found = { rawKeys: new Set(), english: new Set() };
   const settings = page.locator('#Settings');
+  // Экран «Язык» уходит анимацией: пока он виден, его пункты («Не переводить») попадали бы в обход
+  await settings.locator('.settings-language').waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS })
+    .catch(() => undefined);
+  await page.waitForTimeout(500);
   const labelsOf = async () => (await settings.locator('.ListItem:visible').allInnerTexts())
     .map((text) => text.split('\n')[0].trim()).filter(Boolean);
   classifyTexts(await settings.innerText(), found);

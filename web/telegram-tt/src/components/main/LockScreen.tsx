@@ -18,7 +18,6 @@ import AnimatedIconWithPreview from '../common/AnimatedIconWithPreview';
 import PasswordForm from '../common/PasswordForm';
 import Button from '../ui/Button';
 import ConfirmDialog from '../ui/ConfirmDialog';
-import Link from '../ui/Link';
 
 import styles from './LockScreen.module.scss';
 
@@ -101,11 +100,7 @@ const LockScreen: FC<OwnProps & StateProps> = ({
   function renderLogoutPrompt() {
     return (
       <div className={styles.help}>
-        <p>
-          <Link onClick={openSignOutConfirmation}>Log out</Link>
-          {' '}
-          if you don&apos;t remember your passcode.
-        </p>
+        <p>{lang('ParvaneLockForgotPasscode')}</p>
         <p>
           <Button color="translucent" size="tiny" isText onClick={openSignOutConfirmation}>
             {lang('AccountSettings.Logout')}

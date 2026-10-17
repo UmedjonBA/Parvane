@@ -49,6 +49,12 @@ const CHAT_MODE_FALLBACK: Record<string, string> = {
   ParvaneL2Disabled: '{user} disabled enhanced privacy',
 };
 
+// Заглушки сообщений, пока словарь не подгружен (строки — `ParvaneMessageDeleted`, `ParvaneUndecryptable`)
+const STUB_FALLBACK = {
+  ParvaneMessageDeleted: '🗑 Message deleted',
+  ParvaneUndecryptable: '🔒 Could not decrypt this message',
+};
+
 export class ParvaneStore {
   self = '';
 
@@ -572,7 +578,7 @@ export class ParvaneStore {
       chatId,
       content: isChatMode ? this.buildChatModeContent(stored, isOutgoing)
         : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
-          : buildMessageContent(stored),
+          : buildMessageContent(stored, (key) => this.getLangString?.(key)),
       date: stored.ts,
       // Служебное сообщение о режиме чата не шумит (без звука уведомления)
       isSilent: isChatMode ? true : undefined,
@@ -692,19 +698,18 @@ export function setTaskOfferResolver(resolve: typeof resolveTaskOffer) {
   resolveTaskOffer = resolve;
 }
 
-function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
+function buildMessageContent(
+  stored: WireStoredMessage, langString: (key: string) => string | undefined = () => undefined,
+): ApiMessage['content'] {
   const { content, deleted, ts } = stored;
   if (deleted) {
-    return { text: { text: '🗑 Сообщение удалено' } };
+    return { text: { text: langString('ParvaneMessageDeleted') || STUB_FALLBACK.ParvaneMessageDeleted } };
   }
   // Расшифровать не удалось (нет ключа/сессии, продвинутый ратчет). Раньше
   // такое сообщение просто не показывалось, и после исчерпания попыток
   // терялось насовсем — спека требует видимую заглушку, а не пустоту
   if (content.kind === 'encrypted' || content.kind === 'group_encrypted') {
-    // Текст здесь захардкожен так же, как у ветки `deleted` выше: импорт
-    // lang-провайдера в слой API тянет за собой UI-модули. Локализация
-    // обеих заглушек — отдельной задачей
-    return { text: { text: '🔒 Не удалось расшифровать сообщение' } };
+    return { text: { text: langString('ParvaneUndecryptable') || STUB_FALLBACK.ParvaneUndecryptable } };
   }
   // Подпись: entities едут в проводе только после правки (`editMessage`); ссылки,
   // @ники и #хештеги размечаются на клиенте, как в тексте

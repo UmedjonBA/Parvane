@@ -47,6 +47,9 @@ const MIME_BY_EXT: Record<string, string> = {
 
 // pack_ref принятых стикеров: setId → ref (до установки — источник архива)
 const receivedRefBySetId = new Map<string, WirePackRef>();
+// PACK-2: отпечаток содержимого (base64) → набор. Одинаковый набор от разных
+// отправителей — один набор; архив сверяется с отпечатком при скачивании
+const setIdByContentHash = new Map<string, string>();
 // Кто прислал набор: имя пака не уникально, и два разных пака с одинаковым
 // именем от РАЗНЫХ отправителей — это два разных набора. Иначе сырое имя
 // второго становилось алиасом набора первого, и его docId резолвились в чужие
@@ -187,6 +190,38 @@ export function parsePvpkArchive(bytes: Uint8Array): PackFile[] | undefined {
   return files.length ? files : undefined;
 }
 
+// ── отпечаток содержимого (PACK-2) ───────────────────────────────────────────
+// SHA-256 по файлам, отсортированным по имени (байты UTF-8): `имя ‖ 0x00 ‖ u32LE
+// размер ‖ SHA-256(файл)` подряд. От порядка файлов и сборки архива не зависит
+
+function compareBytes(a: Uint8Array, b: Uint8Array) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
+
+export async function packContentHash(files: PackFile[]): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const entries = files.map((file) => ({ name: encoder.encode(file.name), data: file.data }))
+    .sort((a, b) => compareBytes(a.name, b.name));
+  const parts: Uint8Array[] = [];
+  for (const { name, data } of entries) {
+    const size = new Uint8Array(4);
+    new DataView(size.buffer).setUint32(0, data.byteLength, true);
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+    parts.push(name, new Uint8Array([0]), size, digest);
+  }
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
+  }
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', joined));
+}
+
 // ── persist установленных паков (шифрованный IndexedDB, на пользователя) ─────
 // Файлы паков — полученное от других медиа: на диске только шифртекстом
 // (SecureE2eStorage, non-extractable ключ устройства). Раньше лежали открыто в
@@ -316,6 +351,8 @@ function setIdForSender(name: string, from: string) {
 
 export function registerReceivedPackRef(ref: WirePackRef, from?: string): string {
   const name = sanitizePackName(ref.name || 'Pack');
+  const sameContent = ref.content_hash ? setIdByContentHash.get(ref.content_hash) : undefined;
+  if (sameContent) return sameContent;
   const baseSetId = getSetIdForPackName(name);
   const owner = from || '';
   const knownOwner = ownerBySetId.get(baseSetId);
@@ -327,6 +364,7 @@ export function registerReceivedPackRef(ref: WirePackRef, from?: string): string
   if (!receivedRefBySetId.has(setId)) {
     receivedRefBySetId.set(setId, { ...ref, name });
     ownerBySetId.set(setId, owner);
+    if (ref.content_hash) setIdByContentHash.set(ref.content_hash, setId);
     // Короткое имя ведёт на первый пришедший набор — как и раньше
     if (!setIdByShortName.has(name)) setIdByShortName.set(name, setId);
   }
@@ -409,6 +447,7 @@ export function getPendingFiles(setId: string) {
 export function resetPackRegistries() {
   installedCache.clear();
   receivedRefBySetId.clear();
+  setIdByContentHash.clear();
   ownerBySetId.clear();
   pendingFilesBySetId.clear();
   setIdByShortName.clear();

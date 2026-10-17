@@ -102,8 +102,8 @@ const TaskOfferModal = ({ isOpen, chatId, onClose }: OwnProps) => {
         },
       });
       onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } catch {
+      setError(lang('TaskOfferSendFailed'));
     } finally {
       setIsSending(false);
     }

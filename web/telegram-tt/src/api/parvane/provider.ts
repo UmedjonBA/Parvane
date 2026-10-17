@@ -36,6 +36,7 @@ import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
+import { bytesToBase64 } from './v2/base64';
 import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
@@ -103,6 +104,7 @@ import {
   isCustomPackSetId,
   isEmojiPackSetId,
   loadInstalledPacks,
+  packContentHash,
   parsePvpkArchive,
   removeInstalledPack,
   resetPackRegistries,
@@ -382,6 +384,16 @@ let serverInfoPromise: Promise<ServerInfo> | undefined;
 // Ник нового аккаунта (зеркало valid_nick в identity): 2–64 символа, строчная
 // латиница, цифры, _ . -; первый символ — буква или цифра
 const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
+
+// Причины отказа смены пароля: формулировки моста v2 (`bridgeErrorText`) → ключи словаря
+const PASSWORD_CHANGE_REASONS: Record<string, string> = {
+  'неверный пароль': 'ParvaneChangePasswordWrong',
+  'пароль короче 8 символов': 'ParvaneChangePasswordShort',
+  'новый пароль совпадает со старым': 'ParvaneChangePasswordSame',
+  'слишком много попыток, попробуйте позже': 'ParvaneTryLater',
+  'сервер временно недоступен': 'ParvaneServerUnavailable',
+};
+
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 let isCallIdentityReady = false;
 const polls = new PollStore();
@@ -1044,6 +1056,12 @@ async function resolveCustomPack(setId: string): Promise<{ pack: StoredPack; isI
   if (!media) return undefined;
   const files = parsePvpkArchive(new Uint8Array(await media.blob.arrayBuffer()));
   if (!files) return undefined;
+  // PACK-2: набор объединён с другими по отпечатку — архив обязан ему соответствовать,
+  // иначе отправитель мог бы заявить чужой отпечаток и подменить картинки
+  if (ref.content_hash && bytesToBase64(await packContentHash(files)) !== ref.content_hash) {
+    logDebug(`пак ${setId}: содержимое архива не совпало с отпечатком — отвергнут`);
+    return undefined;
+  }
   const rawName = getEmojiPackRawName(setId);
   const pack: StoredPack = {
     // Нормализованное имя: setId установленного пака считается отсюда
@@ -3566,14 +3584,15 @@ const methods = {
     }
   },
 
+  /** Ошибка — ключ словаря с причиной (`ParvaneChangePassword*`), пусто — причина неизвестна. */
   async parvaneChangePassword({ oldPassword, newPassword }: { oldPassword: string; newPassword: string }) {
-    if (!connection) throw new Error('нет соединения');
+    if (!connection) throw new Error('ParvaneNoConnection');
     const raw = await connection.request(
       TOPIC_IDENTITY_PASSWORD_CHANGE,
       JSON.stringify({ token, old_password: oldPassword, new_password: newPassword }),
     );
     const response = JSON.parse(raw) as { ok: boolean; error?: string };
-    if (!response.ok) throw new Error(response.error || 'identity отклонил смену пароля');
+    if (!response.ok) throw new Error(PASSWORD_CHANGE_REASONS[response.error || ''] || '');
     // P-39: пароль не хранится — обновлять нечего
     return true;
   },

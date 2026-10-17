@@ -19,6 +19,7 @@ export type V2Entity = {
 };
 export type V2PackRef = {
   file_id?: string; name?: string; count?: number; key?: string; nonce?: string; capability?: string;
+  content_hash?: string; contentHash?: string;
 };
 export type V2Media = {
   kind: string;
@@ -170,7 +171,13 @@ function entitiesFromV2(list?: V2Entity[]): WireTextEntity[] | undefined {
 }
 
 const packToV2 = (p?: WirePackRef): V2PackRef | undefined => (p ? {
-  file_id: p.file_id, name: p.name, count: p.count, key: p.key, nonce: p.nonce, capability: p.capability,
+  file_id: p.file_id,
+  name: p.name,
+  count: p.count,
+  key: p.key,
+  nonce: p.nonce,
+  capability: p.capability,
+  ...(p.content_hash && { content_hash: p.content_hash }),
 } : undefined);
 
 const packFromV2 = (p?: V2PackRef): WirePackRef | undefined => (p?.file_id ? {
@@ -180,6 +187,7 @@ const packFromV2 = (p?: V2PackRef): WirePackRef | undefined => (p?.file_id ? {
   key: p.key || '',
   nonce: p.nonce || '',
   capability: p.capability || undefined,
+  content_hash: p.content_hash || p.contentHash || undefined,
 } : undefined);
 
 // ── waveform: number[] (0..31) ↔ bytes ─────────────────────────────────────

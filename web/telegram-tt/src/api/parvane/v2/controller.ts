@@ -2787,7 +2787,7 @@ export function createV2Controller(deps: Deps) {
     // понижается (D-13)
     const isGroup = signal.type === 'group_invite' || groupCallId !== undefined;
     if (isGroup && !client?.hasPeerDeliveryKey(to) && !(await acquirePeerKey(to))) return false;
-    const v2Signal = callSignalToV2(signal, groupCallId);
+    const v2Signal = callSignalToV2(signal, groupCallId, serverDomain);
     // Собеседник на v2, а сигнал по v2 не выразить — по v1 не понижаем (D-13)
     if (!v2Signal) throw new V2Error('ERROR_CODE_INVALID');
     await serial(async () => {
