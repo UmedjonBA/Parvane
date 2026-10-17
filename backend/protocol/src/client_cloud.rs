@@ -580,17 +580,51 @@ impl Client {
         if before == Some(level) {
             return Ok(vec![]);
         }
+        // Грант применяется локально до сборки сообщений участнику; если сборка
+        // попросит недостающее (`Need`: жетон первому сообщению незнакомцу) или
+        // упадёт, контейнер возвращается как был — иначе повтор хоста видел бы
+        // роль уже выданной и не отправлял ни гранта, ни ключа, ни приглашения.
+        let saved = (c.access.clone(), c.grants.len());
         let grant = dom::sign_grant(&self.acc, &c.access, &grantee, level, ts_ms)?;
         c.access.apply(&grant, &resolve, &no_groups)?;
         c.grants.push(grant.clone());
         let container = c.access.container_ref()?.clone();
         let name = c.state.name().to_string();
-        let mut out = vec![OutRequest::id("domain.grant.set", &DomainGrantSetRequest { grant: Some(grant) })];
-        if before.is_some_and(|l| l >= GrantLevel::Write) && !write {
-            out.extend(self.cloud_rotate(id, ts_ms)?);
-            return Ok(out);
+        let r = self.cloud_grant_messages(id, user, write, before, container, name, invite_text, ts_ms);
+        match r {
+            Ok(msgs) => {
+                let mut out = vec![OutRequest::id("domain.grant.set", &DomainGrantSetRequest { grant: Some(grant) })];
+                out.extend(msgs);
+                Ok(out)
+            }
+            Err(e) => {
+                if let Some(c) = self.cloud.get_mut(id) {
+                    c.access = saved.0;
+                    c.grants.truncate(saved.1);
+                }
+                Err(e)
+            }
         }
-        out.extend(self.cloud_share_with_user(id, user, true)?);
+    }
+
+    /// Сообщения к гранту: смена эпохи при понижении редактора, иначе ключи всех
+    /// эпох участнику и (новому) приглашение.
+    #[allow(clippy::too_many_arguments)]
+    fn cloud_grant_messages(
+        &mut self,
+        id: &[u8],
+        user: &str,
+        write: bool,
+        before: Option<GrantLevel>,
+        container: Ref,
+        name: String,
+        invite_text: &str,
+        ts_ms: i64,
+    ) -> CResult<Vec<OutRequest>> {
+        if before.is_some_and(|l| l >= GrantLevel::Write) && !write {
+            return self.cloud_rotate(id, ts_ms);
+        }
+        let mut out = self.cloud_share_with_user(id, user, true)?;
         if before.is_none() {
             let invite = CloudInvite { container: Some(container), name, role: if write { 2 } else { 1 }, text: invite_text.to_string() };
             let content = Content { kind: Some(content::Kind::CloudInvite(invite)), ..Default::default() };

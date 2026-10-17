@@ -1763,6 +1763,42 @@ fn cloud_drive_on_own_devices_and_rotated_on_revoke() {
     assert!(alice.cloud_snapshot_request(&id, 1).unwrap().is_none());
 }
 
+/// Грант незнакомцу: первое сообщение требует жетон (`Need::Token`). Хост
+/// добирает и повторяет — повтор обязан выдать грант, ключ и приглашение, а не
+/// пустой список (раньше грант оставался применённым локально после `Need`).
+#[test]
+fn cloud_grant_survives_need_and_retry() {
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let (id, create) = alice.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d1", &create);
+    let members = |c: &Client| serde_json::from_str::<serde_json::Value>(&c.cloud_containers_json()).unwrap()[0]["members"].clone();
+    // Журнал и бандл Боба есть, ключа доступа и жетонов нет.
+    let mut need = None;
+    for _ in 0..4 {
+        match alice.cloud_grant(&id, "bob@local", false, "", 2) {
+            Err(ClientError::Need(Need::Token { .. })) => {
+                need = Some(());
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            other => panic!("ожидался Need::Token: {other:?}"),
+        }
+    }
+    assert!(need.is_some());
+    assert_eq!(members(&alice), serde_json::json!([]), "после Need грант не числится выданным");
+    // Недостающее добрано (здесь — ключ доступа Боба вместо жетона), повтор.
+    bob_learn(&mut alice, "bob@local", *bob.delivery_key());
+    let methods = run_cloud(&mut cloud, &mut srv, &mut alice, &mut |c| c.cloud_grant(&id, "bob@local", false, "Приглашение", 2));
+    assert_eq!(methods[0], "domain.grant.set", "{methods:?}");
+    assert!(methods.len() >= 3, "грант, ключ и приглашение: {methods:?}");
+    assert_eq!(members(&alice), serde_json::json!([{"user": "bob@local", "role": "reader"}]));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(ev.iter().any(|e| matches!(e, Event::CloudChanged { id: i, .. } if *i == id)), "{ev:?}");
+}
+
 #[test]
 fn cloud_shared_folder_roles_revoke_and_leave() {
     use parvane_protocol::client::CloudRole;
