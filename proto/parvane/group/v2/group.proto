@@ -218,7 +218,17 @@ message GroupChange {
     InviteKeyRevoke invite_key_revoke = 15;
     SetPrivacyMode set_privacy_mode = 16;
     SetPublic set_public = 17;
+    InviteEdit invite_edit = 18;
   }
+}
+
+// Правка действующей ссылки (spec 024): название, срок, лимит вступлений. Счётчик вступивших остаётся;
+// «по заявке» не меняется (как в Telegram). Право — создатель ссылки либо админ с `invite_users`.
+message InviteEdit {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+  string title = 2 [(parvane.core.v2.max_len) = 64];
+  int64 expires_ms = 3;
+  uint32 usage_limit = 4;
 }
 
 // Публичная группа (spec 023): имя в общем пространстве с никами, открытый секрет `secret` (решение пользователя
@@ -254,6 +264,8 @@ message Create {
 
 message AddMember {
   parvane.core.v2.UserRef member = 1;
+  // Одобренная заявка по ссылке «по заявке» (spec 024): link_id ссылки — вступивший считается в ней.
+  bytes via_link_id = 2 [(parvane.core.v2.max_len) = 32];
 }
 
 message RemoveMember {
@@ -421,6 +433,8 @@ message JoinResponse {
 message JoinRequestInfo {
   parvane.core.v2.UserRef user = 1;
   int64 requested_ms = 2;
+  // Ссылка, по которой пришла заявка (spec 024; пусто — неизвестна).
+  bytes link_id = 3 [(parvane.core.v2.max_len) = 32];
 }
 message RequestListRequest {
   parvane.core.v2.Ref group = 1;

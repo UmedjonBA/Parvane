@@ -22,6 +22,7 @@ import {
   b64ToUuid, uuidToB64, type V2Content, type V2Text, v2ToWire, wireToV2,
 } from './contentMap';
 import { isV2GroupAddress } from './controller';
+import { pollDelay } from './l2';
 
 /** Что журналу нужно от v2-стека (контроллер). */
 export type StateJournalHost = {
@@ -198,7 +199,7 @@ export function createStateJournal(deps: Deps) {
     syncTimer = setTimeout(() => {
       syncTimer = undefined;
       void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
-    }, isHidden() ? SYNC_HIDDEN_MS : SYNC_INTERVAL_MS);
+    }, pollDelay(SYNC_INTERVAL_MS, SYNC_HIDDEN_MS, !isHidden()));
   }
 
   function listenVisibility() {

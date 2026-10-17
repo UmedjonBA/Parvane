@@ -154,13 +154,21 @@ try {
   console.log(`1-1 video call: frames and audio flow both ways within ${Date.now() - videoConnectedAt} ms`);
   // Живой узор фейковой камеры у собеседника
   await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
-  // Камера выкл → у Боба чёрные кадры; вкл → изображение возвращается
+  // Камера выкл → у Боба «камера выключена» вместо застывшего кадра (spec 024); вкл → изображение возвращается
   await aliceSession.page.getByRole('button', { name: 'Turn camera off' }).click();
   await aliceSession.page.getByRole('button', { name: 'Turn camera on' })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ mean, variance }) => mean >= 0 && mean < 20 && variance < 5);
+  await bobSession.page.locator('[data-remote-camera-off]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await aliceSession.page.getByRole('button', { name: 'Turn camera on' }).click();
+  await bobSession.page.locator('[data-remote-camera-off]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
   await waitLuma(() => remoteCallVideoLuma(bobSession.page), ({ variance }) => variance > 50);
+  console.log('OK: «камера выключена» у собеседника');
+  // Микрофон выкл → у Боба «микрофон выключен»
+  await aliceSession.page.getByRole('button', { name: 'Mute', exact: true }).click();
+  await bobSession.page.locator('[data-remote-muted]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await aliceSession.page.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await bobSession.page.locator('[data-remote-muted]').waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  console.log('OK: «микрофон выключен» у собеседника');
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByRole('button', { name: 'End Call' })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });

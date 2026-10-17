@@ -39,8 +39,13 @@ if [[ "${PARVANE_DEPLOY_SKIP_IMAGES:-0}" != "1" ]]; then
     --ignorefile "$BACKEND/infra/deploy/shards.dockerignore" \
     -t parvane-shards "$REPO"
 
+  # Скрытый сервис Tor (spec 025): маленький образ alpine + tor
+  log "Сборка образа tor (podman)"
+  podman build --http-proxy=false -f "$BACKEND/infra/deploy/Dockerfile.tor" -t parvane-tor "$BACKEND/infra/deploy"
+
   log "Заливка образов на сервер (docker load)"
   podman save --format docker-archive parvane-shards | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
+  podman save --format docker-archive parvane-tor | gzip -1 | "${SSH[@]}" 'gunzip | docker load'
 fi
 
 # WEB-07: раннер web-e2e собирает в тот же dist диагностическую сборку (хуки
@@ -127,7 +132,34 @@ fi
 # топиками, ловят Subscription Violation (подписка молча отброшена) — HUP ДО up
 docker kill -s HUP parvane-nats-1 >/dev/null 2>&1 || true
 sleep 1
-docker compose up -d --remove-orphans
+# Onion-Location (spec 025): файл подключает Caddyfile; без него bind-mount создал бы каталог
+[[ -f onion-location.caddy ]] || : > onion-location.caddy
+# Образа tor ещё нет (деплой только web до первой полной выкладки) — без сервиса tor
+if docker image inspect localhost/parvane-tor:latest >/dev/null 2>&1; then
+  docker compose up -d --remove-orphans
+else
+  echo "образа parvane-tor нет — сервис tor не поднимается до полной выкладки"
+  docker compose up -d --remove-orphans $(docker compose config --services | grep -vx tor)
+fi
+# Адрес .onion появляется после первого запуска tor (ключ — в томе tor-data); заголовок Onion-Location
+# ставится, когда адрес известен
+if docker compose ps --services --status running | grep -qx tor; then
+  for _ in $(seq 1 60); do
+    host="$(docker compose exec -T tor cat /var/lib/tor/hs/hostname 2>/dev/null || true)"
+    [[ "$host" =~ ^[a-z2-7]{56}\.onion$ ]] && break
+    sleep 2
+  done
+  if [[ "$host" =~ ^[a-z2-7]{56}\.onion$ ]]; then
+    want="header Onion-Location \"http://$host{uri}\""
+    if [[ "$(cat onion-location.caddy)" != "$want" ]]; then
+      printf '%s\n' "$want" > onion-location.caddy
+      docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null
+    fi
+    echo "Скрытый сервис Tor: http://$host"
+  else
+    echo "адрес .onion не появился за 2 минуты — смотреть docker compose logs tor" >&2
+  fi
+fi
 docker compose ps
 REMOTE
 

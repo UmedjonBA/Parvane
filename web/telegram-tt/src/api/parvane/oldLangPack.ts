@@ -620,6 +620,20 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'The current main link will stop working.',
   ParvaneJoinModeFailed: 'Could not change how people join. Try again.',
   ParvaneChoosePhoto: 'Choose photo',
+  // Перевод на устройстве (spec 024)
+  TranslateMessage: 'Translate',
+  ShowOriginalButton: 'Show Original',
+  ShowTranslateButton: 'Show Translate Button',
+  DoNotTranslate: 'Do Not Translate',
+  Languages: { oneValue: '%@ language', otherValue: '%@ languages' },
+  lng_settings_change_lang: 'Translate to…',
+  'ReportPeer.AlertSuccess': 'Report sent. Thank you!',
+  'ReportPeer.Report': 'Report',
+  lng_context_report_msg: 'Report',
+  Report: 'Report',
+  Report2Comment: 'Add a comment',
+  Report2CommentOptional: 'Add a comment (optional)',
+  ReportSend: 'Send Report',
 };
 
 export const OLD_LANG_PACK_RU: ApiOldLangPack = {
@@ -1300,6 +1314,21 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'Прежняя основная ссылка перестанет работать.',
   ParvaneJoinModeFailed: 'Не удалось изменить способ вступления. Попробуйте ещё раз.',
   ParvaneChoosePhoto: 'Выбрать фотографию',
+  TranslateMessage: 'Перевести',
+  ShowOriginalButton: 'Показать оригинал',
+  ShowTranslateButton: 'Показывать кнопку «Перевести»',
+  DoNotTranslate: 'Не переводить',
+  Languages: {
+    oneValue: '%@ язык', fewValue: '%@ языка', manyValue: '%@ языков', otherValue: '%@ языков',
+  },
+  lng_settings_change_lang: 'Перевести на…',
+  'ReportPeer.AlertSuccess': 'Жалоба отправлена. Спасибо!',
+  'ReportPeer.Report': 'Пожаловаться',
+  lng_context_report_msg: 'Пожаловаться',
+  Report: 'Жалоба',
+  Report2Comment: 'Комментарий',
+  Report2CommentOptional: 'Комментарий (необязательно)',
+  ReportSend: 'Отправить жалобу',
 };
 
 function capitalize(text: string) {

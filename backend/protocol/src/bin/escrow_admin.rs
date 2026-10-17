@@ -8,6 +8,10 @@
 //!   escrow_admin recover <файл> <адрес> <hex> — по копии из таблицы `root_escrow` (hex) выписать
 //!                                               новый ключ восстановления и новую `root_backup`
 //!
+//!   escrow_admin open-report <файл> <автор> <hex> — открыть жалобу (таблица `reports`, spec 024): JSON на stdout
+//!
+//! Для жалоб — своя пара (`PARVANE_REPORT_PUBLIC_KEY`), создаётся тем же `keygen`.
+//!
 //! `recover` печатает две строки: `recovery_key=…` (передать пользователю) и
 //! `backup=<hex>` (записать в `root_backup` шарда identity). Обёртка для
 //! сервера — `scripts/admin_recover_user.sh`.
@@ -67,6 +71,15 @@ fn recover(path: &str, user: &str, escrow_hex: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn open_report(path: &str, reporter: &str, sealed_hex: &str) -> Result<(), String> {
+    let secret = read_secret(path)?;
+    let sealed = hex::decode(sealed_hex.trim()).map_err(|e| format!("жалоба: не hex ({e})"))?;
+    let text = parvane_protocol::report::open_report(&sealed, reporter, &secret)
+        .map_err(|e| format!("жалоба не открылась (чужой ключ, другой автор или порча): {e}"))?;
+    println!("{}", String::from_utf8_lossy(&text));
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -74,7 +87,10 @@ fn main() -> ExitCode {
         ["keygen", path] => keygen(path),
         ["pubkey", path] => pubkey(path),
         ["recover", path, user, escrow] => recover(path, user, escrow),
-        _ => Err("использование: escrow_admin keygen <файл> | pubkey <файл> | recover <файл> <адрес> <hex копии>".into()),
+        ["open-report", path, reporter, sealed] => open_report(path, reporter, sealed),
+        _ => Err("использование: escrow_admin keygen <файл> | pubkey <файл> | recover <файл> <адрес> <hex копии> \
+                  | open-report <файл> <автор> <hex жалобы>"
+            .into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

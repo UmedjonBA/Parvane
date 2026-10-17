@@ -65,6 +65,8 @@ services:
       # ID-01: требовать доказательство ключа устройства при входе (включать, когда
       # его шлют все клиенты: web — да, desktop/android — со своих сборок)
       PARVANE_REQUIRE_DEVICE_PROOF: ${PARVANE_REQUIRE_DEVICE_PROOF:-1}
+      # Жалобы администратору (spec 024): открытый ключ `escrow_admin keygen`; пусто — жалобы серверу выключены
+      PARVANE_REPORT_PUBLIC_KEY: ${PARVANE_REPORT_PUBLIC_KEY:-}
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}
@@ -250,10 +252,25 @@ services:
       DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Заголовок Onion-Location (spec 025): файл пишет deploy.sh по адресу скрытого сервиса
+      - ./onion-location.caddy:/etc/caddy/onion-location.caddy:ro
       - ./web-dist:/srv/dist:ro
       - caddy-data:/data
       - caddy-config:/config
       - well-known:/srv/well-known:ro
+
+  # Скрытый сервис Tor (spec 025): адрес .onion → сайт Caddy :8081 (web-клиент и /ws) без раскрытия IP
+  # пользователя. Живёт в сетевом пространстве caddy, портов наружу нет; ключ адреса — в томе tor-data.
+  tor:
+    image: localhost/parvane-tor:latest
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 64
+    network_mode: "service:caddy"
+    depends_on:
+      - caddy
+    volumes:
+      - tor-data:/var/lib/tor
 
   # TURN/STUN вынесен на VPS 213.155.15.139 (см. OPERATIONS.md «TURN на VPS»):
   # relay хостера снаружи недостижим. Локальный контейнер turn удалён.
@@ -269,3 +286,4 @@ volumes:
   caddy-data:
   caddy-config:
   well-known:
+  tor-data:

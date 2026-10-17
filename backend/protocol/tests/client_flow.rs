@@ -1073,6 +1073,61 @@ fn call_signal_sealed_roundtrip() {
     assert!(alice.prepare_call("bob@local", &bad).is_err(), "id группового звонка не 16 байт");
 }
 
+/// spec 025: шум L2 — пустышка этому же устройству: метод и канал как у личного сообщения, размер по сетке L2,
+/// получатель (само устройство) молча её выбрасывает.
+#[test]
+fn cover_goes_to_self_and_is_dropped() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let req = alice.prepare_cover().unwrap();
+    assert_eq!((req.chan, req.method), (Chan::Anon, "msg.deliver_sealed"));
+    let q: mpb::DeliverSealedRequest = decode_checked(&req.body, Origin::Client).unwrap();
+    assert_eq!(q.envelopes.len(), 1);
+    let sizes = inner_sizes(std::slice::from_ref(&req));
+    assert!(sizes.len() == 1 && on_grid(sizes[0]), "размер не по сетке L2: {sizes:?}");
+    let rec = InboxRecord { seq: 1, received_ms: 0, item: Some(inbox_record::Item::Sealed(q.envelopes[0].clone())) }.encode_to_vec();
+    let ev = alice.open_record(&rec).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Internal { .. }]), "{ev:?}");
+}
+
+/// spec 024: «принят на другом устройстве» — `Hangup(ANSWERED_ELSEWHERE)` своим другим устройствам; другие
+/// виды сигналов своим устройствам не шлются; сигнал от своего аккаунта, кроме отбоя, не принимается.
+#[test]
+fn call_answered_elsewhere_reaches_own_devices() {
+    use parvane_protocol::pb::parvane::call::v2::{call_signal::Signal, Hangup, HangupReason, MediaState, CallSignal};
+    let mut srv = Server::default();
+    let mut bob = setup(&mut srv, "bob@local");
+    let call_id = [5u8; 16];
+    let hangup = CallSignal {
+        call_id: call_id.to_vec(),
+        signal: Some(Signal::Hangup(Hangup { reason: HangupReason::AnsweredElsewhere as i32, duration_s: 0 })),
+        group_call_id: vec![],
+    };
+    // Одно устройство — слать некому
+    assert!(run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call_own(&hangup)).is_empty());
+
+    let mut bob2 = Client::new("bob@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = bob.link_grant_material().unwrap();
+    for r in bob2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("bob@local", "d2", &r);
+    }
+    bob.ingest_log("bob@local", srv.logs["bob@local"][bob.log_version("bob@local") as usize..].to_vec()).unwrap();
+
+    let reqs = run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call_own(&hangup));
+    assert_eq!(reqs.len(), 1);
+    assert_eq!((reqs[0].chan, reqs[0].method), (Chan::Anon, "call.signal_sealed"));
+    let ev = bob2.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { from, device, signal, .. }] if from == "bob@local" && device == "d1" && signal == &hangup), "{ev:?}");
+
+    // Своим устройствам — только отбой
+    let media = CallSignal {
+        call_id: call_id.to_vec(),
+        signal: Some(Signal::MediaState(MediaState { audio_muted: true, video_muted: false })),
+        group_call_id: vec![],
+    };
+    assert!(bob.prepare_call_own(&media).is_err());
+}
+
 /// Звонок тому, кто нам писал, а мы ему — нет: вызов сначала раздаёт адресату
 /// наш ключ доступа (иначе он принял бы звонок, но не смог бы ответить —
 /// сигналы звонка по слепому жетону сервер не принимает).

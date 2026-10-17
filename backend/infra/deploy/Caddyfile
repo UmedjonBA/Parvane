@@ -12,34 +12,7 @@
 	auto_https disable_redirects
 }
 
-{$PARVANE_PUBLIC_HOST}:443 {
-	# Настоящий серт Let's Encrypt через DNS-01 (плагин duckdns) — HTTP-01
-	# недоступен (наружу проброшен не 80). Токен в env DUCKDNS_TOKEN.
-	# Для self-signed без домена — заменить весь блок на `tls internal`.
-	tls {
-		dns duckdns {$DUCKDNS_TOKEN}
-	}
-
-	# Сайт открыт: пароля круга (basic_auth) больше нет — барьер от мусорных
-	# аккаунтов теперь регистрация с подтверждением почты у identity
-	# (PARVANE_EMAIL_REQUIRED=1 + PARVANE_SMTP_* в .env). Вернуть приватный
-	# круг: блок `basic_auth { {$PARVANE_SITE_USER} {$PARVANE_SITE_HASH} }`
-	# на ВЕСЬ сайт, включая /ws (см. README, история 2026-09-01).
-
-	# P-32: защитные заголовки — HSTS, запрет фрейминга (clickjacking),
-	# nosniff, referrer, минимальные permissions. CSP страницы задаёт сборка
-	# web (vite buildCsp), frame-ancestors — только заголовком.
-	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options "nosniff"
-		X-Frame-Options "DENY"
-		Content-Security-Policy "frame-ancestors 'none'"
-		Referrer-Policy "no-referrer"
-		Permissions-Policy "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=()"
-		Cross-Origin-Opener-Policy "same-origin"
-		-Server
-	}
-
+(app) {
 	handle /ws {
 		reverse_proxy gateway:9222
 	}
@@ -103,6 +76,58 @@
 	}
 }
 
+{$PARVANE_PUBLIC_HOST}:443 {
+	# Настоящий серт Let's Encrypt через DNS-01 (плагин duckdns) — HTTP-01
+	# недоступен (наружу проброшен не 80). Токен в env DUCKDNS_TOKEN.
+	# Для self-signed без домена — заменить весь блок на `tls internal`.
+	tls {
+		dns duckdns {$DUCKDNS_TOKEN}
+	}
+
+	# Сайт открыт: пароля круга (basic_auth) больше нет — барьер от мусорных
+	# аккаунтов теперь регистрация с подтверждением почты у identity
+	# (PARVANE_EMAIL_REQUIRED=1 + PARVANE_SMTP_* в .env). Вернуть приватный
+	# круг: блок `basic_auth { {$PARVANE_SITE_USER} {$PARVANE_SITE_HASH} }`
+	# на ВЕСЬ сайт, включая /ws (см. README, история 2026-09-01).
+
+	# P-32: защитные заголовки — HSTS, запрет фрейминга (clickjacking),
+	# nosniff, referrer, минимальные permissions. CSP страницы задаёт сборка
+	# web (vite buildCsp), frame-ancestors — только заголовком.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
+	# Адрес .onion (spec 025): Tor Browser предлагает перейти на скрытый сервис. Файл пишет deploy.sh по
+	# адресу из тома tor-data; без Tor — пустой
+	import onion-location.caddy
+
+	import app
+}
+
 http://:80 {
 	redir https://{$PARVANE_PUBLIC_HOST}:{$PARVANE_PUBLIC_HTTPS_PORT}{uri}
+}
+
+# Скрытый сервис Tor (spec 025): контейнер tor живёт в сетевом пространстве caddy и ведёт .onion на этот
+# порт. Наружу порт не публикуется. Без TLS (у .onion шифрование и подлинность — в самом Tor), без HSTS и без
+# перенаправления на обычный адрес — иначе Tor Browser ушёл бы с .onion
+http://:8081 {
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "frame-ancestors 'none'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(self), microphone=(self), geolocation=(self), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
+	import app
 }

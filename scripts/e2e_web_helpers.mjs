@@ -190,7 +190,8 @@ export function requireEnv() {
 }
 
 export async function preparePage(context, user, password, options = {}) {
-  const { startUrl, beforeLogin } = options;
+  // `noGatewaySeed` — адрес gateway выбирает само приложение (страница `.onion`, spec 025)
+  const { startUrl, beforeLogin, noGatewaySeed } = options;
   const { seedLocalStorage } = options;
   const { baseUrl, gatewayUrl } = requireEnv();
   const page = await context.newPage();
@@ -212,7 +213,8 @@ export async function preparePage(context, user, password, options = {}) {
     }
   });
   await page.addInitScript(({ gatewayUrl: url, seed }) => {
-    localStorage.setItem('parvane:gateway', url);
+    if (url) localStorage.setItem('parvane:gateway', url);
+    else localStorage.removeItem('parvane:gateway');
     // «План» открывается на экране, где пользователь был в последний раз (по умолчанию «Сегодня» — первый
     // вид календаря); сценарии календаря ждут сетку сразу — «Сегодня» сценарий открывает сам
     // (`openPlannerScreen(page, 'today')`). Второй ключ — что «Календарь» показывал в последний раз
@@ -295,7 +297,7 @@ export async function preparePage(context, user, password, options = {}) {
       }
     };
   }, {
-    gatewayUrl,
+    gatewayUrl: noGatewaySeed ? '' : gatewayUrl,
     seed: seedLocalStorage,
   });
   await page.route(/https:\/\/(?:t\.me|telegram\.me|telegram\.dog)\/_websync_/, async (route) => {

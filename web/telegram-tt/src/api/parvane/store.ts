@@ -169,6 +169,25 @@ export class ParvaneStore {
     return this.groupVersionByAddress.get(address);
   }
 
+  // Жалоба на сообщения группы (spec 024): карточка у админа; без сообщений — текстом
+  private buildModReportContent(stored: WireStoredMessage): ApiMessage['content'] {
+    const { content } = stored;
+    const group = content.report_group?.id
+      ? `${V2_GROUP_ADDRESS_PREFIX}${b64ToHex(content.report_group.id)}` : undefined;
+    if (!group || !content.reported?.length) return { text: { text: content.text || '⚠️' } };
+    return {
+      modReport: {
+        mediaType: 'modReport',
+        groupChatId: this.isGroupAddress(group) ? this.getIdForAddress(group, 'group') : undefined,
+        reason: content.reason || 'other',
+        comment: content.comment || undefined,
+        messages: content.reported.map((m) => ({
+          uuid: m.op_id, authorId: this.getIdForAddress(m.author), text: m.text, date: m.ts,
+        })),
+      },
+    };
+  }
+
   isGroupAddress(address: string) {
     return this.groupInfoByAddress.has(this.canonicalAddress(address));
   }
@@ -498,7 +517,9 @@ export class ParvaneStore {
     return {
       id,
       chatId,
-      content: isChatMode ? this.buildChatModeContent(stored, isOutgoing) : buildMessageContent(stored),
+      content: isChatMode ? this.buildChatModeContent(stored, isOutgoing)
+        : stored.content.kind === 'mod_report' ? this.buildModReportContent(stored)
+          : buildMessageContent(stored),
       date: stored.ts,
       // Служебное сообщение о режиме чата не шумит (без звука уведомления)
       isSilent: isChatMode ? true : undefined,
@@ -512,7 +533,7 @@ export class ParvaneStore {
       replyInfo: replyKey && replyKey.chatId === chatId
         ? { type: 'message', replyToMsgId: replyKey.id }
         : undefined,
-      reactions: buildReactions(stored),
+      reactions: buildReactions(stored, (address) => this.getIdForAddress(address)),
       forwardInfo: stored.content.forwarded_from ? {
         date: stored.ts,
         isChannelPost: false,
@@ -570,14 +591,42 @@ export function buildWebPage(stored: WireStoredMessage) {
   };
 }
 
-function buildReactions(stored: WireStoredMessage): ApiMessage['reactions'] {
+function buildReactions(stored: WireStoredMessage, idOf: (address: string) => string): ApiMessage['reactions'] {
   const list = stored.reactions;
   if (!list?.length) return undefined;
+  const reactors = stored.reactors || [];
   return {
+    // Список «кто отреагировал» знает только устройство (spec 024): есть, когда
+    // известны авторы реакций
+    canSeeList: reactors.length > 0,
     results: list.map((r) => ({
       count: r.count,
       reaction: { type: 'emoji', emoticon: r.emoji },
       chosenOrder: r.mine ? 0 : undefined,
+    })),
+    recentReactions: reactors.slice(-3).reverse().map((r) => ({
+      peerId: idOf(r.user),
+      reaction: { type: 'emoji', emoticon: r.emoji },
+      addedDate: r.ts,
+    })),
+  };
+}
+
+/** Список «кто отреагировал» в форме ответа `fetchMessageReactionsList` (spec 024). */
+export function buildReactorsList(
+  stored: WireStoredMessage, idOf: (address: string) => string, self: string, emoji?: string,
+) {
+  const reactors = (stored.reactors || [])
+    .filter((r) => !emoji || r.emoji === emoji)
+    .slice()
+    .sort((a, b) => b.ts - a.ts);
+  return {
+    count: reactors.length,
+    reactions: reactors.map((r) => ({
+      peerId: idOf(r.user),
+      reaction: { type: 'emoji' as const, emoticon: r.emoji },
+      addedDate: r.ts,
+      isOwn: r.user === self || undefined,
     })),
   };
 }
@@ -903,4 +952,10 @@ export function toWireAdminRights(rights: ApiChatAdminRights): Required<WireAdmi
     pin_messages: Boolean(rights.pinMessages),
     add_admins: Boolean(rights.addAdmins),
   };
+}
+
+const V2_GROUP_ADDRESS_PREFIX = 'v2g:';
+
+function b64ToHex(value: string) {
+  return Array.from(atob(value), (c) => c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
 }

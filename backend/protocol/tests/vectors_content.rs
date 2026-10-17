@@ -195,6 +195,14 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             json!({"article": {"title": "Поход", "markdown": "# Поход\n\n- палатка\n- [[Маршрут]]", "text": "Статья «Поход»"}}),
             msg(json!({"kind": "article", "title": "Поход", "text": "Статья «Поход»"})),
         ),
+        // Жалоба админам группы (spec 024, REPORT-1): клиент без модерации показывает `text`.
+        (
+            "mod-report",
+            json!({"mod_report": {"group": {"domain": "local", "id": OP}, "reason": "spam", "comment": "реклама",
+                "messages": [{"op_id": OP, "author": {"address": "mallory@local"}, "text": "купи", "ts_ms": "1767225600000"}],
+                "text": "Жалоба на сообщение в группе: спам"}}),
+            msg(json!({"kind": "mod_report", "reason": "spam", "text": "Жалоба на сообщение в группе: спам"})),
+        ),
         (
             "poll-options",
             json!({"poll": {"question": "Когда?", "options": [{"text": "утро"}, {"text": "вечер"}], "close_ms": "1767225600000",

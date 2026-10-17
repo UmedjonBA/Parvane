@@ -106,10 +106,11 @@ const ReportModal = ({
         <div className={buildClassName('modal-title', styles.modalTitle, hasSubtitle && styles.titleMultiline)}>
           <h3 className={buildClassName(styles.title, renderingDepth && styles.hasDepth)}>
             {isOptionsSection
-              ? lang(modal?.subject === 'story' ? 'ReportStory' : 'Report') : renderingSection?.title}
+              ? lang(modal?.subject === 'story' ? 'ReportStory' : 'Report')
+              : translateParvane(lang, renderingSection?.title)}
           </h3>
           {isOptionsSection && renderingSection.subtitle && (
-            <span className={styles.subtitle}>{renderingSection.subtitle}</span>
+            <span className={styles.subtitle}>{translateParvane(lang, renderingSection.subtitle)}</span>
           )}
         </div>
       </div>
@@ -183,7 +184,8 @@ const ReportModal = ({
         onStart={handleAnimationStart}
       >
         <div className={styles.slide}>
-          {isOptionsSection ? <h3 className={styles.sectionTitle}>{renderingSection.title}</h3> : undefined}
+          {isOptionsSection
+            ? <h3 className={styles.sectionTitle}>{translateParvane(lang, renderingSection.title)}</h3> : undefined}
           {isOptionsSection && renderingSection.options.map((option) => (
             <ListItem
               narrow
@@ -194,7 +196,7 @@ const ReportModal = ({
               clickArg={option.option}
               onClick={handleOptionClick}
             >
-              <div className={styles.optionText}>{option.text}</div>
+              <div className={styles.optionText}>{translateParvane(lang, option.text)}</div>
             </ListItem>
           ))}
           {isCommentSection ? (
@@ -232,3 +234,8 @@ const ReportModal = ({
 };
 
 export default memo(ReportModal);
+
+// Parvane (spec 024): причины и заголовки жалоб провайдер отдаёт ключами строк — переводит окно
+function translateParvane(lang: (key: string) => string, text?: string) {
+  return text?.startsWith('Parvane') ? lang(text) : text;
+}

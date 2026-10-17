@@ -1196,16 +1196,19 @@ export class PvClient {
      * @param {string} group
      * @param {string} user
      * @param {boolean} approve
+     * @param {string | null} [via_link_hex]
      * @returns {any}
      */
-    groupRequestDecide(group, user, approve) {
+    groupRequestDecide(group, user, approve, via_link_hex) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(user, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len1 = WASM_VECTOR_LEN;
-            wasm.pvclient_groupRequestDecide(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, approve);
+            var ptr2 = isLikeNone(via_link_hex) ? 0 : passStringToWasm0(via_link_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len2 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupRequestDecide(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, approve, ptr2, len2);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -2164,6 +2167,47 @@ export class PvClient {
             const ptr1 = passStringToWasm0(signal_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len1 = WASM_VECTOR_LEN;
             wasm.pvclient_prepareCall(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Сигнал звонка своим другим устройствам (spec 024): только `Hangup` («принят/отклонён здесь»).
+     * @param {string} signal_json
+     * @returns {Array<any>}
+     */
+    prepareCallOwn(signal_json) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(signal_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_prepareCallOwn(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Шум режима L2 (spec 025): пустышка этому же устройству, выровненная по сетке L2.
+     * @returns {any}
+     */
+    prepareCover() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.pvclient_prepareCover(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -3276,20 +3320,22 @@ export function encodePing(nonce) {
 }
 
 /**
+ * `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
  * @param {bigint} id
  * @param {string} method
  * @param {Uint8Array} body
  * @param {number} timeout_ms
+ * @param {number | null} [pad_to]
  * @returns {Uint8Array}
  */
-export function encodeRequest(id, method, body, timeout_ms) {
+export function encodeRequest(id, method, body, timeout_ms, pad_to) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(method, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(body, wasm.__wbindgen_export);
         const len1 = WASM_VECTOR_LEN;
-        wasm.encodeRequest(retptr, id, ptr0, len0, ptr1, len1, timeout_ms);
+        wasm.encodeRequest(retptr, id, ptr0, len0, ptr1, len1, timeout_ms, isLikeNone(pad_to) ? Number.MAX_SAFE_INTEGER : (pad_to) >>> 0);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var v3 = getArrayU8FromWasm0(r0, r1).slice();
@@ -3335,7 +3381,6 @@ export function encodeUploadChunk(upload_id, index, bucket, data) {
 }
 
 /**
- * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
  * @returns {string}
  */
 export function generateRecoveryKey() {
@@ -3503,6 +3548,40 @@ export function runConformanceVectors(suite, json) {
             throw takeObject(r1);
         }
         return r0 >>> 0;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
+ * Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
+ * (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
+ * @param {Uint8Array} admin_public
+ * @param {string} reporter
+ * @param {Uint8Array} plaintext
+ * @returns {Uint8Array}
+ */
+export function sealReport(admin_public, reporter, plaintext) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(admin_public, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(reporter, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArray8ToWasm0(plaintext, wasm.__wbindgen_export);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.sealReport(retptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        if (r3) {
+            throw takeObject(r2);
+        }
+        var v4 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v4;
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }

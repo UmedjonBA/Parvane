@@ -44,11 +44,11 @@ assert(BACKEND_DIR, 'PARVANE_E2E_BACKEND_LOG_DIR is required');
 const DEVICE_LIST_TTL_WAIT_MS = 17000;
 // Дельта-синк соседнего устройства — интервал 10с + запас
 const SIBLING_SYNC_TIMEOUT_MS = 45000;
+// Принято на другом устройстве (spec 024): второе перестаёт звонить сигналом, а не по таймауту
+const ANSWERED_ELSEWHERE_MS = 8000;
 // Таймаут вызова (тестовое переопределение диагностической сборки, contracts/
 // calls-consent-and-test-hooks.md): второе устройство замолкает по нему
 const RING_TIMEOUT_MS = 10000;
-// Верхняя граница спеки: «остальные замолкают по своему таймауту вызова (≤ 45 с)»
-const RING_TIMEOUT_SPEC_MAX_MS = 45000;
 const RING_SEED = { 'parvane:e2e:ringTimeoutMs': String(RING_TIMEOUT_MS) };
 
 async function selectPickerRow(page, containerSelector, name) {
@@ -318,16 +318,12 @@ try {
   await assertSingleInvite(bobDevice2.page, 'restart must not create a new invite');
 
   // ── Групповой вызов звонит на ОБА устройства, входит только принявшее ──────
-  // Снять звонок на остальных устройствах без нового сигнала протокола нельзя
-  // (research R18): они замолкают по своему таймауту вызова (≤ 45 с; здесь
-  // переопределён в 10 с). Их поздний reject{declined} уходит инициатору с тем
-  // же call_id, что и парный invite, — и НЕ должен ронять сессию с принявшим
-  // устройством (в звонке на двоих это заканчивало бы звонок целиком)
+  // spec 024: принявшее устройство сообщает своим другим устройствам («принято здесь»), и они перестают
+  // звонить сразу, без своего таймаута вызова; попарные сигналы участников им больше не идут в ход
   await openGroupChat(aliceSession.page, groupTitle);
   await aliceSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await aliceSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  const ringStartedAt = Date.now();
   const consentOn = (page) => page.getByText(`${groupTitle}: group call`, { exact: true });
   for (const [label, session] of [['device 1', bobDevice1], ['device 2', bobDevice2]]) {
     await consentOn(session.page).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS }).catch(() => {
@@ -337,21 +333,14 @@ try {
       `${label}: getUserMedia before consent`);
   }
   await acceptGroupCall(bobDevice1.page, 'bob device 1');
+  const acceptedAt = Date.now();
+  await consentOn(bobDevice2.page).waitFor({ state: 'hidden', timeout: ANSWERED_ELSEWHERE_MS }).catch(() => {
+    assert.fail('device 2 kept ringing after device 1 accepted');
+  });
+  console.log(`second device stopped ringing ${Date.now() - acceptedAt} ms after device 1 accepted`);
   await waitActivePeers(aliceSession.page, 1, 'alice with bob device 1');
   await waitActivePeers(bobDevice1.page, 1, 'bob device 1 with alice');
   await expectMediaFlowing(aliceSession.page, { audio: true, minPeers: 1 });
-  // Второе устройство всё ещё звонит: мгновенного снятия у протокола нет
-  assert.equal(await consentOn(bobDevice2.page).count(), 1,
-    'device 2 consent screen vanished right after device 1 accepted — no such protocol signal exists');
-  // …и замолкает по своему таймауту вызова
-  await consentOn(bobDevice2.page).waitFor({ state: 'hidden', timeout: RING_TIMEOUT_SPEC_MAX_MS + 5000 }).catch(() => {
-    assert.fail('device 2 kept ringing past the spec maximum of 45 s');
-  });
-  const silencedMs = Date.now() - ringStartedAt;
-  assert(silencedMs <= RING_TIMEOUT_SPEC_MAX_MS, `device 2 silenced after ${silencedMs} ms (> 45 s)`);
-  assert(silencedMs >= RING_TIMEOUT_MS - 1000,
-    `device 2 silenced after ${silencedMs} ms — earlier than its own ring timeout (${RING_TIMEOUT_MS} ms)`);
-  console.log(`second device stopped ringing ${silencedMs} ms after the invite (ring timeout ${RING_TIMEOUT_MS} ms)`);
   assert.equal(await bobDevice2.page.evaluate(() => globalThis.__parvaneGumCalls), 0,
     'device 2 opened the microphone without consent');
   assert.equal(await bobDevice2.page.locator('[data-peer]').count(), 0, 'device 2 entered the call');

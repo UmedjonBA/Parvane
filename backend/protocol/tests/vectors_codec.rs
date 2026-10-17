@@ -140,7 +140,7 @@ fn codec_vectors() {
                 check(name, &codec::decode_frame(&bytes, origin), &case["expect"]);
             }
             "request" => {
-                let req = Request { id: 1, method: input["method"].as_str().unwrap().into(), body: unhex(input, "body_hex"), timeout_ms: 1000 };
+                let req = Request { id: 1, method: input["method"].as_str().unwrap().into(), body: unhex(input, "body_hex"), timeout_ms: 1000, padding: vec![] };
                 check(name, &codec::check_request(&req, Origin::Client), &case["expect"]);
             }
             k => panic!("неизвестный вид {k}"),

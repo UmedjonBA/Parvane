@@ -467,6 +467,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 domain: server_domain(),
                 telegram_bot: if mode == ConfirmMode::Telegram { telegram_bot().unwrap_or_default() } else { String::new() },
                 escrow_public_key: escrow_public_key().map(|k| k.to_vec()).unwrap_or_default(),
+                report_public_key: report_public_key().map(|k| k.to_vec()).unwrap_or_default(),
             }
             .encode_to_vec())
         }
@@ -836,6 +837,33 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         }
 
         // ── ключ восстановления через Telegram-бота (spec 015) ──
+        "identity.report.submit" => {
+            // Жалоба администратору (spec 024): шифртекст и автор из сессии; содержимого сервер не видит
+            require_user(&req)?;
+            let r: pb::ReportSubmitRequest = body(&req)?;
+            if report_public_key().is_none() {
+                return Err(ErrorCode::Unavailable);
+            }
+            if !parvane_protocol::report::is_sealed_report(&r.sealed) {
+                return Err(ErrorCode::Invalid);
+            }
+            if !ratelimit::window_rate_ok("report-submit", &req.user, REPORTS_PER_MINUTE) {
+                return Err(ErrorCode::RateLimited);
+            }
+            let (open,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reports WHERE done_ms IS NULL").fetch_one(&ctx.v2).await.map_err(db_err)?;
+            if open >= MAX_OPEN_REPORTS {
+                return Err(ErrorCode::Limit);
+            }
+            sqlx::query("INSERT INTO reports (reporter, created_ms, sealed) VALUES (?, ?, ?)")
+                .bind(&req.user)
+                .bind(now_unix() * 1000)
+                .bind(&r.sealed)
+                .execute(&ctx.v2)
+                .await
+                .map_err(db_err)?;
+            info!("Жалоба от {} принята", req.user);
+            Ok(pb::ReportSubmitResponse {}.encode_to_vec())
+        }
         "identity.recovery.tg_send" => {
             require_user(&req)?;
             let r: pb::RecoveryTgSendRequest = body(&req)?;
@@ -1620,6 +1648,11 @@ async fn stats_versions(ctx: &V2Ctx) -> Reply {
 /// ID-01: требовать доказательство устройства при входе (`PARVANE_REQUIRE_DEVICE_PROOF`,
 /// по умолчанию выключено, пока его не шлют все клиенты: web — есть, desktop и
 /// android — со своих следующих сборок). Без флага вход прежний.
+/// Жалоб администратору от одного пользователя в минуту (spec 024).
+const REPORTS_PER_MINUTE: usize = 10;
+/// Потолок неразобранных жалоб (место на диске): дальше — `LIMIT`, пока администратор не разберёт.
+const MAX_OPEN_REPORTS: i64 = 100_000;
+
 pub(crate) fn device_proof_required() -> bool {
     matches!(std::env::var("PARVANE_REQUIRE_DEVICE_PROOF").ok().as_deref().map(str::trim), Some("1" | "true" | "yes"))
 }

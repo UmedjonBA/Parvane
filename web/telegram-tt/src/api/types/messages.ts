@@ -414,6 +414,15 @@ export interface ApiTaskOffer {
   myDecision?: boolean;
 }
 
+// Parvane (spec 024, REPORT-1): жалоба на сообщения группы — карточка у админа
+export interface ApiModReport {
+  mediaType: 'modReport';
+  groupChatId?: string;
+  reason: string;
+  comment?: string;
+  messages: { uuid: string; authorId: string; text: string; date: number }[];
+}
+
 // Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown
 export interface ApiArticle {
   mediaType: 'article';
@@ -757,6 +766,7 @@ export type MediaContent = {
   todo?: ApiMediaTodo;
   taskOffer?: ApiTaskOffer;
   article?: ApiArticle;
+  modReport?: ApiModReport;
   action?: ApiMessageAction;
   webPage?: ApiMessageWebPage;
   audio?: ApiAudio;

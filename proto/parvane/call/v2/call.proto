@@ -56,6 +56,8 @@ message CallSignal {
     // Приглашение в групповой звонок (FR-062): `call_id` — id группового
     // звонка. Сами соединения — попарные сигналы с `group_call_id`.
     GroupRing group_ring = 7;
+    // Состояние своих микрофона и камеры (spec 024): собеседник показывает «камера выключена».
+    MediaState media_state = 9;
   }
   // Сигнал попарного соединения внутри группового звонка (mesh): id этого
   // группового звонка. Пусто — личный звонок.
@@ -94,6 +96,8 @@ enum HangupReason {
   HANGUP_REASON_BUSY = 3;
   HANGUP_REASON_MISSED = 4;
   HANGUP_REASON_FAILED = 5;
+  // Своим другим устройствам (spec 024): звонок принят на этом устройстве — перестать звонить молча.
+  HANGUP_REASON_ANSWERED_ELSEWHERE = 6;
 }
 
 message Hangup {
@@ -102,6 +106,11 @@ message Hangup {
 }
 
 message Ringing {}
+
+message MediaState {
+  bool audio_muted = 1;
+  bool video_muted = 2;
+}
 
 message SignalSealedRequest {
   // Копии всем устройствам адресата (≤ 64).

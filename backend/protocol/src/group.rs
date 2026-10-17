@@ -67,6 +67,18 @@ pub struct InviteLink {
     /// Время записи объявления (подписанное время записи журнала): по нему у всех
     /// ведущих приглашения один порядок ссылок — значит, и одна основная.
     pub created_ms: i64,
+    /// Кто вступил по ссылке и когда (время записи журнала; spec 024), последние `MAX_LINK_JOINS`.
+    pub joins: Vec<(String, i64)>,
+}
+
+impl InviteLink {
+    fn note_join(&mut self, user: String, ts_ms: i64) {
+        self.uses += 1;
+        if self.joins.len() >= MAX_LINK_JOINS {
+            self.joins.remove(0);
+        }
+        self.joins.push((user, ts_ms));
+    }
 }
 
 impl GroupState {
@@ -81,6 +93,7 @@ impl GroupState {
                         "id": hex::encode(id), "creator": l.creator, "createdMs": l.created_ms, "title": l.announce.title,
                         "expiresMs": l.announce.expires_ms, "usageLimit": l.announce.usage_limit,
                         "requiresApproval": l.announce.requires_approval, "uses": l.uses,
+                        "joins": l.joins.iter().map(|(user, ts)| serde_json::json!({ "user": user, "tsMs": ts })).collect::<Vec<_>>(),
                     })
                 })
                 .collect(),
@@ -142,6 +155,9 @@ pub struct PublicInfo {
 
 /// Сколько отозванных ссылок группа помнит (остальные неотличимы от несуществующих).
 pub const MAX_REVOKED_LINKS: usize = 200;
+
+/// Сколько вступивших по одной ссылке хранит состояние группы (spec 024).
+pub const MAX_LINK_JOINS: usize = 1000;
 
 fn full_rights() -> AdminRights {
     AdminRights { change_info: true, delete_messages: true, ban_users: true, invite_users: true, pin_messages: true, add_admins: true }
@@ -409,6 +425,14 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             if s.members.len() >= MAX_MEMBERS {
                 return Err(ProtoError::FieldLimit("members"));
             }
+            // Одобренная заявка по ссылке «по заявке» считается в ссылке (spec 024); ссылку, отозванную
+            // между заявкой и одобрением, не считаем — участник при этом добавляется
+            if !a.via_link_id.is_empty() {
+                let id: [u8; 32] = a.via_link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("via_link_id"))?;
+                if let Some(l) = s.invite_links.get_mut(&id) {
+                    l.note_join(m.clone(), now);
+                }
+            }
             s.members.insert(m, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
             // Новому участнику нужны ключи новой эпохи (не читает прошлое).
             s.epoch_stale = true;
@@ -582,7 +606,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             if !ok || a.link_public_key.len() != 32 {
                 return forbid();
             }
-            s.invite_links.insert(link_id(&a.link_public_key), InviteLink { announce: a.clone(), creator: actor, uses: 0, created_ms: now });
+            s.invite_links.insert(link_id(&a.link_public_key), InviteLink { announce: a.clone(), creator: actor, uses: 0, created_ms: now, joins: Vec::new() });
         }
         Change::InviteKeyRevoke(r) => {
             let id: [u8; 32] = r.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
@@ -594,6 +618,22 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
                 if s.revoked_links.len() < MAX_REVOKED_LINKS {
                     s.revoked_links.insert(id, link);
                 }
+            }
+        }
+        Change::InviteEdit(e) => {
+            let id: [u8; 32] = e.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
+            // Только действующая ссылка: отозванную вернуть правкой нельзя
+            let creator = s.invite_links.get(&id).map(|l| l.creator.clone()).ok_or(ProtoError::Forbidden)?;
+            if !(s.admin_can(&actor, |r| r.invite_users) || creator == actor) {
+                return forbid();
+            }
+            if e.expires_ms < 0 {
+                return Err(ProtoError::InvalidField("expires_ms"));
+            }
+            if let Some(l) = s.invite_links.get_mut(&id) {
+                l.announce.title = e.title.clone();
+                l.announce.expires_ms = e.expires_ms;
+                l.announce.usage_limit = e.usage_limit;
             }
         }
         Change::JoinByInvite(j) if s.public.as_ref().is_some_and(|p| p.link_public_key.as_slice() == j.link_public_key.as_slice()) => {
@@ -627,7 +667,7 @@ pub fn apply(state: Option<&GroupState>, entry: &GroupStateEntry, resolve: &dyn 
             let parts = join_signing_parts(&s.group, entry.version, &entry.prev_hash, &j.joiner_root_key);
             sign::verify_ctx(&j.link_public_key, &j.link_signature, ctx::GROUP_JOIN, &[&parts])?;
             if let Some(l) = s.invite_links.get_mut(&id) {
-                l.uses += 1;
+                l.note_join(actor.clone(), now);
             }
             s.members.insert(actor, Member { role: Role::Member, rights: AdminRights::default(), muted_until_ms: 0 });
             s.epoch_stale = true;
@@ -956,7 +996,7 @@ mod tests {
         let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::Ban(Ban { member: ur("alice@x") }), 2).unwrap();
         assert_eq!(apply(Some(&s), &e, &w.resolve()), Err(ProtoError::Forbidden));
         // Боб приглашает Кэрол (права по умолчанию разрешают).
-        let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::AddMember(AddMember { member: ur("carol@x") }), 2).unwrap();
+        let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: ur("carol@x") }), 2).unwrap();
         let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
         assert!(s2.members.contains_key("carol@x"));
         // Алиса банит Кэрол → эпоха устарела.
@@ -1052,6 +1092,48 @@ mod tests {
         let forged = JoinByInvite { link_signature: sign_join(&fake_link, &s2, &root), ..join };
         let e = build_entry(w.k("dave@x"), Some(&s2), "x", Change::JoinByInvite(forged), 3).unwrap();
         assert!(apply(Some(&s2), &e, &w.resolve()).is_err());
+    }
+
+    /// spec 024: правка ссылки (название, срок, лимит) сохраняет счётчик; вступившие по ссылке и одобренные
+    /// заявки по ней считаются и попадают в список; отозванную ссылку править нельзя; участник без права — нет.
+    #[test]
+    fn invite_edit_and_joins() {
+        use crate::pb::parvane::group::v2::{InviteEdit, InviteKeyRevoke, JoinByInvite};
+        let w = World::new(&["alice@x", "bob@x", "dave@x", "erin@x"]);
+        let s = genesis(&w);
+        let link = sign::generate_signing_key();
+        let pubkey = link.verifying_key().to_bytes().to_vec();
+        let id = link_id(&pubkey).to_vec();
+        let announce = GroupInviteKeyAnnounce { link_public_key: pubkey.clone(), title: "до".into(), ..Default::default() };
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKey(announce), 2).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let root = w.roots["dave@x"];
+        let join = JoinByInvite { link_public_key: pubkey.clone(), joiner_root_key: root.to_vec(), link_signature: sign_join(&link, &s, &root) };
+        let e = build_entry(w.k("dave@x"), Some(&s), "x", Change::JoinByInvite(join), 3).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        // Правка: участник без права не может, владелец — может, счётчик и вступившие остаются
+        let edit = |title: &str, limit: u32| InviteEdit { link_id: id.clone(), title: title.into(), expires_ms: 0, usage_limit: limit };
+        let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::InviteEdit(edit("чужая", 5)), 4).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "участник без invite_users");
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("после", 5)), 4).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let l = &s.invite_links[&link_id(&pubkey)];
+        assert_eq!((l.announce.title.as_str(), l.announce.usage_limit, l.uses), ("после", 5, 1));
+        assert_eq!(l.joins.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(), ["dave@x"]);
+        // Одобренная заявка по ссылке считается в ней
+        let add = AddMember { via_link_id: id.clone(), member: ur("erin@x") };
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(add), 5).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let l = &s.invite_links[&link_id(&pubkey)];
+        assert_eq!(l.uses, 2);
+        assert_eq!(l.joins.last().map(|(u, _)| u.as_str()), Some("erin@x"));
+        let json = s.invites_json();
+        assert_eq!(json[0]["joins"].as_array().map(Vec::len), Some(2));
+        // Отозванную — не править
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKeyRevoke(InviteKeyRevoke { link_id: id.clone() }), 6).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("снова", 0)), 7).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "отозванная ссылка");
     }
 
     /// spec 023: публичная группа — имя и секрет в журнале, вступление по ключу из секрета без новой эпохи,
@@ -1150,11 +1232,11 @@ mod tests {
         let mut s = apply(None, &e, &w.resolve()).unwrap();
         let mut i = 1000;
         while s.members.len() < MAX_MEMBERS {
-            let add = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(AddMember { member: ur(&format!("u{i}@x")) }), 2).unwrap();
+            let add = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: ur(&format!("u{i}@x")) }), 2).unwrap();
             s = apply(Some(&s), &add, &w.resolve()).unwrap();
             i += 1;
         }
-        let add = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(AddMember { member: ur("extra@x") }), 2).unwrap();
+        let add = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: ur("extra@x") }), 2).unwrap();
         assert_eq!(apply(Some(&s), &add, &w.resolve()), Err(ProtoError::FieldLimit("members")));
     }
 }

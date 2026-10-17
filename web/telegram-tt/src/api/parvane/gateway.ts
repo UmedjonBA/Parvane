@@ -40,10 +40,16 @@ export function getGatewayUrl() {
   const override = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1'
     ? localStorage.getItem(GATEWAY_URL_STORAGE_KEY) : undefined;
   const isOverrideAllowed = Boolean(override) && (!isSecurePage || override.startsWith('wss://'));
-  return (isOverrideAllowed ? override : undefined)
-    || (isSecurePage
-      ? `wss://${window.location.host}/ws`
-      : `ws://${window.location.hostname}:9222`);
+  return (isOverrideAllowed ? override : undefined) || defaultGatewayUrl();
+}
+
+// Скрытый сервис Tor (spec 025): страница `http://<адрес>.onion` — gateway на том же адресе по `/ws`
+// (шифрование и подлинность .onion даёт сам Tor); иначе — wss на https и прямой порт на локальном стенде
+function defaultGatewayUrl() {
+  const { protocol, host, hostname } = window.location;
+  if (protocol === 'https:') return `wss://${host}/ws`;
+  if (hostname.endsWith('.onion')) return `ws://${host}/ws`;
+  return `ws://${hostname}:9222`;
 }
 
 export class GatewayConnection {

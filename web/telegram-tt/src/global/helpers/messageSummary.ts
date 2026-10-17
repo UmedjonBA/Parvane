@@ -164,6 +164,7 @@ function getSummaryDescription(
     richMessage,
     taskOffer,
     article,
+    modReport,
   } = mediaContent;
   const { poll } = statefulContent || {};
 
@@ -280,6 +281,10 @@ function getSummaryDescription(
 
   if (article) {
     summary = lang('ArticleSummary', { title: article.title });
+  }
+
+  if (modReport) {
+    summary = lang('ParvaneModReportSummary');
   }
 
   if (richMessage) {

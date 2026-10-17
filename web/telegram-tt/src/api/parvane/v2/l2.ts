@@ -148,3 +148,22 @@ export function createL2Gate(deps: L2GateDeps) {
     state,
   };
 }
+
+// Синк по таймеру в режиме L2 (spec 025): пока есть чат с «усиленной приватностью», опросы сервера идут с
+// постоянным шагом — по их частоте не видно, видна ли вкладка и открыт ли раздел
+export const L2_POLL_MS = 20000;
+let isTimerSync = false;
+
+export function setTimerSyncMode(isOn: boolean) {
+  isTimerSync = isOn;
+}
+
+export function isTimerSyncMode() {
+  return isTimerSync;
+}
+
+/** Шаг следующего опроса: в режиме L2 — постоянный, иначе частый либо редкий. */
+export function pollDelay(fastMs: number, slowMs: number, isFast: boolean) {
+  if (isTimerSync) return L2_POLL_MS;
+  return isFast ? fastMs : slowMs;
+}

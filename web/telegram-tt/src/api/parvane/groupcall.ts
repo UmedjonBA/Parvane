@@ -35,6 +35,8 @@ type GroupCallCallbacks = {
   verify?: (publicKey: string, data: string, signature: string) => boolean;
   onPeerState: (peer: string, state: GroupPeerState) => void;
   onPeerStream: (peer: string, stream: MediaStream) => void;
+  // Участник выключил или включил микрофон или камеру (spec 024)
+  onPeerMedia?: (peer: string, state: { isAudioMuted: boolean; isVideoMuted: boolean }) => void;
   onEnded: () => void;
 };
 
@@ -174,6 +176,13 @@ class MeshPeerSession {
           return;
         }
         this.end(false);
+        break;
+      case 'media':
+        if (signal.call_id === this.callId) {
+          this.cb.onPeerMedia?.(this.peer, {
+            isAudioMuted: Boolean(signal.audio_muted), isVideoMuted: Boolean(signal.video_muted),
+          });
+        }
         break;
       case 'hangup':
         if (signal.call_id === this.callId) this.end(false);
@@ -359,6 +368,16 @@ export class GroupCallEngine {
       return;
     }
     await session.handleSignal(signal, isAuthenticated);
+  }
+
+  /** Свои микрофон и камера — каждому участнику его попарным сигналом (spec 024). */
+  sendMediaState(isAudioMuted: boolean, isVideoMuted: boolean) {
+    this.sessions.forEach((session, peer) => {
+      if (!session.callId) return;
+      this.cb.sendSignal(peer, {
+        type: 'media', call_id: session.callId, audio_muted: isAudioMuted, video_muted: isVideoMuted,
+      });
+    });
   }
 
   // Отказ/занятость на парный invite без входа в mesh (согласие не дано)

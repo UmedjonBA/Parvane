@@ -2,6 +2,7 @@ import type { Protocol, PvClient } from './engine';
 
 import { coalesceChanges } from './plannerCoalesce';
 import { V2Error } from './transport';
+import { pollDelay } from './l2';
 
 // Parvane (spec 010): планировщик на сервере — контейнер домена
 // `parvane.planner.v1` (шард domains). Движок держит сведённое состояние,
@@ -522,7 +523,7 @@ export function createPlannerSync(deps: Deps) {
     syncTimer = setTimeout(() => {
       syncTimer = undefined;
       void syncNow();
-    }, isActive && !isHidden() ? SYNC_INTERVAL_MS : SYNC_IDLE_MS);
+    }, pollDelay(SYNC_INTERVAL_MS, SYNC_IDLE_MS, isActive && !isHidden()));
   }
 
   function startTimers() {

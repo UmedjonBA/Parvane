@@ -29,6 +29,7 @@ pub mod olm;
 pub mod policy;
 pub mod recovery;
 pub mod registry_gen;
+pub mod report;
 pub mod schema;
 pub mod seal;
 pub mod sign;

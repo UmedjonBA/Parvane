@@ -120,9 +120,9 @@ export class V2Connection {
     return { user: f.user || '', deviceId: f.deviceId || '' };
   }
 
-  /** Метод реестра: тело запроса (protobuf) → тело ответа. */
-  request(method: string, body: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Uint8Array> {
-    return this.send(method, body, timeoutMs);
+  /** Метод реестра: тело запроса (protobuf) → тело ответа. `padTo` — дополнить кадр до кратной длины (L2). */
+  request(method: string, body: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS, padTo?: number): Promise<Uint8Array> {
+    return this.send(method, body, timeoutMs, undefined, padTo);
   }
 
   /** Поточный метод (скачивание): метаданные + чанки через колбэк. */
@@ -144,6 +144,7 @@ export class V2Connection {
     body: Uint8Array,
     timeoutMs: number,
     chunks?: Pending['chunks'],
+    padTo?: number,
   ): Promise<Uint8Array> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
@@ -156,7 +157,7 @@ export class V2Connection {
       this.pending.set(id, {
         resolve, reject, timer, chunks,
       });
-      ws.send(new Uint8Array(this.pv.encodeRequest(BigInt(id), method, body, Math.min(timeoutMs, 30000))));
+      ws.send(new Uint8Array(this.pv.encodeRequest(BigInt(id), method, body, Math.min(timeoutMs, 30000), padTo)));
     });
   }
 

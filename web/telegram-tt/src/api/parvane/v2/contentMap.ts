@@ -81,6 +81,13 @@ export type V2Content = {
   cloud_invite?: { container?: { domain?: string; id?: string }; name?: string; role?: number; text?: string };
   // ARTICLE-1: статья — заметка в Markdown
   article?: { title?: string; markdown?: string; text?: string; media?: V2Media[] };
+  mod_report?: {
+    group?: { domain?: string; id?: string };
+    reason?: string;
+    comment?: string;
+    text?: string;
+    messages?: { op_id?: string; author?: { address?: string }; text?: string; ts_ms?: string | number }[];
+  };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
   chat_mode?: { l2?: boolean };
@@ -360,6 +367,19 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
         },
       };
       break;
+    case 'mod_report':
+      out = {
+        mod_report: {
+          group: c.report_group,
+          reason: c.reason || undefined,
+          comment: c.comment || undefined,
+          text: c.text || undefined,
+          messages: c.reported?.map((m) => ({
+            op_id: uuidToB64(m.op_id), author: { address: m.author }, text: m.text, ts_ms: String(m.ts * 1000),
+          })),
+        },
+      };
+      break;
     case 'article':
       out = {
         article: {
@@ -489,6 +509,21 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       markdown: c.article.markdown || '',
       text: c.article.text || undefined,
       article_media: c.article.media?.length ? c.article.media.map(mediaFromV2) : undefined,
+    };
+  } else if (c.mod_report) {
+    const group = c.mod_report.group;
+    out = {
+      kind: 'mod_report',
+      report_group: group?.id ? { domain: group.domain || '', id: group.id } : undefined,
+      reason: c.mod_report.reason || undefined,
+      comment: c.mod_report.comment || undefined,
+      text: c.mod_report.text || undefined,
+      reported: (c.mod_report.messages || []).map((m) => ({
+        op_id: b64ToUuid(m.op_id) || '',
+        author: m.author?.address || '',
+        text: m.text || '',
+        ts: Math.floor(Number(m.ts_ms || 0) / 1000),
+      })).filter((m) => m.op_id && m.author),
     };
   } else if (c.task_response) {
     out = {

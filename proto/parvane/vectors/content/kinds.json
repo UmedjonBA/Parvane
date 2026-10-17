@@ -1169,6 +1169,45 @@
       "client": {
         "class": "message",
         "v1": {
+          "kind": "mod_report",
+          "reason": "spam",
+          "text": "Жалоба на сообщение в группе: спам"
+        }
+      },
+      "expect": {
+        "content": {
+          "mod_report": {
+            "comment": "реклама",
+            "group": {
+              "domain": "local",
+              "id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            },
+            "messages": [
+              {
+                "author": {
+                  "address": "mallory@local"
+                },
+                "op_id": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                "text": "купи",
+                "ts_ms": "1767225600000"
+              }
+            ],
+            "reason": "spam",
+            "text": "Жалоба на сообщение в группе: спам"
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "c201a7010a190a056c6f63616c12100102030405060708090a0b0c0d0e0f1012340a100102030405060708090a0b0c0d0e0f10120f0a0d6d616c6c6f7279406c6f63616c1a08d0bad183d0bfd0b82080d0eab6b7331a047370616d220ed180d0b5d0bad0bbd0b0d0bcd0b02a3ed096d0b0d0bbd0bed0b1d0b020d0bdd0b020d181d0bed0bed0b1d189d0b5d0bdd0b8d0b520d0b220d0b3d180d183d0bfd0bfd0b53a20d181d0bfd0b0d0bc"
+      },
+      "name": "mod-report"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
           "kind": "poll",
           "question": "Когда?"
         }

@@ -18,6 +18,7 @@ import {
   getCanManageTopic,
   getHasAdminRight,
   getIsSavedDialog,
+  isChatAdmin,
   isSystemBot,
   isUserRightBanned,
 } from '../../global/helpers';
@@ -866,8 +867,8 @@ export default memo(withGlobal<OwnProps>(
     const isMainThread = threadId === MAIN_THREAD_ID;
     const isChatWithSelf = selectIsChatWithSelf(global, chatId);
     const { chatId: currentChatId, threadId: currentThreadId } = selectCurrentMessageList(global) || {};
-    // Parvane: жалобы не поддерживаются (нет модерации Telegram)
-    const canReportChat = false;
+    // Parvane (spec 024): жалоба на пользователя (личный чат) или на группу — администратору сервера
+    const canReportChat = isMainThread && !isChatWithSelf && (isPrivate || !isChatAdmin(chat));
 
     const chatBot = !isSystemBot(chatId) ? selectBot(global, chatId) : undefined;
     const userFullInfo = isPrivate ? selectUserFullInfo(global, chatId) : undefined;

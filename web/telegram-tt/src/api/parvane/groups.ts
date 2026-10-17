@@ -161,6 +161,8 @@ export function createGroupController(deps: GroupDependencies) {
       members,
       adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
       canViewMembers: true,
+      // Реакции в группах — как в Telegram (spec 024): любые из встроенного набора
+      enabledReactions: { type: 'all' as const },
       about: info.about || undefined,
       requestsPending: info.pending_requests,
     };
@@ -386,6 +388,7 @@ export function createGroupController(deps: GroupDependencies) {
         members,
         adminMembersById: Object.fromEntries(adminMembers.map((member) => [member.userId, member])),
         canViewMembers: true,
+        enabledReactions: { type: 'all' as const },
         inviteLink,
         about: info.about || undefined,
       },
@@ -589,6 +592,16 @@ export function createGroupController(deps: GroupDependencies) {
     return (await v2.changeGroup(groupId, change)) || undefined;
   }
 
+  // Карточка жалобы у админа (spec 024): заблокировать автора в группе
+  async function banFromReport({ groupChatId, userId }: { groupChatId?: string; userId: string }) {
+    const store = deps.getStore();
+    const groupId = groupChatId ? store.getAddressForId(groupChatId) : undefined;
+    const member = store.getAddressForId(userId);
+    const v2 = groupId ? v2Of(groupId) : undefined;
+    if (!v2 || !groupId || !member) return false;
+    return v2.changeGroup(groupId, { ban: { member: { address: member } } });
+  }
+
   // «Создать ссылку»: с параметрами — дополнительная; без — основная группы
   async function exportChatInvite({
     peer, title, expireDate, usageLimit, isRequestNeeded,
@@ -666,20 +679,29 @@ export function createGroupController(deps: GroupDependencies) {
 
   // Сервер не правит параметры ссылки — экран tt зовёт это для отзыва
   // (`isRevoked: true`); остальные правки — «отзови и создай новую»
-  async function editExportedChatInvite({ peer, link, isRevoked }: {
+  async function editExportedChatInvite({
+    peer, link, isRevoked, expireDate, usageLimit, isRequestNeeded, title,
+  }: {
     peer: ApiChat; link: string; isRevoked?: boolean;
     expireDate?: number; usageLimit?: number; isRequestNeeded?: boolean; title?: string;
   }) {
     const groupId = deps.getStore().getAddressForId(peer.id);
     const v2 = groupId ? v2Of(groupId) : undefined;
     if (!v2 || !groupId) return undefined;
-    if (!isRevoked) {
+    const record = (await v2.listInvites(groupId)).find((item) => item.url === link);
+    if (!record) return undefined;
+    if (isRevoked) {
+      if (!(await v2.revokeInvite(groupId, link))) return undefined;
+      return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(record, false, true) };
+    }
+    // Правка действующей ссылки (spec 024): название, срок, лимит; «по заявке» — как при создании
+    if (Boolean(isRequestNeeded) !== Boolean(record.isRequestNeeded)) {
       reportInviteError('editUnsupported');
       return undefined;
     }
-    const record = (await v2.listInvites(groupId)).find((item) => item.url === link);
-    if (!record || !(await v2.revokeInvite(groupId, link))) return undefined;
-    return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(record, false, true) };
+    if (!(await v2.editInvite(groupId, link, { title, expiresAt: expireDate, usageLimit }))) return undefined;
+    const updated = (await v2.listInvites(groupId)).find((item) => item.url === link) || record;
+    return { oldInvite: buildV2ExportedInvite(record), newInvite: buildV2ExportedInvite(updated) };
   }
 
   async function deleteExportedChatInvite({ peer, link }: { peer: ApiChat; link: string }) {
@@ -702,26 +724,34 @@ export function createGroupController(deps: GroupDependencies) {
     return true;
   }
 
-  // Вступившие по ссылке сервер не хранит (только счётчик) — список пуст;
-  // заявители (`isRequested`) — из заявок группы
-  async function fetchChatInviteImporters({ peer, isRequested }: {
+  // Вступившие по ссылке — из журнала группы (spec 024), заявители (`isRequested`) — из заявок группы,
+  // у ссылки — только пришедшие по ней
+  async function fetchChatInviteImporters({ peer, link, isRequested }: {
     peer: ApiChat; link?: string; offsetDate?: number; offsetUser?: ApiUser; limit?: number; isRequested?: boolean;
   }): Promise<{ importers: ApiChatInviteImporter[] } | undefined> {
     const store = deps.getStore();
     const groupId = store.getAddressForId(peer.id);
     if (!groupId) return undefined;
-    if (!isRequested) return { importers: [] };
     const v2 = v2Of(groupId);
     if (!v2) return undefined;
-    // Сервер v2 не сообщает, по какой ссылке пришла заявка, — список общий
+    const linkId = link
+      ? (await v2.listInvites(groupId)).find((item) => isSameV2Link(item.url, link))?.linkId
+      : undefined;
+    const toImporter = (address: string, date: number, isRequest?: boolean): ApiChatInviteImporter => {
+      const user = store.buildApiUser(address);
+      deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
+      return { userId: user.id, date, isRequested: isRequest || undefined };
+    };
+    if (!isRequested) {
+      if (!linkId) return { importers: [] };
+      return { importers: v2.listInviteJoins(groupId, linkId).map((join) => toImporter(join.user, join.date)) };
+    }
     const pending = await v2.listJoinRequests(groupId);
     if (!pending) return undefined;
     return {
-      importers: pending.map((request) => {
-        const user = store.buildApiUser(request.user);
-        deps.sendUpdate({ '@type': 'updateUser', id: user.id, user });
-        return { userId: user.id, date: request.date, isRequested: true as const };
-      }),
+      importers: pending
+        .filter((request) => !link || request.linkId === linkId)
+        .map((request) => toImporter(request.user, request.date, true)),
     };
   }
 
@@ -734,7 +764,9 @@ export function createGroupController(deps: GroupDependencies) {
     if (!groupId || !member) return undefined;
     const v2 = v2Of(groupId);
     if (!v2) return undefined;
-    return (await v2.decideJoinRequest(groupId, member, isApproved)) ? true : undefined;
+    // Ссылка заявки — чтобы одобренный считался во вступивших по ней (spec 024)
+    const linkId = (await v2.listJoinRequests(groupId))?.find((request) => request.user === member)?.linkId;
+    return (await v2.decideJoinRequest(groupId, member, isApproved, linkId)) ? true : undefined;
   }
 
   async function hideAllChatJoinRequests(
@@ -748,7 +780,7 @@ export function createGroupController(deps: GroupDependencies) {
     const pending = await v2.listJoinRequests(groupId);
     if (!pending) return undefined;
     for (const request of pending) {
-      await v2.decideJoinRequest(groupId, request.user, isApproved);
+      await v2.decideJoinRequest(groupId, request.user, isApproved, request.linkId);
     }
     return true;
   }
@@ -1022,6 +1054,7 @@ export function createGroupController(deps: GroupDependencies) {
     editExportedChatInvite,
     exportChatInvite,
     fetchChatInviteImporters,
+    banFromReport,
     fetchExportedChatInvites,
     fetchFullChat,
     fetchMembers,

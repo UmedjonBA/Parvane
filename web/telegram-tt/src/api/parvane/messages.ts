@@ -114,6 +114,27 @@ const ARTICLE_MEDIA_MAX = 32;
 
 // Собеседник без журнала устройств v2 (протокол v1 отключён, T110) — доставить нечем
 const V2_PEER_REQUIRED = 'The recipient has no devices on protocol v2.';
+// Жалобы (spec 024): коды причин схемы и ключи строк окна жалобы
+const REPORT_REASONS = [
+  'spam', 'violence', 'porn', 'child', 'copyright', 'illegal', 'personal', 'fake', 'other',
+] as const;
+const REPORT_REASON_KEYS: Record<typeof REPORT_REASONS[number], string> = {
+  spam: 'ParvaneReportReasonSpam',
+  violence: 'ParvaneReportReasonViolence',
+  porn: 'ParvaneReportReasonPorn',
+  child: 'ParvaneReportReasonChild',
+  copyright: 'ParvaneReportReasonCopyright',
+  illegal: 'ParvaneReportReasonIllegal',
+  personal: 'ParvaneReportReasonPersonal',
+  fake: 'ParvaneReportReasonFake',
+  other: 'ParvaneReportReasonOther',
+};
+const REPORT_SUBMIT_MARK = ':send';
+const REPORT_COMMENT_MAX = 1024;
+const REPORT_TEXT_MAX = 4096;
+const REPORT_FALLBACK_MAX = 600;
+const REPORT_MEDIA_PLACEHOLDER = '[media]';
+const V2_GROUP_PREFIX = 'v2g:';
 
 // Поля статьи: название в пределах схемы и `text` — для клиентов без окна чтения
 function articleFields(title: string, markdown: string) {
@@ -141,6 +162,22 @@ export function createMessageController(deps: MessageDependencies) {
   }
 
   // Стек v2 обязан принять операцию чата; иначе — отказ (без v1 понижать некуда)
+  // Админы группы, которым уходит жалоба на её сообщения: владелец и админы с правом удалять или банить,
+  // кроме себя. Пусто — жалоба уходит администратору сервера
+  function reportAdmins(address: string) {
+    if (!deps.v2?.isV2GroupAddress(address)) return [];
+    const self = store().self;
+    return (deps.v2.groupInfo(address)?.members || [])
+      .filter(({ address: member, role, admin_rights: rights }) => member !== self && (role === 'owner'
+        || (role === 'admin' && (!rights || rights.delete_messages || rights.ban_users))))
+      .map(({ address: member }) => member);
+  }
+
+  function notifyReport(outcome: 'sent' | 'unavailable' | 'failed') {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('parvane-report', { detail: { outcome } }));
+  }
+
   function requireV2() {
     if (!deps.v2) throw new E2eSendError('Protocol v2 stack is unavailable.');
     return deps.v2;
@@ -1503,6 +1540,82 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
+    // Жалоба (spec 024, REPORT-1): шаги окна Telegram — причина, комментарий, отправка. Сообщения группы —
+    // её админам карточкой `mod_report` (личным сообщением каждому), остальное — администратору сервера
+    // шифртекстом под его ключом. Ключи строк окна (`Parvane…`) переводит само окно
+    async reportMessages({
+      peer, messageIds, description, option,
+    }: { peer: ApiChat; messageIds: number[]; description?: string; option?: string }) {
+      const currentStore = store();
+      const address = currentStore.getAddressForId(peer.id);
+      if (!address) return undefined;
+      const admins = messageIds.length ? reportAdmins(address) : [];
+      if (!option) {
+        return {
+          result: {
+            type: 'selectOption' as const,
+            title: admins.length ? 'ParvaneReportToAdminsTitle' : 'ParvaneReportToServerTitle',
+            options: REPORT_REASONS.map((reason) => ({ text: REPORT_REASON_KEYS[reason], option: reason })),
+          },
+        };
+      }
+      // Второй шаг — необязательный комментарий; отметка в `option` отличает отправку от него
+      if (!option.endsWith(REPORT_SUBMIT_MARK)) {
+        return { result: { type: 'comment' as const, isOptional: true, option: `${option}${REPORT_SUBMIT_MARK}` } };
+      }
+      const reason = option.slice(0, -REPORT_SUBMIT_MARK.length);
+      const comment = (description || '').slice(0, REPORT_COMMENT_MAX);
+      const reported = messageIds.map((id) => {
+        const message = currentStore.getMessage(peer.id, id);
+        const uuid = currentStore.getUuidForMessage(peer.id, id);
+        const author = message?.senderId ? currentStore.getAddressForId(message.senderId) : undefined;
+        if (!message || !uuid || !author) return undefined;
+        // Без текста (фото, видео, стикер) — пометка: само вложение жалоба не несёт
+        const text = message.content.text?.text || REPORT_MEDIA_PLACEHOLDER;
+        return {
+          op_id: uuid, author, text: text.slice(0, REPORT_TEXT_MAX), ts: message.date,
+        };
+      }).filter(Boolean);
+      if (admins.length && reported.length) {
+        const groupHex = address.slice(V2_GROUP_PREFIX.length);
+        const content: WireMessageContent = {
+          kind: 'mod_report',
+          report_group: { domain: currentStore.self.split('@')[1] || '', id: hexToB64(groupHex) },
+          reason,
+          comment: comment || undefined,
+          reported,
+          text: `⚠️ ${reported.map((m) => m.text).join(' / ')}`.slice(0, REPORT_FALLBACK_MAX),
+        };
+        for (const admin of admins) {
+          await publishInner(admin, content);
+        }
+        notifyReport('sent');
+        return { result: { type: 'reported' as const } };
+      }
+      const outcome = await requireV2().submitReport({
+        version: 1,
+        reason,
+        comment,
+        chat: address,
+        target: reported[0]?.author || address,
+        messages: reported,
+      });
+      notifyReport(outcome);
+      return outcome === 'sent' ? { result: { type: 'reported' as const } } : undefined;
+    },
+
+    // Карточка жалобы у админа: удалить сообщения у всех (право админа проверит движок)
+    async parvaneModDelete({ groupChatId, uuids }: { groupChatId?: string; uuids: string[] }) {
+      const address = groupChatId ? store().getAddressForId(groupChatId) : undefined;
+      if (!address || !uuids.length) return false;
+      try {
+        return await requireV2().tryDelete(address, uuids);
+      } catch (error) {
+        deps.log(`удаление по жалобе не прошло: ${String(error)}`);
+        return false;
+      }
+    },
+
     // Статья (ARTICLE-1): заметка «Знаний» целиком; картинки заметки не входят
     async parvaneSendArticle({
       chat, title, markdown, media,
@@ -1704,4 +1817,8 @@ export function createMessageController(deps: MessageDependencies) {
     refreshPollMessage,
     refreshTaskOfferMessage,
   };
+}
+
+function hexToB64(hex: string) {
+  return btoa(String.fromCharCode(...(hex.match(/../g) || []).map((h) => parseInt(h, 16))));
 }

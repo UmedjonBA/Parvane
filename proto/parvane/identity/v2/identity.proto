@@ -188,6 +188,17 @@ service IdentityService {
   // ключ открытым текстом (решение пользователя 9 окт 2026: удобство важнее —
   // ключ лежит у человека в чате с ботом). Ключ в базе не хранится: очередь
   // бота и ответ пользователя — только в памяти identity, с коротким сроком.
+  // Жалоба администратору сервера (spec 024): приложенное шифруется открытым ключом администратора
+  // (`ServerDescribeResponse.report_public_key`, HPKE); сервер хранит шифртекст и автора жалобы.
+  rpc ReportSubmit(ReportSubmitRequest) returns (ReportSubmitResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.report.submit"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
   rpc RecoveryTgSend(RecoveryTgSendRequest) returns (RecoveryTgSendResponse) {
     option (parvane.core.v2.method) = {
       name: "identity.recovery.tg_send"
@@ -495,7 +506,16 @@ message ServerDescribeResponse {
   // запечатывает им корень личности и отдаёт серверу шифртекст (RootBackupSet.escrow).
   // Закрытый ключ хранит администратор вне сервера; пусто — страховки нет.
   bytes escrow_public_key = 5 [(parvane.core.v2.max_len) = 32];
+  // Открытый ключ администратора для жалоб (X25519, HPKE; spec 024). Пусто — жалобы серверу не принимаются.
+  bytes report_public_key = 6 [(parvane.core.v2.max_len) = 32];
 }
+
+// Жалоба: `PVRP` ‖ версия ‖ enc(32) ‖ ct — JSON жалобы, запечатанный ключом администратора
+// (`info = "parvane/v2/report\0" ‖ адрес автора`).
+message ReportSubmitRequest {
+  bytes sealed = 1 [(parvane.core.v2.max_len) = 262144];
+}
+message ReportSubmitResponse {}
 
 // ── сессия ──────────────────────────────────────────────────────────────────
 

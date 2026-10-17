@@ -12,7 +12,7 @@ import type { WireCallSignal } from '../callengine';
 import type { BlobSession } from '../cloudBlobs';
 import type { WireGroupInvite } from '../groupcall';
 import type {
-  WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
+  WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireReactor, WireStoredMessage,
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { V2Content } from './contentMap';
@@ -39,7 +39,10 @@ import {
   buildBundleMark, deriveBundleKey, type KeyBundleHistory, openKeyBundle, readGrantBundleKey, sealKeyBundle,
   withBundleKey, withFreshLog,
 } from './keyBundle';
-import { createL2Gate, type L2State, parseL2State } from './l2';
+import {
+  createL2Gate, type L2State, parseL2State, setTimerSyncMode,
+} from './l2';
+import { createL2Ticker } from './l2Ticks';
 import { createMessageIndex, type MessageIndex } from './messageIndex';
 import { createPlannerSync } from './planner';
 import { createReconnectBackoff } from './reconnectBackoff';
@@ -113,7 +116,11 @@ type Deps = {
   /** Сигнал личного звонка от v2-собеседника: отправитель и привязка к звонку уже
    * проверены движком (сертификат устройства, подпись, аудитория, цель). */
   // `groupCallId` — попарный сигнал внутри группового звонка (T141)
-  onCallSignal?: (from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) => void;
+  // Режим L2 (spec 025): скачать вложение заранее, при получении
+  prefetchMedia?: (content: WireMessageContent) => void;
+  onCallSignal?: (
+    from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string, device?: string,
+  ) => void;
   /** Режим «усиленная приватность» (L2) чата изменился — typing/presence и UI. */
   onL2Changed?: (address: string) => void;
   /** Своё служебное сообщение — в журнал исходящих (v2 своей операции не возвращает). */
@@ -142,6 +149,8 @@ type EngineGroupInfo = {
   invites?: {
     id: string; creator: string; createdMs: number; title?: string; expiresMs?: number;
     usageLimit?: number; requiresApproval?: boolean; uses?: number;
+    /** Кто вступил по ссылке (spec 024): адрес и время записи журнала. */
+    joins?: { user: string; tsMs: number }[];
   }[];
   // Политика «усиленная приватность» (L2) и кто задал её последним
   l2?: boolean;
@@ -167,7 +176,10 @@ export type V2DeviceBackup = {
 };
 
 /** Заявка на вступление в группу v2 (ссылка с одобрением). */
-export type V2JoinRequest = { user: string; date: number };
+export type V2JoinRequest = { user: string; date: number; linkId?: string };
+
+/** Вступивший по ссылке (spec 024): из журнала группы. */
+export type V2InviteJoin = { user: string; date: number };
 
 export type V2InviteErrorCode = 'invalid' | 'banned' | 'revoked' | 'expired' | 'exhausted' | 'rateLimited' | 'failed';
 
@@ -379,6 +391,10 @@ const OTK_COUNT = 50;
 // устройство не получало бы сообщений, пока само не напишет
 const PEER_TTL_MS = 10 * 60 * 1000;
 const PEER_LOG_REFRESH_MS = 15000;
+// Режим L2 (spec 025): кадры доставки дополняются до кратного этому размеру
+const L2_FRAME_PAD = 1024;
+// Режим L2 (spec 025): журналы всех собеседников — раз в минуту, а не при открытии чата
+const L2_PEER_REFRESH_MS = 60000;
 // Переподключение (perf A5): повторы 1 → 2 → 4 … 60 с с разбросом, сброс при
 // успехе; `online` и возврат вкладки на экран — попытка сразу
 const RECONNECT_BASE_MS = 1000;
@@ -417,6 +433,7 @@ export function createV2Controller(deps: Deps) {
   // линковки, чтобы любое своё устройство могло сменить SSK
   let rootBackupB64: string | undefined;
   let escrowKey: Promise<Uint8Array | undefined> | undefined;
+  let reportKey: Promise<Uint8Array | undefined> | undefined;
   let escrowCheck: { at: number; isMissing: boolean } | undefined;
   let telegramCheck: { at: number; isLinked: boolean } | undefined;
   let linkMaterial: Uint8Array | undefined;
@@ -433,7 +450,6 @@ export function createV2Controller(deps: Deps) {
   const ephChats = new Set<string>();
   // Строки истории по uuid: цели мутаций (perf A2 — без чтения всей истории)
   const messages = deps.index || createMessageIndex({ loadAll: deps.loadHistory });
-  const reactions = new Map<string, Map<string, string>>();
   // Домен сервера из описателя (группы v2 живут на нём)
   let serverDomain = '';
   // Группы, уже показанные UI (новая — с updateChatJoin)
@@ -563,18 +579,19 @@ export function createV2Controller(deps: Deps) {
     window.addEventListener('pagehide', () => void persistNow());
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') void persistNow();
-      else reconnectNow();
+      // В режиме L2 переподключение по возврату на вкладку выдало бы, когда человек её открыл (spec 025)
+      else if (!isL2Active()) reconnectNow();
     });
     window.addEventListener('online', reconnectNow);
   }
 
   async function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
-    if (chan === 'anon') return callAnon(method, body);
+    if (chan === 'anon') return l2Ticker.submit(method, body);
     if (!idConn) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     return idConn.request(method, body);
   }
 
-  async function callAnon(method: string, body: Uint8Array): Promise<Uint8Array> {
+  async function callAnon(method: string, body: Uint8Array, padTo?: number): Promise<Uint8Array> {
     if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     anonPlanner = anonPlanner || new pv.PvAnonPlanner();
     const now = Date.now();
@@ -586,9 +603,54 @@ export function createV2Controller(deps: Deps) {
       conn = await openAnon(plan.conn);
     }
     try {
-      return await conn.request(method, body);
+      return await conn.request(method, body, undefined, padTo);
     } finally {
       if (plan.closeAfter) closeAnon(plan.conn);
+    }
+  }
+
+  // Режим L2 (spec 025): записи уходят тактами, пустые такты — пустышки себе
+  const l2Ticker = createL2Ticker({
+    isActive: isL2Active,
+    // Кадры тактов одной длины: личное, групповое, пустышка и адресаты разной длины неотличимы
+    send: (method, body) => callAnon(method, body, isL2Active() ? L2_FRAME_PAD : undefined),
+    makeCover: () => {
+      if (!ready || !client) return undefined;
+      try {
+        const req = client.prepareCover() as OutReq;
+        return { method: req.method, body: req.body };
+      } catch {
+        return undefined;
+      }
+    },
+    log: deps.log,
+  });
+
+  /** Есть хотя бы один чат с «усиленной приватностью» — включены такты, шум и синк по таймеру (spec 025). */
+  function isL2Active() {
+    return Boolean(ready && client && !client.presenceAllowed());
+  }
+
+  let l2PeerTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** Режим L2 включился или выключился: такты, постоянный шаг опросов, журналы собеседников по таймеру. */
+  function refreshL2Mode() {
+    const isOn = isL2Active();
+    setTimerSyncMode(isOn);
+    l2Ticker.refresh();
+    if (isOn && !l2PeerTimer) {
+      l2PeerTimer = setInterval(() => void refreshPeerLogsOnTimer(), L2_PEER_REFRESH_MS);
+    } else if (!isOn && l2PeerTimer) {
+      clearInterval(l2PeerTimer);
+      l2PeerTimer = undefined;
+    }
+  }
+
+  // Все известные журналы собеседников — разом и по таймеру: по запросам не видно, чей чат открыт
+  async function refreshPeerLogsOnTimer() {
+    if (!isL2Active()) return;
+    for (const address of loadStickyPeers()) {
+      await syncPeerLog(address).catch(() => undefined);
     }
   }
 
@@ -749,6 +811,7 @@ export function createV2Controller(deps: Deps) {
     l2Gate.reconcile([...loadStickyPeers(), ...publishedGroups])
       .forEach((address) => deps.onL2Changed?.(address));
     deps.log(isReconnect ? 'v2: соединение восстановлено' : 'v2: готов');
+    refreshL2Mode();
     // «Печатает» по v2: каналы известных v2-собеседников и групп (подписки
     // живут на соединении — после обрыва оформляются заново)
     void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
@@ -1102,11 +1165,9 @@ export function createV2Controller(deps: Deps) {
     await deps.applyExternal(next);
   }
 
-  function reactionList(uuid: string) {
-    const byUser = reactions.get(uuid);
-    if (!byUser) return [];
+  function reactionList(reactors: WireReactor[]) {
     const counts = new Map<string, { count: number; mine: boolean }>();
-    byUser.forEach((emoji, user) => {
+    reactors.forEach(({ emoji, user }) => {
       const c = counts.get(emoji) || { count: 0, mine: false };
       c.count += 1;
       if (user === deps.getSelf()) c.mine = true;
@@ -1210,7 +1271,7 @@ export function createV2Controller(deps: Deps) {
         return;
       }
       const signal = callSignalFromV2(ev.signal);
-      if (signal) deps.onCallSignal?.(ev.from, signal, groupCallIdFromV2(ev.signal));
+      if (signal) deps.onCallSignal?.(ev.from, signal, groupCallIdFromV2(ev.signal), ev.device);
       return;
     }
     if (ev.type === 'groupChanged' && ev.group) {
@@ -1276,7 +1337,13 @@ export function createV2Controller(deps: Deps) {
         for (const t of c.delete.targets) {
           const target = b64ToUuid(t.op_id);
 
-          if (target) await update(target, (m) => (m.from === author && inThisChat(m) ? { ...m, deleted: true } : m));
+          // Чужое сообщение группы удаляет и админ с правом удалять (жалоба, spec 024): право подписанта
+          // проверил движок (`mutation_authorized`), здесь — что автор мутации и правда такой админ
+          const canDeleteOthers = isGroup && canDeleteInGroup(ev.group!.id, author);
+          if (target) {
+            await update(target, (m) => ((m.from === author || canDeleteOthers) && inThisChat(m)
+              ? { ...m, deleted: true } : m));
+          }
         }
         return;
       }
@@ -1284,11 +1351,15 @@ export function createV2Controller(deps: Deps) {
         const target = b64ToUuid(c.reaction.target.op_id);
         const known = target ? await knownMessage(target) : undefined;
         if (target && known && inThisChat(known)) {
-          const byUser = reactions.get(target) || new Map<string, string>();
-          if (c.reaction.remove || !c.reaction.emoji) byUser.delete(author);
-          else byUser.set(author, c.reaction.emoji);
-          reactions.set(target, byUser);
-          await update(target, (m) => ({ ...m, reactions: reactionList(target) }));
+          // Основа — сохранённый список строки (а не память вкладки): после
+          // перезагрузки счётчики не начинаются с нуля
+          const emoji = c.reaction.remove ? '' : c.reaction.emoji || '';
+          const ts = Math.floor((ev.tsMs || Date.now()) / 1000);
+          await update(target, (m) => {
+            const reactors = (m.reactors || []).filter((r) => r.user !== author);
+            if (emoji) reactors.push({ user: author, emoji, ts });
+            return { ...m, reactors, reactions: reactionList(reactors) };
+          });
         }
         return;
       }
@@ -1328,6 +1399,11 @@ export function createV2Controller(deps: Deps) {
       await deps.applyExternal(stored);
       // Собеседник (или своё другое устройство) сменил режим L2 личного чата
       if (c.chat_mode) announceL2(author === self ? chat : author);
+      // Чат в режиме L2 (spec 025): вложение качается сразу, а не при просмотре — по скачиванию не видно,
+      // когда человек открыл чат
+      if (author !== self && wire.file_id && readL2(to === self ? author : to)?.active) {
+        deps.prefetchMedia?.(wire);
+      }
       return;
     }
     if (ev.type === 'deviceAdded') {
@@ -1496,6 +1572,40 @@ export function createV2Controller(deps: Deps) {
       });
     }
     return escrowKey;
+  }
+
+  /** Открытый ключ администратора для жалоб (`server.describe`, spec 024); нет — жалобы серверу не принимаются.
+   * Ключ не закрепляется в сборке: жалоба и так раскрывается администратору этого сервера. */
+  function loadReportKey() {
+    if (!reportKey) {
+      reportKey = preauth(deps.gatewayUrl(), 'server.describe', {}).then((described) => {
+        const announced = typeof described.report_public_key === 'string' ? described.report_public_key : '';
+        return announced ? unb64(announced) : undefined;
+      }).catch((e: unknown) => {
+        reportKey = undefined;
+        deps.log(`v2: описание сервера не получено: ${String(e)}`);
+        return undefined;
+      });
+    }
+    return reportKey;
+  }
+
+  /** Жалоба администратору сервера (spec 024): JSON запечатывается его ключом, сервер видит только шифртекст.
+   * `unavailable` — сервер жалобы не принимает. */
+  async function submitReport(report: Record<string, unknown>): Promise<'sent' | 'unavailable' | 'failed'> {
+    if (!ready || !pv) return 'failed';
+    const key = await loadReportKey();
+    if (!key) return 'unavailable';
+    try {
+      const sealed = pv.sealReport(key, deps.getSelf(), new TextEncoder().encode(JSON.stringify(report)));
+      await call('id', 'identity.report.submit', pv.encodeMethodRequest(
+        'identity.report.submit', JSON.stringify({ sealed: b64(sealed) }),
+      ));
+      return 'sent';
+    } catch (e) {
+      deps.log(`v2: жалоба не отправлена: ${String(e)}`);
+      return /UNAVAILABLE/.test(String(e)) ? 'unavailable' : 'failed';
+    }
   }
 
   /** Пока корень в памяти движка (`holder`) — запечатать его ключом администратора
@@ -2228,7 +2338,9 @@ export function createV2Controller(deps: Deps) {
       // сеть на каждой отправке/квитанции/«печатает» не нужно. Компромисс:
       // новое устройство собеседника может не получить одно сообщение
       if (hit.v2) {
-        if (age >= PEER_LOG_REFRESH_MS) void revalidatePeer(address);
+        // В режиме L2 (spec 025) журнал не перечитывается по действию (открыли чат — запрос к его
+        // собеседнику): все журналы обновляются по таймеру разом (`refreshPeerLogsOnTimer`)
+        if (age >= PEER_LOG_REFRESH_MS && !isL2Active()) void revalidatePeer(address);
         return true;
       }
       if (age < PEER_TTL_MS) return isSticky;
@@ -2427,6 +2539,19 @@ export function createV2Controller(deps: Deps) {
     if (!v2Signal) throw new V2Error('ERROR_CODE_INVALID');
     await serial(async () => {
       await runDirect(to, () => client!.prepareCall(to, JSON.stringify(v2Signal)) as OutReq[]);
+      await persist();
+    });
+    return true;
+  }
+
+  /** Сигнал звонка своим другим устройствам (spec 024): «принят/отклонён здесь» — они перестают звонить. */
+  async function trySendCallOwn(signal: WireCallSignal): Promise<boolean> {
+    if (!ready || !client) return false;
+    const v2Signal = callSignalToV2(signal);
+    if (!v2Signal?.hangup) return false;
+    await serial(async () => {
+      const requests = client!.prepareCallOwn(JSON.stringify(v2Signal)) as OutReq[];
+      for (const req of requests) await call(req.chan, req.method, req.body);
       await persist();
     });
     return true;
@@ -2681,6 +2806,7 @@ export function createV2Controller(deps: Deps) {
   function announceL2(address: string) {
     l2Gate.state(address);
     deps.onL2Changed?.(address);
+    refreshL2Mode();
   }
 
   /** Своё предпочтение в личном чате. false — собеседник не на v2. */
@@ -3294,6 +3420,31 @@ export function createV2Controller(deps: Deps) {
     });
   }
 
+  /** Правка действующей ссылки (spec 024): название, срок, лимит; счётчик вступивших прежний. */
+  async function editInvite(
+    address: string, url: string, params: { title?: string; expiresAt?: number; usageLimit?: number },
+  ) {
+    const record = (await loadInvites())[address]?.find((item) => item.url === url);
+    if (!record) return false;
+    return changeGroup(address, {
+      invite_edit: {
+        link_id: hexToB64(record.linkId),
+        title: params.title || '',
+        expires_ms: String((params.expiresAt || 0) * 1000),
+        usage_limit: params.usageLimit || 0,
+      },
+    });
+  }
+
+  /** Кто вступил по ссылке (spec 024), новые сверху. */
+  function listInviteJoins(address: string, linkId: string): V2InviteJoin[] {
+    if (!isV2GroupAddress(address)) return [];
+    const meta = readGroup(groupHex(address))?.invites?.find(({ id }) => id === linkId);
+    return (meta?.joins || [])
+      .map(({ user, tsMs }) => ({ user, date: Math.floor(tsMs / 1000) }))
+      .reverse();
+  }
+
   async function revokeInvite(address: string, url: string) {
     const record = (await loadInvites())[address]?.find((item) => item.url === url);
     if (!record) return false;
@@ -3367,6 +3518,13 @@ export function createV2Controller(deps: Deps) {
   // одобрение — запись `AddMember` журнала внутри `group.request.decide`.
   // О новой заявке сервер сообщает уведомлением о группе без смены версии.
 
+  function canDeleteInGroup(hex: string, user: string) {
+    const g = readGroup(hex);
+    const member = g?.members.find(({ user: address }) => address === user);
+    const isAdmin = member?.role === 2 && (!member.rights || Boolean(member.rights.delete_messages));
+    return Boolean(g && member && (g.owner === user || isAdmin));
+  }
+
   function canDecideRequests(hex: string) {
     const g = readGroup(hex);
     const self = deps.getSelf();
@@ -3389,14 +3547,21 @@ export function createV2Controller(deps: Deps) {
         'parvane.group.v2.RequestListRequest', JSON.stringify({ group: { domain: serverDomain, id: hexToB64(hex) } }),
       ));
       const list = JSON.parse(pv.decodeMessage('parvane.group.v2.RequestListResponse', resp)) as {
-        requests?: { user?: { address?: string }; requested_ms?: string | number; requestedMs?: string | number }[];
+        requests?: {
+          user?: { address?: string }; requested_ms?: string | number; requestedMs?: string | number;
+          link_id?: string; linkId?: string;
+        }[];
       };
       const requests = (list.requests || [])
         .filter((item) => item.user?.address)
-        .map((item) => ({
-          user: item.user!.address!,
-          date: Math.floor(Number(item.requested_ms ?? item.requestedMs ?? 0) / 1000),
-        }));
+        .map((item) => {
+          const link = item.link_id ?? item.linkId;
+          return {
+            user: item.user!.address!,
+            date: Math.floor(Number(item.requested_ms ?? item.requestedMs ?? 0) / 1000),
+            linkId: link ? b64ToHex(link) : undefined,
+          };
+        });
       notePendingRequests(hex, requests.length);
       return requests;
     } catch (e) {
@@ -3405,13 +3570,14 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
-  async function decideJoinRequest(address: string, user: string, approve: boolean) {
+  async function decideJoinRequest(address: string, user: string, approve: boolean, linkId?: string) {
     if (!ready || !client || !isV2GroupAddress(address)) return false;
     const hex = groupHex(address);
     return serial(async () => {
       let req: OutReq;
       try {
-        req = client!.groupRequestDecide(hex, user, approve) as OutReq;
+        // Одобренный по ссылке «по заявке» считается во вступивших по ней (spec 024)
+        req = client!.groupRequestDecide(hex, user, approve, linkId) as OutReq;
       } catch (e) {
         deps.log(`v2: решение по заявке отклонено движком: ${String(e)}`);
         return false;
@@ -3919,6 +4085,8 @@ export function createV2Controller(deps: Deps) {
       if (client && isV2GroupAddress(address)) reportUnconfirmed(groupHex(address), claimed);
     },
     revokeInvite,
+    editInvite,
+    listInviteJoins,
     listRevokedInvites,
     hasPendingPrimary,
     deleteRevokedInvite,
@@ -3941,6 +4109,8 @@ export function createV2Controller(deps: Deps) {
     readers,
     trySend,
     trySendCall,
+    trySendCallOwn,
+    submitReport,
     uploadBlobChunk,
     completeBlobUpload,
     downloadBlobCap,
@@ -3960,6 +4130,10 @@ export function createV2Controller(deps: Deps) {
       receipt: { kind: 'RECEIPT_KIND_READ', messages: uuids.map(ref) },
     }),
     reset() {
+      l2Ticker.stop();
+      if (l2PeerTimer) clearInterval(l2PeerTimer);
+      l2PeerTimer = undefined;
+      setTimerSyncMode(false);
       planner.reset();
       cloud.reset();
       ready = false;
@@ -3984,7 +4158,6 @@ export function createV2Controller(deps: Deps) {
       reconnectBackoff.reset();
       peers.clear();
       messages.clear();
-      reactions.clear();
       publishedGroups.clear();
       pendingRequests.clear();
       rotateTimers.forEach((timer) => clearTimeout(timer));

@@ -293,7 +293,7 @@ fn c17_delivery_methods_take_only_envelopes() {
             assert!(schema::MESSAGES[i].name.ends_with("Envelope"), "{name}");
         }
     }
-    let r = Request { id: 1, method: "msg.deliver_sealed".into(), body: br#"{"kind":"text","text":"hi"}"#.to_vec(), timeout_ms: 1 };
+    let r = Request { id: 1, method: "msg.deliver_sealed".into(), body: br#"{"kind":"text","text":"hi"}"#.to_vec(), timeout_ms: 1, padding: vec![] };
     assert!(codec::check_request(&r, Origin::Client).is_err());
 }
 
@@ -328,7 +328,7 @@ fn c19_member_injected_by_server_rejected() {
     let g = group::build_entry(&owner, None, "x", Change::Create(Create { kind: GroupKind::Group as i32, default_permissions: Some(Permissions::default()), ..Default::default() }), 1).unwrap();
     let s = group::apply(None, &g, &resolve).unwrap();
     // Сервер (не участник) добавляет участника.
-    let e = group::build_entry(&server, Some(&s), "x", Change::AddMember(AddMember { member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
+    let e = group::build_entry(&server, Some(&s), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
     assert_eq!(group::apply(Some(&s), &e, &resolve).err(), Some(ProtoError::Forbidden));
     // Неизвестный ключ — отказ.
     let unknown = sign::generate_signing_key();

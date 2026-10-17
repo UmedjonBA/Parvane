@@ -318,7 +318,7 @@ fn codec_case(case: &Value) -> Result<(), String> {
             expect_outcome(&codec::decode_frame(&bytes, origin_of(input)), &case["expect"])
         }
         "request" => {
-            let req = Request { id: 1, method: str_field(input, "method")?.into(), body: hex_field(input, "body_hex")?, timeout_ms: 1000 };
+            let req = Request { id: 1, method: str_field(input, "method")?.into(), body: hex_field(input, "body_hex")?, timeout_ms: 1000, padding: vec![] };
             expect_outcome(&codec::check_request(&req, Origin::Client), &case["expect"])
         }
         k => Err(format!("неизвестный вид {k}")),

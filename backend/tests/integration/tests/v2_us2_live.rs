@@ -236,7 +236,7 @@ impl V2 {
     fn call(&mut self, method: &str, body: Vec<u8>) -> Result<Vec<u8>, ErrorCode> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000 }));
+        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![] }));
         loop {
             let f = self.recv().expect("ответ");
             match f.kind {
@@ -458,7 +458,7 @@ fn create_group(owner: &mut Dev, members: &[&Dev]) -> G {
     let state = group::apply(None, &genesis, &|k: &[u8; 32], _: u64| owners.get(k).cloned()).unwrap();
     let mut g = G { state, owners };
     for (i, m) in members.iter().enumerate() {
-        g.append(owner, Change::AddMember(AddMember { member: Some(UserRef { address: m.user.clone() }) }), 2 + i as i64).expect("add");
+        g.append(owner, Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: m.user.clone() }) }), 2 + i as i64).expect("add");
     }
     g
 }
@@ -644,7 +644,7 @@ async fn us2_ephemeral_live() {
         // Через идентифицированную сессию — нельзя (иначе автор связывается с сессией).
         f.check("group-typing-in-id", a.c.call("ephemeral.group_typing", group_typing_req(&send, &g.state.group, 1, &gch, &a.user).encode_to_vec()) == Err(ErrorCode::Forbidden), "");
         // Смена состава без новой эпохи: ключ мог остаться у исключённого → EXPIRED.
-        g.append(&mut a, Change::AddMember(AddMember { member: Some(UserRef { address: m.user.clone() }) }), 100_001).expect("add m");
+        g.append(&mut a, Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: m.user.clone() }) }), 100_001).expect("add m");
         f.check("group-typing-stale-epoch", an.call("ephemeral.group_typing", group_typing_req(&send, &g.state.group, 1, &gch, &a.user).encode_to_vec()) == Err(ErrorCode::Expired), "");
         // L2: движок не отдаёт каналы.
         f.check("l2-no-ephemeral", !eph::allowed(true), "");

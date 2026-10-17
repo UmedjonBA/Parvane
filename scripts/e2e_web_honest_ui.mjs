@@ -148,11 +148,12 @@ try {
   await right.getByRole('button', { name: 'Edit' }).click();
   await right.locator('.Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1000);
-  // spec 003: фото, описание, права и заявки — на сервере, экраны вернулись;
-  // тип группы, привязанный канал, реакции, форумы и история — вне контракта
+  // spec 003: фото, описание, права и заявки — на сервере, экраны вернулись; spec 023 — тип группы
+  // (публичная); привязанный канал, выбор реакций, форумы и история — вне контракта
   await assertAbsent(right, [
-    'Group Type', 'Reactions', 'Topics', 'Chat History For New Members', 'Linked Channel',
+    'Reactions', 'Topics', 'Chat History For New Members', 'Linked Channel',
   ], 'ManageGroup');
+  await right.getByText('Group Type').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await right.locator('.AvatarEditable').count(), 1, 'ManageGroup: group photo editor must be shown');
   await right.locator('#group-about').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await right.getByText('Permissions').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
@@ -198,7 +199,8 @@ try {
   await right.getByRole('button', { name: 'Edit' }).click();
   await right.locator('.Management').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.waitForTimeout(1000);
-  await assertAbsent(right, ['Channel Type', 'Discussion', 'Reactions'], 'ManageChannel');
+  await assertAbsent(right, ['Discussion', 'Reactions'], 'ManageChannel');
+  await right.getByText('Channel Type').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await right.locator('.AvatarEditable').count(), 1, 'ManageChannel: channel photo editor must be shown');
   await right.locator('#channel-about, textarea').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.keyboard.press('Escape');
@@ -213,12 +215,12 @@ try {
   await page.mouse.click(900, 300);
   await page.getByRole('menuitem', { name: 'Archive' }).waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
 
-  // ── Шапка и меню сообщения: нет перевода и жалобы ────────────────────────
+  // ── Шапка и меню сообщения: перевода нет (в Chromium без переводчика), жалоба — на пользователя (spec 024) ──
   await openPrivateChatStrict(page, bob);
   await page.getByRole('button', { name: 'More actions' }).click();
   await page.waitForTimeout(500);
   assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 0, 'header: Translate must be hidden');
-  assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 0, 'header: Report must be hidden');
+  assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 1, 'header: Report must be shown');
   await page.keyboard.press('Escape');
   // Меню вложений: списка задач Telegram нет, «Предложить в план» есть (spec 012, A4)
   await page.waitForTimeout(400);
@@ -233,9 +235,11 @@ try {
   const message = page.locator('.Transition_slide-active > .MessageList .Message').filter({ hasText: `hello-${suffix}` }).first();
   await message.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Reply' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 0, 'message menu: Report must be hidden');
-  assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 0,
-    'message menu: Translate must be hidden');
+  // Сообщение собеседника — на него можно пожаловаться (spec 024)
+  assert.equal(await page.getByRole('menuitem', { name: 'Report' }).count(), 1, 'message menu: Report on a peer message');
+  // Перевод — встроенным переводчиком браузера (spec 024); в Chromium он есть, пункт показан
+  assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 1,
+    'message menu: Translate is shown when the browser has a translator');
   await page.keyboard.press('Escape');
 
   // ── «Кто отреагировал» (FR-081) ───────────────────────────────────────────
@@ -250,15 +254,14 @@ try {
   await groupMessage.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await groupMessage.click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Reply' }).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  assert.equal(
-    await page.locator('.MessageContextMenu .ReactionSelector').count(), 0,
-    'group: reaction selector unexpectedly mounted (provider now supplies enabledReactions?)',
-  );
+  // Реакции в группах есть с spec 024 (как в Telegram): автор реакции известен
+  // устройству, список «кто отреагировал» проверяет сценарий reactions_list
+  await page.locator('.MessageContextMenu .ReactionSelector').first()
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await page.keyboard.press('Escape');
 
-  // Реакция ставится рабочим путём — в ЛИЧНОМ чате — и только после этого
-  // проверяется, что пункт «кто отреагировал» не предлагается: провод не
-  // несёт авторов реакций, а `message.reactors` остаётся пустым
+  // В ЛИЧНОМ чате пункт «кто отреагировал» не предлагается (как в Telegram:
+  // собеседник один, его реакция видна на самой кнопке)
   await openPrivateChatStrict(page, bob);
   const reactedText = `reacted-${suffix}`;
   await sendText(page, reactedText);

@@ -128,6 +128,10 @@ async fn main() -> Result<()> {
         "Копия корня для администратора: {}",
         if escrow_public_key().is_some() { "включена (PARVANE_ESCROW_PUBLIC_KEY)" } else { "выключена" }
     );
+    info!(
+        "Жалобы администратору: {}",
+        if report_public_key().is_some() { "принимаются (PARVANE_REPORT_PUBLIC_KEY)" } else { "выключены" }
+    );
 
     // 4.5: обработчики в tokio::spawn под семафором — один медленный запрос
     // (argon2, SMTP, Telegram) больше не стопорит все остальные.
@@ -194,18 +198,28 @@ fn telegram_bot() -> Option<String> {
 /// base64url без дополнения, 32 байта; выдаёт `escrow_admin keygen`). Закрытого
 /// ключа на сервере нет. Не задан или испорчен — страховка выключена.
 fn escrow_public_key() -> Option<[u8; 32]> {
+    x25519_env("PARVANE_ESCROW_PUBLIC_KEY", "страховка корня выключена")
+}
+
+/// Открытый ключ администратора для жалоб (`PARVANE_REPORT_PUBLIC_KEY`, как у копии корня; spec 024).
+/// Не задан — жалобы серверу не принимаются (клиент прячет пункт).
+fn report_public_key() -> Option<[u8; 32]> {
+    x25519_env("PARVANE_REPORT_PUBLIC_KEY", "жалобы администратору выключены")
+}
+
+fn x25519_env(name: &str, off: &str) -> Option<[u8; 32]> {
     use base64::Engine as _;
-    let raw = env_nonempty("PARVANE_ESCROW_PUBLIC_KEY")?;
+    let raw = env_nonempty(name)?;
     match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(raw.trim_end_matches('=')) {
         Ok(bytes) => match <[u8; 32]>::try_from(bytes.as_slice()) {
             Ok(key) => Some(key),
             Err(_) => {
-                tracing::error!("PARVANE_ESCROW_PUBLIC_KEY: нужен ключ в 32 байта, страховка корня выключена");
+                tracing::error!("{name}: нужен ключ в 32 байта, {off}");
                 None
             }
         },
         Err(e) => {
-            tracing::error!("PARVANE_ESCROW_PUBLIC_KEY: не base64url ({e}), страховка корня выключена");
+            tracing::error!("{name}: не base64url ({e}), {off}");
             None
         }
     }

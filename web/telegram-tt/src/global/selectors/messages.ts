@@ -622,8 +622,8 @@ export function selectAllowedMessageActionsSlow<T extends GlobalState>(
     || getHasAdminRight(chat, 'deleteMessages')
   );
 
-  // Parvane: жалоб некуда отправлять (нет модерации Telegram)
-  const canReport = false;
+  // Parvane (spec 024): жалоба на чужое сообщение — и в личном чате (уходит администратору сервера)
+  const canReport = !isOwn && !isLocal && !isChatWithSelf;
 
   const canDeleteForAll = canDelete && !chat.isForbidden && (
     (isPrivate && !isChatWithSelf && !isBotChat && !content.dice)

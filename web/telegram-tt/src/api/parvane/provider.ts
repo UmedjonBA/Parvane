@@ -115,9 +115,10 @@ import {
   isBuiltinStickerId,
   renderBuiltinStickerBlob,
 } from './stickers';
-import { ParvaneStore, setTaskOfferResolver } from './store';
+import { buildReactorsList, ParvaneStore, setTaskOfferResolver } from './store';
 import { createSyncController } from './sync';
 import { TaskOfferStore } from './taskOffers';
+import { createTranslation } from './translation';
 import { buildThumbnailDataUri, renderBackgroundBlob, UPLOADED_SLUG_PREFIX } from './wallpapers';
 import {
   newMessageId,
@@ -242,6 +243,8 @@ let startupCredentials = consumeStartupCredentials();
 // Активность для «оставаться в системе»: отметка обновляется, пока вкладка
 // видима (раз в минуту), при возвращении на вкладку и при уходе со страницы
 const SESSION_ACTIVITY_INTERVAL_MS = 60 * 1000;
+// Режим L2 (spec 025): вложения до этого размера качаются при получении
+const L2_PREFETCH_MAX_BYTES = 32 * 1024 * 1024;
 // Полный выход: запись «устройство вышло» в журнал — сетевой шаг; стирание на устройстве его дольше не ждёт
 const LEAVE_TIMEOUT_MS = 5000;
 const MS_IN_SECOND = 1000;
@@ -457,6 +460,7 @@ const callController = createCallController({
   pushReadState: (chatId) => syncController.pushReadState(chatId),
   // v2Controller создаётся ниже; вызывается только во время звонка
   sendV2Signal: (to, signal, groupCallId) => v2Controller.trySendCall(to, signal, groupCallId),
+  sendV2OwnSignal: (signal) => v2Controller.trySendCallOwn(signal),
   isV2Peer: (peer) => v2Controller.isV2Peer(peer).catch(() => false),
   recordV2Call: (record) => stateJournal.recordCall(record),
   log: logDebug,
@@ -545,6 +549,12 @@ function reportUpgradeRequiredAtLogin(): boolean {
 // Протокол v2 (spec 007): переписка, группы, звонки, присутствие (T110 —
 // единственный стек)
 const v2Controller = createV2Controller({
+  // Режим L2 (spec 025): вложения до 32 МБ — заранее, при получении; ключи помнит медиа-сервис
+  prefetchMedia: (content) => {
+    if (!content.file_id || (content.size_bytes || 0) > L2_PREFETCH_MAX_BYTES) return;
+    mediaService.rememberKeys(content);
+    void mediaService.downloadBlob(content.file_id).catch(() => undefined);
+  },
   getToken: () => token,
   getSelf: () => store.self,
   gatewayUrl: getGatewayUrl,
@@ -617,7 +627,7 @@ const v2Controller = createV2Controller({
     return stateJournal.attach(host, rekey);
   },
   onL2Changed: (address) => applyL2Change(address),
-  onCallSignal: (from, signal, groupCallId) => callController.handleV2Signal(from, signal, groupCallId),
+  onCallSignal: (from, signal, groupCallId, device) => callController.handleV2Signal(from, signal, groupCallId, device),
   // KEY-1 v2: корень личности собеседника сменился — то же служебное
   // сообщение, что при смене ключа устройства в v1
   onPeerRootChanged: (user) => syncController.announceKeyChange(user),
@@ -1696,6 +1706,13 @@ async function requestSetName(
   return result;
 }
 
+// Перевод на устройстве (spec 024): текст сообщения не покидает браузер
+const translation = createTranslation({
+  getText: (chatId, messageId) => store.getMessage(chatId, messageId)?.content.text?.text,
+  sendUpdate: (update) => sendUpdate(update as ApiUpdate),
+  log: logDebug,
+});
+
 const methods = {
   // Языковые пакеты из сборки (fallback.strings / ru.strings)
   ...langPackMethods,
@@ -1948,6 +1965,7 @@ const methods = {
   addChatMembers: groupController.addChatMembers,
   deleteChatMember: groupController.deleteChatMember,
   updateChatMemberBannedRights: groupController.updateChatMemberBannedRights,
+  parvaneModBan: groupController.banFromReport,
   exportChatInvite: groupController.exportChatInvite,
   fetchExportedChatInvites: groupController.fetchExportedChatInvites,
   fetchMembers: groupController.fetchMembers,
@@ -2228,6 +2246,21 @@ const methods = {
       date: Math.floor(Date.now() / 1000),
     }));
     return Promise.resolve({ count: votes.length, votes, nextOffset: undefined });
+  },
+
+  translateText: translation.translateText,
+
+  // «Кто отреагировал» (spec 024): авторы реакций известны только устройству —
+  // список из сохранённой строки сообщения, без сервера
+  async fetchMessageReactionsList({ chat, messageId, reaction }: {
+    chat: ApiChat; messageId: number; reaction?: { type: string; emoticon?: string };
+  }) {
+    const uuid = store.getUuidForMessage(chat.id, messageId);
+    const stored = uuid ? await v2Controller.storedMessage(uuid) : undefined;
+    if (!stored) return undefined;
+    const emoji = reaction?.type === 'emoji' ? reaction.emoticon : undefined;
+    const list = buildReactorsList(stored, (address) => store.getIdForAddress(address), store.self || '', emoji);
+    return { ...list, nextOffset: undefined };
   },
 
   // ── папки (локальный персист, как в десктоп-форке) ──────────────────────────

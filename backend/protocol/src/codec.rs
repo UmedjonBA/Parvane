@@ -63,6 +63,37 @@ pub fn encode_frame(kind: frame::Kind) -> Vec<u8> {
     Frame { proto_major: PROTO_MAJOR, kind: Some(kind) }.encode_to_vec()
 }
 
+/// Кадр запроса, дополненный полем `padding` до длины, кратной `pad_to` (spec 025: в режиме L2 по длине кадра не
+/// отличить, кому и что отправлено). Кадр длиннее предела дополнения — без дополнения.
+pub fn encode_request_padded(mut req: Request, pad_to: usize) -> Vec<u8> {
+    req.padding.clear();
+    let base = encode_frame(frame::Kind::Request(req.clone()));
+    if pad_to == 0 || base.len() % pad_to == 0 {
+        return base;
+    }
+    // Поле `padding` стоит тег, длину и сами байты; длина длины зависит от числа байт — подбираем
+    let target = base.len().div_ceil(pad_to) * pad_to;
+    for extra in [target, target + pad_to] {
+        let mut n = extra.saturating_sub(base.len() + 2);
+        while n > 0 {
+            req.padding = vec![0u8; n];
+            let framed = encode_frame(frame::Kind::Request(req.clone()));
+            match framed.len().cmp(&extra) {
+                std::cmp::Ordering::Equal => return framed,
+                std::cmp::Ordering::Greater => n -= 1,
+                std::cmp::Ordering::Less => break,
+            }
+        }
+        if n > MAX_REQUEST_PADDING {
+            break;
+        }
+    }
+    base
+}
+
+/// Предел поля `Request.padding` (схема `frame.proto`).
+const MAX_REQUEST_PADDING: usize = 8192;
+
 /// Проверить запрос по реестру: метод известен, тело — в лимитах своего типа.
 /// Права канала/reauth/частоты проверяет gateway по возвращённой записи.
 pub fn check_request(req: &Request, origin: Origin) -> Result<&'static MethodInfo> {
@@ -135,6 +166,19 @@ impl TcpDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn padded_requests_share_length_buckets() {
+        let req = |method: &str, body: usize| Request { id: 7, method: method.into(), body: vec![1u8; body], timeout_ms: 1000, padding: vec![] };
+        for (method, body) in [("msg.deliver_sealed", 600), ("msg.deliver_group", 640), ("msg.deliver_sealed", 700)] {
+            let framed = encode_request_padded(req(method, body), 1024);
+            assert_eq!(framed.len() % 1024, 0, "{method} {body}: {}", framed.len());
+            let back = Frame::decode(framed.as_slice()).unwrap();
+            assert!(matches!(back.kind, Some(frame::Kind::Request(r)) if r.method == method && r.body.len() == body));
+        }
+        assert_eq!(encode_request_padded(req("msg.deliver_sealed", 600), 0), encode_frame(frame::Kind::Request(req("msg.deliver_sealed", 600))));
+    }
+
     use crate::pb::parvane::core::v2::{Hello, Ping, Request, Welcome};
 
     #[test]
@@ -160,7 +204,7 @@ mod tests {
 
     #[test]
     fn request_registry() {
-        let ok = Request { id: 1, method: "msg.inbox.sync".into(), body: vec![], timeout_ms: 1000 };
+        let ok = Request { id: 1, method: "msg.inbox.sync".into(), body: vec![], timeout_ms: 1000, padding: vec![] };
         assert_eq!(check_request(&ok, Origin::Client).unwrap().shard, "messenger");
         let bad = Request { method: "msg.chat.send".into(), ..ok.clone() };
         assert_eq!(check_request(&bad, Origin::Client).err(), Some(ProtoError::UnknownMethod));

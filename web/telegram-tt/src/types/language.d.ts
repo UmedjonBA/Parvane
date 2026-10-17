@@ -3046,6 +3046,33 @@ export interface LangPair {
   'ParvanePublicLinkHelp': undefined;
   'ParvanePublicNameOptional': undefined;
   'ParvanePublicNameInfo': undefined;
+  'ParvaneTranslateAbout': undefined;
+  'ParvaneTranslateUnavailable': undefined;
+  'ParvaneInviteApprovalFixed': undefined;
+  'ParvaneCallPeerCameraOff': undefined;
+  'ParvaneCallPeerMuted': undefined;
+  'ParvaneReportReasonSpam': undefined;
+  'ParvaneReportReasonViolence': undefined;
+  'ParvaneReportReasonPorn': undefined;
+  'ParvaneReportReasonChild': undefined;
+  'ParvaneReportReasonCopyright': undefined;
+  'ParvaneReportReasonIllegal': undefined;
+  'ParvaneReportReasonPersonal': undefined;
+  'ParvaneReportReasonFake': undefined;
+  'ParvaneReportReasonOther': undefined;
+  'ParvaneReportToAdminsTitle': undefined;
+  'ParvaneReportToServerTitle': undefined;
+  'ParvaneReportUnavailable': undefined;
+  'ParvaneReportSent': undefined;
+  'ParvaneModReportLabel': undefined;
+  'ParvaneModReportUnknownGroup': undefined;
+  'ParvaneModReportSummary': undefined;
+  'ParvaneModDelete': undefined;
+  'ParvaneModBan': undefined;
+  'ParvaneModDeleted': undefined;
+  'ParvaneModBanned': undefined;
+  'ParvaneModFailed': undefined;
+  'ParvaneReportFailed': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5431,6 +5458,9 @@ export interface LangPairWithVariables<V = LangVariable> {
   };
   'ArticleSaved': {
     'title': V;
+  };
+  'ParvaneModReportTitle': {
+    'group': V;
   };
 }
 

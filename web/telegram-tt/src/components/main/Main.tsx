@@ -597,9 +597,12 @@ const Main = ({
   // Parvane: вызов по v2 не ушёл (собеседник ещё не отвечал — нет ключа доступа)
   useEffect(() => {
     const handleCallUnavailable = (event: Event) => {
-      const detail = (event as CustomEvent<{ isNotContact?: boolean; isRateLimited?: boolean }>).detail;
-      const key = detail?.isRateLimited ? 'ParvaneCallRateLimited'
-        : detail?.isNotContact ? 'ParvaneCallNotContact' : 'ParvaneCallNotSent';
+      const detail = (event as CustomEvent<{
+        isNotContact?: boolean; isRateLimited?: boolean; isTor?: boolean;
+      }>).detail;
+      const key = detail?.isTor ? 'ParvaneCallTorUnavailable'
+        : detail?.isRateLimited ? 'ParvaneCallRateLimited'
+          : detail?.isNotContact ? 'ParvaneCallNotContact' : 'ParvaneCallNotSent';
       showNotification({ message: oldTranslate(key) });
     };
     window.addEventListener('parvane-call-unavailable', handleCallUnavailable);
@@ -652,6 +655,18 @@ const Main = ({
     };
     window.addEventListener('parvane-invite-error', handleInviteError);
     return () => window.removeEventListener('parvane-invite-error', handleInviteError);
+  }, [showNotification]);
+
+  // Parvane (spec 024): жалоба не ушла — сервер не принимает жалобы администратору либо сбой связи;
+  // успешную показывает само окно жалобы
+  useEffect(() => {
+    const handleReport = (event: Event) => {
+      const outcome = (event as CustomEvent<{ outcome?: string }>).detail?.outcome;
+      if (outcome === 'unavailable') showNotification({ message: oldTranslate('ParvaneReportUnavailable') });
+      else if (outcome === 'failed') showNotification({ message: oldTranslate('ParvaneReportFailed') });
+    };
+    window.addEventListener('parvane-report', handleReport);
+    return () => window.removeEventListener('parvane-report', handleReport);
   }, [showNotification]);
 
   // Parvane: identity отклонил запись профиля целиком (пустое или слишком

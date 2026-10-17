@@ -66,7 +66,7 @@ impl Conn {
     pub fn call(&mut self, method: &str, body: Vec<u8>) -> Result<Vec<u8>, ErrorCode> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000 }));
+        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![] }));
         loop {
             let f = self.recv().ok_or(ErrorCode::Unavailable)?;
             match f.kind {

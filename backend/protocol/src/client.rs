@@ -1268,6 +1268,39 @@ impl Client {
         Ok(out)
     }
 
+    /// Сигнал звонка своим ДРУГИМ устройствам (spec 024): «принят здесь» / «отклонён здесь» — `Hangup`
+    /// с причиной `ANSWERED_ELSEWHERE` либо `DECLINED`; остальные устройства перестают звонить. Другие
+    /// виды сигналов своим устройствам не шлются. Нет других устройств — пустой список.
+    pub fn prepare_call_own(&mut self, signal: &cpb::CallSignal) -> CResult<Vec<OutRequest>> {
+        if signal.call_id.len() != msg::CALL_ID_LEN || !matches!(signal.signal, Some(cpb::call_signal::Signal::Hangup(_))) {
+            return Err(ProtoError::InvalidField("call").into());
+        }
+        let me = self.user.clone();
+        self.check_peer(&me)?;
+        let log = self.own_log.clone();
+        let cert = self.my_cert.clone().ok_or(ProtoError::BadCertificate)?;
+        let devices: Vec<String> = log.devices.keys().filter(|d| **d != self.device_id).cloned().collect();
+        if devices.is_empty() {
+            return Ok(vec![]);
+        }
+        let audience: Vec<DeviceRef> = devices.iter().map(|d| DeviceRef { address: me.clone(), device_id: d.clone() }).collect();
+        let call = Ref { domain: self.domain.clone(), id: signal.call_id.clone() };
+        let op = msg::sign_call(&self.acc, signal, call, audience, now_ms())?;
+        let access = self.access_for(&me)?;
+        let mut envelopes = vec![];
+        for d in &devices {
+            let Some(dev) = log.active(d) else { continue };
+            let hpke = dev.hpke_x25519()?;
+            let Some(sess) = self.sessions.get_mut(&(me.clone(), d.clone())) else { continue };
+            let inner = msg::seal_inner(&cert, sess, &op)?;
+            envelopes.push(seal::seal(&DeviceRef { address: me.clone(), device_id: d.clone() }, &hpke, access.clone(), inner, false)?);
+        }
+        if envelopes.is_empty() {
+            return Ok(vec![]);
+        }
+        Ok(vec![OutRequest::anon("call.signal_sealed", &cpb::SignalSealedRequest { envelopes })])
+    }
+
     /// Подготовить личное сообщение: копии устройствам собеседника и своим
     /// другим устройствам (отдельными запросами, D-05) + раздача своего ключа
     /// доставки собеседнику, если он его ещё не получал.
@@ -2130,7 +2163,10 @@ impl Client {
                 // Звонок — только от собеседника и только своего сервера (цель
                 // операции подписана вместе с доменом).
                 let target_ok = call.op.header.target.as_ref().is_some_and(|t| t.domain == self.domain);
-                if sender == self.user || !target_ok {
+                // От своего аккаунта — только «принят/отклонён на другом устройстве» (spec 024)
+                let own_ok = sender != self.user
+                    || (dev_id != self.device_id && matches!(call.signal.signal, Some(cpb::call_signal::Signal::Hangup(_))));
+                if !own_ok || !target_ok {
                     return Err(ClientError::Proto(ProtoError::ContextMismatch));
                 }
                 return Ok(vec![Event::Call {
@@ -2551,10 +2587,16 @@ impl Client {
     /// одобрение — запись `AddMember`, которую сервер проводит и снимает
     /// заявку одним запросом `group.request.decide`; отказ — без записи.
     pub fn group_request_decide(&mut self, group_id: &[u8], user: &str, approve: bool) -> Result<OutRequest> {
+        self.group_request_decide_via(group_id, user, approve, &[])
+    }
+
+    /// То же, с ссылкой, по которой пришла заявка (`JoinRequestInfo.link_id`, spec 024): одобренный
+    /// считается во вступивших по ней. Пустая — без ссылки.
+    pub fn group_request_decide_via(&mut self, group_id: &[u8], user: &str, approve: bool, via_link_id: &[u8]) -> Result<OutRequest> {
         let group = self.group_state(group_id).map(|s| s.group.clone()).ok_or(ProtoError::NotFound)?;
         let member = UserRef { address: user.into() };
         let entry = if approve {
-            Some(self.group_entry(group_id, Change::AddMember(gpb::AddMember { member: Some(member.clone()) }))?)
+            Some(self.group_entry(group_id, Change::AddMember(gpb::AddMember { via_link_id: via_link_id.to_vec(), member: Some(member.clone()) }))?)
         } else {
             None
         };
@@ -2654,6 +2696,15 @@ impl Client {
         // всем устройствам участников, кроме одного, и вычисляет автора следующего конверта
         r.envelopes.push(self.cover_envelope(c, l2)?);
         Ok(vec![OutRequest::anon("msg.deliver_sealed", &r)])
+    }
+
+    /// Шум режима L2 (spec 025): пустышка этому же устройству, выровненная по сетке L2, — снаружи и для сервера
+    /// неотличима от личного сообщения (тот же метод анонимного канала, тот же размер); получив её, устройство
+    /// молча выбрасывает (Olm-сессии с самим собой нет, см. `cover_envelope`).
+    pub fn prepare_cover(&self) -> Result<OutRequest> {
+        let content = Content { kind: Some(content::Kind::Text(mpb::Text::default())), ..Default::default() };
+        let envelope = self.cover_envelope(&content, true)?;
+        Ok(OutRequest::anon("msg.deliver_sealed", &mpb::DeliverSealedRequest { envelopes: vec![envelope] }))
     }
 
     /// ENG-07: конверт этому же устройству того же размера, что раздача ключа; получив его, устройство

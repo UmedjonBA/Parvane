@@ -12,7 +12,9 @@ export type WireCallSignal =
   | { type: 'answer'; call_id: string; sdp: string; sig?: string }
   | { type: 'reject'; call_id: string; reason?: string }
   | { type: 'ice'; call_id: string; candidate: string }
-  | { type: 'hangup'; call_id: string };
+  | { type: 'hangup'; call_id: string }
+  // Свои микрофон и камера (spec 024): собеседник показывает «камера выключена»
+  | { type: 'media'; call_id: string; audio_muted?: boolean; video_muted?: boolean };
 
 export type CallState =
   | 'requesting' | 'ringing' | 'connecting' | 'active' | 'busy' | 'security_failed' | 'ended';
@@ -47,6 +49,8 @@ type CallCallbacks = {
   onRemoteStream: (stream: MediaStream) => void;
   onIncoming: (from: string, callId: string, media: CallMedia) => void;
   onSas: (sas?: string) => void;
+  // Собеседник выключил или включил микрофон или камеру (spec 024)
+  onRemoteMedia?: (state: { isAudioMuted: boolean; isVideoMuted: boolean }) => void;
   // Причина завершения звонка (без содержимого) — в журнал провайдера, для разбора обрывов
   log?: (text: string) => void;
 };
@@ -88,6 +92,10 @@ export class CallEngine {
   private disconnectTimer?: number;
 
   private ringTimer?: number;
+
+  // Устройство собеседника, с которым идёт звонок (spec 024): у звонящего — ответившее, у принимающего —
+  // звонящее. Сигналы его других устройств (их ответ, отказ, кандидаты) звонок не трогают
+  private peerDevice?: string;
 
   constructor(private cb: CallCallbacks) {}
 
@@ -178,6 +186,23 @@ export class CallEngine {
     }
   }
 
+  /** Входящий принят или отклонён на другом своём устройстве (spec 024): перестать звонить молча. */
+  dismissIncoming(callId: string) {
+    if (callId !== this.callId || !this.isAwaitingAcceptance) return false;
+    this.cb.log?.('Входящий звонок принят или отклонён на другом устройстве');
+    this.cleanup();
+    this.cb.onState('ended');
+    return true;
+  }
+
+  /** Сообщить собеседнику о своих микрофоне и камере (spec 024). */
+  sendMediaState(isAudioMuted: boolean, isVideoMuted: boolean) {
+    if (!this.peer || !this.callId || this.isAwaitingAcceptance) return;
+    this.cb.sendSignal(this.peer, {
+      type: 'media', call_id: this.callId, audio_muted: isAudioMuted, video_muted: isVideoMuted,
+    });
+  }
+
   rejectCall(from: string, callId: string) {
     try {
       this.cb.sendSignal(from, { type: 'reject', call_id: callId });
@@ -209,7 +234,11 @@ export class CallEngine {
    * журнала устройств), поэтому подпись SDP ключом звонков (`sig`) не требуется.
    * Для сигналов с v1-шины аргумент не передаётся никогда
    */
-  async handleSignal(from: string, signal: WireCallSignal, isAuthenticated = false) {
+  async handleSignal(from: string, signal: WireCallSignal, isAuthenticated = false, device?: string) {
+    if (device && this.peerDevice && device !== this.peerDevice && signal.type !== 'invite') {
+      this.cb.log?.(`Сигнал звонка ${signal.type} с другого устройства собеседника — пропущен`);
+      return;
+    }
     switch (signal.type) {
       case 'invite':
         if (!from || !signal.call_id || !signal.sdp || this.seenCallIds.has(signal.call_id)) return;
@@ -220,6 +249,7 @@ export class CallEngine {
         this.rememberCallId(signal.call_id);
         this.callId = signal.call_id;
         this.peer = from;
+        this.peerDevice = device;
         this.isCaller = false;
         if (!isAuthenticated) {
           if (!await this.loadPeerSigningKey(from, signal.call_id)
@@ -257,6 +287,7 @@ export class CallEngine {
         // Ответ может прийти дважды (v2 и v1-путём, LEGACY-1) — второй, пока
         // применяется первый, отбрасывается
         this.isApplyingAnswer = true;
+        this.peerDevice = device;
         try {
           await this.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
         } finally {
@@ -276,6 +307,13 @@ export class CallEngine {
           if (!candidate) break;
           if (this.pc && this.remoteReady) await this.pc.addIceCandidate(candidate).catch(() => undefined);
           else this.pendingCandidates.push(candidate);
+        }
+        break;
+      case 'media':
+        if (signal.call_id === this.callId && from === this.peer) {
+          this.cb.onRemoteMedia?.({
+            isAudioMuted: Boolean(signal.audio_muted), isVideoMuted: Boolean(signal.video_muted),
+          });
         }
         break;
       case 'reject':
@@ -383,6 +421,7 @@ export class CallEngine {
     this.disconnectTimer = undefined;
     window.clearTimeout(this.ringTimer);
     this.ringTimer = undefined;
+    this.peerDevice = undefined;
     this.localStream?.getTracks().forEach((t) => t.stop());
     const pc = this.pc;
     this.pc = undefined;

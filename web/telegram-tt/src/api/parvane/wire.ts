@@ -119,7 +119,16 @@ export type WireMessageContent = {
   due?: string;
   offer?: string;
   accepted?: boolean;
+  // kind=mod_report (spec 024, REPORT-1): жалоба админам группы — группа, причина, комментарий и сами сообщения
+  report_group?: { domain: string; id: string };
+  reason?: string;
+  comment?: string;
+  reported?: WireReportedMessage[];
 };
+
+export type WireReportedMessage = { op_id: string; author: string; text: string; ts: number };
+
+export interface WireReactor { user: string; emoji: string; ts: number }
 
 export type WireStoredMessage = {
   id: string;
@@ -133,6 +142,9 @@ export type WireStoredMessage = {
   read?: boolean;
   updated_at?: number;
   reactions?: { emoji: string; count: number; mine?: boolean }[];
+  // Кто какой реакцией (адрес, эмодзи, время в с): список «кто отреагировал» и
+  // основа счётчиков — переживает перезагрузку (spec 024)
+  reactors?: WireReactor[];
   pinned?: boolean;
   // Место в ленте на этом устройстве (правило ORDER-1): числовой id сообщения,
   // выбранный при появлении; строки без поля упорядочены по `ts`

@@ -560,12 +560,21 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             if !invite_admin(&s, &user) {
                 return Err(ErrorCode::Forbidden);
             }
-            let rows: Vec<(String, i64)> = sqlx::query_as("SELECT user, requested_at FROM group_join_requests_v2 WHERE group_id = ? ORDER BY requested_at LIMIT 500")
-                .bind(&g.id)
-                .fetch_all(&ctx.v2)
-                .await
-                .map_err(db_err)?;
-            let requests = rows.into_iter().map(|(u, at)| gpb::JoinRequestInfo { user: Some(UserRef { address: u }), requested_ms: at * 1000 }).collect();
+            let rows: Vec<(String, i64, Option<Vec<u8>>)> =
+                sqlx::query_as("SELECT user, requested_at, link_id FROM group_join_requests_v2 WHERE group_id = ? ORDER BY requested_at LIMIT 500")
+                    .bind(&g.id)
+                    .fetch_all(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+            // Ссылка заявки (spec 024): админ одобряет с ней — вступивший считается в этой ссылке
+            let requests = rows
+                .into_iter()
+                .map(|(u, at, link)| gpb::JoinRequestInfo {
+                    user: Some(UserRef { address: u }),
+                    requested_ms: at * 1000,
+                    link_id: link.unwrap_or_default(),
+                })
+                .collect();
             Ok(gpb::RequestListResponse { requests }.encode_to_vec())
         }
         "group.request.decide" => {

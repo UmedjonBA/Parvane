@@ -318,7 +318,7 @@ export const INITIAL_GLOBAL_STATE: GlobalState = {
       disallowedGifts: undefined,
       nonContactPeersPaidStars: 0,
       shouldHideReadMarks: false,
-      canTranslate: false,
+      canTranslate: true,
       canTranslateChats: true,
       doNotTranslate: [],
       translationTone: 'neutral',

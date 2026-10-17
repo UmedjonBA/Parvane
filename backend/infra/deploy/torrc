@@ -1,0 +1,8 @@
+# Скрытый сервис Parvane (spec 025). Клиентского SOCKS нет — только приём входящих через Tor.
+User tor
+DataDirectory /var/lib/tor
+SocksPort 0
+HiddenServiceDir /var/lib/tor/hs
+HiddenServiceVersion 3
+HiddenServicePort 80 127.0.0.1:8081
+Log notice stdout

@@ -241,7 +241,7 @@ export class PvClient {
     /**
      * Решение по заявке на вступление (одобрение — запись `AddMember`).
      */
-    groupRequestDecide(group: string, user: string, approve: boolean): any;
+    groupRequestDecide(group: string, user: string, approve: boolean, via_link_hex?: string | null): any;
     groupRotateEpoch(group: string): Array<any>;
     /**
      * Публичная группа (spec 023): включить/выключить → запрос `group.state.append`.
@@ -431,6 +431,14 @@ export class PvClient {
      * `call.signal_sealed`, оба анонимным каналом.
      */
     prepareCall(peer: string, signal_json: string): Array<any>;
+    /**
+     * Сигнал звонка своим другим устройствам (spec 024): только `Hangup` («принят/отклонён здесь»).
+     */
+    prepareCallOwn(signal_json: string): Array<any>;
+    /**
+     * Шум режима L2 (spec 025): пустышка этому же устройству, выровненная по сетке L2.
+     */
+    prepareCover(): any;
     /**
      * Личное сообщение: содержимое — proto3-JSON `msg.v2.Content`;
      * `op_id` — UUID сообщения хоста (строка) или пусто.
@@ -652,7 +660,10 @@ export function encodeMethodRequest(method: string, json: string): Uint8Array;
 
 export function encodePing(nonce: bigint): Uint8Array;
 
-export function encodeRequest(id: bigint, method: string, body: Uint8Array, timeout_ms: number): Uint8Array;
+/**
+ * `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
+ */
+export function encodeRequest(id: bigint, method: string, body: Uint8Array, timeout_ms: number, pad_to?: number | null): Uint8Array;
 
 /**
  * Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
@@ -662,9 +673,6 @@ export function encodeRequest(id: bigint, method: string, body: Uint8Array, time
  */
 export function encodeUploadChunk(upload_id: string, index: number, bucket: number, data: Uint8Array): Uint8Array;
 
-/**
- * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
- */
 export function generateRecoveryKey(): string;
 
 /**
@@ -697,6 +705,13 @@ export function protoMajor(): number;
  * Прогнать набор векторов conformance движком (тест клиента на своей сборке).
  */
 export function runConformanceVectors(suite: string, json: string): number;
+
+/**
+ * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
+ * Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
+ * (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
+ */
+export function sealReport(admin_public: Uint8Array, reporter: string, plaintext: Uint8Array): Uint8Array;
 
 /**
  * Страница `msg.inbox.sync` → {records: Uint8Array[] (каждая — InboxRecord), more}.
@@ -734,7 +749,7 @@ export interface InitOutput {
     readonly encodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodeMethodRequest: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodePing: (a: number, b: bigint) => void;
-    readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
     readonly grantRootBackup: (a: number, b: number, c: number) => void;
@@ -798,7 +813,7 @@ export interface InitOutput {
     readonly pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupList: (a: number, b: number) => void;
     readonly pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
-    readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupRotateEpoch: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupSetPublic: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupUnconfirmed: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -848,6 +863,8 @@ export interface InitOutput {
     readonly pvclient_plannerSnapshotRequest: (a: number, b: number, c: number) => void;
     readonly pvclient_plannerStateJson: (a: number, b: number) => void;
     readonly pvclient_prepareCall: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_prepareCallOwn: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_prepareCover: (a: number, b: number) => void;
     readonly pvclient_prepareDirect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_prepareGroup: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly pvclient_presenceAllowed: (a: number) => number;
@@ -890,6 +907,7 @@ export interface InitOutput {
     readonly pvstate_snapshot: (a: number, b: number) => void;
     readonly pvstate_syncRequest: (a: number, b: number) => void;
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly splitSyncResponse: (a: number, b: number, c: number) => void;
     readonly start: () => void;
     readonly verifyServerDescriptor: (a: number, b: number, c: number) => void;

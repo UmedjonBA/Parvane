@@ -193,7 +193,7 @@ impl V2 {
     fn call(&mut self, method: &str, body: Vec<u8>) -> Result<Vec<u8>, ErrorCode> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000 }));
+        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![] }));
         loop {
             let f = self.recv().expect("ответ");
             if let Some(frame::Kind::Response(r)) = f.kind {
@@ -573,9 +573,9 @@ mod msgv2 {
         let r = a.c.call("group.state.append", parvane_protocol::pb::parvane::group::v2::StateAppendRequest { entry: Some(g.clone()) }.encode_to_vec());
         f.check("group-genesis", r.is_ok(), &r);
         let s1 = group::apply(None, &g, &resolve).unwrap();
-        let add = group::build_entry(&a.acc, Some(&s1), "local", Change::AddMember(AddMember { member: Some(UserRef { address: b.user.clone() }) }), 2).unwrap();
+        let add = group::build_entry(&a.acc, Some(&s1), "local", Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: b.user.clone() }) }), 2).unwrap();
         // Боб не вправе добавлять — сервер проверяет права движком.
-        let forged = group::build_entry(&b.acc, Some(&s1), "local", Change::AddMember(AddMember { member: Some(UserRef { address: "eve@local".into() }) }), 2).unwrap();
+        let forged = group::build_entry(&b.acc, Some(&s1), "local", Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: "eve@local".into() }) }), 2).unwrap();
         f.check("group-forged-add-rejected", b.c.call("group.state.append", parvane_protocol::pb::parvane::group::v2::StateAppendRequest { entry: Some(forged) }.encode_to_vec()).is_err(), "");
         f.check("group-add", a.c.call("group.state.append", parvane_protocol::pb::parvane::group::v2::StateAppendRequest { entry: Some(add.clone()) }.encode_to_vec()).is_ok(), "");
         let s2 = group::apply(Some(&s1), &add, &resolve).unwrap();

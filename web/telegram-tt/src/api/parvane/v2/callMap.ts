@@ -26,11 +26,15 @@ export type V2CallSignal = {
   };
   hangup?: V2Hangup;
   ringing?: Record<string, never>;
+  mediaState?: V2MediaState;
+  media_state?: V2MediaState;
   groupRing?: V2GroupRing;
   group_ring?: V2GroupRing;
   groupCallId?: string;
   group_call_id?: string;
 };
+
+type V2MediaState = { audioMuted?: boolean; audio_muted?: boolean; videoMuted?: boolean; video_muted?: boolean };
 
 type V2GroupRing = { participants?: { address?: string }[]; video?: boolean };
 
@@ -40,15 +44,19 @@ const REASON_DECLINED = 'HANGUP_REASON_DECLINED';
 const REASON_BUSY = 'HANGUP_REASON_BUSY';
 const REASON_MISSED = 'HANGUP_REASON_MISSED';
 const REASON_FAILED = 'HANGUP_REASON_FAILED';
+const REASON_ANSWERED_ELSEWHERE = 'HANGUP_REASON_ANSWERED_ELSEWHERE';
 // Причины отказа v1 (`reject.reason`) → причина завершения v2
 const REJECT_TO_V2: Record<string, string> = {
   declined: REASON_DECLINED,
   busy: REASON_BUSY,
   auth_failed: REASON_FAILED,
   media_failed: REASON_FAILED,
+  answered_elsewhere: REASON_ANSWERED_ELSEWHERE,
 };
 // Числовые значения enum (pbjson отдаёт имена, но принимает и числа)
-const REASON_BY_NUMBER = [undefined, REASON_NORMAL, REASON_DECLINED, REASON_BUSY, REASON_MISSED, REASON_FAILED];
+const REASON_BY_NUMBER = [
+  undefined, REASON_NORMAL, REASON_DECLINED, REASON_BUSY, REASON_MISSED, REASON_FAILED, REASON_ANSWERED_ELSEWHERE,
+];
 
 /**
  * `undefined` — такой сигнал по v2 не передаётся (идёт v1-путём или отбрасывается).
@@ -96,6 +104,11 @@ export function callSignalToV2(
       return { call_id: callId, hangup: { reason: REJECT_TO_V2[signal.reason || ''] || REASON_DECLINED } };
     case 'hangup':
       return { call_id: callId, hangup: { reason: REASON_NORMAL } };
+    case 'media':
+      return {
+        call_id: callId,
+        media_state: { audio_muted: Boolean(signal.audio_muted), video_muted: Boolean(signal.video_muted) },
+      };
     default:
       return undefined;
   }
@@ -141,6 +154,15 @@ export function callSignalFromV2(signal: V2CallSignal): WireCallSignal | undefin
       }),
     };
   }
+  const media = signal.mediaState || signal.media_state;
+  if (media) {
+    return {
+      type: 'media',
+      call_id: callId,
+      audio_muted: Boolean(media.audioMuted ?? media.audio_muted),
+      video_muted: Boolean(media.videoMuted ?? media.video_muted),
+    };
+  }
   if (signal.hangup) {
     const raw = signal.hangup.reason;
     const reason = typeof raw === 'number' ? REASON_BY_NUMBER[raw] : raw;
@@ -149,6 +171,7 @@ export function callSignalFromV2(signal: V2CallSignal): WireCallSignal | undefin
       return { type: 'reject', call_id: callId, reason: 'declined' };
     }
     if (reason === REASON_FAILED) return { type: 'reject', call_id: callId, reason: 'media_failed' };
+    if (reason === REASON_ANSWERED_ELSEWHERE) return { type: 'reject', call_id: callId, reason: 'answered_elsewhere' };
     return { type: 'hangup', call_id: callId };
   }
   return undefined;

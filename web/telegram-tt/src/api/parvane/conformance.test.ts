@@ -1382,7 +1382,8 @@ describe('GROUP-3: группа v2 — сведения только из жур
   it('движок и сервер: решение по заявке — запись AddMember в запросе, заявка локально не применяется', () => {
     const client = readRepo('backend/protocol/src/client.rs');
     expect(client).toContain(`OutRequest::id("${r.requestDecideMethod}"`);
-    expect(client).toContain(`Change::${r.approveEntry}(gpb::${r.approveEntry} { member: Some(member.clone()) })`);
+    // spec 024: одобрение несёт ссылку заявки (`via_link_id`)
+    expect(client).toContain(`Change::${r.approveEntry}(gpb::${r.approveEntry} { via_link_id: via_link_id.to_vec(), member: Some(member.clone()) })`);
     expect(client).toMatch(/requires_approval\)\s*\{[\s\S]{0,260}return Ok\(OutRequest::id\("group\.join"/);
     const server = readRepo('backend/shards/messenger/src/v2_groups.rs');
     expect(server).toContain('notify_invite_admins(ctx, &s).await;');
@@ -1394,7 +1395,7 @@ describe('GROUP-3: группа v2 — сведения только из жур
     expect(setInfo.indexOf('return serial(async () => {'))
       .toBeLessThan(setInfo.indexOf('const current = readGroup(hex);'));
     r.setInfoFields.forEach((field) => expect(setInfo.slice(0, 900)).toContain(`${field}:`));
-    expect(controller).toContain('client!.groupRequestDecide(hex, user, approve)');
+    expect(controller).toContain('client!.groupRequestDecide(hex, user, approve, linkId)');
     const groups = readRepo('web/telegram-tt/src/api/parvane/groups.ts');
     expect(groups).toContain(`const GROUP_ABOUT_MAX_CHARS = ${r.aboutMaxChars};`);
     expect(groups).toContain('v2.setGroupInfo(groupId, { name: title })');
@@ -1694,6 +1695,35 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt'))
       .toContain('articleShowsAsText');
     expect(r.clients.android).toContain('articleShowsAsText');
+  });
+});
+
+describe('REPORT-1: жалоба админам группы — карточка у админа, клиент без модерации показывает текст', () => {
+  const r = rule('REPORT-1') as unknown as {
+    kinds: string[];
+    fieldNumbers: Record<string, number>;
+    vectors: string[];
+    fallbackField: string;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема и вектора: поле 24, случай в content/kinds.json', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain(`ModReport mod_report = ${r.fieldNumbers.mod_report};`);
+    expect(proto).toContain(`string ${r.fallbackField} = 5 [(parvane.core.v2.max_len) = 600];`);
+    const vectors = readRepo('proto/parvane/vectors/content/kinds.json');
+    r.vectors.forEach((name) => expect(vectors).toContain(`"name": "${name}"`));
+  });
+
+  it('web: жалоба разбирается, показывается карточкой и отправляется', () => {
+    const map = readRepo('web/telegram-tt/src/api/parvane/v2/contentMap.ts');
+    r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('buildModReportContent');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('async reportMessages(');
+    expect(r.clients.web).toContain('e2e_web_reports.mjs');
+    // Desktop и android — открыто до их очереди (решение «только web»)
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
   });
 });
 

@@ -10,6 +10,8 @@ import {
 import { INITIAL_GLOBAL_STATE } from '../global/initialState';
 import { cloneDeep } from './iteratees';
 
+const TRANSLATE_DEFAULT_KEY = 'parvane:translate-default';
+
 export async function initGlobal(force: boolean = false, prevGlobal?: GlobalState) {
   prevGlobal = prevGlobal || getGlobal();
   if (!force && 'byTabId' in prevGlobal) {
@@ -45,6 +47,12 @@ export async function initGlobal(force: boolean = false, prevGlobal?: GlobalStat
         byKey: { ...global.settings.byKey, ...storedSettings },
       },
     };
+    // Кнопка перевода появилась в spec 024 включённой; сохранённое прежде `false`
+    // было значением по умолчанию, а не выбором — переводим один раз
+    if (!localStorage.getItem(TRANSLATE_DEFAULT_KEY)) {
+      localStorage.setItem(TRANSLATE_DEFAULT_KEY, '1');
+      global.settings.byKey.canTranslate = true;
+    }
   }
   if (storedThemes) {
     global = {

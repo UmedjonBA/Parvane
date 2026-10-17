@@ -54,6 +54,16 @@
   color: var(--color-text-secondary, #aaa);
 }
 
+.remoteState {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+
+  font-size: 0.875rem;
+  color: var(--color-text-secondary, #aaa);
+}
+
 .securityError {
   max-width: 18rem;
   color: var(--color-error, #e0492b);
@@ -173,6 +183,17 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.groupTileOff .groupTileVideo {
+  visibility: hidden;
+}
+
+.groupTileOff .groupTileName {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+  text-align: center;
 }
 
 .groupTileName {

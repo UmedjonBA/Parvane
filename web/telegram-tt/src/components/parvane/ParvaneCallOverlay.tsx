@@ -19,6 +19,9 @@ type CallInfo = {
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  isRemoteMuted?: boolean;
+  isRemoteCameraOff?: boolean;
+  groupCameraOff?: string[];
   pendingGroup?: boolean;
   pendingGroupTitle?: string;
   group?: {
@@ -73,7 +76,8 @@ const ParvaneCallOverlay = () => {
     return () => window.clearInterval(timer);
   }, [state]);
 
-  const hasRemoteVideo = Boolean(call?.remoteStream?.getVideoTracks().length);
+  // Собеседник выключил камеру (spec 024) — вместо застывшего кадра аватар и подпись
+  const hasRemoteVideo = Boolean(call?.remoteStream?.getVideoTracks().length) && !call?.isRemoteCameraOff;
   const hasLocalVideo = Boolean(call?.localStream?.getVideoTracks().length);
 
   // Проигрываем удалённый поток: аудио всегда, видео — при наличии трека
@@ -123,6 +127,7 @@ const ParvaneCallOverlay = () => {
   const groupTilesRef = useRef<HTMLDivElement>();
   const groupStreams = call?.groupStreams;
   const groupPeerNames = group?.peerNames;
+  const groupCameraOff = call?.groupCameraOff;
   useEffect(() => {
     const container = groupTilesRef.current;
     if (!container) return;
@@ -152,10 +157,14 @@ const ParvaneCallOverlay = () => {
         void video.play().catch(() => undefined);
       }
       tile.querySelector('span')!.textContent = groupPeerNames?.[peer] || peer;
+      const isCameraOff = Boolean(groupCameraOff?.includes(peer));
+      tile.classList.toggle(styles.groupTileOff, isCameraOff);
+      if (isCameraOff) tile.dataset.cameraOff = '1';
+      else delete tile.dataset.cameraOff;
       existing.delete(peer);
     });
     existing.forEach((el) => el.remove());
-  }, [groupStreams, groupPeerNames]);
+  }, [groupStreams, groupPeerNames, groupCameraOff]);
 
   const hasGroupVideo = Boolean(call?.localStream?.getVideoTracks().length);
 
@@ -269,6 +278,22 @@ const ParvaneCallOverlay = () => {
         )}
         {!hasRemoteVideo && <div className={styles.avatar}>{peerName.charAt(0).toUpperCase()}</div>}
         <div className={styles.name}>{peerName}</div>
+        {isActive && (call?.isRemoteCameraOff || call?.isRemoteMuted) && (
+          <div className={styles.remoteState}>
+            {call?.isRemoteCameraOff && (
+              <span data-remote-camera-off>
+                <i className={buildClassName(styles.icon, 'icon icon-video-stop')} />
+                {lang('ParvaneCallPeerCameraOff')}
+              </span>
+            )}
+            {call?.isRemoteMuted && (
+              <span data-remote-muted>
+                <i className={buildClassName(styles.icon, 'icon icon-microphone-alt')} />
+                {lang('ParvaneCallPeerMuted')}
+              </span>
+            )}
+          </div>
+        )}
         <div className={buildClassName(styles.status, call?.hasSecurityError && styles.securityError)}>
           {statusText}
         </div>

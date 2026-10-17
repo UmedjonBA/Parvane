@@ -85,7 +85,10 @@ function getGatewayUrl() {
       // Хранилище недоступно — адрес по умолчанию
     }
   }
-  return isSecurePage ? `wss://${window.location.host}/ws` : `ws://${window.location.hostname}:9222`;
+  // Скрытый сервис Tor (spec 025): на `.onion` gateway — на том же адресе по `/ws`
+  if (isSecurePage) return `wss://${window.location.host}/ws`;
+  if (window.location.hostname.endsWith('.onion')) return `ws://${window.location.host}/ws`;
+  return `ws://${window.location.hostname}:9222`;
 }
 
 function extensionOf(name: string) {

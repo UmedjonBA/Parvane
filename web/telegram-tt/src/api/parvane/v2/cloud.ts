@@ -3,6 +3,7 @@ import type { Protocol, PvClient } from './engine';
 
 import { expiredTrashOf } from '../../../components/parvane/cloud/cloudModel';
 import { V2Error } from './transport';
+import { pollDelay } from './l2';
 
 // Parvane (spec 016): раздел «Облако» — контейнеры домена `cloud.v1` (шард
 // domains): личный диск и совместные папки, свои и чужие. Движок держит дерево,
@@ -610,7 +611,7 @@ export function createCloudSync(deps: Deps) {
     syncTimer = setTimeout(() => {
       syncTimer = undefined;
       void syncNow();
-    }, isActive && !isHidden() ? SYNC_ACTIVE_MS : SYNC_IDLE_MS);
+    }, pollDelay(SYNC_ACTIVE_MS, SYNC_IDLE_MS, isActive && !isHidden()));
   }
 
   function setListeners() {

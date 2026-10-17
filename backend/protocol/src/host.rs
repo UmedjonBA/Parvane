@@ -987,7 +987,7 @@ pub fn encode_auth(token: &str) -> Vec<u8> {
 }
 
 pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32) -> Vec<u8> {
-    codec::encode_frame(frame::Kind::Request(Request { id, method: method.into(), body: body.to_vec(), timeout_ms }))
+    codec::encode_frame(frame::Kind::Request(Request { id, method: method.into(), body: body.to_vec(), timeout_ms, padding: vec![] }))
 }
 
 pub fn encode_ping(nonce: u64) -> Vec<u8> {

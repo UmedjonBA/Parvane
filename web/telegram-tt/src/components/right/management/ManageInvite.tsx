@@ -175,13 +175,14 @@ const ManageInvite: FC<OwnProps & StateProps> = ({
                 checked={effectiveIsRequestNeeded}
                 onChange={handleIsRequestChange}
                 label={oldLang('ApproveNewMembers')}
-                disabled={isPublic}
+                // Parvane: «по заявке» задаётся при создании ссылки и потом не меняется (spec 024)
+                disabled={isPublic || Boolean(editingInvite)}
               />
             </Island>
             <IslandDescription>
               {isPublic
                 ? lang('ApproveNewMembersPublicUnavailable')
-                : oldLang('ApproveNewMembersDescription')}
+                : editingInvite ? lang('ParvaneInviteApprovalFixed') : oldLang('ApproveNewMembersDescription')}
             </IslandDescription>
           </>
         )}

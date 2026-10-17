@@ -991,7 +991,7 @@ fn group_survives_signer_device_leaving() {
     sync_own_log(&srv, &mut alice);
     // Первое устройство Алисы добавляет Кэрол: та читает журнал с генезиса
     sync_group(&mut srv, &mut alice, &g.id);
-    run(&mut srv, &mut alice, &mut |c| c.group_change(&g.id, gpb::group_change::Change::AddMember(gpb::AddMember { member: Some(parvane_protocol::pb::parvane::core::v2::UserRef { address: "carol@local".into() }) })).map(|r| vec![r]).map_err(ClientError::Proto));
+    run(&mut srv, &mut alice, &mut |c| c.group_change(&g.id, gpb::group_change::Change::AddMember(gpb::AddMember { via_link_id: Vec::new(), member: Some(parvane_protocol::pb::parvane::core::v2::UserRef { address: "carol@local".into() }) })).map(|r| vec![r]).map_err(ClientError::Proto));
     sync_peer_log(&srv, &mut carol, "alice@local");
     sync_group(&mut srv, &mut carol, &g.id);
     let st = carol.group_state(&g.id).expect("новый участник проверил журнал с записями вышедшего устройства");

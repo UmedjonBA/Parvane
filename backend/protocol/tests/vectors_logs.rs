@@ -122,10 +122,10 @@ fn gen_group_log() -> Value {
     let e = |v: Value, entry: &GroupStateEntry| json!({"entry_hex": hexs(&entry.encode_to_vec()), "expect": v});
     let mut steps = vec![e(ok(), &g)];
     // Сервер вставляет участника.
-    let inject = group::build_entry(&srv, Some(&s1), "x", Change::AddMember(AddMember { member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
+    let inject = group::build_entry(&srv, Some(&s1), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
     steps.push(e(err("Forbidden"), &inject));
     // Боб без права приглашать.
-    let bob_add = group::build_entry(&bob, Some(&s1), "x", Change::AddMember(AddMember { member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
+    let bob_add = group::build_entry(&bob, Some(&s1), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: Some(UserRef { address: "eve@x".into() }) }), 2).unwrap();
     steps.push(e(err("Forbidden"), &bob_add));
     // Алиса банит Боба.
     let ban = group::build_entry(&alice, Some(&s1), "x", Change::Ban(Ban { member: Some(UserRef { address: "bob@x".into() }) }), 3).unwrap();

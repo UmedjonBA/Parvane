@@ -30,6 +30,8 @@ type CallDependencies = {
   sendV2Signal?: (
     to: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string,
   ) => Promise<boolean>;
+  // Своим другим устройствам: «принят/отклонён здесь» (spec 024) — они перестают звонить
+  sendV2OwnSignal?: (signal: WireCallSignal) => Promise<boolean>;
   // Собеседник на v2 — личный звонок идёт запечатанными конвертами
   isV2Peer?: (peer: string) => Promise<boolean>;
   // Завершённый звонок — в журнал личного состояния: серверной истории у
@@ -66,6 +68,11 @@ type CallWindowState = {
   hasSecurityError?: boolean;
   isMuted?: boolean;
   isCameraOff?: boolean;
+  // Собеседник выключил микрофон или камеру (spec 024)
+  isRemoteMuted?: boolean;
+  isRemoteCameraOff?: boolean;
+  // Участники группового звонка с выключенной камерой (spec 024)
+  groupCameraOff?: string[];
   // Входящее приглашение в групповой звонок ждёт согласия
   pendingGroup?: boolean;
   // Название группы, если приглашённый в ней состоит: в WireGroupInvite поля
@@ -105,7 +112,8 @@ export function createCallController(deps: CallDependencies) {
   // заняты): id → момент, после которого запись протухает. Вечная запись
   // навсегда гасила бы экран входящего для этого звонка — освободившийся
   // пользователь больше не мог быть позван в идущий разговор (FR-062)
-  const busyGroupCallIds = new Map<string, { until: number; isBusy: boolean }>();
+  // `isQuiet` — звонок принят или отклонён другим своим устройством (spec 024): здесь на него не отвечают вовсе
+  const busyGroupCallIds = new Map<string, { until: number; isBusy: boolean; isQuiet?: boolean }>();
   const listeners = {
     onState: (_state: string) => {},
     onRemoteStream: (_stream: MediaStream) => {},
@@ -250,6 +258,8 @@ export function createCallController(deps: CallDependencies) {
         callWindow.parvaneCall!.localStream = undefined;
         callWindow.parvaneCall!.isMuted = undefined;
         callWindow.parvaneCall!.isCameraOff = undefined;
+        callWindow.parvaneCall!.isRemoteMuted = undefined;
+        callWindow.parvaneCall!.isRemoteCameraOff = undefined;
       }
       if (state === 'busy') {
         // Показываем «занято» пару секунд, затем закрываем оверлей
@@ -270,6 +280,12 @@ export function createCallController(deps: CallDependencies) {
       // Звонок от заблокированного контакта: молча отклоняем, не показывая экран
       if (deps.isBlocked(from)) {
         engine?.rejectCall(from, callId);
+        return;
+      }
+      // Через Tor звонок не соединится (spec 025): отказ и объяснение вместо вечного «соединения»
+      if (isTorPage()) {
+        engine?.rejectCall(from, callId);
+        window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isTor: true } }));
         return;
       }
       callWindow.parvaneCall!.incoming = { from, callId, media };
@@ -299,6 +315,11 @@ export function createCallController(deps: CallDependencies) {
       onRemoteStream: (stream) => listeners.onRemoteStream(stream),
       onIncoming: (from, callId, media) => listeners.onIncoming(from, callId, media),
       onSas: (sas) => listeners.onSas(sas),
+      onRemoteMedia: ({ isAudioMuted, isVideoMuted }) => {
+        callWindow.parvaneCall!.isRemoteMuted = isAudioMuted;
+        callWindow.parvaneCall!.isRemoteCameraOff = isVideoMuted;
+        emit();
+      },
       log: deps.log,
     });
 
@@ -324,6 +345,14 @@ export function createCallController(deps: CallDependencies) {
         // Локальный поток появляется асинхронно (getUserMedia) — подхватываем его
         // для превью и кнопки камеры, как только медиа поднялось
         callWindow.parvaneCall!.localStream = groupEngine?.getLocalStream();
+        emit();
+      },
+      onPeerMedia: (peer, { isVideoMuted }) => {
+        // Камера участника выключена — его плитка без застывшего кадра (spec 024)
+        const off = new Set(callWindow.parvaneCall!.groupCameraOff || []);
+        if (isVideoMuted) off.add(peer);
+        else off.delete(peer);
+        callWindow.parvaneCall!.groupCameraOff = Array.from(off);
         emit();
       },
       onPeerStream: (peer, stream) => {
@@ -437,7 +466,30 @@ export function createCallController(deps: CallDependencies) {
   // Сигнал звонка, принятый по v2 (отправитель уже проверен движком):
   // приглашение в групповой звонок и попарные сигналы mesh (`groupCallId`) —
   // в групповой движок, остальное — личный звонок
-  function handleV2Signal(from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) {
+  function handleV2Signal(
+    from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string, device?: string,
+  ) {
+    // Своё другое устройство приняло или отклонило входящий (spec 024): здесь он закрывается молча —
+    // запись о звонке сделает то устройство
+    if (from === deps.getStore().self) {
+      if (signal.type !== 'reject') return;
+      if (pendingGroupInvite?.groupCallId === signal.call_id) {
+        // Приглашение в групповой звонок принято или отклонено другим своим устройством: попарные сигналы
+        // участников этому устройству больше не нужны и не отбиваются «занято»
+        silenceGroupCall(signal.call_id, 'quiet');
+        clearPendingGroupInvite();
+        window.dispatchEvent(new CustomEvent('parvane-call'));
+        return;
+      }
+      if (engine && v2Call?.callId === signal.call_id) {
+        const track = v2Call;
+        v2Call = undefined;
+        if (!engine.dismissIncoming(signal.call_id)) v2Call = track;
+      }
+      return;
+    }
+    // Групповой звонок, который здесь замолчал (отклонён, принят другим своим устройством): пары молча
+    if (groupCallId && busyGroupCallIds.get(groupCallId)?.isQuiet && !groupEngine?.currentGroupCallId) return;
     if (signal.type === 'group_invite' || groupCallId) {
       if (signal.type === 'invite' && groupCallId) {
         if (meshGroupByCall.size >= MESH_CALL_MEMORY) meshGroupByCall.clear();
@@ -452,7 +504,7 @@ export function createCallController(deps: CallDependencies) {
       trackV2Call(signal.call_id, from, false, signal.media);
     }
     if (signal.type === 'reject' && v2Call?.callId === signal.call_id) v2Call.isRejected = true;
-    void engine.handleSignal(from, signal, true).catch((error) => {
+    void engine.handleSignal(from, signal, true, device).catch((error) => {
       deps.log(`Ошибка сигналинга звонка (v2): ${String(error)}`);
     });
   }
@@ -548,9 +600,9 @@ export function createCallController(deps: CallDependencies) {
     }
   }
 
-  function silenceGroupCall(groupCallId: string, reason: 'busy' | 'declined') {
+  function silenceGroupCall(groupCallId: string, reason: 'busy' | 'declined' | 'quiet') {
     busyGroupCallIds.set(groupCallId, {
-      until: Date.now() + getRingTimeoutMs(), isBusy: reason === 'busy',
+      until: Date.now() + getRingTimeoutMs(), isBusy: reason === 'busy', isQuiet: reason === 'quiet' || undefined,
     });
     pruneSilencedGroupCalls();
   }
@@ -588,6 +640,7 @@ export function createCallController(deps: CallDependencies) {
     // мгновенный отказ здесь требует правки шарда
     silenceGroupCall(pending.groupCallId, 'declined');
     clearPendingGroupInvite();
+    notifyOwnDevices(pending.groupCallId, 'declined');
     window.dispatchEvent(new CustomEvent('parvane-call'));
   }
 
@@ -608,6 +661,7 @@ export function createCallController(deps: CallDependencies) {
       return;
     }
     clearPendingGroupInvite();
+    notifyOwnDevices(pending.groupCallId, 'answered_elsewhere');
     ensureGroupWindowState(pending.groupCallId, pending.participants);
     groupEngine.joinMesh(pending.groupCallId, pending.participants, pending.media);
     pending.buffered.forEach(({ from, signal, isAuthenticated }) => {
@@ -734,6 +788,11 @@ export function createCallController(deps: CallDependencies) {
   }
 
   async function placeCall(chatId: string, isVideo?: boolean) {
+    // Через Tor (spec 025) звонок не соединится: WebRTC и TURN идут по UDP мимо Tor и раскрыли бы адрес
+    if (isTorPage()) {
+      window.dispatchEvent(new CustomEvent('parvane-call-unavailable', { detail: { isTor: true } }));
+      return undefined;
+    }
     const store = deps.getStore();
     const toAddress = store.getAddressForId(chatId);
     if (!toAddress || !engine) return undefined;
@@ -764,6 +823,7 @@ export function createCallController(deps: CallDependencies) {
       track.enabled = !shouldMute;
     });
     emitWindowState({ isMuted: shouldMute });
+    sendMediaState();
     return shouldMute;
   }
 
@@ -780,13 +840,36 @@ export function createCallController(deps: CallDependencies) {
       track.enabled = !shouldDisable;
     });
     emitWindowState({ isCameraOff: shouldDisable });
+    sendMediaState();
     return shouldDisable;
+  }
+
+  // Состояние своих микрофона и камеры — собеседнику (spec 024): у него «камера выключена» вместо
+  // застывшего кадра. Групповой звонок — каждому участнику его попарным сигналом
+  function sendMediaState() {
+    const callWindow = (window as unknown as { parvaneCall?: CallWindowState }).parvaneCall;
+    const isAudioMuted = Boolean(callWindow?.isMuted);
+    const isVideoMuted = Boolean(callWindow?.isCameraOff);
+    if (groupEngine?.currentGroupCallId) {
+      groupEngine.sendMediaState(isAudioMuted, isVideoMuted);
+      return;
+    }
+    engine?.sendMediaState(isAudioMuted, isVideoMuted);
+  }
+
+  // Ответ или отказ на входящий — своим другим устройствам, чтобы перестали звонить (spec 024)
+  function notifyOwnDevices(callId: string, reason: 'answered_elsewhere' | 'declined') {
+    void deps.sendV2OwnSignal?.({ type: 'reject', call_id: callId, reason }).catch((error) => {
+      deps.log(`Своим устройствам о звонке не сообщено: ${String(error)}`);
+    });
   }
 
   return {
     applyCallRecords,
     acceptIncoming: () => {
       if (pendingGroupInvite) return acceptGroupInvite();
+      const callId = engine?.incomingCallId;
+      if (callId) notifyOwnDevices(callId, 'answered_elsewhere');
       return engine?.acceptIncoming();
     },
     handleV2Signal,
@@ -795,7 +878,10 @@ export function createCallController(deps: CallDependencies) {
       else if (groupEngine?.currentGroupCallId) groupEngine.leave();
       else {
         // Входящий по v2, сброшенный без ответа, — «отклонён», а не «пропущен»
-        if (v2Call && !v2Call.isOutgoing && !v2Call.activeAt) v2Call.isRejected = true;
+        if (v2Call && !v2Call.isOutgoing && !v2Call.activeAt) {
+          v2Call.isRejected = true;
+          notifyOwnDevices(v2Call.callId, 'declined');
+        }
         engine?.hangUp();
       }
     },
@@ -805,4 +891,8 @@ export function createCallController(deps: CallDependencies) {
     toggleCamera,
     toggleMute,
   };
+}
+
+function isTorPage() {
+  return typeof window !== 'undefined' && window.location.hostname.endsWith('.onion');
 }

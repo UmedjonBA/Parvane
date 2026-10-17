@@ -456,6 +456,20 @@ impl PvClient {
         self.inner.prepare_call(peer, &signal).map(|r| reqs_js(&r)).map_err(err_client)
     }
 
+    /// Шум режима L2 (spec 025): пустышка этому же устройству, выровненная по сетке L2.
+    #[wasm_bindgen(js_name = prepareCover)]
+    pub fn prepare_cover(&self) -> Result<JsValue, JsValue> {
+        self.inner.prepare_cover().map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    /// Сигнал звонка своим другим устройствам (spec 024): только `Hangup` («принят/отклонён здесь»).
+    #[wasm_bindgen(js_name = prepareCallOwn)]
+    pub fn prepare_call_own(&mut self, signal_json: &str) -> Result<Array, JsValue> {
+        let signal: parvane_protocol::pb::parvane::call::v2::CallSignal =
+            serde_json::from_str(signal_json).map_err(|_| err_proto(ProtoError::Malformed))?;
+        self.inner.prepare_call_own(&signal).map(|r| reqs_js(&r)).map_err(err_client)
+    }
+
     /// Сервер отверг ключ доступа собеседника (FORBIDDEN на доставке): он сменил
     /// ключ (отзыв устройства, восстановление) — дальше слепым жетоном. true —
     /// ключ был и сброшен (отправку стоит повторить).
@@ -1096,8 +1110,12 @@ impl PvClient {
 
     /// Решение по заявке на вступление (одобрение — запись `AddMember`).
     #[wasm_bindgen(js_name = groupRequestDecide)]
-    pub fn group_request_decide(&mut self, group: &str, user: &str, approve: bool) -> Result<JsValue, JsValue> {
-        self.inner.group_request_decide(&group_id(group)?, user, approve).map(|r| req_js(&r)).map_err(err_proto)
+    pub fn group_request_decide(&mut self, group: &str, user: &str, approve: bool, via_link_hex: Option<String>) -> Result<JsValue, JsValue> {
+        let via = match via_link_hex.as_deref().filter(|h| !h.is_empty()) {
+            Some(h) => hex::decode(h).map_err(|_| JsValue::from_str("via_link: не hex"))?,
+            None => Vec::new(),
+        };
+        self.inner.group_request_decide_via(&group_id(group)?, user, approve, &via).map(|r| req_js(&r)).map_err(err_proto)
     }
 
     #[wasm_bindgen(js_name = groupRotateEpoch)]
@@ -1405,6 +1423,14 @@ pub fn grant_root_backup(material: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
+/// Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
+/// (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
+#[wasm_bindgen(js_name = sealReport)]
+pub fn seal_report(admin_public: &[u8], reporter: &str, plaintext: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let key: [u8; 32] = admin_public.try_into().map_err(|_| JsValue::from_str("ключ администратора: нужно 32 байта"))?;
+    parvane_protocol::report::seal_report(plaintext, reporter, &key).map_err(err_proto)
+}
+
 #[wasm_bindgen(js_name = generateRecoveryKey)]
 pub fn generate_recovery_key() -> String {
     parvane_protocol::recovery::RecoveryKey::generate().to_display().to_string()
@@ -1480,9 +1506,14 @@ pub fn encode_auth(token: &str) -> Vec<u8> {
     codec::encode_frame(frame::Kind::Auth(Auth { token: token.into() }))
 }
 
+/// `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
 #[wasm_bindgen(js_name = encodeRequest)]
-pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32) -> Vec<u8> {
-    codec::encode_frame(frame::Kind::Request(Request { id, method: method.into(), body: body.to_vec(), timeout_ms }))
+pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32, pad_to: Option<u32>) -> Vec<u8> {
+    let req = Request { id, method: method.into(), body: body.to_vec(), timeout_ms, padding: vec![] };
+    match pad_to {
+        Some(n) if n > 0 => codec::encode_request_padded(req, n as usize),
+        _ => codec::encode_frame(frame::Kind::Request(req)),
+    }
 }
 
 #[wasm_bindgen(js_name = encodePing)]

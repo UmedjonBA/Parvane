@@ -46,6 +46,8 @@ allocate_port() {
 }
 
 IDENTITY_PASS="parvane-e2e-identity"
+# Ключ администратора для жалоб (spec 024) — тестовая пара, закрытая часть в scripts/e2e_report_admin.key
+E2E_REPORT_PUBLIC_KEY="HdJ5hOKvSb97IDT0GBi_sqoYEWuTk0SbNQp0yhReHHc"
 MESSENGER_PASS="parvane-e2e-messenger"
 CLOUD_PASS="parvane-e2e-cloud"
 NOTES_PASS="parvane-e2e-notes"
@@ -141,6 +143,7 @@ start_shard() {
     PARVANE_REGISTER_RATE_IP=100000 \
     PARVANE_CALL_V2_RINGING_MAX="${PARVANE_E2E_RINGING_MAX:-100000}" \
     PARVANE_REQUIRE_DEVICE_PROOF="${PARVANE_E2E_DEVICE_PROOF:-1}" \
+    PARVANE_REPORT_PUBLIC_KEY="${PARVANE_E2E_REPORT_PUBLIC_KEY:-$E2E_REPORT_PUBLIC_KEY}" \
     ${PARVANE_E2E_CLOUD_DRIVE_QUOTA_BYTES:+PARVANE_CLOUD_DRIVE_QUOTA_BYTES="$PARVANE_E2E_CLOUD_DRIVE_QUOTA_BYTES"} \
     ${PARVANE_E2E_CLOUD_DRIVE_MAX_FILE_BYTES:+PARVANE_CLOUD_DRIVE_MAX_FILE_BYTES="$PARVANE_E2E_CLOUD_DRIVE_MAX_FILE_BYTES"} \
     "$ROOT/backend/target/debug/$shard" >>"$TEMP_ROOT/$shard.log" 2>&1 &

@@ -52,6 +52,8 @@ import ReadTimeMenuItem from './ReadTimeMenuItem';
 
 import './MessageContextMenu.scss';
 
+const IS_TRANSLATION_TONE_SUPPORTED = false;
+
 type OwnProps = {
   isReactionPickerOpen?: boolean;
   availableReactions?: ApiAvailableReaction[];
@@ -477,7 +479,8 @@ const MessageContextMenu: FC<OwnProps> = ({
             {oldLang('ShowOriginalButton')}
           </MenuItem>
         )}
-        {canShowOriginal && (
+        {/* Parvane: переводчик браузера не знает тона перевода (spec 024) */}
+        {canShowOriginal && IS_TRANSLATION_TONE_SUPPORTED && (
           <NestedMenuItem
             icon="tone"
             submenuClassName="translation-tone-menu"

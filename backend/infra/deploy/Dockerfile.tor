@@ -1,0 +1,8 @@
+# Скрытый сервис Tor для Parvane (spec 025): адрес .onion ведёт на сайт Caddy :8081 (web-клиент и /ws).
+# Контейнер живёт в сетевом пространстве caddy (network_mode: service:caddy) — цель 127.0.0.1:8081.
+# Ключ скрытого сервиса (а с ним и адрес .onion) — в томе tor-data: пересоздание контейнера адрес не меняет.
+FROM docker.io/library/alpine:3.20
+RUN apk add --no-cache tor
+COPY torrc /etc/tor/torrc
+# Том создаётся root-ом — tor требует свой каталог с правами 700
+ENTRYPOINT ["/bin/sh", "-c", "mkdir -p /var/lib/tor/hs && chown -R tor /var/lib/tor && chmod 700 /var/lib/tor /var/lib/tor/hs && exec tor -f /etc/tor/torrc"]

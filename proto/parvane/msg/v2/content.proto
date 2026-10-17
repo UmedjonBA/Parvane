@@ -50,6 +50,9 @@ message Content {
     // Статья (ARTICLE-1): заметка «Знаний» в Markdown, открывается окном чтения.
     // Клиент без чтения статей показывает поле `text`.
     Article article = 23;
+    // Жалоба на сообщения группы её админам (spec 024, REPORT-1): уходит личным сообщением
+    // каждому админу с правом удалять сообщения или банить. Клиент без модерации показывает `text`.
+    ModReport mod_report = 24;
   }
   // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
   // только записью журнала LegacyV1Record (msg.proto).
@@ -375,6 +378,22 @@ message CloudInvite {
 
 // Статья (ARTICLE-1, замена «Статьи» Telegram): заметка в Markdown целиком.
 // Картинки заметки в статью не входят — вместо них подпись.
+message ModReport {
+  parvane.core.v2.Ref group = 1;
+  repeated ReportedMessage messages = 2 [(parvane.core.v2.max_items) = 20];
+  // Код причины: spam | violence | porn | child | copyright | illegal | personal | fake | other.
+  string reason = 3 [(parvane.core.v2.max_len) = 32];
+  string comment = 4 [(parvane.core.v2.max_len) = 1024];
+  string text = 5 [(parvane.core.v2.max_len) = 600];
+}
+
+message ReportedMessage {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.core.v2.UserRef author = 2;
+  string text = 3 [(parvane.core.v2.max_len) = 4096];
+  int64 ts_ms = 4;
+}
+
 message Article {
   string title = 1 [(parvane.core.v2.max_len) = 200];
   string markdown = 2 [(parvane.core.v2.max_len) = 65536];
