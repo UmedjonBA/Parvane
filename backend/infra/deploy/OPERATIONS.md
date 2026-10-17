@@ -444,3 +444,33 @@ parvane-integration --test v1_mode_live` (v1-кадр отвергнут, рук
   запрещён (`PermissionHandler` в `parvane-turn`, `denied-peer-ip` в
   `coturn.conf`); статический пользователь TURN не заводится — только
   краткоживущие креды по `PARVANE_TURN_SECRET`.
+
+## Федерация серверов (spec 028)
+
+Шард `federation` связывает сервер с другими серверами Parvane (правило FED-1). Входящие запросы — `POST
+/_parvane/s2s` (Caddy → `federation:9330`), описатель — `/.well-known/parvane` (поле `s2s_endpoint`).
+
+| Переменная | По умолчанию | Смысл |
+|---|---|---|
+| `PARVANE_FEDERATION` | `off` | `on` — включить; `off` — входящие отвергаются (403 `disabled`), исходящие — `FEDERATION_UNAVAILABLE`, identity не подписывает кадры |
+| `PARVANE_S2S_ENDPOINT` | — | адрес входа для описателя, напр. `https://parvane.duckdns.org:20443` (хост = домен, только https) |
+| `PARVANE_FEDERATION_ENDPOINTS` | — | `домен=https://хост:порт,…` — точки входа серверов на нестандартном порту (иначе — `https://<домен>/.well-known/parvane`) |
+| `PARVANE_FEDERATION_RATE_PER_SEC` / `_BURST` | 50 / 300 | лимит входящих запросов на домен |
+| `PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY` | 2000 | потолок слепых жетонов, выдаваемых пользователям одного чужого домена в сутки (identity) |
+
+Наш прод слушает на 20443: чтобы другой сервер нас нашёл, его администратор задаёт
+`PARVANE_FEDERATION_ENDPOINTS=parvane.duckdns.org=https://parvane.duckdns.org:20443`.
+
+Администрирование (внутри контейнера):
+
+```bash
+docker compose exec federation federation_admin list            # серверы, ключи, состояние
+docker compose exec federation federation_admin block <домен>    # чёрный список (входящие и исходящие)
+docker compose exec federation federation_admin unblock <домен>
+docker compose exec federation federation_admin unpin <домен>    # принять новый ключ сервера (после проверки!)
+```
+
+Ключ чужого сервера закрепляется при первом контакте; смена ключа — состояние `key_changed`, связь стоит до `unpin`.
+Очередь записей групп и «аккаунт удалён» (`outbox`) повторяет доставку до суток. База — том `parvane_db-federation`
+(`federation.db`), в бэкап — вместе с остальными. Тестовый транспорт по http в образ не собирается (фича
+`insecure-test-transport`, сторож `insecure_transport_never_ships`).

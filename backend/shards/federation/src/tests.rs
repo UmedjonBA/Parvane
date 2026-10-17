@@ -78,3 +78,15 @@ async fn domain_bucket_limits_bursts() {
     assert!(!fed.admit("a.example"), "сверх запаса — отказ");
     assert!(fed.admit("b.example"), "другой домен — своя корзина");
 }
+
+/// Тестовый транспорт без TLS не попадает в образ прода и в деплой (R16).
+#[test]
+fn insecure_transport_never_ships() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../infra/deploy");
+    for f in ["Dockerfile.shards", "deploy.sh", "docker-compose.yml"] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap_or_default();
+        assert!(!text.is_empty(), "{f} не прочитан");
+        assert!(!text.contains("insecure-test-transport"), "{f}: фича тестового транспорта");
+        assert!(!text.contains("PARVANE_FEDERATION_INSECURE_HTTP"), "{f}: тестовый транспорт");
+    }
+}

@@ -19,7 +19,7 @@ import { V2Error } from './transport';
 export type PlannerSyncStatus = 'loading' | 'needs-linking' | 'no-key' | 'offline' | 'ready';
 
 type Chan = 'id' | 'anon';
-type OutReq = { chan: Chan; method: string; body: Uint8Array };
+type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
 
 type OutboxItem = { opId: string; op: string };
 type ContainerRef = { domain: string; id: string };
@@ -30,7 +30,8 @@ type Deps = {
   client: () => PvClient | undefined;
   isReady: () => boolean;
   needsLinking: () => boolean;
-  call: (chan: Chan, method: string, body: Uint8Array) => Promise<Uint8Array>;
+  // dest — сервер объекта (spec 028)
+  call: (chan: Chan, method: string, body: Uint8Array, dest?: string) => Promise<Uint8Array>;
   withNeeds: <T>(fn: () => T) => Promise<T>;
   persist: () => Promise<void>;
   loadRecord: <T>(key: string) => Promise<T | undefined>;
@@ -122,10 +123,10 @@ export function createPlannerSync(deps: Deps) {
     return next;
   }
 
-  function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
+  function call(chan: Chan, method: string, body: Uint8Array, dest?: string): Promise<Uint8Array> {
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => reject(new V2Error('ERROR_CODE_UNAVAILABLE')), CALL_TIMEOUT_MS);
-      deps.call(chan, method, body).then(resolve, reject).finally(() => clearTimeout(timer));
+      deps.call(chan, method, body, dest).then(resolve, reject).finally(() => clearTimeout(timer));
     });
   }
 
@@ -233,7 +234,7 @@ export function createPlannerSync(deps: Deps) {
     const client = deps.client();
     if (!client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const req = client.plannerCreate(Date.now()) as OutReq;
-    await call(req.chan, req.method, req.body);
+    await call(req.chan, req.method, req.body, req.dest);
     container = client.plannerContainer() as ContainerRef;
     deps.recordContainer(container);
     await deps.persist();
@@ -246,7 +247,7 @@ export function createPlannerSync(deps: Deps) {
     if (!client) return;
     try {
       const reqs = await deps.withNeeds(() => client.sharePlannerWithOwnDevices() as OutReq[]);
-      for (const r of reqs) await call(r.chan, r.method, r.body);
+      for (const r of reqs) await call(r.chan, r.method, r.body, r.dest);
       if (reqs.length) deps.log('планировщик: ключ контейнера передан своим устройствам');
     } catch (e) {
       deps.log(`планировщик: ключ своим устройствам не передан: ${String(e)}`);
@@ -336,7 +337,7 @@ export function createPlannerSync(deps: Deps) {
     try {
       const req = client.plannerSnapshotRequest(Date.now()) as OutReq | undefined;
       if (!req) return false;
-      await call(req.chan, req.method, req.body);
+      await call(req.chan, req.method, req.body, req.dest);
       deps.log(`планировщик: снимок записан (seq ${client.plannerHeadSeq()})`);
       return true;
     } catch (e) {
@@ -392,7 +393,7 @@ export function createPlannerSync(deps: Deps) {
       }
       try {
         const req = client.plannerSeal(b64ToBytes(item.op), item.opId, Date.now()) as OutReq;
-        await call(req.chan, req.method, req.body);
+        await call(req.chan, req.method, req.body, req.dest);
       } catch (e) {
         const code = errorCode(e);
         if (code === 'ERROR_CODE_DUPLICATE') {

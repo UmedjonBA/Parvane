@@ -193,7 +193,10 @@ export async function preparePage(context, user, password, options = {}) {
   // `noGatewaySeed` — адрес gateway выбирает само приложение (страница `.onion`, spec 025)
   const { startUrl, beforeLogin, noGatewaySeed } = options;
   const { seedLocalStorage } = options;
-  const { baseUrl, gatewayUrl } = requireEnv();
+  const env = requireEnv();
+  const { baseUrl } = env;
+  // `gatewayUrl` — другой сервер (федерация, spec 028: та же сборка web, свой gateway у каждого)
+  const gatewayUrl = options.gatewayUrl || env.gatewayUrl;
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));

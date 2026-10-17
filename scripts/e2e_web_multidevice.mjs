@@ -284,18 +284,25 @@ try {
 
   // Ссылка рабочая с любого устройства: Чарли и Дейв входят через нативную
   // модалку приглашения (t.me/+hash-поведение)
-  const joinByLink = async (page, link) => {
+  const joinByLink = async (session, link) => {
+    const { page } = session;
     await page.goto(inviteAppUrl(baseUrl, link), { waitUntil: 'domcontentloaded' });
     const modal = page.locator('.Modal .modal-dialog').filter({ has: page.getByRole('button', { name: /join group/i }) }).first();
-    await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
+    await modal.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 }).catch(async (error) => {
+      // Для разбора: адрес ссылки, журнал провайдера и снимок экрана
+      console.error(`ссылка: ${link}\n--- журнал ---\n${(session.logs || []).slice(-60).join('\n')}`);
+      const dir = process.env.PARVANE_E2E_BACKEND_LOG_DIR;
+      if (dir) await page.screenshot({ path: `${dir}/join-by-link.png` }).catch(() => undefined);
+      throw error;
+    });
     await modal.getByRole('button', { name: /join group/i }).first().click();
     await page.locator('.MiddleHeader').getByText(inviteGroupTitle)
       .first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS * 2 });
   };
   const charlieSession = await preparePage(charlieContext, charlie, PASSWORD);
-  await joinByLink(charlieSession.page, linkDevice2);
+  await joinByLink(charlieSession, linkDevice2);
   const daveSession = await preparePage(daveContext, dave, PASSWORD);
-  await joinByLink(daveSession.page, linkDevice1);
+  await joinByLink(daveSession, linkDevice1);
   // Оба устройства владельца видят вступивших (bob, alice, charlie, dave)
   await openGroupChat(bobDevice1.page, inviteGroupTitle);
   await membersCountLocator(bobDevice1.page, 4).waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });

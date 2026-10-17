@@ -257,6 +257,29 @@ export class PvClient {
         }
     }
     /**
+     * Домен сервера контейнера облака (spec 028).
+     * @param {string} id_hex
+     * @returns {string}
+     */
+    cloudDomain(id_hex) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(id_hex, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_cloudDomain(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            deferred2_0 = r0;
+            deferred2_1 = r1;
+            return getStringFromWasm0(r0, r1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Забыть контейнер (покинут, доступ отозван, удалён).
      * @param {string} id_hex
      */
@@ -1025,6 +1048,37 @@ export class PvClient {
             return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Домен сервера группы (spec 028): из журнала, ожидающего ключа или свой.
+     * @param {string} group
+     * @returns {string}
+     */
+    groupDomain(group) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(group, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.pvclient_groupDomain(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr2 = r0;
+            var len2 = r1;
+            if (r3) {
+                ptr2 = 0; len2 = 0;
+                throw takeObject(r2);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred3_0, deferred3_1, 1);
         }
     }
     /**
@@ -2886,12 +2940,40 @@ export class PvClient {
         return ret >>> 0;
     }
     /**
+     * @param {string} domain
+     * @returns {number}
+     */
+    tokenCountFor(domain) {
+        const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pvclient_tokenCountFor(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
+    }
+    /**
      * Пора получать суточную партию жетонов (FR-063: по расписанию, не перед
      * тратой).
      * @returns {boolean}
      */
     tokenRefillDue() {
         const ret = wasm.pvclient_tokenRefillDue(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Домены, чьи запасы жетонов пора пополнить (массив строк).
+     * @returns {Array<any>}
+     */
+    tokenRefillDueDomains() {
+        const ret = wasm.pvclient_tokenRefillDueDomains(this.__wbg_ptr);
+        return takeObject(ret);
+    }
+    /**
+     * @param {string} domain
+     * @returns {boolean}
+     */
+    tokenRefillDueFor(domain) {
+        const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pvclient_tokenRefillDueFor(this.__wbg_ptr, ptr0, len0);
         return ret !== 0;
     }
     /**
@@ -2921,6 +3003,35 @@ export class PvClient {
         }
     }
     /**
+     * Запрос жетонов сервера `domain`: ответ его `identity.tokens.key_list` и его ключ сервера.
+     * @param {string} domain
+     * @param {Uint8Array} key_list_response
+     * @param {Uint8Array} server_key
+     * @param {number} count
+     * @returns {any}
+     */
+    tokenRequestFor(domain, key_list_response, server_key, count) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(key_list_response, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passArray8ToWasm0(server_key, wasm.__wbindgen_export);
+            const len2 = WASM_VECTOR_LEN;
+            wasm.pvclient_tokenRequestFor(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, count);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * @param {Uint8Array} resp
      * @returns {number}
      */
@@ -2930,6 +3041,30 @@ export class PvClient {
             const ptr0 = passArray8ToWasm0(resp, wasm.__wbindgen_export);
             const len0 = WASM_VECTOR_LEN;
             wasm.pvclient_tokenResponse(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return r0 >>> 0;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @param {string} domain
+     * @param {Uint8Array} resp
+     * @returns {number}
+     */
+    tokenResponseFor(domain, resp) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(resp, wasm.__wbindgen_export);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvclient_tokenResponseFor(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -3533,26 +3668,30 @@ export function encodePing(nonce) {
 
 /**
  * `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
+ * `dest_domain` (spec 028) — домен сервера объекта; пусто или свой — обычный запрос.
  * @param {bigint} id
  * @param {string} method
  * @param {Uint8Array} body
  * @param {number} timeout_ms
  * @param {number | null} [pad_to]
+ * @param {string | null} [dest_domain]
  * @returns {Uint8Array}
  */
-export function encodeRequest(id, method, body, timeout_ms, pad_to) {
+export function encodeRequest(id, method, body, timeout_ms, pad_to, dest_domain) {
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(method, wasm.__wbindgen_export, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passArray8ToWasm0(body, wasm.__wbindgen_export);
         const len1 = WASM_VECTOR_LEN;
-        wasm.encodeRequest(retptr, id, ptr0, len0, ptr1, len1, timeout_ms, isLikeNone(pad_to) ? Number.MAX_SAFE_INTEGER : (pad_to) >>> 0);
+        var ptr2 = isLikeNone(dest_domain) ? 0 : passStringToWasm0(dest_domain, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len2 = WASM_VECTOR_LEN;
+        wasm.encodeRequest(retptr, id, ptr0, len0, ptr1, len1, timeout_ms, isLikeNone(pad_to) ? Number.MAX_SAFE_INTEGER : (pad_to) >>> 0, ptr2, len2);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var v3 = getArrayU8FromWasm0(r0, r1).slice();
+        var v4 = getArrayU8FromWasm0(r0, r1).slice();
         wasm.__wbindgen_export4(r0, r1 * 1, 1);
-        return v3;
+        return v4;
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }

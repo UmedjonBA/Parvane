@@ -42,6 +42,8 @@ type V2BlobTransport = AttachmentUploadTransport & {
     size: number; chunks: number; parts: Map<number, Uint8Array>;
   }>;
   isReady: () => boolean;
+  // Сервер блоба (spec 028)
+  setBlobDomain?: (fileId: string, domain?: string) => void;
 };
 
 type MediaDependencies = {
@@ -980,6 +982,11 @@ export function createMediaService(deps: MediaDependencies) {
   }
 
   function rememberKeys(content: WireMessageContent) {
+    // Вложение лежит на сервере отправителя (spec 028): скачивание — туда
+    if (content.file_id && content.blob_domain) deps.getV2?.()?.setBlobDomain?.(content.file_id, content.blob_domain);
+    if (content.pack_ref?.file_id && content.pack_ref.blob_domain) {
+      deps.getV2?.()?.setBlobDomain?.(content.pack_ref.file_id, content.pack_ref.blob_domain);
+    }
     if (content.file_id && content.file_key && content.file_nonce) {
       keysByFileId.set(content.file_id, { keyB64: content.file_key, nonceB64: content.file_nonce });
       if (content.mime) mimeByFileId.set(content.file_id, content.mime);

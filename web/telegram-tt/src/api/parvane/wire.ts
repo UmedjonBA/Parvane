@@ -32,6 +32,8 @@ export type WirePackRef = {
   capability?: string;
   // Отпечаток содержимого набора, base64 (PACK-2)
   content_hash?: string;
+  // Сервер архива набора (spec 028)
+  blob_domain?: string;
 };
 
 export type WireMessageContent = {
@@ -58,6 +60,8 @@ export type WireMessageContent = {
   // Секрет скачивания блоба вложения (v2, FR-062/D-08): сервер хранит только
   // SHA-256, получатель качает блоб анонимным каналом без гранта на себя
   capability?: string;
+  // Сервер блоба (spec 028): пусто — сервер отправителя
+  blob_domain?: string;
   file_nonce?: string;
   // Миниатюра фото/видео (perf A10): JPEG ≤ 320 px и ≤ 16 КиБ, base64 —
   // `Media.thumbnail` схемы v2, внутри шифрования; старые сообщения — без неё

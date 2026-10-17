@@ -116,6 +116,9 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
     };
     let is_key_owner = matches!(req.kind, Some(s2s_request::Kind::KeyOwner(_)));
     let res = fed.call(&dest, &req, out.timeout_ms, None).await;
+    if let Err(e) = &res {
+        warn!("федерация: запрос на {} не выполнен (код {})", dest, e.code);
+    }
     let res = match res {
         // Владелец ключа — только пользователь того сервера, у которого спрашивали (доверие по домену).
         Ok(b) if is_key_owner => Ok(scope_key_owner(&b, &dest)),

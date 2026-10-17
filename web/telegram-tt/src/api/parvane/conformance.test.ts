@@ -1941,3 +1941,46 @@ describe('деплой: каждый шард, читающий домен се�
     expect(service, `сервис ${shard} в docker-compose.yml`).toContain('PARVANE_DOMAIN:');
   });
 });
+
+describe('FED-1: федерация — запрос объекту чужого сервера идёт своему серверу с dest_domain', () => {
+  const r = rule('FED-1') as unknown as {
+    fields: Record<string, number>;
+    errors: string[];
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема: адресат запроса, флаг реестра, домены блобов, точка входа сервера, коды отказов', () => {
+    expect(readRepo('proto/parvane/core/v2/frame.proto'))
+      .toContain(`string dest_domain = ${r.fields.request_dest_domain} `);
+    expect(readRepo('proto/parvane/core/v2/registry.proto'))
+      .toContain(`bool federated = ${r.fields.method_spec_federated};`);
+    const content = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(content).toContain(`string blob_domain = ${r.fields.media_blob_domain} `);
+    expect(content).toContain(`string blob_domain = ${r.fields.pack_ref_blob_domain} `);
+    expect(readRepo('proto/parvane/group/v2/group.proto'))
+      .toContain(`string avatar_domain = ${r.fields.set_info_avatar_domain} `);
+    expect(readRepo('proto/parvane/core/v2/envelope.proto'))
+      .toContain(`string s2s_endpoint = ${r.fields.server_descriptor_s2s_endpoint} `);
+    const errors = readRepo('proto/parvane/core/v2/errors.proto');
+    r.errors.forEach((code) => expect(errors).toContain(`${code} =`));
+  });
+
+  it('web: адресат по домену, причины отказа в обоих языках, тестовый транспорт не в образе', () => {
+    const address = readRepo('web/telegram-tt/src/api/parvane/v2/address.ts');
+    ['export function destFor(', 'export function federationReason('].forEach((f) => expect(address).toContain(f));
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    ['function groupDomainOf(', 'async function requestForeignTokens(', 'function setBlobDomain(']
+      .forEach((f) => expect(controller).toContain(f));
+    const en = readRepo('web/telegram-tt/src/assets/localization/fallback.strings');
+    const ru = readRepo('web/telegram-tt/src/assets/localization/ru.strings');
+    ['ParvaneFederationDisabled', 'ParvaneFederationDomainBlocked', 'ParvaneFederationRefused',
+      'ParvaneFederationUnreachable', 'ParvaneFederationKeyChanged'].forEach((key) => {
+      expect(en).toContain(`"${key}" =`);
+      expect(ru).toContain(`"${key}" =`);
+    });
+    expect(readRepo('backend/infra/deploy/Dockerfile.shards')).not.toContain('insecure-test-transport');
+    expect(r.clients.web).toContain('run_web_federation_e2e.sh');
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+});

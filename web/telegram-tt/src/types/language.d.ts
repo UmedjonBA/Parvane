@@ -217,6 +217,11 @@ export interface LangPair {
   'ParvaneMediaUnverified': undefined;
   'ParvaneUndecryptable': undefined;
   'ParvaneMessageDeleted': undefined;
+  'ParvaneFederationDisabled': undefined;
+  'ParvaneFederationDomainBlocked': undefined;
+  'ParvaneFederationRefused': undefined;
+  'ParvaneFederationUnreachable': undefined;
+  'ParvaneFederationKeyChanged': undefined;
   'ParvaneJoinRequestsAcceptAll': undefined;
   'ParvaneJoinRequestsDismissAll': undefined;
   'ParvaneJoinRequestsAcceptAllTitle': undefined;

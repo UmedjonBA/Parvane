@@ -191,6 +191,26 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 Реализации: web `v2/callMap.ts`, `groupcall.ts` (`inviteGroupTitle`), `calls.ts`;
 тесты `v2Call.test.ts`, `groupcall.title.test.ts`. Desktop и android — ОТКРЫТО.
 
+## FED-1. Федерация серверов (spec 028)
+
+1. Любой запрос, касающийся пользователя, группы, контейнера или блоба другого сервера, клиент шлёт СВОЕМУ
+   серверу с `Request.dest_domain` = домен объекта; к чужому серверу напрямую не подключается. Адресат запросов,
+   собранных движком, — `parvane_protocol::routing::dest_of` (получатель письма или сигнала, группа, контейнер).
+2. Домен блоба: `Media.blob_domain` / `PackRef.blob_domain` (пусто — домен отправителя; при пересылке вложения
+   с другого сервера — исходный), `CloudBlobRef.uploader`, `SetInfo.avatar_domain` (пусто — домен группы),
+   аватар пользователя — домен адреса.
+3. Жетоны для письма незнакомцу с другого сервера — от сервера адресата (свой запас на каждый домен), ключ
+   сервера — из `server.describe` с адресатом, подпись описателя проверяет движок.
+4. Звонок принимается, если цель сигнала — домен звонящего; ключ контейнера облака — от сервера раздающего;
+   группа и контейнер хранят свой домен.
+5. Коды `FEDERATION_UNAVAILABLE`, `DOMAIN_BLOCKED`, `DOMAIN_REFUSED`, `DOMAIN_UNREACHABLE`,
+   `SERVER_KEY_CHANGED` показываются своими строками (EN+RU).
+
+Реализации: web — `v2/address.ts`, `v2/controller.ts`, `v2/cloud.ts`, `v2/bridge.ts`, `provider.ts`, тесты
+`v2/address.test.ts`, сценарий `scripts/run_web_federation_e2e.sh`; сервер — `cargo test -p parvane-integration
+--test v2_federation_live` (два стека). Desktop и android — ОТКРЫТО: без `dest_domain` они работают в пределах
+своего сервера, адрес другого сервера получает прежний `FEDERATION_UNAVAILABLE`.
+
 ## EMOJI-1. docId кастом-эмодзи — от имени из ссылки
 
 docId документа кастом-эмодзи = FNV-1a-64 с начальным значением

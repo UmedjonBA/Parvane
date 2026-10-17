@@ -5,7 +5,7 @@
 
 export type L2TickDeps = {
   isActive: () => boolean;
-  send: (method: string, body: Uint8Array) => Promise<Uint8Array>;
+  send: (method: string, body: Uint8Array, dest?: string) => Promise<Uint8Array>;
   makeCover: () => { method: string; body: Uint8Array } | undefined;
   log: (text: string) => void;
   tickMs?: number;
@@ -18,6 +18,8 @@ export type L2TickDeps = {
 type Queued = {
   method: string;
   body: Uint8Array;
+  // Сервер объекта (spec 028)
+  dest?: string;
   resolve: (value: Uint8Array) => void;
   reject: (error: unknown) => void;
 };
@@ -74,16 +76,16 @@ export function createL2Ticker(deps: L2TickDeps) {
   }
 
   function sendNow(item: Queued) {
-    deps.send(item.method, item.body).then(item.resolve, item.reject);
+    deps.send(item.method, item.body, item.dest).then(item.resolve, item.reject);
   }
 
   /** Отправить запись: в режиме L2 — в очередь тактов, иначе сразу. */
-  function submit(method: string, body: Uint8Array): Promise<Uint8Array> {
-    if (!L2_TICKED_METHODS.has(method) || !deps.isActive()) return deps.send(method, body);
+  function submit(method: string, body: Uint8Array, dest?: string): Promise<Uint8Array> {
+    if (!L2_TICKED_METHODS.has(method) || !deps.isActive()) return deps.send(method, body, dest);
     schedule();
     return new Promise((resolve, reject) => {
       queue.push({
-        method, body, resolve, reject,
+        method, body, dest, resolve, reject,
       });
     });
   }

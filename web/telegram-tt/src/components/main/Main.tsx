@@ -609,6 +609,16 @@ const Main = ({
     return () => window.removeEventListener('parvane-call-unavailable', handleCallUnavailable);
   }, [showNotification]);
 
+  // Parvane: отказ федерации (spec 028) — причина с другого сервера понятной строкой
+  useEffect(() => {
+    const handleFederation = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (key) showNotification({ message: oldTranslate(key) });
+    };
+    window.addEventListener('parvane-federation-error', handleFederation);
+    return () => window.removeEventListener('parvane-federation-error', handleFederation);
+  }, [showNotification]);
+
   // Parvane: в групповом звонке больше участников, чем тянет mesh
   useEffect(() => {
     const handleTooMany = (event: Event) => {

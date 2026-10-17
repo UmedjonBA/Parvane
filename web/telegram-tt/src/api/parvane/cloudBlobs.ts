@@ -58,6 +58,8 @@ export type CloudBlobTransport = BlobSession & {
   /** Серия: все `session.downloadBlobCap` внутри `fn` — по одному соединению
    * (миниатюры папки, тексты заметок); без серии — соединение на каждый блоб. */
   withBlobSession?: <T>(fn: (session: BlobSession) => Promise<T>) => Promise<T>;
+  /** Сервер блоба (spec 028): файл совместной папки лежит на сервере загрузившего. */
+  setBlobDomain?: (fileId: string, domain?: string) => void;
 };
 
 export type CloudUploadOptions = {

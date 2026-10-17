@@ -227,9 +227,14 @@ impl Fed {
         }
         let peer = self.trust(&dest).await?;
         let nonce = federation::new_nonce();
-        let frame = self.sign(&dest, nonce.clone(), federation::REQUEST_TYPE, req.encode_to_vec()).await?;
+        let frame = self.sign(&dest, nonce.clone(), federation::REQUEST_TYPE, req.encode_to_vec()).await.inspect_err(|_| {
+            warn!("федерация: identity не подписал кадр для {}", dest);
+        })?;
         let url = format!("{}/_parvane/s2s", peer.endpoint);
-        let (client, url) = self.client_for(&url).await.map_err(|_| err(ErrorCode::DomainUnreachable, 30_000))?;
+        let (client, url) = self.client_for(&url).await.map_err(|_| {
+            warn!("федерация: точка входа {} не прошла фильтр адресов", dest);
+            err(ErrorCode::DomainUnreachable, 30_000)
+        })?;
         let timeout = Duration::from_millis(u64::from(if timeout_ms == 0 { DEFAULT_TIMEOUT_MS } else { timeout_ms.min(30_000) }));
         let resp = client
             .post(url)
@@ -238,7 +243,10 @@ impl Fed {
             .body(frame.encode_to_vec())
             .send()
             .await
-            .map_err(|_| err(ErrorCode::DomainUnreachable, 10_000))?;
+            .map_err(|e| {
+                warn!("федерация: {} не ответил: {}", dest, e);
+                err(ErrorCode::DomainUnreachable, 10_000)
+            })?;
         let status = resp.status().as_u16();
         if status == 403 {
             return Err(err(ErrorCode::DomainRefused, 0));

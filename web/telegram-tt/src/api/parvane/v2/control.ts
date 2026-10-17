@@ -42,12 +42,14 @@ async function openConnection(pv: Protocol, url: string): Promise<V2Connection> 
 }
 
 /** Метод канала PRE без входа (`server.describe`, `identity.session.issue`, `identity.account.*`). */
-export async function preauth(url: string, method: string, request: V2Json): Promise<V2Json> {
+export async function preauth(url: string, method: string, request: V2Json, dest?: string): Promise<V2Json> {
   const pv = await loadProtocol();
   const body = pv.encodeMethodRequest(method, JSON.stringify(request));
   const conn = await openConnection(pv, url);
   try {
-    return JSON.parse(pv.decodeMethodResponse(method, await conn.request(method, body, CALL_TIMEOUT_MS))) as V2Json;
+    // dest (spec 028): `server.describe` чужого сервера — через свой
+    const resp = await conn.request(method, body, CALL_TIMEOUT_MS, undefined, dest);
+    return JSON.parse(pv.decodeMethodResponse(method, resp)) as V2Json;
   } finally {
     conn.close();
   }
@@ -105,16 +107,17 @@ export class V2Control {
   }
 
   /** Метод реестра канала ID. Бросает `V2Error` (код протокола) либо ошибку сети. */
-  call(method: string, request: V2Json, timeoutMs = CALL_TIMEOUT_MS): Promise<V2Json> {
+  call(method: string, request: V2Json, timeoutMs = CALL_TIMEOUT_MS, dest?: string): Promise<V2Json> {
     return this.withConnection(async (pv, conn) => {
       const body = pv.encodeMethodRequest(method, JSON.stringify(request));
-      return JSON.parse(pv.decodeMethodResponse(method, await conn.request(method, body, timeoutMs))) as V2Json;
+      const resp = await conn.request(method, body, timeoutMs, undefined, dest);
+      return JSON.parse(pv.decodeMethodResponse(method, resp)) as V2Json;
     });
   }
 
   /** Метод с уже закодированным телом (чанк блоба байтами) → тело ответа. */
-  requestBytes(method: string, body: Uint8Array, timeoutMs = CALL_TIMEOUT_MS): Promise<Uint8Array> {
-    return this.withConnection((_pv, conn) => conn.request(method, body, timeoutMs));
+  requestBytes(method: string, body: Uint8Array, timeoutMs = CALL_TIMEOUT_MS, dest?: string): Promise<Uint8Array> {
+    return this.withConnection((_pv, conn) => conn.request(method, body, timeoutMs, undefined, dest));
   }
 
   /**

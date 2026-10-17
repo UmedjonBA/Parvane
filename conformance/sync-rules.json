@@ -1453,6 +1453,30 @@
         "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
         "android": "ОТКРЫТО (то же решение)"
       }
+    },
+    {
+      "id": "FED-1",
+      "title": "Федерация: запрос объекту чужого сервера — своему серверу с dest_domain; домен блоба, жетоны сервера адресата, звонок и контейнер по домену владельца, причины отказа понятными строками",
+      "fields": {
+        "request_dest_domain": 6,
+        "method_spec_federated": 9,
+        "media_blob_domain": 20,
+        "pack_ref_blob_domain": 8,
+        "set_info_avatar_domain": 5,
+        "server_descriptor_s2s_endpoint": 8
+      },
+      "errors": [
+        "ERROR_CODE_FEDERATION_UNAVAILABLE",
+        "ERROR_CODE_DOMAIN_BLOCKED",
+        "ERROR_CODE_DOMAIN_REFUSED",
+        "ERROR_CODE_DOMAIN_UNREACHABLE",
+        "ERROR_CODE_SERVER_KEY_CHANGED"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live",
+        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем; без dest_domain остаётся в пределах своего сервера, чужой домен — прежний FEDERATION_UNAVAILABLE)",
+        "android": "ОТКРЫТО (то же решение)"
+      }
     }
   ]
 }

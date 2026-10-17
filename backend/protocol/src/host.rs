@@ -1101,6 +1101,7 @@ pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, Strin
         };
     }
     enc! {
+        "parvane.core.v2.SignedServerDescriptor" => crate::pb::parvane::core::v2::SignedServerDescriptor,
         "parvane.identity.v2.SessionIssueRequest" => ipb::SessionIssueRequest,
         "parvane.identity.v2.AccountRegisterRequest" => ipb::AccountRegisterRequest,
         "parvane.identity.v2.AccountConfirmEmailRequest" => ipb::AccountConfirmEmailRequest,

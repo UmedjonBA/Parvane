@@ -296,7 +296,23 @@ export class V2Bridge {
         const names = Array.isArray(p.usernames) ? p.usernames as unknown[] : [];
         const users = names.filter((name) => typeof name === 'string').map((address) => ({ address }));
         const r = await c.call('identity.profile.resolve', { users });
-        return { ok: true, users: list(r, 'profiles').map(profileToV1) };
+        const found = list(r, 'profiles').map(profileToV1);
+        // Федерация (spec 028): адреса, которых свой сервер не знает, — их серверам (по домену)
+        const known = new Set(found.map((u) => String(u.username)));
+        const byDomain = new Map<string, { address: string }[]>();
+        users.filter(({ address }) => !known.has(address)).forEach((u) => {
+          const domain = String(u.address).split('@')[1]?.toLowerCase();
+          if (domain) byDomain.set(domain, [...(byDomain.get(domain) || []), u]);
+        });
+        for (const [domain, group] of byDomain) {
+          try {
+            const remote = await c.call('identity.profile.resolve', { users: group }, undefined, domain);
+            found.push(...list(remote, 'profiles').map(profileToV1));
+          } catch {
+            // Сервер недоступен или федерация выключена — профиль неизвестен, как несуществующий адрес
+          }
+        }
+        return { ok: true, users: found };
       }
       case 'identity.user.search': {
         const r = await c.call('identity.directory.search', { query: str(p, 'query') });

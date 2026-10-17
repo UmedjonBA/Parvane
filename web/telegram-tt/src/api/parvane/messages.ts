@@ -13,6 +13,7 @@ import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
+import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
 import { withAutoEntities } from './autoEntities';
 import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
@@ -665,6 +666,11 @@ export function createMessageController(deps: MessageDependencies) {
   }
 
   function reportEncryptionSendFailure(chatId: string, localId: number, detail?: unknown) {
+    // Отказ федерации (spec 028) — с понятной причиной: другой сервер недоступен, заблокирован…
+    const reason = federationReason(detail);
+    if (reason && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('parvane-federation-error', { detail: { key: reason } }));
+    }
     const detailMessage = detail instanceof Error ? detail.message : '';
     deps.log(`${E2E_SEND_ERROR}${detailMessage ? ` ${detailMessage}` : ''}`);
     deps.sendUpdate({

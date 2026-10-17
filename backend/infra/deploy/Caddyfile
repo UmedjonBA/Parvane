@@ -17,6 +17,14 @@
 		reverse_proxy gateway:9222
 	}
 
+	# Федерация (spec 028): подписанные кадры других серверов — шарду federation
+	handle /_parvane/s2s {
+		request_body {
+			max_size 5MB
+		}
+		reverse_proxy federation:9330
+	}
+
 	# Протокол v2 (spec 007): подписанный описатель сервера. Файл пишет
 	# identity (PARVANE_WELL_KNOWN_FILE) в общий том well-known.
 	handle /.well-known/parvane {

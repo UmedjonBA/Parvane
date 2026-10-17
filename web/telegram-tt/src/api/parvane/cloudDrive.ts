@@ -209,6 +209,12 @@ function emit(event: CloudTransferEvent) {
 /** Общая серия анонимного соединения для мелких скачиваний (A9): открывается первым
  * потребителем, живёт, пока есть потребители, и ещё `graceMs` после последнего. Без
  * `withBlobSession` у транспорта потребители идут напрямую (соединение на блоб). */
+/** Файл загрузившего с другого сервера качается с его сервера (spec 028). */
+function noteBlobServer(transport: CloudBlobTransport, blob: { fileId: string; uploader?: string }) {
+  const at = blob.uploader?.lastIndexOf('@') ?? -1;
+  if (at > 0) transport.setBlobDomain?.(blob.fileId, blob.uploader!.slice(at + 1));
+}
+
 export function createSharedSession(transport: () => CloudBlobTransport, graceMs = SERIES_GRACE_MS) {
   type Holder = {
     session: Promise<BlobSession>; users: number; end: () => void; timer?: ReturnType<typeof setTimeout>;
@@ -424,6 +430,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     blob: CloudBlobKeys & { fileId: string; size: number; chunks: number }, mime: string, session?: BlobSession,
   ) {
     const { sink, getBlob } = createBlobSink(mime);
+    noteBlobServer(deps.transport(), blob);
     await downloadCloudBlob(session || deps.transport(), blob, sink);
     return getBlob();
   }
@@ -880,6 +887,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
         report('active', 0);
         const memory = handle ? undefined : createBlobSink(found.mime || 'application/octet-stream');
         const sink = handle ? await createFileSink(handle) : memory!.sink;
+        noteBlobServer(deps.transport(), found.blob);
         await downloadCloudBlob(deps.transport(), found.blob, sink, {
           signal: abort.signal,
           onProgress: (done) => report('active', done),
@@ -906,6 +914,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       downloads.set(transferId, abort);
       try {
         const memory = createBlobSink(found.mime || 'application/octet-stream');
+        noteBlobServer(deps.transport(), found.blob);
         await downloadCloudBlob(deps.transport(), found.blob, memory.sink, { signal: abort.signal });
         return memory.getBlob();
       } catch (e) {

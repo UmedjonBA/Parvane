@@ -56,6 +56,7 @@ CALL_PASS="parvane-e2e-call"
 PREVIEW_PASS="parvane-e2e-preview"
 PUSH_PASS="parvane-e2e-push"
 DOMAINS_PASS="parvane-e2e-domains"
+FEDERATION_PASS="parvane-e2e-federation"
 GATEWAY_PASS="parvane-e2e-gateway"
 
 log() {
@@ -138,6 +139,7 @@ start_shard() {
     PARVANE_NATS_USER="$shard" \
     PARVANE_NATS_PASS="$password" \
     PARVANE_DB_PATH="$TEMP_ROOT/$shard.db" \
+    PARVANE_WELL_KNOWN_FILE="$TEMP_ROOT/parvane.json" \
     PARVANE_LOG_LEVEL=info \
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
@@ -155,6 +157,10 @@ log "Build backend binaries"
 # PARVANE_E2E_SKIP_BACKEND_BUILD=1 — шарды уже собраны (серия сценариев: сборка один раз, перед первым)
 if [[ "${PARVANE_E2E_SKIP_BACKEND_BUILD:-0}" != "1" ]]; then
   cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p identity -p messenger -p cloud -p call -p preview -p push -p domains -p gateway
+  # Федерация (spec 028): шард с тестовым транспортом — только для сценариев двух серверов
+  if [[ -n "${PARVANE_E2E_FEDERATION_PORT:-}" ]]; then
+    cargo build --manifest-path "$ROOT/backend/Cargo.toml" -p federation --features insecure-test-transport
+  fi
 fi
 
 log "Start isolated production-like NATS"
@@ -168,6 +174,7 @@ env \
   PARVANE_PREVIEW_PASS="$PREVIEW_PASS" \
   PARVANE_PUSH_PASS="$PUSH_PASS" \
   PARVANE_DOMAINS_PASS="$DOMAINS_PASS" \
+  PARVANE_FEDERATION_PASS="$FEDERATION_PASS" \
   PARVANE_GATEWAY_PASS="$GATEWAY_PASS" \
   nats-server -c "$ROOT/backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$NATS_PORT" \
   >"$TEMP_ROOT/nats.log" 2>&1 &
@@ -219,6 +226,11 @@ wait_for_log call 'Call шард запущен' "${PIDS[-4]}"
 wait_for_log preview 'Preview шард запущен' "${PIDS[-3]}"
 wait_for_log push 'Push шард запущен' "${PIDS[-2]}"
 wait_for_log domains 'Domains шард запущен' "${PIDS[-1]}"
+if [[ -n "${PARVANE_E2E_FEDERATION_PORT:-}" ]]; then
+  PARVANE_FEDERATION_BIND="127.0.0.1:$PARVANE_E2E_FEDERATION_PORT" PARVANE_FEDERATION_INSECURE_HTTP=1 \
+    start_shard federation "$FEDERATION_PASS"
+  wait_for_log federation 'Federation шард запущен' "${PIDS[-1]}"
+fi
 
 if rg -n 'Permissions Violation|authorization violation' "$TEMP_ROOT"/*.log; then
   printf 'Production ACL rejected a shard subscription\n' >&2

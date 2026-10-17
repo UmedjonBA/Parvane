@@ -20,6 +20,7 @@ import type { Protocol, PvClient } from './engine';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
+import { destFor, destForInvite, destForUser } from './address';
 import { base64ToBytes, bytesToBase64 } from './base64';
 import { createBlobConnPool } from './blobConns';
 import {
@@ -221,7 +222,8 @@ export type V2JoinResult =
   | { status: 'error'; code: V2InviteErrorCode };
 
 type Chan = 'id' | 'anon';
-type OutReq = { chan: Chan; method: string; body: Uint8Array };
+// dest — домен сервера объекта (движок выводит его из тела, spec 028)
+type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
 type PendingJoin = {
   state: string;
   requests: { chan: Chan; method: string; body: string }[];
@@ -597,13 +599,15 @@ export function createV2Controller(deps: Deps) {
     window.addEventListener('online', reconnectNow);
   }
 
-  async function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
-    if (chan === 'anon') return l2Ticker.submit(method, body);
+  /** `dest` — сервер объекта запроса (spec 028, FED-1): свой сервер перешлёт запрос чужому. */
+  async function call(chan: Chan, method: string, body: Uint8Array, dest?: string): Promise<Uint8Array> {
+    const to = destFor(dest, serverDomain);
+    if (chan === 'anon') return l2Ticker.submit(method, body, to);
     if (!idConn) throw new V2Error('ERROR_CODE_UNAVAILABLE');
-    return idConn.request(method, body);
+    return idConn.request(method, body, undefined, undefined, to);
   }
 
-  async function callAnon(method: string, body: Uint8Array, padTo?: number): Promise<Uint8Array> {
+  async function callAnon(method: string, body: Uint8Array, padTo?: number, dest?: string): Promise<Uint8Array> {
     if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     anonPlanner = anonPlanner || new pv.PvAnonPlanner();
     const now = Date.now();
@@ -615,7 +619,7 @@ export function createV2Controller(deps: Deps) {
       conn = await openAnon(plan.conn);
     }
     try {
-      return await conn.request(method, body, undefined, padTo);
+      return await conn.request(method, body, undefined, padTo, dest);
     } finally {
       if (plan.closeAfter) closeAnon(plan.conn);
     }
@@ -625,7 +629,7 @@ export function createV2Controller(deps: Deps) {
   const l2Ticker = createL2Ticker({
     isActive: isL2Active,
     // Кадры тактов одной длины: личное, групповое, пустышка и адресаты разной длины неотличимы
-    send: (method, body) => callAnon(method, body, isL2Active() ? L2_FRAME_PAD : undefined),
+    send: (method, body, dest) => callAnon(method, body, isL2Active() ? L2_FRAME_PAD : undefined, dest),
     makeCover: () => {
       if (!ready || !client) return undefined;
       try {
@@ -687,7 +691,7 @@ export function createV2Controller(deps: Deps) {
 
   async function run(reqs: OutReq[]) {
     for (const r of reqs) {
-      await call(r.chan, r.method, r.body);
+      await call(r.chan, r.method, r.body, r.dest);
     }
   }
 
@@ -703,7 +707,7 @@ export function createV2Controller(deps: Deps) {
         const syncFrom = (after: string) => call('anon', 'identity.device.log_sync_anon', pv!.encodeMessage(
           'parvane.identity.v2.DeviceLogSyncAnonRequest',
           JSON.stringify({ user: { address: user }, after_version: after }),
-        ));
+        ), destForUser(user, serverDomain));
         const before = String(client.logVersion(user));
         const first = await syncFrom(before);
         // spec 027: аккаунт удалён — журнала нет, повторять нечего
@@ -737,11 +741,17 @@ export function createV2Controller(deps: Deps) {
         const body = pv.encodeMessage(
           'parvane.identity.v2.DeviceFetchBundleAnonRequest', JSON.stringify({ user: { address: user } }),
         );
-        const resp = await call('anon', 'identity.device.fetch_bundle_anon', body);
+        const resp = await call('anon', 'identity.device.fetch_bundle_anon', body, destForUser(user, serverDomain));
         client.ingestBundle(user, resp);
         return true;
       }
       case 'token': {
+        // Незнакомец с другого сервера — жетоны его сервера (spec 028)
+        const foreign = need.user ? destForUser(need.user, serverDomain) : undefined;
+        if (foreign) {
+          await requestForeignTokens(foreign, TOKEN_BATCH);
+          return true;
+        }
         if (!serverKey) return false;
         await requestTokens(TOKEN_BATCH);
         return true;
@@ -1046,7 +1056,7 @@ export function createV2Controller(deps: Deps) {
       let isJoined = false;
       try {
         const probe = client.otkRequest(OTK_COUNT) as OutReq;
-        await call(probe.chan, probe.method, probe.body);
+        await call(probe.chan, probe.method, probe.body, probe.dest);
         isJoined = true;
       } catch (probeError) {
         if (!isRejection(probeError)) {
@@ -1104,7 +1114,7 @@ export function createV2Controller(deps: Deps) {
     for (let page = 0; page < 1000; page++) {
       const req = client.syncRequest() as OutReq;
 
-      const resp = await call(req.chan, req.method, req.body);
+      const resp = await call(req.chan, req.method, req.body, req.dest);
       const batch = pv.splitSyncResponse(resp) as { records: Uint8Array[]; more: boolean };
       for (const r of batch.records) {
         await openRecord(r);
@@ -1116,7 +1126,7 @@ export function createV2Controller(deps: Deps) {
     // записи повторно не отдаст
     await persistUrgent();
     const ack = client.ackRequest() as OutReq;
-    await call(ack.chan, ack.method, ack.body).catch(() => undefined);
+    await call(ack.chan, ack.method, ack.body, ack.dest).catch(() => undefined);
   }
 
   async function openRecord(bytes: Uint8Array) {
@@ -1270,7 +1280,7 @@ export function createV2Controller(deps: Deps) {
     const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
-    ));
+    ), destForUser(user, serverDomain));
     if (isDeletedLog(resp)) {
       deps.onPeerDeleted?.(user);
       return;
@@ -1308,7 +1318,7 @@ export function createV2Controller(deps: Deps) {
     const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
-    )).catch((e) => {
+    ), destForUser(user, serverDomain)).catch((e) => {
       deps.log(`v2: проверка удалённого аккаунта не удалась: ${String(e)}`);
       return undefined;
     });
@@ -1350,7 +1360,7 @@ export function createV2Controller(deps: Deps) {
     const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: previous }, after_version: String(client.logVersion(previous)) }),
-    ));
+    ), destForUser(previous, serverDomain));
     const verdict = client.ingestLog(previous, resp);
     if (verdict === 'moved') await followPeerRename(previous, verdict);
   }
@@ -1366,7 +1376,7 @@ export function createV2Controller(deps: Deps) {
       const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
         'parvane.identity.v2.DeviceLogSyncAnonRequest',
         JSON.stringify({ user: { address: to }, after_version: String(client.logVersion(to)) }),
-      ));
+      ), destForUser(to, serverDomain));
       if (client.ingestLog(to, resp) !== 'renamed') {
         // Перенос уже был (повторное чтение) либо журналы не связаны
         if (client.peerRenamedFrom(to) !== from) return;
@@ -1524,6 +1534,13 @@ export function createV2Controller(deps: Deps) {
       // как в desktop и android; служебные виды движка в чат не попадают
       const wire = v2ToWire(c) || (v2Class(c) === 'stub' ? { kind: 'unsupported' } : undefined);
       if (!wire) return;
+      // Вложение собеседника с другого сервера лежит на его сервере (spec 028): помечаем, чтобы
+      // скачивание и пересылка знали сервер блоба
+      const authorDomain = destForUser(author, serverDomain);
+      if (authorDomain) {
+        if (wire.file_id && !wire.blob_domain) wire.blob_domain = authorDomain;
+        if (wire.pack_ref?.file_id && !wire.pack_ref.blob_domain) wire.pack_ref.blob_domain = authorDomain;
+      }
       // Режим L2 группы задаёт только запись её журнала (`set_privacy_mode`)
       if (c.chat_mode && isGroup) return;
       const stored: WireStoredMessage = {
@@ -2219,7 +2236,7 @@ export function createV2Controller(deps: Deps) {
     await serial(async () => {
       const [entry] = (client!.signOutDevice(deviceId) as RevokeOutcome).requests;
       try {
-        await call(entry.chan, entry.method, entry.body);
+        await call(entry.chan, entry.method, entry.body, entry.dest);
       } catch (e) {
         // Сервер запись не принял, а движок её уже применил — поднять состояние заново из сохранённого
         idConn?.close();
@@ -2252,7 +2269,7 @@ export function createV2Controller(deps: Deps) {
       const outcome = await withNeeds(make);
       const [entry, ...rotations] = outcome.requests;
       try {
-        await call(entry.chan, entry.method, entry.body);
+        await call(entry.chan, entry.method, entry.body, entry.dest);
       } catch (e) {
         // Сервер запись не принял, а движок её уже применил — поднять состояние
         // заново из сохранённого (переподключение читает его с диска)
@@ -2260,7 +2277,7 @@ export function createV2Controller(deps: Deps) {
         throw e;
       }
       for (const r of rotations) {
-        await call(r.chan, r.method, r.body)
+        await call(r.chan, r.method, r.body, r.dest)
           .catch((e: unknown) => deps.log(`v2: ротация после отзыва (${r.method}): ${String(e)}`));
       }
       await persistUrgent();
@@ -2300,7 +2317,7 @@ export function createV2Controller(deps: Deps) {
       const [keySet, ...shares] = outcome.requests;
       if (!keySet) return false;
       try {
-        await call(keySet.chan, keySet.method, keySet.body);
+        await call(keySet.chan, keySet.method, keySet.body, keySet.dest);
       } catch (e) {
         // Сервер новый ключ не принял, а движок уже сменил — поднять состояние
         // заново из сохранённого
@@ -2308,7 +2325,7 @@ export function createV2Controller(deps: Deps) {
         throw e;
       }
       for (const r of shares) {
-        await call(r.chan, r.method, r.body)
+        await call(r.chan, r.method, r.body, r.dest)
           .catch((e: unknown) => deps.log(`v2: раздача ключа доступа (${r.method}): ${String(e)}`));
       }
       await persistUrgent();
@@ -2530,7 +2547,7 @@ export function createV2Controller(deps: Deps) {
     const old = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: engineSelf }, after_version: String(client.logVersion(engineSelf)) }),
-    ));
+    ), destForUser(engineSelf, serverDomain));
     client.ingestLog(engineSelf, old);
     if (client.ownRenamedTo() !== self) {
       deps.log('v2: ник аккаунта сменён, но журнал прежнего адреса не ведёт на новый — нужна привязка');
@@ -2804,7 +2821,7 @@ export function createV2Controller(deps: Deps) {
     if (!v2Signal?.hangup) return false;
     await serial(async () => {
       const requests = client!.prepareCallOwn(JSON.stringify(v2Signal)) as OutReq[];
-      for (const req of requests) await call(req.chan, req.method, req.body);
+      for (const req of requests) await call(req.chan, req.method, req.body, req.dest);
       await persist();
     });
     return true;
@@ -2858,6 +2875,15 @@ export function createV2Controller(deps: Deps) {
     },
   });
 
+  // Сервер блоба (spec 028): вложение собеседника с другого сервера, файл чужой совместной папки
+  const blobDomains = new Map<string, string>();
+
+  /** Запомнить сервер блоба; свой домен и пустой — не храним (обычный запрос). */
+  function setBlobDomain(fileId: string, domain?: string) {
+    const d = destFor(domain, serverDomain);
+    if (fileId && d) blobDomains.set(fileId, d);
+  }
+
   async function streamBlobCap(
     conn: V2Connection, fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number,
   ) {
@@ -2881,6 +2907,7 @@ export function createV2Controller(deps: Deps) {
         if (chunk.last) finish?.();
       },
       BLOB_TIMEOUT_MS,
+      blobDomains.get(fileId),
     ))) as { size?: string | number; chunks?: number };
     // Метаданные приходят первыми; чанки — следом кадрами того же запроса
     const expected = Math.min(chunkCount, Math.max(0, (meta.chunks || 0) - firstChunk));
@@ -2988,8 +3015,16 @@ export function createV2Controller(deps: Deps) {
 
   async function trySend(to: string, wire: WireMessageContent, uuid: string, replyTo?: string): Promise<boolean> {
     await ensureSendable();
-    if (!(await isV2Chat(to))) return false;
-    await sendContent(to, wireToV2(wire, replyTo), uuid);
+    if (!(await isV2Chat(to))) {
+      deps.log(`v2: ${to} — не собеседник v2 (журнала устройств нет), сообщение не отправлено`);
+      return false;
+    }
+    try {
+      await sendContent(to, wireToV2(wire, replyTo), uuid);
+    } catch (e) {
+      deps.log(`v2: сообщение ${to} не отправлено: ${String(e)}`);
+      throw e;
+    }
     const stored: WireStoredMessage = {
       id: uuid, from: deps.getSelf(), to, ts: Math.floor(Date.now() / 1000), content: wire, reply_to: replyTo,
     };
@@ -3124,9 +3159,17 @@ export function createV2Controller(deps: Deps) {
   // проверяет движок; UI получает синтетический WireGroupInfo через тот же
   // store.registerGroup, что и v1-группы. Адрес группы в UI — `v2g:<hex id>`.
 
+  // Домен группы из ссылки-приглашения, пока журнал группы ещё не прочитан (spec 028)
+  const inviteGroupDomains = new Map<string, string>();
+
+  /** Домен сервера группы (spec 028): из журнала/ключа движка, до вступления — из ссылки. */
+  function groupDomainOf(hex: string) {
+    return inviteGroupDomains.get(hex) || client?.groupDomain(hex) || serverDomain;
+  }
+
   function groupRequestBody(hex: string, after: bigint | number, linkId?: string) {
     return pv!.encodeMessage('parvane.group.v2.StateSyncRequest', JSON.stringify({
-      group: { domain: serverDomain, id: hexToB64(hex) },
+      group: { domain: groupDomainOf(hex), id: hexToB64(hex) },
       after_version: String(after),
       invite_link_id: linkId ? hexToB64(linkId) : undefined,
     }));
@@ -3139,8 +3182,8 @@ export function createV2Controller(deps: Deps) {
     try {
       for (let page = 0; page < GROUP_SYNC_PAGES; page++) {
         const before = client.groupVersion(hex);
-        const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId));
-        await withNeeds(() => client!.groupIngest(serverDomain, hex, resp));
+        const resp = await call('id', 'group.state.sync', groupRequestBody(hex, before, linkId), groupDomainOf(hex));
+        await withNeeds(() => client!.groupIngest(groupDomainOf(hex), hex, resp));
         if (client.groupVersion(hex) === before) break;
       }
     } catch (e) {
@@ -3260,7 +3303,35 @@ export function createV2Controller(deps: Deps) {
     for (let i = 0; i < steps.length; i++) {
       try {
         const req = client.tokenRequest(list, serverKey, steps[i]) as OutReq;
-        client.tokenResponse(await call(req.chan, req.method, req.body));
+        client.tokenResponse(await call(req.chan, req.method, req.body, req.dest));
+        return;
+      } catch (err) {
+        if (!isQuotaExceeded(err) || i === steps.length - 1) throw err;
+      }
+    }
+  }
+
+  /**
+   * Жетоны сервера другого домена (spec 028, R8): его ключ — описатель через `server.describe` с
+   * адресатом (подпись проверяет движок), список ключей выпуска — анонимно, выдача — от имени этого
+   * аккаунта (квота у того сервера считается на этот адрес).
+   */
+  async function requestForeignTokens(domain: string, limit: number) {
+    if (!pv || !client) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    const described = await preauth(deps.gatewayUrl(), 'server.describe', {}, domain);
+    const signed = pv.encodeMessage(
+      'parvane.core.v2.SignedServerDescriptor', JSON.stringify(described.descriptor || {}),
+    );
+    const desc = JSON.parse(pv.verifyServerDescriptor(signed)) as { domain: string; serverKey: string };
+    if (desc.domain.toLowerCase() !== domain) throw new V2Error('ERROR_CODE_INVALID');
+    const key = Uint8Array.from(desc.serverKey.match(/../g)!.map((h) => parseInt(h, 16)));
+    const list = await call('anon', 'identity.tokens.key_list', new Uint8Array(), domain);
+    const steps = TOKEN_BATCH_STEPS.filter((count) => count <= limit);
+    if (!steps.length) steps.push(Math.max(1, limit));
+    for (let i = 0; i < steps.length; i++) {
+      try {
+        const req = client.tokenRequestFor(domain, list, key, steps[i]) as OutReq;
+        client.tokenResponseFor(domain, await call(req.chan, req.method, req.body, domain));
         return;
       } catch (err) {
         if (!isQuotaExceeded(err) || i === steps.length - 1) throw err;
@@ -3309,13 +3380,13 @@ export function createV2Controller(deps: Deps) {
     const reqs = await withNeeds(() => client!.groupRotateEpoch(hex) as OutReq[]);
     const [publish, ...shares] = reqs;
     try {
-      await call(publish.chan, publish.method, publish.body);
+      await call(publish.chan, publish.method, publish.body, publish.dest);
     } catch (e) {
       await resyncGroup(hex);
       throw e;
     }
     for (const r of shares) {
-      await call(r.chan, r.method, r.body)
+      await call(r.chan, r.method, r.body, r.dest)
         .catch((e: unknown) => deps.log(`v2: ключи эпохи не доставлены: ${String(e)}`));
     }
     await persistUrgent();
@@ -3421,7 +3492,7 @@ export function createV2Controller(deps: Deps) {
       return false;
     }
     try {
-      await call(req.chan, req.method, req.body);
+      await call(req.chan, req.method, req.body, req.dest);
     } catch (e) {
       deps.log(`v2: изменение группы отклонено сервером: ${String(e)}`);
       await resyncGroup(hex);
@@ -3716,8 +3787,8 @@ export function createV2Controller(deps: Deps) {
     const hex = groupHex(address);
     try {
       const resp = await call('id', 'group.invite.list', pv.encodeMethodRequest(
-        'group.invite.list', JSON.stringify({ group: { domain: serverDomain, id: hexToB64(hex) } }),
-      ));
+        'group.invite.list', JSON.stringify({ group: { domain: groupDomainOf(hex), id: hexToB64(hex) } }),
+      ), groupDomainOf(hex));
       const list = JSON.parse(pv.decodeMethodResponse('group.invite.list', resp)) as {
         invites?: {
           link_id?: string; revoked?: boolean; title?: string; expires_ms?: string | number;
@@ -3751,8 +3822,11 @@ export function createV2Controller(deps: Deps) {
     try {
       await call('id', 'group.invite.delete', pv.encodeMethodRequest(
         'group.invite.delete',
-        JSON.stringify({ group: { domain: serverDomain, id: hexToB64(groupHex(address)) }, link_id: hexToB64(linkId) }),
-      ));
+        JSON.stringify({
+          group: { domain: groupDomainOf(groupHex(address)), id: hexToB64(groupHex(address)) },
+          link_id: hexToB64(linkId),
+        }),
+      ), groupDomainOf(groupHex(address)));
     } catch (e) {
       deps.log(`v2: отозванная ссылка не удалена: ${String(e)}`);
       return false;
@@ -3797,8 +3871,9 @@ export function createV2Controller(deps: Deps) {
     if (!canDecideRequests(hex)) return [];
     try {
       const resp = await call('id', 'group.request.list', pv.encodeMessage(
-        'parvane.group.v2.RequestListRequest', JSON.stringify({ group: { domain: serverDomain, id: hexToB64(hex) } }),
-      ));
+        'parvane.group.v2.RequestListRequest',
+        JSON.stringify({ group: { domain: groupDomainOf(hex), id: hexToB64(hex) } }),
+      ), groupDomainOf(hex));
       const list = JSON.parse(pv.decodeMessage('parvane.group.v2.RequestListResponse', resp)) as {
         requests?: {
           user?: { address?: string }; requested_ms?: string | number; requestedMs?: string | number;
@@ -3836,7 +3911,7 @@ export function createV2Controller(deps: Deps) {
         return false;
       }
       try {
-        await call(req.chan, req.method, req.body);
+        await call(req.chan, req.method, req.body, req.dest);
       } catch (e) {
         deps.log(`v2: решение по заявке отклонено сервером: ${String(e)}`);
         if (approve) await resyncGroup(hex);
@@ -3880,11 +3955,17 @@ export function createV2Controller(deps: Deps) {
     return 'failed';
   }
 
-  async function inviteGroup(linkId: string) {
+  /** Сервер группы по домену ссылки; ссылка с хостом этой страницы — своя (`destForInvite`). */
+  function inviteDest(domain: string) {
+    return destForInvite(domain, serverDomain, typeof window !== 'undefined' ? window.location.hostname : undefined);
+  }
+
+  /** `domain` — сервер группы из ссылки-приглашения (spec 028: ссылка группы другого сервера). */
+  async function inviteGroup(linkId: string, domain?: string) {
     if (!pv) throw new V2Error('ERROR_CODE_UNAVAILABLE');
     const resp = await call('id', 'group.invite.check', pv.encodeMessage(
       'parvane.group.v2.InviteCheckRequest', JSON.stringify({ link_id: hexToB64(linkId) }),
-    ));
+    ), domain);
     return JSON.parse(pv.decodeMessage('parvane.group.v2.InviteCheckResponse', resp)) as {
       group?: { domain: string; id: string }; name?: string; members?: number; requires_approval?: boolean;
       kind?: string;
@@ -3897,8 +3978,10 @@ export function createV2Controller(deps: Deps) {
     const parsed = parseV2Invite(url);
     if (!ready || !client || !parsed) return undefined;
     try {
-      const check = await inviteGroup(parsed.linkId);
+      const dest = inviteDest(parsed.domain);
+      const check = await inviteGroup(parsed.linkId, dest);
       const hex = b64ToHex(check.group?.id || '');
+      if (hex && dest) inviteGroupDomains.set(hex, dest);
       const self = deps.getSelf();
       // Описание и фото — из подписанного журнала группы (сервер отдаёт его по
       // ссылке), а не со слов сервера; журнал не-участника после чтения не храним
@@ -3931,14 +4014,17 @@ export function createV2Controller(deps: Deps) {
     const parsed = parseV2Invite(url);
     if (!ready || !client || !parsed) return undefined;
     try {
-      const check = await inviteGroup(parsed.linkId);
+      const dest = inviteDest(parsed.domain);
+      const check = await inviteGroup(parsed.linkId, dest);
       const hex = b64ToHex(check.group?.id || '');
+      // Группа другого сервера (spec 028): журнал и запись вступления — её серверу
+      if (hex && dest) inviteGroupDomains.set(hex, dest);
       return await serial(async () => {
         await syncGroup(hex, parsed.linkId);
         const req = client!.groupJoin(url) as OutReq;
         let resp: Uint8Array;
         try {
-          resp = await call(req.chan, req.method, req.body);
+          resp = await call(req.chan, req.method, req.body, req.dest);
         } catch (e) {
           await resyncGroup(hex).catch(() => undefined);
           throw e;
@@ -4014,7 +4100,7 @@ export function createV2Controller(deps: Deps) {
         return 'invalid';
       }
       try {
-        await call(req.chan, req.method, req.body);
+        await call(req.chan, req.method, req.body, req.dest);
       } catch (e) {
         deps.log(`v2: публичность группы отклонена сервером: ${String(e)}`);
         await resyncGroup(hex);
@@ -4049,7 +4135,7 @@ export function createV2Controller(deps: Deps) {
       await syncGroup(hex);
       const req = client!.groupJoinPublic(hex, secretHex) as OutReq;
       try {
-        await call(req.chan, req.method, req.body);
+        await call(req.chan, req.method, req.body, req.dest);
       } catch (e) {
         await resyncGroup(hex).catch(() => undefined);
         throw e;
@@ -4072,8 +4158,8 @@ export function createV2Controller(deps: Deps) {
     const hex = groupHex(address);
     const method = 'group.public.history';
     const resp = await call('id', method, pv.encodeMethodRequest(method, JSON.stringify({
-      group: { domain: serverDomain, id: hexToB64(hex) }, before_seq: String(beforeSeq), limit: 50,
-    })));
+      group: { domain: groupDomainOf(hex), id: hexToB64(hex) }, before_seq: String(beforeSeq), limit: 50,
+    })), groupDomainOf(hex));
     const more = Boolean((JSON.parse(pv.decodeMethodResponse(method, resp)) as { more?: boolean }).more);
     const items = client.publicHistoryItems(resp) as { seq: number; envelope: Uint8Array }[];
     let opened = 0;
@@ -4373,6 +4459,7 @@ export function createV2Controller(deps: Deps) {
     uploadBlobChunk,
     completeBlobUpload,
     downloadBlobCap,
+    setBlobDomain,
     withBlobSession,
     trySendTyping,
     publishPresence,

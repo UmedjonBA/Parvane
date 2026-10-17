@@ -252,6 +252,11 @@
 "ParvaneMediaUnverified" = "Could not verify this file — it opened without an integrity check";
 "ParvaneUndecryptable" = "🔒 Could not decrypt this message";
 "ParvaneMessageDeleted" = "🗑 Message deleted";
+"ParvaneFederationDisabled" = "Messaging with other servers is turned off on your server";
+"ParvaneFederationDomainBlocked" = "Your server administrator has blocked this server";
+"ParvaneFederationRefused" = "The other server does not accept messages from your server";
+"ParvaneFederationUnreachable" = "The other server is unavailable. The message will be retried";
+"ParvaneFederationKeyChanged" = "The other server changed its key. Contact your server administrator";
 "ParvaneJoinRequestsAcceptAll" = "Accept all";
 "ParvaneJoinRequestsDismissAll" = "Dismiss all";
 "ParvaneJoinRequestsAcceptAllTitle" = "Accept all requests?";

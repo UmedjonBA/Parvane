@@ -62,6 +62,10 @@ export class PvClient {
      */
     cloudCreate(ts_ms: number): any;
     /**
+     * Домен сервера контейнера облака (spec 028).
+     */
+    cloudDomain(id_hex: string): string;
+    /**
      * Забыть контейнер (покинут, доступ отозван, удалён).
      */
     cloudForget(id_hex: string): void;
@@ -214,6 +218,10 @@ export class PvClient {
      * Создать группу → {group: {domain, id}, request}.
      */
     groupCreate(kind: number, name: string, members: string[], perms_json: string, migrated_from?: string | null): any;
+    /**
+     * Домен сервера группы (spec 028): из журнала, ожидающего ключа или свой.
+     */
+    groupDomain(group: string): string;
     /**
      * Забыть журнал группы (запись отвергнута сервером — перечитать с начала).
      */
@@ -580,16 +588,27 @@ export class PvClient {
      */
     tokenBatchSize(): number;
     tokenCount(): number;
+    tokenCountFor(domain: string): number;
     /**
      * Пора получать суточную партию жетонов (FR-063: по расписанию, не перед
      * тратой).
      */
     tokenRefillDue(): boolean;
     /**
+     * Домены, чьи запасы жетонов пора пополнить (массив строк).
+     */
+    tokenRefillDueDomains(): Array<any>;
+    tokenRefillDueFor(domain: string): boolean;
+    /**
      * Запрос жетонов: ответ `identity.tokens.key_list` (анонимно) + ключ сервера.
      */
     tokenRequest(key_list_response: Uint8Array, server_key: Uint8Array, count: number): any;
+    /**
+     * Запрос жетонов сервера `domain`: ответ его `identity.tokens.key_list` и его ключ сервера.
+     */
+    tokenRequestFor(domain: string, key_list_response: Uint8Array, server_key: Uint8Array, count: number): any;
     tokenResponse(resp: Uint8Array): number;
+    tokenResponseFor(domain: string, resp: Uint8Array): number;
 }
 
 /**
@@ -706,8 +725,9 @@ export function encodePing(nonce: bigint): Uint8Array;
 
 /**
  * `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
+ * `dest_domain` (spec 028) — домен сервера объекта; пусто или свой — обычный запрос.
  */
-export function encodeRequest(id: bigint, method: string, body: Uint8Array, timeout_ms: number, pad_to?: number | null): Uint8Array;
+export function encodeRequest(id: bigint, method: string, body: Uint8Array, timeout_ms: number, pad_to?: number | null, dest_domain?: string | null): Uint8Array;
 
 /**
  * Тело `cloud.blob.upload_chunk` из байт зашифрованного чанка (A7): без
@@ -793,7 +813,7 @@ export interface InitOutput {
     readonly encodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodeMethodRequest: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly encodePing: (a: number, b: bigint) => void;
-    readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
     readonly grantRootBackup: (a: number, b: number, c: number) => void;
@@ -813,6 +833,7 @@ export interface InitOutput {
     readonly pvclient_cloudAttach: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_cloudContainers: (a: number, b: number) => void;
     readonly pvclient_cloudCreate: (a: number, b: number, c: number) => void;
+    readonly pvclient_cloudDomain: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_cloudForget: (a: number, b: number, c: number) => void;
     readonly pvclient_cloudGrant: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly pvclient_cloudGrantVersion: (a: number, b: number, c: number) => number;
@@ -851,6 +872,7 @@ export interface InitOutput {
     readonly pvclient_groupBehind: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupChange: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly pvclient_groupDomain: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupForget: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupInfo: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupIngest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
@@ -942,9 +964,14 @@ export interface InitOutput {
     readonly pvclient_takeSharedInvites: (a: number, b: number) => void;
     readonly pvclient_tokenBatchSize: (a: number) => number;
     readonly pvclient_tokenCount: (a: number) => number;
+    readonly pvclient_tokenCountFor: (a: number, b: number, c: number) => number;
     readonly pvclient_tokenRefillDue: (a: number) => number;
+    readonly pvclient_tokenRefillDueDomains: (a: number) => number;
+    readonly pvclient_tokenRefillDueFor: (a: number, b: number, c: number) => number;
     readonly pvclient_tokenRequest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;

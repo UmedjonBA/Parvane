@@ -121,8 +121,10 @@ export class V2Connection {
   }
 
   /** Метод реестра: тело запроса (protobuf) → тело ответа. `padTo` — дополнить кадр до кратной длины (L2). */
-  request(method: string, body: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS, padTo?: number): Promise<Uint8Array> {
-    return this.send(method, body, timeoutMs, undefined, padTo);
+  request(
+    method: string, body: Uint8Array, timeoutMs = DEFAULT_TIMEOUT_MS, padTo?: number, dest?: string,
+  ): Promise<Uint8Array> {
+    return this.send(method, body, timeoutMs, undefined, padTo, dest);
   }
 
   /** Поточный метод (скачивание): метаданные + чанки через колбэк. */
@@ -131,8 +133,9 @@ export class V2Connection {
     body: Uint8Array,
     onChunk: (chunk: { index: number; last: boolean; data: Uint8Array; error?: string }) => void,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    dest?: string,
   ): Promise<Uint8Array> {
-    return this.send(method, body, timeoutMs, onChunk);
+    return this.send(method, body, timeoutMs, onChunk, undefined, dest);
   }
 
   close() {
@@ -145,6 +148,7 @@ export class V2Connection {
     timeoutMs: number,
     chunks?: Pending['chunks'],
     padTo?: number,
+    dest?: string,
   ): Promise<Uint8Array> {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
@@ -157,7 +161,10 @@ export class V2Connection {
       this.pending.set(id, {
         resolve, reject, timer, chunks,
       });
-      ws.send(new Uint8Array(this.pv.encodeRequest(BigInt(id), method, body, Math.min(timeoutMs, 30000), padTo)));
+      // dest — сервер объекта запроса (spec 028): свой сервер перешлёт его чужому
+      ws.send(new Uint8Array(
+        this.pv.encodeRequest(BigInt(id), method, body, Math.min(timeoutMs, 30000), padTo, dest || undefined),
+      ));
     });
   }
 

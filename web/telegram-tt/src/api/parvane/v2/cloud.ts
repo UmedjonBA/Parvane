@@ -46,7 +46,7 @@ export type CloudStateEntry = {
 };
 
 type Chan = 'id' | 'anon';
-type OutReq = { chan: Chan; method: string; body: Uint8Array };
+type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
 type OutboxItem = { opId: string; op: string };
 
 type EngineContainer = {
@@ -69,7 +69,8 @@ type Deps = {
   needsLinking: () => boolean;
   self: () => string | undefined;
   serverDomain: () => string | undefined;
-  call: (chan: Chan, method: string, body: Uint8Array) => Promise<Uint8Array>;
+  // dest — сервер объекта (spec 028)
+  call: (chan: Chan, method: string, body: Uint8Array, dest?: string) => Promise<Uint8Array>;
   withNeeds: <T>(fn: () => T) => Promise<T>;
   /** Перечитать журнал устройств собеседника (новое устройство участника). */
   refreshPeerLog: (user: string) => Promise<void>;
@@ -178,15 +179,15 @@ export function createCloudSync(deps: Deps) {
     await deps.persist();
   }
 
-  function call(chan: Chan, method: string, body: Uint8Array): Promise<Uint8Array> {
+  function call(chan: Chan, method: string, body: Uint8Array, dest?: string): Promise<Uint8Array> {
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => reject(new V2Error('ERROR_CODE_UNAVAILABLE')), CALL_TIMEOUT_MS);
-      deps.call(chan, method, body).then(resolve, reject).finally(() => clearTimeout(timer));
+      deps.call(chan, method, body, dest).then(resolve, reject).finally(() => clearTimeout(timer));
     });
   }
 
   async function run(reqs: OutReq[]) {
-    for (const r of reqs) await call(r.chan, r.method, r.body);
+    for (const r of reqs) await call(r.chan, r.method, r.body, r.dest);
   }
 
   function setStatus(next: CloudSyncStatus) {
@@ -195,8 +196,13 @@ export function createCloudSync(deps: Deps) {
     deps.onChanged();
   }
 
+  /** Домен сервера контейнера (spec 028): чужая совместная папка живёт у владельца. */
+  function domainOf(id: string) {
+    return deps.client()?.cloudDomain(id) || deps.serverDomain() || '';
+  }
+
   function refJson(id: string) {
-    return { domain: deps.serverDomain() || '', id: hexToB64(id) };
+    return { domain: domainOf(id), id: hexToB64(id) };
   }
 
   // Тело по ИМЕНИ МЕТОДА (кодек реестра)
@@ -261,8 +267,10 @@ export function createCloudSync(deps: Deps) {
     if (!client) return false;
     try {
       const [got, grants] = await Promise.all([
-        call('id', 'domain.container.get', encode('domain.container.get', { container: refJson(id) })),
-        call('id', 'domain.grant.list', encode('domain.grant.list', { container: refJson(id), after_version: '0' })),
+        call('id', 'domain.container.get', encode('domain.container.get', { container: refJson(id) }), domainOf(id)),
+        call('id', 'domain.grant.list', encode(
+          'domain.grant.list', { container: refJson(id), after_version: '0' },
+        ), domainOf(id)),
       ]);
       await deps.withNeeds(() => client.cloudAttach(got, grants));
     } catch (e) {
@@ -380,7 +388,7 @@ export function createCloudSync(deps: Deps) {
     const client = deps.client()!;
     const resp = await call('id', 'domain.grant.list', encode(
       'domain.grant.list', { container: refJson(id), after_version: String(client.cloudGrantVersion(id)) },
-    ));
+    ), domainOf(id));
     await deps.withNeeds(() => client.cloudIngestGrants(id, resp));
   }
 
@@ -418,7 +426,8 @@ export function createCloudSync(deps: Deps) {
     }
     if (!snapshotTried.has(id) && client.cloudHeadSeq(id) === 0 && client.cloudHasKey(id)) {
       snapshotTried.add(id);
-      const resp = await call('id', 'domain.snapshot.get', encode('domain.snapshot.get', { container: refJson(id) }));
+      const body = encode('domain.snapshot.get', { container: refJson(id) });
+      const resp = await call('id', 'domain.snapshot.get', body, domainOf(id));
       try {
         if (client.cloudIngestSnapshot(id, resp) !== 0) {
           changed = true;
@@ -435,7 +444,7 @@ export function createCloudSync(deps: Deps) {
     for (let page = 0; page < SYNC_PAGES; page++) {
       const resp = await call('id', 'domain.op.sync', encode(
         'domain.op.sync', { container: refJson(id), after_seq: String(client.cloudHeadSeq(id)), max_bytes: 0 },
-      ));
+      ), domainOf(id));
       const r = client.cloudIngestSync(id, resp, isStrict) as {
         applied: number; more: boolean; grantsBehind: boolean; authorsBehind: boolean;
       };
@@ -467,7 +476,7 @@ export function createCloudSync(deps: Deps) {
     try {
       const req = client.cloudSnapshotRequest(id, Date.now()) as OutReq | undefined;
       if (!req) return;
-      await call(req.chan, req.method, req.body);
+      await call(req.chan, req.method, req.body, req.dest);
       // Движок запомнил seq снимка — в персист (дерево не менялось, ревизия прежняя)
       isDirty = true;
       deps.log(`облако: снимок записан (${id.slice(0, 8)}…, seq ${client.cloudHeadSeq(id)})`);
@@ -487,7 +496,7 @@ export function createCloudSync(deps: Deps) {
       if (!client.cloudHasKey(id)) return rejected;
       try {
         const req = client.cloudSeal(id, b64ToBytes(item.op), item.opId, Date.now()) as OutReq;
-        await call(req.chan, req.method, req.body);
+        await call(req.chan, req.method, req.body, req.dest);
       } catch (e) {
         const code = errorCode(e);
         if (code === 'ERROR_CODE_EXPIRED') {
@@ -850,7 +859,7 @@ export function createCloudSync(deps: Deps) {
     outboxes.delete(id);
     lost.add(id);
     await deps.deleteRecord(OUTBOX_RECORD + id).catch(() => undefined);
-    await call(req.chan, req.method, req.body).catch((e) => {
+    await call(req.chan, req.method, req.body, req.dest).catch((e) => {
       if (errorCode(e) !== 'ERROR_CODE_NOT_FOUND') throw e;
     });
     isDirty = false;

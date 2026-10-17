@@ -384,6 +384,8 @@ let serverInfoPromise: Promise<ServerInfo> | undefined;
 // Ник нового аккаунта (зеркало valid_nick в identity): 2–64 символа, строчная
 // латиница, цифры, _ . -; первый символ — буква или цифра
 const NICK_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}$/;
+// Полный адрес пользователя: ник и домен сервера (в том числе другого — spec 028)
+const FULL_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,63}@[a-z0-9][a-z0-9.-]{0,126}$/;
 
 // Причины отказа смены пароля: формулировки моста v2 (`bridgeErrorText`) → ключи словаря
 const PASSWORD_CHANGE_REASONS: Record<string, string> = {
@@ -2393,10 +2395,18 @@ const methods = {
     }
     // Ники строчные; мобильная клавиатура ставит заглавную первую букву и
     // пробел — с телефона поиск «Asd » не находил «asd»
+    const normalized = query.trim().replace(/^@/, '').toLowerCase();
     const raw = await connection.request(TOPIC_IDENTITY_SEARCH, JSON.stringify({
-      query: query.trim().replace(/^@/, '').toLowerCase(),
+      query: normalized,
     }));
     const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
+    // Полный адрес `ник@сервер` (spec 028, FR-001): пользователь другого сервера находится у его сервера
+    if (FULL_ADDRESS_PATTERN.test(normalized) && !users.some((u) => u.username === normalized)) {
+      const resolved = await connection.request(TOPIC_IDENTITY_RESOLVE, JSON.stringify({ usernames: [normalized] }))
+        .then((r) => (JSON.parse(r) as { users?: WireUserInfo[] }).users || [])
+        .catch(() => []);
+      users.push(...resolved.filter((u) => u.username === normalized));
+    }
     const globalResultIds: string[] = [];
     users.forEach((u) => {
       if (u.username === store.self) return;

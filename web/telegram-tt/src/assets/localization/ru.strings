@@ -83,6 +83,11 @@
 "ParvaneMediaUnverified" = "Не удалось проверить целостность файла — он открылся без проверки";
 "ParvaneUndecryptable" = "🔒 Не удалось расшифровать сообщение";
 "ParvaneMessageDeleted" = "🗑 Сообщение удалено";
+"ParvaneFederationDisabled" = "На вашем сервере переписка с другими серверами выключена";
+"ParvaneFederationDomainBlocked" = "Администратор вашего сервера заблокировал этот сервер";
+"ParvaneFederationRefused" = "Другой сервер не принимает сообщения с вашего сервера";
+"ParvaneFederationUnreachable" = "Другой сервер недоступен. Отправка будет повторена";
+"ParvaneFederationKeyChanged" = "Другой сервер сменил ключ. Обратитесь к администратору вашего сервера";
 "ParvaneJoinRequestsAcceptAll" = "Принять все";
 "ParvaneJoinRequestsDismissAll" = "Отклонить все";
 "ParvaneJoinRequestsAcceptAllTitle" = "Принять все заявки?";

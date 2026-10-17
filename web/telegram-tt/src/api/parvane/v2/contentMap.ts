@@ -20,8 +20,11 @@ export type V2Entity = {
 export type V2PackRef = {
   file_id?: string; name?: string; count?: number; key?: string; nonce?: string; capability?: string;
   content_hash?: string; contentHash?: string;
+  blob_domain?: string; blobDomain?: string;
 };
 export type V2Media = {
+  blob_domain?: string;
+  blobDomain?: string;
   kind: string;
   file_id?: string;
   mime?: string;
@@ -178,6 +181,7 @@ const packToV2 = (p?: WirePackRef): V2PackRef | undefined => (p ? {
   nonce: p.nonce,
   capability: p.capability,
   ...(p.content_hash && { content_hash: p.content_hash }),
+  ...(p.blob_domain && { blob_domain: p.blob_domain }),
 } : undefined);
 
 const packFromV2 = (p?: V2PackRef): WirePackRef | undefined => (p?.file_id ? {
@@ -188,6 +192,7 @@ const packFromV2 = (p?: V2PackRef): WirePackRef | undefined => (p?.file_id ? {
   nonce: p.nonce || '',
   capability: p.capability || undefined,
   content_hash: p.content_hash || p.contentHash || undefined,
+  blob_domain: p.blob_domain || p.blobDomain || undefined,
 } : undefined);
 
 // ── waveform: number[] (0..31) ↔ bytes ─────────────────────────────────────
@@ -233,6 +238,7 @@ function mediaToV2(c: WireMessageContent): V2Media {
     name: c.filename,
     caption: c.caption || undefined,
     caption_entities: entitiesToV2(c.entities),
+    blob_domain: c.blob_domain || undefined,
     title: c.audio_title,
     performer: c.audio_performer,
     thumbnail: c.thumbnail,
@@ -269,6 +275,7 @@ function mediaFromV2(m: V2Media): WireMessageContent {
     audio_performer: m.performer || undefined,
     thumbnail: m.thumbnail || undefined,
     capability: m.capability || undefined,
+    blob_domain: m.blob_domain || m.blobDomain || undefined,
   };
   return prune(out);
 }

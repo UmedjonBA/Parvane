@@ -41,6 +41,7 @@ services:
       PARVANE_PREVIEW_PASS: ${PARVANE_PREVIEW_PASS}
       PARVANE_PUSH_PASS: ${PARVANE_PUSH_PASS}
       PARVANE_DOMAINS_PASS: ${PARVANE_DOMAINS_PASS}
+      PARVANE_FEDERATION_PASS: ${PARVANE_FEDERATION_PASS}
       PARVANE_GATEWAY_PASS: ${PARVANE_GATEWAY_PASS}
     read_only: true
     cap_drop:
@@ -77,6 +78,10 @@ services:
       PARVANE_SERVER_KEY_FILE: /data/identity-server-ed25519.pem
       PARVANE_WELL_KNOWN_FILE: /well-known/parvane.json
       PARVANE_LOG_LEVEL: info
+      # Федерация (spec 028): identity подписывает межсерверные кадры и объявляет точку входа
+      PARVANE_FEDERATION: ${PARVANE_FEDERATION:-off}
+      PARVANE_S2S_ENDPOINT: ${PARVANE_S2S_ENDPOINT:-}
+      PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY: ${PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY:-2000}
       # Домен адресов: ник на экране входа → ник@домен; регистрация на чужой
       # домен отклоняется
       PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
@@ -197,6 +202,28 @@ services:
       PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
       PARVANE_LOG_LEVEL: info
 
+  # Федерация (spec 028): единственный, кто ходит к другим серверам (HTTPS, SSRF-фильтр) и принимает их
+  # запросы (/_parvane/s2s за Caddy). Выключатель — PARVANE_FEDERATION, чёрный список —
+  # PARVANE_FEDERATION_BLOCK и `docker compose exec federation federation_admin block <домен>`.
+  federation:
+    <<: *shard-common
+    command: ["/usr/local/bin/federation"]
+    volumes:
+      - db-federation:/data
+      - well-known:/well-known:ro
+    environment:
+      PARVANE_NATS_URL: nats://nats:4222
+      PARVANE_NATS_USER: federation
+      PARVANE_NATS_PASS: ${PARVANE_FEDERATION_PASS}
+      PARVANE_DB_PATH: /data/federation.db
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
+      PARVANE_FEDERATION: ${PARVANE_FEDERATION:-off}
+      PARVANE_FEDERATION_BIND: 0.0.0.0:9330
+      PARVANE_FEDERATION_ENDPOINTS: ${PARVANE_FEDERATION_ENDPOINTS:-}
+      PARVANE_FEDERATION_BLOCK: ${PARVANE_FEDERATION_BLOCK:-}
+      PARVANE_WELL_KNOWN_FILE: /well-known/parvane.json
+      PARVANE_LOG_LEVEL: info
+
   gateway:
     image: localhost/parvane-shards:latest
     command: ["/usr/local/bin/gateway"]
@@ -214,6 +241,8 @@ services:
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: gateway
       PARVANE_NATS_PASS: ${PARVANE_GATEWAY_PASS}
+      # Федерация (spec 028): запрос с чужим dest_domain уходит шарду federation
+      PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
       PARVANE_GATEWAY_BIND: 0.0.0.0:9222
       PARVANE_GATEWAY_TCP_BIND: 0.0.0.0:9223
       # За Caddy все WS-клиенты приходят с ОДНОГО IP (контейнер caddy), поэтому
@@ -283,6 +312,7 @@ volumes:
   db-preview:
   db-push:
   db-domains:
+  db-federation:
   caddy-data:
   caddy-config:
   well-known:
