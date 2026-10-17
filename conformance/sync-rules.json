@@ -1412,6 +1412,22 @@
         "desktop": "ОТКРЫТО (решение пользователя 15–17 окт 2026: desktop не трогаем, пока web не доделан)",
         "android": "ОТКРЫТО (то же решение)"
       }
+    },
+    {
+      "id": "DELETE-1",
+      "title": "Удаление аккаунта: отсрочка 7 дней; вход без отмены токена не даёт; собеседник видит «Удалённый аккаунт» по признаку deleted синка журнала",
+      "fields": {
+        "session_issue_cancel_deletion": 9,
+        "session_issue_deletion_at_ms": 8,
+        "log_sync_deleted": 4,
+        "rename_notice_purge": 4
+      },
+      "delayDays": 7,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (deleteAccount, isDeletedLog, checkPeerDeleted), connectionController.ts (AccountDeletionPendingError), components/parvane/account/AccountDeleteModal.tsx, components/auth/AuthPassword.tsx (data-restore-account); сценарий scripts/e2e_web_account_delete.mjs",
+        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "android": "ОТКРЫТО (то же решение)"
+      }
     }
   ]
 }

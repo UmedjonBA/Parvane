@@ -99,4 +99,13 @@ describe('v2: сигнал звонка', () => {
     expect(groupCallIdFromV2(direct!)).toBeUndefined();
     expect(callSignalToV2({ type: 'hangup', call_id: CALL_ID }, 'not-a-uuid')).toBeUndefined();
   });
+
+  it('отказ уровня группового звонка: call_id = id звонка, существующие поля hangup и group_call_id', () => {
+    for (const reason of ['declined', 'busy'] as const) {
+      const v2 = callSignalToV2({ type: 'reject', call_id: CALL_ID, reason }, CALL_ID);
+      expect(v2?.hangup?.reason).toBe(reason === 'busy' ? 'HANGUP_REASON_BUSY' : 'HANGUP_REASON_DECLINED');
+      expect(groupCallIdFromV2(v2!)).toBe(CALL_ID);
+      expect(callSignalFromV2(v2!)).toEqual({ type: 'reject', call_id: CALL_ID, reason });
+    }
+  });
 });

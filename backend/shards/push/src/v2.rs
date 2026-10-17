@@ -447,6 +447,18 @@ async fn serve_rename(nc: async_nats::Client, pool: SqlitePool) {
 
 async fn rename(pool: &SqlitePool, n: &parvane_protocol::pb::parvane::core::v2::RenameNotice) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
+    // Удаление аккаунта (spec 027): регистрации пробуждения и будильники его устройств
+    if n.purge {
+        for d in &n.device_ids {
+            let Ok(token) = wake::device_token(&n.old_address, d) else { continue };
+            sqlx::query("DELETE FROM wake_alarms WHERE inbox_token = ?").bind(&token).execute(&mut *tx).await?;
+        }
+        sqlx::query("DELETE FROM wake_alarms WHERE inbox_token IN (SELECT inbox_token FROM wake_registrations WHERE user = ?)").bind(&n.old_address).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM wake_registrations WHERE user = ?").bind(&n.old_address).execute(&mut *tx).await?;
+        tx.commit().await?;
+        info!("push: аккаунт стёрт");
+        return Ok(());
+    }
     for d in &n.device_ids {
         let (Ok(from), Ok(to)) = (wake::device_token(&n.old_address, d), wake::device_token(&n.new_address, d)) else { continue };
         sqlx::query("UPDATE wake_registrations SET user = ?, inbox_token = ? WHERE inbox_token = ?").bind(&n.new_address).bind(&to).bind(&from).execute(&mut *tx).await?;

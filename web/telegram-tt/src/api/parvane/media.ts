@@ -13,6 +13,7 @@ import {
 } from '../../util/parvaneMediaBudget';
 import { base64ToBytes, bytesToBase64 } from './v2/base64';
 import { type AttachmentUploadTransport, uploadAttachmentStream } from './attachmentUpload';
+import { withAutoEntities } from './autoEntities';
 import {
   blobChunkCount,
   blobChunkOffset,
@@ -1018,8 +1019,9 @@ export function createMediaService(deps: MediaDependencies) {
 
   function buildLocalContent(uuid: string, params: SendMessageParams): ApiMessage['content'] {
     const { attachment, text, entities } = params;
-    const caption = text ? { text: { text } } : {};
-    if (!attachment) return { text: { text: text || '', entities } };
+    // Ссылки, @ники и #хештеги — как у получателя (`store.buildMessageContent`)
+    const caption = text ? { text: { text, entities: withAutoEntities(text) } } : {};
+    if (!attachment) return { text: { text: text || '', entities: withAutoEntities(text, entities) } };
     if (attachment.voice) {
       return {
         voice: {
@@ -1203,7 +1205,11 @@ export function createMediaService(deps: MediaDependencies) {
 
   function messageToWireContent(message: ApiMessage): Record<string, unknown> | undefined {
     const content = message.content;
-    if (content.text && !content.photo && !content.document && !content.sticker) {
+    // Подпись у видео, аудио и голосового — тоже `content.text`: раньше такое
+    // сообщение пересылалось одним текстом, без файла
+    const hasMedia = Boolean(content.photo || content.document || content.sticker
+      || content.video || content.voice || content.audio);
+    if (content.text && !hasMedia) {
       return {
         kind: 'text',
         text: content.text.text,
@@ -1216,7 +1222,13 @@ export function createMediaService(deps: MediaDependencies) {
     const keys = keysByFileId.get(mediaId);
     const cryptoFields = keys ? { file_key: keys.keyB64, file_nonce: keys.nonceB64 } : {};
     // Подпись к медиа (пересылка теряла её)
-    const captionFields = content.text?.text ? { caption: content.text.text } : {};
+    const captionFields = content.text?.text
+      ? { caption: content.text.text, entities: apiEntitiesToWire(content.text.entities) }
+      : {};
+    // Миниатюра (perf A10) едет и с пересланным фото/видео — иначе у нового
+    // получателя до скачивания пустой прямоугольник
+    const thumbnail = thumbByFileId.get(mediaId);
+    const thumbnailFields = thumbnail ? { thumbnail } : {};
     if (content.voice) {
       return {
         kind: 'voice',
@@ -1226,6 +1238,7 @@ export function createMediaService(deps: MediaDependencies) {
         size_bytes: content.voice.size,
         waveform: content.voice.waveform,
         ...cryptoFields,
+        ...captionFields,
       };
     }
     if (content.video?.isRound) {
@@ -1238,6 +1251,7 @@ export function createMediaService(deps: MediaDependencies) {
         mime: content.video.mimeType,
         size_bytes: content.video.size,
         ...cryptoFields,
+        ...thumbnailFields,
       };
     }
     if (content.audio) {
@@ -1272,12 +1286,14 @@ export function createMediaService(deps: MediaDependencies) {
       return {
         kind: 'video',
         file_id: mediaId,
+        filename: content.video.fileName,
         duration_secs: Math.max(1, Math.round(content.video.duration)),
         width: content.video.width || 640,
         height: content.video.height || 480,
         mime: content.video.mimeType,
         size_bytes: content.video.size,
         ...cryptoFields,
+        ...thumbnailFields,
         ...captionFields,
       };
     }
@@ -1294,7 +1310,14 @@ export function createMediaService(deps: MediaDependencies) {
     }
     if (content.photo) {
       return {
-        kind: 'photo', file_id: mediaId, width: 0, height: 0, mime: 'image/jpeg', ...cryptoFields, ...captionFields,
+        kind: 'photo',
+        file_id: mediaId,
+        width: 0,
+        height: 0,
+        mime: 'image/jpeg',
+        ...cryptoFields,
+        ...thumbnailFields,
+        ...captionFields,
       };
     }
     return {
@@ -1304,6 +1327,7 @@ export function createMediaService(deps: MediaDependencies) {
       mime: content.document!.mimeType,
       size_bytes: content.document!.size,
       ...cryptoFields,
+      ...captionFields,
     };
   }
 

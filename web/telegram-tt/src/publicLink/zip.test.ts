@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { createBlobSink } from '../api/parvane/cloudBlobs';
-import { canZip, crc32, createZipWriter } from './zip';
+import {
+  archiveFileName, canZip, crc32, createZipWriter,
+} from './zip';
 
 // Читатель архива по оглавлению — как распаковщики: конец архива → оглавление → заголовок файла → данные
 function readZip(bytes: Uint8Array) {
@@ -70,5 +72,30 @@ describe('ZIP «Скачать всё»', () => {
     expect(canZip([{ name: 'a', size: 1024 }])).toBe(true);
     expect(canZip([{ name: 'a', size: 2 ** 32 }])).toBe(false);
     expect(canZip(Array.from({ length: 70000 }, (_, i) => ({ name: String(i), size: 0 })))).toBe(false);
+  });
+});
+
+describe('archiveFileName', () => {
+  it('название ссылки — имя архива, кириллица и пробелы остаются', () => {
+    expect(archiveFileName('Отчёты за квартал')).toBe('Отчёты за квартал.zip');
+  });
+
+  it('знаки, запрещённые в именах файлов, и управляющие — пробелом', () => {
+    expect(archiveFileName('a/b\\c:d*e?f"g<h>i|j')).toBe('a b c d e f g h i j.zip');
+    expect(archiveFileName('строка\nвторая\tтретья')).toBe('строка вторая третья.zip');
+  });
+
+  it('без второго .zip, без точек и пробелов по краям, пустое — parvane.zip', () => {
+    expect(archiveFileName('Архив.ZIP')).toBe('Архив.zip');
+    expect(archiveFileName('  ..скрытая.. ')).toBe('скрытая.zip');
+    expect(archiveFileName('')).toBe('parvane.zip');
+    expect(archiveFileName('///')).toBe('parvane.zip');
+    expect(archiveFileName('..')).toBe('parvane.zip');
+  });
+
+  it('длинное название обрезается по знакам, а не по половинкам суррогатных пар', () => {
+    const name = archiveFileName('😀'.repeat(200));
+    expect(Array.from(name.slice(0, -4))).toHaveLength(120);
+    expect(name.endsWith('😀.zip')).toBe(true);
   });
 });

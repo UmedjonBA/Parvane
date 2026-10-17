@@ -370,6 +370,10 @@ pub(crate) async fn token_rejection(pool: &SqlitePool, claims: &Claims) -> Resul
             .fetch_optional(pool)
             .await
             .context("проверка смены пароля")?;
+    // Аккаунт ждёт удаления (spec 027): ни один токен не действует
+    if crate::v2::deletion_pending(&claims.sub).await {
+        return Ok(Some("аккаунт удаляется"));
+    }
     // Ник сменён (spec 026): токены прежнего адреса недействительны
     if row.is_none() && crate::v2::alias_held(&claims.sub).await {
         return Ok(Some("ник сменён — войдите заново"));

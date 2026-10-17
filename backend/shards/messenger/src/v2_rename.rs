@@ -42,6 +42,9 @@ pub(crate) async fn serve(ctx: Arc<V2>) {
 
 /// Журналы инбокса устройств (ключ — из адреса и устройства), личное состояние, членство и заявки.
 pub(crate) async fn rename(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
+    if n.purge {
+        return purge(ctx, n).await;
+    }
     let (old, new) = (n.old_address.as_str(), n.new_address.as_str());
     let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await?;
     for d in &n.device_ids {
@@ -92,5 +95,26 @@ async fn merge_queue(
     }
     sqlx::query(&format!("UPDATE {log} SET {log_key} = ? WHERE {log_key} = ?")).bind(to).bind(from).execute(&mut **tx).await?;
     sqlx::query(&format!("UPDATE {head} SET {head_key} = ? WHERE {head_key} = ?")).bind(to).bind(from).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Удаление аккаунта (spec 027): журналы инбокса устройств, личное состояние, заявки и точки публичных групп.
+/// Членство в группах — запись их журналов (подписана), индекс участников не трогается: доставка удалённому
+/// аккаунту уже не принимается (устройств у него нет).
+async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
+    let address = n.old_address.as_str();
+    let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await?;
+    for d in &n.device_ids {
+        let Ok(key) = device_key(address, d) else { continue };
+        sqlx::query("DELETE FROM inbox_log WHERE device = ?").bind(&key).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM inbox_device WHERE device = ?").bind(&key).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM user_state_log WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM user_state_head WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM group_join_requests_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM public_join_points WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    tx.commit().await?;
+    ctx.forget_devices(address);
+    info!("messenger v2: аккаунт стёрт ({} устройств)", n.device_ids.len());
     Ok(())
 }

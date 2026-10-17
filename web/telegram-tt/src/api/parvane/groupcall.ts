@@ -4,6 +4,9 @@
 // (детерминированное разрешение glare). В звонок входят только после
 // согласия пользователя (calls.ts), дальше парные invite внутри mesh
 // принимаются сами. Локальный поток один на звонок, треки шарятся между pc.
+// Отказ от приглашения («отклонил» / «занят») — сигнал уровня звонка: `reject`
+// с call_id = id группового звонка, каждому участнику; закрывает строку
+// отказавшего у всех сразу, независимо от того, кто из пары шлёт оффер.
 
 import type { CallMedia, WireCallSignal } from './callengine';
 
@@ -16,11 +19,12 @@ export type WireGroupInvite = {
   media: CallMedia;
 };
 
-export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_failed' | 'busy';
+export type GroupPeerState = 'connecting' | 'active' | 'ended' | 'security_failed' | 'busy' | 'declined';
 
 type GroupCallCallbacks = {
-  // Контроллер сам добавляет gcall:-префикс к адресу получателя
-  sendSignal: (peer: string, signal: WireCallSignal | WireGroupInvite) => void;
+  // `groupCallId` — групповой звонок сигнала, когда контроллер не выведет его сам
+  // (отказ уровня звонка уходит и тогда, когда в звонок не входили)
+  sendSignal: (peer: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string) => void;
   getPeerSigningKeys: (peer: string) => Promise<string[]>;
   // Участник на протоколе v2: попарные сигналы идут запечатанными конвертами,
   // подпись SDP не нужна — оффер допустим и без v1-ключей подписи (сервер без v1)
@@ -157,25 +161,11 @@ class MeshPeerSession {
         }
         break;
       case 'reject':
-        // Своего call_id у сессии нет, пока оффер за участником (правило glare:
-        // шлёт лексикографически меньший адрес); до его invite reject от него
-        // прийти не может (шард форвардит reject только по записи invite), и
-        // строка закрывается таймаутом соединения
-        if (this.callId && signal.call_id !== this.callId) return;
-        // Ответ уже применён — сессия ведёт разговор с тем устройством
-        // участника, которое приняло вызов. Отказ с тем же call_id может
-        // прислать только ДРУГОЕ его устройство (приглашение звонит на всех,
-        // и остальные отклоняют его по своему таймауту): ронять по нему живую
-        // сессию нельзя. Уход принявшего устройства приходит сигналом hangup
-        if (this.remoteReady) return;
-        if (signal.reason === 'busy') {
-          // Участник занят другим звонком: строка остаётся с пометкой «занят»
-          this.close();
-          this.cb.onPeerState(this.peer, 'busy');
-          this.engine.onSessionClosed(this.peer);
-          return;
-        }
-        this.end(false);
+        // Попарный отказ — только на свой оффер. Пока оффер за участником (правило
+        // glare: шлёт меньший адрес), своего call_id нет, и его отказ приходит
+        // сигналом уровня звонка (`peerRejected`)
+        if (signal.call_id !== this.callId) return;
+        this.peerRejected(signal.reason);
         break;
       case 'media':
         if (signal.call_id === this.callId) {
@@ -190,6 +180,25 @@ class MeshPeerSession {
       default:
         break;
     }
+  }
+
+  // Участник отказался от приглашения: «занят» — строка с пометкой «занят»,
+  // «отклонил» — «отклонил», прочие причины (нет доступа к медиа, проверка) —
+  // строка просто закрыта
+  peerRejected(reason?: string) {
+    if (this.isEnded) return;
+    // Ответ уже применён — сессия ведёт разговор с тем устройством участника,
+    // которое приняло вызов. Отказ может прислать только ДРУГОЕ его устройство
+    // (приглашение звонит на всех): ронять по нему живую сессию нельзя. Уход
+    // принявшего устройства приходит сигналом hangup
+    if (this.remoteReady) return;
+    if (reason === 'busy' || reason === 'declined') {
+      this.close();
+      this.cb.onPeerState(this.peer, reason);
+      this.engine.onSessionClosed(this.peer);
+      return;
+    }
+    this.end(false);
   }
 
   hangup() {
@@ -356,6 +365,11 @@ export class GroupCallEngine {
       }
       return;
     }
+    if (signal.type === 'reject' && this.groupCallId && signal.call_id === this.groupCallId) {
+      // Отказ уровня звонка: участник отклонил приглашение или занят
+      this.sessions.get(from)?.peerRejected(signal.reason);
+      return;
+    }
     let session = this.sessions.get(from);
     if (!session && signal.type === 'invite' && this.groupCallId) {
       session = new MeshPeerSession(from, this, this.cb);
@@ -383,6 +397,14 @@ export class GroupCallEngine {
   // Отказ/занятость на парный invite без входа в mesh (согласие не дано)
   rejectInvite(peer: string, callId: string, reason: string) {
     this.cb.sendSignal(peer, { type: 'reject', call_id: callId, reason });
+  }
+
+  /** Отказ от приглашения в групповой звонок целиком — каждому участнику (кроме себя). */
+  declineCall(groupCallId: string, participants: string[], reason: 'declined' | 'busy') {
+    new Set(participants).forEach((peer) => {
+      if (peer === this.self) return;
+      this.cb.sendSignal(peer, { type: 'reject', call_id: groupCallId, reason }, groupCallId);
+    });
   }
 
   leave() {

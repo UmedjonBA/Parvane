@@ -49,6 +49,12 @@ const BUILTIN: GifDef[] = [
   },
 ];
 
+// Эмодзи и слова встроенных GIF — для локального поиска (`symbolSearch.ts`)
+export const BUILTIN_GIF_TAGS: Record<string, { emoji: string; words: string[] }> = {
+  'pvgif-spin': { emoji: '🚀', words: ['spin', 'rotate', 'вращение', 'кружится', 'крутится'] },
+  'pvgif-pulse': { emoji: '❤️', words: ['pulse', 'heartbeat', 'пульс', 'бьется', 'сердцебиение'] },
+};
+
 let cached: { gifs: ApiVideo[]; blobs: Map<string, Blob> } | undefined;
 
 function pickWebmMime(): string {
@@ -129,6 +135,8 @@ export type SavedGifRecord = {
   height?: number;
   duration: number;
   size: number;
+  /** Имя файла — по нему ищет поиск GIF; у записей до 17 окт 2026 его нет. */
+  fileName?: string;
   keyB64?: string;
   nonceB64?: string;
 };
@@ -179,7 +187,7 @@ export function buildApiVideoFromSavedRecord(record: SavedGifRecord): ApiVideo {
     id: record.id,
     mimeType: 'video/webm',
     duration: record.duration || 1,
-    fileName: 'animation.webm',
+    fileName: record.fileName || 'animation.webm',
     width: record.width || GIF_W,
     height: record.height || GIF_H,
     isGif: true,

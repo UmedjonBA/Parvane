@@ -138,6 +138,15 @@ log "Two-browser delete chat e2e"
 log "Two-browser forward photo e2e"
 "$ROOT/scripts/run_web_forward_photo_e2e.sh"
 
+log "Three-browser forward video, file and voice e2e"
+"$ROOT/scripts/run_web_forward_media_e2e.sh"
+log "Data export archive e2e"
+"$ROOT/scripts/run_web_export_e2e.sh"
+log "Username change e2e"
+"$ROOT/scripts/run_web_rename_e2e.sh"
+log "Account deletion and restore e2e"
+"$ROOT/scripts/run_web_account_delete_e2e.sh"
+
 log "Two-browser live location e2e"
 "$ROOT/scripts/run_web_live_location_e2e.sh"
 

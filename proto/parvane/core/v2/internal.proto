@@ -151,6 +151,8 @@ message RenameNotice {
     (max_items) = 64,
     (max_len) = 64
   ];
+  // Удаление аккаунта (spec 027): `new_address` пуст — шард стирает строки `old_address`.
+  bool purge = 4;
 }
 message RenameAck {
   bool ok = 1;

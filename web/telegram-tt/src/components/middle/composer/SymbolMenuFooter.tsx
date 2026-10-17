@@ -8,8 +8,6 @@ import useOldLang from '../../../hooks/useOldLang';
 
 import Button from '../../ui/Button';
 
-const IS_SYMBOL_SEARCH_SUPPORTED = false;
-
 type OwnProps = {
   activeTab: SymbolMenuTabs;
   onSwitchTab: (tab: SymbolMenuTabs) => void;
@@ -73,8 +71,8 @@ const SymbolMenuFooter: FC<OwnProps> = ({
 
   return (
     <div className="SymbolMenu-footer" onClick={stopPropagation} dir={lang.isRtl ? 'rtl' : undefined}>
-      {/* Parvane: поиска стикеров и GIF на сервере нет — кнопка поиска скрыта */}
-      {IS_SYMBOL_SEARCH_SUPPORTED && activeTab !== SymbolMenuTabs.Emoji && activeTab !== SymbolMenuTabs.CustomEmoji
+      {/* Parvane: поиск локальный — встроенные и установленные наборы, сохранённые GIF (provider searchStickers/searchGifs) */}
+      {activeTab !== SymbolMenuTabs.Emoji && activeTab !== SymbolMenuTabs.CustomEmoji
         && canSearch && (
         <Button
           className="symbol-search-button"

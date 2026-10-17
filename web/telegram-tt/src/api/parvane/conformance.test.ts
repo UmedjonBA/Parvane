@@ -1118,7 +1118,7 @@ describe('RECOVER-1: смена корня собеседника, восста�
     expect(client).toMatch(/LogVerdict::RootChanged\)[\s\S]{0,200}_ => Err\(ProtoError::BrokenChain\)/);
     const identity = readRepo('backend/shards/identity/src/v2.rs');
     [r.backupMethods.set, r.backupMethods.get].forEach((method) => expect(identity).toContain(`"${method}" =>`));
-    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries, more, ${r.genesisField} }`);
+    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries, more, ${r.genesisField}, deleted: false }`);
     const proto = readRepo('proto/parvane/identity/v2/identity.proto');
     [r.backupMethods.set, r.backupMethods.get, r.resetMethod, r.reauthMethod].forEach((method) => {
       expect(proto, method).toContain(`name: "${method}"`);
@@ -1770,6 +1770,36 @@ describe('RENAME-1: смена ника — журнал прежнего адр
     expect(readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts'))
       .toContain('export async function migrateStorageUser(');
     expect(r.clients.web).toContain('e2e_web_rename.mjs');
+    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+});
+
+describe('DELETE-1: удаление аккаунта — отсрочка, восстановление входом, «Удалённый аккаунт» у собеседника', () => {
+  const r = rule('DELETE-1') as unknown as {
+    fields: Record<string, number>;
+    delayDays: number;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема и сервер: поля входа и синка журнала, срок, стирание в шардах', () => {
+    const identity = readRepo('proto/parvane/identity/v2/identity.proto');
+    expect(identity).toContain(`bool cancel_deletion = ${r.fields.session_issue_cancel_deletion};`);
+    expect(identity).toContain(`int64 deletion_at_ms = ${r.fields.session_issue_deletion_at_ms};`);
+    expect(identity).toContain(`bool deleted = ${r.fields.log_sync_deleted};`);
+    expect(readRepo('proto/parvane/core/v2/internal.proto')).toContain(`bool purge = ${r.fields.rename_notice_purge};`);
+    expect(readRepo('backend/shards/identity/src/v2/delete.rs'))
+      .toContain(`pub(crate) const DELETE_DELAY_MS: i64 = ${r.delayDays} * 24 * 60 * 60 * 1000;`);
+  });
+
+  it('web: удаление, вход в удаляемый аккаунт, удалённый собеседник', () => {
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    ['async function deleteAccount(', 'function isDeletedLog(', 'async function checkPeerDeleted(']
+      .forEach((f) => expect(controller).toContain(f));
+    expect(readRepo('web/telegram-tt/src/api/parvane/connectionController.ts'))
+      .toContain('throw new AccountDeletionPendingError(');
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('\'userTypeDeleted\'');
+    expect(r.clients.web).toContain('e2e_web_account_delete.mjs');
     expect(r.clients.desktop).toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');
   });

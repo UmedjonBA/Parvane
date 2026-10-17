@@ -878,6 +878,8 @@ async function searchGifs<T extends GlobalState>(global: T, query: string, botUs
   }
 
   global = getGlobal();
+  // Ответ на прежний запрос пришёл после смены строки поиска — не выдавать его за новый
+  if (selectTabState(global, tabId).gifSearch.query !== query) return;
   global = updateGifSearch(global, !offset, result.gifs, result.nextOffset, tabId);
   setGlobal(global);
 }

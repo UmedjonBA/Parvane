@@ -18,7 +18,9 @@ type StateProps = {
 const AuthPassword = ({
   auth,
 }: StateProps) => {
-  const { setAuthPassword, clearAuthErrorKey, parvaneStartRegistration } = getActions();
+  const {
+    setAuthPassword, clearAuthErrorKey, parvaneStartRegistration, parvaneRestoreAccount,
+  } = getActions();
   const {
     isLoading, errorKey, hint, phoneNumber,
   } = auth;
@@ -40,6 +42,13 @@ const AuthPassword = ({
     parvaneStartRegistration();
   }, [parvaneStartRegistration]);
 
+  // spec 027: аккаунт ждёт удаления — пароль верен, вход только с отменой удаления
+  const isDeletionPending = errorKey?.key === 'ParvaneAccountDeletionPending';
+
+  const handleRestoreAccount = useCallback(() => {
+    parvaneRestoreAccount();
+  }, [parvaneRestoreAccount]);
+
   return (
     <div id="auth-password-form" className="custom-scroll">
       <div className="auth-form">
@@ -56,6 +65,13 @@ const AuthPassword = ({
           onChangePasswordVisibility={handleChangePasswordVisibility}
           onSubmit={handleSubmit}
         />
+        {isDeletionPending && (
+          <div data-restore-account>
+            <Button className="auth-button" onClick={handleRestoreAccount}>
+              {lang('ParvaneRestoreAccount')}
+            </Button>
+          </div>
+        )}
         <Button className="auth-button" isText onClick={handleCreateAccount}>
           {lang('ParvaneCreateAccount')}
         </Button>

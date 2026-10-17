@@ -182,26 +182,37 @@ describe('Отказ в доступе к устройствам не кэшир
 
 describe('Отказ участника, которому мы ещё не слали оффер (правило glare)', () => {
   // Адрес пира меньше SELF, поэтому оффер за ним: своего call_id у нашей
-  // сессии нет, и отказ приходит с чужим идентификатором
+  // сессии нет, и отказ приходит сигналом уровня звонка — call_id = id
+  // группового звонка
   const PEER = peerAt(1);
 
-  it('reject{declined} закрывает строку, а не ждёт таймаута вызова', async () => {
+  it('reject{declined} уровня звонка закрывает строку «отклонил», а не ждёт таймаута вызова', async () => {
     const ctx = createObservedEngine();
     ctx.engine.joinMesh('call-reject', [SELF, PEER], 'audio');
 
-    await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: 'his-own-id', reason: 'declined' });
+    await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: 'call-reject', reason: 'declined' });
 
-    expect(ctx.peerStates).toContainEqual([PEER, 'ended']);
+    expect(ctx.peerStates).toContainEqual([PEER, 'declined']);
     expect(ctx.endedCount()).toBe(1);
   });
 
-  it('reject{busy} помечает строку «занят»', async () => {
+  it('reject{busy} уровня звонка помечает строку «занят»', async () => {
     const ctx = createObservedEngine();
     ctx.engine.joinMesh('call-busy', [SELF, PEER], 'audio');
 
-    await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: 'his-own-id', reason: 'busy' });
+    await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: 'call-busy', reason: 'busy' });
 
     expect(ctx.peerStates).toContainEqual([PEER, 'busy']);
     expect(ctx.endedCount()).toBe(1);
+  });
+
+  it('reject с чужим id (не наш оффер и не этот звонок) строку не трогает', async () => {
+    const ctx = createObservedEngine();
+    ctx.engine.joinMesh('call-other', [SELF, PEER], 'audio');
+
+    await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: 'his-own-id', reason: 'declined' });
+
+    expect(ctx.peerStates).toEqual([]);
+    expect(ctx.endedCount()).toBe(0);
   });
 });

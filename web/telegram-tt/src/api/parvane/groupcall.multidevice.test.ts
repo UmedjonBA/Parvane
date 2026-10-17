@@ -152,13 +152,13 @@ describe('Групповой звонок: отказ с другого устр
     expect(ctx.ended()).toBe(0);
   });
 
-  it('reject до answer по-прежнему закрывает сессию (обычный отказ участника)', async () => {
+  it('reject до answer по-прежнему закрывает сессию — строка «отклонил»', async () => {
     const ctx = createEngine();
     const callId = await startCallAndReadInvite(ctx);
 
     await ctx.engine.handleSignal(PEER, { type: 'reject', call_id: callId, reason: 'declined' });
 
-    expect(ctx.states.at(-1)).toEqual({ peer: PEER, state: 'ended' });
+    expect(ctx.states.at(-1)).toEqual({ peer: PEER, state: 'declined' });
     // Единственная сессия закрыта — звонок на двоих окончен
     expect(ctx.ended()).toBe(1);
     expect(ctx.engine.currentGroupCallId).toBeUndefined();

@@ -40,7 +40,9 @@ fn bundle_rate() -> usize {
     env_u64("PARVANE_V2_BUNDLE_RATE", 60) as usize
 }
 
+mod delete;
 mod rename;
+pub(crate) use delete::deletion_pending;
 pub(crate) use rename::alias_held;
 
 pub(crate) struct V2Ctx {
@@ -92,7 +94,7 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     parvane_v2rt::serve(nc.clone(), "identity", handler_concurrency(), handler).await?;
     internal(nc.clone(), ctx.clone()).await?;
     // Смена ника (spec 026): повтор переносов в шардах, освобождение прежних ников
-    rename::spawn_upkeep(nc.clone(), ctx.v2.clone());
+    rename::spawn_upkeep(nc.clone(), ctx.v2.clone(), ctx.pool.clone());
     // Суточная ротация ключей выпуска жетонов.
     let c3 = ctx.clone();
     tokio::spawn(async move {
@@ -539,6 +541,13 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 return Ok(pb::SessionIssueResponse { confirm_required: true, ..Default::default() }.encode_to_vec());
             }
             v1_ok(&v)?;
+            // Аккаунт ждёт удаления (spec 027): пароль верен, но токен — только с явной отменой удаления
+            if let Some(at) = delete::pending_until(&ctx.v2, &login).await {
+                if !r.cancel_deletion {
+                    return Ok(pb::SessionIssueResponse { deletion_at_ms: at, address: login, ..Default::default() }.encode_to_vec());
+                }
+                delete::cancel(&ctx.v2, &login).await?;
+            }
             Ok(pb::SessionIssueResponse { token: s(&v, "token"), trust_secret: s(&v, "trust_secret"), address: login, ..Default::default() }.encode_to_vec())
         }
         "identity.account.register" => {
@@ -601,6 +610,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             }
             .encode_to_vec())
         }
+        "identity.account.delete" => delete::account_delete(ctx, &req).await,
         "identity.account.rename" => {
             let r: pb::AccountRenameRequest = body(&req)?;
             rename::account_rename(ctx, &req, r).await
@@ -622,6 +632,10 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let v = v1_call(nc, json!({"usernames": names, "token": req.token}), |msg| handle_resolve(nc, pool, dec, msg)).await?;
             let mut out = Vec::new();
             for u in v["users"].as_array().cloned().unwrap_or_default() {
+                // Удаляемый аккаунт (spec 027) другим не показывается
+                if s(&u, "username") != req.user && delete::shown_deleted(&ctx.v2, &s(&u, "username")).await {
+                    continue;
+                }
                 out.push(profile_from_v1(ctx, &u).await);
             }
             Ok(pb::ProfileResolveResponse { profiles: out }.encode_to_vec())
@@ -632,6 +646,9 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             let v = v1_call(nc, json!({"query": r.query, "token": req.token}), |msg| handle_search(nc, pool, dec, msg)).await?;
             let mut out = Vec::new();
             for u in v["users"].as_array().cloned().unwrap_or_default() {
+                if delete::shown_deleted(&ctx.v2, &s(&u, "username")).await {
+                    continue;
+                }
                 out.push(profile_from_v1(ctx, &u).await);
             }
             Ok(pb::DirectorySearchResponse { results: out }.encode_to_vec())
@@ -733,22 +750,28 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !r.genesis_hash.is_empty() && log_genesis_hash(ctx, &user).await != r.genesis_hash {
                 // Прежний журнал адреса (spec 026: закрытый сменой ника и ушедший в архив)
                 let entries = rename::archived_log(&ctx.v2, &user, &r.genesis_hash, r.after_version).await?;
-                return Ok(pb::DeviceLogSyncResponse { entries, more: false, genesis_hash: r.genesis_hash }.encode_to_vec());
+                return Ok(pb::DeviceLogSyncResponse { entries, more: false, genesis_hash: r.genesis_hash, deleted: false }.encode_to_vec());
+            }
+            if delete::shown_deleted(&ctx.v2, &user).await {
+                return Ok(pb::DeviceLogSyncResponse { deleted: true, ..Default::default() }.encode_to_vec());
             }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
-            Ok(pb::DeviceLogSyncResponse { entries, more, genesis_hash }.encode_to_vec())
+            Ok(pb::DeviceLogSyncResponse { entries, more, genesis_hash, deleted: false }.encode_to_vec())
         }
         "identity.device.log_sync_anon" => {
             let r: pb::DeviceLogSyncAnonRequest = body(&req)?;
             let user = r.user.map(|u| u.address).unwrap_or_default();
             if !r.genesis_hash.is_empty() && log_genesis_hash(ctx, &user).await != r.genesis_hash {
                 let entries = rename::archived_log(&ctx.v2, &user, &r.genesis_hash, r.after_version).await?;
-                return Ok(pb::DeviceLogSyncAnonResponse { entries, more: false, genesis_hash: r.genesis_hash }.encode_to_vec());
+                return Ok(pb::DeviceLogSyncAnonResponse { entries, more: false, genesis_hash: r.genesis_hash, deleted: false }.encode_to_vec());
+            }
+            if delete::shown_deleted(&ctx.v2, &user).await {
+                return Ok(pb::DeviceLogSyncAnonResponse { deleted: true, ..Default::default() }.encode_to_vec());
             }
             let (entries, more) = log_sync(ctx, &user, r.after_version).await?;
             let genesis_hash = log_genesis_hash(ctx, &user).await;
-            Ok(pb::DeviceLogSyncAnonResponse { entries, more, genesis_hash }.encode_to_vec())
+            Ok(pb::DeviceLogSyncAnonResponse { entries, more, genesis_hash, deleted: false }.encode_to_vec())
         }
         "identity.device.publish_certificate" => {
             require_user(&req)?;
@@ -1313,6 +1336,9 @@ async fn fetch_bundle(ctx: &V2Ctx, user: &str) -> Result<(Vec<pb::DeviceBundle>,
     // только с fallback-ключом: OTK не расходуются, а первый контакт с
     // адресатом не блокируется чужим флудом. Частоту запросов с одного
     // IP-источника режет gateway (ANON — до шины, IP в шину не уходит).
+    if delete::pending_until(&ctx.v2, user).await.is_some() {
+        return Ok((vec![], vec![]));
+    }
     let spend_otk = window_rate_ok("v2-bundle", user, bundle_rate());
     let log = load_log(ctx, user).await?;
     let signed_certs = signed_certificates(ctx, user).await?;
@@ -1387,6 +1413,10 @@ async fn devices_of(ctx: &V2Ctx, user: &str) -> Result<DevicesOfResponse, ErrorC
     // Прежний ник ведёт на новый адрес (spec 026): доставка — в журналы нового
     let canonical = rename::canonical_address(&ctx.v2, user).await;
     let user = canonical.as_str();
+    // Удаляемый аккаунт (spec 027): устройств нет — доставка не принимается
+    if delete::pending_until(&ctx.v2, user).await.is_some() {
+        return Ok(DevicesOfResponse { address: canonical.clone(), ..Default::default() });
+    }
     let log = load_log(ctx, user).await?;
     Ok(DevicesOfResponse {
         address: canonical.clone(),

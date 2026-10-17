@@ -97,6 +97,7 @@ async fn serve_rename(nc: Client, d: Arc<Domains>) {
     while let Some(msg) = sub.next().await {
         let Some(reply) = msg.reply.clone() else { continue };
         let ok = match decode_checked::<RenameNotice>(&msg.payload, Origin::Server) {
+            Ok(n) if n.purge => d.purge(&n.old_address).await.is_ok(),
             Ok(n) => d.rename(&n.old_address, &n.new_address).await.is_ok(),
             Err(_) => false,
         };
@@ -228,6 +229,28 @@ impl Domains {
         if let Ok(mut g) = self.owners.lock() {
             g.clear();
         }
+        Ok(())
+    }
+
+    /// Удаление аккаунта (spec 027): его контейнеры целиком (журналы, гранты, снимки) и его строки в индексе
+    /// грантов чужих контейнеров.
+    pub async fn purge(&self, address: &str) -> Result<(), ErrorCode> {
+        let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
+        for t in ["container_log", "container_grant_log", "container_grants", "container_snapshots"] {
+            sqlx::query(&format!("DELETE FROM {t} WHERE container IN (SELECT id FROM containers WHERE owner = ?)"))
+                .bind(address)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_err)?;
+        }
+        sqlx::query("DELETE FROM containers WHERE owner = ?").bind(address).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("DELETE FROM container_grants WHERE kind = 0 AND grantee = ?").bind(address).execute(&mut *tx).await.map_err(db_err)?;
+        sqlx::query("DELETE FROM renamed WHERE new_address = ?").bind(address).execute(&mut *tx).await.map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        if let Ok(mut g) = self.owners.lock() {
+            g.clear();
+        }
+        info!("domains: аккаунт стёрт");
         Ok(())
     }
 

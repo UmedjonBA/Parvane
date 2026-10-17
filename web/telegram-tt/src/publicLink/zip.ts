@@ -46,6 +46,21 @@ export function canZip(entries: { name: string; size: number }[]) {
   return total <= MAX_OFFSET;
 }
 
+// Знаки, которых не бывает в именах файлов Windows/macOS, и управляющие
+// eslint-disable-next-line no-control-regex
+const BAD_FILE_CHARS = /[\\/:*?"<>|\u0000-\u001f\u007f]+/g;
+const ARCHIVE_NAME_MAX = 120;
+const ARCHIVE_FALLBACK = 'parvane';
+
+/** Имя архива «Скачать всё» по названию ссылки: без знаков, запрещённых в именах файлов, не длиннее
+ * `ARCHIVE_NAME_MAX` знаков до `.zip`; пустое — `parvane.zip`, уже оканчивающееся на `.zip` — без второго. */
+export function archiveFileName(title: string) {
+  let base = title.replace(BAD_FILE_CHARS, ' ').replace(/\s+/g, ' ').trim();
+  if (/\.zip$/i.test(base)) base = base.slice(0, -4);
+  base = Array.from(base).slice(0, ARCHIVE_NAME_MAX).join('').replace(/^[\s.]+|[\s.]+$/g, '');
+  return `${base || ARCHIVE_FALLBACK}.zip`;
+}
+
 function dosDateTime(at: Date) {
   const time = (at.getHours() << 11) | (at.getMinutes() << 5) | Math.floor(at.getSeconds() / 2);
   const date = (Math.max(0, at.getFullYear() - 1980) << 9) | ((at.getMonth() + 1) << 5) | at.getDate();

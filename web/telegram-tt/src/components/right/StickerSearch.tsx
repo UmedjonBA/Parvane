@@ -80,7 +80,7 @@ const StickerSearch = ({
 
     if (resultIds) {
       if (!resultIds.length) {
-        return <p className="helper-text" dir="auto">Nothing found.</p>;
+        return <p className="helper-text" dir="auto" data-sticker-search-empty>{lang('NoResult')}</p>;
       }
 
       return resultIds.map((id) => (

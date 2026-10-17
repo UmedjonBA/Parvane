@@ -38,7 +38,7 @@ const SettingsSignOut = () => {
   });
 
   return (
-    <div className={styles.card}>
+    <div className={styles.card} data-settings-sign-out>
       <ListItem className={styles.screenRow} onClick={open}>
         <span className={styles.dangerTile}><ParvaneIcon name="logout" isSmall /></span>
         <span className={styles.rowText}>

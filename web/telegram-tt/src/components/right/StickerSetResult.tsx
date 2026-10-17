@@ -10,6 +10,7 @@ import type { ObserveFn } from '../../hooks/useIntersectionObserver';
 import { STICKER_SIZE_SEARCH } from '../../config';
 import { selectIsCurrentUserPremium, selectShouldLoopStickers, selectStickerSet } from '../../global/selectors';
 
+import useLang from '../../hooks/useLang';
 import useOldLang from '../../hooks/useOldLang';
 
 import StickerButton from '../common/StickerButton';
@@ -40,6 +41,7 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
   const sharedCanvasRef = useRef<HTMLCanvasElement>();
 
   const lang = useOldLang();
+  const newLang = useLang();
   const isAdded = set && !set.isArchived && Boolean(set.installedDate);
   const areStickersLoaded = Boolean(set?.stickers);
 
@@ -82,11 +84,19 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
   const canRenderStickers = displayedStickers.length > 0;
 
   return (
-    <div key={set.id} className="sticker-set" dir={lang.isRtl ? 'rtl' : undefined}>
+    <div
+      key={set.id}
+      className="sticker-set"
+      dir={lang.isRtl ? 'rtl' : undefined}
+      data-sticker-set-id={set.id}
+      data-sticker-set-title={set.title}
+    >
       <div className="sticker-set-header">
         <div className="title-wrapper">
           <h3 className="title" dir="auto">{set.title}</h3>
-          <p className="count" dir="auto">{lang('Stickers', set.count, 'i')}</p>
+          <p className="count" dir="auto">
+            {newLang('StickerPackStickerCount', { count: set.count }, { pluralValue: set.count })}
+          </p>
         </div>
         <Button
           className={isAdded ? 'is-added' : undefined}
@@ -96,7 +106,7 @@ const StickerSetResult: FC<OwnProps & StateProps> = ({
           fluid
           onClick={handleAddClick}
         >
-          {lang(isAdded ? 'Stickers.Installed' : 'Stickers.Install')}
+          {newLang(isAdded ? 'StickersInstalled' : 'StickersInstall')}
         </Button>
       </div>
       <div className="sticker-set-main shared-canvas-container">

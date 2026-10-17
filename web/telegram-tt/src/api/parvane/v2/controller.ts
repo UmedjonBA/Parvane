@@ -108,6 +108,8 @@ type Deps = {
   /** Собеседник сменил ник (spec 026): журнал прежнего адреса закрыт, журнал нового — его продолжение.
    * Чат и всё о собеседнике переходят на новый адрес. */
   onPeerRenamed?: (oldAddress: string, newAddress: string) => void;
+  /** Аккаунт собеседника удалён либо ждёт удаления (spec 027): журнал пуст с признаком `deleted`. */
+  onPeerDeleted?: (user: string) => void;
   /** Отозвано устройство, державшее SSK (T128, D-12): до смены SSK корнем
    * (ключ восстановления) новые устройства в журнал не принимаются. */
   onSskRotationNeeded?: () => void;
@@ -246,6 +248,9 @@ type RevokeOutcome = {
 };
 export type SskRotationResult = 'ok' | 'bad_key' | 'no_backup' | 'failed';
 /** Смена ника (spec 026): `ok` несёт новый адрес и токен — провайдер переносит локальное и перезагружает. */
+export type DeleteAccountResult =
+  | { result: 'ok'; deletionAtMs: number }
+  | { result: 'bad_password' | 'failed' };
 export type RenameResult =
   | { result: 'ok'; address: string; token: string }
   | { result: 'bad_password' | 'bad_key' | 'no_backup' | 'taken' | 'invalid' | 'failed' };
@@ -700,7 +705,13 @@ export function createV2Controller(deps: Deps) {
           JSON.stringify({ user: { address: user }, after_version: after }),
         ));
         const before = String(client.logVersion(user));
-        let verdict = client.ingestLog(user, await syncFrom(before));
+        const first = await syncFrom(before);
+        // spec 027: аккаунт удалён — журнала нет, повторять нечего
+        if (isDeletedLog(first)) {
+          deps.onPeerDeleted?.(user);
+          return false;
+        }
+        let verdict = client.ingestLog(user, first);
         // Журнал на сервере начат заново (другой генезис) — перечитать целиком
         if (verdict === 'replaced') verdict = client.ingestLog(user, await syncFrom('0'));
         if (verdict === 'rootChanged') return acceptPeerRoot(user);
@@ -813,6 +824,9 @@ export function createV2Controller(deps: Deps) {
     await call('id', 'msg.inbox.subscribe', new Uint8Array());
     ready = true;
     readyClient = client;
+    const deferredChecks = [...pendingDeletedChecks];
+    pendingDeletedChecks.clear();
+    deferredChecks.forEach((user) => void checkPeerDeleted(user));
     void serial(refillTokens);
     tokenTimer = tokenTimer || setInterval(() => void serial(refillTokens), TOKEN_CHECK_MS);
     // Группы v2 из состояния движка — в UI до разбора инбокса
@@ -1257,10 +1271,76 @@ export function createV2Controller(deps: Deps) {
       'parvane.identity.v2.DeviceLogSyncAnonRequest',
       JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
     ));
+    if (isDeletedLog(resp)) {
+      deps.onPeerDeleted?.(user);
+      return;
+    }
     const verdict = client.ingestLog(user, resp);
     if (verdict === 'rootChanged') await acceptPeerRoot(user);
     if (verdict === 'moved' || verdict === 'renamed') await followPeerRename(user, verdict);
     rekeyAfterDeviceRemoval();
+  }
+
+  /** Признак `deleted` в ответе синка журнала устройств собеседника (spec 027). */
+  function isDeletedLog(resp: Uint8Array) {
+    const codec = pv;
+    if (!codec) return false;
+    try {
+      const r = JSON.parse(codec.decodeMethodResponse('identity.device.log_sync_anon', resp)) as {
+        deleted?: boolean;
+      };
+      return r.deleted === true;
+    } catch {
+      return false;
+    }
+  }
+
+  const pendingDeletedChecks = new Set<string>();
+
+  /** Профиль собеседника не нашёлся — не удалён ли аккаунт (spec 027). */
+  async function checkPeerDeleted(user: string) {
+    if (user === deps.getSelf()) return false;
+    // Профили читаются при старте раньше подъёма движка — проверка ждёт готовности
+    if (!pv || !client || !ready) {
+      pendingDeletedChecks.add(user);
+      return false;
+    }
+    const resp = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncAnonRequest',
+      JSON.stringify({ user: { address: user }, after_version: String(client.logVersion(user)) }),
+    )).catch((e) => {
+      deps.log(`v2: проверка удалённого аккаунта не удалась: ${String(e)}`);
+      return undefined;
+    });
+    if (!resp || !isDeletedLog(resp)) return false;
+    deps.onPeerDeleted?.(user);
+    return true;
+  }
+
+  /** Удаление аккаунта (spec 027): свежий пароль, затем запрос; через 7 дней сервер стирает всё. Сессии
+   * аккаунта сервер закрывает сам через пару секунд после ответа. */
+  async function deleteAccount(password: string): Promise<DeleteAccountResult> {
+    if (!pv || !client || !ready) return { result: 'failed' };
+    try {
+      await call('id', 'identity.session.reauth', pv.encodeMessage(
+        'parvane.identity.v2.SessionReauthRequest', JSON.stringify({ password }),
+      ));
+    } catch {
+      return { result: 'bad_password' };
+    }
+    try {
+      const resp = await call('id', 'identity.account.delete', pv.encodeMessage(
+        'parvane.identity.v2.AccountDeleteRequest', '{}',
+      ));
+      const r = JSON.parse(pv.decodeMethodResponse('identity.account.delete', resp)) as {
+        deletion_at_ms?: string | number;
+      };
+      deps.log('v2: аккаунт поставлен на удаление');
+      return { result: 'ok', deletionAtMs: Number(r.deletion_at_ms || 0) };
+    } catch (e) {
+      deps.log(`v2: удаление аккаунта не принято: ${String(e)}`);
+      return { result: 'failed' };
+    }
   }
 
   async function checkPeerRenamedFrom(user: string) {
@@ -4217,6 +4297,8 @@ export function createV2Controller(deps: Deps) {
     sskState,
     rotateSsk,
     renameAccount,
+    deleteAccount,
+    checkPeerDeleted,
     recoverWithKey,
     joinWithRecoveryKey,
     refreshKeyBundle,

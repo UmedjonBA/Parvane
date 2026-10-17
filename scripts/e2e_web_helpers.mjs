@@ -139,9 +139,9 @@ export async function openPlannerScreen(page, screen = 'calendar') {
   return planner;
 }
 
-// Строка «Log Out» внизу экрана «Профиль» (меню «⋯» в шапке нет)
+// Строка «Log Out» внизу экрана «Профиль» (меню «⋯» в шапке нет); `[data-settings-sign-out]` — от языка не зависит
 export function logOutRow(page) {
-  return page.locator('#Settings .settings-main-scroll .ListItem-button').filter({ hasText: /^Log Out$/ }).first();
+  return page.locator('#Settings [data-settings-sign-out] .ListItem-button').first();
 }
 
 // Полный выход из аккаунта (не reload): «Профиль» → строка «Log Out» → подтверждение

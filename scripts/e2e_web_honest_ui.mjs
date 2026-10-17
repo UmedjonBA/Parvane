@@ -1,7 +1,8 @@
 // Обход нативного UI: пункты без поддержки в текущем контракте скрыты, а
 // экраны управления группой/каналом, профиля, меню сообщений и чатов, панели
 // GIF и приватности не вызывают нереализованных методов провайдера
-// (spec 002 US8, FR-080…FR-082, SC-012).
+// (spec 002 US8, FR-080…FR-082, SC-012). Поиск стикеров и GIF — локальный
+// (17 окт 2026): находит по слову и эмодзи, на бессмыслицу честно пуст.
 import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
@@ -16,6 +17,7 @@ import {
   readDiagJournal,
   sendText,
   openProfile,
+  closeRightColumn,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-honest-ui-e2e-password';
@@ -289,15 +291,47 @@ try {
   await right.locator('.Profile, .ProfileInfo').first().waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS })
     .catch(() => {});
 
-  // ── Панель GIF: без поиска ────────────────────────────────────────────────
-  await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first().click();
-  await page.locator('.SymbolMenu').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  for (const tab of ['GIFs', 'Stickers']) {
+  // ── Поиск стикеров и GIF: локальный (встроенные и установленные наборы,
+  // сохранённые и встроенные GIF), честное «ничего не найдено» ──────────────
+  const openSymbolSearch = async (tab) => {
+    await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first().click();
+    await page.locator('.SymbolMenu').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await page.locator('.SymbolMenu').getByRole('button', { name: tab, exact: true }).click();
-    await page.waitForTimeout(400);
-    assert.equal(await page.locator('.SymbolMenu .symbol-search-button').count(), 0, `${tab}: search must be hidden`);
+    const searchButton = page.locator('.SymbolMenu .symbol-search-button');
+    await searchButton.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await searchButton.click();
+  };
+  const fillRightSearch = async (placeholder, query) => {
+    const input = right.getByPlaceholder(placeholder);
+    await input.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await input.fill(query);
+  };
+
+  await openSymbolSearch('Stickers');
+  // Слово → эмодзи (😂 во встроенном наборе) и эмодзи напрямую
+  for (const query of ['laugh', '🚀']) {
+    await fillRightSearch('Search sticker sets', query);
+    const builtinSet = right.locator('.StickerSearch [data-sticker-set-id="parvane-builtin"]');
+    await builtinSet.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    assert(await builtinSet.locator('.StickerButton').count() > 0, `sticker search "${query}": no stickers shown`);
   }
-  await page.keyboard.press('Escape');
+  await fillRightSearch('Search sticker sets', `zzqx${suffix}`);
+  await right.locator('.StickerSearch [data-sticker-search-empty]')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await closeRightColumn(page);
+
+  await openSymbolSearch('GIFs');
+  // Пустой запрос — все GIF; «rocket» — встроенная GIF с 🚀; бессмыслица — пусто
+  await right.locator('.GifButton').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await fillRightSearch('Search GIFs', 'rocket');
+  await page.waitForFunction(
+    () => document.querySelectorAll('#RightColumn .GifButton').length === 1,
+    undefined,
+    { timeout: LOGIN_TIMEOUT_MS },
+  );
+  await fillRightSearch('Search GIFs', `zzqx${suffix}`);
+  await right.locator('[data-gif-search-empty]').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await closeRightColumn(page);
 
   // ── Приватность: только работающие пункты ────────────────────────────────
   // Шаг обязательный: не нашли меню или пункт — сценарий падает, а не пропускает
@@ -321,7 +355,7 @@ try {
     assert.deepEqual(session.errors, [], `${name} page errors: ${session.errors.join('; ')}`);
   });
   console.log('OK: нативный UI без мёртвых пунктов — управление группой и каналом, меню чата и сообщения, '
-    + 'панель GIF, приватность; обход не вызывает нереализованных методов');
+    + 'поиск стикеров и GIF, приватность; обход не вызывает нереализованных методов');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, session] of Object.entries(sessions)) {

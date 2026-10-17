@@ -12,14 +12,14 @@ use parvane_protocol::registry_gen::{INTERNAL_RENAME_CLOUD, INTERNAL_RENAME_DOMA
 /// Сколько прежний ник ведёт на новый (и занят).
 pub(crate) const ALIAS_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Шарды со строками по адресу: subject переноса.
-const FANOUT: &[(&str, &str)] = &[
+pub(crate) const FANOUT: &[(&str, &str)] = &[
     ("messenger", INTERNAL_RENAME_MESSENGER),
     ("domains", INTERNAL_RENAME_DOMAINS),
     ("cloud", INTERNAL_RENAME_CLOUD),
     ("push", INTERNAL_RENAME_PUSH),
 ];
 /// Таблицы v1-хранилища со столбцом `username`.
-const V1_TABLES: &[&str] = &[
+pub(crate) const V1_TABLES: &[&str] = &[
     "device_keys",
     "one_time_prekeys",
     "email_codes",
@@ -32,7 +32,7 @@ const V1_TABLES: &[&str] = &[
     "device_labels",
 ];
 /// Таблицы v2-хранилища со столбцом `user`, переходящие к новому адресу целиком.
-const V2_TABLES: &[&str] = &["one_time_keys", "fallback_keys", "delivery_keys", "privacy", "token_issuance", "device_key_claims"];
+pub(crate) const V2_TABLES: &[&str] = &["one_time_keys", "fallback_keys", "delivery_keys", "privacy", "token_issuance", "device_key_claims"];
 
 fn now_ms() -> i64 {
     now_unix() * 1000
@@ -294,24 +294,29 @@ pub(crate) async fn fanout_pending(nc: &Client, pool: &SqlitePool) {
             old_address: old.clone(),
             new_address: new.clone(),
             device_ids: ids.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+            // Удаление аккаунта (spec 027): нового адреса нет — шард стирает строки
+            purge: new.is_empty(),
         };
         let reply = tokio::time::timeout(std::time::Duration::from_secs(5), nc.request(subject.to_string(), notice.encode_to_vec().into())).await;
         let ok = matches!(&reply, Ok(Ok(m)) if decode_checked::<RenameAck>(&m.payload, Origin::Server).is_ok_and(|a| a.ok));
         if ok {
             let _ = sqlx::query("DELETE FROM rename_fanout WHERE old_address = ? AND shard = ?").bind(&old).bind(&shard).execute(pool).await;
-            info!("identity: перенос ника принят шардом {}", shard);
+            info!("identity: {} принят шардом {}", if new.is_empty() { "стирание аккаунта" } else { "перенос ника" }, shard);
         } else {
-            warn!("identity: шард {} не подтвердил перенос ника — повтор позже", shard);
+            warn!("identity: шард {} не подтвердил {} — повтор позже", shard, if new.is_empty() { "стирание аккаунта" } else { "перенос ника" });
         }
     }
 }
 
-/// Раз в минуту: повтор переносов; истёкшие переадресации — журнал прежнего адреса в архив, ник свободен.
-pub(crate) fn spawn_upkeep(nc: Client, pool: SqlitePool) {
+/// Раз в минуту: стирание аккаунтов, чей срок вышел (spec 027); повтор переносов и стираний в шардах; истёкшие
+/// переадресации — журнал прежнего адреса в архив, ник свободен.
+pub(crate) fn spawn_upkeep(nc: Client, pool: SqlitePool, v1: SqlitePool) {
     tokio::spawn(async move {
-        let mut t = tokio::time::interval(std::time::Duration::from_secs(60));
+        // `PARVANE_IDENTITY_UPKEEP_SECS` — только для живых тестов
+        let mut t = tokio::time::interval(std::time::Duration::from_secs(env_u64("PARVANE_IDENTITY_UPKEEP_SECS", 60).max(1)));
         loop {
             t.tick().await;
+            super::delete::purge_due(&pool, &v1).await;
             fanout_pending(&nc, &pool).await;
             expire_aliases(&pool).await;
         }

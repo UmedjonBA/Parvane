@@ -895,6 +895,28 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       }
     },
 
+    /** «Выгрузка данных»: содержимое файла в память без событий хода (полоса загрузок «Файлов» молчит);
+     * отмена — `parvaneCloudCancelDownload` с тем же `transferId`. */
+    async parvaneCloudExportBlob({ container, node, transferId }: {
+      container: string; node: string; transferId: string;
+    }): Promise<Blob | undefined> {
+      const found = findNode(container, node);
+      if (!found?.blob) return undefined;
+      const abort = new AbortController();
+      downloads.set(transferId, abort);
+      try {
+        const memory = createBlobSink(found.mime || 'application/octet-stream');
+        await downloadCloudBlob(deps.transport(), found.blob, memory.sink, { signal: abort.signal });
+        return memory.getBlob();
+      } catch (e) {
+        if (e instanceof CloudAbortError) throw e;
+        deps.log(`облако: файл для выгрузки не скачан: ${String(e)}`);
+        return undefined;
+      } finally {
+        downloads.delete(transferId);
+      }
+    },
+
     parvaneCloudCancelDownload({ transferId }: { transferId: string }) {
       downloads.get(transferId)?.abort();
       return Promise.resolve(true);

@@ -267,6 +267,18 @@ service IdentityService {
       shard: "identity"
     };
   }
+  // Удаление аккаунта (spec 027): аккаунт сразу выходит со всех устройств и скрыт от других; через 7 дней всё
+  // стирается и ник свободен. До этого вход паролем с `cancel_deletion` отменяет удаление.
+  rpc AccountDelete(AccountDeleteRequest) returns (AccountDeleteResponse) {
+    option (parvane.core.v2.method) = {
+      name: "identity.account.delete"
+      channel: METHOD_CHANNEL_ID
+      reauth: true
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "identity"
+    };
+  }
   // Смена ника (spec 026): запись `Rename` в журнал прежнего адреса и журнал нового адреса (генезис с тем же
   // корнем и сертификат устройства) — одним запросом; прежний ник 30 дней ведёт на новый.
   rpc AccountRename(AccountRenameRequest) returns (AccountRenameResponse) {
@@ -450,6 +462,9 @@ message SessionIssueRequest {
   // себе не даёт войти «как» чужое привязанное устройство (окно ±5 минут).
   bytes device_proof = 7 [(parvane.core.v2.max_len) = 64];
   int64 proof_ts_ms = 8;
+  // Аккаунт ждёт удаления (spec 027): вход с этим флагом отменяет удаление; без него ответ несёт только
+  // `deletion_at_ms` (сохранённый пароль другого устройства не отменяет удаление сам).
+  bool cancel_deletion = 9;
 }
 message SessionIssueResponse {
   string token = 1 [(parvane.core.v2.max_len) = 4096];
@@ -465,6 +480,8 @@ message SessionIssueResponse {
   // Адрес аккаунта, на который выписан токен (spec 026): после смены ника вход прежним ником 30 дней ведёт на
   // новый адрес — клиент переносит своё локальное под него.
   string address = 7 [(parvane.core.v2.max_len) = 128];
+  // Аккаунт ждёт удаления (spec 027): когда всё будет стёрто; токена нет — повторить с `cancel_deletion`.
+  int64 deletion_at_ms = 8;
 }
 
 message AccountRegisterRequest {
@@ -604,6 +621,8 @@ message DeviceLogSyncResponse {
   // знающий другой генезис, видит, что журнал начат заново (смена корня,
   // KEY-1 v2), и перечитывает его с версии 0.
   bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
+  // Аккаунт удалён либо ждёт удаления (spec 027): журнала нет, собеседник показывает «Удалённый аккаунт».
+  bool deleted = 4;
 }
 message DeviceLogSyncAnonRequest {
   parvane.core.v2.UserRef user = 1;
@@ -616,6 +635,8 @@ message DeviceLogSyncAnonResponse {
   bool more = 2;
   // Как в DeviceLogSyncResponse.
   bytes genesis_hash = 3 [(parvane.core.v2.max_len) = 32];
+  // Аккаунт удалён либо ждёт удаления (spec 027): журнала нет, собеседник показывает «Удалённый аккаунт».
+  bool deleted = 4;
 }
 
 message DeviceLogAppendRequest {
@@ -772,6 +793,12 @@ message AccountChangePasswordRequest {
   string new_password = 2 [(parvane.core.v2.max_len) = 1024];
 }
 message AccountChangePasswordResponse {}
+
+message AccountDeleteRequest {}
+message AccountDeleteResponse {
+  // Когда аккаунт будет стёрт окончательно.
+  int64 deletion_at_ms = 1;
+}
 
 message AccountRenameRequest {
   string new_login = 1 [(parvane.core.v2.max_len) = 64];

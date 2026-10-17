@@ -20,6 +20,8 @@ import {
 
 type SyncDependencies = {
   getConnection: () => GatewayConnection | undefined;
+  // Профиля адреса нет — проверить, не удалён ли аккаунт (spec 027)
+  checkPeerDeleted?: (address: string) => void;
   getStore: () => ParvaneStore;
   getToken: () => string;
   groups: {
@@ -204,7 +206,15 @@ export function createSyncController(deps: SyncDependencies) {
     try {
       const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
       const store = deps.getStore();
+      const found = new Set(users.map((u) => u.username));
+      const missing = addresses.filter((address) => !found.has(address) && address !== store.self);
+      if (missing.length) deps.log(`профили не найдены: ${missing.length} — проверка удалённых аккаунтов`);
+      missing.forEach((address) => deps.checkPeerDeleted?.(address));
       users.forEach((userInfo) => {
+        if (store.clearUserDeleted(userInfo.username)) {
+          const restored = store.buildApiUser(userInfo.username);
+          deps.sendUpdate({ '@type': 'updateUser', id: restored.id, user: restored });
+        }
         const previousName = store.getDisplayName(userInfo.username);
         store.setDisplayName(userInfo.username, userInfo.display_name || userInfo.username);
         // Имя сменилось (или только что узнали): список чатов и шапки берут

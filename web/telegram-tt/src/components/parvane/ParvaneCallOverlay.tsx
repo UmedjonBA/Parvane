@@ -224,6 +224,7 @@ const ParvaneCallOverlay = () => {
                   />
                   {name}
                   {peerState === 'busy' && ` — ${lang('ParvaneGroupPeerBusy')}`}
+                  {peerState === 'declined' && ` — ${lang('ParvaneGroupPeerDeclined')}`}
                 </div>
               );
             })}

@@ -228,6 +228,7 @@ export class V2Bridge {
           client_kind: str(p, 'client'),
           device_proof: proof?.proof,
           proof_ts_ms: proof ? String(proof.tsMs) : undefined,
+          cancel_deletion: flag(p, 'cancel_deletion') || undefined,
         });
         if (flag(r, 'twofaRequired', 'twofa_required')) {
           return {
@@ -238,6 +239,9 @@ export class V2Bridge {
           };
         }
         if (flag(r, 'confirmRequired', 'confirm_required')) return fail('почта не подтверждена');
+        // spec 027: аккаунт ждёт удаления — пароль верен, токена нет без явной отмены удаления
+        const deletionAt = int(r, 'deletionAtMs', 'deletion_at_ms');
+        if (deletionAt && !str(r, 'token')) return { ok: false, deletion_at_ms: deletionAt };
         const out: V2Json = { ok: true, token: str(r, 'token') };
         // spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый)
         const address = str(r, 'address');

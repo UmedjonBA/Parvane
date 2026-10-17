@@ -439,9 +439,12 @@ export function createCallController(deps: CallDependencies) {
     }
   }
 
-  function sendGroupSignal(peer: string, signal: WireCallSignal | WireGroupInvite) {
+  function sendGroupSignal(peer: string, signal: WireCallSignal | WireGroupInvite, explicitGroupCallId?: string) {
+    // Попарный звонок, на чей оффер отвечаем, знает свой групповой звонок точнее текущего: отказ «занят»
+    // на оффер чужого звонка уходит с id того звонка
     const groupCallId = signal.type === 'group_invite' ? undefined : (
-      groupEngine?.currentGroupCallId || pendingGroupInvite?.groupCallId || meshGroupByCall.get(signal.call_id)
+      explicitGroupCallId || meshGroupByCall.get(signal.call_id)
+      || groupEngine?.currentGroupCallId || pendingGroupInvite?.groupCallId
     );
     const queue = (groupSignalQueues.get(peer) || Promise.resolve()).then(async () => {
       try {
@@ -630,14 +633,15 @@ export function createCallController(deps: CallDependencies) {
     pending.buffered.forEach(({ from, signal }) => {
       if (signal.type === 'invite') groupEngine!.rejectInvite(from, signal.call_id, 'declined');
     });
-    // Оффер в mesh шлёт лексикографически меньший адрес, поэтому участникам с
-    // бóльшим адресом парного invite от них нет и буфер по ним пуст. Доставить
-    // им отказ нечем: call-шард форвардит reject только по известному call_id,
-    // а запись звонка создаёт лишь подписанный invite (group_invite записи не
-    // заводит) — reject с локально выделенным id шард отбрасывает
-    // («неизвестный call_id»). Их строка о нас закрывается по таймауту
-    // соединения MeshPeerSession (contracts/calls-consent-and-test-hooks.md);
-    // мгновенный отказ здесь требует правки шарда
+    // Оффер в mesh шлёт лексикографически меньший адрес, поэтому от участников
+    // с бóльшим адресом парного invite нет и попарно отказать им нечем. Отказ
+    // уровня звонка (call_id = id группового звонка) уходит каждому участнику,
+    // в том числе инициатору с бóльшим адресом и тем, кто ещё не ответил: их
+    // строка о нас закрывается сразу, а не по таймауту соединения. С v2 (T110)
+    // сигналы — запечатанные конверты, шард call пересылает их не глядя на
+    // записи звонка, поэтому прежнее ограничение v1 («reject только по записи
+    // invite») здесь не действует
+    groupEngine.declineCall(pending.groupCallId, pending.participants, 'declined');
     silenceGroupCall(pending.groupCallId, 'declined');
     clearPendingGroupInvite();
     notifyOwnDevices(pending.groupCallId, 'declined');
@@ -727,6 +731,12 @@ export function createCallController(deps: CallDependencies) {
       // Уже в звонке или уже ждём решения по другому приглашению — «занят»
       if (engine?.currentCallId || groupEngine.currentGroupCallId || pendingGroupInvite) {
         if (pendingGroupInvite?.groupCallId !== signal.group_call_id) {
+          // «Занят» — всем участникам сразу (один раз на звонок): иначе тот, кто ждёт нашего оффера,
+          // держал бы строку «соединение» до таймаута. Звонок, замолчавший здесь (принят или отклонён
+          // другим своим устройством), не отвечаем вовсе
+          if (!isGroupCallSilenced(signal.group_call_id)) {
+            groupEngine.declineCall(signal.group_call_id, signal.participants, 'busy');
+          }
           silenceGroupCall(signal.group_call_id, 'busy');
         }
         return;

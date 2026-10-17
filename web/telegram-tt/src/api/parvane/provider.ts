@@ -2,6 +2,7 @@
 // (initApi/callApi + поток ApiUpdate), но вместо MTProto — шина Parvane через
 // gateway (WebSocket, JSON-кадры). Работает в главном потоке, без воркера.
 
+import type { ExportSnapshot, ExportSourceChat } from '../../components/parvane/export/exportModel';
 import type { PlannerReminder } from '../../components/parvane/planner/plannerReminders';
 import type { SendMessageParams, ThreadReadState } from '../../types';
 import type { MethodArgs, MethodResponse, Methods } from '../gramjs/methods/types';
@@ -26,7 +27,7 @@ import type { ServerInfo } from './connectionController';
 import type { GatewayConnection } from './gateway';
 import type { PackFile, StoredPack } from './stickerPacks';
 import type { WireStoredMessage, WireUserInfo } from './wire';
-import { MAIN_THREAD_ID } from '../types';
+import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
 import {
   ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
@@ -55,10 +56,12 @@ import {
 } from './authStorage';
 import { createCallController } from './calls';
 import { createCloudDrive } from './cloudDrive';
-import { canonicalAddress, createConnectionController, TwoFactorRequiredError } from './connectionController';
+import {
+  AccountDeletionPendingError, canonicalAddress, createConnectionController, TwoFactorRequiredError,
+} from './connectionController';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
-import { buildBuiltinGifs } from './gifs';
+import { buildBuiltinGifs, BUILTIN_GIF_TAGS } from './gifs';
 import { createGroupController } from './groups';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
@@ -116,7 +119,13 @@ import {
   isBuiltinStickerId,
   renderBuiltinStickerBlob,
 } from './stickers';
-import { buildReactorsList, ParvaneStore, setTaskOfferResolver } from './store';
+import {
+  buildReactorsList, compareStoredOrder, ParvaneStore, setTaskOfferResolver,
+} from './store';
+import {
+  type GifSearchSource, hasEmojiNameData, searchGifSources, searchStickerSets, setEmojiNameData,
+  type StickerSearchSource, wordsOfFileName,
+} from './symbolSearch';
 import { createSyncController } from './sync';
 import { TaskOfferStore } from './taskOffers';
 import { createTranslation } from './translation';
@@ -126,6 +135,7 @@ import {
   TOPIC_DEVICE_LIST,
   TOPIC_DEVICE_REVOKE,
   TOPIC_IDENTITY_PASSWORD_CHANGE,
+  TOPIC_IDENTITY_RESOLVE,
   TOPIC_IDENTITY_SEARCH,
   TOPIC_IDENTITY_SETAVATAR,
   TOPIC_IDENTITY_SETNAME,
@@ -510,8 +520,19 @@ const messageIndex = createMessageIndex({
   loadOne: (uuid) => localState.loadHistoryRecord(uuid),
 });
 
+/** Аккаунт собеседника удалён (spec 027): «Удалённый аккаунт» в списке, шапке и профиле */
+function markPeerDeleted(address: string) {
+  if (!store.markUserDeleted(address)) return;
+  logDebug('аккаунт собеседника удалён');
+  const user = store.buildApiUser(address);
+  sendUpdate({ '@type': 'updateUser', id: user.id, user });
+}
+
 const syncController = createSyncController({
   getConnection: () => connection,
+  checkPeerDeleted: (address) => {
+    void v2Controller.checkPeerDeleted(address);
+  },
   getStore: () => store,
   getToken: () => token,
   groups: groupController,
@@ -637,6 +658,7 @@ const v2Controller = createV2Controller({
     localState.saveRename(oldAddress, newAddress);
     syncController.announceRename(oldAddress, newAddress);
   },
+  onPeerDeleted: (user) => markPeerDeleted(user),
   onSskRotationNeeded: () => {
     window.dispatchEvent(new CustomEvent('parvane-ssk-rotation'));
   },
@@ -796,6 +818,10 @@ export async function initApi(_onUpdate: OnApiUpdate, _initialArgs: ApiInitialAr
       startTelegramConfirmation(creds.user, creds.password, err.loginToken, 'login');
       return;
     }
+    if (err instanceof AccountDeletionPendingError) {
+      reportDeletionPending(creds.user, creds.password, err.deletionAtMs);
+      return;
+    }
     // eslint-disable-next-line no-console
     console.error('[parvane] логин не удался:', err);
     pendingLoginAddress = creds.user;
@@ -885,6 +911,21 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
     sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
   }
   return true;
+}
+
+// spec 027: пауза после удаления аккаунта, чтобы человек прочитал дату, — затем экран входа
+const ACCOUNT_DELETE_RELOAD_MS = 4000;
+
+/** spec 027: аккаунт ждёт удаления — экран пароля с датой и кнопкой «Восстановить аккаунт» */
+function reportDeletionPending(user: string, password: string, deletionAtMs: number) {
+  pendingLoginAddress = user;
+  pendingLoginPassword = password;
+  const date = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'long', year: 'numeric' })
+    .format(new Date(deletionAtMs));
+  sendUpdate({ '@type': 'updateAuthorizationState', authorizationState: 'authorizationStateWaitPassword' });
+  sendUpdate({
+    '@type': 'updateAuthorizationError', errorKey: { key: 'ParvaneAccountDeletionPending', variables: { date } },
+  });
 }
 
 function logDebug(message: string) {
@@ -2367,9 +2408,15 @@ const methods = {
     return undefined;
   },
   // `@имя` публичной группы: чат участника либо превью с «Вступить»
+  // Иначе — пользователь с этим ником (упоминание `@ник` в тексте сообщения):
+  // известный адрес сразу, незнакомый — точным запросом identity
   async getChatByUsername(username: string) {
     const chat = await groupController.resolvePublicChat(username);
-    return chat ? { chat, user: undefined } : undefined;
+    if (chat) return { chat, user: undefined };
+    const address = await resolveUserAddressByNick(username);
+    if (!address) return undefined;
+    syncController.announcePeer(address);
+    return { chat: store.buildApiChatForUser(address), user: store.buildApiUser(address) };
   },
 
   // chatId пользователя по ТОЧНОМУ адресу (поиск identity — подстрочный, и
@@ -2494,6 +2541,86 @@ const methods = {
       return (await mediaService.downloadBlob(fileId))?.blob;
     } catch (err) {
       logDebug(`статья: файл ${fileId} не скачан: ${String(err)}`);
+      return undefined;
+    }
+  },
+
+  /** «Выгрузка данных»: снимок переписки для архива — расшифрованный кэш истории и журнал исходящих, разложенные
+   * по чатам (как при восстановлении истории), плюс контакты. Удалённое, очищенное «у себя» и непрочитанное
+   * шифрованное в снимок не входит; на сервер ничего не уходит. */
+  async parvaneExportSnapshot(): Promise<ExportSnapshot | undefined> {
+    if (!store.self) return undefined;
+    await localState.flushHistoryNow().catch(() => undefined);
+    const records = await localState.loadHistoryRecords();
+    const known = new Set(records.map((record) => record.id));
+    const journal = (await localState.readOwnJournal()).filter((message) => !known.has(message.id));
+    const clearedUntil = localState.loadClearedUntil();
+    const blocked = new Set(localState.loadBlocked());
+    const self = store.self;
+    const selfName = store.getDisplayName(self);
+    const chats = new Map<string, ExportSourceChat>();
+    const seen = new Set<string>();
+    records.concat(journal).sort(compareStoredOrder).forEach((stored) => {
+      if (stored.deleted || seen.has(stored.id)) return;
+      seen.add(stored.id);
+      const address = store.resolveChatAddress(stored);
+      const until = clearedUntil[address];
+      if (until && stored.ts * MS_IN_SECOND <= until) return;
+      const isGroup = store.isGroupAddress(address);
+      if (!isGroup && stored.from && !store.isSelfAddress(stored.from) && blocked.has(stored.from)) return;
+      let chat = chats.get(address);
+      if (!chat) {
+        const info = isGroup ? store.getGroupInfo(address) : undefined;
+        chat = {
+          address,
+          kind: address === self ? 'saved' : info ? (info.kind === 'channel' ? 'channel' : 'group') : 'user',
+          title: info?.name || store.getDisplayName(address),
+          messages: [],
+        };
+        chats.set(address, chat);
+      }
+      const isOutgoing = store.isSelfAddress(stored.from);
+      chat.messages.push({
+        uuid: stored.id,
+        from: isOutgoing ? self : stored.from,
+        fromName: isOutgoing ? selfName : store.getDisplayName(stored.from),
+        isOutgoing,
+        ts: stored.ts,
+        replyTo: stored.reply_to,
+        edited: stored.edited,
+        editedAt: stored.edited ? stored.updated_at : undefined,
+        pinned: stored.pinned,
+        content: stored.content,
+        reactions: stored.reactions?.map(({ emoji, count }) => ({ emoji, count })),
+      });
+    });
+    const { added } = store.getContactLists();
+    const contactSet = new Set(added);
+    chats.forEach((chat) => {
+      if (chat.kind === 'user' && store.isContact(chat.address)) contactSet.add(chat.address);
+    });
+    contactSet.delete(self);
+    const contacts = Array.from(contactSet).sort().map((address) => ({
+      address, name: store.getDisplayName(address), isExplicit: added.includes(address),
+    }));
+    // Чаты — по последнему сообщению, свежие сверху (как список чатов); «Избранное» первым
+    const ordered = Array.from(chats.values()).sort((a, b) => {
+      if (a.kind === 'saved' || b.kind === 'saved') return a.kind === 'saved' ? -1 : 1;
+      return (b.messages[b.messages.length - 1]?.ts || 0) - (a.messages[a.messages.length - 1]?.ts || 0);
+    });
+    return {
+      self, selfName, chats: ordered, contacts,
+    };
+  },
+
+  /** «Выгрузка данных»: расшифрованное вложение сообщения (из кэша сессии либо скачанное заново). */
+  async parvaneExportMedia({ fileId }: { fileId: string }) {
+    try {
+      const cached = await mediaService.getCached(fileId)?.catch(() => undefined);
+      if (cached?.blob) return cached.blob;
+      return (await mediaService.downloadBlob(fileId))?.blob;
+    } catch (err) {
+      logDebug(`выгрузка: вложение ${fileId} не скачано: ${String(err)}`);
       return undefined;
     }
   },
@@ -2810,6 +2937,26 @@ const methods = {
     if (out.token) await persistSessionCredential(out.address, '');
     window.setTimeout(() => window.location.reload(), 400);
     return { result: 'ok', address: out.address };
+  },
+
+  // spec 027: удалить аккаунт (7 дней отсрочки). После ответа UI выходит; сессии закрывает сервер
+  async parvaneDeleteAccount({ password }: { password: string }) {
+    const out = await v2Controller.deleteAccount(password);
+    if (out.result === 'ok') {
+      // Ключи и история устройства остаются: вход паролем до срока восстанавливает аккаунт на этом же устройстве
+      const self = store.self;
+      window.setTimeout(() => {
+        void clearSecureSession(self).catch(() => undefined).then(() => window.location.reload());
+      }, ACCOUNT_DELETE_RELOAD_MS);
+    }
+    return out;
+  },
+
+  // spec 027: экран пароля сообщил, что аккаунт ждёт удаления, — войти, отменив удаление
+  async parvaneRestoreAccount() {
+    if (!pendingLoginPassword) return;
+    connectionController.cancelDeletionOnNextLogin();
+    await methods.provideAuthPassword(pendingLoginPassword);
   },
 
   // Проверка ника до смены: формат и занятость (поиск в каталоге не выдаёт занятые прежние ники — их держит сервер)
@@ -3135,6 +3282,48 @@ const methods = {
     return found;
   },
 
+  // ── локальный поиск стикеров и GIF (каталога на сервере нет) ────────────────
+
+  // Наборы по эмодзи (и слову → эмодзи, EN+RU), названию и имени файла стикера:
+  // встроенный набор и установленные паки стикеров
+  async searchStickers({ query }: { query: string }) {
+    await ensureEmojiNameData();
+    const sources: StickerSearchSource[] = [{ set: getBuiltinStickerSet() }];
+    (await loadInstalledPacks(store.self)).filter((pack) => !pack.isEmoji).forEach((pack) => {
+      const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
+      registerPackBlobs(built.blobs);
+      const files = pack.files.filter((file) => getPackFileMime(file.name));
+      const fileWords = new Map<string, string[]>();
+      (built.set.stickers || []).forEach((sticker, index) => {
+        // `NN-1f602.webp`: хвост с кодом эмодзи — не слово
+        const name = files[index]?.name.replace(/\.[^.]+$/, '').replace(/-[0-9a-f]{4,6}$/i, '');
+        if (name) fileWords.set(sticker.id, wordsOfFileName(name));
+      });
+      sources.push({ set: built.set, fileWords });
+    });
+    const sets = searchStickerSets(query, sources);
+    return { hash: `local:${query}`, sets };
+  },
+
+  // Сохранённые и встроенные GIF по эмодзи, словам и имени файла; пустой запрос —
+  // все. Ответ один, без страниц: повторный запрос с `GIF_SEARCH_END` пуст и
+  // ничего не меняет (иначе подгрузка ленты крутилась бы по кругу)
+  async searchGifs({ query, offset }: { query: string; offset?: string }) {
+    if (offset === GIF_SEARCH_END) return undefined;
+    await ensureEmojiNameData();
+    const { gifs: builtin, blobs } = await buildBuiltinGifs();
+    blobs.forEach((blob, id) => {
+      mediaService.cacheBlobIfAbsent(id, blob, 'video/webm');
+    });
+    await messageController.ensureSavedGifsHydrated();
+    // Как в `fetchSavedGifs`: сначала сохранённые, затем встроенные (без повторов)
+    const saved = messageController.getSavedGifs();
+    const savedIds = new Set(saved.map((gif) => gif.id));
+    const sources: GifSearchSource[] = [...saved, ...builtin.filter((gif) => !savedIds.has(gif.id))]
+      .map((gif) => ({ gif, ...BUILTIN_GIF_TAGS[gif.id] }));
+    return { gifs: searchGifSources(query, sources), nextOffset: GIF_SEARCH_END };
+  },
+
   async fetchSavedGifs() {
     const { gifs, blobs } = await buildBuiltinGifs();
     blobs.forEach((blob, id) => {
@@ -3422,6 +3611,10 @@ const methods = {
         const info = connectionController.getLastServerInfo();
         const address = canonicalAddress(user, info?.domain || '');
         startTelegramConfirmation(address, password, err.loginToken, 'login');
+        return;
+      }
+      if (err instanceof AccountDeletionPendingError) {
+        reportDeletionPending(user, password, err.deletionAtMs);
         return;
       }
       const message = String(err);
@@ -3810,6 +4003,43 @@ function selfId() {
   return store.getIdForAddress(store.self);
 }
 
+/** Адрес пользователя по нику из `@ник` либо `@ник@сервер`; не найден — `undefined`. */
+async function resolveUserAddressByNick(username: string) {
+  const self = store.self;
+  const raw = username.trim().replace(/^@/, '').toLowerCase();
+  if (!self || !raw) return undefined;
+  const address = raw.includes('@') ? raw : `${raw}@${self.split('@')[1] || ''}`;
+  if (!/^[a-z0-9][a-z0-9_.-]{1,63}@[^@\s]+$/.test(address)) return undefined;
+  const canonical = store.canonicalAddress(address);
+  if (canonical === self || store.getKnownUserAddresses().includes(canonical)) return canonical;
+  if (!connection) return undefined;
+  try {
+    const response = await connection.request(TOPIC_IDENTITY_RESOLVE, JSON.stringify({ usernames: [address] }));
+    const found = ((JSON.parse(response) as { users?: WireUserInfo[] }).users || [])
+      .find((user) => user.username === address);
+    if (!found) return undefined;
+    store.setDisplayName(found.username, found.display_name || found.username);
+    return found.username;
+  } catch {
+    return undefined;
+  }
+}
+
+const GIF_SEARCH_END = 'end';
+
+// Английские имена эмодзи для поиска «слово → эмодзи»: тот же файл, что у
+// панели эмодзи, грузится один раз и только при первом поиске
+let emojiNameDataPromise: Promise<void> | undefined;
+function ensureEmojiNameData() {
+  if (hasEmojiNameData()) return Promise.resolve();
+  emojiNameDataPromise ||= import('emoji-data-ios/emoji-data.json')
+    .then((module) => setEmojiNameData((module as { default: unknown[] }).default))
+    .catch(() => {
+      emojiNameDataPromise = undefined;
+    });
+  return emojiNameDataPromise;
+}
+
 function searchLocalMessages(query: string | undefined, chatId?: string): ApiMessage[] {
   const needle = query?.trim().toLowerCase();
   if (!needle) return [];
@@ -3826,7 +4056,9 @@ function filterMediaMessages(chatId: string, type: string): ApiMessage[] {
     switch (type) {
       case 'media': return Boolean(c.photo || (c.video && !c.video.isRound && !c.video.isGif));
       case 'documents': return Boolean(c.document);
-      case 'links': return Boolean(c.text?.text && /https?:\/\//.test(c.text.text));
+      case 'links': return Boolean(c.text?.text && (/https?:\/\//.test(c.text.text) || c.text.entities?.some(
+        (e) => e.type === ApiMessageEntityTypes.Url || e.type === ApiMessageEntityTypes.TextUrl,
+      )));
       case 'voice': return Boolean(c.voice || (c.video && c.video.isRound));
       case 'audio': return Boolean(c.audio);
       case 'gif': return Boolean(c.video?.isGif);

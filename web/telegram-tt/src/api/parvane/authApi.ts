@@ -41,3 +41,8 @@ export function registerParvane(payload: ParvaneRegisterPayload) {
 export function checkParvaneTelegramConfirmation() {
   return anyCallApi('parvaneCheckTelegramConfirmation') as Promise<boolean>;
 }
+
+// spec 027: аккаунт ждёт удаления — войти, отменив удаление
+export function restoreParvaneAccount() {
+  return anyCallApi('parvaneRestoreAccount') as Promise<void>;
+}

@@ -82,6 +82,14 @@ export class TwoFactorRequiredError extends Error {
   }
 }
 
+/** Аккаунт ждёт удаления (spec 027): пароль верен, вход — только с отменой удаления. */
+export class AccountDeletionPendingError extends Error {
+  constructor(public deletionAtMs: number) {
+    super('аккаунт ждёт удаления');
+    this.name = 'AccountDeletionPendingError';
+  }
+}
+
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 // Домен адресов, если сервер не сообщил свой: хост страницы; локальная
@@ -192,6 +200,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // pending-аккаунт и вела на экран подтверждения чужого ника
   // Адрес аккаунта из последнего ответа выдачи токена (spec 026: прежний ник ведёт на новый)
   let lastIssuedAddress: string | undefined;
+  // spec 027: следующий вход паролем отменяет удаление аккаунта
+  let shouldCancelDeletion = false;
 
   async function issueToken(
     activeConnection: GatewayConnection, user: string, password: string, implicitRegister: boolean, loginToken = '',
@@ -215,6 +225,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
           client: deps.describeDevice?.(),
           login_token: loginToken || undefined,
           trust_secret: (await readTrustSecretAsync(user)) || undefined,
+          cancel_deletion: shouldCancelDeletion || undefined,
         }),
       );
       const parsed = JSON.parse(raw) as {
@@ -226,6 +237,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
         telegram_bot?: string;
         trust_secret?: string;
         address?: string;
+        deletion_at_ms?: number;
       };
       if (parsed.trust_secret) await writeTrustSecretAsync(user, parsed.trust_secret);
       lastIssuedAddress = parsed.address;
@@ -233,6 +245,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
     };
 
     let response = await issue();
+    shouldCancelDeletion = false;
+    if (response.deletion_at_ms) throw new AccountDeletionPendingError(response.deletion_at_ms);
     if (response.twofa_required && response.login_token) {
       throw new TwoFactorRequiredError(response.login_token, response.telegram_bot || '');
     }
@@ -566,6 +580,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
 
   return {
     connectAndLogin,
+    cancelDeletionOnNextLogin: () => {
+      shouldCancelDeletion = true;
+    },
     writeTrustSecret: writeTrustSecretAsync,
     registerAccount,
     confirmEmail,

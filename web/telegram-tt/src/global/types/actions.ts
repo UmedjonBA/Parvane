@@ -161,6 +161,8 @@ export interface ActionPayloads {
   // Parvane: явная регистрация (ник + почта + пароль)
   parvaneStartRegistration: undefined;
   parvaneRegister: { nick: string; email: string; password: string };
+  // spec 027: вход с отменой удаления аккаунта
+  parvaneRestoreAccount: undefined;
 
   // stickers & GIFs
   setStickerSearchQuery: { query?: string } & WithTabId;

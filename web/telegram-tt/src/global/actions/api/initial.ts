@@ -36,7 +36,7 @@ import { forceWebsync } from '../../../util/websync';
 import {
   callApi, callApiLocal, initApi, setShouldEnableDebugLog,
 } from '../../../api/gramjs';
-import { registerParvane, startParvaneRegistration } from '../../../api/parvane/authApi';
+import { registerParvane, restoreParvaneAccount, startParvaneRegistration } from '../../../api/parvane/authApi';
 import {
   removeGlobalFromCache, removeSharedStateFromCache, serializeGlobal, serializeShared,
 } from '../../cache';
@@ -183,6 +183,15 @@ addActionHandler('parvaneStartRegistration', (global): ActionReturnType => {
   void startParvaneRegistration();
 
   return updateAuth(global, {
+    errorKey: undefined,
+  });
+});
+
+addActionHandler('parvaneRestoreAccount', (global): ActionReturnType => {
+  void restoreParvaneAccount();
+
+  return updateAuth(global, {
+    isLoading: true,
     errorKey: undefined,
   });
 });

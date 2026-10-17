@@ -122,6 +122,13 @@ async fn serve_rename(nc: Client, ctx: Arc<V2Ctx>) {
     while let Some(msg) = sub.next().await {
         let Some(reply) = msg.reply.clone() else { continue };
         let ok = match parvane_protocol::codec::decode_checked::<RenameNotice>(&msg.payload, parvane_protocol::limits::Origin::Server) {
+            Ok(n) if n.purge => match purge(&ctx, &n.old_address).await {
+                Ok(()) => true,
+                Err(e) => {
+                    error!("cloud: стирание аккаунта: {}", e);
+                    false
+                }
+            },
             Ok(n) => match rename(&ctx, &n.old_address, &n.new_address).await {
                 Ok(()) => true,
                 Err(e) => {
@@ -144,6 +151,34 @@ async fn rename(ctx: &V2Ctx, old: &str, new: &str) -> Result<(), sqlx::Error> {
     tx.commit().await?;
     sqlx::query("UPDATE links SET owner = ? WHERE owner = ?").bind(new).bind(old).execute(&ctx.pool_v2).await?;
     info!("cloud: ник перенесён");
+    Ok(())
+}
+
+/// Удаление аккаунта (spec 027): его блобы (медиа чатов, облако, копии ссылок) с чанками, незавершённые загрузки,
+/// ссылки и его гранты на чужие файлы. Место возвращается диску ежечасным `incremental_vacuum`.
+async fn purge(ctx: &V2Ctx, address: &str) -> Result<(), sqlx::Error> {
+    let files: Vec<(String,)> = sqlx::query_as("SELECT id FROM files WHERE owner = ? UNION SELECT file_id FROM uploads WHERE owner = ?")
+        .bind(address)
+        .bind(address)
+        .fetch_all(&ctx.pool)
+        .await?;
+    let mut tx = ctx.pool.begin().await?;
+    for (id,) in &files {
+        sqlx::query("DELETE FROM chunks WHERE file_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM file_grants WHERE file_id = ?").bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM uploads WHERE owner = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM files WHERE owner = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM file_grants WHERE principal = ?").bind(address).execute(&mut *tx).await?;
+    tx.commit().await?;
+    let mut tx = ctx.pool_v2.begin().await?;
+    for (id,) in &files {
+        sqlx::query("DELETE FROM blob_caps WHERE file_id = ?").bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM link_blobs WHERE link_key IN (SELECT key FROM links WHERE owner = ?)").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM links WHERE owner = ?").bind(address).execute(&mut *tx).await?;
+    tx.commit().await?;
+    info!("cloud: аккаунт стёрт ({} файлов)", files.len());
     Ok(())
 }
 

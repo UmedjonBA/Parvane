@@ -9,6 +9,7 @@ import type {
   WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireStoredMessage,
 } from './wire';
 
+import { withAutoEntities } from './autoEntities';
 import { wireEntitiesToApi } from './entities';
 import { thumbnailFromWire } from './mediaThumb';
 import { buildParvaneSticker, registerReceivedEmojiPackRef, registerReceivedPackRef } from './stickerPacks';
@@ -114,6 +115,25 @@ export class ParvaneStore {
   // Адрес чата с учётом перевода группы из v1 в v2 (T180)
   canonicalAddress(address: string) {
     return this.migratedTo.get(address) ?? address;
+  }
+
+  // Аккаунты собеседников, удалённые либо ждущие удаления (spec 027): «Удалённый аккаунт»
+  private deletedUsers = new Set<string>();
+
+  markUserDeleted(address: string): boolean {
+    const canonical = this.canonicalAddress(address);
+    if (this.deletedUsers.has(canonical)) return false;
+    this.deletedUsers.add(canonical);
+    return true;
+  }
+
+  // Аккаунт восстановлен владельцем до срока (профиль снова находится)
+  clearUserDeleted(address: string): boolean {
+    return this.deletedUsers.delete(this.canonicalAddress(address));
+  }
+
+  isUserDeleted(address: string) {
+    return this.deletedUsers.has(this.canonicalAddress(address));
   }
 
   // Смена ника (spec 026): прежний адрес пользователя ведёт на новый, чат остаётся прежним (id — от самого
@@ -442,7 +462,7 @@ export class ParvaneStore {
       // Premium-гейт tt (вставка кастом-эмодзи и т.п.) в Parvane снят: свой
       // юзер всегда premium; чужим не ставим, чтобы не рисовать бейджи
       isPremium: isSelf ? true : undefined,
-      type: 'userTypeRegular',
+      type: this.deletedUsers.has(address) ? 'userTypeDeleted' : 'userTypeRegular',
       firstName: this.getDisplayName(address),
       // Username = local-part адреса: включает @-автокомплит и упоминания
       usernames: [{ username: address.split('@')[0], isActive: true, isEditable: false }],
@@ -686,14 +706,24 @@ function buildMessageContent(stored: WireStoredMessage): ApiMessage['content'] {
     // обеих заглушек — отдельной задачей
     return { text: { text: '🔒 Не удалось расшифровать сообщение' } };
   }
-  const caption = content.caption ? { text: { text: content.caption } } : {};
+  // Подпись: entities едут в проводе только после правки (`editMessage`); ссылки,
+  // @ники и #хештеги размечаются на клиенте, как в тексте
+  const caption = content.caption ? {
+    text: {
+      text: content.caption,
+      entities: withAutoEntities(content.caption, wireEntitiesToApi(content.entities, content.caption.length)),
+    },
+  } : {};
   switch (content.kind) {
     case 'text':
       // Эмодзи-паки, приложенные к тексту: регистрируем ref — fetchCustomEmoji
       // подтянет архив из cloud и отдаст документы по docId из entities
       content.emoji_packs?.forEach((ref) => registerReceivedEmojiPackRef(ref, stored.from));
       return {
-        text: { text: content.text || '', entities: wireEntitiesToApi(content.entities, (content.text || '').length) },
+        text: {
+          text: content.text || '',
+          entities: withAutoEntities(content.text, wireEntitiesToApi(content.entities, (content.text || '').length)),
+        },
         webPage: content.webpage ? { id: `wp${stored.id}` } : undefined,
       };
     case 'photo':

@@ -3089,6 +3089,48 @@ export interface LangPair {
   'ParvaneRenameErrorTaken': undefined;
   'ParvaneRenameErrorInvalid': undefined;
   'ParvaneRenameErrorFailed': undefined;
+  'ParvaneDeleteAccountTitle': undefined;
+  'ParvaneDeleteAccountHint': undefined;
+  'ParvaneDeleteAccountPointData': undefined;
+  'ParvaneDeleteAccountPointNick': undefined;
+  'ParvaneDeleteAccountPointRestore': undefined;
+  'ParvaneDeleteAccountPointExport': undefined;
+  'ParvaneDeleteAccountSubmit': undefined;
+  'ParvaneDeleteAccountErrorPassword': undefined;
+  'ParvaneDeleteAccountErrorFailed': undefined;
+  'ParvaneRestoreAccount': undefined;
+  'ParvaneGroupPeerDeclined': undefined;
+  'ParvaneExportData': undefined;
+  'ParvaneExportTitle': undefined;
+  'ParvaneExportHint': undefined;
+  'ParvaneExportMedia': undefined;
+  'ParvaneExportCloud': undefined;
+  'ParvaneExportCloudHint': undefined;
+  'ParvaneExportStart': undefined;
+  'ParvaneExportStagePrepare': undefined;
+  'ParvaneExportStagePlanner': undefined;
+  'ParvaneExportStageContacts': undefined;
+  'ParvaneExportStageFinishing': undefined;
+  'ParvaneExportErrorCanceled': undefined;
+  'ParvaneExportErrorTooLarge': undefined;
+  'ParvaneExportErrorFailed': undefined;
+  'ParvaneExportHtmlTitle': undefined;
+  'ParvaneExportHtmlChats': undefined;
+  'ParvaneExportHtmlPlanner': undefined;
+  'ParvaneExportHtmlNotes': undefined;
+  'ParvaneExportHtmlContacts': undefined;
+  'ParvaneExportHtmlCloud': undefined;
+  'ParvaneExportHtmlReplyTo': undefined;
+  'ParvaneExportHtmlForwardedFrom': undefined;
+  'ParvaneExportHtmlEdited': undefined;
+  'ParvaneExportHtmlMediaNotIncluded': undefined;
+  'ParvaneExportHtmlMediaUnavailable': undefined;
+  'ParvaneExportHtmlPoll': undefined;
+  'ParvaneExportHtmlLocation': undefined;
+  'ParvaneExportHtmlMessages': undefined;
+  'ParvaneExportHtmlExportedAt': undefined;
+  'ParvaneExportHtmlPrivacyOn': undefined;
+  'ParvaneExportHtmlPrivacyOff': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {
@@ -5481,6 +5523,34 @@ export interface LangPairWithVariables<V = LangVariable> {
   'ParvaneUserRenamed': {
     'user': V;
     'nick': V;
+  };
+  'ParvaneDeleteAccountDone': {
+    'date': V;
+  };
+  'ParvaneAccountDeletionPending': {
+    'date': V;
+  };
+  'ParvaneExportStageChats': {
+    'done': V;
+    'total': V;
+  };
+  'ParvaneExportStageNotes': {
+    'done': V;
+    'total': V;
+  };
+  'ParvaneExportStageCloud': {
+    'done': V;
+    'total': V;
+  };
+  'ParvaneExportWritten': {
+    'size': V;
+  };
+  'ParvaneExportDone': {
+    'name': V;
+    'size': V;
+  };
+  'ParvaneExportDoneMissing': {
+    'count': V;
   };
 }
 

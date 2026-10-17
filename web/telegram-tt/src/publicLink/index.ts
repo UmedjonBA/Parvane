@@ -13,7 +13,7 @@ import { createLinkClient } from './client';
 import {
   filesText, fill, pickLang, sizeText, stringsFor,
 } from './strings';
-import { canZip, createZipWriter } from './zip';
+import { archiveFileName, canZip, createZipWriter } from './zip';
 
 import './style.css';
 
@@ -400,7 +400,7 @@ function renderDownloadAll(linkId: string, manifest: LinkManifest, files: LinkMa
     progressText.textContent = fill(strings.downloadingAll, { percent });
   };
   const dirs = manifest.items.filter(isLinkDir).map(({ path }) => path);
-  const archiveName = `${manifest.name}.zip`;
+  const archiveName = archiveFileName(manifest.name);
 
   cancelButton.addEventListener('click', () => abort?.abort());
   button.addEventListener('click', async () => {

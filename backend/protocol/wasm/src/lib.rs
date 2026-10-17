@@ -270,7 +270,7 @@ impl PvClient {
     #[wasm_bindgen(js_name = linkGrantMaterial)]
     pub fn link_grant_material(&self) -> Result<Vec<u8>, JsValue> {
         let (ssk, entries, dk, gen) = self.inner.link_grant_material().map_err(err_proto)?;
-        let resp = ipb::DeviceLogSyncResponse { entries, more: false, genesis_hash: vec![] };
+        let resp = ipb::DeviceLogSyncResponse { entries, more: false, genesis_hash: vec![], deleted: false };
         let mut m = json!({"ssk": hex::encode(ssk), "log": hex::encode(resp.encode_to_vec()), "dk": hex::encode(dk), "gen": gen});
         // Ключ личного состояния — тем же грантом (формат общий с C ABI, host.rs)
         if let Some((k, v)) = self.inner.state_key() {
@@ -1729,6 +1729,7 @@ pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {
         "parvane.identity.v2.AccountSet2faRequest" => ipb::AccountSet2faRequest,
         "parvane.identity.v2.AccountChangePasswordRequest" => ipb::AccountChangePasswordRequest,
         "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
+        "parvane.identity.v2.AccountDeleteRequest" => ipb::AccountDeleteRequest,
         "parvane.identity.v2.ProfileResolveRequest" => ipb::ProfileResolveRequest,
         "parvane.identity.v2.ProfileSetNameRequest" => ipb::ProfileSetNameRequest,
         "parvane.identity.v2.ProfileSetAvatarRequest" => ipb::ProfileSetAvatarRequest,
@@ -1781,7 +1782,9 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
     dec! {
         "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
         "parvane.identity.v2.AccountRenameResponse" => ipb::AccountRenameResponse,
+        "parvane.identity.v2.AccountDeleteResponse" => ipb::AccountDeleteResponse,
         "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
+        "parvane.identity.v2.AccountDeleteRequest" => ipb::AccountDeleteRequest,
         "parvane.identity.v2.AccountRegisterResponse" => ipb::AccountRegisterResponse,
         "parvane.identity.v2.AccountRegisterStatusResponse" => ipb::AccountRegisterStatusResponse,
         "parvane.identity.v2.ServerDescribeResponse" => ipb::ServerDescribeResponse,

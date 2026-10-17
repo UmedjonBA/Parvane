@@ -19,6 +19,8 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Island, { IslandTitle } from '../../gili/layout/Island';
+import AccountDeleteModal from '../../parvane/account/AccountDeleteModal';
+import DataExportModal from '../../parvane/export/DataExportModal';
 import Button from '../../ui/Button';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
@@ -119,6 +121,10 @@ const SettingsPrivacy = ({
 
   const oldLang = useOldLang();
   const lang = useLang();
+  // spec 027: удаление аккаунта
+  const [isAccountDeleteOpen, setIsAccountDeleteOpen] = useState(false);
+  const openAccountDelete = useLastCallback(() => setIsAccountDeleteOpen(true));
+  const closeAccountDelete = useLastCallback(() => setIsAccountDeleteOpen(false));
 
   useHistoryBack({
     isActive,
@@ -323,6 +329,10 @@ const SettingsPrivacy = ({
     }, true);
   });
 
+  const [isExportOpen, setIsExportOpen] = useState(false);
+  const openExport = useLastCallback(() => setIsExportOpen(true));
+  const closeExport = useLastCallback(() => setIsExportOpen(false));
+
   const handleChatInTitleChange = useLastCallback((isChecked: boolean) => {
     setSharedSettingOption({
       canDisplayChatInTitle: isChecked,
@@ -346,7 +356,14 @@ const SettingsPrivacy = ({
         <ListItem icon="download" narrow onClick={handleImportE2eKeys}>
           {oldLang('ParvaneImportKeys')}
         </ListItem>
+        {/* Parvane: выгрузка данных — архив собирается на устройстве */}
+        <div data-export-open>
+          <ListItem icon="download" narrow onClick={openExport}>
+            {lang('ParvaneExportData')}
+          </ListItem>
+        </div>
       </Island>
+      <DataExportModal isOpen={isExportOpen} onClose={closeExport} />
 
       {/* Parvane: скрыты серверные MTProto-разделы — Passcode/2FA/Passkeys/
           Web Sessions, privacy-видимость (номер/last seen/фото/bio/…),
@@ -532,6 +549,15 @@ const SettingsPrivacy = ({
           onCheck={handleChatInTitleChange}
         />
       </Island>
+
+      <Island>
+        <div data-delete-account-open>
+          <ListItem icon="delete" destructive narrow onClick={openAccountDelete}>
+            {lang('ParvaneDeleteAccountTitle')}
+          </ListItem>
+        </div>
+      </Island>
+      <AccountDeleteModal isOpen={isAccountDeleteOpen} onClose={closeAccountDelete} />
 
     </div>
   );

@@ -13,6 +13,7 @@ import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
+import { withAutoEntities } from './autoEntities';
 import { E2E_SEND_ERROR, E2eSendError } from './e2eSendPolicy';
 import { apiEntitiesToWire } from './entities';
 import {
@@ -315,6 +316,7 @@ export function createMessageController(deps: MessageDependencies) {
             height: gif.height,
             duration: gif.duration,
             size: gif.size,
+            fileName: gif.fileName,
             keyB64: keys?.keyB64,
             nonceB64: keys?.nonceB64,
           };
@@ -799,7 +801,8 @@ export function createMessageController(deps: MessageDependencies) {
             ...mediaCrypto,
           };
           sentContent = {
-            ...(params.text && !isRound ? { text: { text: params.text } } : {}),
+            ...(params.text && !isRound
+              ? { text: { text: params.text, entities: withAutoEntities(params.text) } } : {}),
             video: {
               mediaType: 'video',
               id: fileId,
@@ -829,7 +832,7 @@ export function createMessageController(deps: MessageDependencies) {
             ...mediaCrypto,
           };
           sentContent = {
-            ...(params.text ? { text: { text: params.text } } : {}),
+            ...(params.text ? { text: { text: params.text, entities: withAutoEntities(params.text) } } : {}),
             audio: {
               mediaType: 'audio',
               id: fileId,
@@ -855,7 +858,7 @@ export function createMessageController(deps: MessageDependencies) {
             ...mediaCrypto,
           };
           sentContent = {
-            ...(params.text ? { text: { text: params.text } } : {}),
+            ...(params.text ? { text: { text: params.text, entities: withAutoEntities(params.text) } } : {}),
             photo: {
               mediaType: 'photo',
               id: fileId,
@@ -879,7 +882,7 @@ export function createMessageController(deps: MessageDependencies) {
             ...mediaCrypto,
           };
           sentContent = {
-            ...(params.text ? { text: { text: params.text } } : {}),
+            ...(params.text ? { text: { text: params.text, entities: withAutoEntities(params.text) } } : {}),
             document: {
               mediaType: 'document',
               id: fileId,
@@ -1120,7 +1123,7 @@ export function createMessageController(deps: MessageDependencies) {
         };
       await publishEditedContent(uuid, toAddress, plainContent);
       // Сохраняем медиа/вложение оригинала, обновляя только текст и entities
-      const nextText = text ? { text, entities } : undefined;
+      const nextText = text ? { text, entities: withAutoEntities(text, entities) } : undefined;
       const edited: ApiMessage = {
         ...message,
         content: { ...message.content, text: nextText },
@@ -1313,11 +1316,6 @@ export function createMessageController(deps: MessageDependencies) {
       return Promise.resolve(true);
     },
 
-    // Внешних GIF-провайдеров нет (privacy by design) — честный пустой поиск
-    searchGifs() {
-      return Promise.resolve({ gifs: [] });
-    },
-
     // Список голосовавших за вариант (панель результатов публичного опроса).
     // Агрегат весь на клиенте — пагинация не нужна
     loadPollOptionResults({ chat, messageId, option }: {
@@ -1440,6 +1438,12 @@ export function createMessageController(deps: MessageDependencies) {
             wireContent.file_nonce = reshared.nonceB64;
             wireContent.capability = reshared.capability;
             content = replaceMediaId(content, reshared.oldId, reshared.fileId);
+          } else {
+            // Перевыгрузить не удалось (блоб сейчас не скачать): без секрета
+            // скачивания (CAP-1) у нового получателя файл не открылся бы
+            // никогда — отдаём исходный секрет, если он у нас есть
+            const capability = deps.media.getCapability(wireContent.file_id);
+            if (capability) wireContent.capability = capability;
           }
         }
         // Паки эмодзи/стикера перекладываются под нового получателя: архив в

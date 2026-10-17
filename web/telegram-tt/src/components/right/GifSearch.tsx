@@ -131,7 +131,7 @@ const GifSearch = ({
 
     if (!results.length) {
       return (
-        <p className={styles.helperText} dir="auto">{lang('NoGIFsFound')}</p>
+        <p className={styles.helperText} dir="auto" data-gif-search-empty>{lang('NoGIFsFound')}</p>
       );
     }
 

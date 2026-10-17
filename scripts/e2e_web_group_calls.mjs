@@ -142,6 +142,7 @@ try {
   const carol = `gc-carol-${suffix}@local`;
   const bobName = bob.split('@')[0];
   const carolName = carol.split('@')[0];
+  const aliceName = alice.split('@')[0];
   const groupTitle = `GC-${suffix.slice(-6)}`;
 
   const dave = `gc-dave-${suffix}@local`;
@@ -297,6 +298,15 @@ try {
   );
   const declineMs = Date.now() - declinedAt;
   assert(declineMs < 6000, `declined peer row cleared in ${declineMs} ms — looks like the ring timeout, not a reject`);
+  // Строка Кэрол — именно «отклонил», а не просто закрытая
+  await aliceSession.page.waitForFunction(
+    (name) => Array.from(document.querySelectorAll('[data-peer-state="declined"]'))
+      .some((row) => row.textContent.includes(name)),
+    carolName,
+    { timeout: 2000 },
+  ).catch(() => {
+    assert.fail('строка Кэрол у Алисы не пришла в состояние «отклонил»');
+  });
   console.log(`group call decline cleared the row in ${declineMs} ms`);
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
@@ -304,14 +314,14 @@ try {
 
   // ── Отклонение при ОБРАТНОМ порядке адресов ────────────────────────────────
   // Оффер в mesh шлёт лексикографически меньший адрес, поэтому приглашённому,
-  // который сортируется РАНЬШЕ инициатора, парный invite не приходит и буфер у
-  // него пуст. Доставить отказ нечем: call-шард форвардит reject только по
-  // записи invite (group_invite записи не заводит), reject с локально
-  // выделенным call_id он отбрасывает («неизвестный call_id», проверено по логу
-  // шарда 17 сен). Честное поведение: строка у инициатора закрывается по
-  // таймауту соединения MeshPeerSession (ringTimeoutMs, 10 с в тесте, 45 с в
-  // проде), звонок с остальными живёт, микрофон отказавшего не открывается.
-  // Мгновенный отказ здесь требует правки шарда (FR-001)
+  // который сортируется РАНЬШЕ инициатора (Алиса < Кэрол), парный invite не
+  // приходит и попарно отказать нечем. Отказ уровня звонка (reject с call_id =
+  // id группового звонка, запечатанным конвертом v2 каждому участнику)
+  // закрывает её строку у инициатора сразу — «отклонил», а не по таймауту
+  // соединения (ringTimeoutMs, 10 с в тесте, 45 с в проде); у Боба, который
+  // принял вызов позже, строка Алисы тоже «отклонил». Микрофон отказавшей не
+  // открывается, звонок Кэрол с Бобом живёт
+  assert(alice < carol, 'шаг рассчитан на адрес Алисы меньше адреса Кэрол');
   await openGroupChat(carolSession.page, groupTitle);
   await carolSession.page.getByRole('button', { name: 'Call', exact: true }).click();
   await aliceSession.page.getByText(`${groupTitle}: group call`, { exact: true })
@@ -321,17 +331,27 @@ try {
   await aliceSession.page.getByRole('button', { name: 'End Call' }).click();
   await aliceSession.page.getByText(`${groupTitle}: group call`, { exact: true })
     .waitFor({ state: 'hidden', timeout: LOGIN_TIMEOUT_MS });
-  await acceptGroupCall(bobSession.page, 'bob (alice declined, reversed order)');
-  await waitActivePeers(carolSession.page, 1, 'carol with bob only');
   await carolSession.page.waitForFunction(
-    () => document.querySelectorAll('[data-peer-state="connecting"]').length === 0,
-    undefined,
-    { timeout: 15000 },
+    (name) => Array.from(document.querySelectorAll('[data-peer-state="declined"]'))
+      .some((row) => row.textContent.includes(name)),
+    aliceName,
+    { timeout: 5000 },
   ).catch(() => {
-    assert.fail('строка Алисы у Кэрол не закрылась и по таймауту соединения');
+    assert.fail('строка Алисы у Кэрол не закрылась отказом за 5 с (обратный порядок адресов)');
   });
   const reverseDeclineMs = Date.now() - reverseDeclinedAt;
-  assert(reverseDeclineMs <= 15000, `reversed-order row cleared in ${reverseDeclineMs} ms`);
+  assert(reverseDeclineMs < 5000, `reversed-order row closed in ${reverseDeclineMs} ms — looks like the ring timeout`);
+  await acceptGroupCall(bobSession.page, 'bob (alice declined, reversed order)');
+  await waitActivePeers(carolSession.page, 1, 'carol with bob only');
+  // У Боба строка Алисы — тоже «отклонил» (отказ пришёл ему до согласия и применился при входе)
+  await bobSession.page.waitForFunction(
+    (name) => Array.from(document.querySelectorAll('[data-peer-state="declined"]'))
+      .some((row) => row.textContent.includes(name)),
+    aliceName,
+    { timeout: 5000 },
+  ).catch(() => {
+    assert.fail('строка Алисы у Боба не в состоянии «отклонил»');
+  });
   assert.equal(
     await aliceSession.page.evaluate(() => globalThis.__parvaneGumCalls),
     aliceGumBeforeReverse,
@@ -339,7 +359,7 @@ try {
   );
   // Звонок Кэрол с Бобом пережил закрытие строки
   await waitActivePeers(carolSession.page, 1, 'carol with bob after alice row closed');
-  console.log(`reversed-order group call decline: caller row closed in ${reverseDeclineMs} ms (by connect timeout)`);
+  console.log(`reversed-order group call decline: caller row closed in ${reverseDeclineMs} ms (call-level reject)`);
   await carolSession.page.getByRole('button', { name: 'End Call' }).click();
   await bobSession.page.getByText('Group Call', { exact: true })
     .waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
