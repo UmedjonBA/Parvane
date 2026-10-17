@@ -116,9 +116,37 @@ async fn internal(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
     let mut tc = nc.subscribe(INTERNAL_TOKEN_CHECK.to_string()).await?;
     let mut pv = nc.subscribe(INTERNAL_PRIVACY_OF.to_string()).await?;
     let mut nm = nc.subscribe(INTERNAL_NAME_CLAIM.to_string()).await?;
+    let mut s2s = nc.subscribe(parvane_protocol::registry_gen::INTERNAL_S2S_SIGN.to_string()).await?;
     tokio::spawn(async move {
         loop {
             tokio::select! {
+                Some(m) = s2s.next() => {
+                    let (ctx, nc) = (ctx.clone(), nc.clone());
+                    tokio::spawn(async move {
+                        let Some(reply) = m.reply.clone() else { return };
+                        // Подпись межсерверного кадра (spec 028): только от своего домена и только при
+                        // включённой федерации; байты подписи identity собирает сам — подписать этим путём
+                        // описатель или что-то иное нельзя. Отказ — пустая подпись.
+                        let signature = match decode_checked::<parvane_protocol::pb::parvane::core::v2::S2sSignRequest>(&m.payload, Origin::Server) {
+                            Ok(r) if crate::server_key::federation_enabled() && r.origin_domain.eq_ignore_ascii_case(&crate::server_domain()) => {
+                                match parvane_protocol::federation::frame_signing_bytes_digest(
+                                    &r.origin_domain,
+                                    &r.dest_domain,
+                                    r.issued_ms,
+                                    &r.nonce,
+                                    &r.payload_type,
+                                    &r.payload_sha256,
+                                ) {
+                                    Ok(bytes) => parvane_protocol::sign::sign_ctx(&ctx.server_key, &[], &[&bytes]),
+                                    Err(_) => vec![],
+                                }
+                            }
+                            _ => vec![],
+                        };
+                        let out = parvane_protocol::pb::parvane::core::v2::S2sSignResponse { signature };
+                        let _ = nc.publish(reply, out.encode_to_vec().into()).await;
+                    });
+                }
                 Some(m) = devs.next() => {
                     let (ctx, nc) = (ctx.clone(), nc.clone());
                     tokio::spawn(async move {
@@ -1020,6 +1048,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.tokens.issue_blinded" => {
             require_user(&req)?;
             let r: pb::TokensIssueBlindedRequest = body(&req)?;
+            // spec 028 (R8): пользователю другого сервера — ещё и общий потолок на его домен, иначе
+            // сервер выдумывал бы адреса и получал неограниченную квоту
+            if !req.origin_domain.is_empty() && !domain_token_quota(&req.origin_domain, r.blinded.len() as i64) {
+                return Err(ErrorCode::Limit);
+            }
             issue_tokens(ctx, &req.user, r).await
         }
         "identity.privacy.set" => {
@@ -1646,6 +1679,24 @@ impl V2Ctx {
         let keys = self.issuers.read().await.iter().map(|i| i.token_key()).collect();
         parvane_protocol::tokens::sign_key_list(&self.server_key, keys, now_unix() * 1000)
     }
+}
+
+/// Суточный потолок жетонов на домен-отправитель (`PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY`, 2000).
+/// В памяти: перезапуск сбрасывает счётчик, это защита от злоупотребления, а не учёт.
+fn domain_token_quota(domain: &str, n: i64) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static USED: OnceLock<Mutex<HashMap<(String, i64), i64>>> = OnceLock::new();
+    let cap = std::env::var("PARVANE_FEDERATION_TOKENS_PER_DOMAIN_DAY").ok().and_then(|v| v.parse().ok()).unwrap_or(2000i64);
+    let day = day_now();
+    let Ok(mut used) = USED.get_or_init(|| Mutex::new(HashMap::new())).lock() else { return false };
+    used.retain(|(_, d), _| *d == day);
+    let e = used.entry((domain.to_ascii_lowercase(), day)).or_insert(0);
+    if *e + n > cap {
+        return false;
+    }
+    *e += n;
+    true
 }
 
 async fn issue_tokens(ctx: &V2Ctx, user: &str, r: pb::TokensIssueBlindedRequest) -> Reply {

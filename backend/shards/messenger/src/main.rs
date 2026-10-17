@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 mod v2;
+mod v2_fed;
 mod v2_groups;
 mod v2_public;
 mod v2_rename;

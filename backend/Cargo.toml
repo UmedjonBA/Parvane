@@ -19,6 +19,7 @@ members = [
     "shards/push",
     "shards/gateway",
     "shards/domains",
+    "shards/federation",
     "tests/integration",
 ]
 

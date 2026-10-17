@@ -27,7 +27,8 @@ use parvane_protocol::pb::parvane::msg::v2::{
     EphemeralGroupTypingRequest, EphemeralPresenceRequest, EphemeralSubscribeRequest, EphemeralSubscribeResponse,
     EphemeralTypingRequest, GroupEpochInfo, GroupEpochQuery, InboxRecord, InboxSubscribeResponse,
 };
-use parvane_protocol::registry_gen::{eph_subject, inbox_subject, INTERNAL_GROUP_EPOCH, REVOKED_SUBJECT};
+use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut};
+use parvane_protocol::registry_gen::{eph_subject, inbox_subject, FEDERATION_OUT, INTERNAL_GROUP_EPOCH, REVOKED_SUBJECT};
 use parvane_protocol::schema::MethodInfo;
 use parvane_protocol::ProtoError;
 use prost::Message;
@@ -62,6 +63,18 @@ pub(crate) struct Shared {
     pub eph: ephemeral::EphState,
     /// Лимит ANON-запросов на IP-источник (ключ — хэш, только память; D-08).
     pub anon_ip: AnonIpLimits,
+    /// Свой домен (`PARVANE_DOMAIN`): запрос с другим `dest_domain` уходит через шард federation (spec 028).
+    pub domain: String,
+}
+
+/// Свой домен — как у шардов: обрезка `@`, нижний регистр, по умолчанию `local`.
+fn own_domain() -> String {
+    let d = std::env::var("PARVANE_DOMAIN").unwrap_or_default().trim().trim_start_matches('@').to_lowercase();
+    if d.is_empty() {
+        "local".into()
+    } else {
+        d
+    }
 }
 
 fn env_list(name: &str) -> Vec<String> {
@@ -81,6 +94,7 @@ impl Shared {
             operators: env_list("PARVANE_OPERATORS"),
             eph: ephemeral::EphState::default(),
             anon_ip: AnonIpLimits::from_env(),
+            domain: own_domain(),
         });
         let mut sub = nats.subscribe(REVOKED_SUBJECT.to_string()).await?;
         let shared = sh.clone();
@@ -253,6 +267,31 @@ impl Session {
             if let Err(wait) = self.ring.allow(Instant::now()) {
                 return respond(&self.tx, id, Err(err(ErrorCode::RateLimited, wait))).await;
             }
+        }
+        // Федерация (spec 028): объект на чужом сервере — через шард federation, клиент
+        // к чужому серверу не подключается. Только методы с `federated`; IP и JWT дальше не идут.
+        let dest = req.dest_domain.trim().to_ascii_lowercase();
+        if !dest.is_empty() && dest != self.sh.domain {
+            if !m.federated || m.shard == "gateway" || !parvane_protocol::address::is_valid_domain(&dest) {
+                return respond(&self.tx, id, Err(err(ErrorCode::Invalid, 0))).await;
+            }
+            let timeout = u64::from(if req.timeout_ms == 0 { 10_000 } else { req.timeout_ms }).clamp(100, 30_000);
+            let mut sr = self.shard_request(m, req.body);
+            sr.client_ip.clear();
+            sr.token.clear();
+            let out = FederationOut { dest_domain: dest, timeout_ms: timeout as u32, kind: Some(federation_out::Kind::Forward(sr)) }.encode_to_vec();
+            let (nats, tx) = (self.sh.nats.clone(), self.tx.clone());
+            // Запас на путь между серверами сверх таймаута самого метода.
+            let wait = timeout + 5_000;
+            if m.kind == 3 {
+                tokio::spawn(async move { stream(&nats, &tx, id, FEDERATION_OUT, out, wait).await });
+            } else {
+                tokio::spawn(async move {
+                    let r = shard_call(&nats, FEDERATION_OUT, out, wait).await;
+                    respond(&tx, id, r.map_err(|c| err(c, 0))).await;
+                });
+            }
+            return;
         }
         if m.shard == "gateway" {
             let r = self.local(m, &req.body).await;

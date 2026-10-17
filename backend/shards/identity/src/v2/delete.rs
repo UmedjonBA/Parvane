@@ -98,7 +98,7 @@ pub(crate) async fn cancel(pool: &SqlitePool, address: &str) -> Result<(), Error
 }
 
 /// Раз в минуту (из `rename::spawn_upkeep`): аккаунты, чей срок вышел, — стереть.
-pub(crate) async fn purge_due(pool: &SqlitePool, v1: &SqlitePool) {
+pub(crate) async fn purge_due(nc: &async_nats::Client, pool: &SqlitePool, v1: &SqlitePool) {
     let due: Vec<(String, String)> = match sqlx::query_as("SELECT address, device_ids FROM account_deletions WHERE purge_at_ms <= ? LIMIT 32")
         .bind(now_ms())
         .fetch_all(pool)
@@ -112,10 +112,30 @@ pub(crate) async fn purge_due(pool: &SqlitePool, v1: &SqlitePool) {
     };
     for (address, ids) in due {
         match purge(pool, v1, &address, &ids).await {
-            Ok(()) => info!("identity: аккаунт стёрт"),
+            Ok(()) => {
+                info!("identity: аккаунт стёрт");
+                announce_gone(nc, &address);
+            }
             Err(e) => error!("identity: стирание аккаунта: {} — повтор позже", e),
         }
     }
+}
+
+/// Федерация (spec 028): серверам, с которыми есть связь, — «адрес удалён» (рассылает шард federation по
+/// своей очереди; федерация выключена или шарда нет — ничего).
+fn announce_gone(nc: &async_nats::Client, address: &str) {
+    use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut, S2sAccountGone, UserRef};
+    use prost::Message as _;
+    let out = FederationOut {
+        dest_domain: String::new(),
+        timeout_ms: 0,
+        kind: Some(federation_out::Kind::AccountGone(S2sAccountGone { user: Some(UserRef { address: address.to_string() }) })),
+    };
+    let nc = nc.clone();
+    tokio::spawn(async move {
+        let fut = nc.request(parvane_protocol::registry_gen::FEDERATION_OUT.to_string(), out.encode_to_vec().into());
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), fut).await;
+    });
 }
 
 /// Стереть строки аккаунта в identity и поставить в очередь стирание в шардах. Повторяемо: v1 стирается первым,

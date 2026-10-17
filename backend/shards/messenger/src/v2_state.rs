@@ -162,6 +162,10 @@ pub(crate) fn v2_allows_group_add(p: &PrivacyOfResponse) -> Option<bool> {
 /// v2-рантайм не поднят (юнит-тесты); ошибка связи — Err (отказ, не «разрешено»).
 pub(crate) async fn privacy_group_add(user: &str) -> Result<Option<bool>> {
     let Some(ctx) = crate::v2::ctx() else { return Ok(None) };
+    // Участник с другого сервера — настройка у его сервера (spec 028; связи нет — отказ)
+    if let Some(domain) = crate::v2_fed::foreign_domain(user) {
+        return Ok(v2_allows_group_add(&crate::v2_fed::privacy_remote(&ctx, user, &domain).await?));
+    }
     let req = PrivacyOfRequest { user: user.to_string() }.encode_to_vec();
     let r = tokio::time::timeout(Duration::from_secs(3), ctx.nc.request(INTERNAL_PRIVACY_OF.to_string(), req.into()))
         .await

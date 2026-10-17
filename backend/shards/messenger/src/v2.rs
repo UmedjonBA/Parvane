@@ -84,6 +84,8 @@ pub(crate) async fn run(nc: Client, v2: SqlitePool) -> Result<()> {
     let concurrency = std::env::var("PARVANE_HANDLER_CONCURRENCY").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
     parvane_v2rt::serve(nc, "messenger", concurrency, handler).await?;
     tokio::spawn(crate::v2_groups::serve_group_epoch(ctx.clone()));
+    // Федерация (spec 028): записи групп и «аккаунт удалён» с других серверов
+    tokio::spawn(crate::v2_fed::serve(ctx.clone()));
     tokio::spawn(crate::v2_rename::serve(ctx.clone()));
     let c4 = ctx.clone();
     tokio::spawn(async move { crate::v2_groups::rebuild_link_index(&c4).await });

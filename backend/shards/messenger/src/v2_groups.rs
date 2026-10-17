@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub(crate) struct GroupCache {
     states: Mutex<HashMap<Vec<u8>, GroupState>>,
-    owners: Mutex<HashMap<[u8; 32], (Instant, SignerInfo, Vec<String>)>>,
+    pub(crate) owners: Mutex<HashMap<[u8; 32], (Instant, SignerInfo, Vec<String>)>>,
     last_epoch: Mutex<HashMap<Vec<u8>, Instant>>,
 }
 
@@ -51,8 +51,9 @@ fn now_ms() -> i64 {
     now_unix() * 1000
 }
 
-/// Владелец ключа подписи и его прежние адреса (смена ника, spec 026).
-async fn key_owner(ctx: &V2, key: &[u8; 32]) -> Result<Option<(SignerInfo, Vec<String>)>, ErrorCode> {
+/// Владелец ключа подписи и его прежние адреса (смена ника, spec 026). `claimed` — заявленный
+/// автор новой записи: если ключ не наш, спрашиваем сервер автора (spec 028, доверие — по домену).
+async fn key_owner(ctx: &V2, key: &[u8; 32], claimed: Option<&str>) -> Result<Option<(SignerInfo, Vec<String>)>, ErrorCode> {
     if let Ok(g) = ctx.groups.owners.lock() {
         if let Some((at, s, aliases)) = g.get(key) {
             if at.elapsed() < Duration::from_secs(60) {
@@ -65,9 +66,15 @@ async fn key_owner(ctx: &V2, key: &[u8; 32]) -> Result<Option<(SignerInfo, Vec<S
         .await
         .map_err(|_| ErrorCode::Unavailable)?
         .map_err(db_err)?;
-    let o = decode_checked::<KeyOwnerResponse>(&r.payload, Origin::Server).map_err(|_| ErrorCode::Unavailable)?;
+    let mut o = decode_checked::<KeyOwnerResponse>(&r.payload, Origin::Server).map_err(|_| ErrorCode::Unavailable)?;
     if !o.found {
-        return Ok(None);
+        match claimed.map(|c| crate::v2_fed::key_owner_remote(ctx, key, c)) {
+            Some(f) => match f.await? {
+                Some(remote) => o = remote,
+                None => return Ok(None),
+            },
+            None => return Ok(None),
+        }
     }
     let info = SignerInfo { user: o.user, root_key: o.root_key.as_slice().try_into().unwrap_or([0u8; 32]) };
     if let Ok(mut g) = ctx.groups.owners.lock() {
@@ -89,14 +96,20 @@ fn max_members() -> usize {
 
 /// Применить одну запись к состоянию. Подписант — проверенный при приёме
 /// (`stored`, C1-04) или, для новой записи, владелец ключа по identity.
-async fn apply_one(ctx: &V2, state: Option<&GroupState>, entry: &GroupStateEntry, stored: Option<SignerInfo>) -> Result<(GroupState, SignerInfo), ErrorCode> {
+async fn apply_one(
+    ctx: &V2,
+    state: Option<&GroupState>,
+    entry: &GroupStateEntry,
+    stored: Option<SignerInfo>,
+    claimed: Option<&str>,
+) -> Result<(GroupState, SignerInfo), ErrorCode> {
     let hint = signer_hint(entry)?;
     // Записи журнала, принятые раньше, проверены при приёме (C1-04): прежний адрес `RenameMember` не
     // перепроверяется (переадресация к тому времени могла истечь)
     let (info, aliases, is_stored) = match stored {
         Some(s) => (s, vec![], true),
         None => {
-            let (s, a) = key_owner(ctx, &hint).await?.ok_or(ErrorCode::Forbidden)?;
+            let (s, a) = key_owner(ctx, &hint, claimed).await?.ok_or(ErrorCode::Forbidden)?;
             (s, a, false)
         }
     };
@@ -139,7 +152,7 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
             _ => None,
         };
         let had = stored.is_some();
-        match apply_one(ctx, state.as_ref(), &entry, stored).await {
+        match apply_one(ctx, state.as_ref(), &entry, stored, None).await {
             Ok((s, signer)) => {
                 if !had {
                     heal.push((version, signer));
@@ -208,7 +221,7 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
             }
         }
     }
-    let (next, signer) = apply_one(ctx, prev.as_ref(), &entry, None).await?;
+    let (next, signer) = apply_one(ctx, prev.as_ref(), &entry, None, Some(actor)).await?;
     if signer.user != actor {
         return Err(ErrorCode::Forbidden);
     }
@@ -293,8 +306,13 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
         notify.extend(p.members.keys().cloned());
     }
     let notice = GroupStateNotice { group: Some(g.clone()), version: next.version };
+    // Участники с других серверов — через шард federation (spec 028)
+    let (local, remote) = crate::v2_fed::split(notify.iter());
+    if !remote.is_empty() {
+        crate::v2_fed::push_remote(ctx, &g, remote, inbox_record::Item::GroupState(notice.clone())).await;
+    }
     let mut done = BTreeSet::new();
-    for u in notify {
+    for u in local {
         if let Ok(devs) = ctx.devices_of(&u).await {
             let owner = crate::v2::inbox_owner(&u, &devs).to_string();
             if !done.insert(owner.clone()) {
@@ -313,7 +331,11 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
 /// отдельного вида записи в инбоксе для заявок нет).
 async fn notify_invite_admins(ctx: &V2, s: &GroupState) {
     let notice = GroupStateNotice { group: Some(s.group.clone()), version: s.version };
-    for u in s.members.keys().filter(|u| invite_admin(s, u)) {
+    let (local, remote) = crate::v2_fed::split(s.members.keys().filter(|u| invite_admin(s, u)));
+    if !remote.is_empty() {
+        crate::v2_fed::push_remote(ctx, &s.group, remote, inbox_record::Item::GroupState(notice.clone())).await;
+    }
+    for u in local.iter() {
         if let Ok(devs) = ctx.devices_of(u).await {
             for d in &devs.v2_device_ids {
                 let _ = ctx.append(crate::v2::inbox_owner(u, &devs), d, inbox_record::Item::GroupState(notice.clone())).await;
@@ -663,7 +685,11 @@ pub(crate) async fn deliver_group(ctx: &V2, r: mpb::DeliverGroupRequest) -> Repl
         .await
         .map_err(|_| ErrorCode::Duplicate)?;
     crate::v2_public::keep_envelope(ctx, &s, &env).await;
-    for u in s.members.keys() {
+    let (local, remote) = crate::v2_fed::split(s.members.keys());
+    if !remote.is_empty() {
+        crate::v2_fed::push_remote(ctx, &g, remote, inbox_record::Item::Group(env.clone())).await;
+    }
+    for u in local.iter() {
         let Ok(devs) = ctx.devices_of(u).await else { continue };
         let owner = crate::v2::inbox_owner(u, &devs);
         for d in &devs.v2_device_ids {

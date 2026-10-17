@@ -158,7 +158,7 @@ fn handler_concurrency() -> usize {
 
 /// Домен адресов этого сервера (`PARVANE_DOMAIN`, по умолчанию `local`).
 /// Ник без `@` в запросах логина/регистрации дополняется до `ник@домен`.
-fn server_domain() -> String {
+pub(crate) fn server_domain() -> String {
     std::env::var("PARVANE_DOMAIN")
         .ok()
         .map(|d| d.trim().trim_start_matches('@').to_lowercase())

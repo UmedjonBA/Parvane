@@ -316,7 +316,7 @@ pub(crate) fn spawn_upkeep(nc: Client, pool: SqlitePool, v1: SqlitePool) {
         let mut t = tokio::time::interval(std::time::Duration::from_secs(env_u64("PARVANE_IDENTITY_UPKEEP_SECS", 60).max(1)));
         loop {
             t.tick().await;
-            super::delete::purge_due(&pool, &v1).await;
+            super::delete::purge_due(&nc, &pool, &v1).await;
             fanout_pending(&nc, &pool).await;
             expire_aliases(&pool).await;
         }

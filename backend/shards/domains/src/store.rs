@@ -164,7 +164,9 @@ impl Domains {
         }
     }
 
-    async fn key_owner(&self, key: &[u8; 32]) -> Result<Option<Author>, ErrorCode> {
+    /// `claimed` — заявленный автор: ключ не наш, а автор с другого сервера — спрашиваем его сервер
+    /// (spec 028, доверие только в пределах его домена).
+    async fn key_owner(&self, key: &[u8; 32], claimed: Option<&str>) -> Result<Option<Author>, ErrorCode> {
         if let Ok(g) = self.owners.lock() {
             if let Some((at, a)) = g.get(key) {
                 if at.elapsed() < OWNER_TTL {
@@ -181,9 +183,15 @@ impl Domains {
                 ErrorCode::Unavailable
             })?
             .map_err(db_err)?;
-        let o = decode_checked::<KeyOwnerResponse>(&r.payload, Origin::Server).map_err(|_| ErrorCode::Unavailable)?;
+        let mut o = decode_checked::<KeyOwnerResponse>(&r.payload, Origin::Server).map_err(|_| ErrorCode::Unavailable)?;
         if !o.found {
-            return Ok(None);
+            match claimed {
+                Some(c) => match self.key_owner_remote(nc, key, c).await? {
+                    Some(remote) => o = remote,
+                    None => return Ok(None),
+                },
+                None => return Ok(None),
+            }
         }
         let mut aliases = self.former(&o.user).await?;
         aliases.extend(o.aliases.into_iter().filter(|a| !aliases.contains(a)).collect::<Vec<_>>());
@@ -192,9 +200,33 @@ impl Domains {
         Ok(Some(a))
     }
 
+    /// Владелец ключа у сервера заявленного автора с другого домена; ответ — только его пользователь.
+    async fn key_owner_remote(&self, nc: &Client, key: &[u8; 32], claimed: &str) -> Result<Option<KeyOwnerResponse>, ErrorCode> {
+        use parvane_protocol::pb::parvane::core::v2::{federation_out, shard_response, FederationOut, ShardResponse};
+        let Some(domain) = parvane_protocol::address::address_domain(claimed).filter(|d| !d.eq_ignore_ascii_case(&self.server_domain)) else {
+            return Ok(None);
+        };
+        let out = FederationOut {
+            dest_domain: domain.to_ascii_lowercase(),
+            timeout_ms: 5000,
+            kind: Some(federation_out::Kind::KeyOwner(KeyOwnerRequest { ed25519: key.to_vec() })),
+        };
+        let fut = nc.request(parvane_protocol::registry_gen::FEDERATION_OUT.to_string(), out.encode_to_vec().into());
+        let r = tokio::time::timeout(std::time::Duration::from_secs(8), fut).await.map_err(|_| ErrorCode::Unavailable)?.map_err(db_err)?;
+        let b = match decode_checked::<ShardResponse>(&r.payload, Origin::Server) {
+            Ok(ShardResponse { result: Some(shard_response::Result::Ok(b)) }) => b,
+            Ok(ShardResponse { result: Some(shard_response::Result::Error(e)) }) => {
+                return Err(ErrorCode::try_from(e.code).unwrap_or(ErrorCode::Unavailable));
+            }
+            _ => return Err(ErrorCode::Unavailable),
+        };
+        let o = decode_checked::<KeyOwnerResponse>(&b, Origin::Server).map_err(|_| ErrorCode::Unavailable)?;
+        Ok((o.found && (o.user == claimed || o.aliases.iter().any(|a| a == claimed))).then_some(o))
+    }
+
     /// Подписант — устройство вызывающего пользователя.
     async fn author_is_caller(&self, signer: &[u8; 32], user: &str) -> Result<Author, ErrorCode> {
-        match self.key_owner(signer).await? {
+        match self.key_owner(signer, Some(user)).await? {
             Some(a) if a.user == user => Ok(a),
             _ => Err(ErrorCode::Forbidden),
         }
