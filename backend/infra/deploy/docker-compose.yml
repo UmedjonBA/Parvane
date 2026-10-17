@@ -64,7 +64,7 @@ services:
     environment:
       # ID-01: требовать доказательство ключа устройства при входе (включать, когда
       # его шлют все клиенты: web — да, desktop/android — со своих сборок)
-      PARVANE_REQUIRE_DEVICE_PROOF: ${PARVANE_REQUIRE_DEVICE_PROOF:-0}
+      PARVANE_REQUIRE_DEVICE_PROOF: ${PARVANE_REQUIRE_DEVICE_PROOF:-1}
       PARVANE_NATS_URL: nats://nats:4222
       PARVANE_NATS_USER: identity
       PARVANE_NATS_PASS: ${PARVANE_IDENTITY_PASS}

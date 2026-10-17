@@ -483,9 +483,17 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 let log = load_log(&ctx, &login).await?;
                 let dev = log.active(&r.device_id).ok_or(ErrorCode::Forbidden)?;
                 let ed = dev.olm_ed25519().map_err(|_| ErrorCode::Invalid)?;
-                if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000)
-                    || !parvane_protocol::client::verify_session_proof(&ed, &login, &r.device_id, r.proof_ts_ms, &r.device_proof)
-                {
+                let reason = if r.device_proof.is_empty() {
+                    Some("нет доказательства")
+                } else if !session_proof_fresh(r.proof_ts_ms, now_unix() * 1000) {
+                    Some("доказательство несвежее")
+                } else if !parvane_protocol::client::verify_session_proof(&ed, &login, &r.device_id, r.proof_ts_ms, &r.device_proof) {
+                    Some("подпись не сошлась")
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    warn!("identity v2: вход устройства из журнала отвергнут (ID-01): {reason}");
                     return Err(ErrorCode::Forbidden);
                 }
             }

@@ -58,6 +58,7 @@ try {
 } catch (error) {
   const shotDir = process.env.PARVANE_E2E_SHOT_DIR;
   if (shotDir && session) await session.page.screenshot({ path: `${shotDir}/session-expiry.png` }).catch(() => {});
+  if (session) console.error(session.logs.slice(-60).join('\n'));
   throw error;
 } finally {
   await browser.close();

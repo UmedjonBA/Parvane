@@ -3836,7 +3836,10 @@ export function createV2Controller(deps: Deps) {
       const st = await SecureE2eStorage.open(user);
       const savedKey = await st.loadRecord<string>(KEY_RECORD);
       const saved = await loadEngineState(st);
-      if (!savedKey || !saved) return undefined;
+      if (!savedKey || !saved) {
+        deps.log('v2: доказательство устройства — нет ключа или состояния на диске');
+        return undefined;
+      }
       const c = pvm.PvClient.importState(saved, unb64(savedKey));
       try {
         // Состояние и зеркало device_id — одного хранилища; при расхождении
@@ -3846,7 +3849,8 @@ export function createV2Controller(deps: Deps) {
       } finally {
         c.free();
       }
-    } catch {
+    } catch (err) {
+      deps.log(`v2: доказательство устройства не построено: ${String(err)}`);
       return undefined;
     }
   }
