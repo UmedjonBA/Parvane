@@ -187,6 +187,8 @@ fn card(row: CardRow) -> gpb::PublicGroupCard {
         preview: preview != 0,
         history: history != 0,
         group: Some(Ref { domain: crate::v2::server_domain(), id: group_id }),
+        // Фото публичной группы лежит на её сервере (spec 028: пусто — домен группы).
+        avatar_domain: String::new(),
     }
 }
 

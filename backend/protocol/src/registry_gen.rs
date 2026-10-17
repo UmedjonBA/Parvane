@@ -42,8 +42,20 @@ pub const INTERNAL_RENAME_PUSH: &str = "v2.internal.rename.push";
 /// отправки (проверка `ephemeral.group_typing`, D-07).
 pub const INTERNAL_GROUP_EPOCH: &str = "v2.internal.messenger.group_epoch";
 
+/// Федерация (spec 028): своё → шард federation (пересылка клиентского запроса и действия самого сервера).
+pub const FEDERATION_OUT: &str = "v2.federation.out";
+/// federation → identity: подпись межсерверного кадра ключом сервера. Вне `v2.internal.identity.>`: этот шаблон
+/// публикуют messenger, call и domains, а подписывать кадры может только роль federation.
+pub const INTERNAL_S2S_SIGN: &str = "v2.internal.s2s_sign";
+/// federation → messenger: запись инбокса участникам группы с чужого сервера.
+pub const INTERNAL_INBOX_PUSH: &str = "v2.internal.messenger.inbox_push";
+/// federation → messenger: адрес чужого домена удалён (spec 027).
+pub const INTERNAL_ACCOUNT_GONE: &str = "v2.internal.messenger.account_gone";
+/// federation → gateway: эфемерное событие с чужого сервера («печатает»).
+pub const INTERNAL_EPH_IN: &str = "v2.internal.gateway.eph_in";
+
 /// Роли NATS, у которых есть v2-права.
-pub const ROLES: &[&str] = &["identity", "messenger", "cloud", "call", "preview", "push", "gateway", "domains"];
+pub const ROLES: &[&str] = &["identity", "messenger", "cloud", "call", "preview", "push", "gateway", "domains", "federation"];
 
 /// Токен subject'а журнала устройства: без `.`/`*`/`>` — hex SHA-256 от
 /// проверенного адреса и device_id (не раскрывает адрес в имени subject'а).
@@ -89,6 +101,12 @@ pub fn acl() -> BTreeMap<&'static str, RoleAcl> {
         if let Some(g) = m.get_mut("gateway") {
             g.publish.push(meth.subject.to_string());
         }
+        // Входящий межсерверный запрос шард federation публикует в шину как обычный.
+        if meth.federated {
+            if let Some(f) = m.get_mut("federation") {
+                f.publish.push(meth.subject.to_string());
+            }
+        }
     }
     let add = |m: &mut BTreeMap<&'static str, RoleAcl>, role: &str, sub: &[&str], publ: &[&str]| {
         if let Some(r) = m.get_mut(role) {
@@ -96,16 +114,23 @@ pub fn acl() -> BTreeMap<&'static str, RoleAcl> {
             r.publish.extend(publ.iter().map(|s| s.to_string()));
         }
     };
-    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, IDENTITY_REPLY_INBOX], &[REVOKED_SUBJECT, INBOX_WILDCARD, INTERNAL_RENAME_WILDCARD]);
-    add(&mut m, "messenger", &[INTERNAL_GROUP_EPOCH, INTERNAL_RENAME_MESSENGER], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
+    add(&mut m, "identity", &[INTERNAL_IDENTITY_WILDCARD, IDENTITY_REPLY_INBOX, INTERNAL_S2S_SIGN], &[REVOKED_SUBJECT, INBOX_WILDCARD, INTERNAL_RENAME_WILDCARD, FEDERATION_OUT]);
+    add(&mut m, "messenger", &[INTERNAL_GROUP_EPOCH, INTERNAL_RENAME_MESSENGER, INTERNAL_INBOX_PUSH, INTERNAL_ACCOUNT_GONE], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD, FEDERATION_OUT]);
     // call.signal_sealed: право доставки (ключ доступа) и устройства адресата —
     // через identity; сигналы — живыми событиями в журналы устройств.
     add(&mut m, "call", &[], &[INBOX_WILDCARD, INTERNAL_IDENTITY_WILDCARD]);
     add(&mut m, "push", &[INBOX_WILDCARD, INTERNAL_RENAME_PUSH], &[]);
     add(&mut m, "cloud", &[INTERNAL_RENAME_CLOUD], &[]);
     // domains: владелец ключа подписи — через identity (key_owner).
-    add(&mut m, "domains", &[INTERNAL_RENAME_DOMAINS], &[INTERNAL_IDENTITY_WILDCARD]);
-    add(&mut m, "gateway", &[INBOX_WILDCARD, EPH_WILDCARD, REVOKED_SUBJECT], &[EPH_WILDCARD, INTERNAL_GROUP_EPOCH]);
+    add(&mut m, "domains", &[INTERNAL_RENAME_DOMAINS], &[INTERNAL_IDENTITY_WILDCARD, FEDERATION_OUT]);
+    add(&mut m, "gateway", &[INBOX_WILDCARD, EPH_WILDCARD, REVOKED_SUBJECT, INTERNAL_EPH_IN], &[EPH_WILDCARD, INTERNAL_GROUP_EPOCH, FEDERATION_OUT]);
+    // federation: вход из своей шины, подпись кадров у identity, доставка входящего шардам.
+    add(
+        &mut m,
+        "federation",
+        &[FEDERATION_OUT],
+        &[INTERNAL_S2S_SIGN, INTERNAL_INBOX_PUSH, INTERNAL_ACCOUNT_GONE, INTERNAL_EPH_IN, INTERNAL_KEY_OWNER, INTERNAL_PRIVACY_OF],
+    );
     for r in m.values_mut() {
         r.subscribe.sort();
         r.subscribe.dedup();

@@ -321,6 +321,9 @@ message ServerDescriptor {
     (max_len) = 512
   ];
   int64 issued_ms = 7;
+  // Федерация (spec 028): база межсерверной точки входа (`https://host[:port]`, без пути); запросы — POST
+  // `<база>/_parvane/s2s`. Принимается, только если host равен domain и схема https.
+  string s2s_endpoint = 8 [(max_len) = 512];
 }
 
 message SignedServerDescriptor {

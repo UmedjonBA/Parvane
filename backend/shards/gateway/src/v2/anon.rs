@@ -52,6 +52,8 @@ pub(crate) fn shard_request(m: &MethodInfo, s: &SessionIdentity<'_>, body: Vec<u
         body,
         reauth_fresh: id && s.reauth_fresh,
         operator: id && s.operator,
+        // Межсерверный домен-источник ставит только шард federation (spec 028).
+        origin_domain: String::new(),
     }
 }
 

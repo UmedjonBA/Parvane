@@ -79,6 +79,10 @@ fn req_js(r: &OutRequest) -> JsValue {
     }));
     set(&o, "method", &JsValue::from_str(r.method));
     set(&o, "body", &Uint8Array::from(r.body.as_slice()).into());
+    // spec 028: домен сервера объекта запроса (хост ставит в Request.dest_domain)
+    if let Some(d) = parvane_protocol::routing::dest_of(r) {
+        set(&o, "dest", &JsValue::from_str(&d));
+    }
     o.into()
 }
 
@@ -515,6 +519,50 @@ impl PvClient {
     #[wasm_bindgen(js_name = tokenBatchSize)]
     pub fn token_batch_size(&self) -> usize {
         self.inner.token_batch_size()
+    }
+
+    // ── жетоны серверов других доменов (spec 028) ──────────────────────────
+
+    #[wasm_bindgen(js_name = tokenCountFor)]
+    pub fn token_count_for(&self, domain: &str) -> usize {
+        self.inner.token_count_for(domain)
+    }
+
+    #[wasm_bindgen(js_name = tokenRefillDueFor)]
+    pub fn token_refill_due_for(&self, domain: &str) -> bool {
+        self.inner.token_refill_due_for(domain, parvane_protocol::time::now_ms())
+    }
+
+    /// Домены, чьи запасы жетонов пора пополнить (массив строк).
+    #[wasm_bindgen(js_name = tokenRefillDueDomains)]
+    pub fn token_refill_due_domains(&self) -> Array {
+        self.inner.token_refill_due_domains(parvane_protocol::time::now_ms()).iter().map(|d| JsValue::from_str(d)).collect()
+    }
+
+    /// Запрос жетонов сервера `domain`: ответ его `identity.tokens.key_list` и его ключ сервера.
+    #[wasm_bindgen(js_name = tokenRequestFor)]
+    pub fn token_request_for(&mut self, domain: &str, key_list_response: &[u8], server_key: &[u8], count: usize) -> Result<JsValue, JsValue> {
+        let r: ipb::TokensKeyListResponse = decode_checked(key_list_response, Origin::Server).map_err(err_proto)?;
+        let list = r.list.ok_or_else(|| err_proto(ProtoError::InvalidField("list")))?;
+        self.inner.token_request_for(domain, &list, server_key, count).map(|r| req_js(&r)).map_err(err_proto)
+    }
+
+    #[wasm_bindgen(js_name = tokenResponseFor)]
+    pub fn token_response_for(&mut self, domain: &str, resp: &[u8]) -> Result<usize, JsValue> {
+        let r: ipb::TokensIssueBlindedResponse = decode_checked(resp, Origin::Server).map_err(err_proto)?;
+        self.inner.token_response_for(domain, &r).map_err(err_proto)
+    }
+
+    /// Домен сервера группы (spec 028): из журнала, ожидающего ключа или свой.
+    #[wasm_bindgen(js_name = groupDomain)]
+    pub fn group_domain(&self, group: &str) -> Result<String, JsValue> {
+        Ok(self.inner.group_domain(&group_id(group)?))
+    }
+
+    /// Домен сервера контейнера облака (spec 028).
+    #[wasm_bindgen(js_name = cloudDomain)]
+    pub fn cloud_domain(&self, id_hex: &str) -> String {
+        hex::decode(id_hex).map_or_else(|_| String::new(), |id| self.inner.cloud_domain(&id))
     }
 
     /// Личное сообщение: содержимое — proto3-JSON `msg.v2.Content`;
@@ -1593,9 +1641,17 @@ pub fn encode_auth(token: &str) -> Vec<u8> {
 }
 
 /// `pad_to` — дополнить кадр до длины, кратной этому числу (spec 025, режим L2); не задано — без дополнения.
+/// `dest_domain` (spec 028) — домен сервера объекта; пусто или свой — обычный запрос.
 #[wasm_bindgen(js_name = encodeRequest)]
-pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32, pad_to: Option<u32>) -> Vec<u8> {
-    let req = Request { id, method: method.into(), body: body.to_vec(), timeout_ms, padding: vec![] };
+pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32, pad_to: Option<u32>, dest_domain: Option<String>) -> Vec<u8> {
+    let req = Request {
+        id,
+        method: method.into(),
+        body: body.to_vec(),
+        timeout_ms,
+        padding: vec![],
+        dest_domain: dest_domain.unwrap_or_default(),
+    };
     match pad_to {
         Some(n) if n > 0 => codec::encode_request_padded(req, n as usize),
         _ => codec::encode_frame(frame::Kind::Request(req)),

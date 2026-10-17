@@ -159,6 +159,20 @@ impl Client {
         self.cloud.get(id).ok_or(ClientError::Proto(ProtoError::NotFound))
     }
 
+    /// Домен сервера контейнера (spec 028): подключённого — из генезиса, иначе из
+    /// ожидающего ключа, иначе свой. Хост адресует им запросы `domain.*`.
+    pub fn cloud_domain(&self, id: &[u8]) -> String {
+        if let Some(r) = self.cloud.get(id).and_then(|c| c.access.container_ref().ok()) {
+            return r.domain.clone();
+        }
+        self.cloud_pending_keys
+            .iter()
+            .filter_map(|(_, s)| s.container.as_ref())
+            .find(|r| r.id == id && crate::address::is_valid_domain(&r.domain))
+            .map(|r| r.domain.clone())
+            .unwrap_or_else(|| self.domain.clone())
+    }
+
     /// Идентификаторы подключённых контейнеров облака.
     pub fn cloud_ids(&self) -> Vec<Vec<u8>> {
         self.cloud.keys().cloned().collect()
@@ -699,7 +713,14 @@ impl Client {
     /// аккаунта либо от админа контейнера. Для неподключённого контейнера
     /// ключ ждёт: хост подключит контейнер по событию.
     fn cloud_accept_key(&mut self, sender: &str, share: &ContainerKeyShare, seq: u64) -> Vec<Event> {
-        let Some(id) = share.container.as_ref().filter(|r| r.domain == self.domain).map(|r| r.id.clone()) else {
+        // Контейнер живёт у своего владельца: свой сервер либо сервер раздающего (spec 028)
+        let sender_domain = crate::address::address_domain(sender).unwrap_or_default();
+        let Some(id) = share
+            .container
+            .as_ref()
+            .filter(|r| r.domain.eq_ignore_ascii_case(&self.domain) || r.domain.eq_ignore_ascii_case(sender_domain))
+            .map(|r| r.id.clone())
+        else {
             return vec![Event::Skipped { seq }];
         };
         let names = self.identity_names(sender);

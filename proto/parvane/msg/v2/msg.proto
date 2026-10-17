@@ -18,6 +18,7 @@ service MsgService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   // Групповое сообщение: право — подпись ключом отправки эпохи (R8).
@@ -28,6 +29,7 @@ service MsgService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   // Легаси-копия формата v1 — только устройствам получателя из его
@@ -86,6 +88,7 @@ service MsgService {
       rate: RATE_CLASS_MSG
       kind: METHOD_KIND_CALL
       shard: "gateway"
+      federated: true
     };
   }
   rpc EphemeralPresence(EphemeralPresenceRequest) returns (EphemeralPresenceResponse) {
@@ -105,6 +108,7 @@ service MsgService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_CALL
       shard: "gateway"
+      federated: true
     };
   }
   rpc EphemeralSubscribe(EphemeralSubscribeRequest) returns (EphemeralSubscribeResponse) {
@@ -307,4 +311,9 @@ message GroupEpochInfo {
   // Состав/права изменились, новой эпохи ещё нет (ключ мог утечь исключённому).
   bool stale = 4;
   bool deleted = 5;
+  // Федерация (spec 028): домены участников, кроме своего, — куда gateway рассылает «печатает» группы.
+  repeated string remote_domains = 6 [
+    (parvane.core.v2.max_items) = 64,
+    (parvane.core.v2.max_len) = 128
+  ];
 }

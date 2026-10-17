@@ -27,6 +27,7 @@ fn descriptor_of(domain: &str, server_key: &SigningKey, signer: &SigningKey) -> 
         features: vec!["sealed".into()],
         endpoints: vec![format!("https://{domain}/ws")],
         issued_ms: NOW,
+        s2s_endpoint: String::new(),
     };
     let bytes = d.encode_to_vec();
     SignedServerDescriptor { signature: sign::sign_ctx(signer, ctx::SERVER_DESCRIPTOR, &[&bytes]), descriptor: bytes }

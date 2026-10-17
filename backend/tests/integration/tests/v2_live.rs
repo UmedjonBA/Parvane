@@ -193,7 +193,7 @@ impl V2 {
     fn call(&mut self, method: &str, body: Vec<u8>) -> Result<Vec<u8>, ErrorCode> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![] }));
+        self.send(frame::Kind::Request(Request { id, method: method.into(), body, timeout_ms: 5000, padding: vec![], dest_domain: String::new() }));
         loop {
             let f = self.recv().expect("ответ");
             if let Some(frame::Kind::Response(r)) = f.kind {

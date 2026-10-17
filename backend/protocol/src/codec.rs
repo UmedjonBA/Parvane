@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn padded_requests_share_length_buckets() {
-        let req = |method: &str, body: usize| Request { id: 7, method: method.into(), body: vec![1u8; body], timeout_ms: 1000, padding: vec![] };
+        let req = |method: &str, body: usize| Request { id: 7, method: method.into(), body: vec![1u8; body], timeout_ms: 1000, padding: vec![], dest_domain: String::new() };
         for (method, body) in [("msg.deliver_sealed", 600), ("msg.deliver_group", 640), ("msg.deliver_sealed", 700)] {
             let framed = encode_request_padded(req(method, body), 1024);
             assert_eq!(framed.len() % 1024, 0, "{method} {body}: {}", framed.len());
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn request_registry() {
-        let ok = Request { id: 1, method: "msg.inbox.sync".into(), body: vec![], timeout_ms: 1000, padding: vec![] };
+        let ok = Request { id: 1, method: "msg.inbox.sync".into(), body: vec![], timeout_ms: 1000, padding: vec![], dest_domain: String::new() };
         assert_eq!(check_request(&ok, Origin::Client).unwrap().shard, "messenger");
         let bad = Request { method: "msg.chat.send".into(), ..ok.clone() };
         assert_eq!(check_request(&bad, Origin::Client).err(), Some(ProtoError::UnknownMethod));

@@ -38,6 +38,7 @@ service DomainService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   rpc DomainOpAppend(DomainOpAppendRequest) returns (DomainOpAppendResponse) {
@@ -47,6 +48,7 @@ service DomainService {
       rate: RATE_CLASS_MSG
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   rpc DomainOpSync(DomainOpSyncRequest) returns (DomainOpSyncResponse) {
@@ -56,6 +58,7 @@ service DomainService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   rpc DomainGrantSet(DomainGrantSetRequest) returns (DomainGrantSetResponse) {
@@ -83,6 +86,7 @@ service DomainService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   rpc DomainSnapshotPut(DomainSnapshotPutRequest) returns (DomainSnapshotPutResponse) {
@@ -92,6 +96,7 @@ service DomainService {
       rate: RATE_CLASS_MSG
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   rpc DomainSnapshotGet(DomainSnapshotGetRequest) returns (DomainSnapshotGetResponse) {
@@ -101,6 +106,7 @@ service DomainService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   // Смена эпохи ключа без отзыва гранта (spec 010, R6): запись журнала грантов
@@ -124,6 +130,7 @@ service DomainService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
   // Участник сам покидает контейнер (spec 016): запись журнала грантов вида
@@ -136,6 +143,7 @@ service DomainService {
       rate: RATE_CLASS_MSG
       kind: METHOD_KIND_CALL
       shard: "domains"
+      federated: true
     };
   }
 }

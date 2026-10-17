@@ -38,6 +38,7 @@ service BlobService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_STREAM
       shard: "cloud"
+      federated: true
     };
   }
   // D-08: вложения сообщений — по capability (секрет из E2E-сообщения) через
@@ -49,6 +50,7 @@ service BlobService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_STREAM
       shard: "cloud"
+      federated: true
     };
   }
   rpc Delete(DeleteRequest) returns (DeleteResponse) {

@@ -71,6 +71,9 @@ message MethodSpec {
   string subject = 7 [(max_len) = 128];
   // Только для операторской роли (server.stats.*).
   bool operator_only = 8;
+  // Федерация (spec 028): метод можно адресовать чужому серверу (`Request.dest_domain`); входящий межсерверный
+  // запрос принимается только для таких методов. Из флага генерируются права роли NATS `federation`.
+  bool federated = 9;
 }
 
 extend google.protobuf.MethodOptions {

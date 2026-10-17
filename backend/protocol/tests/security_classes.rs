@@ -293,7 +293,7 @@ fn c17_delivery_methods_take_only_envelopes() {
             assert!(schema::MESSAGES[i].name.ends_with("Envelope"), "{name}");
         }
     }
-    let r = Request { id: 1, method: "msg.deliver_sealed".into(), body: br#"{"kind":"text","text":"hi"}"#.to_vec(), timeout_ms: 1, padding: vec![] };
+    let r = Request { id: 1, method: "msg.deliver_sealed".into(), body: br#"{"kind":"text","text":"hi"}"#.to_vec(), timeout_ms: 1, padding: vec![], dest_domain: String::new() };
     assert!(codec::check_request(&r, Origin::Client).is_err());
 }
 

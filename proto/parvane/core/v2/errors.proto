@@ -23,7 +23,7 @@ enum ErrorCode {
   ERROR_CODE_REAUTH_REQUIRED = 8;
   // Превышена квота/лимит объёма.
   ERROR_CODE_LIMIT = 9;
-  // Адресат на чужом домене, а федерации нет.
+  // Адресат на чужом домене, а федерация на ВАШЕМ сервере выключена (или метод нельзя адресовать чужому).
   ERROR_CODE_FEDERATION_UNAVAILABLE = 10;
   // Временная недоступность сервиса.
   ERROR_CODE_UNAVAILABLE = 11;
@@ -31,6 +31,14 @@ enum ErrorCode {
   ERROR_CODE_EXPIRED = 12;
   // Пользователь заблокирован/забанен для этой операции.
   ERROR_CODE_BANNED = 13;
+  // Федерация (spec 028): администратор вашего сервера заблокировал домен.
+  ERROR_CODE_DOMAIN_BLOCKED = 14;
+  // Чужой сервер не принимает запросы с вашего (заблокировал его или выключил федерацию).
+  ERROR_CODE_DOMAIN_REFUSED = 15;
+  // Чужой сервер не найден или не отвечает; retry_after_ms — когда повторить.
+  ERROR_CODE_DOMAIN_UNREACHABLE = 16;
+  // Ключ чужого сервера не совпадает с закреплённым; до сброса администратором — отказ.
+  ERROR_CODE_SERVER_KEY_CHANGED = 17;
 }
 
 message Error {

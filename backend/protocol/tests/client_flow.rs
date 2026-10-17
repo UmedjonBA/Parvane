@@ -2123,3 +2123,98 @@ fn rename_member_with_foreign_root_is_rejected() {
     assert_eq!(group::apply(Some(&state), &entry, &resolve).err(), Some(parvane_protocol::ProtoError::Forbidden));
     let _ = &mut mallory;
 }
+
+// ── Федерация (spec 028): пользователи двух доменов на одном мини-сервере ─────
+
+fn setup_on(srv: &mut Server, user: &str) -> Client {
+    let domain = parvane_protocol::address::address_domain(user).unwrap().to_string();
+    let mut c = Client::new(user, "d1", &domain).unwrap();
+    let (reqs, _root) = c.create_identity(10).unwrap();
+    for r in &reqs {
+        srv.handle(user, "d1", r);
+    }
+    c
+}
+
+#[test]
+fn federated_direct_message_and_call_route_to_peer_server() {
+    use parvane_protocol::routing::dest_of;
+    let mut srv = Server::default();
+    let mut alice = setup_on(&mut srv, "alice@a.example");
+    let mut bob = setup_on(&mut srv, "bob@b.example");
+    // Ключи доступа друг друга известны (как после знакомства).
+    bob_learn(&mut bob, "alice@a.example", *alice.delivery_key());
+    bob_learn(&mut alice, "bob@b.example", *bob.delivery_key());
+
+    // Письмо Борису адресовано серверу Бориса.
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@b.example", &text("привет с A")));
+    let deliver = reqs.iter().find(|r| r.method == "msg.deliver_sealed" && dest_of(r).as_deref() == Some("b.example"));
+    assert!(deliver.is_some(), "{:?}", reqs.iter().map(|r| (r.method, dest_of(r))).collect::<Vec<_>>());
+    // Копия своим устройствам — своему серверу (своих других устройств нет — копии нет вовсе).
+    assert!(reqs.iter().all(|r| r.method != "msg.deliver_sealed" || dest_of(r).as_deref() != Some("a.example")));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).contains(&("alice@a.example".into(), "alice@a.example".into(), "привет с A".into())), "{ev:?}");
+
+    // Звонок живёт у звонящего: цель — домен Ани, Борис его принимает.
+    let offer = call_offer(&[7u8; 16], "v=0 FED");
+    let reqs = run_collect(&mut srv, &mut alice, &mut |c| c.prepare_call("bob@b.example", &offer));
+    assert_eq!(dest_of(&reqs[0]).as_deref(), Some("b.example"));
+    let ev = bob.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { from, .. }] if from == "alice@a.example"), "{ev:?}");
+    // Ответ Бориса — серверу Ани.
+    let answer = parvane_protocol::pb::parvane::call::v2::CallSignal {
+        call_id: vec![7u8; 16],
+        signal: Some(parvane_protocol::pb::parvane::call::v2::call_signal::Signal::Answer(parvane_protocol::pb::parvane::call::v2::Answer { sdp: "v=0 A".into() })),
+        group_call_id: vec![],
+    };
+    let reqs = run_collect(&mut srv, &mut bob, &mut |c| c.prepare_call("alice@a.example", &answer));
+    assert_eq!(dest_of(&reqs[0]).as_deref(), Some("a.example"));
+    let ev = alice.open_record(&live_records(&reqs[0])[0]).unwrap();
+    assert!(matches!(ev.as_slice(), [Event::Call { from, .. }] if from == "bob@b.example"), "{ev:?}");
+}
+
+#[test]
+fn stranger_on_other_server_needs_that_servers_token() {
+    let mut srv = Server::default();
+    let mut alice = setup_on(&mut srv, "alice@a.example");
+    let _bob = setup_on(&mut srv, "bob@b.example");
+    // Ключа доступа Бориса нет, жетонов сервера B нет — нужен жетон (своего запаса не берёт).
+    let mut got = None;
+    for _ in 0..6 {
+        match alice.prepare_direct("bob@b.example", &text("знакомство")) {
+            Err(ClientError::Need(Need::Token { user })) => {
+                got = Some(user);
+                break;
+            }
+            Err(ClientError::Need(n)) => satisfy(&mut srv, &mut alice, n),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(got.as_deref(), Some("bob@b.example"));
+    assert_eq!(alice.token_count_for("b.example"), 0);
+    assert!(alice.token_refill_due_for("b.example", 0), "запаса сервера B нет — пополнить сразу");
+    assert!(alice.token_refill_due_domains(0).is_empty(), "запасы заводятся только запросом");
+    // Экспорт и импорт с новым полем.
+    let key = [3u8; 32];
+    let restored = Client::import(&alice.export(&key).unwrap(), &key).unwrap();
+    assert_eq!(restored.token_count_for("b.example"), 0);
+}
+
+#[test]
+fn group_and_container_domains_are_known_to_the_host() {
+    use parvane_protocol::routing::dest_of;
+    let mut srv = Server::default();
+    let mut alice = setup_on(&mut srv, "alice@a.example");
+    // Своя группа — на своём сервере.
+    let (g, req) = alice.group_create(GroupKind::Group, "Кружок", &[], Permissions::default()).unwrap();
+    assert_eq!(g.domain, "a.example");
+    assert_eq!(dest_of(&req).as_deref(), Some("a.example"));
+    srv.handle("alice@a.example", "d1", &req);
+    assert_eq!(alice.group_domain(&g.id), "a.example");
+    // Неизвестная группа — свой домен по умолчанию.
+    assert_eq!(alice.group_domain(&[9u8; 16]), "a.example");
+    // Контейнер облака — домен генезиса.
+    let (id, create) = alice.cloud_create(1).unwrap();
+    assert_eq!(alice.cloud_domain(&id), "a.example");
+    assert_eq!(dest_of(&create).as_deref(), Some("a.example"));
+}

@@ -291,6 +291,7 @@ fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: 
             let kind = get_enum("kind");
             let reauth = get_bool("reauth");
             let operator_only = get_bool("operator_only");
+            let federated = get_bool("federated");
             let shard = get_str("shard");
             let mut subject = get_str("subject");
             if subject.is_empty() {
@@ -315,6 +316,13 @@ fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: 
             if channel == 3 && (rate != 4 || reauth || operator_only) {
                 errors.push(format!("{full}: метод канала ANON — только rate ANON, без reauth"));
             }
+            // Федерация (spec 028): пересылается чужому серверу только обычный запрос пользователя.
+            if federated && (reauth || operator_only || kind == 2) {
+                errors.push(format!("{full}: federated несовместим с reauth/operator_only/SUBSCRIBE"));
+            }
+            if federated && channel == 1 && name != "server.describe" {
+                errors.push(format!("{full}: из канала PRE пересылается только server.describe"));
+            }
             if channel == 1 && rate != 5 {
                 errors.push(format!("{full}: метод канала PRE — только rate PRE"));
             }
@@ -334,7 +342,7 @@ fn build_methods(pool: &DescriptorPool, index: &HashMap<String, usize>, errors: 
             rows.push((
                 name.clone(),
                 format!(
-                    "  MethodInfo {{ name: {name:?}, channel: {channel}, reauth: {reauth}, rate: {rate}, kind: {kind}, shard: {shard:?}, subject: {subject:?}, operator_only: {operator_only}, request: {req}, response: {resp} }},"
+                    "  MethodInfo {{ name: {name:?}, channel: {channel}, reauth: {reauth}, rate: {rate}, kind: {kind}, shard: {shard:?}, subject: {subject:?}, operator_only: {operator_only}, federated: {federated}, request: {req}, response: {resp} }},"
                 ),
             ));
         }

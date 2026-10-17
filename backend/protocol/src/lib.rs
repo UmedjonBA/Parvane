@@ -30,6 +30,7 @@ pub mod policy;
 pub mod recovery;
 pub mod registry_gen;
 pub mod report;
+pub mod routing;
 pub mod schema;
 pub mod seal;
 pub mod sign;

@@ -50,7 +50,12 @@ fn cerr(e: ClientError) -> String {
 }
 
 fn req_json(r: &OutRequest) -> Value {
-    json!({"chan": match r.chan { Chan::Id => "id", Chan::Anon => "anon" }, "method": r.method, "body": b64(&r.body)})
+    let mut v = json!({"chan": match r.chan { Chan::Id => "id", Chan::Anon => "anon" }, "method": r.method, "body": b64(&r.body)});
+    // spec 028: домен сервера объекта запроса (хост ставит в Request.dest_domain)
+    if let Some(d) = crate::routing::dest_of(r) {
+        v["dest"] = json!(d);
+    }
+    v
 }
 
 fn reqs_json(rs: &[OutRequest]) -> String {
@@ -995,7 +1000,19 @@ pub fn encode_auth(token: &str) -> Vec<u8> {
 }
 
 pub fn encode_request(id: u64, method: &str, body: &[u8], timeout_ms: u32) -> Vec<u8> {
-    codec::encode_frame(frame::Kind::Request(Request { id, method: method.into(), body: body.to_vec(), timeout_ms, padding: vec![] }))
+    encode_request_to(id, method, body, timeout_ms, "")
+}
+
+/// Запрос с адресатом-сервером (spec 028): пустой `dest_domain` — свой сервер.
+pub fn encode_request_to(id: u64, method: &str, body: &[u8], timeout_ms: u32, dest_domain: &str) -> Vec<u8> {
+    codec::encode_frame(frame::Kind::Request(Request {
+        id,
+        method: method.into(),
+        body: body.to_vec(),
+        timeout_ms,
+        padding: vec![],
+        dest_domain: dest_domain.into(),
+    }))
 }
 
 pub fn encode_ping(nonce: u64) -> Vec<u8> {

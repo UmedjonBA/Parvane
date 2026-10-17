@@ -359,6 +359,9 @@ pub struct Client {
     shared_invites: Vec<(Vec<u8>, String)>,
     /// Запрос жетонов в полёте (не сохраняется).
     token_req: Option<(crate::tokens::TokenRequest, TokenKey)>,
+    /// Жетоны серверов других доменов (spec 028): письмо незнакомцу с чужого
+    /// сервера оплачивается жетоном ЕГО сервера.
+    foreign_tokens: BTreeMap<String, ForeignTokens>,
     /// L2 личных чатов (ключ — собеседник): предпочтения участников из
     /// проверенных операций `ChatMode` (T079).
     l2_direct: BTreeMap<String, L2State>,
@@ -478,6 +481,7 @@ impl Client {
             pending_keys: vec![],
             shared_invites: vec![],
             token_req: None,
+            foreign_tokens: BTreeMap::new(),
             l2_direct: BTreeMap::new(),
             l2_group_pref: BTreeMap::new(),
             eph: BTreeMap::new(),
@@ -1214,7 +1218,17 @@ impl Client {
         if let Some((k, _)) = self.peers.get(user).and_then(|p| p.delivery_key.clone()) {
             return Ok(Access::DeliveryKey(k));
         }
-        match self.stock.take(now_ms()) {
+        // Незнакомец с другого сервера — жетоном его сервера (spec 028)
+        let domain = crate::address::address_domain(user).unwrap_or_default().to_ascii_lowercase();
+        let stock = if domain.is_empty() || domain.eq_ignore_ascii_case(&self.domain) {
+            &mut self.stock
+        } else {
+            match self.foreign_tokens.get_mut(&domain) {
+                Some(f) => &mut f.stock,
+                None => return need(Need::Token { user: user.into() }),
+            }
+        };
+        match stock.take(now_ms()) {
             Some(t) => Ok(Access::AnonToken(t)),
             None => need(Need::Token { user: user.into() }),
         }
@@ -1223,9 +1237,83 @@ impl Client {
     /// Жетон не ушёл (сборка запроса не удалась) — вернуть в запас.
     fn return_access(&mut self, access: Access) {
         if let Access::AnonToken(t) = access {
+            // Жетон чужого сервера — в его запас (ключ выпуска есть только в его списке)
+            if let Some(f) = self.foreign_tokens.values_mut().find(|f| f.keys.iter().any(|k| k.key_id == t.key_id)) {
+                let until = f.keys.iter().find(|k| k.key_id == t.key_id).map(|k| k.valid_until_ms).unwrap_or(i64::MAX);
+                f.stock.put_back(t, until);
+                return;
+            }
             let until = self.token_keys.iter().find(|k| k.key_id == t.key_id).map(|k| k.valid_until_ms).unwrap_or(i64::MAX);
             self.stock.put_back(t, until);
         }
+    }
+
+    // ── жетоны чужих серверов (spec 028) ────────────────────────────────────
+    // Те же правила, что у своих (D-06): список ключей выпуска — анонимно и
+    // проверен ключом ТОГО сервера (`server.describe` с адресатом-доменом),
+    // выдача — проверена по этому списку. Хост ставит `dest_domain` = домен.
+
+    /// Действующих жетонов сервера `domain`.
+    pub fn token_count_for(&self, domain: &str) -> usize {
+        self.foreign_tokens.get(&domain.to_ascii_lowercase()).map_or(0, |f| f.stock.len(now_ms()))
+    }
+
+    /// Пора пополнить запас сервера `domain` (нет запаса — сразу).
+    pub fn token_refill_due_for(&self, domain: &str, now_ms: i64) -> bool {
+        self.foreign_tokens.get(&domain.to_ascii_lowercase()).is_none_or(|f| f.stock.refill_due(now_ms))
+    }
+
+    /// Домены чужих серверов, чьи запасы пора пополнить.
+    pub fn token_refill_due_domains(&self, now_ms: i64) -> Vec<String> {
+        self.foreign_tokens.iter().filter(|(_, f)| f.stock.refill_due(now_ms)).map(|(d, _)| d.clone()).collect()
+    }
+
+    /// Запрос жетонов сервера `domain` по его списку ключей (получен анонимно с
+    /// адресатом `domain`) и его ключу сервера.
+    pub fn token_request_for(
+        &mut self,
+        domain: &str,
+        key_list: &crate::pb::parvane::core::v2::SignedTokenKeyList,
+        server_key: &[u8],
+        count: usize,
+    ) -> Result<OutRequest> {
+        let domain = domain.to_ascii_lowercase();
+        if !crate::address::is_valid_domain(&domain) || domain.eq_ignore_ascii_case(&self.domain) {
+            return Err(ProtoError::BadAddress);
+        }
+        let trusted = crate::tokens::verify_key_list(key_list, server_key)?;
+        let now = now_ms();
+        let key = trusted
+            .keys
+            .iter()
+            .filter(|k| k.valid_from_ms <= now && now <= k.valid_until_ms)
+            .max_by_key(|k| k.valid_from_ms)
+            .ok_or(ProtoError::Expired)?
+            .clone();
+        let (req, blinded) = crate::tokens::TokenRequest::new(&trusted, &key.key_id, count)?;
+        let f = self.foreign_tokens.entry(domain).or_default();
+        f.stock.retain_keys(&trusted.keys);
+        f.keys = trusted.keys;
+        f.req = Some((req, key));
+        f.stock.schedule_next(now, crate::access::random_jitter());
+        Ok(OutRequest::id("identity.tokens.issue_blinded", &ipb::TokensIssueBlindedRequest { blinded }))
+    }
+
+    /// Ответ сервера `domain` на запрос жетонов → его запас.
+    pub fn token_response_for(&mut self, domain: &str, resp: &ipb::TokensIssueBlindedResponse) -> Result<usize> {
+        let f = self.foreign_tokens.get_mut(&domain.to_ascii_lowercase()).ok_or(ProtoError::InvalidField("token_request"))?;
+        let (req, key) = f.req.take().ok_or(ProtoError::InvalidField("token_request"))?;
+        let listed = f.keys.iter().any(|k| k.key_id == resp.key_id && k.rsa_public_key == key.rsa_public_key);
+        if resp.key_id != key.key_id || !listed {
+            return Err(ProtoError::Forbidden);
+        }
+        if !resp.public_key.is_empty() && resp.public_key != key.rsa_public_key {
+            return Err(ProtoError::Forbidden);
+        }
+        let t = req.finalize(&resp.blind_signatures)?;
+        let n = t.len();
+        f.stock.add(t, key.valid_until_ms);
+        Ok(n)
     }
 
     /// Сервер отверг ключ доступа собеседника (FORBIDDEN): он сменил ключ
@@ -2228,9 +2316,11 @@ impl Client {
         let opened = match msg::open_sealed_op(&inner, &me, &|_d: &VerifiedDevice| true, &mut decrypt, &mut seen)? {
             msg::OpenedSealed::Message(m) => *m,
             msg::OpenedSealed::Call(call) => {
-                // Звонок — только от собеседника и только своего сервера (цель
-                // операции подписана вместе с доменом).
-                let target_ok = call.op.header.target.as_ref().is_some_and(|t| t.domain == self.domain);
+                // Звонок «живёт» у звонящего (цель операции подписана вместе с
+                // доменом): домен цели — домен звонящего; для своего сервера это
+                // прежнее условие (spec 028, звонки между серверами).
+                let caller_domain = crate::address::address_domain(&sender).unwrap_or_default();
+                let target_ok = call.op.header.target.as_ref().is_some_and(|t| t.domain.eq_ignore_ascii_case(caller_domain));
                 // От своего аккаунта — только «принят/отклонён на другом устройстве» (spec 024)
                 let own_ok = sender != self.user
                     || (dev_id != self.device_id && matches!(call.signal.signal, Some(cpb::call_signal::Signal::Hangup(_))));
@@ -2307,8 +2397,10 @@ impl Client {
                         Ok(ev)
                     }
                     Err(ClientError::Need(Need::GroupLog { group, .. })) => {
+                        // Домен группы — из контекста ключа (группа может жить на другом сервере, spec 028)
+                        let domain = gk.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.domain.clone()).unwrap_or_else(|| self.domain.clone());
                         self.pending_keys.push((sender, gk));
-                        let g = Ref { domain: self.domain.clone(), id: group };
+                        let g = Ref { domain, id: group };
                         Ok(vec![Event::GroupChanged { seq, group: g, version: 0 }])
                     }
                     Err(ClientError::Need(_)) => Ok(vec![Event::Internal { seq }]),
@@ -2442,6 +2534,20 @@ impl Client {
     fn own_signer_version(&self, state: Option<&GroupState>) -> u64 {
         let seen = state.and_then(|s| s.signer_versions.get(&self.user)).copied().unwrap_or(0);
         self.own_log.version.max(seen)
+    }
+
+    /// Домен сервера группы (spec 028): из журнала, иначе из ожидающего ключа,
+    /// иначе свой. Хост адресует им `group.state.sync` и прочие запросы группы.
+    pub fn group_domain(&self, group_id: &[u8]) -> String {
+        if let Some(s) = self.group_state(group_id) {
+            return s.group.domain.clone();
+        }
+        self.pending_keys
+            .iter()
+            .filter_map(|(_, gk)| gk.context.as_ref()?.group.as_ref())
+            .find(|r| r.id == group_id && crate::address::is_valid_domain(&r.domain))
+            .map(|r| r.domain.clone())
+            .unwrap_or_else(|| self.domain.clone())
     }
 
     /// Состояние группы (после `group_ingest`).
@@ -3296,6 +3402,17 @@ impl Client {
             tokens: self.stock.entries().map(|(t, _)| b(&t.encode_to_vec())).collect(),
             token_until: self.stock.entries().map(|(_, u)| u).collect(),
             next_refill_ms: self.stock.next_refill_ms(),
+            foreign_tokens: self
+                .foreign_tokens
+                .iter()
+                .map(|(domain, f)| PersistedForeignTokens {
+                    domain: domain.clone(),
+                    tokens: f.stock.entries().map(|(t, _)| b(&t.encode_to_vec())).collect(),
+                    token_until: f.stock.entries().map(|(_, u)| u).collect(),
+                    next_refill_ms: f.stock.next_refill_ms(),
+                    keys: f.keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
+                })
+                .collect(),
             token_keys: self.token_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
             state_key: self.state_key.as_ref().map(|(k, v)| (b(k.as_bytes()), *v)),
             reads: self.reads.clone(),
@@ -3439,6 +3556,18 @@ impl Client {
             c.stock.add(vec![tok], until);
         }
         c.stock.set_next_refill(p.next_refill_ms);
+        for pf in p.foreign_tokens {
+            let mut f = ForeignTokens::default();
+            for k in &pf.keys {
+                f.keys.push(TokenKey::decode(d(k)?.as_slice()).map_err(|_| ProtoError::Malformed)?);
+            }
+            for (i, t) in pf.tokens.iter().enumerate() {
+                let tok = AnonToken::decode(d(t)?.as_slice()).map_err(|_| ProtoError::Malformed)?;
+                f.stock.add(vec![tok], pf.token_until.get(i).copied().unwrap_or(i64::MAX));
+            }
+            f.stock.set_next_refill(pf.next_refill_ms);
+            c.foreign_tokens.insert(pf.domain.to_ascii_lowercase(), f);
+        }
         c.state_key = p.state_key.as_ref().map(|(k, v)| d(k).and_then(|b| StateKey::from_bytes(&b).map_err(|_| ProtoError::Malformed)).map(|k| (k, *v))).transpose()?;
         c.reads = p.reads;
         c.revocations_done = p.revocations_done.into_iter().collect();
@@ -3561,6 +3690,23 @@ impl Client {
     }
 }
 
+/// Запас жетонов сервера другого домена (spec 028).
+#[derive(Default)]
+struct ForeignTokens {
+    stock: TokenStock,
+    keys: Vec<TokenKey>,
+    req: Option<(crate::tokens::TokenRequest, TokenKey)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedForeignTokens {
+    domain: String,
+    tokens: Vec<String>,
+    token_until: Vec<i64>,
+    next_refill_ms: Option<i64>,
+    keys: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct PersistedPeer {
     user: String,
@@ -3613,6 +3759,9 @@ struct Persisted {
     token_until: Vec<i64>,
     #[serde(default)]
     next_refill_ms: Option<i64>,
+    /// spec 028: жетоны серверов других доменов (нет поля — нет запасов).
+    #[serde(default)]
+    foreign_tokens: Vec<PersistedForeignTokens>,
     #[serde(default)]
     token_keys: Vec<String>,
     #[serde(default)]

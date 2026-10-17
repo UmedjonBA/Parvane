@@ -26,6 +26,12 @@ message ShardRequest {
   bool reauth_fresh = 7;
   // Роль оператора (server.stats.*).
   bool operator = 8;
+  // Федерация (spec 028): запрос пришёл с чужого сервера (домен-отправитель, проверенный подписью кадра). Ставит
+  // только шард federation, gateway — никогда. Для канала ID `user` принадлежит этому домену.
+  string origin_domain = 9 [
+    (max_len) = 128,
+    (actor) = ACTOR_SERVER_SET
+  ];
 }
 
 message ShardResponse {

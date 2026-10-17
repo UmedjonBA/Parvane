@@ -60,6 +60,8 @@ pub struct MethodInfo {
     pub shard: &'static str,
     pub subject: &'static str,
     pub operator_only: bool,
+    /// Федерация (spec 028): метод можно переслать чужому серверу и принять от него.
+    pub federated: bool,
     /// Индексы в `MESSAGES`.
     pub request: usize,
     pub response: usize,

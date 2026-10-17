@@ -58,6 +58,20 @@ fn env_list(name: &str) -> Vec<String> {
         .collect()
 }
 
+/// Возможности из `PARVANE_V2_FEATURES`; при включённой федерации — ещё `federation` (только для интерфейса).
+fn descriptor_features() -> Vec<String> {
+    let mut f = env_list("PARVANE_V2_FEATURES");
+    if federation_enabled() && !f.iter().any(|x| x == "federation") {
+        f.push("federation".into());
+    }
+    f
+}
+
+/// `PARVANE_FEDERATION=on` (spec 028); по умолчанию выключено.
+pub(crate) fn federation_enabled() -> bool {
+    matches!(std::env::var("PARVANE_FEDERATION").ok().as_deref().map(str::trim), Some("on" | "1" | "true"))
+}
+
 /// Подписанный описатель сервера.
 pub(crate) fn signed_descriptor(key: &ed25519_dalek::SigningKey) -> SignedServerDescriptor {
     let d = ServerDescriptor {
@@ -65,9 +79,11 @@ pub(crate) fn signed_descriptor(key: &ed25519_dalek::SigningKey) -> SignedServer
         server_key: key.verifying_key().to_bytes().to_vec(),
         proto_major: parvane_protocol::PROTO_MAJOR,
         proto_minor: parvane_protocol::PROTO_MINOR,
-        features: env_list("PARVANE_V2_FEATURES"),
+        features: descriptor_features(),
         endpoints: env_list("PARVANE_ENDPOINTS"),
         issued_ms: now_unix() * 1000,
+        // Федерация (spec 028): точка входа межсерверных запросов, `https://host[:port]`.
+        s2s_endpoint: std::env::var("PARVANE_S2S_ENDPOINT").unwrap_or_default().trim().trim_end_matches('/').to_string(),
     };
     let bytes = d.encode_to_vec();
     SignedServerDescriptor {

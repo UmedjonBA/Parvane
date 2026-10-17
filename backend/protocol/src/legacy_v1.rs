@@ -258,6 +258,7 @@ fn pack_ref(v: Option<&Value>) -> Option<PackRef> {
         // v1 качает наборы по гранту/публично — capability нет.
         capability: Vec::new(),
         content_hash: Vec::new(),
+        blob_domain: String::new(),
     })
 }
 

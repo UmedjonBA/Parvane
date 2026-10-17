@@ -19,6 +19,7 @@ service CallService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_CALL
       shard: "call"
+      federated: true
     };
   }
   // Первый сигнал звонка (Offer) — тот же sealed-конверт, отдельный метод
@@ -32,6 +33,7 @@ service CallService {
       rate: RATE_CLASS_ANON
       kind: METHOD_KIND_CALL
       shard: "call"
+      federated: true
     };
   }
   rpc IceConfig(IceConfigRequest) returns (IceConfigResponse) {

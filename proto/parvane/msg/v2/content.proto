@@ -140,6 +140,8 @@ message PackRef {
   // архив обязан дать тот же отпечаток. Пусто — старый клиент, наборы различаются
   // по отправителю.
   bytes content_hash = 7 [(parvane.core.v2.max_len) = 32];
+  // Федерация (spec 028): домен сервера архива набора; пусто — домен отправителя.
+  string blob_domain = 8 [(parvane.core.v2.max_len) = 128];
 }
 
 message LinkPreview {
@@ -192,6 +194,9 @@ message Media {
   // `cloud.blob.download_cap` в анонимном канале, без гранта на себя;
   // сервер хранит только SHA-256 (UploadCompleteRequest.capability_hash).
   bytes capability = 19 [(parvane.core.v2.max_len) = 32];
+  // Федерация (spec 028): домен сервера блоба; пусто — домен отправителя. При пересылке чужого вложения клиент
+  // обязан заполнить исходный домен.
+  string blob_domain = 20 [(parvane.core.v2.max_len) = 128];
 }
 
 message Sticker {

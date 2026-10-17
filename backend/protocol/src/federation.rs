@@ -21,7 +21,11 @@ use crate::address;
 use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
-use crate::pb::parvane::core::v2::{DeviceRef, Ref, S2sFrame, ServerDescriptor, SignedServerDescriptor, UserRef};
+use crate::pb::parvane::core::v2::{
+    s2s_request, s2s_response, DeviceRef, Error as PbError, ErrorCode, Ref, Request, S2sFrame, S2sRequest, S2sResponse,
+    S2sStreamChunk, ServerDescriptor, SignedServerDescriptor, UserRef,
+};
+use crate::pb::parvane::msg::v2::{inbox_record, InboxRecord};
 use crate::sign::{self, ctx, OpSigner, ReplayGuard};
 use crate::PROTO_MAJOR;
 
@@ -248,6 +252,282 @@ impl VerifiedS2S {
             Err(ProtoError::Forbidden)
         }
     }
+}
+
+// ── Транспорт S2S (spec 028) ────────────────────────────────────────────────
+
+/// Тип полезной нагрузки запроса.
+pub const REQUEST_TYPE: &str = "parvane.core.v2.S2SRequest";
+/// Тип первого кадра ответа.
+pub const RESPONSE_TYPE: &str = "parvane.core.v2.S2SResponse";
+/// Тип следующих кадров ответа STREAM-метода.
+pub const STREAM_CHUNK_TYPE: &str = "parvane.core.v2.S2SStreamChunk";
+/// Предел одного кадра в рамке `u32 BE` (полезная нагрузка ≤ 4 000 000 + поля кадра).
+pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
+/// Получателей одной записи инбокса.
+pub const MAX_PUSH_RECIPIENTS: usize = 200;
+/// Канал метода реестра.
+const CH_PRE: i32 = 1;
+const CH_ID: i32 = 2;
+
+/// Случайный `nonce` кадра.
+pub fn new_nonce() -> Vec<u8> {
+    let mut nonce = vec![0u8; NONCE_LEN];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    nonce
+}
+
+/// Подписываемые байты по готовому SHA-256 полезной нагрузки — для подписи по
+/// запросу (identity подписывает кадр, не видя тела): та же раскладка, что у
+/// [`frame_signing_bytes`].
+pub fn frame_signing_bytes_digest(
+    origin_domain: &str,
+    dest_domain: &str,
+    issued_ms: i64,
+    nonce: &[u8],
+    payload_type: &str,
+    payload_sha256: &[u8],
+) -> Result<Vec<u8>> {
+    if !address::is_valid_domain(origin_domain) || !address::is_valid_domain(dest_domain) {
+        return Err(ProtoError::BadAddress);
+    }
+    if nonce.len() != NONCE_LEN {
+        return Err(ProtoError::InvalidField("nonce"));
+    }
+    if !is_valid_payload_type(payload_type) {
+        return Err(ProtoError::InvalidField("payload_type"));
+    }
+    if payload_sha256.len() != 32 {
+        return Err(ProtoError::InvalidField("payload_sha256"));
+    }
+    let mut v = ctx::S2S_FRAME.to_vec();
+    v.push(origin_domain.len() as u8);
+    v.extend_from_slice(origin_domain.as_bytes());
+    v.push(dest_domain.len() as u8);
+    v.extend_from_slice(dest_domain.as_bytes());
+    v.extend_from_slice(&issued_ms.to_be_bytes());
+    v.extend_from_slice(nonce);
+    v.push(payload_type.len() as u8);
+    v.extend_from_slice(payload_type.as_bytes());
+    v.extend_from_slice(payload_sha256);
+    Ok(v)
+}
+
+/// Подписать кадр с заданным `nonce` (ответы и тесты).
+pub fn sign_frame_with_nonce(
+    key: &dyn OpSigner,
+    origin_domain: &str,
+    dest_domain: &str,
+    issued_ms: i64,
+    nonce: Vec<u8>,
+    payload_type: &str,
+    payload: Vec<u8>,
+) -> Result<S2sFrame> {
+    let fields = frame_fields(origin_domain, dest_domain, issued_ms, &nonce, payload_type, &payload)?;
+    let signature = sign::sign_ctx(key, ctx::S2S_FRAME, &[&fields]);
+    Ok(S2sFrame {
+        origin_domain: origin_domain.to_string(),
+        dest_domain: dest_domain.to_string(),
+        issued_ms,
+        nonce,
+        payload_type: payload_type.to_string(),
+        payload,
+        signature,
+    })
+}
+
+/// Рамка потока ответа: `u32 BE длина ‖ кадр`.
+pub fn frame_push(out: &mut Vec<u8>, frame: &[u8]) -> Result<()> {
+    if frame.len() > MAX_FRAME_BYTES {
+        return Err(ProtoError::FieldLimit("s2s_frame"));
+    }
+    out.extend_from_slice(&(frame.len() as u32).to_be_bytes());
+    out.extend_from_slice(frame);
+    Ok(())
+}
+
+/// Разборщик потока кадров ответа; длина проверяется до буферизации тела.
+#[derive(Default)]
+pub struct FrameReader {
+    buf: Vec<u8>,
+}
+
+impl FrameReader {
+    pub fn push(&mut self, bytes: &[u8]) -> Result<()> {
+        self.buf.extend_from_slice(bytes);
+        if self.buf.len() >= 4 {
+            let len = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
+            if len > MAX_FRAME_BYTES {
+                return Err(ProtoError::FieldLimit("s2s_frame"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Следующий целый кадр, если он уже пришёл.
+    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>> {
+        if self.buf.len() < 4 {
+            return Ok(None);
+        }
+        let len = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
+        if len > MAX_FRAME_BYTES {
+            return Err(ProtoError::FieldLimit("s2s_frame"));
+        }
+        if self.buf.len() < 4 + len {
+            return Ok(None);
+        }
+        let frame = self.buf[4..4 + len].to_vec();
+        self.buf.drain(..4 + len);
+        Ok(Some(frame))
+    }
+
+    /// Хвост без целого кадра (обрыв потока).
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+}
+
+/// Проверить межсерверный запрос: кадр (подпись, адресат, свежесть, повтор) и
+/// вид полезной нагрузки. Тело пересылаемого метода проверяется лимитами схемы
+/// как вход от клиента — чужой сервер не доверен больше, чем клиент.
+pub fn verify_request(
+    bytes: &[u8],
+    sender: &TrustedServer,
+    local_domain: &str,
+    now_ms: i64,
+    replay: Option<&mut ReplayGuard>,
+) -> Result<(VerifiedS2S, S2sRequest)> {
+    let v = verify_frame(bytes, sender, local_domain, now_ms, replay)?;
+    let req: S2sRequest = v.payload_as()?;
+    match req.kind.as_ref().ok_or(ProtoError::Malformed)? {
+        s2s_request::Kind::Forward(f) => {
+            let m = crate::schema::method(&f.method).ok_or(ProtoError::UnknownMethod)?;
+            if !m.federated {
+                return Err(ProtoError::Forbidden);
+            }
+            let probe = Request {
+                id: 0,
+                method: f.method.clone(),
+                body: f.body.clone(),
+                timeout_ms: f.timeout_ms.min(30_000),
+                padding: vec![],
+                dest_domain: String::new(),
+            };
+            crate::codec::check_request(&probe, Origin::Client)?;
+            if m.channel == CH_ID {
+                v.require_origin_address(&f.user)?;
+                if !address::is_valid_device_id(&f.device_id) {
+                    return Err(ProtoError::BadAddress);
+                }
+            } else if !f.user.is_empty() || !f.device_id.is_empty() {
+                // ANON/PRE не несут личности (sealed sender).
+                return Err(ProtoError::Forbidden);
+            }
+            if m.channel == CH_PRE && f.method != "server.describe" {
+                return Err(ProtoError::Forbidden);
+            }
+        }
+        s2s_request::Kind::InboxPush(p) => {
+            let group = p.group.as_ref().ok_or(ProtoError::InvalidField("group"))?;
+            v.require_origin_ref(group)?;
+            if p.recipients.is_empty() || p.recipients.len() > MAX_PUSH_RECIPIENTS {
+                return Err(ProtoError::InvalidField("recipients"));
+            }
+            for r in &p.recipients {
+                address::check_user(r)?;
+                let d = address::address_domain(&r.address).ok_or(ProtoError::BadAddress)?;
+                if !same_domain(d, local_domain) {
+                    return Err(ProtoError::Forbidden);
+                }
+            }
+            push_record(&p.record, group)?;
+        }
+        s2s_request::Kind::KeyOwner(k) => {
+            if k.ed25519.len() != 32 {
+                return Err(ProtoError::InvalidField("ed25519"));
+            }
+        }
+        s2s_request::Kind::PrivacyOf(q) => {
+            let d = address::address_domain(&q.user).ok_or(ProtoError::BadAddress)?;
+            if !same_domain(d, local_domain) {
+                return Err(ProtoError::Forbidden);
+            }
+        }
+        s2s_request::Kind::Ephemeral(e) => {
+            if e.channel_id.len() != 16 || e.payload.is_empty() {
+                return Err(ProtoError::InvalidField("ephemeral"));
+            }
+        }
+        s2s_request::Kind::AccountGone(g) => {
+            v.require_origin_user(g.user.as_ref().ok_or(ProtoError::InvalidField("user"))?)?;
+        }
+    }
+    Ok((v, req))
+}
+
+/// Запись инбокса из межсерверного кадра: только конверт или уведомление той же
+/// группы, без серверных полей (их ставит получатель).
+pub fn push_record(bytes: &[u8], group: &Ref) -> Result<InboxRecord> {
+    let rec: InboxRecord = decode_checked(bytes, Origin::Client)?;
+    if rec.seq != 0 || rec.received_ms != 0 {
+        return Err(ProtoError::InvalidField("record"));
+    }
+    let same = |r: Option<&Ref>| r.is_some_and(|r| same_domain(&r.domain, &group.domain) && r.id == group.id);
+    match rec.item.as_ref() {
+        Some(inbox_record::Item::Group(g)) if same(g.group.as_ref()) => Ok(rec),
+        Some(inbox_record::Item::GroupState(n)) if same(n.group.as_ref()) => Ok(rec),
+        _ => Err(ProtoError::Forbidden),
+    }
+}
+
+/// Байты полезной нагрузки ответа (подписывает отвечающий сервер).
+pub fn response_payload(request_nonce: &[u8], result: std::result::Result<Vec<u8>, PbError>) -> Vec<u8> {
+    S2sResponse {
+        request_nonce: request_nonce.to_vec(),
+        result: Some(match result {
+            Ok(b) => s2s_response::Result::Ok(b),
+            Err(e) => s2s_response::Result::Error(e),
+        }),
+    }
+    .encode_to_vec()
+}
+
+/// Ошибка ответа с кодом.
+pub fn error_of(code: ErrorCode, retry_after_ms: u32) -> PbError {
+    PbError { code: code as i32, retry_after_ms }
+}
+
+/// Проверить первый кадр ответа на свой запрос `request_nonce`.
+pub fn verify_response(
+    bytes: &[u8],
+    sender: &TrustedServer,
+    local_domain: &str,
+    now_ms: i64,
+    request_nonce: &[u8],
+) -> Result<S2sResponse> {
+    let v = verify_frame(bytes, sender, local_domain, now_ms, None)?;
+    let r: S2sResponse = v.payload_as()?;
+    if r.request_nonce != request_nonce || r.result.is_none() {
+        return Err(ProtoError::ContextMismatch);
+    }
+    Ok(r)
+}
+
+/// Проверить очередной кадр потока ответа (номер — строго по порядку).
+pub fn verify_stream_chunk(
+    bytes: &[u8],
+    sender: &TrustedServer,
+    local_domain: &str,
+    now_ms: i64,
+    request_nonce: &[u8],
+    expected_index: u32,
+) -> Result<S2sStreamChunk> {
+    let v = verify_frame(bytes, sender, local_domain, now_ms, None)?;
+    let c: S2sStreamChunk = v.payload_as()?;
+    if c.request_nonce != request_nonce || c.index != expected_index {
+        return Err(ProtoError::ContextMismatch);
+    }
+    Ok(c)
 }
 
 #[cfg(test)]

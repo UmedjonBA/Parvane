@@ -1,6 +1,6 @@
-// Межсерверный кадр (S2S, задел федерации R12/FR-051). Транспорт S2S вне
-// объёма v2: схема и проверка есть, передачи между серверами нет — запрос к
-// чужому домену получает Error{FEDERATION_UNAVAILABLE}.
+// Межсерверный кадр (S2S, R12/FR-051 спеки 007; транспорт — spec 028): HTTPS POST
+// `<s2s_endpoint>/_parvane/s2s`, тело — S2SFrame с полезной нагрузкой S2SRequest;
+// ответ — кадры `u32 BE длина ‖ S2SFrame` (S2SResponse, затем S2SStreamChunk).
 //
 // Доверие ограничено доменом: кадр подписан ключом сервера-отправителя
 // (server_key из его SignedServerDescriptor, опубликованного по
@@ -10,6 +10,9 @@ syntax = "proto3";
 
 package parvane.core.v2;
 
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/errors.proto";
+import "parvane/core/v2/internal.proto";
 import "parvane/core/v2/options.proto";
 
 message S2SFrame {
@@ -31,4 +34,111 @@ message S2SFrame {
   // ‖ u8(len(dest_domain)) ‖ dest_domain ‖ issued_ms(i64 BE) ‖ nonce(16)
   // ‖ u8(len(payload_type)) ‖ payload_type ‖ SHA-256(payload).
   bytes signature = 7 [(max_len) = 64];
+}
+
+// ── Шина своего сервера (spec 028) ──────────────────────────────────────────
+
+// Своё → шард federation по `v2.federation.out` (request-reply; для STREAM — ответы потоком в reply-inbox).
+// Ответ: ShardResponse (ok — тело ответа метода / KeyOwnerResponse / PrivacyOfResponse / пусто для очереди),
+// для STREAM — ShardResponse, затем ShardStreamChunk до last.
+message FederationOut {
+  string dest_domain = 1 [(max_len) = 128];
+  // ≤ 30000; 0 — 10000.
+  uint32 timeout_ms = 2;
+  oneof kind {
+    // gateway: клиентский запрос. Личность — как собрал gateway (ANON — пусто), client_ip пуст.
+    ShardRequest forward = 10;
+    // messenger: конверт/уведомление группы участникам домена (через очередь).
+    S2SInboxPush inbox_push = 11;
+    // messenger, domains: владелец ключа подписи (синхронно).
+    KeyOwnerRequest key_owner = 12;
+    // messenger: приватность «кто может добавлять в группы» (синхронно).
+    PrivacyOfRequest privacy_of = 13;
+    // gateway: «печатает» в группе для подписчиков на другом сервере (синхронно, без повтора).
+    S2SEphemeral ephemeral = 14;
+    // identity: аккаунт удалён (через очередь, всем активным доменам).
+    S2SAccountGone account_gone = 15;
+  }
+}
+
+// federation → identity по `v2.internal.s2s_sign`: подпись кадра ключом сервера. identity сам собирает байты
+// подписи (контекст кадра S2S) — подписать этим путём что-то иное нельзя; origin_domain — только свой.
+message S2SSignRequest {
+  string origin_domain = 1 [(max_len) = 128];
+  string dest_domain = 2 [(max_len) = 128];
+  int64 issued_ms = 3;
+  bytes nonce = 4 [(max_len) = 16];
+  string payload_type = 5 [(max_len) = 128];
+  bytes payload_sha256 = 6 [(max_len) = 32];
+}
+message S2SSignResponse {
+  bytes signature = 1 [(max_len) = 64];
+}
+
+// ── Полезная нагрузка межсерверных кадров ───────────────────────────────────
+
+// payload_type = "parvane.core.v2.S2SRequest" — тело POST /_parvane/s2s.
+message S2SRequest {
+  oneof kind {
+    S2SForward forward = 10;
+    S2SInboxPush inbox_push = 11;
+    KeyOwnerRequest key_owner = 12;
+    PrivacyOfRequest privacy_of = 13;
+    S2SEphemeral ephemeral = 14;
+    S2SAccountGone account_gone = 15;
+  }
+}
+
+// Клиентский запрос, пересланный своим сервером.
+message S2SForward {
+  // Метод реестра с federated = true.
+  string method = 1 [(max_len) = 96];
+  bytes body = 2 [(max_len) = 4194304];
+  // Канал ID: адрес пользователя ДОМЕНА-ОТПРАВИТЕЛЯ и его устройство. Каналы ANON и PRE: оба поля пусты.
+  string user = 3 [(max_len) = 255];
+  string device_id = 4 [(max_len) = 64];
+  // L2: длина как у Request.padding клиента; не читается.
+  bytes padding = 5 [(max_len) = 8192];
+  uint32 timeout_ms = 6;
+}
+
+// Запись инбокса участникам группы на сервере-получателе.
+message S2SInboxPush {
+  // Группа живёт на сервере-отправителе.
+  Ref group = 1;
+  // Только адреса домена-получателя (иначе весь кадр отвергается).
+  repeated UserRef recipients = 2 [(max_items) = 200];
+  // Сериализованный parvane.msg.v2.InboxRecord (байтами — пакет core.v2 не импортирует msg.v2, иначе цикл
+  // пакетов): только item = group (GroupEnvelope той же группы) или group_state (GroupStateNotice той же
+  // группы); seq и received_ms ставит получатель.
+  bytes record = 3 [(max_len) = 4194304];
+}
+
+message S2SEphemeral {
+  bytes channel_id = 1 [(max_len) = 16];
+  bytes payload = 2 [(max_len) = 256];
+}
+
+// Адрес домена-отправителя удалён (spec 027): получатель убирает его из своих групп.
+message S2SAccountGone {
+  UserRef user = 1;
+}
+
+// payload_type = "parvane.core.v2.S2SResponse" — первый кадр тела ответа.
+message S2SResponse {
+  // nonce кадра запроса: ответ не переносится на другой запрос.
+  bytes request_nonce = 1 [(max_len) = 16];
+  oneof result {
+    bytes ok = 2 [(max_len) = 4194304];
+    Error error = 3;
+  }
+}
+
+// payload_type = "parvane.core.v2.S2SStreamChunk" — следующие кадры ответа STREAM-метода.
+message S2SStreamChunk {
+  bytes request_nonce = 1 [(max_len) = 16];
+  uint32 index = 2;
+  bool last = 3;
+  bytes data = 4 [(max_len) = 716800];
+  Error error = 5;
 }

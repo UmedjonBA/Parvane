@@ -21,6 +21,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc StateSync(StateSyncRequest) returns (StateSyncResponse) {
@@ -30,6 +31,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc EpochPublishSendKey(EpochPublishSendKeyRequest) returns (EpochPublishSendKeyResponse) {
@@ -39,6 +41,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc InviteCreate(InviteCreateRequest) returns (InviteCreateResponse) {
@@ -48,6 +51,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc InviteList(InviteListRequest) returns (InviteListResponse) {
@@ -57,6 +61,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc InviteRevoke(InviteRevokeRequest) returns (InviteRevokeResponse) {
@@ -66,6 +71,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc InviteDelete(InviteDeleteRequest) returns (InviteDeleteResponse) {
@@ -75,6 +81,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc InviteCheck(InviteCheckRequest) returns (InviteCheckResponse) {
@@ -84,6 +91,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc Join(JoinRequest) returns (JoinResponse) {
@@ -93,6 +101,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc RequestList(RequestListRequest) returns (RequestListResponse) {
@@ -102,6 +111,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc PublicCheckName(PublicCheckNameRequest) returns (PublicCheckNameResponse) {
@@ -120,6 +130,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc PublicResolve(PublicResolveRequest) returns (PublicResolveResponse) {
@@ -129,6 +140,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc PublicHistory(PublicHistoryRequest) returns (PublicHistoryResponse) {
@@ -138,6 +150,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
   rpc RequestDecide(RequestDecideRequest) returns (RequestDecideResponse) {
@@ -147,6 +160,7 @@ service GroupService {
       rate: RATE_CLASS_REQ
       kind: METHOD_KIND_CALL
       shard: "messenger"
+      federated: true
     };
   }
 }
@@ -308,6 +322,8 @@ message SetInfo {
   // Фото группы — объект, зашифрованный ключом эпохи.
   string avatar_file_id = 3 [(parvane.core.v2.max_len) = 64];
   bytes avatar_key = 4 [(parvane.core.v2.max_len) = 32];
+  // Федерация (spec 028): домен сервера блоба фото; пусто — домен группы.
+  string avatar_domain = 5 [(parvane.core.v2.max_len) = 128];
 }
 
 message SetPermissions {
@@ -475,6 +491,8 @@ message PublicGroupCard {
   bool preview = 7;
   bool history = 8;
   parvane.core.v2.Ref group = 9;
+  // Федерация (spec 028): домен сервера блоба фото (копия из SetInfo); пусто — домен группы.
+  string avatar_domain = 10 [(parvane.core.v2.max_len) = 128];
 }
 
 message PublicCheckNameRequest {

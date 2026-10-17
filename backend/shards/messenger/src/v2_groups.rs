@@ -702,6 +702,7 @@ pub(crate) async fn serve_group_epoch(ctx: std::sync::Arc<V2>) {
                             send_public_key: s.send_public_key.map(|k| k.to_vec()).unwrap_or_default(),
                             stale: s.epoch_stale,
                             deleted: s.deleted,
+                            remote_domains: remote_domains(&s),
                         },
                         _ => mpb::GroupEpochInfo::default(),
                     },
@@ -714,4 +715,20 @@ pub(crate) async fn serve_group_epoch(ctx: std::sync::Arc<V2>) {
             }
         });
     }
+}
+
+/// Домены участников группы, кроме своего (spec 028): туда gateway рассылает «печатает» группы.
+pub(crate) fn remote_domains(s: &parvane_protocol::group::GroupState) -> Vec<String> {
+    let own = crate::v2::server_domain();
+    let mut out: Vec<String> = s
+        .members
+        .keys()
+        .filter_map(|a| parvane_protocol::address::address_domain(a))
+        .filter(|d| !d.eq_ignore_ascii_case(&own))
+        .map(|d| d.to_ascii_lowercase())
+        .collect();
+    out.sort();
+    out.dedup();
+    out.truncate(64);
+    out
 }
