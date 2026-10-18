@@ -121,7 +121,10 @@ struct TwoFactorState {
 void SetStrangersAllowed(bool allowed);
 // FR-040 (T137): «кто может звонить», «кто видит, что я в сети», «кто может
 // добавлять в группы» — «все» или «никто». Доступно при StrangersPolicyAvailable().
-enum class PrivacyAudience { Calls, Presence, GroupAdd };
+enum class PrivacyAudience { Calls, Presence, GroupAdd, CallsPeerToPeer };
+// WEB-14: «Звонки только через сервер» — настройка этого устройства (штатный пункт «Peer-to-peer»: «никто» =
+// только через TURN, собеседник не видит IP-адрес).
+[[nodiscard]] bool CallsRelayOnly();
 [[nodiscard]] bool PrivacyAudienceNobody(PrivacyAudience which);
 void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody);
 

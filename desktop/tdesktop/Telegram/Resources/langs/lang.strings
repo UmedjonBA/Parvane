@@ -2757,6 +2757,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
 "lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
 "lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
+"lng_parvane_call_peer_camera_off" = "Camera is off";
 "lng_parvane_report_reason_spam" = "Spam";
 "lng_parvane_report_reason_violence" = "Violence";
 "lng_parvane_report_reason_porn" = "Pornography";

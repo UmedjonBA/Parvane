@@ -69,6 +69,7 @@ private:
 	std::unique_ptr<Calls::VideoBubble> _localVideo;  // своя камера (self-preview)
 	rpl::variable<bool> _muted = false;
 	QString _peerName;
+	bool _remoteCameraOff = false; // spec 024: собеседник выключил камеру — аватар вместо видео
 	QTimer _timer;
 	bool _video = false;
 	bool _incoming = false;
@@ -191,6 +192,7 @@ void CallPanel::layout() {
 
 	// Есть ли реально удалённое видео (иначе — аватар даже в видеозвонке).
 	const auto remoteVideo = _remoteVideo
+		&& !_remoteCameraOff
 		&& Parvane::CallRemoteVideoTrack()
 		&& (Parvane::CallRemoteVideoTrack()->state()
 			!= Webrtc::VideoState::Inactive);
@@ -275,9 +277,21 @@ void CallPanel::setSas(const QString &sas) {
 }
 
 void CallPanel::setPeerMediaState(bool audioMuted, bool videoMuted) {
-	(void)videoMuted; // выключенная камера видна по самому видео (трек неактивен)
-	_remoteMuted.setText(tr::lng_call_microphone_off(tr::now, lt_user, _peerName));
-	_remoteMuted.setVisible(audioMuted);
+	auto lines = QStringList();
+	if (audioMuted) {
+		lines.push_back(tr::lng_call_microphone_off(tr::now, lt_user, _peerName));
+	}
+	// Камера выключена — видео не рисуется (последний кадр не висит), вместо него аватар
+	_remoteCameraOff = _video && videoMuted;
+	if (_remoteCameraOff) {
+		lines.push_back(tr::lng_parvane_call_peer_camera_off(tr::now));
+	}
+	// Видео собеседника гаснет штатно: неактивный трек VideoBubble не рисует
+	if (const auto track = Parvane::CallRemoteVideoTrack(); track && _video) {
+		track->setState(_remoteCameraOff ? Webrtc::VideoState::Inactive : Webrtc::VideoState::Active);
+	}
+	_remoteMuted.setText(lines.join('\n'));
+	_remoteMuted.setVisible(!lines.isEmpty());
 	layout();
 }
 

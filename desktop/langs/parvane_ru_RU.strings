@@ -8933,6 +8933,7 @@
 "lng_parvane_chat_mode_off_you" = "Вы выключили усиленную приватность";
 "lng_parvane_upgrade_available" = "Доступна новая версия Parvane. Обновите приложение — эта версия скоро перестанет работать.";
 "lng_parvane_upgrade_required" = "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.";
+"lng_parvane_call_peer_camera_off" = "Камера выключена";
 "lng_parvane_report_reason_spam" = "Спам";
 "lng_parvane_report_reason_violence" = "Насилие";
 "lng_parvane_report_reason_porn" = "Порнография";

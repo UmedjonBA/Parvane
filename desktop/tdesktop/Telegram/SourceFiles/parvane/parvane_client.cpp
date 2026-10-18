@@ -10443,17 +10443,42 @@ QString ResetIdentityWithPassword(const QString &password) {
 
 // FR-040 (T137): нативные пункты Settings → Privacy «Last seen & online»,
 // «Calls», «Groups & channels». У Parvane два значения — «все» и «никто».
+[[nodiscard]] QString CallsRelayPath() {
+	return cWorkingDir() + u"tdata/parvane-calls-relay"_q;
+}
+
+bool CallsRelayOnly() {
+	return QFile::exists(CallsRelayPath());
+}
+
 bool PrivacyAudienceNobody(PrivacyAudience which) {
+	if (which == PrivacyAudience::CallsPeerToPeer) {
+		return CallsRelayOnly();
+	}
 	const auto privacy = LoadPrivacyLocal(SelfAddress());
 	switch (which) {
 	case PrivacyAudience::Calls: return privacy.callsNobody;
 	case PrivacyAudience::Presence: return privacy.presenceNobody;
 	case PrivacyAudience::GroupAdd: return privacy.groupAddNobody;
+	case PrivacyAudience::CallsPeerToPeer: break;
 	}
 	return false;
 }
 
 void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody) {
+	if (which == PrivacyAudience::CallsPeerToPeer) {
+		// Только это устройство (как web parvane:calls_p2p): на сервер не уходит
+		if (nobody) {
+			QFile file(CallsRelayPath());
+			if (file.open(QIODevice::WriteOnly)) {
+				file.write("1");
+			}
+		} else {
+			QFile::remove(CallsRelayPath());
+		}
+		LOG(("Parvane: звонки только через сервер: %1").arg(nobody ? u"да"_q : u"нет"_q));
+		return;
+	}
 	const auto self = SelfAddress();
 	if (self.isEmpty()) {
 		return;
@@ -10474,6 +10499,8 @@ void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody) {
 			privacy.groupAddNobody = nobody;
 			privacy.dirty = true;
 			return u"добавление в группы"_q;
+		case PrivacyAudience::CallsPeerToPeer:
+			break;
 		}
 		return QString();
 	}();

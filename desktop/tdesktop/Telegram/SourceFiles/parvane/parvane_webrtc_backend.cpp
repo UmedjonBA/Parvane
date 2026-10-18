@@ -343,6 +343,11 @@ private:
 			LOG(("Parvane: ICE-серверов сконфигурировано: %1")
 				.arg(int(config.servers.size())));
 		}
+		// WEB-14: «звонки только через сервер» — только TURN, собеседник не видит IP-адрес
+		if (Parvane::CallsRelayOnly()) {
+			config.type = webrtc::PeerConnectionInterface::kRelay;
+			LOG(("Parvane: звонок только через сервер (relay)"));
+		}
 		webrtc::PeerConnectionDependencies deps(_observer.get());
 		auto pcOrError = g.factory->CreatePeerConnectionOrError(
 			config, std::move(deps));

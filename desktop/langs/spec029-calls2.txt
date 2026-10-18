@@ -1,0 +1,3 @@
+lng_parvane_call_peer_camera_off
+Camera is off
+Камера выключена

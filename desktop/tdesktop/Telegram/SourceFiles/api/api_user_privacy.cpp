@@ -33,6 +33,7 @@ constexpr auto kMaxRules = 3; // Allow users, disallow users, Option.
 	case UserPrivacy::Key::Calls: return Parvane::PrivacyAudience::Calls;
 	case UserPrivacy::Key::LastSeen: return Parvane::PrivacyAudience::Presence;
 	case UserPrivacy::Key::Invites: return Parvane::PrivacyAudience::GroupAdd;
+	case UserPrivacy::Key::CallsPeer2Peer: return Parvane::PrivacyAudience::CallsPeerToPeer;
 	default: return std::nullopt;
 	}
 }
