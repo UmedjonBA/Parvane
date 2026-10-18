@@ -1,0 +1,75 @@
+lng_parvane_report_reason_spam
+Spam
+Спам
+
+lng_parvane_report_reason_violence
+Violence
+Насилие
+
+lng_parvane_report_reason_porn
+Pornography
+Порнография
+
+lng_parvane_report_reason_child
+Child abuse
+Насилие над детьми
+
+lng_parvane_report_reason_copyright
+Copyright
+Нарушение авторских прав
+
+lng_parvane_report_reason_illegal
+Illegal goods
+Незаконные товары
+
+lng_parvane_report_reason_personal
+Personal details
+Личные данные
+
+lng_parvane_report_reason_fake
+Fake account
+Поддельный аккаунт
+
+lng_parvane_report_reason_other
+Other
+Другое
+
+lng_parvane_report_to_admins_title
+What is wrong? The report and the text of the messages go to the group admins
+Что не так? Жалоба и текст сообщений уйдут админам группы
+
+lng_parvane_report_to_server_title
+What is wrong? The report and the text of the messages go to the server administrator, encrypted for them only
+Что не так? Жалоба и текст сообщений уйдут администратору сервера — зашифрованными только для него
+
+lng_parvane_report_sent
+Report sent
+Жалоба отправлена
+
+lng_parvane_report_unavailable
+This server does not accept reports to the administrator. You can block the user.
+Этот сервер не принимает жалобы администратору. Пользователя можно заблокировать.
+
+lng_parvane_report_failed
+Could not send the report. Try again.
+Не удалось отправить жалобу. Попробуйте ещё раз.
+
+lng_parvane_mod_delete
+Delete messages
+Удалить сообщения
+
+lng_parvane_mod_ban
+Ban in group
+Заблокировать в группе
+
+lng_parvane_mod_deleted
+Messages deleted
+Сообщения удалены
+
+lng_parvane_mod_banned
+Author banned in the group
+Автор заблокирован в группе
+
+lng_parvane_mod_failed
+Could not do that — check your admin rights
+Не получилось — проверьте права админа

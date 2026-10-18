@@ -55,7 +55,10 @@ inline std::optional<std::string> contentText(const json &content) {
     const auto kind = contentKind(content);
     // location (внутри E2E-контента) рендерится как сообщение с гео-медиа.
     if (kind == "location") return std::string();
-    if (kind != "text") return std::nullopt;
+    // TASK-1, CLOUD-1, ARTICLE-1, spec 024: карточки показываются своим полем `text` (кнопки — у клиента)
+    const bool card = kind == "task_offer" || kind == "task_response" || kind == "cloud_invite"
+                      || kind == "article" || kind == "mod_report";
+    if (kind != "text" && !card) return std::nullopt;
     const auto it = content.find("text");
     return (it != content.end() && it->is_string()) ? it->get<std::string>() : std::string();
 }

@@ -6,6 +6,7 @@
 
 #include "parvane/poll.h"
 #include "parvane/call.h"
+#include "parvane/messenger.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_engine.h"
 
@@ -234,6 +235,12 @@ int main() {
         const auto resp = respV2 ? v2::fromV2(*respV2) : std::nullopt;
         check(resp && *resp == respV1, "task_response туда и обратно");
         check(v2::v2Kind(json{{"task_offer", json::object()}}) == "task_offer", "v2Kind: task_offer");
+        // TASK-1, CLOUD-1, ARTICLE-1, spec 024: клиент без карточек показывает `text`, а не теряет сообщение
+        for (const auto *kind : {"task_offer", "task_response", "cloud_invite", "article", "mod_report"}) {
+            const auto shown = parvane::contentText(json{{"kind", kind}, {"text", "показ"}});
+            check(shown && *shown == "показ", std::string("карточка ") + kind + " показывается текстом");
+        }
+        check(!parvane::contentText(json{{"kind", "photo"}, {"text", "x"}}), "медиа не идёт текстовым путём");
         const json inviteV1{{"kind", "cloud_invite"}, {"container", {{"domain", "local"}, {"id", "AAEC"}}}, {"name", "Проект"},
                             {"role", 2}, {"text", "Приглашение в папку «Проект» (редактор)"}};
         const auto inviteV2 = v2::toV2(inviteV1);

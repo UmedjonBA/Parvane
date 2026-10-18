@@ -5910,6 +5910,36 @@ void ResolveNames(const QStringList &addresses) {
 		? c["ttl_secs"].get<int>() : 0;
 }
 
+// Карточки сообщений с кнопками (spec 024 и др.): содержимое по uuid и inline-кнопки штатной клавиатуры
+// tdesktop; нажатие приходит в Api::SendBotCallbackData → HandleCardButton. Только main.
+QHash<QString, QString> g_cardContent;
+
+[[nodiscard]] MTPKeyboardButton CardButton(const QString &text, const QString &data) {
+	return MTP_keyboardButtonCallback(
+		MTP_flags(0),
+		MTPKeyboardButtonStyle(),
+		MTP_string(text),
+		MTP_bytes(data.toUtf8()));
+}
+
+[[nodiscard]] std::optional<MTPReplyMarkup> CardMarkup(
+		const QString &uuid,
+		const parvane::json &content,
+		bool out) {
+	const auto kind = parvane::contentKind(content);
+	if (kind != "mod_report" || out) {
+		return std::nullopt;
+	}
+	g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+	// Жалоба на сообщения группы — админу: удалить их у всех либо заблокировать автора в группе
+	return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
+		MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
+			CardButton(tr::lng_parvane_mod_delete(tr::now), u"pv:moddel:"_q + uuid),
+			CardButton(tr::lng_parvane_mod_ban(tr::now), u"pv:modban:"_q + uuid),
+		})),
+	}));
+}
+
 [[nodiscard]] MTPMessage buildMessage(
 		std::uint64_t authorId,
 		std::uint64_t peerId,
@@ -5922,7 +5952,8 @@ void ResolveNames(const QStringList &addresses) {
 		bool peerIsChat = false,
 		const MTPVector<MTPMessageEntity> &entities = MTPVector<MTPMessageEntity>(),
 		int ttlSecs = 0,
-		bool mentionsSelf = false) {
+		bool mentionsSelf = false,
+		const std::optional<MTPReplyMarkup> &markup = std::nullopt) {
 	const auto authorPeer = peerFromUser(UserId(BareId(authorId)));
 	// Диалог — 1-на-1 (user) или группа (chat). Для группы peerId = chatId.
 	const auto dialogPeer = peerIsChat
@@ -5936,7 +5967,8 @@ void ResolveNames(const QStringList &addresses) {
 		| (hasEntities ? Flag::f_entities : Flag(0))
 		| (ttlSecs > 0 ? Flag::f_ttl_period : Flag(0)) // самоуничтожение (TTL)
 		| (mentionsSelf ? Flag::f_mentioned : Flag(0)) // «вас упомянули»
-		| (replyToMsgId ? Flag::f_reply_to : Flag(0));
+		| (replyToMsgId ? Flag::f_reply_to : Flag(0))
+		| (markup ? Flag::f_reply_markup : Flag(0));
 	const auto replyHeader = replyToMsgId
 		? MTP_messageReplyHeader(
 			MTP_flags(MTPDmessageReplyHeader::Flag::f_reply_to_msg_id),
@@ -5967,7 +5999,7 @@ void ResolveNames(const QStringList &addresses) {
 		MTP_int(int(ts)),           // date
 		MTP_string(text),           // message (для медиа — caption)
 		media,
-		MTPReplyMarkup(),
+		markup.value_or(MTPReplyMarkup()), // кнопки карточки (жалоба админу и т. п.)
 		entities,                   // форматирование (bold/italic/code/…)
 		MTPint(),                   // views
 		MTPint(),                   // forwards
@@ -7470,7 +7502,8 @@ void injectOnMain(
 				hasWp ? buildWebpageMedia(wpJson)
 					: isLoc ? buildLocationMedia(sm.content) : MTPMessageMedia(),
 				/*hasMedia=*/hasWp || isLoc, replyToMsgId,
-				/*peerIsChat=*/false, entities, ttl, mentionsSelf),
+				/*peerIsChat=*/false, entities, ttl, mentionsSelf,
+				CardMarkup(uuid, sm.content, out)),
 			MessageFlags(),
 			NewMessageType::Unread);
 		if (ttl > 0) {
@@ -11593,6 +11626,216 @@ bool JoinByInviteLink(const QString &url) {
 }
 void LeaveGroup(const QString &groupId) {
 	groupAdminAction(groupId, SelfAddress(), u"remove"_q); // сам себя = выйти
+}
+
+namespace {
+
+constexpr auto kReportSubmitMark = ":send";
+constexpr auto kReportCommentMax = 1024;
+constexpr auto kReportTextMax = 4096;
+constexpr auto kReportFallbackMax = 600;
+
+[[nodiscard]] std::vector<std::pair<QByteArray, QString>> ReportReasons() {
+	return {
+		{ "spam", tr::lng_parvane_report_reason_spam(tr::now) },
+		{ "violence", tr::lng_parvane_report_reason_violence(tr::now) },
+		{ "porn", tr::lng_parvane_report_reason_porn(tr::now) },
+		{ "child", tr::lng_parvane_report_reason_child(tr::now) },
+		{ "copyright", tr::lng_parvane_report_reason_copyright(tr::now) },
+		{ "illegal", tr::lng_parvane_report_reason_illegal(tr::now) },
+		{ "personal", tr::lng_parvane_report_reason_personal(tr::now) },
+		{ "fake", tr::lng_parvane_report_reason_fake(tr::now) },
+		{ "other", tr::lng_parvane_report_reason_other(tr::now) },
+	};
+}
+
+// Админы группы v2 с правом удалять сообщения или банить (кроме себя) — как web reportAdmins.
+[[nodiscard]] std::vector<std::string> ReportAdmins(const QString &gid) {
+	auto out = std::vector<std::string>();
+	if (!parvane::v2::isGroupAddress(gid.toStdString())) {
+		return out;
+	}
+	const auto self = SelfAddress().toStdString();
+	const auto it = g_groupInfo.constFind(gid);
+	if (it == g_groupInfo.constEnd()) {
+		return out;
+	}
+	for (const auto &m : it->members) {
+		if (m.address == self) {
+			continue;
+		}
+		const auto rights = m.admin_rights.value_or(parvane::AdminRights());
+		if (m.role == "owner" || (m.role == "admin" && (rights.delete_messages || rights.ban_users))) {
+			out.push_back(m.address);
+		}
+	}
+	return out;
+}
+
+void ShowReportOutcome(const QString &outcome) {
+	if (const auto window = Core::App().activeWindow()) {
+		window->showToast((outcome == u"sent"_q)
+			? tr::lng_parvane_report_sent(tr::now)
+			: (outcome == u"unavailable"_q)
+			? tr::lng_parvane_report_unavailable(tr::now)
+			: tr::lng_parvane_report_failed(tr::now));
+	}
+}
+
+} // namespace
+
+void ReportMessages(
+		not_null<PeerData*> peer,
+		const QByteArray &optionId,
+		const QString &comment,
+		const std::vector<MsgId> &ids,
+		Fn<void(ReportStep)> done) {
+	const auto address = peer->isChat()
+		? GroupIdForChat(peer)
+		: AddressForId(std::uint64_t(peerToUser(peer->id).bare));
+	if (address.isEmpty()) {
+		done({ .error = u"PARVANE_NO_PEER"_q });
+		return;
+	}
+	const auto admins = ids.empty() ? std::vector<std::string>() : ReportAdmins(address);
+	if (optionId.isEmpty()) {
+		done({
+			.options = ReportReasons(),
+			.title = admins.empty()
+				? tr::lng_parvane_report_to_server_title(tr::now)
+				: tr::lng_parvane_report_to_admins_title(tr::now),
+		});
+		return;
+	}
+	// Второй шаг — необязательный комментарий; отметка в id отличает отправку от него
+	if (!optionId.endsWith(kReportSubmitMark)) {
+		done({ .commentId = optionId + kReportSubmitMark });
+		return;
+	}
+	const auto reason = optionId.left(optionId.size() - int(std::strlen(kReportSubmitMark))).toStdString();
+	const auto note = comment.left(kReportCommentMax).toStdString();
+	auto reported = parvane::json::array();
+	auto fallback = QStringList();
+	for (const auto &id : ids) {
+		const auto item = peer->owner().message(peer->id, id);
+		const auto uuid = g_msgIdToUuid.value(id.bare);
+		const auto from = item ? item->from().get() : nullptr;
+		const auto author = (from && from->isUser())
+			? AddressForId(std::uint64_t(peerToUser(from->id).bare))
+			: QString();
+		if (!item || uuid.isEmpty() || author.isEmpty()) {
+			continue;
+		}
+		// Без текста (фото, видео, стикер) — пометка: само вложение жалоба не несёт
+		auto text = item->originalText().text;
+		if (text.isEmpty()) {
+			text = u"[media]"_q;
+		}
+		fallback.push_back(text);
+		reported.push_back({
+			{ "op_id", uuid.toStdString() },
+			{ "author", author.toStdString() },
+			{ "text", text.left(kReportTextMax).toStdString() },
+			{ "ts", std::int64_t(item->date()) },
+		});
+	}
+	const auto chat = address.toStdString();
+	const auto self = SelfAddress().toStdString();
+	crl::async([=] {
+		auto outcome = QString();
+		if (!admins.empty() && !reported.empty()) {
+			const auto hex = parvane::v2::groupHex(chat);
+			auto content = parvane::json{
+				{ "kind", "mod_report" },
+				{ "report_group", {
+					{ "domain", self.substr(self.find('@') == std::string::npos ? self.size() : self.find('@') + 1) },
+					{ "id", parvane::v2::hexToB64(hex) },
+				} },
+				{ "reason", reason },
+				{ "reported", reported },
+				{ "text", (u"⚠️ "_q + fallback.join(u" / "_q)).left(kReportFallbackMax).toStdString() },
+			};
+			if (!note.empty()) {
+				content["comment"] = note;
+			}
+			auto sent = false;
+			for (const auto &admin : admins) {
+				sent = !sendSealedDirect(admin, content).empty() || sent;
+			}
+			outcome = sent ? u"sent"_q : u"failed"_q;
+		} else if (const auto s = V2Ready()) {
+			outcome = QString::fromStdString(s->submitReport({
+				{ "version", 1 },
+				{ "reason", reason },
+				{ "comment", note },
+				{ "chat", chat },
+				{ "target", reported.empty() ? chat : reported[0].value("author", chat) },
+				{ "messages", reported },
+			}));
+		} else {
+			outcome = u"failed"_q;
+		}
+		LOG(("Parvane: жалоба (%1) → %2").arg(QString::fromStdString(reason), outcome));
+		crl::on_main([=] {
+			ShowReportOutcome(outcome);
+			done((outcome == u"sent"_q)
+				? ReportStep{ .successful = true }
+				: ReportStep{ .error = u"PARVANE_REPORT_"_q + outcome });
+		});
+	});
+}
+
+bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
+	const auto text = QString::fromUtf8(data);
+	if (!text.startsWith(u"pv:"_q)) {
+		return false;
+	}
+	const auto parts = text.split(':');
+	const auto action = parts.value(1);
+	const auto uuid = parts.mid(2).join(':');
+	const auto content = parvane::json::parse(g_cardContent.value(uuid).toStdString(), nullptr, false);
+	if (!content.is_object()) {
+		return true;
+	}
+	if (action == u"moddel"_q || action == u"modban"_q) {
+		const auto group = content.value("report_group", parvane::json::object());
+		const auto hex = parvane::v2::b64ToHex(group.value("id", std::string()));
+		const auto gid = QString::fromStdString(parvane::v2::groupAddress(hex));
+		const auto reported = content.value("reported", parvane::json::array());
+		if (action == u"moddel"_q) {
+			auto targets = parvane::json::array();
+			auto first = QString();
+			for (const auto &m : reported) {
+				const auto op = m.value("op_id", std::string());
+				if (!op.empty()) {
+					targets.push_back(parvane::v2::ref(op));
+					if (first.isEmpty()) first = QString::fromStdString(op);
+				}
+			}
+			const auto ok = !targets.empty() && TryMutateV2(first, parvane::json{ { "delete", {
+				{ "targets", targets },
+				{ "for_everyone", true } } } });
+			if (const auto window = Core::App().activeWindow()) {
+				window->showToast(ok ? tr::lng_parvane_mod_deleted(tr::now) : tr::lng_parvane_mod_failed(tr::now));
+			}
+		} else {
+			auto authors = QSet<QString>();
+			for (const auto &m : reported) {
+				authors.insert(QString::fromStdString(m.value("author", std::string())));
+			}
+			for (const auto &author : authors) {
+				if (!author.isEmpty()) {
+					BanMember(gid, author, true);
+				}
+			}
+			if (const auto window = Core::App().activeWindow()) {
+				window->showToast(tr::lng_parvane_mod_banned(tr::now));
+			}
+		}
+		LOG(("Parvane: карточка жалобы: %1 в %2").arg(action, gid));
+	}
+	(void)item;
+	return true;
 }
 
 QString GroupIdForChat(not_null<PeerData*> peer) {

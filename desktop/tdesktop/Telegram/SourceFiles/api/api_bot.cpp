@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_bot.h"
 
+#include "parvane/parvane_client.h" // Parvane: кнопки карточек
+
 #include "apiwrap.h"
 #include "api/api_cloud_password.h"
 #include "api/api_send_progress.h"
@@ -71,6 +73,10 @@ void SendBotCallbackData(
 	};
 	const auto button = getButton();
 	if (!button || button->requestId) {
+		return;
+	}
+	// Parvane: кнопки карточек сообщений (жалоба админу и т. п.) обрабатывает клиент
+	if (Parvane::HandleCardButton(item, button->data)) {
 		return;
 	}
 

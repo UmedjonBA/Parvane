@@ -223,6 +223,26 @@ struct DeleteAccountResult {
 // После удаления: снять учётные данные и выйти на экран входа (ключи и история остаются). Только main.
 void SignOutDeletedAccount();
 
+// Жалобы (spec 024) — шаги штатного окна жалобы tdesktop: список причин → необязательный комментарий →
+// отправка. Сообщения группы v2 — карточкой mod_report её админам с правом удалять/банить, остальное —
+// администратору сервера (запечатано его ключом). Только main; done — на main.
+struct ReportStep {
+	std::vector<std::pair<QByteArray, QString>> options; // id причины → подпись
+	QString title;
+	std::optional<QByteArray> commentId; // шаг комментария (необязательного)
+	bool successful = false;
+	QString error;
+};
+void ReportMessages(
+	not_null<PeerData*> peer,
+	const QByteArray &optionId,
+	const QString &comment,
+	const std::vector<MsgId> &ids,
+	Fn<void(ReportStep)> done);
+
+// Кнопка карточки сообщения (inline-кнопка с данными "pv:…"): true — обработана здесь. Только main.
+bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data);
+
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
 [[nodiscard]] RegisterResult Register(
 	const QString &user,

@@ -3130,14 +3130,13 @@ bool HistoryItem::canDeleteForEveryone(TimeId now) const {
 }
 
 bool HistoryItem::suggestReport() const {
+	// Parvane (spec 024): пожаловаться можно на любое чужое сообщение — в группе админам, иначе серверу
 	if (out() || isService() || !isRegular()) {
 		return false;
-	} else if (_history->peer->isChannel()) {
-		return true;
 	} else if (const auto user = _history->peer->asUser()) {
-		return user->isBot();
+		return !user->isSelf();
 	}
-	return false;
+	return true;
 }
 
 bool HistoryItem::suggestBanReport() const {

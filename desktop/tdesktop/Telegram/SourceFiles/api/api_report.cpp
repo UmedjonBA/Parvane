@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_report.h"
 
+#include "parvane/parvane_client.h" // Parvane: жалобы без MTProto
+
 #include "apiwrap.h"
 #include "data/data_session.h"
 #include "data/data_peer.h"
@@ -80,6 +82,31 @@ auto CreateReportMessagesOrStoriesCallback(
 	return [=](
 			Data::ReportInput reportInput,
 			Fn<void(Result)> done) {
+		// Parvane (spec 024): шаги жалобы — причины, комментарий, отправка админам группы либо серверу
+		if (reportInput.stories.empty()) {
+			Parvane::ReportMessages(
+				peer,
+				reportInput.optionId,
+				reportInput.comment,
+				reportInput.ids,
+				[=](Parvane::ReportStep step) {
+					auto result = Result();
+					for (const auto &[id, text] : step.options) {
+						result.options.push_back({ .id = id, .text = text });
+					}
+					result.title = step.title;
+					if (step.commentId) {
+						result.commentOption = ReportResult::CommentOption{
+							.optional = true,
+							.id = *step.commentId,
+						};
+					}
+					result.successful = step.successful;
+					result.error = step.error;
+					done(std::move(result));
+				});
+			return;
+		}
 		auto apiIds = QVector<MTPint>();
 		apiIds.reserve(reportInput.ids.size() + reportInput.stories.size());
 		for (const auto &id : reportInput.ids) {
