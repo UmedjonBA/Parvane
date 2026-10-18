@@ -1,0 +1,7 @@
+lng_parvane_cloud_menu_save
+Save to Cloud
+Сохранить в облако
+
+lng_parvane_cloud_menu_attach
+From Cloud
+Из облака

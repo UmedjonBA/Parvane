@@ -1,0 +1,759 @@
+lng_parvane_planner_add_entry
++ Entry
++ Запись
+
+lng_parvane_planner_add_for_day
+Add to this day
+Добавить на этот день
+
+lng_parvane_planner_agenda_empty
+Nothing planned for the next 30 days
+На ближайшие 30 дней ничего не запланировано
+
+lng_parvane_planner_all_day
+All day
+Весь день
+
+lng_parvane_planner_all_day_short
+all day
+весь день
+
+lng_parvane_planner_all_day_tiny
+all
+весь
+
+lng_parvane_planner_aria_done
+Done: {name}
+Выполнено: {name}
+
+lng_parvane_planner_cal_agenda
+List
+Список
+
+lng_parvane_planner_cal_month
+Month
+Месяц
+
+lng_parvane_planner_cal_view
+Calendar view
+Вид календаря
+
+lng_parvane_planner_cal_week
+Week
+Неделя
+
+lng_parvane_planner_cal_year
+Year
+Год
+
+lng_parvane_planner_completed
+Completed · {amount}
+Завершённые · {amount}
+
+lng_parvane_planner_create_list
+Create group
+Создать группу
+
+lng_parvane_planner_daily_note
+Daily note
+Заметка дня
+
+lng_parvane_planner_daily_note_hint
+Thoughts, checklist items and links for the day live in «Knowledge».
+Мысли, пункты и ссылки дня — в «Знаниях».
+
+lng_parvane_planner_daily_note_write
+Write the daily note
+Написать заметку дня
+
+lng_parvane_planner_day_plan
+Plan: {planned} / {budget}
+План: {planned} / {budget}
+
+lng_parvane_planner_day_unrated
+{amount} unrated
+{amount} без оценки
+
+lng_parvane_planner_deadline_preview
+Due: {name}
+Срок: {name}
+
+lng_parvane_planner_due_passed
+overdue
+срок прошёл
+
+lng_parvane_planner_due_tiny
+due
+срок
+
+lng_parvane_planner_due_today
+due today
+срок сегодня
+
+lng_parvane_planner_due_tomorrow
+due tomorrow
+срок завтра
+
+lng_parvane_planner_due_value
+due {date}
+срок {date}
+
+lng_parvane_planner_error_name
+Enter a name
+Введите название
+
+lng_parvane_planner_error_minutes
+Duration must be from 5 to 1440 minutes
+Длительность — от 5 до 1440 минут
+
+lng_parvane_planner_error_start_needs
+A start time needs a work date
+Для времени начала нужна дата работы
+
+lng_parvane_planner_error_past_midnight
+The task runs past the end of the day
+Задача выходит за границу дня
+
+lng_parvane_planner_error_day_after_due
+The work date is after the deadline
+Дата работы позже дедлайна
+
+lng_parvane_planner_error_event_time
+The end must be later than the start
+Конец должен быть позже начала
+
+lng_parvane_planner_error_event_repeat
+Pick a date or weekdays for the event
+Укажите дату события или дни недели
+
+lng_parvane_planner_error_repeat_interval
+The repeat step must be from 1 to 99
+Шаг повтора — от 1 до 99
+
+lng_parvane_planner_error_repeat_weekdays
+Pick at least one weekday
+Выберите хотя бы один день недели
+
+lng_parvane_planner_error_repeat_month_day
+The day of month must be from 1 to 31
+Число месяца — от 1 до 31
+
+lng_parvane_planner_error_repeat_start
+Set the start date of the series
+Укажите дату начала ряда
+
+lng_parvane_planner_error_repeat_end
+The end date is before the start
+Дата конца раньше начала
+
+lng_parvane_planner_error_repeat_count
+The number of times must be from 1 to 999
+Число повторов — от 1 до 999
+
+lng_parvane_planner_error_list_name
+Enter the group name
+Введите название группы
+
+lng_parvane_planner_error_group_duplicate
+A group with this name already exists
+Группа с таким названием уже есть
+
+lng_parvane_planner_feed_wake
+Wake-up · slept {sleep}
+Подъём · сон {sleep}
+
+lng_parvane_planner_field_description
+Description
+Описание
+
+lng_parvane_planner_field_list
+Group
+Группа
+
+lng_parvane_planner_free
+Free
+Свободно
+
+lng_parvane_planner_group_add
+Group
+Группа
+
+lng_parvane_planner_group_apply
+Add
+Добавить
+
+lng_parvane_planner_group_delete
+Delete group
+Удалить группу
+
+lng_parvane_planner_group_delete_confirm
+Delete the group «{name}»? Its tasks and events stay, without a group.
+Удалить группу «{name}»? Её задачи и события останутся, без группы.
+
+lng_parvane_planner_group_name
+Group name
+Название группы
+
+lng_parvane_planner_group_pick
+Add to group
+Добавить в группу
+
+lng_parvane_planner_group_pick_hint
+Tick the entries to add, then choose the group.
+Отметьте записи, которые добавить, и выберите группу.
+
+lng_parvane_planner_group_picked
+Selected: {amount}
+Выбрано: {amount}
+
+lng_parvane_planner_group_with_repeats
+Together with repeats
+Вместе с повторами
+
+lng_parvane_planner_groups
+Groups
+Группы
+
+lng_parvane_planner_groups_period
+count · hours, next 30 days
+записей · часов за 30 дней
+
+lng_parvane_planner_health_body
+Body
+Тело
+
+lng_parvane_planner_health_budget_reduced
+Short sleep: day budget reduced
+Мало сна: бюджет дня снижен
+
+lng_parvane_planner_health_fiber_short
+fb {value}
+кл {value}
+
+lng_parvane_planner_health_food
+Food
+Еда
+
+lng_parvane_planner_health_goal_value
+goal {value}
+цель {value}
+
+lng_parvane_planner_health_goals
+Goals and settings
+Цели и настройки
+
+lng_parvane_planner_health_grams
+{value} g
+{value} г
+
+lng_parvane_planner_health_kcal
+{value} kcal
+{value} ккал
+
+lng_parvane_planner_health_kcal_over
+{value} over
+перебор {value}
+
+lng_parvane_planner_health_km
+{value} km
+{value} км
+
+lng_parvane_planner_health_macros
+P{protein} F{fat} C{carbs}
+Б{protein} Ж{fat} У{carbs}
+
+lng_parvane_planner_health_ml
+{value} ml
+{value} мл
+
+lng_parvane_planner_health_mood
+How I feel
+Самочувствие
+
+lng_parvane_planner_health_pace
+{value}/km
+{value}/км
+
+lng_parvane_planner_health_pressure
+Pressure
+Давление
+
+lng_parvane_planner_health_pulse
+Pulse
+Пульс
+
+lng_parvane_planner_health_sleep
+Sleep
+Сон
+
+lng_parvane_planner_health_sleep_goal
+{from}–{to} · goal {goal}
+{from}–{to} · цель {goal}
+
+lng_parvane_planner_health_sleep_none
+No sleep record
+Сон не записан
+
+lng_parvane_planner_health_steps_short
+Steps
+Шаги
+
+lng_parvane_planner_health_water
+Water
+Вода
+
+lng_parvane_planner_health_weight
+Weight
+Вес
+
+lng_parvane_planner_holiday
+Holiday
+Праздник
+
+lng_parvane_planner_hours_value
+{hours} h
+{hours} ч
+
+lng_parvane_planner_jump_today
+Current date
+Текущая дата
+
+lng_parvane_planner_kcal_left_of
+{left} left of {goal}
+осталось {left} из {goal}
+
+lng_parvane_planner_kind_event
+Event
+Событие
+
+lng_parvane_planner_kind_food
+Meal
+Еда
+
+lng_parvane_planner_kind_sleep
+Sleep
+Сон
+
+lng_parvane_planner_kind_task
+Task
+Задача
+
+lng_parvane_planner_kind_workout
+Workout
+Спорт
+
+lng_parvane_planner_layer_work
+Plans
+Дела
+
+lng_parvane_planner_layers
+Calendar layers
+Слои календаря
+
+lng_parvane_planner_meal_breakfast
+Breakfast
+Завтрак
+
+lng_parvane_planner_meal_lunch
+Lunch
+Обед
+
+lng_parvane_planner_meal_dinner
+Dinner
+Ужин
+
+lng_parvane_planner_meal_snack
+Snacks
+Перекусы
+
+lng_parvane_planner_meal_other
+Other entries
+Другие записи
+
+lng_parvane_planner_minutes_short
+{minutes}m
+{minutes}м
+
+lng_parvane_planner_minutes_value
+{minutes} min
+{minutes} мин
+
+lng_parvane_planner_month_sleep
+sleep {value}
+сон {value}
+
+lng_parvane_planner_near_limit
+The planner is close to its size limit. Delete old entries to keep syncing.
+Планировщик близок к потолку размера. Удалите старые записи, чтобы синхронизация продолжалась.
+
+lng_parvane_planner_needs_linking
+Planner data will appear after this device is linked to your account: reply to the Parvane bot in Telegram with your recovery key or confirm this device on another one.
+Данные планировщика появятся после привязки этого устройства к аккаунту: ответьте боту Parvane в Telegram ключом восстановления или подтвердите устройство на другом.
+
+lng_parvane_planner_new_list
+New group
+Новая группа
+
+lng_parvane_planner_new_task
+New task
+Новая задача
+
+lng_parvane_planner_next_day
+Next day
+Следующий день
+
+lng_parvane_planner_next_month
+Next month
+Следующий месяц
+
+lng_parvane_planner_next_period
+Next period
+Следующий период
+
+lng_parvane_planner_next_year
+Next year
+Следующий год
+
+lng_parvane_planner_no_list
+No group
+Без группы
+
+lng_parvane_planner_notice_added
+Added: {name}
+Добавлено: {name}
+
+lng_parvane_planner_notice_done
+{name} · Done
+{name} · Готово
+
+lng_parvane_planner_notice_goals_saved
+Goals updated
+Цели обновлены
+
+lng_parvane_planner_notice_group_added
+Added to «{name}»: {amount}
+Добавлено в «{name}»: {amount}
+
+lng_parvane_planner_notice_group_deleted
+Group deleted
+Группа удалена
+
+lng_parvane_planner_notice_group_saved
+Group saved
+Группа сохранена
+
+lng_parvane_planner_notice_list_created
+Group created: {name}
+Группа создана: {name}
+
+lng_parvane_planner_notice_moved
+Moved to {date}: {name}
+Перенесено на {date}: {name}
+
+lng_parvane_planner_notice_reopened
+{name} · Queue
+{name} · Очередь
+
+lng_parvane_planner_notice_undone
+Last action undone
+Последнее действие отменено
+
+lng_parvane_planner_pick_period
+Choose month and year
+Выбрать месяц и год
+
+lng_parvane_planner_prev_day
+Previous day
+Предыдущий день
+
+lng_parvane_planner_prev_month
+Previous month
+Предыдущий месяц
+
+lng_parvane_planner_prev_period
+Previous period
+Предыдущий период
+
+lng_parvane_planner_prev_year
+Previous year
+Предыдущий год
+
+lng_parvane_planner_quick_add
+Add
+Добавить
+
+lng_parvane_planner_quick_alternatives
+Other readings
+Другие чтения
+
+lng_parvane_planner_quick_auto
+Auto
+Авто
+
+lng_parvane_planner_quick_default
+Default: {date}
+По умолчанию: {date}
+
+lng_parvane_planner_quick_description_to_name
+Move the description back to the name
+Вернуть описание в название
+
+lng_parvane_planner_quick_due
+due {date}
+до {date}
+
+lng_parvane_planner_quick_examples
+call tomorrow 16:00 45 min | English lesson tue 15:00 -- listening test | task check the papers by fri | lunch buckwheat 13:00 650 kcal | sleep 23:40-07:30 | run 5 km 28 min | weight 72.4 | water 500 ml | slept from 14 to 15 | didn't sleep yesterday | gym squat 4x8x80, bench 3x10x60 | yoga 40 min | breakfast oatmeal 350 kcal | snack apple 80 kcal | water 300 ml | pressure 120/80 | pulse 64 | mood 4 | steps 9500
+созвон завтра 16:00 45 мин | пара по английскому вт 15:00 -- тест по лисенингу | задача проверить работы до пт | обед гречка 13:00 650 ккал | сон 23:40-07:30 | бег 5 км 28 мин | вес 72,4 | вода 500 мл | спал с 14 до 15 | вчера не спал | зал присед 4x8x80, жим 3x10x60 | йога 40 мин | завтрак овсянка 350 ккал | перекус яблоко 80 ккал | вода 300 мл | давление 120/80 | пульс 64 | самочувствие 4 | шаги 9500
+
+lng_parvane_planner_quick_examples_title
+Examples
+Примеры
+
+lng_parvane_planner_quick_forget
+Forget: {value}
+Забыть: {value}
+
+lng_parvane_planner_quick_hint
+Type as you would in a note: date, time, duration, deadline and repeat are recognised. Put a description after “--”: “English lesson tue 15:00 -- listening test”. Numbers can be words (“at five pm”). Markers #group, @place and a final ! set the group (task or event), the place and “in progress” (task).
+Пишите как в заметке: дата, время, длительность, срок и повтор распознаются сами. Описание пишите после «--»: «пара по английскому вт 15:00 -- тест по лисенингу». Числа можно словами («в пять вечера»). Метки #группа, @место и ! в конце — группа (у задачи и события), место и «в работе» (у задачи).
+
+lng_parvane_planner_quick_learned
+From your corrections
+По вашим правкам
+
+lng_parvane_planner_quick_more
+More options
+Подробнее
+
+lng_parvane_planner_quick_name
+Name
+Название
+
+lng_parvane_planner_quick_no_name
+No name yet
+Названия пока нет
+
+lng_parvane_planner_quick_placeholder
+call tomorrow 16:00 45 min
+созвон завтра 16:00 45 мин
+
+lng_parvane_planner_quick_recent_title
+Recent
+Недавние
+
+lng_parvane_planner_quick_remove
+Remove: {value}
+Убрать: {value}
+
+lng_parvane_planner_quick_suggestions_title
+Suggestions
+Подсказки
+
+lng_parvane_planner_quick_title
+New entry
+Новая запись
+
+lng_parvane_planner_quick_too_long
+The name is too long.
+Название слишком длинное.
+
+lng_parvane_planner_quick_workout_sets
+{amount} exercises
+упражнений: {amount}
+
+lng_parvane_planner_remind_at_start
+Remind at the start
+Напомнить в начале
+
+lng_parvane_planner_remind_before
+Remind {amount} before
+Напомнить за {amount}
+
+lng_parvane_planner_repeat_daily
+Every day
+Каждый день
+
+lng_parvane_planner_repeat_every_days
+Every {n} days
+Каждые {n} дн.
+
+lng_parvane_planner_repeat_every_months
+Every {n} months on day {day}
+Каждые {n} мес. {day}-го
+
+lng_parvane_planner_repeat_every_weeks
+Every {n} weeks: {days}
+Каждые {n} нед.: {days}
+
+lng_parvane_planner_repeat_every_years
+Every {n} years on {date}
+Каждые {n} г. {date}
+
+lng_parvane_planner_repeat_mark
+repeats
+повтор
+
+lng_parvane_planner_repeat_monthly
+Monthly on day {day}
+Ежемесячно {day}-го
+
+lng_parvane_planner_repeat_times
+{amount} times
+{amount} раз
+
+lng_parvane_planner_repeat_until
+until {date}
+до {date}
+
+lng_parvane_planner_repeat_weekly
+Every week: {days}
+Каждую неделю: {days}
+
+lng_parvane_planner_repeat_yearly
+Yearly on {date}
+Ежегодно {date}
+
+lng_parvane_planner_schedule
+Schedule
+Расписание
+
+lng_parvane_planner_settings
+Planner settings
+Настройки плана
+
+lng_parvane_planner_showing_saved
+No connection yet: showing the plan saved on this device. Editing will be available once it connects.
+Связи пока нет: показан план, сохранённый на устройстве. Править можно будет после подключения.
+
+lng_parvane_planner_sleep_routine_broken
+routine off track: ±{value}
+режим сбит: ±{value}
+
+lng_parvane_planner_sleep_routine_drifting
+routine drifting: ±{value}
+режим плавает: ±{value}
+
+lng_parvane_planner_sleep_warn
+Slept {sleep} — day budget reduced to {budget}
+Сон {sleep} — бюджет дня снижен до {budget}
+
+lng_parvane_planner_status_active
+In progress
+В работе
+
+lng_parvane_planner_status_done
+Done
+Готово
+
+lng_parvane_planner_status_queue
+Queue
+В очереди
+
+lng_parvane_planner_steps_count
+{done}/{total} steps
+{done}/{total} шагов
+
+lng_parvane_planner_sync_pending
+Waiting for the planner key from your other device. Some data has not arrived yet.
+Ждём ключ планировщика от другого вашего устройства. Часть данных ещё не получена.
+
+lng_parvane_planner_sync_unavailable
+Planner sync is unavailable right now. Changes are saved on this device and will be sent later.
+Синхронизация планировщика сейчас недоступна. Изменения сохранены на устройстве и уйдут позже.
+
+lng_parvane_planner_today
+Today
+Сегодня
+
+lng_parvane_planner_today_all_done
+All done
+Всё сделано
+
+lng_parvane_planner_today_left
+{amount} left
+осталось: {amount}
+
+lng_parvane_planner_today_load
+Day load
+Загрузка дня
+
+lng_parvane_planner_today_no_tasks
+No tasks for this day
+На этот день задач нет
+
+lng_parvane_planner_today_over
+Over the day budget
+Больше бюджета дня
+
+lng_parvane_planner_tomorrow
+Tomorrow
+Завтра
+
+lng_parvane_planner_yesterday
+Yesterday
+Вчера
+
+lng_parvane_planner_undated
+No date · {amount}
+Без даты · {amount}
+
+lng_parvane_planner_undated_all
+All without a date
+Все без даты
+
+lng_parvane_planner_undated_assign
+Schedule {name} for {date}
+Назначить «{name}» на {date}
+
+lng_parvane_planner_undated_empty
+No tasks without a date
+Задач без даты нет
+
+lng_parvane_planner_undated_hint
+Tasks without a day. Those «in progress» show up on «Today», the button on the right schedules a task for the selected day.
+Задачи без дня. «В работе» видны в «Сегодня», кнопка справа ставит задачу на выбранный день.
+
+lng_parvane_planner_undated_short
+No date
+Без даты
+
+lng_parvane_planner_undo
+Undo
+Отменить
+
+lng_parvane_planner_view_tasks
+Tasks
+Задачи
+
+lng_parvane_planner_year_legend
+Colour depth is the day load, a red number is a holiday, a dot is a task deadline.
+Насыщенность — загрузка дня, красное число — праздник, точка — срок задачи.
+
+lng_parvane_planner_section_title
+Planner
+План
+
+lng_parvane_planner_cancel
+Cancel
+Отмена
+
+lng_parvane_planner_save
+Save
+Сохранить
+
+lng_parvane_planner_edit
+Edit
+Изменить
+
+lng_parvane_planner_done
+Done
+Готово
+
+lng_parvane_planner_close
+Close
+Закрыть
+
+lng_parvane_planner_days_value
+{days} d
+{days} дн.

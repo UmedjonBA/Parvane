@@ -51,14 +51,74 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_rail.cpp
     ${src_loc}/parvane/parvane_rail.h
     # spec 029 L3 — «План»: виды (агент A)
+    ${src_loc}/parvane/parvane_planner_common.cpp
+    ${src_loc}/parvane/parvane_planner_common.h
+    ${src_loc}/parvane/parvane_planner_day.cpp
+    ${src_loc}/parvane/parvane_planner_day.h
+    ${src_loc}/parvane/parvane_planner.cpp
+    ${src_loc}/parvane/parvane_planner_agenda.cpp
+    ${src_loc}/parvane/parvane_planner_agenda.h
+    ${src_loc}/parvane/parvane_planner_calendar.cpp
+    ${src_loc}/parvane/parvane_planner_calendar.h
+    ${src_loc}/parvane/parvane_planner_header.cpp
+    ${src_loc}/parvane/parvane_planner_header.h
+    ${src_loc}/parvane/parvane_planner_quick.cpp
+    ${src_loc}/parvane/parvane_planner_quick.h
+    ${src_loc}/parvane/parvane_planner_today.cpp
+    ${src_loc}/parvane/parvane_planner_today.h
     # spec 029 L3 — «План»: окна и «Здоровье» (агент B)
+    ${src_loc}/parvane/parvane_planner_form_widgets.cpp
+    ${src_loc}/parvane/parvane_planner_form_widgets.h
+    ${src_loc}/parvane/parvane_planner_form_editors.cpp
+    ${src_loc}/parvane/parvane_planner_form_editors.h
+    ${src_loc}/parvane/parvane_planner_forms.cpp
+    ${src_loc}/parvane/parvane_planner_settings.cpp
+    ${src_loc}/parvane/parvane_planner_settings.h
+    ${src_loc}/parvane/parvane_health.cpp
+    ${src_loc}/parvane/parvane_health.h
+    ${src_loc}/parvane/parvane_health_widgets.cpp
+    ${src_loc}/parvane/parvane_health_widgets.h
     # spec 029 L3 — «Знания» (агент C)
+    ${src_loc}/parvane/parvane_knowledge_common.cpp
+    ${src_loc}/parvane/parvane_knowledge_common.h
+    ${src_loc}/parvane/parvane_note_folders.cpp
+    ${src_loc}/parvane/parvane_note_folders.h
+    ${src_loc}/parvane/parvane_note_links.cpp
+    ${src_loc}/parvane/parvane_note_links.h
+    ${src_loc}/parvane/parvane_note_markdown.cpp
+    ${src_loc}/parvane/parvane_note_markdown.h
+    ${src_loc}/parvane/parvane_note_view.cpp
+    ${src_loc}/parvane/parvane_note_view.h
+    ${src_loc}/parvane/parvane_notes_graph.cpp
+    ${src_loc}/parvane/parvane_notes_graph.h
+    ${src_loc}/parvane/parvane_notes_graph_panel.cpp
+    ${src_loc}/parvane/parvane_notes_graph_panel.h
+    ${src_loc}/parvane/parvane_knowledge.cpp
+    ${src_loc}/parvane/parvane_knowledge.h
+    ${src_loc}/parvane/parvane_knowledge_list.cpp
+    ${src_loc}/parvane/parvane_knowledge_list.h
     # spec 029 L3 — холст «Знаний» (агент D)
+    ${src_loc}/parvane/parvane_notes_canvas_look.cpp
+    ${src_loc}/parvane/parvane_notes_canvas_look.h
+    ${src_loc}/parvane/parvane_notes_canvas_media.cpp
+    ${src_loc}/parvane/parvane_notes_canvas_media.h
+    ${src_loc}/parvane/parvane_notes_canvas.cpp
+    ${src_loc}/parvane/parvane_notes_canvas_widgets.cpp
+    ${src_loc}/parvane/parvane_notes_canvas_widgets.h
     # spec 029 L3 — «Облако» (агент E)
+    ${src_loc}/parvane/parvane_cloud.cpp
+    ${src_loc}/parvane/parvane_cloud.h
+    ${src_loc}/parvane/parvane_cloud_dialogs.cpp
+    ${src_loc}/parvane/parvane_cloud_internal.h
+    ${src_loc}/parvane/parvane_cloud_store.cpp
+    ${src_loc}/parvane/parvane_cloud_widgets.cpp
     ${src_loc}/parvane/parvane_planner_forms.h
     ${src_loc}/parvane/parvane_notes_canvas.h
+    ${src_loc}/parvane/parvane_scheme_picker.cpp
+    ${src_loc}/parvane/parvane_scheme_picker.h
     ${src_loc}/parvane/parvane_sections_data.cpp
     ${src_loc}/parvane/parvane_sections_data.h
+    ${src_loc}/parvane/parvane_sections_hooks.cpp
     ${src_loc}/parvane/parvane_sections_host.cpp
     ${src_loc}/parvane/parvane_sections_host.h
     ${src_loc}/parvane/parvane_space.cpp

@@ -1,0 +1,15 @@
+lng_parvane_article_read
+Read
+Читать
+
+lng_parvane_article_save
+Save to notes
+Сохранить в заметки
+
+lng_parvane_article_saved
+Saved to notes: «{title}»
+Сохранено в заметки: «{title}»
+
+lng_parvane_article_save_failed
+Could not save the article
+Не удалось сохранить статью

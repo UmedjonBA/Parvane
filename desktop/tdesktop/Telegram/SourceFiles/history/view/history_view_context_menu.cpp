@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
 
+#include "parvane/parvane_cloud.h"
+
 #include "api/api_attached_stickers.h"
 #include "api/api_editing.h"
 #include "api/api_global_privacy.h"
@@ -313,6 +315,13 @@ void AddDocumentActions(
 				: tr::lng_context_show_in_folder(tr::now)),
 			[=] { ShowInFolder(document); },
 			&st::menuIconShowInFolder);
+		// Parvane fork (spec 029, spec 016): «Сохранить в облако» — скачанный файл на личный диск
+		if (item && !list->hasCopyMediaRestriction(item)) {
+			const auto path = document->filepath(true);
+			menu->addAction(tr::lng_parvane_cloud_menu_save(tr::now), [=] {
+				Parvane::ShowCloudSaveDialog(controller, { path });
+			}, &st::menuIconDownload);
+		}
 	}
 	if (document->hasAttachedStickers()) {
 		const auto controller = list->controller();

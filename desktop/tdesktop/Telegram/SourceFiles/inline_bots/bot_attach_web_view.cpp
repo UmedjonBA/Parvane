@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "inline_bots/bot_attach_web_view.h"
 
+#include "parvane/parvane_cloud.h"
+
 #include "api/api_blocked_peers.h"
 #include "api/api_common.h"
 #include "api/api_sending.h"
@@ -2923,6 +2925,10 @@ std::unique_ptr<Ui::DropdownMenu> MakeAttachBotsMenu(
 		++minimal;
 		raw->addAction(tr::lng_attach_document(tr::now), [=] {
 			attach(false);
+		}, &st::menuIconFile);
+		// Parvane fork (spec 029, spec 016): «Из облака» — файлы личного диска в чат
+		raw->addAction(tr::lng_parvane_cloud_menu_attach(tr::now), [=] {
+			Parvane::ShowCloudAttachDialog(controller, peer->owner().history(peer));
 		}, &st::menuIconFile);
 	}
 	if (peer->canCreatePolls(false)) {

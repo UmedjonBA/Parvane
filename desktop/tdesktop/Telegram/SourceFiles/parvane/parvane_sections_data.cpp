@@ -9,6 +9,8 @@
 #include <parvane/v2_session.h>
 
 #include <crl/crl_on_main.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <rpl/variable.h>
 
 #include <QtCore/QDateTime>
@@ -213,6 +215,43 @@ public:
 	json usage() override {
 		const auto body = _transport.encodeMethod("cloud.blob.usage", json::object());
 		return _transport.decodeMethod("cloud.blob.usage", _transport.request(false, "cloud.blob.usage", body, {}));
+	}
+
+	// Для файлов «Облака» (cloud_files.h, T064): миниатюры, перенос, ссылки
+	std::string randomBytes(std::size_t n) override {
+		auto result = std::string(n, '\0');
+		if (RAND_bytes(reinterpret_cast<unsigned char*>(result.data()), int(n)) != 1) {
+			throw std::runtime_error("RAND_bytes");
+		}
+		return result;
+	}
+	std::string sha256(const std::string &bytes) override {
+		auto result = std::string(SHA256_DIGEST_LENGTH, '\0');
+		SHA256(
+			reinterpret_cast<const unsigned char*>(bytes.data()),
+			bytes.size(),
+			reinterpret_cast<unsigned char*>(result.data()));
+		return result;
+	}
+	std::string sealWithKey(const std::string &plain, const std::string &keyRaw, const std::string &nonceRaw) override {
+		return parvane::blobcrypt::encryptWithKey(plain, keyRaw, nonceRaw);
+	}
+	std::optional<std::string> openWithKey(
+			const std::string &cipher,
+			const std::string &keyB64,
+			const std::string &nonceB64) override {
+		return parvane::blobcrypt::decrypt(cipher, keyB64, nonceB64);
+	}
+	std::string uploadCipher(const std::string &cipher, const std::string &capabilityRaw) override {
+		const auto session = _transport.session();
+		if (!session) {
+			throw domain::BusError("ERROR_CODE_UNAVAILABLE");
+		}
+		try {
+			return session->uploadBlob(cipher, capabilityRaw, kCloudChunkBytes, kDriveBucket);
+		} catch (const parvane::v2::V2Error &e) {
+			throw domain::BusError(e.code());
+		}
 	}
 
 private:

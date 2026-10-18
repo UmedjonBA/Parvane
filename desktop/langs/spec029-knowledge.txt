@@ -1,0 +1,467 @@
+lng_parvane_notes_tab_notes
+Notes
+Заметки
+
+lng_parvane_notes_tab_graph
+Graph
+Граф
+
+lng_parvane_notes_tab_canvas
+Canvas
+Холст
+
+lng_parvane_notes_tab_files
+Files
+Файлы
+
+lng_parvane_notes_vault_name
+Knowledge
+Знания
+
+lng_parvane_notes_daily_folder
+Daily
+Ежедневные
+
+lng_parvane_notes_new_note
+New note
+Новая заметка
+
+lng_parvane_notes_note_title
+Note title
+Название заметки
+
+lng_parvane_notes_search
+Search notes
+Поиск по заметкам
+
+lng_parvane_notes_graph_search
+Find in graph
+Найти на графе
+
+lng_parvane_notes_canvas_search
+Find on canvas
+Найти на холсте
+
+lng_parvane_notes_empty
+No notes yet. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud.
+Заметок пока нет. Заметки — обычные .md в зашифрованной папке «Знания» вашего облака.
+
+lng_parvane_notes_nothing_found
+Nothing found
+Ничего не найдено
+
+lng_parvane_notes_guide_added
+The «{name}» folder was added: notes about every section of Parvane
+Добавлена папка «{name}»: заметки обо всех разделах Parvane
+
+lng_parvane_notes_guide_open
+Open
+Открыть
+
+lng_parvane_notes_guide_dismiss
+Hide
+Скрыть
+
+lng_parvane_notes_guide_restore_text
+The guide is not among your notes right now. Create the «{name}» folder again? Notes you already have are never overwritten.
+Справки сейчас нет среди заметок. Создать папку «{name}» заново? Заметки, которые уже есть, не перезаписываются.
+
+lng_parvane_notes_guide_restore
+Create
+Создать
+
+lng_parvane_notes_guide_return
+Bring back the Parvane guide
+Вернуть справку Parvane
+
+lng_parvane_notes_notice_guide_failed
+The guide was not created. Check the connection and that this device is linked.
+Справка не создана. Проверьте связь и то, что это устройство привязано.
+
+lng_parvane_notes_new_folder
+New folder
+Новая папка
+
+lng_parvane_notes_folder_name
+Folder name
+Название папки
+
+lng_parvane_notes_folder_create
+Create
+Создать
+
+lng_parvane_notes_folder_rename
+Rename
+Переименовать
+
+lng_parvane_notes_folder_delete
+Delete folder
+Удалить папку
+
+lng_parvane_notes_folder_delete_title
+Delete folder
+Удалить папку
+
+lng_parvane_notes_folder_delete_confirm
+The folder «{name}» holds notes: {amount}. Move them to «No folder», or delete them together with the folder? Deleted notes stay in the Files trash for 30 days.
+В папке «{name}» заметок: {amount}. Перенести их в «Без папки» или удалить вместе с папкой? Удалённые заметки 30 дней лежат в корзине «Файлов».
+
+lng_parvane_notes_folder_delete_action
+Move to «No folder» and delete
+Перенести в «Без папки» и удалить
+
+lng_parvane_notes_folder_delete_with_notes
+Delete with notes
+Удалить вместе с заметками
+
+lng_parvane_notes_folder_actions
+Folder actions: {name}
+Действия с папкой «{name}»
+
+lng_parvane_notes_folder_add_note
+Add a note to «{name}»
+Новая заметка в «{name}»
+
+lng_parvane_notes_folder_empty
+Empty — add a note
+Пусто — добавить заметку
+
+lng_parvane_notes_folder_bad_name
+A folder name cannot be empty or contain slashes and control characters
+Название папки не может быть пустым и содержать косую черту или управляющие знаки
+
+lng_parvane_notes_folder_taken
+There is already a folder with this name
+Папка с таким названием уже есть
+
+lng_parvane_notes_folder_failed
+The folder was not changed. Check the connection.
+Папка не изменена. Проверьте связь.
+
+lng_parvane_notes_notice_folder_files
+«{name}» holds files that are not notes. Delete this folder in the «Files» tab.
+В «{name}» лежат файлы, которые не заметки. Удалите эту папку во вкладке «Файлы».
+
+lng_parvane_notes_move_note
+Move to another folder
+Переместить в другую папку
+
+lng_parvane_notes_move_title
+Folder for «{name}»
+Папка для «{name}»
+
+lng_parvane_notes_move_new_folder
+New folder…
+Новая папка…
+
+lng_parvane_notes_pick_note
+Pick a note on the left. Notes are plain .md files in the encrypted «Knowledge» folder of your cloud. Any event or task that links [[to a note]] shows up in its «Planned» block.
+Выберите заметку слева. Заметки — обычные .md в зашифрованной папке «Знания» в облаке. Любое событие или задача со ссылкой [[на заметку]] попадает в её блок «Запланировано».
+
+lng_parvane_notes_root
+No folder
+Без папки
+
+lng_parvane_notes_edit
+Edit
+Изменить
+
+lng_parvane_notes_save
+Save
+Готово
+
+lng_parvane_notes_delete
+Move to trash
+В корзину
+
+lng_parvane_notes_delete_confirm
+Move the note «{name}» to the cloud trash?
+Переместить заметку «{name}» в корзину облака?
+
+lng_parvane_notes_back
+Back to notes
+К заметкам
+
+lng_parvane_notes_editor_placeholder
+Text, - [ ] items, [[links]], #tags
+Текст, - [ ] пункты, [[ссылки]], #теги
+
+lng_parvane_notes_plan
+Schedule
+Запланировать
+
+lng_parvane_notes_plan_add
+Add
+Добавить
+
+lng_parvane_notes_planned
+Planned
+Запланировано
+
+lng_parvane_notes_planned_hint
+linking here
+со ссылкой сюда
+
+lng_parvane_notes_no_date
+no date
+без даты
+
+lng_parvane_notes_open_day
+Open the day
+Открыть день
+
+lng_parvane_notes_backlinks
+Backlinks · {amount}
+Обратные ссылки · {amount}
+
+lng_parvane_notes_backlinks_empty
+No one links here yet
+Пока никто не ссылается
+
+lng_parvane_notes_missing_note
+Not created yet
+Ещё не создана
+
+lng_parvane_notes_notice_conflict
+«{name}» was changed on another device. The other version is saved next to it as a «conflict» copy.
+«{name}» изменили на другом устройстве. Та версия сохранена рядом копией «конфликт».
+
+lng_parvane_notes_notice_merged
+«{name}»: changes from another device were merged
+«{name}»: правки с другого устройства сведены
+
+lng_parvane_notes_notice_failed
+«{name}» was not saved. Check the connection.
+«{name}» не сохранена. Проверьте связь.
+
+lng_parvane_notes_note_short
+Note
+Заметка
+
+lng_parvane_notes_note_empty
+Empty
+Пусто
+
+lng_parvane_notes_show_all
+Show all · {amount}
+Показать все · {amount}
+
+lng_parvane_notes_links
+Links
+Связи
+
+lng_parvane_notes_nearest
+next
+ближайшее
+
+lng_parvane_notes_insert_from_cloud
+From cloud
+Из облака
+
+lng_parvane_notes_embed_missing
+File not found
+Файл не найден
+
+lng_parvane_notes_graph_days
+Days
+Дни
+
+lng_parvane_notes_graph_records
+Events and tasks
+События и задачи
+
+lng_parvane_notes_graph_notes
+Notes {amount}
+Заметки {amount}
+
+lng_parvane_notes_graph_folders
+Folders shown on the graph
+Папки на графе
+
+lng_parvane_notes_graph_folders_all
+All folders
+Все папки
+
+lng_parvane_notes_graph_folders_count
+Folders: {amount}
+Папки: {amount}
+
+lng_parvane_notes_graph_empty
+The graph appears when notes link to each other with [[links]].
+Граф появится, когда заметки начнут ссылаться друг на друга через [[ссылки]].
+
+lng_parvane_notes_zoom_in
+Zoom in
+Приблизить
+
+lng_parvane_notes_zoom_out
+Zoom out
+Отдалить
+
+lng_parvane_notes_zoom_fit
+Fit
+Вписать
+
+lng_parvane_notes_graph_kind_missing
+no such note yet
+заметки ещё нет
+
+lng_parvane_notes_graph_kind_task
+task
+задача
+
+lng_parvane_notes_graph_kind_event
+event
+событие
+
+lng_parvane_notes_graph_create
+Create note
+Создать заметку
+
+lng_parvane_notes_graph_hint
+click a note to read it here · drag from the ring around a note to link it · click a line to remove the link
+нажмите заметку — она откроется справа · потяните от кольца вокруг заметки, чтобы связать · нажмите линию, чтобы убрать связь
+
+lng_parvane_notes_graph_open_in_notes
+Open in Notes
+Открыть в заметках
+
+lng_parvane_notes_graph_open_in_plan
+Open in plan
+Открыть в плане
+
+lng_parvane_notes_graph_missing_text
+Other notes link here, but the note itself does not exist yet.
+На эту заметку ссылаются другие, но самой её ещё нет.
+
+lng_parvane_notes_graph_connect
+Connect
+Связать
+
+lng_parvane_notes_graph_connect_title
+Link this note to another one on the graph
+Связать эту заметку с другой на графе
+
+lng_parvane_notes_graph_connect_hint
+Pick the note that «{name}» should link to
+Выберите заметку, на которую сошлётся «{name}»
+
+lng_parvane_notes_graph_new_linked
+New note title
+Название новой заметки
+
+lng_parvane_notes_graph_remove_link
+Remove link
+Убрать связь
+
+lng_parvane_notes_graph_remove_link_from
+Remove the link written in «{name}»
+Убрать ссылку из заметки «{name}»
+
+lng_parvane_notes_graph_linked
+Link added: «{from}» → «{to}»
+Связь добавлена: «{from}» → «{to}»
+
+lng_parvane_notes_graph_unlinked
+Link removed: «{from}» → «{to}»
+Связь убрана: «{from}» → «{to}»
+
+lng_parvane_notes_graph_link_exists
+«{from}» already links to «{to}»
+«{from}» уже ссылается на «{to}»
+
+lng_parvane_notes_graph_link_refused
+A link cannot be written to «{name}»: the title has [, ] or |
+На «{name}» ссылку не записать: в названии есть [, ] или |
+
+lng_parvane_notes_graph_unlink_inline
+The link to «{to}» stands inside the text of «{from}». It is highlighted — remove it in the note yourself.
+Ссылка на «{to}» стоит внутри текста заметки «{from}». Она выделена — уберите её в заметке сами.
+
+lng_parvane_notes_graph_undo
+Undo
+Отменить
+
+lng_parvane_notes_graph_to_canvas
+Create canvas
+Создать холст
+
+lng_parvane_notes_graph_to_canvas_title
+Create a canvas from the notes shown on the graph
+Создать холст из заметок, которые сейчас видны на графе
+
+lng_parvane_notes_graph_to_canvas_empty
+There are no notes on the graph to put on a canvas
+На графе нет заметок для холста
+
+lng_parvane_notes_canvas_graph_name
+Link graph
+Граф связей
+
+lng_parvane_notes_canvas_hint
+double-click: new card, edit text and notes · drag a group by its title bar or border · Shift+drag: select several · right-click: menu
+двойной клик — новая карточка, правка текста и заметок · группу двигают за полосу с названием или за рамку · Shift и рамка — выделить несколько · правая кнопка — меню
+
+lng_parvane_notes_resize_panel
+Drag to resize, double-click to reset
+Потяните, чтобы изменить ширину. Двойное нажатие возвращает прежнюю
+
+lng_parvane_notes_due
+due {date}
+срок {date}
+
+lng_parvane_notes_status_active
+In progress
+В работе
+
+lng_parvane_notes_status_done
+Done
+Готово
+
+lng_parvane_notes_cancel
+Cancel
+Отмена
+
+lng_parvane_notes_close
+Close
+Закрыть
+
+lng_parvane_notes_repeat_daily
+Every day
+Каждый день
+
+lng_parvane_notes_repeat_every_days
+Every {amount} days
+Каждые {amount} дн.
+
+lng_parvane_notes_repeat_weekly
+Every week: {days}
+Каждую неделю: {days}
+
+lng_parvane_notes_repeat_every_weeks
+Every {amount} weeks: {days}
+Каждые {amount} нед.: {days}
+
+lng_parvane_notes_repeat_monthly
+Monthly on day {day}
+Ежемесячно {day}-го
+
+lng_parvane_notes_repeat_every_months
+Every {amount} months on day {day}
+Каждые {amount} мес. {day}-го
+
+lng_parvane_notes_repeat_yearly
+Yearly on {date}
+Ежегодно {date}
+
+lng_parvane_notes_repeat_every_years
+Every {amount} years on {date}
+Каждые {amount} г. {date}
+
+lng_parvane_notes_repeat_until
+until {date}
+до {date}
+
+lng_parvane_notes_repeat_times
+{amount} times
+{amount} раз

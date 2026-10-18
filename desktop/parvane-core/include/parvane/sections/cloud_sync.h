@@ -232,6 +232,20 @@ public:
     virtual std::optional<std::string> download(const json &blob) = 0;
     // `cloud.blob.usage` → ответ (proto3-JSON: buckets[], links_bytes)
     virtual json usage() = 0;
+
+    // ── для файлов раздела (cloud_files.h, spec 029 T064): миниатюры, перенос, ссылки ──
+    // Крипто и сеть — у сессии; по умолчанию не поддержано (исключение std::runtime_error)
+    // Случайные байты (секреты доступа, nonce, ключ ссылки)
+    virtual std::string randomBytes(std::size_t n);
+    // SHA-256 (сырые 32 байта)
+    virtual std::string sha256(const std::string &bytes);
+    // PVB2 заданным ключом и nonce (сырые 32 и 12 байт) — как `encryptBlobWithKey` web
+    virtual std::string sealWithKey(const std::string &plain, const std::string &keyRaw, const std::string &nonceRaw);
+    // Расшифровать PVB2 (ключ и nonce — base64); подделка либо чужой ключ — nullopt
+    virtual std::optional<std::string> openWithKey(const std::string &cipher, const std::string &keyB64,
+                                                   const std::string &nonceB64);
+    // Загрузить готовый шифртекст в bucket DRIVE под секретом доступа (сырые 32 байта) → file_id
+    virtual std::string uploadCipher(const std::string &cipher, const std::string &capabilityRaw);
 };
 
 // Код ошибки для экрана (web `errorOf`): offline | no-space | too-large | forbidden | rejected | not-found |
@@ -258,6 +272,12 @@ public:
 
     // Разобранное дерево контейнера (кэш по ревизии CloudSync)
     std::optional<json> readTree(const std::string &container);
+
+    // Для файлов раздела (cloud_files.h): общие синхронизация, блобы, транспорт; занятое место перечитать
+    CloudSync &sync() { return cloud_; }
+    CloudBlobs &blobs() { return blobs_; }
+    domain::DomainTransport &transport() { return t_; }
+    void forgetUsage() { usage_.reset(); }
 
 private:
     std::optional<json> findNode(const std::string &container, const std::string &node);

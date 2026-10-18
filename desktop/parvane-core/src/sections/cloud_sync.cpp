@@ -1093,6 +1093,19 @@ std::string errorOf(const std::exception &e) {
     return "rejected";
 }
 
+// По умолчанию крипто и сырых загрузок у блобов нет: файлы раздела (cloud_files.cpp) получат отказ
+std::string CloudBlobs::randomBytes(std::size_t) { throw std::runtime_error("CloudBlobs: randomBytes unsupported"); }
+std::string CloudBlobs::sha256(const std::string &) { throw std::runtime_error("CloudBlobs: sha256 unsupported"); }
+std::string CloudBlobs::sealWithKey(const std::string &, const std::string &, const std::string &) {
+    throw std::runtime_error("CloudBlobs: sealWithKey unsupported");
+}
+std::optional<std::string> CloudBlobs::openWithKey(const std::string &, const std::string &, const std::string &) {
+    return std::nullopt;
+}
+std::string CloudBlobs::uploadCipher(const std::string &, const std::string &) {
+    throw std::runtime_error("CloudBlobs: uploadCipher unsupported");
+}
+
 CloudDrive::CloudDrive(CloudSync &cloud, CloudBlobs &blobs, d::DomainTransport &transport,
                        std::function<std::string()> newNodeId)
 : cloud_(cloud), blobs_(blobs), t_(transport), newNodeId_(newNodeId ? std::move(newNodeId) : newCloudNodeId) {}

@@ -85,6 +85,8 @@
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
 #include "parvane/parvane_sections_data.h"
+#include "parvane/parvane_knowledge.h"
+#include "parvane/parvane_note_markdown.h"
 #include <parvane/sections/planner_engine.h>
 #include <parvane/sections/task_offer.h>
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
@@ -6162,6 +6164,15 @@ QHash<QString, QString> g_cardContent;
 			})),
 		}));
 	}
+	if (kind == "article") {
+		// Статья (ARTICLE-1): окно чтения и «Сохранить в заметки»
+		g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
+			MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
+				CardButton(tr::lng_parvane_article_read(tr::now), u"pv:article:"_q + uuid),
+			})),
+		}));
+	}
 	if (kind != "mod_report" || out) {
 		return std::nullopt;
 	}
@@ -7609,7 +7620,8 @@ void injectOnMain(
 					gHasWp || gIsLoc, 0, /*peerIsChat=*/true, gEntities,
 					TtlFromContent(sm.content),
 					/*mentionsSelf=*/!gOwn && MentionsSelf(
-						gtextQ, parvane::contentEntities(sm.content), self)),
+						gtextQ, parvane::contentEntities(sm.content), self),
+					CardMarkup(uuid, sm.content, gOwn)),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -12880,6 +12892,40 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 		return true;
 	}
 	if (action == u"none"_q) {
+		return true;
+	}
+	if (action == u"article"_q) {
+		const auto title = content.value("title", std::string());
+		const auto markdown = content.value("markdown", std::string());
+		const auto window = Core::App().activeWindow();
+		if (!window) {
+			return true;
+		}
+		window->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(rpl::single(QString::fromStdString(title)));
+			box->setWidth(st::boxWideWidth);
+			box->addRow(Knowledge::CreateMarkdownView(box, markdown, std::string(), [](QString target) {
+				OpenKnowledgeNote(target);
+			}));
+			box->addButton(tr::lng_parvane_article_save(), [=] {
+				const auto vault = IsRussianUi() ? std::string("Знания") : std::string("Knowledge");
+				Sections::Ask<bool>([=](Sections::Workers &w) -> bool {
+					if (w.self.empty()) {
+						return false;
+					}
+					w.notes.loadNotes(w.self);
+					return w.notes.createNote(title, vault, markdown).has_value();
+				}, [=](bool ok) {
+					if (const auto window = Core::App().activeWindow()) {
+						window->showToast(ok
+							? tr::lng_parvane_article_saved(tr::now, lt_title, QString::fromStdString(title))
+							: tr::lng_parvane_article_save_failed(tr::now));
+					}
+				});
+				box->closeBox();
+			});
+			box->addButton(tr::lng_close(), [=] { box->closeBox(); });
+		}));
 		return true;
 	}
 	if (action == u"moddel"_q || action == u"modban"_q) {

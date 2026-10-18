@@ -1,0 +1,387 @@
+lng_parvane_canvas
+Canvas
+Холст
+
+lng_parvane_canvas_actions
+Canvas actions
+Действия с холстом
+
+lng_parvane_canvas_align_bottom
+Align bottom
+По нижнему краю
+
+lng_parvane_canvas_align_center
+Align centres
+По центру
+
+lng_parvane_canvas_align_left
+Align left
+По левому краю
+
+lng_parvane_canvas_align_middle
+Align middles
+По середине
+
+lng_parvane_canvas_align_right
+Align right
+По правому краю
+
+lng_parvane_canvas_align_top
+Align top
+По верхнему краю
+
+lng_parvane_canvas_already_on
+already on the canvas
+уже на холсте
+
+lng_parvane_canvas_back
+Back
+Назад
+
+lng_parvane_canvas_cancel
+Cancel
+Отмена
+
+lng_parvane_canvas_choose_note
+Add a note to the canvas
+Заметка на холст
+
+lng_parvane_canvas_close
+Close
+Закрыть
+
+lng_parvane_canvas_color
+Colour
+Цвет
+
+lng_parvane_canvas_copy
+Copy
+Копировать
+
+lng_parvane_canvas_create_note
+Create note
+Создать заметку
+
+lng_parvane_canvas_cut
+Cut
+Вырезать
+
+lng_parvane_canvas_damaged
+This canvas file is damaged and cannot be opened
+Файл холста повреждён и не открывается
+
+lng_parvane_canvas_delete
+Move to trash
+В корзину
+
+lng_parvane_canvas_delete_confirm
+Move the canvas «{name}» to the cloud trash?
+Переместить холст «{name}» в корзину облака?
+
+lng_parvane_canvas_direction
+Arrow direction
+Направление стрелки
+
+lng_parvane_canvas_distribute_x
+Distribute horizontally
+Распределить по горизонтали
+
+lng_parvane_canvas_distribute_y
+Distribute vertically
+Распределить по вертикали
+
+lng_parvane_canvas_done
+Done
+Готово
+
+lng_parvane_canvas_drop_note
+Existing note
+Заметка из списка
+
+lng_parvane_canvas_duplicate
+Duplicate
+Дублировать
+
+lng_parvane_canvas_edge_label
+Arrow label
+Подпись стрелки
+
+lng_parvane_canvas_edges_hint
+Connections — the label appears on the arrow
+Связи — подпись появится на стрелке
+
+lng_parvane_canvas_edge_title
+Connection
+Связь
+
+lng_parvane_canvas_edit
+Edit
+Изменить
+
+lng_parvane_canvas_edit_note
+Edit note text
+Изменить текст заметки
+
+lng_parvane_canvas_editor_placeholder
+Text, - [ ] items, [[links]], #tags
+Текст, - [ ] пункты, [[ссылки]], #теги
+
+lng_parvane_canvas_empty
+No canvases yet. A canvas is a .canvas file (JSON Canvas) in the «Knowledge» folder.
+Холстов пока нет. Холст — файл .canvas (JSON Canvas) в папке «Знания».
+
+lng_parvane_canvas_empty_graph
+No canvases yet. Start from your link graph: every note becomes a card and every [[link]] an arrow — then move and draw as you like.
+Холстов пока нет. Начните с графа связей: каждая заметка станет карточкой, каждая [[ссылка]] — стрелкой, дальше двигайте и дорисовывайте как угодно.
+
+lng_parvane_canvas_file_choose
+Add a file to the canvas
+Файл на холст
+
+lng_parvane_canvas_file_empty
+There is nothing here yet
+Здесь пока пусто
+
+lng_parvane_canvas_file_in_cloud
+The file is in the «Cloud» section — open it there
+Файл лежит в разделе «Облако» — откройте его там
+
+lng_parvane_canvas_file_missing
+File not found
+Файл не найден
+
+lng_parvane_canvas_fit_group
+Fit to content
+По содержимому
+
+lng_parvane_canvas_from_graph
+Canvas from graph
+Холст из графа
+
+lng_parvane_canvas_from_graph_short
+From graph
+Из графа
+
+lng_parvane_canvas_graph_name
+Link graph
+Граф связей
+
+lng_parvane_canvas_group
+Group
+Группа
+
+lng_parvane_canvas_group_here
+New group here
+Группа здесь
+
+lng_parvane_canvas_group_name
+Group name
+Название группы
+
+lng_parvane_canvas_images
+Pictures on the canvas
+Картинки на холсте
+
+lng_parvane_canvas_images_full
+Full quality
+В полном качестве
+
+lng_parvane_canvas_images_hint
+Thumbnails save mobile data. The setting applies to this device only
+Миниатюры берегут мобильный трафик. Настройка действует только на этом устройстве
+
+lng_parvane_canvas_images_thumb
+Thumbnails
+Миниатюрами
+
+lng_parvane_canvas_label
+label
+подпись
+
+lng_parvane_canvas_link
+Connect
+Связать
+
+lng_parvane_canvas_link_add
+Add
+Добавить
+
+lng_parvane_canvas_link_bad
+Only http and https links can be added
+Добавить можно только ссылку http или https
+
+lng_parvane_canvas_link_card
+Link
+Ссылка
+
+lng_parvane_canvas_link_hint
+Pick the card to connect to
+Выберите карточку, с которой связать
+
+lng_parvane_canvas_link_title
+Link on the canvas
+Ссылка на холст
+
+lng_parvane_canvas_link_url
+Link address
+Адрес ссылки
+
+lng_parvane_canvas_more
+More actions
+Ещё действия
+
+lng_parvane_canvas_name
+Canvas {amount}
+Холст {amount}
+
+lng_parvane_canvas_new
+New canvas
+Новый холст
+
+lng_parvane_canvas_new_note
+New note
+Новая заметка
+
+lng_parvane_canvas_new_note_create
+Create note
+Создать заметку
+
+lng_parvane_canvas_new_note_here
+New note here
+Новая заметка здесь
+
+lng_parvane_canvas_new_note_hint
+A real note: it appears in «Notes» and on the graph
+Настоящая заметка: появится в «Заметках» и на графе
+
+lng_parvane_canvas_new_note_linked_hint
+The note is created in «Notes», its card is put at the end of the arrow
+Заметка создаётся в «Заметках», её карточка встаёт на конец стрелки
+
+lng_parvane_canvas_no_color
+no colour
+без цвета
+
+lng_parvane_canvas_note_loading
+Loading the note…
+Заметка загружается…
+
+lng_parvane_canvas_note_missing
+Note not found
+Заметка не найдена
+
+lng_parvane_canvas_note_restored
+The note was deleted while you were editing. Your text is saved as «{name}»
+Заметку удалили, пока вы её правили. Текст сохранён в заметке «{name}»
+
+lng_parvane_canvas_note_title
+Note title
+Название заметки
+
+lng_parvane_canvas_notice_failed
+«{name}» was not saved. Check the connection.
+«{name}» не сохранена. Проверьте связь.
+
+lng_parvane_canvas_open_file
+Open file
+Открыть файл
+
+lng_parvane_canvas_open_note
+Open note
+Открыть заметку
+
+lng_parvane_canvas_paste
+Paste
+Вставить
+
+lng_parvane_canvas_props
+Properties
+Свойства
+
+lng_parvane_canvas_redo
+Redo
+Вернуть
+
+lng_parvane_canvas_refresh
+Refresh from graph
+Обновить из графа
+
+lng_parvane_canvas_refresh_done
+Added notes: {cards}, links: {edges}. Removed links: {removed}
+Добавлено заметок: {cards}, связей: {edges}. Убрано связей: {removed}
+
+lng_parvane_canvas_refresh_nothing
+Nothing to update
+Обновлять нечего
+
+lng_parvane_canvas_refresh_renamed
+Cards moved to renamed notes: {amount}
+Карточек перенесено на переименованные заметки: {amount}
+
+lng_parvane_canvas_remove
+Delete
+Удалить
+
+lng_parvane_canvas_remove_edge
+Remove connection
+Удалить связь
+
+lng_parvane_canvas_rename
+Rename
+Переименовать
+
+lng_parvane_canvas_root
+No folder
+Без папки
+
+lng_parvane_canvas_select_all
+Select all
+Выделить всё
+
+lng_parvane_canvas_select_mode
+Select several
+Выбрать несколько
+
+lng_parvane_canvas_text
+Text
+Текст
+
+lng_parvane_canvas_text_card
+Text card
+Текстовая карточка
+
+lng_parvane_canvas_text_here
+New text card here
+Текстовая карточка здесь
+
+lng_parvane_canvas_title
+Canvas name
+Название холста
+
+lng_parvane_canvas_to_back
+Send to back
+На задний план
+
+lng_parvane_canvas_to_front
+Bring to front
+На передний план
+
+lng_parvane_canvas_undo
+Undo
+Отменить
+
+lng_parvane_canvas_wrap
+Wrap in group
+Обернуть в группу
+
+lng_parvane_canvas_zoom_fit
+Fit
+Вписать
+
+lng_parvane_canvas_zoom_in
+Zoom in
+Приблизить
+
+lng_parvane_canvas_zoom_out
+Zoom out
+Отдалить

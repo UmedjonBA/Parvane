@@ -1,0 +1,707 @@
+lng_parvane_cloud_title
+Files
+Файлы
+
+lng_parvane_cloud_drive
+Cloud
+Облако
+
+lng_parvane_cloud_can_edit
+can edit
+можно править
+
+lng_parvane_cloud_decrypted_here
+The file is decrypted here, on this device.
+Файл расшифровывается здесь, на устройстве.
+
+lng_parvane_cloud_downloading
+{percent}% of {size} · downloading and decrypting
+{percent}% из {size} · скачивается и расшифровывается
+
+lng_parvane_cloud_uploading
+{percent}% of {size} · encrypting and uploading
+{percent}% из {size} · шифруется и загружается
+
+lng_parvane_cloud_moving
+{percent}% of {size} · moving
+{percent}% из {size} · переносится
+
+lng_parvane_cloud_encrypted
+files are encrypted on this device, the server sees only encrypted blocks
+файлы шифруются на устройстве, сервер видит только зашифрованные блоки
+
+lng_parvane_cloud_from
+from {name}
+от {name}
+
+lng_parvane_cloud_here
+currently here
+сейчас здесь
+
+lng_parvane_cloud_incoming_banner
+Folder “{name}” from {owner} · {rights}
+Папка «{name}» от {owner} · {rights}
+
+lng_parvane_cloud_move_title_one
+Move “{name}”
+Переместить «{name}»
+
+lng_parvane_cloud_next
+Next file
+Следующий файл
+
+lng_parvane_cloud_previous
+Previous file
+Предыдущий файл
+
+lng_parvane_cloud_only_you
+only you
+только вы
+
+lng_parvane_cloud_rights
+Rights
+Права
+
+lng_parvane_cloud_shared_alone
+shared, no one added yet
+общая, пока без участников
+
+lng_parvane_cloud_shared_banner
+Shared folder “{name}”: {members}. Press to change access.
+Общая папка «{name}»: {members}. Нажмите, чтобы изменить доступ.
+
+lng_parvane_cloud_shared_banner_alone
+Shared folder “{name}”: no one added yet. Press to give access.
+Общая папка «{name}»: пока без участников. Нажмите, чтобы открыть доступ.
+
+lng_parvane_cloud_shared_with
+shared with {amount}
+общая с {amount}
+
+lng_parvane_cloud_share_note
+Everything inside becomes shared. Members get the key to the files — the server still cannot see them.
+Всё вложенное станет общим. Участники получают ключ к файлам — сервер их по-прежнему не видит.
+
+lng_parvane_cloud_share_open
+Share
+Открыть доступ
+
+lng_parvane_cloud_to_chat
+To chat
+В чат
+
+lng_parvane_cloud_upload_file
+Upload file
+Загрузить файл
+
+lng_parvane_cloud_vault
+notes vault · .md
+хранилище заметок · .md
+
+lng_parvane_cloud_view_only
+view only
+только просмотр
+
+lng_parvane_cloud_accept
+Accept
+Принять
+
+lng_parvane_cloud_actions
+Actions
+Действия
+
+lng_parvane_cloud_choose_files
+Choose files
+Выберите файлы
+
+lng_parvane_cloud_choose_folder
+Choose a folder
+Выберите папку
+
+lng_parvane_cloud_clear_selection
+Clear selection
+Снять выделение
+
+lng_parvane_cloud_create
+Create
+Создать
+
+lng_parvane_cloud_decline
+Decline
+Отклонить
+
+lng_parvane_cloud_delete
+Delete
+Удалить
+
+lng_parvane_cloud_delete_forever
+Delete forever
+Удалить навсегда
+
+lng_parvane_cloud_delete_forever_confirm
+The selected items will be deleted forever. This cannot be undone.
+Выбранное будет удалено навсегда. Отменить это нельзя.
+
+lng_parvane_cloud_download
+Download
+Скачать
+
+lng_parvane_cloud_drop_here
+Drop files to upload
+Отпустите файлы для загрузки
+
+lng_parvane_cloud_empty
+No files yet
+Пусто
+
+lng_parvane_cloud_empty_folder
+This folder is empty
+В папке пусто
+
+lng_parvane_cloud_empty_hint
+Drag files here or press Upload.
+Перетащите сюда файлы или нажмите «Загрузить».
+
+lng_parvane_cloud_empty_shared
+No one has shared a folder with you yet
+Пока никто не делился с вами папками
+
+lng_parvane_cloud_empty_trash
+Trash is empty
+Корзина пуста
+
+lng_parvane_cloud_empty_trash_action
+Empty trash
+Очистить корзину
+
+lng_parvane_cloud_empty_trash_confirm
+All files in the trash will be deleted forever. This cannot be undone.
+Все файлы в корзине будут удалены навсегда. Отменить это нельзя.
+
+lng_parvane_cloud_error_forbidden
+You can only view files in this folder.
+В этой папке вы можете только смотреть файлы.
+
+lng_parvane_cloud_error_name_chars
+The name can't contain / or \.
+В названии не должно быть знаков / и \.
+
+lng_parvane_cloud_error_name_empty
+Enter a name.
+Введите название.
+
+lng_parvane_cloud_error_name_long
+The name is too long.
+Название слишком длинное.
+
+lng_parvane_cloud_error_no_space
+Not enough space. Empty the trash or delete files.
+Не хватает места. Очистите корзину или удалите ненужное.
+
+lng_parvane_cloud_error_not_found
+The file is no longer available.
+Файл больше недоступен.
+
+lng_parvane_cloud_error_offline
+No connection to the server.
+Нет связи с сервером.
+
+lng_parvane_cloud_error_rejected
+The change was not applied.
+Изменение не применено.
+
+lng_parvane_cloud_error_too_large
+The file is too large.
+Файл слишком большой.
+
+lng_parvane_cloud_error_too_many
+Too many files in this storage.
+В хранилище слишком много файлов.
+
+lng_parvane_cloud_folder
+Folder
+Папка
+
+lng_parvane_cloud_folder_name
+Folder name
+Название папки
+
+lng_parvane_cloud_found
+Found: {amount} · in all folders except the trash
+Найдено: {amount} · во всех папках, кроме корзины
+
+lng_parvane_cloud_invite_from
+{name} invites you to “{folder}”
+{name} приглашает в «{folder}»
+
+lng_parvane_cloud_invite_gone
+The invitation is no longer valid
+Приглашение больше не действует
+
+lng_parvane_cloud_invite_text
+Invitation to the folder “{name}” ({role})
+Приглашение в папку «{name}» ({role})
+
+lng_parvane_cloud_leave
+Leave folder
+Покинуть папку
+
+lng_parvane_cloud_leave_confirm
+You will lose access to the files in this folder.
+Вы потеряете доступ к файлам этой папки.
+
+lng_parvane_cloud_link
+Link…
+Ссылка…
+
+lng_parvane_cloud_link_copied
+Copied
+Скопировано
+
+lng_parvane_cloud_link_copy
+Copy
+Скопировать
+
+lng_parvane_cloud_link_create
+Create link
+Создать ссылку
+
+lng_parvane_cloud_link_created
+created {date}
+создана {date}
+
+lng_parvane_cloud_link_error_disabled
+Links are turned off on this server.
+Ссылки на этом сервере выключены.
+
+lng_parvane_cloud_link_error_limit
+You have too many links. Revoke the ones you no longer need.
+У вас слишком много ссылок. Отзовите ненужные.
+
+lng_parvane_cloud_link_error_too_many
+A link can include up to 500 files.
+В ссылку помещается не больше 500 файлов.
+
+lng_parvane_cloud_link_expired
+Expired on {date}
+Срок истёк {date}
+
+lng_parvane_cloud_link_extend
+Extend
+Продлить
+
+lng_parvane_cloud_link_extend_hint
+The new term starts today
+Новый срок отсчитывается от сегодня
+
+lng_parvane_cloud_link_forever
+Valid with no expiry
+Действует без срока
+
+lng_parvane_cloud_link_heading
+Link for people without an account
+Ссылка для людей без аккаунта
+
+lng_parvane_cloud_link_key_note
+The key is the part of the link after #. The browser never sends it to the server, so the server stores only encrypted files. The recipient decrypts them in their browser.
+Ключ — часть ссылки после #. Браузер не отправляет её на сервер, поэтому сервер хранит только зашифрованные файлы. Получатель расшифровывает их у себя в браузере.
+
+lng_parvane_cloud_link_kind_file
+File
+Файл
+
+lng_parvane_cloud_link_no_name
+The name and address of this link cannot be read on this device.
+Название и адрес этой ссылки на этом устройстве прочитать нельзя.
+
+lng_parvane_cloud_link_note
+Anyone with the link can view and download these files without a Parvane account. The link is a snapshot: later changes are not included, and the copies count towards your storage.
+Любой, у кого есть ссылка, сможет посмотреть и скачать эти файлы без аккаунта Parvane. Ссылка — снимок: более поздние изменения в неё не попадут, а копии занимают место в вашем облаке.
+
+lng_parvane_cloud_link_preparing
+Preparing: {done} of {total}
+Подготовка: {done} из {total}
+
+lng_parvane_cloud_link_preparing_start
+Preparing…
+Подготовка…
+
+lng_parvane_cloud_link_preview
+How the recipient sees it
+Как увидит получатель
+
+lng_parvane_cloud_link_revoke
+Revoke
+Отозвать
+
+lng_parvane_cloud_link_revoke_confirm
+The link stops opening right away, its copies are deleted and the space is freed. Your own files stay where they are.
+Ссылка сразу перестанет открываться, её копии будут удалены, место освободится. Ваши файлы останутся на месте.
+
+lng_parvane_cloud_links
+My links
+Мои ссылки
+
+lng_parvane_cloud_links_count
+Links: {amount}
+Ссылок: {amount}
+
+lng_parvane_cloud_links_empty
+You have not created any links yet
+Вы ещё не создавали ссылок
+
+lng_parvane_cloud_links_empty_hint
+Open the menu of a file or folder and choose Link.
+Откройте меню файла или папки и выберите «Ссылка».
+
+lng_parvane_cloud_links_none
+No links yet
+Ссылок пока нет
+
+lng_parvane_cloud_link_state_expired
+expired
+истекла
+
+lng_parvane_cloud_link_state_forever
+no expiry
+без срока
+
+lng_parvane_cloud_link_state_until
+until {date}
+до {date}
+
+lng_parvane_cloud_link_title
+Link to “{name}”
+Ссылка на «{name}»
+
+lng_parvane_cloud_link_ttl
+The link is valid for
+Ссылка действует
+
+lng_parvane_cloud_link_ttl_day
+1 day
+1 день
+
+lng_parvane_cloud_link_ttl_forever
+No expiry
+Без срока
+
+lng_parvane_cloud_link_ttl_month
+30 days
+30 дней
+
+lng_parvane_cloud_link_ttl_week
+7 days
+7 дней
+
+lng_parvane_cloud_link_unfinished
+Not finished
+Не доделана
+
+lng_parvane_cloud_link_unfinished_note
+This link was not finished and does not open. Delete it to free the space.
+Эта ссылка не была доделана и не открывается. Удалите её, чтобы освободить место.
+
+lng_parvane_cloud_link_until
+Valid until {date}
+Действует до {date}
+
+lng_parvane_cloud_make_private
+Make private
+Закрыть доступ
+
+lng_parvane_cloud_make_private_confirm
+The folder becomes a regular folder in My files. Everyone else loses access, and its trash is emptied.
+Папка станет обычной папкой в «Моих файлах». Остальные участники потеряют доступ, корзина папки будет очищена.
+
+lng_parvane_cloud_modified
+Date
+Дата
+
+lng_parvane_cloud_move
+Move
+Переместить
+
+lng_parvane_cloud_move_here
+Move here
+Переместить сюда
+
+lng_parvane_cloud_move_title
+Move to
+Переместить в
+
+lng_parvane_cloud_name
+Name
+Имя
+
+lng_parvane_cloud_needs_linking
+Your files will appear after this device is linked to the account.
+Файлы появятся после привязки этого устройства к аккаунту.
+
+lng_parvane_cloud_new_folder
+New folder
+Новая папка
+
+lng_parvane_cloud_new_name
+New name
+Новое название
+
+lng_parvane_cloud_new_shared
+New shared folder
+Новая общая папка
+
+lng_parvane_cloud_no_members
+Only you have access so far
+Пока доступ только у вас
+
+lng_parvane_cloud_nothing_found
+Nothing found
+Ничего не нашлось
+
+lng_parvane_cloud_preview_no_viewer
+{type} files cannot be shown here. Download the file to open it.
+Файлы {type} здесь не открываются. Скачайте файл, чтобы открыть его.
+
+lng_parvane_cloud_preview_too_large
+The file is too large to show here. Download it to open.
+Файл слишком большой для просмотра здесь. Скачайте его, чтобы открыть.
+
+lng_parvane_cloud_preview_unavailable
+Preview is not available. Download the file to open it.
+Просмотр недоступен. Скачайте файл, чтобы открыть его.
+
+lng_parvane_cloud_remove_member
+Remove
+Убрать
+
+lng_parvane_cloud_rename
+Rename
+Переименовать
+
+lng_parvane_cloud_restore
+Restore
+Восстановить
+
+lng_parvane_cloud_retry
+Retry
+Повторить
+
+lng_parvane_cloud_role_editor
+Editor
+Правка
+
+lng_parvane_cloud_role_editor_hint
+Can upload, rename, move and delete
+Может загружать, переименовывать, перемещать и удалять
+
+lng_parvane_cloud_role_owner
+Owner
+Владелец
+
+lng_parvane_cloud_role_reader
+Reader
+Просмотр
+
+lng_parvane_cloud_role_reader_hint
+Can view and download
+Может смотреть и скачивать
+
+lng_parvane_cloud_save
+Save
+Сохранить
+
+lng_parvane_cloud_saved_to_cloud
+Saved to Cloud
+Сохранено в облако
+
+lng_parvane_cloud_save_here
+Save here
+Сохранить сюда
+
+lng_parvane_cloud_search
+Search files
+Поиск по файлам
+
+lng_parvane_cloud_select
+Select
+Выбрать
+
+lng_parvane_cloud_selected
+Selected: {amount}
+Выбрано: {amount}
+
+lng_parvane_cloud_send
+Send
+Отправить
+
+lng_parvane_cloud_send_to_chat
+Send to chat
+Отправить в чат
+
+lng_parvane_cloud_sent_to_chat
+Sent
+Отправлено
+
+lng_parvane_cloud_share
+Sharing
+Доступ
+
+lng_parvane_cloud_share_add
+Add people
+Добавить
+
+lng_parvane_cloud_shared_by
+Owner: {name}
+Владелец: {name}
+
+lng_parvane_cloud_shared_count
+Folders: {amount}
+Папок: {amount}
+
+lng_parvane_cloud_shared_folder
+Shared folder
+Общая папка
+
+lng_parvane_cloud_shared_none
+Nothing yet
+Пока пусто
+
+lng_parvane_cloud_share_folder_action
+Make shared
+Сделать общей
+
+lng_parvane_cloud_share_folder_confirm
+Share “{name}”? It becomes a shared folder at the top of My files, with everything inside it.
+Открыть доступ к папке «{name}»? Она станет общей и встанет в начало списка вместе со всем содержимым.
+
+lng_parvane_cloud_share_title
+Access to “{name}”
+Доступ к «{name}»
+
+lng_parvane_cloud_size
+Size
+Размер
+
+lng_parvane_cloud_sort
+Sorting
+Сортировка
+
+lng_parvane_cloud_sort_date
+By date
+По дате
+
+lng_parvane_cloud_sort_name
+By name
+По имени
+
+lng_parvane_cloud_sort_size
+By size
+По размеру
+
+lng_parvane_cloud_stop_sharing
+Delete shared folder
+Удалить общую папку
+
+lng_parvane_cloud_stop_sharing_confirm
+The folder and all its files will be deleted for everyone.
+Папка и все файлы в ней будут удалены у всех участников.
+
+lng_parvane_cloud_sync_pending
+Waiting for keys from your other devices.
+Ждём ключи от других ваших устройств.
+
+lng_parvane_cloud_sync_unavailable
+No connection. Changes will be sent when it returns.
+Нет связи. Изменения отправятся, когда она вернётся.
+
+lng_parvane_cloud_tab_drive
+My files
+Мои файлы
+
+lng_parvane_cloud_tab_shared
+Shared with me
+Доступные мне
+
+lng_parvane_cloud_tab_trash
+Trash
+Корзина
+
+lng_parvane_cloud_to_trash
+Move to trash
+В корзину
+
+lng_parvane_cloud_trash_count
+Items: {amount} · kept for 30 days
+Объектов: {amount} · хранится 30 дней
+
+lng_parvane_cloud_trash_expired
+Deleted at the next sync
+Удалится при следующей синхронизации
+
+lng_parvane_cloud_trash_note
+Items are deleted forever 30 days after they are moved to the trash. This is done by your device, so they may stay longer while you are offline.
+Через 30 дней после удаления объекты стираются навсегда. Стирает ваше устройство, поэтому без связи они лежат дольше.
+
+lng_parvane_cloud_upload
+Upload
+Загрузить
+
+lng_parvane_cloud_usage
+{used} of {total} used
+Занято {used} из {total}
+
+lng_parvane_cloud_usage_almost_full
+Storage is almost full.
+Место почти закончилось.
+
+lng_parvane_cloud_usage_links
+Links: {size}
+Ссылки: {size}
+
+lng_parvane_cloud_usage_trash
+Trash: {size}
+Корзина: {size}
+
+lng_parvane_cloud_view
+View
+Просмотр
+
+lng_parvane_cloud_open
+Open
+Открыть
+
+lng_parvane_cloud_done
+Done
+Готово
+
+lng_parvane_cloud_cancel
+Cancel
+Отмена
+
+lng_parvane_cloud_more
+More
+Ещё
+
+lng_parvane_cloud_close
+Close
+Закрыть
+
+lng_parvane_cloud_open_link
+Open in browser
+Открыть в браузере
+
+lng_parvane_cloud_items#one
+{count} item
+{count} объект
+
+lng_parvane_cloud_items#other
+{count} items
+{count} объектов
+
+lng_parvane_cloud_trash_days_left#one
+Deleted in {count} day
+Удалится через {count} день
+
+lng_parvane_cloud_trash_days_left#other
+Deleted in {count} days
+Удалится через {count} дней
