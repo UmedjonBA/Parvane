@@ -10672,6 +10672,36 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 				LOG(("Parvane: поиск пользователей — ошибка: %1")
 					.arg(QString::fromUtf8(e.what())));
 			}
+			// Полный адрес «ник@сервер» (spec 028, FED-1): профиль у его сервера — каталог своего сервера
+			// чужих не знает
+			const auto at = q.find('@');
+			auto address = QString::fromStdString(q).toLower();
+			if (address.startsWith('@')) {
+				address = address.mid(1);
+			}
+			if (at != std::string::npos && address.indexOf('@') > 0 && !out.contains(address)) {
+				try {
+					const auto reply = t->request(parvane::topics::IdentityResolve,
+						parvane::json{ { "usernames", parvane::json::array({ address.toStdString() }) } }.dump(),
+						8000);
+					const auto j = parvane::json::parse(reply, nullptr, false);
+					for (const auto &u : j.value("users", parvane::json::array())) {
+						const auto addr = QString::fromStdString(u.value("username", std::string()));
+						if (addr.isEmpty()) {
+							continue;
+						}
+						out.push_back(addr);
+						if (u.contains("display_name") && u["display_name"].is_string()) {
+							names.insert(addr, QString::fromStdString(u["display_name"].get<std::string>()));
+						}
+						if (u.contains("avatar") && u["avatar"].is_string()) {
+							avatars.insert(addr, QString::fromStdString(u["avatar"].get<std::string>()));
+						}
+					}
+				} catch (const std::exception &e) {
+					LOG(("Parvane: адрес %1 не найден: %2").arg(address, QString::fromUtf8(e.what())));
+				}
+			}
 		}
 		crl::on_main([callback = std::move(callback), out, names, avatars]() mutable {
 			for (auto it = names.constBegin(); it != names.constEnd(); ++it) {

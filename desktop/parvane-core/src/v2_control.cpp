@@ -82,12 +82,13 @@ void Control::close() {
     if (c) c->close();
 }
 
-json Control::call(const std::string &method, const json &request, std::int64_t timeoutMs) {
+json Control::call(const std::string &method, const json &request, std::int64_t timeoutMs,
+                   const std::string &dest) {
     const auto body = encodeMethodRequest(method, request);
     for (int attempt = 0;; ++attempt) {
         auto c = connection();
         try {
-            return decodeMethodResponse(method, c->request(method, body, timeoutMs));
+            return decodeMethodResponse(method, c->request(method, body, timeoutMs, dest));
         } catch (const V2Error &e) {
             if (attempt > 0 || !connectionLost(e, *c)) throw;
             log(method + ": соединение потеряно — повтор");

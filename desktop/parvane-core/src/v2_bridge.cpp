@@ -1,6 +1,14 @@
 // Parvane fork: мост «запросы клиента → методы v2» — см. v2_bridge.h.
 #include "parvane/v2_bridge.h"
 
+#include <cctype>
+
+#include <set>
+
+#include <map>
+
+#include <algorithm>
+
 #include <chrono>
 #include <vector>
 
@@ -288,7 +296,32 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
                 if (u.is_string()) users.push_back(json{{"address", u.get<std::string>()}});
             }
         }
-        out = profilesToV1(control(token).call("identity.profile.resolve", json{{"users", users}}), "profiles");
+        auto &c = control(token);
+        out = profilesToV1(c.call("identity.profile.resolve", json{{"users", users}}), "profiles");
+        // Федерация (spec 028): адреса, которых свой сервер не знает, — их серверам (по домену)
+        std::set<std::string> known;
+        for (const auto &u : out["users"]) known.insert(u.value("username", std::string()));
+        std::map<std::string, json> byDomain;
+        for (const auto &u : users) {
+            const auto address = u.value("address", std::string());
+            const auto at = address.find('@');
+            if (known.count(address) || at == std::string::npos) continue;
+            auto domain = address.substr(at + 1);
+            std::transform(domain.begin(), domain.end(), domain.begin(), [](unsigned char ch) {
+                return char(std::tolower(ch));
+            });
+            if (!byDomain.count(domain)) byDomain[domain] = json::array();
+            byDomain[domain].push_back(u);
+        }
+        for (const auto &[domain, group] : byDomain) {
+            try {
+                const auto remote = profilesToV1(
+                    c.call("identity.profile.resolve", json{{"users", group}}, 15000, domain), "profiles");
+                for (const auto &u : remote["users"]) out["users"].push_back(u);
+            } catch (const std::exception &) {
+                // Сервер недоступен или федерация выключена — профиль неизвестен, как несуществующий адрес
+            }
+        }
     } else if (subject == "identity.user.search") {
         out = profilesToV1(control(token).call("identity.directory.search", json{{"query", str(p, "query")}}), "results");
     } else if (subject == "identity.user.setname") {

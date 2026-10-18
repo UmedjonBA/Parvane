@@ -59,8 +59,10 @@ public:
     Control(const Control &) = delete;
     Control &operator=(const Control &) = delete;
 
-    // Метод реестра канала ID. Бросает V2Error / std::runtime_error.
-    json call(const std::string &method, const json &request, std::int64_t timeoutMs = 15000);
+    // Метод реестра канала ID. Бросает V2Error / std::runtime_error. `dest` — домен чужого сервера
+    // (spec 028: запрос уходит через свой сервер и федерацию).
+    json call(const std::string &method, const json &request, std::int64_t timeoutMs = 15000,
+              const std::string &dest = std::string());
 
     // Блоб без capability: владелец — этот аккаунт. `isPublic` — открытый
     // объект (аватар, фото группы), иначе доступен только владельцу (блоб
