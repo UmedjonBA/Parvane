@@ -2757,6 +2757,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
 "lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
 "lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
+"lng_parvane_bug_report" = "Report a Bug";
+"lng_parvane_bug_report_about" = "Describe what happened and what you did right before it. Your last actions in the app (without message contents) will be attached automatically.";
+"lng_parvane_bug_report_placeholder" = "What went wrong?";
+"lng_parvane_bug_report_send" = "Send";
+"lng_parvane_bug_report_sent" = "Bug report sent. Thank you!";
+"lng_parvane_bug_report_failed" = "Could not send the bug report";
+"lng_parvane_bug_report_no_address" = "This server doesn't accept bug reports";
 "lng_parvane_public_preview" = "Read without joining";
 "lng_parvane_public_history" = "History for new members";
 "lng_parvane_public_about" = "These settings decide what Parvane shows: the feed before joining and earlier messages to those who join. Anyone can find a public group by its name and join it. Its messages can be read by anyone who joins, including technically the server: do not post anything private here.";

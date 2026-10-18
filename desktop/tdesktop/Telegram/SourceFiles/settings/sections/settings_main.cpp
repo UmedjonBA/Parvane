@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_main.h"
 
+#include "parvane/parvane_account_ui.h" // Parvane: «Сообщить об ошибке»
+
 #include "settings/settings_common_session.h"
 
 #include "api/api_cloud_password.h"
@@ -577,9 +579,22 @@ void BuildPremiumSection(SectionBuilder &builder) {
 }
 
 void BuildHelpSection(SectionBuilder &builder) {
-	// Parvane: раздел «Помощь» убран — FAQ/Features/Ask a Question вели на
+	// Parvane: раздел «Помощь» Telegram убран — FAQ/Features/Ask a Question вели на
 	// ресурсы Telegram (внешние ссылки + облачный саппорт-бот), у нас их нет.
-	(void)builder;
+	// Вместо них — «Сообщить об ошибке» (как web SettingsMore).
+	const auto controller = builder.controller();
+	builder.addSkip();
+	builder.addButton({
+		.id = u"main/bug_report"_q,
+		.title = tr::lng_parvane_bug_report(),
+		.icon = { &st::menuIconReport },
+		.onClick = [=] {
+			if (controller) {
+				Parvane::ShowBugReportBox(controller);
+			}
+		},
+		.keywords = { u"bug"_q, u"report"_q, u"error"_q },
+	});
 }
 
 void BuildValidationSuggestions(SectionBuilder &builder) {

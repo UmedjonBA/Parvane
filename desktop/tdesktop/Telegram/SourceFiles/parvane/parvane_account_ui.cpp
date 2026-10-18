@@ -7,6 +7,7 @@
 #include "base/timer.h"
 #include "boxes/abstract_box.h"
 #include "lang/lang_keys.h"
+#include "main/main_session.h"
 #include "settings/cloud_password/settings_cloud_password_common.h"
 #include "settings/settings_common.h"
 #include "ui/boxes/confirm_box.h"
@@ -594,6 +595,45 @@ void ShowDeleteAccountBox(not_null<Window::SessionController*> controller) {
 		};
 		QObject::connect(password, &Ui::MaskedInputField::submitted, submit);
 		box->addButton(tr::lng_parvane_delete_account_submit(), submit, st::attentionBoxButton);
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
+}
+
+void ShowBugReportBox(not_null<Window::SessionController*> controller) {
+	const auto session = &controller->session();
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(tr::lng_parvane_bug_report());
+		box->addRow(object_ptr<Ui::FlatLabel>(box, tr::lng_parvane_bug_report_about(), st::boxLabel));
+		const auto field = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::newGroupDescription,
+			Ui::InputField::Mode::MultiLine,
+			tr::lng_parvane_bug_report_placeholder()));
+		field->setMaxLength(4000);
+		box->setFocusCallback([=] { field->setFocusFast(); });
+		const auto busy = std::make_shared<bool>(false);
+		const auto submit = [=] {
+			const auto text = field->getLastText().trimmed();
+			if (*busy) {
+				return;
+			} else if (text.isEmpty()) {
+				field->showError();
+				return;
+			}
+			*busy = true;
+			SendBugReport(session, text, crl::guard(box, [=](QString result) {
+				*busy = false;
+				if (result == u"sent"_q) {
+					controller->showToast(tr::lng_parvane_bug_report_sent(tr::now));
+					box->closeBox();
+				} else {
+					controller->showToast((result == u"not_found"_q)
+						? tr::lng_parvane_bug_report_no_address(tr::now)
+						: tr::lng_parvane_bug_report_failed(tr::now));
+				}
+			}));
+		};
+		box->addButton(tr::lng_parvane_bug_report_send(), submit);
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	}));
 }

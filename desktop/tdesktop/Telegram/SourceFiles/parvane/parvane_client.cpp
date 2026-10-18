@@ -97,6 +97,9 @@
 #include "data/data_chat_participant_status.h" // ChatRestriction/ChatAdminRight (spec 003)
 #include "data/data_poll.h"          // PollData (опросы)
 #include "data/data_media_types.h"   // Data::Media::poll()
+#include "core/version.h"                 // отчёт об ошибке: версия
+#include "storage/storage_media_prepare.h" // отчёт об ошибке: вложение JSON
+#include "ui/chat/attach/attach_prepare.h"
 #include "data/stickers/data_stickers.h"     // стикеры: локальные паки → панель
 #include "data/stickers/data_stickers_set.h"
 #include <QtCore/QFileInfo>
@@ -12576,6 +12579,104 @@ void JoinPublicGroup(not_null<PeerData*> peer) {
 				});
 			}
 		});
+	});
+}
+
+// ── «Сообщить об ошибке» (как web ParvaneBugReportModal) ─────────────────────
+// Описание + журнал клиента (строки «Parvane:» лога, без содержимого сообщений) уходят
+// обычным E2E-сообщением с JSON-вложением на служебный адрес своего сервера.
+namespace {
+
+[[nodiscard]] QString BugReportAddress() {
+	if (const char *v = std::getenv("PARVANE_BUG_REPORT_TO"); v && *v) {
+		return QString::fromUtf8(v);
+	}
+	return u"bugs@"_q + StateDomain();
+}
+
+[[nodiscard]] QStringList BugReportLog() {
+	auto f = QFile(cWorkingDir() + u"log.txt"_q);
+	if (!f.open(QIODevice::ReadOnly)) {
+		return {};
+	}
+	// Хвост лога: строк ядра достаточно для разбора, текстов сообщений там нет
+	const auto size = f.size();
+	if (size > 4 * 1024 * 1024) {
+		f.seek(size - 4 * 1024 * 1024);
+	}
+	auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	auto out = QStringList();
+	for (const auto &line : lines) {
+		if (line.contains(u"Parvane"_q)) {
+			out.push_back(line.trimmed());
+		}
+	}
+	constexpr auto kMaxLines = 500;
+	if (out.size() > kMaxLines) {
+		out = out.mid(out.size() - kMaxLines);
+	}
+	return out;
+}
+
+} // namespace
+
+void SendBugReport(not_null<Main::Session*> session, const QString &description, Fn<void(QString)> done) {
+	const auto address = BugReportAddress();
+	const auto text = description.trimmed();
+	const auto weak = base::make_weak(session.get());
+	// Точное совпадение адреса: первый результат поиска выбирает сервер
+	SearchUsers(address, [=](QStringList found) {
+		const auto strong = weak.get();
+		if (!strong) {
+			return;
+		}
+		if (!found.contains(address)) {
+			LOG(("Parvane: отчёт об ошибке — адрес %1 не найден").arg(address));
+			done(u"not_found"_q);
+			return;
+		}
+		auto log = parvane::json::array();
+		for (const auto &line : BugReportLog()) {
+			log.push_back(line.toStdString());
+		}
+		const auto report = parvane::json{
+			{ "version", std::string(AppVersionStr) },
+			{ "client", "desktop" },
+			{ "platform", QSysInfo::prettyProductName().toStdString() },
+			{ "reportedAt", QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString() },
+			{ "description", text.toStdString() },
+			{ "storeInfo", {
+				{ "self", SelfAddress().toStdString() },
+				{ "connected", SessionActive() },
+			} },
+			{ "log", log },
+		};
+		const auto path = cWorkingDir() + u"tdata/parvane-bug-%1.json"_q.arg(QDateTime::currentMSecsSinceEpoch());
+		auto f = QFile(path);
+		if (!f.open(QIODevice::WriteOnly) || f.write(QByteArray::fromStdString(report.dump(1))) < 0) {
+			done(u"failed"_q);
+			return;
+		}
+		f.close();
+		RestrictToOwner(path);
+		auto list = Storage::PrepareMediaList(QStringList{ path }, 400, false);
+		if (list.error != Ui::PreparedList::Error::None || list.files.empty()) {
+			QFile::remove(path);
+			done(u"failed"_q);
+			return;
+		}
+		list.files.front().caption = TextWithTags{ text.left(1000), TextWithTags::Tags() };
+		RegisterPeer(address);
+		const auto user = ensurePeerUser(strong, IdForAddress(address), address);
+		strong->api().sendFiles(
+			std::move(list),
+			SendMediaType::File,
+			nullptr,
+			Api::SendAction(strong->data().history(user)));
+		// Файл читается задачей загрузки — убрать его позже
+		base::call_delayed(5 * 60 * crl::time(1000), [path] { QFile::remove(path); });
+		LOG(("Parvane: отчёт об ошибке → %1 (%2 строк журнала)").arg(address).arg(int(log.size())));
+		done(u"sent"_q);
 	});
 }
 

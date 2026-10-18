@@ -1,0 +1,27 @@
+lng_parvane_bug_report
+Report a Bug
+Сообщить об ошибке
+
+lng_parvane_bug_report_about
+Describe what happened and what you did right before it. Your last actions in the app (without message contents) will be attached automatically.
+Опишите, что произошло и что вы делали перед этим. Последние действия в приложении (без содержимого сообщений) приложатся автоматически.
+
+lng_parvane_bug_report_placeholder
+What went wrong?
+Что пошло не так?
+
+lng_parvane_bug_report_send
+Send
+Отправить
+
+lng_parvane_bug_report_sent
+Bug report sent. Thank you!
+Отчёт отправлен. Спасибо!
+
+lng_parvane_bug_report_failed
+Could not send the bug report
+Не удалось отправить отчёт
+
+lng_parvane_bug_report_no_address
+This server doesn't accept bug reports
+Этот сервер не принимает отчёты об ошибках
