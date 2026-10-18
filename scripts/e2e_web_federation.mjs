@@ -3,7 +3,8 @@
 //   1 — личный чат: Аня находит Бориса по полному адресу `ник@сервер`, переписка в обе стороны, история;
 //   2 — группа на сервере A с участником с B: сообщения всех троих видят все;
 //   3 — личный звонок A ↔ B и групповой звонок группы с участниками с обоих серверов;
-//   4 — совместная папка облака на A, редактор с B: файлы с обоих серверов скачиваются обеими сторонами.
+//   4 — совместная папка облака на A, редактор с B: файлы с обоих серверов скачиваются обеими сторонами;
+//   2б — ссылка-приглашение в группу сервера A: Борис (B) получает её в чате, нажимает и вступает.
 // Запуск: scripts/run_web_federation_e2e.sh (поднимает оба сервера).
 import assert from 'node:assert/strict';
 
@@ -11,7 +12,8 @@ import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
 import { CLOUD_STEP_TIMEOUT_MS, cloudDriver } from './e2e_web_cloud_lib.mjs';
 import {
-  dismissRecoveryKeyDialog, exchangeMessages, expectMediaFlowing, findMessage, preparePage, sendText,
+  dismissRecoveryKeyDialog, exchangeMessages, expectMediaFlowing, findMessage, findMessageContainer, preparePage,
+  readInvitesScreen, sendText,
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-federation-e2e-1';
@@ -28,6 +30,7 @@ const vera = `vera-${suffix}@${domainA}`;
 const boris = `boris-${suffix}@${domainB}`;
 const nick = (address) => address.split('@')[0];
 const groupTitle = `Fed-${suffix.slice(-6)}`;
+const linkGroupTitle = `FedLink-${suffix.slice(-6)}`;
 const FOLDER = 'Общая папка двух серверов';
 const FILE_A = 'с-сервера-a.txt';
 const FILE_B = 'с-сервера-b.txt';
@@ -60,7 +63,9 @@ async function openListed(page, title) {
   await item.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   await item.locator('.ListItem-button').click();
   await page.locator('.MiddleHeader').getByText(title).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await page.locator('#editable-message-text[contenteditable="true"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Во время смены чата в DOM два композера — ждём композер активного слайда
+  await page.locator('.Transition_slide-active #editable-message-text[contenteditable="true"]').last()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
 }
 
 async function selectPickerRow(page, name) {
@@ -224,6 +229,36 @@ try {
   await ac.item(FILE_B).waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   assert.equal((await ac.download(FILE_B)).toString(), CONTENT_B, 'Аня (A) скачивает файл с сервера B');
   console.log('OK: владелец с A скачал файл редактора с сервера B');
+
+  // ── История 2б: ссылка-приглашение в группу другого сервера ────────────
+  await ac.close();
+  await bc.close();
+  await createGroup(a, [vera], linkGroupTitle);
+  const link = await readInvitesScreen(a, linkGroupTitle);
+  assert.match(link, new RegExp(`^https://${domainA.replace(/\./g, '\\.')}/join/`), `ссылка с доменом сервера A: ${link}`);
+  await openListed(a, nick(boris));
+  await sendText(a, link);
+  await openListed(b, nick(anya));
+  const linkMessage = findMessageContainer(b, link.split('#')[0].replace(/^https:\/\//, ''));
+  await linkMessage.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await linkMessage.locator('a[href*="/join/"]').first().click();
+  const joinModal = b.locator('.Modal .modal-dialog').filter({ has: b.getByRole('button', { name: /join group/i }) }).first();
+  await joinModal.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await joinModal.getByText(linkGroupTitle).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  await joinModal.getByRole('button', { name: /join group/i }).first().click();
+  await b.locator('.MiddleHeader').getByText(linkGroupTitle).first().waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  // После вступления по ссылке на экране два композера (уходящий и новый слайд) — пишем в активный
+  const composer = b.locator('.Transition_slide-active #editable-message-text').last();
+  await composer.waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await composer.fill('вступил по ссылке с сервера B');
+  await composer.press('Enter');
+  await openListed(v, linkGroupTitle);
+  await findMessage(v, 'вступил по ссылке с сервера B').first().waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  await openListed(a, linkGroupTitle);
+  await findMessage(a, 'вступил по ссылке с сервера B').first().waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
+  // Группа другого сервера — в списке чатов вступившего
+  await openListed(b, linkGroupTitle);
+  console.log('OK: участник с B вступил по ссылке в группу сервера A и пишет в неё');
 
   for (const s of Object.values(sessions)) assert.deepEqual(s.errors || [], [], 'ошибки страницы');
   console.log('OK');

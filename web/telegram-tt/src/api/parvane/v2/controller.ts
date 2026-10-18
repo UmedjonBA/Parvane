@@ -2680,7 +2680,27 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  // Участник без ключей эпохи (только что вступил: админ начинает новую эпоху не чаще раза в 10 с) —
+  // отправка ждёт раздачу ключей, а не проваливается сразу. Ожидание — вне очереди `serial`: ключи
+  // приходят инбоксом через неё же
+  const GROUP_KEYS_WAIT_MS = 20000;
+  const GROUP_KEYS_RETRY_MS = 1000;
+
   async function sendContent(to: string, content: V2Content, uuid: string) {
+    const started = Date.now();
+    for (;;) {
+      try {
+        await sendContentOnce(to, content, uuid);
+        return;
+      } catch (e) {
+        const isWaitingKeys = isV2GroupAddress(to) && String(e).includes('"kind":"groupKeys"');
+        if (!isWaitingKeys || Date.now() - started > GROUP_KEYS_WAIT_MS) throw e;
+        await pause(GROUP_KEYS_RETRY_MS);
+      }
+    }
+  }
+
+  async function sendContentOnce(to: string, content: V2Content, uuid: string) {
     await serial(async () => {
       if (isV2GroupAddress(to)) {
         const hex = groupHex(to);
