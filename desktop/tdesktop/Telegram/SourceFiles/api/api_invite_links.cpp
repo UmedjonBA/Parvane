@@ -306,12 +306,43 @@ void InviteLinks::performEdit(
 	if (done) {
 		callbacks.push_back(std::move(done));
 	}
-	// Parvane: отзыв ссылки группы шины → group.invite.revoke; правка
-	// параметров сервером не поддерживается — честный тост (spec 004, US4).
+	// Parvane: отзыв ссылки — запись журнала группы; правка (spec 024) — название, срок и лимит записью
+	// invite_edit, «по заявке» не меняется, число вступивших прежнее.
 	if (const auto gid = Parvane::GroupIdForChat(peer); !gid.isEmpty()) {
 		if (!revoke) {
-			_editCallbacks.erase(key);
-			Ui::Toast::Show(tr::lng_parvane_invite_edit_unsupported(tr::now));
+			auto expire = expireDate;
+			auto limit = usageLimit;
+			if (editOnlyTitle) {
+				// Только название — срок и лимит прежние
+				if (const auto i = _firstSlices.find(peer); i != end(_firstSlices)) {
+					const auto j = ranges::find(i->second.links, key.link, &Link::link);
+					if (j != end(i->second.links)) {
+						expire = j->expireDate;
+						limit = j->usageLimit;
+					}
+				}
+			}
+			Parvane::EditGroupInvite(gid, Parvane::GroupInviteToken(link), label, expire, limit,
+				[=](bool ok, Parvane::GroupInviteLink edited, const QString &error) {
+					const auto callbacks = _editCallbacks.take(key);
+					if (!ok) {
+						Ui::Toast::Show(error);
+						return;
+					}
+					const auto result = ParvaneLink(peer, edited);
+					if (auto i = _firstSlices.find(peer); i != end(_firstSlices)) {
+						const auto j = ranges::find(i->second.links, key.link, &Link::link);
+						if (j != end(i->second.links)) {
+							*j = result;
+						}
+					}
+					if (callbacks) {
+						for (const auto &callback : *callbacks) {
+							callback(result);
+						}
+					}
+					_updates.fire(Update{ .peer = peer, .admin = admin, .was = key.link, .now = result });
+				});
 			return;
 		}
 		Parvane::RevokeGroupInvite(gid, Parvane::GroupInviteToken(link), [=](bool ok, const QString &error) {
@@ -758,10 +789,26 @@ void InviteLinks::requestJoinedFirstSlice(LinkKey key) {
 	if (_firstJoinedRequests.contains(key)) {
 		return;
 	}
-	// Parvane: вступивших по ссылке сервер не хранит (только счётчик) — пусто
-	if (!Parvane::GroupIdForChat(key.peer).isEmpty()) {
-		_firstJoined[key] = JoinedByLinkSlice();
-		_joinedFirstSliceLoaded.fire_copy(key);
+	// Parvane (spec 024): вступившие по ссылке — из журнала группы (новые сверху)
+	if (const auto gid = Parvane::GroupIdForChat(key.peer); !gid.isEmpty()) {
+		_firstJoinedRequests.emplace(key, 0);
+		Parvane::ListInviteJoins(gid, Parvane::GroupInviteToken(key.link), [=](
+				std::vector<std::pair<QString, int>> joined) {
+			_firstJoinedRequests.remove(key);
+			auto slice = JoinedByLinkSlice();
+			for (const auto &[address, date] : joined) {
+				if (address.isEmpty()) {
+					continue;
+				}
+				slice.users.push_back({
+					.user = Parvane::EnsureUser(&key.peer->session(), address),
+					.date = TimeId(date),
+				});
+			}
+			slice.count = int(slice.users.size());
+			_firstJoined[key] = std::move(slice);
+			_joinedFirstSliceLoaded.fire_copy(key);
+		});
 		return;
 	}
 	const auto requestId = _api->request(MTPmessages_GetChatInviteImporters(

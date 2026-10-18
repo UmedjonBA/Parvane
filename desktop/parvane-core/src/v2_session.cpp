@@ -2674,17 +2674,35 @@ json Session::listInvites(const std::string &address) {
     if (!isGroupAddress(address)) return out;
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!client_) return out;
-    std::set<std::string> active;
-    if (const auto g = client_->groupInfo(groupHex(address)); g && g->contains("inviteLinks")) {
-        for (const auto &id : (*g)["inviteLinks"]) {
-            if (id.is_string()) active.insert(id.get<std::string>());
-        }
-    }
+    // Как web listInvites: метаданные (название, срок, лимит, число вступивших, режим) — из журнала группы,
+    // одни у всех ведущих приглашения; секрет ссылки (url) — из своего хранилища
+    std::map<std::string, json> known;
     const auto all = loadInvites();
     if (all.contains(address) && all[address].is_array()) {
-        for (const auto &r : all[address]) {
-            if (active.count(r.value("linkId", std::string()))) out.push_back(r);
-        }
+        for (const auto &r : all[address]) known[r.value("linkId", std::string())] = r;
+    }
+    const auto toInt = [](const json &v) -> std::int64_t {
+        if (v.is_number_integer()) return v.get<std::int64_t>();
+        if (v.is_number()) return static_cast<std::int64_t>(v.get<double>());
+        if (v.is_string()) return std::atoll(v.get<std::string>().c_str());
+        return 0;
+    };
+    const auto g = client_->groupInfo(groupHex(address));
+    if (!g || !g->contains("invites") || !(*g)["invites"].is_array()) return out;
+    for (const auto &meta : (*g)["invites"]) {
+        const auto id = meta.value("id", std::string());
+        const auto it = known.find(id);
+        if (it == known.end()) continue;
+        json rec{{"url", it->second.value("url", std::string())},
+                 {"linkId", id},
+                 {"date", toInt(meta.value("createdMs", json(0))) / 1000},
+                 {"title", meta.value("title", std::string())},
+                 {"expiresAt", toInt(meta.value("expiresMs", json(0))) / 1000},
+                 {"usageLimit", toInt(meta.value("usageLimit", json(0)))},
+                 {"usage", toInt(meta.value("uses", json(0)))},
+                 {"isRequestNeeded", meta.value("requiresApproval", false)},
+                 {"creator", meta.value("creator", std::string())}};
+        out.push_back(std::move(rec));
     }
     // Порядок один на всех своих устройствах (T160): по нему выбирается основная ссылка.
     std::sort(out.begin(), out.end(), [](const json &a, const json &b) {
@@ -2785,7 +2803,11 @@ json Session::listJoinRequestsLocked(const std::string &hex) {
                 const auto &ms = r.contains("requested_ms") ? r["requested_ms"] : r.value("requestedMs", json(0));
                 const auto at = ms.is_string() ? std::atoll(ms.get<std::string>().c_str())
                     : ms.is_number() ? ms.get<long long>() : 0LL;
-                out.push_back(json{{"user", user}, {"date", at / 1000}});
+                json rec{{"user", user}, {"date", at / 1000}};
+                // spec 024: по какой ссылке «по заявке» пришла заявка — одобренный считается вступившим по ней
+                const auto link = r.contains("link_id") ? r.value("link_id", std::string()) : r.value("linkId", std::string());
+                if (!link.empty()) rec["linkId"] = b64ToHex(link);
+                out.push_back(std::move(rec));
             }
         }
     } catch (const std::exception &e) {

@@ -560,6 +560,11 @@ struct GroupJoinRequest {
 	QString invite;
 	int date = 0;
 };
+// spec 024: правка ссылки v2 (название, срок, лимит; «по заявке» не меняется) и кто по ней вступил.
+void EditGroupInvite(const QString &groupId, const QString &url, const QString &title, int expireDate,
+	int usageLimit, Fn<void(bool ok, GroupInviteLink link, const QString &error)> done);
+void ListInviteJoins(const QString &groupId, const QString &url,
+	Fn<void(std::vector<std::pair<QString, int>> joined)> done);
 // Ссылка по токену — https://parvane.invite/<token> (web открывает её).
 [[nodiscard]] QString GroupInviteUrl(const QString &token);
 // Токен из ссылки любого формата (parvane.invite/<t>, …#+<t>, голый 32 hex); "" — не наша.

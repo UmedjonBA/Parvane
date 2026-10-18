@@ -11431,19 +11431,57 @@ QString InviteErrorText(const QString &code) {
 }
 
 // Запись ссылки v2 (хранится на устройстве, секрет — в url) → GroupInviteLink.
-[[nodiscard]] GroupInviteLink V2InviteLink(const nlohmann::json &r) {
+[[nodiscard]] GroupInviteLink V2InviteLink(const nlohmann::json &r, bool revoked = false) {
 	auto l = GroupInviteLink();
 	l.token = QString::fromStdString(r.value("url", std::string()));
-	l.createdBy = SelfAddress();
+	const auto creator = QString::fromStdString(r.value("creator", std::string()));
+	l.createdBy = creator.isEmpty() ? SelfAddress() : creator;
 	l.title = QString::fromStdString(r.value("title", std::string()));
-	l.state = u"active"_q;
+	l.state = revoked ? u"revoked"_q : u"active"_q;
+	l.revoked = revoked;
 	l.date = int(r.value("date", std::int64_t(0)));
 	l.expireDate = int(r.value("expiresAt", std::int64_t(0)));
 	l.usageLimit = int(r.value("usageLimit", 0));
+	l.usage = int(r.value("usage", 0));
 	l.requestApproval = r.value("isRequestNeeded", false);
-	// Основная (FR-040) — без параметров.
-	l.permanent = l.title.isEmpty() && !l.expireDate && !l.usageLimit && !l.requestApproval;
 	return l;
+}
+
+// Основная ссылка (как web pickPrimaryInvite): первая без названия, срока и лимита; открытая в приоритете,
+// иначе — с одобрением (группа «по заявке»).
+void MarkPrimaryInvite(std::vector<GroupInviteLink> &links) {
+	const auto plain = [](const GroupInviteLink &l) {
+		return l.title.isEmpty() && !l.expireDate && !l.usageLimit && !l.revoked;
+	};
+	auto chosen = -1;
+	for (auto i = 0; i != int(links.size()); ++i) {
+		if (plain(links[i]) && !links[i].requestApproval) {
+			chosen = i;
+			break;
+		}
+	}
+	for (auto i = 0; chosen < 0 && i != int(links.size()); ++i) {
+		if (plain(links[i])) {
+			chosen = i;
+		}
+	}
+	for (auto i = 0; i != int(links.size()); ++i) {
+		links[i].permanent = (i == chosen);
+	}
+}
+
+// id ссылки v2 (hex) по адресу https://<domain>/join/<id base64url>#<секрет>
+[[nodiscard]] std::string InviteLinkIdHex(const QString &url) {
+	const auto at = url.indexOf(u"/join/"_q);
+	if (at < 0) {
+		return std::string();
+	}
+	auto id = url.mid(at + 6).section('#', 0, 0).section('?', 0, 0);
+	id.replace('-', '+').replace('_', '/');
+	while (id.size() % 4) {
+		id += '=';
+	}
+	return parvane::v2::b64ToHex(id.toStdString());
 }
 
 void ListGroupInvites(const QString &groupId, bool revoked,
@@ -11453,12 +11491,19 @@ void ListGroupInvites(const QString &groupId, bool revoked,
 		crl::async([=] {
 			auto links = std::vector<GroupInviteLink>();
 			const auto s = V2Ready();
-			if (s && !revoked) {
-				for (const auto &r : s->listInvites(groupId.toStdString())) {
-					links.push_back(V2InviteLink(r));
+			if (s) {
+				const auto records = revoked
+					? s->listRevokedInvites(groupId.toStdString())
+					: s->listInvites(groupId.toStdString());
+				for (const auto &r : records) {
+					links.push_back(V2InviteLink(r, revoked));
+				}
+				if (!revoked) {
+					MarkPrimaryInvite(links);
 				}
 			}
-			LOG(("Parvane: ссылки v2 %1: %2").arg(groupId).arg(int(links.size())));
+			LOG(("Parvane: ссылки v2 %1 (%2): %3").arg(groupId,
+				revoked ? u"отозванные"_q : u"активные"_q).arg(int(links.size())));
 			crl::on_main([=] { done(s != nullptr, links, s ? QString() : u"failed"_q); });
 		});
 		return;
@@ -11566,12 +11611,60 @@ void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 
 void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone done) {
 	if (parvane::v2::isGroupAddress(groupId.toStdString())) {
-		if (done) {
-			done(true, QString()); // отозванная ссылка v2 уже не хранится
-		}
+		// Отозванная ссылка v2 — из списка отозванных у сервера (T188)
+		const auto linkId = InviteLinkIdHex(token);
+		crl::async([=] {
+			const auto s = V2Ready();
+			const auto ok = s && !linkId.empty() && s->deleteRevokedInvite(groupId.toStdString(), linkId);
+			LOG(("Parvane: INVITE delete %1 → %2 (v2)").arg(token, ok ? u"ok"_q : u"отказ"_q));
+			crl::on_main([=] {
+				if (done) {
+					done(ok, ok ? QString() : u"failed"_q);
+				}
+			});
+		});
 		return;
 	}
 	GroupV1Gone(std::move(done));
+}
+
+void EditGroupInvite(const QString &groupId, const QString &url, const QString &title, int expireDate,
+		int usageLimit, Fn<void(bool ok, GroupInviteLink link, const QString &error)> done) {
+	crl::async([=] {
+		const auto s = V2Ready();
+		const auto ok = s && s->editInvite(groupId.toStdString(), url.toStdString(), title.toStdString(),
+			expireDate, std::uint32_t(std::max(usageLimit, 0)));
+		auto link = GroupInviteLink();
+		if (ok) {
+			auto links = std::vector<GroupInviteLink>();
+			for (const auto &r : s->listInvites(groupId.toStdString())) {
+				links.push_back(V2InviteLink(r));
+			}
+			MarkPrimaryInvite(links);
+			for (const auto &l : links) {
+				if (l.token == url) {
+					link = l;
+				}
+			}
+		}
+		LOG(("Parvane: INVITE edit %1 → %2 (v2)").arg(url, ok ? u"ok"_q : u"отказ"_q));
+		crl::on_main([=] { done(ok, link, ok ? QString() : u"failed"_q); });
+	});
+}
+
+void ListInviteJoins(const QString &groupId, const QString &url,
+		Fn<void(std::vector<std::pair<QString, int>> joined)> done) {
+	const auto linkId = InviteLinkIdHex(url);
+	crl::async([=] {
+		auto out = std::vector<std::pair<QString, int>>();
+		if (const auto s = V2Ready(); s && !linkId.empty()) {
+			for (const auto &j : s->listInviteJoins(groupId.toStdString(), linkId)) {
+				out.emplace_back(QString::fromStdString(j.value("user", std::string())),
+					int(j.value("date", std::int64_t(0))));
+			}
+		}
+		crl::on_main([=] { done(out); });
+	});
 }
 
 void CheckGroupInvite(const QString &token,
@@ -11649,7 +11742,7 @@ void ListJoinRequests(const QString &groupId,
 					for (const auto &q : requests) {
 						list.push_back({
 							QString::fromStdString(q.value("user", std::string())),
-							QString(),
+							QString::fromStdString(q.value("linkId", std::string())),
 							int(q.value("date", std::int64_t(0))),
 						});
 						log.push_back(list.back().member + ':');
@@ -11676,7 +11769,17 @@ void DecideJoinRequest(const QString &groupId, const QString &member, bool appro
 		const auto tag = u"REQUEST %1 %2"_q.arg(approve ? u"approve"_q : u"decline"_q, member);
 		crl::async([=] {
 			const auto s = V2Ready();
-			const auto ok = s && s->decideJoinRequest(groupId.toStdString(), member.toStdString(), approve);
+			// spec 024: ссылка, по которой пришла заявка, — одобренный считается вступившим по ней
+			auto linkId = std::string();
+			if (s && approve) {
+				const auto requests = s->listJoinRequests(groupId.toStdString());
+				for (const auto &q : requests.is_array() ? requests : nlohmann::json::array()) {
+					if (q.value("user", std::string()) == member.toStdString()) {
+						linkId = q.value("linkId", std::string());
+					}
+				}
+			}
+			const auto ok = s && s->decideJoinRequest(groupId.toStdString(), member.toStdString(), approve, linkId);
 			if (ok) {
 				LOG(("Parvane: %1 → ok (v2)").arg(tag));
 			} else {
