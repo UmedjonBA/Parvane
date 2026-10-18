@@ -40,6 +40,8 @@ endif()
 target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.cpp
     ${src_loc}/parvane/parvane_client.h
+    ${src_loc}/parvane/parvane_account_ui.cpp
+    ${src_loc}/parvane/parvane_account_ui.h
     ${src_loc}/parvane/parvane_map.cpp
     ${src_loc}/parvane/parvane_map.h
     ${src_loc}/parvane/parvane_webrtc_backend.cpp

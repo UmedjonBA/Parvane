@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "main/main_session.h"
 #include "parvane/parvane_client.h" // Parvane: устройства из identity.device.*
+#include "parvane/parvane_account_ui.h" // Parvane: пароль и способ завершить сеанс
 #include "boxes/abstract_box.h" // Parvane: Ui::show — запрос пароля при отзыве
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/fields/password_input.h"
@@ -223,6 +224,7 @@ void Authorizations::requestTerminate(
 		// P-07: отзыв устройства требует текущий пароль — запрашиваем один раз
 		// на всю пачку тем же password-box, что и копия ключей.
 		const auto password = std::make_shared<QString>();
+		const auto rotateKeys = std::make_shared<bool>(false);
 		*step = [=](size_t i) {
 			if (i >= ids.size()) {
 				if (!weak.expired()) {
@@ -240,36 +242,19 @@ void Authorizations::requestTerminate(
 				(*shared)(MTP_boolTrue());
 				return;
 			}
-			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); }, *password);
+			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); }, *password, *rotateKeys);
 		};
 		if (ids.empty()) {
 			(*step)(0);
 			return;
 		}
-		Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
-			box->setTitle(rpl::single(u"Отозвать устройство"_q));
-			const auto field = Settings::CloudPassword::AddPasswordField(
-				box->verticalLayout(),
-				rpl::single(u"Текущий пароль"_q),
-				QString());
-			box->setFocusCallback([=] { field->setFocus(); });
-			const auto submit = [=] {
-				const auto value = field->getLastText();
-				if (value.isEmpty()) {
-					field->showError();
-					return;
-				}
-				*password = value;
-				box->closeBox();
-				(*step)(0);
-			};
-			QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
-			box->addButton(rpl::single(u"Отозвать"_q), submit);
-			box->addButton(tr::lng_cancel(), [=] {
-				box->closeBox();
-				(*shared)(MTP_boolFalse());
-			});
-		}));
+		Parvane::AskSignOutPassword(ids.size() > 1 || !hash, [=](QString value, bool rotate) {
+			*password = value;
+			*rotateKeys = rotate;
+			(*step)(0);
+		}, [=] {
+			(*shared)(MTP_boolFalse());
+		});
 		return;
 	}
 	const auto send = [&](auto request) {

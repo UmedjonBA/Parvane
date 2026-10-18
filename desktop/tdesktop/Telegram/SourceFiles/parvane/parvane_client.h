@@ -137,8 +137,48 @@ struct RecoveryState {
 };
 [[nodiscard]] RecoveryState FetchRecoveryState();
 [[nodiscard]] QString RotateSskWithKey(const QString &recoveryKey);
+// Вход этого устройства по ключу восстановления (spec 015, RECOVER-2): из копии ключей аккаунта — прежние
+// устройства остаются; у аккаунта без копии — прежним путём (они отзываются). Блокирующий.
 [[nodiscard]] QString RecoverWithKey(const QString &recoveryKey);
 [[nodiscard]] QString ResetIdentityWithPassword(const QString &password);
+
+// Новое устройство, не привязанное к аккаунту (как web «Устройства»): ответ боту в Telegram ключом
+// восстановления и/или подтверждение на другом своём устройстве (код сверки). Состояние — на main.
+enum class TelegramRecoveryState {
+	Idle,
+	Waiting,     // бот спросил владельца, ждём ответ
+	Joining,     // ключ получен, устройство вступает в журнал
+	Done,        // устройство подключено
+	Failed,      // не удалось (сеть, ключ не подошёл)
+	Limit,       // слишком часто
+	Expired,     // ответа не было 15 минут
+	Unavailable, // Telegram к аккаунту не привязан
+};
+struct LinkingStatus {
+	bool needsLinking = false;
+	TelegramRecoveryState telegram = TelegramRecoveryState::Idle;
+	QString linkCode; // код сверки с другим устройством (после его отклика)
+};
+[[nodiscard]] LinkingStatus CurrentLinkingStatus();
+[[nodiscard]] rpl::producer<> LinkingStatusChanges();
+// «Прислать сообщение ещё раз» (бот снова спросит ключ).
+void RequestTelegramKeyAgain();
+
+// Экран «Устройства» (как web SettingsActiveSessions): блоки ключа подписи, вышедших устройств,
+// страховочной копии и ключа в Telegram. Блокирующие (сеть) — с воркера.
+struct DevicesExtras {
+	bool ready = false;          // сессия v2 готова
+	bool rotationNeeded = false; // ключ подписи устройств раскрыт отзывом
+	bool escrowMissing = false;  // сервер ждёт страховочную копию, её нет
+	bool canSendTelegram = false; // ключ ещё не уходил в Telegram, Telegram привязан
+	std::vector<QString> leftDevices; // вышедшие сами устройства, державшие ключ подписи
+};
+[[nodiscard]] DevicesExtras FetchDevicesExtras();
+[[nodiscard]] bool ReportDeviceStolen(const QString &deviceId);
+// "ok" | "bad_key" | "no_backup" | "failed".
+[[nodiscard]] QString StoreEscrowCopy(const QString &recoveryKey);
+// "ok" | "bad_key" | "no_telegram" | "failed".
+[[nodiscard]] QString SendRecoveryKeyToTelegram(const QString &recoveryKey);
 
 // Режим чата «усиленная приватность» (L2, T079; правило conformance L2-1):
 // выравнивание размеров конвертов, без typing/presence, виден участникам.
@@ -188,8 +228,13 @@ struct DeviceEntry {
 	bool current = false;
 };
 void ListDevices(Fn<void(std::vector<DeviceEntry>)> done);
-// P-07: отзыв устройства требует текущий пароль (сервер отклонит без него).
-void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password = QString());
+// P-07: отзыв устройства требует текущий пароль (сервер отклонит без него). rotateKeys — «выйти и сменить
+// ключи» (потеряно/украдено: ротации и смена ключа подписи); иначе «просто выйти» — запись журнала без ротаций.
+void RevokeDevice(
+	const QString &deviceId,
+	Fn<void(bool)> done,
+	const QString &password = QString(),
+	bool rotateKeys = false);
 
 // Прочитавшие сообщение (msg.chat.readers) — для нативного «Seen by»/«read at».
 struct ReaderEntry {

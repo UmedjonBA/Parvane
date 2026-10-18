@@ -1,0 +1,287 @@
+lng_parvane_linking_title
+Confirm sign-in
+Подтвердите вход
+
+lng_parvane_needs_linking_notice
+This device is not linked to your account yet. Reply to the Parvane bot in Telegram with your recovery key or confirm this device on another one.
+Это устройство ещё не привязано к аккаунту. Ответьте боту Parvane в Telegram ключом восстановления или подтвердите устройство на другом.
+
+lng_parvane_tg_recover_title
+Confirm in Telegram
+Подтвердите вход в Telegram
+
+lng_parvane_tg_recover_waiting
+The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key (the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.
+Бот Parvane отправил вам сообщение в Telegram. Ответьте на него ключом восстановления (бот присылал ключ в этот же чат) — на этом устройстве появятся ваши чаты и план.
+
+lng_parvane_tg_recover_joining
+Key received. Connecting this device…
+Ключ получен. Подключаем устройство…
+
+lng_parvane_tg_recover_done
+This device is connected. Your chats and planner are loading.
+Устройство подключено. Чаты и план загружаются.
+
+lng_parvane_tg_recover_failed
+Could not connect this device. Check your connection and try again.
+Не удалось подключить устройство. Проверьте связь и попробуйте ещё раз.
+
+lng_parvane_tg_recover_limit
+Too many requests. Wait a minute and try again.
+Слишком много запросов. Подождите минуту и попробуйте ещё раз.
+
+lng_parvane_tg_recover_expired
+The request has expired. Ask the bot to send the message again.
+Запрос устарел. Попросите бота прислать сообщение ещё раз.
+
+lng_parvane_tg_recover_again
+Send the message again
+Прислать сообщение ещё раз
+
+lng_parvane_link_pending_title
+Or confirm on another device
+Или подтвердите на другом устройстве
+
+lng_parvane_link_pending_text
+Waiting for your other device. Open Settings → Devices there and confirm code {code}.
+Ждём ваше другое устройство. Откройте там Настройки → Устройства и подтвердите код {code}.
+
+lng_parvane_link_pending_wait
+Waiting for your other device. Open Settings → Devices there — the verification code will appear on both devices.
+Ждём ваше другое устройство. Откройте там Настройки → Устройства — код сверки появится на обоих устройствах.
+
+lng_parvane_recover_title
+No other device?
+Нет другого устройства?
+
+lng_parvane_recover_text
+Enter your recovery key to sign this device in: your chats and planner will appear here and your other devices stay signed in.
+Введите ключ восстановления, чтобы подключить это устройство: здесь появятся ваши чаты и план, а другие устройства останутся подключены.
+
+lng_parvane_recover_action
+Use recovery key
+Ввести ключ восстановления
+
+lng_parvane_recover_done
+This device is now signed in with your recovery key.
+Устройство подключено по ключу восстановления.
+
+lng_parvane_recover_no_backup
+No recovery copy is stored for this account.
+Для этого аккаунта нет копии для восстановления.
+
+lng_parvane_reset_action
+Reset secure identity
+Сбросить защищённую личность
+
+lng_parvane_reset_text
+This creates a new secure identity for your account. Your contacts will see that your security key has changed, and earlier encrypted messages will not be readable on this device. Enter your password to continue.
+Будет создана новая защищённая личность аккаунта. Собеседники увидят, что ваш ключ безопасности изменился, а прежние зашифрованные сообщения на этом устройстве не прочитаются. Введите пароль, чтобы продолжить.
+
+lng_parvane_reset_confirm
+Reset
+Сбросить
+
+lng_parvane_reset_done
+Secure identity was reset. Save your new recovery key.
+Защищённая личность сброшена. Сохраните новый ключ восстановления.
+
+lng_parvane_reset_bad_password
+Wrong password.
+Неверный пароль.
+
+lng_parvane_reset_failed
+Could not reset the secure identity. Try again later.
+Не удалось сбросить защищённую личность. Попробуйте позже.
+
+lng_parvane_password_confirm
+Current password
+Текущий пароль
+
+lng_parvane_session_password_hint
+Enter your current password to terminate the session.
+Введите текущий пароль, чтобы завершить сеанс.
+
+lng_parvane_sign_out_keep
+Just sign out
+Просто выйти
+
+lng_parvane_sign_out_keep_hint
+The device leaves the account, your keys stay the same. Choose this if the device is still yours.
+Устройство выйдет из аккаунта, ключи останутся прежними. Подходит, если устройство у вас.
+
+lng_parvane_sign_out_rotate
+Sign out and change keys
+Выйти и сменить ключи
+
+lng_parvane_sign_out_rotate_hint
+If the device was lost or stolen: the keys it held are replaced. To add new devices you may need your recovery key.
+Если устройство потеряно или украдено: ключи, которые оно хранило, сменятся. Чтобы добавлять новые устройства, может понадобиться ключ восстановления.
+
+lng_parvane_ssk_rotation_title
+Device signing key
+Ключ подписи устройств
+
+lng_parvane_ssk_rotation_text
+A removed device held the key that signs your devices. Until it is renewed, new devices cannot be added. Enter your recovery key to renew it.
+Удалённое устройство держало ключ, которым подписываются ваши устройства. Пока он не обновлён, добавить новое устройство нельзя. Введите ключ восстановления, чтобы обновить его.
+
+lng_parvane_ssk_rotation_action
+Renew key
+Обновить ключ
+
+lng_parvane_ssk_rotation_placeholder
+Recovery key
+Ключ восстановления
+
+lng_parvane_ssk_rotation_done
+Device signing key renewed.
+Ключ подписи устройств обновлён.
+
+lng_parvane_ssk_rotation_bad_key
+This recovery key does not match.
+Ключ восстановления не подходит.
+
+lng_parvane_ssk_rotation_no_backup
+A removed device held the key that signs your devices. Renew it from the device where your account was first set up — the recovery copy is stored there.
+Удалённое устройство держало ключ, которым подписываются ваши устройства. Обновите его на устройстве, где аккаунт настраивался впервые, — копия для восстановления хранится там.
+
+lng_parvane_ssk_rotation_failed
+Could not renew the key. Try again later.
+Не удалось обновить ключ. Попробуйте позже.
+
+lng_parvane_left_devices
+Signed-out devices
+Вышедшие устройства
+
+lng_parvane_left_devices_hint
+These devices signed out without changing keys. If one of them was stolen, mark it — the device signing key will be replaced with your recovery key.
+Эти устройства вышли из аккаунта без смены ключей. Если одно из них украли, отметьте его — ключ подписи устройств сменится по ключу восстановления.
+
+lng_parvane_left_device_stolen
+This device was stolen
+Это устройство украли
+
+lng_parvane_left_device_stolen_confirm
+Mark {device} as stolen? You will need your recovery key to replace the device signing key. Until then new devices can't be added and contacts see a warning.
+Отметить {device} украденным? Для смены ключа подписи устройств понадобится ключ восстановления. До смены новые устройства не добавляются, а собеседники видят предупреждение.
+
+lng_parvane_left_device_stolen_done
+Device marked as stolen
+Устройство отмечено украденным
+
+lng_parvane_left_device_stolen_failed
+Could not mark the device as stolen
+Не удалось отметить устройство украденным
+
+lng_parvane_escrow_title
+Recovery key safety copy
+Страховка ключа восстановления
+
+lng_parvane_escrow_text
+If you lose your recovery key, the server administrator can issue a new one — but only after a safety copy is created. Enter your recovery key once to create it.
+Если вы потеряете ключ восстановления, администратор сервера сможет выдать новый — но только после создания страховочной копии. Введите ключ восстановления один раз, чтобы её создать.
+
+lng_parvane_escrow_action
+Create safety copy
+Создать страховочную копию
+
+lng_parvane_escrow_done
+Safety copy created.
+Страховочная копия создана.
+
+lng_parvane_tg_send_title
+Recovery key in Telegram
+Ключ восстановления в Telegram
+
+lng_parvane_tg_send_text
+Enter your recovery key once — we will send it to your Telegram chat with the Parvane bot. After that, a new device can be signed in by replying to the bot with this key, and your chats and planner will appear there.
+Введите ключ восстановления один раз — мы отправим его вам в Telegram, в чат с ботом Parvane. После этого новое устройство можно будет подключить, ответив боту этим ключом, и на нём появятся ваши чаты и план.
+
+lng_parvane_tg_send_action
+Send key to Telegram
+Отправить ключ в Telegram
+
+lng_parvane_tg_send_done
+The recovery key has been sent to your Telegram.
+Ключ восстановления отправлен вам в Telegram.
+
+lng_parvane_tg_send_no_telegram
+Telegram is not linked to this account.
+К этому аккаунту не привязан Telegram.
+
+lng_parvane_recovery_key_title
+Recovery key
+Ключ восстановления
+
+lng_parvane_recovery_key_about
+Save your recovery key. It restores your account keys on a new device. It is shown only once and nobody else has it, not even the server — keep it somewhere safe.
+Сохраните ключ восстановления. Он восстановит ключи аккаунта на новом устройстве. Он показывается один раз, и его нет больше ни у кого, даже у сервера, — храните его надёжно.
+
+lng_parvane_recovery_key_saved
+I saved the key
+Я сохранил(а) ключ
+
+lng_parvane_recovery_key_copy
+Copy
+Скопировать
+
+lng_parvane_recovery_key_copied
+Recovery key copied
+Ключ восстановления скопирован
+
+lng_parvane_keys_backup_title
+Key backup
+Резервная копия ключей
+
+lng_parvane_keys_backup_about
+A password-protected file with this device's keys and history. It also works in the web client.
+Файл с ключами и историей этого устройства под паролем. Подходит и для веб-клиента.
+
+lng_parvane_keys_backup_password
+Backup password (at least 8 characters)
+Пароль копии (не короче 8 символов)
+
+lng_parvane_keys_export
+Save key backup…
+Сохранить копию ключей…
+
+lng_parvane_keys_import
+Restore from backup…
+Восстановить из копии…
+
+lng_parvane_keys_backup_continue
+Continue
+Продолжить
+
+lng_parvane_keys_backup_restore
+Restore
+Восстановить
+
+lng_parvane_keys_backup_file
+Parvane key backup
+Копия ключей Parvane
+
+lng_parvane_keys_exported
+Key backup saved
+Копия ключей сохранена
+
+lng_parvane_keys_export_failed
+Could not save the key backup
+Не удалось сохранить копию ключей
+
+lng_parvane_keys_imported
+Keys restored, history is loading
+Ключи восстановлены, история подтягивается
+
+lng_parvane_keys_import_bad_password
+Wrong password or damaged file
+Неверный пароль или повреждённый файл
+
+lng_parvane_keys_import_failed
+This backup does not fit this account
+Копия не подошла к этому аккаунту
+
+lng_parvane_keys_not_ready
+Keys are not ready yet — wait a few seconds after signing in
+Ключи ещё не готовы — подождите несколько секунд после входа

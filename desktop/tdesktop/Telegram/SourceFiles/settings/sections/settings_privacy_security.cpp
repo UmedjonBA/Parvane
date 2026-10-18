@@ -723,10 +723,10 @@ void BuildSecuritySection(
 	{
 		const auto container = builder.container();
 		Ui::AddSkip(container);
-		Ui::AddSubsectionTitle(container, rpl::single(u"Резервная копия ключей"_q));
+		Ui::AddSubsectionTitle(container, tr::lng_parvane_keys_backup_title());
 		Ui::AddDividerText(
 			container,
-			rpl::single(u"История зашифрована ключами этого устройства. Без копии переустановка или сбой диска уничтожат переписку навсегда. Файл подходит и для веб-клиента."_q));
+			tr::lng_parvane_keys_backup_about());
 		const auto askPassword = [=](
 				const QString &title,
 				const QString &button,
@@ -737,7 +737,7 @@ void BuildSecuritySection(
 				// обёртку из модуля облачного пароля.
 				const auto field = Settings::CloudPassword::AddPasswordField(
 					box->verticalLayout(),
-					rpl::single(u"Пароль копии (не короче 8 символов)"_q),
+					tr::lng_parvane_keys_backup_password(),
 					QString());
 				box->setFocusCallback([=] { field->setFocus(); });
 				const auto submit = [=] {
@@ -756,14 +756,14 @@ void BuildSecuritySection(
 		};
 		builder.addButton({
 			.id = u"security/parvane_keys_export"_q,
-			.title = rpl::single(u"Сохранить копию ключей…"_q),
+			.title = tr::lng_parvane_keys_export(),
 			.icon = { &st::menuIconExport },
 			.onClick = [=] {
-				askPassword(u"Копия ключей"_q, u"Продолжить"_q, [=](QString password) {
+				askPassword(tr::lng_parvane_keys_backup_title(tr::now), tr::lng_parvane_keys_backup_continue(tr::now), [=](QString password) {
 					FileDialog::GetWritePath(
 						Core::App().getFileDialogParent(),
-						u"Сохранить копию ключей"_q,
-						u"Копия ключей Parvane (*.parvane-keys)"_q,
+						tr::lng_parvane_keys_export(tr::now),
+						tr::lng_parvane_keys_backup_file(tr::now) + u" (*.parvane-keys)"_q,
 						u"parvane-keys.parvane-keys"_q,
 						[=](QString &&path) {
 							crl::async([=] {
@@ -771,7 +771,7 @@ void BuildSecuritySection(
 								const auto ok = Parvane::ExportKeyBackup(path, password, &error);
 								crl::on_main([=] {
 									controller->showToast(ok
-										? u"Копия ключей сохранена"_q
+										? tr::lng_parvane_keys_exported(tr::now)
 										: error);
 								});
 							});
@@ -782,25 +782,25 @@ void BuildSecuritySection(
 		});
 		builder.addButton({
 			.id = u"security/parvane_keys_import"_q,
-			.title = rpl::single(u"Восстановить из копии…"_q),
+			.title = tr::lng_parvane_keys_import(),
 			.icon = { &st::menuIconRestore },
 			.onClick = [=] {
 				FileDialog::GetOpenPath(
 					Core::App().getFileDialogParent(),
-					u"Файл копии ключей"_q,
-					u"Копия ключей Parvane (*.parvane-keys *.json);;Все файлы (*)"_q,
+					tr::lng_parvane_keys_import(tr::now),
+					tr::lng_parvane_keys_backup_file(tr::now) + u" (*.parvane-keys *.json);;"_q + FileDialog::AllFilesFilter(),
 					[=](FileDialog::OpenResult &&result) {
 						if (result.paths.isEmpty()) {
 							return;
 						}
 						const auto path = result.paths.front();
-						askPassword(u"Пароль копии"_q, u"Восстановить"_q, [=](QString password) {
+						askPassword(tr::lng_parvane_keys_backup_title(tr::now), tr::lng_parvane_keys_backup_restore(tr::now), [=](QString password) {
 							crl::async([=] {
 								auto error = QString();
 								const auto ok = Parvane::ImportKeyBackup(path, password, &error);
 								crl::on_main([=] {
 									controller->showToast(ok
-										? u"Ключи восстановлены, история подтягивается"_q
+										? tr::lng_parvane_keys_imported(tr::now)
 										: error);
 								});
 							});
@@ -811,133 +811,8 @@ void BuildSecuritySection(
 		});
 	}
 
-	// Parvane (T140, FR-066): ключ восстановления — смена ключа подписи устройств
-	// после отзыва, вход без других устройств, сброс личности. Сам ключ
-	// показывается один раз при создании аккаунта (диалог из parvane_client).
-	if (Parvane::StrangersPolicyAvailable()) {
-		const auto container = builder.container();
-		Ui::AddSkip(container);
-		Ui::AddSubsectionTitle(container, rpl::single(u"Ключ восстановления"_q));
-		Ui::AddDividerText(
-			container,
-			rpl::single(u"Ключ восстановления показывается один раз при создании аккаунта. Он нужен, чтобы сменить ключ подписи устройств после отзыва устройства и чтобы войти, когда других устройств не осталось."_q));
-		const auto askText = [=](
-				const QString &title,
-				const QString &placeholder,
-				const QString &button,
-				bool secret,
-				Fn<void(QString)> done) {
-			controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-				box->setTitle(rpl::single(title));
-				if (secret) {
-					const auto field = Settings::CloudPassword::AddPasswordField(
-						box->verticalLayout(),
-						rpl::single(placeholder),
-						QString());
-					box->setFocusCallback([=] { field->setFocus(); });
-					const auto submit = [=] {
-						const auto value = field->getLastText();
-						if (value.isEmpty()) {
-							field->showError();
-							return;
-						}
-						box->closeBox();
-						done(value);
-					};
-					QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
-					box->addButton(rpl::single(button), submit);
-				} else {
-					const auto field = box->addRow(object_ptr<Ui::InputField>(
-						box,
-						st::defaultInputField,
-						rpl::single(placeholder)));
-					box->setFocusCallback([=] { field->setFocusFast(); });
-					const auto submit = [=] {
-						const auto value = field->getLastText().trimmed();
-						if (value.isEmpty()) {
-							field->showError();
-							return;
-						}
-						box->closeBox();
-						done(value);
-					};
-					field->submits() | rpl::on_next(submit, field->lifetime());
-					box->addButton(rpl::single(button), submit);
-				}
-				box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
-			}));
-		};
-		const auto resultText = [](const QString &result, const QString &done) {
-			return (result == u"ok"_q)
-				? done
-				: (result == u"bad_key"_q)
-				? u"Ключ восстановления не подошёл"_q
-				: (result == u"no_backup"_q)
-				? u"Копии корня под ключом восстановления нет"_q
-				: (result == u"bad_password"_q)
-				? u"Неверный пароль"_q
-				: u"Не удалось — проверьте соединение и повторите"_q;
-		};
-		const auto run = [=](Fn<QString()> work, const QString &done) {
-			crl::async([=] {
-				const auto result = work();
-				crl::on_main([=] { controller->showToast(resultText(result, done)); });
-			});
-		};
-		builder.addButton({
-			.id = u"security/parvane_ssk_rotate"_q,
-			.title = rpl::single(u"Сменить ключ подписи устройств…"_q),
-			.icon = { &st::menuIconRestore },
-			.onClick = [=] {
-				const auto state = Parvane::FetchRecoveryState();
-				if (!state.rotationNeeded) {
-					controller->showToast(u"Смена не требуется: ключ подписи устройств не раскрыт"_q);
-					return;
-				}
-				askText(u"Ключ восстановления"_q, u"Ключ восстановления"_q, u"Сменить"_q, false, [=](QString key) {
-					run([=] { return Parvane::RotateSskWithKey(key); }, u"Ключ подписи устройств сменён"_q);
-				});
-			},
-			.keywords = { u"recovery"_q, u"key"_q, u"ключ"_q, u"восстановления"_q, u"подписи"_q },
-		});
-		builder.addButton({
-			.id = u"security/parvane_recover"_q,
-			.title = rpl::single(u"Войти по ключу восстановления…"_q),
-			.icon = { &st::menuIconRestore },
-			.onClick = [=] {
-				if (!Parvane::FetchRecoveryState().needsLinking) {
-					controller->showToast(u"Это устройство уже привязано к аккаунту"_q);
-					return;
-				}
-				askText(u"Ключ восстановления"_q, u"Ключ восстановления"_q, u"Войти"_q, false, [=](QString key) {
-					run([=] { return Parvane::RecoverWithKey(key); }, u"Устройство привязано; прежние устройства отозваны"_q);
-				});
-			},
-			.keywords = { u"recovery"_q, u"восстановление"_q },
-		});
-		builder.addButton({
-			.id = u"security/parvane_identity_reset"_q,
-			.title = rpl::single(u"Сбросить личность…"_q),
-			.icon = { &st::menuIconDelete },
-			.onClick = [=] {
-				if (!Parvane::FetchRecoveryState().needsLinking) {
-					controller->showToast(u"Сброс доступен только на устройстве, не привязанном к аккаунту"_q);
-					return;
-				}
-				controller->show(Ui::MakeConfirmBox({
-					.text = u"Сброс создаст новую личность: прежняя переписка на этом устройстве не откроется, собеседники увидят смену ключа безопасности, остальные устройства будут отозваны. Используйте, только если ключ восстановления и все устройства потеряны."_q,
-					.confirmed = [=](Fn<void()> close) {
-						close();
-						askText(u"Пароль аккаунта"_q, u"Пароль"_q, u"Сбросить"_q, true, [=](QString password) {
-							run([=] { return Parvane::ResetIdentityWithPassword(password); }, u"Личность сброшена; сохраните новый ключ восстановления"_q);
-						});
-					},
-					.confirmText = rpl::single(u"Продолжить"_q),
-				}));
-			},
-			.keywords = { u"reset"_q, u"сброс"_q },
-		});
-	}
+	// Parvane: ключ восстановления, ключ подписи устройств и привязка — на экране «Устройства»
+	// (parvane_account_ui, как web).
 
 	auto ttlLabel = rpl::combine(
 		session->api().selfDestruct().periodDefaultHistoryTTL(),

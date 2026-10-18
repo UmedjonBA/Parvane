@@ -87,6 +87,7 @@
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
+#include <parvane/keybundle.h>       // parvane-core: отпечаток снимка истории (spec 015)
 #include <parvane/call_manager.h>    // parvane-core (оркестрация звонка)
 #include <parvane/stub_media_backend.h> // parvane-core (медиа-заглушка Э4)
 #include "parvane/parvane_webrtc_backend.h" // реальный webrtc-движок (Э3-b)
@@ -100,6 +101,7 @@
 #include "data/stickers/data_stickers_set.h"
 #include <QtCore/QFileInfo>
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Open/Close)
+#include "parvane/parvane_account_ui.h" // окна аккаунта: привязка устройства, ключ восстановления
 #include "media/audio/media_audio_track.h" // рингтон звонка
 #include "media/audio/media_audio.h"  // audioCountWaveform (реальная волна голосового)
 #include "core/file_location.h"       // Core::FileLocation
@@ -169,8 +171,21 @@ bool RunV2GroupChange(
 	const QString &gid,
 	std::function<nlohmann::json(const nlohmann::json &info)> change,
 	GroupOpDone done);
+// spec 015: вход по ключу восстановления и копия ключей аккаунта (определены ниже)
+void CompleteKeyJoin(parvane::v2::KeyJoinOutcome outcome);
+void NoteDomainKeys(const std::string &planner, const std::string &cloud);
 
 namespace {
+
+// Привязка устройства и копия ключей аккаунта (определены ниже).
+[[nodiscard]] bool HeadlessUi();
+[[nodiscard]] nlohmann::json CollectV2HistoryRows();
+void ImportV2History(const std::string &stateJson);
+[[nodiscard]] QString CurrentLinkCode();
+void PublishLinkingStatus();
+void StartTelegramRecovery(bool again);
+void SyncFromKeyBundle();
+nlohmann::json BuildBundleHistory(const nlohmann::json &previous, bool force);
 
 // Протокол v2 (определены ниже, раздел «Протокол v2»).
 void LoadV2Ids();
@@ -1582,27 +1597,7 @@ void ShowPendingRecoveryKey(int attempt) {
 		}
 		return;
 	}
-	const auto key = base::take(g_pendingRecoveryKey);
-	Ui::show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(rpl::single(u"Ключ восстановления"_q));
-		box->setCloseByOutsideClick(false);
-		box->setCloseByEscape(false);
-		box->addRow(object_ptr<Ui::FlatLabel>(
-			box,
-			rpl::single(u"Сохраните этот ключ в надёжном месте — он показывается один раз. "
-				"Им вы войдёте в аккаунт, если потеряете все устройства, и подтвердите "
-				"смену ключа подписи после отзыва устройства. Сервер ключа не знает."_q),
-			st::boxLabel));
-		const auto label = box->addRow(
-			object_ptr<Ui::FlatLabel>(box, rpl::single(key), st::boxLabel),
-			st::boxRowPadding + QMargins(0, st::boxLittleSkip, 0, 0));
-		label->setSelectable(true);
-		box->addButton(rpl::single(u"Я сохранил(а) ключ"_q), [=] { box->closeBox(); });
-		box->addLeftButton(rpl::single(u"Скопировать"_q), [=] {
-			QGuiApplication::clipboard()->setText(key);
-			box->showToast(u"Ключ восстановления скопирован"_q);
-		});
-	}));
+	ShowRecoveryKeyBox(base::take(g_pendingRecoveryKey));
 	LOG(("Parvane: v2: ключ восстановления показан"));
 }
 
@@ -1666,6 +1661,10 @@ void StartV2Locked() {
 		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
 	};
 	cfg.onEvent = [](const parvane::json &ev) { HandleV2Event(ev); };
+	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
+	cfg.bundleHistory = [](const nlohmann::json &previous, bool force) {
+		return BuildBundleHistory(previous, force);
+	};
 	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
 		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
 	}
@@ -9179,7 +9178,11 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	}
 	if (type == "stateReady") {
 		crl::on_main([] { AttachStateJournal(); });
-		crl::async([] { StartHistoryLinking(); }); // роль «старого» устройства: опрос чужих офферов
+		crl::async([] {
+			StartHistoryLinking(); // роль «старого» устройства: опрос чужих офферов
+			SyncFromKeyBundle();   // снимок истории свежее применённого — с другого своего устройства
+		});
+		PublishLinkingStatus();
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
 		return true;
 	}
@@ -9223,7 +9226,16 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			});
 			return true;
 		}
-		crl::async([] { StartDeviceLinkOfferForV2(); });
+		crl::async([] {
+			StartDeviceLinkOfferForV2();
+			StartTelegramRecovery(false);
+		});
+		PublishLinkingStatus();
+		crl::on_main([] {
+			if (!HeadlessUi()) {
+				ShowLinkingBox();
+			}
+		});
 		return true;
 	}
 	if (type == "callSignal") {
@@ -9383,6 +9395,353 @@ void SetStrangersAllowed(bool allowed) {
 	});
 }
 
+// ── spec 015: новое устройство без других устройств, копия ключей аккаунта ─────
+// Как web provider.ts (startTelegramRecovery, completeKeyJoin, buildBundleHistory, applyBundleHistory).
+namespace {
+
+constexpr auto kTelegramKeyPollMs = 3000;
+constexpr auto kTelegramKeyPollMaxMs = 30000;
+constexpr auto kTelegramKeyWaitMs = std::int64_t(15 * 60 * 1000);
+constexpr auto kBundleHistorySmallBytes = std::int64_t(512 * 1024);
+constexpr auto kBundleHistoryMinMs = std::int64_t(30 * 60 * 1000);
+constexpr crl::time kBundleRecheckDelays[] = { 60 * crl::time(1000), 5 * 60 * crl::time(1000) };
+
+std::mutex g_tgMutex;
+int g_tgGeneration = 0;
+TelegramRecoveryState g_tgState = TelegramRecoveryState::Idle;
+
+LinkingStatus g_linkingStatus; // только main
+rpl::event_stream<> g_linkingChanges;
+
+void PublishLinkingStatus() {
+	auto status = LinkingStatus();
+	status.needsLinking = (V2NeedsLinking() != nullptr);
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		status.telegram = g_tgState;
+	}
+	status.linkCode = CurrentLinkCode();
+	crl::on_main([status] {
+		g_linkingStatus = status;
+		g_linkingChanges.fire({});
+	});
+}
+
+void SetTelegramState(TelegramRecoveryState state) {
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		g_tgState = state;
+	}
+	PublishLinkingStatus();
+}
+
+// Сменить поколение: прежний опрос перестаёт действовать.
+int StopTelegramRecovery(TelegramRecoveryState state) {
+	auto generation = 0;
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		generation = ++g_tgGeneration;
+		g_tgState = state;
+	}
+	PublishLinkingStatus();
+	return generation;
+}
+
+[[nodiscard]] bool TelegramGenerationIs(int generation, TelegramRecoveryState state) {
+	std::lock_guard<std::mutex> lk(g_tgMutex);
+	return g_tgGeneration == generation && g_tgState == state;
+}
+
+[[nodiscard]] QString AppliedBundleMarkPath(const QString &self) {
+	return cWorkingDir() + u"tdata/parvane-bundle-history-"_q + self + u".txt"_q;
+}
+
+// Снимок истории из копии ключей аккаунта: owner-блоб облака, зашифрованный JSON {linkVersion, v2History}.
+void ApplyBundleHistory(const nlohmann::json &history, const QString &owner) {
+	if (!history.is_object() || SelfAddress() != owner) {
+		return;
+	}
+	const auto mark = QString::fromStdString(history.value("mark", std::string()));
+	if (!mark.isEmpty() && QString::fromUtf8(StoreRead(AppliedBundleMarkPath(owner))) == mark) {
+		return;
+	}
+	parvane::ITransport *t = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		t = g_transport.get();
+	}
+	if (!t) {
+		return;
+	}
+	try {
+		parvane::CloudClient cloud(*t);
+		const auto d = cloud.download(owner.toStdString(), Token().toStdString(),
+			history.value("fileId", std::string()), 60000);
+		if (!d.ok) {
+			LOG(("Parvane: копия ключей: снимок истории не скачался (%1)").arg(QString::fromStdString(d.error)));
+			return;
+		}
+		const auto plain = parvane::blobcrypt::decrypt(d.bytes,
+			history.value("fileKey", std::string()), history.value("fileNonce", std::string()));
+		if (!plain || SelfAddress() != owner) {
+			LOG(("Parvane: копия ключей: снимок истории не расшифровался"));
+			return;
+		}
+		ImportV2History(*plain);
+		if (!mark.isEmpty()) {
+			StoreWrite(AppliedBundleMarkPath(owner), mark.toUtf8());
+		}
+		LOG(("Parvane: копия ключей: снимок истории применён"));
+	} catch (const std::exception &e) {
+		LOG(("Parvane: копия ключей: история не применена: %1").arg(QString::fromUtf8(e.what())));
+	}
+}
+
+// Свериться с копией ключей аккаунта: снимок истории свежее применённого (его мог положить другой своё
+// устройство). Ключи планировщика и облака — в файл ожидания до разделов «План» и «Облако».
+void SyncFromKeyBundle() {
+	const auto s = V2Ready();
+	const auto owner = SelfAddress();
+	if (!s || owner.isEmpty()) {
+		return;
+	}
+	const auto bundle = s->fetchKeyBundle();
+	if (!bundle.is_object() || SelfAddress() != owner) {
+		return;
+	}
+	NoteDomainKeys(bundle.value("planner", std::string()), bundle.contains("cloud")
+		? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump())
+		: std::string());
+	ApplyBundleHistory(bundle.value("history", nlohmann::json()), owner);
+}
+
+// Снимок истории для копии ключей аккаунта (зовёт сессия движка на своём потоке).
+nlohmann::json BuildBundleHistory(const nlohmann::json &previous, bool force) {
+	const auto owner = SelfAddress();
+	const auto size = previous.is_object() ? previous.value("size", std::int64_t(0)) : std::int64_t(0);
+	const auto at = previous.is_object() ? previous.value("at", std::int64_t(0)) : std::int64_t(0);
+	if (previous.is_object() && !force && size > kBundleHistorySmallBytes
+		&& QDateTime::currentMSecsSinceEpoch() - at < kBundleHistoryMinMs) {
+		return previous;
+	}
+	auto rows = CollectV2HistoryRows();
+	if (rows.empty()) {
+		return previous;
+	}
+	const auto exportJson = nlohmann::json{ { "linkVersion", 2 }, { "v2History", std::move(rows) } }.dump();
+	const auto mark = parvane::keybundle::digestHex(exportJson);
+	if (previous.is_object() && previous.value("mark", std::string()) == mark) {
+		return previous;
+	}
+	parvane::ITransport *t = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		t = g_transport.get();
+	}
+	if (!t) {
+		return previous;
+	}
+	auto enc = parvane::blobcrypt::encrypt(exportJson);
+	if (enc.ciphertext.empty()) {
+		return previous;
+	}
+	parvane::CloudClient cloud(*t);
+	const auto fileId = cloud.upload(owner.toStdString(), Token().toStdString(), "account-history",
+		"application/octet-stream", enc.ciphertext, {}, false, 256 * 1024, 60000);
+	if (fileId.empty() || SelfAddress() != owner) {
+		return previous;
+	}
+	StoreWrite(AppliedBundleMarkPath(owner), QByteArray::fromStdString(mark));
+	LOG(("Parvane: копия ключей: снимок истории загружен (%1 байт)").arg(qint64(exportJson.size())));
+	return nlohmann::json{
+		{ "fileId", fileId },
+		{ "fileKey", enc.keyB64 },
+		{ "fileNonce", enc.nonceB64 },
+		{ "at", QDateTime::currentMSecsSinceEpoch() },
+		{ "mark", mark },
+		{ "size", std::int64_t(exportJson.size()) },
+	};
+}
+
+void ScheduleTelegramPoll(int generation, std::int64_t startedMs, int delayMs);
+
+void PollTelegramRecovery(int generation, std::int64_t startedMs) {
+	if (!TelegramGenerationIs(generation, TelegramRecoveryState::Waiting)) {
+		return;
+	}
+	const auto s = V2NeedsLinking();
+	if (!s) {
+		StopTelegramRecovery(TelegramRecoveryState::Idle); // привязано другим путём
+		return;
+	}
+	if (QDateTime::currentMSecsSinceEpoch() - startedMs > kTelegramKeyWaitMs) {
+		StopTelegramRecovery(TelegramRecoveryState::Expired);
+		return;
+	}
+	const auto reply = s->pollTelegramKey(false);
+	if (!TelegramGenerationIs(generation, TelegramRecoveryState::Waiting) || !reply.is_object()) {
+		return;
+	}
+	const auto key = reply.value("recovery_key", std::string());
+	if (key.empty()) {
+		// Сервер запроса не помнит (перезапуск) — просим заново, без нового сообщения
+		if (!reply.value("pending", false)) {
+			(void)s->requestTelegramKey(false);
+		}
+		return;
+	}
+	SetTelegramState(TelegramRecoveryState::Joining);
+	LOG(("Parvane: ключ восстановления: получен ответ владельца из Telegram"));
+	auto outcome = s->joinWithRecoveryKey(key, true);
+	if (outcome.result != "ok") {
+		LOG(("Parvane: ключ восстановления: вход не удался (%1)").arg(QString::fromStdString(outcome.result)));
+		SetTelegramState(TelegramRecoveryState::Failed);
+		return;
+	}
+	(void)s->pollTelegramKey(true);
+	SetTelegramState(TelegramRecoveryState::Done);
+	CompleteKeyJoin(std::move(outcome));
+}
+
+void ScheduleTelegramPoll(int generation, std::int64_t startedMs, int delayMs) {
+	crl::on_main([=] {
+		base::call_delayed(crl::time(delayMs), [=] {
+			crl::async([=] {
+				PollTelegramRecovery(generation, startedMs);
+				if (TelegramGenerationIs(generation, TelegramRecoveryState::Waiting)) {
+					ScheduleTelegramPoll(generation, startedMs,
+						std::min(kTelegramKeyPollMaxMs, delayMs * 3 / 2));
+				}
+			});
+		});
+	});
+}
+
+// Бот просит владельца ответить ключом восстановления; ответ забираем опросом. again — «прислать ещё раз».
+void StartTelegramRecovery(bool again) {
+	const auto s = V2NeedsLinking();
+	if (!s) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		if (g_tgState == TelegramRecoveryState::Joining
+			|| (g_tgState == TelegramRecoveryState::Waiting && !again)) {
+			return;
+		}
+	}
+	const auto generation = StopTelegramRecovery(TelegramRecoveryState::Idle);
+	const auto requested = s->requestTelegramKey(again);
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		if (g_tgGeneration != generation) {
+			return;
+		}
+	}
+	if (requested != "sent") {
+		SetTelegramState((requested == "no_telegram")
+			? TelegramRecoveryState::Unavailable
+			: (requested == "limit")
+			? TelegramRecoveryState::Limit
+			: TelegramRecoveryState::Failed);
+		return;
+	}
+	LOG(("Parvane: ключ восстановления: бот спросит владельца в Telegram"));
+	SetTelegramState(TelegramRecoveryState::Waiting);
+	ScheduleTelegramPoll(generation, QDateTime::currentMSecsSinceEpoch(), kTelegramKeyPollMs);
+}
+
+} // namespace
+
+// Ключи «Плана» и «Облака» из копии ключей аккаунта ждут своих разделов (их синхронизация — в ядре, spec 029
+// этап 4): файл в tdata, разделы забирают его при подключении.
+void NoteDomainKeys(const std::string &planner, const std::string &cloud) {
+	if (planner.empty() && (cloud.empty() || cloud == "[]" || cloud == "null")) {
+		return;
+	}
+	const auto self = SelfAddress();
+	if (self.isEmpty()) {
+		return;
+	}
+	StoreWrite(cWorkingDir() + u"tdata/parvane-domain-keys-"_q + self + u".json"_q,
+		QByteArray::fromStdString(nlohmann::json{ { "planner", planner }, { "cloud", cloud } }.dump()));
+}
+
+// Устройство вошло в журнал по ключу восстановления: ключи доменов и история — из копии ключей аккаунта
+void CompleteKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
+	const auto owner = SelfAddress();
+	NoteDomainKeys(outcome.planner, outcome.cloud);
+	ApplyBundleHistory(outcome.history, owner);
+	for (const auto delay : kBundleRecheckDelays) {
+		crl::on_main([=] {
+			base::call_delayed(delay, [=] {
+				if (SelfAddress() == owner) {
+					crl::async([] { SyncFromKeyBundle(); });
+				}
+			});
+		});
+	}
+	PublishLinkingStatus();
+}
+
+LinkingStatus CurrentLinkingStatus() {
+	return g_linkingStatus;
+}
+
+rpl::producer<> LinkingStatusChanges() {
+	return g_linkingChanges.events();
+}
+
+void RequestTelegramKeyAgain() {
+	crl::async([] { StartTelegramRecovery(true); });
+}
+
+DevicesExtras FetchDevicesExtras() {
+	auto out = DevicesExtras();
+	const auto s = V2Ready();
+	if (!s) {
+		return out;
+	}
+	out.ready = true;
+	try {
+		s->pollOwnDevices();
+		out.rotationNeeded = s->sskState().value("rotationNeeded", false);
+		out.escrowMissing = s->isEscrowCopyMissing();
+		out.canSendTelegram = s->canSendKeyToTelegram();
+		for (const auto &id : s->leftSskHolders()) {
+			out.leftDevices.push_back(QString::fromStdString(id));
+		}
+	} catch (const std::exception &e) {
+		LOG(("Parvane: экран устройств: состояние не получено: %1").arg(QString::fromUtf8(e.what())));
+	}
+	return out;
+}
+
+bool ReportDeviceStolen(const QString &deviceId) {
+	const auto s = V2Ready();
+	if (!s) {
+		return false;
+	}
+	try {
+		const auto ok = s->reportDeviceStolen(deviceId.toStdString());
+		LOG(("Parvane: устройство %1 отмечено украденным: %2").arg(deviceId, ok ? u"да"_q : u"нет"_q));
+		return ok;
+	} catch (const std::exception &e) {
+		LOG(("Parvane: устройство не отмечено украденным: %1").arg(QString::fromUtf8(e.what())));
+		return false;
+	}
+}
+
+QString StoreEscrowCopy(const QString &recoveryKey) {
+	const auto s = V2Ready();
+	return s ? QString::fromStdString(s->storeEscrowCopy(recoveryKey.trimmed().toStdString())) : u"failed"_q;
+}
+
+QString SendRecoveryKeyToTelegram(const QString &recoveryKey) {
+	const auto s = V2Ready();
+	return s ? QString::fromStdString(s->sendKeyToTelegram(recoveryKey.trimmed().toStdString())) : u"failed"_q;
+}
+
 // ── T140: ключ восстановления (публичное, для Settings → Privacy) ──────────
 
 RecoveryState FetchRecoveryState() {
@@ -9425,9 +9784,12 @@ QString RecoverWithKey(const QString &recoveryKey) {
 	if (!s || !s->needsLinking()) {
 		return u"failed"_q;
 	}
-	const auto result = QString::fromStdString(s->recoverWithKey(recoveryKey.trimmed().toStdString()));
-	LOG(("Parvane: v2: вход по ключу восстановления: %1").arg(result));
-	return result;
+	auto outcome = s->joinWithRecoveryKey(recoveryKey.trimmed().toStdString(), false);
+	LOG(("Parvane: v2: вход по ключу восстановления: %1").arg(QString::fromStdString(outcome.result)));
+	if (outcome.result == "ok") {
+		CompleteKeyJoin(std::move(outcome));
+	}
+	return QString::fromStdString(outcome.result);
 }
 
 QString ResetIdentityWithPassword(const QString &password) {
@@ -12855,7 +13217,7 @@ void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	});
 }
 
-void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password) {
+void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &password, bool rotateKeys) {
 	const auto devStd = deviceId.toStdString();
 	const auto pwStd = password.toStdString();
 	crl::async([=] {
@@ -12884,12 +13246,14 @@ void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &p
 		if (ok) {
 			// Протокол v2 (T128, FR-066): запись отзыва в журнале устройств и
 			// ротации ключей, которые устройство держало (пароль проверен выше).
+			// «Просто выйти» — запись sign_out без ротаций; «выйти и сменить ключи» — отзыв с ротациями.
 			auto journaled = false;
 			if (const auto s = V2Ready()) {
 				try {
-					if (s->revokeDevice(devStd)) {
+					if (rotateKeys ? s->revokeDevice(devStd) : s->signOutDevice(devStd)) {
 						journaled = true;
-						LOG(("Parvane: v2: устройство %1 отозвано в журнале устройств").arg(deviceId));
+						LOG(("Parvane: v2: устройство %1 %2 в журнале устройств").arg(deviceId,
+							rotateKeys ? u"отозвано со сменой ключей"_q : u"вышло"_q));
 					}
 				} catch (const std::exception &e) {
 					LOG(("Parvane: v2: отзыв устройства в журнале не выполнен: %1")
@@ -13045,6 +13409,11 @@ bool g_linkOffersPolling = false;
 
 [[nodiscard]] std::int64_t NowMs() {
 	return QDateTime::currentMSecsSinceEpoch();
+}
+
+[[nodiscard]] QString CurrentLinkCode() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_linkActive ? g_linkCode : QString();
 }
 
 [[nodiscard]] bool HeadlessUi() {
@@ -13368,13 +13737,8 @@ bool PollLinkGrantOnce() {
 		// Только dev-сборка: headless e2e сверяет код по логу.
 		LOG(("Parvane: линковка (dev): код сверки %1").arg(code));
 #endif
-		crl::on_main([code] {
-			if (HeadlessUi()) {
-				return; // headless e2e — без боксов
-			}
-			Ui::show(Ui::MakeInformBox(
-				u"Перенос истории: сверьте код на другом устройстве (Настройки → Устройства) и подтвердите там.\nКод: %1"_q.arg(code)));
-		});
+		(void)code;
+		PublishLinkingStatus(); // код показывает окно привязки и экран «Устройства»
 	}
 	if (grant.is_null()) {
 		return false;
@@ -13687,7 +14051,7 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 	// Формат web 2 (keyBackup.ts): {deviceId, v2: устройство движка, v2History} — сервер историю заново не отдаст
 	const auto s = V2Ready();
 	if (!s) {
-		*error = u"Ключи ещё не готовы — подождите несколько секунд после входа"_q;
+		*error = tr::lng_parvane_keys_not_ready(tr::now);
 		return false;
 	}
 	auto payload = nlohmann::json::object();
@@ -13703,19 +14067,19 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 	} catch (const std::exception &) {
 	}
 	if (!payload.contains("v2")) {
-		*error = u"Нечего сохранять"_q;
+		*error = tr::lng_parvane_keys_export_failed(tr::now);
 		return false;
 	}
 	const auto state = payload.dump();
 	const auto file = parvane::keybackup::exportEncrypted(state, password.toStdString());
 	if (file.empty()) {
-		*error = u"Не удалось зашифровать копию"_q;
+		*error = tr::lng_parvane_keys_export_failed(tr::now);
 		return false;
 	}
 	auto f = QFile(path);
 	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)
 		|| f.write(file.data(), qint64(file.size())) != qint64(file.size())) {
-		*error = u"Не удалось записать файл"_q;
+		*error = tr::lng_parvane_keys_export_failed(tr::now);
 		return false;
 	}
 	auto marker = QFile(BackupMarkerPath());
@@ -13729,13 +14093,13 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 bool ImportKeyBackup(const QString &path, const QString &password, QString *error) {
 	auto f = QFile(path);
 	if (!f.open(QIODevice::ReadOnly)) {
-		*error = u"Не удалось прочитать файл"_q;
+		*error = tr::lng_parvane_keys_import_bad_password(tr::now);
 		return false;
 	}
 	const auto state = parvane::keybackup::importEncrypted(
 		f.readAll().toStdString(), password.toStdString());
 	if (!state) {
-		*error = u"Неверный пароль или повреждённый файл"_q;
+		*error = tr::lng_parvane_keys_import_bad_password(tr::now);
 		return false;
 	}
 	// История v2 из копии сливается с журналом. Устройство копии (`v2`) десктоп не перенимает: своя личность
@@ -13743,14 +14107,14 @@ bool ImportKeyBackup(const QString &path, const QString &password, QString *erro
 	try {
 		const auto parsed = nlohmann::json::parse(*state);
 		if (!parsed.is_object() || !parsed.contains("v2")) {
-			*error = u"Копия не подошла к этому аккаунту"_q;
+			*error = tr::lng_parvane_keys_import_failed(tr::now);
 			return false;
 		}
 		if (parsed.contains("v2History") && parsed["v2History"].is_array()) {
 			ImportV2History(nlohmann::json{ { "v2History", parsed["v2History"] } }.dump());
 		}
 	} catch (const std::exception &) {
-		*error = u"Неверный пароль или повреждённый файл"_q;
+		*error = tr::lng_parvane_keys_import_bad_password(tr::now);
 		return false;
 	}
 	LOG(("Parvane: копия ключей восстановлена"));

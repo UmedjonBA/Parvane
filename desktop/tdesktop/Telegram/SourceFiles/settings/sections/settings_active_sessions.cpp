@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_active_sessions.h"
 
+#include "parvane/parvane_account_ui.h" // Parvane: блоки экрана «Устройства»
+
 #include "settings/settings_common_session.h"
 
 #include "api/api_authorizations.h"
@@ -920,6 +922,9 @@ void SessionsContent::Inner::setupContent() {
 	using namespace rpl::mappers;
 
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
+
+	// Parvane: привязка устройства, ключ подписи, вышедшие устройства, страховка, ключ в Telegram (как web)
+	Parvane::AddDevicesExtras(content, _controller);
 
 	_currentHeader = AddSubsectionTitle(
 		content,
