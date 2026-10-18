@@ -38,6 +38,12 @@ private:
 
 };
 
+// Регистрация экранов разделов (каждая — в файлах своего раздела); зовёт SectionsHost один раз
+void RegisterPlannerViews();   // «Календарь» — parvane_planner*.cpp (виды Сегодня/Неделя/Месяц/Год/Список)
+void RegisterPlannerHealth();  // «Здоровье» — parvane_health*.cpp
+void RegisterKnowledge();      // «Знания» — parvane_knowledge*.cpp
+void RegisterCloud();          // «Облако» — parvane_cloud*.cpp
+
 // Заголовок раздела (как web `.hdr`): крупное название слева.
 [[nodiscard]] QString SectionTitle(Section section);
 

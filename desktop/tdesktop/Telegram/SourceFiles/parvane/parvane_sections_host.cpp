@@ -2,6 +2,7 @@
 #include "parvane/parvane_sections_host.h"
 
 #include "parvane/parvane_kit.h"
+#include "parvane/parvane_sections_data.h"
 
 #include "lang/lang_keys.h"
 #include "ui/painter.h"
@@ -65,6 +66,14 @@ SectionsHost::SectionsHost(QWidget *parent, not_null<Window::SessionController*>
 : RpWidget(parent)
 , _controller(controller) {
 	hide();
+	static const auto registered = [] {
+		RegisterPlannerViews();
+		RegisterPlannerHealth();
+		RegisterKnowledge();
+		RegisterCloud();
+		return true;
+	}();
+	(void)registered;
 	SectionValue() | rpl::on_next([=](Section section) {
 		showSection(section);
 	}, lifetime());
@@ -78,6 +87,7 @@ SectionsHost::SectionsHost(QWidget *parent, not_null<Window::SessionController*>
 
 void SectionsHost::showSection(Section section) {
 	_shown = section;
+	Sections::SetShownSection(section);
 	if (section == Section::Chats) {
 		hide();
 		return;

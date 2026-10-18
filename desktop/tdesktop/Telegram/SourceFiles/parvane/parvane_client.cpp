@@ -84,6 +84,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
+#include "parvane/parvane_sections_data.h"
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -3320,6 +3321,7 @@ void OnAuthRejected(const QString &reason) {
 void StopSession() {
 	ResetLocationMaps(); // склейки карт и кэш тайлов — на сессию
 	StopV2(); // до g_sessionMutex: рабочий поток v2 берёт его в обработчиках
+	Sections::OnSessionChanged(); // разделы отпускают прежнюю сессию
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	g_transport.reset();
 	g_sessionStarted = false;
@@ -9858,6 +9860,13 @@ void FireScheduledGated(const ScheduledItem &item) {
 // Событие v2-сессии (рабочий поток) → main.
 bool HandleV2SessionEvent(const parvane::json &ev) {
 	const auto type = ev.is_object() ? ev.value("type", std::string()) : std::string();
+	if (type == "plannerChanged" || type == "cloudChanged") {
+		Sections::OnEngineEvent(ev); // spec 029: «План», «Облако»
+		return true;
+	}
+	if (type == "stateReady") {
+		Sections::OnSessionChanged();
+	}
 	const auto address = QString::fromStdString(ev.value("address", std::string()));
 	if (type == "groupUpdated") {
 		crl::on_main([address, info = ev.value("info", parvane::json()), isNew = ev.value("isNew", false)] {
@@ -15909,6 +15918,24 @@ void StartHistoryLinking() {
 QString HistoryLinkCode() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	return g_linkActive ? g_linkCode : QString();
+}
+
+// ── spec 029, L3: данные разделов ────────────────────────────────────────────
+
+std::shared_ptr<parvane::v2::Session> SectionsSession() {
+	return V2Ready();
+}
+
+QString SectionsStateDir(const std::string &self) {
+	return self.empty() ? QString() : V2StateDir(QString::fromStdString(self));
+}
+
+QByteArray SectionsRead(const QString &path) {
+	return StoreRead(path);
+}
+
+bool SectionsWrite(const QString &path, const QByteArray &data) {
+	return StoreWrite(path, data);
 }
 
 } // namespace Parvane

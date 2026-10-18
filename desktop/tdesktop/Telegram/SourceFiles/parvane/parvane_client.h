@@ -14,6 +14,10 @@
 
 #include <rpl/producer.h>
 
+namespace parvane::v2 {
+class Session;
+} // namespace parvane::v2
+
 class PeerData;
 class ChatData;
 class UserData;
@@ -717,5 +721,12 @@ void LeaveGroupCall();
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);
+
+// spec 029, L3: данные разделов «План», «Знания», «Облако» (parvane_sections_data.cpp)
+[[nodiscard]] std::shared_ptr<parvane::v2::Session> SectionsSession(); // готовая v2-сессия либо null
+[[nodiscard]] QString SectionsStateDir(const std::string &self);    // каталог состояния устройства
+[[nodiscard]] QByteArray SectionsRead(const QString &path);          // зашифрованные файлы tdata (P-13)
+bool SectionsWrite(const QString &path, const QByteArray &data);
+[[nodiscard]] bool IsRussianUi();
 
 } // namespace Parvane

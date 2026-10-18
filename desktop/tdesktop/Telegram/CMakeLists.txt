@@ -50,6 +50,15 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_kit_internal.h
     ${src_loc}/parvane/parvane_rail.cpp
     ${src_loc}/parvane/parvane_rail.h
+    # spec 029 L3 — «План»: виды (агент A)
+    # spec 029 L3 — «План»: окна и «Здоровье» (агент B)
+    # spec 029 L3 — «Знания» (агент C)
+    # spec 029 L3 — холст «Знаний» (агент D)
+    # spec 029 L3 — «Облако» (агент E)
+    ${src_loc}/parvane/parvane_planner_forms.h
+    ${src_loc}/parvane/parvane_notes_canvas.h
+    ${src_loc}/parvane/parvane_sections_data.cpp
+    ${src_loc}/parvane/parvane_sections_data.h
     ${src_loc}/parvane/parvane_sections_host.cpp
     ${src_loc}/parvane/parvane_sections_host.h
     ${src_loc}/parvane/parvane_space.cpp
@@ -138,6 +147,7 @@ PRIVATE
     desktop-app::external_openal
     desktop-app::external_xxhash
     parvane_core
+    parvane_sections
 )
 
 if (NOT DESKTOP_APP_DISABLE_SWIFT6)
