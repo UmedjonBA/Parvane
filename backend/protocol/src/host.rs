@@ -279,18 +279,28 @@ fn key32(b: &[u8]) -> Result<[u8; 32], String> {
     b.try_into().map_err(|_| err(ProtoError::InvalidField("key")))
 }
 
+pub mod call;
+
 /// Обёртка клиента для нативных хостов.
 pub struct HostClient {
     pub inner: Client,
+    /// Корень после createIdentity/importRootBackup — только в памяти (как у WASM-обвязки, C1-06).
+    root: Option<zeroize::Zeroizing<[u8; 32]>>,
+    /// Подготовленная смена ника (spec 026) до ответа сервера.
+    rename_plan: Option<crate::client::RenamePlan>,
 }
 
 impl HostClient {
     pub fn new(user: &str, device: &str, domain: &str) -> Result<Self, String> {
-        Client::new(user, device, domain).map(|inner| Self { inner }).map_err(err)
+        Client::new(user, device, domain).map(Self::wrap).map_err(err)
     }
 
     pub fn import(blob: &[u8], key: &[u8]) -> Result<Self, String> {
-        Client::import(blob, &key32(key)?).map(|inner| Self { inner }).map_err(err)
+        Client::import(blob, &key32(key)?).map(Self::wrap).map_err(err)
+    }
+
+    fn wrap(inner: Client) -> Self {
+        Self { inner, root: None, rename_plan: None }
     }
 
     pub fn export(&self, key: &[u8]) -> Result<Vec<u8>, String> {
@@ -919,6 +929,12 @@ impl HostState {
             r#ref: Some(crate::pb::parvane::core::v2::Ref { domain: domain.into(), id }),
         };
         self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::PlannerContainerSet(c)])
+    }
+
+    /// Контейнер облака (spec 016): proto3-JSON `state.v1.CloudContainer` → тела `state.append`.
+    pub fn cloud_container_set(&mut self, container_json: &str) -> Result<String, String> {
+        let c: crate::pb::parvane::state::v1::CloudContainer = serde_json::from_str(container_json).map_err(|_| err(ProtoError::Malformed))?;
+        self.seal_ops(vec![crate::pb::parvane::state::v1::state_op::Op::CloudContainerSet(c)])
     }
 
     /// Чат очищен «у себя» до момента (T145): proto3-JSON `state.v1.ChatCleared`

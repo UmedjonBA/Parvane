@@ -54,6 +54,21 @@ void parvane_protocol_string_free(char *s);
 
 void parvane_protocol_bytes_free(struct PvBytes b);
 
+/**
+ * Вызвать функцию клиента по имени WASM (`plannerSeal`, `groupInfo`, …): `args` — объект JSON (байты —
+ * base64), результат — JSON-текст значения (освобождать `parvane_protocol_string_free`), ошибка — `err`.
+ * Имена без клиента (`encodeRequest`, `parseInvite`, …) тоже принимаются.
+ */
+char *pv_client_call(struct PvClient *c,
+                     const char *name,
+                     const char *args,
+                     char **err);
+
+/**
+ * Функции без клиента по имени WASM (см. `pv_client_call`).
+ */
+char *pv_call(const char *name, const char *args, char **err);
+
 struct PvClient *pv_client_new(const char *user,
                                const char *device,
                                const char *domain,
@@ -491,6 +506,14 @@ bool pv_client_ensure_state_key(struct PvClient *c);
 struct PvStateSession *pv_client_state_session(const struct PvClient *c);
 
 void pv_state_free(struct PvStateSession *s);
+
+/**
+ * Вызвать функцию сессии журнала личного состояния по имени WASM `PvState` (см. `pv_client_call`).
+ */
+char *pv_state_call(struct PvStateSession *s,
+                    const char *name,
+                    const char *args,
+                    char **err);
 
 /**
  * Тело `state.sync` от курсора сессии.

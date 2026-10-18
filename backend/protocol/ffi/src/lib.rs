@@ -114,6 +114,36 @@ pub unsafe extern "C" fn parvane_protocol_bytes_free(b: PvBytes) {
     }
 }
 
+// ── единая точка входа (spec 029): функции движка по именам WASM-обвязки ───
+
+fn parse_args(args: *const c_char) -> Result<serde_json::Value, String> {
+    // SAFETY: строка C или null — проверяет str_arg
+    let s = unsafe { str_arg(args) }.unwrap_or("{}");
+    let s = if s.trim().is_empty() { "{}" } else { s };
+    serde_json::from_str(s).map_err(|_| r#"{"error":"Malformed"}"#.to_string())
+}
+
+/// Вызвать функцию клиента по имени WASM (`plannerSeal`, `groupInfo`, …): `args` — объект JSON (байты —
+/// base64), результат — JSON-текст значения (освобождать `parvane_protocol_string_free`), ошибка — `err`.
+/// Имена без клиента (`encodeRequest`, `parseInvite`, …) тоже принимаются.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_call(c: *mut PvClient, name: *const c_char, args: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let c = c.as_mut().ok_or_else(bad_arg)?;
+        let name = str_arg(name).ok_or_else(bad_arg)?;
+        c.inner.call(name, &parse_args(args)?).map(|v| cstring(v.to_string()))
+    })
+}
+
+/// Функции без клиента по имени WASM (см. `pv_client_call`).
+#[no_mangle]
+pub unsafe extern "C" fn pv_call(name: *const c_char, args: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let name = str_arg(name).ok_or_else(bad_arg)?;
+        host::call::call_static(name, &parse_args(args)?).map(|v| cstring(v.to_string()))
+    })
+}
+
 // ── клиент ──────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -832,6 +862,16 @@ pub unsafe extern "C" fn pv_state_free(s: *mut PvStateSession) {
     }
 }
 
+/// Вызвать функцию сессии журнала личного состояния по имени WASM `PvState` (см. `pv_client_call`).
+#[no_mangle]
+pub unsafe extern "C" fn pv_state_call(s: *mut PvStateSession, name: *const c_char, args: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        let name = str_arg(name).ok_or_else(bad_arg)?;
+        s.inner.call(name, &parse_args(args)?).map(|v| cstring(v.to_string()))
+    })
+}
+
 /// Тело `state.sync` от курсора сессии.
 #[no_mangle]
 pub unsafe extern "C" fn pv_state_sync_request(s: *const PvStateSession) -> PvBytes {
@@ -1380,6 +1420,49 @@ mod tests {
             assert!(info.contains(r#""l2":true"#) && info.contains(r#""l2By":"alice@local""#), "{info}");
             assert!(!pv_client_presence_allowed(c));
             assert_eq!(take(pv_client_l2_active_chats(c)), format!(r#"{{"direct":[],"groups":["{}"]}}"#, hex[0]));
+            pv_client_free(c);
+        }
+    }
+
+    /// spec 029: единая точка входа — функции движка по именам WASM; ошибка аргумента и незнакомое имя — в err.
+    #[test]
+    fn call_entry_points() {
+        unsafe {
+            let mut err: *mut c_char = ptr::null_mut();
+            let u = CString::new("alice@local").unwrap();
+            let dm = CString::new("local").unwrap();
+            let d1 = CString::new("d1").unwrap();
+            let c = pv_client_new(u.as_ptr(), d1.as_ptr(), dm.as_ptr(), &mut err);
+            let call = |c: *mut PvClient, name: &str, args: &str, err: &mut *mut c_char| {
+                let (n, a) = (CString::new(name).unwrap(), CString::new(args).unwrap());
+                let out = pv_client_call(c, n.as_ptr(), a.as_ptr(), err);
+                if out.is_null() { String::new() } else { take(out) }
+            };
+            let out = call(c, "createIdentity", r#"{"otkCount":2}"#, &mut err);
+            assert!(err.is_null() && out.contains(r#""rootSecret""#), "{out}");
+            assert_eq!(call(c, "hasRoot", "", &mut err), "true");
+            assert_eq!(call(c, "selfAddress", "{}", &mut err), r#""alice@local""#);
+            // Без клиента — та же функция через pv_call
+            let (n, a) = (CString::new("encodePing").unwrap(), CString::new(r#"{"nonce":5}"#).unwrap());
+            let ping = take(pv_call(n.as_ptr(), a.as_ptr(), &mut err));
+            assert!(err.is_null() && ping.starts_with('"'), "{ping}");
+            // Ошибки
+            assert_eq!(call(c, "nope", "{}", &mut err), "");
+            assert!(take(err).contains("UnknownCall"));
+            err = ptr::null_mut();
+            assert_eq!(call(c, "groupInfo", "{}", &mut err), "");
+            assert!(take(err).contains("InvalidField"));
+            err = ptr::null_mut();
+            assert_eq!(call(c, "hasRoot", "не json", &mut err), "");
+            assert!(take(err).contains("Malformed"));
+            err = ptr::null_mut();
+            // Журнал личного состояния
+            assert!(pv_client_ensure_state_key(c));
+            let s = pv_client_state_session(c);
+            let (n, a) = (CString::new("snapshot").unwrap(), CString::new("{}").unwrap());
+            let snap = take(pv_state_call(s, n.as_ptr(), a.as_ptr(), &mut err));
+            assert!(err.is_null() && snap.starts_with('{'), "{snap}");
+            pv_state_free(s);
             pv_client_free(c);
         }
     }
