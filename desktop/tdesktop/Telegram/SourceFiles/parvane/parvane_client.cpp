@@ -152,6 +152,8 @@
 
 namespace Parvane {
 
+void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> doc);
+
 // Объявления вперёд (определены ниже по файлу, вне анонимного пространства).
 void DecCachePut(const QString &id, const QString &inner);
 [[nodiscard]] QString DecCacheGet(const QString &id);
@@ -4971,7 +4973,7 @@ void AttachLocalOutgoingMedia(
 		// Свою гифку — в Saved GIFs (нативный checkSavedGif гейтится по
 		// isGifv = mp4, а наши .gif — image/gif, добавляем сами).
 		if (ownDoc->isAnimation()) {
-			session->data().stickers().addSavedGif(nullptr, ownDoc);
+			AddSavedGifLocal(session, ownDoc);
 		}
 	}
 }
@@ -6488,7 +6490,7 @@ void injectMediaOnMain(
 	// Гифки — в Saved GIFs (вкладка GIFs панели): на реплее журнала список
 	// восстанавливается сам, нативный персист не задействуем.
 	if (kind == u"gif"_q) {
-		session->data().stickers().addSavedGif(nullptr, doc);
+		AddSavedGifLocal(session, doc);
 	}
 
 	const auto item = session->data().addNewMessage(
@@ -12659,6 +12661,72 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 	}
 }
 
+// GIF-панель: списка сохранённых гифок на сервере нет — он живёт на устройстве
+// (как в web). Удалённые из панели помним в tdata, чтобы реплей журнала их не вернул.
+base::flat_set<DocumentId> g_hiddenGifs;
+bool g_hiddenGifsLoaded = false;
+
+[[nodiscard]] QString HiddenGifsPath() {
+	return cWorkingDir() + u"tdata/parvane-hidden-gifs.json"_q;
+}
+
+void LoadHiddenGifs() {
+	if (g_hiddenGifsLoaded) {
+		return;
+	}
+	g_hiddenGifsLoaded = true;
+	const auto j = parvane::json::parse(StoreRead(HiddenGifsPath()).toStdString(), nullptr, false);
+	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
+		return;
+	}
+	for (const auto &id : j.value("ids", parvane::json::array())) {
+		if (id.is_string()) {
+			g_hiddenGifs.emplace(DocumentId(std::stoull(id.get<std::string>())));
+		}
+	}
+}
+
+void SaveHiddenGifs() {
+	auto ids = parvane::json::array();
+	for (const auto id : g_hiddenGifs) {
+		ids.push_back(std::to_string(id));
+	}
+	const auto j = parvane::json{ { "self", SelfAddress().toStdString() }, { "ids", ids } };
+	StoreWrite(HiddenGifsPath(), QByteArray::fromStdString(j.dump()));
+}
+
+void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> doc) {
+	LoadHiddenGifs();
+	if (!g_hiddenGifs.contains(doc->id)) {
+		session->data().stickers().addSavedGif(nullptr, doc);
+	}
+}
+
+bool ToggleSavedGif(not_null<DocumentData*> document, bool saved) {
+	if (!document->isAnimation() && !document->isGifv()) {
+		return true;
+	}
+	LoadHiddenGifs();
+	const auto session = &document->session();
+	auto &stickers = session->data().stickers();
+	if (saved) {
+		g_hiddenGifs.remove(document->id);
+		SaveHiddenGifs();
+		stickers.addSavedGif(nullptr, document);
+	} else {
+		g_hiddenGifs.emplace(document->id);
+		SaveHiddenGifs();
+		auto &list = stickers.savedGifsRef();
+		const auto index = list.indexOf(document);
+		if (index >= 0) {
+			list.remove(index);
+			session->local().writeSavedGifs();
+			stickers.notifySavedGifsUpdated();
+		}
+	}
+	return true;
+}
+
 // GIF-посев: локальная папка → Saved GIFs, чтобы вкладка GIFs не была пуста
 // из коробки. PARVANE_GIFS_DIR или ~/.local/share/ParvaneGifs, файлы *.gif.
 // Идемпотентно (docId стабилен от пути); дальше список живёт журналом.
@@ -12691,7 +12759,7 @@ void LoadLocalSavedGifs(not_null<Main::Session*> session) {
 			/*durationSecs=*/2, img.width(), img.height(), path);
 		const auto doc = session->data().processDocument(mtpDoc);
 		doc->setLocation(Core::FileLocation(path));
-		session->data().stickers().addSavedGif(nullptr, doc);
+		AddSavedGifLocal(session, doc);
 		++loaded;
 	}
 	if (loaded > 0) {

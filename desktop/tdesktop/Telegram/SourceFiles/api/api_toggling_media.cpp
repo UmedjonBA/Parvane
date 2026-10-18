@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_toggling_media.h"
 
+#include "parvane/parvane_client.h"
+
 #include "apiwrap.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
@@ -107,6 +109,10 @@ void ToggleSavedGif(
 		not_null<DocumentData*> document,
 		Data::FileOrigin origin,
 		bool saved) {
+	// Parvane: список сохранённых гифок живёт на устройстве (наши гифки — image/gif, не gifv)
+	if (Parvane::ToggleSavedGif(document, saved)) {
+		return;
+	}
 	if (saved && !document->isGifv()) {
 		return;
 	}

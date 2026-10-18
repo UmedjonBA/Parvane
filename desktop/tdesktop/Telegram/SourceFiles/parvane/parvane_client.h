@@ -246,6 +246,9 @@ void ReportMessages(
 	const std::vector<MsgId> &ids,
 	Fn<void(ReportStep)> done);
 
+// «Сохранить/удалить гифку» в панели: список живёт на устройстве. true — обработано (Parvane активен).
+bool ToggleSavedGif(not_null<DocumentData*> document, bool saved);
+
 // Кнопка карточки сообщения (inline-кнопка с данными "pv:…"): true — обработана здесь. Только main.
 bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data);
 
