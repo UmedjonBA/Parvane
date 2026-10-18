@@ -187,8 +187,21 @@ public:
     // Блоб сообщения v2-чата грузится без per-recipient гранта: сервер хранит
     // SHA-256 секрета, сам секрет (32 байта) едет внутри E2E-содержимого.
     // Загрузить шифртекст → file_id. Бросает. Блокирующий (сеть).
+    // bucket — "BLOB_BUCKET_DRIVE" для файлов «Облака» (spec 016: своя квота); пусто — медиа чатов.
     std::string uploadBlob(const std::string &bytes, const std::string &capability32,
-                           std::size_t chunkBytes = 192 * 1024);
+                           std::size_t chunkBytes = 192 * 1024, const std::string &bucket = std::string());
+
+    // ── разделы «План», «Облако», «Знания» (spec 029): точки входа слоя данных parvane::sections ──
+    // Функция движка по имени (как WASM web); withNeeds — с удовлетворением нужд (журналы собеседников).
+    json engineCall(const std::string &name, const json &args, bool withNeeds = false);
+    // Запрос шины (тело/ответ — байты); dest — сервер объекта. Бросает V2Error.
+    std::string busRequest(bool anon, const std::string &method, const std::string &body, const std::string &dest);
+    void persistEngine();
+    // Сведённый снимок журнала личного состояния (planner_container, cloud_containers); null — журнала нет.
+    json stateSnapshot();
+    [[nodiscard]] const std::string &serverDomain() const { return domain_; }
+    // Журнал устройств собеседника — перечитать (участник совместной папки облака).
+    void refreshPeerLog(const std::string &user);
     // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение
     // на запрос (≤ 256 чанков). Бросает.
     // domain — сервер блоба (spec 028: вложение собеседника с другого сервера); пусто — свой.

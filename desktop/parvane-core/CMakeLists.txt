@@ -70,6 +70,14 @@ target_link_libraries(parvane_core
     PRIVATE OpenSSL::SSL OpenSSL::Crypto
             ${PARVANE_PROTOCOL_LIB} pthread dl m)
 
+# ── логика разделов (spec 029: порт web — «План», «Знания», «Облако», палитра, выгрузка) ──
+# Чистая логика без Qt и сети; экраны tdesktop подключат её на этапе L3. C++20, как tdesktop.
+file(GLOB PARVANE_SECTIONS_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/sections/*.cpp)
+add_library(parvane_sections STATIC ${PARVANE_SECTIONS_SRC})
+target_compile_features(parvane_sections PUBLIC cxx_std_20)
+target_include_directories(parvane_sections PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(parvane_sections PUBLIC nlohmann_json::nlohmann_json)
+
 # ── probe-бинарь + тесты (де-риск транспорта; нужен живой backend) ────────────
 # P-45/P-46: dev-хуки (PARVANE_WSS_INSECURE, ws:// к gateway, PARVANE_AUTO* в
 # tdesktop) компилируются ТОЛЬКО с -DPARVANE_DEV=ON. В релизе их нет вовсе —
@@ -102,6 +110,15 @@ if (PARVANE_CORE_BUILD_PROBE)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
               protocol_vectors webcompat)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
+    endforeach()
+    # Тесты разделов (порт vitest web): по бинарю на файл
+    file(GLOB PARVANE_SECTIONS_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/sections/*_tests.cpp)
+    foreach(src ${PARVANE_SECTIONS_TESTS})
+        get_filename_component(t ${src} NAME_WE)
+        add_executable(parvane_sections_${t} ${src})
+        target_link_libraries(parvane_sections_${t} PRIVATE parvane_sections)
+        target_include_directories(parvane_sections_${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/sections)
+        add_test(NAME sections_${t} COMMAND parvane_sections_${t})
     endforeach()
     # Живой: v2-сессия против стека (tests/run_v2_session_live.sh)
     add_test(NAME v2_session COMMAND parvane_v2_session_tests)

@@ -1263,9 +1263,44 @@ bool Session::sendCallSignalOwn(const json &signal) {
     }
 }
 
+// ── разделы (spec 029): точки входа слоя данных parvane::sections ────────────
+
+json Session::engineCall(const std::string &name, const json &args, bool withNeeds) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    if (withNeeds) return withNeedsJsonLocked([&] { return client_->call(name, args); });
+    return client_->call(name, args);
+}
+
+std::string Session::busRequest(bool anon, const std::string &method, const std::string &body,
+                                const std::string &dest) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    return call(anon, method, body, dest);
+}
+
+void Session::persistEngine() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    persistLocked();
+}
+
+json Session::stateSnapshot() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return nullptr;
+    return state_->snapshot();
+}
+
+void Session::refreshPeerLog(const std::string &user) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_) return;
+    satisfyLocked(EngineError(json{{"need", {{"kind", "peerLog"}, {"user", user}}}}.dump()));
+    persistLocked();
+}
+
 // ── блобы вложений по capability (T131, FR-062, D-08) ──────────────────────
 
-std::string Session::uploadBlob(const std::string &bytes, const std::string &capability32, std::size_t chunkBytes) {
+std::string Session::uploadBlob(const std::string &bytes, const std::string &capability32, std::size_t chunkBytes,
+                                const std::string &bucket) {
     if (capability32.size() != 32 || chunkBytes == 0) throw std::runtime_error("v2: capability/чанк");
     if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     // Загрузка идёт ID-каналом (владелец блоба серверу известен — получатели нет).
@@ -1275,9 +1310,13 @@ std::string Session::uploadBlob(const std::string &bytes, const std::string &cap
         const auto resp = decodeMessage("parvane.cloud.v1.UploadChunkResponse",
             call(false, "cloud.blob.upload_chunk",
                  encodeMessage("parvane.cloud.v1.UploadChunkRequest",
-                               json{{"upload_id", uploadId},
-                                    {"index", index},
-                                    {"data", toBase64(bytes.substr(index * chunkBytes, chunkBytes))}})));
+                               [&] {
+                                   auto req = json{{"upload_id", uploadId},
+                                                   {"index", index},
+                                                   {"data", toBase64(bytes.substr(index * chunkBytes, chunkBytes))}};
+                                   if (!bucket.empty()) req["bucket"] = bucket;
+                                   return req;
+                               }())));
         const auto got = resp.value("uploadId", resp.value("upload_id", std::string()));
         if (!got.empty()) uploadId = got;
     }
