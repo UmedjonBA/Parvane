@@ -1042,6 +1042,16 @@ void Controller::fillPrivacyTypeButton() {
 			? QString()
 			: _peer->session().createInternalLink(guardBotUsername),
 	};
+	// Parvane: публичность группы v2 — из её журнала (spec 023)
+	if (!Parvane::GroupIdForChat(_peer).isEmpty()) {
+		const auto pub = Parvane::GroupPublic(_peer);
+		_typeDataSavedValue->privacy = pub.name.isEmpty()
+			? Privacy::NoUsername
+			: Privacy::HasUsername;
+		_typeDataSavedValue->username = pub.name;
+		_typeDataSavedValue->publicPreview = pub.preview;
+		_typeDataSavedValue->publicHistory = pub.history;
+	}
 	const auto isGroup = (_peer->isChat() || _peer->isMegagroup());
 	AddButtonWithText(
 		_controls.buttonsLayout,
@@ -2419,6 +2429,35 @@ void Controller::saveUsernamesOrder() {
 }
 
 void Controller::saveUsername() {
+	// Parvane: имя и настройки публичной группы — запись журнала группы (group.public)
+	if (!Parvane::GroupIdForChat(_peer).isEmpty()) {
+		const auto was = Parvane::GroupPublic(_peer);
+		const auto name = _savingData.username.value_or(was.name);
+		const auto preview = _typeDataSavedValue
+			? _typeDataSavedValue->publicPreview
+			: was.preview;
+		const auto history = _typeDataSavedValue
+			? _typeDataSavedValue->publicHistory
+			: was.history;
+		if (name == was.name
+			&& (name.isEmpty()
+				|| (preview == was.preview && history == was.history))) {
+			return continueSave();
+		}
+		Parvane::SetGroupPublic(_peer, name, preview, history, crl::guard(this, [=](QString result) {
+			if (result == u"ok"_q) {
+				continueSave();
+				return;
+			}
+			showEditPeerTypeBox((result == u"taken"_q)
+				? tr::lng_create_channel_link_occupied()
+				: (result == u"invalid"_q)
+				? tr::lng_create_channel_link_invalid()
+				: tr::lng_parvane_public_save_failed());
+			cancelSave();
+		}));
+		return;
+	}
 	const auto channel = _peer->asChannel();
 	const auto username = (channel ? channel->editableUsername() : QString());
 	if (!_savingData.username || *_savingData.username == username) {

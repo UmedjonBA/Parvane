@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_peer_type_box.h"
 
+#include "parvane/parvane_client.h" // Parvane: публичные группы (spec 023)
+
 #include "main/main_session.h"
 #include "boxes/add_contact_box.h"
 #include "ui/boxes/confirm_box.h"
@@ -293,6 +295,8 @@ EditPeerTypeData Controller::collectData() const {
 		.guardBotLink = _dataSavedValue
 			? _dataSavedValue->guardBotLink
 			: QString(),
+		.publicPreview = _dataSavedValue && _dataSavedValue->publicPreview,
+		.publicHistory = _dataSavedValue && _dataSavedValue->publicHistory,
 	};
 }
 
@@ -594,9 +598,11 @@ object_ptr<Ui::RpWidget> Controller::createUsernameEdit() {
 	Expects(_wrap != nullptr);
 
 	const auto channel = _peer->asChannel();
-	const auto username = (!_dataSavedValue || !channel)
+	const auto username = !_dataSavedValue
 		? QString()
-		: channel->editableUsername();
+		: channel
+		? channel->editableUsername()
+		: _dataSavedValue->username; // Parvane: имя публичной группы
 
 	auto result = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 		_wrap,
@@ -643,6 +649,32 @@ object_ptr<Ui::RpWidget> Controller::createUsernameEdit() {
 	Ui::AddDividerText(
 		container,
 		tr::lng_create_channel_link_about());
+
+	// Parvane: настройки публичной группы (как web ManageChatPrivacyType)
+	if (_dataSavedValue && !Parvane::GroupIdForChat(_peer).isEmpty()) {
+		Ui::AddSkip(container);
+		const auto addToggle = [&](rpl::producer<QString> text, bool initial, Fn<void(bool)> set) {
+			const auto button = container->add(EditPeerInfoBox::CreateButton(
+				container,
+				std::move(text),
+				rpl::single(QString()),
+				[] {},
+				st::peerPermissionsButton,
+				{}));
+			button->toggleOn(rpl::single(initial))->toggledValue(
+			) | rpl::on_next(std::move(set), container->lifetime());
+		};
+		addToggle(
+			tr::lng_parvane_public_preview(),
+			_dataSavedValue->publicPreview,
+			[=](bool on) { _dataSavedValue->publicPreview = on; });
+		addToggle(
+			tr::lng_parvane_public_history(),
+			_dataSavedValue->publicHistory,
+			[=](bool on) { _dataSavedValue->publicHistory = on; });
+		Ui::AddSkip(container);
+		Ui::AddDividerText(container, tr::lng_parvane_public_about());
+	}
 
 	if (channel) {
 		const auto focusCallback = [=] {
@@ -734,6 +766,27 @@ void Controller::checkUsernameAvailability() {
 		? u".bad."_q
 		: getUsernameInput();
 	if (checking.size() < Ui::EditPeer::kMinUsernameLength) {
+		return;
+	}
+	// Parvane: имя публичной группы проверяет каталог сервера (group.public.check_name)
+	if (!Parvane::GroupIdForChat(_peer).isEmpty()) {
+		if (initial) {
+			return;
+		}
+		const auto current = _dataSavedValue ? _dataSavedValue->username : QString();
+		Parvane::CheckGroupPublicName(checking, crl::guard(this, [=](QString error) {
+			if (getUsernameInput() != checking) {
+				return;
+			} else if (error.isEmpty() || checking == current) {
+				showUsernameGood();
+			} else if (error == u"taken"_q) {
+				showUsernameError(tr::lng_create_channel_link_occupied());
+			} else if (error == u"invalid"_q) {
+				showUsernameError(tr::lng_create_channel_link_invalid());
+			} else {
+				showUsernameError(tr::lng_parvane_public_check_failed());
+			}
+		}));
 		return;
 	}
 	if (_checkUsernameRequestId) {

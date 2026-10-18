@@ -44,6 +44,8 @@ struct EditPeerTypeData {
 	std::optional<bool> requestToJoinApplyToInvites;
 	QString guardBotUsername;
 	QString guardBotLink;
+	bool publicPreview = false; // Parvane: «Читать без вступления» (spec 023)
+	bool publicHistory = false; // Parvane: «История для новых участников»
 };
 
 class EditPeerTypeBox : public Ui::BoxContent {

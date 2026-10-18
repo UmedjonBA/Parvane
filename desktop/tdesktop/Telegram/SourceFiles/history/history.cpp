@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history.h"
 
+#include "parvane/parvane_client.h" // Parvane: превью публичной группы
+
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_item_preview.h"
 #include "history/view/history_view_translate_tracker.h"
@@ -3219,6 +3221,10 @@ bool History::shouldBeInChatList() const {
 			return isTopPromoted();
 		}
 	} else if (const auto chat = peer->asChat()) {
+		// Parvane: превью публичной группы (не участник) — не в списке чатов
+		if (Parvane::IsPublicPreview(peer)) {
+			return false;
+		}
 		return chat->amIn()
 			|| !lastMessageKnown()
 			|| (lastMessage() != nullptr);

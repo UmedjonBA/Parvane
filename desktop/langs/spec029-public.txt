@@ -1,0 +1,19 @@
+lng_parvane_public_preview
+Read without joining
+Читать без вступления
+
+lng_parvane_public_history
+History for new members
+История для новых участников
+
+lng_parvane_public_about
+These settings decide what Parvane shows: the feed before joining and earlier messages to those who join. Anyone can find a public group by its name and join it. Its messages can be read by anyone who joins, including technically the server: do not post anything private here.
+Эти настройки определяют, что показывает Parvane: ленту до вступления и прежнюю переписку вступившим. Публичную группу находят по имени и вступают без приглашения. Её переписку может прочитать любой вступивший и технически сервер — не пишите сюда личное.
+
+lng_parvane_public_check_failed
+Couldn't check the name. Try again later.
+Не удалось проверить имя. Попробуйте позже.
+
+lng_parvane_public_save_failed
+Couldn't change the group type. Try again later.
+Не удалось изменить тип группы. Попробуйте позже.

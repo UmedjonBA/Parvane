@@ -47,16 +47,25 @@ void PeerSearch::request(
 	// contacts.search — так можно найти пользователя по имени/адресу и начать чат.
 	const auto session = _session;
 	const auto q = _query;
-	Parvane::SearchUsers(query, [session, q, callback](QStringList addrs) {
+	// Публичные группы каталога (spec 023) — следом за людьми
+	Parvane::SearchUsers(query, [session, q, query, callback](QStringList addrs) {
 		auto result = PeerSearchResult{};
 		result.query = q;
 		for (const auto &address : addrs) {
 			const auto user = Parvane::EnsurePeer(session, address);
 			result.peers.push_back(not_null<PeerData*>(user.get()));
 		}
-		if (const auto onstack = callback) {
-			onstack(std::move(result));
-		}
+		Parvane::SearchPublicGroups(session, query, [=](
+				std::vector<not_null<PeerData*>> groups) mutable {
+			for (const auto &peer : groups) {
+				if (!ranges::contains(result.peers, peer)) {
+					result.peers.push_back(peer);
+				}
+			}
+			if (const auto onstack = callback) {
+				onstack(std::move(result));
+			}
+		});
 	});
 }
 

@@ -505,6 +505,29 @@ void LeaveGroup(const QString &groupId);
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
 
+// ── публичные группы (spec 023, как web groups.ts) ──────────────────────────
+// Публичность своей группы v2: имя каталога (пусто — частная) и две настройки.
+struct GroupPublicInfo {
+	QString name;
+	bool preview = false; // «Читать без вступления»
+	bool history = false; // «История для новых участников»
+};
+[[nodiscard]] GroupPublicInfo GroupPublic(not_null<PeerData*> peer);
+// Свободно ли имя: done("") — да, иначе "taken" | "invalid" | "failed". Только main.
+void CheckGroupPublicName(const QString &name, Fn<void(QString)> done);
+// Сделать публичной (name не пуст) / частной; done("ok" | "taken" | "invalid" | "failed"). Только main.
+void SetGroupPublic(not_null<PeerData*> peer, const QString &name, bool preview, bool history,
+	Fn<void(QString)> done);
+// Поиск в каталоге: участнику — его чат, иначе чат-превью (вступить из него). Только main.
+void SearchPublicGroups(not_null<Main::Session*> session, const QString &query,
+	Fn<void(std::vector<not_null<PeerData*>>)> done);
+// Чат — превью публичной группы для не-участника (вместо композера — «Вступить»).
+[[nodiscard]] bool IsPublicPreview(not_null<PeerData*> peer);
+// Лента превью (если группа разрешает читать без вступления); повторно не грузит.
+void LoadPublicPreview(not_null<PeerData*> peer);
+// «Вступить» из превью: секрет из каталога, вступление сразу; ошибки — тостом.
+void JoinPublicGroup(not_null<PeerData*> peer);
+
 // ── spec 004: экраны управления группой (нативные боксы tdesktop) ────────────
 // Результат операции: ok и код ошибки сервера (forbidden|bad_request|limit|…)
 // либо текст исключения. Вызывается на main-потоке после RefreshGroups.

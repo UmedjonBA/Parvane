@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_widget.h"
 
+#include "parvane/parvane_client.h" // Parvane: превью публичной группы
+
 #include "api/api_compose_with_ai.h"
 #include "api/api_editing.h"
 #include "api/api_bot.h"
@@ -1154,6 +1156,11 @@ Dialogs::EntryState HistoryWidget::computeDialogsEntryState() const {
 }
 
 void HistoryWidget::refreshJoinChannelText() {
+	if (_peer && Parvane::IsPublicPreview(_peer)) {
+		_joinChannel->setText(tr::lng_profile_join_group(tr::now).toUpper());
+		Parvane::LoadPublicPreview(_peer);
+		return;
+	}
 	if (const auto channel = _peer ? _peer->asChannel() : nullptr) {
 		_joinChannel->setText((channel->isBroadcast()
 			? tr::lng_profile_join_channel(tr::now)
@@ -2913,6 +2920,9 @@ void HistoryWidget::showHistory(
 		}, _list->lifetime());
 		_list->show();
 
+		if (Parvane::IsPublicPreview(_peer)) {
+			refreshJoinChannelText();
+		}
 		if (const auto channel = _peer->asChannel()) {
 			channel->updateFull();
 			if (!channel->isBroadcast()) {
@@ -5282,6 +5292,11 @@ void HistoryWidget::sendBotStartCommand() {
 }
 
 void HistoryWidget::joinChannel() {
+	// Parvane: превью публичной группы — вступление по секрету каталога (spec 023)
+	if (_peer && Parvane::IsPublicPreview(_peer)) {
+		Parvane::JoinPublicGroup(_peer);
+		return;
+	}
 	if (!_peer || !_peer->isChannel() || !isJoinChannel()) {
 		updateControlsVisibility();
 		return;
@@ -5922,6 +5937,9 @@ bool HistoryWidget::isBlocked() const {
 }
 
 bool HistoryWidget::isJoinChannel() const {
+	if (_peer && Parvane::IsPublicPreview(_peer)) {
+		return true;
+	}
 	if (const auto channel = _peer ? _peer->asChannel() : nullptr) {
 		return !channel->amIn() && !channel->isMonoforum();
 	}

@@ -1457,6 +1457,7 @@ std::vector<parvane::ReactionSummary> V2ReactionsLocked(const QString &uuid, con
 void ScheduleStateFlush(const char *kind);
 void NoteStateEdited(const char *kind); // T150                                  // журнал состояния: своя правка
 void LoadV2GroupCache(not_null<Main::Session*> session);    // группы v2 до подъёма сессии
+void NoteGroupPublic(const QString &address, const parvane::json &info); // публичность группы (spec 023)
 
 // Групповое сообщение — конвертом эпохи группы v2 (T056). "" — не отправлено (причина в логе).
 std::string sendGroupContent(
@@ -5234,6 +5235,10 @@ bool ApplyGroupInfo(
 	}
 	// Роль и права своего участника: владелец — Creator, админ — гранулярные
 	// права; по ним tdesktop сам решает, что показывать в меню и композере.
+	// Снова участник (вступил из превью публичной группы или вернулся) — чат не «покинут»
+	if (!selfRole.empty() && selfRole != "banned") {
+		chat->removeFlags(ChatDataFlag::Left);
+	}
 	if (selfRole == "owner") {
 		chat->addFlags(ChatDataFlag::Creator);
 		chat->setAdminRights(adminRightsFrom(parvane::AdminRights{}));
@@ -8521,6 +8526,7 @@ void LoadV2GroupCache(not_null<Main::Session*> session) {
 	for (auto it = all.begin(); it != all.end(); ++it) {
 		if (parvane::v2::isGroupAddress(it.key()) && it.value().is_object()) {
 			NoteV2GroupOrigin(session, QString::fromStdString(it.key()), it.value());
+			NoteGroupPublic(QString::fromStdString(it.key()), it.value());
 			ApplyGroupInfo(session, V2GroupInfo(QString::fromStdString(it.key()), it.value()), u"v2 кэш"_q);
 			++n;
 		}
@@ -8579,11 +8585,30 @@ void AnnounceNewOwnDevices(int count) {
 	LOG(("Parvane: v2: новое своё устройство (%1) — сервисное уведомление").arg(count));
 }
 
+// Публичность групп v2 по сведениям журнала (main): адрес → имя и настройки (spec 023)
+QHash<QString, GroupPublicInfo> g_groupPublic;
+
+void NoteGroupPublic(const QString &address, const parvane::json &info) {
+	const auto name = info.contains("publicName") && info["publicName"].is_string()
+		? QString::fromStdString(info["publicName"].get<std::string>())
+		: QString();
+	if (name.isEmpty()) {
+		g_groupPublic.remove(address);
+		return;
+	}
+	g_groupPublic.insert(address, GroupPublicInfo{
+		.name = name,
+		.preview = info.value("publicPreview", false),
+		.history = info.value("publicHistory", false),
+	});
+}
+
 void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew) {
 	const auto session = g_sessionWeak.get();
 	if (!session) {
 		return;
 	}
+	NoteGroupPublic(address, info);
 	SaveV2GroupCache(address, &info);
 	NoteV2GroupOrigin(session, address, info);
 	ApplyGroupInfo(session, V2GroupInfo(address, info), isNew ? u"v2 новая"_q : u"v2 журнал"_q);
@@ -12332,6 +12357,224 @@ void ReportMessages(
 			done((outcome == u"sent"_q)
 				? ReportStep{ .successful = true }
 				: ReportStep{ .error = u"PARVANE_REPORT_"_q + outcome });
+		});
+	});
+}
+
+// ── публичные группы (spec 023, как web groups.ts) ─────────────────────────
+namespace {
+
+// Публичные группы, показанные не-участнику (поиск): адрес → имя и настройки каталога. Только main.
+QHash<QString, GroupPublicInfo> g_publicPreviews;
+QSet<QString> g_loadedPreviews; // превью ленты уже загружено
+
+[[nodiscard]] QString PublicNameError(const std::string &reason) {
+	return (reason == "taken") ? u"taken"_q : u"invalid"_q;
+}
+
+// Чат публичной группы из карточки каталога: участнику — обычный, иначе превью с «Вступить».
+ChatData *AnnouncePublicCard(not_null<Main::Session*> session, const parvane::json &card) {
+	const auto group = card.value("group", parvane::json::object());
+	const auto id = group.is_object() ? group.value("id", std::string()) : std::string();
+	const auto hex = QString::fromStdString(parvane::v2::b64ToHex(id));
+	if (hex.size() != 32) {
+		return nullptr;
+	}
+	const auto address = u"v2g:"_q + hex;
+	const auto self = SelfAddress().toStdString();
+	if (const auto known = g_groupInfo.constFind(address); known != g_groupInfo.constEnd()) {
+		for (const auto &m : known->members) {
+			if (m.address == self && m.role != "banned") {
+				return session->data().chatLoaded(ChatId(BareId(IdForAddress(address))));
+			}
+		}
+	}
+	const auto name = QString::fromStdString(card.value("name", std::string()));
+	g_publicPreviews.insert(address, GroupPublicInfo{
+		.name = name,
+		.preview = card.value("preview", false),
+		.history = card.value("history", false),
+	});
+	auto gi = parvane::GroupInfo();
+	gi.group_id = address.toStdString();
+	gi.name = card.value("title", std::string());
+	if (gi.name.empty()) {
+		gi.name = name.toStdString();
+	}
+	gi.kind = (card.value("kind", std::string()) == "GROUP_KIND_CHANNEL") ? "channel" : "group";
+	gi.avatar = card.value("avatar_file_id", std::string());
+	gi.about = card.value("about", std::string());
+	ApplyGroupInfo(session, gi, u"v2 каталог"_q);
+	const auto chat = session->data().chatLoaded(ChatId(BareId(IdForAddress(address))));
+	if (chat) {
+		chat->addFlags(ChatDataFlag::Left);
+		chat->count = int(card.value("members", 0));
+		session->changes().peerUpdated(chat, Data::PeerUpdate::Flag::Members);
+	}
+	return chat;
+}
+
+} // namespace
+
+GroupPublicInfo GroupPublic(not_null<PeerData*> peer) {
+	const auto gid = GroupIdForChat(peer);
+	const auto it = g_groupPublic.constFind(gid);
+	return (it == g_groupPublic.constEnd()) ? GroupPublicInfo() : it.value();
+}
+
+void CheckGroupPublicName(const QString &name, Fn<void(QString)> done) {
+	const auto n = name.trimmed().toStdString();
+	crl::async([=] {
+		auto result = u"failed"_q;
+		if (const auto s = V2Ready()) {
+			try {
+				const auto r = s->checkPublicName(n);
+				result = r.value("available", false)
+					? QString()
+					: PublicNameError(r.value("reason", std::string()));
+			} catch (const std::exception &e) {
+				LOG(("Parvane: публичные группы: проверка имени не удалась: %1").arg(e.what()));
+			}
+		}
+		crl::on_main([=] { done(result); });
+	});
+}
+
+void SetGroupPublic(not_null<PeerData*> peer, const QString &name, bool preview, bool history,
+		Fn<void(QString)> done) {
+	const auto gid = GroupIdForChat(peer);
+	if (!parvane::v2::isGroupAddress(gid.toStdString())) {
+		done(u"failed"_q);
+		return;
+	}
+	const auto n = name.trimmed();
+	crl::async([=] {
+		auto result = u"failed"_q;
+		if (const auto s = V2Ready()) {
+			result = QString::fromStdString(
+				s->setGroupPublic(gid.toStdString(), !n.isEmpty(), n.toStdString(), preview, history));
+		}
+		LOG(("Parvane: публичные группы: имя «%1» для %2 → %3").arg(n, gid, result));
+		crl::on_main([=] { done(result); });
+	});
+}
+
+void SearchPublicGroups(not_null<Main::Session*> session, const QString &query,
+		Fn<void(std::vector<not_null<PeerData*>>)> done) {
+	auto q = query.trimmed();
+	if (q.startsWith('@')) {
+		q = q.mid(1);
+	}
+	if (q.size() < 2 || !V2Ready()) {
+		done({});
+		return;
+	}
+	const auto weak = base::make_weak(session.get());
+	crl::async([=] {
+		auto cards = parvane::json::array();
+		if (const auto s = V2Ready()) {
+			try {
+				cards = s->searchPublic(q.toStdString());
+			} catch (const std::exception &e) {
+				LOG(("Parvane: публичные группы: поиск не удался: %1").arg(e.what()));
+			}
+		}
+		crl::on_main([=] {
+			auto out = std::vector<not_null<PeerData*>>();
+			if (const auto strong = weak.get()) {
+				for (const auto &card : cards) {
+					if (const auto chat = AnnouncePublicCard(strong, card)) {
+						out.push_back(chat);
+					}
+				}
+			}
+			done(std::move(out));
+		});
+	});
+}
+
+bool IsPublicPreview(not_null<PeerData*> peer) {
+	if (!peer->isChat()) {
+		return false;
+	}
+	const auto gid = GroupIdForChat(peer);
+	return !gid.isEmpty() && g_publicPreviews.contains(gid);
+}
+
+void LoadPublicPreview(not_null<PeerData*> peer) {
+	const auto gid = GroupIdForChat(peer);
+	const auto it = g_publicPreviews.constFind(gid);
+	if (it == g_publicPreviews.constEnd() || !it->preview || g_loadedPreviews.contains(gid)) {
+		return;
+	}
+	g_loadedPreviews.insert(gid);
+	const auto hex = parvane::v2::groupHex(gid.toStdString());
+	crl::async([=] {
+		auto ok = false;
+		if (const auto s = V2Ready()) {
+			try {
+				s->loadPublicGroup(hex);
+				s->publicHistory(gid.toStdString(), 0);
+				ok = true;
+			} catch (const std::exception &e) {
+				LOG(("Parvane: публичные группы: превью не загружено: %1").arg(e.what()));
+			}
+		}
+		if (!ok) {
+			crl::on_main([=] { g_loadedPreviews.remove(gid); });
+		}
+	});
+}
+
+void JoinPublicGroup(not_null<PeerData*> peer) {
+	const auto gid = GroupIdForChat(peer);
+	const auto it = g_publicPreviews.constFind(gid);
+	if (it == g_publicPreviews.constEnd()) {
+		return;
+	}
+	const auto name = it->name.toStdString();
+	const auto showError = [](const QString &code) {
+		if (const auto window = Core::App().activeWindow()) {
+			window->showToast(InviteErrorText(code));
+		}
+	};
+	crl::async([=] {
+		auto code = u"failed"_q;
+		auto info = parvane::json();
+		if (const auto s = V2Ready()) {
+			try {
+				const auto found = s->resolvePublic(name);
+				if (found.is_null()) {
+					code = u"invalid"_q;
+				} else {
+					info = s->joinPublic(found.value("hex", std::string()), found.value("secretHex", std::string()));
+					code = info.is_null() ? u"failed"_q : QString();
+				}
+			} catch (const std::exception &e) {
+				LOG(("Parvane: публичные группы: вступление не удалось: %1").arg(e.what()));
+				code = QString::fromUtf8(e.what()).contains(u"BANNED"_q) ? u"banned"_q : u"failed"_q;
+			}
+		}
+		crl::on_main([=] {
+			if (!code.isEmpty()) {
+				showError(code);
+				return;
+			}
+			g_publicPreviews.remove(gid);
+			g_loadedPreviews.remove(gid);
+			ApplyV2Group(gid, info, true);
+			// «История для новых участников»: прежняя переписка
+			if (info.value("publicHistory", false)) {
+				crl::async([=] {
+					if (const auto s = V2Ready()) {
+						try {
+							s->publicHistory(gid.toStdString(), 0);
+						} catch (const std::exception &e) {
+							LOG(("Parvane: публичные группы: история не загружена: %1").arg(e.what()));
+						}
+					}
+				});
+			}
 		});
 	});
 }
