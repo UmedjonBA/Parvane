@@ -1,10 +1,8 @@
-// Parvane fork: высокоуровневый cloud-клиент поверх Transport. Инкапсулирует
-// разбиение блоба на чанки, base64, сборку конверта ParvaneEvent<T> и (де)-
-// сериализацию file.* пейлоадов. Используется glue-слоем tdesktop (Фаза 4:
-// отправка/приём медиа) и тестами.
+// Parvane fork: блобы владельца через мост v2 (spec 029): свой либо открытый блоб (аватар, фото группы,
+// блоб линковки своему устройству) — методами `cloud.blob.*` управляющего соединения моста. Вложения
+// сообщений идут по capability через v2-сессию (Session::uploadBlob/downloadBlobCap), не здесь.
 //
-// Потокобезопасность: методы блокирующие (request/requestMany транспорта).
-// Звать upload/download из worker-потока, не из main/UI.
+// Потокобезопасность: методы блокирующие — звать из worker-потока, не из main/UI.
 #pragma once
 
 #include <cstddef>
@@ -12,8 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "parvane/cloud.h"
-#include "parvane/transport.h"
+#include "parvane/itransport.h"
 
 namespace parvane {
 
@@ -21,10 +18,8 @@ class CloudClient {
 public:
     explicit CloudClient(ITransport &transport) : _t(transport) {}
 
-    // Загружает `bytes` в облако: разбивает на чанки по chunkSize, каждый чанк —
-    // request/reply (ждём ack сохранения от шарда), затем file.upload.complete.
-    // Возвращает сгенерированный file_id (uuid v7). Бросает TransportError при
-    // таймауте/сетевой ошибке; std::runtime_error — если шард отверг чанк/файл.
+    // Загрузить блоб владельца (recipients — только сам владелец либо пусто; грантов получателям в v2
+    // нет). Возвращает file_id. Бросает std::runtime_error при отказе и если транспорт — не мост v2.
     std::string upload(const std::string &from, const std::string &token,
                        const std::string &filename, const std::string &mime,
                        const std::string &bytes,
@@ -32,23 +27,17 @@ public:
                        bool publicAccess = false,
                        std::size_t chunkSize = 256 * 1024, int timeoutMs = 5000);
 
-    // Результат скачивания: собранные байты + метаданные.
     struct Downloaded {
         bool ok = false;
         std::string filename;
         std::string mime;
-        std::string bytes;   // склеенные по порядку чанки
-        std::string error;   // при ok=false
+        std::string bytes;
+        std::string error; // при ok=false
     };
 
-    // Скачивает файл по fileId: собирает N чанков с reply-инбокса (см.
-    // Transport::requestMany), декодирует base64 и склеивает по chunk_index.
+    // Скачать свой, открытый либо выданный блоб (имени и MIME в ответе v2 нет).
     Downloaded download(const std::string &from, const std::string &token,
                         const std::string &fileId, int timeoutMs = 5000);
-
-    // Список файлов владельца (request/reply на file.list.request).
-    std::vector<FileEntry> list(const std::string &from, const std::string &token,
-                                int timeoutMs = 3000);
 
 private:
     ITransport &_t;

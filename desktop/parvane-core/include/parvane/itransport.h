@@ -1,16 +1,20 @@
-// Parvane fork: абстрактный транспорт шины. Позволяет подставлять либо прямой
-// NATS (parvane::Transport, cnats), либо доступ через gateway
-// (parvane::GatewayTransport, TCP). Высокоуровневые клиенты (MessengerClient,
-// CloudClient, CallClient, GroupClient) держат ссылку на ITransport и не знают,
-// какой транспорт под ними. Жизненный цикл (connect/authenticate/close) —
-// ответственность владельца транспорта, не этого интерфейса.
+// Parvane fork: абстрактный транспорт запросов «subject + JSON» — в spec 029 его реализует только мост
+// v2 (v2_bridge.h): вход, профили, поиск и прочие методы аккаунта. Переписка, группы и звонки идут v2-сессией.
 #pragma once
 
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 #include <string>
 
 namespace parvane {
+
+// Бросается на ошибках соединения/запроса (вкл. таймаут request).
+class TransportError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 
 class ITransport {
 public:

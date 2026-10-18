@@ -5,22 +5,13 @@
 
 namespace parvane {
 
-CallManager::CallManager(CallClient &calls, std::string selfAddr, std::string token,
-                         const crypto::SigningKey *key,
+CallManager::CallManager(std::string selfAddr, const crypto::SigningKey *key,
                          std::function<std::unique_ptr<MediaBackend>()> makeBackend,
                          Callbacks cb)
-    : calls_(calls),
-      self_(std::move(selfAddr)),
-      token_(std::move(token)),
+    : self_(std::move(selfAddr)),
       key_(key),
       makeBackend_(std::move(makeBackend)),
       cb_(std::move(cb)) {}
-
-void CallManager::start() {
-    calls_.onSignal(self_, [this](std::string from, CallSignalIn sig) {
-        handleSignal(from, sig);
-    });
-}
 
 void CallManager::newSession(const std::string &peer) {
     peer_ = peer;
@@ -46,11 +37,8 @@ void CallManager::newSession(const std::string &peer) {
 }
 
 void CallManager::sendTo(const std::string &peer, const json &signal) {
-    if (cb_.sendV2 && cb_.sendV2(peer, signal)) {
-        // LEGACY-1: v1-устройствам собеседника — тот же сигнал v1-путём
-        if (!cb_.hasLegacyDevices || !cb_.hasLegacyDevices(peer)) return;
-    }
-    calls_.send(self_, peer, token_, signal);
+    // Только v2: не ушло — звонок завершится по таймауту ожидания ответа
+    if (cb_.sendV2) (void)cb_.sendV2(peer, signal);
 }
 
 void CallManager::handleV2Signal(const std::string &from, const json &signal) {
@@ -88,8 +76,22 @@ void CallManager::handleSignal(const std::string &from, const CallSignalIn &sig)
     }
     // Остальные сигналы — активной сессии, если callId совпадает.
     if (session_ && sig.call_id == session_->callId()) {
+        if (sig.type == "media") {
+            if (cb_.onMediaState) cb_.onMediaState(from, sig.audio_muted, sig.video_muted);
+            return;
+        }
         session_->onSignal(sig);
     }
+}
+
+void CallManager::sendMediaState(bool audioMuted, bool videoMuted) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (session_ && !peer_.empty()) sendTo(peer_, mediaStateSignal(session_->callId(), audioMuted, videoMuted));
+}
+
+std::string CallManager::callId() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return session_ ? session_->callId() : std::string();
 }
 
 void CallManager::accept() {

@@ -313,6 +313,21 @@ const json *field(const json &j, const char *camel, const char *snake) {
 
 } // namespace
 
+std::string fingerprintOf(const std::string &keyB64) {
+    if (keyB64.empty()) return {};
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int len = 0;
+    if (EVP_Digest(keyB64.data(), keyB64.size(), digest, &len, EVP_sha256(), nullptr) != 1) return {};
+    static const char *hex = "0123456789abcdef";
+    std::string out;
+    for (unsigned i = 0; i < 24 && i < len; ++i) {
+        if (i && i % 2 == 0) out += ' ';
+        out += hex[digest[i] >> 4];
+        out += hex[digest[i] & 0xF];
+    }
+    return out;
+}
+
 std::string cleanGroupTitle(const std::string &title) {
     // Как web cleanGroupTitle: управляющие и bidi-символы — пробелом, пробелы схлопнуты, ≤ 255 байт UTF-8
     const auto seqLen = [](unsigned char c) -> std::size_t {

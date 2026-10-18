@@ -22,8 +22,6 @@
 #include <unistd.h>
 
 #include "parvane/events.h"
-#include "parvane/gateway_transport.h"
-#include "parvane/gateway_ws_transport.h"
 #include "parvane/messenger.h"
 #include "parvane/topics.h"
 #include "parvane/v2_content.h"

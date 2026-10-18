@@ -1718,79 +1718,6 @@ void Session::watchPeers(const std::vector<std::string> &peers) {
     }
 }
 
-// ── переходный период: v1-устройства (FR-054/FR-058) ───────────────────────
-
-namespace {
-
-std::string stripPadding(std::string s) {
-    while (!s.empty() && s.back() == '=') s.pop_back();
-    return s;
-}
-
-} // namespace
-
-std::map<std::string, std::string> Session::legacyDevices(const std::string &user) {
-    std::map<std::string, std::string> out;
-    std::lock_guard<std::recursive_mutex> lk(engineMu_);
-    if (!ready_ || !client_) return out;
-    const auto devices = client_->logDevices(user);
-    if (!devices.contains("legacyKeys") || !devices["legacyKeys"].is_array()) return out;
-    for (const auto &d : devices["legacyKeys"]) {
-        if (!d.is_object()) continue;
-        out[d.value("deviceId", std::string())] = d.value("identity", std::string());
-    }
-    return out;
-}
-
-void Session::syncLegacySet(const json &catalog) {
-    std::lock_guard<std::recursive_mutex> lk(engineMu_);
-    if (!ready_ || !client_ || !catalog.is_array()) return;
-    const auto own = client_->logDevices(cfg_.self);
-    const auto v2 = own.contains("v2") && own["v2"].is_array() ? own["v2"] : json::array();
-    if (v2.empty()) return;
-    // Кандидаты: устройства каталога v1, которых нет в журнале v2.
-    json candidates = json::array();
-    for (const auto &d : catalog) {
-        if (!d.is_object()) continue;
-        const auto id = d.value("deviceId", std::string());
-        const auto identity = stripPadding(d.value("identity", std::string()));
-        const auto signing = stripPadding(d.value("signing", std::string()));
-        if (id.empty() || identity.empty() || signing.empty()) continue;
-        if (std::find(v2.begin(), v2.end(), json(id)) != v2.end()) continue;
-        candidates.push_back(json{{"deviceId", id}, {"identity", identity}, {"signing", signing}});
-    }
-    json next = json::array();
-    if (!own.value("legacySet", false)) {
-        if (candidates.empty()) return;
-        next = candidates;
-    } else {
-        const auto keys = own.contains("legacyKeys") && own["legacyKeys"].is_array() ? own["legacyKeys"] : json::array();
-        for (const auto &k : keys) {
-            const auto found = std::any_of(candidates.begin(), candidates.end(), [&](const json &d) {
-                return d["deviceId"] == k.value("deviceId", std::string())
-                    && d["identity"] == k.value("identity", std::string());
-            });
-            if (found) next.push_back(k);
-        }
-        if (next.size() == keys.size()) return;
-    }
-    try {
-        runRequestsLocked(json::array({client_->legacyDevicesRequest(next)}));
-        // Запись попадает в свой журнал синком — после подтверждения сервера.
-        checkOwnDevicesLocked();
-        log("список v1-устройств опубликован (" + std::to_string(next.size()) + ")");
-    } catch (const std::exception &e) {
-        // Нет SSK на этом устройстве либо журнал ушёл вперёд — догонит другое.
-        log(std::string("список v1-устройств не опубликован: ") + e.what());
-    }
-}
-
-void Session::deliverLegacy(const std::string &messageId, const json &sendPayload) {
-    std::lock_guard<std::recursive_mutex> lk(engineMu_);
-    if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
-    runRequestsLocked(json::array({client_->legacyDeliverRequest(messageId, sendPayload.dump())}));
-}
-
 template <typename F>
 auto Session::withNeedsLocked(F &&f) -> decltype(f()) {
     for (int i = 0; i < kNeedAttempts; ++i) {
@@ -2409,10 +2336,8 @@ std::string Session::migrateGroup(const json &v1) {
             if (role == "admin") admins.push_back(m);
         }
     }
-    // Чьё-то v1-устройство сообщений группы v2 не получит — ждём, пока их не останется
-    if (!legacyDevices(cfg_.self).empty()) return {};
     for (const auto &member : others) {
-        if (!isV2Peer(member) || !legacyDevices(member).empty()) return {};
+        if (!isV2Peer(member)) return {};
     }
     const auto channel = v1.value("kind", std::string()) == "channel";
     const auto address = createGroup(v1.value("name", std::string()), others, channel, groupId,

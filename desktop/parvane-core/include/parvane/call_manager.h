@@ -1,7 +1,6 @@
-// Parvane fork: связка CallClient (сигналинг) + CallSession (оркестрация+крипто)
-// в единый менеджер звонков для одного пользователя. Подписывается на инбокс
-// call.user.<self>, ведёт ОДИН активный звонок 1-на-1, маршрутизирует сигналы в
-// сессию, а исходящие сессии — в шину. Медиа-движок создаётся фабрикой (в форке
+// Parvane fork: менеджер звонков одного пользователя над CallSession (оркестрация). Ведёт ОДИН активный
+// звонок 1-на-1; сигналы — только протоколом v2 (spec 029: v1-шарда звонков нет): входящие подаёт хост
+// (handleV2Signal), исходящие уходят колбэком sendV2. Медиа-движок создаётся фабрикой (в форке
 // и тестах Э4 — StubMediaBackend; в Э3-b — WebrtcMediaBackend). Потокобезопасен
 // (onSignal приходит из потока cnats). См. desktop/CALLS-parvane.md.
 #pragma once
@@ -12,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "parvane/call_client.h"
+#include "parvane/call.h"
 #include "parvane/call_session.h"
 #include "parvane/crypto.h"
 
@@ -35,19 +34,13 @@ public:
         // Протокол v2: отправить сигнал собеседнику запечатанным конвертом.
         // true — сигнал взят v2 (по v1 не дублировать), false — собеседник на v1.
         std::function<bool(const std::string &peer, const json &signal)> sendV2;
-        // У собеседника на v2 остались v1-устройства (подписанный список,
-        // LEGACY-1): сигнал, ушедший по v2, дублируется им v1-путём — иначе они
-        // не зазвонят. Его v2-устройства повтор с тем же call_id отбрасывают.
-        std::function<bool(const std::string &peer)> hasLegacyDevices;
+        // spec 024: собеседник выключил/включил микрофон или камеру.
+        std::function<void(const std::string &peer, bool audioMuted, bool videoMuted)> onMediaState;
     };
 
-    CallManager(CallClient &calls, std::string selfAddr, std::string token,
-                const crypto::SigningKey *key,
+    CallManager(std::string selfAddr, const crypto::SigningKey *key,
                 std::function<std::unique_ptr<MediaBackend>()> makeBackend,
                 Callbacks cb);
-
-    // Подписаться на call.user.<self> (звать один раз после логина).
-    void start();
 
     // Сигнал личного звонка, принятый по протоколу v2 (отправитель проверен
     // движком) — тот же путь, что у сигнала с шины, без проверки подписи SDP.
@@ -61,6 +54,10 @@ public:
     void hangup();
     // Заглушить/включить свой микрофон в текущем звонке.
     void setMuted(bool muted);
+    // spec 024: сообщить собеседнику, что свой микрофон/камера выключены.
+    void sendMediaState(bool audioMuted, bool videoMuted);
+    // id текущего звонка ("" — звонка нет).
+    [[nodiscard]] std::string callId();
 
     [[nodiscard]] CallState state();
     [[nodiscard]] PeerAuth peerAuth();
@@ -73,9 +70,7 @@ private:
     // Создаёт сессию с проводкой колбэков (звать под mutex_).
     void newSession(const std::string &peer);
 
-    CallClient &calls_;
     std::string self_;
-    std::string token_;
     const crypto::SigningKey *key_;
     std::function<std::unique_ptr<MediaBackend>()> makeBackend_;
     Callbacks cb_;

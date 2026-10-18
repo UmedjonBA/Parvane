@@ -100,11 +100,22 @@ inline json hangupSignal(const std::string &callId) {
 // Приглашение в ГРУППОВОЙ звонок: id звонка + полный список участников. Каждый
 // участник, получив его, строит mesh — 1-на-1 соединение с каждым другим
 // (оффер инициирует тот, чей адрес лексикографически меньше). media audio|video.
+// group — адрес группы v2 ("v2g:<hex>"), title — её название (CALL-2: у адресата во входящем звонке).
 inline json groupInviteSignal(const std::string &groupCallId,
                               const std::vector<std::string> &participants,
-                              const std::string &media = "audio") {
-    return json{{"type", "group_invite"}, {"group_call_id", groupCallId},
-                {"participants", participants}, {"media", media}};
+                              const std::string &media = "audio",
+                              const std::string &group = std::string(),
+                              const std::string &title = std::string()) {
+    json out{{"type", "group_invite"}, {"group_call_id", groupCallId},
+             {"participants", participants}, {"media", media}};
+    if (!group.empty()) out["group"] = group;
+    if (!title.empty()) out["title"] = title;
+    return out;
+}
+
+// spec 024: камера/микрофон выключены — собеседнику (сигнал `media`).
+inline json mediaStateSignal(const std::string &callId, bool audioMuted, bool videoMuted) {
+    return json{{"type", "media"}, {"call_id", callId}, {"audio_muted", audioMuted}, {"video_muted", videoMuted}};
 }
 
 // ── входящий сигнал (разбор relay из инбокса) ─────────────────────────────────
@@ -118,6 +129,10 @@ struct CallSignalIn {
     std::optional<std::string> reason; // reject
     std::string group_call_id;              // group_invite
     std::vector<std::string> participants;  // group_invite
+    std::string group;                      // group_invite: адрес группы (CALL-2)
+    std::string title;                      // group_invite: название группы
+    bool audio_muted = false;               // media (spec 024)
+    bool video_muted = false;               // media
     // Сигнал пришёл по протоколу v2: отправителя, аудиторию и привязку к звонку
     // проверил движок — подпись SDP ключом звонков (`sig`) не требуется. Из JSON
     // НЕ читается (fromJson), выставляет только CallManager::handleV2Signal.
@@ -136,8 +151,12 @@ struct CallSignalIn {
             for (const auto &p : *it)
                 if (p.is_string()) s.participants.push_back(p.get<std::string>());
         }
-        if (auto it = j.find("reason"); it != j.end() && !it->is_null())
+        if (auto it = j.find("reason"); it != j.end() && it->is_string())
             s.reason = it->get<std::string>();
+        s.group = j.value("group", std::string());
+        s.title = j.value("title", std::string());
+        s.audio_muted = j.value("audio_muted", false);
+        s.video_muted = j.value("video_muted", false);
         return s;
     }
 

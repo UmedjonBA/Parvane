@@ -2,7 +2,7 @@
 // групп; SFU — на будущее). У звонка есть group_call_id; каждый участник строит
 // P2P-соединение с каждым другим. Оффер инициирует тот, чей адрес меньше
 // (защита от glare). Входящие в групповой звонок авто-принимаются. Переиспользует
-// CallSession (крипто-гейтинг подписи SDP) и CallClient (сигналинг). Медиа-движок
+// CallSession; сигналы — только протоколом v2 (spec 029): входящие подаёт хост, исходящие — sendV2. Медиа-движок
 // — фабрикой (Stub в тестах / Webrtc в бою). Потокобезопасен.
 #pragma once
 
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "parvane/call_client.h"
+#include "parvane/call.h"
 #include "parvane/call_session.h"
 #include "parvane/crypto.h"
 
@@ -32,18 +32,16 @@ public:
         std::function<std::string(const std::string &data)> sign;
         // Протокол v2 (T141): сигнал участнику запечатанным конвертом.
         // groupCallId пуст у самого приглашения (group_invite). true — сигнал
-        // ушёл по v2; false — идти v1-инбоксом gcall:<адрес>.
+        // ушёл по v2.
         std::function<bool(const std::string &peer, const json &signal,
                            const std::string &groupCallId)> sendV2;
+        // spec 024: участник выключил/включил микрофон или камеру.
+        std::function<void(const std::string &peer, bool audioMuted, bool videoMuted)> onMediaState;
     };
 
-    GroupCallManager(CallClient &calls, std::string selfAddr, std::string token,
-                     const crypto::SigningKey *key,
+    GroupCallManager(std::string selfAddr, const crypto::SigningKey *key,
                      std::function<std::unique_ptr<MediaBackend>()> makeBackend,
                      Callbacks cb);
-
-    // Подписаться на инбокс call.user.<self>.
-    void start();
 
     // Сигнал группового звонка, принятый по протоколу v2 (отправитель проверен
     // движком) — тот же путь, что у сигнала с шины, без проверки подписи SDP.
@@ -51,9 +49,14 @@ public:
 
     // Инициировать групповой звонок: разослать group_invite всем участникам и
     // самому войти в mesh. participants — полный список (включая себя).
+    // group/title — адрес и название группы (CALL-2: у адресатов во входящем звонке).
     void startCall(const std::string &groupCallId,
                    const std::vector<std::string> &participants,
-                   const std::string &media = "audio");
+                   const std::string &media = "audio",
+                   const std::string &group = std::string(),
+                   const std::string &title = std::string());
+    // spec 024: свой микрофон/камера выключены — всем участникам.
+    void sendMediaState(bool audioMuted, bool videoMuted);
 
     // Выйти: положить все P2P-сессии.
     void leave();
@@ -73,9 +76,7 @@ private:
     // Создать (идемпотентно) сессию к участнику peer. Под mutex_.
     CallSession *ensureSession(const std::string &peer, const std::string &media);
 
-    CallClient &calls_;
     std::string self_;
-    std::string token_;
     const crypto::SigningKey *key_;
     std::function<std::unique_ptr<MediaBackend>()> makeBackend_;
     Callbacks cb_;

@@ -43,6 +43,9 @@ inline constexpr const char *kGroupPrefix = "v2g:";
 // domain — свой домен: группа в приглашении в групповой звонок (CALL-2: название группы у адресата).
 [[nodiscard]] std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId = std::string(),
                                                  const std::string &domain = std::string());
+// «Ключ безопасности» (KEY-1, T153): SHA-256 от base64 корневого ключа, 12 групп по 4 hex через пробел
+// (как web fingerprintOf). "" — ключа нет.
+[[nodiscard]] std::string fingerprintOf(const std::string &keyB64);
 // Название группы из сигнала (как web cleanGroupTitle): без управляющих и bidi-символов, ≤ 255 байт UTF-8.
 [[nodiscard]] std::string cleanGroupTitle(const std::string &title);
 [[nodiscard]] std::optional<json> callSignalFromV2(const json &v2);

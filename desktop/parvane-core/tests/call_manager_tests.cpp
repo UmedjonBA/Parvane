@@ -1,110 +1,176 @@
-// Parvane fork: e2e-тест CallManager против ЖИВОГО бэкенда (NATS + identity +
-// call, поднимает scripts/run_all_tests.sh). Проверяет ВЕСЬ путь сигналинга без
-// звука (StubMediaBackend): alice звонит → bob получает входящий → принимает →
-// оба доходят до Active, подписи проверены. Медиа-звук — Э3-b, вживую.
+// Parvane fork: CallManager и GroupCallManager без стека (spec 029: сигналы только v2). Менеджеры соединены
+// колбэком sendV2 через очередь доставки на своём потоке — как сигнал, прошедший сервер (handleV2Signal);
+// медиа — StubMediaBackend. Проверка: личный звонок до Active у обоих, состояние микрофона/камеры у
+// собеседника, отказ «занято»; групповой mesh из трёх участников.
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
-#include <cstdlib>
+#include <deque>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 #include "parvane/call_manager.h"
 #include "parvane/crypto.h"
-#include "parvane/events.h"
+#include "parvane/group_call_manager.h"
 #include "parvane/stub_media_backend.h"
-#include "parvane/topics.h"
-#include "parvane/transport.h"
-
-// Пароль тестовых аккаунтов по политике сервера (P-43: не короче 8 символов).
-constexpr auto kTestPassword = "e2e-Test-pass-2026";
 
 using namespace parvane;
-using parvane::crypto::SigningKey;
 
 static int g_total = 0, g_fail = 0;
-static void check(bool ok, const std::string &name, const std::string &info = "") {
+static void check(bool ok, const std::string &name) {
     ++g_total;
     if (!ok) ++g_fail;
-    std::printf("  %s  %s%s\n", ok ? "ok  " : "FAIL", name.c_str(),
-                info.empty() ? "" : (" — " + info).c_str());
-}
-static void sleepMs(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
-
-static std::string env(const char *n, const std::string &d) {
-    const char *v = std::getenv(n);
-    return (v && *v) ? std::string(v) : d;
-}
-static std::string issue(Transport &tr, const std::string &user) {
-    IssueRequest req{user, kTestPassword};
-    tr.request(topics::IdentityRegister, req.toJson().dump()); // регистрируем (идемпотентно)
-    auto resp = IssueResponse::fromJson(
-        json::parse(tr.request(topics::IdentityIssue, req.toJson().dump())));
-    return resp.token.value_or("");
-}
-static std::unique_ptr<MediaBackend> makeStub() {
-    return std::make_unique<StubMediaBackend>();
+    std::printf("  %s  %s\n", ok ? "ok  " : "FAIL", name.c_str());
 }
 
-int main() {
-    const std::string url = env("PARVANE_NATS_URL", "nats://127.0.0.1:4222");
-    std::printf("=== parvane-core call_manager tests (NATS %s) ===\n", url.c_str());
-
-    Transport trA, trB;
-    try {
-        trA.connect(url);
-        trB.connect(url);
-    } catch (const std::exception &e) {
-        check(false, "connect к live NATS", e.what());
-        std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
-        return 1;
+// «Сервер»: доставка сигналов адресатам на отдельном потоке (без повторного входа в менеджер отправителя)
+class Relay {
+public:
+    using Handler = std::function<void(const std::string &from, const json &signal)>;
+    Relay() : thread_([this] { loop(); }) {}
+    ~Relay() {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            stop_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+    }
+    void attach(const std::string &who, Handler h) {
+        std::lock_guard<std::mutex> lk(mu_);
+        handlers_[who] = std::move(h);
+    }
+    void send(const std::string &from, const std::string &to, const json &signal) {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            queue_.push_back({from, to, signal});
+        }
+        cv_.notify_all();
     }
 
-    const std::string alice = "alice@local", bob = "bob@local";
-    const std::string tokA = issue(trA, alice), tokB = issue(trB, bob);
-    check(!tokA.empty() && !tokB.empty(), "issue токенов alice+bob");
+private:
+    struct Item {
+        std::string from, to;
+        json signal;
+    };
+    void loop() {
+        for (;;) {
+            Item item;
+            Handler h;
+            {
+                std::unique_lock<std::mutex> lk(mu_);
+                cv_.wait(lk, [&] { return stop_ || !queue_.empty(); });
+                if (stop_ && queue_.empty()) return;
+                item = std::move(queue_.front());
+                queue_.pop_front();
+                if (const auto it = handlers_.find(item.to); it != handlers_.end()) h = it->second;
+            }
+            if (h) h(item.from, item.signal);
+        }
+    }
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::deque<Item> queue_;
+    std::map<std::string, Handler> handlers_;
+    bool stop_ = false;
+    std::thread thread_;
+};
 
-    // Ключи идентичности: каждый знает публичный ключ другого (эмулируем каталог).
-    auto keyA = SigningKey::generate();
-    auto keyB = SigningKey::generate();
+template <typename Pred>
+static bool waitFor(Pred p, int ms = 3000) {
+    for (int i = 0; i < ms / 10; ++i) {
+        if (p()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return p();
+}
 
-    CallClient callsA(trA), callsB(trB);
+static std::unique_ptr<MediaBackend> stub() { return std::make_unique<StubMediaBackend>(); }
 
-    CallManager::Callbacks cbA;
-    cbA.peerPubkey = [&](std::string) { return keyB.publicB64(); };
-    CallManager::Callbacks cbB;
-    cbB.peerPubkey = [&](std::string) { return keyA.publicB64(); };
+int main() {
+    std::printf("=== parvane-core: менеджеры звонков (v2, без стека) ===\n");
+    {
+        Relay relay;
+        const auto keyA = crypto::SigningKey::generate(), keyB = crypto::SigningKey::generate(),
+                   keyC = crypto::SigningKey::generate();
+        std::atomic<bool> bobRang{false};
+        std::atomic<bool> bobSawMuted{false};
+        CallManager::Callbacks ca, cb, cc;
+        ca.sendV2 = [&](const std::string &peer, const json &s) {
+            relay.send("alice@local", peer, s);
+            return true;
+        };
+        cb.sendV2 = [&](const std::string &peer, const json &s) {
+            relay.send("bob@local", peer, s);
+            return true;
+        };
+        cc.sendV2 = [&](const std::string &peer, const json &s) {
+            relay.send("carol@local", peer, s);
+            return true;
+        };
+        cb.onIncoming = [&](std::string, std::string) { bobRang = true; };
+        cb.onMediaState = [&](const std::string &peer, bool audio, bool video) {
+            if (peer == "alice@local" && audio && !video) bobSawMuted = true;
+        };
+        CallManager alice("alice@local", &keyA, stub, ca);
+        CallManager bob("bob@local", &keyB, stub, cb);
+        CallManager carol("carol@local", &keyC, stub, cc);
+        relay.attach("alice@local", [&](const std::string &from, const json &s) { alice.handleV2Signal(from, s); });
+        relay.attach("bob@local", [&](const std::string &from, const json &s) { bob.handleV2Signal(from, s); });
+        relay.attach("carol@local", [&](const std::string &from, const json &s) { carol.handleV2Signal(from, s); });
 
-    CallManager mgrA(callsA, alice, tokA, &keyA, makeStub, cbA);
-    CallManager mgrB(callsB, bob, tokB, &keyB, makeStub, cbB);
-    mgrA.start();
-    mgrB.start();
-    sleepMs(200); // дать подпискам встать
-
-    // alice звонит bob.
-    mgrA.placeCall(bob, "audio");
-    sleepMs(600);
-
-    check(mgrB.state() == CallState::Incoming, "bob получил входящий (Incoming)");
-    check(mgrB.peer() == alice, "у bob собеседник = alice", mgrB.peer());
-    check(mgrB.peerAuth() == PeerAuth::Verified,
-          "подпись invite от alice проверена ключом из каталога");
-
-    // bob принимает.
-    mgrB.accept();
-    sleepMs(700);
-
-    check(mgrB.state() == CallState::Active, "принявший (bob) → Active");
-    check(mgrA.state() == CallState::Active, "инициатор (alice) → Active");
-    check(mgrA.peerAuth() == PeerAuth::Verified,
-          "alice проверила подпись answer от bob");
-
-    // Отбой инициатором → у обоих Ended.
-    mgrA.hangup();
-    sleepMs(500);
-    check(mgrA.state() == CallState::Ended, "после hangup: инициатор Ended");
-    check(mgrB.state() == CallState::Ended, "после hangup: собеседник получил hangup → Ended");
-
-    std::printf("\nИТОГО: %d/%d прошло\n", g_total - g_fail, g_total);
+        alice.placeCall("bob@local", "audio");
+        check(waitFor([&] { return bobRang.load(); }), "bob: входящий звонок (v2-сигнал без подписи SDP)");
+        check(bob.state() == CallState::Incoming, "bob: состояние Incoming");
+        bob.accept();
+        check(waitFor([&] { return alice.state() == CallState::Active && bob.state() == CallState::Active; }),
+              "оба в звонке (Active)");
+        check(!alice.callId().empty() && alice.callId() == bob.callId(), "общий id звонка");
+        alice.sendMediaState(true, false);
+        check(waitFor([&] { return bobSawMuted.load(); }), "spec 024: bob видит, что у alice выключен микрофон");
+        // carol звонит занятому bob — «занято»
+        carol.placeCall("bob@local", "audio");
+        check(waitFor([&] { return carol.state() == CallState::Ended; }), "занятый собеседник — отказ «занято»");
+        alice.hangup();
+        check(waitFor([&] { return bob.state() == CallState::Ended; }), "отбой доходит до собеседника");
+    }
+    {
+        Relay relay;
+        const auto k1 = crypto::SigningKey::generate(), k2 = crypto::SigningKey::generate(), k3 = crypto::SigningKey::generate();
+        std::vector<std::unique_ptr<GroupCallManager>> m;
+        const std::vector<std::string> who = {"a@local", "b@local", "c@local"};
+        const crypto::SigningKey *keys[] = {&k1, &k2, &k3};
+        std::atomic<int> mediaSeen{0};
+        for (std::size_t i = 0; i < who.size(); ++i) {
+            GroupCallManager::Callbacks cb;
+            const auto self = who[i];
+            cb.sendV2 = [&relay, self](const std::string &peer, const json &s, const std::string &gcid) {
+                auto signal = s;
+                if (!gcid.empty()) signal["group_call_id"] = gcid; // как callSignalFromV2 для попарных сигналов
+                relay.send(self, peer, signal);
+                return true;
+            };
+            cb.onMediaState = [&](const std::string &, bool, bool video) {
+                if (video) ++mediaSeen;
+            };
+            m.push_back(std::make_unique<GroupCallManager>(self, keys[i], stub, cb));
+        }
+        for (std::size_t i = 0; i < who.size(); ++i) {
+            auto *mgr = m[i].get();
+            relay.attach(who[i], [mgr](const std::string &from, const json &s) { mgr->handleV2Signal(from, s); });
+        }
+        m[0]->startCall("0192f1a2-2222-7000-8000-000000000001", who, "audio", "v2g:00aa", "Семья");
+        check(waitFor([&] { return m[0]->connectedCount() == 2 && m[1]->connectedCount() == 2 && m[2]->connectedCount() == 2; }, 5000),
+              "групповой mesh: у каждого из трёх два соединения");
+        m[1]->sendMediaState(false, true);
+        check(waitFor([&] { return mediaSeen.load() >= 2; }), "spec 024: остальные видят выключенную камеру участника");
+        for (auto &x : m) x->leave();
+    }
+    std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

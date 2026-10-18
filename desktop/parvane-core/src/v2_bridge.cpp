@@ -4,7 +4,7 @@
 #include <chrono>
 #include <vector>
 
-#include "parvane/transport.h"
+#include "parvane/itransport.h"
 #include "parvane/v2_link.h"
 
 namespace parvane::v2 {
@@ -145,16 +145,11 @@ json twofaToV1(const json &resp) {
 }
 
 // «v1, если жив»: обслуживает v1-шифрование и каталог v1-устройств.
-bool prefersV1(const std::string &subject) {
-    return subject == "identity.prekeys.publish" || subject == "identity.prekeys.fetch"
-        || subject == "identity.user.setkey" || subject == "identity.device.list"
-        || subject == "identity.device.revoke";
-}
 
 } // namespace
 
-BridgeTransport::BridgeTransport(BridgeConfig cfg, std::unique_ptr<ITransport> inner)
-: cfg_(std::move(cfg)), inner_(std::move(inner)), token_(cfg_.token) {}
+BridgeTransport::BridgeTransport(BridgeConfig cfg)
+: cfg_(std::move(cfg)), token_(cfg_.token) {}
 
 BridgeTransport::~BridgeTransport() {
     if (control_) control_->close();
@@ -277,7 +272,6 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
             // Свежий пароль нужен методу v2 всегда — тумблер настроек спрашивает его
             // и при включении, и при выключении 2FA. Запрос без пароля (прежний
             // вызов) — по v1, пока оно живо; без v1 сервер ответит REAUTH_REQUIRED.
-            if (password.empty() && inner_) return false;
             reauth(c, password);
             out = twofaToV1(c.call("identity.account.set_2fa", json{{"enabled", p["enabled"]}, {"password", password}}));
         }
@@ -322,7 +316,8 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
                                        {"identity_key", ""}, {"one_time_available", 0},
                                        {"updated_at", int2(d, "lastSeenMs", "last_seen_ms") / 1000},
                                        {"created_at", int2(d, "createdMs", "created_ms") / 1000},
-                                       {"legacy", flag2(d, "legacy", "legacy")}});
+                                       {"legacy", flag2(d, "legacy", "legacy")},
+                                       {"client_kind", str2(d, "clientKind", "client_kind")}});
             }
         }
         out = json{{"ok", true}, {"devices", devices}};
@@ -404,59 +399,44 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
 
 std::string BridgeTransport::request(const std::string &subject, const std::string &payload,
                                      std::int64_t timeout_ms) {
-    if (inner_ && prefersV1(subject)) return inner_->request(subject, payload, timeout_ms);
+    (void)timeout_ms;
     std::string reply;
     try {
         const auto raw = json::parse(payload, nullptr, false);
         if (viaV2(subject, raw.is_discarded() ? json::object() : raw, &reply)) return reply;
     } catch (const V2Error &e) {
-        // Отказ метода — ответ прежнего вида. Потеря связи и «версия v2 клиента
-        // ниже минимальной» — при живом v1 запрос идёт прежним путём, иначе
-        // ошибка транспорта.
+        // Отказ метода — ответ прежнего вида; потеря связи и «версия клиента ниже минимальной» — ошибка
+        // транспорта.
         const bool transport = e.code() == "ERROR_CODE_UNAVAILABLE" || e.code() == "ERROR_CODE_UPGRADE_REQUIRED";
         if (!transport) return fail(errorText(subject, e.code())).dump();
-        if (!inner_) {
-            throw TransportError(e.code() == "ERROR_CODE_UPGRADE_REQUIRED"
-                ? std::string("gateway: upgrade_required") : "gateway v2: " + subject + ": недоступен");
-        }
+        throw TransportError(e.code() == "ERROR_CODE_UPGRADE_REQUIRED"
+            ? std::string("gateway: upgrade_required") : "gateway v2: " + subject + ": недоступен");
     } catch (const TransportError &) {
-        if (!inner_) throw;
+        throw;
     } catch (const std::exception &e) {
-        if (!inner_) throw TransportError(std::string("gateway v2: ") + subject + ": " + e.what());
+        throw TransportError(std::string("gateway v2: ") + subject + ": " + e.what());
     }
-    if (inner_) return inner_->request(subject, payload, timeout_ms);
-    throw TransportError("gateway: v1 отключён (" + subject + ")");
+    // Протокола v1 нет (spec 029): запрос без метода v2 — ошибка вызывающего
+    throw TransportError("gateway: нет метода v2 для " + subject);
 }
 
 void BridgeTransport::publish(const std::string &subject, const std::string &payload) {
-    if (inner_) inner_->publish(subject, payload);
+    (void)subject;
+    (void)payload;
 }
 
 void BridgeTransport::requestMany(const std::string &subject, const std::string &payload,
                                   const ReplyHandler &onReply, std::int64_t timeout_ms) {
-    if (inner_) {
-        inner_->requestMany(subject, payload, onReply, timeout_ms);
-        return;
-    }
-    throw TransportError("gateway: v1 отключён (" + subject + ")");
+    (void)payload;
+    (void)onReply;
+    (void)timeout_ms;
+    throw TransportError("gateway: нет метода v2 для " + subject);
 }
 
 void BridgeTransport::subscribe(const std::string &subject, Handler handler) {
-    {
-        std::lock_guard<std::mutex> lk(handlersMu_);
-        handlers_.emplace(subject, handler);
-    }
-    if (inner_) inner_->subscribe(subject, std::move(handler));
+    std::lock_guard<std::mutex> lk(handlersMu_);
+    handlers_.emplace(subject, std::move(handler));
 }
 
-void BridgeTransport::deliver(const std::string &subject, const std::string &payload) {
-    std::vector<Handler> targets;
-    {
-        std::lock_guard<std::mutex> lk(handlersMu_);
-        const auto range = handlers_.equal_range(subject);
-        for (auto it = range.first; it != range.second; ++it) targets.push_back(it->second);
-    }
-    for (const auto &h : targets) h(subject, payload);
-}
 
 } // namespace parvane::v2

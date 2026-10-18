@@ -163,12 +163,16 @@ void Authorizations::reload() {
 			if (!d.current) {
 				g_parvaneDeviceByHash.emplace(e.hash, d.deviceId);
 			}
-			const auto legacy = d.deviceId.isEmpty();
+			// Вид клиента (spec 027): как в web — «Parvane Web/Desktop/Android»
+			const auto kind = (d.clientKind == u"web"_q) ? u"Web"_q
+				: (d.clientKind == u"android"_q) ? u"Android"_q
+				: (d.clientKind == u"desktop"_q) ? u"Desktop"_q
+				: QString();
 			e.name = d.current
 				? Core::App().settings().deviceModel()
-				: legacy ? u"Parvane Desktop (legacy)"_q
-				: u"Parvane %1"_q.arg(d.deviceId.left(8));
-			e.info = u"Parvane (one-time prekeys: %1)"_q.arg(d.oneTimeAvailable);
+				: kind.isEmpty() ? u"Parvane %1"_q.arg(d.deviceId.left(8))
+				: u"Parvane "_q + kind;
+			e.info = kind.isEmpty() ? u"Parvane"_q : (u"Parvane "_q + kind);
 			e.system = d.current ? u"this device"_q : QString();
 			e.platform = QString();
 			e.activeTime = TimeId(d.updatedAt);

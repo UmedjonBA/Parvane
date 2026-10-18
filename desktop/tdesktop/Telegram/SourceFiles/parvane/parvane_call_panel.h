@@ -19,6 +19,9 @@ void NativeCallConnected();
 // SAS-код (эмодзи сверки голосом).
 void NativeCallSas(const std::string &sas);
 
+// Собеседник выключил/включил микрофон или камеру (spec 024, сигнал `media`).
+void NativeCallPeerMediaState(bool audioMuted, bool videoMuted);
+
 // Закрыть экран звонка (Ended). Видео рендерится нативным Calls::VideoBubble из
 // общих видео-треков (parvane_call_video.h) — отдельного API кадров не нужно.
 void CloseNativeCallPanel();

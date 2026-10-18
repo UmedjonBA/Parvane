@@ -1,50 +1,26 @@
 // Parvane fork: реализация group_call_manager.h.
 #include "parvane/group_call_manager.h"
-#include "parvane/topics.h"
 
 #include <utility>
 
 namespace parvane {
 
-// Префикс адреса для сигналинга ГРУППОВЫХ звонков — чтобы они шли в отдельный
-// инбокс call.user.gcall:<addr> и НЕ пересекались с 1-на-1 CallManager (иначе
-// per-pair инвайты группового звонка вызывали бы ложный «входящий звонок»).
-namespace {
-constexpr auto kGPrefix = parvane::topics::GroupCallRoutePrefix;
-std::string gAddr(const std::string &a) { return std::string(kGPrefix) + a; }
-} // namespace
-
-GroupCallManager::GroupCallManager(CallClient &calls, std::string selfAddr,
-                                   std::string token, const crypto::SigningKey *key,
+GroupCallManager::GroupCallManager(std::string selfAddr, const crypto::SigningKey *key,
                                    std::function<std::unique_ptr<MediaBackend>()> makeBackend,
                                    Callbacks cb)
-    : calls_(calls),
-      self_(std::move(selfAddr)),
-      token_(std::move(token)),
+    : self_(std::move(selfAddr)),
       key_(key),
       makeBackend_(std::move(makeBackend)),
       cb_(std::move(cb)) {}
 
-void GroupCallManager::start() {
-    // Отдельный инбокс call.user.gcall:<self> — не пересекается с 1-на-1. `from`
-    // в relayed-сигнале уже реальный (шард проверяет from == JWT), префикс — лишь
-    // в `to` для маршрутизации.
-    calls_.onSignal(gAddr(self_), [this](std::string from, CallSignalIn sig) {
-        handleSignal(from, sig);
-    });
-}
-
 void GroupCallManager::sendTo(const std::string &peer, const json &signal) {
-    if (cb_.sendV2) {
-        std::string gcid;
-        if (signal.value("type", std::string()) != "group_invite") {
-            std::lock_guard<std::mutex> lk(sendMutex_);
-            gcid = sendGcid_;
-        }
-        if (cb_.sendV2(peer, signal, gcid)) return;
+    if (!cb_.sendV2) return;
+    std::string gcid;
+    if (signal.value("type", std::string()) != "group_invite") {
+        std::lock_guard<std::mutex> lk(sendMutex_);
+        gcid = sendGcid_;
     }
-    // from — реальный (шард сверяет с JWT); префикс только в `to` (инбокс).
-    calls_.send(self_, gAddr(peer), token_, signal);
+    (void)cb_.sendV2(peer, signal, gcid);
 }
 
 void GroupCallManager::handleV2Signal(const std::string &from, const json &signal) {
@@ -107,12 +83,14 @@ void GroupCallManager::joinMesh(const std::string &gcid,
 
 void GroupCallManager::startCall(const std::string &groupCallId,
                                  const std::vector<std::string> &participants,
-                                 const std::string &media) {
-    // Разослать приглашение всем другим участникам (в групповой инбокс).
+                                 const std::string &media,
+                                 const std::string &group,
+                                 const std::string &title) {
+    // Разослать приглашение всем другим участникам.
     for (const auto &peer : participants) {
         if (peer != self_) {
             sendTo(peer, groupInviteSignal(groupCallId, participants,
-                                           media.empty() ? "audio" : media));
+                                           media.empty() ? "audio" : media, group, title));
         }
     }
     std::lock_guard<std::mutex> lk(mutex_);
@@ -123,6 +101,10 @@ void GroupCallManager::handleSignal(const std::string &from, const CallSignalIn 
     if (sig.type == "group_invite") {
         std::lock_guard<std::mutex> lk(mutex_);
         joinMesh(sig.group_call_id, sig.participants, sig.media);
+        return;
+    }
+    if (sig.type == "media") {
+        if (cb_.onMediaState) cb_.onMediaState(from, sig.audio_muted, sig.video_muted);
         return;
     }
     std::lock_guard<std::mutex> lk(mutex_);
@@ -164,6 +146,17 @@ int GroupCallManager::connectedCount() {
         }
     }
     return n;
+}
+
+void GroupCallManager::sendMediaState(bool audioMuted, bool videoMuted) {
+    std::vector<std::pair<std::string, std::string>> targets;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        for (auto &[peer, s] : peers_) {
+            if (s) targets.emplace_back(peer, s->callId());
+        }
+    }
+    for (const auto &[peer, id] : targets) sendTo(peer, mediaStateSignal(id, audioMuted, videoMuted));
 }
 
 std::string GroupCallManager::groupCallId() {

@@ -39,9 +39,6 @@ class ITransport;
 
 namespace Parvane {
 
-// URL шины из PARVANE_NATS_URL (или дефолт). Реального соединения не открывает.
-[[nodiscard]] QString NatsUrl();
-
 // Снимок шины для воркеров (транспорт/self/JWT под g_sessionMutex). Транспорт
 // не владеющий — как в fetchWebpage; nullptr, если сессии нет.
 struct BusSnapshot {
@@ -80,13 +77,18 @@ struct IssueResult {
 	bool twofaRequired = false;
 	QString loginToken;
 	QString telegramBot;
+	// spec 027: аккаунт ждёт удаления (пароль верен, токена нет) — срок, мс; вход с cancelDeletion его отменяет.
+	qint64 deletionAtMs = 0;
+	// spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый).
+	QString address;
 };
 
 // БЛОКИРУЮЩИЙ запрос identity.token.issue. Звать с воркер-потока (crl::async).
 [[nodiscard]] IssueResult Issue(
 	const QString &user,
 	const QString &password,
-	const QString &loginToken = QString());
+	const QString &loginToken = QString(),
+	bool cancelDeletion = false);
 
 // Результат identity.user.register (регистрация отделена от логина, Фаза 0).
 struct RegisterResult {
@@ -180,9 +182,9 @@ struct ConfirmResult {
 // Устройства аккаунта (Settings → Devices): identity.device.list / revoke.
 struct DeviceEntry {
 	QString deviceId;
-	QString signingKey;
+	QString clientKind; // web | desktop | android (spec 027)
 	qint64 updatedAt = 0;
-	int oneTimeAvailable = 0;
+	qint64 createdAt = 0;
 	bool current = false;
 };
 void ListDevices(Fn<void(std::vector<DeviceEntry>)> done);
@@ -585,11 +587,5 @@ void LeaveGroupCall();
 // Вызывается в конце конструктора Main::Session. Запоминает сессию (weak),
 // запускает первичный приём и debug-autosend (PARVANE_AUTOSEND=peer@server:текст).
 void AfterSessionReady(not_null<Main::Session*> session);
-
-// Один цикл приёма (Фаза 3c): sync с шины на воркере → инъекция НОВЫХ входящих
-// сообщений в Data::Session активной сессии (на main). Дедуп по UUID. Безопасно
-// звать с любого потока; если сессии нет — no-op. Триггерится onDelivered и при
-// старте сессии.
-void PumpReceive();
 
 } // namespace Parvane

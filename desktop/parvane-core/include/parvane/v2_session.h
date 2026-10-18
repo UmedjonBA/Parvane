@@ -295,17 +295,6 @@ public:
     // Подписаться на эфемерные каналы собеседников (их присутствие и «печатает»).
     void watchPeers(const std::vector<std::string> &peers);
 
-    // ── переходный период: v1-устройства (FR-054/FR-058) ──
-    // Подписанный список v1-устройств пользователя: device_id → identity-ключ
-    // (base64 без дополнения). Свой — по своему журналу, чужой — по кэшу
-    // журнала собеседника (после isV2Peer).
-    [[nodiscard]] std::map<std::string, std::string> legacyDevices(const std::string &user);
-    // Опубликовать (первое v2-устройство) или сократить свой список по каталогу
-    // v1 `[{deviceId, identity, signing}]`. Список только сокращается.
-    void syncLegacySet(const json &catalog);
-    // v1 SendPayload с копиями для v1-устройств — `msg.deliver_legacy`. Бросает.
-    void deliverLegacy(const std::string &messageId, const json &sendPayload);
-
     // Синхронизировать инбокс сейчас (блокирующий; на потоке вызывающего).
     void syncNow();
 

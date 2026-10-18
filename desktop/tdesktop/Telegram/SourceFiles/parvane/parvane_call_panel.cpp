@@ -18,6 +18,7 @@
 #include "base/debug_log.h"
 #include "base/event_filter.h"        // close → hangup
 #include "styles/style_calls.h"
+#include "lang/lang_keys.h"
 
 #include <QtGui/QWindow>
 #include <QtCore/QEvent>
@@ -46,6 +47,7 @@ public:
 
 	void setConnected();
 	void setSas(const QString &sas);
+	void setPeerMediaState(bool audioMuted, bool videoMuted);
 
 private:
 	void layout();
@@ -57,6 +59,7 @@ private:
 	Ui::FlatLabel _name;
 	Ui::FlatLabel _status;
 	Ui::FlatLabel _fingerprint;
+	Ui::FlatLabel _remoteMuted; // «микрофон собеседника отключён» (spec 024)
 	Ui::CallButton _mute;
 	Ui::CallButton _hangup;
 	Ui::CallButton _answer;   // входящий: «Ответить» (зелёная)
@@ -65,6 +68,7 @@ private:
 	std::unique_ptr<Calls::VideoBubble> _remoteVideo; // видео собеседника (нативно)
 	std::unique_ptr<Calls::VideoBubble> _localVideo;  // своя камера (self-preview)
 	rpl::variable<bool> _muted = false;
+	QString _peerName;
 	QTimer _timer;
 	bool _video = false;
 	bool _incoming = false;
@@ -76,6 +80,7 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 : _name(_gl.widget(), st::callName)
 , _status(_gl.widget(), st::callStatus)
 , _fingerprint(_gl.widget(), st::callStatus)
+, _remoteMuted(_gl.widget(), st::callRemoteAudioMute)
 , _mute(_gl.widget(), st::callMicrophoneMute, &st::callMicrophoneUnmute)
 , _hangup(_gl.widget(), st::callHangup)
 , _answer(_gl.widget(), st::callAnswer)
@@ -102,6 +107,8 @@ CallPanel::CallPanel(not_null<PeerData*> peer, bool video, bool incoming)
 	});
 
 	_name.setText(peer->name());
+	_peerName = peer->shortName();
+	_remoteMuted.hide();
 	_status.setText(_incoming
 		? (_video ? QString::fromUtf8("Входящий видеозвонок")
 			: QString::fromUtf8("Входящий звонок"))
@@ -215,6 +222,8 @@ void CallPanel::layout() {
 	_name.move(0, bodyTop + body.nameTop);
 	_status.resizeToWidth(w);
 	_status.move(0, bodyTop + body.statusTop);
+	_remoteMuted.resizeToWidth(w);
+	_remoteMuted.move(0, bodyTop + body.statusTop + _status.height() + st::callRemoteAudioMuteSkip);
 	// SAS-код (сверка) — верхняя часть панели.
 	_fingerprint.resizeToWidth(w);
 	_fingerprint.move(0, 16);
@@ -265,6 +274,13 @@ void CallPanel::setSas(const QString &sas) {
 	layout();
 }
 
+void CallPanel::setPeerMediaState(bool audioMuted, bool videoMuted) {
+	(void)videoMuted; // выключенная камера видна по самому видео (трек неактивен)
+	_remoteMuted.setText(tr::lng_call_microphone_off(tr::now, lt_user, _peerName));
+	_remoteMuted.setVisible(audioMuted);
+	layout();
+}
+
 std::unique_ptr<CallPanel> g_panel;
 
 } // namespace
@@ -291,6 +307,12 @@ void NativeCallConnected() {
 void NativeCallSas(const std::string &sas) {
 	const auto s = QString::fromStdString(sas);
 	crl::on_main([s] { if (g_panel) g_panel->setSas(s); });
+}
+
+void NativeCallPeerMediaState(bool audioMuted, bool videoMuted) {
+	crl::on_main([audioMuted, videoMuted] {
+		if (g_panel) g_panel->setPeerMediaState(audioMuted, videoMuted);
+	});
 }
 
 void CloseNativeCallPanel() {
