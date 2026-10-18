@@ -54,6 +54,7 @@ start_b() {
     PARVANE_LOGIN_RATE_IP=100000 \
     PARVANE_REGISTER_RATE_IP=100000 \
     PARVANE_REQUIRE_DEVICE_PROOF=1 \
+    PARVANE_CALL_V2_RINGING_MAX=100000 \
     "$@" \
     "$ROOT/backend/target/debug/$shard" >>"$B_ROOT/$shard.log" 2>&1 &
   B_PIDS+=("$!")

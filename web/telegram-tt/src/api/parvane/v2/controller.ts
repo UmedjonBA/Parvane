@@ -1540,6 +1540,10 @@ export function createV2Controller(deps: Deps) {
       if (authorDomain) {
         if (wire.file_id && !wire.blob_domain) wire.blob_domain = authorDomain;
         if (wire.pack_ref?.file_id && !wire.pack_ref.blob_domain) wire.pack_ref.blob_domain = authorDomain;
+        // Приглашение в папку другого сервера: папка — на сервере пригласившего (его домен, не со слов письма)
+        if (wire.kind === 'cloud_invite' && wire.container?.domain?.toLowerCase() === authorDomain) {
+          void cloud.noteRemoteDomain(authorDomain);
+        }
       }
       // Режим L2 группы задаёт только запись её журнала (`set_privacy_mode`)
       if (c.chat_mode && isGroup) return;

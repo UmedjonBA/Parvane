@@ -92,6 +92,9 @@ export const CLOUD_DOMAIN = 'cloud.v1';
 const OUTBOX_RECORD = 'cloud-outbox:';
 // Блобы стёртых файлов, уже удалённые с сервера этим устройством
 const GC_RECORD = 'cloud-gc';
+// Серверы, приглашавшие в совместные папки (spec 028): папка живёт у владельца, и её видно только в
+// списке его сервера — до подключения домен известен лишь из приглашения
+const REMOTE_DOMAINS_RECORD = 'cloud-remote-domains';
 const GC_KEEP = 2000;
 const SYNC_ACTIVE_MS = 8000;
 const SYNC_IDLE_MS = 60000;
@@ -304,19 +307,55 @@ export function createCloudSync(deps: Deps) {
     deps.onChanged();
   }
 
+  let remoteDomains: Set<string> | undefined;
+
+  async function loadRemoteDomains() {
+    remoteDomains = remoteDomains
+      || new Set((await deps.loadRecord<string[]>(REMOTE_DOMAINS_RECORD).catch(() => undefined)) || []);
+    return remoteDomains;
+  }
+
+  /** Приглашение в папку другого сервера: спрашивать список и у него (домен — сервер пригласившего). */
+  async function noteRemoteDomain(domain: string) {
+    const d = domain.toLowerCase();
+    if (!d || d === (deps.serverDomain() || '').toLowerCase()) return;
+    const set = await loadRemoteDomains();
+    if (set.has(d)) return;
+    set.add(d);
+    await deps.saveRecord(REMOTE_DOMAINS_RECORD, [...set]).catch(() => undefined);
+  }
+
   /** Контейнеры аккаунта на сервере (свои и по грантам) → подключить новые. */
   async function discover() {
     const client = deps.client();
     const pv = deps.pv();
     if (!client || !pv) return;
-    const resp = await call('id', 'domain.container.list', encode('domain.container.list', { domain: CLOUD_DOMAIN }));
-    const list = JSON.parse(pv.decodeMethodResponse('domain.container.list', resp)) as {
-      containers?: { ref?: { id?: string }; owner?: { address?: string } }[];
-    };
+    // Свой сервер и серверы чужих папок (spec 028): папка видна только в списке сервера владельца
+    const own = (deps.serverDomain() || '').toLowerCase();
+    const domains = new Set<string>([own, ...await loadRemoteDomains()]);
+    engineContainers().forEach((c) => domains.add(domainOf(c.id).toLowerCase()));
+    liveEntries().filter((e) => e.domain).forEach((e) => domains.add(e.domain.toLowerCase()));
     const onServer = new Map<string, string>();
-    (list.containers || []).forEach((c) => {
-      if (c.ref?.id) onServer.set(b64ToHex(c.ref.id), c.owner?.address || '');
-    });
+    const listed = new Set<string>();
+    for (const domain of domains) {
+      let resp: Uint8Array;
+      try {
+        const body = encode('domain.container.list', { domain: CLOUD_DOMAIN });
+        resp = await call('id', 'domain.container.list', body, domain);
+      } catch (e) {
+        // Свой сервер обязан ответить; недоступный чужой — папки его не считаем отозванными
+        if (domain === own) throw e;
+        deps.log(`облако: список папок сервера ${domain} не получен (${errorCode(e)})`);
+        continue;
+      }
+      listed.add(domain);
+      const list = JSON.parse(pv.decodeMethodResponse('domain.container.list', resp)) as {
+        containers?: { ref?: { id?: string }; owner?: { address?: string } }[];
+      };
+      (list.containers || []).forEach((c) => {
+        if (c.ref?.id) onServer.set(b64ToHex(c.ref.id), c.owner?.address || '');
+      });
+    }
     const self = deps.self();
     const entries = deps.stateEntries();
     for (const [id, owner] of onServer) {
@@ -332,7 +371,7 @@ export function createCloudSync(deps: Deps) {
     }
     // Подключённый чужой контейнер пропал из списка — доступ отозван
     engineContainers().forEach((c) => {
-      if (c.owner !== self && !onServer.has(c.id)) dropContainer(c.id);
+      if (c.owner !== self && !onServer.has(c.id) && listed.has(domainOf(c.id).toLowerCase())) dropContainer(c.id);
     });
     ownOnServer = [...onServer.values()].filter((owner) => owner === self).length;
     isDiscovered = true;
@@ -996,6 +1035,7 @@ export function createCloudSync(deps: Deps) {
     share,
     unshare,
     answerInvite,
+    noteRemoteDomain,
     leave,
     removeFolder,
     rotate,
