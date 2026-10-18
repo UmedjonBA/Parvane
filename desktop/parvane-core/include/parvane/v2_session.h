@@ -68,6 +68,7 @@ using nlohmann::json;
 class AnonPlanner;
 class Client;
 class Connection;
+class L2Ticker;
 class StateSession;
 
 struct SessionConfig {
@@ -163,6 +164,9 @@ public:
     // тебе уже писал, D-08) либо "failed"; пусто — отправлен.
     bool sendCallSignal(const std::string &peer, const json &signal,
                         const std::string &groupCallId = std::string(), std::string *error = nullptr);
+    // spec 024: сигнал своим другим устройствам — «принят/отклонён здесь» (только reject/hangup): они
+    // перестают звонить. false — сигнал не завершение или сессия не готова.
+    bool sendCallSignalOwn(const json &signal);
 
     // LINK-1 v2. Старое устройство: материал гранта движка для своего нового
     // устройства (пусто — сессия не готова или у устройства нет SSK). Блокирующий.
@@ -187,7 +191,9 @@ public:
                            std::size_t chunkBytes = 192 * 1024);
     // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение
     // на запрос (≤ 256 чанков). Бросает.
-    std::string downloadBlobCap(const std::string &fileId, const std::string &capability32);
+    // domain — сервер блоба (spec 028: вложение собеседника с другого сервера); пусто — свой.
+    std::string downloadBlobCap(const std::string &fileId, const std::string &capability32,
+                                const std::string &domain = std::string());
 
     // ── новое устройство без других устройств (T130, FR-066) ──
     // Сессия ждёт линковку (needsLinking), а других устройств аккаунта нет.
@@ -433,6 +439,9 @@ public:
     // запись журнала состояния; остальные свои устройства скрывают сообщения
     // не позже untilMs (поле снимка "cleared": [{"peer","cleared_until_ms"}]).
     void stateChatCleared(const std::string &address, std::int64_t untilMs);
+    // Любая запись журнала состояния по имени WASM `PvState` (`callSet` — история звонков, D-08;
+    // `cloudContainerSet`, `plannerContainerSet`, …): записи уходят на сервер. false — журнал недоступен.
+    bool stateCall(const std::string &name, const json &args);
 
 private:
     using Task = std::function<void()>;
@@ -544,6 +553,18 @@ private:
     json publicCallLocked(const std::string &method, const json &request);
     void shareInvitesLocked(const std::string &hex);
     void absorbSharedInvitesLocked();
+    // Режим L2 (spec 025): такты отправки, свои анонимные соединения такта, запас пустышек.
+    std::string tickSend(const std::string &method, const std::string &body, const std::string &dest);
+    std::optional<std::pair<std::string, std::string>> takeCover();
+    void scheduleL2PeerRefresh();
+    std::unique_ptr<L2Ticker> ticker_;
+    std::atomic<bool> l2Active_{false};
+    bool l2PeerRefreshScheduled_ = false;
+    std::mutex tickMu_;
+    std::unique_ptr<AnonPlanner> tickPlanner_;
+    std::map<std::uint64_t, std::unique_ptr<Connection>> tickConns_;
+    std::mutex coverMu_;
+    std::deque<std::pair<std::string, std::string>> covers_;
     bool recoveryUpkeepScheduled_ = false;
     std::optional<json> described_;
     std::chrono::steady_clock::time_point telegramCheckAt_{};

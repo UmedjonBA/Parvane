@@ -6,6 +6,7 @@ import { exportEncryptedBackup, importEncryptedBackup, type KeyBackupPayload } f
 import {
   deriveBundleKey, type KeyBundlePayload, openKeyBundle, pickRecoveryKey, sealKeyBundle,
 } from './v2/keyBundle';
+import { callSignalFromV2, callSignalToV2, cleanGroupTitle, groupInviteFromV2 } from './v2/callMap';
 
 // Общие векторы форматов клиентов (spec 029, FR-006): файл, который пишет web, обязан читать desktop
 // (`parvane-core/tests/webcompat_tests.cpp`), и наоборот. Вектор web создаётся, если его нет (или
@@ -98,5 +99,64 @@ describe('Векторы форматов клиентов: копия ключ�
     };
     const desktopKey = (await deriveBundleKey(desktop.recoveryKey, desktop.address))!;
     expect(await openKeyBundle(desktopKey, desktop.address, unb64(desktop.sealed))).toEqual(desktop.payload);
+  });
+});
+
+// Сигналы звонка v1 ↔ v2 (CALL-1, CALL-2, spec 024): desktop обязан отображать так же
+const CALL_ID = '0192f1a2-1111-7000-8000-000000000001';
+const CALL_CASES_TO_V2: unknown[] = [
+  { type: 'invite', call_id: CALL_ID, media: 'video', sdp: 'v=0 offer' },
+  { type: 'answer', call_id: CALL_ID, sdp: 'v=0 answer' },
+  { type: 'reject', call_id: CALL_ID, reason: 'busy' },
+  { type: 'reject', call_id: CALL_ID, reason: 'answered_elsewhere' },
+  { type: 'reject', call_id: CALL_ID, reason: 'media_failed' },
+  { type: 'reject', call_id: CALL_ID },
+  { type: 'hangup', call_id: CALL_ID },
+  { type: 'media', call_id: CALL_ID, audio_muted: true, video_muted: false },
+  {
+    type: 'group_invite', group_call_id: CALL_ID, participants: ['a@x', 'b@x'], media: 'audio',
+    group: 'v2g:0011aabb', title: '  Семья\u202e  \n дача ',
+  },
+];
+const CALL_CASES_FROM_V2: unknown[] = [
+  { call_id: 'AZLxohERcACAAAAAAAAAAQ==', offer: { sdp: 'v=0', video: true } },
+  { call_id: 'AZLxohERcACAAAAAAAAAAQ==', hangup: { reason: 'HANGUP_REASON_ANSWERED_ELSEWHERE' } },
+  { call_id: 'AZLxohERcACAAAAAAAAAAQ==', hangup: { reason: 6 } },
+  { call_id: 'AZLxohERcACAAAAAAAAAAQ==', hangup: { reason: 'HANGUP_REASON_MISSED' } },
+  { call_id: 'AZLxohERcACAAAAAAAAAAQ==', mediaState: { audioMuted: false, videoMuted: true } },
+  {
+    call_id: 'AZLxohERcACAAAAAAAAAAQ==',
+    group_ring: { participants: [{ address: 'a@x' }], video: false, group: { domain: 'x', id: 'ABGqsw==' }, title: 'Дача' },
+  },
+];
+const TITLE_CASES = ['Обычное', ' много   пробелов ', 'бидиу\u202eкод', 'перевод\nстроки', 'я'.repeat(300)];
+
+describe('Векторы форматов клиентов: сигналы звонка', () => {
+  it('web пишет таблицу отображения; desktop сверяет её в webcompat_tests', () => {
+    const file = vectorPath('calls-web.json');
+    if (REGEN || !existsSync(file)) {
+      mkdirSync(DIR, { recursive: true });
+      writeFileSync(file, `${JSON.stringify({
+        domain: 'vec.example',
+        toV2: CALL_CASES_TO_V2.map((input) => ({
+          input, output: callSignalToV2(input as never, undefined, 'vec.example') ?? null,
+        })),
+        fromV2: CALL_CASES_FROM_V2.map((input) => ({
+          input, output: groupInviteFromV2(input as never) ?? callSignalFromV2(input as never) ?? null,
+        })),
+        titles: TITLE_CASES.map((input) => ({ input, output: cleanGroupTitle(input) })),
+      }, undefined, 2)}\n`);
+    }
+    const table = JSON.parse(readFileSync(file, 'utf8')) as {
+      domain: string; toV2: { input: unknown; output: unknown }[]; fromV2: { input: unknown; output: unknown }[];
+      titles: { input: string; output: string }[];
+    };
+    table.toV2.forEach(({ input, output }) => {
+      expect(callSignalToV2(input as never, undefined, table.domain) ?? null).toEqual(output);
+    });
+    table.fromV2.forEach(({ input, output }) => {
+      expect(groupInviteFromV2(input as never) ?? callSignalFromV2(input as never) ?? null).toEqual(output);
+    });
+    table.titles.forEach(({ input, output }) => expect(cleanGroupTitle(input)).toBe(output));
   });
 });

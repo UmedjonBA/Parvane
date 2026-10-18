@@ -40,7 +40,11 @@ inline constexpr const char *kGroupPrefix = "v2g:";
 // сигнал внутри группового звонка несёт `group_call_id` (в v1 — отдельный
 // инбокс gcall:<адрес>): его задаёт `groupCallId`, а `callSignalFromV2` кладёт
 // в v1-JSON поле "group_call_id".
-[[nodiscard]] std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId = std::string());
+// domain — свой домен: группа в приглашении в групповой звонок (CALL-2: название группы у адресата).
+[[nodiscard]] std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId = std::string(),
+                                                 const std::string &domain = std::string());
+// Название группы из сигнала (как web cleanGroupTitle): без управляющих и bidi-символов, ≤ 255 байт UTF-8.
+[[nodiscard]] std::string cleanGroupTitle(const std::string &title);
 [[nodiscard]] std::optional<json> callSignalFromV2(const json &v2);
 // MessageRef {"op_id": base64}.
 [[nodiscard]] json ref(const std::string &uuid);

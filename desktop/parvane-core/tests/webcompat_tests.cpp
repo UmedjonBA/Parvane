@@ -12,6 +12,7 @@
 #include "parvane/crypto.h"
 #include "parvane/keybackup.h"
 #include "parvane/keybundle.h"
+#include "parvane/v2_content.h"
 
 using nlohmann::json;
 
@@ -132,10 +133,41 @@ static void keyBundle() {
     check(json::parse(kb::withFreshLog(R"({"log":"aa"})", std::string("\x01\xff", 2)))["log"] == "01ff", "keybundle: свежий журнал (hex)");
 }
 
+static void calls() {
+    const auto t = json::parse(readText(vectorPath("calls-web.json")), nullptr, false);
+    check(t.is_object(), "звонки: вектор web есть");
+    if (!t.is_object()) return;
+    const auto domain = t.value("domain", std::string());
+    int i = 0;
+    for (const auto &c : t["toV2"]) {
+        const auto got = parvane::v2::callSignalToV2(c["input"], std::string(), domain);
+        const auto want = c["output"];
+        check((got ? *got : json(nullptr)) == want, "звонки v1→v2 #" + std::to_string(i++) + " " + c["input"].value("type", std::string()),
+              got ? got->dump() : "null");
+    }
+    i = 0;
+    for (const auto &c : t["fromV2"]) {
+        auto got = parvane::v2::callSignalFromV2(c["input"]);
+        const auto want = c["output"];
+        check((got ? *got : json(nullptr)) == want, "звонки v2→v1 #" + std::to_string(i++), got ? got->dump() : "null");
+    }
+    bool titles = true;
+    for (const auto &c : t["titles"]) {
+        const auto got = parvane::v2::cleanGroupTitle(c.value("input", std::string()));
+        if (got != c.value("output", std::string())) {
+            titles = false;
+            std::printf("    название: «%s» → «%s», web «%s»\n", c.value("input", std::string()).c_str(), got.c_str(),
+                        c.value("output", std::string()).c_str());
+        }
+    }
+    check(titles, "звонки: название группы очищается как web (CALL-2)");
+}
+
 int main() {
     std::printf("=== parvane-core: векторы форматов web ↔ desktop (%s) ===\n", PARVANE_VECTORS_DIR);
     keyBackup();
     keyBundle();
+    calls();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

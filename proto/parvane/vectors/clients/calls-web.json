@@ -1,0 +1,264 @@
+{
+  "domain": "vec.example",
+  "toV2": [
+    {
+      "input": {
+        "type": "invite",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "media": "video",
+        "sdp": "v=0 offer"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "offer": {
+          "sdp": "v=0 offer",
+          "video": true
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "answer",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "sdp": "v=0 answer"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "answer": {
+          "sdp": "v=0 answer"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "busy"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_BUSY"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "answered_elsewhere"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_ANSWERED_ELSEWHERE"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "media_failed"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_FAILED"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_DECLINED"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "hangup",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001"
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_NORMAL"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "media",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "audio_muted": true,
+        "video_muted": false
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "media_state": {
+          "audio_muted": true,
+          "video_muted": false
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "group_invite",
+        "group_call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "participants": [
+          "a@x",
+          "b@x"
+        ],
+        "media": "audio",
+        "group": "v2g:0011aabb",
+        "title": "  Семья‮  \n дача "
+      },
+      "output": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "group_ring": {
+          "participants": [
+            {
+              "address": "a@x"
+            },
+            {
+              "address": "b@x"
+            }
+          ],
+          "video": false,
+          "group": {
+            "domain": "vec.example",
+            "id": "ABGquw=="
+          },
+          "title": "Семья дача"
+        }
+      }
+    }
+  ],
+  "fromV2": [
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "offer": {
+          "sdp": "v=0",
+          "video": true
+        }
+      },
+      "output": {
+        "type": "invite",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "media": "video",
+        "sdp": "v=0"
+      }
+    },
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_ANSWERED_ELSEWHERE"
+        }
+      },
+      "output": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "answered_elsewhere"
+      }
+    },
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": 6
+        }
+      },
+      "output": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "answered_elsewhere"
+      }
+    },
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "hangup": {
+          "reason": "HANGUP_REASON_MISSED"
+        }
+      },
+      "output": {
+        "type": "reject",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "reason": "declined"
+      }
+    },
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "mediaState": {
+          "audioMuted": false,
+          "videoMuted": true
+        }
+      },
+      "output": {
+        "type": "media",
+        "call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "audio_muted": false,
+        "video_muted": true
+      }
+    },
+    {
+      "input": {
+        "call_id": "AZLxohERcACAAAAAAAAAAQ==",
+        "group_ring": {
+          "participants": [
+            {
+              "address": "a@x"
+            }
+          ],
+          "video": false,
+          "group": {
+            "domain": "x",
+            "id": "ABGqsw=="
+          },
+          "title": "Дача"
+        }
+      },
+      "output": {
+        "type": "group_invite",
+        "group_call_id": "0192f1a2-1111-7000-8000-000000000001",
+        "participants": [
+          "a@x"
+        ],
+        "media": "audio",
+        "group": "v2g:0011aab3",
+        "title": "Дача"
+      }
+    }
+  ],
+  "titles": [
+    {
+      "input": "Обычное",
+      "output": "Обычное"
+    },
+    {
+      "input": " много   пробелов ",
+      "output": "много пробелов"
+    },
+    {
+      "input": "бидиу‮код",
+      "output": "бидиу код"
+    },
+    {
+      "input": "перевод\nстроки",
+      "output": "перевод строки"
+    },
+    {
+      "input": "яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя",
+      "output": "яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя"
+    }
+  ]
+}

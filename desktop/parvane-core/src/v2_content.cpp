@@ -295,6 +295,7 @@ constexpr auto kReasonDeclined = "HANGUP_REASON_DECLINED";
 constexpr auto kReasonBusy = "HANGUP_REASON_BUSY";
 constexpr auto kReasonMissed = "HANGUP_REASON_MISSED";
 constexpr auto kReasonFailed = "HANGUP_REASON_FAILED";
+constexpr const char *kReasonAnsweredElsewhere = "HANGUP_REASON_ANSWERED_ELSEWHERE";
 
 // Поле proto3-JSON: движок отдаёт camelCase, принимает и snake_case.
 const json *field(const json &j, const char *camel, const char *snake) {
@@ -305,7 +306,48 @@ const json *field(const json &j, const char *camel, const char *snake) {
 
 } // namespace
 
-std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId) {
+std::string cleanGroupTitle(const std::string &title) {
+    // Как web cleanGroupTitle: управляющие и bidi-символы — пробелом, пробелы схлопнуты, ≤ 255 байт UTF-8
+    const auto seqLen = [](unsigned char c) -> std::size_t {
+        return c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 1;
+    };
+    std::string plain;
+    for (std::size_t i = 0; i < title.size();) {
+        const auto c = static_cast<unsigned char>(title[i]);
+        auto len = seqLen(c);
+        if (i + len > title.size()) len = 1;
+        const auto ch = title.substr(i, len);
+        bool bad = c < 0x20 || c == 0x7f;
+        if (len == 2 && c == 0xC2 && static_cast<unsigned char>(ch[1]) < 0xA0) bad = true; // U+0080..U+009F
+        if (len == 3 && c == 0xE2) {
+            const auto b1 = static_cast<unsigned char>(ch[1]), b2 = static_cast<unsigned char>(ch[2]);
+            const int cp = ((c & 0x0f) << 12) | ((b1 & 0x3f) << 6) | (b2 & 0x3f);
+            bad = bad || cp == 0x200e || cp == 0x200f || (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+        }
+        plain += bad ? std::string(" ") : ch;
+        i += len;
+    }
+    std::string squeezed;
+    for (const char ch : plain) {
+        if (ch == ' ') {
+            if (!squeezed.empty() && squeezed.back() != ' ') squeezed.push_back(' ');
+        } else {
+            squeezed.push_back(ch);
+        }
+    }
+    while (!squeezed.empty() && squeezed.back() == ' ') squeezed.pop_back();
+    std::string out;
+    for (std::size_t i = 0; i < squeezed.size();) {
+        const auto len = seqLen(static_cast<unsigned char>(squeezed[i]));
+        if (out.size() + len > 255) break;
+        out += squeezed.substr(i, len);
+        i += len;
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallId, const std::string &domain) {
     if (!v1.is_object()) return std::nullopt;
     const auto type = v1.value("type", std::string());
     if (type == "group_invite") {
@@ -317,9 +359,12 @@ std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallI
                 if (p.is_string()) participants.push_back(json{{"address", p.get<std::string>()}});
             }
         }
-        return json{{"call_id", id},
-                    {"group_ring", {{"participants", participants},
-                                    {"video", v1.value("media", std::string()) == "video"}}}};
+        json ring{{"participants", participants}, {"video", v1.value("media", std::string()) == "video"}};
+        // CALL-2: группа и её название — в приглашении (у адресата во входящем звонке)
+        const auto group = v1.value("group", std::string());
+        if (!domain.empty() && isGroupAddress(group)) ring["group"] = {{"domain", domain}, {"id", hexToB64(groupHex(group))}};
+        if (const auto title = cleanGroupTitle(v1.value("title", std::string())); !title.empty()) ring["title"] = title;
+        return json{{"call_id", id}, {"group_ring", ring}};
     }
     const auto callId = uuidToB64(v1.value("call_id", std::string()));
     if (callId.empty()) return std::nullopt;
@@ -340,9 +385,13 @@ std::optional<json> callSignalToV2(const json &v1, const std::string &groupCallI
     } else if (type == "reject") {
         const auto reason = v1.contains("reason") && v1["reason"].is_string() ? v1["reason"].get<std::string>() : std::string();
         out["hangup"] = {{"reason", reason == "busy" ? kReasonBusy
-            : (reason == "auth_failed" || reason == "media_failed") ? kReasonFailed : kReasonDeclined}};
+            : (reason == "auth_failed" || reason == "media_failed") ? kReasonFailed
+            : reason == "answered_elsewhere" ? kReasonAnsweredElsewhere : kReasonDeclined}};
     } else if (type == "hangup") {
         out["hangup"] = {{"reason", kReasonNormal}};
+    } else if (type == "media") {
+        // spec 024: камера/микрофон выключены — собеседнику
+        out["media_state"] = {{"audio_muted", v1.value("audio_muted", false)}, {"video_muted", v1.value("video_muted", false)}};
     } else {
         return std::nullopt;
     }
@@ -375,8 +424,21 @@ std::optional<json> callSignalFromV2(const json &v2) {
                 if (!address.empty()) participants.push_back(address);
             }
         }
-        return json{{"type", "group_invite"}, {"group_call_id", *callId}, {"participants", participants},
+        json invite{{"type", "group_invite"}, {"group_call_id", *callId}, {"participants", participants},
                     {"media", ring->value("video", false) ? "video" : "audio"}};
+        if (auto g = ring->find("group"); g != ring->end() && g->is_object()) {
+            if (const auto id = b64decode(g->value("id", std::string())); id && !id->empty() && id->size() <= 64) {
+                static const char *hexd = "0123456789abcdef";
+                std::string hex;
+                for (const unsigned char ch : *id) {
+                    hex.push_back(hexd[ch >> 4]);
+                    hex.push_back(hexd[ch & 15]);
+                }
+                invite["group"] = groupAddress(hex);
+            }
+        }
+        if (const auto title = cleanGroupTitle(ring->value("title", std::string())); !title.empty()) invite["title"] = title;
+        return invite;
     }
     if (auto it = v2.find("offer"); it != v2.end() && it->is_object()) {
         return withGroupCall(json{{"type", "invite"}, {"call_id", *callId}, {"sdp", it->value("sdp", std::string())},
@@ -393,15 +455,24 @@ std::optional<json> callSignalFromV2(const json &v2) {
         if (const auto *idx = field(*it, "sdpMlineIndex", "sdp_mline_index"); idx && idx->is_number_integer()) c.mlineIndex = idx->get<int>();
         return withGroupCall(json{{"type", "ice"}, {"call_id", *callId}, {"candidate", iceCandidateJson(c)}}, v2);
     }
+    if (const auto *media = field(v2, "mediaState", "media_state"); media && media->is_object()) {
+        const auto flag = [&](const char *camel, const char *snake) {
+            const auto *v = field(*media, camel, snake);
+            return v && v->is_boolean() && v->get<bool>();
+        };
+        return withGroupCall(json{{"type", "media"}, {"call_id", *callId}, {"audio_muted", flag("audioMuted", "audio_muted")},
+                                  {"video_muted", flag("videoMuted", "video_muted")}}, v2);
+    }
     if (auto it = v2.find("hangup"); it != v2.end() && it->is_object()) {
         std::string reason;
         if (auto r = it->find("reason"); r != it->end()) {
             if (r->is_string()) {
                 reason = r->get<std::string>();
             } else if (r->is_number_integer()) {
-                static const char *const kByNumber[] = {"", kReasonNormal, kReasonDeclined, kReasonBusy, kReasonMissed, kReasonFailed};
+                static const char *const kByNumber[] = {"", kReasonNormal, kReasonDeclined, kReasonBusy, kReasonMissed, kReasonFailed,
+                                                        kReasonAnsweredElsewhere};
                 const auto n = r->get<int>();
-                if (n >= 0 && n < 6) reason = kByNumber[n];
+                if (n >= 0 && n < 7) reason = kByNumber[n];
             }
         }
         if (reason == kReasonBusy) return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "busy"}}, v2);
@@ -410,6 +481,9 @@ std::optional<json> callSignalFromV2(const json &v2) {
         }
         if (reason == kReasonFailed) {
             return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "media_failed"}}, v2);
+        }
+        if (reason == kReasonAnsweredElsewhere) {
+            return withGroupCall(json{{"type", "reject"}, {"call_id", *callId}, {"reason", "answered_elsewhere"}}, v2);
         }
         return withGroupCall(json{{"type", "hangup"}, {"call_id", *callId}}, v2);
     }

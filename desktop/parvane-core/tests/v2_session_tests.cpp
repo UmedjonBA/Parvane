@@ -471,6 +471,31 @@ int main() {
 
     groupScenario(tcp, dir, suffix, alice, bob);
 
+    // spec 025: режим L2 — записи уходят тактами (5 ± 2 с), пустые такты — пустышки себе, кадры одной длины
+    try {
+        alice.s->setDirectL2(bob.user, true, v2::newUuidV7());
+    } catch (const std::exception &e) {
+        check(false, "L2: включён в личном чате", e.what());
+    }
+    check(!alice.s->presenceAllowed(), "L2: присутствие не публикуется, пока режим включён");
+    {
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            alice.s->sendContent(bob.user, *v2::toV2(parvane::textContent("l2-tick-" + suffix)), v2::newUuidV7());
+        } catch (const std::exception &e) {
+            check(false, "L2: отправка тактом", e.what());
+        }
+        const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        check(waited >= 2500, "L2: запись ждала такта (" + std::to_string(waited) + " мс)");
+        check(textArrived(bob.inbox, "l2-tick-" + suffix, alice.user, nullptr, 30000), "L2: сообщение тактом дошло");
+    }
+    try {
+        alice.s->setDirectL2(bob.user, false, v2::newUuidV7());
+    } catch (const std::exception &e) {
+        check(false, "L2: выключен", e.what());
+    }
+    check(alice.s->presenceAllowed(), "L2: режим выключен — присутствие снова публикуется");
+
     // FR-040: приватность — на сервере; устройство при запуске читает её.
     check(bob.s->setPrivacy(true, true), "FR-040: приватность сохранена на сервере");
     check(bob.inbox.waitSession([](const json &e) { return e.value("type", std::string()) == "privacySaved"; }, 5000),

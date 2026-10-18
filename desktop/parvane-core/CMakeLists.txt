@@ -67,6 +67,7 @@ add_library(parvane_core STATIC
     src/storecrypt.cpp
     src/keybackup.cpp
     src/keybundle.cpp
+    src/l2_ticker.cpp
     src/map_tiles.cpp
     src/pack_archive.cpp
     src/messenger_client.cpp
@@ -180,6 +181,10 @@ if (PARVANE_CORE_BUILD_PROBE)
     target_compile_definitions(parvane_protocol_vectors_tests PRIVATE
         PARVANE_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors")
 
+    # Такты режима L2 (spec 025), без стека
+    add_executable(parvane_l2_ticker_tests tests/l2_ticker_tests.cpp)
+    target_link_libraries(parvane_l2_ticker_tests PRIVATE parvane_core)
+
     # Общие векторы форматов web ↔ desktop (spec 029): копия ключей, линковка, записи доменов
     add_executable(parvane_webcompat_tests tests/webcompat_tests.cpp)
     target_link_libraries(parvane_webcompat_tests PRIVATE parvane_core)
@@ -201,6 +206,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME call COMMAND parvane_call_tests)
     add_test(NAME crypto COMMAND parvane_crypto_tests)
     add_test(NAME webcompat COMMAND parvane_webcompat_tests)
+    add_test(NAME l2_ticker COMMAND parvane_l2_ticker_tests)
     add_test(NAME linking COMMAND parvane_linking_tests)
     add_test(NAME storecrypt COMMAND parvane_storecrypt_tests)
     add_test(NAME blobcrypt COMMAND parvane_blobcrypt_tests)

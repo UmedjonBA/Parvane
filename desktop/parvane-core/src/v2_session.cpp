@@ -3,6 +3,7 @@
 
 #include "parvane/crypto.h"
 #include "parvane/keybundle.h"
+#include "parvane/l2_ticker.h"
 #include "parvane/storecrypt.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_control.h"
@@ -158,11 +159,29 @@ bool Session::writeStateFile(const std::string &name, const std::string &data) c
 void Session::start() {
     if (worker_.joinable()) return;
     stopping_ = false;
+    if (!ticker_) {
+        ticker_ = std::make_unique<L2Ticker>(L2Ticker::Deps{
+            [this] { return l2Active_.load(); },
+            [this](const std::string &method, const std::string &body, const std::string &dest) { return tickSend(method, body, dest); },
+            [this] { return takeCover(); },
+            [this](const std::string &m) { log(m); }});
+    }
+    ticker_->start();
     worker_ = std::thread(&Session::workerLoop, this);
     post([this] { connectOnce(); });
 }
 
 void Session::stop() {
+    // Такты — первыми: ждущие отправки записи уходят сразу
+    l2Active_ = false;
+    if (ticker_) ticker_->stop();
+    {
+        std::lock_guard<std::mutex> lk(tickMu_);
+        for (auto &[id, c] : tickConns_) {
+            if (c) c->close();
+        }
+        tickConns_.clear();
+    }
     stopping_ = true;
     {
         std::lock_guard<std::mutex> lk(qMu_);
@@ -679,9 +698,107 @@ std::string Session::groupDestLocked(const std::string &hex) {
     return d == domain_ ? std::string() : d;
 }
 
+// Режим L2 (spec 025): кадры такта одной длины — личное, групповое, пустышка и адресаты неотличимы
+namespace {
+constexpr std::uint32_t kL2FramePad = 1024;
+constexpr std::int64_t kL2PeerRefreshMs = 60000;
+constexpr std::size_t kCoverPool = 3;
+} // namespace
+
+std::string Session::tickSend(const std::string &method, const std::string &body, const std::string &dest) {
+    std::lock_guard<std::mutex> lk(tickMu_);
+    if (!tickPlanner_) tickPlanner_ = std::make_unique<AnonPlanner>();
+    const auto now = nowMs();
+    for (const auto id : tickPlanner_->expired(now)) {
+        if (const auto it = tickConns_.find(id); it != tickConns_.end()) {
+            if (it->second) it->second->close();
+            tickConns_.erase(it);
+        }
+        tickPlanner_->closed(id);
+    }
+    const auto plan = tickPlanner_->assign(method, body, now);
+    Connection *c = nullptr;
+    if (const auto it = tickConns_.find(plan.conn); it != tickConns_.end()) c = it->second.get();
+    if (plan.open || !c || !c->isOpen()) {
+        if (c) c->close();
+        auto fresh = std::make_unique<Connection>(cfg_.gatewayUrl);
+        fresh->open(kChannelAnonymous, cfg_.clientVersion);
+        c = fresh.get();
+        tickConns_[plan.conn] = std::move(fresh);
+    }
+    try {
+        auto resp = c->request(method, body, 15000, dest, l2Active_ ? kL2FramePad : 0);
+        if (plan.closeAfter) {
+            c->close();
+            tickConns_.erase(plan.conn);
+            tickPlanner_->closed(plan.conn);
+        }
+        return resp;
+    } catch (...) {
+        if (plan.closeAfter || !c->isOpen()) {
+            c->close();
+            tickConns_.erase(plan.conn);
+            tickPlanner_->closed(plan.conn);
+        }
+        throw;
+    }
+}
+
+// Пустышка себе на пустой такт: запас готовится, когда движок свободен (вызывающий submit может держать его)
+std::optional<std::pair<std::string, std::string>> Session::takeCover() {
+    std::unique_lock<std::recursive_mutex> engine(engineMu_, std::try_to_lock);
+    if (engine.owns_lock() && client_ && ready_) {
+        std::lock_guard<std::mutex> lk(coverMu_);
+        while (covers_.size() < kCoverPool) {
+            try {
+                const auto req = parseRequest(client_->call("prepareCover"));
+                covers_.emplace_back(req.method, req.body);
+            } catch (const std::exception &) {
+                break;
+            }
+        }
+    }
+    std::lock_guard<std::mutex> lk(coverMu_);
+    if (covers_.empty()) return std::nullopt;
+    auto cover = covers_.front();
+    covers_.pop_front();
+    return cover;
+}
+
+// В L2 журналы всех собеседников перечитываются разом и по таймеру: по запросам не видно, чей чат открыт
+void Session::scheduleL2PeerRefresh() {
+    postDelayed(kL2PeerRefreshMs, [this] {
+        if (!l2Active_) {
+            l2PeerRefreshScheduled_ = false;
+            return;
+        }
+        std::vector<std::string> known;
+        {
+            std::lock_guard<std::mutex> lk(peersMu_);
+            for (const auto &[address, info] : peers_) {
+                if (info.v2) known.push_back(address);
+            }
+        }
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            for (const auto &address : known) {
+                try {
+                    satisfyLocked(EngineError(json{{"need", {{"kind", "peerLog"}, {"user", address}}}}.dump()));
+                } catch (const std::exception &) {
+                }
+            }
+            persistLocked();
+        }
+        flush();
+        scheduleL2PeerRefresh();
+    });
+}
+
 std::string Session::call(bool anon, const std::string &method, const std::string &body, const std::string &destIn) {
     // Свой домен — обычный запрос (gateway обслуживает его и с dest, но без лишнего поля в кадре)
     const auto dest = destIn == domain_ ? std::string() : destIn;
+    // Режим L2: доставка записей — тактами
+    if (anon && ticker_ && l2Active_ && L2Ticker::isTicked(method)) return ticker_->submit(method, body, dest);
     // Чтения identity (журналы, бандлы, жетоны) при кратком UNAVAILABLE сервера
     // (identity v2: «database is locked» под одновременной нагрузкой) — повтор,
     // иначе отправка падала целиком (verify_protocol_v2.sh, 29 сен 2026).
@@ -875,6 +992,8 @@ bool Session::isV2Peer(const std::string &address) {
         std::lock_guard<std::mutex> lk(peersMu_);
         const auto it = peers_.find(address);
         if (it != peers_.end()) {
+            // В L2 журналы перечитываются только по таймеру (по запросам видно, чей чат открыт)
+            if (it->second.v2 && l2Active_) return true;
             const auto ttl = it->second.v2 ? std::chrono::steady_clock::duration(kPeerPositiveTtl)
                                            : std::chrono::steady_clock::duration(kPeerNegativeTtl);
             if (now - it->second.at < ttl) return it->second.v2;
@@ -1078,7 +1197,7 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
     // Участнику группового звонка без известного ключа доступа — сперва обмен
     // ключами (T185); не вышло — прежним путём (v1-инбокс, пока v1 жив)
     if (group && !acquirePeerKey(peer)) return false;
-    const auto v2Signal = callSignalToV2(signal, groupCallId);
+    const auto v2Signal = callSignalToV2(signal, groupCallId, domain_);
     if (!v2Signal) {
         if (group) return false;
         log("сигнал звонка по v2 не выражается — не отправлен (D-13)");
@@ -1112,6 +1231,21 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
     return true;
 }
 
+bool Session::sendCallSignalOwn(const json &signal) {
+    const auto v2Signal = callSignalToV2(signal);
+    if (!v2Signal || !v2Signal->contains("hangup")) return false;
+    try {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!ready_ || !client_) return false;
+        runRequestsLocked(client_->call("prepareCallOwn", json{{"signalJson", *v2Signal}}));
+        persistLocked();
+        return true;
+    } catch (const std::exception &e) {
+        log(std::string("сигнал звонка своим устройствам не отправлен: ") + e.what());
+        return false;
+    }
+}
+
 // ── блобы вложений по capability (T131, FR-062, D-08) ──────────────────────
 
 std::string Session::uploadBlob(const std::string &bytes, const std::string &capability32, std::size_t chunkBytes) {
@@ -1143,7 +1277,8 @@ std::string Session::uploadBlob(const std::string &bytes, const std::string &cap
     return fileId;
 }
 
-std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32) {
+std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32, const std::string &domainIn) {
+    const auto domain = domainIn == domain_ ? std::string() : domainIn;
     if (capability32.size() != 32) throw std::runtime_error("v2: capability");
     if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     constexpr std::uint32_t kBatch = 256;
@@ -1159,7 +1294,7 @@ std::string Session::downloadBlobCap(const std::string &fileId, const std::strin
                           json{{"file_id", fileId},
                                {"capability", toBase64(capability32)},
                                {"first_chunk", first},
-                               {"chunk_count", kBatch}}));
+                               {"chunk_count", kBatch}}), 60000, domain);
         conn.close();
         const auto meta = decodeMessage("parvane.cloud.v1.DownloadCapResponse", got.body);
         total = meta.value("chunks", std::uint32_t(0));
@@ -1906,6 +2041,15 @@ void Session::noteL2StateLocked(bool force) {
         for (const auto &g : active["groups"]) {
             if (g.is_string()) chats.push_back(groupAddress(g.get<std::string>()));
         }
+    }
+    const bool l2On = !client_->presenceAllowed();
+    if (l2On != l2Active_.exchange(l2On)) {
+        if (ticker_) ticker_->refresh();
+        if (l2On && !l2PeerRefreshScheduled_) {
+            l2PeerRefreshScheduled_ = true;
+            scheduleL2PeerRefresh();
+        }
+        log(std::string("режим L2: такты ") + (l2On ? "включены" : "выключены"));
     }
     json ev{{"type", "l2State"}, {"chats", chats}, {"mine", mine},
             {"presenceAllowed", client_->presenceAllowed()}};
@@ -3025,6 +3169,21 @@ void Session::stateChatCleared(const std::string &address, std::int64_t untilMs)
         pushAppendsLocked();
     } catch (const std::exception &e) {
         log(std::string("очистка чата в журнале состояния: ") + e.what());
+    }
+}
+
+bool Session::stateCall(const std::string &name, const json &args) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!openStateLocked()) return false;
+    try {
+        for (const auto &b : state_->call(name, args)) {
+            if (b.is_string()) pendingAppends_.push_back(fromBase64(b.get<std::string>()));
+        }
+        pushAppendsLocked();
+        return true;
+    } catch (const std::exception &e) {
+        log("запись журнала состояния (" + name + "): " + e.what());
+        return false;
     }
 }
 
