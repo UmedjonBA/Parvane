@@ -119,10 +119,55 @@ static void planKey() {
           "ключ — одна и та же строка для одной записи в разных объектах состояния");
 }
 
+
+// ── «Принять» / «Отклонить» (web `taskOffers.ts`, `addTaskOfferToPlan`) ─────────────────────────────────────
+static void respond() {
+    using nlohmann::json;
+    const auto content = json{{"kind", "task_offer"}, {"name", "Созвон по проекту"}, {"day", "2026-10-21"},
+                              {"start", "14:30"}, {"minutes", 45}, {"text", "📅 …"}};
+    const auto event = OfferFields::fromContent(content);
+    check(offerKind(event) == "event", "день и время без шагов и срока — событие");
+    auto task = event;
+    task.steps = {"Подготовить вопросы"};
+    check(offerKind(task) == "task", "с шагами — задание");
+    auto due = event;
+    due.due = "2026-10-25";
+    check(offerKind(due) == "task", "со сроком — задание");
+    auto badTime = event;
+    badTime.start = "25:00";
+    check(offerKind(badTime) == "task", "негодное время — задание");
+    check(offerEventEnd("14:30", 45) == "15:15" && offerEventEnd("14:30", std::nullopt) == "15:30"
+              && offerEventEnd("23:30", 120) == "23:59" && offerEventEnd("09:00", 0) == "10:00",
+          "конец события: длительность, час по умолчанию, не позже 23:59");
+
+    const auto UUID = std::string("0a1b2c3d-0000-4000-8000-00000000abcd");
+    const auto ev = offerPlanChange(UUID, "bob@local", event, "unused");
+    check(ev.contains("event") && ev["event"]["id"] == UUID && ev["event"]["end"] == "15:15"
+              && ev["event"]["day"] == "2026-10-21" && ev["event"]["repeat"].is_null() && ev["event"]["color"] == 0,
+          "событие: id карточки, конец, день, без повтора");
+    const auto tk = offerPlanChange(UUID, "bob@local", task, "t-new");
+    check(tk.contains("task") && tk["task"]["id"] == "t-new" && tk["task"]["source"]["chat"] == "bob@local"
+              && tk["task"]["source"]["opId"] == "0a1b2c3d00004000800000000000abcd"
+              && tk["task"]["steps"][0]["text"] == "Подготовить вопросы" && tk["task"]["steps"][0]["isDone"] == false
+              && tk["task"]["minutes"] == 45 && tk["task"]["status"] == "queue",
+          "задание: source с uuid без дефисов, шаги, оценка");
+    auto bare = OfferFields::fromContent(json{{"name", "Прочитать главу"}});
+    const auto bt = offerPlanChange(UUID, "bob@local", bare, "t2");
+    check(bt["task"]["minutes"].is_null() && bt["task"]["day"] == "" && bt["task"]["due"] == "",
+          "без оценки — null, без дня и срока — пустые строки");
+    check(taskResponseText("Созвон", true, "event") == "✅ Принято: событие «Созвон»"
+              && taskResponseText("Отчёт", false, "task") == "❌ Отклонено: задание «Отчёт»",
+          "текст ответа как в web");
+    check(OfferFields::fromContent(json{{"name", "x"}, {"minutes", 0}}).minutes == std::nullopt
+              && OfferFields::fromContent(json::array()).name.empty(),
+          "нулевая оценка — нет оценки; не объект — пусто");
+}
+
 int main() {
     std::printf("=== parvane-core task offer tests (без стека) ===\n");
     card();
     planKey();
+    respond();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

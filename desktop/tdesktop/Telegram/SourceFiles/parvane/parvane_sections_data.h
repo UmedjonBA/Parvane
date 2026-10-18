@@ -116,6 +116,9 @@ void SetWindowVisible(bool visible);
 void OnEngineEvent(const json &event);
 // Сессия сменилась (вход, выход, смена аккаунта): модули сбрасываются и подключаются заново
 void OnSessionChanged();
+// Хуки сценариев PARVANE_AUTOPLANNER/NOTES/CLOUD (parvane_sections_hooks.cpp); зовётся после подъёма сессии
+void StartSectionHooks();
+
 // Выход из приложения: дослать правки и остановить поток
 void Shutdown();
 

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_chat.h"
 
+#include "parvane/parvane_scheme_picker.h"
+
 #include "settings/settings_common_session.h"
 
 #include "base/timer_rpl.h"
@@ -2575,19 +2577,9 @@ void SetupThemeOptions(
 
 	Ui::AddSkip(container, st::settingsPrivacySkip);
 
-	const auto title = Ui::AddSubsectionTitle(
-		container,
-		tr::lng_settings_themes());
-	if (highlights) {
-		highlights->push_back({ u"chat/themes"_q, {
-			title.get(),
-			SubsectionTitleHighlight(),
-		} });
-	}
-
-	Ui::AddSkip(container, st::settingsThemesTopSkip);
-	SetupDefaultThemes(&controller->window(), container, highlights);
-	Ui::AddSkip(container);
+	// Parvane fork (spec 029, T057): вместо встроенных тем tdesktop — цветовые схемы web «Пространство»
+	// (каждая — своя встроенная тема; светлая/тёмная — ночным режимом)
+	Parvane::SetupSchemePicker(container);
 }
 
 void SetupCloudThemes(

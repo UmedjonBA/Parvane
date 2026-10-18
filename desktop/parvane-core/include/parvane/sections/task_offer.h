@@ -62,4 +62,29 @@ std::optional<OfferInPlan> parseOfferInPlanKey(const std::optional<std::string> 
 // «В плане · открыть»: задание — экран `today`, событие — `calendar`
 std::string offerPlannerView(const std::string &kind);
 
+// ── «Принять» / «Отклонить» (web `api/parvane/taskOffers.ts`, `addTaskOfferToPlan` в `messages.ts`) ──────────
+
+// Поля карточки из содержимого `task_offer` (`name`, `description`, `steps`, `day`, `start`, `minutes`, `due`)
+struct OfferFields {
+    std::string name;
+    std::string description;
+    std::vector<std::string> steps;
+    std::optional<std::string> day;
+    std::optional<std::string> start;
+    std::optional<int> minutes;
+    std::optional<std::string> due;
+    static OfferFields fromContent(const nlohmann::json &content);
+};
+
+// Вид карточки (`getTaskOfferKind`): `event` — есть день и время начала, нет шагов и срока; иначе `task`
+std::string offerKind(const OfferFields &offer);
+// Конец события (`getOfferEventEnd`): начало + длительность (час, если её нет), не позже 23:59
+std::string offerEventEnd(const std::string &start, std::optional<int> minutes);
+// Правка движка «Плана» по «Принять»: событие с id карточки (`buildOfferEvent`) либо задача с `source`
+// {chat, opId — uuid без дефисов}; `newTaskId` — id новой задачи (у события не нужен)
+nlohmann::json offerPlanChange(const std::string &uuid, const std::string &chat, const OfferFields &offer,
+                               const std::string &newTaskId);
+// Текст ответа для клиентов без планировщика (`taskResponseText`, поле `text` содержимого `task_response`)
+std::string taskResponseText(const std::string &name, bool accepted, const std::string &kind);
+
 } // namespace parvane::sections::planner

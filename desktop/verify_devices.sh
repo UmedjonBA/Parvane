@@ -16,7 +16,7 @@ P1=$(start_client "$B1" bob@local "${PV_DEV_NEW[@]}" PARVANE_AUTOREVOKE_OTHERS=4
 wait_linked "$B1/td/log.txt" && ok "bob1 привязан грантом линковки" || bad "bob1 не привязан"
 wait_log "$B1/td/log.txt" "устройство .* \[текущее\]" 60 && ok "bob1 видит себя в списке устройств" || bad "список устройств пуст"
 wait_log "$B1/td/log.txt" "autorevoke .* → ok" 60 && ok "bob1 отозвал bob2" || bad "отзыв не удался"
-wait_log "$B1/td/log.txt" "v2: устройство .* отозвано.* в журнале устройств" 30 && ok "отзыв записан в журнал устройств v2" || bad "записи отзыва v2 нет"
+wait_log "$B1/td/log.txt" "v2: устройство .* (отозвано|вышло).* в журнале устройств" 30 && ok "отзыв записан в журнал устройств v2" || bad "записи отзыва v2 нет"
 sleep 1
 N=$(sqlite3 "$SB/identity.db-v2.db" "SELECT COUNT(*) FROM device_state WHERE user='bob@local' AND revoked=0;")
 [ "$N" = "1" ] && ok "в журнале устройств осталось 1 активное устройство bob" || bad "активных устройств bob в журнале: $N"

@@ -1,0 +1,7 @@
+lng_parvane_color_scheme
+Colour scheme
+Цветовая схема
+
+lng_parvane_color_scheme_hint
+Changes colours only, in the messenger and in every section. Light or dark follows the night mode setting.
+Меняются только цвета — в мессенджере и во всех разделах. Светлая или тёмная — по ночному режиму.

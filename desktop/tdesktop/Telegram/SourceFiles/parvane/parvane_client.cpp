@@ -85,6 +85,8 @@
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
 #include "parvane/parvane_sections_data.h"
+#include <parvane/sections/planner_engine.h>
+#include <parvane/sections/task_offer.h>
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
 #include <parvane/cloud_client.h>    // parvane-core
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
@@ -112,6 +114,7 @@
 #include "core/application.h"        // Core::App().settings().getSoundPath
 #include "window/window_controller.h" // Parvane: тост rate_limited
 #include "window/window_session_controller.h" // Parvane: открыть чат группы (spec 004)
+#include "history/history_item_reply_markup.h" // кнопки карточек (spec 029)
 #include "api/api_chat_invite.h" // Parvane: CheckChatInvite по ссылке группы (spec 004)
 #include "api/api_invite_links.h" // Parvane: перечитать ссылки по нотису (spec 004)
 #include "api/api_blocked_peers.h" // Parvane: блок-лист из журнала состояния (T132)
@@ -1117,7 +1120,8 @@ void AttachBlobCap(parvane::json &target, const std::string &fileId) {
 		const std::vector<std::string> &recipients,
 		int timeoutMs) {
 	if (recipients.size() == 1 && recipients[0] == kBlobCapabilityMark) {
-		if (const auto s = V2Ready()) {
+		// Файл сразу после входа: ждём подъёма сессии, как отправка текста (V2ReadyForSend)
+		if (const auto s = V2ReadyForSend()) {
 			auto capability = std::string(32, '\0');
 			base::RandomFill(capability.data(), capability.size());
 			const auto fileId = s->uploadBlob(bytes, capability);
@@ -6144,6 +6148,20 @@ QHash<QString, QString> g_cardContent;
 		const parvane::json &content,
 		bool out) {
 	const auto kind = parvane::contentKind(content);
+	if (kind == "task_offer" && !out) {
+		// Задание в чат (spec 011, TASK-1): «В план» / «В календарь» и «Отклонить»; запись плана — по карточке
+		g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		const auto offer = parvane::sections::planner::OfferFields::fromContent(content);
+		const auto event = (parvane::sections::planner::offerKind(offer) == "event");
+		return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
+			MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
+				CardButton(event
+					? tr::lng_parvane_offer_to_calendar(tr::now)
+					: tr::lng_parvane_offer_to_plan(tr::now), u"pv:offeryes:"_q + uuid),
+				CardButton(tr::lng_parvane_offer_decline(tr::now), u"pv:offerno:"_q + uuid),
+			})),
+		}));
+	}
 	if (kind != "mod_report" || out) {
 		return std::nullopt;
 	}
@@ -12736,6 +12754,56 @@ void SendBugReport(not_null<Main::Session*> session, const QString &description,
 	});
 }
 
+// Кнопки карточки после решения: принято — «В плане · открыть», отклонено — «Отклонено» без действия
+void SetOfferDecided(not_null<HistoryItem*> item, const QString &uuid, bool accepted) {
+	const auto button = accepted
+		? CardButton(tr::lng_parvane_offer_in_plan_open(tr::now), u"pv:offeropen:"_q + uuid)
+		: CardButton(tr::lng_parvane_offer_declined(tr::now), u"pv:none:"_q + uuid);
+	const auto markup = MTPReplyMarkup(MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
+		MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({ button })),
+	})));
+	item->updateReplyMarkup(HistoryMessageMarkupData(&markup));
+}
+
+// Ответ на задание (`task_response`) собеседнику: строка в чате и сообщение ему (у своего задания и в «Избранном» —
+// без ответа, как web)
+void SendOfferResponse(not_null<HistoryItem*> item, const QString &uuid, const parvane::json &content, bool accepted) {
+	const auto session = &item->history()->session();
+	const auto peer = item->history()->peer;
+	const auto self = SelfAddress();
+	const auto address = peer->isChat()
+		? GroupIdForChat(peer)
+		: peer->isUser() ? AddressForUser(peer->asUser()) : QString();
+	if (address.isEmpty() || address == self) {
+		return;
+	}
+	const auto offer = parvane::sections::planner::OfferFields::fromContent(content);
+	const auto response = parvane::json{
+		{ "kind", "task_response" },
+		{ "offer", uuid.toStdString() },
+		{ "accepted", accepted },
+		{ "text", parvane::sections::planner::taskResponseText(
+			offer.name,
+			accepted,
+			parvane::sections::planner::offerKind(offer)) },
+	};
+	parvane::StoredMessage own;
+	own.id = parvane::newUuidV7();
+	own.from = self.toStdString();
+	own.to = address.toStdString();
+	own.ts = QDateTime::currentSecsSinceEpoch();
+	own.content = response;
+	own.reply_to = uuid.toStdString();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_ownSentUuids.insert(own.id);
+	}
+	injectOnMain(session, { own }, /*live=*/false);
+	HistoryAppend(own);
+	sendInnerAsync(address, response, own.id);
+	LOG(("Parvane: ответ на задание %1 → %2: %3").arg(uuid, address, accepted ? u"принято"_q : u"отклонено"_q));
+}
+
 bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 	const auto text = QString::fromUtf8(data);
 	if (!text.startsWith(u"pv:"_q)) {
@@ -12746,6 +12814,72 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 	const auto uuid = parts.mid(2).join(':');
 	const auto content = parvane::json::parse(g_cardContent.value(uuid).toStdString(), nullptr, false);
 	if (!content.is_object()) {
+		return true;
+	}
+	if (action == u"offeryes"_q || action == u"offerno"_q || action == u"offeropen"_q) {
+		const auto chat = item->history()->peer;
+		const auto chatAddress = chat->isChat()
+			? GroupIdForChat(chat)
+			: chat->isUser() ? AddressForUser(chat->asUser()) : QString();
+		if (action == u"offeropen"_q) {
+			ShowSection(Section::Calendar);
+			return true;
+		}
+		const auto itemId = item->fullId();
+		const auto itemSession = base::make_weak(&item->history()->session());
+		if (action == u"offerno"_q) {
+			SetOfferDecided(item, uuid, false);
+			SendOfferResponse(item, uuid, content, false);
+			return true;
+		}
+		// «Принять»: запись в «План» (дубль не создаётся), затем ответ собеседнику
+		const auto uuidStd = uuid.toStdString();
+		const auto chatStd = chatAddress.toStdString();
+		const auto taskId = parvane::newUuidV7();
+		Sections::Ask<std::string>([=](Sections::Workers &w) -> std::string {
+			namespace planner = parvane::sections::planner;
+			if (w.self.empty()) {
+				return "unavailable";
+			}
+			w.plannerSync.ensure(true);
+			const auto status = w.plannerSync.status();
+			if (status == "needs-linking" || status == "no-key") {
+				return status;
+			}
+			const auto json = w.plannerSync.stateJson();
+			if (json) {
+				const auto state = planner::fromEngineState(*json);
+				if (planner::findOfferInPlan(&state, uuidStd)) {
+					return "exists";
+				}
+			}
+			const auto offer = planner::OfferFields::fromContent(content);
+			w.plannerSync.apply(parvane::json::array({ planner::offerPlanChange(uuidStd, chatStd, offer, taskId) }));
+			return "ok";
+		}, [=](std::string result) {
+			const auto offer = parvane::sections::planner::OfferFields::fromContent(content);
+			const auto event = (parvane::sections::planner::offerKind(offer) == "event");
+			const auto text = (result == "ok")
+				? (event ? tr::lng_parvane_offer_event_added(tr::now) : tr::lng_parvane_offer_added(tr::now))
+				: (result == "exists")
+				? (event ? tr::lng_parvane_offer_event_exists(tr::now) : tr::lng_parvane_offer_exists(tr::now))
+				: (result == "needs-linking" || result == "no-key")
+				? tr::lng_parvane_offer_needs_planner(tr::now)
+				: tr::lng_parvane_offer_unavailable(tr::now);
+			if (const auto window = Core::App().activeWindow()) {
+				window->showToast(text);
+			}
+			const auto session = itemSession.get();
+			const auto strong = session ? session->data().message(itemId) : nullptr;
+			if (strong && (result == "ok" || result == "exists")) {
+				SetOfferDecided(strong, uuid, true);
+				SendOfferResponse(strong, uuid, content, true);
+			}
+			LOG(("Parvane: задание %1 → план: %2").arg(uuid, QString::fromStdString(result)));
+		});
+		return true;
+	}
+	if (action == u"none"_q) {
 		return true;
 	}
 	if (action == u"moddel"_q || action == u"modban"_q) {
@@ -13273,6 +13407,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 		session->lifetime().add([] { previousEnded = true; });
 		g_sessionWeak = weak;
+		Sections::StartSectionHooks(); // spec 029: хуки сценариев разделов
 		// Рестарт: tdesktop возобновил кэшированную сессию, минуя экран логина
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
 		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
@@ -13866,7 +14001,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 							RevokeDevice(d.deviceId, [id = d.deviceId](bool ok) {
 								LOG(("Parvane: autorevoke %1 → %2")
 									.arg(id, ok ? u"ok"_q : u"fail"_q));
-							}, password);
+							}, password, /*rotateKeys=*/true); // отзыв: «выйти и сменить ключи» (REVOKE-1)
 						}
 					}
 				});

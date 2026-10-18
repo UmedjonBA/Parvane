@@ -1,0 +1,43 @@
+lng_parvane_offer_to_plan
+To plan
+В план
+
+lng_parvane_offer_to_calendar
+To calendar
+В календарь
+
+lng_parvane_offer_decline
+Decline
+Отклонить
+
+lng_parvane_offer_declined
+Declined
+Отклонено
+
+lng_parvane_offer_in_plan_open
+In plan · open
+В плане · открыть
+
+lng_parvane_offer_added
+The task is in your plan
+Задача в вашем плане
+
+lng_parvane_offer_exists
+The task is already in your plan
+Задача уже в вашем плане
+
+lng_parvane_offer_event_added
+The event is in your calendar
+Событие в вашем календаре
+
+lng_parvane_offer_event_exists
+The event is already in your calendar
+Событие уже в вашем календаре
+
+lng_parvane_offer_needs_planner
+The plan is not available on this device until it is linked
+План недоступен на этом устройстве, пока оно не привязано
+
+lng_parvane_offer_unavailable
+The task could not be processed
+Не удалось обработать предложение
