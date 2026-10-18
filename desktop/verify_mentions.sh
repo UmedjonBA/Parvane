@@ -16,12 +16,12 @@ ok(){ printf '\033[32mok  \033[0m %s\n' "$*"; }; bad(){ printf '\033[31mFAIL\033
 stack_up "$SB"
 
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" "$BIN" -workdir "$B" >"$SB/b.out" 2>&1 & BP=$!
-sleep 2
+wait_log "$B/log.txt" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOSEND="bob@local:$TXT" "$BIN" -workdir "$A" >"$SB/a.out" 2>&1 & AP=$!
 
 BL="$B/log.txt"
-for i in $(seq 1 40); do grep -qa "входящее msg .* (alice@local): $TXT" "$BL" 2>/dev/null && break; sleep 1; done
+for i in $(seq 1 90); do grep -qa "входящее msg .* (alice@local): $TXT" "$BL" 2>/dev/null && break; sleep 1; done
 sleep 2
 kill "$AP" "$BP" 2>/dev/null; wait "$AP" "$BP" 2>/dev/null
 
@@ -43,7 +43,7 @@ for J in "$AH" "$BH"; do
     bad "нет журнала $J"
   fi
 done
-if grep -qa "@bob@local" "$SB/messenger.db" 2>/dev/null; then
+if grep -qa "@bob@local" "$SB"/messenger.db* 2>/dev/null; then
   bad "текст с @bob@local найден в messenger.db — не зашифровано!"
 else
   ok "текст упоминания отсутствует в messenger.db (E2E держится)"

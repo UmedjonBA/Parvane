@@ -12,7 +12,6 @@
 # Стек поднимает сам (verify_lib.sh); нужен собранный бинарь.
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
-NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
 A_WD="$(mktemp -d /tmp/pv-ph-alice.XXXXXX)"; B_WD="$(mktemp -d /tmp/pv-ph-bob.XXXXXX)"
 A_LOG="$A_WD/td/log.txt"; B_LOG="$B_WD/td/log.txt"
 PNG="$A_WD/pic.png"
@@ -22,8 +21,7 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
-# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+# стек поднимаем сами; клиенты ходят только через gateway (протокол v2)
 STACK="$(mktemp -d /tmp/parvane-media-photo-stack.XXXXXX)"; stack_up "$STACK"
 
 # Настоящий PNG 320x240 (без внешних либ).
@@ -47,20 +45,20 @@ open(sys.argv[1], 'wb').write(png)
 PY
 echo "PNG: $(stat -c%s "$PNG") байт (320x240)"
 
-# bob стартует и делает полный ресинк (since=0) — он реплеит СТАРЫЕ фото из
-# истории мессенджера. Поэтому изолируемся: даём ресинку осесть, считаем фото-
-# строки ДО отправки, потом ждём прироста именно от нашего PNG.
+# bob стартует первым: заводит устройство и журнал устройств v2 (без них alice
+# не адресует ему конверт). Считаем фото-строки ДО отправки и ждём прироста
+# именно от нашего PNG.
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WD/td" >"$B_WD/out.log" 2>&1 &
 BPID=$!
-sleep 6  # дать стартовому ресинку слить старую историю
+wait_log "$B_LOG" "v2: готов" 90 || bad "bob: v2 не поднялся"
 BEFORE=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || true); BEFORE=${BEFORE:-0}
 
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOSENDFILE="bob@local:$PNG" "$BIN" -workdir "$A_WD/td" >"$A_WD/out.log" 2>&1 &
 APID=$!
 # ждём отправку у alice И новую фото-строку у bob (сверх BEFORE).
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
     AFTER=$(grep -c "Parvane: получено фото" "$B_LOG" 2>/dev/null || true); AFTER=${AFTER:-0}
     [ "$AFTER" -gt "$BEFORE" ] \
         && grep -q "Parvane: медиа отправлено" "$A_LOG" 2>/dev/null && break

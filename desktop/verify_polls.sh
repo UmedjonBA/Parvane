@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Parvane — e2e опросов двумя реальными экземплярами (alice ↔ bob).
-#   1) alice создаёт опрос (PARVANE_AUTOPOLL) → E2E poll-контент в шину;
+#   1) alice создаёт опрос (PARVANE_AUTOPOLL) → E2E poll-контент по v2;
 #   2) bob получает опрос (инъекция MTP_messageMediaPoll) и голосует
 #      (PARVANE_AUTOVOTE) → E2E poll_vote;
 #   3) alice получает голос — агрегат применён (applyPollState);
@@ -23,19 +23,18 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
-# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+# стек поднимаем сами; клиенты ходят только через gateway (протокол v2)
 STACK="$(mktemp -d /tmp/parvane-polls-stack.XXXXXX)"; stack_up "$STACK"
 
 echo "alice workdir: $A_WORK"
 echo "bob   workdir: $B_WORK"
 
-# Сначала bob (его prekeys должны быть опубликованы до sealFor у alice).
+# Сначала bob (его журнал устройств v2 должен быть до отправки alice).
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOVOTE='1' \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 &
 B_PID=$!
-sleep 4
+wait_log "$B_LOG" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOPOLL="$B_USER:$QUESTION:вариант А,вариант Б,вариант В" \
@@ -43,7 +42,7 @@ QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
 A_PID=$!
 
 # Ждём: bob проголосовал и alice получила голос.
-for i in $(seq 1 45); do
+for i in $(seq 1 90); do
     grep -q "Parvane: опрос .* — poll_vote от $B_USER" "$A_LOG" 2>/dev/null && break
     sleep 1
 done
@@ -69,7 +68,7 @@ QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout2.log" 2>&1 &
 A_PID=$!
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
     grep -q "Parvane: опрос .* инъецирован" "$A_LOG" 2>/dev/null && break
     sleep 1
 done

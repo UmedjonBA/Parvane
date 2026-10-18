@@ -20,7 +20,7 @@ CREDS="$A/td/tdata/parvane-session.txt"
 
 # 1) регистрация alice; bob пишет ей — появляется журнал истории
 P=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$A/td/log.txt" "E2E-устройство готово" 40 && ok "alice: устройство готово" || bad "alice: устройство не готово"
+wait_log "$A/td/log.txt" "v2: готов" 90 && ok "alice: устройство v2 готово" || bad "alice: устройство v2 не готово"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:hi-$STAMP")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*hi-$STAMP" 60 && ok "alice получила сообщение bob (журнал есть)" || bad "alice не получила сообщение bob"
 sleep 2; stop_pid "$BP"; stop_pid "$P"
@@ -41,7 +41,6 @@ wait_log "$A/td/log.txt" "autologin hook for alice@local" 40 && ok "показа
 wait_log "$A/td/log.txt" "сессия поднята для alice@local" 40 && ok "повторный вход: сессия с адресом" || bad "повторный вход не удался"
 kill -0 "$P" 2>/dev/null && ok "клиент жив после отказа JWT" || bad "клиент упал после отказа JWT"
 wait_log "$A/td/log.txt" "воспроизведено [1-9][0-9]* сообщений из журнала" 20 && ok "история сохранена" || bad "история потеряна"
-wait_log "$A/td/log.txt" "вход — первый sync полный" 20 && ok "после входа первый sync полный" || bad "после входа sync не полный"
 wait_log "$A/td/log.txt" "профиль alice@local: bio=" 30 && ok "свой профиль резолвится после входа" || bad "свой профиль не резолвится после входа"
 sleep 2; stop_pid "$P"
 

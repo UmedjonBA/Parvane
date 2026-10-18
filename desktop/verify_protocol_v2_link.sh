@@ -20,10 +20,10 @@ sleep 1
 A1="$SB/alice1"; A2="$SB/alice2"; B="$SB/bob"
 L1="$A1/td/log.txt"; L2="$A2/td/log.txt"; BL="$B/td/log.txt"
 
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия готова" || bad "bob: v2 не поднялся"
 G="ГруппаЛинк$S"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 \
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 \
   "PARVANE_AUTOSEND_V2=bob@local:до-линковки-$S" \
   "PARVANE_AUTOGROUP=$G:bob@local" "PARVANE_AUTOGROUPSEND=$G:гр-до-линковки-$S")
 wait_log "$L1" "v2: готов" 90 && ok "alice1: v2-сессия готова (первое устройство)" || bad "alice1: v2 не поднялся"
@@ -36,7 +36,7 @@ wait_log "$BL" "групповое [0-9a-f-]+ в v2g:[0-9a-f]{32} от alice@loc
   && ok "bob получил групповое alice1" || bad "bob не получил групповое alice1"
 
 # ── второе устройство: своего корня не создаёт, просит линковку ──────────────
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1)
+P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)
 wait_log "$L2" "v2: у аккаунта уже есть журнал устройств — нужна линковка" 90 \
   && ok "alice2: журнал устройств уже есть — второй корень не создаётся" || bad "alice2: нет отказа «нужна линковка»"
 grep -q "v2: устройство создано" "$L2" && bad "alice2 создала собственный корень" || ok "alice2: корень не создан"
@@ -64,7 +64,7 @@ wait_log "$L2" "своё msg [0-9a-f-]+ \(bob@local\): до-линковки-$S"
 [ "$(grep -c "своё msg [0-9a-f-]* (bob@local): до-линковки-$S" "$L2")" = 1 ] \
   && ok "alice2: сообщение истории без дублей" || bad "alice2: сообщение истории задвоилось"
 # ── T142: группы v2 на привязанном устройстве ────────────────────────────────
-# alice1 пересылает alice2 ключи эпохи и сессии Megolm; alice2 дочитывает журнал
+# alice1 пересылает alice2 ключи эпох групп; alice2 дочитывает журнал
 # группы, группа появляется, строка истории группы (ждала в ApplyLinkedV2History) показана.
 wait_log "$L1" "v2: группы пересланы новому своему устройству \(записей [1-9][0-9]*\)" 60 \
   && ok "alice1 переслала группы новому устройству" || bad "alice1: группы не пересланы"
@@ -74,7 +74,7 @@ wait_log "$L2" "групповое [0-9a-f-]+ в v2g:[0-9a-f]{32} от alice@loc
 
 # ── сообщение после линковки читают оба устройства alice ─────────────────────
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=alice@local:после-линковки-$S")
 wait_log "$BL" "v2 → alice@local msg [0-9a-f-]+ \(text\)" 90 && ok "bob → alice ушло по v2" || bad "bob → alice не ушло по v2"
 wait_log "$L1" "входящее msg [0-9a-f-]+ \(bob@local\): после-линковки-$S" 60 && ok "alice1 прочитала" || bad "alice1 не прочитала"
@@ -83,7 +83,7 @@ wait_log "$L2" "входящее msg [0-9a-f-]+ \(bob@local\): после-лин
 
 # T142: новое групповое сообщение участника читает и привязанное устройство
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOGROUPSEND=$G:гр-после-линковки-$S")
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOGROUPSEND=$G:гр-после-линковки-$S")
 wait_log "$L1" "групповое [0-9a-f-]+ в v2g:[0-9a-f]{32} от bob@local: гр-после-линковки-$S" 90 \
   && ok "alice1 прочитала групповое bob" || bad "alice1 не прочитала групповое bob"
 wait_log "$L2" "групповое [0-9a-f-]+ в v2g:[0-9a-f]{32} от bob@local: гр-после-линковки-$S" 60 \
@@ -91,7 +91,7 @@ wait_log "$L2" "групповое [0-9a-f-]+ в v2g:[0-9a-f]{32} от bob@local
 
 # ── журнал личного состояния между устройствами: папка ≤ 10 с (SC-009) ───────
 stop_pid "$P1"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 \
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 \
   "PARVANE_AUTOFOLDER=Работа-$S:bob@local")
 wait_log "$L1" "AUTOFOLDER создал папку 'Работа-$S'" 90 && ok "alice1: папка создана" || bad "alice1: папка не создана"
 wait_log "$L2" "журнал состояния → папки \([1-9][0-9]* изменений\)" 10 && ok "alice2: папка пришла из журнала ≤ 10 с (SC-009)" \
@@ -99,7 +99,7 @@ wait_log "$L2" "журнал состояния → папки \([1-9][0-9]* и�
 
 # ── T160: ссылка-приглашение группы одна на все свои устройства ──────────────
 stop_pid "$P1"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOGROUPINVITE=$G:create")
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 "PARVANE_AUTOGROUPINVITE=$G:create")
 wait_log "$L1" "AUTOGROUPINVITE '$G' create → ok" 90 && ok "alice1: ссылка-приглашение создана" \
   || bad "alice1: ссылка-приглашение не создана"
 wait_log "$L2" "v2: ссылки-приглашения с других своих устройств: [1-9]" 30 \

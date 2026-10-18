@@ -3,8 +3,8 @@
 # (Фаза 4a+4b). alice-форк шлёт файл bob-форку штатным путём tdesktop; bob-форк
 # принимает его через sync → скачивает блоб из cloud → инъецирует медиа-
 # сообщение в Data::Session. Проверяем:
-#   1) alice отправила медиа в шину (лог "медиа отправлено", есть file_id);
-#   2) bob скачал и инъецировал медиа (лог "получено медиа от alice");
+#   1) alice отправила медиа (лог "медиа отправлено", есть file_id);
+#   2) bob скачал блоб по capability и инъецировал медиа (лог "получено медиа … alice");
 #   3) у bob диалог alice в списке (медиа-диалог … в списке=1);
 #   4) скачанный на диск блоб побайтово равен исходному файлу;
 #   5) ни в одном логе нет фатальных ошибок / ошибок скачивания.
@@ -12,8 +12,6 @@
 # Стек поднимает сам (verify_lib.sh); нужен собранный бинарь.
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
-NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
-MEDIA_DIR="${TMPDIR:-/tmp}/parvane-media"
 A_WD="$(mktemp -d /tmp/pv-2m-alice.XXXXXX)"
 B_WD="$(mktemp -d /tmp/pv-2m-bob.XXXXXX)"
 A_LOG="$A_WD/td/log.txt"; B_LOG="$B_WD/td/log.txt"
@@ -25,8 +23,7 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
-# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+# стек поднимаем сами; клиенты ходят только через gateway (протокол v2)
 STACK="$(mktemp -d /tmp/parvane-media-two-instances-stack.XXXXXX)"; stack_up "$STACK"
 
 # Бинарь с нулевым/0xff байтами — проверяем целостность.
@@ -38,7 +35,8 @@ echo "файл: $SZ байт; stamp=$STAMP"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WD/td" >"$B_WD/out.log" 2>&1 &
 BPID=$!
-sleep 3
+# bob заводит журнал устройств v2 до отправки ему
+wait_log "$B_LOG" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOSENDFILE="bob@local:$SRC" \
   "$BIN" -workdir "$A_WD/td" >"$A_WD/out.log" 2>&1 &
@@ -46,7 +44,7 @@ APID=$!
 
 # Извлекаем file_id из лога alice, ждём приёма у bob именно этого file_id.
 FID=""
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
     [ -z "$FID" ] && FID=$(grep "Parvane: медиа отправлено" "$A_LOG" 2>/dev/null \
         | tail -1 | sed -n 's/.*(file \([0-9a-f-]\+\).*/\1/p')
     [ -n "$FID" ] && grep -q "получено медиа.*alice@local:.*${FID}" "$B_LOG" 2>/dev/null && break
@@ -63,8 +61,8 @@ grep -q "Parvane: медиа отправлено.*$FID" "$A_LOG" 2>/dev/null &&
 grep -q "получено медиа.*alice@local:.*$FID" "$B_LOG" 2>/dev/null && ok "bob принял и инъецировал медиа" || bad "bob не принял медиа"
 grep -q "медиа-диалог alice@local — в списке=1" "$B_LOG" 2>/dev/null && ok "у bob диалог alice в списке" || bad "у bob нет медиа-диалога"
 
-# Целостность: файл, который bob записал на диск, == исходному.
-GOT=$(ls -t "$MEDIA_DIR/${FID}_"* 2>/dev/null | head -1)
+# Целостность: файл, который bob записал на диск (tdata/parvane-media, NAT-02), == исходному.
+GOT=$(ls -t "$B_WD/td/tdata/parvane-media/${FID}_"* 2>/dev/null | head -1)
 if [ -n "$GOT" ] && cmp -s "$SRC" "$GOT"; then
     ok "скачанный блоб побайтово равен исходному ($SZ байт)"
 else

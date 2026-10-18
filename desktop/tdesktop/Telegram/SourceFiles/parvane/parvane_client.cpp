@@ -569,6 +569,9 @@ void FlushPendingGroupMessages(const QString &gid) {
 }
 
 
+// Картинка превью ссылки → вложение-фото (определена ниже, рядом с блобами)
+nlohmann::json UploadPreviewPhoto(const std::string &imageB64);
+
 void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 	// Превью тянет шард preview (SSRF-безопасно, IP клиента не светится
 	// целевому сайту) — паритет с web media.ts. Шард недоступен/таймаут →
@@ -600,6 +603,17 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 		}
 		if (!result.is_object()) {
 			result = {{"url", urlStd}, {"site_name", QUrl(url).host().toStdString()}};
+		}
+		// Картинка превью (как web uploadPreviewPhoto): уменьшить до 960 px, зашифровать и загрузить вложением
+		// с секретом; сырые байты шарда в сообщение не уходят
+		const auto image = result.value("image", std::string());
+		const auto mime = result.value("image_mime", std::string());
+		result.erase("image");
+		result.erase("image_mime");
+		if (!image.empty() && !mime.empty() && t) {
+			if (auto photo = UploadPreviewPhoto(image); photo.is_object()) {
+				result["photo"] = std::move(photo);
+			}
 		}
 		crl::on_main([done, result] { done(result); });
 	});
@@ -1073,6 +1087,8 @@ void AttachBlobCap(parvane::json &target, const std::string &fileId) {
 	}
 }
 
+
+
 // Получатели гранта для блоба чата `to`; {kBlobCapabilityMark} — чат v2 без
 // v1-устройств: грузить по capability. Сеть (журнал собеседника) — звать с
 // рабочего потока.
@@ -1106,6 +1122,59 @@ void AttachBlobCap(parvane::json &target, const std::string &fileId) {
 	}
 	return cloud.upload(from, token, filename, mime, bytes, recipients, false, 256 * 1024, timeoutMs);
 }
+
+// Воркер: байты картинки превью (base64) → вложение-фото {file_id, file_key, file_nonce, capability, …}; null — нет.
+nlohmann::json UploadPreviewPhoto(const std::string &imageB64) {
+	constexpr auto kMaxSide = 960;
+	constexpr auto kQuality = 82;
+	try {
+		const auto raw = QByteArray::fromBase64(QByteArray::fromStdString(imageB64));
+		auto image = QImage();
+		if (!image.loadFromData(raw)) {
+			return nullptr;
+		}
+		if (image.width() > kMaxSide || image.height() > kMaxSide) {
+			image = image.scaled(kMaxSide, kMaxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+		}
+		auto bytes = QByteArray();
+		{
+			QBuffer buffer(&bytes);
+			buffer.open(QIODevice::WriteOnly);
+			image.convertToFormat(QImage::Format_RGB32).save(&buffer, "JPG", kQuality);
+		}
+		auto enc = parvane::blobcrypt::encrypt(bytes.toStdString());
+		if (enc.ciphertext.empty()) {
+			return nullptr;
+		}
+		parvane::ITransport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		if (!t) {
+			return nullptr;
+		}
+		parvane::CloudClient cloud(*t);
+		const auto fileId = UploadBlobWith(cloud, SelfAddress().toStdString(), Token().toStdString(), "blob",
+			"image/jpeg", enc.ciphertext, { kBlobCapabilityMark }, 20000);
+		auto photo = nlohmann::json{
+			{ "kind", "photo" },
+			{ "file_id", fileId },
+			{ "mime", "image/jpeg" },
+			{ "size_bytes", std::int64_t(bytes.size()) },
+			{ "width", image.width() },
+			{ "height", image.height() },
+			{ "file_key", enc.keyB64 },
+			{ "file_nonce", enc.nonceB64 },
+		};
+		AttachBlobCap(photo, fileId);
+		return photo;
+	} catch (const std::exception &e) {
+		LOG(("Parvane: картинка превью не загружена: %1").arg(QString::fromUtf8(e.what())));
+		return nullptr;
+	}
+}
+
 
 // Скачать блоб: известен секрет — анонимным каналом v2; иначе v1 (владелец
 // или получатель гранта).
@@ -5845,6 +5914,53 @@ void ResolveNames(const QStringList &addresses) {
 }
 
 // content.webpage (OG-превью ссылки) → MTP_messageMediaWebPage. Пусто — если нет.
+// Скачать картинку превью по секрету, расшифровать и положить в PhotoData (один раз на фото).
+QSet<PhotoId> g_previewPhotosRequested; // только main
+void RequestPreviewPhoto(PhotoId photoId, const nlohmann::json &photo) {
+	if (g_previewPhotosRequested.contains(photoId)) {
+		return;
+	}
+	g_previewPhotosRequested.insert(photoId);
+	RememberBlobCaps(photo);
+	const auto fileId = photo.value("file_id", std::string());
+	const auto key = photo.value("file_key", std::string());
+	const auto nonce = photo.value("file_nonce", std::string());
+	crl::async([=] {
+		parvane::ITransport *t = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			t = g_transport.get();
+		}
+		auto image = QImage();
+		auto bytes = QByteArray();
+		if (t) {
+			try {
+				parvane::CloudClient cloud(*t);
+				const auto d = DownloadChatBlob(cloud, SelfAddress().toStdString(), Token().toStdString(), fileId, 20000);
+				if (d.ok) {
+					if (const auto plain = parvane::blobcrypt::decrypt(d.bytes, key, nonce)) {
+						bytes = QByteArray::fromStdString(*plain);
+						image.loadFromData(bytes);
+					}
+				}
+			} catch (const std::exception &e) {
+				LOG(("Parvane: картинка превью не скачалась: %1").arg(QString::fromUtf8(e.what())));
+			}
+		}
+		crl::on_main([=] {
+			const auto session = g_sessionWeak.get();
+			if (!session || image.isNull()) {
+				g_previewPhotosRequested.remove(photoId); // повтор при следующем показе
+				return;
+			}
+			const auto data = session->data().photo(photoId);
+			const auto inMemory = Images::FromImageInMemory(image, "JPG", bytes);
+			data->updateImages(QByteArray(), inMemory, inMemory, inMemory, ImageWithLocation(), ImageWithLocation(), 0);
+			session->notifyDownloaderTaskFinished();
+		});
+	});
+}
+
 [[nodiscard]] MTPMessageMedia buildWebpageMedia(const nlohmann::json &wp) {
 	if (!wp.is_object() || !wp.contains("url")) {
 		return MTPMessageMedia();
@@ -5858,11 +5974,33 @@ void ResolveNames(const QStringList &addresses) {
 	const auto siteName = str("site_name");
 	const auto title = str("title");
 	const auto description = str("description");
+	// Картинка превью (вложение-фото с секретом): фото в памяти, байты скачиваются отдельно
+	const auto photoJson = (wp.contains("photo") && wp["photo"].is_object()) ? wp["photo"] : nlohmann::json();
+	const auto photoFileId = photoJson.is_object() ? photoJson.value("file_id", std::string()) : std::string();
+	const auto hasPhoto = !photoFileId.empty() && !photoJson.value("file_key", std::string()).empty();
+	const auto photoId = PhotoId(IdForAddress(QString::fromStdString(photoFileId)) | (std::uint64_t(1) << 61));
+	if (hasPhoto) {
+		RequestPreviewPhoto(photoId, photoJson);
+	}
 	using PageFlag = MTPDwebPage::Flag;
 	const auto pageFlags = PageFlag(0)
 		| (siteName.isEmpty() ? PageFlag(0) : PageFlag::f_site_name)
 		| (title.isEmpty() ? PageFlag(0) : PageFlag::f_title)
-		| (description.isEmpty() ? PageFlag(0) : PageFlag::f_description);
+		| (description.isEmpty() ? PageFlag(0) : PageFlag::f_description)
+		| (hasPhoto ? PageFlag::f_photo : PageFlag(0));
+	const auto photoW = std::max(1, photoJson.is_object() ? photoJson.value("width", 320) : 320);
+	const auto photoH = std::max(1, photoJson.is_object() ? photoJson.value("height", 200) : 200);
+	const auto photo = hasPhoto
+		? MTP_photo(
+			MTP_flags(0),
+			MTP_long(photoId),
+			MTP_long(0),
+			MTP_bytes(),
+			MTP_int(int(base::unixtime::now())),
+			MTP_vector<MTPPhotoSize>({ MTP_photoSize(MTP_string("x"), MTP_int(photoW), MTP_int(photoH), MTP_int(0)) }),
+			MTPVector<MTPVideoSize>(),
+			MTP_int(1))
+		: MTPPhoto();
 	const auto id = std::int64_t(
 		std::hash<std::string>{}(url.toStdString()) & 0x7fffffffffffffffULL);
 	const auto page = MTP_webPage(
@@ -5875,7 +6013,7 @@ void ResolveNames(const QStringList &addresses) {
 		MTP_string(siteName),     // site_name
 		MTP_string(title),        // title
 		MTP_string(description),  // description
-		MTPPhoto(),               // photo (пока без картинки)
+		photo,                    // photo — картинка превью
 		MTPstring(),              // embed_url
 		MTPstring(),              // embed_type
 		MTPint(),                 // embed_width
@@ -12899,7 +13037,16 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
 				const auto peerAddr = spec.left(sep);
-				const auto path = spec.mid(sep + 1);
+				auto path = spec.mid(sep + 1);
+				// Необязательный вид в конце: …:voice (голосовое) или …:round (кружок)
+				auto forced = std::optional<SendMediaType>();
+				if (path.endsWith(u":voice"_q)) {
+					forced = SendMediaType::Audio;
+					path.chop(6);
+				} else if (path.endsWith(u":round"_q)) {
+					forced = SendMediaType::Round;
+					path.chop(6);
+				}
 				auto f = QFile(path);
 				if (f.open(QIODevice::ReadOnly)) {
 					const auto bytes = f.readAll();
@@ -12918,7 +13065,9 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						fileHistory = session->data().history(fileUser);
 					}
 					const auto lower = path.toLower();
-					const auto type = (lower.endsWith(u".png"_q)
+					const auto type = forced
+						? *forced
+						: (lower.endsWith(u".png"_q)
 							|| lower.endsWith(u".jpg"_q)
 							|| lower.endsWith(u".jpeg"_q))
 						? SendMediaType::Photo

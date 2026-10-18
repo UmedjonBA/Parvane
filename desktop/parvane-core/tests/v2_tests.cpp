@@ -241,6 +241,23 @@ int main() {
             check(shown && *shown == "показ", std::string("карточка ") + kind + " показывается текстом");
         }
         check(!parvane::contentText(json{{"kind", "photo"}, {"text", "x"}}), "медиа не идёт текстовым путём");
+        // Превью ссылки с картинкой (как web contentMapPreview.test.ts)
+        const json withImage{{"kind", "text"}, {"text", "https://example.org"},
+                             {"webpage", {{"url", "https://example.org"}, {"title", "Пример"},
+                                          {"photo", {{"kind", "photo"}, {"file_id", "f1"}, {"file_key", "a2V5"},
+                                                     {"file_nonce", "bm9uY2U="}, {"width", 320}, {"height", 200},
+                                                     {"capability", "Y2Fw"}}}}}};
+        const auto previewV2 = v2::toV2(withImage);
+        check(previewV2 && (*previewV2)["text"]["preview"].contains("image"), "превью → v2: картинка в LinkPreview.image");
+        const auto previewBack = previewV2 ? v2::fromV2(*previewV2) : std::nullopt;
+        check(previewBack && (*previewBack)["webpage"]["photo"].value("file_id", std::string()) == "f1"
+                  && (*previewBack)["webpage"]["photo"].value("capability", std::string()) == "Y2Fw",
+              "превью ← v2: фото с ключами и секретом");
+        auto noKey = *previewV2;
+        noKey["text"]["preview"]["image"].erase("key");
+        noKey["text"]["preview"]["image"].erase("file_key");
+        const auto stripped = v2::fromV2(noKey);
+        check(stripped && !(*stripped)["webpage"].contains("photo"), "превью без ключа картинки — без фото");
         const json inviteV1{{"kind", "cloud_invite"}, {"container", {{"domain", "local"}, {"id", "AAEC"}}}, {"name", "Проект"},
                             {"role", 2}, {"text", "Приглашение в папку «Проект» (редактор)"}};
         const auto inviteV2 = v2::toV2(inviteV1);

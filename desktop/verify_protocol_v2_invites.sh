@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Протокол v2 (spec 007, T143): ссылки-приглашения и ЗАЯВКИ на вступление в
-# группе v2 с тех же экранов, что и v1 (хуки AUTOGROUPINVITE / AUTOGROUPJOIN /
+# группе v2 с нативных экранов (хуки AUTOGROUPINVITE / AUTOGROUPJOIN /
 # AUTOGROUPREQUEST = экраны «Invite Links», модалка «Join group», «Join Requests»).
 #  §1 ссылки: с лимитом 1 и «по одобрению»; carol вступает по лимитной, dave по
 #     исчерпанной — отказ; отзыв ссылки → по ней больше не вступить.
@@ -9,14 +9,13 @@
 #     видит её в списке, одобряет → dave получает группу и читает сообщение новой
 #     эпохи; заявка erin отклоняется (журнал группы не меняется), повторная
 #     заявка после отказа снова принимается к рассмотрению.
-# Модель v1 (токены, состояния ссылок, список отозванных) — verify_group_invites.sh.
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
 S=$(date +%s); G="Inv2-$S"
 stack_start "${SCRATCH:-/tmp/parvane-v2-invites}"
 A="$SB/alice"; B="$SB/bob"; C="$SB/carol"; D="$SB/dave"; E="$SB/erin"
 AL="$A/td/log.txt"; BL="$B/td/log.txt"; CL="$C/td/log.txt"; DL="$D/td/log.txt"; EL="$E/td/log.txt"
-V2=(PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+V2=(PARVANE_NO_LINK_OFFER=1)
 LINK='https://[^ ]+/join/[A-Za-z0-9_-]{43}#[A-Za-z0-9_-]{43}'
 
 # Участники — первыми: их журналы устройств v2 должны существовать до создания

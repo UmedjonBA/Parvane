@@ -5,18 +5,17 @@
 # его глазами. Опционально кликает (открыть диалог) и шлёт autosend/файл.
 #
 # Параметры через окружение:
-#   GUI_ACCOUNT=bob@local:test-pass-2026       автологин (по умолчанию gui@local)
+#   GUI_ACCOUNT=bob@local:test-pass-2026  автологин (по умолчанию gui@local)
 #   GUI_OUT=/path/shot.png           куда сохранить скриншот (по умолчанию /tmp/parvane_gui.png)
 #   GUI_AUTOSEND="peer@local:текст"  (опц.) отправить текст при старте
 #   GUI_AUTOSENDFILE="peer@local:/f" (опц.) отправить файл при старте
 #   GUI_CLICKS="x,y;x,y"             (опц.) клики перед снимком (напр. открыть чат)
 #   GUI_PORT=5906  GUI_SIZE=1280x800  GUI_WAIT=12   (опц.)
 #   GUI_KEEP=1                        (опц.) не убивать инстанс после снимка
-# Backend: если на 4222 уже кто-то слушает (демо-стек) — работаем с ним; иначе
-# поднимаем свой временный стек (verify_lib.sh) и гасим его на выходе.
+# Backend: если gateway на 9223 уже слушает (стек verify_lib.sh или демо) — клиент
+# идёт в него; иначе поднимаем свой временный стек (verify_lib.sh) и гасим его на выходе.
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
 PORT="${GUI_PORT:-5906}"
 SIZE="${GUI_SIZE:-1280x800}"
 WAIT="${GUI_WAIT:-12}"
@@ -27,7 +26,7 @@ WD="$(mktemp -d /tmp/pv-gui.XXXXXX)"
 [ -x "$BIN" ] || { echo "нет бинаря $BIN"; exit 2; }
 
 OWN_STACK=0
-if ! wait_port 4222 1; then
+if ! wait_port 9223 1; then
     OWN_STACK=1
     stack_up "$WD/stack"
 fi
@@ -40,7 +39,7 @@ setsid nohup env \
   QT_QPA_PLATFORM="vnc:port=$PORT,size=$SIZE" \
   QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 \
   XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
-  PARVANE_NATS_URL="$URL" \
+  PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$ACCOUNT" \
   "${env_extra[@]}" \
   "$BIN" -workdir "$WD/td" >"$WD/out.log" 2>&1 </dev/null & disown

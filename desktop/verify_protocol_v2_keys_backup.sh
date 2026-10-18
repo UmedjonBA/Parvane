@@ -21,9 +21,9 @@ L1="$A1/td/log.txt"; L2="$A2/td/log.txt"; BL="$B/td/log.txt"
 KEY="$SB/alice1-recovery.key"; COPY="$SB/alice-keys.json"; PASS="Копия-$S"
 rm -f "$KEY" "$COPY"
 
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия готова" || bad "bob: v2 не поднялся"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 "PARVANE_RECOVERY_KEY_FILE=$KEY" \
+P1=$(start_client "$A1" alice@local "PARVANE_RECOVERY_KEY_FILE=$KEY" \
   "PARVANE_AUTOSEND_V2=bob@local:до-копии-$S")
 wait_log "$L1" "v2: готов" 90 && ok "alice1: v2-сессия готова" || bad "alice1: v2 не поднялся"
 wait_log "$L1" "v2: ключ восстановления записан в файл e2e" 30 && [ -s "$KEY" ] \
@@ -31,14 +31,14 @@ wait_log "$L1" "v2: ключ восстановления записан в фа
 wait_log "$BL" "входящее msg [0-9a-f-]+ \(alice@local\): до-копии-$S" 60 && ok "bob получил текст alice1 по v2" \
   || bad "bob не получил текст alice1"
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=alice@local:ответ-до-копии-$S")
 wait_log "$L1" "входящее msg [0-9a-f-]+ \(bob@local\): ответ-до-копии-$S" 90 && ok "alice1 получила ответ bob по v2" \
   || bad "alice1 не получила ответ bob"
 
 # ── копия ключей на alice1 ───────────────────────────────────────────────────
 stop_pid "$P1"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 "PARVANE_RECOVERY_KEY_FILE=$KEY" \
+P1=$(start_client "$A1" alice@local "PARVANE_RECOVERY_KEY_FILE=$KEY" \
   "PARVANE_AUTOKEYBACKUP=export:$PASS:$COPY")
 wait_log "$L1" "AUTOKEYBACKUP export → ok" 90 && [ -s "$COPY" ] && ok "alice1: копия ключей сохранена" \
   || bad "alice1: копия ключей не сохранена"
@@ -48,7 +48,7 @@ grep -q "до-копии-$S" "$COPY" && bad "копия ключей лежит 
 stop_pid "$P1"
 
 # ── alice2: вход ключом восстановления — истории нет ─────────────────────────
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTORECOVER=$(cat "$KEY" 2>/dev/null)")
+P2=$(start_client "$A2" alice@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTORECOVER=$(cat "$KEY" 2>/dev/null)")
 wait_log "$L2" "v2: autorecover → ok" 120 && ok "alice2 вошла ключом восстановления" || bad "alice2: вход по ключу не удался"
 wait_log "$L2" "v2: готов" 90 && ok "alice2: v2-сессия готова" || bad "alice2: v2 не поднялся"
 sleep 8
@@ -57,11 +57,11 @@ grep -q "до-копии-$S" "$L2" && bad "alice2 видит прошлую пе
 
 # ── импорт копии ─────────────────────────────────────────────────────────────
 stop_pid "$P2"
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOKEYBACKUP=import:неверный-$S:$COPY")
+P2=$(start_client "$A2" alice@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOKEYBACKUP=import:неверный-$S:$COPY")
 wait_log "$L2" "AUTOKEYBACKUP import → отказ" 90 && ok "alice2: неверный пароль копии отвергнут" \
   || bad "alice2: неверный пароль не отвергнут"
 stop_pid "$P2"
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOKEYBACKUP=import:$PASS:$COPY")
+P2=$(start_client "$A2" alice@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOKEYBACKUP=import:$PASS:$COPY")
 wait_log "$L2" "v2: готов" 90 && ok "alice2 поднята заново" || bad "alice2 не поднялась"
 wait_log "$L2" "AUTOKEYBACKUP import → ok" 90 && ok "alice2: копия ключей принята" || bad "alice2: копия ключей не принята"
 wait_log "$L2" "история v2 перенесена \([1-9][0-9]* сообщений\)" 60 && ok "alice2: история v2 из копии применена" \
@@ -76,7 +76,7 @@ wait_log "$L2" "входящее msg [0-9a-f-]+ \(bob@local\): ответ-до-�
 # ── новое сообщение после импорта ────────────────────────────────────────────
 sleep 17 # bob перечитывает журнал alice раз в 15 с
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=alice@local:после-копии-$S")
 wait_log "$BL" "v2 → alice@local msg [0-9a-f-]+ \(text\)" 90 && ok "bob → alice ушло по v2" || bad "bob → alice не ушло по v2"
 wait_log "$L2" "входящее msg [0-9a-f-]+ \(bob@local\): после-копии-$S" 60 && ok "alice2 читает новое сообщение" \

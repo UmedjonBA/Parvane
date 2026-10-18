@@ -3,16 +3,17 @@
 #  bob1 накопил историю (alice → bob1); свежий bob2 публикует оффер-обязательство
 #  (LINK-1), bob1 (PARVANE_AUTOLINK_GRANT=1 — подтверждение без UI) отвечает
 #  challenge, после раскрытия ключа видит тот же код сверки и выдаёт грант;
-#  bob2 импортирует историю и показывает старое сообщение alice.
+#  bob2 входит в журнал устройств v2 грантом (LINK-1 v2), получает экспорт с
+#  историей v2 (поле v2History) и показывает старое сообщение alice.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-link}"
 STAMP=$(date +%s); T1="история-$STAMP"; T2="живое-$STAMP"
 B1="$SB/bob1"; B2="$SB/bob2"; A="$SB/alice"
 P1=$(start_client "$B1" bob@local PARVANE_AUTOLINK_GRANT=1)
-wait_log "$B1/td/log.txt" "E2E-устройство готово" 40 || bad "bob1 не поднялся"
+wait_log "$B1/td/log.txt" "v2: готов" 90 || bad "bob1 не поднялся"
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:$T1")
-wait_log "$B1/td/log.txt" "входящее msg .* \(alice@local\): $T1" 60 && ok "bob1 получил историю от alice" || bad "bob1 не получил"
+wait_log "$B1/td/log.txt" "входящее msg .* \(alice@local\): $T1" 90 && ok "bob1 получил историю от alice" || bad "bob1 не получил"
 stop_pid "$PA"
 
 P2=$(start_client "$B2" bob@local PARVANE_AUTOLINK_GRANT=1)
@@ -28,7 +29,9 @@ wait_log "$B1/td/log.txt" "запрос переноса истории от у�
 CODE1=$(grep -oE "линковка \(dev\): код сверки $SAS_RE для устройства" "$B1/td/log.txt" | head -1 | grep -oE "$SAS_RE")
 [ -n "$CODE2" ] && [ "$CODE1" = "$CODE2" ] && ok "SAS-коды совпадают ($CODE1)" || bad "коды: bob1=$CODE1 bob2=$CODE2"
 wait_log "$B1/td/log.txt" "линковка: грант выдан" 30 && ok "грант выдан" || bad "грант не выдан"
-wait_log "$B2/td/log.txt" "линковка: история получена" 40 && ok "bob2 импортировал историю" || bad "bob2 не импортировал"
+wait_log "$B2/td/log.txt" "линковка: экспорт получен" 60 && ok "bob2 получил экспорт линковки" || bad "bob2 не получил экспорт"
+wait_linked "$B2/td/log.txt" 90 && ok "bob2 привязан грантом v2 (журнал устройств)" || bad "bob2 не привязан"
+wait_log "$B2/td/log.txt" "линковка: история v2 перенесена \([1-9][0-9]* сообщений\)" 60 && ok "bob2 импортировал историю v2" || bad "bob2 не импортировал историю"
 wait_log "$B2/td/log.txt" "входящее msg .* \(alice@local\): $T1" 40 && ok "bob2 видит старое сообщение alice" || bad "bob2 не видит историю"
 # Живое сообщение после линковки читают оба.
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:$T2")

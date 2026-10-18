@@ -401,6 +401,11 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
         if (const auto v = str2(r, "siteName", "site_name"); !v.empty()) page["site_name"] = v;
         if (const auto v = str(r, "title"); !v.empty()) page["title"] = v;
         if (const auto v = str(r, "description"); !v.empty()) page["description"] = v;
+        // Картинка превью (bytes в proto3-JSON — base64); шард отдаёт её не для всех страниц
+        if (const auto mime = str2(r, "imageMime", "image_mime"); !mime.empty() && !str(r, "image").empty()) {
+            page["image"] = str(r, "image");
+            page["image_mime"] = mime;
+        }
         out = json{{"ok", true}, {"webpage", page}};
     } else if (subject == "preview.map.tile") {
         const auto r = control(token).call("preview.map_tile",

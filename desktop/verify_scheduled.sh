@@ -8,7 +8,7 @@ stack_start "${SCRATCH:-/tmp/parvane-sched}"
 STAMP=$(date +%s); T="запланировано-$STAMP"
 B="$SB/bob"; A="$SB/alice"
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:пинг-$STAMP" PARVANE_AUTOSCHEDULE="bob@local:6:$T")
 wait_log "$A/td/log.txt" "сообщение запланировано → bob@local" 40 && ok "alice запланировала сообщение" || bad "не запланировано"
 # файл очереди появился

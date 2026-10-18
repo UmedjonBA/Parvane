@@ -20,8 +20,7 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
-# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+# стек поднимаем сами; клиенты ходят только через gateway (протокол v2)
 STACK="$(mktemp -d /tmp/parvane-stickers-stack.XXXXXX)"; stack_up "$STACK"
 
 # Тестовый пак: 3 PNG-стикера генерируются на лету.
@@ -56,15 +55,12 @@ EOF
 echo "alice workdir: $A_WORK"
 echo "bob   workdir: $B_WORK"
 
-# bob первым (prekeys ДО отправки ему — см. verify_two_instances.sh).
+# bob первым (журнал устройств v2 ДО отправки ему — см. verify_two_instances.sh).
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 &
 B_PID=$!
-for i in $(seq 1 30); do
-    grep -q "Parvane: E2E-устройство готово" "$B_LOG" 2>/dev/null && break
-    sleep 1
-done
+wait_log "$B_LOG" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_STICKERS_DIR="$PACKS" \
   PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSTICKER="$B_USER" \
@@ -72,7 +68,7 @@ QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
 A_PID=$!
 
 # Ждём: bob получил и скачал стикер.
-for i in $(seq 1 45); do
+for i in $(seq 1 90); do
     grep -qE "Parvane: (входящее|получено) медиа .*kind=sticker" "$B_LOG" 2>/dev/null && break
     sleep 1
 done

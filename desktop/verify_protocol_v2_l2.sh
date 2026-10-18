@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-PV_V1_OFF=0 # сценарий сам задаёт режим v1 gateway (либо проверяет транспорт v1) — общий режим «без v1» не для него
 # Протокол v2 (spec 007, T079 + T110): режим чата «усиленная приватность» (L2,
-# правило conformance L2-1), настройка «сообщения от незнакомых» и кадры
-# перехода на v2 (E6) — два десктопа на v2.
+# правило conformance L2-1) и настройка «сообщения от незнакомых» — два десктопа.
 #
 # L2: alice включает режим в личном чате с bob → у обоих служебное сообщение
 # чата, режим активен у обоих, присутствие не публикуется, «печатает» в этот
 # чат не уходит; alice выключает → всё возвращается. Служебные сообщения
 # переживают рестарт без повторов. Приватность: «сообщения от незнакомых:
 # нет» уходит в identity.privacy.set и досылается после рестарта.
-# E6: gateway в режиме notice → сервисное уведомление; disabled → диалог
-# «обновите приложение», без разлогина и без цикла переподключений.
+# Прежний блок E6 (кадры перехода gateway PARVANE_V1_MODE=notice|disabled) снят:
+# v1 удалён и из gateway (T110), и из клиента (spec 029).
 #
 # Хуки (бинарь с -DPARVANE_DEV=ON): PARVANE_AUTOL2=<чат>:<on|off>[@сек][,…],
 # PARVANE_AUTOTYPING=<собеседник>@сек[,…], PARVANE_AUTOSTRANGERS=<on|off>[@сек].
@@ -27,7 +25,7 @@ sleep 1
 A="$SB/alice"; B="$SB/bob"
 AL="$A/td/log.txt"; BL="$B/td/log.txt"
 WS_URL='ws://127.0.0.1:9222/ws'
-V2=(PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+V2=(PARVANE_NO_LINK_OFFER=1)
 
 # ── L2 в личном чате ─────────────────────────────────────────────────────────
 PB=$(start_client "$B" bob@local "${V2[@]}" PARVANE_GATEWAY_URL="$WS_URL" \
@@ -99,33 +97,6 @@ wait_log "$BL" "история: воспроизведено" 60 || bad "bob: и
 wait_log "$AL" "приватность с сервера: незнакомые нет" 90 && ok "alice: приватность после рестарта прочитана с сервера" \
   || bad "alice: приватность после рестарта не прочитана с сервера"
 stop_pid "$PA"; stop_pid "$PB"
-
-# ── E6: кадры перехода на v2 (последним блоком: после disabled клиент ждёт) ──
-PV_GATEWAY_ENV="PARVANE_V2_FEATURES=sealed PARVANE_V1_MODE=notice" gateway_restart
-PA=$(start_client "$A" alice@local "${V2[@]}")
-wait_log "$AL" "upgrade_available\) — сервисное уведомление" 90 && ok "notice: нативное сервисное уведомление «доступна новая версия»" \
-  || bad "notice: уведомления нет"
-[ "$(grep -c "upgrade_available) — сервисное уведомление" "$AL")" = 1 ] && ok "notice: один раз за запуск" \
-  || bad "notice: уведомление повторилось"
-wait_log "$AL" "v2: готов" 90 && ok "notice: клиент работает дальше (v1 и v2)" || bad "notice: v2 не поднялся"
-stop_pid "$PA"
-
-PV_GATEWAY_ENV="PARVANE_V2_FEATURES=sealed PARVANE_V1_MODE=disabled" gateway_restart
-PA=$(start_client "$A" alice@local "${V2[@]}")
-# T134: клиент на v2 без v1 работоспособен — диалога «обновите приложение» нет,
-# он продолжает работать методами v2 (подробно — verify_protocol_v2_v1off.sh)
-wait_log "$AL" "upgrade_required\) — работаем по v2" 90 && ok "disabled: клиент отметил отключение v1 и работает по v2" \
-  || bad "disabled: нет отметки об отключении v1"
-wait_log "$AL" "v2: готов" 90 && ok "disabled: v2-сессия поднялась без соединения v1" || bad "disabled: v2 не поднялся"
-sleep 20
-grep -q "upgrade_required) — нужна новая версия" "$AL" && bad "disabled: клиент на v2 показал «обновите приложение»" \
-  || ok "disabled: диалога «обновите приложение» нет"
-grep -q "авторизация отклонена" "$AL" && bad "disabled: клиент разлогинился (учётные данные должны остаться)" \
-  || ok "disabled: без разлогина"
-[ -s "$A/td/tdata/parvane-session.txt" ] && ok "disabled: учётные данные на диске" || bad "disabled: учётные данные пропали"
-[ "$(grep -c "upgrade_required) — работаем по v2" "$AL")" = 1 ] && ok "disabled: отметка одна, без цикла переподключений v1" \
-  || bad "disabled: цикл переподключений v1"
-stop_pid "$PA"
 
 stack_stop
 finish "verify_protocol_v2_l2"

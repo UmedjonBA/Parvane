@@ -13,7 +13,7 @@ STAMP="$(date +%s)"
 A="$SB/alice"; B="$SB/bob"; mkdir -p "$A/td" "$B/td"
 
 AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$A/td/log.txt" "E2E-устройство готово" 40 && ok "alice готова" || bad "alice не готова"
+wait_log "$A/td/log.txt" "v2: готов" 90 && ok "alice готова" || bad "alice не готова"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:before-$STAMP")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*before-$STAMP" 60 && ok "до обрыва: alice получила" || bad "до обрыва: alice не получила"
 

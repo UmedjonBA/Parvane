@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Parvane — два РЕАЛЬНЫХ экземпляра форка одновременно (alice ↔ bob).
-# Никакого внешнего `nats pub` — оба сообщения отправляют сами форки через
-# обычный путь ApiWrap::sendMessage → MirrorOutgoing → msg.chat.send.
+# Оба сообщения отправляют сами форки через
+# обычный путь ApiWrap::sendMessage → MirrorOutgoing → движок v2 (запечатанный
+# конверт в инбокс v2 получателя).
 # Проверяем полный двусторонний обмен:
 #   1) alice отправила (autosend → bob);
 #   2) bob отправил  (autosend → alice);
@@ -26,53 +27,43 @@ ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 
 [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами; клиенты идут через gateway (как прод и остальные сценарии):
-# на прямом NATS sealed-отправку без токена messenger отвергает (P-40)
+# стек поднимаем сами; клиенты ходят только через gateway (протокол v2)
 STACK="$(mktemp -d /tmp/parvane-two-instances-stack.XXXXXX)"; stack_up "$STACK"
 
 echo "alice workdir: $A_WORK"
 echo "bob   workdir: $B_WORK"
 
-# E2E: свежий workdir = НОВОЕ Olm-устройство. Отправитель запечатывает для
-# бандла, который есть у identity В МОМЕНТ отправки — поэтому получатель обязан
-# опубликовать prekeys ДО отправки в его сторону. Последовательность:
-# bob (без autosend, публикует устройство) → alice шлёт bob'у → bob
-# перезапускается в ТОМ ЖЕ workdir (устройство персистно) и шлёт alice.
+# Свежий workdir = НОВОЕ устройство v2. Отправитель адресует конверт по журналу
+# устройств получателя, поэтому получатель заводит журнал ДО отправки в его
+# сторону. Последовательность: bob (без autosend, заводит устройство) → alice
+# шлёт bob'у → bob перезапускается в ТОМ ЖЕ workdir (устройство персистно) и
+# шлёт alice.
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout.log" 2>&1 &
 B_PID=$!
-for i in $(seq 1 30); do
-    grep -q "Parvane: E2E-устройство готово" "$B_LOG" 2>/dev/null && break
-    sleep 1
-done
+wait_log "$B_LOG" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$A_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="$B_USER:$A_TEXT" \
   "$BIN" -workdir "$A_WORK/td" >"$A_WORK/stdout.log" 2>&1 &
 A_PID=$!
-for i in $(seq 1 40); do
-    grep -q "Parvane: входящее msg .* ($A_USER): $A_TEXT" "$B_LOG" 2>/dev/null && break
-    sleep 1
-done
+wait_log "$B_LOG" "Parvane: входящее msg .* \($A_USER\): $A_TEXT" 90
 kill "$B_PID" 2>/dev/null; wait "$B_PID" 2>/dev/null
 mv "$B_LOG" "$B_WORK/td/log.first.txt"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
   PARVANE_AUTOLOGIN="$B_USER:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="$A_USER:$B_TEXT" \
   "$BIN" -workdir "$B_WORK/td" >"$B_WORK/stdout2.log" 2>&1 &
 B_PID=$!
-for i in $(seq 1 40); do
-    grep -q "Parvane: входящее msg .* ($B_USER): $B_TEXT" "$A_LOG" 2>/dev/null && break
-    sleep 1
-done
+wait_log "$A_LOG" "Parvane: входящее msg .* \($B_USER\): $B_TEXT" 90
 sleep 2
 kill "$A_PID" "$B_PID" 2>/dev/null; wait "$A_PID" "$B_PID" 2>/dev/null
 # Обе фазы bob'а — в один файл для дальнейших greps.
 cat "$B_WORK/td/log.first.txt" >> "$B_LOG" 2>/dev/null || true
 
 echo "── ALICE log.txt (Parvane) ──"
-grep -iE "Parvane: (login|сессия|отправлено|autosend|входящее|диалог)" "$A_LOG" 2>/dev/null || echo "(пусто)"
+grep -iE "Parvane: (login|сессия|v2 →|autosend|входящее|диалог)" "$A_LOG" 2>/dev/null || echo "(пусто)"
 echo "── BOB log.txt (Parvane) ──"
-grep -iE "Parvane: (login|сессия|отправлено|autosend|входящее|диалог)" "$B_LOG" 2>/dev/null || echo "(пусто)"
+grep -iE "Parvane: (login|сессия|v2 →|autosend|входящее|диалог)" "$B_LOG" 2>/dev/null || echo "(пусто)"
 echo "─────────────────────────────"
 
 grep -q "Parvane: autosend → $B_USER: $A_TEXT"   "$A_LOG" && ok "alice отправила bob"        || bad "alice не отправила"

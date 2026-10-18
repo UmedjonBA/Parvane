@@ -1,101 +1,62 @@
 #!/usr/bin/env bash
-# Фаза 3 — РОТАЦИЯ ключа группы при удалении участника (forward secrecy).
-# alice(owner)+bob+carol. alice шлёт msg1 (оба читают). carol удаляют. alice, увидев
-# это (RefreshGroups), ротирует свою Megolm-сессию и шлёт msg2 новым ключом.
-# Проверяем:
-#   1) до удаления: и bob, и carol расшифровали msg1;
-#   2) alice заметила выбытие и ротировала ключ (лог);
-#   3) ПОСЛЕ ротации: bob расшифровал msg2 (re-key оставшемуся сработал);
-#   4) carol НЕ получила msg2 (удалена: и сервером не фанится, и ключа новой сессии нет);
-#   5) плейнтекста msg2 нет в messenger.db.
-# Протокол v2 (по умолчанию, T135): carol исключает сама alice записью журнала
-# группы (хук AUTOADMIN remove), «ротация» — новая эпоха группы; при PV_PROTO=v1
-# — прежний путь (group.removemember шарду и Megolm-ротация).
+# Фаза 3 — РОТАЦИЯ ключа группы при исключении участника (forward secrecy), группа v2.
+# alice(owner)+bob+carol. alice шлёт msg1 (оба читают), затем исключает carol записью
+# журнала группы (хук AUTOADMIN remove) — это новая эпоха группы; msg2 alice шлёт
+# уже ключом новой эпохи. Проверяем:
+#   1) до исключения: и bob, и carol прочитали msg1;
+#   2) carol исключена, у alice началась новая эпоха группы (лог движка);
+#   3) ПОСЛЕ смены эпохи: bob прочитал msg2;
+#   4) carol НЕ получила msg2 (вне группы и без ключа новой эпохи);
+#   5) открытого текста msg2 нет в БД messenger.
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
-URL="nats://127.0.0.1:4222"
-SB="${SCRATCH:-/tmp/parvane-grprot}"; rm -rf "$SB"; mkdir -p "$SB"
+stack_start "${SCRATCH:-/tmp/parvane-grprot}"
 STAMP="$(date +%s)"; GNAME="РотГруппа"
 M1="до-удаления-$STAMP"; M2="после-ротации-$STAMP"
-A="$SB/alice/td"; B="$SB/bob/td"; C="$SB/carol/td"; mkdir -p "$A" "$B" "$C"
-AL="$A/log.txt"; BL="$B/log.txt"; CL="$C/log.txt"
-RC=0
-ok(){ printf '\033[32mok  \033[0m %s\n' "$*"; }; bad(){ printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
-[ -x "$BIN" ] || { echo "нет бинаря $BIN"; exit 2; }
+A="$SB/alice"; B="$SB/bob"; C="$SB/carol"
+AL="$A/td/log.txt"; BL="$B/td/log.txt"; CL="$C/td/log.txt"
 
-stack_up "$SB"
+# bob и carol первыми: группу v2 создают только из участников с журналом устройств v2.
+BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
+CP=$(start_client "$C" carol@local PARVANE_NO_LINK_OFFER=1)
+wait_log "$BL" "v2: готов" 90 || bad "bob: v2 не поднялся"
+wait_log "$CL" "v2: готов" 90 || bad "carol: v2 не поднялся"
+# Хуки: группа и msg1 сразу после входа, исключение carol — через ~11 с,
+# msg2 (AUTOGROUPSEND2) — позже, уже в новой эпохе.
+AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 \
+  "PARVANE_AUTOGROUP=$GNAME:bob@local,carol@local" \
+  "PARVANE_AUTOGROUPSEND=$GNAME:$M1" "PARVANE_AUTOGROUPSEND2=$GNAME:$M2" \
+  "PARVANE_AUTOADMIN=$GNAME;remove:carol@local")
 
-# bob и carol первыми (успеют опубликовать prekeys + подхватить группу).
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" \
-  "$BIN" -workdir "$B" >"$B/out.log" 2>&1 & BP=$!
-QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="carol@local:${PV_PASSWORD:-test-pass-2026}" \
-  "$BIN" -workdir "$C" >"$C/out.log" 2>&1 & CP=$!
-sleep 2
-# v2: исключение — через ~11 с после входа (после msg1 на 9-й секунде), msg2 — на 24-й
-EXTRA=(); is_v2 && EXTRA=("PARVANE_AUTOADMIN=$GNAME;remove:carol@local")
-env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
-  PARVANE_AUTOGROUP="$GNAME:bob@local,carol@local" \
-  PARVANE_AUTOGROUPSEND="$GNAME:$M1" PARVANE_AUTOGROUPSEND2="$GNAME:$M2" "${EXTRA[@]}" \
-  "$BIN" -workdir "$A" >"$A/out.log" 2>&1 & AP=$!
-
-# msg1 у обоих (до удаления).
-for i in $(seq 1 40); do
-  grep -qa "групповое .* от alice@local: $M1" "$BL" 2>/dev/null \
-    && grep -qa "групповое .* от alice@local: $M1" "$CL" 2>/dev/null && break
-  sleep 1
-done
-grep -qa "групповое .* от alice@local: $M1" "$BL" && ok "bob расшифровал msg1 (до удаления)" || bad "bob не получил msg1"
-grep -qa "групповое .* от alice@local: $M1" "$CL" && ok "carol расшифровал msg1 (до удаления)" || bad "carol не получил msg1"
+# msg1 у обоих (до исключения).
+wait_log "$BL" "групповое .* от alice@local: $M1" 90 && ok "bob прочитал msg1 (до исключения)" || bad "bob не получил msg1"
+wait_log "$CL" "групповое .* от alice@local: $M1" 30 && ok "carol прочитала msg1 (до исключения)" || bad "carol не получила msg1"
 
 GID=$(group_gid "$AL" "$GNAME")
-[ -n "$GID" ] && ok "группа создана ($GID)" || bad "GID не найден"
+[ -n "$GID" ] && ok "группа v2 создана ($GID)" || bad "GID не найден"
+wait_log "$AL" "админ-действие 'remove' над carol@local в .* → ok" 40 \
+  && ok "carol исключена записью журнала группы" || bad "не удалось исключить carol"
+ROTATED="v2: новая эпоха группы ${GID#v2g:}: [2-9]"
+wait_log "$AL" "$ROTATED" 45 && ok "alice начала новую эпоху группы после исключения" || bad "новой эпохи не было"
+wait_log "$BL" "групповое .* от alice@local: $M2" 60 && ok "bob прочитал msg2 в новой эпохе" \
+  || bad "bob НЕ прочитал msg2 — ключ новой эпохи не дошёл!"
+sleep 3
+stop_pid "$AP"; stop_pid "$BP"; stop_pid "$CP"
 
-if is_v2; then
-  ROTATED="v2: новая эпоха группы ${GID#v2g:}: [2-9]"
-  for i in $(seq 1 30); do grep -qa "админ-действие 'remove' над carol@local в .* → ok" "$AL" 2>/dev/null && break; sleep 1; done
-  grep -qa "админ-действие 'remove' над carol@local в .* → ok" "$AL" \
-    && ok "carol исключена записью журнала группы (v2)" || bad "не удалось исключить carol (v2)"
-else
-ROTATED="ротация ключа группы"
-# Удаляем carol (owner alice): берём её токен и шлём group.removemember.
-TOKRESP=$(nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"'"${PV_PASSWORD:-test-pass-2026}"'"}' 2>/dev/null | grep -o '{.*}' | head -1)
-TOKEN=$(printf '%s' "$TOKRESP" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
-if [ -n "$TOKEN" ] && [ -n "$GID" ]; then
-  nats --server "$URL" req group.removemember \
-    "{\"token\":\"$TOKEN\",\"group_id\":\"$GID\",\"member\":\"carol@local\"}" >/dev/null 2>&1
-  ok "carol удалена из группы (group.removemember)"
-else
-  bad "не удалось удалить carol (токен/GID пусты)"
-fi
-fi
-
-# Ждём ротацию у alice (RefreshGroups заметит выбытие) и msg2 у bob.
-for i in $(seq 1 45); do
-  grep -qaE "$ROTATED" "$AL" 2>/dev/null \
-    && grep -qa "групповое .* от alice@local: $M2" "$BL" 2>/dev/null && break
-  sleep 1
-done
-sleep 2
-kill "$AP" "$BP" "$CP" 2>/dev/null; wait "$AP" "$BP" "$CP" 2>/dev/null
-
-echo "── ALICE ──"; grep -aE "Parvane: (участник выбыл|ротация|AUTOGROUPSEND2?|отправлено|v2: новая эпоха|админ-действие)" "$AL" 2>/dev/null | head
+echo "── ALICE ──"; grep -aE "Parvane: (AUTOGROUPSEND2?|v2: новая эпоха|админ-действие)" "$AL" 2>/dev/null | head
 echo "── BOB ──"; grep -aE "групповое .* (: $M1|: $M2)" "$BL" 2>/dev/null | head
-echo "── CAROL ──"; grep -aE "групповое .* (: $M1|: $M2)" "$CL" 2>/dev/null | head
+echo "── CAROL ──"; grep -aE "групповое .* (: $M1|: $M2)|группа .* снята" "$CL" 2>/dev/null | head
 echo "──────────"
 
-grep -qaE "$ROTATED" "$AL" && ok "alice ротировала ключ после выбытия carol" || bad "ротации не было"
-grep -qa "групповое .* от alice@local: $M2" "$BL" && ok "bob расшифровал msg2 ПОСЛЕ ротации (re-key ok)" || bad "bob НЕ расшифровал msg2 — re-key сломан!"
 if grep -qa "групповое .* от alice@local: $M2" "$CL"; then
-  bad "carol ПОЛУЧИЛА msg2 после удаления — forward secrecy НАРУШЕНА!"
+  bad "carol ПОЛУЧИЛА msg2 после исключения — forward secrecy НАРУШЕНА!"
 else
-  ok "carol НЕ получила msg2 (удалена: нет фана + нет нового ключа)"
+  ok "carol НЕ получила msg2 (вне группы, ключа новой эпохи нет)"
 fi
-if grep -qa "$M2" "$SB"/messenger.db* 2>/dev/null; then
-  bad "плейнтекст msg2 в БД messenger"
-else
-  ok "плейнтекст msg2 отсутствует в БД messenger"
-fi
+grep -qa "группа $GID снята" "$CL" && ok "у carol группа снята" || bad "у carol группа не снята"
+grep -qa -e "$M1" -e "$M2" "$SB"/messenger.db* 2>/dev/null \
+  && bad "открытый текст группы в БД messenger" || ok "открытого текста группы в БД messenger нет"
+grep -qiE "Fatal|Unexpected in " "$AL" "$BL" "$CL" && bad "фатальная ошибка" || ok "без фатальных ошибок"
 
 clients_kill "$SB"; stack_stop
-[ "$RC" -eq 0 ] && printf '\033[32mРОТАЦИЯ ГРУПП: OK\033[0m\n' || printf '\033[31mРОТАЦИЯ ГРУПП: ПРОВАЛЫ\033[0m\n'
-exit "$RC"
+finish "РОТАЦИЯ ГРУПП"

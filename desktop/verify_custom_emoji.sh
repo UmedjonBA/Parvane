@@ -22,7 +22,7 @@ png=b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",ihdr)+chunk(b"IDAT",zlib.compress(raw))+c
 open(sys.argv[1],"wb").write(png)
 PY
 PB=$(start_client "$B" bob@local PARVANE_EMOJI_DIR="$SB/bob-emoji" PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
 # alice: со своим эмодзи-каталогом + autoemoji на bob
 PA=$(start_client "$A" alice@local PARVANE_EMOJI_DIR="$SB/alice-emoji" PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:пинг" PARVANE_AUTOEMOJI="bob@local:ТестЭмодзи:01-1f600.png")
 wait_log "$A/td/log.txt" "эмодзи-пак «ТестЭмодзи» загружен" 40 && ok "alice загрузила локальный эмодзи-пак (секция панели)" || bad "пак не загружен"
@@ -32,8 +32,8 @@ wait_log "$B/td/log.txt" "эмодзи-пак «ТестЭмодзи» мате�
 # файл появился у bob на диске
 sleep 1
 [ -f "$B/td/../"*"ParvaneEmoji/ТестЭмодзи/01-1f600.png" ] 2>/dev/null || ls "$SB/bob-emoji/ТестЭмодзи/" >/dev/null 2>&1 && ok "файл эмодзи у bob на диске" || ok "(материализация подтверждена логом)"
-K=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages WHERE kind NOT IN ('encrypted','group_encrypted');")
-[ "${K:-0}" = "0" ] && ok "на сервере только шифртекст (emoji_packs внутри E2E)" || bad "плейнтекст на сервере: $K"
+grep -qa "ТестЭмодзи" "$SB"/messenger.db* && bad "имя пака лежит на сервере открыто" \
+  || ok "на сервере только шифртекст (emoji_packs внутри E2E)"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальная ошибка" || ok "без фатальных ошибок"
 stop_pid "$PA"; stop_pid "$PB"; stack_stop
 finish "КАСТОМ-ЭМОДЗИ"

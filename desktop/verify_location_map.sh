@@ -6,15 +6,13 @@
 # не пересобирается; conformance MAP-1 — клиент не ходит к картографическим
 # хостам (тайлы только через preview.map.tile), на сервере — только шифртекст.
 # Хуки PARVANE_AUTOLOCATION живут внутри ветки PARVANE_AUTOSEND — текст передаём всегда.
-# Шард preview stack_start не поднимает — стартуем сами и засеваем кэш тайлов
+# Шард preview входит в стек (verify_lib.sh); кэш тайлов в его БД засеваем
 # синтетическими PNG: прогон офлайн, OSM не нужен.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
-[ -x "$SHARD/preview" ] || { echo "нет шарда $SHARD/preview — cd backend && cargo build -p preview"; exit 2; }
 stack_start "${SCRATCH:-/tmp/parvane-locmap}"
-PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/preview.db" \
-  PARVANE_LOG_LEVEL=info "$SHARD/preview" >"$SB/preview.log" 2>&1 & PREVIEW_PID=$!; PIDS+=($PREVIEW_PID)
-wait_log "$SB/preview.log" "Preview шард запущен" 20 && ok "preview поднят" || bad "preview не поднялся"
+PREVIEW_PID=$(stack_pids preview | head -1)
+[ -n "$PREVIEW_PID" ] && ok "preview поднят" || bad "preview не поднялся"
 
 # Точки сценария: статичная + live с тремя ходами (последний ход повторяет предыдущий —
 # проверка «та же точка не пересобирается»)
@@ -53,7 +51,7 @@ PY
 
 B="$SB/bob"; A="$SB/alice"
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
 
 # ── статичная точка ──────────────────────────────────────────────────────────
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:метка-места" PARVANE_AUTOLOCATION="bob@local:$P0")
@@ -63,8 +61,8 @@ wait_log "$B/td/log.txt" "карта локации собрана 55.75" 60 && 
 wait_log "$A/td/log.txt" "карта локации собрана 55.75" 60 && ok "alice: карта локации собрана (исходящий пузырь)" || bad "alice: карта не собрана"
 grep -q "через preview" "$B/td/log.txt" && ok "MAP-1: тайлы шли через preview" || bad "MAP-1: нет маркера «через preview»"
 grep -q "карта локации не собрана" "$A/td/log.txt" "$B/td/log.txt" && bad "есть «карта локации не собрана»" || ok "провалов склейки нет"
-K=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages WHERE kind='location';")
-[ "${K:-0}" = "0" ] && ok "на сервере location скрыт (нет kind=location)" || bad "location на сервере открыт"
+grep -qa -e '"location"' -e '55\.7512' "$SB"/messenger.db* && bad "location на сервере открыт" \
+  || ok "на сервере location скрыт (только шифртекст)"
 # SC-005: каждый уникальный тайл запрошен не больше одного раза за жизнь клиента
 # (LRU + in-flight дедуп TileClient) — в маркерах «тайл z/x/y через preview» нет повторов
 tile_dups() { grep -o "тайл [0-9/]* через preview" "$1" | sort | uniq -d | wc -l; }
@@ -103,12 +101,12 @@ sleep 5
 [ "$(tile_dups "$B/td/log.txt")" = 0 ] && ok "SC-005 bob после live: общие тайлы ходов из кэша" || bad "SC-005 bob после live: тайл запрошен повторно"
 
 # ── FR-009: preview недоступен → карта не собрана → после восстановления собирается сама ──
+# preview — потомок этой оболочки (stack_start): stop_pid дождётся выхода
 stop_pid "$PREVIEW_PID"; sleep 1
 stop_pid "$PA"; sleep 1
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:retry" PARVANE_AUTOLOCATION="bob@local:$P4")
 wait_log "$B/td/log.txt" "карта локации не собрана 55.8,37.7" 60 && ok "bob: без preview карта не собрана (ожидаемо, пузырь с фоном)" || bad "bob: нет маркера «не собрана» без preview"
-PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/preview.db" \
-  PARVANE_LOG_LEVEL=info "$SHARD/preview" >>"$SB/preview.log" 2>&1 & PREVIEW_PID=$!; PIDS+=($PREVIEW_PID)
+shard_start preview; PREVIEW_PID=${PIDS[-1]}
 sleep 3
 # повтор по таймеру (30 с) — карта появляется без рестарта клиента
 wait_log "$B/td/log.txt" "карта локации собрана 55.8,37.7" 75 && ok "bob: карта собрана повтором после восстановления preview" || bad "bob: повтор склейки не сработал"

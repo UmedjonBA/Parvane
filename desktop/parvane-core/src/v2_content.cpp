@@ -577,6 +577,10 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
             if (!str(w, "site_name").empty()) p["site_name"] = str(w, "site_name");
             if (!str(w, "title").empty()) p["title"] = str(w, "title");
             if (!str(w, "description").empty()) p["description"] = str(w, "description");
+            // Картинка превью — вложение-фото с секретом (как web: отправитель уменьшает её до загрузки)
+            if (w.contains("photo") && w["photo"].is_object() && !str(w["photo"], "file_id").empty()) {
+                p["image"] = mediaToV2(w["photo"], "photo");
+            }
             t["preview"] = p;
         }
         if (c.contains("emoji_packs") && c["emoji_packs"].is_array() && !c["emoji_packs"].empty()) {
@@ -721,6 +725,14 @@ std::optional<json> fromV2(const json &c) {
             json w{{"url", str(p, "url")}};
             for (const char *k : {"site_name", "title", "description"}) {
                 if (!str(p, k).empty()) w[k] = str(p, k);
+            }
+            // Только фото с ключами (как web contentMap): иное из чужого клиента не показываем
+            if (p.contains("image") && p["image"].is_object()) {
+                auto photo = mediaFromV2(p["image"]);
+                if (photo.value("kind", std::string()) == "photo" && !str(photo, "file_id").empty()
+                    && !str(photo, "file_key").empty()) {
+                    w["photo"] = photo;
+                }
             }
             out["webpage"] = w;
         }

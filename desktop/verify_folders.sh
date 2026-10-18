@@ -18,11 +18,11 @@ stack_up "$SB"
 
 # bob — чтобы peer bob@local резолвился; alice создаёт папку.
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOSEND="alice@local:привет" "$BIN" -workdir "$B" >"$SB/b.out" 2>&1 & BP=$!
-sleep 2
+wait_log "$B/log.txt" "v2: готов" 90 || bad "bob: v2 не поднялся"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" \
   PARVANE_AUTOFOLDER='Работа:bob@local' "$BIN" -workdir "$A" >"$SB/a1.out" 2>&1 & AP=$!
 AL="$A/log.txt"
-for i in $(seq 1 25); do grep -qa "AUTOFOLDER создал папку" "$AL" 2>/dev/null && break; sleep 1; done
+for i in $(seq 1 90); do grep -qa "AUTOFOLDER создал папку" "$AL" 2>/dev/null && break; sleep 1; done
 sleep 2
 kill "$AP" "$BP" 2>/dev/null; wait "$AP" "$BP" 2>/dev/null; sleep 1
 
@@ -36,7 +36,7 @@ echo "── persist ──"; cat "$FF" 2>/dev/null | head -c 400; echo
 # ── РАН 2: перезапуск тех же workdir ──
 info "перезапуск…"
 QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" "$BIN" -workdir "$A" >"$SB/a2.out" 2>&1 & AP=$!
-for i in $(seq 1 25); do grep -qa "папки восстановлены" "$AL" 2>/dev/null && break; sleep 1; done
+for i in $(seq 1 60); do grep -qa "папки восстановлены" "$AL" 2>/dev/null && break; sleep 1; done
 sleep 2
 kill "$AP" 2>/dev/null; wait "$AP" 2>/dev/null
 

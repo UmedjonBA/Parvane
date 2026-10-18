@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Протокол v2 (spec 007, T064): два десктопа на v2 (PARVANE_PROTO_V2=1).
+# Протокол v2 (spec 007, T064): два десктопа (клиент говорит только по v2).
 # alice — gateway по TCP (преамбула PVN2), bob — по WebSocket (двоичные кадры).
 # Проверяет: обе v2-сессии поднялись (устройство + журнал), отправка ШТАТНЫМ
 # путём уходит по v2 (маршрутизация по журналу собеседника), текст в обе
@@ -21,9 +21,9 @@ A="$SB/alice"; B="$SB/bob"
 AL="$A/td/log.txt"; BL="$B/td/log.txt"
 WS_URL='ws://127.0.0.1:9222/ws'
 
-PA=$(start_client "$A" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=bob@local:v2-a1-$S|{\"contact\":{\"first_name\":\"Ivan\"}}")
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   PARVANE_GATEWAY_URL="$WS_URL" "PARVANE_AUTOSEND_V2=alice@local:v2-b1-$S")
 
 wait_log "$AL" "v2: готов" 90 && ok "alice: v2-сессия готова (TCP PVN2)" || bad "alice: v2 не поднялся"
@@ -51,13 +51,13 @@ fi
 # поднимается из сохранённого v2-состояния и догоняет.
 stop_pid "$PB"
 stop_pid "$PA"
-PA=$(start_client "$A" alice@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=bob@local:v2-a2-$S" "PARVANE_AUTOEDIT=25:v2-a2-edited-$S")
 wait_log "$AL" "v2: состояние устройства загружено" 90 && ok "alice: v2-состояние загружено после рестарта" \
   || bad "alice: v2-состояние не загружено"
 wait_log "$AL" "v2 → bob@local msg [0-9a-f-]+ \(text\)" 90 && ok "alice → офлайн bob по v2" || bad "alice → офлайн bob не ушло"
 wait_log "$AL" "v2 → bob@local edit для" 60 && ok "правка своего сообщения ушла по v2" || bad "правка не ушла по v2"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 PARVANE_GATEWAY_URL="$WS_URL")
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_GATEWAY_URL="$WS_URL")
 wait_log "$BL" "v2: состояние устройства загружено" 90 && ok "bob: v2-состояние загружено после рестарта" \
   || bad "bob: v2-состояние не загружено"
 wait_log "$BL" "история: воспроизведено" 60 && grep -qE "\(alice@local\): v2-a1-$S" "$BL" \

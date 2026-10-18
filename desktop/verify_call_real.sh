@@ -4,36 +4,20 @@
 # Проверяем, что webrtc-фабрика поднимается и между двумя экземплярами реально
 # устанавливается ICE/DTLS-соединение (оба доходят до Active из webrtc-колбэка
 # OnConnectionChange(kConnected)). САМ ЗВУК headless не проверить — только связь.
+# Сигналы — конверты v2 через gateway; перед звонком — обмен сообщениями (D-08).
 set -u
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_lib.sh"
-URL="${PARVANE_NATS_URL:-nats://127.0.0.1:4222}"
-RC=0
-ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
-bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
+stack_start "${SCRATCH:-/tmp/parvane-call-real}"
+A="$SB/alice"; B="$SB/bob"; AL="$A/td/log.txt"; BL="$B/td/log.txt"
 
-[ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-# стек поднимаем сами (раньше скрипт ждал вручную запущенные nats+шарды)
-STACK="$(mktemp -d /tmp/parvane-call-real-stack.XXXXXX)"; stack_up "$STACK"
-nats --server "$URL" req identity.token.issue '{"user":"alice@local","password":"'"${PV_PASSWORD:-test-pass-2026}"'"}' \
-    >/dev/null 2>&1 || { echo "identity не отвечает — запусти nats+identity+call"; exit 2; }
+pair_exchange "$A" alice@local "$B" bob@local
+BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_REAL_MEDIA=1 PARVANE_AUTOACCEPT=1)
+wait_log "$BL" "v2: готов" 90 || bad "bob: v2 не поднялся"
+AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_REAL_MEDIA=1 PARVANE_AUTOCALL=bob@local)
 
-BOB=$(mktemp -d /tmp/pv-rcall-bob.XXXXXX); ALICE=$(mktemp -d /tmp/pv-rcall-alice.XXXXXX)
-
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_REAL_MEDIA=1 \
-  PARVANE_AUTOLOGIN="bob@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOACCEPT='1' \
-  "$BIN" -workdir "$BOB/td" >"$BOB/out.log" 2>&1 &
-BOBPID=$!
-sleep 7
-QT_QPA_PLATFORM=offscreen PARVANE_NATS_URL="$URL" PARVANE_REAL_MEDIA=1 \
-  PARVANE_AUTOLOGIN="alice@local:${PV_PASSWORD:-test-pass-2026}" PARVANE_AUTOCALL='bob@local' \
-  "$BIN" -workdir "$ALICE/td" >"$ALICE/out.log" 2>&1 &
-ALICEPID=$!
-
-AL="$ALICE/td/log.txt"; BL="$BOB/td/log.txt"
-for i in $(seq 1 30); do
-    grep -qa 'звонок → Active' "$AL" 2>/dev/null \
-      && grep -qa 'звонок → Active' "$BL" 2>/dev/null && break
-    sleep 1
+for _ in $(seq 1 60); do
+  grep -qa 'звонок → Active' "$AL" 2>/dev/null && grep -qa 'звонок → Active' "$BL" 2>/dev/null && break
+  sleep 1
 done
 
 grep -qa 'webrtc-фабрика создана, ok=1' "$AL" && ok "alice: webrtc-фабрика поднялась" || bad "alice: нет webrtc-фабрики"
@@ -43,8 +27,5 @@ grep -qa 'медиа-движок = webrtc' "$BL" && ok "bob: движок = р�
 grep -qa 'звонок → Active' "$AL" && ok "alice → Active (ICE/DTLS установлен)" || bad "alice не соединилась"
 grep -qa 'звонок → Active' "$BL" && ok "bob → Active (ICE/DTLS установлен)" || bad "bob не соединился"
 
-kill -9 "$BOBPID" "$ALICEPID" 2>/dev/null
-if [ "$RC" -eq 0 ]; then printf '\033[32mРЕАЛЬНЫЙ ЗВОНОК e2e: СВЯЗЬ УСТАНОВЛЕНА (звук — проверять вживую)\033[0m\n'
-else printf '\033[31mРЕАЛЬНЫЙ ЗВОНОК e2e: ЕСТЬ ПРОВАЛЫ\033[0m\n'; fi
-stack_stop
-exit $RC
+stop_pid "$AP"; stop_pid "$BP"; stack_stop
+finish "РЕАЛЬНЫЙ ЗВОНОК e2e (звук — проверять вживую)"

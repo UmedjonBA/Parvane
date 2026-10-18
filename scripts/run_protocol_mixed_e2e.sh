@@ -23,7 +23,7 @@
 #   unknown-kinds — Rust-инжектор v2 (tests/v2_inject.rs, фича test-inject)
 #                 шлёт web v2 10 записей неизвестного вида + текст (T041);
 #   state-sync-desktop — личное состояние web → desktop одного аккаунта (T139)
-#   web2-desktop2 — web v2 с desktop v2 (PARVANE_PROTO_V2=1; нужен бинарь
+#   web2-desktop2 — web v2 с desktop (клиент только v2, spec 029; нужен бинарь
 #                 desktop/build-probe/bin/Telegram с -DPARVANE_DEV=ON);
 #   call-web2-desktop2 — звонок web ↔ desktop в обе стороны (аудио, настоящий
 #                 движок на десктопе) запечатанными конвертами v2 (T089);

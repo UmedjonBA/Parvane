@@ -5,8 +5,8 @@
 #  1) bob поднимается (регистрирует устройство) и ГАСНЕТ;
 #  2) alice шлёт ему, пока его нет;
 #  3) bob поднимается снова и ОБЯЗАН получить всё пропущенное;
-#  4) дисковый курсор не должен уезжать за нерасшифрованное:
-#     tdata/parvane-pending.txt пуст либо отсутствует при чистом проходе.
+#  4) состояние движка v2 (позиция инбокса) сохранено на диске, неоткрытых
+#     записей инбокса нет.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-offline-dev}"
@@ -15,17 +15,18 @@ A="$SB/alice"; B="$SB/bob"
 
 # 1. bob регистрируется и гаснет.
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 60 && ok "bob зарегистрировал устройство" || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 && ok "bob зарегистрировал устройство" || bad "bob не поднялся"
 stop_pid "$PB"
 sleep 2
 
 # 2. alice шлёт, пока bob выключен (два сообщения — двумя запусками).
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:$T1")
-wait_log "$A/td/log.txt" "E2E-устройство готово" 60 || bad "alice не поднялась"
-sleep 6
+wait_log "$A/td/log.txt" "v2 → bob@local msg" 90 || bad "alice не отправила (1/2)"
+sleep 2
 stop_pid "$PA"
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="bob@local:$T2")
-sleep 8
+wait_log "$A/td/log.txt" "v2 → bob@local msg" 90 || bad "alice не отправила (2/2)"
+sleep 2
 stop_pid "$PA"
 
 # 3. bob возвращается — обязан догнать ОБА сообщения.
@@ -37,27 +38,14 @@ wait_log "$B/td/log.txt" "входящее msg .* \(alice@local\): $T2" 60 \
 	&& ok "bob догнал сообщение, присланное в его отсутствие (2/2)" \
 	|| bad "ПОТЕРЯ: второе сообщение не доехало после возвращения"
 
-# 4. Курсор и очередь починки согласованы: пропущенного нет.
+# 4. Позицию инбокса держит движок v2; его состояние сохраняется ДО подтверждения
+#    записи серверу (msg.inbox.ack) — иначе после рестарта прочитанное потерялось бы.
 sleep 3
-PEND="$B/td/tdata/parvane-pending.txt"
-if [ ! -s "$PEND" ]; then
-	ok "очередь починки пуста (всё прочитано)"
-else
-	bad "остались непрочитанные: $(wc -l < "$PEND") — см. $PEND"
-fi
-if is_v2; then
-	# v2: курсора синка v1 нет — позицию инбокса держит движок, его состояние
-	# сохраняется ДО подтверждения записи серверу
-	[ -s "$B/td/tdata/parvane-v2-bob@local/state" ] \
-		&& ok "состояние движка v2 сохранено (позиция инбокса)" \
-		|| bad "состояние движка v2 не сохранено"
-else
-	[ -s "$B/td/tdata/parvane-cursors.txt" ] \
-		&& ok "дисковый курсор записан после успешной вставки" \
-		|| bad "дисковый курсор не записан"
-fi
-grep -q "НЕ расшифровано" "$B/td/log.txt" && bad "были нерасшифрованные сообщения" \
-	|| ok "нерасшифрованных нет"
+[ -s "$B/td/tdata/parvane-v2-bob@local/state" ] \
+	&& ok "состояние движка v2 сохранено (позиция инбокса)" \
+	|| bad "состояние движка v2 не сохранено"
+grep -qE "запись не открыта|ошибка записи" "$B/td/log.txt" && bad "были неоткрытые записи инбокса v2" \
+	|| ok "неоткрытых записей инбокса нет"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" && bad "фатальная ошибка в логе" \
 	|| ok "без фатальных ошибок"
 

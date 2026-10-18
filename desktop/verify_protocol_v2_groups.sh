@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Протокол v2 (spec 007): группы v2 и журнал личного состояния на десктопе.
-# Четыре десктопа на v2 (PARVANE_PROTO_V2=1): alice создаёт группу с bob и
+# Четыре десктопа (протокол v2): alice создаёт группу с bob и
 # carol (все на v2 → группа v2: подписанный журнал состояния, эпохи ключей),
 # пишет; исключает carol (запись журнала → новая эпоха) — carol группу теряет
 # и нового сообщения не читает; создаёт ссылку v2
@@ -19,7 +19,7 @@ wait_log "$SB/messenger.log" "Messenger шард запущен" 60 || bad "mess
 sleep 1
 A="$SB/alice"; B="$SB/bob"; C="$SB/carol"; D="$SB/dave"
 AL="$A/td/log.txt"; BL="$B/td/log.txt"; CL="$C/td/log.txt"; DL="$D/td/log.txt"
-V2=(PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+V2=(PARVANE_NO_LINK_OFFER=1)
 
 # Участники — первыми: их журналы устройств v2 должны существовать до создания.
 PB=$(start_client "$B" bob@local "${V2[@]}")

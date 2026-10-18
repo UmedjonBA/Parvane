@@ -2,24 +2,21 @@
 # Parvane desktop — управление группой с нативных экранов (spec 004, US1–US3).
 # Экраны Edit / Permissions / Edit admin зовут те же функции, что и хуки
 # PARVANE_AUTOGROUPINFO / AUTOGROUPPERMS / AUTOGROUPADMIN; сценарий проверяет:
-#  §1 описание и фото: alice ставит через хук → маркер ok, у bob нотис с about/
-#     avatar, group.info совпадает; рестарт bob — то же из списка; bob без права
-#     → отказ forbidden; 256 символов → отказ bad_request.
+#  §1 описание и фото: alice ставит через хук → маркер ok, у bob запись журнала с
+#     about/avatar, сведения у владельца совпадают; рестарт bob — то же; bob без
+#     права → отказ forbidden; 256 символов → отказ bad_request.
 #  §2 права по умолчанию: цикл по всем 8 правам (SC-002) — снять, увидеть у bob,
 #     сверить с сервером, вернуть; рестарт bob; bob → forbidden.
 #  §3 гранулярные права админа: каждое из 6 прав по одному, admins= в маркере,
 #     bob без add_admins → forbidden, снятие → role=member.
-# Протокол v2 (по умолчанию, T135): те же хуки пишут записи журнала группы;
-# сведения сверяются по журналам клиентов (маркер «группа … обновлена (vN, v2 …)»
-# у bob и у самой alice) — ответа group.info у v2-группы нет. PV_PROTO=v1 —
-# прежний путь с нотисами и сверкой с шардом.
+# Хуки пишут записи журнала группы v2; сведения сверяются по журналам клиентов
+# (маркер «группа … обновлена (vN, v2 …)» у bob и у самой alice) — сервер видит
+# только шифртекст журнала, спросить у него сведения нельзя.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
 stack_start "${SCRATCH:-/tmp/parvane-group-manage}"
 A="$SB/alice"; B="$SB/bob"
-URL="nats://127.0.0.1:4222"
 GNAME="Manage-$$"
-NATS="${NATS_CLI:-$HOME/.local/bin/nats}"
 PNG="$SB/group.png"
 python3 - "$PNG" <<'EOF'
 import struct, sys, zlib
@@ -29,21 +26,10 @@ def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zl
 open(sys.argv[1], 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
 EOF
 
-req() { "$NATS" --server "$URL" req "$1" "$2" 2>/dev/null | grep -o '{.*}' | head -1; }
-token_of() {
-  req identity.token.issue "{\"user\":\"$1\",\"password\":\"${PV_PASSWORD:-test-pass-2026}\"}" \
-    | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null
-}
-group_info() { # <token> → JSON GroupInfo
-  req group.info "{\"token\":\"$1\",\"group_id\":\"$GID\"}" \
-    | python3 -c 'import sys,json;g=json.load(sys.stdin).get("groups",[]);print(json.dumps(g[0]) if g else "{}")' 2>/dev/null
-}
-field() { python3 -c 'import sys,json;d=json.loads(sys.argv[1]);print(eval("d"+sys.argv[2]))' "$1" "$2" 2>/dev/null; }
-
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUP="$GNAME:bob@local")
-wait_log "$A/td/log.txt" "E2E-устройство готово" 40 || bad "alice не поднялась"
+wait_log "$A/td/log.txt" "v2: готов" 90 || bad "alice не поднялась"
 
 GID=""
 for _ in $(seq 1 40); do
@@ -51,37 +37,30 @@ for _ in $(seq 1 40); do
   [ -n "$GID" ] && break; sleep 1
 done
 [ -n "$GID" ] && ok "группа создана ($GID)" || bad "GID не найден"
-# Источник сведений в маркере «обновлена (vN, <источник>)»: v1 — «нотис» (живое
-# изменение) и «список» (после рестарта); v2 — журнал группы в обоих случаях
-if is_v2; then
-  FIRST='v[0-9]+, v2 [^)]*'; NOTE='v[0-9]+, v2 [^)]*'; NOTE2="$NOTE"; LIST2="$NOTE"
-else
-  FIRST='v0, список'; NOTE='v[0-9]+, нотис'; NOTE2='v2, нотис'; LIST2='v2, список'
-fi
+# Источник сведений в маркере «обновлена (vN, <источник>)» — журнал группы
+# («v2 новая|журнал|кэш») и для живого изменения, и после рестарта
+FIRST='v[0-9]+, v2 [^)]*'; NOTE="$FIRST"; NOTE2="$FIRST"; LIST2="$FIRST"
 wait_log "$B/td/log.txt" "группа $GID обновлена \($FIRST\)" 40 \
   && ok "bob получил группу" || bad "bob не получил группу"
-TA=$(token_of alice@local); TB=$(token_of bob@local)
-[ -n "$TA" ] && [ -n "$TB" ] && ok "токены получены" || bad "нет токенов"
-# Сведения группы на «сервере»: v1 — group.info шарда; v2 — последняя запись
-# журнала глазами владельца (alice): about=…, avatar=…, perms={…}, vN
-state_about() { if is_v2; then group_line "$A/td/log.txt" "$GID" | sed -E 's/.* about=(.*) avatar=[^ ]* perms=.*/\1/'; else field "$(group_info "$TA")" '["about"]'; fi; }
-state_avatar() { if is_v2; then group_line "$A/td/log.txt" "$GID" | sed -E 's/.* avatar=([^ ]*) perms=.*/\1/' | grep -v '^-$'; else field "$(group_info "$TA")" '["avatar"]'; fi; }
+# Сведения группы — последняя запись журнала глазами владельца (alice):
+# about=…, avatar=…, perms={…}, vN
+state_about() { group_line "$A/td/log.txt" "$GID" | sed -E 's/.* about=(.*) avatar=[^ ]* perms=.*/\1/'; }
+state_avatar() { group_line "$A/td/log.txt" "$GID" | sed -E 's/.* avatar=([^ ]*) perms=.*/\1/' | grep -v '^-$'; }
 state_perm() { # <право> → True|False
-  if is_v2; then group_line "$A/td/log.txt" "$GID" | grep -q "\"$1\":true" && echo True || echo False
-  else field "$(group_info "$TA")" "[\"default_permissions\"][\"$1\"]"; fi
+  group_line "$A/td/log.txt" "$GID" | grep -q "\"$1\":true" && echo True || echo False
 }
-state_version() { if is_v2; then group_line "$A/td/log.txt" "$GID" | sed -E 's/.*обновлена \(v([0-9]+),.*/\1/'; else field "$(group_info "$TA")" '["version"]'; fi; }
+state_version() { group_line "$A/td/log.txt" "$GID" | sed -E 's/.*обновлена \(v([0-9]+),.*/\1/'; }
 
 # ── §1 описание и фото (US1) ─────────────────────────────────────────────────
 ABOUT="описание с экрана $$"
 stop_pid "$PA"
 PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUPINFO="$GNAME:about=$ABOUT;avatar=$PNG")
 wait_log "$A/td/log.txt" "AUTOGROUPINFO '$GNAME' about → ok" 40 \
-  && ok "US1: описание принято сервером" || bad "US1: описание не принято"
+  && ok "US1: описание записано в журнал группы" || bad "US1: описание не принято"
 wait_log "$A/td/log.txt" "AUTOGROUPINFO '$GNAME' avatar → ok" 40 \
-  && ok "US1: фото принято сервером" || bad "US1: фото не принято"
+  && ok "US1: фото записано в журнал группы" || bad "US1: фото не принято"
 wait_log "$B/td/log.txt" "группа $GID обновлена \($NOTE\) about=$ABOUT" 30 \
-  && ok "US1: bob получил описание нотисом" || bad "US1: описание не дошло до bob"
+  && ok "US1: bob получил описание без перезагрузки" || bad "US1: описание не дошло до bob"
 wait_log "$B/td/log.txt" "группа $GID обновлена \($NOTE2\) about=$ABOUT avatar=[0-9a-f-]{36}" 30 \
   && ok "US1: bob получил фото без перезагрузки" || bad "US1: фото не дошло до bob"
 wait_log "$B/td/log.txt" "аватар применён для $GID" 30 \
@@ -114,14 +93,14 @@ for right in send_messages send_media send_stickers_gifs send_polls embed_links 
     && ok "US2: $right=0 принято" || bad "US2: $right=0 не принято"
   wait_log "$B/td/log.txt" "группа $GID обновлена \($NOTE\) .*\"$right\":false" 30 \
     && ok "US2: bob видит $right=false без перезагрузки" || bad "US2: $right=false не дошло до bob"
-  # v2: строка о группе в журнале владельца появляется чуть позже ответа хука
+  # строка о группе в журнале владельца появляется чуть позже ответа хука
   for _ in $(seq 1 15); do [ "$(state_perm "$right")" = "False" ] && break; sleep 1; done
   [ "$(state_perm "$right")" = "False" ] \
     && ok "US2: в сведениях группы $right=false" || bad "US2: $right=false не сохранено"
   stop_pid "$PA"
   PA=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUPPERMS="$GNAME:$right=1")
   wait_log "$A/td/log.txt" "AUTOGROUPPERMS '$GNAME' → ok" 40 || bad "US2: $right=1 не принято"
-  # последние сведения у bob несут право снова включённым (в v2 «true» есть и в прежних записях)
+  # последние сведения у bob несут право снова включённым («true» есть и в прежних записях)
   for _ in $(seq 1 30); do group_line "$B/td/log.txt" "$GID" | grep -q "\"$right\":true" && break; sleep 1; done
   group_line "$B/td/log.txt" "$GID" | grep -q "\"$right\":true" \
     && ok "US2: $right вернулось" || bad "US2: $right=true не дошло до bob"
@@ -129,7 +108,7 @@ done
 VER=$(state_version)
 stop_pid "$PB"
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOGROUPPERMS="$GNAME:send_polls=0")
-if is_v2; then AFTER="v$VER, v2 [^)]*"; else AFTER="v$VER, список"; fi
+AFTER="v$VER, v2 [^)]*"
 wait_log "$B/td/log.txt" "группа $GID обновлена \($AFTER\)" 60 \
   && ok "US2: после рестарта bob — та же ревизия v$VER" || bad "US2: после рестарта версия не сошлась"
 wait_log "$B/td/log.txt" "AUTOGROUPPERMS '$GNAME' → отказ forbidden" 40 \
@@ -147,20 +126,9 @@ for right in change_info delete_messages ban_users invite_users pin_messages add
   esac
   wait_log "$A/td/log.txt" "группа $GID обновлена \(v[0-9]+, [^)]*\) .* admins=bob@local:$F" 40 \
     && ok "US3: маркер admins=bob@local:$F" || bad "US3: маркер admins не содержит только $right"
-  # набор прав на сервере: v1 — group.info; v2 — тот же маркер admins= в журнале bob
-  if is_v2; then
-    wait_log "$B/td/log.txt" "группа $GID обновлена \(v[0-9]+, [^)]*\) .* admins=bob@local:$F" 40 \
-      && ok "US3: журнал группы у bob — ровно $right" || bad "US3: у bob набор прав не совпал"
-    continue
-  fi
-  RIGHTS=$(field "$(group_info "$TA")" '["members"]')
-  echo "$RIGHTS" | python3 -c "
-import sys,ast
-ms=ast.literal_eval(sys.stdin.read())
-b=[m for m in ms if m['address']=='bob@local'][0]
-r=b.get('admin_rights',{})
-ok = b['role']=='admin' and r.get('$right') and sum(1 for v in r.values() if v)==1
-sys.exit(0 if ok else 1)" && ok "US3: сервер — ровно $right" || bad "US3: сервер — набор не совпал"
+  # набор прав глазами участника — тот же маркер admins= в журнале bob
+  wait_log "$B/td/log.txt" "группа $GID обновлена \(v[0-9]+, [^)]*\) .* admins=bob@local:$F" 40 \
+    && ok "US3: журнал группы у bob — ровно $right" || bad "US3: у bob набор прав не совпал"
 done
 wait_log "$B/td/log.txt" "группа $GID обновлена \($NOTE\) .* role=admin" 30 \
   && ok "US3: bob видит свою роль admin" || bad "US3: у bob нет role=admin"

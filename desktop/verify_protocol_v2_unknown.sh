@@ -19,7 +19,7 @@ sleep 1
 B="$SB/bob"; BL="$B/td/log.txt"
 INJ="inj$S@local"; FINAL="после-неизвестных-$S"
 
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия готова" || bad "bob: v2 не поднялся"
 
 (cd "$ROOT/../backend" && PARVANE_INJECT_GATEWAY_TCP=127.0.0.1:9223 PARVANE_INJECT_FROM="$INJ" \
@@ -38,7 +38,7 @@ TEXT_AT=$(grep -n "входящее msg [0-9a-f-]* ($INJ): $FINAL" "$BL" | head 
 
 # Рестарт: заглушки и текст не пропали и не задвоились (курсор журнала не откатился)
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 || bad "bob: v2 не поднялся после рестарта"
 sleep 8
 [ "$(grep -c "входящее msg [0-9a-f-]* ($INJ): $FINAL" "$BL")" -le 1 ] \

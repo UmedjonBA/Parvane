@@ -10,9 +10,9 @@ stack_start "$SB"
 STAMP="$(date +%s)"
 A="$SB/alice"; B="$SB/bob"; mkdir -p "$A/td" "$B/td"
 BP=$(start_client "$B" bob@local)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob: устройство не готово"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob: устройство не готово"
 AP=$(start_client "$A" alice@local PARVANE_AUTOSEND="bob@local:Needle-$STAMP-from-alice")
-wait_log "$B/td/log.txt" "входящее msg .*alice@local.*Needle-$STAMP-from-alice" 40 && ok "bob получил сообщение alice" || bad "bob не получил"
+wait_log "$B/td/log.txt" "входящее msg .*alice@local.*Needle-$STAMP-from-alice" 90 && ok "bob получил сообщение alice" || bad "bob не получил"
 stop_pid "$BP"
 BP=$(start_client "$B" bob@local PARVANE_AUTOSEND="alice@local:reply needle-$STAMP-from-bob")
 wait_log "$A/td/log.txt" "входящее msg .*bob@local.*needle-$STAMP-from-bob" 40 && ok "alice получила ответ bob" || bad "alice не получила ответ"

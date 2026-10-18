@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 # Parvane — регистрация через Telegram-бота и двухфакторный вход (десктоп).
-# identity в режиме telegram (PARVANE_TELEGRAM_BOT+SECRET); «бот» — nats req
-# identity.telegram.confirm. Сценарий:
+# identity в режиме telegram (PARVANE_TELEGRAM_BOT+SECRET); «бот» — метод v2
+# канала PRE `identity.account.confirm_telegram` через gateway (как настоящий бот
+# backend/infra/telegram-bot; кодек — scripts/e2e_tg_confirm_v2.mjs, нужен node ≥ 22
+# с глобальным WebSocket). Сценарий:
 #   1) новый ник → экран Telegram (token в логе) → бот подтверждает → вход;
 #   2) PARVANE_AUTOTWOFA=on включает 2FA;
 #   3) новое устройство (другой workdir): пароль верен → экран Telegram;
 #      чужой Telegram отклонён; свой — подтверждает → вход;
 #   4) то же устройство повторно — доверенное, без Telegram;
 #   5) выключение 2FA → обычный вход с нового устройства.
-# Без соединения v1: PV_GATEWAY_ENV="PARVANE_V2_FEATURES=sealed PARVANE_V1_MODE=disabled".
+# «Вошёл» = сессия поднята («сессия поднята для …»): новые устройства аккаунта в
+# журнал устройств v2 без линковки не входят (LINK-1), но вход и 2FA — до этого.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/verify_lib.sh"
-NATS="${NATS_BIN:-$HOME/.local/bin/nats}"
+BOT_JS="$ROOT/../scripts/e2e_tg_confirm_v2.mjs"
+command -v node >/dev/null || { echo "нет node в PATH (нужен для «бота» подтверждения)"; exit 2; }
 SB="$(mktemp -d /tmp/pv-2fa.XXXXXX)"
 SECRET="desktop-e2e-telegram-secret"
 stack_start "$SB" PARVANE_TELEGRAM_BOT=parvane_e2e_bot PARVANE_TELEGRAM_SECRET="$SECRET" PARVANE_DOMAIN=local
 USER="tfa$(date +%s)"
-confirm() { # confirm <token> <telegram_id>
-  "$NATS" --server nats://127.0.0.1:4222 req identity.telegram.confirm \
-    "{\"secret\":\"$SECRET\",\"token\":\"$1\",\"telegram_id\":$2,\"telegram_name\":\"tg$2\"}" 2>/dev/null
+confirm() { # confirm <token> <telegram_id> → JSON {"ok":true|false,…}
+  node --input-type=module -e '
+    const [js, url, secret, token, id] = process.argv.slice(1);
+    const { botConfirmV2 } = await import(js);
+    console.log(JSON.stringify(await botConfirmV2(url, secret, token, Number(id))));
+  ' "$BOT_JS" "ws://127.0.0.1:9222/ws" "$SECRET" "$1" "$2" 2>/dev/null
 }
 token_of() { grep -oE "ждём подтверждения, token=[A-Za-z0-9_-]+" "$1" | tail -1 | sed 's/.*token=//'; }
 
@@ -29,7 +36,7 @@ wait_log "$D1/td/log.txt" "Telegram регистрация — ждём подт
 T=$(token_of "$D1/td/log.txt")
 [ -n "$T" ] && ok "токен регистрации в логе" || bad "нет токена"
 R=$(confirm "$T" 3001); echo "$R" | grep -q '"ok":true' && ok "бот подтвердил регистрацию" || bad "бот не подтвердил: $R"
-wait_log "$D1/td/log.txt" "E2E-устройство готово" 40 && ok "после подтверждения клиент вошёл сам ($USER@local)" || bad "клиент не вошёл после подтверждения"
+wait_log "$D1/td/log.txt" "сессия поднята для $USER@local" 60 && ok "после подтверждения клиент вошёл сам ($USER@local)" || bad "клиент не вошёл после подтверждения"
 grep -q "autologin hook for $USER" "$D1/td/log.txt" || bad "автологин не сработал"
 stop_pid "$P1"
 
@@ -44,14 +51,14 @@ P2=$(start_client "$D2" "$USER@local")
 wait_log "$D2/td/log.txt" "Telegram вход — ждём подтверждения" 40 && ok "новое устройство: экран подтверждения входа" || bad "новое устройство: нет экрана Telegram"
 T=$(token_of "$D2/td/log.txt")
 R=$(confirm "$T" 3002); echo "$R" | grep -q '"ok":false' && ok "чужой Telegram отклонён" || bad "чужой Telegram принят: $R"
-sleep 3; grep -q "E2E-устройство готово" "$D2/td/log.txt" && bad "вошёл без подтверждения" || ok "без подтверждения входа нет"
+sleep 3; grep -q "сессия поднята для" "$D2/td/log.txt" && bad "вошёл без подтверждения" || ok "без подтверждения входа нет"
 R=$(confirm "$T" 3001); echo "$R" | grep -q '"ok":true' && ok "свой Telegram подтвердил вход" || bad "свой Telegram отклонён: $R"
-wait_log "$D2/td/log.txt" "E2E-устройство готово" 40 && ok "вход завершён после подтверждения" || bad "вход не завершился"
+wait_log "$D2/td/log.txt" "сессия поднята для $USER@local" 60 && ok "вход завершён после подтверждения" || bad "вход не завершился"
 stop_pid "$P2"
 
 # 4) то же устройство — доверенное
 P2=$(start_client "$D2" "$USER@local")
-wait_log "$D2/td/log.txt" "E2E-устройство готово" 40 && ok "доверенное устройство вошло без Telegram" || bad "доверенное устройство не вошло"
+wait_log "$D2/td/log.txt" "сессия поднята для $USER@local" 60 && ok "доверенное устройство вошло без Telegram" || bad "доверенное устройство не вошло"
 grep -q "ждём подтверждения" "$D2/td/log.txt" && bad "доверенное устройство снова просит Telegram" || ok "повторного подтверждения не было"
 stop_pid "$P2"
 
@@ -61,17 +68,9 @@ wait_log "$D1/td/log.txt" "autotwofa → enabled=0 ok=1" 40 && ok "2FA выкл�
 stop_pid "$P1"
 D3="$SB/dev3"; mkdir -p "$D3/td"
 P3=$(start_client "$D3" "$USER")
-wait_log "$D3/td/log.txt" "E2E-устройство готово" 40 && ok "после выключения 2FA — обычный вход" || bad "обычный вход не прошёл"
+wait_log "$D3/td/log.txt" "сессия поднята для $USER@local" 60 && ok "после выключения 2FA — обычный вход" || bad "обычный вход не прошёл"
 grep -q "ждём подтверждения" "$D3/td/log.txt" && bad "просит Telegram при выключенном 2FA" || true
 stop_pid "$P3"
-# Сервер с отключённым v1 (E6-1): PV_GATEWAY_ENV="… PARVANE_V1_MODE=disabled" — весь
-# сценарий (регистрация, включение/выключение 2FA с паролем, вход) идёт методами v2
-case " ${PV_GATEWAY_ENV:-} " in *" PARVANE_V1_MODE=disabled "*)
-  grep -qa "v1-путь в режиме Disabled" "$SB/gateway.log" && ok "gateway: v1 отключён" || bad "gateway не в режиме disabled"
-  grep -qa "gateway::session.*Клиент авторизован" "$SB/gateway.log" && bad "кто-то авторизовался по v1" \
-    || ok "по v1 не авторизовался никто"
-  ;;
-esac
 stack_stop
 [ "$RC" -eq 0 ] && rm -rf "$SB" || echo "логи: $SB"
 finish "TELEGRAM 2FA"

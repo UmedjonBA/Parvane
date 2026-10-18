@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Parvane desktop — CONFORMANCE PACK-1 и EMOJI-1 (conformance/sync-rules.json).
-# PACK-1: архив пака грузится в cloud ПОД НАБОР ПОЛУЧАТЕЛЕЙ — alice шлёт эмодзи
-#   одного пака сначала bob'у, затем carol; в облаке должно появиться ДВА архива
-#   (переиспользование ссылки, выданной другому получателю, — нарушение).
+# PACK-1: архив пака — блоб по секрету capability (CAP-1), секрет едет в ссылке
+#   на пак и к получателям не привязан: alice шлёт эмодзи одного пака bob'у,
+#   carol и снова bob'у — в облаке ОДИН архив (повторно не грузится).
 # EMOJI-1: docId считается от ИМЕНИ ИЗ ССЫЛКИ — пак с нормализуемым именем
 #   «Pv.Raw!77» распаковывается у bob в каталог «PvRaw77», но после рестарта
 #   грузится под сырым именем (иначе docId разъедутся с отправителем).
@@ -27,8 +27,8 @@ PY
 
 PB=$(start_client "$B" bob@local PARVANE_EMOJI_DIR="$SB/bob-emoji" PARVANE_NO_LINK_OFFER=1)
 PC=$(start_client "$C" carol@local PARVANE_EMOJI_DIR="$SB/carol-emoji" PARVANE_NO_LINK_OFFER=1)
-wait_log "$B/td/log.txt" "E2E-устройство готово" 40 || bad "bob не поднялся"
-wait_log "$C/td/log.txt" "E2E-устройство готово" 40 || bad "carol не поднялась"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
+wait_log "$C/td/log.txt" "v2: готов" 90 || bad "carol не поднялась"
 
 # alice в ОДНОМ сеансе шлёт эмодзи пака двум разным получателям
 PA=$(start_client "$A" alice@local PARVANE_EMOJI_DIR="$SB/alice-emoji" PARVANE_NO_LINK_OFFER=1 \
@@ -41,30 +41,18 @@ wait_log "$C/td/log.txt" "эмодзи-пак «$RAW» материализов�
 #  «другой получатель» → новый архив, «тот же получатель» → переиспользование.
 #  Третья отправка идёт на t+15 с, ждём её появления у bob перед подсчётом.
 wait_log "$A/td/log.txt" "autoemoji → " 40 || bad "autoemoji не отработал"
-archives() {
-  if is_v2; then
-    # v2: архив — блоб по capability (CAP-1): имени файла серверу нет, получателей нет;
-    # секрет едет в ссылке на пак, и тот же архив переиспользуется по тому же правилу
-    sqlite3 "$SB/cloud.db-v2.db" "SELECT COUNT(*) FROM blob_caps;"
-  else
-    sqlite3 "$SB/cloud.db" "SELECT COUNT(*) FROM files WHERE filename = 'emoji.pvpk';"
-  fi
-}
+# Архив — блоб по capability (CAP-1): имени файла серверу нет, получателей нет;
+# секрет едет в ссылке на пак, и тот же архив переиспользуется по тому же правилу
+archives() { sqlite3 "$SB/cloud.db-v2.db" "SELECT COUNT(*) FROM blob_caps;"; }
 # Вторая отправка (другой получатель) по v2 идёт дольше — журнал и ключи нового
 # собеседника; ждём второй архив, затем третью отправку (t+15 с) и считаем итог
 sleep 12
 ARCHIVES=$(archives)
-if is_v2; then
-  # Секрет capability едет в самой ссылке на пак — архив не привязан к получателям,
-  # и один и тот же годится всем (carol выше материализовала пак): грузится ОДИН раз
-  [ "${ARCHIVES:-0}" = "1" ] \
-    && ok "PACK-1 (v2): один архив по capability на три отправки — повторно не грузится" \
-    || bad "PACK-1 (v2): архивов $ARCHIVES вместо 1 — архив грузится на каждую отправку"
-  ARCHIVES=2 # проверка ниже — модель получателей v1
-fi
-[ "${ARCHIVES:-0}" = "2" ] \
-  && ok "PACK-1: ровно два архива на три отправки — новый получатель грузит, повторный переиспользует" \
-  || bad "PACK-1: архивов в cloud $ARCHIVES вместо 2 — ссылка переиспользована для чужого получателя либо архив грузится на каждую отправку"
+# Секрет capability едет в самой ссылке на пак — архив не привязан к получателям,
+# и один и тот же годится всем (carol выше материализовала пак): грузится ОДИН раз
+[ "${ARCHIVES:-0}" = "1" ] \
+  && ok "PACK-1: один архив по capability на три отправки — повторно не грузится" \
+  || bad "PACK-1: архивов $ARCHIVES вместо 1 — архив грузится на каждую отправку"
 
 # EMOJI-1: каталог нормализован, сырое имя сохранено рядом
 DEST="$SB/bob-emoji/$NORM"
@@ -103,8 +91,8 @@ wait_log "$B/td/log.txt" "эмодзи-пак «$CYR» загружен" 60 \
   && ok "EMOJI-1/кириллица: после рестарта пак загружен под сырым именем" \
   || bad "EMOJI-1/кириллица: после рестарта имя пака разъехалось"
 
-K=$(sqlite3 "$SB/messenger.db" "SELECT COUNT(*) FROM messages WHERE kind NOT IN ('encrypted','group_encrypted');")
-[ "${K:-0}" = "0" ] && ok "на сервере только шифртекст" || bad "плейнтекст на сервере: $K"
+grep -qa -e "$RAW" -e "$CYR" "$SB"/messenger.db* && bad "имя пака лежит на сервере открыто" \
+  || ok "на сервере только шифртекст"
 grep -qiE "Fatal|Unexpected in " "$A/td/log.txt" "$B/td/log.txt" "$C/td/log.txt" && bad "фатальная ошибка" || ok "без фатальных ошибок"
 stop_pid "$PA"; stop_pid "$PB"; stop_pid "$PC"; stack_stop
 finish "CONFORMANCE PACK-1/EMOJI-1"

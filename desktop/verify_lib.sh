@@ -1,46 +1,57 @@
 #!/usr/bin/env bash
-# Parvane — общая обвязка desktop-e2e (мультидевайс/линковка/devices/email/edit).
-# Поднимает nats + шарды (identity, messenger, cloud, call) + gateway в $SB,
-# даёт ok/bad/start_client/wait_log/stop_all. Источник: . verify_lib.sh
+# Parvane — общая обвязка desktop-e2e. Клиент говорит ТОЛЬКО по протоколу v2
+# через gateway (spec 029: v1, прямой NATS и Olm/Megolm из клиента удалены).
+# Стек как у web-e2e (`scripts/run_web_e2e.sh`) и прода (compose): NATS с
+# продовым конфигом ACL (`backend/infra/nats/server.prod.conf`, пароли ролей),
+# шарды identity, messenger, cloud, call, preview, push, domains + gateway
+# (WS 9222 / TCP 9223); identity требует доказательство ключа устройства
+# (PARVANE_REQUIRE_DEVICE_PROOF=1, как на проде с 17 окт 2026).
+# Даёт ok/bad/start_client/wait_log/stop_pid/stack_*/finish. Источник: . verify_lib.sh
 # ВАЖНО: бинарь tdesktop должен быть собран с -DPARVANE_DEV=ON — иначе
-# PARVANE_AUTOLOGIN/AUTOSEND/PARVANE_GATEWAY_URL=host:port игнорируются (P-45/P-46).
+# PARVANE_AUTO*/PARVANE_GATEWAY_URL=host:port игнорируются (P-45/P-46).
+#
+# Настройки окружения:
+#   PV_GATEWAY_ENV="A=1 B=2"  — дополнительное окружение gateway (и при gateway_restart);
+#   PV_SHARD_ENV="A=1 B=2"    — дополнительное окружение ВСЕХ шардов;
+#   PV_DOMAIN=local           — домен сервера (PARVANE_DOMAIN всех шардов и gateway);
+#   PV_NATS_ACL=0             — NATS без ACL (только для старых android-сценариев,
+#                               которые ходят в шину `nats req` напрямую);
+#   PV_FEDERATION_PORT=<порт> — поднять ещё шард federation (HTTP без TLS: бинарь
+#                               собран с `--features insecure-test-transport`).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 RC=0
-# ── протокол клиентов сценария (T135) ────────────────────────────────────────
-# v2 включён по умолчанию; PV_PROTO=v1 — весь сценарий на прежнем протоколе
-# (клиентам уходит PARVANE_PROTO_V2=0). Проверки, привязанные к v1 (ответы
-# шарда group.*, таблицы messenger.db, каталог устройств v1), идут только при
-# PV_PROTO=v1; для v2 рядом стоят проверки по журналам клиентов и БД v2.
-PV_PROTO="${PV_PROTO:-v2}"
-if [ "$PV_PROTO" = v1 ]; then export PARVANE_PROTO_V2=0; else export PARVANE_PROTO_V2=1; fi
-is_v2() { [ "$PV_PROTO" != v1 ]; }
-# Адрес группы по имени из лога создателя: UUID (v1) либо v2g:<hex> (v2).
+PV_DOMAIN="${PV_DOMAIN:-local}"
+# Адрес группы v2 (v2g:<hex>) по имени из лога создателя.
 group_gid() { # group_gid <log> <имя>
-  grep -a "группа \(v2 \)\?'$2' создана" "$1" 2>/dev/null \
-    | grep -oE 'v2g:[0-9a-f]{32}|[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}' | head -1
+  grep -a "группа v2 '$2' создана" "$1" 2>/dev/null | grep -oE 'v2g:[0-9a-f]{32}' | head -1
 }
 # Последняя строка «группа <gid> обновлена (…)» в логе клиента: версия, права,
 # роль самого клиента, заявки и админы — состояние группы глазами участника.
 group_line() { # group_line <log> <gid>
   grep -a "Parvane: группа $2 обновлена" "$1" 2>/dev/null | tail -1
 }
-# Окружение устройств одного аккаунта. v2: второе устройство обязано быть
-# привязано (LINK-1 v2) — старое выдаёт грант без UI (PARVANE_AUTOLINK_GRANT=1),
-# новое публикует оффер само. v1: второе устройство работает и без линковки —
-# офферы выключены, как в сценариях до v2.
-if is_v2; then PV_DEV_OLD=(PARVANE_AUTOLINK_GRANT=1); PV_DEV_NEW=(PARVANE_AUTOLINK_GRANT=1)
-else PV_DEV_OLD=(PARVANE_NO_LINK_OFFER=1); PV_DEV_NEW=(PARVANE_NO_LINK_OFFER=1); fi
+# Окружение устройств одного аккаунта: второе устройство обязано быть привязано
+# (LINK-1 v2) — старое выдаёт грант без UI (PARVANE_AUTOLINK_GRANT=1), новое
+# публикует оффер само и ждёт гранта (wait_linked).
+PV_DEV_OLD=(PARVANE_AUTOLINK_GRANT=1)
+PV_DEV_NEW=(PARVANE_AUTOLINK_GRANT=1)
 wait_linked() { # wait_linked <log нового устройства> [сек=90]
   wait_log "$1" "v2: устройство привязано грантом линковки" "${2:-90}" && wait_log "$1" "v2: готов" 60
 }
 ok()  { printf '\033[32mok  \033[0m %s\n' "$*"; }
 bad() { printf '\033[31mFAIL\033[0m %s\n' "$*"; RC=1; }
 PIDS=()
+# Пароли ролей NATS (как в run_web_e2e.sh; только для локального стека)
+PV_NATS_ROLES="identity messenger cloud notes calendar call preview push domains federation gateway"
+nats_pass() { echo "parvane-desk-e2e-$1"; }
+# Открытый ключ администратора для жалоб (spec 024) — тестовая пара, закрытая часть
+# в scripts/e2e_report_admin.key (тот же ключ, что у web-e2e)
+PV_REPORT_PUBLIC_KEY="${PV_REPORT_PUBLIC_KEY:-HdJ5hOKvSb97IDT0GBi_sqoYEWuTk0SbNQp0yhReHHc}"
 # Гасит ТОЛЬКО стек desktop-e2e: nats на 4222 и шарды, подключённые к нему.
 # Не по имени процесса (`pkill -x identity`) — рядом могут идти web-e2e со своими
 # шардами из тех же бинарей на других портах.
 stack_pids() { # stack_pids <имя-шарда|все>
-  local p names="${1:-identity|messenger|cloud|call|gateway|preview|push|domains}"
+  local p names="${1:-identity|messenger|cloud|call|gateway|preview|push|domains|federation}"
   for p in $(pgrep -x "$names" 2>/dev/null); do
     tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null \
       | grep -qx 'PARVANE_NATS_URL=nats://127.0.0.1:4222' && echo "$p"
@@ -65,35 +76,72 @@ wait_port() { # wait_port <port> [попыток по 0.2 с = 50]
   done
   return 1
 }
+# Запуск одного шарда: shard_start <шард> [ENV=VAL ...] (ENV из аргументов — после
+# умолчаний, переопределяют их). Окружение — как start_shard в run_web_e2e.sh.
+shard_start() {
+  local s="$1"; shift
+  local creds=()
+  [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER="$s" PARVANE_NATS_PASS="$(nats_pass "$s")")
+  # shellcheck disable=SC2086
+  env PARVANE_NATS_URL=nats://127.0.0.1:4222 "${creds[@]}" \
+    PARVANE_DB_PATH="$SB/$s.db" \
+    PARVANE_WELL_KNOWN_FILE="$SB/parvane.json" \
+    PARVANE_DOMAIN="$PV_DOMAIN" \
+    PARVANE_LOG_LEVEL=info \
+    PARVANE_LOGIN_RATE_IP=100000 \
+    PARVANE_REGISTER_RATE_IP=100000 \
+    PARVANE_CALL_V2_RINGING_MAX=100000 \
+    PARVANE_REQUIRE_DEVICE_PROOF=1 \
+    PARVANE_REPORT_PUBLIC_KEY="$PV_REPORT_PUBLIC_KEY" \
+    ${PV_SHARD_ENV:-} "$@" "$SHARD/$s" >>"$SB/$s.log" 2>&1 & PIDS+=($!)
+}
 # stack_up <scratch> [env-для-identity] — поднять стек, НЕ очищая каталог
 # (скрипт уже разложил в нём профили/файлы); stack_start — то же с очисткой.
 stack_up() {
   SB="$1"; shift
   mkdir -p "$SB"
   [ -x "$BIN" ] || { echo "нет бинаря $BIN — сначала собери"; exit 2; }
-  for s in identity messenger cloud call gateway; do
-    [ -x "$SHARD/$s" ] || { echo "нет шарда $SHARD/$s — cargo build"; exit 2; }
+  local s
+  for s in identity messenger cloud call preview push domains gateway; do
+    [ -x "$SHARD/$s" ] || { echo "нет шарда $SHARD/$s — cargo build -p $s"; exit 2; }
   done
+  if [ -n "${PV_FEDERATION_PORT:-}" ] && [ ! -x "$SHARD/federation" ]; then
+    echo "нет шарда $SHARD/federation — cargo build -p federation --features insecure-test-transport"; exit 2
+  fi
   command -v nats-server >/dev/null || { echo "нет nats-server в PATH"; exit 2; }
   stack_reap   # хвост прошлого прогона на тех же портах
-  nats-server -p 4222 >"$SB/nats.log" 2>&1 & PIDS+=($!)
+  if [ "${PV_NATS_ACL:-1}" = 1 ]; then
+    local penv=() r
+    for r in $PV_NATS_ROLES; do penv+=("PARVANE_$(echo "$r" | tr a-z A-Z)_PASS=$(nats_pass "$r")"); done
+    env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p 4222 \
+      >"$SB/nats.log" 2>&1 & PIDS+=($!)
+  else
+    nats-server -a 127.0.0.1 -p 4222 >"$SB/nats.log" 2>&1 & PIDS+=($!)
+  fi
   wait_port 4222 || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
   # headless-клиенты перелогиниваются ~1-2 раза/с с 127.0.0.1 — лимиты по IP
   # и логину (identity) для e2e снимаем, иначе через ~15 с интро замирает
-  env PARVANE_LOGIN_RATE=100000 PARVANE_LOGIN_RATE_IP=100000 \
-    PARVANE_REGISTER_RATE=100000 PARVANE_REGISTER_RATE_IP=100000 PARVANE_REGISTER_RATE_GLOBAL=100000 \
-    "$@" PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/identity.db" \
-    PARVANE_LOG_LEVEL=info "$SHARD/identity" >"$SB/identity.log" 2>&1 & PIDS+=($!)
-  # domains (каркас доменов, spec 010) — если собран: desktop его не использует,
-  # но стек должен совпадать с web-e2e и продом
-  for s in messenger cloud call domains; do
-    [ "$s" = domains ] && [ ! -x "$SHARD/$s" ] && continue
-    PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/$s.db" \
-      PARVANE_LOG_LEVEL=info "$SHARD/$s" >"$SB/$s.log" 2>&1 & PIDS+=($!)
+  shard_start identity PARVANE_LOGIN_RATE=100000 PARVANE_REGISTER_RATE=100000 \
+    PARVANE_REGISTER_RATE_GLOBAL=100000 "$@"
+  for s in messenger cloud call preview push domains; do shard_start "$s"; done
+  if [ -n "${PV_FEDERATION_PORT:-}" ]; then
+    shard_start federation PARVANE_FEDERATION=on PARVANE_FEDERATION_BIND="127.0.0.1:$PV_FEDERATION_PORT" \
+      PARVANE_FEDERATION_INSECURE_HTTP=1
+  fi
+  # Диск медленный: клиент, пришедший раньше шарда, получает таймаут входа и не
+  # повторяет его — ждём отметку запуска каждого шарда
+  for s in identity messenger cloud call preview push domains ${PV_FEDERATION_PORT:+federation}; do
+    local name; name="$(echo "${s:0:1}" | tr a-z A-Z)${s:1}"
+    wait_log "$SB/$s.log" "$name шард запущен" 60 || { echo "шард $s не поднялся (см. $SB/$s.log)"; exit 2; }
   done
+  if grep -qaE 'Permissions Violation|authorization violation' "$SB"/*.log 2>/dev/null; then
+    echo "ACL NATS отверг подписку шарда (см. $SB/nats.log)"; exit 2
+  fi
+  : >>"$SB/gateway.log"
   gateway_start
   wait_port 9223
-  sleep 2
+  wait_log "$SB/gateway.log" "Gateway WebSocket" 30 || { echo "gateway не поднялся (см. $SB/gateway.log)"; exit 2; }
+  sleep 1
 }
 stack_start() { # stack_start <scratch> [env-для-identity]
   local sb="$1"; shift
@@ -104,17 +152,13 @@ stack_start() { # stack_start <scratch> [env-для-identity]
 }
 # gateway отдельно (перезапуск с другими лимитами: PV_GATEWAY_ENV="A=1 B=2")
 GW_PID=""
-# PV_V1_OFF=1 — любой сценарий на сервере с отключённым v1 (E6-1, T178): gateway в
-# режиме PARVANE_V1_MODE=disabled, если сценарий сам режим не задал и идёт по v2;
-# `finish` сверяет, что по v1 не авторизовался никто.
-v1_off() { [ "${PV_V1_OFF:-0}" = 1 ] && is_v2; }
 gateway_start() {
-  local v1mode=""
-  if v1_off; then case " ${PV_GATEWAY_ENV:-} " in *PARVANE_V1_MODE=*) ;; *) v1mode="PARVANE_V1_MODE=disabled" ;; esac; fi
+  local creds=()
+  [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER=gateway PARVANE_NATS_PASS="$(nats_pass gateway)")
   # shellcheck disable=SC2086
-  env ${PV_GATEWAY_ENV:-} $v1mode PARVANE_NATS_URL=nats://127.0.0.1:4222 \
+  env PARVANE_NATS_URL=nats://127.0.0.1:4222 "${creds[@]}" PARVANE_DOMAIN="$PV_DOMAIN" \
     PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 PARVANE_GATEWAY_BIND=127.0.0.1:9222 \
-    PARVANE_LOG_LEVEL=info "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
+    PARVANE_LOG_LEVEL=info ${PV_GATEWAY_ENV:-} "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
   PIDS+=($GW_PID)
 }
 # Работает и из чужого шелла (стек поднят другим скриптом, GW_PID пуст — так tgx_conformance_flow.sh
@@ -126,27 +170,45 @@ gateway_restart() {
   sleep 1; gateway_start; sleep 2
   if ! kill -0 "$GW_PID" 2>/dev/null || tail -3 "$SB/gateway.log" | grep -aq "Address already in use"; then bad "gateway не перезапустился (см. $SB/gateway.log)"; fi
 }
-# Пароль тестовых аккаунтов: сервер требует не короче 8 символов (P-43),
-# прежний «test» больше не регистрируется.
+# Пароль тестовых аккаунтов: сервер требует не короче 8 символов (P-43).
 PV_PASSWORD="${PV_PASSWORD:-test-pass-2026}"
 # start_client <workdir> <user@server> [ENV=VAL ...] → pid; лог: <workdir>/td/log.txt
+# Клиент ходит только через gateway (TCP 9223 по умолчанию; WebSocket —
+# PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws в аргументах).
 start_client() {
   local work="$1" user="$2"; shift 2
   mkdir -p "$work/td"
   # tdesktop переписывает log.txt при каждом старте — прошлый прогон сохраняем
   [ -f "$work/td/log.txt" ] && mv "$work/td/log.txt" "$work/td/log.$(date +%s%N).txt"
   # ENV из аргументов — после умолчаний: вызывающий может их переопределить
-  # (например PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws для WebSocket)
   env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
     PARVANE_AUTOLOGIN="$user:$PV_PASSWORD" "$@" "$BIN" -workdir "$work/td" \
     >>"$work/stdout.log" 2>&1 &
   echo $!
 }
+# pair_exchange <workdir1> <user1> <workdir2> <user2> [ENV=VAL …] — заводит обоих
+# (устройство и журнал устройств v2) и обменивается сообщениями в обе стороны;
+# по выходу оба клиента остановлены. В v2 звонить можно только тому, с кем уже
+# была переписка (ключ доступа собеседника, D-08), — подготовка для звонков.
+# ENV из аргументов получают оба клиента.
+pair_exchange() {
+  local w1="$1" u1="$2" w2="$3" u2="$4"; shift 4
+  local s; s="обмен-$(date +%s%N)"
+  local p2 p1
+  p2=$(start_client "$w2" "$u2" PARVANE_NO_LINK_OFFER=1 "$@")
+  wait_log "$w2/td/log.txt" "v2: готов" 90 || bad "pair_exchange: $u2 не поднялся"
+  p1=$(start_client "$w1" "$u1" PARVANE_NO_LINK_OFFER=1 "$@" "PARVANE_AUTOSEND=$u2:$s-1")
+  wait_log "$w2/td/log.txt" "входящее msg .* \($u1\): $s-1" 90 || bad "pair_exchange: $u2 не получил сообщение $u1"
+  stop_pid "$p2"
+  p2=$(start_client "$w2" "$u2" PARVANE_NO_LINK_OFFER=1 "$@" "PARVANE_AUTOSEND=$u1:$s-2")
+  wait_log "$w1/td/log.txt" "входящее msg .* \($u2\): $s-2" 90 || bad "pair_exchange: $u1 не получил сообщение $u2"
+  stop_pid "$p1"; stop_pid "$p2"
+}
 # wait_log <file> <regex> [secs=40] → 0 если дождались
 wait_log() {
   local f="$1" re="$2" n="${3:-40}"
   for _ in $(seq 1 "$n"); do
-    grep -qE "$re" "$f" 2>/dev/null && return 0
+    grep -qaE "$re" "$f" 2>/dev/null && return 0
     sleep 1
   done
   return 1
@@ -168,11 +230,9 @@ clients_kill() { # clients_kill <каталог>...
 }
 stack_stop() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; wait 2>/dev/null; PIDS=(); }
 finish() { # finish <имя>
-  if v1_off && [ -n "${SB:-}" ] && [ -f "$SB/gateway.log" ]; then
-    grep -qa "v1-путь в режиме Disabled" "$SB/gateway.log" && ok "E6-1: gateway с отключённым v1" \
-      || echo "E6-1: gateway режим не отметил (сценарий без соединений v1 либо свой режим)"
-    grep -qa "gateway::session.*Клиент авторизован" "$SB/gateway.log" && bad "E6-1: кто-то авторизовался по v1" \
-      || ok "E6-1: по v1 не авторизовался никто"
+  # Продовый ACL: шард, полезший мимо своих прав, — дефект конфигурации или кода
+  if [ -n "${SB:-}" ] && [ -f "$SB/nats.log" ] && grep -qaE 'Permissions Violation' "$SB/nats.log"; then
+    bad "NATS ACL: нарушение прав роли (см. $SB/nats.log)"
   fi
   [ "$RC" -eq 0 ] && printf '\033[32m%s: OK\033[0m\n' "$1" || printf '\033[31m%s: ЕСТЬ ПРОВАЛЫ\033[0m\n' "$1"
   exit "$RC"

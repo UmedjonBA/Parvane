@@ -20,9 +20,9 @@ sleep 1
 A1="$SB/alice1"; A2="$SB/alice2"; B="$SB/bob"
 L1="$A1/td/log.txt"; L2="$A2/td/log.txt"; BL="$B/td/log.txt"
 
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1)
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 && ok "bob: v2-сессия готова" || bad "bob: v2 не поднялся"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 \
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 \
   "PARVANE_AUTOSEND_V2=bob@local:знакомство-$S")
 wait_log "$L1" "v2: готов" 90 && ok "alice1: v2-сессия готова" || bad "alice1: v2 не поднялся"
 wait_log "$L1" "жетоны: партия по расписанию получена" 30 && ok "alice1: партия жетонов получена заранее (FR-063)" \
@@ -32,20 +32,20 @@ wait_log "$BL" "входящее msg [0-9a-f-]+ \(alice@local\): знакомс�
 
 # bob отвечает — у alice появляется чат с bob (его можно закрепить и убрать в архив)
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=alice@local:ответ-$S")
 wait_log "$L1" "входящее msg [0-9a-f-]+ \(bob@local\): ответ-$S" 90 && ok "alice1 получила ответ bob по v2" \
   || bad "alice1 не получила ответ bob"
 
 # ── второе устройство alice ──────────────────────────────────────────────────
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1)
+P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)
 wait_log "$L2" "v2: устройство привязано грантом линковки" 150 && ok "alice2 привязана грантом" || bad "alice2 не привязана"
 wait_log "$L2" "журнал личного состояния подключён" 90 && ok "alice2: журнал состояния подключён" \
   || bad "alice2: журнал состояния не подключён"
 
 # ── правки на alice1 → alice2 из журнала ≤ 10 с ──────────────────────────────
 stop_pid "$P1"
-P1=$(start_client "$A1" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1 \
+P1=$(start_client "$A1" alice@local PARVANE_AUTOLINK_GRANT=1 \
   "PARVANE_AUTOSTRANGERS=off@14" "PARVANE_AUTOAUDIENCE=calls:nobody@16,presence:nobody@17" \
   "PARVANE_AUTOMUTE=bob@local:19" \
   "PARVANE_AUTOSTATE=pin:bob@local@28,archive:bob@local@40,block:bob@local@52" \
@@ -81,26 +81,16 @@ wait_log "$L1" "доступ заблокированного отозван \(�
   && ok "alice1: ключ доступа к доставке сменён (FR-033)" || bad "alice1: доступ заблокированного не отозван"
 
 # ── T145: «удалить чат у себя» на alice1 → чат очищен и на alice2 ≤ 10 с ─────
-# Граница очистки едет журналом личного состояния. Нотис `cleared` v1-шарда обычно
-# успевает раньше (сервер записывает скрытие и для неизвестных ему id сообщений v2),
-# поэтому число скрытых журналом сообщений может быть нулём — проверяется приход границы
+# Граница очистки едет журналом личного состояния; число скрытых журналом сообщений
+# может быть нулём (alice2 могла не видеть часть переписки) — проверяется приход границы
 wait_log "$L1" "очистка чата bob@local — скрыто [1-9][0-9]* сообщений" 60 && ok "alice1: чат с bob очищен" \
   || bad "alice1: очистка чата не сработала"
 wait_log "$L2" "журнал состояния → очистка чатов \(1\), скрыто [0-9]+ сообщений" 12 \
   && ok "alice2: очистка чата пришла из журнала ≤ 10 с" || bad "alice2: очистка чата из журнала не пришла"
 
-# v1-блоб настроек уведомлений не раскрывает серверу, кто заглушён (FR-039)
-if command -v sqlite3 >/dev/null; then
-  BLOB=$(sqlite3 "$SB/messenger.db" "SELECT notify_json FROM user_settings WHERE user='alice@local'" 2>/dev/null)
-  case "$BLOB" in
-    *bob@local*) bad "v1-блоб настроек содержит адрес заглушённого чата" ;;
-    *) ok "v1-блоб настроек не содержит заглушённых чатов" ;;
-  esac
-fi
-
 # ── приватность читается с сервера на другом устройстве (FR-040) ─────────────
 stop_pid "$P2"
-P2=$(start_client "$A2" alice@local PARVANE_PROTO_V2=1 PARVANE_AUTOLINK_GRANT=1)
+P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)
 wait_log "$L2" "приватность с сервера: незнакомые нет" 90 \
   && ok "alice2: приватность прочитана с сервера после перезапуска" || bad "alice2: приватность с сервера не прочитана"
 wait_log "$L2" "приватность с сервера: незнакомые нет, добавление в группы все, звонки никто, присутствие скрыто" 10 \
@@ -108,7 +98,7 @@ wait_log "$L2" "приватность с сервера: незнакомые �
 
 # ── заблокированный: прежний ключ доступа не действует, незнакомым закрыто ────
 stop_pid "$PB"
-PB=$(start_client "$B" bob@local PARVANE_PROTO_V2=1 PARVANE_NO_LINK_OFFER=1 \
+PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 \
   "PARVANE_AUTOSEND_V2=alice@local:после-блока-$S")
 wait_log "$BL" "v2: готов" 90 || bad "bob: v2 не поднялся после рестарта"
 sleep 20
