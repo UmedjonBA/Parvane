@@ -2423,6 +2423,9 @@ IssueResult Issue(
 		if (rawJson.contains("trust_secret") && rawJson["trust_secret"].is_string()) {
 			WriteTrustSecret(user, QString::fromStdString(rawJson["trust_secret"].get<std::string>()));
 		}
+		if (rawJson.contains("error_code") && rawJson["error_code"].is_string()) {
+			out.errorCode = QString::fromStdString(rawJson["error_code"].get<std::string>());
+		}
 		if (rawJson.contains("deletion_at_ms") && rawJson["deletion_at_ms"].is_number()) {
 			out.deletionAtMs = rawJson["deletion_at_ms"].get<qint64>();
 		}
@@ -2438,7 +2441,7 @@ IssueResult Issue(
 			}
 		}
 		if (!out.ok && out.error.isEmpty() && !out.deletionAtMs && !out.twofaRequired) {
-			out.error = u"identity отклонил вход"_q;
+			out.error = tr::lng_parvane_sign_in_failed(tr::now);
 		}
 	} catch (const std::exception &e) {
 		out.ok = false;
@@ -2473,8 +2476,19 @@ RegisterResult Register(const QString &user, const QString &password,
 		if (resp.contains("error") && resp["error"].is_string()) {
 			out.error = QString::fromStdString(resp["error"].get<std::string>());
 		}
+		// Отказ v2 — текст на языке интерфейса (почта: формулировку моста ждёт экран входа)
+		if (const auto code = resp.value("error_code", std::string()); !code.empty()
+				&& !out.error.contains(u"email"_q, Qt::CaseInsensitive)) {
+			out.error = (code == "ERROR_CODE_DUPLICATE")
+				? tr::lng_parvane_nick_taken(tr::now)
+				: (code == "ERROR_CODE_INVALID")
+				? tr::lng_parvane_register_invalid(tr::now)
+				: (code == "ERROR_CODE_RATE_LIMITED")
+				? tr::lng_parvane_too_many_attempts(tr::now)
+				: tr::lng_parvane_register_failed(tr::now);
+		}
 		if (!out.ok && out.error.isEmpty()) {
-			out.error = u"identity отклонил регистрацию"_q;
+			out.error = tr::lng_parvane_register_failed(tr::now);
 		}
 	} catch (const std::exception &e) {
 		out.ok = false;
@@ -2561,7 +2575,7 @@ ConfirmResult ConfirmEmail(const QString &user, const QString &code) {
 			out.error = QString::fromStdString(resp["error"].get<std::string>());
 		}
 		if (!out.ok && out.error.isEmpty()) {
-			out.error = u"identity отклонил код"_q;
+			out.error = tr::lng_parvane_bad_code(tr::now);
 		}
 	} catch (const std::exception &e) {
 		out.ok = false;
@@ -2869,7 +2883,7 @@ bool StartSession() {
 						.arg(QString::fromStdString(subject)));
 					crl::on_main([] {
 						if (const auto window = Core::App().activeWindow()) {
-							window->showToast(u"Слишком много действий, помедленнее."_q);
+							window->showToast(tr::lng_parvane_rate_limited(tr::now));
 						}
 					});
 				});
@@ -4762,16 +4776,14 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 	const auto dest = StickerPacksRoot() + u"/"_q + name;
 	if (QDir(dest).exists()) {
 		Ui::show(Ui::MakeInformBox(
-			u"Набор «%1» уже установлен."_q.arg(name)));
+			tr::lng_parvane_sticker_set_installed(tr::now, lt_name, name)));
 		return;
 	}
 	const auto key = ref.value("key", std::string());
 	const auto nonce = ref.value("nonce", std::string());
 	RememberBlobCaps(ref);
 	Ui::show(Ui::MakeConfirmBox({
-		.text = u"Добавить набор стикеров «%1» (%2 шт.)?"_q
-			.arg(name)
-			.arg(count),
+		.text = tr::lng_parvane_sticker_set_add(tr::now, lt_name, name, lt_amount, QString::number(count)),
 		.confirmed = [=](Fn<void()> &&close) {
 			close();
 			g_packInstallBusy.insert(fileId);
@@ -4816,17 +4828,15 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 							.arg(name)
 							.arg(unpacked));
 						Ui::show(Ui::MakeInformBox(
-							u"Набор «%1» добавлен (%2 шт.)."_q
-								.arg(name)
-								.arg(unpacked)));
+							tr::lng_parvane_sticker_set_added(tr::now, lt_name, name, lt_amount, QString::number(unpacked))));
 					} else {
 						Ui::show(Ui::MakeInformBox(
-							u"Не удалось установить набор «%1»."_q.arg(name)));
+							tr::lng_parvane_sticker_set_failed(tr::now, lt_name, name)));
 					}
 				});
 			});
 		},
-		.confirmText = u"Добавить"_q,
+		.confirmText = tr::lng_parvane_sticker_set_add_button(),
 	}));
 }
 
@@ -5588,7 +5598,7 @@ not_null<UserData*> ensurePeerUser(
 			!rootFp.isEmpty()) {
 		// Собеседник на v2: ключ безопасности — отпечаток корня его личности
 		// (сверяется с «своим ключом v2» на его устройстве)
-		const auto about = u"\xF0\x9F\x94\x92 Ключ безопасности (сверьте с устройством собеседника):\n"_q + rootFp;
+		const auto about = tr::lng_parvane_security_key_profile(tr::now) + u"\n"_q + rootFp;
 		if (result->setAbout(about)) {
 			LOG(("Parvane: ключ безопасности с %1 в профиле: %2").arg(address, rootFp));
 		}
@@ -7774,7 +7784,7 @@ void AnnounceKeyChange(const QString &address) {
 		return;
 	}
 	const auto user = EnsurePeer(session, address);
-	const auto text = u"Ключ безопасности %1 изменился."_q.arg(user->name());
+	const auto text = tr::lng_parvane_security_key_changed(tr::now, lt_user, user->name());
 	const auto msgId = MsgId(g_nextMsgId++);
 	session->data().addNewMessage(
 		msgId,
@@ -10802,7 +10812,7 @@ bool ShowPollResultsBox(PollData *poll) {
 	}
 	auto text = poll->question.text + u"\n"_q;
 	if (!it->publicVoters) {
-		text += u"\nОпрос анонимный — виден только счётчик голосов."_q;
+		text += u"\n"_q + tr::lng_parvane_poll_anonymous_hint(tr::now);
 	} else {
 		// вариант → список голосовавших (имя из каталога или адрес)
 		for (auto i = 0; i != int(poll->answers.size()); ++i) {
@@ -10817,7 +10827,7 @@ bool ShowPollResultsBox(PollData *poll) {
 			text += u"\n%1 — %2"_q
 				.arg(poll->answers[i].text.text)
 				.arg(names.isEmpty()
-					? u"нет голосов"_q
+					? tr::lng_parvane_poll_no_votes(tr::now)
 					: names.join(u", "_q));
 		}
 	}
@@ -15092,12 +15102,12 @@ void PollLinkOffersOnce() {
 		}
 		crl::on_main([dev, eph, signingKey, code] {
 			Ui::show(Ui::MakeConfirmBox({
-				.text = u"Новое устройство запрашивает перенос истории.\nСверьте код — он должен совпадать с кодом на новом устройстве:\n%1\nПередать историю?"_q.arg(code),
+				.text = tr::lng_parvane_link_grant_confirm(tr::now, lt_code, code),
 				.confirmed = [dev, eph, signingKey](Fn<void()> &&close) {
 					crl::async([dev, eph, signingKey] { GrantLink(dev, eph, signingKey); });
 					close();
 				},
-				.confirmText = u"Передать"_q,
+				.confirmText = tr::lng_parvane_link_grant_button(),
 			}));
 		});
 	}

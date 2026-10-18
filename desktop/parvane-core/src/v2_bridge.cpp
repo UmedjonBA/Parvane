@@ -441,7 +441,11 @@ std::string BridgeTransport::request(const std::string &subject, const std::stri
         // Отказ метода — ответ прежнего вида; потеря связи и «версия клиента ниже минимальной» — ошибка
         // транспорта.
         const bool transport = e.code() == "ERROR_CODE_UNAVAILABLE" || e.code() == "ERROR_CODE_UPGRADE_REQUIRED";
-        if (!transport) return fail(errorText(subject, e.code())).dump();
+        if (!transport) {
+            auto out = fail(errorText(subject, e.code()));
+            out["error_code"] = e.code(); // клиент подставляет текст на языке интерфейса
+            return out.dump();
+        }
         throw TransportError(e.code() == "ERROR_CODE_UPGRADE_REQUIRED"
             ? std::string("gateway: upgrade_required") : "gateway v2: " + subject + ": недоступен");
     } catch (const TransportError &) {

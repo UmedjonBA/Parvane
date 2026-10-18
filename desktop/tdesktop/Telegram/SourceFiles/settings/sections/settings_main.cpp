@@ -96,7 +96,7 @@ namespace {
 // английский — встроенный (перезапуск для применения).
 void ShowParvaneLanguageBox(not_null<Window::SessionController*> controller) {
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(rpl::single(u"Язык"_q));
+		box->setTitle(tr::lng_languages());
 		const auto addRow = [&](const QString &title, Fn<void()> onClick) {
 			const auto button = box->addRow(object_ptr<Ui::SettingsButton>(
 				box,

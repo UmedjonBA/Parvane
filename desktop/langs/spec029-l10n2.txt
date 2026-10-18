@@ -1,0 +1,7 @@
+lng_parvane_too_many_attempts
+Too many attempts, try again later
+Слишком много попыток, попробуйте позже
+
+lng_parvane_device_revoked
+This device was signed out of the account. Sign in again.
+Это устройство вышло из аккаунта. Войдите заново.

@@ -603,29 +603,32 @@ void BuildSecuritySection(
 		const auto apply = [=](Parvane::TwoFactorState state) {
 			twofa->busy = false;
 			if (!state.ok) {
-				twofa->label = state.error.isEmpty()
-					? u"недоступно"_q : state.error;
+				twofa->label = tr::lng_parvane_two_factor_unavailable(tr::now);
 				return;
 			}
 			twofa->enabled = state.enabled;
 			twofa->label = state.enabled
-				? u"включён: вход подтверждает бот в Telegram"_q
+				? tr::lng_settings_cloud_password_on(tr::now)
 				: (state.telegramLinked
-					? u"выключен"_q
-					: u"нужен привязанный Telegram (регистрация через бота)"_q);
+					? tr::lng_settings_cloud_password_off(tr::now)
+					: tr::lng_parvane_two_factor_no_telegram(tr::now));
 		};
 		crl::async([=] {
 			auto state = Parvane::FetchTwoFactor();
 			crl::on_main(weak, [=] { apply(state); });
 		});
+		Ui::AddSkip(builder.container());
+		Ui::AddSubsectionTitle(builder.container(), tr::lng_parvane_two_factor_title());
 		const auto toggle = builder.addButton({
 			.id = u"security/parvane_twofa"_q,
-			.title = rpl::single(u"Двухфакторный вход через Telegram"_q),
+			.title = tr::lng_parvane_two_factor_toggle(),
 			.icon = { &st::menuIconLock },
 			.label = twofa->label.value(),
 			.toggled = twofa->enabled.value(),
 			.keywords = { u"2fa"_q, u"telegram"_q, u"two-factor"_q },
 		});
+		Ui::AddSkip(builder.container());
+		Ui::AddDividerText(builder.container(), tr::lng_parvane_two_factor_info());
 		if (toggle) {
 			toggle->toggledChanges(
 			) | rpl::filter([=](bool toggled) {
@@ -640,9 +643,7 @@ void BuildSecuritySection(
 							if (!state.ok) {
 								// Откат тумблера + пояснение (напр. нет привязки)
 								twofa->enabled.force_assign(twofa->enabled.current());
-								controller->showToast(state.error.isEmpty()
-									? u"Не удалось изменить двухфакторный вход"_q
-									: state.error);
+								controller->showToast(tr::lng_parvane_two_factor_failed(tr::now));
 							}
 						});
 					});
@@ -652,12 +653,12 @@ void BuildSecuritySection(
 				// включает и 2FA — без соединения v1 иначе настройка недоступна).
 				// Тот же password-box, что у копии ключей.
 				controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-					box->setTitle(rpl::single(toggled
-						? u"Включить двухфакторный вход"_q
-						: u"Выключить двухфакторный вход"_q));
+					box->setTitle(toggled
+						? tr::lng_parvane_two_factor_enable()
+						: tr::lng_parvane_two_factor_disable());
 					const auto field = Settings::CloudPassword::AddPasswordField(
 						box->verticalLayout(),
-						rpl::single(u"Текущий пароль"_q),
+						tr::lng_parvane_password_confirm(),
 						QString());
 					box->setFocusCallback([=] { field->setFocus(); });
 					const auto submit = [=] {
@@ -671,7 +672,7 @@ void BuildSecuritySection(
 					};
 					QObject::connect(field, &Ui::MaskedInputField::submitted, submit);
 					box->addButton(
-						rpl::single(toggled ? u"Включить"_q : u"Выключить"_q),
+						toggled ? tr::lng_parvane_two_factor_enable() : tr::lng_parvane_two_factor_disable(),
 						submit);
 					box->addButton(tr::lng_cancel(), [=] {
 						// Отмена — тумблер обратно
@@ -689,7 +690,7 @@ void BuildSecuritySection(
 		const auto container = builder.container();
 		const auto fingerprint = Parvane::OwnFingerprint();
 		Ui::AddSkip(container);
-		Ui::AddSubsectionTitle(container, rpl::single(u"Ваш ключ безопасности"_q));
+		Ui::AddSubsectionTitle(container, tr::lng_parvane_security_key_own());
 		const auto label = container->add(
 			object_ptr<Ui::FlatLabel>(
 				container,
@@ -700,18 +701,18 @@ void BuildSecuritySection(
 		Ui::AddSkip(container);
 		Ui::AddDividerText(
 			container,
-			rpl::single(u"Покажите его тем, кто хочет вас проверить. Отпечатки устройств собеседника — в его профиле."_q));
+			tr::lng_parvane_security_key_own_hint());
 		const auto copy = builder.addButton({
 			.id = u"security/parvane_key_copy"_q,
-			.title = rpl::single(u"Скопировать ключ безопасности"_q),
+			.title = tr::lng_parvane_security_key_copy(),
 			.icon = { &st::menuIconCopy },
 			.onClick = [=] {
 				if (fingerprint.isEmpty()) {
-					controller->showToast(u"Ключ ещё не готов"_q);
+					controller->showToast(tr::lng_parvane_security_key_not_ready(tr::now));
 					return;
 				}
 				QGuiApplication::clipboard()->setText(fingerprint);
-				controller->showToast(u"Ключ безопасности скопирован"_q);
+				controller->showToast(tr::lng_parvane_security_key_copied(tr::now));
 			},
 			.keywords = { u"key"_q, u"fingerprint"_q, u"ключ"_q, u"отпечаток"_q },
 		});

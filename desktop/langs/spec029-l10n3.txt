@@ -1,0 +1,7 @@
+lng_parvane_nick_taken
+This nickname is already taken.
+Этот ник уже занят.
+
+lng_parvane_register_invalid
+Nickname: 2–64 characters, lowercase latin letters, digits, _ . -. Password: at least 8 characters.
+Ник: 2–64 символа, строчные латинские буквы, цифры, _ . -. Пароль: не короче 8 символов.

@@ -1,0 +1,191 @@
+lng_parvane_nickname
+Nickname
+Ник
+
+lng_parvane_password
+Password
+Пароль
+
+lng_parvane_email
+Email for confirmation
+Почта для подтверждения
+
+lng_parvane_email_code
+Code from the email (6 digits)
+Код из письма (6 цифр)
+
+lng_parvane_bot_link
+Bot link
+Ссылка на бота
+
+lng_parvane_tg_login_text
+Two-factor authentication is on. Open our Telegram bot and press Start — only the Telegram account linked to this profile can confirm the sign-in.
+Включена двухфакторная аутентификация. Откройте нашего Telegram-бота и нажмите Start — подтвердить вход может только Telegram, привязанный к этому аккаунту.
+
+lng_parvane_tg_register_text
+Open our Telegram bot and press Start — the account will be confirmed automatically.
+Откройте нашего Telegram-бота и нажмите Start — аккаунт подтвердится автоматически.
+
+lng_parvane_email_text
+Sign-up: enter your email — a confirmation code will be sent to it.
+Регистрация: укажите почту — на неё придёт код подтверждения.
+
+lng_parvane_code_text
+We have sent a confirmation code to your email. Enter the 6 digits.
+Мы отправили код подтверждения на вашу почту. Введите 6 цифр.
+
+lng_parvane_sign_in_title
+Sign in
+Вход в аккаунт
+
+lng_parvane_register_title
+New account
+Новый аккаунт
+
+lng_parvane_link_expired
+The link has expired — sign in again
+Ссылка устарела — войдите заново
+
+lng_parvane_no_account
+No account? Sign up
+Нет аккаунта? Зарегистрироваться
+
+lng_parvane_have_account
+I already have an account
+У меня уже есть аккаунт
+
+lng_parvane_sign_in
+Sign in
+Войти
+
+lng_parvane_create_account
+Create account
+Создать аккаунт
+
+lng_parvane_enter_nickname
+Enter your nickname
+Укажите ник
+
+lng_parvane_enter_password
+Enter your password
+Укажите пароль
+
+lng_parvane_bad_code
+Wrong code
+Неверный код
+
+lng_parvane_register_failed
+Could not create the account
+Не удалось создать аккаунт
+
+lng_parvane_bad_login
+Wrong nickname or password
+Неверный ник или пароль
+
+lng_parvane_sign_in_failed
+Could not sign in
+Не удалось войти
+
+lng_parvane_sign_up_hint
+If you have no account yet, press «No account? Sign up».
+Если аккаунта ещё нет — нажмите «Нет аккаунта? Зарегистрироваться».
+
+lng_parvane_two_factor_title
+Sign-in protection
+Защита входа
+
+lng_parvane_two_factor_toggle
+Confirm sign-in in Telegram
+Подтверждать вход в Telegram
+
+lng_parvane_two_factor_info
+Protects the account if someone learns your password. Without it, they can sign in on a new device: they cannot read your messages (that needs the recovery key), but they can change the password or reset your identity. With it, every sign-in on a new device must also be confirmed in Telegram.
+Защищает аккаунт, если кто-то узнал пароль. Без неё он войдёт с нового устройства: переписку не прочитает (для неё нужен ключ восстановления), но сможет сменить пароль или сбросить личность. С ней каждый вход с нового устройства нужно ещё подтвердить в Telegram.
+
+lng_parvane_two_factor_no_telegram
+Link Telegram first: it is done when confirming the account via the bot.
+Сначала привяжите Telegram: это происходит при подтверждении аккаунта через бота.
+
+lng_parvane_two_factor_failed
+Could not change the two-factor setting
+Не удалось изменить настройку двухфакторного входа
+
+lng_parvane_two_factor_enable
+Enable two-factor
+Включить двухфакторный вход
+
+lng_parvane_two_factor_disable
+Disable two-factor
+Выключить двухфакторный вход
+
+lng_parvane_two_factor_unavailable
+Unavailable
+Недоступно
+
+lng_parvane_security_key_own
+Your security key
+Ваш ключ безопасности
+
+lng_parvane_security_key_own_hint
+Show it to people who want to verify you. The other person's key is in their profile.
+Покажите его тем, кто хочет вас сверить. Ключ собеседника — в его профиле.
+
+lng_parvane_security_key_copy
+Copy security key
+Скопировать ключ безопасности
+
+lng_parvane_security_key_not_ready
+The key is not ready yet
+Ключ ещё не готов
+
+lng_parvane_security_key_copied
+Security key copied
+Ключ безопасности скопирован
+
+lng_parvane_security_key_profile
+🔒 Security key (compare with the other person's device):
+🔒 Ключ безопасности (сверьте с устройством собеседника):
+
+lng_parvane_security_key_changed
+The security key of {user} has changed. If you did not expect this, verify the key fingerprint in the profile.
+Ключ безопасности {user} изменился. Если вы этого не ожидали, сверьте отпечаток ключа в профиле.
+
+lng_parvane_rate_limited
+Too many actions, slow down.
+Слишком много действий, помедленнее.
+
+lng_parvane_sticker_set_installed
+The «{name}» set is already installed.
+Набор «{name}» уже установлен.
+
+lng_parvane_sticker_set_add
+Add the «{name}» sticker set ({amount} stickers)?
+Добавить набор стикеров «{name}» ({amount} шт.)?
+
+lng_parvane_sticker_set_added
+The «{name}» set has been added ({amount} stickers).
+Набор «{name}» добавлен ({amount} шт.).
+
+lng_parvane_sticker_set_failed
+Could not install the «{name}» set.
+Не удалось установить набор «{name}».
+
+lng_parvane_sticker_set_add_button
+Add
+Добавить
+
+lng_parvane_link_grant_confirm
+A new device asks to transfer the history. Make sure it shows the same code: {code}. Transfer the history?
+Новое устройство запрашивает перенос истории. Убедитесь, что на нём показан тот же код: {code}. Передать историю?
+
+lng_parvane_link_grant_button
+Transfer
+Передать
+
+lng_parvane_poll_anonymous_hint
+The poll is anonymous — only the vote count is visible.
+Опрос анонимный — виден только счётчик голосов.
+
+lng_parvane_poll_no_votes
+No votes
+Нет голосов

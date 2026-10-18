@@ -66,11 +66,11 @@ ParvaneWidget::ParvaneWidget(
 	not_null<Main::Account*> account,
 	not_null<Data*> data)
 : Step(parent, account, data)
-, _user(this, st::introName, rpl::single(u"ник"_q))
-, _password(this, st::introPassword, rpl::single(u"пароль"_q))
-, _email(this, st::introName, rpl::single(u"email для подтверждения"_q))
-, _code(this, st::introName, rpl::single(u"код из письма (6 цифр)"_q))
-, _tgLink(this, st::introName, rpl::single(u"ссылка на бота"_q))
+, _user(this, st::introName, tr::lng_parvane_nickname())
+, _password(this, st::introPassword, tr::lng_parvane_password())
+, _email(this, st::introName, tr::lng_parvane_email())
+, _code(this, st::introName, tr::lng_parvane_email_code())
+, _tgLink(this, st::introName, tr::lng_parvane_bot_link())
 , _showPassword(this)
 , _switchMode(this, QString(), st::introLink) {
 	setTitleText(rpl::single(u"Parvane"_q));
@@ -122,22 +122,20 @@ void ParvaneWidget::setStage(Stage stage) {
 	_code->setVisible(stage == Stage::Code);
 	_tgLink->setVisible(stage == Stage::Telegram);
 	if (stage == Stage::Telegram) {
-		setDescriptionText(rpl::single(_tgMode == TelegramMode::Login
-			? u"Двухфакторный вход: откройте бота по ссылке и нажмите Start. Подтвердить может только привязанный Telegram"_q
-			: u"Подтверждение через Telegram: откройте бота по ссылке и нажмите Start — вход произойдёт сам"_q));
+		setDescriptionText(_tgMode == TelegramMode::Login
+			? tr::lng_parvane_tg_login_text()
+			: tr::lng_parvane_tg_register_text());
 		_tgLink->setFocus();
 	} else if (stage == Stage::Email) {
-		setDescriptionText(rpl::single(
-			u"Регистрация: укажите email — на него придёт код подтверждения"_q));
+		setDescriptionText(tr::lng_parvane_email_text());
 		_email->setFocus();
 	} else if (stage == Stage::Code) {
-		setDescriptionText(rpl::single(
-			u"Введите 6-значный код из письма"_q));
+		setDescriptionText(tr::lng_parvane_code_text());
 		_code->setFocus();
 	} else {
-		setDescriptionText(rpl::single(_mode == Mode::SignIn
-			? u"Вход в аккаунт"_q
-			: u"Создание аккаунта"_q));
+		setDescriptionText(_mode == Mode::SignIn
+			? tr::lng_parvane_sign_in_title()
+			: tr::lng_parvane_register_title());
 		_user->setFocus();
 	}
 	_switchMode->setVisible(login);
@@ -179,7 +177,7 @@ void ParvaneWidget::pollTelegram() {
 		return;
 	}
 	if (QDateTime::currentSecsSinceEpoch() - _tgStartedAt > 14 * 60) {
-		showError(rpl::single(u"Ссылка устарела — войдите заново"_q));
+		showError(tr::lng_parvane_link_expired());
 		setStage(Stage::Login);
 		return;
 	}
@@ -290,13 +288,15 @@ void ParvaneWidget::setMode(Mode mode) {
 	_mode = mode;
 	const auto signIn = (mode == Mode::SignIn);
 	_switchMode->setText(signIn
-		? u"Нет аккаунта? Зарегистрироваться"_q
-		: u"Уже есть аккаунт? Войти"_q);
-	_nextText = signIn ? u"Войти"_q : u"Создать аккаунт"_q;
+		? tr::lng_parvane_no_account(tr::now)
+		: tr::lng_parvane_have_account(tr::now));
+	_nextText = signIn
+		? tr::lng_parvane_sign_in(tr::now)
+		: tr::lng_parvane_create_account(tr::now);
 	if (_stage == Stage::Login) {
-		setDescriptionText(rpl::single(signIn
-			? u"Вход в аккаунт"_q
-			: u"Создание аккаунта"_q));
+		setDescriptionText(signIn
+			? tr::lng_parvane_sign_in_title()
+			: tr::lng_parvane_register_title());
 	}
 	hideError();
 	updateControlsGeometry();
@@ -351,12 +351,12 @@ void ParvaneWidget::submit() {
 	const auto password = _password->getLastText();
 	if (_stage == Stage::Login) {
 		if (rawUser.isEmpty()) {
-			showError(rpl::single(u"Укажите ник"_q));
+			showError(tr::lng_parvane_enter_nickname());
 			_user->setFocus();
 			return;
 		}
 		if (password.isEmpty()) {
-			showError(rpl::single(u"Укажите пароль"_q));
+			showError(tr::lng_parvane_enter_password());
 			_password->setFocus();
 			return;
 		}
@@ -399,7 +399,7 @@ void ParvaneWidget::submit() {
 			crl::on_main(weak, [=] {
 				_requesting = false;
 				if (!r.ok) {
-					showError(rpl::single(r.error.isEmpty() ? u"Неверный код"_q : r.error));
+					showError(rpl::single(r.error.isEmpty() ? tr::lng_parvane_bad_code(tr::now) : r.error));
 					_code->setFocus();
 					startCodeFilePoll(); // headless: ждём следующий код
 					return;
@@ -416,7 +416,7 @@ void ParvaneWidget::submit() {
 				_requesting = false;
 				if (!reg.ok) {
 					showError(rpl::single(reg.error.isEmpty()
-						? u"Ошибка регистрации"_q : reg.error));
+						? tr::lng_parvane_register_failed(tr::now) : reg.error));
 					_email->setFocus();
 					return;
 				}
@@ -446,7 +446,7 @@ void ParvaneWidget::submit() {
 					next = Stage::Email; // сервер требует почту — спросим её
 				} else {
 					res.error = reg.error.isEmpty()
-						? u"Не удалось создать аккаунт"_q
+						? tr::lng_parvane_register_failed(tr::now)
 						: reg.error;
 				}
 			} else if (reg.confirmRequired && !reg.telegramToken.isEmpty()) {
@@ -475,7 +475,7 @@ void ParvaneWidget::submit() {
 					next = Stage::Code;
 				}
 			} else if (!res.ok && res.error.isEmpty()) {
-				res.error = u"Неверный ник или пароль"_q;
+				res.error = tr::lng_parvane_bad_login(tr::now);
 			}
 		}
 		const auto twofaBot = res.telegramBot;
@@ -508,7 +508,6 @@ void ParvaneWidget::onIssued(
 	_requesting = false;
 	const auto ok = res.ok;
 	const auto token = res.token;
-	const auto error = res.error;
 	if (!ok && res.deletionAtMs > 0) {
 		// spec 027: аккаунт ждёт удаления — пароль верен, вход его восстановит
 		const auto password = _password->getLastText();
@@ -524,6 +523,16 @@ void ParvaneWidget::onIssued(
 			.confirmText = tr::lng_parvane_restore_account(),
 		}));
 		return;
+	}
+	// Текст отказа — на языке интерфейса (мост отдаёт код v2)
+	auto error = res.error;
+	if (!ok && !res.errorCode.isEmpty()) {
+		const auto &code = res.errorCode;
+		error = (code == u"ERROR_CODE_RATE_LIMITED"_q)
+			? tr::lng_parvane_too_many_attempts(tr::now)
+			: (code == u"ERROR_CODE_REVOKED"_q)
+			? tr::lng_parvane_device_revoked(tr::now)
+			: tr::lng_parvane_bad_login(tr::now);
 	}
 	if (!ok) {
 		// Headless-хук: аккаунта может не быть (e2e регистрируют на лету) —
@@ -544,11 +553,11 @@ void ParvaneWidget::onIssued(
 		}
 		// В режиме входа подсказываем, что аккаунта может не быть: молча
 		// заводить его мы больше не станем, переключение — осознанное.
-		const auto hint = (_mode == Mode::SignIn && !error.contains(u"пароль"_q))
-			? u" Если аккаунта ещё нет — нажмите «Зарегистрироваться»."_q
+		const auto hint = (_mode == Mode::SignIn && error != tr::lng_parvane_bad_login(tr::now))
+			? (u" "_q + tr::lng_parvane_sign_up_hint(tr::now))
 			: QString();
 		showError(rpl::single(
-			(error.isEmpty() ? u"Не удалось войти"_q : error) + hint));
+			(error.isEmpty() ? tr::lng_parvane_sign_in_failed(tr::now) : error) + hint));
 		_password->setFocus();
 		return;
 	}

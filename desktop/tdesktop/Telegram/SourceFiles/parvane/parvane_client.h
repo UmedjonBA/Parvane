@@ -82,6 +82,8 @@ struct IssueResult {
 	qint64 deletionAtMs = 0;
 	// spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый).
 	QString address;
+	// Код отказа v2 (ERROR_CODE_…) — текст на языке интерфейса подставляет экран входа.
+	QString errorCode;
 };
 
 // БЛОКИРУЮЩИЙ запрос identity.token.issue. Звать с воркер-потока (crl::async).
