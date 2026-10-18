@@ -220,31 +220,55 @@ int main() {
     check(!v2::toV2(json{{"kind", "skdm"}}).has_value(), "служебный v1-вид (skdm) в v2 не уходит");
     check(!v2::fromV2(json{{"contact", {{"first_name", "A"}}}}).has_value(), "contact ← v2: нет v1-вида");
     {
-        // TASK-1 (spec 011): задание и ответ — текст из поля text, не заглушка
-        const auto offer = v2::fromV2(json{{"task_offer", {{"name", "Отчёт"}, {"day", "2026-10-20"},
-                                                            {"text", "📋 Задание: Отчёт · 2026-10-20"}}}});
-        check(offer && (*offer)["kind"] == "text" && (*offer)["text"] == "📋 Задание: Отчёт · 2026-10-20",
-              "task_offer ← v2: текст");
-        const auto noText = v2::fromV2(json{{"task_offer", {{"name", "Отчёт"}}}});
-        check(noText && (*noText)["kind"] == "text" && (*noText)["text"] == "📋 Отчёт", "task_offer без text — имя");
-        const auto resp = v2::fromV2(json{{"task_response", {{"decision", "TASK_DECISION_ACCEPTED"}, {"text", "✅ Принято"}}}});
-        check(resp && (*resp)["kind"] == "text" && (*resp)["text"] == "✅ Принято", "task_response ← v2: текст");
+        // spec 029: desktop показывает задание, приглашение, статью и жалобу как web (карточки), а не текстом
+        const json offerV1{{"kind", "task_offer"}, {"name", "Отчёт"}, {"description", "к пятнице"}, {"steps", json::array({"черновик", "правка"})},
+                           {"day", "2026-10-20"}, {"start", "10:00"}, {"minutes", 60}, {"text", "📋 Задание: Отчёт · 2026-10-20"}};
+        const auto offerV2 = v2::toV2(offerV1);
+        check(offerV2 && (*offerV2)["task_offer"]["steps"][1]["text"] == "правка", "task_offer → v2 (шаги)");
+        const auto offer = offerV2 ? v2::fromV2(*offerV2) : std::nullopt;
+        check(offer && *offer == offerV1, "task_offer туда и обратно без потерь");
+        const json respV1{{"kind", "task_response"}, {"offer", "0192f0e4-1a2b-7c3d-8e4f-001122334455"}, {"accepted", true},
+                          {"text", "✅ Принято"}};
+        const auto respV2 = v2::toV2(respV1);
+        check(respV2 && (*respV2)["task_response"]["decision"] == "TASK_DECISION_ACCEPTED", "task_response → v2");
+        const auto resp = respV2 ? v2::fromV2(*respV2) : std::nullopt;
+        check(resp && *resp == respV1, "task_response туда и обратно");
         check(v2::v2Kind(json{{"task_offer", json::object()}}) == "task_offer", "v2Kind: task_offer");
-        // Приглашение в папку облака (spec 016, CLOUD-1): текст из поля text
-        const auto invite = v2::fromV2(json{{"cloud_invite", {{"name", "Проект"}, {"role", 2},
-                                                               {"text", "Приглашение в папку «Проект» (редактор)"}}}});
-        check(invite && (*invite)["kind"] == "text" && (*invite)["text"] == "Приглашение в папку «Проект» (редактор)",
-              "cloud_invite ← v2: текст");
-        const auto bare = v2::fromV2(json{{"cloud_invite", {{"name", "Проект"}}}});
-        check(bare && (*bare)["kind"] == "text" && (*bare)["text"] == "📁 Проект", "cloud_invite без text — имя");
+        const json inviteV1{{"kind", "cloud_invite"}, {"container", {{"domain", "local"}, {"id", "AAEC"}}}, {"name", "Проект"},
+                            {"role", 2}, {"text", "Приглашение в папку «Проект» (редактор)"}};
+        const auto inviteV2 = v2::toV2(inviteV1);
+        const auto invite = inviteV2 ? v2::fromV2(*inviteV2) : std::nullopt;
+        check(invite && *invite == inviteV1, "cloud_invite туда и обратно");
         check(v2::v2Kind(json{{"cloud_invite", json::object()}}) == "cloud_invite", "v2Kind: cloud_invite");
-        // Статья (ARTICLE-1): текст из поля text, без него — название
-        const auto article = v2::fromV2(json{{"article", {{"title", "Поход"}, {"markdown", "# Поход"},
-                                                          {"text", "Статья «Поход»"}}}});
-        check(article && (*article)["kind"] == "text" && (*article)["text"] == "Статья «Поход»", "article ← v2: текст");
-        const auto bareArticle = v2::fromV2(json{{"article", {{"title", "Поход"}}}});
-        check(bareArticle && (*bareArticle)["text"] == "📄 Поход", "article без text — название");
-        check(v2::v2Kind(json{{"article", json::object()}}) == "article", "v2Kind: article");
+        const json articleV1{{"kind", "article"}, {"title", "Поход"}, {"markdown", "# Поход\nтекст"}, {"text", "Статья «Поход»"},
+                             {"article_media", json::array({json{{"kind", "photo"}, {"file_id", "f1"}, {"mime", "image/jpeg"}}})}};
+        const auto articleV2 = v2::toV2(articleV1);
+        check(articleV2 && (*articleV2)["article"]["media"][0]["kind"] == "MEDIA_KIND_PHOTO", "article → v2 с картинкой");
+        const auto article = articleV2 ? v2::fromV2(*articleV2) : std::nullopt;
+        check(article && *article == articleV1, "article туда и обратно");
+        const json reportV1{{"kind", "mod_report"}, {"report_group", {{"domain", "local"}, {"id", "AAEC"}}}, {"reason", "spam"},
+                            {"text", "Жалоба: спам"},
+                            {"reported", json::array({json{{"op_id", "0192f0e4-1a2b-7c3d-8e4f-001122334455"},
+                                                           {"author", "eve@local"}, {"text", "реклама"}, {"ts", 1700000000}}})}};
+        const auto reportV2 = v2::toV2(reportV1);
+        const auto report = reportV2 ? v2::fromV2(*reportV2) : std::nullopt;
+        check(report && *report == reportV1, "mod_report туда и обратно");
+        check(v2::v2Kind(json{{"mod_report", json::object()}}) == "mod_report", "v2Kind: mod_report");
+        // Опросы: срок, без переголосования, перемешивание, скрытые итоги — как web
+        const json pollV1{{"kind", "poll"}, {"question", "Куда?"}, {"options", json::array({"лес", "море"})}, {"close_ms", 1800000000000LL},
+                          {"no_revote", true}, {"shuffle", true}, {"hide_results", true}};
+        const auto pollV2 = v2::toV2(pollV1);
+        check(pollV2 && (*pollV2)["poll"]["close_ms"] == "1800000000000" && (*pollV2)["poll"]["hide_results"] == true,
+              "poll → v2 с новыми настройками");
+        const auto poll = pollV2 ? v2::fromV2(*pollV2) : std::nullopt;
+        check(poll && (*poll)["close_ms"] == 1800000000000LL && (*poll)["no_revote"] == true && (*poll)["shuffle"] == true,
+              "poll ← v2 с новыми настройками");
+        // spec 028: сервер вложения и миниатюра
+        const json photo{{"kind", "photo"}, {"file_id", "f9"}, {"blob_domain", "b.example"}, {"thumbnail", "/9j/"}};
+        const auto photoV2 = v2::toV2(photo);
+        const auto photoBack = photoV2 ? v2::fromV2(*photoV2) : std::nullopt;
+        check(photoBack && (*photoBack)["blob_domain"] == "b.example" && (*photoBack)["thumbnail"] == "/9j/",
+              "media: сервер блоба и миниатюра туда и обратно");
     }
 
     // ── события "direct" ───────────────────────────────────────────────────

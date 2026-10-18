@@ -187,6 +187,9 @@ json mediaToV2(const json &c, const std::string &kind) {
     }
     if (!str(c, "audio_title").empty()) m["title"] = str(c, "audio_title");
     if (!str(c, "audio_performer").empty()) m["performer"] = str(c, "audio_performer");
+    // spec 028: сервер блоба (пусто — домен отправителя); миниатюра (JPEG ≤ 320 px, base64)
+    if (!str(c, "blob_domain").empty()) m["blob_domain"] = str(c, "blob_domain");
+    if (!str(c, "thumbnail").empty()) m["thumbnail"] = str(c, "thumbnail");
     return m;
 }
 
@@ -229,6 +232,10 @@ json mediaFromV2(const json &m) {
     }
     if (!str(m, "title").empty()) c["audio_title"] = str(m, "title");
     if (!str(m, "performer").empty()) c["audio_performer"] = str(m, "performer");
+    if (!str(m, "thumbnail").empty()) c["thumbnail"] = str(m, "thumbnail");
+    if (const auto d = !str(m, "blob_domain").empty() ? str(m, "blob_domain") : str(m, "blobDomain"); !d.empty()) {
+        c["blob_domain"] = d;
+    }
     return c;
 }
 
@@ -528,7 +535,7 @@ std::string v2Kind(const json &v2) {
                                   "poll_close", "receipt", "edit", "delete", "reaction", "pin",
                                   "call", "group_key", "delivery_key", "contact", "container_key",
                                   "state_key", "chat_mode", "task_offer", "task_response",
-                                  "cloud_invite", "article"};
+                                  "cloud_invite", "article", "mod_report"};
     if (!v2.is_object()) return {};
     for (const char *k : kinds) {
         if (v2.contains(k) && !v2[k].is_null()) return k;
@@ -600,6 +607,14 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
         if (c.value("is_quiz", false)) p["is_quiz"] = true;
         if (c.contains("correct") && c["correct"].is_array()) p["correct"] = c["correct"];
         if (!str(c, "solution").empty()) p["solution"] = str(c, "solution");
+        // Срок, запрет переголосования, перемешивание и скрытые до срока итоги (как web)
+        if (const auto *ms = c.contains("close_ms") ? &c["close_ms"] : nullptr; ms && (ms->is_number() || ms->is_string())) {
+            const auto v = ms->is_number() ? ms->get<long long>() : std::atoll(ms->get<std::string>().c_str());
+            if (v > 0) p["close_ms"] = std::to_string(v);
+        }
+        if (c.value("no_revote", false)) p["no_revote"] = true;
+        if (c.value("shuffle", false)) p["shuffle"] = true;
+        if (c.value("hide_results", false)) p["hide_results"] = true;
         out["poll"] = p;
     } else if (kind == "poll_vote") {
         json v{{"option_indexes", c.contains("options") && c["options"].is_array() ? c["options"] : json::array()}};
@@ -609,6 +624,57 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
         json v = json::object();
         if (!str(c, "poll").empty()) v["poll"] = ::parvane::v2::ref(str(c, "poll"));
         out["poll_close"] = v;
+    } else if (kind == "task_offer") {
+        json t{{"name", str(c, "name")}};
+        if (!str(c, "description").empty()) t["description"] = str(c, "description");
+        if (c.contains("steps") && c["steps"].is_array() && !c["steps"].empty()) {
+            auto steps = json::array();
+            for (const auto &x : c["steps"]) {
+                if (x.is_string()) steps.push_back(json{{"text", x.get<std::string>()}});
+            }
+            t["steps"] = steps;
+        }
+        for (const char *k : {"day", "start", "due", "text"}) {
+            if (!str(c, k).empty()) t[k] = str(c, k);
+        }
+        if (c.value("minutes", 0) > 0) t["minutes"] = c["minutes"];
+        out["task_offer"] = t;
+    } else if (kind == "task_response") {
+        json t{{"decision", c.value("accepted", false) ? "TASK_DECISION_ACCEPTED" : "TASK_DECISION_DECLINED"}};
+        if (!str(c, "offer").empty()) t["offer"] = ::parvane::v2::ref(str(c, "offer"));
+        if (!str(c, "text").empty()) t["text"] = str(c, "text");
+        out["task_response"] = t;
+    } else if (kind == "cloud_invite") {
+        json t{{"name", str(c, "name")}};
+        if (c.contains("container") && c["container"].is_object()) t["container"] = c["container"];
+        if (c.value("role", 0) > 0) t["role"] = c["role"];
+        if (!str(c, "text").empty()) t["text"] = str(c, "text");
+        out["cloud_invite"] = t;
+    } else if (kind == "article") {
+        json t{{"title", str(c, "title")}, {"markdown", str(c, "markdown")}};
+        if (!str(c, "text").empty()) t["text"] = str(c, "text");
+        if (c.contains("article_media") && c["article_media"].is_array() && !c["article_media"].empty()) {
+            auto media = json::array();
+            for (const auto &m : c["article_media"]) media.push_back(mediaToV2(m, str(m, "kind")));
+            t["media"] = media;
+        }
+        out["article"] = t;
+    } else if (kind == "mod_report") {
+        json t = json::object();
+        if (c.contains("report_group") && c["report_group"].is_object()) t["group"] = c["report_group"];
+        for (const char *k : {"reason", "comment", "text"}) {
+            if (!str(c, k).empty()) t[k] = str(c, k);
+        }
+        if (c.contains("reported") && c["reported"].is_array()) {
+            auto messages = json::array();
+            for (const auto &m : c["reported"]) {
+                messages.push_back(json{{"op_id", uuidToB64(str(m, "op_id"))}, {"author", {{"address", str(m, "author")}}},
+                                        {"text", str(m, "text")},
+                                        {"ts_ms", std::to_string(m.value("ts", 0LL) * 1000)}});
+            }
+            t["messages"] = messages;
+        }
+        out["mod_report"] = t;
     } else {
         return std::nullopt;
     }
@@ -678,6 +744,14 @@ std::optional<json> fromV2(const json &c) {
         if (p.value("is_quiz", false)) out["is_quiz"] = true;
         if (p.contains("correct") && p["correct"].is_array()) out["correct"] = p["correct"];
         if (!str(p, "solution").empty()) out["solution"] = str(p, "solution");
+        if (p.contains("close_ms")) {
+            const auto &ms = p["close_ms"];
+            const auto v = ms.is_number() ? ms.get<long long>() : ms.is_string() ? std::atoll(ms.get<std::string>().c_str()) : 0LL;
+            if (v > 0) out["close_ms"] = v;
+        }
+        if (p.value("no_revote", false)) out["no_revote"] = true;
+        if (p.value("shuffle", false)) out["shuffle"] = true;
+        if (p.value("hide_results", false)) out["hide_results"] = true;
         out = parvane::poll::normalize(out);
     } else if (c.contains("poll_vote") && c["poll_vote"].is_object()) {
         const auto &v = c["poll_vote"];
@@ -695,29 +769,70 @@ std::optional<json> fromV2(const json &c) {
     } else if (c.contains("chat_mode") && c["chat_mode"].is_object()) {
         // Режим L2 личного чата: видимое служебное сообщение (без ttl/пересылки).
         return chatModeContent(c["chat_mode"].value("l2", false));
-    } else if (c.contains("task_offer") || c.contains("task_response")) {
-        // Задание в чат (spec 011, TASK-1): раздела «План» у desktop нет —
-        // показываем текстовое представление, которое заполнил отправитель
-        const auto &t = c.contains("task_offer") ? c["task_offer"] : c["task_response"];
-        std::string text = t.is_object() ? str(t, "text") : std::string();
-        if (text.empty() && t.is_object() && !str(t, "name").empty()) text = "📋 " + str(t, "name");
-        if (text.empty()) text = c.contains("task_offer") ? "📋 Задание" : "📋 Ответ на задание";
-        out = json{{"kind", "text"}, {"text", text}};
-    } else if (c.contains("cloud_invite")) {
-        // Приглашение в совместную папку облака (spec 016, CLOUD-1): раздела
-        // «Облако» у desktop нет — показываем текст, который заполнил отправитель
+    } else if (c.contains("task_offer") && c["task_offer"].is_object()) {
+        // Задание в чат (spec 011, TASK-1) — как web: карточка с «Принять/Отклонить»
+        const auto &t = c["task_offer"];
+        out = json{{"kind", "task_offer"}, {"name", str(t, "name")}};
+        if (!str(t, "description").empty()) out["description"] = str(t, "description");
+        if (t.contains("steps") && t["steps"].is_array()) {
+            auto steps = json::array();
+            for (const auto &x : t["steps"]) {
+                if (!str(x, "text").empty()) steps.push_back(str(x, "text"));
+            }
+            if (!steps.empty()) out["steps"] = steps;
+        }
+        for (const char *k : {"day", "start", "due", "text"}) {
+            if (!str(t, k).empty()) out[k] = str(t, k);
+        }
+        if (t.value("minutes", 0) > 0) out["minutes"] = t["minutes"];
+    } else if (c.contains("task_response") && c["task_response"].is_object()) {
+        const auto &t = c["task_response"];
+        out = json{{"kind", "task_response"}, {"accepted", str(t, "decision") == "TASK_DECISION_ACCEPTED"}};
+        if (t.contains("offer")) {
+            if (auto u = b64ToUuid(str(t["offer"], "op_id"))) out["offer"] = *u;
+        }
+        if (!str(t, "text").empty()) out["text"] = str(t, "text");
+    } else if (c.contains("cloud_invite") && c["cloud_invite"].is_object()) {
+        // Приглашение в совместную папку облака (spec 016, CLOUD-1)
         const auto &t = c["cloud_invite"];
-        std::string text = t.is_object() ? str(t, "text") : std::string();
-        if (text.empty() && t.is_object() && !str(t, "name").empty()) text = "📁 " + str(t, "name");
-        if (text.empty()) text = "📁 Приглашение в папку";
-        out = json{{"kind", "text"}, {"text", text}};
-    } else if (c.contains("article")) {
-        // Статья (ARTICLE-1): окна чтения у desktop нет — показываем текст, который заполнил отправитель
+        out = json{{"kind", "cloud_invite"}, {"name", str(t, "name")}};
+        if (t.contains("container") && t["container"].is_object() && !str(t["container"], "id").empty()) {
+            out["container"] = json{{"domain", str(t["container"], "domain")}, {"id", str(t["container"], "id")}};
+        }
+        if (t.value("role", 0) > 0) out["role"] = t["role"];
+        if (!str(t, "text").empty()) out["text"] = str(t, "text");
+    } else if (c.contains("article") && c["article"].is_object()) {
+        // Статья (ARTICLE-1): окно чтения и «Сохранить в заметки»
         const auto &t = c["article"];
-        std::string text = t.is_object() ? str(t, "text") : std::string();
-        if (text.empty() && t.is_object() && !str(t, "title").empty()) text = "📄 " + str(t, "title");
-        if (text.empty()) text = "📄 Статья";
-        out = json{{"kind", "text"}, {"text", text}};
+        out = json{{"kind", "article"}, {"title", str(t, "title")}, {"markdown", str(t, "markdown")}};
+        if (!str(t, "text").empty()) out["text"] = str(t, "text");
+        if (t.contains("media") && t["media"].is_array() && !t["media"].empty()) {
+            auto media = json::array();
+            for (const auto &m : t["media"]) media.push_back(mediaFromV2(m));
+            out["article_media"] = media;
+        }
+    } else if (c.contains("mod_report") && c["mod_report"].is_object()) {
+        // Жалоба админам группы (REPORT-1, spec 024): карточка у админов
+        const auto &t = c["mod_report"];
+        out = json{{"kind", "mod_report"}};
+        if (t.contains("group") && t["group"].is_object() && !str(t["group"], "id").empty()) {
+            out["report_group"] = json{{"domain", str(t["group"], "domain")}, {"id", str(t["group"], "id")}};
+        }
+        for (const char *k : {"reason", "comment", "text"}) {
+            if (!str(t, k).empty()) out[k] = str(t, k);
+        }
+        auto reported = json::array();
+        if (t.contains("messages") && t["messages"].is_array()) {
+            for (const auto &m : t["messages"]) {
+                const auto id = b64ToUuid(str(m, "op_id"));
+                const auto author = m.contains("author") ? str(m["author"], "address") : std::string();
+                if (!id || author.empty()) continue;
+                const auto &ts = m.contains("ts_ms") ? m["ts_ms"] : json(0);
+                const auto ms = ts.is_number() ? ts.get<long long>() : ts.is_string() ? std::atoll(ts.get<std::string>().c_str()) : 0LL;
+                reported.push_back(json{{"op_id", *id}, {"author", author}, {"text", str(m, "text")}, {"ts", ms / 1000}});
+            }
+        }
+        out["reported"] = reported;
     } else {
         return std::nullopt;
     }
