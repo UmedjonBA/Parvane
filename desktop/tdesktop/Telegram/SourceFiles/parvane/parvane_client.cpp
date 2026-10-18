@@ -388,6 +388,20 @@ struct PollState {
 	bool closed = false;
 	bool publicVoters = false; // публичный опрос — можно показывать голосовавших
 	QHash<QString, QVector<int>> votes; // голосовавший → индексы вариантов
+	// spec 024: автор (только он закрывает), срок, без переголосования, перемешивание, итоги после срока
+	QString author;
+	std::int64_t closeAtMs = 0;
+	std::int64_t createdMs = 0;
+	bool noRevote = false;
+	bool shuffle = false;
+	bool hideResults = false;
+
+	[[nodiscard]] parvane::poll::VoteRules rules() const {
+		return { .closed = closed, .closeAtMs = closeAtMs, .quiz = quiz, .noRevote = noRevote };
+	}
+	[[nodiscard]] bool closedNow() const {
+		return parvane::poll::isClosedAt(rules(), QDateTime::currentMSecsSinceEpoch());
+	}
 };
 QHash<QString, PollState> g_pollsByUuid;   // uuid опроса → состояние
 QHash<quint64, QString> g_pollUuidById;    // PollId → uuid опроса
@@ -6591,10 +6605,20 @@ void pumpMediaDownload(
 		}
 	}
 	using Flag = MTPDpoll::Flag;
-	const auto flags = (st.closed ? Flag::f_closed : Flag(0))
+	const auto closeDate = int(st.closeAtMs / 1000);
+	const auto closePeriod = (st.closeAtMs && st.createdMs)
+		? std::max(1, int((st.closeAtMs - st.createdMs) / 1000))
+		: 0;
+	const auto flags = (st.closedNow() ? Flag::f_closed : Flag(0))
 		| (c.value("multiple", false) ? Flag::f_multiple_choice : Flag(0))
 		| (c.value("quiz", false) ? Flag::f_quiz : Flag(0))
-		| (c.value("public", false) ? Flag::f_public_voters : Flag(0));
+		| (c.value("public", false) ? Flag::f_public_voters : Flag(0))
+		| (st.noRevote ? Flag::f_revoting_disabled : Flag(0))
+		| (st.shuffle ? Flag::f_shuffle_answers : Flag(0))
+		| (st.hideResults ? Flag::f_hide_results_until_close : Flag(0))
+		| ((!st.author.isEmpty() && st.author == SelfAddress()) ? Flag::f_creator : Flag(0))
+		| (closeDate ? Flag::f_close_date : Flag(0))
+		| (closePeriod ? Flag::f_close_period : Flag(0));
 	const auto poll = MTP_poll(
 		MTP_long(st.pollId),
 		MTP_flags(flags),
@@ -6602,8 +6626,8 @@ void pumpMediaDownload(
 			MTP_string(question),
 			MTP_vector<MTPMessageEntity>()),
 		MTP_vector<MTPPollAnswer>(answers),
-		MTP_int(0),                 // close_period (flags.4 — нет)
-		MTP_int(0),                 // close_date (flags.5 — нет)
+		MTP_int(closePeriod),       // close_period (spec 024)
+		MTP_int(closeDate),         // close_date
 		MTPVector<MTPstring>(),     // countries_iso2 (flags.12 — нет)
 		MTP_long(0));               // hash
 	const auto results = MTP_pollResults(
@@ -6629,7 +6653,9 @@ void applyPollState(not_null<Main::Session*> session, const PollState &st) {
 	const auto myVote = st.votes.value(self);
 	auto counts = QVector<int>(st.answers, 0);
 	auto total = 0;
-	for (auto i = st.votes.constBegin(); i != st.votes.constEnd(); ++i) {
+	// spec 024: итоги скрыты до срока — у всех, кроме автора
+	const auto hidden = st.hideResults && !st.closedNow() && st.author != self;
+	for (auto i = st.votes.constBegin(); i != st.votes.constEnd() && !hidden; ++i) {
 		if (i.value().isEmpty()) {
 			continue; // отозванный голос
 		}
@@ -6739,8 +6765,23 @@ void handlePollService(
 		}
 		return;
 	}
+	// P-44: голос — только из чата опроса; закрыть может только автор
+	const auto to = QString::fromStdString(sm.to);
+	const auto voteChat = parvane::v2::isGroupAddress(sm.to)
+		? to
+		: (voter == SelfAddress() ? to : voter);
 	if (kind == "poll_close") {
+		if (!it->author.isEmpty() && voter != it->author) {
+			LOG(("Parvane: закрытие опроса %1 не автором (%2) — отброшено").arg(pollUuid, voter));
+			return;
+		}
 		it->closed = true;
+	} else if (voteChat != it->chatAddress) {
+		LOG(("Parvane: голос в опросе %1 из чужого чата — отброшен").arg(pollUuid));
+		return;
+	} else if (!parvane::poll::acceptsVote(it->rules(), it->votes.contains(voter), sm.ts * 1000)) {
+		LOG(("Parvane: голос в опросе %1 от %2 не принят (срок/без переголосования)").arg(pollUuid, voter));
+		return;
 	} else if (options.isEmpty()) {
 		it->votes.remove(voter);
 	} else {
@@ -6812,6 +6853,25 @@ void injectPollMessage(
 			&& sm.content["answers"].is_array())
 		? int(sm.content["answers"].size())
 		: 0;
+	{
+		const auto rules = parvane::poll::rulesOf(sm.content);
+		st.author = from;
+		st.closeAtMs = rules.closeAtMs;
+		st.createdMs = std::int64_t(sm.ts) * 1000;
+		st.noRevote = rules.noRevote;
+		st.shuffle = sm.content.value("shuffle", false);
+		st.hideResults = sm.content.value("hide_results", false);
+		// Срок наступит — опрос перерисуется закрытым (итоги откроются)
+		if (const auto left = st.closeAtMs - QDateTime::currentMSecsSinceEpoch(); st.closeAtMs && left > 0) {
+			base::call_delayed(crl::time(left + 500), [uuid] {
+				const auto session = g_sessionWeak.get();
+				const auto it = g_pollsByUuid.constFind(uuid);
+				if (session && it != g_pollsByUuid.constEnd()) {
+					applyPollState(session, *it);
+				}
+			});
+		}
+	}
 	st.correct.clear();
 	if (sm.content.contains("correct") && sm.content["correct"].is_array()) {
 		for (const auto &o : sm.content["correct"]) {
@@ -7810,6 +7870,18 @@ bool MirrorPollCreate(PeerData *peer, const PollData &data) {
 			content["solution"] = data.solution.text.toStdString();
 		}
 	}
+	// spec 024: срок, без переголосования, перемешивание, итоги после срока
+	if (data.closeDate > 0) {
+		content["close_ms"] = std::int64_t(data.closeDate) * 1000;
+	} else if (data.closePeriod > 0) {
+		content["close_ms"] = QDateTime::currentMSecsSinceEpoch() + std::int64_t(data.closePeriod) * 1000;
+	}
+	const auto flags = data.flags();
+	if (flags & PollData::Flag::RevotingDisabled) content["no_revote"] = true;
+	if (flags & PollData::Flag::ShuffleAnswers) content["shuffle"] = true;
+	if ((flags & PollData::Flag::HideResultsUntilClose) && content.contains("close_ms")) {
+		content["hide_results"] = true;
+	}
 	// Локальное эхо + PollState — общий путь инъекции (isOwn по from==self).
 	parvane::StoredMessage own;
 	own.id = parvane::newUuidV7();
@@ -7836,10 +7908,10 @@ bool MirrorPollVotes(
 	if (it == g_pollsByUuid.end()) {
 		return false;
 	}
-	if (it->closed) {
-		return true; // опрос остановлен — голос не принимаем
-	}
 	const auto self = SelfAddress();
+	if (!parvane::poll::acceptsVote(it->rules(), it->votes.contains(self), QDateTime::currentMSecsSinceEpoch())) {
+		return true; // остановлен, срок вышел либо голос окончательный — не принимаем
+	}
 	auto idx = QVector<int>();
 	auto jopts = nlohmann::json::array();
 	for (const auto &option : options) {

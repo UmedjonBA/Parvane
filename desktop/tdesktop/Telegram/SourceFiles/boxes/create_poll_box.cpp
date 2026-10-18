@@ -2795,7 +2795,8 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 		rpl::single(!!(_chosen & PollData::Flag::MultiChoice))
 			| rpl::then(state->multipleForceOff.events()),
 		st::detailedSettingsButtonStyle);
-	const auto addOptions = (!(_disabled & PollData::Flag::OpenAnswers))
+	// Parvane: варианты от голосующих в схеме опроса нет — пункта нет (как web)
+	const auto addOptions = (false && !(_disabled & PollData::Flag::OpenAnswers))
 		? AddPollToggleButton(
 			container,
 			tr::lng_polls_create_allow_adding_options(),
@@ -2850,7 +2851,8 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 
 	const auto show = uiShow();
 
-	const auto restrictToSubscribers = isBroadcastChannel
+	// Parvane: «только подписчикам» и «по странам» — у сервера нет этих данных (как web)
+	const auto restrictToSubscribers = (false && isBroadcastChannel)
 		? AddPollToggleButton(
 			container,
 			tr::lng_polls_create_restrict_to_subscribers(),
@@ -2862,7 +2864,7 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			rpl::single(!!(_chosen & PollData::Flag::SubscribersOnly)),
 			st::detailedSettingsButtonStyle).get()
 		: nullptr;
-	const auto limitByCountry = isBroadcastChannel
+	const auto limitByCountry = (false && isBroadcastChannel)
 		? AddPollToggleButton(
 			container,
 			tr::lng_polls_create_limit_by_country(),

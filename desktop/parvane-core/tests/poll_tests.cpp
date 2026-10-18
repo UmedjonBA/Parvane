@@ -23,6 +23,21 @@ int main() {
     const auto both = parvane::poll::normalize(json::parse(R"({"options":["a"],"answers":["b"],"is_quiz":true,"quiz":false})"));
     check(both["options"][0] == "a" && both["answers"][0] == "b" && both["quiz"] == false, "оба имени есть — ничего не трогаем");
     check(parvane::poll::normalize(json("str")).is_string(), "не-объект возвращается как есть");
+    // spec 024: срок, переголосование, викторина (как web polls.ts applyVote)
+    using parvane::poll::acceptsVote;
+    using parvane::poll::rulesOf;
+    const auto timed = rulesOf(json::parse(R"({"kind":"poll","close_ms":"100000","no_revote":true})"));
+    check(timed.closeAtMs == 100000 && timed.noRevote, "close_ms строкой (protobuf int64) и no_revote читаются");
+    check(rulesOf(json::parse(R"({"close_ms":5})")).closeAtMs == 5, "close_ms числом");
+    check(acceptsVote(timed, false, 100000 + 59000), "голос в пределах минуты после срока принят (доставка)");
+    check(!acceptsVote(timed, false, 100000 + 61000), "голос после срока и минуты отброшен");
+    check(!acceptsVote(timed, true, 1000), "без переголосования второй голос отброшен");
+    const auto quiz = rulesOf(json::parse(R"({"is_quiz":true})"));
+    check(quiz.quiz && !acceptsVote(quiz, true, 1) && acceptsVote(quiz, false, 1), "викторина: первый голос окончательный");
+    auto closed = rulesOf(json::object());
+    closed.closed = true;
+    check(!acceptsVote(closed, false, 1), "закрытый опрос голосов не принимает");
+    check(parvane::poll::isClosedAt(timed, 100000) && !parvane::poll::isClosedAt(timed, 99999), "закрыт с наступлением срока");
     std::printf("=== итог: %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }
