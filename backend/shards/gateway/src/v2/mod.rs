@@ -27,8 +27,10 @@ use parvane_protocol::pb::parvane::msg::v2::{
     EphemeralGroupTypingRequest, EphemeralPresenceRequest, EphemeralSubscribeRequest, EphemeralSubscribeResponse,
     EphemeralTypingRequest, GroupEpochInfo, GroupEpochQuery, InboxRecord, InboxSubscribeResponse,
 };
-use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut};
-use parvane_protocol::registry_gen::{eph_subject, inbox_subject, FEDERATION_OUT, INTERNAL_GROUP_EPOCH, REVOKED_SUBJECT};
+use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut, S2sEphemeral};
+use parvane_protocol::registry_gen::{
+    eph_subject, inbox_subject, FEDERATION_OUT, INTERNAL_EPH_IN, INTERNAL_GROUP_EPOCH, REVOKED_SUBJECT,
+};
 use parvane_protocol::schema::MethodInfo;
 use parvane_protocol::ProtoError;
 use prost::Message;
@@ -96,6 +98,7 @@ impl Shared {
             anon_ip: AnonIpLimits::from_env(),
             domain: own_domain(),
         });
+        fed_ephemeral_serve(&sh).await?;
         let mut sub = nats.subscribe(REVOKED_SUBJECT.to_string()).await?;
         let shared = sh.clone();
         tokio::spawn(async move {
@@ -272,7 +275,16 @@ impl Session {
         // к чужому серверу не подключается. Только методы с `federated`; IP и JWT дальше не идут.
         let dest = req.dest_domain.trim().to_ascii_lowercase();
         if !dest.is_empty() && dest != self.sh.domain {
-            if !m.federated || m.shard == "gateway" || !parvane_protocol::address::is_valid_domain(&dest) {
+            if !m.federated || !parvane_protocol::address::is_valid_domain(&dest) {
+                return respond(&self.tx, id, Err(err(ErrorCode::Invalid, 0))).await;
+            }
+            // «Печатает» собеседнику с другого сервера (R14): канал и запечатанный сигнал — его gateway.
+            if m.name == "ephemeral.typing" {
+                let r = self.typing_remote(dest, &req.body).await;
+                return respond(&self.tx, id, r.map_err(|c| err(c, 0))).await;
+            }
+            // Остальное своё gateway не пересылает; «печатает» группы проверяет gateway дома группы.
+            if m.shard == "gateway" && m.name != "ephemeral.group_typing" {
                 return respond(&self.tx, id, Err(err(ErrorCode::Invalid, 0))).await;
             }
             let timeout = u64::from(if req.timeout_ms == 0 { 10_000 } else { req.timeout_ms }).clamp(100, 30_000);
@@ -361,26 +373,21 @@ impl Session {
     /// T122 (D-07): «печатает» в группе через анонимный канал. Право — подпись
     /// ключом отправки текущей эпохи; автор серверу неизвестен.
     async fn group_typing(&self, r: EphemeralGroupTypingRequest) -> Result<Vec<u8>, ErrorCode> {
-        let g = r.group.clone().ok_or(ErrorCode::Invalid)?;
-        parvane_protocol::address::check_ref(&g).map_err(|_| ErrorCode::Invalid)?;
-        if r.nonce.len() != 16 || r.channel_id.len() != 16 || r.epoch_signature.len() != 64 || r.payload.is_empty() {
+        group_typing(&self.sh, r).await.map(|()| vec![])
+    }
+
+    /// «Печатает» собеседнику с другого сервера: тот же отказ, что у своего канала, — и в шард federation.
+    async fn typing_remote(&self, dest: String, body: &[u8]) -> Result<Vec<u8>, ErrorCode> {
+        let r: EphemeralTypingRequest = decode_checked(body, Origin::Client).map_err(|e| e.code())?;
+        if r.channel_id.len() != 16 || r.payload.is_empty() {
             return Err(ErrorCode::Invalid);
         }
-        let info = group_epoch(&self.sh.nats, &g).await?;
-        if !info.found || info.deleted {
-            return Err(ErrorCode::NotFound);
-        }
-        // После смены состава/прав до новой эпохи ключ мог остаться у исключённого.
-        if r.epoch != info.epoch || info.stale {
-            return Err(ErrorCode::Expired);
-        }
-        let pk: [u8; 32] = info.send_public_key.as_slice().try_into().map_err(|_| ErrorCode::Forbidden)?;
-        parvane_protocol::group::verify_group_typing(&pk, &g, r.epoch, &r.nonce, &r.payload, &r.epoch_signature)
-            .map_err(|_| ErrorCode::Forbidden)?;
-        self.sh.eph.group_nonce_fresh(&g.id, &r.nonce, Instant::now())?;
-        // Подписчики получают тот же вид, что и личный typing: (channel_id, payload).
-        let out = EphemeralTypingRequest { channel_id: r.channel_id.clone(), payload: r.payload }.encode_to_vec();
-        self.publish_eph(&r.channel_id, &out).await
+        let out = FederationOut {
+            dest_domain: dest,
+            timeout_ms: FED_EPH_TIMEOUT_MS,
+            kind: Some(federation_out::Kind::Ephemeral(S2sEphemeral { channel_id: r.channel_id, payload: r.payload })),
+        };
+        shard_call(&self.sh.nats, FEDERATION_OUT, out.encode_to_vec(), u64::from(FED_EPH_TIMEOUT_MS) + 2_000).await
     }
 
     async fn publish_eph(&self, channel_id: &[u8], body: &[u8]) -> Result<Vec<u8>, ErrorCode> {
@@ -440,6 +447,91 @@ async fn group_epoch(nats: &Client, g: &parvane_protocol::pb::parvane::core::v2:
         _ => return Err(ErrorCode::Unavailable),
     };
     decode_checked::<GroupEpochInfo>(&reply.payload, Origin::Server).map_err(|_| ErrorCode::Unavailable)
+}
+
+/// Таймаут доставки «печатает» на другой сервер: сигнал живёт секунды, повторов нет.
+const FED_EPH_TIMEOUT_MS: u32 = 5_000;
+
+/// «Печатает» группы (D-07): проверка подписи ключом текущей эпохи, публикация у себя и рассылка
+/// серверам участников с других доменов (R14). Группа — своя: чужие проверяет gateway их дома.
+async fn group_typing(sh: &Shared, r: EphemeralGroupTypingRequest) -> Result<(), ErrorCode> {
+    let g = r.group.clone().ok_or(ErrorCode::Invalid)?;
+    parvane_protocol::address::check_ref(&g).map_err(|_| ErrorCode::Invalid)?;
+    if !g.domain.eq_ignore_ascii_case(&sh.domain) {
+        return Err(ErrorCode::NotFound);
+    }
+    if r.nonce.len() != 16 || r.channel_id.len() != 16 || r.epoch_signature.len() != 64 || r.payload.is_empty() {
+        return Err(ErrorCode::Invalid);
+    }
+    let info = group_epoch(&sh.nats, &g).await?;
+    if !info.found || info.deleted {
+        return Err(ErrorCode::NotFound);
+    }
+    // После смены состава/прав до новой эпохи ключ мог остаться у исключённого.
+    if r.epoch != info.epoch || info.stale {
+        return Err(ErrorCode::Expired);
+    }
+    let pk: [u8; 32] = info.send_public_key.as_slice().try_into().map_err(|_| ErrorCode::Forbidden)?;
+    parvane_protocol::group::verify_group_typing(&pk, &g, r.epoch, &r.nonce, &r.payload, &r.epoch_signature)
+        .map_err(|_| ErrorCode::Forbidden)?;
+    sh.eph.group_nonce_fresh(&g.id, &r.nonce, Instant::now())?;
+    // Подписчики получают тот же вид, что и личный typing: (channel_id, payload).
+    let out = EphemeralTypingRequest { channel_id: r.channel_id.clone(), payload: r.payload.clone() }.encode_to_vec();
+    let subject = eph_subject(&r.channel_id).map_err(|_| ErrorCode::Invalid)?;
+    sh.nats.publish(subject, out.into()).await.map_err(|_| ErrorCode::Unavailable)?;
+    for d in info.remote_domains {
+        let out = FederationOut {
+            dest_domain: d,
+            timeout_ms: FED_EPH_TIMEOUT_MS,
+            kind: Some(federation_out::Kind::Ephemeral(S2sEphemeral { channel_id: r.channel_id.clone(), payload: r.payload.clone() })),
+        }
+        .encode_to_vec();
+        let nats = sh.nats.clone();
+        // Без ожидания: недоступный сервер участника не задерживает остальных.
+        tokio::spawn(async move {
+            let _ = shard_call(&nats, FEDERATION_OUT, out, u64::from(FED_EPH_TIMEOUT_MS) + 2_000).await;
+        });
+    }
+    Ok(())
+}
+
+/// Федерация (R14): «печатает» с другого сервера. `INTERNAL_EPH_IN` — сигнал в свой канал (собеседник
+/// или участник группы здесь), `ephemeral.group_typing` — «печатает» своей группы от участника с другого
+/// сервера. Публикует их только шард federation (ACL), кадр уже проверен им; оба — без ответа.
+async fn fed_ephemeral_serve(sh: &Arc<Shared>) -> anyhow::Result<()> {
+    let mut eph_in = sh.nats.subscribe(INTERNAL_EPH_IN.to_string()).await?;
+    let shared = sh.clone();
+    tokio::spawn(async move {
+        while let Some(m) = eph_in.next().await {
+            let Ok(e) = decode_checked::<S2sEphemeral>(&m.payload, Origin::Server) else { continue };
+            if e.payload.is_empty() || shared.eph.typing_publish(&e.channel_id, Instant::now()).is_err() {
+                continue;
+            }
+            let Ok(subject) = eph_subject(&e.channel_id) else { continue };
+            let out = EphemeralTypingRequest { channel_id: e.channel_id, payload: e.payload }.encode_to_vec();
+            let _ = shared.nats.publish(subject, out.into()).await;
+        }
+    });
+    // Ответа нет: у gateway нет права публиковать в ящики других ролей (GW-05).
+    let subject = parvane_protocol::schema::method("ephemeral.group_typing").map(|m| m.subject).unwrap_or_default();
+    let mut gt = sh.nats.subscribe(subject.to_string()).await?;
+    let shared = sh.clone();
+    tokio::spawn(async move {
+        while let Some(m) = gt.next().await {
+            let shared = shared.clone();
+            tokio::spawn(async move {
+                let Ok(sr) = decode_checked::<ShardRequest>(&m.payload, Origin::Server) else { return };
+                if sr.origin_domain.is_empty() {
+                    return;
+                }
+                let Ok(r) = decode_checked::<EphemeralGroupTypingRequest>(&sr.body, Origin::Client) else { return };
+                if let Err(c) = group_typing(&shared, r).await {
+                    debug!("федерация: «печатает» группы от {} отвергнуто ({:?})", sr.origin_domain, c);
+                }
+            });
+        }
+    });
+    Ok(())
 }
 
 /// Поток ответа шарда: ShardResponse (метаданные), затем ShardStreamChunk до `last`.

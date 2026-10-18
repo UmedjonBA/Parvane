@@ -103,6 +103,17 @@ async function createGroup(page, members, title) {
   await page.locator('#editable-message-text').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
 }
 
+// «Печатает»: набор в композере `from` → индикатор в шапке чата у `to` (R14, через шард federation).
+async function typingProbe(from, to, label) {
+  const composer = from.locator('.Transition_slide-active #editable-message-text').last();
+  await composer.pressSequentially('typing-probe', { delay: 60 });
+  await to.locator('.MiddleHeader').getByText(/typing/i).first()
+    .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail(`${label}: «печатает» не показан`));
+  await composer.fill('');
+  console.log(`OK: ${label}`);
+}
+
 async function waitActivePeers(page, count, label) {
   await page.waitForFunction(
     (expected) => document.querySelectorAll('[data-peer-state="active"]').length === expected,
@@ -146,6 +157,8 @@ try {
   await openListed(a, nick(boris));
   await findMessage(a, 'ответ с сервера B').first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   console.log('OK: история переписки между серверами пережила перезагрузку');
+  await typingProbe(b, a, '«печатает» Бориса (B) видит Аня (A)');
+  await typingProbe(a, b, '«печатает» Ани (A) видит Борис (B)');
 
   // ── История 2: группа на A с участником с B ─────────────────────────────
   await exchangeMessages(a, anya, v, vera, `fed-${suffix}`);
@@ -164,6 +177,10 @@ try {
     await findMessage(page, 'группа: Вера (A)').first().waitFor({ state: 'visible', timeout: SYNC_TIMEOUT_MS });
   }
   console.log('OK: группа с участниками двух серверов — сообщения всех троих видят все');
+  // Все трое в группе: Борис — запрос на сервер группы A, Аня — рассылка на B.
+  await openListed(a, groupTitle);
+  await typingProbe(b, a, '«печатает» Бориса (B) в группе сервера A видит Аня');
+  await typingProbe(a, b, '«печатает» Ани в группе сервера A видит Борис (B)');
 
   // ── История 3: личный звонок A ↔ B ──────────────────────────────────────
   await openListed(a, nick(boris));

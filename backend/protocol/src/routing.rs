@@ -18,6 +18,9 @@ use crate::pb::parvane::msg::v2 as mpb;
 /// Домен сервера объекта запроса; `None` — запрос своему серверу (аккаунт,
 /// устройства, свой инбокс и прочее, чего у чужого сервера нет).
 pub fn dest_of(r: &OutRequest) -> Option<String> {
+    if let Some(d) = &r.dest {
+        return Some(d.to_ascii_lowercase());
+    }
     let d = match r.method {
         "msg.deliver_sealed" => {
             let q = mpb::DeliverSealedRequest::decode(r.body.as_slice()).ok()?;
@@ -34,6 +37,8 @@ pub fn dest_of(r: &OutRequest) -> Option<String> {
         "msg.deliver_group" => ref_domain(mpb::DeliverGroupRequest::decode(r.body.as_slice()).ok()?.envelope?.group.as_ref()),
         "group.state.append" => entry_domain(gpb::StateAppendRequest::decode(r.body.as_slice()).ok()?.entry.as_ref()),
         "group.join" => entry_domain(gpb::JoinRequest::decode(r.body.as_slice()).ok()?.entry.as_ref()),
+        // «Печатает» группы (R14): проверяет gateway дома группы и рассылает серверам участников.
+        "ephemeral.group_typing" => ref_domain(mpb::EphemeralGroupTypingRequest::decode(r.body.as_slice()).ok()?.group.as_ref()),
         "group.request.decide" => ref_domain(gpb::RequestDecideRequest::decode(r.body.as_slice()).ok()?.group.as_ref()),
         "domain.op.append" => ref_domain(DomainOpAppendRequest::decode(r.body.as_slice()).ok()?.op?.container.as_ref()),
         "domain.snapshot.put" => ref_domain(DomainSnapshotPutRequest::decode(r.body.as_slice()).ok()?.snapshot?.container.as_ref()),

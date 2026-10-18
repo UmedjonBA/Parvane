@@ -206,6 +206,18 @@ async fn dispatch(fed: &Fed, origin: &str, req: S2sRequest, out: Responder) {
                 origin_domain: origin.to_string(),
                 ..Default::default()
             };
+            // «Печатает» своей группы (R14) — gateway, без ответа: у gateway нет права публиковать в ящики
+            // других ролей (GW-05), а сигнал живёт секунды — исход отправителю не нужен.
+            if m.shard == "gateway" {
+                // Личный «печатает» приходит видом `ephemeral` (канал без адреса), не пересылкой.
+                if m.name != "ephemeral.group_typing" {
+                    out.head(Err(err(ErrorCode::Forbidden, 0))).await;
+                    return;
+                }
+                let r = fed.nc.publish(m.subject.to_string(), sr.encode_to_vec().into()).await;
+                out.head(r.map(|()| vec![]).map_err(|_| err(ErrorCode::Unavailable, 1000))).await;
+                return;
+            }
             let timeout = Duration::from_millis(u64::from(if f.timeout_ms == 0 { 10_000 } else { f.timeout_ms.min(30_000) }));
             if m.kind == 3 {
                 return stream(fed, m.subject, sr, timeout, out).await;

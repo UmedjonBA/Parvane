@@ -108,6 +108,16 @@ pub fn acl() -> BTreeMap<&'static str, RoleAcl> {
             }
         }
     }
+    // Федерация (R14): «печатает» группы от участника с другого сервера проверяет gateway дома группы —
+    // federation публикует запрос в subject метода, gateway его слушает.
+    for meth in METHODS.iter().filter(|x| x.shard == "gateway" && x.federated && x.channel == 3) {
+        if let Some(g) = m.get_mut("gateway") {
+            g.subscribe.push(meth.subject.to_string());
+        }
+        if let Some(f) = m.get_mut("federation") {
+            f.publish.push(meth.subject.to_string());
+        }
+    }
     let add = |m: &mut BTreeMap<&'static str, RoleAcl>, role: &str, sub: &[&str], publ: &[&str]| {
         if let Some(r) = m.get_mut(role) {
             r.subscribe.extend(sub.iter().map(|s| s.to_string()));

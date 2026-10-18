@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use parvane_protocol::client::{Chan, Client, ClientError, Event, Need, OutRequest};
 use parvane_protocol::pb::parvane::core::v2::{frame, Auth, Channel, ErrorCode, UserRef};
 use parvane_protocol::pb::parvane::identity::v2 as ipb;
-use parvane_protocol::pb::parvane::msg::v2::{self as mpb, content, Content, Text};
+use parvane_protocol::pb::parvane::msg::v2::{self as mpb, content, Content, Text, TypingAction};
 use prost::Message;
 
 mod v2common;
@@ -434,6 +434,23 @@ impl Dev {
     }
 }
 
+/// Событие «печатает» от `from` (в группе `group` или лично) за 10 с.
+fn typing_seen(d: &mut Dev, from: &str, group: Option<&Vec<u8>>) -> bool {
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        let Some(ev) = d.id.next_event() else { return false };
+        if ev.kind != "ephemeral" {
+            continue;
+        }
+        if let Some(Event::Typing { group: g, from: f, .. }) = d.client.open_ephemeral(&ev.body) {
+            if f == from && g.as_ref() == group {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn kl_list(bytes: &[u8]) -> parvane_protocol::pb::parvane::core::v2::SignedTokenKeyList {
     ipb::TokensKeyListResponse::decode(bytes).unwrap().list.expect("список ключей")
 }
@@ -589,6 +606,27 @@ async fn federation_groups_calls_and_shared_folders() {
             t.iter().any(|(_, x)| x == "в группе от Ани").then_some(t)
         });
         assert!(got.contains(&(anya_u.clone(), "в группе от Ани".to_string())), "{got:?}");
+
+        // ── «печатает» между серверами (R14): каналы — у своего gateway, сигнал — через federation ──
+        let sub = boris.client.eph_subscribe(std::slice::from_ref(&anya_u), std::slice::from_ref(&gid));
+        boris.run(&sub).expect("подписка Бориса");
+        let sub = anya.client.eph_subscribe(std::slice::from_ref(&boris_u), std::slice::from_ref(&gid));
+        anya.run(&sub).expect("подписка Ани");
+        let t = anya.client.typing_request(&boris_u, TypingAction::Typing).unwrap().expect("канал Ани к Борису");
+        anya.exec(&t).expect("личный «печатает» Борису");
+        assert!(typing_seen(&mut boris, &anya_u, None), "Борис не увидел личный «печатает» Ани");
+        let t = boris.client.typing_request(&anya_u, TypingAction::Typing).unwrap().expect("канал Бориса к Ане");
+        boris.exec(&t).expect("личный «печатает» Ане");
+        assert!(typing_seen(&mut anya, &boris_u, None), "Аня не увидела личный «печатает» Бориса");
+        // Группа на A: Борис — его gateway пересылает на A, тот проверяет эпоху и публикует.
+        let t = boris.client.group_typing_request(&gid, TypingAction::Typing).unwrap().expect("канал группы у Бориса");
+        assert_eq!(boris.dest(&t), A);
+        boris.exec(&t).expect("«печатает» группы от Бориса");
+        assert!(typing_seen(&mut anya, &boris_u, Some(&gid)), "Аня не увидела «печатает» Бориса в группе");
+        // Аня: gateway A публикует у себя и рассылает серверу B.
+        let t = anya.client.group_typing_request(&gid, TypingAction::Typing).unwrap().expect("канал группы у Ани");
+        anya.exec(&t).expect("«печатает» группы от Ани");
+        assert!(typing_seen(&mut boris, &anya_u, Some(&gid)), "Борис не увидел «печатает» Ани в группе");
 
         // ── звонок между серверами ──
         let offer = CallSignal { call_id: vec![7u8; 16], signal: Some(Signal::Offer(Offer { sdp: "v=0 FED".into(), video: false, group: None })), group_call_id: vec![] };

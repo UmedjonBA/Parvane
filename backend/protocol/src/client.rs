@@ -70,14 +70,17 @@ pub struct OutRequest {
     pub chan: Chan,
     pub method: &'static str,
     pub body: Vec<u8>,
+    /// Домен сервера объекта, которого нет в теле (spec 028, R14: «печатает» собеседнику — канал
+    /// без адреса); `None` — `routing::dest_of` выводит его из тела.
+    pub dest: Option<String>,
 }
 
 impl OutRequest {
     fn id(method: &'static str, m: &impl Message) -> Self {
-        Self { chan: Chan::Id, method, body: m.encode_to_vec() }
+        Self { chan: Chan::Id, method, body: m.encode_to_vec(), dest: None }
     }
     fn anon(method: &'static str, m: &impl Message) -> Self {
-        Self { chan: Chan::Anon, method, body: m.encode_to_vec() }
+        Self { chan: Chan::Anon, method, body: m.encode_to_vec(), dest: None }
     }
 }
 
@@ -1805,7 +1808,10 @@ impl Client {
     pub fn typing_request(&self, peer: &str, action: mpb::TypingAction) -> Result<Option<OutRequest>> {
         let Some(c) = self.eph_direct_channel(peer) else { return Ok(None) };
         let payload = c.seal(&ephemeral::typing(&self.user, action, now_ms()))?;
-        Ok(Some(OutRequest::id("ephemeral.typing", &mpb::EphemeralTypingRequest { channel_id: c.id.to_vec(), payload })))
+        let mut r = OutRequest::id("ephemeral.typing", &mpb::EphemeralTypingRequest { channel_id: c.id.to_vec(), payload });
+        // Собеседник с другого сервера (R14): его gateway публикует сигнал в канал, на который он подписан.
+        r.dest = crate::address::address_domain(peer).map(str::to_ascii_lowercase);
+        Ok(Some(r))
     }
 
     /// «Печатает» в группе: анонимно, подпись ключом отправки текущей эпохи (D-07).
@@ -2853,7 +2859,7 @@ impl Client {
             "group.epoch.publish_send_key" => gpb::EpochPublishSendKeyRequest { entry: Some(entry) }.encode_to_vec(),
             _ => gpb::StateAppendRequest { entry: Some(entry) }.encode_to_vec(),
         };
-        Ok(OutRequest { chan: Chan::Id, method, body })
+        Ok(OutRequest { chan: Chan::Id, method, body, dest: None })
     }
 
     /// Только для тестов (cargo-feature `test-inject`): запись журнала группы

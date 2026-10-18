@@ -1266,6 +1266,8 @@ fn ephemeral_typing_and_presence() {
     assert_eq!(bob.eph_subscribe(&[], &[g.id.clone()]).len(), 1);
     let gt = alice.group_typing_request(&g.id, TypingAction::RecordingVoice).unwrap().unwrap();
     assert_eq!((gt.chan, gt.method), (Chan::Anon, "ephemeral.group_typing"));
+    // R14: проверяет gateway дома группы.
+    assert_eq!(parvane_protocol::routing::dest_of(&gt).as_deref(), Some("local"));
     assert!(!gt.body.windows(11).any(|w| w == b"alice@local"), "автор виден серверу");
     let gq: mpb::EphemeralGroupTypingRequest = decode_checked(&gt.body, Origin::Client).unwrap();
     let send_pk = bob.group_state(&g.id).unwrap().send_public_key.unwrap();
@@ -2171,6 +2173,10 @@ fn federated_direct_message_and_call_route_to_peer_server() {
     assert_eq!(dest_of(&reqs[0]).as_deref(), Some("a.example"));
     let ev = alice.open_record(&live_records(&reqs[0])[0]).unwrap();
     assert!(matches!(ev.as_slice(), [Event::Call { from, .. }] if from == "bob@b.example"), "{ev:?}");
+
+    // «Печатает» (R14): канал без адреса — сервер собеседника задан явно.
+    let t = alice.typing_request("bob@b.example", parvane_protocol::pb::parvane::msg::v2::TypingAction::Typing).unwrap().unwrap();
+    assert_eq!(dest_of(&t).as_deref(), Some("b.example"));
 }
 
 #[test]
