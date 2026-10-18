@@ -2283,6 +2283,13 @@ void ApiWrap::saveDraftsToCloud() {
 		const auto monoforumPeerId = thread->monoforumPeerId();
 		auto cloudDraft = history->cloudDraft(topicRootId, monoforumPeerId);
 		auto localDraft = history->localDraft(topicRootId, monoforumPeerId);
+		// Parvane (T024): черновик — в журнал личного состояния, своим устройствам (MTProto нет)
+		if (!topicRootId && Parvane::MirrorDraft(
+				history,
+				localDraft ? localDraft->textWithTags : TextWithTags())) {
+			i = _draftsSaveRequestIds.erase(i);
+			continue;
+		}
 		if (cloudDraft && cloudDraft->saveRequestId) {
 			request(base::take(cloudDraft->saveRequestId)).cancel();
 		}

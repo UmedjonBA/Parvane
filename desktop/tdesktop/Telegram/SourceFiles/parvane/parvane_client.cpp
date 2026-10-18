@@ -8451,8 +8451,17 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 // Черновики tdesktop хранит в своём локальном хранилище, блок-лист и архив у
 // десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
 const std::vector<std::string> kV2StateKinds{
-	"folders", "scheduled", "notify", "blocked", "archived", "pinned",
+	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts",
 };
+// T024: черновики (как web stateJournal drafts) — адрес → {text, entities, dateMs}. Только main; файл в tdata.
+struct DraftEntry {
+	QString text;
+	nlohmann::json entities = nlohmann::json::array();
+	std::int64_t dateMs = 0;
+};
+QHash<QString, DraftEntry> g_drafts;
+bool g_draftsLoaded = false;
+void LoadDraftsLocal();
 bool g_stateAttached = false;    // main
 bool g_stateApplying = false;    // main: применяем снимок — не зеркалить назад
 bool g_stateFlushQueued = false; // main
@@ -8656,7 +8665,26 @@ std::unique_ptr<base::Timer> g_stateTimer;
 			pinnedPeers.push_back(std::move(peer));
 		}
 	}
+	auto drafts = parvane::json::array();
+	LoadDraftsLocal();
+	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
+		auto peer = StatePeerOf(it.key());
+		const auto content = parvane::v2::toV2(parvane::textContent(it->text.toStdString(), it->entities));
+		if (peer.is_null() || !content || !content->contains("text")) {
+			continue;
+		}
+		try {
+			drafts.push_back({
+				{ "peer", std::move(peer) },
+				{ "text", parvane::v2::toBase64(parvane::v2::encodeMessage("parvane.msg.v2.Text", (*content)["text"])) },
+				{ "date_ms", std::to_string(it->dateMs) },
+			});
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: черновик %1 не в журнал: %2").arg(it.key(), QString::fromUtf8(e.what())));
+		}
+	}
 	return {
+		{ "drafts", std::move(drafts) },
 		{ "folders", std::move(folders) },
 		{ "folder_order", { { "ids", std::move(order) } } },
 		{ "scheduled", std::move(scheduled) },
@@ -8713,6 +8741,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "blocked", digest(canon("blocked", false)) },
 		{ "archived", digest(canon("archived", false)) },
 		{ "pinned", digest(canon("pinned", true)) },
+		{ "drafts", digest(canon("drafts", false)) },
 	};
 }
 
@@ -9230,6 +9259,116 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 	ForgetClearedOnMain(session, uuids);
 }
 
+[[nodiscard]] QString DraftsPath() {
+	return cWorkingDir() + u"tdata/parvane-drafts.json"_q;
+}
+
+void LoadDraftsLocal() {
+	if (g_draftsLoaded) {
+		return;
+	}
+	g_draftsLoaded = true;
+	const auto j = parvane::json::parse(StoreRead(DraftsPath()).toStdString(), nullptr, false);
+	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
+		return;
+	}
+	for (const auto &[address, d] : j.value("drafts", parvane::json::object()).items()) {
+		g_drafts.insert(QString::fromStdString(address), DraftEntry{
+			QString::fromStdString(d.value("text", std::string())),
+			d.value("entities", parvane::json::array()),
+			d.value("date_ms", std::int64_t(0)),
+		});
+	}
+}
+
+void SaveDraftsLocal() {
+	auto drafts = parvane::json::object();
+	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
+		drafts[it.key().toStdString()] = {
+			{ "text", it->text.toStdString() },
+			{ "entities", it->entities },
+			{ "date_ms", it->dateMs },
+		};
+	}
+	StoreWrite(DraftsPath(), QByteArray::fromStdString(parvane::json{
+		{ "self", SelfAddress().toStdString() },
+		{ "drafts", drafts },
+	}.dump()));
+}
+
+// Снимок журнала → черновики (штатный путь облачного черновика tdesktop: поле ввода обновится само)
+void ProjectDrafts(not_null<Main::Session*> session, const parvane::json &snap) {
+	if (!snap.contains("drafts") || !snap["drafts"].is_array()) {
+		return;
+	}
+	LoadDraftsLocal();
+	auto next = QHash<QString, DraftEntry>();
+	for (const auto &d : snap["drafts"]) {
+		const auto address = StateAddressOf(d.value("peer", parvane::json()));
+		if (address.isEmpty() || !d.contains("text") || !d["text"].is_string()) {
+			continue;
+		}
+		try {
+			const auto textJson = parvane::v2::decodeMessage("parvane.msg.v2.Text",
+				parvane::v2::fromBase64(d["text"].get<std::string>()));
+			const auto wire = parvane::v2::fromV2(parvane::json{ { "text", textJson } });
+			if (!wire || wire->value("text", std::string()).empty()) {
+				continue;
+			}
+			const auto ms = d.contains("date_ms") && d["date_ms"].is_string()
+				? std::atoll(d["date_ms"].get<std::string>().c_str())
+				: d.value("date_ms", std::int64_t(0));
+			next.insert(address, DraftEntry{
+				QString::fromStdString(wire->value("text", std::string())),
+				parvane::contentEntities(*wire),
+				ms,
+			});
+		} catch (const std::exception &) {
+		}
+	}
+	auto addresses = QSet<QString>();
+	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) addresses.insert(it.key());
+	for (auto it = next.constBegin(); it != next.constEnd(); ++it) addresses.insert(it.key());
+	auto changed = 0;
+	for (const auto &address : addresses) {
+		const auto before = g_drafts.value(address).text;
+		const auto after = next.value(address).text;
+		if (before == after) {
+			continue;
+		}
+		const auto history = HistoryForAddress(session, address);
+		if (!history) {
+			continue;
+		}
+		const auto peerId = history->peer->id;
+		const auto date = TimeId(next.value(address).dateMs / 1000);
+		if (after.isEmpty()) {
+			Data::ClearPeerCloudDraft(session, peerId, MsgId(), PeerId(), date ? date : base::unixtime::now());
+		} else {
+			const auto entities = Api::EntitiesToMTP(session, entitiesFromJson(next.value(address).entities),
+				Api::ConvertOption::SkipLocal);
+			using DFlag = MTPDdraftMessage::Flag;
+			const auto draft = MTP_draftMessage(
+				MTP_flags(entities.v.isEmpty() ? DFlag(0) : DFlag::f_entities),
+				MTPInputReplyTo(),
+				MTP_string(after),
+				entities,
+				MTPInputMedia(),
+				MTP_int(date ? date : base::unixtime::now()),
+				MTPlong(),
+				MTPSuggestedPost(),
+				MTPRichMessage());
+			Data::ApplyPeerCloudDraft(session, peerId, MsgId(), PeerId(), draft.c_draftMessage());
+		}
+		++changed;
+	}
+	g_drafts = next;
+	SaveDraftsLocal();
+	if (changed) {
+		LOG(("Parvane: журнал состояния → черновики (%1 изменений)").arg(changed));
+	}
+}
+
 void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	if (!snap.is_object()) {
 		return;
@@ -9241,6 +9380,7 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	ProjectNotify(snap);
 	ProjectBlocked(session, snap);
 	ProjectDialogs(session, snap);
+	ProjectDrafts(session, snap);
 	g_stateApplying = false;
 	SaveFolders(session);
 }
@@ -9817,6 +9957,35 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 // Личное состояние (T132): публичные точки врезки нативных путей.
 void MirrorBlock(not_null<PeerData*> peer, bool blocked) {
 	NoteBlock(peer, blocked);
+}
+
+bool MirrorDraft(not_null<History*> history, const TextWithTags &text) {
+	if (!SessionActive()) {
+		return false;
+	}
+	const auto address = HistoryAddress(history);
+	if (address.isEmpty()) {
+		return true;
+	}
+	LoadDraftsLocal();
+	const auto clean = text.text.trimmed();
+	if (g_drafts.value(address).text == text.text && (clean.isEmpty() == !g_drafts.contains(address))) {
+		return true;
+	}
+	if (clean.isEmpty()) {
+		if (!g_drafts.remove(address)) {
+			return true;
+		}
+	} else {
+		g_drafts.insert(address, DraftEntry{
+			text.text,
+			entitiesToJson(TextUtilities::ConvertTextTagsToEntities(text.tags)),
+			QDateTime::currentMSecsSinceEpoch(),
+		});
+	}
+	SaveDraftsLocal();
+	ScheduleStateFlush("drafts");
+	return true;
 }
 
 void MirrorArchive(not_null<History*> history, bool archived) {

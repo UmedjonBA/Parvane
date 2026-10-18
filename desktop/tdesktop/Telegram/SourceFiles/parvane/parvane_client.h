@@ -23,6 +23,7 @@ class DocumentData;
 class QImage;
 struct FilePrepareResult; // storage/localimageloader.h
 struct TextWithEntities;   // ui/text/text_entity.h (форматирование)
+struct TextWithTags;       // ui/text/text_entity.h (черновики)
 struct PollData;           // data/data_poll.h (опросы)
 
 namespace Data {
@@ -364,6 +365,8 @@ void SetProfileFields(const ProfileFields &fields);
 void MirrorNotifySettings(not_null<const PeerData*> peer);
 // Блокировка собеседника (локальная): список на диск и в журнал состояния.
 void MirrorBlock(not_null<PeerData*> peer, bool blocked);
+// T024: черновик поля ввода — в журнал личного состояния (как web). true — обработан здесь (MTProto не нужен).
+bool MirrorDraft(not_null<History*> history, const TextWithTags &text);
 // Архив и закреп чатов (локальные): адреса на диск и в журнал состояния.
 void MirrorArchive(not_null<History*> history, bool archived);
 void MirrorDialogPins(not_null<Main::Session*> session);
