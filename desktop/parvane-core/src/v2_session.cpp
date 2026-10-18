@@ -1754,6 +1754,8 @@ void Session::absorbLocked(std::vector<json> events) {
     }
     // Входящая смена режима личного чата (chat_mode) уже в состоянии движка.
     noteL2StateLocked();
+    // Секреты ссылок от других ведущих приглашения (spec 024) — в своё хранилище
+    absorbSharedInvitesLocked();
 }
 
 // Публичные методы зовутся с чужих потоков (UI, пул) — события отдаёт рабочий
@@ -1859,6 +1861,8 @@ void Session::publishGroupLocked(const std::string &hex) {
         info["pendingRequests"] = it->second;
     }
     outbox_.push_back(json{{"type", "groupUpdated"}, {"address", address}, {"isNew", isNew}, {"info", info}});
+    // Новая ссылка, новый админ — секреты своих ссылок ведущим приглашения
+    shareInvitesLocked(hex);
     noteGroupL2Locked(hex, *g);
     reportUnconfirmedLocked(hex, {});
     // Новую эпоху начинает владелец (или админ, сделавший изменение, — сразу).
@@ -2723,7 +2727,7 @@ json Session::listJoinRequests(const std::string &address) {
     return out;
 }
 
-bool Session::decideJoinRequest(const std::string &address, const std::string &user, bool approve) {
+bool Session::decideJoinRequest(const std::string &address, const std::string &user, bool approve, const std::string &linkId) {
     if (!ready_ || !isGroupAddress(address)) return false;
     const auto hex = groupHex(address);
     bool ok = false;
@@ -2732,7 +2736,10 @@ bool Session::decideJoinRequest(const std::string &address, const std::string &u
         if (!client_) return false;
         json reqJson;
         try {
-            reqJson = client_->groupRequestDecide(hex, user, approve);
+            // Одобренный по ссылке «по заявке» считается во вступивших по ней (spec 024)
+            json args{{"group", hex}, {"user", user}, {"approve", approve}};
+            if (!linkId.empty()) args["viaLinkHex"] = linkId;
+            reqJson = client_->call("groupRequestDecide", args);
         } catch (const std::exception &e) {
             log(std::string("решение по заявке отклонено движком: ") + e.what());
             return false;

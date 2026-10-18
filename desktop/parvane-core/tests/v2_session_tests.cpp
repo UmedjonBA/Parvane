@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -272,7 +273,69 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
         delivered = groupTextArrived(erin.inbox, group, "g-erin-" + suffix + std::to_string(i), alice.user, 15000);
     }
     check(delivered, "erin получила групповое после вступления");
+    // spec 024: правка ссылки (название, лимит) и вступившие по ней
+    const auto linkId = inv.is_object() ? inv.value("linkId", std::string()) : std::string();
+    check(alice.s->editInvite(group, url, "Ссылка для друзей", 0, 5), "spec 024: ссылка отредактирована (название, лимит)");
+    {
+        const auto g = alice.s->groupInfo(group);
+        bool titled = false;
+        for (const auto &meta : g.value("invites", json::array())) {
+            titled = titled || (meta.value("id", std::string()) == linkId && meta.dump().find("Ссылка для друзей") != std::string::npos);
+        }
+        check(titled, "spec 024: новое название ссылки — в журнале группы");
+    }
+    const auto joins = alice.s->listInviteJoins(group, linkId);
+    check(joins.dump().find(erin.user) != std::string::npos, "spec 024: erin — во вступивших по ссылке", joins.dump());
     check(alice.s->revokeInvite(group, url) && alice.s->listInvites(group).empty(), "ссылка отозвана записью журнала");
+    const auto revoked = alice.s->listRevokedInvites(group);
+    check(revoked.dump().find(linkId) != std::string::npos, "отозванная ссылка — в списке отозванных", revoked.dump());
+    check(alice.s->deleteRevokedInvite(group, linkId) && alice.s->listRevokedInvites(group).empty(),
+          "отозванная ссылка удалена из списка");
+
+    // Сведения одной записью: имя и описание вместе (вторая правка не откатывает первую)
+    check(alice.s->setGroupInfo(group, std::string("Кружок ") + suffix, std::string("Про всё"), std::nullopt),
+          "сведения группы — одной записью");
+    {
+        const auto g = alice.s->groupInfo(group);
+        check(g.value("name", std::string()) == "Кружок " + suffix && g.value("about", std::string()) == "Про всё",
+              "имя и описание группы — оба на месте", g.value("name", std::string()));
+    }
+
+    // spec 023: публичная группа — имя, поиск, вступление по открытому секрету, история для новых
+    const auto pubName = "pub" + suffix;
+    const auto madePublic = alice.s->setGroupPublic(group, true, pubName, true, true);
+    check(madePublic == "ok", "spec 023: группа стала публичной", madePublic);
+    // proto3-JSON: false не передаётся
+    check(!alice.s->checkPublicName(pubName).value("available", false), "spec 023: имя занято");
+    check(alice.s->checkPublicName("free" + pubName).value("available", false), "spec 023: свободное имя — доступно");
+    // История публичной группы хранит сообщения с момента публичности
+    try {
+        alice.s->sendContent(group, *v2::toV2(parvane::textContent("pub-hello-" + suffix)), v2::newUuidV7());
+    } catch (const std::exception &e) {
+        check(false, "alice → публичная группа", e.what());
+    }
+    const auto resolved = bob.s->resolvePublic(pubName);
+    check(resolved.is_object() && resolved.value("hex", std::string()) == v2::groupHex(group), "spec 023: группа находится по имени");
+    check(bob.s->searchPublic(pubName).dump().find(pubName) != std::string::npos, "spec 023: группа есть в поиске");
+    {
+        Peer fred;
+        fred.user = "v2df" + suffix + "@local";
+        fred.token = issue(tcp, fred.user, "df-" + suffix);
+        fred.start(tcp, dir + "/fred");
+        check(fred.s->waitReady(30000), "fred: сессия готова");
+        const auto found = fred.s->resolvePublic(pubName);
+        json joinedPub;
+        try {
+            if (found.is_object()) joinedPub = fred.s->joinPublic(found.value("hex", std::string()), found.value("secretHex", std::string()));
+        } catch (const std::exception &e) {
+            check(false, "spec 023: вступление в публичную группу", e.what());
+        }
+        check(joinedPub.is_object() && joinedPub.dump().find(fred.user) != std::string::npos, "spec 023: fred вступил по открытому секрету");
+        const auto hist = fred.s->publicHistory(group, 0);
+        check(hist.is_object() && hist.value("opened", 0) >= 1, "spec 023: новому участнику открыта история группы",
+              hist.is_object() ? hist.dump() : "null");
+        fred.s->stop();
+    }
 
     // Журнал личного состояния: миграция, правка, перечитывание после рестарта.
     const auto snap = alice.s->stateAttach(json{{"folders", json::array({json{{"id", 2}, {"title", "Работа"}}})}});

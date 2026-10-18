@@ -353,8 +353,34 @@ public:
     // заявок нет либо нет права приглашать. Число заявок едет в сведениях
     // группы события groupUpdated (поле "pendingRequests", только решающему).
     json listJoinRequests(const std::string &address);
-    // Одобрение — запись AddMember и новая эпоха; false — отклонено.
-    bool decideJoinRequest(const std::string &address, const std::string &user, bool approve);
+    // Одобрение — запись AddMember и новая эпоха; false — отклонено. linkId (hex) — ссылка «по заявке», по
+    // которой пришла заявка: одобренный считается во вступивших по ней (spec 024).
+    bool decideJoinRequest(const std::string &address, const std::string &user, bool approve,
+                           const std::string &linkId = std::string());
+
+    // ── группы: сведения, ссылки, публичные (spec 023/024) — как web controller.ts ──
+    // Имя/описание/фото одной записью set_info; недостающие поля — из журнала (атомарно).
+    bool setGroupInfo(const std::string &address, const std::optional<std::string> &name,
+                      const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId);
+    // Правка действующей ссылки (название, срок в секундах, лимит); счётчик вступивших прежний.
+    bool editInvite(const std::string &address, const std::string &url, const std::string &title, std::int64_t expiresAt,
+                    std::uint32_t usageLimit);
+    // Кто вступил по ссылке (новые сверху): [{"user","date"}].
+    json listInviteJoins(const std::string &address, const std::string &linkId);
+    // Отозванные ссылки группы (их помнит сервер) — записи как у listInvites + "usage"; и удаление из списка.
+    json listRevokedInvites(const std::string &address);
+    bool deleteRevokedInvite(const std::string &address, const std::string &linkId);
+    // Публичные группы: свободно ли имя ({"available","reason"}), поиск (карточки), разрешение имени
+    // ({"card","hex","secretHex"} | null), публичность ("ok"|"taken"|"invalid"|"failed"), журнал для превью,
+    // вступление по открытому секрету (сведения группы | null), история (события — onEvent).
+    json checkPublicName(const std::string &name);
+    json searchPublic(const std::string &query);
+    json resolvePublic(const std::string &name);
+    std::string setGroupPublic(const std::string &address, bool isPublic, const std::string &name, bool preview, bool history);
+    json loadPublicGroup(const std::string &hex);
+    json joinPublic(const std::string &hex, const std::string &secretHex);
+    // {"opened","more","oldest"} | null.
+    json publicHistory(const std::string &address, std::uint64_t beforeSeq);
 
     // ── приватность (T079, FR-040) ──
     // identity.privacy.set перезаписывает ВСЕ поля — настройки уходят целиком:
@@ -513,6 +539,11 @@ private:
     void startRecoveryUpkeepLocked();
     void scheduleRecoveryUpkeep();
     std::string buildGrantMaterialLocked();
+    // Группы (v2_session_groups.cpp).
+    bool applyGroupChangeLocked(const std::string &hex, const json &change);
+    json publicCallLocked(const std::string &method, const json &request);
+    void shareInvitesLocked(const std::string &hex);
+    void absorbSharedInvitesLocked();
     bool recoveryUpkeepScheduled_ = false;
     std::optional<json> described_;
     std::chrono::steady_clock::time_point telegramCheckAt_{};

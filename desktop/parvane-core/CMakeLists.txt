@@ -84,7 +84,8 @@ add_library(parvane_core STATIC
     src/v2_control.cpp
     src/v2_bridge.cpp
     src/v2_session.cpp
-    src/v2_session_account.cpp)
+    src/v2_session_account.cpp
+    src/v2_session_groups.cpp)
 add_dependencies(parvane_core parvane_e2e_build parvane_protocol_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
