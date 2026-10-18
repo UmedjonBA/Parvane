@@ -1,10 +1,11 @@
-// Parvane fork: резервная копия ключей E2E под паролем — ФОРМАТ ВЕБ-КЛИЕНТА
-// (e2e.ts exportEncrypted/importEncrypted), чтобы копия годилась для переноса
-// между клиентами. Файл — JSON:
-//   {"v":1,"kdf":"pbkdf2-sha256","iterations":600000,"salt":b64,"iv":b64,"data":b64}
-// data = AES-256-GCM(key, iv, stateJson) || tag(16)  (как WebCrypto),
+// Parvane fork: ручная копия ключей устройства под паролем — ФОРМАТ ВЕБ-КЛИЕНТА (web `keyBackup.ts`,
+// конверт версии 2 с T110): копия переносится между клиентами. Файл — JSON:
+//   {"v":2,"kdf":"pbkdf2-sha256","iterations":600000,"salt":b64,"iv":b64,"data":b64}
+// data = AES-256-GCM(key, iv, payloadJson) || tag(16)  (как WebCrypto),
 // key = PBKDF2-SHA256(password, salt, iterations) → 32 байта.
-// stateJson — PersistedE2eState (e2e::exportStateJson / importLinkedHistory).
+// payloadJson — {"deviceId", "v2": устройство v2 (Session::deviceBackup), "v2History"?: строки истории}.
+// Импорт проверяет конверт до KDF (P-48): итерации ≤ 5 млн (не ниже 310 тыс.), соль 16–64 байт, iv 12,
+// данные ≤ 16 МиБ. Общие векторы с web — proto/parvane/vectors/clients/keybackup-*.json.
 #pragma once
 
 #include <optional>
@@ -16,9 +17,10 @@ namespace parvane::keybackup {
 // (подделанный бэкап с iterations=1 сделал бы перебор пароля тривиальным).
 constexpr int kIterations = 600000;
 constexpr int kMinIterations = 310000;
+constexpr long long kMaxIterations = 5000000;
 
 // Пустая строка — ошибка (пустой пароль/состояние, сбой OpenSSL).
-[[nodiscard]] std::string exportEncrypted(const std::string &stateJson,
+[[nodiscard]] std::string exportEncrypted(const std::string &payloadJson,
                                           const std::string &password);
 
 // nullopt — неверный пароль (не сошёлся GCM-tag), чужая версия, битый файл.

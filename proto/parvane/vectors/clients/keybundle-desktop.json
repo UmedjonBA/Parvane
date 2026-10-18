@@ -1,0 +1,16 @@
+{
+  "address": "gleb@parvane.example",
+  "payload": {
+    "cloud": "[]",
+    "grant": "eyJzc2siOiJmZiJ9",
+    "history": {
+      "at": 1760000000001,
+      "fileId": "f2",
+      "fileKey": "k2",
+      "fileNonce": "n2",
+      "mark": "m2"
+    }
+  },
+  "recoveryKey": "Z9Y8-X7W6-V5T4-S3R2-Q1P0-N9M8-K7J6-H5G4-F3E2-D1C0",
+  "sealed": "UFZLQgFOY3OJZ/YEy2jECSDBNyZUjVGWulZ8D7rTOJSApXXicDxrlrDiJU38qoGW6qMSpOmhjmfjVgXfd+OJntQehz7PgqcABEayt7qTlMe6jot9+LcXzmC3WFkqo6hzlgHO8VMJX5vsCygVu5qN+FWcPcCQYohEs4Amynf55nJ2LLEB72pJl1JwPZ/DbVHpB1fTaMsYNUEXKs6n3gTUvvEioA=="
+}

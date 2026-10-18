@@ -1177,6 +1177,8 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
         };
     }
     dec! {
+        "parvane.identity.v2.AccountRenameRequest" => ipb::AccountRenameRequest,
+        "parvane.identity.v2.AccountDeleteRequest" => ipb::AccountDeleteRequest,
         "parvane.identity.v2.SessionIssueResponse" => ipb::SessionIssueResponse,
         "parvane.identity.v2.AccountRenameResponse" => ipb::AccountRenameResponse,
         "parvane.identity.v2.AccountDeleteResponse" => ipb::AccountDeleteResponse,

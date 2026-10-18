@@ -1,0 +1,45 @@
+{
+  "recoveryKey": "A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0",
+  "address": "vera@parvane.example",
+  "bundleKey": "vOEoSR8z86e0vPmyGst+EcpD1l2jOKSaZ35P5X5hvfk=",
+  "sealed": "UFZLQgHdCh+wcq1VnTGmiDk3Gi8l3PMrQvxupfL5pCLyEa2EYcNnhvO94ZW0uN4/n5x6phlK35e/X86cy4bX5b2GziwzH3lTKWoj+RtqjtOscZOVtUvSMT40/pS78Kh+YkuOYBIKJWrsGIRhoXmBf+m3jIIxhLpmpGU7gKGr5yzubzH+1+Rdow2Nh+LpwRnxp5kPpOFvm2rKaNPid/7KumvEjyHpGtjyt0DF5HFyRD/HjZKdb0KP8OV19S3aqUx2muUF/tWG7awZ",
+  "payload": {
+    "grant": "eyJzc2siOiIwMCJ9",
+    "planner": "{\"id\":\"aa\"}",
+    "cloud": "[]",
+    "history": {
+      "fileId": "f1",
+      "fileKey": "k1",
+      "fileNonce": "n1",
+      "at": 1760000000000,
+      "mark": "m1",
+      "size": 42
+    }
+  },
+  "pick": [
+    {
+      "input": "Ваш ключ: A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0. Сохраните его.",
+      "output": "A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0"
+    },
+    {
+      "input": "a1b2—c3d4—e5f6—g7h8—j9k0—m1n2—p3q4—r5s6—t7v8—w9x0",
+      "output": "A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0"
+    },
+    {
+      "input": "A1B2C3D4E5F6G7H8J9K0M1N2P3Q4R5S6T7V8W9X0",
+      "output": "A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0"
+    },
+    {
+      "input": "A1B2 C3D4 E5F6 G7H8 J9K0 M1N2 P3Q4 R5S6 T7V8 W9XO",
+      "output": "A1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0"
+    },
+    {
+      "input": "  не ключ  ",
+      "output": "не ключ"
+    },
+    {
+      "input": "XA1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0",
+      "output": "XA1B2-C3D4-E5F6-G7H8-J9K0-M1N2-P3Q4-R5S6-T7V8-W9X0"
+    }
+  ]
+}

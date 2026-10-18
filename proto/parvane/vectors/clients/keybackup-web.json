@@ -1,0 +1,25 @@
+{
+  "password": "Vector-pass-2026",
+  "payload": {
+    "deviceId": "vec-device-1",
+    "v2": {
+      "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "state": "c3RhdGUtYnl0ZXM="
+    },
+    "v2History": [
+      {
+        "chat": "bob@local",
+        "id": "0192f1a2-0000-7000-8000-000000000001",
+        "text": "привет"
+      }
+    ]
+  },
+  "file": {
+    "v": 2,
+    "kdf": "pbkdf2-sha256",
+    "iterations": 600000,
+    "salt": "wNemR4g4Nd7e4DviQgRCtg==",
+    "iv": "e/yqDyq06VITmRsf",
+    "data": "D5Ki4FhBnJtBrVhMroYe+dnvv5FTRz55PAN4azNE/2c3xUYlUfSWRVzsHUo+wpE+GR7SKX3BLeWiAT/iP+5EVNblzhgyScseJGUZ8Z1t8C3ds3QMjSE8RXgxdlTBVAS4MEuG4YBze+xzVK/J9uAYeibQvRGOKBbZ9LouuILHu9v8IBISg5s0njXqK1rs+3QrcXIRSLzEITPCEYAS4N+haG2vLuBOiAOqTejRyawv0JXXVBf4rNYx3Vsvo/FMT1/ooQyO1jlNWJ00B1Q6rlgId9T6KtHBZRPLFxt8NLP90w7T4PhdAAR9"
+  }
+}

@@ -13,9 +13,12 @@
 
 namespace parvane::keybackup {
 namespace {
-constexpr int kVersion = 1;
+using nlohmann::json;
+constexpr int kVersion = 2; // с T110: устройство v2 и история v2, материала v1 нет
 constexpr int kKeyLen = 32;
 constexpr int kSaltLen = 16;
+constexpr std::size_t kSaltMin = 16, kSaltMax = 64;
+constexpr std::size_t kDataMax = 16 * 1024 * 1024;
 constexpr int kIvLen = 12;
 constexpr int kTagLen = 16;
 
@@ -87,24 +90,35 @@ std::string exportEncrypted(const std::string &stateJson, const std::string &pas
 
 std::optional<std::string> importEncrypted(const std::string &fileJson,
                                            const std::string &password) {
+    if (fileJson.size() > kDataMax * 2) return std::nullopt;
     const auto j = nlohmann::json::parse(fileJson, nullptr, false);
     if (!j.is_object() || j.value("v", 0) != kVersion || password.empty()) {
         return std::nullopt;
     }
-    const auto salt = parvane::crypto::b64decode(j.value("salt", std::string()));
-    if (!salt || salt->size() != kSaltLen) {
+    // P-48 (как web validateBackupEnvelope): границы конверта — до KDF
+    const auto it = j.find("iterations");
+    long long raw = kMinIterations;
+    if (it != j.end()) {
+        if (!it->is_number_integer()) return std::nullopt;
+        raw = it->get<long long>();
+    }
+    if (raw > kMaxIterations) return std::nullopt;
+    const auto iterations = static_cast<int>(std::max<long long>(raw, kMinIterations));
+    if (!j.value("salt", json()).is_string() || !j.value("iv", json()).is_string() || !j.value("data", json()).is_string()) {
         return std::nullopt;
     }
-    const auto iterations = std::max(j.value("iterations", kMinIterations), kMinIterations);
+    const auto salt = parvane::crypto::b64decode(j.value("salt", std::string()));
+    const auto iv = parvane::crypto::b64decode(j.value("iv", std::string()));
+    const auto data = parvane::crypto::b64decode(j.value("data", std::string()));
+    if (!salt || salt->size() < kSaltMin || salt->size() > kSaltMax) return std::nullopt;
+    if (!iv || iv->size() != static_cast<std::size_t>(kIvLen)) return std::nullopt;
+    if (!data || data->size() < static_cast<std::size_t>(kTagLen) || data->size() > kDataMax) return std::nullopt;
     const auto key = deriveKey(password, *salt, iterations);
     if (key.empty()) {
         return std::nullopt;
     }
     // data = ciphertext||tag — ровно формат blobcrypt::decrypt.
-    return parvane::blobcrypt::decrypt(
-        parvane::crypto::b64decode(j.value("data", std::string())).value_or(std::string()),
-        parvane::crypto::b64encode(key),
-        j.value("iv", std::string()));
+    return parvane::blobcrypt::decrypt(*data, parvane::crypto::b64encode(key), j.value("iv", std::string()));
 }
 
 } // namespace parvane::keybackup

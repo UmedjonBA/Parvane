@@ -90,7 +90,25 @@ struct SessionConfig {
     // только его копия под ключом восстановления (файл root-backup), ключ
     // отдаётся сюда один раз для показа пользователю (на рабочем потоке).
     // Не задан — прежнее поведение (корень в файле root под storecrypt).
+    // spec 015: если у сервера есть Telegram-бот, ключ сначала уходит владельцу в Telegram, а сюда — только
+    // если туда не ушёл (как web `queueRecoveryKey`/`flushTelegramKey`).
     std::function<void(const std::string &recoveryKey)> onRecoveryKey;
+    // Закреплённый в сборке открытый ключ администратора для копии корня (как web
+    // `VITE_PARVANE_ESCROW_PUBLIC_KEY`, base64); пусто — копии для администратора нет.
+    std::string pinnedEscrowKey;
+    // Описание этого устройства для бота (запрос ключа восстановления: «Parvane Desktop, Linux»).
+    std::string deviceDescription = "Parvane Desktop";
+    // Указатель на снимок истории для копии ключей аккаунта (как web `deps.bundleHistory`): хост выгружает
+    // историю блобом и возвращает {fileId, fileKey, fileNonce, at, mark, size}; null/не задан — прежний.
+    std::function<nlohmann::json(const nlohmann::json &previous, bool force)> bundleHistory;
+};
+
+// Итог входа нового устройства по ключу восстановления (как web `KeyJoinOutcome`).
+struct KeyJoinOutcome {
+    std::string result; // "ok" | "bad_key" | "no_backup" | "failed"
+    std::string planner; // ключи планировщика из копии ключей аккаунта ("" — нет)
+    std::string cloud;   // ключи облака (JSON-массив строкой)
+    nlohmann::json history; // указатель на снимок истории или null
 };
 
 class Session {
@@ -180,6 +198,52 @@ public:
     // переаутентификация). Собеседники увидят смену ключа безопасности.
     // "ok" | "bad_password" | "failed".
     std::string resetIdentity(const std::string &password);
+
+    // ── жизненный цикл аккаунта (spec 015, 024, 026, 027) — как web controller.ts ──
+    // Удаление аккаунта: свежий пароль, затем запрос; через 7 дней сервер стирает всё.
+    // {"result":"ok"|"bad_password"|"failed","deletionAtMs":n}.
+    json deleteAccount(const std::string &password);
+    // Профиль собеседника не нашёлся — не удалён ли аккаунт (событие peerDeleted{user}).
+    bool checkPeerDeleted(const std::string &user);
+    // Смена ника: пароль, ключ восстановления → {"result":"ok"|"bad_password"|"no_backup"|"bad_key"|"taken"|
+    // "invalid"|"failed","address","token"}. После ok движок уже под новым адресом (на диске).
+    json renameAccount(const std::string &nick, const std::string &password, const std::string &recoveryKey);
+    // Ник сменён другим своим устройством: перейти под новый адрес. false — нужна привязка.
+    bool followOwnRename(const std::string &engineSelf);
+    // Группы, где участником ещё значится свой прежний адрес, — перенести.
+    void renameGroupsPending();
+    // Выход: устройство убирает себя из журнала записью своим ключом (сервер затем гасит сессию).
+    void leave();
+    // Обычный выход своего другого устройства без смены ключей; false — устройства нет в журнале v2.
+    bool signOutDevice(const std::string &deviceId);
+    // Перечитать свой журнал устройств (экран «Устройства» зовёт по таймеру, как web pollOwnDevices).
+    void pollOwnDevices();
+    // ENG-04: свои вышедшие сами устройства, державшие ключ подписи, и отметка «украдено» (смена ключей).
+    [[nodiscard]] std::vector<std::string> leftSskHolders();
+    bool reportDeviceStolen(const std::string &deviceId);
+    // Жалоба администратору сервера (spec 024): "sent" | "unavailable" | "failed".
+    std::string submitReport(const json &report);
+
+    // ── ключ восстановления через Telegram и копия ключей аккаунта (spec 015) ──
+    // Ключ восстановления владельцу в Telegram: "ok" | "bad_key" | "no_telegram" | "failed".
+    std::string sendKeyToTelegram(const std::string &recoveryKey);
+    // К аккаунту привязан Telegram (кэш минута).
+    bool hasTelegram();
+    // Ключ этого аккаунта в Telegram ещё не уходил (аккаунт до spec 015).
+    bool canSendKeyToTelegram();
+    // Новое устройство (needsLinking): попросить бота спросить ключ у владельца —
+    // "sent" | "no_telegram" | "limit" | "failed".
+    std::string requestTelegramKey(bool again);
+    // Ответ владельца боту: {"recovery_key"?, "pending"}; null — сбой. done — ключ применён.
+    json pollTelegramKey(bool done);
+    // Вход нового устройства по ключу восстановления: из копии ключей аккаунта (прежние устройства
+    // остаются), у аккаунта без копии — прежним путём recoverWithKey.
+    KeyJoinOutcome joinWithRecoveryKey(const std::string &recoveryKey, bool viaTelegram);
+    // Копия корня для администратора у сервера ожидается, а у аккаунта её нет — и её создание.
+    bool isEscrowCopyMissing();
+    std::string storeEscrowCopy(const std::string &recoveryKey);
+    // Копия ключей аккаунта с сервера, открытая ключом этого устройства (null — нет).
+    json fetchKeyBundle();
 
     // ── отзыв своего устройства (T128, FR-066; D-11, D-12, D-16) ──
     // Запись отзыва в журнале устройств + ротации: ключ доступа к доставке
@@ -385,6 +449,8 @@ private:
     void flush();
     void flushAsync();
     template <typename F> auto withNeedsLocked(F &&f) -> decltype(f());
+    // То же для операций с JSON-результатом (для файлов сессии вне v2_session.cpp).
+    json withNeedsJsonLocked(const std::function<json()> &f);
     // Группы.
     void syncGroupLocked(const std::string &hex, const std::string &linkId = std::string());
     void resyncGroupLocked(const std::string &hex);
@@ -428,6 +494,35 @@ private:
     void uploadRootBackupLocked();
     // Подписаться на эфемерные каналы чатов (движок отдаёт только новые).
     void ensureEphemeralLocked(const std::vector<std::string> &chats);
+    // Жизненный цикл аккаунта (v2_session_account.cpp).
+    // Ответ log_sync собеседника: удалён / ник сменён / смена корня — действия как web refreshPeerLog.
+    bool absorbPeerLogLocked(const std::string &user, const std::string &resp);
+    bool isDeletedLog(const std::string &resp) const;
+    void followPeerRenameLocked(const std::string &user, const std::string &verdict);
+    void rekeyAfterDeviceRemovalLocked();
+    void applyRevocationLocked(const json &outcome);
+    json describeServerLocked();
+    std::string loadEscrowKeyLocked();
+    void sealRootEscrowLocked(const std::string &root32);
+    json fetchRootBackupStateLocked();
+    void rememberBundleKeyLocked(const std::string &recoveryKey);
+    void refreshKeyBundleLocked(bool force);
+    void queueRecoveryKeyLocked(const std::string &recoveryKey);
+    void flushTelegramKeyLocked();
+    void adoptTelegramKeyLocked();
+    void startRecoveryUpkeepLocked();
+    void scheduleRecoveryUpkeep();
+    std::string buildGrantMaterialLocked();
+    bool recoveryUpkeepScheduled_ = false;
+    std::optional<json> described_;
+    std::chrono::steady_clock::time_point telegramCheckAt_{};
+    bool telegramLinked_ = false;
+    std::chrono::steady_clock::time_point escrowCheckAt_{};
+    bool escrowMissing_ = false;
+    bool recoveryKeyShown_ = false;
+    std::string telegramKey_;
+    bool justJoined_ = false;
+
     // Журнал состояния.
     bool openStateLocked();
     bool pullStateLocked();

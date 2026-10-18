@@ -1,6 +1,8 @@
 // Parvane fork: клиентская сессия протокола v2 (см. v2_session.h).
 #include "parvane/v2_session.h"
 
+#include "parvane/crypto.h"
+#include "parvane/keybundle.h"
 #include "parvane/storecrypt.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_control.h"
@@ -324,11 +326,9 @@ void Session::connectOnce() {
                 } catch (const std::exception &e) {
                     log(std::string("журнал своих устройств: ") + e.what());
                 }
-                try {
-                    uploadRootBackupLocked();
-                } catch (const std::exception &e) {
-                    log(std::string("копия корня на сервер не ушла: ") + e.what());
-                }
+                // Копия корня и ключ восстановления — на сервер и в Telegram, копия ключей аккаунта по таймеру
+                startRecoveryUpkeepLocked();
+                renameGroupsPending();
                 refillTokensLocked();
                 if (!tokenCheckScheduled_) {
                     tokenCheckScheduled_ = true;
@@ -369,15 +369,17 @@ std::string Session::linkGrantMaterial() {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!ready_ || !client_) return {};
     try {
-        const auto material = client_->linkGrantMaterial();
-        // Копия корня под ключом восстановления — вместе с грантом (поле `rb`):
-        // привязанное устройство сможет сменить SSK после отзыва другого (D-12).
-        const auto backup = readStateFile("root-backup");
-        return backup.empty() ? material : grantWithRootBackup(material, backup);
+        // Грант несёт журнал устройств: если другое своё устройство только что вышло само, без перечитки
+        // новое записалось бы поверх его записи (отказ)
+        checkOwnDevicesLocked();
     } catch (const std::exception &e) {
-        log(std::string("грант линковки недоступен: ") + e.what());
-        return {};
+        log(std::string("журнал своих устройств: ") + e.what());
     }
+    // Ключ копии ключей аккаунта (поле `bk`) и копия корня под ключом восстановления (поле `rb`): привязанное
+    // устройство сможет обновлять копию и сменить SSK после отзыва другого (D-12)
+    const auto material = buildGrantMaterialLocked();
+    if (material.empty()) log("грант линковки недоступен");
+    return material;
 }
 
 void Session::joinWithGrant(std::string material) {
@@ -532,6 +534,11 @@ bool Session::connectLocked(std::string *error) {
                     if (const auto backup = grantRootBackup(linkMaterial_); !backup.empty()) {
                         writeStateFile("root-backup", backup);
                     }
+                    // Ключ копии ключей аккаунта (spec 015): и это устройство обновляет копию
+                    if (const auto bk = keybundle::readGrantBundleKey(linkMaterial_); !bk.empty()) {
+                        if (const auto raw = crypto::b64decode(bk); raw && raw->size() == 32) writeStateFile("bundle-key", *raw);
+                    }
+                    justJoined_ = true;
                     persistLocked();
                     std::fill(linkMaterial_.begin(), linkMaterial_.end(), '\0');
                     linkMaterial_.clear();
@@ -555,6 +562,7 @@ bool Session::connectLocked(std::string *error) {
                     // копия под ключом восстановления; ключ — пользователю.
                     recoveryKey = generateRecoveryKey();
                     writeStateFile("root-backup", client_->exportRootBackup(root, recoveryKey));
+                    sealRootEscrowLocked(root);
                 } else {
                     // Корень — в личное хранилище (storecrypt).
                     writeStateFile("root", root);
@@ -565,7 +573,11 @@ bool Session::connectLocked(std::string *error) {
                 persistLocked();
                 runRequestsLocked(created.value("requests", json::array()));
                 std::remove((cfg_.stateDir + "/publish").c_str());
-                if (!recoveryKey.empty()) cfg_.onRecoveryKey(recoveryKey);
+                if (!recoveryKey.empty()) {
+                    // spec 015: ключ — владельцу в Telegram (окном — если туда не ушёл), копия ключей аккаунта
+                    rememberBundleKeyLocked(recoveryKey);
+                    queueRecoveryKeyLocked(recoveryKey);
+                }
                 log("устройство создано (журнал устройств опубликован)");
             }
         }
@@ -719,6 +731,11 @@ bool Session::satisfyLocked(const std::exception &ex) {
             encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
                           json{{"user", {{"address", user}}},
                                {"after_version", std::to_string(client_->logVersion(user))}}), dest);
+        // spec 027: аккаунт удалён — журнала нет, повторять нечего
+        if (isDeletedLog(resp)) {
+            outbox_.push_back(json{{"type", "peerDeleted"}, {"user", user}});
+            return false;
+        }
         auto verdict = client_->ingestLog(user, resp);
         if (verdict == "replaced") {
             // Журнал на сервере начат заново (другой генезис) — перечитать целиком.
@@ -727,6 +744,12 @@ bool Session::satisfyLocked(const std::exception &ex) {
                               json{{"user", {{"address", user}}}, {"after_version", "0"}}), dest));
         }
         if (verdict == "rootChanged") return acceptPeerRootLocked(user);
+        // spec 026: собеседник сменил ник — чат переезжает на новый адрес
+        if (verdict == "moved" || verdict == "renamed") {
+            followPeerRenameLocked(user, verdict);
+            return true;
+        }
+        rekeyAfterDeviceRemovalLocked();
         // Журнал не продвинулся, а движок просит его снова: собеседник прямо
         // сейчас публикует первое устройство (корень записан, сертификат ещё
         // нет) — дать ему дописать, а не сжечь все попытки за миллисекунды.
@@ -885,6 +908,8 @@ bool Session::isV2Peer(const std::string &address) {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         ensureEphemeralLocked({address});
     }
+    // Чтение журнала могло принести события (смена ника, удаление, смена корня)
+    flushAsync();
     return v2;
 }
 
@@ -1166,10 +1191,14 @@ void Session::dropIdentityLocked() {
 void Session::uploadRootBackupLocked() {
     const auto backup = readStateFile("root-backup");
     if (backup.empty() || !client_) return;
-    const auto mark = toBase64(backup);
+    const auto b64 = toBase64(backup);
+    const auto escrow = readStateFile("root-escrow");
+    // Без копии для администратора отметка — прежнего вида (сама копия корня)
+    const auto mark = escrow.empty() ? b64 : b64 + "|" + toBase64(escrow);
     if (readStateFile("root-backup-sent") == mark) return;
-    call(false, "identity.root.backup_set",
-         encodeMessage("parvane.identity.v2.RootBackupSetRequest", json{{"backup", mark}}));
+    json req{{"backup", b64}};
+    if (!escrow.empty()) req["escrow"] = toBase64(escrow);
+    call(false, "identity.root.backup_set", encodeMessage("parvane.identity.v2.RootBackupSetRequest", req));
     writeStateFile("root-backup-sent", mark);
 }
 
@@ -1209,6 +1238,9 @@ std::string Session::recoverWithKey(const std::string &recoveryKey) {
             runRequestsLocked(requests);
             std::remove((cfg_.stateDir + "/publish").c_str());
             needsLinking_ = false;
+            // Ключ в руках — копия ключей аккаунта под ним (spec 015)
+            std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+            rememberBundleKeyLocked(recoveryKey);
             log("устройство восстановлено ключом восстановления (прежние устройства отозваны)");
         } catch (const std::exception &e) {
             std::fill(root.begin(), root.end(), '\0');
@@ -1247,6 +1279,8 @@ std::string Session::resetIdentity(const std::string &password) {
             if (cfg_.onRecoveryKey) {
                 recoveryKey = generateRecoveryKey();
                 writeStateFile("root-backup", client_->exportRootBackup(root, recoveryKey));
+                std::remove((cfg_.stateDir + "/root-escrow").c_str());
+                sealRootEscrowLocked(root);
                 std::remove((cfg_.stateDir + "/root").c_str());
             } else {
                 writeStateFile("root", root);
@@ -1264,7 +1298,12 @@ std::string Session::resetIdentity(const std::string &password) {
             return "failed";
         }
     }
-    if (!recoveryKey.empty()) cfg_.onRecoveryKey(recoveryKey);
+    if (!recoveryKey.empty()) {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+        rememberBundleKeyLocked(recoveryKey);
+        queueRecoveryKeyLocked(recoveryKey);
+    }
     post([this] {
         if (!stopping_) connectOnce();
     });
@@ -1428,6 +1467,12 @@ json Session::deviceBackup() {
 std::string Session::rotateSsk(const std::string &recoveryKey) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!ready_ || !client_) return "failed";
+    // Запись смены SSK — от текущей версии своего журнала (другое устройство могло выйти)
+    try {
+        checkOwnDevicesLocked();
+    } catch (const std::exception &e) {
+        log(std::string("журнал своих устройств: ") + e.what());
+    }
     std::string root;
     if (recoveryKey.empty()) {
         root = readStateFile("root");
@@ -1438,8 +1483,22 @@ std::string Session::rotateSsk(const std::string &recoveryKey) {
         try {
             root = client_->importRootBackup(backup, recoveryKey);
         } catch (const std::exception &) {
-            return "bad_key";
+            // Ключ мог быть выписан администратором заново: тогда копия под ним — на сервере
+            std::string serverBackup;
+            try {
+                serverBackup = fromBase64(fetchRootBackupStateLocked().value("backup", std::string()));
+            } catch (const std::exception &) {
+            }
+            if (serverBackup.empty() || serverBackup == backup) return "bad_key";
+            try {
+                root = client_->importRootBackup(serverBackup, recoveryKey);
+            } catch (const std::exception &) {
+                return "bad_key";
+            }
+            writeStateFile("root-backup", serverBackup);
+            writeStateFile("root-backup-sent", toBase64(serverBackup));
         }
+        sealRootEscrowLocked(root);
     }
     std::string result = "ok";
     try {
@@ -1454,6 +1513,16 @@ std::string Session::rotateSsk(const std::string &recoveryKey) {
         }
         persistLocked();
         log("SSK сменён корнем");
+        if (!recoveryKey.empty()) {
+            // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
+            rememberBundleKeyLocked(recoveryKey);
+            refreshKeyBundleLocked(true);
+            try {
+                uploadRootBackupLocked();
+            } catch (const std::exception &e) {
+                log(std::string("копия корня на сервер не ушла: ") + e.what());
+            }
+        }
     } catch (const std::exception &e) {
         log(std::string("смена SSK не удалась: ") + e.what());
         result = "failed";
@@ -1597,6 +1666,10 @@ auto Session::withNeedsLocked(F &&f) -> decltype(f()) {
         }
     }
     throw std::runtime_error("v2: данные не сошлись");
+}
+
+json Session::withNeedsJsonLocked(const std::function<json()> &f) {
+    return withNeedsLocked([&] { return f(); });
 }
 
 // ── события наружу ─────────────────────────────────────────────────────────

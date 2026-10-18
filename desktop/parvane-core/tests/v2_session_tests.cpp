@@ -7,6 +7,7 @@
 // обе стороны через анонимную доставку, правка/реакция/квитанция чтения,
 // доставка офлайн-устройству и восстановление состояния из файла (import),
 // то же по WebSocket (двоичные кадры) при PARVANE_V2_WS_URL.
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -82,7 +83,7 @@ struct Inbox {
         if (type == "groupUpdated" || type == "groupLeft" || type == "groupUnconfirmed"
             || type == "ownDevicesAdded" || type == "stateReady" || type == "typing"
             || type == "peerRootChanged" || type == "needsLinking" || type == "privacy"
-            || type == "privacySaved") {
+            || type == "privacySaved" || type == "peerRenamed" || type == "peerDeleted" || type == "sskRotationNeeded") {
             std::lock_guard<std::mutex> lk(mu);
             session.push_back(ev);
             cv.notify_all();
@@ -685,6 +686,152 @@ int main() {
         } catch (const std::exception &) {
         }
         check(!again, "T133: повторный отзыв — ключа у собеседника уже нет");
+    }
+
+    // spec 029: жизненный цикл аккаунта (как web controller.ts) — копия ключей аккаунта и вход по ключу
+    // восстановления с сохранением прежних устройств (spec 015), выход и «украдено» (ENG-04), выход без смены
+    // ключей, смена ника (spec 026) и удаление аккаунта (spec 027).
+    {
+        Peer k1;
+        k1.user = "v2dk" + suffix + "@local";
+        k1.withRecoveryKey = true;
+        k1.token = issue(tcp, k1.user, "dk1-" + suffix);
+        k1.start(tcp, dir + "/k1");
+        check(k1.s->waitReady(30000) && !k1.recoveryKey.empty(),
+              "spec 015: сервер без Telegram-бота — ключ восстановления показан окном");
+        // Копия ключей аккаунта уходит на сервер через 8 с после готовности
+        json bundle;
+        for (int i = 0; i < 30 && !bundle.is_object(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            bundle = k1.s->fetchKeyBundle();
+        }
+        check(bundle.is_object() && bundle.contains("grant"), "spec 015: копия ключей аккаунта на сервере (PVKB)");
+
+        // Новое устройство входит по ключу восстановления из копии — прежние устройства остаются
+        Peer k2;
+        k2.user = k1.user;
+        k2.token = issue(tcp, k2.user, "dk2-" + suffix);
+        k2.start(tcp, dir + "/k2");
+        check(!k2.s->waitReady(8000) && k2.s->needsLinking(), "spec 015: новое устройство ждёт привязку");
+        const auto tg = k2.s->requestTelegramKey(false);
+        check(tg == "no_telegram" || tg == "failed", "spec 015: без Telegram — запрос ключа через бота не уходит", tg);
+        const auto joined = k2.s->joinWithRecoveryKey("Ключ: " + k1.recoveryKey + " — сохраните", false);
+        check(joined.result == "ok", "spec 015: вход по ключу восстановления (ключ выделен из текста)", joined.result);
+        check(k2.s->waitReady(30000), "spec 015: устройство в журнале");
+        {
+            const auto devices = k1.s->ownDevices();
+            check(devices.size() >= 1 && std::find(devices.begin(), devices.end(), "dk1-" + suffix) != devices.end(),
+                  "spec 015: прежнее устройство осталось в журнале");
+        }
+
+        // Выход самим устройством и отметка «украдено»
+        k2.s->leave();
+        bool gone = false;
+        for (int i = 0; i < 20 && !gone; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            k1.s->pollOwnDevices();
+            const auto left = k1.s->leftSskHolders();
+            gone = std::find(left.begin(), left.end(), "dk2-" + suffix) != left.end();
+        }
+        check(gone, "ENG-04: вышедшее само устройство с SSK — в списке вышедших");
+        k2.s->stop();
+        bool stolen = false;
+        try {
+            stolen = k1.s->reportDeviceStolen("dk2-" + suffix);
+        } catch (const std::exception &e) {
+            check(false, "ENG-04: отметка «украдено»", e.what());
+        }
+        check(stolen, "ENG-04: вышедшее устройство отмечено украденным");
+        check(k1.s->sskState().value("rotationNeeded", false), "ENG-04: SSK раскрыт — нужна смена");
+        check(k1.s->rotateSsk(k1.recoveryKey) == "ok", "ENG-04: SSK сменён ключом восстановления");
+
+        // Выход другого устройства без смены ключей
+        Peer k3;
+        k3.user = k1.user;
+        k3.token = issue(tcp, k3.user, "dk3-" + suffix);
+        k3.start(tcp, dir + "/k3");
+        check(!k3.s->waitReady(8000) && k3.s->needsLinking(), "третье устройство ждёт привязку");
+        k3.s->joinWithGrant(k1.s->linkGrantMaterial());
+        check(k3.s->waitReady(30000), "третье устройство привязано грантом");
+        bool signedOut = false;
+        try {
+            signedOut = k1.s->signOutDevice("dk3-" + suffix);
+        } catch (const std::exception &e) {
+            check(false, "выход другого устройства", e.what());
+        }
+        const auto after = k1.s->ownDevices();
+        check(signedOut && std::find(after.begin(), after.end(), "dk3-" + suffix) == after.end(),
+              "выход другого устройства без смены ключей — его нет в журнале");
+        check(!k1.s->sskState().value("rotationNeeded", false), "выход по просьбе владельца SSK не раскрывает");
+        k3.s->stop();
+
+        // Смена ника: bob знает k1 по переписке, после смены видит переезд чата
+        try {
+            k1.s->sendContent(bob.user, *v2::toV2(parvane::textContent("pre-rename-" + suffix)), "");
+        } catch (const std::exception &e) {
+            check(false, "k1 → bob до смены ника", e.what());
+        }
+        check(textArrived(bob.inbox, "pre-rename-" + suffix, k1.user), "bob знает k1 до смены ника");
+        const auto nick = "v2dkr" + suffix;
+        check(k1.s->renameAccount(nick, "wrong-password-1", k1.recoveryKey).value("result", std::string()) == "bad_password",
+              "spec 026: неверный пароль — отказ");
+        const auto renamed = k1.s->renameAccount(nick, kTestPassword, k1.recoveryKey);
+        check(renamed.value("result", std::string()) == "ok", "spec 026: ник сменён", renamed.dump());
+        const auto newAddress = renamed.value("address", std::string());
+        k1.s->stop();
+        if (!newAddress.empty()) {
+            k1.s.reset();
+            // Устройство поднимается под новым адресом: вход новым ником с доказательством ключа
+            k1.user = newAddress;
+            try {
+                k1.token = issue(tcp, newAddress, "dk1-" + suffix, dir + "/k1");
+            } catch (const std::exception &e) {
+                check(false, "spec 026: вход новым ником", e.what());
+            }
+            check(!k1.token.empty(), "spec 026: вход новым ником с доказательством ключа устройства");
+            k1.start(tcp, dir + "/k1");
+            check(k1.s->waitReady(30000), "spec 026: сессия под новым адресом");
+            std::this_thread::sleep_for(std::chrono::seconds(16)); // bob перечитывает журнал по TTL
+            (void)bob.s->isV2Peer("v2dk" + suffix + "@local");
+            check(bob.inbox.waitSession([&](const json &e) {
+                return e.value("type", std::string()) == "peerRenamed" && e.value("to", std::string()) == newAddress;
+            }, 10000), "spec 026: bob видит смену ника собеседника (событие peerRenamed)");
+
+            // Удаление аккаунта: вход в период ожидания — без токена, с отменой удаления — с токеном
+            check(k1.s->deleteAccount("wrong-password-1").value("result", std::string()) == "bad_password",
+                  "spec 027: неверный пароль — отказ");
+            const auto deleted = k1.s->deleteAccount(kTestPassword);
+            check(deleted.value("result", std::string()) == "ok" && deleted.value("deletionAtMs", 0LL) > 0,
+                  "spec 027: аккаунт поставлен на удаление", deleted.dump());
+            k1.s->stop();
+            std::this_thread::sleep_for(std::chrono::seconds(3)); // сессии аккаунта сервер закрывает сам
+            {
+                const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()).count();
+                json req{{"login", newAddress}, {"password", kTestPassword}, {"device_id", "dk1-" + suffix}};
+                if (const auto proof = v2::Session::sessionProofFor(dir + "/k1", ts); proof.is_object()) {
+                    req["device_proof"] = proof["proof"];
+                    req["proof_ts_ms"] = std::to_string(ts);
+                }
+                json pending;
+                try {
+                    pending = v2::preauth(tcp, "identity.session.issue", req);
+                } catch (const std::exception &e) {
+                    check(false, "spec 027: вход в период ожидания", e.what());
+                }
+                const auto *at = v2::field(pending, "deletionAtMs", "deletion_at_ms");
+                check(pending.value("token", std::string()).empty() && at && !at->is_null(),
+                      "spec 027: вход в период ожидания — без токена, со сроком удаления", pending.dump());
+                req["cancel_deletion"] = true;
+                json restored;
+                try {
+                    restored = v2::preauth(tcp, "identity.session.issue", req);
+                } catch (const std::exception &e) {
+                    check(false, "spec 027: вход с отменой удаления", e.what());
+                }
+                check(!restored.value("token", std::string()).empty(), "spec 027: вход с отменой удаления — аккаунт восстановлен");
+            }
+        }
     }
 
     alice.s->stop();

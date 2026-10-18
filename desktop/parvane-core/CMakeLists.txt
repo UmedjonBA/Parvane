@@ -66,6 +66,7 @@ add_library(parvane_core STATIC
     src/blobcrypt.cpp
     src/storecrypt.cpp
     src/keybackup.cpp
+    src/keybundle.cpp
     src/map_tiles.cpp
     src/pack_archive.cpp
     src/messenger_client.cpp
@@ -82,7 +83,8 @@ add_library(parvane_core STATIC
     src/v2_legacy.cpp
     src/v2_control.cpp
     src/v2_bridge.cpp
-    src/v2_session.cpp)
+    src/v2_session.cpp
+    src/v2_session_account.cpp)
 add_dependencies(parvane_core parvane_e2e_build parvane_protocol_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -177,6 +179,12 @@ if (PARVANE_CORE_BUILD_PROBE)
     target_compile_definitions(parvane_protocol_vectors_tests PRIVATE
         PARVANE_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors")
 
+    # Общие векторы форматов web ↔ desktop (spec 029): копия ключей, линковка, записи доменов
+    add_executable(parvane_webcompat_tests tests/webcompat_tests.cpp)
+    target_link_libraries(parvane_webcompat_tests PRIVATE parvane_core)
+    target_compile_definitions(parvane_webcompat_tests PRIVATE
+        PARVANE_VECTORS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors")
+
     # Кадры перехода на v2 (E6, T110) на v1-транспорте — локальный TCP-сервер, без стека.
     add_executable(parvane_gateway_upgrade_tests tests/gateway_upgrade_tests.cpp)
     target_link_libraries(parvane_gateway_upgrade_tests PRIVATE parvane_core)
@@ -191,6 +199,7 @@ if (PARVANE_CORE_BUILD_PROBE)
     add_test(NAME cloud COMMAND parvane_cloud_tests)
     add_test(NAME call COMMAND parvane_call_tests)
     add_test(NAME crypto COMMAND parvane_crypto_tests)
+    add_test(NAME webcompat COMMAND parvane_webcompat_tests)
     add_test(NAME linking COMMAND parvane_linking_tests)
     add_test(NAME storecrypt COMMAND parvane_storecrypt_tests)
     add_test(NAME blobcrypt COMMAND parvane_blobcrypt_tests)

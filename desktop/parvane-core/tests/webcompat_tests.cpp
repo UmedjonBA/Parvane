@@ -1,0 +1,141 @@
+// Parvane fork: общие векторы форматов клиентов web ↔ desktop (spec 029, FR-006), без стека.
+// Файл, который пишет web (`web/.../clientVectors.test.ts`), обязан читаться здесь, и наоборот:
+// вектор desktop создаётся этим тестом (если его нет или PARVANE_REGEN_VECTORS=1), web его читает.
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <string>
+
+#include <nlohmann/json.hpp>
+
+#include "parvane/crypto.h"
+#include "parvane/keybackup.h"
+#include "parvane/keybundle.h"
+
+using nlohmann::json;
+
+static int g_total = 0, g_fail = 0;
+
+static void check(bool ok, const std::string &name, const std::string &info = "") {
+    ++g_total;
+    if (!ok) ++g_fail;
+    std::printf("  %s  %s%s\n", ok ? "ok  " : "FAIL", name.c_str(), info.empty() ? "" : (" — " + info).c_str());
+}
+
+static std::string vectorPath(const std::string &name) {
+    return std::string(PARVANE_VECTORS_DIR) + "/clients/" + name;
+}
+
+static std::string readText(const std::string &path) {
+    std::ifstream f(path, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+static bool regen() {
+    const char *v = std::getenv("PARVANE_REGEN_VECTORS");
+    return v && std::string(v) == "1";
+}
+
+static void keyBackup() {
+    // Файл web — читается desktop
+    const auto web = json::parse(readText(vectorPath("keybackup-web.json")), nullptr, false);
+    check(web.is_object(), "keybackup: вектор web есть (сгенерировать: vitest clientVectors)");
+    if (web.is_object()) {
+        const auto got = parvane::keybackup::importEncrypted(web["file"].dump(), web.value("password", std::string()));
+        check(got.has_value(), "keybackup: файл web расшифрован паролем");
+        check(got && json::parse(*got, nullptr, false) == web["payload"], "keybackup: содержимое файла web совпало");
+        check(!parvane::keybackup::importEncrypted(web["file"].dump(), "wrong-password"), "keybackup: неверный пароль — отказ");
+    }
+
+    // Файл desktop — пишется здесь, читает web
+    const auto desktopPath = vectorPath("keybackup-desktop.json");
+    if (regen() || readText(desktopPath).empty()) {
+        const json payload{{"deviceId", "vec-device-desktop"},
+                           {"v2", {{"key", "HxweHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgE="}, {"state", "ZGVza3RvcC1zdGF0ZQ=="}}},
+                           {"v2History", json::array({json{{"chat", "alice@local"}, {"id", "0192f1a2-0000-7000-8000-0000000000aa"},
+                                                           {"text", "с компьютера"}}})}};
+        const auto file = parvane::keybackup::exportEncrypted(payload.dump(), "Desktop-vector-2026");
+        std::ofstream(desktopPath) << json{{"password", "Desktop-vector-2026"}, {"payload", payload},
+                                           {"file", json::parse(file)}}.dump(2) << "\n";
+    }
+    const auto desktop = json::parse(readText(desktopPath), nullptr, false);
+    check(desktop.is_object() && desktop["file"].value("v", 0) == 2, "keybackup: файл desktop — конверт версии 2");
+    if (desktop.is_object()) {
+        const auto got = parvane::keybackup::importEncrypted(desktop["file"].dump(), desktop.value("password", std::string()));
+        check(got && json::parse(*got, nullptr, false) == desktop["payload"], "keybackup: файл desktop читается обратно");
+    }
+
+    // P-48: границы конверта — до KDF
+    const auto fresh = json::parse(parvane::keybackup::exportEncrypted(R"({"deviceId":"x","v2":{}})", "pass-12345678"));
+    auto bad = fresh;
+    bad["v"] = 1;
+    check(!parvane::keybackup::importEncrypted(bad.dump(), "pass-12345678"), "keybackup: конверт версии 1 не читается (T110)");
+    bad = fresh;
+    bad["iterations"] = 5000001;
+    check(!parvane::keybackup::importEncrypted(bad.dump(), "pass-12345678"), "keybackup: итераций больше 5 млн — отказ до KDF");
+    bad = fresh;
+    bad["salt"] = parvane::crypto::b64encode(std::string(8, 'x'));
+    check(!parvane::keybackup::importEncrypted(bad.dump(), "pass-12345678"), "keybackup: короткая соль — отказ");
+    bad = fresh;
+    bad["iv"] = parvane::crypto::b64encode(std::string(16, 'x'));
+    check(!parvane::keybackup::importEncrypted(bad.dump(), "pass-12345678"), "keybackup: iv не 12 байт — отказ");
+    check(parvane::keybackup::importEncrypted(fresh.dump(), "pass-12345678").has_value(), "keybackup: свой файл читается");
+}
+
+static void keyBundle() {
+    namespace kb = parvane::keybundle;
+    const auto web = json::parse(readText(vectorPath("keybundle-web.json")), nullptr, false);
+    check(web.is_object(), "keybundle: вектор web есть");
+    if (web.is_object()) {
+        const auto key = kb::deriveBundleKey(web.value("recoveryKey", std::string()), web.value("address", std::string()));
+        check(key && parvane::crypto::b64encode(*key) == web.value("bundleKey", std::string()), "keybundle: ключ копии совпал с web (HKDF)");
+        const auto sealed = parvane::crypto::b64decode(web.value("sealed", std::string())).value_or(std::string());
+        const auto opened = key ? kb::open(*key, web.value("address", std::string()), sealed) : std::nullopt;
+        check(opened && *opened == web["payload"], "keybundle: копия web открыта, содержимое совпало");
+        check(key && !kb::open(*key, "other@parvane.example", sealed), "keybundle: чужой адрес (AAD) — отказ");
+        bool pickOk = true;
+        for (const auto &c : web["pick"]) {
+            const auto got = kb::pickRecoveryKey(c.value("input", std::string()));
+            if (got != c.value("output", std::string())) {
+                pickOk = false;
+                std::printf("    pick: «%s» → «%s», web «%s»\n", c.value("input", std::string()).c_str(), got.c_str(),
+                            c.value("output", std::string()).c_str());
+            }
+        }
+        check(pickOk, "keybundle: разбор ключа из текста — как web (" + std::to_string(web["pick"].size()) + " случаев)");
+    }
+    const auto desktopPath = vectorPath("keybundle-desktop.json");
+    if (regen() || readText(desktopPath).empty()) {
+        const std::string recoveryKey = "Z9Y8-X7W6-V5T4-S3R2-Q1P0-N9M8-K7J6-H5G4-F3E2-D1C0";
+        const std::string address = "gleb@parvane.example";
+        const json payload{{"grant", "eyJzc2siOiJmZiJ9"}, {"cloud", "[]"},
+                           {"history", {{"fileId", "f2"}, {"fileKey", "k2"}, {"fileNonce", "n2"}, {"at", 1760000000001LL},
+                                        {"mark", "m2"}}}};
+        const auto key = kb::deriveBundleKey(recoveryKey, address);
+        const auto sealed = key ? kb::seal(*key, address, payload) : std::string();
+        std::ofstream(desktopPath) << json{{"recoveryKey", recoveryKey}, {"address", address},
+                                           {"sealed", parvane::crypto::b64encode(sealed)}, {"payload", payload}}.dump(2) << "\n";
+    }
+    const auto desktop = json::parse(readText(desktopPath), nullptr, false);
+    if (desktop.is_object()) {
+        const auto key = kb::deriveBundleKey(desktop.value("recoveryKey", std::string()), desktop.value("address", std::string()));
+        const auto opened = key ? kb::open(*key, desktop.value("address", std::string()),
+            parvane::crypto::b64decode(desktop.value("sealed", std::string())).value_or(std::string())) : std::nullopt;
+        check(opened && *opened == desktop["payload"], "keybundle: файл desktop открывается обратно");
+    }
+    check(!kb::canonicalRecoveryKey("UUUU-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA"), "keybundle: «U» — не ключ");
+    check(kb::withBundleKey(R"({"ssk":"00"})", "QUJD") == R"({"bk":"QUJD","ssk":"00"})", "keybundle: ключ копии в грант (поле bk)");
+    check(kb::readGrantBundleKey(R"({"bk":"QUJD"})") == "QUJD", "keybundle: ключ копии из гранта");
+    check(json::parse(kb::withFreshLog(R"({"log":"aa"})", std::string("\x01\xff", 2)))["log"] == "01ff", "keybundle: свежий журнал (hex)");
+}
+
+int main() {
+    std::printf("=== parvane-core: векторы форматов web ↔ desktop (%s) ===\n", PARVANE_VECTORS_DIR);
+    keyBackup();
+    keyBundle();
+    std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
+    return g_fail == 0 ? 0 : 1;
+}

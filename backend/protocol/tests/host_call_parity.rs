@@ -133,3 +133,32 @@ fn client_calls_match_wasm_semantics() {
     let chats = c.call("ephSubscribe", &json!({"chatsJson": {"peers": [], "groups": []}})).unwrap();
     assert_eq!(chats, json!([]));
 }
+
+/// Таблицы типов `encodeMessage`/`decodeMessage` нативных хостов — те же, что у WASM (иначе desktop не
+/// разбирал ответ смены ника, найдено живым тестом 18 окт 2026).
+#[test]
+fn message_type_tables_match_wasm() {
+    fn tables(src: &str) -> (Vec<String>, Vec<String>) {
+        let grab = |from: &str| -> Vec<String> {
+            let start = src.find(from).expect(from);
+            let body = &src[start..];
+            let body = &body[..body.find("\n}\n").expect("конец функции")];
+            let mut out: Vec<String> = body
+                .split('"')
+                .filter(|t| t.starts_with("parvane.") && !t.contains(' '))
+                .map(str::to_string)
+                .collect();
+            out.sort();
+            out.dedup();
+            out
+        };
+        (grab("pub fn encode_message"), grab("pub fn decode_message"))
+    }
+    let wasm = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/wasm/src/lib.rs")).unwrap();
+    let host = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/host.rs")).unwrap();
+    let (we, wd) = tables(&wasm);
+    let (he, hd) = tables(&host);
+    let missing = |a: &[String], b: &[String]| a.iter().filter(|x| !b.contains(x)).cloned().collect::<Vec<_>>();
+    assert!(missing(&we, &he).is_empty(), "encodeMessage: нет у хоста {:?}", missing(&we, &he));
+    assert!(missing(&wd, &hd).is_empty(), "decodeMessage: нет у хоста {:?}", missing(&wd, &hd));
+}
