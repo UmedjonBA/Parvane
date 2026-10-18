@@ -54,6 +54,13 @@ private:
 [[nodiscard]] std::string encodeAuth(const std::string &token);
 [[nodiscard]] std::string encodeRequest(std::uint64_t id, const std::string &method,
                                         const std::string &body, std::uint32_t timeoutMs);
+// Запрос объекту сервера `dest` (spec 028, FED-1; пусто — свой сервер); `padTo` > 0 — дополнить кадр до
+// кратного этой длине (spec 025, L2).
+[[nodiscard]] std::string encodeRequestTo(std::uint64_t id, const std::string &method, const std::string &body,
+                                          std::uint32_t timeoutMs, const std::string &dest, std::uint32_t padTo = 0);
+// spec 029: функция движка без клиента по имени WASM-обвязки (`encodeHello`, `parseInvite`, …): аргументы —
+// объект (байты — base64), результат — значение JSON. Бросает EngineError.
+[[nodiscard]] json engineCall(const std::string &name, const json &args = json::object());
 [[nodiscard]] std::string encodePing(std::uint64_t nonce);
 // Кадр сервера → JSON {"kind":"welcome"|"authOk"|"response"|"event"|"chunk"|
 // "ping"|"pong"|"unknown", …}; тела — base64. Бросает EngineError.
@@ -84,6 +91,8 @@ struct OutRequest {
     bool anon = false;
     std::string method;
     std::string body;
+    // Домен сервера объекта (spec 028, FED-1; `dest` запроса движка); пусто — свой сервер.
+    std::string dest;
 };
 [[nodiscard]] OutRequest parseRequest(const json &r);
 
@@ -141,6 +150,11 @@ public:
     [[nodiscard]] static std::unique_ptr<Client> import(const std::string &blob,
                                                         const std::string &key32);
     [[nodiscard]] std::string exportState(const std::string &key32) const;
+
+    // spec 029: любая функция клиента по имени WASM-обвязки (`plannerSeal`, `groupInfo`, `renamePrepare`, …)
+    // с тем же смыслом, что в web `controller.ts`: аргументы — объект (байты — base64), результат — значение
+    // JSON (запросы — {chan, method, body, dest?}). Бросает EngineError (need — добрать и повторить).
+    json call(const std::string &name, const json &args = json::object());
 
     // Первое v2-устройство: корень, журнал, сертификат, OTK.
     // → {"requests":[…], "rootSecret": base64}.
@@ -325,6 +339,8 @@ public:
     StateSession &operator=(const StateSession &) = delete;
 
     [[nodiscard]] std::string syncRequest() const;
+    // spec 029: функция журнала по имени WASM `PvState` (`callSet`, `cloudContainerSet`, …). Бросает.
+    json call(const std::string &name, const json &args = json::object());
     // Ответ state.sync → {"more","applied","rejected"}. Бросает.
     json ingest(const std::string &resp);
     // proto3-JSON state.v1.StateSnapshot.

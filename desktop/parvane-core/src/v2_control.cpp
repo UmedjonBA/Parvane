@@ -27,14 +27,14 @@ const json *field(const json &object, const char *camel, const char *snake) {
 }
 
 json preauth(const std::string &gatewayUrl, const std::string &method, const json &request,
-             const std::string &clientVersion, std::int64_t timeoutMs) {
+             const std::string &clientVersion, std::int64_t timeoutMs, const std::string &dest) {
     const auto body = encodeMethodRequest(method, request);
     Connection conn(gatewayUrl);
     const auto welcome = conn.open(kChannelIdentified, clientVersion);
     (void)verifyServerDescriptor(welcome.serverDescriptor); // бросает при негодной подписи
     std::string response;
     try {
-        response = conn.request(method, body, timeoutMs);
+        response = conn.request(method, body, timeoutMs, dest);
     } catch (...) {
         conn.close();
         throw;

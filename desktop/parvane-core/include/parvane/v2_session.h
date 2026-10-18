@@ -95,6 +95,14 @@ struct SessionConfig {
 
 class Session {
 public:
+    // id этого устройства для входа (`identity.session.issue`): тот, под которым живёт сохранённое
+    // состояние движка, иначе созданный один раз и записанный в каталог (`device-id`). Без v1-файла
+    // устройства (spec 029). Бросает при сбое записи.
+    [[nodiscard]] static std::string deviceIdFor(const std::string &stateDir);
+    // ID-01: доказательство ключа устройства по сохранённому состоянию движка — {"proof": base64,
+    // "tsMs": n}; null — состояния нет (первый вход этого устройства).
+    [[nodiscard]] static json sessionProofFor(const std::string &stateDir, std::int64_t tsMs);
+
     explicit Session(SessionConfig cfg);
     ~Session();
     Session(const Session &) = delete;
@@ -350,9 +358,18 @@ private:
     bool connectLocked(std::string *error);
     void onIdClosed();
 
-    std::string call(bool anon, const std::string &method, const std::string &body);
+    // `dest` — домен сервера объекта (spec 028, FED-1): пусто или свой — свой сервер.
+    std::string call(bool anon, const std::string &method, const std::string &body,
+                     const std::string &dest = std::string());
     // C2-01: анонимный запрос в соединении, выбранном планировщиком движка.
-    std::string callAnon(const std::string &method, const std::string &body);
+    std::string callAnon(const std::string &method, const std::string &body, const std::string &dest = std::string());
+    // Федерация (spec 028): домен пользователя, если он не свой ("" — свой сервер).
+    [[nodiscard]] std::string destOfUser(const std::string &user) const;
+    // Домен сервера группы (журнал, ожидающий ключа, иначе свой) и `dest` для её запросов.
+    [[nodiscard]] std::string groupDomainLocked(const std::string &hex);
+    [[nodiscard]] std::string groupDestLocked(const std::string &hex);
+    // Жетоны сервера другого домена (spec 028): ключ сервера — из его описателя, проверенного движком.
+    void requestForeignTokensLocked(const std::string &domain, std::size_t limit);
     void closeAnon(std::uint64_t conn);
     void closeAllAnon();
     // Добрать данные по ошибке движка; false — нельзя (не need или неизвестный need).
@@ -392,7 +409,7 @@ private:
     void rotateEpochOnceLocked(const std::string &hex);
     void scheduleRotate(const std::string &hex, std::int64_t delayMs, int attempt = 0);
     std::vector<std::string> groupMembersLocked(const std::string &hex);
-    json inviteGroupLocked(const std::string &linkIdHex);
+    json inviteGroupLocked(const std::string &linkIdHex, const std::string &domain);
     json loadInvites() const;
     // T160: ссылки-приглашения делятся между своими устройствами журналом
     // личного состояния (секрет ссылки знает только создавшее её устройство).
@@ -437,6 +454,8 @@ private:
     std::set<std::string> ephChats_;
     std::set<std::string> warnedUnconfirmed_;
     std::set<std::string> syncingGroups_;
+    // Домен группы из ссылки-приглашения (spec 028), пока её журнала у движка нет (под engineMu_).
+    std::map<std::string, std::string> inviteDomains_;
     // Приватность, заданная клиентом (под engineMu_): {groupAddNobody, strangers}.
     std::string l2Snapshot_; // последнее отданное событие l2State (под engineMu_)
     bool privacySet_ = false;

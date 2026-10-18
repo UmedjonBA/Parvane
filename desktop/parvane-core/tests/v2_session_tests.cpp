@@ -25,6 +25,7 @@
 #include "parvane/messenger.h"
 #include "parvane/topics.h"
 #include "parvane/v2_content.h"
+#include "parvane/v2_control.h"
 #include "parvane/v2_session.h"
 
 using nlohmann::json;
@@ -46,29 +47,27 @@ static std::string env(const char *n, const std::string &d) {
     return (v && *v) ? std::string(v) : d;
 }
 
-// Регистрация + JWT с claim dev через v1-gateway (pre-auth issue/register).
-// gw — host:port (TCP) или ws://… (v1 JSON текстовыми кадрами того же
-// GatewayWsTransport, у которого есть двоичный режим v2 — v1 не сломан).
-static std::string issue(const std::string &gw, const std::string &user, const std::string &device) {
-    std::unique_ptr<parvane::GatewayTransport> tp;
-    if (gw.rfind("ws://", 0) == 0) {
-        auto ws = std::make_unique<parvane::GatewayWsTransport>();
-        ws->connectUrl(gw);
-        tp = std::move(ws);
-    } else {
-        tp = std::make_unique<parvane::GatewayTransport>();
-        const auto colon = gw.rfind(':');
-        tp->connect(gw.substr(0, colon), std::atoi(gw.c_str() + colon + 1));
-    }
-    auto &t = *tp;
-    parvane::IssueRequest req{user, kTestPassword, device};
+// Регистрация + JWT с claim dev методами v2 канала PRE (`identity.account.register`,
+// `identity.session.issue`) — v1 на сервере нет (T110). `stateDir` задан — устройство уже в журнале:
+// вход с доказательством ключа (ID-01, стек с PARVANE_REQUIRE_DEVICE_PROOF=1).
+static std::string issue(const std::string &gw, const std::string &user, const std::string &device,
+                         const std::string &stateDir = std::string()) {
     try {
-        t.request(parvane::topics::IdentityRegister, req.toJson().dump(), 5000);
+        (void)v2::preauth(gw, "identity.account.register", json{{"user", user}, {"password", kTestPassword}});
     } catch (const std::exception &) {
+        // уже зарегистрирован
     }
-    const auto resp = parvane::IssueResponse::fromJson(
-        json::parse(t.request(parvane::topics::IdentityIssue, req.toJson().dump(), 5000)));
-    return resp.token.value_or("");
+    json req{{"login", user}, {"password", kTestPassword}, {"device_id", device}, {"client_kind", "desktop-test"}};
+    if (!stateDir.empty()) {
+        const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (const auto proof = v2::Session::sessionProofFor(stateDir, ts); proof.is_object()) {
+            req["device_proof"] = proof["proof"];
+            req["proof_ts_ms"] = std::to_string(ts);
+        }
+    }
+    const auto r = v2::preauth(gw, "identity.session.issue", req);
+    return r.value("token", std::string());
 }
 
 // Сборщик событий движка одного клиента.
@@ -426,6 +425,26 @@ int main() {
         std::lock_guard<std::mutex> lk(bob.inbox.mu);
         bob.inbox.got.clear();
     }
+    // ID-01 (стек с PARVANE_REQUIRE_DEVICE_PROOF=1): устройство уже в журнале — пароль без доказательства
+    // ключа сессию не даёт, с доказательством по сохранённому состоянию — даёт (так входит desktop)
+    {
+        std::string noProof, err;
+        try {
+            noProof = issue(tcp, bob.user, "db-" + suffix);
+        } catch (const std::exception &e) {
+            err = e.what();
+        }
+        check(noProof.empty(), "ID-01: вход привязанного устройства без доказательства отклонён", err);
+        std::string withProof;
+        try {
+            withProof = issue(tcp, bob.user, "db-" + suffix, dir + "/bob");
+        } catch (const std::exception &e) {
+            err = e.what();
+        }
+        check(!withProof.empty(), "ID-01: вход с доказательством ключа устройства", err);
+        if (!withProof.empty()) bob.token = withProof;
+        check(v2::Session::deviceIdFor(dir + "/bob") == "db-" + suffix, "id устройства — из сохранённого состояния");
+    }
     bob.start(tcp, dir + "/bob");
     check(bob.s->waitReady(30000), "bob: сессия поднята из сохранённого состояния");
     check(bob.inbox.waitSession([](const json &e) {
@@ -452,7 +471,7 @@ int main() {
         } catch (const std::exception &e) {
             std::printf("    v1 по WS: %s\n", e.what());
         }
-        check(!carol.token.empty(), "v1 JSON по WebSocket (текстовые кадры) работает рядом с двоичным режимом");
+        check(!carol.token.empty(), "вход по WebSocket (двоичные кадры v2)");
         carol.start(ws, dir + "/carol");
         check(carol.s->waitReady(30000), "carol: v2-сессия по WebSocket готова");
         const auto u4 = v2::newUuidV7();

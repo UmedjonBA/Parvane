@@ -299,7 +299,8 @@ AuthOk Connection::auth(const std::string &token, std::int64_t timeoutMs) {
     return a;
 }
 
-std::string Connection::request(const std::string &method, const std::string &body, std::int64_t timeoutMs) {
+std::string Connection::request(const std::string &method, const std::string &body, std::int64_t timeoutMs,
+                                const std::string &dest, std::uint32_t padTo) {
     if (!open_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     const auto id = nextId_++;
     {
@@ -307,15 +308,18 @@ std::string Connection::request(const std::string &method, const std::string &bo
         pending_[id] = Pending{};
     }
     try {
-        sendFrame(encodeRequest(id, method, body,
-            static_cast<std::uint32_t>(std::min<std::int64_t>(timeoutMs, 30000))));
+        const auto t = static_cast<std::uint32_t>(std::min<std::int64_t>(timeoutMs, 30000));
+        sendFrame(dest.empty() && padTo == 0 ? encodeRequest(id, method, body, t)
+                                             : encodeRequestTo(id, method, body, t, dest, padTo));
     } catch (...) {
         std::lock_guard<std::mutex> lk(mu_);
         pending_.erase(id);
         throw;
     }
     std::unique_lock<std::mutex> lk(mu_);
-    const bool got = cv_.wait_for(lk, std::chrono::milliseconds(timeoutMs + 500), [&] {
+    // Запрос к другому серверу идёт через свой (federation): запас на путь между серверами
+    const auto wait = timeoutMs + (dest.empty() ? 500 : 5500);
+    const bool got = cv_.wait_for(lk, std::chrono::milliseconds(wait), [&] {
         const auto it = pending_.find(id);
         return it == pending_.end() || it->second.done;
     });
@@ -329,7 +333,7 @@ std::string Connection::request(const std::string &method, const std::string &bo
 }
 
 Connection::StreamResult Connection::requestStream(const std::string &method, const std::string &body,
-                                                   std::int64_t timeoutMs) {
+                                                   std::int64_t timeoutMs, const std::string &dest) {
     if (!open_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     const auto id = nextId_++;
     {
@@ -339,15 +343,15 @@ Connection::StreamResult Connection::requestStream(const std::string &method, co
         pending_[id] = std::move(p);
     }
     try {
-        sendFrame(encodeRequest(id, method, body,
-            static_cast<std::uint32_t>(std::min<std::int64_t>(timeoutMs, 30000))));
+        const auto t = static_cast<std::uint32_t>(std::min<std::int64_t>(timeoutMs, 30000));
+        sendFrame(dest.empty() ? encodeRequest(id, method, body, t) : encodeRequestTo(id, method, body, t, dest));
     } catch (...) {
         std::lock_guard<std::mutex> lk(mu_);
         pending_.erase(id);
         throw;
     }
     std::unique_lock<std::mutex> lk(mu_);
-    const bool got = cv_.wait_for(lk, std::chrono::milliseconds(timeoutMs + 500), [&] {
+    const bool got = cv_.wait_for(lk, std::chrono::milliseconds(timeoutMs + (dest.empty() ? 500 : 5500)), [&] {
         const auto it = pending_.find(id);
         return it == pending_.end() || it->second.done;
     });

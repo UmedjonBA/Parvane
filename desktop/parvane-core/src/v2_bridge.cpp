@@ -209,17 +209,32 @@ bool BridgeTransport::viaV2(const std::string &subject, const json &raw, std::st
         out = json{{"domain", str(d, "domain")}, {"email_required", mode == "email"}, {"confirm", mode},
                    {"telegram_bot", str2(d, "telegramBot", "telegram_bot")}};
     } else if (subject == "identity.token.issue") {
-        const auto r = pre("identity.session.issue",
-            json{{"login", str(p, "user")}, {"password", str(p, "password")}, {"device_id", str(p, "device_id")},
-                 {"login_token", str(p, "login_token")}, {"trust_secret", str(p, "trust_secret")}});
+        json req{{"login", str(p, "user")}, {"password", str(p, "password")}, {"device_id", str(p, "device_id")},
+                 {"login_token", str(p, "login_token")}, {"trust_secret", str(p, "trust_secret")},
+                 {"client_kind", str(p, "client").empty() ? std::string("desktop") : str(p, "client")}};
+        // ID-01: устройство, уже привязанное к журналу, доказывает свой ключ
+        if (!str(p, "device_id").empty() && cfg_.sessionProof) {
+            if (const auto proof = cfg_.sessionProof(str(p, "user"), str(p, "device_id")); proof.is_object()) {
+                req["device_proof"] = proof.value("proof", std::string());
+                req["proof_ts_ms"] = std::to_string(proof.value("tsMs", std::int64_t(0)));
+            }
+        }
+        // spec 027: вход в аккаунт, ждущий удаления, — только с явной отменой удаления
+        if (flag2(p, "cancel_deletion", "cancelDeletion")) req["cancel_deletion"] = true;
+        const auto r = pre("identity.session.issue", req);
         if (flag2(r, "twofaRequired", "twofa_required")) {
             out = json{{"ok", false}, {"twofa_required", true}, {"login_token", str2(r, "loginToken", "login_token")},
                        {"telegram_bot", str2(r, "telegramBot", "telegram_bot")}};
         } else if (flag2(r, "confirmRequired", "confirm_required")) {
             out = fail("почта не подтверждена");
+        } else if (const auto deletionAt = int2(r, "deletionAtMs", "deletion_at_ms"); deletionAt > 0 && str(r, "token").empty()) {
+            // Пароль верен, аккаунт ждёт удаления: токена нет без явной отмены
+            out = json{{"ok", false}, {"deletion_at_ms", deletionAt}};
         } else {
             out = json{{"ok", true}, {"token", str(r, "token")}};
             if (const auto secret = str2(r, "trustSecret", "trust_secret"); !secret.empty()) out["trust_secret"] = secret;
+            // spec 026: адрес аккаунта (вход прежним ником после смены ника ведёт на новый)
+            if (const auto address = str(r, "address"); !address.empty()) out["address"] = address;
         }
     } else if (subject == "identity.user.register") {
         try {

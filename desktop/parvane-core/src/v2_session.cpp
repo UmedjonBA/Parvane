@@ -3,6 +3,7 @@
 
 #include "parvane/storecrypt.h"
 #include "parvane/v2_content.h"
+#include "parvane/v2_control.h"
 #include "parvane/v2_engine.h"
 #include "parvane/v2_link.h"
 
@@ -110,6 +111,29 @@ void mkdirs(const std::string &dir) {
 }
 
 } // namespace
+
+std::string Session::deviceIdFor(const std::string &stateDir) {
+    // Состояние движка уже есть — его устройство (запись `device` ставит сессия)
+    if (const auto saved = storecrypt::readFile(stateDir + "/device"); !saved.empty()) return saved;
+    if (const auto id = storecrypt::readFile(stateDir + "/device-id"); !id.empty()) return id;
+    mkdirs(stateDir);
+    const auto id = newUuidV7();
+    if (!storecrypt::writeFile(stateDir + "/device-id", id)) throw std::runtime_error("v2: id устройства не записан");
+    return id;
+}
+
+json Session::sessionProofFor(const std::string &stateDir, std::int64_t tsMs) {
+    const auto key = storecrypt::readFile(stateDir + "/key");
+    const auto state = storecrypt::readFile(stateDir + "/state");
+    if (key.size() != 32 || state.empty()) return nullptr;
+    try {
+        auto c = Client::import(state, key);
+        return json{{"proof", c->call("sessionProof", json{{"tsMs", tsMs}})}, {"tsMs", tsMs}};
+    } catch (const std::exception &) {
+        // Состояние не читается — вход как с нового устройства (сервер решит сам)
+        return nullptr;
+    }
+}
 
 Session::Session(SessionConfig cfg) : cfg_(std::move(cfg)) {}
 
@@ -585,7 +609,7 @@ void Session::closeAllAnon() {
     while (!anonConns_.empty()) closeAnon(anonConns_.begin()->first);
 }
 
-std::string Session::callAnon(const std::string &method, const std::string &body) {
+std::string Session::callAnon(const std::string &method, const std::string &body, const std::string &dest) {
     if (!planner_) planner_ = std::make_unique<AnonPlanner>();
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::system_clock::now().time_since_epoch()).count();
@@ -607,7 +631,7 @@ std::string Session::callAnon(const std::string &method, const std::string &body
         anonConns_[plan.conn] = std::move(fresh);
     }
     try {
-        auto resp = c->request(method, body);
+        auto resp = c->request(method, body, 15000, dest);
         if (plan.closeAfter) closeAnon(plan.conn);
         return resp;
     } catch (...) {
@@ -616,17 +640,46 @@ std::string Session::callAnon(const std::string &method, const std::string &body
     }
 }
 
-std::string Session::call(bool anon, const std::string &method, const std::string &body) {
+std::string Session::destOfUser(const std::string &user) const {
+    const auto at = user.rfind('@');
+    if (at == std::string::npos) return {};
+    auto d = user.substr(at + 1);
+    std::transform(d.begin(), d.end(), d.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return d == domain_ || d.empty() ? std::string() : d;
+}
+
+std::string Session::groupDomainLocked(const std::string &hex) {
+    if (!client_ || hex.empty()) return domain_;
+    // Группа другого сервера по ссылке, журнал которой ещё не принят
+    if (const auto it = inviteDomains_.find(hex); it != inviteDomains_.end() && client_->groupVersion(hex) == 0) {
+        return it->second;
+    }
+    try {
+        const auto d = client_->call("groupDomain", json{{"group", hex}});
+        if (d.is_string() && !d.get<std::string>().empty()) return d.get<std::string>();
+    } catch (const std::exception &) {
+    }
+    return domain_;
+}
+
+std::string Session::groupDestLocked(const std::string &hex) {
+    const auto d = groupDomainLocked(hex);
+    return d == domain_ ? std::string() : d;
+}
+
+std::string Session::call(bool anon, const std::string &method, const std::string &body, const std::string &destIn) {
+    // Свой домен — обычный запрос (gateway обслуживает его и с dest, но без лишнего поля в кадре)
+    const auto dest = destIn == domain_ ? std::string() : destIn;
     // Чтения identity (журналы, бандлы, жетоны) при кратком UNAVAILABLE сервера
     // (identity v2: «database is locked» под одновременной нагрузкой) — повтор,
     // иначе отправка падала целиком (verify_protocol_v2.sh, 29 сен 2026).
     const bool retriable = method.rfind("identity.", 0) == 0;
     for (int attempt = 0;; ++attempt) {
         try {
-            if (anon) return callAnon(method, body);
+            if (anon) return callAnon(method, body, dest);
             Connection *c = id_.get();
             if (!c || !c->isOpen()) throw V2Error("ERROR_CODE_UNAVAILABLE");
-            return c->request(method, body);
+            return c->request(method, body, 15000, dest);
         } catch (const V2Error &e) {
             if (!retriable || attempt >= 2 || e.code() != "ERROR_CODE_UNAVAILABLE" || stopping_) throw;
             log(method + ": сервер недоступен — повтор");
@@ -639,7 +692,7 @@ void Session::runRequestsLocked(const json &reqs) {
     if (!reqs.is_array()) return;
     for (const auto &r : reqs) {
         const auto req = parseRequest(r);
-        call(req.anon, req.method, req.body);
+        call(req.anon, req.method, req.body, req.dest);
     }
 }
 
@@ -659,17 +712,19 @@ bool Session::satisfyLocked(const std::exception &ex) {
     const auto kind = need.value("kind", std::string());
     const auto user = need.value("user", std::string());
     if (kind == "peerLog") {
+        // Журнал собеседника — у его сервера (spec 028)
+        const auto dest = destOfUser(user);
         const auto before = client_->logVersion(user);
         const auto resp = call(true, "identity.device.log_sync_anon",
             encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
                           json{{"user", {{"address", user}}},
-                               {"after_version", std::to_string(client_->logVersion(user))}}));
+                               {"after_version", std::to_string(client_->logVersion(user))}}), dest);
         auto verdict = client_->ingestLog(user, resp);
         if (verdict == "replaced") {
             // Журнал на сервере начат заново (другой генезис) — перечитать целиком.
             verdict = client_->ingestLog(user, call(true, "identity.device.log_sync_anon",
                 encodeMessage("parvane.identity.v2.DeviceLogSyncAnonRequest",
-                              json{{"user", {{"address", user}}}, {"after_version", "0"}})));
+                              json{{"user", {{"address", user}}}, {"after_version", "0"}}), dest));
         }
         if (verdict == "rootChanged") return acceptPeerRootLocked(user);
         // Журнал не продвинулся, а движок просит его снова: собеседник прямо
@@ -684,11 +739,16 @@ bool Session::satisfyLocked(const std::exception &ex) {
     if (kind == "bundle") {
         const auto resp = call(true, "identity.device.fetch_bundle_anon",
             encodeMessage("parvane.identity.v2.DeviceFetchBundleAnonRequest",
-                          json{{"user", {{"address", user}}}}));
+                          json{{"user", {{"address", user}}}}), destOfUser(user));
         client_->ingestBundle(user, resp);
         return true;
     }
     if (kind == "token") {
+        // Жетоны для первого письма незнакомцу с другого сервера — от сервера адресата (свой запас на домен)
+        if (const auto dest = destOfUser(user); !dest.empty()) {
+            requestForeignTokensLocked(dest, kTokenBatch);
+            return true;
+        }
         if (serverKey_.empty()) return false;
         requestTokensLocked(kTokenBatch);
         return true;
@@ -828,20 +888,43 @@ bool Session::isV2Peer(const std::string &address) {
     return v2;
 }
 
+namespace {
+
+// Ключей новой эпохи группы ещё нет у этого участника (смена эпохи админом — не чаще раза в 10 с).
+bool isGroupKeysNeed(const std::exception &e) {
+    const auto *ee = dynamic_cast<const EngineError *>(&e);
+    return ee && ee->isNeed() && ee->need().value("kind", std::string()) == "groupKeys";
+}
+
+// Сколько ждать ключи эпохи и шаг ожидания (как web `GROUP_KEYS_WAIT_MS`/`GROUP_KEYS_RETRY_MS`).
+constexpr std::int64_t kGroupKeysWaitMs = 20000;
+constexpr std::int64_t kGroupKeysRetryMs = 1000;
+
+} // namespace
+
 void Session::sendContent(const std::string &peer, const json &content, const std::string &opId) {
-    {
-        std::lock_guard<std::recursive_mutex> lk(engineMu_);
-        if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
-        json reqs;
-        if (isGroupAddress(peer)) {
-            const auto hex = groupHex(peer);
-            ensureTokensLocked(groupMembersLocked(hex).size());
-            reqs = withNeedsLocked([&] { return client_->prepareGroup(hex, content, opId); });
-            runRequestsLocked(reqs);
-        } else {
-            runDirectLocked(peer, [&] { return client_->prepareDirect(peer, content, opId); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kGroupKeysWaitMs);
+    for (;;) {
+        try {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (!ready_ || !client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+            json reqs;
+            if (isGroupAddress(peer)) {
+                const auto hex = groupHex(peer);
+                ensureTokensLocked(groupMembersLocked(hex).size());
+                reqs = withNeedsLocked([&] { return client_->prepareGroup(hex, content, opId); });
+                runRequestsLocked(reqs);
+            } else {
+                runDirectLocked(peer, [&] { return client_->prepareDirect(peer, content, opId); });
+            }
+            persistLocked();
+            break;
+        } catch (const std::exception &e) {
+            // Вступили только что: ключи эпохи придут от админа записью инбокса — ждём без мьютекса движка
+            if (!isGroupKeysNeed(e) || stopping_ || std::chrono::steady_clock::now() >= deadline) throw;
+            log("отправка в группу ждёт ключи новой эпохи");
+            std::this_thread::sleep_for(std::chrono::milliseconds(kGroupKeysRetryMs));
         }
-        persistLocked();
     }
     flushAsync();
 }
@@ -1641,11 +1724,14 @@ void Session::syncGroupLocked(const std::string &hex, const std::string &linkId)
     try {
         for (int page = 0; page < kGroupSyncPages; ++page) {
             const auto before = client_->groupVersion(hex);
-            json req{{"group", {{"domain", domain_}, {"id", hexToB64(hex)}}},
+            // Журнал группы — у её сервера (spec 028)
+            const auto gdomain = groupDomainLocked(hex);
+            json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}},
                      {"after_version", std::to_string(before)}};
             if (!linkId.empty()) req["invite_link_id"] = hexToB64(linkId);
-            const auto resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req));
-            withNeedsLocked([&] { return client_->groupIngest(domain_, hex, resp); });
+            const auto resp = call(false, "group.state.sync", encodeMessage("parvane.group.v2.StateSyncRequest", req),
+                                   gdomain);
+            withNeedsLocked([&] { return client_->groupIngest(gdomain, hex, resp); });
             if (client_->groupVersion(hex) == before) break;
         }
     } catch (...) {
@@ -1947,6 +2033,38 @@ void Session::requestTokensLocked(std::size_t limit) {
     }
 }
 
+// Жетоны сервера другого домена (spec 028, как web `requestForeignTokens`): его описатель — через свой
+// сервер, подпись проверяет движок; ключи жетонов — анонимно; выдача — от своего аккаунта через свой сервер.
+void Session::requestForeignTokensLocked(const std::string &domain, std::size_t limit) {
+    if (!client_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+    const auto described = preauth(cfg_.gatewayUrl, "server.describe", json::object(), cfg_.clientVersion, 15000, domain);
+    const auto signedDesc = encodeMessage("parvane.core.v2.SignedServerDescriptor",
+                                          described.contains("descriptor") ? described["descriptor"] : json::object());
+    const auto desc = verifyServerDescriptor(signedDesc);
+    auto got = desc.value("domain", std::string());
+    std::transform(got.begin(), got.end(), got.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (got != domain) throw V2Error("ERROR_CODE_INVALID");
+    const auto key = hexToBytes(desc.value("serverKey", std::string()));
+    const auto list = call(true, "identity.tokens.key_list", std::string(), domain);
+    std::vector<std::size_t> steps;
+    for (const auto count : kTokenBatchSteps) {
+        if (count <= limit) steps.push_back(count);
+    }
+    if (steps.empty()) steps.push_back(std::max<std::size_t>(1, limit));
+    for (std::size_t i = 0; i < steps.size(); ++i) {
+        try {
+            const auto req = parseRequest(client_->call("tokenRequestFor",
+                json{{"domain", domain}, {"keyListResponse", toBase64(list)}, {"serverKey", toBase64(key)},
+                     {"count", steps[i]}}));
+            const auto resp = call(req.anon, req.method, req.body, domain);
+            client_->call("tokenResponseFor", json{{"domain", domain}, {"resp", toBase64(resp)}});
+            return;
+        } catch (const V2Error &e) {
+            if (e.code() != "ERROR_CODE_LIMIT" || i + 1 == steps.size()) throw;
+        }
+    }
+}
+
 void Session::refillTokensLocked() {
     if (!client_ || serverKey_.empty() || !client_->tokenRefillDue()) return;
     try {
@@ -1997,7 +2115,7 @@ void Session::rotateEpochOnceLocked(const std::string &hex) {
     if (!reqs.is_array() || reqs.empty()) return;
     const auto publish = parseRequest(reqs[0]);
     try {
-        call(publish.anon, publish.method, publish.body);
+        call(publish.anon, publish.method, publish.body, publish.dest);
     } catch (...) {
         resyncGroupLocked(hex);
         throw;
@@ -2005,7 +2123,7 @@ void Session::rotateEpochOnceLocked(const std::string &hex) {
     for (std::size_t i = 1; i < reqs.size(); ++i) {
         try {
             const auto r = parseRequest(reqs[i]);
-            call(r.anon, r.method, r.body);
+            call(r.anon, r.method, r.body, r.dest);
         } catch (const std::exception &e) {
             log(std::string("ключи эпохи не доставлены: ") + e.what());
         }
@@ -2133,7 +2251,7 @@ std::string Session::createGroup(const std::string &title, const std::vector<std
         if (hex.empty() && created.contains("group")) hex = created["group"].value("id", std::string());
         const auto req = parseRequest(created.value("request", json::object()));
         try {
-            call(req.anon, req.method, req.body);
+            call(req.anon, req.method, req.body, req.dest);
         } catch (...) {
             client_->groupForget(hex);
             throw;
@@ -2206,7 +2324,7 @@ bool Session::changeGroup(const std::string &address, const json &change, std::s
         }
         try {
             const auto req = parseRequest(reqJson);
-            call(req.anon, req.method, req.body);
+            call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
             ok = true;
         } catch (const std::exception &e) {
             log(std::string("изменение группы отклонено сервером: ") + e.what());
@@ -2281,7 +2399,7 @@ json Session::createInvite(const std::string &address, const std::string &title,
         }
         try {
             const auto req = parseRequest(created.value("request", json::object()));
-            call(req.anon, req.method, req.body);
+            call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
         } catch (const std::exception &e) {
             log(std::string("ссылка не принята сервером: ") + e.what());
             resyncGroupLocked(hex);
@@ -2458,10 +2576,14 @@ std::string inviteErrorCode(const std::exception &e) {
 
 } // namespace
 
-json Session::inviteGroupLocked(const std::string &linkIdHex) {
+// Проверка ссылки — у сервера группы (домен из ссылки, spec 028); группа запоминает этот домен.
+json Session::inviteGroupLocked(const std::string &linkIdHex, const std::string &domain) {
     const auto resp = call(false, "group.invite.check",
-        encodeMessage("parvane.group.v2.InviteCheckRequest", json{{"link_id", hexToB64(linkIdHex)}}));
-    return decodeMessage("parvane.group.v2.InviteCheckResponse", resp);
+        encodeMessage("parvane.group.v2.InviteCheckRequest", json{{"link_id", hexToB64(linkIdHex)}}), domain);
+    auto out = decodeMessage("parvane.group.v2.InviteCheckResponse", resp);
+    const auto hex = b64ToHex(out.contains("group") ? out["group"].value("id", std::string()) : std::string());
+    if (!hex.empty() && !domain.empty()) inviteDomains_[hex] = domain;
+    return out;
 }
 
 // ── заявки на вступление (ссылка с одобрением, D-04; T143) ───────────────────
@@ -2486,9 +2608,10 @@ json Session::listJoinRequestsLocked(const std::string &hex) {
     json out = json::array();
     if (!canDecideRequestsLocked(hex)) return out;
     try {
-        const json req{{"group", {{"domain", domain_}, {"id", hexToB64(hex)}}}};
+        const auto gdomain = groupDomainLocked(hex);
+        const json req{{"group", {{"domain", gdomain}, {"id", hexToB64(hex)}}}};
         const auto resp = call(false, "group.request.list",
-                               encodeMessage("parvane.group.v2.RequestListRequest", req));
+                               encodeMessage("parvane.group.v2.RequestListRequest", req), gdomain);
         const auto list = decodeMessage("parvane.group.v2.RequestListResponse", resp);
         if (list.contains("requests") && list["requests"].is_array()) {
             for (const auto &r : list["requests"]) {
@@ -2543,7 +2666,7 @@ bool Session::decideJoinRequest(const std::string &address, const std::string &u
         }
         try {
             const auto req = parseRequest(reqJson);
-            call(req.anon, req.method, req.body);
+            call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
             ok = true;
         } catch (const std::exception &e) {
             log(std::string("решение по заявке отклонено сервером: ") + e.what());
@@ -2578,7 +2701,7 @@ json Session::checkInvite(const std::string &url) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!client_) return nullptr;
     try {
-        const auto check = inviteGroupLocked(parsed->value("linkId", std::string()));
+        const auto check = inviteGroupLocked(parsed->value("linkId", std::string()), parsed->value("domain", std::string()));
         const auto hex = b64ToHex(check.contains("group") ? check["group"].value("id", std::string()) : std::string());
         bool isMember = false;
         for (const auto &m : groupMembersLocked(hex)) {
@@ -2623,14 +2746,14 @@ json Session::joinByInvite(const std::string &url) {
         if (!client_) return nullptr;
         try {
             const auto linkId = parsed->value("linkId", std::string());
-            const auto check = inviteGroupLocked(linkId);
+            const auto check = inviteGroupLocked(linkId, parsed->value("domain", std::string()));
             const auto hex = b64ToHex(check.contains("group") ? check["group"].value("id", std::string()) : std::string());
             if (hex.empty()) throw V2Error("ERROR_CODE_NOT_FOUND");
             syncGroupLocked(hex, linkId);
             const auto req = parseRequest(client_->groupJoin(url));
             std::string resp;
             try {
-                resp = call(req.anon, req.method, req.body);
+                resp = call(req.anon, req.method, req.body, req.dest.empty() ? groupDestLocked(hex) : req.dest);
             } catch (...) {
                 resyncGroupLocked(hex);
                 throw;
@@ -2815,7 +2938,7 @@ void Session::stateChatCleared(const std::string &address, std::int64_t untilMs)
     if (!openStateLocked()) return;
     try {
         const json peer = isGroupAddress(address)
-            ? json{{"group", {{"domain", domain_}, {"id", hexToB64(groupHex(address))}}}}
+            ? json{{"group", {{"domain", groupDomainLocked(groupHex(address))}, {"id", hexToB64(groupHex(address))}}}}
             : json{{"user", {{"address", address}}}};
         const json cleared{{"peer", peer}, {"cleared_until_ms", std::to_string(untilMs)}};
         for (const auto &b : state_->chatCleared(cleared)) pendingAppends_.push_back(b);

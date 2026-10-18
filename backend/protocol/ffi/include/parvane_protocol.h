@@ -609,6 +609,18 @@ struct PvBytes pv_encode_request(uint64_t id,
                                  uintptr_t len,
                                  uint32_t timeout_ms);
 
+/**
+ * Запрос объекту сервера `dest` (spec 028, FED-1; пусто — свой сервер), с дополнением кадра до кратного
+ * `pad_to` (spec 025, режим L2; 0 — без дополнения).
+ */
+struct PvBytes pv_encode_request_to(uint64_t id,
+                                    const char *method,
+                                    const uint8_t *body,
+                                    uintptr_t len,
+                                    uint32_t timeout_ms,
+                                    const char *dest,
+                                    uint32_t pad_to);
+
 struct PvBytes pv_encode_ping(uint64_t nonce);
 
 char *pv_decode_frame(const uint8_t *bytes, uintptr_t len, char **err);

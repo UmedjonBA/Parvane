@@ -1023,6 +1023,33 @@ pub unsafe extern "C" fn pv_encode_request(id: u64, method: *const c_char, body:
     PvBytes::from_vec(host::encode_request(id, str_arg(method).unwrap_or(""), bytes_arg(body, len), timeout_ms))
 }
 
+/// Запрос объекту сервера `dest` (spec 028, FED-1; пусто — свой сервер), с дополнением кадра до кратного
+/// `pad_to` (spec 025, режим L2; 0 — без дополнения).
+#[no_mangle]
+pub unsafe extern "C" fn pv_encode_request_to(
+    id: u64,
+    method: *const c_char,
+    body: *const u8,
+    len: usize,
+    timeout_ms: u32,
+    dest: *const c_char,
+    pad_to: u32,
+) -> PvBytes {
+    let req = parvane_protocol::pb::parvane::core::v2::Request {
+        id,
+        method: str_arg(method).unwrap_or("").into(),
+        body: bytes_arg(body, len).to_vec(),
+        timeout_ms,
+        padding: vec![],
+        dest_domain: str_arg(dest).unwrap_or("").into(),
+    };
+    PvBytes::from_vec(if pad_to > 0 {
+        parvane_protocol::codec::encode_request_padded(req, pad_to as usize)
+    } else {
+        parvane_protocol::codec::encode_frame(parvane_protocol::pb::parvane::core::v2::frame::Kind::Request(req))
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn pv_encode_ping(nonce: u64) -> PvBytes {
     PvBytes::from_vec(host::encode_ping(nonce))

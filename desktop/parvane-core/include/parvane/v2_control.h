@@ -44,8 +44,10 @@ struct ControlConfig {
 // Метод канала PRE без входа (`server.describe`, `identity.session.issue`,
 // `identity.account.*`). Подпись дескриптора сервера проверяется. Бросает
 // V2Error (код протокола) либо std::runtime_error (сеть, негодный ответ).
+// `dest` — домен сервера (spec 028: `server.describe` чужого сервера через свой).
 [[nodiscard]] json preauth(const std::string &gatewayUrl, const std::string &method, const json &request,
-                           const std::string &clientVersion = "desktop", std::int64_t timeoutMs = 15000);
+                           const std::string &clientVersion = "desktop", std::int64_t timeoutMs = 15000,
+                           const std::string &dest = std::string());
 
 // Поле proto3-JSON в любом из двух написаний (camelCase / snake_case); null — нет.
 [[nodiscard]] const json *field(const json &object, const char *camel, const char *snake);

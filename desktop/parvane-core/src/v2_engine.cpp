@@ -90,6 +90,18 @@ std::string encodeRequest(std::uint64_t id, const std::string &method, const std
     return takeBytes(pv_encode_request(id, method.c_str(), u8(body), body.size(), timeoutMs));
 }
 
+std::string encodeRequestTo(std::uint64_t id, const std::string &method, const std::string &body,
+                            std::uint32_t timeoutMs, const std::string &dest, std::uint32_t padTo) {
+    return takeBytes(pv_encode_request_to(id, method.c_str(), u8(body), body.size(), timeoutMs, dest.c_str(), padTo));
+}
+
+json engineCall(const std::string &name, const json &args) {
+    char *err = nullptr;
+    const auto a = args.dump();
+    char *out = pv_call(name.c_str(), a.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 std::string encodePing(std::uint64_t nonce) { return takeBytes(pv_encode_ping(nonce)); }
 
 json decodeFrame(const std::string &bytes) {
@@ -143,6 +155,7 @@ OutRequest parseRequest(const json &r) {
     out.anon = r.value("chan", std::string()) == "anon";
     out.method = r.value("method", std::string());
     out.body = fromBase64(r.value("body", std::string()));
+    out.dest = r.value("dest", std::string());
     return out;
 }
 
@@ -177,6 +190,13 @@ std::string Client::exportState(const std::string &key32) const {
         check(err);
     }
     return takeBytes(b);
+}
+
+json Client::call(const std::string &name, const json &args) {
+    char *err = nullptr;
+    const auto a = args.dump();
+    char *out = pv_client_call(c_, name.c_str(), a.c_str(), &err);
+    return parseOrThrow(result(out, err));
 }
 
 json Client::createIdentity(std::size_t otk) {
@@ -655,6 +675,13 @@ StateSession::~StateSession() {
 }
 
 std::string StateSession::syncRequest() const { return takeBytes(pv_state_sync_request(s_)); }
+
+json StateSession::call(const std::string &name, const json &args) {
+    char *err = nullptr;
+    const auto a = args.dump();
+    char *out = pv_state_call(s_, name.c_str(), a.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
 
 json StateSession::ingest(const std::string &resp) {
     char *err = nullptr;

@@ -78,8 +78,11 @@ public:
     // Auth JWT (claim dev обязателен). Бросает V2Error.
     AuthOk auth(const std::string &token, std::int64_t timeoutMs = 10000);
     // Метод реестра: тело запроса → тело ответа. Бросает V2Error.
+    // `dest` — домен сервера объекта (spec 028, FED-1; пусто — свой сервер); `padTo` > 0 — кадр
+    // дополняется до кратного этой длине (spec 025, режим L2).
     std::string request(const std::string &method, const std::string &body,
-                        std::int64_t timeoutMs = 15000);
+                        std::int64_t timeoutMs = 15000, const std::string &dest = std::string(),
+                        std::uint32_t padTo = 0);
     // Поточный метод (скачивание блоба): тело ответа (метаданные) + чанки по
     // индексу до кадра last. Возвращается после последнего чанка. Бросает
     // V2Error (в т.ч. ошибка посреди потока).
@@ -88,7 +91,7 @@ public:
         std::map<std::uint32_t, std::string> chunks;
     };
     StreamResult requestStream(const std::string &method, const std::string &body,
-                               std::int64_t timeoutMs = 60000);
+                               std::int64_t timeoutMs = 60000, const std::string &dest = std::string());
 
     void setEventHandler(std::function<void(const Event &)> h);
     void setClosedHandler(std::function<void()> h);

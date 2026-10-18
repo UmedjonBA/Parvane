@@ -43,6 +43,10 @@ struct BridgeConfig {
     std::string token;
     std::string clientVersion = "desktop";
     std::function<void(const std::string &)> log;
+    // ID-01: доказательство ключа устройства для `identity.session.issue` (как web `setSessionProof`):
+    // {"proof": base64, "tsMs": n} по сохранённому состоянию движка; null — устройства ещё нет (сервер
+    // требует доказательство только от устройства, уже действующего в журнале).
+    std::function<nlohmann::json(const std::string &user, const std::string &deviceId)> sessionProof;
 };
 
 class BridgeTransport : public ITransport {
