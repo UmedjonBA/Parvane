@@ -1,0 +1,13 @@
+<!DOCTYPE RCC><RCC version="1.0">
+  <!-- Parvane: цветовые схемы «Пространство» (desktop/theme/gen_palettes.mjs из web colorScheme.ts) -->
+  <qresource prefix="/gui">
+    <file alias="space-catppuccin-dark.tdesktop-theme">../../../../../theme/space-catppuccin-dark.tdesktop-theme</file>
+    <file alias="space-catppuccin-light.tdesktop-theme">../../../../../theme/space-catppuccin-light.tdesktop-theme</file>
+    <file alias="space-gruvbox-dark.tdesktop-theme">../../../../../theme/space-gruvbox-dark.tdesktop-theme</file>
+    <file alias="space-gruvbox-light.tdesktop-theme">../../../../../theme/space-gruvbox-light.tdesktop-theme</file>
+    <file alias="space-nord-dark.tdesktop-theme">../../../../../theme/space-nord-dark.tdesktop-theme</file>
+    <file alias="space-nord-light.tdesktop-theme">../../../../../theme/space-nord-light.tdesktop-theme</file>
+    <file alias="space-solarized-dark.tdesktop-theme">../../../../../theme/space-solarized-dark.tdesktop-theme</file>
+    <file alias="space-solarized-light.tdesktop-theme">../../../../../theme/space-solarized-light.tdesktop-theme</file>
+  </qresource>
+</RCC>

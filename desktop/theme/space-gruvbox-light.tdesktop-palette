@@ -1,0 +1,163 @@
+// Parvane «Пространство»: схема gruvbox, светлый режим.
+// Создано desktop/theme/gen_palettes.mjs из web/telegram-tt/src/util/colorScheme.ts — руками не править.
+// Ключей без записи здесь нет: они берут значение исходного ключа либо штатное значение tdesktop.
+
+// окно и базовые цвета
+windowBg: #fbf1c7;
+windowFg: #3c3836;
+windowBgOver: #efe1b6;
+windowBgRipple: #ddd0a9;
+windowSubTextFg: #7c6f64;
+windowSubTextFgOver: #72675d;
+windowBoldFg: #3c3836;
+windowBoldFgOver: #3c3836;
+windowBgActive: #b57614;
+windowFgActive: #ffffff;
+windowActiveTextFg: #076678;
+windowShadowFgFallback: #e3d4ae;
+
+// кнопки
+activeButtonBgOver: #a86e13;
+activeButtonBgRipple: #9c6511;
+activeButtonSecondaryFg: #edddc4;
+activeLineFg: #b57614;
+activeLineFgError: #9d0006;
+lightButtonBgOver: #f3e2b2;
+lightButtonBgRipple: #ecd6a0;
+attentionButtonFg: #9d0006;
+attentionButtonFgOver: #9d0006;
+attentionButtonBgOver: #f0d4b0;
+attentionButtonBgRipple: #e6bc9d;
+
+// меню, полосы прокрутки, мелкие значки
+menuIconFg: #7c6f64;
+menuIconFgOver: #6f645b;
+menuSubmenuArrowFg: #3c3836;
+menuFgDisabled: #a89984;
+menuSeparatorFg: #e3d4ae;
+scrollBarBg: #3c383653;
+scrollBarBgOver: #3c38367a;
+scrollBg: #3c38361a;
+scrollBgOver: #3c38362c;
+smallCloseIconFg: #a89984;
+smallCloseIconFgOver: #7c6f64;
+
+// поля ввода, флажки, ползунки, подсказки
+placeholderFgActive: #a89984;
+inputBorderFg: #d5c4a1;
+filterInputBorderFg: #b57614;
+checkboxFg: #a89984;
+sliderBgInactive: #d5c4a1;
+tooltipBg: #f2e5bc;
+tooltipFg: #3c3836;
+tooltipBorderFg: #d5c4a1;
+
+// заголовок окна (свой, Windows/macOS): фон вокруг колонок
+titleBg: #ebdbb2;
+titleButtonFg: #a89984;
+titleButtonBgOver: #efe1b6;
+titleButtonFgOver: #7c6f64;
+titleFg: #a89984;
+titleFgActive: #3c3836;
+
+// окна (боксы) и экран входа
+boxTextFgGood: #79740e;
+boxTextFgError: #9d0006;
+boxTitleFg: #3c3836;
+boxTitleAdditionalFg: #7c6f64;
+introCoverTopBg: #9c6511;
+introCoverBottomBg: #b57614;
+introCoverIconsFg: #c8984f;
+introCoverPlaneTrace: #c8984f69;
+
+// список чатов
+dialogsDraftFg: #9d0006;
+dialogsSendingIconFg: #a89984;
+dialogsSentIconFg: #076678;
+dialogsSentIconFgOver: #076678;
+dialogsUnreadBgMuted: #a89984;
+dialogsOnlineBadgeFg: #79740e;
+dialogsBgActive: #b57614;
+dialogsDraftFgActive: #edddc4;
+
+// панель эмодзи и стикеров
+emojiPanHeaderBg: #fbf1c7f2;
+emojiIconFg: #a89984;
+stickerPreviewBg: #fbf1c7b0;
+
+// сообщения: значки отправки, звонки в ленте, полоса непрочитанного
+historyOutIconFg: #79740e;
+historyOutIconFgSelected: #79740e;
+historySendingOutIconFg: #9e9370;
+historySendingInIconFg: #a89984;
+historyCallArrowInFg: #79740e;
+historyCallArrowInFgSelected: #79740e;
+historyUnreadBarBg: #f2e5bc;
+historyUnreadBarFg: #076678;
+
+// фон чата (плоский): полоса прокрутки и служебные сообщения
+historyScrollBarBg: #7c6f647a;
+historyScrollBarBgOver: #7c6f64bc;
+historyScrollBg: #7c6f644c;
+historyScrollBgOver: #7c6f646b;
+msgServiceBg: #7c6f64cc;
+msgServiceBgSelected: #8d714cd9;
+msgServiceFg: #ffffff;
+
+// сообщения: входящие (panel) и исходящие (own)
+msgInBgSelected: #eedba7;
+msgOutBg: #eedda0;
+msgOutBgSelected: #e0c37d;
+msgSelectOverlay: #b576144c;
+msgStickerOverlay: #b576147f;
+msgOutServiceFg: #79740e;
+msgOutServiceFgSelected: #79740e;
+msgInShadow: #3c383629;
+msgInShadowSelected: #b5761429;
+msgOutShadow: #958b6b29;
+msgOutShadowSelected: #b5761429;
+msgInDateFg: #7c6f64;
+msgInDateFgSelected: #7c6f64;
+msgOutDateFg: #837a60;
+msgOutDateFgSelected: #837a60;
+msgOutReplyBarColor: #79740e;
+msgInMonoFg: #076678;
+msgOutMonoFg: #79740e;
+msgDateImgBgSelected: #9c651187;
+
+// сообщения: файлы и голосовые
+msgFileThumbLinkOutFg: #79740e;
+msgFileThumbLinkOutFgSelected: #79740e;
+msgFileInBgOver: #a86e13;
+msgFileInBgSelected: #9c6511;
+msgFileOutBg: #79740e;
+msgFileOutBgSelected: #68640c;
+msgWaveformInActiveSelected: #9c6511;
+msgWaveformInInactive: #d5c4a1;
+msgWaveformInInactiveSelected: #cbad77;
+msgWaveformOutActive: #79740e;
+msgWaveformOutActiveSelected: #79740e;
+msgWaveformOutInactive: #c5b86d;
+msgWaveformOutInactiveSelected: #c5b86d;
+
+// общие медиа, профиль, медиаплеер
+overviewPhotoSelectOverlay: #b5761433;
+profileStatusFgOver: #72675d;
+mediaPlayerDisabledFg: #dfc07f;
+
+// боковая панель папок (рейка разделов): фон вокруг колонок
+sideBarBg: #ebdbb2;
+sideBarBgActive: #f2e5bc;
+sideBarBgRipple: #efe1b6;
+sideBarTextFg: #7c6f64;
+sideBarTextFgActive: #076678;
+sideBarIconFg: #7c6f64;
+sideBarIconFgActive: #076678;
+sideBarBadgeBg: #b57614;
+sideBarBadgeBgMuted: #a89984;
+sideBarBadgeFg: #ffffff;
+
+// прочее: орфография, плашки ролей
+spellUnderline: #9d000688;
+rankAdminFg: #79740e;
+rankOwnerFg: #8f3f71;

@@ -1640,7 +1640,12 @@ SessionController::SessionController(
 	}, lifetime());
 
 	const auto processFiltersMenu = [this] {
-		if (SessionNavigation::session().data().chatsFilters().has()) {
+		// Parvane: рейка разделов есть всегда, папки — всегда чипами над списком чатов
+		if (true) {
+			content()->toggleFiltersMenu(
+				SessionNavigation::session().data().chatsFilters().has());
+			toggleFiltersMenu(true);
+		} else if (SessionNavigation::session().data().chatsFilters().has()) {
 			const auto isHorizontal
 				= Core::App().settings().chatFiltersHorizontal()
 					|| !enoughSpaceForFilters();

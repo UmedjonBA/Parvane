@@ -24,6 +24,11 @@ enum class FilterIcon : uchar;
 class PopupMenu;
 } // namespace Ui
 
+namespace Parvane {
+class SectionRail;
+class SectionsHost;
+} // namespace Parvane
+
 namespace Window {
 
 class SessionController;
@@ -82,6 +87,10 @@ private:
 	} _drag;
 
 	Ui::Animations::Simple _scrollToAnimation;
+
+	// Parvane: рейка разделов «Пространство» вместо списка папок (spec 029)
+	base::unique_qptr<Parvane::SectionRail> _rail;
+	base::unique_qptr<Parvane::SectionsHost> _host; // разделы поверх колонок мессенджера
 
 };
 

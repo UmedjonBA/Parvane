@@ -42,6 +42,18 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_client.h
     ${src_loc}/parvane/parvane_account_ui.cpp
     ${src_loc}/parvane/parvane_account_ui.h
+    ${src_loc}/parvane/parvane_icons.cpp
+    ${src_loc}/parvane/parvane_icons.h
+    ${src_loc}/parvane/parvane_kit.cpp
+    ${src_loc}/parvane/parvane_kit.h
+    ${src_loc}/parvane/parvane_kit_extra.cpp
+    ${src_loc}/parvane/parvane_kit_internal.h
+    ${src_loc}/parvane/parvane_rail.cpp
+    ${src_loc}/parvane/parvane_rail.h
+    ${src_loc}/parvane/parvane_sections_host.cpp
+    ${src_loc}/parvane/parvane_sections_host.h
+    ${src_loc}/parvane/parvane_space.cpp
+    ${src_loc}/parvane/parvane_space.h
     ${src_loc}/parvane/parvane_map.cpp
     ${src_loc}/parvane/parvane_map.h
     ${src_loc}/parvane/parvane_webrtc_backend.cpp
@@ -2053,6 +2065,7 @@ PRIVATE
     qrc/telegram/export.qrc
     qrc/telegram/picker.qrc
     qrc/telegram/telegram.qrc
+    qrc/telegram/parvane_space.qrc
     qrc/telegram/sounds.qrc
     winrc/Telegram.rc
     winrc/Telegram.manifest

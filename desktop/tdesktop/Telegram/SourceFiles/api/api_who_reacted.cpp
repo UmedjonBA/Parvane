@@ -353,6 +353,23 @@ struct State {
 		}
 		const auto context = PreparedContextAt(weak.get(), session);
 		auto &entry = context->cacheReacted(item, reaction);
+		// Parvane: кто отреагировал — реакции v2 на устройстве (E2E, сервер их не видит), без MTProto
+		if (!entry.requestId) {
+			auto parsed = PeersWithReactions();
+			for (const auto &[peer, emoji] : Parvane::ReactorsOf(session, item->id.bare)) {
+				const auto id = Data::ReactionId{ emoji };
+				if (!reaction.empty() && id != reaction) {
+					continue;
+				}
+				parsed.list.push_back(PeerWithReaction{
+					.peerWithDate = { .peer = peer->id },
+					.reaction = id,
+				});
+			}
+			parsed.fullReactionsCount = int(parsed.list.size());
+			entry.data = std::move(parsed);
+			return entry.data.value().start_existing(consumer);
+		}
 		if (!entry.requestId) {
 			using Flag = MTPmessages_GetMessageReactionsList::Flag;
 			entry.requestId = session->api().request(

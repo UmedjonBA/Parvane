@@ -1462,6 +1462,47 @@ void NoteStateEdited(const char *kind); // T150                                 
 void LoadV2GroupCache(not_null<Main::Session*> session);    // группы v2 до подъёма сессии
 void NoteGroupPublic(const QString &address, const parvane::json &info); // публичность группы (spec 023)
 
+// Отказ федерации (spec 028, как web federationReason): понятная причина тостом — другой сервер
+// недоступен, заблокирован, сменил ключ… Одна и та же причина — не чаще раза в 10 с. Любой поток.
+void NoteFederationFailure(const std::exception &e) {
+	const auto text = QString::fromUtf8(e.what());
+	const auto reason = text.contains(u"FEDERATION_UNAVAILABLE"_q)
+		? u"disabled"_q
+		: text.contains(u"DOMAIN_BLOCKED"_q)
+		? u"blocked"_q
+		: text.contains(u"DOMAIN_REFUSED"_q)
+		? u"refused"_q
+		: text.contains(u"DOMAIN_UNREACHABLE"_q)
+		? u"unreachable"_q
+		: text.contains(u"SERVER_KEY_CHANGED"_q)
+		? u"key_changed"_q
+		: QString();
+	if (reason.isEmpty()) {
+		return;
+	}
+	crl::on_main([=] {
+		static auto shown = QHash<QString, crl::time>();
+		const auto now = crl::now();
+		if (const auto it = shown.constFind(reason); it != shown.constEnd() && now - *it < 10000) {
+			return;
+		}
+		shown.insert(reason, now);
+		const auto window = Core::App().activeWindow();
+		if (!window) {
+			return;
+		}
+		window->showToast((reason == u"disabled"_q)
+			? tr::lng_parvane_federation_disabled(tr::now)
+			: (reason == u"blocked"_q)
+			? tr::lng_parvane_federation_blocked(tr::now)
+			: (reason == u"refused"_q)
+			? tr::lng_parvane_federation_refused(tr::now)
+			: (reason == u"unreachable"_q)
+			? tr::lng_parvane_federation_unreachable(tr::now)
+			: tr::lng_parvane_federation_key_changed(tr::now));
+	});
+}
+
 // Групповое сообщение — конвертом эпохи группы v2 (T056). "" — не отправлено (причина в логе).
 std::string sendGroupContent(
 		const std::string &to,
@@ -1473,6 +1514,7 @@ std::string sendGroupContent(
 	} catch (const std::exception &e) {
 		LOG(("Parvane: отправка в группу %1 не удалась: %2 — НЕ отправлено")
 			.arg(QString::fromStdString(to), QString::fromUtf8(e.what())));
+		NoteFederationFailure(e);
 		return {};
 	}
 }
@@ -1820,6 +1862,7 @@ std::string sendSealedDirect(
 	} catch (const std::exception &e) {
 		LOG(("Parvane: отправка %1 не удалась: %2 — НЕ отправлено")
 			.arg(QString::fromStdString(to), QString::fromUtf8(e.what())));
+		NoteFederationFailure(e);
 		return {};
 	}
 }
@@ -11059,6 +11102,10 @@ void SearchUsers(const QString &query, Fn<void(QStringList)> callback) {
 						parvane::json{ { "usernames", parvane::json::array({ address.toStdString() }) } }.dump(),
 						8000);
 					const auto j = parvane::json::parse(reply, nullptr, false);
+					// Отказ федерации (чужой сервер недоступен, заблокирован…) — причиной тостом
+					if (j.is_object() && j.contains("error_code") && j["error_code"].is_string()) {
+						NoteFederationFailure(std::runtime_error(j["error_code"].get<std::string>()));
+					}
 					for (const auto &u : j.value("users", parvane::json::array())) {
 						const auto addr = QString::fromStdString(u.value("username", std::string()));
 						if (addr.isEmpty()) {
@@ -14824,6 +14871,32 @@ void ListDevices(Fn<void(std::vector<DeviceEntry>)> done) {
 
 // «Seen by» / «read at» для нативного меню: список прочитавших сообщение из
 // messenger (msg.chat.readers). Воркер → main. Себя не отдаём.
+std::vector<std::pair<not_null<PeerData*>, QString>> ReactorsOf(
+		not_null<Main::Session*> session,
+		qint64 msgId) {
+	auto out = std::vector<std::pair<not_null<PeerData*>, QString>>();
+	const auto it = g_msgIdToUuid.find(msgId);
+	if (it == g_msgIdToUuid.end()) {
+		return out;
+	}
+	auto users = QHash<QString, QString>();
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		users = g_v2Reactions.value(it.value());
+	}
+	const auto self = SelfAddress();
+	for (auto r = users.cbegin(); r != users.cend(); ++r) {
+		if (r.value().isEmpty()) {
+			continue;
+		}
+		const auto peer = (r.key() == self)
+			? not_null<PeerData*>(session->user())
+			: not_null<PeerData*>(ensurePeerUser(session, IdForAddress(r.key()), r.key()));
+		out.emplace_back(peer, r.value());
+	}
+	return out;
+}
+
 void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done) {
 	QString uuid;
 	{

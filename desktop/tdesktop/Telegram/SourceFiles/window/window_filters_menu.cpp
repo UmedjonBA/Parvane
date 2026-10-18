@@ -7,6 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_filters_menu.h"
 
+#include "parvane/parvane_rail.h" // Parvane: рейка разделов
+#include "parvane/parvane_sections_host.h"
+
 #include "mainwindow.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
@@ -60,7 +63,17 @@ FiltersMenu::FiltersMenu(
 			_session->setActiveChatsFilter(_drag.filterId);
 		}
 	});
-	setup();
+	// Parvane: на месте боковой панели папок — рейка разделов; папки — чипами над списком чатов
+	_outer.hide();
+	_rail = base::make_unique_q<Parvane::SectionRail>(_parent, _session);
+	_rail->show();
+	_host = base::make_unique_q<Parvane::SectionsHost>(_parent, _session);
+	_parent->sizeValue(
+	) | rpl::on_next([=](QSize size) {
+		const auto railWidth = st::windowFiltersWidth;
+		_rail->setGeometry(0, 0, railWidth, size.height());
+		_host->setGeometry(railWidth, 0, std::max(size.width() - railWidth, 0), size.height());
+	}, _rail->lifetime());
 }
 
 FiltersMenu::~FiltersMenu() = default;

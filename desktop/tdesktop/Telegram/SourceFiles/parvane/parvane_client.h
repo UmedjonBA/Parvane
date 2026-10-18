@@ -294,6 +294,10 @@ struct ReaderEntry {
 	qint64 date = 0;   // unix ts прочтения
 };
 void FetchReaders(qint64 msgId, Fn<void(std::vector<ReaderEntry>)> done);
+// Кто отреагировал (реакции v2 известны только устройствам — E2E): пары (человек, эмодзи). Только main.
+[[nodiscard]] std::vector<std::pair<not_null<PeerData*>, QString>> ReactorsOf(
+	not_null<Main::Session*> session,
+	qint64 msgId);
 
 // STUN/TURN из шарда call (эфемерные креды, кэш 0.8×TTL). Блокирующий.
 struct IceServer {

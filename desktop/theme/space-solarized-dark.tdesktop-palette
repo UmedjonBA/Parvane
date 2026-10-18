@@ -1,0 +1,215 @@
+// Parvane «Пространство»: схема solarized, тёмный режим.
+// Создано desktop/theme/gen_palettes.mjs из web/telegram-tt/src/util/colorScheme.ts — руками не править.
+// Ключей без записи здесь нет: они берут значение исходного ключа либо штатное значение tdesktop.
+
+// окно и базовые цвета
+windowBg: #002b36;
+windowFg: #a9b7b7;
+windowBgOver: #0a4050;
+windowBgRipple: #1a4c5a;
+windowSubTextFg: #7f9296;
+windowSubTextFgOver: #85989b;
+windowBoldFg: #a9b7b7;
+windowBoldFgOver: #a9b7b7;
+windowBgActive: #268bd2;
+windowFgActive: #ffffff;
+windowActiveTextFg: #2aa198;
+windowShadowFgFallback: #073642;
+
+// кнопки
+activeButtonBgOver: #2381c3;
+activeButtonBgRipple: #2178b5;
+activeButtonSecondaryFg: #c9e2f4;
+activeLineFg: #268bd2;
+activeLineFgError: #dc322f;
+lightButtonBgOver: #053749;
+lightButtonBgRipple: #084058;
+attentionButtonFg: #dc322f;
+attentionButtonFgOver: #dc322f;
+attentionButtonBgOver: #1a2c35;
+attentionButtonBgRipple: #302d34;
+
+// меню, полосы прокрутки, мелкие значки
+menuIconFg: #7f9296;
+menuIconFgOver: #87999d;
+menuSubmenuArrowFg: #a9b7b7;
+menuFgDisabled: #586e75;
+menuSeparatorFg: #073642;
+scrollBarBg: #a9b7b753;
+scrollBarBgOver: #a9b7b77a;
+scrollBg: #a9b7b71a;
+scrollBgOver: #a9b7b72c;
+smallCloseIconFg: #586e75;
+smallCloseIconFgOver: #7f9296;
+
+// поля ввода, флажки, ползунки, подсказки
+placeholderFgActive: #586e75;
+inputBorderFg: #1a4b58;
+filterInputBorderFg: #268bd2;
+checkboxFg: #586e75;
+sliderBgInactive: #1a4b58;
+tooltipBg: #073642;
+tooltipFg: #a9b7b7;
+tooltipBorderFg: #1a4b58;
+
+// заголовок окна (свой, Windows/macOS): фон вокруг колонок
+titleBg: #00212b;
+titleButtonFg: #586e75;
+titleButtonBgOver: #0a4050;
+titleButtonFgOver: #7f9296;
+titleFg: #586e75;
+titleFgActive: #a9b7b7;
+
+// окна (боксы) и экран входа
+boxTextFgGood: #859900;
+boxTextFgError: #dc322f;
+boxTitleFg: #a9b7b7;
+boxTitleAdditionalFg: #7f9296;
+introCoverTopBg: #2178b5;
+introCoverBottomBg: #268bd2;
+introCoverIconsFg: #5ca8dd;
+introCoverPlaneTrace: #5ca8dd69;
+
+// список чатов
+dialogsDraftFg: #dc322f;
+dialogsSendingIconFg: #586e75;
+dialogsSentIconFg: #2aa198;
+dialogsSentIconFgOver: #2aa198;
+dialogsUnreadBgMuted: #586e75;
+dialogsOnlineBadgeFg: #859900;
+dialogsBgActive: #268bd2;
+dialogsDraftFgActive: #c9e2f4;
+
+// панель эмодзи и стикеров
+emojiPanHeaderBg: #002b36f2;
+emojiIconFg: #586e75;
+stickerPreviewBg: #002b36b0;
+
+// сообщения: значки отправки, звонки в ленте, полоса непрочитанного
+historyOutIconFg: #2aa198;
+historyOutIconFgSelected: #2aa198;
+historySendingOutIconFg: #537a82;
+historySendingInIconFg: #586e75;
+historyCallArrowInFg: #859900;
+historyCallArrowInFgSelected: #859900;
+historyUnreadBarBg: #073642;
+historyUnreadBarFg: #2aa198;
+
+// фон чата (плоский): полоса прокрутки и служебные сообщения
+historyScrollBarBg: #7f92967a;
+historyScrollBarBgOver: #7f9296bc;
+historyScrollBg: #7f92964c;
+historyScrollBgOver: #7f92966b;
+msgServiceBg: #073642e6;
+msgServiceBgSelected: #10506de6;
+msgServiceFg: #a9b7b7;
+
+// сообщения: входящие (panel) и исходящие (own)
+msgInBgSelected: #073c52;
+msgOutBg: #0d4857;
+msgOutBgSelected: #135976;
+msgSelectOverlay: #268bd24c;
+msgStickerOverlay: #268bd27f;
+msgOutServiceFg: #2aa198;
+msgOutServiceFgSelected: #2aa198;
+msgInShadow: #00000029;
+msgInShadowSelected: #268bd229;
+msgOutShadow: #00000029;
+msgOutShadowSelected: #268bd229;
+msgInDateFg: #7f9296;
+msgInDateFgSelected: #7f9296;
+msgOutDateFg: #6b8b91;
+msgOutDateFgSelected: #6b8b91;
+msgOutReplyBarColor: #2aa198;
+msgInMonoFg: #2aa198;
+msgOutMonoFg: #2aa198;
+msgDateImgBgSelected: #2178b587;
+
+// сообщения: файлы и голосовые
+msgFileThumbLinkOutFg: #2aa198;
+msgFileThumbLinkOutFgSelected: #2aa198;
+msgFileInBgOver: #2381c3;
+msgFileInBgSelected: #2178b5;
+msgFileOutBg: #2aa198;
+msgFileOutBgSelected: #248a83;
+msgWaveformInActiveSelected: #2178b5;
+msgWaveformInInactive: #1a4b58;
+msgWaveformInInactiveSelected: #1e5e7d;
+msgWaveformOutActive: #2aa198;
+msgWaveformOutActiveSelected: #2aa198;
+msgWaveformOutInactive: #17676e;
+msgWaveformOutInactiveSelected: #17676e;
+
+// общие медиа, профиль, медиаплеер
+overviewPhotoSelectOverlay: #268bd233;
+profileStatusFgOver: #85989b;
+mediaPlayerDisabledFg: #0f5174;
+
+// боковая панель папок (рейка разделов): фон вокруг колонок
+sideBarBg: #00212b;
+sideBarBgActive: #073642;
+sideBarBgRipple: #0a4050;
+sideBarTextFg: #7f9296;
+sideBarTextFgActive: #2aa198;
+sideBarIconFg: #7f9296;
+sideBarIconFgActive: #2aa198;
+sideBarBadgeBg: #268bd2;
+sideBarBadgeBgMuted: #586e75;
+sideBarBadgeFg: #ffffff;
+
+// прочее: орфография, плашки ролей
+spellUnderline: #dc322f88;
+rankAdminFg: #859900;
+rankOwnerFg: #6c71c4;
+
+// Штатные значения ночной темы tdesktop (night.tdesktop-theme): без записи ключ взял бы дневное
+shadowFg: #04080e56;
+titleShadow: #00000000;
+titleButtonCloseBgOver: #e92539;
+introCoverPlaneInner: #ced9e2;
+introCoverPlaneOuter: #97a9b5;
+stickerPanDeleteBg: #000000cc;
+historyUnreadBarBorder: #03080d00;
+historyPeer1NameFg: #fb6169;
+historyPeer1NameFgSelected: #ffffff;
+historyPeer2NameFg: #85de85;
+historyPeer2NameFgSelected: #ffffff;
+historyPeer3NameFg: #f3bc5c;
+historyPeer3NameFgSelected: #ffffff;
+historyPeer5NameFg: #b48bf2;
+historyPeer5NameFgSelected: #ffffff;
+historyPeer6NameFg: #ff5694;
+historyPeer6NameFgSelected: #ffffff;
+historyPeer7NameFg: #62d4e3;
+historyPeer7NameFgSelected: #ffffff;
+historyPeer8NameFg: #faa357;
+historyPeer8NameFgSelected: #ffffff;
+msgFile1Bg: #3e7eba;
+msgFile1BgDark: #24679e;
+msgFile1BgOver: #1d5e93;
+msgFile1BgSelected: #ffffff;
+msgFile2Bg: #3ea34a;
+msgFile2BgDark: #298835;
+msgFile2BgOver: #1b7725;
+msgFile2BgSelected: #1b7725;
+msgFile3Bg: #d6454c;
+msgFile3BgDark: #bf333a;
+msgFile3BgOver: #b2282f;
+msgFile3BgSelected: #b2282f;
+msgFile4Bg: #d99546;
+msgFile4BgDark: #c17d39;
+msgFile4BgOver: #ac6b29;
+msgFile4BgSelected: #ac6b29;
+msgBotKbOverBgAdd: #80b1db0f;
+msgBotKbRippleBg: #92c0e50b;
+toastBg: #000000b2;
+mediaviewTextLinkFg: #70baf5;
+callBg: #14191ff5;
+callAnswerBg: #488fc9;
+callAnswerRipple: #4286c2;
+callAnswerBgOuter: #3f95eb26;
+callHangupBg: #cc4646;
+callHangupRipple: #ca4141;
+importantTooltipFgLink: #65b6fc;
+statisticsChartInactive: #313d4cc8;
+statisticsChartActive: #526679d8;

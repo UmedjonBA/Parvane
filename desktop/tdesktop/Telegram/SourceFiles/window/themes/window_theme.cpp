@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/themes/window_theme.h"
 
+#include "parvane/parvane_space.h" // Parvane: схемы «Пространство»
+
 #include "window/themes/window_theme_preview.h"
 #include "window/themes/window_themes_embedded.h"
 #include "window/themes/window_theme_editor.h"
@@ -1432,6 +1434,12 @@ void SetNightModeValue(bool nightMode) {
 }
 
 void ToggleNightMode() {
+	// Parvane: у схемы «Пространство» пара режимов своя — без неё в слот другого режима попала бы прежняя тема
+	const auto scheme = Parvane::CurrentScheme();
+	if (scheme != u"telegram"_q) {
+		Background()->toggleNightMode(Parvane::SchemeThemePath(scheme, !IsNightMode()));
+		return;
+	}
 	Background()->toggleNightMode(std::nullopt);
 }
 

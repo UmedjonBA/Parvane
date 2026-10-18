@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/reactions/history_view_reactions_list.h"
 
+#include "parvane/parvane_client.h" // Parvane: кто отреагировал
+
 #include "history/view/reactions/history_view_reactions_tabs.h"
 #include "boxes/moderate_messages_box.h"
 #include "boxes/peer_list_box.h"
@@ -432,6 +434,33 @@ void Controller::loadMore(const ReactionId &reaction) {
 		return;
 	}
 	_api.request(_loadRequestId).cancel();
+
+	// Parvane: кто отреагировал — реакции v2 на устройстве (E2E, сервер их не видит), без MTProto
+	{
+		const auto filtered = !reaction.empty();
+		if (filtered && !_filtered.empty()) {
+			return;
+		}
+		const auto shown = (reaction == _shownReaction);
+		for (const auto &[peer, emoji] : Parvane::ReactorsOf(&session(), _itemId.msg.bare)) {
+			const auto id = Data::ReactionId{ emoji };
+			if (filtered && id != reaction) {
+				continue;
+			}
+			if (!shown || appendRow(peer, id)) {
+				if (filtered) {
+					_filtered.emplace_back(peer);
+				} else {
+					_all.emplace_back(peer, id);
+				}
+			}
+		}
+		if (shown) {
+			setDescriptionText(QString());
+			delegate()->peerListRefreshRows();
+		}
+		return;
+	}
 
 	const auto &offset = reaction.empty()
 		? _allOffset

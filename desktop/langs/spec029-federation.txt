@@ -1,0 +1,19 @@
+lng_parvane_federation_disabled
+Messaging with other servers is turned off on your server
+На вашем сервере переписка с другими серверами выключена
+
+lng_parvane_federation_blocked
+Your server administrator has blocked this server
+Администратор вашего сервера заблокировал этот сервер
+
+lng_parvane_federation_refused
+The other server does not accept messages from your server
+Другой сервер не принимает сообщения с вашего сервера
+
+lng_parvane_federation_unreachable
+The other server is unavailable. The message will be retried
+Другой сервер недоступен. Отправка будет повторена
+
+lng_parvane_federation_key_changed
+The other server changed its key. Contact your server administrator
+Другой сервер сменил ключ. Обратитесь к администратору вашего сервера
