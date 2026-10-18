@@ -15,8 +15,12 @@ import { ParvaneStore, shouldApplyGroupInfo } from './store';
 // (курсор синка v1, повтор msg.chat.read, подпись v1-отправки, v1-топики
 // typing/presence, нотис v1 группы, легаси-копии, понижение до v1, перевод
 // групп v1, v1-блоб настроек, виртуальное соединение) для web закрыты удалением
-// кода — тест сторожит, что v1-код в web не вернулся; для desktop и android
-// они действуют до их T110.
+// кода — тест сторожит, что v1-код в web не вернулся; для android они
+// действуют до его T110.
+// spec 029 (18 окт 2026): v1 удалён из desktop (ядро parvane-core и клиент
+// parvane_client.cpp: Olm/Megolm, messenger/group/call_client, v2_legacy,
+// прямой NATS, курсоры синка, очередь починки). Desktop-пункты тех же правил
+// сторожат, что v1-кода в desktop нет, остальные — смотрят в v2-код desktop.
 const REPO_ROOT = path.resolve(process.cwd(), '../..');
 const rules = JSON.parse(
   readFileSync(path.join(REPO_ROOT, 'conformance/sync-rules.json'), 'utf8'),
@@ -57,6 +61,29 @@ function readDesktopSource() {
   );
 }
 
+// Сессия v2 ядра desktop разнесена по трём файлам (spec 029)
+function readDesktopSession() {
+  return ['v2_session.cpp', 'v2_session_account.cpp', 'v2_session_groups.cpp']
+    .map((file) => readRepo(`desktop/parvane-core/src/${file}`))
+    .join('\n');
+}
+
+// spec 029: v1-модули ядра desktop удалены вместе с заголовками
+const DESKTOP_V1_FILES = [
+  'desktop/parvane-core/src/e2e.cpp',
+  'desktop/parvane-core/include/parvane/e2e.h',
+  'desktop/parvane-core/src/transport.cpp',
+  'desktop/parvane-core/src/messenger_client.cpp',
+  'desktop/parvane-core/include/parvane/messenger_client.h',
+  'desktop/parvane-core/src/group_client.cpp',
+  'desktop/parvane-core/src/call_client.cpp',
+  'desktop/parvane-core/src/v2_legacy.cpp',
+];
+
+function expectDesktopV1FilesGone() {
+  DESKTOP_V1_FILES.forEach((file) => expect(existsSync(path.join(REPO_ROOT, file)), file).toBe(false));
+}
+
 describe('SYNC-1: дисковый курсор двигается только по применённому', () => {
   // Зеркало решения из web sync.ts persistCursor и desktop NotePendingAndMayAdvance
   const mayPersist = (c: { applied: boolean; e2eReady: boolean; deliberateReject?: boolean }) =>
@@ -74,14 +101,14 @@ describe('SYNC-1: дисковый курсор двигается только 
     expect(source).toMatch(/if \(await restoreFromCache\(\)\) \{/);
   });
 
-  it('desktop двигает дисковый курсор только после успешной вставки', () => {
+  it('desktop: курсора синка v1 нет (spec 029: v1 удалён из desktop) — история из журнала, новое — инбокс v2', () => {
+    expectDesktopV1FilesGone();
     const source = readDesktopSource();
-    // SaveCursors обязан стоять внутри ветки mayAdvance, после injectOnMain
-    const inject = source.indexOf('injectOnMain(session, msgs);');
-    const save = source.indexOf('SaveCursors(cursorId, cursorUpd)');
-    expect(inject).toBeGreaterThan(0);
-    expect(save).toBeGreaterThan(inject);
-    expect(source).toMatch(/if \(mayAdvance\) \{/);
+    expect(source).not.toMatch(/SaveCursors|LoadCursors|NotePendingAndMayAdvance|mayAdvance|PumpReceive/);
+    // При старте лента поднимается из локального журнала истории без ack и без повторной записи
+    expect(source).toMatch(/void ReplayHistory\(\) \{[\s\S]{0,900}injectOnMain\(session, msgs, \/\*live=\*\/false\);/);
+    // Новое пишется в журнал только после вставки (живое, без TTL)
+    expect(source).toMatch(/if \(live && TtlFromContent\(sm\.content\) == 0\) \{\s+HistoryAppend\(sm\);/);
   });
 });
 
@@ -93,10 +120,11 @@ describe('SYNC-2: непрочитанное не держит курсор ве
     expect(source).toMatch(/в формате v1 — пропущено/);
   });
 
-  it('desktop kRepairAttempts совпадает с документом', () => {
-    const expected = rule('SYNC-2').maxRepairAttempts;
-    const match = readDesktopSource().match(/constexpr int kRepairAttempts = (\d+);/);
-    expect(match?.[1]).toBe(String(expected));
+  it('desktop: курсора и очереди починки нет (spec 029: v1 удалён из desktop) — шифртекст v1 не показывается', () => {
+    const source = readDesktopSource();
+    expect(source).not.toMatch(/kRepairAttempts|parvane-pending\.txt|g_repair/);
+    // Строки приходят расшифрованными движком v2; запись LegacyV1 не разбирается
+    expect(source).toMatch(/if \(type == "legacyV1"\) \{\s+return true; \/\/ кадры v1 больше не разбираются/);
   });
 });
 
@@ -136,11 +164,13 @@ describe('READ-1: прочитанное журналируется локаль
     );
   });
 
-  it('desktop журналирует и повторяет прочитанное (READ-1)', () => {
+  it('desktop: журнал прочитанного, квитанция — E2E-содержимое v2 (spec 029: повтора msg.chat.read нет)', () => {
     const source = readDesktopSource();
     expect(source).toMatch(/parvane-read\.txt/);
-    expect(source).toMatch(/void RetryUnconfirmedReads\(/);
-    expect(source).toMatch(/NoteReported\(ids\);/);
+    expect(source).not.toMatch(/void RetryUnconfirmedReads\(/);
+    // Прочитанное сразу в журнал устройства; квитанцию автору доставляет движок v2
+    expect(source).toMatch(/void MirrorRead\([\s\S]{0,2500}AppendReadJournal\(v2ids\);/);
+    expect(source).toMatch(/TryMutateV2\(first, parvane::json\{\{"receipt", \{\s+\{"kind", "RECEIPT_KIND_READ"\}/);
   });
 
   it('web: квитанция прочтения — E2E-содержимое v2, локальный журнал прочитанного сохраняется (T110)', () => {
@@ -215,20 +245,13 @@ describe('E2E-1: автор из провода, SKDM из identity конвер
     expect(existsSync(path.join(REPO_ROOT, 'web/telegram-tt/src/api/parvane/e2e.ts'))).toBe(false);
   });
 
-  it('desktop: groupSeal шлёт голый content, приём не доверяет inner.from в группе', () => {
-    const e2e = readFileSync(
-      path.join(REPO_ROOT, 'desktop/parvane-core/src/e2e.cpp'),
-      'utf8',
-    );
-    // groupSeal больше не оборачивает в {from, content}
-    const seal = e2e.slice(e2e.indexOf('std::string groupSeal'));
-    expect(seal.slice(0, 400)).not.toMatch(/\{\{"from", g_self\}, \{"content"/);
+  it('desktop: Olm/Megolm-пути нет (spec 029: v1 удалён из desktop) — автора и ключи проверяет движок v2', () => {
+    expectDesktopV1FilesGone();
     const client = readDesktopSource();
-    expect(client).toMatch(/const auto author = direct \? claimedFrom : wireFrom;/);
-    // unknown в prepareIncoming держит сообщение (continue), не показывает
-    const uk = client.indexOf('Verdict::Unknown');
-    expect(uk).toBeGreaterThan(0);
-    expect(client.slice(uk, uk + 700)).toMatch(/continue;/);
+    expect(client).not.toMatch(/parvane::e2e::|groupSeal|claimedFrom|Verdict::Unknown/);
+    // Раздача Megolm-ключа из прежней истории ничего не показывает; кадры v1 не разбираются
+    expect(client).toMatch(/contentKind\(sm\.content\) == "skdm"\) \{\s+continue;/);
+    expect(client).toMatch(/if \(type == "legacyV1"\) \{\s+return true;/);
   });
 
   it('android: автор группы = wire from, SKDM привязан к identity конверта', () => {
@@ -286,7 +309,8 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
     expect(desktop).toContain(`kV2HistoryLimit = std::size_t(${r.v2History.limit})`);
     expect(desktop).toContain(`state["${r.v2History.exportField}"] = std::move(rows)`);
-    expect(desktop).toContain('exported = WithV2History(exported)');
+    // spec 029: экспорт — формат web 2 (`{linkVersion: 2, v2History}`), материала v1 нет
+    expect(desktop).toContain('const auto exported = WithV2History(nlohmann::json{ { "linkVersion", 2 } }.dump());');
     expect(desktop).toContain('ImportV2History(stateJson)');
     expect(desktop).toContain('if (group && !known) {');
     expect(desktop).toContain('sm.read = true; // история, а не новые входящие');
@@ -397,8 +421,10 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
       path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
       'utf8',
     );
-    expect(desktop).toMatch(/exportLinkStateJson\(DecCacheSnapshot\(\)\)/);
+    // spec 029: экспорт без материала v1 (Olm-pickle, decCache, перенос владения)
+    expect(desktop).not.toMatch(/exportLinkStateJson|signLinkTransfer|importLinkedHistory/);
     expect(desktop).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != challenge/);
+    expect(desktop).toContain('parvane::linking::sasCodeV2(eph->publicB64(), newChallenge)');
     const android = readFileSync(path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'), 'utf8');
     expect(android).toMatch(/sasCodeV2\(g_linkEph->publicB64\(\), challenge\)/);
     expect(android).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != g_linkChallenge/);
@@ -410,11 +436,6 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     keyChangeSource: string; prekeySignatureRequiredInDeviceList: boolean;
     allDevicesRejectedVerdict: string;
   };
-  const core = readFileSync(
-    path.join(REPO_ROOT, 'desktop/parvane-core/src/e2e.cpp'),
-    'utf8',
-  );
-
   it('web: ключей устройств v1 нет (T110) — смена ключа собеседника = смена корня журнала (RECOVER-1)', () => {
     const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
     expect(provider).toContain('onPeerRootChanged: (user) => syncController.announceKeyChange(user),');
@@ -428,21 +449,12 @@ describe('KEY-1: смена ключа по виденным identity, signed_pr
     expect(r.allDevicesRejectedVerdict).toBe('unknown');
   });
 
-  it('desktop: смена ключа — по множеству виденных, не по кэшу primary', () => {
-    const coreIdx = core.indexOf(
-      'bool rememberContactIdentity(const std::string &contact, const std::string &identity) {',
-    );
-    expect(coreIdx).toBeGreaterThan(0);
-    expect(core.slice(coreIdx, coreIdx + 700)).toMatch(/auto &seen = g_seenIds\[contact\]/);
-  });
-
-  it('desktop: каталог засевает виденные только при первом знакомстве', () => {
-    expect(core).toMatch(/if \(g_seenIds\[contact\]\.empty\(\)\) \{/);
-  });
-
-  it('desktop: устройство без валидной подписи SPK пропускается, пустой каталог = unknown', () => {
-    expect(core).toMatch(/if \(!prekeySigOk\(d\)\) \{\s*\+\+rejected;\s*continue;/);
-    expect(core).toMatch(/if \(rejected && next\.empty\(\)\) \{\s*return;/);
+  it('desktop: ключей устройств v1 нет (spec 029) — смена ключа собеседника = смена корня (RECOVER-1)', () => {
+    expectDesktopV1FilesGone();
+    const client = readDesktopSource();
+    expect(client).not.toMatch(/rememberContactIdentity|g_seenIds|prekeySigOk|identity\.prekeys\./);
+    expect(client).toMatch(/type == "peerRootChanged"[\s\S]{0,500}AnnounceKeyChange\(user\)/);
+    expect(readDesktopSession()).toContain('outbox_.push_back(json{{"type", "peerRootChanged"}, {"user", user}});');
   });
 });
 
@@ -476,24 +488,20 @@ describe('SEND-1: подпись отправки, ack без sender, правк
     expect(webSync).not.toMatch(/sendAck|msg\.chat\.ack/);
   });
 
-  it('desktop и android подписывают send той же строкой и шлют ack без sender', () => {
-    const core = readFileSync(
-      path.join(REPO_ROOT, 'desktop/parvane-core/include/parvane/messenger.h'),
-      'utf8',
-    );
-    expect(core).toContain('return "send:" + messageId + ":" + ciphertext;');
-    const client = readFileSync(
-      path.join(REPO_ROOT, 'desktop/parvane-core/src/messenger_client.cpp'),
-      'utf8',
-    );
-    expect(client).toMatch(/const json payload\{\{"message_id", messageId\}\};/);
-    const desktop = readFileSync(
-      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
-      'utf8',
-    );
-    const sends = desktop.match(/m->sendContent\(/g) || [];
-    const signers = desktop.match(/E2eSigner\(\)\);/g) || [];
-    expect(signers.length).toBe(sends.length);
+  it('desktop: отправок v1 нет (spec 029: v1 удалён из desktop) — каждая отправка конвертом движка v2', () => {
+    expectDesktopV1FilesGone();
+    const desktop = readDesktopSource();
+    expect(desktop).not.toMatch(/m->sendContent\(|E2eSigner|sendLegacyCopies|msg\.chat\.ack/);
+    expect(desktop).toContain('s->sendContent(to, *mapped, id);');
+    // Собеседник без журнала устройств v2 — отказ отправки, понижения до v1 нет
+    expect(desktop).toContain('throw std::runtime_error("у собеседника нет журнала устройств');
+  });
+
+  it('android подписывает send той же строкой и шлёт ack без sender (до T110 android)', () => {
+    // Строка подписи — в общем заголовке ядра (он остался); messenger_client.cpp ядра удалён
+    // spec 029, поэтому jni android до своего T110 не собирается — это известно
+    expect(readRepo('desktop/parvane-core/include/parvane/messenger.h'))
+      .toContain('return "send:" + messageId + ":" + ciphertext;');
     const android = readFileSync(path.join(REPO_ROOT, 'android/jni/parvane_jni.cpp'), 'utf8');
     const androidSends = android.match(/g_messenger->sendContent\(/g) || [];
     const androidSigners = android.match(/e2eSigner\(\)\);/g) || [];
@@ -744,19 +752,20 @@ describe('GROUP-1: сведения группы применяются по р�
     );
   });
 
-  it('десктоп: нотис читается из поля `group`, сведения применяются по ревизии, removed/deleted снимают чат', () => {
-    const core = readRepo('desktop/parvane-core/src/messenger_client.cpp');
-    expect(core).toMatch(/MessengerClient::onGroupNotice\(/);
-    expect(core).toMatch(/p\.contains\("group"\)/);
+  it('десктоп: нотиса v1 нет (spec 029: v1 удалён из desktop) — сведения из журнала движка, по ревизии', () => {
+    expectDesktopV1FilesGone();
     const client = readDesktopSource();
+    expect(client).not.toMatch(/onGroupNotice|ApplyGroupInfo\(session, \*n\.info/);
     expect(client).toMatch(/QHash<QString, quint64> g_groupVersions;/);
     expect(client).toMatch(/gi\.version < known\.value\(\)/);
-    expect(client).toMatch(/onGroupNotice\(self,/);
-    expect(client).toMatch(/n\.change == "removed" \|\| n\.change == "deleted"/);
-    expect(client).toMatch(/ApplyGroupInfo\(session, \*n\.info/);
-    const header = readRepo('desktop/parvane-core/include/parvane/group.h');
-    expect(header).toMatch(/struct GroupNotice/);
-    expect(header).toMatch(/std::uint64_t version = 0;/);
+    // Сведения приходят событием сессии v2 и применяются только как источник «v2 …»
+    expect(client).toMatch(/if \(type == "groupUpdated"\) \{[\s\S]{0,300}ApplyV2Group\(address, info, isNew\);/);
+    const applyCalls = client.match(/ApplyGroupInfo\(session, [^\n]*/g) || [];
+    expect(applyCalls.length).toBeGreaterThan(0);
+    applyCalls.forEach((call) => expect(call).toContain('u"v2'));
+    // Исключили или группу удалили — запись журнала, чат снимается без перезагрузки
+    expect(client).toMatch(/if \(type == "groupLeft"\) \{[\s\S]{0,400}DropGroupLocally\(session, address,/);
+    expect(readRepo('desktop/parvane-core/include/parvane/group.h')).toMatch(/std::uint64_t version = 0;/);
     expect(String(group.clients!.desktop)).toContain('verify_conformance_group.sh');
   });
 
@@ -983,18 +992,17 @@ describe('LEGACY-1: v1-устройства аккаунта на v2', () => {
     expect(client).toContain('self.own_log.clone().apply(&op)?;');
   });
 
-  it('desktop и android: общее ядро — список, копии по подписанным спискам, пропуск чужой копии', () => {
-    const legacy = readRepo('desktop/parvane-core/src/v2_legacy.cpp');
-    expect(legacy).toContain('e2e::sealLegacyCopies(to, content.dump(), t, token, peer, own)');
-    expect(legacy).toContain(`e2e::sign("${r.sendSignature.replace('<id>:', '')}" + id + ":")`);
-    expect(legacy).toContain(`e2e::sign("${r.editSignature.replace('<id>:', '')}" + id + ":")`);
-    const e2e = readRepo('desktop/parvane-core/src/e2e.cpp');
-    expect(e2e).toContain('want->second != stripB64Padding(info.identity)');
-    expect(e2e).toContain('{"ciphertext", ""},');
+  it('desktop: легаси-копий нет (spec 029: v1 удалён из desktop) — доставить v1-устройствам нечем', () => {
+    expectDesktopV1FilesGone();
     const desktop = readDesktopSource();
-    expect(desktop).toContain('parvane::v2::sendLegacyCopies(*s, *t, token, to, content, id, replyTo)');
-    expect(desktop).toContain('parvane::v2::publishLegacySet(*s, *t, token)');
-    expect(desktop).toContain('parvane::e2e::isForeignLegacyCopy(sm.content)');
+    expect(desktop).not.toMatch(/sendLegacyCopies|publishLegacySet|isForeignLegacyCopy|legacyDevices/);
+    const session = readDesktopSession();
+    expect(session).not.toMatch(/legacyDevices|syncLegacySet|deliver_legacy/);
+    // Запись LegacyV1 (кадр v1) целиком пропускается: читать её нечем
+    expect(desktop).toMatch(/if \(type == "legacyV1"\) \{\s+return true;/);
+  });
+
+  it('android: общее ядро — список, копии по подписанным спискам, пропуск чужой копии (до T110 android)', () => {
     const android = readRepo('android/jni/parvane_jni.cpp');
     expect(android).toContain('parvane::v2::sendLegacyCopies(*s, *g_transport, g_token, to, content, id, replyTo)');
     expect(android).toContain('s->syncLegacySet(catalog)');
@@ -1081,14 +1089,17 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
   });
 
   it('desktop и android: общее ядро — отзыв, смена SSK, перенос журнала состояния', () => {
-    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    const session = readDesktopSession();
     expect(session).toContain('runRequestsLocked(json::array({requests[0]}));');
     expect(session).toContain('if (stateRekeyed_ && !readable) {');
     expect(session).toContain('grantWithRootBackup(material, backup)');
     expect(session).toContain('grantRootBackup(linkMaterial_)');
     r.sskResults.forEach((result) => expect(session, result).toContain(`"${result}"`));
     const desktop = readDesktopSource();
-    expect(desktop).toMatch(/IdentityDeviceRevoke[\s\S]{0,1500}s->revokeDevice\(devStd\)/);
+    // «Выйти и сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`)
+    expect(desktop).toMatch(
+      /IdentityDeviceRevoke[\s\S]{0,1500}rotateKeys \? s->revokeDevice\(devStd\) : s->signOutDevice\(devStd\)/,
+    );
     expect(desktop).toContain('for (const auto &id : s->ownDevices()) {');
     const android = readRepo('android/jni/parvane_jni.cpp');
     expect(android).toMatch(/IdentityDeviceRevoke[\s\S]{0,900}s->revokeDevice\(dev\)/);
@@ -1213,10 +1224,13 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
     expect(content).toContain(`if (has(c, "${r.contentField}")) m["${r.contentField}"] = str(c, "${r.contentField}");`);
     const desktop = readDesktopSource();
-    expect(desktop).toContain('s->legacyDevices(to).empty() && s->legacyDevices(self).empty()');
+    // spec 029: v1-устройств нет — вложение чата всегда по capability, без грантов получателям
+    expect(desktop).not.toContain('legacyDevices');
+    expect(desktop).toMatch(
+      /BlobRecipientsFor\(const std::string &\) \{\s+\/\/[^\n]*\n\s+return \{ kBlobCapabilityMark \};/,
+    );
+    expect(desktop).toContain('const auto fileId = s->uploadBlob(bytes, capability);');
     expect(desktop).toContain('s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap))');
-    // Прямое v1-скачивание осталось одно — запасной путь внутри DownloadChatBlob
-    expect(desktop.match(/cloud\.download\(/g) || []).toHaveLength(1);
     const android = readRepo('android/jni/parvane_jni.cpp');
     expect(android).toContain('s->legacyDevices(toStd).empty() && s->legacyDevices(g_self).empty()');
     expect(android).toContain('d.bytes = s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap));');
@@ -1261,9 +1275,9 @@ describe('STATE-2: личное состояние — целиком в жур�
     r.kinds.forEach((kind) => expect(kinds, kind).toContain(`"${kind}"`));
     expect(desktop).toContain(`{ "list", "${r.mainPinList}" }`);
     expect(desktop).toContain('if (!QFile::exists(NotifyJournaledPath())) {');
-    expect(desktop).toContain(
-      'if (const auto s = V2Ready(); s && s->legacyDevices(SelfAddress().toStdString()).empty()) {',
-    );
+    // spec 029: v1-блоба настроек desktop не публикует вовсе — правка уходит в журнал
+    expect(desktop).toMatch(/void PublishNotifyBlob\(\) \{\s+\/\/[^\n]*\n\}/);
+    expect(desktop).toMatch(/void MirrorNotifySettings\([\s\S]{0,800}ScheduleStateFlush\("notify"\);/);
     // Своя несохранённая правка сильнее серверного значения — по группам полей
     // (незнакомые/группы и звонки/присутствие, T137): серверным перезаписывается
     // только то, что не правилось на этом устройстве
@@ -1357,15 +1371,19 @@ describe('GROUP-4: группа v1 переводится в v2, чат оста
     expect(groups).not.toMatch(/migrateToV2|migrateGroup|applyNotice/);
   });
 
-  it('desktop: id чата — от прежнего адреса, права — в генезисе, v1-нотис чат не снимает', () => {
-    const client = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+  it('desktop: id чата — от прежнего адреса; сведений v1 нет — перевод не запускается (spec 029)', () => {
+    const client = readDesktopSource();
+    // Переведённые группы по-прежнему открываются прежним чатом
     expect(client).toContain('g_migratedFrom.constFind(rawAddress)');
     expect(client).toContain('const auto gid = CanonicalGroup(rawGid);');
     expect(client).toMatch(/void DropGroupLocally\([^)]*\) \{\s*if \(IsMigratedGroup\(gid\)\) \{\s*return;/);
     expect(client).toContain('NoteV2GroupOrigin(session, address, info);');
-    const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
-    expect(session).toContain('v1.value("default_permissions", json())');
-    expect(session).toContain('if (!isV2Peer(member) || !legacyDevices(member).empty()) return {};');
+    // Перевод запускает только сведения группы v1, а их источников (шард, нотис) у desktop больше нет:
+    // ApplyGroupInfo зовётся лишь из журнала v2 (см. GROUP-1)
+    expectDesktopV1FilesGone();
+    (client.match(/ApplyGroupInfo\(session, [^\n]*/g) || []).forEach((call) => expect(call).toContain('u"v2'));
+    const session = readDesktopSession();
+    expect(session).not.toContain('legacyDevices(member)');
     expect(readRepo('desktop/parvane-core/src/v2_engine.cpp')).toContain('pv_client_group_create_from(');
   });
 });
@@ -1404,9 +1422,11 @@ describe('GROUP-3: группа v2 — сведения только из жур
 
   it('desktop и android: v1-сведения о группе v2 отбрасываются, правка — set_info_patch под мьютексом движка', () => {
     expect(r.v1NoticeApplied).toBe(false);
-    const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    const core = readDesktopSession();
     expect(core).toContain('change.contains("set_info_patch")');
-    expect(core).toContain('client_->groupRequestDecide(hex, user, approve)');
+    // Решение по заявке — запрос движка (spec 024: с ссылкой заявки), без локального применения
+    expect(core).toContain('if (!linkId.empty()) args["viaLinkHex"] = linkId;');
+    expect(core).toContain('reqJson = client_->call("groupRequestDecide", args);');
     const desktop = readDesktopSource();
     expect(desktop).toContain('parvane::v2::isGroupAddress(gi.group_id) && !source.startsWith(u"v2"_q)');
     expect(desktop).toContain('return { { "set_info_patch", std::move(patch) } };');
@@ -1436,12 +1456,13 @@ describe('E6-1: клиент работоспособен без соедине�
       expect(webBridge, subject).toContain(`case '${subject}':`);
       expect(coreBridge, subject).toContain(`subject == "${subject}"`);
     });
-    // T110: web класса «v1, если жив» не имеет — список и отзыв устройств всегда
-    // методами v2, прекеев и setkey нет; ядро desktop/android — до их T110
+    // T110 / spec 029: ни web, ни ядро desktop класса «v1, если жив» не имеют — список и
+    // отзыв устройств всегда методами v2, прекеев нет (setkey ядро отвечает заглушкой «ok»)
     expect(webBridge).not.toMatch(/bridgePrefersV1|PREFERS_V1|prekeys|setkey/);
-    r.prefersV1.forEach((subject) => {
-      expect(coreBridge, subject).toContain(`"${subject}"`);
-    });
+    expect(coreBridge).not.toMatch(/prefersV1|PrefersV1|identity\.prekeys/);
+    expect(coreBridge).toContain('control(token).call("identity.device.list", json::object())');
+    expect(coreBridge).toContain('(void)c.call("identity.device.revoke", json{{"device_id", str(p, "device_id")}});');
+    expect(coreBridge).toContain('out = json{{"ok", true}}; // ключ подписи v1-звонков');
   });
 
   it('вход и регистрация — методами канала PRE, свои блобы — методами cloud.blob', () => {
@@ -1469,19 +1490,28 @@ describe('E6-1: клиент работоспособен без соедине�
     expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
   });
 
-  it('desktop: транспорт — мост, запись LegacyV1 подаётся обработчикам инбокса', () => {
+  it('desktop: соединения v1 нет (spec 029) — транспорт только мост, записи LegacyV1 пропускаются', () => {
+    expectDesktopV1FilesGone();
     const desktop = readDesktopSource();
-    expect(desktop).toContain(
-      'return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));',
+    // Мост без внутреннего v1-транспорта
+    expect(desktop).toContain('return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg));');
+    expect(desktop).not.toMatch(/BridgeTransport>\(std::move\(cfg\), std::move\(inner\)\)|NatsTransport/);
+    expect(readRepo('desktop/parvane-core/include/parvane/v2_bridge.h'))
+      .toContain('explicit BridgeTransport(BridgeConfig cfg);');
+    // Кадр v1 из моста не уходит никуда (остаточные publish v1-топиков — пустые)
+    expect(coreBridge).toMatch(
+      new RegExp('void BridgeTransport::publish\\(const std::string &subject, const std::string &payload\\) \\{'
+        + '\\s+\\(void\\)subject;\\s+\\(void\\)payload;\\s+\\}'),
     );
-    expect(desktop).toContain(`if (type == "${r.legacyEvent}") {`);
-    expect(desktop).toContain('bridge->deliver(std::string("msg.user.") + self, frame);');
-    expect(desktop).toContain('(upgrade_required) — работаем по v2');
+    expect(desktop).toMatch(new RegExp(`if \\(type == "${r.legacyEvent}"\\) \\{\\s+return true;`));
+    expect(desktop).not.toContain('bridge->deliver(std::string("msg.user.") + self, frame);');
   });
 
-  it('сценарии с отключённым v1 есть у desktop и android (web без v1 целиком), мост подключён и в JNI', () => {
+  it('web и desktop без v1 целиком (сценариев «v1 выключен» нет), мост подключён и в JNI (android до T110)', () => {
     expect(existsSync(path.join(REPO_ROOT, 'scripts/e2e_protocol_v1_off.mjs'))).toBe(false);
-    expect(readRepo('desktop/verify_protocol_v2_v1off.sh')).toContain('PARVANE_V1_MODE=disabled');
+    // spec 029: сценарий desktop «v1 выключен» удалён — v1 выключать нечего
+    expect(existsSync(path.join(REPO_ROOT, 'desktop/verify_protocol_v2_v1off.sh'))).toBe(false);
+    expect(readRepo('desktop/verify_lib.sh')).not.toContain('PARVANE_V1_MODE');
     const jni = readRepo('android/jni/parvane_jni.cpp');
     expect(jni).toContain(
       'return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg), std::move(inner));',
@@ -1563,8 +1593,17 @@ describe('TASK-1: задание в чат — видимые сообщения
   it('desktop и android: оба вида показываются текстом из поля text', () => {
     const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
     r.kinds.forEach((kind) => expect(core).toContain(`"${kind}"`));
-    expect(core).toContain('c.contains("task_offer") || c.contains("task_response")');
-    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('task_offer ← v2');
+    // spec 029: ядро разбирает оба вида в карточку (как web), клиент без карточки показывает `text`
+    expect(core).toContain('} else if (c.contains("task_offer") && c["task_offer"].is_object()) {');
+    expect(core).toContain('} else if (c.contains("task_response") && c["task_response"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/include/parvane/messenger.h'))
+      .toContain('const bool card = kind == "task_offer" || kind == "task_response" || kind == "cloud_invite"');
+    const tests = readRepo('desktop/parvane-core/tests/v2_tests.cpp');
+    expect(tests).toContain(
+      'for (const auto *kind : {"task_offer", "task_response", "cloud_invite", "article", "mod_report"})',
+    );
+    expect(tests).toContain('" показывается текстом"');
+    expect(tests).toContain('task_offer туда и обратно без потерь');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
     expect(store).toContain('"task_offer", "task_response" -> textContent(c)');
@@ -1657,8 +1696,8 @@ describe('CLOUD-1: приглашение в папку облака — вид�
     r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'cloud_invite\':');
     const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(core).toContain('} else if (c.contains("cloud_invite")) {');
-    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite ← v2');
+    expect(core).toContain('} else if (c.contains("cloud_invite") && c["cloud_invite"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('cloud_invite туда и обратно');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
     expect(store).toContain('"cloud_invite" -> textContent(c)');
@@ -1690,8 +1729,8 @@ describe('ARTICLE-1: статья — видимое сообщение, кли�
     r.kinds.forEach((kind) => expect(map).toContain(`case '${kind}':`));
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('case \'article\':');
     const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
-    expect(core).toContain('} else if (c.contains("article")) {');
-    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article ← v2');
+    expect(core).toContain('} else if (c.contains("article") && c["article"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('article → v2 с картинкой');
     expect(r.clients.desktop).toContain('v2_tests.cpp');
     const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt');
     expect(store).toContain('"article" -> textContent(c)');
@@ -1867,9 +1906,28 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(readRepo('web/telegram-tt/src/api/parvane/wire.ts')).toContain(`${r.orderField}?: number;`);
   });
 
-  // Правило открыто, пока desktop и android упорядочивают по времени отправителя
-  it('desktop и android отмечены открытыми', () => {
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
+  // spec 029: desktop ставит сообщения по порядку прихода — id выдаётся счётчиком, а не из
+  // времени отправителя (лента tdesktop упорядочена по id); место сохраняет журнал истории
+  it('desktop: id по порядку прихода, место — порядком строк журнала истории', () => {
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('qint64 g_nextMsgId = 1;');
+    // Счётчик только растёт: других присваиваний нет, id сообщения не выводится из `ts`
+    expect(desktop.match(/g_nextMsgId\s*=[^=]/g) || []).toHaveLength(1);
+    expect((desktop.match(/MsgId\(g_nextMsgId\+\+\)/g) || []).length).toBeGreaterThan(5);
+    expect(desktop).not.toMatch(/MsgId\([^)]*\.ts\b/);
+    const inject = desktop.slice(desktop.indexOf('void injectOnMain(\n\t\tnot_null<Main::Session*> session,'));
+    expect(inject).toContain('const auto msgId = MsgId(g_nextMsgId++);');
+    // Журнал истории — в порядке вставки, воспроизводится тем же порядком (без сортировки)
+    const replay = desktop.slice(desktop.indexOf('void ReplayHistory() {'));
+    const replayBody = replay.slice(0, replay.indexOf('\n}\n'));
+    expect(replayBody).toContain('for (const auto &line : StoreReadLines(HistoryPath())) {');
+    expect(replayBody).not.toMatch(/sort\(/);
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+    expect(r.clients.desktop).toContain('g_nextMsgId');
+  });
+
+  // Правило открыто, пока android упорядочивает по времени отправителя
+  it('android отмечен открытым', () => {
     expect(r.clients.android).toContain('ОТКРЫТО');
   });
 });
