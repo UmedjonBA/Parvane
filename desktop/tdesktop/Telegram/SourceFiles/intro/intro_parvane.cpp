@@ -9,6 +9,9 @@
 #include "ui/abstract_button.h"
 #include "ui/painter.h"
 #include "styles/style_intro.h"
+#include "boxes/abstract_box.h"      // Ui::show
+#include "lang/lang_keys.h"
+#include "ui/boxes/confirm_box.h"    // Ui::MakeConfirmBox
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
@@ -17,6 +20,7 @@
 
 #include <QtWidgets/QLineEdit>
 #include <QtCore/QDateTime>
+#include <QtCore/QLocale>
 #include <QtCore/QFile>
 
 #include <cstdlib>
@@ -206,7 +210,7 @@ void ParvaneWidget::pollTelegram() {
 				auto res = Parvane::Issue(user, password,
 					mode == TelegramMode::Login ? token : QString());
 				crl::on_main(weak, [=, res = std::move(res)] {
-					onIssued(user, res.ok, res.token, res.error);
+					onIssued(user, res);
 				});
 			});
 		});
@@ -334,7 +338,7 @@ void ParvaneWidget::finishLogin(const QString &user, const QString &password) {
 	crl::async([=] {
 		auto res = Parvane::Issue(user, password);
 		crl::on_main(weak, [=, res = std::move(res)] {
-			onIssued(user, res.ok, res.token, res.error);
+			onIssued(user, res);
 		});
 	});
 }
@@ -493,17 +497,34 @@ void ParvaneWidget::submit() {
 				}
 				return;
 			}
-			onIssued(user, res.ok, res.token, res.error);
+			onIssued(user, res);
 		});
 	});
 }
 
 void ParvaneWidget::onIssued(
 		const QString &user,
-		bool ok,
-		QString token,
-		QString error) {
+		const Parvane::IssueResult &res) {
 	_requesting = false;
+	const auto ok = res.ok;
+	const auto token = res.token;
+	const auto error = res.error;
+	if (!ok && res.deletionAtMs > 0) {
+		// spec 027: аккаунт ждёт удаления — пароль верен, вход его восстановит
+		const auto password = _password->getLastText();
+		const auto date = QLocale().toString(
+			QDateTime::fromMSecsSinceEpoch(res.deletionAtMs).date(),
+			QLocale::LongFormat);
+		Ui::show(Ui::MakeConfirmBox({
+			.text = tr::lng_parvane_account_deletion_pending(tr::now, lt_date, date),
+			.confirmed = [=](Fn<void()> close) {
+				close();
+				restoreDeletedAccount(user, password);
+			},
+			.confirmText = tr::lng_parvane_restore_account(),
+		}));
+		return;
+	}
 	if (!ok) {
 		// Headless-хук: аккаунта может не быть (e2e регистрируют на лету) —
 		// прежний экран заводил его молча; для хука сохраняем это, для человека
@@ -534,9 +555,28 @@ void ParvaneWidget::onIssued(
 	// Запоминаем себя (адрес+JWT) и поднимаем персистентную сессию шины на
 	// воркер-потоке (connect блокирующий, но локальный и быстрый). Сессия нужна
 	// для зеркалирования исходящих (Фаза 3b) и приёма (Фаза 3c).
-	Parvane::SetSelf(user, token);
+	// spec 026: вход прежним ником после смены ника на другом устройстве — адрес аккаунта уже новый
+	const auto address = res.address.isEmpty() ? user : res.address;
+	if (address != user) {
+		Parvane::MoveAccountLocal(user, address);
+	}
+	Parvane::SetSelf(address, token);
 	crl::async([] { Parvane::StartSession(); });
-	loginSucceeded(user);
+	loginSucceeded(address);
+}
+
+void ParvaneWidget::restoreDeletedAccount(const QString &user, const QString &password) {
+	if (_requesting) {
+		return;
+	}
+	_requesting = true;
+	const auto weak = base::make_weak(this);
+	crl::async([=] {
+		auto res = Parvane::Issue(user, password, QString(), true);
+		crl::on_main(weak, [=, res = std::move(res)] {
+			onIssued(user, res);
+		});
+	});
 }
 
 void ParvaneWidget::loginSucceeded(const QString &user) {

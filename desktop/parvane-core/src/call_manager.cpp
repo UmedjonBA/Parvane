@@ -43,6 +43,11 @@ void CallManager::sendTo(const std::string &peer, const json &signal) {
 
 void CallManager::handleV2Signal(const std::string &from, const json &signal) {
     auto sig = CallSignalIn::fromJson(signal);
+    if (from == self_) {
+        // Своё другое устройство приняло или отклонило входящий (spec 024): здесь он закрывается молча
+        if (sig.type == "reject") (void)dismissIncoming(sig.call_id);
+        return;
+    }
     sig.authenticated = true;
     handleSignal(from, sig);
 }
@@ -102,6 +107,13 @@ void CallManager::accept() {
 void CallManager::hangup() {
     std::lock_guard<std::mutex> lk(mutex_);
     if (session_) session_->hangup();
+}
+
+bool CallManager::dismissIncoming(const std::string &callId) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!session_ || session_->callId() != callId || session_->state() != CallState::Incoming) return false;
+    session_->dismiss();
+    return true;
 }
 
 void CallManager::setMuted(bool muted) {

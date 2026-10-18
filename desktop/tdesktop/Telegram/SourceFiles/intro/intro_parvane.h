@@ -3,6 +3,8 @@
 // Step::createSession. Заменяет стартовый intro-экран (Фаза 2, срез логина).
 #pragma once
 
+#include "parvane/parvane_client.h" // Parvane::IssueResult
+
 #include "intro/intro_step.h"
 
 namespace Ui {
@@ -32,7 +34,8 @@ protected:
 
 private:
 	void updateControlsGeometry();
-	void onIssued(const QString &user, bool ok, QString token, QString error);
+	void onIssued(const QString &user, const Parvane::IssueResult &res);
+	void restoreDeletedAccount(const QString &user, const QString &password);
 	void loginSucceeded(const QString &user);
 
 	// Регистрация через почту (PARVANE_EMAIL_REQUIRED на identity): после

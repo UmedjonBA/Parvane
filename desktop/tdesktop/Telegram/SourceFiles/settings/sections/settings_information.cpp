@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/sections/settings_information.h"
 
 #include "parvane/parvane_client.h" // Parvane: профиль в identity
+#include "parvane/parvane_account_ui.h" // Parvane: смена ника
 
 #include "settings/sections/settings_main.h"
 #include "settings/settings_builder.h"
@@ -695,12 +696,8 @@ void SetupRows(
 			if (controller->showFrozenError()) {
 				return;
 			}
-			const auto box = controller->show(
-				Box(UsernamesBox, session->user()));
-			box->boxClosing(
-			) | rpl::on_next([=] {
-				session->api().usernames().requestToCache(session->user());
-			}, box->lifetime());
+			// Parvane (spec 026): ник = адрес аккаунта, смена — окном смены ника
+			Parvane::ShowRenameBox(controller);
 		},
 		{ &st::menuIconUsername });
 	if (targets) {
@@ -708,7 +705,7 @@ void SetupRows(
 	}
 
 	Ui::AddSkip(container);
-	Ui::AddDividerText(container, tr::lng_settings_username_about());
+	Ui::AddDividerText(container, tr::lng_parvane_rename_hint());
 }
 
 void SetupBio(

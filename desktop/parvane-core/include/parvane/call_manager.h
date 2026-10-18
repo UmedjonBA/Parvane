@@ -52,6 +52,8 @@ public:
     void accept();
     // Отбой/отклонение текущего.
     void hangup();
+    // spec 024: свой входящий `callId` принят/отклонён другим своим устройством — закрыть молча. false — не он.
+    bool dismissIncoming(const std::string &callId);
     // Заглушить/включить свой микрофон в текущем звонке.
     void setMuted(bool muted);
     // spec 024: сообщить собеседнику, что свой микрофон/камера выключены.

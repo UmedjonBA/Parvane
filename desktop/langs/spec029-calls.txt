@@ -1,0 +1,27 @@
+lng_parvane_group_call_busy
+{user} is on another call
+{user} занят(а) другим звонком
+
+lng_parvane_group_call_declined
+{user} declined the call
+{user} отклонил(а) звонок
+
+lng_parvane_call_not_contact
+You can call this person after they reply to your message
+Позвонить можно после того, как собеседник ответит на ваше сообщение
+
+lng_parvane_call_not_sent
+The call could not be placed. Try again later
+Не удалось позвонить. Попробуйте позже
+
+lng_parvane_call_rate_limited
+Too many calls to this person in the last minute. Wait a minute and try again
+Этому собеседнику слишком много звонили за последнюю минуту. Подождите минуту и позвоните снова
+
+lng_parvane_calls_relay_toggle
+Calls only through the server
+Звонки только через сервер
+
+lng_parvane_calls_relay_info
+Your IP address is hidden from the other side, the call may sound a bit worse. This device only.
+Собеседник не видит ваш IP-адрес, звук может стать чуть хуже. Только на этом устройстве.

@@ -500,6 +500,16 @@ bool Session::connectLocked(std::string *error) {
             if (!saved.empty() && savedDevice == auth.deviceId) {
                 client_ = Client::import(saved, storageKey_);
                 log("состояние устройства загружено");
+                // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес (как web start())
+                if (const auto engineSelf = client_->call("selfAddress");
+                    engineSelf.is_string() && engineSelf.get<std::string>() != cfg_.self
+                    && !followOwnRename(engineSelf.get<std::string>())) {
+                    ready_ = false;
+                    client_.reset();
+                    needsLinking_ = true;
+                    if (error) *error = "нужна линковка";
+                    return false;
+                }
                 // Пока устройство было выключено, личность аккаунта могли сбросить
                 // (новый корень и журнал, T130): тогда оно вне неё — только линковка.
                 try {
@@ -1213,8 +1223,15 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
         persistLocked();
         break;
     } catch (const std::exception &e) {
+        const bool rateLimited = std::string(e.what()).find("RATE_LIMITED") != std::string::npos;
+        // T189: вызов (invite) упёрся в потолок вызовов адресату шарда call — повтор бесполезен
+        if (rateLimited && !group && signal.value("type", std::string()) == "invite") {
+            log("сигнал звонка не отправлен: потолок вызовов адресату");
+            if (error) *error = "rate_limited";
+            break;
+        }
         // Лимит частоты gateway — не повод терять сигнал: пауза (без мьютекса) и повтор
-        if (attempt < 4 && std::string(e.what()).find("RATE_LIMITED") != std::string::npos) {
+        if (attempt < 4 && rateLimited) {
             std::this_thread::sleep_for(std::chrono::milliseconds(700 * (attempt + 1)));
             continue;
         }

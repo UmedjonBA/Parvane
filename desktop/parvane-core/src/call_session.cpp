@@ -165,4 +165,10 @@ void CallSession::hangup() {
     setState(CallState::Ended);
 }
 
+void CallSession::dismiss() {
+    if (state_ == CallState::Ended) return;
+    if (media_engine_) media_engine_->close();
+    setState(CallState::Ended);
+}
+
 } // namespace parvane

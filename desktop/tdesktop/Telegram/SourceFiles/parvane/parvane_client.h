@@ -205,6 +205,24 @@ void SetChatL2(not_null<PeerData*> peer, bool enabled, Fn<void(bool ok)> done);
 // показывает «обновите приложение» и не крутит переподключение.
 [[nodiscard]] bool UpgradeRequired();
 
+// spec 026, RENAME-1: смена ника. Чат и id пользователя остаются прежними (id — от первого адреса цепочки),
+// писать и показывать — по последнему адресу. NoteRename: true — связь новая.
+[[nodiscard]] QString LatestAddress(const QString &address);
+bool NoteRename(const QString &from, const QString &to);
+// Локальные данные (каталог движка, история, файлы аккаунта) — под новый адрес. До SetSelf/StartSession.
+void MoveAccountLocal(const QString &oldAddress, const QString &newAddress);
+// Сменить свой ник: "ok" | "bad_password" | "no_backup" | "bad_key" | "taken" | "invalid" | "failed".
+// После ok сессия сама перезапускается под новым адресом. Блокирующий.
+[[nodiscard]] QString RenameAccount(const QString &nick, const QString &password, const QString &recoveryKey);
+// spec 027: удалить аккаунт (7 дней отсрочки). result: "ok" | "bad_password" | "failed". Блокирующий.
+struct DeleteAccountResult {
+	QString result = QStringLiteral("failed");
+	qint64 deletionAtMs = 0;
+};
+[[nodiscard]] DeleteAccountResult DeleteAccount(const QString &password);
+// После удаления: снять учётные данные и выйти на экран входа (ключи и история остаются). Только main.
+void SignOutDeletedAccount();
+
 // БЛОКИРУЮЩИЙ запрос identity.user.register. Звать с воркер-потока.
 [[nodiscard]] RegisterResult Register(
 	const QString &user,

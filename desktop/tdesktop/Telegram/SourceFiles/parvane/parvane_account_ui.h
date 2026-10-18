@@ -30,6 +30,12 @@ void AskSignOutPassword(
 	Fn<void(QString password, bool rotateKeys)> done,
 	Fn<void()> cancelled);
 
+// Смена ника (spec 026): новый ник, пароль, ключ восстановления.
+void ShowRenameBox(not_null<Window::SessionController*> controller);
+
+// Удаление аккаунта (spec 027): 7 дней отсрочки, затем выход на экран входа.
+void ShowDeleteAccountBox(not_null<Window::SessionController*> controller);
+
 // Блоки над списком устройств экрана «Устройства».
 void AddDevicesExtras(
 	not_null<Ui::VerticalLayout*> container,

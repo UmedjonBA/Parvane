@@ -103,6 +103,8 @@ public:
     void accept();
     // Завершить/отклонить (шлёт hangup или reject в зависимости от фазы).
     void hangup();
+    // spec 024: входящий принят или отклонён другим своим устройством — закрыть без сигнала собеседнику
+    void dismiss();
     // Заглушить/включить свой микрофон.
     void setMuted(bool muted) { if (media_engine_) media_engine_->setMuted(muted); }
 

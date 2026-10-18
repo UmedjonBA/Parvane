@@ -3,6 +3,7 @@
 
 #include "parvane/parvane_client.h"
 
+#include "base/call_delayed.h"
 #include "base/timer.h"
 #include "boxes/abstract_box.h"
 #include "lang/lang_keys.h"
@@ -29,11 +30,16 @@
 #include <crl/crl_on_main.h>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
+#include <QtCore/QDateTime>
+#include <QtCore/QLocale>
+#include <QtCore/QRegularExpression>
 
 namespace Parvane {
 namespace {
 
 constexpr auto kExtrasRefresh = crl::time(15000); // как web: экран «Устройства» перечитывает свой журнал
+constexpr auto kSignOutAfterDelete = crl::time(4000);
+const auto kNickRule = QRegularExpression(u"^[a-z0-9][a-z0-9_.-]{1,63}$"_q);
 
 using ToastFn = Fn<void(QString)>;
 
@@ -464,6 +470,131 @@ void AskSignOutPassword(
 				cancelled();
 			}
 		}, box->lifetime());
+	}));
+}
+
+void ShowRenameBox(not_null<Window::SessionController*> controller) {
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(tr::lng_parvane_rename_title());
+		box->addRow(object_ptr<Ui::FlatLabel>(box, tr::lng_parvane_rename_hint(), st::boxLabel));
+		const auto nick = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::defaultInputField,
+			tr::lng_parvane_rename_nick()));
+		box->addRow(object_ptr<Ui::FlatLabel>(box, tr::lng_parvane_rename_nick_rule(), st::boxDividerLabel));
+		const auto password = Settings::CloudPassword::AddPasswordField(
+			box->verticalLayout(),
+			tr::lng_parvane_rename_password(),
+			QString());
+		const auto key = box->addRow(object_ptr<Ui::InputField>(
+			box,
+			st::defaultInputField,
+			tr::lng_parvane_rename_recovery_key()));
+		const auto error = box->addRow(object_ptr<Ui::FlatLabel>(box, QString(), st::boxLabel));
+		error->setTextColorOverride(st::boxTextFgError->c);
+		box->setFocusCallback([=] { nick->setFocusFast(); });
+		const auto busy = std::make_shared<bool>(false);
+		const auto submit = [=] {
+			if (*busy) {
+				return;
+			}
+			const auto nickText = nick->getLastText().trimmed().toLower();
+			if (!kNickRule.match(nickText).hasMatch()) {
+				nick->showError();
+				error->setText(tr::lng_parvane_nick_invalid(tr::now));
+				return;
+			}
+			if (password->getLastText().isEmpty()) {
+				password->showError();
+				return;
+			}
+			if (key->getLastText().trimmed().isEmpty()) {
+				key->showError();
+				return;
+			}
+			*busy = true;
+			const auto passwordText = password->getLastText();
+			const auto keyText = key->getLastText();
+			RunWork(box, [=] { return RenameAccount(nickText, passwordText, keyText); }, [=](QString result) {
+				*busy = false;
+				if (result == u"ok"_q) {
+					box->closeBox();
+					controller->showToast(tr::lng_parvane_rename_done(tr::now));
+					return;
+				}
+				error->setText((result == u"bad_password"_q)
+					? tr::lng_parvane_rename_error_password(tr::now)
+					: (result == u"bad_key"_q)
+					? tr::lng_parvane_rename_error_key(tr::now)
+					: (result == u"no_backup"_q)
+					? tr::lng_parvane_rename_error_no_backup(tr::now)
+					: (result == u"taken"_q)
+					? tr::lng_parvane_rename_error_taken(tr::now)
+					: (result == u"invalid"_q)
+					? tr::lng_parvane_rename_error_invalid(tr::now)
+					: tr::lng_parvane_rename_error_failed(tr::now));
+			});
+		};
+		nick->submits() | rpl::on_next(submit, nick->lifetime());
+		key->submits() | rpl::on_next(submit, key->lifetime());
+		box->addButton(tr::lng_parvane_rename_submit(), submit);
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
+}
+
+void ShowDeleteAccountBox(not_null<Window::SessionController*> controller) {
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(tr::lng_parvane_delete_account_title());
+		box->addRow(object_ptr<Ui::FlatLabel>(box, tr::lng_parvane_delete_account_hint(), st::boxLabel));
+		for (const auto &point : {
+				tr::lng_parvane_delete_account_point_data,
+				tr::lng_parvane_delete_account_point_nick,
+				tr::lng_parvane_delete_account_point_restore,
+				tr::lng_parvane_delete_account_point_export }) {
+			box->addRow(
+				object_ptr<Ui::FlatLabel>(box, u"• "_q + point(tr::now), st::boxDividerLabel),
+				st::boxRowPadding + QMargins(0, st::boxLittleSkip, 0, 0));
+		}
+		const auto password = Settings::CloudPassword::AddPasswordField(
+			box->verticalLayout(),
+			tr::lng_parvane_password_confirm(),
+			QString());
+		const auto error = box->addRow(object_ptr<Ui::FlatLabel>(box, QString(), st::boxLabel));
+		error->setTextColorOverride(st::boxTextFgError->c);
+		box->setFocusCallback([=] { password->setFocus(); });
+		const auto busy = std::make_shared<bool>(false);
+		const auto submit = [=] {
+			if (*busy) {
+				return;
+			}
+			const auto value = password->getLastText();
+			if (value.isEmpty()) {
+				password->showError();
+				return;
+			}
+			*busy = true;
+			crl::async([=] {
+				const auto out = DeleteAccount(value);
+				crl::on_main(box, [=] {
+					*busy = false;
+					if (out.result != u"ok"_q) {
+						error->setText((out.result == u"bad_password"_q)
+							? tr::lng_parvane_delete_account_error_password(tr::now)
+							: tr::lng_parvane_delete_account_error_failed(tr::now));
+						return;
+					}
+					const auto date = QLocale().toString(
+						QDateTime::fromMSecsSinceEpoch(out.deletionAtMs).date(),
+						QLocale::LongFormat);
+					controller->showToast(tr::lng_parvane_delete_account_done(tr::now, lt_date, date));
+					box->closeBox();
+					base::call_delayed(kSignOutAfterDelete, [] { SignOutDeletedAccount(); });
+				});
+			});
+		};
+		QObject::connect(password, &Ui::MaskedInputField::submitted, submit);
+		box->addButton(tr::lng_parvane_delete_account_submit(), submit, st::attentionBoxButton);
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	}));
 }
 

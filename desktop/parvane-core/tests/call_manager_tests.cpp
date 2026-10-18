@@ -2,6 +2,7 @@
 // колбэком sendV2 через очередь доставки на своём потоке — как сигнал, прошедший сервер (handleV2Signal);
 // медиа — StubMediaBackend. Проверка: личный звонок до Active у обоих, состояние микрофона/камеры у
 // собеседника, отказ «занято»; групповой mesh из трёх участников.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "parvane/call_manager.h"
 #include "parvane/crypto.h"
@@ -138,6 +140,23 @@ int main() {
         check(waitFor([&] { return carol.state() == CallState::Ended; }), "занятый собеседник — отказ «занято»");
         alice.hangup();
         check(waitFor([&] { return bob.state() == CallState::Ended; }), "отбой доходит до собеседника");
+        // spec 024: входящий, принятый другим своим устройством, закрывается молча — без отказа звонящему
+        std::atomic<bool> carolGotReject{false};
+        relay.attach("carol@local", [&](const std::string &from, const json &s) {
+            if (s.value("type", std::string()) == "reject") carolGotReject = true;
+            carol.handleV2Signal(from, s);
+        });
+        bobRang = false;
+        carol.placeCall("bob@local", "audio");
+        check(waitFor([&] { return bobRang.load(); }), "bob: новый входящий от carol");
+        const auto incoming = bob.callId();
+        bob.handleV2Signal("bob@local", rejectSignal(incoming, "answered_elsewhere"));
+        check(bob.state() == CallState::Ended, "spec 024: принят на другом своём устройстве — здесь закрыт");
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        check(!carolGotReject.load() && carol.state() == CallState::Outgoing,
+              "spec 024: звонящему отказ не уходит, у него звонок продолжается");
+        check(!bob.dismissIncoming("нет-такого"), "чужой id звонка — не закрывает");
+        carol.hangup();
     }
     {
         Relay relay;
@@ -146,6 +165,9 @@ int main() {
         const std::vector<std::string> who = {"a@local", "b@local", "c@local"};
         const crypto::SigningKey *keys[] = {&k1, &k2, &k3};
         std::atomic<int> mediaSeen{0};
+        std::mutex evMu;
+        std::vector<std::string> invites[3], closed[3], declined[3];
+        std::atomic<bool> busy[3] = {false, false, false};
         for (std::size_t i = 0; i < who.size(); ++i) {
             GroupCallManager::Callbacks cb;
             const auto self = who[i];
@@ -158,17 +180,83 @@ int main() {
             cb.onMediaState = [&](const std::string &, bool, bool video) {
                 if (video) ++mediaSeen;
             };
+            cb.onInvite = [&, i](const std::string &, const std::string &gcid, const std::vector<std::string> &,
+                                 const std::string &, const std::string &group, const std::string &title) {
+                std::lock_guard<std::mutex> lk(evMu);
+                invites[i].push_back(gcid + "|" + group + "|" + title);
+            };
+            cb.onInviteClosed = [&, i](const std::string &gcid) {
+                std::lock_guard<std::mutex> lk(evMu);
+                closed[i].push_back(gcid);
+            };
+            cb.onPeerDeclined = [&, i](const std::string &peer, const std::string &reason) {
+                std::lock_guard<std::mutex> lk(evMu);
+                declined[i].push_back(peer + ":" + reason);
+            };
+            cb.isBusy = [&, i] { return busy[i].load(); };
             m.push_back(std::make_unique<GroupCallManager>(self, keys[i], stub, cb));
         }
         for (std::size_t i = 0; i < who.size(); ++i) {
             auto *mgr = m[i].get();
             relay.attach(who[i], [mgr](const std::string &from, const json &s) { mgr->handleV2Signal(from, s); });
         }
-        m[0]->startCall("0192f1a2-2222-7000-8000-000000000001", who, "audio", "v2g:00aa", "Семья");
+        const auto has = [&](std::vector<std::string> *list, std::size_t i, const std::string &value) {
+            std::lock_guard<std::mutex> lk(evMu);
+            return std::find(list[i].begin(), list[i].end(), value) != list[i].end();
+        };
+        const std::string g1 = "0192f1a2-2222-7000-8000-000000000001";
+        m[0]->startCall(g1, who, "audio", "v2g:00aa", "Семья");
+        check(waitFor([&] { return m[1]->pendingInviteId() == g1 && m[2]->pendingInviteId() == g1; }),
+              "приглашение ждёт решения у b и c (не входят сами)");
+        check(has(invites, 1, g1 + "|v2g:00aa|Семья"), "CALL-2: во входящем — группа и её название");
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        check(m[1]->connectedCount() == 0, "до «Принять» соединений нет (сигналы копятся)");
+        check(m[1]->acceptInvite() && m[2]->acceptInvite(), "b и c приняли");
         check(waitFor([&] { return m[0]->connectedCount() == 2 && m[1]->connectedCount() == 2 && m[2]->connectedCount() == 2; }, 5000),
-              "групповой mesh: у каждого из трёх два соединения");
+              "групповой mesh: у каждого из трёх два соединения (накопленные сигналы разобраны)");
         m[1]->sendMediaState(false, true);
         check(waitFor([&] { return mediaSeen.load() >= 2; }), "spec 024: остальные видят выключенную камеру участника");
+        for (auto &x : m) x->leave();
+
+        // Отказ: b отклоняет — инициатор сразу закрывает строку b; c принимает и соединяется
+        const std::string g2 = "0192f1a2-2222-7000-8000-000000000002";
+        m[0]->startCall(g2, who, "audio");
+        check(waitFor([&] { return m[1]->pendingInviteId() == g2 && m[2]->pendingInviteId() == g2; }), "второе приглашение");
+        check(m[1]->declineInvite(), "b отклонил");
+        check(waitFor([&] { return has(declined, 0, "b@local:declined"); }), "инициатор: b отклонил (строка закрыта сразу)");
+        check(has(closed, 1, g2), "b: приглашение закрыто");
+        check(m[2]->acceptInvite(), "c принял");
+        check(waitFor([&] { return m[0]->connectedCount() == 1 && m[2]->connectedCount() == 1; }, 5000),
+              "a и c соединились без b (a=" + std::to_string(m[0]->connectedCount()) + ", c="
+                  + std::to_string(m[2]->connectedCount()) + ")");
+        for (auto &x : m) x->leave();
+
+        // Своё другое устройство приняло приглашение — здесь оно замолкает без отказа
+        {
+            std::lock_guard<std::mutex> lk(evMu);
+            for (auto &list : declined) list.clear();
+        }
+        const std::string g3 = "0192f1a2-2222-7000-8000-000000000003";
+        m[0]->startCall(g3, who, "audio");
+        check(waitFor([&] { return m[1]->pendingInviteId() == g3; }), "третье приглашение у b");
+        m[1]->handleV2Signal("b@local", rejectSignal(g3, "answered_elsewhere"));
+        check(m[1]->pendingInviteId().empty() && has(closed, 1, g3), "spec 024: принято на другом своём устройстве — замолчало");
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        check(!has(declined, 0, "b@local:declined"), "звонящему отказ от b не ушёл");
+        m[1]->handleV2Signal("a@local", groupInviteSignal(g3, who, "audio"));
+        check(m[1]->pendingInviteId().empty(), "повтор приглашения замолчавшего звонка не звонит");
+        m[2]->declineInvite();
+        for (auto &x : m) x->leave();
+
+        // Занят личным звонком — «занят» всем участникам
+        const std::string g4 = "0192f1a2-2222-7000-8000-000000000004";
+        busy[1] = true;
+        m[0]->startCall(g4, who, "audio");
+        check(waitFor([&] { return has(declined, 0, "b@local:busy"); }), "занятый участник отвечает «занят»");
+        check(m[1]->pendingInviteId().empty(), "занятому приглашение не звонит");
+        busy[1] = false;
+        m[2]->expireInvite(g4);
+        check(waitFor([&] { return has(declined, 0, "c@local:declined"); }), "таймаут приглашения — отказ звонящему");
         for (auto &x : m) x->leave();
     }
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);

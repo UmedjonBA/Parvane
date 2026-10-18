@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_privacy_security.h"
 
+#include "parvane/parvane_account_ui.h" // Parvane: удаление аккаунта
+
 #include "settings/settings_common_session.h"
 
 #include "api/api_authorizations.h"
@@ -812,7 +814,19 @@ void BuildSecuritySection(
 	}
 
 	// Parvane: ключ восстановления, ключ подписи устройств и привязка — на экране «Устройства»
-	// (parvane_account_ui, как web).
+	// (parvane_account_ui, как web). Удаление аккаунта (spec 027) — здесь.
+	{
+		const auto container = builder.container();
+		Ui::AddSkip(container);
+		builder.addButton({
+			.id = u"security/parvane_delete_account"_q,
+			.title = tr::lng_parvane_delete_account_title(),
+			.st = &st::settingsAttentionButtonWithIcon,
+			.icon = { &st::menuIconDeleteAttention },
+			.onClick = [=] { Parvane::ShowDeleteAccountBox(controller); },
+			.keywords = { u"delete"_q, u"account"_q, u"удалить"_q, u"аккаунт"_q },
+		});
+	}
 
 	auto ttlLabel = rpl::combine(
 		session->api().selfDestruct().periodDefaultHistoryTTL(),

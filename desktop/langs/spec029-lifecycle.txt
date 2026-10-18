@@ -1,0 +1,111 @@
+lng_parvane_user_renamed
+{user} changed username to @{nick}
+{user} сменил(а) ник на @{nick}
+
+lng_parvane_account_deletion_pending
+This account will be deleted on {date}. Restore it to sign in.
+Этот аккаунт будет удалён {date}. Восстановите его, чтобы войти.
+
+lng_parvane_restore_account
+Restore account
+Восстановить аккаунт
+
+lng_parvane_rename_title
+Change username
+Изменить ник
+
+lng_parvane_rename_hint
+Your chats, groups, plan and files stay with you. For 30 days your old username leads to the new one and nobody else can take it. Contacts will see that you changed your username.
+Чаты, группы, «План» и файлы остаются с вами. 30 дней прежний ник ведёт на новый, и занять его никто не сможет. Собеседники увидят, что вы сменили ник.
+
+lng_parvane_rename_nick
+New username
+Новый ник
+
+lng_parvane_rename_nick_rule
+2 to 64 characters: lowercase Latin letters, digits, _ . - (starts with a letter or digit)
+От 2 до 64 символов: строчные латинские буквы, цифры, _ . - (первый — буква или цифра)
+
+lng_parvane_rename_password
+Password
+Пароль
+
+lng_parvane_rename_recovery_key
+Recovery key
+Ключ восстановления
+
+lng_parvane_rename_submit
+Change
+Изменить
+
+lng_parvane_rename_done
+Username changed.
+Ник изменён.
+
+lng_parvane_rename_error_password
+Wrong password
+Неверный пароль
+
+lng_parvane_rename_error_key
+Wrong recovery key
+Неверный ключ восстановления
+
+lng_parvane_rename_error_no_backup
+There is no recovery key copy on the server for this account
+На сервере нет копии ключа восстановления этого аккаунта
+
+lng_parvane_rename_error_taken
+This username is taken
+Этот ник занят
+
+lng_parvane_rename_error_invalid
+This username cannot be used
+Такой ник нельзя использовать
+
+lng_parvane_rename_error_failed
+Could not change the username. Try again.
+Не удалось сменить ник. Попробуйте ещё раз.
+
+lng_parvane_nick_invalid
+Username: 2–64 characters, lowercase latin letters, digits, _ . -
+Ник: 2–64 символа, строчные латинские буквы, цифры, _ . -
+
+lng_parvane_delete_account_title
+Delete my account
+Удалить аккаунт
+
+lng_parvane_delete_account_hint
+Your account signs out of all devices right away and disappears for other people.
+Аккаунт сразу выйдет со всех устройств и пропадёт для других людей.
+
+lng_parvane_delete_account_point_data
+In 7 days your messages, groups you created, Plan, notes and files are erased from the server.
+Через 7 дней с сервера сотрутся ваши сообщения, созданные вами группы, «План», заметки и файлы.
+
+lng_parvane_delete_account_point_nick
+Your username becomes free. Contacts see “Deleted Account”.
+Ник станет свободным. Собеседники увидят «Удалённый аккаунт».
+
+lng_parvane_delete_account_point_restore
+Until then, sign in with your password to restore the account.
+До этого аккаунт можно восстановить, войдя с паролем.
+
+lng_parvane_delete_account_point_export
+To keep a copy, export your data first (Privacy and Security → Export my data).
+Чтобы сохранить копию, сначала выгрузите данные (Конфиденциальность → Выгрузить мои данные).
+
+lng_parvane_delete_account_submit
+Delete account
+Удалить аккаунт
+
+lng_parvane_delete_account_done
+The account will be deleted on {date}. Signing out…
+Аккаунт будет удалён {date}. Выход…
+
+lng_parvane_delete_account_error_password
+Wrong password
+Неверный пароль
+
+lng_parvane_delete_account_error_failed
+The server did not accept the request. Try again later.
+Сервер не принял запрос. Попробуйте позже.

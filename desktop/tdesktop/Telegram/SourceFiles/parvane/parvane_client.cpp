@@ -174,6 +174,11 @@ bool RunV2GroupChange(
 // spec 015: вход по ключу восстановления и копия ключей аккаунта (определены ниже)
 void CompleteKeyJoin(parvane::v2::KeyJoinOutcome outcome);
 void NoteDomainKeys(const std::string &planner, const std::string &cloud);
+// RENAME-1 и spec 027 (определены ниже)
+void AnnounceRename(const QString &from, const QString &to);
+void MarkPeerDeleted(const QString &address, bool deleted);
+void ShowIncomingGroupCall(const QString &from, const QString &group, const QString &title, bool video);
+void NotifyOwnDevicesAboutCall(const std::string &callId, const char *reason);
 
 namespace {
 
@@ -185,6 +190,10 @@ void ImportV2History(const std::string &stateJson);
 void PublishLinkingStatus();
 void StartTelegramRecovery(bool again);
 void SyncFromKeyBundle();
+[[nodiscard]] QString DisplayNameFor(const QString &address);
+// Время звонка приглашения в групповой звонок (как web getRingTimeoutMs)
+constexpr auto kGroupRingTimeout = crl::time(45000);
+[[nodiscard]] QString StateSyncedPath();
 nlohmann::json BuildBundleHistory(const nlohmann::json &previous, bool force);
 
 // Протокол v2 (определены ниже, раздел «Протокол v2»).
@@ -247,6 +256,8 @@ std::set<std::string> g_ownSentUuids;
 // повторно (второй раз ratchet не расшифрует → «НЕ расшифровано» + порча). Под
 // g_sessionMutex.
 QHash<QString, QString> g_decCache;
+// spec 027: собеседники с удалённым аккаунтом. Только main.
+QSet<QString> g_deletedPeers;
 
 // Общие медиа диалога по типу (msgId'ы) для панели профиля. Без живого MTProto
 // messages.getSearchCounters не отвечает → счётчики/галереи пусты; заполняем
@@ -2595,7 +2606,83 @@ bool NoteGroupMigrated(const QString &from, const QString &to) {
 	return true;
 }
 
+// spec 026, RENAME-1: смена ника — свой либо собеседника. Чат остаётся прежним: id считается от самого
+// первого адреса цепочки, а писать и показывать — по последнему. Файл — на всё устройство.
+std::mutex g_renameMutex;
+QHash<QString, QString> g_renameNext; // прежний адрес → следующий
+QHash<QString, QString> g_renamePrev; // новый адрес → прежний
+bool g_renamesLoaded = false;
+constexpr auto kRenameChainLimit = 32;
+
+[[nodiscard]] QString RenamesPath() {
+	return cWorkingDir() + u"tdata/parvane-renames.json"_q;
+}
+
+void LoadRenamesLocked() {
+	if (g_renamesLoaded) {
+		return;
+	}
+	g_renamesLoaded = true;
+	const auto j = parvane::json::parse(StoreRead(RenamesPath()).toStdString(), nullptr, false);
+	if (!j.is_array()) {
+		return;
+	}
+	for (const auto &pair : j) {
+		if (pair.is_array() && pair.size() == 2 && pair[0].is_string() && pair[1].is_string()) {
+			const auto from = QString::fromStdString(pair[0].get<std::string>());
+			const auto to = QString::fromStdString(pair[1].get<std::string>());
+			g_renameNext.insert(from, to);
+			g_renamePrev.insert(to, from);
+		}
+	}
+}
+
+[[nodiscard]] QString FollowChain(const QHash<QString, QString> &map, QString address) {
+	for (auto i = 0; i != kRenameChainLimit; ++i) {
+		const auto it = map.constFind(address);
+		if (it == map.constEnd() || it.value() == address) {
+			break;
+		}
+		address = it.value();
+	}
+	return address;
+}
+
+[[nodiscard]] QString OriginAddress(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_renameMutex);
+	LoadRenamesLocked();
+	return g_renamePrev.isEmpty() ? address : FollowChain(g_renamePrev, address);
+}
+
 } // namespace
+
+QString LatestAddress(const QString &address) {
+	std::lock_guard<std::mutex> lk(g_renameMutex);
+	LoadRenamesLocked();
+	return g_renameNext.isEmpty() ? address : FollowChain(g_renameNext, address);
+}
+
+bool NoteRename(const QString &from, const QString &to) {
+	if (from.isEmpty() || to.isEmpty() || from == to) {
+		return false;
+	}
+	auto saved = parvane::json::array();
+	{
+		std::lock_guard<std::mutex> lk(g_renameMutex);
+		LoadRenamesLocked();
+		if (g_renameNext.value(from) == to) {
+			return false;
+		}
+		g_renameNext.insert(from, to);
+		g_renamePrev.insert(to, from);
+		for (auto it = g_renameNext.cbegin(); it != g_renameNext.cend(); ++it) {
+			saved.push_back(parvane::json::array({ it.key().toStdString(), it.value().toStdString() }));
+		}
+	}
+	StoreWrite(RenamesPath(), QByteArray::fromStdString(saved.dump()));
+	LOG(("Parvane: адрес %1 сменился на %2 (тот же чат)").arg(from, to));
+	return true;
+}
 
 std::uint64_t IdForAddress(const QString &rawAddress) {
 	auto address = rawAddress;
@@ -2605,6 +2692,7 @@ std::uint64_t IdForAddress(const QString &rawAddress) {
 			address = it.value(); // группа v2, переведённая из v1, — прежний чат
 		}
 	}
+	address = OriginAddress(address); // сменивший ник — прежний чат (RENAME-1)
 	const auto utf8 = address.toUtf8();
 	std::uint64_t h = 1469598103934665603ULL; // FNV offset basis
 	for (const auto c : utf8) {
@@ -2655,10 +2743,11 @@ void EnsurePresenceSubscription(const QString &address) {
 	});
 }
 
-void RegisterPeer(const QString &address) {
-	if (address.isEmpty()) {
+void RegisterPeer(const QString &rawAddress) {
+	if (rawAddress.isEmpty()) {
 		return;
 	}
+	const auto address = LatestAddress(rawAddress); // писать — по последнему нику
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_idToAddress.insert(quint64(IdForAddress(address)), address);
@@ -2799,17 +2888,14 @@ bool StartSession() {
 				// Менеджер держит свой мьютекс — отбой с главного потока.
 				LOG(("Parvane: звонок %1 не начат (%2)").arg(
 					QString::fromStdString(peer), QString::fromStdString(error)));
-				crl::on_main([notContact = (error == "forbidden")] {
+				crl::on_main([error] {
 					HangupCall();
 					if (const auto window = Core::App().activeWindow()) {
-						const auto ru = IsRussianUi();
-						window->showToast(notContact
-							? (ru
-								? u"Позвонить можно после того, как собеседник ответит на ваше сообщение"_q
-								: u"You can call this person after they reply to your message"_q)
-							: (ru
-								? u"Не удалось позвонить. Попробуйте позже"_q
-								: u"The call could not be placed. Try again later"_q));
+						window->showToast((error == "forbidden")
+							? tr::lng_parvane_call_not_contact(tr::now)
+							: (error == "rate_limited")
+							? tr::lng_parvane_call_rate_limited(tr::now)
+							: tr::lng_parvane_call_not_sent(tr::now));
 					}
 				});
 				return true;
@@ -2970,6 +3056,78 @@ bool StartSession() {
 		gcb.onPeerState = [](std::string peer, parvane::CallState s) {
 			LOG(("Parvane: groupcall %1 → %2")
 				.arg(QString::fromStdString(peer)).arg(CallStateName(s)));
+			if (s == parvane::CallState::Active) {
+				crl::on_main([] {
+					StopRingtone();
+					Parvane::NativeCallConnected(); // первый участник на связи — таймер звонка
+				});
+			}
+		};
+		gcb.onMediaState = [](const std::string &peer, bool audioMuted, bool videoMuted) {
+			LOG(("Parvane: групповой звонок: %1 микрофон %2, камера %3").arg(
+				QString::fromStdString(peer),
+				audioMuted ? u"выкл"_q : u"вкл"_q,
+				videoMuted ? u"выкл"_q : u"вкл"_q));
+		};
+		// Приглашение ждёт «Принять / Отклонить» (как web): нативный экран входящего звонка группы
+		gcb.onInvite = [](const std::string &from, const std::string &gcid,
+				const std::vector<std::string> &participants, const std::string &media,
+				const std::string &group, const std::string &title) {
+			LOG(("Parvane: приглашение в групповой звонок %1 от %2 (%3 участников)").arg(
+				QString::fromStdString(gcid), QString::fromStdString(from)).arg(int(participants.size())));
+			const auto fromQ = QString::fromStdString(from);
+			const auto groupQ = QString::fromStdString(group);
+			const auto titleQ = QString::fromStdString(title);
+			const auto video = (media == "video");
+			crl::on_main([=] {
+				ShowIncomingGroupCall(fromQ, groupQ, titleQ, video);
+				base::call_delayed(kGroupRingTimeout, [gcid] {
+					std::lock_guard<std::mutex> lk(g_sessionMutex);
+					if (g_groupCallManager) {
+						crl::async([gcid] {
+							parvane::GroupCallManager *g = nullptr;
+							{
+								std::lock_guard<std::mutex> lk(g_sessionMutex);
+								g = g_groupCallManager.get();
+							}
+							if (g) g->expireInvite(gcid);
+						});
+					}
+				});
+			});
+			if (const char *aa = ParvaneDevEnv("PARVANE_AUTOACCEPT"); aa && *aa) {
+				crl::on_main([] { AcceptCall(); });
+			}
+		};
+		gcb.onInviteClosed = [](const std::string &gcid) {
+			LOG(("Parvane: приглашение в групповой звонок %1 закрыто").arg(QString::fromStdString(gcid)));
+			crl::on_main([] {
+				StopRingtone();
+				Parvane::CloseNativeCallPanel();
+			});
+		};
+		gcb.onPeerDeclined = [](const std::string &peer, const std::string &reason) {
+			LOG(("Parvane: групповой звонок: %1 — %2").arg(
+				QString::fromStdString(peer), QString::fromStdString(reason)));
+			const auto peerQ = QString::fromStdString(peer);
+			const auto busy = (reason == "busy");
+			crl::on_main([=] {
+				if (const auto window = Core::App().activeWindow()) {
+					window->showToast(busy
+						? tr::lng_parvane_group_call_busy(tr::now, lt_user, DisplayNameFor(peerQ))
+						: tr::lng_parvane_group_call_declined(tr::now, lt_user, DisplayNameFor(peerQ)));
+				}
+			});
+		};
+		// Занят личным звонком — приглашению «занят»
+		gcb.isBusy = [] {
+			parvane::CallManager *m = nullptr;
+			{
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				m = g_callManager.get();
+			}
+			const auto state = m ? m->state() : parvane::CallState::Idle;
+			return state != parvane::CallState::Idle && state != parvane::CallState::Ended;
 		};
 		g_groupCallManager = std::make_unique<parvane::GroupCallManager>(
 			g_selfAddress.toStdString(), g_callKey.get(), makeBackend, std::move(gcb));
@@ -3061,6 +3219,131 @@ void ClearLocalState() {
 	LOG(("Parvane: выход — учётные данные %1; ключи и история СОХРАНЕНЫ "
 		"(повторный вход на этом устройстве вернёт переписку)")
 		.arg(removed ? u"удалены"_q : u"не найдены"_q));
+}
+
+// ── spec 026/027: смена ника и удаление аккаунта (как web parvaneRenameAccount / parvaneDeleteAccount) ──
+
+[[nodiscard]] QString SafeAddressPart(const QString &address) {
+	QString safe;
+	for (const auto ch : address) {
+		safe += (ch.isLetterOrNumber() || ch == '@' || ch == '.' || ch == '-') ? ch : QChar('_');
+	}
+	return safe;
+}
+
+// Журнал истории прежнего адреса — под новым: свои сообщения прежнего адреса становятся своими нового.
+void MoveHistoryFile(const QString &oldAddress, const QString &newAddress) {
+	const auto from = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(oldAddress) + u".jsonl"_q;
+	const auto to = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(newAddress) + u".jsonl"_q;
+	if (!QFile::exists(from)) {
+		return;
+	}
+	const auto oldStd = oldAddress.toStdString();
+	const auto newStd = newAddress.toStdString();
+	auto lines = StoreReadLines(from);
+	for (auto &line : lines) {
+		auto row = parvane::json::parse(line.toStdString(), nullptr, false);
+		if (!row.is_object()) {
+			continue;
+		}
+		for (const auto key : { "from", "to" }) {
+			if (row.value(key, std::string()) == oldStd) {
+				row[key] = newStd;
+			}
+		}
+		line = QString::fromStdString(row.dump());
+	}
+	if (StoreWriteLines(to, lines)) {
+		QFile::remove(from);
+	}
+}
+
+// Файлы с полем "self" (приватность, режим L2, отпечатки личного состояния).
+void MoveSelfField(const QString &path, const QString &oldAddress, const QString &newAddress) {
+	auto j = parvane::json::parse(StoreRead(path).toStdString(), nullptr, false);
+	if (j.is_object() && j.value("self", std::string()) == oldAddress.toStdString()) {
+		j["self"] = newAddress.toStdString();
+		StoreWrite(path, QByteArray::fromStdString(j.dump()));
+	}
+}
+
+void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
+	if (oldAddress.isEmpty() || newAddress.isEmpty() || oldAddress == newAddress) {
+		return;
+	}
+	EnsureStoreKey();
+	NoteRename(oldAddress, newAddress);
+	const auto oldDir = V2StateDir(oldAddress);
+	const auto newDir = V2StateDir(newAddress);
+	if (QDir(oldDir).exists() && !QDir(newDir).exists()) {
+		QDir().rename(oldDir, newDir);
+	}
+	MoveHistoryFile(oldAddress, newAddress);
+	const auto tdata = cWorkingDir() + u"tdata/"_q;
+	for (const auto &[prefix, suffix] : std::vector<std::pair<QString, QString>>{
+			{ u"parvane-cleared-"_q, u".txt"_q },
+			{ u"parvane-trust-"_q, u".txt"_q },
+			{ u"parvane-bundle-history-"_q, u".txt"_q },
+			{ u"parvane-domain-keys-"_q, u".json"_q } }) {
+		const auto from = tdata + prefix + SafeAddressPart(oldAddress) + suffix;
+		const auto rawFrom = tdata + prefix + oldAddress + suffix;
+		const auto to = tdata + prefix + newAddress + suffix;
+		for (const auto &source : { from, rawFrom }) {
+			if (QFile::exists(source) && !QFile::exists(to)) {
+				QFile::rename(source, to);
+			}
+		}
+	}
+	MoveSelfField(PrivacyPath(), oldAddress, newAddress);
+	MoveSelfField(L2CachePath(), oldAddress, newAddress);
+	MoveSelfField(StateSyncedPath(), oldAddress, newAddress);
+	LOG(("Parvane: локальные данные перенесены: %1 → %2").arg(oldAddress, newAddress));
+}
+
+QString RenameAccount(const QString &nick, const QString &password, const QString &recoveryKey) {
+	const auto s = V2Ready();
+	if (!s) {
+		return u"failed"_q;
+	}
+	const auto oldAddress = SelfAddress();
+	const auto out = s->renameAccount(nick.trimmed().toLower().toStdString(), password.toStdString(),
+		parvane::keybundle::pickRecoveryKey(recoveryKey.toStdString()));
+	const auto result = QString::fromStdString(out.value("result", std::string("failed")));
+	if (result != u"ok"_q) {
+		return result;
+	}
+	const auto newAddress = QString::fromStdString(out.value("address", std::string()));
+	const auto token = QString::fromStdString(out.value("token", std::string()));
+	crl::on_main([=] {
+		StopSession();
+		MoveAccountLocal(oldAddress, newAddress);
+		SetSelf(newAddress, token.isEmpty() ? Token() : token);
+		crl::async([] { StartSession(); });
+		if (const auto session = g_sessionWeak.get()) {
+			ensurePeerUser(session, IdForAddress(newAddress), newAddress);
+		}
+	});
+	return result;
+}
+
+DeleteAccountResult DeleteAccount(const QString &password) {
+	auto result = DeleteAccountResult();
+	const auto s = V2Ready();
+	if (!s) {
+		return result;
+	}
+	const auto out = s->deleteAccount(password.toStdString());
+	result.result = QString::fromStdString(out.value("result", std::string("failed")));
+	result.deletionAtMs = out.value("deletionAtMs", std::int64_t(0));
+	return result;
+}
+
+void SignOutDeletedAccount() {
+	// Ключи и история устройства остаются: вход паролем до срока восстанавливает аккаунт на этом устройстве
+	ClearLocalState();
+	if (const auto session = g_sessionWeak.get()) {
+		session->account().forcedLogOut();
+	}
 }
 
 void MirrorOutgoing(
@@ -5208,7 +5491,8 @@ void ApplyPersonalChannel(not_null<UserData*> user, const QString &gid) {
 not_null<UserData*> ensurePeerUser(
 		not_null<Main::Session*> session,
 		std::uint64_t id,
-		const QString &address) {
+		const QString &rawAddress) {
+	const auto address = LatestAddress(rawAddress); // @ник — последний (RENAME-1)
 	const auto existed = (session->data().userLoaded(
 		UserId(BareId(id))) != nullptr);
 	// Отображаемое имя = display_name (каталог); @username = адрес (уникален).
@@ -5218,6 +5502,9 @@ not_null<UserData*> ensurePeerUser(
 		| MTPDuser::Flag::f_username;
 	if (address == SelfAddress()) {
 		flags |= MTPDuser::Flag::f_self;
+	}
+	if (g_deletedPeers.contains(address)) {
+		flags |= MTPDuser::Flag::f_deleted; // spec 027: «Удалённый аккаунт»
 	}
 	// Профиль (имя + аватар) спрашиваем у каталога, если не спрашивали вовсе
 	// либо ответ устарел. Условие «имя неизвестно» здесь было ошибкой: после
@@ -5358,6 +5645,16 @@ void ResolveNames(const QStringList &addresses) {
 				.arg(QString::fromUtf8(e.what())));
 			return;
 		}
+		// spec 027: профиль не нашёлся — не удалён ли аккаунт (сессия спросит его журнал)
+		if (const auto s = V2Ready()) {
+			const auto asked = parvane::json::parse(reqStr, nullptr, false);
+			for (const auto &a : asked.value("usernames", parvane::json::array())) {
+				const auto addr = QString::fromStdString(a.get<std::string>());
+				if (!profiles.contains(addr) && addr.contains('@') && addr != SelfAddress()) {
+					(void)s->checkPeerDeleted(addr.toStdString());
+				}
+			}
+		}
 		if (names.isEmpty() && avatars.isEmpty() && profiles.isEmpty()) {
 			LOG(("Parvane: identity.user.resolve — пустой ответ на %1")
 				.arg(QString::fromStdString(reqStr).left(120)));
@@ -5367,6 +5664,9 @@ void ResolveNames(const QStringList &addresses) {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
+			}
+			for (auto it = profiles.constBegin(); it != profiles.constEnd(); ++it) {
+				MarkPeerDeleted(it.key(), false); // профиль нашёлся снова
 			}
 			for (auto it = names.constBegin(); it != names.constEnd(); ++it) {
 				g_displayNames.insert(it.key(), it.value());
@@ -7330,6 +7630,51 @@ QString OwnFingerprint() {
 // Как announceKeyChange в вебе: локальное служебное сообщение (на сервер не
 // уходит, в журнал не пишется — после перезапуска остаётся только в логе),
 // отпечатки в профиле пересчитываются через ensurePeerUser.
+// Собеседник сменил ник (RENAME-1): служебное сообщение в том же чате (на сервер не уходит).
+void AnnounceRename(const QString &from, const QString &to) {
+	const auto session = g_sessionWeak.get();
+	if (!session || to == SelfAddress()) {
+		return;
+	}
+	const auto user = EnsurePeer(session, to);
+	const auto at = to.indexOf('@');
+	const auto nick = (at > 0) ? to.left(at) : to;
+	const auto text = tr::lng_parvane_user_renamed(tr::now, lt_user, user->name(), lt_nick, nick);
+	session->data().addNewMessage(
+		MsgId(g_nextMsgId++),
+		MTP_messageService(
+			MTP_flags(MTPDmessageService::Flag::f_from_id),
+			MTP_int(0),
+			peerToMTP(user->id),
+			peerToMTP(user->id),
+			MTPPeer(),
+			MTPMessageReplyHeader(),
+			MTP_int(int(QDateTime::currentSecsSinceEpoch())),
+			MTP_messageActionCustomAction(MTP_string(text)),
+			MTPMessageReactions(),
+			MTPint()),
+		MessageFlags(),
+		NewMessageType::Unread);
+	LOG(("Parvane: %1 сменил ник на %2 — служебное сообщение в чате").arg(from, to));
+}
+
+// spec 027: аккаунт собеседника удалён (журнала нет) либо снова нашёлся. Только main.
+void MarkPeerDeleted(const QString &address, bool deleted) {
+	if (address.isEmpty() || address == SelfAddress()
+		|| g_deletedPeers.contains(address) == deleted) {
+		return;
+	}
+	if (deleted) {
+		g_deletedPeers.insert(address);
+	} else {
+		g_deletedPeers.remove(address);
+	}
+	LOG(("Parvane: аккаунт %1 %2").arg(address, deleted ? u"удалён"_q : u"снова доступен"_q));
+	if (const auto session = g_sessionWeak.get()) {
+		ensurePeerUser(session, IdForAddress(address), address);
+	}
+}
+
 void AnnounceKeyChange(const QString &address) {
 	const auto session = g_sessionWeak.get();
 	if (!session || address == SelfAddress()) {
@@ -9071,6 +9416,22 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		crl::on_main([address, members] { AnnounceUnconfirmed(address, members); });
 		return true;
 	}
+	if (type == "peerRenamed") {
+		// RENAME-1: собеседник сменил ник — тот же чат, служебное сообщение
+		const auto from = QString::fromStdString(ev.value("from", std::string()));
+		const auto to = QString::fromStdString(ev.value("to", std::string()));
+		if (NoteRename(from, to)) {
+			RegisterPeer(to);
+			crl::on_main([from, to] { AnnounceRename(from, to); });
+		}
+		return true;
+	}
+	if (type == "peerDeleted") {
+		// spec 027: аккаунт собеседника удалён — «Удалённый аккаунт»
+		const auto user = QString::fromStdString(ev.value("user", std::string()));
+		crl::on_main([user] { MarkPeerDeleted(user, true); });
+		return true;
+	}
 	if (type == "peerRootChanged") {
 		// KEY-1 v2 (T129): у собеседника сменился корень личности — то же
 		// служебное сообщение «ключ безопасности изменился», что в v1.
@@ -10511,22 +10872,73 @@ void PlaceCall(const QString &peer, bool video) {
 // ВАЖНО: не держим g_sessionMutex при вызове менеджера — accept/hangup/setMuted
 // синхронно дёргают onState, а тот берёт g_sessionMutex → self-deadlock (окно
 // зависало). Берём указатель под локом, отпускаем, потом зовём.
+// spec 024: ответ или отказ на входящий — своим другим устройствам, чтобы перестали звонить
+void NotifyOwnDevicesAboutCall(const std::string &callId, const char *reason) {
+	if (callId.empty()) {
+		return;
+	}
+	crl::async([callId, reason = std::string(reason)] {
+		if (const auto s = V2Ready()) {
+			if (!s->sendCallSignalOwn(parvane::rejectSignal(callId, reason))) {
+				LOG(("Parvane: своим устройствам о звонке не сообщено"));
+			}
+		}
+	});
+}
+
 void AcceptCall() {
 	parvane::CallManager *m = nullptr;
+	parvane::GroupCallManager *g = nullptr;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		m = g_callManager.get();
+		g = g_groupCallManager.get();
 	}
-	if (m) m->accept();
+	if (g) {
+		if (const auto gcid = g->pendingInviteId(); !gcid.empty()) {
+			StopRingtone();
+			NotifyOwnDevicesAboutCall(gcid, "answered_elsewhere");
+			crl::async([g] { (void)g->acceptInvite(); });
+			return;
+		}
+	}
+	if (!m) {
+		return;
+	}
+	if (m->state() == parvane::CallState::Incoming) {
+		NotifyOwnDevicesAboutCall(m->callId(), "answered_elsewhere");
+	}
+	m->accept();
 }
 
 void HangupCall() {
 	parvane::CallManager *m = nullptr;
+	parvane::GroupCallManager *g = nullptr;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		m = g_callManager.get();
+		g = g_groupCallManager.get();
 	}
-	if (m) m->hangup();
+	if (g) {
+		if (const auto gcid = g->pendingInviteId(); !gcid.empty()) {
+			NotifyOwnDevicesAboutCall(gcid, "declined");
+			crl::async([g] { (void)g->declineInvite(); });
+			return;
+		}
+		if (!g->groupCallId().empty()) {
+			crl::async([g] { g->leave(); });
+			StopRingtone();
+			Parvane::CloseNativeCallPanel();
+			return;
+		}
+	}
+	if (!m) {
+		return;
+	}
+	if (m->state() == parvane::CallState::Incoming) {
+		NotifyOwnDevicesAboutCall(m->callId(), "declined"); // отклонён, а не пропущен
+	}
+	m->hangup();
 }
 
 // Заглушить/включить свой микрофон (кнопка в окне звонка).
@@ -10539,6 +10951,14 @@ void ToggleMute(bool muted) {
 	if (m) {
 		m->setMuted(muted);
 		m->sendMediaState(muted, false); // spec 024: собеседник видит «микрофон отключён»
+	}
+	parvane::GroupCallManager *g = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g = g_groupCallManager.get();
+	}
+	if (g && !g->groupCallId().empty()) {
+		crl::async([g, muted] { g->sendMediaState(muted, false); });
 	}
 }
 
@@ -10637,15 +11057,34 @@ void StartGroupCall(const QString &groupId, bool video) {
 		LOG(("Parvane: групповой звонок начат в %1 (%2 участников)")
 			.arg(groupId).arg(int(parts.size())));
 	});
-	// UI-панель группового звонка.
-	crl::on_main([] {
-		Ui::show(Ui::MakeConfirmBox({
-			.text = u"Групповой звонок"_q,
-			.confirmed = [](Fn<void()> &&close) { LeaveGroupCall(); close(); },
-			.confirmText = u"Завершить"_q,
-			.inform = true,
-		}));
+	// Нативный экран звонка с группой (аватар и название группы, mute/завершить)
+	crl::on_main([groupId, video] {
+		const auto session = g_sessionWeak.get();
+		if (!session) {
+			return;
+		}
+		const auto chat = ensureGroupChat(session, groupId, g_knownGroups.value(groupId), 0);
+		Parvane::OpenNativeCallPanel(chat, video, /*incoming=*/false);
+		PlayRingtone(/*outgoing=*/true);
 	});
+}
+
+// Входящее приглашение в групповой звонок: экран группы (известна — её аватар и название, иначе пригласивший).
+void ShowIncomingGroupCall(const QString &from, const QString &group, const QString &title, bool video) {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	PeerData *peer = nullptr;
+	if (!group.isEmpty() && g_knownGroups.contains(group)) {
+		peer = ensureGroupChat(session, group, g_knownGroups.value(group), 0);
+	} else if (!group.isEmpty() && !title.isEmpty()) {
+		peer = ensureGroupChat(session, group, title, 0);
+	} else {
+		peer = EnsurePeer(session, from);
+	}
+	PlayRingtone(/*outgoing=*/false);
+	Parvane::OpenNativeCallPanel(peer, video, /*incoming=*/true);
 }
 
 // ── группы: публичное API ────────────────────────────────────────────────────
