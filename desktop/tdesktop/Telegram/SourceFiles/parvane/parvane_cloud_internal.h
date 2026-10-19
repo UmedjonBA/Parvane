@@ -298,6 +298,7 @@ private:
 	std::vector<Item> _items;
 	int _gap = 0;
 	bool _inResize = false;
+	bool _relayoutScheduled = false;
 
 };
 

@@ -11,6 +11,8 @@
 #include "parvane/parvane_sections_host.h"
 
 #include "lang/lang_keys.h"
+
+#include <crl/crl_on_main.h>
 #include "mainwindow.h"
 #include "ui/painter.h"
 #include "ui/qt_object_factory.h"
@@ -305,10 +307,18 @@ public:
 		raw->setParent(this);
 		raw->show();
 		_items.push_back({ raw, wide });
-		raw->heightValue() | rpl::on_next([=] {
-			if (!_inResize && width() > 0) {
-				resizeToWidth(width());
+		raw->heightValue() | rpl::skip(1) | rpl::on_next([=] {
+			// Пересчёт после текущего прохода и один на пачку: синхронный зацикливался (карточка ↔ сетка)
+			if (_inResize || _relayoutScheduled) {
+				return;
 			}
+			_relayoutScheduled = true;
+			crl::on_main(this, [=] {
+				_relayoutScheduled = false;
+				if (width() > 0) {
+					resizeToWidth(width());
+				}
+			});
 		}, raw->lifetime());
 		return static_cast<Widget*>(raw);
 	}
@@ -358,6 +368,7 @@ private:
 	};
 	std::vector<Item> _items;
 	bool _inResize = false;
+	bool _relayoutScheduled = false;
 
 };
 
@@ -470,7 +481,7 @@ void Content::rebuild() {
 	// Набранное в строке сна переживает перестройку
 	const auto sleepText = _sleepForm ? _sleepForm->text() : QString();
 	const auto sleepFocus = _sleepForm && _sleepForm->hasFocus();
-	_column->clear();
+	Kit::ClearLayout(_column);
 	_sleepForm = nullptr;
 	_sleepDetail = nullptr;
 	_routineChart = nullptr;

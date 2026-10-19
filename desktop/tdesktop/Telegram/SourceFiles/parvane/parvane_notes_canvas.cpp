@@ -3805,7 +3805,7 @@ void Board::showFilePicker(std::optional<CanvasPoint> at) {
 }
 
 void Board::fillFilePicker(not_null<Sheet*> sheet, std::optional<std::string> folderId, std::optional<CanvasPoint> at) {
-	sheet->content()->clear();
+	Kit::ClearLayout(sheet->content());
 	const auto nodes = _driveNodes;
 	// Папка сама либо любая из её родительских лежит в корзине — открыт корень
 	const auto trashedIn = [&](const std::string &id) {

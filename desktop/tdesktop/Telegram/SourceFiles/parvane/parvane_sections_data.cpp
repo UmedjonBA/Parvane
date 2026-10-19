@@ -348,6 +348,8 @@ public:
 				_planner.setUser(_self);
 			}
 			_notesLoaded = false;
+			_notesSent = {};
+			_cloudSent = {};
 			_plannerDirty = _cloudDirty = _notesDirty = true;
 		}
 		applyWanted();
@@ -560,6 +562,17 @@ private:
 		view->lastError = _cloud.lastError();
 		view->usage = _usage;
 		view->revision = _cloud.revision();
+		const auto key = std::make_tuple(
+			view->status,
+			view->rootId.value_or(std::string()),
+			view->revision,
+			view->lastError.value_or(std::string()),
+			view->usage ? view->usage->dump() : std::string(),
+			view->containers.size());
+		if (key == _cloudSent) {
+			return;
+		}
+		_cloudSent = key;
 		if (_notesLoaded) {
 			_notes.setCloudData(view->state);
 		}
@@ -593,6 +606,17 @@ private:
 	}
 
 	void publishNotes() {
+		const auto notice = _notes.notice();
+		const auto key = std::make_tuple(
+			_notes.revision(),
+			int(_notes.status()),
+			notice ? (notice->code + '\x01' + std::to_string(notice->at)) : std::string(),
+			_notes.guideOpenId().value_or(std::string()),
+			static_cast<const void*>(_notes.cloudData().get()));
+		if (key == _notesSent) {
+			return;
+		}
+		_notesSent = key;
 		auto view = std::make_shared<NotesView>();
 		view->notes = _notes.notes();
 		view->canvases = _notes.canvases();
@@ -642,6 +666,8 @@ private:
 	std::int64_t _linkingPollAt = 0;
 	std::uint64_t _plannerRevision = 0;
 	std::tuple<std::string, bool, bool, std::string, std::uint64_t> _plannerSent;
+	std::tuple<std::uint64_t, int, std::string, std::string, const void*> _notesSent;
+	std::tuple<std::string, std::string, std::uint64_t, std::string, std::string, std::size_t> _cloudSent;
 	std::optional<json> _usage;
 
 };
@@ -781,10 +807,11 @@ void Post(std::function<void(Workers&)> job) {
 	Enqueue([job = std::move(job)](Hub &hub) {
 		auto workers = hub.workers();
 		job(workers);
+		// Перечитать модули; экранам уйдёт снимок, только если данные изменились (иначе экран, который
+		// на каждый снимок спрашивает данные заданием, зацикливается)
 		hub.markPlannerDirty();
 		hub.markCloudDirty();
 		hub.markNotesDirty();
-		hub.bumpPlanner();
 	});
 }
 

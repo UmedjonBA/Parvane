@@ -691,6 +691,10 @@ private:
 // ── меню ─────────────────────────────────────────────────────────────────────
 
 // Всплывающее меню (Ui::PopupMenu) в тонах набора: фон `--pv-panel`, наведение `--pv-hover`, текст `--pv-fg`.
+// Очистить раскладку и удалить её строки. `Ui::VerticalLayout::clear()` строки только отвязывает: у виджета с
+// родителем `object_ptr` не удаляет его, и прежние строки остаются видимыми (наложение при перестройке)
+void ClearLayout(not_null<Ui::VerticalLayout*> layout);
+
 [[nodiscard]] base::unique_qptr<Ui::PopupMenu> CreateMenu(QWidget *parent);
 
 // Пункт меню: значок ParvaneIcon слева (необязательно), подпись; danger — красным (`.rowRed`).

@@ -939,4 +939,16 @@ void Resizer::focusOutEvent(QFocusEvent *e) {
 	update();
 }
 
+void ClearLayout(not_null<Ui::VerticalLayout*> layout) {
+	auto widgets = std::vector<QPointer<QWidget>>();
+	widgets.reserve(layout->count());
+	for (auto i = 0, count = layout->count(); i != count; ++i) {
+		widgets.push_back(layout->widgetAt(i).get());
+	}
+	layout->clear();
+	for (const auto &widget : widgets) {
+		delete widget.data();
+	}
+}
+
 } // namespace Parvane::Kit

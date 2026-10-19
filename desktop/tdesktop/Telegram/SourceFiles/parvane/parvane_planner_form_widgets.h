@@ -117,6 +117,7 @@ private:
 	bool _alignTop = false;
 	bool _alignBottom = false;
 	bool _inResize = false;
+	bool _relayoutScheduled = false;
 
 };
 
@@ -140,6 +141,7 @@ private:
 	std::vector<Ui::RpWidget*> _items;
 	bool _three = false;
 	bool _inResize = false;
+	bool _relayoutScheduled = false;
 
 };
 

@@ -18,6 +18,8 @@
 
 #include <QtCore/QDateTime>
 #include <QtCore/QTimer>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QWidget>
 
 #include <random>
 
@@ -213,6 +215,34 @@ void LogSnapshots() {
 	}, Hooks());
 }
 
+// Отладка раскладки (PARVANE_DUMPTREE=<сек>[,<сек>…]): дерево видимых виджетов с геометрией в окне
+void DumpTree(QWidget *widget, int depth) {
+	if (!widget->isVisible() || depth > 14) {
+		return;
+	}
+	const auto global = widget->mapTo(widget->window(), QPoint());
+	LOG(("Parvane: tree %1%2 [%3,%4 %5x%6]").arg(
+		QString(depth * 2, ' '),
+		QString::fromLatin1(widget->metaObject()->className()),
+		QString::number(global.x()),
+		QString::number(global.y()),
+		QString::number(widget->width()),
+		QString::number(widget->height())));
+	for (const auto child : widget->children()) {
+		if (const auto w = qobject_cast<QWidget*>(child)) {
+			DumpTree(w, depth + 1);
+		}
+	}
+}
+
+void DumpTrees() {
+	for (const auto top : QApplication::topLevelWidgets()) {
+		if (top->isVisible()) {
+			DumpTree(top, 0);
+		}
+	}
+}
+
 } // namespace
 
 rpl::lifetime &Hooks() {
@@ -222,6 +252,9 @@ rpl::lifetime &Hooks() {
 
 void StartSectionHooks() {
 	static auto started = false;
+	for (const auto &part : qEnvironmentVariable("PARVANE_DUMPTREE").split(',', Qt::SkipEmptyParts)) {
+		After(part.toInt(), [] { DumpTrees(); });
+	}
 	const auto planner = ParseSteps("PARVANE_AUTOPLANNER");
 	const auto notesSteps = ParseSteps("PARVANE_AUTONOTES");
 	const auto cloudSteps = ParseSteps("PARVANE_AUTOCLOUD");

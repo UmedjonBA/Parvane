@@ -3,6 +3,7 @@
 // `.itemCheck`, полоса хода `.transferBar`) по `Cloud.module.scss` и `PvKit.module.scss`.
 #include "parvane/parvane_cloud_internal.h"
 
+#include <crl/crl_on_main.h>
 #include "parvane/parvane_icons.h"
 #include "ui/painter.h"
 #include "ui/style/style_core.h"
@@ -557,17 +558,20 @@ Ui::RpWidget *HRow::addItem(object_ptr<Ui::RpWidget> child, bool stretch) {
 	raw->setParent(this);
 	raw->show();
 	_items.push_back({ raw, stretch });
-	raw->heightValue() | rpl::on_next([=] {
-		if (!_inResize) {
-			resizeToWidth(width());
+	// Смена размера ребёнка — пересчёт после текущего прохода и один на пачку (синхронный может зациклиться)
+	const auto relayout = [=] {
+		if (_inResize || _relayoutScheduled) {
+			return;
 		}
-	}, raw->lifetime());
+		_relayoutScheduled = true;
+		crl::on_main(this, [=] {
+			_relayoutScheduled = false;
+			resizeToWidth(width());
+		});
+	};
+	raw->heightValue() | rpl::skip(1) | rpl::on_next(relayout, raw->lifetime());
 	if (!stretch) {
-		raw->widthValue() | rpl::on_next([=] {
-			if (!_inResize) {
-				resizeToWidth(width());
-			}
-		}, raw->lifetime());
+		raw->widthValue() | rpl::skip(1) | rpl::on_next(relayout, raw->lifetime());
 	}
 	return raw;
 }

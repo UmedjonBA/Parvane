@@ -428,7 +428,7 @@ object_ptr<Ui::RpWidget> MakeLinkBlock(
 	const auto local = std::make_shared<Local>();
 	const auto rebuild = std::make_shared<Fn<void()>>();
 	*rebuild = [=] {
-		layout->clear();
+		Kit::ClearLayout(layout);
 		const auto gap = Rem(0.75);
 		auto first = true;
 		const auto add = [&](object_ptr<Ui::RpWidget> w) {
@@ -691,7 +691,7 @@ void ShowShareSheet(
 		if (!weak) {
 			return;
 		}
-		content->clear();
+		Kit::ClearLayout(content);
 		const auto id = containerId ? containerId : local->created;
 		const auto container = id ? ContainerOf(*id) : nullptr;
 		const auto isOwner = container && container->role == "owner";
@@ -1023,7 +1023,7 @@ private:
 
 void FillPreview(Sheet *sheet, std::shared_ptr<PreviewArgs> args) {
 	const auto content = sheet->content();
-	content->clear();
+	Kit::ClearLayout(content);
 	const auto &node = args->entry.node;
 	const auto kind = cloud::kindOfFile(node.mime, node.name);
 	const auto isText = (kind == cloud::FileKind::Text);
@@ -1228,7 +1228,7 @@ void ShowCloudAttachDialog(not_null<Window::SessionController*> controller, not_
 	const auto send = std::make_shared<Btn*>(nullptr);
 	const auto rebuild = std::make_shared<Fn<void()>>();
 	*rebuild = [=] {
-		list->clear();
+		Kit::ClearLayout(list);
 		const auto root = Current().rootId.value_or(std::string());
 		const auto &nodes = NodesOf(root);
 		// Путь: «Мои файлы › Папка › Вложенная»

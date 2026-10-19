@@ -1,4 +1,5 @@
 // Parvane fork: окна аккаунта (parvane_account_ui.h). Тексты — как web `SettingsActiveSessions.tsx`.
+#include "parvane/parvane_kit.h"
 #include "parvane/parvane_account_ui.h"
 
 #include "parvane/parvane_client.h"
@@ -663,7 +664,7 @@ void AddDevicesExtras(
 			const auto extras = FetchDevicesExtras();
 			crl::on_main(ready, [=] {
 				*fetching = false;
-				ready->clear();
+				Parvane::Kit::ClearLayout(ready);
 				if (extras.ready) {
 					FillReadyExtras(ready, show, extras, [=] { (*refresh)(); });
 				}

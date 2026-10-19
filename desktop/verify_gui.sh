@@ -12,6 +12,7 @@
 #   GUI_CLICKS="x,y;x,y"             (опц.) клики перед снимком (напр. открыть чат)
 #   GUI_PORT=5906  GUI_SIZE=1280x800  GUI_WAIT=12   (опц.)
 #   GUI_KEEP=1                        (опц.) не убивать инстанс после снимка
+#   GUI_ENV="PARVANE_DUMPTREE=60"      (опц.) прочие переменные окружения клиента через пробел
 # Backend: если gateway на 9223 уже слушает (стек verify_lib.sh или демо) — клиент
 # идёт в него; иначе поднимаем свой временный стек (verify_lib.sh) и гасим его на выходе.
 set -u
@@ -34,6 +35,8 @@ fi
 env_extra=()
 [ -n "${GUI_AUTOSEND:-}" ]     && env_extra+=("PARVANE_AUTOSEND=$GUI_AUTOSEND")
 [ -n "${GUI_AUTOSENDFILE:-}" ] && env_extra+=("PARVANE_AUTOSENDFILE=$GUI_AUTOSENDFILE")
+# GUI_ENV="VAR=знач VAR2=знач" — прочие хуки клиента (PARVANE_DUMPTREE, PARVANE_AUTOPLANNER, …)
+[ -n "${GUI_ENV:-}" ] && read -r -a gui_env <<< "$GUI_ENV" && env_extra+=("${gui_env[@]}")
 
 setsid nohup env \
   QT_QPA_PLATFORM="vnc:port=$PORT,size=$SIZE" \

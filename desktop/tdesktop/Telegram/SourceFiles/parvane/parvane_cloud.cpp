@@ -938,7 +938,7 @@ void CloudScreen::rebuild() {
 
 	_entries = computeEntries();
 	const auto scrollTop = _scroll->scrollTop();
-	_list->clear();
+	Kit::ClearLayout(_list);
 	const auto pad = Rem(1.25); // `.content`
 	const auto listPad = pad - Rem(0.625); // `.list { margin-inline: -0.625rem }`
 	auto firstBlock = true;

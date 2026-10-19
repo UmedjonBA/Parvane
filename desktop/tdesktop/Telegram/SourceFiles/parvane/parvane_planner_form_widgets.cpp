@@ -9,6 +9,8 @@
 #include <parvane/sections/planner_groups.h>
 
 #include "lang/lang_keys.h"
+
+#include <crl/crl_on_main.h>
 #include "ui/ui_utility.h"
 #include "ui/boxes/calendar_box.h"
 #include "ui/layers/generic_box.h"
@@ -481,10 +483,19 @@ Ui::RpWidget *Line::addItem(object_ptr<Ui::RpWidget> child, bool stretch) {
 	raw->setParent(this);
 	raw->show();
 	_items.push_back({ raw, stretch });
-	raw->heightValue() | rpl::on_next([=] {
-		if (!_inResize && width() > 0) {
-			resizeToWidth(width());
+	raw->heightValue() | rpl::skip(1) | rpl::on_next([=] {
+		// Смена высоты ребёнка — пересчёт раскладки ПОСЛЕ текущего прохода и один на пачку: синхронный
+		// пересчёт из сигнала высоты зацикливался (карточка ↔ сетка), съедая процессор и память
+		if (_inResize || _relayoutScheduled) {
+			return;
 		}
+		_relayoutScheduled = true;
+		crl::on_main(this, [=] {
+			_relayoutScheduled = false;
+			if (width() > 0) {
+				resizeToWidth(width());
+			}
+		});
 	}, raw->lifetime());
 	return raw;
 }
@@ -559,10 +570,19 @@ Ui::RpWidget *FieldsGrid::addItem(object_ptr<Ui::RpWidget> child) {
 	raw->setParent(this);
 	raw->show();
 	_items.push_back(raw);
-	raw->heightValue() | rpl::on_next([=] {
-		if (!_inResize && width() > 0) {
-			resizeToWidth(width());
+	raw->heightValue() | rpl::skip(1) | rpl::on_next([=] {
+		// Смена высоты ребёнка — пересчёт раскладки ПОСЛЕ текущего прохода и один на пачку: синхронный
+		// пересчёт из сигнала высоты зацикливался (карточка ↔ сетка), съедая процессор и память
+		if (_inResize || _relayoutScheduled) {
+			return;
 		}
+		_relayoutScheduled = true;
+		crl::on_main(this, [=] {
+			_relayoutScheduled = false;
+			if (width() > 0) {
+				resizeToWidth(width());
+			}
+		});
 	}, raw->lifetime());
 	return raw;
 }
@@ -1392,7 +1412,7 @@ void RepeatFields::refreshSummary() {
 }
 
 void RepeatFields::rebuild() {
-	_column->clear();
+	Kit::ClearLayout(_column);
 	_summary = nullptr;
 	const auto draft = _draft->current();
 	const auto gap = Rem(0.5); // `.repeat`
@@ -1759,7 +1779,7 @@ void ListPicker::refreshOptions() {
 
 void ListPicker::showSelect() {
 	_creating = false;
-	_column->clear();
+	Kit::ClearLayout(_column);
 	static const auto kNone = QString(QChar(0)) + u"none"_q;
 	static const auto kNew = QString(QChar(0)) + u"new"_q;
 	_select = AddTo(_column, object_ptr<FormSelect>(
@@ -1784,7 +1804,7 @@ void ListPicker::showSelect() {
 void ListPicker::showCreate() {
 	_creating = true;
 	_select = nullptr;
-	_column->clear();
+	Kit::ClearLayout(_column);
 	struct Draft {
 		int color = 0;
 	};

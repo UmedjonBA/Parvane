@@ -2,6 +2,7 @@
 // (spec 029, T061). Поведение — как в web (`PlannerTaskEditor.tsx`, `PlannerEventEditor.tsx`,
 // `PlannerTaskForm.tsx`); правки — `Sections::UpdatePlanner` (задания идут в рабочий поток: лямбды правок
 // берут только значения, не виджеты).
+#include "parvane/parvane_kit.h"
 #include "parvane/parvane_planner_form_editors.h"
 
 #include "lang/lang_keys.h"
@@ -468,7 +469,7 @@ void TaskEditor::rebuild() {
 	if (_repeatRow) {
 		_repeatOpen = _repeatRow->isOpen();
 	}
-	_column->clear();
+	Kit::ClearLayout(_column);
 	_title = nullptr;
 	_autosave = nullptr;
 	_done = nullptr;
@@ -720,7 +721,7 @@ void TaskEditor::rebuild() {
 	}
 	_descriptionSave = info->add(object_ptr<Ui::VerticalLayout>(info->body()));
 	const auto refreshSave = [=] {
-		_descriptionSave->clear();
+		Kit::ClearLayout(_descriptionSave);
 		if (!isInstance() || _descriptionDraft == Q(_task.description)) {
 			_descriptionSave->resizeToWidth(_descriptionSave->width());
 			return;
@@ -908,7 +909,7 @@ void TaskEditor::rebuildSlots() {
 	if (!_slotsColumn) {
 		return;
 	}
-	_slotsColumn->clear();
+	Kit::ClearLayout(_slotsColumn);
 	const auto gap = Rem(0.375); // `.slots`
 	if (!_slotHint.isEmpty()) {
 		AddTo(_slotsColumn, SmallText(_slotsColumn, _slotHint), gap);
@@ -935,7 +936,7 @@ void TaskEditor::rebuildBottom() {
 	if (!_bottom) {
 		return;
 	}
-	_bottom->clear();
+	Kit::ClearLayout(_bottom);
 	if (_pending) {
 		// О чём спрашивает выбор объёма: правка полей, удаление, новое правило повтора либо его снятие
 		const auto mode = (_pending->kind == u"rule"_q)
@@ -1102,7 +1103,7 @@ void EventEditor::build() {
 }
 
 void EventEditor::rebuildWhen() {
-	_when->clear();
+	Kit::ClearLayout(_when);
 	const auto controller = _host.controller;
 	const auto hasDate = !_event.repeat || isInstance();
 	const auto grid = AddTo(_when, object_ptr<FieldsGrid>(_when, hasDate && !_allDay), 0);
@@ -1140,7 +1141,7 @@ void EventEditor::rebuildWhen() {
 }
 
 void EventEditor::rebuildBottom() {
-	_bottom->clear();
+	Kit::ClearLayout(_bottom);
 	if (_pending) {
 		const auto mode = (_pending->kind == u"rule"_q)
 			? (_pending->repeat ? u"rule"_q : u"stop"_q)
@@ -1530,7 +1531,7 @@ void TaskForm::rebuild() {
 	if (_repeatRow) {
 		_repeatOpen = _repeatRow->isOpen();
 	}
-	_column->clear();
+	Kit::ClearLayout(_column);
 	_nameInput = nullptr;
 	_endField = nullptr;
 	_repeatRow = nullptr;
@@ -1609,7 +1610,7 @@ void TaskForm::rebuild() {
 			if (!whenGrid) {
 				return;
 			}
-			whenGrid->clear();
+			Kit::ClearLayout(whenGrid);
 			_endField = nullptr;
 			const auto hasDateNow = (_repeatDraft->current().kind == "none");
 			const auto grid = AddTo(whenGrid.data(), object_ptr<FieldsGrid>(whenGrid.data(), hasDateNow && !_allDay), 0);
