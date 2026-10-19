@@ -50,6 +50,11 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_kit_internal.h
     ${src_loc}/parvane/parvane_rail.cpp
     ${src_loc}/parvane/parvane_rail.h
+    # spec 029 — палитра Ctrl+K (T065) и выгрузка данных (T036)
+    ${src_loc}/parvane/parvane_palette.cpp
+    ${src_loc}/parvane/parvane_palette.h
+    ${src_loc}/parvane/parvane_data_export.cpp
+    ${src_loc}/parvane/parvane_data_export.h
     # spec 029 L3 — «План»: виды (агент A)
     ${src_loc}/parvane/parvane_planner_common.cpp
     ${src_loc}/parvane/parvane_planner_common.h
@@ -123,6 +128,10 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_sections_host.h
     ${src_loc}/parvane/parvane_space.cpp
     ${src_loc}/parvane/parvane_space.h
+    ${src_loc}/parvane/parvane_islands.cpp
+    ${src_loc}/parvane/parvane_islands.h
+    ${src_loc}/parvane/parvane_chats_header.cpp
+    ${src_loc}/parvane/parvane_chats_header.h
     ${src_loc}/parvane/parvane_map.cpp
     ${src_loc}/parvane/parvane_map.h
     ${src_loc}/parvane/parvane_webrtc_backend.cpp

@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { exportEncryptedBackup, importEncryptedBackup, type KeyBackupPayload } from './keyBackup';
+import { callSignalFromV2, callSignalToV2, cleanGroupTitle, groupInviteFromV2 } from './v2/callMap';
 import {
   deriveBundleKey, type KeyBundlePayload, openKeyBundle, pickRecoveryKey, sealKeyBundle,
 } from './v2/keyBundle';
-import { callSignalFromV2, callSignalToV2, cleanGroupTitle, groupInviteFromV2 } from './v2/callMap';
+import { exportEncryptedBackup, importEncryptedBackup, type KeyBackupPayload } from './keyBackup';
+import { buildPvpkArchive, packContentHash, parsePvpkArchive } from './stickerPacks';
 
 // Общие векторы форматов клиентов (spec 029, FR-006): файл, который пишет web, обязан читать desktop
 // (`parvane-core/tests/webcompat_tests.cpp`), и наоборот. Вектор web создаётся, если его нет (или
@@ -158,5 +159,21 @@ describe('Векторы форматов клиентов: сигналы зв�
       expect(groupInviteFromV2(input as never) ?? callSignalFromV2(input as never) ?? null).toEqual(output);
     });
     table.titles.forEach(({ input, output }) => expect(cleanGroupTitle(input)).toBe(output));
+  });
+});
+
+// PACK-2: отпечаток содержимого набора стикеров — тот же вектор читает desktop (`webcompat_tests.cpp`)
+describe('Векторы форматов клиентов: отпечаток набора стикеров (PACK-2)', () => {
+  it('отпечаток файлов и распакованного архива совпадает с вектором', async () => {
+    const table = JSON.parse(readFileSync(vectorPath('pack-hash.json'), 'utf8')) as {
+      cases: { name: string; files: { name: string; data: string }[]; content_hash: string }[];
+    };
+    expect(table.cases.length).toBeGreaterThan(0);
+    for (const entry of table.cases) {
+      const files = entry.files.map(({ name, data }) => ({ name, data: unb64(data).slice().buffer }));
+      expect(b64(await packContentHash(files)), entry.name).toBe(entry.content_hash);
+      const unpacked = parsePvpkArchive(buildPvpkArchive(files)!)!;
+      expect(b64(await packContentHash(unpacked)), entry.name).toBe(entry.content_hash);
+    }
   });
 });

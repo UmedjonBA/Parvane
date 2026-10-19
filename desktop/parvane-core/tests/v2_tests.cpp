@@ -218,6 +218,28 @@ int main() {
                   && (*back)["file_id"] == "s1",
               "sticker ← v2");
     }
+    {
+        // PACK-2: отпечаток содержимого набора переносится в обе стороны (и у стикера, и у эмодзи-паков текста)
+        const std::string hash = "wOtWDi36OhUURnUZGyYsN5DXpqYeu1MsE3cmIQV/sQM=";
+        const json ref{{"file_id", "p2"}, {"name", "Котики"}, {"count", 2}, {"key", "k"}, {"nonce", "n"},
+                       {"content_hash", hash}};
+        const auto v = v2::toV2(json{{"kind", "sticker"}, {"file_id", "s2"}, {"pack_ref", ref}});
+        check(v && (*v)["sticker"]["pack_ref"]["content_hash"] == hash, "PACK-2: content_hash стикера → v2");
+        const auto back = v ? v2::fromV2(*v) : std::nullopt;
+        check(back && (*back)["pack_ref"]["content_hash"] == hash, "PACK-2: content_hash стикера ← v2");
+        const auto camel = v2::fromV2(json{{"sticker", {{"media", {{"file_id", "s3"}}},
+                                                        {"pack_ref", {{"file_id", "p3"}, {"contentHash", hash}}}}}});
+        check(camel && (*camel)["pack_ref"]["content_hash"] == hash, "PACK-2: contentHash (camelCase) ← v2");
+        const auto old = v2::toV2(json{{"kind", "sticker"}, {"file_id", "s4"},
+                                       {"pack_ref", {{"file_id", "p4"}, {"name", "cats"}}}});
+        check(old && !(*old)["sticker"]["pack_ref"].contains("content_hash"), "PACK-2: без отпечатка — поля нет (старый клиент)");
+        const auto text = v2::toV2(json{{"kind", "text"}, {"text", "x"},
+                                        {"entities", json::array({json{{"type", "custom_emoji"}, {"offset", 0}, {"length", 1}, {"data", "1"}}})},
+                                        {"emoji_packs", json::array({ref})}});
+        const auto textBack = text ? v2::fromV2(*text) : std::nullopt;
+        check(textBack && (*textBack)["emoji_packs"].size() == 1 && (*textBack)["emoji_packs"][0]["content_hash"] == hash,
+              "PACK-2: content_hash эмодзи-пака текста туда и обратно");
+    }
     check(!v2::toV2(json{{"kind", "skdm"}}).has_value(), "служебный v1-вид (skdm) в v2 не уходит");
     check(!v2::fromV2(json{{"contact", {{"first_name", "A"}}}}).has_value(), "contact ← v2: нет v1-вида");
     {

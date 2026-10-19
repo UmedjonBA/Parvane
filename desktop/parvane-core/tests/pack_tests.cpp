@@ -87,6 +87,30 @@ int main() {
     check(!canReuseRef({"a@x"}, {"a@x", "c@x"}), "PACK-1: новый получатель → нельзя");
     check(canReuseRef({}, {}), "PACK-1: пустые наборы → можно");
 
+    // ── PACK-2: отпечаток содержимого ──
+    {
+        const Entry a{"a.webp", std::string("\x01\x02\x03", 3)};
+        const Entry b{"b.webp", std::string("\x04\x05", 2)};
+        const auto one = contentHash({a, b});
+        check(one.size() == 32, "PACK-2: отпечаток — 32 байта");
+        check(contentHash({b, a}) == one, "PACK-2: от порядка файлов не зависит");
+        check(contentHash({a, {"b.webp", std::string("\x04\x06", 2)}}) != one, "PACK-2: другой байт — другой отпечаток");
+        check(contentHash({a, {"c.webp", b.bytes}}) != one, "PACK-2: другое имя — другой отпечаток");
+        const auto archive = build({b, a});
+        const auto hashB64 = archiveContentHashB64(archive);
+        // Эталон web (`proto/parvane/vectors/clients/pack-hash.json`, первый случай)
+        check(hashB64 == "wOtWDi36OhUURnUZGyYsN5DXpqYeu1MsE3cmIQV/sQM=", "PACK-2: отпечаток архива = вектор web", hashB64);
+        check(archiveMatchesContentHash(archive, hashB64), "PACK-2: архив с заявленным отпечатком принят");
+        check(archiveMatchesContentHash(archive, ""), "PACK-2: ссылка без отпечатка (старый клиент) — принят");
+        check(!archiveMatchesContentHash(build({a}), hashB64), "PACK-2: подменённое содержимое — отказ");
+        check(!archiveMatchesContentHash(archive, "не base64!"), "PACK-2: битый отпечаток — отказ");
+        check(!archiveMatchesContentHash(archive, "AQID"), "PACK-2: отпечаток не 32 байта — отказ");
+        check(!archiveMatchesContentHash("PVPK1", ""), "PACK-2: неразбираемый архив — отказ");
+        check(archiveContentHashB64("мусор").empty(), "PACK-2: у битого архива отпечатка нет");
+        // Каталог с лишним файлом другого расширения: отпечаток — по тому, что распакует получатель
+        check(archiveContentHashB64(build({a, b, {"readme.txt", "x"}})) == hashB64, "PACK-2: недопустимые файлы в отпечаток не входят");
+    }
+
     // ── alt-эмодзи из имени файла ──
     check(altEmojiForFileName("00-1f98b.png", "🙂") == "🦋", "alt: NN-<hex>.<ext> → эмодзи", altEmojiForFileName("00-1f98b.png", "🙂"));
     check(altEmojiForFileName("sticker.webp", "🙂") == "🙂", "alt: без кода → fallback");

@@ -454,6 +454,10 @@ private:
     bool acquirePeerKey(const std::string &peer);
     void reciprocateKeysLocked();
     std::set<std::string> reciprocated_;
+    // Записи инбокса, ждущие разбора (порядок прихода); разбирает только рабочий поток
+    std::mutex recordsMu_;
+    std::deque<std::string> records_;
+    void openPendingRecords();
     void workerLoop();
     void connectOnce();
     bool connectLocked(std::string *error);

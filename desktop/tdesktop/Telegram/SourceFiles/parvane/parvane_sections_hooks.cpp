@@ -37,7 +37,7 @@ struct HookStep {
 
 [[nodiscard]] std::vector<HookStep> ParseSteps(const char *name) {
 	auto result = std::vector<HookStep>();
-	const auto raw = qEnvironmentVariable(name);
+	const auto raw = QString::fromUtf8(DevEnv(name)); // без PARVANE_DEV — пусто
 	if (raw.isEmpty()) {
 		return result;
 	}
@@ -251,7 +251,7 @@ rpl::lifetime &Hooks() {
 
 void StartSectionHooks() {
 	static auto started = false;
-	for (const auto &part : qEnvironmentVariable("PARVANE_DUMPTREE").split(',', Qt::SkipEmptyParts)) {
+	for (const auto &part : QString::fromUtf8(DevEnv("PARVANE_DUMPTREE")).split(',', Qt::SkipEmptyParts)) {
 		After(part.toInt(), [] { DumpTrees(); });
 	}
 	const auto planner = ParseSteps("PARVANE_AUTOPLANNER");

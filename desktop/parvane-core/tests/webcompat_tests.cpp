@@ -12,6 +12,7 @@
 #include "parvane/crypto.h"
 #include "parvane/keybackup.h"
 #include "parvane/keybundle.h"
+#include "parvane/pack_archive.h"
 #include "parvane/v2_content.h"
 
 using nlohmann::json;
@@ -163,11 +164,34 @@ static void calls() {
     check(titles, "звонки: название группы очищается как web (CALL-2)");
 }
 
+// PACK-2: отпечаток набора стикеров по вектору web (`pack-hash.json`, его проверяет и web clientVectors.test.ts)
+static void packHash() {
+    const auto table = json::parse(readText(vectorPath("pack-hash.json")), nullptr, false);
+    check(table.is_object() && table["cases"].is_array() && !table["cases"].empty(), "pack-hash: вектор есть");
+    if (!table.is_object() || !table["cases"].is_array()) return;
+    for (const auto &c : table["cases"]) {
+        std::vector<parvane::pack::Entry> files;
+        for (const auto &f : c["files"]) {
+            const auto data = parvane::crypto::b64decode(f.value("data", std::string()));
+            files.push_back({f.value("name", std::string()), data.value_or(std::string())});
+        }
+        const auto name = c.value("name", std::string());
+        const auto expected = c.value("content_hash", std::string());
+        const auto got = parvane::crypto::b64encode(parvane::pack::contentHash(files));
+        check(got == expected, "pack-hash: " + name, got);
+        const auto archive = parvane::pack::build(files);
+        check(parvane::pack::archiveContentHashB64(archive) == expected
+                  && parvane::pack::archiveMatchesContentHash(archive, expected),
+              "pack-hash: архив PVPK1 — " + name);
+    }
+}
+
 int main() {
     std::printf("=== parvane-core: векторы форматов web ↔ desktop (%s) ===\n", PARVANE_VECTORS_DIR);
     keyBackup();
     keyBundle();
     calls();
+    packHash();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

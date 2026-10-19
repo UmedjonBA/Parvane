@@ -708,6 +708,11 @@
         "nonce": "12 x 0x02",
         "plaintext": "parvane blob v1",
         "ciphertextB64": "d7e7Pys5pN2xoNOqfNHzVpFQwpooOo/gVIDan1UXaA=="
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/blobcrypt.ts (encryptBlobWithKey, decryptBlobChunks, parseBlobHeader), media.ts (окна плеера — только чанки с проверенным тегом); тест blobcrypt.test.ts (вектор и legacy-вектор)",
+        "desktop": "desktop/parvane-core/src/blobcrypt.cpp (PVB2: encryptWithKey, decryptChunks, parseHeader; legacy v1 — только decrypt целиком); tdesktop parvane_client.cpp, parvane_sections_data.cpp (blobcrypt::encrypt / blobcrypt::decrypt целым файлом — окон без проверки тега нет); тест tests/blobcrypt_tests.cpp (ctest blobcrypt: заголовок PVB2, окно из проверенных чанков, порча чанка — отказ, legacy-вектор)",
+        "android": "ядро то же: android/jni/parvane_jni.cpp зовёт parvane::blobcrypt::decrypt целым файлом; тест — tests/blobcrypt_tests.cpp ядра (jni до T110 android не собирается)"
       }
     },
     {
@@ -957,7 +962,7 @@
         "desktop": "desktop — со spec 029 легаси-копий не шлёт (v2_legacy.cpp, e2e.cpp удалены, сервер без v1); запись LegacyV1 пропускается целиком (parvane_client.cpp HandleV2SessionEvent)",
         "android": "android/jni/parvane_jni.cpp (то же ядро: sendLegacyCopies, publishLegacySetAsync, isForeignLegacyCopy)"
       },
-      "status": "web закрыто удалением (T110, 7 окт 2026); desktop и android — до их T110"
+      "status": "web закрыто удалением (T110, 7 окт 2026); desktop закрыто удалением (spec 029, 18 окт 2026); android — до своего T110"
     },
     {
       "id": "TYPING-1",
@@ -1125,14 +1130,19 @@
         "desktop": "tdesktop parvane_client.cpp (IdForAddress, CanonicalGroup, NoteV2GroupOrigin — переведённая группа открывается прежним чатом); со spec 029 перевод не запускается: сведений групп v1 нет (ApplyGroupInfo — только из журнала v2), сценарий verify_protocol_v2_group_migrate.sh удалён. Остаток: MigrateGroupIfOwner (клиент) и Session::migrateGroup (ядро) — мёртвый код, убрать",
         "android": "нет — T184 (Android после web и desktop): группа v2 с migrated_from приходит отдельным чатом"
       },
-      "status": "web: перевод закрыт с T110 (переводить нечего); desktop — до T110 desktop; android — T184"
+      "status": "web: перевод закрыт с T110 (переводить нечего); desktop: перевод не запускается со spec 029 (v1 удалён; мёртвый остаток — MigrateGroupIfOwner и Session::migrateGroup); android — T184"
     },
     {
       "id": "OP-SIG",
       "title": "Каноничная подпись операций v2",
       "signingBytes": "\"parvane/v2/op\" | u8(len) | domain | u8(len) | op_type | body",
       "vectors": "proto/parvane/vectors/sign/ops.json",
-      "engineTest": "backend/protocol/tests/vectors_sign.rs"
+      "engineTest": "backend/protocol/tests/vectors_sign.rs",
+      "clients": {
+        "web": "движок через WASM: подписывает и проверяет операции только он (v2/controller.ts); тест src/api/parvane/protocol.vectors.test.ts (набор sign/ops)",
+        "desktop": "движок через C ABI: операции подписывает и проверяет только он (parvane-core v2_session*.cpp — отправки конвертом движка, своей подписи нет); тест desktop/parvane-core/tests/protocol_vectors_tests.cpp (ctest protocol_vectors, набор sign/ops через pv_run_conformance_vectors)",
+        "android": "движок через JNI → C ABI; тест android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt (conformanceVectorsPassThroughCAbi, набор sign/ops)"
+      }
     },
     {
       "id": "PROTO-1",
@@ -1340,7 +1350,7 @@
       "fallbackField": "text",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (mod_report), store.ts (buildModReportContent), messages.ts (reportMessages: причина → комментарий → админам группы либо администратору сервера), components/middle/message/ModReportCard.tsx; сценарий scripts/e2e_web_reports.mjs",
-        "desktop": "ОТКРЫТО: показывать поле text (решение пользователя 15–17 окт 2026: desktop не трогаем, пока web не доделан)",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (toV2/fromV2: mod_report ↔ v2, как web), include/parvane/messenger.h (contentText: показ полем text), src/v2_session_account.cpp (submitReport — жалоба администратору сервера: sealReport движка ключом report_public_key, identity.report.submit); tdesktop parvane_client.cpp (ReportMessages из штатного окна api_report.cpp; CardMarkup — карточка у админа «Удалить сообщения»/«Заблокировать в группе», HandleCardButton pv:moddel/pv:modban); тест tests/v2_tests.cpp (mod_report туда и обратно; карточка mod_report показывается текстом)",
         "android": "ОТКРЫТО: показывать поле text (то же решение)"
       }
     },
@@ -1371,7 +1381,7 @@
       ],
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (buildBundleHistory, startTelegramRecovery); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
-        "desktop": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу — прежним путём RECOVER-1 (корень, отзыв прежних устройств); копию ключей не пишет и не читает",
+        "desktop": "desktop/parvane-core/src/keybundle.cpp (формат PVKB: deriveBundleKey, seal, open, pickRecoveryKey), src/v2_session_account.cpp (refreshKeyBundleLocked — копия ключей аккаунта на сервер, joinWithRecoveryKey — вход по копии без отзыва прежних устройств, иначе прежний recoverWithKey; sendKeyToTelegram, requestTelegramKey, pollTelegramKey); tdesktop parvane_client.cpp (StartTelegramRecovery, PollTelegramRecovery, RecoverWithKey), parvane_account_ui.cpp (FillLinking — ввод ключа, FillReadyExtras — ключ в Telegram); тесты tests/webcompat_tests.cpp (keyBundle: копия web открывается, ключ выделяется из текста как в web), живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 015: копия ключей аккаунта на сервере, вход по ключу восстановления, прежнее устройство осталось в журнале)",
         "android": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу не сделан; копию ключей не пишет и не читает"
       }
     },
@@ -1389,7 +1399,7 @@
       "linkPath": "/@",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupPublic, joinPublic, publicHistory), groups.ts (превью, вступление, поиск), components/right/management/ManageChatPrivacyType.tsx; сценарий scripts/e2e_web_public_groups.mjs",
-        "desktop": "ОТКРЫТО: движок общий, но сборка не обновлялась (решение пользователя 15 окт 2026 — desktop не трогать); старый движок отвергнет журнал публичной группы, частные группы не затронуты",
+        "desktop": "desktop/parvane-core/src/v2_session_groups.cpp (checkPublicName, searchPublic, resolvePublic, setGroupPublic — groupSetPublic движка, joinPublic, publicHistory — методы group.public.*); tdesktop parvane_client.cpp (GroupPublic, CheckGroupPublicName, SetGroupPublic, SearchPublicGroups, LoadPublicPreview, JoinPublicGroup); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 023: группа стала публичной, имя занято, поиск и открытие по имени, вступление по открытому секрету, история для нового участника)",
         "android": "ОТКРЫТО: как desktop"
       }
     },
@@ -1407,7 +1417,7 @@
       "aliasDays": 30,
       "clients": {
         "web": "backend/protocol/src/client_rename.rs (движок), web/telegram-tt/src/api/parvane/v2/controller.ts (renameAccount, followPeerRename, followOwnRename, renameGroupsPending), store.ts (registerUserRename), secureStorage.ts (migrateStorageUser), components/parvane/rename/UsernameChangeModal.tsx; сценарий scripts/e2e_web_rename.mjs",
-        "desktop": "ОТКРЫТО (решение пользователя 15–17 окт 2026: desktop не трогаем, пока web не доделан)",
+        "desktop": "desktop/parvane-core/src/v2_session_account.cpp (renameAccount — renamePrepare движка и identity.account.rename, followPeerRenameLocked → событие peerRenamed, followOwnRename, renameGroupsPending); tdesktop parvane_client.cpp (RenameAccount, MoveAccountLocal, NoteRename/LatestAddress — чат прежний, писать по последнему адресу), parvane_account_ui.cpp (ShowRenameBox); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 026: неверный пароль — отказ, ник сменён, вход новым ником, собеседник получает peerRenamed); п. 3 (своё другое устройство) и п. 4 (RenameMember в группах) тестом не покрыты",
         "android": "ОТКРЫТО (то же решение)"
       }
     },
@@ -1423,7 +1433,7 @@
       "delayDays": 7,
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (deleteAccount, isDeletedLog, checkPeerDeleted), connectionController.ts (AccountDeletionPendingError), components/parvane/account/AccountDeleteModal.tsx, components/auth/AuthPassword.tsx (data-restore-account); сценарий scripts/e2e_web_account_delete.mjs",
-        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "desktop": "desktop/parvane-core/src/v2_session_account.cpp (deleteAccount; isDeletedLog → событие peerDeleted), src/v2_bridge.cpp (вход: deletion_at_ms без токена, cancel_deletion); tdesktop parvane_client.cpp (Issue с cancelDeletion, DeleteAccount, peerDeleted → MarkPeerDeleted), intro/intro_parvane.cpp (дата удаления и «Восстановить» на экране пароля), parvane_account_ui.cpp (ShowDeleteAccountBox); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 027: неверный пароль — отказ, аккаунт поставлен на удаление, вход в период ожидания — без токена со сроком, вход с отменой удаления — восстановлен); п. 2 («Удалённый аккаунт» у собеседника) тестом не покрыт",
         "android": "ОТКРЫТО (то же решение)"
       }
     },
@@ -1435,7 +1445,7 @@
       },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/stickerPacks.ts (packContentHash, registerReceivedPackRef), messages.ts (buildPackRefForSet), provider.ts (resolveCustomPack)",
-        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "desktop": "desktop/parvane-core/include/parvane/pack_archive.h + src/pack_archive.cpp (contentHash, archiveContentHashB64, archiveMatchesContentHash — алгоритм web packContentHash), src/v2_content.cpp (packToV2/packFromV2 переносят content_hash); tdesktop parvane_client.cpp (AttachPackContentHash — отпечаток в pack_ref стикера и emoji_packs при отправке; InstallStickerPackFromDocument — набор с тем же отпечатком уже установлен → тот же набор (FindInstalledPackByHash), другой набор с тем же именем — отдельный каталог (DistinctPackName), архив с чужим отпечатком отвергается; MaterializeEmojiPacks — сверка отпечатка эмодзи-пака); тесты tests/pack_tests.cpp (PACK-2), tests/webcompat_tests.cpp (общий вектор proto/parvane/vectors/clients/pack-hash.json, его же проверяет web clientVectors.test.ts), tests/v2_tests.cpp (content_hash туда и обратно). Эмодзи-паки объединяются по имени из ссылки (docId, EMOJI-1) — по отпечатку только сверка",
         "android": "ОТКРЫТО (то же решение)"
       }
     },
@@ -1448,7 +1458,7 @@
       },
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/callMap.ts (callSignalToV2, groupInviteFromV2, cleanGroupTitle), groupcall.ts (inviteGroupTitle, startCall), calls.ts (startPendingGroupInvite)",
-        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем, пока web не доделан)",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (callSignalToV2/callSignalFromV2: group_invite ↔ group_ring с group и title, cleanGroupTitle), include/parvane/call.h (groupInviteSignal, CallSignalIn.group/title), src/group_call_manager.cpp (startCall с группой и названием, onInvite); tdesktop parvane_client.cpp (StartGroupCall — название из сведений группы; ShowIncomingGroupCall — известная группа своим названием, неизвестная — из приглашения); тесты tests/call_manager_tests.cpp (CALL-2: во входящем — группа и её название), tests/webcompat_tests.cpp (название группы очищается как web)",
         "android": "ОТКРЫТО (то же решение)"
       }
     },
@@ -1472,7 +1482,7 @@
       ],
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live",
-        "desktop": "ОТКРЫТО (решение пользователя: desktop не трогаем; без dest_domain остаётся в пределах своего сервера, чужой домен — прежний FEDERATION_UNAVAILABLE)",
+        "desktop": "parvane-core include/parvane/v2_engine.h (OutRequest.dest), v2_link.h (Connection::request с dest), v2_control.h (Control::call с dest), src/v2_session.cpp (groupDomainLocked, requestForeignTokensLocked), src/v2_content.cpp (Media.blob_domain); tdesktop parvane_client.cpp (NoteFederationFailure — причины отказа строками EN+RU). Сценарий desktop/verify_federation.sh (зелёный 19 окт 2026) (два локальных сервера a.parvane.test/b.parvane.test с шардом federation на тестовом транспорте, по клиенту на сервер, личное письмо в обе стороны; verify_lib.sh — порты стека PV_NATS_PORT/PV_GW_WS_PORT/PV_GW_TCP_PORT, PV_FEDERATION_PEERS). tests/v2_tests.cpp проверяет только перенос blob_domain",
         "android": "ОТКРЫТО (то же решение)"
       }
     }

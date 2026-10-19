@@ -17,6 +17,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "api/api_single_message_search.h"
 
+namespace Parvane {
+class ChatsHeader;
+} // namespace Parvane
+
 namespace MTP {
 class Error;
 } // namespace MTP
@@ -325,6 +329,8 @@ private:
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _jumpToDate;
 	object_ptr<Ui::CrossButton> _cancelSearch;
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _lockUnlock;
+	// Parvane: шапка «Чаты» — заголовок, поиск пилюлей, «Написать» (spec 029, T056)
+	std::unique_ptr<Parvane::ChatsHeader> _pvHeader;
 
 	std::unique_ptr<Ui::MoreChatsBar> _moreChatsBar;
 

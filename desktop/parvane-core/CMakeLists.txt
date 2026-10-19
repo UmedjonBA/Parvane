@@ -29,9 +29,18 @@ find_program(CARGO_EXE cargo REQUIRED)
 # и тела v2 разбирает и собирает ТОЛЬКО он (своего protobuf в C++ нет).
 # Протокол v1 (Olm/Megolm, parvane-e2e, NATS) удалён в spec 029 — только движок v2.
 # Заголовок parvane_protocol.h генерирует cbindgen при cargo build.
-set(PARVANE_PROTOCOL_LIB ${PARVANE_BACKEND_DIR}/target/debug/libparvane_protocol_ffi.a)
+# Релизная сборка клиента (без PARVANE_DEV) берёт движок из `cargo --release` (NAT-11/ENG-15: debug-движок в релизе
+# не нужен); dev-сборки — прежний debug.
+if (NOT PARVANE_DEV AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+    set(PARVANE_CARGO_PROFILE release)
+    set(PARVANE_CARGO_FLAGS --release)
+else()
+    set(PARVANE_CARGO_PROFILE debug)
+    set(PARVANE_CARGO_FLAGS)
+endif()
+set(PARVANE_PROTOCOL_LIB ${PARVANE_BACKEND_DIR}/target/${PARVANE_CARGO_PROFILE}/libparvane_protocol_ffi.a)
 add_custom_target(parvane_protocol_build ALL
-    COMMAND ${CARGO_EXE} build -p parvane-protocol-ffi
+    COMMAND ${CARGO_EXE} build ${PARVANE_CARGO_FLAGS} -p parvane-protocol-ffi
     WORKING_DIRECTORY ${PARVANE_BACKEND_DIR}
     BYPRODUCTS ${PARVANE_PROTOCOL_LIB}
     COMMENT "cargo build parvane-protocol-ffi (движок v2, staticlib)")

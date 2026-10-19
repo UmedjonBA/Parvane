@@ -1,0 +1,23 @@
+lng_parvane_compose
+Compose
+Написать
+
+lng_parvane_compose_message
+New Message
+Новое сообщение
+
+lng_parvane_compose_plan
+Planner entry
+Запись в план
+
+lng_parvane_profile_messenger
+Messenger
+Мессенджер
+
+lng_parvane_profile_health_goals
+Health goals
+Цели здоровья
+
+lng_parvane_profile_appearance
+Appearance
+Оформление

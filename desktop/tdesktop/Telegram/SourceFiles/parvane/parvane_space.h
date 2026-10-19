@@ -60,4 +60,9 @@ void EnsureSchemeApplied();
 [[nodiscard]] std::array<QColor, 4> SchemeSwatches(const QString &scheme, bool night);
 [[nodiscard]] rpl::producer<> TonesChanges(); // смена схемы или светлого/тёмного режима
 
+// Шрифты оформления (как web: IBM Plex Sans 400/600, JetBrains Mono; файлы — lib_ui/fonts, OFL 1.1).
+// Пустая настройка «Шрифт» tdesktop означает IBM Plex Sans; выбранный пользователем шрифт не трогаем.
+[[nodiscard]] QString UiFontFamily(const QString &custom);
+void SetupFontFallbacks(); // после style::internal::StartFonts: письменности, которых нет в Plex
+
 } // namespace Parvane

@@ -1,5 +1,6 @@
 # Артефакты сборки форка (не коммитим)
 build-probe/
+build-release/
 build/
 out/
 *.log

@@ -37,6 +37,19 @@ std::string build(const std::vector<Entry> &entries);
 // Разобрать архив: пусто — битый/сверх лимитов. Имена сводятся к basename.
 std::vector<Entry> parse(const std::string &bytes);
 
+// PACK-2: отпечаток содержимого набора (поле PackRef.content_hash) — как web
+// `packContentHash`: SHA-256 по файлам, отсортированным по байтам UTF-8 имени,
+// подряд `имя ‖ 0x00 ‖ u32LE размер ‖ SHA-256(файл)`. Считается по тому, что
+// получатель распакует (`parse`), поэтому от порядка файлов и сборки архива
+// не зависит. Возвращает 32 сырых байта.
+std::string contentHash(const std::vector<Entry> &entries);
+// Отпечаток архива PVPK1 в base64 (как в PackRef); "" — архив не разбирается.
+std::string archiveContentHashB64(const std::string &archive);
+// Скачанный архив соответствует заявленному отпечатку (base64). Пустой
+// отпечаток — старый клиент, принимается любой разбираемый архив; битый
+// base64, неразбираемый архив или другой отпечаток — отказ.
+bool archiveMatchesContentHash(const std::string &archive, const std::string &hashB64);
+
 // Имя пака как каталог: буквы/цифры/пробел/-/_, trim, ≤32 символа (по code point), fallback "Pack".
 std::string sanitizeName(const std::string &name);
 

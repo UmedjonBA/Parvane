@@ -12,6 +12,7 @@
 #include "base/basic_types.h"
 
 #include <QtCore/QStringList>
+#include <string>
 
 class QWidget;
 
@@ -34,5 +35,9 @@ void ShowCloudSaveDialog(not_null<Window::SessionController*> controller, const 
 // отправкой файлов (скачиваются во временный каталог и уходят через `MainWidget::sendPaths` — без копии блоба
 // на сервере, как в web).
 void ShowCloudAttachDialog(not_null<Window::SessionController*> controller, not_null<Data::Thread*> thread);
+
+// Открыть узел облака из палитры Ctrl+K: раздел «Файлы» на папке узла; файл — сразу просмотром, папка — списком.
+// Дерево ещё читается — узел откроется, когда появится.
+void OpenCloudNode(const std::string &container, const std::string &nodeId);
 
 } // namespace Parvane

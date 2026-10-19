@@ -28,7 +28,47 @@ void GroupCallManager::sendTo(const std::string &peer, const json &signal, const
         std::lock_guard<std::mutex> lk(sendMutex_);
         gcid = sendGcid_;
     }
-    (void)cb_.sendV2(peer, signal, gcid);
+    if (!cb_.asyncSend) {
+        (void)cb_.sendV2(peer, signal, gcid);
+        return;
+    }
+    std::lock_guard<std::mutex> lk(outMu_);
+    if (outStop_) return;
+    auto &box = outboxes_[peer];
+    box.queue.push_back({signal, gcid});
+    if (!box.thread.joinable()) box.thread = std::thread([this, peer] { runOutbox(peer); });
+    outCv_.notify_all();
+}
+
+void GroupCallManager::runOutbox(const std::string &peer) {
+    for (;;) {
+        OutSignal next;
+        {
+            std::unique_lock<std::mutex> lk(outMu_);
+            auto &box = outboxes_[peer];
+            outCv_.wait(lk, [&] { return outStop_ || !box.queue.empty(); });
+            if (outStop_) return;
+            next = std::move(box.queue.front());
+            box.queue.pop_front();
+        }
+        (void)cb_.sendV2(peer, next.signal, next.gcid);
+    }
+}
+
+GroupCallManager::~GroupCallManager() {
+    {
+        // Сессии — раньше очередей: их колбэки при разрушении ещё зовут sendTo
+        std::lock_guard<std::mutex> lk(mutex_);
+        peers_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lk(outMu_);
+        outStop_ = true;
+    }
+    outCv_.notify_all();
+    for (auto &[peer, box] : outboxes_) {
+        if (box.thread.joinable()) box.thread.join();
+    }
 }
 
 void GroupCallManager::declineCall(const std::string &gcid, const std::vector<std::string> &participants,

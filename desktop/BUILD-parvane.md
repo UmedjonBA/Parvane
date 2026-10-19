@@ -176,7 +176,7 @@ cmake -S desktop/tdesktop -B desktop/build-probe \
   tar --use-compress-program=unzstd -xf glib2-devel-*.pkg.tar.zst -C "$SR" \
     usr/bin/gdbus-codegen usr/share/glib-2.0/codegen
   ```
-  и к cmake-реконфигу из п. 5 добавить `-DDESKTOP_APP_GDBUSCODEGEN=$SR/usr/bin/gdbus-codegen`.
+  и к cmake-реконфигу из п. 5 добавить `-DDESKTOP_APP_GDBUSCODEGEN=$SR/bin/gdbus-codegen`.
 - Смена мажора protobuf в системе (36 → 35) → старый бинарь не стартует
   (`libprotobuf-lite.so.36 not found`), нужна полная пересборка; cmake сам
   подхватывает новый `protoc`.
@@ -212,3 +212,26 @@ handshake RFC 6455, маскированные текстовые кадры, pi
 двухфакторный вход подтверждаются в Telegram-боте (экран со ссылкой
 `https://t.me/<бот>?start=<token>`, клиент опрашивает `identity.register.status`
 раз в 2 с). Headless-проверка: `PARVANE_AUTOLOGIN=ник:пароль` без `@server`.
+
+## Релиз (spec 029, T073; 19 окт 2026)
+
+Релизная сборка — отдельный каталог `build-release`, БЕЗ `PARVANE_DEV`: хуков `PARVANE_AUTO*`, `PARVANE_DUMPTREE`,
+`ws://`/TCP к gateway и небезопасного TLS в ней нет (NAT-11; хуки читаются только через `Parvane::DevEnv`, который
+без `PARVANE_DEV` отдаёт `nullptr`). Движок v2 при `CMAKE_BUILD_TYPE=Release` берётся из `cargo build --release`
+(`backend/target/release/libparvane_protocol_ffi.a`). Полная компиляция ~900 объектов — часы; гонять только
+под `heavy.lock` в `parvane-link.slice`, как линковку:
+```bash
+cd /home/ub/Projects/active/Parvane/desktop
+SR=~/.local/parvane-sysroot/usr
+cmake -S tdesktop -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DPARVANE_DEV=OFF \
+  -DDESKTOP_APP_USE_PACKAGED=ON -DCMAKE_PREFIX_PATH="$SR" \
+  -DTDESKTOP_API_ID=17349 -DTDESKTOP_API_HASH=344583e45741c457fe1862106095a5eb \
+  -DDESKTOP_APP_DISABLE_AUTOUPDATE=ON -DDESKTOP_APP_DISABLE_CRASH_REPORTS=ON \
+  -DCARGO_EXE=$HOME/.cargo/bin/cargo -DDESKTOP_APP_GIRSCANNER=$HOME/.local/bin/g-ir-scanner \
+  -DDESKTOP_APP_DISPATCH_LIBRARIES=$SR/lib/libdispatch.so -DDESKTOP_APP_DISPATCH_INCLUDE_DIRS=$SR/include \
+  -DDESKTOP_APP_GDBUSCODEGEN=$SR/bin/gdbus-codegen
+ninja -C build-release -j3 Telegram
+```
+Запуск — `desktop/parvane-desktop` (данные в `~/.local/share/parvane-desktop`, сервер — прод по WSS). Проверка
+входа — вручную (в релизе нет хуков): VNC/экран, тестовый аккаунт заводит `local-workdirs/prod-desk/prod_check.sh`
+на dev-сборке.

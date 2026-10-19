@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 
 #include "parvane/parvane_client.h" // Parvane fork
+#include "parvane/parvane_space.h" // Parvane fork: шрифты «Пространство»
 #include "data/data_abstract_structure.h"
 #include "data/data_channel.h"
 #include "data/data_forum.h"
@@ -272,8 +273,10 @@ void Application::run() {
 
 	Parvane::EnsureDefaultLanguage(); // Parvane fork: русский по умолчанию (1-й старт).
 
-	style::SetCustomFont(settings().customFontFamily());
+	// Parvane fork: шрифт по умолчанию — IBM Plex Sans оформления «Пространство» (spec 029, T052)
+	style::SetCustomFont(Parvane::UiFontFamily(settings().customFontFamily()));
 	style::internal::StartFonts();
+	Parvane::SetupFontFallbacks();
 
 	ValidateScale();
 

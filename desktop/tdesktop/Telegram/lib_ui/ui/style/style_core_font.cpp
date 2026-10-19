@@ -140,6 +140,13 @@ bool LoadCustomFont(const QString &filePath) {
 
 [[nodiscard]] QString MonospaceFont() {
 	static const auto family = [&]() -> QString {
+		// Parvane fork: моноширинный шрифт оформления — встроенный JetBrains Mono (как web)
+		const auto parvane = u"JetBrains Mono"_q;
+		if (QFontInfo(QFont(parvane)).family().trimmed().startsWith(
+				parvane,
+				Qt::CaseInsensitive)) {
+			return parvane;
+		}
 		const auto manual = ManualMonospaceFont();
 		const auto system = SystemMonospaceFont();
 

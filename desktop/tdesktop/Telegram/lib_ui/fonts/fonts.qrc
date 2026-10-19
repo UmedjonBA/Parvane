@@ -6,5 +6,11 @@
     <file>OpenSans-SemiBoldItalic.ttf</file>
     <file>Vazirmatn-UI-NL-Regular.ttf</file>
     <file>Vazirmatn-UI-NL-SemiBold.ttf</file>
+    <!-- Parvane fork: шрифты оформления «Пространство» (как web: IBM Plex Sans / JetBrains Mono, OFL 1.1) -->
+    <file>IBMPlexSans-Regular.ttf</file>
+    <file>IBMPlexSans-Italic.ttf</file>
+    <file>IBMPlexSans-SemiBold.ttf</file>
+    <file>IBMPlexSans-SemiBoldItalic.ttf</file>
+    <file>JetBrainsMono-Regular.ttf</file>
   </qresource>
 </RCC>

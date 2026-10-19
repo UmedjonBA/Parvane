@@ -84,6 +84,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QDateTime>
 #include <parvane/blobcrypt.h>       // parvane-core (E2E медиа, Фаза 3)
+#include <parvane/pack_archive.h>    // parvane-core: отпечаток набора стикеров (PACK-2)
 #include "parvane/parvane_sections_data.h"
 #include "parvane/parvane_knowledge.h"
 #include "parvane/parvane_note_markdown.h"
@@ -760,10 +761,15 @@ void RestrictToOwner(const QString &path) {
 	return cWorkingDir() + u"tdata/parvane-history-"_q + safe + u".jsonl"_q;
 }
 
+// Файл журнала истории — под одним замком: дозапись и перезаписи (прочтение, скрытые) идут с разных
+// потоков, и перезапись, прочитавшая файл до дозаписи, стирала новое входящее (verify_protocol_v2_keys_backup).
+std::mutex g_historyFileMutex;
+
 void HistoryAppend(const parvane::StoredMessage &sm) {
 	if (sm.id.empty()) {
 		return;
 	}
+	std::lock_guard<std::mutex> lk(g_historyFileMutex);
 	StoreAppendLine(HistoryPath(), QString::fromStdString(sm.toJson().dump()));
 }
 
@@ -839,6 +845,7 @@ void AppendCleared(const QStringList &uuids) {
 
 // Переписать журнал истории без скрытых сообщений (иначе воскреснут при старте).
 void RewriteHistoryWithout(const QSet<QString> &uuids) {
+	std::lock_guard<std::mutex> lk(g_historyFileMutex);
 	QStringList kept;
 	auto dropped = 0;
 	for (const auto &line : StoreReadLines(HistoryPath())) {
@@ -865,7 +872,6 @@ void RewriteHistoryWithout(const QSet<QString> &uuids) {
 // реплей показывал одну галочку, хотя sync курсор уже прошёл эту мутацию и
 // повторно её не отдавал (10 сен 2026). Перезаписываем записи с read=true.
 // Воркер; файл под мьютексом — параллельные перезаписи теряли бы правки.
-std::mutex g_historyFileMutex;
 void MarkHistoryRead(const QSet<QString> &uuids) {
 	std::lock_guard<std::mutex> lk(g_historyFileMutex);
 	QStringList kept;
@@ -2430,6 +2436,10 @@ void DecCacheRemove(const QString &id) {
 
 // Язык интерфейса — русский (пакет Parvane) или нет: для коротких уведомлений,
 // которым не заведён ключ lang.strings (новый ключ — пересборка ~100 объектов).
+const char *DevEnv(const char *name) {
+	return ParvaneDevEnv(name);
+}
+
 [[nodiscard]] bool IsRussianUi() {
 	return tr::lng_parvane_enhanced_privacy(tr::now) != u"Enhanced privacy"_q;
 }
@@ -3194,6 +3204,8 @@ bool StartSession() {
 				std::make_unique<parvane::StubMediaBackend>());
 		};
 		parvane::GroupCallManager::Callbacks gcb;
+		// Отправка участнику может ждать его ключ доступа (T185) — очередью, не под замком менеджера
+		gcb.asyncSend = true;
 		// Протокол v2 (T141, FR-062): приглашение в групповой звонок и попарные
 		// сигналы mesh — запечатанными конвертами участникам.
 		gcb.sendV2 = [](const std::string &peer, const parvane::json &signal, const std::string &groupCallId) {
@@ -4383,6 +4395,63 @@ constexpr auto kPackMaxFiles = 200;
 	return written;
 }
 
+// PACK-2: отпечаток содержимого в ссылку на набор — как web, по тому, что
+// распакует получатель (`parvane::pack::parse` собранного архива).
+void AttachPackContentHash(nlohmann::json &ref, const std::string &archive) {
+	const auto hash = parvane::pack::archiveContentHashB64(archive);
+	if (!hash.empty()) {
+		ref["content_hash"] = hash;
+	}
+}
+
+// PACK-2: отпечатки установленных наборов (каталог → отпечаток), считаются
+// лениво на воркере; ключ — каталог и время его изменения (новый файл в
+// своём наборе меняет отпечаток).
+std::mutex g_packHashMutex;
+QHash<QString, QPair<qint64, std::string>> g_packHashByDir;
+
+// Установленный набор с тем же отпечатком: тот же набор от другого
+// отправителя (или свой) — один набор. Пусто — такого нет. Только воркер.
+[[nodiscard]] QString FindInstalledPackByHash(
+		const QString &root,
+		const std::string &hashB64) {
+	const auto rootDir = QDir(root);
+	if (hashB64.empty() || !rootDir.exists()) {
+		return {};
+	}
+	for (const auto &packName : rootDir.entryList(
+			QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+		const auto dir = rootDir.filePath(packName);
+		const auto stamp = QFileInfo(dir).lastModified().toMSecsSinceEpoch();
+		auto hash = std::string();
+		{
+			std::lock_guard<std::mutex> lk(g_packHashMutex);
+			const auto it = g_packHashByDir.constFind(dir);
+			if (it != g_packHashByDir.constEnd() && it->first == stamp) {
+				hash = it->second;
+			}
+		}
+		if (hash.empty()) {
+			hash = parvane::pack::archiveContentHashB64(BuildPackArchive(dir));
+			std::lock_guard<std::mutex> lk(g_packHashMutex);
+			g_packHashByDir.insert(dir, { stamp, hash });
+		}
+		if (!hash.empty() && hash == hashB64) {
+			return packName;
+		}
+	}
+	return {};
+}
+
+// PACK-2: имя занято другим набором — отдельный каталог «<имя> <6 hex отпечатка>».
+[[nodiscard]] QString DistinctPackName(
+		const QString &name,
+		const std::string &hashB64) {
+	const auto hex = QString::fromLatin1(QByteArray::fromBase64(
+		QByteArray::fromStdString(hashB64)).toHex().left(6));
+	return SanitizePackName(name.left(25).trimmed() + u" "_q + hex);
+}
+
 } // namespace
 
 void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
@@ -4512,6 +4581,7 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 								{ "key", penc.keyB64 },
 								{ "nonce", penc.nonceB64 }};
 							AttachBlobCap(ref, pfid);
+							AttachPackContentHash(ref, archive);
 							refStr = QString::fromStdString(ref.dump());
 							std::lock_guard<std::mutex> lk(g_sessionMutex);
 							RememberUploadedPackRef(
@@ -4724,6 +4794,7 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 		const auto fileId = QString::fromStdString(ref.value("file_id", std::string()));
 		const auto key = ref.value("key", std::string());
 		const auto nonce = ref.value("nonce", std::string());
+		const auto contentHash = ref.value("content_hash", std::string());
 		RememberBlobCaps(ref);
 		if (rawName.isEmpty() || fileId.isEmpty()) {
 			continue;
@@ -4760,6 +4831,14 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 					auto d = DownloadChatBlob(cloud, self, token, fidStd, 20000);
 					if (d.ok) {
 						auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce);
+						// PACK-2: архив обязан дать заявленный отпечаток —
+						// иначе отправитель подменил бы картинки чужого набора
+						if (dec && !contentHash.empty()
+							&& !parvane::pack::archiveMatchesContentHash(*dec, contentHash)) {
+							LOG(("Parvane: эмодзи-пак «%1»: содержимое архива не совпало с отпечатком — отвергнут")
+								.arg(rawName));
+							dec.reset();
+						}
 						if (dec) {
 							written = UnpackPackArchive(*dec, dest);
 							if (written > 0) {
@@ -4853,6 +4932,7 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 							{ "key", penc.keyB64 },
 							{ "nonce", penc.nonceB64 }};
 						AttachBlobCap(ref, pfid);
+						AttachPackContentHash(ref, archive);
 						refStr = QString::fromStdString(ref.dump());
 						std::lock_guard<std::mutex> lk(g_sessionMutex);
 						RememberUploadedPackRef(
@@ -4899,71 +4979,116 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 	if (fileId.isEmpty() || g_packInstallBusy.contains(fileId)) {
 		return;
 	}
-	const auto dest = StickerPacksRoot() + u"/"_q + name;
-	if (QDir(dest).exists()) {
-		Ui::show(Ui::MakeInformBox(
-			tr::lng_parvane_sticker_set_installed(tr::now, lt_name, name)));
-		return;
-	}
 	const auto key = ref.value("key", std::string());
 	const auto nonce = ref.value("nonce", std::string());
+	const auto contentHash = ref.value("content_hash", std::string());
 	RememberBlobCaps(ref);
-	Ui::show(Ui::MakeConfirmBox({
-		.text = tr::lng_parvane_sticker_set_add(tr::now, lt_name, name, lt_amount, QString::number(count)),
-		.confirmed = [=](Fn<void()> &&close) {
-			close();
-			g_packInstallBusy.insert(fileId);
-			const auto fid = fileId.toStdString();
-			const auto self = SelfAddress().toStdString();
-			const auto token = Token().toStdString();
-			crl::async([=] {
-				parvane::ITransport *t = nullptr;
-				{
-					std::lock_guard<std::mutex> lk(g_sessionMutex);
-					t = g_transport.get();
-				}
-				auto unpacked = 0;
-				if (t) {
-					try {
-						parvane::CloudClient cloud(*t);
-						auto d = DownloadChatBlob(cloud, self, token, fid, 20000);
-						if (d.ok) {
-							auto bytes = std::string();
-							if (key.empty()) {
-								bytes = std::move(d.bytes);
-							} else if (auto dec = parvane::blobcrypt::decrypt(
-									d.bytes, key, nonce)) {
-								bytes = std::move(*dec);
-							}
-							if (!bytes.empty()) {
-								unpacked = UnpackPackArchive(bytes, dest);
-							}
-						}
-					} catch (const std::exception &e) {
-						LOG(("Parvane: установка пака не удалась: %1")
-							.arg(QString::fromUtf8(e.what())));
+	const auto installed = [](const QString &shown) {
+		Ui::show(Ui::MakeInformBox(
+			tr::lng_parvane_sticker_set_installed(tr::now, lt_name, shown)));
+	};
+	// Подтверждение и установка в каталог dest; shown — имя набора на экране
+	// (имя каталога: под ним набор и покажется после LoadLocalStickerPacks).
+	const auto install = [=](const QString &dest, const QString &shown) {
+		Ui::show(Ui::MakeConfirmBox({
+			.text = tr::lng_parvane_sticker_set_add(tr::now, lt_name, shown, lt_amount, QString::number(count)),
+			.confirmed = [=](Fn<void()> &&close) {
+				close();
+				g_packInstallBusy.insert(fileId);
+				const auto fid = fileId.toStdString();
+				const auto self = SelfAddress().toStdString();
+				const auto token = Token().toStdString();
+				crl::async([=] {
+					parvane::ITransport *t = nullptr;
+					{
+						std::lock_guard<std::mutex> lk(g_sessionMutex);
+						t = g_transport.get();
 					}
-				}
-				crl::on_main([=] {
-					g_packInstallBusy.remove(fileId);
-					if (unpacked > 0) {
-						if (const auto s = g_sessionWeak.get()) {
-							LoadLocalStickerPacks(s);
+					auto unpacked = 0;
+					if (t) {
+						try {
+							parvane::CloudClient cloud(*t);
+							auto d = DownloadChatBlob(cloud, self, token, fid, 20000);
+							if (d.ok) {
+								auto bytes = std::string();
+								if (key.empty()) {
+									bytes = std::move(d.bytes);
+								} else if (auto dec = parvane::blobcrypt::decrypt(
+										d.bytes, key, nonce)) {
+									bytes = std::move(*dec);
+								}
+								// PACK-2: архив обязан дать заявленный отпечаток —
+								// иначе отправитель подменил бы картинки чужого набора
+								if (!bytes.empty() && !contentHash.empty()
+									&& !parvane::pack::archiveMatchesContentHash(bytes, contentHash)) {
+									LOG(("Parvane: пак «%1»: содержимое архива не совпало с отпечатком — отвергнут")
+										.arg(shown));
+									bytes.clear();
+								}
+								if (!bytes.empty()) {
+									unpacked = UnpackPackArchive(bytes, dest);
+								}
+							}
+						} catch (const std::exception &e) {
+							LOG(("Parvane: установка пака не удалась: %1")
+								.arg(QString::fromUtf8(e.what())));
 						}
-						LOG(("Parvane: пак «%1» установлен (%2 шт)")
-							.arg(name)
-							.arg(unpacked));
-						Ui::show(Ui::MakeInformBox(
-							tr::lng_parvane_sticker_set_added(tr::now, lt_name, name, lt_amount, QString::number(unpacked))));
-					} else {
-						Ui::show(Ui::MakeInformBox(
-							tr::lng_parvane_sticker_set_failed(tr::now, lt_name, name)));
 					}
+					crl::on_main([=] {
+						g_packInstallBusy.remove(fileId);
+						if (unpacked > 0) {
+							if (const auto s = g_sessionWeak.get()) {
+								LoadLocalStickerPacks(s);
+							}
+							LOG(("Parvane: пак «%1» установлен (%2 шт)")
+								.arg(shown)
+								.arg(unpacked));
+							Ui::show(Ui::MakeInformBox(
+								tr::lng_parvane_sticker_set_added(tr::now, lt_name, shown, lt_amount, QString::number(unpacked))));
+						} else {
+							Ui::show(Ui::MakeInformBox(
+								tr::lng_parvane_sticker_set_failed(tr::now, lt_name, shown)));
+						}
+					});
 				});
-			});
-		},
-		.confirmText = tr::lng_parvane_sticker_set_add_button(),
-	}));
+			},
+			.confirmText = tr::lng_parvane_sticker_set_add_button(),
+		}));
+	};
+	const auto root = StickerPacksRoot();
+	if (contentHash.empty()) {
+		// Старый клиент без отпечатка: набор узнаётся по имени, как раньше
+		const auto dest = root + u"/"_q + name;
+		if (QDir(dest).exists()) {
+			installed(name);
+			return;
+		}
+		install(dest, name);
+		return;
+	}
+	// PACK-2: тот же набор от другого отправителя (или свой) — один набор;
+	// другой набор с тем же именем — отдельный каталог. Отпечатки
+	// установленных наборов считаются на воркере.
+	crl::async([=] {
+		const auto found = FindInstalledPackByHash(root, contentHash);
+		crl::on_main([=] {
+			if (!found.isEmpty()) {
+				LOG(("Parvane: пак «%1» уже установлен как «%2» (тот же отпечаток)")
+					.arg(name, found));
+				installed(found);
+				return;
+			}
+			auto shown = name;
+			if (QDir(root + u"/"_q + shown).exists()) {
+				shown = DistinctPackName(name, contentHash);
+				if (QDir(root + u"/"_q + shown).exists()) {
+					installed(shown);
+					return;
+				}
+			}
+			install(root + u"/"_q + shown, shown);
+		});
+	});
 }
 
 void AttachLocalOutgoingMedia(
@@ -16117,6 +16242,228 @@ QByteArray SectionsRead(const QString &path) {
 
 bool SectionsWrite(const QString &path, const QByteArray &data) {
 	return StoreWrite(path, data);
+}
+
+// ── spec 029, T036: «Выгрузка данных» — снимок переписки и вложения ──────────
+// Порт web `parvaneExportSnapshot` / `parvaneExportMedia`: всё — с устройства (журнал истории + кэш правок v2),
+// на сервер ничего не уходит, кроме скачивания вложений, которых нет в кэше.
+
+std::string ExportSnapshotJson(const QStringList &contacts) {
+	const auto self = SelfAddress();
+	if (self.isEmpty()) {
+		return std::string();
+	}
+	LoadV2Ids();
+	const auto isSelf = [&](const QString &address) {
+		return !address.isEmpty() && (address == self || LatestAddress(address) == self);
+	};
+	// Последняя строка журнала по id (порядок — первого появления); правки и реакции — из кэша v2
+	auto order = std::vector<std::string>();
+	auto rows = std::map<std::string, nlohmann::json>();
+	for (const auto &line : StoreReadLines(HistoryPath())) {
+		try {
+			auto row = nlohmann::json::parse(line.toStdString());
+			const auto id = row.value("id", std::string());
+			if (id.empty()) {
+				continue;
+			}
+			if (!rows.contains(id)) {
+				order.push_back(id);
+			}
+			rows[id] = std::move(row);
+		} catch (const std::exception &) {
+		}
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		for (auto &[id, row] : rows) {
+			const auto it = g_v2Cache.find(QString::fromStdString(id));
+			if (it != g_v2Cache.end()) {
+				row = it.value().toJson();
+			}
+		}
+	}
+	auto list = std::vector<nlohmann::json>();
+	list.reserve(order.size());
+	for (const auto &id : order) {
+		auto &row = rows[id];
+		if (!row.is_object()
+			|| row.value("deleted", false)
+			|| !row.contains("content")
+			|| !row["content"].is_object()
+			|| !row.contains("ts")
+			|| !row["ts"].is_number()) {
+			continue;
+		}
+		const auto kind = row["content"].value("kind", std::string());
+		if (kind.empty() || kind == "encrypted" || kind == "group_encrypted") {
+			continue;
+		}
+		// Исчезающие сообщения на устройстве не хранятся дольше срока — в архив не идут
+		if (TtlFromContent(row["content"]) != 0 || IsCleared(QString::fromStdString(id))) {
+			continue;
+		}
+		list.push_back(std::move(row));
+	}
+	std::stable_sort(list.begin(), list.end(), [](const nlohmann::json &a, const nlohmann::json &b) {
+		return a.value("ts", std::int64_t(0)) < b.value("ts", std::int64_t(0));
+	});
+
+	const auto selfName = DisplayNameFor(self);
+	auto chats = std::map<QString, nlohmann::json>();
+	for (auto &row : list) {
+		const auto from = QString::fromStdString(row.value("from", std::string()));
+		const auto to = QString::fromStdString(row.value("to", std::string()));
+		const auto isOutgoing = isSelf(from);
+		const auto isGroup = parvane::v2::isGroupAddress(to.toStdString());
+		const auto address = isGroup
+			? CanonicalGroup(to)
+			: LatestAddress(isOutgoing ? to : from);
+		if (address.isEmpty()) {
+			continue;
+		}
+		if (!isGroup && !isOutgoing && g_blockedAddrs.contains(LatestAddress(from))) {
+			continue;
+		}
+		auto &chat = chats[address];
+		if (chat.is_null()) {
+			const auto info = isGroup ? GroupInfoFor(address) : std::nullopt;
+			const auto kind = isSelf(address)
+				? "saved"
+				: info
+				? (info->kind == "channel" ? "channel" : "group")
+				: isGroup
+				? "group"
+				: "user";
+			const auto title = (info && !info->name.empty())
+				? info->name
+				: DisplayNameFor(address).toStdString();
+			chat = nlohmann::json{
+				{ "address", address.toStdString() },
+				{ "kind", kind },
+				{ "title", title },
+				{ "messages", nlohmann::json::array() },
+			};
+		}
+		auto message = nlohmann::json{
+			{ "uuid", row.value("id", std::string()) },
+			{ "from", (isOutgoing ? self : from).toStdString() },
+			{ "fromName", (isOutgoing ? selfName : DisplayNameFor(from)).toStdString() },
+			{ "isOutgoing", isOutgoing },
+			{ "ts", row.value("ts", std::int64_t(0)) },
+			{ "edited", row.value("edited", false) },
+			{ "pinned", row.value("pinned", false) },
+			{ "content", row["content"] },
+		};
+		if (row.contains("reply_to") && row["reply_to"].is_string()) {
+			message["replyTo"] = row["reply_to"];
+		}
+		if (row.value("edited", false) && row.value("updated_at", std::int64_t(0)) > 0) {
+			message["editedAt"] = row.value("updated_at", std::int64_t(0));
+		}
+		if (row.contains("reactions") && row["reactions"].is_array() && !row["reactions"].empty()) {
+			auto reactions = nlohmann::json::array();
+			for (const auto &r : row["reactions"]) {
+				if (r.is_object()) {
+					reactions.push_back({
+						{ "emoji", r.value("emoji", std::string()) },
+						{ "count", r.value("count", std::int64_t(0)) },
+					});
+				}
+			}
+			message["reactions"] = std::move(reactions);
+		}
+		chat["messages"].push_back(std::move(message));
+	}
+
+	// Чаты — по последнему сообщению, свежие сверху (как список чатов); «Избранное» первым
+	auto ordered = std::vector<nlohmann::json>();
+	for (auto &[address, chat] : chats) {
+		ordered.push_back(std::move(chat));
+	}
+	const auto lastTs = [](const nlohmann::json &chat) {
+		const auto &messages = chat["messages"];
+		return messages.empty() ? std::int64_t(0) : messages.back().value("ts", std::int64_t(0));
+	};
+	std::stable_sort(ordered.begin(), ordered.end(), [&](const nlohmann::json &a, const nlohmann::json &b) {
+		const auto aSaved = (a.value("kind", std::string()) == "saved");
+		const auto bSaved = (b.value("kind", std::string()) == "saved");
+		if (aSaved != bSaved) {
+			return aSaved;
+		}
+		return lastTs(a) > lastTs(b);
+	});
+
+	auto contactSet = std::set<QString>();
+	for (const auto &address : contacts) {
+		if (!address.isEmpty() && !isSelf(address)) {
+			contactSet.insert(LatestAddress(address));
+		}
+	}
+	auto contactList = nlohmann::json::array();
+	for (const auto &address : contactSet) {
+		contactList.push_back({
+			{ "address", address.toStdString() },
+			{ "name", DisplayNameFor(address).toStdString() },
+			{ "isExplicit", true },
+		});
+	}
+
+	return nlohmann::json{
+		{ "self", self.toStdString() },
+		{ "selfName", selfName.toStdString() },
+		{ "chats", std::move(ordered) },
+		{ "contacts", std::move(contactList) },
+	}.dump();
+}
+
+std::optional<std::string> ExportMediaBytes(
+		const std::string &fileId,
+		const std::string &fileKey,
+		const std::string &fileNonce) {
+	const auto id = QString::fromStdString(fileId);
+	if (!IsSafeFileId(id)) {
+		return std::nullopt;
+	}
+	// Уже расшифрованное устройством при показе (`<file_id>_<имя>`)
+	const auto dir = QDir(MediaDir());
+	for (const auto &name : dir.entryList(QStringList{ id + u"_*"_q }, QDir::Files)) {
+		auto f = QFile(dir.filePath(name));
+		if (f.open(QIODevice::ReadOnly)) {
+			return f.readAll().toStdString();
+		}
+	}
+	parvane::ITransport *t = nullptr;
+	std::string self, token;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		t = g_transport.get();
+		self = g_selfAddress.toStdString();
+		token = g_token.toStdString();
+	}
+	if (!t) {
+		return std::nullopt;
+	}
+	try {
+		parvane::CloudClient cloud(*t);
+		auto d = DownloadChatBlob(cloud, self, token, fileId, 30000);
+		if (!d.ok) {
+			LOG(("Parvane: выгрузка — вложение %1 не скачано: %2").arg(id, QString::fromStdString(d.error)));
+			return std::nullopt;
+		}
+		if (fileKey.empty()) {
+			return std::move(d.bytes);
+		}
+		auto plain = parvane::blobcrypt::decrypt(d.bytes, fileKey, fileNonce);
+		if (!plain) {
+			LOG(("Parvane: выгрузка — вложение %1 не расшифровано").arg(id));
+			return std::nullopt;
+		}
+		return std::move(*plain);
+	} catch (const std::exception &e) {
+		LOG(("Parvane: выгрузка — вложение %1: %2").arg(id, QString::fromUtf8(e.what())));
+		return std::nullopt;
+	}
 }
 
 } // namespace Parvane

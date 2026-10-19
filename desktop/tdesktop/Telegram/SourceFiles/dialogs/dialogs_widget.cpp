@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_widget.h"
 
 #include "parvane/parvane_client.h" // Parvane: локальный поиск по сообщениям
+#include "parvane/parvane_chats_header.h" // Parvane: шапка «Чаты»
 
 #include "base/call_delayed.h"
 #include "base/qt/qt_key_modifiers.h"
@@ -615,6 +616,13 @@ Widget::Widget(
 	});
 
 	setupMainMenuToggle();
+	if (_layout == Layout::Main
+		&& !controller->windowId().forum()
+		&& !controller->windowId().folder()) {
+		_pvHeader = std::make_unique<Parvane::ChatsHeader>(
+			_searchControls.data(),
+			controller);
+	}
 	setupShortcuts();
 	if (_stories) {
 		setupStories();
@@ -1691,6 +1699,9 @@ void Widget::updateHasFocus(not_null<QWidget*> focused) {
 		|| (focused == _search->rawTextEdit());
 	if (_searchHasFocus != has) {
 		_searchHasFocus = has;
+		if (_pvHeader) {
+			updateControlsGeometry(); // Parvane: поиск разворачивается из пилюли и обратно
+		}
 		if (_postponeProcessSearchFocusChange) {
 			return;
 		} else if (has) {
@@ -3720,6 +3731,8 @@ bool Widget::applySearchState(SearchState state) {
 			&& !_openedForum
 			&& !searchInPeer());
 		updateControlsGeometry();
+	} else if (_pvHeader && (queryEmptyChanged || inChatChanged)) {
+		updateControlsGeometry(); // Parvane: пилюля поиска или поле на всю шапку
 	}
 	if (_topBarSuggestion && queryEmptyChanged) {
 		_searchStateForTopBarSuggestion.fire(!_searchState.query.isEmpty());
@@ -4050,6 +4063,27 @@ void Widget::updateControlsGeometry() {
 	_searchForNarrowLayout->moveToLeft(
 		searchLeft,
 		st::dialogsFilterPadding.y());
+
+	if (_pvHeader) {
+		// Parvane: пока поиск пуст и без фокуса — «Чаты», пилюля поиска и «Написать» (как web)
+		const auto collapsed = !narrowRatio
+			&& !_searchHasFocus
+			&& _searchState.empty()
+			&& !_openedFolder
+			&& !_openedForum
+			&& !_childList;
+		const auto place = _pvHeader->layout(
+			QRect(filterLeft, 0, filterWidth, filterAreaHeight),
+			_search->geometry(),
+			collapsed);
+		if (place != _search->geometry()) {
+			_search->setGeometryToLeft(
+				place.x(),
+				place.y(),
+				place.width(),
+				place.height());
+		}
+	}
 
 	auto right = filterLeft + filterWidth;
 	_cancelSearch->moveToLeft(right - _cancelSearch->width(), _search->y());

@@ -8,6 +8,8 @@
 // доставка офлайн-устройству и восстановление состояния из файла (import),
 // то же по WebSocket (двоичные кадры) при PARVANE_V2_WS_URL.
 #include <algorithm>
+#include <atomic>
+#include <functional>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -21,6 +23,7 @@
 
 #include <unistd.h>
 
+#include "parvane/call.h"
 #include "parvane/events.h"
 #include "parvane/messenger.h"
 #include "parvane/topics.h"
@@ -122,6 +125,8 @@ struct Peer {
     std::string token;
     Inbox inbox;
     std::unique_ptr<v2::Session> s;
+    // Задан — зовётся на рабочем потоке сессии до сборщика (как обработчик событий хоста)
+    std::function<void(const json &)> hook;
     // Задан — корень на устройстве не хранится: ключ восстановления сюда.
     bool withRecoveryKey = false;
     std::string recoveryKey;
@@ -138,7 +143,10 @@ struct Peer {
         cfg.clientVersion = "desktop-test";
         cfg.otkCount = 10;
         cfg.log = [u = user](const std::string &m) { std::printf("    [%s] %s\n", u.c_str(), m.c_str()); };
-        cfg.onEvent = [this](const json &ev) { inbox.push(ev, user); };
+        cfg.onEvent = [this](const json &ev) {
+            if (hook) hook(ev);
+            inbox.push(ev, user);
+        };
         s = std::make_unique<v2::Session>(std::move(cfg));
         s->start();
     }
@@ -347,6 +355,71 @@ static void groupScenario(const std::string &tcp, const std::string &dir, const 
     erin.s->stop();
 }
 
+// T185: попарный сигнал группового звонка участнику, с которым не было переписки, шлётся
+// из обработчика событий — на рабочем потоке сессии (как GroupCallManager в tdesktop).
+// Встречный ключ доступа приходит записью инбокса; рабочий поток, ждущий его, обязан
+// разобрать её сам (verify_group_call: bob → carol упирался в 8 с и сигнал терялся).
+static void groupCallKeyScenario(const std::string &tcp, const std::string &dir, const std::string &suffix) {
+    Peer ka, kb, kc;
+    ka.user = "v2ka" + suffix + "@local";
+    kb.user = "v2kb" + suffix + "@local";
+    kc.user = "v2kc" + suffix + "@local";
+    try {
+        ka.token = issue(tcp, ka.user, "ka-" + suffix);
+        kb.token = issue(tcp, kb.user, "kb-" + suffix);
+        kc.token = issue(tcp, kc.user, "kc-" + suffix);
+    } catch (const std::exception &e) {
+        check(false, "T185: JWT участников звонка", e.what());
+        return;
+    }
+    std::atomic<bool> fired{false};
+    std::atomic<int> result{-1};
+    std::atomic<long long> tookMs{0};
+    std::string group; // задаётся до появления группы у kb; читается в hook после
+    std::mutex groupMu;
+    const auto callId = v2::newUuidV7();
+    const auto groupCallId = v2::newUuidV7();
+    kb.hook = [&](const json &ev) {
+        if (ev.value("type", std::string()) != "groupUpdated") return;
+        {
+            std::lock_guard<std::mutex> lk(groupMu);
+            if (group.empty() || ev.value("address", std::string()) != group) return;
+        }
+        if (fired.exchange(true)) return;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool sent = kb.s->sendCallSignal(kc.user, parvane::inviteSignal(callId, "audio", "v=0 t185"), groupCallId);
+        tookMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        result = sent ? 1 : 0;
+    };
+    std::atomic<bool> signalled{false};
+    kc.hook = [&](const json &ev) {
+        if (ev.value("type", std::string()) == "callSignal" && ev.value("group", false)
+            && ev.value("from", std::string()) == kb.user) {
+            signalled = true;
+        }
+    };
+    ka.start(tcp, dir + "/ka");
+    kb.start(tcp, dir + "/kb");
+    kc.start(tcp, dir + "/kc");
+    check(ka.s->waitReady(30000) && kb.s->waitReady(30000) && kc.s->waitReady(30000), "T185: сессии участников готовы");
+    try {
+        std::lock_guard<std::mutex> lk(groupMu);
+        group = ka.s->createGroup("Звонок " + suffix, {kb.user, kc.user}, false);
+    } catch (const std::exception &e) {
+        check(false, "T185: группа создана", e.what());
+    }
+    for (int i = 0; i < 300 && result < 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(result == 1, "T185: сигнал из обработчика событий участнику без переписки ушёл (встречный ключ пришёл)",
+          std::to_string(tookMs.load()) + " мс");
+    check(result == 1 && tookMs < 6000, "T185: встречный ключ разобран, не дожидаясь конца ожидания",
+          std::to_string(tookMs.load()) + " мс");
+    for (int i = 0; i < 100 && !signalled; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(signalled.load(), "T185: участник получил попарный сигнал группового звонка");
+    ka.s->stop();
+    kb.s->stop();
+    kc.s->stop();
+}
+
 int main() {
     const auto tcp = env("PARVANE_GATEWAY_TCP", "127.0.0.1:9223");
     const auto ws = env("PARVANE_V2_WS_URL", "");
@@ -468,6 +541,7 @@ int main() {
     check(!alice.s->sendTyping("nobody" + suffix + "@local"), "T127: собеседник не на v2 — «печатает» идёт по v1");
 
     groupScenario(tcp, dir, suffix, alice, bob);
+    groupCallKeyScenario(tcp, dir, suffix);
 
     // spec 025: режим L2 — записи уходят тактами (5 ± 2 с), пустые такты — пустышки себе, кадры одной длины
     try {

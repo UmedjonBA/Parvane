@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_checker.h"
 #include "data/data_auto_download.h"
 #include "export/export_manager.h"
+#include "parvane/parvane_data_export.h"
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
 #include "lang/lang_keys.h"
@@ -1161,7 +1162,18 @@ void BuildExportSection(SectionBuilder &builder) {
 	builder.addDivider();
 	builder.addSkip();
 
-	// Parvane: «Export Telegram data» убран — экспорт шёл через MTProto.
+	// Parvane: «Export Telegram data» (MTProto) заменён выгрузкой данных Parvane в ZIP (spec 029, T036)
+	builder.addButton({
+		.id = u"advanced/export"_q,
+		.title = tr::lng_parvane_export_data(),
+		.icon = { &st::menuIconExport },
+		.onClick = [=] {
+			if (controller) {
+				Parvane::ShowDataExportBox(controller);
+			}
+		},
+		.keywords = { u"export"_q, u"data"_q, u"archive"_q, u"zip"_q },
+	});
 	builder.addButton({
 		.id = u"advanced/experimental"_q,
 		.title = tr::lng_settings_experimental(),

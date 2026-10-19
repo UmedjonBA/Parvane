@@ -8,6 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/sections/settings_main.h"
 
 #include "parvane/parvane_account_ui.h" // Parvane: «Сообщить об ошибке»
+#include "parvane/parvane_health.h" // Parvane: цели здоровья
+#include "parvane/parvane_islands.h" // Parvane: профиль-хаб карточками
+#include "parvane/parvane_kit.h"
+#include "parvane/parvane_planner_forms.h" // Parvane: настройки «Плана»
 
 #include "settings/settings_common_session.h"
 
@@ -597,6 +601,39 @@ void BuildHelpSection(SectionBuilder &builder) {
 	});
 }
 
+// Parvane: карточка «Parvane» профиль-хаба, как web SettingsMain (spec 029, T057)
+void BuildParvaneSection(SectionBuilder &builder) {
+	const auto controller = builder.controller();
+	const auto showOther = builder.showOther();
+	builder.addButton({
+		.id = u"main/parvane-planner"_q,
+		.title = tr::lng_parvane_planner_settings(),
+		.icon = { &st::menuIconSchedule },
+		.onClick = [=] {
+			controller->window().hideSettingsAndLayer();
+			Parvane::PlannerUi::OpenPlannerSettings(controller);
+		},
+		.keywords = { u"planner"_q, u"calendar"_q },
+	});
+	builder.addButton({
+		.id = u"main/parvane-health"_q,
+		.title = tr::lng_parvane_profile_health_goals(),
+		.icon = { &st::menuIconStats },
+		.onClick = [=] {
+			controller->window().hideSettingsAndLayer();
+			Parvane::Health::OpenGoals(controller);
+		},
+		.keywords = { u"health"_q, u"goals"_q },
+	});
+	builder.addButton({
+		.id = u"main/parvane-appearance"_q,
+		.title = tr::lng_parvane_profile_appearance(),
+		.icon = { &st::menuIconPalette },
+		.onClick = [=] { showOther(ChatId()); },
+		.keywords = { u"scheme"_q, u"colors"_q, u"theme"_q },
+	});
+}
+
 void BuildValidationSuggestions(SectionBuilder &builder) {
 	builder.add([](const WidgetContext &ctx) {
 		const auto controller = ctx.controller.get();
@@ -677,11 +714,14 @@ void Main::keyPressEvent(QKeyEvent *e) {
 
 void Main::setupContent() {
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
+	// Parvane: профиль-хаб — карточки на фоне `--pv-bg`, как web «Профиль» (spec 029, T057)
+	Parvane::Islands::PaintPageBackground(this);
 
 	const auto window = controller();
 	const auto session = &window->session();
-	const auto cover = content->add(object_ptr<Cover>(
-		content,
+	const auto accountCard = Parvane::Islands::AddCard(content);
+	const auto cover = accountCard->add(object_ptr<Cover>(
+		accountCard,
 		window,
 		session->user()));
 	_userpic = cover->userpic();
@@ -696,21 +736,40 @@ void Main::setupContent() {
 		const auto isPaused = Window::PausedIn(
 			controller,
 			Window::GifPauseReason::Layer);
-		auto builder = SectionBuilder(WidgetContext{
-			.container = container,
-			.controller = controller,
-			.showOther = std::move(showOther),
-			.isPaused = isPaused,
-			.highlights = highlights,
-		});
-		builder.addDivider();
-		builder.addSkip();
+		// Parvane: группы строк — карточками с подписями (вместо разделителей Telegram)
+		const auto context = [&](not_null<Ui::VerticalLayout*> into) {
+			return WidgetContext{
+				.container = into,
+				.controller = controller,
+				.showOther = showOther,
+				.isPaused = isPaused,
+				.highlights = highlights,
+			};
+		};
+		Parvane::Islands::AddCardCaption(
+			container,
+			tr::lng_parvane_profile_messenger());
+		auto builder = SectionBuilder(
+			context(Parvane::Islands::AddCard(container)));
 		BuildValidationSuggestions(builder);
 		BuildSectionButtons(builder);
-		builder.addSkip();
-		BuildInterfaceScale(builder);
-		BuildPremiumSection(builder);
-		BuildHelpSection(builder);
+		if (HasInterfaceScale()) {
+			SetupInterfaceScale(
+				&controller->window(),
+				Parvane::Islands::AddCard(container));
+		}
+		auto premium = SectionBuilder(context(container));
+		BuildPremiumSection(premium);
+		Parvane::Islands::AddCardCaption(container, rpl::single(u"Parvane"_q));
+		auto parvane = SectionBuilder(
+			context(Parvane::Islands::AddCard(container)));
+		BuildParvaneSection(parvane);
+		auto help = SectionBuilder(
+			context(Parvane::Islands::AddCard(container)));
+		BuildHelpSection(help);
+		container->add(object_ptr<Ui::FixedHeightWidget>(
+			container,
+			Parvane::Kit::Rem(1.)));
 
 		std::move(showFinished) | rpl::on_next([=] {
 			for (const auto &[id, entry] : *highlights) {

@@ -1763,9 +1763,21 @@ describe('REPORT-1: жалоба админам группы — карточк�
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('buildModReportContent');
     expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts')).toContain('async reportMessages(');
     expect(r.clients.web).toContain('e2e_web_reports.mjs');
-    // Desktop и android — открыто до их очереди (решение «только web»)
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    // Android — открыто до его очереди
     expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+
+  // spec 029: desktop разбирает жалобу, показывает карточку админу и шлёт жалобы
+  it('desktop: жалоба разбирается, показывается и отправляется', () => {
+    const core = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    expect(core).toContain('} else if (c.contains("mod_report") && c["mod_report"].is_object()) {');
+    expect(readRepo('desktop/parvane-core/tests/v2_tests.cpp')).toContain('mod_report туда и обратно');
+    expect(readDesktopSession()).toContain('std::string Session::submitReport(const json &report) {');
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('void ReportMessages(');
+    expect(desktop).toContain('u"pv:moddel:"_q + uuid');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+    expect(r.clients.desktop).toContain('v2_tests.cpp');
   });
 });
 
@@ -1809,8 +1821,22 @@ describe('RENAME-1: смена ника — журнал прежнего адр
     expect(readRepo('web/telegram-tt/src/api/parvane/secureStorage.ts'))
       .toContain('export async function migrateStorageUser(');
     expect(r.clients.web).toContain('e2e_web_rename.mjs');
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+
+  // spec 029: desktop меняет ник, переносит собеседника и своё другое устройство
+  it('desktop: смена ника, перенос собеседника, своё другое устройство', () => {
+    const session = readDesktopSession();
+    ['json Session::renameAccount(', 'void Session::followPeerRenameLocked(', 'bool Session::followOwnRename(',
+      'void Session::renameGroupsPending(']
+      .forEach((f) => expect(session).toContain(f));
+    const desktop = readDesktopSource();
+    ['QString LatestAddress(const QString &address) {', 'bool NoteRename(const QString &from, const QString &to) {',
+      'void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {']
+      .forEach((f) => expect(desktop).toContain(f));
+    expect(readRepo('desktop/parvane-core/tests/v2_session_tests.cpp')).toContain('spec 026: ник сменён');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+    expect(r.clients.desktop).toContain('v2_session_tests.cpp');
   });
 });
 
@@ -1839,8 +1865,20 @@ describe('DELETE-1: удаление аккаунта — отсрочка, во
       .toContain('throw new AccountDeletionPendingError(');
     expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('\'userTypeDeleted\'');
     expect(r.clients.web).toContain('e2e_web_account_delete.mjs');
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+
+  // spec 029: desktop удаляет аккаунт, восстанавливает его входом и видит удалённого собеседника
+  it('desktop: удаление, вход в удаляемый аккаунт, удалённый собеседник', () => {
+    const session = readDesktopSession();
+    expect(session).toContain('json Session::deleteAccount(const std::string &password) {');
+    expect(session).toContain('outbox_.push_back(json{{"type", "peerDeleted"}, {"user", user}});');
+    expect(readRepo('desktop/parvane-core/src/v2_bridge.cpp')).toContain('req["cancel_deletion"] = true;');
+    expect(readDesktopSource()).toContain('MarkPeerDeleted(user, true);');
+    expect(readRepo('desktop/parvane-core/tests/v2_session_tests.cpp'))
+      .toContain('spec 027: вход с отменой удаления — аккаунт восстановлен');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+    expect(r.clients.desktop).toContain('v2_session_tests.cpp');
   });
 });
 
@@ -1976,9 +2014,23 @@ describe('RECOVER-2: новое устройство по ключу восст�
     expect(queue).not.toMatch(/sqlx::|INSERT |SqlitePool/);
   });
 
-  // Правило открыто, пока desktop и android входят по ключу прежним путём
-  it('desktop и android отмечены открытыми', () => {
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
+  // spec 029: desktop входит по копии ключей аккаунта (тот же формат, что web), прежние устройства остаются
+  it('desktop: копия ключей и вход по ней', () => {
+    const bundle = readRepo('desktop/parvane-core/src/keybundle.cpp');
+    expect(bundle).toContain(`"${r.bundleKdfSalt}"`);
+    const session = readDesktopSession();
+    expect(session).toContain('KeyJoinOutcome Session::joinWithRecoveryKey(');
+    expect(session).toContain(`json{{"${r.bundleField}", toBase64(sealed)}}`);
+    r.methods.filter((method) => method.startsWith('identity.recovery.'))
+      .forEach((method) => expect(session, method).toContain(`"${method}"`));
+    expect(readRepo('desktop/parvane-core/tests/webcompat_tests.cpp')).toContain('static void keyBundle() {');
+    expect(readRepo('desktop/parvane-core/tests/v2_session_tests.cpp'))
+      .toContain('spec 015: прежнее устройство осталось в журнале');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+  });
+
+  // Правило открыто, пока android входит по ключу прежним путём
+  it('android отмечен открытым', () => {
     expect(r.clients.android).toContain('ОТКРЫТО');
   });
 });
@@ -2038,7 +2090,49 @@ describe('FED-1: федерация — запрос объекту чужого
     });
     expect(readRepo('backend/infra/deploy/Dockerfile.shards')).not.toContain('insecure-test-transport');
     expect(r.clients.web).toContain('run_web_federation_e2e.sh');
-    expect(r.clients.desktop).toContain('ОТКРЫТО');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
+    expect(r.clients.android).toContain('ОТКРЫТО');
+  });
+
+  it('desktop: сценарий двух серверов есть (прогон — после линковки)', () => {
+    expect(r.clients.desktop).toContain('desktop/verify_federation.sh');
+    const scenario = readRepo('desktop/verify_federation.sh');
+    ['server_a()', 'server_b()', 'PV_FEDERATION_PEERS=', 'PARVANE_AUTOSEND=$B_USER', 'PARVANE_AUTOSEND=$A_USER']
+      .forEach((s) => expect(scenario).toContain(s));
+    const lib = readRepo('desktop/verify_lib.sh');
+    ['PV_NATS_PORT:-4222', 'PV_GW_TCP_PORT:-9223', 'PARVANE_FEDERATION_ENDPOINTS="$']
+      .forEach((s) => expect(lib).toContain(s));
+  });
+});
+
+describe('PACK-2: один набор стикеров от разных отправителей — один набор', () => {
+  const r = rule('PACK-2') as unknown as {
+    fields: Record<string, number>;
+    clients: { web: string; desktop: string; android: string };
+  };
+
+  it('схема: отпечаток содержимого в ссылке на набор', () => {
+    expect(readRepo('proto/parvane/msg/v2/content.proto'))
+      .toContain(`bytes content_hash = ${r.fields.pack_ref_content_hash} `);
+  });
+
+  it('web и desktop считают отпечаток одним алгоритмом (общий вектор), desktop сверяет архив', () => {
+    expect(readRepo('web/telegram-tt/src/api/parvane/stickerPacks.ts'))
+      .toContain('export async function packContentHash(');
+    expect(readRepo('web/telegram-tt/src/api/parvane/clientVectors.test.ts'))
+      .toContain('vectorPath(\'pack-hash.json\')');
+    expect(readRepo('proto/parvane/vectors/clients/pack-hash.json')).toContain('"content_hash"');
+    const core = readRepo('desktop/parvane-core/src/pack_archive.cpp');
+    ['std::string contentHash(', 'bool archiveMatchesContentHash('].forEach((f) => expect(core).toContain(f));
+    const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
+    expect(content).toContain('o["content_hash"] = str(p, "content_hash")');
+    expect(content).toContain('out["content_hash"] = contentHash');
+    const client = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    ['AttachPackContentHash(ref, archive)', 'FindInstalledPackByHash(root, contentHash)',
+      'parvane::pack::archiveMatchesContentHash(bytes, contentHash)',
+      'parvane::pack::archiveMatchesContentHash(*dec, contentHash)'].forEach((s) => expect(client).toContain(s));
+    expect(readRepo('desktop/parvane-core/tests/webcompat_tests.cpp')).toContain('vectorPath("pack-hash.json")');
+    expect(r.clients.desktop).not.toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('ОТКРЫТО');
   });
 });

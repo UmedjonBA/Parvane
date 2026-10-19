@@ -4,6 +4,7 @@
 
 #include "parvane/parvane_icons.h"
 #include "parvane/parvane_kit.h"
+#include "parvane/parvane_palette.h"
 #include "parvane/parvane_space.h"
 
 #include "core/shortcuts.h"
@@ -54,6 +55,8 @@ SectionRail::SectionRail(QWidget *parent, not_null<Window::SessionController*> c
 , _controller(controller) {
 	setMouseTracking(true);
 	refreshTitles();
+	// Ctrl+K — палитра общего поиска этого окна
+	SetupPaletteShortcut(controller, lifetime());
 	// Первый запуск: схема по умолчанию, как web (gruvbox)
 	crl::on_main(this, [] { EnsureSchemeApplied(); });
 
@@ -133,9 +136,8 @@ void SectionRail::activate(int index) {
 	} else if (index < kSections) {
 		ShowSection(SectionAt(index));
 	} else if (index == kSections) {
-		// Общий поиск: палитра Ctrl+K появится с разделами, пока — поиск по чатам
-		ShowSection(Section::Chats);
-		Shortcuts::Launch(Shortcuts::Command::Search);
+		// Общий поиск — палитра Ctrl+K (web: кнопка «Поиск» боковой панели открывает её же)
+		OpenPalette(_controller);
 	} else {
 		ShowSection(Section::Chats);
 		_controller->showSettings();

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/chat_filters_tabs_slider.h"
 
 #include "ui/effects/ripple_animation.h"
+#include "ui/painter.h"
 #include "ui/widgets/side_bar_button.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_widgets.h"
@@ -15,6 +16,41 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QScrollBar>
 
 namespace Ui {
+namespace {
+
+// Parvane fork: папки над списком чатов — чипы «Пространства» (web ChatFolderTabList.module.scss): высота
+// 1.875rem, скругление пополам, выбранная — заливка цветом подписи на 22 %, остальные — рамка (тот же цвет на
+// 45 %). Поля чипа — половина промежутка между подписями за вычетом 0.375rem зазора.
+constexpr auto kParvaneChips = true;
+
+void PaintParvaneChip(
+		QPainter &p,
+		QRect label,
+		const style::SettingsSlider &st,
+		float64 active) {
+	const auto gap = style::ConvertScale(6);
+	const auto pad = std::max((st.strictSkip - gap) / 2, 0);
+	const auto height = std::min(style::ConvertScale(30), label.height());
+	const auto chip = QRectF(
+		label.x() - pad,
+		label.y() + (label.height() - height) / 2.,
+		label.width() + 2 * pad,
+		height).adjusted(0.5, 0.5, -0.5, -0.5);
+	const auto accent = st.labelFgActive->c;
+	auto fill = accent;
+	fill.setAlphaF(0.22 * active);
+	auto border = accent; // ≈ color-mix(акцент 45 %, линия) на любом фоне
+	border.setAlphaF(0.45 * (1. - active));
+	PainterHighQualityEnabler hq(p);
+	p.setPen((active < 1.)
+		? QPen(border, style::ConvertScale(1))
+		: QPen(Qt::NoPen));
+	p.setBrush(fill);
+	p.drawRoundedRect(chip, chip.height() / 2., chip.height() / 2.);
+	p.setBrush(Qt::NoBrush);
+}
+
+} // namespace
 
 ChatsFiltersTabs::ChatsFiltersTabs(
 	not_null<Ui::RpWidget*> parent,
@@ -226,6 +262,12 @@ void ChatsFiltersTabs::paintEvent(QPaintEvent *e) {
 		}
 		const auto labelLeft = shiftedLeft
 			+ (section.width - section.contentWidth) / 2;
+		// Parvane: папки чипами, как web ChatFolderTabList (spec 029, T056)
+		PaintParvaneChip(
+			p,
+			myrtlrect(labelLeft, 0, section.contentWidth, height()),
+			_st,
+			active);
 		const auto rect = myrtlrect(
 			labelLeft,
 			_st.labelTop,
@@ -277,7 +319,7 @@ void ChatsFiltersTabs::paintEvent(QPaintEvent *e) {
 		index = raisedIndex;
 		drawSection(*_sections[raisedIndex].section);
 	}
-	if (_st.barSnapToLabel) {
+	if (_st.barSnapToLabel && !kParvaneChips) {
 		const auto drawRect = [&](QRect rect, bool active) {
 			const auto &bar = active ? _barActive : _bar;
 			if (bar) {

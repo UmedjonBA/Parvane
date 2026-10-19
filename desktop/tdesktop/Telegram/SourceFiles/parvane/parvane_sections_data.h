@@ -110,6 +110,8 @@ void CallCloud(const std::string &method, json args, std::function<void(std::opt
 
 // Раздел на экране: подключает нужные модули (План — Календарь/Здоровье; Облако — Файлы и Знания; Знания)
 void SetShownSection(Section section);
+// Палитра Ctrl+K открыта/закрыта: пока открыта, заметки и облако читаются (как web `retainNotes` палитры)
+void SetPaletteOpen(bool open);
 // Окно видно/скрыто (опрос 8 с только при видимом окне)
 void SetWindowVisible(bool visible);
 // Событие движка v2 (`plannerChanged`, `cloudChanged`); зовётся из потока сессии

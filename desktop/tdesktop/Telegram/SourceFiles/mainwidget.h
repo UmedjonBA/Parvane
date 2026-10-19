@@ -93,6 +93,10 @@ class GroupCall;
 class TopBar;
 } // namespace Calls
 
+namespace Parvane::Islands {
+class Frame;
+} // namespace Parvane::Islands
+
 namespace Core {
 class Changelogs;
 } // namespace Core
@@ -308,6 +312,7 @@ private:
 		not_null<const HistoryItem*> item) override;
 
 	void refreshResizeAreas();
+	void updateIslands(); // Parvane: острова колонок
 	template <typename MoveCallback, typename FinishCallback>
 	void createResizeArea(
 		object_ptr<Ui::ResizeArea> &area,
@@ -350,6 +355,8 @@ private:
 
 	const base::unique_qptr<Ui::PlainShadow> _sideShadow;
 	object_ptr<Ui::PlainShadow> _thirdShadow = { nullptr };
+	// Parvane: острова «Пространство» — промежутки, тени и скруглённые углы колонок (spec 029, T054)
+	std::unique_ptr<Parvane::Islands::Frame> _islands;
 	object_ptr<Ui::ResizeArea> _firstColumnResizeArea = { nullptr };
 	object_ptr<Ui::ResizeArea> _thirdColumnResizeArea = { nullptr };
 

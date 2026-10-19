@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Запуск релизной сборки Parvane Desktop (spec 029, T073) против прода.
+# Данные — в своём каталоге (не ~/.local/share/TelegramDesktop системного Telegram).
+# Бинарь: PARVANE_DESKTOP_BIN, иначе build-release рядом со скриптом.
+#   desktop/parvane-desktop [аргументы tdesktop]
+set -eu
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+BIN="${PARVANE_DESKTOP_BIN:-$HERE/build-release/bin/Telegram}"
+DATA="${PARVANE_DESKTOP_DATA:-${XDG_DATA_HOME:-$HOME/.local/share}/parvane-desktop}"
+[ -x "$BIN" ] || { echo "parvane-desktop: нет бинаря $BIN (собрать — BUILD-parvane.md, «Релиз»)" >&2; exit 1; }
+mkdir -p "$DATA"
+chmod 700 "$DATA"
+exec "$BIN" -workdir "$DATA" "$@"

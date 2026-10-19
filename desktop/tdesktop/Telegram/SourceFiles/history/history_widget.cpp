@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_widget.h"
 
 #include "parvane/parvane_client.h" // Parvane: превью публичной группы
+#include "parvane/parvane_islands.h" // Parvane: острова «Пространство»
+#include "ui/chat/continuous_scroll.h"
 
 #include "api/api_compose_with_ai.h"
 #include "api/api_editing.h"
@@ -340,6 +342,9 @@ HistoryWidget::HistoryWidget(
 	}))
 , _topShadow(this) {
 	setAcceptDrops(true);
+	_pvChatCorners = std::make_unique<Parvane::Islands::ChatCorners>(
+		this,
+		_scroll.data());
 
 	session().downloaderTaskFinished() | rpl::on_next([=] {
 		update();
@@ -5467,6 +5472,9 @@ void HistoryWidget::doneShow() {
 	if (_history) {
 		_history->saveMeAsActiveSubsectionThread();
 	}
+	if (_pvChatCorners) {
+		_pvChatCorners->refresh(); // Parvane: после анимации показа дети снова видны
+	}
 }
 
 void HistoryWidget::cornerButtonsShowAtPosition(
@@ -7206,6 +7214,10 @@ void HistoryWidget::updateControlsGeometry() {
 	updateFieldSize();
 
 	_cornerButtons.updatePositions();
+
+	if (_pvChatCorners) {
+		_pvChatCorners->refresh(); // Parvane: уголки шапки и композера поверх перестроенных полос
+	}
 
 	if (_membersDropdown) {
 		_membersDropdown->setMaxHeight(countMembersDropdownHeightMax());

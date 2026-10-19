@@ -257,14 +257,14 @@ void ParvaneWidget::activate() {
 	// переменная не задана и хук не срабатывает.
 	if (!_autologinTried) {
 		_autologinTried = true;
-		if (const char *v = std::getenv("PARVANE_AUTOLOGIN"); v && *v) {
+		if (const char *v = Parvane::DevEnv("PARVANE_AUTOLOGIN"); v && *v) {
 			const auto spec = QString::fromUtf8(v);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
 				_user->setText(spec.left(sep));
 				_password->setText(spec.mid(sep + 1));
 				// PARVANE_AUTOEMAIL=addr — email для headless-регистрации через почту.
-				if (const char *em = std::getenv("PARVANE_AUTOEMAIL"); em && *em) {
+				if (const char *em = Parvane::DevEnv("PARVANE_AUTOEMAIL"); em && *em) {
 					_email->setText(QString::fromUtf8(em));
 				}
 				LOG(("Parvane: autologin hook for %1").arg(spec.left(sep)));
@@ -307,7 +307,7 @@ rpl::producer<QString> ParvaneWidget::nextButtonText() const {
 }
 
 void ParvaneWidget::startCodeFilePoll() {
-	const char *cf = std::getenv("PARVANE_AUTOCODE_FILE");
+	const char *cf = Parvane::DevEnv("PARVANE_AUTOCODE_FILE");
 	if (!cf || !*cf) {
 		return;
 	}

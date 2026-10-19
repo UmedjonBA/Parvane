@@ -1,0 +1,215 @@
+lng_parvane_palette_placeholder
+Chat, note, event, file or command
+Чат, заметка, событие, файл или команда
+
+lng_parvane_palette_commands
+Commands
+Команды
+
+lng_parvane_palette_records
+Planner entries
+Записи
+
+lng_parvane_palette_files
+Files
+Файлы
+
+lng_parvane_palette_log_sleep
+Log sleep
+Записать сон
+
+lng_parvane_palette_log_food
+Log a meal
+Записать еду
+
+lng_parvane_palette_sleep_text
+sleep
+сон
+
+lng_parvane_palette_food_text
+lunch
+обед
+
+lng_parvane_palette_loading
+Loading notes and entries…
+Заметки и записи загружаются…
+
+lng_parvane_palette_shortcut
+Search everything
+Общий поиск
+
+lng_parvane_export_data
+Export my data
+Выгрузить мои данные
+
+lng_parvane_export_title
+Export my data
+Выгрузка данных
+
+lng_parvane_export_hint
+Everything is put together on this device from your decrypted data into one ZIP archive: chats (HTML and JSON), Plan, notes and contacts. Nothing new is sent to the server.
+Всё собирается на этом устройстве из расшифрованных данных в один ZIP-архив: чаты (HTML и JSON), «План», заметки и контакты. На сервер ничего нового не уходит.
+
+lng_parvane_export_media
+Photos, videos and files from chats
+Фото, видео и файлы из чатов
+
+lng_parvane_export_cloud
+Cloud files
+Файлы облака
+
+lng_parvane_export_cloud_hint
+May be large. Files are downloaded and decrypted on this device.
+Может получиться много. Файлы скачиваются и расшифровываются на этом устройстве.
+
+lng_parvane_export_folder
+Save to: {path}
+Папка: {path}
+
+lng_parvane_export_folder_change
+Change folder
+Сменить папку
+
+lng_parvane_export_folder_choose
+Choose a folder for the archive
+Выберите папку для архива
+
+lng_parvane_export_start
+Export
+Выгрузить
+
+lng_parvane_export_stage_prepare
+Collecting data…
+Собираем данные…
+
+lng_parvane_export_stage_chats
+Chats and media: {done} of {total}
+Чаты и медиа: {done} из {total}
+
+lng_parvane_export_stage_planner
+Plan…
+«План»…
+
+lng_parvane_export_stage_notes
+Notes: {done} of {total}
+Заметки: {done} из {total}
+
+lng_parvane_export_stage_contacts
+Contacts…
+Контакты…
+
+lng_parvane_export_stage_cloud
+Cloud files: {done} of {total}
+Файлы облака: {done} из {total}
+
+lng_parvane_export_stage_finishing
+Finishing the archive…
+Завершаем архив…
+
+lng_parvane_export_written
+Archive so far: {size}
+Записано: {size}
+
+lng_parvane_export_done
+Done. The archive {name} ({size}) has been saved.
+Готово. Архив {name} ({size}) сохранён.
+
+lng_parvane_export_done_missing
+Files that could not be downloaded: {amount}
+Не удалось скачать файлов: {amount}
+
+lng_parvane_export_show
+Show in folder
+Показать в папке
+
+lng_parvane_export_toast
+Data export finished: {name}
+Выгрузка данных готова: {name}
+
+lng_parvane_export_error_canceled
+Export canceled
+Выгрузка отменена
+
+lng_parvane_export_error_too_large
+The archive would be larger than 4 GB. Try without cloud files or without media.
+Архив получился бы больше 4 ГБ. Попробуйте без файлов облака или без медиа.
+
+lng_parvane_export_error_failed
+Export failed. Try again.
+Выгрузить не получилось. Попробуйте ещё раз.
+
+lng_parvane_export_error_write
+Could not write the archive to this folder. Choose another folder.
+Не удалось записать архив в эту папку. Выберите другую.
+
+lng_parvane_export_html_title
+Parvane data export
+Выгрузка данных Parvane
+
+lng_parvane_export_html_chats
+Chats
+Чаты
+
+lng_parvane_export_html_planner
+Plan
+План
+
+lng_parvane_export_html_notes
+Notes
+Заметки
+
+lng_parvane_export_html_contacts
+Contacts
+Контакты
+
+lng_parvane_export_html_cloud
+Cloud files
+Файлы облака
+
+lng_parvane_export_html_reply_to
+In reply to
+В ответ на
+
+lng_parvane_export_html_forwarded_from
+Forwarded from
+Переслано от
+
+lng_parvane_export_html_edited
+edited
+изменено
+
+lng_parvane_export_html_media_not_included
+Media not included
+Медиа не выгружалось
+
+lng_parvane_export_html_media_unavailable
+Media unavailable
+Медиа недоступно
+
+lng_parvane_export_html_poll
+Poll
+Опрос
+
+lng_parvane_export_html_location
+Location
+Геопозиция
+
+lng_parvane_export_html_messages
+messages
+сообщений
+
+lng_parvane_export_html_exported_at
+Exported
+Выгружено
+
+lng_parvane_export_html_privacy_on
+enabled enhanced privacy
+включает усиленную приватность
+
+lng_parvane_export_html_privacy_off
+disabled enhanced privacy
+выключает усиленную приватность
+
+lng_parvane_export_planner_missing
+The Plan could not be loaded and is not in the archive.
+«План» не загрузился и в архив не попал.

@@ -84,6 +84,7 @@ const auto CommandByName = base::flat_map<QString, Command>{
 	{ u"media_next"_q        , Command::MediaNext },
 
 	{ u"search"_q            , Command::Search },
+	{ u"parvane_palette"_q   , Command::ParvanePalette },
 
 	{ u"previous_chat"_q     , Command::ChatPrevious },
 	{ u"next_chat"_q         , Command::ChatNext },
@@ -488,6 +489,8 @@ void Manager::fillDefaults() {
 	set(u"ctrl+f"_q, Command::Search);
 	set(u"search"_q, Command::Search);
 	set(u"find"_q, Command::Search);
+	// Parvane: палитра общего поиска — Ctrl+K (на macOS «ctrl» здесь — Cmd), как web
+	set(u"ctrl+k"_q, Command::ParvanePalette);
 
 	set(u"ctrl+pgdown"_q, Command::ChatNext);
 	set(u"alt+down"_q, Command::ChatNext);

@@ -64,6 +64,7 @@ struct Labeled {
 		{ C::Quit, tr::lng_shortcuts_quit() },
 		separator,
 		{ C::Search, tr::lng_shortcuts_search() },
+		{ C::ParvanePalette, tr::lng_parvane_palette_shortcut() },
 		separator,
 		{ C::ChatPrevious, tr::lng_shortcuts_chat_previous() },
 		{ C::ChatNext, tr::lng_shortcuts_chat_next() },

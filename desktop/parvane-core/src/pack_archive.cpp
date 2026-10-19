@@ -6,6 +6,9 @@
 #include <cstring>
 
 #include <nlohmann/json.hpp>
+#include <openssl/sha.h>
+
+#include "parvane/crypto.h"
 
 namespace parvane::pack {
 
@@ -110,6 +113,41 @@ std::vector<Entry> parse(const std::string &bytes) {
         offset += size;
     }
     return out;
+}
+
+std::string contentHash(const std::vector<Entry> &entries) {
+    std::vector<const Entry *> sorted;
+    sorted.reserve(entries.size());
+    for (const auto &e : entries) sorted.push_back(&e);
+    // std::string сравнивает char как unsigned (char_traits) — порядок байтов UTF-8, как web
+    std::stable_sort(sorted.begin(), sorted.end(), [](const Entry *a, const Entry *b) { return a->name < b->name; });
+    std::string joined;
+    for (const auto *e : sorted) {
+        unsigned char digest[SHA256_DIGEST_LENGTH];
+        SHA256(reinterpret_cast<const unsigned char *>(e->bytes.data()), e->bytes.size(), digest);
+        const auto size = static_cast<std::uint32_t>(e->bytes.size());
+        joined.append(e->name);
+        joined.push_back('\0');
+        for (int k = 0; k < 4; ++k) joined.push_back(static_cast<char>((size >> (8 * k)) & 0xFF));
+        joined.append(reinterpret_cast<const char *>(digest), sizeof(digest));
+    }
+    unsigned char out[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char *>(joined.data()), joined.size(), out);
+    return std::string(reinterpret_cast<const char *>(out), sizeof(out));
+}
+
+std::string archiveContentHashB64(const std::string &archive) {
+    const auto entries = parse(archive);
+    if (entries.empty()) return {};
+    return parvane::crypto::b64encode(contentHash(entries));
+}
+
+bool archiveMatchesContentHash(const std::string &archive, const std::string &hashB64) {
+    const auto entries = parse(archive);
+    if (entries.empty()) return false;
+    if (hashB64.empty()) return true;
+    const auto expected = parvane::crypto::b64decode(hashB64);
+    return expected && expected->size() == SHA256_DIGEST_LENGTH && *expected == contentHash(entries);
 }
 
 std::string sanitizeName(const std::string &name) {

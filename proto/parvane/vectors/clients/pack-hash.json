@@ -1,0 +1,47 @@
+{
+  "comment": "PACK-2: отпечаток содержимого набора — SHA-256 по файлам, отсортированным по байтам UTF-8 имени: имя ‖ 0x00 ‖ u32LE размер ‖ SHA-256(файл). Читают web clientVectors.test.ts и desktop webcompat_tests.cpp; данные выдуманные",
+  "cases": [
+    {
+      "name": "два файла (как stickerPacks.test.ts)",
+      "files": [
+        {
+          "name": "b.webp",
+          "data": "BAU="
+        },
+        {
+          "name": "a.webp",
+          "data": "AQID"
+        }
+      ],
+      "content_hash": "wOtWDi36OhUURnUZGyYsN5DXpqYeu1MsE3cmIQV/sQM="
+    },
+    {
+      "name": "один файл",
+      "files": [
+        {
+          "name": "a.webp",
+          "data": "AQID"
+        }
+      ],
+      "content_hash": "5WFcwXP6L7tW85+wM/okDSAe/Io2TWIVvSEGddU97LE="
+    },
+    {
+      "name": "порядок по байтам UTF-8: заглавная раньше строчной, кириллица в конце",
+      "files": [
+        {
+          "name": "кот.png",
+          "data": "Y2F0LWJ5dGVz"
+        },
+        {
+          "name": "a.tgs",
+          "data": "Z3o="
+        },
+        {
+          "name": "B.webm",
+          "data": "d2VibS1ieXRlcw=="
+        }
+      ],
+      "content_hash": "71Vay30p6iB0WATd9YvsFSM7dXYgxzBJpHtMmwLBsa0="
+    }
+  ]
+}

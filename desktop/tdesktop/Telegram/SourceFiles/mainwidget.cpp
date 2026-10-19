@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mainwidget.h"
 
+#include "parvane/parvane_islands.h" // Parvane: острова «Пространство»
+
 #include "api/api_updates.h"
 #include "api/api_views.h"
 #include "data/components/scheduled_messages.h"
@@ -272,6 +274,7 @@ MainWidget::MainWidget(
 	: nullptr)
 , _playerPlaylist(this, _controller)
 , _changelogs(Core::Changelogs::Create(&controller->session())) {
+	_islands = std::make_unique<Parvane::Islands::Frame>(this);
 	if (_dialogs) {
 		setupConnectingWidget();
 	}
@@ -1858,12 +1861,8 @@ void MainWidget::showNewSection(
 
 	_a_dialogsWidth.stop();
 
-	auto mainSectionTop = getMainSectionTop();
-	auto newMainGeometry = QRect(
-		_history->x(),
-		mainSectionTop,
-		_history->width(),
-		height() - mainSectionTop);
+	// Parvane: место ленты с отступами островов «Пространство»
+	auto newMainGeometry = _history->geometry();
 	auto newMainSection = newThirdSection
 		? nullptr
 		: memento->createWidget(
@@ -2155,6 +2154,9 @@ void MainWidget::orderWidgets() {
 	if (_thirdColumnResizeArea) {
 		_thirdColumnResizeArea->raise();
 	}
+	if (_islands) {
+		_islands->raise(); // Parvane: уголки островов над колонками
+	}
 	if (_connecting) {
 		_connecting->raise();
 	}
@@ -2268,6 +2270,11 @@ void MainWidget::showFinished() {
 void MainWidget::paintEvent(QPaintEvent *e) {
 	if (_background) {
 		checkChatBackground();
+	}
+	if (_islands && _islands->active()) {
+		// Parvane: фон окна в промежутках между островами и их тени
+		auto p = QPainter(this);
+		_islands->paint(p, e->rect());
 	}
 	if (_showAnimation) {
 		auto p = QPainter(this);
@@ -2471,14 +2478,19 @@ void MainWidget::updateControlsGeometry() {
 			_contentScrollAddToY);
 		if (_hider) _hider->setGeometry(0, 0, dialogsWidth, height());
 	} else {
+		// Parvane: острова «Пространство» (spec 029, T054) — колонки с промежутком gap сверху, снизу, справа
+		// и между собой (слева — рейка разделов); тонкие тени-разделители не нужны
+		const auto gap = (_islands ? Parvane::Islands::Gap() : 0);
+		const auto half = gap / 2;
+		const auto lineWidth = gap ? 0 : st::lineWidth;
 		auto thirdSectionWidth = _thirdSection ? _thirdColumnWidth : 0;
 		if (_thirdSection) {
 			auto thirdSectionTop = getThirdSectionTop();
 			_thirdSection->setGeometry(
-				width() - thirdSectionWidth,
-				thirdSectionTop,
-				thirdSectionWidth,
-				height() - thirdSectionTop);
+				width() - thirdSectionWidth + half,
+				thirdSectionTop + gap,
+				thirdSectionWidth - half - gap,
+				height() - thirdSectionTop - 2 * gap);
 		}
 		const auto shadowTop = _controller->window().verticalShadowTop();
 		const auto shadowHeight = height() - shadowTop;
@@ -2486,63 +2498,73 @@ void MainWidget::updateControlsGeometry() {
 			accumulate_min(
 				dialogsWidth,
 				width() - st::columnMinimalWidthMain);
-			_dialogs->setGeometryToLeft(0, 0, dialogsWidth, height());
+			_dialogs->setGeometryToLeft(
+				0,
+				gap,
+				dialogsWidth - half,
+				height() - 2 * gap);
 		}
 		if (_sideShadow) {
 			_sideShadow->setGeometryToLeft(
 				dialogsWidth,
 				shadowTop,
-				st::lineWidth,
+				lineWidth,
 				shadowHeight);
 		}
 		if (_thirdShadow) {
 			_thirdShadow->setGeometryToLeft(
 				width() - thirdSectionWidth - st::lineWidth,
 				shadowTop,
-				st::lineWidth,
+				lineWidth,
 				shadowHeight);
 		}
+		const auto mainSectionLeft = dialogsWidth + (_dialogs ? half : gap);
 		const auto mainSectionWidth = width()
-			- dialogsWidth
-			- thirdSectionWidth;
+			- mainSectionLeft
+			- thirdSectionWidth
+			- (_thirdSection ? half : gap);
 		if (_callTopBar) {
 			_callTopBar->resizeToWidth(mainSectionWidth);
-			_callTopBar->moveToLeft(dialogsWidth, 0);
+			_callTopBar->moveToLeft(mainSectionLeft, gap);
 		}
 		if (_exportTopBar) {
 			_exportTopBar->resizeToWidth(mainSectionWidth);
-			_exportTopBar->moveToLeft(dialogsWidth, _callTopBarHeight);
+			_exportTopBar->moveToLeft(
+				mainSectionLeft,
+				gap + _callTopBarHeight);
 		}
 		if (_player) {
 			_player->resizeToWidth(mainSectionWidth);
 			_player->moveToLeft(
-				dialogsWidth,
-				_callTopBarHeight + _exportTopBarHeight);
+				mainSectionLeft,
+				gap + _callTopBarHeight + _exportTopBarHeight);
 		}
 		_history->setGeometryWithTopMoved(QRect(
-			dialogsWidth,
-			mainSectionTop,
+			mainSectionLeft,
+			mainSectionTop + gap,
 			mainSectionWidth,
-			height() - mainSectionTop
+			height() - mainSectionTop - 2 * gap
 		), _contentScrollAddToY);
 		if (_hider) {
 			_hider->setGeometryToLeft(
-				dialogsWidth,
-				0,
+				mainSectionLeft,
+				gap,
 				mainSectionWidth,
-				height());
+				height() - 2 * gap);
 		}
 	}
 	if (_mainSection) {
+		// Parvane: место главной секции — то же, что у ленты (с отступами островов)
 		const auto mainSectionGeometry = QRect(
 			_history->x(),
-			mainSectionTop,
+			_history->y(),
 			_history->width(),
-			height() - mainSectionTop);
+			_history->height());
 		_mainSection->setGeometryWithTopMoved(
 			mainSectionGeometry,
 			_contentScrollAddToY);
 	}
+	updateIslands();
 	refreshResizeAreas();
 	if (_player) {
 		_player->entity()->updateDropdownsGeometry();
@@ -2551,6 +2573,30 @@ void MainWidget::updateControlsGeometry() {
 	_contentScrollAddToY = 0;
 
 	floatPlayerUpdatePositions();
+}
+
+void MainWidget::updateIslands() {
+	if (!_islands) {
+		return;
+	} else if (isOneColumn()) {
+		_islands->setIslands({});
+		return;
+	}
+	const auto gap = Parvane::Islands::Gap();
+	auto islands = std::vector<QRect>();
+	if (_dialogs) {
+		islands.push_back(_dialogs->geometry());
+	}
+	// Середина: полосы звонка, выгрузки и плеера сверху и лента (или главная секция) — один остров
+	islands.push_back(QRect(
+		_history->x(),
+		gap,
+		_history->width(),
+		std::max(height() - 2 * gap, 0)));
+	if (_thirdSection) {
+		islands.push_back(_thirdSection->geometry());
+	}
+	_islands->setIslands(std::move(islands));
 }
 
 void MainWidget::destroyThirdSection() {

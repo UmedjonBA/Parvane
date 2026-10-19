@@ -17,10 +17,18 @@
 #   PV_NATS_ACL=0             — NATS без ACL (только для старых android-сценариев,
 #                               которые ходят в шину `nats req` напрямую);
 #   PV_FEDERATION_PORT=<порт> — поднять ещё шард federation (HTTP без TLS: бинарь
-#                               собран с `--features insecure-test-transport`).
+#                               собран с `--features insecure-test-transport`); всем
+#                               шардам — PARVANE_FEDERATION=on и PARVANE_S2S_ENDPOINT;
+#   PV_FEDERATION_PEERS="<домен>=http://127.0.0.1:<порт>,…" — входы федерации соседей;
+#   PV_NATS_PORT=4222, PV_GW_WS_PORT=9222, PV_GW_TCP_PORT=9223 — порты стека; второй
+#                               стек в том же сценарии (федерация, verify_federation.sh) —
+#                               другие порты, свой PV_DOMAIN и свой каталог SB.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
 RC=0
 PV_DOMAIN="${PV_DOMAIN:-local}"
+PV_NATS_PORT="${PV_NATS_PORT:-4222}"
+PV_GW_WS_PORT="${PV_GW_WS_PORT:-9222}"
+PV_GW_TCP_PORT="${PV_GW_TCP_PORT:-9223}"
 # Адрес группы v2 (v2g:<hex>) по имени из лога создателя.
 group_gid() { # group_gid <log> <имя>
   grep -a "группа v2 '$2' создана" "$1" 2>/dev/null | grep -oE 'v2g:[0-9a-f]{32}' | head -1
@@ -47,24 +55,24 @@ nats_pass() { echo "parvane-desk-e2e-$1"; }
 # Открытый ключ администратора для жалоб (spec 024) — тестовая пара, закрытая часть
 # в scripts/e2e_report_admin.key (тот же ключ, что у web-e2e)
 PV_REPORT_PUBLIC_KEY="${PV_REPORT_PUBLIC_KEY:-HdJ5hOKvSb97IDT0GBi_sqoYEWuTk0SbNQp0yhReHHc}"
-# Гасит ТОЛЬКО стек desktop-e2e: nats на 4222 и шарды, подключённые к нему.
+# Гасит ТОЛЬКО стек desktop-e2e: nats на $PV_NATS_PORT и шарды, подключённые к нему.
 # Не по имени процесса (`pkill -x identity`) — рядом могут идти web-e2e со своими
 # шардами из тех же бинарей на других портах.
 stack_pids() { # stack_pids <имя-шарда|все>
   local p names="${1:-identity|messenger|cloud|call|gateway|preview|push|domains|federation}"
   for p in $(pgrep -x "$names" 2>/dev/null); do
     tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null \
-      | grep -qx 'PARVANE_NATS_URL=nats://127.0.0.1:4222' && echo "$p"
+      | grep -qx "PARVANE_NATS_URL=nats://127.0.0.1:$PV_NATS_PORT" && echo "$p"
   done
 }
 stack_reap() {
   local p
   for p in $(stack_pids); do kill "$p" 2>/dev/null; done
   for p in $(pgrep -x nats-server 2>/dev/null); do
-    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q -- '-p 4222 ' && kill "$p" 2>/dev/null
+    tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q -- "-p $PV_NATS_PORT " && kill "$p" 2>/dev/null
   done
   for _ in $(seq 1 25); do
-    (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null || return 0
+    (exec 3<>/dev/tcp/127.0.0.1/"$PV_NATS_PORT") 2>/dev/null || return 0
     sleep 0.2
   done
 }
@@ -82,8 +90,11 @@ shard_start() {
   local s="$1"; shift
   local creds=()
   [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER="$s" PARVANE_NATS_PASS="$(nats_pass "$s")")
+  # Федерация (spec 028): identity описывает свой вход s2s в server.describe
+  local fed=()
+  [ -n "${PV_FEDERATION_PORT:-}" ] && fed=(PARVANE_FEDERATION=on PARVANE_S2S_ENDPOINT="http://127.0.0.1:$PV_FEDERATION_PORT")
   # shellcheck disable=SC2086
-  env PARVANE_NATS_URL=nats://127.0.0.1:4222 "${creds[@]}" \
+  env PARVANE_NATS_URL="nats://127.0.0.1:$PV_NATS_PORT" "${creds[@]}" "${fed[@]}" \
     PARVANE_DB_PATH="$SB/$s.db" \
     PARVANE_WELL_KNOWN_FILE="$SB/parvane.json" \
     PARVANE_DOMAIN="$PV_DOMAIN" \
@@ -113,20 +124,20 @@ stack_up() {
   if [ "${PV_NATS_ACL:-1}" = 1 ]; then
     local penv=() r
     for r in $PV_NATS_ROLES; do penv+=("PARVANE_$(echo "$r" | tr a-z A-Z)_PASS=$(nats_pass "$r")"); done
-    env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p 4222 \
+    env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$PV_NATS_PORT" \
       >"$SB/nats.log" 2>&1 & PIDS+=($!)
   else
-    nats-server -a 127.0.0.1 -p 4222 >"$SB/nats.log" 2>&1 & PIDS+=($!)
+    nats-server -a 127.0.0.1 -p "$PV_NATS_PORT" >"$SB/nats.log" 2>&1 & PIDS+=($!)
   fi
-  wait_port 4222 || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
+  wait_port "$PV_NATS_PORT" || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
   # headless-клиенты перелогиниваются ~1-2 раза/с с 127.0.0.1 — лимиты по IP
   # и логину (identity) для e2e снимаем, иначе через ~15 с интро замирает
   shard_start identity PARVANE_LOGIN_RATE=100000 PARVANE_REGISTER_RATE=100000 \
     PARVANE_REGISTER_RATE_GLOBAL=100000 "$@"
   for s in messenger cloud call preview push domains; do shard_start "$s"; done
   if [ -n "${PV_FEDERATION_PORT:-}" ]; then
-    shard_start federation PARVANE_FEDERATION=on PARVANE_FEDERATION_BIND="127.0.0.1:$PV_FEDERATION_PORT" \
-      PARVANE_FEDERATION_INSECURE_HTTP=1
+    shard_start federation PARVANE_FEDERATION_BIND="127.0.0.1:$PV_FEDERATION_PORT" \
+      PARVANE_FEDERATION_ENDPOINTS="${PV_FEDERATION_PEERS:-}" PARVANE_FEDERATION_INSECURE_HTTP=1
   fi
   # Диск медленный: клиент, пришедший раньше шарда, получает таймаут входа и не
   # повторяет его — ждём отметку запуска каждого шарда
@@ -139,7 +150,7 @@ stack_up() {
   fi
   : >>"$SB/gateway.log"
   gateway_start
-  wait_port 9223
+  wait_port "$PV_GW_TCP_PORT"
   wait_log "$SB/gateway.log" "Gateway WebSocket" 30 || { echo "gateway не поднялся (см. $SB/gateway.log)"; exit 2; }
   sleep 1
 }
@@ -156,8 +167,8 @@ gateway_start() {
   local creds=()
   [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER=gateway PARVANE_NATS_PASS="$(nats_pass gateway)")
   # shellcheck disable=SC2086
-  env PARVANE_NATS_URL=nats://127.0.0.1:4222 "${creds[@]}" PARVANE_DOMAIN="$PV_DOMAIN" \
-    PARVANE_GATEWAY_TCP_BIND=127.0.0.1:9223 PARVANE_GATEWAY_BIND=127.0.0.1:9222 \
+  env PARVANE_NATS_URL="nats://127.0.0.1:$PV_NATS_PORT" "${creds[@]}" PARVANE_DOMAIN="$PV_DOMAIN" \
+    PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$PV_GW_TCP_PORT" PARVANE_GATEWAY_BIND="127.0.0.1:$PV_GW_WS_PORT" \
     PARVANE_LOG_LEVEL=info ${PV_GATEWAY_ENV:-} "$SHARD/gateway" >>"$SB/gateway.log" 2>&1 & GW_PID=$!
   PIDS+=($GW_PID)
 }
@@ -173,15 +184,15 @@ gateway_restart() {
 # Пароль тестовых аккаунтов: сервер требует не короче 8 символов (P-43).
 PV_PASSWORD="${PV_PASSWORD:-test-pass-2026}"
 # start_client <workdir> <user@server> [ENV=VAL ...] → pid; лог: <workdir>/td/log.txt
-# Клиент ходит только через gateway (TCP 9223 по умолчанию; WebSocket —
-# PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws в аргументах).
+# Клиент ходит только через gateway (TCP $PV_GW_TCP_PORT по умолчанию — порт стека на момент
+# вызова; WebSocket — PARVANE_GATEWAY_URL=ws://127.0.0.1:9222/ws в аргументах).
 start_client() {
   local work="$1" user="$2"; shift 2
   mkdir -p "$work/td"
   # tdesktop переписывает log.txt при каждом старте — прошлый прогон сохраняем
   [ -f "$work/td/log.txt" ] && mv "$work/td/log.txt" "$work/td/log.$(date +%s%N).txt"
   # ENV из аргументов — после умолчаний: вызывающий может их переопределить
-  env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL='127.0.0.1:9223' \
+  env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL="127.0.0.1:$PV_GW_TCP_PORT" \
     PARVANE_AUTOLOGIN="$user:$PV_PASSWORD" "$@" "$BIN" -workdir "$work/td" \
     >>"$work/stdout.log" 2>&1 &
   echo $!

@@ -122,6 +122,8 @@ json packToV2(const json &p) {
     if (has(p, "key")) o["key"] = str(p, "key");
     if (has(p, "nonce")) o["nonce"] = str(p, "nonce");
     if (has(p, "capability")) o["capability"] = str(p, "capability");
+    // PACK-2: отпечаток содержимого набора (base64, 32 байта)
+    if (has(p, "content_hash")) o["content_hash"] = str(p, "content_hash");
     return o;
 }
 
@@ -130,6 +132,8 @@ std::optional<json> packFromV2(const json &p) {
     json out{{"file_id", str(p, "file_id")}, {"name", str(p, "name")},
              {"count", p.value("count", 0)}, {"key", str(p, "key")}, {"nonce", str(p, "nonce")}};
     if (!str(p, "capability").empty()) out["capability"] = str(p, "capability");
+    const auto contentHash = !str(p, "content_hash").empty() ? str(p, "content_hash") : str(p, "contentHash");
+    if (!contentHash.empty()) out["content_hash"] = contentHash;
     return out;
 }
 

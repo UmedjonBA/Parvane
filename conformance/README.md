@@ -189,8 +189,16 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 
 Реализации: web `api/parvane/stickerPacks.ts` (`packContentHash`,
 `registerReceivedPackRef`), `messages.ts` (`buildPackRefForSet`), `provider.ts`
-(`resolveCustomPack` — сверка). Desktop и android — ОТКРЫТО (поле игнорируют,
-наборы различаются по отправителю, как раньше).
+(`resolveCustomPack` — сверка). Desktop: ядро `parvane-core/src/pack_archive.cpp`
+(`contentHash`, `archiveContentHashB64`, `archiveMatchesContentHash`), `src/v2_content.cpp`
+(`packToV2`/`packFromV2` переносят `content_hash`); tdesktop `parvane_client.cpp` — отпечаток в
+ссылку при отправке (`AttachPackContentHash`, стикер и `emoji_packs`), установка набора по стикеру
+(`InstallStickerPackFromDocument`: набор с тем же отпечатком уже стоит — он и есть,
+`FindInstalledPackByHash`; другой набор с тем же именем — отдельный каталог, `DistinctPackName`;
+архив с чужим отпечатком отвергается), сверка эмодзи-пака в `MaterializeEmojiPacks` (эмодзи-паки
+по-прежнему различаются именем из ссылки — от него docId, EMOJI-1). Тесты: `tests/pack_tests.cpp`,
+`tests/webcompat_tests.cpp` — общий вектор `proto/parvane/vectors/clients/pack-hash.json` (его же
+проверяет web `clientVectors.test.ts`), `tests/v2_tests.cpp`. Android — ОТКРЫТО (то же).
 
 ## CALL-2. Название группы во входящем групповом звонке
 
@@ -202,7 +210,13 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 составу участников, затем название из приглашения.
 
 Реализации: web `v2/callMap.ts`, `groupcall.ts` (`inviteGroupTitle`), `calls.ts`;
-тесты `v2Call.test.ts`, `groupcall.title.test.ts`. Desktop и android — ОТКРЫТО.
+тесты `v2Call.test.ts`, `groupcall.title.test.ts`. Desktop (spec 029): ядро
+`v2_content.cpp` (`callSignalToV2`/`callSignalFromV2` — `group` и `title`,
+`cleanGroupTitle`), `call.h` (`groupInviteSignal`), `group_call_manager.cpp`;
+tdesktop `parvane_client.cpp` (`StartGroupCall`, `ShowIncomingGroupCall` — известная
+группа своим названием, неизвестная — из приглашения); тесты
+`tests/call_manager_tests.cpp` («CALL-2: во входящем — группа и её название»),
+`tests/webcompat_tests.cpp` (очистка названия как web). Android — ОТКРЫТО.
 
 ## FED-1. Федерация серверов (spec 028)
 
@@ -223,8 +237,14 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 
 Реализации: web — `v2/address.ts`, `v2/controller.ts`, `v2/cloud.ts`, `v2/bridge.ts`, `provider.ts`, тесты
 `v2/address.test.ts`, сценарий `scripts/run_web_federation_e2e.sh`; сервер — `cargo test -p parvane-integration
---test v2_federation_live` (два стека). Desktop и android — ОТКРЫТО: без `dest_domain` они работают в пределах
-своего сервера, адрес другого сервера получает прежний `FEDERATION_UNAVAILABLE`.
+--test v2_federation_live` (два стека). Desktop — сделано (spec 029): `OutRequest.dest`,
+`Connection::request`/`Control::call` с `dest`, `groupDomainLocked`, `requestForeignTokensLocked`, `Media.blob_domain`;
+tdesktop `NoteFederationFailure` — причины строками EN+RU; сценарий
+`desktop/verify_federation.sh` (зелёный 19 окт 2026) (два локальных сервера `a.parvane.test`/`b.parvane.test` с шардом federation на тестовом
+транспорте, по клиенту на сервер, личное письмо в обе стороны; `verify_lib.sh` — порты стека `PV_NATS_PORT`/
+`PV_GW_WS_PORT`/`PV_GW_TCP_PORT`, соседи `PV_FEDERATION_PEERS`); `tests/v2_tests.cpp` проверяет только перенос
+`blob_domain`. Android — ОТКРЫТО: без `dest_domain` он работает в
+пределах своего сервера, адрес другого сервера получает прежний `FEDERATION_UNAVAILABLE`.
 
 ## EMOJI-1. docId кастом-эмодзи — от имени из ссылки
 
@@ -907,7 +927,8 @@ N. **Выход устройства (6 окт 2026, T197).** При полно�
    Устройство, выдающее грант линковки, перед выдачей перечитывает свой журнал.
    Движок `identity.rs` (`by_itself`), `Client::leave_request`; обвязки `leave`
    (WASM), `pv_client_leave` (C ABI). Реализовано в web (`v2Controller.leave` в
-   `destroy`); desktop и android — T193.
+   `destroy`); desktop — в ядре `Session::leave` (живой тест `v2_session_tests.cpp`,
+   ENG-04), но полный выход tdesktop его не зовёт — ОТКРЫТО; android — T193.
 
 N+1. **Ревью 7 окт, ENG-04…08 (15 окт 2026, движок — общий для всех клиентов).**
    - Признак «держал SSK» не снимается более поздним сертификатом с `no-ssk`;
@@ -926,8 +947,10 @@ N+1. **Ревью 7 окт, ENG-04…08 (15 окт 2026, движок — общ
      своему отправляющему устройству (обманка, ENG-07). Web, кроме того, отправляет
      первый конверт новой сессии через случайные 0,8–2,5 с после раздачи
      (`GROUP_SHARE_GAP_*` в `v2/controller.ts`), чтобы сервер не связывал их по времени.
-   Desktop/android получают это со следующей сборкой движка (C ABI прежний;
-   кнопки «устройство украдено» у них нет — ОТКРЫТО).
+   Desktop (spec 029): ядро `reportDeviceStolen`, `leftSskHolders`, кнопка — экран
+   «Устройства» (`parvane_account_ui.cpp`, `FillReadyExtras`), живой тест
+   `v2_session_tests.cpp` (ENG-04). Android получает это со следующей сборкой движка
+   (C ABI прежний; кнопки «устройство украдено» нет — ОТКРЫТО).
 
 N+2. **Два способа завершить сеанс (15 окт 2026, решение владельца).** «Завершить
    сеанс» и «Завершить все другие сеансы» спрашивают, как именно:
@@ -1008,7 +1031,8 @@ rekey)`), `SettingsActiveSessions.tsx`; ядро `v2_session.cpp` (`revokeDevice
    SSK при негодном ключе пробует копию с сервера (ключ мог быть выписан
    заново). Экраны говорят «ключ утерян — напишите администратору». Реализовано
    в web (`sealRootEscrow`, сценарий `run_protocol_mixed_e2e.sh escrow`);
-   desktop и android — T193 (обвязка `pv_client_export_root_escrow` готова).
+   desktop — ядро `sealRootEscrowLocked` (создание и сброс личности, `storeEscrowCopy`),
+   сценария нет; android — T193 (обвязка `pv_client_export_root_escrow` готова).
 
 Реализации: движок `client.rs` (`ingest_log_sync`, `log_genesis`,
 `accept_pending_root`, `recover_with_root`, `reset_identity`), обвязки
@@ -1024,8 +1048,9 @@ device?» в `SettingsActiveSessions.tsx`; ядро `v2_session.cpp`
 (`acceptPeerRootLocked`, `runDirectLocked`, `dropIdentityLocked`,
 `uploadRootBackupLocked`, `recoverWithKey`, `resetIdentity`), tdesktop — событие
 `peerRootChanged` → `AnnounceKeyChange`, Android JNI — событие
-`peer_root_changed`. Ввод ключа восстановления и сброс в UI desktop/Android —
-T140 (на десктопе пока хуки `PARVANE_AUTORECOVER` / `PARVANE_AUTORESET`).
+`peer_root_changed`. Ввод ключа восстановления и сброс в UI desktop — окно
+«Подтвердите вход» (`parvane_account_ui.cpp` `FillLinking` → `RecoverWithKey`,
+`ResetIdentityWithPassword`, spec 029); Android — T140.
 Тесты: движок `revocation_flow.rs` (`recovery_with_root_replaces_devices`,
 `identity_reset_is_seen_as_root_change`), ядро `v2_session_tests.cpp` (живой,
 T129/T130), сторож `conformance.test.ts`, сценарии
@@ -1251,6 +1276,12 @@ Android — не сделано (T184).
 Векторы: `proto/parvane/vectors/sign/ops.json` (движок —
 `backend/protocol/tests/vectors_sign.rs`).
 
+Подписывает и проверяет операции только движок; клиенты прогоняют набор `sign/ops`
+через свою обвязку: web — `protocol.vectors.test.ts` (WASM), desktop —
+`desktop/parvane-core/tests/protocol_vectors_tests.cpp` (ctest `protocol_vectors`, C ABI
+`pv_run_conformance_vectors`), android — `ProtocolV2SeamTest.kt`
+(`conformanceVectorsPassThroughCAbi`).
+
 ## PROTO-1. Протокол разбирает только движок
 
 **Spec 007, принцип III конституции 2.0.0.** Кадры, тела запросов, конверты и
@@ -1428,20 +1459,25 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 
 ## REPORT-1. Жалоба админам группы (`mod_report`)
 
-**Spec 024 (17 окт 2026), правило открыто: web — сделано, desktop и android — нет (решение «только web»).**
+**Spec 024 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
 `Content.mod_report = 24` — видимое личное сообщение каждому админу группы с правом удалять сообщения или банить:
 `group` (группа), `messages` (≤ 20: `op_id`, автор, текст, время), `reason` — код причины (`spam`, `violence`,
 `porn`, `child`, `copyright`, `illegal`, `personal`, `fake`, `other`), `comment` (≤ 1024), `text` (≤ 600) —
 представление для клиентов без модерации. Web показывает карточку с «Удалить сообщения» (мутация удаления в группе
 от админа) и «Заблокировать в группе» (запись `Ban` журнала группы). Клиент без модерации обязан показать `text`
-обычным текстом и не падать; до реализации desktop/android показывают сообщение как неподдерживаемое (CONTENT-1).
+обычным текстом и не падать; до реализации android показывает сообщение как неподдерживаемое (CONTENT-1).
 Жалоба администратору сервера — не содержимое переписки: метод `identity.report.submit`, шифртекст под ключом
 `ServerDescribeResponse.report_public_key` (HPKE, `info = "parvane/v2/report\0" ‖ адрес автора`), клиентам без
 этой функции делать ничего не нужно.
 
+Desktop (spec 029): ядро `v2_content.cpp` (`mod_report` ↔ v2), `messenger.h` (`contentText`),
+`v2_session_account.cpp` (`submitReport`); tdesktop `parvane_client.cpp` (`ReportMessages` из штатного окна
+`api_report.cpp`, карточка админа `CardMarkup` → `HandleCardButton` `pv:moddel`/`pv:modban`); тест
+`tests/v2_tests.cpp` («mod_report туда и обратно», «карточка mod_report показывается текстом»).
+
 ## RENAME-1. Смена ника
 
-**Spec 026 (17 окт 2026), правило открыто: web — сделано, desktop и android — нет (решение «только web»).**
+**Spec 026 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
 Личность — корень; адрес — её имя. Смена ника — запись `Rename` (подпись корнем) в журнале устройств прежнего
 адреса: журнал закрыт, его ключи устройств больше не действуют (прошлые подписи проверяемы по версии журнала), а
 личность продолжается журналом нового адреса, чей генезис — тот же корень с `renamed_from` = прежний адрес и
@@ -1467,9 +1503,15 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 токены прежнего адреса недействительны; шарды переносят свои строки (`v2.internal.rename.<шард>`). Клиенту без
 этой функции до реализации: прежний адрес собеседника перестаёт принимать сообщения через 30 дней.
 
+Desktop (spec 029): ядро `v2_session_account.cpp` (`renameAccount`, `followPeerRenameLocked` → событие
+`peerRenamed`, `followOwnRename`, `renameGroupsPending`); tdesktop `parvane_client.cpp` (`RenameAccount`,
+`MoveAccountLocal`, `NoteRename`/`LatestAddress`), `parvane_account_ui.cpp` (`ShowRenameBox`); живой тест
+`tests/v2_session_tests.cpp` (spec 026: отказ при неверном пароле, смена ника, вход новым ником, `peerRenamed` у
+собеседника). Пп. 3 и 4 тестом не покрыты.
+
 ## DELETE-1. Удаление аккаунта
 
-**Spec 027 (17 окт 2026), правило открыто: web — сделано, desktop и android — нет (решение «только web»).**
+**Spec 027 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
 `identity.account.delete` (свежее подтверждение паролем) ставит аккаунт на удаление: все токены сразу
 недействительны, сессии закрываются, для других аккаунт исчезает; через 7 дней identity и шарды стирают его строки
 (`RenameNotice.purge = 4` на `v2.internal.rename.<шард>`), ник свободен. Клиент обязан:
@@ -1480,6 +1522,12 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 2. **Собеседник.** Синк журнала устройств с `deleted = 4` (`DeviceLogSync(Anon)Response`) — аккаунт удалён либо
    ждёт удаления: показать «Удалённый аккаунт», не повторять отправку. Новый владелец ника — новый журнал (смена
    корня, KEY-1).
+
+Desktop (spec 029): ядро `v2_session_account.cpp` (`deleteAccount`, `isDeletedLog` → событие `peerDeleted`),
+`v2_bridge.cpp` (`deletion_at_ms`, `cancel_deletion`); tdesktop `parvane_client.cpp` (`Issue` с `cancelDeletion`,
+`DeleteAccount`, `MarkPeerDeleted`), `intro/intro_parvane.cpp` (дата и «Восстановить» на экране пароля),
+`parvane_account_ui.cpp` (`ShowDeleteAccountBox`); живой тест `tests/v2_session_tests.cpp` (spec 027: удаление,
+вход в период ожидания без токена, вход с отменой). П. 2 тестом не покрыт.
 
 ## ORDER-1. Порядок сообщений в ленте
 
@@ -1514,7 +1562,7 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 
 ## RECOVER-2. Новое устройство по ключу восстановления — без других устройств
 
-**Spec 015 (10 окт 2026), правило открыто: web — сделано, desktop и android — нет.**
+**Spec 015 (10 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
 По RECOVER-1 ключ восстановления означал «все устройства потеряны»: корень назначал
 новый ключ подписи устройств, прежние устройства отзывались, история и ключ личного
 состояния не возвращались. Привязка с другого устройства требовала это устройство в
@@ -1562,6 +1610,14 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 `scripts/e2e_web_telegram_bot.mjs`. Сервер: `shards/identity/src/recovery_tg.rs`,
 `v2.rs`; бот `infra/telegram-bot/parvane_tg_bot.py`.
 
+Реализация desktop (spec 029): ядро `keybundle.cpp` (PVKB), `v2_session_account.cpp`
+(`refreshKeyBundleLocked`, `joinWithRecoveryKey`, `sendKeyToTelegram`,
+`requestTelegramKey`, `pollTelegramKey`); tdesktop `parvane_client.cpp`
+(`StartTelegramRecovery`, `PollTelegramRecovery`, `RecoverWithKey`),
+`parvane_account_ui.cpp`; тесты `tests/webcompat_tests.cpp` (`keyBundle`: копия web
+открывается, ключ из текста — как web), живой `tests/v2_session_tests.cpp` (spec 015:
+копия на сервере, вход по ключу, прежнее устройство осталось).
+
 ## PUBLIC-1. Публичные группы и каналы (spec 023, 15 окт 2026)
 
 Решение пользователя: имя и секрет публичной группы серверу знать можно. Публичность — запись журнала группы
@@ -1573,4 +1629,9 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 
 1. Клиент с поддержкой показывает тип «Публичная/Частная», имя и честное предупреждение: переписку публичной группы
    может прочитать любой вступивший и технически сервер.
-2. Клиент без поддержки обязан пропускать такую группу без падения (desktop и android — ОТКРЫТО, сборки не обновлялись).
+2. Клиент без поддержки обязан пропускать такую группу без падения (android — ОТКРЫТО, сборка не обновлялась).
+
+Desktop (spec 029) поддерживает: ядро `v2_session_groups.cpp` (`checkPublicName`, `searchPublic`, `resolvePublic`,
+`setGroupPublic`, `joinPublic`, `publicHistory`), tdesktop `parvane_client.cpp` (`SetGroupPublic`,
+`SearchPublicGroups`, `LoadPublicPreview`, `JoinPublicGroup`); живой тест `tests/v2_session_tests.cpp` (spec 023:
+публичность, имя, поиск, вступление по открытому секрету, история для нового участника).

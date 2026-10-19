@@ -432,25 +432,15 @@ bool Session::connectLocked(std::string *error) {
         deviceId_ = auth.deviceId;
         id_->setEventHandler([this](const Event &ev) {
             if (ev.kind == "inbox.record") {
-                auto body = ev.body;
-                post([this, body] {
-                    std::vector<json> events;
-                    {
-                        std::lock_guard<std::recursive_mutex> lk(engineMu_);
-                        if (!client_) return;
-                        openRecordLocked(body, events);
-                        log("запись инбокса: событий " + std::to_string(events.size()));
-                        absorbLocked(std::move(events));
-                        // Сначала на диск (сессии Olm продвинулись), потом ack: процесс,
-                        // убитый между ними, иначе терял входящую сессию навсегда.
-                        persistLocked();
-                        try {
-                            const auto ack = parseRequest(client_->ackRequest());
-                            call(ack.anon, ack.method, ack.body);
-                        } catch (const std::exception &) {
-                        }
-                        reciprocateKeysLocked(); // T185: запись могла принести ключ участника группы
-                    }
+                // Запись — в свою очередь, разбор — рабочим потоком. Очередь отдельная от
+                // задач: рабочий поток, ждущий встречный ключ звонка (acquirePeerKey), разбирает
+                // записи сам, не дожидаясь своей же задачи (T185).
+                {
+                    std::lock_guard<std::mutex> lk(recordsMu_);
+                    records_.push_back(ev.body);
+                }
+                post([this] {
+                    openPendingRecords();
                     flush();
                 });
             } else if (ev.kind == "ephemeral") {
@@ -1169,14 +1159,54 @@ bool Session::acquirePeerKey(const std::string &peer) {
             return false;
         }
     }
-    // Ждём без мьютекса движка: встречный ключ приносит запись инбокса
+    // Ждём без мьютекса движка: встречный ключ приносит запись инбокса. Сигналы
+    // группового звонка шлются и из обработчика событий — то есть с рабочего потока,
+    // который сам разбирает записи: тогда разбираем их здесь, иначе ключ, пришедший
+    // через секунду, ждал бы в очереди до конца ожидания (bob → carol в verify_group_call).
+    const bool onWorker = std::this_thread::get_id() == worker_.get_id();
     for (int i = 0; i < 27 && !stopping_; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        if (onWorker) openPendingRecords();
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         if (client_ && client_->hasPeerDeliveryKey(peer)) return true;
     }
     log("встречный ключ доступа участника звонка не пришёл");
     return false;
+}
+
+// Разобрать накопленные записи инбокса по порядку прихода. Только рабочий поток:
+// задача обработчика `inbox.record` либо ожидание встречного ключа (acquirePeerKey).
+// События уходят в outbox_; onEvent здесь не зовётся — отдаёт их flush вызывающего.
+void Session::openPendingRecords() {
+    for (;;) {
+        std::string body;
+        {
+            std::lock_guard<std::mutex> lk(recordsMu_);
+            if (records_.empty()) return;
+            body = std::move(records_.front());
+            records_.pop_front();
+        }
+        std::vector<json> events;
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!client_) {
+            // Сессия закрыта — записи без ack сервер отдаст заново
+            std::lock_guard<std::mutex> rl(recordsMu_);
+            records_.clear();
+            return;
+        }
+        openRecordLocked(body, events);
+        log("запись инбокса: событий " + std::to_string(events.size()));
+        absorbLocked(std::move(events));
+        // Сначала на диск (сессии Olm продвинулись), потом ack: процесс,
+        // убитый между ними, иначе терял входящую сессию навсегда.
+        persistLocked();
+        try {
+            const auto ack = parseRequest(client_->ackRequest());
+            call(ack.anon, ack.method, ack.body);
+        } catch (const std::exception &) {
+        }
+        reciprocateKeysLocked(); // T185: запись могла принести ключ участника группы
+    }
 }
 
 // Участник общей группы прислал свой ключ доступа (собирается звонить) — отвечаем

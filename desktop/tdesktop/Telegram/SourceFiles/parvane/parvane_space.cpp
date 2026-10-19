@@ -11,6 +11,9 @@
 
 #include <rpl/variable.h>
 
+#include <QtGui/QFont>
+#include <QtGui/QFontInfo>
+
 namespace Parvane {
 namespace {
 
@@ -157,6 +160,21 @@ rpl::producer<> TonesChanges() {
 	) | rpl::filter([](const Window::Theme::BackgroundUpdate &update) {
 		return update.paletteChanged();
 	}) | rpl::to_empty;
+}
+
+QString UiFontFamily(const QString &custom) {
+	if (!custom.isEmpty()) {
+		return custom;
+	}
+	return u"IBM Plex Sans"_q;
+}
+
+void SetupFontFallbacks() {
+	// Plex — латиница, кириллица, греческий; арабское письмо — встроенный Vazirmatn, как у Open Sans
+	QFont::insertSubstitutions(u"IBM Plex Sans"_q, {
+		u"Vazirmatn UI NL"_q,
+		u"Open Sans"_q,
+	});
 }
 
 } // namespace Parvane

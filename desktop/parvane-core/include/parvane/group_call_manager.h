@@ -9,12 +9,15 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <optional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "parvane/call.h"
@@ -51,11 +54,18 @@ public:
         std::function<void(const std::string &peer, const std::string &reason)> onPeerDeclined;
         // Занят ли клиент другим (личным) звонком: тогда приглашению — «занят».
         std::function<bool()> isBusy;
+        // Слать sendV2 не из вызывающего потока, а очередью на участника (порядок сохраняется). Хосту, у
+        // которого sendV2 может ждать (ключ доступа участника, T185: до 8 с), — true: иначе ожидание шло бы
+        // под mutex_, и входящие сигналы (а с ними встречный ключ) стояли бы за ним. Тесты — false (синхронно).
+        bool asyncSend = false;
     };
 
     GroupCallManager(std::string selfAddr, const crypto::SigningKey *key,
                      std::function<std::unique_ptr<MediaBackend>()> makeBackend,
                      Callbacks cb);
+    ~GroupCallManager();
+    GroupCallManager(const GroupCallManager &) = delete;
+    GroupCallManager &operator=(const GroupCallManager &) = delete;
 
     // Сигнал группового звонка, принятый по протоколу v2 (отправитель проверен
     // движком) — тот же путь, что у сигнала с шины, без проверки подписи SDP.
@@ -118,6 +128,8 @@ private:
                   const std::string &media);
     // Создать (идемпотентно) сессию к участнику peer. Под mutex_.
     CallSession *ensureSession(const std::string &peer, const std::string &media);
+    // Очередь отправки участнику (asyncSend): свой поток на участника.
+    void runOutbox(const std::string &peer);
 
     std::string self_;
     const crypto::SigningKey *key_;
@@ -135,6 +147,19 @@ private:
     std::optional<PendingInvite> pending_;
     // Замолчавшие звонки: id → {срок, тихо (решено своим устройством)}.
     std::map<std::string, std::pair<std::chrono::steady_clock::time_point, bool>> silenced_;
+
+    struct OutSignal {
+        json signal;
+        std::string gcid;
+    };
+    struct Outbox {
+        std::deque<OutSignal> queue;
+        std::thread thread;
+    };
+    std::mutex outMu_;
+    std::condition_variable outCv_;
+    bool outStop_ = false;
+    std::map<std::string, Outbox> outboxes_; // узлы map не переезжают — поток держит ссылку на свой
 };
 
 } // namespace parvane

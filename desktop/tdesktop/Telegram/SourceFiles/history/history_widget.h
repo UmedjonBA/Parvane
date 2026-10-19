@@ -136,6 +136,10 @@ struct VoiceToSend;
 class BotKeyboard;
 class HistoryInner;
 
+namespace Parvane::Islands {
+class ChatCorners;
+} // namespace Parvane::Islands
+
 class HistoryWidget final
 	: public Window::AbstractSectionWidget
 	, private HistoryView::CornerButtonsDelegate {
@@ -947,6 +951,8 @@ private:
 	bool _justMarkingAsRead = false;
 
 	object_ptr<Ui::PlainShadow> _topShadow;
+	// Parvane: шапка и композер островами над плоским фоном чата (spec 029, T054)
+	std::unique_ptr<Parvane::Islands::ChatCorners> _pvChatCorners;
 	bool _inGrab = false;
 
 	int _topDelta = 0;

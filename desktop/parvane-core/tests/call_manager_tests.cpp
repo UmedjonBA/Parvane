@@ -259,6 +259,51 @@ int main() {
         check(waitFor([&] { return has(declined, 0, "c@local:declined"); }), "таймаут приглашения — отказ звонящему");
         for (auto &x : m) x->leave();
     }
+    {
+        // T185 (desktop): отправка участнику ждёт его ключ доступа (до 8 с). С asyncSend ожидание идёт в
+        // очереди участника, не под замком менеджера: «Принять» возвращается сразу, входящие сигналы
+        // разбираются, остальные участники соединяются, и после ожидания mesh полный.
+        Relay relay;
+        const auto k1 = crypto::SigningKey::generate(), k2 = crypto::SigningKey::generate(), k3 = crypto::SigningKey::generate();
+        std::vector<std::unique_ptr<GroupCallManager>> m;
+        const std::vector<std::string> who = {"a@local", "b@local", "c@local"};
+        const crypto::SigningKey *keys[] = {&k1, &k2, &k3};
+        std::atomic<bool> slowDone{false};
+        for (std::size_t i = 0; i < who.size(); ++i) {
+            GroupCallManager::Callbacks cb;
+            const auto self = who[i];
+            cb.asyncSend = true;
+            cb.sendV2 = [&relay, &slowDone, self](const std::string &peer, const json &s, const std::string &gcid) {
+                if (self == "b@local" && peer == "c@local" && !slowDone.exchange(true)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(4000)); // «ждём встречный ключ»
+                }
+                auto signal = s;
+                if (!gcid.empty()) signal["group_call_id"] = gcid;
+                relay.send(self, peer, signal);
+                return true;
+            };
+            m.push_back(std::make_unique<GroupCallManager>(self, keys[i], stub, cb));
+        }
+        for (std::size_t i = 0; i < who.size(); ++i) {
+            auto *mgr = m[i].get();
+            relay.attach(who[i], [mgr](const std::string &from, const json &s) { mgr->handleV2Signal(from, s); });
+        }
+        const std::string g5 = "0192f1a2-2222-7000-8000-000000000005";
+        m[0]->startCall(g5, who, "audio");
+        check(waitFor([&] { return m[1]->pendingInviteId() == g5 && m[2]->pendingInviteId() == g5; }),
+              "asyncSend: приглашение дошло до b и c");
+        const auto t0 = std::chrono::steady_clock::now();
+        check(m[1]->acceptInvite(), "asyncSend: b принял");
+        const auto acceptMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        check(acceptMs < 500, "asyncSend: «Принять» не ждёт отправку участнику (" + std::to_string(acceptMs) + " мс)");
+        check(m[2]->acceptInvite(), "asyncSend: c принял");
+        check(waitFor([&] { return m[0]->connectedCount() == 1 && m[1]->connectedCount() >= 1; }, 3500),
+              "asyncSend: b соединился с a, пока отправка c ещё ждёт");
+        check(waitFor([&] { return m[0]->connectedCount() == 2 && m[1]->connectedCount() == 2 && m[2]->connectedCount() == 2; }, 10000),
+              "asyncSend: после ожидания mesh полный");
+        for (auto &x : m) x->leave();
+    }
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail == 0 ? 0 : 1;
 }

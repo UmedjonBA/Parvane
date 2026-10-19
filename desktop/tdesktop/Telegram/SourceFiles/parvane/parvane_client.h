@@ -364,6 +364,17 @@ void ClearLocalState();
 // Делалась ли копия на этом устройстве (маркер tdata/parvane-backup-done).
 [[nodiscard]] bool KeyBackupDone();
 
+// «Выгрузка данных» (spec 029, T036): снимок переписки в формате web `parvaneExportSnapshot` (JSON-текст) —
+// расшифрованный журнал истории, разложенный по чатам; удалённое, очищенное, шифрованное, исчезающее и
+// сообщения заблокированных в снимок не входят. `contacts` — адреса контактов. Главный поток; пусто — нет сессии.
+[[nodiscard]] std::string ExportSnapshotJson(const QStringList &contacts);
+// Расшифрованное вложение сообщения: из кэша устройства (tdata/parvane-media) либо скачанное заново и
+// расшифрованное ключом из содержимого. Блокирующий — не с главного потока; nullopt — недоступно.
+[[nodiscard]] std::optional<std::string> ExportMediaBytes(
+	const std::string &fileId,
+	const std::string &fileKey,
+	const std::string &fileNonce);
+
 // Профиль в identity (setname): bio / дата рождения (ISO YYYY-MM-DD, пусто —
 // очистить) / телефон / индекс цвета имени. Меняются только присланные поля.
 struct ProfileFields {
@@ -728,5 +739,8 @@ void AfterSessionReady(not_null<Main::Session*> session);
 [[nodiscard]] QByteArray SectionsRead(const QString &path);          // зашифрованные файлы tdata (P-13)
 bool SectionsWrite(const QString &path, const QByteArray &data);
 [[nodiscard]] bool IsRussianUi();
+
+// Переменная окружения dev/e2e-хука: в сборке без PARVANE_DEV всегда nullptr (NAT-11 — хуков в релизе нет)
+[[nodiscard]] const char *DevEnv(const char *name);
 
 } // namespace Parvane

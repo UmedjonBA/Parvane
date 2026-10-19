@@ -26,6 +26,7 @@ enum class Command {
 	MediaNext,
 
 	Search,
+	ParvanePalette, // Parvane: общий поиск (палитра Ctrl+K, spec 029)
 
 	ChatPrevious,
 	ChatNext,

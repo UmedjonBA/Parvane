@@ -1952,6 +1952,10 @@ InputField::InputField(
 	finishAnimating();
 }
 
+// Parvane: Ctrl+K — палитра общего поиска (как web), ссылка в поле — Ctrl+Shift+K. Константа заголовка не
+// меняется (иначе пересборка всего, что его включает): последовательность ссылки подменена здесь
+const auto kParvaneEditLinkSequence = QKeySequence("ctrl+shift+k");
+
 std::vector<InputField::MarkdownAction> InputField::MarkdownActions() {
 	return {
 		{ QKeySequence::Bold, kTagBold },
@@ -1962,7 +1966,7 @@ std::vector<InputField::MarkdownAction> InputField::MarkdownActions() {
 		{ kBlockquoteSequence, kTagBlockquote },
 		{ kSpoilerSequence, kTagSpoiler },
 		{ kClearFormatSequence, QString() },
-		{ kEditLinkSequence, QString(), MarkdownActionType::EditLink },
+		{ kParvaneEditLinkSequence, QString(), MarkdownActionType::EditLink },
 		{ kEditDateSequence, QString(), MarkdownActionType::EditDate },
 	};
 }
@@ -5594,7 +5598,7 @@ void InputField::addMarkdownActions(
 		const auto base = data.link.isEmpty()
 			? integration.phraseFormattingLinkCreate()
 			: integration.phraseFormattingLinkEdit();
-		add(base, kEditLinkSequence, false, [=] {
+		add(base, kParvaneEditLinkSequence, false, [=] {
 			editMarkdownLink(selection);
 		});
 	};

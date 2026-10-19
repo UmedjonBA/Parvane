@@ -42,6 +42,20 @@ const auto kVaultNames = std::array<const char*, 2>{ "Знания", "Knowledge"
 	return value.empty() ? std::optional<std::string>() : std::optional<std::string>(value);
 }
 
+// Узел, который просили открыть извне (палитра Ctrl+K): контейнер и id; экран забирает его, когда дерево готово
+struct OpenRequest {
+	std::string container;
+	std::string node;
+};
+[[nodiscard]] std::optional<OpenRequest> &PendingOpen() {
+	static auto result = std::optional<OpenRequest>();
+	return result;
+}
+[[nodiscard]] rpl::event_stream<> &OpenRequests() {
+	static auto result = rpl::event_stream<>();
+	return result;
+}
+
 // Однострочная подпись по центру строки высотой height (разделитель пути «/», число выбранного)
 class CenterText final : public Ui::RpWidget {
 public:
@@ -275,6 +289,7 @@ protected:
 private:
 	void scheduleRebuild();
 	void rebuild();
+	void consumeOpenRequest();
 	void layoutIsland();
 	void goTo(Place place);
 	[[nodiscard]] Place placeOf(const std::string &container, std::optional<std::string> folder = {}) const;
@@ -403,8 +418,12 @@ CloudScreen::CloudScreen(QWidget *parent, not_null<Window::SessionController*> c
 	SectionValue() | rpl::filter([](Section s) { return s == Section::Files; }) | rpl::on_next([=] {
 		Load();
 	}, lifetime());
+	OpenRequests().events() | rpl::on_next([=] {
+		scheduleRebuild();
+	}, lifetime());
 	Load();
 	rebuild();
+	consumeOpenRequest();
 }
 
 void CloudScreen::resizeEvent(QResizeEvent *e) {
@@ -441,7 +460,39 @@ void CloudScreen::scheduleRebuild() {
 	QTimer::singleShot(0, this, [=] {
 		_rebuildPending = false;
 		rebuild();
+		consumeOpenRequest();
 	});
+}
+
+void CloudScreen::consumeOpenRequest() {
+	auto &pending = PendingOpen();
+	if (!pending) {
+		return;
+	}
+	const auto &nodes = NodesOf(pending->container);
+	const auto i = std::find_if(nodes.begin(), nodes.end(), [&](const CloudNode &node) {
+		return node.id == pending->node;
+	});
+	if (i == nodes.end()) {
+		// Дерево ещё читается — ждём; готово, а узла нет (удалён) — забываем просьбу
+		if (IsLoaded() && Current().status != "loading") {
+			pending = std::nullopt;
+		}
+		return;
+	}
+	const auto entry = Entry{ pending->container, *i };
+	// Папка открывается сама, файл — просмотром в своей папке (список соседей — для листания)
+	const auto target = entry.node.isFolder()
+		? placeOf(entry.container, entry.node.id)
+		: placeOf(entry.container, entry.node.parent);
+	if (!(CurrentPlace() == target) || !_applied.isEmpty()) {
+		goTo(target);
+		return;
+	}
+	pending = std::nullopt;
+	if (!entry.node.isFolder()) {
+		showPreview(entry);
+	}
 }
 
 Place CloudScreen::placeOf(const std::string &container, std::optional<std::string> folder) const {
@@ -1432,6 +1483,12 @@ void CloudScreen::rebuild() {
 } // namespace Parvane::Cloud
 
 namespace Parvane {
+
+void OpenCloudNode(const std::string &container, const std::string &nodeId) {
+	Cloud::PendingOpen() = Cloud::OpenRequest{ container, nodeId };
+	ShowSection(Section::Files);
+	Cloud::OpenRequests().fire({});
+}
 
 void RegisterCloud() {
 	RegisterSectionFactory(Section::Files, [](

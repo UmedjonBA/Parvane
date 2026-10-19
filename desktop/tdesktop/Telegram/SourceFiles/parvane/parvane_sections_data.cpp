@@ -360,6 +360,11 @@ public:
 		applyWanted();
 	}
 
+	void setPaletteOpen(bool open) {
+		_paletteOpen = open;
+		applyWanted();
+	}
+
 	void setVisible(bool visible) {
 		_plannerSync.setVisible(visible);
 		_cloud.setVisible(visible);
@@ -506,11 +511,12 @@ private:
 		// «План» нужен и в фоне (напоминания, карточки задания в чате) — опрос редкий
 		_plannerSync.ensure(!plannerShown);
 		_plannerSync.setActive(plannerShown);
-		if (cloudShown || _shown == Section::Knowledge) {
+		// Палитра Ctrl+K ищет по заметкам и файлам: пока она открыта, облако и заметки читаются, как в «Знаниях»
+		if (cloudShown || _paletteOpen) {
 			_cloud.ensureSoon(true);
 		}
 		_cloud.setActive(cloudShown);
-		if (_shown == Section::Knowledge) {
+		if (_shown == Section::Knowledge || _paletteOpen) {
 			if (!_notesLoaded) {
 				_notesLoaded = true;
 				_notes.loadNotes(_self, notesOptions());
@@ -658,6 +664,7 @@ private:
 
 	std::string _self;
 	Section _shown = Section::Chats;
+	bool _paletteOpen = false;
 	bool _notesLoaded = false;
 	std::function<void()> _notesRelease;
 	bool _plannerDirty = false;
@@ -892,6 +899,10 @@ void CallCloud(const std::string &method, json args, std::function<void(std::opt
 
 void SetShownSection(Section section) {
 	Enqueue([section](Hub &hub) { hub.setShown(section); });
+}
+
+void SetPaletteOpen(bool open) {
+	Enqueue([open](Hub &hub) { hub.setPaletteOpen(open); });
 }
 
 void SetWindowVisible(bool visible) {
