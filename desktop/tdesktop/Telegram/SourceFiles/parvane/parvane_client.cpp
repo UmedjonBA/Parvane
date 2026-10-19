@@ -10095,8 +10095,11 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 				if (state.value("hasBackup", false)) {
 					crl::on_main([] {
 						if (const auto window = Core::App().activeWindow()) {
-							window->showToast(u"Устройство отозвано: смените ключ подписи устройств "
-								"в настройках приватности (нужен ключ восстановления)."_q);
+							window->showToast(IsRussianUi()
+								? u"Устройство отозвано: смените ключ подписи устройств "
+									"в настройках приватности (нужен ключ восстановления)."_q
+								: u"Device revoked: change the device signing key "
+									"in Privacy settings (requires the recovery key)."_q);
 						}
 					});
 				}
@@ -13609,30 +13612,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		if (!SessionActive()) {
 			StartSession(); // на случай гонки с воркер-StartSession из логина
 		}
-		// Напоминание о резервной копии ключей: у ЕДИНСТВЕННОГО устройства
-		// перенести ключи некуда (линковке нужно второе живое), потеря профиля
-		// необратима. Раз на установку (маркер), не в headless-прогонах.
-		if (!KeyBackupDone() && !ParvaneDevEnv("PARVANE_AUTOLOGIN")) {
-			base::call_delayed(8000, [] {
-				ListDevices([](std::vector<DeviceEntry> devices) {
-					if (devices.size() > 1) {
-						return;
-					}
-					crl::on_main([] {
-						static auto shown = false;
-						if (shown || !g_sessionWeak.get()) {
-							return;
-						}
-						shown = true;
-						Ui::show(Ui::MakeInformBox(u"Это единственное устройство аккаунта. "
-							"История зашифрована его ключами: без резервной копии "
-							"переустановка или сбой диска уничтожат переписку навсегда.\n\n"
-							"Сделайте копию: Настройки → Конфиденциальность → "
-							"«Сохранить копию ключей»."_q));
-					});
-				});
-			});
-		}
+		// Напоминания «единственное устройство — сделайте копию ключей» больше нет: копия ключей аккаунта с историей
+		// (RECOVER-2) уходит на сервер сама, как в web.
 
 		// Подписка на «печатает…» (эфемерно): msg.typing.<мой id>. Хендлер
 		// приходит с NATS-потока → маршалим на main и показываем действие пира.

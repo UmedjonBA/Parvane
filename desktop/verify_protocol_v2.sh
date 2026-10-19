@@ -60,7 +60,7 @@ wait_log "$AL" "v2 → bob@local edit для" 60 && ok "правка своег�
 PB=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_GATEWAY_URL="$WS_URL")
 wait_log "$BL" "v2: состояние устройства загружено" 90 && ok "bob: v2-состояние загружено после рестарта" \
   || bad "bob: v2-состояние не загружено"
-wait_log "$BL" "история: воспроизведено" 60 && grep -qE "\(alice@local\): v2-a1-$S" "$BL" \
+wait_log "$BL" "история: воспроизведено" 60 && wait_log "$BL" "\(alice@local\): v2-a1-$S" 20 \
   && ok "bob: история v2 после рестарта на месте" || bad "bob: история v2 после рестарта не видна"
 wait_log "$BL" "\(alice@local\): v2-a2-edited-$S|входящее msg [0-9a-f-]+ \(alice@local\): v2-a2-$S" 60 \
   && ok "bob догнал сообщение, отправленное офлайн" || bad "bob не догнал офлайн-сообщение"
