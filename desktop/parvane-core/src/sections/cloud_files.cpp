@@ -153,8 +153,9 @@ LinkPlan buildLinkPlan(const json &nodes, const std::optional<std::string> &node
     for (std::size_t i = 0; i < queue.size(); ++i) {
         const auto step = queue[i];
         auto list = children[step.id];
+        // Как web `a.name.localeCompare(b.name)` — без числового режима (T037: «отчёт 10» раньше «отчёт 2»)
         std::stable_sort(list.begin(), list.end(), [](const json &a, const json &b) {
-            return compareNames(str(a, "name"), str(b, "name")) < 0;
+            return compareNames(str(a, "name"), str(b, "name"), false) < 0;
         });
         for (const auto &child : list) {
             const auto id = str(child, "id");

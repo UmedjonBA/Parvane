@@ -15,9 +15,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "parvane/events.h"
-#include "parvane/ids.h"
-#include "parvane/topics.h"
 
 namespace parvane::map {
 
@@ -27,31 +24,6 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kMaxLat = 85.05; // предел Web Mercator, как в web
 
 // base64 → байты (тот же алфавит, что у шарда: base64 стандартный с '=')
-std::vector<std::uint8_t> base64Decode(const std::string &in) {
-    static constexpr char kB64[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::array<std::int8_t, 256> tab{};
-    tab.fill(-1);
-    for (int i = 0; i < 64; ++i) {
-        tab[std::uint8_t(kB64[i])] = static_cast<std::int8_t>(i);
-    }
-    std::vector<std::uint8_t> out;
-    out.reserve((in.size() / 4) * 3);
-    std::uint32_t buf = 0;
-    int bits = 0;
-    for (const auto ch : in) {
-        if (ch == '=') break;
-        const auto v = tab[std::uint8_t(ch)];
-        if (v < 0) continue; // переводы строк и мусор пропускаем
-        buf = (buf << 6) | std::uint32_t(v);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<std::uint8_t>((buf >> bits) & 0xFF));
-        }
-    }
-    return out;
-}
 
 } // namespace
 
@@ -129,22 +101,10 @@ struct TileClient::Impl {
     std::size_t requests = 0; // обращений к шарду (каждая попытка)
 
     // Один запрос к шарду; пустой вектор при любой ошибке.
-    std::vector<std::uint8_t> requestOnce(ITransport &transport, const TileKey &key,
-                                          const std::string &self, const std::string &token) {
+    std::vector<std::uint8_t> requestOnce(const TileClient::Fetcher &fetcher, const TileKey &key) {
         try {
-            auto ev = makeEvent(newUuidV7(), self, nowUnix(), token,
-                nlohmann::json{{"z", key.z}, {"x", key.x}, {"y", key.y}});
-            const auto reply = transport.request(topics::PreviewMapTile, ev.dump(),
-                kTileTimeoutMs);
-            const auto r = nlohmann::json::parse(reply, nullptr, false);
-            if (!r.is_object() || !r.value("ok", false)) {
-                return {};
-            }
-            const auto it = r.find("png_base64");
-            if (it == r.end() || !it->is_string()) {
-                return {};
-            }
-            return base64Decode(it->get<std::string>());
+            const auto png = fetcher(key);
+            return std::vector<std::uint8_t>(png.begin(), png.end());
         } catch (const std::exception &) {
             return {};
         }
@@ -167,10 +127,7 @@ TileClient::TileClient() : impl_(std::make_unique<Impl>()) {
 
 TileClient::~TileClient() = default;
 
-std::vector<std::uint8_t> TileClient::fetch(ITransport &transport, const TileKey &key,
-                                            const std::string &self,
-                                            const std::string &token,
-                                            bool *fromCache) {
+std::vector<std::uint8_t> TileClient::fetch(const Fetcher &fetcher, const TileKey &key, bool *fromCache) {
     auto &d = *impl_;
     const auto k = key.str();
     if (fromCache) {
@@ -211,7 +168,7 @@ std::vector<std::uint8_t> TileClient::fetch(ITransport &transport, const TileKey
             std::lock_guard<std::mutex> lk(d.mu);
             ++d.requests;
         }
-        png = d.requestOnce(transport, key, self, token);
+        png = d.requestOnce(fetcher, key);
     }
     {
         std::lock_guard<std::mutex> lk(d.mu);

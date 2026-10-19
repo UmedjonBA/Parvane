@@ -270,12 +270,13 @@ char32_t baseLetter(char32_t c) {
     }
 }
 
-std::vector<CollElem> collElems(std::string_view s) {
+std::vector<CollElem> collElems(std::string_view s, bool numeric) {
     const auto cps = u::decode(s);
     std::vector<CollElem> out;
     for (size_t i = 0; i < cps.size();) {
         const char32_t c = cps[i];
-        if (c >= U'0' && c <= U'9') {
+        // Без числового режима цифра — обычный знак класса чисел (сравнивается по своему значению)
+        if (numeric && c >= U'0' && c <= U'9') {
             CollElem e;
             e.isNumber = true;
             e.klass = 1;
@@ -291,7 +292,7 @@ std::vector<CollElem> collElems(std::string_view s) {
         CollElem e;
         const char32_t lower = u::lower(c);
         const char32_t base = baseLetter(lower);
-        e.klass = u::isLetterOrNumber(c) ? 2 : 0;
+        e.klass = (c >= U'0' && c <= U'9') ? 1 : u::isLetterOrNumber(c) ? 2 : 0;
         e.primary = base;
         e.secondary = base == lower ? 0 : lower;
         e.tertiary = lower != c ? 1 : 0;
@@ -314,9 +315,9 @@ int comparePrimary(const CollElem &a, const CollElem &b) {
 
 } // namespace
 
-int compareNames(std::string_view a, std::string_view b) {
-    const auto ea = collElems(a);
-    const auto eb = collElems(b);
+int compareNames(std::string_view a, std::string_view b, bool numeric) {
+    const auto ea = collElems(a, numeric);
+    const auto eb = collElems(b, numeric);
     const size_t n = std::min(ea.size(), eb.size());
     for (size_t i = 0; i < n; ++i) {
         if (const int r = comparePrimary(ea[i], eb[i])) return r;

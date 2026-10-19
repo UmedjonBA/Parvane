@@ -10,6 +10,8 @@
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 
 #include <parvane/map_tiles.h> // parvane-core
+#include <parvane/v2_account.h> // parvane-core: preview.map_tile
+#include <parvane/v2_control.h>
 
 #include <QtCore/QBuffer>
 #include <QtGui/QImage>
@@ -109,7 +111,7 @@ void RequestLocationMap(
 	const auto lon = point.lon();
 	const auto key = std::make_pair(lat, lon);
 	auto bus = SnapshotBus();
-	if (!bus.transport) {
+	if (!bus.control) {
 		LOG(("Parvane: карта локации не собрана %1,%2: нет транспорта")
 			.arg(lat).arg(lon));
 		noteFailed(session.get(), image.get(), key);
@@ -143,7 +145,11 @@ void RequestLocationMap(
 	}
 	const auto sessionPtr = session.get();
 	const auto imagePtr = image.get();
-	crl::async([=, transport = bus.transport, self = bus.self, token = bus.token] {
+	crl::async([=, control = bus.control] {
+		// Тайл — методом preview.map_tile соединения управления (MAP-1)
+		const auto fetcher = [control](const parvane::map::TileKey &key) {
+			return parvane::v2::account::mapTile(*control, key.z, key.x, key.y, parvane::map::kTileTimeoutMs);
+		};
 		// Тайлы — параллельно небольшими группами; неудавшиеся оставляют фон
 		std::vector<std::vector<std::uint8_t>> pngs(geometry.tiles.size());
 		for (std::size_t start = 0; start < geometry.tiles.size(); start += kTilesPerMapParallel) {
@@ -152,12 +158,7 @@ void RequestLocationMap(
 			for (auto i = start; i < end; ++i) {
 				batch.push_back(std::async(std::launch::async, [&, i] {
 					auto fromCache = false;
-					pngs[i] = tiles->fetch(
-						*transport,
-						geometry.tiles[i].key,
-						self,
-						token,
-						&fromCache);
+					pngs[i] = tiles->fetch(fetcher, geometry.tiles[i].key, &fromCache);
 					if (pngs[i].empty()) {
 						return;
 					}

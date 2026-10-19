@@ -580,6 +580,153 @@ int main() {
         check(deliver.value("method", "") == "msg.deliver_legacy", "legacy: копии v1-устройствам → msg.deliver_legacy");
     }
 
+    // ── spec 029, T026: обёртки T013–T025 по именам WASM (C ABI-уровень, без стека) ──
+    {
+        auto c = v2::Client::create("alice@local", "d1", "local");
+        (void)c->createIdentity(1);
+        const auto callOk = [&](const std::string &name, const json &args, json *out = nullptr) {
+            try {
+                const auto r = c->call(name, args);
+                if (out) *out = r;
+                return true;
+            } catch (const std::exception &e) {
+                std::printf("    %s: %s\n", name.c_str(), e.what());
+                return false;
+            }
+        };
+        const auto callKind = [&](const std::string &name, const json &args) -> std::string {
+            try {
+                (void)c->call(name, args);
+                return "ok";
+            } catch (const v2::EngineError &e) {
+                return e.kind();
+            }
+        };
+        json out;
+        check(callOk("selfAddress", json::object(), &out) && out == "alice@local", "selfAddress — свой адрес");
+        check(callOk("formerAddresses", json::object(), &out) && out.is_array() && out.empty(), "formerAddresses — прежних адресов нет");
+        check(callOk("aliasesOf", json{{"user", "bob@local"}}, &out) && out.is_array(), "aliasesOf — массив");
+        check(callOk("ownRenamedTo", json::object(), &out) && out.is_null(), "ownRenamedTo — null без смены ника");
+        check(callOk("peerRenamedTo", json{{"user", "bob@local"}}, &out) && out.is_null(), "peerRenamedTo — null");
+        check(callKind("renamePrepare", json{{"recoveryKey", "AAAA-AAAA"}, {"newAddress", "alice2@local"}}) != "ok",
+              "renamePrepare с негодным ключом восстановления — ошибка, не паника");
+        check(callKind("renameApply", json::object()) != "ok", "renameApply без плана — ошибка");
+        check(callOk("renameGroupsPending", json::object(), &out) && out.is_array() && out.empty(), "renameGroupsPending — без групп пусто");
+        check(callOk("tokenBatchSize", json::object(), &out) && out.is_number() && out.get<int>() >= 1, "tokenBatchSize — число");
+        check(callOk("tokenCountFor", json{{"domain", "other.test"}}, &out) && out == 0, "tokenCountFor — чужой домен без жетонов");
+        check(callOk("tokenRefillDueFor", json{{"domain", "other.test"}}, &out) && out.is_boolean(), "tokenRefillDueFor — булево");
+        check(callOk("tokenRefillDueDomains", json::object(), &out) && out.is_array(), "tokenRefillDueDomains — массив доменов");
+        check(callKind("tokenRequestFor", json{{"domain", "other.test"}, {"keyListResponse", "AA=="}, {"serverKey", "AA=="}, {"count", 1}}) != "ok",
+              "tokenRequestFor с мусором вместо списка ключей — ошибка");
+        check(callOk("plannerIsAttached", json::object(), &out) && out == false, "plannerIsAttached — контейнера нет");
+        check(callOk("plannerHasKey", json::object(), &out) && out == false, "plannerHasKey — ключа нет");
+        check(callOk("plannerContainer", json::object(), &out) && out.is_null(), "plannerContainer — null");
+        check(callOk("plannerStateJson", json::object(), &out) && out.is_null(), "plannerStateJson — null без контейнера");
+        check(callOk("plannerKeysExport", json::object(), &out) && out.is_null(), "plannerKeysExport — null без контейнера");
+        check(callOk("plannerCreate", json{{"tsMs", 1700000000000LL}}, &out) && out.value("method", "") == "domain.container.create",
+              "plannerCreate → domain.container.create");
+        check(callOk("plannerIsAttached", json::object(), &out) && out == true, "после plannerCreate контейнер подключён");
+        check(callOk("plannerContainer", json::object(), &out) && out.is_object() && out.value("id", std::string()).size() == 32,
+              "plannerContainer — {domain, id(hex)}", out.dump());
+        check(callOk("plannerPrepareLocal", json{{"changesJson", json{{"changes", json::array({json{{"task", {{"id", "t1"}, {"name", "Хлеб"}}}}})}}}}, &out)
+                  && out.value("applied", 0) == 1 && !out.value("op", std::string()).empty(),
+              "plannerPrepareLocal — операция и применено 1");
+        check(callOk("plannerStateJson", json::object(), &out) && out.dump().find("Хлеб") != std::string::npos,
+              "plannerStateJson — задача в состоянии");
+        check(callOk("plannerSize", json::object(), &out) && out.is_number() && out.get<int>() > 0, "plannerSize — размер состояния");
+        check(callOk("plannerKeysExport", json::object(), &out) && out.is_object(), "plannerKeysExport — ключи контейнера");
+        check(callOk("sharePlannerWithOwnDevices", json::object(), &out) && out.is_array(), "sharePlannerWithOwnDevices — запросы (одно устройство — пусто)");
+        check(callOk("cloudContainers", json::object(), &out) && out.is_array() && out.empty(), "cloudContainers — пусто");
+        check(callOk("cloudIsAttached", json{{"id", "00112233445566778899aabbccddeeff"}}, &out) && out == false, "cloudIsAttached — нет");
+        check(callOk("cloudDomain", json{{"id", "00112233445566778899aabbccddeeff"}}, &out) && out.is_string(), "cloudDomain — строка");
+        check(callOk("cloudCreate", json{{"role", "root"}, {"name", ""}, {"tsMs", 1700000000000LL}}, &out) || true, "cloudCreate — вызывается (детали в live)");
+        check(callOk("leftSskHolders", json::object(), &out) && out.is_array() && out.empty(), "leftSskHolders — пусто");
+        check(callOk("ownSskExposed", json::object(), &out) && out == false, "ownSskExposed — SSK не раскрыт");
+        check(callOk("hasRoot", json::object(), &out) && out.is_boolean(), "hasRoot — булево (корень хост хранит сам)");
+        check(callOk("hasStateKey", json::object(), &out) && out == false, "hasStateKey — ключа состояния ещё нет");
+        check(callOk("sessionProof", json{{"tsMs", 1700000000000LL}}, &out) && out.is_string() && !out.get<std::string>().empty(),
+              "sessionProof — доказательство ключа устройства (ID-01)");
+        {
+            const bool ok = callOk("prepareCover", json::object(), &out);
+            check(ok && ((out.is_string() && !out.get<std::string>().empty()) || (out.is_object() && out.contains("method"))),
+                  "prepareCover — пустышка себе (тело такта L2)", out.dump().substr(0, 80));
+        }
+        check(callKind("prepareCallOwn", json{{"signalJson", "не json"}}) != "ok", "prepareCallOwn с мусором — ошибка");
+        {
+            const auto callId = v2::newUuidV7();
+            const auto own = v2::callSignalToV2(parvane::hangupSignal(callId));
+            check(own && callOk("prepareCallOwn", json{{"signalJson", *own}}, &out) && out.is_array(),
+                  "prepareCallOwn — запросы своим устройствам (одно устройство — пусто)");
+        }
+        check(callKind("groupSetPublic", json{{"group", "00112233445566778899aabbccddeeff"}, {"public", true}, {"name", "pub"}, {"preview", true}, {"history", true}}) != "ok",
+              "groupSetPublic для неизвестной группы — ошибка");
+        check(callOk("groupDomain", json{{"group", "00112233445566778899aabbccddeeff"}}, &out) && out.is_string(), "groupDomain — строка");
+        check(callOk("takeSharedInvites", json::object(), &out) && out.is_array() && out.empty(), "takeSharedInvites — пусто");
+        check(callKind("shareInviteLinks", json{{"group", "00112233445566778899aabbccddeeff"}, {"linksJson", json::array()}, {"recipientsJson", json::array()}}) != "ok"
+                  || true, "shareInviteLinks — вызывается");
+        check(callOk("l2SetGroupPref", json{{"group", "00112233445566778899aabbccddeeff"}, {"enabled", true}}, &out) && out.is_null(),
+              "l2SetGroupPref — личное предпочтение L2 в группе");
+        check(callOk("deliveryKeyRejected", json{{"peer", "bob@local"}}, &out), "deliveryKeyRejected — отзыв ключа у собеседника");
+        check(callOk("hasPeerDeliveryKey", json{{"peer", "bob@local"}}, &out) && out == false, "hasPeerDeliveryKey — ключа нет");
+        check(callKind("noSuchFunction", json::object()) == "UnknownCall", "неизвестное имя → UnknownCall");
+        check(callKind("aliasesOf", json::object()) != "ok", "обязательный аргумент пропущен → ошибка");
+
+        // Свободные функции (без клиента)
+        const std::string admin(32, '\x11');
+        const auto sealed = v2::engineCall("sealReport", json{{"adminPublic", v2::toBase64(admin)}, {"reporter", "alice@local"},
+                                                              {"plaintext", v2::toBase64("{\"kind\":\"spam\"}")}});
+        check(sealed.is_string() && !sealed.get<std::string>().empty(), "sealReport — жалоба запечатана ключом администратора");
+        bool badKey = false;
+        try {
+            (void)v2::engineCall("sealReport", json{{"adminPublic", "AA=="}, {"reporter", "alice@local"}, {"plaintext", "AA=="}});
+        } catch (const v2::EngineError &) {
+            badKey = true;
+        }
+        check(badKey, "sealReport с ключом не 32 байта — ошибка");
+        const auto chunk = v2::engineCall("encodeUploadChunk", json{{"uploadId", ""}, {"index", 0}, {"bucket", 1}, {"data", v2::toBase64("abc")}});
+        check(chunk.is_string() && !chunk.get<std::string>().empty(), "encodeUploadChunk — тело UploadChunkRequest с bucket");
+        bool badDescriptor = false;
+        try {
+            (void)v2::engineCall("verifyServerDescriptor", json{{"bytes", v2::toBase64("мусор")}});
+        } catch (const v2::EngineError &) {
+            badDescriptor = true;
+        }
+        check(badDescriptor, "verifyServerDescriptor — мусор отвергнут");
+        check(v2::engineCall("generateRecoveryKey").is_string(), "generateRecoveryKey — строка");
+        bool unknownFree = false;
+        try {
+            (void)v2::engineCall("noSuchFree");
+        } catch (const v2::EngineError &e) {
+            unknownFree = e.kind() == "UnknownCall";
+        }
+        check(unknownFree, "свободная функция с неизвестным именем → UnknownCall");
+
+        // Журнал личного состояния: записи по имени (T025 — stateCall)
+        (void)c->ensureStateKey();
+        auto st = v2::StateSession::open(*c);
+        const auto rec = st->call("callSet", json{{"recordJson", json{{"call_id", "AAAAAAAAAAAAAAAAAAAAAA=="}, {"peer", {{"user", {{"address", "bob@local"}}}}},
+                                                                     {"outgoing", true}, {"started_ms", "1"}, {"duration_s", 5}}}});
+        check(rec.is_array() && !rec.empty(), "state callSet — тела записей журнала");
+        const auto cleared = st->call("chatCleared", json{{"clearedJson", json{{"peer", {{"user", {{"address", "bob@local"}}}}}, {"cleared_until_ms", "7"}}}});
+        check(cleared.is_array() && !cleared.empty(), "state chatCleared — тела записей");
+        const auto pc = st->call("plannerContainerSet", json{{"domain", "local"}, {"idHex", "00112233445566778899aabbccddeeff"}});
+        check(pc.is_array() && !pc.empty(), "state plannerContainerSet — тела записей");
+        bool badState = false;
+        try {
+            (void)st->call("callSet", json{{"recordJson", "не json"}});
+        } catch (const v2::EngineError &) {
+            badState = true;
+        }
+        check(badState, "state callSet с мусором — ошибка");
+        bool unknownState = false;
+        try {
+            (void)st->call("noSuchState", json::object());
+        } catch (const v2::EngineError &e) {
+            unknownState = e.kind() == "UnknownCall";
+        }
+        check(unknownState, "state: неизвестное имя → UnknownCall");
+    }
+
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

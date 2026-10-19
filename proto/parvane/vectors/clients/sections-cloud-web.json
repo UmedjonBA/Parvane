@@ -1,0 +1,1089 @@
+{
+  "nodes": [
+    {
+      "size": 0,
+      "mime": "",
+      "mtime": 1758544000000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "f-docs",
+      "kind": "folder",
+      "name": "Документы"
+    },
+    {
+      "size": 0,
+      "mime": "",
+      "mtime": 1761740800000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "f-photo",
+      "kind": "folder",
+      "name": "Фото",
+      "parent": "f-docs"
+    },
+    {
+      "size": 20480,
+      "mime": "application/pdf",
+      "mtime": 1761827200000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "r2",
+      "kind": "file",
+      "name": "отчёт 2.pdf",
+      "parent": "f-docs",
+      "blob": {
+        "fileId": "blob-r2",
+        "key": "a2V5LXIy",
+        "nonce": "bm9uY2UtcjI=",
+        "capability": "Y2FwLXIy",
+        "size": 20480,
+        "chunks": 1,
+        "mime": "application/pdf",
+        "uploader": "vera@parvane.example"
+      }
+    },
+    {
+      "size": 10240,
+      "mime": "application/pdf",
+      "mtime": 1761913600000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "r10",
+      "kind": "file",
+      "name": "отчёт 10.pdf",
+      "parent": "f-docs",
+      "blob": {
+        "fileId": "blob-r10",
+        "key": "a2V5LXIxMA==",
+        "nonce": "bm9uY2UtcjEw",
+        "capability": "Y2FwLXIxMA==",
+        "size": 10240,
+        "chunks": 1,
+        "mime": "application/pdf",
+        "uploader": "vera@parvane.example"
+      }
+    },
+    {
+      "size": 350000,
+      "mime": "image/jpeg",
+      "mtime": 1761568000000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "cat",
+      "kind": "file",
+      "name": "Кот.JPG",
+      "parent": "f-photo",
+      "blob": {
+        "fileId": "blob-cat",
+        "key": "a2V5LWNhdA==",
+        "nonce": "bm9uY2UtY2F0",
+        "capability": "Y2FwLWNhdA==",
+        "size": 350000,
+        "chunks": 2,
+        "mime": "image/jpeg",
+        "uploader": "vera@parvane.example"
+      },
+      "thumb": {
+        "fileId": "thumb-cat",
+        "nonce": "dG51bWItY2F0",
+        "capability": "Y2FwLXRodW1i",
+        "width": 320,
+        "height": 240
+      }
+    },
+    {
+      "size": 120,
+      "mime": "text/plain",
+      "mtime": 1753360000000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "readme",
+      "kind": "file",
+      "name": "readme.txt",
+      "blob": {
+        "fileId": "blob-readme",
+        "key": "a2V5LXJlYWRtZQ==",
+        "nonce": "bm9uY2UtcmVhZG1l",
+        "capability": "Y2FwLXJlYWRtZQ==",
+        "size": 120,
+        "chunks": 1,
+        "mime": "text/plain",
+        "uploader": "vera@parvane.example"
+      }
+    },
+    {
+      "size": 64,
+      "mime": "application/json",
+      "mtime": 1762000000000,
+      "trashed": false,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "svc",
+      "kind": "file",
+      "name": ".parvane-notes.json"
+    },
+    {
+      "size": 0,
+      "mime": "",
+      "mtime": 1756816000000,
+      "trashed": true,
+      "trashTop": true,
+      "trashedAt": 1761827200000,
+      "id": "f-old",
+      "kind": "folder",
+      "name": "Старое"
+    },
+    {
+      "size": 900,
+      "mime": "text/plain",
+      "mtime": 1756729600000,
+      "trashed": true,
+      "trashTop": false,
+      "trashedAt": 0,
+      "id": "old-file",
+      "kind": "file",
+      "name": "черновик.txt",
+      "parent": "f-old"
+    },
+    {
+      "size": 5000,
+      "mime": "",
+      "mtime": 1754224000000,
+      "trashed": true,
+      "trashTop": true,
+      "trashedAt": 1759321600000,
+      "id": "gone",
+      "kind": "file",
+      "name": "лишнее.bin",
+      "parent": "f-docs"
+    },
+    {
+      "size": 70,
+      "mime": "video/quicktime",
+      "mtime": 0,
+      "trashed": true,
+      "trashTop": true,
+      "trashedAt": 0,
+      "id": "nodate",
+      "kind": "file",
+      "name": "без даты.mov"
+    }
+  ],
+  "now": 1762000000000,
+  "listed": [
+    "f-docs",
+    "f-photo",
+    "r2",
+    "r10",
+    "cat",
+    "readme",
+    "f-old",
+    "old-file",
+    "gone",
+    "nodate"
+  ],
+  "children": {
+    "root": [
+      "f-docs",
+      "readme",
+      "svc"
+    ],
+    "docs": [
+      "f-photo",
+      "r2",
+      "r10"
+    ],
+    "listedRoot": [
+      "f-docs",
+      "readme"
+    ]
+  },
+  "names": {
+    "root": [
+      "Документы",
+      "readme.txt",
+      ".parvane-notes.json"
+    ],
+    "docs": [
+      "Фото",
+      "отчёт 10.pdf"
+    ]
+  },
+  "path": [
+    "f-docs",
+    "f-photo",
+    "cat"
+  ],
+  "pathRoot": [],
+  "subtree": [
+    "f-docs",
+    "f-photo",
+    "r2",
+    "r10",
+    "gone",
+    "cat"
+  ],
+  "canMove": [
+    {
+      "moved": [
+        "r2"
+      ],
+      "target": "f-photo",
+      "ok": true
+    },
+    {
+      "moved": [
+        "f-docs"
+      ],
+      "target": "f-photo",
+      "ok": false
+    },
+    {
+      "moved": [
+        "f-photo"
+      ],
+      "target": "f-photo",
+      "ok": false
+    },
+    {
+      "moved": [
+        "cat",
+        "r10"
+      ],
+      "ok": true
+    }
+  ],
+  "sorted": [
+    {
+      "sort": {
+        "key": "name",
+        "isDescending": false
+      },
+      "ids": [
+        "f-photo",
+        "r2",
+        "r10"
+      ]
+    },
+    {
+      "sort": {
+        "key": "name",
+        "isDescending": true
+      },
+      "ids": [
+        "f-photo",
+        "r10",
+        "r2"
+      ]
+    },
+    {
+      "sort": {
+        "key": "date",
+        "isDescending": true
+      },
+      "ids": [
+        "f-photo",
+        "r10",
+        "r2"
+      ]
+    },
+    {
+      "sort": {
+        "key": "size",
+        "isDescending": false
+      },
+      "ids": [
+        "f-photo",
+        "r10",
+        "r2"
+      ]
+    }
+  ],
+  "sortedAll": [
+    {
+      "sort": {
+        "key": "name",
+        "isDescending": false
+      },
+      "ids": [
+        "f-docs",
+        "f-old",
+        "f-photo",
+        "svc",
+        "readme",
+        "nodate",
+        "cat",
+        "gone",
+        "r2",
+        "r10",
+        "old-file"
+      ]
+    },
+    {
+      "sort": {
+        "key": "name",
+        "isDescending": true
+      },
+      "ids": [
+        "f-photo",
+        "f-old",
+        "f-docs",
+        "old-file",
+        "r10",
+        "r2",
+        "gone",
+        "cat",
+        "nodate",
+        "readme",
+        "svc"
+      ]
+    },
+    {
+      "sort": {
+        "key": "date",
+        "isDescending": true
+      },
+      "ids": [
+        "f-photo",
+        "f-docs",
+        "f-old",
+        "svc",
+        "r10",
+        "r2",
+        "cat",
+        "old-file",
+        "gone",
+        "readme",
+        "nodate"
+      ]
+    },
+    {
+      "sort": {
+        "key": "size",
+        "isDescending": false
+      },
+      "ids": [
+        "f-docs",
+        "f-old",
+        "f-photo",
+        "svc",
+        "nodate",
+        "readme",
+        "old-file",
+        "gone",
+        "r10",
+        "r2",
+        "cat"
+      ]
+    }
+  ],
+  "search": [
+    {
+      "query": "отч",
+      "ids": [
+        "r2",
+        "r10"
+      ]
+    },
+    {
+      "query": "  КОТ ",
+      "ids": [
+        "cat"
+      ]
+    },
+    {
+      "query": "",
+      "ids": []
+    },
+    {
+      "query": "txt",
+      "ids": [
+        "readme"
+      ]
+    },
+    {
+      "query": ".parvane",
+      "ids": [
+        "svc"
+      ]
+    }
+  ],
+  "trash": [
+    "f-old",
+    "gone",
+    "nodate"
+  ],
+  "expiredTrash": [
+    "gone"
+  ],
+  "expiredTrashWeek": [
+    "gone"
+  ],
+  "trashDaysLeft": {
+    "f-old": 28,
+    "gone": 0,
+    "nodate": 30
+  },
+  "usage": {
+    "total": 386874,
+    "trash": 5970
+  },
+  "sizeOf": {
+    "docs": 385720,
+    "photo": 350000,
+    "old": 900
+  },
+  "folderStats": {
+    "f-docs": {
+      "count": 3,
+      "size": 385720
+    },
+    "f-photo": {
+      "count": 1,
+      "size": 350000
+    },
+    "f-old": {
+      "count": 0,
+      "size": 900
+    }
+  },
+  "kinds": [
+    {
+      "mime": "application/pdf",
+      "name": "a.bin",
+      "kind": "pdf"
+    },
+    {
+      "mime": "image/svg+xml",
+      "name": "схема.svg",
+      "kind": "text"
+    },
+    {
+      "mime": "image/png",
+      "name": "x.png",
+      "kind": "photo"
+    },
+    {
+      "mime": "",
+      "name": "фото.HEIC",
+      "kind": "other"
+    },
+    {
+      "mime": "video/mp2t",
+      "name": "код.ts",
+      "kind": "text"
+    },
+    {
+      "mime": "video/mp4",
+      "name": "клип.mp4",
+      "kind": "video"
+    },
+    {
+      "mime": "",
+      "name": "песня.flac",
+      "kind": "audio"
+    },
+    {
+      "mime": "text/markdown; charset=utf-8",
+      "name": "z",
+      "kind": "text"
+    },
+    {
+      "mime": "application/json",
+      "name": "данные.json",
+      "kind": "text"
+    },
+    {
+      "mime": "application/octet-stream",
+      "name": "модель.3mf",
+      "kind": "other"
+    },
+    {
+      "mime": "",
+      "name": "архив.tar.gz",
+      "kind": "other"
+    }
+  ],
+  "typeLabels": [
+    {
+      "name": "модель.3mf",
+      "label": "3MF"
+    },
+    {
+      "name": "отчёт.pdf",
+      "label": "PDF"
+    },
+    {
+      "name": "архив.tar.gz",
+      "label": "GZ"
+    },
+    {
+      "name": "без",
+      "label": ""
+    },
+    {
+      "name": "x.verylongextension",
+      "label": ""
+    },
+    {
+      "name": "файл.ЁЛКА",
+      "label": "ЁЛКА"
+    }
+  ],
+  "extensions": [
+    {
+      "name": "a.TXT",
+      "extension": "txt"
+    },
+    {
+      "name": ".env",
+      "extension": ""
+    },
+    {
+      "name": "архив.tar.gz",
+      "extension": "gz"
+    },
+    {
+      "name": "без",
+      "extension": ""
+    },
+    {
+      "name": "точка.",
+      "extension": ""
+    }
+  ],
+  "freeNames": [
+    {
+      "taken": [
+        "отчёт.pdf"
+      ],
+      "name": "отчёт.pdf",
+      "free": "отчёт (2).pdf"
+    },
+    {
+      "taken": [
+        "отчёт.pdf",
+        "отчёт (2).pdf"
+      ],
+      "name": "отчёт.pdf",
+      "free": "отчёт (3).pdf"
+    },
+    {
+      "taken": [
+        "Папка",
+        "Папка (2)"
+      ],
+      "name": "папка",
+      "free": "папка"
+    },
+    {
+      "taken": [],
+      "name": "новый",
+      "free": "новый"
+    },
+    {
+      "taken": [
+        ".env"
+      ],
+      "name": ".env",
+      "free": ".env (2)"
+    },
+    {
+      "taken": [
+        "архив.tar.gz"
+      ],
+      "name": "архив.tar.gz",
+      "free": "архив.tar (2).gz"
+    }
+  ],
+  "validation": [
+    {
+      "name": "",
+      "error": "empty"
+    },
+    {
+      "name": "   ",
+      "error": "empty"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "error": "too-long"
+    },
+    {
+      "name": "ёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёёё",
+      "error": "too-long"
+    },
+    {
+      "name": "плохое/имя",
+      "error": "bad-chars"
+    },
+    {
+      "name": "с\\слешем",
+      "error": "bad-chars"
+    },
+    {
+      "name": ".",
+      "error": "reserved"
+    },
+    {
+      "name": "..",
+      "error": "reserved"
+    },
+    {
+      "name": "CON",
+      "error": null
+    },
+    {
+      "name": "норм.txt",
+      "error": null
+    },
+    {
+      "name": " пробел ",
+      "error": null
+    },
+    {
+      "name": "tab\tв",
+      "error": "bad-chars"
+    }
+  ],
+  "linkPlan": {
+    "folder": {
+      "name": "Документы",
+      "kind": "folder",
+      "dirs": [
+        "Фото"
+      ],
+      "files": [
+        {
+          "path": "отчёт 10.pdf",
+          "node": {
+            "size": 10240,
+            "mime": "application/pdf",
+            "mtime": 1761913600000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "r10",
+            "kind": "file",
+            "name": "отчёт 10.pdf",
+            "parent": "f-docs",
+            "blob": {
+              "fileId": "blob-r10",
+              "key": "a2V5LXIxMA==",
+              "nonce": "bm9uY2UtcjEw",
+              "capability": "Y2FwLXIxMA==",
+              "size": 10240,
+              "chunks": 1,
+              "mime": "application/pdf",
+              "uploader": "vera@parvane.example"
+            }
+          }
+        },
+        {
+          "path": "отчёт 2.pdf",
+          "node": {
+            "size": 20480,
+            "mime": "application/pdf",
+            "mtime": 1761827200000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "r2",
+            "kind": "file",
+            "name": "отчёт 2.pdf",
+            "parent": "f-docs",
+            "blob": {
+              "fileId": "blob-r2",
+              "key": "a2V5LXIy",
+              "nonce": "bm9uY2UtcjI=",
+              "capability": "Y2FwLXIy",
+              "size": 20480,
+              "chunks": 1,
+              "mime": "application/pdf",
+              "uploader": "vera@parvane.example"
+            }
+          }
+        },
+        {
+          "path": "Фото/Кот.JPG",
+          "node": {
+            "size": 350000,
+            "mime": "image/jpeg",
+            "mtime": 1761568000000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "cat",
+            "kind": "file",
+            "name": "Кот.JPG",
+            "parent": "f-photo",
+            "blob": {
+              "fileId": "blob-cat",
+              "key": "a2V5LWNhdA==",
+              "nonce": "bm9uY2UtY2F0",
+              "capability": "Y2FwLWNhdA==",
+              "size": 350000,
+              "chunks": 2,
+              "mime": "image/jpeg",
+              "uploader": "vera@parvane.example"
+            },
+            "thumb": {
+              "fileId": "thumb-cat",
+              "nonce": "dG51bWItY2F0",
+              "capability": "Y2FwLXRodW1i",
+              "width": 320,
+              "height": 240
+            }
+          }
+        }
+      ],
+      "bytes": 380720
+    },
+    "file": {
+      "name": "Кот.JPG",
+      "kind": "file",
+      "dirs": [],
+      "files": [
+        {
+          "path": "Кот.JPG",
+          "node": {
+            "size": 350000,
+            "mime": "image/jpeg",
+            "mtime": 1761568000000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "cat",
+            "kind": "file",
+            "name": "Кот.JPG",
+            "parent": "f-photo",
+            "blob": {
+              "fileId": "blob-cat",
+              "key": "a2V5LWNhdA==",
+              "nonce": "bm9uY2UtY2F0",
+              "capability": "Y2FwLWNhdA==",
+              "size": 350000,
+              "chunks": 2,
+              "mime": "image/jpeg",
+              "uploader": "vera@parvane.example"
+            },
+            "thumb": {
+              "fileId": "thumb-cat",
+              "nonce": "dG51bWItY2F0",
+              "capability": "Y2FwLXRodW1i",
+              "width": 320,
+              "height": 240
+            }
+          }
+        }
+      ],
+      "bytes": 350000
+    },
+    "root": {
+      "name": "Общая папка",
+      "kind": "folder",
+      "dirs": [
+        "Документы",
+        "Документы/Фото"
+      ],
+      "files": [
+        {
+          "path": "readme.txt",
+          "node": {
+            "size": 120,
+            "mime": "text/plain",
+            "mtime": 1753360000000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "readme",
+            "kind": "file",
+            "name": "readme.txt",
+            "blob": {
+              "fileId": "blob-readme",
+              "key": "a2V5LXJlYWRtZQ==",
+              "nonce": "bm9uY2UtcmVhZG1l",
+              "capability": "Y2FwLXJlYWRtZQ==",
+              "size": 120,
+              "chunks": 1,
+              "mime": "text/plain",
+              "uploader": "vera@parvane.example"
+            }
+          }
+        },
+        {
+          "path": "Документы/отчёт 10.pdf",
+          "node": {
+            "size": 10240,
+            "mime": "application/pdf",
+            "mtime": 1761913600000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "r10",
+            "kind": "file",
+            "name": "отчёт 10.pdf",
+            "parent": "f-docs",
+            "blob": {
+              "fileId": "blob-r10",
+              "key": "a2V5LXIxMA==",
+              "nonce": "bm9uY2UtcjEw",
+              "capability": "Y2FwLXIxMA==",
+              "size": 10240,
+              "chunks": 1,
+              "mime": "application/pdf",
+              "uploader": "vera@parvane.example"
+            }
+          }
+        },
+        {
+          "path": "Документы/отчёт 2.pdf",
+          "node": {
+            "size": 20480,
+            "mime": "application/pdf",
+            "mtime": 1761827200000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "r2",
+            "kind": "file",
+            "name": "отчёт 2.pdf",
+            "parent": "f-docs",
+            "blob": {
+              "fileId": "blob-r2",
+              "key": "a2V5LXIy",
+              "nonce": "bm9uY2UtcjI=",
+              "capability": "Y2FwLXIy",
+              "size": 20480,
+              "chunks": 1,
+              "mime": "application/pdf",
+              "uploader": "vera@parvane.example"
+            }
+          }
+        },
+        {
+          "path": "Документы/Фото/Кот.JPG",
+          "node": {
+            "size": 350000,
+            "mime": "image/jpeg",
+            "mtime": 1761568000000,
+            "trashed": false,
+            "trashTop": false,
+            "trashedAt": 0,
+            "id": "cat",
+            "kind": "file",
+            "name": "Кот.JPG",
+            "parent": "f-photo",
+            "blob": {
+              "fileId": "blob-cat",
+              "key": "a2V5LWNhdA==",
+              "nonce": "bm9uY2UtY2F0",
+              "capability": "Y2FwLWNhdA==",
+              "size": 350000,
+              "chunks": 2,
+              "mime": "image/jpeg",
+              "uploader": "vera@parvane.example"
+            },
+            "thumb": {
+              "fileId": "thumb-cat",
+              "nonce": "dG51bWItY2F0",
+              "capability": "Y2FwLXRodW1i",
+              "width": 320,
+              "height": 240
+            }
+          }
+        }
+      ],
+      "bytes": 380840
+    },
+    "trashed": {
+      "error": "not-found"
+    },
+    "missing": {
+      "error": "not-found"
+    },
+    "noBlob": {
+      "error": "not-found"
+    }
+  },
+  "manifest": {
+    "v": 1,
+    "name": "Документы",
+    "kind": "folder",
+    "created": 1762000123,
+    "items": [
+      {
+        "path": "Фото",
+        "dir": true
+      },
+      {
+        "path": "отчёт 10.pdf",
+        "size": 10240,
+        "mime": "application/pdf",
+        "fileId": "copy-r10",
+        "key": "a2V5LXIxMA==",
+        "nonce": "bm9uY2UtcjEw",
+        "chunks": 1,
+        "blobSize": 10280
+      },
+      {
+        "path": "отчёт 2.pdf",
+        "size": 20480,
+        "mime": "application/pdf",
+        "fileId": "copy-r2",
+        "key": "a2V5LXIy",
+        "nonce": "bm9uY2UtcjI=",
+        "chunks": 1,
+        "blobSize": 20520
+      },
+      {
+        "path": "Фото/Кот.JPG",
+        "size": 350000,
+        "mime": "image/jpeg",
+        "fileId": "copy-cat",
+        "key": "a2V5LWNhdA==",
+        "nonce": "bm9uY2UtY2F0",
+        "chunks": 2,
+        "blobSize": 350056,
+        "thumb": {
+          "fileId": "copy-thumb-cat",
+          "nonce": "bm9uY2UtdGh1bWI=",
+          "blobSize": 9000
+        }
+      }
+    ]
+  },
+  "manifestText": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"Фото\",\"dir\":true},{\"path\":\"отчёт 10.pdf\",\"size\":10240,\"mime\":\"application/pdf\",\"fileId\":\"copy-r10\",\"key\":\"a2V5LXIxMA==\",\"nonce\":\"bm9uY2UtcjEw\",\"chunks\":1,\"blobSize\":10280},{\"path\":\"отчёт 2.pdf\",\"size\":20480,\"mime\":\"application/pdf\",\"fileId\":\"copy-r2\",\"key\":\"a2V5LXIy\",\"nonce\":\"bm9uY2UtcjI=\",\"chunks\":1,\"blobSize\":20520},{\"path\":\"Фото/Кот.JPG\",\"size\":350000,\"mime\":\"image/jpeg\",\"fileId\":\"copy-cat\",\"key\":\"a2V5LWNhdA==\",\"nonce\":\"bm9uY2UtY2F0\",\"chunks\":2,\"blobSize\":350056,\"thumb\":{\"fileId\":\"copy-thumb-cat\",\"nonce\":\"bm9uY2UtdGh1bWI=\",\"blobSize\":9000}}]}",
+  "parsedManifest": {
+    "v": 1,
+    "name": "Документы",
+    "kind": "folder",
+    "created": 1762000123,
+    "items": [
+      {
+        "path": "Фото",
+        "dir": true
+      },
+      {
+        "path": "отчёт 10.pdf",
+        "size": 10240,
+        "mime": "application/pdf",
+        "fileId": "copy-r10",
+        "key": "a2V5LXIxMA==",
+        "nonce": "bm9uY2UtcjEw",
+        "chunks": 1,
+        "blobSize": 10280
+      },
+      {
+        "path": "отчёт 2.pdf",
+        "size": 20480,
+        "mime": "application/pdf",
+        "fileId": "copy-r2",
+        "key": "a2V5LXIy",
+        "nonce": "bm9uY2UtcjI=",
+        "chunks": 1,
+        "blobSize": 20520
+      },
+      {
+        "path": "Фото/Кот.JPG",
+        "size": 350000,
+        "mime": "image/jpeg",
+        "fileId": "copy-cat",
+        "key": "a2V5LWNhdA==",
+        "nonce": "bm9uY2UtY2F0",
+        "chunks": 2,
+        "blobSize": 350056,
+        "thumb": {
+          "fileId": "copy-thumb-cat",
+          "nonce": "bm9uY2UtdGh1bWI=",
+          "blobSize": 9000
+        }
+      }
+    ]
+  },
+  "badManifests": [
+    {
+      "text": "{",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":2,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"Фото\",\"dir\":true},{\"path\":\"отчёт 10.pdf\",\"size\":10240,\"mime\":\"application/pdf\",\"fileId\":\"copy-r10\",\"key\":\"a2V5LXIxMA==\",\"nonce\":\"bm9uY2UtcjEw\",\"chunks\":1,\"blobSize\":10280},{\"path\":\"отчёт 2.pdf\",\"size\":20480,\"mime\":\"application/pdf\",\"fileId\":\"copy-r2\",\"key\":\"a2V5LXIy\",\"nonce\":\"bm9uY2UtcjI=\",\"chunks\":1,\"blobSize\":20520},{\"path\":\"Фото/Кот.JPG\",\"size\":350000,\"mime\":\"image/jpeg\",\"fileId\":\"copy-cat\",\"key\":\"a2V5LWNhdA==\",\"nonce\":\"bm9uY2UtY2F0\",\"chunks\":2,\"blobSize\":350056,\"thumb\":{\"fileId\":\"copy-thumb-cat\",\"nonce\":\"bm9uY2UtdGh1bWI=\",\"blobSize\":9000}}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"Фото\",\"dir\":true},{\"path\":\"отчёт 10.pdf\",\"size\":10240,\"mime\":\"application/pdf\",\"fileId\":\"copy-r10\",\"key\":\"a2V5LXIxMA==\",\"nonce\":\"bm9uY2UtcjEw\",\"chunks\":1,\"blobSize\":10280},{\"path\":\"отчёт 2.pdf\",\"size\":20480,\"mime\":\"application/pdf\",\"fileId\":\"copy-r2\",\"key\":\"a2V5LXIy\",\"nonce\":\"bm9uY2UtcjI=\",\"chunks\":1,\"blobSize\":20520},{\"path\":\"Фото/Кот.JPG\",\"size\":350000,\"mime\":\"image/jpeg\",\"fileId\":\"copy-cat\",\"key\":\"a2V5LWNhdA==\",\"nonce\":\"bm9uY2UtY2F0\",\"chunks\":2,\"blobSize\":350056,\"thumb\":{\"fileId\":\"copy-thumb-cat\",\"nonce\":\"bm9uY2UtdGh1bWI=\",\"blobSize\":9000}}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"dir\",\"created\":1762000123,\"items\":[{\"path\":\"Фото\",\"dir\":true},{\"path\":\"отчёт 10.pdf\",\"size\":10240,\"mime\":\"application/pdf\",\"fileId\":\"copy-r10\",\"key\":\"a2V5LXIxMA==\",\"nonce\":\"bm9uY2UtcjEw\",\"chunks\":1,\"blobSize\":10280},{\"path\":\"отчёт 2.pdf\",\"size\":20480,\"mime\":\"application/pdf\",\"fileId\":\"copy-r2\",\"key\":\"a2V5LXIy\",\"nonce\":\"bm9uY2UtcjI=\",\"chunks\":1,\"blobSize\":20520},{\"path\":\"Фото/Кот.JPG\",\"size\":350000,\"mime\":\"image/jpeg\",\"fileId\":\"copy-cat\",\"key\":\"a2V5LWNhdA==\",\"nonce\":\"bm9uY2UtY2F0\",\"chunks\":2,\"blobSize\":350056,\"thumb\":{\"fileId\":\"copy-thumb-cat\",\"nonce\":\"bm9uY2UtdGh1bWI=\",\"blobSize\":9000}}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"../x\",\"dir\":true}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"a\",\"dir\":true},{\"path\":\"a\",\"dir\":true}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"a.txt\",\"size\":1,\"blobSize\":1,\"chunks\":0,\"fileId\":\"f\",\"key\":\"k\",\"nonce\":\"n\"}]}",
+      "parsed": null
+    },
+    {
+      "text": "{\"v\":1,\"name\":\"Документы\",\"kind\":\"folder\",\"created\":1762000123,\"items\":[{\"path\":\"a.txt\",\"size\":-1,\"blobSize\":1,\"chunks\":1,\"fileId\":\"f\",\"key\":\"k\",\"nonce\":\"n\"}]}",
+      "parsed": null
+    }
+  ],
+  "tolerantManifest": {
+    "text": "{\"v\":1,\"name\":\"x\",\"kind\":\"file\",\"created\":\"вчера\",\"items\":[{\"path\":\"a.txt\",\"size\":1,\"blobSize\":1,\"chunks\":1,\"fileId\":\"f\",\"key\":\"k\",\"nonce\":\"n\",\"thumb\":{\"fileId\":\"\",\"nonce\":\"n\",\"blobSize\":1}},{\"path\":\"b.txt\",\"size\":2,\"blobSize\":3,\"chunks\":1,\"fileId\":\"g\",\"key\":\"k\",\"nonce\":\"n\",\"mime\":7}]}",
+    "parsed": {
+      "v": 1,
+      "name": "x",
+      "kind": "file",
+      "created": 0,
+      "items": [
+        {
+          "path": "a.txt",
+          "size": 1,
+          "mime": "application/octet-stream",
+          "fileId": "f",
+          "key": "k",
+          "nonce": "n",
+          "chunks": 1,
+          "blobSize": 1
+        },
+        {
+          "path": "b.txt",
+          "size": 2,
+          "mime": "application/octet-stream",
+          "fileId": "g",
+          "key": "k",
+          "nonce": "n",
+          "chunks": 1,
+          "blobSize": 3
+        }
+      ]
+    }
+  },
+  "urls": [
+    {
+      "origin": "https://parvane.example:20443",
+      "id": "abc123",
+      "key": "AAAA_-8",
+      "url": "https://parvane.example:20443/s/abc123#k=AAAA_-8"
+    },
+    {
+      "origin": "https://parvane.example/",
+      "id": "z",
+      "key": "k",
+      "url": "https://parvane.example/s/z#k=k"
+    }
+  ]
+}

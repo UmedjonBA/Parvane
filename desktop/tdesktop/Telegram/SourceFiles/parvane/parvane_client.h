@@ -38,16 +38,16 @@ namespace Main {
 class Session;
 } // namespace Main
 
-namespace parvane {
-class ITransport;
-} // namespace parvane
+namespace parvane::v2 {
+class Control;
+} // namespace parvane::v2
 
 namespace Parvane {
 
 // Снимок шины для воркеров (транспорт/self/JWT под g_sessionMutex). Транспорт
 // не владеющий — как в fetchWebpage; nullptr, если сессии нет.
 struct BusSnapshot {
-	parvane::ITransport *transport = nullptr;
+	std::shared_ptr<parvane::v2::Control> control; // соединение управления v2 (null — сессии нет)
 	std::string self;
 	std::string token;
 };
@@ -80,6 +80,7 @@ struct IssueResult {
 	// Двухфакторный вход: пароль верен, нужен Start в привязанном Telegram по
 	// deep link t.me/<bot>?start=<loginToken>; затем Issue с loginToken.
 	bool twofaRequired = false;
+	bool confirmRequired = false; // аккаунт ждёт подтверждения почты (повторный Register перевышлет код)
 	QString loginToken;
 	QString telegramBot;
 	// spec 027: аккаунт ждёт удаления (пароль верен, токена нет) — срок, мс; вход с cancelDeletion его отменяет.
@@ -102,6 +103,7 @@ struct RegisterResult {
 	bool ok = false;
 	QString error;
 	bool confirmRequired = false; // регистрация через почту: ждём код
+	bool emailRequired = false;   // сервер подтверждает почтой, а почты не было — спросить адрес
 	QString telegramToken;        // режим Telegram: токен deep link для бота
 };
 

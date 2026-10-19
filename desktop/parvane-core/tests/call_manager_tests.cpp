@@ -298,7 +298,9 @@ int main() {
             std::chrono::steady_clock::now() - t0).count();
         check(acceptMs < 500, "asyncSend: «Принять» не ждёт отправку участнику (" + std::to_string(acceptMs) + " мс)");
         check(m[2]->acceptInvite(), "asyncSend: c принял");
-        check(waitFor([&] { return m[0]->connectedCount() == 1 && m[1]->connectedCount() >= 1; }, 3500),
+        // a соединяется и с c (его ответ не задержан) — у a может быть уже 2; важно, что b соединился
+        // с a раньше, чем прошла задержанная отправка b → c (4 с)
+        check(waitFor([&] { return m[0]->connectedCount() >= 1 && m[1]->connectedCount() >= 1; }, 3500),
               "asyncSend: b соединился с a, пока отправка c ещё ждёт");
         check(waitFor([&] { return m[0]->connectedCount() == 2 && m[1]->connectedCount() == 2 && m[2]->connectedCount() == 2; }, 10000),
               "asyncSend: после ожидания mesh полный");

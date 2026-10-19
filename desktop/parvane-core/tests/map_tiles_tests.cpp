@@ -1,7 +1,6 @@
 // Parvane fork: тесты геометрии статичной карты (порт web renderStaticMap).
 // Чистые, без backend. Сверка с web: те же формулы → те же ключи тайлов.
 #include "parvane/map_tiles.h"
-#include "parvane/topics.h"
 
 #include <cmath>
 #include <cstdio>
@@ -24,20 +23,16 @@ static std::pair<long, long> osmTile(double lat, double lon, int z) {
     return { x, y };
 }
 
-// Фальшивый транспорт: отвечает валидным {ok, png_base64} на каждый запрос
-// и считает обращения — проверка LRU и дедупа TileClient без стека.
-struct FakeTransport : parvane::ITransport {
+// Заглушка загрузчика: отдаёт валидный PNG на каждый запрос и считает обращения — проверка LRU и дедупа
+// TileClient без стека.
+struct FakeFetcher {
     int requests = 0;
-    std::string request(const std::string &subject, const std::string &,
-                        std::int64_t) override {
-        ++requests;
-        if (subject != parvane::topics::PreviewMapTile) return "{\"ok\":false}";
-        return "{\"ok\":true,\"png_base64\":\"iVBORw0KGgo=\"}"; // сигнатура PNG
+    parvane::map::TileClient::Fetcher fn() {
+        return [this](const parvane::map::TileKey &) {
+            ++requests;
+            return std::string("\x89PNG\r\n\x1a\n", 8); // сигнатура PNG
+        };
     }
-    void publish(const std::string &, const std::string &) override {}
-    void requestMany(const std::string &, const std::string &, const ReplyHandler &,
-                     std::int64_t) override {}
-    void subscribe(const std::string &, Handler) override {}
 };
 
 int main() {
@@ -131,20 +126,20 @@ int main() {
 
     // TileClient: SC-005 — повторный тайл из кэша, к шарду один раз; LRU ≤ 200
     {
-        FakeTransport t;
+        FakeFetcher t;
         TileClient c;
         const TileKey k{ 16, 39615, 20487 };
         bool fromCache = true;
-        const auto a = c.fetch(t, k, "bob@local", "tok", &fromCache);
+        const auto a = c.fetch(t.fn(), k, &fromCache);
         check(a.size() == 8 && !fromCache, "TileClient: первый fetch — реальный запрос, PNG-байты");
-        const auto b = c.fetch(t, k, "bob@local", "tok", &fromCache);
+        const auto b = c.fetch(t.fn(), k, &fromCache);
         check(b == a && fromCache, "TileClient: повторный fetch — из кэша");
         check(t.requests == 1 && c.requestCount() == 1, "TileClient: к шарду один запрос на тайл");
         for (std::uint32_t i = 0; i < std::uint32_t(kTileCacheLimit) + 5; ++i) {
-            c.fetch(t, TileKey{ 16, 1000 + i, 2000 }, "bob@local", "tok");
+            c.fetch(t.fn(), TileKey{ 16, 1000 + i, 2000 });
         }
         check(c.cachedCount() == std::size_t(kTileCacheLimit), "TileClient: LRU не растёт выше kTileCacheLimit");
-        c.fetch(t, k, "bob@local", "tok", &fromCache);
+        c.fetch(t.fn(), k, &fromCache);
         check(!fromCache, "TileClient: вытесненный из LRU тайл запрашивается заново");
         c.clear();
         check(c.cachedCount() == 0, "TileClient: clear() очищает кэш");

@@ -92,8 +92,10 @@ bool canMoveInto(const std::vector<CloudNode> &nodes, const std::vector<std::str
     const std::optional<std::string> &target = {});
 
 // Сравнение имён как Intl.Collator({numeric: true}): числа по значению, регистр и диакритика — слабее букв.
-// Без ICU — приближение корневой сортировки Unicode (латиница, кириллица, греческий и т. п.)
-int compareNames(std::string_view a, std::string_view b);
+// Без ICU — приближение корневой сортировки Unicode (латиница, кириллица, греческий и т. п.).
+// `numeric = false` — как `String.prototype.localeCompare` без числового режима (цифры знак за знаком:
+// «отчёт 10» раньше «отчёт 2»); так web строит план ссылки для людей без аккаунта (`cloudLinks.ts buildLinkPlan`)
+int compareNames(std::string_view a, std::string_view b, bool numeric = true);
 
 // Папки выше файлов; дальше — по выбранному полю, при равенстве — по имени
 std::vector<CloudNode> sortNodes(const std::vector<CloudNode> &nodes, const Sort &sort);

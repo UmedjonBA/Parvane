@@ -1,0 +1,608 @@
+{
+  "files": [
+    {
+      "text": "{\"nodes\":[{\"id\":\"grp\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":600,\"height\":400,\"label\":\"Участок\",\"color\":\"4\",\"background\":\"фон.png\",\"backgroundStyle\":\"cover\"},{\"id\":\"txt\",\"type\":\"text\",\"x\":20,\"y\":40,\"width\":250,\"height\":60,\"text\":\"Грядки **весной**\",\"color\":\"#ff8800\"},{\"id\":\"note\",\"type\":\"file\",\"x\":300,\"y\":40,\"width\":250,\"height\":120,\"file\":\"Теплица.md\",\"subpath\":\"#Полив\",\"pvNote\":\"n-green\"},{\"id\":\"img\",\"type\":\"file\",\"x\":20,\"y\":200,\"width\":320,\"height\":180,\"file\":\"грядки.png\",\"pvImage\":{\"fileId\":\"blob-img\",\"width\":1280,\"height\":720}},{\"id\":\"web\",\"type\":\"link\",\"x\":700,\"y\":50,\"width\":250,\"height\":60,\"url\":\"https://example.org/seeds\"},{\"id\":\"odd\",\"type\":\"sticker\",\"x\":\"15.5\",\"y\":null,\"width\":0,\"height\":\"\",\"emoji\":\"🌱\"},{\"id\":42,\"type\":\"text\",\"text\":\"числовой id\"},{\"type\":\"text\",\"x\":1,\"y\":1},{\"id\":\"txt\",\"type\":\"text\",\"x\":9,\"y\":9},\"мусор\"],\"edges\":[{\"id\":\"e1\",\"fromNode\":\"txt\",\"toNode\":\"note\",\"fromSide\":\"right\",\"toSide\":\"left\",\"toEnd\":\"arrow\",\"label\":\"см.\",\"color\":\"2\"},{\"id\":\"e2\",\"fromNode\":\"img\",\"toNode\":\"web\",\"fromEnd\":\"none\",\"zzz\":1,\"aaa\":[1,2]},{\"id\":\"e3\",\"fromNode\":\"nope\",\"toNode\":\"txt\"},{\"id\":\"e1\",\"fromNode\":\"txt\",\"toNode\":\"web\"},{\"fromNode\":\"txt\",\"toNode\":\"web\"},{\"id\":\"e4\",\"fromNode\":7,\"toNode\":\"txt\"}],\"metadata\":{\"version\":\"1.0\",\"frontmatter\":{\"title\":\"Схема\"}},\"pvGraphScope\":\"Дом\"}",
+      "doc": {
+        "nodes": [
+          {
+            "id": "grp",
+            "type": "group",
+            "x": 0,
+            "y": 0,
+            "width": 600,
+            "height": 400,
+            "label": "Участок",
+            "color": "4",
+            "background": "фон.png",
+            "backgroundStyle": "cover"
+          },
+          {
+            "id": "txt",
+            "type": "text",
+            "x": 20,
+            "y": 40,
+            "width": 250,
+            "height": 60,
+            "text": "Грядки **весной**",
+            "color": "#ff8800"
+          },
+          {
+            "id": "note",
+            "type": "file",
+            "x": 300,
+            "y": 40,
+            "width": 250,
+            "height": 120,
+            "file": "Теплица.md",
+            "subpath": "#Полив",
+            "pvNote": "n-green"
+          },
+          {
+            "id": "img",
+            "type": "file",
+            "x": 20,
+            "y": 200,
+            "width": 320,
+            "height": 180,
+            "file": "грядки.png",
+            "pvImage": {
+              "fileId": "blob-img",
+              "width": 1280,
+              "height": 720
+            }
+          },
+          {
+            "id": "web",
+            "type": "link",
+            "x": 700,
+            "y": 50,
+            "width": 250,
+            "height": 60,
+            "url": "https://example.org/seeds"
+          },
+          {
+            "id": "odd",
+            "type": "sticker",
+            "x": 15.5,
+            "y": 0,
+            "width": 250,
+            "height": 60,
+            "emoji": "🌱"
+          },
+          {
+            "id": "42",
+            "type": "text",
+            "text": "числовой id",
+            "x": 0,
+            "y": 0,
+            "width": 250,
+            "height": 60
+          }
+        ],
+        "edges": [
+          {
+            "id": "e1",
+            "fromNode": "txt",
+            "toNode": "note",
+            "fromSide": "right",
+            "toSide": "left",
+            "toEnd": "arrow",
+            "label": "см.",
+            "color": "2"
+          },
+          {
+            "id": "e2",
+            "fromNode": "img",
+            "toNode": "web",
+            "fromEnd": "none",
+            "zzz": 1,
+            "aaa": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": "e3",
+            "fromNode": "nope",
+            "toNode": "txt"
+          },
+          {
+            "id": "e4",
+            "fromNode": "7",
+            "toNode": "txt"
+          }
+        ],
+        "extra": {
+          "metadata": {
+            "version": "1.0",
+            "frontmatter": {
+              "title": "Схема"
+            }
+          },
+          "pvGraphScope": "Дом"
+        }
+      },
+      "error": null,
+      "dropped": {
+        "nodes": 3,
+        "edges": 2
+      },
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"color\": \"#ff8800\",\n\t\t\t\"text\": \"Грядки **весной**\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "text": "",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": null,
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "   \n",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": null,
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "{}",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": null,
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "{\"nodes\": {}, \"edges\": []}",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": "shape",
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "[1, 2]",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": "shape",
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "{\"nodes\": [",
+      "doc": {
+        "nodes": [],
+        "edges": []
+      },
+      "error": "json",
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": []\n}"
+    },
+    {
+      "text": "{\"edges\": [{\"id\": \"e\", \"fromNode\": \"a\", \"toNode\": \"b\"}], \"x\": 1}",
+      "doc": {
+        "nodes": [],
+        "edges": [
+          {
+            "id": "e",
+            "fromNode": "a",
+            "toNode": "b"
+          }
+        ],
+        "extra": {
+          "x": 1
+        }
+      },
+      "error": null,
+      "dropped": {
+        "nodes": 0,
+        "edges": 0
+      },
+      "serialized": "{\n\t\"nodes\": [],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e\",\n\t\t\t\"fromNode\": \"a\",\n\t\t\t\"toNode\": \"b\"\n\t\t}\n\t],\n\t\"x\": 1\n}"
+    }
+  ],
+  "roundTrip": true,
+  "ops": [
+    {
+      "name": "addNode",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"color\": \"#ff8800\",\n\t\t\t\"text\": \"Грядки **весной**\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "addNode-duplicate",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"color\": \"#ff8800\",\n\t\t\t\"text\": \"Грядки **весной**\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "updateNode",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "updateNode-missing",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "addEdge",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "addEdge-loop",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "addEdge-duplicate",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "updateEdge",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"color\": \"5\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "removeEdge",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 25,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"color\": \"5\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "moveNode-group",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 36,\n\t\t\t\"y\": 20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 311,\n\t\t\t\"y\": 20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 31,\n\t\t\t\"y\": 180,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 26,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"color\": \"5\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "moveNode-single",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 36,\n\t\t\t\"y\": 20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 311,\n\t\t\t\"y\": 20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 31,\n\t\t\t\"y\": 180,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 51,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 26,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"color\": \"5\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    },
+    {
+      "name": "removeNode",
+      "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 36,\n\t\t\t\"y\": 20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"Грядки осенью\",\n\t\t\t\"pvExtra\": \"да\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 31,\n\t\t\t\"y\": 180,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 51,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 26,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 11,\n\t\t\t\"y\": -20,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"new\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 10.4,\n\t\t\t\"y\": -3,\n\t\t\t\"width\": 100,\n\t\t\t\"height\": 50,\n\t\t\t\"text\": \"новый\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"edge-new-0001\",\n\t\t\t\"fromNode\": \"new\",\n\t\t\t\"toNode\": \"txt\",\n\t\t\t\"label\": \"связь\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}"
+    }
+  ],
+  "inGroup": {
+    "group": "grp",
+    "ids": [
+      "txt",
+      "note",
+      "img",
+      "odd",
+      "42"
+    ],
+    "notGroup": []
+  },
+  "geometry": {
+    "bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 950,
+      "height": 400
+    },
+    "boundsEmpty": null,
+    "fit": [
+      {
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 950,
+          "height": 400
+        },
+        "viewport": {
+          "width": 800,
+          "height": 600
+        },
+        "view": {
+          "scale": 0.7578947368421053,
+          "x": 40,
+          "y": 148.42105263157893
+        }
+      },
+      {
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "viewport": {
+          "width": 800,
+          "height": 600
+        },
+        "padding": 0,
+        "view": {
+          "scale": 1.2,
+          "x": 340,
+          "y": 270
+        }
+      },
+      {
+        "viewport": {
+          "width": 300,
+          "height": 200
+        },
+        "view": {
+          "scale": 1,
+          "x": 150,
+          "y": 100
+        }
+      },
+      {
+        "bounds": {
+          "x": -50,
+          "y": 10,
+          "width": 40,
+          "height": 40
+        },
+        "viewport": {
+          "width": 100,
+          "height": 100
+        },
+        "padding": 10,
+        "view": {
+          "scale": 1.2,
+          "x": 86,
+          "y": 14
+        }
+      }
+    ],
+    "firstGroup": [
+      {
+        "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"grp\",\n\t\t\t\"type\": \"group\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 600,\n\t\t\t\"height\": 400,\n\t\t\t\"color\": \"4\",\n\t\t\t\"label\": \"Участок\",\n\t\t\t\"background\": \"фон.png\",\n\t\t\t\"backgroundStyle\": \"cover\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"color\": \"#ff8800\",\n\t\t\t\"text\": \"Грядки **весной**\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}",
+        "viewport": {
+          "width": 390,
+          "height": 700
+        },
+        "view": {
+          "scale": 0.5166666666666667,
+          "x": 39.99999999999997,
+          "y": 246.66666666666666
+        }
+      },
+      {
+        "serialized": "{\n\t\"nodes\": [\n\t\t{\n\t\t\t\"id\": \"txt\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"color\": \"#ff8800\",\n\t\t\t\"text\": \"Грядки **весной**\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"note\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 300,\n\t\t\t\"y\": 40,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 120,\n\t\t\t\"file\": \"Теплица.md\",\n\t\t\t\"subpath\": \"#Полив\",\n\t\t\t\"pvNote\": \"n-green\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"img\",\n\t\t\t\"type\": \"file\",\n\t\t\t\"x\": 20,\n\t\t\t\"y\": 200,\n\t\t\t\"width\": 320,\n\t\t\t\"height\": 180,\n\t\t\t\"file\": \"грядки.png\",\n\t\t\t\"pvImage\": {\n\t\t\t\t\"fileId\": \"blob-img\",\n\t\t\t\t\"width\": 1280,\n\t\t\t\t\"height\": 720\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t\"id\": \"web\",\n\t\t\t\"type\": \"link\",\n\t\t\t\"x\": 700,\n\t\t\t\"y\": 50,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"url\": \"https://example.org/seeds\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"odd\",\n\t\t\t\"type\": \"sticker\",\n\t\t\t\"x\": 15.5,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"emoji\": \"🌱\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"42\",\n\t\t\t\"type\": \"text\",\n\t\t\t\"x\": 0,\n\t\t\t\"y\": 0,\n\t\t\t\"width\": 250,\n\t\t\t\"height\": 60,\n\t\t\t\"text\": \"числовой id\"\n\t\t}\n\t],\n\t\"edges\": [\n\t\t{\n\t\t\t\"id\": \"e1\",\n\t\t\t\"fromNode\": \"txt\",\n\t\t\t\"fromSide\": \"right\",\n\t\t\t\"toNode\": \"note\",\n\t\t\t\"toSide\": \"left\",\n\t\t\t\"toEnd\": \"arrow\",\n\t\t\t\"color\": \"2\",\n\t\t\t\"label\": \"см.\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e2\",\n\t\t\t\"fromNode\": \"img\",\n\t\t\t\"fromEnd\": \"none\",\n\t\t\t\"toNode\": \"web\",\n\t\t\t\"aaa\": [\n\t\t\t\t1,\n\t\t\t\t2\n\t\t\t],\n\t\t\t\"zzz\": 1\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e3\",\n\t\t\t\"fromNode\": \"nope\",\n\t\t\t\"toNode\": \"txt\"\n\t\t},\n\t\t{\n\t\t\t\"id\": \"e4\",\n\t\t\t\"fromNode\": \"7\",\n\t\t\t\"toNode\": \"txt\"\n\t\t}\n\t],\n\t\"metadata\": {\n\t\t\"version\": \"1.0\",\n\t\t\"frontmatter\": {\n\t\t\t\"title\": \"Схема\"\n\t\t}\n\t},\n\t\"pvGraphScope\": \"Дом\"\n}",
+        "viewport": {
+          "width": 390,
+          "height": 700
+        },
+        "view": {
+          "scale": 0.3263157894736842,
+          "x": 40,
+          "y": 288
+        }
+      }
+    ],
+    "clamp": [
+      {
+        "scale": 0,
+        "clamped": 0.15
+      },
+      {
+        "scale": 0.1,
+        "clamped": 0.15
+      },
+      {
+        "scale": 1,
+        "clamped": 1
+      },
+      {
+        "scale": 2.5,
+        "clamped": 2.5
+      },
+      {
+        "scale": 9,
+        "clamped": 2.5
+      }
+    ],
+    "sidePoints": [
+      {
+        "side": "top",
+        "point": {
+          "x": 50,
+          "y": 0
+        }
+      },
+      {
+        "side": "right",
+        "point": {
+          "x": 100,
+          "y": 25
+        }
+      },
+      {
+        "side": "bottom",
+        "point": {
+          "x": 50,
+          "y": 50
+        }
+      },
+      {
+        "side": "left",
+        "point": {
+          "x": 0,
+          "y": 25
+        }
+      }
+    ],
+    "anchors": [
+      {
+        "from": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "to": {
+          "x": 300,
+          "y": 200,
+          "width": 80,
+          "height": 80
+        },
+        "anchors": {
+          "from": {
+            "x": 50,
+            "y": 50,
+            "side": "bottom"
+          },
+          "to": {
+            "x": 300,
+            "y": 240,
+            "side": "left"
+          }
+        }
+      },
+      {
+        "from": {
+          "x": 300,
+          "y": 200,
+          "width": 80,
+          "height": 80
+        },
+        "to": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "anchors": {
+          "from": {
+            "x": 300,
+            "y": 240,
+            "side": "left"
+          },
+          "to": {
+            "x": 50,
+            "y": 50,
+            "side": "bottom"
+          }
+        }
+      },
+      {
+        "from": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "to": {
+          "x": -50,
+          "y": 10,
+          "width": 40,
+          "height": 40
+        },
+        "anchors": {
+          "from": {
+            "x": 0,
+            "y": 25,
+            "side": "left"
+          },
+          "to": {
+            "x": -10,
+            "y": 30,
+            "side": "right"
+          }
+        }
+      },
+      {
+        "from": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "to": {
+          "x": 300,
+          "y": 200,
+          "width": 80,
+          "height": 80
+        },
+        "sides": {
+          "fromSide": "top"
+        },
+        "anchors": {
+          "from": {
+            "x": 50,
+            "y": 0,
+            "side": "top"
+          },
+          "to": {
+            "x": 300,
+            "y": 240,
+            "side": "left"
+          }
+        }
+      },
+      {
+        "from": {
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "height": 50
+        },
+        "to": {
+          "x": 300,
+          "y": 200,
+          "width": 80,
+          "height": 80
+        },
+        "sides": {
+          "fromSide": "left",
+          "toSide": "bottom"
+        },
+        "anchors": {
+          "from": {
+            "x": 0,
+            "y": 25,
+            "side": "left"
+          },
+          "to": {
+            "x": 340,
+            "y": 280,
+            "side": "bottom"
+          }
+        }
+      }
+    ],
+    "ids": [
+      {
+        "values": [
+          0,
+          0.999,
+          0.5,
+          0.0625,
+          1,
+          -1,
+          0.25,
+          0.75
+        ],
+        "id": "0f81f04c0f81f04c"
+      },
+      {
+        "values": [
+          0.999
+        ],
+        "id": "ffffffffffffffff"
+      }
+    ]
+  }
+}

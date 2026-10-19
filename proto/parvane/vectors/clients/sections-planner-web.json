@@ -1,0 +1,2038 @@
+{
+  "engine": {
+    "tasks": [
+      {
+        "id": "t-water",
+        "name": "Полить рассаду",
+        "description": "помидоры и перец",
+        "steps": [
+          {
+            "text": "теплица",
+            "isDone": true
+          },
+          {
+            "text": "балкон",
+            "isDone": false
+          }
+        ],
+        "status": "active",
+        "listId": "l-garden",
+        "rank": 2,
+        "day": "",
+        "start": "07:30",
+        "due": "",
+        "minutes": 20,
+        "repeat": {
+          "kind": "daily",
+          "interval": 2,
+          "weekdays": [],
+          "monthDay": 0,
+          "startDay": "2026-11-01",
+          "endDay": "2026-11-30",
+          "count": 0
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-03",
+            "excluded": false,
+            "done": true,
+            "doneSteps": [
+              0
+            ]
+          },
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "origin": null,
+        "source": {
+          "chat": "note:Огород",
+          "opId": "0192f1a2-3333-7000-8000-000000000031"
+        },
+        "remind": 10
+      },
+      {
+        "id": "t-book",
+        "name": "Дочитать главу",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "listId": "l-read",
+        "rank": 0,
+        "day": "2026-11-04",
+        "start": "",
+        "due": "2026-11-10",
+        "minutes": null,
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "source": null,
+        "remind": null
+      },
+      {
+        "id": "t-tax",
+        "name": "Отчёт в фонд",
+        "description": "",
+        "steps": [],
+        "status": "done",
+        "listId": "l-missing",
+        "rank": 1.5,
+        "day": "",
+        "start": "",
+        "due": "2026-11-20",
+        "minutes": 45
+      }
+    ],
+    "events": [
+      {
+        "id": "e-choir",
+        "name": "Хор",
+        "start": "19:00",
+        "end": "20:30",
+        "weekdays": [
+          2,
+          4
+        ],
+        "day": ""
+      },
+      {
+        "id": "e-rent",
+        "name": "Платёж за гараж",
+        "start": "10:00",
+        "end": "10:15",
+        "weekdays": null,
+        "day": "",
+        "repeat": {
+          "kind": "monthly",
+          "interval": 1,
+          "weekdays": [],
+          "monthDay": 5,
+          "startDay": "2026-09-05",
+          "endDay": "",
+          "count": 6
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "origin": null,
+        "description": "через банк",
+        "remind": 60,
+        "listId": "l-garden"
+      },
+      {
+        "id": "e-day",
+        "name": "Выходной",
+        "start": "00:00",
+        "end": "23:59",
+        "weekdays": null,
+        "day": "2026-11-04",
+        "allDay": true,
+        "isHoliday": true,
+        "color": 3,
+        "remind": null
+      },
+      {
+        "id": "e-split",
+        "name": "Хор",
+        "start": "18:00",
+        "end": "19:30",
+        "weekdays": null,
+        "day": "2026-11-12",
+        "origin": {
+          "seriesId": "e-choir",
+          "day": "2026-11-12"
+        },
+        "color": 0
+      }
+    ],
+    "lists": [
+      {
+        "id": "l-read",
+        "name": "Чтение",
+        "order": 1,
+        "color": 4
+      },
+      {
+        "id": "l-garden",
+        "name": "Огород",
+        "order": 0
+      },
+      {
+        "id": "l-garden-dup",
+        "name": "Огород",
+        "order": 2,
+        "color": 1
+      }
+    ],
+    "nutrition": [
+      {
+        "day": "2026-11-02",
+        "entries": [
+          {
+            "id": "f-oat",
+            "name": "Овсянка",
+            "meal": "breakfast",
+            "kcal": 340,
+            "protein": 12,
+            "fat": 6,
+            "carbs": 58,
+            "fiber": 8,
+            "grams": 300,
+            "per100": true,
+            "time": "08:10"
+          },
+          {
+            "id": "f-fish",
+            "name": "Треска",
+            "meal": "dinner",
+            "kcal": 180,
+            "protein": 40,
+            "fat": null,
+            "carbs": null,
+            "fiber": null,
+            "grams": null,
+            "per100": false,
+            "sugar": 0,
+            "salt": 1.5
+          }
+        ],
+        "isComplete": true,
+        "fixedGoals": {
+          "kcal": {
+            "target": 1900,
+            "tolerance": 100
+          },
+          "protein": {
+            "target": 110,
+            "tolerance": 15
+          },
+          "fat": null,
+          "carbs": null,
+          "water": {
+            "target": 1800,
+            "tolerance": 200
+          }
+        },
+        "waterMl": 1600
+      },
+      {
+        "day": "2026-11-03",
+        "entries": [],
+        "isComplete": false,
+        "fixedGoals": null,
+        "waterMl": 400
+      },
+      {
+        "day": "2026-11-04",
+        "entries": [],
+        "isComplete": false,
+        "fixedGoals": null,
+        "waterMl": null
+      }
+    ],
+    "settings": {
+      "dayStart": 420,
+      "dayEnd": 1320,
+      "lunchStart": 0,
+      "lunchEnd": 0,
+      "margin": 5,
+      "budget": 540
+    },
+    "goals": {
+      "kcal": {
+        "target": 1900,
+        "tolerance": 100
+      },
+      "protein": {
+        "target": 110,
+        "tolerance": 15
+      },
+      "fat": null,
+      "carbs": null,
+      "fiber": {
+        "target": 25,
+        "tolerance": 5
+      },
+      "water": {
+        "target": 1800,
+        "tolerance": 200
+      }
+    },
+    "goalPeriods": [
+      {
+        "id": "g-cut",
+        "startDay": "2026-11-10",
+        "endDay": "2026-11-24",
+        "kcal": {
+          "target": 1600,
+          "tolerance": 80
+        },
+        "protein": null,
+        "fat": null,
+        "carbs": null,
+        "fiber": null,
+        "water": null
+      }
+    ],
+    "health": [
+      {
+        "id": "h-sleep",
+        "day": "2026-11-02",
+        "kind": "sleep",
+        "time": "23:10",
+        "endTime": "06:40",
+        "value": 450,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      },
+      {
+        "id": "h-weight",
+        "day": "2026-11-03",
+        "kind": "weight",
+        "time": "",
+        "endTime": "",
+        "value": 73.4,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      },
+      {
+        "id": "h-run",
+        "day": "2026-11-03",
+        "kind": "workout",
+        "time": "07:00",
+        "endTime": "07:40",
+        "value": 40,
+        "value2": 6.5,
+        "name": "бег",
+        "details": "{\"ex\":[{\"name\":\"разминка\",\"reps\":10},{\"name\":\"бег\",\"sets\":1,\"weight\":0}]}"
+      },
+      {
+        "id": "h-bad",
+        "day": "2026-11-01",
+        "kind": "mood",
+        "time": "",
+        "endTime": "",
+        "value": 4,
+        "value2": 0,
+        "name": "",
+        "details": "{не json"
+      },
+      {
+        "id": "health-goals",
+        "day": "2000-01-01",
+        "kind": "goals",
+        "time": "",
+        "endTime": "",
+        "value": 0,
+        "value2": 0,
+        "name": "",
+        "details": "{\"sugarMax\":40,\"saltMax\":5,\"sleepMinutes\":480,\"steps\":9000,\"activeMinutes\":150,\"workouts\":3}"
+      }
+    ],
+    "learned": [
+      {
+        "id": "созвон",
+        "kind": "event",
+        "kindCount": 3,
+        "minutes": 30,
+        "minutesCount": 2,
+        "touched": 12
+      },
+      {
+        "id": "прогулка",
+        "kind": "",
+        "kindCount": 0,
+        "minutes": null,
+        "minutesCount": 0,
+        "touched": 11
+      }
+    ],
+    "quickLines": [
+      {
+        "id": "q-1",
+        "text": "Купить семена",
+        "count": 2,
+        "touched": 5,
+        "hidden": false
+      },
+      {
+        "id": "q-2",
+        "text": "созвон",
+        "count": 0,
+        "touched": 1,
+        "hidden": true
+      }
+    ],
+    "reminded": [
+      "t-water@2026-11-03@10",
+      "e-rent@2026-11-05@60"
+    ],
+    "headSeq": 42,
+    "sizeBytes": 5120
+  },
+  "hasQuickLines": true,
+  "state": {
+    "version": 1,
+    "tasks": [
+      {
+        "id": "t-water",
+        "name": "Полить рассаду",
+        "description": "помидоры и перец",
+        "steps": [
+          {
+            "text": "теплица",
+            "isDone": true
+          },
+          {
+            "text": "балкон",
+            "isDone": false
+          }
+        ],
+        "status": "active",
+        "project": "Огород",
+        "rank": 2,
+        "start": "07:30",
+        "minutes": 20,
+        "repeat": {
+          "kind": "daily",
+          "interval": 2,
+          "startDay": "2026-11-01",
+          "endDay": "2026-11-30"
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-03",
+            "excluded": false,
+            "done": true,
+            "doneSteps": [
+              0
+            ]
+          },
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "remind": 10,
+        "source": {
+          "chat": "note:Огород",
+          "opId": "0192f1a2-3333-7000-8000-000000000031"
+        }
+      },
+      {
+        "id": "t-book",
+        "name": "Дочитать главу",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "project": "Чтение",
+        "rank": 0,
+        "day": "2026-11-04",
+        "due": "2026-11-10"
+      },
+      {
+        "id": "t-tax",
+        "name": "Отчёт в фонд",
+        "description": "",
+        "steps": [],
+        "status": "done",
+        "project": "",
+        "rank": 1.5,
+        "due": "2026-11-20",
+        "minutes": 45
+      }
+    ],
+    "events": [
+      {
+        "id": "e-choir",
+        "name": "Хор",
+        "start": "19:00",
+        "end": "20:30",
+        "repeat": {
+          "kind": "weekly",
+          "interval": 1,
+          "weekdays": [
+            2,
+            4
+          ],
+          "startDay": ""
+        }
+      },
+      {
+        "id": "e-rent",
+        "name": "Платёж за гараж",
+        "description": "через банк",
+        "start": "10:00",
+        "end": "10:15",
+        "repeat": {
+          "kind": "monthly",
+          "interval": 1,
+          "monthDay": 5,
+          "startDay": "2026-09-05",
+          "count": 6
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "remind": 60,
+        "project": "Огород"
+      },
+      {
+        "id": "e-day",
+        "name": "Выходной",
+        "start": "00:00",
+        "end": "23:59",
+        "day": "2026-11-04",
+        "isAllDay": true,
+        "isHoliday": true,
+        "color": 3
+      },
+      {
+        "id": "e-split",
+        "name": "Хор",
+        "start": "18:00",
+        "end": "19:30",
+        "day": "2026-11-12",
+        "origin": {
+          "seriesId": "e-choir",
+          "day": "2026-11-12"
+        }
+      }
+    ],
+    "projects": [
+      "",
+      "Огород",
+      "Чтение"
+    ],
+    "lists": [
+      {
+        "id": "l-garden",
+        "name": "Огород",
+        "order": 0
+      },
+      {
+        "id": "l-read",
+        "name": "Чтение",
+        "order": 1,
+        "color": 4
+      }
+    ],
+    "nutrition": {
+      "2026-11-02": {
+        "entries": [
+          {
+            "id": "f-oat",
+            "name": "Овсянка",
+            "meal": "breakfast",
+            "kcal": 340,
+            "protein": 12,
+            "fat": 6,
+            "carbs": 58,
+            "fiber": 8,
+            "grams": 300,
+            "per100": {
+              "kcal": 113.3333,
+              "protein": 4,
+              "fat": 2,
+              "carbs": 19.3333,
+              "fiber": 2.6667
+            },
+            "time": "08:10"
+          },
+          {
+            "id": "f-fish",
+            "name": "Треска",
+            "meal": "dinner",
+            "kcal": 180,
+            "protein": 40,
+            "sugar": 0,
+            "salt": 1.5
+          }
+        ],
+        "isComplete": true,
+        "fixedGoals": {
+          "kcal": {
+            "target": 1900,
+            "tolerance": 100
+          },
+          "protein": {
+            "target": 110,
+            "tolerance": 15
+          },
+          "water": {
+            "target": 1800,
+            "tolerance": 200
+          }
+        },
+        "waterMl": 1600
+      },
+      "2026-11-03": {
+        "entries": [],
+        "isComplete": false,
+        "waterMl": 400
+      }
+    },
+    "goals": {
+      "kcal": {
+        "target": 1900,
+        "tolerance": 100
+      },
+      "protein": {
+        "target": 110,
+        "tolerance": 15
+      },
+      "fiber": {
+        "target": 25,
+        "tolerance": 5
+      },
+      "water": {
+        "target": 1800,
+        "tolerance": 200
+      }
+    },
+    "goalPeriods": [
+      {
+        "id": "g-cut",
+        "startDay": "2026-11-10",
+        "endDay": "2026-11-24",
+        "goals": {
+          "kcal": {
+            "target": 1600,
+            "tolerance": 80
+          }
+        }
+      }
+    ],
+    "budget": 540,
+    "settings": {
+      "dayStart": 420,
+      "dayEnd": 1320,
+      "lunchStart": 0,
+      "lunchEnd": 0,
+      "margin": 5
+    },
+    "health": [
+      {
+        "id": "h-sleep",
+        "day": "2026-11-02",
+        "kind": "sleep",
+        "time": "23:10",
+        "endTime": "06:40",
+        "value": 450
+      },
+      {
+        "id": "h-weight",
+        "day": "2026-11-03",
+        "kind": "weight",
+        "value": 73.4
+      },
+      {
+        "id": "h-run",
+        "day": "2026-11-03",
+        "kind": "workout",
+        "time": "07:00",
+        "endTime": "07:40",
+        "value": 40,
+        "value2": 6.5,
+        "name": "бег",
+        "exercises": [
+          {
+            "name": "разминка",
+            "reps": 10
+          },
+          {
+            "name": "бег",
+            "sets": 1,
+            "weight": 0
+          }
+        ]
+      },
+      {
+        "id": "h-bad",
+        "day": "2026-11-01",
+        "kind": "mood",
+        "value": 4
+      }
+    ],
+    "healthGoals": {
+      "sugarMax": 40,
+      "saltMax": 5,
+      "sleepMinutes": 480,
+      "steps": 9000,
+      "activeMinutes": 150,
+      "workouts": 3
+    },
+    "learned": [
+      {
+        "id": "созвон",
+        "kind": "event",
+        "kindCount": 3,
+        "minutes": 30,
+        "minutesCount": 2,
+        "touched": 12
+      }
+    ],
+    "quickLines": [
+      {
+        "id": "q-1",
+        "text": "Купить семена",
+        "count": 2,
+        "touched": 5
+      },
+      {
+        "id": "q-2",
+        "text": "созвон",
+        "count": 0,
+        "touched": 1,
+        "isHidden": true
+      }
+    ],
+    "reminded": [
+      "e-rent@2026-11-05@60",
+      "t-water@2026-11-03@10"
+    ]
+  },
+  "fullChanges": [
+    {
+      "list": {
+        "id": "l-garden",
+        "name": "Огород",
+        "order": 0,
+        "color": 0
+      }
+    },
+    {
+      "list": {
+        "id": "l-read",
+        "name": "Чтение",
+        "order": 1,
+        "color": 4
+      }
+    },
+    {
+      "task": {
+        "id": "t-water",
+        "name": "Полить рассаду",
+        "description": "помидоры и перец",
+        "steps": [
+          {
+            "text": "теплица",
+            "isDone": true
+          },
+          {
+            "text": "балкон",
+            "isDone": false
+          }
+        ],
+        "status": "active",
+        "listId": "l-garden",
+        "rank": 2,
+        "day": "",
+        "start": "07:30",
+        "due": "",
+        "minutes": 20,
+        "repeat": {
+          "kind": "daily",
+          "interval": 2,
+          "weekdays": [],
+          "monthDay": 0,
+          "startDay": "2026-11-01",
+          "endDay": "2026-11-30",
+          "count": 0
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-03",
+            "excluded": false,
+            "done": true,
+            "doneSteps": [
+              0
+            ]
+          },
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "origin": null,
+        "source": {
+          "chat": "note:Огород",
+          "opId": "0192f1a2-3333-7000-8000-000000000031"
+        },
+        "remind": 10
+      }
+    },
+    {
+      "task": {
+        "id": "t-book",
+        "name": "Дочитать главу",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "listId": "l-read",
+        "rank": 0,
+        "day": "2026-11-04",
+        "start": "",
+        "due": "2026-11-10",
+        "minutes": null,
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "source": null,
+        "remind": null
+      }
+    },
+    {
+      "task": {
+        "id": "t-tax",
+        "name": "Отчёт в фонд",
+        "description": "",
+        "steps": [],
+        "status": "done",
+        "listId": "",
+        "rank": 1.5,
+        "day": "",
+        "start": "",
+        "due": "2026-11-20",
+        "minutes": 45,
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "source": null,
+        "remind": null
+      }
+    },
+    {
+      "event": {
+        "id": "e-choir",
+        "name": "Хор",
+        "start": "19:00",
+        "end": "20:30",
+        "weekdays": null,
+        "day": "",
+        "repeat": {
+          "kind": "weekly",
+          "interval": 1,
+          "weekdays": [
+            2,
+            4
+          ],
+          "monthDay": 0,
+          "startDay": "",
+          "endDay": "",
+          "count": 0
+        },
+        "occurrences": [],
+        "origin": null,
+        "allDay": false,
+        "isHoliday": false,
+        "color": 0,
+        "description": "",
+        "remind": null,
+        "listId": ""
+      }
+    },
+    {
+      "event": {
+        "id": "e-rent",
+        "name": "Платёж за гараж",
+        "start": "10:00",
+        "end": "10:15",
+        "weekdays": null,
+        "day": "",
+        "repeat": {
+          "kind": "monthly",
+          "interval": 1,
+          "weekdays": [],
+          "monthDay": 5,
+          "startDay": "2026-09-05",
+          "endDay": "",
+          "count": 6
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "origin": null,
+        "allDay": false,
+        "isHoliday": false,
+        "color": 0,
+        "description": "через банк",
+        "remind": 60,
+        "listId": "l-garden"
+      }
+    },
+    {
+      "event": {
+        "id": "e-day",
+        "name": "Выходной",
+        "start": "00:00",
+        "end": "23:59",
+        "weekdays": null,
+        "day": "2026-11-04",
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "allDay": true,
+        "isHoliday": true,
+        "color": 3,
+        "description": "",
+        "remind": null,
+        "listId": ""
+      }
+    },
+    {
+      "event": {
+        "id": "e-split",
+        "name": "Хор",
+        "start": "18:00",
+        "end": "19:30",
+        "weekdays": null,
+        "day": "2026-11-12",
+        "repeat": null,
+        "occurrences": [],
+        "origin": {
+          "seriesId": "e-choir",
+          "day": "2026-11-12"
+        },
+        "allDay": false,
+        "isHoliday": false,
+        "color": 0,
+        "description": "",
+        "remind": null,
+        "listId": ""
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-02",
+        "entries": [
+          {
+            "id": "f-oat",
+            "name": "Овсянка",
+            "meal": "breakfast",
+            "kcal": 340,
+            "protein": 12,
+            "fat": 6,
+            "carbs": 58,
+            "fiber": 8,
+            "grams": 300,
+            "per100": true,
+            "sugar": null,
+            "salt": null,
+            "time": "08:10"
+          },
+          {
+            "id": "f-fish",
+            "name": "Треска",
+            "meal": "dinner",
+            "kcal": 180,
+            "protein": 40,
+            "fat": null,
+            "carbs": null,
+            "fiber": null,
+            "grams": null,
+            "per100": false,
+            "sugar": 0,
+            "salt": 1.5,
+            "time": ""
+          }
+        ],
+        "isComplete": true,
+        "fixedGoals": {
+          "kcal": {
+            "target": 1900,
+            "tolerance": 100
+          },
+          "protein": {
+            "target": 110,
+            "tolerance": 15
+          },
+          "fat": null,
+          "carbs": null,
+          "fiber": null,
+          "water": {
+            "target": 1800,
+            "tolerance": 200
+          }
+        },
+        "waterMl": 1600
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-03",
+        "entries": [],
+        "isComplete": false,
+        "fixedGoals": null,
+        "waterMl": 400
+      }
+    },
+    {
+      "settings": {
+        "dayStart": 420,
+        "dayEnd": 1320,
+        "lunchStart": 0,
+        "lunchEnd": 0,
+        "margin": 5,
+        "budget": 540
+      }
+    },
+    {
+      "goals": {
+        "kcal": {
+          "target": 1900,
+          "tolerance": 100
+        },
+        "protein": {
+          "target": 110,
+          "tolerance": 15
+        },
+        "fat": null,
+        "carbs": null,
+        "fiber": {
+          "target": 25,
+          "tolerance": 5
+        },
+        "water": {
+          "target": 1800,
+          "tolerance": 200
+        }
+      }
+    },
+    {
+      "goalPeriod": {
+        "id": "g-cut",
+        "startDay": "2026-11-10",
+        "endDay": "2026-11-24",
+        "kcal": {
+          "target": 1600,
+          "tolerance": 80
+        },
+        "protein": null,
+        "fat": null,
+        "carbs": null,
+        "fiber": null,
+        "water": null
+      }
+    },
+    {
+      "health": {
+        "id": "h-sleep",
+        "day": "2026-11-02",
+        "kind": "sleep",
+        "time": "23:10",
+        "endTime": "06:40",
+        "value": 450,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      }
+    },
+    {
+      "health": {
+        "id": "h-weight",
+        "day": "2026-11-03",
+        "kind": "weight",
+        "time": "",
+        "endTime": "",
+        "value": 73.4,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      }
+    },
+    {
+      "health": {
+        "id": "h-run",
+        "day": "2026-11-03",
+        "kind": "workout",
+        "time": "07:00",
+        "endTime": "07:40",
+        "value": 40,
+        "value2": 6.5,
+        "name": "бег",
+        "details": "{\"ex\":[{\"name\":\"разминка\",\"reps\":10},{\"name\":\"бег\",\"sets\":1,\"weight\":0}]}"
+      }
+    },
+    {
+      "health": {
+        "id": "h-bad",
+        "day": "2026-11-01",
+        "kind": "mood",
+        "time": "",
+        "endTime": "",
+        "value": 4,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      }
+    },
+    {
+      "health": {
+        "id": "health-goals",
+        "day": "2000-01-01",
+        "kind": "goals",
+        "value": 0,
+        "details": "{\"sugarMax\":40,\"saltMax\":5,\"sleepMinutes\":480,\"steps\":9000,\"activeMinutes\":150,\"workouts\":3}"
+      }
+    },
+    {
+      "learned": {
+        "id": "созвон",
+        "kind": "event",
+        "kindCount": 3,
+        "minutes": 30,
+        "minutesCount": 2,
+        "touched": 12
+      }
+    },
+    {
+      "quickLine": {
+        "id": "q-1",
+        "text": "Купить семена",
+        "count": 2,
+        "touched": 5,
+        "hidden": false
+      }
+    },
+    {
+      "quickLine": {
+        "id": "q-2",
+        "text": "созвон",
+        "count": 0,
+        "touched": 1,
+        "hidden": true
+      }
+    },
+    {
+      "reminded": {
+        "id": "e-rent@2026-11-05@60"
+      }
+    },
+    {
+      "reminded": {
+        "id": "t-water@2026-11-03@10"
+      }
+    }
+  ],
+  "edited": {
+    "version": 1,
+    "tasks": [
+      {
+        "id": "t-water",
+        "name": "Полить рассаду",
+        "description": "помидоры и перец",
+        "steps": [
+          {
+            "text": "теплица",
+            "isDone": true
+          },
+          {
+            "text": "балкон",
+            "isDone": false
+          }
+        ],
+        "status": "done",
+        "project": "Огород",
+        "rank": 2,
+        "start": "07:30",
+        "minutes": 20,
+        "repeat": {
+          "kind": "daily",
+          "interval": 2,
+          "startDay": "2026-11-01",
+          "endDay": "2026-11-30"
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-03",
+            "excluded": false,
+            "done": true,
+            "doneSteps": [
+              0
+            ]
+          },
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          },
+          {
+            "day": "2026-11-07",
+            "done": true
+          }
+        ],
+        "remind": 10,
+        "source": {
+          "chat": "note:Огород",
+          "opId": "0192f1a2-3333-7000-8000-000000000031"
+        }
+      },
+      {
+        "id": "t-tax",
+        "name": "Отчёт в фонд",
+        "description": "",
+        "steps": [],
+        "status": "done",
+        "project": "",
+        "rank": 1.5,
+        "due": "2026-11-20",
+        "minutes": 45
+      },
+      {
+        "id": "t-new",
+        "name": "Заказать плёнку",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "project": "Чтение",
+        "rank": 3,
+        "minutes": 15
+      }
+    ],
+    "events": [
+      {
+        "id": "e-choir",
+        "name": "Хор",
+        "start": "19:15",
+        "end": "20:30",
+        "repeat": {
+          "kind": "weekly",
+          "interval": 1,
+          "weekdays": [
+            2,
+            4
+          ],
+          "startDay": ""
+        }
+      },
+      {
+        "id": "e-rent",
+        "name": "Платёж за гараж",
+        "description": "через банк",
+        "start": "10:00",
+        "end": "10:15",
+        "repeat": {
+          "kind": "monthly",
+          "interval": 1,
+          "monthDay": 5,
+          "startDay": "2026-09-05",
+          "count": 6
+        },
+        "occurrences": [
+          {
+            "day": "2026-11-05",
+            "excluded": true,
+            "done": false,
+            "doneSteps": []
+          }
+        ],
+        "remind": 60,
+        "project": "Огород"
+      },
+      {
+        "id": "e-split",
+        "name": "Хор",
+        "start": "18:00",
+        "end": "19:30",
+        "day": "2026-11-12",
+        "origin": {
+          "seriesId": "e-choir",
+          "day": "2026-11-12"
+        }
+      },
+      {
+        "id": "e-new",
+        "name": "Врач",
+        "start": "11:00",
+        "end": "11:40",
+        "day": "2026-11-18",
+        "remind": 15,
+        "project": "Дом"
+      }
+    ],
+    "projects": [
+      "",
+      "Огород",
+      "Чтение",
+      "Дом"
+    ],
+    "lists": [
+      {
+        "id": "l-garden",
+        "name": "Огород",
+        "order": 0,
+        "color": 6
+      },
+      {
+        "id": "l-read",
+        "name": "Чтение",
+        "order": 1,
+        "color": 4
+      },
+      {
+        "id": "l-new",
+        "name": "Дом",
+        "order": 3,
+        "color": 2
+      }
+    ],
+    "nutrition": {
+      "2026-11-03": {
+        "entries": [],
+        "isComplete": false,
+        "waterMl": 900
+      },
+      "2026-11-06": {
+        "entries": [],
+        "isComplete": false,
+        "waterMl": 250
+      }
+    },
+    "goals": {
+      "kcal": {
+        "target": 1900,
+        "tolerance": 100
+      },
+      "protein": {
+        "target": 110,
+        "tolerance": 15
+      },
+      "fiber": {
+        "target": 25,
+        "tolerance": 5
+      },
+      "water": {
+        "target": 2000,
+        "tolerance": 200
+      }
+    },
+    "goalPeriods": [
+      {
+        "id": "g-cut",
+        "startDay": "2026-11-10",
+        "endDay": "2026-11-30",
+        "goals": {
+          "kcal": {
+            "target": 1600,
+            "tolerance": 80
+          }
+        }
+      }
+    ],
+    "budget": 600,
+    "settings": {
+      "dayStart": 420,
+      "dayEnd": 1320,
+      "lunchStart": 0,
+      "lunchEnd": 0,
+      "margin": 10
+    },
+    "health": [
+      {
+        "id": "h-sleep",
+        "day": "2026-11-02",
+        "kind": "sleep",
+        "time": "23:10",
+        "endTime": "06:40",
+        "value": 450
+      },
+      {
+        "id": "h-run",
+        "day": "2026-11-03",
+        "kind": "workout",
+        "time": "07:00",
+        "endTime": "07:40",
+        "value": 40,
+        "value2": 6.5,
+        "name": "бег",
+        "exercises": [
+          {
+            "name": "разминка",
+            "reps": 10
+          },
+          {
+            "name": "бег",
+            "sets": 1,
+            "weight": 0
+          }
+        ]
+      },
+      {
+        "id": "h-bad",
+        "day": "2026-11-01",
+        "kind": "mood",
+        "value": 4
+      },
+      {
+        "id": "h-steps",
+        "day": "2026-11-04",
+        "kind": "steps",
+        "value": 8200
+      }
+    ],
+    "healthGoals": {
+      "sugarMax": 40,
+      "saltMax": 5,
+      "sleepMinutes": 480,
+      "steps": 10000,
+      "activeMinutes": 150,
+      "workouts": 3
+    },
+    "learned": [
+      {
+        "id": "созвон",
+        "kind": "event",
+        "kindCount": 3,
+        "minutes": 45,
+        "minutesCount": 2,
+        "touched": 12
+      }
+    ],
+    "quickLines": [
+      {
+        "id": "q-1",
+        "text": "Купить семена",
+        "count": 3,
+        "touched": 5
+      },
+      {
+        "id": "q-2",
+        "text": "созвон",
+        "count": 0,
+        "touched": 1,
+        "isHidden": true
+      }
+    ],
+    "reminded": [
+      "t-water@2026-11-03@10",
+      "t-new@2026-11-08@0"
+    ]
+  },
+  "editChanges": [
+    {
+      "list": {
+        "id": "l-garden",
+        "color": 6
+      }
+    },
+    {
+      "list": {
+        "id": "l-new",
+        "name": "Дом",
+        "order": 3,
+        "color": 2
+      }
+    },
+    {
+      "task": {
+        "id": "t-water",
+        "status": "done",
+        "occurrences": [
+          {
+            "day": "2026-11-07",
+            "excluded": false,
+            "done": true,
+            "doneSteps": []
+          }
+        ]
+      }
+    },
+    {
+      "task": {
+        "id": "t-new",
+        "name": "Заказать плёнку",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "listId": "l-read",
+        "rank": 3,
+        "day": "",
+        "start": "",
+        "due": "",
+        "minutes": 15,
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "source": null,
+        "remind": null
+      }
+    },
+    {
+      "task": {
+        "id": "t-book",
+        "deleted": true
+      }
+    },
+    {
+      "event": {
+        "id": "e-choir",
+        "start": "19:15",
+        "weekdays": null,
+        "repeat": {
+          "kind": "weekly",
+          "interval": 1,
+          "weekdays": [
+            2,
+            4
+          ],
+          "monthDay": 0,
+          "startDay": "",
+          "endDay": "",
+          "count": 0
+        }
+      }
+    },
+    {
+      "event": {
+        "id": "e-new",
+        "name": "Врач",
+        "start": "11:00",
+        "end": "11:40",
+        "weekdays": null,
+        "day": "2026-11-18",
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "allDay": false,
+        "isHoliday": false,
+        "color": 0,
+        "description": "",
+        "remind": 15,
+        "listId": "l-new"
+      }
+    },
+    {
+      "event": {
+        "id": "e-day",
+        "deleted": true
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-03",
+        "entries": [],
+        "waterMl": 900
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-06",
+        "entries": [],
+        "isComplete": false,
+        "fixedGoals": null,
+        "waterMl": 250
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-02",
+        "entries": [
+          {
+            "id": "f-oat",
+            "deleted": true
+          },
+          {
+            "id": "f-fish",
+            "deleted": true
+          }
+        ],
+        "isComplete": false,
+        "fixedGoals": null,
+        "waterMl": null
+      }
+    },
+    {
+      "settings": {
+        "dayStart": 420,
+        "dayEnd": 1320,
+        "lunchStart": 0,
+        "lunchEnd": 0,
+        "margin": 10,
+        "budget": 600
+      }
+    },
+    {
+      "goals": {
+        "kcal": {
+          "target": 1900,
+          "tolerance": 100
+        },
+        "protein": {
+          "target": 110,
+          "tolerance": 15
+        },
+        "fat": null,
+        "carbs": null,
+        "fiber": {
+          "target": 25,
+          "tolerance": 5
+        },
+        "water": {
+          "target": 2000,
+          "tolerance": 200
+        }
+      }
+    },
+    {
+      "goalPeriod": {
+        "id": "g-cut",
+        "startDay": "2026-11-10",
+        "endDay": "2026-11-30",
+        "kcal": {
+          "target": 1600,
+          "tolerance": 80
+        },
+        "protein": null,
+        "fat": null,
+        "carbs": null,
+        "fiber": null,
+        "water": null
+      }
+    },
+    {
+      "health": {
+        "id": "h-steps",
+        "day": "2026-11-04",
+        "kind": "steps",
+        "time": "",
+        "endTime": "",
+        "value": 8200,
+        "value2": 0,
+        "name": "",
+        "details": ""
+      }
+    },
+    {
+      "health": {
+        "id": "h-weight",
+        "deleted": true
+      }
+    },
+    {
+      "health": {
+        "id": "health-goals",
+        "day": "2000-01-01",
+        "kind": "goals",
+        "value": 0,
+        "details": "{\"sugarMax\":40,\"saltMax\":5,\"sleepMinutes\":480,\"steps\":10000,\"activeMinutes\":150,\"workouts\":3}"
+      }
+    },
+    {
+      "learned": {
+        "id": "созвон",
+        "minutes": 45,
+        "minutesCount": 2
+      }
+    },
+    {
+      "quickLine": {
+        "id": "q-1",
+        "text": "Купить семена",
+        "count": 3,
+        "touched": 5,
+        "hidden": false
+      }
+    },
+    {
+      "reminded": {
+        "id": "t-new@2026-11-08@0"
+      }
+    },
+    {
+      "reminded": {
+        "id": "e-rent@2026-11-05@60",
+        "deleted": true
+      }
+    }
+  ],
+  "legacy": {
+    "version": 1,
+    "tasks": [
+      {
+        "id": "17",
+        "name": "Сдать книги",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "project": "Чтение",
+        "rank": 0,
+        "due": "2026-10-30"
+      }
+    ],
+    "events": [
+      {
+        "id": "3",
+        "name": "Поликлиника",
+        "start": "09:00",
+        "end": "09:30",
+        "day": "2026-10-28",
+        "remind": 30
+      }
+    ],
+    "projects": [
+      "",
+      "Чтение"
+    ],
+    "lists": [
+      {
+        "id": "1",
+        "name": "Чтение",
+        "order": 0
+      }
+    ],
+    "nutrition": {},
+    "goals": {
+      "kcal": {
+        "target": 2000,
+        "tolerance": 100
+      },
+      "protein": {
+        "target": 120,
+        "tolerance": 20
+      },
+      "fat": {
+        "target": 70,
+        "tolerance": 15
+      },
+      "carbs": {
+        "target": 230,
+        "tolerance": 30
+      }
+    },
+    "goalPeriods": [],
+    "budget": 480,
+    "settings": {
+      "dayStart": 540,
+      "dayEnd": 1260,
+      "lunchStart": 780,
+      "lunchEnd": 840,
+      "margin": 15
+    },
+    "health": [],
+    "healthGoals": {
+      "sugarMax": 50,
+      "saltMax": 5,
+      "sleepMinutes": 480,
+      "steps": 8000,
+      "activeMinutes": 150,
+      "workouts": 3
+    },
+    "learned": [],
+    "quickLines": [],
+    "reminded": []
+  },
+  "legacyChanges": [
+    {
+      "list": {
+        "id": "1",
+        "name": "Чтение",
+        "order": 0,
+        "color": 0
+      }
+    },
+    {
+      "task": {
+        "id": "legacy-desk-01Linux-17",
+        "name": "Сдать книги",
+        "description": "",
+        "steps": [],
+        "status": "queue",
+        "listId": "1",
+        "rank": 0,
+        "day": "",
+        "start": "",
+        "due": "2026-10-30",
+        "minutes": null,
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "source": null,
+        "remind": null
+      }
+    },
+    {
+      "event": {
+        "id": "legacy-desk-01Linux-3",
+        "name": "Поликлиника",
+        "start": "09:00",
+        "end": "09:30",
+        "weekdays": null,
+        "day": "2026-10-28",
+        "repeat": null,
+        "occurrences": [],
+        "origin": null,
+        "allDay": false,
+        "isHoliday": false,
+        "color": 0,
+        "description": "",
+        "remind": 30,
+        "listId": ""
+      }
+    },
+    {
+      "settings": {
+        "dayStart": 540,
+        "dayEnd": 1260,
+        "lunchStart": 780,
+        "lunchEnd": 840,
+        "margin": 15,
+        "budget": 480
+      }
+    },
+    {
+      "migration": {
+        "sourceDevice": "desk-01:Linux",
+        "count": 4
+      }
+    }
+  ],
+  "legacyRecordCases": [
+    {
+      "raw": {
+        "version": 1,
+        "tasks": [
+          {
+            "id": "17",
+            "name": "Сдать книги",
+            "description": "",
+            "steps": [],
+            "status": "queue",
+            "project": "Чтение",
+            "rank": 0,
+            "due": "2026-10-30"
+          }
+        ],
+        "events": [
+          {
+            "id": "3",
+            "name": "Поликлиника",
+            "start": "09:00",
+            "end": "09:30",
+            "day": "2026-10-28",
+            "remind": 30
+          }
+        ],
+        "projects": [
+          "",
+          "Чтение"
+        ],
+        "lists": [
+          {
+            "id": "1",
+            "name": "Чтение",
+            "order": 0
+          }
+        ],
+        "nutrition": {},
+        "goals": {
+          "kcal": {
+            "target": 2000,
+            "tolerance": 100
+          },
+          "protein": {
+            "target": 120,
+            "tolerance": 20
+          },
+          "fat": {
+            "target": 70,
+            "tolerance": 15
+          },
+          "carbs": {
+            "target": 230,
+            "tolerance": 30
+          }
+        },
+        "goalPeriods": [],
+        "budget": 480,
+        "settings": {
+          "dayStart": 540,
+          "dayEnd": 1260,
+          "lunchStart": 780,
+          "lunchEnd": 840,
+          "margin": 15
+        },
+        "health": [],
+        "healthGoals": {
+          "sugarMax": 50,
+          "saltMax": 5,
+          "sleepMinutes": 480,
+          "steps": 8000,
+          "activeMinutes": 150,
+          "workouts": 3
+        },
+        "learned": [],
+        "quickLines": [],
+        "reminded": []
+      },
+      "isLegacy": true
+    },
+    {
+      "raw": {
+        "version": 1
+      },
+      "isLegacy": false
+    },
+    {
+      "raw": {
+        "migrated": true
+      },
+      "isLegacy": false
+    }
+  ],
+  "coalesceInput": [
+    {
+      "task": {
+        "id": "t-water",
+        "status": "done"
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-03",
+        "entries": [
+          {
+            "id": "f-a",
+            "name": "Чай",
+            "meal": "other",
+            "kcal": 5
+          }
+        ]
+      }
+    },
+    {
+      "task": {
+        "id": "t-water",
+        "name": "Полить всё",
+        "occurrences": [
+          {
+            "day": "2026-11-09",
+            "done": true
+          }
+        ]
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-03",
+        "waterMl": 700,
+        "entries": [
+          {
+            "id": "f-a",
+            "kcal": 7
+          },
+          {
+            "id": "f-b",
+            "name": "Хлеб",
+            "meal": "other",
+            "kcal": 90
+          }
+        ]
+      }
+    },
+    {
+      "settings": {
+        "budget": 500
+      }
+    },
+    {
+      "migration": {
+        "sourceDevice": "desk",
+        "count": 1
+      }
+    },
+    {
+      "task": {
+        "id": "t-book",
+        "deleted": true
+      }
+    },
+    {
+      "task": {
+        "id": "t-book",
+        "name": "Снова"
+      }
+    },
+    {
+      "settings": {
+        "margin": 20
+      }
+    }
+  ],
+  "coalesced": [
+    {
+      "task": {
+        "id": "t-water",
+        "status": "done",
+        "name": "Полить всё",
+        "occurrences": [
+          {
+            "day": "2026-11-09",
+            "done": true
+          }
+        ]
+      }
+    },
+    {
+      "nutritionDay": {
+        "day": "2026-11-03",
+        "entries": [
+          {
+            "id": "f-a",
+            "kcal": 7
+          },
+          {
+            "id": "f-b",
+            "name": "Хлеб",
+            "meal": "other",
+            "kcal": 90
+          }
+        ],
+        "waterMl": 700
+      }
+    },
+    {
+      "settings": {
+        "budget": 500,
+        "margin": 20
+      }
+    },
+    {
+      "migration": {
+        "sourceDevice": "desk",
+        "count": 1
+      }
+    },
+    {
+      "task": {
+        "id": "t-book",
+        "name": "Снова"
+      }
+    }
+  ]
+}

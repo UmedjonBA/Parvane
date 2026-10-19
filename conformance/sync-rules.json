@@ -1199,11 +1199,36 @@
         "cloud.blob.upload_complete",
         "cloud.blob.download"
       ],
+      "desktopMethods": [
+       "server.describe",
+       "identity.session.issue",
+       "identity.account.register",
+       "identity.account.confirm_email",
+       "identity.account.register_status",
+       "identity.account.get_2fa",
+       "identity.account.set_2fa",
+       "identity.account.change_password",
+       "identity.session.reauth",
+       "identity.profile.resolve",
+       "identity.directory.search",
+       "identity.profile.set_name",
+       "identity.profile.set_avatar",
+       "identity.device.list",
+       "identity.device.revoke",
+       "identity.link.offer",
+       "identity.link.poll",
+       "identity.link.challenge",
+       "identity.link.grant",
+       "preview.link",
+       "preview.map_tile",
+       "call.ice_config",
+       "cloud.blob.delete"
+      ],
       "legacyEvent": "legacyV1",
       "noUpgradeDialogOnV2": true,
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/gateway.ts (GatewayConnection — ручка сессии над мостом, WebSocket v1 нет), v2/bridge.ts, v2/control.ts; все сценарии scripts/e2e_web_*.mjs идут без v1",
-        "desktop": "desktop — со spec 029 соединения v1 нет вовсе: транспорт — только мост (v2_bridge.cpp, BridgeTransport без внутреннего транспорта; publish — пустой), v2_control.cpp, cloud_client.cpp; tdesktop parvane_client.cpp (MakeTransport, legacyV1 пропускается). Сценарий verify_protocol_v2_v1off.sh удалён — все desktop/verify_*.sh идут без v1",
+        "desktop": "desktop — со spec 029 соединения v1 нет вовсе, с T038 (20 окт 2026) нет и моста: запросы аккаунта — типизированный API v2_account.cpp (методы — desktopMethods) над preauth()/Control (v2_control.cpp), свои блобы — Control::uploadBlob/downloadBlob; tdesktop parvane_client.cpp (MakeControl, g_control, без ITransport/topics; legacyV1 пропускается; «печатает»/присутствие — только эфемерными каналами v2-сессии). Файлы v2_bridge.*, cloud_client.* удалены. Все desktop/verify_*.sh идут без v1",
         "android": "android/jni/parvane_jni.cpp (makeTransport → BridgeTransport, v1Absent, legacyV1, presence); сценарий — блок disabled в android/tgx_protocol_v2_flow.sh desktop2-android2 (X отмечает отключение v1, диалога нет, сессия остаётся); переписка X при отключённом v1 отдельным сценарием не покрыта"
       },
       "prefersV1Note": "класс «v1, если жив» — только у ядра desktop/android до их T110; web список и отзыв устройств ведёт методами v2 всегда"

@@ -67,7 +67,7 @@ public:
     // Блоб без capability: владелец — этот аккаунт. `isPublic` — открытый
     // объект (аватар, фото группы), иначе доступен только владельцу (блоб
     // линковки своему устройству). Возвращает file_id.
-    std::string uploadBlob(const std::string &bytes, bool isPublic, std::size_t chunkBytes = 512 * 1024);
+    std::string uploadBlob(const std::string &bytes, bool isPublic = false, std::size_t chunkBytes = 512 * 1024);
     // Скачать блоб, доступный аккаунту: свой, открытый либо с v1-грантом.
     std::string downloadBlob(const std::string &fileId);
     void deleteBlob(const std::string &fileId);

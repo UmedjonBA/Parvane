@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "parvane/itransport.h"
+#include <functional>
 
 namespace parvane::map {
 
@@ -85,9 +85,10 @@ public:
     // fromCache (необязательно): true — байты взяты из LRU или от параллельного
     // запроса того же ключа, к шарду этот вызов не ходил (SC-005: ≤ 1 запрос
     // на уникальный тайл за жизнь клиента).
-    std::vector<std::uint8_t> fetch(ITransport &transport, const TileKey &key,
-                                    const std::string &self, const std::string &token,
-                                    bool *fromCache = nullptr);
+    // Загрузчик тайла: PNG байтами, пусто — нет тайла/ошибка (клиент даёт `account::mapTile` над своим
+    // соединением; тесты — заглушку). Без транспорта ядра (spec 029, T038).
+    using Fetcher = std::function<std::string(const TileKey &key)>;
+    std::vector<std::uint8_t> fetch(const Fetcher &fetcher, const TileKey &key, bool *fromCache = nullptr);
 
     void setConcurrencyLimit(int n); // по умолчанию 8 (gateway: 20 req/s)
     std::size_t cachedCount() const;

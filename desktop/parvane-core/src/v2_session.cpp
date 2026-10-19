@@ -138,7 +138,8 @@ json Session::sessionProofFor(const std::string &stateDir, std::int64_t tsMs) {
     }
 }
 
-Session::Session(SessionConfig cfg) : cfg_(std::move(cfg)) {}
+Session::Session(SessionConfig cfg)
+: cfg_(std::move(cfg)), backoff_(cfg_.reconnectBaseMs, cfg_.reconnectMaxMs) {}
 
 Session::~Session() { stop(); }
 
@@ -167,6 +168,15 @@ void Session::start() {
             [this](const std::string &m) { log(m); }});
     }
     ticker_->start();
+    if (!watchdog_) {
+        watchdog_ = std::make_unique<QueueWatchdog>(QueueWatchdog::Deps{
+            [this](const std::string &, std::int64_t elapsedMs) {
+                log("сторож очереди: задача рабочего потока идёт уже " + std::to_string(elapsedMs / 1000)
+                    + " с — очередь сессии стоит");
+            },
+            cfg_.queueWatchdogMs});
+    }
+    watchdog_->start();
     worker_ = std::thread(&Session::workerLoop, this);
     post([this] { connectOnce(); });
 }
@@ -192,6 +202,7 @@ void Session::stop() {
     qCv_.notify_all();
     readyCv_.notify_all();
     if (worker_.joinable()) worker_.join();
+    if (watchdog_) watchdog_->stop();
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     ready_ = false;
     if (id_) id_->close();
@@ -245,11 +256,13 @@ void Session::workerLoop() {
                 }
             }
         }
+        if (watchdog_) watchdog_->begin();
         try {
             t();
         } catch (const std::exception &e) {
             log(std::string("ошибка задачи: ") + e.what());
         }
+        if (watchdog_) watchdog_->end();
     }
 }
 
@@ -263,21 +276,43 @@ bool Session::waitReady(std::int64_t timeoutMs) {
 void Session::onIdClosed() {
     ready_ = false;
     if (stopping_) return;
-    log("соединение ID закрыто — переподключение");
+    std::int64_t delayMs = 0;
+    int attempt = 0;
     {
         std::lock_guard<std::mutex> lk(qMu_);
         if (reconnectScheduled_) return;
         reconnectScheduled_ = true;
+        reconnectNow_ = false;
+        delayMs = backoff_.next();
+        attempt = backoff_.attempts();
     }
-    post([this] {
-        // Пауза с выходом по stop().
+    log("соединение ID закрыто — переподключение через " + std::to_string(delayMs) + " мс (попытка "
+        + std::to_string(attempt) + ")");
+    post([this, delayMs] {
+        // Пауза отката с выходом по stop() и reconnectNow().
         {
             std::unique_lock<std::mutex> lk(qMu_);
-            qCv_.wait_for(lk, std::chrono::milliseconds(cfg_.reconnectMs), [&] { return stopping_.load(); });
+            qCv_.wait_for(lk, std::chrono::milliseconds(delayMs),
+                          [&] { return stopping_.load() || reconnectNow_; });
+            reconnectNow_ = false;
             reconnectScheduled_ = false;
         }
         if (!stopping_) connectOnce();
     });
+}
+
+void Session::reconnectNow() {
+    {
+        std::lock_guard<std::mutex> lk(qMu_);
+        if (!reconnectScheduled_) return;
+        reconnectNow_ = true;
+    }
+    qCv_.notify_all();
+}
+
+int Session::reconnectAttempts() {
+    std::lock_guard<std::mutex> lk(qMu_);
+    return backoff_.attempts();
 }
 
 void Session::connectOnce() {
@@ -329,6 +364,10 @@ void Session::connectOnce() {
         }
     }
     if (ok) {
+        {
+            std::lock_guard<std::mutex> lk(qMu_);
+            backoff_.reset();
+        }
         {
             std::lock_guard<std::mutex> lk(readyMu_);
             ready_ = true;

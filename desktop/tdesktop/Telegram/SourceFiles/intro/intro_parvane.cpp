@@ -442,7 +442,7 @@ void ParvaneWidget::submit() {
 		if (mode == Mode::SignUp) {
 			const auto reg = Parvane::Register(user, password, email);
 			if (!reg.ok) {
-				if (reg.error.contains(u"email"_q, Qt::CaseInsensitive)) {
+				if (reg.emailRequired) {
 					next = Stage::Email; // сервер требует почту — спросим её
 				} else {
 					res.error = reg.error.isEmpty()
@@ -463,8 +463,7 @@ void ParvaneWidget::submit() {
 				// Пароль верен, включён двухфакторный вход — экран Telegram
 				next = Stage::Telegram;
 				telegramToken = res.loginToken;
-			} else if (!res.ok
-				&& res.error.contains(u"почта не подтверждена"_q)) {
+			} else if (!res.ok && res.confirmRequired) {
 				// Аккаунт есть, но ждёт подтверждения: повторный register
 				// перевысылает код / выдаёт новый токен Telegram
 				const auto reg = Parvane::Register(user, password, email);

@@ -78,6 +78,11 @@ const DESKTOP_V1_FILES = [
   'desktop/parvane-core/src/group_client.cpp',
   'desktop/parvane-core/src/call_client.cpp',
   'desktop/parvane-core/src/v2_legacy.cpp',
+  // T038 (spec 029): мост v1-запросов и клиент блобов v1 удалены — запросы аккаунта типизированным API v2
+  'desktop/parvane-core/src/v2_bridge.cpp',
+  'desktop/parvane-core/include/parvane/v2_bridge.h',
+  'desktop/parvane-core/src/cloud_client.cpp',
+  'desktop/parvane-core/include/parvane/cloud_client.h',
 ];
 
 function expectDesktopV1FilesGone() {
@@ -589,11 +594,14 @@ describe('MAP-1: фрагменты карты — только через ша�
     for (const host of hosts) expect(media).not.toContain(host);
   });
 
-  it('desktop берёт тайлы через topics::PreviewMapTile и не знает картографических хостов', () => {
-    const topics = readRepo('desktop/parvane-core/include/parvane/topics.h');
-    expect(topics).toContain(`PreviewMapTile = "${map.tileTopic}"`);
+  it('desktop берёт тайлы методом preview.map_tile (v2_account::mapTile) и не знает картографических хостов', () => {
+    // T038 (spec 029): топиков v1 в desktop нет — тайл запрашивается методом v2 соединения управления
+    const account = readRepo('desktop/parvane-core/src/v2_account.cpp');
+    expect(account).toContain('c.call("preview.map_tile"');
     const core = readRepo('desktop/parvane-core/src/map_tiles.cpp');
-    expect(core).toMatch(/topics::PreviewMapTile/);
+    expect(core).not.toMatch(/topics::|ITransport|makeEvent/);
+    expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_map.cpp'))
+      .toContain('parvane::v2::account::mapTile(*control, key.z, key.x, key.y, parvane::map::kTileTimeoutMs)');
     for (const file of map.clients!.desktop as string[]) {
       const source = readRepo(file);
       for (const host of hosts) expect(source).not.toContain(host);
@@ -1036,10 +1044,12 @@ describe('TYPING-1: «печатает» в чате v2 — только эфе�
     const session = readRepo('desktop/parvane-core/src/v2_session.cpp');
     expect(session).toContain('if (!group && !isV2Peer(chat)) return false;');
     expect(session).toContain('if (!ready_ || !client_) return true; // чат v2: по v1 не понижаем');
-    [readDesktopSource(), readRepo('android/jni/parvane_jni.cpp')].forEach((source) => {
-      expect(source).toMatch(/if \(s->sendTyping\(to(Std)?\)\) \{?\s*return;/);
-      expect(source).toMatch(/\} else if \(parvane::v2::isGroupAddress\(to(Std)?\)\) \{\s*return;/);
-    });
+    // desktop (T038): кадра v1 нет вовсе — только эфемерный канал сессии
+    expect(readDesktopSource()).toContain('(void)s->sendTyping(to);');
+    expect(readDesktopSource()).not.toMatch(/msgTyping\(/);
+    const android = readRepo('android/jni/parvane_jni.cpp');
+    expect(android).toMatch(/if \(s->sendTyping\(to(Std)?\)\) \{?\s*return;/);
+    expect(android).toMatch(/\} else if \(parvane::v2::isGroupAddress\(to(Std)?\)\) \{\s*return;/);
   });
 });
 
@@ -1098,7 +1108,7 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     const desktop = readDesktopSource();
     // «Выйти и сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`)
     expect(desktop).toMatch(
-      /IdentityDeviceRevoke[\s\S]{0,1500}rotateKeys \? s->revokeDevice\(devStd\) : s->signOutDevice\(devStd\)/,
+      /account::revokeDevice\(\*t, devStd, pwStd\)[\s\S]{0,1500}rotateKeys \? s->revokeDevice\(devStd\) : s->signOutDevice\(devStd\)/,
     );
     expect(desktop).toContain('for (const auto &id : s->ownDevices()) {');
     const android = readRepo('android/jni/parvane_jni.cpp');
@@ -1445,24 +1455,29 @@ describe('E6-1: клиент работоспособен без соедине�
     prefersV1: string[];
     preAuthMethods: string[];
     ownedBlobMethods: string[];
+    desktopMethods: string[];
     legacyEvent: string;
     clients: { web: string; desktop: string; android: string };
   };
   const webBridge = readRepo('web/telegram-tt/src/api/parvane/v2/bridge.ts');
-  const coreBridge = readRepo('desktop/parvane-core/src/v2_bridge.cpp');
+  // T038 (spec 029): desktop без моста — типизированный API аккаунта над методами v2
+  const coreAccount = readRepo('desktop/parvane-core/src/v2_account.cpp');
 
-  it('мост web и ядра обслуживает один и тот же список запросов', () => {
+  it('мост web обслуживает список запросов; ядро desktop зовёт те же методы v2 напрямую', () => {
     r.bridged.forEach((subject) => {
       expect(webBridge, subject).toContain(`case '${subject}':`);
-      expect(coreBridge, subject).toContain(`subject == "${subject}"`);
+    });
+    // cloud.blob.delete зовётся через Control::deleteBlob (v2_control.cpp)
+    const coreControlForMethods = readRepo('desktop/parvane-core/src/v2_control.cpp');
+    r.desktopMethods.forEach((method) => {
+      expect(coreAccount + coreControlForMethods, method).toContain(`"${method}"`);
     });
     // T110 / spec 029: ни web, ни ядро desktop класса «v1, если жив» не имеют — список и
-    // отзыв устройств всегда методами v2, прекеев нет (setkey ядро отвечает заглушкой «ok»)
+    // отзыв устройств всегда методами v2, прекеев нет
     expect(webBridge).not.toMatch(/bridgePrefersV1|PREFERS_V1|prekeys|setkey/);
-    expect(coreBridge).not.toMatch(/prefersV1|PrefersV1|identity\.prekeys/);
-    expect(coreBridge).toContain('control(token).call("identity.device.list", json::object())');
-    expect(coreBridge).toContain('(void)c.call("identity.device.revoke", json{{"device_id", str(p, "device_id")}});');
-    expect(coreBridge).toContain('out = json{{"ok", true}}; // ключ подписи v1-звонков');
+    expect(coreAccount).not.toMatch(/prefersV1|PrefersV1|identity\.prekeys|setkey|subject ==/);
+    expect(coreAccount).toContain('c.call("identity.device.list", json::object())');
+    expect(coreAccount).toContain('(void)c.call("identity.device.revoke", json{{"device_id", deviceId}});');
   });
 
   it('вход и регистрация — методами канала PRE, свои блобы — методами cloud.blob', () => {
@@ -1470,7 +1485,7 @@ describe('E6-1: клиент работоспособен без соедине�
     const coreControl = readRepo('desktop/parvane-core/src/v2_control.cpp');
     r.preAuthMethods.forEach((method) => {
       expect(webBridge, method).toContain(`'${method}'`);
-      expect(coreBridge, method).toContain(`"${method}"`);
+      expect(coreAccount, method).toContain(`"${method}"`);
     });
     r.ownedBlobMethods.forEach((method) => {
       expect(webControl, method).toContain(`'${method}'`);
@@ -1490,19 +1505,15 @@ describe('E6-1: клиент работоспособен без соедине�
     expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
   });
 
-  it('desktop: соединения v1 нет (spec 029) — транспорт только мост, записи LegacyV1 пропускаются', () => {
+  it('desktop: соединения v1 и моста нет (spec 029, T038) — соединение управления v2, записи LegacyV1 пропускаются', () => {
     expectDesktopV1FilesGone();
     const desktop = readDesktopSource();
-    // Мост без внутреннего v1-транспорта
-    expect(desktop).toContain('return std::make_unique<parvane::v2::BridgeTransport>(std::move(cfg));');
-    expect(desktop).not.toMatch(/BridgeTransport>\(std::move\(cfg\), std::move\(inner\)\)|NatsTransport/);
-    expect(readRepo('desktop/parvane-core/include/parvane/v2_bridge.h'))
-      .toContain('explicit BridgeTransport(BridgeConfig cfg);');
-    // Кадр v1 из моста не уходит никуда (остаточные publish v1-топиков — пустые)
-    expect(coreBridge).toMatch(
-      new RegExp('void BridgeTransport::publish\\(const std::string &subject, const std::string &payload\\) \\{'
-        + '\\s+\\(void\\)subject;\\s+\\(void\\)payload;\\s+\\}'),
-    );
+    // Соединение управления v2 вместо моста; ни транспорта v1, ни его топиков в клиенте
+    expect(desktop).toContain('g_control = MakeControl();');
+    expect(desktop).not.toMatch(/BridgeTransport|ITransport|topics::|MakeTransport|g_transport|CloudClient|NatsTransport/);
+    // «Печатает» и присутствие — только эфемерными каналами v2-сессии (TYPING-1)
+    expect(desktop).not.toMatch(/msgTyping\(|presence\(std::to_string/);
+    expect(desktop).toContain('(void)s->sendTyping(to);');
     expect(desktop).toMatch(new RegExp(`if \\(type == "${r.legacyEvent}"\\) \\{\\s+return true;`));
     expect(desktop).not.toContain('bridge->deliver(std::string("msg.user.") + self, frame);');
   });
@@ -1873,7 +1884,7 @@ describe('DELETE-1: удаление аккаунта — отсрочка, во
     const session = readDesktopSession();
     expect(session).toContain('json Session::deleteAccount(const std::string &password) {');
     expect(session).toContain('outbox_.push_back(json{{"type", "peerDeleted"}, {"user", user}});');
-    expect(readRepo('desktop/parvane-core/src/v2_bridge.cpp')).toContain('req["cancel_deletion"] = true;');
+    expect(readRepo('desktop/parvane-core/src/v2_account.cpp')).toContain('body["cancel_deletion"] = true;');
     expect(readDesktopSource()).toContain('MarkPeerDeleted(user, true);');
     expect(readRepo('desktop/parvane-core/tests/v2_session_tests.cpp'))
       .toContain('spec 027: вход с отменой удаления — аккаунт восстановлен');
@@ -1916,7 +1927,7 @@ describe('CLOUD-2: ссылки облака для людей без аккау
   });
 
   it('desktop и android: методы ссылок не вызываются', () => {
-    const core = readRepo('desktop/parvane-core/src/v2_bridge.cpp');
+    const core = readRepo('desktop/parvane-core/src/v2_account.cpp');
     const jni = readRepo('android/jni/parvane_jni.cpp');
     [...r.ownerMethods, ...r.anonMethods].forEach((name) => {
       expect(core).not.toContain(name);

@@ -24,12 +24,15 @@
 #include <unistd.h>
 
 #include "parvane/call.h"
-#include "parvane/events.h"
 #include "parvane/messenger.h"
-#include "parvane/topics.h"
 #include "parvane/v2_content.h"
 #include "parvane/v2_control.h"
+#include "parvane/v2_engine.h"
+#include "parvane/v2_link.h"
 #include "parvane/v2_session.h"
+#include "parvane/sections/cloud_sync.h"
+#include "parvane/sections/domain_sync.h"
+#include "parvane/sections/planner_sync.h"
 
 using nlohmann::json;
 namespace v2 = parvane::v2;
@@ -85,7 +88,8 @@ struct Inbox {
         if (type == "groupUpdated" || type == "groupLeft" || type == "groupUnconfirmed"
             || type == "ownDevicesAdded" || type == "stateReady" || type == "typing"
             || type == "peerRootChanged" || type == "needsLinking" || type == "privacy"
-            || type == "privacySaved" || type == "peerRenamed" || type == "peerDeleted" || type == "sskRotationNeeded") {
+            || type == "privacySaved" || type == "peerRenamed" || type == "peerDeleted" || type == "sskRotationNeeded"
+            || type == "callSignal" || type == "presence" || type == "plannerChanged" || type == "cloudChanged") {
             std::lock_guard<std::mutex> lk(mu);
             session.push_back(ev);
             cv.notify_all();
@@ -418,6 +422,448 @@ static void groupCallKeyScenario(const std::string &tcp, const std::string &dir,
     ka.s->stop();
     kb.s->stop();
     kc.s->stop();
+}
+
+// ── spec 029, T026: живые случаи таблицы M1–M36 plan.md, которых не было ─────────────────────────────
+
+// Транспорт разделов поверх живой сессии — как `SessionTransport` в tdesktop (parvane_sections_data.cpp).
+namespace d = parvane::sections::domain;
+class LiveTransport final : public d::DomainTransport {
+public:
+    explicit LiveTransport(v2::Session &s) : s_(s) {}
+    json engine(const std::string &name, const json &args) override { return s_.engineCall(name, args, false); }
+    json engineWithNeeds(const std::string &name, const json &args) override { return s_.engineCall(name, args, true); }
+    std::string request(bool anon, const std::string &method, const std::string &body, const std::string &dest) override {
+        try {
+            return s_.busRequest(anon, method, body, dest);
+        } catch (const v2::V2Error &e) {
+            throw d::BusError(e.code());
+        }
+    }
+    std::string encodeMethod(const std::string &method, const json &value) override { return v2::encodeMethodRequest(method, value); }
+    json decodeMethod(const std::string &method, const std::string &bytes) override { return v2::decodeMethodResponse(method, bytes); }
+    bool hasClient() override { return true; }
+    bool isReady() override { return s_.isReady(); }
+    bool needsLinking() override { return s_.needsLinking(); }
+    std::string self() override { return s_.self(); }
+    std::string serverDomain() override { return s_.serverDomain(); }
+    void persist() override { s_.persistEngine(); }
+    std::int64_t nowMs() override {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+    void log(const std::string &m) override { s_.logLine("разделы: " + m); }
+
+private:
+    v2::Session &s_;
+};
+
+static std::string nowMsStr() {
+    return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+// Хуки «Плана» и «Облака» на журнале личного состояния сессии — как plannerHooks()/cloudHooks() в tdesktop.
+namespace pl = parvane::sections::planner;
+namespace cl = parvane::sections::cloud;
+static pl::PlannerHooks plannerHooksOf(v2::Session &s) {
+    return pl::PlannerHooks{
+        [&s]() -> std::optional<pl::ContainerRef> {
+            const auto snap = s.stateSnapshot();
+            if (!snap.is_object() || !snap.contains("planner_container")) return std::nullopt;
+            const auto ref = snap["planner_container"].is_object() ? snap["planner_container"].value("ref", json::object()) : json::object();
+            const auto id = ref.is_object() ? ref.value("id", std::string()) : std::string();
+            if (id.empty()) return std::nullopt;
+            return pl::ContainerRef{ref.value("domain", std::string()), d::b64ToHex(id)};
+        },
+        [&s](const pl::ContainerRef &ref) { s.stateCall("plannerContainerSet", json{{"domain", ref.domain}, {"idHex", ref.id}}); },
+        [] {}};
+}
+static cl::CloudHooks cloudHooksOf(v2::Session &s) {
+    return cl::CloudHooks{
+        [&s] { return cl::parseCloudEntries(s.stateSnapshot()); },
+        [&s](const cl::CloudStateEntry &entry) { s.stateCall("cloudContainerSet", json{{"containerJson", cl::cloudEntryToState(entry)}}); },
+        [](const std::string &) {},
+        [&s](const std::string &user) { s.refreshPeerLog(user); },
+        [] {}};
+}
+
+// M15/M18/M20 (виды содержимого), M16 (удаление, закреп), M28 (сигнал личного звонка).
+static void contentAndCallScenario(const std::string &tcp, const std::string &dir, const std::string &suffix,
+                                   Peer &alice, Peer &bob) {
+    std::printf("-- содержимое, мутации, личный звонок (M15/M16/M18/M20/M28)\n");
+    const auto pollId = v2::newUuidV7();
+    try {
+        alice.s->sendContent(bob.user, *v2::toV2(json{{"kind", "poll"}, {"question", "Чай или кофе?"},
+                                                      {"answers", json::array({"чай", "кофе"})}, {"multiple", true}}), pollId);
+        alice.s->sendContent(bob.user, *v2::toV2(json{{"kind", "location"}, {"lat", 55.75}, {"long", 37.61}}), "");
+    } catch (const std::exception &e) {
+        check(false, "M18/M20: опрос и геопозиция отправлены", e.what());
+    }
+    check(bob.inbox.wait([&](const v2::Incoming &x) {
+        return x.kind == v2::Incoming::Kind::Message && x.id == pollId && x.content.value("kind", "") == "poll"
+            && x.content.value("question", "") == "Чай или кофе?" && x.content.value("answers", json::array()).size() == 2;
+    }), "M18: опрос дошёл видом poll (вопрос, два ответа)");
+    check(bob.inbox.wait([&](const v2::Incoming &x) {
+        return x.kind == v2::Incoming::Kind::Message && x.from == alice.user && x.content.value("kind", "") == "location"
+            && std::abs(x.content.value("lat", 0.0) - 55.75) < 1e-6;
+    }), "M20: геопозиция дошла видом location");
+    try {
+        alice.s->sendContent(bob.user, json{{"pin", {{"target", v2::ref(pollId)}}}}, "");
+        alice.s->sendContent(bob.user, json{{"delete", {{"targets", json::array({v2::ref(pollId)})}, {"for_everyone", true}}}}, "");
+    } catch (const std::exception &e) {
+        check(false, "M16: закреп и удаление отправлены", e.what());
+    }
+    check(bob.inbox.wait([&](const v2::Incoming &x) {
+        return x.kind == v2::Incoming::Kind::Pin && !x.unpin && !x.targets.empty() && x.targets[0] == pollId;
+    }), "M16: закреп дошёл (Pin)");
+    check(bob.inbox.wait([&](const v2::Incoming &x) {
+        return x.kind == v2::Incoming::Kind::Delete && !x.targets.empty() && x.targets[0] == pollId;
+    }), "M16: удаление «у всех» дошло (Delete)");
+
+    // Сигнал личного звонка — только тому, чей ключ доступа есть (D-08). bob знает ключ alice по переписке
+    // (alice свой не отзывала); сбой по v2 вниз не понижается (D-13): true и причина в error.
+    const auto callId = v2::newUuidV7();
+    std::string error;
+    const bool sent = bob.s->sendCallSignal(alice.user, parvane::inviteSignal(callId, "audio", "v=0 m28"), "", &error);
+    check(sent && error.empty(), "M28: сигнал звонка собеседнику с ключом доступа ушёл", error);
+    check(alice.inbox.waitSession([&](const json &e) {
+        return e.value("type", std::string()) == "callSignal" && !e.value("group", false)
+            && e.value("from", std::string()) == bob.user && e["signal"].value("call_id", std::string()) == callId;
+    }, 10000), "M28: alice получила приглашение в звонок (callSignal, не групповой)");
+    Peer stranger;
+    stranger.user = "v2dn" + suffix + "@local";
+    try {
+        stranger.token = issue(tcp, stranger.user, "dn-" + suffix);
+        stranger.start(tcp, dir + "/stranger");
+        check(stranger.s->waitReady(30000), "M28: незнакомец на v2 готов");
+        error.clear();
+        (void)bob.s->isV2Peer(stranger.user);
+        (void)bob.s->sendCallSignal(stranger.user, parvane::inviteSignal(v2::newUuidV7(), "audio", "v=0"), "", &error);
+        check(error == "forbidden", "M28: без ключа доступа адресата звонок запрещён (forbidden, по v1 не понижается)", error);
+        stranger.s->stop();
+    } catch (const std::exception &e) {
+        check(false, "M28: незнакомец", e.what());
+    }
+}
+
+// M2 (регистрация/статус), M8 (смена пароля), M13 (профиль), M34 (каталог), M24 (жалоба серверу),
+// M36 (нужна новая версия) — методами v2 через `Control`/`preauth`, как мост и web.
+static void identityScenario(const std::string &tcp, const std::string &upgradeTcp, const std::string &suffix,
+                             Peer &alice, Peer &bob) {
+    std::printf("-- identity: регистрация, пароль, профиль, каталог, жалоба, версия (M2/M8/M13/M24/M34/M36)\n");
+    {
+        bool dup = false;
+        try {
+            (void)v2::preauth(tcp, "identity.account.register", json{{"user", alice.user}, {"password", kTestPassword}});
+        } catch (const v2::V2Error &e) {
+            dup = e.code() == "ERROR_CODE_DUPLICATE";
+        }
+        check(dup, "M2: повторная регистрация ника — DUPLICATE");
+        std::string bad;
+        try {
+            (void)v2::preauth(tcp, "identity.account.register", json{{"user", "Плохой Ник@local"}, {"password", kTestPassword}});
+        } catch (const v2::V2Error &e) {
+            bad = e.code();
+        }
+        check(bad == "ERROR_CODE_INVALID", "M2: негодный ник — INVALID", bad);
+        json st;
+        try {
+            st = v2::preauth(tcp, "identity.account.register_status", json{{"user", alice.user}, {"token", ""}});
+        } catch (const std::exception &e) {
+            check(false, "M2: статус регистрации", e.what());
+        }
+        check(st.is_object(), "M2: статус регистрации отвечает (confirmed — только для ожидающих подтверждения)", st.dump());
+    }
+    {
+        const auto user = "v2dp" + suffix + "@local";
+        const auto device = "dp-" + suffix;
+        std::string token;
+        try {
+            token = issue(tcp, user, device);
+        } catch (const std::exception &e) {
+            check(false, "M8: JWT", e.what());
+        }
+        v2::ControlConfig cc;
+        cc.gatewayUrl = tcp;
+        cc.token = [token] { return token; };
+        cc.clientVersion = "desktop-test";
+        v2::Control c(cc);
+        const auto fresh = "e2e-New-pass-2026";
+        bool changed = false;
+        try {
+            (void)c.call("identity.session.reauth", json{{"password", kTestPassword}});
+            (void)c.call("identity.account.change_password", json{{"old_password", kTestPassword}, {"new_password", fresh}});
+            changed = true;
+        } catch (const std::exception &e) {
+            check(false, "M8: смена пароля", e.what());
+        }
+        check(changed, "M8: пароль сменён (reauth + change_password)");
+        bool oldRefused = false;
+        try {
+            (void)v2::preauth(tcp, "identity.session.issue", json{{"login", user}, {"password", kTestPassword}, {"device_id", device}});
+        } catch (const v2::V2Error &) {
+            oldRefused = true;
+        }
+        check(oldRefused, "M8: прежний пароль больше не подходит");
+        json again;
+        try {
+            again = v2::preauth(tcp, "identity.session.issue", json{{"login", user}, {"password", fresh}, {"device_id", device}});
+        } catch (const std::exception &e) {
+            check(false, "M8: вход новым паролем", e.what());
+        }
+        check(!again.value("token", std::string()).empty(), "M8: вход новым паролем");
+        c.close();
+    }
+    {
+        v2::ControlConfig ca;
+        ca.gatewayUrl = tcp;
+        ca.token = [&alice] { return alice.token; };
+        ca.clientVersion = "desktop-test";
+        v2::Control a(ca);
+        v2::ControlConfig cb = ca;
+        cb.token = [&bob] { return bob.token; };
+        v2::Control b(cb);
+        bool set = false;
+        try {
+            (void)a.call("identity.profile.set_name", json{{"display_name", "Алиса Тест"}, {"bio", "о себе"}, {"name_color", "3"}});
+            set = true;
+        } catch (const std::exception &e) {
+            check(false, "M13: профиль записан", e.what());
+        }
+        check(set, "M13: профиль записан (имя, о себе, цвет)");
+        json resolved;
+        try {
+            resolved = b.call("identity.profile.resolve", json{{"users", json::array({json{{"address", alice.user}}})}});
+        } catch (const std::exception &e) {
+            check(false, "M13: профиль прочитан собеседником", e.what());
+        }
+        const auto *profiles = v2::field(resolved, "profiles", "profiles");
+        const json p = profiles && profiles->is_array() && !profiles->empty() ? (*profiles)[0] : json::object();
+        const auto *name = v2::field(p, "displayName", "display_name");
+        const auto *color = v2::field(p, "nameColor", "name_color");
+        check(name && name->is_string() && *name == "Алиса Тест" && p.value("bio", std::string()) == "о себе"
+                  && color && (color->is_number() ? color->get<int>() == 3 : color->get<std::string>() == "3"),
+              "M13: собеседник видит имя, «о себе» и цвет", p.dump());
+        json found;
+        try {
+            found = b.call("identity.directory.search", json{{"query", "v2da" + suffix}});
+        } catch (const std::exception &e) {
+            check(false, "M34: поиск по каталогу", e.what());
+        }
+        check(found.dump().find(alice.user) != std::string::npos, "M34: поиск по каталогу находит ник", found.dump());
+        a.close();
+        b.close();
+    }
+    check(alice.s->submitReport(json{{"kind", "spam"}, {"user", bob.user}, {"text", "тест жалобы"}}) == "sent",
+          "M24: жалоба серверу запечатана ключом администратора и отправлена");
+    if (!upgradeTcp.empty()) {
+        std::string code;
+        try {
+            (void)v2::preauth(upgradeTcp, "server.describe", json::object(), "desktop-test");
+        } catch (const v2::V2Error &e) {
+            code = e.code();
+        } catch (const std::exception &e) {
+            code = e.what();
+        }
+        check(code.find("UPGRADE_REQUIRED") != std::string::npos, "M36: gateway с минимальной версией выше нашей — UPGRADE_REQUIRED", code);
+    }
+}
+
+// Два устройства одного аккаунта: журнал личного состояния по видам (M21/M22), история звонков и сигнал
+// «принято на другом устройстве» (M30), «План» и «Облако» — домен `domains` (spec 010/016, DOMAIN-1/2).
+static void devicesStateAndDomainsScenario(const std::string &tcp, const std::string &dir, const std::string &suffix,
+                                           Peer &bob) {
+    std::printf("-- журнал состояния, звонки, домены «План»/«Облако» на двух устройствах (M21/M22/M30, domains)\n");
+    Peer d1, d2;
+    d1.user = d2.user = "v2dm" + suffix + "@local";
+    try {
+        d1.token = issue(tcp, d1.user, "dm1-" + suffix);
+    } catch (const std::exception &e) {
+        check(false, "domains: JWT", e.what());
+        return;
+    }
+    d1.start(tcp, dir + "/dm1");
+    check(d1.s->waitReady(30000), "domains: первое устройство готово");
+    (void)d1.s->stateAttach(json::object());
+    try {
+        d2.token = issue(tcp, d2.user, "dm2-" + suffix);
+    } catch (const std::exception &e) {
+        check(false, "domains: JWT второго устройства", e.what());
+    }
+    d2.start(tcp, dir + "/dm2");
+    check(!d2.s->waitReady(8000) && d2.s->needsLinking(), "domains: второе устройство ждёт привязку");
+    d2.s->joinWithGrant(d1.s->linkGrantMaterial());
+    check(d2.s->waitReady(30000), "domains: второе устройство привязано грантом");
+    (void)d2.s->stateAttach(json::object());
+
+    // M21/M22: виды журнала состояния — блок-лист, архив, уведомления, черновик, закреп
+    const auto textB64 = d::toBase64(v2::encodeMessage("parvane.msg.v2.Text", json{{"text", "черновик " + suffix}}));
+    const json desired{
+        {"blocked", json::array({json{{"peer", {{"user", {{"address", "spam" + suffix + "@local"}}}}}, {"blocked_at_ms", "1700000000000"}}})},
+        {"archived", json::array({json{{"user", {{"address", bob.user}}}}})},
+        {"notify", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"settings", {{"mute_until_ms", "4102444800000"}}}}})},
+        {"drafts", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"text", textB64}, {"date_ms", nowMsStr()}}})},
+        {"pinned", json::array({json{{"list", "PIN_LIST_MAIN"}, {"peers", json::array({json{{"user", {{"address", bob.user}}}}})}}})},
+    };
+    const auto synced = d1.s->stateSync(desired, {"blocked", "archived", "notify", "drafts", "pinned"});
+    const auto snap1 = synced.is_object() ? synced.value("snapshot", json::object()) : json::object();
+    check(snap1.contains("blocked") && snap1.dump().find("spam" + suffix) != std::string::npos
+              && snap1.contains("archived") && snap1.contains("notify") && snap1.contains("drafts") && snap1.contains("pinned"),
+          "M21/M22: блок-лист, архив, уведомления, черновик, закреп — в журнале", snap1.dump().substr(0, 200));
+    json snap2;
+    for (int i = 0; i < 20; ++i) {
+        const auto r = d2.s->stateSync(json(), {});
+        snap2 = r.is_object() ? r.value("snapshot", json::object()) : json::object();
+        if (snap2.dump().find("spam" + suffix) != std::string::npos && snap2.dump().find(textB64) != std::string::npos) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    check(snap2.dump().find("spam" + suffix) != std::string::npos && snap2.dump().find(textB64) != std::string::npos
+              && snap2.dump().find("4102444800000") != std::string::npos,
+          "M21/M22: второе устройство прочитало те же виды (блок-лист, черновик, уведомления)");
+    // Очистка чата «у себя» — граница между своими устройствами
+    d1.s->stateChatCleared(bob.user, 1700000001000);
+    bool cleared = false;
+    for (int i = 0; i < 20 && !cleared; ++i) {
+        const auto r = d2.s->stateSync(json(), {});
+        cleared = r.is_object() && r.value("snapshot", json::object()).dump().find("1700000001000") != std::string::npos;
+        if (!cleared) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    check(cleared, "T145: граница очистки чата дошла до второго устройства (cleared)");
+
+    // M30: история звонков в журнале и «принято/отклонено на другом устройстве»
+    const auto callId = v2::newUuidV7();
+        check(d1.s->stateCall("callSet", json{{"recordJson", json{{"call_id", v2::uuidToB64(callId)}, {"peer", {{"user", {{"address", bob.user}}}}},
+                                                                {"outgoing", true}, {"started_ms", "1700000002000"}, {"duration_s", 42}}}}),
+          "M30: запись истории звонка — в журнал состояния (callSet)");
+    bool calls = false;
+    for (int i = 0; i < 20 && !calls; ++i) {
+        const auto r = d2.s->stateSync(json(), {});
+        const auto s = r.is_object() ? r.value("snapshot", json::object()) : json::object();
+        calls = s.contains("calls") && s["calls"].dump().find("1700000002000") != std::string::npos;
+        if (!calls) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    check(calls, "M30: история звонков видна второму устройству (calls, длительность 42 с)");
+    check(d1.s->sendCallSignalOwn(parvane::hangupSignal(callId)), "M30: сигнал «завершено здесь» своим устройствам ушёл");
+    check(d2.inbox.waitSession([&](const json &e) {
+        return e.value("type", std::string()) == "callSignal" && e.value("from", std::string()) == d1.user
+            && e["signal"].value("call_id", std::string()) == callId && e["signal"].value("type", std::string()) == "hangup";
+    }, 10000), "M30: второе устройство получило «принято/завершено на другом устройстве»");
+    check(!d1.s->sendCallSignalOwn(parvane::inviteSignal(callId, "audio", "v=0")), "M30: своим устройствам уходит только reject/hangup");
+
+    // «План» (spec 010): контейнер и операция с первого устройства, второе читает по ключу от своего устройства
+    LiveTransport t1(*d1.s), t2(*d2.s);
+    d::MemoryRecords r1, r2;
+    pl::PlannerSync p1(t1, r1, plannerHooksOf(*d1.s));
+    pl::PlannerSync p2(t2, r2, plannerHooksOf(*d2.s));
+    p1.ensure();
+    check(p1.status() == "ready", "planner: раздел подключён к стеку (ready)", p1.status());
+    p1.apply(json::array({json{{"task", {{"id", "t-" + suffix}, {"name", "Полить цветы"}, {"day", "2026-10-20"}}}}}));
+    p1.tick();
+    p1.flush();
+    const auto s1 = p1.stateJson();
+    check(s1 && s1->value("tasks", json::array()).dump().find("Полить цветы") != std::string::npos,
+          "planner: контейнер создан, операция применена и отправлена", s1 ? s1->dump().substr(0, 160) : "null");
+    check(p1.outboxSize() == 0 && !p1.hasPending(), "planner: очередь отправки пуста");
+    {
+        const auto snap = d1.s->stateSnapshot();
+        check(snap.is_object() && snap.contains("planner_container") && snap["planner_container"].dump().find("\"id\"") != std::string::npos,
+              "planner: контейнер объявлен в журнале личного состояния (planner_container)");
+    }
+    bool seen = false;
+    for (int i = 0; i < 60 && !seen; ++i) {
+        p2.onEngineEvent();
+        p2.ensure();
+        p2.syncNow();
+        p2.tick();
+        const auto s2 = p2.stateJson();
+        seen = s2 && s2->value("tasks", json::array()).dump().find("Полить цветы") != std::string::npos;
+        if (!seen) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    check(seen, "planner: второе устройство получило ключ контейнера и видит задачу", p2.status());
+
+    // «Облако» (spec 016): личный диск с папкой с первого устройства, второе видит контейнер и дерево
+    const auto nodeId = (std::string(32, '0') + suffix).substr(suffix.size()); // id узла — 16 байт hex
+    cl::CloudSync c1(t1, r1, cloudHooksOf(*d1.s));
+    cl::CloudSync c2(t2, r2, cloudHooksOf(*d2.s));
+    c1.ensure(true);
+    std::string root;
+    try {
+        root = c1.apply("root", json::array({json{{"op", "create"}, {"id", nodeId}, {"kind", "folder"}, {"name", "Документы"}}}));
+    } catch (const std::exception &e) {
+        check(false, "cloud: личный диск создан первой правкой", e.what());
+    }
+    check(!root.empty() && c1.rootId() == std::optional<std::string>(root), "cloud: личный диск создан первой правкой", root);
+    check(c1.flush(root) && !c1.hasPending(root), "cloud: операция «папка» отправлена");
+    {
+        const auto tree = c1.stateJson(root);
+        check(tree && tree->dump().find("Документы") != std::string::npos, "cloud: дерево диска содержит папку");
+    }
+    bool treeSeen = false;
+    std::string c2status;
+    for (int i = 0; i < 60 && !treeSeen; ++i) {
+        (void)d2.s->stateSync(json(), {}); // запись о диске — в журнале личного состояния
+        c2.onEngineEvent(root);
+        c2.ensure(true);
+        c2.syncNow(true);
+        c2.tick();
+        c2status = c2.status();
+        const auto list = c2.containers();
+        const auto tree = c2.stateJson(root);
+        for (const auto &info : list) {
+            treeSeen = treeSeen || (info.id == root && info.kind == "root" && info.hasKey && tree
+                                    && tree->dump().find("Документы") != std::string::npos);
+        }
+        if (!treeSeen) {
+            c2status += " [" + std::to_string(list.size()) + (list.empty() ? "" : " " + list[0].kind + (list[0].hasKey ? " key" : " nokey")) + "]";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+    check(treeSeen, "cloud: второе устройство видит личный диск (ключ от своего устройства) и папку в дереве",
+          c2status.substr(c2status.size() > 120 ? c2status.size() - 120 : 0));
+    check(d2.inbox.waitSession([](const json &e) { return e.value("type", std::string()) == "plannerChanged"; }, 1000)
+              && d2.inbox.waitSession([](const json &e) { return e.value("type", std::string()) == "cloudChanged"; }, 1000),
+          "domains: хосту второго устройства пришли события plannerChanged и cloudChanged");
+
+    d1.s->stop();
+    d2.s->stop();
+}
+
+// M31 (FED-1): письмо и ответ между пользователями двух серверов — свой gateway у каждого, запрос к объекту
+// чужого сервера идёт своему серверу с `dest_domain`, жетоны незнакомцу — от сервера адресата.
+static void federationScenario(const std::string &tcpA, const std::string &tcpB, const std::string &domainB,
+                               const std::string &dir, const std::string &suffix) {
+    std::printf("-- федерация (M31, FED-1): %s ↔ %s\n", "local", domainB.c_str());
+    Peer fa, fb;
+    fa.user = "v2fa" + suffix + "@local";
+    fb.user = "v2fb" + suffix + "@" + domainB;
+    try {
+        fa.token = issue(tcpA, fa.user, "fa-" + suffix);
+        fb.token = issue(tcpB, fb.user, "fb-" + suffix);
+    } catch (const std::exception &e) {
+        check(false, "M31: JWT на двух серверах", e.what());
+        return;
+    }
+    fa.start(tcpA, dir + "/fa");
+    fb.start(tcpB, dir + "/fb");
+    check(fa.s->waitReady(30000) && fb.s->waitReady(30000), "M31: сессии на двух серверах готовы");
+    check(fa.s->serverDomain() == "local" && fb.s->serverDomain() == domainB, "M31: домены серверов из описателей",
+          fa.s->serverDomain() + " / " + fb.s->serverDomain());
+    check(fa.s->isV2Peer(fb.user), "M31: журнал устройств собеседника с чужого сервера прочитан (dest_domain)");
+    try {
+        fa.s->sendContent(fb.user, *v2::toV2(parvane::textContent("fed-a-" + suffix)), v2::newUuidV7());
+    } catch (const std::exception &e) {
+        check(false, "M31: письмо на чужой сервер отправлено", e.what());
+    }
+    check(textArrived(fb.inbox, "fed-a-" + suffix, fa.user, nullptr, 40000), "M31: письмо дошло через федерацию (незнакомцу, по жетону его сервера)");
+    try {
+        fb.s->sendContent(fa.user, *v2::toV2(parvane::textContent("fed-b-" + suffix)), v2::newUuidV7());
+    } catch (const std::exception &e) {
+        check(false, "M31: ответ отправлен", e.what());
+    }
+    check(textArrived(fa.inbox, "fed-b-" + suffix, fb.user, nullptr, 40000), "M31: ответ дошёл через федерацию");
+    check(fa.s->sendTyping(fb.user), "M31: «печатает» собеседнику чужого сервера взято на v2");
+    fa.s->stop();
+    fb.s->stop();
 }
 
 int main() {
@@ -992,6 +1438,15 @@ int main() {
                 check(!restored.value("token", std::string()).empty(), "spec 027: вход с отменой удаления — аккаунт восстановлен");
             }
         }
+    }
+
+    contentAndCallScenario(tcp, dir, suffix, alice, bob);
+    identityScenario(tcp, env("PARVANE_V2_UPGRADE_TCP", ""), suffix, alice, bob);
+    devicesStateAndDomainsScenario(tcp, dir, suffix, bob);
+    if (const auto fed = env("PARVANE_V2_FED_TCP", ""); !fed.empty()) {
+        federationScenario(tcp, fed, env("PARVANE_V2_FED_DOMAIN", "fed.parvane.test"), dir, suffix);
+    } else {
+        std::printf("  skip  M31: федерация (нет PARVANE_V2_FED_TCP — шард federation не собран)\n");
     }
 
     alice.s->stop();

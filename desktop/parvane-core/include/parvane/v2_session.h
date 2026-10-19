@@ -61,6 +61,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "parvane/queue_watchdog.h"
+#include "parvane/reconnect_backoff.h"
+
 namespace parvane::v2 {
 
 using nlohmann::json;
@@ -85,8 +88,12 @@ struct SessionConfig {
     std::function<void(const std::string &)> log;
     // Событие движка (proto3-JSON, см. host.rs event_json) — на рабочем потоке.
     std::function<void(const json &event)> onEvent;
-    // Пауза переподключения после обрыва.
-    std::int64_t reconnectMs = 3000;
+    // Переподключение после обрыва (T025, как web perf A5): 1 → 2 → 4 … до потолка с разбросом ±50 %,
+    // сброс при успехе; reconnectNow() — попытка сразу (сеть вернулась).
+    std::int64_t reconnectBaseMs = ReconnectBackoff::kBaseMs;
+    std::int64_t reconnectMaxMs = ReconnectBackoff::kMaxMs;
+    // Сторож очереди рабочего потока (как web SERIAL_WATCHDOG_MS): задача дольше порога — строка в логе.
+    std::int64_t queueWatchdogMs = QueueWatchdog::kThresholdMs;
     // C1-06 / D-12: задан — корень нового устройства НЕ хранится на диске:
     // только его копия под ключом восстановления (файл root-backup), ключ
     // отдаётся сюда один раз для показа пользователю (на рабочем потоке).
@@ -137,6 +144,10 @@ public:
     void logLine(const std::string &m) const { log(m); }
     // Дождаться готовности (для тестов/хуков). false — таймаут/остановлено.
     bool waitReady(std::int64_t timeoutMs);
+    // Сеть вернулась: ждущее переподключение — сразу, не дожидаясь паузы отката (как web `online`).
+    void reconnectNow();
+    // Сколько попыток переподключения подряд не удалось (0 — соединение есть или ещё не рвалось).
+    [[nodiscard]] int reconnectAttempts();
     // Устройство не создано: у аккаунта уже есть журнал v2 — этому
     // устройству нужна линковка (до неё — только v1).
     [[nodiscard]] bool needsLinking() const { return needsLinking_; }
@@ -641,6 +652,9 @@ private:
     std::set<std::string> rotateScheduled_; // под qMu_
     std::thread worker_;
     bool reconnectScheduled_ = false;
+    bool reconnectNow_ = false; // под qMu_: прервать паузу отката
+    ReconnectBackoff backoff_;  // под qMu_
+    std::unique_ptr<QueueWatchdog> watchdog_;
 
     std::mutex peersMu_;
     struct PeerInfo {

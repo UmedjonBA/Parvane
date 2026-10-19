@@ -30,16 +30,26 @@ get_filename_component(src_loc SourceFiles REALPATH)
 get_filename_component(res_loc Resources REALPATH)
 
 # Parvane: dev/e2e-хуки (PARVANE_AUTO*, ws://, TCP к gateway) — только в
-# parvane_client.cpp; определение не распространяется на весь Telegram.
+# файлах клиента parvane_client*.cpp (один заголовок parvane_client_internal.h с ParvaneDevEnv —
+# определение обязано совпадать во всех них); на весь Telegram не распространяется.
+set(parvane_client_sources
+    ${src_loc}/parvane/parvane_client.cpp
+    ${src_loc}/parvane/parvane_client_auth.cpp
+    ${src_loc}/parvane/parvane_client_groups.cpp
+    ${src_loc}/parvane/parvane_client_state.cpp
+    ${src_loc}/parvane/parvane_client_devices.cpp
+    ${src_loc}/parvane/parvane_client_linking.cpp
+    ${src_loc}/parvane/parvane_client_export.cpp)
 if (PARVANE_DEV)
-    set_source_files_properties(${src_loc}/parvane/parvane_client.cpp
+    set_source_files_properties(${parvane_client_sources}
         PROPERTIES COMPILE_DEFINITIONS PARVANE_DEV=1)
 endif()
 
-# Parvane fork: glue-модуль клиента (мост tdesktop ↔ parvane-core).
+# Parvane fork: glue-модуль клиента (мост tdesktop ↔ parvane-core); с T038 (spec 029) — по темам.
 target_sources(Telegram PRIVATE
-    ${src_loc}/parvane/parvane_client.cpp
+    ${parvane_client_sources}
     ${src_loc}/parvane/parvane_client.h
+    ${src_loc}/parvane/parvane_client_internal.h
     ${src_loc}/parvane/parvane_account_ui.cpp
     ${src_loc}/parvane/parvane_account_ui.h
     ${src_loc}/parvane/parvane_icons.cpp
