@@ -945,7 +945,7 @@ void ClearLayout(not_null<Ui::VerticalLayout*> layout) {
 	for (auto i = 0, count = layout->count(); i != count; ++i) {
 		widgets.push_back(layout->widgetAt(i).get());
 	}
-	layout->clear();
+	// Удаление строки раскладка видит сама (конец её сигнала высоты) и убирает строку из себя
 	for (const auto &widget : widgets) {
 		delete widget.data();
 	}
