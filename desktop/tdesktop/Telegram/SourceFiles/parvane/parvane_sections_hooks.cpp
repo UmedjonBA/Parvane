@@ -146,11 +146,10 @@ void RunCloudStep(const HookStep &step) {
 	const auto name = step.arg.toStdString();
 	Ask<bool>([=](Workers &w) -> bool {
 		w.cloud.ensure(true);
+		// Личного диска ещё нет — `apply("root")` создаст его, как первая правка экрана «Облака»
 		const auto data = notes::parseCloudData(w.drive.state());
-		if (!data->rootId) {
-			return false;
-		}
-		const auto &nodes = data->nodesOf(data->rootId);
+		const auto empty = std::vector<cloud::CloudNode>();
+		const auto &nodes = data->rootId ? data->nodesOf(data->rootId) : empty;
 		const auto ops = cloud::createFolderOps(nodes, std::nullopt, name, NewId());
 		const auto result = w.drive.applyOps("root", ops);
 		return result.value("ok", false);
