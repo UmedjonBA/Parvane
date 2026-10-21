@@ -36,6 +36,7 @@ enum class DefaultNotify : uint8_t;
 
 namespace Main {
 class Session;
+class Account;
 } // namespace Main
 
 namespace parvane::v2 {
@@ -353,10 +354,22 @@ bool StartSession();
 [[nodiscard]] bool SessionActive();
 void StopSession();
 
-// Выход из аккаунта: гасит сессию и снимает учётные данные (адрес + JWT).
+// Отказ авторизации: гасит сессию и снимает учётные данные (адрес + JWT).
 // Ключи E2E и историю НЕ трогает — повторный вход на том же устройстве
-// возвращает переписку. Зовётся из Main::Account::logOut.
+// возвращает переписку.
 void ClearLocalState();
+// Выход по кнопке (NAT-16, как web T197): запись выхода в журнал устройств (не
+// дольше 5 с), затем ClearLocalState и стирание данных Parvane в tdata — ключи
+// движка, id устройства, история, кэши, медиа. Следующий вход — новым устройством.
+// Главный поток; ждёт сеть до 5 с.
+void LogOutAndWipe();
+// Окно «Выйти?» подтверждено пользователем: logOut этого аккаунта пойдёт через
+// LogOutAndWipe. Остальные пути logOut (сброс забытого код-пароля, дубль аккаунта
+// во входе, отказ проверки self) стирания не делают. Главный поток.
+void RequestWipeOnLogout(not_null<Main::Account*> account);
+// Из Main::Account::logOut: LogOutAndWipe, если выход подтверждён для этого
+// аккаунта (RequestWipeOnLogout), иначе ClearLocalState.
+void OnAccountLogOut(not_null<Main::Account*> account);
 
 // Резервная копия ключей E2E в формате веб-клиента (файл годится для
 // переноса между клиентами). Блокирующие — звать с воркера. error —

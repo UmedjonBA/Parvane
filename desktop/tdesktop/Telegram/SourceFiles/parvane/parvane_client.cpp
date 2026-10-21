@@ -84,8 +84,26 @@ std::shared_ptr<parvane::v2::Control> g_control;
 // Сессия запущена (StartSession прошёл; переписка — v2-сессией g_v2). Под g_sessionMutex.
 bool g_sessionStarted = false;
 // Звонки: оркестрация (сигналы — v2-сессией). Под g_sessionMutex.
-std::unique_ptr<parvane::CallManager> g_callManager;
+std::shared_ptr<parvane::CallManager> g_callManager;
 std::unique_ptr<parvane::crypto::SigningKey> g_callKey;
+
+// Медиа звонка — настоящий tg_owt? Dev-сборка: по PARVANE_REAL_MEDIA (сценарии сигналинга идут на
+// заглушке). Релиз — всегда: переменные окружения в релизе не действуют, а прежде релиз без неё звонил
+// на заглушке, без звука (найдено при проверке NAT-20, 21 окт 2026).
+[[nodiscard]] bool RealCallMedia() {
+#ifdef PARVANE_DEV
+	const char *rm = std::getenv("PARVANE_REAL_MEDIA");
+	return rm && *rm;
+#else
+	return true;
+#endif
+}
+
+// Текущий менеджер личных звонков (копия под g_sessionMutex; звать его — уже без мьютекса).
+std::shared_ptr<parvane::CallManager> CurrentCallManager() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	return g_callManager;
+}
 // Кэш публичных ключей пиров (адрес → base64) для проверки подписи invite/answer.
 // Читается из потока cnats (peerPubkey-колбэк) → отдельный мьютекс.
 std::mutex g_pubkeyMutex;
@@ -94,7 +112,7 @@ QHash<quint64, QString> g_idToAddress;
 // Группы/каналы: клиент + реестр. g_knownGroups: gid → имя (для роутинга
 // входящих и синтеза чата). g_chatIdToGroupId: chatId(FNV) → gid (для роутинга
 // исходящих из чат-пира). Под g_sessionMutex.
-std::unique_ptr<parvane::GroupCallManager> g_groupCallManager;
+std::shared_ptr<parvane::GroupCallManager> g_groupCallManager;
 QHash<QString, QString> g_knownGroups;
 QHash<QString, QSet<quint64>> g_personalChannelUsers; // group_id → user id, чей личный канал ещё не синтезирован
 QHash<quint64, QString> g_chatIdToGroupId;
@@ -468,14 +486,16 @@ void fetchWebpage(const QString &url, Fn<void(nlohmann::json)> done) {
 // паскодом): SHA-256("parvane-store-v1" || AuthKey). Все файлы parvane-*
 // (JWT, секрет доверия, кэш расшифровки, журнал истории, курсоры, ключ
 // звонков, Olm-стор ядра) пишутся шифртекстом; plain прежних версий читается
-// и перешифровывается при первом доступе. Без ключа (домен ещё не стартовал)
-// хелперы работают как раньше — plain, и миграция догоняет позже.
+// и перешифровывается при первом доступе. NAT-13: без ключа (домен ещё не
+// стартовал) хелперы НЕ пишут открытый текст — запись отклоняется (false), а
+// не уходит на диск plain, как раньше.
 std::once_flag g_storeMigrated;
 
 void EnsureStoreKey() {
 	if (parvane::storecrypt::enabled()) {
 		return;
 	}
+	parvane::storecrypt::setRequired(true);
 	if (!Core::App().domain().started()) {
 		return;
 	}
@@ -2455,8 +2475,12 @@ bool StartSession() {
 		LoadClearedLocked();  // скрытые «для меня» сообщения (удалённые чаты)
 
 		// ── Звонки: менеджеры, сигналы — только запечатанными конвертами v2 ──
-		g_callKey = std::make_unique<parvane::crypto::SigningKey>(
-			parvane::crypto::SigningKey::loadOrCreate(CallKeyPath().toStdString()));
+		// Ключ один на процесс (путь не зависит от аккаунта): прежний менеджер, которого ещё держит
+		// рабочий поток (NAT-07), хранит указатель на него — не пересоздавать.
+		if (!g_callKey) {
+			g_callKey = std::make_unique<parvane::crypto::SigningKey>(
+				parvane::crypto::SigningKey::loadOrCreate(CallKeyPath().toStdString()));
+		}
 		parvane::CallManager::Callbacks ccb;
 		// Протокол v2 (D-08): сигнал личного звонка уходит запечатанным конвертом
 		// по анонимному каналу — сервер не видит ни сторон, ни SDP.
@@ -2518,15 +2542,15 @@ bool StartSession() {
 							.arg(peerQ));
 						StopRingtone();
 						Parvane::CloseNativeCallPanel();
-						if (g_callManager) {
-							g_callManager->hangup();
+						if (const auto m = CurrentCallManager()) {
+							m->hangup();
 						}
 					}
 				});
 			}
 			// Авто-приём (e2e) без UI.
 			if (const char *aa = ParvaneDevEnv("PARVANE_AUTOACCEPT"); aa && *aa) {
-				crl::on_main([] { if (g_callManager) g_callManager->accept(); });
+				crl::on_main([] { if (const auto m = CurrentCallManager()) m->accept(); });
 				return;
 			}
 			// UI: рингтон + НАТИВНЫЙ экран входящего звонка (кнопки Ответить/Отклонить).
@@ -2592,15 +2616,13 @@ bool StartSession() {
 				Parvane::NativeCallPeerMediaState(audioMuted, videoMuted);
 			});
 		};
-		g_callManager = std::make_unique<parvane::CallManager>(
+		g_callManager = std::make_shared<parvane::CallManager>(
 			g_selfAddress.toStdString(),
 			g_callKey.get(),
 			[] {
-				// PARVANE_REAL_MEDIA=1 → реальный webrtc-звук; иначе заглушка
-				// (для e2e сигналинга без звука). Если webrtc не поднялся —
-				// откат на заглушку.
-				if (const char *rm = std::getenv("PARVANE_REAL_MEDIA");
-						rm && *rm) {
+				// Реальный webrtc-звук (RealCallMedia); иначе заглушка (для e2e
+				// сигналинга без звука). Если webrtc не поднялся — откат на заглушку.
+				if (RealCallMedia()) {
 					if (auto w = Parvane::MakeWebrtcBackend()) {
 						LOG(("Parvane: медиа-движок = webrtc (реальный звук)"));
 						return w;
@@ -2615,7 +2637,7 @@ bool StartSession() {
 		// Групповые звонки (mesh). Тот же движок-фабрика (webrtc/заглушка) + кэш
 		// pubkey. onPeerState — лог (UI-бокс — в StartGroupCall).
 		const auto makeBackend = [] {
-			if (const char *rm = std::getenv("PARVANE_REAL_MEDIA"); rm && *rm) {
+			if (RealCallMedia()) {
 				if (auto w = Parvane::MakeWebrtcBackend()) {
 					return w;
 				}
@@ -2670,10 +2692,10 @@ bool StartSession() {
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
 					if (g_groupCallManager) {
 						crl::async([gcid] {
-							parvane::GroupCallManager *g = nullptr;
+							std::shared_ptr<parvane::GroupCallManager> g;
 							{
 								std::lock_guard<std::mutex> lk(g_sessionMutex);
-								g = g_groupCallManager.get();
+								g = g_groupCallManager;
 							}
 							if (g) g->expireInvite(gcid);
 						});
@@ -2706,15 +2728,15 @@ bool StartSession() {
 		};
 		// Занят личным звонком — приглашению «занят»
 		gcb.isBusy = [] {
-			parvane::CallManager *m = nullptr;
+			std::shared_ptr<parvane::CallManager> m;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				m = g_callManager.get();
+				m = g_callManager;
 			}
 			const auto state = m ? m->state() : parvane::CallState::Idle;
 			return state != parvane::CallState::Idle && state != parvane::CallState::Ended;
 		};
-		g_groupCallManager = std::make_unique<parvane::GroupCallManager>(
+		g_groupCallManager = std::make_shared<parvane::GroupCallManager>(
 			g_selfAddress.toStdString(), g_callKey.get(), makeBackend, std::move(gcb));
 
 		// ICE-серверы — заранее: входящий вызов создаёт движок на потоке чтения
@@ -2785,18 +2807,11 @@ Main::Session *ActiveMainSession() {
 	return g_sessionWeak.get();
 }
 
-// Выход из аккаунта. Снимаем ТОЛЬКО учётные данные сессии (адрес + JWT):
-// после этого нужен повторный ввод пароля, но повторный вход на ТОМ ЖЕ
-// устройстве возвращает всю переписку.
-//
-// ПОЧЕМУ НЕ СНОСИМ КЛЮЧИ. История у нас сквозным шифрованием: на сервере лежит
-// только шифртекст, читаемый исключительно ключами устройства. Ручного
-// экспорта ключей на десктопе НЕТ (в ядре есть exportStateJson, но подключён
-// он только к авто-линковке, а ей нужно ВТОРОЕ живое устройство). Значит для
-// человека, у которого стоит один десктоп, снос ключей = безвозвратная потеря
-// всей переписки, причём по нажатию кнопки, от которой такого никто не ждёт.
-// Поэтому «выйти» ≠ «стереть устройство». Полное стирание — отдельное явное
-// действие (и его стоит давать только вместе с экспортом ключей).
+// Снять учётные данные сессии (адрес + JWT), ключи и историю не трогать. Так
+// отвечаем на отказ JWT (истёк, отозван): устройство остаётся тем же, повторный
+// вход возвращает переписку. Выход по кнопке — LogOutAndWipe (NAT-16, как web):
+// там устройство уходит из журнала и данные стираются — копия ключей аккаунта
+// (RECOVER-2) уходит на сервер сама, история возвращается новым устройством.
 void ClearLocalState() {
 	StopSession();
 	{
@@ -2812,6 +2827,74 @@ void ClearLocalState() {
 	LOG(("Parvane: выход — учётные данные %1; ключи и история СОХРАНЕНЫ "
 		"(повторный вход на этом устройстве вернёт переписку)")
 		.arg(removed ? u"удалены"_q : u"не найдены"_q));
+}
+
+namespace {
+
+// Как web LEAVE_TIMEOUT_MS (WEB-11): дольше выход из журнала не ждём — стирание идёт в любом случае.
+constexpr auto kLeaveTimeoutMs = 5000;
+
+// tdata/parvane-*, которые выход не трогает: настройки устройства, а не данные аккаунта
+// (как web: стираются ключи `parvane:…:<адрес>`, настройки без адреса остаются).
+const std::vector<std::string> kDeviceSettings = {
+	"parvane-background",   // фон чатов
+	"parvane-scheme",       // схема оформления
+	"parvane-lang-applied", // язык по умолчанию уже применён
+	"parvane-calls-relay",  // «звонки только через сервер»
+	"parvane-callkey.txt",  // ключ подписи звонков процесса (g_callKey держит его в памяти)
+};
+
+// Стереть данные Parvane из tdata этой установки: состояние движка (ключи, id устройства), журнал истории,
+// кэши, расшифрованные медиа, файлы разделов. Только имена parvane-* в своём рабочем каталоге — системный
+// telegram-desktop (другой каталог) и файлы tdesktop не затрагиваются (parvane-core, тест storecrypt NAT-16).
+int WipeParvaneData() {
+	auto failed = std::vector<std::string>();
+	const auto removed = parvane::storecrypt::removePrefixed(
+		(cWorkingDir() + u"tdata"_q).toStdString(),
+		"parvane-",
+		kDeviceSettings,
+		&failed);
+	for (const auto &name : failed) {
+		LOG(("Parvane: выход — не удалось стереть %1").arg(QString::fromStdString(name)));
+	}
+	return removed;
+}
+
+} // namespace
+
+void LogOutAndWipe() {
+	// 1. Пока соединение живо — запись выхода в журнал устройств (своим ключом, SSK не раскрывается):
+	// у остальных устройств и собеседников этого устройства больше нет, сервер гасит его сессию.
+	if (const auto s = V2Ready()) {
+		const auto left = s->leave(kLeaveTimeoutMs);
+		LOG(("Parvane: выход — устройство %1 журнала устройств")
+			.arg(left ? u"вышло из"_q : u"не вышло (нет связи или отказ) из"_q));
+	}
+	// 2. Сессия гаснет, учётные данные — прочь.
+	ClearLocalState();
+	// 3. Стирание данных аккаунта на устройстве: следующий вход — новым устройством.
+	const auto removed = WipeParvaneData();
+	// Ключ хранилища — заново от локального ключа tdesktop при следующем доступе
+	parvane::storecrypt::setKey(std::string());
+	LOG(("Parvane: выход — данные устройства стёрты (%1 записей tdata/parvane-*)").arg(removed));
+}
+
+namespace {
+Main::Account *g_wipeOnLogout = nullptr; // главный поток; только сравнение указателей
+} // namespace
+
+void RequestWipeOnLogout(not_null<Main::Account*> account) {
+	g_wipeOnLogout = account.get();
+}
+
+void OnAccountLogOut(not_null<Main::Account*> account) {
+	const auto wipe = (g_wipeOnLogout == account.get());
+	g_wipeOnLogout = nullptr;
+	if (wipe) {
+		LogOutAndWipe();
+	} else {
+		ClearLocalState();
+	}
 }
 
 // ── spec 026/027: смена ника и удаление аккаунта (как web parvaneRenameAccount / parvaneDeleteAccount) ──
@@ -8545,10 +8628,10 @@ void PlaceCall(const QString &peer, bool video) {
 	const auto p = peer.toStdString();
 	const auto media = std::string(video ? "video" : "audio");
 	crl::async([p, media] {
-		parvane::CallManager *m = nullptr;
+		std::shared_ptr<parvane::CallManager> m;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
-			m = g_callManager.get();
+			m = g_callManager;
 		}
 		if (m) {
 			m->placeCall(p, media);
@@ -8576,12 +8659,12 @@ void NotifyOwnDevicesAboutCall(const std::string &callId, const char *reason) {
 }
 
 void AcceptCall() {
-	parvane::CallManager *m = nullptr;
-	parvane::GroupCallManager *g = nullptr;
+	std::shared_ptr<parvane::CallManager> m;
+	std::shared_ptr<parvane::GroupCallManager> g;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		m = g_callManager.get();
-		g = g_groupCallManager.get();
+		m = g_callManager;
+		g = g_groupCallManager;
 	}
 	if (g) {
 		if (const auto gcid = g->pendingInviteId(); !gcid.empty()) {
@@ -8601,12 +8684,12 @@ void AcceptCall() {
 }
 
 void HangupCall() {
-	parvane::CallManager *m = nullptr;
-	parvane::GroupCallManager *g = nullptr;
+	std::shared_ptr<parvane::CallManager> m;
+	std::shared_ptr<parvane::GroupCallManager> g;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		m = g_callManager.get();
-		g = g_groupCallManager.get();
+		m = g_callManager;
+		g = g_groupCallManager;
 	}
 	if (g) {
 		if (const auto gcid = g->pendingInviteId(); !gcid.empty()) {
@@ -8632,19 +8715,19 @@ void HangupCall() {
 
 // Заглушить/включить свой микрофон (кнопка в окне звонка).
 void ToggleMute(bool muted) {
-	parvane::CallManager *m = nullptr;
+	std::shared_ptr<parvane::CallManager> m;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		m = g_callManager.get();
+		m = g_callManager;
 	}
 	if (m) {
 		m->setMuted(muted);
 		m->sendMediaState(muted, false); // spec 024: собеседник видит «микрофон отключён»
 	}
-	parvane::GroupCallManager *g = nullptr;
+	std::shared_ptr<parvane::GroupCallManager> g;
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		g = g_groupCallManager.get();
+		g = g_groupCallManager;
 	}
 	if (g && !g->groupCallId().empty()) {
 		crl::async([g, muted] { g->sendMediaState(muted, false); });
@@ -8671,8 +8754,12 @@ void StopRingtone() {
 }
 
 void LeaveGroupCall() {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	if (g_groupCallManager) g_groupCallManager->leave();
+	std::shared_ptr<parvane::GroupCallManager> g;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g = g_groupCallManager;
+	}
+	if (g) g->leave(); // без g_sessionMutex: колбэки менеджера берут его сами
 }
 
 // Начать групповой звонок по чат-пиру (кнопка звонка в шапке группы).
@@ -8703,12 +8790,12 @@ void StartGroupCall(const QString &groupId, bool video) {
 		// Участники и название — из журнала группы v2, иначе из кэша.
 		QStringList members;
 		std::string title;
-		parvane::GroupCallManager *g = nullptr;
+		std::shared_ptr<parvane::GroupCallManager> g;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			members = g_groupMembers.value(groupId);
 			title = g_knownGroups.value(groupId).toStdString();
-			g = g_groupCallManager.get();
+			g = g_groupCallManager;
 		}
 		if (const auto s = V2Ready()) {
 			try {
@@ -8940,7 +9027,8 @@ void JoinPublicGroup(not_null<PeerData*> peer) {
 namespace Internal {
 
 [[nodiscard]] QString BugReportAddress() {
-	if (const char *v = std::getenv("PARVANE_BUG_REPORT_TO"); v && *v) {
+	// Адрес отчётов — только в dev-сборке (NAT-20: в релизе переменная окружения не уводит журнал на чужой адрес)
+	if (const char *v = ParvaneDevEnv("PARVANE_BUG_REPORT_TO"); v && *v) {
 		return QString::fromUtf8(v);
 	}
 	return u"bugs@"_q + StateDomain();

@@ -7,6 +7,7 @@
 
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_health_widgets.h"
+#include "parvane/parvane_mascot.h"
 #include "parvane/parvane_sections_data.h"
 #include "parvane/parvane_sections_host.h"
 
@@ -1270,6 +1271,13 @@ public:
 		});
 		_scroll = Ui::CreateChild<Ui::ScrollArea>(_island);
 		_content = _scroll->setOwnedWidget(object_ptr<Content>(_scroll, controller)).data();
+		// web: «Здоровье» — вид «Плана», пока нет ни данных, ни сохранённой копии — `<Loading />`
+		_loading = Ui::CreateChild<Mascot>(_island);
+		Sections::PlannerValue() | rpl::on_next([=](std::shared_ptr<const Sections::PlannerView> view) {
+			const auto hasContent = view && (view->isLoaded || view->isCached);
+			_scroll->setVisible(hasContent);
+			_loading->setVisible(!hasContent);
+		}, lifetime());
 		sizeValue() | rpl::on_next([=](QSize size) {
 			// `.root`: отступы 0.5rem сверху, справа и снизу
 			const auto margin = Rem(0.5);
@@ -1283,6 +1291,7 @@ public:
 				inner.width(),
 				std::max(inner.height() - _header->height(), 0));
 			_content->resizeToWidth(inner.width());
+			_loading->setGeometry(_scroll->geometry());
 		}, lifetime());
 	}
 
@@ -1291,6 +1300,7 @@ private:
 	Kit::Header *_header = nullptr;
 	Ui::ScrollArea *_scroll = nullptr;
 	Content *_content = nullptr;
+	Mascot *_loading = nullptr;
 
 };
 

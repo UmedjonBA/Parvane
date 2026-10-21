@@ -6,6 +6,7 @@
 #include "parvane/parvane_cloud_internal.h"
 
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_mascot.h"
 #include "parvane/parvane_space.h"
 
 #include "boxes/peer_list_box.h"
@@ -890,8 +891,14 @@ namespace {
 // Место просмотра `.previewArt`: заглушка с типом файла, «загрузка», картинка либо текст
 class PreviewArt final : public Ui::RpWidget {
 public:
-	explicit PreviewArt(QWidget *parent) : RpWidget(parent) {
+	explicit PreviewArt(QWidget *parent)
+	: RpWidget(parent)
+	, _loading(Ui::CreateChild<Mascot>(this)) {
 		RepaintOnTones(this);
+		// web `CloudPreview`: `<Loading />`, пока файл не скачан
+		sizeValue() | rpl::on_next([=](QSize size) {
+			_loading->setGeometry(QRect(QPoint(), size));
+		}, lifetime());
 	}
 
 	void setStub(const QString &type, const QString &icon, const QString &text) {
@@ -941,10 +948,7 @@ protected:
 		p.fillRect(rect(), ToneColor(Tone::Raised));
 		switch (_mode) {
 		case Mode::Loading: {
-			const auto font = Font(14);
-			p.setFont(font->f);
-			p.setPen(ToneColor(Tone::Muted));
-			p.drawText(rect(), Qt::AlignCenter, QString::fromUtf8("…"));
+			// Маскот — дочерний виджет поверх фона
 		} break;
 		case Mode::Image: {
 			const auto ratio = _image.devicePixelRatio();
@@ -1009,10 +1013,12 @@ private:
 		return size();
 	}
 	void refresh() {
+		_loading->setVisible(_mode == Mode::Loading);
 		resizeToWidth(width());
 		update();
 	}
 
+	Mascot *_loading = nullptr;
 	Mode _mode = Mode::Loading;
 	QString _type;
 	QString _icon;

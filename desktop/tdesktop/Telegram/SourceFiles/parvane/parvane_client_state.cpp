@@ -1093,7 +1093,9 @@ void LoadDraftsLocal() {
 	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
 		return;
 	}
-	for (const auto &[address, d] : j.value("drafts", parvane::json::object()).items()) {
+	// items() временного объекта ссылается на уже разрушенный json (-Wdangling-reference) — держим копию
+	const auto drafts = j.value("drafts", parvane::json::object());
+	for (const auto &[address, d] : drafts.items()) {
 		g_drafts.insert(QString::fromStdString(address), DraftEntry{
 			QString::fromStdString(d.value("text", std::string())),
 			d.value("entities", parvane::json::array()),
@@ -1685,10 +1687,10 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		const auto signal = ev.contains("signal") ? ev["signal"] : parvane::json::object();
 		if (ev.value("group", false)) {
 			// Групповой звонок (T141): приглашение либо попарный сигнал mesh
-			parvane::GroupCallManager *g = nullptr;
+			std::shared_ptr<parvane::GroupCallManager> g;
 			{
 				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				g = g_groupCallManager.get();
+				g = g_groupCallManager;
 			}
 			if (g && !from.empty() && signal.is_object()) {
 				LOG(("Parvane: v2 ← %1 сигнал группового звонка (%2)").arg(
@@ -1698,10 +1700,10 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			}
 			return true;
 		}
-		parvane::CallManager *m = nullptr;
+		std::shared_ptr<parvane::CallManager> m;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
-			m = g_callManager.get();
+			m = g_callManager;
 		}
 		if (m && !from.empty() && signal.is_object()) {
 			LOG(("Parvane: v2 ← %1 сигнал звонка (%2)").arg(

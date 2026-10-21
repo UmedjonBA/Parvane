@@ -6,6 +6,7 @@
 
 #include "lang/lang_keys.h"
 #include "base/event_filter.h"
+#include "base/unique_qptr.h"
 #include "ui/painter.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/widgets/fields/input_field.h"
@@ -21,6 +22,7 @@
 #include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
 #include <QtGui/QtEvents>
+#include <QtWidgets/QToolTip>
 
 namespace Parvane {
 [[nodiscard]] bool IsRussianUi(); // parvane_client.cpp
@@ -383,6 +385,22 @@ std::optional<ExampleFilter> ExampleFilterOf(const QString &text, const std::str
 	return result;
 }
 
+// Крестик, нарисованный холстом (`.tagRemove`): невидимая кнопка над ним даёт фокус с клавиатуры, кольцо фокуса и
+// подпись для чтения с экрана (`aria-label`). Мышь проходит сквозь неё к холсту — наведение рисует холст
+class HitButton final : public Kit::Button {
+public:
+	explicit HitButton(QWidget *parent) : Button(parent) {
+		setAttribute(Qt::WA_TransparentForMouseEvents);
+	}
+
+protected:
+	void paintEvent(QPaintEvent *e) override {
+		auto p = QPainter(this);
+		paintFocusRing(p, QRectF(rect()), height() / 2.);
+	}
+
+};
+
 // Тело окна под полем ввода: распознанное, вид записи, подсказки, кнопки
 class QuickBody final : public Canvas {
 public:
@@ -393,8 +411,27 @@ public:
 
 protected:
 	int draw(QPainter *p, int width) override;
+	int resizeGetHeight(int newWidth) override;
+	bool eventHook(QEvent *e) override;
 
 private:
+	// Подсказка при наведении (`title`)
+	struct Hint {
+		QRect rect;
+		QString text;
+	};
+	// Действие крестика: подпись для чтения с экрана и нажатие
+	struct Action {
+		QRect rect;
+		QString name;
+		Fn<void()> click;
+	};
+
+	void hint(QRect rect, const QString &text);
+	void action(QRect rect, const QString &name, Fn<void()> click);
+	void syncActions();
+	void runAction(int index);
+
 	[[nodiscard]] planner::QuickContext baseContext() const;
 	[[nodiscard]] planner::QuickDraft parse(const QString &value) const;
 	void reparse();
@@ -419,6 +456,9 @@ private:
 	std::optional<ExampleFilter> _example;
 	planner::QuickDraft _draft;
 	std::optional<std::vector<planner::QuickCandidate>> _candidates;
+	std::vector<Hint> _hints;
+	std::vector<Action> _actions;
+	std::vector<base::unique_qptr<HitButton>> _buttons;
 
 };
 
@@ -454,6 +494,71 @@ QuickBody::QuickBody(QWidget *parent, QuickArgs args, Kit::Field *field, Fn<void
 	_field->submits() | rpl::on_next([=] { submit(); }, lifetime());
 	reparse();
 	buildCandidates();
+}
+
+void QuickBody::hint(QRect rect, const QString &text) {
+	_hints.push_back({ rect, text });
+}
+
+void QuickBody::action(QRect rect, const QString &name, Fn<void()> click) {
+	_actions.push_back({ rect, name, std::move(click) });
+	// Подсказка крестика — та же подпись (`title`)
+	hint(rect, name);
+}
+
+int QuickBody::resizeGetHeight(int newWidth) {
+	const auto result = Canvas::resizeGetHeight(newWidth);
+	syncActions();
+	return result;
+}
+
+// Кнопки над крестиками — по раскладке последнего замера; лишние прячутся, а не удаляются: в фокусе может быть
+// только что нажатая
+void QuickBody::syncActions() {
+	while (_buttons.size() < _actions.size()) {
+		const auto index = int(_buttons.size());
+		auto button = base::make_unique_q<HitButton>(this);
+		button->setClickedCallback([=] { runAction(index); });
+		_buttons.push_back(std::move(button));
+	}
+	for (auto i = 0; i != int(_buttons.size()); ++i) {
+		const auto &button = _buttons[i];
+		if (i < int(_actions.size())) {
+			button->setGeometry(_actions[i].rect);
+			button->setAccessibleName(_actions[i].name);
+			button->show();
+		} else {
+			button->hide();
+		}
+	}
+}
+
+void QuickBody::runAction(int index) {
+	if (index < 0 || index >= int(_actions.size())) {
+		return;
+	}
+	// Нажатие перестраивает список действий — вызывается копия
+	const auto click = _actions[index].click;
+	if (click) {
+		click();
+	}
+}
+
+bool QuickBody::eventHook(QEvent *e) {
+	if (e->type() == QEvent::ToolTip) {
+		const auto help = static_cast<QHelpEvent*>(e);
+		// Последняя добавленная — верхняя: крестик поверх чипа
+		for (auto i = int(_hints.size()) - 1; i >= 0; --i) {
+			if (_hints[i].rect.contains(help->pos())) {
+				QToolTip::showText(help->globalPos(), _hints[i].text, this, _hints[i].rect);
+				return true;
+			}
+		}
+		QToolTip::hideText();
+		e->ignore();
+		return true;
+	}
+	return Canvas::eventHook(e);
 }
 
 planner::QuickContext QuickBody::baseContext() const {
@@ -638,6 +743,8 @@ int QuickBody::draw(QPainter *p, int width) {
 	const auto hasText = !_text.trimmed().isEmpty();
 	const auto gap = Kit::Rem(0.875);
 	const auto muted = ToneColor(Tone::Muted);
+	_hints.clear();
+	_actions.clear();
 	auto y = Kit::Rem(0.25);
 
 	// ── распознанное (`.quickPreview`) ──
@@ -678,6 +785,10 @@ int QuickBody::draw(QPainter *p, int width) {
 			const auto chipWidth = padX + iconSize + font->width(label) + altArrow + dot + close + padX
 				- (removable ? Kit::Rem(0.25) : 0);
 			const auto rect = flowRect(chipWidth, Kit::Px(18) + 2 * Kit::Rem(0.25));
+			// Значение из словаря правок (`title` чипа)
+			if (learned) {
+				hint(rect, tr::lng_parvane_planner_quick_learned(tr::now));
+			}
 			auto cx = rect.x() + padX;
 			if (p) {
 				p->setPen(Qt::NoPen);
@@ -700,6 +811,7 @@ int QuickBody::draw(QPainter *p, int width) {
 					_altField = (_altField == field) ? std::nullopt : std::optional<std::string>(field);
 					refresh();
 				});
+				hint(toggle, tr::lng_parvane_planner_quick_alternatives(tr::now));
 			}
 			cx += labelWidth + altArrow;
 			if (learned) {
@@ -717,6 +829,9 @@ int QuickBody::draw(QPainter *p, int width) {
 						closeRect.y(), closeRect.width());
 				}
 				area(closeRect.marginsAdded({ 3, 3, 3, 3 }), [=] { skipField(field); });
+				action(closeRect.marginsAdded({ 3, 3, 3, 3 }),
+					tr::lng_parvane_planner_quick_remove(tr::now, lt_value, label),
+					[=] { skipField(field); });
 			}
 		};
 		const auto isKindLearned = Learned(draft, "kind");
@@ -780,6 +895,13 @@ int QuickBody::draw(QPainter *p, int width) {
 							closeRect.y(), closeRect.width());
 					}
 					area(closeRect.marginsAdded({ 3, 3, 3, 3 }), [=] { skipField("description"); });
+					action(closeRect.marginsAdded({ 3, 3, 3, 3 }), tr::lng_parvane_planner_quick_remove(
+						tr::now,
+						lt_value,
+						tr::lng_parvane_planner_field_description(tr::now)), [=] { skipField("description"); });
+					// При наведении — что сделает крестик (web `title`)
+					hint(closeRect.marginsAdded({ 3, 3, 3, 3 }),
+						tr::lng_parvane_planner_quick_description_to_name(tr::now));
 				}
 				y += height + Kit::Rem(0.25);
 			};
@@ -897,6 +1019,10 @@ int QuickBody::draw(QPainter *p, int width) {
 						closeRect.width());
 				}
 				area(closeRect.marginsAdded({ 3, 3, 3, 3 }), [=, line = item.text] { forget(line); });
+				action(closeRect.marginsAdded({ 3, 3, 3, 3 }), tr::lng_parvane_planner_quick_forget(
+					tr::now,
+					lt_value,
+					text), [=, line = item.text] { forget(line); });
 			}
 			x += itemWidth + chipGap;
 		}

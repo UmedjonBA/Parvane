@@ -5,6 +5,7 @@
 // «Корзина»), занятое место, перетаскивание файлов, короткое уведомление.
 #include "parvane/parvane_cloud.h"
 #include "parvane/parvane_cloud_internal.h"
+#include "parvane/parvane_mascot.h"
 
 #include "parvane/parvane_sections_host.h"
 #include "parvane/parvane_space.h"
@@ -1173,9 +1174,8 @@ void CloudScreen::rebuild() {
 	}
 
 	if (!IsLoaded() && !blocked) {
-		auto st = Label::Muted();
-		st.align = style::al_center;
-		block(object_ptr<Label>(_list, QString::fromUtf8("…"), st), 0);
+		// web `<Loading />`: маскот с полями, как у пустого состояния
+		block(object_ptr<Mascot>(_list, Mascot::Side() + 2 * Rem(2.5)), 0);
 	}
 
 	auto hasRows = false;

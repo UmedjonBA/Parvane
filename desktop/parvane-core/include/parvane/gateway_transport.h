@@ -135,7 +135,8 @@ protected:
     void abortPending(const std::string &reason);
     std::string nextId();
 
-    int fd_ = -1;
+    // Атомарен: connected() и пишущие потоки читают его без замка; закрытие сокета — под writeMu_ (NAT-07).
+    std::atomic<int> fd_{-1};
     std::atomic<bool> running_{false};
     std::thread reader_;
 

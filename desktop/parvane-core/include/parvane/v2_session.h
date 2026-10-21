@@ -210,7 +210,7 @@ public:
     void persistEngine();
     // Сведённый снимок журнала личного состояния (planner_container, cloud_containers); null — журнала нет.
     json stateSnapshot();
-    [[nodiscard]] const std::string &serverDomain() const { return domain_; }
+    [[nodiscard]] std::string serverDomain() const { return domainNow(); }
     // Журнал устройств собеседника — перечитать (участник совместной папки облака).
     void refreshPeerLog(const std::string &user);
     // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение
@@ -242,8 +242,10 @@ public:
     bool followOwnRename(const std::string &engineSelf);
     // Группы, где участником ещё значится свой прежний адрес, — перенести.
     void renameGroupsPending();
-    // Выход: устройство убирает себя из журнала записью своим ключом (сервер затем гасит сессию).
-    void leave();
+    // Выход: устройство убирает себя из журнала записью своим ключом (сервер затем гасит сессию; SSK не
+    // раскрывается). Сеть — не дольше timeoutMs (как web LEAVE_TIMEOUT_MS: хост стирает данные в любом случае).
+    // true — запись принята сервером; false — сессия не готова, нет связи или сервер отказал (в логе).
+    bool leave(std::int64_t timeoutMs = 15000);
     // Обычный выход своего другого устройства без смены ключей; false — устройства нет в журнале v2.
     bool signOutDevice(const std::string &deviceId);
     // Перечитать свой журнал устройств (экран «Устройства» зовёт по таймеру, как web pollOwnDevices).
@@ -478,7 +480,8 @@ private:
     std::string call(bool anon, const std::string &method, const std::string &body,
                      const std::string &dest = std::string());
     // C2-01: анонимный запрос в соединении, выбранном планировщиком движка.
-    std::string callAnon(const std::string &method, const std::string &body, const std::string &dest = std::string());
+    std::string callAnon(const std::string &method, const std::string &body, const std::string &dest = std::string(),
+                         std::int64_t timeoutMs = 15000);
     // Федерация (spec 028): домен пользователя, если он не свой ("" — свой сервер).
     [[nodiscard]] std::string destOfUser(const std::string &user) const;
     // Домен сервера группы (журнал, ожидающий ключа, иначе свой) и `dest` для её запросов.
@@ -603,7 +606,14 @@ private:
     SessionConfig cfg_;
     std::recursive_mutex engineMu_;
     std::unique_ptr<Client> client_;
-    std::unique_ptr<Connection> id_;
+    // NAT-07: соединение ID меняют только под engineMu_ (переподключение, stop) и одновременно под idMu_;
+    // вызовы без engineMu_ (uploadBlob с потока разделов, sendCallSignal) берут копию под idMu_ —
+    // соединение живёт, пока запрос не вернётся, а не разрушается у них под ногами.
+    std::shared_ptr<Connection> id_;
+    mutable std::mutex idMu_;
+    [[nodiscard]] std::shared_ptr<Connection> idConnection() const;
+    // domain_ пишется под engineMu_ и idMu_; без engineMu_ — читать этим.
+    [[nodiscard]] std::string domainNow() const;
     std::unique_ptr<AnonPlanner> planner_;
     std::map<std::uint64_t, std::unique_ptr<Connection>> anonConns_;
     std::string storageKey_;

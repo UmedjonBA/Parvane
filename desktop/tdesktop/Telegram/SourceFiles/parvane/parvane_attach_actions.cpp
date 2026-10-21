@@ -3,6 +3,7 @@
 
 #include "parvane/parvane_client_internal.h"
 #include "parvane/parvane_kit.h"
+#include "parvane/parvane_mascot.h"
 #include "parvane/parvane_sections_data.h"
 
 #include "boxes/abstract_box.h"
@@ -311,12 +312,15 @@ void ArticlePickerBox(
 		}
 		if (!shown) {
 			const auto loading = !view || view->status == Sections::notes::NotesStatus::Loading;
-			list->add(object_ptr<Ui::FlatLabel>(
-				list,
-				loading
-					? tr::lng_parvane_article_pick_loading()
-					: tr::lng_parvane_article_pick_empty(),
-				st::boxDividerLabel));
+			if (loading) {
+				// web `ArticlePickerModal`: `isLoading && <Loading />`
+				list->add(object_ptr<Mascot>(list, Mascot::Side() + 2 * Kit::Rem(1.5)));
+			} else {
+				list->add(object_ptr<Ui::FlatLabel>(
+					list,
+					tr::lng_parvane_article_pick_empty(),
+					st::boxDividerLabel));
+			}
 		}
 		list->resizeToWidth(box->width());
 	};

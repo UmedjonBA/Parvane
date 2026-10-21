@@ -135,16 +135,33 @@ int main() {
         check(s.state() == CallState::Ended, "срезанная подпись → отбой");
     }
 
-    // ── 5. У собеседника нет ключа → пропускаем, но помечаем Unverified ────────
+    // ── 5. NAT-15: неподписанный сигнал, ключа собеседника нет → отбой (не Unverified) ──
+    // Сигналы v2 проверены конвертом (authenticated) — неаутентифицированный SDP проверить нечем.
+    {
+        auto callee = SigningKey::generate();
+        auto sink = std::make_shared<Sink>();
+        auto *fake = new FakeMedia();
+        CallSession s("bob@l", "alice@l", &callee, std::unique_ptr<FakeMedia>(fake),
+                      {[sink](json j) { (*sink)(std::move(j)); },
+                       [] { return std::string(); }, nullptr});
+        s.onSignal(CallSignalIn::fromJson(inviteSignal("c1", "audio", "OFFER", "")));
+        check(s.state() == CallState::Ended, "NAT-15: нет ключа и подписи → звонок не принят (Ended)");
+        check(s.peerAuth() == PeerAuth::Failed, "NAT-15: нет ключа → Failed (не Unverified)");
+        check(sink->last("reject") != nullptr, "NAT-15: на неподписанный invite отправлен reject");
+        check(fake->remoteOffer.empty(), "NAT-15: движок не получил непроверенный offer");
+    }
+    // ── 5б. Тот же invite, проверенный конвертом v2 (authenticated) — принимается ──
     {
         auto callee = SigningKey::generate();
         auto sink = std::make_shared<Sink>();
         CallSession s("bob@l", "alice@l", &callee, std::make_unique<FakeMedia>(),
                       {[sink](json j) { (*sink)(std::move(j)); },
                        [] { return std::string(); }, nullptr});
-        s.onSignal(CallSignalIn::fromJson(inviteSignal("c1", "audio", "OFFER", "")));
-        check(s.state() == CallState::Incoming, "нет ключа собеседника → всё равно Incoming");
-        check(s.peerAuth() == PeerAuth::Unverified, "нет ключа → Unverified (не Failed)");
+        auto sig = CallSignalIn::fromJson(inviteSignal("c1", "audio", "OFFER", ""));
+        sig.authenticated = true;
+        s.onSignal(sig);
+        check(s.state() == CallState::Incoming, "invite из конверта v2 без подписи SDP → Incoming");
+        check(s.peerAuth() == PeerAuth::Verified, "invite из конверта v2 → Verified");
     }
 
     // ── 6. БЕЗОПАСНОСТЬ: невалидная подпись answer → инициатор кладёт трубку ────

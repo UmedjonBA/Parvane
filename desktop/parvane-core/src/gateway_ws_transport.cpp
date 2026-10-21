@@ -7,14 +7,20 @@
 #include <openssl/ssl.h>
 
 #include <arpa/inet.h>
+#include <cerrno>
 #include <cstring>
 #include <dirent.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <random>
 
@@ -41,6 +47,44 @@ std::string base64(const unsigned char *data, size_t len) {
     }
     return out;
 }
+
+// Ожидание сокета в потоке чтения: столько же ждёт и close() после shutdown, пока поток не заметит конец.
+constexpr int kPollMs = 200;
+// Запись кадра: дольше этого сокет не принимает данные — соединение считаем мёртвым.
+constexpr auto kWriteTimeout = std::chrono::seconds(30);
+
+// SSL_read/SSL_write пишут в сокет обычным write() (у socket BIO нет MSG_NOSIGNAL): запись в сокет,
+// закрытый собеседником или нашим же close() (shutdown) с другого потока, шлёт процессу SIGPIPE, и
+// tdesktop, который его не игнорирует, падает. На время вызова SIGPIPE этого потока блокируется, а
+// порождённый вызовом — снимается (как libpq); прочие потоки и обработчики приложения не затрагиваются.
+class SigpipeGuard {
+public:
+    SigpipeGuard() {
+        sigemptyset(&pipe_);
+        sigaddset(&pipe_, SIGPIPE);
+        blocked_ = pthread_sigmask(SIG_BLOCK, &pipe_, &old_) == 0;
+        sigset_t pending;
+        sigemptyset(&pending);
+        wasPending_ = blocked_ && sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1;
+    }
+    ~SigpipeGuard() {
+        if (!blocked_) return;
+        if (!wasPending_) {
+            const timespec zero{0, 0};
+            while (sigtimedwait(&pipe_, nullptr, &zero) == SIGPIPE) {
+            }
+        }
+        pthread_sigmask(SIG_SETMASK, &old_, nullptr);
+    }
+    SigpipeGuard(const SigpipeGuard &) = delete;
+    SigpipeGuard &operator=(const SigpipeGuard &) = delete;
+
+private:
+    sigset_t pipe_{};
+    sigset_t old_{};
+    bool blocked_ = false;
+    bool wasPending_ = false;
+};
 
 std::string sslError() {
     char buf[256];
@@ -119,6 +163,13 @@ void GatewayWsTransport::connectUrl(const std::string &url) {
     try {
         if (tls_) tlsConnect(ep.host);
         handshake(ep);
+        if (tls_) {
+            // NAT-08: дальше SSL_read потока чтения не блокируется внутри SSL (см. sslMu_)
+            const int flags = ::fcntl(fd_, F_GETFL, 0);
+            if (flags < 0 || ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+                throw GatewayError("gateway wss: неблокирующий сокет не включён");
+            }
+        }
     } catch (...) {
         if (ssl_) { SSL_free(ssl_); ssl_ = nullptr; }
         if (ctx_) { SSL_CTX_free(ctx_); ctx_ = nullptr; }
@@ -175,33 +226,92 @@ void GatewayWsTransport::tlsConnect(const std::string &host) {
     const bool verify = true;
 #endif
     SSL_CTX_set_verify(ctx_, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
+    // Неблокирующий сокет: повтор SSL_write после WANT_* — с тем же хвостом буфера, частичная запись
+    // продвигает смещение (writeRaw).
+    SSL_CTX_set_mode(ctx_, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     ssl_ = SSL_new(ctx_);
     if (!ssl_) throw GatewayError("gateway wss: SSL_new: " + sslError());
     SSL_set_tlsext_host_name(ssl_, host.c_str());
     if (verify) SSL_set1_host(ssl_, host.c_str());
     SSL_set_fd(ssl_, fd_);
-    if (SSL_connect(ssl_) != 1) {
+    int connected = 0;
+    {
+        const SigpipeGuard noSigpipe;
+        connected = SSL_connect(ssl_);
+    }
+    if (connected != 1) {
         throw GatewayError("gateway wss: TLS handshake с " + host + ": " + sslError());
     }
 }
 
+bool GatewayWsTransport::waitFd(short events, int timeoutMs) const {
+    pollfd p{};
+    p.fd = fd_;
+    p.events = events;
+    return ::poll(&p, 1, timeoutMs) > 0;
+}
+
 int GatewayWsTransport::readRaw(char *buf, int len) {
-    if (tls_) return SSL_read(ssl_, buf, len);
-    const auto n = ::recv(fd_, buf, static_cast<size_t>(len), 0);
-    return static_cast<int>(n);
+    if (!tls_) {
+        // Голый сокет: recv и send разных потоков ядро разводит само.
+        const auto n = ::recv(fd_, buf, static_cast<size_t>(len), 0);
+        if (n > 0) return static_cast<int>(n);
+        if (n < 0 && errno == EINTR) return 0;
+        return -1;
+    }
+    int n = 0;
+    int err = SSL_ERROR_NONE;
+    {
+        std::lock_guard<std::mutex> lk(sslMu_);
+        if (!ssl_) return -1;
+        const SigpipeGuard noSigpipe; // чтение тоже пишет (alert, ответ на KeyUpdate)
+        ERR_clear_error();
+        n = SSL_read(ssl_, buf, len);
+        if (n <= 0) err = SSL_get_error(ssl_, n);
+    }
+    if (n > 0) return n;
+    if (err == SSL_ERROR_WANT_READ) {
+        (void)waitFd(POLLIN, kPollMs);
+        return 0;
+    }
+    if (err == SSL_ERROR_WANT_WRITE) {
+        (void)waitFd(POLLOUT, kPollMs);
+        return 0;
+    }
+    return -1;
 }
 
 bool GatewayWsTransport::writeRaw(const std::string &data) {
+    const auto deadline = std::chrono::steady_clock::now() + kWriteTimeout;
     size_t off = 0;
     while (off < data.size()) {
-        int n;
-        if (tls_) {
-            n = SSL_write(ssl_, data.data() + off, static_cast<int>(data.size() - off));
-        } else {
-            n = static_cast<int>(::send(fd_, data.data() + off, data.size() - off, MSG_NOSIGNAL));
+        if (!tls_) {
+            const auto n = ::send(fd_, data.data() + off, data.size() - off, MSG_NOSIGNAL);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) return false;
+            off += static_cast<size_t>(n);
+            continue;
         }
-        if (n <= 0) return false;
-        off += static_cast<size_t>(n);
+        int n = 0;
+        int err = SSL_ERROR_NONE;
+        {
+            std::lock_guard<std::mutex> lk(sslMu_);
+            if (!ssl_) return false;
+            const SigpipeGuard noSigpipe;
+            ERR_clear_error();
+            n = SSL_write(ssl_, data.data() + off, static_cast<int>(data.size() - off));
+            if (n <= 0) err = SSL_get_error(ssl_, n);
+        }
+        if (n > 0) {
+            off += static_cast<size_t>(n);
+            continue;
+        }
+        if ((err != SSL_ERROR_WANT_WRITE && err != SSL_ERROR_WANT_READ)
+            || std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        // Замок отпущен: поток чтения тем временем разбирает входящее (в т.ч. то, чего ждёт WANT_READ)
+        (void)waitFd(err == SSL_ERROR_WANT_WRITE ? POLLOUT : POLLIN, 100);
     }
     return true;
 }
@@ -228,8 +338,10 @@ void GatewayWsTransport::handshake(const Endpoint &ep) {
     std::string acc;
     char buf[4096];
     while (acc.find("\r\n\r\n") == std::string::npos) {
+        // Сокет здесь ещё блокирующий: 0 (повтор) — только прерванный вызов
         const int n = readRaw(buf, sizeof(buf));
-        if (n <= 0) throw GatewayError("gateway ws: обрыв на handshake");
+        if (n == 0) continue;
+        if (n < 0) throw GatewayError("gateway ws: обрыв на handshake");
         acc.append(buf, static_cast<size_t>(n));
         if (acc.size() > 65536) throw GatewayError("gateway ws: слишком длинный ответ handshake");
     }
@@ -295,7 +407,8 @@ void GatewayWsTransport::readerLoop() {
     char buf[16384];
     while (running_) {
         const int n = readRaw(buf, sizeof(buf));
-        if (n <= 0) break;
+        if (n < 0) break;
+        if (n == 0) continue; // данных пока нет — проверить running_ и ждать дальше
         acc.append(buf, static_cast<size_t>(n));
         for (;;) {
             if (acc.size() < 2) break;
@@ -345,10 +458,15 @@ void GatewayWsTransport::readerLoop() {
                 if (opcode != 0x0) messageOpcode = opcode;
                 message += payload;
                 if (fin) {
-                    if (messageOpcode == 0x2 && binaryHandler_) {
-                        binaryHandler_(std::move(message));
-                    } else {
-                        dispatch(message);
+                    // NAT-14: исключение обработчика (кадр сервера с полем не того типа, сбой выше по
+                    // стеку) не уходит из потока чтения — иначе std::terminate роняет клиент.
+                    try {
+                        if (messageOpcode == 0x2 && binaryHandler_) {
+                            binaryHandler_(std::move(message));
+                        } else {
+                            dispatch(message);
+                        }
+                    } catch (...) {
                     }
                     message.clear();
                 }
@@ -357,7 +475,12 @@ void GatewayWsTransport::readerLoop() {
     }
     running_ = false;
     abortPending("соединение с gateway потеряно"); // ждущие request не висят до таймаута
-    if (closedHandler_) closedHandler_();
+    if (closedHandler_) {
+        try {
+            closedHandler_();
+        } catch (...) {
+        }
+    }
 }
 
 void GatewayWsTransport::close() {
@@ -366,10 +489,16 @@ void GatewayWsTransport::close() {
     running_ = false;
     ::shutdown(fd_, SHUT_RDWR);
     if (reader_.joinable()) reader_.join();
-    if (ssl_) { SSL_free(ssl_); ssl_ = nullptr; }
-    if (ctx_) { SSL_CTX_free(ctx_); ctx_ = nullptr; }
-    ::close(fd_);
-    fd_ = -1;
+    {
+        // NAT-07: пишущий поток может стоять в writeRaw — освобождаем SSL и сокет только после него
+        // (после shutdown его запись завершается ошибкой сразу).
+        std::lock_guard<std::mutex> wl(writeMu_);
+        std::lock_guard<std::mutex> sl(sslMu_);
+        if (ssl_) { SSL_free(ssl_); ssl_ = nullptr; }
+        if (ctx_) { SSL_CTX_free(ctx_); ctx_ = nullptr; }
+        ::close(fd_);
+        fd_ = -1;
+    }
     abortPending("соединение с gateway закрыто");
 }
 

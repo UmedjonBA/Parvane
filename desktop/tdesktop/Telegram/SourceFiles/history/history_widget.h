@@ -812,6 +812,7 @@ private:
 
 	object_ptr<HistoryView::TopBarWidget> _topBar;
 	object_ptr<Ui::ContinuousScroll> _scroll;
+	object_ptr<Ui::RpWidget> _firstLoadMascot = { nullptr }; // Parvane (spec 030)
 	QPointer<HistoryInner> _list;
 	History *_migrated = nullptr;
 	History *_history = nullptr;

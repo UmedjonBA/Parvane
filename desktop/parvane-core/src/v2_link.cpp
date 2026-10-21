@@ -21,42 +21,54 @@ namespace {
 constexpr std::size_t kMaxFrame = 4194304;
 
 // ── WebSocket (двоичный режим GatewayWsTransport) ──────────────────────────
+// NAT-07: close() зовут с другого потока, пока send() ещё пишет (остановка сессии, сброс соединения
+// управления). Транспорт — под shared_ptr: пишущий держит свою ссылку, и объект живёт, пока запись
+// не вернётся (close() транспорта дождётся её на writeMu_); прежде close() разрушал его под ногами.
 class WsFrameIo final : public FrameIo {
 public:
     explicit WsFrameIo(std::string url) : url_(std::move(url)) {}
     ~WsFrameIo() override { close(); }
 
     void open(FrameHandler onFrame, ClosedHandler onClosed) override {
-        ws_ = std::make_unique<GatewayWsTransport>();
-        ws_->setBinaryHandler(std::move(onFrame));
-        ws_->setClosedHandler(std::move(onClosed));
+        auto ws = std::make_shared<GatewayWsTransport>();
+        ws->setBinaryHandler(std::move(onFrame));
+        ws->setClosedHandler(std::move(onClosed));
         try {
-            ws_->connectUrl(url_);
+            ws->connectUrl(url_);
         } catch (const std::exception &e) {
-            ws_.reset();
             throw V2Error(std::string("ERROR_CODE_UNAVAILABLE: ") + e.what());
         }
+        std::lock_guard<std::mutex> lk(mu_);
+        ws_ = std::move(ws);
     }
 
     void send(const std::string &frame) override {
-        if (!ws_) throw V2Error("ERROR_CODE_UNAVAILABLE");
+        std::shared_ptr<GatewayWsTransport> ws;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            ws = ws_;
+        }
+        if (!ws) throw V2Error("ERROR_CODE_UNAVAILABLE");
         try {
-            ws_->sendBinary(frame);
+            ws->sendBinary(frame);
         } catch (const std::exception &) {
             throw V2Error("ERROR_CODE_UNAVAILABLE");
         }
     }
 
     void close() override {
-        if (ws_) {
-            ws_->close();
-            ws_.reset();
+        std::shared_ptr<GatewayWsTransport> ws;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            ws = std::move(ws_);
         }
+        if (ws) ws->close();
     }
 
 private:
     std::string url_;
-    std::unique_ptr<GatewayWsTransport> ws_;
+    std::mutex mu_;
+    std::shared_ptr<GatewayWsTransport> ws_;
 };
 
 // ── TCP: преамбула PVN2, кадры с varint-длиной ─────────────────────────────
@@ -119,6 +131,9 @@ public:
         running_ = false;
         ::shutdown(fd_, SHUT_RDWR);
         if (reader_.joinable()) reader_.join();
+        // NAT-07: пишущий поток мог проверить fd_ и стоять в send() — номер сокета освобождается после
+        // него, иначе он достаётся новому соединению и кадр уходит в чужой канал.
+        std::lock_guard<std::mutex> lk(writeMu_);
         ::close(fd_);
         fd_ = -1;
     }
@@ -166,17 +181,24 @@ private:
                 if (acc.size() < pre + len) break;
                 std::string frame = acc.substr(pre, static_cast<std::size_t>(len));
                 acc.erase(0, pre + static_cast<std::size_t>(len));
-                if (onFrame_) onFrame_(std::move(frame));
+                // NAT-14: исключение обработчика не уходит из потока чтения (std::terminate)
+                try {
+                    if (onFrame_) onFrame_(std::move(frame));
+                } catch (...) {
+                }
             }
             if (bad) break;
         }
         running_ = false;
-        if (onClosed_) onClosed_();
+        try {
+            if (onClosed_) onClosed_();
+        } catch (...) {
+        }
     }
 
     std::string host_;
     int port_ = 0;
-    int fd_ = -1;
+    std::atomic<int> fd_{-1};
     std::atomic<bool> running_{false};
     std::thread reader_;
     std::mutex writeMu_;

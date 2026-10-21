@@ -198,8 +198,10 @@ extern std::mutex g_sessionMutex;
 extern QString g_token;
 extern QString g_selfAddress;
 extern std::shared_ptr<parvane::v2::Control> g_control;
-extern std::unique_ptr<parvane::CallManager> g_callManager;
-extern std::unique_ptr<parvane::GroupCallManager> g_groupCallManager;
+// NAT-07: shared_ptr — поток, взявший менеджер под g_sessionMutex, держит его, даже если новый
+// StartSession (смена ника, повторный вход) уже поставил другой.
+extern std::shared_ptr<parvane::CallManager> g_callManager;
+extern std::shared_ptr<parvane::GroupCallManager> g_groupCallManager;
 extern QHash<QString, QString> g_knownGroups;
 extern QHash<QString, QSet<quint64>> g_personalChannelUsers;
 extern QHash<quint64, QString> g_chatIdToGroupId;

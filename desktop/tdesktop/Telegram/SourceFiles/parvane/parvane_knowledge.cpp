@@ -5,6 +5,7 @@
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_knowledge_common.h"
 #include "parvane/parvane_knowledge_list.h"
+#include "parvane/parvane_mascot.h"
 #include "parvane/parvane_note_folders.h"
 #include "parvane/parvane_note_links.h"
 #include "parvane/parvane_note_view.h"
@@ -347,6 +348,7 @@ private:
 	Kit::Field *_search = nullptr;
 	NoticeBar *_noticeBar = nullptr;
 	ContentArea *_content = nullptr;
+	Mascot *_loading = nullptr; // web `status !== 'ready' ? <Loading />`
 	Ui::ScrollArea *_listScroll = nullptr;
 	KnowledgeList *_list = nullptr;
 	std::string _listKey;
@@ -408,6 +410,7 @@ KnowledgeScreen::KnowledgeScreen(QWidget *parent, not_null<Window::SessionContro
 	_noticeBar = Ui::CreateChild<NoticeBar>(_page);
 	_noticeBar->hide();
 	_content = Ui::CreateChild<ContentArea>(_page);
+	_loading = Ui::CreateChild<Mascot>(_content);
 
 	// Список и заметка
 	_listScroll = Ui::CreateChild<Ui::ScrollArea>(_content);
@@ -1226,6 +1229,13 @@ void KnowledgeScreen::relayout() {
 	const auto cw = _content->width();
 	const auto ch = _content->height();
 
+	// Заметки ещё не готовы — маскот на всё поле вместо любого вида
+	const auto isLoading = (_notes->status != notes::NotesStatus::Ready);
+	_loading->setVisible(isLoading);
+	if (isLoading) {
+		_loading->setGeometry(0, 0, cw, ch);
+		_loading->raise();
+	}
 	const auto isNotes = (_view == View::Notes) && _notes->status == notes::NotesStatus::Ready;
 	const auto note = openNote();
 	const auto isNoteShown = isNotes && note;

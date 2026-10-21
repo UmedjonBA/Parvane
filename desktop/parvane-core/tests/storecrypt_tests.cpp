@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+
+#include <unistd.h>
 
 static int g_fail = 0;
 static void check(bool c, const char *msg) {
@@ -159,6 +162,92 @@ int main() {
         const auto whole = (base / "session.txt").string();
         check(sc::writeFile(whole, "token") && sc::migrateFile(whole) == 0 && sc::readFile(whole) == "token", "обычный файл: без изменений");
         std::filesystem::remove_all(base);
+    }
+
+    // NAT-13: обязательное шифрование — без ключа хелперы открытый текст не пишут
+    {
+        namespace sc = parvane::storecrypt;
+        const auto base = std::filesystem::temp_directory_path() / ("pv-sc-required-" + std::to_string(::getpid()));
+        std::filesystem::remove_all(base);
+        std::filesystem::create_directories(base);
+        const auto file = (base / "parvane-session.txt").string();
+        const auto journal = (base / "parvane-history.jsonl").string();
+        sc::setKey("");
+        sc::setRequired(true);
+        check(sc::required(), "NAT-13: обязательное шифрование включено");
+        check(!sc::writeFile(file, "alice@local jwt-secret"), "NAT-13: writeFile без ключа — отказ");
+        check(!std::filesystem::exists(file), "NAT-13: writeFile без ключа — файла нет");
+        check(!sc::appendLine(journal, "{\"text\":\"secret\"}"), "NAT-13: appendLine без ключа — отказ");
+        check(!std::filesystem::exists(journal), "NAT-13: appendLine без ключа — файла нет");
+        check(!sc::writeLines(journal, {"one", "two"}), "NAT-13: writeLines без ключа — отказ");
+        check(!std::filesystem::exists(journal), "NAT-13: writeLines без ключа — файла нет");
+        // Старый открытый файл без ключа не трогается (миграция — только с ключом)
+        {
+            std::ofstream f(file, std::ios::binary);
+            f << "legacy-plain";
+        }
+        check(sc::migrateFile(file) == 0 && sc::readFile(file) == "legacy-plain", "NAT-13: без ключа миграция не пишет");
+        // С ключом — пишет запечатанным и перешифровывает старое
+        sc::setKey(sc::deriveKey("required-secret"));
+        check(sc::migrateFile(file) == 1, "NAT-13: с ключом старый открытый файл перешифрован");
+        check(sc::writeFile(file, "alice@local jwt-secret") && sc::readFile(file) == "alice@local jwt-secret",
+              "NAT-13: с ключом writeFile пишет и читает");
+        {
+            std::ifstream f(file, std::ios::binary);
+            const std::string raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            check(sc::isSealed(raw) && raw.find("jwt-secret") == std::string::npos, "NAT-13: на диске — шифртекст");
+        }
+        check(sc::appendLine(journal, "line-1") && sc::readLines(journal).size() == 1, "NAT-13: с ключом appendLine пишет");
+        sc::setRequired(false);
+        sc::setKey("");
+        check(sc::writeFile(file, "plain-again") && sc::readFile(file) == "plain-again",
+              "без обязательного шифрования — прежнее поведение (plain)");
+        std::filesystem::remove_all(base);
+    }
+
+    // NAT-16: стирание данных Parvane при выходе — только parvane-*, кроме настроек устройства
+    {
+        namespace sc = parvane::storecrypt;
+        namespace fs = std::filesystem;
+        const auto base = fs::temp_directory_path() / ("pv-sc-wipe-" + std::to_string(::getpid()));
+        const auto tdata = base / "tdata";
+        const auto outside = base / "outside";
+        fs::remove_all(base);
+        fs::create_directories(tdata / "parvane-v2-alice@local");
+        fs::create_directories(tdata / "parvane-media" / "sub");
+        fs::create_directories(tdata / "D877F783D5D3EF8C");
+        fs::create_directories(outside);
+        const auto put = [](const fs::path &p, const std::string &data) {
+            std::ofstream f(p, std::ios::binary);
+            f << data;
+        };
+        put(tdata / "parvane-v2-alice@local" / "state", "engine");
+        put(tdata / "parvane-v2-alice@local" / "device-id", "dev-1");
+        put(tdata / "parvane-media" / "sub" / "photo.jpg", "jpeg");
+        put(tdata / "parvane-history-alice@local.jsonl", "line");
+        put(tdata / "parvane-session.txt", "jwt");
+        put(tdata / "parvane-background", "pattern");
+        put(tdata / "parvane-scheme", "dark");
+        put(tdata / "key_datas", "tdesktop");
+        put(tdata / "settingss", "tdesktop");
+        put(tdata / "D877F783D5D3EF8C" / "maps", "tdesktop");
+        put(outside / "keep.txt", "not ours");
+        fs::create_directory_symlink(outside, tdata / "parvane-link");
+        std::vector<std::string> failed;
+        const auto n = sc::removePrefixed(tdata.string(), "parvane-", {"parvane-background", "parvane-scheme"}, &failed);
+        check(n == 5 && failed.empty(), "NAT-16: стёрты 5 записей parvane-* (каталоги целиком, ссылка)");
+        check(!fs::exists(tdata / "parvane-v2-alice@local") && !fs::exists(tdata / "parvane-media")
+                  && !fs::exists(tdata / "parvane-history-alice@local.jsonl") && !fs::exists(tdata / "parvane-session.txt")
+                  && !fs::exists(fs::symlink_status(tdata / "parvane-link")),
+              "NAT-16: состояние движка, медиа, журнал, учётные данные стёрты");
+        check(fs::exists(tdata / "parvane-background") && fs::exists(tdata / "parvane-scheme"),
+              "NAT-16: настройки устройства оставлены");
+        check(fs::exists(tdata / "key_datas") && fs::exists(tdata / "settingss") && fs::exists(tdata / "D877F783D5D3EF8C" / "maps"),
+              "NAT-16: файлы tdesktop не тронуты");
+        check(fs::exists(outside / "keep.txt"), "NAT-16: цель символьной ссылки не тронута");
+        check(sc::removePrefixed(tdata.string(), "", {}) == 0 && fs::exists(tdata / "key_datas"),
+              "NAT-16: пустой префикс ничего не стирает");
+        fs::remove_all(base);
     }
 
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");

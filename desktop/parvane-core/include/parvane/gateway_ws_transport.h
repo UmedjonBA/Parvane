@@ -60,11 +60,18 @@ protected:
 private:
     void tlsConnect(const std::string &host);
     void handshake(const Endpoint &ep);
-    // Сырые чтение/запись поверх TLS или голого сокета.
+    // Сырые чтение/запись поверх TLS или голого сокета. readRaw: > 0 — байты, 0 — данных пока нет
+    // (повторить), < 0 — соединение закрыто или ошибка.
     int readRaw(char *buf, int len);
     bool writeRaw(const std::string &data); // под writeMu_
     void sendFrame(unsigned char opcode, const std::string &payload); // под writeMu_
+    // Дождаться готовности сокета (poll, без замков); false — таймаут.
+    bool waitFd(short events, int timeoutMs) const;
 
+    // NAT-08: объект SSL не допускает одновременных SSL_read и SSL_write из разных потоков. После
+    // рукопожатия сокет TLS неблокирующий, и каждый вызов SSL_* идёт под sslMu_; ожидание данных
+    // (poll) — без замка, поэтому поток чтения не держит пишущих. Порядок замков: writeMu_ → sslMu_.
+    std::mutex sslMu_;
     SSL_CTX *ctx_ = nullptr;
     SSL *ssl_ = nullptr;
     bool tls_ = false;

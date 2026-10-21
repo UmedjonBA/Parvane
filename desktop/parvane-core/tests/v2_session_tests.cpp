@@ -1449,6 +1449,99 @@ int main() {
         std::printf("  skip  M31: федерация (нет PARVANE_V2_FED_TCP — шард federation не собран)\n");
     }
 
+    // NAT-07: stop() сессии, пока поток разделов грузит блоб (uploadBlob идёт без мьютекса движка) —
+    // соединение ID не разрушается под запросом: загрузка завершается ошибкой, не падением.
+    {
+        std::printf("-- NAT-07: stop() во время uploadBlob с другого потока\n");
+        Peer dora;
+        dora.user = "v2dna" + suffix + "@local";
+        try {
+            dora.token = issue(tcp, dora.user, "dna-" + suffix);
+        } catch (const std::exception &e) {
+            check(false, "NAT-07: вход dora", e.what());
+        }
+        dora.start(tcp, dir + "/dora");
+        const bool ready = dora.s->waitReady(30000);
+        check(ready, "NAT-07: сессия dora готова");
+        if (ready) {
+            std::string blob(64 * 1024, '\0');
+            for (std::size_t i = 0; i < blob.size(); ++i) blob[i] = static_cast<char>((i * 13 + 5) & 0xFF);
+            const std::string capability(32, '\x3C');
+            std::atomic<int> uploaded{0};
+            std::atomic<int> failed{0};
+            std::atomic<bool> stopLoop{false};
+            std::vector<std::thread> uploaders;
+            for (int w = 0; w < 2; ++w) {
+                uploaders.emplace_back([&] {
+                    while (!stopLoop) {
+                        try {
+                            if (!dora.s->uploadBlob(blob, capability, 2048).empty()) ++uploaded;
+                        } catch (const std::exception &) {
+                            ++failed;
+                            if (!dora.s->isReady()) break;
+                        }
+                    }
+                });
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(700));
+            dora.s->stop(); // прежде разрушал соединение ID под загрузкой (use-after-free)
+            stopLoop = true;
+            for (auto &t : uploaders) t.join();
+            check(true, "NAT-07: stop() во время загрузки — без падения",
+                  std::to_string(uploaded.load()) + " загружено, " + std::to_string(failed.load()) + " прервано");
+            bool after = false;
+            try {
+                (void)dora.s->uploadBlob(blob, capability, 2048);
+            } catch (const std::exception &) {
+                after = true;
+            }
+            check(after, "NAT-07: после stop() загрузка отвечает ошибкой, а не обращается к закрытому соединению");
+        }
+    }
+
+    // NAT-16 (как web T197): выход с устройства — запись журнала своим ключом с ограниченным сроком;
+    // собеседник после перечитывания журнала этого устройства больше не видит.
+    {
+        std::printf("-- NAT-16: выход устройства из журнала (leave с лимитом)\n");
+        Peer lea;
+        lea.user = "v2dle" + suffix + "@local";
+        const auto leaDevice = "dle-" + suffix;
+        try {
+            lea.token = issue(tcp, lea.user, leaDevice);
+        } catch (const std::exception &e) {
+            check(false, "NAT-16: вход lea", e.what());
+        }
+        lea.start(tcp, dir + "/lea");
+        const bool ready = lea.s->waitReady(30000);
+        check(ready, "NAT-16: сессия lea готова");
+        if (ready) {
+            const auto devicesOf = [&] {
+                bob.s->refreshPeerLog(lea.user);
+                const auto log = bob.s->engineCall("logDevices", json{{"user", lea.user}});
+                return log.value("v2", json::array());
+            };
+            const auto before = devicesOf();
+            check(std::find(before.begin(), before.end(), json(leaDevice)) != before.end(),
+                  "NAT-16: до выхода устройство lea в журнале", before.dump());
+            const auto started = std::chrono::steady_clock::now();
+            const bool left = lea.s->leave(5000);
+            const auto tookMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started).count();
+            check(left, "NAT-16: leave(5000) — запись выхода принята");
+            check(tookMs < 6500, "NAT-16: leave уложился в лимит", std::to_string(tookMs) + " мс");
+            json after = before;
+            for (int i = 0; i < 10; ++i) {
+                after = devicesOf();
+                if (std::find(after.begin(), after.end(), json(leaDevice)) == after.end()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            check(std::find(after.begin(), after.end(), json(leaDevice)) == after.end(),
+                  "NAT-16: после выхода собеседник устройства lea в журнале не видит", after.dump());
+            lea.s->stop();
+            check(!lea.s->leave(5000), "NAT-16: leave остановленной сессии — false сразу");
+        }
+    }
+
     alice.s->stop();
     bob.s->stop();
     std::string rm = "rm -rf '" + dir + "'";

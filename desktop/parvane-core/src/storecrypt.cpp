@@ -6,6 +6,7 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -24,6 +25,7 @@ const std::string kLinePrefix = std::string(kMagic) + ":";
 
 std::mutex g_mu;
 std::string g_key; // 32 байта или пусто
+bool g_required = false; // NAT-13: без ключа не писать открытым текстом
 
 struct CipherDel {
     void operator()(EVP_CIPHER_CTX *p) const { EVP_CIPHER_CTX_free(p); }
@@ -148,6 +150,42 @@ bool enabled() {
     return !g_key.empty();
 }
 
+void setRequired(bool value) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_required = value;
+}
+
+bool required() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_required;
+}
+
+namespace {
+
+// Запечатать для записи на диск: nullopt — писать нельзя (обязательное шифрование, а ключа нет или
+// шифр отказал). Без обязательного шифрования — прежнее поведение seal()/sealLine().
+std::optional<std::string> sealForDisk(const std::string &plain, bool line) {
+    std::string key;
+    bool mandatory = false;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        key = g_key;
+        mandatory = g_required;
+    }
+    if (key.empty()) {
+        if (mandatory) return std::nullopt;
+        return plain;
+    }
+    const auto sealed = gcmSeal(key, plain);
+    if (!sealed) {
+        if (mandatory) return std::nullopt;
+        return plain; // RAND/EVP отказали — не теряем данные, но и не врём о шифровании
+    }
+    return line ? kLinePrefix + linking::b64encode(*sealed) : std::string(kMagic) + '\0' + *sealed;
+}
+
+} // namespace
+
 std::string deriveKey(const std::string &secret) {
     const std::string input = "parvane-store-v1" + secret;
     unsigned char digest[SHA256_DIGEST_LENGTH];
@@ -228,7 +266,8 @@ std::string readFile(const std::string &path) {
 }
 
 bool writeFile(const std::string &path, const std::string &data) {
-    return rawWrite(path, seal(data));
+    const auto sealed = sealForDisk(data, /*line=*/false);
+    return sealed && rawWrite(path, *sealed);
 }
 
 // Строки файла-журнала в любом исторически возможном виде. Журналы с именем не
@@ -286,11 +325,15 @@ std::vector<std::string> readLines(const std::string &path) {
 }
 
 bool appendLine(const std::string &path, const std::string &line) {
+    const auto sealed = sealForDisk(line, /*line=*/true);
+    if (!sealed) {
+        return false;
+    }
     std::ofstream f(path, std::ios::binary | std::ios::app);
     if (!f) {
         return false;
     }
-    f << sealLine(line) << '\n';
+    f << *sealed << '\n';
     std::error_code ec;
     std::filesystem::permissions(path,
         std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
@@ -301,7 +344,11 @@ bool appendLine(const std::string &path, const std::string &line) {
 bool writeLines(const std::string &path, const std::vector<std::string> &lines) {
     std::string data;
     for (const auto &line : lines) {
-        data += sealLine(line);
+        const auto sealed = sealForDisk(line, /*line=*/true);
+        if (!sealed) {
+            return false;
+        }
+        data += *sealed;
         data += '\n';
     }
     return rawWrite(path, data);
@@ -353,7 +400,8 @@ int migrateFile(const std::string &path) {
         }
         return (anyPlain && writeLines(path, readLines(path))) ? 1 : 0;
     }
-    return rawWrite(path, seal(blob)) ? 1 : 0;
+    const auto sealed = sealForDisk(blob, /*line=*/false);
+    return (sealed && rawWrite(path, *sealed)) ? 1 : 0;
 }
 
 int migrateDir(const std::string &dir, const std::string &skipPrefix) {
@@ -380,6 +428,41 @@ int migrateDir(const std::string &dir, const std::string &skipPrefix) {
     }
     for (const auto &path : files) {
         n += migrateFile(path);
+    }
+    return n;
+}
+
+int removePrefixed(const std::string &dir, const std::string &prefix, const std::vector<std::string> &keep,
+                   std::vector<std::string> *failed) {
+    if (dir.empty() || prefix.empty()) {
+        return 0;
+    }
+    std::error_code ec;
+    std::vector<std::filesystem::path> victims;
+    for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.rfind(prefix, 0) != 0 || std::find(keep.begin(), keep.end(), name) != keep.end()) {
+            continue;
+        }
+        victims.push_back(entry.path());
+    }
+    int n = 0;
+    for (const auto &path : victims) {
+        std::error_code rc;
+        // symlink_status: ссылка удаляется сама, без перехода по ней
+        const auto st = std::filesystem::symlink_status(path, rc);
+        if (std::filesystem::is_directory(st)) {
+            std::filesystem::remove_all(path, rc);
+        } else {
+            std::filesystem::remove(path, rc);
+        }
+        std::error_code check;
+        const bool left = std::filesystem::symlink_status(path, check).type() != std::filesystem::file_type::not_found;
+        if (rc || left) {
+            if (failed) failed->push_back(path.filename().string());
+        } else {
+            ++n;
+        }
     }
     return n;
 }

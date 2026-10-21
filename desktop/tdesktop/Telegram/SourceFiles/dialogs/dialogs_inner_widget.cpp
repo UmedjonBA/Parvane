@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/dialogs_inner_widget.h"
 #include "parvane/parvane_folder_look.h" // Parvane: цвет метки папки (spec 030)
+#include "parvane/parvane_mascot.h" // Parvane: маскот вместо «Загрузка…» (spec 030)
 
 #include "dialogs/dialogs_three_state_icon.h"
 #include "dialogs/ui/chat_search_empty.h"
@@ -4288,13 +4289,17 @@ void InnerWidget::refreshEmpty() {
 	if (state == EmptyState::None) {
 		_emptyState = state;
 		_empty.destroy();
+		_emptyMascot.destroy();
 		_emptyList.destroy();
 		_emptyButton.destroy();
 		return;
 	} else if (_emptyState == state) {
 		const auto isEmptyVisible = (_state == WidgetState::Default)
 			&& !_openedFolder;
-		_empty->setVisible(isEmptyVisible);
+		_empty->setVisible(isEmptyVisible && !_emptyMascot);
+		if (_emptyMascot) {
+			_emptyMascot->setVisible(isEmptyVisible);
+		}
 		if (_emptyList) {
 			_emptyList->setVisible(isEmptyVisible);
 			_empty->setVisible(false);
@@ -4343,6 +4348,14 @@ void InnerWidget::refreshEmpty() {
 		}
 	});
 	_empty->setVisible(_state == WidgetState::Default);
+
+	// Parvane (spec 030): список ещё грузится — вместо текста маскот (web ChatList `<Loading />`)
+	_emptyMascot.destroy();
+	if (state == EmptyState::Loading) {
+		_emptyMascot = object_ptr<Parvane::Mascot>(this);
+		_emptyMascot->setVisible(_state == WidgetState::Default);
+		_empty->hide();
+	}
 
 	if (state == EmptyState::NoContacts) {
 		const auto isListVisible = (_state == WidgetState::Default)
@@ -4408,6 +4421,9 @@ void InnerWidget::resizeEmpty() {
 		const auto skip = st::dialogsEmptySkip;
 		_empty->resizeToWidth(width() - 2 * skip);
 		_empty->move(skip, (st::dialogsEmptyHeight - _empty->height()) / 2);
+	}
+	if (_emptyMascot) {
+		_emptyMascot->setGeometry(0, 0, width(), st::dialogsEmptyHeight);
 	}
 	if (_emptyList) {
 		_emptyList->resizeToWidth(width());

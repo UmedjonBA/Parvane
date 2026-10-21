@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <regex>
+#include <utility>
 
 namespace parvane::v2 {
 
@@ -143,6 +144,16 @@ Session::Session(SessionConfig cfg)
 
 Session::~Session() { stop(); }
 
+std::shared_ptr<Connection> Session::idConnection() const {
+    std::lock_guard<std::mutex> lk(idMu_);
+    return id_;
+}
+
+std::string Session::domainNow() const {
+    std::lock_guard<std::mutex> lk(idMu_);
+    return domain_;
+}
+
 void Session::log(const std::string &m) const {
     if (cfg_.log) cfg_.log("v2: " + m);
 }
@@ -205,9 +216,13 @@ void Session::stop() {
     if (watchdog_) watchdog_->stop();
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     ready_ = false;
-    if (id_) id_->close();
+    std::shared_ptr<Connection> id;
+    {
+        std::lock_guard<std::mutex> idLock(idMu_);
+        id = std::move(id_);
+    }
+    if (id) id->close(); // запрос с другого потока держит свою копию и получит UNAVAILABLE
     closeAllAnon();
-    id_.reset();
     state_.reset();
     pendingAppends_.clear();
     outbox_.clear();
@@ -459,11 +474,18 @@ bool Session::connectLocked(std::string *error) {
         ready_ = false;
         closeAllAnon();
         planner_ = std::make_unique<AnonPlanner>();
-        if (id_) id_->close();
-        id_ = std::make_unique<Connection>(cfg_.gatewayUrl);
+        std::shared_ptr<Connection> previous;
+        {
+            std::lock_guard<std::mutex> idLock(idMu_);
+            previous = std::exchange(id_, std::make_shared<Connection>(cfg_.gatewayUrl));
+        }
+        if (previous) previous->close();
         const auto welcome = id_->open(kChannelIdentified, cfg_.clientVersion);
         const auto desc = verifyServerDescriptor(welcome.serverDescriptor);
-        domain_ = desc.value("domain", std::string());
+        {
+            std::lock_guard<std::mutex> idLock(idMu_);
+            domain_ = desc.value("domain", std::string());
+        }
         serverKey_ = hexToBytes(desc.value("serverKey", std::string()));
         const auto token = cfg_.token ? cfg_.token() : std::string();
         if (token.empty()) throw std::runtime_error("нет JWT");
@@ -679,7 +701,8 @@ void Session::closeAllAnon() {
     while (!anonConns_.empty()) closeAnon(anonConns_.begin()->first);
 }
 
-std::string Session::callAnon(const std::string &method, const std::string &body, const std::string &dest) {
+std::string Session::callAnon(const std::string &method, const std::string &body, const std::string &dest,
+                              std::int64_t timeoutMs) {
     if (!planner_) planner_ = std::make_unique<AnonPlanner>();
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                          std::chrono::system_clock::now().time_since_epoch()).count();
@@ -691,7 +714,7 @@ std::string Session::callAnon(const std::string &method, const std::string &body
         if (c) c->close();
         auto fresh = std::make_unique<Connection>(cfg_.gatewayUrl);
         try {
-            fresh->open(kChannelAnonymous, cfg_.clientVersion);
+            fresh->open(kChannelAnonymous, cfg_.clientVersion, std::min<std::int64_t>(timeoutMs, 10000));
         } catch (...) {
             anonConns_.erase(plan.conn);
             planner_->closed(plan.conn);
@@ -701,7 +724,7 @@ std::string Session::callAnon(const std::string &method, const std::string &body
         anonConns_[plan.conn] = std::move(fresh);
     }
     try {
-        auto resp = c->request(method, body, 15000, dest);
+        auto resp = c->request(method, body, timeoutMs, dest);
         if (plan.closeAfter) closeAnon(plan.conn);
         return resp;
     } catch (...) {
@@ -715,7 +738,7 @@ std::string Session::destOfUser(const std::string &user) const {
     if (at == std::string::npos) return {};
     auto d = user.substr(at + 1);
     std::transform(d.begin(), d.end(), d.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return d == domain_ || d.empty() ? std::string() : d;
+    return d == domainNow() || d.empty() ? std::string() : d;
 }
 
 std::string Session::groupDomainLocked(const std::string &hex) {
@@ -835,7 +858,7 @@ void Session::scheduleL2PeerRefresh() {
 
 std::string Session::call(bool anon, const std::string &method, const std::string &body, const std::string &destIn) {
     // Свой домен — обычный запрос (gateway обслуживает его и с dest, но без лишнего поля в кадре)
-    const auto dest = destIn == domain_ ? std::string() : destIn;
+    const auto dest = destIn == domainNow() ? std::string() : destIn;
     // Режим L2: доставка записей — тактами
     if (anon && ticker_ && l2Active_ && L2Ticker::isTicked(method)) return ticker_->submit(method, body, dest);
     // Чтения identity (журналы, бандлы, жетоны) при кратком UNAVAILABLE сервера
@@ -845,7 +868,8 @@ std::string Session::call(bool anon, const std::string &method, const std::strin
     for (int attempt = 0;; ++attempt) {
         try {
             if (anon) return callAnon(method, body, dest);
-            Connection *c = id_.get();
+            // Копия: uploadBlob зовёт без engineMu_, а переподключение и stop() меняют id_ (NAT-07)
+            const auto c = idConnection();
             if (!c || !c->isOpen()) throw V2Error("ERROR_CODE_UNAVAILABLE");
             return c->request(method, body, 15000, dest);
         } catch (const V2Error &e) {
@@ -1276,7 +1300,7 @@ bool Session::sendCallSignal(const std::string &peer, const json &signal, const 
     // Участнику группового звонка без известного ключа доступа — сперва обмен
     // ключами (T185); не вышло — прежним путём (v1-инбокс, пока v1 жив)
     if (group && !acquirePeerKey(peer)) return false;
-    const auto v2Signal = callSignalToV2(signal, groupCallId, domain_);
+    const auto v2Signal = callSignalToV2(signal, groupCallId, domainNow());
     if (!v2Signal) {
         if (group) return false;
         log("сигнал звонка по v2 не выражается — не отправлен (D-13)");
@@ -1403,7 +1427,7 @@ std::string Session::uploadBlob(const std::string &bytes, const std::string &cap
 }
 
 std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32, const std::string &domainIn) {
-    const auto domain = domainIn == domain_ ? std::string() : domainIn;
+    const auto domain = domainIn == domainNow() ? std::string() : domainIn;
     if (capability32.size() != 32) throw std::runtime_error("v2: capability");
     if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     constexpr std::uint32_t kBatch = 256;

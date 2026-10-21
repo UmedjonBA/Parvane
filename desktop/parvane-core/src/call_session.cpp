@@ -60,10 +60,11 @@ bool CallSession::authenticateSdp(const std::string &sdp, const std::string &sig
         }
     }
     if (pubs.empty()) {
-        // У собеседника нет зарегистрированного ключа — проверить нечем.
-        // Пропускаем, но помечаем как неаутентифицированный (UI покажет).
-        peerAuth_ = PeerAuth::Unverified;
-        return true;
+        // NAT-15: проверить нечем — отбой. Сигналы v2 приходят уже проверенными конвертом
+        // (sig.authenticated, сюда не попадают); неподписанный SDP без ключа собеседника прежде
+        // принимался как Unverified, и подменивший сигнал звонил от чужого имени.
+        peerAuth_ = PeerAuth::Failed;
+        return false;
     }
     const auto data = callSignedData(callId_, sdp);
     bool ok = false;

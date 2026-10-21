@@ -103,10 +103,12 @@ option(PARVANE_CORE_BUILD_PROBE "Build parvane-core tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     set(PARVANE_VECTORS ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 v2_session
-              l2_ticker reconnect_backoff queue_watchdog)
+              l2_ticker reconnect_backoff queue_watchdog transport)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
     endforeach()
+    # NAT-07/08/14: тест перехватывает SSL_read/SSL_write/SSL_free (dlsym RTLD_NEXT) и поднимает свой TLS-сервер
+    target_link_libraries(parvane_transport_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto dl pthread)
     # Живой тест сессии гоняет и разделы «План»/«Облако» поверх сессии (spec 029, T026)
     target_link_libraries(parvane_v2_session_tests PRIVATE parvane_sections)
     # Общие векторы conformance v2 (SEAL-1, GSEAL-1, приглашения) через C ABI и векторы форматов web ↔ desktop
@@ -119,7 +121,7 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     enable_testing()
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
-              reconnect_backoff queue_watchdog protocol_vectors webcompat)
+              reconnect_backoff queue_watchdog protocol_vectors webcompat transport)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

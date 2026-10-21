@@ -697,7 +697,7 @@ bool ImportKeyBackup(const QString &path, const QString &password, QString *erro
 // Воркер: сессии v2 нужен грант линковки (событие `needsLinking`) — оффер
 // публикуется, даже если история v1 на устройстве уже есть.
 void StartDeviceLinkOfferForV2() {
-	if (std::getenv("PARVANE_NO_LINK_OFFER")) {
+	if (ParvaneDevEnv("PARVANE_NO_LINK_OFFER")) {
 		return;
 	}
 	{
@@ -727,7 +727,7 @@ void StartHistoryLinking() {
 		offered = g_linkActive; // оффер уже опубликован по событию v2 `needsLinking`
 	}
 	if (!offered && V2NeedsLinking()
-		&& !std::getenv("PARVANE_NO_LINK_OFFER")) {
+		&& !ParvaneDevEnv("PARVANE_NO_LINK_OFFER")) {
 		StartHistoryLinkOffer();
 		bool active = false;
 		{

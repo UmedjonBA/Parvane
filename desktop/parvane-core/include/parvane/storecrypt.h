@@ -21,11 +21,17 @@ inline constexpr char kMagic[] = "PVSE1";
 // Установить ключ (ровно 32 байта); пустая строка — выключить. Потокобезопасно.
 void setKey(const std::string &key32);
 [[nodiscard]] bool enabled();
+// NAT-13: обязательное шифрование. Включено — файловые хелперы (writeFile, appendLine, writeLines,
+// migrate*) без ключа или при сбое шифра НЕ пишут открытый текст, а возвращают false (запись
+// не сделана). Выключено (по умолчанию: тесты, android до своего ключа) — прежнее поведение.
+// Desktop включает при старте: ключ у него есть всегда (локальный ключ tdata).
+void setRequired(bool required);
+[[nodiscard]] bool required();
 // Производная ключа хранилища из произвольного секрета ОС:
 // SHA-256("parvane-store-v1" || secret) — 32 байта.
 [[nodiscard]] std::string deriveKey(const std::string &secret);
 
-// Файл целиком. Без ключа seal возвращает plain как есть.
+// Файл целиком. Без ключа seal возвращает plain как есть (и при setRequired — хелперы ниже его не пишут).
 [[nodiscard]] std::string seal(const std::string &plain);
 // nullopt — шифртекст без ключа / порча / чужой ключ. Plain (без магии) — как есть.
 [[nodiscard]] std::optional<std::string> open(const std::string &blob);
@@ -49,5 +55,11 @@ bool writeLines(const std::string &path, const std::vector<std::string> &lines);
 // JSONL-файлы (расширение .jsonl) перешифровываются построчно.
 int migrateDir(const std::string &dir, const std::string &skipPrefix = std::string());
 int migrateFile(const std::string &path);
+
+// NAT-16: стереть в каталоге `dir` (не рекурсивно по имени) всё, чьё имя начинается с `prefix`, кроме имён из
+// `keep`: файлы, каталоги — целиком, символьные ссылки — сами ссылки (цель не трогается). Прочие имена
+// каталога не затрагиваются. Возвращает число стёртых записей; несбывшиеся — в `failed` (имена), если задан.
+int removePrefixed(const std::string &dir, const std::string &prefix, const std::vector<std::string> &keep,
+                   std::vector<std::string> *failed = nullptr);
 
 } // namespace parvane::storecrypt

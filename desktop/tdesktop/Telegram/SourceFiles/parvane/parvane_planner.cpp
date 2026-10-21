@@ -5,6 +5,7 @@
 #include "parvane/parvane_sections_host.h"
 
 #include "parvane/parvane_knowledge.h"
+#include "parvane/parvane_mascot.h"
 #include "parvane/parvane_planner_agenda.h"
 #include "parvane/parvane_planner_calendar.h"
 #include "parvane/parvane_planner_forms.h"
@@ -237,7 +238,7 @@ private:
 	WeekView *_week = nullptr;
 	DayIsland *_side = nullptr;
 	Toast *_toast = nullptr;
-	Kit::Empty *_loading = nullptr;
+	Mascot *_loading = nullptr; // web `<Loading />` — маскот, пока нет ни данных, ни сохранённой копии
 	QString _localToast;
 	QTimer _localToastTimer;
 	QTimer _midnight;
@@ -278,7 +279,7 @@ PlannerScreen::PlannerScreen(QWidget *parent, not_null<Window::SessionController
 	_todayView->setScrollTo([=](int y) {
 		_scroll->scrollToY(y + Kit::Rem(1.25));
 	});
-	_loading = Ui::CreateChild<Kit::Empty>(_holder, tr::lng_contacts_loading(tr::now));
+	_loading = Ui::CreateChild<Mascot>(_holder);
 	_month = Ui::CreateChild<MonthView>(_holder, actions);
 	_year = Ui::CreateChild<YearView>(_holder, actions);
 	_agenda = Ui::CreateChild<AgendaView>(_holder, actions);
@@ -588,6 +589,8 @@ void PlannerScreen::relayout() {
 	// Сетка недели листается сама, шапки дней стоят на месте (`.contentFlush`)
 	_week->setGeometry(content.marginsRemoved({ 0, 0, 0, Kit::Rem(0.5) }));
 	_scroll->setGeometry(content);
+	// Маскот — по центру видимой части (web `.Loading { height: 100% }`; `Holder` даёт поля 1.25rem)
+	_loading->setNaturalHeight(content.height() - 2 * Kit::Rem(1.25));
 	_holder->resizeToWidth(content.width());
 	_toast->relayout();
 }

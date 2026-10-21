@@ -313,7 +313,9 @@ private:
 		// ICE-серверы из окружения — обход NAT (иначе только host-кандидаты,
 		// localhost/LAN). PARVANE_STUN=stun:host:port[,...]; PARVANE_TURN=
 		// turn:host:port[?transport=udp] + PARVANE_TURN_USER/PARVANE_TURN_PASS.
-		if (const char *stun = std::getenv("PARVANE_STUN"); stun && *stun) {
+		// Только dev-сборка (Parvane::DevEnv, NAT-20): в релизе переменная окружения
+		// не подсовывает звонку чужой TURN — серверы только от своего сервера.
+		if (const char *stun = Parvane::DevEnv("PARVANE_STUN"); stun && *stun) {
 			std::stringstream ss(stun);
 			std::string url;
 			while (std::getline(ss, url, ',')) {
@@ -323,11 +325,11 @@ private:
 				config.servers.push_back(srv);
 			}
 		}
-		if (const char *turn = std::getenv("PARVANE_TURN"); turn && *turn) {
+		if (const char *turn = Parvane::DevEnv("PARVANE_TURN"); turn && *turn) {
 			webrtc::PeerConnectionInterface::IceServer srv;
 			srv.urls.push_back(std::string(turn));
-			if (const char *u = std::getenv("PARVANE_TURN_USER")) srv.username = u;
-			if (const char *p = std::getenv("PARVANE_TURN_PASS")) srv.password = p;
+			if (const char *u = Parvane::DevEnv("PARVANE_TURN_USER")) srv.username = u;
+			if (const char *p = Parvane::DevEnv("PARVANE_TURN_PASS")) srv.password = p;
 			config.servers.push_back(srv);
 		}
 		// Шард call: STUN/TURN с эфемерными кредами (call.ice.request, кэш).

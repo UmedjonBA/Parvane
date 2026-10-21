@@ -12,6 +12,7 @@
 #include "parvane/v2_engine.h"
 #include "parvane/v2_link.h"
 
+#include <chrono>
 #include <cstdio>
 #include <thread>
 
@@ -289,14 +290,33 @@ void Session::renameGroupsPending() {
 
 // ── свои устройства: выход, отзыв, «украдено» ──────────────────────────────
 
-void Session::leave() {
+bool Session::leave(std::int64_t timeoutMs) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
-    if (!ready_ || !client_) return;
+    if (!ready_ || !client_) return false;
     try {
-        runRequestsLocked(client_->call("leave"));
+        const auto reqs = client_->call("leave");
+        if (!reqs.is_array() || reqs.empty()) throw std::runtime_error("движок не дал запись выхода");
+        for (const auto &r : reqs) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  deadline - std::chrono::steady_clock::now()).count();
+            if (left <= 0) throw V2Error("ERROR_CODE_UNAVAILABLE");
+            // Повторов, как у call() для identity, здесь нет: срок выхода ограничен (NAT-16, WEB-11)
+            const auto req = parseRequest(r);
+            const auto dest = req.dest == domainNow() ? std::string() : req.dest;
+            if (req.anon) {
+                (void)callAnon(req.method, req.body, dest, left);
+            } else {
+                const auto c = idConnection();
+                if (!c || !c->isOpen()) throw V2Error("ERROR_CODE_UNAVAILABLE");
+                (void)c->request(req.method, req.body, left, dest);
+            }
+        }
         log("устройство вышло из журнала устройств");
+        return true;
     } catch (const std::exception &e) {
         log(std::string("выход из журнала устройств не выполнен: ") + e.what());
+        return false;
     }
 }
 

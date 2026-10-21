@@ -561,6 +561,11 @@ void Controller::showLogoutConfirmation() {
 	const auto weak = base::make_weak(account);
 	const auto callback = [=](Fn<void()> close) {
 		if (!account || weak) {
+			if (account) {
+				// Parvane (NAT-16, как web): выход уводит устройство из журнала и стирает его данные —
+				// ровно то, о чём предупреждает lng_parvane_logout_last_device
+				Parvane::RequestWipeOnLogout(account);
+			}
 			Core::App().logoutWithChecks(account);
 		}
 		if (close) {

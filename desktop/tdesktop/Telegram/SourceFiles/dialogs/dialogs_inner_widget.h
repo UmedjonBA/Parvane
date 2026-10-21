@@ -669,6 +669,7 @@ private:
 	object_ptr<SearchEmpty> _searchEmpty = { nullptr };
 	SearchState _searchEmptyState;
 	object_ptr<Ui::FlatLabel> _empty = { nullptr };
+	object_ptr<Ui::RpWidget> _emptyMascot = { nullptr }; // Parvane (spec 030): «Загрузка…» — маскот, как web
 	object_ptr<Ui::VerticalLayout> _emptyList = { nullptr };
 	object_ptr<Ui::RoundButton> _emptyButton = { nullptr };
 

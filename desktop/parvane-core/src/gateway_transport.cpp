@@ -168,8 +168,13 @@ void GatewayTransport::close() {
     if (reader_.joinable()) {
         reader_.join();
     }
-    ::close(fd_);
-    fd_ = -1;
+    {
+        // NAT-07: пишущий поток мог проверить fd_ и стоять в send() — закрываем после него, иначе номер
+        // сокета успевает достаться новому соединению и кадр уходит не туда.
+        std::lock_guard<std::mutex> lk(writeMu_);
+        ::close(fd_);
+        fd_ = -1;
+    }
 
     abortPending("соединение с gateway закрыто");
 }
@@ -230,7 +235,12 @@ void GatewayTransport::readerLoop() {
             std::string line = acc.substr(0, pos);
             acc.erase(0, pos + 1);
             if (!line.empty()) {
-                dispatch(line);
+                // NAT-14: исключение обработчика (кадр сервера с полем не того типа) не должно
+                // уходить из потока чтения — иначе std::terminate и падение клиента.
+                try {
+                    dispatch(line);
+                } catch (...) {
+                }
             }
         }
     }

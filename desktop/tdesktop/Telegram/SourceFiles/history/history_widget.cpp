@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "parvane/parvane_client.h" // Parvane: превью публичной группы
 #include "parvane/parvane_islands.h" // Parvane: острова «Пространство»
+#include "parvane/parvane_mascot.h" // Parvane: маскот первой загрузки истории (spec 030)
 #include "ui/chat/continuous_scroll.h"
 
 #include "api/api_compose_with_ai.h"
@@ -495,6 +496,14 @@ HistoryWidget::HistoryWidget(
 	_topBar->hide();
 	_scroll->hide();
 	_kbScroll->hide();
+
+	// Parvane (spec 030): пока идёт первая загрузка истории, лента скрыта — на её месте маскот
+	// (web MessageList `<Loading />`); штатный tdesktop показывал пустой фон
+	_firstLoadMascot = object_ptr<Parvane::Mascot>(this);
+	_firstLoadMascot->hide();
+	_scroll->geometryValue() | rpl::on_next([=](QRect geometry) {
+		_firstLoadMascot->setGeometry(geometry);
+	}, _firstLoadMascot->lifetime());
 
 	controller->chatStyle()->paletteChanged(
 	) | rpl::on_next([=] {
@@ -3585,6 +3594,7 @@ void HistoryWidget::updateControlsVisibility() {
 	} else if (!_firstLoadRequest && _scroll->isHidden()) {
 		_scroll->show();
 	}
+	_firstLoadMascot->setVisible(_firstLoadRequest != 0);
 	_topBars->show();
 	if (_sponsoredMessageBar && checkSponsoredMessageBarVisibility()) {
 		_sponsoredMessageBar->toggle(true, anim::type::normal);
