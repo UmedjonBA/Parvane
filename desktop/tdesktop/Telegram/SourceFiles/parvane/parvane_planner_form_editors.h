@@ -14,6 +14,7 @@ struct EditorHost {
 	Window::SessionController *controller = nullptr;
 	Fn<void()> close;
 	Fn<void(std::string taskId, std::string day)> openTask;
+	Ui::VerticalLayout *footer = nullptr; // низ окна вне прокрутки — туда кнопки карточки (spec 030)
 };
 
 // Карточка задачи: поля пишутся сразу; у экземпляра ряда — выбор объёма правки
@@ -133,8 +134,8 @@ private:
 
 	Ui::VerticalLayout *_column = nullptr;
 	Ui::VerticalLayout *_when = nullptr;
-	ColorSwatches *_swatches = nullptr;
-	Kit::Label *_error = nullptr;
+	Ui::SlideWrap<ColorSwatches> *_swatches = nullptr;
+	Ui::SlideWrap<Kit::Label> *_error = nullptr;
 	Ui::VerticalLayout *_bottom = nullptr;
 
 };

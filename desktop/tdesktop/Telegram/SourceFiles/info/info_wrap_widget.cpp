@@ -429,18 +429,12 @@ void WrapWidget::setupTopBarMenuToggle() {
 		addTopBarMenuButton();
 		addProfileCallsButton();
 	} else if (section.type() == Section::Type::Settings) {
-		addTopBarMenuButton();
-		if (section.settingsType() == ::Settings::MainId()) {
-			const auto &st = (wrap() == Wrap::Layer)
-				? st::infoLayerTopBarSearch
-				: st::infoTopBarSearch;
-			const auto button = _topBar->addButton(
-				base::make_unique_q<Ui::IconButton>(_topBar, st));
-			button->setAccessibleName(tr::lng_dlg_filter(tr::now));
-			button->addClickHandler([=] {
-				_controller->showSettings(::Settings::Search::Id());
-			});
-		} else if (section.settingsType() == ::Settings::InformationId()) {
+		// Parvane: «Профиль» (главный экран) — без «⋮» и поиска, как web (spec 030, F): «Добавить аккаунт» и
+		// «Выйти» — строками экрана, поиск по всему — палитра Ctrl+K
+		if (section.settingsType() != ::Settings::MainId()) {
+			addTopBarMenuButton();
+		}
+		if (section.settingsType() == ::Settings::InformationId()) {
 			const auto controller = _controller->parentController();
 			const auto self = controller->session().user();
 			if (!self->username().isEmpty()) {

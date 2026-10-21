@@ -657,12 +657,18 @@ public:
 	static not_null<Sheet*> Show(not_null<QWidget*> parent, Descriptor descriptor);
 
 	void setTitle(const QString &title);
+	// Своя строка шапки слева от кнопки закрытия вместо названия (spec 030: чип «Событие» и дата карточки
+	// записи «Плана», как web `.cardHead`). Высота строки — по названию либо кнопке закрытия.
+	void setHeadWidget(object_ptr<Ui::RpWidget> widget);
 	template <typename Widget>
 	Widget *add(object_ptr<Widget> &&child) {
 		return static_cast<Widget*>(addItem(std::move(child)));
 	}
 	[[nodiscard]] not_null<Flow*> addButtons(); // `.sheetButtons`: ряд с промежутком 0.5rem
 	[[nodiscard]] not_null<Ui::VerticalLayout*> content() const;
+	// Низ окна вне прокрутки (spec 030: «Сохранить / Удалить» карточки «Плана» видны и в невысоком окне, поля
+	// над ними прокручиваются). Пустой низ места не занимает.
+	[[nodiscard]] not_null<Ui::VerticalLayout*> footer();
 
 	void showSheet(); // показать поверх соседей и взять фокус
 	void requestClose();
@@ -678,9 +684,12 @@ private:
 	void relayout();
 	[[nodiscard]] QRect paneRect() const;
 	[[nodiscard]] int headHeight() const;
+	[[nodiscard]] int footerHeight() const;
 
 	Descriptor _descriptor;
 	IconButton *_close = nullptr;
+	Ui::RpWidget *_head = nullptr;
+	Ui::VerticalLayout *_footer = nullptr;
 	Ui::ScrollArea *_scroll = nullptr;
 	Ui::VerticalLayout *_content = nullptr;
 	rpl::event_stream<> _closed;

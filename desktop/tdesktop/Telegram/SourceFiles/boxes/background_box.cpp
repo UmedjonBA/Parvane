@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "boxes/background_preview_box.h"
+#include "parvane/parvane_wallpapers.h" // Parvane: фоны как в web (spec 030)
 #include "info/profile/info_profile_icon.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/widgets/buttons.h"
@@ -198,6 +199,31 @@ void BackgroundBox::prepare() {
 	button->setClickedCallback([=] {
 		chooseFromFile();
 	});
+
+	if (!_forPeer) {
+		// Parvane (spec 030): вместо галереи обоев Telegram — рисунки и градиенты Parvane, как web
+		const auto reset = container->add(object_ptr<Ui::SettingsButton>(
+			container,
+			tr::lng_parvane_bg_default(),
+			st::infoProfileButton));
+		object_ptr<Info::Profile::FloatingIcon>(
+			reset,
+			st::infoIconMediaPhoto,
+			st::infoSharedMediaButtonIconPosition);
+		reset->setClickedCallback([] {
+			Parvane::Wallpapers::ApplyDefault();
+		});
+		button->setClickedCallback([=] {
+			chooseFromFile();
+		});
+		Ui::AddSkip(container);
+		Ui::AddDivider(container);
+		container->add(Parvane::Wallpapers::CreatePicker(container));
+		container->resizeToWidth(st::boxWideWidth);
+		setInnerWidget(std::move(wrap), st::backgroundScroll);
+		setInnerTopSkip(st::lineWidth);
+		return;
+	}
 
 	Ui::AddSkip(container);
 	Ui::AddDivider(container);

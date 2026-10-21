@@ -1,0 +1,3 @@
+lng_in_dlg_photo
+Photo
+Фото

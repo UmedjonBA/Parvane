@@ -27,7 +27,8 @@ void PaintParvaneChip(
 		QPainter &p,
 		QRect label,
 		const style::SettingsSlider &st,
-		float64 active) {
+		float64 active,
+		std::optional<QColor> folderColor) {
 	const auto gap = style::ConvertScale(6);
 	const auto pad = std::max((st.strictSkip - gap) / 2, 0);
 	const auto height = std::min(style::ConvertScale(30), label.height());
@@ -36,7 +37,7 @@ void PaintParvaneChip(
 		label.y() + (label.height() - height) / 2.,
 		label.width() + 2 * pad,
 		height).adjusted(0.5, 0.5, -0.5, -0.5);
-	const auto accent = st.labelFgActive->c;
+	const auto accent = folderColor.value_or(st.labelFgActive->c);
 	auto fill = accent;
 	fill.setAlphaF(0.22 * active);
 	auto border = accent; // ≈ color-mix(акцент 45 %, линия) на любом фоне
@@ -148,18 +149,43 @@ void ChatsFiltersTabs::setUnreadCount(int index, int unreadCount, bool mute) {
 		it->second.cache = cacheUnreadCount(unreadCount, mute);
 		update();
 	}
-	if (unreadCount) {
+	refreshAdditionalWidth(index);
+}
+
+int ChatsFiltersTabs::parvaneIconSkip(int index) const {
+	if (index < 0 || index >= int(_parvaneDecor.size())) {
+		return 0;
+	}
+	const auto &icon = _parvaneDecor[index].icon;
+	if (icon.isNull()) {
+		return 0;
+	}
+	// web `.chip`: значок 1.125rem, промежуток 0.375rem
+	return icon.width() / style::DevicePixelRatio() + style::ConvertScale(6);
+}
+
+void ChatsFiltersTabs::refreshAdditionalWidth(int index) {
+	auto additional = parvaneIconSkip(index);
+	const auto it = _unreadCounts.find(index);
+	if (it != _unreadCounts.end() && it->second.count) {
+		const auto unreadCount = int(it->second.count);
 		const auto widthIndex = (unreadCount < 10)
 			? 0
 			: (unreadCount < 100)
 			? 1
 			: 2;
-		setAdditionalContentWidthToSection(
-			index,
-			_cachedBadgeWidths[widthIndex] + _unreadSkip);
-	} else {
-		setAdditionalContentWidthToSection(index, 0);
+		additional += _cachedBadgeWidths[widthIndex] + _unreadSkip;
 	}
+	setAdditionalContentWidthToSection(index, additional);
+}
+
+void ChatsFiltersTabs::setParvaneDecor(std::vector<ParvaneChipDecor> decor) {
+	const auto count = std::max(decor.size(), _parvaneDecor.size());
+	_parvaneDecor = std::move(decor);
+	for (auto i = 0; i < int(count); ++i) {
+		refreshAdditionalWidth(i);
+	}
+	update();
 }
 
 int ChatsFiltersTabs::calculateLockedFromX() const {
@@ -262,12 +288,27 @@ void ChatsFiltersTabs::paintEvent(QPaintEvent *e) {
 		}
 		const auto labelLeft = shiftedLeft
 			+ (section.width - section.contentWidth) / 2;
-		// Parvane: папки чипами, как web ChatFolderTabList (spec 029, T056)
+		// Parvane: папки чипами, как web ChatFolderTabList (spec 029, T056; цвет и значок папки — spec 030)
+		const auto decor = (index < int(_parvaneDecor.size()))
+			? &_parvaneDecor[index]
+			: nullptr;
+		const auto folderColor = (decor && decor->color.isValid())
+			? std::make_optional(decor->color)
+			: std::nullopt;
 		PaintParvaneChip(
 			p,
 			myrtlrect(labelLeft, 0, section.contentWidth, height()),
 			_st,
-			active);
+			active,
+			folderColor);
+		const auto iconSkip = parvaneIconSkip(index);
+		if (decor && !decor->icon.isNull()) {
+			const auto size = decor->icon.height() / style::DevicePixelRatio();
+			p.drawImage(
+				labelLeft,
+				_st.labelTop + (_st.labelStyle.font->height - size) / 2,
+				decor->icon);
+		}
 		const auto rect = myrtlrect(
 			labelLeft,
 			_st.labelTop,
@@ -279,9 +320,13 @@ void ChatsFiltersTabs::paintEvent(QPaintEvent *e) {
 				constexpr auto kPremiumLockedOpacity = 0.6;
 				p.setOpacity(kPremiumLockedOpacity);
 			}
-			p.setPen(anim::pen(_st.labelFg, _st.labelFgActive, active));
+			if (folderColor && active > 0.) {
+				p.setPen(*folderColor); // web `.chipActive`: подпись цветом папки
+			} else {
+				p.setPen(anim::pen(_st.labelFg, _st.labelFgActive, active));
+			}
 			section.label.draw(p, {
-				.position = QPoint(labelLeft, _st.labelTop),
+				.position = QPoint(labelLeft + iconSkip, _st.labelTop),
 				.outerWidth = width(),
 				.availableWidth = section.label.maxWidth(),
 				.now = now,
@@ -292,6 +337,7 @@ void ChatsFiltersTabs::paintEvent(QPaintEvent *e) {
 				if (it != _unreadCounts.end()) {
 					p.drawImage(
 						labelLeft
+							+ iconSkip
 							+ _unreadSkip
 							+ section.label.maxWidth(),
 						_st.labelTop,

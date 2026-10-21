@@ -161,6 +161,8 @@ Settings::Settings()
 , _dialogsWithChatWidthRatio(DefaultDialogsWidthRatio())
 , _dialogsNoChatWidthRatio(DefaultDialogsWidthRatio())
 , _videoQuality({ .height = kInitialVideoQuality }) {
+	// Parvane (spec 030): профиль чата справа закрыт, пока его не откроют нажатием на шапку (как web)
+	_thirdSectionInfoEnabled = false;
 }
 
 Settings::~Settings() = default;
@@ -1617,7 +1619,7 @@ void Settings::resetOnLastLogout() {
 	_tabbedSelectorSectionEnabled = false; // per-window
 	_floatPlayerColumn = Window::Column::Second; // per-window
 	_floatPlayerCorner = RectPart::TopRight; // per-window
-	_thirdSectionInfoEnabled = true; // per-window
+	_thirdSectionInfoEnabled = false; // per-window (Parvane: закрыт, как web)
 	_thirdSectionExtendedBy = -1; // per-window
 	_dialogsWithChatWidthRatio = DefaultDialogsWidthRatio(); // per-window
 	_dialogsNoChatWidthRatio = DefaultDialogsWidthRatio(); // per-window

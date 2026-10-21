@@ -233,6 +233,8 @@ extern QHash<QString, GroupPublicInfo> g_publicPreviews;
 extern QSet<QString> g_loadedPreviews;
 
 // ── помощники (определены в файле своей темы) ──
+void HistoryAppend(const parvane::StoredMessage &sm);
+void sendInnerAsync(const QString &toAddress, const nlohmann::json &content, const std::string &preId);
 [[nodiscard]] std::shared_ptr<parvane::v2::Control> ControlSnapshot();
 void FlushPendingGroupMessages(const QString &gid);
 void EnsureStoreKey();

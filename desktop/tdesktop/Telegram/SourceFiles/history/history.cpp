@@ -3201,6 +3201,13 @@ bool History::useTopPromotion() const {
 }
 
 int History::fixedOnTopIndex() const {
+	// Parvane (spec 030): «Избранное» — первым в каждом списке, ниже архива и промо, выше закреплённых (web
+	// folderManager buildFolderOrderedIds). Закреплённым чатом его не считают: перестановка закреплённых и
+	// переход к закреплённому N пропускают строки «сверху», как архив.
+	constexpr auto kParvaneSavedFixOnTopIndex = 3;
+	if (peer->isSelf()) {
+		return kParvaneSavedFixOnTopIndex;
+	}
 	return useTopPromotion() ? kTopPromotionFixOnTopIndex : 0;
 }
 

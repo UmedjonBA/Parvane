@@ -3092,6 +3092,25 @@ void Session::checkOwnDevicesLocked() {
     const auto known = json::parse(readStateFile("own-devices"), nullptr, false);
     writeStateFile("own-devices", current.dump());
     persistLocked();
+    // Разовая пересылка групп всем своим устройствам (spec 030): прежние версии не пересылали публичную группу без
+    // сообщений (ключей эпохи у движка ещё не было) — устройство, привязанное позже вступления, её не видело.
+    if (readStateFile("groups-reshared-v1").empty()) {
+        json others = json::array();
+        for (const auto &id : current) {
+            if (id.is_string() && id.get<std::string>() != deviceId_) others.push_back(id);
+        }
+        try {
+            if (!others.empty()) {
+                const auto reqs = withNeedsLocked([&] { return client_->shareGroupsWithOwnDevices(others); });
+                runRequestsLocked(reqs);
+                persistLocked();
+                log("группы пересланы своим устройствам разово (записей " + std::to_string(reqs.size()) + ")");
+            }
+            writeStateFile("groups-reshared-v1", "1");
+        } catch (const std::exception &e) {
+            log(std::string("разовая пересылка групп своим устройствам не удалась: ") + e.what());
+        }
+    }
     // Первая проверка на этом устройстве — запоминаем, не уведомляем.
     if (!known.is_array()) return;
     json added = json::array();

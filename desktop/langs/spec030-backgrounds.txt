@@ -1,0 +1,11 @@
+lng_parvane_bg_pattern
+Pattern
+Рисунок
+
+lng_parvane_bg_color
+Color
+Цвет
+
+lng_parvane_bg_default
+Default background
+Фон по умолчанию

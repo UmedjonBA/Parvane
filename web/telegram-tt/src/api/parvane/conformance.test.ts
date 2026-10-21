@@ -54,11 +54,16 @@ function readRepo(rel: string) {
   return readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 }
 
+// Клиент desktop с T038 (spec 029) разбит по темам: parvane_client.cpp + parvane_client_*.cpp + внутренний заголовок
+const DESKTOP_CLIENT_FILES = [
+  'parvane_client.cpp', 'parvane_client_internal.h', 'parvane_client_auth.cpp', 'parvane_client_groups.cpp',
+  'parvane_client_state.cpp', 'parvane_client_devices.cpp', 'parvane_client_linking.cpp', 'parvane_client_export.cpp',
+];
+
 function readDesktopSource() {
-  return readFileSync(
-    path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
-    'utf8',
-  );
+  return DESKTOP_CLIENT_FILES
+    .map((file) => readFileSync(path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane', file), 'utf8'))
+    .join('\n');
 }
 
 // Сессия v2 ядра desktop разнесена по трём файлам (spec 029)
@@ -111,7 +116,7 @@ describe('SYNC-1: дисковый курсор двигается только 
     const source = readDesktopSource();
     expect(source).not.toMatch(/SaveCursors|LoadCursors|NotePendingAndMayAdvance|mayAdvance|PumpReceive/);
     // При старте лента поднимается из локального журнала истории без ack и без повторной записи
-    expect(source).toMatch(/void ReplayHistory\(\) \{[\s\S]{0,900}injectOnMain\(session, msgs, \/\*live=\*\/false\);/);
+    expect(source).toMatch(/void ReplayHistory\(\) \{[\s\S]{0,2400}injectOnMain\(session, msgs, \/\*live=\*\/false\);/);
     // Новое пишется в журнал только после вставки (живое, без TTL)
     expect(source).toMatch(/if \(live && TtlFromContent\(sm\.content\) == 0\) \{\s+HistoryAppend\(sm\);/);
   });
@@ -311,7 +316,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(provider).toContain('isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)');
     expect(provider).toContain('stored.from === owner ? stored : { ...stored, read: true }');
     // desktop: выдача и приём
-    const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    const desktop = readDesktopSource();
     expect(desktop).toContain(`kV2HistoryLimit = std::size_t(${r.v2History.limit})`);
     expect(desktop).toContain(`state["${r.v2History.exportField}"] = std::move(rows)`);
     // spec 029: экспорт — формат web 2 (`{linkVersion: 2, v2History}`), материала v1 нет
@@ -351,7 +356,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(controller).toContain('client.joinWithGrant(material, OTK_COUNT)');
     expect(controller).toContain('deps.onNeedsLinking?.()');
     // desktop: выдача и приём; android (шов): приём
-    const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    const desktop = readDesktopSource();
     expect(desktop).toContain(`boxPlain["${r.v2Grant.boxField}"] = {{${coords[0]}, v2File}`);
     expect(desktop).toContain(`box.contains("${r.v2Grant.boxField}")`);
     expect(desktop).toContain('s->joinWithGrant(std::move(*material))');
@@ -422,10 +427,7 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     );
     expect(core).toContain('"parvane-link-sas-v2"');
     expect(core).toMatch(/v %= 1000000000000ULL/);
-    const desktop = readFileSync(
-      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
-      'utf8',
-    );
+    const desktop = readDesktopSource();
     // spec 029: экспорт без материала v1 (Olm-pickle, decCache, перенос владения)
     expect(desktop).not.toMatch(/exportLinkStateJson|signLinkTransfer|importLinkedHistory/);
     expect(desktop).toMatch(/grant\.value\("eph_pub", std::string\(\)\) != challenge/);
@@ -669,10 +671,7 @@ describe('PACK-1: архив пака — под набор получателе
   });
 
   it('десктоп помнит ссылку вместе с набором получателей', () => {
-    const source = readFileSync(
-      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
-      'utf8',
-    );
+    const source = readDesktopSource();
     // ссылка ищется по набору получателей, а не только по id набора
     expect(source).toMatch(/FindUploadedPackRef\(\s*\n?\s*quint64 setId,\s*\n?\s*const QSet<QString> &recipients\)/);
     expect(source).toMatch(/\(recipients - entry\.recipients\)\.isEmpty\(\)/);
@@ -725,10 +724,7 @@ describe('EMOJI-1: docId кастом-эмодзи — от имени из сс
   });
 
   it('десктоп грузит полученный пак под сырым именем и после рестарта', () => {
-    const source = readFileSync(
-      path.join(REPO_ROOT, 'desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'),
-      'utf8',
-    );
+    const source = readDesktopSource();
     // сырое имя пишется рядом с распакованным каталогом и читается при загрузке
     expect(source).toMatch(/WriteRawPackName\(dest, rawName\)/);
     expect(source).toMatch(/const auto rawName = ReadRawPackName\(dir, packName\)/);
@@ -1108,7 +1104,8 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     const desktop = readDesktopSource();
     // «Выйти и сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`)
     expect(desktop).toMatch(
-      /account::revokeDevice\(\*t, devStd, pwStd\)[\s\S]{0,1500}rotateKeys \? s->revokeDevice\(devStd\) : s->signOutDevice\(devStd\)/,
+      new RegExp('account::revokeDevice\\(\\*t, devStd, pwStd\\)[\\s\\S]{0,1500}'
+        + 'rotateKeys \\? s->revokeDevice\\(devStd\\) : s->signOutDevice\\(devStd\\)'),
     );
     expect(desktop).toContain('for (const auto &id : s->ownDevices()) {');
     const android = readRepo('android/jni/parvane_jni.cpp');
@@ -1505,12 +1502,14 @@ describe('E6-1: клиент работоспособен без соедине�
     expect(controller).toContain(`if (ev.type === '${r.legacyEvent}') {`);
   });
 
-  it('desktop: соединения v1 и моста нет (spec 029, T038) — соединение управления v2, записи LegacyV1 пропускаются', () => {
+  it('desktop: соединения v1 и моста нет (spec 029, T038) — соединение управления v2, LegacyV1 пропускаются', () => {
     expectDesktopV1FilesGone();
     const desktop = readDesktopSource();
     // Соединение управления v2 вместо моста; ни транспорта v1, ни его топиков в клиенте
     expect(desktop).toContain('g_control = MakeControl();');
-    expect(desktop).not.toMatch(/BridgeTransport|ITransport|topics::|MakeTransport|g_transport|CloudClient|NatsTransport/);
+    expect(desktop).not.toMatch(
+      /BridgeTransport|ITransport|topics::|MakeTransport|g_transport|CloudClient|NatsTransport/,
+    );
     // «Печатает» и присутствие — только эфемерными каналами v2-сессии (TYPING-1)
     expect(desktop).not.toMatch(/msgTyping\(|presence\(std::to_string/);
     expect(desktop).toContain('(void)s->sendTyping(to);');
@@ -1966,7 +1965,8 @@ describe('ORDER-1: живое сообщение встаёт после все�
     expect(desktop).not.toMatch(/MsgId\([^)]*\.ts\b/);
     const inject = desktop.slice(desktop.indexOf('void injectOnMain(\n\t\tnot_null<Main::Session*> session,'));
     expect(inject).toContain('const auto msgId = MsgId(g_nextMsgId++);');
-    // Журнал истории — в порядке вставки, воспроизводится тем же порядком (без сортировки)
+    // Журнал истории — в порядке вставки, воспроизводится тем же порядком (без сортировки); только строка старше
+    // показанных больше чем на окно «живого» сообщения (перенос истории) встаёт по времени (spec 030)
     const replay = desktop.slice(desktop.indexOf('void ReplayHistory() {'));
     const replayBody = replay.slice(0, replay.indexOf('\n}\n'));
     expect(replayBody).toContain('for (const auto &line : StoreReadLines(HistoryPath())) {');
@@ -2138,7 +2138,7 @@ describe('PACK-2: один набор стикеров от разных отп�
     const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
     expect(content).toContain('o["content_hash"] = str(p, "content_hash")');
     expect(content).toContain('out["content_hash"] = contentHash');
-    const client = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    const client = readDesktopSource();
     ['AttachPackContentHash(ref, archive)', 'FindInstalledPackByHash(root, contentHash)',
       'parvane::pack::archiveMatchesContentHash(bytes, contentHash)',
       'parvane::pack::archiveMatchesContentHash(*dec, contentHash)'].forEach((s) => expect(client).toContain(s));

@@ -30,14 +30,22 @@ public:
 	// вертикали. collapsed — поиск свёрнут в пилюлю. Возвращает прямоугольник для поля поиска.
 	[[nodiscard]] QRect layout(QRect area, QRect search, bool collapsed);
 	void raise();
+	// Отступ слева в поле поиска под значок лупы свёрнутой пилюли (spec 030): значение, если изменилось с
+	// прошлого раза (поле поиска принадлежит Dialogs::Widget, он и применяет).
+	[[nodiscard]] std::optional<int> takeSearchSkipChange();
 
 private:
 	void showComposeMenu();
+	void refreshComposeText();
 
 	const not_null<Ui::RpWidget*> _parent;
 	const not_null<Window::SessionController*> _controller;
 	base::unique_qptr<Ui::RpWidget> _title;
 	base::unique_qptr<Kit::Pill> _compose;
+	base::unique_qptr<Ui::RpWidget> _searchIcon;
+	int _composeFullWidth = 0;
+	int _searchSkip = 0;
+	int _searchSkipApplied = -1;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	bool _compact = false;
 

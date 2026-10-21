@@ -6725,6 +6725,8 @@ void HistoryWidget::updateFieldPlaceholder() {
 			return tr::lng_edit_message_text();
 		} else if (!peer) {
 			return tr::lng_message_ph();
+		} else if (Parvane::IsChannelChat(peer)) {
+			return tr::lng_broadcast_ph(); // Parvane fork (spec 030): канал
 		} else if ((_kbShown || _keyboard->forceReply())
 			&& !_keyboard->placeholder().isEmpty()) {
 			return rpl::single(_keyboard->placeholder());

@@ -5541,7 +5541,8 @@ bool Message::hasOutLayout() const {
 	if (item->isGuestChatBotMessage()) {
 		return false;
 	}
-	return item->out() && !item->isPost();
+	// Parvane fork (spec 030): свои посты канала — тоже исходящие (справа), как в web
+	return item->out();
 }
 
 bool Message::drawBubble() const {

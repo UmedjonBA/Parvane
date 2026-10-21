@@ -302,7 +302,9 @@ const style::DialogRow &Row::ComputeSt(
 		not_null<const Entry*> entry,
 		FilterId filterId) {
 	if (const auto history = entry->asHistory()) {
-		const auto hasTags = entry->hasChatsFilterTags(filterId);
+		// Parvane (spec 030): метки папок — в строке имени (web ChatTags), высота строки не растёт
+		constexpr auto hasTags = false;
+		(void)filterId;
 		const auto wideRow = history->peer->displayAsForum()
 			|| history->amMonoforumAdmin();
 		return wideRow

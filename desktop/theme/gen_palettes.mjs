@@ -79,6 +79,14 @@ function alpha(hex, aa) {
 // ---------------------------------------------------------------------------------------------------------------
 const MAP = [
   {
+    // web `.Avatar.saved-messages`: `--color-user: var(--color-primary)`, градиент от белого (spec 030)
+    group: 'аватар «Избранного»',
+    keys: {
+      historyPeerSavedMessagesBg: (c) => c.p.accent,
+      historyPeerSavedMessagesBg2: (c) => mix(c.p.accent, WHITE, 0.2),
+    },
+  },
+  {
     group: 'окно и базовые цвета',
     keys: {
       windowBg: (c) => c.p.panel,

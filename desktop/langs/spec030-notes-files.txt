@@ -1,0 +1,15 @@
+lng_parvane_notes_embed_play
+Play
+Воспроизвести
+
+lng_parvane_notes_embed_loading
+Loading…
+Загрузка…
+
+lng_parvane_notes_embed_failed
+Could not open the file
+Не удалось открыть файл
+
+lng_parvane_notes_insert_file
+Insert file
+Вставить файл

@@ -2,6 +2,10 @@
 // Создано desktop/theme/gen_palettes.mjs из web/telegram-tt/src/util/colorScheme.ts — руками не править.
 // Ключей без записи здесь нет: они берут значение исходного ключа либо штатное значение tdesktop.
 
+// аватар «Избранного»
+historyPeerSavedMessagesBg: #b57614;
+historyPeerSavedMessagesBg2: #c49143;
+
 // окно и базовые цвета
 windowBg: #fbf1c7;
 windowFg: #3c3836;

@@ -477,6 +477,42 @@ fn linked_device_gets_groups_from_own_device() {
     // у Боба нет способа выдать её за сессию Алисы (проверка в accept_group_key).
 }
 
+/// Публичная группа без сообщений своему новому устройству (spec 030): ключи эпохи у вступившего лениво берутся из
+/// комплекта журнала при первом конверте; без сообщений их не было, и `share_groups_with_own_devices` группу
+/// пропускал — устройство, привязанное после вступления, публичный канал не узнавало вовсе.
+#[test]
+fn public_group_without_messages_reaches_linked_device() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Channel, "Публичный", &[], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    let req = alice.group_set_public(&g.id, true, "publicchan", true, true).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    let secret = alice.group_state(&g.id).unwrap().public.as_ref().unwrap().secret;
+
+    // Боб вступает по открытому секрету; сообщений в группе нет
+    satisfy(&mut srv, &mut bob, Need::GroupLog { group: g.id.clone(), after: 0 });
+    let join = bob.group_join_public(&g.id, &secret).unwrap();
+    srv.handle("bob@local", "d1", &join);
+    drain(&mut srv, &mut bob);
+    assert!(bob.group_state(&g.id).unwrap().members.contains_key("bob@local"), "{:?}", bob.last_error);
+
+    // Второе устройство Боба — после вступления
+    let mut bob2 = Client::new("bob@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = bob.link_grant_material().unwrap();
+    for r in bob2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("bob@local", "d2", &r);
+    }
+    bob.ingest_log("bob@local", srv.logs["bob@local"][bob.log_version("bob@local") as usize..].to_vec()).unwrap();
+    let shared = run_collect(&mut srv, &mut bob, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
+    assert!(!shared.is_empty(), "публичная группа без сообщений не переслана своему устройству");
+    drain(&mut srv, &mut bob2);
+    assert_eq!(bob2.group_ids(), vec![g.id.clone()], "{:?}", bob2.last_error);
+}
+
 /// Передать Алисе ключ доступа Боба сообщением Боба (как в жизни: первый
 /// ответ несёт DeliveryKeyShare). Для первого контакта — через своё
 /// устройство Боба: Боб пишет Алисе по её ключу, полученному из профиля.

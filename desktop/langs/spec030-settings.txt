@@ -1,0 +1,35 @@
+lng_parvane_profile_title
+Profile
+Профиль
+
+lng_parvane_profile_general
+General settings
+Основные настройки
+
+lng_parvane_profile_animations
+Animations and performance
+Анимации и производительность
+
+lng_parvane_profile_data
+Data and storage
+Данные и память
+
+lng_parvane_profile_devices
+Devices
+Устройства
+
+lng_parvane_profile_folders
+Chat folders
+Папки чатов
+
+lng_parvane_profile_stickers
+Stickers and emoji
+Стикеры и эмодзи
+
+lng_parvane_profile_more
+More
+Ещё
+
+lng_parvane_profile_vault
+Notes vault
+Хранилище заметок

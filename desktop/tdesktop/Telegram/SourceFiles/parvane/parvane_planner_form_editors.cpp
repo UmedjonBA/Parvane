@@ -480,6 +480,9 @@ void TaskEditor::rebuild() {
 	_description = nullptr;
 	_descriptionSave = nullptr;
 	_slotsColumn = nullptr;
+	if (_host.footer) {
+		Kit::ClearLayout(_host.footer); // кнопки прежней сборки в низу окна
+	}
 	_bottom = nullptr;
 	if (!_view) {
 		return;
@@ -613,8 +616,7 @@ void TaskEditor::rebuild() {
 	_repeatRow = AddTo(_column, object_ptr<RepeatRow>(_column, controller, _repeatDraft), gap);
 	{
 		const auto extra = _repeatRow->extra();
-		const auto error = AddTo(extra, SmallText(extra, _repeatError, Tone::Red), Rem(0.625));
-		error->setVisible(!_repeatError.isEmpty());
+		const auto error = AddFold(extra, SmallText(extra, _repeatError, Tone::Red), Rem(0.625), !_repeatError.isEmpty());
 		const auto line = AddTo(extra, object_ptr<Line>(extra), Rem(0.625));
 		const auto save = line->add(object_ptr<Kit::PushButton>(
 			line,
@@ -625,12 +627,12 @@ void TaskEditor::rebuild() {
 			const auto problem = repeat ? planner::validateRepeat(*repeat) : std::nullopt;
 			if (problem) {
 				_repeatError = RepeatErrorText(*problem);
-				error->setText(_repeatError);
-				error->show();
+				error->entity()->setText(_repeatError);
+				error->toggle(true, anim::type::instant);
 				return;
 			}
 			_repeatError = QString();
-			error->hide();
+			error->toggle(false, anim::type::instant);
 			const auto current = _task;
 			if (isInstance()) {
 				// Сравнение — с правилом в том виде, в каком его показывает форма
@@ -858,7 +860,7 @@ void TaskEditor::rebuild() {
 	slots->setLast(true);
 	rebuildSlots();
 
-	_bottom = AddTo(_column, object_ptr<Ui::VerticalLayout>(_column), gap);
+	_bottom = _host.footer ? _host.footer : AddTo(_column, object_ptr<Ui::VerticalLayout>(_column), gap);
 	rebuildBottom();
 
 	if (width() > 0) {
@@ -1059,15 +1061,13 @@ void EventEditor::build() {
 	group->add(object_ptr<ListPicker>(group->body(), controller, _state, _project, [=](std::string project) {
 		_project = project;
 		if (_swatches) {
-			_swatches->setVisible(_project.empty());
-			_column->resizeToWidth(width());
+			_swatches->toggle(_project.empty(), anim::type::instant);
 		}
 	}));
-	// Цвет — у группы; свой цвет события — только без группы
-	_swatches = group->add(object_ptr<ColorSwatches>(group->body(), _color, [=](int color) {
+	// Цвет — у группы; свой цвет события — только без группы (скрытые кружки места не занимают)
+	_swatches = AddFold(group->body(), object_ptr<ColorSwatches>(group->body(), _color, [=](int color) {
 		_color = color;
-	}));
-	_swatches->setVisible(_project.empty());
+	}), Rem(0.625), _project.empty());
 
 	const auto remind = AddTo(_column, object_ptr<CardRow>(_column, u"schedule"_q), gap);
 	remind->add(MakeRemindSelect(remind->body(), _remind, [=](std::optional<int> value) {
@@ -1096,9 +1096,8 @@ void EventEditor::build() {
 			}));
 	}
 
-	_error = AddTo(_column, SmallText(_column, QString(), Tone::Red), gap);
-	_error->hide();
-	_bottom = AddTo(_column, object_ptr<Ui::VerticalLayout>(_column), gap);
+	_error = AddFold(_column, SmallText(_column, QString(), Tone::Red), gap, false);
+	_bottom = _host.footer ? _host.footer : AddTo(_column, object_ptr<Ui::VerticalLayout>(_column), gap);
 	rebuildBottom();
 }
 
@@ -1200,8 +1199,8 @@ void EventEditor::rebuildBottom() {
 void EventEditor::submit() {
 	const auto repeat = planner::draftToRepeat(_repeatDraft->current());
 	const auto showError = [=](const QString &text) {
-		_error->setText(text);
-		_error->setVisible(!text.isEmpty());
+		_error->entity()->setText(text);
+		_error->toggle(!text.isEmpty(), anim::type::instant);
 		_column->resizeToWidth(width());
 	};
 	// Событие, бывшее «весь день», получает обычное время заново
@@ -1659,19 +1658,17 @@ void TaskForm::rebuild() {
 	_repeatRow->setOpen(_repeatOpen);
 
 	const auto group = AddTo(_column, object_ptr<CardRow>(_column, u"folder"_q), gap);
-	const auto swatches = std::make_shared<QPointer<ColorSwatches>>();
+	const auto swatches = std::make_shared<QPointer<Ui::SlideWrap<ColorSwatches>>>();
 	group->add(object_ptr<ListPicker>(group->body(), controller, _state, _project, [=](std::string project) {
 		_project = project;
 		if (const auto strong = swatches->data()) {
-			strong->setVisible(_event && _project.empty());
-			_column->resizeToWidth(width());
+			strong->toggle(_event && _project.empty(), anim::type::instant);
 		}
 	}));
 	if (_event) {
-		*swatches = group->add(object_ptr<ColorSwatches>(group->body(), _color, [=](int color) {
+		*swatches = AddFold(group->body(), object_ptr<ColorSwatches>(group->body(), _color, [=](int color) {
 			_color = color;
-		}));
-		(*swatches)->setVisible(_project.empty());
+		}), Rem(0.625), _project.empty());
 	}
 
 	const auto remind = AddTo(_column, object_ptr<CardRow>(_column, u"schedule"_q), gap);

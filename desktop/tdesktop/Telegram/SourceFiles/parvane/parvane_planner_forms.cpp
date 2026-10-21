@@ -52,6 +52,7 @@ QPointer<Kit::Sheet> &CurrentSheet() {
 		.openTask = [=](std::string taskId, std::string day) {
 			OpenTaskEditor(controller, taskId, day);
 		},
+		.footer = sheet->footer(),
 	};
 }
 
@@ -60,12 +61,12 @@ QPointer<Kit::Sheet> &CurrentSheet() {
 	return view ? view->state : planner::createEmptyState();
 }
 
-// Подпись дня под названием окна (`.hdrOver`)
-not_null<Kit::Label*> AddDayLabel(not_null<Kit::Sheet*> sheet, const QString &text) {
-	return sheet->add(object_ptr<Kit::Label>(
-		sheet->content(),
-		text,
-		Kit::Label::Style{ .px = 14, .tone = Tone::Muted }));
+// Шапка карточки (web `.cardHead`): чип вида и день — в строке с кнопкой закрытия, вместо названия
+not_null<Forms::CardHead*> SetCardHead(not_null<Kit::Sheet*> sheet, const QString &icon, const QString &kind) {
+	auto head = object_ptr<Forms::CardHead>(sheet.get(), icon, kind);
+	const auto raw = head.data();
+	sheet->setHeadWidget(std::move(head));
+	return raw;
 }
 
 void OpenForm(
@@ -93,7 +94,7 @@ void OpenTaskEditor(
 		return;
 	}
 	const auto sheet = OpenSheet(controller, tr::lng_parvane_planner_title_task(tr::now));
-	const auto label = AddDayLabel(sheet, QString());
+	const auto head = SetCardHead(sheet, u"check"_q, tr::lng_parvane_planner_kind_task(tr::now));
 	// День экземпляра ряда; у разовой задачи карточка открывается на ней самой
 	const auto editor = sheet->add(object_ptr<Forms::TaskEditor>(
 		sheet->content(),
@@ -102,8 +103,8 @@ void OpenTaskEditor(
 		day,
 		day));
 	editor->dayLabel() | rpl::on_next([=](QString text) {
-		label->setText(text);
-	}, label->lifetime());
+		head->setDay(text);
+	}, head->lifetime());
 }
 
 void OpenEventEditor(
@@ -123,8 +124,9 @@ void OpenEventEditor(
 	auto event = (i->repeat && !instanceDay.empty()) ? planner::eventInstance(*i, instanceDay) : *i;
 	const auto shownDay = event.instanceDay ? *event.instanceDay : event.day.value_or(std::string());
 	const auto sheet = OpenSheet(controller, tr::lng_parvane_planner_title_event(tr::now));
+	const auto head = SetCardHead(sheet, u"calendar"_q, tr::lng_parvane_planner_kind_event(tr::now));
 	if (!shownDay.empty()) {
-		AddDayLabel(sheet, Forms::FormatDayLabel(shownDay));
+		head->setDay(Forms::FormatDayLabel(shownDay));
 	}
 	sheet->add(object_ptr<Forms::EventEditor>(
 		sheet->content(),

@@ -397,7 +397,7 @@ void TranslateBar::setup(not_null<History*> history) {
 	}) | rpl::flatten_latest(
 	) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](QString phrase) {
-		_shouldBeShown = !phrase.isEmpty();
+		_shouldBeShown = false && !phrase.isEmpty(); // Parvane (spec 029 R7): перевода нет
 		if (_shouldBeShown) {
 			label->setText(phrase);
 			updateLabelGeometry();

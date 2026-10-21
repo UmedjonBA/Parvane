@@ -44,11 +44,13 @@ private:
 };
 
 // Показ Markdown только для чтения (окно чтения статьи и т. п.): первый заголовок, повторяющий title, пропускается;
-// [[заметки]] — openNote (пусто — не нажимаются), встроенные файлы — подписью с именем. Ширина — по ширине виджета
+// [[заметки]] — openNote (пусто — не нажимаются), встроенные файлы — embed (пусто — подписью с именем). Ширина — по
+// ширине виджета
 [[nodiscard]] object_ptr<Ui::RpWidget> CreateMarkdownView(
 	QWidget *parent,
 	const std::string &markdown,
 	const std::string &title = std::string(),
-	Fn<void(QString target)> openNote = nullptr);
+	Fn<void(QString target)> openNote = nullptr,
+	Fn<object_ptr<Ui::RpWidget>(QWidget *parent, const md::MdBlock &block)> embed = nullptr);
 
 } // namespace Parvane::Knowledge

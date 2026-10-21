@@ -1247,8 +1247,9 @@ void TopBarWidget::updateControlsVisibility() {
 	_back->setVisible(backVisible && !_chooseForReportReason);
 	_cancelChoose->setVisible(_chooseForReportReason.has_value());
 	if (_info) {
-		_info->setVisible(!_chooseForReportReason
-			&& (isOneColumn || !_primaryWindow));
+		// Parvane (spec 030): аватар чата слева от названия и в широком окне, как в web; штатно — только в одной
+		// колонке и во вторичных окнах
+		_info->setVisible(!_chooseForReportReason);
 	}
 	if (_unreadBadge) {
 		_unreadBadge->setVisible(!_chooseForReportReason
@@ -1798,9 +1799,14 @@ void TopBarWidget::updateOnlineDisplay() {
 				text = _titlePeerText.toString();
 			} else if (chat->count <= 0) {
 				text = tr::lng_group_status(tr::now);
+			} else if (Parvane::IsChannelChat(chat)) {
+				text = tr::lng_chat_status_subscribers(tr::now, lt_count_decimal, chat->count);
 			} else {
 				text = tr::lng_chat_status_members(tr::now, lt_count_decimal, chat->count);
 			}
+		} else if (Parvane::IsChannelChat(chat)) {
+			// Parvane fork (spec 030): канал — подписчики, без «в сети»
+			text = tr::lng_chat_status_subscribers(tr::now, lt_count_decimal, int(chat->participants.size()));
 		} else {
 			const auto self = session().user();
 			auto online = 0;

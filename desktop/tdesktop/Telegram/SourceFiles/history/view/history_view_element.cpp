@@ -2512,8 +2512,8 @@ bool Element::hasOutLayout() const {
 }
 
 bool Element::hasRightLayout() const {
-	return hasOutLayout()
-		&& (_delegate->elementChatMode() != ElementChatMode::Wide);
+	// Parvane fork (spec 030): свои сообщения справа и в широком окне — как в web
+	return hasOutLayout();
 }
 
 bool Element::drawBubble() const {

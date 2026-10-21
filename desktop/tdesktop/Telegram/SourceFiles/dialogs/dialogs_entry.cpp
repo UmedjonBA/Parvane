@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_options.h"
 #include "ui/ui_utility.h"
 #include "history/history.h"
+#include "data/data_peer.h"
 #include "history/history_item.h"
 #include "styles/style_dialogs.h" // st::dialogsTextWidthMin
 
@@ -46,6 +47,12 @@ uint64 FixedOnTopDialogPos(int index) {
 
 uint64 PinnedDialogPos(int pinnedIndex) {
 	return 0xFFFFFFFF000000FFULL - pinnedIndex;
+}
+
+// Parvane (spec 030): «Избранное» — первым и в каждой папке (место — History::fixedOnTopIndex)
+[[nodiscard]] bool IsParvaneSaved(const Dialogs::Entry *entry) {
+	const auto history = entry->asHistory();
+	return history && history->peer->isSelf();
 }
 
 } // namespace
@@ -228,6 +235,9 @@ int Entry::lookupPinnedIndex(FilterId filterId) const {
 }
 
 uint64 Entry::computeSortPosition(FilterId filterId) const {
+	if (IsParvaneSaved(this) && _sortKeyByDate) {
+		return FixedOnTopDialogPos(fixedOnTopIndex());
+	}
 	const auto index = lookupPinnedIndex(filterId);
 	return index ? PinnedDialogPos(index) : _sortKeyByDate;
 }
@@ -280,7 +290,7 @@ void Entry::notifyUnreadStateChange(const UnreadState &wasState) {
 						continue;
 					}
 					const auto wasTagsCount = _tagColors.size();
-					setColorIndexForFilterId(filter.id(), std::nullopt);
+					_tagColors.remove(filter.id());
 					updateRequested |= (wasTagsCount != _tagColors.size());
 				}
 				if (updateRequested) {
@@ -404,11 +414,10 @@ void Entry::setColorIndexForFilterId(
 	if (!filterId) {
 		return;
 	}
-	if (colorIndex) {
-		_tagColors[filterId] = *colorIndex;
-	} else {
-		_tagColors.remove(filterId);
-	}
+	// Parvane (spec 030): метка папки есть у любой папки (web ChatTags), цвет без выбора — тон по порядку
+	// (Parvane::FolderColor); значение здесь — только «чат в папке»
+	constexpr auto kNoChosenColor = uint8(0xFF);
+	_tagColors[filterId] = colorIndex.value_or(kNoChosenColor);
 }
 
 not_null<Row*> Entry::addToChatList(

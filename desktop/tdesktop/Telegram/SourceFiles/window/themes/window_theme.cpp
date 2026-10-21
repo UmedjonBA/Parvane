@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/themes/window_theme.h"
+#include "parvane/parvane_wallpapers.h" // Parvane: фоны чата как в web (spec 030)
 
 #include "parvane/parvane_space.h" // Parvane: схемы «Пространство»
 
@@ -501,7 +502,7 @@ void ChatBackground::initialRead() {
 	if (_themeObject.pathAbsolute.isEmpty() && !nightMode()) {
 		applyDefaultThemeAccentColorizer();
 	}
-	if (!Local::readBackground()) {
+	if (const auto restore = Parvane::Wallpapers::RestoreScope(); !Local::readBackground()) {
 		set(Data::ThemeWallPaper());
 	}
 	if (_localStoredTileDayValue) {
@@ -675,6 +676,15 @@ QImage ChatBackground::postprocessBackgroundImage(QImage image) {
 }
 
 void ChatBackground::set(const Data::WallPaper &paper, QImage image) {
+	// Parvane (spec 030): фон по умолчанию и пустой фон темы — рисунок science-mix в тонах схемы (как web),
+	// а не обои Telegram; ставится своей картинкой, перерисовывается при смене схемы (parvane_wallpapers)
+	if (Data::IsDefaultWallPaper(paper)
+		|| (Data::IsThemeWallPaper(paper) && _themeImage.isNull())) {
+		Parvane::Wallpapers::ApplyDefault(); // своя картинка; сюда вернётся уже с CustomWallPaper
+		return;
+	} else if (Data::IsCustomWallPaper(paper)) {
+		Parvane::Wallpapers::NoteCustomApplied();
+	}
 	image = Ui::PreprocessBackgroundImage(std::move(image));
 
 	const auto needResetAdjustable = Data::IsDefaultWallPaper(paper)
@@ -1255,6 +1265,7 @@ void ChatBackground::reapplyWithNightMode(
 			if (tile() != _tileForRevert || nightModeChanged) {
 				Local::writeSettings();
 			}
+			const auto restore = Parvane::Wallpapers::RestoreScope();
 			if (!settingExactTheme && !Local::readBackground()) {
 				set(Data::ThemeWallPaper());
 			}

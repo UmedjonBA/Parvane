@@ -114,6 +114,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
+// Parvane (spec 029 R7, spec 030): «Перевести» скрыт — офлайн-переводчика нет, а перевод tdesktop идёт через MTProto
+constexpr auto kParvaneTranslate = false;
+
 constexpr auto kRescheduleLimit = 20;
 constexpr auto kTagNameLimit = 12;
 constexpr auto kPublicPostLinkToastDuration = 4 * crl::time(1000);
@@ -1473,7 +1476,8 @@ void FillContextMenuItems(
 			}
 		}, &st::menuIconCopy);
 	}
-	if (request.overSelection
+	if (kParvaneTranslate
+		&& request.overSelection
 		&& !Ui::SkipTranslate(list->getSelectedText().rich)) {
 		const auto owner = &view->history()->owner();
 		result->addAction(tr::lng_context_translate_selected(tr::now), [=] {
@@ -1532,7 +1536,8 @@ void FillContextMenuItems(
 					.append('\n')
 					.append(item->originalText()))
 				: item->originalText();
-			if ((!item->translation() || !item->history()->translatedTo())
+			if (kParvaneTranslate
+				&& (!item->translation() || !item->history()->translatedTo())
 				&& !translate.text.isEmpty()
 				&& !Ui::SkipTranslate(translate)) {
 				result->addAction(tr::lng_context_translate(tr::now), [=] {
@@ -1949,7 +1954,7 @@ void AddPollActions(
 		for (const auto &answer : poll->answers) {
 			text.append('\n').append(radio).append(answer.text);
 		}
-		if (!Ui::SkipTranslate(text)) {
+		if (kParvaneTranslate && !Ui::SkipTranslate(text)) {
 			menu->addAction(tr::lng_context_translate(tr::now), [=] {
 				controller->show(Box(
 					Ui::TranslateBox,

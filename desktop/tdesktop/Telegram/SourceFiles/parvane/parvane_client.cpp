@@ -1,5 +1,9 @@
 // Parvane fork: см. parvane_client.h.
 #include "parvane/parvane_client_internal.h"
+#include "parvane/parvane_article_view.h"
+#include "data/data_photo_media.h"
+#include <deque>
+#include <QtGui/QImageReader>
 namespace Parvane {
 
 void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> doc);
@@ -614,6 +618,34 @@ void ReplayHistory() {
 	}
 	if (msgs.empty()) {
 		return;
+	}
+	// Журнал пишется в порядке прихода, и перенесённая история (снимок web) могла лечь в него не по времени —
+	// тогда сообщение 12 окт стояло выше сообщения 11 окт (spec 030). Строка, которая старше уже показанных
+	// больше чем на окно «живого» сообщения (ORDER-1, 300 с), встаёт на своё место по времени; мелкий разнобой
+	// часов (живые сообщения) порядок прихода сохраняет. Почти упорядоченный журнал — за линейное время.
+	{
+		constexpr auto kLiveWindowSecs = std::int64_t(300);
+		// Сортировки здесь нет и быть не должно (ORDER-1: близкие по времени сообщения — порядком прихода). Вставка
+		// дорога лишь для журнала, где не на месте много строк; перенос истории пишет строки уже по времени
+		// (`ImportV2History`), так что обычно проход ниже ничего не двигает
+		auto misplaced = false;
+		auto latest = std::numeric_limits<std::int64_t>::min();
+		for (const auto &sm : msgs) {
+			misplaced = misplaced || (sm.ts + kLiveWindowSecs < latest);
+			latest = std::max(latest, std::int64_t(sm.ts));
+		}
+		if (misplaced) {
+			auto ordered = std::vector<parvane::StoredMessage>();
+			ordered.reserve(msgs.size());
+			for (auto &sm : msgs) {
+				auto at = ordered.size();
+				while (at > 0 && ordered[at - 1].ts > sm.ts + kLiveWindowSecs) {
+					--at;
+				}
+				ordered.insert(ordered.begin() + std::ptrdiff_t(at), std::move(sm));
+			}
+			msgs = std::move(ordered);
+		}
 	}
 	LoadV2Ids();
 	V2CacheReplayed(msgs); // правки/реакции v2 после рестарта находят сообщение
@@ -4450,8 +4482,9 @@ void AttachLocalOutgoingMedia(
 		}
 		const auto photo = session->data().photo(photoId);
 		const auto large = Images::FromImageInMemory(image, "JPG", raw);
+		// small — та же картинка: превью строки списка чатов (`PreparePhotoPreviewImage`) просит именно Small
 		photo->updateImages(
-			QByteArray(), ImageWithLocation(), large, large,
+			QByteArray(), large, large, large,
 			ImageWithLocation(), ImageWithLocation(), 0);
 	} else if (docId) {
 		// Свой файл — привязываем локальную копию, чтобы считался скачанным.
@@ -5483,6 +5516,40 @@ void injectMediaOnMain(
 	}
 }
 
+// Превью строки списка чатов (spec 030): список берёт миниатюру из своего просмотра фото, а картинка «из памяти»
+// попадает только в просмотр, живой в момент вставки — без открытого чата строка оставалась с пустым местом под
+// миниатюрой. Держим просмотры последних фото с уже уменьшенной картинкой Small.
+void KeepPhotoPreview(not_null<PhotoData*> photo, const QImage &image) {
+	constexpr auto kKeepPhotoPreviews = 128;
+	constexpr auto kPreviewSide = 160;
+	static auto kept = std::deque<std::shared_ptr<Data::PhotoMedia>>();
+	static auto keptFor = static_cast<Main::Session*>(nullptr);
+	if (image.isNull()) {
+		return;
+	}
+	// Просмотры живут не дольше сессии своих фото
+	if (keptFor != &photo->session()) {
+		kept.clear();
+		keptFor = &photo->session();
+		photo->session().lifetime().add([] {
+			kept.clear();
+			keptFor = nullptr;
+		});
+	}
+	auto media = photo->createMediaView();
+	if (!media->image(Data::PhotoSize::Small)) {
+		media->set(
+			Data::PhotoSize::Small,
+			Data::PhotoSize::Small,
+			image.scaled(kPreviewSide, kPreviewSide, Qt::KeepAspectRatio, Qt::SmoothTransformation),
+			QByteArray());
+	}
+	kept.push_back(std::move(media));
+	while (kept.size() > kKeepPhotoPreviews) {
+		kept.pop_front();
+	}
+}
+
 // Инъекция ФОТО inline (Фаза 4c): картинка из локального файла прямо в ленту.
 // При неудаче декодирования — деградирует в документ (injectMediaOnMain).
 void injectPhotoOnMain(
@@ -5568,12 +5635,13 @@ void injectPhotoOnMain(
 	const auto large = Images::FromImageInMemory(image, "JPG", raw);
 	photo->updateImages(
 		QByteArray(),        // inlineThumbnailBytes
-		ImageWithLocation(), // small
+		large,               // small — превью строки списка чатов просит именно Small (spec 030)
 		large,               // thumbnail
 		large,               // large
 		ImageWithLocation(), // videoSmall
 		ImageWithLocation(), // videoLarge
 		0);
+	KeepPhotoPreview(photo, image);
 
 	LOG(("Parvane: %1 фото %2: %3x%4 (%5 байт)")
 		.arg(out ? u"своё"_q : u"получено"_q).arg(from)
@@ -5663,7 +5731,18 @@ void pumpMediaDownload(
 			RestrictToOwner(path);
 		}
 		const auto mediaId = docIdFromFileId(fileId);
-		crl::on_main([=] {
+		// Стикер: размеры — по самой картинке (spec 030). Без них tdesktop брал 512×512, и стикер не квадратной
+		// формы (web шлёт картинку стикером без width/height) рисовался растянутым.
+		auto realW = width;
+		auto realH = height;
+		if (kind == u"sticker"_q) {
+			const auto real = QImageReader(path).size();
+			if (real.isValid() && real.width() > 0 && real.height() > 0) {
+				realW = real.width();
+				realH = real.height();
+			}
+		}
+		crl::on_main([=, width = realW, height = realH] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
@@ -9082,37 +9161,7 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 		return true;
 	}
 	if (action == u"article"_q) {
-		const auto title = content.value("title", std::string());
-		const auto markdown = content.value("markdown", std::string());
-		const auto window = Core::App().activeWindow();
-		if (!window) {
-			return true;
-		}
-		window->show(Box([=](not_null<Ui::GenericBox*> box) {
-			box->setTitle(rpl::single(QString::fromStdString(title)));
-			box->setWidth(st::boxWideWidth);
-			box->addRow(Knowledge::CreateMarkdownView(box, markdown, std::string(), [](QString target) {
-				OpenKnowledgeNote(target);
-			}));
-			box->addButton(tr::lng_parvane_article_save(), [=] {
-				const auto vault = IsRussianUi() ? std::string("Знания") : std::string("Knowledge");
-				Sections::Ask<bool>([=](Sections::Workers &w) -> bool {
-					if (w.self.empty()) {
-						return false;
-					}
-					w.notes.loadNotes(w.self);
-					return w.notes.createNote(title, vault, markdown).has_value();
-				}, [=](bool ok) {
-					if (const auto window = Core::App().activeWindow()) {
-						window->showToast(ok
-							? tr::lng_parvane_article_saved(tr::now, lt_title, QString::fromStdString(title))
-							: tr::lng_parvane_article_save_failed(tr::now));
-					}
-				});
-				box->closeBox();
-			});
-			box->addButton(tr::lng_close(), [=] { box->closeBox(); });
-		}));
+		ShowArticleWindow(content); // окно чтения с файлами статьи и «Сохранить в заметки» (spec 030)
 		return true;
 	}
 	if (action == u"moddel"_q || action == u"modban"_q) {

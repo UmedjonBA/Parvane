@@ -180,6 +180,7 @@ void ImportV2History(const std::string &stateJson) {
 			return;
 		}
 		LoadV2Ids();
+		auto seen = std::set<std::string>(); // повтор строки в том же снимке (отметка V2NoteMessage — после цикла)
 		for (const auto &row : state["v2History"]) {
 			if (out.size() >= kV2HistoryLimit) {
 				break;
@@ -189,22 +190,28 @@ void ImportV2History(const std::string &stateJson) {
 					continue;
 				}
 				auto sm = parvane::StoredMessage::fromJson(row);
-				if (sm.id.empty() || IsV2Message(sm.id)) {
+				if (sm.id.empty() || IsV2Message(sm.id) || !seen.insert(sm.id).second) {
 					continue;
 				}
-				const auto chat = parvane::v2::isGroupAddress(sm.to)
-					? sm.to
-					: (sm.from == self) ? sm.to : sm.from;
 				if (sm.from != self) {
 					sm.read = true; // история, а не новые входящие
 				}
-				V2NoteMessage(sm, QString::fromStdString(chat));
 				out.push_back(std::move(sm));
 			} catch (const std::exception &) {
 			}
 		}
 	} catch (const std::exception &) {
 		return;
+	}
+	// Перенос истории (экспорт линковки, снимок из копии ключей) — по времени отправки: строки снимка web идут
+	// не по порядку, а id сообщения выдаётся по порядку вставки (ORDER-1), и сообщение 12 окт вставало выше
+	// сообщения 11 окт (spec 030)
+	std::stable_sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.ts < b.ts; });
+	for (const auto &sm : out) {
+		const auto chat = parvane::v2::isGroupAddress(sm.to)
+			? sm.to
+			: (sm.from == self) ? sm.to : sm.from;
+		V2NoteMessage(sm, QString::fromStdString(chat));
 	}
 	if (!out.empty()) {
 		ApplyLinkedV2History(std::move(out), owner, 0);

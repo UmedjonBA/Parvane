@@ -557,6 +557,18 @@ void Sheet::setTitle(const QString &title) {
 	update();
 }
 
+void Sheet::setHeadWidget(object_ptr<Ui::RpWidget> widget) {
+	if (_head) {
+		delete _head;
+	}
+	_head = widget.release();
+	if (_head) {
+		_head->setParent(this);
+		_head->show();
+	}
+	relayout();
+}
+
 Ui::RpWidget *Sheet::addItem(object_ptr<Ui::RpWidget> child) {
 	// `.modal-content`: промежуток 0.875rem (`.sheetTight` — 0.125rem)
 	const auto gap = _content->count() ? (_descriptor.tight ? Rem(0.125) : Rem(0.875)) : 0;
@@ -569,6 +581,23 @@ not_null<Flow*> Sheet::addButtons() {
 
 not_null<Ui::VerticalLayout*> Sheet::content() const {
 	return _content;
+}
+
+not_null<Ui::VerticalLayout*> Sheet::footer() {
+	if (!_footer) {
+		_footer = Ui::CreateChild<Ui::VerticalLayout>(this);
+		_footer->show(); // окно уже показано — дочерний виджет сам не появится
+		_footer->heightValue() | rpl::on_next([=] {
+			relayout();
+		}, _footer->lifetime());
+		relayout();
+	}
+	return _footer;
+}
+
+int Sheet::footerHeight() const {
+	// Промежуток до низа — как между строками содержимого
+	return (_footer && _footer->height()) ? (Rem(0.875) + _footer->height()) : 0;
 }
 
 int Sheet::headHeight() const {
@@ -585,7 +614,7 @@ QRect Sheet::paneRect() const {
 	const auto top = std::max(height() / 10, margin); // `padding: 10vh 1rem 1rem`
 	const auto maxHeight = std::max(std::min(height() * 8 / 10, height() - top - margin), 0);
 	const auto inner = _content->height();
-	const auto h = std::min(headHeight() + Rem(0.5) + inner + Rem(1.25), maxHeight);
+	const auto h = std::min(headHeight() + Rem(0.5) + inner + footerHeight() + Rem(1.25), maxHeight);
 	return QRect((width() - w) / 2, top, w, h);
 }
 
@@ -596,14 +625,25 @@ void Sheet::relayout() {
 	if (_close) {
 		_close->move(pane.x() + pane.width() - Rem(1) - _close->width(), pane.y() + Rem(0.875));
 	}
+	if (_head) {
+		const auto left = pane.x() + padX;
+		const auto right = _close ? _close->x() - Rem(0.5) : pane.x() + pane.width() - Rem(1);
+		const auto line = head - Rem(0.875) - Rem(0.25);
+		_head->resizeToWidth(std::max(right - left, 1));
+		_head->moveToLeft(left, pane.y() + Rem(0.875) + std::max((line - _head->height()) / 2, 0), width());
+	}
 	const auto innerWidth = std::max(pane.width() - 2 * padX, 0);
 	_content->resizeToWidth(innerWidth);
+	if (_footer) {
+		_footer->resizeToWidth(innerWidth);
+		_footer->moveToLeft(pane.x() + padX, pane.y() + pane.height() - Rem(1.25) - _footer->height(), width());
+	}
 	// `.modal-content`: поля 0.5rem 1.25rem 1.25rem; прокрутка внутри окна
 	_scroll->setGeometry(
 		pane.x() + padX,
 		pane.y() + head + Rem(0.5),
 		innerWidth,
-		std::max(pane.height() - head - Rem(0.5) - Rem(1.25), 0));
+		std::max(pane.height() - head - Rem(0.5) - footerHeight() - Rem(1.25), 0));
 	update();
 }
 
@@ -640,7 +680,7 @@ void Sheet::paintEvent(QPaintEvent *e) {
 		p.setBrush(ToneColor(Tone::Panel));
 		p.drawRoundedRect(pane, radius, radius);
 	}
-	if (_descriptor.title.isEmpty()) {
+	if (_descriptor.title.isEmpty() || _head) {
 		return;
 	}
 	const auto font = Font(18, true);

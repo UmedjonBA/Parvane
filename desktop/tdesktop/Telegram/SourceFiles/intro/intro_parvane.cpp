@@ -3,6 +3,7 @@
 
 #include "intro/intro_widget.h"
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_space.h"   // тона схемы «Пространство», схема по умолчанию
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
 #include "ui/widgets/buttons.h"
@@ -57,6 +58,10 @@ void PaintEye(QPainter &p, QRect rect, bool crossed, QColor color) {
 }
 
 constexpr auto kEyeSize = 28;
+// Знак над заголовком (как web `#logo`): размер и зазор до заголовка, отступ от верха окна
+constexpr auto kLogoSize = 104;
+constexpr auto kLogoGap = 22;
+constexpr auto kLogoTopMin = 16;
 
 } // namespace
 
@@ -75,6 +80,13 @@ ParvaneWidget::ParvaneWidget(
 , _switchMode(this, QString(), st::introLink) {
 	setTitleText(rpl::single(u"Parvane"_q));
 	setErrorCentered(true);
+	setLabelsCentered(true);
+	// Экран входа — уже в схеме «Пространство» (по умолчанию Gruvbox), а не в штатной теме Telegram
+	crl::on_main(this, [] { Parvane::EnsureSchemeApplied(); });
+	Parvane::TonesChanges(
+	) | rpl::on_next([=] {
+		update();
+	}, lifetime());
 	_tgLink->hide();
 
 	_showPassword->resize(kEyeSize, kEyeSize);
@@ -218,6 +230,29 @@ void ParvaneWidget::pollTelegram() {
 void ParvaneWidget::resizeEvent(QResizeEvent *e) {
 	Step::resizeEvent(e);
 	updateControlsGeometry();
+}
+
+void ParvaneWidget::paintEvent(QPaintEvent *e) {
+	{
+		auto p = QPainter(this);
+		p.fillRect(e->rect(), Parvane::ToneColor(Parvane::Tone::Bg));
+		const auto size = style::ConvertScale(kLogoSize);
+		const auto ratio = style::DevicePixelRatio();
+		if (_logo.isNull() || _logo.width() != size * ratio) {
+			_logo = QImage(u":/gui/art/logo_256.png"_q).scaled(
+				size * ratio,
+				size * ratio,
+				Qt::IgnoreAspectRatio,
+				Qt::SmoothTransformation);
+			_logo.setDevicePixelRatio(ratio);
+		}
+		const auto titleTop = contentTop() + st::introTitleTop;
+		const auto top = titleTop - style::ConvertScale(kLogoGap) - size;
+		if (top >= style::ConvertScale(kLogoTopMin)) {
+			p.drawImage((width() - size) / 2, top, _logo);
+		}
+	}
+	Step::paintEvent(e);
 }
 
 void ParvaneWidget::updateControlsGeometry() {

@@ -100,6 +100,8 @@ public:
 	[[nodiscard]] int contentTop() const;
 
 	void setErrorCentered(bool centered);
+	// Parvane fork: заголовок и описание по центру колонки (экран входа «Пространство», как web)
+	void setLabelsCentered(bool centered);
 	void showError(rpl::producer<QString> text);
 	void hideError() {
 		showError(rpl::single(QString()));
@@ -204,6 +206,7 @@ private:
 	Fn<void()> _cancelNearestDcCallback;
 	Fn<void(Fn<void()> callback)> _acceptTermsCallback;
 
+	bool _labelsCentered = false; // Parvane fork
 	rpl::variable<QString> _titleText;
 	object_ptr<Ui::FlatLabel> _title;
 	rpl::variable<TextWithEntities> _descriptionText;

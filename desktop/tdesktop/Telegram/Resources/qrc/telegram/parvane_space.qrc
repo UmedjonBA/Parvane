@@ -10,4 +10,17 @@
     <file alias="space-solarized-dark.tdesktop-theme">../../../../../theme/space-solarized-dark.tdesktop-theme</file>
     <file alias="space-solarized-light.tdesktop-theme">../../../../../theme/space-solarized-light.tdesktop-theme</file>
   </qresource>
+  <!-- Parvane: рисунки фона чата (spec 030; источник — web assets/parvane/chat-patterns, рисунки пользователя) -->
+  <qresource prefix="/gui">
+    <file alias="parvane/patterns/algorithms.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/algorithms.svg</file>
+    <file alias="parvane/patterns/biology.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/biology.svg</file>
+    <file alias="parvane/patterns/chemistry.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/chemistry.svg</file>
+    <file alias="parvane/patterns/cosmos.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/cosmos.svg</file>
+    <file alias="parvane/patterns/electronics.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/electronics.svg</file>
+    <file alias="parvane/patterns/flight.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/flight.svg</file>
+    <file alias="parvane/patterns/mathematics.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/mathematics.svg</file>
+    <file alias="parvane/patterns/physics.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/physics.svg</file>
+    <file alias="parvane/patterns/programming.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/programming.svg</file>
+    <file alias="parvane/patterns/science-mix.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/science-mix.svg</file>
+  </qresource>
 </RCC>

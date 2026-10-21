@@ -78,6 +78,9 @@ using notes::CanvasJson;
 // Запись холста в облако: через паузу после последней правки, но не позже потолка от первой несохранённой
 constexpr auto kSaveDelayMs = crl::time(4000);
 constexpr auto kSaveMaxWaitMs = crl::time(15000);
+// Поиск: к первой находке холст едет после паузы набора; мелкий масштаб подрастает, чтобы её было видно (web)
+constexpr auto kFoundDelayMs = crl::time(400);
+constexpr auto kFoundMinScale = 0.8;
 constexpr auto kGroupWidth = 420.;
 constexpr auto kGroupHeight = 280.;
 constexpr auto kNoteHeight = 140.;
@@ -282,6 +285,10 @@ struct Hit {
 
 class Board final : public Ui::RpWidget {
 public:
+	// Поиск из шапки «Знаний»: найденные подсвечены, к первой холст едет сам; searchNext — к следующей
+	void setSearchQuery(const QString &query);
+	void searchNext();
+
 	Board(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller,
@@ -305,6 +312,7 @@ protected:
 	bool eventHook(QEvent *e) override;
 
 private:
+	void refreshFound();
 	// ── данные ──
 	void applyNotes(std::shared_ptr<const Sections::NotesView> view);
 	[[nodiscard]] notes::CanvasRef entry() const;
@@ -449,6 +457,12 @@ private:
 	std::string _driveId;
 	std::set<std::string> _filesOnCanvas;
 
+	// Поиск из шапки раздела (как web `found`): найденные карточки подсвечены, остальные приглушены
+	QString _searchQuery;
+	std::optional<std::set<std::string>> _found;
+	int _foundAt = -1;
+	base::Timer _foundTimer;
+
 	CanvasDocPtr _doc;
 	std::optional<Live> _live;
 	notes::CanvasHistory _history;
@@ -515,6 +529,7 @@ Board::Board(
 , _openNote(std::move(openNote))
 , _canvasId(std::move(canvasId))
 , _doc(Share(notes::createEmptyCanvas()))
+, _foundTimer([=] { searchNext(); })
 , _saveTimer([=] { flushSave(); }) {
 	setMouseTracking(true);
 	setFocusPolicy(Qt::StrongFocus);
@@ -666,6 +681,7 @@ void Board::applyDoc(CanvasDocPtr next) {
 	}
 	refreshTools();
 	measureTextCards();
+	refreshFound();
 	updateFieldGeometry();
 	update();
 }
@@ -1316,7 +1332,10 @@ void Board::paintFileBody(QPainter &p, const CanvasNode &node, QRectF card, std:
 		// Картинка в полном качестве — когда карточка на экране шире порога
 		const auto large = node.width * _view.scale >= notes::kCanvasFullImageMinPx;
 		const auto source = notes::canvasImageSource(file, quality);
-		if (large && source == notes::CanvasImageSource::Full && file->blob) {
+		// Без миниатюры (вставленная картинка, миниатюра не прочиталась) мелкая карточка иначе осталась бы
+		// пустой — берётся сам файл
+		const auto noThumb = CanvasMedia::ThumbUnavailable(*file);
+		if ((large || noThumb) && source == notes::CanvasImageSource::Full && file->blob) {
 			const auto fileId = file->blob->value("fileId", std::string());
 			wanted.insert(fileId);
 			if (!_acquired.contains(fileId)) {
@@ -1464,7 +1483,7 @@ void Board::paintEvent(QPaintEvent *e) {
 	auto focusEdges = std::set<std::string>();
 	auto focusNodes = std::set<std::string>();
 	const auto selected = selectedNode();
-	const auto hasFocus = selected && selected->type != "group";
+	const auto hasFocus = !_found && selected && selected->type != "group";
 	if (hasFocus) {
 		for (const auto &edge : _doc->edges) {
 			if (edge.fromNode == selected->id || edge.toNode == selected->id) {
@@ -1533,7 +1552,9 @@ void Board::paintEvent(QPaintEvent *e) {
 		if (!rect.intersects(visible)) {
 			continue;
 		}
-		const auto linked = (hasFocus && node.id != selected->id)
+		const auto linked = _found
+			? std::optional<bool>(_found->contains(node.id))
+			: (hasFocus && node.id != selected->id)
 			? std::optional<bool>(focusNodes.contains(node.id))
 			: std::nullopt;
 		paintCard(p, node, linked, wanted);
@@ -4193,6 +4214,74 @@ void Board::refreshBar() {
 	_bar->raise();
 }
 
+[[nodiscard]] QString NormalizeSearch(const QString &value) {
+	return value.trimmed().toLower().replace(QChar(0x0451), QChar(0x0435)); // ё → е, как web
+}
+
+void Board::setSearchQuery(const QString &query) {
+	_searchQuery = NormalizeSearch(query);
+	_foundAt = -1;
+	refreshFound();
+	_foundTimer.cancel();
+	if (_found) {
+		_foundTimer.callOnce(kFoundDelayMs);
+	}
+	update();
+}
+
+// Текст карточки, подпись группы, адрес ссылки, путь файла, название и текст заметки (web `found`)
+void Board::refreshFound() {
+	if (_searchQuery.isEmpty() || !entry() || !_doc) {
+		_found = std::nullopt;
+		return;
+	}
+	auto found = std::set<std::string>();
+	for (const auto &node : _doc->nodes) {
+		auto texts = QStringList();
+		for (const auto key : { "text", "label", "url", "file" }) {
+			if (const auto value = node.str(key)) {
+				texts.push_back(Q(*value));
+			}
+		}
+		if (const auto title = notes::noteTitleOfPath(node.str("file"))) {
+			if (const auto i = _noteByTitle.find(Lower(*title)); i != _noteByTitle.end() && i->second) {
+				texts.push_back(Q(i->second->text));
+			}
+		}
+		for (const auto &text : texts) {
+			if (NormalizeSearch(text).contains(_searchQuery)) {
+				found.insert(node.id);
+				break;
+			}
+		}
+	}
+	_found = std::move(found);
+}
+
+void Board::searchNext() {
+	if (!_found || !entry() || !_doc) {
+		return;
+	}
+	auto hits = std::vector<const CanvasNode*>();
+	for (const auto &node : _doc->nodes) {
+		if (_found->contains(node.id)) {
+			hits.push_back(&node);
+		}
+	}
+	if (hits.empty()) {
+		return;
+	}
+	_foundAt = (_foundAt + 1) % int(hits.size());
+	const auto &hit = *hits[_foundAt];
+	const auto size = viewport();
+	const auto scale = notes::clampBoardScale(std::max(_view.scale, kFoundMinScale));
+	applyView({
+		scale,
+		size.width() / 2. - (hit.x + hit.width / 2.) * scale,
+		size.height() / 2. - (hit.y + shownHeight(hit) / 2.) * scale,
+	});
+}
+
 void Board::resizeEvent(QResizeEvent *e) {
 	if (!_viewFitted && entry() && width() > 0 && height() > 0) {
 		_view = fitTo(*_doc);
@@ -4207,6 +4296,18 @@ void Board::resizeEvent(QResizeEvent *e) {
 }
 
 } // namespace
+
+void SetCanvasSearch(not_null<Ui::RpWidget*> view, const QString &query) {
+	if (const auto board = dynamic_cast<Board*>(view.get())) {
+		board->setSearchQuery(query);
+	}
+}
+
+void CanvasSearchNext(not_null<Ui::RpWidget*> view) {
+	if (const auto board = dynamic_cast<Board*>(view.get())) {
+		board->searchNext();
+	}
+}
 
 object_ptr<Ui::RpWidget> CreateCanvasView(
 		not_null<QWidget*> parent,

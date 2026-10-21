@@ -1,0 +1,119 @@
+lng_parvane_attach_task_offer
+Suggest for plan
+Предложить в план
+
+lng_parvane_attach_article
+Article
+Статья
+
+lng_parvane_attach_location
+Location
+Геопозиция
+
+lng_parvane_attach_location_current
+Current location
+Текущая геопозиция
+
+lng_parvane_attach_location_live15
+Share live for 15 minutes
+Транслировать 15 минут
+
+lng_parvane_attach_location_live60
+Share live for 1 hour
+Транслировать 1 час
+
+lng_parvane_attach_location_live480
+Share live for 8 hours
+Транслировать 8 часов
+
+lng_parvane_location_title
+Send location
+Отправить геопозицию
+
+lng_parvane_location_about
+This computer has no positioning service. Enter coordinates or paste a map link (for example 55.7512, 37.6184).
+У компьютера нет службы определения местоположения. Введите координаты или вставьте ссылку на карту (например 55.7512, 37.6184).
+
+lng_parvane_location_field
+Latitude, longitude
+Широта, долгота
+
+lng_parvane_location_send
+Send
+Отправить
+
+lng_parvane_location_failed
+Could not send the location
+Не удалось отправить геопозицию
+
+lng_parvane_offer_title
+Suggest for plan
+Предложить в план
+
+lng_parvane_offer_name
+Title
+Название
+
+lng_parvane_offer_description
+Description
+Описание
+
+lng_parvane_offer_steps
+Steps, one per line
+Шаги, по одному в строке
+
+lng_parvane_offer_day
+Day (DD.MM.YYYY)
+День (ДД.ММ.ГГГГ)
+
+lng_parvane_offer_start
+Start (HH:MM)
+Начало (ЧЧ:ММ)
+
+lng_parvane_offer_minutes
+Duration, minutes
+Длительность, минут
+
+lng_parvane_offer_due
+Due (DD.MM.YYYY)
+Срок (ДД.ММ.ГГГГ)
+
+lng_parvane_offer_send
+Send
+Отправить
+
+lng_parvane_offer_sent
+The task is sent to the chat
+Задание отправлено в чат
+
+lng_parvane_offer_send_failed
+Could not send the task
+Не удалось отправить задание
+
+lng_parvane_article_pick_title
+Send a note as an article
+Отправить заметку статьёй
+
+lng_parvane_article_pick_search
+Search notes
+Поиск заметок
+
+lng_parvane_article_pick_empty
+No notes yet
+Заметок пока нет
+
+lng_parvane_article_pick_loading
+Notes are loading…
+Заметки загружаются…
+
+lng_parvane_article_too_long
+The note is too long to send as an article
+Заметка слишком длинная для статьи
+
+lng_parvane_article_sent
+The article is sent
+Статья отправлена
+
+lng_parvane_article_send_failed
+Could not send the article
+Не удалось отправить статью

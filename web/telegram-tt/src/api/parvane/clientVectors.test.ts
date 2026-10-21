@@ -33,9 +33,12 @@ describe('Векторы форматов клиентов: копия ключ�
     if (REGEN || !existsSync(webFile)) {
       mkdirSync(DIR, { recursive: true });
       const file = await exportEncryptedBackup(KEYBACKUP_PASSWORD, KEYBACKUP_PAYLOAD);
-      writeFileSync(webFile, `${JSON.stringify({ password: KEYBACKUP_PASSWORD, payload: KEYBACKUP_PAYLOAD, file: JSON.parse(file) }, undefined, 2)}\n`);
+      const vector = { password: KEYBACKUP_PASSWORD, payload: KEYBACKUP_PAYLOAD, file: JSON.parse(file) };
+      writeFileSync(webFile, `${JSON.stringify(vector, undefined, 2)}\n`);
     }
-    const web = JSON.parse(readFileSync(webFile, 'utf8')) as { password: string; payload: KeyBackupPayload; file: unknown };
+    const web = JSON.parse(readFileSync(webFile, 'utf8')) as {
+      password: string; payload: KeyBackupPayload; file: unknown;
+    };
     expect(await importEncryptedBackup(web.password, JSON.stringify(web.file))).toEqual(web.payload);
 
     const desktopFile = vectorPath('keybackup-desktop.json');
@@ -80,7 +83,12 @@ describe('Векторы форматов клиентов: копия ключ�
       const sealed = await sealKeyBundle(key, BUNDLE_ADDRESS, BUNDLE_PAYLOAD);
       const pick = PICK_CASES.map((input) => ({ input, output: pickRecoveryKey(input) }));
       writeFileSync(webFile, `${JSON.stringify({
-        recoveryKey: BUNDLE_KEY, address: BUNDLE_ADDRESS, bundleKey: b64(key), sealed: b64(sealed), payload: BUNDLE_PAYLOAD, pick,
+        recoveryKey: BUNDLE_KEY,
+        address: BUNDLE_ADDRESS,
+        bundleKey: b64(key),
+        sealed: b64(sealed),
+        payload: BUNDLE_PAYLOAD,
+        pick,
       }, undefined, 2)}\n`);
     }
     const web = JSON.parse(readFileSync(webFile, 'utf8')) as {
@@ -127,11 +135,14 @@ const CALL_CASES_FROM_V2: unknown[] = [
   { call_id: 'AZLxohERcACAAAAAAAAAAQ==', mediaState: { audioMuted: false, videoMuted: true } },
   {
     call_id: 'AZLxohERcACAAAAAAAAAAQ==',
-    group_ring: { participants: [{ address: 'a@x' }], video: false, group: { domain: 'x', id: 'ABGqsw==' }, title: 'Дача' },
+    group_ring: {
+      participants: [{ address: 'a@x' }], video: false, group: { domain: 'x', id: 'ABGqsw==' }, title: 'Дача',
+    },
   },
 ];
 const TITLE_CASES = ['Обычное', ' много   пробелов ', 'бидиу\u202eкод', 'перевод\nстроки', 'я'.repeat(300)];
 
+/* eslint-disable no-null/no-null -- в JSON-векторе отсутствие результата записано как null */
 describe('Векторы форматов клиентов: сигналы звонка', () => {
   it('web пишет таблицу отображения; desktop сверяет её в webcompat_tests', () => {
     const file = vectorPath('calls-web.json');

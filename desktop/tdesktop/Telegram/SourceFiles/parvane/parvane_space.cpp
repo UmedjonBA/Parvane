@@ -1,6 +1,7 @@
 // Parvane fork: реализация parvane_space.h. Схема «Telegram» берёт нейтральные тона из палитры
 // мессенджера (как web: `var(--color-background)` и т. п.), акценты — из таблицы TONES web.
 #include "parvane/parvane_space.h"
+#include "parvane/parvane_wallpapers.h"
 
 #include "parvane/parvane_space_table.h"
 
@@ -121,6 +122,7 @@ void EnsureSchemeApplied() {
 	if (ReadScheme().isEmpty()) {
 		SetScheme(QString::fromLatin1(SpaceTable::kDefaultScheme));
 	}
+	Wallpapers::Start(); // фон по умолчанию — под текущую схему и день/ночь (spec 030)
 }
 
 std::array<QColor, 4> SchemeSwatches(const QString &scheme, bool night) {

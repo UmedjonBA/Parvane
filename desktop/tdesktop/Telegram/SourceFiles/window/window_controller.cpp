@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_controller.h"
 
+#include "parvane/parvane_client.h" // Parvane: предупреждение «последнее устройство» при выходе
+
 #include "api/api_updates.h"
 #include "core/application.h"
 #include "core/click_handler_types.h"
@@ -565,12 +567,28 @@ void Controller::showLogoutConfirmation() {
 			close();
 		}
 	};
-	show(Ui::MakeConfirmBox({
-		.text = tr::lng_sure_logout(),
-		.confirmed = callback,
-		.confirmText = tr::lng_settings_logout(),
-		.confirmStyle = &st::attentionBoxButton,
-	}));
+	const auto confirm = [=](bool lastDevice) {
+		show(Ui::MakeConfirmBox({
+			.text = lastDevice
+				? tr::lng_parvane_logout_last_device()
+				: tr::lng_sure_logout(),
+			.confirmed = callback,
+			.confirmText = tr::lng_settings_logout(),
+			.confirmStyle = &st::attentionBoxButton,
+		}));
+	};
+	// Parvane (как web `parvaneIsLastDevice`): единственное устройство аккаунта — выход сотрёт его ключи,
+	// читать переписку дальше можно будет только с ключом восстановления. Сбой списка — обычный вопрос.
+	if (!account || !Parvane::SessionActive()) {
+		confirm(false);
+		return;
+	}
+	const auto guard = base::make_weak(this);
+	Parvane::ListDevices([=](std::vector<Parvane::DeviceEntry> devices) {
+		if (guard) {
+			confirm(!devices.empty() && devices.size() <= 1);
+		}
+	});
 }
 
 Window::Adaptive &Controller::adaptive() const {

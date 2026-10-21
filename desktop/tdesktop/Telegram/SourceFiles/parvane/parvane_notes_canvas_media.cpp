@@ -176,6 +176,11 @@ QImage Thumb(const std::string &container, const cloud::CloudNode &node) {
 	return QImage();
 }
 
+bool ThumbUnavailable(const cloud::CloudNode &node) {
+	const auto key = BlobFileId(node.thumb);
+	return key.empty() || S().thumbsFailed.contains(key);
+}
+
 void Acquire(const std::string &container, const cloud::CloudNode &node) {
 	auto &s = S();
 	const auto fileId = BlobFileId(node.blob);

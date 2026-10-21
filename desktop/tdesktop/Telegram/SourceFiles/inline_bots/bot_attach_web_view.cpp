@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "inline_bots/bot_attach_web_view.h"
+#include "parvane/parvane_attach_actions.h" // Parvane fork (spec 030): пункты меню вложений
 
 #include "parvane/parvane_cloud.h"
 
@@ -240,7 +241,7 @@ constexpr auto kPopularAppBotsLimit = 100;
 	});
 }
 
-[[nodiscard]] Ui::LocationPickerConfig ResolveMapsConfig(
+[[nodiscard, maybe_unused]] Ui::LocationPickerConfig ResolveMapsConfig(
 		not_null<Main::Session*> session) {
 	const auto &appConfig = session->appConfig();
 	auto map = appConfig.get<base::flat_map<QString, QString>>(
@@ -2966,24 +2967,18 @@ std::unique_ptr<Ui::DropdownMenu> MakeAttachBotsMenu(
 				sendMenuDetails());
 		}, &st::menuIconCreateTodoList);
 	}
-#ifdef TDESKTOP_IV_EDITOR
+	// Parvane fork (spec 030, как web AttachMenu.tsx): «Предложить в план» (TASK-1), «Статья» — заметка «Знаний»
+	// (ARTICLE-1, вместо редактора статей Telegram), «Геопозиция» — подменю с трансляцией (карты Telegram и
+	// LocationPicker не нужны: у Parvane нет их ключей, и пункт не показывался)
 	if (Data::CanSendAnyOf(peer, ChatRestriction::SendOther, false)) {
-		raw->addAction(tr::lng_article_menu_item(tr::now), [=] {
-			Iv::Editor::ShowComposeBox(
-				controller,
-				peer,
-				actionFactory(),
-				sendMenuDetails);
-		}, &st::menuIconArticle);
-	}
-#endif // TDESKTOP_IV_EDITOR
-	const auto session = &controller->session();
-	const auto locationType = ChatRestriction::SendOther;
-	const auto config = ResolveMapsConfig(session);
-	if (Data::CanSendAnyOf(peer, locationType, false)
-		&& Ui::LocationPicker::Available(config)) {
-		raw->addAction(tr::lng_maps_point(tr::now), [=] {
-			ChooseAndSendLocation(controller, config, actionFactory());
+		raw->addAction(tr::lng_parvane_attach_task_offer(tr::now), [=] {
+			Parvane::ShowTaskOfferBox(controller, peer);
+		}, &st::menuIconSchedule);
+		raw->addAction(tr::lng_parvane_attach_article(tr::now), [=] {
+			Parvane::ShowArticlePicker(controller, peer);
+		}, &st::menuIconFile);
+		raw->addAction(tr::lng_parvane_attach_location(tr::now), [=] {
+			Parvane::ShowLocationMenu(controller, peer, QCursor::pos());
 		}, &st::menuIconAddress);
 	}
 	const auto addBots = Data::CanSend(peer, ChatRestriction::SendInline, false)

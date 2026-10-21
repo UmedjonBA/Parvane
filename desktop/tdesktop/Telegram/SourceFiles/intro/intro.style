@@ -48,7 +48,7 @@ introCoverDescriptionTop: 174px;
 introTitle: FlatLabel(defaultFlatLabel) {
 	textFg: introTitleFg;
 	style: TextStyle(defaultTextStyle) {
-		font: font(17px semibold);
+		font: font(24px semibold);
 	}
 }
 introTitleTop: 1px;
@@ -59,7 +59,7 @@ introDescription: FlatLabel(defaultFlatLabel) {
 		lineHeight: 20px;
 	}
 }
-introDescriptionTop: 34px;
+introDescriptionTop: 40px;
 
 introLink: defaultLinkButton;
 

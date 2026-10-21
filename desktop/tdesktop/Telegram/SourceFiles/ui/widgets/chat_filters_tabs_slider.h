@@ -34,6 +34,12 @@ public:
 
 	void fitWidthToSections() override;
 	void setUnreadCount(int index, int unreadCount, bool muted);
+	// Parvane (spec 030): значок и цвет папки на чипе (web ChatFolderTabList). Пустой значок — без значка.
+	struct ParvaneChipDecor {
+		QImage icon; // маска значка, уже нужного цвета и размера (с плотностью экрана)
+		QColor color; // цвет папки: заливка выбранного чипа, рамка, подпись выбранного
+	};
+	void setParvaneDecor(std::vector<ParvaneChipDecor> decor);
 	void setLockedFrom(int index);
 	[[nodiscard]] int lockedFrom() const {
 		return _lockedFrom;
@@ -71,6 +77,8 @@ protected:
 private:
 	[[nodiscard]] QImage cacheUnreadCount(int count, bool muted) const;
 	[[nodiscard]] int calculateLockedFromX() const;
+	[[nodiscard]] int parvaneIconSkip(int index) const;
+	void refreshAdditionalWidth(int index);
 
 	using Index = int;
 	struct Unread final {
@@ -79,6 +87,7 @@ private:
 		bool muted = false;
 	};
 	base::flat_map<Index, Unread> _unreadCounts;
+	std::vector<ParvaneChipDecor> _parvaneDecor;
 	const style::SettingsSlider &_st;
 	const UnreadBadgeStyle _unreadSt;
 	const QString _unreadMaxString;

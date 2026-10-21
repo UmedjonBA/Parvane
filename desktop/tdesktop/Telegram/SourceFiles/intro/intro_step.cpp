@@ -271,6 +271,14 @@ void Step::updateLabelsPosition() {
 	if (hasCover()) {
 		_title->moveToLeft((width() - _title->width()) / 2, contentTop() + st::introCoverTitleTop);
 		_description->moveToLeft((width() - _description->width()) / 2, contentTop() + st::introCoverDescriptionTop);
+	} else if (_labelsCentered) {
+		// Parvane fork: по центру колонки; длинное описание переносится в пределах ширины колонки
+		_title->moveToLeft((width() - _title->width()) / 2, contentTop() + st::introTitleTop);
+		_description->entity()->resizeToNaturalWidth(st::introDescription.minWidth);
+		_description->resizeToWidth(_description->entity()->width());
+		_description->moveToLeft(
+			(width() - _description->width()) / 2,
+			contentTop() + st::introDescriptionTop);
 	} else {
 		_title->moveToLeft(contentLeft() + st::buttonRadius, contentTop() + st::introTitleTop);
 		_description->resizeToWidth(st::introDescription.minWidth);
@@ -288,6 +296,11 @@ void Step::updateLabelsPosition() {
 
 int Step::errorTop() const {
 	return contentTop() + st::introErrorTop;
+}
+
+void Step::setLabelsCentered(bool centered) {
+	_labelsCentered = centered;
+	updateLabelsPosition();
 }
 
 void Step::setTitleText(rpl::producer<QString> titleText) {

@@ -4,6 +4,7 @@
 
 #include "parvane/parvane_icons.h"
 #include "parvane/parvane_note_links.h"
+#include "parvane/parvane_note_embed.h"
 #include "parvane/parvane_note_markdown.h"
 #include "parvane/parvane_sections_host.h"
 #include "parvane/parvane_space.h"
@@ -19,6 +20,8 @@
 #include <parvane/sections/planner_quick_apply.h>
 
 #include "base/weak_qptr.h"
+#include "core/file_utilities.h"
+#include "parvane/parvane_cloud_internal.h"
 #include "lang/lang_keys.h"
 #include "ui/painter.h"
 #include "ui/widgets/fields/input_field.h"
@@ -27,6 +30,10 @@
 
 #include <crl/crl_on_main.h>
 
+#include <QtCore/QDir>
+#include <QtCore/QFileInfo>
+#include <QtCore/QMimeData>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <QtGui/QTextCursor>
 #include <QtGui/QtEvents>
@@ -193,68 +200,19 @@ private:
 
 };
 
-// Встроенный файл (`.card` MediaEmbed): значок файла с типом, имя, размер; не найден — красным «Файл не найден».
-// Просмотр картинок и проигрывание — у вкладки «Файлы»: блобы личного диска здесь не открываются
-class EmbedCard final : public Ui::RpWidget {
-public:
-	EmbedCard(QWidget *parent, QString name, std::optional<int64_t> size)
-	: RpWidget(parent)
-	, _name(std::move(name))
-	, _size(size) {
-		Kit::RepaintOnTones(this);
-		_type = Q(parvane::sections::cloud::fileTypeLabel(S(_name)));
-		resize(width(), Rem(2.75) + Px(2));
+// Локальные файлы из перетаскивания/буфера (папки и не-файлы пропускаются)
+[[nodiscard]] QStringList LocalFilePaths(not_null<const QMimeData*> data) {
+	auto result = QStringList();
+	if (!data->hasUrls()) {
+		return result;
 	}
-
-protected:
-	int resizeGetHeight(int newWidth) override {
-		return Rem(2.75) + Px(2);
-	}
-	void paintEvent(QPaintEvent *e) override {
-		auto p = QPainter(this);
-		PainterHighQualityEnabler hq(p);
-		const auto w = std::min(width(), Rem(24));
-		const auto r = QRectF(0.5, 0.5, w - 1., height() - 1.);
-		p.setPen(QPen(ToneColor(Tone::Line), Px(1)));
-		p.setBrush(ToneColor(Tone::Raised));
-		p.drawRoundedRect(r, Rem(0.5), Rem(0.5));
-		const auto missing = !_size.has_value();
-		const auto fg = ToneColor(missing ? Tone::Red : Tone::Fg);
-		auto x = Rem(0.75);
-		const auto icon = Rem(1.375);
-		if (missing) {
-			PaintNotesIcon(p, u"x"_q, fg, x, (height() - icon) / 2, icon);
-		} else {
-			const auto type = Kit::Font(10, true);
-			const auto top = (height() - icon - (_type.isEmpty() ? 0 : type->height)) / 2;
-			PaintNotesIcon(p, u"file"_q, ToneColor(Tone::Muted), x, top, icon);
-			if (!_type.isEmpty()) {
-				p.setFont(type->f);
-				p.setPen(ToneColor(Tone::Muted));
-				const auto tw = type->width(_type);
-				p.drawText(x + (icon - tw) / 2, top + icon + type->ascent, _type);
-			}
+	for (const auto &url : data->urls()) {
+		if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isFile()) {
+			result.push_back(url.toLocalFile());
 		}
-		x += icon + Rem(0.625);
-		const auto meta = missing ? tr::lng_parvane_notes_embed_missing(tr::now) : FormatSize(*_size);
-		const auto small = Kit::Font(13);
-		const auto metaWidth = small->width(meta);
-		const auto right = w - Rem(0.75) - metaWidth - Rem(0.625);
-		const auto font = Kit::Font(Kit::kBodyPx);
-		p.setFont(font->f);
-		p.setPen(fg);
-		p.drawText(x, (height() - font->height) / 2 + font->ascent, font->elided(_name, std::max(right - x, 0)));
-		p.setFont(small->f);
-		p.setPen(missing ? fg : ToneColor(Tone::Muted));
-		p.drawText(w - Rem(0.75) - metaWidth, (height() - small->height) / 2 + small->ascent, meta);
 	}
-
-private:
-	QString _name;
-	QString _type;
-	std::optional<int64_t> _size;
-
-};
+	return result;
+}
 
 // Столбец с промежутками: виджеты по порядку (видимые), у каждого — отступ сверху
 class Column final : public Ui::RpWidget {
@@ -568,16 +526,23 @@ object_ptr<Ui::RpWidget> NoteView::createEmbed(QWidget *parent, const md::MdBloc
 		result->setInlines({ part });
 		return result;
 	}
+	// Встроенный файл (web `NoteEmbed`): картинка — сам файл, видео/аудио — «Воспроизвести», прочее — «Скачать»
 	const auto cloud = _data.cloud;
 	const auto rootId = cloud ? cloud->rootId : std::nullopt;
 	const parvane::sections::cloud::CloudNode *node = nullptr;
 	if (cloud && rootId) {
 		node = notes::resolveEmbed(cloud->nodesOf(rootId), block.name, _data.note->id);
 	}
-	return object_ptr<EmbedCard>(
-		parent,
-		Q(node ? node->name : block.name),
-		node ? std::make_optional<int64_t>(node->size) : std::nullopt);
+	auto source = EmbedSource();
+	source.name = Q(node ? node->name : md::embedBaseName(block.name));
+	if (node) {
+		source.type = EmbedSource::Type::Cloud;
+		source.size = node->size;
+		source.mime = node->mime;
+		source.container = *rootId;
+		source.node = *node;
+	}
+	return CreateEmbedView(parent, std::move(source));
 }
 
 void NoteView::rebuildBody() {
@@ -795,8 +760,39 @@ void NoteView::startEdit() {
 	field->show();
 	_editor.reset(field);
 
-	// `.editorTools`: вставка файла из облака
+	// Файл с диска, перетаскиванием либо из буфера (web `NoteView`: drop, paste) — в облако, в папку заметки
+	field->input()->setMimeDataHook([=](not_null<const QMimeData*> data, Ui::InputField::MimeAction action) {
+		const auto paths = LocalFilePaths(data);
+		const auto image = paths.isEmpty() && data->hasImage() && !data->hasText();
+		if (paths.isEmpty() && !image) {
+			return false;
+		}
+		if (action == Ui::InputField::MimeAction::Insert) {
+			if (image) {
+				insertClipboardImage(qvariant_cast<QImage>(data->imageData()));
+			} else {
+				insertLocalFiles(paths);
+			}
+		}
+		return true;
+	});
+
+	// `.editorTools`: файл с диска и из облака
 	const auto tools = Ui::CreateChild<Kit::Flow>(this, Rem(0.5));
+	const auto disk = tools->add(object_ptr<NotesTextButton>(
+		tools,
+		tr::lng_parvane_notes_insert_file(tr::now),
+		u"file"_q,
+		NotesTextButton::Kind::Ghost));
+	disk->setClickedCallback([=] {
+		const auto self = base::make_weak(this);
+		FileDialog::GetOpenPaths(this, tr::lng_parvane_notes_insert_file(tr::now), QString(), [=](
+				FileDialog::OpenResult &&result) {
+			if (self && !result.paths.isEmpty()) {
+				insertLocalFiles(result.paths);
+			}
+		});
+	});
 	const auto cloud = tools->add(object_ptr<NotesTextButton>(
 		tools,
 		tr::lng_parvane_notes_insert_from_cloud(tr::now),
@@ -1037,6 +1033,55 @@ void NoteView::chooseFromCloud() {
 		sheet->add(object_ptr<Kit::Empty>(sheet, tr::lng_parvane_notes_embed_missing(tr::now)));
 	}
 	sheet->showSheet();
+}
+
+void NoteView::insertLocalFiles(const QStringList &paths) {
+	// Имена — как их даст загрузка (`Cloud::UploadFiles`: свободное имя в папке заметки), в текст — `![[имя]]`
+	const auto cloud = _data.cloud;
+	if (!_editor || !cloud || !cloud->rootId || !_data.note || paths.isEmpty()) {
+		return;
+	}
+	const auto &nodes = cloud->nodesOf(cloud->rootId);
+	auto parent = std::optional<std::string>();
+	for (const auto &node : nodes) {
+		if (node.id == _data.note->id) {
+			parent = (node.parent && !node.parent->empty()) ? node.parent : std::nullopt;
+			break;
+		}
+	}
+	auto taken = parvane::sections::cloud::namesIn(nodes, parent);
+	auto names = std::vector<QString>();
+	auto files = QStringList();
+	for (const auto &path : paths) {
+		const auto info = QFileInfo(path);
+		if (!info.isFile()) {
+			continue;
+		}
+		const auto name = parvane::sections::cloud::freeName(
+			taken,
+			info.fileName().isEmpty() ? std::string("file") : S(info.fileName()));
+		taken.push_back(name);
+		names.push_back(Q(name));
+		files.push_back(path);
+	}
+	if (files.isEmpty()) {
+		return;
+	}
+	Cloud::UploadFiles(*cloud->rootId, parent, files);
+	insertEmbeds(names);
+}
+
+void NoteView::insertClipboardImage(const QImage &image) {
+	if (image.isNull()) {
+		return;
+	}
+	const auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
+		u"parvane-paste/"_q + QUuid::createUuid().toString(QUuid::WithoutBraces));
+	QDir().mkpath(dir);
+	const auto path = QDir(dir).filePath(u"Pasted image.png"_q);
+	if (image.save(path, "PNG")) {
+		insertLocalFiles({ path });
+	}
 }
 
 void NoteView::insertEmbeds(const std::vector<QString> &names) {

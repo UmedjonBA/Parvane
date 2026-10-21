@@ -3062,6 +3062,9 @@ impl Client {
             if !state.members.contains_key(&me) {
                 continue;
             }
+            // Публичная группа (spec 023): ключи эпохи берутся из комплекта журнала лениво, при первом конверте;
+            // в группе без сообщений их ещё нет — без этого новое своё устройство её не узнавало бы вовсе
+            self.take_public_epoch_keys(&state, state.epoch);
             let Some(keys) = self.epoch_keys.get(&(gid.clone(), state.epoch)) else { continue };
             let pad = self.group_l2_state(&gid, &state).must_pad(&me, &[]);
             shares.push((pad, GroupKeyShare {

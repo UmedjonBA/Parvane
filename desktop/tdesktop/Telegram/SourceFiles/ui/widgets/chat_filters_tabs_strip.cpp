@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
+#include "parvane/parvane_folder_look.h" // Parvane: значок и цвет папки (spec 030)
 #include "styles/style_dialogs.h" // dialogsSearchTabs
 #include "styles/style_media_player.h" // mediaPlayerMenuCheck
 #include "styles/style_menu_icons.h"
@@ -397,6 +398,22 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 					? Data::ForceCustomEmojiStatic(title.text)
 					: title.text;
 			}) | ranges::to_vector, context, paused);
+		{
+			// Parvane (spec 030): значок и цвет папки на чипе, как web ChatFolderTabList
+			auto decor = std::vector<Ui::ChatsFiltersTabs::ParvaneChipDecor>();
+			decor.reserve(list.size());
+			for (const auto &filter : list) {
+				const auto color = Parvane::FolderColor(list, filter.id());
+				decor.push_back({
+					.icon = Parvane::FolderIconImage(filter, color, style::ConvertScale(18)),
+					.color = color,
+				});
+			}
+			slider->setParvaneDecor(std::move(decor));
+			if (!sectionsChanged) {
+				slider->fitWidthToSections();
+			}
+		}
 		if (!sectionsChanged) {
 			return;
 		}
@@ -506,6 +523,8 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 		session->data().chatsFilters().changed(),
 		Data::AmPremiumValue(session) | rpl::to_empty
 	) | rpl::on_next(rebuild, wrap->lifetime());
+	// Parvane (spec 030): цвета папок — тона схемы, пересчитать при смене схемы или светлого/тёмного режима
+	Parvane::TonesChanges() | rpl::on_next(rebuild, wrap->lifetime());
 	rebuild();
 
 	session->data().chatsFilters().isChatlistChanged(

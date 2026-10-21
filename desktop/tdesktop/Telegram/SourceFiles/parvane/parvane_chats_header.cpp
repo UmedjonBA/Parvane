@@ -4,6 +4,7 @@
 #include "parvane/parvane_chats_header.h"
 
 #include "parvane/parvane_health.h"
+#include "parvane/parvane_icons.h"
 #include "parvane/parvane_kit.h"
 #include "parvane/parvane_space.h"
 
@@ -18,8 +19,29 @@
 namespace Parvane {
 namespace {
 
-// Колонка уже этого — «Написать» без подписи (web `.left-header--compact`)
-constexpr auto kCompactWidthPx = 300;
+// «Написать» теряет подпись, только если иначе заголовку «Чаты» не остаётся места (web `.left-header--compact`
+// в узкой колонке); spec 030 — раньше подпись пропадала уже при колонке уже 300 px
+constexpr auto kTitleMinRem = 3.25;
+constexpr auto kPillMinRem = 4.75;
+constexpr auto kSearchIconPx = 16;
+
+// Значок лупы в свёрнутой пилюле поиска (web `.SearchInput--pill` со значком)
+class SearchIcon final : public Ui::RpWidget {
+public:
+	explicit SearchIcon(QWidget *parent)
+	: RpWidget(parent) {
+		setAttribute(Qt::WA_TransparentForMouseEvents);
+		Kit::RepaintOnTones(this);
+		resize(Kit::Px(kSearchIconPx), Kit::Px(kSearchIconPx));
+	}
+
+protected:
+	void paintEvent(QPaintEvent *e) override {
+		auto p = QPainter(this);
+		PaintIcon(p, u"search"_q, ToneColor(Tone::Muted), 0, 0, width());
+	}
+
+};
 
 class Title final : public Ui::RpWidget {
 public:
@@ -62,12 +84,31 @@ ChatsHeader::ChatsHeader(
 	parent,
 	tr::lng_parvane_compose(tr::now),
 	u"pen"_q,
-	true)) {
+	true))
+, _searchIcon(base::make_unique_q<SearchIcon>(parent)) {
 	_compose->setClickedCallback([=] { showComposeMenu(); });
+	_composeFullWidth = _compose->width();
+	_searchIcon->hide();
 	Lang::Updated() | rpl::on_next([=] {
-		_compose->setText(_compact ? QString() : tr::lng_parvane_compose(tr::now));
-		_compose->setAccessibleName(tr::lng_parvane_compose(tr::now));
+		refreshComposeText();
 	}, _compose->lifetime());
+}
+
+void ChatsHeader::refreshComposeText() {
+	_compose->setText(tr::lng_parvane_compose(tr::now));
+	_composeFullWidth = _compose->width();
+	if (_compact) {
+		_compose->setText(QString());
+	}
+	_compose->setAccessibleName(tr::lng_parvane_compose(tr::now));
+}
+
+std::optional<int> ChatsHeader::takeSearchSkipChange() {
+	if (_searchSkipApplied == _searchSkip) {
+		return std::nullopt;
+	}
+	_searchSkipApplied = _searchSkip;
+	return _searchSkip;
 }
 
 ChatsHeader::~ChatsHeader() = default;
@@ -76,23 +117,26 @@ QRect ChatsHeader::layout(QRect area, QRect search, bool collapsed) {
 	if (!collapsed || area.width() <= 0) {
 		_title->hide();
 		_compose->hide();
+		_searchIcon->hide();
+		_searchSkip = 0;
 		return QRect(area.x(), search.y(), area.width(), search.height());
 	}
-	const auto compact = (area.width() < Kit::Px(kCompactWidthPx));
+	const auto gap = Kit::Rem(0.5);
+	const auto compact = (area.width()
+		< _composeFullWidth + Kit::Rem(kPillMinRem) + Kit::Rem(kTitleMinRem) + 2 * gap);
 	if (_compact != compact) {
 		_compact = compact;
-		_compose->setText(_compact ? QString() : tr::lng_parvane_compose(tr::now));
-		_compose->setAccessibleName(tr::lng_parvane_compose(tr::now));
+		refreshComposeText();
 	}
-	const auto gap = Kit::Rem(0.5);
 	const auto right = area.x() + area.width();
 	_compose->moveToLeft(
 		right - _compose->width(),
 		search.y() + (search.height() - _compose->height()) / 2);
 	_compose->show();
-	// `.SearchInput--pill`: flex 0 1 5.75rem, не уже 2.125rem
+	// `.SearchInput--pill`: flex 0 1 5.75rem, не уже 2.125rem; пилюле — всё, что осталось после заголовка, иначе
+	// подпись «Поиск» за лупой обрезается до «…» (spec 030)
 	const auto free = _compose->x() - gap - area.x();
-	const auto pill = std::clamp(free / 2, Kit::Rem(2.125), Kit::Rem(5.75));
+	const auto pill = std::clamp(free - gap - Kit::Rem(kTitleMinRem), Kit::Rem(2.125), Kit::Rem(7.));
 	const auto searchLeft = _compose->x() - gap - pill;
 	const auto titleWidth = searchLeft - gap - area.x();
 	if (titleWidth > Kit::Rem(1.)) {
@@ -101,12 +145,20 @@ QRect ChatsHeader::layout(QRect area, QRect search, bool collapsed) {
 	} else {
 		_title->hide();
 	}
+	// Лупа слева в пилюле, подпись «Поиск» сдвигается за неё (отступ поля — takeSearchSkipChange)
+	const auto iconLeft = searchLeft + Kit::Rem(0.75);
+	_searchIcon->moveToLeft(
+		iconLeft,
+		search.y() + (search.height() - _searchIcon->height()) / 2);
+	_searchIcon->show();
+	_searchSkip = _searchIcon->width() + Kit::Rem(0.375);
 	return QRect(searchLeft, search.y(), pill, search.height());
 }
 
 void ChatsHeader::raise() {
 	_title->raise();
 	_compose->raise();
+	_searchIcon->raise();
 }
 
 void ChatsHeader::showComposeMenu() {

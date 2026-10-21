@@ -14,6 +14,7 @@
 
 #include "base/unique_qptr.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/wrap/slide_wrap.h"
 
 #include <rpl/variable.h>
 
@@ -151,6 +152,20 @@ private:
 template <typename Widget>
 Widget *AddTo(not_null<Ui::VerticalLayout*> column, object_ptr<Widget> &&child, int gap) {
 	return column->add(std::move(child), style::margins(0, column->count() ? gap : 0, 0, 0));
+}
+
+// Строка, которую можно скрыть (spec 030): `Ui::VerticalLayout` отводит место и скрытой строке, поэтому
+// скрываемое оборачивается в `Ui::SlideWrap` — скрытая обёртка (вместе с промежутком) высоты не занимает.
+// Показ/скрытие — `wrap->toggle(shown, anim::type::instant)`, содержимое — `wrap->entity()`.
+template <typename Widget>
+Ui::SlideWrap<Widget> *AddFold(not_null<Ui::VerticalLayout*> column, object_ptr<Widget> &&child, int gap, bool shown) {
+	const auto top = column->count() ? gap : 0;
+	const auto wrap = column->add(object_ptr<Ui::SlideWrap<Widget>>(
+		column,
+		std::move(child),
+		style::margins(0, top, 0, 0)));
+	wrap->toggle(shown, anim::type::instant);
+	return wrap;
 }
 
 // Небольшой текст набора (`.small`, `.fieldLabel`, `.error`, `.sheetHint`, `.cardText`, `.seriesTitle`)
@@ -361,6 +376,24 @@ private:
 
 };
 
+// Шапка карточки записи (web `.cardHead`, spec 030): чип вида («Событие»/«Задача») со значком и подпись дня
+class CardHead final : public Ui::RpWidget {
+public:
+	CardHead(QWidget *parent, const QString &icon, const QString &kind);
+
+	void setDay(const QString &day);
+
+protected:
+	int resizeGetHeight(int newWidth) override;
+	void paintEvent(QPaintEvent *e) override;
+
+private:
+	QString _icon;
+	QString _kind;
+	QString _day;
+
+};
+
 // Выбор объёма правки ряда (web PlannerSeriesPrompt): edit | delete | rule | stop | copy; выбор —
 // one | following | all | stop
 class SeriesPrompt final : public Ui::RpWidget {
@@ -392,7 +425,7 @@ private:
 	Window::SessionController *_controller = nullptr;
 	std::shared_ptr<rpl::variable<planner::RepeatDraft>> _draft;
 	Ui::VerticalLayout *_column = nullptr;
-	Kit::Label *_summary = nullptr;
+	Ui::SlideWrap<Kit::Label> *_summary = nullptr;
 
 };
 
@@ -416,8 +449,8 @@ private:
 	void toggle();
 
 	CardRow *_row = nullptr;
-	RepeatFields *_fields = nullptr;
-	Ui::VerticalLayout *_extra = nullptr;
+	Ui::SlideWrap<RepeatFields> *_fields = nullptr;
+	Ui::SlideWrap<Ui::VerticalLayout> *_extra = nullptr;
 	bool _open = false;
 
 };

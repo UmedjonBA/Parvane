@@ -27,6 +27,9 @@ namespace cloud = parvane::sections::cloud;
 // Миниатюра облака узла (320 точек по длинной стороне); нет — пустая картинка, чтение начато
 [[nodiscard]] QImage Thumb(const std::string &container, const cloud::CloudNode &node);
 
+// Миниатюры у узла нет либо она не читается — карточке нечего показать, кроме самого файла
+[[nodiscard]] bool ThumbUnavailable(const cloud::CloudNode &node);
+
 // Сам файл картинки: `Acquire` по версии содержимого (`blob.fileId`) — карточка на экране и крупная; каждому
 // `Acquire` — свой `Release`. `Full` — готовая картинка либо пустая
 void Acquire(const std::string &container, const cloud::CloudNode &node);

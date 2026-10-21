@@ -22,4 +22,9 @@ namespace Parvane::NotesUi {
 	const std::string &canvasId,
 	Fn<void(std::string noteId)> openNote);
 
+// Поиск из шапки «Знаний» (web `found`): найденные карточки подсвечены, остальные приглушены, к первой находке
+// холст едет сам; `CanvasSearchNext` (Enter в поле) — к следующей
+void SetCanvasSearch(not_null<Ui::RpWidget*> view, const QString &query);
+void CanvasSearchNext(not_null<Ui::RpWidget*> view);
+
 } // namespace Parvane::NotesUi

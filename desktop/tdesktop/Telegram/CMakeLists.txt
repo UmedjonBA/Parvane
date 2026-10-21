@@ -50,6 +50,8 @@ target_sources(Telegram PRIVATE
     ${parvane_client_sources}
     ${src_loc}/parvane/parvane_client.h
     ${src_loc}/parvane/parvane_client_internal.h
+    ${src_loc}/parvane/parvane_attach_actions.cpp
+    ${src_loc}/parvane/parvane_attach_actions.h
     ${src_loc}/parvane/parvane_account_ui.cpp
     ${src_loc}/parvane/parvane_account_ui.h
     ${src_loc}/parvane/parvane_icons.cpp
@@ -103,6 +105,10 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_note_markdown.cpp
     ${src_loc}/parvane/parvane_note_markdown.h
     ${src_loc}/parvane/parvane_note_view.cpp
+    ${src_loc}/parvane/parvane_note_embed.cpp
+    ${src_loc}/parvane/parvane_note_embed.h
+    ${src_loc}/parvane/parvane_article_view.cpp
+    ${src_loc}/parvane/parvane_article_view.h
     ${src_loc}/parvane/parvane_note_view.h
     ${src_loc}/parvane/parvane_notes_graph.cpp
     ${src_loc}/parvane/parvane_notes_graph.h
@@ -138,6 +144,8 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_sections_host.h
     ${src_loc}/parvane/parvane_space.cpp
     ${src_loc}/parvane/parvane_space.h
+    ${src_loc}/parvane/parvane_wallpapers.cpp
+    ${src_loc}/parvane/parvane_wallpapers.h
     ${src_loc}/parvane/parvane_islands.cpp
     ${src_loc}/parvane/parvane_islands.h
     ${src_loc}/parvane/parvane_chats_header.cpp

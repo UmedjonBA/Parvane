@@ -69,7 +69,9 @@ void TranslateTracker::setup() {
 		Core::App().settings().translateChatEnabledValue(),
 		Data::AmPremiumValue(&_history->session()),
 		std::move(autoTranslationValue),
-		_1 && (_2 || _3));
+		// Parvane (spec 029 R7, spec 030): офлайн-переводчика нет, сетевой отдал бы переписку третьей стороне —
+		// язык чата не отслеживается, панель перевода не появляется
+		_1 && (_2 || _3) && false);
 	_trackingLanguage.value() | rpl::on_next([=](bool tracking) {
 		_trackingLifetime.destroy();
 		if (tracking) {

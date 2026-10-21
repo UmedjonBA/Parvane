@@ -449,13 +449,14 @@ object_ptr<Ui::RpWidget> CreateMarkdownView(
 		QWidget *parent,
 		const std::string &markdown,
 		const std::string &title,
-		Fn<void(QString target)> openNote) {
+		Fn<void(QString target)> openNote,
+		Fn<object_ptr<Ui::RpWidget>(QWidget *parent, const md::MdBlock &block)> embed) {
 	auto result = object_ptr<MarkdownView>(parent, MarkdownCallbacks{
 		.openNote = std::move(openNote),
 		.taskTail = [](const std::string &text) {
 			return std::make_pair(notes::splitTaskMarker(text).text, QString());
 		},
-		.embed = [](QWidget *parent, const md::MdBlock &block) -> object_ptr<Ui::RpWidget> {
+		.embed = embed ? std::move(embed) : [](QWidget *parent, const md::MdBlock &block) -> object_ptr<Ui::RpWidget> {
 			auto label = object_ptr<RichText>(parent, RichText::Style{ .tone = Tone::Muted });
 			if (block.url) {
 				auto part = md::MdInline();

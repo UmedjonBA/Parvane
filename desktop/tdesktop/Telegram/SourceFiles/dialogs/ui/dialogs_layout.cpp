@@ -444,7 +444,20 @@ void PaintRow(
 	if (swipeTranslation) {
 		p.translate(-swipeTranslation, 0);
 	}
-	p.fillRect(geometry, bg);
+	if ((context.active || context.selected) && !context.narrow) {
+		// Parvane (spec 030): выбранная и наведённая строка — скруглённая карточка с отступами по бокам, как web
+		// `.chat-list .ListItem-button`. В web поля списка 0.5rem и аватар ещё на 0.5rem внутри карточки; здесь
+		// поле строки tdesktop 10 px, поэтому карточка уже (4 px), иначе аватар и время легли бы на её край
+		p.fillRect(geometry, context.currentBg);
+		const auto inset = style::ConvertScale(4);
+		const auto radius = style::ConvertScale(10);
+		auto hq = PainterHighQualityEnabler(p);
+		p.setPen(Qt::NoPen);
+		p.setBrush(bg);
+		p.drawRoundedRect(geometry.marginsRemoved({ inset, 0, inset, 0 }), radius, radius);
+	} else {
+		p.fillRect(geometry, bg);
+	}
 	if (!(flags & Flag::TopicJumpRipple)) {
 		auto ripple = context.active
 			? st::dialogsRippleBgActive
@@ -795,6 +808,21 @@ void PaintRow(
 		sendStateIcon->paint(p, rectForName.topLeft() + QPoint(rectForName.width(), 0), context.width);
 	}
 
+	// Parvane (spec 030): метки папок — в строке имени сразу после названия (web ChatTags); место под них
+	// отнимается у имени, не больше 45 % ширины
+	auto parvaneTagsWidth = 0;
+	if (const auto tags = context.chatsFilterTags) {
+		for (const auto &tag : *tags) {
+			parvaneTagsWidth += st::dialogRowFilterTagSkip
+				+ (tag->width() / style::DevicePixelRatio());
+		}
+		parvaneTagsWidth = std::min(
+			parvaneTagsWidth + st::dialogRowFilterTagSkip,
+			rectForName.width() * 45 / 100);
+		rectForName.setWidth(rectForName.width() - parvaneTagsWidth);
+	}
+	auto parvaneNameRight = rectForName.left();
+
 	p.setFont(st::semiboldFont);
 	const auto paintPeerBadge = [&](int rowNameWidth) {
 		const auto badgeWidth = rowBadge.drawGetWidth(p, {
@@ -864,6 +892,8 @@ void PaintRow(
 			rectForName.top(),
 			context.width,
 			text);
+		parvaneNameRight = rectForName.left()
+			+ std::min(st::semiboldFont->width(text), rectForName.width());
 	} else if (from) {
 		auto badgeWidth = 0;
 		if ((history || sublist) && !context.search) {
@@ -910,6 +940,15 @@ void PaintRow(
 				+ (st::semiboldFont->height - muteIcon.height()) / 2;
 			muteIcon.paint(p, muteLeft, muteTop, context.width);
 		}
+		parvaneNameRight = rectForName.left()
+			+ std::min(rowName.maxWidth(), rectForName.width())
+			+ badgeWidth
+			+ (drawMuteIcon
+				? (ThreeStateIcon(
+					st::dialogsMuteIcon,
+					context.active,
+					context.selected).width() + 2 * st::dialogsMuteIconSkip)
+				: 0);
 	} else if (hiddenSenderInfo) {
 		p.setPen(context.active
 			? st::dialogsNameFgActive
@@ -936,14 +975,27 @@ void PaintRow(
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
 		});
+		parvaneNameRight = rectForName.left()
+			+ std::min(rowName.maxWidth(), rectForName.width());
 	}
 
 	if (const auto tags = context.chatsFilterTags) {
-		auto left = nameleft;
+		// Parvane (spec 030): после названия, по центру строки имени; что не влезло — не рисуется
+		auto left = parvaneNameRight + st::dialogRowFilterTagSkip;
+		const auto right = rectForName.left()
+			+ rectForName.width()
+			+ parvaneTagsWidth;
 		for (const auto &tag : *tags) {
-			p.drawImage(left, context.st->tagTop, *tag);
-			left += st::dialogRowFilterTagSkip
-				+ (tag->width() / style::DevicePixelRatio());
+			const auto tagWidth = tag->width() / style::DevicePixelRatio();
+			const auto tagHeight = tag->height() / style::DevicePixelRatio();
+			if (left + tagWidth > right) {
+				break;
+			}
+			p.drawImage(
+				left,
+				rectForName.top() + (st::semiboldFont->height - tagHeight) / 2,
+				*tag);
+			left += st::dialogRowFilterTagSkip + tagWidth;
 		}
 	}
 	if (swipeTranslation) {
@@ -1083,9 +1135,11 @@ void RowPainter::Paint(
 		const auto draftDate = cloudDraft ? cloudDraft->date : TimeId(0);
 		return std::max(itemDate, draftDate);
 	}();
+	// Parvane (spec 030): «Избранное» всегда первым и с булавкой (web folderManager)
 	const auto displayPinnedIcon = badgesState.empty()
-		&& entry->isPinnedDialog(context.filter)
-		&& (context.filter || !entry->fixedOnTopIndex());
+		&& ((entry->isPinnedDialog(context.filter)
+			&& (context.filter || !entry->fixedOnTopIndex()))
+			|| (history && history->peer->isSelf()));
 
 	const auto from = history
 		? (history->peer->migrateTo()

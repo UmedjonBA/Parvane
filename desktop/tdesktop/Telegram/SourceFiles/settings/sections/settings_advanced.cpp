@@ -1174,13 +1174,8 @@ void BuildExportSection(SectionBuilder &builder) {
 		},
 		.keywords = { u"export"_q, u"data"_q, u"archive"_q, u"zip"_q },
 	});
-	builder.addButton({
-		.id = u"advanced/experimental"_q,
-		.title = tr::lng_settings_experimental(),
-		.icon = { &st::menuIconExperimental },
-		.onClick = [showOther] { showOther(Experimental::Id()); },
-		.keywords = { u"experimental"_q, u"beta"_q, u"features"_q },
-	});
+	// Parvane (spec 030): «Экспериментальные настройки» Telegram убраны — в web их нет, флаги там про MTProto
+	(void)showOther;
 }
 
 void BuildScreenReaderSection(SectionBuilder &builder) {
@@ -1316,7 +1311,8 @@ void SetupConnectionType(
 }
 
 bool HasUpdate() {
-	return !Core::UpdaterDisabled();
+	// Parvane (spec 030): апдейтера Telegram нет — обновления Parvane не раздаются через серверы Telegram
+	return false;
 }
 
 void SetupUpdate(not_null<Ui::VerticalLayout*> container) {

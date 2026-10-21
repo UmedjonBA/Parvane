@@ -8,6 +8,8 @@
 
 #include "base/unique_qptr.h"
 
+#include <QtGui/QImage>
+
 namespace Ui {
 class InputField;
 } // namespace Ui
@@ -73,6 +75,8 @@ private:
 	void schedule();
 	void chooseFromCloud();
 	void insertEmbeds(const std::vector<QString> &names);
+	void insertLocalFiles(const QStringList &paths);
+	void insertClipboardImage(const QImage &image);
 	void commitTitle();
 	[[nodiscard]] object_ptr<Ui::RpWidget> createEmbed(QWidget *parent, const md::MdBlock &block);
 

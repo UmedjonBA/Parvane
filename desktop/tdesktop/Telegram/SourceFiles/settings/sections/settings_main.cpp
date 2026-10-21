@@ -12,6 +12,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "parvane/parvane_islands.h" // Parvane: профиль-хаб карточками
 #include "parvane/parvane_kit.h"
 #include "parvane/parvane_planner_forms.h" // Parvane: настройки «Плана»
+#include "parvane/parvane_space.h" // Parvane: «Хранилище заметок» → раздел «Файлы»
+#include "boxes/peer_list_controllers.h" // Parvane: «Контакты»
+#include "boxes/stickers_box.h" // Parvane: «Стикеры и эмодзи»
+#include "core/version.h" // Parvane: строка версии
+#include "data/data_folder.h" // Parvane: «Архив»
+#include "dialogs/dialogs_main_list.h"
+#include "settings/sections/settings_active_sessions.h" // Parvane: «Устройства»
+#include "window/themes/window_theme.h" // Parvane: «Ночной режим»
+#include "ui/widgets/labels.h"
 
 #include "settings/settings_common_session.h"
 
@@ -385,25 +394,86 @@ void Cover::refreshQrButtonGeometry(int newWidth) {
 	_qrButton->moveToRight(buttonRight - inset, buttonTop, newWidth);
 }
 
+// Parvane: строки карточки «Мессенджер» — порядок и названия web SettingsMain (spec 030, F): «Избранное», «Архив»
+// (если убран из списка чатов), «Контакты», затем экраны настроек. «Мой аккаунт» — сама карточка аккаунта сверху.
+// «Звук и камера» в web нет (настройки устройств браузера), у desktop она рабочая — стоит после «Устройств».
 void BuildSectionButtons(SectionBuilder &builder) {
 	const auto session = builder.session();
 	const auto controller = builder.controller();
 	const auto showOther = builder.showOther();
 
-	if (!session->supportMode()) {
-		builder.addSectionButton({
-			.title = tr::lng_settings_my_account(),
-			.targetSection = InformationId(),
-			.icon = { &st::menuIconProfile },
-			.keywords = { u"profile"_q, u"edit"_q, u"information"_q },
+	builder.addButton({
+		.id = u"main/saved"_q,
+		.title = tr::lng_saved_messages(),
+		.icon = { &st::menuIconSavedMessages },
+		.onClick = [=] {
+			controller->window().hideSettingsAndLayer();
+			Parvane::ShowSection(Parvane::Section::Chats);
+			controller->showPeerHistory(session->user());
+		},
+		.keywords = { u"saved"_q, u"favorites"_q },
+	});
+	{ // Архив — строкой, если он убран из списка чатов (как web `isArchiveHidden`)
+		const auto folder = [=] {
+			return session->data().folderLoaded(Data::Folder::kId);
+		};
+		builder.addButton({
+			.id = u"main/archive"_q,
+			.title = tr::lng_archived_name(),
+			.icon = { &st::menuIconArchive },
+			.onClick = [=] {
+				if (const auto f = folder()) {
+					controller->window().hideSettingsAndLayer();
+					Parvane::ShowSection(Parvane::Section::Chats);
+					controller->openFolder(f);
+				}
+			},
+			.keywords = { u"archive"_q },
+			.shown = session->settings().archiveInMainMenuChanges(
+			) | rpl::map([=](bool inMenu) {
+				const auto f = folder();
+				return inMenu && f && !f->chatsList()->empty();
+			}),
 		});
 	}
+	builder.addButton({
+		.id = u"main/contacts"_q,
+		.title = tr::lng_menu_contacts(),
+		.icon = { &st::menuIconUserShow },
+		.onClick = [=] { controller->show(PrepareContactsBox(controller)); },
+		.keywords = { u"contacts"_q, u"people"_q },
+	});
+
+	builder.addSectionButton({
+		.title = tr::lng_parvane_profile_general(),
+		.targetSection = ChatId(),
+		.icon = { &st::menuIconChatBubble },
+		.keywords = { u"themes"_q, u"appearance"_q, u"text"_q, u"background"_q },
+	});
+
+	builder.addButton({
+		.id = u"main/power"_q,
+		.title = tr::lng_parvane_profile_animations(),
+		.icon = { &st::menuIconPowerUsage },
+		.onClick = [=] {
+			controller->show(Box(PowerSavingBox, PowerSaving::Flags()));
+		},
+		.keywords = { u"battery"_q, u"animations"_q, u"power"_q, u"saving"_q },
+	});
 
 	builder.addSectionButton({
 		.title = tr::lng_settings_section_notify(),
 		.targetSection = NotificationsId(),
 		.icon = { &st::menuIconNotifications },
 		.keywords = { u"alerts"_q, u"sounds"_q, u"badge"_q },
+	});
+
+	// «Данные и память» — экран «Продвинутые» tdesktop (загрузки, кэш, прокси, выгрузка данных)
+	builder.addSectionButton({
+		.title = tr::lng_parvane_profile_data(),
+		.targetSection = AdvancedId(),
+		.icon = { &st::menuIconStorage },
+		.keywords = { u"performance"_q, u"proxy"_q, u"storage"_q, u"cache"_q, u"export"_q },
 	});
 
 	builder.addSectionButton({
@@ -413,54 +483,42 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.keywords = { u"security"_q, u"passcode"_q, u"password"_q, u"2fa"_q },
 	});
 
-	builder.addSectionButton({
-		.title = tr::lng_settings_section_chat_settings(),
-		.targetSection = ChatId(),
-		.icon = { &st::menuIconChatBubble },
-		.keywords = { u"themes"_q, u"appearance"_q, u"stickers"_q },
-	});
-
-	{ // Folders
-		const auto preload = [=] {
-			session->data().chatsFilters().requestSuggested();
-		};
-		// Parvane: папки (chat filters) у нас локальные — appConfig их не
-		// включает (MTProto заглушён), поэтому раздел показываем ВСЕГДА,
-		// иначе «создать папку» не найти, пока папок нет.
-		auto shownProducer = rpl::single(true) | rpl::type_erased;
-		preload();
-
+	{ // Папки: подпись — названия до четырёх папок через запятую (как web)
+		session->data().chatsFilters().requestSuggested();
+		auto names = rpl::single(rpl::empty) | rpl::then(
+			session->data().chatsFilters().changed()
+		) | rpl::map([=] {
+			auto list = QStringList();
+			for (const auto &filter : session->data().chatsFilters().list()) {
+				const auto title = filter.titleText().text;
+				if (filter.id() && !title.isEmpty() && list.size() < 4) {
+					list.push_back(title);
+				}
+			}
+			return list.join(u", "_q);
+		});
+		// Parvane: папки (chat filters) у нас локальные — раздел показываем ВСЕГДА
 		builder.addButton({
-			.title = tr::lng_settings_section_filters(),
+			.title = tr::lng_parvane_profile_folders(),
 			.icon = { &st::menuIconShowInFolder },
+			.label = std::move(names),
 			.onClick = [=] { showOther(FoldersId()); },
-			.keywords = { u"filters"_q, u"tabs"_q },
-			.shown = std::move(shownProducer),
+			.keywords = { u"filters"_q, u"tabs"_q, u"folders"_q },
 		});
 	}
 
 	builder.addSectionButton({
-		.title = tr::lng_settings_advanced(),
-		.targetSection = AdvancedId(),
-		.icon = { &st::menuIconManage },
-		.keywords = { u"performance"_q, u"proxy"_q, u"experimental"_q },
+		.title = tr::lng_parvane_profile_devices(),
+		.targetSection = SessionsId(),
+		.icon = { &st::menuIconDevices },
+		.keywords = { u"sessions"_q, u"devices"_q },
 	});
 
 	builder.addSectionButton({
 		.title = tr::lng_settings_section_devices(),
 		.targetSection = CallsId(),
 		.icon = { &st::menuIconUnmute },
-		.keywords = { u"sessions"_q, u"calls"_q },
-	});
-
-	builder.addButton({
-		.id = u"main/power"_q,
-		.title = tr::lng_settings_power_menu(),
-		.icon = { &st::menuIconPowerUsage },
-		.onClick = [=] {
-			controller->show(Box(PowerSavingBox, PowerSaving::Flags()));
-		},
-		.keywords = { u"battery"_q, u"animations"_q, u"power"_q, u"saving"_q },
+		.keywords = { u"calls"_q, u"camera"_q, u"microphone"_q },
 	});
 
 	builder.addButton({
@@ -476,6 +534,18 @@ void BuildSectionButtons(SectionBuilder &builder) {
 			ShowParvaneLanguageBox(controller);
 		},
 		.keywords = { u"translate"_q, u"localization"_q, u"language"_q },
+	});
+
+	builder.addButton({
+		.id = u"main/stickers"_q,
+		.title = tr::lng_parvane_profile_stickers(),
+		.icon = { &st::menuIconStickers },
+		.onClick = [=] {
+			controller->show(Box<StickersBox>(
+				controller->uiShow(),
+				StickersBox::Section::Installed));
+		},
+		.keywords = { u"stickers"_q, u"emoji"_q, u"packs"_q },
 	});
 }
 
@@ -582,12 +652,38 @@ void BuildPremiumSection(SectionBuilder &builder) {
 	builder.addSkip();
 }
 
-void BuildHelpSection(SectionBuilder &builder) {
-	// Parvane: раздел «Помощь» Telegram убран — FAQ/Features/Ask a Question вели на
-	// ресурсы Telegram (внешние ссылки + облачный саппорт-бот), у нас их нет.
-	// Вместо них — «Сообщить об ошибке» (как web SettingsMore).
+// Parvane: карточка «Ещё» — прежнее подменю «Ещё» главного меню, как web SettingsMore (spec 030, F): ночной режим,
+// «Сообщить об ошибке» (вместо раздела «Помощь» Telegram — FAQ и саппорт-бот вели на ресурсы Telegram),
+// «Добавить аккаунт» (был в «⋮» шапки). Масштаб интерфейса — отдельной карточкой ниже.
+void BuildMoreSection(SectionBuilder &builder) {
 	const auto controller = builder.controller();
-	builder.addSkip();
+	const auto night = builder.addButton({
+		.id = u"main/night"_q,
+		.title = tr::lng_menu_night_mode(),
+		.icon = { &st::menuIconNightMode },
+		.toggled = rpl::single(
+			Window::Theme::IsNightMode()
+		) | rpl::then(
+			Window::Theme::Background()->updates(
+			) | rpl::filter([](const Window::Theme::BackgroundUpdate &update) {
+				return update.type == Window::Theme::BackgroundUpdate::Type::ApplyingTheme;
+			}) | rpl::map([] { return Window::Theme::IsNightMode(); })
+		),
+		.keywords = { u"night"_q, u"dark"_q, u"theme"_q },
+	});
+	if (night) {
+		night->toggledChanges(
+		) | rpl::filter([](bool on) {
+			return (on != Window::Theme::IsNightMode());
+		}) | rpl::on_next([=](bool) {
+			Window::Theme::ToggleNightModeWithConfirmation(
+				&controller->window(),
+				[] {
+					Window::Theme::ToggleNightMode();
+					Window::Theme::KeepApplied();
+				});
+		}, night->lifetime());
+	}
 	builder.addButton({
 		.id = u"main/bug_report"_q,
 		.title = tr::lng_parvane_bug_report(),
@@ -598,6 +694,28 @@ void BuildHelpSection(SectionBuilder &builder) {
 			}
 		},
 		.keywords = { u"bug"_q, u"report"_q, u"error"_q },
+	});
+	if (Core::App().domain().accounts().size() < Core::App().domain().maxAccounts()) {
+		builder.addButton({
+			.id = u"main/add-account"_q,
+			.title = tr::lng_menu_add_account(),
+			.icon = { &st::menuIconAddAccount },
+			.onClick = [] { Core::App().domain().addActivated(MTP::Environment{}); },
+			.keywords = { u"account"_q },
+		});
+	}
+}
+
+// Parvane: «Выйти» — последняя строка «Профиля», красная (как web SettingsSignOut; прежде — в «⋮» шапки)
+void BuildSignOutSection(SectionBuilder &builder) {
+	const auto controller = builder.controller();
+	builder.addButton({
+		.id = u"settings/log-out"_q,
+		.title = tr::lng_settings_logout(),
+		.st = &st::settingsAttentionButtonWithIcon,
+		.icon = { &st::menuIconLeaveAttention },
+		.onClick = [=] { controller->window().showLogoutConfirmation(); },
+		.keywords = { u"logout"_q, u"sign out"_q },
 	});
 }
 
@@ -624,6 +742,16 @@ void BuildParvaneSection(SectionBuilder &builder) {
 			Parvane::Health::OpenGoals(controller);
 		},
 		.keywords = { u"health"_q, u"goals"_q },
+	});
+	builder.addButton({
+		.id = u"main/parvane-vault"_q,
+		.title = tr::lng_parvane_profile_vault(),
+		.icon = { &st::menuIconShowInFolder },
+		.onClick = [=] {
+			controller->window().hideSettingsAndLayer();
+			Parvane::ShowSection(Parvane::Section::Files);
+		},
+		.keywords = { u"notes"_q, u"vault"_q, u"knowledge"_q, u"files"_q },
 	});
 	builder.addButton({
 		.id = u"main/parvane-appearance"_q,
@@ -679,7 +807,7 @@ Main::Main(
 }
 
 rpl::producer<QString> Main::title() {
-	return tr::lng_menu_settings();
+	return tr::lng_parvane_profile_title(); // Parvane: «Профиль», как web (spec 030, F)
 }
 
 void Main::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
@@ -725,6 +853,16 @@ void Main::setupContent() {
 		window,
 		session->user()));
 	_userpic = cover->userpic();
+	{ // Parvane: карточка аккаунта = «Мой профиль» (web SettingsMain); фото, QR и ник — свои кнопки поверх
+		const auto open = Ui::CreateChild<Ui::AbstractButton>(cover);
+		open->setAccessibleName(tr::lng_menu_my_profile(tr::now));
+		open->setClickedCallback([=] { showOther(InformationId()); });
+		cover->sizeValue() | rpl::on_next([=](QSize size) {
+			open->setGeometry(QRect(QPoint(), size));
+			open->lower();
+		}, open->lifetime());
+		open->setCursor(style::cur_pointer);
+	}
 
 	const SectionBuildMethod buildMethod = [](
 			not_null<Ui::VerticalLayout*> container,
@@ -746,6 +884,7 @@ void Main::setupContent() {
 				.highlights = highlights,
 			};
 		};
+		// Порядок карточек — web SettingsMain: «Мессенджер», «Parvane», «Ещё», «Выйти», версия
 		Parvane::Islands::AddCardCaption(
 			container,
 			tr::lng_parvane_profile_messenger());
@@ -753,20 +892,34 @@ void Main::setupContent() {
 			context(Parvane::Islands::AddCard(container)));
 		BuildValidationSuggestions(builder);
 		BuildSectionButtons(builder);
-		if (HasInterfaceScale()) {
-			SetupInterfaceScale(
-				&controller->window(),
-				Parvane::Islands::AddCard(container));
-		}
 		auto premium = SectionBuilder(context(container));
 		BuildPremiumSection(premium);
 		Parvane::Islands::AddCardCaption(container, rpl::single(u"Parvane"_q));
 		auto parvane = SectionBuilder(
 			context(Parvane::Islands::AddCard(container)));
 		BuildParvaneSection(parvane);
-		auto help = SectionBuilder(
+		Parvane::Islands::AddCardCaption(
+			container,
+			tr::lng_parvane_profile_more());
+		auto more = SectionBuilder(
 			context(Parvane::Islands::AddCard(container)));
-		BuildHelpSection(help);
+		BuildMoreSection(more);
+		if (HasInterfaceScale()) {
+			SetupInterfaceScale(
+				&controller->window(),
+				Parvane::Islands::AddCard(container));
+		}
+		auto signOut = SectionBuilder(
+			context(Parvane::Islands::AddCard(container)));
+		BuildSignOutSection(signOut);
+		const auto version = container->add(
+			object_ptr<Ui::FlatLabel>(
+				container,
+				QString::fromLatin1(AppName.utf8()) + u" "_q + QString::fromLatin1(AppVersionStr),
+				st::defaultFlatLabel),
+			QMargins(Parvane::Kit::Rem(1.), Parvane::Kit::Rem(0.75), Parvane::Kit::Rem(1.), 0),
+			style::al_top);
+		version->setTextColorOverride(st::windowSubTextFg->c);
 		container->add(object_ptr<Ui::FixedHeightWidget>(
 			container,
 			Parvane::Kit::Rem(1.)));
@@ -821,7 +974,7 @@ void Main::showFinished() {
 const auto kMeta = BuildHelper({
 	.id = Main::Id(),
 	.parentId = nullptr,
-	.title = &tr::lng_menu_settings,
+	.title = &tr::lng_parvane_profile_title,
 	.icon = &st::menuIconSettings,
 }, [](SectionBuilder &builder) {
 	builder.addDivider();
@@ -844,7 +997,9 @@ const auto kMeta = BuildHelper({
 
 	BuildInterfaceScale(builder);
 	BuildPremiumSection(builder);
-	BuildHelpSection(builder);
+	BuildParvaneSection(builder);
+	BuildMoreSection(builder);
+	BuildSignOutSection(builder);
 });
 
 } // namespace

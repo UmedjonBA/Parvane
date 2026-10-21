@@ -4083,6 +4083,17 @@ void Widget::updateControlsGeometry() {
 				place.width(),
 				place.height());
 		}
+		// Parvane (spec 030): лупа в свёрнутой пилюле — подпись поля за ней. Крестика у пустого свёрнутого поля
+		// нет — правый запас под него снимается, иначе подпись «Поиск» не помещается
+		if (const auto skip = _pvHeader->takeSearchSkipChange()) {
+			// Развёрнутое поле — прежний правый отступ под кнопку «от кого», если она показана
+			const auto right = *skip
+				? (st::dialogsFilter.textMargins.left() - st::dialogsFilter.textMargins.right())
+				: (_chooseFromUser->toggled() && !_subsectionTopBar)
+				? _chooseFromUser->width()
+				: 0;
+			_search->setAdditionalMargins(QMargins(*skip, 0, right, 0));
+		}
 	}
 
 	auto right = filterLeft + filterWidth;

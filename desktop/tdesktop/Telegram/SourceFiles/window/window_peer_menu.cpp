@@ -542,6 +542,10 @@ void Filler::addTogglePin() {
 	if (!entry || entry->fixedOnTopIndex()) {
 		return;
 	}
+	// Parvane (spec 030): «Избранное» всегда первым (web) — закреплять и откреплять нечего
+	if (!_sublist && !_topic && _peer && _peer->isSelf()) {
+		return;
+	}
 	const auto pinText = [=] {
 		return entry->isPinnedDialog(filterId)
 			? tr::lng_context_unpin_from_top(tr::now)

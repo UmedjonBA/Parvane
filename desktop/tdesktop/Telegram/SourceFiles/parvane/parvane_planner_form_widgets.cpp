@@ -1305,6 +1305,53 @@ void CardRow::paintEvent(QPaintEvent *e) {
 	}
 }
 
+CardHead::CardHead(QWidget *parent, const QString &icon, const QString &kind)
+: RpWidget(parent)
+, _icon(icon)
+, _kind(kind) {
+	Kit::RepaintOnTones(this);
+	setAccessibleName(_kind);
+	resize(width(), Rem(1.875));
+}
+
+void CardHead::setDay(const QString &day) {
+	_day = day;
+	update();
+}
+
+int CardHead::resizeGetHeight(int newWidth) {
+	return Rem(1.875);
+}
+
+void CardHead::paintEvent(QPaintEvent *e) {
+	// `.cardKind`: пилюля 1.875rem, поля 0.625rem, значок 1rem, промежуток 0.375rem; `.cardDay` — через 0.75rem
+	auto p = QPainter(this);
+	const auto font = Font(13, true);
+	const auto pad = Rem(0.625);
+	const auto icon = Rem(1);
+	const auto gap = Rem(0.375);
+	const auto chip = std::min(pad + icon + gap + font->width(_kind) + pad, width());
+	{
+		PainterHighQualityEnabler hq(p);
+		p.setPen(Qt::NoPen);
+		p.setBrush(ToneColor(Tone::Raised));
+		const auto radius = height() / 2.;
+		p.drawRoundedRect(QRectF(0, 0, chip, height()), radius, radius);
+	}
+	PaintGlyph(p, _icon, ToneColor(Tone::Muted), QRect(pad, (height() - icon) / 2, icon, icon));
+	p.setFont(font->f);
+	p.setPen(ToneColor(Tone::Muted));
+	const auto textLeft = pad + icon + gap;
+	p.drawText(textLeft, Baseline(font, 0, height()), font->elided(_kind, std::max(chip - textLeft - pad, 0)));
+	if (_day.isEmpty()) {
+		return;
+	}
+	const auto dayFont = Font(13);
+	const auto dayLeft = chip + Rem(0.75);
+	p.setFont(dayFont->f);
+	p.drawText(dayLeft, Baseline(dayFont, 0, height()), dayFont->elided(_day, std::max(width() - dayLeft, 0)));
+}
+
 SeriesPrompt::SeriesPrompt(QWidget *parent, const QString &mode, Fn<void(QString)> choose, Fn<void()> cancel)
 : RpWidget(parent) {
 	Kit::RepaintOnTones(this);
@@ -1407,8 +1454,8 @@ void RepeatFields::refreshSummary() {
 	}
 	const auto repeat = planner::draftToRepeat(_draft->current());
 	const auto valid = repeat && !planner::validateRepeat(*repeat);
-	_summary->setText(valid ? FormatRepeat(*repeat) : QString());
-	_summary->setVisible(valid);
+	_summary->entity()->setText(valid ? FormatRepeat(*repeat) : QString());
+	_summary->toggle(valid, anim::type::instant);
 }
 
 void RepeatFields::rebuild() {
@@ -1525,7 +1572,7 @@ void RepeatFields::rebuild() {
 			set([=](planner::RepeatDraft &d) { d.count = value; }, false);
 		});
 	}
-	_summary = AddTo(_column, SmallText(_column, QString()), gap);
+	_summary = AddFold(_column, SmallText(_column, QString()), gap, false);
 	refreshSummary();
 	if (width() > 0) {
 		_column->resizeToWidth(width());
@@ -1609,17 +1656,16 @@ RepeatRow::RepeatRow(
 		toggle();
 		toggleButton->update();
 	});
-	_fields = _row->add(object_ptr<RepeatFields>(_row->body(), controller, draft));
-	_extra = _row->add(object_ptr<Ui::VerticalLayout>(_row->body()));
-	_fields->hide();
-	_extra->hide();
+	// Поля и «Сохранить правило» видны только раскрытыми и в свёрнутом виде места не занимают (spec 030)
+	_fields = AddFold(_row->body(), object_ptr<RepeatFields>(_row->body(), controller, draft), Rem(0.625), false);
+	_extra = AddFold(_row->body(), object_ptr<Ui::VerticalLayout>(_row->body()), Rem(0.625), false);
 	_row->heightValue() | rpl::on_next([=](int h) {
 		resize(width(), h);
 	}, lifetime());
 }
 
 not_null<Ui::VerticalLayout*> RepeatRow::extra() const {
-	return _extra;
+	return _extra->entity();
 }
 
 not_null<CardRow*> RepeatRow::row() const {
@@ -1634,8 +1680,8 @@ void RepeatRow::setOpen(bool open) {
 
 void RepeatRow::toggle() {
 	_open = !_open;
-	_fields->setVisible(_open);
-	_extra->setVisible(_open);
+	_fields->toggle(_open, anim::type::instant);
+	_extra->toggle(_open, anim::type::instant);
 	_row->resizeToWidth(width());
 }
 
@@ -1821,8 +1867,7 @@ void ListPicker::showCreate() {
 	AddTo(_column, object_ptr<ColorSwatches>(_column, 0, [=](int color) {
 		draft->color = color;
 	}), gap);
-	const auto error = AddTo(_column, SmallText(_column, QString(), Tone::Red), gap);
-	error->hide();
+	const auto error = AddFold(_column, SmallText(_column, QString(), Tone::Red), gap, false);
 	const auto actions = AddTo(_column, object_ptr<Kit::Flow>(_column, Rem(0.5)), gap);
 	const auto create = actions->add(object_ptr<Kit::PushButton>(
 		actions,
@@ -1835,8 +1880,8 @@ void ListPicker::showCreate() {
 	const auto submit = [=] {
 		const auto listName = S(name->raw().trimmed());
 		if (listName.empty()) {
-			error->setText(tr::lng_parvane_planner_error_list_name(tr::now));
-			error->show();
+			error->entity()->setText(tr::lng_parvane_planner_error_list_name(tr::now));
+			error->toggle(true, anim::type::instant);
 			_column->resizeToWidth(width());
 			return;
 		}

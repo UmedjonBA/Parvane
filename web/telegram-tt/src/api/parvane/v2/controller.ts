@@ -357,6 +357,7 @@ const TOKEN_BATCH = 20;
 const TOKEN_BATCH_STEPS = [TOKEN_BATCH, 10, 5, 2, 1];
 const GROUP_SYNC_PAGES = 50;
 const OWN_DEVICES_RECORD = 'v2-own-devices';
+const GROUPS_RESHARED_RECORD = 'v2-groups-reshared-v1';
 const ROOT_BACKUP_RECORD = 'v2-root-backup';
 // Какая копия корня уже лежит на сервере (чтобы не слать при каждом запуске)
 const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
@@ -1604,6 +1605,13 @@ export function createV2Controller(deps: Deps) {
     const known = await storage.loadRecord<string[]>(OWN_DEVICES_RECORD);
     await storage.saveRecord(OWN_DEVICES_RECORD, current);
     await persist();
+    // Разовая пересылка групп всем своим устройствам (spec 030): прежние версии не пересылали публичную группу
+    // без сообщений (ключей эпохи у движка ещё не было) — устройство, привязанное позже вступления, её не видело
+    if (!(await storage.loadRecord<boolean>(GROUPS_RESHARED_RECORD))) {
+      const others = current.filter((id) => id !== ownDeviceId);
+      if (others.length) await shareGroupsWithOwnDevices(others);
+      await storage.saveRecord(GROUPS_RESHARED_RECORD, true);
+    }
     // Первая проверка на этом устройстве — запоминаем, не уведомляем
     if (!known) return;
     if (known.length !== current.length || current.some((id) => !known.includes(id))) {

@@ -329,7 +329,6 @@ Actions PlannerScreen::makeActions() {
 		_picked = day;
 		switchSegment(u"month"_q);
 	};
-	// Заметки открываются в «Знаниях» (выбор заметки по названию из другого раздела на desktop пока нет)
 	result.openNote = [=](QString title) { OpenKnowledgeNote(title); }; // [[заметка]] — открыть (создать) в «Знаниях»
 	result.sheetHost = [=]() -> QWidget* { return this; };
 	return result;

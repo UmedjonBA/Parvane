@@ -798,17 +798,18 @@ void KnowledgeScreen::refreshHeader() {
 			}
 		});
 	}, tabs->lifetime());
-	// Поиск по холсту вид холста не принимает — поле только у заметок и графа
-	if (_view != View::Canvas) {
+	// Поиск по текущей вкладке: заметки — список, граф — точки, холст — карточки (web `PvHeaderSearch`)
+	{
 		const auto label = (_view == View::Graph)
 			? tr::lng_parvane_notes_graph_search()
 			: (_view == View::Canvas)
 			? tr::lng_parvane_notes_canvas_search()
 			: tr::lng_parvane_notes_search();
+		// Поле не уже 12rem: подсказки справа сжимаются (до нуля) раньше, чем поле теряет ширину
 		const auto search = header->addShrinkable(
 			object_ptr<Kit::Field>(header, Kit::Field::Kind::HeaderSearch, std::move(label), viewQuery()),
 			Rem(15),
-			Rem(9));
+			Rem(12));
 		search->textChanges() | rpl::on_next([=](const QString &value) {
 			setQuery(value);
 		}, search->lifetime());
@@ -833,19 +834,21 @@ void KnowledgeScreen::refreshHeader() {
 			u"plus"_q,
 			true));
 		add->setClickedCallback([=] { crl::on_main(this, [=] { handleNew(); }); });
-	} else if (_view == View::Canvas && !narrow) {
-		header->add(object_ptr<Kit::Label>(header, tr::lng_parvane_notes_canvas_hint(tr::now), Kit::Label::Small()));
-	} else if (_view == View::Graph && !narrow) {
-		// Подсказка графа: одна строка, не помещается — обрезается (целиком — во всплывающей подписи)
+	} else if ((_view == View::Canvas || _view == View::Graph) && !narrow) {
+		// Подсказка холста/графа: одна строка, не помещается — обрезается (целиком — во всплывающей подписи);
+		// поле поиска при этом держит свою минимальную ширину
+		const auto text = (_view == View::Canvas)
+			? tr::lng_parvane_notes_canvas_hint(tr::now)
+			: tr::lng_parvane_notes_graph_hint(tr::now);
 		const auto hint = header->addShrinkable(
-			object_ptr<Kit::Label>(header, tr::lng_parvane_notes_graph_hint(tr::now), Kit::Label::Style{
+			object_ptr<Kit::Label>(header, text, Kit::Label::Style{
 				.px = 13,
 				.tone = Tone::Muted,
 				.align = style::al_right,
 			}),
-			Kit::Font(13)->width(tr::lng_parvane_notes_graph_hint(tr::now)),
+			Kit::Font(13)->width(text),
 			0);
-		hint->setToolTip(tr::lng_parvane_notes_graph_hint(tr::now));
+		hint->setToolTip(text);
 		hint->setAttribute(Qt::WA_TransparentForMouseEvents, false);
 	}
 	header->show();
@@ -1129,6 +1132,9 @@ void KnowledgeScreen::refreshCanvas() {
 		const auto raw = view.release();
 		raw->setParent(_content);
 		_canvas.reset(raw);
+		if (!_canvasQuery.isEmpty()) {
+			NotesUi::SetCanvasSearch(raw, _canvasQuery);
+		}
 	}
 	_canvas->show();
 }
@@ -1303,6 +1309,9 @@ void KnowledgeScreen::setQuery(const QString &value) {
 		return;
 	} else if (_view == View::Canvas) {
 		_canvasQuery = value;
+		if (_canvas) {
+			NotesUi::SetCanvasSearch(_canvas.get(), value);
+		}
 		return;
 	}
 	_query = value;
@@ -1319,6 +1328,8 @@ void KnowledgeScreen::setQuery(const QString &value) {
 void KnowledgeScreen::searchNext() {
 	if (_view == View::Graph && _graph) {
 		_graph->searchNext();
+	} else if (_view == View::Canvas && _canvas) {
+		NotesUi::CanvasSearchNext(_canvas.get());
 	}
 }
 

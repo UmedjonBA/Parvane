@@ -529,6 +529,9 @@ void LeaveGroup(const QString &groupId);
 // Адрес нашей группы по peer (Chat) — "" если это не наша группа. Для врезки
 // нативного «выйти из группы» в меню.
 [[nodiscard]] QString GroupIdForChat(not_null<PeerData*> peer);
+// Группа Parvane — канал (spec 030): шапка показывает подписчиков, поле ввода — «Публикация», свои посты справа.
+// Только main-поток (кэш сведений групп).
+[[nodiscard]] bool IsChannelChat(not_null<PeerData*> peer);
 
 // ── публичные группы (spec 023, как web groups.ts) ──────────────────────────
 // Публичность своей группы v2: имя каталога (пусто — частная) и две настройки.

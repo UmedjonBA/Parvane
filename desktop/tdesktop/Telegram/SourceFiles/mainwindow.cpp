@@ -399,6 +399,9 @@ bool MainWindow::showSectionInExistingLayer(
 }
 
 void MainWindow::showMainMenu() {
+	// Parvane: бокового главного меню Telegram нет — его заменяют рейка разделов и «Профиль»
+	// (кнопка в шапке, свайп по списку чатов, ссылки tg://settings больше его не открывают)
+	return;
 	if (_passcodeLock || _setupEmailLock) return;
 
 	if (isHidden()) showFromTray();

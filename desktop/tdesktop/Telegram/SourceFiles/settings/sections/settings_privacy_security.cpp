@@ -882,7 +882,8 @@ void BuildSecuritySection(
 		.keywords = { u"passcode"_q, u"lock"_q, u"pin"_q },
 	});
 
-	if (session->passkeys().possible()) {
+	// Parvane: ключей доступа (passkeys) Telegram у нас нет — строка не показывается
+	if (constexpr auto kParvanePasskeys = false; kParvanePasskeys && session->passkeys().possible()) {
 		auto passkeysLabel = rpl::combine(
 			tr::lng_profile_loading(),
 			(rpl::single(rpl::empty_value())
@@ -934,10 +935,8 @@ void BuildSecuritySection(
 	}
 
 	{
-		auto loginEmailShown = session->api().cloudPassword().state(
-		) | rpl::map([](const Core::CloudPasswordState &state) {
-			return !state.loginEmailPattern.isEmpty();
-		}) | rpl::distinct_until_changed();
+		// Parvane: почты входа облачного пароля Telegram нет — строка не показывается
+		auto loginEmailShown = rpl::single(false);
 
 		auto loginEmailLabel = session->api().cloudPassword().state(
 		) | rpl::map([](const Core::CloudPasswordState &state) {
@@ -1059,15 +1058,6 @@ void BuildPrivacySection(SectionBuilder &builder) {
 
 	using Key = Privacy::Key;
 
-	builder.addPrivacyButton({
-		.id = u"privacy/phone_number"_q,
-		.title = tr::lng_settings_phone_number_privacy(),
-		.key = Key::PhoneNumber,
-		.controllerFactory = [=] {
-			return std::make_unique<PhoneNumberPrivacyController>(controller);
-		},
-		.keywords = { u"phone"_q, u"number"_q },
-	});
 
 	builder.addPrivacyButton({
 		.id = u"privacy/last_seen"_q,
@@ -1079,25 +1069,7 @@ void BuildPrivacySection(SectionBuilder &builder) {
 		.keywords = { u"last seen"_q, u"online"_q },
 	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/profile_photo"_q,
-		.title = tr::lng_settings_profile_photo_privacy(),
-		.key = Key::ProfilePhoto,
-		.controllerFactory = [] {
-			return std::make_unique<ProfilePhotoPrivacyController>();
-		},
-		.keywords = { u"photo"_q, u"avatar"_q },
-	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/forwards"_q,
-		.title = tr::lng_settings_forwards_privacy(),
-		.key = Key::Forwards,
-		.controllerFactory = [=] {
-			return std::make_unique<ForwardsPrivacyController>(controller);
-		},
-		.keywords = { u"forwards"_q, u"link"_q },
-	});
 
 	builder.addPrivacyButton({
 		.id = u"privacy/calls"_q,
@@ -1109,16 +1081,6 @@ void BuildPrivacySection(SectionBuilder &builder) {
 		.keywords = { u"calls"_q, u"voice"_q },
 	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/voices"_q,
-		.title = tr::lng_settings_voices_privacy(),
-		.key = Key::Voices,
-		.controllerFactory = [=] {
-			return std::make_unique<VoicesPrivacyController>(session);
-		},
-		.premium = true,
-		.keywords = { u"voice"_q, u"messages"_q },
-	});
 
 	const auto privacy = &session->api().globalPrivacy();
 	auto messagesLabel = rpl::combine(
@@ -1155,45 +1117,9 @@ void BuildPrivacySection(SectionBuilder &builder) {
 			st::settingsButtonNoIcon.padding);
 	}
 
-	builder.addPrivacyButton({
-		.id = u"privacy/birthday"_q,
-		.title = tr::lng_settings_birthday_privacy(),
-		.key = Key::Birthday,
-		.controllerFactory = [] {
-			return std::make_unique<BirthdayPrivacyController>();
-		},
-		.keywords = { u"birthday"_q, u"age"_q },
-	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/gifts"_q,
-		.title = tr::lng_settings_gifts_privacy(),
-		.key = Key::GiftsAutoSave,
-		.controllerFactory = [] {
-			return std::make_unique<GiftsAutoSavePrivacyController>();
-		},
-		.keywords = { u"gifts"_q },
-	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/bio"_q,
-		.title = tr::lng_settings_bio_privacy(),
-		.key = Key::About,
-		.controllerFactory = [] {
-			return std::make_unique<AboutPrivacyController>();
-		},
-		.keywords = { u"bio"_q, u"about"_q },
-	});
 
-	builder.addPrivacyButton({
-		.id = u"privacy/saved_music"_q,
-		.title = tr::lng_settings_saved_music_privacy(),
-		.key = Key::SavedMusic,
-		.controllerFactory = [] {
-			return std::make_unique<SavedMusicPrivacyController>();
-		},
-		.keywords = { u"music"_q, u"saved"_q },
-	});
 
 	builder.addPrivacyButton({
 		.id = u"privacy/groups"_q,

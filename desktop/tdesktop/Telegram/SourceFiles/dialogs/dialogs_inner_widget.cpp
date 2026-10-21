@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/dialogs_inner_widget.h"
+#include "parvane/parvane_folder_look.h" // Parvane: цвет метки папки (spec 030)
 
 #include "dialogs/dialogs_three_state_icon.h"
 #include "dialogs/ui/chat_search_empty.h"
@@ -389,6 +390,12 @@ InnerWidget::InnerWidget(
 			_shownList->updateHeights(_narrowRatio);
 		}
 		refreshWithCollapsedRows();
+	}, lifetime());
+
+	// Parvane (spec 030): цвет меток — тона схемы
+	Parvane::TonesChanges() | rpl::on_next([=] {
+		_chatsFilterTags.clear();
+		update();
 	}, lifetime());
 
 	session().data().chatsFilters().tagsEnabledValue(
@@ -913,13 +920,12 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 			context.chatsFilterTags = nullptr;
 		} else if (row->entry()->hasChatsFilterTags(context.filter)) {
 			const auto a = active;
-			context.st = (forum || monoforum)
-				? &st::taggedForumDialogRow
-				: &st::taggedDialogRow;
-			auto availableWidth = context.width
+			// Parvane (spec 030): метки — в строке имени после названия (web ChatTags), строка прежней высоты;
+			// под метки — не больше 45 % ширины имени, остальное режет dialogs_layout
+			auto availableWidth = (context.width
 				- context.st->padding.right()
 				- st::dialogsUnreadPadding
-				- context.st->nameLeft;
+				- context.st->nameLeft) * 45 / 100;
 			auto more = uint8(0);
 			const auto &list = session().data().chatsFilters().list();
 			for (const auto &filter : list) {
@@ -4950,23 +4956,22 @@ QImage *InnerWidget::cacheChatsFilterTag(
 			}
 		}
 	}
+	// Parvane (spec 030): метка — название папки как есть (web ChatTags), цвет — как у чипа папки
 	auto roundedText = TextWithEntities();
-	auto colorIndex = -1;
+	auto color = QColor();
 	if (filter.id()) {
 		roundedText = filter.title().text;
-		roundedText.text = roundedText.text.toUpper();
-		if (filter.colorIndex()) {
-			colorIndex = *(filter.colorIndex());
-		}
+		color = Parvane::FolderColor(
+			session().data().chatsFilters().list(),
+			filter.id());
 	} else if (more > 0) {
 		roundedText.text = QChar('+') + QString::number(more);
-		colorIndex = st::colorIndexBlue;
+		color = Parvane::ToneColor(Parvane::Tone::Muted);
 	}
-	if (roundedText.empty() || colorIndex < 0) {
+	if (roundedText.empty() || !color.isValid()) {
 		return nullptr;
 	}
-	const auto color = Ui::EmptyUserpic::UserpicColor(colorIndex).color2;
-	entry.context.color = color->c;
+	entry.context.color = color;
 	entry.context.active = active;
 	entry.context.textContext = Core::TextContext({ .session = &session() });
 	entry.frame = Ui::ChatsFilterTag(roundedText, entry.context);

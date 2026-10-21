@@ -49,6 +49,38 @@ void applyAvatar(not_null<PeerData*> peer, const QString &address) {
 		Images::FromImageInMemory(it.value(), "JPG", QByteArray()));
 }
 
+// Время первого появления группы на этом устройстве (main): строке списка чатов нужна дата, а у группы без
+// сообщений её нет — tdesktop такой чат не показывает (web показывает сразу, spec 030). Дата хранится, чтобы
+// пустая группа не всплывала наверх при каждом запуске; первое же сообщение её перезапишет.
+[[nodiscard]] TimeId GroupFirstSeen(const QString &gid) {
+	static auto loadedFrom = QString();
+	static auto seen = QHash<QString, TimeId>();
+	const auto path = cWorkingDir() + u"tdata/parvane-groups-seen.json"_q;
+	if (loadedFrom != path) {
+		loadedFrom = path;
+		seen.clear();
+		const auto j = nlohmann::json::parse(StoreRead(path).toStdString(), nullptr, false);
+		if (j.is_object()) {
+			for (const auto &[key, value] : j.items()) {
+				if (value.is_number_integer()) {
+					seen.insert(QString::fromStdString(key), TimeId(value.get<std::int64_t>()));
+				}
+			}
+		}
+	}
+	if (const auto i = seen.constFind(gid); i != seen.constEnd()) {
+		return *i;
+	}
+	const auto now = base::unixtime::now();
+	seen.insert(gid, now);
+	auto j = nlohmann::json::object();
+	for (auto i = seen.cbegin(); i != seen.cend(); ++i) {
+		j[i.key().toStdString()] = std::int64_t(i.value());
+	}
+	StoreWrite(path, QByteArray::fromStdString(j.dump()));
+	return now;
+}
+
 // Синтезирует (идемпотентно) базовую группу как ChatData, чтобы она появилась в
 // списке диалогов. gid — group_id (адрес переписки), name — заголовок,
 // memberCount — число участников (для «N members»). Регистрирует chatId↔gid.
@@ -96,6 +128,9 @@ ChatData *ensureGroupChat(
 		}
 		if (!history->unreadCountKnown()) {
 			history->setUnreadCount(0);
+		}
+		if (!history->chatListTimeId()) {
+			history->setChatListTimeId(GroupFirstSeen(gid)); // группа без сообщений — тоже в списке (spec 030)
 		}
 		LOG(("Parvane: группа синтезирована %1 (%2)").arg(gid, title));
 		// Личный канал контактов, указывающий на эту группу, теперь можно
@@ -272,10 +307,14 @@ bool ApplyGroupInfo(
 			? adminRightsFrom(selfRights)
 			: ChatAdminRights());
 	}
-	// Права по умолчанию только у групп: в канале пишут владелец и админы.
-	chat->setDefaultRestrictions(gi.kind == "channel"
-		? ChatRestrictions()
-		: restrictionsFromPerms(gi.default_permissions));
+	// Права по умолчанию только у групп: в канале пишут владелец и админы — у подписчика композер закрыт
+	// (владелец и админы освобождены от ограничений по умолчанию, как в группе).
+	auto channelPerms = parvane::DefaultPermissions();
+	channelPerms.send_messages = channelPerms.send_media = channelPerms.send_stickers_gifs = false;
+	channelPerms.send_polls = channelPerms.embed_links = channelPerms.invite_users = false;
+	chat->setDefaultRestrictions(restrictionsFromPerms(gi.kind == "channel"
+		? channelPerms
+		: gi.default_permissions));
 	chat->setAbout(QString::fromStdString(gi.about));
 	// Фото группы — открытый объект cloud, как аватар пользователя.
 	const auto avatar = QString::fromStdString(gi.avatar);
@@ -332,6 +371,18 @@ std::optional<parvane::GroupInfo> GroupInfoFor(const QString &gid) {
 	return (it == g_groupInfo.constEnd())
 		? std::nullopt
 		: std::optional<parvane::GroupInfo>(it.value());
+}
+
+bool IsChannelChat(not_null<PeerData*> peer) {
+	if (!peer->isChat()) {
+		return false;
+	}
+	const auto gid = GroupIdForChat(peer);
+	if (gid.isEmpty()) {
+		return false;
+	}
+	const auto it = g_groupInfo.constFind(gid);
+	return (it != g_groupInfo.constEnd()) && (it->kind == "channel");
 }
 
 QString GroupRoleOf(const QString &gid, const QString &address) {

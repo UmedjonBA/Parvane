@@ -31,6 +31,7 @@ public:
 
 protected:
 	void resizeEvent(QResizeEvent *e) override;
+	void paintEvent(QPaintEvent *e) override; // фон схемы и знак Parvane (экран входа «Пространство»)
 
 private:
 	void updateControlsGeometry();
@@ -97,6 +98,7 @@ private:
 	void setMode(Mode mode);
 	Mode _mode = Mode::SignIn;
 	object_ptr<Ui::LinkButton> _switchMode;
+	QImage _logo; // знак мотылька под текущий масштаб экрана
 	rpl::variable<QString> _nextText;
 
 };

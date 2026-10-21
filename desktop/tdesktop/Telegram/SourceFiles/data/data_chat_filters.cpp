@@ -447,6 +447,8 @@ void ChatFilters::load(bool force) {
 	// (SourceFiles/parvane/parvane_client.cpp) прямо в этот же _list. Поэтому
 	// загрузка завершается сразу тем, что уже в памяти.
 	_loadRequestId = 0;
+	// Parvane (spec 030): метки папок у имени чата включены всегда (web ChatTags); MTProto-переключателя нет
+	_tagsEnabled = true;
 	if (!ranges::contains(begin(_list), end(_list), 0, &ChatFilter::id)) {
 		_list.insert(begin(_list), ChatFilter());
 	}
