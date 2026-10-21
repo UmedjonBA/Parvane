@@ -2757,6 +2757,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
 "lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
 "lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
+"lng_parvane_logout_progress" = "Signing out of this device. Its data will be erased in a few seconds.";
+"lng_parvane_logout_pending" = "Signing out of the previous account is still in progress. Try again in a few seconds.";
 "lng_parvane_notes_embed_play" = "Play";
 "lng_parvane_notes_embed_loading" = "Loading…";
 "lng_parvane_notes_embed_failed" = "Could not open the file";

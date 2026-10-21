@@ -829,10 +829,8 @@ void ProjectNotify(const parvane::json &snap) {
 	if (!QFile::exists(NotifyJournaledPath())) {
 		// Вид `notify` появился позже первого переноса состояния: в журнале его
 		// ещё нет — локальные настройки уходят в журнал, а не стираются.
-		QFile marker(NotifyJournaledPath());
-		if (marker.open(QIODevice::WriteOnly)) {
-			marker.close();
-		}
+		// Под оградой хранилища: событие прежней сессии после выхода со стиранием маркер не пересоздаёт
+		parvane::storecrypt::writeRawFile(NotifyJournaledPath().toStdString(), std::string_view());
 		if (!has) {
 			ScheduleStateFlush("notify");
 			return;

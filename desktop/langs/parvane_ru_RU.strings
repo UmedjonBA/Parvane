@@ -8933,6 +8933,8 @@
 "lng_parvane_chat_mode_off_you" = "Вы выключили усиленную приватность";
 "lng_parvane_upgrade_available" = "Доступна новая версия Parvane. Обновите приложение — эта версия скоро перестанет работать.";
 "lng_parvane_upgrade_required" = "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.";
+"lng_parvane_logout_progress" = "Выход с этого устройства. Его данные будут стёрты через несколько секунд.";
+"lng_parvane_logout_pending" = "Выход из прежнего аккаунта ещё не завершён. Повторите через несколько секунд.";
 "lng_parvane_notes_embed_play" = "Воспроизвести";
 "lng_parvane_notes_embed_loading" = "Загрузка…";
 "lng_parvane_notes_embed_failed" = "Не удалось открыть файл";

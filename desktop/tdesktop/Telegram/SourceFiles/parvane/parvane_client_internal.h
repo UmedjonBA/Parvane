@@ -93,6 +93,8 @@ inline const char *ParvaneDevEnv(const char *name) {
 #include <parvane/sections/planner_engine.h>
 #include <parvane/sections/task_offer.h>
 #include <parvane/storecrypt.h>      // parvane-core (шифрование tdata/parvane-*, P-13)
+#include <parvane/local_files.h>     // parvane-core (временный каталог, стирание при выходе, строки журнала)
+#include "parvane/parvane_local_files.h" // временный каталог экземпляра, LogSecret
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
 #include <parvane/keybundle.h>       // parvane-core: отпечаток снимка истории (spec 015)
 #include <parvane/call_manager.h>    // parvane-core (оркестрация звонка)
@@ -243,7 +245,9 @@ void EnsureStoreKey();
 [[nodiscard]] QByteArray StoreRead(const QString &path);
 bool StoreWrite(const QString &path, const QByteArray &data);
 [[nodiscard]] QStringList StoreReadLines(const QString &path);
-[[nodiscard]] QString MediaDir();
+// Кэш расшифрованных вложений (tdata/parvane-media-cache, зашифрован ключом хранилища)
+[[nodiscard]] std::optional<std::string> ReadMediaCache(const QString &fileId);
+void WriteMediaCache(const QString &fileId, const std::string &bytes);
 [[nodiscard]] bool IsSafeFileId(const QString &fileId);
 [[nodiscard]] QString HistoryPath();
 void AppendCleared(const QStringList &uuids);
@@ -310,6 +314,13 @@ void ImportV2History(const std::string &stateJson);
 
 } // namespace Internal
 using namespace Internal;
+
+// Выход со стиранием (NAT-16): новый вход ждёт его конца и снимает ограду записи хранилища; false — выход ещё
+// идёт (вход отложить). Звать не с главного потока (ждёт до 30 с).
+[[nodiscard]] bool PrepareForLogin();
+// При старте процесса, до хранилища и сессии: дотереть прерванный выход, стереть временный каталог экземпляра,
+// прежний открытый кэш медиа и прежние общие $TMPDIR/parvane-*.
+void StartupHousekeeping();
 
 // ── то же в пространстве Parvane (прежде — объявления вперёд в parvane_client.cpp) ──
 extern QSet<QString> g_blockedAddrs;

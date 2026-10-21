@@ -2,6 +2,7 @@
 // снимка CloudView, место в списке, сортировка (настройка устройства), переносы с ходом и отменой, уведомление,
 // свои ссылки, миниатюры. Сеть и крипто — задания в рабочий поток разделов (`Sections::Ask`, CloudFiles ядра).
 #include "parvane/parvane_cloud_internal.h"
+#include "parvane/parvane_local_files.h"
 
 #include "core/file_utilities.h"
 #include "lang/lang_instance.h"
@@ -1029,12 +1030,14 @@ void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QStr
 			list.push_back({ e.container, e.node.id });
 		}
 	}
-	const auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
-		u"parvane-cloud/"_q + QUuid::createUuid().toString(QUuid::WithoutBraces));
 	Sections::Ask<std::pair<QStringList, QString>>([=](Sections::Workers &w) {
 		auto paths = QStringList();
 		auto error = QString();
-		QDir().mkpath(dir);
+		// Временный каталог экземпляра (tdata/parvane-tmp), не общий $TMPDIR: стирается при старте и выходе
+		const auto dir = MakeTempDir(u"cloud"_q);
+		if (dir.isEmpty()) {
+			return std::make_pair(paths, error);
+		}
 		auto files = cloud::CloudFiles(w.drive);
 		for (const auto &[container, node] : list) {
 			const auto got = files.download(container, node);
@@ -1045,9 +1048,7 @@ void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QStr
 			auto name = Q(got.name);
 			name.replace('/', '_');
 			const auto path = QDir(dir).filePath(name);
-			auto f = QFile(path);
-			if (f.open(QIODevice::WriteOnly)) {
-				f.write(got.bytes.data(), qint64(got.bytes.size()));
+			if (WriteTempFile(path, got.bytes)) {
 				paths.push_back(path);
 			}
 		}

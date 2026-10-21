@@ -12,6 +12,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace parvane::storecrypt {
@@ -61,5 +62,18 @@ int migrateFile(const std::string &path);
 // каталога не затрагиваются. Возвращает число стёртых записей; несбывшиеся — в `failed` (имена), если задан.
 int removePrefixed(const std::string &dir, const std::string &prefix, const std::vector<std::string> &keep,
                    std::vector<std::string> *failed = nullptr);
+
+// Ограда записи (NAT-16, поздняя запись после стирания). blockWrites() дожидается записей, уже идущих через
+// хелперы этого файла (writeFile, appendLine, writeLines, migrate*, writeRawFile), и с этого момента все они
+// отказывают (false, на диск ничего), пока не вызван allowWrites(). Так фоновая задача прежней сессии (поток
+// разделов, журнал истории, кэш) не пересоздаёт стёртый файл: запись либо закончилась до ограды (и стирается
+// вслед за ней), либо отклонена. Desktop ставит ограду при выходе со стиранием и снимает при следующем входе.
+void blockWrites();
+void allowWrites();
+[[nodiscard]] bool writesBlocked();
+
+// Открытый файл под той же оградой (атомарно: tmp + rename, права 0600): расшифрованные копии во временном
+// каталоге экземпляра, которые нужны внешнему приложению по пути. Шифрованием НЕ закрывается — только оградой.
+bool writeRawFile(const std::string &path, std::string_view data);
 
 } // namespace parvane::storecrypt

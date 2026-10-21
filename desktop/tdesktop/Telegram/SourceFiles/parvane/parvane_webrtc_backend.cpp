@@ -6,6 +6,7 @@
 
 #include "base/debug_log.h"
 #include "parvane/parvane_client.h"     // FetchIceServers (шард call)
+#include "parvane/parvane_local_files.h" // LogSecret
 #include "parvane/parvane_call_panel.h" // нативный экран звонка (Native*)
 #include "parvane/parvane_call_video.h" // сырые кадры → нативный видео-трек
 #include "parvane/parvane_pulse_adm.h"  // свой ADM (PulseAudio) вместо dummy
@@ -438,7 +439,7 @@ private:
 			return;
 		}
 		const auto sas = parvane::crypto::sasEmoji(lf, rf);
-		LOG(("Parvane: SAS звонка: %1").arg(QString::fromStdString(sas)));
+		LOG(("Parvane: SAS звонка: %1").arg(LogSecret(QString::fromStdString(sas))));
 		Parvane::NativeCallSas(sas);
 	}
 

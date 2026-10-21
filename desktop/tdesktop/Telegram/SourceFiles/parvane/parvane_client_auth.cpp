@@ -151,7 +151,21 @@ void EnsureDefaultLanguage() {
 
 void LogStartup() {
 	LOG(("Parvane: протокол v2, сервер %1").arg(GatewayUrl()));
+	StartupHousekeeping(); // до хранилища и сессии (Application::run → startLocalStorage — следом)
 }
+
+namespace {
+
+// Строки журнала клиента («Parvane…»): dev-сборка пишет их в log.txt как раньше (verify_*.sh), релиз — только
+// при режиме отладки tdesktop, иначе в память (parvane-core logpriv). Ставится до main — до первой строки.
+[[maybe_unused]] const bool kLogDevBuildSet = [] {
+#ifdef PARVANE_DEV
+	parvane::logpriv::setDevBuild(true);
+#endif // PARVANE_DEV
+	return true;
+}();
+
+} // namespace
 
 ServerInfo FetchServerInfo() {
 	ServerInfo out;
@@ -188,6 +202,11 @@ IssueResult Issue(
 		const QString &loginToken,
 		bool cancelDeletion) {
 	IssueResult out;
+	// Выход со стиранием прежнего аккаунта ещё идёт — вход после него (иначе стирание задело бы новый вход)
+	if (!PrepareForLogin()) {
+		out.error = tr::lng_parvane_logout_pending(tr::now);
+		return out;
+	}
 	try {
 		// Канал PRE: без токена (gateway пускает identity.session.issue до auth).
 		parvane::v2::account::IssueRequest req;
@@ -239,6 +258,10 @@ IssueResult Issue(
 RegisterResult Register(const QString &user, const QString &password,
 		const QString &email) {
 	RegisterResult out;
+	if (!PrepareForLogin()) {
+		out.error = tr::lng_parvane_logout_pending(tr::now);
+		return out;
+	}
 	try {
 		// bootstrap: как Issue, до auth (identity.user.register разрешён).
 		// email — регистрация через почту (PARVANE_EMAIL_REQUIRED на identity):

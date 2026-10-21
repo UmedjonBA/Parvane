@@ -3,6 +3,7 @@
 
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_cloud_internal.h"
+#include "parvane/parvane_local_files.h"
 #include "parvane/parvane_notes_canvas_media.h"
 #include "parvane/parvane_space.h"
 
@@ -43,15 +44,18 @@ constexpr auto kCardMaxWidthRem = 24.;
 	return (node.blob && node.blob->is_object()) ? node.blob->value("fileId", std::string()) : std::string();
 }
 
+// Временный каталог экземпляра (tdata/parvane-tmp), не общий $TMPDIR: стирается при старте и выходе. Пусто — нет каталога
 [[nodiscard]] QString TempPath(const QString &name) {
-	const auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
-		u"parvane-embed/"_q + QUuid::createUuid().toString(QUuid::WithoutBraces));
-	QDir().mkpath(dir);
+	const auto dir = MakeTempDir(u"embed"_q);
+	if (dir.isEmpty()) {
+		return QString();
+	}
 	auto safe = name;
 	safe.replace('/', '_');
 	return QDir(dir).filePath(safe.isEmpty() ? u"file"_q : safe);
 }
 
+// Файл, выбранный пользователем («Сохранить как»)
 [[nodiscard]] bool WriteFile(const QString &path, const QByteArray &bytes) {
 	auto f = QFile(path);
 	return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size();
@@ -282,7 +286,7 @@ private:
 					return;
 				}
 				const auto path = TempPath(name);
-				finish(WriteFile(path, *bytes) ? path : QString());
+				finish((!path.isEmpty() && WriteTempFile(path, *bytes)) ? path : QString());
 			});
 		}
 	}

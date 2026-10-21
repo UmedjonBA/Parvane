@@ -3,6 +3,7 @@
 #include "parvane/parvane_note_view.h"
 
 #include "parvane/parvane_icons.h"
+#include "parvane/parvane_local_files.h"
 #include "parvane/parvane_note_links.h"
 #include "parvane/parvane_note_embed.h"
 #include "parvane/parvane_note_markdown.h"
@@ -30,6 +31,7 @@
 
 #include <crl/crl_on_main.h>
 
+#include <QtCore/QBuffer>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMimeData>
@@ -1075,11 +1077,19 @@ void NoteView::insertClipboardImage(const QImage &image) {
 	if (image.isNull()) {
 		return;
 	}
-	const auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
-		u"parvane-paste/"_q + QUuid::createUuid().toString(QUuid::WithoutBraces));
-	QDir().mkpath(dir);
+	// Временный каталог экземпляра (tdata/parvane-tmp), не общий $TMPDIR: стирается при старте и выходе
+	const auto dir = MakeTempDir(u"paste"_q);
+	if (dir.isEmpty()) {
+		return;
+	}
 	const auto path = QDir(dir).filePath(u"Pasted image.png"_q);
-	if (image.save(path, "PNG")) {
+	auto bytes = QByteArray();
+	{
+		auto buffer = QBuffer(&bytes);
+		buffer.open(QIODevice::WriteOnly);
+		image.save(&buffer, "PNG");
+	}
+	if (!bytes.isEmpty() && WriteTempFile(path, bytes)) {
 		insertLocalFiles({ path });
 	}
 }

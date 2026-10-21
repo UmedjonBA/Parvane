@@ -7,6 +7,7 @@
 #include "data/data_location.h"
 #include "main/main_session.h"
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_local_files.h" // LogSecret
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 
 #include <parvane/map_tiles.h> // parvane-core
@@ -63,7 +64,7 @@ void noteFailed(
 		std::lock_guard<std::mutex> lk(g_mapMutex);
 		if (g_attempts[key] >= kMapRetryMax) {
 			LOG(("Parvane: карта локации %1,%2 — повторы исчерпаны (%3)")
-				.arg(key.first).arg(key.second).arg(kMapRetryMax));
+				.arg(LogSecret(key.first)).arg(LogSecret(key.second)).arg(kMapRetryMax));
 			return;
 		}
 		g_failed[key] = FailedMap{ session, image };
@@ -113,7 +114,7 @@ void RequestLocationMap(
 	auto bus = SnapshotBus();
 	if (!bus.control) {
 		LOG(("Parvane: карта локации не собрана %1,%2: нет транспорта")
-			.arg(lat).arg(lon));
+			.arg(LogSecret(lat)).arg(LogSecret(lon)));
 		noteFailed(session.get(), image.get(), key);
 		return;
 	}
@@ -140,7 +141,7 @@ void RequestLocationMap(
 		double(native.scale));
 	if (geometry.tiles.empty()) {
 		LOG(("Parvane: карта локации не собрана %1,%2: пустая геометрия")
-			.arg(lat).arg(lon));
+			.arg(LogSecret(lat)).arg(LogSecret(lon)));
 		return;
 	}
 	const auto sessionPtr = session.get();
@@ -200,7 +201,7 @@ void RequestLocationMap(
 		const auto total = int(geometry.tiles.size());
 		if (!ok) {
 			LOG(("Parvane: карта локации не собрана %1,%2: 0 тайлов из %3")
-				.arg(lat).arg(lon).arg(total));
+				.arg(LogSecret(lat)).arg(LogSecret(lon)).arg(total));
 			{
 				std::lock_guard<std::mutex> lk(g_mapMutex);
 				g_requested.erase(key); // дать шанс повтору
@@ -221,7 +222,7 @@ void RequestLocationMap(
 			publishOnMain(sessionPtr, imagePtr, canvas, png);
 			++g_built;
 			LOG(("Parvane: карта локации собрана %1,%2 z%3 %4x%5 тайлов=%6/%7")
-				.arg(lat).arg(lon).arg(geometry.zoom)
+				.arg(LogSecret(lat)).arg(LogSecret(lon)).arg(geometry.zoom)
 				.arg(canvas.width()).arg(canvas.height())
 				.arg(ok).arg(total));
 			if (ok < total) {
@@ -229,7 +230,7 @@ void RequestLocationMap(
 				// ставим точку в очередь повторов — иначе пузырь оставался с
 				// дырами до рестарта (готовые тайлы повтор берёт из LRU).
 				LOG(("Parvane: карта локации собрана частично %1,%2 — повтор")
-					.arg(lat).arg(lon));
+					.arg(LogSecret(lat)).arg(LogSecret(lon)));
 				{
 					std::lock_guard<std::mutex> lk(g_mapMutex);
 					g_requested.erase(key);
@@ -266,7 +267,7 @@ void RetryFailedLocationMaps() {
 			attempt = g_attempts[key];
 		}
 		LOG(("Parvane: повтор склейки карты %1,%2 (попытка %3 из %4)")
-			.arg(key.first).arg(key.second).arg(attempt).arg(kMapRetryMax));
+			.arg(LogSecret(key.first)).arg(LogSecret(key.second)).arg(attempt).arg(kMapRetryMax));
 		RequestLocationMap(
 			failed.session,
 			Data::LocationPoint(key.first, key.second, Data::LocationPoint::NoAccessHash),

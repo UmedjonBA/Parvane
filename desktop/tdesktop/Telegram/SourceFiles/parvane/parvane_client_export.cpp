@@ -202,13 +202,9 @@ std::optional<std::string> ExportMediaBytes(
 	if (!IsSafeFileId(id)) {
 		return std::nullopt;
 	}
-	// Уже расшифрованное устройством при показе (`<file_id>_<имя>`)
-	const auto dir = QDir(MediaDir());
-	for (const auto &name : dir.entryList(QStringList{ id + u"_*"_q }, QDir::Files)) {
-		auto f = QFile(dir.filePath(name));
-		if (f.open(QIODevice::ReadOnly)) {
-			return f.readAll().toStdString();
-		}
+	// Уже расшифрованное устройством при показе — из зашифрованного кэша (tdata/parvane-media-cache)
+	if (auto cached = ReadMediaCache(id)) {
+		return cached;
 	}
 	std::shared_ptr<parvane::v2::Control> t;
 	std::string self, token;

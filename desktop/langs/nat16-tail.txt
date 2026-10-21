@@ -1,0 +1,7 @@
+lng_parvane_logout_progress
+Signing out of this device. Its data will be erased in a few seconds.
+Выход с этого устройства. Его данные будут стёрты через несколько секунд.
+
+lng_parvane_logout_pending
+Signing out of the previous account is still in progress. Try again in a few seconds.
+Выход из прежнего аккаунта ещё не завершён. Повторите через несколько секунд.

@@ -61,12 +61,19 @@ grep -q "Parvane: медиа отправлено.*$FID" "$A_LOG" 2>/dev/null &&
 grep -q "получено медиа.*alice@local:.*$FID" "$B_LOG" 2>/dev/null && ok "bob принял и инъецировал медиа" || bad "bob не принял медиа"
 grep -q "медиа-диалог alice@local — в списке=1" "$B_LOG" 2>/dev/null && ok "у bob диалог alice в списке" || bad "у bob нет медиа-диалога"
 
-# Целостность: файл, который bob записал на диск (tdata/parvane-media, NAT-02), == исходному.
-GOT=$(ls -t "$B_WD/td/tdata/parvane-media/${FID}_"* 2>/dev/null | head -1)
+# Целостность: открытая копия bob (временный каталог экземпляра tdata/parvane-tmp/media) == исходному.
+GOT=$(ls -t "$B_WD/td/tdata/parvane-tmp/media/${FID}_"* 2>/dev/null | head -1)
 if [ -n "$GOT" ] && cmp -s "$SRC" "$GOT"; then
     ok "скачанный блоб побайтово равен исходному ($SZ байт)"
 else
     bad "блоб на диске не совпал (got=$GOT)"
+fi
+# Кэш расшифрованных медиа — шифртекст ключом хранилища (PVSE1), без открытых байтов исходника
+CACHE="$B_WD/td/tdata/parvane-media-cache/$FID"
+if [ -f "$CACHE" ] && [ "$(head -c 5 "$CACHE")" = "PVSE1" ] && ! cmp -s "$SRC" "$CACHE"; then
+    ok "кэш медиа bob зашифрован"
+else
+    bad "кэш медиа bob не зашифрован или отсутствует ($CACHE)"
 fi
 
 grep -qiE "Fatal|Unexpected in |ошибка скачивания медиа|не записать медиа" "$A_LOG" "$B_LOG" 2>/dev/null \

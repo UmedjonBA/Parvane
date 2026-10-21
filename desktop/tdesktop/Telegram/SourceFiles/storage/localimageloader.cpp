@@ -39,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "main/main_session.h"
+#include "parvane/parvane_local_files.h" // Parvane fork: LogSecret
 
 #include <QtCore/QBuffer>
 #include <QtGui/QImageWriter>
@@ -1052,8 +1053,8 @@ void FileLoadTask::finish() {
 	LOG(("Parvane/send: finish type=%1 filesize=%2 filepath=%3 filename=%4 mime=%5")
 		.arg(int(_type))
 		.arg(_result ? _result->filesize : -1)
-		.arg(_filepath)
-		.arg(_result ? _result->filename : QString())
+		.arg(Parvane::LogSecret(_filepath))
+		.arg(Parvane::LogSecret(_result ? _result->filename : QString()))
 		.arg(_result ? _result->filemime : QString()));
 	const auto premium = session->user()->isPremium();
 	if (!_result || !_result->filesize || _result->filesize < 0) {

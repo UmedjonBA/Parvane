@@ -39,8 +39,9 @@ wait_log "$B/td/log.txt" "autoforward alice@local → carol@local" 40 || bad "bo
 wait_log "$B/td/log.txt" "переслано медиа → carol@local" 40 && ok "bob отправил пересылку" || bad "bob не отправил пересылку"
 wait_log "$C/td/log.txt" "входящее медиа .*bob@local" 60 && ok "carol получила пересланное фото" || bad "carol не получила пересланное фото"
 sleep 3
-# CAP-1: тот же блоб (file_id исходного), скачан в tdata/parvane-media carol
-GOT=$(ls -t "$C/td/tdata/parvane-media/${FID}_"* 2>/dev/null | head -1)
+# CAP-1: тот же блоб (file_id исходного); открытая копия у carol — во временном каталоге экземпляра
+# (tdata/parvane-tmp/media), кэш tdata/parvane-media-cache зашифрован (ревью 21 окт)
+GOT=$(ls -t "$C/td/tdata/parvane-tmp/media/${FID}_"* 2>/dev/null | head -1)
 [ -n "$GOT" ] && cmp -s "$SRC" "$GOT" && ok "блоб у carol побайтово равен исходному" || bad "блоб у carol не совпал (got=$GOT)"
 grep -qiE "Fatal|Unexpected in |ошибка скачивания медиа" "$A/td/log.txt" "$B/td/log.txt" "$C/td/log.txt" && bad "ошибки в логах" || ok "без фатальных ошибок"
 stop_pid "$AP"; stop_pid "$BP"; stop_pid "$CP"; stack_stop

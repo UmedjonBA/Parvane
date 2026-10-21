@@ -1,9 +1,20 @@
 // Parvane fork: см. parvane_client.h.
 #include "parvane/parvane_client_internal.h"
 #include "parvane/parvane_article_view.h"
+#include "parvane/parvane_local_files.h"
 #include "data/data_photo_media.h"
+#include <condition_variable>
+#include <thread>
 #include <deque>
+#include <QtCore/QCoreApplication>
+#include <QtCore/QStandardPaths>
 #include <QtGui/QImageReader>
+
+// Parvane fork: стирание журналов tdesktop при выходе со стиранием (определено в logs.cpp; logs.h не меняется —
+// его подключают почти все объекты)
+namespace Logs {
+void ParvaneWipeFiles();
+} // namespace Logs
 namespace Parvane {
 
 void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> doc);
@@ -570,14 +581,56 @@ bool StoreWriteLines(const QString &path, const QStringList &lines) {
 // Пишем каждое ПОКАЗАННОЕ сообщение (своё при отправке, принятое в injectOnMain) в
 // РАСШИФРОВАННОМ виде в per-self journal и воспроизводим при старте. Переживает
 // и рестарт, и релогин (файл наш, не чистится логаутом tdesktop).
-// NAT-02/NAT-05: расшифрованные медиа — в tdata (не в общем /tmp, где файлы
-// читались всеми и жили вечно), каталог 0700, файлы 0600; имя и id файла из
-// сообщения — только безопасные символы (иначе `../` писал в домашний каталог).
-[[nodiscard]] QString MediaDir() {
-	const auto dir = cWorkingDir() + u"tdata/parvane-media"_q;
+// NAT-02/NAT-05: расшифрованные медиа — не в общем /tmp, где файлы читались всеми и жили вечно; имя и id
+// файла из сообщения — только безопасные символы (иначе `../` писал в домашний каталог).
+// Ревью 21 окт: кэш расшифрованных вложений — `tdata/parvane-media-cache/<file_id>`, зашифрован ключом
+// хранилища (как прочие tdata/parvane-*; имя файла в кэш не попадает). tdesktop (плеер, «Открыть», «Сохранить
+// как») читает файл по пути — ему отдаётся открытая копия во временном каталоге экземпляра
+// `tdata/parvane-tmp/media` (0700/0600), который стирается при старте и при выходе со стиранием. Прежний
+// открытый кэш `tdata/parvane-media` стирается при старте (`StartupHousekeeping`).
+[[nodiscard]] QString MediaCachePath(const QString &fileId) {
+	const auto dir = cWorkingDir() + u"tdata/parvane-media-cache"_q;
 	QDir().mkpath(dir);
 	QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
-	return dir;
+	return dir + u"/"_q + fileId;
+}
+
+// Расшифрованные байты вложения из кэша устройства; nullopt — нет в кэше (или id небезопасен)
+[[nodiscard]] std::optional<std::string> ReadMediaCache(const QString &fileId) {
+	if (!IsSafeFileId(fileId)) {
+		return std::nullopt;
+	}
+	const auto path = MediaCachePath(fileId);
+	if (!QFileInfo::exists(path)) {
+		return std::nullopt;
+	}
+	EnsureStoreKey();
+	const auto blob = parvane::storecrypt::readFile(path.toStdString());
+	if (blob.empty()) {
+		return std::nullopt; // нечитаемо (чужой ключ, порча) — скачается заново
+	}
+	return blob;
+}
+
+void WriteMediaCache(const QString &fileId, const std::string &bytes) {
+	if (IsSafeFileId(fileId) && !bytes.empty()) {
+		EnsureStoreKey();
+		parvane::storecrypt::writeFile(MediaCachePath(fileId).toStdString(), bytes);
+	}
+}
+
+// Открытая копия для tdesktop во временном каталоге экземпляра; пусто — не записана
+[[nodiscard]] QString WriteMediaWorkCopy(const QString &name, const std::string &bytes) {
+	const auto dir = TempKindDir(u"media"_q);
+	if (dir.isEmpty()) {
+		return QString();
+	}
+	const auto path = dir + u"/"_q + name;
+	// Уже лежит (повтор показа в этом запуске) — файл может держать внешнее приложение, не переписываем
+	if (QFileInfo(path).size() == qint64(bytes.size()) && QFileInfo::exists(path)) {
+		return path;
+	}
+	return WriteTempFile(path, bytes) ? path : QString();
 }
 
 [[nodiscard]] bool IsSafeFileId(const QString &fileId) {
@@ -594,10 +647,6 @@ bool StoreWriteLines(const QString &path, const QStringList &lines) {
 	}
 	base = base.left(128).trimmed();
 	return base.isEmpty() ? u"file"_q : base;
-}
-
-void RestrictToOwner(const QString &path) {
-	QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
 [[nodiscard]] QString HistoryPath() {
@@ -2844,39 +2893,162 @@ const std::vector<std::string> kDeviceSettings = {
 	"parvane-callkey.txt",  // ключ подписи звонков процесса (g_callKey держит его в памяти)
 };
 
-// Стереть данные Parvane из tdata этой установки: состояние движка (ключи, id устройства), журнал истории,
-// кэши, расшифрованные медиа, файлы разделов. Только имена parvane-* в своём рабочем каталоге — системный
-// telegram-desktop (другой каталог) и файлы tdesktop не затрагиваются (parvane-core, тест storecrypt NAT-16).
-int WipeParvaneData() {
-	auto failed = std::vector<std::string>();
-	const auto removed = parvane::storecrypt::removePrefixed(
-		(cWorkingDir() + u"tdata"_q).toStdString(),
-		"parvane-",
-		kDeviceSettings,
-		&failed);
-	for (const auto &name : failed) {
-		LOG(("Parvane: выход — не удалось стереть %1").arg(QString::fromStdString(name)));
+// Выход со стиранием идёт в своём потоке (сеть — до 5 с), UI не ждёт. Новый вход ждёт его конца
+// (PrepareForLogin), выход из приложения — тоже (aboutToQuit); процесс, убитый посреди выхода, дотирает при
+// следующем старте по маркеру (StartupHousekeeping).
+std::mutex g_logoutMutex;
+std::condition_variable g_logoutDone;
+bool g_logoutRunning = false; // под g_logoutMutex
+
+void LogWipeResult(const parvane::localfiles::WipeResult &result, const char *when) {
+	for (const auto &name : result.failed) {
+		LOG(("Parvane: %1 — не удалось стереть %2").arg(QString::fromUtf8(when), QString::fromStdString(name)));
 	}
-	return removed;
+	LOG(("Parvane: %1 — данные устройства стёрты (%2 записей tdata/parvane-*, временный каталог %3)")
+		.arg(QString::fromUtf8(when))
+		.arg(result.removed)
+		.arg(result.tempWiped ? u"стёрт"_q : u"НЕ стёрт"_q));
+}
+
+// Журналы tdesktop (log.txt, DebugLogs) со строками прежней сессии и память строк клиента — прочь
+void WipeClientLogs() {
+	parvane::logpriv::forget();
+	Logs::ParvaneWipeFiles();
+}
+
+[[nodiscard]] bool WaitLogoutFinished(crl::time timeoutMs) {
+	auto lock = std::unique_lock(g_logoutMutex);
+	return g_logoutDone.wait_for(lock, std::chrono::milliseconds(timeoutMs), [] {
+		return !g_logoutRunning;
+	});
 }
 
 } // namespace
 
 void LogOutAndWipe() {
-	// 1. Пока соединение живо — запись выхода в журнал устройств (своим ключом, SSK не раскрывается):
-	// у остальных устройств и собеседников этого устройства больше нет, сервер гасит его сессию.
-	if (const auto s = V2Ready()) {
-		const auto left = s->leave(kLeaveTimeoutMs);
-		LOG(("Parvane: выход — устройство %1 журнала устройств")
-			.arg(left ? u"вышло из"_q : u"не вышло (нет связи или отказ) из"_q));
+	const auto tdata = TdataDir().toStdString();
+	{
+		auto lock = std::lock_guard(g_logoutMutex);
+		if (g_logoutRunning) {
+			return;
+		}
+		g_logoutRunning = true;
 	}
-	// 2. Сессия гаснет, учётные данные — прочь.
-	ClearLocalState();
-	// 3. Стирание данных аккаунта на устройстве: следующий вход — новым устройством.
-	const auto removed = WipeParvaneData();
-	// Ключ хранилища — заново от локального ключа tdesktop при следующем доступе
-	parvane::storecrypt::setKey(std::string());
-	LOG(("Parvane: выход — данные устройства стёрты (%1 записей tdata/parvane-*)").arg(removed));
+	// 0. Маркер «выход не завершён» — до всего остального: процесс могут закрыть или убить посреди выхода
+	parvane::localfiles::setLogoutPending(tdata);
+	// 1. Сессия v2 отцепляется от клиента, но не останавливается: запись выхода в журнал устройств ещё впереди
+	auto s = std::shared_ptr<parvane::v2::Session>();
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		if (g_v2 && g_v2->isReady()) {
+			s = g_v2;
+		}
+		if (s) {
+			g_v2 = nullptr; // StopSession ниже её не остановит; остановит поток выхода после leave
+		} else {
+			s = std::exchange(g_v2, nullptr); // не готова — только остановить
+		}
+	}
+	const auto ready = s && s->isReady();
+	// 2. Учётные данные и сессия клиента — сразу (рестарт посреди выхода не поднимет прежний аккаунт)
+	StopSession();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_token.clear();
+		g_selfAddress.clear();
+		g_ownSentUuids.clear();
+	}
+	QFile::remove(cWorkingDir() + u"tdata/parvane-session.txt"_q);
+	LOG(("Parvane: выход — учётные данные удалены, устройство выходит из журнала устройств"));
+	if (const auto window = Core::App().activeWindow()) {
+		window->showToast(tr::lng_parvane_logout_progress(tr::now));
+	}
+	static auto quitHooked = false;
+	if (!quitHooked) {
+		quitHooked = true;
+		// Закрытие приложения во время выхода: дождаться стирания (сеть ограничена 5 с)
+		QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, [] {
+			if (!WaitLogoutFinished(kLeaveTimeoutMs + 10000)) {
+				LOG(("Parvane: выход не завершён к закрытию приложения — дотрётся при следующем старте"));
+			}
+		});
+	}
+	// 3. Поток выхода: запись выхода (до 5 с, как web) → ограда записи и стирание → остановка сессии
+	std::thread([s = std::move(s), ready, tdata] {
+		if (s && ready) {
+			// Своим ключом, SSK не раскрывается: у остальных устройств и собеседников этого устройства больше нет
+			const auto left = s->leave(kLeaveTimeoutMs);
+			LOG(("Parvane: выход — устройство %1 журнала устройств")
+				.arg(left ? u"вышло из"_q : u"не вышло (нет связи или отказ) из"_q));
+		}
+		// Ограда записи — ДО стирания: фоновые писатели прежней сессии (поток разделов, журнал истории, кэш,
+		// сама сессия до stop) после неё не пересоздают стёртое; снимается при следующем входе (PrepareForLogin)
+		const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+		if (s) {
+			s->stop();
+		}
+		WipeClientLogs();
+		LogWipeResult(result, "выход");
+		{
+			auto lock = std::lock_guard(g_logoutMutex);
+			g_logoutRunning = false;
+		}
+		g_logoutDone.notify_all();
+	}).detach();
+}
+
+bool PrepareForLogin() {
+	// Выход со стиранием ещё идёт — новый вход ждёт его (сеть выхода — до 5 с)
+	if (!WaitLogoutFinished(kLeaveTimeoutMs + 25000)) {
+		LOG(("Parvane: вход отложен — выход с устройства ещё не завершён"));
+		return false;
+	}
+	if (parvane::storecrypt::writesBlocked()) {
+		parvane::storecrypt::allowWrites(); // новый вход: ограда прежней сессии больше не нужна
+		LOG(("Parvane: новый вход — запись в tdata/parvane-* снова разрешена"));
+	}
+	return true;
+}
+
+void StartupHousekeeping() {
+	const auto tdata = TdataDir().toStdString();
+	// Выход, прерванный закрытием или падением процесса, — дотереть до любого входа
+	if (parvane::localfiles::logoutPending(tdata)) {
+		const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+		parvane::storecrypt::allowWrites(); // процесс только стартовал: прежних писателей нет
+		// log.txt tdesktop при старте начинается заново; старые части отладочного журнала — прочь
+		WipeClientLogs();
+		LogWipeResult(result, "незавершённый выход дотёрт при старте");
+	}
+	// Расшифрованные копии прошлого запуска
+	if (!parvane::localfiles::wipeTempRoot(tdata)) {
+		LOG(("Parvane: временный каталог tdata/parvane-tmp не стёрт"));
+	}
+	// Прежний открытый кэш медиа (до 21 окт 2026 — открытым текстом; теперь parvane-media-cache, шифр)
+	{
+		auto failed = std::vector<std::string>();
+		const auto n = parvane::storecrypt::removePrefixed(tdata, "parvane-media", { "parvane-media-cache" }, &failed);
+		if (n) {
+			LOG(("Parvane: прежний открытый кэш медиа tdata/parvane-media стёрт"));
+		}
+	}
+	// Прежние общие временные каталоги всех экземпляров ($TMPDIR/parvane-*, /tmp/parvane-media) — только свои
+	auto shared = std::vector<QString>{
+		QStandardPaths::writableLocation(QStandardPaths::TempLocation),
+		QDir::tempPath(),
+		u"/tmp"_q,
+	};
+	std::sort(shared.begin(), shared.end());
+	shared.erase(std::unique(shared.begin(), shared.end()), shared.end());
+	for (const auto &dir : shared) {
+		if (dir.isEmpty()) {
+			continue;
+		}
+		const auto n = parvane::localfiles::removeLegacySharedTemp(QFile::encodeName(dir).toStdString());
+		if (n) {
+			LOG(("Parvane: прежние общие временные каталоги parvane-* стёрты (%1)").arg(n));
+		}
+	}
 }
 
 namespace {
@@ -4573,15 +4745,13 @@ void AttachLocalOutgoingMedia(
 		// Свой файл — привязываем локальную копию, чтобы считался скачанным.
 		auto localPath = file->filepath;
 		if (localPath.isEmpty()) {
-			localPath = MediaDir() + u"/out_"_q + QString::number(docId) + u"_"_q
-				+ SafeFileName(file->filename);
-			auto f = QFile(localPath);
-			if (!f.open(QIODevice::WriteOnly)
-				|| f.write(raw) != qint64(raw.size())) {
+			// Открытая копия — во временном каталоге экземпляра (стирается при старте и выходе)
+			localPath = WriteMediaWorkCopy(
+				u"out_"_q + QString::number(docId) + u"_"_q + SafeFileName(file->filename),
+				raw.toStdString());
+			if (localPath.isEmpty()) {
 				return;
 			}
-			f.close();
-			RestrictToOwner(localPath);
 		}
 		const auto ownDoc = session->data().document(docId);
 		ownDoc->setLocation(Core::FileLocation(localPath));
@@ -5586,8 +5756,8 @@ void injectMediaOnMain(
 		NewMessageType::Unread);
 
 	LOG(("Parvane: %1 медиа %2: %3 (%4 байт) → %5")
-		.arg(out ? u"своё"_q : u"получено"_q).arg(from).arg(filename)
-		.arg(size).arg(localPath));
+		.arg(out ? u"своё"_q : u"получено"_q).arg(from).arg(LogSecret(filename))
+		.arg(size).arg(LogSecret(localPath)));
 	if (item) {
 		indexSharedMediaWithCount(session, item);
 		const auto history = item->history();
@@ -5774,44 +5944,45 @@ void pumpMediaDownload(
 		if (!t) {
 			return;
 		}
-		std::string bytes;
-		try {
-			auto d = DownloadChatBlob(fileIdStd);
-			if (!d.ok) {
-				LOG(("Parvane: скачивание медиа %1 не удалось: %2")
-					.arg(fileId).arg(QString::fromStdString(d.error)));
-				return;
-			}
-			bytes = std::move(d.bytes);
-		} catch (const std::exception &e) {
-			LOG(("Parvane: ошибка скачивания медиа: %1")
-				.arg(QString::fromUtf8(e.what())));
-			return;
-		}
-		// E2E медиа (Фаза 3): блоб зашифрован (1-на-1) — расшифровать ключом из
-		// сообщения. Пустой ключ — открытый блоб (группы/legacy).
-		if (!fileKeyStd.empty()) {
-			auto dec = parvane::blobcrypt::decrypt(bytes, fileKeyStd, fileNonceStd);
-			if (!dec) {
-				LOG(("Parvane: медиа %1 — блоб НЕ расшифрован").arg(fileId));
-				return;
-			}
-			bytes = std::move(*dec);
-		}
 		if (!IsSafeFileId(fileId)) {
 			LOG(("Parvane: недопустимый file_id медиа — пропущено"));
 			return;
 		}
-		const auto path = MediaDir() + u"/"_q + fileId + u"_"_q + SafeFileName(filename);
-		{
-			auto f = QFile(path);
-			if (!f.open(QIODevice::WriteOnly)
-				|| f.write(bytes.data(), bytes.size()) != qint64(bytes.size())) {
-				LOG(("Parvane: не записать медиа-файл %1").arg(path));
+		// Уже расшифрованное устройством — из зашифрованного кэша, без сети
+		auto cached = ReadMediaCache(fileId);
+		std::string bytes;
+		if (cached) {
+			bytes = std::move(*cached);
+		} else {
+			try {
+				auto d = DownloadChatBlob(fileIdStd);
+				if (!d.ok) {
+					LOG(("Parvane: скачивание медиа %1 не удалось: %2")
+						.arg(fileId).arg(QString::fromStdString(d.error)));
+					return;
+				}
+				bytes = std::move(d.bytes);
+			} catch (const std::exception &e) {
+				LOG(("Parvane: ошибка скачивания медиа: %1")
+					.arg(QString::fromUtf8(e.what())));
 				return;
 			}
-			f.close();
-			RestrictToOwner(path);
+			// E2E медиа (Фаза 3): блоб зашифрован (1-на-1) — расшифровать ключом из
+			// сообщения. Пустой ключ — открытый блоб (группы/legacy).
+			if (!fileKeyStd.empty()) {
+				auto dec = parvane::blobcrypt::decrypt(bytes, fileKeyStd, fileNonceStd);
+				if (!dec) {
+					LOG(("Parvane: медиа %1 — блоб НЕ расшифрован").arg(fileId));
+					return;
+				}
+				bytes = std::move(*dec);
+			}
+			WriteMediaCache(fileId, bytes);
+		}
+		const auto path = WriteMediaWorkCopy(fileId + u"_"_q + SafeFileName(filename), bytes);
+		if (path.isEmpty()) {
+			LOG(("Parvane: не записать медиа-файл %1").arg(fileId));
+			return;
 		}
 		const auto mediaId = docIdFromFileId(fileId);
 		// Стикер: размеры — по самой картинке (spec 030). Без них tdesktop брал 512×512, и стикер не квадратной
@@ -6849,7 +7020,7 @@ void injectOnMain(
 		++added;
 		LOG(("Parvane: %1 msg %2 (%3): %4")
 			.arg(out ? u"своё"_q : u"входящее"_q).arg(uuid)
-			.arg(peerAddress).arg(text));
+			.arg(peerAddress).arg(LogSecret(text)));
 		// Диагностика кросс-сценария web→desktop: сообщение принято — это ещё
 		// не значит, что кастом-эмодзи отрисовано. Эмодзи рендерится, только
 		// если его документ скормлен из локального пака (g_emojiDocToSet);
@@ -7082,7 +7253,7 @@ std::vector<not_null<HistoryItem*>> SearchMessagesLocal(
 	if (int(found.size()) > limit) {
 		found.erase(found.begin() + limit, found.end());
 	}
-	LOG(("Parvane: локальный поиск «%1»: %2 совпадений").arg(needle).arg(found.size()));
+	LOG(("Parvane: локальный поиск «%1»: %2 совпадений").arg(LogSecret(needle)).arg(found.size()));
 	return found;
 }
 
@@ -8191,7 +8362,7 @@ bool MirrorLocationIfOurs(
 	}
 	sendInnerAsync(address, content, own.id);
 	LOG(("Parvane: геолокация → %1 (%2,%3)").arg(address)
-		.arg(lat).arg(lon));
+		.arg(LogSecret(lat)).arg(LogSecret(lon)));
 	if (uuidOut) {
 		*uuidOut = own.id;
 	}
@@ -8239,7 +8410,7 @@ void MirrorLiveLocationUpdate(
 		}
 	}
 	publishEditAsync(address.toStdString(), uuid, content);
-	LOG(("Parvane: live-правка → %1 (%2,%3)%4").arg(address).arg(lat).arg(lon)
+	LOG(("Parvane: live-правка → %1 (%2,%3)%4").arg(address).arg(LogSecret(lat)).arg(LogSecret(lon))
 		.arg(livePeriod > 0 ? QString() : u" стоп"_q));
 }
 
@@ -9035,25 +9206,11 @@ namespace Internal {
 }
 
 [[nodiscard]] QStringList BugReportLog() {
-	auto f = QFile(cWorkingDir() + u"log.txt"_q);
-	if (!f.open(QIODevice::ReadOnly)) {
-		return {};
-	}
-	// Хвост лога: строк ядра достаточно для разбора, текстов сообщений там нет
-	const auto size = f.size();
-	if (size > 4 * 1024 * 1024) {
-		f.seek(size - 4 * 1024 * 1024);
-	}
-	auto lines = QString::fromUtf8(f.readAll()).split('\n');
+	// Строки клиента этого запуска — из памяти (parvane-core logpriv): релиз их на диск не пишет (ревью 21 окт),
+	// содержимое (текст, координаты, токены) в релизе в них уже скрыто. Выход со стиранием память чистит.
 	auto out = QStringList();
-	for (const auto &line : lines) {
-		if (line.contains(u"Parvane"_q)) {
-			out.push_back(line.trimmed());
-		}
-	}
-	constexpr auto kMaxLines = 500;
-	if (out.size() > kMaxLines) {
-		out = out.mid(out.size() - kMaxLines);
+	for (const auto &line : parvane::logpriv::recent()) {
+		out.push_back(QString::fromStdString(line).trimmed());
 	}
 	return out;
 }
@@ -9091,14 +9248,13 @@ void SendBugReport(not_null<Main::Session*> session, const QString &description,
 			} },
 			{ "log", log },
 		};
-		const auto path = cWorkingDir() + u"tdata/parvane-bug-%1.json"_q.arg(QDateTime::currentMSecsSinceEpoch());
-		auto f = QFile(path);
-		if (!f.open(QIODevice::WriteOnly) || f.write(QByteArray::fromStdString(report.dump(1))) < 0) {
+		// Временный каталог экземпляра (tdata/parvane-tmp): стирается при старте и выходе
+		const auto dir = MakeTempDir(u"bug"_q);
+		const auto path = dir + u"/parvane-bug-%1.json"_q.arg(QDateTime::currentMSecsSinceEpoch());
+		if (dir.isEmpty() || !WriteTempFile(path, report.dump(1))) {
 			done(u"failed"_q);
 			return;
 		}
-		f.close();
-		RestrictToOwner(path);
 		auto list = Storage::PrepareMediaList(QStringList{ path }, 400, false);
 		if (list.error != Ui::PreparedList::Error::None || list.files.empty()) {
 			QFile::remove(path);

@@ -655,10 +655,7 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 		*error = tr::lng_parvane_keys_export_failed(tr::now);
 		return false;
 	}
-	auto marker = QFile(BackupMarkerPath());
-	if (marker.open(QIODevice::WriteOnly)) {
-		marker.write("1");
-	}
+	parvane::storecrypt::writeRawFile(BackupMarkerPath().toStdString(), "1"); // под оградой хранилища
 	LOG(("Parvane: копия ключей сохранена (%1 байт)").arg(qint64(file.size())));
 	return true;
 }

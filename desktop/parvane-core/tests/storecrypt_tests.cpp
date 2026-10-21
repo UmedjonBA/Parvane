@@ -250,6 +250,36 @@ int main() {
         fs::remove_all(base);
     }
 
+    // Ограда записи (хвост NAT-16): после blockWrites ни один хелпер не пишет, пока не allowWrites
+    {
+        namespace sc = parvane::storecrypt;
+        namespace fs = std::filesystem;
+        const auto base = fs::temp_directory_path() / ("pv-sc-fence-" + std::to_string(::getpid()));
+        fs::remove_all(base);
+        fs::create_directories(base);
+        sc::setKey(sc::deriveKey("fence"));
+        const auto file = (base / "parvane-session.txt").string();
+        const auto journal = (base / "parvane-history.jsonl").string();
+        const auto plainOld = (base / "parvane-old.json").string();
+        {
+            std::ofstream f(plainOld, std::ios::binary);
+            f << "legacy-plain";
+        }
+        sc::blockWrites();
+        check(sc::writesBlocked(), "ограда: поставлена");
+        check(!sc::writeFile(file, "jwt") && !fs::exists(file), "ограда: writeFile — отказ, файла нет");
+        check(!sc::appendLine(journal, "line") && !fs::exists(journal), "ограда: appendLine — отказ, файла нет");
+        check(!sc::writeLines(journal, {"a"}) && !fs::exists(journal), "ограда: writeLines — отказ");
+        check(sc::migrateFile(plainOld) == 0, "ограда: миграция не пишет");
+        check(!sc::writeRawFile((base / "copy.bin").string(), "x") && !fs::exists(base / "copy.bin"),
+              "ограда: writeRawFile — отказ");
+        check(sc::readFile(plainOld) == "legacy-plain", "ограда: чтение идёт");
+        sc::allowWrites();
+        check(!sc::writesBlocked() && sc::writeFile(file, "jwt") && sc::readFile(file) == "jwt", "ограда снята: запись идёт");
+        sc::setKey("");
+        fs::remove_all(base);
+    }
+
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
 }

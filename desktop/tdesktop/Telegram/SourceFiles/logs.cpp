@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/launcher.h"
 #include "mtproto/facade.h"
 
+#include <parvane/local_files.h> // Parvane fork: строки клиента в релизе — только в память
+
 namespace {
 
 std::atomic<int> ThreadCounter/* = 0*/;
@@ -121,6 +123,33 @@ public:
 		}
 		file->write(msg.toUtf8());
 		file->flush();
+	}
+
+	// Parvane fork (выход со стиранием, NAT-16): открытые журналы — обрезать до нуля (логгер пишет дальше в тот
+	// же файл), прочие части (log_start*.txt, старые DebugLogs/*) — удалить.
+	void parvaneWipe() {
+		auto open = QStringList();
+		for (const auto type : { LogDataMain, LogDataDebug, LogDataMtp }) {
+			QMutexLocker lock(_logsMutex(type));
+			WritingEntryScope scope;
+			const auto file = files[type].get();
+			if (file && file->isOpen()) {
+				file->flush();
+				file->resize(0);
+				open.push_back(QFileInfo(*file).absoluteFilePath());
+			}
+		}
+		const auto remove = [&](const QString &path, const QStringList &patterns) {
+			const auto dir = QDir(path);
+			for (const auto &name : dir.entryList(patterns, QDir::Files)) {
+				const auto full = dir.absoluteFilePath(name);
+				if (!open.contains(full)) {
+					QFile::remove(full);
+				}
+			}
+		};
+		remove(cWorkingDir(), { u"log_start*.txt"_q });
+		remove(cWorkingDir() + u"DebugLogs"_q, { u"log*.txt"_q, u"mtp*.txt"_q });
 	}
 
 private:
@@ -498,7 +527,29 @@ void closeMain() {
 	}
 }
 
+// Parvane fork: строка клиента («Parvane…») — в память для «Сообщить об ошибке»; на диск — только в dev-сборке
+// или при режиме отладки tdesktop (в строках адреса, имена групп, пути файлов; parvane-core logpriv)
+[[nodiscard]] bool ParvaneMemoryOnly(const QString &v, bool remember) {
+	if (!v.startsWith(u"Parvane"_q)) {
+		return false;
+	}
+	if (remember) {
+		parvane::logpriv::remember(
+			(u"["_q + QDateTime::currentDateTime().toString(u"yyyy.MM.dd hh:mm:ss"_q) + u"] "_q + v).toStdString());
+	}
+	return !parvane::logpriv::keepOnDisk(v.toStdString(), DebugEnabled());
+}
+
+void ParvaneWipeFiles() {
+	if (LogsData) {
+		LogsData->parvaneWipe();
+	}
+}
+
 void writeMain(const QString &v) {
+	if (ParvaneMemoryOnly(v, true)) {
+		return;
+	}
 	time_t t = time(NULL);
 	struct tm tm;
 	mylocaltime(&tm, &t);
@@ -517,6 +568,9 @@ void writeMain(const QString &v) {
 }
 
 void writeDebug(const QString &v) {
+	if (ParvaneMemoryOnly(v, false)) {
+		return;
+	}
 	const auto msg = QString("%1 %2\n").arg(_logsEntryStart(), v);
 	_logsWrite(LogDataDebug, msg);
 

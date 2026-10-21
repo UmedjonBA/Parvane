@@ -13,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
 
 namespace parvane::storecrypt {
@@ -26,6 +27,10 @@ const std::string kLinePrefix = std::string(kMagic) + ":";
 std::mutex g_mu;
 std::string g_key; // 32 байта или пусто
 bool g_required = false; // NAT-13: без ключа не писать открытым текстом
+
+// Ограда записи (NAT-16): писатели держат её разделяемо на время всей записи, blockWrites — исключительно.
+std::shared_mutex g_fenceMu;
+bool g_blocked = false; // под g_fenceMu
 
 struct CipherDel {
     void operator()(EVP_CIPHER_CTX *p) const { EVP_CIPHER_CTX_free(p); }
@@ -114,7 +119,7 @@ std::string rawRead(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-bool rawWrite(const std::string &path, const std::string &data) {
+bool rawWriteUnfenced(const std::string &path, std::string_view data) {
     const auto tmp = path + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
@@ -136,6 +141,11 @@ bool rawWrite(const std::string &path, const std::string &data) {
         return false;
     }
     return true;
+}
+
+bool rawWrite(const std::string &path, std::string_view data) {
+    std::shared_lock<std::shared_mutex> fence(g_fenceMu);
+    return !g_blocked && rawWriteUnfenced(path, data);
 }
 
 } // namespace
@@ -329,6 +339,10 @@ bool appendLine(const std::string &path, const std::string &line) {
     if (!sealed) {
         return false;
     }
+    std::shared_lock<std::shared_mutex> fence(g_fenceMu);
+    if (g_blocked) {
+        return false;
+    }
     std::ofstream f(path, std::ios::binary | std::ios::app);
     if (!f) {
         return false;
@@ -465,6 +479,25 @@ int removePrefixed(const std::string &dir, const std::string &prefix, const std:
         }
     }
     return n;
+}
+
+void blockWrites() {
+    std::unique_lock<std::shared_mutex> fence(g_fenceMu); // ждёт идущие записи
+    g_blocked = true;
+}
+
+void allowWrites() {
+    std::unique_lock<std::shared_mutex> fence(g_fenceMu);
+    g_blocked = false;
+}
+
+bool writesBlocked() {
+    std::shared_lock<std::shared_mutex> fence(g_fenceMu);
+    return g_blocked;
+}
+
+bool writeRawFile(const std::string &path, std::string_view data) {
+    return rawWrite(path, data);
 }
 
 } // namespace parvane::storecrypt

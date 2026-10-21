@@ -966,7 +966,7 @@ void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 		crl::async([=] {
 			const auto s = V2Ready();
 			const auto ok = s && s->revokeInvite(groupId.toStdString(), token.toStdString());
-			LOG(("Parvane: INVITE revoke %1 → %2 (v2)").arg(token, ok ? u"ok"_q : u"отказ"_q));
+			LOG(("Parvane: INVITE revoke %1 → %2 (v2)").arg(LogSecret(token), ok ? u"ok"_q : u"отказ"_q));
 			crl::on_main([=] {
 				if (done) {
 					done(ok, ok ? QString() : u"failed"_q);
@@ -985,7 +985,7 @@ void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 		crl::async([=] {
 			const auto s = V2Ready();
 			const auto ok = s && !linkId.empty() && s->deleteRevokedInvite(groupId.toStdString(), linkId);
-			LOG(("Parvane: INVITE delete %1 → %2 (v2)").arg(token, ok ? u"ok"_q : u"отказ"_q));
+			LOG(("Parvane: INVITE delete %1 → %2 (v2)").arg(LogSecret(token), ok ? u"ok"_q : u"отказ"_q));
 			crl::on_main([=] {
 				if (done) {
 					done(ok, ok ? QString() : u"failed"_q);
@@ -1192,7 +1192,7 @@ bool JoinByInviteLink(const QString &url) {
 	const auto window = Core::App().activeWindow();
 	const auto controller = window ? window->sessionController() : nullptr;
 	if (!controller) {
-		LOG(("Parvane: ссылка группы %1 — нет активного окна").arg(token));
+		LOG(("Parvane: ссылка группы %1 — нет активного окна").arg(LogSecret(token)));
 		return true;
 	}
 	Api::CheckChatInvite(controller, token);

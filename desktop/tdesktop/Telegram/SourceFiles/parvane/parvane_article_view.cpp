@@ -4,6 +4,7 @@
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_cloud_internal.h"
 #include "parvane/parvane_knowledge.h"
+#include "parvane/parvane_local_files.h"
 #include "parvane/parvane_note_embed.h"
 #include "parvane/parvane_note_markdown.h"
 #include "parvane/parvane_sections_data.h"
@@ -71,9 +72,11 @@ void UploadArticleFiles(const json &media, const SaveResult &saved) {
 	if (!media.is_array() || media.empty() || saved.rootId.empty()) {
 		return;
 	}
-	const auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(
-		u"parvane-article/"_q + QUuid::createUuid().toString(QUuid::WithoutBraces));
-	QDir().mkpath(dir);
+	// Временный каталог экземпляра (tdata/parvane-tmp), не общий $TMPDIR: стирается при старте и выходе
+	const auto dir = MakeTempDir(u"article"_q);
+	if (dir.isEmpty()) {
+		return;
+	}
 	struct Pending {
 		int left = 0;
 		QStringList paths;
@@ -96,8 +99,7 @@ void UploadArticleFiles(const json &media, const SaveResult &saved) {
 				auto safe = target;
 				safe.replace('/', '_');
 				const auto path = QDir(dir).filePath(safe);
-				auto f = QFile(path);
-				if (f.open(QIODevice::WriteOnly) && f.write(*bytes) == bytes->size()) {
+				if (WriteTempFile(path, *bytes)) {
 					state->paths.push_back(path);
 				}
 			}
