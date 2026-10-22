@@ -205,6 +205,45 @@ class ParvaneStore {
     }
 
     fun addressOf(chatId: Long): String? = groupsByChatId[chatId]?.gid ?: addressById[chatId]
+
+    // ── RENAME-1: собеседник сменил ник — тот же чат (id прежнего адреса), отправка — на новый адрес ──
+    /** Прежний адрес → новый (цепочки сворачиваются); переживает рестарт через [renamesFile]. */
+    private val renames = ConcurrentHashMap<String, String>()
+    @Volatile var renamesFile: java.io.File? = null
+
+    /** Последний адрес цепочки смен ника. */
+    fun latestAddress(address: String): String {
+        var a = address
+        repeat(16) { a = renames[a] ?: return a }
+        return a
+    }
+
+    /** Смена ника: новый адрес получает id прежнего (сообщения встают в прежний чат). false — уже известно. */
+    @Synchronized
+    fun noteRename(from: String, to: String): Boolean {
+        if (from.isEmpty() || to.isEmpty() || from == to || renames[from] == to) return false
+        renames[from] = to
+        val id = idOf(from)
+        idByAddress[to] = id
+        addressById[id] = to
+        profiles[from]?.let { p -> if (!profiles.containsKey(to)) profiles[to] = JSONObject(p.toString()).put("username", to) }
+        renamesFile?.let { f -> try { SeamFiles.write(f, JSONObject(renames as Map<*, *>).toString()) } catch (e: Exception) { } }
+        return true
+    }
+
+    fun loadRenames() {
+        val f = renamesFile?.takeIf { it.exists() } ?: return
+        val j = try { JSONObject(SeamFiles.read(f)) } catch (e: Exception) { return }
+        for (k in j.keys()) noteRename(k, j.optString(k))
+    }
+
+    /** DELETE-1: аккаунт собеседника удалён — «Удалённый аккаунт» вместо имени. */
+    fun markDeleted(address: String, deletedName: String): TdApi.User? {
+        val u = users[idOf(address)] ?: return null
+        u.firstName = deletedName; u.lastName = ""
+        u.type = TdApi.UserTypeDeleted()
+        return u
+    }
     /** Известные пользователи (кроме себя) — «Контакты» X (телефонной книги у нас нет). */
     fun knownUserIds(): LongArray = users.keys.filter { it != idOf(self) && addressById[it] != null && !isGroup(addressById[it]!!) }.toLongArray()
     val blocked = java.util.Collections.synchronizedSet(HashSet<String>())
@@ -353,6 +392,8 @@ class ParvaneStore {
             "cloud_invite" -> textContent(c)
             // Статья (ARTICLE-1): окна чтения нет — текст из поля text
             "article" -> textContent(c)
+            // REPORT-1: жалоба админу группы — текст карточки (кнопки — после проверки по своей истории, шов)
+            "mod_report" -> textContent(c)
             // Служебное сообщение шва в чате (T080: участник группы v2 без записи администратора)
             "service" -> TdApi.MessageCustomServiceAction(c.optString("text"))
             // Режим «усиленная приватность» (L2-1): смена режима — видимое служебное сообщение чата,

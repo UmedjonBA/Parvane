@@ -202,6 +202,25 @@ else:
     print("   клиент", pk, "уже есть")
 PY
 
+echo "== spec 031: звонки — экран X поверх ядра и org.webrtc =="
+git -C "$TGX" checkout -- app/src/main/java/org/thunderdog/challegram/service/TGCallService.java app/src/main/java/org/thunderdog/challegram/BaseApplication.kt 2>/dev/null
+python3 - "$TGX" <<'PY'
+import sys
+root = sys.argv[1] + "/app/src/main/java/org/thunderdog/challegram/"
+p = root + "service/TGCallService.java"; s = open(p).read()
+s = s.replace("return tgcalls != null ? tgcalls.getCallDuration() : VoIPInstance.DURATION_UNKNOWN;",
+  "return tgcalls != null ? tgcalls.getCallDuration() : org.drinkless.tdlib.Calls.durationMs(); // Parvane: таймер — ядро")
+s = s.replace("    this.postponedCallSettings = settings;\n",
+  "    this.postponedCallSettings = settings;\n    org.parvane.core.ParvaneCalls.INSTANCE.setMuted(settings != null && settings.isMicMuted(), false); // Parvane: микрофон — ядро\n", 1)
+s = s.replace("    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;\n",
+  "    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;\n    if (true) { tdlib.dispatchCallStateChanged(call.id, CallState.ESTABLISHED); return; } // Parvane: медиа — ядро и org.webrtc, tgcalls не нужен\n", 1)
+open(p, "w").write(s)
+p = root + "BaseApplication.kt"; s = open(p).read()
+s = s.replace("    scope = MainScope()\n", "    scope = MainScope()\n    org.thunderdog.challegram.parvane.Parvane.onAppCreate(this) // Parvane: звонки, фон\n", 1)
+open(p, "w").write(s)
+PY
+grep -q "Parvane: медиа — ядро" "$TGX/app/src/main/java/org/thunderdog/challegram/service/TGCallService.java" && echo "   TGCallService → ядро" || { echo "   TGCallService не пропатчен"; exit 2; }
+
 echo "== local.properties / keystore =="
 [ -f "$KEYS/keystore.properties" ] || { echo "нет $KEYS/keystore.properties (см. BUILD-android.md)"; exit 2; }
 cat > "$TGX/local.properties" <<PROPS

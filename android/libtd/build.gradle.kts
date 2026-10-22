@@ -16,8 +16,7 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake {
-                arguments += listOf("-DANDROID_STL=c++_static")
-                cppFlags += "-std=c++17"
+                arguments += listOf("-DANDROID_STL=c++_static") // стандарт C++ (20) — в jni/CMakeLists.txt
             }
         }
     }

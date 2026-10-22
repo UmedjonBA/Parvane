@@ -95,11 +95,12 @@ public final class ParvaneKeys {
               StringBuilder sb = new StringBuilder();
               int n;
               while ((n = is.read(buf)) > 0) sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-              int merged = ParvaneCore.importKeys(sb.toString(), password);
-              if (merged >= 0) {
-                toast = UI.getAppContext().getString(R.string.ParvaneKeysImported) + " " + merged;
-              } else if (merged == -2) {
-                toast = UI.getAppContext().getString(R.string.ParvaneKeysNotReady);
+              // Формат 2 (как web/desktop): история из копии сливается с журналом; −2 — копия старого формата
+              int result = ParvaneCore.importKeys(sb.toString(), password);
+              if (result > 0) {
+                toast = UI.getAppContext().getString(R.string.ParvaneKeysImported);
+              } else if (result == -2) {
+                toast = UI.getAppContext().getString(R.string.ParvaneKeysOldFormat);
               } else {
                 toast = UI.getAppContext().getString(R.string.ParvaneKeysImportFailed);
               }

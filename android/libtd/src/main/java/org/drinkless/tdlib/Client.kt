@@ -314,20 +314,19 @@ class Client private constructor(
                     Log.w(TAG, "gateway без wss:// в release проигнорирован: $gatewayUrl")
                     gatewayUrl = DEFAULT_GATEWAY_URL
                 }
-                ParvaneCore.init(gatewayUrl, f.databaseDirectory)
+                ParvaneCore.init(gatewayUrl, f.databaseDirectory, org.parvane.libtd.BuildConfig.DEBUG)
                 // Файлы локального состояния шва — через шифрованное хранилище ядра (P-13)
                 SeamFiles.codec = object : SeamFiles.Codec {
                     override fun read(path: String) = ParvaneCore.storeRead(path)
                     override fun write(path: String, text: String) = ParvaneCore.storeWrite(path, text)
                 }
-                // Протокол v2 (spec 007): двойной стек, включён по умолчанию (T135).
-                // Остаться на v1 — файл <databaseDirectory>/parvane-proto-v1 (читает ядро)
-                // или, только в debug, /data/local/tmp/parvane-proto-v1 (сценарии эмулятора).
-                ParvaneCore.setProtoV2(!(org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-proto-v1").canRead()))
                 if (ParvaneCore.self().isNotEmpty() && ParvaneCore.startSession()) {
                     onSessionReady(ParvaneCore.self())
                 } else {
                     setAuth(TdApi.AuthorizationStateWaitPhoneNumber())
+                    // dev-хук сценариев эмулятора (только debug, как PARVANE_AUTOLOGIN desktop): вход, а нет аккаунта —
+                    // регистрация на локальном стеке без подтверждения
+                    if (org.parvane.libtd.BuildConfig.DEBUG) devAutoLogin()
                 }
             }
             TdApi.Ok()
@@ -343,7 +342,12 @@ class Client private constructor(
             }
         }
         is TdApi.CheckAuthenticationPassword -> {
-            val r = ParvaneCore.login(pendingNick, f.password ?: "")
+            var r = ParvaneCore.login(pendingNick, f.password ?: "")
+            // spec 027: аккаунт ждёт удаления — вход паролем его восстанавливает (как web «Восстановить»)
+            if (!r.optBoolean("ok") && r.optLong("deletion_at_ms") > 0) {
+                r = ParvaneCore.login(pendingNick, f.password ?: "", "", cancelDeletion = true)
+                if (r.optBoolean("ok")) serviceNotice("parvane_account_restored", uiText("account_restored"))
+            }
             if (r.optBoolean("ok")) {
                 // P-07: пароль держим только в памяти процесса — отзыв устройства
                 // (TerminateSession) требует его; на диск не пишем.
@@ -355,24 +359,49 @@ class Client private constructor(
                 // статус опрашиваем каждые 2 с, после подтверждения — issue с login_token.
                 startTwoFactor(r.optString("address"), f.password ?: "", r.optString("login_token"))
                 TdApi.Ok()
-            } else if (upgrade.required || UpgradeNotices.isUpgradeError(r.optString("error"))) {
-                TdApi.Error(406, uiText("upgrade_required")) // E6: сервер отключил v1 — вход этой версией невозможен
+            } else if (r.optBoolean("confirm_required")) {
+                TdApi.Error(400, uiText("confirm_required"))
             } else {
-                TdApi.Error(400, r.optString("error", "неверный логин или пароль"))
+                TdApi.Error(400, uiText(SeamText.loginErrorKey(r.optString("error_code"))))
             }
         }
         is TdApi.ForwardMessages -> forwardMessages(f) // паритет: тот же content новому адресату, медиа перезаливается
+        // ── звонки (spec 031): экран звонка X ← TdApi.Call; сигналы и медиа — ядро и org.webrtc ──
+        is TdApi.CreateCall -> {
+            val address = store.addressOf(f.userId)
+            if (address == null || store.group(address) != null) TdApi.Error(404, "user not found") else {
+                val a = calls.begin(address, outgoing = true, video = f.isVideo, nowMs = System.currentTimeMillis())
+                org.parvane.core.ParvaneCalls.place(address, f.isVideo)
+                postUpdate(TdApi.UpdateCall(calls.call(a)))
+                io.execute { Thread.sleep(500); a.callUuid = org.parvane.core.ParvaneCalls.callId() }
+                TdApi.CallId(a.id)
+            }
+        }
+        is TdApi.AcceptCall -> {
+            calls.current?.let { a ->
+                a.state = TdApi.CallStateExchangingKeys()
+                postUpdate(TdApi.UpdateCall(calls.call(a)))
+            }
+            org.parvane.core.ParvaneCalls.accept()
+            TdApi.Ok()
+        }
+        is TdApi.DiscardCall -> {
+            calls.current?.let { a -> if (!a.outgoing && a.connectedMs == 0L) a.declined = true }
+            org.parvane.core.ParvaneCalls.hangup()
+            TdApi.Ok()
+        }
+        is TdApi.SendCallRating, is TdApi.SendCallDebugInformation, is TdApi.SendCallLog, is TdApi.SendCallSignalingData -> TdApi.Ok()
         // Settings → Devices: устройства аккаунта из identity; отзыв = терминация сессии
         is TdApi.GetActiveSessions -> TdApi.Sessions(sessionsList(), 0)
-        // P-07: отзыв требует текущий пароль; после рестарта (сессия из session.json)
-        // пароля в памяти нет — сервер откажет, просим войти заново.
+        // REVOKE-1: «Завершить» — обычный выход того устройства из журнала (без смены ключей, пароль не нужен);
+        // «выйти и сменить ключи» и «украдено» — экран устройств оверлея (ParvaneDevices)
         is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { dev ->
-            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройства нужен повторный вход по паролю")
-            else if (ParvaneCore.revokeDevice(dev, sessionPassword)) TdApi.Ok() else TdApi.Error(400, "не удалось отозвать устройство")
+            val r = ParvaneCore.revokeDevice(dev, sessionPassword, rotate = false)
+            if (r.optBoolean("ok")) TdApi.Ok() else TdApi.Error(400, uiText(r.optString("error_code").ifEmpty { "failed" }))
         } ?: TdApi.Error(404, "session not found")
         is TdApi.TerminateAllOtherSessions -> {
-            if (sessionPassword.isEmpty()) TdApi.Error(401, "для отзыва устройств нужен повторный вход по паролю")
-            else { sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let { ParvaneCore.revokeDevice(it, sessionPassword) } }; TdApi.Ok() }
+            sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let { ParvaneCore.revokeDevice(it, sessionPassword, rotate = false) } }
+            TdApi.Ok()
         }
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
@@ -392,7 +421,7 @@ class Client private constructor(
         is TdApi.ResendAuthenticationCode, is TdApi.CheckAuthenticationCode ->
             TdApi.Error(400, "Parvane: кодов нет — вход по нику и паролю")
         is TdApi.LogOut -> {
-            if (!detached) ParvaneCore.logout()
+            if (!detached) ParvaneCore.logout() // NAT-16: устройство уходит из журнала, данные стираются
             l2.clear()
             store.clear()
             announcedChats.clear()
@@ -433,9 +462,9 @@ class Client private constructor(
             }
         }
         // ── spec 004: экраны управления группой Telegram X поверх шва ────────────
-        is TdApi.SetChatDescription -> withGroup(f.chatId) { g -> groupResult(ParvaneCore.groupSetInfo(g.gid, f.description ?: "", false)) }
+        is TdApi.SetChatDescription -> withGroup(f.chatId) { g -> groupResult(ParvaneCore.groupSetInfo(g.gid, null, f.description ?: "", false)) }
         is TdApi.SetChatPhoto -> withGroup(f.chatId) { g ->
-            if (f.photo == null) groupResult(ParvaneCore.groupSetInfo(g.gid, null, true)) else {
+            if (f.photo == null) groupResult(ParvaneCore.groupSetInfo(g.gid, null, null, true)) else {
                 val path = ((f.photo as? TdApi.InputChatPhotoStatic)?.photo)?.let { localPath(it) } ?: return@withGroup TdApi.Error(400, "нет файла")
                 val r = ParvaneCore.groupSetPhoto(g.gid, path)
                 if (r.optBoolean("ok")) store.setGroupPhoto(g.gid, r.optString("file_id"), r.optString("path"))?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
@@ -470,7 +499,14 @@ class Client private constructor(
             val link = r.optJSONObject("link")
             if (!r.optBoolean("ok") || link == null) groupError(r) else store.inviteLinkOf(link).also { refreshPrimaryLink(g) }
         }
-        is TdApi.EditChatInviteLink -> TdApi.Error(400, uiText("invite_edit_unsupported"))
+        is TdApi.EditChatInviteLink -> withGroup(f.chatId) { g ->
+            val url = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
+            val r = ParvaneCore.groupInviteEdit(g.gid, url, f.name ?: "", f.expirationDate.toLong(), f.memberLimit)
+            if (!r.optBoolean("ok")) groupError(r) else {
+                refreshPrimaryLink(g)
+                (inviteLinks(g, false) ?: emptyList()).firstOrNull { ParvaneStore.inviteTokenOf(it.inviteLink) == url } ?: TdApi.Error(404, uiText("invalid"))
+            }
+        }
         is TdApi.RevokeChatInviteLink -> withGroup(f.chatId) { g ->
             val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
             val r = ParvaneCore.groupInviteRevoke(g.gid, token)
@@ -482,12 +518,13 @@ class Client private constructor(
         }
         is TdApi.DeleteRevokedChatInviteLink -> withGroup(f.chatId) { g ->
             val token = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
-            groupResult(ParvaneCore.groupInviteDelete(g.gid, token))
+            if (linkIds[token] == null) inviteLinks(g, true)
+            groupResult(ParvaneCore.groupInviteDelete(g.gid, linkIds[token] ?: return@withGroup TdApi.Error(404, uiText("invalid"))))
         }
         is TdApi.DeleteAllRevokedChatInviteLinks -> withGroup(f.chatId) { g ->
             val revoked = inviteLinks(g, true) ?: return@withGroup TdApi.Error(403, uiText("forbidden"))
             revoked.filter { f.creatorUserId == 0L || it.creatorUserId == f.creatorUserId }
-                .forEach { l -> ParvaneStore.inviteTokenOf(l.inviteLink)?.let { ParvaneCore.groupInviteDelete(g.gid, it) } }
+                .forEach { l -> ParvaneStore.inviteTokenOf(l.inviteLink)?.let { linkIds[it] }?.let { ParvaneCore.groupInviteDelete(g.gid, it) } }
             TdApi.Ok()
         }
         is TdApi.ReplacePrimaryChatInviteLink -> withGroup(f.chatId) { g ->
@@ -498,7 +535,17 @@ class Client private constructor(
             val link = r.optJSONObject("link")
             if (!r.optBoolean("ok") || link == null) groupError(r) else store.inviteLinkOf(link).also { refreshPrimaryLink(g) }
         }
-        is TdApi.GetChatInviteLinkMembers -> TdApi.ChatInviteLinkMembers(0, arrayOf()) // сервер хранит только счётчик
+        is TdApi.GetChatInviteLinkMembers -> withGroup(f.chatId) { g -> // кто вступил по ссылке (spec 024)
+            val url = ParvaneStore.inviteTokenOf(f.inviteLink) ?: return@withGroup TdApi.Error(400, uiText("invalid"))
+            if (linkIds[url] == null) inviteLinks(g, false)
+            val r = ParvaneCore.groupInviteJoins(g.gid, linkIds[url] ?: return@withGroup TdApi.ChatInviteLinkMembers(0, arrayOf()))
+            val joins = r.optJSONArray("joins") ?: org.json.JSONArray()
+            val members = (0 until joins.length()).map { i -> joins.getJSONObject(i) }.map { j ->
+                ensurePeer(j.optString("user"), announce = false)
+                TdApi.ChatInviteLinkMember(store.idOf(j.optString("user")), j.optLong("date").toInt(), false, 0L)
+            }
+            TdApi.ChatInviteLinkMembers(members.size, members.toTypedArray())
+        }
         is TdApi.GetInternalLinkType -> ParvaneStore.inviteTokenOf(f.link)?.let { TdApi.InternalLinkTypeChatInvite(ParvaneStore.buildInviteLink(it)) }
             ?: TdApi.Error(404, "Not Found")
         is TdApi.CheckChatInviteLink -> {
@@ -517,11 +564,11 @@ class Client private constructor(
             if (!r.optBoolean("ok")) groupError(r) else {
                 val all = store.joinRequestsOf(r.optJSONArray("requests"))
                 val token = ParvaneStore.inviteTokenOf(f.inviteLink)
-                // Группа v2 (T143): сервер не сообщает, по какой ссылке пришла заявка — список общий
-                if (token == null || g.gid.startsWith("v2g:")) all else {
+                val linkId = token?.let { linkIds[it] }
+                if (linkId == null) all else {
                     val arr = r.optJSONArray("requests")
                     val keep = HashSet<Long>()
-                    if (arr != null) for (i in 0 until arr.length()) { val q = arr.getJSONObject(i); if (q.optString("invite") == token) keep += store.idOf(q.optString("member")) }
+                    if (arr != null) for (i in 0 until arr.length()) { val q = arr.getJSONObject(i); if (q.optString("link_id") == linkId) keep += store.idOf(q.optString("member")) }
                     val filtered = all.requests.filter { it.userId in keep }
                     TdApi.ChatJoinRequests(filtered.size, filtered.toTypedArray())
                 }
@@ -567,7 +614,7 @@ class Client private constructor(
                 if (scheduledQueue.forChat(f.chatId).isEmpty()) postUpdate(TdApi.UpdateChatHasScheduledMessages(f.chatId, false))
             }
             val uuids = f.messageIds.filter { !scheduledQueue.isScheduledId(it) }.mapNotNull { id -> store.uuidOf(f.chatId, id) }
-            uuids.forEach { ParvaneCore.delete(it) }
+            uuids.forEach { ParvaneCore.delete(it, f.revoke) }
             store.removeMessages(uuids).forEach { postUpdate(it) }
             TdApi.Ok()
         }
@@ -580,19 +627,17 @@ class Client private constructor(
             val address = store.addressOf(f.chatId)
             if (address == null) TdApi.Error(404, "chat not found") else {
                 val n = f.notificationSettings
-                val blob = store.setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
+                store.setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
                 postUpdate(TdApi.UpdateChatNotificationSettings(f.chatId, store.chatNotifySettings(address)))
-                io.execute { ParvaneCore.setNotify(notifyBlobToPublish(blob)) }
-                scheduleStateFlush() // журнал личного состояния v2 (T132)
+                scheduleStateFlush() // журнал личного состояния (STATE-2: notify)
                 TdApi.Ok()
             }
         }
         is TdApi.GetScopeNotificationSettings -> store.scopeSettings(scopeKey(f.scope))
         is TdApi.SetScopeNotificationSettings -> {
-            val blob = store.setScopeMute(scopeKey(f.scope), f.notificationSettings?.muteFor ?: 0)
+            store.setScopeMute(scopeKey(f.scope), f.notificationSettings?.muteFor ?: 0)
             postUpdate(TdApi.UpdateScopeNotificationSettings(f.scope, store.scopeSettings(scopeKey(f.scope))))
-            io.execute { ParvaneCore.setNotify(notifyBlobToPublish(blob)) }
-            scheduleStateFlush() // журнал личного состояния v2 (T132)
+            scheduleStateFlush() // журнал личного состояния (STATE-2: notify)
             TdApi.Ok()
         }
         // профиль → identity (display_name обязателен; остальное — что прислали)
@@ -814,15 +859,13 @@ class Client private constructor(
         }
         is TdApi.DeleteChatHistory -> { // «для меня»: скрыть на сервере (msg.chat.clear) и убрать локально
             val uuids = store.uuidsOfChat(f.chatId)
-            recordChatCleared(f.chatId)
-            if (uuids.isNotEmpty()) io.execute { ParvaneCore.clearMessages(uuids) }
+            recordChatCleared(f.chatId, uuids)
             (if (f.removeFromChatList) store.removeChat(f.chatId) else store.removeMessages(uuids)).forEach { postUpdate(it) }
             TdApi.Ok()
         }
         is TdApi.DeleteChat -> {
             val uuids = store.uuidsOfChat(f.chatId)
-            recordChatCleared(f.chatId)
-            if (uuids.isNotEmpty()) io.execute { ParvaneCore.clearMessages(uuids) }
+            recordChatCleared(f.chatId, uuids)
             store.removeChat(f.chatId).forEach { postUpdate(it) }
             TdApi.Ok()
         }
@@ -866,7 +909,7 @@ class Client private constructor(
             postUpdate(TdApi.UpdateScopeNotificationSettings(scope, store.scopeSettings(scopeKey(scope))))
         // spec 007 (T079): настройка «сообщения от незнакомых» есть только у v2 — пункт экрана приватности X
         // появляется по опции; сама настройка уходит в identity, ТОЛЬКО если её задавали на этом устройстве
-        v2Enabled = try { ParvaneCore.v2Status().optBoolean("enabled") } catch (e: Throwable) { false }
+        v2Enabled = true // spec 031: только протокол v2
         postUpdate(TdApi.UpdateOption("can_set_new_chat_privacy_settings", TdApi.OptionValueBoolean(v2Enabled)))
         store.groupAddPolicy = privacy.groupAdd(self)
         if (v2Enabled) io.execute { pushPrivacy() }
@@ -875,6 +918,8 @@ class Client private constructor(
         io.execute { if (!stickers.ensureBuiltin()) Log.w(TAG, "встроенные паки не нарисованы") }
         // spec 005 / история 3: локальное состояние чатов, очередь отложенных, e2e-хук команд
         if (store.local == null) store.local = ChatLocalState(java.io.File(boundDir))
+        store.renamesFile = java.io.File(boundDir, "renames.json") // RENAME-1: прежние ники собеседников → тот же чат
+        store.loadRenames()
         store.local?.folders?.let { if (it.all().isNotEmpty()) postUpdate(TdApi.UpdateChatFolders(it.infos(), it.mainPosition, false)) }
         startScheduled()
         // NAT-12: хук команд из /data/local/tmp — только в отладочной сборке (как
@@ -940,8 +985,8 @@ class Client private constructor(
     /** null — ошибка (в логе), иначе "" */
     private fun groupAction(chatId: Long, action: String, arg: String): String? {
         val g = store.groupByChat(chatId) ?: return null
-        val err = ParvaneCore.groupAction(g.gid, action, arg)
-        if (err.isNotEmpty()) { Log.w(TAG, "группа $action: $err"); return null }
+        val r = ParvaneCore.groupAction(g.gid, action, arg)
+        if (!r.optBoolean("ok")) { Log.w(TAG, "группа $action: отказ ${r.optString("error_code")}"); return null }
         syncGroups()
         return ""
     }
@@ -1001,12 +1046,56 @@ class Client private constructor(
         if (!r.optBoolean("ok")) { Log.w(TAG, "ссылки ${g.gid}: отказ ${r.optString("error_code")}"); return null }
         val arr = r.optJSONArray("links") ?: return emptyList()
         val out = ArrayList<TdApi.ChatInviteLink>()
-        for (i in 0 until arr.length()) out += store.inviteLinkOf(arr.getJSONObject(i))
+        for (i in 0 until arr.length()) {
+            val j = arr.getJSONObject(i)
+            j.optString("link_id").takeIf { it.isNotEmpty() }?.let { linkIds[j.optString("token")] = it }
+            out += store.inviteLinkOf(j)
+        }
         if (!revoked) {
             g.primaryInviteLink = out.firstOrNull { it.isPrimary && !it.isRevoked }
         }
         return out
     }
+    /** url ссылки-приглашения v2 → её link_id (вступившие, удаление отозванной, заявки по ссылке). */
+    private val linkIds = ConcurrentHashMap<String, String>()
+    /** Сервисное уведомление X (чат «Parvane»): привязка, ключ восстановления, предупреждения. */
+    private fun serviceNotice(key: String, text: String) =
+        postUpdate(TdApi.UpdateServiceNotification(key, TdApi.MessageText(TdApi.FormattedText(text, arrayOf()), null, null)))
+    /** Служебное сообщение в чате (как TDLib messageCustomServiceAction): id стабильный — повтор не дублирует. */
+    private fun chatServiceMessage(chatAddress: String, author: String, idSeed: String, text: String) {
+        val id = java.util.UUID.nameUUIDFromBytes(idSeed.toByteArray()).toString()
+        val content = JSONObject().put("kind", "service").put("text", text)
+        store.putMessage(id, author, chatAddress, System.currentTimeMillis() / 1000, content, out = false, read = true)?.let { announceMessage(it) }
+    }
+    private val calls = Calls(store::idOf)
+    /** Событие ядра `call`: входящий — новый TdApi.Call; смены состояния — UpdateCall; конец — запись в журнал. */
+    private fun onCallEvent(event: JSONObject) {
+        val now = System.currentTimeMillis()
+        when (event.optString("state")) {
+            "incoming" -> {
+                val peer = event.optString("peer")
+                ensurePeer(peer, announce = true)
+                val a = calls.begin(peer, outgoing = false, video = event.optBoolean("video"), nowMs = now)
+                Log.i(TAG, "звонок: входящий ${if (a.video) "видео" else "аудио"}")
+                postUpdate(TdApi.UpdateCall(calls.call(a)))
+                io.execute { a.callUuid = org.parvane.core.ParvaneCalls.callId() }
+            }
+            "media" -> Log.i(TAG, "звонок: у собеседника микрофон ${if (event.optBoolean("audio_muted")) "выкл" else "вкл"}")
+            else -> {
+                val a = calls.current ?: return
+                if (a.callUuid.isEmpty()) a.callUuid = try { org.parvane.core.ParvaneCalls.callId() } catch (e: Throwable) { "" }
+                val st = calls.apply(event, now) ?: return
+                Log.i(TAG, "звонок → ${st.javaClass.simpleName}")
+                postUpdate(TdApi.UpdateCall(calls.call(a)))
+                if (st is TdApi.CallStateError) serviceNotice("parvane_call_failed", uiText(if (event.optString("error_code") == "forbidden") "call_not_contact" else "call_not_sent"))
+                if (st is TdApi.CallStateDiscarded) calls.record(a, now)?.let { rec ->
+                    io.execute { if (stateAttached) ParvaneCore.stateCall("callSet", rec.toString()) }
+                }
+            }
+        }
+    }
+    /** Запросы привязки новых устройств, ждущие подтверждения пользователя: device_id → код сверки. */
+    val pendingLinkRequests = ConcurrentHashMap<String, String>()
     /** Основная ссылка в BasicGroupFullInfo (getPrimaryChatInviteLink в X читает её оттуда). */
     private fun refreshPrimaryLink(g: ParvaneStore.GroupRef) {
         inviteLinks(g, false) ?: return
@@ -1046,18 +1135,18 @@ class Client private constructor(
 
     private fun editMessage(f: TdApi.EditMessageText): TdApi.Object {
         val uuid = store.uuidOf(f.chatId, f.messageId) ?: return TdApi.Error(404, "message not found")
-        val address = store.addressOf(f.chatId) ?: return TdApi.Error(404, "chat not found")
-        val text = (f.inputMessageContent as? TdApi.InputMessageText)?.text?.text ?: ""
-        val content = JSONObject().put("kind", "text").put("text", text)
-        if (!ParvaneCore.edit(uuid, address, content.toString())) return TdApi.Error(500, "правка не удалась")
+        val text = (f.inputMessageContent as? TdApi.InputMessageText)?.text
+        val content = JSONObject().put("kind", "text").put("text", text?.text ?: "")
+        Entities.toWire(text?.entities)?.let { content.put("entities", it) }
+        if (!ParvaneCore.edit(uuid, content.toString())) return TdApi.Error(500, uiText("failed"))
         store.applyEdit(uuid, content, System.currentTimeMillis() / 1000).forEach { postUpdate(it) }
         return store.messageByUuid(uuid) ?: TdApi.Error(404, "message not found")
     }
 
     // ── профиль / папки / карта (spec 005 / история 4) ──────────────────────
     private fun userFullInfo(address: String): TdApi.UserFullInfo = TdApi.UserFullInfo().apply {
-        canBeCalled = false // звонков на Android пока нет (спек 006) — кнопка звонка в шапке не показывается
-        supportsVideoCalls = false
+        canBeCalled = address != store.self // звонки v2 (spec 031): звонить можно тому, кто писал (D-08) — отказ скажет ядро
+        supportsVideoCalls = true
         bio = TdApi.FormattedText(store.profileField(address, "bio"), arrayOf())
         blockList = if (store.blocked.contains(address)) TdApi.BlockListMain() else null
         giftSettings = null
@@ -1445,10 +1534,6 @@ class Client private constructor(
             scheduledTick.scheduleWithFixedDelay({ try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
         }
     }
-    /** v1-блоб настроек уведомлений (STATE-2): журнал подключён и v1-устройств у аккаунта нет — без списка
-     *  заглушённых (только `group_add`); иначе полный. Блокирующий (JNI ждёт движок) — звать с io-потока. */
-    private fun notifyBlobToPublish(full: String): String =
-        if (stateAttached && !ParvaneCore.hasLegacyDevices()) store.minimalNotifyBlob() else full
     /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
     private val stateLock = Any()
     private fun stateSyncNow() {
@@ -1464,13 +1549,12 @@ class Client private constructor(
     // `cleared` до остальных своих устройств не дойдёт — граница очистки (мс) едет
     // журналом личного состояния. Применённые границы: адрес → мс.
     private val clearedUntilMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private fun recordChatCleared(chatId: Long) {
-        if (!stateAttached) return
+    private fun recordChatCleared(chatId: Long, uuids: List<String>) {
         val address = store.addressOf(chatId) ?: return
         val last = store.lastDateOfChat(chatId)
         val until = if (last > 0) last * 1000 + 999 else System.currentTimeMillis()
         clearedUntilMs.merge(address, until) { a, b -> maxOf(a, b) }
-        io.execute { ParvaneCore.stateChatCleared(address, until) }
+        io.execute { ParvaneCore.clearChat(address, until, uuids) }
     }
     private fun projectCleared(snap: JSONObject) {
         val list = snap.optJSONArray("cleared") ?: return
@@ -1572,7 +1656,7 @@ class Client private constructor(
         if (ref.path.isNotEmpty()) return store.tdFile(ref)
         val job = Runnable {
             try {
-                val path = ParvaneCore.downloadFile(ref.remoteId, ref.key, ref.nonce)
+                val path = ParvaneCore.downloadFile(ref.remoteId, ref.key, ref.nonce, "", ref.size)
                 if (path.isNotEmpty()) store.setFilePath(fileId, path)?.let { postUpdate(TdApi.UpdateFile(it)) }
             } finally {
                 downloading.remove(fileId)
@@ -1646,6 +1730,24 @@ class Client private constructor(
         return TdApi.Messages(out.size, out.toTypedArray())
     }
 
+    /** /data/local/tmp/parvane-autologin = «ник:пароль» (только debug-сборка, сценарии эмулятора). */
+    private fun devAutoLogin() {
+        val spec = java.io.File("/data/local/tmp/parvane-autologin").takeIf { it.canRead() }?.readText()?.trim() ?: return
+        val sep = spec.indexOf(':'); if (sep <= 0) return
+        val user = spec.substring(0, sep); val password = spec.substring(sep + 1)
+        io.execute {
+            Log.i(TAG, "autologin (dev): вход $user")
+            var r = ParvaneCore.login(user, password)
+            if (!r.optBoolean("ok") && !r.optBoolean("twofa_required")) {
+                val reg = ParvaneCore.register(user, password, "")
+                Log.i(TAG, "autologin (dev): регистрация ${if (reg.optBoolean("ok")) "ok" else reg.optString("error_code")}")
+                r = ParvaneCore.login(user, password)
+            }
+            if (r.optBoolean("ok")) { sessionPassword = password; finishLogin(r.optString("address")) }
+            else Log.w(TAG, "autologin (dev): вход не удался ${r.optString("error_code")}")
+        }
+    }
+
     private fun finishLogin(address: String): TdApi.Object =
         if (ParvaneCore.startSession()) { onSessionReady(address); TdApi.Ok() } else TdApi.Error(500, "не удалось поднять сессию")
 
@@ -1679,17 +1781,19 @@ class Client private constructor(
     /** Устройства identity как TdApi.Session; id сессии = FNV от device_id (для TerminateSession). */
     private val deviceById = ConcurrentHashMap<Long, String>()
     private fun sessionsList(): Array<TdApi.Session> {
-        val arr = try { ParvaneCore.listDevices() } catch (e: Throwable) { org.json.JSONArray() }
+        val arr = try { ParvaneCore.listDevices().optJSONArray("devices") } catch (e: Throwable) { null } ?: org.json.JSONArray()
         val out = ArrayList<TdApi.Session>()
         for (i in 0 until arr.length()) {
             val d = arr.getJSONObject(i)
             val dev = d.optString("device_id"); if (dev.isEmpty()) continue
             val id = store.idOf("dev:$dev"); deviceById[id] = dev
-            val ts = d.optLong("updated_at").toInt()
+            val ts = (d.optLong("last_seen_ms") / 1000).toInt()
+            val created = (d.optLong("created_ms") / 1000).toInt().takeIf { it > 0 } ?: ts
             val current = d.optBoolean("current")
+            val kind = d.optString("client_kind")
             out += TdApi.Session(id, current, false, false, false, false,
-                if (current) TdApi.SessionDeviceTypeAndroid() else TdApi.SessionDeviceTypeUnknown(),
-                0, "Parvane", if (current) "android" else "", true, dev.take(10), "", "", ts, ts, "", "")
+                when (kind) { "android" -> TdApi.SessionDeviceTypeAndroid(); "desktop" -> TdApi.SessionDeviceTypeLinux(); "web" -> TdApi.SessionDeviceTypeChrome(); else -> TdApi.SessionDeviceTypeUnknown() },
+                0, "Parvane", kind, true, dev.take(10), "", "", created, ts, "", "")
         }
         return out.sortedByDescending { it.isCurrent }.toTypedArray()
     }
@@ -1755,6 +1859,8 @@ class Client private constructor(
         if (announce && announcedChats.add(chat.id)) {
             postUpdate(TdApi.UpdateUser(user))
             postUpdate(TdApi.UpdateNewChat(chat.copyForUi()))
+            // «в сети» и «печатает» собеседника — эфемерные каналы v2 (TYPING-1, присутствие)
+            if (address.contains('@') && address != store.self) io.execute { ParvaneCore.watchPeers(listOf(address)) }
             announceScheduled(chat.id)
             if (chat.draftMessage != null) Log.i(TAG, "черновик ${chat.id} восстановлен")
             if (store.local?.isArchived(chat.id) == true) Log.i(TAG, "позиция ${chat.id}: archive")
@@ -1918,18 +2024,49 @@ class Client private constructor(
             "link" -> {
                 // P-46: код сверки НЕ в logcat — только в UI через сервисное уведомление.
                 val state = event.optString("state")
-                Log.i(TAG, "линковка: $state")
-                val text = when (state) {
-                    "offered" -> "Перенос истории: откройте Настройки → Устройства на другом устройстве — код сверки появится на обоих."
-                    "code" -> "Перенос истории. Сверьте код на другом устройстве и подтвердите там:\n${event.optString("code")}"
-                    "imported" -> "История перенесена (${event.optInt("count")} сообщений)."
-                    else -> null
-                }
-                text?.let {
-                    postUpdate(TdApi.UpdateServiceNotification("parvane_link_$state",
-                        TdApi.MessageText(TdApi.FormattedText(it, arrayOf()), null, null)))
+                Log.i(TAG, "привязка: $state")
+                SeamText.of("link_$state")?.let { serviceNotice("parvane_link_$state", it.replace("%s", event.optString("code"))) }
+            }
+            // Устройству нужна привязка (LINK-1/RECOVER-2): оффер ядро публикует само, бот Telegram спросит ключ
+            "needs_linking" -> {
+                Log.i(TAG, "устройству нужна привязка")
+                io.execute { ParvaneCore.telegramRecovery(false) }
+            }
+            // Старое устройство: новое просит привязку — подтверждение пользователем (код сверки на обоих)
+            "link_request" -> {
+                val device = event.optString("device_id")
+                val auto = org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-autolink").canRead()
+                if (auto) io.execute { Log.i(TAG, "привязка (dev): грант ${if (ParvaneCore.linkGrant(device)) "выдан" else "не выдан"}") }
+                else {
+                    pendingLinkRequests[device] = event.optString("code")
+                    serviceNotice("parvane_link_request", uiText("link_request").replace("%s", event.optString("code")))
                 }
             }
+            // RECOVER-2: ключ восстановления через бота Telegram
+            "recovery" -> event.optString("state").takeIf { it != "idle" }?.let { st ->
+                Log.i(TAG, "ключ восстановления: $st")
+                SeamText.of("recovery_$st")?.let { serviceNotice("parvane_recovery_$st", it) }
+            }
+            // RENAME-1: собеседник сменил ник — служебное сообщение в прежнем чате
+            "peer_renamed" -> {
+                val from = event.optString("from"); val to = event.optString("to")
+                if (from.isNotEmpty() && to.isNotEmpty()) {
+                    store.noteRename(from, to)
+                    chatServiceMessage(from, from, "renamed:$from:$to", uiText("peer_renamed").replaceFirst("%s", from.substringBefore('@')).replaceFirst("%s", to.substringBefore('@')))
+                }
+            }
+            // DELETE-1: аккаунт собеседника удалён
+            "peer_deleted" -> event.optString("user").takeIf { it.isNotEmpty() }?.let { u ->
+                store.markDeleted(u, uiText("peer_deleted"))?.let { postUpdate(TdApi.UpdateUser(it)) }
+            }
+            // KEY-1 / NAT-10: ключ безопасности собеседника изменился — предупреждение в чате
+            "peer_root_changed" -> event.optString("user").takeIf { it.isNotEmpty() }?.let { u ->
+                ensurePeer(u, announce = true)
+                chatServiceMessage(u, u, "root:$u:${System.currentTimeMillis() / 60000}", uiText("peer_root_changed").replace("%s", u.substringBefore('@')))
+            }
+            "ssk_rotation_needed" -> if (event.optBoolean("has_backup")) serviceNotice("parvane_ssk_rotation", uiText("ssk_rotation_needed"))
+            "send_failed" -> Log.w(TAG, "не отправлено: ${event.optString("error_code")}")
+            "call" -> onCallEvent(event)
             // T080 (FR-028): сервер показывает участника группы v2 без подтверждённой записи
             // администратора — нативное служебное сообщение в чате группы
             "group_unconfirmed" -> {
@@ -1981,6 +2118,8 @@ class Client private constructor(
             // (в logcat не пишем — P-46)
             "recovery_key" -> {
                 val key = event.optString("key")
+                // debug: сценарии эмулятора читают ключ из файла приложения (run-as), как PARVANE_RECOVERY_KEY_FILE desktop
+                if (org.parvane.libtd.BuildConfig.DEBUG && key.isNotEmpty()) try { java.io.File(boundDir, "e2e-recovery-key.txt").writeText(key) } catch (e: Exception) { }
                 if (key.isNotEmpty()) postUpdate(TdApi.UpdateServiceNotification("parvane_recovery_key",
                     TdApi.MessageText(TdApi.FormattedText(uiText("v2_recovery_key").replace("%s", key), arrayOf()), null, null)))
             }

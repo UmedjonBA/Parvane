@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Собирает libparvane_core.a под один Android ABI:
-#  1) cargo-ndk → libparvane_e2e.a (Rust vodozemac, v1) и libparvane_protocol_ffi.a
-#     (движок протокола v2, spec 007, C ABI) под target;
-#  2) cmake+ninja (android/jni) → libparvane_core.a, линкует OpenSSL(ABI)+e2e.
+# Собирает ядро и JNI под один Android ABI (spec 031 — только протокол v2):
+#  1) cargo-ndk → libparvane_protocol_ffi.a (движок протокола v2, C ABI) под target;
+#  2) cmake+ninja (android/jni) → libparvane_core.a, libparvane_sections.a, libparvane_jni.so.
 # Требует: ANDROID_NDK_HOME, cargo-ndk, собранный OpenSSL (build-openssl.sh).
 set -Eeuo pipefail
 NDK="${ANDROID_NDK_HOME:?задай ANDROID_NDK_HOME}"
@@ -21,16 +20,14 @@ case "$ABI" in
   *) echo "неизвестный ABI: $ABI"; exit 2 ;;
 esac
 
-echo "== 1/2 cargo-ndk: parvane-e2e + parvane-protocol-ffi для $ABI ($RUST_TARGET) =="
+echo "== 1/2 cargo-ndk: parvane-protocol-ffi для $ABI ($RUST_TARGET) =="
 cd "$REPO/backend"
-# Один вызов cargo — одна сборка общих зависимостей; -j по CARGO_JOBS (16 ГБ ОЗУ)
-cargo ndk -t "$ABI" --platform "$API" build -p parvane-e2e -p parvane-protocol-ffi --release -j "${CARGO_JOBS:-4}"
-E2E_LIB="$REPO/backend/target/$RUST_TARGET/release/libparvane_e2e.a"
+# -j по CARGO_JOBS (16 ГБ ОЗУ)
+cargo ndk -t "$ABI" --platform "$API" build -p parvane-protocol-ffi --release -j "${CARGO_JOBS:-4}"
 PROTO_LIB="$REPO/backend/target/$RUST_TARGET/release/libparvane_protocol_ffi.a"
-[ -f "$E2E_LIB" ] || { echo "нет $E2E_LIB"; exit 3; }
 [ -f "$PROTO_LIB" ] || { echo "нет $PROTO_LIB"; exit 3; }
 
-echo "== 2/2 cmake+ninja: parvane_core для $ABI =="
+echo "== 2/2 cmake+ninja: parvane_core + parvane_sections + parvane_jni для $ABI =="
 BUILD="$ROOT/.build/core-$ABI"
 rm -rf "$BUILD"; mkdir -p "$BUILD"
 cmake -S "$ROOT/jni" -B "$BUILD" -G Ninja \
@@ -38,10 +35,9 @@ cmake -S "$ROOT/jni" -B "$BUILD" -G Ninja \
   -DANDROID_ABI="$ABI" \
   -DANDROID_PLATFORM="android-$API" \
   -DPARVANE_OPENSSL_DIR="$OSSL" \
-  -DPARVANE_E2E_LIB="$E2E_LIB" \
   -DPARVANE_PROTOCOL_LIB="$PROTO_LIB" \
   -DCMAKE_BUILD_TYPE=Release
-ninja -C "$BUILD"
+ninja -C "$BUILD" -j "${CORE_JOBS:-4}"
 echo "== готово =="
-ls -la "$BUILD"/libparvane_core.a && \
-  echo "OK: parvane_core под $ABI собран ($(du -h "$BUILD"/libparvane_core.a | cut -f1))"
+ls -la "$BUILD"/libparvane_jni.so && \
+  echo "OK: ядро и JNI под $ABI собраны ($(du -h "$BUILD"/libparvane_jni.so | cut -f1))"

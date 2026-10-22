@@ -269,12 +269,12 @@ class L2PrivacySeamTest {
         assertTrue(UpgradeNotices.isUpgradeError("gateway: upgrade_required"))
         assertFalse(UpgradeNotices.isUpgradeError("gateway: отказ авторизации: просроченный JWT"))
         assertFalse(UpgradeNotices.isUpgradeError(null))
-        // сторож исходников: ветка разлогина pump в JNI проверяет upgrade_required раньше текста «отказ авторизации»,
-        // обработчик кадров подключён, шов не уводит upgrade в sessionExpired
-        val jni = source("jni/parvane_jni.cpp")
-        assertTrue(jni.contains("setUpgradeHandler("))
-        assertTrue(jni.contains("if (!upgrade && (what.find(\"отказ авторизации\")"))
-        assertTrue(jni.contains("if (upgradeBlocked()) throw"))
+        // сторож исходников (spec 031, только v2): отказ JWT приходит событием сессии authRejected → session failed
+        // reason=auth (экран входа); UPGRADE_REQUIRED — отдельный код отказа входа, не разлогин
+        val jni = source("jni/jni_session.cpp")
+        assertTrue(jni.contains("if (type == \"authRejected\")"))
+        assertTrue(jni.contains("{\"reason\", \"auth\"}"))
+        assertTrue(source("libtd/src/main/java/org/drinkless/tdlib/SeamText.kt").contains("\"ERROR_CODE_UPGRADE_REQUIRED\" -> \"upgrade_required\""))
         val client = source("libtd/src/main/java/org/drinkless/tdlib/Client.kt")
         assertTrue(client.contains("\"upgrade_available\" -> upgrade.onAvailable()"))
         assertTrue(client.contains("\"upgrade_required\" -> upgrade.onRequired()"))
@@ -348,9 +348,8 @@ class L2PrivacySeamTest {
         assertTrue("typing в L2-чат не уходит", client.contains("if (l2.ephemeralAllowed(it)) ParvaneCore.sendTyping(it)"))
         assertTrue("кэш l2State подключён", client.contains("\"l2_state\" -> {"))
         assertTrue("приватность шлём только заданную здесь", client.contains("privacy.toPush(store.self) ?: return"))
-        val jni = source("jni/parvane_jni.cpp")
-        assertTrue("присутствие не публикуется при активном режиме", jni.contains("&& g_l2PresenceAllowed"))
-        assertTrue(jni.contains("if (l2Active(toStd)) return;"))
+        assertTrue("присутствие не публикуется при активном режиме", source("jni/jni_session.cpp").contains("if (presenceAllowed())"))
+        assertTrue("typing в L2-чат ядро не шлёт", source("jni/jni_messages.cpp").contains("if (l2Active(chat)) return;"))
     }
 
     private fun source(path: String): String =

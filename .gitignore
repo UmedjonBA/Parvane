@@ -48,3 +48,4 @@ __pycache__/
 # адрес/логин прод-сервера для deploy.sh (P-50)
 backend/infra/deploy/.deploy.env
 desktop/parvane-core/build-mine/
+android/jni/compile_flags.txt

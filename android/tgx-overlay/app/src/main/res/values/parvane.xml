@@ -27,7 +27,7 @@
   <string name="ParvaneKeysPasswordShort">Password must be at least 8 characters</string>
   <string name="ParvaneKeysSaved">Keys backup saved:</string>
   <string name="ParvaneKeysExportFailed">Could not save keys backup</string>
-  <string name="ParvaneKeysImported">Backup restored, messages merged:</string>
+  <string name="ParvaneKeysImported">Backup restored, history merged</string>
   <string name="ParvaneKeysImportFailed">Wrong password or damaged file</string>
   <string name="ParvaneKeysNotReady">Keys are not ready yet, wait a few seconds after sign-in</string>
   <!-- spec 007: режим «усиленная приватность» (L2) — строка-переключатель в профиле чата и управлении группой -->
@@ -37,4 +37,9 @@
   <string name="ParvaneL2On">On</string>
   <string name="ParvaneL2Off">Off</string>
   <string name="ParvaneL2NoRights">Only members who can change group info can switch this mode</string>
+  <string name="ParvaneNickTaken">This username is already taken</string>
+  <string name="ParvaneNickInvalid">Username: Latin letters, digits and _ . -, starting with a letter or digit</string>
+  <string name="ParvaneTooManyAttempts">Too many attempts. Try again later</string>
+  <string name="ParvaneUpgradeRequired">This version of Parvane is no longer supported. Update the app to continue.</string>
+  <string name="ParvaneKeysOldFormat">This backup is from an older version and cannot be restored</string>
 </resources>

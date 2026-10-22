@@ -22,7 +22,7 @@
   <string name="ParvaneKeysPasswordShort">Пароль не короче 8 символов</string>
   <string name="ParvaneKeysSaved">Копия ключей сохранена:</string>
   <string name="ParvaneKeysExportFailed">Не удалось сохранить копию ключей</string>
-  <string name="ParvaneKeysImported">Копия восстановлена, сообщений добавлено:</string>
+  <string name="ParvaneKeysImported">Копия восстановлена, история добавлена</string>
   <string name="ParvaneKeysImportFailed">Неверный пароль или повреждённый файл</string>
   <string name="ParvaneKeysNotReady">Ключи ещё не готовы, подождите несколько секунд после входа</string>
   <string name="ParvaneL2Toggle">Усиленная приватность</string>
@@ -31,4 +31,9 @@
   <string name="ParvaneL2On">Включена</string>
   <string name="ParvaneL2Off">Выключена</string>
   <string name="ParvaneL2NoRights">Менять режим могут участники с правом изменять сведения группы</string>
+  <string name="ParvaneNickTaken">Этот ник уже занят</string>
+  <string name="ParvaneNickInvalid">Ник: латинские буквы, цифры и _ . -, начинается с буквы или цифры</string>
+  <string name="ParvaneTooManyAttempts">Слишком много попыток. Попробуйте позже</string>
+  <string name="ParvaneUpgradeRequired">Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.</string>
+  <string name="ParvaneKeysOldFormat">Это копия старой версии, её нельзя восстановить</string>
 </resources>

@@ -163,7 +163,7 @@ public class ParvaneRegisterController extends EditBaseController<Void> implemen
           if (r.optBoolean("ok")) {
             login(nick, password);
           } else {
-            showError(r.optString("error", UI.getAppContext().getString(R.string.ParvaneWrongCode)));
+            showError(UI.getAppContext().getString(errorText(r.optString("error_code"), R.string.ParvaneWrongCode)));
           }
         });
       }, "parvane-confirm").start();
@@ -181,7 +181,14 @@ public class ParvaneRegisterController extends EditBaseController<Void> implemen
         inProgress = false;
         setDoneInProgress(false);
         if (!r.optBoolean("ok")) {
-          showError(r.optString("error", UI.getAppContext().getString(R.string.ParvaneSignUpFailed)));
+          if (r.optBoolean("email_required")) {
+            // Сервер подтверждает почтой, а почты в запросе нет — спросить адрес
+            emailView.setVisibility(android.view.View.VISIBLE);
+            showInfo(UI.getAppContext().getString(R.string.ParvaneEmailRequired));
+            emailView.getEditText().requestFocus();
+            return;
+          }
+          showError(UI.getAppContext().getString(errorText(r.optString("error_code"), R.string.ParvaneSignUpFailed)));
           return;
         }
         tgAddress = r.optString("address", nick);
@@ -202,6 +209,17 @@ public class ParvaneRegisterController extends EditBaseController<Void> implemen
       });
     }, "parvane-register").start();
     return true;
+  }
+
+  // Отказ протокола v2 (ERROR_CODE_*) → строка интерфейса (как desktop V2ErrorText)
+  private static int errorText (String code, int fallback) {
+    switch (code) {
+      case "ERROR_CODE_DUPLICATE": return R.string.ParvaneNickTaken;
+      case "ERROR_CODE_INVALID": return R.string.ParvaneNickInvalid;
+      case "ERROR_CODE_RATE_LIMITED": return R.string.ParvaneTooManyAttempts;
+      case "ERROR_CODE_UPGRADE_REQUIRED": return R.string.ParvaneUpgradeRequired;
+      default: return fallback;
+    }
   }
 
   private void startTelegram (String token) {

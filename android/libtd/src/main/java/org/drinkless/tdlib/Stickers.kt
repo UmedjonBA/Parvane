@@ -27,7 +27,7 @@ class Stickers(
     }
     object RealCore : Core {
         override fun packFetch(refJson: String) = ParvaneCore.packFetch(refJson)
-        override fun packRefFor(dir: String, rawName: String, recipients: List<String>) = ParvaneCore.packRefFor(dir, rawName, recipients)
+        override fun packRefFor(dir: String, rawName: String, recipients: List<String>) = ParvaneCore.packRefFor(dir, rawName) // CAP-1: блоб по секрету, получатели не нужны
     }
 
     val index = PackIndex(root)
