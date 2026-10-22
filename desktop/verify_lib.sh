@@ -24,6 +24,10 @@
 #                               стек в том же сценарии (федерация, verify_federation.sh) —
 #                               другие порты, свой PV_DOMAIN и свой каталог SB.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+# Ревью 21 окт 2026: dev-сборка включает хуки (PARVANE_AUTO*, ws://, TCP, PARVANE_WSS_INSECURE …) только при
+# PARVANE_DEV_HOOKS=1 И gateway на loopback; содержимое сообщений (LogSecret) пишет в log.txt только при
+# PARVANE_LOG_CONTENT=1. Сценарии запускают клиент и напрямую, и через start_client — экспорт для всех.
+export PARVANE_DEV_HOOKS=1 PARVANE_LOG_CONTENT=1
 RC=0
 PV_DOMAIN="${PV_DOMAIN:-local}"
 PV_NATS_PORT="${PV_NATS_PORT:-4222}"
@@ -192,7 +196,10 @@ start_client() {
   # tdesktop переписывает log.txt при каждом старте — прошлый прогон сохраняем
   [ -f "$work/td/log.txt" ] && mv "$work/td/log.txt" "$work/td/log.$(date +%s%N).txt"
   # ENV из аргументов — после умолчаний: вызывающий может их переопределить
+  # PARVANE_DEV_HOOKS=1 — dev-хуки (PARVANE_AUTO* и пр.) действуют только с ним и при gateway на loopback;
+  # PARVANE_LOG_CONTENT=1 — содержимое (LogSecret) в log.txt, сценарии сверяют его (ревью 21 окт 2026)
   env QT_QPA_PLATFORM=offscreen PARVANE_GATEWAY_URL="127.0.0.1:$PV_GW_TCP_PORT" \
+    PARVANE_DEV_HOOKS=1 PARVANE_LOG_CONTENT=1 \
     PARVANE_AUTOLOGIN="$user:$PV_PASSWORD" "$@" "$BIN" -workdir "$work/td" \
     >>"$work/stdout.log" 2>&1 &
   echo $!

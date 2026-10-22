@@ -41,6 +41,7 @@ constexpr auto kLivePeriods = std::array<int, 3>{ 15 * 60, 60 * 60, 8 * 60 * 60 
 
 base::unique_qptr<Ui::PopupMenu> LocationMenu;
 QString LastCoordinates;
+QString LastCoordinatesSelf; // чьи (ревью 21 окт, вечер: координаты прежнего аккаунта — не следующему)
 
 // Адрес чата, как у MirrorPollCreate: группа v2 по id чата, иначе собеседник или «Избранное»
 [[nodiscard]] QString AddressForPeer(not_null<PeerData*> peer) {
@@ -363,7 +364,7 @@ void LocationBox(
 	box->setTitle(tr::lng_parvane_location_title());
 	box->addRow(object_ptr<Ui::FlatLabel>(box, tr::lng_parvane_location_about(), st::boxLabel));
 	const auto field = AddField(box, tr::lng_parvane_location_field);
-	if (!LastCoordinates.isEmpty()) {
+	if (!LastCoordinates.isEmpty() && LastCoordinatesSelf == SelfAddress()) {
 		field->setText(LastCoordinates);
 		field->selectAll();
 	}
@@ -376,6 +377,7 @@ void LocationBox(
 		}
 		LastCoordinates = QString::number(coordinates->first, 'f', 6) + u", "_q
 			+ QString::number(coordinates->second, 'f', 6);
+		LastCoordinatesSelf = SelfAddress();
 		const auto sent = MirrorLocationIfOurs(peer, coordinates->first, coordinates->second, livePeriod);
 		if (!sent) {
 			controller->uiShow()->showToast(tr::lng_parvane_location_failed(tr::now));

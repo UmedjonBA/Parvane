@@ -199,10 +199,12 @@ public:
 			return std::nullopt;
 		}
 		try {
+			// Ревью 21 окт (2.2): потолок шифртекста из описания блоба (миниатюра, просмотр) — сессии
 			const auto cipher = session->downloadBlobCap(
 				fileId,
 				domain::fromBase64(capability),
-				blob.value("domain", std::string()));
+				blob.value("domain", std::string()),
+				std::size_t(std::max<std::int64_t>(0, blob.value(cloud::kBlobMaxBytesKey, std::int64_t(0)))));
 			return parvane::blobcrypt::decrypt(
 				cipher,
 				blob.value("key", std::string()),
@@ -337,22 +339,41 @@ public:
 		flushRecords();
 		_transport.setSession(session);
 		if (self != _self) {
-			_self = self;
-			_plannerSync.reset();
-			_planner.reset();
-			_cloud.reset();
-			const auto dir = SectionsStateDir(_self);
-			_records.open(dir.isEmpty() ? QString() : dir + u"/sections-records.json"_q);
-			_texts.open(dir.isEmpty() ? QString() : dir + u"/sections-texts.json"_q);
-			if (!_self.empty()) {
-				_planner.setUser(_self);
-			}
-			_notesLoaded = false;
-			_notesSent = {};
-			_cloudSent = {};
-			_plannerDirty = _cloudDirty = _notesDirty = true;
+			switchAccount(self);
 		}
 		applyWanted();
+	}
+
+	// Выход из аккаунта (ревью 21 окт 2026, вечер): модули и снимки прежнего — прочь, до новой сессии
+	void resetAccount() {
+		flushRecords();
+		_transport.setSession(nullptr);
+		switchAccount(std::string());
+	}
+
+	// Другой аккаунт (или никакого): всё прежнего сбрасывается — «План», облако, заметки (иначе publishNotes
+	// переопубликовал бы заметки прежнего аккаунта следующему), сводка квоты; экранам уходят пустые снимки
+	void switchAccount(const std::string &self) {
+		_self = self;
+		_plannerSync.reset();
+		_planner.reset();
+		_cloud.reset();
+		_notes.signOut();
+		if (_notesRelease) {
+			std::exchange(_notesRelease, nullptr)();
+		}
+		_usage.reset();
+		const auto dir = SectionsStateDir(_self);
+		_records.open(dir.isEmpty() ? QString() : dir + u"/sections-records.json"_q);
+		_texts.open(dir.isEmpty() ? QString() : dir + u"/sections-texts.json"_q);
+		if (!_self.empty()) {
+			_planner.setUser(_self);
+		}
+		_notesLoaded = false;
+		_notesSent = {};
+		_cloudSent = {};
+		_plannerSent = {};
+		_plannerDirty = _cloudDirty = _notesDirty = true;
 	}
 
 	void setShown(Section section) {
@@ -915,6 +936,29 @@ void OnEngineEvent(const json &event) {
 
 void OnSessionChanged() {
 	Enqueue([](Hub &hub) { hub.syncSession(); });
+}
+
+void OnAccountReset() {
+	// Экранам и палитре — сразу пустые снимки (окно «Статья», палитра Ctrl+K читают их), модули — потоком разделов
+	Hub::SetPlanner(std::make_shared<PlannerView>());
+	Hub::SetCloud(std::make_shared<CloudView>());
+	Hub::SetNotes(std::make_shared<NotesView>());
+	Enqueue([](Hub &hub) { hub.resetAccount(); });
+}
+
+void DetachAccount(std::function<void()> done) {
+	{
+		auto &t = Worker();
+		auto lock = std::lock_guard(t.mutex);
+		if (t.stop) {
+			PostMain(std::move(done)); // потока уже нет — писать некому
+			return;
+		}
+	}
+	Enqueue([done = std::move(done)](Hub &hub) mutable {
+		hub.resetAccount();
+		PostMain(std::move(done));
+	});
 }
 
 void Shutdown() {

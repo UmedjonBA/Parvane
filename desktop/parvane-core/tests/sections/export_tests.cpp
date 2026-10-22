@@ -3,6 +3,7 @@
 // проверяется чтением: конец архива → центральный каталог → локальный заголовок → данные → дескриптор, CRC.
 // не перенесено: проверка «stops with `canceled` when aborted before start» сводится к той же отмене (здесь —
 // отдельная проверка с `canceled` = true с самого начала); `unzipSync` fflate заменён собственным читателем.
+#include <chrono>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -497,6 +498,21 @@ int main() {
             paths.push_back(f.path);
         }
         check(paths == V{"Plan.md", "Sub_dir/Deep.md", "plan (2).md"}, "walks a folder, skipping trash and service files");
+    }
+    // Ревью 21 окт 2026: цепочка 30 000 папок (редактор совместной папки) — без переполнения стека и квадрата
+    {
+        std::vector<cloud::CloudNode> chain;
+        chain.push_back(cnode("c0", "a", "", "folder"));
+        for (int i = 1; i < 30000; ++i) {
+            chain.push_back(cnode("c" + std::to_string(i), "a", "c" + std::to_string(i - 1), "folder"));
+        }
+        chain.push_back(cnode("shallow", "s.txt", "c2"));
+        chain.push_back(cnode("deep", "d.txt", "c29999"));
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto files = treeFilePaths(chain, "", std::nullopt, nullptr);
+        const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        check(seconds < 1.0 && files.size() == 1 && files[0].path == "a/a/a/s.txt",
+              "chain of 30000 folders: fast, deeper than kExportMaxDepth skipped");
     }
     {
         V paths;

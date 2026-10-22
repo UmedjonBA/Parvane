@@ -1,5 +1,6 @@
 // Parvane fork: группы: сведения, управление, ссылки, заявки, публичные (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include <parvane/chat_rules.h> // parvane-core: потолок скачивания картинки
 
 namespace Parvane {
 
@@ -56,8 +57,10 @@ void applyAvatar(not_null<PeerData*> peer, const QString &address) {
 	static auto loadedFrom = QString();
 	static auto seen = QHash<QString, TimeId>();
 	const auto path = cWorkingDir() + u"tdata/parvane-groups-seen.json"_q;
-	if (loadedFrom != path) {
-		loadedFrom = path;
+	// Файл — аккаунта (ревью 21 окт, вечер): другой аккаунт — перечитать, память прежнего не переносить
+	const auto key = path + u'\n' + SelfAddress();
+	if (loadedFrom != key) {
+		loadedFrom = key;
 		seen.clear();
 		const auto j = nlohmann::json::parse(StoreRead(path).toStdString(), nullptr, false);
 		if (j.is_object()) {
@@ -915,7 +918,9 @@ void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray by
 		std::string bytes;
 		if (t) {
 			try {
-				auto d = DownloadChatBlob(fid);
+				auto d = DownloadChatBlob(
+					fid,
+					parvane::chatrules::chatBlobCipherCap("avatar", 0));
 				if (d.ok) {
 					bytes = std::move(d.bytes);
 				}
@@ -1418,6 +1423,12 @@ GroupPublicInfo GroupPublic(not_null<PeerData*> peer) {
 	const auto gid = GroupIdForChat(peer);
 	const auto it = g_groupPublic.constFind(gid);
 	return (it == g_groupPublic.constEnd()) ? GroupPublicInfo() : it.value();
+}
+
+// Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер)
+void ResetGroupsAccountData() {
+	g_publicPreviews.clear();
+	g_loadedPreviews.clear();
 }
 
 } // namespace Parvane

@@ -33,7 +33,15 @@ struct EmbedSource {
 
 [[nodiscard]] object_ptr<Ui::RpWidget> CreateEmbedView(QWidget *parent, EmbedSource source);
 
-// Вложение сообщения по секрету доступа, расшифрованное; ответ — на главном потоке (nullopt — не вышло)
-void LoadChatMediaBytes(const nlohmann::json &media, Fn<void(std::optional<QByteArray>)> done);
+// Картинка статьи больше этого не грузится сама при открытии — карточкой, по нажатию (ревью 21 окт 2026, 2.2)
+inline constexpr int64_t kArticleImageAutoMaxBytes = 20 * 1024 * 1024;
+
+// Вложение сообщения по секрету доступа, расшифрованное; ответ — на главном потоке (nullopt — не вышло).
+// Ревью 21 окт 2026 (2.2): скачивание с потолком — заявленный размер вложения (`size_bytes`) и `maxPlainBytes`
+// (> 0), меньший из них; заявлено больше `maxPlainBytes` — отказ без скачивания.
+void LoadChatMediaBytes(
+	const nlohmann::json &media,
+	int64_t maxPlainBytes,
+	Fn<void(std::optional<QByteArray>)> done);
 
 } // namespace Parvane::Knowledge

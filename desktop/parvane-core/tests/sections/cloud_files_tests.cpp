@@ -180,7 +180,9 @@ struct Blobs : CloudBlobs {
         return json{{"fileId", id}, {"key", d::toBase64("K-" + id)}, {"nonce", "n"}, {"capability", "c"},
                     {"size", bytes.size()}, {"chunks", 1}};
     }
+    std::int64_t lastMaxBytes = -1; // поле kBlobMaxBytesKey последнего скачивания (нет — 0)
     std::optional<std::string> download(const json &blob) override {
+        lastMaxBytes = blob.value(kBlobMaxBytesKey, std::int64_t(0));
         const auto it = store.find(blob.value("fileId", std::string()));
         if (it == store.end()) return std::nullopt;
         // Миниатюра хранится запечатанной: вскрыть ключом и nonce из описания
@@ -307,6 +309,16 @@ static void uploadTests() {
           "миниатюра запечатана ключом файла и загружена отдельно");
     const auto thumb = files.thumb(n);
     check(thumb && *thumb == "JPEG", "миниатюра вскрывается ключом файла и своим nonce");
+    // Ревью 21 окт 2026 (2.2): миниатюру указывает любой редактор совместной папки — скачивание с потолком
+    check(blobs.lastMaxBytes == cipherCeiling(kThumbMaxBytes) && blobs.lastMaxBytes < 3 * 1024 * 1024,
+          "миниатюра: потолок шифртекста ~2 МБ уходит реализации блобов");
+    (void)files.open(n, 1000);
+    check(blobs.lastMaxBytes == cipherCeiling(1000), "просмотр: потолок содержимого уходит реализации блобов");
+    (void)files.open(n);
+    check(blobs.lastMaxBytes == 0, "открыть без потолка — поля нет (общий потолок сессии)");
+    check(cipherCeiling(0) == 0 && cipherCeiling(-5) == 0 && cipherCeiling(1) == 1 + 8 + 16
+              && cipherCeiling(300000) >= cloudCipherSize(300000),
+          "cipherCeiling: не меньше шифртекста PVB2 web");
     const auto got = files.download("root1", n["id"].get<std::string>());
     check(got.ok && got.bytes == "IMG" && got.name == "фото.jpg", "скачивание: байты и имя");
     check(!files.download("root1", "нет").ok && files.download("root1", "нет").error == "not-found", "нет узла — not-found");

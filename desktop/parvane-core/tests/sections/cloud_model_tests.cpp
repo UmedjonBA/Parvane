@@ -1,5 +1,6 @@
 // Parvane fork (spec 029, фаза 4): тесты раздела «Облако» — порт web `cloud/cloudModel.test.ts` 1:1.
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -244,6 +245,80 @@ int main() {
         check(n.id == "n1" && !n.parent && n.mtime == 1700000000000 && n.blob && (*n.blob)["fileId"] == "b1"
                 && !back.contains("parent") && back["trashTop"] == false && back["blob"]["size"] == 3,
             "узел читается из JSON движка и пишется обратно (пустой parent — корень)");
+    }
+
+    // Ревью безопасности 21 окт 2026: дерево совместной папки правит любой редактор — цепочка и цикл из 30 000
+    // папок не вешают показ (прежде размер поднимался по всей цепочке предков — квадрат)
+    {
+        constexpr int kDeep = 30000;
+        std::vector<CloudNode> chain;
+        for (int i = 0; i < kDeep; ++i) {
+            CloudNode n;
+            n.id = "f" + std::to_string(i);
+            n.kind = "folder";
+            if (i) n.parent = "f" + std::to_string(i - 1);
+            n.name = "п";
+            chain.push_back(n);
+        }
+        CloudNode leaf;
+        leaf.id = "leaf";
+        leaf.parent = "f" + std::to_string(kDeep - 1);
+        leaf.name = "x.bin";
+        leaf.size = 7;
+        chain.push_back(leaf);
+        auto cycle = chain;
+        cycle[0].parent = "f" + std::to_string(kDeep - 1); // f0 → … → f29999 → f0
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto stats = folderStats(chain);
+        const auto path = pathOf(chain, std::string("leaf"));
+        const auto cycleStats = folderStats(cycle);
+        const auto cyclePath = pathOf(cycle, std::string("leaf"));
+        const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("       цепочка и цикл 30 000 папок: %.3f с\n", seconds);
+        check(seconds < 1.0, "цепочка и цикл 30 000 папок — меньше секунды");
+        check(stats.at("f0").size == 7 && stats.at("f0").count == 1 && stats.at("f29999").size == 7,
+              "цепочка: размер листа виден у каждого предка");
+        check(path.size() == std::size_t(kDeep) + 1 && path.front().id == "f0" && path.back().id == "leaf",
+              "цепочка: путь от корня до файла");
+        check(cyclePath.size() == std::size_t(kDeep) + 1 && cycleStats.size() <= std::size_t(kDeep) + 1,
+              "цикл родителей: путь обрывается на повторе");
+    }
+
+    // Ревью безопасности 21 окт 2026 (2.3): чужой файл система откроет по расширению
+    {
+        check(safeToOpenExternally("image/png", "x.png") && safeToOpenExternally("image/jpeg", "Фото.JPG")
+                  && safeToOpenExternally("video/mp4", "v.mp4") && safeToOpenExternally("audio/ogg; codecs=opus", "a.ogg")
+                  && safeToOpenExternally("", "x.webp"),
+              "открыть системой: картинка, видео, звук с совпадающими mime и расширением");
+        check(!safeToOpenExternally("image/png", "x.desktop") && !safeToOpenExternally("image/png", "x.png.desktop")
+                  && !safeToOpenExternally("image/png", "x.sh") && !safeToOpenExternally("image/png", "x.exe")
+                  && !safeToOpenExternally("image/png", "x"),
+              "x.desktop / .sh / .exe / без расширения при image/png — нет («Сохранить как»)");
+        check(!safeToOpenExternally("video/mp4", "x.png") && !safeToOpenExternally("image/svg+xml", "x.png")
+                  && !safeToOpenExternally("application/octet-stream", "x.png") && !safeToOpenExternally("text/html", "x.mp3")
+                  && !safeToOpenExternally("image/png", "x.svg") && !safeToOpenExternally("image/png", "x.html"),
+              "вид по mime и по расширению различаются — нет");
+        check(!safeToOpenExternally("image/png", "x.png ") && !safeToOpenExternally("image/png", ".png"),
+              "хвостовой пробел, только расширение — нет");
+    }
+    {
+        check(safeLocalName("фото.jpg") == "фото.jpg", "обычное имя — как есть");
+        check(safeLocalName("../../.bashrc") == "___.._.bashrc" && safeLocalName("a/b\\c") == "a_b_c",
+              "разделители путей и ведущие точки заменены");
+        check(safeLocalName("") == "file" && safeLocalName(".") == "file" && safeLocalName("..") == "file"
+                  && safeLocalName("/") == "file",
+              "пустое, «.», «..», «/» — file");
+        check(safeLocalName(std::string("a\x01\nb.png")) == "a__b.png", "управляющие знаки заменены");
+        std::string longName;
+        for (int i = 0; i < 300; ++i) longName += "ж";
+        longName += ".png";
+        const auto cut = safeLocalName(longName);
+        bool utf8 = true;
+        for (std::size_t i = 0; i + 4 < cut.size(); i += 2) {
+            utf8 = utf8 && static_cast<unsigned char>(cut[i]) == 0xD0;
+        }
+        check(cut.size() <= kLocalNameMaxBytes && cut.size() > 190 && cut.substr(cut.size() - 4) == ".png" && utf8,
+              "длинное имя — до 200 байт по границе знака, расширение на месте");
     }
 
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);

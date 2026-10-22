@@ -3449,7 +3449,9 @@ void HistoryWidget::refreshSendGiftToggle() {
 		| Type::Unlimited
 		| Type::Limited
 		| Type::Unique;
+	// Parvane: подарков нет — кнопки «подарок» в поле ввода (в т.ч. в день рождения) нет.
 	const auto has = user
+		&& session().premiumPossible()
 		&& _canSendMessages
 		&& !user->isServiceUser()
 		&& !user->isSelf()

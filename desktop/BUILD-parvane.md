@@ -42,7 +42,8 @@ SR=~/.local/parvane-sysroot/usr
 cd desktop && git clone https://github.com/tdlib/td.git tde2e-src
 cd tde2e-src && git fetch --depth 1 origin 51743df && git checkout 51743df
 # Для e2e-скриптов verify_*.sh (PARVANE_AUTOLOGIN/AUTOSEND/…, PARVANE_WSS_INSECURE,
-# PARVANE_NATS_URL, ws:// к gateway) нужна dev-сборка: добавьте -DPARVANE_DEV=ON.
+# PARVANE_NATS_URL, ws:// к gateway) нужна dev-сборка: добавьте -DPARVANE_DEV=ON
+# (и при запуске PARVANE_DEV_HOOKS=1 с gateway на loopback — см. «Переменные окружения»).
 # В релизной сборке этих хуков нет (P-45/P-46).
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_INSTALL_PREFIX="$SR" -DTD_E2E_ONLY=ON \
@@ -208,6 +209,9 @@ handshake RFC 6455, маскированные текстовые кадры, pi
 - `PARVANE_NATS_URL=nats://…` — прямой NATS (dev), gateway не используется;
 - `PARVANE_WSS_INSECURE=1` — не проверять сертификат (только для самоподписанных стендов).
 
+С 21 окт 2026 (ревью «dev-сборка и журналы») всё, кроме `wss://`, действует только в dev-сборке и только на стенде
+— см. «Переменные окружения» ниже.
+
 Вход: голый ник дополняется доменом сервера (`identity.server.info`), регистрация и
 двухфакторный вход подтверждаются в Telegram-боте (экран со ссылкой
 `https://t.me/<бот>?start=<token>`, клиент опрашивает `identity.register.status`
@@ -233,5 +237,23 @@ cmake -S tdesktop -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DPARVANE
 ninja -C build-release -j3 Telegram
 ```
 Запуск — `desktop/parvane-desktop` (данные в `~/.local/share/parvane-desktop`, сервер — прод по WSS). Проверка
-входа — вручную (в релизе нет хуков): VNC/экран, тестовый аккаунт заводит `local-workdirs/prod-desk/prod_check.sh`
-на dev-сборке.
+входа — вручную (в релизе нет хуков): VNC/экран. `local-workdirs/prod-desk/prod_check.sh` (dev-сборка с хуками) с
+21 окт 2026 к проду напрямую не ходит — только через SSH-туннель к gateway на loopback (`PROD_GW=ws://127.0.0.1:…`).
+
+### Переменные окружения (ревью 21 окт 2026)
+
+| Переменная | Релиз | Dev-сборка (`-DPARVANE_DEV=ON`) |
+|---|---|---|
+| `PARVANE_GATEWAY_URL` | только `wss://` (свой сервер) | `wss://` всегда; `ws://`, TCP `host:port` — только при открытом шлюзе |
+| `PARVANE_DEV_HOOKS=1` | не читается | открывает шлюз dev-хуков, но только если `PARVANE_GATEWAY_URL` на loopback (`127.0.0.1`, `localhost`, `::1`) |
+| `PARVANE_AUTO*`, `PARVANE_RECOVERY_KEY_FILE`, `PARVANE_DUMPTREE`, `PARVANE_NO_LINK_OFFER`, `PARVANE_BUG_REPORT_TO`, `PARVANE_STUN/TURN*`, `PARVANE_STICKERS_DIR/EMOJI_DIR/GIFS_DIR`, `PARVANE_REAL_MEDIA` | нет | только при открытом шлюзе (`Parvane::DevEnv`/`ParvaneDevEnv` → `nullptr` иначе; в журнале одна строка «dev-хуки включены/отключены»); без шлюза звонок — с настоящим звуком, как релиз |
+| `PARVANE_WSS_INSECURE=1` | нет | только при `PARVANE_DEV_HOOKS=1` и хосте gateway на loopback |
+| `PARVANE_LOG_CONTENT=1` | нет | содержимое (`LogSecret`: текст, координаты, коды сверки) в `log.txt` открыто; только при открытом шлюзе. Без него скрыто и в dev. «Сообщить об ошибке» при нём уходит без журнала |
+| `PARVANE_LANG_FILE` | не читается — русский пакет встроен (qrc `:/parvane/lang/parvane_ru_RU.strings` из `desktop/langs/`, лимит tdesktop на файл — 1 МиБ), первый запуск профиля — русский | только при открытом шлюзе (стенды spec 030); без него — встроенный пакет, и, как прежде, английский по умолчанию |
+| `PARVANE_CA_DIRS` | desktop не читает (ядро: `GatewayWsTransport::setEnvCaDirsAllowed(false)`; Android включает сам через JNI) | так же |
+| `PARVANE_ALLOW_COREDUMP=1` | нет | оставить дампы памяти для отладки; иначе в начале `main` — `PR_SET_DUMPABLE=0` и `RLIMIT_CORE=0` (и в релизе всегда) |
+
+Секретные коды tdesktop (набор в поле поиска настроек) в релизе — только `viewlogs` и `testmode`; `debugmode`
+(строки клиента на диск), `loadlang` (любой языковой файл) и прочие — только dev. `verify_lib.sh` экспортирует
+`PARVANE_DEV_HOOKS=1 PARVANE_LOG_CONTENT=1` для всех сценариев; так же `scripts/e2e_desktop_helpers.mjs` и
+`e2e_web_cross_{features,multidevice,profile}.mjs`.

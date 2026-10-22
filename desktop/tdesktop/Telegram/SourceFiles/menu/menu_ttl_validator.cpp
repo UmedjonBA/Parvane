@@ -75,18 +75,9 @@ Args TTLValidator::createArgs() const {
 		: peer->isBroadcast()
 		? tr::lng_ttl_edit_about_channel()
 		: tr::lng_ttl_edit_about_group();
-	auto about2 = tr::lng_ttl_edit_about2(
-		lt_link,
-		tr::lng_ttl_edit_about2_link(
-		) | rpl::map([=](const QString &s) {
-			return tr::link(s, "tg://settings/auto_delete");
-		}),
-		tr::marked);
-	auto about = rpl::combine(
-		std::move(about1),
-		std::move(about2)
-	) | rpl::map([](const QString &s1, TextWithEntities &&s2) {
-		return TextWithEntities{ s1 }.append(u"\n\n"_q).append(std::move(s2));
+	// Parvane: ссылки на глобальное автоудаление (tg://settings/auto_delete) нет — настройки нет и в web.
+	auto about = std::move(about1) | rpl::map([](const QString &s1) {
+		return TextWithEntities{ s1 };
 	});
 	const auto ttl = peer->messagesTTL();
 	return { std::move(show), ttl, std::move(about), std::move(callback) };

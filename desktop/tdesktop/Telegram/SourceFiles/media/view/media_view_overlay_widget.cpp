@@ -2213,6 +2213,11 @@ void OverlayWidget::fillContextMenuActions(
 		}, &st::mediaMenuIconProfile);
 	}();
 	[&] { // Report userpic.
+		// Parvane: жалоба на фото профиля — account.reportProfilePhoto (MTProto); жалобы Parvane (spec 024) — на
+		// сообщения и собеседников.
+		if (constexpr auto kParvaneReportPhoto = false; !kParvaneReportPhoto) {
+			return;
+		}
 		if (!_peer || !_photo) {
 			return;
 		}

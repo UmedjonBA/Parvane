@@ -944,6 +944,11 @@ void Filler::addDirectMessages() {
 }
 
 void Filler::addExportChat() {
+	// Parvane: экспорт истории tdesktop идёт через MTProto (ошибка, затем «остановить экспорт?» при выходе).
+	// Выгрузка данных Parvane — «Продвинутые» → «Выгрузить данные» (spec 029).
+	if (constexpr auto kParvaneExportChat = false; !kParvaneExportChat) {
+		return;
+	}
 	if (!_peer->canExportChatHistory()) {
 		return;
 	}
@@ -996,6 +1001,11 @@ void Filler::addReport() {
 }
 
 void Filler::addNewContact() {
+	// Parvane: контакты Telegram (contacts.addContact/deleteContacts, EditContactBox) — MTProto; в Parvane собеседник
+	// личного чата — контакт сам, правки контакта нет.
+	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user
 		|| user->isContact()
@@ -1018,6 +1028,10 @@ void Filler::addNewContact() {
 }
 
 void Filler::addShareContact() {
+	// Parvane: карточка контакта уходит через MTProto sendMedia (без зеркала Parvane) — пункта нет.
+	if (constexpr auto kParvaneShareContact = false; !kParvaneShareContact) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user || !user->canShareThisContact()) {
 		return;
@@ -1030,6 +1044,11 @@ void Filler::addShareContact() {
 }
 
 void Filler::addEditContact() {
+	// Parvane: контакты Telegram (contacts.addContact/deleteContacts, EditContactBox) — MTProto; в Parvane собеседник
+	// личного чата — контакт сам, правки контакта нет.
+	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user || !user->isContact() || user->isSelf()) {
 		return;
@@ -1085,6 +1104,10 @@ void Filler::addNewMembers() {
 }
 
 void Filler::addDeleteContact() {
+	// Parvane: contacts.deleteContacts (MTProto) — пункта нет.
+	if (constexpr auto kParvaneContacts = false; !kParvaneContacts) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user || !user->isContact() || user->isSelf()) {
 		return;
@@ -1346,6 +1369,10 @@ void Filler::addCreateTodoList() {
 }
 
 void Filler::addThemeEdit() {
+	// Parvane: темы чата Telegram — облачные (MTProto); фон Parvane — «Оформление» (spec 030, фоны web).
+	if (constexpr auto kParvaneChatTheme = false; !kParvaneChatTheme) {
+		return;
+	}
 	if (_peer->isVerifyCodes() || _peer->isRepliesChat()) {
 		return;
 	}
@@ -1448,6 +1475,10 @@ void ShowDisableSharingBox(
 }
 
 void Filler::addToggleNoForwards() {
+	// Parvane: «Запретить пересылку» — Premium + MTProto messages.toggleNoForwards, в web нет.
+	if (constexpr auto kParvaneNoForwards = false; !kParvaneNoForwards) {
+		return;
+	}
 	const auto user = _peer->asUser();
 	if (!user
 		|| user->isInaccessible()

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -95,5 +96,28 @@ struct Incoming {
 // Не "direct"/"group" или без opId → Kind::None. disposition "stub" и виды, которых
 // клиент не знает (контакт, служебные ключи и т.п.) → Kind::Stub.
 [[nodiscard]] Incoming interpretDirect(const json &event, const std::string &self);
+
+// Жалоба на сообщения группы админу (`{"kind":"mod_report"}`, spec 029): отправитель — любой, поэтому карточке с
+// кнопками «удалить у всех» / «заблокировать автора» верить можно только тому, что проверено по своим данным
+// (ревью безопасности 21 окт 2026, вечер). Сообщение — из своей истории; группа — та, что в `report_group`.
+struct ReportLocalMessage {
+    std::string chat;   // чат сообщения на этом устройстве ("v2g:<hex>" для группы v2)
+    std::string author; // автор по своей истории
+    std::string text;   // свой текст сообщения ("" — вложение без подписи)
+};
+struct ReportCheck {
+    std::string group;                // "v2g:<hex>"
+    std::vector<std::string> opIds;   // сообщения группы из жалобы, найденные в своей истории
+    std::vector<std::string> authors; // их авторы (по своей истории), без повторов
+    std::string text;                 // текст карточки — из своей истории, не из жалобы
+};
+// nullopt — карточку не показывать: не жалоба, группа не v2, отправитель не участник группы (по своим сведениям),
+// ни одного сообщения этой группы в своей истории. Сообщения чужой группы и неизвестные — отбрасываются, автор и текст
+// жалобы игнорируются.
+[[nodiscard]] std::optional<ReportCheck> validateModReport(
+    const json &content,
+    const std::string &reporter,
+    const std::function<std::vector<std::string>(const std::string &group)> &membersOf,
+    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup);
 
 } // namespace parvane::v2

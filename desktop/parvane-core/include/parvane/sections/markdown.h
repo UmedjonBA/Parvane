@@ -66,6 +66,14 @@ std::vector<MdInline> parseInline(const std::string &text);
 std::vector<std::string> embedNames(const std::string &markdown);
 /** Последняя часть пути встроенного файла: под ней файл лежит в статье и в облаке получателя */
 std::string embedBaseName(const std::string &name);
+/** Адрес, который можно отдать системе: только http(s) и mailto (web SAFE_URL) */
+bool isSafeUrl(const std::string &url);
+/**
+ * Ревью безопасности 21 окт 2026 (2.3): ссылку, подпись которой не совпадает с адресом, открывать только после
+ * подтверждения с показом адреса (как скрытые ссылки в сообщениях tdesktop): `[https://bank.example](https://evil…)`.
+ * Совпадение — без учёта регистра, схемы http(s)/mailto, `www.` и завершающей `/`. Пустая подпись — совпадает.
+ */
+bool linkNeedsConfirmation(const std::string &text, const std::string &url);
 /** Переписать цели встроенных файлов (`![[старое]]` → `![[новое]]`); прочий текст не меняется */
 std::string renameEmbeds(const std::string &markdown, const std::map<std::string, std::string> &rename);
 

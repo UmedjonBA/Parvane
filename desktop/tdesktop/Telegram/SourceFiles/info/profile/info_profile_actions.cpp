@@ -955,7 +955,9 @@ void DeleteContactNote(
 	}) | rpl::flatten_latest(
 	) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](bool today) {
-		const auto disable = !today && user->session().premiumCanBuy();
+		// Parvane: подарков нет — строка дня рождения не кнопка «подарить», значка подарка нет.
+		const auto disable = !user->session().premiumPossible()
+			|| (!today && user->session().premiumCanBuy());
 		button->setDisabled(disable);
 		button->setAttribute(Qt::WA_TransparentForMouseEvents, disable);
 		button->clearState();
@@ -2309,7 +2311,7 @@ Section DetailsFiller::makeAddAsContact(not_null<UserData*> user) {
 	AddMainButton(
 		raw->entity(),
 		tr::lng_info_add_as_contact(),
-		CanAddContactValue(user),
+		rpl::single(false), // Parvane: contacts.addContact (MTProto) — пункта нет
 		[=, controller = _controller->parentController()] {
 			controller->uiShow()->show(
 				Box(EditContactBox, controller, user));
@@ -2754,7 +2756,7 @@ void ActionsFiller::addShareContactAction(not_null<UserData*> user) {
 	AddActionButton(
 		_wrap,
 		tr::lng_info_share_contact(),
-		CanShareContactValue(user),
+		rpl::single(false), // Parvane: карточка контакта уходит через MTProto sendMedia — пункта нет
 		[=] { Window::PeerMenuShareContactBox(controller, user); },
 		&st::infoIconShare);
 }
@@ -2770,7 +2772,7 @@ void ActionsFiller::addEditContactAction(not_null<UserData*> user) {
 	AddActionButton(
 		_wrap,
 		tr::lng_info_edit_contact(),
-		IsContactValue(user),
+		rpl::single(false), // Parvane: EditContactBox — contacts.addContact (MTProto)
 		edit,
 		&st::infoIconEdit);
 }
@@ -2780,7 +2782,7 @@ void ActionsFiller::addDeleteContactAction(not_null<UserData*> user) {
 	AddActionButton(
 		_wrap,
 		tr::lng_info_delete_contact(),
-		IsContactValue(user),
+		rpl::single(false), // Parvane: contacts.deleteContacts (MTProto)
 		[=] { Window::PeerMenuDeleteContact(controller, user); },
 		&st::infoIconDelete);
 }

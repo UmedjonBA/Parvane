@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_phone.h"
 #include "intro/intro_qr.h"
 #include "intro/intro_parvane.h" // Parvane fork
+#include "parvane/parvane_lang.h" // Parvane: ссылка смены языка без облака Telegram
 #include "intro/intro_code.h"
 #include "intro/intro_signup.h"
 #include "intro/intro_password_check.h"
@@ -263,41 +264,26 @@ void Widget::createLanguageLink() {
 		return;
 	}
 
-	const auto createLink = [=](
-			const QString &text,
-			const QString &languageId) {
+	const auto createLink = [=](const QString &text, Fn<void()> switchTo) {
 		_changeLanguage.create(
 			this,
 			object_ptr<Ui::LinkButton>(this, text));
 		_changeLanguage->hide(anim::type::instant);
-		_changeLanguage->entity()->setClickedCallback([=] {
-			Lang::CurrentCloudManager().switchToLanguage(languageId);
-		});
+		_changeLanguage->entity()->setClickedCallback(std::move(switchTo));
 		_changeLanguage->toggle(
 			!_resetAccount && !_terms && _nextShown,
 			anim::type::normal);
 		updateControlsGeometry();
 	};
 
-	const auto currentId = Lang::LanguageIdOrDefault(Lang::Id());
-	const auto defaultId = Lang::DefaultLanguageId();
-	const auto suggested = Lang::CurrentCloudManager().suggestedLanguage();
-	if (currentId != defaultId) {
+	// Parvane: облачного каталога языков Telegram нет (запрос langpack ушёл бы к серверам Telegram) — ссылка
+	// переключает между встроенными русским и английским (parvane_lang.cpp). Текст ссылки — на языке цели.
+	if (Parvane::RussianLanguageActive()) {
 		createLink(
 			Lang::GetOriginalValue(tr::lng_switch_to_this.base),
-			defaultId);
-	} else if (!suggested.isEmpty() && suggested != currentId && _api) {
-		_api->request(MTPlangpack_GetStrings(
-			MTP_string(Lang::CloudLangPackName()),
-			MTP_string(suggested),
-			MTP_vector<MTPstring>(1, MTP_string("lng_switch_to_this"))
-		)).done([=](const MTPVector<MTPLangPackString> &result) {
-			const auto strings = Lang::Instance::ParseStrings(result);
-			const auto i = strings.find(tr::lng_switch_to_this.base);
-			if (i != strings.end()) {
-				createLink(i->second, suggested);
-			}
-		}).send();
+			[] { Parvane::SwitchToEnglish(); });
+	} else {
+		createLink(u"Продолжить на русском"_q, [] { Parvane::SwitchToRussian(); });
 	}
 }
 
@@ -870,24 +856,26 @@ void Widget::keyPressEvent(QKeyEvent *e) {
 			backRequested();
 		}
 	} else if (e->key() == Qt::Key_Enter
-		|| e->key() == Qt::Key_Return
-		|| e->key() == Qt::Key_Space) {
+		|| e->key() == Qt::Key_Return) {
+		// Parvane: пробел вне поля формы не отправляет (ревью 21 окт, вечер — случайный вход/регистрация)
 		getStep()->submit();
 	}
 }
 
 void Widget::backRequested() {
+	// Parvane: стадии почты/кода/Telegram экрана входа — назад к паролю
+	if (const auto parvane = dynamic_cast<ParvaneWidget*>(getStep())) {
+		if (parvane->backToLogin()) {
+			return;
+		}
+	}
 	if (_stepHistory.size() > 1) {
 		historyMove(StackAction::Back, Animate::Back);
 	} else if (const auto parent
 		= Core::App().domain().maybeLastOrSomeAuthedAccount()) {
 		Core::App().domain().activate(parent);
-	} else {
-		moveToStep(
-			Ui::CreateChild<StartWidget>(this, _account, getData()),
-			StackAction::Replace,
-			Animate::Back);
 	}
+	// Parvane: иначе — некуда. Upstream ставил StartWidget Telegram (вход по номеру через MTProto) — тупик
 }
 
 Widget::~Widget() {

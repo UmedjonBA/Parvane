@@ -269,6 +269,14 @@ SpecialConfigRequest::SpecialConfigRequest(
 void SpecialConfigRequest::sendNextRequest() {
 	Expects(!_attempts.empty());
 
+	// Parvane (ревью 21 окт 2026): «особый» конфиг и время по HTTP (dns.google.com, mozilla.cloudflare-dns.com,
+	// firebaseremoteconfig/firestore.googleapis.com) — только для MTProto Telegram, которого у форка нет. Ничего
+	// не отправляем: третьи стороны не видят IP пользователя и факт запуска клиента.
+	if (const auto parvaneNoMtproto = true) {
+		_attempts.clear();
+		return;
+	}
+
 	const auto attempt = _attempts.back();
 	_attempts.pop_back();
 	if (!_attempts.empty()) {

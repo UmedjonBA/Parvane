@@ -26,6 +26,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "data/data_peer_values.h" // Data::AmPremiumValue.
 
+// Parvane fork: выход при забытом код-пароле (определены в parvane_client.cpp; parvane_client.h здесь не подключается)
+namespace Parvane {
+void WipeAfterForgottenPasscode();
+void RequestWipeOnLogout(not_null<Main::Account*> account);
+} // namespace Parvane
+
 namespace Main {
 
 Domain::Domain(const QString &dataName)
@@ -116,10 +122,16 @@ int Domain::activeForStorage() const {
 
 void Domain::resetWithForgottenPasscode() {
 	if (_accounts.empty()) {
+		// Parvane: код-пароль забыт на старте — локальный ключ будет новым, файлы tdata/parvane-*, зашифрованные
+		// прежним, никто не прочтёт: стереть, как выход со стиранием (записи выхода нет — ключи устройства под
+		// прежним ключом). Ревью 21 окт, вечер
+		Parvane::WipeAfterForgottenPasscode();
 		_local->startFromScratch();
 		activateAfterStarting();
 	} else {
 		for (const auto &[index, account] : _accounts) {
+			// Parvane: «Выйти» на экране код-пароля — выход со стиранием, как «Выйти» в настройках (NAT-16)
+			Parvane::RequestWipeOnLogout(account.get());
 			account->logOut();
 		}
 	}
@@ -316,6 +328,13 @@ not_null<Main::Account*> Domain::add(MTP::Environment environment) {
 }
 
 void Domain::addActivated(MTP::Environment environment, bool newWindow) {
+	// Parvane: один аккаунт на процесс — при вошедшем аккаунте не добавлять второй ни одним путём (ссылка
+	// tg://settings/edit/add-account, Ctrl+клик / Alt+Shift+ПКМ в списке аккаунтов, код testmode)
+	for (const auto &[index, account] : accounts()) {
+		if (account->sessionExists()) {
+			return;
+		}
+	}
 	const auto added = [&](not_null<Main::Account*> account) {
 		if (newWindow) {
 			Core::App().ensureSeparateWindowFor(account);
@@ -501,13 +520,10 @@ void Domain::scheduleWriteAccounts() {
 }
 
 int Domain::maxAccounts() const {
-	const auto premiumCount = ranges::count_if(accounts(), [](
-			const Main::Domain::AccountWithIndex &d) {
-		return d.account->sessionExists()
-			&& (d.account->session().premium()
-				|| d.account->session().isTestMode());
-	});
-	return std::min(int(premiumCount) + kMaxAccounts, kPremiumMaxAccounts);
+	// Parvane: один аккаунт на процесс — клиент держит состояние аккаунта глобально (parvane_client*.cpp), второй
+	// Main::Account смешал бы данные двух аккаунтов; «Добавить аккаунт» вёл на экран входа без выхода назад.
+	// Отсюда скрываются все пункты добавления, а addActivated при существующем аккаунте ничего не делает.
+	return 1;
 }
 
 rpl::producer<int> Domain::maxAccountsChanges() const {

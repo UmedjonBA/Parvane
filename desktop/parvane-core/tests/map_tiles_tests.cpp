@@ -97,6 +97,26 @@ int main() {
         check(dstWrapped > dstLast, "179.999: обёрнутый тайл рисуется правее (по tx)");
     }
 
+    // Ревью 21 окт 2026: долгота из сообщения вне [-180, 180] (1e300, 370) — та же карта, что у приведённой,
+    // без перебора тайлов по переполненным индексам
+    {
+        const auto ref = computeGeometry(10.0, 10.0, 16, 320, 240, 1.0);
+        const auto huge = computeGeometry(10.0, 1e300, 16, 320, 240, 1.0);
+        const auto wrapped = computeGeometry(10.0, 370.0, 16, 320, 240, 1.0);
+        const std::uint32_t n = 1u << kMaxZoom;
+        const auto expect = computeGeometry(10.0, std::remainder(1e300, 360.0), 16, 320, 240, 1.0);
+        bool inRange = !huge.tiles.empty() && huge.tiles.size() == expect.tiles.size();
+        for (std::size_t i = 0; inRange && i < huge.tiles.size(); ++i) {
+            inRange = huge.tiles[i].key.x < n && huge.tiles[i].key.x == expect.tiles[i].key.x;
+        }
+        check(inRange, "долгота 1e300: тайлов как у обычной точки, x < 2^z");
+        bool same = wrapped.tiles.size() == ref.tiles.size();
+        for (std::size_t i = 0; same && i < ref.tiles.size(); ++i) {
+            same = wrapped.tiles[i].key.x == ref.tiles[i].key.x && wrapped.tiles[i].dstX == ref.tiles[i].dstX;
+        }
+        check(same, "долгота 370 — как 10");
+    }
+
     // Широта 80° — обычная точка, ty в диапазоне
     {
         const auto g = computeGeometry(80.0, 20.0, 16, 320, 240, 1.0);

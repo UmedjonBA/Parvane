@@ -53,6 +53,9 @@ Geometry computeGeometry(double lat, double lon, int zoom, int width, int height
         g.height = std::max(0, height);
         return g;
     }
+    // Долгота из сообщения может быть любой (1e300): к [-180, 180], иначе центр вне int64 и перебор тайлов —
+    // неопределённое поведение (ревью 21 окт 2026)
+    lon = std::remainder(lon, 360.0);
     // Web Mercator: центр в «тайловых пикселях» уровня zoom (как в web)
     const double n = std::ldexp(1.0, g.zoom); // 2^zoom
     const double latRad = std::max(-kMaxLat, std::min(kMaxLat, lat)) * kPi / 180.0;

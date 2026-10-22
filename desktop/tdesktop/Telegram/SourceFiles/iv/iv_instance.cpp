@@ -1111,6 +1111,12 @@ void Instance::openWithIvPreferred(
 void Instance::showTonSite(
 		const QString &uri,
 		QVariant context) {
+	// Parvane (ревью 21 окт 2026): сайты TON открывались веб-просмотром через прокси TON Telegram — третья
+	// сторона видела IP и адрес. У форка этой функции нет: «не поддерживается», без сети.
+	if (const auto parvaneNoTonSite = true) {
+		Ui::Toast::Show(tr::lng_iv_not_supported(tr::now));
+		return;
+	}
 	if (!Controller::IsGoodTonSiteUrl(uri)) {
 		Ui::Toast::Show(tr::lng_iv_not_supported(tr::now));
 		return;
@@ -1656,6 +1662,11 @@ void Instance::closeAll() {
 }
 
 bool PreferForUri(const QString &uri) {
+	// Parvane (ревью 21 окт 2026): Instant View берёт страницу у серверов Telegram (MTProto у форка нет) —
+	// ссылки telegra.ph/telegram.org открываются обычным браузером по выбору пользователя.
+	if (const auto parvaneNoIv = true) {
+		return false;
+	}
 	const auto url = QUrl(uri);
 	const auto host = url.host().toLower();
 	const auto path = url.path().toLower();

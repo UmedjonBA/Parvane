@@ -3,6 +3,7 @@
 // `CloudSendDialog`, `CloudChatDialogs`. Шторки — Kit::Sheet поверх раздела; содержимое, зависящее от данных,
 // перестраивается при их смене.
 #include "parvane/parvane_cloud.h"
+#include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_cloud_internal.h"
 
 #include "parvane/parvane_client.h"
@@ -36,6 +37,7 @@ using Kind = Btn::Kind;
 
 constexpr auto kPreviewMaxBytes = std::int64_t(256) * 1024 * 1024; // web PREVIEW_MAX_BYTES_DESKTOP
 constexpr auto kPreviewTextChars = 64 * 1024; // длиннее в окне не показываем — Qt рисует текст целиком
+constexpr auto kPreviewImageMaxSide = 4096; // картинка просмотра — не крупнее (разбор с уменьшением)
 constexpr auto kCopiedHideMs = 2500;
 
 Sheet *NewSheet(not_null<QWidget*> parent, const QString &title, bool wide = false, bool tight = false) {
@@ -606,7 +608,8 @@ object_ptr<Ui::RpWidget> MakeLinkBlock(
 			auto flow = object_ptr<Flow>(layout, Rem(0.5));
 			if (!url.isEmpty() && state == u"active"_q) {
 				flow->add(object_ptr<Btn>(flow.data(), tr::lng_parvane_cloud_link_preview(tr::now), Kind::Normal, u"eye"_q))->setClickedCallback([=] {
-					QDesktopServices::openUrl(QUrl(url));
+					// Адрес ссылки собран из ответа сервера: только http(s), браузером системы
+					OpenExternalLink(url, url);
 				});
 			}
 			const auto revoke = flow->add(object_ptr<Btn>(flow.data(), tr::lng_parvane_cloud_link_revoke(tr::now), Kind::Danger));
@@ -1071,6 +1074,8 @@ void FillPreview(Sheet *sheet, std::shared_ptr<PreviewArgs> args) {
 		art->setLoading();
 		const auto weak = QPointer<PreviewArt>(art);
 		const auto id = node.id;
+		// Ревью 21 окт 2026 (2.2): `node.size` называет загрузивший — потолок скачивания тот же, что у проверки выше
+		const auto previewMax = isText ? std::min(kPreviewMaxBytes, cloud::kTextPreviewMaxBytes) : kPreviewMaxBytes;
 		OpenBlob(args->entry, [=](std::optional<QByteArray> bytes) {
 			if (!weak) {
 				return;
@@ -1095,14 +1100,14 @@ void FillPreview(Sheet *sheet, std::shared_ptr<PreviewArgs> args) {
 				}
 				weak->setText(text);
 			} else {
-				auto image = QImage::fromData(*bytes);
+				auto image = DecodeImageBounded(*bytes, kPreviewImageMaxSide);
 				if (image.isNull()) {
 					fail();
 				} else {
 					weak->setImage(std::move(image));
 				}
 			}
-		});
+		}, previewMax);
 	}
 
 	// `.previewFacts`: размер, дата, папка, доступ

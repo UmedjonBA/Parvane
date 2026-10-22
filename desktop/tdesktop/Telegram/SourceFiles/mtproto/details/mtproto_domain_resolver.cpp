@@ -187,6 +187,11 @@ DomainResolver::DomainResolver(Fn<void(
 }
 
 void DomainResolver::resolve(const QString &domain) {
+	// Parvane (ревью 21 окт 2026): разрешение адреса прокси MTProto через DNS-over-HTTPS Google/Mozilla —
+	// MTProto у форка нет, запросы к третьим сторонам не шлём.
+	if (const auto parvaneNoMtproto = true) {
+		return;
+	}
 	resolve({ domain, false });
 	resolve({ domain, true });
 }

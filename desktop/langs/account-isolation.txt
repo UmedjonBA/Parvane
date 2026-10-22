@@ -1,0 +1,11 @@
+lng_parvane_code_resend
+Send the code again
+Отправить код ещё раз
+
+lng_parvane_code_resent
+A new code has been sent
+Новый код отправлен
+
+lng_parvane_other_account_signed_in
+Another account is already signed in on this device. Sign out of it first.
+На этом устройстве уже выполнен вход в другой аккаунт. Сначала выйдите из него.

@@ -746,14 +746,19 @@ void StickersBox::refreshTabs() {
 		sections.push_back(tr::lng_stickers_masks_tab(tr::now));
 		_tabIndices.push_back(Section::Masks);
 	}
-	const auto showFeatured = _featured.widget()
+	// Parvane: «Популярные» и «Архив» — облачные списки MTProto (getFeaturedStickers/getArchivedStickers),
+	// в Parvane всегда пустые — вкладок нет, открытие на них уходит на «Установленные».
+	constexpr auto kParvaneCloudTabs = false;
+	const auto showFeatured = kParvaneCloudTabs
+		&& _featured.widget()
 		&& (!stickers.featuredSetsOrder().isEmpty()
 			|| _section == Section::Featured);
 	if (showFeatured) {
 		sections.push_back(tr::lng_stickers_featured_tab(tr::now));
 		_tabIndices.push_back(Section::Featured);
 	}
-	const auto showArchived = _archived.widget()
+	const auto showArchived = kParvaneCloudTabs
+		&& _archived.widget()
 		&& (!archivedSetsOrder().isEmpty()
 			|| _section == Section::Archived);
 	if (showArchived) {

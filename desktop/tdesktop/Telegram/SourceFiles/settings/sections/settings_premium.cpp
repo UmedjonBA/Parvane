@@ -1894,6 +1894,11 @@ void ShowPremiumPromoToast(
 			not_null<::Main::Session*>)> resolveWindow,
 		TextWithEntities textWithLink,
 		const QString &ref) {
+	// Parvane: Premium нет — вместо «подпишитесь на Premium» со ссылкой понятный тост без ссылки.
+	if (!show->session().premiumPossible()) {
+		show->showToast(tr::lng_premium_unavailable(tr::now));
+		return;
+	}
 	using WeakToast = base::weak_ptr<Ui::Toast::Instance>;
 	const auto toast = std::make_shared<WeakToast>();
 	(*toast) = show->showToast({

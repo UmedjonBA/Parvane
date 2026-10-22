@@ -3,6 +3,9 @@
 // свои ссылки, миниатюры. Сеть и крипто — задания в рабочий поток разделов (`Sections::Ask`, CloudFiles ядра).
 #include "parvane/parvane_cloud_internal.h"
 #include "parvane/parvane_local_files.h"
+#include "parvane/parvane_safe_open.h"
+
+#include <parvane/storecrypt.h>
 
 #include "core/file_utilities.h"
 #include "lang/lang_instance.h"
@@ -38,6 +41,8 @@ constexpr auto kThumbCache = 300;
 constexpr auto kThumbMaxSide = 320;
 constexpr auto kThumbQuality = 80;
 constexpr auto kThumbSourceMaxBytes = std::int64_t(40) * 1024 * 1024;
+// Чужая миниатюра (совместная папка) крупнее этого по длинной стороне уменьшается при разборе: в кэше их до 300
+constexpr auto kThumbDecodeMaxSide = 640;
 
 struct UploadSpec {
 	std::string container;
@@ -90,12 +95,13 @@ void ReadSort() {
 		return;
 	}
 	st.sortRead = true;
-	auto f = QFile(PrefsPath());
-	if (!f.open(QIODevice::ReadOnly)) {
+	// Хелперы хранилища (ревью 21 окт 2026, L9): под оградой стирания при выходе; прежний открытый файл читается
+	const auto raw = parvane::storecrypt::readFile(QFile::encodeName(PrefsPath()).toStdString());
+	if (raw.empty()) {
 		return;
 	}
 	try {
-		const auto saved = json::parse(f.readAll().toStdString());
+		const auto saved = json::parse(raw);
 		const auto key = saved.value("sort", json::object()).value("key", std::string());
 		st.sort.key = key == "date" ? cloud::SortKey::Date : key == "size" ? cloud::SortKey::Size : cloud::SortKey::Name;
 		st.sort.isDescending = saved.value("sort", json::object()).value("isDescending", false);
@@ -107,10 +113,9 @@ void ReadSort() {
 void WriteSort() {
 	const auto &sort = St().sort;
 	const auto key = sort.key == cloud::SortKey::Date ? "date" : sort.key == cloud::SortKey::Size ? "size" : "name";
-	auto f = QFile(PrefsPath());
-	if (f.open(QIODevice::WriteOnly)) {
-		f.write(QByteArray::fromStdString(json{ { "sort", { { "key", key }, { "isDescending", sort.isDescending } } } }.dump()));
-	}
+	(void)parvane::storecrypt::writeFile(
+		QFile::encodeName(PrefsPath()).toStdString(),
+		json{ { "sort", { { "key", key }, { "isDescending", sort.isDescending } } } }.dump());
 }
 
 // Открытая папка или контейнер исчезли (удалены, доступ отозван) — подняться выше (web `fixPlace`)
@@ -829,7 +834,8 @@ void CancelTransfer(const QString &id) {
 
 void Download(not_null<QWidget*> parent, const Entry &entry) {
 	const auto name = Q(entry.node.name);
-	const auto initial = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(name);
+	// Имя выбирает загрузивший (совместная папка): в окно «Сохранить как» — только последней частью пути
+	const auto initial = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(SafeLocalName(name));
 	const auto container = entry.container;
 	const auto node = entry.node.id;
 	const auto size = entry.node.size;
@@ -988,8 +994,9 @@ QImage Thumb(const std::string &container, const CloudNode &node) {
 	st.thumbLoading.insert(key);
 	const auto value = *raw;
 	Sections::Ask<QImage>([value](Sections::Workers &w) {
+		// Ревью 21 окт 2026 (2.2): миниатюра — с потолком скачивания (CloudFiles::thumb) и размера картинки
 		const auto bytes = cloud::CloudFiles(w.drive).thumb(value);
-		return bytes ? QImage::fromData(QByteArray::fromStdString(*bytes)) : QImage();
+		return bytes ? DecodeImageBounded(QByteArray::fromStdString(*bytes), kThumbDecodeMaxSide) : QImage();
 	}, [key](QImage image) {
 		auto &st = St();
 		st.thumbLoading.erase(key);
@@ -1007,15 +1014,15 @@ QImage Thumb(const std::string &container, const CloudNode &node) {
 	return QImage();
 }
 
-void OpenBlob(const Entry &entry, Fn<void(std::optional<QByteArray>)> done) {
+void OpenBlob(const Entry &entry, Fn<void(std::optional<QByteArray>)> done, std::int64_t maxPlainBytes) {
 	const auto raw = RawNode(entry.container, entry.node.id);
 	if (!raw) {
 		done(std::nullopt);
 		return;
 	}
 	const auto value = *raw;
-	Sections::Ask<std::optional<QByteArray>>([value](Sections::Workers &w) -> std::optional<QByteArray> {
-		const auto bytes = cloud::CloudFiles(w.drive).open(value);
+	Sections::Ask<std::optional<QByteArray>>([value, maxPlainBytes](Sections::Workers &w) -> std::optional<QByteArray> {
+		const auto bytes = cloud::CloudFiles(w.drive).open(value, maxPlainBytes);
 		if (!bytes) {
 			return std::nullopt;
 		}
@@ -1045,9 +1052,8 @@ void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QStr
 				error = Q(got.error);
 				continue;
 			}
-			auto name = Q(got.name);
-			name.replace('/', '_');
-			const auto path = QDir(dir).filePath(name);
+			// Имя выбирает загрузивший (совместная папка): только последней частью пути, без «..» и скрытых
+			const auto path = QDir(dir).filePath(SafeLocalName(Q(got.name)));
 			if (WriteTempFile(path, got.bytes)) {
 				paths.push_back(path);
 			}

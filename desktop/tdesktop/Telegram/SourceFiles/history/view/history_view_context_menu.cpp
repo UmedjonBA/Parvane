@@ -288,7 +288,9 @@ void AddDocumentActions(
 			}, &st::menuIconGif);
 		}
 	}
-	if (document->sticker() && document->sticker()->set) {
+	// Parvane: окно набора (messages.getStickerSet) и «Избранное» стикеров (messages.faveSticker) — MTProto.
+	constexpr auto kParvaneStickerCloud = false;
+	if (kParvaneStickerCloud && document->sticker() && document->sticker()->set) {
 		menu->addAction(
 			(document->isStickerSetInstalled()
 				? tr::lng_context_pack_info(tr::now)
@@ -302,7 +304,7 @@ void AddDocumentActions(
 			controller->uiShow(),
 			document);
 	}
-	if (document->sticker()) {
+	if (kParvaneStickerCloud && document->sticker()) {
 		const auto isFaved = document->owner().stickers().isFaved(document);
 		menu->addAction(
 			(isFaved
@@ -2011,6 +2013,10 @@ void AddSaveSoundForNotifications(
 		not_null<HistoryItem*> item,
 		not_null<DocumentData*> document,
 		not_null<Window::SessionController*> controller) {
+	// Parvane: «Сохранить для уведомлений» — облачные звуки MTProto, в Parvane нет.
+	if (constexpr auto kParvaneSaveSound = false; !kParvaneSaveSound) {
+		return;
+	}
 	if (ItemHasTtl(item)) {
 		return;
 	}
@@ -2442,6 +2448,10 @@ void AddEmojiPacksAction(
 		std::vector<StickerSetIdentifier> packIds,
 		EmojiPacksSource source,
 		not_null<Window::SessionController*> controller) {
+	// Parvane: окно наборов эмодзи (messages.getStickerSet) — MTProto, пункта нет.
+	if (constexpr auto kParvaneEmojiPacks = false; !kParvaneEmojiPacks) {
+		return;
+	}
 	if (packIds.empty()) {
 		return;
 	}

@@ -339,7 +339,8 @@ bool PollLinkGrantOnce() {
 		LOG(("Parvane: линковка: ключ раскрыт, код сверки готов"));
 #ifdef PARVANE_DEV
 		// Только dev-сборка: headless e2e сверяет код по логу.
-		LOG(("Parvane: линковка (dev): код сверки %1").arg(code));
+		// Код сверки — секрет: открыто только при PARVANE_LOG_CONTENT=1 на стенде (ревью 21 окт 2026).
+		LOG(("Parvane: линковка (dev): код сверки %1").arg(LogSecret(code)));
 #endif
 		(void)code;
 		PublishLinkingStatus(); // код показывает окно привязки и экран «Устройства»
@@ -573,7 +574,7 @@ void PollLinkOffersOnce() {
 		LOG(("Parvane: линковка: запрос переноса истории от устройства %1, код готов").arg(dev));
 #ifdef PARVANE_DEV
 		// Только dev-сборка: headless e2e сверяет код с кодом нового устройства.
-		LOG(("Parvane: линковка (dev): код сверки %1 для устройства %2").arg(code, dev));
+		LOG(("Parvane: линковка (dev): код сверки %1 для устройства %2").arg(LogSecret(code), dev));
 #endif
 		// Headless e2e: PARVANE_AUTOLINK_GRANT=1 — подтверждать без UI (только dev-сборка).
 		if (const char *ag = ParvaneDevEnv("PARVANE_AUTOLINK_GRANT"); ag && *ag) {
@@ -752,6 +753,20 @@ void StartHistoryLinking() {
 QString HistoryLinkCode() {
 	std::lock_guard<std::mutex> lk(g_sessionMutex);
 	return g_linkActive ? g_linkCode : QString();
+}
+
+// Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер): оффер, ключи и показанные офферы прежнего — прочь
+void ResetLinkingAccountData() {
+	std::lock_guard<std::mutex> lk(g_sessionMutex);
+	g_linkEph.reset();
+	g_linkCommitment.clear();
+	g_linkChallenge.clear();
+	g_linkCode.clear();
+	g_linkStartedMs = 0;
+	g_linkActive = false;
+	g_linkPendingGrant = parvane::json();
+	g_linkChallenges.clear();
+	g_linkOffersShown.clear();
 }
 
 } // namespace Parvane

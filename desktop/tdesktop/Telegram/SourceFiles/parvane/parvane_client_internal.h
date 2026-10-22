@@ -73,9 +73,12 @@
 // только в сборке с -DPARVANE_DEV=ON (см. parvane-core/CMakeLists.txt). В релизе
 // функция всегда возвращает nullptr — переменные окружения не могут включить
 // автологин/автоотправку/автогрант линковки.
+// Ревью 21 окт 2026: и в dev-сборке — только при PARVANE_DEV_HOOKS=1 И gateway на loopback
+// (ParvaneDevHooksEnabled, parvane_client_auth.cpp; решение — parvane-core dev_hooks.h). Иначе nullptr.
+[[nodiscard]] bool ParvaneDevHooksEnabled();
 inline const char *ParvaneDevEnv(const char *name) {
 #ifdef PARVANE_DEV
-	return std::getenv(name);
+	return ParvaneDevHooksEnabled() ? std::getenv(name) : nullptr;
 #else
 	(void)name;
 	return nullptr;
@@ -257,7 +260,11 @@ void SetPeerTtlLocal(const QString &address, int secs);
 [[nodiscard]] QString V2StateDir(const QString &address);
 [[nodiscard]] std::string OwnDeviceId();
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2Ready();
-[[nodiscard]] BlobDownload DownloadChatBlob(const std::string &fileId);
+// maxBytes — потолок шифртекста (0 — общий 2 ГиБ ядра); для вложения чата —
+// parvane::chatrules::chatBlobCipherCap(вид, size_bytes).
+[[nodiscard]] BlobDownload DownloadChatBlob(
+	const std::string &fileId,
+	std::size_t maxBytes = 0);
 void V2NoteRoot(const std::shared_ptr<parvane::v2::Session> &s, const std::string &user);
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2NeedsLinking();
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2AwaitNeedsLinking();
@@ -351,5 +358,28 @@ void groupAdminAction(const QString &groupId, const QString &member, const QStri
 void SaveFolders(not_null<Main::Session*> session);
 void StartDeviceLinkOfferForV2();
 void StartHistoryLinking();
+
+// ── изоляция аккаунтов (ревью безопасности 21 окт 2026, вечер) ──
+// Поколение аккаунта: растёт при каждом сбросе состояния аккаунта (выход, вход другим адресом). Отложенные задачи
+// (таймеры отложенных, crl::on_main/call_delayed после сети) запоминают его при постановке и молча выходят, если
+// аккаунт с тех пор сменился: иначе отложенное, черновик или ответ сети прежнего аккаунта доставались следующему.
+[[nodiscard]] std::uint64_t AccountGeneration();
+[[nodiscard]] bool AccountGenerationIs(std::uint64_t generation);
+// Сброс всего состояния аккаунта в памяти (главный поток): кэши, очереди, отложенные, черновики, уведомления,
+// группы, имена, аватары, журнал состояния, разделы. Поколение растёт. Файлы не трогает.
+void ResetAccountState(const char *why);
+// Файлы аккаунта без адреса в имени (tdata/parvane-*.json и т. п.) — этому адресу: прежнего владельца — в его
+// каталог, свои — обратно (parvane::accountfiles::adopt). Главный поток, до чтения этих файлов.
+void AdoptAccountFiles(const QString &address);
+// Звонки при выходе: отбой личного, выход из группового (до остановки сессии v2), менеджеры сброшены.
+void EndCallsForLogout();
+// `tdata/<prefix><адрес>…<suffix>` с безопасной частью имени (SafeAddressPart); "" — адрес недопустим
+// (parvane::accountfiles::isValidAddress). Файл прежних версий с сырым адресом в имени переименовывается.
+[[nodiscard]] QString AccountFilePath(const QString &prefix, const QString &address, const QString &suffix);
+// Части сброса в файлах своей темы.
+void ResetStateAccountData();    // parvane_client_state.cpp: черновики, журнал состояния, кэш групп v2
+void ResetGroupsAccountData();   // parvane_client_groups.cpp: превью публичных групп
+void ResetLinkingAccountData();  // parvane_client_linking.cpp: офферы и ключи линковки
+void ResetDevicesAccountData();  // parvane_client_devices.cpp: кэш STUN/TURN (выдан под JWT прежнего)
 
 } // namespace Parvane

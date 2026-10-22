@@ -591,7 +591,16 @@ void BuildSecuritySection(
 
 	// Parvane: двухфакторный вход через Telegram-бота (identity.user.twofa).
 	// Состояние тянем с шарда; переключение — блокирующий запрос на воркере.
-	{
+	// Поиск по настройкам строит раздел без окна (container() == nullptr) —
+	// там только строки поиска, иначе разыменование пустого контейнера.
+	if (!builder.container()) {
+		builder.addButton({
+			.id = u"security/parvane_twofa"_q,
+			.title = tr::lng_parvane_two_factor_toggle(),
+			.icon = { &st::menuIconLock },
+			.keywords = { u"2fa"_q, u"telegram"_q, u"two-factor"_q },
+		});
+	} else {
 		struct TwoFa {
 			rpl::variable<bool> enabled;
 			rpl::variable<QString> label;
@@ -686,7 +695,14 @@ void BuildSecuritySection(
 
 	// Parvane: свой ключ безопасности (отпечаток identity-ключа, формат как в
 	// вебе) — показать тем, кто хочет вас проверить; клик копирует.
-	{
+	if (!builder.container()) {
+		builder.addButton({
+			.id = u"security/parvane_key_copy"_q,
+			.title = tr::lng_parvane_security_key_copy(),
+			.icon = { &st::menuIconCopy },
+			.keywords = { u"key"_q, u"fingerprint"_q, u"ключ"_q, u"отпечаток"_q },
+		});
+	} else {
 		const auto container = builder.container();
 		const auto fingerprint = Parvane::OwnFingerprint();
 		Ui::AddSkip(container);
@@ -725,11 +741,13 @@ void BuildSecuritySection(
 	// файла — веб-клиента, копия годится для переноса между клиентами.
 	{
 		const auto container = builder.container();
-		Ui::AddSkip(container);
-		Ui::AddSubsectionTitle(container, tr::lng_parvane_keys_backup_title());
-		Ui::AddDividerText(
-			container,
-			tr::lng_parvane_keys_backup_about());
+		if (container) { // Parvane: в поиске окна нет
+			Ui::AddSkip(container);
+			Ui::AddSubsectionTitle(container, tr::lng_parvane_keys_backup_title());
+			Ui::AddDividerText(
+				container,
+				tr::lng_parvane_keys_backup_about());
+		}
 		const auto askPassword = [=](
 				const QString &title,
 				const QString &button,
@@ -817,8 +835,9 @@ void BuildSecuritySection(
 	// Parvane: ключ восстановления, ключ подписи устройств и привязка — на экране «Устройства»
 	// (parvane_account_ui, как web). Удаление аккаунта (spec 027) — здесь.
 	{
-		const auto container = builder.container();
-		Ui::AddSkip(container);
+		if (const auto container = builder.container()) { // Parvane: в поиске окна нет
+			Ui::AddSkip(container);
+		}
 		builder.addButton({
 			.id = u"security/parvane_delete_account"_q,
 			.title = tr::lng_parvane_delete_account_title(),
@@ -829,6 +848,8 @@ void BuildSecuritySection(
 		});
 	}
 
+	// Parvane: глобального автоудаления (MTProto account.setDefaultHistoryTTL) нет и в web — строка скрыта.
+	if (constexpr auto kParvaneGlobalTtl = false; kParvaneGlobalTtl) {
 	auto ttlLabel = rpl::combine(
 		session->api().selfDestruct().periodDefaultHistoryTTL(),
 		tr::lng_settings_ttl_after_off()
@@ -853,6 +874,7 @@ void BuildSecuritySection(
 		}, ctx.container->lifetime());
 		return SectionBuilder::WidgetToAdd{};
 	});
+	} // Parvane: kParvaneGlobalTtl
 
 	auto passcodeHas = rpl::single(rpl::empty) | rpl::then(
 		session->domain().local().localPasscodeChanged()
@@ -1323,11 +1345,19 @@ void BuildPrivacySecuritySectionContent(SectionBuilder &builder) {
 
 	BuildSecuritySection(builder, trigger());
 	BuildPrivacySection(builder);
-	BuildArchiveAndMuteSection(builder);
-	BuildBotsAndWebsitesSection(builder);
+	// Parvane: «Новые чаты от незнакомцев» (Premium/облако), «Очистить платёжные данные», «Часто используемые
+	// контакты» (MTProto top peers) и «Удалить аккаунт, если меня не было…» (account.setAccountTTL) — тупики
+	// Telegram, скрыты. Удаление аккаунта Parvane — строка «Удалить аккаунт» выше (spec 027).
+	constexpr auto kParvaneTelegramOnly = false;
+	if (kParvaneTelegramOnly) {
+		BuildArchiveAndMuteSection(builder);
+		BuildBotsAndWebsitesSection(builder);
+	}
 	BuildConfirmationExtensions(builder);
-	BuildTopPeersSection(builder);
-	BuildSelfDestructionSection(builder, trigger());
+	if (kParvaneTelegramOnly) {
+		BuildTopPeersSection(builder);
+		BuildSelfDestructionSection(builder, trigger());
+	}
 }
 
 class PrivacySecurity : public Section<PrivacySecurity> {

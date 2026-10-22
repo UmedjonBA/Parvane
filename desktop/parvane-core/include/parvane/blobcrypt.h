@@ -68,4 +68,11 @@ struct Header {
                                                        std::size_t firstChunk,
                                                        std::size_t totalChunks);
 
+// Ревью 21 окт 2026 (2.2): наибольший шифртекст (v2 или legacy v1) для plaintext не больше `plainBytes` —
+// потолок скачивания блоба, у которого известен предел содержимого (заголовок + тег на каждый чанк самого
+// мелкого допустимого размера). 0 — 0 (без потолка).
+[[nodiscard]] constexpr std::size_t maxCipherSize(std::size_t plainBytes) {
+    return plainBytes == 0 ? 0 : plainBytes + kHeaderLen + kTagLen * (plainBytes / kMinChunkSize + 1);
+}
+
 } // namespace parvane::blobcrypt

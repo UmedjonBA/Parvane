@@ -963,31 +963,7 @@ bool ShowEditBirthday(
 	} else {
 		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 			Ui::EditBirthdayBox(box, user->birthday(), save);
-
-			const auto container = box->verticalLayout();
-			const auto session = &user->session();
-			const auto key = Api::UserPrivacy::Key::Birthday;
-			session->api().userPrivacy().reload(key);
-			auto isExactlyContacts = session->api().userPrivacy().value(
-				key
-			) | rpl::map([=](const Api::UserPrivacy::Rule &value) {
-				return (value.option == Api::UserPrivacy::Option::Contacts)
-					&& value.always.peers.empty()
-					&& !value.always.premiums
-					&& value.never.peers.empty();
-			}) | rpl::distinct_until_changed();
-			Ui::AddSkip(container);
-			const auto link = u"internal:edit_privacy_birthday:from_box"_q;
-			Ui::AddDividerText(container, rpl::conditional(
-				std::move(isExactlyContacts),
-				tr::lng_settings_birthday_contacts(
-					lt_link,
-					tr::lng_settings_birthday_contacts_link(tr::url(link)),
-					tr::marked),
-				tr::lng_settings_birthday_about(
-					lt_link,
-					tr::lng_settings_birthday_about_link(tr::url(link)),
-					tr::marked)));
+			// Parvane: видимость дня рождения не настраивается (как web) — подсказки «Кто видит» нет.
 		}));
 
 	}
@@ -1853,6 +1829,11 @@ QString TryConvertUrlToLocal(QString url) {
 	if (tonsiteMatch) {
 		const auto protocol = tonsiteMatch->captured(1);
 		return u"tonsite://"_q + url.mid(protocol.size());
+	}
+	// Parvane: t.me / telegram.me / telegram.dog — ссылки на Telegram, а не на Parvane: в локальные tg://
+	// (resolve, join, proxy, invoice, privatepost…) не превращаем — они откроются в браузере как обычные.
+	if (constexpr auto kParvaneTelegramLinks = false; !kParvaneTelegramLinks) {
+		return url;
 	}
 	auto subdomainMatch = regex_match(u"^(https?://)?([a-zA-Z0-9\\_]+)\\.t\\.me(/\\d+)?/?(\\?.+)?"_q, url, matchOptions);
 	if (subdomainMatch) {

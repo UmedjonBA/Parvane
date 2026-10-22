@@ -140,6 +140,9 @@ public:
     void loadNotes(const std::string &userId, const std::optional<NotesOptions> &options = std::nullopt);
     // Экран читает заметки: изменения облака применяются сразу. Возвращает отпускание
     std::function<void()> retainNotes();
+    // Выход из аккаунта либо вход другим (ревью 21 окт 2026, вечер): заметки, тексты, облако и справка прежнего —
+    // прочь, хранилище не слушает облако до следующего loadNotes. Отпускания retainNotes остаются в силе
+    void signOut();
 
     // Сигналы web
     const std::vector<NoteRef> &notes() const { return notes_; }

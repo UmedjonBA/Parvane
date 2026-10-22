@@ -285,6 +285,8 @@ void RingtonesBox(
 	session->api().ringtones().requestList();
 	rebuild();
 
+	// Parvane: свои звуки уведомлений — облако MTProto (account.uploadRingtone), в Parvane нет.
+	if (constexpr auto kParvaneUploadSound = false; kParvaneUploadSound) {
 	const auto upload = box->addRow(
 		Settings::CreateButtonWithIcon(
 			container,
@@ -335,6 +337,7 @@ void RingtonesBox(
 				crl::guard(box, callback));
 		}));
 	});
+	} // Parvane: kParvaneUploadSound
 
 	if (volumeController.volume && volumeController.saveVolume) {
 		auto saveAndTestVolume = [=](ushort currentVolume) {
@@ -361,8 +364,7 @@ void RingtonesBox(
 			});
 	}
 
-	box->addSkip(st::ringtonesBoxSkip);
-	Ui::AddDividerText(container, tr::lng_ringtones_box_about());
+	// Parvane: подсказка про «Сохранить для уведомлений» — пункта нет.
 
 	box->addSkip(st::ringtonesBoxSkip);
 

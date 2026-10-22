@@ -4,6 +4,11 @@
 #include "intro/intro_widget.h"
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_space.h"   // тона схемы «Пространство», схема по умолчанию
+#include "parvane/parvane_local_files.h" // LogSecret
+#include "core/application.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
+#include "ui/toast/toast.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/fields/password_input.h"
 #include "ui/widgets/buttons.h"
@@ -77,7 +82,9 @@ ParvaneWidget::ParvaneWidget(
 , _code(this, st::introName, tr::lng_parvane_email_code())
 , _tgLink(this, st::introName, tr::lng_parvane_bot_link())
 , _showPassword(this)
-, _switchMode(this, QString(), st::introLink) {
+, _switchMode(this, QString(), st::introLink)
+, _backLink(this, tr::lng_go_back(tr::now), st::introLink)
+, _resendCode(this, tr::lng_parvane_code_resend(tr::now), st::introLink) {
 	setTitleText(rpl::single(u"Parvane"_q));
 	setErrorCentered(true);
 	setLabelsCentered(true);
@@ -109,6 +116,11 @@ ParvaneWidget::ParvaneWidget(
 		setMode(_mode == Mode::SignIn ? Mode::SignUp : Mode::SignIn);
 	});
 	setMode(Mode::SignIn);
+	// Стадии почты, кода и Telegram: «Назад» к паролю и «Отправить код ещё раз» (ревью 21 окт, вечер — тупики)
+	_backLink->setClickedCallback([=] { backToLogin(); });
+	_backLink->hide();
+	_resendCode->setClickedCallback([=] { resendCode(); });
+	_resendCode->hide();
 
 	_user->submits(
 	) | rpl::on_next([=] { submit(); }, _user->lifetime());
@@ -133,6 +145,8 @@ void ParvaneWidget::setStage(Stage stage) {
 	_email->setVisible(stage == Stage::Email);
 	_code->setVisible(stage == Stage::Code);
 	_tgLink->setVisible(stage == Stage::Telegram);
+	_backLink->setVisible(!login);
+	_resendCode->setVisible(stage == Stage::Code);
 	if (stage == Stage::Telegram) {
 		setDescriptionText(_tgMode == TelegramMode::Login
 			? tr::lng_parvane_tg_login_text()
@@ -169,9 +183,10 @@ void ParvaneWidget::startTelegram(
 	const auto botName = bot.isEmpty() ? _serverBot : bot;
 	const auto link = u"https://t.me/"_q + botName + u"?start="_q + token;
 	_tgLink->setText(link);
-	// Headless e2e: токен виден в логе, «бот» подтверждает через gateway
+	// Headless e2e (dev): токен виден в логе, «бот» подтверждает через gateway. Релиз — отметка вместо токена:
+	// токен подтверждает вход в аккаунт (ревью 21 окт, вечер)
 	LOG(("Parvane: Telegram %1 — ждём подтверждения, token=%2 bot=%3")
-		.arg(mode == TelegramMode::Login ? u"вход"_q : u"регистрация"_q, token, botName));
+		.arg(mode == TelegramMode::Login ? u"вход"_q : u"регистрация"_q, Parvane::LogSecret(token), botName));
 	_requesting = false;
 	hideError();
 	setStage(Stage::Telegram);
@@ -220,6 +235,9 @@ void ParvaneWidget::pollTelegram() {
 				auto res = Parvane::Issue(user, password,
 					mode == TelegramMode::Login ? token : QString());
 				crl::on_main(weak, [=, res = std::move(res)] {
+					if (_tgGeneration != generation) {
+						return; // «Назад» во время выдачи — вход не продолжается
+					}
 					onIssued(user, res);
 				});
 			});
@@ -273,6 +291,65 @@ void ParvaneWidget::updateControlsGeometry() {
 	_switchMode->moveToLeft(
 		contentLeft(),
 		secondTop + st::introPassword.heightMin + st::introPhoneTop / 2);
+	// Стадии почты/кода/Telegram: под полем — «Отправить код ещё раз» (код) и «Назад»
+	const auto linksTop = firstTop + st::introName.heightMin + st::introPhoneTop / 2;
+	_resendCode->moveToLeft(contentLeft(), linksTop);
+	_backLink->moveToLeft(
+		contentLeft(),
+		linksTop + ((_stage == Stage::Code) ? (_resendCode->height() + st::introPhoneTop / 2) : 0));
+}
+
+bool ParvaneWidget::hasBack() const {
+	if (_stage != Stage::Login) {
+		return true;
+	}
+	// На пароле — только если есть куда: другой аккаунт с сессией (иначе Widget создал бы вход по номеру Telegram)
+	return Core::App().domain().maybeLastOrSomeAuthedAccount() != nullptr;
+}
+
+bool ParvaneWidget::backToLogin() {
+	if (_stage == Stage::Login) {
+		return false;
+	}
+	++_tgGeneration;     // опрос Telegram прежней стадии — прочь
+	++_requestGeneration; // идущий запрос не продолжит вход
+	_requesting = false;
+	hideError();
+	setStage(Stage::Login);
+	return true;
+}
+
+void ParvaneWidget::resendCode() {
+	if (_stage != Stage::Code || _requesting) {
+		return;
+	}
+	// Как web: повторная регистрация тем же паролем перевысылает код подтверждения
+	const auto user = Parvane::CanonicalAddress(_user->getLastText().trimmed(), _serverDomain);
+	const auto password = _password->getLastText();
+	const auto email = _email->getLastText().trimmed();
+	_requesting = true;
+	hideError();
+	const auto weak = base::make_weak(this);
+	const auto generation = _requestGeneration;
+	crl::async([=] {
+		const auto reg = Parvane::Register(user, password, email);
+		crl::on_main(weak, [=] {
+			if (generation != _requestGeneration) {
+				return;
+			}
+			_requesting = false;
+			if (!reg.telegramToken.isEmpty()) {
+				startTelegram(user, password, reg.telegramToken, QString(), TelegramMode::Register);
+			} else if (reg.confirmRequired || reg.ok) {
+				Ui::Toast::Show(this, tr::lng_parvane_code_resent(tr::now));
+				_code->setFocus();
+			} else {
+				showError(rpl::single(reg.error.isEmpty()
+					? tr::lng_parvane_register_failed(tr::now)
+					: reg.error));
+			}
+		});
+	});
 }
 
 void ParvaneWidget::setInnerFocus() {
@@ -292,7 +369,11 @@ void ParvaneWidget::activate() {
 	// переменная не задана и хук не срабатывает.
 	if (!_autologinTried) {
 		_autologinTried = true;
-		if (const char *v = Parvane::DevEnv("PARVANE_AUTOLOGIN"); v && *v) {
+		// PARVANE_AUTOLOGIN_NEXT=user:password — вход экраном входа в процессе, поднятом с прежней сессией, после
+		// её выхода (сценарий verify_relogin_other_account.sh: другой аккаунт в том же окне). Без неё — снова
+		// PARVANE_AUTOLOGIN, как раньше (verify_auth_reject.sh)
+		const char *next = Parvane::DevEnv("PARVANE_AUTOLOGIN_NEXT");
+		if (const char *v = (next && *next) ? next : Parvane::DevEnv("PARVANE_AUTOLOGIN"); v && *v) {
 			const auto spec = QString::fromUtf8(v);
 			const auto sep = spec.indexOf(':');
 			if (sep > 0) {
@@ -370,9 +451,13 @@ void ParvaneWidget::startCodeFilePoll() {
 
 void ParvaneWidget::finishLogin(const QString &user, const QString &password) {
 	const auto weak = base::make_weak(this);
+	const auto generation = _requestGeneration;
 	crl::async([=] {
 		auto res = Parvane::Issue(user, password);
 		crl::on_main(weak, [=, res = std::move(res)] {
+			if (generation != _requestGeneration) {
+				return;
+			}
 			onIssued(user, res);
 		});
 	});
@@ -399,6 +484,7 @@ void ParvaneWidget::submit() {
 	_requesting = true;
 	hideError();
 	const auto weak = base::make_weak(this);
+	const auto generation = _requestGeneration; // «Назад» отменяет ответ (backToLogin)
 	const auto stage = _stage;
 	const auto email = _email->getLastText().trimmed();
 	const auto code = _code->getLastText().trimmed();
@@ -409,6 +495,9 @@ void ParvaneWidget::submit() {
 		crl::async([=] {
 			const auto info = Parvane::FetchServerInfo();
 			crl::on_main(weak, [=] {
+				if (generation != _requestGeneration) {
+					return; // «Назад» — запрос отменён
+				}
 				_serverDomain = info.domain;
 				_serverConfirm = info.confirm;
 				_serverBot = info.telegramBot;
@@ -432,6 +521,9 @@ void ParvaneWidget::submit() {
 		crl::async([=] {
 			const auto r = Parvane::ConfirmEmail(user, code);
 			crl::on_main(weak, [=] {
+				if (generation != _requestGeneration) {
+					return; // «Назад» — запрос отменён
+				}
 				_requesting = false;
 				if (!r.ok) {
 					showError(rpl::single(r.error.isEmpty() ? tr::lng_parvane_bad_code(tr::now) : r.error));
@@ -448,6 +540,9 @@ void ParvaneWidget::submit() {
 		crl::async([=] {
 			const auto reg = Parvane::Register(user, password, email);
 			crl::on_main(weak, [=] {
+				if (generation != _requestGeneration) {
+					return; // «Назад» — запрос отменён
+				}
 				_requesting = false;
 				if (!reg.ok) {
 					showError(rpl::single(reg.error.isEmpty()
@@ -515,6 +610,9 @@ void ParvaneWidget::submit() {
 		const auto twofaBot = res.telegramBot;
 		const auto twofa = res.twofaRequired;
 		crl::on_main(weak, [=, res = std::move(res)] {
+			if (generation != _requestGeneration) {
+				return; // «Назад» — запрос отменён
+			}
 			if (next == Stage::Telegram) {
 				startTelegram(user, password, telegramToken, twofaBot,
 					twofa ? TelegramMode::Login : TelegramMode::Register);
@@ -599,7 +697,22 @@ void ParvaneWidget::onIssued(
 	// воркер-потоке (connect блокирующий, но локальный и быстрый). Сессия нужна
 	// для зеркалирования исходящих (Фаза 3b) и приёма (Фаза 3c).
 	// spec 026: вход прежним ником после смены ника на другом устройстве — адрес аккаунта уже новый
+	// Один аккаунт на процесс (ревью 21 окт, вечер, 1.3): состояние клиента глобальное — вход, когда у другого
+	// аккаунта домена уже есть сессия, смешал бы данные двух аккаунтов. Проверка — до SetSelf
+	for (const auto &[index, other] : Core::App().domain().accounts()) {
+		if (other.get() != &account() && other->sessionExists()) {
+			LOG(("Parvane: вход отклонён — у другого аккаунта уже есть сессия"));
+			showError(tr::lng_parvane_other_account_signed_in());
+			return;
+		}
+	}
 	const auto address = res.address.isEmpty() ? user : res.address;
+	// Адрес от сервера — часть имён файлов устройства (1.6): только допустимый
+	if (!parvane::accountfiles::isValidAddress(address.toStdString())) {
+		LOG(("Parvane: вход отклонён — сервер вернул недопустимый адрес"));
+		showError(tr::lng_parvane_sign_in_failed());
+		return;
+	}
 	if (address != user) {
 		Parvane::MoveAccountLocal(user, address);
 	}
@@ -614,9 +727,13 @@ void ParvaneWidget::restoreDeletedAccount(const QString &user, const QString &pa
 	}
 	_requesting = true;
 	const auto weak = base::make_weak(this);
+	const auto generation = _requestGeneration;
 	crl::async([=] {
 		auto res = Parvane::Issue(user, password, QString(), true);
 		crl::on_main(weak, [=, res = std::move(res)] {
+			if (generation != _requestGeneration) {
+				return;
+			}
 			onIssued(user, res);
 		});
 	});

@@ -14,6 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "settings/settings_common.h"
 #include "settings/sections/settings_privacy_security.h"
+#include "settings/sections/settings_business.h" // Parvane: разделы вне поиска
+#include "settings/sections/settings_credits.h"
+#include "settings/sections/settings_global_ttl.h"
+#include "settings/sections/settings_passkeys.h"
+#include "settings/sections/settings_premium.h"
+#include "settings/sections/settings_websites.h"
 #include "ui/vertical_list.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
@@ -34,6 +40,59 @@ namespace {
 		[] {},
 		lifetime);
 	return result;
+}
+
+// Parvane: строка, скрытая в окне сразу (`shown` с первым значением false),
+// не должна находиться поиском. Нет значения сразу — считаем видимой.
+[[nodiscard]] bool ResolveShown(rpl::producer<bool> shown) {
+	auto result = true;
+	auto lifetime = rpl::lifetime();
+	std::move(shown).start(
+		[&](bool value) { result = value; },
+		[](auto&&) {},
+		[] {},
+		lifetime);
+	return result;
+}
+
+// Parvane: разделы Telegram, которых в Parvane нет (Premium, Stars, TON,
+// Business, сайты, ключи доступа, глобальное автоудаление), и строки,
+// скрытые в окне врезками Parvane, — вне поиска по настройкам.
+[[nodiscard]] bool ParvaneHiddenSection(const Type &id) {
+	return (id == PremiumId())
+		|| (id == CreditsId())
+		|| (id == CurrencyId())
+		|| (id == BusinessId())
+		|| (id == WebsitesId())
+		|| (id == PasskeysId())
+		|| (id == GlobalTTLId());
+}
+
+[[nodiscard]] bool ParvaneHiddenEntry(const QString &id) {
+	static const auto kPrefixes = std::vector<QString>{
+		u"main/premium"_q,
+		u"main/credits"_q,
+		u"main/currency"_q,
+		u"main/business"_q,
+		u"main/send-gift"_q,
+		u"security/ttl"_q,
+		u"security/websites"_q,
+		u"security/passkeys"_q,
+		u"security/login_email"_q,
+		u"privacy/self_destruct"_q,
+		u"privacy/bots"_q,
+		u"privacy/top_peers"_q,
+		u"privacy/new_unknown"_q,
+		u"privacy/archive_and_mute"_q,
+		u"sessions/auto-terminate"_q,
+		u"folders/show-tags"_q,
+	};
+	for (const auto &prefix : kPrefixes) {
+		if (id.startsWith(prefix)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 } // namespace
@@ -97,8 +156,22 @@ void SearchRegistry::add(
 
 std::vector<SearchEntry> SearchRegistry::collectAll(
 		not_null<Main::Session*> session) const {
+	// Parvane: раздел скрыт, если скрыт он сам или любой из его предков.
+	const auto hiddenSection = [&](Type id) {
+		while (id) {
+			if (ParvaneHiddenSection(id)) {
+				return true;
+			}
+			const auto it = _sections.find(id);
+			id = (it != _sections.end()) ? it->second->parentId : nullptr;
+		}
+		return false;
+	};
 	auto result = std::vector<SearchEntry>();
 	for (const auto &[sectionId, meta] : _sections) {
+		if (hiddenSection(sectionId)) {
+			continue;
+		}
 		if (meta->parentId) {
 			result.push_back({
 				.title = (*meta->title)(tr::now),
@@ -108,8 +181,16 @@ std::vector<SearchEntry> SearchRegistry::collectAll(
 		}
 	}
 	for (const auto &entry : _indexers) {
+		if (hiddenSection(entry.sectionId)) {
+			continue;
+		}
 		auto entries = entry.indexer(session);
-		result.insert(result.end(), entries.begin(), entries.end());
+		for (auto &found : entries) {
+			if (!ParvaneHiddenEntry(found.id)
+				&& !hiddenSection(found.section)) {
+				result.push_back(std::move(found));
+			}
+		}
 	}
 	return result;
 }
@@ -191,6 +272,10 @@ Ui::VerticalLayout *SectionBuilder::scope(
 		wctx.container = outer;
 		result = inner;
 	}, [&](const SearchContext &sctx) {
+		// Parvane: скрытое в окне не индексируется (см. ResolveShown).
+		if (shown && !ResolveShown(std::move(shown))) {
+			return;
+		}
 		method();
 	});
 	return result;

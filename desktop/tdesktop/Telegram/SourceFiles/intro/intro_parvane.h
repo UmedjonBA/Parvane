@@ -28,6 +28,11 @@ public:
 	void activate() override;
 	void submit() override;
 	rpl::producer<QString> nextButtonText() const override;
+	// «Назад»/Escape: со стадий почты, кода и Telegram — к паролю; на пароле — к другому вошедшему аккаунту
+	// (если он есть). Без этого из стадий выхода не было (ревью 21 окт, вечер)
+	bool hasBack() const override;
+	// Стадия не «пароль» — вернуться к паролю (идущие запросы отменяются). false — уже на пароле
+	bool backToLogin();
 
 protected:
 	void resizeEvent(QResizeEvent *e) override;
@@ -38,6 +43,7 @@ private:
 	void onIssued(const QString &user, const Parvane::IssueResult &res);
 	void restoreDeletedAccount(const QString &user, const QString &password);
 	void loginSucceeded(const QString &user);
+	void resendCode();
 
 	// Регистрация через почту (PARVANE_EMAIL_REQUIRED на identity): после
 	// пароля — экран email, затем 6-значный код из письма (identity.email.confirm).
@@ -100,6 +106,10 @@ private:
 	object_ptr<Ui::LinkButton> _switchMode;
 	QImage _logo; // знак мотылька под текущий масштаб экрана
 	rpl::variable<QString> _nextText;
+	// Отменённый «Назад» запрос не продолжает вход: ответы с прежним поколением отбрасываются
+	int _requestGeneration = 0;
+	object_ptr<Ui::LinkButton> _backLink;
+	object_ptr<Ui::LinkButton> _resendCode;
 
 };
 

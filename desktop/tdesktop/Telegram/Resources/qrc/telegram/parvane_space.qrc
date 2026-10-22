@@ -23,4 +23,8 @@
     <file alias="parvane/patterns/programming.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/programming.svg</file>
     <file alias="parvane/patterns/science-mix.svg">../../../../../../web/telegram-tt/src/assets/parvane/chat-patterns/science-mix.svg</file>
   </qresource>
+  <!-- Parvane: русский пакет встроен (ревью 21 окт 2026) — релиз не читает PARVANE_LANG_FILE; лимит tdesktop 1 МиБ -->
+  <qresource prefix="/parvane">
+    <file alias="lang/parvane_ru_RU.strings">../../../../../langs/parvane_ru_RU.strings</file>
+  </qresource>
 </RCC>

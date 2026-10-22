@@ -58,6 +58,8 @@ target_sources(Telegram PRIVATE
     ${src_loc}/parvane/parvane_icons.h
     ${src_loc}/parvane/parvane_kit.cpp
     ${src_loc}/parvane/parvane_kit.h
+    ${src_loc}/parvane/parvane_lang.cpp
+    ${src_loc}/parvane/parvane_lang.h
     ${src_loc}/parvane/parvane_mascot.cpp
     ${src_loc}/parvane/parvane_mascot.h
     ${src_loc}/parvane/parvane_kit_extra.cpp

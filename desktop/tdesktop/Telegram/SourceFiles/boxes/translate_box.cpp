@@ -88,6 +88,11 @@ void TranslateBox(
 }
 
 bool SkipTranslate(TextWithEntities textWithEntities) {
+	// Parvane (spec 029 R7): перевода нет (messages.translateText — MTProto, офлайн-переводчика нет) — все пункты
+	// «Перевести» (сообщение, выделение, описание профиля) скрыты отсюда.
+	if (constexpr auto kParvaneTranslate = false; !kParvaneTranslate) {
+		return true;
+	}
 	const auto &text = textWithEntities.text;
 	if (text.isEmpty()) {
 		return true;

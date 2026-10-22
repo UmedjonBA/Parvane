@@ -1541,12 +1541,16 @@ void Controller::fillManageSection() {
 		&& !channel->isMegagroup();
 	const auto canEditAutoTranslate = isChannel
 		&& channel->canEditAutoTranslate();
-	const auto canEditPreHistoryHidden = isChannel
+	// Parvane: «История для новых участников» и «Темы» у ChatData идут через messages.migrateChat (MTProto, очередь
+	// сохранения ждала ответа вечно), реакций группы (messages.setChatAvailableReactions) нет — как web, где эти
+	// строки скрыты (ManageGroup.tsx, IS_GROUP_EXTRA_SETTINGS_SUPPORTED). История публичной группы — в «Тип группы».
+	constexpr auto kParvaneGroupExtras = false;
+	const auto canEditPreHistoryHidden = kParvaneGroupExtras && (isChannel
 		? channel->canEditPreHistoryHidden()
-		: chat->canEditPreHistoryHidden();
-	const auto canEditForum = isChannel
+		: chat->canEditPreHistoryHidden());
+	const auto canEditForum = kParvaneGroupExtras && (isChannel
 		? (channel->isMegagroup() && channel->amCreator())
-		: chat->amCreator();
+		: chat->amCreator());
 	const auto canEditPermissions = isChannel
 		? channel->canEditPermissions()
 		: chat->canEditPermissions();
@@ -1614,7 +1618,7 @@ void Controller::fillManageSection() {
 		::AddSkip(_controls.buttonsLayout);
 	}
 
-	if (canEditReactions()) {
+	if (kParvaneGroupExtras && canEditReactions()) {
 		auto allowedReactions = Info::Profile::MigratedOrMeValue(
 			_peer
 		) | rpl::map([=](not_null<PeerData*> peer) {

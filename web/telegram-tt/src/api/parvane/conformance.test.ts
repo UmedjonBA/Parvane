@@ -1227,7 +1227,9 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
     r.uploadMethods.forEach((method) => expect(session, method).toContain(`"${method}"`));
     expect(session).toContain(`conn.requestStream("${r.downloadMethod}"`);
     expect(session).toContain('conn.open(kChannelAnonymous, cfg_.clientVersion);');
-    expect(session).toContain(`constexpr std::uint32_t kBatch = ${r.maxChunksPerRequest};`);
+    // 21 окт 2026: пакетная загрузка с потолком размера вынесена в v2_link (downloadBlobChunks)
+    const link = readRepo('desktop/parvane-core/include/parvane/v2_link.h');
+    expect(link).toContain(`inline constexpr std::uint32_t kBlobDownloadBatch = ${r.maxChunksPerRequest};`);
     const content = readRepo('desktop/parvane-core/src/v2_content.cpp');
     expect(content).toContain(`if (has(c, "${r.contentField}")) m["${r.contentField}"] = str(c, "${r.contentField}");`);
     const desktop = readDesktopSource();
@@ -1237,7 +1239,8 @@ describe('CAP-1: блобы вложений v2-чата — по секрету
       /BlobRecipientsFor\(const std::string &\) \{\s+\/\/[^\n]*\n\s+return \{ kBlobCapabilityMark \};/,
     );
     expect(desktop).toContain('const auto fileId = s->uploadBlob(bytes, capability);');
-    expect(desktop).toContain('s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap))');
+    // 21 окт 2026: загрузка вложения с потолком по заявленному размеру
+    expect(desktop).toMatch(/s->downloadBlobCap\(\s*fileId,\s*parvane::v2::fromBase64\(cap\),/);
     const android = readRepo('android/jni/parvane_jni.cpp');
     expect(android).toContain('s->legacyDevices(toStd).empty() && s->legacyDevices(g_self).empty()');
     expect(android).toContain('d.bytes = s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap));');

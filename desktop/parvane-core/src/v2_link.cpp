@@ -355,13 +355,15 @@ std::string Connection::request(const std::string &method, const std::string &bo
 }
 
 Connection::StreamResult Connection::requestStream(const std::string &method, const std::string &body,
-                                                   std::int64_t timeoutMs, const std::string &dest) {
+                                                   std::int64_t timeoutMs, const std::string &dest,
+                                                   StreamLimits limits) {
     if (!open_) throw V2Error("ERROR_CODE_UNAVAILABLE");
     const auto id = nextId_++;
     {
         std::lock_guard<std::mutex> lk(mu_);
         Pending p;
         p.stream = true;
+        p.limits = std::move(limits);
         pending_[id] = std::move(p);
     }
     try {
@@ -424,6 +426,18 @@ void Connection::onFrame(const std::string &bytes) {
                     it->second.error = "ERROR_CODE_UNSPECIFIED";
                 }
             }
+            // Ревью 21 окт (2.2): метаданные поточного ответа (размер, число чанков) — до приёма чанков
+            if (it->second.stream && it->second.error.empty() && it->second.limits.acceptMeta && !it->second.done) {
+                bool ok = false;
+                try {
+                    ok = it->second.limits.acceptMeta(it->second.body);
+                } catch (...) {
+                }
+                if (!ok) {
+                    it->second.error = "ERROR_CODE_LIMIT";
+                    it->second.chunks.clear();
+                }
+            }
             // Поточный запрос: успешный ответ — только метаданные, конец — чанк last.
             it->second.responded = true;
             if (!it->second.stream || !it->second.error.empty()) it->second.done = true;
@@ -433,13 +447,28 @@ void Connection::onFrame(const std::string &bytes) {
         if (kind == "chunk") {
             const auto id = f.value("id", std::uint64_t(0));
             auto it = pending_.find(id);
-            if (it == pending_.end() || !it->second.stream) return;
+            // Запрос уже завершён (отказ по потолку, ошибка): дальнейшие чанки не копятся
+            if (it == pending_.end() || !it->second.stream || it->second.done) return;
             if (f.contains("error") && f["error"].is_string()) {
                 it->second.error = f["error"].get<std::string>();
             } else {
                 try {
                     auto data = fromBase64(f.value("data", std::string()));
-                    if (!data.empty()) it->second.chunks[f.value("index", std::uint32_t(0))] = std::move(data);
+                    auto &p = it->second;
+                    const auto index = f.value("index", std::uint32_t(0));
+                    const auto &lim = p.limits;
+                    if (lim.chunkCount && (index < lim.firstChunk || index - lim.firstChunk >= lim.chunkCount)) {
+                        // Ревью 21 окт (2.2): чанк вне запрошенного окна — подделка
+                        p.error = "ERROR_CODE_INVALID";
+                        p.chunks.clear();
+                    } else if (lim.maxBytes && (data.size() > lim.maxBytes || p.bytes > lim.maxBytes - data.size())) {
+                        // Ревью 21 окт (2.2): больше потолка — отказ, принятое освобождается
+                        p.error = "ERROR_CODE_LIMIT";
+                        p.chunks.clear();
+                    } else if (!data.empty()) {
+                        p.bytes += data.size();
+                        p.chunks[index] = std::move(data);
+                    }
                 } catch (const std::exception &) {
                     it->second.error = "ERROR_CODE_UNSPECIFIED";
                 }
@@ -505,6 +534,69 @@ void Connection::close() {
     closing_ = true;
     open_ = false;
     if (io) io->close();
+}
+
+// ── скачивание блоба целиком ────────────────────────────────────────────────
+
+namespace {
+
+// Число из proto3-JSON: uint64 приходит строкой, uint32 — числом; иное — 0
+std::uint64_t metaNumber(const json &meta, const char *key) {
+    const auto it = meta.find(key);
+    if (it == meta.end()) return 0;
+    if (it->is_number_unsigned()) return it->get<std::uint64_t>();
+    if (it->is_number_integer()) {
+        const auto v = it->get<std::int64_t>();
+        return v > 0 ? std::uint64_t(v) : 0;
+    }
+    if (it->is_string()) {
+        const auto &s = it->get_ref<const std::string &>();
+        if (s.empty() || s.size() > 20) return s.empty() ? 0 : UINT64_MAX;
+        std::uint64_t v = 0;
+        for (const char c : s) {
+            if (c < '0' || c > '9') return 0;
+            const auto d = std::uint64_t(c - '0');
+            if (v > (UINT64_MAX - d) / 10) return UINT64_MAX;
+            v = v * 10 + d;
+        }
+        return v;
+    }
+    return 0;
+}
+
+} // namespace
+
+std::string downloadBlobChunks(const std::string &method, std::size_t maxBytesIn, const BlobBatchFetch &fetch) {
+    const std::size_t maxBytes = maxBytesIn ? maxBytesIn : kMaxBlobDownloadBytes;
+    // Заявленное сервером больше потолка — отказ по метаданным, до чанков
+    const auto tooLarge = [&](const json &meta) {
+        return metaNumber(meta, "size") > maxBytes || metaNumber(meta, "chunks") > kMaxBlobChunks;
+    };
+    std::string out;
+    std::uint32_t total = 0;
+    for (std::uint32_t first = 0;; first += kBlobDownloadBatch) {
+        // Потолок выбран, а чанки ещё есть (каждый непуст) — дальше только больше потолка
+        if (out.size() >= maxBytes) throw V2Error("ERROR_CODE_LIMIT");
+        Connection::StreamLimits limits;
+        limits.maxBytes = maxBytes - out.size();
+        limits.firstChunk = first;
+        limits.chunkCount = kBlobDownloadBatch;
+        limits.acceptMeta = [&](const std::string &body) { return !tooLarge(decodeMethodResponse(method, body)); };
+        const auto got = fetch(limits);
+        const auto meta = decodeMethodResponse(method, got.body);
+        if (tooLarge(meta)) throw V2Error("ERROR_CODE_LIMIT");
+        const auto chunks = static_cast<std::uint32_t>(metaNumber(meta, "chunks"));
+        if (first > 0 && chunks != total) throw V2Error("ERROR_CODE_INVALID");
+        total = chunks;
+        for (std::uint32_t index = first; index < total && index - first < kBlobDownloadBatch; ++index) {
+            const auto it = got.chunks.find(index);
+            if (it == got.chunks.end()) throw V2Error("ERROR_CODE_UNAVAILABLE");
+            if (it->second.size() > maxBytes - out.size()) throw V2Error("ERROR_CODE_LIMIT");
+            out += it->second;
+        }
+        if (total <= kBlobDownloadBatch || first >= total - kBlobDownloadBatch) break;
+    }
+    return out;
 }
 
 } // namespace parvane::v2

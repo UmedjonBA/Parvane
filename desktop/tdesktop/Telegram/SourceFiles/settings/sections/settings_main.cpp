@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "parvane/parvane_health.h" // Parvane: цели здоровья
 #include "parvane/parvane_islands.h" // Parvane: профиль-хаб карточками
 #include "parvane/parvane_kit.h"
+#include "parvane/parvane_lang.h" // Parvane: выбор языка без облака Telegram
 #include "parvane/parvane_planner_forms.h" // Parvane: настройки «Плана»
 #include "parvane/parvane_space.h" // Parvane: «Хранилище заметок» → раздел «Файлы»
 #include "boxes/peer_list_controllers.h" // Parvane: «Контакты»
@@ -109,8 +110,9 @@ namespace {
 // Parvane: выбор языка (Русский/English). Облачный список Telegram у нас
 // заглушён, поэтому свой простой бокс: русский — кастомный пакет (live),
 // английский — встроенный (перезапуск для применения).
-void ShowParvaneLanguageBox(not_null<Window::SessionController*> controller) {
-	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+// Parvane: принимает окно (не сессию) — на экране входа сессии нет.
+void ShowParvaneLanguageBox(not_null<Window::Controller*> window) {
+	window->show(Box([=](not_null<Ui::GenericBox*> box) {
 		box->setTitle(tr::lng_languages());
 		const auto addRow = [&](const QString &title, Fn<void()> onClick) {
 			const auto button = box->addRow(object_ptr<Ui::SettingsButton>(
@@ -122,15 +124,12 @@ void ShowParvaneLanguageBox(not_null<Window::SessionController*> controller) {
 				box->closeBox();
 			});
 		};
+		// Русский пакет встроен в бинарь (parvane_lang.cpp; PARVANE_LANG_FILE — только dev-стенд).
 		addRow(u"Русский"_q, [] {
-			if (const char *lf = std::getenv("PARVANE_LANG_FILE"); lf && *lf) {
-				Lang::GetInstance().switchToCustomFile(QString::fromUtf8(lf));
-			}
+			Parvane::SwitchToRussian();
 		});
 		addRow(u"English"_q, [] {
-			Lang::GetInstance().switchToId(Lang::DefaultLanguage());
-			Local::writeLangPack();
-			Core::Restart();
+			Parvane::SwitchToEnglish();
 		});
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	}));
@@ -531,7 +530,7 @@ void BuildSectionButtons(SectionBuilder &builder) {
 			Lang::GetInstance().idChanges()
 		) | rpl::map([] { return Lang::GetInstance().nativeName(); }),
 		.onClick = [=] {
-			ShowParvaneLanguageBox(controller);
+			ShowParvaneLanguageBox(&controller->window());
 		},
 		.keywords = { u"translate"_q, u"localization"_q, u"language"_q },
 	});
@@ -1018,7 +1017,7 @@ void SetupLanguageButton(
 		st::settingsButton,
 		{ &st::menuIconTranslate });
 	button->addClickHandler([=] {
-		ShowParvaneLanguageBox(window->sessionController());
+		ShowParvaneLanguageBox(window);
 	});
 }
 

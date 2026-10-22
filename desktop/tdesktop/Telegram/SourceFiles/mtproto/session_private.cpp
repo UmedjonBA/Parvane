@@ -1008,6 +1008,12 @@ void SessionPrivate::restartNow() {
 }
 
 void SessionPrivate::connectToServer(bool afterConfig) {
+	// Parvane (ревью 21 окт 2026): сети MTProto за форком нет — сессия к DC Telegram не соединяется вовсе
+	// (прежде каждые секунды «Connecting…» к 149.154.x/91.108.x: Telegram видел IP пользователя). Запросы
+	// отклоняются локально в Instance::Private::sendRequest (PARVANE_NO_MTPROTO), ключи DC не создаются.
+	if (const auto parvaneNoMtproto = true) {
+		return;
+	}
 	if (afterConfig && (!_testConnections.empty() || _connection)) {
 		return;
 	}

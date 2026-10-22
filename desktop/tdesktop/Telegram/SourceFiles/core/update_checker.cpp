@@ -1465,6 +1465,11 @@ void Updater::stop() {
 }
 
 void Updater::start(bool forceWait) {
+	// Parvane (ревью 21 окт 2026): обновления Telegram (td.telegram.org, канал обновлений по MTProto) не
+	// проверяем никогда — сборки собираются с DESKTOP_APP_DISABLE_AUTOUPDATE, это страховка.
+	if (UpdaterDisabled()) {
+		return;
+	}
 	if (cExeName().isEmpty()) {
 		return;
 	}

@@ -1725,6 +1725,45 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
+		// Parvane: в каждый выбранный чат — путём одиночной пересылки
+		// (ApiWrap::forwardMessages → Parvane::MirrorForward: медиа, опросы,
+		// группы с правами GROUP-2); messages.forwardMessages MTProto не шлётся.
+		if (constexpr auto kParvaneForward = true; kParvaneForward) {
+			auto &api = history->session().api();
+			for (const auto &thread : result) {
+				if (!comment.text.isEmpty()) {
+					auto message = Api::MessageToSend(
+						Api::SendAction(thread, options));
+					message.textWithTags = comment;
+					message.action.clearDraft = false;
+					api.sendMessage(std::move(message));
+				}
+				auto action = Api::SendAction(thread, options);
+				action.clearDraft = false;
+				api.forwardMessages(
+					Data::ResolvedForwardDraft{
+						.items = items,
+						.options = forwardOptions,
+					},
+					std::move(action));
+			}
+			if (show->valid()) {
+				auto phrase = rpl::variable<TextWithEntities>(
+					ChatHelpers::ForwardedMessagePhrase(
+						CreateForwardedMessagePhraseArgs(result, msgIds)
+					)).current();
+				if (!phrase.empty()) {
+					show->showToast({
+						.text = std::move(phrase),
+						.filter = ChatHelpers::ForwardedToSavedMessagesFilter(
+							&history->session()),
+					});
+				}
+				show->hideLayer();
+			}
+			return;
+		}
+
 		using Flag = MTPmessages_ForwardMessages::Flag;
 		const auto commonSendFlags = Flag(0)
 			| Flag::f_with_my_score

@@ -7,6 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/sticker_set_box.h"
 
+#include "parvane/parvane_client.h" // HasStickerPackRef / InstallStickerPackFromDocument
+#include <parvane/chat_rules.h>     // parvane-core: что открывает клик по стикеру
+
 #include "api/api_common.h"
 #include "api/api_stickers_creator.h"
 #include "api/api_toggling_media.h"
@@ -222,6 +225,33 @@ void ValidatePremiumStarFg(const style::icon &lockIcon, QImage &image) {
 	};
 }
 
+// Parvane: наборы стикеров — только свои, на устройстве (паки, PACK-1/PACK-2),
+// MTProto (messages.getStickerSet) нет. Набор с содержимым по id или короткому
+// имени — или nullptr.
+[[nodiscard]] Data::StickersSet *ParvaneLocalSet(
+		not_null<Main::Session*> session,
+		const StickerSetIdentifier &id) {
+	const auto &sets = session->data().stickers().sets();
+	auto found = id.id ? sets.find(id.id) : sets.end();
+	if (found == sets.end() && !id.shortName.isEmpty()) {
+		for (auto i = sets.begin(); i != sets.end(); ++i) {
+			if (!i->second->shortName.compare(
+					id.shortName,
+					Qt::CaseInsensitive)) {
+				found = i;
+				break;
+			}
+		}
+	}
+	if (found == sets.end()) {
+		return nullptr;
+	}
+	const auto set = found->second.get();
+	return (set->stickers.isEmpty() || (set->flags & SetFlag::NotLoaded))
+		? nullptr
+		: set;
+}
+
 } // namespace
 
 StickerPremiumMark::StickerPremiumMark(
@@ -337,6 +367,11 @@ public:
 	void applySet(const TLStickerSet &set);
 	void setOuterContainer(QPointer<QWidget> container);
 
+	// Parvane: набор показан из своих наборов устройства (без MTProto).
+	[[nodiscard]] bool parvaneLocal() const {
+		return _parvaneLocal;
+	}
+
 	~Inner();
 
 protected:
@@ -423,6 +458,8 @@ private:
 
 	void updateItems();
 	void repaintItems(crl::time now = 0);
+	void applyLocalSet(not_null<Data::StickersSet*> set);
+	void finishApply();
 
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const not_null<Main::Session*> _session;
@@ -453,6 +490,7 @@ private:
 	StickerType _setThumbnailType = StickerType::Webp;
 	ImageWithLocation _setThumbnail;
 	bool _amSetCreator = false;
+	bool _parvaneLocal = false;
 
 	struct {
 		bool enabled = false;
@@ -530,6 +568,21 @@ base::weak_qptr<Ui::BoxContent> StickerSetBox::Show(
 		not_null<DocumentData*> document,
 		DocumentId previewDocumentId) {
 	if (const auto sticker = document->sticker()) {
+		// Parvane (как web): pack_ref принятого стикера — установка набора;
+		// свой набор устройства — окно из него; иначе — подсказка, без MTProto.
+		using Open = parvane::chatrules::StickerSetOpen;
+		switch (parvane::chatrules::stickerSetOpenAction(
+				Parvane::HasStickerPackRef(document),
+				ParvaneLocalSet(&show->session(), sticker->set) != nullptr)) {
+		case Open::InstallFromRef:
+			Parvane::InstallStickerPackFromDocument(document);
+			return nullptr;
+		case Open::Unavailable:
+			show->showToast(tr::lng_parvane_sticker_set_unknown(tr::now));
+			return nullptr;
+		case Open::ShowLocal:
+			break;
+		}
 		if (sticker->set) {
 			auto box = Box<StickerSetBox>(
 				show,
@@ -761,6 +814,10 @@ void StickerSetBox::updateButtons() {
 			_inner->setReorderState(false);
 			updateButtons();
 		});
+	} else if (_inner->loaded() && _inner->parvaneLocal()) {
+		// Parvane: свой набор устройства — просмотр и отправка стикера;
+		// ссылки t.me/addstickers, архива и установки через MTProto нет.
+		addButton(tr::lng_close(), [=] { closeBox(); });
 	} else if (_inner->loaded()) {
 		const auto type = _inner->setType();
 		const auto share = [=] {
@@ -1068,6 +1125,18 @@ StickerSetBox::Inner::Inner(
 , _previewTimer([=] { showPreview(); }) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
 
+	// Parvane: набор — из своих наборов устройства; неизвестный — «не найден»
+	// (после подписки окна на ошибки). messages.getStickerSet не шлётся.
+	if (const auto local = ParvaneLocalSet(_session, set)) {
+		_parvaneLocal = true;
+		applyLocalSet(local);
+	} else {
+		crl::on_main(this, [=] {
+			_loaded = true;
+			_errors.fire(Error::NotFound);
+		});
+	}
+	if (constexpr auto kParvaneMtproto = false; kParvaneMtproto) {
 	_api.request(MTPmessages_GetStickerSet(
 		Data::InputStickerSet(_input),
 		MTP_int(0) // hash
@@ -1079,6 +1148,7 @@ StickerSetBox::Inner::Inner(
 	}).send();
 
 	_session->api().updateStickers();
+	}
 
 	_session->downloaderTaskFinished(
 	) | rpl::on_next([=] {
@@ -1183,7 +1253,42 @@ void StickerSetBox::Inner::applySet(const TLStickerSet &set) {
 	}, [&](const MTPDmessages_stickerSetNotModified &data) {
 		LOG(("API Error: Unexpected messages.stickerSetNotModified."));
 	});
+	finishApply();
+}
 
+void StickerSetBox::Inner::applyLocalSet(not_null<Data::StickersSet*> set) {
+	_pack.clear();
+	_emoji.clear();
+	_elements.clear();
+	_selected = -1;
+	setCursor(style::cur_default);
+	_pack.reserve(set->stickers.size());
+	_elements.reserve(set->stickers.size());
+	for (const auto &document : set->stickers) {
+		if (!document->sticker()) {
+			continue;
+		}
+		_pack.push_back(document);
+		_elements.push_back({
+			document,
+			document->createMediaView(),
+		});
+	}
+	_emoji = set->emoji;
+	_setTitle = set->title;
+	_setShortName = set->shortName;
+	_setId = set->id;
+	_setAccessHash = set->accessHash;
+	_setHash = set->hash;
+	_setCount = set->count;
+	_setFlags = set->flags;
+	_setInstallDate = set->installDate;
+	_setThumbnailDocumentId = set->thumbnailDocumentId;
+	_amSetCreator = false;
+	finishApply();
+}
+
+void StickerSetBox::Inner::finishApply() {
 	if (_pack.isEmpty()) {
 		_errors.fire(Error::NotFound);
 		return;
@@ -1640,7 +1745,9 @@ void StickerSetBox::Inner::contextMenuEvent(QContextMenuEvent *e) {
 				}
 			}, &st::menuIconCopy);
 		}
-		if (!amSetCreator()) {
+		if (_parvaneLocal) {
+			// Parvane: «добавить в набор эмодзи» — MTProto.
+		} else if (!amSetCreator()) {
 			Api::AddAddToEmojiSetAction(
 				Ui::Menu::CreateAddActionCallback(_menu.get()),
 				_show,
@@ -1682,6 +1789,8 @@ void StickerSetBox::Inner::contextMenuEvent(QContextMenuEvent *e) {
 				Data::FileOriginStickerSet(Data::Stickers::FavedSetId, 0));
 		};
 		const auto isFaved = document->owner().stickers().isFaved(document);
+		// Parvane: «Избранное» стикеров и «добавить в набор» — MTProto.
+		if (!_parvaneLocal)
 		_menu->addAction(
 			(isFaved
 				? tr::lng_faved_stickers_remove
@@ -1690,7 +1799,7 @@ void StickerSetBox::Inner::contextMenuEvent(QContextMenuEvent *e) {
 			(isFaved
 				? &st::menuIconUnfave
 				: &st::menuIconFave));
-		if (!amSetCreator()) {
+		if (!amSetCreator() && !_parvaneLocal) {
 			Api::AddAddToStickerSetAction(
 				Ui::Menu::CreateAddActionCallback(_menu.get()),
 				_show,

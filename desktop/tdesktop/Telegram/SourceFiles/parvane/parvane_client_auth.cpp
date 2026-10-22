@@ -1,5 +1,29 @@
 // Parvane fork: вход, регистрация, 2FA, учётные данные (сервер, токен, секрет доверия) (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include "parvane/parvane_lang.h"
+
+#include <parvane/dev_hooks.h>            // шлюз dev-хуков (ревью 21 окт 2026)
+#include <parvane/gateway_ws_transport.h> // PARVANE_CA_DIRS выключен на desktop
+
+// Шлюз dev-хуков: dev-сборка И PARVANE_DEV_HOOKS=1 И PARVANE_GATEWAY_URL на loopback (127.0.0.1, localhost, ::1).
+// Решается один раз за запуск; строка в журнале — одна (зовёт LogStartup первым делом). Релиз — всегда false.
+bool ParvaneDevHooksEnabled() {
+#ifdef PARVANE_DEV
+	static const bool enabled = [] {
+		const char *gw = std::getenv("PARVANE_GATEWAY_URL");
+		const auto on = parvane::devhooks::allowed(std::getenv("PARVANE_DEV_HOOKS"), gw ? gw : "");
+		if (on) {
+			LOG(("Parvane: dev-хуки включены (PARVANE_DEV_HOOKS=1, gateway на loopback)"));
+		} else {
+			LOG(("Parvane: dev-хуки отключены (нужны PARVANE_DEV_HOOKS=1 и gateway на loopback)"));
+		}
+		return on;
+	}();
+	return enabled;
+#else
+	return false;
+#endif
+}
 
 namespace Parvane {
 
@@ -11,14 +35,17 @@ constexpr auto kDefaultGatewayWss = "wss://parvane.duckdns.org:20443/ws";
 QString GatewayUrl() {
 	if (const char *v = std::getenv("PARVANE_GATEWAY_URL"); v && *v) {
 		const auto url = QString::fromUtf8(v);
-#ifndef PARVANE_DEV
 		// P-45: в релизе только wss:// — plaintext TCP/ws:// к gateway отдал бы
-		// JWT в открытом виде; переменной окружения этого не обойти.
-		if (!url.startsWith(u"wss://"_q, Qt::CaseInsensitive)) {
-			LOG(("Parvane: PARVANE_GATEWAY_URL без wss:// проигнорирован в релизе: %1").arg(url));
+		// JWT в открытом виде; переменной окружения этого не обойти. Dev-сборка —
+		// ws:// и TCP только с открытым шлюзом dev-хуков (loopback, ревью 21 окт 2026).
+		if (!url.startsWith(u"wss://"_q, Qt::CaseInsensitive) && !ParvaneDevHooksEnabled()) {
+			static std::once_flag once;
+			std::call_once(once, [&] {
+				LOG(("Parvane: PARVANE_GATEWAY_URL без wss:// проигнорирован (только dev-стенд на loopback): %1")
+					.arg(url));
+			});
 			return QString::fromUtf8(kDefaultGatewayWss);
 		}
-#endif
 		return url;
 	}
 	return QString::fromUtf8(kDefaultGatewayWss);
@@ -76,15 +103,17 @@ bool UpgradeRequired() {
 // доверенное устройство входит по паролю без Telegram. device_id для этого не
 // годится — он публичен (каталог прекеев отдаёт его любому).
 [[nodiscard]] QString TrustSecretPath(const QString &user) {
-	return cWorkingDir() + u"tdata/parvane-trust-"_q + user + u".txt"_q;
+	// Ревью 21 окт, вечер (1.6): адрес с экрана входа — часть имени файла; только проверенный ("" — нет файла)
+	return AccountFilePath(u"parvane-trust-"_q, user, u".txt"_q);
 }
 
 [[nodiscard]] QString ReadTrustSecret(const QString &user) {
-	return QString::fromUtf8(StoreRead(TrustSecretPath(user))).trimmed();
+	const auto path = TrustSecretPath(user);
+	return path.isEmpty() ? QString() : QString::fromUtf8(StoreRead(path)).trimmed();
 }
 
 void WriteTrustSecret(const QString &user, const QString &secret) {
-	if (user.isEmpty() || secret.isEmpty()) {
+	if (user.isEmpty() || secret.isEmpty() || TrustSecretPath(user).isEmpty()) {
 		return;
 	}
 	if (StoreWrite(TrustSecretPath(user), secret.toUtf8())) {
@@ -116,6 +145,12 @@ bool RestoreSessionCreds() {
 	}
 	const auto address = lines[0].trimmed();
 	const auto token = lines[1].trimmed();
+	if (!parvane::accountfiles::isValidAddress(address.toStdString())) {
+		LOG(("Parvane: учётные данные с недопустимым адресом — не восстановлены"));
+		return false;
+	}
+	// Файлы без адреса в имени — этого аккаунта (процесс могли закрыть посреди входа другим)
+	AdoptAccountFiles(address);
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_selfAddress = address;
@@ -127,29 +162,12 @@ bool RestoreSessionCreds() {
 }
 
 void EnsureDefaultLanguage() {
-	const char *lf = std::getenv("PARVANE_LANG_FILE");
-	if (!lf || !*lf) {
-		return;
-	}
-	const auto path = QString::fromUtf8(lf);
-	if (!QFileInfo::exists(path)) {
-		LOG(("Parvane: языковой файл не найден: %1").arg(path));
-		return;
-	}
-	// Однократно: маркер в tdata. Дальше язык — выбор пользователя.
-	const auto marker = cWorkingDir() + u"tdata/parvane-lang-applied"_q;
-	if (QFileInfo::exists(marker)) {
-		return;
-	}
-	Core::App().langpack().switchToCustomFile(path);
-	QFile f(marker);
-	if (f.open(QIODevice::WriteOnly)) {
-		f.write("ru");
-	}
-	LOG(("Parvane: язык по умолчанию — русский (%1)").arg(path));
+	// Русский встроен в бинарь (qrc), PARVANE_LANG_FILE — только dev-стенд; см. parvane_lang.cpp.
+	ApplyDefaultLanguage();
 }
 
 void LogStartup() {
+	(void)ParvaneDevHooksEnabled(); // одна строка «dev-хуки включены/отключены» — первой
 	LOG(("Parvane: протокол v2, сервер %1").arg(GatewayUrl()));
 	StartupHousekeeping(); // до хранилища и сессии (Application::run → startLocalStorage — следом)
 }
@@ -158,9 +176,19 @@ namespace {
 
 // Строки журнала клиента («Parvane…»): dev-сборка пишет их в log.txt как раньше (verify_*.sh), релиз — только
 // при режиме отладки tdesktop, иначе в память (parvane-core logpriv). Ставится до main — до первой строки.
+// Содержимое (LogSecret) — открытым текстом только в dev при PARVANE_LOG_CONTENT=1 и открытом шлюзе dev-хуков
+// (решение без LOG: до main журнала ещё нет). Доверенные корни из PARVANE_CA_DIRS desktop не читает никогда:
+// подложенный корень дал бы посреднику подменить сервер (ревью 21 окт 2026; Android задаёт их сам).
 [[maybe_unused]] const bool kLogDevBuildSet = [] {
+	parvane::GatewayWsTransport::setEnvCaDirsAllowed(false);
 #ifdef PARVANE_DEV
 	parvane::logpriv::setDevBuild(true);
+	const char *gw = std::getenv("PARVANE_GATEWAY_URL");
+	const char *content = std::getenv("PARVANE_LOG_CONTENT");
+	parvane::logpriv::setLogContent(
+		content
+		&& std::strcmp(content, "1") == 0
+		&& parvane::devhooks::allowed(std::getenv("PARVANE_DEV_HOOKS"), gw ? gw : ""));
 #endif // PARVANE_DEV
 	return true;
 }();
@@ -205,6 +233,11 @@ IssueResult Issue(
 	// Выход со стиранием прежнего аккаунта ещё идёт — вход после него (иначе стирание задело бы новый вход)
 	if (!PrepareForLogin()) {
 		out.error = tr::lng_parvane_logout_pending(tr::now);
+		return out;
+	}
+	// Адрес — часть имён файлов устройства (каталог состояния, секрет доверия): только допустимый (1.6)
+	if (!parvane::accountfiles::isValidAddress(user.toStdString())) {
+		out.error = tr::lng_parvane_bad_login(tr::now);
 		return out;
 	}
 	try {
@@ -260,6 +293,10 @@ RegisterResult Register(const QString &user, const QString &password,
 	RegisterResult out;
 	if (!PrepareForLogin()) {
 		out.error = tr::lng_parvane_logout_pending(tr::now);
+		return out;
+	}
+	if (!parvane::accountfiles::isValidAddress(user.toStdString())) {
+		out.error = tr::lng_parvane_register_invalid(tr::now);
 		return out;
 	}
 	try {

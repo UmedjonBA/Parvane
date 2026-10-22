@@ -727,6 +727,57 @@ int main() {
         check(unknownState, "state: неизвестное имя → UnknownCall");
     }
 
+    // ── жалоба админу (mod_report): верить только своим данным (ревью 21 окт 2026, вечер) ──
+    {
+        const std::string hex = "0123456789abcdef0123456789abcdef";
+        const std::string other = "fedcba9876543210fedcba9876543210";
+        const auto group = v2::groupAddress(hex);
+        const auto members = [&](const std::string &g) {
+            return g == group ? std::vector<std::string>{"admin@local", "dave@local", "erin@local"}
+                              : std::vector<std::string>{"mallory@local"};
+        };
+        const auto lookup = [&](const std::string &op) -> std::optional<v2::ReportLocalMessage> {
+            if (op == "m1") return v2::ReportLocalMessage{group, "erin@local", "грубость"};
+            if (op == "m2") return v2::ReportLocalMessage{group, "erin@local", ""};
+            if (op == "x1") return v2::ReportLocalMessage{v2::groupAddress(other), "frank@local", "чужая группа"};
+            if (op == "d1") return v2::ReportLocalMessage{"frank@local", "frank@local", "личное"};
+            return std::nullopt;
+        };
+        const auto report = [&](const std::string &gid, const json &reported) {
+            return json{{"kind", "mod_report"},
+                        {"report_group", {{"domain", "local"}, {"id", v2::hexToB64(gid)}}},
+                        {"reason", "spam"},
+                        {"reported", reported},
+                        {"text", "⚠️ текст отправителя"}};
+        };
+        const auto ok = v2::validateModReport(
+            report(hex, json::array({{{"op_id", "m1"}, {"author", "admin@local"}, {"text", "подделка"}},
+                                     {{"op_id", "m2"}, {"author", "dave@local"}},
+                                     {{"op_id", "x1"}, {"author", "frank@local"}},
+                                     {{"op_id", "d1"}, {"author", "frank@local"}},
+                                     {{"op_id", "zz"}, {"author", "frank@local"}},
+                                     {{"op_id", "m1"}, {"author", "erin@local"}}})),
+            "dave@local", members, lookup);
+        check(ok && ok->group == group && ok->opIds == std::vector<std::string>{"m1", "m2"}
+                  && ok->authors == std::vector<std::string>{"erin@local"},
+              "жалоба: сообщения и авторы — только из своей истории этой группы");
+        check(ok && ok->text.find("грубость") != std::string::npos && ok->text.find("[media]") != std::string::npos
+                  && ok->text.find("подделка") == std::string::npos && ok->text.find("отправителя") == std::string::npos,
+              "жалоба: текст карточки — свой, не из жалобы");
+        check(!v2::validateModReport(report(hex, json::array({{{"op_id", "m1"}}})), "mallory@local", members, lookup),
+              "жалоба от не участника группы — без карточки");
+        check(!v2::validateModReport(report(hex, json::array({{{"op_id", "x1"}}, {{"op_id", "d1"}}, {{"op_id", "zz"}}})),
+                                     "dave@local", members, lookup),
+              "жалоба на сообщения не этой группы — без карточки");
+        check(!v2::validateModReport(report(other, json::array({{{"op_id", "x1"}}})), "dave@local", members, lookup),
+              "жалоба от имени чужой группы — без карточки");
+        check(!v2::validateModReport(json{{"kind", "mod_report"}, {"report_group", {{"id", "AAAA"}}}, {"reported", json::array()}},
+                                     "dave@local", members, lookup)
+                  && !v2::validateModReport(json{{"kind", "text"}}, "dave@local", members, lookup)
+                  && !v2::validateModReport(json::array(), "dave@local", members, lookup),
+              "жалоба: битая группа, не жалоба, не объект — без карточки");
+    }
+
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

@@ -221,6 +221,10 @@ private:
 
 // ── провайдер раздела (cloudDrive.ts): методы `parvaneCloud*` ─────────────────────────────────────────────
 
+// Потолок шифртекста в описании блоба для CloudBlobs::download (ревью безопасности 21 окт 2026, 2.2): реализация
+// передаёт его сессии (Session::downloadBlobCap), больше — отказ до приёма чанков. Нет поля — общий потолок сессии.
+inline constexpr char kBlobMaxBytesKey[] = "maxBytes";
+
 // Блобы личного диска (PVB2, bucket DRIVE): загрузка и скачивание делает сессия
 class CloudBlobs {
 public:

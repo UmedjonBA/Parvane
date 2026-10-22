@@ -601,6 +601,16 @@ void EditNoPaidMessagesExceptions(
 		Box<PeerListBox>(std::move(controller), std::move(initBox)));
 }
 
+// Parvane: звонки, присутствие, добавление в группы и прямые звонки в v2 —
+// только «все» / «никто», без исключений (как web, SettingsPrivacy.tsx).
+[[nodiscard]] bool ParvaneBinaryPrivacy(Api::UserPrivacy::Key key) {
+	using Key = Api::UserPrivacy::Key;
+	return (key == Key::Calls)
+		|| (key == Key::LastSeen)
+		|| (key == Key::Invites)
+		|| (key == Key::CallsPeer2Peer);
+}
+
 } // namespace
 
 bool EditPrivacyController::hasOption(Option option) const {
@@ -786,7 +796,23 @@ void EditPrivacyBox::setupContent() {
 	});
 	auto optionValue = toggle->events_starting_with_copy(_value.option);
 
+	// Parvane: двоичная настройка v2 — без «Мои контакты» и исключений.
+	const auto parvaneBinary = ParvaneBinaryPrivacy(_controller->key());
+	if (parvaneBinary) {
+		_value.always = {};
+		_value.never = {};
+		if (_value.option != Option::Nobody) {
+			_value.option = Option::Everyone;
+			group->setValue(Option::Everyone);
+		}
+	}
+
 	const auto addOptionRow = [&](Option option) {
+		if (parvaneBinary
+			&& option != Option::Everyone
+			&& option != Option::Nobody) {
+			return (Ui::Radioenum<Option>*)nullptr;
+		}
 		return (_controller->hasOption(option) || (_value.option == option))
 			? AddOption(content, _controller.get(), group, option)
 			: nullptr;
@@ -869,6 +895,9 @@ void EditPrivacyBox::setupContent() {
 	};
 	for (const auto &option : options) {
 		if (const auto row = addOptionRow(option)) {
+			if (parvaneBinary) {
+				continue;
+			}
 			const auto premiumCallback = _controller->premiumClickedCallback(
 				option,
 				_window);
@@ -885,7 +914,10 @@ void EditPrivacyBox::setupContent() {
 
 	const auto warning = addLabelOrDivider(
 		content,
-		_controller->warning(),
+		// Parvane: предупреждения tdesktop здесь — про Premium.
+		(parvaneBinary
+			? rpl::producer<TextWithEntities>(nullptr)
+			: _controller->warning()),
 		st::defaultVerticalListSkip + st::settingsPrivacySkipTop);
 	if (warning) {
 		_controller->prepareWarningLabel(warning);
@@ -899,41 +931,60 @@ void EditPrivacyBox::setupContent() {
 		content->add(std::move(middle));
 	}
 
-	Ui::AddSkip(content);
-	Ui::AddSubsectionTitle(
-		content,
-		tr::lng_edit_privacy_exceptions(),
-		{ 0, st::settingsPrivacySkipTop, 0, 0 });
-	const auto always = addExceptionLink(Exception::Always);
-	const auto never = addExceptionLink(Exception::Never);
-	_always = always->entity();
-	_never = never->entity();
-	addLabel(
-		content,
-		_controller->exceptionsDescription() | rpl::map(tr::marked),
-		st::defaultVerticalListSkip);
+	auto always = (Ui::SlideWrap<Button>*)nullptr;
+	auto never = (Ui::SlideWrap<Button>*)nullptr;
+	if (!parvaneBinary) {
+		Ui::AddSkip(content);
+		Ui::AddSubsectionTitle(
+			content,
+			tr::lng_edit_privacy_exceptions(),
+			{ 0, st::settingsPrivacySkipTop, 0, 0 });
+		always = addExceptionLink(Exception::Always);
+		never = addExceptionLink(Exception::Never);
+		_always = always->entity();
+		_never = never->entity();
+		addLabel(
+			content,
+			_controller->exceptionsDescription() | rpl::map(tr::marked),
+			st::defaultVerticalListSkip);
+	}
 
-	auto below = _controller->setupBelowWidget(
-		_window,
-		content,
-		rpl::duplicate(optionValue));
+	// Parvane: под «Последней активностью» у tdesktop — «скрыть время
+	// прочтения» и Premium; у звонков — прямые соединения (есть и в web).
+	auto below = (parvaneBinary
+		&& _controller->key() == Api::UserPrivacy::Key::LastSeen)
+		? object_ptr<Ui::RpWidget>(nullptr)
+		: _controller->setupBelowWidget(
+			_window,
+			content,
+			rpl::duplicate(optionValue));
 	if (below) {
 		content->add(std::move(below));
 	}
 
 	addButton(tr::lng_settings_save(), [=] {
-		const auto someAreDisallowed = (_value.option != Option::Everyone)
-			|| !_value.never.peers.empty();
-		_controller->confirmSave(someAreDisallowed, crl::guard(this, [=] {
-			_value.ignoreAlways = !showExceptionLink(Exception::Always);
-			_value.ignoreNever = !showExceptionLink(Exception::Never);
+		const auto save = crl::guard(this, [=] {
+			_value.ignoreAlways = parvaneBinary
+				|| !showExceptionLink(Exception::Always);
+			_value.ignoreNever = parvaneBinary
+				|| !showExceptionLink(Exception::Never);
 
-			_controller->saveAdditional();
+			if (!parvaneBinary) { // Parvane: «скрыть время прочтения» — MTProto
+				_controller->saveAdditional();
+			}
 			_window->session().api().userPrivacy().save(
 				_controller->key(),
 				_value);
 			closeBox();
-		}));
+		});
+		if (parvaneBinary) {
+			// Parvane: подтверждение tdesktop — про Premium.
+			save();
+			return;
+		}
+		const auto someAreDisallowed = (_value.option != Option::Everyone)
+			|| !_value.never.peers.empty();
+		_controller->confirmSave(someAreDisallowed, save);
 	});
 	addButton(tr::lng_cancel(), [this] { closeBox(); });
 
@@ -948,7 +999,9 @@ void EditPrivacyBox::setupContent() {
 
 	content->heightValue(
 	) | rpl::map([=](int height) {
-		return height - always->height() - never->height() + 2 * linkHeight;
+		return always
+			? (height - always->height() - never->height() + 2 * linkHeight)
+			: height;
 	}) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](int height) {
 		setDimensions(st::boxWideWidth, height);
@@ -956,8 +1009,10 @@ void EditPrivacyBox::setupContent() {
 }
 
 void EditPrivacyBox::showFinished() {
-	_window->checkHighlightControl(u"privacy/always"_q, _always.data());
-	_window->checkHighlightControl(u"privacy/never"_q, _never.data());
+	if (_always) {
+		_window->checkHighlightControl(u"privacy/always"_q, _always.data());
+		_window->checkHighlightControl(u"privacy/never"_q, _never.data());
+	}
 	_controller->checkHighlightControls(_window);
 }
 

@@ -3424,7 +3424,10 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				const auto mediaHasTextForCopy = media && media->hasTextForCopy();
 				if (const auto document = media ? media->getDocument() : nullptr) {
 					if (!view->isIsolatedEmoji() && document->sticker()) {
-						if (document->sticker()->set) {
+						// Parvane: окно набора (messages.getStickerSet) и «Избранное» стикеров (messages.faveSticker) — MTProto.
+						constexpr auto kParvaneStickerCloud = false;
+						if (!kParvaneStickerCloud) {
+						} else if (document->sticker()->set) {
 							_menu->addAction(document->isStickerSetInstalled() ? tr::lng_context_pack_info(tr::now) : tr::lng_context_pack_add(tr::now), [=] {
 								showStickerPackInfo(document);
 							}, &st::menuIconStickers);
@@ -3434,7 +3437,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 								_controller->uiShow(),
 								document);
 						}
-						{
+						if (kParvaneStickerCloud) {
 							const auto isFaved = session->data().stickers().isFaved(document);
 							_menu->addAction(isFaved ? tr::lng_faved_stickers_remove(tr::now) : tr::lng_faved_stickers_add(tr::now), [=] {
 								Api::ToggleFavedSticker(controller->uiShow(), document, itemId);

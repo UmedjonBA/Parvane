@@ -733,8 +733,12 @@ std::vector<ExportTreeFile> treeFilePaths(const std::vector<cloud::CloudNode> &n
         byParent[key].push_back(&node);
     }
     std::set<std::string> seen;
-    std::function<void(const std::optional<std::string> &, const std::string &)> walk;
-    walk = [&](const std::optional<std::string> &parent, const std::string &dir) {
+    // Ревью 21 окт 2026: дерево совместной папки задаёт любой редактор — цепочка в десятки тысяч папок прежде
+    // уводила рекурсию в переполнение стека и держала на нём строки путей квадратичной суммарной длины.
+    // Глубже kExportMaxDepth папки в архив не идут (путь в zip и так ограничен 64 КБ).
+    std::function<void(const std::optional<std::string> &, const std::string &, int)> walk;
+    walk = [&](const std::optional<std::string> &parent, const std::string &dir, int depth) {
+        if (depth > kExportMaxDepth) return;
         std::set<std::string> taken;
         const auto it = byParent.find(parent);
         if (it == byParent.end()) return;
@@ -747,7 +751,7 @@ std::vector<ExportTreeFile> treeFilePaths(const std::vector<cloud::CloudNode> &n
             seen.insert(node->id);
             const std::string name = uniqueName(taken, sanitizeFileName(node->name, node->kind));
             if (node->kind == "folder") {
-                walk(node->id, dir + name + "/");
+                walk(node->id, dir + name + "/", depth + 1);
             } else if (node->blob && !node->blob->is_null() && (!accept || accept(*node))) {
                 out.push_back({*node, dir + name});
             }
@@ -755,7 +759,7 @@ std::vector<ExportTreeFile> treeFilePaths(const std::vector<cloud::CloudNode> &n
     };
     std::optional<std::string> start;
     if (root && !root->empty()) start = root;
-    walk(start, prefix);
+    walk(start, prefix, 0);
     return out;
 }
 

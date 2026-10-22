@@ -1344,6 +1344,11 @@ rpl::producer<QString> Chat::title() {
 }
 
 void Chat::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
+	// Parvane: свои темы tdesktop (.tdesktop-theme) не применяются к схемам «Пространства» — «Создать тему» убрано,
+	// пустое меню — без «⋮».
+	if (constexpr auto kParvaneCreateTheme = false; !kParvaneCreateTheme) {
+		return;
+	}
 	const auto window = &controller()->window();
 	const auto createTheme = addAction(
 		tr::lng_settings_bg_theme_create(tr::now),

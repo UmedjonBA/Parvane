@@ -1216,7 +1216,11 @@ void StateSyncNow() {
 		return;
 	}
 	const auto desired = BuildLocalState(session);
-	crl::async([desired] {
+	const auto generation = AccountGeneration();
+	crl::async([desired, generation] {
+		if (!AccountGenerationIs(generation)) {
+			return;
+		}
 		const auto s = V2Ready();
 		if (!s) {
 			return;
@@ -1233,10 +1237,17 @@ void StateSyncNow() {
 		}
 		if (!r.value("changed", false)) {
 			// Журнал принял ровно `desired` — это и есть сведённое состояние (T150)
-			crl::on_main([desired] { SaveStateSynced(desired); });
+			crl::on_main([desired, generation] {
+				if (AccountGenerationIs(generation)) {
+					SaveStateSynced(desired);
+				}
+			});
 			return;
 		}
-		crl::on_main([snap = r["snapshot"]] {
+		crl::on_main([snap = r["snapshot"], generation] {
+			if (!AccountGenerationIs(generation)) {
+				return;
+			}
 			if (const auto session = g_sessionWeak.get()) {
 				ProjectState(session, snap);
 				if (!g_stateFlushQueued) {
@@ -1347,7 +1358,10 @@ void ScheduleStateFlush(const char *kind) {
 		return;
 	}
 	g_stateFlushQueued = true;
-	base::call_delayed(crl::time(700), [] {
+	base::call_delayed(crl::time(700), [generation = AccountGeneration()] {
+		if (!AccountGenerationIs(generation)) {
+			return; // правка прежнего аккаунта — не в журнал следующего
+		}
 		g_stateFlushQueued = false;
 		StateSyncNow();
 	});
@@ -1362,7 +1376,15 @@ void AttachStateJournal() {
 	}
 	const auto local = BuildLocalState(session);
 	const auto dirty = StateDirtyKinds(local);
-	crl::async([local, dirty] {
+	const auto generation = AccountGeneration();
+	// Маркер сценария verify_relogin_other_account.sh: что этот аккаунт несёт в журнал при подключении
+	LOG(("Parvane: v2: журнал состояния — подключение (черновиков %1, отложенных %2)")
+		.arg(int(local.value("drafts", parvane::json::array()).size()))
+		.arg(int(local.value("scheduled", parvane::json::array()).size())));
+	crl::async([local, dirty, generation] {
+		if (!AccountGenerationIs(generation)) {
+			return; // состояние прежнего аккаунта — не в журнал следующего
+		}
 		const auto s = V2Ready();
 		if (!s) {
 			return;
@@ -1391,9 +1413,9 @@ void AttachStateJournal() {
 		if (!snap.is_object()) {
 			return;
 		}
-		crl::on_main([snap] {
+		crl::on_main([snap, generation] {
 			const auto session = g_sessionWeak.get();
-			if (!session) {
+			if (!session || !AccountGenerationIs(generation)) {
 				return;
 			}
 			g_stateAttached = true;
@@ -1431,7 +1453,8 @@ void FireScheduledGated(const ScheduledItem &item) {
 		return;
 	}
 	const auto opId = parvane::v2::uuidToB64(item.id.toStdString());
-	crl::async([item, opId] {
+	const auto generation = AccountGeneration();
+	crl::async([item, opId, generation] {
 		auto sent = false;
 		if (const auto s = V2Ready()) {
 			try {
@@ -1439,7 +1462,10 @@ void FireScheduledGated(const ScheduledItem &item) {
 			} catch (const std::exception &) {
 			}
 		}
-		crl::on_main([item, opId, sent] {
+		crl::on_main([item, opId, sent, generation] {
+			if (!AccountGenerationIs(generation)) {
+				return; // отложенное прежнего аккаунта — не от имени следующего
+			}
 			if (sent) {
 				LOG(("Parvane: v2: отложенное %1 уже отправлено другим устройством").arg(item.id));
 			} else {
@@ -1455,6 +1481,17 @@ void FireScheduledGated(const ScheduledItem &item) {
 	});
 }
 
+// Задача события сессии — на главный поток, только если аккаунт за это время не сменился (ревью 21 окт,
+// вечер: событие сессии прежнего аккаунта, дошедшее после выхода, наполняло память следующего)
+template <typename Callable>
+void OnMainForAccount(Callable &&callable) {
+	crl::on_main([generation = AccountGeneration(), callable = std::forward<Callable>(callable)]() mutable {
+		if (AccountGenerationIs(generation)) {
+			callable();
+		}
+	});
+}
+
 // Событие v2-сессии (рабочий поток) → main.
 bool HandleV2SessionEvent(const parvane::json &ev) {
 	const auto type = ev.is_object() ? ev.value("type", std::string()) : std::string();
@@ -1467,13 +1504,13 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	}
 	const auto address = QString::fromStdString(ev.value("address", std::string()));
 	if (type == "groupUpdated") {
-		crl::on_main([address, info = ev.value("info", parvane::json()), isNew = ev.value("isNew", false)] {
+		OnMainForAccount([address, info = ev.value("info", parvane::json()), isNew = ev.value("isNew", false)] {
 			ApplyV2Group(address, info, isNew);
 		});
 		return true;
 	}
 	if (type == "groupLeft") {
-		crl::on_main([address] {
+		OnMainForAccount([address] {
 			SaveV2GroupCache(address, nullptr);
 			if (const auto session = g_sessionWeak.get()) {
 				DropGroupLocally(session, address, u"v2: исключены или группа удалена"_q);
@@ -1486,7 +1523,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		for (const auto &m : ev.value("members", parvane::json::array())) {
 			if (m.is_string()) members.push_back(QString::fromStdString(m.get<std::string>()));
 		}
-		crl::on_main([address, members] { AnnounceUnconfirmed(address, members); });
+		OnMainForAccount([address, members] { AnnounceUnconfirmed(address, members); });
 		return true;
 	}
 	if (type == "peerRenamed") {
@@ -1495,14 +1532,14 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		const auto to = QString::fromStdString(ev.value("to", std::string()));
 		if (NoteRename(from, to)) {
 			RegisterPeer(to);
-			crl::on_main([from, to] { AnnounceRename(from, to); });
+			OnMainForAccount([from, to] { AnnounceRename(from, to); });
 		}
 		return true;
 	}
 	if (type == "peerDeleted") {
 		// spec 027: аккаунт собеседника удалён — «Удалённый аккаунт»
 		const auto user = QString::fromStdString(ev.value("user", std::string()));
-		crl::on_main([user] { MarkPeerDeleted(user, true); });
+		OnMainForAccount([user] { MarkPeerDeleted(user, true); });
 		return true;
 	}
 	if (type == "peerRootChanged") {
@@ -1511,7 +1548,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		const auto user = QString::fromStdString(ev.value("user", std::string()));
 		LOG(("Parvane: v2: у %1 сменился корневой ключ — предупреждение в чате").arg(user));
 		V2NoteRoot(V2Ready(), user.toStdString());
-		crl::on_main([user] { AnnounceKeyChange(user); });
+		OnMainForAccount([user] { AnnounceKeyChange(user); });
 		return true;
 	}
 	if (type == "sskRotationNeeded") {
@@ -1536,7 +1573,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			} else {
 				LOG(("Parvane: v2: SSK ждёт смены — корня на этом устройстве нет"));
 				if (state.value("hasBackup", false)) {
-					crl::on_main([] {
+					OnMainForAccount([] {
 						if (const auto window = Core::App().activeWindow()) {
 							window->showToast(IsRussianUi()
 								? u"Устройство отозвано: смените ключ подписи устройств "
@@ -1558,7 +1595,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		const auto groupAddNobody = ev.value("groupAddNobody", false);
 		const auto callsNobody = ev.value("callsNobody", false);
 		const auto presenceNobody = ev.value("presenceNobody", false);
-		crl::on_main([=] {
+		OnMainForAccount([=] {
 			const auto self = SelfAddress();
 			if (self.isEmpty()) {
 				return;
@@ -1610,11 +1647,11 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	}
 	if (type == "ownDevicesAdded") {
 		const auto count = int(ev.value("devices", parvane::json::array()).size());
-		crl::on_main([count] { AnnounceNewOwnDevices(count); });
+		OnMainForAccount([count] { AnnounceNewOwnDevices(count); });
 		return true;
 	}
 	if (type == "stateReady") {
-		crl::on_main([] {
+		OnMainForAccount([] {
 			AttachStateJournal();
 			RetryFailedLocationMaps(); // карты геолокации, не собранные без связи, — повторить сразу
 		});
@@ -1671,7 +1708,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 			StartTelegramRecovery(false);
 		});
 		PublishLinkingStatus();
-		crl::on_main([] {
+		OnMainForAccount([] {
 			if (!HeadlessUi()) {
 				ShowLinkingBox();
 			}
@@ -1739,7 +1776,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		SaveL2Cache(SelfAddress(), chats, mine, presence);
 		LOG(("Parvane: v2: режим L2 — активных чатов %1, присутствие %2")
 			.arg(chats.size()).arg(presence ? u"публикуется"_q : u"не публикуется"_q));
-		crl::on_main([entered, released] {
+		OnMainForAccount([entered, released] {
 			const auto session = g_sessionWeak.get();
 			for (const auto &chat : entered) {
 				// «В сети» собеседника L2-чата больше не показываем.
@@ -1776,7 +1813,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		LOG(("Parvane: v2: политика L2 группы %1: %2 (задал %3)")
 			.arg(address, ev.value("enabled", false) ? u"включена"_q : u"выключена"_q,
 				QString::fromStdString(sm.from)));
-		crl::on_main([sm] {
+		OnMainForAccount([sm] {
 			if (const auto session = g_sessionWeak.get()) {
 				injectOnMain(session, { sm }, /*live=*/true);
 			}
@@ -1820,6 +1857,21 @@ bool MirrorDraft(not_null<History*> history, const TextWithTags &text) {
 	SaveDraftsLocal();
 	ScheduleStateFlush("drafts");
 	return true;
+}
+
+// Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер): черновики, журнал состояния, сведения групп v2
+// прежнего — прочь из памяти. Иначе первое подключение журнала следующего аккаунта (BuildLocalState →
+// stateAttach) переносило в его журнал черновики и отложенные прежнего.
+void ResetStateAccountData() {
+	g_drafts.clear();
+	g_draftsLoaded = false;
+	g_stateAttached = false;
+	g_stateApplying = false;
+	g_stateFlushQueued = false;
+	g_stateTimer = nullptr;
+	g_stateSyncedSaved.clear();
+	g_migrationTriedAt.clear();
+	g_groupPublic.clear();
 }
 
 } // namespace Parvane

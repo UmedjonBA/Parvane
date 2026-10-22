@@ -106,6 +106,17 @@ std::int64_t cloudPlainSize(std::int64_t cipherSize) {
     return std::max<std::int64_t>(0, body - total * kBlobTagBytes);
 }
 
+std::int64_t cipherCeiling(std::int64_t plain) {
+    if (plain <= 0) return 0;
+    // blobcrypt::maxCipherSize: заголовок + тег на каждый чанк самого мелкого допустимого размера (1 КиБ)
+    return plain + kBlobHeaderBytes + kBlobTagBytes * (plain / 1024 + 1);
+}
+
+json withMaxBytes(json blob, std::int64_t plain) {
+    if (plain > 0 && blob.is_object()) blob[kBlobMaxBytesKey] = cipherCeiling(plain);
+    return blob;
+}
+
 // ── ссылки: чистая часть ─────────────────────────────────────────────────────────
 
 LinkPlan buildLinkPlan(const json &nodes, const std::optional<std::string> &nodeId, const std::string &rootName) {
@@ -392,10 +403,10 @@ DownloadResult CloudFiles::download(const std::string &container, const std::str
     return result;
 }
 
-std::optional<std::string> CloudFiles::open(const json &node) {
+std::optional<std::string> CloudFiles::open(const json &node, std::int64_t maxPlainBytes) {
     if (!node.contains("blob") || !node["blob"].is_object()) return std::nullopt;
     try {
-        return drive_.blobs().download(withDomain(node["blob"]));
+        return drive_.blobs().download(withMaxBytes(withDomain(node["blob"]), maxPlainBytes));
     } catch (const std::exception &e) {
         drive_.transport().log(std::string("облако: файл для просмотра не скачан: ") + e.what());
         return std::nullopt;
@@ -412,7 +423,8 @@ std::optional<std::string> CloudFiles::thumb(const json &node) {
     json ref{{"fileId", str(th, "fileId")}, {"capability", str(th, "capability")}, {"key", str(blob, "key")},
              {"nonce", str(th, "nonce")}, {"uploader", str(blob, "uploader")}};
     try {
-        return drive_.blobs().download(withDomain(ref));
+        // Миниатюру указывает любой редактор совместной папки — ссылкой на любой свой блоб: потолок
+        return drive_.blobs().download(withMaxBytes(withDomain(ref), kThumbMaxBytes));
     } catch (const std::exception &) {
         return std::nullopt;
     }

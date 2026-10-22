@@ -214,6 +214,8 @@ std::string prettyJson(const std::string &text);
 
 // --- облако в архиве (exportRun.ts) ---
 
+// Глубина папок облака в архиве не больше этого (ревью 21 окт 2026: цепочка папок от редактора совместной папки)
+inline constexpr int kExportMaxDepth = 64;
 struct ExportTreeFile {
     cloud::CloudNode node;
     std::string path;

@@ -64,6 +64,9 @@ std::string offerPlannerView(const std::string &kind);
 
 // ── «Принять» / «Отклонить» (web `api/parvane/taskOffers.ts`, `addTaskOfferToPlan` в `messages.ts`) ──────────
 
+// Длительность задания от собеседника больше этого (неделя) не принимается (ревью 21 окт 2026, 2.3)
+inline constexpr int kOfferMaxMinutes = 7 * 24 * 60;
+
 // Поля карточки из содержимого `task_offer` (`name`, `description`, `steps`, `day`, `start`, `minutes`, `due`)
 struct OfferFields {
     std::string name;

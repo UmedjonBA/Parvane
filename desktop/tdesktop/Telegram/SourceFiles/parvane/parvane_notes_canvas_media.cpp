@@ -1,7 +1,11 @@
 // Parvane fork: картинки и превью карточек холста «Знаний» (spec 029, T063) — см. parvane_notes_canvas_media.h.
 #include "parvane/parvane_notes_canvas_media.h"
 
+#include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_sections_data.h"
+
+#include <parvane/sections/cloud_files.h>
+#include <parvane/storecrypt.h>
 
 #include "base/timer.h"
 #include "settings.h"
@@ -26,6 +30,8 @@ constexpr auto kThumbsMax = 300;
 constexpr auto kPreviewsMax = 100;
 // Картинка крупнее этого по длинной стороне уменьшается при чтении: экрану больше не нужно
 constexpr auto kFullMaxSide = 2560;
+// Миниатюра (JPEG до 320 px у web): больше не держим — их в памяти до kThumbsMax
+constexpr auto kThumbMaxSide = 640;
 
 struct State {
 	rpl::event_stream<> updated;
@@ -59,29 +65,29 @@ State &S();
 	return (blob && blob->is_object()) ? blob->value("fileId", std::string()) : std::string();
 }
 
+// Ревью 21 окт 2026 (2.2): картинка уменьшается уже при разборе (JPEG), заявленная огромной — не разбирается
 [[nodiscard]] QImage Decode(const std::string &bytes, int maxSide) {
-	auto image = QImage::fromData(
-		reinterpret_cast<const uchar*>(bytes.data()),
-		int(bytes.size()));
+	auto image = DecodeImageBounded(
+		QByteArray::fromRawData(bytes.data(), int(bytes.size())),
+		maxSide);
 	if (image.isNull()) {
 		return image;
-	}
-	if (maxSide > 0 && std::max(image.width(), image.height()) > maxSide) {
-		image = image.scaled(maxSide, maxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 	}
 	return image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 
-// Прочитать блоб узла в рабочем потоке и разобрать картинку там же
+// Прочитать блоб узла в рабочем потоке и разобрать картинку там же. `maxPlainBytes` — потолок скачивания
+// (миниатюру указывает любой редактор совместной папки — ссылкой на любой блоб)
 void ReadImage(
 		const std::string &container,
 		const std::string &nodeId,
 		const json &blob,
 		int maxSide,
+		std::int64_t maxPlainBytes,
 		std::function<void(QImage)> done) {
 	Sections::Ask<QImage>([=](Sections::Workers &w) {
 		try {
-			const auto read = w.drive.readText(container, nodeId, blob);
+			const auto read = w.drive.readText(container, nodeId, cloud::withMaxBytes(blob, maxPlainBytes));
 			if (!read || !read->contains("text") || !(*read)["text"].is_string()) {
 				return QImage();
 			}
@@ -158,7 +164,7 @@ QImage Thumb(const std::string &container, const cloud::CloudNode &node) {
 		return QImage();
 	}
 	s.thumbsLoading.insert(key);
-	ReadImage(container, node.id, *node.thumb, 0, [key](QImage image) {
+	ReadImage(container, node.id, *node.thumb, kThumbMaxSide, cloud::kThumbMaxBytes, [key](QImage image) {
 		auto &s = S();
 		s.thumbsLoading.erase(key);
 		if (image.isNull()) {
@@ -190,7 +196,7 @@ void Acquire(const std::string &container, const cloud::CloudNode &node) {
 	const auto blob = *node.blob;
 	const auto nodeId = node.id;
 	s.cache->acquire(fileId, [=](notes::CanvasImageDone done) {
-		ReadImage(container, nodeId, blob, kFullMaxSide, [done](QImage image) {
+		ReadImage(container, nodeId, blob, kFullMaxSide, notes::kCanvasImageMaxBytes, [done](QImage image) {
 			if (image.isNull()) {
 				done(std::nullopt);
 				return;
@@ -302,10 +308,11 @@ const Preview *LinkPreview(const std::string &url) {
 notes::CanvasImageQuality ImageQuality() {
 	auto &s = S();
 	if (!s.quality) {
-		auto f = QFile(QualityPath());
+		// Ревью 21 окт 2026 (L9): хелперы хранилища — под оградой стирания при выходе
+		const auto raw = parvane::storecrypt::readFile(QFile::encodeName(QualityPath()).toStdString());
 		auto stored = std::optional<std::string>();
-		if (f.open(QIODevice::ReadOnly)) {
-			stored = QString::fromUtf8(f.readAll()).trimmed().toStdString();
+		if (!raw.empty()) {
+			stored = QString::fromUtf8(QByteArray::fromStdString(raw)).trimmed().toStdString();
 		}
 		s.quality = notes::parseCanvasImageQuality(stored);
 	}
@@ -315,10 +322,9 @@ notes::CanvasImageQuality ImageQuality() {
 void SetImageQuality(notes::CanvasImageQuality quality) {
 	auto &s = S();
 	s.quality = quality;
-	auto f = QFile(QualityPath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(QByteArray::fromStdString(notes::canvasImageQualityValue(quality)));
-	}
+	(void)parvane::storecrypt::writeFile(
+		QFile::encodeName(QualityPath()).toStdString(),
+		notes::canvasImageQualityValue(quality));
 	s.updated.fire({});
 }
 

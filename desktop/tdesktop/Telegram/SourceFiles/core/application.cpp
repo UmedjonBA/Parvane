@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "parvane/parvane_client.h" // Parvane fork
 #include "parvane/parvane_space.h" // Parvane fork: шрифты «Пространство»
+#include "parvane/parvane_sections_data.h" // Parvane fork: остановка потока разделов при выходе
 #include "data/data_abstract_structure.h"
 #include "data/data_channel.h"
 #include "data/data_forum.h"
@@ -109,6 +110,116 @@ namespace {
 constexpr auto kQuitPreventTimeoutMs = crl::time(1500);
 constexpr auto kAutoLockTimeoutLateMs = crl::time(3000);
 constexpr auto kClearEmojiImageSourceTimeout = 10 * crl::time(1000);
+
+// Parvane: из tg:// работают только разделы, которые есть в Parvane: настройки (кроме тупиков Telegram ниже),
+// «Чаты»/«Контакты»/«Новая группа», «поделиться ссылкой» и @ник уже известного собеседника. Остальное
+// (Premium, Stars, подарки, Business, прокси, паспорт, язык с сервера Telegram, invoice, privatepost, звонки по
+// ссылке, вступление по инвайтам Telegram…) — тупики MTProto: не открываем, показываем тост.
+[[nodiscard]] bool ParvaneLocalUrlAllowed(
+		const QString &command,
+		Window::SessionController *controller) {
+	const auto lower = command.toLower();
+	const auto end = lower.indexOf(QRegularExpression(u"[?#]"_q));
+	auto path = (end >= 0) ? lower.left(end) : lower;
+	while (path.endsWith('/')) {
+		path.chop(1);
+	}
+	const auto under = [&](const QString &prefix) {
+		return (path == prefix) || path.startsWith(prefix + '/');
+	};
+	if (path == u"msg_url"_q) {
+		return true;
+	} else if (path == u"resolve"_q) {
+		if (!controller) {
+			return false;
+		}
+		const auto params = qthelp::url_parse_params(
+			command.mid(command.indexOf('?') + 1),
+			qthelp::UrlParamNameTransform::ToLower);
+		const auto domain = params.value(u"domain"_q);
+		return (params.size() == 1)
+			&& !domain.isEmpty()
+			&& (controller->session().data().peerByUsername(domain)
+				!= nullptr);
+	} else if (under(u"chats"_q) || under(u"contacts"_q)) {
+		return !under(u"chats/emoji-status"_q);
+	} else if (under(u"new"_q)) {
+		return under(u"new/group"_q);
+	} else if (!under(u"settings"_q)) {
+		return false;
+	}
+	static const auto kDenied = std::vector<QString>{
+		u"settings/premium"_q,
+		u"settings/stars"_q,
+		u"settings/ton"_q,
+		u"settings/send-gift"_q,
+		u"settings/business"_q,
+		u"settings/edit/add-account"_q,
+		u"settings/faq"_q,
+		u"settings/ask-question"_q,
+		u"settings/features"_q,
+		u"settings/data/proxy"_q,
+		u"settings/proxy"_q,
+		u"settings/passkeys"_q,
+		u"settings/privacy/passkey"_q,
+		u"settings/websites"_q,
+		u"settings/privacy/active-websites"_q,
+		u"settings/auto_delete"_q,
+		u"settings/auto-delete"_q,
+		u"settings/privacy/auto-delete"_q,
+		u"settings/privacy/self-destruct"_q,
+		u"settings/privacy/self_destruct"_q,
+		u"settings/devices/auto-terminate"_q,
+		u"settings/sessions/auto-terminate"_q,
+		u"settings/privacy/data-settings"_q,
+		u"settings/privacy/top_peers"_q,
+		u"settings/privacy/bots_payment"_q,
+		u"settings/privacy/archive-and-mute"_q,
+		u"settings/privacy/archive_and_mute"_q,
+		u"settings/privacy/hide-read-time"_q,
+		u"settings/privacy/last-seen/hide-read-time"_q,
+		u"settings/privacy/messages"_q,
+		u"settings/privacy/set-price"_q,
+		u"settings/privacy/remove-fee"_q,
+		u"settings/privacy/gifts"_q,
+		u"settings/privacy/accepted-types"_q,
+		u"settings/privacy/show-icon"_q,
+		u"settings/privacy/saved-music"_q,
+		u"settings/privacy/birthday"_q,
+		u"settings/privacy/always"_q,
+		u"settings/privacy/never"_q,
+		u"settings/privacy/last-seen/always"_q,
+		u"settings/privacy/last-seen/never"_q,
+		u"settings/privacy/calls/always"_q,
+		u"settings/privacy/calls/never"_q,
+		u"settings/privacy/invites/always"_q,
+		u"settings/privacy/invites/never"_q,
+		u"settings/appearance/themes/create"_q,
+		u"settings/themes/create"_q,
+		u"settings/chat/themes-create"_q,
+		u"settings/appearance/stickers-and-emoji/trending"_q,
+		u"settings/appearance/stickers-and-emoji/archived"_q,
+		u"settings/my-profile/gifts"_q,
+		u"settings/my-profile/posts"_q,
+		u"settings/my-profile/archived-posts"_q,
+		u"settings/emoji-status"_q,
+		u"settings/main-menu/emoji-status"_q,
+		u"settings/folders/show-tags"_q,
+		u"settings/folders/add-recommended"_q,
+		u"settings/login_email"_q,
+		u"settings/change_number"_q,
+		u"settings/edit/change-number"_q,
+		u"settings/channel"_q,
+		u"settings/edit/channel"_q,
+		u"settings/language"_q, // облачный список языков Telegram
+	};
+	for (const auto &denied : kDenied) {
+		if (under(denied)) {
+			return false;
+		}
+	}
+	return true;
+}
 
 LaunchState GlobalLaunchState/* = LaunchState::Running*/;
 
@@ -240,6 +351,9 @@ Application::~Application() {
 	closeAdditionalWindows();
 
 	_private->proxyRotation = nullptr;
+	// Parvane: поток разделов — статический std::thread; без join при выходе ~thread звал std::terminate (SIGABRT
+	// на каждом закрытии, дампы 19–21 окт 2026)
+	Parvane::Sections::Shutdown();
 	_domain->finish();
 
 	Local::finish();
@@ -1196,6 +1310,16 @@ bool Application::openLocalUrl(const QString &url, QVariant context) {
 			: _lastActivePrimaryWindow
 			? _lastActivePrimaryWindow->sessionController()
 			: nullptr;
+		// Parvane: белый список tg:// (см. ParvaneLocalUrlAllowed).
+		if (!ParvaneLocalUrlAllowed(command, controller)) {
+			if (controller) {
+				controller->showToast(
+					tr::lng_parvane_link_unsupported(tr::now));
+			} else if (const auto window = activeWindow()) {
+				window->showToast(tr::lng_parvane_link_unsupported(tr::now));
+			}
+			return true;
+		}
 		if (TryRouterForLocalUrl(controller, command)) {
 			return true;
 		}

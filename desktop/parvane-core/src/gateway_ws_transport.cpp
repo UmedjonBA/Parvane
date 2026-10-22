@@ -1,5 +1,6 @@
 // Parvane fork: WebSocket/TLS-транспорт к gateway (см. .h).
 #include "parvane/gateway_ws_transport.h"
+#include "parvane/dev_hooks.h"
 
 #include <nlohmann/json.hpp>
 #include <openssl/err.h>
@@ -20,6 +21,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <random>
@@ -95,6 +97,18 @@ std::string sslError() {
 }
 
 } // namespace
+
+namespace {
+std::atomic<bool> g_envCaDirsAllowed{true}; // Android (JNI) задаёт PARVANE_CA_DIRS; desktop выключает
+} // namespace
+
+void GatewayWsTransport::setEnvCaDirsAllowed(bool allowed) {
+    g_envCaDirsAllowed.store(allowed);
+}
+
+bool GatewayWsTransport::envCaDirsAllowed() {
+    return g_envCaDirsAllowed.load();
+}
 
 GatewayWsTransport::GatewayWsTransport() = default;
 
@@ -194,7 +208,8 @@ void GatewayWsTransport::tlsConnect(const std::string &host) {
     // /system/etc/security/cacerts — имена файлов по СТАРОМУ хэшу, поэтому не
     // hash-dir, а каждый файл в стор. JNI задаёт PARVANE_CA_DIRS (через ':').
     // Без этого на телефоне «TLS handshake» → «сервер недоступен» (10 сен 2026).
-    if (const char *dirs = std::getenv("PARVANE_CA_DIRS"); dirs && *dirs) {
+    const char *dirs = envCaDirsAllowed() ? std::getenv("PARVANE_CA_DIRS") : nullptr;
+    if (dirs && *dirs) {
         X509_STORE *store = SSL_CTX_get_cert_store(ctx_);
         std::string all = dirs;
         size_t start = 0;
@@ -219,9 +234,12 @@ void GatewayWsTransport::tlsConnect(const std::string &host) {
     // Проверка сертификата: системные CA + имя хоста. PARVANE_WSS_INSECURE=1 —
     // только для dev-стенда с самоподписанным сертификатом и ТОЛЬКО в сборке с
     // -DPARVANE_DEV=ON (P-45): в релизе переменная окружения проверку не отключит.
+    // Ревью 21 окт 2026: и в dev — только при PARVANE_DEV_HOOKS=1 и хосте на loopback.
 #ifdef PARVANE_DEV
     const char *insecure = std::getenv("PARVANE_WSS_INSECURE");
-    const bool verify = !(insecure && *insecure && std::strcmp(insecure, "0") != 0);
+    const bool insecureAllowed = devhooks::flagOn(std::getenv("PARVANE_DEV_HOOKS"))
+        && devhooks::isLoopbackHost(host);
+    const bool verify = !(insecureAllowed && insecure && *insecure && std::strcmp(insecure, "0") != 0);
 #else
     const bool verify = true;
 #endif

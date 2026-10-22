@@ -451,30 +451,9 @@ void SetupBirthday(
 		targets->birthday = birthdayButton;
 	}
 
-	const auto key = Api::UserPrivacy::Key::Birthday;
-	session->api().userPrivacy().reload(key);
-	auto isExactlyContacts = session->api().userPrivacy().value(
-		key
-	) | rpl::map([=](const Api::UserPrivacy::Rule &value) {
-		return (value.option == Api::UserPrivacy::Option::Contacts)
-			&& value.always.peers.empty()
-			&& !value.always.premiums
-			&& value.never.peers.empty();
-	}) | rpl::distinct_until_changed();
-
+	// Parvane: день рождения в identity без настройки видимости (как web) — «Кто видит» (ключ Birthday MTProto) убрано.
+	(void)session;
 	Ui::AddSkip(container);
-	Ui::AddDividerText(container, rpl::conditional(
-		std::move(isExactlyContacts),
-		tr::lng_settings_birthday_contacts(
-			lt_link,
-			tr::lng_settings_birthday_contacts_link(
-				tr::url(u"internal:edit_privacy_birthday"_q)),
-			tr::marked),
-		tr::lng_settings_birthday_about(
-			lt_link,
-			tr::lng_settings_birthday_about_link(
-				tr::url(u"internal:edit_privacy_birthday"_q)),
-			tr::marked)));
 }
 
 [[maybe_unused]] void SetupChatAutomation(
@@ -1226,7 +1205,7 @@ void AccountsList::rebuild() {
 		std::max(1, count - premiumLimit));
 
 	_addAccount->toggle(
-		(count < ::Main::Domain::kPremiumMaxAccounts),
+		(count < _controller->session().domain().maxAccounts()), // Parvane: один аккаунт — кнопки нет
 		anim::type::instant);
 
 	_reorder->start();
@@ -1296,6 +1275,9 @@ void BuildInformationSection(SectionBuilder &builder) {
 		};
 	});
 	builder.add(nullptr, [] {
+		if (Core::App().domain().accounts().size() >= Core::App().domain().maxAccounts()) {
+			return SearchEntry(); // Parvane: один аккаунт на процесс — в поиске настроек пункта нет
+		}
 		return SearchEntry{
 			.id = u"edit/add-account"_q,
 			.title = tr::lng_menu_add_account(tr::now),

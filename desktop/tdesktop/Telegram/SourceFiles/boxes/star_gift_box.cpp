@@ -2335,6 +2335,11 @@ std::vector<not_null<UserData*>> CollectGiftFrequentUsers(
 
 void ChooseStarGiftRecipient(
 		not_null<Window::SessionController*> window) {
+	// Parvane: подарков (Stars/Premium, MTProto payments) нет.
+	if (!window->session().premiumPossible()) {
+		window->showToast(tr::lng_premium_unavailable(tr::now));
+		return;
+	}
 	const auto session = &window->session();
 	session->promoSuggestions().requestContactBirthdays([=] {
 		auto controller = std::make_unique<Controller>(
@@ -2368,6 +2373,11 @@ void ShowStarGiftBox(
 		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer) {
 	if (controller->showFrozenError()) {
+		return;
+	}
+	// Parvane: подарков (Stars/Premium, MTProto payments) нет.
+	if (!controller->session().premiumPossible()) {
+		controller->showToast(tr::lng_premium_unavailable(tr::now));
 		return;
 	}
 

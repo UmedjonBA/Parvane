@@ -2,6 +2,7 @@
 // (по проверке на `it`, имена — как в web). Строку карточки собирает здесь тестовый «UI» с английскими названиями
 // дней и месяцев и ключами вместо текстов — как `lang`-заглушка web, — и сверяет с ожиданием web буква в букву.
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -163,8 +164,20 @@ static void respond() {
           "нулевая оценка — нет оценки; не объект — пусто");
 }
 
+// Ревью безопасности 21 окт 2026 (2.3): длительность от собеседника — до int(value) проверка диапазона
+static void minutesRange() {
+    const auto of = [](nlohmann::json v) { return OfferFields::fromContent(nlohmann::json{{"name", "x"}, {"minutes", v}}).minutes; };
+    check(of(90) == 90 && of(kOfferMaxMinutes) == kOfferMaxMinutes, "минуты в пределах — как есть");
+    check(!of(4294967295u) && !of(2147483648.0) && !of(1e300) && !of(kOfferMaxMinutes + 1),
+          "uint32 4294967295, 2^31, 1e300, больше недели — нет длительности (без переполнения int)");
+    check(!of(0) && !of(-5) && !of(std::numeric_limits<double>::quiet_NaN()), "0, отрицательное, NaN — нет");
+    check(offerEventEnd("10:00", 2147483647) == "23:59" && offerEventEnd("bad", 30) == "00:30",
+          "конец события: без переполнения и исключения при негодном начале");
+}
+
 int main() {
     std::printf("=== parvane-core task offer tests (без стека) ===\n");
+    minutesRange();
     card();
     planKey();
     respond();

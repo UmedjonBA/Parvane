@@ -1027,7 +1027,8 @@ void SessionsContent::Inner::setupContent() {
 			(_1 + _2) > 0));
 	incompleteWrap->toggleOn(_incomplete->itemsCount() | rpl::map(_1 > 0));
 	listWrap->toggleOn(_list->itemsCount() | rpl::map(_1 > 0));
-	ttlWrap->toggleOn(_list->itemsCount() | rpl::map(_1 > 0));
+	// Parvane: «Автоматически завершать сеансы» — account.setAuthorizationTTL MTProto, в Parvane нет (как web).
+	ttlWrap->toggleOn(rpl::single(false));
 	placeholder->toggleOn(_list->itemsCount() | rpl::map(_1 == 0));
 
 	Ui::ResizeFitChild(this, content);

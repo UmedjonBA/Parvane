@@ -74,6 +74,11 @@ void HttpConnection::connectToServer(
 		const bytes::vector &protocolSecret,
 		int16 protocolDcId,
 		bool protocolForFiles) {
+	// Parvane (ревью 21 окт 2026): ни одного HTTP-запроса MTProto к DC Telegram — страховка к
+	// SessionPrivate::connectToServer.
+	if (const auto parvaneNoMtproto = true) {
+		return;
+	}
 	_address = address;
 	connect(
 		&_manager,

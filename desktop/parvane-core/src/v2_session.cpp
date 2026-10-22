@@ -1426,35 +1426,27 @@ std::string Session::uploadBlob(const std::string &bytes, const std::string &cap
     return fileId;
 }
 
-std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32, const std::string &domainIn) {
+std::string Session::downloadBlobCap(const std::string &fileId, const std::string &capability32, const std::string &domainIn,
+                                     std::size_t maxBytes) {
     const auto domain = domainIn == domainNow() ? std::string() : domainIn;
     if (capability32.size() != 32) throw std::runtime_error("v2: capability");
     if (!ready_) throw V2Error("ERROR_CODE_UNAVAILABLE");
-    constexpr std::uint32_t kBatch = 256;
-    std::string out;
-    std::uint32_t total = 0;
-    for (std::uint32_t first = 0;; first += kBatch) {
-        // Одноразовое анонимное соединение на запрос: серверу не связать
-        // скачивание ни с аккаунтом, ни с другими запросами (D-05).
-        Connection conn(cfg_.gatewayUrl);
-        conn.open(kChannelAnonymous, cfg_.clientVersion);
-        const auto got = conn.requestStream("cloud.blob.download_cap",
-            encodeMessage("parvane.cloud.v1.DownloadCapRequest",
-                          json{{"file_id", fileId},
-                               {"capability", toBase64(capability32)},
-                               {"first_chunk", first},
-                               {"chunk_count", kBatch}}), 60000, domain);
-        conn.close();
-        const auto meta = decodeMessage("parvane.cloud.v1.DownloadCapResponse", got.body);
-        total = meta.value("chunks", std::uint32_t(0));
-        for (std::uint32_t index = first; index < std::min(total, first + kBatch); ++index) {
-            const auto it = got.chunks.find(index);
-            if (it == got.chunks.end()) throw V2Error("ERROR_CODE_UNAVAILABLE");
-            out += it->second;
-        }
-        if (first + kBatch >= total) break;
-    }
-    return out;
+    // Ревью 21 окт (2.2): с потолком — отказ по заявленному размеру до приёма чанков (downloadBlobChunks)
+    return downloadBlobChunks("cloud.blob.download_cap", maxBytes,
+        [&](const Connection::StreamLimits &limits) {
+            // Одноразовое анонимное соединение на запрос: серверу не связать
+            // скачивание ни с аккаунтом, ни с другими запросами (D-05).
+            Connection conn(cfg_.gatewayUrl);
+            conn.open(kChannelAnonymous, cfg_.clientVersion);
+            auto got = conn.requestStream("cloud.blob.download_cap",
+                encodeMessage("parvane.cloud.v1.DownloadCapRequest",
+                              json{{"file_id", fileId},
+                                   {"capability", toBase64(capability32)},
+                                   {"first_chunk", limits.firstChunk},
+                                   {"chunk_count", limits.chunkCount}}), 60000, domain, limits);
+            conn.close();
+            return got;
+        });
 }
 
 // ── новое устройство без других устройств (T130, FR-066) ───────────────────

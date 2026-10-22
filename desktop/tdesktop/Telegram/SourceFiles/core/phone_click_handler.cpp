@@ -331,6 +331,13 @@ void PhoneClickHandler::onClick(ClickContext context) const {
 			TextForMimeData::Simple(phone.trimmed()));
 	}, &st::menuIconCopy);
 
+	// Parvane: поиск аккаунта по номеру (contacts.resolvePhone) и «Добавить в контакты» по номеру — MTProto,
+	// аккаунты Parvane адресуются ником. Остаётся «Копировать номер».
+	if (constexpr auto kParvaneResolvePhone = false; !kParvaneResolvePhone) {
+		menu->popup(pos);
+		return;
+	}
+
 	auto resolvePhoneAction = base::make_unique_q<ResolvePhoneAction>(
 		menu->menu(),
 		menu->st(),

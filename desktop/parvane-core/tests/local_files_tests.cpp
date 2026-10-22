@@ -174,6 +174,97 @@ int main() {
         sc::setKey("");
     }
 
+    // ── изоляция аккаунтов (21 окт, вечер): адрес как часть имени файла ──
+    {
+        namespace af = parvane::accountfiles;
+        check(af::isValidAddress("alice@local") && af::isValidAddress("bob.k-2@parvane.duckdns.org")
+                  && af::isValidAddress("carol_x@localhost:20443") && af::isValidAddress("_svc@a.b"),
+              "адрес: обычные адреса годятся");
+        check(!af::isValidAddress("") && !af::isValidAddress("alice") && !af::isValidAddress("a@b@c")
+                  && !af::isValidAddress("../x@local") && !af::isValidAddress("a/b@local")
+                  && !af::isValidAddress("a@../../etc") && !af::isValidAddress("a@local/x")
+                  && !af::isValidAddress("a..b@local") && !af::isValidAddress(".a@local")
+                  && !af::isValidAddress("a@-x.local") && !af::isValidAddress("a@x..local")
+                  && !af::isValidAddress("a@local:") && !af::isValidAddress("a@local:99999x")
+                  && !af::isValidAddress(std::string("a\nb@local")) && !af::isValidAddress("a b@local")
+                  && !af::isValidAddress("a\\b@local") && !af::isValidAddress(std::string(65, 'a') + "@local"),
+              "адрес: пути, `..`, лишние `@`, пробелы и управляющие символы — отказ");
+        check(af::safePart("carol@localhost:20443") == "carol@localhost_20443" && af::safePart("a/b") == "a_b",
+              "адрес → часть имени файла");
+    }
+
+    // ── изоляция аккаунтов: файлы без адреса в имени достаются только своему аккаунту ──
+    {
+        namespace af = parvane::accountfiles;
+        const auto tdata = base / "accounts" / "tdata";
+        fs::create_directories(tdata);
+        sc::setKey(sc::deriveKey("accounts-test"));
+        sc::allowWrites();
+        const auto file = [&](const char *name) { return (tdata / name).string(); };
+        // Установка до маркера: файлы alice, её журнал истории самый свежий
+        sc::writeFile(file("parvane-history-alice@local.jsonl"), "{}");
+        sc::writeFile(file("parvane-scheduled.json"), "[{\"id\":\"s1\",\"text\":\"от alice\"}]");
+        sc::writeFile(file("parvane-drafts.json"), "{\"self\":\"alice@local\"}");
+        fs::create_directories(tdata / "parvane-media-cache");
+        sc::writeFile(file("parvane-media-cache/f1"), "jpeg alice");
+        put(tdata / "parvane-background", "pattern");
+        // Прежний владелец без маркера, вход тем же адресом — файлы остаются (данные пользователя не теряются)
+        auto r = af::adopt(tdata.string(), "alice@local");
+        check(r.legacy && !r.switched && fs::exists(file("parvane-scheduled.json"))
+                  && af::owner(tdata.string()) == "alice@local",
+              "установка до маркера: вход своим адресом — файлы его, маркер поставлен");
+        // Выход без стирания (протухший JWT) → вход bob: файлы alice уезжают в её каталог
+        r = af::adopt(tdata.string(), "bob@local");
+        check(r.switched && r.previousOwner == "alice@local" && r.stashed == 3 && r.failed.empty(),
+              "вход другим адресом: файлы прежнего унесены");
+        check(!fs::exists(file("parvane-scheduled.json")) && !fs::exists(file("parvane-drafts.json"))
+                  && !fs::exists(tdata / "parvane-media-cache"),
+              "вход другим адресом: в tdata нет отложенных, черновиков и кэша медиа прежнего");
+        const auto aliceHome = fs::path(af::stashDir(tdata.string(), "alice@local"));
+        check(sc::readFile((aliceHome / "parvane-scheduled.json").string()).find("от alice") != std::string::npos
+                  && mode(aliceHome) == 0700,
+              "файлы прежнего — в его каталоге (0700), шифром");
+        check(fs::exists(tdata / "parvane-background") && af::owner(tdata.string()) == "bob@local",
+              "настройки устройства на месте, маркер — входящего");
+        // bob пишет своё; повторный вход alice возвращает её файлы, bob — уезжают
+        sc::writeFile(file("parvane-scheduled.json"), "[{\"id\":\"s2\",\"text\":\"от bob\"}]");
+        r = af::adopt(tdata.string(), "alice@local");
+        check(r.switched && r.restored == 3 && r.stashed == 1
+                  && sc::readFile(file("parvane-scheduled.json")).find("от alice") != std::string::npos
+                  && sc::readFile(file("parvane-media-cache/f1")) == "jpeg alice",
+              "повторный вход прежнего: его файлы вернулись");
+        check(sc::readFile((fs::path(af::stashDir(tdata.string(), "bob@local")) / "parvane-scheduled.json").string())
+                      .find("от bob") != std::string::npos,
+              "файлы bob — в его каталоге");
+        // Тот же адрес — ничего не двигается
+        r = af::adopt(tdata.string(), "alice@local");
+        check(!r.switched && !r.legacy && fs::exists(file("parvane-scheduled.json")), "тот же адрес — без переноса");
+        // Смена ника: маркер переходит к новому адресу
+        af::renameOwner(tdata.string(), "alice@local", "alice2@local");
+        check(af::owner(tdata.string()) == "alice2@local", "смена ника: маркер переходит");
+        // Недопустимый адрес — ничего не трогается
+        r = af::adopt(tdata.string(), "../evil@local");
+        check(!r.switched && fs::exists(file("parvane-scheduled.json")), "недопустимый адрес — без переноса");
+        // Без ключа хранилища маркер не пишется — свои файлы входящего не возвращаются
+        sc::setKey("");
+        sc::setRequired(true);
+        r = af::adopt(tdata.string(), "bob@local");
+        check(r.switched && r.restored == 0 && !fs::exists(file("parvane-scheduled.json")),
+              "без ключа: прежнее унесено, своё не возвращено");
+        sc::setRequired(false);
+        // Установка до маркера, вход чужим адресом: журнал истории свежее у alice — её файлы уезжают
+        const auto legacy = base / "legacy" / "tdata";
+        fs::create_directories(legacy);
+        sc::setKey(sc::deriveKey("accounts-test"));
+        sc::writeFile((legacy / "parvane-history-alice@local.jsonl").string(), "{}");
+        sc::writeFile((legacy / "parvane-notify.json").string(), "{\"exceptions\":{\"carol@local\":{}}}");
+        r = af::adopt(legacy.string(), "bob@local");
+        check(r.legacy && r.switched && r.previousOwner == "alice@local" && !fs::exists(legacy / "parvane-notify.json")
+                  && fs::exists(fs::path(af::stashDir(legacy.string(), "alice@local")) / "parvane-notify.json"),
+              "установка до маркера, вход другим адресом: файлы прежнего унесены");
+        sc::setKey("");
+    }
+
     // ── п.2: строки журнала клиента ──
     {
         lp::forget();
@@ -184,8 +275,18 @@ int main() {
         check(lp::secret("привет") != "привет" && lp::secret("привет").find("привет") == std::string::npos,
               "релиз: содержимое скрыто");
         lp::setDevBuild(true);
-        check(lp::keepOnDisk("Parvane: x", false) && lp::secret("привет") == "привет", "dev: как раньше");
+        check(lp::keepOnDisk("Parvane: x", false), "dev: строки клиента на диск — как раньше");
+        check(lp::secret("привет") != "привет", "dev без PARVANE_LOG_CONTENT: содержимое скрыто (21 окт 2026)");
+        lp::setLogContent(true);
+        check(lp::secret("привет") == "привет", "dev с PARVANE_LOG_CONTENT: содержимое как есть");
+        lp::remember("Parvane: msg: привет");
+        const auto rep = lp::reportLines();
+        check(rep.size() == 1 && rep.front().find("привет") == std::string::npos,
+              "dev с содержимым: отчёт об ошибке без журнала");
         lp::setDevBuild(false);
+        check(lp::secret("привет") != "привет", "релиз: флаг содержимого не действует");
+        lp::setLogContent(false);
+        lp::forget();
         for (int i = 0; i < 600; ++i) lp::remember("Parvane: строка " + std::to_string(i));
         const auto r = lp::recent();
         check(r.size() == lp::kRingCapacity && r.front() == "Parvane: строка 100" && r.back() == "Parvane: строка 599",

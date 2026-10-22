@@ -349,7 +349,8 @@ object_ptr<TabbedSelector::InnerFooter> StickersListWidget::createFooter() {
 
 	_footer->openSettingsRequests(
 	) | rpl::on_next([=] {
-		const auto onlyFeatured = !_isMasks && _mySets.empty();
+		// Parvane: «Популярных» (MTProto) нет — окно наборов всегда на своих наборах.
+		const auto onlyFeatured = false;
 		_show->showBox(Box<StickersBox>(
 			_show,
 			(onlyFeatured
@@ -2593,15 +2594,19 @@ base::unique_qptr<Ui::PopupMenu> StickersListWidget::fillContextMenu(
 			document,
 			Data::FileOriginStickerSet(Data::Stickers::FavedSetId, 0));
 	};
+	// Parvane: «Избранное» стикеров (messages.faveSticker) и окно набора (messages.getStickerSet) — MTProto.
+	constexpr auto kParvaneStickerCloud = false;
 	const auto isFaved = document->owner().stickers().isFaved(document);
-	menu->addAction(
-		(isFaved
-			? tr::lng_faved_stickers_remove
-			: tr::lng_faved_stickers_add)(tr::now),
-		toggleFavedSticker,
-		isFaved ? &icons->menuUnfave : &icons->menuFave);
+	if (kParvaneStickerCloud) {
+		menu->addAction(
+			(isFaved
+				? tr::lng_faved_stickers_remove
+				: tr::lng_faved_stickers_add)(tr::now),
+			toggleFavedSticker,
+			isFaved ? &icons->menuUnfave : &icons->menuFave);
+	}
 
-	if (_features.openStickerSets) {
+	if (kParvaneStickerCloud && _features.openStickerSets) {
 		menu->addAction(tr::lng_context_pack_info(tr::now), [=, id = set.id] {
 			showStickerSetBox(document, id);
 		}, &icons->menuStickerSet);
@@ -2690,25 +2695,31 @@ base::unique_qptr<Ui::PopupMenu> FillStickerSetContextMenu(
 			},
 			&st::menuIconAdd);
 	}
-	menu->addAction(
-		tr::lng_chat_link_share(tr::now),
-		[=] { FastShareLink(show, url); },
-		&st::menuIconShare);
-	menu->addAction(
-		tr::lng_context_copy_link(tr::now),
-		[=] {
-			TextUtilities::SetClipboardText(TextForMimeData::Simple(url));
-			show->showToast(isEmoji
-				? tr::lng_stickers_copied_emoji(tr::now)
-				: tr::lng_stickers_copied(tr::now));
-		},
-		&st::menuIconLink);
+	// Parvane: ссылка addstickers/… ведёт в Telegram (MTProto) — «Поделиться» и «Копировать ссылку» убраны.
+	if (constexpr auto kParvaneSetLinks = false; kParvaneSetLinks) {
+		menu->addAction(
+			tr::lng_chat_link_share(tr::now),
+			[=] { FastShareLink(show, url); },
+			&st::menuIconShare);
+		menu->addAction(
+			tr::lng_context_copy_link(tr::now),
+			[=] {
+				TextUtilities::SetClipboardText(TextForMimeData::Simple(url));
+				show->showToast(isEmoji
+					? tr::lng_stickers_copied_emoji(tr::now)
+					: tr::lng_stickers_copied(tr::now));
+			},
+			&st::menuIconLink);
+	}
 	if (installed) {
 		menu->addSeparator();
 		menu->addAction(
 			tr::lng_stickers_remove_pack_confirm(tr::now),
 			[=] { remove(setId); },
 			&st::menuIconDelete);
+	}
+	if (menu->empty()) {
+		return nullptr; // Parvane: без ссылок меню может остаться пустым
 	}
 	return menu;
 }

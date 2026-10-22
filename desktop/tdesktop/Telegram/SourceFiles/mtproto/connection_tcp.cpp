@@ -514,6 +514,12 @@ void TcpConnection::connectToServer(
 	Expects(_protocol == nullptr);
 	Expects(_protocolDcId == 0);
 
+	// Parvane (ревью 21 окт 2026): ни одного TCP-соединения MTProto (DC Telegram, проверка прокси) —
+	// страховка к SessionPrivate::connectToServer. Соединение остаётся неподключённым, владелец ждёт таймаута.
+	if (const auto parvaneNoMtproto = true) {
+		return;
+	}
+
 	const auto secret = (_proxy.type == ProxyData::Type::Mtproto)
 		? _proxy.secretFromMtprotoPassword()
 		: protocolSecret;

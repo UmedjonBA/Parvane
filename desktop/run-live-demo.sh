@@ -38,7 +38,8 @@ echo "бэкенд на 4222: $(ss -ltn 2>/dev/null | grep -c ':4222')"
 
 CE=(DISPLAY=:0 WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000
 	QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1
-	PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_REAL_MEDIA=1)
+	PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_REAL_MEDIA=1
+	PARVANE_DEV_HOOKS=1 PARVANE_LOG_CONTENT=1) # хуки — только с флагом и при gateway на loopback (21 окт 2026)
 
 # Два окна, залогинены, БЕЗ авто-звонка. Звонок начинаешь сам как в Telegram:
 # в окне alice найди через поиск "bob@local", открой чат, нажми кнопку звонка

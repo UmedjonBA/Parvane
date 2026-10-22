@@ -7,6 +7,7 @@
 #include "parvane/parvane_local_files.h"
 #include "parvane/parvane_note_embed.h"
 #include "parvane/parvane_note_markdown.h"
+#include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_sections_data.h"
 
 #include <parvane/sections/cloud_model.h>
@@ -16,6 +17,7 @@
 #include "boxes/abstract_box.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/layers/generic_box.h"
 #include "window/window_controller.h"
 #include "styles/style_layers.h"
@@ -27,6 +29,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 
 namespace Parvane {
 namespace {
@@ -50,6 +53,11 @@ using nlohmann::json;
 	return nullptr;
 }
 
+// Файл статьи больше этого в облако читателя не сохраняется (как предел медиа чата); всего больше второго —
+// с вопросом (ревью 21 окт 2026, 2.2)
+constexpr auto kArticleSaveFileMaxBytes = int64_t(512) * 1024 * 1024;
+constexpr auto kArticleSaveConfirmBytes = int64_t(20) * 1024 * 1024;
+
 [[nodiscard]] std::string VaultName() {
 	return IsRussianUi() ? std::string("Знания") : std::string("Knowledge");
 }
@@ -67,7 +75,8 @@ void ShowToast(const QString &text) {
 	}
 }
 
-// Файлы статьи — во временный каталог под именами облака, затем загрузкой в папку хранилища
+// Файлы статьи — по одному во временный каталог под именами облака, затем загрузкой в папку хранилища. По одному:
+// в памяти одновременно один файл (прежде — все сразу); каждый — с потолком заявленного размера
 void UploadArticleFiles(const json &media, const SaveResult &saved) {
 	if (!media.is_array() || media.empty() || saved.rootId.empty()) {
 		return;
@@ -78,34 +87,39 @@ void UploadArticleFiles(const json &media, const SaveResult &saved) {
 		return;
 	}
 	struct Pending {
-		int left = 0;
+		std::size_t next = 0;
 		QStringList paths;
+		Fn<void()> step;
 	};
 	const auto state = std::make_shared<Pending>();
-	state->left = int(media.size());
 	const auto rootId = saved.rootId;
 	const auto folder = saved.folder;
-	const auto finishOne = [=] {
-		if (--state->left == 0 && !state->paths.isEmpty()) {
-			Cloud::UploadFiles(rootId, folder, state->paths);
+	const auto names = saved.names;
+	state->step = [=] {
+		if (state->next >= media.size()) {
+			if (!state->paths.isEmpty()) {
+				Cloud::UploadFiles(rootId, folder, state->paths);
+			}
+			state->step = nullptr; // разорвать цикл ссылок
+			return;
 		}
-	};
-	for (const auto &m : media) {
+		const auto &m = media[state->next++];
 		const auto file = m.value("filename", std::string("file"));
-		const auto i = saved.names.find(file);
-		const auto target = QString::fromStdString(i != saved.names.end() ? i->second : file);
-		Knowledge::LoadChatMediaBytes(m, [=](std::optional<QByteArray> bytes) {
+		const auto i = names.find(file);
+		const auto target = QString::fromStdString(i != names.end() ? i->second : file);
+		Knowledge::LoadChatMediaBytes(m, kArticleSaveFileMaxBytes, [=](std::optional<QByteArray> bytes) {
 			if (bytes) {
-				auto safe = target;
-				safe.replace('/', '_');
-				const auto path = QDir(dir).filePath(safe);
+				const auto path = QDir(dir).filePath(SafeLocalName(target));
 				if (WriteTempFile(path, *bytes)) {
 					state->paths.push_back(path);
 				}
 			}
-			finishOne();
+			if (state->step) {
+				state->step();
+			}
 		});
-	}
+	};
+	state->step();
 }
 
 void SaveArticle(const std::string &title, const std::string &markdown, const json &media) {
@@ -174,6 +188,59 @@ void SaveArticle(const std::string &title, const std::string &markdown, const js
 	});
 }
 
+// Ревью 21 окт 2026 (2.2): «Сохранить в заметки» скачивает вложения в память и заливает в облако читателя (его
+// квота). Как web — только файлы, встроенные в текст; крупнее kArticleSaveFileMaxBytes — не сохраняются; всего
+// больше kArticleSaveConfirmBytes — сначала вопрос «с файлами / только текст» с их размером.
+void AskAndSaveArticle(const std::string &title, const std::string &markdown, const json &media) {
+	auto files = json::array();
+	auto total = int64_t(0);
+	auto skipped = false;
+	auto seen = std::set<std::string>();
+	for (const auto &name : md::embedNames(markdown)) {
+		const auto found = FindMedia(media, name);
+		if (!found || !seen.insert(found->value("filename", std::string())).second) {
+			continue;
+		}
+		const auto declared = (found->contains("size_bytes") && (*found)["size_bytes"].is_number())
+			? (*found)["size_bytes"].get<double>()
+			: 0.;
+		if (declared > double(kArticleSaveFileMaxBytes)) {
+			skipped = true;
+			continue;
+		}
+		total += int64_t(std::max(declared, 0.));
+		files.push_back(*found);
+	}
+	if (skipped) {
+		ShowToast(tr::lng_parvane_article_files_skipped(
+			tr::now,
+			lt_size,
+			Knowledge::FormatSize(kArticleSaveFileMaxBytes)));
+	}
+	if (total <= kArticleSaveConfirmBytes || files.empty()) {
+		SaveArticle(title, markdown, files);
+		return;
+	}
+	const auto window = Core::App().activeWindow();
+	if (!window) {
+		return;
+	}
+	window->show(Ui::MakeConfirmBox({
+		.text = tr::lng_parvane_article_save_big(tr::now, lt_size, Knowledge::FormatSize(total)),
+		.confirmed = [=](Fn<void()> close) {
+			SaveArticle(title, markdown, files);
+			close();
+		},
+		.cancelled = [=](Fn<void()> close) {
+			SaveArticle(title, markdown, json::array());
+			close();
+		},
+		.confirmText = tr::lng_parvane_article_save_with_files(tr::now),
+		.cancelText = tr::lng_parvane_article_save_text_only(tr::now),
+		.strictCancel = true,
+	}));
+}
+
 } // namespace
 
 void ShowArticleWindow(const nlohmann::json &content) {
@@ -215,8 +282,8 @@ void ShowArticleWindow(const nlohmann::json &content) {
 			return Knowledge::CreateEmbedView(parent, std::move(source));
 		}));
 		box->addButton(tr::lng_parvane_article_save(), [=] {
-			SaveArticle(title, markdown, media);
 			box->closeBox();
+			AskAndSaveArticle(title, markdown, media);
 		});
 		box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 	}));

@@ -1,0 +1,19 @@
+lng_parvane_link_blocked
+This link can't be opened: only web and email links are allowed.
+Эту ссылку открыть нельзя: открываются только веб-адреса и почта.
+
+lng_parvane_article_save_big
+Files of this article will take {size} in your Cloud. Save them too?
+Файлы статьи займут {size} в вашем облаке. Сохранить их тоже?
+
+lng_parvane_article_save_with_files
+Save with files
+Сохранить с файлами
+
+lng_parvane_article_save_text_only
+Text only
+Только текст
+
+lng_parvane_article_files_skipped
+Files larger than {size} were not saved.
+Файлы больше {size} не сохранены.

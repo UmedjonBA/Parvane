@@ -64,7 +64,7 @@ object_ptr<Ui::RpWidget> CreateIntroSettings(
 	Ui::AddDivider(result);
 	Ui::AddSkip(result);
 	SetupLanguageButton(window, result);
-	SetupConnectionType(window, &window->account(), result);
+	// Parvane: «Тип соединения» — прокси MTProto, на транспорт Parvane (WSS) не влияет (как в «Продвинутых»).
 	Ui::AddSkip(result);
 	if (HasUpdate()) {
 		Ui::AddDivider(result);
@@ -102,16 +102,7 @@ object_ptr<Ui::RpWidget> CreateIntroSettings(
 		Ui::AddSkip(result);
 	}
 
-	Ui::AddDivider(result);
-	Ui::AddSkip(result);
-
-	AddButtonWithIcon(
-		result,
-		tr::lng_settings_faq(),
-		st::settingsButtonNoIcon
-	)->addClickHandler([] {
-		OpenFaq(nullptr);
-	});
+	// Parvane: «Частые вопросы» вели на telegram.org/faq — убрано.
 
 	return result;
 }

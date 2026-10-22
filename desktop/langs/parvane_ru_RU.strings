@@ -6130,7 +6130,7 @@
 "lng_premium_summary_top_about" = "**Больше свободы** и **десятки эксклюзивных функций** с подпиской **Parvane Premium**.";
 "lng_premium_summary_user_about" = "Подписчики Parvane Premium имеют эксклюзивный доступ к множеству дополнительных функций.";
 "lng_premium_summary_user_title" = "{user} является обладателем подписки Parvane Premium.";
-"lng_premium_unavailable" = "Это функция для пользователей с **Parvane Premium**.\n\nК сожалению, подписка **Parvane Premium** недоступна в Вашем регионе.";
+"lng_premium_unavailable" = "В Parvane нет подписок: эта возможность недоступна, а пределы одинаковы для всех.";
 "lng_premium_unlock_emoji" = "Получить анимированные эмодзи";
 "lng_premium_unlock_reactions" = "Получить уникальные реакции";
 "lng_premium_unlock_status" = "Получить эмодзи-статусы";
@@ -8933,6 +8933,16 @@
 "lng_parvane_chat_mode_off_you" = "Вы выключили усиленную приватность";
 "lng_parvane_upgrade_available" = "Доступна новая версия Parvane. Обновите приложение — эта версия скоро перестанет работать.";
 "lng_parvane_upgrade_required" = "Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.";
+"lng_parvane_sticker_set_unknown" = "Этого набора стикеров нет на устройстве";
+"lng_parvane_link_blocked" = "Эту ссылку открыть нельзя: открываются только веб-адреса и почта.";
+"lng_parvane_article_save_big" = "Файлы статьи займут {size} в вашем облаке. Сохранить их тоже?";
+"lng_parvane_article_save_with_files" = "Сохранить с файлами";
+"lng_parvane_article_save_text_only" = "Только текст";
+"lng_parvane_article_files_skipped" = "Файлы больше {size} не сохранены.";
+"lng_parvane_code_resend" = "Отправить код ещё раз";
+"lng_parvane_code_resent" = "Новый код отправлен";
+"lng_parvane_other_account_signed_in" = "На этом устройстве уже выполнен вход в другой аккаунт. Сначала выйдите из него.";
+"lng_parvane_link_unsupported" = "Эта ссылка ведёт к функции Telegram, которой в Parvane нет.";
 "lng_parvane_logout_progress" = "Выход с этого устройства. Его данные будут стёрты через несколько секунд.";
 "lng_parvane_logout_pending" = "Выход из прежнего аккаунта ещё не завершён. Повторите через несколько секунд.";
 "lng_parvane_notes_embed_play" = "Воспроизвести";

@@ -248,4 +248,11 @@ void DeleteGroup(const QString &groupId) {
 	}
 }
 
+// Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер): учётные данные TURN выданы под JWT прежнего
+void ResetDevicesAccountData() {
+	std::lock_guard<std::mutex> lk(g_iceMutex);
+	g_iceCached.clear();
+	g_iceCachedUntil = 0;
+}
+
 } // namespace Parvane

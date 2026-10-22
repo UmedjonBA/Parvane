@@ -2757,6 +2757,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_chat_mode_off_you" = "You disabled enhanced privacy";
 "lng_parvane_upgrade_available" = "A new version of Parvane is available. Please update the app — this version will stop working soon.";
 "lng_parvane_upgrade_required" = "This version of Parvane is no longer supported. Update the app to continue.";
+"lng_parvane_sticker_set_unknown" = "This sticker set is not on this device";
+"lng_parvane_link_blocked" = "This link can't be opened: only web and email links are allowed.";
+"lng_parvane_article_save_big" = "Files of this article will take {size} in your Cloud. Save them too?";
+"lng_parvane_article_save_with_files" = "Save with files";
+"lng_parvane_article_save_text_only" = "Text only";
+"lng_parvane_article_files_skipped" = "Files larger than {size} were not saved.";
+"lng_parvane_code_resend" = "Send the code again";
+"lng_parvane_code_resent" = "A new code has been sent";
+"lng_parvane_other_account_signed_in" = "Another account is already signed in on this device. Sign out of it first.";
+"lng_parvane_link_unsupported" = "This link leads to a Telegram feature that Parvane doesn't have.";
 "lng_parvane_logout_progress" = "Signing out of this device. Its data will be erased in a few seconds.";
 "lng_parvane_logout_pending" = "Signing out of the previous account is still in progress. Try again in a few seconds.";
 "lng_parvane_notes_embed_play" = "Play";
@@ -4275,7 +4285,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_soon_badge" = "Soon";
 
 "lng_premium_success" = "You've successfully subscribed to Telegram Premium!";
-"lng_premium_unavailable" = "This feature requires subscription to **Telegram Premium**.\n\nUnfortunately, **Telegram Premium** is not available in your region.";
+"lng_premium_unavailable" = "Parvane has no subscriptions: this feature isn't available, and limits are the same for everyone.";
 
 // Upgraded Stories.
 "lng_premium_stories_subtitle_order" = "Priority Order";

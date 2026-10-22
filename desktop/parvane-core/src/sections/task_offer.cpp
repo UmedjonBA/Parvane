@@ -4,6 +4,8 @@
 #include "planner_util.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 namespace parvane::sections::planner {
@@ -130,7 +132,9 @@ OfferFields OfferFields::fromContent(const nlohmann::json &content) {
     result.due = text("due");
     if (const auto i = content.find("minutes"); i != content.end() && i->is_number()) {
         const auto value = i->get<double>();
-        if (value > 0) result.minutes = int(value); // `content.minutes || undefined`
+        // `content.minutes || undefined`; ревью 21 окт 2026 (2.3): число от собеседника — до int(value) проверить
+        // диапазон (uint32 4294967295 в int — переполнение), больше недели — не длительность задания
+        if (std::isfinite(value) && value > 0 && value <= kOfferMaxMinutes) result.minutes = int(value);
     }
     return result;
 }
@@ -169,9 +173,10 @@ std::string offerKind(const OfferFields &offer) {
 }
 
 std::string offerEventEnd(const std::string &start, std::optional<int> minutes) {
-    const auto from = std::stoi(start.substr(0, 2)) * 60 + std::stoi(start.substr(3, 2));
-    const auto length = (minutes && *minutes > 0) ? *minutes : 60;
-    return clock(std::min(from + length, 1439));
+    // Начало — «ЧЧ:ММ» (offerKind проверил); иное — с полуночи, без исключения stoi
+    const auto from = isClock(start) ? std::stoi(start.substr(0, 2)) * 60 + std::stoi(start.substr(3, 2)) : 0;
+    const auto length = (minutes && *minutes > 0) ? std::int64_t(*minutes) : std::int64_t(60);
+    return clock(int(std::min<std::int64_t>(from + length, 1439)));
 }
 
 nlohmann::json offerPlanChange(const std::string &uuid, const std::string &chat, const OfferFields &offer,

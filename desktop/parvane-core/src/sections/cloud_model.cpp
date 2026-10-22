@@ -5,6 +5,7 @@
 #include <cmath>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "unicode_lite.h"
 
@@ -183,13 +184,17 @@ std::vector<CloudNode> pathOf(const std::vector<CloudNode> &nodes, const std::op
         const auto it = byId.find(*want);
         if (it != byId.end()) current = it->second;
     }
-    while (current && path.size() <= nodes.size()) {
-        path.insert(path.begin(), *current);
+    // Ревью 21 окт 2026: дерево совместной папки правит любой редактор — цикл родителей обрывается на повторе,
+    // путь собирается с конца и разворачивается (вставка в начало на цепочке в тысячи папок — квадрат)
+    std::unordered_set<const CloudNode *> seen;
+    while (current && seen.insert(current).second) {
+        path.push_back(*current);
         const auto p = parentOf(*current);
         if (!p) break;
         const auto it = byId.find(*p);
         current = it != byId.end() ? it->second : nullptr;
     }
+    std::reverse(path.begin(), path.end());
     return path;
 }
 
@@ -402,19 +407,43 @@ std::map<std::string, FolderStats> folderStats(const std::vector<CloudNode> &nod
     for (const auto &n : nodes) byId[n.id] = &n;
     std::map<std::string, FolderStats> stats;
     const bool hasService = std::any_of(nodes.begin(), nodes.end(), isServiceNode);
+    // Дети по id родителя (только существующего): размер поддерева считается одним обходом снизу вверх.
+    // Ревью 21 окт 2026: прежде размер каждого узла поднимался по всей цепочке предков — на цепочке либо цикле
+    // из десятков тысяч папок (их задаёт любой редактор совместной папки) — квадрат и секунды на каждый показ.
+    std::unordered_map<std::string, std::vector<const CloudNode *>> children;
     for (const auto &n : nodes) {
         const auto p = parentOf(n);
         if (!p) continue;
         if (!n.trashed && !(hasService && isServiceNode(n))) stats[*p].count += 1;
-        if (!n.size) continue;
-        auto it = byId.find(*p);
-        const CloudNode *ancestor = it != byId.end() ? it->second : nullptr;
-        for (size_t guard = 0; ancestor && guard <= nodes.size(); ++guard) {
-            stats[ancestor->id].size += n.size;
-            const auto ap = parentOf(*ancestor);
-            if (!ap) break;
-            it = byId.find(*ap);
-            ancestor = it != byId.end() ? it->second : nullptr;
+        if (byId.count(*p)) children[*p].push_back(&n);
+    }
+    // Итеративный обход в глубину от корней (без родителя либо с несуществующим родителем): субтотал id —
+    // сумма размеров всех потомков. Узлы цикла от корня недостижимы — их размеры не суммируются.
+    std::unordered_map<std::string, int64_t> subtotal;
+    std::unordered_set<std::string> entered;
+    for (const auto &[id, node] : byId) {
+        const auto p = parentOf(*node);
+        if (p && byId.count(*p)) continue; // не корень
+        if (!entered.insert(id).second) continue;
+        std::vector<std::pair<std::string, size_t>> stack{{id, 0}};
+        while (!stack.empty()) {
+            auto &[current, next] = stack.back();
+            const auto it = children.find(current);
+            if (it != children.end() && next < it->second.size()) {
+                const auto &child = it->second[next++]->id;
+                if (entered.insert(child).second) stack.push_back({child, 0});
+                continue;
+            }
+            int64_t sum = 0;
+            if (it != children.end()) {
+                for (const auto *c : it->second) {
+                    const auto sub = subtotal.find(c->id);
+                    sum += c->size + (sub != subtotal.end() ? sub->second : 0);
+                }
+            }
+            subtotal[current] = sum;
+            if (sum) stats[current].size += sum;
+            stack.pop_back();
         }
     }
     return stats;
@@ -435,6 +464,53 @@ FileKind kindOfFile(std::string_view mime, std::string_view name) {
     const auto bare = u::trim(mime.substr(0, semi));
     if (startsWith(mime, "text/") || kTextMimes.count(bare)) return FileKind::Text;
     return FileKind::Other;
+}
+
+bool safeToOpenExternally(std::string_view mime, std::string_view name) {
+    const auto extension = getExtension(name);
+    const auto byName = kPhotoExtensions.count(extension) ? FileKind::Photo
+        : kVideoExtensions.count(extension) ? FileKind::Video
+        : kAudioExtensions.count(extension) ? FileKind::Audio
+        : FileKind::Other;
+    if (byName == FileKind::Other) return false;
+    const auto semi = mime.find(';');
+    const auto bare = u::toLower(u::trim(mime.substr(0, semi)));
+    if (bare.empty()) return true;
+    const auto byMime = (startsWith(bare, "image/") && bare != "image/svg+xml") ? FileKind::Photo
+        : startsWith(bare, "video/") ? FileKind::Video
+        : startsWith(bare, "audio/") ? FileKind::Audio
+        : FileKind::Other;
+    return byMime == byName;
+}
+
+std::string safeLocalName(std::string_view name) {
+    std::string out;
+    out.reserve(name.size());
+    for (const char c : name) {
+        const auto b = static_cast<unsigned char>(c);
+        out.push_back((b < 0x20 || b == 0x7f || c == '/' || c == '\\') ? '_' : c);
+    }
+    // Ведущие точки — скрытый файл либо «..»
+    for (auto &c : out) {
+        if (c != '.') break;
+        c = '_';
+    }
+    bool blank = true;
+    for (const char c : out) {
+        if (c != '_' && c != ' ') {
+            blank = false;
+            break;
+        }
+    }
+    if (blank) return "file";
+    if (out.size() <= kLocalNameMaxBytes) return out;
+    // Длинное имя: укоротить основу по границе знака UTF-8, расширение (до 16 байт) оставить
+    const auto dot = out.rfind('.');
+    const auto extension = (dot != std::string::npos && out.size() - dot <= 17) ? out.substr(dot) : std::string();
+    auto stem = out.substr(0, kLocalNameMaxBytes - extension.size());
+    while (!stem.empty() && (static_cast<unsigned char>(stem.back()) & 0xC0) == 0x80) stem.pop_back();
+    if (!stem.empty() && (static_cast<unsigned char>(stem.back()) & 0x80)) stem.pop_back(); // начало знака
+    return stem + extension;
 }
 
 std::string fileTypeLabel(std::string_view name) {

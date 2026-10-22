@@ -39,6 +39,12 @@ ConfigLoader::ConfigLoader(
 }
 
 void ConfigLoader::load() {
+	// Parvane (ревью 21 окт 2026): help.getConfig и перебор DC/«особых» адресов (DNS-over-HTTPS Google/Mozilla,
+	// Firebase) ходили к Telegram и Google каждые секунды. Конфиг MTProto форку не нужен — UI живёт на сохранённом/
+	// встроенном (как при CLIENT_PARVANE_NO_MTPROTO); загрузчик ничего не шлёт.
+	if (const auto parvaneNoMtproto = true) {
+		return;
+	}
 	if (!_instance->isKeysDestroyer()) {
 		sendRequest(_instance->mainDcId());
 		_enumDCTimer.callOnce(kEnumerateDcTimeout);

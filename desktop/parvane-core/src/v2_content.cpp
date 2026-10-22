@@ -7,6 +7,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -980,6 +981,63 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     in.kind = Incoming::Kind::Stub;
     in.content = unsupportedContent();
     return in;
+}
+
+std::optional<ReportCheck> validateModReport(
+    const json &content,
+    const std::string &reporter,
+    const std::function<std::vector<std::string>(const std::string &group)> &membersOf,
+    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup) {
+    constexpr std::size_t kMaxMessages = 50;
+    constexpr std::size_t kMaxText = 1000;
+    if (!content.is_object() || content.value("kind", std::string()) != "mod_report" || reporter.empty()) {
+        return std::nullopt;
+    }
+    const auto group = content.contains("report_group") && content["report_group"].is_object()
+        ? content["report_group"] : json::object();
+    const auto id = group.contains("id") && group["id"].is_string() ? group["id"].get<std::string>() : std::string();
+    const auto hex = b64ToHex(id);
+    if (hex.size() != 32) {
+        return std::nullopt;
+    }
+    ReportCheck out;
+    out.group = groupAddress(hex);
+    const auto members = membersOf ? membersOf(out.group) : std::vector<std::string>();
+    if (std::find(members.begin(), members.end(), reporter) == members.end()) {
+        return std::nullopt;
+    }
+    if (!content.contains("reported") || !content["reported"].is_array() || !lookup) {
+        return std::nullopt;
+    }
+    auto texts = std::vector<std::string>();
+    for (const auto &m : content["reported"]) {
+        if (out.opIds.size() >= kMaxMessages) break;
+        if (!m.is_object() || !m.contains("op_id") || !m["op_id"].is_string()) continue;
+        const auto op = m["op_id"].get<std::string>();
+        if (op.empty() || std::find(out.opIds.begin(), out.opIds.end(), op) != out.opIds.end()) continue;
+        const auto local = lookup(op);
+        if (!local || local->chat != out.group || local->author.empty()) continue;
+        out.opIds.push_back(op);
+        if (std::find(out.authors.begin(), out.authors.end(), local->author) == out.authors.end()) {
+            out.authors.push_back(local->author);
+        }
+        texts.push_back(local->text.empty() ? std::string("[media]") : local->text);
+    }
+    if (out.opIds.empty()) {
+        return std::nullopt;
+    }
+    out.text = "\xE2\x9A\xA0\xEF\xB8\x8F "; // ⚠️
+    for (std::size_t i = 0; i != texts.size(); ++i) {
+        if (i) out.text += " / ";
+        out.text += texts[i];
+    }
+    if (out.text.size() > kMaxText) {
+        auto cut = kMaxText;
+        while (cut > 0 && (static_cast<unsigned char>(out.text[cut]) & 0xC0) == 0x80) --cut; // граница UTF-8
+        out.text.resize(cut);
+        out.text += "\xE2\x80\xA6"; // …
+    }
+    return out;
 }
 
 } // namespace parvane::v2

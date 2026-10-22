@@ -36,6 +36,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/options.h"
 #include "boxes/abstract_box.h" // Ui::show().
 
+#include <parvane/local_files.h> // Parvane: logpriv::devBuild — коды только в dev-сборке
+
 #include <zlib.h>
 
 namespace Settings {
@@ -144,6 +146,11 @@ auto GenerateCodes() {
 		});
 	});
 	codes.emplace(u"testmode"_q, [](SessionController *window) {
+		// Parvane: отключено — тестовой среды MTProto нет, а addActivated заводил второй аккаунт в домене
+		// (один аккаунт на процесс, ревью 21 окт 2026, вечер)
+		if ((true)) {
+			return;
+		}
 		auto &domain = Core::App().domain();
 		if (domain.started()
 			&& (domain.accounts().size() == 1)
@@ -283,6 +290,20 @@ auto GenerateCodes() {
 		});
 	});
 #endif // Q_OS_MAC
+
+	// Parvane (ревью 21 окт 2026): в релизе секретные коды tdesktop не нужны и опасны — «debugmode» пишет строки
+	// клиента (адреса, имена групп, пути) на диск, «loadlang» подгружает любой языковой файл (подмена текста окна
+	// одобрения привязки), «endpoints»/«registertg»/… трогают MTProto и систему. Остаются «viewlogs» (открыть
+	// каталог журнала) и «testmode» (его поведение — отдельная правка). Dev-сборка — все коды, как прежде.
+	if (!parvane::logpriv::devBuild()) {
+		for (auto i = codes.begin(); i != codes.end();) {
+			if (i->first == u"viewlogs"_q || i->first == u"testmode"_q) {
+				++i;
+			} else {
+				i = codes.erase(i);
+			}
+		}
+	}
 
 	return codes;
 }

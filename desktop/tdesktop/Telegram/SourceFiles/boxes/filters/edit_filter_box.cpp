@@ -846,6 +846,8 @@ void EditFilterBox(
 		).withColorIndex(colorIndex);
 	};
 
+	// Parvane: ссылок-приглашений в папку (chatlist) нет — блок не строится.
+	if (constexpr auto kParvaneFilterLinks = false; kParvaneFilterLinks) {
 	Ui::AddSubsectionTitle(
 		content,
 		rpl::conditional(
@@ -933,6 +935,7 @@ void EditFilterBox(
 			state->hasLinks.value(),
 			tr::lng_filters_link_about_many(),
 			tr::lng_filters_link_about()));
+	} // Parvane: kParvaneFilterLinks
 
 	const auto show = box->uiShow();
 	const auto refreshPreviews = [=] {

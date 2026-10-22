@@ -20,6 +20,20 @@ static void testFiles() {
     check(drivePathOf(NODES, "scan") == "Документы/Сканы/паспорт.png", "путь от корня: вложенный файл");
     check(drivePathOf(NODES, "root-file") == "смета.xlsx", "путь от корня: файл в корне");
     check(drivePathOf(NODES, "нет").empty(), "путь от корня: нет узла — пусто");
+    // Ревью 21 окт 2026: цикл родителей — путь обрывается на повторе, цепочка 30 000 папок — без квадрата
+    {
+        std::vector<cloud::CloudNode> nodes;
+        for (int i = 0; i < 30000; ++i) {
+            cloud::CloudNode n;
+            n.id = "f" + std::to_string(i);
+            n.kind = "folder";
+            n.parent = "f" + std::to_string((i + 29999) % 30000);
+            n.name = "a";
+            nodes.push_back(n);
+        }
+        const auto path = drivePathOf(nodes, "f5");
+        check(path.size() == 30000 * 2 - 1, "цикл родителей: каждая папка в пути один раз");
+    }
     check(idOf(resolveDrivePath(NODES, "Документы/Сканы/паспорт.png")) == "scan", "файл по пути: вложенный");
     check(idOf(resolveDrivePath(NODES, "смета.xlsx")) == "root-file", "файл по пути: в корне");
     check(idOf(resolveDrivePath(NODES, "/Документы//Сканы/паспорт.png")) == "scan", "файл по пути: лишние «/»");

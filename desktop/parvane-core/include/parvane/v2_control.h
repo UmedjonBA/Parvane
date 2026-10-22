@@ -69,7 +69,8 @@ public:
     // линковки своему устройству). Возвращает file_id.
     std::string uploadBlob(const std::string &bytes, bool isPublic = false, std::size_t chunkBytes = 512 * 1024);
     // Скачать блоб, доступный аккаунту: свой, открытый либо с v1-грантом.
-    std::string downloadBlob(const std::string &fileId);
+    // maxBytes — потолок (0 — kMaxBlobDownloadBytes): больше — ERROR_CODE_LIMIT до приёма чанков (ревью 21 окт, 2.2).
+    std::string downloadBlob(const std::string &fileId, std::size_t maxBytes = 0);
     void deleteBlob(const std::string &fileId);
 
     void close();

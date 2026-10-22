@@ -216,8 +216,10 @@ public:
     // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение
     // на запрос (≤ 256 чанков). Бросает.
     // domain — сервер блоба (spec 028: вложение собеседника с другого сервера); пусто — свой.
+    // maxBytes — потолок шифртекста (0 — kMaxBlobDownloadBytes): больше — V2Error ERROR_CODE_LIMIT до приёма
+    // чанков (ревью 21 окт 2026, 2.2; потолок по содержимому — blobcrypt::maxCipherSize).
     std::string downloadBlobCap(const std::string &fileId, const std::string &capability32,
-                                const std::string &domain = std::string());
+                                const std::string &domain = std::string(), std::size_t maxBytes = 0);
 
     // ── новое устройство без других устройств (T130, FR-066) ──
     // Сессия ждёт линковку (needsLinking), а других устройств аккаунта нет.

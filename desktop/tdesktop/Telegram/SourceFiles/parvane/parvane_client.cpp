@@ -3,6 +3,8 @@
 #include "parvane/parvane_article_view.h"
 #include "parvane/parvane_local_files.h"
 #include "data/data_photo_media.h"
+#include "boxes/share_box.h" // хук PARVANE_AUTOFORWARD_MULTI: колбэк окна выбора чатов
+#include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
 #include <condition_variable>
 #include <thread>
 #include <deque>
@@ -103,6 +105,10 @@ std::unique_ptr<parvane::crypto::SigningKey> g_callKey;
 // на заглушке, без звука (найдено при проверке NAT-20, 21 окт 2026).
 [[nodiscard]] bool RealCallMedia() {
 #ifdef PARVANE_DEV
+	// Шлюз dev-хуков закрыт (dev-сборка не на стенде) — как релиз, настоящий звук (ревью 21 окт 2026)
+	if (!ParvaneDevHooksEnabled()) {
+		return true;
+	}
 	const char *rm = std::getenv("PARVANE_REAL_MEDIA");
 	return rm && *rm;
 #else
@@ -998,7 +1004,9 @@ void RememberBlobCap(const std::string &fileId, const std::string &capB64) {
 		return;
 	}
 	std::lock_guard<std::mutex> lk(g_blobCapMutex);
-	g_blobCaps[fileId] = capB64;
+	// Ревью 21 окт, вечер (L6): первая запись побеждает — чужое сообщение с тем же file_id и другим секретом не
+	// подменяет секрет вложения, уже показанного из другого чата (иначе оно перестаёт открываться)
+	g_blobCaps.emplace(fileId, capB64);
 }
 
 // Секреты из содержимого сообщения: вложение, pack_ref стикера, emoji_packs.
@@ -1124,12 +1132,18 @@ nlohmann::json UploadPreviewPhoto(const std::string &imageB64) {
 
 // Скачать блоб: известен секрет — анонимным каналом v2 (CAP-1); иначе свой блоб (владелец) — соединением
 // управления.
-[[nodiscard]] BlobDownload DownloadChatBlob(const std::string &fileId) {
+[[nodiscard]] BlobDownload DownloadChatBlob(
+		const std::string &fileId,
+		std::size_t maxBytes) {
 	if (const auto cap = BlobCapOf(fileId); !cap.empty()) {
 		if (const auto s = V2Ready()) {
 			BlobDownload d;
 			try {
-				d.bytes = s->downloadBlobCap(fileId, parvane::v2::fromBase64(cap));
+				d.bytes = s->downloadBlobCap(
+					fileId,
+					parvane::v2::fromBase64(cap),
+					std::string(),
+					maxBytes);
 				d.ok = true;
 			} catch (const std::exception &e) {
 				d.error = e.what();
@@ -1144,7 +1158,7 @@ nlohmann::json UploadPreviewPhoto(const std::string &imageB64) {
 		return d;
 	}
 	try {
-		d.bytes = c->downloadBlob(fileId);
+		d.bytes = c->downloadBlob(fileId, maxBytes);
 		d.ok = true;
 	} catch (const std::exception &e) {
 		d.error = e.what();
@@ -1741,7 +1755,13 @@ void StartV2Locked() {
 	cfg.log = [](const std::string &m) {
 		LOG(("Parvane: %1").arg(QString::fromStdString(m)));
 	};
-	cfg.onEvent = [](const parvane::json &ev) { HandleV2Event(ev); };
+	// События сессии — только пока её аккаунт текущий: сессия прежнего, дорабатывающая выход (leave) или
+	// останавливаемая, не наполняет память следующего (ревью 21 окт, вечер)
+	cfg.onEvent = [generation = AccountGeneration()](const parvane::json &ev) {
+		if (AccountGenerationIs(generation)) {
+			HandleV2Event(ev);
+		}
+	};
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
 	cfg.bundleHistory = [](const nlohmann::json &previous, bool force) {
 		return BuildBundleHistory(previous, force);
@@ -1825,7 +1845,13 @@ void sendTextAsync(
 	const auto to = toAddress.toStdString();
 	const auto body = text.toStdString();
 	const auto token = Token().toStdString();
+	const auto generation = AccountGeneration();
 	crl::async([=] {
+		// Текст прежнего аккаунта после выхода (и входа другим) не уходит от имени следующего (ревью 21 окт)
+		if (!AccountGenerationIs(generation)) {
+			LOG(("Parvane: sendText прежнего аккаунта — пропуск"));
+			return;
+		}
 		std::shared_ptr<parvane::v2::Control> t;
 		bool isGroup = false;
 		{
@@ -1963,7 +1989,11 @@ void sendInnerAsync(
 		const nlohmann::json &content,
 		const std::string &preId) {
 	const auto to = toAddress.toStdString();
+	const auto generation = AccountGeneration();
 	crl::async([=] {
+		if (!AccountGenerationIs(generation)) {
+			return; // содержимое прежнего аккаунта — не от имени следующего (ревью 21 окт)
+		}
 		try {
 			const auto pre = preId.empty()
 				? std::optional<std::string>{}
@@ -2075,6 +2105,9 @@ void SaveNotifyState() { // main
 }
 
 void LoadNotifyState() { // main
+	// Снимок — только с диска этого аккаунта (прежде дописывался к оставшемуся в памяти от прежнего)
+	g_notifyDefaults.clear();
+	g_notifyExceptions.clear();
 	const auto raw = StoreRead(NotifyStatePath());
 	if (raw.isEmpty()) {
 		return;
@@ -2184,6 +2217,7 @@ void LoadDialogState() { // main
 
 // Загрузить кэш. Звать ПОД g_sessionMutex (из StartSession).
 void LoadDecCacheLocked() {
+	g_decCache.clear(); // только этого аккаунта: DecCacheRemove переписывает файл всей картой
 	for (const auto &line : StoreReadLines(DecCachePath())) {
 		try {
 			const auto j = nlohmann::json::parse(line.toStdString());
@@ -2466,6 +2500,19 @@ QString ProfileLink(const QString &address) {
 
 // ── сессия ───────────────────────────────────────────────────────────────────
 void SetSelf(const QString &address, const QString &token) {
+	auto previous = QString();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		previous = g_selfAddress;
+	}
+	// Другой аккаунт без выхода (смена ника — тот же: MoveAccountLocal уже записал переход) — всё прежнего прочь
+	if (!previous.isEmpty() && previous != address && LatestAddress(previous) != address) {
+		LOG(("Parvane: вход другим адресом без выхода — сессия и состояние прежнего аккаунта сброшены"));
+		StopSession();
+		ResetAccountState("смена адреса");
+	}
+	// Файлы без адреса в имени (отложенные, папки, уведомления, кэш расшифровки…) — только этого аккаунта
+	AdoptAccountFiles(address);
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_selfAddress = address;
@@ -2818,17 +2865,22 @@ void OnAuthRejected(const QString &reason) {
 	}
 	LOG(("Parvane: авторизация отклонена (%1) — на экран входа; ключи и история "
 		"сохранены").arg(reason));
-	crl::on_main([] {
+	const auto generation = AccountGeneration();
+	crl::on_main([generation] {
+		g_authRejectHandling = false;
+		if (!AccountGenerationIs(generation)) {
+			return; // отказ токена прежнего аккаунта — не выход следующего (ревью 21 окт)
+		}
 		ClearLocalState();
 		if (const auto session = g_sessionWeak.get()) {
 			session->account().forcedLogOut();
 		}
-		g_authRejectHandling = false;
 	});
 }
 
 void StopSession() {
 	ResetLocationMaps(); // склейки карт и кэш тайлов — на сессию
+	EndCallsForLogout(); // отбой звонка — пока сессия v2 жива (ревью 21 окт, вечер: звонок переживал выход)
 	StopV2(); // до g_sessionMutex: рабочий поток v2 берёт его в обработчиках
 	Sections::OnSessionChanged(); // разделы отпускают прежнюю сессию
 	std::shared_ptr<parvane::v2::Control> control;
@@ -2876,6 +2928,8 @@ void ClearLocalState() {
 	LOG(("Parvane: выход — учётные данные %1; ключи и история СОХРАНЕНЫ "
 		"(повторный вход на этом устройстве вернёт переписку)")
 		.arg(removed ? u"удалены"_q : u"не найдены"_q));
+	// Память аккаунта — прочь: файлы остаются его (маркер владельца), вход другим уносит их в его каталог
+	ResetAccountState("выход без стирания");
 }
 
 namespace {
@@ -2936,6 +2990,8 @@ void LogOutAndWipe() {
 	}
 	// 0. Маркер «выход не завершён» — до всего остального: процесс могут закрыть или убить посреди выхода
 	parvane::localfiles::setLogoutPending(tdata);
+	// 0а. Звонок — отбой, пока сессия v2 ещё у клиента (ревью 21 окт, вечер: звонок переживал выход)
+	EndCallsForLogout();
 	// 1. Сессия v2 отцепляется от клиента, но не останавливается: запись выхода в журнал устройств ещё впереди
 	auto s = std::shared_ptr<parvane::v2::Session>();
 	{
@@ -2960,6 +3016,8 @@ void LogOutAndWipe() {
 	}
 	QFile::remove(cWorkingDir() + u"tdata/parvane-session.txt"_q);
 	LOG(("Parvane: выход — учётные данные удалены, устройство выходит из журнала устройств"));
+	// Память аккаунта — прочь до стирания файлов: следующий вход в этом окне не получит ничего прежнего
+	ResetAccountState("выход со стиранием");
 	if (const auto window = Core::App().activeWindow()) {
 		window->showToast(tr::lng_parvane_logout_progress(tr::now));
 	}
@@ -3051,6 +3109,18 @@ void StartupHousekeeping() {
 	}
 }
 
+// Код-пароль забыт на старте (Domain::resetWithForgottenPasscode без аккаунтов): локальный ключ будет новым —
+// файлы tdata/parvane-*, зашифрованные прежним, никто не прочтёт и не сотрёт. Стирание как при выходе (маркер
+// «выход не завершён» — до него); записи выхода в журнал устройств нет: ключи устройства под прежним ключом.
+void WipeAfterForgottenPasscode() {
+	const auto tdata = TdataDir().toStdString();
+	parvane::localfiles::setLogoutPending(tdata);
+	ResetAccountState("сброс забытого код-пароля");
+	const auto result = parvane::localfiles::wipeAccountData(tdata, kDeviceSettings);
+	WipeClientLogs();
+	LogWipeResult(result, "сброс забытого код-пароля");
+}
+
 namespace {
 Main::Account *g_wipeOnLogout = nullptr; // главный поток; только сравнение указателей
 } // namespace
@@ -3079,10 +3149,26 @@ void OnAccountLogOut(not_null<Main::Account*> account) {
 	return safe;
 }
 
+QString AccountFilePath(const QString &prefix, const QString &address, const QString &suffix) {
+	if (!parvane::accountfiles::isValidAddress(address.toStdString())) {
+		return QString();
+	}
+	const auto tdata = cWorkingDir() + u"tdata/"_q;
+	const auto path = tdata + prefix + SafeAddressPart(address) + suffix;
+	// Прежние версии писали сырой адрес (с `:` порта): переименовать под безопасное имя
+	const auto raw = tdata + prefix + address + suffix;
+	if (raw != path && !QFile::exists(path) && QFile::exists(raw)) {
+		QFile::rename(raw, path);
+	}
+	return path;
+}
+
 // Журнал истории прежнего адреса — под новым: свои сообщения прежнего адреса становятся своими нового.
 void MoveHistoryFile(const QString &oldAddress, const QString &newAddress) {
 	const auto from = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(oldAddress) + u".jsonl"_q;
 	const auto to = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(newAddress) + u".jsonl"_q;
+	// Ревью 21 окт, вечер (1.5): под замком журнала — дозапись с рабочего потока не теряется между чтением и записью
+	std::lock_guard<std::mutex> lock(g_historyFileMutex);
 	if (!QFile::exists(from)) {
 		return;
 	}
@@ -3119,6 +3205,12 @@ void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
 	if (oldAddress.isEmpty() || newAddress.isEmpty() || oldAddress == newAddress) {
 		return;
 	}
+	// Ревью 21 окт, вечер (1.6): адрес — часть имён файлов; новый пришёл от сервера — проверить формат
+	if (!parvane::accountfiles::isValidAddress(oldAddress.toStdString())
+		|| !parvane::accountfiles::isValidAddress(newAddress.toStdString())) {
+		LOG(("Parvane: перенос локальных данных отклонён — недопустимый адрес"));
+		return;
+	}
 	EnsureStoreKey();
 	NoteRename(oldAddress, newAddress);
 	const auto oldDir = V2StateDir(oldAddress);
@@ -3134,17 +3226,17 @@ void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
 			{ u"parvane-bundle-history-"_q, u".txt"_q },
 			{ u"parvane-domain-keys-"_q, u".json"_q } }) {
 		const auto from = tdata + prefix + SafeAddressPart(oldAddress) + suffix;
-		const auto rawFrom = tdata + prefix + oldAddress + suffix;
-		const auto to = tdata + prefix + newAddress + suffix;
-		for (const auto &source : { from, rawFrom }) {
-			if (QFile::exists(source) && !QFile::exists(to)) {
-				QFile::rename(source, to);
-			}
+		const auto to = tdata + prefix + SafeAddressPart(newAddress) + suffix;
+		if (QFile::exists(from) && !QFile::exists(to)) {
+			QFile::rename(from, to);
 		}
 	}
 	MoveSelfField(PrivacyPath(), oldAddress, newAddress);
 	MoveSelfField(L2CachePath(), oldAddress, newAddress);
 	MoveSelfField(StateSyncedPath(), oldAddress, newAddress);
+	MoveSelfField(cWorkingDir() + u"tdata/parvane-drafts.json"_q, oldAddress, newAddress);
+	// Файлы аккаунта без адреса в имени — за новым адресом (их каталог переехал вместе с parvane-v2-*)
+	parvane::accountfiles::renameOwner(TdataDir().toStdString(), oldAddress.toStdString(), newAddress.toStdString());
 	LOG(("Parvane: локальные данные перенесены: %1 → %2").arg(oldAddress, newAddress));
 }
 
@@ -3162,14 +3254,23 @@ QString RenameAccount(const QString &nick, const QString &password, const QStrin
 	}
 	const auto newAddress = QString::fromStdString(out.value("address", std::string()));
 	const auto token = QString::fromStdString(out.value("token", std::string()));
+	// Ревью 21 окт, вечер (1.6): адрес от сервера — часть имён файлов
+	if (!parvane::accountfiles::isValidAddress(newAddress.toStdString())) {
+		LOG(("Parvane: смена ника — сервер вернул недопустимый адрес, локальные данные не переносятся"));
+		return u"failed"_q;
+	}
 	crl::on_main([=] {
 		StopSession();
-		MoveAccountLocal(oldAddress, newAddress);
-		SetSelf(newAddress, token.isEmpty() ? Token() : token);
-		crl::async([] { StartSession(); });
-		if (const auto session = g_sessionWeak.get()) {
-			ensurePeerUser(session, IdForAddress(newAddress), newAddress);
-		}
+		// Каталог состояния переносится, только когда поток разделов отпустил прежний (1.5): иначе его запись
+		// уходила в старый каталог посреди переноса
+		Sections::DetachAccount([=] {
+			MoveAccountLocal(oldAddress, newAddress);
+			SetSelf(newAddress, token.isEmpty() ? Token() : token);
+			crl::async([] { StartSession(); });
+			if (const auto session = g_sessionWeak.get()) {
+				ensurePeerUser(session, IdForAddress(newAddress), newAddress);
+			}
+		});
 	});
 	return result;
 }
@@ -3258,15 +3359,48 @@ void ForwardPollCopy(const QString &toAddress, const QString &contentJson);
 void ForwardMediaReshared(const QString &toAddress, const QString &contentJson, int attempt = 0);
 
 void MirrorForward(PeerData *toPeer, not_null<HistoryItem*> item) {
-	if (!toPeer || !toPeer->isUser()) {
+	if (!toPeer) {
 		return;
 	}
-	const auto bare = std::uint64_t(peerToUser(toPeer->id).bare);
-	const auto address = AddressForId(bare);
+	// Адрес получателя: 1-на-1 — адрес собеседника, группа/канал — адрес группы
+	// (как MirrorOutgoing; пересылка в группу раньше молча не уходила).
+	QString address;
+	if (toPeer->isUser()) {
+		address = AddressForId(std::uint64_t(peerToUser(toPeer->id).bare));
+	} else if (toPeer->isChat()) {
+		const auto chatBare = std::uint64_t(peerToChat(toPeer->id).bare);
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(chatBare);
+	}
 	if (address.isEmpty()) {
+		LOG(("Parvane: пересылка не зеркалится — адрес получателя неизвестен"));
 		return;
 	}
 	const auto found = g_mediaContentByMsgId.constFind(item->id.bare);
+	// GROUP-2 на стороне отправителя: композер (GetErrorForSending) уже
+	// проверил права tdesktop; здесь — по сведениям группы, для каждого
+	// получателя пересылки в несколько чатов.
+	if (toPeer->isChat()) {
+		const auto info = g_groupInfo.constFind(address);
+		if (info != g_groupInfo.constEnd()) {
+			auto content = nlohmann::json{{"kind", "text"}};
+			if (item->media() && found != g_mediaContentByMsgId.constEnd()) {
+				content = nlohmann::json::parse(
+					found.value().toStdString(), nullptr, false);
+			} else if (!firstUrlInText(item->originalText().text).isEmpty()) {
+				content["webpage"] = nlohmann::json{{"url", "link"}};
+			}
+			if (!parvane::chatrules::canForwardToGroup(
+					GroupRoleOf(address, SelfAddress()).toStdString(),
+					info.value().kind == "channel",
+					info.value().default_permissions,
+					content)) {
+				LOG(("Parvane: пересылка в %1 (%2) не отправлена — права группы")
+					.arg(address, QString::fromStdString(parvane::contentKind(content))));
+				return;
+			}
+		}
+	}
 	// Опрос: пересылка = независимая копия (новый uuid, голоса с нуля).
 	if (item->media() && item->media()->poll()
 		&& found != g_mediaContentByMsgId.constEnd()) {
@@ -3883,7 +4017,7 @@ namespace Internal {
 
 // Корень локальных стикер-паков (тот же, что в LoadLocalStickerPacks).
 [[nodiscard]] QString StickerPacksRoot() {
-	if (const char *v = std::getenv("PARVANE_STICKERS_DIR"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_STICKERS_DIR"); v && *v) {
 		return QString::fromUtf8(v);
 	}
 	return QDir::homePath() + u"/.local/share/ParvaneStickers"_q;
@@ -4262,7 +4396,7 @@ namespace Internal {
 // файла (без MTProto). docId детерминирован от (rawName|file), поэтому entity
 // custom_emoji (data=docId) резолвится и у получателя после материализации.
 [[nodiscard]] QString CustomEmojiRoot() {
-	if (const char *v = std::getenv("PARVANE_EMOJI_DIR"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_EMOJI_DIR"); v && *v) {
 		return QString::fromUtf8(v);
 	}
 	return QDir::homePath() + u"/.local/share/ParvaneEmoji"_q;
@@ -4445,7 +4579,9 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 			auto written = 0;
 			if (t) {
 				try {
-					auto d = DownloadChatBlob(fidStd);
+					auto d = DownloadChatBlob(
+						fidStd,
+						parvane::chatrules::chatBlobCipherCap("pack", 0));
 					if (d.ok) {
 						auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce);
 						// PACK-2: архив обязан дать заявленный отпечаток —
@@ -4614,7 +4750,9 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 					auto unpacked = 0;
 					if (t) {
 						try {
-							auto d = DownloadChatBlob(fid);
+							auto d = DownloadChatBlob(
+								fid,
+								parvane::chatrules::chatBlobCipherCap("pack", 0));
 							if (d.ok) {
 								auto bytes = std::string();
 								if (key.empty()) {
@@ -5168,13 +5306,18 @@ void RequestPreviewPhoto(PhotoId photoId, const nlohmann::json &photo) {
 	const auto fileId = photo.value("file_id", std::string());
 	const auto key = photo.value("file_key", std::string());
 	const auto nonce = photo.value("file_nonce", std::string());
+	const auto maxCipher = parvane::chatrules::chatBlobCipherCap(
+		"preview",
+		(photo.contains("size_bytes") && photo["size_bytes"].is_number_integer())
+			? photo["size_bytes"].get<std::int64_t>()
+			: std::int64_t(0));
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		auto image = QImage();
 		auto bytes = QByteArray();
 		if (t) {
 			try {
-				const auto d = DownloadChatBlob(fileId);
+				const auto d = DownloadChatBlob(fileId, maxCipher);
 				if (d.ok) {
 					if (const auto plain = parvane::blobcrypt::decrypt(d.bytes, key, nonce)) {
 						bytes = QByteArray::fromStdString(*plain);
@@ -5322,10 +5465,44 @@ QHash<QString, QString> g_cardContent;
 		MTP_bytes(data.toUtf8()));
 }
 
+// Жалоба админу (mod_report) по своим данным (ревью 21 окт, вечер, 2.1): отправитель — участник группы из жалобы,
+// сообщения — этой группы и есть в своей истории, автор и текст — свои. nullopt — карточки нет.
+[[nodiscard]] std::optional<parvane::v2::ReportCheck> CheckModReport(
+		const parvane::json &content,
+		const std::string &reporter) {
+	return parvane::v2::validateModReport(content, reporter, [](const std::string &group) {
+		auto out = std::vector<std::string>();
+		const auto it = g_groupInfo.constFind(QString::fromStdString(group)); // main
+		if (it != g_groupInfo.constEnd()) {
+			for (const auto &m : it->members) {
+				if (m.role != "banned") {
+					out.push_back(m.address);
+				}
+			}
+		}
+		return out;
+	}, [](const std::string &opId) -> std::optional<parvane::v2::ReportLocalMessage> {
+		const auto uuid = QString::fromStdString(opId);
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		const auto chat = g_v2Ids.constFind(uuid);
+		const auto row = g_v2Cache.constFind(uuid);
+		if (chat == g_v2Ids.constEnd() || row == g_v2Cache.constEnd() || row->deleted) {
+			return std::nullopt;
+		}
+		const auto text = row->text();
+		return parvane::v2::ReportLocalMessage{
+			.chat = chat->toStdString(),
+			.author = row->from,
+			.text = text ? *text : std::string(),
+		};
+	});
+}
+
 [[nodiscard]] std::optional<MTPReplyMarkup> CardMarkup(
 		const QString &uuid,
 		const parvane::json &content,
-		bool out) {
+		bool out,
+		const std::string &from = std::string()) {
 	const auto kind = parvane::contentKind(content);
 	if (kind == "task_offer" && !out) {
 		// Задание в чат (spec 011, TASK-1): «В план» / «В календарь» и «Отклонить»; запись плана — по карточке
@@ -5353,7 +5530,18 @@ QHash<QString, QString> g_cardContent;
 	if (kind != "mod_report" || out) {
 		return std::nullopt;
 	}
-	g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+	// Карточка — только из проверенного: в g_cardContent кладётся не жалоба отправителя, а свои данные
+	const auto check = CheckModReport(content, from);
+	if (!check) {
+		LOG(("Parvane: жалоба %1 не подтверждена своими данными — без карточки").arg(uuid));
+		return std::nullopt;
+	}
+	g_cardContent.insert(uuid, QString::fromStdString(parvane::json{
+		{ "kind", "mod_report" },
+		{ "group", check->group },
+		{ "ops", check->opIds },
+		{ "authors", check->authors },
+	}.dump()));
 	// Жалоба на сообщения группы — админу: удалить их у всех либо заблокировать автора в группе
 	return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
 		MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
@@ -5473,7 +5661,9 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 		}
 		std::string bytes;
 		try {
-			auto d = DownloadChatBlob(fid);
+			auto d = DownloadChatBlob(
+				fid,
+				parvane::chatrules::chatBlobCipherCap("avatar", 0));
 			if (!d.ok) {
 				return;
 			}
@@ -5955,7 +6145,13 @@ void pumpMediaDownload(
 			bytes = std::move(*cached);
 		} else {
 			try {
-				auto d = DownloadChatBlob(fileIdStd);
+				// Потолок — по заявленному size_bytes (+ накладка PVB2), без
+				// него — по виду (картинка — десятки МБ, файл — 2 ГиБ)
+				auto d = DownloadChatBlob(
+					fileIdStd,
+					parvane::chatrules::chatBlobCipherCap(
+						kind.toStdString(),
+						size));
 				if (!d.ok) {
 					LOG(("Parvane: скачивание медиа %1 не удалось: %2")
 						.arg(fileId).arg(QString::fromStdString(d.error)));
@@ -6835,7 +7031,7 @@ void injectOnMain(
 					TtlFromContent(sm.content),
 					/*mentionsSelf=*/!gOwn && MentionsSelf(
 						gtextQ, parvane::contentEntities(sm.content), self),
-					CardMarkup(uuid, sm.content, gOwn)),
+					CardMarkup(uuid, sm.content, gOwn, sm.from)),
 				MessageFlags(), NewMessageType::Unread);
 			if (gItem) {
 				const auto h = gItem->history();
@@ -6969,7 +7165,13 @@ void injectOnMain(
 				.arg(uuid).arg(peerAddress).arg(kind));
 			continue;
 		}
-		const auto text = QString::fromStdString(*maybeText);
+		// Жалоба админу (2.1): подтверждённая своими данными показывает свой текст сообщений, а не текст отправителя
+		const auto modReport = (!out && parvane::contentKind(sm.content) == "mod_report")
+			? CheckModReport(sm.content, sm.from)
+			: std::nullopt;
+		const auto text = modReport
+			? QString::fromStdString(modReport->text)
+			: QString::fromStdString(*maybeText);
 		MaterializeEmojiPacks(session, sm.content); // кастом-эмодзи в тексте
 		RegisterPeer(peerAddress);
 		ensurePeerUser(session, peerId, peerAddress);
@@ -7010,7 +7212,7 @@ void injectOnMain(
 					: isLoc ? buildLocationMedia(sm.content) : MTPMessageMedia(),
 				/*hasMedia=*/hasWp || isLoc, replyToMsgId,
 				/*peerIsChat=*/false, entities, ttl, mentionsSelf,
-				CardMarkup(uuid, sm.content, out)),
+				CardMarkup(uuid, sm.content, out, sm.from)),
 			MessageFlags(),
 			NewMessageType::Unread);
 		if (ttl > 0) {
@@ -7526,7 +7728,12 @@ void ArmScheduledTimers() {
 		// на диске): максимум ~24 дня.
 		const auto secs = std::clamp<qint64>(
 			it.dueAt - QDateTime::currentSecsSinceEpoch(), 0, qint64(2000000));
-		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it] {
+		// Таймер — аккаунта, взведшего его: после выхода (и входа другим в том же окне) молчит (ревью 21 окт)
+		const auto generation = AccountGeneration();
+		base::call_delayed(std::max<crl::time>(crl::time(secs * 1000), 1), [it, generation] {
+			if (!AccountGenerationIs(generation)) {
+				return;
+			}
 			FireScheduledGated(it);
 		});
 	}
@@ -7580,12 +7787,15 @@ void ScheduleOutgoing(PeerData *peer, const TextWithEntities &textWithEntities,
 
 // Загрузить очередь с диска и взвести таймеры (на старте сессии).
 void RestoreScheduled() {
+	// Очередь в памяти — только с диска этого аккаунта: пустой или битый файл тоже её очищает (прежде выход
+	// до очистки оставлял очередь прежнего аккаунта)
 	const auto raw = StoreRead(ScheduledPath());
-	if (raw.isEmpty()) {
-		return;
-	}
-	const auto arr = nlohmann::json::parse(raw.toStdString(), nullptr, false);
+	const auto arr = raw.isEmpty()
+		? nlohmann::json::array()
+		: nlohmann::json::parse(raw.toStdString(), nullptr, false);
 	if (!arr.is_array()) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_scheduled.clear();
 		return;
 	}
 	{
@@ -7726,7 +7936,8 @@ int StopTelegramRecovery(TelegramRecoveryState state) {
 }
 
 [[nodiscard]] QString AppliedBundleMarkPath(const QString &self) {
-	return cWorkingDir() + u"tdata/parvane-bundle-history-"_q + self + u".txt"_q;
+	// Ревью 21 окт, вечер (1.6): адрес в имени — только проверенный и безопасной частью ("" — не писать)
+	return AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q);
 }
 
 // Снимок истории из копии ключей аккаунта: owner-блоб облака, зашифрованный JSON {linkVersion, v2History}.
@@ -7924,7 +8135,11 @@ void NoteDomainKeys(const std::string &planner, const std::string &cloud) {
 	if (self.isEmpty()) {
 		return;
 	}
-	StoreWrite(cWorkingDir() + u"tdata/parvane-domain-keys-"_q + self + u".json"_q,
+	const auto path = AccountFilePath(u"parvane-domain-keys-"_q, self, u".json"_q);
+	if (path.isEmpty()) {
+		return;
+	}
+	StoreWrite(path,
 		QByteArray::fromStdString(nlohmann::json{ { "planner", planner }, { "cloud", cloud } }.dump()));
 }
 
@@ -8933,6 +9148,43 @@ void LeaveGroupCall() {
 	if (g) g->leave(); // без g_sessionMutex: колбэки менеджера берут его сами
 }
 
+void EndCallsForLogout() {
+	std::shared_ptr<parvane::CallManager> m;
+	std::shared_ptr<parvane::GroupCallManager> g;
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		m = g_callManager;
+		g = g_groupCallManager;
+	}
+	// Сигналы отбоя уходят сессией v2 — до её остановки; без мьютекса (колбэки менеджеров берут его сами)
+	auto ended = false;
+	if (g) {
+		if (!g->pendingInviteId().empty()) {
+			(void)g->declineInvite();
+			ended = true;
+		} else if (!g->groupCallId().empty()) {
+			g->leave();
+			ended = true;
+		}
+	}
+	if (m && m->state() != parvane::CallState::Idle && m->state() != parvane::CallState::Ended) {
+		m->hangup();
+		ended = true;
+	}
+	StopRingtone();
+	Parvane::CloseNativeCallPanel();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_callManager = nullptr;
+		g_groupCallManager = nullptr;
+		g_currentCallPeer.clear();
+		g_currentCallVideo = false;
+	}
+	if (ended) {
+		LOG(("Parvane: выход — звонок завершён"));
+	}
+}
+
 // Начать групповой звонок по чат-пиру (кнопка звонка в шапке группы).
 void StartGroupCallForChat(PeerData *chat, bool video) {
 	if (!chat || !chat->isChat()) {
@@ -9207,9 +9459,10 @@ namespace Internal {
 
 [[nodiscard]] QStringList BugReportLog() {
 	// Строки клиента этого запуска — из памяти (parvane-core logpriv): релиз их на диск не пишет (ревью 21 окт),
-	// содержимое (текст, координаты, токены) в релизе в них уже скрыто. Выход со стиранием память чистит.
+	// содержимое (текст, координаты, токены) в них уже скрыто. Выход со стиранием память чистит. Ревью 21 окт 2026:
+	// и в dev — через фильтр релиза: при PARVANE_LOG_CONTENT=1 журнал не прикладывается вовсе (logpriv::reportLines).
 	auto out = QStringList();
-	for (const auto &line : parvane::logpriv::recent()) {
+	for (const auto &line : parvane::logpriv::reportLines()) {
 		out.push_back(QString::fromStdString(line).trimmed());
 	}
 	return out;
@@ -9409,33 +9662,54 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 		return true;
 	}
 	if (action == u"moddel"_q || action == u"modban"_q) {
-		const auto group = content.value("report_group", parvane::json::object());
-		const auto hex = parvane::v2::b64ToHex(group.value("id", std::string()));
-		const auto gid = QString::fromStdString(parvane::v2::groupAddress(hex));
-		const auto reported = content.value("reported", parvane::json::array());
+		// Только проверенное при показе карточки (CheckModReport): группа, свои сообщения этой группы и их авторы
+		// по своей истории. Жалоба отправителя здесь не читается (ревью 21 окт, вечер, 2.1)
+		const auto gidStd = content.value("group", std::string());
+		const auto gid = QString::fromStdString(gidStd);
+		if (!parvane::v2::isGroupAddress(gidStd)) {
+			return true;
+		}
 		if (action == u"moddel"_q) {
 			auto targets = parvane::json::array();
-			auto first = QString();
-			for (const auto &m : reported) {
-				const auto op = m.value("op_id", std::string());
-				if (!op.empty()) {
-					targets.push_back(parvane::v2::ref(op));
-					if (first.isEmpty()) first = QString::fromStdString(op);
+			for (const auto &op : content.value("ops", parvane::json::array())) {
+				// Ещё раз: сообщение по-прежнему этой группы (свой список v2-сообщений)
+				if (op.is_string() && V2PeerOf(QString::fromStdString(op.get<std::string>())) == gid) {
+					targets.push_back(parvane::v2::ref(op.get<std::string>()));
 				}
 			}
-			const auto ok = !targets.empty() && TryMutateV2(first, parvane::json{ { "delete", {
-				{ "targets", targets },
-				{ "for_everyone", true } } } });
+			const auto ok = !targets.empty();
+			if (ok) {
+				// Удаление — в группу из жалобы, не «туда, где лежит первое сообщение»
+				const auto mutation = parvane::json{ { "delete", {
+					{ "targets", targets },
+					{ "for_everyone", true } } } };
+				crl::async([gidStd, mutation, gid] {
+					const auto s = V2Ready();
+					if (!s) {
+						LOG(("Parvane: карточка жалобы: удаление в %1 не отправлено — сессия v2 не готова").arg(gid));
+						return;
+					}
+					try {
+						s->sendContent(gidStd, mutation, parvane::v2::newUuidV7());
+					} catch (const std::exception &e) {
+						LOG(("Parvane: карточка жалобы: удаление в %1 не отправлено: %2")
+							.arg(gid, QString::fromUtf8(e.what())));
+					}
+				});
+			}
 			if (const auto window = Core::App().activeWindow()) {
 				window->showToast(ok ? tr::lng_parvane_mod_deleted(tr::now) : tr::lng_parvane_mod_failed(tr::now));
 			}
 		} else {
 			auto authors = QSet<QString>();
-			for (const auto &m : reported) {
-				authors.insert(QString::fromStdString(m.value("author", std::string())));
+			for (const auto &author : content.value("authors", parvane::json::array())) {
+				if (author.is_string()) {
+					authors.insert(QString::fromStdString(author.get<std::string>()));
+				}
 			}
+			const auto self = SelfAddress();
 			for (const auto &author : authors) {
-				if (!author.isEmpty()) {
+				if (!author.isEmpty() && author != self) {
 					BanMember(gid, author, true);
 				}
 			}
@@ -9575,7 +9849,7 @@ void LoadFolders(not_null<Main::Session*> session) {
 // нативная панель chat_helpers показывает и шлёт их без MTProto.
 void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 	auto root = QString();
-	if (const char *v = std::getenv("PARVANE_STICKERS_DIR"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_STICKERS_DIR"); v && *v) {
 		root = QString::fromUtf8(v);
 	} else {
 		root = QDir::homePath() + u"/.local/share/ParvaneStickers"_q;
@@ -9792,7 +10066,7 @@ bool ToggleSavedGif(not_null<DocumentData*> document, bool saved) {
 // Идемпотентно (docId стабилен от пути); дальше список живёт журналом.
 void LoadLocalSavedGifs(not_null<Main::Session*> session) {
 	auto root = QString();
-	if (const char *v = std::getenv("PARVANE_GIFS_DIR"); v && *v) {
+	if (const char *v = ParvaneDevEnv("PARVANE_GIFS_DIR"); v && *v) {
 		root = QString::fromUtf8(v);
 	} else {
 		root = QDir::homePath() + u"/.local/share/ParvaneGifs"_q;
@@ -9860,6 +10134,151 @@ void ResetSessionBoundState() {
 		g_ownSentUuids.clear();
 	}
 	LOG(("Parvane: новая сессия — состояние прежней Data::Session сброшено"));
+}
+
+// ── изоляция аккаунтов (ревью безопасности 21 окт 2026, вечер) ───────────────
+// Состояние клиента — глобальное на процесс. Раньше выход (и со стиранием) снимал только учётные данные: кэши,
+// отложенные с взведёнными таймерами, черновики, уведомления, группы, имена, кэш расшифровки прежнего аккаунта
+// доставались следующему, вошедшему в том же окне (таймер отправлял текст прежнего от имени нового, первое
+// подключение журнала состояния нового переносило туда черновики и отложенные прежнего).
+namespace {
+std::atomic<std::uint64_t> g_accountGeneration{ 1 };
+} // namespace
+
+std::uint64_t AccountGeneration() {
+	return g_accountGeneration.load();
+}
+
+bool AccountGenerationIs(std::uint64_t generation) {
+	return g_accountGeneration.load() == generation;
+}
+
+void ResetAccountState(const char *why) {
+	++g_accountGeneration; // отложенные задачи прежнего аккаунта больше ничего не сделают
+	ResetSessionBoundState();
+	{
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		g_scheduled.clear();
+		g_ownSentUuids.clear();
+		g_decCache.clear(); // иначе DecCacheRemove следующего аккаунта переписал бы файл картой прежнего
+		g_idToAddress.clear();
+		g_knownGroups.clear();
+		g_personalChannelUsers.clear();
+		g_chatIdToGroupId.clear();
+		g_groupMembers.clear();
+		g_peerTtl.clear();
+		g_currentCallPeer.clear();
+		g_currentCallVideo = false;
+		g_reportedRead.clear();
+		g_unconfirmedRead.clear();
+		g_readRetries.clear();
+		g_presenceSubscribedIds.clear();
+		g_clearedUuids.clear();
+		g_clearedUntilMs.clear();
+		g_packRefUploaded.clear();
+	}
+	g_scheduledArmed.clear();
+	g_pendingGroupMsgs.clear();
+	g_deletedPeers.clear();
+	g_sharedMedia.clear();
+	g_displayNames.clear();
+	g_resolvedAt.clear();
+	g_notifyExceptions.clear();
+	g_notifyDefaults.clear();
+	g_applyingNotify = false;
+	g_avatarFileIds.clear();
+	g_avatarDownloaded.clear();
+	g_avatarImages.clear();
+	g_groupVersions.clear();
+	g_groupInfo.clear();
+	g_blockedAddrs.clear();
+	g_archivedAddrs.clear();
+	g_pinnedAddrs.clear();
+	g_cardContent.clear();
+	g_previewPhotosRequested.clear();
+	g_hiddenGifs.clear();
+	g_hiddenGifsLoaded = false;
+	g_pendingRecoveryKey.clear();
+	g_presenceSubscribed = false;
+	g_presenceTimer = nullptr;
+	{
+		std::lock_guard<std::mutex> lk(g_l2Mutex);
+		g_l2Chats.clear();
+		g_l2Mine.clear();
+		g_l2V2Peers.clear();
+	}
+	g_l2PresenceAllowed = true;
+	g_privacyCallsNobody = false;
+	g_privacyPresenceHidden = false;
+	g_l2Updates.fire({});
+	{
+		std::lock_guard<std::mutex> lk(g_pubkeyMutex);
+		g_peerPubkeys.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		g_v2Ids.clear();
+		g_v2Cache.clear();
+		g_v2Reactions.clear();
+		g_v2IdsLoaded = false;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_blobCapMutex);
+		g_blobCaps.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_v2RootMutex);
+		g_v2RootFp.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_migratedMutex);
+		g_migratedTo.clear();
+		g_migratedFrom.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_renameMutex);
+		g_renameNext.clear();
+		g_renamePrev.clear();
+		g_renamesLoaded = false;
+	}
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		++g_tgGeneration; // опрос ключа восстановления через Telegram прежнего входа — прочь
+		g_tgState = TelegramRecoveryState::Idle;
+	}
+	g_linkingStatus = LinkingStatus();
+	g_linkingChanges.fire({});
+	ResetStateAccountData();
+	ResetGroupsAccountData();
+	ResetLinkingAccountData();
+	ResetDevicesAccountData();
+	Sections::OnAccountReset();
+	parvane::logpriv::forget(); // строки прежнего аккаунта — не в «Сообщить об ошибке» следующего
+	LOG(("Parvane: состояние аккаунта в памяти сброшено (%1)").arg(QString::fromUtf8(why)));
+}
+
+void AdoptAccountFiles(const QString &address) {
+	const auto addressStd = address.toStdString();
+	if (!parvane::accountfiles::isValidAddress(addressStd)) {
+		LOG(("Parvane: файлы аккаунта не переданы — адрес недопустим"));
+		return;
+	}
+	EnsureStoreKey();
+	const auto result = parvane::accountfiles::adopt(TdataDir().toStdString(), addressStd);
+	for (const auto &name : result.failed) {
+		LOG(("Parvane: файлы аккаунта — %1 не перенесён (стёрт)").arg(QString::fromStdString(name)));
+	}
+	if (result.switched) {
+		// Расшифрованные копии прежнего аккаунта (tdata/parvane-tmp) — не следующему
+		parvane::localfiles::wipeTempRoot(TdataDir().toStdString());
+		LOG(("Parvane: файлы аккаунта: прежнего (%1) унесено %2, этого возвращено %3%4")
+			.arg(LogSecret(QString::fromStdString(result.previousOwner)))
+			.arg(result.stashed)
+			.arg(result.restored)
+			.arg(result.legacy ? u" (установка до маркера)"_q : QString()));
+	} else if (result.legacy) {
+		LOG(("Parvane: файлы аккаунта: установка до маркера — файлы этого аккаунта"));
+	}
 }
 
 namespace Internal {
@@ -9938,13 +10357,24 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// (SetSelf не звался) → self пуст. Восстанавливаем логин-состояние с
 		// диска, иначе Parvane-слой поднимется без личности (отправка/приём/E2E
 		// не работают).
+		// Учётные данные — ДО чтения файлов аккаунта: восстановление отдаёт файлы этому адресу (AdoptAccountFiles),
+		// прежде файлы читались до него — от имени неизвестно кого (ревью 21 окт, вечер)
+		if (SelfAddress().isEmpty()) {
+			RestoreSessionCreds();
+		}
+		if (!SelfAddress().isEmpty()
+			&& session->userId().bare != BareId(IdForAddress(SelfAddress()))) {
+			// Сессия tdesktop другого аккаунта, чем учётные данные Parvane (второй аккаунт домена, прерванный вход):
+			// продолжать нельзя — данные одного показались бы под другим. На экран входа; данные остаются.
+			LOG(("Parvane: сессия tdesktop не совпадает с учётными данными — на экран входа"));
+			ClearLocalState();
+			session->account().forcedLogOut();
+			return;
+		}
 		LoadReadJournal();  // READ-1: до воспроизведения журнала истории
 		LoadNotifyState();  // снимок настроек уведомлений
 		LoadBlockedState(); // блок-лист (применяется к пользователям по мере появления)
 		LoadDialogState();  // архив и закреп (применяются после воспроизведения истории)
-		if (SelfAddress().isEmpty()) {
-			RestoreSessionCreds();
-		}
 		if (SelfAddress().isEmpty()) {
 			// tdesktop восстановил сессию по userId из mtp-данных, а
 			// учётных данных Parvane на диске нет (выход/отказ JWT не дошёл до
@@ -10372,6 +10802,67 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					LOG(("Parvane: autoforward %1 → %2 (msgId %3)")
 						.arg(fromAddr, toAddr).arg(bestId));
 					ForwardMediaReshared(toAddr, bestContent);
+				});
+			}
+		}
+
+		// Debug-хук: PARVANE_AUTOFORWARD_MULTI=from@server:to1@server,to2@server:<сек> —
+		// последнее медиа диалога from пересылается сразу в несколько чатов
+		// ШТАТНЫМ колбэком окна выбора (ShareBox::DefaultForwardCallback — путь
+		// «Переслать» с несколькими получателями; spec 030, тупики UI).
+		if (const char *fw = ParvaneDevEnv("PARVANE_AUTOFORWARD_MULTI"); fw && *fw) {
+			const auto parts = QString::fromUtf8(fw).split(':');
+			if (parts.size() == 3) {
+				const auto fromAddr = parts[0];
+				const auto targets = parts[1].split(',', Qt::SkipEmptyParts);
+				const auto secs = std::max(parts[2].toInt(), 1);
+				base::call_delayed(secs * crl::time(1000), [fromAddr, targets] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					RegisterPeer(fromAddr);
+					const auto fromUser = session->data().user(
+						UserId(BareId(IdForAddress(fromAddr))));
+					HistoryItem *best = nullptr;
+					for (auto it = g_mediaContentByMsgId.constBegin();
+							it != g_mediaContentByMsgId.constEnd(); ++it) {
+						const auto item = session->data().nonChannelMessage(
+							MsgId(it.key()));
+						if (item
+							&& item->history()->peer == fromUser
+							&& (!best || item->id > best->id)) {
+							best = item;
+						}
+					}
+					const auto window = Core::App().activePrimaryWindow();
+					const auto controller = window
+						? window->sessionController()
+						: nullptr;
+					if (!best || !controller) {
+						LOG(("Parvane: autoforward-multi — нет медиа в диалоге %1 или окна")
+							.arg(fromAddr));
+						return;
+					}
+					auto threads = std::vector<not_null<Data::Thread*>>();
+					for (const auto &to : targets) {
+						RegisterPeer(to);
+						threads.push_back(session->data().history(
+							session->data().user(UserId(BareId(IdForAddress(to))))));
+					}
+					LOG(("Parvane: autoforward-multi %1 → %2 (msgId %3)")
+						.arg(fromAddr, targets.join(u", "_q))
+						.arg(best->id.bare));
+					const auto send = ShareBox::DefaultForwardCallback(
+						controller->uiShow(),
+						best->history(),
+						MessageIdsList{ best->fullId() });
+					send(
+						std::move(threads),
+						[] { return true; },
+						TextWithTags(),
+						Api::SendOptions(),
+						Data::ForwardOptions::PreserveInfo);
 				});
 			}
 		}
@@ -11193,6 +11684,55 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				const auto nobody = (part.mid(colon + 1, at - colon - 1) == u"nobody"_q);
 				base::call_delayed(part.mid(at + 1).toInt() * crl::time(1000), [=] {
 					SetPrivacyAudienceNobody(which, nobody);
+				});
+			}
+		}
+
+		// Изоляция аккаунтов (e2e, verify_relogin_other_account.sh; ревью 21 окт, вечер). Один раз за процесс —
+		// первым аккаунтом: PARVANE_AUTOSEED=<адрес>:<сек> — черновик и отложенное этому адресу через <сек>;
+		// PARVANE_AUTOLOGOUT=wipe@<сек>|reject@<сек> — выход со стиранием либо как отказ JWT. Следующий вход в том же
+		// процессе — PARVANE_AUTOLOGIN_NEXT (intro_parvane.cpp).
+		static auto isolationHooksDone = false;
+		if (!isolationHooksDone) {
+			isolationHooksDone = true;
+			if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSEED"); sv && *sv) {
+				const auto spec = QString::fromUtf8(sv);
+				const auto colon = spec.lastIndexOf(u':');
+				const auto peerAddr = (colon > 0) ? spec.left(colon) : spec;
+				const auto secs = (colon > 0) ? spec.mid(colon + 1).toInt() : 30;
+				base::call_delayed(5 * crl::time(1000), [weak, peerAddr, secs] {
+					const auto s = weak.get();
+					if (!s) {
+						return;
+					}
+					RegisterPeer(peerAddr);
+					const auto user = s->data().user(UserId(BareId(IdForAddress(peerAddr))));
+					const auto history = s->data().history(user);
+					MirrorDraft(history, TextWithTags{ u"черновик-прежнего-аккаунта"_q });
+					const auto due = QDateTime::currentSecsSinceEpoch() + std::max(secs - 5, 1);
+					ScheduleOutgoing(user, TextWithEntities{ u"отложенное-прежнего-аккаунта"_q }, 0, due);
+					LOG(("Parvane: autoseed → черновик и отложенное для %1 (через %2 с)")
+						.arg(peerAddr)
+						.arg(std::max(secs - 5, 1)));
+				});
+			}
+			if (const char *lv = ParvaneDevEnv("PARVANE_AUTOLOGOUT"); lv && *lv) {
+				const auto spec = QString::fromUtf8(lv);
+				const auto at = spec.indexOf(u'@');
+				const auto mode = (at > 0) ? spec.left(at) : spec;
+				const auto delay = (at > 0) ? spec.mid(at + 1).toInt() : 10;
+				base::call_delayed(delay * crl::time(1000), [weak, mode] {
+					const auto s = weak.get();
+					if (!s) {
+						return;
+					}
+					LOG(("Parvane: autologout → %1").arg(mode));
+					if (mode == u"reject"_q) {
+						OnAuthRejected(u"autologout (dev)"_q);
+					} else {
+						RequestWipeOnLogout(&s->account());
+						s->account().logOut();
+					}
 				});
 			}
 		}

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 
 #include "notes_text.h"
 #include "parvane/sections/notes_canvas.h"
@@ -72,10 +73,13 @@ std::string drivePathOf(const std::vector<cloud::CloudNode> &nodes, const std::s
     };
     std::vector<std::string> names;
     const cloud::CloudNode *current = find(id);
-    while (current && names.size() <= nodes.size()) {
-        names.insert(names.begin(), current->name);
+    // Ревью 21 окт 2026: цикл родителей — до повтора; путь — с конца и разворотом (без квадрата на цепочке)
+    std::set<const cloud::CloudNode *> seen;
+    while (current && seen.insert(current).second) {
+        names.push_back(current->name);
         current = find(parentOf(*current));
     }
+    std::reverse(names.begin(), names.end());
     return text::join(names, "/");
 }
 

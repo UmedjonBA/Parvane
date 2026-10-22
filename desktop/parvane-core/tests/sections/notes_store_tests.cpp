@@ -437,6 +437,30 @@ int main() {
               "пустая папка (заметка уже в корзине) уходит в корзину");
     }
 
+    std::printf("=== notes_store: смена аккаунта (ревью 21 окт 2026, вечер) ===\n");
+    {
+        Fake fake;
+        NotesStore store(fake);
+        open(fake, store, TREE, TEXTS);
+        bool ok = store.notes().size() == 2 && store.cloudData() != nullptr;
+        const auto rev = store.revision();
+        store.signOut();
+        ok = ok && store.notes().empty() && store.canvases().empty() && store.folders().empty()
+            && store.cloudData() == nullptr && store.revision() > rev && store.status() == NotesStatus::Loading;
+        // Облако прежнего аккаунта, пришедшее после выхода, хранилище не наполняет
+        const auto reads = fake.reads;
+        store.setCloudData(fake.data);
+        ok = ok && store.notes().empty() && fake.reads == reads;
+        check(ok, "выход: заметки, облако и тексты прежнего аккаунта сброшены, облако не слушается");
+        // Вход другим (хаб снова сбрасывает хранилище при смене сессии): облако — его, заметки прежнего не возвращаются
+        store.signOut();
+        fake.data = stateWith(json::array({folder("v", VAULT), file("m1", "Другое.md", "v")}));
+        fake.texts = {{"m1", "# Другое\n"}};
+        store.loadNotes("other");
+        ok = store.notes().size() == 1 && store.notes()[0]->id == "m1" && !noteById(store, "n1");
+        check(ok, "вход другим аккаунтом: только его заметки");
+    }
+
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

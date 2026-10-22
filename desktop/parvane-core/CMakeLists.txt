@@ -104,7 +104,7 @@ option(PARVANE_CORE_BUILD_PROBE "Build parvane-core tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     set(PARVANE_VECTORS ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 v2_session
-              l2_ticker reconnect_backoff queue_watchdog transport local_files)
+              l2_ticker reconnect_backoff queue_watchdog transport local_files blob_download dev_hooks chat_rules)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
     endforeach()
@@ -122,7 +122,7 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     enable_testing()
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
-              reconnect_backoff queue_watchdog protocol_vectors webcompat transport local_files)
+              reconnect_backoff queue_watchdog protocol_vectors webcompat transport local_files blob_download dev_hooks chat_rules)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

@@ -145,8 +145,9 @@ void ExtendLink(const QString &id, int ttlDays, Fn<void(bool)> done = nullptr);
 [[nodiscard]] std::optional<json> LinkOfSource(const std::string &container, const std::string &node);
 // Миниатюра узла (кэш на сессию; загружается в фоне, по готовности — StoreChanges)
 [[nodiscard]] QImage Thumb(const std::string &container, const CloudNode &node);
-// Содержимое файла для просмотра → done на главном потоке (nullopt — не удалось)
-void OpenBlob(const Entry &entry, Fn<void(std::optional<QByteArray>)> done);
+// Содержимое файла для просмотра → done на главном потоке (nullopt — не удалось). `maxPlainBytes` > 0 — потолок
+// содержимого: размер узла называет загрузивший, больше — nullopt без скачивания целиком (ревью 21 окт, 2.2)
+void OpenBlob(const Entry &entry, Fn<void(std::optional<QByteArray>)> done, std::int64_t maxPlainBytes = 0);
 // Файлы во временный каталог (для отправки в чат) → пути по порядку; не скачанный — пропущен
 void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QString error)> done);
 

@@ -55,6 +55,9 @@ function spawnDesktop(workdir, shimDir, env) {
     env: {
       ...process.env,
       QT_QPA_PLATFORM: 'offscreen',
+      // dev-хуки и содержимое в журнале — только по явному флагу и при gateway на loopback (ревью 21 окт 2026)
+      PARVANE_DEV_HOOKS: '1',
+      PARVANE_LOG_CONTENT: '1',
       PARVANE_GATEWAY_URL: GATEWAY_TCP_URL,
       PARVANE_NO_LINK_OFFER: '1',
       ...(shimDir ? { LD_LIBRARY_PATH: shimDir } : {}),

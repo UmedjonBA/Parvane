@@ -11,6 +11,7 @@
 #include "parvane/parvane_notes_canvas.h"
 
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_kit.h"
 #include "parvane/parvane_notes_canvas_look.h"
 #include "parvane/parvane_notes_canvas_media.h"
@@ -2910,7 +2911,9 @@ void Board::mousePressEvent(QMouseEvent *e) {
 		return;
 	}
 	if (e->button() == Qt::LeftButton && hit.linkUrl && !hit.linkUrl->empty()) {
-		QDesktopServices::openUrl(QUrl(Q(*hit.linkUrl)));
+		// Ревью 21 окт 2026 (2.3): адрес карточки — из файла холста (совместная папка, статья): только http(s)/mailto
+		// и с окном «Перейти по ссылке?» — карточка показывает заголовок страницы, а не адрес
+		OpenExternalLink(Q(*hit.linkUrl), QString(), true);
 		return;
 	}
 	const auto nodeId = nodeUnder(hit, point, edgeHit);

@@ -466,6 +466,10 @@ bool GenerateServiceFile(bool silent = false) {
 }
 
 void InstallLauncher() {
+	// Parvane: свой ярлык ставит пакет/лаунчер (parvane-desktop.desktop). Штатная установка писала
+	// .desktop, D-Bus service и значки Telegram в ~/.local/share для каждого -workdir (dev-стенды, verify).
+	// Прежний мусор «userapp-Telegram Desktop-*.desktop» оставлял RegisterUrlScheme (выключен с 9 сен 2026).
+	return;
 	static const auto DisabledByEnv = !qEnvironmentVariableIsEmpty(
 		"DESKTOPINTEGRATION");
 

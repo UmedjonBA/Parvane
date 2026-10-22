@@ -138,6 +138,17 @@ FileKind kindOfFile(std::string_view mime, std::string_view name);
 // Подпись типа файла для заглушки просмотра: расширение прописными («3MF»); нет короткого — ""
 std::string fileTypeLabel(std::string_view name);
 
+// Ревью безопасности 21 окт 2026 (2.3): файл, имя и тип которого выбирает другой (вложение статьи, файл
+// совместной папки), система откроет по расширению. Открывать можно только картинку, видео или звук с известным
+// расширением, и только если вид по расширению совпадает с видом по mime (пустой mime — по расширению);
+// иначе — «Сохранить как». `x.desktop` с `image/png` — нет.
+bool safeToOpenExternally(std::string_view mime, std::string_view name);
+
+// Имя файла на диске из чужого имени: без `/`, `\`, управляющих знаков и ведущих точек, не длиннее
+// kLocalNameMaxBytes байт (расширение сохраняется); пустое и «.»/«..» — "file"
+inline constexpr std::size_t kLocalNameMaxBytes = 200;
+std::string safeLocalName(std::string_view name);
+
 // Текст файла для просмотра (UTF-8 на выходе): UTF-8 (в том числе с меткой), UTF-16 с меткой, иначе —
 // windows-1251. Двоичное (нулевые байты) — nullopt
 std::optional<std::string> decodeTextPreview(std::string_view bytes);

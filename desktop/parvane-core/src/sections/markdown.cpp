@@ -3,6 +3,8 @@
 #include "parvane/sections/markdown.h"
 
 #include <algorithm>
+#include <set>
+#include <vector>
 
 #include "notes_text.h"
 
@@ -258,7 +260,7 @@ bool isWebUrl(const std::string &value) {
 }
 
 // SAFE_URL = /^(?:https?:|mailto:)/i
-bool isSafeUrl(const std::string &value) {
+bool safeUrl(const std::string &value) {
     return hasPrefixIgnoreCase(value, "http:") || hasPrefixIgnoreCase(value, "https:")
         || hasPrefixIgnoreCase(value, "mailto:");
 }
@@ -294,74 +296,94 @@ bool isMarkChar(char32_t c) { return c == '*' || c == '_'; }
 
 bool isTagChar(char32_t c) { return isLetter(c) || isAsciiDigit(c) || c == '_' || c == '/' || c == '-'; }
 
+// Ревью безопасности 21 окт 2026 (2.3): разбор строки линейный. Прежде каждая позиция заново просматривала строку
+// до закрывающего знака (`[[[[…` из 64 КБ — миллиарды шагов, поток вставал), а остаток строки копировался после
+// каждого куска. Теперь «следующий знак X либо перевод строки» с каждой позиции считается один раз (таблицы
+// `Scan`), а куски берутся по смещению. Совпадения — те же, что у регулярки INLINE web.
+struct Scan {
+    explicit Scan(const U32 &text) : s(text), n(text.size()) {
+        const auto build = [&](std::vector<size_t> &next, auto stop) {
+            next.assign(n + 1, n);
+            for (size_t i = n; i-- > 0;) next[i] = stop(s[i]) ? i : next[i + 1];
+        };
+        build(star, [](char32_t c) { return c == '*' || c == '\n'; });
+        build(tilde, [](char32_t c) { return c == '~' || c == '\n'; });
+        build(tick, [](char32_t c) { return c == '`' || c == '\n'; });
+        build(close, [](char32_t c) { return c == ']' || c == '\n'; });
+        build(parenOrSpace, [](char32_t c) { return c == ')' || isSpace(c); });
+        build(mark, [](char32_t c) { return isMarkChar(c) || c == '\n'; });
+    }
+    const U32 &s;
+    const size_t n;
+    // next[i] — первый индекс j ≥ i со знаком-остановкой (n — нет)
+    std::vector<size_t> star, tilde, tick, close, parenOrSpace, mark;
+};
+
 // Конец парного знака `**…**`, `~~…~~` с `p` либо 0
-size_t matchPair(const U32 &s, size_t p, char32_t mark) {
-    const size_t n = s.size();
+size_t matchPair(const Scan &c, size_t p, char32_t mark) {
+    const auto &s = c.s;
+    const size_t n = c.n;
     if (p + 1 >= n || s[p] != mark || s[p + 1] != mark) return 0;
-    size_t j = p + 2;
-    while (j < n && s[j] != mark && s[j] != '\n') ++j;
+    const size_t j = (mark == '*' ? c.star : c.tilde)[p + 2];
     if (j == p + 2 || j + 1 >= n || s[j] != mark || s[j + 1] != mark) return 0;
     return j + 2;
 }
 
 // Конец `` `…` `` с `p` либо 0
-size_t matchCode(const U32 &s, size_t p) {
-    const size_t n = s.size();
+size_t matchCode(const Scan &c, size_t p) {
+    const auto &s = c.s;
     if (s[p] != '`') return 0;
-    size_t j = p + 1;
-    while (j < n && s[j] != '`' && s[j] != '\n') ++j;
-    if (j == p + 1 || j >= n || s[j] != '`') return 0;
+    const size_t j = c.tick[p + 1];
+    if (j == p + 1 || j >= c.n || s[j] != '`') return 0;
     return j + 1;
 }
 
 // Конец `[[…]]` с `p` либо 0
-size_t matchNote(const U32 &s, size_t p) {
-    const size_t n = s.size();
+size_t matchNote(const Scan &c, size_t p) {
+    const auto &s = c.s;
+    const size_t n = c.n;
     if (p + 1 >= n || s[p] != '[' || s[p + 1] != '[') return 0;
-    size_t j = p + 2;
-    while (j < n && s[j] != ']' && s[j] != '\n') ++j;
+    const size_t j = c.close[p + 2];
     if (j == p + 2 || j + 1 >= n || s[j] != ']' || s[j + 1] != ']') return 0;
     return j + 2;
 }
 
 // Конец `[…](…)` с `p` либо 0
-size_t matchLink(const U32 &s, size_t p) {
-    const size_t n = s.size();
+size_t matchLink(const Scan &c, size_t p) {
+    const auto &s = c.s;
+    const size_t n = c.n;
     if (s[p] != '[') return 0;
-    size_t j = p + 1;
-    while (j < n && s[j] != ']' && s[j] != '\n') ++j;
+    const size_t j = c.close[p + 1];
     if (j == p + 1 || j + 1 >= n || s[j] != ']' || s[j + 1] != '(') return 0;
-    size_t k = j + 2;
-    while (k < n && s[k] != ')' && !isSpace(s[k])) ++k;
+    const size_t k = c.parenOrSpace[j + 2];
     if (k == j + 2 || k >= n || s[k] != ')') return 0;
     return k + 1;
 }
 
 // Курсив `[*_][^*_\n]+[*_]` с `q` либо 0
-size_t matchItalicBody(const U32 &s, size_t q) {
-    const size_t n = s.size();
-    if (q >= n || !isMarkChar(s[q])) return 0;
-    size_t j = q + 1;
-    while (j < n && !isMarkChar(s[j]) && s[j] != '\n') ++j;
-    if (j == q + 1 || j >= n || !isMarkChar(s[j])) return 0;
+size_t matchItalicBody(const Scan &c, size_t q) {
+    const auto &s = c.s;
+    if (q >= c.n || !isMarkChar(s[q])) return 0;
+    const size_t j = c.mark[q + 1];
+    if (j == q + 1 || j >= c.n || !isMarkChar(s[j])) return 0;
     return j + 1;
 }
 
-// Тег `#[\p{L}\d_/-]+` с `q` либо 0
-size_t matchTagBody(const U32 &s, size_t q) {
-    const size_t n = s.size();
-    if (q >= n || s[q] != '#') return 0;
+// Тег `#[\p{L}\d_/-]+` с `q` либо 0 (зовётся только в начале и после пробела — просмотры не пересекаются)
+size_t matchTagBody(const Scan &c, size_t q) {
+    const auto &s = c.s;
+    if (q >= c.n || s[q] != '#') return 0;
     size_t j = q + 1;
-    while (j < n && isTagChar(s[j])) ++j;
+    while (j < c.n && isTagChar(s[j])) ++j;
     return j == q + 1 ? 0 : j;
 }
 
-// `(?:^|\s)<тело>` с `p`: конец совпадения либо 0
-size_t matchAfterSpace(const U32 &s, size_t p, size_t (*body)(const U32 &, size_t)) {
-    if (p == 0) {
-        if (const size_t end = body(s, 0)) return end;
+// `(?:^|\s)<тело>` с `p`: конец совпадения либо 0; `from` — начало остатка строки (`^`)
+size_t matchAfterSpace(const Scan &c, size_t from, size_t p, size_t (*body)(const Scan &, size_t)) {
+    if (p == from) {
+        if (const size_t end = body(c, from)) return end;
     }
-    if (isSpace(s[p])) return body(s, p + 1);
+    if (isSpace(c.s[p])) return body(c, p + 1);
     return 0;
 }
 
@@ -370,16 +392,16 @@ struct InlineFound {
     size_t end = 0;
 };
 
-// INLINE — самое левое совпадение; на одном месте альтернативы пробуются по порядку
-std::optional<InlineFound> findInline(const U32 &s) {
-    for (size_t p = 0; p < s.size(); ++p) {
-        size_t end = matchPair(s, p, '*');
-        if (!end) end = matchPair(s, p, '~');
-        if (!end) end = matchCode(s, p);
-        if (!end) end = matchNote(s, p);
-        if (!end) end = matchLink(s, p);
-        if (!end) end = matchAfterSpace(s, p, matchItalicBody);
-        if (!end) end = matchAfterSpace(s, p, matchTagBody);
+// INLINE — самое левое совпадение в остатке с `from`; на одном месте альтернативы пробуются по порядку
+std::optional<InlineFound> findInline(const Scan &c, size_t from) {
+    for (size_t p = from; p < c.n; ++p) {
+        size_t end = matchPair(c, p, '*');
+        if (!end) end = matchPair(c, p, '~');
+        if (!end) end = matchCode(c, p);
+        if (!end) end = matchNote(c, p);
+        if (!end) end = matchLink(c, p);
+        if (!end) end = matchAfterSpace(c, from, p, matchItalicBody);
+        if (!end) end = matchAfterSpace(c, from, p, matchTagBody);
         if (end) return InlineFound{p, end};
     }
     return std::nullopt;
@@ -414,7 +436,7 @@ MdInline inlineOf(const U32 &token) {
         const std::string label = encode(token.substr(1, split - 1));
         const std::string url = encode(token.substr(split + 2, token.size() - split - 3));
         part.text = label;
-        if (isSafeUrl(url)) {
+        if (safeUrl(url)) {
             part.type = MdInlineType::Link;
             part.url = url;
         }
@@ -630,28 +652,57 @@ std::vector<MdBlock> parseMarkdown(const std::string &markdown, const std::strin
 
 std::vector<MdInline> parseInline(const std::string &text) {
     std::vector<MdInline> parts;
-    U32 rest = decode(text);
-    while (!rest.empty()) {
-        const auto found = findInline(rest);
+    const U32 s = decode(text);
+    const Scan scan(s);
+    size_t from = 0;
+    while (from < s.size()) {
+        const auto found = findInline(scan, from);
         if (!found) {
-            parts.push_back(MdInline{MdInlineType::Text, encode(rest), "", ""});
+            parts.push_back(MdInline{MdInlineType::Text, encode(s.substr(from)), "", ""});
             break;
         }
-        const U32 match = rest.substr(found->index, found->end - found->index);
-        const bool hasSpace = isSpace(match[0]);
-        const U32 before = rest.substr(0, found->index) + (hasSpace ? match.substr(0, 1) : U32());
-        if (!before.empty()) parts.push_back(MdInline{MdInlineType::Text, encode(before), "", ""});
-        parts.push_back(inlineOf(match.substr(hasSpace ? 1 : 0)));
-        rest = rest.substr(found->end);
+        const bool hasSpace = isSpace(s[found->index]);
+        const size_t tokenAt = found->index + (hasSpace ? 1 : 0);
+        if (tokenAt > from) parts.push_back(MdInline{MdInlineType::Text, encode(s.substr(from, tokenAt - from)), "", ""});
+        parts.push_back(inlineOf(s.substr(tokenAt, found->end - tokenAt)));
+        from = found->end;
     }
     return mergeText(parts);
 }
 
+bool isSafeUrl(const std::string &url) { return safeUrl(url); }
+
+namespace {
+
+// Адрес для сравнения с подписью: без пробелов по краям, схемы, `www.`, завершающей `/`, в нижнем регистре ASCII
+std::string comparableUrl(const std::string &value) {
+    auto v = encode(trimU(decode(value)));
+    for (auto &c : v) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    }
+    for (const char *prefix : {"https://", "http://", "mailto:"}) {
+        if (startsWith(v, prefix)) {
+            v.erase(0, std::char_traits<char>::length(prefix));
+            break;
+        }
+    }
+    if (startsWith(v, "www.")) v.erase(0, 4);
+    while (!v.empty() && v.back() == '/') v.pop_back();
+    return v;
+}
+
+} // namespace
+
+bool linkNeedsConfirmation(const std::string &text, const std::string &url) {
+    if (encode(trimU(decode(text))).empty()) return false;
+    return comparableUrl(text) != comparableUrl(url);
+}
+
 std::vector<std::string> embedNames(const std::string &markdown) {
     std::vector<std::string> names;
+    std::set<std::string> seen; // повторы — без квадратичного поиска (ревью 21 окт, 2.3)
     for (const auto &block : parseMarkdown(markdown)) {
-        if (block.type == MdBlockType::Embed && !block.url
-            && std::find(names.begin(), names.end(), block.name) == names.end()) {
+        if (block.type == MdBlockType::Embed && !block.url && seen.insert(block.name).second) {
             names.push_back(block.name);
         }
     }

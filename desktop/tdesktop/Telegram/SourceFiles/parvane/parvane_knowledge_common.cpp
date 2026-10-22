@@ -2,13 +2,21 @@
 #include "parvane/parvane_knowledge_common.h"
 
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_client_internal.h"
 #include "parvane/parvane_icons.h"
+#include "parvane/parvane_safe_open.h"
+
+#include <parvane/storecrypt.h>
 
 #include <parvane/sections/notes_look.h>
 #include <parvane/sections/notes_folders.h>
 
+#include "core/application.h"
+#include "core/mime_type.h"
 #include "lang/lang_keys.h"
 #include "ui/basic_click_handlers.h"
+#include "ui/boxes/confirm_box.h"
+#include "window/window_controller.h"
 #include "ui/painter.h"
 #include "ui/style/style_core.h"
 #include "ui/wrap/vertical_layout.h"
@@ -20,6 +28,8 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QLocale>
+#include <QtCore/QUrl>
+#include <QtGui/QDesktopServices>
 #include <QtGui/QtEvents>
 #include <QtSvg/QSvgRenderer>
 #include <QtCore/QHash>
@@ -32,27 +42,46 @@ namespace {
 	return "parvane:panel-" + panel;
 }
 
+// Файл аккаунта (`tdata/parvane-knowledge-<адрес>.json`): после выхода без стирания и входа другим аккаунтом
+// настройки прежнего (имена его папок) новому не видны. Нет допустимого адреса — пусто (настройки не пишутся)
 [[nodiscard]] QString PrefsPath() {
+	return AccountFilePath(u"parvane-knowledge-"_q, SelfAddress(), u".json"_q);
+}
+
+// Прежний общий файл (до 21 окт 2026) — не переносится: чей он, неизвестно; стирается при первом обращении
+[[nodiscard]] QString LegacyPrefsPath() {
 	return cWorkingDir() + u"tdata/parvane-knowledge.json"_q;
 }
 
-QJsonObject &Prefs() {
-	static auto result = [] {
-		auto f = QFile(PrefsPath());
-		if (!f.open(QIODevice::ReadOnly)) {
-			return QJsonObject();
-		}
-		const auto doc = QJsonDocument::fromJson(f.readAll());
-		return doc.isObject() ? doc.object() : QJsonObject();
-	}();
-	return result;
+// Ревью 21 окт 2026 (L9): настройки «Знаний» (ширины панелей, свёрнутые папки, папки графа — имена папок
+// аккаунта) — через хелперы хранилища: шифром хранилища и под оградой стирания при выходе (после стирания
+// фоновая запись не пересоздаёт файл). Без кэша в памяти: после выхода и входа другим аккаунтом прежние
+// настройки не всплывают (сбрасывать при Sections::OnAccountReset нечего — каждое чтение из файла текущего
+// аккаунта). Открытый файл аккаунта читается (миграция), следующая запись — уже шифром.
+[[nodiscard]] QJsonObject Prefs() {
+	if (QFile::exists(LegacyPrefsPath())) {
+		QFile::remove(LegacyPrefsPath());
+	}
+	const auto path = PrefsPath();
+	if (path.isEmpty()) {
+		return QJsonObject();
+	}
+	const auto raw = parvane::storecrypt::readFile(QFile::encodeName(path).toStdString());
+	if (raw.empty()) {
+		return QJsonObject();
+	}
+	const auto doc = QJsonDocument::fromJson(QByteArray::fromStdString(raw));
+	return doc.isObject() ? doc.object() : QJsonObject();
 }
 
-void WritePrefs() {
-	auto f = QFile(PrefsPath());
-	if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		f.write(QJsonDocument(Prefs()).toJson(QJsonDocument::Compact));
+void WritePrefs(const QJsonObject &prefs) {
+	const auto path = PrefsPath();
+	if (path.isEmpty()) {
+		return;
 	}
+	(void)parvane::storecrypt::writeFile(
+		QFile::encodeName(path).toStdString(),
+		QJsonDocument(prefs).toJson(QJsonDocument::Compact).toStdString());
 }
 
 [[nodiscard]] QLocale UiLocale() {
@@ -214,13 +243,13 @@ std::optional<std::string> PrefGet(const std::string &key) {
 }
 
 void PrefSet(const std::string &key, const std::optional<std::string> &value) {
-	auto &prefs = Prefs();
+	auto prefs = Prefs();
 	if (value) {
 		prefs.insert(Q(key), Q(*value));
 	} else {
 		prefs.remove(Q(key));
 	}
-	WritePrefs();
+	WritePrefs(prefs);
 }
 
 std::optional<int> PanelWidth(const std::string &panel) {
@@ -439,7 +468,23 @@ void RichText::mouseReleaseEvent(QMouseEvent *e) {
 			_openNote(url.mid(kNoteScheme.size()));
 		}
 	} else if (!url.isEmpty()) {
-		UrlClickHandler::Open(url);
+		// Ревью 21 окт 2026 (2.3): не UrlClickHandler (он превращает t.me во внутренний tg:// и открывает скрытые
+		// ссылки без вопроса), а браузер системы; подпись ≠ адресу — окно «Перейти по ссылке?»
+		auto shown = QString();
+		auto found = false;
+		for (const auto &entity : _marked.entities) {
+			if (entity.type() != EntityType::CustomUrl || entity.data() != url) {
+				continue;
+			}
+			shown = _marked.text.mid(entity.offset(), entity.length());
+			found = true;
+			if (md::linkNeedsConfirmation(S(shown), S(url))) {
+				break;
+			}
+		}
+		// Автоссылка — сам адрес в тексте; иначе подписи не нашли — спросить
+		const auto literal = !found && _marked.text.contains(url);
+		OpenExternalLink(url, found ? shown : url, !found && !literal);
 	}
 }
 
@@ -921,3 +966,61 @@ notes::NoteRef FindNote(const std::string &noteId) {
 }
 
 } // namespace Parvane::Knowledge
+
+// ── ввод от собеседника: ссылки и файлы (ревью безопасности 21 окт 2026, 2.3) ─────────────────────────────────
+
+namespace Parvane {
+
+bool SafeToOpenFile(const QString &name, const std::string &mime) {
+	if (!parvane::sections::cloud::safeToOpenExternally(mime, name.toStdString())) {
+		return false;
+	}
+	switch (Core::DetectNameType(name)) {
+	case Core::NameType::Image:
+	case Core::NameType::Video:
+	case Core::NameType::Audio:
+		return true;
+	default:
+		return false;
+	}
+}
+
+void OpenExternalLink(const QString &url, const QString &shown, bool alwaysConfirm) {
+	namespace md = parvane::sections::markdown;
+	const auto window = Core::App().activeWindow();
+	const auto trimmed = url.trimmed();
+	const auto parsed = QUrl(trimmed, QUrl::StrictMode);
+	const auto scheme = parsed.scheme().toLower();
+	const auto allowed = md::isSafeUrl(trimmed.toStdString())
+		&& parsed.isValid()
+		&& (scheme == u"http"_q || scheme == u"https"_q || scheme == u"mailto"_q)
+		&& (scheme == u"mailto"_q || !parsed.host().isEmpty());
+	if (!allowed) {
+		if (window) {
+			window->showToast(tr::lng_parvane_link_blocked(tr::now));
+		}
+		return;
+	}
+	const auto open = [=] {
+		QDesktopServices::openUrl(parsed);
+	};
+	if (!alwaysConfirm && !md::linkNeedsConfirmation(shown.toStdString(), trimmed.toStdString())) {
+		open();
+		return;
+	}
+	if (!window) {
+		return;
+	}
+	// Полный адрес (с punycode-узлом — чтобы похожие буквы другого алфавита было видно)
+	const auto display = parsed.toString(QUrl::FullyEncoded);
+	window->show(Ui::MakeConfirmBox({
+		.text = tr::lng_open_this_link(tr::now) + u"\n\n"_q + display,
+		.confirmed = [=](Fn<void()> close) {
+			open();
+			close();
+		},
+		.confirmText = tr::lng_open_link(tr::now),
+	}));
+}
+
+} // namespace Parvane

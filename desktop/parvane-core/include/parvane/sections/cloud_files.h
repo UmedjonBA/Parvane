@@ -34,6 +34,16 @@ std::int64_t cloudCipherSize(std::int64_t size);
 // Открытый размер по длине шифртекста (обратное к cloudCipherSize)
 std::int64_t cloudPlainSize(std::int64_t cipherSize);
 
+// ── потолки скачивания в память (ревью безопасности 21 окт 2026, 2.2) ─────────────────────────────────────────
+// Размер блоба называет загрузивший (в совместной папке — любой редактор), число чанков — сервер. Потолок
+// шифртекста едет в описании блоба полем kBlobMaxBytesKey (cloud_sync.h).
+// Миниатюра узла (JPEG до 320 px — с запасом)
+inline constexpr std::int64_t kThumbMaxBytes = 2 * 1024 * 1024;
+// Наибольший шифртекст PVB2 для открытого размера `plain` при любом размере чанка (0 и меньше — 0)
+std::int64_t cipherCeiling(std::int64_t plain);
+// Описание блоба с потолком шифртекста для открытого размера `plain` (0 — без своего потолка)
+json withMaxBytes(json blob, std::int64_t plain);
+
 // ── ссылки (cloudLinks.ts) ────────────────────────────────────────────────────────────────────────────────────
 
 inline constexpr int kLinkMaxFiles = 500;
@@ -133,9 +143,10 @@ public:
     json upload(const UploadRequest &request);
     // Скачать файл узла целиком (`parvaneCloudDownload` в память)
     DownloadResult download(const std::string &container, const std::string &node);
-    // Байты по описанию блоба узла (`parvaneCloudOpenBlob`); нет — nullopt
-    std::optional<std::string> open(const json &node);
-    // Миниатюра узла (JPEG) по `blob` и `thumb` узла (`parvaneCloudThumb`); нет — nullopt
+    // Байты по описанию блоба узла (`parvaneCloudOpenBlob`); нет — nullopt. `maxPlainBytes` > 0 — потолок
+    // содержимого (просмотр): больше — nullopt без скачивания целиком
+    std::optional<std::string> open(const json &node, std::int64_t maxPlainBytes = 0);
+    // Миниатюра узла (JPEG) по `blob` и `thumb` узла (`parvaneCloudThumb`), не больше kThumbMaxBytes; нет — nullopt
     std::optional<std::string> thumb(const json &node);
 
     // Узлы со всем вложенным — в папку другого контейнера (`parvaneCloudMove`): {ok} | {ok:false, error}

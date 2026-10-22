@@ -167,9 +167,18 @@ Domain::StartModernResult Domain::startModern(
 
 	_oldVersion = keyData.version;
 
+	// Parvane: один аккаунт на процесс (ревью 21 окт 2026, вечер, 1.3) — состояние клиента глобальное, второй
+	// аккаунт смешал бы данные двух. Читаются все, запускается один: активный (если с сессией), иначе первый с
+	// сессией, иначе последний без неё. Прочие не запускаются — их данные tdesktop остаются на диске нетронутыми
+	// (данные Parvane — в tdata/parvane-*, по аккаунтам; учётные данные сверяет AfterSessionReady)
+	struct Candidate {
+		int index = 0;
+		std::unique_ptr<Main::Account> account;
+		std::unique_ptr<MTP::Config> config;
+		uint64 sessionId = 0;
+	};
+	auto candidates = std::vector<Candidate>();
 	auto tried = base::flat_set<int>();
-	auto sessions = base::flat_set<uint64>();
-	auto active = 0;
 	for (auto i = 0; i != count; ++i) {
 		auto index = qint32();
 		info.stream >> index;
@@ -183,31 +192,49 @@ Domain::StartModernResult Domain::startModern(
 			auto config = account->prepareToStart(_localKey);
 			const auto sessionId = account->willHaveSessionUniqueId(
 				config.get());
-			if (!sessions.contains(sessionId)
-				&& (sessionId != 0 || (sessions.empty() && i + 1 == count))) {
-				if (sessions.empty()) {
-					active = index;
-				}
-				account->start(std::move(config));
-				_owner->accountAddedInStorage({
-					.index = index,
-					.account = std::move(account)
-				});
-				sessions.emplace(sessionId);
-			}
+			candidates.push_back({
+				.index = index,
+				.account = std::move(account),
+				.config = std::move(config),
+				.sessionId = sessionId,
+			});
 		}
 	}
-	if (sessions.empty()) {
+	if (candidates.empty()) {
 		LOG(("App Error: no accounts read."));
 		return StartModernResult::Failed;
 	}
-
+	auto active = -1;
 	if (!info.stream.atEnd()) {
 		info.stream >> active;
 	}
-	_owner->activateFromStorage(active);
+	auto &chosen = [&]() -> Candidate& {
+		for (auto &c : candidates) {
+			if (c.index == active && c.sessionId != 0) {
+				return c;
+			}
+		}
+		for (auto &c : candidates) {
+			if (c.sessionId != 0) {
+				return c;
+			}
+		}
+		return candidates.back();
+	}();
+	if (candidates.size() > 1) {
+		LOG(("Parvane: аккаунтов в домене %1 — запущен один (индекс %2)")
+			.arg(candidates.size())
+			.arg(chosen.index));
+	}
+	chosen.account->start(std::move(chosen.config));
+	const auto chosenIndex = chosen.index;
+	_owner->accountAddedInStorage({
+		.index = chosenIndex,
+		.account = std::move(chosen.account)
+	});
+	_owner->activateFromStorage(chosenIndex);
 
-	Ensures(!sessions.empty());
+	Ensures(!_owner->accounts().empty());
 	return StartModernResult::Success;
 }
 

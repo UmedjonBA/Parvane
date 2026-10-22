@@ -117,33 +117,22 @@ std::string Control::uploadBlob(const std::string &bytes, bool isPublic, std::si
     return id->get<std::string>();
 }
 
-std::string Control::downloadBlob(const std::string &fileId) {
-    constexpr std::uint32_t kBatch = 256;
-    std::string out;
-    for (std::uint32_t first = 0;; first += kBatch) {
-        const auto body = encodeMethodRequest("cloud.blob.download",
-            json{{"file_id", fileId}, {"first_chunk", first}, {"chunk_count", kBatch}});
-        Connection::StreamResult got;
-        for (int attempt = 0;; ++attempt) {
-            auto c = connection();
-            try {
-                got = c->requestStream("cloud.blob.download", body);
-                break;
-            } catch (const V2Error &e) {
-                if (attempt > 0 || !connectionLost(e, *c)) throw;
-                drop(c);
+std::string Control::downloadBlob(const std::string &fileId, std::size_t maxBytes) {
+    // Ревью 21 окт (2.2): с потолком — отказ по заявленному размеру до приёма чанков (downloadBlobChunks)
+    return downloadBlobChunks("cloud.blob.download", maxBytes,
+        [&](const Connection::StreamLimits &limits) {
+            const auto body = encodeMethodRequest("cloud.blob.download",
+                json{{"file_id", fileId}, {"first_chunk", limits.firstChunk}, {"chunk_count", limits.chunkCount}});
+            for (int attempt = 0;; ++attempt) {
+                auto c = connection();
+                try {
+                    return c->requestStream("cloud.blob.download", body, 60000, std::string(), limits);
+                } catch (const V2Error &e) {
+                    if (attempt > 0 || !connectionLost(e, *c)) throw;
+                    drop(c);
+                }
             }
-        }
-        const auto meta = decodeMethodResponse("cloud.blob.download", got.body);
-        const auto total = meta.value("chunks", std::uint32_t(0));
-        for (std::uint32_t index = first; index < std::min(total, first + kBatch); ++index) {
-            const auto it = got.chunks.find(index);
-            if (it == got.chunks.end()) throw V2Error("ERROR_CODE_UNAVAILABLE");
-            out += it->second;
-        }
-        if (first + kBatch >= total) break;
-    }
-    return out;
+        });
 }
 
 void Control::deleteBlob(const std::string &fileId) {

@@ -389,6 +389,16 @@ void NotesStore::resetForUser() {
     setStatus(NotesStatus::Loading);
 }
 
+void NotesStore::signOut() {
+    userId_.reset();
+    options_.reset();
+    data_.reset();
+    isListening_ = false;
+    isDirty_ = false;
+    notice_.reset();
+    resetForUser();
+}
+
 void NotesStore::loadNotes(const std::string &userId, const std::optional<NotesOptions> &options) {
     if (userId_ != userId) {
         userId_ = userId;

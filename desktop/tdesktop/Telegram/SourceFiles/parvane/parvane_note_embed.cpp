@@ -5,6 +5,7 @@
 #include "parvane/parvane_cloud_internal.h"
 #include "parvane/parvane_local_files.h"
 #include "parvane/parvane_notes_canvas_media.h"
+#include "parvane/parvane_safe_open.h"
 #include "parvane/parvane_space.h"
 
 #include <parvane/blobcrypt.h>
@@ -50,10 +51,12 @@ constexpr auto kCardMaxWidthRem = 24.;
 	if (dir.isEmpty()) {
 		return QString();
 	}
-	auto safe = name;
-	safe.replace('/', '_');
-	return QDir(dir).filePath(safe.isEmpty() ? u"file"_q : safe);
+	// Имя выбирает отправитель: только последней частью пути, без «..» и скрытых
+	return QDir(dir).filePath(SafeLocalName(name));
 }
+
+// Наибольшая сторона картинки статьи и заметки на экране: крупнее — уменьшается при разборе
+constexpr auto kEmbedImageMaxSide = 2560;
 
 // Файл, выбранный пользователем («Сохранить как»)
 [[nodiscard]] bool WriteFile(const QString &path, const QByteArray &bytes) {
@@ -118,8 +121,12 @@ private:
 	[[nodiscard]] bool isMissing() const {
 		return _source.type == EmbedSource::Type::Missing;
 	}
+	// Картинка показывается сама: своя (облако) — всегда, из статьи — не больше kArticleImageAutoMaxBytes
+	// (заявленное больше — карточка, файл по нажатию; как web MediaEmbed с CANVAS_IMAGE_MAX_BYTES)
 	[[nodiscard]] bool isImage() const {
-		return !isMissing() && _kind == cloud::FileKind::Photo;
+		return !isMissing()
+			&& _kind == cloud::FileKind::Photo
+			&& (_source.type != EmbedSource::Type::Chat || _source.size <= kArticleImageAutoMaxBytes);
 	}
 	[[nodiscard]] bool isPlayable() const {
 		return _kind == cloud::FileKind::Video || _kind == cloud::FileKind::Audio;
@@ -149,12 +156,12 @@ private:
 		} else if (_source.type == EmbedSource::Type::Chat) {
 			_busy = true;
 			const auto weak = QPointer<EmbedView>(this);
-			LoadChatMediaBytes(_source.media, [=](std::optional<QByteArray> bytes) {
+			LoadChatMediaBytes(_source.media, kArticleImageAutoMaxBytes, [=](std::optional<QByteArray> bytes) {
 				if (!weak) {
 					return;
 				}
 				weak->_busy = false;
-				auto image = bytes ? QImage::fromData(*bytes) : QImage();
+				auto image = bytes ? DecodeImageBounded(*bytes, kEmbedImageMaxSide) : QImage();
 				if (image.isNull()) {
 					weak->_failed = true;
 				} else {
@@ -236,18 +243,20 @@ private:
 	}
 
 	void activate() {
-		if ((isImage() || isPlayable()) && safeToOpen()) {
+		if ((_kind == cloud::FileKind::Photo || isPlayable()) && safeToOpen()) {
 			openExternally();
 		} else {
 			save();
 		}
 	}
 
-	// Файл из статьи чата система откроет по расширению, а имя выбирает отправитель: открываем, только если тип
-	// по имени совпадает с видом по mime (картинка, видео, звук), иначе — «Сохранить как». Своё облако — как есть.
+	// Файл система откроет по расширению, а имя выбирает отправитель статьи либо любой редактор совместной папки
+	// (`x.desktop` при `image/png`): открываем, только если вид по расширению совпадает с видом по mime
+	// (картинка, видео, звук) и расширение не исполняемое, иначе — «Сохранить как». Для облака — то же
+	// (ревью 21 окт 2026, 2.3), для картинки ещё и совпадение с видом карточки.
 	[[nodiscard]] bool safeToOpen() const {
-		if (_source.type == EmbedSource::Type::Cloud) {
-			return true;
+		if (!SafeToOpenFile(_source.name, _source.mime)) {
+			return false;
 		}
 		const auto type = Core::DetectNameType(_source.name);
 		switch (_kind) {
@@ -280,7 +289,7 @@ private:
 			});
 		} else {
 			const auto name = _source.name;
-			LoadChatMediaBytes(_source.media, [=](std::optional<QByteArray> bytes) {
+			LoadChatMediaBytes(_source.media, 0, [=](std::optional<QByteArray> bytes) {
 				if (!bytes) {
 					finish(QString());
 					return;
@@ -299,7 +308,8 @@ private:
 		const auto media = _source.media;
 		const auto name = _source.name;
 		const auto weak = QPointer<EmbedView>(this);
-		const auto initial = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(name);
+		// Имя выбирает отправитель: в окно «Сохранить как» — только последней частью пути
+		const auto initial = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(SafeLocalName(name));
 		FileDialog::GetWritePath(this, tr::lng_parvane_cloud_download(tr::now), QString(), initial, [=](QString &&path) {
 			if (path.isEmpty()) {
 				return;
@@ -308,7 +318,7 @@ private:
 				weak->_busy = true;
 				weak->update();
 			}
-			LoadChatMediaBytes(media, [=](std::optional<QByteArray> bytes) {
+			LoadChatMediaBytes(media, 0, [=](std::optional<QByteArray> bytes) {
 				const auto ok = bytes && WriteFile(path, *bytes);
 				if (!weak) {
 					return;
@@ -336,18 +346,40 @@ object_ptr<Ui::RpWidget> CreateEmbedView(QWidget *parent, EmbedSource source) {
 	return object_ptr<EmbedView>(parent, std::move(source));
 }
 
-void LoadChatMediaBytes(const nlohmann::json &media, Fn<void(std::optional<QByteArray>)> done) {
+void LoadChatMediaBytes(
+		const nlohmann::json &media,
+		int64_t maxPlainBytes,
+		Fn<void(std::optional<QByteArray>)> done) {
 	const auto fileId = media.value("file_id", std::string());
 	const auto capability = media.value("capability", std::string());
 	const auto key = media.value("file_key", std::string());
 	const auto nonce = media.value("file_nonce", std::string());
 	const auto domain = media.value("blob_domain", std::string());
+	const auto declared = media.contains("size_bytes") && media["size_bytes"].is_number()
+		? media["size_bytes"].get<double>()
+		: 0.;
+	// Заявлено больше потолка — не качать вовсе; иначе потолок — меньший из заявленного и данного
+	if (maxPlainBytes > 0 && declared > double(maxPlainBytes)) {
+		crl::on_main([=] {
+			done(std::nullopt);
+		});
+		return;
+	}
+	auto limit = (declared > 0. && declared < 9e15) ? int64_t(declared) : int64_t(0);
+	if (maxPlainBytes > 0 && (limit <= 0 || limit > maxPlainBytes)) {
+		limit = maxPlainBytes;
+	}
+	const auto maxCipher = limit > 0 ? parvane::blobcrypt::maxCipherSize(std::size_t(limit)) : std::size_t(0);
 	crl::async([=] {
 		auto result = std::optional<QByteArray>();
 		try {
 			const auto session = SectionsSession();
 			if (session && !fileId.empty() && !capability.empty()) {
-				const auto cipher = session->downloadBlobCap(fileId, parvane::v2::fromBase64(capability), domain);
+				const auto cipher = session->downloadBlobCap(
+					fileId,
+					parvane::v2::fromBase64(capability),
+					domain,
+					maxCipher);
 				if (key.empty()) {
 					result = QByteArray::fromStdString(cipher);
 				} else if (const auto plain = parvane::blobcrypt::decrypt(cipher, key, nonce)) {

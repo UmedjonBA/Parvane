@@ -1,4 +1,6 @@
 // Parvane fork (spec 029, фаза 4): перенос 1:1 web `markdown/markdown.test.ts`.
+#include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <map>
 #include <string>
@@ -165,6 +167,48 @@ int main() {
     check(embedBaseName("папка/карта 1.png") == "карта 1.png" && embedBaseName("фото.jpg") == "фото.jpg"
             && embedBaseName("a//b/") == "b" && embedBaseName("/") == "/",
         "embedBaseName: последняя непустая часть пути");
+
+    // Ревью безопасности 21 окт 2026 (2.3): разбор линейный — 64 КБ `[` (предел Markdown статьи) не вешают поток.
+    // Прежде каждая позиция просматривала строку до конца: квадрат длины (секунды на 64 КБ, минуты на 1 МБ).
+    {
+        const auto timed = [](const std::string &text) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto blocks = parseMarkdown(text);
+            std::size_t parts = 0;
+            for (const auto &b : blocks) parts += parseInline(b.text).size();
+            (void)parts;
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        };
+        double worst = 0;
+        for (const char *unit : {"[", "[[", "**", "~~", "`", "[a](", " _", " #a", "*a "}) {
+            std::string text;
+            while (text.size() < 65536) text += unit;
+            worst = std::max(worst, timed(text));
+            worst = std::max(worst, timed(text + "\n" + text));
+        }
+        // Много кусков подряд: прежде остаток строки копировался после каждого
+        std::string many;
+        while (many.size() < 65536) many += "**a** ";
+        worst = std::max(worst, timed(many));
+        std::printf("       худший разбор 64 КБ: %.3f с\n", worst);
+        check(worst < 0.5, "64 КБ злонамеренной разметки — меньше 0,5 с");
+        std::string big;
+        while (big.size() < 1024 * 1024) big += "[";
+        check(timed(big) < 2.0, "1 МБ `[` — меньше 2 с (линейно)");
+        check(parseInline(many).size() > 10000, "много кусков — все разобраны");
+    }
+    // Ссылки статьи: подпись ≠ адрес — открывать только после подтверждения; схемы — только http(s)/mailto
+    {
+        check(linkNeedsConfirmation("https://bank.example", "https://evil.example"), "подпись-адрес другого сайта — подтверждение");
+        check(linkNeedsConfirmation("https://bank.example", "https://bank.example.evil.example/"), "подпись — префикс адреса — подтверждение");
+        check(linkNeedsConfirmation("тут", "https://example.com"), "словесная подпись — подтверждение");
+        check(!linkNeedsConfirmation("https://Example.com/", "https://example.com") && !linkNeedsConfirmation("example.com", "https://www.example.com/")
+                  && !linkNeedsConfirmation("", "https://example.com") && !linkNeedsConfirmation("a@b.c", "mailto:a@b.c"),
+              "подпись совпадает с адресом (регистр, схема, www, /) — без подтверждения");
+        check(isSafeUrl("https://x") && isSafeUrl("HTTP://x") && isSafeUrl("mailto:a@b") && !isSafeUrl("tg://resolve?domain=x")
+                  && !isSafeUrl("file:///etc/passwd") && !isSafeUrl("javascript:alert(1)") && !isSafeUrl(" https://x"),
+              "isSafeUrl: только http(s) и mailto");
+    }
 
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
