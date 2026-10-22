@@ -16,6 +16,7 @@ import {
   consumeNoteRequest, getIsParvaneScreenShown, getKnowledgeView, getNoteRequest, getParvaneSection,
   setKnowledgeView, setParvaneSection,
 } from '../../../util/parvaneSection';
+import { setCloudActive } from '../cloud/cloudStore';
 import { toDayKey } from '../planner/plannerModel';
 import { getPlannerState, loadPlanner } from '../planner/plannerStore';
 import { openOfferInPlan } from '../taskOffer/taskOfferOpen';
@@ -176,6 +177,13 @@ const Knowledge = () => {
   // eslint-disable-next-line react-hooks-static-deps/exhaustive-deps
   const isShown = useDerivedState(() => getIsParvaneScreenShown('knowledge'), [getParvaneSection, getKnowledgeView]);
   useEffect(() => (isShown ? retainNotes() : undefined), [isShown]);
+  // Заметки лежат в облаке: пока раздел на экране, облако опрашивается часто — заметка с другого устройства
+  // появляется за секунды, а не через минуту фонового опроса
+  useEffect(() => {
+    if (!isShown) return undefined;
+    setCloudActive(true);
+    return () => setCloudActive(false);
+  }, [isShown]);
 
   useEffect(() => {
     void loadNotes(currentUserId, { guideLang, vaultName });

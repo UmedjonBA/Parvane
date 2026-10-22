@@ -224,9 +224,16 @@ function resetCloud() {
   }
 }
 
-/** Раздел открыт/закрыт: частый либо редкий опрос сервера. */
+let activeHolders = 0;
+
+/** Экран облака («Файлы» либо «Знания» — заметки лежат в облаке) открыт/закрыт: частый либо редкий опрос сервера.
+ * Экранов несколько — опрос частый, пока открыт хотя бы один. */
 export function setCloudActive(isActive: boolean) {
-  void callParvane('parvaneCloudSetActive', { isActive }).catch(() => undefined);
+  const wasActive = activeHolders > 0;
+  activeHolders = Math.max(0, activeHolders + (isActive ? 1 : -1));
+  const isNowActive = activeHolders > 0;
+  if (wasActive === isNowActive) return;
+  void callParvane('parvaneCloudSetActive', { isActive: isNowActive }).catch(() => undefined);
 }
 
 export async function refreshCloudUsage() {

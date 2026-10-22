@@ -30,7 +30,7 @@ Rust-сервисов («шардов»), каждый со своей встр�
 Клиентов три, все на общем контракте (версионированный протокол v2, см.
 «Протокол v2»; прежний JSON-протокол v1 с сервера и из веба удалён 7 окт 2026):
 **веб** (основной, задеплоен),
-**десктоп** (форк tdesktop) и **Android** (в работе). Принцип везде один — берём
+**десктоп** (форк tdesktop) и **Android** (форк Telegram X). Принцип везде один — берём
 зрелый клиент Telegram и подменяем его сетевой слой на наш (`web`: провайдер
 вместо MTProto/GramJS; `desktop`: `parvane-core` вместо MTProto; `android`:
 shim TDLib поверх `parvane-core`). Прод-путь клиентов — через
@@ -139,7 +139,7 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Клиенты: web (Telegram Web A, TS) · desktop (tdesktop, C++) ·   │
-│           android (форк TDLib-клиента, в работе)                 │
+│           android (форк Telegram X на шве TDLib)                 │
 │  У каждого сетевой слой Telegram заменён на наш (провайдер/        │
 │  parvane-core); события Parvane маппятся в родные объекты клиента │
 └────────────────────────────┬────────────────────────────────────┘
@@ -178,7 +178,7 @@ crypto/SAS, call, group, blobcrypt…) + web (`vitest`, включая `conforma
    Веб (`web/`, форк Telegram Web A) — провайдер `src/api/parvane/` вместо
    MTProto/GramJS. Десктоп (`desktop/`, форк tdesktop) — модуль `parvane-core`
    (WSS/gateway или cnats) вместо MTProto, события маппятся в TL-объекты
-   (`MTPMessage`/`MTPUser`) для штатного UI. Android (`android/`, в работе) —
+   (`MTPMessage`/`MTPUser`) для штатного UI. Android (`android/`, форк Telegram X) —
    shim TDLib поверх `parvane-core`. Прод-подключение — через `gateway` по WSS.
 
 ---
@@ -586,7 +586,7 @@ Identity генерирует keypair (Ed25519) при первом старте
 - Тулчейн tdesktop (Qt 6, OpenSSL, FFmpeg, CMake/ninja) — для десктоп-клиента,
   см. `desktop/BUILD-parvane.md`
 - Android NDK + `cargo-ndk` + Rust android-таргеты — для `parvane-core` под
-  Android, см. `android/BUILD-android.md` (Android-клиент в работе)
+  Android, см. `android/BUILD-android.md`
 
 ### Установка NATS (без прав root)
 
@@ -748,8 +748,8 @@ nats req call.history.request \
 - Свои исходящие sealed после релогина — восстанавливаются из локального журнала
   истории и подписанным sync по `sender_signing_key` (сервер отдаёт их только
   владельцу по токену — `sender_user`).
-- **Android-клиент в работе**: нет звонков, на реальном телефоне проверен мало
-  (см. `android/BUILD-android.md`).
+- **Android-клиент** проверен сценариями в эмуляторе x86_64 и входом release-сборки на прод; на реальных
+  телефонах — мало (см. `android/BUILD-android.md`).
 - Календарь/Дневник (шарды `notes`/`calendar` есть, к UI клиентов не подключены)
   — впереди.
 - `notes`/`calendar` шарды на прод не разворачиваются (пока не нужны клиентам).

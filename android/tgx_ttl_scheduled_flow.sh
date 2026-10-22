@@ -26,7 +26,21 @@ PKG=org.parvane.tgx; ACT="$PKG/org.thunderdog.challegram.MainActivity"
 # logcat сценария копится в $OUT/logcat.txt (перед очисткой при рестарте — дописываем), иначе провалы не разобрать
 x_savelog() { ad logcat -d -v time >> "$OUT/logcat.txt" 2>/dev/null; }
 : > "$OUT/logcat.txt"
-x_restart() { x_force_stop $PKG || bad "X не остановился (force-stop)"; x_savelog; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; xlog "сессия поднята" 60; }
+# Рестарт — до НОВОГО процесса: сбой adb посреди прогона (force-stop/logcat -c не дошли) оставлял прежний процесс, и
+# проверка «пережило рестарт» падала без рестарта
+x_restart() {
+  local old new
+  old="$(ad shell pidof $PKG 2>/dev/null | tr -d '\r')"
+  for _ in 1 2 3; do
+    x_force_stop $PKG || { sleep 3; continue; }
+    x_savelog; ad shell rm -f /data/local/tmp/parvane-e2e-cmd; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1
+    xlog "сессия поднята" 60
+    new="$(ad shell pidof $PKG 2>/dev/null | tr -d '\r')"
+    [ -n "$new" ] && [ "$new" != "$old" ] && return 0
+    sleep 3
+  done
+  bad "X не перезапустился (pid $old)"
+}
 # e2e-хуки шва: файл /data/local/tmp/parvane-e2e-cmd читается швом раз в 3 с (команда JSON)
 x_cmd() { echo "$1" > "$OUT/cmd"; ad push "$OUT/cmd" /data/local/tmp/parvane-e2e-cmd >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-e2e-cmd; }
 [ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX TTL"; }
@@ -78,7 +92,7 @@ xlog "позиция [0-9-]+: archive" 30 && ok "X: архив пережил р
 x_cmd "{\"op\":\"archive\",\"peer\":\"bob@local\",\"on\":false}"
 xlog "чат [0-9-]+ → главный список" 30 && ok "X: чат возвращён из архива" || bad "X: чат не возвращён"
 
-ad logcat -d -v time > "$OUT/logcat.txt"
+x_savelog; ad logcat -c
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"
 # уборка: черновик в поле ввода прячет скрепку у следующих сценариев; десктоп помнит TTL чата (шаг 1)
 x_cmd "{\"op\":\"draft\",\"peer\":\"bob@local\",\"text\":\"\"}"

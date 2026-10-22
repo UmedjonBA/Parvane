@@ -18,9 +18,16 @@ echo "== :app:assembleRelease (libparvane_jni.so) =="
   || { grep -E "error:|What went wrong|FAILED" -A3 "$LOG/app-gradle.log" | head -20; exit 10; }
 ./setup-tgx.sh > "$LOG/setup.log" 2>&1 || { tail -20 "$LOG/setup.log"; exit 2; }
 echo "== X arm64 + x64 release =="
-(cd "$TGX" && JAVA_HOME=/mnt/hdd/ub/android/jdk-21 PATH=/mnt/hdd/ub/android/jdk-21/bin:$PATH \
-  ./gradlew assembleLatestArm64Release assembleLatestX64Release --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx3g > "$LOG/tgx-gradle.log" 2>&1) \
-  || { grep -E "^e: |error:|What went wrong" -A3 "$LOG/tgx-gradle.log" | head -30; exit 3; }
+# по одной архитектуре и с двумя воркерами: два R8 разом не помещаются в память машины на 16 ГБ
+: > "$LOG/tgx-gradle.log"
+# x64 release (только для эмулятора) — по PV_RELEASE_X64=1: tgcalls X в RelWithDebInfo под x86_64 не линкуется
+# (__tls_get_addr); эмулятор x86_64 запускает arm64-APK трансляцией ARM
+TARGETS="assembleLatestArm64Release"; [ "${PV_RELEASE_X64:-0}" = 1 ] && TARGETS="$TARGETS assembleLatestX64Release"
+for T in $TARGETS; do
+  (cd "$TGX" && JAVA_HOME=/mnt/hdd/ub/android/jdk-21 PATH=/mnt/hdd/ub/android/jdk-21/bin:$PATH \
+    ./gradlew "$T" --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx4g >> "$LOG/tgx-gradle.log" 2>&1) \
+    || { grep -E "^e: |error:|What went wrong" -A3 "$LOG/tgx-gradle.log" | head -30; exit 3; }
+done
 REL=$(ls "$TGX"/app/build/outputs/apk/latestArm64/release/*.apk 2>/dev/null | head -1)
 REL64=$(ls "$TGX"/app/build/outputs/apk/latestX64/release/*.apk 2>/dev/null | head -1)
 [ -n "$REL" ] || { echo "release-APK не найден"; exit 4; }
@@ -29,8 +36,8 @@ APKSIGNER=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/apksigner | tail -1)
   && echo "подпись: release-ключ Parvane" || { cat "$LOG/apksigner.txt"; exit 5; }
 aapt=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/aapt | tail -1)
 "$aapt" dump badging "$REL" | grep -q "application-debuggable" && { echo "APK debuggable — не выкладываем"; exit 6; }
-ls -la --time-style=long-iso "$REL" "$REL64"
-cp "$REL" "$LOG/parvane-android-arm64.apk"; [ -n "$REL64" ] && cp "$REL64" "$LOG/parvane-android-x64.apk"
+ls -la --time-style=long-iso "$REL" ${REL64:+"$REL64"}
+cp "$REL" "$LOG/parvane-android-arm64.apk"; [ -n "$REL64" ] && cp "$REL64" "$LOG/parvane-android-x64.apk"; rm -f "$TGX"/app/build/outputs/apk/latestX64/release/*.apk
 [ "${1:-}" = "--no-upload" ] && { echo "RELEASE_DONE (без выкладки) $LOG"; exit 0; }
 STAMP=$(date +%Y%m%d%H%M)
 ssh -p 2240 umejon@185.81.248.52 "mkdir -p parvane/apk && cd parvane/apk && { [ -f parvane-android-arm64.apk ] && cp parvane-android-arm64.apk parvane-android-arm64.prev-$STAMP.apk || true; }" \

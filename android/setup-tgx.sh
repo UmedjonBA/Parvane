@@ -187,19 +187,38 @@ if grep -q "^  tdjni$" "$CM"; then
 fi
 grep -q "parvane: tdjni убран" "$CM" || sed -i '1i # parvane: tdjni убран из линковки tgxjni (шов над parvane-core, см. android/setup-tgx.sh)' "$CM"
 
+echo "== spec 031: release без загрузки переводов с translations.telegram.org (T045; строки — в исходниках, как у debug) =="
+git -C "$TGX" checkout -q -- app/build.gradle.kts
+python3 - "$TGX/app/build.gradle.kts" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = ("      variant.sources.res?.addGeneratedSourceDirectory(\n"
+       "        fetchLocalizedStrings, FetchLocalizedStringsTask::resOutputDir\n"
+       "      )\n")
+assert old in s, 'build.gradle.kts: fetchLocalizedStrings'
+s = s.replace(old, "      // Parvane: переводы X с серверов Telegram не загружаются (T045)\n", 1)
+open(p, "w").write(s)
+PY
+grep -q "Parvane: переводы X с серверов Telegram" "$TGX/app/build.gradle.kts" && echo "   загрузка переводов отключена" || { echo "   build.gradle.kts не пропатчен"; exit 2; }
+
 echo "== google-services.json: клиент для нашего app.id (Firebase у нас не используется) =="
 python3 - "$TGX/app/google-services.json" <<'PY'
 import json, sys, copy
 p = sys.argv[1]; j = json.load(open(p))
 pk = "org.parvane.tgx"
-if not any(c["client_info"]["android_client_info"]["package_name"] == pk for c in j["client"]):
+# Свой заглушечный id приложения: Firebase отключён, а проверка выпуска X (validateApiTokens) отвергает чужой
+# id Telegram X при другом пакете
+own_id = "1:0:android:0000000000000000"
+mine = [c for c in j["client"] if c["client_info"]["android_client_info"]["package_name"] == pk]
+if not mine:
     c = copy.deepcopy(j["client"][0])
     c["client_info"]["android_client_info"]["package_name"] = pk
     j["client"].append(c)
-    json.dump(j, open(p, "w"), indent=2)
-    print("   добавлен клиент", pk)
-else:
-    print("   клиент", pk, "уже есть")
+    mine = [c]
+for c in mine:
+    c["client_info"]["mobilesdk_app_id"] = own_id
+json.dump(j, open(p, "w"), indent=2)
+print("   клиент", pk, "с заглушечным id приложения")
 PY
 
 echo "== spec 031: звонки — экран X поверх ядра и org.webrtc =="

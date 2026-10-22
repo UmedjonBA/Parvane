@@ -2,6 +2,7 @@
 // только запечатанными конвертами v2 (CALL-1, CALL-2). Медиа — org.webrtc из состава Telegram X в Kotlin
 // (ParvaneCalls): MediaBackend ядра здесь — тонкий мост по числовому дескриптору соединения.
 #include "jni_internal.h"
+#include "media_slots.h"
 
 #include <parvane/call.h>
 #include <parvane/call_manager.h>
@@ -57,44 +58,16 @@ void callStatic(const char *name, const char *sig, std::int64_t handle, const st
     });
 }
 
-// Мост MediaBackend ↔ Kotlin: дескриптор → объект (колбэки Kotlin находят его по дескриптору).
-// NAT-06: колбэк Kotlin (поток наблюдателя WebRTC) может прийти, пока ядро разрушает мост (отбой, выход участника
-// из сетки). Мост знает, сколько колбэков идёт сейчас, и деструктор ждёт их (кроме колбэка своего же потока: ядро
-// может завершить звонок прямо из него — тогда после возврата объект уже не трогается).
+// Мост MediaBackend ↔ Kotlin: дескриптор → объект (колбэки Kotlin находят его по дескриптору); гонку колбэка с
+// разрушением моста (NAT-06) закрывает реестр media_slots.h.
 class JniMediaBackend;
-struct MediaSlot {
-    JniMediaBackend *backend = nullptr;
-    int inflight = 0;
-    bool dead = false;
-};
-std::mutex g_mediaMu;
-std::condition_variable g_mediaCv;
-std::map<std::int64_t, MediaSlot> g_media;
-std::atomic<std::int64_t> g_nextHandle{1};
-thread_local std::vector<std::int64_t> t_mediaCallbacks; // дескрипторы, чей колбэк идёт на этом потоке
+pvjni::MediaSlots<JniMediaBackend> g_media;
 
 class JniMediaBackend : public parvane::MediaBackend {
 public:
-    JniMediaBackend() : handle_(g_nextHandle++) {
-        {
-            std::lock_guard<std::mutex> lk(g_mediaMu);
-            g_media[handle_].backend = this;
-        }
-        callStatic("mediaCreate", "(J)V", handle_);
-    }
+    JniMediaBackend() : handle_(g_media.add(this)) { callStatic("mediaCreate", "(J)V", handle_); }
     ~JniMediaBackend() override {
-        {
-            std::unique_lock<std::mutex> lk(g_mediaMu);
-            const auto own = static_cast<int>(std::count(t_mediaCallbacks.begin(), t_mediaCallbacks.end(), handle_));
-            if (const auto it = g_media.find(handle_); it != g_media.end()) {
-                it->second.dead = true;
-                g_mediaCv.wait(lk, [&] {
-                    const auto cur = g_media.find(handle_);
-                    return cur == g_media.end() || cur->second.inflight <= own;
-                });
-                g_media.erase(handle_);
-            }
-        }
+        g_media.retire(handle_);
         callStatic("mediaClose", "(J)V", handle_);
     }
     void createOffer(std::function<void(std::string)> onOffer) override {
@@ -158,27 +131,13 @@ private:
 
 template <typename F>
 void withMedia(std::int64_t handle, F &&f) {
-    // Колбэк ядра зовётся без g_mediaMu (сессия звонка берёт свои замки)
-    JniMediaBackend *b = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(g_mediaMu);
-        const auto it = g_media.find(handle);
-        if (it == g_media.end() || it->second.dead || !it->second.backend) return;
-        b = it->second.backend;
-        ++it->second.inflight;
-    }
-    t_mediaCallbacks.push_back(handle);
-    try {
-        f(*b);
-    } catch (const std::exception &e) {
-        LOGE("медиа звонка: %s", e.what());
-    }
-    t_mediaCallbacks.pop_back();
-    {
-        std::lock_guard<std::mutex> lk(g_mediaMu);
-        if (const auto it = g_media.find(handle); it != g_media.end()) --it->second.inflight;
-    }
-    g_mediaCv.notify_all();
+    g_media.with(handle, [&](JniMediaBackend &b) {
+        try {
+            f(b);
+        } catch (const std::exception &e) {
+            LOGE("медиа звонка: %s", e.what());
+        }
+    });
 }
 
 std::mutex g_callMu;

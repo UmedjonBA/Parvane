@@ -2,6 +2,8 @@ package org.thunderdog.challegram.parvane.sections
 
 import android.content.Context
 import android.graphics.PorterDuff
+import android.os.Build
+import android.view.WindowInsets
 import android.graphics.PorterDuffColorFilter
 import android.view.Gravity
 import android.view.View
@@ -27,18 +29,39 @@ object ParvaneTabBar {
     /** Главный экран X: панель поверх низа списка чатов; список и плавающая кнопка поднимаются над ней. */
     @JvmStatic
     fun attachToMain(owner: ViewController<*>, contentView: ViewGroup, mainWrap: View, compose: View?) {
-        contentView.addView(create(owner.context(), owner, Tab.CHATS),
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height(), Gravity.BOTTOM))
-        (mainWrap.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
-            it.bottomMargin = height()
-            mainWrap.layoutParams = it
-        }
-        compose?.let { c ->
-            (c.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
-                it.bottomMargin = height()
-                c.layoutParams = it
+        val bar = create(owner.context(), owner, Tab.CHATS)
+        contentView.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height(), Gravity.BOTTOM))
+        fitNavigation(bar, *listOfNotNull(mainWrap, compose).toTypedArray())
+    }
+
+    /**
+     * Главный экран X рисует под системной панелью навигации: панель разделов встаёт над ней (нижний отступ на её высоту), а
+     * содержимое [above] поднимается над панелью целиком. Высоту и padding панели корень X при раскладке не учитывает. Без этого подписи и нажатия панели
+     * уходили под кнопки ◀ ● ■ (снимки тем T074).
+     */
+    private fun fitNavigation(bar: View, vararg above: View) {
+        fun apply(inset: Int) {
+            val total = height() + inset
+            (bar.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
+                if (it.bottomMargin != inset) { it.bottomMargin = inset; bar.layoutParams = it; android.util.Log.i("ParvaneClient", "панель разделов: отступ навигации $inset") }
+            }
+            above.forEach { v ->
+                (v.layoutParams as? ViewGroup.MarginLayoutParams)?.let { if (it.bottomMargin != total) { it.bottomMargin = total; v.layoutParams = it } }
             }
         }
+        // Только панель навигации, без клавиатуры: панель не прыгает, когда открыт ввод
+        fun insetOf(w: WindowInsets?): Int = when {
+            w == null -> 0
+            Build.VERSION.SDK_INT >= 30 -> w.getInsets(WindowInsets.Type.navigationBars()).bottom
+            else -> @Suppress("DEPRECATION") w.stableInsetBottom
+        }
+        apply(0)
+        // Вставки, которые X передаёт детям, уже «съедены» (0) — высота навигации берётся у окна
+        bar.setOnApplyWindowInsetsListener { v, w -> apply(insetOf(v.rootWindowInsets)); w }
+        bar.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) { v.post { apply(insetOf(v.rootWindowInsets)) } }
+            override fun onViewDetachedFromWindow(v: View) {}
+        })
     }
 
     fun create(context: Context, owner: ViewController<*>, current: Tab): View {

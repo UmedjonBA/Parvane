@@ -328,6 +328,9 @@ class ParvaneStore {
         return Folders.ChatFacts(isGroup = g != null && kind != "channel", isChannel = kind == "channel", isContact = g == null,
             isMuted = muted, isRead = (chat?.unreadCount ?: 0) == 0, isArchived = local?.isArchived(chatId) == true)
     }
+    /** Локальное состояние появилось после создания чатов — применить его к уже созданным. */
+    fun applyLocalToExisting() { chats.values.forEach { applyLocal(it) } }
+
     /** Применить TTL/черновик к чату из локального состояния (при создании и при восстановлении). */
     fun applyLocal(chat: TdApi.Chat) {
         val l = local ?: return

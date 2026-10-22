@@ -39,6 +39,7 @@ abstract class SectionController(context: Context, tdlib: Tdlib) : ViewControlle
         root.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
             bottomMargin = ParvaneTabBar.height()
         })
+        // Экран раздела X уже ставит над системной навигацией (в отличие от главного экрана — ParvaneTabBar.fitNavigation)
         root.addView(ParvaneTabBar.create(context, this, tab), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ParvaneTabBar.height(), Gravity.BOTTOM))
         addThemeInvalidateListener(root)

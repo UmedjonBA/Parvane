@@ -20,6 +20,10 @@
    `assembleLatestArm64Release`, `apksigner verify`, выкладка в `~/parvane/apk/` прода с копией прежнего файла;
    Caddy отдаёт `/apk/*.apk`).
 4. Сценарии эмулятора — `android/tgx_*_flow.sh` (общие функции — `android/tgx_lib.sh`, описание каждого — в его шапке); прогон по одному — `tgx_session_flow.sh` первым.
+   Пары с web — `tgx_protocol_web_flow.sh` (переписка, web2-android2) и `tgx_protocol_sections_web_flow.sh` (разделы,
+   sections-android); обе — также через `scripts/run_protocol_mixed_e2e.sh <пара>`.
+5. Гонки потоков JNI (NAT-06): `tools/tsan_media_slots.sh` — реестр мостов медиа звонка под ThreadSanitizer на хосте.
+6. Release-сборка X собирает архитектуры по очереди (`--max-workers=2`): два R8 разом не помещаются в 16 ГБ.
 
 ## Сделано (стадия 1: тулчейн + ядро под NDK) — ✅ РАБОТАЕТ
 

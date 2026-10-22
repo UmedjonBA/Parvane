@@ -1076,6 +1076,12 @@ class Client private constructor(
 
     private fun onSessionReady(self: String) {
         store.self = self
+        // Локальное состояние чатов (черновики, архив, TTL) — до первого чата: чат, созданный раньше другим потоком
+        // (группы, события ядра), оставался без черновика и архива — `applyLocal` зовётся только при создании чата
+        if (store.local == null) {
+            store.local = ChatLocalState(java.io.File(boundDir))
+            store.applyLocalToExisting()
+        }
         // Порядок как у TDLib: my_id → Ready → и только потом updateNewChat/
         // updateUser. Telegram X на переходе в Ready сбрасывает состояние, и
         // объявленный раньше чат терялся: следующий updateChatTitle падал с
@@ -1105,7 +1111,6 @@ class Client private constructor(
         // spec 005: встроенные паки ParvaneEmoji/ParvaneStickers (Canvas при первом старте)
         io.execute { if (!stickers.ensureBuiltin()) Log.w(TAG, "встроенные паки не нарисованы") }
         // spec 005 / история 3: локальное состояние чатов, очередь отложенных, e2e-хук команд
-        if (store.local == null) store.local = ChatLocalState(java.io.File(boundDir))
         store.renamesFile = java.io.File(boundDir, "renames.json") // RENAME-1: прежние ники собеседников → тот же чат
         store.loadRenames()
         store.local?.folders?.let { if (it.all().isNotEmpty()) postUpdate(TdApi.UpdateChatFolders(it.infos(), it.mainPosition, false)) }
@@ -2005,6 +2010,7 @@ class Client private constructor(
     // ── e2e-хук команд (только для сценариев эмулятора: /data/local/tmp/parvane-e2e-cmd) ──
     private val e2eTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-e2e").apply { isDaemon = true } }
     @Volatile private var lastE2eCmd = ""
+    private val e2eHookStartedMs = System.currentTimeMillis()
     private fun startE2eHook() {
         val f = java.io.File("/data/local/tmp/parvane-e2e-cmd")
         e2eTick.scheduleWithFixedDelay({
@@ -2012,6 +2018,11 @@ class Client private constructor(
                 if (!f.canRead()) return@scheduleWithFixedDelay
                 // adbd эмулятора — root, файл после `adb push` принадлежит root и приложением не удаляется:
                 // без дедупа по (mtime, текст) команда выполнялась каждые 3 с (повторные send/folder, 27 сен 2026)
+                // Команда прошлого процесса (файл root не удаляется, дедуп в памяти пуст) повторно не выполняется:
+                // повтор после рестарта объявлял чат раньше локального состояния — черновик и архив «терялись»
+                if (f.lastModified() < e2eHookStartedMs) return@scheduleWithFixedDelay
+                // До подключения сессии (локальное состояние чатов не загружено) команда ждёт
+                if (store.local == null) return@scheduleWithFixedDelay
                 val text = f.readText(); val key = "${f.lastModified()}:$text"
                 if (key == lastE2eCmd) return@scheduleWithFixedDelay
                 lastE2eCmd = key
