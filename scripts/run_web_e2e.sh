@@ -9,6 +9,7 @@ export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://l
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках
+"$ROOT/scripts/mute_test_audio_watch.sh" $$ >/dev/null 2>&1 & # сторож тишины (звук тестовых процессов)
 WEB_ROOT="$ROOT/web/telegram-tt"
 TEMP_ROOT="$(mktemp -d /tmp/parvane-web-e2e.XXXXXX)"
 PIDS=()

@@ -1116,7 +1116,12 @@ class Client private constructor(
     }
 
     /** Группы с сервера → basic group + чат в UI (idempotent). */
-    private fun syncGroups() {
+    // По одному: вызывают и событие ядра «группа», и io (создание, действия) — параллельно один поток отмечал чат
+    // объявленным, а второй успевал послать UpdateChatTitle раньше его UpdateNewChat (X падал «updateChat not received»)
+    private val groupsLock = Any()
+    private fun syncGroups(): Unit = synchronized(groupsLock) { syncGroupsLocked() }
+
+    private fun syncGroupsLocked() {
         val arr = try { ParvaneCore.listGroups() } catch (e: Throwable) { Log.w(TAG, "группы: ${e.message}"); return }
         for (i in 0 until arr.length()) {
             val g = arr.getJSONObject(i)

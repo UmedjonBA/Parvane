@@ -40,6 +40,7 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках
+"$ROOT/scripts/mute_test_audio_watch.sh" $$ >/dev/null 2>&1 & # сторож тишины (звук тестовых процессов)
 PAIR="${1:-web2-web2}"
 case "$PAIR" in
   # Android (spec 031): после android/tgx_session_flow.sh (стек и X — alice); desktop2-android2 — сам session_flow

@@ -433,6 +433,21 @@ open(p, "w").write(s)
 PY
 grep -q "Parvane: без Firebase" "$TGX/app/src/google/main/java/org/thunderdog/challegram/service/DefaultFirebaseTokenRetriever.kt" && grep -q "FirebaseInitProvider" "$TGX/app/src/main/AndroidManifest.xml" && echo "   Firebase отключён" || { echo "   Firebase не отключён"; exit 2; }
 
+echo "== spec 031: без проверки обновлений Google Play и канала Telegram X (T045; обновления — /apk/ сервера) =="
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/util/AppUpdater.java
+python3 - "$TGX/app/src/main/java/org/thunderdog/challegram/util/AppUpdater.java" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "    if (AppInstallationUtil.allowInAppGooglePlayUpdates(context)) {"
+assert old in s, 'AppUpdater: менеджер Play'
+s = s.replace(old, "    if (false) { // Parvane: приложения нет в Google Play — менеджер обновлений не создаётся", 1)
+old = "  public void checkForUpdates () {\n"
+assert old in s, 'AppUpdater: checkForUpdates'
+s = s.replace(old, old + "    if (true) return; // Parvane: ни Google Play, ни канал Telegram X — обновление с /apk/ сервера\n", 1)
+open(p, "w").write(s)
+PY
+grep -q "Parvane: ни Google Play" "$TGX/app/src/main/java/org/thunderdog/challegram/util/AppUpdater.java" && echo "   проверка обновлений отключена" || { echo "   AppUpdater не пропатчен"; exit 2; }
+
 echo "== local.properties / keystore =="
 KEYPROPS="${PARVANE_KEYSTORE_PROPS:-$KEYS/keystore.properties}" # выпуск — keystore-release.properties (T077)
 [ -f "$KEYPROPS" ] || { echo "нет $KEYPROPS (см. BUILD-android.md)"; exit 2; }
