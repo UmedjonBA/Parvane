@@ -507,12 +507,8 @@ void Histories::changeDialogUnreadMark(
 		bool unread) {
 	history->setUnreadMark(unread);
 
-	using Flag = MTPmessages_MarkDialogUnread::Flag;
-	session().api().request(MTPmessages_MarkDialogUnread(
-		MTP_flags(unread ? Flag::f_unread : Flag(0)),
-		MTPInputPeer(), // parent_peer
-		MTP_inputDialogPeer(history->peer->input())
-	)).send();
+	// Parvane: отметка — в журнал личного состояния (на всех своих устройствах), не на сервер Telegram
+	Parvane::MirrorUnreadMark(history, unread);
 }
 
 void Histories::changeSublistUnreadMark(

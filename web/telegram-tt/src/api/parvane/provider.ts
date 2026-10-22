@@ -10,11 +10,12 @@ import type {
   ApiAppConfig,
   ApiAvailableReaction,
   ApiBirthday,
-  ApiChat, ApiDraft, ApiInitialArgs,
+  ApiChat, ApiConfig, ApiDraft, ApiInitialArgs,
   ApiMessage,
   ApiOnProgress,
   ApiPeer,
   ApiPhoto,
+  ApiReaction,
   ApiSession,
   ApiSticker, ApiStickerSet, ApiThreadInfo,
   ApiUpdate,
@@ -243,6 +244,10 @@ async function buildUploadedWallpaper(slug: string, blob: Blob, fileName: string
   };
 }
 const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
+// Быстрая реакция, пока пользователь её не выбирал (как у Telegram)
+const DEFAULT_QUICK_REACTION: ApiReaction = { type: 'emoji', emoticon: '👍' };
+// Срок ответа fetchConfig: tt перечитывает его по таймеру (меньше суток — без переполнения setTimeout)
+const CONFIG_TTL_SECS = 3600;
 const BUILTIN_REACTIONS: ApiAvailableReaction[] = [
   '👍', '❤️', '🔥', '😂', '👏', '🎉', '🤔',
 ].map((emoticon) => ({
@@ -1809,6 +1814,31 @@ const methods = {
     return Promise.resolve(BUILTIN_REACTIONS);
   },
 
+  // Из настроек сервера Telegram у нас есть только быстрая реакция (журнал личного
+  // состояния); нулевые пределы tt читает как «без предела», как без config
+  fetchConfig() {
+    const quick = localState.loadQuickReaction();
+    const defaultReaction: ApiReaction = quick?.documentId
+      ? { type: 'custom', documentId: quick.documentId }
+      : quick?.emoji ? { type: 'emoji', emoticon: quick.emoji } : DEFAULT_QUICK_REACTION;
+    return Promise.resolve({
+      expiresAt: Math.floor(Date.now() / 1000) + CONFIG_TTL_SECS,
+      defaultReaction,
+      maxGroupSize: 0,
+      maxMessageLength: 0,
+      editTimeLimit: 0,
+      maxForwardedCount: 0,
+      ratingEDecay: 0,
+    } satisfies ApiConfig);
+  },
+
+  setDefaultReaction({ reaction }: { reaction: ApiReaction }) {
+    localState.saveQuickReaction(
+      reaction.type === 'custom' ? { documentId: reaction.documentId } : { emoji: reaction.emoticon },
+    );
+    return Promise.resolve(true);
+  },
+
   // Рейтинга собеседников и ботов сервер не ведёт (ботов нет вовсе): tt просит его
   // после синхронизации и на экране поиска — отвечаем «нет данных»
   fetchTopPeers() {
@@ -1821,7 +1851,11 @@ const methods = {
     // Пинок загрузки наборов стикеров/кастом-эмодзи после маунта Main: штатный
     // путь гейтится на isAppConfigLoaded (fetchAppConfig у нас нет), а апдейт
     // updateStickerSets зовёт loadStickerSets напрямую
-    setTimeout(() => sendUpdate({ '@type': 'updateStickerSets' }), 0);
+    setTimeout(() => {
+      sendUpdate({ '@type': 'updateStickerSets' });
+      // Быстрая реакция живёт в config: штатно его грузит MTProto-клиент, у нас — этот пинок
+      sendUpdate({ '@type': 'updateConfig' });
+    }, 0);
 
     const users: ApiUser[] = [];
     const chats: ApiChat[] = [];
@@ -1859,7 +1893,13 @@ const methods = {
     // но ключ остаётся — иначе пометка deleted снималась и пустой чат
     // всплывал в списке до reload
     const chatIdsWithHistory = new Set(store.getChatIds().filter((id) => store.getMessages(id).length > 0));
-    const unreadMarks = new Set(localState.loadUnreadMarks());
+    const legacyMarks = localState.takeLegacyUnreadMarks()
+      .map((id) => store.getAddressForId(id))
+      .filter((address): address is string => Boolean(address));
+    if (legacyMarks.length) {
+      localState.saveUnreadMarks(Array.from(new Set([...localState.loadUnreadMarks(), ...legacyMarks])));
+    }
+    const unreadMarks = new Set(localState.loadUnreadMarks().map((address) => store.getIdForAddress(address)));
     const isVisibleChat = (chat: ApiChat) => chatIdsWithHistory.has(chat.id)
       || chatIdsWithDrafts.has(chat.id)
       || chat.type !== 'chatTypePrivate';
@@ -2260,13 +2300,15 @@ const methods = {
     return Promise.resolve({ blockedIds: ids, totalCount: ids.length });
   },
 
-  // ── «Отметить непрочитанным» (локальный персист; снимается при открытии чата
-  //    штатным markChatRead → hasUnreadMark: undefined) ──────────────────────
+  // ── «Отметить непрочитанным» (журнал личного состояния — на всех своих
+  //    устройствах; снимается при открытии чата штатным markChatRead →
+  //    hasUnreadMark: undefined) ─────────────────────────────────────────────
   toggleDialogUnread({ chat, hasUnreadMark }: { chat: ApiChat; hasUnreadMark?: true }) {
-    const marks = new Set(localState.loadUnreadMarks());
-    if (hasUnreadMark) marks.add(chat.id);
-    else marks.delete(chat.id);
-    localState.saveUnreadMarks(Array.from(marks));
+    const address = store.getAddressForId(chat.id);
+    const marks = localState.loadUnreadMarks();
+    if (address && marks.includes(address) !== Boolean(hasUnreadMark)) {
+      localState.saveUnreadMarks(hasUnreadMark ? [...marks, address] : marks.filter((a) => a !== address));
+    }
     sendUpdate({
       '@type': 'updateThreadReadState',
       chatId: chat.id,

@@ -33,7 +33,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
     peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
-    CloudContainer, CloudContainerRole, PlannerContainer,
+    CloudContainer, CloudContainerRole, PlannerContainer, QuickReaction,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -295,6 +295,10 @@ pub struct PersonalState {
     planner_container: Option<Lww<PlannerContainer>>,
     // Контейнеры облака (spec 016) по (домен сервера, id): запись целиком по метке.
     cloud_containers: BTreeMap<(String, Vec<u8>), Lww<CloudContainer>>,
+    // Чаты, отмеченные «непрочитанными» вручную, по собеседнику.
+    unread_marks: BTreeMap<String, Lww<Peer>>,
+    // Быстрая реакция: LWW-регистр.
+    quick_reaction: Option<Lww<QuickReaction>>,
     max_lamport: u64,
 }
 
@@ -353,6 +357,15 @@ fn check_folder(f: &Folder) -> Result<()> {
     check_peers(&f.include_peers)?;
     check_peers(&f.exclude_peers)?;
     check_peers(&f.pinned_peers)
+}
+
+/// Эмодзи либо id собственного эмодзи (десятичный), не оба; оба пусты — реакция по умолчанию.
+fn check_quick_reaction(r: &QuickReaction) -> Result<()> {
+    let is_custom_valid = r.custom_emoji_id.is_empty() || r.custom_emoji_id.bytes().all(|b| b.is_ascii_digit());
+    if !is_custom_valid || (!r.emoji.is_empty() && !r.custom_emoji_id.is_empty()) {
+        return Err(ProtoError::InvalidField("quick_reaction"));
+    }
+    Ok(())
 }
 
 fn pin_list(list: i32) -> Result<i32> {
@@ -492,6 +505,19 @@ impl PersonalState {
                 }
                 put(&mut self.cloud_containers, (r.domain.clone(), r.id.clone()), &stamp, Some(c.clone()));
             }
+            Some(Op::UnreadMarkSet(p)) => {
+                let peer = p.peer.clone().ok_or(ProtoError::InvalidField("peer"))?;
+                let k = peer_key(&peer)?;
+                put(&mut self.unread_marks, k, &stamp, Some(peer));
+            }
+            Some(Op::UnreadMarkRemove(p)) => {
+                let k = opt_peer_key(&p.peer)?;
+                put(&mut self.unread_marks, k, &stamp, None);
+            }
+            Some(Op::QuickReaction(r)) => {
+                check_quick_reaction(r)?;
+                put_reg(&mut self.quick_reaction, &stamp, r.clone());
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -532,6 +558,8 @@ impl PersonalState {
             invites: live(&self.invites),
             planner_container: self.planner_container.as_ref().and_then(|e| e.value.clone()),
             cloud_containers: live(&self.cloud_containers),
+            unread_marks: live(&self.unread_marks),
+            quick_reaction: self.quick_reaction.as_ref().and_then(|e| e.value.clone()),
         }
     }
 
@@ -650,6 +678,13 @@ pub fn migrate_snapshot_with(
     kinds.extend(snapshot.invites.iter().cloned().map(Op::GroupInviteSet));
     kinds.extend(snapshot.planner_container.clone().map(Op::PlannerContainerSet));
     kinds.extend(snapshot.cloud_containers.iter().cloned().map(Op::CloudContainerSet));
+    kinds.extend(
+        snapshot
+            .unread_marks
+            .iter()
+            .map(|p| Op::UnreadMarkSet(PeerKey { peer: Some(p.clone()) })),
+    );
+    kinds.extend(snapshot.quick_reaction.clone().map(Op::QuickReaction));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());
@@ -683,11 +718,13 @@ pub struct Managed {
     pub scheduled: bool,
     pub archived: bool,
     pub pinned: bool,
+    pub unread: bool,
+    pub reaction: bool,
 }
 
 impl Managed {
     /// Из списка имён (`folders`, `blocked`, `notify`, `drafts`, `scheduled`,
-    /// `archived`, `pinned`); незнакомые имена пропускаются.
+    /// `archived`, `pinned`, `unread`, `reaction`); незнакомые имена пропускаются.
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
         let mut m = Managed::default();
         for n in names {
@@ -699,6 +736,8 @@ impl Managed {
                 "scheduled" => m.scheduled = true,
                 "archived" => m.archived = true,
                 "pinned" => m.pinned = true,
+                "unread" => m.unread = true,
+                "reaction" => m.reaction = true,
                 _ => {}
             }
         }
@@ -805,6 +844,26 @@ pub fn diff_ops(current: &StateSnapshot, desired: &StateSnapshot, m: Managed) ->
             if !want.contains_key(k) {
                 out.push(Op::ArchiveRemove(PeerKey { peer: Some(p.clone()) }));
             }
+        }
+    }
+    if m.unread {
+        let cur = keyed(&current.unread_marks, |p| peer_key(p).ok());
+        let want = keyed(&desired.unread_marks, |p| peer_key(p).ok());
+        for (k, p) in &want {
+            if !cur.contains_key(k) {
+                out.push(Op::UnreadMarkSet(PeerKey { peer: Some(p.clone()) }));
+            }
+        }
+        for (k, p) in &cur {
+            if !want.contains_key(k) {
+                out.push(Op::UnreadMarkRemove(PeerKey { peer: Some(p.clone()) }));
+            }
+        }
+    }
+    if m.reaction {
+        let want = desired.quick_reaction.clone().unwrap_or_default();
+        if current.quick_reaction.clone().unwrap_or_default() != want && check_quick_reaction(&want).is_ok() {
+            out.push(Op::QuickReaction(want));
         }
     }
     if m.pinned {
@@ -950,6 +1009,38 @@ mod tests {
         // Неуправляемое (звонки) разница не трогает.
         assert_eq!(got.calls.len(), 1);
         assert!(diff_ops(&got, &desired, m).is_empty());
+    }
+
+    #[test]
+    fn unread_marks_and_quick_reaction_diff() {
+        let mut s = PersonalState::new();
+        let mut c = LamportClock::default();
+        let mut desired = s.snapshot();
+        desired.unread_marks = vec![user("bob@x")];
+        desired.quick_reaction = Some(QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() });
+        let m = Managed::from_names(["unread", "reaction"]);
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert_eq!(s.snapshot().unread_marks, desired.unread_marks);
+        assert_eq!(s.snapshot().quick_reaction, desired.quick_reaction);
+        assert!(diff_ops(&s.snapshot(), &desired, m).is_empty());
+        // Открытие чата снимает отметку; реакция без выбора — по умолчанию клиента
+        desired.unread_marks.clear();
+        desired.quick_reaction = None;
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert!(s.snapshot().unread_marks.is_empty());
+        assert_eq!(s.snapshot().quick_reaction, Some(QuickReaction::default()));
+        // Неуправляемые виды разница не трогает
+        desired.quick_reaction = Some(QuickReaction { emoji: "❤".into(), custom_emoji_id: String::new() });
+        assert!(diff_ops(&s.snapshot(), &desired, Managed::from_names(["unread"])).is_empty());
+        // Эмодзи и собственный эмодзи вместе, нецифровой id — отказ
+        let both = make_op(&mut c, "d1", 0, Op::QuickReaction(QuickReaction { emoji: "👍".into(), custom_emoji_id: "1".into() })).unwrap();
+        assert!(s.apply(&both).is_err());
+        let bad = make_op(&mut c, "d1", 0, Op::QuickReaction(QuickReaction { emoji: String::new(), custom_emoji_id: "x1".into() })).unwrap();
+        assert!(s.apply(&bad).is_err());
     }
 
     #[test]

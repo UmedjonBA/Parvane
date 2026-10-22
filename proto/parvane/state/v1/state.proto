@@ -258,6 +258,15 @@ message CloudContainer {
   string owner = 5 [(parvane.core.v2.max_len) = 255];
 }
 
+// Быстрая реакция (двойной щелчок по сообщению, как `messages.setDefaultReaction`
+// Telegram). LWW-регистр; оба поля пусты — реакция по умолчанию клиента.
+message QuickReaction {
+  // Эмодзи реакции.
+  string emoji = 1 [(parvane.core.v2.max_len) = 64];
+  // Либо собственный эмодзи: id документа (десятичная строка, EMOJI-1).
+  string custom_emoji_id = 2 [(parvane.core.v2.max_len) = 32];
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -294,6 +303,11 @@ message StateOp {
     // его из журнала состояния, не перебирая контейнеры.
     PlannerContainer planner_container_set = 31;
     CloudContainer cloud_container_set = 32;
+    // Чат отмечен «непрочитанным» вручную (как `messages.markDialogUnread`).
+    // Карта по собеседнику; отметку снимает открытие чата на любом устройстве.
+    PeerKey unread_mark_set = 33;
+    PeerKey unread_mark_remove = 34;
+    QuickReaction quick_reaction = 35;
   }
 }
 
@@ -318,4 +332,6 @@ message StateSnapshot {
   repeated GroupInvite invites = 13 [(parvane.core.v2.max_items) = 10000];
   PlannerContainer planner_container = 14;
   repeated CloudContainer cloud_containers = 15 [(parvane.core.v2.max_items) = 300];
+  repeated Peer unread_marks = 16 [(parvane.core.v2.max_items) = 100000];
+  QuickReaction quick_reaction = 17;
 }

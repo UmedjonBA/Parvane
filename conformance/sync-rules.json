@@ -741,7 +741,8 @@
         "удаление — надгробие с меткой; надгробие раньше записи; воскрешение большей меткой",
         "scheduled_sent необратим и сильнее любой метки",
         "повторы записей идемпотентны",
-        "некорректные операции отвергаются одинаково при любом порядке; неизвестный вид — пропуск"
+        "некорректные операции отвергаются одинаково при любом порядке; неизвестный вид — пропуск",
+        "отметка «непрочитано» — карта с надгробиями; быстрая реакция — регистр, эмодзи и собственный эмодзи вместе либо нецифровой id отвергаются"
       ],
       "server": {
         "shard": "messenger (backend/shards/messenger/src/v2_state.rs, журнал user_state_log в <PARVANE_DB_PATH>-v2.db)",
@@ -1056,15 +1057,19 @@
     },
     {
       "id": "STATE-2",
-      "title": "Личное состояние — целиком в журнале (уведомления, блок-лист, архив, закреп); v1-блоб без списка заглушённых; приватность — с сервера",
+      "title": "Личное состояние — целиком в журнале (уведомления, блок-лист, архив, закреп, отметка «непрочитано», быстрая реакция); v1-блоб без списка заглушённых; приватность — с сервера",
       "kinds": [
         "folders",
         "blocked",
         "scheduled",
         "archived",
         "pinned",
-        "notify"
+        "notify",
+        "unread",
+        "reaction"
       ],
+      "unreadMark": "state.v1 unread_mark_set/unread_mark_remove (карта по собеседнику, LWW); открытие чата на любом своём устройстве снимает отметку",
+      "quickReaction": "state.v1 quick_reaction (LWW-регистр: emoji либо custom_emoji_id, не оба; оба пусты — реакция клиента по умолчанию)",
       "mainPinList": "PIN_LIST_MAIN",
       "notifyFields": [
         "mute_until_ms",
@@ -1078,7 +1083,7 @@
       ],
       "privacyGetMethod": "identity.privacy.get",
       "privacySetMethod": "identity.privacy.set",
-      "status": "open: web и desktop готовы; android ведёт в журнале блок-лист и архив, уведомления и закреп — нет",
+      "status": "open: web и desktop готовы (отметка «непрочитано» и быстрая реакция — с 22 окт 2026); android ведёт в журнале блок-лист и архив, уведомления, закреп, отметку «непрочитано» и быструю реакцию — нет",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/stateJournal.ts (notify), provider.ts (refreshV2Privacy; v1-блоба msg.chat.setnotify нет с T110 — group_add в приватности v2), v2/controller.ts (getPrivacy)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (fetchPrivacyLocked); tdesktop parvane_client.cpp (kV2StateKinds, ProjectNotify, ProjectBlocked, ProjectDialogs; v1-блоба настроек нет со spec 029 — PublishNotifyBlob пуст, правка → ScheduleStateFlush(\"notify\")); desktop/verify_protocol_v2_state.sh",

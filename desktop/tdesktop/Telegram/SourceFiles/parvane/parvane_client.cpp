@@ -1,5 +1,6 @@
 // Parvane fork: см. parvane_client.h.
 #include "parvane/parvane_client_internal.h"
+#include "data/data_message_reactions.h" // PARVANE_AUTOSTATE react
 #include "parvane/parvane_article_view.h"
 #include "parvane/parvane_local_files.h"
 #include "data/data_photo_media.h"
@@ -2162,6 +2163,10 @@ void LoadBlockedState() { // main
 // личного состояния (виды `archived`, `pinned`).
 QSet<QString> g_archivedAddrs; // main
 QStringList g_pinnedAddrs;     // main: основной список, сверху вниз
+// Отметка «непрочитано» и быстрая реакция (22 окт 2026): тот же файл, виды журнала `unread`, `reaction`
+QSet<QString> g_unreadMarkAddrs; // main
+QString g_quickEmoji;            // main
+QString g_quickCustom;           // main
 
 [[nodiscard]] QString DialogStatePath() {
 	return cWorkingDir() + u"tdata/parvane-dialogs.json"_q;
@@ -2176,17 +2181,39 @@ void SaveDialogState() { // main
 	for (const auto &address : g_pinnedAddrs) {
 		pinned.push_back(address.toStdString());
 	}
-	const nlohmann::json j{ { "archived", std::move(archived) }, { "pinned", std::move(pinned) } };
+	auto unread = nlohmann::json::array();
+	for (const auto &address : g_unreadMarkAddrs) {
+		unread.push_back(address.toStdString());
+	}
+	const nlohmann::json j{
+		{ "archived", std::move(archived) },
+		{ "pinned", std::move(pinned) },
+		{ "unread", std::move(unread) },
+		{ "quick_emoji", g_quickEmoji.toStdString() },
+		{ "quick_custom", g_quickCustom.toStdString() },
+	};
 	StoreWrite(DialogStatePath(), QByteArray::fromStdString(j.dump()));
 }
 
 void LoadDialogState() { // main
 	g_archivedAddrs.clear();
 	g_pinnedAddrs.clear();
+	g_unreadMarkAddrs.clear();
+	g_quickEmoji.clear();
+	g_quickCustom.clear();
 	const auto j = nlohmann::json::parse(StoreRead(DialogStatePath()).toStdString(), nullptr, false);
 	if (!j.is_object()) {
 		return;
 	}
+	if (j.contains("unread") && j["unread"].is_array()) {
+		for (const auto &v : j["unread"]) {
+			if (v.is_string()) {
+				g_unreadMarkAddrs.insert(QString::fromStdString(v.get<std::string>()));
+			}
+		}
+	}
+	g_quickEmoji = QString::fromStdString(j.value("quick_emoji", std::string()));
+	g_quickCustom = QString::fromStdString(j.value("quick_custom", std::string()));
 	if (j.contains("archived") && j["archived"].is_array()) {
 		for (const auto &v : j["archived"]) {
 			if (v.is_string()) {
@@ -7844,6 +7871,14 @@ void MirrorDialogPins(not_null<Main::Session*> session) {
 	NoteDialogPins(session);
 }
 
+void MirrorUnreadMark(not_null<History*> history, bool unread) {
+	NoteUnreadMark(history, unread);
+}
+
+void MirrorQuickReaction(const QString &emoji, std::uint64_t customId) {
+	NoteQuickReaction(emoji, customId);
+}
+
 // ── T079: приватность «сообщения от незнакомых» и режим L2 (публичное) ─────
 
 bool StrangersPolicyAvailable() {
@@ -10194,6 +10229,9 @@ void ResetAccountState(const char *why) {
 	g_blockedAddrs.clear();
 	g_archivedAddrs.clear();
 	g_pinnedAddrs.clear();
+	g_unreadMarkAddrs.clear();
+	g_quickEmoji.clear();
+	g_quickCustom.clear();
 	g_cardContent.clear();
 	g_previewPhotosRequested.clear();
 	g_hiddenGifs.clear();
@@ -11738,13 +11776,15 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		}
 
 		// Личное состояние (e2e, T132): PARVANE_AUTOSTATE=<op>:<адрес>@сек[,…],
-		// op = block|unblock|archive|unarchive|pin|unpin — нативными путями.
+		// op = block|unblock|archive|unarchive|pin|unpin|unread|read — нативными путями;
+		// react:<эмодзи>@сек — быстрая реакция (Data::Reactions::setFavorite).
 		if (const char *sv = ParvaneDevEnv("PARVANE_AUTOSTATE"); sv && *sv) {
 			for (const auto &part : QString::fromUtf8(sv).split(QChar(','), Qt::SkipEmptyParts)) {
 				const auto colon = part.indexOf(u':');
 				const auto at = part.lastIndexOf(u'@');
 				const auto dog = part.indexOf(u'@');
-				if (colon <= 0 || at <= colon || at == dog) {
+				const auto isReact = part.startsWith(u"react:"_q);
+				if (colon <= 0 || at <= colon || (at == dog && !isReact)) {
 					continue;
 				}
 				const auto op = part.left(colon);
@@ -11753,6 +11793,11 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 				base::call_delayed(delay * crl::time(1000), [weak, op, address] {
 					const auto s = weak.get();
 					if (!s) {
+						return;
+					}
+					if (op == u"react"_q) {
+						s->data().reactions().setFavorite(Data::ReactionId{ address });
+						LOG(("Parvane: autostate react → %1").arg(address));
 						return;
 					}
 					const auto history = HistoryForAddress(s, address);
@@ -11771,6 +11816,8 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						}
 						s->data().setChatPinned(history, FilterId(), op == u"pin"_q);
 						MirrorDialogPins(s);
+					} else if (op == u"unread"_q || op == u"read"_q) {
+						s->data().histories().changeDialogUnreadMark(history, op == u"unread"_q);
 					}
 					LOG(("Parvane: autostate %1 → %2").arg(op, address));
 				});

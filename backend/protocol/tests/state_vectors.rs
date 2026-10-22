@@ -23,7 +23,7 @@ use parvane_protocol::pb::parvane::call::v2::HangupReason;
 use parvane_protocol::pb::parvane::core::v2::{Ref, UserRef};
 use parvane_protocol::pb::parvane::state::v1::{
     peer, state_op::Op, BlockEntry, CallRecord, CallRef, ChatCleared, Draft, Folder, FolderOrder, FolderRef, NotifyDefaults,
-    NotifySettings, Peer, PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare,
+    NotifySettings, Peer, PeerKey, PeerNotify, PinList, PinnedOrder, QuickReaction, ScheduledMessage, ScheduledRef, StateKeyShare,
     StateOp, StateSnapshot,
 };
 use parvane_protocol::state::{self, LamportClock, PersonalState, SendGuard, StateKey};
@@ -167,6 +167,22 @@ fn gen_merge() -> Value {
             op(7, 3, "dev-a", Op::PinnedOrder(PinnedOrder { list: PinList::Main as i32, peers: vec![user("bob@x"), group(3)] })),
             op(8, 3, "dev-b", Op::PinnedOrder(PinnedOrder { list: PinList::Main as i32, peers: vec![group(3)] })),
             op(9, 1, "dev-a", Op::PinnedOrder(PinnedOrder { list: PinList::Archive as i32, peers: vec![user("spam@x")] })),
+        ],
+    ));
+    let emoji = |e: &str| QuickReaction { emoji: e.into(), custom_emoji_id: String::new() };
+    cases.push(merge_case(
+        "отметка «непрочитано» и быстрая реакция",
+        vec![
+            op(1, 1, "dev-a", Op::UnreadMarkSet(pk(user("bob@x")))),
+            op(2, 2, "dev-b", Op::UnreadMarkRemove(pk(user("bob@x")))),
+            op(3, 1, "dev-b", Op::UnreadMarkSet(pk(group(6)))),
+            op(4, 3, "dev-a", Op::UnreadMarkSet(pk(user("bob@x")))),
+            op(5, 1, "dev-a", Op::QuickReaction(emoji("🔥"))),
+            op(6, 2, "dev-b", Op::QuickReaction(QuickReaction { emoji: String::new(), custom_emoji_id: "5368324170671202286".into() })),
+            op(7, 2, "dev-a", Op::QuickReaction(emoji("❤"))),
+            op(8, 4, "dev-b", Op::QuickReaction(QuickReaction { emoji: "👍".into(), custom_emoji_id: "1".into() })),
+            op(9, 5, "dev-c", Op::QuickReaction(QuickReaction { emoji: String::new(), custom_emoji_id: "12a".into() })),
+            op(10, 6, "dev-c", Op::UnreadMarkSet(PeerKey { peer: None })),
         ],
     ));
     cases.push(merge_case(
@@ -468,6 +484,8 @@ fn gen_migration() -> Value {
         invites: vec![],
             planner_container: None,
             cloud_containers: vec![],
+        unread_marks: vec![user("bob@x")],
+        quick_reaction: Some(QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() }),
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();
@@ -549,6 +567,9 @@ fn arb_kind() -> impl Strategy<Value = Op> {
         (id16.clone(), arb_peer()).prop_map(|(c, p)| Op::CallSet(CallRecord { call_id: c, peer: Some(p), ..Default::default() })),
         id16.prop_map(|c| Op::CallRemove(CallRef { call_id: c })),
         (arb_peer(), 0i64..4).prop_map(|(p, t)| Op::ChatCleared(ChatCleared { peer: Some(p), cleared_until_ms: t })),
+        arb_peer().prop_map(|p| Op::UnreadMarkSet(pk(p))),
+        arb_peer().prop_map(|p| Op::UnreadMarkRemove(pk(p))),
+        prop::sample::select(vec!["", "🔥", "❤"]).prop_map(|e| Op::QuickReaction(QuickReaction { emoji: e.into(), custom_emoji_id: String::new() })),
     ]
 }
 

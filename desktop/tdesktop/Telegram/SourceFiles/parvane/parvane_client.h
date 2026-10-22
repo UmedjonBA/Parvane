@@ -416,6 +416,11 @@ bool MirrorDraft(not_null<History*> history, const TextWithTags &text);
 // Архив и закреп чатов (локальные): адреса на диск и в журнал состояния.
 void MirrorArchive(not_null<History*> history, bool archived);
 void MirrorDialogPins(not_null<Main::Session*> session);
+// Отметка «непрочитано» (ручная) и быстрая реакция: на диск и в журнал состояния (STATE-2;
+// MTProto messages.markDialogUnread / setDefaultReaction не шлются). Реакция — эмодзи либо id
+// собственного эмодзи (customId != 0).
+void MirrorUnreadMark(not_null<History*> history, bool unread);
+void MirrorQuickReaction(const QString &emoji, std::uint64_t customId);
 void MirrorNotifyDefault(Data::DefaultNotify type);
 
 // Зеркалит исходящее текстовое сообщение (с форматированием) в шину. Адрес

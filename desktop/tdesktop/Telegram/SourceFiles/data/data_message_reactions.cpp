@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 
 #include "base/random.h"
+#include "parvane/parvane_client.h" // быстрая реакция — журнал личного состояния
 
 namespace Data {
 namespace {
@@ -400,7 +401,8 @@ Reactions::Reactions(not_null<Session*> owner)
 				? ReactionId{ DocumentId(config.reactionDefaultCustom) }
 				: ReactionId{ config.reactionDefaultEmoji };
 		}) | rpl::filter([=](const ReactionId &id) {
-			return !_saveFaveRequestId;
+			// Parvane: значение config — только начальное; дальше реакцию ведёт журнал состояния
+			return !_saveFaveRequestId && _favoriteId.empty();
 		}) | rpl::on_next([=](ReactionId &&id) {
 			applyFavorite(id);
 		}, _lifetime);
@@ -503,17 +505,9 @@ const Reaction *Reactions::favorite() const {
 }
 
 void Reactions::setFavorite(const ReactionId &id) {
-	const auto api = &_owner->session().api();
-	if (_saveFaveRequestId) {
-		api->request(_saveFaveRequestId).cancel();
-	}
-	_saveFaveRequestId = api->request(MTPmessages_SetDefaultReaction(
-		ReactionToMTP(id)
-	)).done([=] {
-		_saveFaveRequestId = 0;
-	}).fail([=] {
-		_saveFaveRequestId = 0;
-	}).send();
+	// Parvane: быстрая реакция — в журнал личного состояния (на всех своих устройствах), не на сервер Telegram
+	const auto custom = id.custom();
+	Parvane::MirrorQuickReaction(custom ? QString() : id.emoji(), custom);
 
 	applyFavorite(id);
 }

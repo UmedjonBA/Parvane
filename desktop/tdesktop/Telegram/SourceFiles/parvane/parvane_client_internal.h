@@ -304,8 +304,11 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 [[nodiscard]] QString StateSyncedPath();
 void NoteStateEdited(const char *kind);
 void ApplyDialogState(not_null<Main::Session*> session);
+void ApplyQuickReaction(not_null<Main::Session*> session);
 void NoteArchive(not_null<History*> history, bool archived);
 void NoteDialogPins(not_null<Main::Session*> session);
+void NoteUnreadMark(not_null<History*> history, bool unread);
+void NoteQuickReaction(const QString &emoji, std::uint64_t customId);
 void ScheduleStateFlush(const char *kind);
 void FireScheduledGated(const ScheduledItem &item);
 bool HandleV2SessionEvent(const parvane::json &ev);
@@ -333,6 +336,9 @@ void StartupHousekeeping();
 extern QSet<QString> g_blockedAddrs;
 extern QSet<QString> g_archivedAddrs;
 extern QStringList g_pinnedAddrs;
+extern QSet<QString> g_unreadMarkAddrs;
+extern QString g_quickEmoji;  // быстрая реакция: эмодзи
+extern QString g_quickCustom; // либо id собственного эмодзи (десятичный); оба пусты — по умолчанию
 extern std::vector<ScheduledItem> g_scheduled;
 QString GatewayUrl();
 [[nodiscard]] std::shared_ptr<parvane::v2::Control> MakeControl(const QString &token = QString());

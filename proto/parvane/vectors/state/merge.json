@@ -1880,6 +1880,326 @@
     },
     {
       "expect": {
+        "max_lamport": 3,
+        "ok": true,
+        "rejected": [
+          7,
+          8,
+          9
+        ],
+        "snapshot": {
+          "quick_reaction": {
+            "custom_emoji_id": "5368324170671202286"
+          },
+          "unread_marks": [
+            {
+              "group": {
+                "domain": "x",
+                "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+              }
+            },
+            {
+              "user": {
+                "address": "bob@x"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+            "ts_ms": "1700000000000",
+            "unread_mark_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            }
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "AgICAgICAgICAgICAgICAg==",
+            "ts_ms": "1700000000000",
+            "unread_mark_remove": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            }
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "1",
+            "op_id": "AwMDAwMDAwMDAwMDAwMDAw==",
+            "ts_ms": "1700000000000",
+            "unread_mark_set": {
+              "peer": {
+                "group": {
+                  "domain": "x",
+                  "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+                }
+              }
+            }
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "3",
+            "op_id": "BAQEBAQEBAQEBAQEBAQEBA==",
+            "ts_ms": "1700000000000",
+            "unread_mark_set": {
+              "peer": {
+                "user": {
+                  "address": "bob@x"
+                }
+              }
+            }
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "1",
+            "op_id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+            "quick_reaction": {
+              "emoji": "🔥"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "2",
+            "op_id": "BgYGBgYGBgYGBgYGBgYGBg==",
+            "quick_reaction": {
+              "custom_emoji_id": "5368324170671202286"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-a",
+            "lamport": "2",
+            "op_id": "BwcHBwcHBwcHBwcHBwcHBw==",
+            "quick_reaction": {
+              "emoji": "❤"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-b",
+            "lamport": "4",
+            "op_id": "CAgICAgICAgICAgICAgICA==",
+            "quick_reaction": {
+              "custom_emoji_id": "1",
+              "emoji": "👍"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-c",
+            "lamport": "5",
+            "op_id": "CQkJCQkJCQkJCQkJCQkJCQ==",
+            "quick_reaction": {
+              "custom_emoji_id": "12a"
+            },
+            "ts_ms": "1700000000000"
+          },
+          {
+            "device_id": "dev-c",
+            "lamport": "6",
+            "op_id": "CgoKCgoKCgoKCgoKCgoKCg==",
+            "ts_ms": "1700000000000",
+            "unread_mark_set": {}
+          }
+        ],
+        "ops_hex": [
+          "0a100101010101010101010101010101010110011a056465762d612080d095ffbc318a020b0a090a070a05626f624078",
+          "0a100202020202020202020202020202020210021a056465762d622080d095ffbc3192020b0a090a070a05626f624078",
+          "0a100303030303030303030303030303030310011a056465762d622080d095ffbc318a02190a1712150a0178121006060606060606060606060606060606",
+          "0a100404040404040404040404040404040410031a056465762d612080d095ffbc318a020b0a090a070a05626f624078",
+          "0a100505050505050505050505050505050510011a056465762d612080d095ffbc319a02060a04f09f94a5",
+          "0a100606060606060606060606060606060610021a056465762d622080d095ffbc319a0215121335333638333234313730363731323032323836",
+          "0a100707070707070707070707070707070710021a056465762d612080d095ffbc319a02050a03e29da4",
+          "0a100808080808080808080808080808080810041a056465762d622080d095ffbc319a02090a04f09f918d120131",
+          "0a100909090909090909090909090909090910051a056465762d632080d095ffbc319a02051203313261",
+          "0a100a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a10061a056465762d632080d095ffbc318a0200"
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          [
+            9,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            5,
+            6,
+            7,
+            8,
+            9,
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            6,
+            7,
+            8,
+            9,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          [
+            7,
+            8,
+            9,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          [
+            8,
+            9,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          [
+            9,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            1,
+            3,
+            5,
+            7,
+            9,
+            0,
+            2,
+            4,
+            6,
+            8
+          ],
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            9,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ]
+        ]
+      },
+      "name": "отметка «непрочитано» и быстрая реакция"
+    },
+    {
+      "expect": {
         "max_lamport": 4,
         "ok": true,
         "rejected": [],

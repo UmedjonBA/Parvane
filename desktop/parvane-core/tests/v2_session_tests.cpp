@@ -704,8 +704,10 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
         {"notify", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"settings", {{"mute_until_ms", "4102444800000"}}}}})},
         {"drafts", json::array({json{{"peer", {{"user", {{"address", bob.user}}}}}, {"text", textB64}, {"date_ms", nowMsStr()}}})},
         {"pinned", json::array({json{{"list", "PIN_LIST_MAIN"}, {"peers", json::array({json{{"user", {{"address", bob.user}}}}})}}})},
+        {"unread_marks", json::array({json{{"user", {{"address", bob.user}}}}})},
+        {"quick_reaction", json{{"emoji", "\xF0\x9F\x94\xA5"}}},
     };
-    const auto synced = d1.s->stateSync(desired, {"blocked", "archived", "notify", "drafts", "pinned"});
+    const auto synced = d1.s->stateSync(desired, {"blocked", "archived", "notify", "drafts", "pinned", "unread", "reaction"});
     const auto snap1 = synced.is_object() ? synced.value("snapshot", json::object()) : json::object();
     check(snap1.contains("blocked") && snap1.dump().find("spam" + suffix) != std::string::npos
               && snap1.contains("archived") && snap1.contains("notify") && snap1.contains("drafts") && snap1.contains("pinned"),
@@ -720,6 +722,9 @@ static void devicesStateAndDomainsScenario(const std::string &tcp, const std::st
     check(snap2.dump().find("spam" + suffix) != std::string::npos && snap2.dump().find(textB64) != std::string::npos
               && snap2.dump().find("4102444800000") != std::string::npos,
           "M21/M22: второе устройство прочитало те же виды (блок-лист, черновик, уведомления)");
+    check(snap2.value("unread_marks", json::array()).dump().find(bob.user) != std::string::npos
+              && snap2.value("quick_reaction", json::object()).value("emoji", std::string()) == "\xF0\x9F\x94\xA5",
+          "STATE-2: отметка «непрочитано» и быстрая реакция дошли до второго устройства", snap2.dump().substr(0, 300));
     // Очистка чата «у себя» — граница между своими устройствами
     d1.s->stateChatCleared(bob.user, 1700000001000);
     bool cleared = false;

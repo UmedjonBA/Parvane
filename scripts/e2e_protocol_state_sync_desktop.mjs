@@ -187,6 +187,16 @@ try {
   assert.ok(!muted.error, `bob1: мьют не выполнен: ${muted.error}`);
   await waitDesktopWithin(/журнал состояния → уведомления \([1-9]\d* изменений\)/, STATE_SYNC_BUDGET_MS, 'мьют');
 
+  // STATE-2: отметка «непрочитано» и быстрая реакция web → desktop
+  await bob1.page.locator('#LeftColumn .ListItem').filter({ hasText: aliceName }).first().click({ button: 'right' });
+  await bob1.page.getByRole('menuitem', { name: 'Mark as Unread' }).click();
+  await waitDesktopWithin(/журнал состояния → отмечено непрочитанными 1,/, STATE_SYNC_BUDGET_MS, 'отметка «непрочитано»');
+  await bob1.page.evaluate(
+    () => window.__parvaneDiagCallApi('setDefaultReaction', { reaction: { type: 'emoji', emoticon: '🔥' } }),
+  );
+  await waitDesktopWithin(/журнал состояния → отмечено непрочитанными \d+, быстрая реакция 🔥/, STATE_SYNC_BUDGET_MS,
+    'быстрая реакция');
+
   await bob1.page.getByRole('button', { name: 'More actions' }).click();
   await bob1.page.getByRole('menuitem', { name: 'Block user' }).click();
   await waitDesktopWithin(/журнал состояния → блок-лист \([1-9]\d* изменений\)/, STATE_SYNC_BUDGET_MS, 'блокировка');

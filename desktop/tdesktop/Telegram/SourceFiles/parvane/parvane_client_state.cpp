@@ -1,5 +1,6 @@
 // Parvane fork: группы v2 и журнал личного состояния (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include "data/data_message_reactions.h" // быстрая реакция (вид журнала `reaction`)
 
 namespace Parvane {
 
@@ -272,7 +273,7 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 // Черновики tdesktop хранит в своём локальном хранилище, блок-лист и архив у
 // десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
 const std::vector<std::string> kV2StateKinds{
-	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts",
+	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts", "unread", "reaction",
 };
 // T024: черновики (как web stateJournal drafts) — адрес → {text, entities, dateMs}. Только main; файл в tdata.
 struct DraftEntry {
@@ -486,6 +487,18 @@ std::unique_ptr<base::Timer> g_stateTimer;
 			pinnedPeers.push_back(std::move(peer));
 		}
 	}
+	auto unreadMarks = parvane::json::array();
+	for (const auto &address : g_unreadMarkAddrs) {
+		if (auto peer = StatePeerOf(address); !peer.is_null()) {
+			unreadMarks.push_back(std::move(peer));
+		}
+	}
+	auto quickReaction = parvane::json::object();
+	if (!g_quickCustom.isEmpty()) {
+		quickReaction["custom_emoji_id"] = g_quickCustom.toStdString();
+	} else if (!g_quickEmoji.isEmpty()) {
+		quickReaction["emoji"] = g_quickEmoji.toStdString();
+	}
 	auto drafts = parvane::json::array();
 	LoadDraftsLocal();
 	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
@@ -515,6 +528,8 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "archived", std::move(archived) },
 		{ "pinned", parvane::json::array({
 			parvane::json{ { "list", "PIN_LIST_MAIN" }, { "peers", std::move(pinnedPeers) } } }) },
+		{ "unread_marks", std::move(unreadMarks) },
+		{ "quick_reaction", std::move(quickReaction) },
 	};
 }
 
@@ -563,6 +578,8 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "archived", digest(canon("archived", false)) },
 		{ "pinned", digest(canon("pinned", true)) },
 		{ "drafts", digest(canon("drafts", false)) },
+		{ "unread", digest(canon("unread_marks", false)) },
+		{ "reaction", digest(canon("quick_reaction", true)) },
 	};
 }
 
@@ -970,7 +987,65 @@ void ApplyDialogState(not_null<Main::Session*> session) { // main
 		}
 		owner.notifyPinnedDialogsOrderUpdated();
 	}
+	for (const auto &address : g_unreadMarkAddrs) {
+		if (const auto history = HistoryForAddress(session, address)) {
+			history->setUnreadMark(true);
+		}
+	}
+	ApplyQuickReaction(session);
 	g_stateApplying = wasApplying;
+}
+
+// Быстрая реакция → нативный «избранный» (`Data::Reactions::favoriteId`). Без выбора — 👍,
+// как у web (MTProto-config с реакцией сервера Telegram у нас не приходит).
+void ApplyQuickReaction(not_null<Main::Session*> session) { // main
+	const auto id = !g_quickCustom.isEmpty()
+		? Data::ReactionId{ DocumentId(g_quickCustom.toULongLong()) }
+		: Data::ReactionId{ g_quickEmoji.isEmpty() ? QString::fromUtf8("\xF0\x9F\x91\x8D") : g_quickEmoji };
+	auto &reactions = session->data().reactions();
+	if (reactions.favoriteId() == id) {
+		return;
+	}
+	const auto wasApplying = g_stateApplying;
+	g_stateApplying = true;
+	reactions.setFavorite(id);
+	g_stateApplying = wasApplying;
+}
+
+// Отметка «непрочитано» и быстрая реакция из журнала → локальные → чаты и реакции.
+void ProjectUnreadAndReaction(not_null<Main::Session*> session, const parvane::json &snap) {
+	auto marks = QSet<QString>();
+	if (snap.contains("unread_marks") && snap["unread_marks"].is_array()) {
+		for (const auto &peer : snap["unread_marks"]) {
+			if (const auto address = StateAddressOf(peer); !address.isEmpty()) {
+				marks.insert(address);
+			}
+		}
+	}
+	const auto reaction = snap.value("quick_reaction", parvane::json::object());
+	const auto emoji = reaction.is_object()
+		? QString::fromStdString(reaction.value("emoji", std::string()))
+		: QString();
+	const auto custom = reaction.is_object()
+		? QString::fromStdString(reaction.value("custom_emoji_id", std::string()))
+		: QString();
+	if (marks == g_unreadMarkAddrs && emoji == g_quickEmoji && custom == g_quickCustom) {
+		return;
+	}
+	const auto unmarked = g_unreadMarkAddrs - marks;
+	g_unreadMarkAddrs = marks;
+	g_quickEmoji = emoji;
+	g_quickCustom = custom;
+	SaveDialogState();
+	for (const auto &address : unmarked) {
+		if (const auto history = HistoryForAddress(session, address)) {
+			history->setUnreadMark(false);
+		}
+	}
+	ApplyDialogState(session);
+	LOG(("Parvane: v2: журнал состояния → отмечено непрочитанными %1, быстрая реакция %2")
+		.arg(g_unreadMarkAddrs.size())
+		.arg(!custom.isEmpty() ? (u"custom:"_q + custom) : emoji.isEmpty() ? u"по умолчанию"_q : emoji));
 }
 
 // Архив и закреп основного списка из журнала → локальные списки → чаты.
@@ -1201,6 +1276,7 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	ProjectNotify(snap);
 	ProjectBlocked(session, snap);
 	ProjectDialogs(session, snap);
+	ProjectUnreadAndReaction(session, snap);
 	ProjectDrafts(session, snap);
 	g_stateApplying = false;
 	SaveFolders(session);
@@ -1314,6 +1390,43 @@ void NoteArchive(not_null<History*> history, bool archived) {
 	LOG(("Parvane: чат %1 %2").arg(address, archived ? u"в архиве"_q : u"возвращён из архива"_q));
 	NoteStateEdited("pinned"); // архив снимает закреп
 	ScheduleStateFlush("archived");
+}
+
+// Пользователь отметил чат «непрочитанным» либо снял отметку (в т.ч. открытием чата,
+// Data::Histories::changeDialogUnreadMark).
+void NoteUnreadMark(not_null<History*> history, bool unread) {
+	if (g_stateApplying) {
+		return;
+	}
+	const auto address = HistoryAddress(history);
+	if (address.isEmpty() || (g_unreadMarkAddrs.contains(address) == unread)) {
+		return;
+	}
+	if (unread) {
+		g_unreadMarkAddrs.insert(address);
+	} else {
+		g_unreadMarkAddrs.remove(address);
+	}
+	SaveDialogState();
+	LOG(("Parvane: чат %1 %2").arg(address, unread ? u"отмечен непрочитанным"_q : u"без отметки «непрочитано»"_q));
+	ScheduleStateFlush("unread");
+}
+
+// Пользователь выбрал быструю реакцию (Data::Reactions::setFavorite).
+void NoteQuickReaction(const QString &emoji, std::uint64_t customId) {
+	if (g_stateApplying) {
+		return;
+	}
+	const auto custom = customId ? QString::number(customId) : QString();
+	const auto plain = customId ? QString() : emoji;
+	if (plain == g_quickEmoji && custom == g_quickCustom) {
+		return;
+	}
+	g_quickEmoji = plain;
+	g_quickCustom = custom;
+	SaveDialogState();
+	LOG(("Parvane: быстрая реакция %1").arg(custom.isEmpty() ? plain : (u"custom:"_q + custom)));
+	ScheduleStateFlush("reaction");
 }
 
 // Пользователь закрепил/открепил чат или переставил закреплённые в основном

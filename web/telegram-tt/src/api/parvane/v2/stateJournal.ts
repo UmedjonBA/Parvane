@@ -8,7 +8,9 @@
 // журнал не подключается — всё как раньше.
 
 import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../../types';
-import type { createLocalState, JournalScheduled, LocalStateKind } from '../localState';
+import type {
+  createLocalState, JournalScheduled, LocalQuickReaction, LocalStateKind,
+} from '../localState';
 import type { ParvaneStore } from '../store';
 import type { WireCallRecord } from '../wire';
 import type { CloudStateEntry } from './cloud';
@@ -99,6 +101,8 @@ type SSnapshot = {
   cloud_containers?: unknown[];
   notify?: { peer?: SPeer; settings?: SNotify }[];
   notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
+  unread_marks?: SPeer[];
+  quick_reaction?: SQuickReaction;
   [key: string]: unknown;
 };
 // `state.v1.GroupInvite`: ссылка-приглашение группы v2 (bytes — base64)
@@ -112,6 +116,8 @@ type SInvite = {
   usage_limit?: number;
   requires_approval?: boolean;
 };
+// `state.v1.QuickReaction`: эмодзи либо id собственного эмодзи; пусто — реакция по умолчанию
+type SQuickReaction = { emoji?: string; custom_emoji_id?: string };
 // `state.v1.NotifySettings`: без звука до момента (мс эпохи, int64 — строкой)
 type SNotify = { mute_until_ms?: string; sound?: string; show_previews?: boolean; silent?: boolean };
 // Локальный вид настроек уведомлений чата (поля ApiPeerNotifySettings)
@@ -119,8 +125,10 @@ type LocalNotify = Record<string, unknown>;
 const NOTIFY_DEFAULT_TYPES = ['users', 'groups', 'channels'] as const;
 
 const MANAGED_KINDS: LocalStateKind[] = [
-  'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify',
+  'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify', 'unread', 'reaction',
 ];
+// Виды, появившиеся в журнале позже первого переноса (миграция — один раз на вид)
+const LATE_KINDS: LocalStateKind[] = ['notify', 'unread', 'reaction'];
 const PIN_LIST_MAIN = 'PIN_LIST_MAIN';
 // Причина завершения звонка (`call.v2.HangupReason`): имя и числовое значение
 const HANGUP_NORMAL = 'HANGUP_REASON_NORMAL';
@@ -242,25 +250,31 @@ export function createStateJournal(deps: Deps) {
     }
   }
 
-  async function migrateNotify() {
+  // Вид пуст в журнале — локальное значение уходит туда; иначе главнее журнал
+  function isKindEmpty(snap: SSnapshot, kind: LocalStateKind) {
+    if (kind === 'notify') return !snap.notify?.length && !snap.notify_defaults;
+    if (kind === 'unread') return !snap.unread_marks?.length;
+    return !snap.quick_reaction;
+  }
+
+  async function migrateLateKinds() {
     if (!session) return;
-    try {
-      if (localStorage.getItem(kindMigratedKey('notify')) === '1') return;
-    } catch {
-      // приватный режим — переносим
-    }
+    const kinds = LATE_KINDS.filter((kind) => {
+      try {
+        return localStorage.getItem(kindMigratedKey(kind)) !== '1';
+      } catch {
+        return true; // приватный режим — переносим
+      }
+    });
     const current = readSnapshot();
-    if (!current.notify?.length && !current.notify_defaults) {
-      const desired = buildDesired(current);
-      const bodies = session.diff(
-        JSON.stringify({ ...current, notify: desired.notify, notify_defaults: desired.notify_defaults }),
-        ['notify'],
-      );
+    const empty = kinds.filter((kind) => isKindEmpty(current, kind));
+    if (empty.length) {
+      const bodies = session.diff(JSON.stringify(buildDesired(current, empty)), empty);
       append(...bodies);
       await pushAppends();
-      if (bodies.length) deps.log(`v2: настройки уведомлений перенесены в журнал (${bodies.length} записей)`);
+      if (bodies.length) deps.log(`v2: ${empty.join(', ')} перенесены в журнал (${bodies.length} записей)`);
     }
-    markKindMigrated('notify');
+    kinds.forEach(markKindMigrated);
   }
 
   function markMigrated() {
@@ -304,11 +318,11 @@ export function createStateJournal(deps: Deps) {
         append(...bodies);
         await pushAppends();
         markMigrated();
-        markKindMigrated('notify');
+        LATE_KINDS.forEach(markKindMigrated);
         deps.localState.clearDirtyKinds(revision);
         deps.log(`v2: локальное состояние перенесено в журнал (${bodies.length} записей)`);
       }
-      await migrateNotify();
+      await migrateLateKinds();
       await flushDirty();
       project();
     }).catch((e: unknown) => deps.log(`v2: журнал состояния не прочитан: ${String(e)}`));
@@ -606,9 +620,25 @@ export function createStateJournal(deps: Deps) {
 
   // ── локальные данные → желаемый снимок ───────────────────────────────────
 
-  function buildDesired(current: SSnapshot): SSnapshot {
+  // `only` — собрать только эти виды, остальные — как в журнале
+  function buildDesired(current: SSnapshot, only?: LocalStateKind[]): SSnapshot {
     const { localState } = deps;
     const store = deps.getStore();
+    if (only) {
+      const full = buildDesired(current);
+      const pick: SSnapshot = { ...current };
+      only.forEach((kind) => {
+        if (kind === 'notify') {
+          pick.notify = full.notify;
+          pick.notify_defaults = full.notify_defaults;
+        } else if (kind === 'unread') {
+          pick.unread_marks = full.unread_marks;
+        } else if (kind === 'reaction') {
+          pick.quick_reaction = full.quick_reaction;
+        }
+      });
+      return pick;
+    }
     const folders = localState.loadFolders() as unknown as ApiChatFolder[];
     const blockedAt = new Map((current.blocked || []).map((b) => [peerKey(b.peer), b.blocked_at_ms]));
     const now = String(Date.now());
@@ -635,6 +665,8 @@ export function createStateJournal(deps: Deps) {
         { list: PIN_LIST_MAIN, peers: localState.loadPinned().map(peerOf).filter(isPeer) },
         ...pinnedOther,
       ],
+      unread_marks: localState.loadUnreadMarks().map(peerOf).filter(isPeer),
+      quick_reaction: reactionToState(localState.loadQuickReaction()),
     };
   }
 
@@ -697,6 +729,8 @@ export function createStateJournal(deps: Deps) {
       projectArchived(snap);
       projectPinned(snap);
       projectDrafts(snap);
+      projectUnreadMarks(snap);
+      projectQuickReaction(snap);
     });
     projectScheduled(snap);
     projectCalls(snap);
@@ -817,6 +851,32 @@ export function createStateJournal(deps: Deps) {
     if (before.join('\n') === next.join('\n')) return;
     localState.savePinnedList(next);
     deps.sendUpdate({ '@type': 'updatePinnedChatIds', ids: next.map(chatIdOf) });
+  }
+
+  // Отметка «непрочитано» с другого своего устройства — и её снятие открытием чата там
+  function projectUnreadMarks(snap: SSnapshot) {
+    const { localState } = deps;
+    const before = localState.loadUnreadMarks();
+    const next = (snap.unread_marks || []).map(addressOf).filter(isAddress);
+    if (sameSet(before, next)) return;
+    localState.saveUnreadMarks(next);
+    diffSets(before, next).forEach(({ address, isAdded }) => {
+      deps.sendUpdate({
+        '@type': 'updateThreadReadState',
+        chatId: chatIdOf(address),
+        threadId: MAIN_THREAD_ID,
+        readState: { hasUnreadMark: isAdded || undefined },
+      });
+    });
+  }
+
+  function projectQuickReaction(snap: SSnapshot) {
+    const { localState } = deps;
+    const next = reactionFromState(snap.quick_reaction);
+    if (JSON.stringify(localState.loadQuickReaction()) === JSON.stringify(next)) return;
+    localState.saveQuickReaction(next);
+    // tt держит быструю реакцию в config — перечитать
+    deps.sendUpdate({ '@type': 'updateConfig' });
   }
 
   function projectDrafts(snap: SSnapshot) {
@@ -972,6 +1032,16 @@ function notifyDefaultsToState(defaults: Record<string, LocalNotify>) {
     if (defaults[type]) out[type] = notifyToState(defaults[type]);
   });
   return out;
+}
+
+function reactionToState(reaction: LocalQuickReaction | undefined): SQuickReaction {
+  if (reaction?.documentId) return { custom_emoji_id: reaction.documentId };
+  return reaction?.emoji ? { emoji: reaction.emoji } : {};
+}
+
+function reactionFromState(reaction: SQuickReaction | undefined): LocalQuickReaction | undefined {
+  if (reaction?.custom_emoji_id) return { documentId: reaction.custom_emoji_id };
+  return reaction?.emoji ? { emoji: reaction.emoji } : undefined;
 }
 
 function isPeer(peer: SPeer | undefined): peer is SPeer {

@@ -39,6 +39,24 @@ const LINK_TIMEOUT_MS = 90000;
 // SC-009: правка видна на другом устройстве ≤ 10 с
 const STATE_SYNC_BUDGET_MS = 10000;
 
+// Быстрая реакция в config tt
+function readQuickReaction(page) {
+  return page.evaluate(() => globalThis.__parvaneGetGlobal?.().config?.defaultReaction?.emoticon);
+}
+
+// Отметка «непрочитано» чата с собеседником (основной тред) — функцией в странице
+async function installUnreadMarkReader(page) {
+  await page.evaluate(() => {
+    globalThis.__parvaneReadUnreadMark = (name) => {
+      const g = globalThis.__parvaneGetGlobal?.();
+      const user = g && Object.values(g.users.byId)
+        .find((candidate) => candidate.usernames?.some(({ username }) => username === name));
+      if (!user) return undefined;
+      return Boolean(g.messages.byChatId[user.id]?.threadsById?.[-1]?.readState?.hasUnreadMark);
+    };
+  });
+}
+
 // Текст подтверждения выхода (диалог закрывается без выхода)
 async function readLogoutWarning(page) {
   await openProfile(page);
@@ -286,6 +304,9 @@ try {
   await findMessage(alicePage, own).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await findMessage(bob2Page, own).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
+  await installUnreadMarkReader(bob1Page);
+  await installUnreadMarkReader(bob2Page);
+
   // ── Журнал личного состояния: папка и блок-лист ≤ 10 с (SC-009) ────────────
   const folderName = `F-${suffix.slice(-6)}`;
   await createFolder(bob1Page, folderName, aliceName);
@@ -314,6 +335,43 @@ try {
   console.log(`мьют на втором устройстве через ${Date.now() - muteStarted} мс`);
   // Открытого v1-блоба настроек на сервере нет с T110 (таблицы `user_settings`
   // v1 больше нет) — мьют живёт только в журнале личного состояния
+
+  // ── STATE-2: отметка «непрочитано» — на втором устройстве ≤ 10 с; «прочитано»
+  // там (как и открытие чата) снимает её и на первом
+  await bob1Page.locator('#LeftColumn .ListItem').filter({ hasText: aliceName }).first().click({ button: 'right' });
+  await bob1Page.getByRole('menuitem', { name: 'Mark as Unread' }).click();
+  const markStarted = Date.now();
+  await bob1Page.waitForFunction((name) => globalThis.__parvaneReadUnreadMark?.(name) === true, aliceName);
+  await bob2Page.waitForFunction(
+    (name) => globalThis.__parvaneReadUnreadMark?.(name) === true,
+    aliceName,
+    { timeout: STATE_SYNC_BUDGET_MS },
+  );
+  console.log(`отметка «непрочитано» на втором устройстве через ${Date.now() - markStarted} мс`);
+  await bob2Page.locator('#LeftColumn .ListItem').filter({ hasText: aliceName }).first().click({ button: 'right' });
+  await bob2Page.getByRole('menuitem', { name: 'Mark as Read' }).click();
+  const unmarkStarted = Date.now();
+  await bob1Page.waitForFunction(
+    (name) => globalThis.__parvaneReadUnreadMark?.(name) === false,
+    aliceName,
+    { timeout: STATE_SYNC_BUDGET_MS },
+  );
+  console.log(`отметка снята на первом устройстве через ${Date.now() - unmarkStarted} мс`);
+
+  // ── STATE-2: быстрая реакция — на втором устройстве в config ≤ 10 с ─────────
+  const QUICK = '🔥';
+  assert.notEqual(await readQuickReaction(bob2Page), QUICK, 'bob2: быстрая реакция уже выбрана');
+  await bob1Page.evaluate(
+    (emoticon) => window.__parvaneDiagCallApi('setDefaultReaction', { reaction: { type: 'emoji', emoticon } }),
+    QUICK,
+  );
+  const reactionStarted = Date.now();
+  await bob2Page.waitForFunction(
+    (emoticon) => globalThis.__parvaneGetGlobal?.().config?.defaultReaction?.emoticon === emoticon,
+    QUICK,
+    { timeout: STATE_SYNC_BUDGET_MS },
+  );
+  console.log(`быстрая реакция на втором устройстве через ${Date.now() - reactionStarted} мс`);
 
   assert.equal(await isBlocked(bob2Page, aliceName), false, 'bob2: alice заблокирована до блокировки');
   await bob1Page.getByRole('button', { name: 'More actions' }).click();

@@ -1108,17 +1108,23 @@ Kotlin). Тесты: ядро `v2_session_tests.cpp` (живой, T131), сто�
    `msg.chat.setnotify` уходит только то, что обязан исполнять сервер
    (`group_add`); списка заглушённых чатов в нём нет. Есть v1-устройства — блоб
    полный (иначе они потеряют настройки).
-3. **Новый вид на старой установке.** Вид, которого журнал ещё не содержит,
+3. **Отметка «непрочитано» и быстрая реакция (22 окт 2026).** Чат, отмеченный
+   «непрочитанным» вручную, — запись `unread_mark_set` по собеседнику; открытие
+   чата на любом своём устройстве снимает отметку (`unread_mark_remove`), и
+   остальные снимают её у себя. Быстрая реакция (двойной щелчок) — регистр
+   `quick_reaction`: эмодзи либо id собственного эмодзи, не оба; пустой —
+   реакция клиента по умолчанию (👍). Виды хоста — `unread`, `reaction`.
+4. **Новый вид на старой установке.** Вид, которого журнал ещё не содержит,
    переносится из локальных данных один раз (маркер на устройстве); пустая
    проекция такого вида локальные данные не стирает.
-4. **Приватность — на сервере.** `identity.privacy.set` перезаписывает все
+5. **Приватность — на сервере.** `identity.privacy.set` перезаписывает все
    поля; устройство при готовности сессии читает `identity.privacy.get` и
    принимает серверное значение. Своя правка, не дошедшая до сервера,
    досылается и сильнее прочитанного. Экран настройки перед показом
    перечитывает значение.
 
 Реализации: web `v2/stateJournal.ts` (`notifyToState`/`notifyFromState`,
-`projectNotify`, `migrateNotify`), `provider.ts` (`pushNotifySettings`,
+`projectNotify`, `projectUnreadMarks`, `projectQuickReaction`, `migrateLateKinds`), `provider.ts` (`toggleDialogUnread`, `fetchConfig`/`setDefaultReaction`,
 `refreshV2Privacy`), `v2/controller.ts` (`getPrivacy`); ядро `v2_session.cpp`
 (`fetchPrivacyLocked`, события `privacy`/`privacySaved`); tdesktop
 `parvane_client.cpp` (`kV2StateKinds`, `ProjectNotify`, `ProjectBlocked`,

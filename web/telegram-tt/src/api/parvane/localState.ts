@@ -22,7 +22,11 @@ type ScheduledEntry = {
 };
 
 // Вид локальных данных, изменённых пользователем (журнал личного состояния, T098)
-export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned' | 'notify';
+export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned' | 'notify'
+  | 'unread' | 'reaction';
+
+// Быстрая реакция: эмодзи либо id собственного эмодзи (журнал состояния, `state.v1.QuickReaction`)
+export type LocalQuickReaction = { emoji?: string; documentId?: string };
 
 // Текстовое отложенное сообщение в виде для журнала личного состояния
 export type JournalScheduled = {
@@ -720,17 +724,50 @@ export function createLocalState(deps: LocalStateDependencies) {
     localStorage.setItem(storageKey('noncontacts'), JSON.stringify(list));
   }
 
-  // «Отметить непрочитанным»: chatId с ручной пометкой (сервер такого не хранит)
+  // «Отметить непрочитанным»: адреса чатов с ручной пометкой; между своими
+  // устройствами — журналом личного состояния (`unread_marks`)
   function loadUnreadMarks(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('unreadmarks')) || '[]');
+      return JSON.parse(localStorage.getItem(storageKey('unreadpeers')) || '[]');
     } catch {
       return [];
     }
   }
 
-  function saveUnreadMarks(chatIds: string[]) {
-    localStorage.setItem(storageKey('unreadmarks'), JSON.stringify(chatIds));
+  function saveUnreadMarks(addresses: string[]) {
+    localStorage.setItem(storageKey('unreadpeers'), JSON.stringify(addresses));
+    notifyChange('unread');
+  }
+
+  // Пометки прежних версий хранились по id чата (хеш адреса, обратное соответствие
+  // только в памяти) — переносятся один раз, когда чаты уже известны
+  function takeLegacyUnreadMarks(): string[] {
+    try {
+      const ids = JSON.parse(localStorage.getItem(storageKey('unreadmarks')) || '[]') as string[];
+      localStorage.removeItem(storageKey('unreadmarks'));
+      return Array.isArray(ids) ? ids : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function loadQuickReaction(): LocalQuickReaction | undefined {
+    try {
+      const raw = localStorage.getItem(storageKey('quickreaction'));
+      const value = raw ? JSON.parse(raw) as LocalQuickReaction : undefined;
+      return value?.emoji || value?.documentId ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function saveQuickReaction(reaction: LocalQuickReaction | undefined) {
+    if (reaction) {
+      localStorage.setItem(storageKey('quickreaction'), JSON.stringify(reaction));
+    } else {
+      localStorage.removeItem(storageKey('quickreaction'));
+    }
+    notifyChange('reaction');
   }
 
   // Прочитанное ЭТИМ устройством. Раньше жило только в памяти, поэтому после
@@ -1070,6 +1107,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveContacts,
     saveNonContacts,
     saveUnreadMarks,
+    takeLegacyUnreadMarks,
+    loadQuickReaction,
+    saveQuickReaction,
     saveReadUuids,
     saveRepairAttempts,
     saveDraft,
