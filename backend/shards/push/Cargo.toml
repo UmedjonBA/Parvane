@@ -11,6 +11,12 @@ path = "src/lib.rs"
 name = "push"
 path = "src/main.rs"
 
+[features]
+# Тестовый распространитель на стенде (android/tgx_push_flow.sh): адрес http://127.0.0.1:<порт>/… вместо публичного
+# https — только с этой фичей сборки и PARVANE_PUSH_INSECURE_HTTP=1. В образ прода НЕ собирается (сторож — тест
+# insecure_transport_never_ships).
+insecure-test-transport = []
+
 [dependencies]
 url = "2"
 parvane-types = { path = "../../shared/parvane-types" }

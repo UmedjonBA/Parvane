@@ -1,0 +1,28 @@
+!
+id: 8
+name: "Pink"
+time: 1601377368
+tinted: true
+@
+parentTheme: 1
+#
+avatarArchive, avatarReplies, avatarReplies_big, avatarSavedMessages, avatarSavedMessages_big, bubbleOut_file, controlActive, file, playerButtonActive, profileSectionActive, profileSectionActiveContent, promo, textSearchQueryHighlight, tooltip_textLink: #F06292
+badge, bubbleIn_fillingPositive, bubbleIn_fillingPositive_overlay, bubbleIn_progress, bubbleIn_textLink, bubbleOut_chatCorrectChosenFilling, bubbleOut_chatCorrectFilling, bubbleOut_chatVerticalLine, bubbleOut_fillingPositive, bubbleOut_fillingPositive_overlay, bubbleOut_inlineOutline, bubbleOut_textLink, bubbleOut_ticks, bubbleOut_ticksRead, bubbleOut_waveformActive, chatListVerify, circleButtonActive, circleButtonRegular, circleButtonTheme, fillingPositive, headerBarCallActive, inlineOutline, inputActive, iv_textLink, iv_textMarkedLink, messageCorrectChosenFilling, messageCorrectFilling, messageSwipeBackground, messageVerticalLine, progress, seekDone, sliderActive, snackbarUpdate, textLink, textNeutral, ticks, ticksRead, togglerActive, unreadText, waveformActive: #EC407A
+bubble_messageSelection, bubble_messageSelectionNoWallpaper: #E91E6333
+bubbleIn_textLinkPressHighlight, bubbleOut_textLinkPressHighlight, iv_textLinkPressHighlight, iv_textMarkedLinkPressHighlight, textLinkPressHighlight, tooltip_textLinkPressHighlight: #EC407A40
+bubbleOut_background, unread: #FCE4EC
+bubbleOut_fillingActive: #D954801A
+bubbleOut_inlineIcon, bubbleOut_inlineText, bubbleOut_progress, bubbleOut_separator, bubbleOut_time, chatSendButton, checkActive, headerBackground, iconActive, inlineIcon, inlineText, notification, notificationLink, notificationPlayer, passcode: #E91E63
+bubbleOut_messageAuthor, chatListAction, messageAuthor, online: #D81B60
+bubbleOut_waveformInactive, textSelectionHighlight, togglerActiveBackground, waveformInactive: #F8BBD0
+headerBadgeFailed: #ffd307
+messageSelection: #EC407A10
+seekReady: #FBD8E4
+themeBlackWhite: #11111b
+themeClassic: #b57614
+themeCyan: #5e81ac
+themeGreen: #8839ef
+themeNightBlue: #1d2021
+themeOrange: #268bd2
+themeRed: #00212b
+themeWhiteBlack: #242933

@@ -24,6 +24,8 @@
 #                               стек в том же сценарии (федерация, verify_federation.sh) —
 #                               другие порты, свой PV_DOMAIN и свой каталог SB.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify_paths.sh"
+# тесты без звука в колонках (уведомления и звонки клиентов — в немой сток)
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../scripts/mute_test_audio.sh"
 # Ревью 21 окт 2026: dev-сборка включает хуки (PARVANE_AUTO*, ws://, TCP, PARVANE_WSS_INSECURE …) только при
 # PARVANE_DEV_HOOKS=1 И gateway на loopback; содержимое сообщений (LogSecret) пишет в log.txt только при
 # PARVANE_LOG_CONTENT=1. Сценарии запускают клиент и напрямую, и через start_client — экспорт для всех.

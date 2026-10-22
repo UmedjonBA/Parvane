@@ -20,6 +20,8 @@ object ParvaneCalls {
         fun setVideo(handle: Long, on: Boolean)
         fun setMuted(handle: Long, muted: Boolean)
         fun close(handle: Long)
+        /** Все соединения (групповой звонок): микрофон вкл/выкл. */
+        fun setAllMuted(muted: Boolean) {}
     }
 
     @Volatile var engine: MediaEngine? = null
@@ -38,6 +40,13 @@ object ParvaneCalls {
     fun groupStart(participants: List<String>, video: Boolean, group: String, title: String) =
         nativeGroupStart(JSONArray(participants).toString(), video, group, title)
     fun groupLeave() = nativeGroupLeave()
+    fun groupAccept() = nativeGroupAccept()
+    fun groupDecline() = nativeGroupDecline()
+    /** Свой микрофон в групповом звонке: дорожки всех соединений + сигнал участникам. */
+    fun groupSetMuted(muted: Boolean) {
+        engine?.setAllMuted(muted)
+        nativeGroupMediaState(muted, true)
+    }
     /** UUID текущего личного звонка ("" — нет). */
     fun callId(): String = nativeCallId()
     /** «Звонки — никто» (FR-040): входящие отклоняются без звонка. */
@@ -67,6 +76,9 @@ object ParvaneCalls {
     @JvmStatic private external fun nativeSetMuted(muted: Boolean, videoOff: Boolean)
     @JvmStatic private external fun nativeGroupStart(participantsJson: String, video: Boolean, group: String, title: String)
     @JvmStatic private external fun nativeGroupLeave()
+    @JvmStatic private external fun nativeGroupAccept()
+    @JvmStatic private external fun nativeGroupDecline()
+    @JvmStatic private external fun nativeGroupMediaState(audioMuted: Boolean, videoMuted: Boolean)
     @JvmStatic private external fun nativeCallId(): String
     @JvmStatic private external fun nativeSetCallsNobody(nobody: Boolean)
     @JvmStatic private external fun nativeLocalOffer(handle: Long, sdp: String)

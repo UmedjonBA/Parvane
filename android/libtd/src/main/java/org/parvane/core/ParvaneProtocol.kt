@@ -68,6 +68,9 @@ object ParvaneProtocol {
     /** base64 байтов → proto3-JSON ("" — не разобрано). */
     fun decode(type: String, b64: String): String { ensureLoaded(); return nativeDecode(type, b64) }
 
+    /** PACK-2: файлы набора [{"name","data"(base64)}] → {"hash", "matches"} (тот же код ядра, что nativePackFetch). */
+    fun packHash(filesJson: String): JSONObject { ensureLoaded(); return JSONObject(nativePackHash(filesJson)) }
+
     /** Кодек журнала личного состояния (T098) на движке. */
     val stateCodec = object : org.drinkless.tdlib.StateJournal.Codec {
         override fun encode(type: String, json: String) = ParvaneProtocol.encode(type, json)
@@ -82,6 +85,7 @@ object ParvaneProtocol {
     @JvmStatic private external fun nativeEncode(type: String, json: String): String
     @JvmStatic private external fun nativeDecode(type: String, b64: String): String
     @JvmStatic private external fun nativeEngineVersion(): String
+    @JvmStatic private external fun nativePackHash(filesJson: String): String
     @JvmStatic private external fun nativeRunConformanceVectors(suite: String, vectorsJson: String): String
     @JvmStatic private external fun nativeInterpretDirect(eventJson: String, self: String): String
     @JvmStatic private external fun nativeToV2(v1Json: String, replyTo: String): String

@@ -165,22 +165,32 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPhoto(
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPerms(JNIEnv *env, jclass, jstring groupId, jstring permsJson) {
-    const auto pj = json::parse(jstr(env, permsJson), nullptr, false);
-    if (!pj.is_object()) return jreply(env, jfail("bad_request"));
-    return jreply(env, change(jstr(env, groupId), [&](const json &) {
-        return json{{"set_permissions", {{"default_permissions", permissions(pj)}}}};
-    }));
+    try {
+        const auto pj = json::parse(jstr(env, permsJson), nullptr, false);
+        if (!pj.is_object()) return jreply(env, jfail("bad_request"));
+        return jreply(env, change(jstr(env, groupId), [&](const json &) {
+            return json{{"set_permissions", {{"default_permissions", permissions(pj)}}}};
+        }));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupSetPerms: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 // rightsJson == null — снять админа.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetAdmin(
         JNIEnv *env, jclass, jstring groupId, jstring member, jstring rightsJson) {
-    const auto mem = jstr(env, member);
-    const auto rj = rightsJson ? json::parse(jstr(env, rightsJson), nullptr, false) : json();
-    return jreply(env, change(jstr(env, groupId), [&](const json &) {
-        return json{{"set_role", {{"member", {{"address", mem}}}, {"role", rj.is_object() ? "ROLE_ADMIN" : "ROLE_MEMBER"},
-                                  {"rights", rj.is_object() ? adminRights(rj) : json::object()}}}};
-    }));
+    try {
+        const auto mem = jstr(env, member);
+        const auto rj = rightsJson ? json::parse(jstr(env, rightsJson), nullptr, false) : json();
+        return jreply(env, change(jstr(env, groupId), [&](const json &) {
+            return json{{"set_role", {{"member", {{"address", mem}}}, {"role", rj.is_object() ? "ROLE_ADMIN" : "ROLE_MEMBER"},
+                                      {"rights", rj.is_object() ? adminRights(rj) : json::object()}}}};
+        }));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupSetAdmin: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 // Ссылки группы: действующие (на устройствах админов — общие, T160) или отозванные (помнит сервер).
@@ -241,58 +251,88 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteJoi
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteRevoke(JNIEnv *env, jclass, jstring groupId, jstring token) {
-    const auto s = v2ReadyForSend();
-    const bool ok = s && s->revokeInvite(jstr(env, groupId), jstr(env, token));
-    return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    try {
+        const auto s = v2ReadyForSend();
+        const bool ok = s && s->revokeInvite(jstr(env, groupId), jstr(env, token));
+        return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupInviteRevoke: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteDelete(JNIEnv *env, jclass, jstring groupId, jstring linkId) {
-    const auto s = v2ReadyForSend();
-    const bool ok = s && s->deleteRevokedInvite(jstr(env, groupId), jstr(env, linkId));
-    return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    try {
+        const auto s = v2ReadyForSend();
+        const bool ok = s && s->deleteRevokedInvite(jstr(env, groupId), jstr(env, linkId));
+        return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupInviteDelete: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 // Превью ссылки до вступления → {ok, group_id, name, kind, members_count, request_needed, already_member}.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupInviteCheck(JNIEnv *env, jclass, jstring token) {
-    const auto url = jstr(env, token);
-    if (!parvane::v2::Session::isInviteUrl(url)) return jreply(env, jfail("invalid"));
-    const auto s = v2ReadyForSend();
-    const auto r = s ? s->checkInvite(url) : json();
-    if (!r.is_object()) return jreply(env, jfail("failed"));
-    if (r.contains("error")) return jreply(env, jfail(r.value("error", std::string("failed"))));
-    return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"name", r.value("name", std::string())},
-                            {"kind", r.value("isChannel", false) ? "channel" : "group"}, {"avatar", ""}, {"about", ""},
-                            {"members_count", r.value("membersCount", std::int64_t(0))},
-                            {"request_needed", r.value("isRequestNeeded", false)}, {"already_member", r.value("isMember", false)}});
+    try {
+        const auto url = jstr(env, token);
+        if (!parvane::v2::Session::isInviteUrl(url)) return jreply(env, jfail("invalid"));
+        const auto s = v2ReadyForSend();
+        const auto r = s ? s->checkInvite(url) : json();
+        if (!r.is_object()) return jreply(env, jfail("failed"));
+        if (r.contains("error")) return jreply(env, jfail(r.value("error", std::string("failed"))));
+        return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"name", r.value("name", std::string())},
+                                {"kind", r.value("isChannel", false) ? "channel" : "group"}, {"avatar", ""}, {"about", ""},
+                                {"members_count", r.value("membersCount", std::int64_t(0))},
+                                {"request_needed", r.value("isRequestNeeded", false)}, {"already_member", r.value("isMember", false)}});
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupInviteCheck: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupJoin(JNIEnv *env, jclass, jstring token) {
-    const auto url = jstr(env, token);
-    if (!parvane::v2::Session::isInviteUrl(url)) return jreply(env, jfail("invalid"));
-    const auto s = v2ReadyForSend();
-    const auto r = s ? s->joinByInvite(url) : json();
-    const auto status = r.is_object() ? r.value("status", std::string()) : std::string();
-    if (status == "ok") return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"pending", false}});
-    if (status == "requested") return jreply(env, json{{"ok", true}, {"group_id", ""}, {"pending", true}});
-    return jreply(env, jfail(r.is_object() ? r.value("code", std::string("failed")) : "failed"));
+    try {
+        const auto url = jstr(env, token);
+        if (!parvane::v2::Session::isInviteUrl(url)) return jreply(env, jfail("invalid"));
+        const auto s = v2ReadyForSend();
+        const auto r = s ? s->joinByInvite(url) : json();
+        const auto status = r.is_object() ? r.value("status", std::string()) : std::string();
+        if (status == "ok") return jreply(env, json{{"ok", true}, {"group_id", r.value("address", std::string())}, {"pending", false}});
+        if (status == "requested") return jreply(env, json{{"ok", true}, {"group_id", ""}, {"pending", true}});
+        return jreply(env, jfail(r.is_object() ? r.value("code", std::string("failed")) : "failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupJoin: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequests(JNIEnv *env, jclass, jstring groupId) {
-    const auto s = v2ReadyForSend();
-    const auto list = s ? s->listJoinRequests(jstr(env, groupId)) : json(nullptr);
-    if (!list.is_array()) return jreply(env, jfail("failed"));
-    auto reqs = json::array();
-    for (const auto &q : list)
-        reqs.push_back(json{{"member", q.value("user", std::string())}, {"link_id", q.value("linkId", std::string())},
-                            {"created_at", q.value("date", std::int64_t(0))}});
-    return jreply(env, json{{"ok", true}, {"requests", reqs}});
+    try {
+        const auto s = v2ReadyForSend();
+        const auto list = s ? s->listJoinRequests(jstr(env, groupId)) : json(nullptr);
+        if (!list.is_array()) return jreply(env, jfail("failed"));
+        auto reqs = json::array();
+        for (const auto &q : list)
+            reqs.push_back(json{{"member", q.value("user", std::string())}, {"link_id", q.value("linkId", std::string())},
+                                {"created_at", q.value("date", std::int64_t(0))}});
+        return jreply(env, json{{"ok", true}, {"requests", reqs}});
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupRequests: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupRequestDecide(
         JNIEnv *env, jclass, jstring groupId, jstring member, jboolean approve, jstring linkId) {
-    const auto s = v2ReadyForSend();
-    const bool ok = s && s->decideJoinRequest(jstr(env, groupId), jstr(env, member), approve == JNI_TRUE, jstr(env, linkId));
-    return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    try {
+        const auto s = v2ReadyForSend();
+        const bool ok = s && s->decideJoinRequest(jstr(env, groupId), jstr(env, member), approve == JNI_TRUE, jstr(env, linkId));
+        return jreply(env, ok ? json{{"ok", true}} : jfail("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeGroupRequestDecide: %s", e.what());
+        return jreply(env, jfail("failed"));
+    }
 }
 
 // ── публичные группы и каналы (spec 023, PUBLIC-1) ───────────────────────────
@@ -367,17 +407,22 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSubmitReport(J
 // Карточка жалобы админу группы (mod_report): проверена по своим данным — группа, участник, сообщения из своей
 // истории (ревью 21 окт). → {"group","ops":[…],"authors":[…],"text"} | null.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCheckModReport(JNIEnv *env, jclass, jstring contentJson, jstring reporter) {
-    const auto content = json::parse(jstr(env, contentJson), nullptr, false);
-    const auto check = parvane::v2::validateModReport(
-        content, jstr(env, reporter), [](const std::string &g) { return groupMembers(g); },
-        [](const std::string &opId) -> std::optional<parvane::v2::ReportLocalMessage> {
-            const auto row = messageRow(opId);
-            if (!row) return std::nullopt;
-            return parvane::v2::ReportLocalMessage{row->chat, row->from,
-                                                    row->content.value("text", row->content.value("caption", std::string()))};
-        });
-    if (!check) return jout(env, "null");
-    return jreply(env, json{{"group", check->group}, {"ops", check->opIds}, {"authors", check->authors}, {"text", check->text}});
+    try {
+        const auto content = json::parse(jstr(env, contentJson), nullptr, false);
+        const auto check = parvane::v2::validateModReport(
+            content, jstr(env, reporter), [](const std::string &g) { return groupMembers(g); },
+            [](const std::string &opId) -> std::optional<parvane::v2::ReportLocalMessage> {
+                const auto row = messageRow(opId);
+                if (!row) return std::nullopt;
+                return parvane::v2::ReportLocalMessage{row->chat, row->from,
+                                                        row->content.value("text", row->content.value("caption", std::string()))};
+            });
+        if (!check) return jout(env, "null");
+        return jreply(env, json{{"group", check->group}, {"ops", check->opIds}, {"authors", check->authors}, {"text", check->text}});
+    } catch (const std::exception &e) {
+        LOGE("nativeCheckModReport: %s", e.what());
+        return jout(env, "null");
+    }
 }
 
 } // extern "C"

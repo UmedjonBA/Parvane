@@ -31,7 +31,11 @@ find_package(OpenSSL REQUIRED)
 add_library(parvane_protocol_jni SHARED
     ${JNI_DIR}/protocol_jni.cpp
     ${CORE}/src/v2_engine.cpp
-    ${CORE}/src/v2_content.cpp)
+    ${CORE}/src/v2_content.cpp
+    ${CORE}/src/pack_archive.cpp
+    ${CORE}/src/crypto.cpp
+    ${CORE}/src/storecrypt.cpp
+    ${CORE}/src/linking.cpp)
 target_include_directories(parvane_protocol_jni PRIVATE
     ${JNI_DIR}
     ${CORE}/include

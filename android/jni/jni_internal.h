@@ -21,18 +21,35 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "jni_utf.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "parvane", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "parvane", __VA_ARGS__)
+
+namespace pvjni {
+// Фоновая задача JNI: исключение из ядра не уходит в std::terminate (SIGABRT всего приложения), а пишется в журнал.
+template <typename F> void runDetached(F &&fn) {
+    std::thread([fn = std::forward<F>(fn)]() mutable {
+        try {
+            fn();
+        } catch (const std::exception &e) {
+            LOGE("фоновая задача: %s", e.what());
+        } catch (...) {
+            LOGE("фоновая задача: исключение не std::exception");
+        }
+    }).detach();
+}
+} // namespace pvjni
 
 namespace pvjni {
 
@@ -64,12 +81,17 @@ extern bool g_debugBuild;        // debug-сборка (dev-хуки, логи �
 // ── события в Kotlin ─────────────────────────────────────────────────────────
 void emit(const json &event);    // через очередь; журналируемые виды пишутся в журнал истории
 void emitNow(const json &event); // синхронно (реплей журнала)
+// FED-1: отказ федерации (код в тексте ошибки) → событие federation_error{reason} (disabled|blocked|refused|unreachable|
+// key_changed); остальные ошибки — ничего. Как desktop NoteFederationFailure / web federationReason.
+void noteFederationFailure(const std::string &error);
 
 // ── журнал истории (как parvane-history-*.jsonl desktop) ─────────────────────
 // События message/edited/deleted/meta/outbox_read/read/group; свёртка по uuid, порядок ORDER-1.
 void journalAppend(const json &event);
 [[nodiscard]] std::vector<json> journalFold();
 void journalRewrite(const std::vector<json> &messages);
+// Свёртка → правка → перезапись под одним замком журнала (дописанное другими потоками не теряется).
+void journalTransform(const std::function<void(std::vector<json> &)> &edit);
 void journalReplay();
 void journalRemoveIds(const std::set<std::string> &ids);
 

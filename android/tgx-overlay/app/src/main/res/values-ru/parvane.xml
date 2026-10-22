@@ -36,4 +36,9 @@
   <string name="ParvaneTooManyAttempts">Слишком много попыток. Попробуйте позже</string>
   <string name="ParvaneUpgradeRequired">Эта версия Parvane больше не поддерживается. Обновите приложение, чтобы продолжить.</string>
   <string name="ParvaneKeysOldFormat">Это копия старой версии, её нельзя восстановить</string>
+  <string name="ParvaneSaveToCloud">Сохранить в облако</string>
+  <string name="ParvanePublicGroup">Тип группы</string>
+  <string name="ParvaneFromCloud">Отправить из облака</string>
+  <string name="ParvaneSuggestPlan">Предложить в план</string>
+  <string name="ParvaneArticle">Статья</string>
 </resources>

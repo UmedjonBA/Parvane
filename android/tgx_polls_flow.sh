@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# spec 005 / история 2 в эмуляторе: опросы в форке X. После tgx_link_e2e.sh
+# spec 005 / история 2 в эмуляторе: опросы в форке X. После tgx_protocol_link_flow.sh
 # (стек в последнем /tmp/pv-tgx.*, X = второе устройство alice, bob — desktop).
 #   1. bob-desktop создаёт опрос (PARVANE_AUTOPOLL) → X: «опрос <uuid>: 3 вариантов»;
 #   2. X голосует тапом по варианту → «голос alice@local → опрос …»,
@@ -20,7 +20,7 @@ x_cmd() { echo "$1" > "$OUT/cmd"; ad push "$OUT/cmd" /data/local/tmp/parvane-e2e
 OUT=/tmp/pv-tgx-polls; mkdir -p "$OUT"
 SB=$(\ls -td /tmp/pv-tgx.* | head -1); STAMP=$(date +%s); Q="Вопрос-$STAMP"
 A="$SB/alice"; B="$SB/bob"
-[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_link_e2e.sh"; finish "TGX POLLS"; }
+[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX POLLS"; }
 ad logcat -c
 
 # 1. опрос desktop → X (1-на-1 bob → alice)

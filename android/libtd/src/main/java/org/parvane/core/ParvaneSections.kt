@@ -32,6 +32,27 @@ object ParvaneSections {
     fun notes(op: String, argsJson: String = "{}"): Any? = nativeNotes(op, argsJson).let { org.json.JSONTokener(it).nextValue() }
         .takeIf { it != JSONObject.NULL }
 
+    /** «План»/«Здоровье»: запрос (days, undated, lists, settings, health, monthGrid, week, quickParse, stats, slots) либо
+     *  правка (quickAdd, taskDone, stepDone, status, move, save, remove, food, removeFood, water, removeHealth, goals,
+     *  healthGoals, settings, list) — логика ядра; правка с `notice` даёт «Отменить». */
+    fun planner(op: String, args: JSONObject = JSONObject()): Any? = nativePlanner(op, args.toString())
+        .let { org.json.JSONTokener(it).nextValue() }.takeIf { it != JSONObject.NULL }
+
+    /** Файлы «Облака»: upload (path, name, mime, container, parent), download (container, node, out), thumb,
+     *  createFolder, rename, trash/restore/purge (nodes), move, shareFolder, unshareFolder, links, linkCreate,
+     *  linkRevoke, linkExtend. Блокирующий — с io-потока. */
+    fun cloudFiles(op: String, args: JSONObject = JSONObject()): Any? = nativeCloudFiles(op, args.toString())
+        .let { org.json.JSONTokener(it).nextValue() }.takeIf { it != JSONObject.NULL }
+
+    /** Выгрузка данных в ZIP по пути `outPath` (meta — chats, selfName, contacts, labels, includeMedia, includeCloud,
+     *  drive). Блокирующий; ход — событие `export_progress`. */
+    fun exportData(meta: JSONObject, outPath: String): JSONObject = JSONObject(nativeExportData(meta.toString(), outPath))
+    fun exportCancel() = nativeExportCancel()
+
+    @JvmStatic private external fun nativeExportData(metaJson: String, outPath: String): String
+    @JvmStatic private external fun nativeExportCancel()
+    @JvmStatic private external fun nativeCloudFiles(op: String, argsJson: String): String
+    @JvmStatic private external fun nativePlanner(op: String, argsJson: String): String
     @JvmStatic private external fun nativeShow(section: String)
     @JvmStatic private external fun nativeVisible(visible: Boolean)
     @JvmStatic private external fun nativePaletteOpen(open: Boolean)

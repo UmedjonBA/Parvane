@@ -7,6 +7,8 @@
 
 #include <parvane_protocol.h>
 
+#include <parvane/pack_archive.h>
+#include <parvane/crypto.h>
 #include <parvane/v2_content.h>
 #include <parvane/v2_engine.h>
 
@@ -111,6 +113,20 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativeDecode(JNI
     } catch (const std::exception &) {
         return parvane::jniutf::toJava(env, "");
     }
+}
+
+// PACK-2: [{"name","data"(base64)}] → {"hash": отпечаток содержимого набора, "matches": архив сверяется с ним}.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneProtocol_nativePackHash(JNIEnv *env, jclass, jstring filesJson) {
+    const auto files = json::parse(jstr(env, filesJson), nullptr, false);
+    std::vector<parvane::pack::Entry> entries;
+    if (files.is_array())
+        for (const auto &f : files) {
+            if (!f.is_object() || !f.contains("name") || !f["name"].is_string() || !f.contains("data") || !f["data"].is_string()) continue;
+            entries.push_back({f["name"].get<std::string>(), parvane::crypto::b64decode(f["data"].get<std::string>()).value_or(std::string())});
+        }
+    const auto archive = parvane::pack::build(entries);
+    const auto hash = parvane::pack::archiveContentHashB64(archive);
+    return jout(env, json{{"hash", hash}, {"matches", parvane::pack::archiveMatchesContentHash(archive, hash)}});
 }
 
 } // extern "C"

@@ -97,6 +97,17 @@ pub struct StoredWake {
 
 /// Проверка регистрации без сети. Сеть (резолв хоста в публичные адреса)
 /// проверяет вызывающий.
+/// Тестовый распространитель на loopback (фича `insecure-test-transport` + `PARVANE_PUSH_INSECURE_HTTP=1`).
+pub fn insecure_loopback_enabled() -> bool {
+    cfg!(feature = "insecure-test-transport") && std::env::var("PARVANE_PUSH_INSECURE_HTTP").is_ok_and(|v| v == "1")
+}
+
+/// Адрес тестового распространителя: только `http://127.0.0.1:<порт>/…` и только в тестовом режиме.
+pub fn is_test_loopback(endpoint: &str) -> bool {
+    insecure_loopback_enabled()
+        && url::Url::parse(endpoint).is_ok_and(|u| u.scheme() == "http" && u.host_str() == Some("127.0.0.1") && u.port().is_some())
+}
+
 pub fn check_registration(r: &WakeRegistration) -> Result<StoredWake, ErrorCode> {
     let kind = WakeKind::try_from(r.kind).map_err(|_| ErrorCode::Invalid)?;
     match kind {
@@ -106,7 +117,9 @@ pub fn check_registration(r: &WakeRegistration) -> Result<StoredWake, ErrorCode>
         WakeKind::WebPush | WakeKind::UnifiedPush => {}
     }
     // P-17: только публичный https (общий фильтр parvane-netguard).
-    parvane_netguard::check_url(&r.endpoint, &parvane_netguard::UrlPolicy::HTTPS).map_err(|_| ErrorCode::Invalid)?;
+    if !is_test_loopback(&r.endpoint) {
+        parvane_netguard::check_url(&r.endpoint, &parvane_netguard::UrlPolicy::HTTPS).map_err(|_| ErrorCode::Invalid)?;
+    }
     if kind == WakeKind::UnifiedPush {
         return Ok(StoredWake { kind, endpoint: r.endpoint.clone(), p256dh: Vec::new(), auth: Vec::new() });
     }

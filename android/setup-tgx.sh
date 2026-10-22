@@ -214,19 +214,232 @@ s = s.replace("    this.postponedCallSettings = settings;\n",
   "    this.postponedCallSettings = settings;\n    org.parvane.core.ParvaneCalls.INSTANCE.setMuted(settings != null && settings.isMicMuted(), false); // Parvane: микрофон — ядро\n", 1)
 s = s.replace("    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;\n",
   "    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;\n    if (true) { tdlib.dispatchCallStateChanged(call.id, CallState.ESTABLISHED); return; } // Parvane: медиа — ядро и org.webrtc, tgcalls не нужен\n", 1)
+# Новый звонок, пока служба держит прежний (тот закончился без её уборки), — не падение, а перезапуск под новый
+s = s.replace("      if (oldCallId != 0 && oldCallId != callId)\n        throw new IllegalStateException();\n",
+  "      if (oldCallId != 0 && oldCallId != callId) { callInitialized = false; initCall(tdlib, call); } // Parvane: прежний звонок не убран\n", 1)
 open(p, "w").write(s)
 p = root + "BaseApplication.kt"; s = open(p).read()
 s = s.replace("    scope = MainScope()\n", "    scope = MainScope()\n    org.thunderdog.challegram.parvane.Parvane.onAppCreate(this) // Parvane: звонки, фон\n", 1)
 open(p, "w").write(s)
 PY
+grep -q "Parvane: прежний звонок не убран" "$TGX/app/src/main/java/org/thunderdog/challegram/service/TGCallService.java" || { echo "   TGCallService: перезапуск не пропатчен"; exit 2; }
 grep -q "Parvane: медиа — ядро" "$TGX/app/src/main/java/org/thunderdog/challegram/service/TGCallService.java" && echo "   TGCallService → ядро" || { echo "   TGCallService не пропатчен"; exit 2; }
 
+echo "== spec 031: публичные группы — «Вступить» у превью (PUBLIC-1) =="
+MSC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/MessagesController.java"
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/ui/MessagesController.java
+perl -0pi -e 's/if \(tdlib\.isSupergroupChat\(chat\) && status != null && TD\.canReturnToChat\(status\)\) \{/if ((tdlib.isSupergroupChat(chat) || ChatId.isBasicGroup(chat.id)) \&\& status != null \&\& TD.canReturnToChat(status)) { \/\/ Parvane: публичная группа без вступления/' "$MSC"
+grep -q "Parvane: публичная группа без вступления" "$MSC" && echo "   MessagesController: «Вступить» у превью" || { echo "   MessagesController не пропатчен"; exit 2; }
+
+echo "== spec 031: связь чатов с разделами (T067) — меню сообщения и меню чата =="
+MV="$TGX/app/src/main/java/org/thunderdog/challegram/component/chat/MessageView.java"
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/component/chat/MessageView.java
+python3 - "$MV" "$MSC" <<'PY'
+import sys
+mv, msc = sys.argv[1], sys.argv[2]
+s = open(mv).read()
+old = "      if (allMessages.length == 1 && playListAddMode != TGPlayerController.ADD_MODE_NONE) {"
+new = ("      if (allMessages.length == 1 && downloadedFiles.size() == 1) { // Parvane: сохранить в облако\n"
+       "        ids.append(R.id.btn_parvaneSaveToCloud);\n"
+       "        strings.append(R.string.ParvaneSaveToCloud);\n"
+       "        icons.append(R.drawable.baseline_cloud_download_24);\n"
+       "      }\n" + old)
+assert old in s, 'MessageView: меню сообщения'
+s = s.replace(old, new, 1)
+open(mv, 'w').write(s)
+s = open(msc).read()
+old = "      } else if (id == R.id.btn_saveFile) {"
+new = ("      } else if (id == R.id.btn_parvaneSaveToCloud) { // Parvane: сохранить в облако\n"
+       "        org.thunderdog.challegram.parvane.sections.CloudBridge.saveFiles(this, (List<TD.DownloadedFile>) selectedMessageTag);\n"
+       "        return true;\n" + old)
+assert old in s, 'MessagesController: обработчик меню сообщения'
+s = s.replace(old, new, 1)
+old = ("    if ((!tdlib.isChannel(chat.id) || (status != null && !TD.isLeft(status))) && !tdlib.isSelfChat(chat.id)) {\n"
+       "      ids.append(R.id.btn_mute);")
+new = ("    if (!isSecretChat() && !tdlib.isChannel(chat.id)) { // Parvane: разделы в чате\n"
+       "      ids.append(R.id.btn_parvaneFromCloud); strings.append(R.string.ParvaneFromCloud);\n"
+       "      ids.append(R.id.btn_parvaneSuggestPlan); strings.append(R.string.ParvaneSuggestPlan);\n"
+       "      ids.append(R.id.btn_parvaneArticle); strings.append(R.string.ParvaneArticle);\n"
+       "    }\n" + old)
+assert old in s, 'MessagesController: меню чата'
+s = s.replace(old, new, 1)
+old = "    } else if (id == R.id.btn_viewScheduled) {\n      viewScheduledMessages(false);"
+new = ("    } else if (id == R.id.btn_parvaneFromCloud) {\n"
+       "      org.thunderdog.challegram.parvane.sections.CloudBridge.attachFromCloud(this, chat.id);\n"
+       "    } else if (id == R.id.btn_parvaneSuggestPlan) {\n"
+       "      org.thunderdog.challegram.parvane.sections.CloudBridge.suggestPlan(this, chat.id);\n"
+       "    } else if (id == R.id.btn_parvaneArticle) {\n"
+       "      org.thunderdog.challegram.parvane.sections.CloudBridge.sendArticle(this, chat.id);\n" + old)
+assert s.count(old) >= 1, 'MessagesController: обработчик меню чата'
+s = s.replace(old, new, 1)
+open(msc, 'w').write(s)
+PY
+grep -q "btn_parvaneSaveToCloud" "$MV" && grep -q "btn_parvaneArticle" "$MSC" && echo "   меню: облако, план, статья" || { echo "   меню не пропатчены"; exit 2; }
+
+echo "== spec 031: темы — цветовые схемы web (Gruvbox по умолчанию) =="
+python3 "$(dirname "$0")/theme/gen_tgx_themes.py" "$TGX" --check >/dev/null || { echo "   темы: генератор сообщил о контрасте"; exit 2; }
+python3 - "$TGX" "$(dirname "$0")/tgx-overlay/app/src/main/other/theme-names.json" <<'PY'
+import json, re, sys
+tgx, names_path = sys.argv[1], sys.argv[2]
+names = json.load(open(names_path, encoding='utf-8'))
+for res, idx in (('values', 0), ('values-ru', 1)):
+    p = f'{tgx}/app/src/main/res/{res}/strings.xml'
+    try:
+        s = open(p, encoding='utf-8').read()
+    except FileNotFoundError:
+        continue
+    for key, pair in names.items():
+        s = re.sub(r'(<string name="%s">)[^<]*(</string>)' % key, lambda m: m.group(1) + pair[idx] + m.group(2), s)
+    open(p, 'w', encoding='utf-8').write(s)
+PY
+TM="$TGX/app/src/main/java/org/thunderdog/challegram/theme/ThemeManager.java"
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/theme/ThemeManager.java
+python3 - "$TM" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+order = ("ThemeId.CLASSIC, ThemeId.NIGHT_BLUE, ThemeId.CYAN, ThemeId.WHITE_BLACK, ThemeId.GREEN, ThemeId.BLACK_WHITE, "
+         "ThemeId.ORANGE, ThemeId.RED, ThemeId.BLUE, ThemeId.NIGHT_BLACK")
+s2 = re.sub(r'int\[\] builtInThemeIds = BuildConfig\.DEBUG \? new int\[\] \{.*?\} : new int\[\] \{.*?\};',
+            'int[] builtInThemeIds = new int[] { %s }; // Parvane: схемы web — светлая и тёмная парами' % order, s, flags=re.S)
+assert s2 != s, 'список тем не найден'
+open(p, 'w').write(s2)
+PY
+grep -q "Parvane: схемы web" "$TM" && echo "   темы: Gruvbox, Nord, Catppuccin, Solarized, Telegram" || { echo "   ThemeManager не пропатчен"; exit 2; }
+
+echo "== spec 031: шрифты IBM Plex Sans и JetBrains Mono (OFL, как web и desktop) =="
+FONTS_SRC="$(cd "$(dirname "$0")/.." && pwd)/desktop/tdesktop/Telegram/lib_ui/fonts"
+mkdir -p "$TGX/app/src/main/assets/fonts"
+for f in IBMPlexSans-Regular IBMPlexSans-SemiBold IBMPlexSans-Italic JetBrainsMono-Regular; do
+  cp "$FONTS_SRC/$f.ttf" "$TGX/app/src/main/assets/fonts/$f.ttf" || { echo "   нет шрифта $f"; exit 2; }
+done
+cp "$FONTS_SRC/IBMPlexSans-OFL.txt" "$FONTS_SRC/JetBrainsMono-OFL.txt" "$TGX/app/src/main/assets/fonts/"
+FJ="$TGX/app/src/main/java/org/thunderdog/challegram/tool/Fonts.java"
+git -C "$TGX" checkout -q -- app/src/main/java/org/thunderdog/challegram/tool/Fonts.java
+sed -i 's#"fonts/Roboto-Regular.ttf"#"fonts/IBMPlexSans-Regular.ttf"#; s#"fonts/Roboto-Bold.ttf"#"fonts/IBMPlexSans-SemiBold.ttf"#; s#"fonts/Roboto-Medium.ttf"#"fonts/IBMPlexSans-SemiBold.ttf"#; s#"fonts/Roboto-Italic.ttf"#"fonts/IBMPlexSans-Italic.ttf"#; s#"fonts/RobotoMono-Regular.ttf"#"fonts/JetBrainsMono-Regular.ttf"#' "$FJ"
+grep -q "IBMPlexSans-Regular" "$FJ" && echo "   Fonts: Plex / JetBrains Mono" || { echo "   Fonts.java не пропатчен"; exit 2; }
+
+echo "== spec 031: групповой звонок — кнопка звонка в профиле группы (CALL-2) =="
+PRC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/ProfileController.java"
+python3 - "$PRC" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "Parvane: групповой звонок" not in s:
+    old = "      if (mode == Mode.SECRET) {\n        StopwatchHeaderButton"
+    new = ("      if (mode != Mode.SECRET && mode != Mode.USER && chat != null && ChatId.isBasicGroup(chat.id)) { // Parvane: групповой звонок\n"
+           "        callButton = header.addButton(realMenu, R.id.menu_btn_call, R.drawable.baseline_phone_24, buttonColorId, this, Screen.dp(48f));\n"
+           "      }\n" + old)
+    assert old in s, 'шапка профиля'
+    s = s.replace(old, new, 1)
+    old = "      if (userFull != null) {\n        tdlib.context().calls().makeCall(this, user.id, userFull);\n      }"
+    new = old + "\n      else if (chat != null && ChatId.isBasicGroup(chat.id)) org.thunderdog.challegram.parvane.sections.GroupCallController.Companion.start(this, chat.id);"
+    assert old in s, 'нажатие звонка'
+    s = s.replace(old, new, 1)
+    open(p, 'w').write(s)
+PY
+grep -q "Parvane: групповой звонок" "$PRC" && echo "   ProfileController: групповой звонок" || { echo "   ProfileController не пропатчен"; exit 2; }
+python3 - "$PRC" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "btn_parvanePublic" not in s:
+    old = "    tdlib.ui().addDeleteChatOptions(getChatId(), ids, strings, false, true);\n\n    if (ids.size() > 0) {\n      showMore(ids.get(), strings.get(), 0);"
+    new = ("    if (mode == Mode.GROUP && org.thunderdog.challegram.parvane.sections.PublicGroupUi.canOpen(getChatId())) { // Parvane: PUBLIC-1\n"
+           "      ids.append(R.id.btn_parvanePublic);\n"
+           "      strings.append(R.string.ParvanePublicGroup);\n"
+           "    }\n" + old)
+    assert old in s, 'меню «⋮» группы'
+    s = s.replace(old, new, 1)
+    old = "        if (id == R.id.more_btn_addMember) {\n          addMember(null);"
+    new = ("        if (id == R.id.btn_parvanePublic) { // Parvane: PUBLIC-1\n"
+           "          org.thunderdog.challegram.parvane.sections.PublicGroupUi.open(this, getChatId());\n"
+           "          return;\n"
+           "        }\n" + old)
+    assert old in s, 'обработчик «⋮» группы'
+    s = s.replace(old, new, 1)
+    open(p, 'w').write(s)
+PY
+grep -q "btn_parvanePublic" "$PRC" && echo "   ProfileController: тип группы (PUBLIC-1)" || { echo "   ProfileController: PUBLIC-1 не вставлен"; exit 2; }
+
+echo "== spec 031: нижняя панель разделов на главном экране =="
+MC="$TGX/app/src/main/java/org/thunderdog/challegram/ui/MainController.java"
+if ! grep -q "ParvaneTabBar.attachToMain" "$MC"; then
+  perl -0pi -e 's/(\n(\s*)contentView\.addView\(composeWrap\);\n)/$1$2org.thunderdog.challegram.parvane.sections.ParvaneTabBar.attachToMain(this, contentView, mainWrap, composeWrap); \/\/ Parvane: Чаты · План · + · Знания · Профиль\n/' "$MC"
+fi
+grep -q "ParvaneTabBar.attachToMain" "$MC" && echo "   MainController: панель разделов" || { echo "   MainController: панель не вставлена"; exit 2; }
+
+echo "== spec 031: фон — UnifiedPush и служба связи (манифест) =="
+git -C "$TGX" checkout -- app/src/main/AndroidManifest.xml 2>/dev/null
+python3 - "$TGX/app/src/main/AndroidManifest.xml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+perm = '  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />\n'
+if "FOREGROUND_SERVICE_REMOTE_MESSAGING" not in s:
+    s = s.replace("  <application", perm + "  <application", 1)
+if "RECEIVE_BOOT_COMPLETED" not in s:
+    s = s.replace("  <application", '  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n  <application', 1)
+if "SCHEDULE_EXACT_ALARM" not in s:
+    s = s.replace("  <application", '  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />\n  <uses-permission android:name="android.permission.USE_EXACT_ALARM" />\n  <application', 1)
+comp = """    <!-- Parvane: работа в фоне без Firebase (spec 031) -->
+    <service android:name="org.thunderdog.challegram.parvane.ParvaneLinkService" android:exported="false"
+      android:foregroundServiceType="remoteMessaging" />
+    <receiver android:name="org.thunderdog.challegram.parvane.ParvaneUnifiedPushReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+        <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+        <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+        <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+      </intent-filter>
+    </receiver>
+    <receiver android:name="org.thunderdog.challegram.parvane.sections.ParvaneReminderReceiver" android:exported="false" />
+    <receiver android:name="org.thunderdog.challegram.parvane.ParvaneBootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+      </intent-filter>
+    </receiver>
+"""
+if "ParvaneLinkService" not in s:
+    s = s.replace("  </application>", comp + "  </application>", 1)
+# Android 11+: распространители UnifiedPush видны приложению только через <queries>
+if "org.unifiedpush.android.distributor.REGISTER" not in s:
+    s = s.replace("  </queries>", "    <intent><action android:name=\"org.unifiedpush.android.distributor.REGISTER\" /></intent>\n  </queries>", 1)
+open(p, "w").write(s)
+PY
+grep -q "ParvaneLinkService" "$TGX/app/src/main/AndroidManifest.xml" && echo "   манифест: служба связи и приёмник UnifiedPush" || { echo "   манифест не пропатчен"; exit 2; }
+
+echo "== spec 031: без Firebase (T045: токены устройства Google/Telegram X не запрашиваются) =="
+git -C "$TGX" checkout -q -- app/src/google/main/java/org/thunderdog/challegram/service/DefaultFirebaseTokenRetriever.kt
+python3 - "$TGX" <<'PY'
+import sys
+tgx = sys.argv[1]
+p = tgx + "/app/src/google/main/java/org/thunderdog/challegram/service/DefaultFirebaseTokenRetriever.kt"
+s = open(p).read()
+s = s.replace("override fun isAvailable(context: Context): Boolean =\n    U.isGooglePlayServicesAvailable(context)",
+              "override fun isAvailable(context: Context): Boolean = false // Parvane: без Firebase, пробуждение — UnifiedPush", 1)
+s = s.replace("  override fun performInitialization(context: Context): Boolean {\n    try {",
+              "  override fun performInitialization(context: Context): Boolean {\n    if (true) return false // Parvane: Firebase не инициализируется\n    try {", 1)
+open(p, "w").write(s)
+p = tgx + "/app/src/main/java/org/thunderdog/challegram/BaseApplication.kt"
+s = open(p).read()
+s = s.replace("        FirebaseMessaging.getInstance().isAutoInitEnabled = false\n",
+              "        // Parvane: Firebase не инициализируется (провайдер инициализации убран из манифеста)\n", 1)
+open(p, "w").write(s)
+p = tgx + "/app/src/main/AndroidManifest.xml"
+s = open(p).read()
+prov = ('    <provider android:name="com.google.firebase.provider.FirebaseInitProvider" '
+        'android:authorities="${applicationId}.firebaseinitprovider" tools:node="remove" />\n')
+if "FirebaseInitProvider" not in s:
+    s = s.replace("  </application>", prov + "  </application>", 1)
+open(p, "w").write(s)
+PY
+grep -q "Parvane: без Firebase" "$TGX/app/src/google/main/java/org/thunderdog/challegram/service/DefaultFirebaseTokenRetriever.kt" && grep -q "FirebaseInitProvider" "$TGX/app/src/main/AndroidManifest.xml" && echo "   Firebase отключён" || { echo "   Firebase не отключён"; exit 2; }
+
 echo "== local.properties / keystore =="
-[ -f "$KEYS/keystore.properties" ] || { echo "нет $KEYS/keystore.properties (см. BUILD-android.md)"; exit 2; }
+KEYPROPS="${PARVANE_KEYSTORE_PROPS:-$KEYS/keystore.properties}" # выпуск — keystore-release.properties (T077)
+[ -f "$KEYPROPS" ] || { echo "нет $KEYPROPS (см. BUILD-android.md)"; exit 2; }
 cat > "$TGX/local.properties" <<PROPS
 sdk.dir=$SDK
 org.gradle.workers.max=8
-keystore.file=$KEYS/keystore.properties
+keystore.file=$KEYPROPS
 app.id=org.parvane.tgx
 app.name=Parvane
 app.download_url=https://parvane.duckdns.org:20443/

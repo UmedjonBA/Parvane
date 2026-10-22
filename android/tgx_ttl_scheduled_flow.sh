@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # spec 005 / история 3 в эмуляторе: TTL, отложенная отправка, черновик, архив в форке X.
-# После tgx_link_e2e.sh (стек в последнем /tmp/pv-tgx.*, X = второе устройство alice, bob — desktop).
+# После tgx_protocol_link_flow.sh (стек в последнем /tmp/pv-tgx.*, X = второе устройство alice, bob — desktop).
 #   1. bob-desktop ставит TTL 10 с (PARVANE_AUTOTTL) и шлёт текст → X: показан,
 #      «ttl: удалено <uuid>» ≤ 20 с; рестарт X → в logcat нет повторного «сообщение <uuid>»;
 #   2. X ставит таймер автоудаления чата (SetChatMessageAutoDeleteTime через тап в
@@ -23,10 +23,13 @@ OUT=/tmp/pv-tgx-ttl; mkdir -p "$OUT"
 SB=$(\ls -td /tmp/pv-tgx.* | head -1); STAMP=$(date +%s)
 A="$SB/alice"; B="$SB/bob"
 PKG=org.parvane.tgx; ACT="$PKG/org.thunderdog.challegram.MainActivity"
-x_restart() { x_force_stop $PKG || bad "X не остановился (force-stop)"; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; xlog "сессия поднята" 60; }
+# logcat сценария копится в $OUT/logcat.txt (перед очисткой при рестарте — дописываем), иначе провалы не разобрать
+x_savelog() { ad logcat -d -v time >> "$OUT/logcat.txt" 2>/dev/null; }
+: > "$OUT/logcat.txt"
+x_restart() { x_force_stop $PKG || bad "X не остановился (force-stop)"; x_savelog; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; xlog "сессия поднята" 60; }
 # e2e-хуки шва: файл /data/local/tmp/parvane-e2e-cmd читается швом раз в 3 с (команда JSON)
 x_cmd() { echo "$1" > "$OUT/cmd"; ad push "$OUT/cmd" /data/local/tmp/parvane-e2e-cmd >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-e2e-cmd; }
-[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_link_e2e.sh"; finish "TGX TTL"; }
+[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX TTL"; }
 ad logcat -c
 
 # 1. TTL от desktop
@@ -85,4 +88,5 @@ BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOTTL="alice@
 wait_log "$B/td/log.txt" "AUTOTTL — TTL чата alice@local = 0с" 40 && ok "bob: TTL чата сброшен" || bad "bob: TTL чата не сброшен"
 stop_pid "$BP"
 echo "TTL_E2E_DONE rc=$RC"
+x_savelog
 finish "TGX TTL"

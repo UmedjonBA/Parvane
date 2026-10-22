@@ -41,7 +41,7 @@ json g_linkPendingGrant;
 std::map<std::string, parvane::linking::EphemeralKey> g_linkChallenges;
 std::map<std::string, std::string> g_linkOffersShown;
 std::map<std::string, std::string> g_linkOfferEph; // device_id → раскрытый ключ (для гранта по подтверждению)
-std::atomic<bool> g_linkWorker{false};
+std::atomic<int> g_linkWorkerGen{0}; // поколение идущего опроса (0 — нет): старый после сброса не мешает новому
 std::atomic<int> g_linkGeneration{0};
 
 // Ключ восстановления через Telegram (новое устройство).
@@ -295,8 +295,12 @@ bool grantLink(const std::string &deviceId) {
         if (!box) return false;
         parvane::v2::account::linkGrant(*c, deviceId, *box, own->publicB64());
         LOGI("привязка: грант выдан");
-        std::lock_guard<std::mutex> lk(g_linkMu);
-        g_linkChallenges.erase(deviceId);
+        {
+            std::lock_guard<std::mutex> lk(g_linkMu);
+            g_linkChallenges.erase(deviceId);
+        }
+        // окно подтверждения закрывается, каким бы путём ни выдан грант (кнопка окна, экран устройств, хук)
+        emit(json{{"type", "link_granted"}, {"device_id", deviceId}});
         return true;
     } catch (const std::exception &e) {
         LOGE("привязка: грант не удался: %s", e.what());
@@ -450,12 +454,16 @@ void startLinkOffer() {
 }
 
 void startLinkingWorkers() {
-    if (g_linkWorker.exchange(true)) return;
+    // уже идёт опрос текущего поколения — второй не нужен; опрос прежнего (до resetLinking) сам завершится
+    const int current = g_linkGeneration;
+    if (current != 0 && g_linkWorkerGen == current) return;
     const int generation = ++g_linkGeneration;
-    std::thread([generation] {
+    g_linkWorkerGen = generation;
+    runDetached([generation] {
         linkWorkerLoop(generation);
-        g_linkWorker = false;
-    }).detach();
+        int expected = generation;
+        g_linkWorkerGen.compare_exchange_strong(expected, 0);
+    });
 }
 
 void resetLinking() {
@@ -521,12 +529,12 @@ void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
     noteDomainKeys(outcome.planner, outcome.cloud);
     applyBundleHistory(outcome.history);
     emit(json{{"type", "link"}, {"state", "joined"}});
-    std::thread([] {
+    runDetached([] {
         for (const int delaySec : {20, 60, 180}) {
             std::this_thread::sleep_for(std::chrono::seconds(delaySec));
             syncFromKeyBundle();
         }
-    }).detach();
+    });
 }
 
 } // namespace pvjni
@@ -540,9 +548,11 @@ extern "C" {
 // [{device_id, client_kind, last_seen_ms, created_ms, current, in_log}] + extras.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListDevices(JNIEnv *env, jclass) {
     json out{{"devices", json::array()}};
+    // До входа (X спрашивает сеансы рано) — пусто: id устройства заводится только в каталоге вошедшего аккаунта
+    if (self().empty()) return jreply(env, out);
     const auto c = control();
-    const auto mine = parvane::v2::Session::deviceIdFor(v2StateDir(self()));
     try {
+        const auto mine = parvane::v2::Session::deviceIdFor(v2StateDir(self()));
         std::set<std::string> inLog;
         const auto s = v2Ready();
         if (s) {
@@ -610,14 +620,14 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkGrant(JNI
 
 // Новое устройство: опубликовать оффер снова (после истечения).
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkOffer(JNIEnv *, jclass) {
-    std::thread([] { startLinkOffer(); }).detach();
+    runDetached([] { startLinkOffer(); });
 }
 
 // ── ключ восстановления (RECOVER-1/2) ────────────────────────────────────────
 
 // Новое устройство: бот попросит владельца ответить ключом. again — «прислать ещё раз».
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeTelegramRecovery(JNIEnv *, jclass, jboolean again) {
-    std::thread([again] {
+    runDetached([again] {
         const auto s = v2NeedsLinking();
         if (!s) return;
         int generation = 0;
@@ -633,51 +643,81 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeTelegramRecovery(
         }
         setTelegramState("waiting");
         pollTelegramLoop(generation);
-    }).detach();
+    });
 }
 
 // Вход по ключу восстановления, введённому вручную: "ok" | "bad_key" | "no_backup" | "failed".
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRecoverWithKey(JNIEnv *env, jclass, jstring key) {
-    const auto s = v2NeedsLinking();
-    if (!s) return jout(env, "failed");
-    auto outcome = s->joinWithRecoveryKey(parvane::keybundle::pickRecoveryKey(jstr(env, key)), false);
-    if (outcome.result == "ok") completeKeyJoin(outcome);
-    return jout(env, outcome.result);
+    try {
+        const auto s = v2NeedsLinking();
+        if (!s) return jout(env, "failed");
+        auto outcome = s->joinWithRecoveryKey(parvane::keybundle::pickRecoveryKey(jstr(env, key)), false);
+        if (outcome.result == "ok") completeKeyJoin(outcome);
+        return jout(env, outcome.result);
+    } catch (const std::exception &e) {
+        LOGE("nativeRecoverWithKey: %s", e.what());
+        return jout(env, "failed");
+    }
 }
 
 // Сброс личности (других устройств нет, ключа нет): "ok" | "bad_password" | "failed".
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeResetIdentity(JNIEnv *env, jclass, jstring password) {
-    const auto s = v2NeedsLinking();
-    return jout(env, s ? s->resetIdentity(jstr(env, password)) : std::string("failed"));
+    try {
+        const auto s = v2NeedsLinking();
+        return jout(env, s ? s->resetIdentity(jstr(env, password)) : std::string("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeResetIdentity: %s", e.what());
+        return jout(env, "failed");
+    }
 }
 
 // Смена SSK ключом восстановления (после отзыва устройства-держателя).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRotateSsk(JNIEnv *env, jclass, jstring key) {
-    const auto s = v2Ready();
-    return jout(env, s ? s->rotateSsk(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    try {
+        const auto s = v2Ready();
+        return jout(env, s ? s->rotateSsk(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeRotateSsk: %s", e.what());
+        return jout(env, "failed");
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendKeyToTelegram(JNIEnv *env, jclass, jstring key) {
-    const auto s = v2Ready();
-    return jout(env, s ? s->sendKeyToTelegram(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    try {
+        const auto s = v2Ready();
+        return jout(env, s ? s->sendKeyToTelegram(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeSendKeyToTelegram: %s", e.what());
+        return jout(env, "failed");
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreEscrowCopy(JNIEnv *env, jclass, jstring key) {
-    const auto s = v2Ready();
-    return jout(env, s ? s->storeEscrowCopy(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    try {
+        const auto s = v2Ready();
+        return jout(env, s ? s->storeEscrowCopy(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
+    } catch (const std::exception &e) {
+        LOGE("nativeStoreEscrowCopy: %s", e.what());
+        return jout(env, "failed");
+    }
 }
 
 // {"rotationNeeded","hasRoot","hasBackup","needsLinking","telegram":state}
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRecoveryState(JNIEnv *env, jclass) {
-    json out = json::object();
-    const auto s = v2Any();
-    out["needsLinking"] = s && s->needsLinking();
-    if (s && s->isReady()) out.update(s->sskState());
-    {
-        std::lock_guard<std::mutex> lk(g_tgMu);
-        out["telegram"] = g_tgState;
+    try {
+        json out = json::object();
+        const auto s = v2Any();
+        out["needsLinking"] = s && s->needsLinking();
+        if (s && s->isReady()) out.update(s->sskState());
+        {
+            std::lock_guard<std::mutex> lk(g_tgMu);
+            out["telegram"] = g_tgState;
+        }
+        return jreply(env, out);
+    } catch (const std::exception &e) {
+        LOGE("nativeRecoveryState: %s", e.what());
+        return jreply(env, json::object());
     }
-    return jreply(env, out);
 }
 
 // ── копия ключей формата 2 (вручную) ─────────────────────────────────────────
@@ -700,12 +740,17 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeExportKeys(JNI
 
 // 1 — история перенесена; −1 — неверный пароль/битый файл; −2 — копия не формата 2.
 JNIEXPORT jint JNICALL Java_org_parvane_core_ParvaneCore_nativeImportKeys(JNIEnv *env, jclass, jstring fileJson, jstring password) {
-    const auto state = parvane::keybackup::importEncrypted(jstr(env, fileJson), jstr(env, password));
-    if (!state) return -1;
-    const auto parsed = json::parse(*state, nullptr, false);
-    if (!parsed.is_object() || !parsed.contains("v2")) return -2;
-    if (parsed.contains("v2History")) importV2History(json{{"v2History", parsed["v2History"]}}.dump());
-    return 1;
+    try {
+        const auto state = parvane::keybackup::importEncrypted(jstr(env, fileJson), jstr(env, password));
+        if (!state) return -1;
+        const auto parsed = json::parse(*state, nullptr, false);
+        if (!parsed.is_object() || !parsed.contains("v2")) return -2;
+        if (parsed.contains("v2History")) importV2History(json{{"v2History", parsed["v2History"]}}.dump());
+        return 1;
+    } catch (const std::exception &e) {
+        LOGE("nativeImportKeys: %s", e.what());
+        return -1;
+    }
 }
 
 // ── аккаунт (RENAME-1, DELETE-1) ─────────────────────────────────────────────
@@ -713,41 +758,51 @@ JNIEXPORT jint JNICALL Java_org_parvane_core_ParvaneCore_nativeImportKeys(JNIEnv
 // {"result":"ok"|"bad_password"|"no_backup"|"bad_key"|"taken"|"invalid"|"failed","address"}
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRenameAccount(
         JNIEnv *env, jclass, jstring nick, jstring password, jstring recoveryKey) {
-    const auto s = v2Ready();
-    if (!s) return jreply(env, json{{"result", "failed"}});
-    const auto oldAddress = self();
-    auto out = s->renameAccount(jstr(env, nick), jstr(env, password), parvane::keybundle::pickRecoveryKey(jstr(env, recoveryKey)));
-    if (out.value("result", std::string()) != "ok") return jreply(env, out);
-    const auto newAddress = out.value("address", std::string());
-    if (!parvane::accountfiles::isValidAddress(newAddress)) return jreply(env, json{{"result", "failed"}});
-    const auto token = out.value("token", std::string());
-    // Сессия — под новым адресом: каталог состояния переезжает, журнал истории — свои строки нового адреса
-    stopSession();
-    std::error_code ec;
-    std::filesystem::rename(v2StateDir(oldAddress), v2StateDir(newAddress), ec);
-    auto msgs = journalFold();
-    for (auto &m : msgs)
-        for (const auto *k : {"from", "to"})
-            if (m.value(k, std::string()) == oldAddress) m[k] = newAddress;
-    journalRewrite(msgs);
-    {
-        std::lock_guard<std::mutex> lk(g_mu);
-        g_self = newAddress;
-        if (!token.empty()) g_token = token;
-        parvane::storecrypt::writeFile(storeDir() + "/session.json", json{{"self", g_self}, {"token", g_token}}.dump());
-        parvane::storecrypt::writeFile(storeDir() + "/account-owner", g_self);
+    try {
+        const auto s = v2Ready();
+        if (!s) return jreply(env, json{{"result", "failed"}});
+        const auto oldAddress = self();
+        auto out = s->renameAccount(jstr(env, nick), jstr(env, password), parvane::keybundle::pickRecoveryKey(jstr(env, recoveryKey)));
+        if (out.value("result", std::string()) != "ok") return jreply(env, out);
+        const auto newAddress = out.value("address", std::string());
+        if (!parvane::accountfiles::isValidAddress(newAddress)) return jreply(env, json{{"result", "failed"}});
+        const auto token = out.value("token", std::string());
+        // Сессия — под новым адресом: каталог состояния переезжает, журнал истории — свои строки нового адреса
+        stopSession();
+        std::error_code ec;
+        std::filesystem::rename(v2StateDir(oldAddress), v2StateDir(newAddress), ec);
+        journalTransform([&](std::vector<json> &msgs) {
+            for (auto &m : msgs)
+                for (const auto *k : {"from", "to"})
+                    if (m.value(k, std::string()) == oldAddress) m[k] = newAddress;
+        });
+        {
+            std::lock_guard<std::mutex> lk(g_mu);
+            g_self = newAddress;
+            if (!token.empty()) g_token = token;
+            parvane::storecrypt::writeFile(storeDir() + "/session.json", json{{"self", g_self}, {"token", g_token}}.dump());
+            parvane::storecrypt::writeFile(storeDir() + "/account-owner", g_self);
+        }
+        startSession();
+        emit(json{{"type", "renamed"}, {"from", oldAddress}, {"to", newAddress}});
+        out.erase("token");
+        return jreply(env, out);
+    } catch (const std::exception &e) {
+        LOGE("nativeRenameAccount: %s", e.what());
+        return jreply(env, json{{"result", "failed"}});
     }
-    startSession();
-    emit(json{{"type", "renamed"}, {"from", oldAddress}, {"to", newAddress}});
-    out.erase("token");
-    return jreply(env, out);
 }
 
 // {"result":"ok"|"bad_password"|"failed","deletionAtMs"}
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDeleteAccount(JNIEnv *env, jclass, jstring password) {
-    const auto s = v2Ready();
-    if (!s) return jreply(env, json{{"result", "failed"}});
-    return jreply(env, s->deleteAccount(jstr(env, password)));
+    try {
+        const auto s = v2Ready();
+        if (!s) return jreply(env, json{{"result", "failed"}});
+        return jreply(env, s->deleteAccount(jstr(env, password)));
+    } catch (const std::exception &e) {
+        LOGE("nativeDeleteAccount: %s", e.what());
+        return jreply(env, json{{"result", "failed"}});
+    }
 }
 
 // ── профиль, поиск (FED-1) ───────────────────────────────────────────────────
@@ -763,7 +818,10 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeResolve(JNIEnv
     try {
         std::string federationError;
         for (const auto &p : parvane::v2::account::resolveProfiles(*c, addresses, &federationError)) out["users"].push_back(p.toJson());
-        if (!federationError.empty()) out["federation_error"] = federationError;
+        if (!federationError.empty()) {
+            out["federation_error"] = federationError;
+            noteFederationFailure(federationError);
+        }
     } catch (const std::exception &e) {
         out["error_code"] = errorCodeOf(e);
     }

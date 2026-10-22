@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # spec 005 / история 4 в эмуляторе: папки, превью ссылок, карта (MAP-1), поля профиля,
-# глобальный поиск в форке X. После tgx_link_e2e.sh (стек в последнем /tmp/pv-tgx.*,
-# X = второе устройство alice, bob — desktop). Шард preview stack_start не поднимает —
-# стартуем сами с засеянным кэшем тайлов (офлайн, как verify_location_map.sh).
+# глобальный поиск в форке X. После tgx_protocol_link_flow.sh (стек в последнем /tmp/pv-tgx.*,
+# X = второе устройство alice, bob — desktop). Шард preview поднят стеком (с учёткой NATS по ACL) — засеваем его
+# кэш тайлов (офлайн, как verify_location_map.sh); свой второй preview без учётки NATS отвергает.
 #   1. папка через e2e-хук (CreateChatFolder с чатом bob) → «папка 1 «Work»: 1 чатов»,
 #      рестарт X → UpdateChatFolders и позиция ChatListFolder;
 #   2. bob-desktop шлёт текст со ссылкой → X: MessageText.linkPreview («превью … → …» у
@@ -26,15 +26,13 @@ A="$SB/alice"; B="$SB/bob"
 PKG=org.parvane.tgx; ACT="$PKG/org.thunderdog.challegram.MainActivity"
 x_restart() { ad shell am force-stop $PKG; sleep 2; ad logcat -c; ad shell am start -n "$ACT" >/dev/null 2>&1; xlog "сессия поднята" 60; }
 x_cmd() { echo "$1" > "$OUT/cmd"; ad push "$OUT/cmd" /data/local/tmp/parvane-e2e-cmd >/dev/null 2>&1; ad shell chmod 644 /data/local/tmp/parvane-e2e-cmd; }
-[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_link_e2e.sh"; finish "TGX FOLDERS"; }
+[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX FOLDERS"; }
 [ -x "$SHARD/preview" ] || { bad "нет шарда $SHARD/preview — cd backend && cargo build -p preview"; finish "TGX FOLDERS"; }
 ad logcat -c
 
 # preview + засев тайлов вокруг точки
 P0="55.7558,37.6173"
-pkill -f "target/debug/[p]review" 2>/dev/null; sleep 1
-PARVANE_NATS_URL=nats://127.0.0.1:4222 PARVANE_DB_PATH="$SB/preview.db" PARVANE_LOG_LEVEL=info "$SHARD/preview" >"$SB/preview.log" 2>&1 & PREVIEW_PID=$!
-wait_log "$SB/preview.log" "Preview шард запущен" 20 && ok "preview поднят" || bad "preview не поднялся"
+grep -qa "Preview шард запущен" "$SB/preview.log" && ok "preview стека поднят" || bad "preview стека не поднят (см. $SB/preview.log)"
 python3 - "$SB/preview.db" "$P0" <<'PY'
 import math, sqlite3, struct, sys, time, zlib
 db = sys.argv[1]; points = [tuple(map(float, p.split(','))) for p in sys.argv[2:]]
@@ -110,6 +108,6 @@ xlog "поиск «page-$STAMP»: [1-9][0-9]* совпадений" 30 && ok "X:
 ad logcat -d -v time > "$OUT/logcat.txt"
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"
 ui_reset
-stop_pid "$BP"; kill "$PREVIEW_PID" 2>/dev/null
+stop_pid "$BP"
 echo "FOLDERS_E2E_DONE rc=$RC"
 finish "TGX FOLDERS"

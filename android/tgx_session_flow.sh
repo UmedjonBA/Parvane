@@ -20,7 +20,7 @@ tgx_logwait "autologin \(dev\): вход alice@local" 40 && ok "вход dev-х�
 tgx_logwait "v2: готов" 120 && ok "alice (X) на v2: устройство в журнале" || bad "сессия v2 X не поднялась"
 sleep 5; tgx_shot "$OUT/01-main.png"
 # bob → alice
-S="privet-$(date +%s)"
+S="privet-$(date +%s)"; tgx_mark
 stop_pid "$BP"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOSEND=alice@local:$S")
 tgx_logwait "v2 ← входящее msg" 90 && ok "X получил сообщение bob" || bad "X не получил сообщение bob"

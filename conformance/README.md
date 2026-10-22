@@ -18,9 +18,9 @@ v1-отправки и ack (SEND-1), v1-топики typing/presence (EPHEMERAL-
 устройств v1 и TOFU по ним (KEY-1, E2E-1 — автора проверяет движок v2), материал v1 и
 перенос владения в линковке (LINK-1) —
 для web закрыты удалением кода: сторож `conformance.test.ts` проверяет, что
-v1-код в web не вернулся. Для desktop и android эти пункты действуют до их T110
-(десктоп и Android остаются совместимы по v2). Поле `clients.web` в
-`sync-rules.json` у таких правил описывает состояние после T110.
+v1-код в web не вернулся. Desktop и Android прошли тот же переход позже (spec 029
+и spec 031, абзацы ниже). Поле `clients.web` в `sync-rules.json` у таких правил
+описывает состояние после T110.
 
 **spec 029 (18 окт 2026): desktop без протокола v1.** Из ядра `parvane-core` и
 клиента `parvane_client.cpp` удалены Olm/Megolm (`e2e.cpp`), `messenger_client`/
@@ -32,8 +32,23 @@ v1-код в web не вернулся. Для desktop и android эти пун�
 GROUP-4, STATE-2, E6-1, LINK-1), для desktop закрыты удалением кода: сторож
 проверяет, что v1-кода в desktop нет, а остальные desktop-пункты смотрят в
 v2-код (`v2_session*.cpp`, `v2_bridge.cpp`, `v2_content.cpp`). Поле
-`clients.desktop` описывает состояние после spec 029. Android — до своего T110
-(его `jni` использует удалённые модули ядра и до перехода не собирается).
+`clients.desktop` описывает состояние после spec 029.
+
+**spec 031 (22 окт 2026): android без протокола v1.** Монолит `android/jni/parvane_jni.cpp`
+удалён вместе с Rust-библиотекой v1 `backend/shared/parvane-e2e` (Olm/Megolm), мостом
+`BridgeTransport`, курсорами синка (`cursors.json`, `pending.json`), очередью починки,
+повтором `msg.chat.read`, легаси-копиями и сценариями v1/двойного стека
+(`tgx_protocol_v2_flow.sh`, `tgx_link_flow.sh`, `tgx_link_e2e.sh` и др.). JNI переписан
+модулями поверх `v2::Session` / `v2_account` / `Control` ядра — того же списка исходников
+`parvane_core`, что у desktop (сторож `android/tools/check_core_sources.sh`): `jni_main.cpp`
+(журнал истории, ORDER-1), `jni_session.cpp` (вход, события сессии), `jni_messages.cpp`,
+`jni_groups.cpp`, `jni_account.cpp`, `jni_calls.cpp`, `jni_push.cpp`, `jni_sections.cpp`,
+`jni_planner_ops.cpp`. Каталог устройства прежней версии стирается при первом запуске.
+Пункты правил о v1-пути (SYNC-1/2, READ-1, E2E-1, KEY-1, SEND-1, EPHEMERAL-1, GROUP-1,
+LEGACY-1, GROUP-4, E6-1, LINK-1) для android закрыты удалением кода: сторож проверяет, что
+v1-кода в `android/jni` нет, остальные android-пункты смотрят в модули `jni_*.cpp` и шов
+`android/libtd`. Поле `clients.android` описывает состояние после spec 031; там, где
+android сделан не полностью, — пометка «ОТКРЫТО».
 
 ## SYNC-1. Дисковый курсор двигается только по применённому
 
@@ -49,9 +64,9 @@ v2-код (`v2_session*.cpp`, `v2_bridge.cpp`, `v2_content.cpp`). Поле
 
 Реализации: web `api/parvane/sync.ts` (`persistCursor`, флаг `sawUndecryptable`);
 desktop `parvane/parvane_client.cpp` (`prepareIncoming` → `NotePendingAndMayAdvance`);
-android `jni/parvane_jni.cpp` (`enum class Deliver`, `g_diskCursorId` → `cursors.json`
-только после `Applied`, придержанное — `pending.json`; маркеры «курсор придержан»,
-«курсор: … применён», 27 сен 2026). Тест android — сценарий на эмуляторе
+android до spec 031 — `jni/parvane_jni.cpp` (`g_diskCursorId` → `cursors.json`); со spec 031
+курсора v1 нет: новое отдаёт инбокс v2 (курсор — в ядре), показанное пишется в журнал истории
+`android/jni/jni_main.cpp`. Тест android — сценарий на эмуляторе
 `android/tgx_conformance_flow.sh`, шаг 1 (см. «устройство отсутствовало» ниже).
 
 ## SYNC-2. Непрочитанное не держит курсор вечно
@@ -66,9 +81,8 @@ android `jni/parvane_jni.cpp` (`enum class Deliver`, `g_diskCursorId` → `curso
 
 Реализации: desktop `NotePendingAndMayAdvance` (`tdata/parvane-pending.txt`);
 web `mayAdvanceDiskCursor` + `localState.loadRepairAttempts` (9 сен 2026);
-android `jni/parvane_jni.cpp` (`kRepairAttempts` = 3, `pending.json`, маркер
-«курсор отпущен после 3 попыток (SYNC-2)»; на чистом проходе сценарий
-`android/tgx_conformance_flow.sh` проверяет, что ничего не придержано).
+android — до spec 031 `jni/parvane_jni.cpp` (`kRepairAttempts` = 3); со spec 031 курсора и
+очереди починки нет (строки приходят расшифрованными движком v2).
 
 ## PROFILE-1. Профиль собеседника перечитывается по TTL
 
@@ -95,9 +109,8 @@ desktop → профиль перечитан без перезапуска X).
 
 Реализации: web `localState.loadReadUuids/saveReadUuids`, `retryUnconfirmedReads`;
 desktop `g_reportedRead` + `tdata/parvane-read.txt`, `RetryUnconfirmedReads` (9 сен 2026);
-android `jni/parvane_jni.cpp` (`read.json` + запись в журнал ДО `msg.chat.read` —
-«прочитано локально»; `g_unconfirmedRead` повторяется в `pumpLoop`, пока сервер
-не вернёт `read=true` — «read подтверждён»). Тест android —
+android со spec 031 — `android/jni/jni_messages.cpp` `nativeMarkRead` (строка `read` в журнал
+истории ДО квитанции, квитанция — E2E-содержимое v2 через движок; повтора `msg.chat.read` нет). Тест android —
 `android/tgx_conformance_flow.sh`, шаг 2 (после рестарта X бейдж не возвращается).
 
 ## FAIL-1. Ожидание без ответа запрещено
@@ -116,15 +129,14 @@ android `jni/parvane_jni.cpp` (`read.json` + запись в журнал ДО `
   `desktop/verify_gateway_reconnect.sh`.
 - web: `useModuleLoader` ловит отказ импорта, `moduleLoader` не кэширует
   отвергнутый промис, устаревший чанк лечится одноразовой перезагрузкой.
-- android: `jni/parvane_jni.cpp` `pumpLoop` — ошибка синка «отказ авторизации» /
-  «просроченный JWT» / «устройство отозвано» → событие `session failed`
-  (`reason=auth`) → `Client.kt` `sessionExpired()`: стор очищен, `session.json`
-  снят, ключи `e2e-*` и `journal.jsonl` сохранены, X переводится в
-  `LoggingOut → WaitPhoneNumber` (не `Closed` — тот стирает данные). Обрыв
-  gateway: транспорт ядра переподключается сам, обработчик в `nativeInit`
-  пишет «gateway переподключён». Тест — `android/tgx_conformance_flow.sh`,
-  шаги 4 (отзыв устройства с alice-desktop → экран входа, данные на месте)
-  и 5 (`gateway_restart` → реконнект → следующее сообщение доставлено).
+- android (spec 031): отказ авторизации v2-сессии (событие `authRejected`,
+  `android/jni/jni_session.cpp`) → событие `session failed` (`reason=auth`) →
+  `Client.kt` `sessionExpired()`: стор очищен, `session.json` снят, журнал истории
+  сохранён, X переводится в `LoggingOut → WaitPhoneNumber` (не `Closed` — тот
+  стирает данные). Обрыв gateway: сессия ядра переподключается сама (сеть
+  вернулась — `nativeNetworkAvailable`). Тест — `android/tgx_conformance_flow.sh`,
+  шаги 4 (`gateway_restart` → реконнект → следующее сообщение доставлено)
+  и 5 (отзыв устройства с alice-desktop → экран входа).
 
 ## MAP-1. Фрагменты карты — только через шард preview
 
@@ -198,7 +210,11 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 архив с чужим отпечатком отвергается), сверка эмодзи-пака в `MaterializeEmojiPacks` (эмодзи-паки
 по-прежнему различаются именем из ссылки — от него docId, EMOJI-1). Тесты: `tests/pack_tests.cpp`,
 `tests/webcompat_tests.cpp` — общий вектор `proto/parvane/vectors/clients/pack-hash.json` (его же
-проверяет web `clientVectors.test.ts`), `tests/v2_tests.cpp`. Android — ОТКРЫТО (то же).
+проверяет web `clientVectors.test.ts`), `tests/v2_tests.cpp`. Android (spec 031) — частично:
+`android/jni/jni_messages.cpp` кладёт `content_hash` в ссылку (`nativePackRefFor`, кэш ссылок по
+отпечатку), одноимённый набор с другим отпечатком ставит отдельным каталогом «<имя> <6 hex>»
+(`nativePackFetch`, `hashTag`), `nativePackHash` — отпечаток установленного набора. ОТКРЫТО: скачанный
+архив с отпечатком не сверяется, тот же набор под другим именем не находится; теста нет.
 
 ## CALL-2. Название группы во входящем групповом звонке
 
@@ -216,7 +232,11 @@ desktop `parvane-core/src/map_tiles.cpp` (геометрия, клиент та�
 tdesktop `parvane_client.cpp` (`StartGroupCall`, `ShowIncomingGroupCall` — известная
 группа своим названием, неизвестная — из приглашения); тесты
 `tests/call_manager_tests.cpp` («CALL-2: во входящем — группа и её название»),
-`tests/webcompat_tests.cpp` (очистка названия как web). Android — ОТКРЫТО.
+`tests/webcompat_tests.cpp` (очистка названия как web). Android (spec 031): `android/jni/jni_calls.cpp`
+(`nativeGroupStart` → `GroupCallManager::startCall` с адресом и названием группы, приглашение —
+событие `group_call` с `cleanGroupTitle`), окно и экран — `GroupCallController.kt` оверлея; сценарий
+`android/tgx_group_call_flow.sh`. ОТКРЫТО (мелочь): для известной группы окно приглашения
+показывает название из приглашения, а не своё из журнала.
 
 ## FED-1. Федерация серверов (spec 028)
 
@@ -243,8 +263,10 @@ tdesktop `NoteFederationFailure` — причины строками EN+RU; сц
 `desktop/verify_federation.sh` (зелёный 19 окт 2026) (два локальных сервера `a.parvane.test`/`b.parvane.test` с шардом federation на тестовом
 транспорте, по клиенту на сервер, личное письмо в обе стороны; `verify_lib.sh` — порты стека `PV_NATS_PORT`/
 `PV_GW_WS_PORT`/`PV_GW_TCP_PORT`, соседи `PV_FEDERATION_PEERS`); `tests/v2_tests.cpp` проверяет только перенос
-`blob_domain`. Android — ОТКРЫТО: без `dest_domain` он работает в
-пределах своего сервера, адрес другого сервера получает прежний `FEDERATION_UNAVAILABLE`.
+`blob_domain`. Android (spec 031): адресат запросов, жетоны сервера адресата, домены групп и блобов —
+общее ядро (тот же список исходников `parvane_core`, что desktop); профиль адреса чужого сервера —
+`android/jni/jni_account.cpp` `nativeResolve` (`resolveProfiles` по доменам). ОТКРЫТО: причины отказа
+(п. 5) шов строками не показывает; сценария двух серверов на эмуляторе нет.
 
 ## EMOJI-1. docId кастом-эмодзи — от имени из ссылки
 
@@ -792,7 +814,8 @@ sealed- и групповых записей он округляет до мин
 `l2/mode` тем же тестом, что SEAL-1; поведение — web
 `src/api/parvane/l2.test.ts`, desktop `desktop/parvane-core/tests/v2_tests.cpp`
 (состояние, содержимое) и `desktop/verify_protocol_v2.sh` (шаги L2), android
-`L2PrivacySeamTest.kt` и `android/tgx_protocol_v2_flow.sh`.
+`L2PrivacySeamTest.kt` (сценарий двойного стека `tgx_protocol_v2_flow.sh` удалён в spec 031;
+режим L2 на эмуляторе сейчас отдельным сценарием не проверяется).
 
 ## CALL-1. ICE-кандидат звонка: один формат во всех клиентах
 
@@ -817,9 +840,12 @@ desktop не соединялся (ICE оставался в `new`), а авто
 Реализации: web `src/api/parvane/iceCandidate.ts` (`encodeIceCandidate`,
 `decodeIceCandidate`; `callengine.ts`, `groupcall.ts`), desktop и ядро
 `parvane-core/include/parvane/call.h` (`iceCandidateJson`, `parseIceCandidate`;
-`parvane_webrtc_backend.cpp`). В Android звонков нет (спека 006). Тесты: web
+`parvane_webrtc_backend.cpp`). Android (spec 031): `android/jni/jni_calls.cpp` — менеджеры
+звонков ядра (`CallManager`/`GroupCallManager`, тот же кодек `call.h`), медиа — `org.webrtc`
+из состава Telegram X (`ParvaneCalls.kt`, `Calls.kt`). Тесты: web
 `iceCandidate.test.ts`, ядро `call_session_tests.cpp`, сторож
-`conformance.test.ts`, сценарий `scripts/run_web_cross_calls_e2e.sh`.
+`conformance.test.ts`, сценарии `scripts/run_web_cross_calls_e2e.sh` и
+`android/tgx_calls_flow.sh` (desktop ↔ X в обе стороны).
 
 ## LEGACY-1. v1-устройства аккаунта, перешедшего на v2
 
@@ -928,7 +954,8 @@ N. **Выход устройства (6 окт 2026, T197).** При полно�
    Движок `identity.rs` (`by_itself`), `Client::leave_request`; обвязки `leave`
    (WASM), `pv_client_leave` (C ABI). Реализовано в web (`v2Controller.leave` в
    `destroy`); desktop — в ядре `Session::leave` (живой тест `v2_session_tests.cpp`,
-   ENG-04), но полный выход tdesktop его не зовёт — ОТКРЫТО; android — T193.
+   ENG-04), но полный выход tdesktop его не зовёт — ОТКРЫТО; android (spec 031) — выход
+   `nativeLogout` зовёт `Session::leave` (≤ 5 с) и стирает данные устройства.
 
 N+1. **Ревью 7 окт, ENG-04…08 (15 окт 2026, движок — общий для всех клиентов).**
    - Признак «держал SSK» не снимается более поздним сертификатом с `no-ssk`;
@@ -949,8 +976,9 @@ N+1. **Ревью 7 окт, ENG-04…08 (15 окт 2026, движок — общ
      (`GROUP_SHARE_GAP_*` в `v2/controller.ts`), чтобы сервер не связывал их по времени.
    Desktop (spec 029): ядро `reportDeviceStolen`, `leftSskHolders`, кнопка — экран
    «Устройства» (`parvane_account_ui.cpp`, `FillReadyExtras`), живой тест
-   `v2_session_tests.cpp` (ENG-04). Android получает это со следующей сборкой движка
-   (C ABI прежний; кнопки «устройство украдено» нет — ОТКРЫТО).
+   `v2_session_tests.cpp` (ENG-04). Android (spec 031): то же ядро, JNI `nativeListDevices`
+   (`left_devices`) и `nativeReportDeviceStolen`, кнопка — экран аккаунта оверлея
+   (`AccountController.kt`).
 
 N+2. **Два способа завершить сеанс (15 окт 2026, решение владельца).** «Завершить
    сеанс» и «Завершить все другие сеансы» спрашивают, как именно:
@@ -1032,7 +1060,7 @@ rekey)`), `SettingsActiveSessions.tsx`; ядро `v2_session.cpp` (`revokeDevice
    заново). Экраны говорят «ключ утерян — напишите администратору». Реализовано
    в web (`sealRootEscrow`, сценарий `run_protocol_mixed_e2e.sh escrow`);
    desktop — ядро `sealRootEscrowLocked` (создание и сброс личности, `storeEscrowCopy`),
-   сценария нет; android — T193 (обвязка `pv_client_export_root_escrow` готова).
+   сценария нет; android (spec 031) — то же ядро, JNI `nativeStoreEscrowCopy` (экрана нет).
 
 Реализации: движок `client.rs` (`ingest_log_sync`, `log_genesis`,
 `accept_pending_root`, `recover_with_root`, `reset_identity`), обвязки
@@ -1048,9 +1076,11 @@ device?» в `SettingsActiveSessions.tsx`; ядро `v2_session.cpp`
 (`acceptPeerRootLocked`, `runDirectLocked`, `dropIdentityLocked`,
 `uploadRootBackupLocked`, `recoverWithKey`, `resetIdentity`), tdesktop — событие
 `peerRootChanged` → `AnnounceKeyChange`, Android JNI — событие
-`peer_root_changed`. Ввод ключа восстановления и сброс в UI desktop — окно
+`peer_root_changed` (служебное сообщение в чате, `Client.kt`). Ввод ключа восстановления и сброс в UI desktop — окно
 «Подтвердите вход» (`parvane_account_ui.cpp` `FillLinking` → `RecoverWithKey`,
-`ResetIdentityWithPassword`, spec 029); Android — T140.
+`ResetIdentityWithPassword`, spec 029); Android (spec 031) — JNI `nativeRecoverWithKey`
+(вход по копии ключей, RECOVER-2), `nativeResetIdentity`; ввод ключа — `AccountController.kt`
+оверлея, экрана сброса личности нет.
 Тесты: движок `revocation_flow.rs` (`recovery_with_root_replaces_devices`,
 `identity_reset_is_seen_as_root_change`), ядро `v2_session_tests.cpp` (живой,
 T129/T130), сторож `conformance.test.ts`, сценарии
@@ -1085,9 +1115,9 @@ T129/T130), сторож `conformance.test.ts`, сценарии
 `v2/contentMap.ts`; ядро `v2_link.cpp` (`Connection::requestStream`),
 `v2_session.cpp` (`uploadBlob`, `downloadBlobCap`), `v2_content.cpp`; tdesktop
 `BlobRecipientsFor` / `UploadBlobWith` / `DownloadChatBlob` / `RememberBlobCaps`;
-Android JNI `rememberBlobCaps` / `downloadChatBlob` и ветка capability в
-отправке медиа (архивы паков с Android — пока с грантами: получателей задаёт
-Kotlin). Тесты: ядро `v2_session_tests.cpp` (живой, T131), сторож
+Android JNI (spec 031) `rememberBlobCaps` / `downloadChatBlob` (`jni_main.cpp`) и
+`uploadChatBlob` (`jni_messages.cpp`) — все вложения, архивы паков и картинки превью по
+секрету, грантов получателям нет. Тесты: ядро `v2_session_tests.cpp` (живой, T131), сторож
 `conformance.test.ts`, сценарий `scripts/run_protocol_mixed_e2e.sh web2-web2`
 (в `cloud.db` нет строк `file_grants`).
 
@@ -1129,8 +1159,10 @@ Kotlin). Тесты: ядро `v2_session_tests.cpp` (живой, T131), сто�
 (`fetchPrivacyLocked`, события `privacy`/`privacySaved`); tdesktop
 `parvane_client.cpp` (`kV2StateKinds`, `ProjectNotify`, `ProjectBlocked`,
 `ProjectDialogs`, `MirrorBlock`/`MirrorArchive`/`MirrorDialogPins`,
-`PublishNotifyBlob`, `PrivacyLocal.dirty`); Android — блок-лист и архив в
-`StateJournal.kt`, уведомления и закреп — ещё нет (правило открыто). Тесты:
+`PublishNotifyBlob`, `PrivacyLocal.dirty`); Android (spec 031) — `StateJournal.kt` (все виды:
+папки, блок-лист, черновики, архив, отложенные, уведомления, закреп, «непрочитано», быстрая
+реакция; JVM `StateJournalTest.pinsUnreadAndReactionRoundTrip`), приватность — события
+`privacy`/`privacy_saved` → `PrivacyPrefs.kt`. Тесты:
 ядро `v2_session_tests.cpp` (FR-040, живой), сторож `conformance.test.ts`,
 сценарии `scripts/run_protocol_mixed_e2e.sh state-sync` и
 `desktop/verify_protocol_v2_state.sh`.
@@ -1161,8 +1193,8 @@ Kotlin). Тесты: ядро `v2_session_tests.cpp` (живой, T131), сто�
 `tokenBatchSize`; web `v2/controller.ts` (`revokeContactAccess`,
 `refillTokens`), `provider.ts` (`blockUser`); ядро `v2_session.cpp`
 (`revokeContactAccess`, `refillTokensLocked`, `scheduleTokenCheck`); tdesktop
-`NoteBlock`; Android JNI `nativeRevokeContactAccess` (Kotlin его ещё не зовёт —
-правило открыто). Тесты: движок `revocation_flow.rs`
+`NoteBlock`; Android JNI `nativeRevokeContactAccess` — `Client.kt` зовёт его при блокировке
+(spec 031). Тесты: движок `revocation_flow.rs`
 (`contact_access_revocation_excludes_one_peer`), ядро `v2_session_tests.cpp`
 (T133, живой), сторож `conformance.test.ts`, сценарии `state-sync` и
 `desktop/verify_protocol_v2_state.sh`.
@@ -1200,8 +1232,9 @@ desktop применял к группе v2 нотис и список v1-шар
 (`setGroupInfo`, `listJoinRequests`, `decideJoinRequest`), `groups.ts`; ядро
 `v2_session.cpp` (`changeGroup` с `set_info_patch`, `listJoinRequests`,
 `decideJoinRequest`); tdesktop `ApplyGroupInfo`, обработчик `onGroupNotice`,
-`V2SetInfo`, `ListJoinRequests`/`DecideJoinRequest`; Android JNI `v2SetInfo`,
-`onGroupNotice`, `nativeGroupRequests`/`nativeGroupRequestDecide`. Тесты: движок
+`V2SetInfo`, `ListJoinRequests`/`DecideJoinRequest`; Android JNI (spec 031, v1-нотисов нет)
+`jni_groups.cpp` `nativeGroupSetInfo` (`Session::setGroupInfo`), `nativeGroupRequests`/
+`nativeGroupRequestDecide`. Тесты: движок
 `client_flow.rs` (`join_request_is_approved_by_add_member`), сторож
 `conformance.test.ts` (GROUP-3), сценарии web `web2-groups`
 (`e2e_protocol_groups.mjs`: заявка, отказ, одобрение), `group_admin`
@@ -1238,10 +1271,10 @@ desktop применял к группе v2 нотис и список v1-шар
   подставляет сам по запросу и коду.
 
 Сценарии: web — вся матрица (с T110 web без v1 целиком; пара `v1-off` удалена), desktop —
-все `desktop/verify_*.sh` (со spec 029 desktop без v1, с T038 — без моста; `verify_protocol_v2_v1off.sh` удалён), android — блок disabled в
-`android/tgx_protocol_v2_flow.sh desktop2-android2` (мост в `android/jni`
-подключён 4 окт 2026: X отмечает отключение v1, диалога нет, сессия остаётся).
-Переписка Android при отключённом v1 отдельным сценарием ещё не покрыта.
+все `desktop/verify_*.sh` (со spec 029 desktop без v1, с T038 — без моста; `verify_protocol_v2_v1off.sh` удалён), android —
+все `android/tgx_*_flow.sh` (со spec 031 android без v1 и без моста: соединение управления v2
+`parvane::v2::Control` и сессия ядра, как desktop; сценарий `tgx_protocol_v2_flow.sh` с блоком
+disabled удалён — выключать нечего).
 
 ## GROUP-4. Группа v1 переводится в v2, чат остаётся прежним
 
@@ -1270,7 +1303,8 @@ desktop применял к группе v2 нотис и список v1-шар
 таблица сообщений v1 не растёт, работа после `PARVANE_V1_MODE=disabled`); web —
 `scripts/run_protocol_mixed_e2e.sh group-migrate` (пара удалена с T110 — переводить нечего; один чат в списке, история обеих эпох, после
 перевода `msg.chat.send` по v1 не уходит); сторож — `conformance.test.ts` (GROUP-4).
-Android — не сделано (T184).
+Android — закрыто удалением (spec 031): групп v1 у android нет (каталог прежней версии
+стирается при первом запуске), группы — только из журнала v2.
 
 ## OP-SIG. Каноничная подпись операций
 
@@ -1345,7 +1379,8 @@ LINK-1) — `device_log/`; журнал группы (GROUP-1, GROUP-2 прав�
 3. **Отзыв устройства** (REVOKE-1) поднимает эпоху контейнера записью
    журнала грантов `rotate` (`domain.key.rotate`, подпись админа); новый ключ
    — оставшимся своим устройствам; отозванное новых операций не читает.
-4. **Чужой домен.** Клиент, не реализующий домен (desktop, android),
+4. **Чужой домен.** Клиент, не реализующий домен (desktop и android реализуют его со spec 029 и
+   spec 031 — раздел «План» поверх `PlannerSync` ядра),
    принимает `container_key` и операции незнакомого домена без ошибок и без
    влияния на остальную синхронизацию (движок хранит ключ, UI не трогает).
 5. **Сведение** — в движке (`domain/planner.rs`): «последняя правка
@@ -1378,7 +1413,8 @@ web `v2/planner.ts`, `controller.ts`, `provider.ts`, `plannerSync.ts`,
 2. **Принятие создаёт задачу один раз на аккаунт**: у задачи планировщика
    поле `source {chat, op_id}`; второе устройство того же аккаунта, увидев
    задачу с тем же `source` в контейнере, задачи не создаёт.
-3. **Клиент без планировщика (desktop, android)** показывает поле `text`
+3. **Клиент без планировщика** (так было у desktop и android до spec 029 / spec 031; теперь оба
+   показывают карточку с кнопками) показывает поле `text`
    обоих видов как обычный текст — не заглушку «не поддерживается» — и
    продолжает синхронизацию (следующие сообщения доставляются). Принять он
    не может; `text` формирует отправитель.
@@ -1391,10 +1427,11 @@ web `v2/planner.ts`, `controller.ts`, `provider.ts`, `plannerSync.ts`,
 `messages.ts` (`parvaneSendTaskOffer`, `parvaneRespondTaskOffer`),
 `components/middle/message/TaskOffer.tsx`, `TaskOfferModal.tsx`; desktop
 `parvane-core/src/v2_content.cpp` (`v2Kind`, `fromV2` → `kind: text`);
-android `ParvaneStore.kt` (`contentFrom` → `MessageText`). Тесты: web
+android `ParvaneStore.kt` (`contentFrom` → `MessageText`), с spec 031 — карточка с кнопками
+(`Cards.kt`, нажатие `GetCallbackQueryAnswer` → «План» ядра). Тесты: web
 `taskOffers.test.ts`, `protocol.vectors.test.ts`, сторож `conformance.test.ts`,
 сценарий `scripts/e2e_web_task_offer.mjs`; desktop `tests/v2_tests.cpp`;
-android `ProtocolV2SeamTest.kt`.
+android `ProtocolV2SeamTest.kt`, `CardsTest.kt`.
 
 ## DOMAIN-2. Облако: домен `cloud.v1` (spec 016)
 
@@ -1439,7 +1476,8 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 владельца и список, зашифрованный ключом ссылки. Ключ живёт только во фрагменте адреса и серверу не передаётся.
 
 1. **Создаёт и ведёт ссылки только web**: методы владельца `cloud.link.create/add/publish/list/revoke/extend`
-   (ID-канал). Desktop и android этих методов не вызывают и ни раздела «Облако», ни ссылок не показывают.
+   (ID-канал). Desktop и android этих методов не вызывают и ссылок не показывают (раздел «Облако» у них есть
+   со spec 029 / spec 031).
 2. **Получатель — без аккаунта**: публичная страница web ходит анонимным каналом (`cloud.link.get`,
    `cloud.link.download`) и шлёт серверу только `link_id` и `file_id` копии. Прочие методы анонимному каналу закрыты.
 3. **Идентификатор ссылки** — 16 случайных байт, base64url без `=` (22 знака), выдаёт сервер; срок — 0 (без срока),
@@ -1467,13 +1505,13 @@ PVB2-блобы (BLOB-1) в отдельном bucket шарда `cloud` со с
 
 ## REPORT-1. Жалоба админам группы (`mod_report`)
 
-**Spec 024 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
+**Spec 024 (17 окт 2026): web — сделано, desktop — со spec 029, android — со spec 031.**
 `Content.mod_report = 24` — видимое личное сообщение каждому админу группы с правом удалять сообщения или банить:
 `group` (группа), `messages` (≤ 20: `op_id`, автор, текст, время), `reason` — код причины (`spam`, `violence`,
 `porn`, `child`, `copyright`, `illegal`, `personal`, `fake`, `other`), `comment` (≤ 1024), `text` (≤ 600) —
 представление для клиентов без модерации. Web показывает карточку с «Удалить сообщения» (мутация удаления в группе
 от админа) и «Заблокировать в группе» (запись `Ban` журнала группы). Клиент без модерации обязан показать `text`
-обычным текстом и не падать; до реализации android показывает сообщение как неподдерживаемое (CONTENT-1).
+обычным текстом и не падать.
 Жалоба администратору сервера — не содержимое переписки: метод `identity.report.submit`, шифртекст под ключом
 `ServerDescribeResponse.report_public_key` (HPKE, `info = "parvane/v2/report\0" ‖ адрес автора`), клиентам без
 этой функции делать ничего не нужно.
@@ -1483,9 +1521,14 @@ Desktop (spec 029): ядро `v2_content.cpp` (`mod_report` ↔ v2), `messenger.
 `api_report.cpp`, карточка админа `CardMarkup` → `HandleCardButton` `pv:moddel`/`pv:modban`); тест
 `tests/v2_tests.cpp` («mod_report туда и обратно», «карточка mod_report показывается текстом»).
 
+Android (spec 031): `Client.kt` `reportChat` (штатное окно жалобы X: причина → комментарий → карточкой админам
+группы либо администратору сервера `nativeSubmitReport` → `Session::submitReport`), карточка админа с кнопками —
+после проверки своими данными (`nativeCheckModReport` → `validateModReport` ядра, `Cards.kt`), без проверки — `text`;
+тест `CardsTest.modReportOnlyWhenCheckedAndArticleAlways`. Сценария эмулятора нет.
+
 ## RENAME-1. Смена ника
 
-**Spec 026 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
+**Spec 026 (17 окт 2026): web — сделано, desktop — со spec 029, android — со spec 031.**
 Личность — корень; адрес — её имя. Смена ника — запись `Rename` (подпись корнем) в журнале устройств прежнего
 адреса: журнал закрыт, его ключи устройств больше не действуют (прошлые подписи проверяемы по версии журнала), а
 личность продолжается журналом нового адреса, чей генезис — тот же корень с `renamed_from` = прежний адрес и
@@ -1517,9 +1560,13 @@ Desktop (spec 029): ядро `v2_session_account.cpp` (`renameAccount`, `followP
 `tests/v2_session_tests.cpp` (spec 026: отказ при неверном пароле, смена ника, вход новым ником, `peerRenamed` у
 собеседника). Пп. 3 и 4 тестом не покрыты.
 
+Android (spec 031): `android/jni/jni_account.cpp` `nativeRenameAccount` (`Session::renameAccount`; каталог состояния
+и журнал истории переезжают под новый адрес), событие `peerRenamed` → `ParvaneStore.noteRename` (тот же чат) и
+служебное сообщение; экран — `AccountController.kt` оверлея. Сценария эмулятора нет.
+
 ## DELETE-1. Удаление аккаунта
 
-**Spec 027 (17 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
+**Spec 027 (17 окт 2026): web — сделано, desktop — со spec 029, android — со spec 031.**
 `identity.account.delete` (свежее подтверждение паролем) ставит аккаунт на удаление: все токены сразу
 недействительны, сессии закрываются, для других аккаунт исчезает; через 7 дней identity и шарды стирают его строки
 (`RenameNotice.purge = 4` на `v2.internal.rename.<шард>`), ник свободен. Клиент обязан:
@@ -1537,9 +1584,14 @@ Desktop (spec 029): ядро `v2_session_account.cpp` (`deleteAccount`, `isDelet
 `parvane_account_ui.cpp` (`ShowDeleteAccountBox`); живой тест `tests/v2_session_tests.cpp` (spec 027: удаление,
 вход в период ожидания без токена, вход с отменой). П. 2 тестом не покрыт.
 
+Android (spec 031): `nativeDeleteAccount` (`Session::deleteAccount`), вход — `nativeLogin` с `deletion_at_ms`;
+`Client.kt` сразу повторяет вход с `cancel_deletion` (отдельного вопроса с датой нет — отступление от п. 1);
+удалённый собеседник — событие `peerDeleted` / `nativeCheckPeerDeleted` → `ParvaneStore.markDeleted`. Экран —
+`AccountController.kt` оверлея. Сценария эмулятора нет.
+
 ## ORDER-1. Порядок сообщений в ленте
 
-**Spec 012 (9 окт 2026): web — сделано, desktop — со spec 029 (порядок прихода), android — нет.**
+**Spec 012 (9 окт 2026): web — сделано, desktop — со spec 029, android — со spec 031 (оба — порядок прихода).**
 Время сообщения в протоколе v2 — время ОТПРАВИТЕЛЯ по его часам; общего времени
 нет (серверное округлено до минуты, и клиент его не читает). Клиент, который
 упорядочивает ленту по этому времени, ставит ответ собеседника с отстающими
@@ -1568,9 +1620,14 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 прихода (инбокс v2 отдаёт их в порядке очереди сервера). Сторож — блок ORDER-1 в
 `conformance.test.ts`.
 
+Android (spec 031): как desktop — id сообщения выдаёт шов по порядку прихода (`ParvaneStore.putMessage`,
+`nextMessageId`), журнал истории (`android/jni/jni_main.cpp`) воспроизводится в порядке записи; только строка
+старше показанных больше чем на окно 300 с встаёт по времени (`placeByTime`, без сортировки), перенос истории
+(`importV2History`) — по времени отправки (п. 3).
+
 ## RECOVER-2. Новое устройство по ключу восстановления — без других устройств
 
-**Spec 015 (10 окт 2026), правило открыто: web — сделано, desktop — со spec 029, android — нет.**
+**Spec 015 (10 окт 2026): web — сделано, desktop — со spec 029, android — со spec 031.**
 По RECOVER-1 ключ восстановления означал «все устройства потеряны»: корень назначал
 новый ключ подписи устройств, прежние устройства отзывались, история и ключ личного
 состояния не возвращались. Привязка с другого устройства требовала это устройство в
@@ -1626,6 +1683,11 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 открывается, ключ из текста — как web), живой `tests/v2_session_tests.cpp` (spec 015:
 копия на сервере, вход по ключу, прежнее устройство осталось).
 
+Реализация android (spec 031): то же ядро; `android/jni/jni_account.cpp` (`nativeTelegramRecovery` —
+`requestTelegramKey` → `pollTelegramKey` → `joinWithRecoveryKey`, `nativeRecoverWithKey`, снимок истории копии —
+`bundleHistory` / `syncFromKeyBundle` / `completeKeyJoin`, `nativeSendKeyToTelegram`); `Client.kt` по
+`needs_linking` сам просит ключ у бота; ввод ключа — `AccountController.kt`. Сценария эмулятора с ботом нет.
+
 ## PUBLIC-1. Публичные группы и каналы (spec 023, 15 окт 2026)
 
 Решение пользователя: имя и секрет публичной группы серверу знать можно. Публичность — запись журнала группы
@@ -1637,9 +1699,15 @@ Desktop (spec 029, 18 окт 2026): id сообщения — счётчик `g_
 
 1. Клиент с поддержкой показывает тип «Публичная/Частная», имя и честное предупреждение: переписку публичной группы
    может прочитать любой вступивший и технически сервер.
-2. Клиент без поддержки обязан пропускать такую группу без падения (android — ОТКРЫТО, сборка не обновлялась).
+2. Клиент без поддержки обязан пропускать такую группу без падения.
 
 Desktop (spec 029) поддерживает: ядро `v2_session_groups.cpp` (`checkPublicName`, `searchPublic`, `resolvePublic`,
 `setGroupPublic`, `joinPublic`, `publicHistory`), tdesktop `parvane_client.cpp` (`SetGroupPublic`,
 `SearchPublicGroups`, `LoadPublicPreview`, `JoinPublicGroup`); живой тест `tests/v2_session_tests.cpp` (spec 023:
 публичность, имя, поиск, вступление по открытому секрету, история для нового участника).
+
+Android (spec 031): `android/jni/jni_groups.cpp` (`nativePublic*` — методы `group.public.*` через сессию ядра);
+`Client.kt` — поиск каталога, открытие по имени, превью не-участнику (`openPublic`, лента — `loadPublicHistory`),
+вступление (`joinPublic`); `setup-tgx.sh` — кнопка «Вступить» у превью (патч `MessagesController` X). ОТКРЫТО:
+сделать группу публичной и выбрать имя из android нельзя (JNI `nativePublicSet`/`nativePublicCheckName` есть,
+экрана нет); сценария эмулятора нет.

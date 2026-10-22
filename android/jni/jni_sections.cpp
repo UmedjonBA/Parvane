@@ -4,12 +4,16 @@
 // v2-сессию), записи устройства (зашифрованные файлы каталога состояния) и снимки для экранов Kotlin — JSON
 // (имена полей как в web), событие `sections_snapshot` при каждом изменении (только когда данные изменились).
 #include "jni_internal.h"
+#include "jni_planner_ops.h"
 
 #include <parvane/blobcrypt.h>
+#include <parvane/sections/cloud_files.h>
+#include <parvane/sections/export_source.h>
 #include <parvane/sections/cloud_sync.h>
 #include <parvane/sections/notes_store.h>
 #include <parvane/sections/planner_store.h>
 #include <parvane/sections/planner_sync.h>
+#include <parvane/sections/task_offer.h>
 #include <parvane/storecrypt.h>
 #include <parvane/v2_engine.h>
 
@@ -20,6 +24,8 @@
 #include <condition_variable>
 #include <ctime>
 #include <deque>
+#include <fstream>
+#include <sstream>
 #include <future>
 #include <thread>
 
@@ -600,7 +606,15 @@ void run() {
         std::function<void(Hub &)> job;
         {
             std::unique_lock<std::mutex> lock(t.mutex);
-            const auto until = std::chrono::system_clock::time_point(std::chrono::milliseconds(hub->nextWakeMs()));
+            std::int64_t wakeMs = 0;
+            try {
+                wakeMs = hub->nextWakeMs();
+            } catch (const std::exception &e) {
+                LOGE("разделы — срок пробуждения: %s", e.what());
+                wakeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count() + 60000;
+            }
+            const auto until = std::chrono::system_clock::time_point(std::chrono::milliseconds(wakeMs));
             t.wake.wait_until(lock, until, [&] { return !t.jobs.empty(); });
             if (!t.jobs.empty()) {
                 job = std::move(t.jobs.front());
@@ -722,6 +736,233 @@ json notesOp(Hub &hub, const std::string &op, const json &a) {
     throw std::runtime_error("заметки: неизвестная операция " + op);
 }
 
+// Файлы «Облака» (`CloudFiles`/правки дерева ядра) — экрану «Облако»: загрузка/скачивание через файлы
+// рабочего каталога (Kotlin копирует из/в content://), папки, переименование, корзина, перенос, совместные
+// папки, ссылки для людей без аккаунта.
+std::vector<cloud::CloudNode> treeNodes(Hub &hub, const std::string &container) {
+    std::vector<cloud::CloudNode> out;
+    const auto state = hub.drive().state();
+    const auto trees = state.value("trees", json::object());
+    const auto it = trees.find(container);
+    if (it == trees.end() || !it->is_object()) return out;
+    for (const auto &n : it->value("nodes", json::array())) {
+        try {
+            out.push_back(n.get<cloud::CloudNode>());
+        } catch (const std::exception &) {
+        }
+    }
+    return out;
+}
+
+std::vector<cloud::CloudNode> pick(const std::vector<cloud::CloudNode> &all, const json &ids) {
+    std::vector<cloud::CloudNode> out;
+    for (const auto &id : ids) {
+        if (!id.is_string()) continue;
+        for (const auto &n : all)
+            if (n.id == id.get<std::string>()) out.push_back(n);
+    }
+    return out;
+}
+
+std::string gatewayOrigin() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return cloud::originOfGateway(g_gatewayUrl);
+}
+
+json cloudFilesOp(Hub &hub, const std::string &op, const json &a) {
+    const auto s = [&](const char *k) { return a.value(k, std::string()); };
+    const auto container = s("container");
+    const auto parent = a.contains("parent") && a["parent"].is_string() && !a["parent"].get<std::string>().empty()
+                            ? std::optional<std::string>(a["parent"].get<std::string>())
+                            : std::nullopt;
+    auto files = cloud::CloudFiles(hub.drive());
+    if (op == "upload") {
+        std::ifstream in(s("path"), std::ios::binary);
+        if (!in) return json{{"ok", false}, {"error", "read"}};
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        auto r = cloud::UploadRequest();
+        r.container = container;
+        r.parent = parent;
+        r.name = s("name");
+        r.mime = s("mime");
+        r.mtime = a.value("mtime", nowMs());
+        r.bytes = buf.str();
+        if (!s("thumbPath").empty()) {
+            std::ifstream t(s("thumbPath"), std::ios::binary);
+            std::ostringstream tb;
+            tb << t.rdbuf();
+            if (!tb.str().empty()) r.thumb = cloud::UploadThumb{tb.str(), a.value("thumbWidth", 0), a.value("thumbHeight", 0)};
+        }
+        return files.upload(r);
+    }
+    if (op == "download") {
+        const auto r = files.download(container, s("node"));
+        if (!r.ok) return json{{"ok", false}, {"error", r.error}};
+        std::ofstream out(s("out"), std::ios::binary | std::ios::trunc);
+        out.write(r.bytes.data(), std::streamsize(r.bytes.size()));
+        return json{{"ok", bool(out)}, {"name", r.name}, {"size", std::int64_t(r.bytes.size())}};
+    }
+    if (op == "thumb") {
+        const auto all = treeNodes(hub, container);
+        const auto nodes = pick(all, json::array({s("node")}));
+        if (nodes.empty()) return json();
+        const auto jpeg = files.thumb(json(nodes.front()));
+        if (!jpeg) return json();
+        std::ofstream out(s("out"), std::ios::binary | std::ios::trunc);
+        out.write(jpeg->data(), std::streamsize(jpeg->size()));
+        return bool(out);
+    }
+    if (op == "createFolder")
+        return hub.drive().applyOps(container, cloud::createFolderOps(treeNodes(hub, container), parent, s("name"), cloud::newCloudNodeId()));
+    if (op == "rename") {
+        const auto all = treeNodes(hub, container);
+        const auto nodes = pick(all, json::array({s("node")}));
+        if (nodes.empty()) return json{{"ok", false}, {"error", "not-found"}};
+        return hub.drive().applyOps(container, cloud::renameOps(all, nodes.front(), s("name")));
+    }
+    if (op == "trash") return hub.drive().applyOps(container, cloud::trashOps(pick(treeNodes(hub, container), a.value("nodes", json::array())), nowMs()));
+    if (op == "restore") {
+        const auto all = treeNodes(hub, container);
+        return hub.drive().applyOps(container, cloud::restoreOps(all, pick(all, a.value("nodes", json::array()))));
+    }
+    if (op == "purge") {
+        auto r = hub.drive().applyOps(container, cloud::purgeOps(pick(treeNodes(hub, container), a.value("nodes", json::array())), nowMs()));
+        hub.drive().handle("parvaneCloudSync", json::object());
+        return r;
+    }
+    if (op == "move") {
+        std::vector<cloud::MoveItem> items;
+        for (const auto &n : pick(treeNodes(hub, container), a.value("nodes", json::array()))) items.push_back({n.id, n.name});
+        const auto to = s("to").empty() ? container : s("to");
+        if (to == container) {
+            const auto all = treeNodes(hub, container);
+            return hub.drive().applyOps(container, cloud::moveOps(all, pick(all, a.value("nodes", json::array())), parent));
+        }
+        return files.move(container, items, to, parent);
+    }
+    if (op == "shareFolder") return files.shareFolder(container, s("node"));
+    if (op == "unshareFolder") return files.unshareFolder(container, s("name"));
+    if (op == "links") return files.links(gatewayOrigin());
+    if (op == "linkCreate") {
+        const auto node = s("node");
+        return files.linkCreate(container, node.empty() ? std::nullopt : std::optional(node), s("name"), a.value("ttlDays", 7),
+                                gatewayOrigin());
+    }
+    if (op == "linkRevoke") return files.linkRevoke(s("id"));
+    if (op == "linkExtend") return files.linkExtend(s("id"), a.value("ttlDays", 7));
+    throw std::runtime_error("облако: неизвестная операция " + op);
+}
+
+// ── выгрузка данных (T039, как desktop parvane_data_export) ──────────────────
+// Снимок переписки — из журнала истории устройства (свёртка по uuid), имена чатов и контакты даёт Kotlin;
+// «План» и облако — хаб разделов; вложения — кэш устройства либо сервер (расшифровка ключом из содержимого).
+json exportSnapshot(const json &meta) {
+    const auto session = v2Any();
+    const auto self = session ? session->self() : std::string();
+    const auto names = meta.value("chats", json::object());
+    std::map<std::string, json> chats;
+    std::vector<std::string> order;
+    for (const auto &e : journalFold()) {
+        const auto out = e.value("out", false);
+        const auto group = e.value("group", false);
+        const auto chat = group ? e.value("to", std::string()) : (out ? e.value("to", std::string()) : e.value("from", std::string()));
+        if (chat.empty()) continue;
+        if (!chats.count(chat)) {
+            order.push_back(chat);
+            const auto n = names.value(chat, json::object());
+            chats[chat] = json{{"address", chat}, {"kind", chat == self ? "saved" : n.value("kind", group ? "group" : "user")},
+                               {"title", n.value("title", chat)}, {"messages", json::array()}};
+        }
+        auto reactions = json::array();
+        for (const auto &r : e.value("reactions", json::array()))
+            if (r.is_object()) reactions.push_back(json{{"emoji", r.value("emoji", std::string())}, {"count", r.value("count", 1)}});
+        const auto from = e.value("from", std::string());
+        auto msg = json{{"uuid", e.value("id", std::string())}, {"from", from},
+                        {"fromName", names.value(from, json::object()).value("title", from)}, {"isOutgoing", out},
+                        {"ts", e.value("ts", std::int64_t(0))}, {"edited", e.value("edited", false)},
+                        {"pinned", e.value("pinned", false)}, {"content", e.value("content", json::object())}};
+        if (e.contains("reply_to") && e["reply_to"].is_string()) msg["replyTo"] = e["reply_to"];
+        if (!reactions.empty()) msg["reactions"] = reactions;
+        chats[chat]["messages"].push_back(std::move(msg));
+    }
+    auto list = json::array();
+    for (const auto &a : order) list.push_back(chats[a]);
+    return json{{"self", self}, {"selfName", meta.value("selfName", self)}, {"chats", list},
+                {"contacts", meta.value("contacts", json::array())}};
+}
+
+class AndroidExportHost final : public parvane::sections::exportdata::ExportHost {
+public:
+    AndroidExportHost(json snapshot, std::function<bool()> canceled) : snapshot_(std::move(snapshot)), canceled_(std::move(canceled)) {
+        for (const auto &chat : snapshot_.value("chats", json::array()))
+            for (const auto &m : chat.value("messages", json::array())) {
+                const auto &c = m.value("content", json::object());
+                const auto fileId = c.value("file_id", std::string());
+                if (!fileId.empty()) keys_[fileId] = {c.value("file_key", std::string()), c.value("file_nonce", std::string())};
+            }
+    }
+    std::optional<json> callParvane(const std::string &method, const json &args) override {
+        if (method == "parvaneExportSnapshot") return snapshot_;
+        if (method == "parvanePlannerState") {
+            return ask([](Hub &hub) -> json {
+                if (!hub.plannerStore().isLoaded()) return json{{"status", hub.plannerStore().status()}};
+                return json{{"status", "ready"}, {"state", hub.plannerSync().stateJson()}};
+            });
+        }
+        if (method == "parvanePlannerCachedState") return json(nullptr);
+        if (method.rfind("parvaneCloud", 0) == 0) {
+            const auto r = ask([method, args](Hub &hub) -> json {
+                const auto out = hub.drive().handle(method, args);
+                return out ? *out : json{{"__none", true}};
+            }, 300000);
+            if (r.is_object() && r.value("__none", false)) return std::nullopt;
+            return r;
+        }
+        return std::nullopt;
+    }
+    std::optional<parvane::sections::exportdata::ZipWriter::ChunkSource> blob(const std::string &method, const json &args) override {
+        std::optional<std::string> bytes;
+        if (method == "parvaneExportMedia") {
+            const auto fileId = args.value("fileId", std::string());
+            if (!isSafeFileId(fileId)) return std::nullopt;
+            bytes = readMediaCache(fileId);
+            if (!bytes) {
+                const auto d = downloadChatBlob(fileId);
+                const auto it = keys_.find(fileId);
+                if (d.ok && it != keys_.end()) bytes = parvane::blobcrypt::decrypt(d.bytes, it->second.first, it->second.second);
+            }
+        } else if (method == "parvaneCloudExportBlob") {
+            const auto container = args.value("container", std::string());
+            const auto node = args.value("node", std::string());
+            const auto r = ask([container, node](Hub &hub) -> json {
+                auto got = cloud::CloudFiles(hub.drive()).download(container, node);
+                return got.ok ? json(domain::toBase64(got.bytes)) : json();
+            }, 600000);
+            if (r.is_string()) bytes = domain::fromBase64(r.get<std::string>());
+        }
+        if (!bytes) return std::nullopt;
+        auto data = std::make_shared<std::string>(std::move(*bytes));
+        auto offset = std::make_shared<std::size_t>(0);
+        return [data, offset](std::string &chunk) {
+            if (*offset >= data->size()) return false;
+            const auto n = std::min<std::size_t>(1024 * 1024, data->size() - *offset);
+            chunk.assign(data->data() + *offset, n);
+            *offset += n;
+            return true;
+        };
+    }
+    int64_t nowMs() override { return pvjni::nowMs(); }
+    void sleepMs(int64_t ms) override { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+
+private:
+    json snapshot_;
+    std::function<bool()> canceled_;
+    std::map<std::string, std::pair<std::string, std::string>> keys_;
+};
+
+std::atomic<bool> g_exportCanceled{false};
+
 } // namespace
 
 void sectionsEngineEvent(const std::string &domainName, const std::string &id) {
@@ -808,32 +1049,168 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativePlannerUndo(J
 
 // Метод провайдера облака по имени web (`parvaneCloud*`). Блокирующий. → JSON ответа | "null".
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudCall(JNIEnv *env, jclass, jstring method, jstring argsJson) {
-    const auto m = jstr(env, method);
-    const auto args = json::parse(jstr(env, argsJson), nullptr, false);
-    const auto r = ask([m, args](Hub &hub) -> json {
-        const auto result = hub.drive().handle(m, args.is_discarded() ? json() : args);
-        if (m == "parvaneCloudUsage" && result) hub.setUsage(*result);
-        return result ? *result : json();
-    }, 300000);
-    return jreply(env, r);
+    try {
+        const auto m = jstr(env, method);
+        const auto args = json::parse(jstr(env, argsJson), nullptr, false);
+        const auto r = ask([m, args](Hub &hub) -> json {
+            const auto result = hub.drive().handle(m, args.is_discarded() ? json() : args);
+            if (m == "parvaneCloudUsage" && result) hub.setUsage(*result);
+            return result ? *result : json();
+        }, 300000);
+        return jreply(env, r);
+    } catch (const std::exception &e) {
+        LOGE("nativeCloudCall: %s", e.what());
+        return jreply(env, json());
+    }
 }
 
 // Правки дерева облака. Блокирующий. → true — применено.
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudApply(JNIEnv *env, jclass, jstring container, jstring opsJson) {
-    const auto c = jstr(env, container);
-    const auto ops = json::parse(jstr(env, opsJson), nullptr, false);
-    const auto r = ask([c, ops](Hub &hub) -> json {
-        const auto result = hub.drive().applyOps(c, ops);
-        return !result.is_object() || !result.contains("error");
-    });
-    return r.is_boolean() && r.get<bool>() ? JNI_TRUE : JNI_FALSE;
+    try {
+        const auto c = jstr(env, container);
+        const auto ops = json::parse(jstr(env, opsJson), nullptr, false);
+        const auto r = ask([c, ops](Hub &hub) -> json {
+            const auto result = hub.drive().applyOps(c, ops);
+            return !result.is_object() || !result.contains("error");
+        });
+        return r.is_boolean() && r.get<bool>() ? JNI_TRUE : JNI_FALSE;
+    } catch (const std::exception &e) {
+        LOGE("nativeCloudApply: %s", e.what());
+        return JNI_FALSE;
+    }
 }
 
 // Операция заметок по имени (create, save, rename, delete, move, folders, canvas, daily, guide…). Блокирующий.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeNotes(JNIEnv *env, jclass, jstring op, jstring argsJson) {
-    const auto o = jstr(env, op);
-    const auto args = json::parse(jstr(env, argsJson), nullptr, false);
-    return jreply(env, ask([o, args](Hub &hub) { return notesOp(hub, o, args.is_object() ? args : json::object()); }));
+    try {
+        const auto o = jstr(env, op);
+        const auto args = json::parse(jstr(env, argsJson), nullptr, false);
+        return jreply(env, ask([o, args](Hub &hub) { return notesOp(hub, o, args.is_object() ? args : json::object()); }));
+    } catch (const std::exception &e) {
+        LOGE("nativeNotes: %s", e.what());
+        return jreply(env, json{{"ok", false}, {"error", "failed"}});
+    }
 }
+
+// «План»/«Здоровье»: запрос (days, health, quickParse…) либо правка (save, remove, taskDone, food…) по имени над
+// логикой ядра; правка идёт через PlannerStore::update (разница — на сервер, notice — «Отменить»). Блокирующий.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativePlanner(JNIEnv *env, jclass, jstring op, jstring argsJson) {
+    const auto o = jstr(env, op);
+    auto args = json::parse(jstr(env, argsJson), nullptr, false);
+    if (!args.is_object()) args = json::object();
+    return jreply(env, ask([o, args](Hub &hub) -> json {
+        const auto now = nowMs();
+        auto ctx = plannerops::Context();
+        ctx.today = localDate(now, "%Y-%m-%d");
+        const auto hm = localDate(now, "%H:%M");
+        ctx.nowMinutes = std::stoi(hm.substr(0, 2)) * 60 + std::stoi(hm.substr(3, 2));
+        ctx.lang = g_russian ? "ru" : "en";
+        // Задание в чат (TASK-1): «Принять» — запись в «План» правкой движка (дубль не создаётся), ответ — текстом ядра
+        if (o == "offerAccept") {
+            if (hub.self().empty()) return "unavailable";
+            hub.plannerSync().ensure(true);
+            const auto status = hub.plannerSync().status();
+            if (status == "needs-linking" || status == "no-key") return status;
+            const auto uuid = args.value("uuid", std::string());
+            if (const auto state = hub.plannerSync().stateJson()) {
+                const auto st = planner::fromEngineState(*state);
+                if (planner::findOfferInPlan(&st, uuid)) return "exists";
+            }
+            const auto offer = planner::OfferFields::fromContent(args.value("content", json::object()));
+            hub.plannerSync().apply(json::array({planner::offerPlanChange(uuid, args.value("chat", std::string()), offer, parvane::v2::newUuidV7())}));
+            hub.bumpPlanner();
+            return "ok";
+        }
+        if (o == "offerResponse") {
+            const auto offer = planner::OfferFields::fromContent(args.value("content", json::object()));
+            const auto accepted = args.value("accepted", false);
+            return json{{"kind", "task_response"}, {"accepted", accepted},
+                        {"text", planner::taskResponseText(offer.name, accepted, planner::offerKind(offer))}};
+        }
+        if (!plannerops::isEdit(o)) return plannerops::query(hub.plannerStore().state(), o, args, ctx);
+        if (!hub.plannerStore().isLoaded()) return json{{"error", "loading"}};
+        json result;
+        const auto notice = args.value("notice", std::string());
+        hub.plannerStore().update([&](planner::State &s) { result = plannerops::edit(s, o, args, ctx); },
+                                  notice.empty() ? std::nullopt : std::optional(notice), now);
+        hub.bumpPlanner();
+        return result;
+    }));
+}
+
+// Файлы «Облака» по имени операции (upload, download, thumb, createFolder, rename, trash, restore, purge, move,
+// shareFolder, unshareFolder, links, linkCreate, linkRevoke, linkExtend). Блокирующий.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudFiles(JNIEnv *env, jclass, jstring op, jstring argsJson) {
+    try {
+        const auto o = jstr(env, op);
+        auto args = json::parse(jstr(env, argsJson), nullptr, false);
+        if (!args.is_object()) args = json::object();
+        return jreply(env, ask([o, args](Hub &hub) { return cloudFilesOp(hub, o, args); }, 30 * 60 * 1000));
+    } catch (const std::exception &e) {
+        LOGE("nativeCloudFiles: %s", e.what());
+        return jreply(env, json{{"ok", false}, {"error", "failed"}});
+    }
+}
+
+// Выгрузка данных в ZIP (`outPath`): meta — {chats:{адрес:{title,kind}}, selfName, contacts, labels, includeMedia,
+// includeCloud, drive}. Блокирующий (Kotlin — с io-потока), ход — событие `export_progress`. → {ok, fileName, …} | {ok:false, error}.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeExportData(JNIEnv *env, jclass, jstring metaJson, jstring outPath) {
+    namespace ex = parvane::sections::exportdata;
+    auto meta = json::parse(jstr(env, metaJson), nullptr, false);
+    if (!meta.is_object()) meta = json::object();
+    const auto path = jstr(env, outPath);
+    g_exportCanceled = false;
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) return jreply(env, json{{"ok", false}, {"error", "write"}});
+    const auto canceled = [] { return g_exportCanceled.load(); };
+    try {
+        AndroidExportHost host(exportSnapshot(meta), canceled);
+        auto args = ex::ExportRunArgs();
+        args.source = ex::createProviderSource(host, ex::ProviderNames{meta.value("drive", std::string("Drive"))}, canceled);
+        args.options.includeMedia = meta.value("includeMedia", true);
+        args.options.includeCloud = meta.value("includeCloud", false);
+        const auto labels = meta.value("labels", json::object());
+        const auto l = [&](const char *k, std::string &v) { if (labels.contains(k) && labels[k].is_string()) v = labels[k].get<std::string>(); };
+        l("title", args.labels.title); l("chats", args.labels.chats); l("planner", args.labels.planner); l("notes", args.labels.notes);
+        l("contacts", args.labels.contacts); l("cloud", args.labels.cloud); l("savedMessages", args.labels.savedMessages);
+        l("replyTo", args.labels.replyTo); l("forwardedFrom", args.labels.forwardedFrom); l("edited", args.labels.edited);
+        l("mediaNotIncluded", args.labels.mediaNotIncluded); l("mediaUnavailable", args.labels.mediaUnavailable);
+        l("poll", args.labels.poll); l("location", args.labels.location); l("messages", args.labels.messages);
+        l("exportedAt", args.labels.exportedAt); l("privacyOn", args.labels.privacyOn); l("privacyOff", args.labels.privacyOff);
+        args.canceled = canceled;
+        args.nowUnixMs = nowMs();
+        args.localTime = [](int64_t sec) {
+            const std::time_t t = static_cast<std::time_t>(sec);
+            std::tm tm{};
+            localtime_r(&t, &tm);
+            return ex::CivilTime{tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec};
+        };
+        args.sink = [&](const uint8_t *data, size_t size) {
+            file.write(reinterpret_cast<const char *>(data), std::streamsize(size));
+            if (!file) throw ex::ExportError(ex::ExportErrorCode::Failed, "write");
+        };
+        auto lastAt = std::int64_t(0);
+        std::string lastStage;
+        args.onProgress = [&](const ex::ExportProgress &p) {
+            const auto now = nowMs();
+            if (p.stage == lastStage && now - lastAt < 250) return;
+            lastStage = p.stage;
+            lastAt = now;
+            emit(json{{"type", "export_progress"}, {"stage", p.stage}, {"done", p.done}, {"total", p.total}});
+        };
+        const auto r = ex::runDataExport(args);
+        file.close();
+        return jreply(env, json{{"ok", true}, {"fileName", r.fileName}, {"bytes", std::int64_t(r.bytes)}, {"chats", r.chats},
+                                {"messages", r.messages}, {"media", r.media}, {"mediaFailed", r.mediaFailed}, {"notes", r.notes},
+                                {"cloudFiles", r.cloudFiles}});
+    } catch (const ex::ExportError &e) {
+        return jreply(env, json{{"ok", false}, {"error", g_exportCanceled ? "canceled" : (e.code() == ex::ExportErrorCode::TooLarge ? "too-large" : "failed")}});
+    } catch (const std::exception &e) {
+        LOGE("выгрузка данных: %s", e.what());
+        return jreply(env, json{{"ok", false}, {"error", "failed"}});
+    }
+}
+
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativeExportCancel(JNIEnv *, jclass) { g_exportCanceled = true; }
 
 } // extern "C"

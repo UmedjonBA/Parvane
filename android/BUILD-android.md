@@ -7,6 +7,20 @@
 Разбор кандидатов и шва — в истории; шов = `Client.send(TdApi.Function)` +
 `ResultHandler.onResult(TdApi.Object)`.
 
+## Сейчас (spec 031, с 22 окт 2026) — только протокол v2
+
+Разделы ниже — журнал стадий 2026-09 (v1-шов); действующая сборка такая:
+
+1. Ядро и движок под NDK: `./build-core.sh x86_64` и `./build-core.sh arm64-v8a` (`cargo ndk -p parvane-protocol-ffi`
+   из `../backend` + cmake/ninja `jni/` → `libparvane_core.a`); OpenSSL — `./build-openssl.sh <ABI>` один раз.
+2. Наш модуль (шов + `libparvane_jni.so`) и JVM-тесты: `gradle :libtd:testDebugUnitTest :app:assembleRelease`
+   (JDK 17, Gradle 8.9 — пути в `local-workdirs/spec031/pipeline.sh`).
+3. Оверлей и X: `./setup-tgx.sh` (клон `/mnt/hdd/ub/android/tgx`, JDK 21) → `./gradlew assembleLatestX64Debug`
+   (эмулятор) либо выпуск `./tgx_build_upload.sh` (release-ключ `keys/keystore-release.properties`,
+   `assembleLatestArm64Release`, `apksigner verify`, выкладка в `~/parvane/apk/` прода с копией прежнего файла;
+   Caddy отдаёт `/apk/*.apk`).
+4. Сценарии эмулятора — `android/tgx_*_flow.sh` (общие функции — `android/tgx_lib.sh`, описание каждого — в его шапке); прогон по одному — `tgx_session_flow.sh` первым.
+
 ## Сделано (стадия 1: тулчейн + ядро под NDK) — ✅ РАБОТАЕТ
 
 - **NDK r27c** на HDD: `/mnt/hdd/ub/android/android-ndk-r27c`

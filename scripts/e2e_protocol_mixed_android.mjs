@@ -1,11 +1,7 @@
-// Протокол v2 (spec 007, T039): пара web2-android1. Web (bob) на v2, Telegram X
-// (alice, шов) на v1 в эмуляторе — у alice нет журнала устройств v2, поэтому web
-// обязан говорить с ней по v1 (D-13). Запускается из
+// Пара web2-android2 (spec 031, T040): web и Telegram X (alice, шов) — оба на протоколе v2. Запускается из
 // `android/tgx_protocol_web_flow.sh` (стек, эмулятор и vite preview уже подняты).
-// Проверяет: текст и фото web → X (по маркеру входящего в logcat — текста
-// сообщений там нет, P-46), ответ X → web через e2e-хук шва. T139: голосовое
-// web → X и группа web → X (web обязан собрать группу v1 — у alice нет v2;
-// входящее в группу — чат с отрицательным id TDLib).
+// Проверяет: текст, фото и голосовое web → X (по маркеру входящего в logcat — текста сообщений там нет,
+// P-46), ответ X → web через e2e-хук шва, группа v2 web → X (входящее в группу — чат с отрицательным id TDLib).
 // Строки `ok …` / `FAIL …` в stdout разбирает раннер.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -19,6 +15,7 @@ import {
   createGroupViaUi,
   dismissRecoveryKeyDialog,
   dumpDiagJournal,
+  expectMediaFlowing,
   findMessage,
   findMessageContainer,
   LOGIN_TIMEOUT_MS,
@@ -29,7 +26,6 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-v2-android-password';
-const V2_SEED = { 'parvane:proto': 'v2' };
 const OUT = process.env.PV_ANDROID_OUT;
 const STAMP = process.env.PV_STAMP || String(Date.now());
 const ALICE = 'alice@local';
@@ -44,6 +40,16 @@ function adb(...args) {
 
 function incomingCount(re = INCOMING) {
   return (adb('logcat', '-d').match(re) || []).length;
+}
+
+async function waitCount(re, before, label) {
+  const start = Date.now();
+  while (Date.now() - start < X_TIMEOUT_MS) {
+    if (incomingCount(re) > before) return;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => { setTimeout(r, 2000); });
+  }
+  throw new Error(`${label}: нет в logcat X`);
 }
 
 async function waitIncoming(before, label, re = INCOMING) {
@@ -87,7 +93,7 @@ let session;
 try {
   assert(OUT, 'PV_ANDROID_OUT is required');
   const bob = `wab-${STAMP}@local`;
-  session = await preparePage(context, bob, PASSWORD, { seedLocalStorage: V2_SEED });
+  session = await preparePage(context, bob, PASSWORD);
   const { page } = session;
   const start = Date.now();
   while (!logs.some((l) => l.includes('v2: готов'))) {
@@ -98,14 +104,14 @@ try {
   await dismissRecoveryKeyDialog(page);
   ok('web: bob на v2 (движок готов)');
 
-  // web → X: текст (по v1 — журнала v2 у alice нет)
+  // web → X: текст
   await openPrivateChatStrict(page, ALICE);
   let before = incomingCount();
   const hello = `web-hello-${STAMP}`;
   await sendText(page, hello);
   await findMessage(page, hello).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await waitIncoming(before, 'текст');
-  ok('X: текст от web v2 принят (v1-путь, D-13)');
+  ok('X: текст от web принят');
 
   // X → web: ответ через e2e-хук шва (штатный SendMessage)
   const reply = `x-reply-${STAMP}`;
@@ -138,7 +144,33 @@ try {
   await waitIncoming(before, 'голосовое');
   ok('X: голосовое от web v2 принято');
 
-  // web → X: группа (v1 — у alice нет журнала устройств v2, D-13)
+  // Звонки (T058, call-web2-android2): web → X (X принимает кнопкой — e2e-хук), затем X → web
+  const X_INCOMING_CALL = /звонок: входящий/g;
+  const X_CONNECTED = /ParvaneWebrtc.*соединение .*: (CONNECTED|COMPLETED)/g;
+  await openPrivateChatStrict(page, ALICE);
+  let callsBefore = incomingCount(X_INCOMING_CALL);
+  let connectedBefore = incomingCount(X_CONNECTED);
+  await page.getByRole('button', { name: 'Call', exact: true }).click();
+  await waitCount(X_INCOMING_CALL, callsBefore, 'входящий звонок от web');
+  xCommand({ op: 'call_accept', peer: bob });
+  await waitCount(X_CONNECTED, connectedBefore, 'медиа звонка web → X');
+  await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectMediaFlowing(page, { audio: true });
+  await page.getByRole('button', { name: 'End Call' }).click();
+  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  ok('звонок web → X соединился, звук идёт');
+  connectedBefore = incomingCount(X_CONNECTED);
+  xCommand({ op: 'call', peer: bob, video: false });
+  await page.getByText('is calling you...', { exact: true }).waitFor({ state: 'visible', timeout: X_TIMEOUT_MS });
+  await page.getByRole('button', { name: 'Accept' }).click();
+  await waitCount(X_CONNECTED, connectedBefore, 'медиа звонка X → web');
+  await page.getByText(/^\d+:\d{2}$/).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await expectMediaFlowing(page, { audio: true });
+  await page.getByRole('button', { name: 'End Call' }).click();
+  await page.getByRole('button', { name: 'End Call' }).waitFor({ state: 'detached', timeout: LOGIN_TIMEOUT_MS });
+  ok('звонок X → web соединился, звук идёт');
+
+  // web → X: группа v2
   const title = `WX-${STAMP.slice(-6)}`;
   await createGroupViaUi(page, title, ['alice']);
   await openGroupChatByTitle(page, title);
@@ -149,7 +181,6 @@ try {
   await composer.fill(groupText);
   await composer.press('Enter');
   await waitIncoming(before, 'группа', GROUP_INCOMING);
-  assert.ok(!logs.some((l) => l.includes('v2: группа создана')), 'web создал группу v2 с участником на v1');
   ok('X: групповое от web v2 пришло в чат группы');
 
   assert.ok(!logs.some((l) => l.includes('запуск не удался')), `web: ${logs.join(' | ')}`);

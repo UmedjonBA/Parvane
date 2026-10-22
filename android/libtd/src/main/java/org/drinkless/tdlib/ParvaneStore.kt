@@ -91,6 +91,9 @@ class ParvaneStore {
         // spec 004: заявки (только менеджерам ссылок; 0 — нет/не отдано) и основная ссылка (кэш invite.list)
         var pendingRequests: Int = 0
         var primaryInviteLink: TdApi.ChatInviteLink? = null
+        // PUBLIC-1 (spec 023): публичная группа и её имя в общем пространстве ников
+        var isPublic: Boolean = false
+        var publicName: String = ""
     }
 
     // ── spec 004: чистые маппинги для экранов управления X (JVM-тесты) ──────────
@@ -159,6 +162,8 @@ class ParvaneStore {
     fun isGroup(address: String) = groupsByGid.containsKey(address)
     fun group(gid: String): GroupRef? = groupsByGid[gid]
     fun groupByChat(chatId: Long): GroupRef? = groupsByChatId[chatId]
+    /** Группа по названию (сценарии эмулятора; совпадений несколько — последняя заведённая). */
+    fun groupByName(name: String): GroupRef? = groupsByGid.values.lastOrNull { it.name == name }
     fun groupByBasicId(basicGroupId: Long): GroupRef? = groupsByChatId[-basicGroupId]
     private fun groupHash(gid: String): Long {
         var h = -3750763034362895579L
@@ -447,10 +452,11 @@ class ParvaneStore {
             permissions = TdApi.ChatPermissions(true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true)
             positions = arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), 0L, false, null))
             chatLists = arrayOf(TdApi.ChatListMain())
-            notificationSettings = TdApi.ChatNotificationSettings(true, 0, true, 0, true, true, true, false, true, 0, true, true, true, false, true, false)
+            notificationSettings = chatNotifySettings(address) // мут, пришедший журналом раньше чата (STATE-2 notify)
             availableReactions = TdApi.ChatAvailableReactionsAll(11)
+            isMarkedAsUnread = local?.isMarkedUnread(this.id) == true
             canBeDeletedOnlyForSelf = true
-            canBeReported = false
+            canBeReported = true
             isTranslatable = false
             clientData = ""
         }
@@ -462,6 +468,7 @@ class ParvaneStore {
     }
 
     private fun memberStatus(g: GroupRef, address: String): TdApi.ChatMemberStatus = when {
+        address !in g.members && g.createdBy != address -> TdApi.ChatMemberStatusLeft() // публичная группа без вступления (PUBLIC-1)
         address == g.createdBy -> TdApi.ChatMemberStatusCreator(false, true)
         g.roles[address] == "admin" -> TdApi.ChatMemberStatusAdministrator(true, adminRightsOf(g.adminRights[address]))
         else -> TdApi.ChatMemberStatusMember(0)
@@ -494,6 +501,8 @@ class ParvaneStore {
             }
             g.adminRights = rights
             g.pendingRequests = info.optInt("pending_requests", -1).coerceAtLeast(0)
+            g.isPublic = info.optBoolean("is_public", false)
+            g.publicName = if (info.isNull("public_name")) "" else info.optString("public_name", "")
         }
         val chat = chats[g.chatId] ?: TdApi.Chat().apply {
             id = g.chatId
@@ -501,10 +510,11 @@ class ParvaneStore {
             permissions = TdApi.ChatPermissions(true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true)
             positions = arrayOf(TdApi.ChatPosition(TdApi.ChatListMain(), System.currentTimeMillis() / 1000, false, null))
             chatLists = arrayOf(TdApi.ChatListMain())
-            notificationSettings = TdApi.ChatNotificationSettings(true, 0, true, 0, true, true, true, false, true, 0, true, true, true, false, true, false)
+            notificationSettings = chatNotifySettings(gid) // мут группы, пришедший журналом раньше чата
             availableReactions = TdApi.ChatAvailableReactionsAll(11)
+            isMarkedAsUnread = local?.isMarkedUnread(this.id) == true
             canBeDeletedOnlyForSelf = true
-            canBeReported = false
+            canBeReported = true
             isTranslatable = false
             clientData = ""
         }

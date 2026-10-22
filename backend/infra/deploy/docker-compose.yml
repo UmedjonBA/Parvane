@@ -284,6 +284,7 @@ services:
       # Заголовок Onion-Location (spec 025): файл пишет deploy.sh по адресу скрытого сервиса
       - ./onion-location.caddy:/etc/caddy/onion-location.caddy:ro
       - ./web-dist:/srv/dist:ro
+      - ./apk:/srv/apk:ro
       - caddy-data:/data
       - caddy-config:/config
       - well-known:/srv/well-known:ro

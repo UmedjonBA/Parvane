@@ -15,6 +15,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <thread>
 
@@ -73,8 +74,14 @@ std::string errorCodeOf(const std::exception &e) {
 
 namespace {
 
+// Kotlin получает события строго по одному: поток очереди и реплей журнала (поток io) не пересекаются — живое
+// событие ждёт конца реплея и встаёт после истории (ORDER-1, NAT-06). Рекурсивный: реплей, начатый из обработчика
+// события, идёт на том же потоке.
+std::recursive_mutex g_onEventMu;
+
 void callOnEvent(const std::string &s) {
     if (!g_vm || !g_coreClass || !g_onEvent) return;
+    std::lock_guard<std::recursive_mutex> serial(g_onEventMu);
     JNIEnv *env = nullptr;
     bool attached = false;
     if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
@@ -136,12 +143,25 @@ void emit(const json &event) {
 
 void emitNow(const json &event) { callOnEvent(event.dump()); }
 
+void noteFederationFailure(const std::string &error) {
+    static const std::pair<const char *, const char *> kReasons[] = {
+        {"FEDERATION_UNAVAILABLE", "disabled"}, {"DOMAIN_BLOCKED", "blocked"}, {"DOMAIN_REFUSED", "refused"},
+        {"DOMAIN_UNREACHABLE", "unreachable"}, {"SERVER_KEY_CHANGED", "key_changed"}};
+    for (const auto &[code, reason] : kReasons)
+        if (error.find(code) != std::string::npos) {
+            LOGI("федерация: отказ %s", reason);
+            emit(json{{"type", "federation_error"}, {"reason", reason}});
+            return;
+        }
+}
+
 // ── журнал истории ───────────────────────────────────────────────────────────
 
 namespace {
 
 std::mutex g_journalMu;
-std::atomic<bool> g_replaying{false};
+// Флаг реплея — только потока реплея: события ядра с других потоков в это время пишутся в журнал (NAT-06)
+thread_local bool t_replaying = false;
 std::string journalPath() { return storeDir() + "/journal.jsonl"; }
 
 // Строка, которая старше уже показанных больше чем на окно «живого» сообщения (ORDER-1, 300 с), встаёт на своё
@@ -171,17 +191,19 @@ void placeByTime(std::vector<json> &msgs) {
 } // namespace
 
 void journalAppend(const json &event) {
-    if (g_replaying) return;
+    if (t_replaying) return;
     const auto path = journalPath();
     if (path.size() < 2) return;
     std::lock_guard<std::mutex> lk(g_journalMu);
     parvane::storecrypt::appendLine(path, event.dump());
 }
 
-std::vector<json> journalFold() {
+namespace {
+
+// Свёртка журнала; вызывающий держит g_journalMu.
+std::vector<json> journalFoldLocked() {
     std::vector<std::string> order;
     std::map<std::string, json> msgs;
-    std::lock_guard<std::mutex> lk(g_journalMu);
     for (const auto &line : parvane::storecrypt::readLines(journalPath())) {
         auto e = json::parse(line, nullptr, false);
         if (!e.is_object()) continue;
@@ -229,20 +251,39 @@ std::vector<json> journalFold() {
     return out;
 }
 
-void journalRewrite(const std::vector<json> &messages) {
+void journalRewriteLocked(const std::vector<json> &messages) {
     std::vector<std::string> lines;
     lines.reserve(messages.size());
     for (const auto &m : messages) lines.push_back(m.dump());
-    std::lock_guard<std::mutex> lk(g_journalMu);
     parvane::storecrypt::writeLines(journalPath(), lines);
+}
+
+} // namespace
+
+std::vector<json> journalFold() {
+    std::lock_guard<std::mutex> lk(g_journalMu);
+    return journalFoldLocked();
+}
+
+void journalRewrite(const std::vector<json> &messages) {
+    std::lock_guard<std::mutex> lk(g_journalMu);
+    journalRewriteLocked(messages);
+}
+
+// Свёртка → правка → перезапись под одним замком: дописанное другими потоками между ними не теряется (NAT-06).
+void journalTransform(const std::function<void(std::vector<json> &)> &edit) {
+    std::lock_guard<std::mutex> lk(g_journalMu);
+    auto msgs = journalFoldLocked();
+    edit(msgs);
+    journalRewriteLocked(msgs);
 }
 
 void journalRemoveIds(const std::set<std::string> &ids) {
     if (ids.empty()) return;
-    auto msgs = journalFold();
-    msgs.erase(std::remove_if(msgs.begin(), msgs.end(), [&](const json &m) { return ids.count(m.value("id", "")) > 0; }),
-               msgs.end());
-    journalRewrite(msgs);
+    journalTransform([&](std::vector<json> &msgs) {
+        msgs.erase(std::remove_if(msgs.begin(), msgs.end(), [&](const json &m) { return ids.count(m.value("id", "")) > 0; }),
+                   msgs.end());
+    });
 }
 
 // Реплей в Kotlin по ПЕРВОМУ LoadChats/GetChats от X (не сразу после готовности: X на переходе в Ready сбрасывает
@@ -250,7 +291,7 @@ void journalRemoveIds(const std::set<std::string> &ids) {
 void journalReplay() {
     auto msgs = journalFold();
     if (msgs.empty()) return;
-    g_replaying = true;
+    t_replaying = true;
     for (const auto &m : msgs) {
         const auto id = m.value("id", "");
         (void)markSeen(id);
@@ -260,10 +301,12 @@ void journalReplay() {
         const auto chat = group ? to : (from == self() ? to : from);
         noteMessage(id, from, chat, m.value("content", json::object()));
         restoreMeta(id, m.value("by", json::object()), m.value("pinned", false));
-        emitNow(m);
+        auto ev = m;
+        ev["replay"] = true; // история с диска: шов не уведомляет
+        emitNow(ev);
     }
-    g_replaying = false;
-    journalRewrite(msgs); // компакция
+    t_replaying = false;
+    journalTransform([](std::vector<json> &) {}); // компакция — с тем, что пришло за время реплея
     LOGI("журнал: восстановлено %zu сообщений", msgs.size());
 }
 
@@ -383,40 +426,51 @@ void cacheGroupInfo(const std::string &address, const json *info) {
 
 namespace {
 
+// Поле сведений: null в журнале (нет фото, нет публичного имени) — значение по умолчанию, а не исключение json.
+std::string strOf(const json &o, const char *k) {
+    const auto it = o.find(k);
+    return it != o.end() && it->is_string() ? it->get<std::string>() : std::string();
+}
+
+template <typename T> T numOf(const json &o, const char *k, T dflt) {
+    const auto it = o.find(k);
+    return it != o.end() && it->is_number() ? it->get<T>() : dflt;
+}
+
 bool isMember(const json &info, const std::string &me) {
-    if (!info.is_object() || info.value("deleted", false)) return false;
-    for (const auto &m : info.value("members", json::array()))
-        if (m.value("user", std::string()) == me) return true;
+    if (!info.is_object() || (info.contains("deleted") && info["deleted"].is_boolean() && info["deleted"].get<bool>())) return false;
+    for (const auto &m : (info.contains("members") && info["members"].is_array() ? info["members"] : json::array()))
+        if (strOf(m, "user") == me) return true;
     return false;
 }
 
 // Сведения журнала (groupInfo движка) → запись списка групп для шва (тот же вид, что прежде).
 json groupJson(const std::string &address, const json &info) {
-    const auto flag = [](const json &o, const char *k) { return o.is_object() && o.value(k, false); };
+    const auto flag = [](const json &o, const char *k) { return o.is_object() && o.contains(k) && o[k].is_boolean() && o[k].get<bool>(); };
     auto members = json::array();
-    for (const auto &m : info.value("members", json::array())) {
-        const auto role = m.value("role", 1);
-        json e{{"address", m.value("user", std::string())},
+    for (const auto &m : (info.contains("members") && info["members"].is_array() ? info["members"] : json::array())) {
+        const auto role = numOf(m, "role", 1);
+        json e{{"address", strOf(m, "user")},
                {"role", role == 3 ? "owner" : role == 2 ? "admin" : "member"}};
         if (role == 2) {
-            const auto r = m.value("rights", json::object());
+            const auto r = (m.contains("rights") && m["rights"].is_object() ? m["rights"] : json::object());
             e["admin_rights"] = json{{"change_info", flag(r, "change_info")}, {"delete_messages", flag(r, "delete_messages")},
                                      {"ban_users", flag(r, "ban_users")}, {"invite_users", flag(r, "invite_users")},
                                      {"pin_messages", flag(r, "pin_messages")}, {"add_admins", flag(r, "add_admins")}};
         }
         members.push_back(std::move(e));
     }
-    const auto p = info.value("defaultPermissions", json::object());
+    const auto p = (info.contains("defaultPermissions") && info["defaultPermissions"].is_object() ? info["defaultPermissions"] : json::object());
     json perms = json::object();
     for (const char *k : {"send_messages", "send_media", "send_stickers_gifs", "send_polls", "embed_links", "invite_users",
                           "pin_messages", "change_info"})
         perms[k] = flag(p, k);
-    return json{{"group_id", address}, {"name", info.value("name", std::string())},
-                {"kind", info.value("kind", 1) == 2 ? "channel" : "group"}, {"created_by", info.value("owner", std::string())},
-                {"members", members}, {"avatar", info.value("avatarFileId", std::string())},
-                {"about", info.value("about", std::string())}, {"default_permissions", perms},
-                {"version", info.value("version", std::uint64_t(0))}, {"pending_requests", info.value("pendingRequests", -1)},
-                {"public_name", info.value("publicName", std::string())}, {"is_public", info.value("isPublic", false)},
+    return json{{"group_id", address}, {"name", strOf(info, "name")},
+                {"kind", numOf(info, "kind", 1) == 2 ? "channel" : "group"}, {"created_by", strOf(info, "owner")},
+                {"members", members}, {"avatar", strOf(info, "avatarFileId")},
+                {"about", strOf(info, "about")}, {"default_permissions", perms},
+                {"version", numOf(info, "version", std::uint64_t(0))}, {"pending_requests", numOf(info, "pendingRequests", -1)},
+                {"public_name", strOf(info, "publicName")}, {"is_public", (info.contains("isPublic") && info["isPublic"].is_boolean() && info["isPublic"].get<bool>())},
                 {"proto", 2}};
 }
 
@@ -430,7 +484,11 @@ json groupListJson() {
         for (const auto &address : s->groupAddresses()) {
             const auto info = s->groupInfo(address);
             if (isMember(info, me)) source[address] = info;
+            else LOGI("группа %s: не участник (участников %zu, удалена=%d)", address.c_str(),
+                      info.contains("members") && info["members"].is_array() ? info["members"].size() : std::size_t(0),
+                      int(info.contains("deleted") && info["deleted"].is_boolean() && info["deleted"].get<bool>()));
         }
+        LOGI("список групп: %zu", source.size());
         std::lock_guard<std::mutex> lk(g_groupMu);
         parvane::storecrypt::writeFile(groupsCachePath(), source.dump());
     } else {
@@ -601,11 +659,16 @@ void wipeAccountData(const char *why) {
     parvane::storecrypt::blockWrites();
     int removed = 0, failed = 0;
     std::error_code ec;
-    for (const auto &e : std::filesystem::directory_iterator(dir, ec)) {
-        const auto name = e.path().filename().string();
+    // Сначала список, потом стирание; шаг итератора — с ec (range-for бросал бы filesystem_error мимо JNI)
+    std::vector<std::filesystem::path> entries;
+    for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::directory_iterator();
+         it.increment(ec))
+        entries.push_back(it->path());
+    for (const auto &path : entries) {
+        const auto name = path.filename().string();
         if (name == "store.key" || name == parvane::localfiles::kLogoutMarkerName) continue;
         std::error_code rec;
-        std::filesystem::remove_all(e.path(), rec);
+        std::filesystem::remove_all(path, rec);
         if (rec) ++failed; else ++removed;
     }
     std::filesystem::remove(dir + "/" + parvane::localfiles::kLogoutMarkerName, ec);

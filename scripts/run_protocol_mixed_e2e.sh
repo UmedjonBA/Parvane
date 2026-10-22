@@ -30,18 +30,22 @@
 #                 desktop/build-probe/bin/Telegram с -DPARVANE_DEV=ON);
 #   call-web2-desktop2 — звонок web ↔ desktop в обе стороны (аудио, настоящий
 #                 движок на десктопе) запечатанными конвертами v2 (T089);
-#   desktop2-android2 — desktop v2 с Telegram X на v2 (флаг шва), в эмуляторе
-#                 (обе — android/tgx_protocol_v2_flow.sh: свой стек на 4222/9222,
-#                 нужен x64-debug APK X с текущим libparvane_jni.so);
+#   desktop2-android2 — desktop с Telegram X в эмуляторе (android/tgx_session_flow.sh: свой стек на 4222/9222,
+#                 нужен x64-debug APK X); web2-android2, call-desktop2-android2 — после него
+#                 (android/tgx_protocol_web_flow.sh, android/tgx_calls_flow.sh);
 #   desktop2-groups — группа v2 из четырёх desktop: создание, исключение → новая
 #                 эпоха, ссылка v2 и вступление, журнал личного состояния
 #                 (desktop/verify_protocol_v2_groups.sh, свой стек);
 # (desktop2-desktop2 — desktop/verify_protocol_v2.sh).
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках
 PAIR="${1:-web2-web2}"
 case "$PAIR" in
-  desktop2-android2) exec "$ROOT/android/tgx_protocol_v2_flow.sh" "$PAIR" ;;
+  # Android (spec 031): после android/tgx_session_flow.sh (стек и X — alice); desktop2-android2 — сам session_flow
+  desktop2-android2) exec "$ROOT/android/tgx_session_flow.sh" ;;
+  web2-android2) exec "$ROOT/android/tgx_protocol_web_flow.sh" ;;
+  call-desktop2-android2) exec "$ROOT/android/tgx_calls_flow.sh" ;;
   call-web2-desktop2) exec "$ROOT/scripts/run_web_cross_calls_e2e.sh" "$PAIR" ;;
   desktop2-groups) exec "$ROOT/desktop/verify_protocol_v2_groups.sh" ;;
   web2-web2) SCRIPT="$ROOT/scripts/e2e_protocol_mixed.mjs" ;;

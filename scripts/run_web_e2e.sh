@@ -8,6 +8,7 @@ export VITE_PARVANE_DIAG_HOOKS=1
 export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://localhost:*}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/scripts/mute_test_audio.sh" # тесты без звука в колонках
 WEB_ROOT="$ROOT/web/telegram-tt"
 TEMP_ROOT="$(mktemp -d /tmp/parvane-web-e2e.XXXXXX)"
 PIDS=()

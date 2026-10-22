@@ -5,6 +5,17 @@
   <item type="id" name="btn_parvaneKeysImport" />
   <item type="id" name="btn_parvaneSignUp" />
   <item type="id" name="btn_parvaneL2" />
+  <item type="id" name="controller_parvanePlanner" />
+  <item type="id" name="controller_parvaneKnowledge" />
+  <item type="id" name="controller_parvaneNote" />
+  <item type="id" name="controller_parvaneCloud" />
+  <item type="id" name="controller_parvaneProfile" />
+  <item type="id" name="controller_parvaneGraph" />
+  <item type="id" name="btn_parvaneSaveToCloud" />
+  <item type="id" name="btn_parvaneFromCloud" />
+  <item type="id" name="btn_parvanePublic" />
+  <item type="id" name="btn_parvaneSuggestPlan" />
+  <item type="id" name="btn_parvaneArticle" />
   <string name="ParvaneSignUp">Create account</string>
   <string name="ParvaneSignUpHint">Nickname and password. If the server confirms by Telegram or e-mail, a confirmation step follows.</string>
   <string name="ParvaneSignInHint">Sign in with nickname and password.</string>
@@ -42,4 +53,9 @@
   <string name="ParvaneTooManyAttempts">Too many attempts. Try again later</string>
   <string name="ParvaneUpgradeRequired">This version of Parvane is no longer supported. Update the app to continue.</string>
   <string name="ParvaneKeysOldFormat">This backup is from an older version and cannot be restored</string>
+  <string name="ParvaneSaveToCloud">Save to Cloud</string>
+  <string name="ParvanePublicGroup">Group type</string>
+  <string name="ParvaneFromCloud">Send from Cloud</string>
+  <string name="ParvaneSuggestPlan">Suggest for plan</string>
+  <string name="ParvaneArticle">Article</string>
 </resources>

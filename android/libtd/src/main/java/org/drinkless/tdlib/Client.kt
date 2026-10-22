@@ -63,6 +63,76 @@ class Client private constructor(
             logHandler = handler
         }
 
+        /**
+         * DELETE-1: вопрос «аккаунт будет удалён <дата> — восстановить?» перед входом в удаляемый аккаунт (как web/desktop).
+         * Регистрирует оверлей (окно поверх экрана входа); ответ — в колбэк с любого потока. Нет окна — вход не восстанавливает.
+         */
+        @JvmStatic
+        @Volatile
+        var deletionPrompt: ((atMs: Long, answer: (Boolean) -> Unit) -> Unit)? = null
+
+        /** Группа чата (групповой звонок): {gid, title, members, self}; null — не группа. */
+        @JvmStatic
+        fun groupForChat(chatId: Long): JSONObject? {
+            val c = boundClient ?: return null
+            val g = c.store.groupByChat(chatId) ?: return null
+            return JSONObject().put("gid", g.gid).put("title", g.name).put("members", org.json.JSONArray(g.members)).put("self", c.store.self)
+        }
+
+        /** PUBLIC-1: {gid, isPublic, name, owner} группы чата; null — не группа. */
+        @JvmStatic
+        fun publicInfo(chatId: Long): JSONObject? {
+            val c = boundClient ?: return null
+            val g = c.store.groupByChat(chatId) ?: return null
+            return JSONObject().put("gid", g.gid).put("isPublic", g.isPublic).put("name", g.publicName)
+                .put("owner", g.createdBy == c.store.self).put("kind", c.store.groupKind[g.gid] ?: "group")
+        }
+
+        /** PUBLIC-1: применить публичность и перечитать группы ("ok" | "taken" | "invalid" | "failed"). */
+        @JvmStatic
+        fun setPublic(chatId: Long, isPublic: Boolean, name: String, preview: Boolean, history: Boolean): String {
+            val c = boundClient ?: return "failed"
+            val g = c.store.groupByChat(chatId) ?: return "failed"
+            val r = ParvaneCore.publicSet(g.gid, isPublic, name, preview, history)
+            Log.i(TAG, "публичность группы ${g.gid}: ${if (isPublic) "публичная" else "закрытая"} → $r")
+            if (r == "ok") c.syncGroups()
+            return r
+        }
+
+        /** Название группы из её журнала (CALL-2: окно приглашения показывает своё название, не присланное). */
+        @JvmStatic
+        fun groupTitle(address: String): String? = boundClient?.store?.group(address)?.name?.takeIf { it.isNotEmpty() }
+
+        @JvmStatic
+        fun selfAddress(): String = boundClient?.store?.self.orEmpty()
+
+        /** Адрес собеседника или группы чата (сообщения оверлея: задание, статья). */
+        @JvmStatic
+        fun addressOfChat(chatId: Long): String? = boundClient?.store?.addressOf(chatId)
+
+        /** Имя собеседника для экранов оверлея (групповой звонок). */
+        @JvmStatic
+        fun displayName(address: String): String = boundClient?.store?.user(address)?.let { listOf(it.firstName, it.lastName).filter { s -> s.isNotEmpty() }.joinToString(" ") }
+            ?.ifEmpty { null } ?: address.substringBefore('@')
+
+        /** Выгрузка данных (T039): имена чатов, своё имя и контакты для снимка переписки ядра. */
+        @JvmStatic
+        fun exportMeta(): JSONObject {
+            val c = boundClient ?: return JSONObject()
+            val st = c.store
+            val chats = JSONObject()
+            st.chatIds().forEach { id ->
+                val address = st.addressOf(id) ?: return@forEach
+                val chat = st.chatById(id) ?: return@forEach
+                chats.put(address, JSONObject().put("title", chat.title).put("kind", if (st.group(address) != null) "group" else "user"))
+            }
+            val contacts = org.json.JSONArray()
+            st.knownUserIds().forEach { id -> st.addressOf(id)?.let { a -> contacts.put(JSONObject().put("address", a).put("name", st.chatById(id)?.title ?: a)) } }
+            val me = st.user(st.self)
+            return JSONObject().put("chats", chats).put("contacts", contacts)
+                .put("selfName", listOfNotNull(me?.firstName, me?.lastName).filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { st.self })
+        }
+
         /** Gateway по умолчанию — тестовый прод; приложение может переопределить. */
         const val DEFAULT_GATEWAY_URL = "wss://parvane.duckdns.org:20443/ws"
         @JvmStatic
@@ -198,8 +268,10 @@ class Client private constructor(
 
     private val coreListener = ParvaneCore.Listener { event -> onCoreEvent(event) }
 
+    // События ядра слушает только Client, к которому ядро привязано (SetTdlibParameters): X создаёт и Client'ы,
+    // которым параметры так и не приходят, — слушая с init, они обрабатывали каждое событие повторно (два входящих
+    // звонка: второй экземпляр X сбрасывал звонок первого)
     init {
-        ParvaneCore.addListener(coreListener)
         postUpdate(TdApi.UpdateAuthorizationState(authState))
     }
 
@@ -218,6 +290,13 @@ class Client private constructor(
             }
             resultHandler?.let { h -> handlerThread.execute { h.onResult(result) } }
         }
+    }
+
+    /** Прежний Client того же аккаунта: события ядра больше не обрабатывает. */
+    private fun retire() {
+        detached = true
+        ParvaneCore.removeListener(coreListener)
+        Log.i(TAG, "прежний Client отцеплен от ядра")
     }
 
     fun close() {
@@ -264,6 +343,51 @@ class Client private constructor(
     }
 
     // ── обработка функций TDLib ─────────────────────────────────────────────
+    private fun checkPassword(password: String): TdApi.Object {
+        var r = ParvaneCore.login(pendingNick, password)
+        // DELETE-1: аккаунт ждёт удаления — показать дату и спросить; «Восстановить» отменяет удаление входом
+        val deletionAt = if (r.optBoolean("ok")) 0L else r.optLong("deletion_at_ms")
+        if (deletionAt > 0) {
+            val restore = askDeletion(deletionAt)
+            Log.i(TAG, "удаление аккаунта: вопрос (через ${(deletionAt - System.currentTimeMillis()) / 3_600_000} ч) → ${if (restore) "восстановить" else "нет"}")
+            if (!restore) return TdApi.Error(400, uiText("account_deletion_kept").replace("%s", deletionDate(deletionAt)))
+            r = ParvaneCore.login(pendingNick, password, "", cancelDeletion = true)
+            if (r.optBoolean("ok")) serviceNotice("parvane_account_restored", uiText("account_restored"))
+        }
+        return when {
+            r.optBoolean("ok") -> {
+                // P-07: пароль держим только в памяти процесса — отзыв устройства
+                // (TerminateSession) требует его; на диск не пишем.
+                sessionPassword = password
+                finishLogin(r.optString("address"))
+            }
+            r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty() -> {
+                // Двухфакторный вход (как Stage::Telegram на десктопе): подтверждение в Telegram-боте.
+                // X показывает экран WaitOtherDeviceConfirmation со ссылкой; ссылку открываем сами,
+                // статус опрашиваем каждые 2 с, после подтверждения — issue с login_token.
+                startTwoFactor(r.optString("address"), password, r.optString("login_token"))
+                TdApi.Ok()
+            }
+            r.optBoolean("confirm_required") -> TdApi.Error(400, uiText("confirm_required"))
+            else -> TdApi.Error(400, uiText(SeamText.loginErrorKey(r.optString("error_code"))))
+        }
+    }
+
+    /** Ответ на вопрос DELETE-1 (ждём на рабочем потоке шва, не на UI; 5 мин без ответа — «нет»). */
+    private fun askDeletion(atMs: Long): Boolean {
+        // dev-хук сценариев (только debug): ответ из файла yes|no
+        if (org.parvane.libtd.BuildConfig.DEBUG) java.io.File("/data/local/tmp/parvane-deletion-answer").takeIf { it.canRead() }
+            ?.readText()?.trim()?.let { return it == "yes" }
+        val prompt = deletionPrompt ?: return false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val answer = java.util.concurrent.atomic.AtomicBoolean(false)
+        prompt(atMs) { yes -> answer.set(yes); latch.countDown() }
+        return latch.await(5, java.util.concurrent.TimeUnit.MINUTES) && answer.get()
+    }
+
+    private fun deletionDate(atMs: Long): String =
+        java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.LONG, java.text.DateFormat.SHORT).format(java.util.Date(atMs))
+
     private fun handle(f: TdApi.Function<*>): TdApi.Object = when (f) {
         is TdApi.SetLogVerbosityLevel, is TdApi.SetLogStream, is TdApi.SetLogTagVerbosityLevel,
         is TdApi.AddLogMessage -> TdApi.Ok()
@@ -301,7 +425,13 @@ class Client private constructor(
                 Log.i(TAG, "второй Client (${f.databaseDirectory}) — отсоединён от ядра")
                 setAuth(TdApi.AuthorizationStateWaitPhoneNumber())
             } else {
+                // X пересоздаёт Client того же аккаунта (пауза/пробуждение), не всегда закрыв прежний: прежний
+                // перестаёт слушать ядро — иначе каждое событие обрабатывалось дважды (два входящих звонка)
+                owner?.takeIf { it !== this }?.retire()
                 boundClient = this
+                ParvaneCore.removeListener(coreListener)
+                ParvaneCore.addListener(coreListener)
+                Log.i(TAG, "Client ${System.identityHashCode(this)} привязан к ядру (${f.databaseDirectory})")
                 boundDir = f.databaseDirectory
                 // Дев-стенд/эмулятор: gateway из файла (adb push … /data/local/tmp/parvane-gateway),
                 // когда extra запуска недоступен (Telegram X) — ТОЛЬКО в debug (P-12/P-46):
@@ -341,30 +471,7 @@ class Client private constructor(
                 TdApi.Ok()
             }
         }
-        is TdApi.CheckAuthenticationPassword -> {
-            var r = ParvaneCore.login(pendingNick, f.password ?: "")
-            // spec 027: аккаунт ждёт удаления — вход паролем его восстанавливает (как web «Восстановить»)
-            if (!r.optBoolean("ok") && r.optLong("deletion_at_ms") > 0) {
-                r = ParvaneCore.login(pendingNick, f.password ?: "", "", cancelDeletion = true)
-                if (r.optBoolean("ok")) serviceNotice("parvane_account_restored", uiText("account_restored"))
-            }
-            if (r.optBoolean("ok")) {
-                // P-07: пароль держим только в памяти процесса — отзыв устройства
-                // (TerminateSession) требует его; на диск не пишем.
-                sessionPassword = f.password ?: ""
-                finishLogin(r.optString("address"))
-            } else if (r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty()) {
-                // Двухфакторный вход (как Stage::Telegram на десктопе): подтверждение в Telegram-боте.
-                // X показывает экран WaitOtherDeviceConfirmation со ссылкой; ссылку открываем сами,
-                // статус опрашиваем каждые 2 с, после подтверждения — issue с login_token.
-                startTwoFactor(r.optString("address"), f.password ?: "", r.optString("login_token"))
-                TdApi.Ok()
-            } else if (r.optBoolean("confirm_required")) {
-                TdApi.Error(400, uiText("confirm_required"))
-            } else {
-                TdApi.Error(400, uiText(SeamText.loginErrorKey(r.optString("error_code"))))
-            }
-        }
+        is TdApi.CheckAuthenticationPassword -> checkPassword(f.password ?: "")
         is TdApi.ForwardMessages -> forwardMessages(f) // паритет: тот же content новому адресату, медиа перезаливается
         // ── звонки (spec 031): экран звонка X ← TdApi.Call; сигналы и медиа — ядро и org.webrtc ──
         is TdApi.CreateCall -> {
@@ -386,8 +493,11 @@ class Client private constructor(
             TdApi.Ok()
         }
         is TdApi.DiscardCall -> {
-            calls.current?.let { a -> if (!a.outgoing && a.connectedMs == 0L) a.declined = true }
-            org.parvane.core.ParvaneCalls.hangup()
+            val a = calls.current
+            if (a != null && a.id == f.callId) { // чужой (устаревший) id звонка — не трогать текущий
+                if (!a.outgoing && a.connectedMs == 0L) a.declined = true
+                org.parvane.core.ParvaneCalls.hangup()
+            }
             TdApi.Ok()
         }
         is TdApi.SendCallRating, is TdApi.SendCallDebugInformation, is TdApi.SendCallLog, is TdApi.SendCallSignalingData -> TdApi.Ok()
@@ -424,6 +534,7 @@ class Client private constructor(
             if (!detached) ParvaneCore.logout() // NAT-16: устройство уходит из журнала, данные стираются
             l2.clear()
             store.clear()
+            notifications.clear()
             announcedChats.clear()
             setAuth(TdApi.AuthorizationStateLoggingOut())
             setAuth(TdApi.AuthorizationStateWaitPhoneNumber())
@@ -445,7 +556,9 @@ class Client private constructor(
             if (g != null && addr != null) store.chatMember(g, addr) else TdApi.Error(404, "member not found")
         }
         is TdApi.CreateNewBasicGroupChat -> createGroup(f)
-        is TdApi.AddChatMember -> groupAction(f.chatId, "add", store.addressOf(f.userId) ?: "")?.let { TdApi.FailedToAddMembers(arrayOf()) } ?: TdApi.Error(500, "не добавлен")
+        is TdApi.AddChatMember -> if (f.userId == store.idOf(store.self) && store.addressOf(f.chatId)?.let { publicPreviews.containsKey(it) } == true)
+            joinPublic(store.addressOf(f.chatId)!!)
+            else groupAction(f.chatId, "add", store.addressOf(f.userId) ?: "")?.let { TdApi.FailedToAddMembers(arrayOf()) } ?: TdApi.Error(500, "не добавлен")
         is TdApi.SetChatTitle -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "rename", f.title ?: "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не переименована")) else TdApi.Ok()
         is TdApi.LeaveChat -> if (store.groupByChat(f.chatId) != null) (groupAction(f.chatId, "leave", "")?.let { TdApi.Ok() } ?: TdApi.Error(500, "не вышли")) else TdApi.Ok()
         is TdApi.SetChatMemberStatus -> { // роли/бан участника группы (owner/admin)
@@ -588,13 +701,27 @@ class Client private constructor(
             TdApi.Error(404, "Not Found")
         }
         is TdApi.GetChats -> { replayJournalOnce(); TdApi.Chats(store.chatIds().size, store.chatIds().take(f.limit).toLongArray()) }
-        is TdApi.GetChatHistory -> store.history(f.chatId, f.fromMessageId, f.offset, f.limit)
+        is TdApi.GetChatHistory -> {
+            store.addressOf(f.chatId)?.let { gid -> if (publicPreviews.containsKey(gid)) loadPublicHistory(gid) }
+            store.history(f.chatId, f.fromMessageId, f.offset, f.limit)
+        }
         is TdApi.ViewMessages -> {
+            // прочтение снимает отметку «непрочитано» (как TDLib)
+            store.local?.takeIf { it.isMarkedUnread(f.chatId) && f.messageIds.isNotEmpty() }?.let { l ->
+                l.setMarkedUnread(f.chatId, false)
+                store.chatById(f.chatId)?.isMarkedAsUnread = false
+                postUpdate(TdApi.UpdateChatIsMarkedAsUnread(f.chatId, false))
+                scheduleStateFlush("unread")
+            }
             f.messageIds.forEach { id -> store.uuidOf(f.chatId, id)?.let { ParvaneCore.markRead(it) } }
             store.markInboxRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
+            notifications.onRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
             TdApi.Ok()
         }
         is TdApi.OpenChat, is TdApi.CloseChat -> TdApi.Ok()
+        // уведомление смахнули в шторке
+        is TdApi.RemoveNotification -> { notifications.remove(f.notificationGroupId, f.notificationId, single = true)?.let { postUpdate(it) }; TdApi.Ok() }
+        is TdApi.RemoveNotificationGroup -> { notifications.remove(f.notificationGroupId, f.maxNotificationId, single = false)?.let { postUpdate(it) }; TdApi.Ok() }
         is TdApi.SendMessage -> sendMessage(f)
         is TdApi.GetMessage -> messageOf(f.chatId, f.messageId)
         is TdApi.GetMessageLocally -> messageOf(f.chatId, f.messageId)
@@ -629,7 +756,7 @@ class Client private constructor(
                 val n = f.notificationSettings
                 store.setChatMute(address, if (n == null || n.useDefaultMuteFor) 0 else n.muteFor)
                 postUpdate(TdApi.UpdateChatNotificationSettings(f.chatId, store.chatNotifySettings(address)))
-                scheduleStateFlush() // журнал личного состояния (STATE-2: notify)
+                scheduleStateFlush("notify") // журнал личного состояния (STATE-2: notify)
                 TdApi.Ok()
             }
         }
@@ -637,7 +764,7 @@ class Client private constructor(
         is TdApi.SetScopeNotificationSettings -> {
             store.setScopeMute(scopeKey(f.scope), f.notificationSettings?.muteFor ?: 0)
             postUpdate(TdApi.UpdateScopeNotificationSettings(f.scope, store.scopeSettings(scopeKey(f.scope))))
-            scheduleStateFlush() // журнал личного состояния (STATE-2: notify)
+            scheduleStateFlush("notify") // журнал личного состояния (STATE-2: notify)
             TdApi.Ok()
         }
         // профиль → identity (display_name обязателен; остальное — что прислали)
@@ -692,7 +819,7 @@ class Client private constructor(
             val fo = l.folders.create(f.folder)
             Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
-            scheduleStateFlush()
+            scheduleStateFlush("folders")
             fo.toInfo()
         }
         is TdApi.EditChatFolder -> run {
@@ -700,7 +827,7 @@ class Client private constructor(
             val fo = l.folders.edit(f.chatFolderId, f.folder) ?: return@run TdApi.Error(404, "folder not found")
             Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
-            scheduleStateFlush()
+            scheduleStateFlush("folders")
             fo.toInfo()
         }
         is TdApi.DeleteChatFolder -> run {
@@ -710,14 +837,14 @@ class Client private constructor(
             refreshFolderPositions()
             Log.i(TAG, "папка ${f.chatFolderId} удалена")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
-            scheduleStateFlush()
+            scheduleStateFlush("folders")
             TdApi.Ok()
         }
         is TdApi.ReorderChatFolders -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             l.folders.reorder(f.chatFolderIds ?: IntArray(0), f.mainChatListPosition)
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
-            scheduleStateFlush()
+            scheduleStateFlush("folders")
             TdApi.Ok()
         }
         is TdApi.GetRecommendedChatFolders -> TdApi.RecommendedChatFolders(arrayOf())
@@ -762,7 +889,7 @@ class Client private constructor(
             if (st == null) { scheduledQueue.remove(item.id); fireScheduledGated(item) }
             else if (st is TdApi.MessageSchedulingStateSendAtDate) { scheduledQueue.reschedule(item.id, st.sendDate.toLong()); scheduledMsgs[item.id] = scheduledMessage(item) }
             else return@run TdApi.Error(400, "unsupported scheduling state")
-            scheduleStateFlush()
+            scheduleStateFlush("scheduled")
             TdApi.Ok()
         }
         is TdApi.SetChatDraftMessage -> run {
@@ -773,10 +900,67 @@ class Client private constructor(
             chat?.draftMessage = l.tdDraft(f.chatId)
             Log.i(TAG, if (json != null) "черновик ${f.chatId} сохранён" else "черновик ${f.chatId} снят")
             postUpdate(TdApi.UpdateChatDraftMessage(f.chatId, chat?.draftMessage, chat?.positions ?: arrayOf()))
-            scheduleStateFlush()
+            scheduleStateFlush("drafts")
             TdApi.Ok()
         }
         is TdApi.ClearAllDraftMessages -> { store.local?.clearDrafts(); TdApi.Ok() }
+        // STATE-2: закреп главного списка, «непрочитано», быстрая реакция — локально и журналом своим устройствам
+        is TdApi.ToggleChatIsPinned -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            if (f.chatList is TdApi.ChatListFolder) return@run TdApi.Error(400, "folder pins are set in the folder editor")
+            store.chatById(f.chatId) ?: return@run TdApi.Error(404, "chat not found")
+            val before = l.pinnedChatIds()
+            if (l.setPinned(f.chatId, f.isPinned)) {
+                repositionChats((before + f.chatId).toSet())
+                scheduleStateFlush("pinned")
+            }
+            TdApi.Ok()
+        }
+        is TdApi.SetPinnedChats -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            if (f.chatList is TdApi.ChatListFolder) return@run TdApi.Error(400, "folder pins are set in the folder editor")
+            val before = l.pinnedChatIds()
+            l.setPinnedOrder(f.chatIds.toList())
+            repositionChats((before + f.chatIds.toList()).toSet())
+            scheduleStateFlush("pinned")
+            TdApi.Ok()
+        }
+        is TdApi.ToggleChatIsMarkedAsUnread -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val chat = store.chatById(f.chatId) ?: return@run TdApi.Error(404, "chat not found")
+            if (l.setMarkedUnread(f.chatId, f.isMarkedAsUnread)) {
+                chat.isMarkedAsUnread = f.isMarkedAsUnread
+                postUpdate(TdApi.UpdateChatIsMarkedAsUnread(f.chatId, f.isMarkedAsUnread))
+                scheduleStateFlush("unread")
+            }
+            TdApi.Ok()
+        }
+        is TdApi.SetDefaultReactionType -> run {
+            val l = store.local ?: return@run TdApi.Error(500, "no local state")
+            val emoji = (f.reactionType as? TdApi.ReactionTypeEmoji)?.emoji ?: return@run TdApi.Error(400, "only emoji reactions")
+            if (l.setQuickReaction(emoji)) {
+                postUpdate(TdApi.UpdateDefaultReactionType(f.reactionType))
+                scheduleStateFlush("reaction")
+            }
+            TdApi.Ok()
+        }
+        // Карточки (T030): нажатие кнопки inline-клавиатуры — задание в «План», статья, жалоба админу
+        is TdApi.GetCallbackQueryAnswer -> onCardPress(f.chatId, f.messageId, (f.payload as? TdApi.CallbackQueryPayloadData)?.data)
+        // «Кто отреагировал»: авторы реакций из меты сообщения (свои устройства и собеседники)
+        is TdApi.GetMessageAddedReactions -> run {
+            val uuid = store.uuidOf(f.chatId, f.messageId) ?: return@run TdApi.Error(404, "message not found")
+            val want = (f.reactionType as? TdApi.ReactionTypeEmoji)?.emoji
+            val by = reactionBy[uuid] ?: JSONObject()
+            val list = by.keys().asSequence().mapNotNull { a ->
+                val emoji = by.optString(a)
+                if (want != null && emoji != want) return@mapNotNull null
+                ensurePeer(a, announce = true)
+                TdApi.AddedReaction(TdApi.ReactionTypeEmoji(emoji), TdApi.MessageSenderUser(store.idOf(a)), a == store.self, 0)
+            }.toList()
+            TdApi.AddedReactions(list.size, list.toTypedArray(), "")
+        }
+        // REPORT-1: жалоба — причина → комментарий → отправка (админам группы карточкой mod_report, иначе — серверу)
+        is TdApi.ReportChat -> reportChat(f.chatId, String(f.optionId ?: ByteArray(0)), f.messageIds ?: LongArray(0), f.text ?: "")
         is TdApi.AddChatToList -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             val toArchive = f.chatList is TdApi.ChatListArchive
@@ -788,7 +972,7 @@ class Client private constructor(
             Log.i(TAG, "чат ${f.chatId} → ${if (toArchive) "архив" else "главный список"}")
             postUpdate(TdApi.UpdateChatPosition(f.chatId, TdApi.ChatPosition(oldList, 0L, false, null)))
             postUpdate(TdApi.UpdateChatPosition(f.chatId, chat.positions[0]))
-            scheduleStateFlush()
+            scheduleStateFlush("archived")
             TdApi.Ok()
         }
         // spec 005: опросы — голос/закрытие как отдельные sealed-сообщения, агрегат локальный (PollStore)
@@ -848,7 +1032,7 @@ class Client private constructor(
             val uid = (f.senderId as? TdApi.MessageSenderUser)?.userId
             val address = uid?.let { store.addressOf(it) }
             if (address != null) { if (f.blockList == null) store.blocked.remove(address) else store.blocked.add(address) }
-            scheduleStateFlush() // журнал личного состояния v2 (T098)
+            scheduleStateFlush("blocked") // журнал личного состояния v2 (T098)
             // FR-033 (T133, правило ACCESS-1): блокировка сама ключ доступа к доставке не отнимает —
             // новый ключ всем, кроме заблокированного
             if (address != null && f.blockList != null && v2Enabled) io.execute {
@@ -899,6 +1083,10 @@ class Client private constructor(
         // нужен до my_id — X сразу спрашивает GetUser(my_id).
         store.ensurePeer(self)
         postUpdate(TdApi.UpdateOption("my_id", TdApi.OptionValueInteger(store.idOf(self))))
+        // STATE-2: закреп чатов (лимиты как у TDLib без Premium) и быстрая реакция этого аккаунта
+        postUpdate(TdApi.UpdateOption("pinned_chat_count_max", TdApi.OptionValueInteger(10)))
+        postUpdate(TdApi.UpdateOption("pinned_archived_chat_count_max", TdApi.OptionValueInteger(100)))
+        store.local?.quickReaction()?.takeIf { it.isNotEmpty() }?.let { postUpdate(TdApi.UpdateDefaultReactionType(TdApi.ReactionTypeEmoji(it))) }
         postUpdate(TdApi.UpdateOption("authorization_date", TdApi.OptionValueInteger(System.currentTimeMillis() / 1000)))
         setAuth(TdApi.AuthorizationStateReady())
         ensurePeer(self, announce = true)
@@ -954,10 +1142,13 @@ class Client private constructor(
             }
             val (chat, basic, created) = ensured
             postUpdate(TdApi.UpdateBasicGroup(basic))
-            if (created && announcedChats.add(chat.id)) { postUpdate(TdApi.UpdateNewChat(chat.copyForUi())); announceScheduled(chat.id) }
+            // объявить чат, если X его ещё не видел (группа могла попасть в стор раньше — реплей, превью, сообщение)
+            val announced = announcedChats.add(chat.id)
+            Log.i(TAG, "группа $gid: чат ${chat.id} создан=$created объявлен=$announced v${g.optLong("version", -1)} (было v$previousVersion)")
+            if (announced) { postUpdate(TdApi.UpdateNewChat(chat.copyForUi())); announceScheduled(chat.id) }
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
             val version = g.optLong("version", -1L)
-            if (!created && version >= 0 && version == previousVersion) continue
+            if (!created && !announced && version >= 0 && version == previousVersion) continue
             // spec 003: права по умолчанию, описание, фото — открытые экраны X обновляются апдейтами
             postUpdate(TdApi.UpdateChatPermissions(chat.id, chat.permissions))
             store.group(gid)?.let { postUpdate(TdApi.UpdateBasicGroupFullInfo(it.basicGroupId, store.basicGroupFullInfo(it))) }
@@ -1068,15 +1259,24 @@ class Client private constructor(
         store.putMessage(id, author, chatAddress, System.currentTimeMillis() / 1000, content, out = false, read = true)?.let { announceMessage(it) }
     }
     private val calls = Calls(store::idOf)
+    private val notifications = Notifications()
+    /** Чат заглушён: своё исключение, иначе область (личные/группы) — как TDLib. */
+    private fun isMuted(address: String, group: Boolean): Boolean {
+        val c = store.chatNotifySettings(address)
+        return if (!c.useDefaultMuteFor) c.muteFor > 0 else store.scopeSettings(if (group) "groups" else "users").muteFor > 0
+    }
     /** Событие ядра `call`: входящий — новый TdApi.Call; смены состояния — UpdateCall; конец — запись в журнал. */
     private fun onCallEvent(event: JSONObject) {
         val now = System.currentTimeMillis()
         when (event.optString("state")) {
             "incoming" -> {
                 val peer = event.optString("peer")
+                if (peer.isEmpty()) return
+                // приглашение может прийти повторно (копия инбокса) — тот же звонок, не второй
+                if (calls.current?.let { it.peer == peer && !it.outgoing } == true) return
                 ensurePeer(peer, announce = true)
                 val a = calls.begin(peer, outgoing = false, video = event.optBoolean("video"), nowMs = now)
-                Log.i(TAG, "звонок: входящий ${if (a.video) "видео" else "аудио"}")
+                Log.i(TAG, "звонок: входящий ${if (a.video) "видео" else "аудио"} (Client ${System.identityHashCode(this)})")
                 postUpdate(TdApi.UpdateCall(calls.call(a)))
                 io.execute { a.callUuid = org.parvane.core.ParvaneCalls.callId() }
             }
@@ -1089,7 +1289,7 @@ class Client private constructor(
                 postUpdate(TdApi.UpdateCall(calls.call(a)))
                 if (st is TdApi.CallStateError) serviceNotice("parvane_call_failed", uiText(if (event.optString("error_code") == "forbidden") "call_not_contact" else "call_not_sent"))
                 if (st is TdApi.CallStateDiscarded) calls.record(a, now)?.let { rec ->
-                    io.execute { if (stateAttached) ParvaneCore.stateCall("callSet", rec.toString()) }
+                    io.execute { if (stateAttached) ParvaneCore.stateCall("callSet", JSONObject().put("recordJson", rec.toString()).toString()) }
                 }
             }
         }
@@ -1460,7 +1660,7 @@ class Client private constructor(
         val msg = scheduledMessage(item); scheduledMsgs[item.id] = msg
         Log.i(TAG, "отложено ${item.uuid} на $due")
         postUpdate(TdApi.UpdateChatHasScheduledMessages(chatId, true))
-        scheduleStateFlush()
+        scheduleStateFlush("scheduled")
         return msg
     }
     private fun fireScheduled(it: ScheduledQueue.Item) {
@@ -1501,7 +1701,7 @@ class Client private constructor(
             fireScheduled(it)
             if (op != null) ParvaneCore.stateMarkSent(op)
         }
-        scheduleStateFlush()
+        scheduleStateFlush("scheduled")
     }
 
     // ── журнал личного состояния v2 (spec 007, T098): папки/черновики/архив/отложенные ──
@@ -1520,14 +1720,27 @@ class Client private constructor(
         val l = store.local ?: return
         val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
         if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
+        // T150: несохранённая правка (до подключения или перед остановкой процесса) — в журнал раньше проекции
+        val dirty = loadStateDirty()
+        var effective: JSONObject = snap
+        if (dirty.isNotEmpty()) {
+            val r = synchronized(stateLock) {
+                ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString(), dirty.toList())
+            }
+            if (r != null) {
+                clearStateDirty()
+                r.optJSONObject("snapshot")?.let { effective = it }
+                Log.i(TAG, "несохранённая правка личного состояния дослана в журнал (${dirty.sorted().joinToString()})")
+            }
+        }
         stateAttached = true
         // Вид `notify` появился позже первого переноса состояния (T132): пока журнал его не содержит,
         // пустая проекция не должна снять локальные муты — они уйдут в журнал следующим синком
         val marker = java.io.File(boundDir, "notify-journaled")
-        val keepLocalNotify = !marker.exists() && !stateJournal.hasNotify(snap)
+        val keepLocalNotify = !marker.exists() && !stateJournal.hasNotify(effective)
         if (!marker.exists()) try { marker.writeText("1") } catch (e: Exception) { }
-        applyState(snap, projectNotify = !keepLocalNotify)
-        if (keepLocalNotify) scheduleStateFlush()
+        applyState(effective, projectNotify = !keepLocalNotify)
+        if (keepLocalNotify) scheduleStateFlush("notify")
         Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
         if (!stateTimerStarted) {
             stateTimerStarted = true
@@ -1541,10 +1754,31 @@ class Client private constructor(
             if (!stateAttached || detached) return
             val l = store.local ?: return
             val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString(), StateJournal.KINDS) ?: return
+            clearStateDirty()
             if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
         }
     }
-    private fun scheduleStateFlush() { if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } } }
+    /**
+     * Своя правка вида [kind]: вид помечается «не дослан» (файл state-dirty, переживает перезапуск) до успешного
+     * синка. Правка, сделанная до подключения журнала или не успевшая в него до остановки процесса, при следующем
+     * подключении досылается раньше проекции журнала — иначе снимок журнала её откатил бы (T150, как desktop).
+     */
+    private fun scheduleStateFlush(kind: String) {
+        markStateDirty(kind)
+        if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } }
+    }
+    private val stateDirtyFile get() = java.io.File(boundDir, "state-dirty")
+    private fun loadStateDirty(): Set<String> = try {
+        stateDirtyFile.takeIf { it.exists() }?.readLines()?.map { it.trim() }?.filter { it in StateJournal.KINDS }?.toSet() ?: emptySet()
+    } catch (e: Exception) { emptySet() }
+    private fun markStateDirty(kind: String) {
+        synchronized(stateLock) {
+            val cur = loadStateDirty()
+            if (kind in cur) return
+            try { stateDirtyFile.writeText((cur + kind).joinToString("\n")) } catch (e: Exception) { Log.w(TAG, "state-dirty: ${e.message}") }
+        }
+    }
+    private fun clearStateDirty() { try { stateDirtyFile.delete() } catch (e: Exception) { } }
     // «Удалить чат у себя» в v2 (T145): сообщений v2 сервер v1 не знает, нотис
     // `cleared` до остальных своих устройств не дойдёт — граница очистки (мс) едет
     // журналом личного состояния. Применённые границы: адрес → мс.
@@ -1571,6 +1805,154 @@ class Client private constructor(
             Log.i(TAG, "журнал состояния → очистка чата, скрыто ${uuids.size} сообщений")
         }
     }
+    // ── жалобы (REPORT-1, как desktop api_report / web) ──────────────────────
+    private val reportReasons = listOf("spam", "violence", "porn", "child", "copyright", "illegal", "personal", "fake", "other")
+    private fun reportReasonText(code: String): String = when (code) {
+        "spam" -> uiText("report_spam"); "violence" -> uiText("report_violence"); "porn" -> uiText("report_porn")
+        "child" -> uiText("report_child"); "copyright" -> uiText("report_copyright"); "illegal" -> uiText("report_illegal")
+        "personal" -> uiText("report_personal"); "fake" -> uiText("report_fake"); else -> uiText("report_other")
+    }
+    /** Админы группы, которые могут удалить сообщения или заблокировать (без себя). */
+    private fun reportAdmins(address: String): List<String> {
+        val g = store.group(address) ?: return emptyList()
+        return g.members.filter { m ->
+            m != store.self && (m == g.createdBy || g.roles[m] == "admin") &&
+                (g.adminRights[m]?.let { r -> r.optBoolean("delete_messages", true) || r.optBoolean("ban_users", true) } ?: true)
+        }
+    }
+    private val REPORT_SUBMIT = ":send"
+    private fun reportChat(chatId: Long, optionId: String, messageIds: LongArray, comment: String): TdApi.Object {
+        val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
+        val admins = if (messageIds.isEmpty()) emptyList() else reportAdmins(address)
+        if (optionId.isEmpty())
+            return TdApi.ReportChatResultOptionRequired(uiText(if (admins.isEmpty()) "report_to_server" else "report_to_admins"),
+                reportReasons.map { TdApi.ReportOption(it.toByteArray(), reportReasonText(it)) }.toTypedArray())
+        if (!optionId.endsWith(REPORT_SUBMIT)) return TdApi.ReportChatResultTextRequired((optionId + REPORT_SUBMIT).toByteArray(), true)
+        val reason = optionId.removeSuffix(REPORT_SUBMIT).takeIf { it in reportReasons } ?: "other"
+        val note = comment.take(1024)
+        val reported = org.json.JSONArray()
+        val fallback = ArrayList<String>()
+        messageIds.forEach { id ->
+            val uuid = store.uuidOf(chatId, id) ?: return@forEach
+            val m = store.messageByUuid(uuid) ?: return@forEach
+            val author = (m.senderId as? TdApi.MessageSenderUser)?.let { store.addressOf(it.userId) } ?: return@forEach
+            val text = when (val c = m.content) {
+                is TdApi.MessageText -> c.text.text
+                is TdApi.MessagePhoto -> c.caption?.text.orEmpty()
+                is TdApi.MessageVideo -> c.caption?.text.orEmpty()
+                is TdApi.MessageDocument -> c.caption?.text.orEmpty()
+                else -> ""
+            }.ifEmpty { "[media]" }
+            fallback += text
+            reported.put(JSONObject().put("op_id", uuid).put("author", author).put("text", text.take(4096)).put("ts", m.date.toLong()))
+        }
+        val outcome = if (admins.isNotEmpty() && reported.length() > 0) {
+            val hex = address.removePrefix(StateJournal.V2_GROUP_PREFIX)
+            val content = JSONObject().put("kind", "mod_report")
+                .put("report_group", JSONObject().put("domain", store.self.substringAfter('@', "")).put("id", StateJournal.hexToB64(hex)))
+                .put("reason", reason).put("reported", reported).put("text", ("⚠️ " + fallback.joinToString(" / ")).take(600))
+            if (note.isNotEmpty()) content.put("comment", note)
+            if (admins.map { a -> ParvaneCore.sendContent(a, content.toString(), "").isNotEmpty() }.any { it }) "sent" else "failed"
+        } else {
+            val target = if (reported.length() > 0) reported.getJSONObject(0).optString("author", address) else address
+            ParvaneCore.submitReport(JSONObject().put("version", 1).put("reason", reason).put("comment", note).put("chat", address)
+                .put("target", target).put("messages", reported).toString())
+        }
+        Log.i(TAG, "жалоба ($reason) → $outcome")
+        return when (outcome) {
+            "sent" -> TdApi.ReportChatResultOk()
+            "unavailable" -> TdApi.Error(400, uiText("report_unavailable"))
+            else -> TdApi.Error(500, uiText("report_failed"))
+        }
+    }
+
+    // ── карточки с кнопками (T030, как desktop CardMarkup/HandleCardButton) ──
+    /** Содержимое карточки по uuid (у жалобы — проверенное своими данными, не присланное). */
+    private val cardContent = ConcurrentHashMap<String, JSONObject>()
+    private val cardDecided = ConcurrentHashMap<String, Boolean>()
+
+    private fun cardMarkup(uuid: String, content: JSONObject, out: Boolean, from: String): TdApi.ReplyMarkup? {
+        when (content.optString("kind")) {
+            "task_offer", "article" -> cardContent[uuid] = content
+            "mod_report" -> {
+                if (out) return null
+                val checked = ParvaneCore.checkModReport(content.toString(), from) ?: return null
+                cardContent[uuid] = checked
+                return Cards.markup(content, uuid, out, modChecked = true)
+            }
+            else -> return null
+        }
+        return Cards.markup(content, uuid, out, cardDecided[uuid])
+    }
+
+    private fun setCardMarkup(chatId: Long, msgId: Long, uuid: String) {
+        val m = store.messageByUuid(uuid) ?: return
+        val content = cardContent[uuid] ?: return
+        m.replyMarkup = Cards.markup(content, uuid, m.isOutgoing, cardDecided[uuid])
+        postUpdate(TdApi.UpdateMessageEdited(chatId, msgId, m.editDate, m.replyMarkup))
+    }
+
+    private fun onCardPress(chatId: Long, msgId: Long, data: ByteArray?): TdApi.Object {
+        val press = Cards.parse(data) ?: return TdApi.CallbackQueryAnswer("", false, "")
+        val content = cardContent[press.uuid] ?: return TdApi.CallbackQueryAnswer("", false, "")
+        val chat = store.addressOf(chatId) ?: return TdApi.CallbackQueryAnswer("", false, "")
+        val ru = SeamText.isRu()
+        return when (press.action) {
+            "offeryes", "offerno" -> {
+                val accepted = press.action == "offeryes"
+                val result = if (accepted) (org.parvane.core.ParvaneSections.planner("offerAccept",
+                    JSONObject().put("content", content).put("uuid", press.uuid).put("chat", chat)) as? String ?: "unavailable") else "ok"
+                val event = Cards.offerIsEvent(content)
+                val text = when (result) {
+                    "ok" -> if (!accepted) (if (ru) "Задание отклонено" else "Task declined")
+                        else if (event) (if (ru) "Добавлено в календарь" else "Added to calendar") else (if (ru) "Добавлено в «План»" else "Added to Plan")
+                    "exists" -> if (ru) "Уже в «Плане»" else "Already in Plan"
+                    "needs-linking", "no-key" -> if (ru) "«План» ещё не готов на этом устройстве" else "Plan is not ready on this device yet"
+                    else -> if (ru) "Не удалось — попробуйте позже" else "Failed — try again later"
+                }
+                Log.i(TAG, "задание ${press.uuid} → ${if (accepted) "план" else "отказ"}: $result")
+                if (result == "ok" || result == "exists") {
+                    cardDecided[press.uuid] = accepted
+                    setCardMarkup(chatId, msgId, press.uuid)
+                    if (chat != store.self) io.execute {
+                        val resp = org.parvane.core.ParvaneSections.planner("offerResponse", JSONObject().put("content", content).put("accepted", accepted)) as? JSONObject
+                        resp?.put("offer", press.uuid)?.let { ParvaneCore.sendContent(chat, it.toString(), press.uuid) }
+                    }
+                }
+                TdApi.CallbackQueryAnswer(text, false, "")
+            }
+            "article" -> TdApi.CallbackQueryAnswer(Cards.articleText(content), true, "")
+            "articlesave" -> {
+                val r = org.parvane.core.ParvaneSections.notes("create", JSONObject().put("title", content.optString("title").ifEmpty { if (ru) "Статья" else "Article" })
+                    .put("text", content.optString("markdown").ifEmpty { content.optString("text") }).toString())
+                TdApi.CallbackQueryAnswer(if (r is String) (if (ru) "Сохранено в «Знания»" else "Saved to Knowledge") else (if (ru) "Не сохранено — такое название уже есть?" else "Not saved — the title may be taken"), false, "")
+            }
+            "moddel" -> {
+                var ok = 0
+                content.optJSONArray("ops")?.let { ops -> for (i in 0 until ops.length()) if (ParvaneCore.delete(ops.getString(i), true)) ok++ }
+                TdApi.CallbackQueryAnswer(if (ok > 0) (if (ru) "Сообщения удалены" else "Messages deleted") else (if (ru) "Не удалось удалить" else "Could not delete"), false, "")
+            }
+            "modban" -> {
+                val gid = content.optString("group")
+                content.optJSONArray("authors")?.let { a -> for (i in 0 until a.length()) a.getString(i).takeIf { it != store.self }?.let { ParvaneCore.groupAction(gid, "ban", it) } }
+                TdApi.CallbackQueryAnswer(if (ru) "Заблокировано в группе" else "Banned in the group", false, "")
+            }
+            else -> TdApi.CallbackQueryAnswer("", false, "")
+        }
+    }
+
+    /** Авторы реакций по сообщению: uuid → {адрес: эмодзи}. */
+    private val reactionBy = ConcurrentHashMap<String, JSONObject>()
+
+    /** Позиции чатов заново (закреп сменился): закреплённые — выше всех, остальные — по последнему сообщению. */
+    private fun repositionChats(ids: Collection<Long>) {
+        ids.forEach { id ->
+            val chat = store.chatById(id) ?: return@forEach
+            chat.positions = store.positionsFor(id, store.lastDateOfChat(id))
+            postUpdate(TdApi.UpdateChatPosition(id, chat.positions[0]))
+        }
+    }
+
     /** Сведённый снимок → локальные файлы шва и апдейты X. */
     private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
         projectCleared(snap)
@@ -1585,7 +1967,7 @@ class Client private constructor(
             val id = store.idOf(a)
             postUpdate(TdApi.UpdateChatBlockList(id, if (store.blocked.contains(a)) TdApi.BlockListMain() else null))
         }
-        Log.i(TAG, "журнал состояния → блок=${ch.blocked.size} папки=${ch.folders} черновики=${ch.drafts.size} архив=${ch.archived.size} отложенные=+${ch.scheduledAdded.size}/-${ch.scheduledRemoved.size}")
+        Log.i(TAG, "журнал состояния → блок=${ch.blocked.size} папки=${ch.folders} черновики=${ch.drafts.size} архив=${ch.archived.size} отложенные=+${ch.scheduledAdded.size}/-${ch.scheduledRemoved.size} закреп=${ch.pinned.size} непрочитано=${ch.unread.size} реакция=${ch.reaction}")
         if (ch.folders) { refreshFolderPositions(); postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false)) }
         ch.drafts.forEach { id ->
             val chat = store.chatById(id) ?: return@forEach
@@ -1600,6 +1982,13 @@ class Client private constructor(
             postUpdate(TdApi.UpdateChatPosition(id, TdApi.ChatPosition(oldList, 0L, false, null)))
             postUpdate(TdApi.UpdateChatPosition(id, chat.positions[0]))
         }
+        if (ch.pinned.isNotEmpty()) repositionChats(ch.pinned)
+        ch.unread.forEach { id ->
+            val on = l.isMarkedUnread(id)
+            store.chatById(id)?.isMarkedAsUnread = on
+            postUpdate(TdApi.UpdateChatIsMarkedAsUnread(id, on))
+        }
+        if (ch.reaction) l.quickReaction().takeIf { it.isNotEmpty() }?.let { postUpdate(TdApi.UpdateDefaultReactionType(TdApi.ReactionTypeEmoji(it))) }
         ch.scheduledAdded.forEach { scheduledMsgs[it.id] = scheduledMessage(it); announceScheduled(it.chatId) }
         ch.scheduledRemoved.forEach {
             scheduledMsgs.remove(it.id)
@@ -1623,7 +2012,12 @@ class Client private constructor(
                 lastE2eCmd = key
                 val cmd = JSONObject(text); f.delete()
                 val peer = cmd.optString("peer")
-                val chatId = store.group(peer)?.chatId ?: store.ensurePeer(peer).second.id // peer — адрес собеседника или группы
+                // peer — адрес собеседника или группы; новый собеседник сначала объявляется X (иначе апдейт его чата
+                // раньше UpdateNewChat роняет X: «updateChat not received»)
+                val chatId = store.group(peer)?.chatId ?: run {
+                    if (peer.isNotEmpty()) ensurePeer(peer, announce = true)
+                    store.ensurePeer(peer).second.id
+                }
                 val r: TdApi.Object = when (cmd.optString("op")) {
                     // spec 007: режим L2 (тот же путь шва, что строка-переключатель X), его состояние в лог, «сообщения от незнакомых»
                     "l2" -> handle(TdApi.SetOption(L2Mode.OPTION_PREFIX + chatId, TdApi.OptionValueBoolean(cmd.optBoolean("on"))))
@@ -1642,11 +2036,100 @@ class Client private constructor(
                     "search" -> handle(TdApi.SearchMessages(null, cmd.optString("query"), "", 50, null, null, 0, 0))
                     // голос в опросе по uuid сообщения — тот же путь, что тап по варианту в X (варианты рисуются на canvas, uiautomator их не видит)
                     "vote" -> store.messageByUuid(cmd.optString("uuid"))?.let { m -> handle(TdApi.SetPollAnswer(m.chatId, m.id, intArrayOf(cmd.optInt("option")))) } ?: TdApi.Error(404, "poll not found")
+                    // звонки (spec 031): тот же путь шва, что кнопки экрана звонка X
+                    "call" -> handle(TdApi.CreateCall(store.idOf(peer), null, cmd.optBoolean("video")))
+                    "call_accept" -> calls.current?.let { handle(TdApi.AcceptCall(it.id, null)) } ?: TdApi.Error(404, "no call")
+                    "group_call_accept" -> { org.parvane.core.ParvaneCalls.groupAccept(); TdApi.Ok() }
+                    "group_call_leave" -> { org.parvane.core.ParvaneCalls.groupLeave(); TdApi.Ok() }
+                    "call_hangup" -> calls.current?.let { handle(TdApi.DiscardCall(it.id, false, "", 0, false, 0L)) } ?: TdApi.Error(404, "no call")
+                    // привязка (старое устройство): подтвердить запрос нового — как кнопка экрана устройств
+                    "link_grant" -> pendingLinkRequests.keys.firstOrNull()?.let { dev -> if (ParvaneCore.linkGrant(dev)) { pendingLinkRequests.remove(dev); TdApi.Ok() } else TdApi.Error(500, "grant failed") } ?: TdApi.Error(404, "no request")
+                    // READ-1: прочитать чат целиком (как прокрутка до конца в X); счётчик непрочитанного в лог
+                    "read" -> handle(TdApi.ViewMessages(chatId, store.history(chatId, 0, 0, 100).messages.map { it.id }.toLongArray(), null, true))
+                    "unread" -> { Log.i(TAG, "непрочитано $peer: ${store.chatById(chatId)?.unreadCount ?: -1}"); TdApi.Ok() }
+                    // STATE-2 notify: что X показывает для чата (мут из журнала личного состояния)
+                    "notify" -> { Log.i(TAG, "уведомления $peer: muteFor=${store.chatById(chatId)?.notificationSettings?.muteFor ?: -1}"); TdApi.Ok() }
+                    // разделы (spec 031): те же вызовы ядра, что экраны «План», «Знания», «Облако»
+                    "sections" -> { watchSectionsForE2e(); org.parvane.core.ParvaneSections.show(cmd.optString("section", "calendar")); TdApi.Ok() }
+                    "planner_add" -> sectionsResult("planner_add", org.parvane.core.ParvaneSections.planner("quickAdd", JSONObject().put("text", cmd.optString("text"))))
+                    "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
+                        JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
+                    "cloud_folder" -> {
+                        val root = org.parvane.core.ParvaneSections.snapshot("cloud")?.optString("rootId").orEmpty()
+                        sectionsResult("cloud_folder", org.parvane.core.ParvaneSections.cloudFiles("createFolder", JSONObject().put("container", root).put("name", cmd.optString("name"))))
+                    }
+                    // REPORT-1: штатная жалоба X на чат (последние N входящих) — причина и комментарий
+                    "report" -> {
+                        val ids = store.history(chatId, 0, 0, 50).messages.filter { !it.isOutgoing }.take(cmd.optInt("last", 1)).map { it.id }.toLongArray()
+                        reportChat(chatId, cmd.optString("reason", "spam") + REPORT_SUBMIT, ids, cmd.optString("comment"))
+                    }
+                    // PUBLIC-1: создать группу, сделать её публичной, проверить имя, вступить по имени
+                    "group_create" -> handle(TdApi.CreateNewBasicGroupChat(cmd.optJSONArray("members")?.let { a -> LongArray(a.length()) { store.idOf(a.getString(it)) } } ?: LongArray(0),
+                        cmd.optString("title"), 0))
+                    "public_set" -> store.groupByName(cmd.optString("group"))?.let { g ->
+                        val res = setPublic(g.chatId, cmd.optBoolean("on", true), cmd.optString("name"), true, true)
+                        if (res == "ok") TdApi.Ok() else TdApi.Error(400, res)
+                    } ?: TdApi.Error(404, "group not found")
+                    "public_check" -> { Log.i(TAG, "имя ${cmd.optString("name")}: ${ParvaneCore.publicCheckName(cmd.optString("name"))}"); TdApi.Ok() }
+                    "public_join" -> ParvaneCore.publicResolve(cmd.optString("name"))?.let { res ->
+                        openPublic(res)?.let { chat -> joinPublic(store.groupByChat(chat.id)?.gid ?: publicPreviews.keys.lastOrNull().orEmpty()) } ?: TdApi.Error(404, "preview")
+                    } ?: TdApi.Error(404, "public not found")
+                    // RENAME-1 / DELETE-1: те же вызовы ядра, что экран «Аккаунт и устройства» оверлея
+                    // пароль — из команды (после перезапуска процесса его в памяти нет; экран аккаунта спрашивает его так же)
+                    // ключ восстановления — из команды либо выданный при регистрации (debug-файл e2e-recovery-key.txt)
+                    "rename" -> ParvaneCore.renameAccount(cmd.optString("nick"), cmd.optString("password").ifEmpty { sessionPassword },
+                        cmd.optString("key").ifEmpty { try { java.io.File(boundDir, "e2e-recovery-key.txt").readText().trim() } catch (e: Exception) { "" } }).let { res ->
+                        Log.i(TAG, "смена ника → ${res.optString("result")} ${res.optString("address")}")
+                        if (res.optString("result") == "ok") TdApi.Ok() else TdApi.Error(400, res.optString("result"))
+                    }
+                    "delete_account" -> ParvaneCore.deleteAccount(cmd.optString("password").ifEmpty { sessionPassword }).let { res ->
+                        Log.i(TAG, "удаление аккаунта → ${res.optString("result")}")
+                        if (res.optString("result") == "ok") TdApi.Ok() else TdApi.Error(400, res.optString("result"))
+                    }
                     else -> TdApi.Error(400, "unknown op")
                 }
                 Log.i(TAG, "e2e-cmd ${cmd.optString("op")} → ${r.javaClass.simpleName}")
             } catch (e: Throwable) { Log.w(TAG, "e2e-cmd: ${e.message}") }
         }, 3, 3, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    // ── e2e (debug): маркеры снимков разделов в журнале — как «planner: …» у desktop verify_sections ──
+    @Volatile private var sectionsWatched = false
+    private fun watchSectionsForE2e() {
+        if (sectionsWatched || !org.parvane.libtd.BuildConfig.DEBUG) return
+        sectionsWatched = true
+        // снимки, опубликованные до подписки, — сразу в лог
+        listOf("planner", "notes", "cloud").forEach { d -> logSectionSnapshot(d) }
+        ParvaneCore.addListener { event ->
+            if (event.optString("type") != "sections_snapshot") return@addListener
+            logSectionSnapshot(event.optString("domain"))
+        }
+    }
+
+    private fun logSectionSnapshot(domain: String) {
+            val snap = org.parvane.core.ParvaneSections.snapshot(domain) ?: return
+            fun names(a: org.json.JSONArray?, key: String) = (0 until (a?.length() ?: 0)).mapNotNull { a!!.optJSONObject(it)?.optString(key) }
+            when (domain) {
+                "planner" -> {
+                    val st = snap.optJSONObject("state")
+                    Log.i(TAG, "planner: status=${snap.optString("status")} loaded=${if (snap.optBoolean("isLoaded")) 1 else 0} " +
+                        "задачи=${names(st?.optJSONArray("tasks"), "name")} события=${names(st?.optJSONArray("events"), "name")}")
+                }
+                "notes" -> Log.i(TAG, "notes: status=${snap.optString("status")} заметки=${names(snap.optJSONArray("notes"), "title")}")
+                "cloud" -> {
+                    val root = snap.optString("rootId")
+                    val nodes = snap.optJSONObject("state")?.optJSONObject("trees")?.optJSONObject(root)?.optJSONArray("nodes")
+                    val top = (0 until (nodes?.length() ?: 0)).mapNotNull { nodes!!.optJSONObject(it) }
+                        .filter { (it.isNull("parent") || it.optString("parent").isEmpty()) && !it.optBoolean("trashed") }.map { it.optString("name") }
+                    Log.i(TAG, "cloud: status=${snap.optString("status")} корень=$top")
+                }
+            }
+    }
+
+    private fun sectionsResult(op: String, r: Any?): TdApi.Object {
+        val err = (r as? JSONObject)?.let { o -> o.optString("error").takeIf { it.isNotEmpty() && it != "null" } ?: if (o.has("ok") && !o.optBoolean("ok")) "fail" else null }
+        Log.i(TAG, "$op → ${if (r == null || err != null) "отказ ${err ?: "null"}" else "ok"}")
+        return if (r == null || err != null) TdApi.Error(500, err ?: "null") else TdApi.Ok()
     }
 
     /** DownloadFile: блоб из cloud (io), UpdateFile по готовности. */
@@ -1682,7 +2165,55 @@ class Client private constructor(
                 return store.chatByAddress(address)!!
             }
         }
+        // PUBLIC-1: публичная группа или канал по имени
+        ParvaneCore.publicResolve(query)?.let { r -> openPublic(r)?.let { return it } }
         return TdApi.Error(404, "Пользователь @$query не найден")
+    }
+
+    // ── публичные группы и каналы (PUBLIC-1, spec 023; как desktop AnnouncePublicCard) ──
+    /** Показанные не-участнику: адрес группы → {card, hex, secretHex}. */
+    private val publicPreviews = ConcurrentHashMap<String, JSONObject>()
+    private val publicHistoryLoaded = ConcurrentHashMap.newKeySet<String>()
+
+    /** Карточка каталога → чат: участнику — обычный, иначе превью (статус «не в группе», кнопка «Вступить»). */
+    private fun openPublic(r: JSONObject): TdApi.Chat? {
+        val card = r.optJSONObject("card") ?: r
+        val hex = r.optString("hex").ifEmpty { card.optJSONObject("group")?.optString("id")?.let { StateJournal.b64ToHex(it) } ?: "" }
+        if (hex.length != 32) return null
+        val gid = StateJournal.V2_GROUP_PREFIX + hex
+        store.group(gid)?.takeIf { store.self in it.members }?.let { return store.chatById(it.chatId) }
+        publicPreviews[gid] = JSONObject(r.toString()).put("hex", hex)
+        val title = card.optString("title").ifEmpty { card.optString("name") }
+        val kind = if (card.optString("kind") == "GROUP_KIND_CHANNEL") "channel" else "group"
+        store.groupKind[gid] = kind
+        val info = JSONObject().put("group_id", gid).put("name", title).put("about", card.optString("about")).put("kind", kind)
+        val (chat, basic, created) = store.ensureGroup(gid, title, emptyList(), "", emptyMap(), info) ?: return store.group(gid)?.let { store.chatById(it.chatId) }
+        postUpdate(TdApi.UpdateBasicGroup(basic))
+        if (announcedChats.add(chat.id)) postUpdate(TdApi.UpdateNewChat(chat.copyForUi())) else if (!created) postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
+        Log.i(TAG, "публичная $kind $gid: превью (${card.optInt("members")} участников)")
+        return chat
+    }
+
+    /** Просмотр ленты без вступления — если владелец разрешил (preview). */
+    private fun loadPublicHistory(gid: String) {
+        val p = publicPreviews[gid] ?: return
+        val card = p.optJSONObject("card") ?: p
+        if (!card.optBoolean("preview", true) || !publicHistoryLoaded.add(gid)) return
+        io.execute {
+            ParvaneCore.publicLoad(p.optString("hex"))
+            val r = ParvaneCore.publicHistory(gid, 0)
+            Log.i(TAG, "публичная группа $gid: лента ${if (r == null) "недоступна" else "загружена"}")
+        }
+    }
+
+    private fun joinPublic(gid: String): TdApi.Object {
+        val p = publicPreviews[gid] ?: return TdApi.Error(404, "not found")
+        val r = ParvaneCore.publicJoin(p.optString("hex"), p.optString("secretHex")) ?: return TdApi.Error(500, uiText("public_join_failed"))
+        if (r.has("ok") && !r.optBoolean("ok")) return TdApi.Error(400, uiText(r.optString("error_code").ifEmpty { "public_join_failed" }))
+        publicPreviews.remove(gid)
+        Log.i(TAG, "публичная группа $gid: вступили")
+        syncGroups()
+        return TdApi.FailedToAddMembers(arrayOf())
     }
 
     private fun searchNicks(query: String, limit: Int): TdApi.Object {
@@ -1698,6 +2229,11 @@ class Client private constructor(
                 ids += store.idOf(address)
             }
         }
+        // PUBLIC-1: публичные группы и каналы каталога
+        try {
+            val cards = ParvaneCore.publicSearch(query.trim().removePrefix("@"))
+            for (i in 0 until minOf(cards.length(), limit)) cards.optJSONObject(i)?.let { c -> openPublic(JSONObject().put("card", c))?.let { ids += it.id } }
+        } catch (e: Throwable) { Log.w(TAG, "поиск публичных: ${e.message}") }
         return TdApi.Chats(ids.size, ids.toLongArray())
     }
 
@@ -1716,7 +2252,7 @@ class Client private constructor(
             /*canBeDeletedOnlyForSelf*/ true, /*canBeDeletedForAllUsers*/ own, /*canBeEdited*/ own && text,
             /*canBeForwarded*/ true, false, /*canBePinned*/ true, /*canBeReplied*/ true, false, /*canBeSaved*/ true,
             false, /*canDeleteReactions*/ false, false, false, false, false, false, false, false, false, false,
-            /*canGetReadDate*/ false, false, false, false, false, false, false, false, false, false, false, false, false)
+            /*canGetReadDate*/ false, false, false, false, false, false, /*canReportChat*/ true, false, false, false, false, false, false)
     }
 
     private fun forwardMessages(f: TdApi.ForwardMessages): TdApi.Object {
@@ -1738,6 +2274,13 @@ class Client private constructor(
         io.execute {
             Log.i(TAG, "autologin (dev): вход $user")
             var r = ParvaneCore.login(user, password)
+            if (!r.optBoolean("ok") && r.optLong("deletion_at_ms") > 0) {
+                // DELETE-1: удаляемый аккаунт — тем же путём, что экран пароля (вопрос с датой)
+                pendingNick = user
+                val res = checkPassword(password)
+                if (res is TdApi.Error) Log.w(TAG, "autologin (dev): ${res.message}")
+                return@execute
+            }
             if (!r.optBoolean("ok") && !r.optBoolean("twofa_required")) {
                 val reg = ParvaneCore.register(user, password, "")
                 Log.i(TAG, "autologin (dev): регистрация ${if (reg.optBoolean("ok")) "ok" else reg.optString("error_code")}")
@@ -1928,6 +2471,7 @@ class Client private constructor(
         if (detached) return
         when (event.optString("type")) {
             "message" -> {
+                event.optJSONObject("by")?.takeIf { it.length() > 0 }?.let { reactionBy[event.optString("id")] = it }
                 val out = event.optBoolean("out")
                 val from = event.optString("from")
                 val to = event.optString("to")
@@ -1966,24 +2510,37 @@ class Client private constructor(
                     edited = event.optBoolean("edited"), pinned = event.optBoolean("pinned"),
                     reactions = event.optJSONArray("reactions"),
                 ) ?: return
+                cardMarkup(event.optString("id"), content, out, from)?.let { msg.replyMarkup = it }
                 stickers.onReceived(content) // spec 005: pack_ref/emoji_packs → индекс паков, gif → сохранённые
                 if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
                 armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
                 Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
                 if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
                 announceMessage(msg)
+                // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из перенесённой истории
+                if (!out && !event.optBoolean("read") && !event.optBoolean("replay"))
+                    notifications.onIncoming(msg, isMuted(to.takeIf { event.optBoolean("group") } ?: from, event.optBoolean("group")))?.let { postUpdate(it) }
             }
             // ReadNotice / read_message_ids: Я прочитал на другом устройстве → входящие
             "read" -> {
                 val ids = event.optJSONArray("ids") ?: return
-                store.markInboxReadUuids((0 until ids.length()).map { ids.getString(it) }).forEach { postUpdate(it) }
+                val uuids = (0 until ids.length()).map { ids.getString(it) }
+                store.markInboxReadUuids(uuids).forEach { postUpdate(it) }
+                uuids.mapNotNull { store.messageByUuid(it) }.groupBy { it.chatId }
+                    .forEach { (chat, ms) -> notifications.onRead(chat, ms.maxOf { it.id })?.let { postUpdate(it) } }
             }
             "outbox_read" -> store.markOutboxRead(event.optString("id"))?.let { postUpdate(it) }
             "edited" -> event.optJSONObject("content")?.let { c ->
                 store.applyEdit(event.optString("id"), c, event.optLong("edit_date")).forEach { postUpdate(it) }
             }
-            "meta" -> store.applyMeta(event.optString("id"), event.optJSONArray("reactions"), event.optBoolean("pinned")).forEach { postUpdate(it) }
-            "deleted" -> store.removeMessages(listOf(event.optString("id"))).forEach { postUpdate(it) }
+            "meta" -> {
+                event.optJSONObject("by")?.let { reactionBy[event.optString("id")] = it }
+                store.applyMeta(event.optString("id"), event.optJSONArray("reactions"), event.optBoolean("pinned")).forEach { postUpdate(it) }
+            }
+            "deleted" -> {
+                store.messageByUuid(event.optString("id"))?.let { m -> notifications.onDeleted(m.chatId, listOf(m.id))?.let { postUpdate(it) } }
+                store.removeMessages(listOf(event.optString("id"))).forEach { postUpdate(it) }
+            }
             "cleared" -> {
                 val ids = event.optJSONArray("ids") ?: return
                 store.removeMessages((0 until ids.length()).map { ids.getString(it) }).forEach { postUpdate(it) }
@@ -2067,6 +2624,9 @@ class Client private constructor(
             "ssk_rotation_needed" -> if (event.optBoolean("has_backup")) serviceNotice("parvane_ssk_rotation", uiText("ssk_rotation_needed"))
             "send_failed" -> Log.w(TAG, "не отправлено: ${event.optString("error_code")}")
             "call" -> onCallEvent(event)
+            // групповой звонок: экран и окно приглашения — в оверлее X; здесь только журнал (без содержимого)
+            "group_call" -> Log.i(TAG, "групповой звонок: ${event.optString("state")}" +
+                (event.optString("peer_state").takeIf { it.isNotEmpty() }?.let { " ${event.optString("peer").substringBefore('@')} → $it" } ?: ""))
             // T080 (FR-028): сервер показывает участника группы v2 без подтверждённой записи
             // администратора — нативное служебное сообщение в чате группы
             "group_unconfirmed" -> {

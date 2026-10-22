@@ -89,6 +89,7 @@ add_library(parvane_jni SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_calls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_push.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_sections.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jni_planner_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/protocol_jni.cpp)   # ParvaneProtocol (движок v2 без сети, векторы)
 target_link_libraries(parvane_jni PRIVATE parvane_sections parvane_core log)
 target_compile_options(parvane_jni PRIVATE -fvisibility=hidden)

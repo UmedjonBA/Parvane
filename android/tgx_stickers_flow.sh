@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # spec 005 / история 1 в эмуляторе: стикеры, кастом-эмодзи, паки (PACK-1/EMOJI-1) в форке X.
-# Запускать ПОСЛЕ tgx_link_e2e.sh (стек в последнем /tmp/pv-tgx.*, X = второе
+# Запускать ПОСЛЕ tgx_protocol_link_flow.sh (стек в последнем /tmp/pv-tgx.*, X = второе
 # устройство alice, bob — desktop).
 #   1. bob-desktop шлёт стикер из локального пака TestPack (PARVANE_AUTOSTICKER)
 #      → X: «стикер … пак=TestPack», сообщение в чате;
@@ -21,7 +21,7 @@ xlog() { timeout "${2:-90}" bash -c "until adb logcat -d 2>/dev/null | grep -qE 
 OUT=/tmp/pv-tgx-stickers; mkdir -p "$OUT"
 SB=$(\ls -td /tmp/pv-tgx.* | head -1); STAMP=$(date +%s)
 A="$SB/alice"; B="$SB/bob"
-[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_link_e2e.sh"; finish "TGX STICKERS"; }
+[ "$(ad shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && ok "эмулятор жив" || { bad "эмулятора нет — сначала tgx_protocol_link_flow.sh"; finish "TGX STICKERS"; }
 ad logcat -c
 
 # тестовые паки для desktop: 3 PNG-стикера и 2 PNG-эмодзи (имена NN-<hex>.png → alt-эмодзи)
@@ -47,7 +47,7 @@ kill $(pgrep -f "workdir $SB/bob/t[d]") 2>/dev/null; sleep 2
 # и эмодзи-набор из ~/.local/share/ParvaneEmoji прошлых прогонов обгонял TestPack (исправлено в коде,
 # вступит после перелинковки десктопа)
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_STICKERS_DIR="$PACKS" PARVANE_EMOJI_DIR="$OUT/no-emoji" PARVANE_AUTOSTICKER="alice@local")
-wait_log "$B/td/log.txt" "E2E-устройство готово" 60 || bad "bob не поднялся"
+wait_log "$B/td/log.txt" "v2: готов" 90 || bad "bob не поднялся"
 wait_log "$B/td/log.txt" "пак «TestPack» загружен в cloud" 60 && ok "bob: пак загружен в cloud (PACK-1)" || bad "bob: пак не загружен"
 xlog "стикер [0-9a-f-]{36} image/png [0-9]+x[0-9]+ пак=TestPack" 90 && ok "X: стикер принят с pack_ref" || bad "X: стикер не принят"
 xlog "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)" 30 && ok "X: сообщение со стикером в чате" || bad "X: сообщение не показано"

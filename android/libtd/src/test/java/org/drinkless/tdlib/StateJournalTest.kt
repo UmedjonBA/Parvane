@@ -27,6 +27,46 @@ class StateJournalTest {
 
     private fun tmp() = Files.createTempDirectory("pv-state").toFile()
 
+    /** STATE-2: закреп главного списка (порядок), отметка «непрочитано» и быстрая реакция переходят на другое устройство. */
+    @Test
+    fun pinsUnreadAndReactionRoundTrip() {
+        val a = tmp()
+        val local = ChatLocalState(a)
+        local.setPinned(11L, true)
+        local.setPinned(-21L, true) // последний закреплённый — первым
+        local.setMarkedUnread(12L, true)
+        local.setQuickReaction("🔥")
+        assertTrue("закреплённый выше любого времени сообщения", local.pinnedOrder(-21L)!! > local.pinnedOrder(11L)!!)
+        val j = StateJournal(ParvaneProtocol.stateCodec, resolver())
+        val snap = j.build(local, ScheduledQueue(a) { 1000L })
+        val pins = snap.getJSONArray("pinned").getJSONObject(0)
+        assertEquals("PIN_LIST_MAIN", pins.getString("list"))
+        assertEquals(2, pins.getJSONArray("peers").length())
+        assertEquals("🔥", snap.getJSONObject("quick_reaction").getString("emoji"))
+
+        val b = tmp()
+        val other = ChatLocalState(b)
+        val ch = StateJournal(ParvaneProtocol.stateCodec, resolver()).project(snap, other, ScheduledQueue(b) { 1000L })
+        assertEquals(listOf(-21L, 11L), other.pinnedChatIds())
+        assertTrue(other.isMarkedUnread(12L))
+        assertEquals("🔥", other.quickReaction())
+        assertEquals(setOf(-21L, 11L), ch.pinned)
+        assertEquals(setOf(12L), ch.unread)
+        assertTrue(ch.reaction)
+        // переживает перезапуск (pins.json)
+        val reopened = ChatLocalState(b)
+        assertEquals(listOf(-21L, 11L), reopened.pinnedChatIds())
+        assertTrue(reopened.isMarkedUnread(12L))
+        // снятие на первом устройстве доходит до второго
+        local.setPinned(11L, false)
+        local.setMarkedUnread(12L, false)
+        val ch2 = StateJournal(ParvaneProtocol.stateCodec, resolver()).project(j.build(local, ScheduledQueue(a) { 1000L }), other, ScheduledQueue(b) { 1000L })
+        assertEquals(listOf(-21L), other.pinnedChatIds())
+        assertFalse(other.isMarkedUnread(12L))
+        assertEquals(setOf(12L), ch2.unread)
+        assertFalse(ch2.reaction)
+    }
+
     /** T132 (FR-039, правило STATE-2): настройки уведомлений — вид журнала, чужие поля записи не стираются. */
     @Test
     fun notifySettingsRoundTripThroughSnapshot() {

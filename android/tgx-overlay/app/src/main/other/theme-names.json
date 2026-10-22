@@ -1,0 +1,42 @@
+{
+ "ThemeClassic": [
+  "Gruvbox",
+  "Gruvbox"
+ ],
+ "ThemeNightBlue": [
+  "Gruvbox Dark",
+  "Gruvbox тёмная"
+ ],
+ "ThemeCyan": [
+  "Nord",
+  "Nord"
+ ],
+ "ThemeWhiteBlack": [
+  "Nord Dark",
+  "Nord тёмная"
+ ],
+ "ThemeGreen": [
+  "Catppuccin",
+  "Catppuccin"
+ ],
+ "ThemeBlackWhite": [
+  "Catppuccin Dark",
+  "Catppuccin тёмная"
+ ],
+ "ThemeOrange": [
+  "Solarized",
+  "Solarized"
+ ],
+ "ThemeRed": [
+  "Solarized Dark",
+  "Solarized тёмная"
+ ],
+ "ThemeBlue": [
+  "Telegram",
+  "Telegram"
+ ],
+ "ThemeNight": [
+  "Telegram Dark",
+  "Telegram тёмная"
+ ]
+}

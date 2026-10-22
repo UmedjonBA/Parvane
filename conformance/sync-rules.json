@@ -33,7 +33,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/sync.ts — курсора синка v1 нет с T110 (7 окт 2026): история из кэша (restoreFromCache) и журнала исходящих, новое отдаёт инбокс v2 своим курсором (движок)",
         "desktop": "desktop — курсора синка v1 нет со spec 029 (18 окт 2026, v1 удалён из desktop): лента поднимается из локального журнала истории (parvane_client.cpp ReplayHistory, HistoryAppend после вставки), новое отдаёт инбокс v2 своим курсором (движок)",
-        "android": "jni/parvane_jni.cpp (enum class Deliver, g_diskCursorId → cursors.json только после Applied, pending.json) — сценарий эмулятора android/tgx_conformance_flow.sh шаг 1 («устройство отсутствовало»: X выключен, 3 сообщения, включён → все три + «курсор: … применён», ничего не придержано)"
+        "android": "spec 031: курсора синка v1 нет — новое отдаёт инбокс v2 (курсор ведёт движок в общем ядре v2_session), показанное пишется в журнал истории android/jni/jni_main.cpp (journalAppend до показа, journalFold/journalReplay; каталог v1 — cursors.json, pending.json, dec-cache.jsonl — только стирается при первом запуске) — сценарий эмулятора android/tgx_conformance_flow.sh шаг 1 («устройство отсутствовало»: X выключен, bob шлёт 3 сообщения, после запуска все три в чате, сверка по uuid)"
       }
     },
     {
@@ -43,7 +43,7 @@
       "clients": {
         "web": "web — не применимо с T110 (курсора нет): нерасшифрованное показывается заглушкой (undecryptableUuids) до удачной расшифровки",
         "desktop": "desktop — не применимо со spec 029 (курсора и очереди починки нет): строки приходят расшифрованными движком v2, запись LegacyV1 не разбирается (parvane_client.cpp HandleV2SessionEvent)",
-        "android": "jni/parvane_jni.cpp (kRepairAttempts = 3, pending.json, маркеры «курсор придержан: … (n/3)» и «курсор отпущен после 3 попыток (SYNC-2)») — сценарий android/tgx_conformance_flow.sh шаг 1 проверяет, что на чистом проходе ничего не придержано"
+        "android": "spec 031: курсора и очереди починки нет (v1 удалён) — строки приходят расшифрованными движком v2, запись LegacyV1 пропускается (android/jni/jni_session.cpp handleSessionEvent); сценарий android/tgx_conformance_flow.sh шаг 1"
       }
     },
     {
@@ -53,7 +53,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/sync.ts (resolveDisplayNames на каждом проходе синка)",
         "desktop": "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (g_resolvedAt + kProfileTtlMs)",
-        "android": "libtd/src/main/java/org/drinkless/tdlib/Client.kt (resolvedAt, profileTtlMs = 10 мин, тик 60 с; тестовый override /data/local/tmp/parvane-profile-ttl в мс) — сценарий android/tgx_conformance_flow.sh шаг 3 (bio сменён на desktop → «профиль bob@local: …» второй раз без перезапуска, TTL 20 с)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/Client.kt (resolvedAt, profileTtlMs = 10 мин, тик 60 с; тестовый override /data/local/tmp/parvane-profile-ttl в мс; профили — android/jni/jni_account.cpp nativeResolve → v2_account::resolveProfiles) — сценарий android/tgx_conformance_flow.sh шаг 3 (bio сменён на desktop → профиль перечитан по TTL 20 с без перезапуска)"
       }
     },
     {
@@ -82,7 +82,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/localState.ts (loadReadUuids/saveReadUuids) + sync.ts (markReportedRead); квитанция — E2E-содержимое v2 (messages.ts tryRead), повтора msg.chat.read нет с T110",
         "desktop": "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (g_reportedRead, tdata/parvane-read.txt, MirrorRead: квитанция — E2E-содержимое v2 RECEIPT_KIND_READ через движок); повтора msg.chat.read нет со spec 029",
-        "android": "jni/parvane_jni.cpp (read.json + журнал ДО msg.chat.read — «прочитано локально»; g_unconfirmedRead повторяется в pumpLoop до read=true — «read подтверждён») — сценарий android/tgx_conformance_flow.sh шаг 2 (после рестарта X бейдж не возвращается)"
+        "android": "spec 031: android/jni/jni_messages.cpp nativeMarkRead — строка read в журнал истории ДО квитанции, квитанция автору — E2E-содержимое v2 (receipt RECEIPT_KIND_READ) через движок; свёртка журнала (android/jni/jni_main.cpp journalFold) держит прочитанное после рестарта; повтора msg.chat.read нет — сценарий android/tgx_conformance_flow.sh шаг 2 (bob видит ✓✓, после перезапуска X счётчик не возвращается)"
       }
     },
     {
@@ -105,7 +105,7 @@
           "desktop/parvane-core/src/map_tiles.cpp",
           "desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_map.cpp"
         ],
-        "android": "libtd/src/main/java/org/drinkless/tdlib/Client.kt (mapThumbnail → ParvaneCore.mapTile → jni nativeMapTile → preview.map.tile) + MapGeometry.kt (порт computeGeometry desktop) — тест libtd FoldersMapTest.mapGeometryMatchesDesktop (JVM) и сценарий эмулятора android/tgx_folders_preview_flow.sh шаг 3 (маркер «тайл 16/x/y через preview»)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/Client.kt (mapThumbnail → ParvaneCore.mapTile) → android/jni/jni_messages.cpp nativeMapTile → v2_account::mapTile ядра (метод preview.map_tile соединения управления, как desktop) + MapGeometry.kt (порт computeGeometry desktop) — тест libtd FoldersMapTest.mapGeometryMatchesDesktop (JVM) и сценарий эмулятора android/tgx_folders_preview_flow.sh шаг 3 (маркер «тайл 15/x/y через preview»)"
       }
     },
     {
@@ -160,7 +160,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/messages.ts",
         "desktop": "parvane_client.cpp (FindUploadedPackRef/RememberUploadedPackRef — кэш по набору получателей, 16 сен 2026); тест desktop/verify_conformance_packs.sh",
-        "android": "jni/parvane_jni.cpp (nativePackRefFor: packrefs.json, ссылка помнится с набором получателей, повтор только для подмножества, ≤8 вариантов на пак) + libtd/src/main/java/org/drinkless/tdlib/Stickers.kt (packRefForSend, emojiPacksFor) — тесты libtd StickersTest.sendResolvesInputFileIdAndAttachesPackRefByRecipients и PackIndexTest (JVM), сценарий android/tgx_stickers_flow.sh"
+        "android": "spec 031: android/jni/jni_messages.cpp nativePackRefFor — архив пака блобом по секрету (CAP-1), грантов получателям нет, поэтому одна ссылка годится любому набору получателей; кэш packrefs.json по отпечатку содержимого (≤ 32) + android/libtd/src/main/java/org/drinkless/tdlib/Stickers.kt (packRefForSend, emojiPacksFor) — тесты libtd StickersTest.sendResolvesInputFileIdAndAttachesPackRefByRecipients и PackIndexTest (JVM), сценарий android/tgx_stickers_flow.sh"
       }
     },
     {
@@ -186,7 +186,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/stickerPacks.ts",
         "desktop": "parvane_client.cpp (сырое имя пака в .pvname, ReadRawPackName в LoadLocalCustomEmoji, 16 сен 2026); тест desktop/verify_conformance_packs.sh",
-        "android": "libtd/src/main/java/org/drinkless/tdlib/EmojiDocId.kt (emojiDocId: FNV-1a-64 от pvemoji:<rawName>|<file>, OFFSET_BASIS/PRIME из этого файла) + PackIndex.kt (emojiByDocId по сырому имени) — тесты libtd EmojiDocIdTest (constantsMatchConformance, docIdUsesRawNameAndFile) и StickersTest.emojiPacksLimitedToFourAndResolvedByDocId (JVM), сценарий android/tgx_stickers_flow.sh шаг 3 (docId из desktop разрешается в X)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/EmojiDocId.kt (emojiDocId: FNV-1a-64 от pvemoji:<rawName>|<file>, OFFSET_BASIS/PRIME из этого файла) + PackIndex.kt (emojiByDocId по сырому имени) — тесты libtd EmojiDocIdTest (constantsMatchConformance, docIdUsesRawNameAndFile) и StickersTest.emojiPacksLimitedToFourAndResolvedByDocId (JVM), сценарий android/tgx_stickers_flow.sh шаг 3 (docId из desktop разрешается в X)"
       },
       "offsetBasis": "1469598103934665603",
       "prime": "1099511628211"
@@ -249,7 +249,7 @@
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (ApplyGroupInfo по ревизии g_groupVersions; сведения — событием groupUpdated сессии v2 из журнала группы, исключение — groupLeft → DropGroupLocally); нотиса v1 нет со spec 029 (messenger_client.cpp удалён)",
           "тест desktop/verify_conformance_group.sh"
         ],
-        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (ensureGroup по version) + Client.kt (onCoreEvent group) — тесты libtd ParvaneStoreGroupTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (нотисы perms/members → UpdateChatPermissions/UpdateBasicGroupFullInfo)"
+        "android": "spec 031: нотиса v1 нет — сведения из журнала группы v2: событие сессии groupUpdated / groupLeft → событие шва group (change v2 | removed) в android/jni/jni_session.cpp; android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (ensureGroup по version) + Client.kt (onCoreEvent group → syncGroups) — тесты libtd ParvaneStoreGroupTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (права и состав → UpdateChatPermissions/UpdateBasicGroupFullInfo)"
       }
     },
     {
@@ -539,7 +539,7 @@
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы; composer — defaultRestrictions)",
           "тест desktop/verify_conformance_perms.sh"
         ],
-        "android": "libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (файл участника без права скрыт, с правом показан)"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (isContentAllowedForMember) + Client.kt (приём) — тесты libtd ParvaneStorePermsTest (JVM) и сценарий эмулятора android/tgx_group_manage_flow.sh (медиа участника без права скрыто, с правом показано)"
       }
     },
     {
@@ -557,7 +557,7 @@
       "clients": {
         "web": "web — с T110 Olm/Megolm-пути нет: автора и ключи проверяет движок v2 (сертификат устройства, подпись записи), строка приходит расшифрованной; шифртекст v1 (LegacyV1) пропускается (sync.ts)",
         "desktop": "desktop — со spec 029 (18 окт 2026) Olm/Megolm-пути нет (e2e.cpp, messenger_client.cpp удалены): автора и ключи проверяет движок v2, строка приходит расшифрованной; запись LegacyV1 и раздача SKDM из прежней истории не показываются (parvane_client.cpp)",
-        "android": "android/jni/parvane_jni.cpp — до T110 android"
+        "android": "spec 031: Olm/Megolm-пути нет (parvane-e2e и монолит parvane_jni.cpp удалены) — автора и ключи проверяет движок v2: android/jni/jni_session.cpp handleV2Event (interpretDirect; править и удалять у всех — только своё), кадры LegacyV1 пропускаются"
       }
     },
     {
@@ -637,7 +637,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/linking.ts (ECDH, commitment, SAS v2), provider.ts (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` + грант движка вторым блобом; с T110 материала v1 и transfer нет), v2/linkHistory.ts, keyBackup.ts (ручная копия — устройство v2 + история)",
         "desktop": "desktop/parvane-core/src/v2_link.cpp, linking.cpp (commitment, SAS v2), tdesktop parvane_client.cpp (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` (WithV2History, ImportV2History) + грант движка вторым блобом; со spec 029 материала v1 и transfer нет)",
-        "android": "android/jni/parvane_jni.cpp (importV2HistoryLocked)"
+        "android": "spec 031: android/jni/jni_account.cpp — обе роли: новое устройство (startLinkOffer, pollLinkGrantOnce: SAS sasCodeV2, грант только под свой challenge, грант движка вторым блобом → Session::joinWithGrant, история importV2History; строки групп ждут группу — deferLinkedGroupRow/flushLinkedGroupRows) и старое (pollLinkOffersOnce: commitmentMatches, grantLink: экспорт {linkVersion: 2, v2History} + материал linkGrantMaterial); материала v1 нет — сценарий android/tgx_protocol_link_flow.sh (X в обеих ролях)"
       }
     },
     {
@@ -651,7 +651,7 @@
       "clients": {
         "web": "web — с T110 ключей устройств v1 нет: смена ключа собеседника — смена корня журнала устройств (RECOVER-1, provider.ts onPeerRootChanged → sync.ts announceKeyChange)",
         "desktop": "desktop — со spec 029 ключей устройств v1 нет (e2e.cpp удалён): смена ключа собеседника — смена корня журнала устройств (RECOVER-1, v2_session peerRootChanged → parvane_client.cpp AnnounceKeyChange)",
-        "android": "то же ядро — до T110 android"
+        "android": "spec 031: ключей устройств v1 нет — смена ключа собеседника = смена корня (RECOVER-1): событие сессии peerRootChanged → peer_root_changed (android/jni/jni_session.cpp) → служебное сообщение в чате (android/libtd/src/main/java/org/drinkless/tdlib/Client.kt)"
       }
     },
     {
@@ -667,7 +667,7 @@
       "clients": {
         "web": "web — с T110 отправок v1 нет: каждая отправка — конверт движка v2 (OP-SIG), ack v1 нет (messages.ts requireV2().trySend, sync.ts без sendAck)",
         "desktop": "desktop — со spec 029 отправок v1 нет (messenger_client.cpp удалён): каждая отправка — конверт движка v2 (OP-SIG; parvane_client.cpp s->sendContent), собеседник без журнала v2 — отказ, ack v1 нет",
-        "android": "android/jni/parvane_jni.cpp — до T110 android"
+        "android": "spec 031: отправок v1 нет — каждая отправка и мутация конвертом движка v2 (android/jni/jni_messages.cpp sendV2 / mutate → Session::sendContent); устройство без привязки — отказ ERROR_CODE_NOT_LINKED, понижения до v1 нет"
       }
     },
     {
@@ -679,7 +679,7 @@
       "clients": {
         "web": "web — с T110 v1-топиков нет: присутствие собеседника слушает движок по адресу (connectionController.ensurePresence → v2.watchPresence), своё — эфемерным каналом v2 (publishPresence)",
         "desktop": "desktop — со spec 029 соединения v1 нет: «печатает» и присутствие — эфемерным каналом v2 (v2_session sendTyping); остаточные публикации v1-топиков в parvane_client.cpp уходят в BridgeTransport::publish, который ничего не шлёт (v2_bridge.cpp)",
-        "android": "android/jni/parvane_jni.cpp — до T110 android"
+        "android": "spec 031: v1-топиков typing/presence нет — своё присутствие и «печатает» эфемерными каналами v2-сессии (android/jni/jni_session.cpp presenceLoop → sendPresence; android/jni/jni_messages.cpp nativeSendTyping → sendTyping), чужое — подпиской на конкретных собеседников (nativeWatchPeers → watchPeers); в L2-чате не уходит"
       }
     },
     {
@@ -712,7 +712,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/blobcrypt.ts (encryptBlobWithKey, decryptBlobChunks, parseBlobHeader), media.ts (окна плеера — только чанки с проверенным тегом); тест blobcrypt.test.ts (вектор и legacy-вектор)",
         "desktop": "desktop/parvane-core/src/blobcrypt.cpp (PVB2: encryptWithKey, decryptChunks, parseHeader; legacy v1 — только decrypt целиком); tdesktop parvane_client.cpp, parvane_sections_data.cpp (blobcrypt::encrypt / blobcrypt::decrypt целым файлом — окон без проверки тега нет); тест tests/blobcrypt_tests.cpp (ctest blobcrypt: заголовок PVB2, окно из проверенных чанков, порча чанка — отказ, legacy-вектор)",
-        "android": "ядро то же: android/jni/parvane_jni.cpp зовёт parvane::blobcrypt::decrypt целым файлом; тест — tests/blobcrypt_tests.cpp ядра (jni до T110 android не собирается)"
+        "android": "ядро то же: android/jni/jni_messages.cpp / jni_main.cpp зовут parvane::blobcrypt (encrypt при отправке, decrypt целым файлом при скачивании); тест — tests/blobcrypt_tests.cpp ядра"
       }
     },
     {
@@ -762,7 +762,7 @@
           "desktop/parvane-core/tests/v2_session_tests.cpp — живой: миграция локальных папок, своя правка, чтение журнала после рестарта (tests/run_v2_session_live.sh)",
           "desktop/verify_protocol_v2_groups.sh — папка из журнала после потери локального файла; журнал в клиенте — parvane_client.cpp (папки Data::ChatFilters, отложенные g_scheduled)"
         ],
-        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt (state/merge через JNI → C ABI движка) + StateJournalTest.kt (папки/блок-лист/черновики/архив/отложенные ↔ StateSnapshot); журнал в шве — StateJournal.kt + Client.kt"
+        "android": "android/libtd/src/test/java/org/drinkless/tdlib/ProtocolV2SeamTest.kt (state/merge через JNI → C ABI движка) + StateJournalTest.kt (папки/блок-лист/черновики/архив/отложенные/закреп/«непрочитано»/быстрая реакция ↔ StateSnapshot); журнал в шве — StateJournal.kt + Client.kt, JNI — android/jni/jni_account.cpp nativeStateAttach/nativeStateSync"
       }
     },
     {
@@ -913,7 +913,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/iceCandidate.ts (+ iceCandidate.test.ts)",
         "desktop": "desktop/parvane-core/include/parvane/call.h (+ tests/call_session_tests.cpp), tdesktop parvane_webrtc_backend.cpp",
-        "android": "звонков нет (спека 006)"
+        "android": "spec 031: android/jni/jni_calls.cpp — CallManager/GroupCallManager ядра (кандидат — parseIceCandidate/iceCandidateJson из call.h, тот же кодек, что desktop), сигналы только запечатанными конвертами v2 (Session::sendCallSignal), медиа — org.webrtc из состава X (android/libtd/src/main/java/org/drinkless/tdlib/Calls.kt, android/libtd/src/main/java/org/parvane/core/ParvaneCalls.kt) — сценарий android/tgx_calls_flow.sh (звонок desktop ↔ X в обе стороны, ICE/DTLS соединились)"
       }
     },
     {
@@ -961,9 +961,9 @@
       "clients": {
         "web": "web — с T110 легаси-копий не шлёт (сервер без v1); чужая копия из записи LegacyV1 пропускается (sync.ts unsealStored)",
         "desktop": "desktop — со spec 029 легаси-копий не шлёт (v2_legacy.cpp, e2e.cpp удалены, сервер без v1); запись LegacyV1 пропускается целиком (parvane_client.cpp HandleV2SessionEvent)",
-        "android": "android/jni/parvane_jni.cpp (то же ядро: sendLegacyCopies, publishLegacySetAsync, isForeignLegacyCopy)"
+        "android": "закрыто удалением (spec 031, 22 окт 2026): v1-устройств у android нет — легаси-копий, подписанного списка и пропуска чужой копии нет; запись LegacyV1 пропускается (android/jni/jni_session.cpp)"
       },
-      "status": "web закрыто удалением (T110, 7 окт 2026); desktop закрыто удалением (spec 029, 18 окт 2026); android — до своего T110"
+      "status": "web закрыто удалением (T110, 7 окт 2026); desktop закрыто удалением (spec 029, 18 окт 2026); android закрыто удалением (spec 031, 22 окт 2026)"
     },
     {
       "id": "TYPING-1",
@@ -979,7 +979,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (trySendTyping), messages.ts (sendMessageAction — только канал v2, v1-кадра нет с T110)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (sendTyping); tdesktop parvane_client.cpp (MirrorTyping)",
-        "android": "android/jni/parvane_jni.cpp (nativeSendTyping → то же ядро)"
+        "android": "spec 031: android/jni/jni_messages.cpp nativeSendTyping → Session::sendTyping (эфемерный канал v2, кадра v1 нет; в L2-чате не уходит), событие сессии typing → шов (android/jni/jni_session.cpp)"
       }
     },
     {
@@ -1002,7 +1002,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeDevice, rotateSsk), provider.ts (fetchAuthorizations, revokeOwnDevice: identity.device.revoke мостом v2, затем запись журнала), v2/stateJournal.ts (attach rekey)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp, v2_session_account.cpp (revokeDevice, signOutDevice, rotateSsk, ownDevices); tdesktop parvane_client.cpp (ListDevices, RevokeDevice: «Просто выйти» / «Выйти и сменить ключи»); identity.device.revoke — только мостом v2",
-        "android": "android/jni/parvane_jni.cpp (nativeListDevices, nativeRevokeDevice → то же ядро)"
+        "android": "spec 031: android/jni/jni_account.cpp nativeListDevices (каталог + устройства журнала v2, ушедшие держатели SSK — leftSskHolders), nativeRevokeDevice (обычный выход — signOutDevice; «выйти и сменить ключи» — пароль session.reauth и revokeDevice с ротациями), nativeReportDeviceStolen, nativeRotateSsk; держатель корня меняет SSK сам по событию sskRotationNeeded (android/jni/jni_session.cpp) — сценарий android/tgx_conformance_flow.sh шаг 5 (alice-desktop отзывает X → экран входа)"
       }
     },
     {
@@ -1035,7 +1035,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (acceptPeerRoot, runDirect, dropIdentity, recoverWithKey, resetIdentity), SettingsActiveSessions.tsx",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (acceptPeerRootLocked, runDirectLocked, dropIdentityLocked, recoverWithKey, resetIdentity); tdesktop parvane_client.cpp (peerRootChanged)",
-        "android": "android/jni/parvane_jni.cpp (peer_root_changed; то же ядро)"
+        "android": "spec 031: событие сессии peerRootChanged → peer_root_changed (android/jni/jni_session.cpp) → служебное сообщение (android/libtd/src/main/java/org/drinkless/tdlib/Client.kt); вход по ключу и сброс личности — android/jni/jni_account.cpp nativeRecoverWithKey (joinWithRecoveryKey), nativeResetIdentity, копия корня — nativeStoreEscrowCopy (то же ядро)"
       }
     },
     {
@@ -1052,7 +1052,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/media.ts (uploadBlob: capability либо cloud.blob.upload), messages.ts (mediaUploadOptions — всегда capability с T110), v2/controller.ts (uploadBlob, downloadBlobCap)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (uploadBlob, downloadBlobCap), v2_link.cpp (requestStream); tdesktop parvane_client.cpp (BlobRecipientsFor — всегда capability со spec 029, UploadBlobWith, DownloadChatBlob)",
-        "android": "android/jni/parvane_jni.cpp (rememberBlobCaps, downloadChatBlob, отправка медиа)"
+        "android": "spec 031: android/jni/jni_messages.cpp uploadChatBlob (Session::uploadBlob с секретом, capability в содержимом) — все вложения, паки и картинки превью, грантов получателям нет; android/jni/jni_main.cpp rememberBlobCaps (секрет запоминается с каждым показанным содержимым) и downloadChatBlob (Session::downloadBlobCap анонимным каналом)"
       }
     },
     {
@@ -1083,11 +1083,11 @@
       ],
       "privacyGetMethod": "identity.privacy.get",
       "privacySetMethod": "identity.privacy.set",
-      "status": "open: web и desktop готовы (отметка «непрочитано» и быстрая реакция — с 22 окт 2026); android ведёт в журнале блок-лист и архив, уведомления, закреп, отметку «непрочитано» и быструю реакцию — нет",
+      "status": "web, desktop и android готовы (отметка «непрочитано» и быстрая реакция — web/desktop с 22 окт 2026, android — spec 031); android проверен JVM-тестом StateJournalTest, сценария синхронизации двух устройств на эмуляторе нет",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/stateJournal.ts (notify), provider.ts (refreshV2Privacy; v1-блоба msg.chat.setnotify нет с T110 — group_add в приватности v2), v2/controller.ts (getPrivacy)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (fetchPrivacyLocked); tdesktop parvane_client.cpp (kV2StateKinds, ProjectNotify, ProjectBlocked, ProjectDialogs; v1-блоба настроек нет со spec 029 — PublishNotifyBlob пуст, правка → ScheduleStateFlush(\"notify\")); desktop/verify_protocol_v2_state.sh",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/StateJournal.kt (блок-лист, архив); JNI — события privacy / privacy_saved"
+        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/StateJournal.kt (KINDS: folders, blocked, drafts, archived, scheduled, notify, pinned, unread, reaction) + Client.kt (ToggleChatIsPinned, ToggleChatIsMarkedAsUnread, SetDefaultReactionType); приватность — события сессии privacy / privacy_saved (android/jni/jni_session.cpp) → PrivacyPrefs.kt (своя неподтверждённая правка сильнее) — тесты libtd StateJournalTest.pinsUnreadAndReactionRoundTrip, notifySettingsRoundTripThroughSnapshot (JVM)"
       }
     },
     {
@@ -1097,11 +1097,11 @@
       "keySetMethod": "identity.delivery_key.set",
       "tokenBatch": 20,
       "tokenCheckIntervalMs": 3600000,
-      "status": "open: web и desktop готовы; android — JNI nativeRevokeContactAccess есть, Kotlin при блокировке его не зовёт",
+      "status": "web, desktop и android готовы (android — spec 031: блокировка в шве зовёт nativeRevokeContactAccess)",
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (revokeContactAccess, refillTokens), provider.ts (blockUser)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (revokeContactAccess, refillTokensLocked); tdesktop parvane_client.cpp (NoteBlock); desktop/verify_protocol_v2_state.sh",
-        "android": "android/jni/parvane_jni.cpp (nativeRevokeContactAccess; партия жетонов — общее ядро)"
+        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt (SetMessageSenderBlockList → ParvaneCore.revokeContactAccess) → android/jni/jni_account.cpp nativeRevokeContactAccess → Session::revokeContactAccess; партия жетонов по расписанию — общее ядро (v2_session)"
       }
     },
     {
@@ -1119,7 +1119,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupInfo, listJoinRequests, decideJoinRequest), groups.ts (register: isVerified)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (changeGroup: set_info_patch, listJoinRequests, decideJoinRequest — запрос движка groupRequestDecide с viaLinkHex); tdesktop parvane_client.cpp (ApplyGroupInfo, V2SetInfo); desktop/verify_conformance_group.sh, verify_protocol_v2_invites.sh",
-        "android": "android/jni/parvane_jni.cpp (v2SetInfo, onGroupNotice, nativeGroupRequests, nativeGroupRequestDecide)"
+        "android": "spec 031: v1-сведений нет — android/jni/jni_groups.cpp nativeGroupSetInfo (Session::setGroupInfo — set_info_patch под мьютексом движка, описание ≤ 255 символов), переименование — запись set_info_patch, nativeGroupRequests / nativeGroupRequestDecide (decideJoinRequest со ссылкой заявки) — сценарий android/tgx_group_manage_flow.sh"
       }
     },
     {
@@ -1133,9 +1133,9 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/store.ts (canonicalAddress, getIdForAddress, registerGroup — переведённая группа открывается прежним чатом); перевод web не запускает с T110 (v1-шарда нет)",
         "desktop": "tdesktop parvane_client.cpp (IdForAddress, CanonicalGroup, NoteV2GroupOrigin — переведённая группа открывается прежним чатом); со spec 029 перевод не запускается: сведений групп v1 нет (ApplyGroupInfo — только из журнала v2), сценарий verify_protocol_v2_group_migrate.sh удалён. Остаток: MigrateGroupIfOwner (клиент) и Session::migrateGroup (ядро) — мёртвый код, убрать",
-        "android": "нет — T184 (Android после web и desktop): группа v2 с migrated_from приходит отдельным чатом"
+        "android": "закрыто удалением (spec 031, 22 окт 2026): групп v1 у android нет — каталог протокола v1 стирается при первом запуске (android/jni/jni_main.cpp nativeInit), группы — только из журнала v2-сессии; переводить нечего"
       },
-      "status": "web: перевод закрыт с T110 (переводить нечего); desktop: перевод не запускается со spec 029 (v1 удалён; мёртвый остаток — MigrateGroupIfOwner и Session::migrateGroup); android — T184"
+      "status": "web: перевод закрыт с T110 (переводить нечего); desktop: перевод не запускается со spec 029 (v1 удалён; мёртвый остаток — MigrateGroupIfOwner и Session::migrateGroup); android: закрыто удалением (spec 031 — групп v1 нет)"
     },
     {
       "id": "OP-SIG",
@@ -1156,7 +1156,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/conformance.test.ts (PROTO-1)",
         "desktop": "desktop/parvane-core: разбор только через parvane_protocol.h",
-        "android": "android/jni: разбор только через C ABI движка"
+        "android": "android/jni: разбор только через C ABI движка (общее ядро v2_session/v2_content; protocol_jni.cpp — обвязка для JVM-тестов)"
       }
     },
     {
@@ -1205,38 +1205,38 @@
         "cloud.blob.download"
       ],
       "desktopMethods": [
-       "server.describe",
-       "identity.session.issue",
-       "identity.account.register",
-       "identity.account.confirm_email",
-       "identity.account.register_status",
-       "identity.account.get_2fa",
-       "identity.account.set_2fa",
-       "identity.account.change_password",
-       "identity.session.reauth",
-       "identity.profile.resolve",
-       "identity.directory.search",
-       "identity.profile.set_name",
-       "identity.profile.set_avatar",
-       "identity.device.list",
-       "identity.device.revoke",
-       "identity.link.offer",
-       "identity.link.poll",
-       "identity.link.challenge",
-       "identity.link.grant",
-       "preview.link",
-       "preview.map_tile",
-       "call.ice_config",
-       "cloud.blob.delete"
+        "server.describe",
+        "identity.session.issue",
+        "identity.account.register",
+        "identity.account.confirm_email",
+        "identity.account.register_status",
+        "identity.account.get_2fa",
+        "identity.account.set_2fa",
+        "identity.account.change_password",
+        "identity.session.reauth",
+        "identity.profile.resolve",
+        "identity.directory.search",
+        "identity.profile.set_name",
+        "identity.profile.set_avatar",
+        "identity.device.list",
+        "identity.device.revoke",
+        "identity.link.offer",
+        "identity.link.poll",
+        "identity.link.challenge",
+        "identity.link.grant",
+        "preview.link",
+        "preview.map_tile",
+        "call.ice_config",
+        "cloud.blob.delete"
       ],
       "legacyEvent": "legacyV1",
       "noUpgradeDialogOnV2": true,
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/gateway.ts (GatewayConnection — ручка сессии над мостом, WebSocket v1 нет), v2/bridge.ts, v2/control.ts; все сценарии scripts/e2e_web_*.mjs идут без v1",
         "desktop": "desktop — со spec 029 соединения v1 нет вовсе, с T038 (20 окт 2026) нет и моста: запросы аккаунта — типизированный API v2_account.cpp (методы — desktopMethods) над preauth()/Control (v2_control.cpp), свои блобы — Control::uploadBlob/downloadBlob; tdesktop parvane_client.cpp (MakeControl, g_control, без ITransport/topics; legacyV1 пропускается; «печатает»/присутствие — только эфемерными каналами v2-сессии). Файлы v2_bridge.*, cloud_client.* удалены. Все desktop/verify_*.sh идут без v1",
-        "android": "android/jni/parvane_jni.cpp (makeTransport → BridgeTransport, v1Absent, legacyV1, presence); сценарий — блок disabled в android/tgx_protocol_v2_flow.sh desktop2-android2 (X отмечает отключение v1, диалога нет, сессия остаётся); переписка X при отключённом v1 отдельным сценарием не покрыта"
+        "android": "spec 031 (22 окт 2026): соединения v1 нет вовсе — мост BridgeTransport, транспорт v1 и сценарий двойного стека tgx_protocol_v2_flow.sh удалены; вход, профили, устройства, привязка, превью, карта и свои блобы — соединение управления v2 (android/jni/jni_session.cpp makeControl → parvane::v2::Control, parvane::v2::account::*), переписка — Session ядра; запись LegacyV1 пропускается. Все сценарии android/tgx_*_flow.sh идут без v1"
       },
-      "prefersV1Note": "класс «v1, если жив» — только у ядра desktop/android до их T110; web список и отзыв устройств ведёт методами v2 всегда"
+      "prefersV1Note": "класса «v1, если жив» нет ни у одного клиента: web — с T110, desktop — со spec 029 (T038), android — со spec 031; список и отзыв устройств — методами v2 всегда"
     },
     {
       "id": "DOMAIN-1",
@@ -1250,7 +1250,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/planner.ts (жизненный цикл контейнера, очередь), controller.ts (событие plannerChanged, planner), provider.ts (экспорт/импорт ключей в линковке); сценарий scripts/e2e_web_planner_sync.mjs",
         "desktop": "движок общий (backend/protocol/src/client_planner.rs): ключ контейнера принимается и хранится, раздела «План» нет; тест client_flow.rs planner_container_shared_with_own_devices_and_rotated_on_revoke, planner_key_from_stranger_is_ignored",
-        "android": "движок общий (тот же тест); раздела «План» нет"
+        "android": "spec 031: «План» есть — android/jni/jni_sections.cpp (хаб разделов, порт desktop: PlannerSync/PlannerStore ядра, событие движка plannerChanged → sectionsEngineEvent), android/jni/jni_planner_ops.cpp; ключи контейнера — из копии ключей аккаунта (android/jni/jni_account.cpp noteDomainKeys) и грантом движка; экраны — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/PlannerController.kt — сценарий android/tgx_sections_flow.sh (правки desktop ↔ X, на сервере только шифртекст)"
       }
     },
     {
@@ -1274,7 +1274,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (task_offer/task_response), taskOffers.ts (TaskOfferStore), sync.ts (handleTaskOfferContent), messages.ts (parvaneSendTaskOffer, parvaneRespondTaskOffer, addTaskOfferToPlan); тесты taskOffers.test.ts, protocol.vectors.test.ts; сценарий scripts/e2e_web_task_offer.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: task_offer/task_response → карточка, как web), include/parvane/messenger.h (contentText: карточка показывается полем text); тест tests/v2_tests.cpp (task_offer туда и обратно; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: task_offer, task_response → MessageText); тест ProtocolV2SeamTest.kt taskOfferShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: task_offer, task_response → MessageText — текст из поля text); spec 031: карточка с кнопками «В план»/«В календарь»/«Отклонить» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt), нажатие — GetCallbackQueryAnswer → onCardPress в Client.kt → «План» ядра (offerAccept/offerResponse) — тесты ProtocolV2SeamTest.kt taskOfferShowsAsText, CardsTest.offerButtonsDependOnKindAndDecision (JVM)"
       }
     },
     {
@@ -1293,7 +1293,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/cloud.ts (жизненный цикл контейнеров, очереди, доступ), cloudBlobs.ts (потоковые блобы), cloudDrive.ts (методы провайдера), controller.ts (событие cloudChanged, копия ключей), provider.ts (экспорт/импорт ключей в линковке); тесты cloudBlobs.test.ts, cloudModel.test.ts; сценарии scripts/e2e_web_cloud.mjs, e2e_web_cloud_sync.mjs, e2e_web_cloud_chat.mjs, e2e_web_cloud_share.mjs",
         "desktop": "движок общий (backend/protocol/src/client_cloud.rs): ключи контейнеров принимаются и хранятся, раздела «Облако» нет; тесты client_flow.rs cloud_drive_on_own_devices_and_rotated_on_revoke, cloud_shared_folder_roles_revoke_and_leave",
-        "android": "движок общий (те же тесты); раздела «Облако» нет"
+        "android": "spec 031: «Облако» и «Знания» есть — android/jni/jni_sections.cpp (CloudSync/CloudDrive/NotesStore ядра, cloudContainerSet в журнале состояния, событие cloudChanged → хаб), ключи — из копии ключей аккаунта; экраны — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/CloudController.kt, KnowledgeController.kt — сценарий android/tgx_sections_flow.sh"
       }
     },
     {
@@ -1312,7 +1312,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (cloud_invite), store.ts (текст сообщения), v2/cloud.ts (answerInvite); тест protocol.vectors.test.ts; сценарий scripts/e2e_web_cloud_share.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: cloud_invite → карточка), include/parvane/messenger.h (contentText: показ полем text); тест tests/v2_tests.cpp (cloud_invite туда и обратно; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: cloud_invite → MessageText); тест ProtocolV2SeamTest.kt cloudInviteShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: cloud_invite → MessageText); тест ProtocolV2SeamTest.kt cloudInviteShowsAsText (приглашение — текстом; кнопки «Принять» у android нет); spec 031: раздел «Облако» (android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/CloudController.kt над android/jni/jni_sections.cpp) показывает совместные папки, где аккаунт уже участник, и выход из них; сценарий android/tgx_sections_flow.sh"
       }
     },
     {
@@ -1343,7 +1343,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/cloudDrive.ts (создание, список, отзыв, продление), публичная страница s.html (src/publicLink/, свой кодек кадров v2 — сверяется с движком тестом vitest); сценарий scripts/e2e_web_cloud_links.mjs",
         "desktop": "движок общий: методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет; новые методы реестра и поле UsageResponse.links_bytes клиенту не мешают (тесты backend/shards/cloud/src/v2.rs registry_methods_are_known, backend/tests/integration/tests/v2_links_live.rs)",
-        "android": "движок общий (те же тесты): методы cloud.link.* не вызываются, раздела «Облако» и ссылок нет"
+        "android": "spec 031: раздел «Облако» есть, ссылок для людей без аккаунта нет — методы cloud.link.* не вызываются (android/jni, ParvaneSections.kt, CloudController.kt); общий движок от новых методов и поля не ломается"
       }
     },
     {
@@ -1362,7 +1362,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (article), store.ts (карточка), components/middle/message/ArticleCard.tsx, components/parvane/article/*, components/parvane/markdown/* (разбор и показ, общие с заметками; встроенные файлы — `article.media`); тест protocol.vectors.test.ts, markdown.test.ts; сценарий scripts/e2e_web_article.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (fromV2: article → карточка с медиа), include/parvane/messenger.h (contentText: показ полем text); тест tests/v2_tests.cpp (article → v2 с картинкой; карточка показывается текстом)",
-        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: article → MessageText); тест ProtocolV2SeamTest.kt articleShowsAsText; без сборки APK — проверить при следующей сборке очереди android"
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt (contentFrom: article → MessageText); тест ProtocolV2SeamTest.kt articleShowsAsText; spec 031: кнопки «Читать» и «В заметки» (android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt, Client.kt onCardPress → «Знания» ядра)"
       }
     },
     {
@@ -1381,7 +1381,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (mod_report), store.ts (buildModReportContent), messages.ts (reportMessages: причина → комментарий → админам группы либо администратору сервера), components/middle/message/ModReportCard.tsx; сценарий scripts/e2e_web_reports.mjs",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (toV2/fromV2: mod_report ↔ v2, как web), include/parvane/messenger.h (contentText: показ полем text), src/v2_session_account.cpp (submitReport — жалоба администратору сервера: sealReport движка ключом report_public_key, identity.report.submit); tdesktop parvane_client.cpp (ReportMessages из штатного окна api_report.cpp; CardMarkup — карточка у админа «Удалить сообщения»/«Заблокировать в группе», HandleCardButton pv:moddel/pv:modban); тест tests/v2_tests.cpp (mod_report туда и обратно; карточка mod_report показывается текстом)",
-        "android": "ОТКРЫТО: показывать поле text (то же решение)"
+        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt reportChat (штатное окно жалобы X: причина → комментарий → карточкой mod_report админам группы с правом удалять/банить, иначе — администратору сервера ParvaneCore.submitReport → android/jni/jni_groups.cpp nativeSubmitReport → Session::submitReport, identity.report.submit); у админа — карточка с кнопками «Удалить сообщения»/«Заблокировать» после проверки своими данными (nativeCheckModReport → validateModReport ядра; android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt); без проверки — поле text (ParvaneStore.kt contentFrom) — тест CardsTest.modReportOnlyWhenCheckedAndArticleAlways (JVM); сценария эмулятора нет"
       }
     },
     {
@@ -1392,7 +1392,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/store.ts (allocateMessageId, LIVE_ORDER_WINDOW_SECS, compareStoredOrder), sync.ts (persistHistory с order, restoreFromCache), messages.ts (appendOwnJournal: время нажатия и order); тест store.test.ts; сценарий scripts/e2e_web_saved_messages.mjs (часы собеседника −30 с)",
         "desktop": "parvane_client.cpp (spec 029): id сообщения — счётчик g_nextMsgId по порядку прихода (лента tdesktop упорядочена по id), а не время отправителя; место сохраняет журнал истории (ReplayHistory в порядке записи). Отличие от п. 3: догон и перенос истории тоже встают по порядку прихода (инбокс v2 отдаёт их в порядке очереди сервера)",
-        "android": "ОТКРЫТО (spec 012, 9 окт 2026): порядок по времени отправителя; правка — в очереди android"
+        "android": "spec 031: как desktop — id сообщения выдаёт шов по порядку прихода (android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt putMessage: nextMessageId++), а не из времени отправителя; место сохраняет журнал истории (android/jni/jni_main.cpp: journalFold в порядке записи, placeByTime — только строка старше показанных больше чем на окно 300 с встаёт по времени; сортировки нет); перенос истории (importV2History) — по времени отправки"
       }
     },
     {
@@ -1412,7 +1412,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (buildBundleHistory, startTelegramRecovery); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
         "desktop": "desktop/parvane-core/src/keybundle.cpp (формат PVKB: deriveBundleKey, seal, open, pickRecoveryKey), src/v2_session_account.cpp (refreshKeyBundleLocked — копия ключей аккаунта на сервер, joinWithRecoveryKey — вход по копии без отзыва прежних устройств, иначе прежний recoverWithKey; sendKeyToTelegram, requestTelegramKey, pollTelegramKey); tdesktop parvane_client.cpp (StartTelegramRecovery, PollTelegramRecovery, RecoverWithKey), parvane_account_ui.cpp (FillLinking — ввод ключа, FillReadyExtras — ключ в Telegram); тесты tests/webcompat_tests.cpp (keyBundle: копия web открывается, ключ выделяется из текста как в web), живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 015: копия ключей аккаунта на сервере, вход по ключу восстановления, прежнее устройство осталось в журнале)",
-        "android": "ОТКРЫТО (spec 015, 10 окт 2026): вход по ключу не сделан; копию ключей не пишет и не читает"
+        "android": "spec 031: то же ядро, что desktop (keybundle.cpp, v2_session_account.cpp): android/jni/jni_account.cpp nativeTelegramRecovery (requestTelegramKey → pollTelegramKey → joinWithRecoveryKey), nativeRecoverWithKey (ввод ключа вручную), снимок истории копии ключей — bundleHistory/syncFromKeyBundle/completeKeyJoin (ключи «Плана» и «Облака» — noteDomainKeys), nativeSendKeyToTelegram; android/libtd/src/main/java/org/drinkless/tdlib/Client.kt — needs_linking → telegramRecovery, состояние recovery — уведомление; ввод ключа — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/AccountController.kt; сценария эмулятора с ботом нет"
       }
     },
     {
@@ -1430,7 +1430,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (setGroupPublic, joinPublic, publicHistory), groups.ts (превью, вступление, поиск), components/right/management/ManageChatPrivacyType.tsx; сценарий scripts/e2e_web_public_groups.mjs",
         "desktop": "desktop/parvane-core/src/v2_session_groups.cpp (checkPublicName, searchPublic, resolvePublic, setGroupPublic — groupSetPublic движка, joinPublic, publicHistory — методы group.public.*); tdesktop parvane_client.cpp (GroupPublic, CheckGroupPublicName, SetGroupPublic, SearchPublicGroups, LoadPublicPreview, JoinPublicGroup); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 023: группа стала публичной, имя занято, поиск и открытие по имени, вступление по открытому секрету, история для нового участника)",
-        "android": "ОТКРЫТО: как desktop"
+        "android": "spec 031: android/jni/jni_groups.cpp nativePublicCheckName/Search/Resolve/Set/Load/Join/History (методы group.public.* через Session ядра); android/libtd/src/main/java/org/drinkless/tdlib/Client.kt openPublic (превью: «не в группе»), loadPublicHistory, joinPublic, поиск каталога в searchNicks; android/setup-tgx.sh — патч MessagesController X (кнопка «Вступить» у превью). ОТКРЫТО: сделать группу публичной и выбрать имя из android нельзя (JNI nativePublicSet/nativePublicCheckName есть, экрана нет); сценария эмулятора нет"
       }
     },
     {
@@ -1448,7 +1448,7 @@
       "clients": {
         "web": "backend/protocol/src/client_rename.rs (движок), web/telegram-tt/src/api/parvane/v2/controller.ts (renameAccount, followPeerRename, followOwnRename, renameGroupsPending), store.ts (registerUserRename), secureStorage.ts (migrateStorageUser), components/parvane/rename/UsernameChangeModal.tsx; сценарий scripts/e2e_web_rename.mjs",
         "desktop": "desktop/parvane-core/src/v2_session_account.cpp (renameAccount — renamePrepare движка и identity.account.rename, followPeerRenameLocked → событие peerRenamed, followOwnRename, renameGroupsPending); tdesktop parvane_client.cpp (RenameAccount, MoveAccountLocal, NoteRename/LatestAddress — чат прежний, писать по последнему адресу), parvane_account_ui.cpp (ShowRenameBox); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 026: неверный пароль — отказ, ник сменён, вход новым ником, собеседник получает peerRenamed); п. 3 (своё другое устройство) и п. 4 (RenameMember в группах) тестом не покрыты",
-        "android": "ОТКРЫТО (то же решение)"
+        "android": "spec 031: android/jni/jni_account.cpp nativeRenameAccount (Session::renameAccount; каталог состояния и журнал истории переезжают под новый адрес, событие renamed), событие сессии peerRenamed → peer_renamed (android/jni/jni_session.cpp) → android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt noteRename (тот же чат) и служебное сообщение в Client.kt; экран — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/AccountController.kt; сценария эмулятора нет"
       }
     },
     {
@@ -1464,7 +1464,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/controller.ts (deleteAccount, isDeletedLog, checkPeerDeleted), connectionController.ts (AccountDeletionPendingError), components/parvane/account/AccountDeleteModal.tsx, components/auth/AuthPassword.tsx (data-restore-account); сценарий scripts/e2e_web_account_delete.mjs",
         "desktop": "desktop/parvane-core/src/v2_session_account.cpp (deleteAccount; isDeletedLog → событие peerDeleted), src/v2_bridge.cpp (вход: deletion_at_ms без токена, cancel_deletion); tdesktop parvane_client.cpp (Issue с cancelDeletion, DeleteAccount, peerDeleted → MarkPeerDeleted), intro/intro_parvane.cpp (дата удаления и «Восстановить» на экране пароля), parvane_account_ui.cpp (ShowDeleteAccountBox); тест живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 027: неверный пароль — отказ, аккаунт поставлен на удаление, вход в период ожидания — без токена со сроком, вход с отменой удаления — восстановлен); п. 2 («Удалённый аккаунт» у собеседника) тестом не покрыт",
-        "android": "ОТКРЫТО (то же решение)"
+        "android": "spec 031: android/jni/jni_account.cpp nativeDeleteAccount (Session::deleteAccount), вход в удаляемый аккаунт — android/jni/jni_session.cpp nativeLogin (deletion_at_ms; android/libtd/src/main/java/org/drinkless/tdlib/Client.kt сразу повторяет вход с cancel_deletion — отдельного вопроса с датой нет), удалённый собеседник — событие peerDeleted / nativeCheckPeerDeleted → ParvaneStore.kt markDeleted («Удалённый аккаунт»); экран — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/AccountController.kt; сценария эмулятора нет"
       }
     },
     {
@@ -1476,7 +1476,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/stickerPacks.ts (packContentHash, registerReceivedPackRef), messages.ts (buildPackRefForSet), provider.ts (resolveCustomPack)",
         "desktop": "desktop/parvane-core/include/parvane/pack_archive.h + src/pack_archive.cpp (contentHash, archiveContentHashB64, archiveMatchesContentHash — алгоритм web packContentHash), src/v2_content.cpp (packToV2/packFromV2 переносят content_hash); tdesktop parvane_client.cpp (AttachPackContentHash — отпечаток в pack_ref стикера и emoji_packs при отправке; InstallStickerPackFromDocument — набор с тем же отпечатком уже установлен → тот же набор (FindInstalledPackByHash), другой набор с тем же именем — отдельный каталог (DistinctPackName), архив с чужим отпечатком отвергается; MaterializeEmojiPacks — сверка отпечатка эмодзи-пака); тесты tests/pack_tests.cpp (PACK-2), tests/webcompat_tests.cpp (общий вектор proto/parvane/vectors/clients/pack-hash.json, его же проверяет web clientVectors.test.ts), tests/v2_tests.cpp (content_hash туда и обратно). Эмодзи-паки объединяются по имени из ссылки (docId, EMOJI-1) — по отпечатку только сверка",
-        "android": "ОТКРЫТО (то же решение)"
+        "android": "spec 031: android/jni/jni_messages.cpp nativePackRefFor — content_hash (archiveContentHashB64 ядра) в ссылке при отправке, кэш ссылок по отпечатку; nativePackFetch — одноимённый набор с другим отпечатком ставится отдельным каталогом «<имя> <6 hex>» (hashTag, как desktop DistinctPackName); nativePackHash — отпечаток установленного набора. Скачанный архив сверяется с заявленным отпечатком (archiveMatchesContentHash, иначе отказ), тот же набор под другим именем находится (findInstalledPackByHash, как desktop FindInstalledPackByHash) — android/jni/jni_messages.cpp; тест — android/libtd/src/test/java/org/drinkless/tdlib/PackHashVectorsTest.kt (общий вектор proto/parvane/vectors/clients/pack-hash.json через хостовую JNI, тот же pack_archive.cpp ядра)"
       }
     },
     {
@@ -1489,7 +1489,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/callMap.ts (callSignalToV2, groupInviteFromV2, cleanGroupTitle), groupcall.ts (inviteGroupTitle, startCall), calls.ts (startPendingGroupInvite)",
         "desktop": "desktop/parvane-core/src/v2_content.cpp (callSignalToV2/callSignalFromV2: group_invite ↔ group_ring с group и title, cleanGroupTitle), include/parvane/call.h (groupInviteSignal, CallSignalIn.group/title), src/group_call_manager.cpp (startCall с группой и названием, onInvite); tdesktop parvane_client.cpp (StartGroupCall — название из сведений группы; ShowIncomingGroupCall — известная группа своим названием, неизвестная — из приглашения); тесты tests/call_manager_tests.cpp (CALL-2: во входящем — группа и её название), tests/webcompat_tests.cpp (название группы очищается как web)",
-        "android": "ОТКРЫТО (то же решение)"
+        "android": "spec 031: android/jni/jni_calls.cpp nativeGroupStart (GroupCallManager::startCall с адресом и названием группы), onInvite → событие group_call invite с group и cleanGroupTitle(title); android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/GroupCallController.kt (звонок из профиля группы, окно приглашения) — сценарий android/tgx_group_call_flow.sh (X получает приглашение с названием группы, сетка на троих).; для известной группы окно приглашения берёт название из её журнала (Client.groupTitle), присланное — только для незнакомой"
       }
     },
     {
@@ -1513,7 +1513,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live",
         "desktop": "parvane-core include/parvane/v2_engine.h (OutRequest.dest), v2_link.h (Connection::request с dest), v2_control.h (Control::call с dest), src/v2_session.cpp (groupDomainLocked, requestForeignTokensLocked), src/v2_content.cpp (Media.blob_domain); tdesktop parvane_client.cpp (NoteFederationFailure — причины отказа строками EN+RU). Сценарий desktop/verify_federation.sh (зелёный 19 окт 2026) (два локальных сервера a.parvane.test/b.parvane.test с шардом federation на тестовом транспорте, по клиенту на сервер, личное письмо в обе стороны; verify_lib.sh — порты стека PV_NATS_PORT/PV_GW_WS_PORT/PV_GW_TCP_PORT, PV_FEDERATION_PEERS). tests/v2_tests.cpp проверяет только перенос blob_domain",
-        "android": "ОТКРЫТО (то же решение)"
+        "android": "spec 031: адресат запросов (dest_domain), жетоны сервера адресата, домены групп и блобов — общее ядро (те же исходники parvane_core, что desktop: v2_session, v2_account, v2_control, v2_content; сторож android/tools/check_core_sources.sh); профиль адреса чужого сервера — android/jni/jni_account.cpp nativeResolve (resolveProfiles по доменам, federation_error); причины отказа (FEDERATION_UNAVAILABLE, DOMAIN_BLOCKED/REFUSED/UNREACHABLE, SERVER_KEY_CHANGED) — событие federation_error JNI (noteFederationFailure в jni_main.cpp: отправка и профиль адреса) → понятный тост на языке UI (tgx-overlay .../parvane/sections/AccountController.kt AccountUi.federationToast, не чаще раза в 10 с на причину); сценарий android/tgx_federation_flow.sh — два стека (a/b.parvane.test), переписка X ↔ desktop через федерацию в обе стороны, недоступный сервер → отказ «unreachable»"
       }
     }
   ]

@@ -128,10 +128,12 @@ async fn register(ctx: &Ctx, req: &ShardRequest) -> Reply {
     let token = wake::device_token(user, device)?;
     // P-17: все адреса хоста — публичные (SSRF во внутреннюю сеть через канал).
     let parsed = url::Url::parse(&reg.endpoint).map_err(|_| ErrorCode::Invalid)?;
-    parvane_netguard::resolve_url(&parsed).await.map_err(|e| {
-        debug!("v2 push.wake.register: endpoint не резолвится в публичный адрес: {e}");
-        ErrorCode::Invalid
-    })?;
+    if !wake::is_test_loopback(&reg.endpoint) {
+        parvane_netguard::resolve_url(&parsed).await.map_err(|e| {
+            debug!("v2 push.wake.register: endpoint не резолвится в публичный адрес: {e}");
+            ErrorCode::Invalid
+        })?;
+    }
     let mut tx = ctx.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
     // ≤ 8 регистраций на пользователя: при переполнении уходят самые старые.
     sqlx::query(

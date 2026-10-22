@@ -61,12 +61,40 @@ tgx_fresh() { # tgx_fresh <ник@сервер> [пароль]
 # Запуск приложения и живой logcat в $TGX_LOG (перезапуск — с новым файлом)
 tgx_start() {
   [ -n "${TGX_LCP:-}" ] && kill "$TGX_LCP" 2>/dev/null
+  # чужой `adb logcat` в тот же файл (прерванный прошлый прогон) затирал строки своим смещением — гасим
+  local p
+  for p in $(pgrep -x adb 2>/dev/null); do
+    [ "$(readlink "/proc/$p/fd/1" 2>/dev/null)" = "$(readlink -f "$TGX_LOG" 2>/dev/null)" ] && kill "$p" 2>/dev/null
+  done
+  # logcat сценария — один файл на весь сценарий: перезапуск дописывает (иначе ранние шаги не разобрать)
+  [ "${TGX_LOG_STARTED:-}" = "$TGX_LOG" ] || { : > "$TGX_LOG"; TGX_LOG_STARTED="$TGX_LOG"; }
+  TGX_MARK=$(( $(wc -l < "$TGX_LOG" 2>/dev/null || echo 0) + 1 ))
+  # Краш прошлого сценария (он уже отмечен в своём логе) уводит debug-X в режим восстановления («Aw, Snap!»):
+  # X не шлёт параметры, шов молчит — следующие сценарии падали каскадом. Метки краша стираем.
+  a shell run-as "$TGX_PKG" sh -c 'rm -f files/logs/crash.*' >/dev/null 2>&1
+  local alive; alive="$(a shell pidof "$TGX_PKG" 2>/dev/null | tr -d '\r')"
+  if [ -n "$alive" ]; then echo "tgx_start: X уже запущен (pid $alive) — останавливаю" >&2; tgx_stop; fi
   a logcat -c
-  adb logcat -v time > "$TGX_LOG" 2>&1 & TGX_LCP=$!
+  adb logcat -v time >> "$TGX_LOG" 2>&1 & TGX_LCP=$!
   a shell am start -n "$TGX_PKG/org.thunderdog.challegram.MainActivity" >/dev/null 2>&1
 }
-tgx_stop() { a shell am force-stop "$TGX_PKG" >/dev/null 2>&1; sleep 2; }
-tgx_logwait() { wait_log "$TGX_LOG" "$1" "${2:-60}"; }
+# Остановка — до исчезновения процесса (am force-stop возвращается раньше; процесс, доживший до tgx_start, терял
+# начало журнала после logcat -c, и «v2: готов» не находилось)
+tgx_stop() {
+  a shell am force-stop "$TGX_PKG" >/dev/null 2>&1
+  for _ in $(seq 1 20); do [ -z "$(a shell pidof "$TGX_PKG" 2>/dev/null | tr -d '\r')" ] && break; sleep 0.5; done
+  sleep 1
+}
+# tgx_mark — дальше tgx_logwait смотрит только новые строки logcat (после отметки)
+tgx_mark() { TGX_MARK=$(( $(wc -l < "$TGX_LOG" 2>/dev/null || echo 0) + 1 )); }
+tgx_logwait() {
+  local n="${2:-60}"
+  for _ in $(seq 1 "$n"); do
+    tail -n "+${TGX_MARK:-1}" "$TGX_LOG" 2>/dev/null | grep -qaE "$1" && return 0
+    sleep 1
+  done
+  return 1
+}
 tgx_cmd() { # tgx_cmd <json> [маркер-regex ожидания]
   tgx_put parvane-e2e-cmd "$1"
   local op; op="$(printf '%s' "$1" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("op",""))')"
@@ -76,5 +104,8 @@ tgx_shot() { a exec-out screencap -p > "$1"; }
 tgx_no_crash() {
   if grep -q "FATAL EXCEPTION" "$TGX_LOG"; then
     bad "краш X: $(grep -A3 'FATAL EXCEPTION' "$TGX_LOG" | tail -2 | tr '\n' ' ' | cut -c1-200)"
+  elif grep -aq "Fatal signal .*($TGX_PKG)\|>>> $TGX_PKG <<<" "$TGX_LOG"; then
+    # нативное падение (SIGABRT/SIGSEGV в ядре или JNI) — Java-краша нет, приложение просто исчезает
+    bad "нативный краш X: $(grep -a 'Abort message\|Fatal signal' "$TGX_LOG" | head -2 | tr '\n' ' ' | cut -c1-200)"
   else ok "без крашей"; fi
 }

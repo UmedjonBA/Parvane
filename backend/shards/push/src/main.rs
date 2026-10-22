@@ -67,6 +67,9 @@ fn handler_concurrency() -> usize {
 /// фильтром, адреса хоста резолвятся заново и фиксируются (анти-rebinding
 /// между регистрацией и отправкой).
 async fn pinned_push_client(endpoint: &str) -> Result<reqwest::Client> {
+    if push::wake::is_test_loopback(endpoint) {
+        return build_http_client(reqwest::Client::builder());
+    }
     let parsed = parvane_netguard::check_url(endpoint, &parvane_netguard::UrlPolicy::HTTPS)?;
     let (host, addrs) = parvane_netguard::resolve_url(&parsed).await?;
     build_http_client(parvane_netguard::pinned_client_builder(&host, &addrs))
@@ -173,6 +176,29 @@ fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client>
 
 #[cfg(test)]
 mod tests {
+    /// Тестовый распространитель (loopback без TLS) не попадает в образ прода и в деплой.
+    #[test]
+    fn insecure_transport_never_ships() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../infra/deploy");
+        for f in ["Dockerfile.shards", "deploy.sh", "docker-compose.yml"] {
+            let text = std::fs::read_to_string(root.join(f)).unwrap_or_default();
+            assert!(!text.is_empty(), "{f} не прочитан");
+            assert!(!text.contains("insecure-test-transport"), "{f}: фича тестового распространителя");
+            assert!(!text.contains("PARVANE_PUSH_INSECURE_HTTP"), "{f}: тестовый распространитель");
+        }
+    }
+
+    /// Без фичи (и без переменной) loopback-адрес не принимается.
+    #[test]
+    fn loopback_endpoint_only_in_test_mode() {
+        if !cfg!(feature = "insecure-test-transport") {
+            std::env::set_var("PARVANE_PUSH_INSECURE_HTTP", "1");
+            assert!(!push::wake::is_test_loopback("http://127.0.0.1:9400/up/x"));
+        }
+        std::env::remove_var("PARVANE_PUSH_INSECURE_HTTP");
+        assert!(!push::wake::is_test_loopback("http://127.0.0.1:9400/up/x"));
+    }
+
     use super::*;
     use base64::Engine;
     use sqlx::sqlite::SqlitePoolOptions;

@@ -93,15 +93,19 @@ object ParvaneWebrtc : ParvaneCalls.MediaEngine {
 
     private fun factory(): PeerConnectionFactory {
         factory?.let { return it }
-        // Нативная часть WebRTC уже загружена (libtgcallsjni.so, NLoader X) — свой загрузчик ничего не грузит
-        PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(appContext)
-                .setNativeLibraryLoader { true }
-                .createInitializationOptions())
+        // Нативная часть WebRTC — в libtgcallsjni.so X, глобальные JVM-переменные она заводит сама (N.getTgCallsVersions
+        // при старте вызывает tgcalls::initialize; вызов идемпотентный). PeerConnectionFactory.initialize повторил бы
+        // JVM::Initialize и уронил процесс — только контекст и отметка загрузки.
+        org.thunderdog.challegram.N.getTgCallsVersions()
+        org.webrtc.ParvaneWebrtcInit.prepare(appContext)
         val egl = EglBase.create().also { eglBase = it }
         val adm = JavaAudioDeviceModule.builder(appContext).setUseHardwareAcousticEchoCanceler(true)
             .setUseHardwareNoiseSuppressor(true).createAudioDeviceModule()
+        // Монитор сети WebRTC общий с tgcalls X: при закрытии нашего соединения он снимал чужой приёмник
+        // («Receiver not registered») и Java-исключение роняло network_thread (Check failed: !env->ExceptionCheck())
+        val options = PeerConnectionFactory.Options().apply { disableNetworkMonitor = true }
         return PeerConnectionFactory.builder()
+            .setOptions(options)
             .setAudioDeviceModule(adm)
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
@@ -234,6 +238,10 @@ object ParvaneWebrtc : ParvaneCalls.MediaEngine {
 
     override fun setMuted(handle: Long, muted: Boolean) = worker.execute {
         conns[handle]?.audio?.setEnabled(!muted)
+    }
+
+    override fun setAllMuted(muted: Boolean) = worker.execute {
+        conns.values.forEach { it.audio?.setEnabled(!muted) }
     }
 
     override fun close(handle: Long) = worker.execute {

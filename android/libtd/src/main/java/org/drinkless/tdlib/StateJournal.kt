@@ -49,7 +49,14 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val blocked = HashSet<String>()
         /** Изменившиеся настройки уведомлений блобом веба (`{defaults, exceptions}`) — для `applyNotifyBlob`; null — без изменений. */
         var notify: JSONObject? = null
-        fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() || scheduledRemoved.isNotEmpty() || notify != null
+        /** STATE-2: закреп главного списка изменился (чаты, чья позиция сменилась). */
+        val pinned = HashSet<Long>()
+        /** STATE-2: чаты, у которых сменилась отметка «непрочитано». */
+        val unread = HashSet<Long>()
+        /** STATE-2: сменилась быстрая реакция. */
+        var reaction = false
+        fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() ||
+            scheduledRemoved.isNotEmpty() || notify != null || pinned.isNotEmpty() || unread.isNotEmpty() || reaction
     }
 
     /**
@@ -133,6 +140,10 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         synchronized(blockedSet) { blockedSet.toList() }.sorted().forEach { a -> peerOf(a)?.let { blocked.put(JSONObject().put("peer", it)) } }
         val out = JSONObject().put("folders", folders).put("folder_order", JSONObject().put("ids", order)).put("blocked", blocked)
             .put("drafts", drafts).put("archived", archived).put("scheduled", scheduled)
+        // STATE-2: закреп главного списка, отметки «непрочитано», быстрая реакция (как web/desktop)
+        out.put("pinned", JSONArray().put(JSONObject().put("list", "PIN_LIST_MAIN").put("peers", peers(local.pinnedChatIds()))))
+        out.put("unread_marks", peers(local.unreadMarkedChatIds()))
+        out.put("quick_reaction", local.quickReaction().takeIf { it.isNotEmpty() }?.let { JSONObject().put("emoji", it) } ?: JSONObject())
         // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
         if (notify != null) {
             val list = JSONArray()
@@ -167,6 +178,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         projectDrafts(snap, local, ch)
         projectArchived(snap, local, ch)
         projectScheduled(snap, local, queue, ch)
+        projectPins(snap, local, ch)
         return ch
     }
 
@@ -259,6 +271,28 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         (cur - next).forEach { local.setArchived(it, false); ch.archived += it }
     }
 
+    private fun projectPins(snap: JSONObject, local: ChatLocalState, ch: Changes) {
+        snap.optJSONArray("pinned")?.let { lists ->
+            val main = (0 until lists.length()).mapNotNull { lists.optJSONObject(it) }
+                .firstOrNull { it.optString("list", "PIN_LIST_MAIN") == "PIN_LIST_MAIN" }
+            val next = chatIds(main?.optJSONArray("peers"))
+            val cur = local.pinnedChatIds()
+            if (next != cur) {
+                ch.pinned += (next + cur).toSet()
+                local.setPinnedOrder(next)
+            }
+        }
+        snap.optJSONArray("unread_marks")?.let { a ->
+            val next = chatIds(a).toSet()
+            val cur = local.unreadMarkedChatIds().toSet()
+            (next - cur).forEach { local.setMarkedUnread(it, true); ch.unread += it }
+            (cur - next).forEach { local.setMarkedUnread(it, false); ch.unread += it }
+        }
+        snap.optJSONObject("quick_reaction")?.let { r ->
+            if (local.setQuickReaction(r.optString("emoji"))) ch.reaction = true
+        }
+    }
+
     private fun projectScheduled(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, ch: Changes) {
         val sent = snap.optJSONArray("scheduled_sent")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() } ?: emptySet()
         val list = snap.optJSONArray("scheduled") ?: JSONArray()
@@ -286,7 +320,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     companion object {
         /** Виды, которые ведёт шов (остальные виды журнала не трогаются). */
-        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify")
+        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction")
         private val NOTIFY_SCOPES = listOf("users", "groups", "channels")
         const val V2_GROUP_PREFIX = "v2g:"
         private val HEX32 = Regex("^[0-9a-f]{32}$")

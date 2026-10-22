@@ -79,7 +79,10 @@ void writeTrust(const std::string &address, const std::string &secret) {
 
 // Владелец каталога: вход другим адресом не получает данных прежнего (один аккаунт на процесс; ревью 21 окт).
 std::string ownerPath() { return storeDir() + "/account-owner"; }
+void resetAccountMemory();
+
 void adoptAccount(const std::string &address) {
+    resetAccountMemory(); // вход: ничего из памяти прежнего аккаунта (события, прошедшие проверку до выхода)
     const auto owner = parvane::storecrypt::readFile(ownerPath());
     if (!owner.empty() && owner != address) wipeAccountData("вход другим аккаунтом");
     parvane::storecrypt::allowWrites();
@@ -286,7 +289,7 @@ bool handleSessionEvent(const json &ev) {
         return true;
     }
     if (type == "sskRotationNeeded") {
-        std::thread([] {
+        runDetached([] {
             const auto s = v2Ready();
             if (!s) return;
             const auto state = s->sskState();
@@ -296,7 +299,7 @@ bool handleSessionEvent(const json &ev) {
             } else {
                 emit(json{{"type", "ssk_rotation_needed"}, {"has_backup", state.value("hasBackup", false)}});
             }
-        }).detach();
+        });
         return true;
     }
     if (type == "privacy" || type == "privacySaved") {
@@ -326,10 +329,10 @@ bool handleSessionEvent(const json &ev) {
     if (type == "stateReady") {
         sectionsSessionChanged(); // «План», «Облако»: журнал состояния подключён
         emit(json{{"type", "state_ready"}});
-        std::thread([] {
+        runDetached([] {
             startLinkingWorkers(); // роль «старого» устройства: опрос чужих офферов
             syncFromKeyBundle();   // снимок истории свежее применённого — с другого своего устройства
-        }).detach();
+        });
         return true;
     }
     if (type == "authRejected") {
@@ -341,7 +344,7 @@ bool handleSessionEvent(const json &ev) {
     if (type == "needsLinking") {
         LOGI("v2: устройству нужна привязка");
         emit(json{{"type", "needs_linking"}});
-        std::thread([] { startLinkOffer(); }).detach();
+        runDetached([] { startLinkOffer(); });
         return true;
     }
     if (type == "l2State") {
@@ -371,23 +374,30 @@ bool handleSessionEvent(const json &ev) {
     return false;
 }
 
-std::atomic<bool> g_presenceRunning{false};
+// Поколение цикла присутствия: стоп и быстрый старт не оставляют два цикла (NAT-06)
+std::atomic<std::uint64_t> g_presenceGen{0};
 
-void presenceLoop() {
-    while (g_presenceRunning) {
+void presenceLoop(std::uint64_t gen) {
+    while (g_presenceGen == gen) {
         if (presenceAllowed()) {
             if (const auto s = v2Ready()) {
                 try { s->sendPresence(true); } catch (const std::exception &) {}
             }
         }
-        for (int i = 0; i < 300 && g_presenceRunning; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int i = 0; i < 300 && g_presenceGen == gen; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
+
+// NAT-06: запуск, остановка, выход и смена ника — по одному (не g_mu: под ним колбэк JWT сессии); поколение сессии
+// отсекает события остановленной, уже прошедшие проверку адреса.
+std::recursive_mutex g_lifecycleMu;
+std::atomic<std::uint64_t> g_sessionGen{0};
 
 } // namespace
 
 // Сессия v2 текущего аккаунта (адрес и JWT уже есть). Звать БЕЗ g_mu: сессия берёт JWT колбэком под ним.
 void startSession() {
+    std::lock_guard<std::recursive_mutex> life(g_lifecycleMu);
     std::string gw, me;
     {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -412,8 +422,10 @@ void startSession() {
     cfg.clientVersion = "android";
     cfg.deviceDescription = "Parvane Android";
     cfg.log = [](const std::string &m) { LOGI("%s", m.c_str()); };
-    cfg.onEvent = [owner = me](const json &ev) {
-        if (self() == owner) handleV2Event(ev); // событие прежнего аккаунта после выхода — мимо
+    const auto gen = ++g_sessionGen;
+    cfg.onEvent = [owner = me, gen](const json &ev) {
+        // событие прежней сессии (выход, перезапуск под новым ником) — мимо
+        if (g_sessionGen == gen && self() == owner) handleV2Event(ev);
     };
     cfg.bundleHistory = [](const json &previous, bool force) { return bundleHistory(previous, force); };
     cfg.onRecoveryKey = [](const std::string &key) {
@@ -426,12 +438,15 @@ void startSession() {
         g_v2 = s;
     }
     s->start();
-    if (!g_presenceRunning.exchange(true)) std::thread(presenceLoop).detach();
+    const auto presence = ++g_presenceGen;
+    runDetached([presence] { presenceLoop(presence); });
     LOGI("v2: сессия запускается (движок %s)", parvane::v2::engineVersion().c_str());
 }
 
 void stopSession() {
-    g_presenceRunning = false;
+    std::lock_guard<std::recursive_mutex> life(g_lifecycleMu);
+    ++g_presenceGen;
+    ++g_sessionGen;
     std::shared_ptr<parvane::v2::Session> s;
     std::shared_ptr<parvane::v2::Control> c;
     {
@@ -642,15 +657,24 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(
 
 // Сеть вернулась (ConnectivityManager): ждущее переподключение — сразу.
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeNetworkAvailable(JNIEnv *, jclass) {
-    if (const auto s = v2Any()) s->reconnectNow();
+    try {
+        if (const auto s = v2Any()) s->reconnectNow();
+    } catch (const std::exception &e) {
+        LOGE("nativeNetworkAvailable: %s", e.what());
+    }
 }
 
 // Состояние: {"ready","needsLinking","engine","self"} — диагностика и экраны входа.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStatus(JNIEnv *env, jclass) {
-    const auto s = v2Any();
-    return jreply(env, json{{"ready", s && s->isReady()}, {"needsLinking", s && s->needsLinking()},
-                            {"engine", parvane::v2::engineVersion()}, {"self", self()},
-                            {"reconnectAttempts", s ? s->reconnectAttempts() : 0}});
+    try {
+        const auto s = v2Any();
+        return jreply(env, json{{"ready", s && s->isReady()}, {"needsLinking", s && s->needsLinking()},
+                                {"engine", parvane::v2::engineVersion()}, {"self", self()},
+                                {"reconnectAttempts", s ? s->reconnectAttempts() : 0}});
+    } catch (const std::exception &e) {
+        LOGE("nativeStatus: %s", e.what());
+        return jreply(env, json::object());
+    }
 }
 
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSelf(JNIEnv *env, jclass) { return jout(env, self()); }
@@ -667,6 +691,10 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSessionExpired(JN
 // Выход (NAT-16, как web/desktop): устройство уходит из журнала устройств (≤ 5 с), данные устройства стираются.
 // Блокирующий — звать не с UI-потока.
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, jclass) {
+    std::lock_guard<std::recursive_mutex> life(g_lifecycleMu);
+    try {
+    ++g_presenceGen;
+    ++g_sessionGen;
     const auto dir = storeDir();
     parvane::localfiles::setLogoutPending(dir);
     std::shared_ptr<parvane::v2::Session> s;
@@ -692,6 +720,10 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLogout(JNIEnv *, 
     if (c) c->close();
     parvane::logpriv::forget();
     parvane::storecrypt::allowWrites();
+    } catch (const std::exception &e) {
+        LOGE("выход: %s", e.what());
+        parvane::storecrypt::allowWrites();
+    }
 }
 
 } // extern "C"

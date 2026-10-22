@@ -48,7 +48,7 @@ void emitOwn(const std::string &id, const std::string &to, const json &content, 
 bool mutate(const std::string &uuid, const json &content) {
     const auto row = messageRow(uuid);
     if (!row || row->chat.empty()) return false;
-    std::thread([chat = row->chat, content, uuid] {
+    runDetached([chat = row->chat, content, uuid] {
         const auto s = v2ReadyForSend();
         if (!s) { LOGE("v2: мутация %s не отправлена — сессия не готова", uuid.c_str()); return; }
         try {
@@ -57,7 +57,7 @@ bool mutate(const std::string &uuid, const json &content) {
         } catch (const std::exception &e) {
             LOGE("v2: мутация %s не отправлена: %s", uuid.c_str(), e.what());
         }
-    }).detach();
+    });
     return true;
 }
 
@@ -97,6 +97,27 @@ std::string readFileBytes(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
+// Отпечаток содержимого каталога набора ("" — пусто): те же записи, что уходят в архив PVPK1.
+std::string packDirHash(const std::string &dir) {
+    std::vector<parvane::pack::Entry> entries;
+    std::error_code ec;
+    for (const auto &e : std::filesystem::directory_iterator(dir, ec))
+        if (e.is_regular_file() && parvane::pack::isAllowedExtension(e.path().filename().string()))
+            entries.push_back({e.path().filename().string(), readFileBytes(e.path().string())});
+    return entries.empty() ? std::string() : parvane::pack::archiveContentHashB64(parvane::pack::build(entries));
+}
+
+// PACK-2 (как desktop FindInstalledPackByHash): установленный набор с тем же отпечатком под любым именем.
+std::string findInstalledPackByHash(const std::string &root, const std::string &hashB64) {
+    if (hashB64.empty()) return {};
+    std::error_code ec;
+    std::vector<std::filesystem::path> dirs;
+    for (const auto &e : std::filesystem::directory_iterator(root, ec)) if (e.is_directory()) dirs.push_back(e.path());
+    std::sort(dirs.begin(), dirs.end());
+    for (const auto &d : dirs) if (packDirHash(d.string()) == hashB64) return d.string();
+    return {};
+}
+
 } // namespace
 
 // Медиа: байты → blobcrypt → блоб по секрету → содержимое с file_id/file_key/file_nonce/capability → v2.
@@ -120,6 +141,7 @@ std::string sendMediaBytes(const std::string &to, const std::string &plain, json
         return id;
     } catch (const std::exception &e) {
         LOGE("sendMedia: %s", e.what());
+        noteFederationFailure(e.what());
         emit(json{{"type", "send_failed"}, {"to", to}, {"error_code", errorCodeOf(e)}});
         return {};
     }
@@ -141,6 +163,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(JNIEn
         return jout(env, id);
     } catch (const std::exception &e) {
         LOGE("sendText: %s", e.what());
+        noteFederationFailure(e.what());
         emit(json{{"type", "send_failed"}, {"to", toStd}, {"error_code", errorCodeOf(e)}});
         return jout(env, "");
     }
@@ -160,6 +183,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendContent(
         return jout(env, id);
     } catch (const std::exception &e) {
         LOGE("sendContent: %s", e.what());
+        noteFederationFailure(e.what());
         emit(json{{"type", "send_failed"}, {"to", toStd}, {"error_code", errorCodeOf(e)}});
         return jout(env, "");
     }
@@ -168,14 +192,19 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendContent(
 // content — {kind, mime, width, height, duration_secs, filename, caption[, forwarded_name, ttl_secs]}.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendMedia(
         JNIEnv *env, jclass, jstring to, jstring path, jstring contentJson, jstring replyTo) {
-    const auto pathStd = jstr(env, path);
-    auto content = json::parse(jstr(env, contentJson), nullptr, false);
-    const auto plain = readFileBytes(pathStd);
-    if (!content.is_object() || plain.empty()) {
-        LOGE("sendMedia: битый content или файл не читается");
+    try {
+        const auto pathStd = jstr(env, path);
+        auto content = json::parse(jstr(env, contentJson), nullptr, false);
+        const auto plain = readFileBytes(pathStd);
+        if (!content.is_object() || plain.empty()) {
+            LOGE("sendMedia: битый content или файл не читается");
+            return jout(env, "");
+        }
+        return jout(env, sendMediaBytes(jstr(env, to), plain, content, jstr(env, replyTo)));
+    } catch (const std::exception &e) {
+        LOGE("nativeSendMedia: %s", e.what());
         return jout(env, "");
     }
-    return jout(env, sendMediaBytes(jstr(env, to), plain, content, jstr(env, replyTo)));
 }
 
 // Пересылка в несколько чатов (как desktop MirrorForward): текст — тот же content; медиа — блоб из кэша или
@@ -252,11 +281,11 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeSendTyping(JNIEnv *env, jclass, jstring to) {
     const auto chat = jstr(env, to);
     if (l2Active(chat)) return; // L2-1
-    std::thread([chat] {
+    runDetached([chat] {
         if (const auto s = v2Ready()) {
             try { (void)s->sendTyping(chat); } catch (const std::exception &) {}
         }
-    }).detach();
+    });
 }
 
 // Присутствие собеседников (их «в сети» и «печатает»): подписка на эфемерные каналы.
@@ -265,30 +294,35 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeWatchPeers(JNIEnv
     std::vector<std::string> peers;
     if (arr.is_array()) for (const auto &p : arr) if (p.is_string() && !l2Active(p.get<std::string>())) peers.push_back(p);
     if (peers.empty()) return;
-    std::thread([peers] {
+    runDetached([peers] {
         if (const auto s = v2ReadyForSend()) {
             try { s->watchPeers(peers); } catch (const std::exception &) {}
         }
-    }).detach();
+    });
 }
 
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(JNIEnv *env, jclass, jstring uuid, jstring contentJson) {
-    const auto id = jstr(env, uuid);
-    const auto content = json::parse(jstr(env, contentJson), nullptr, false);
-    const auto row = messageRow(id);
-    if (!row || !content.is_object() || row->from != self()) return JNI_FALSE;
-    auto edit = json{{"target", parvane::v2::ref(id)}};
-    if (parvane::contentKind(content) == "location") {
-        if (const auto m = parvane::v2::toV2(content)) edit["location"] = (*m)["location"];
-    } else {
-        const auto text = parvane::contentKind(content) == "text" ? content.value("text", std::string())
-                                                                  : content.value("caption", std::string());
-        if (const auto m = parvane::v2::toV2(parvane::textContent(text, parvane::contentEntities(content)))) edit["text"] = (*m)["text"];
+    try {
+        const auto id = jstr(env, uuid);
+        const auto content = json::parse(jstr(env, contentJson), nullptr, false);
+        const auto row = messageRow(id);
+        if (!row || !content.is_object() || row->from != self()) return JNI_FALSE;
+        auto edit = json{{"target", parvane::v2::ref(id)}};
+        if (parvane::contentKind(content) == "location") {
+            if (const auto m = parvane::v2::toV2(content)) edit["location"] = (*m)["location"];
+        } else {
+            const auto text = parvane::contentKind(content) == "text" ? content.value("text", std::string())
+                                                                      : content.value("caption", std::string());
+            if (const auto m = parvane::v2::toV2(parvane::textContent(text, parvane::contentEntities(content)))) edit["text"] = (*m)["text"];
+        }
+        updateMessageContent(id, content);
+        if (!mutate(id, json{{"edit", edit}})) return JNI_FALSE;
+        emit(json{{"type", "edited"}, {"id", id}, {"content", content}, {"edit_date", nowSec()}});
+        return JNI_TRUE;
+    } catch (const std::exception &e) {
+        LOGE("nativeEdit: %s", e.what());
+        return JNI_FALSE;
     }
-    updateMessageContent(id, content);
-    if (!mutate(id, json{{"edit", edit}})) return JNI_FALSE;
-    emit(json{{"type", "edited"}, {"id", id}, {"content", content}, {"edit_date", nowSec()}});
-    return JNI_TRUE;
 }
 
 // Удалить у всех (своё; админ группы — любое): удаление v2. forMe — только у себя (журнал «скрытых»).
@@ -359,11 +393,11 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeClearChat(JNIEnv 
     if (arr.is_array()) for (const auto &v : arr) if (v.is_string()) ids.insert(v.get<std::string>());
     for (const auto &id : ids) forgetMessage(id);
     journalRemoveIds(ids);
-    std::thread([chat, untilMs] {
+    runDetached([chat, untilMs] {
         if (const auto s = v2ReadyForSend()) {
             try { s->stateChatCleared(chat, static_cast<std::int64_t>(untilMs)); } catch (const std::exception &e) { LOGE("очистка чата: %s", e.what()); }
         }
-    }).detach();
+    });
 }
 
 // ── наборы стикеров PVPK1 (PACK-1/2), превью, карта ──────────────────────────
@@ -389,18 +423,22 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackFetch(JNIE
             return files;
         };
         auto files = std::filesystem::is_directory(dir, ec) ? listFiles(dir) : json::array();
-        const auto wantHash = ref.value("content_hash", std::string());
-        if (!files.empty() && !wantHash.empty()) {
-            // Каталог с этим именем — другой набор: отдельный каталог
-            std::vector<parvane::pack::Entry> entries;
-            for (const auto &f : files) {
-                const auto name = f.value("name", std::string());
-                std::ifstream in(dir + "/" + name, std::ios::binary);
-                entries.push_back({name, std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>())});
-            }
-            if (parvane::pack::archiveContentHashB64(parvane::pack::build(entries)) != wantHash) {
+        const auto wantHash = ref.contains("content_hash") && ref["content_hash"].is_string()
+            ? ref["content_hash"].get<std::string>() : std::string();
+        if (!files.empty() && !wantHash.empty() && packDirHash(dir) != wantHash) {
+            // Тот же набор под другим именем — он и есть; иначе имя занято другим набором — отдельный каталог
+            if (const auto found = findInstalledPackByHash(root, wantHash); !found.empty()) {
+                dir = found;
+                LOGI("пак уже установлен под другим именем (тот же отпечаток)");
+            } else {
                 dir = root + "/" + parvane::pack::sanitizeName(raw.substr(0, 25) + " " + hashTag(wantHash));
-                files = std::filesystem::is_directory(dir, ec) ? listFiles(dir) : json::array();
+            }
+            files = std::filesystem::is_directory(dir, ec) ? listFiles(dir) : json::array();
+        } else if (files.empty() && !wantHash.empty()) {
+            if (const auto found = findInstalledPackByHash(root, wantHash); !found.empty()) {
+                dir = found;
+                files = listFiles(dir);
+                LOGI("пак уже установлен под другим именем (тот же отпечаток)");
             }
         }
         if (files.empty()) {
@@ -409,6 +447,9 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackFetch(JNIE
             if (!d.ok) throw std::runtime_error(d.error);
             const auto dec = parvane::blobcrypt::decrypt(d.bytes, ref.value("key", std::string()), ref.value("nonce", std::string()));
             if (!dec) throw std::runtime_error("архив не расшифровался");
+            // PACK-2: архив обязан совпасть с заявленным отпечатком (иначе отправитель подменил содержимое набора)
+            if (!wantHash.empty() && !parvane::pack::archiveMatchesContentHash(*dec, wantHash))
+                throw std::runtime_error("PVPK1: отпечаток архива не совпал с заявленным");
             const auto entries = parvane::pack::parse(*dec);
             if (entries.empty()) throw std::runtime_error("PVPK1: архив пуст или битый");
             std::filesystem::create_directories(dir, ec);
@@ -475,15 +516,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackRefFor(JNI
 
 // Отпечаток содержимого установленного набора (PACK-2: тот же набор от другого отправителя — один набор).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackHash(JNIEnv *env, jclass, jstring dirJ) {
-    const auto dir = jstr(env, dirJ);
-    std::vector<parvane::pack::Entry> entries;
-    std::error_code ec;
-    std::vector<std::filesystem::path> paths;
-    for (const auto &e : std::filesystem::directory_iterator(dir, ec)) if (e.is_regular_file()) paths.push_back(e.path());
-    std::sort(paths.begin(), paths.end());
-    for (const auto &p : paths)
-        if (parvane::pack::isAllowedExtension(p.filename().string())) entries.push_back({p.filename().string(), readFileBytes(p.string())});
-    return jout(env, entries.empty() ? std::string() : parvane::pack::archiveContentHashB64(parvane::pack::build(entries)));
+    return jout(env, packDirHash(jstr(env, dirJ)));
 }
 
 // Превью ссылки — только через шард preview; картинка превью (если есть) — вложением по секрету при отправке.
@@ -536,6 +569,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_parvane_core_ParvaneCore_nativeMapTile(JNI
         }
     }
     if (png.empty()) return nullptr;
+    LOGI("тайл %d/%d/%d через preview %zu байт", z, x, y, png.size()); // MAP-1: тайлы — только шардом preview
     jbyteArray arr = env->NewByteArray(static_cast<jsize>(png.size()));
     env->SetByteArrayRegion(arr, 0, static_cast<jsize>(png.size()), reinterpret_cast<const jbyte *>(png.data()));
     return arr;

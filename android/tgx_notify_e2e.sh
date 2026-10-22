@@ -1,24 +1,39 @@
 #!/usr/bin/env bash
-# Уведомления кросс-девайс в форке X: alice-десктоп мутит bob (AUTOMUTE) → X (второе
-# устройство alice) получает notify-блоб из sync/NotifyNotice → чат bob замучен в списке.
+# Уведомления кросс-девайс в форке X (spec 031, STATE-2 вид notify): alice-десктоп мутит bob (PARVANE_AUTOMUTE) →
+# запись журнала личного состояния → X (второе устройство alice) применяет её: «журнал состояния → уведомления
+# (N чатов …)» и UpdateChatNotificationSettings — чат bob замучен в списке.
+# После tgx_protocol_link_flow.sh (стек в последнем /tmp/pv-tgx.*, X — второе устройство alice).
+#   ./tgx_notify_e2e.sh [OUT_DIR]
 set -u
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH"
-. /mnt/hdd/ub/Projects/active/Parvane/desktop/verify_lib.sh
-ad() { timeout 30 adb "$@"; }
-OUT=/tmp/pv-tgx-notify; mkdir -p $OUT; SB=$(\ls -td /tmp/pv-tgx.* | head -1); A="$SB/alice"
-APK=$(find /mnt/hdd/ub/android/tgx/app/build/outputs/apk -name "*-x64-debug.apk" | head -1)
-ad install -r "$APK" >/dev/null 2>&1; ad shell am force-stop org.parvane.tgx; ad shell pm clear org.parvane.tgx >/dev/null
-ad shell pm grant org.parvane.tgx android.permission.POST_NOTIFICATIONS
-ad shell run-as org.parvane.tgx mkdir -p files/tdlib; ad shell run-as org.parvane.tgx cp /data/local/tmp/parvane-session.json files/tdlib/session.json
-ad logcat -c; ad shell am start -n org.parvane.tgx/org.thunderdog.challegram.MainActivity >/dev/null
-timeout 120 bash -c 'until adb logcat -d 2>/dev/null | grep -q "линковка: история получена"; do sleep 3; done' && ok "линковка" || bad "линковка не завершилась"
-sleep 5; ad exec-out screencap -p > $OUT/01-before.png
-kill $(pgrep -f "workdir $SB/alice/t[d]") 2>/dev/null; sleep 2
-AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1 PARVANE_AUTOMUTE="bob@local:6")
-wait_log "$A/td/log.txt" "automute → bob@local" 60 && ok "alice-десктоп замутила bob" || bad "automute не сработал"
-timeout 60 bash -c 'until adb logcat -d 2>/dev/null | grep -q "type.*notify\|notify blob\|UpdateChatNotificationSettings"; do sleep 3; done'
-sleep 8; ad exec-out screencap -p > $OUT/02-after-mute.png
-ad logcat -d -v time > $OUT/logcat.txt
-grep -aE "notify|мут|mute" $OUT/logcat.txt | grep -v "Notification\b" | tail -5 | cut -c1-160
-echo "AndroidRuntime: $(grep -c AndroidRuntime $OUT/logcat.txt)"
-echo "NOTIFY_E2E_DONE rc=$RC"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT="${1:-/tmp/pv-tgx-notify}"; mkdir -p "$OUT"
+. "$HERE/../desktop/verify_lib.sh"
+. "$HERE/tgx_lib.sh"
+tgx_env
+TGX_LOG="$OUT/logcat.txt"
+SB=$(\ls -td /tmp/pv-tgx.* | head -1); A="$SB/alice"; AL="$A/td/log.txt"
+
+tgx_stop; tgx_start
+tgx_logwait "v2: готов" 90 && ok "X: сессия поднята (второе устройство alice)" || bad "X: сессии нет"
+tgx_logwait "журнал личного состояния подключён" 60 || bad "X: журнал личного состояния не подключён"
+sleep 3; tgx_shot "$OUT/01-before.png"
+tgx_mark
+AP=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOMUTE="bob@local:15")
+wait_log "$AL" "automute → bob@local" 90 && ok "alice-десктоп замутила bob" || bad "automute не сработал"
+tgx_logwait "журнал состояния → уведомления \([1-9][0-9]* чатов" 90 && ok "X: мут применён из журнала личного состояния" \
+  || bad "X: мут из журнала не пришёл"
+tgx_mark
+tgx_put parvane-e2e-cmd '{"op":"notify","peer":"bob@local"}'
+tgx_logwait "уведомления bob@local: muteFor=[1-9]" 30 && ok "X: чат bob показан замученным" || bad "X: чат bob не замучен в UI"
+# после перезапуска — тот же мут (чат создаётся с настройками из журнала, а не по умолчанию)
+tgx_stop; tgx_start
+tgx_logwait "журнал личного состояния подключён" 90 || bad "X: журнал после перезапуска не подключён"
+sleep 3
+tgx_mark
+tgx_put parvane-e2e-cmd '{"op":"notify","peer":"bob@local"}'
+tgx_logwait "уведомления bob@local: muteFor=[1-9]" 30 && ok "X: мут пережил перезапуск" || bad "X: мут потерян после перезапуска"
+sleep 3; tgx_shot "$OUT/02-after-mute.png"
+stop_pid "$AP"
+tgx_no_crash
+kill "$TGX_LCP" 2>/dev/null
+finish "TGX NOTIFY"
