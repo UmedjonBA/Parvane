@@ -4,7 +4,8 @@
 # (его стек; bob — desktop). Свой аккаунт dave:
 #   1) X регистрирует dave, пишет bob, создаёт две группы с bob; копия ключей аккаунта уходит на сервер;
 #   2) данные X стёрты — X входит тем же ником новым устройством (нужна привязка) и вводит ключ восстановления;
-#   3) обе группы и личный чат появляются в списке X не позже 20 с после вступления.
+#   3) обе группы и личный чат появляются в списке X не позже 20 с после вступления, «План» первого устройства —
+#      тоже (ключ «Плана» из копии ключей аккаунта; другого устройства, которое прислало бы ключ, нет).
 #   ./tgx_recovery_groups_flow.sh [OUT_DIR]
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +34,10 @@ for g in "Klub-$RANDOM" "Kanal-$RANDOM"; do
   tgx_mark; tgx_cmd "{\"op\":\"group_create\",\"title\":\"$g\",\"members\":[\"bob@local\"]}"
   tgx_logwait "группа .* объявлен=true" 30 && ok "группа $g создана" || bad "группа $g не создана"
 done
+TASK="Zadacha-$RANDOM"
+tgx_cmd '{"op":"sections","section":"calendar"}' || bad "«План» не открыт"
+tgx_cmd "{\"op\":\"planner_add\",\"text\":\"$TASK\"}"
+tgx_logwait "planner: status=ready loaded=1 задачи=\[[^]]*$TASK" 60 && ok "задача в «Плане» первого устройства" || bad "задача не добавлена"
 tgx_mark
 tgx_logwait "копия ключей аккаунта обновлена" 150 && ok "копия ключей аккаунта на сервере" || bad "копия ключей не обновилась"
 
@@ -53,6 +58,10 @@ done
 DT=$(( $(date +%s) - T0 ))
 [ "$GOT" -ge 2 ] && [ "$DT" -le 30 ] && ok "обе группы в списке через ${DT} с после ключа" || bad "групп в списке: $GOT за ${DT} с"
 tgx_shot "$OUT/chats-after-key.png"
+tgx_cmd '{"op":"sections","section":"calendar"}' || bad "«План» не открыт"
+tgx_logwait "planner: status=ready loaded=1 задачи=\[[^]]*$TASK" 40 \
+  && ok "«План» первого устройства через $(( $(date +%s) - T0 )) с после ключа" || bad "задачи первого устройства в «Плане» нет"
+tgx_shot "$OUT/plan-after-key.png"
 tgx_no_crash
 kill "$TGX_LCP" 2>/dev/null
 finish "TGX RECOVERY GROUPS"

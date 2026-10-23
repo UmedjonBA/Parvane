@@ -341,7 +341,34 @@ public:
 		if (self != _self) {
 			switchAccount(self);
 		}
+		importDomainKeys();
 		applyWanted();
+	}
+
+	// Ключи «Плана» и «Облака» из копии ключей аккаунта (вход по ключу восстановления): ждут сессии своего
+	// аккаунта, затем движок принимает их как экспорт привязки — контейнеры подключаются сразу, а не когда другое
+	// своё устройство пришлёт ключ
+	void setDomainKeys(std::string owner, std::string planner, std::string cloud) {
+		_domainKeys = DomainKeys{ std::move(owner), std::move(planner), std::move(cloud) };
+		importDomainKeys();
+		applyWanted();
+	}
+
+	void importDomainKeys() {
+		if (!_domainKeys || _self.empty() || !_transport.session() || _domainKeys->owner != _self) {
+			return;
+		}
+		const auto keys = *std::exchange(_domainKeys, std::nullopt);
+		if (!keys.planner.empty() && keys.planner != "null") {
+			_plannerSync.keysImport(json(keys.planner));
+		}
+		if (!keys.cloud.empty() && keys.cloud != "[]" && keys.cloud != "null") {
+			_cloud.keysImport(json(keys.cloud));
+		}
+		_plannerSync.onEngineEvent();
+		_cloud.syncNow(true);
+		_plannerDirty = _cloudDirty = true;
+		LOG(("Parvane: разделы — ключи «Плана» и «Облака» из копии ключей аккаунта применены"));
 	}
 
 	// Выход из аккаунта (ревью 21 окт 2026, вечер): модули и снимки прежнего — прочь, до новой сессии
@@ -688,6 +715,12 @@ private:
 	bool _paletteOpen = false;
 	bool _notesLoaded = false;
 	std::function<void()> _notesRelease;
+	struct DomainKeys {
+		std::string owner;
+		std::string planner;
+		std::string cloud;
+	};
+	std::optional<DomainKeys> _domainKeys;
 	bool _plannerDirty = false;
 	bool _cloudDirty = false;
 	bool _notesDirty = false;
@@ -936,6 +969,12 @@ void OnEngineEvent(const json &event) {
 
 void OnSessionChanged() {
 	Enqueue([](Hub &hub) { hub.syncSession(); });
+}
+
+void ApplyDomainKeys(std::string owner, std::string planner, std::string cloud) {
+	Enqueue([owner = std::move(owner), planner = std::move(planner), cloud = std::move(cloud)](Hub &hub) mutable {
+		hub.setDomainKeys(std::move(owner), std::move(planner), std::move(cloud));
+	});
 }
 
 void OnAccountReset() {

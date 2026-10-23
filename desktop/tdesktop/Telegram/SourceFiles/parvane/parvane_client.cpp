@@ -8176,6 +8176,7 @@ void NoteDomainKeys(const std::string &planner, const std::string &cloud) {
 	}
 	StoreWrite(path,
 		QByteArray::fromStdString(nlohmann::json{ { "planner", planner }, { "cloud", cloud } }.dump()));
+	Sections::ApplyDomainKeys(self.toStdString(), planner, cloud);
 }
 
 // Устройство вошло в журнал по ключу восстановления: ключи доменов и история — из копии ключей аккаунта

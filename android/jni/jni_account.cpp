@@ -79,9 +79,13 @@ std::string downloadDecrypt(const json &coords, const char *id, const char *key,
 
 std::string markPath() { return storeDir() + "/bundle-history-mark.txt"; }
 
+// Ключи «Плана» и «Облака» из копии ключей аккаунта: файл (переживает перезапуск до подключения разделов) и сразу
+// разделам — без этого «План» появлялся, только когда другое своё устройство присылало ключ само
 void noteDomainKeys(const std::string &planner, const std::string &cloud) {
     if (planner.empty() && (cloud.empty() || cloud == "[]" || cloud == "null")) return;
-    parvane::storecrypt::writeFile(storeDir() + "/domain-keys.json", json{{"planner", planner}, {"cloud", cloud}}.dump());
+    parvane::storecrypt::writeFile(storeDir() + "/domain-keys.json",
+                                   json{{"owner", self()}, {"planner", planner}, {"cloud", cloud}}.dump());
+    sectionsDomainKeys();
     emit(json{{"type", "sections"}, {"domain", "keys"}});
 }
 

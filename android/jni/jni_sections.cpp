@@ -273,6 +273,28 @@ public:
         flushRecords();
         transport_.setSession(session);
         if (me != self_) switchAccount(me);
+        importDomainKeys();
+        applyWanted();
+    }
+
+    // Ключи «Плана» и «Облака» из копии ключей аккаунта (вход по ключу восстановления): движок принимает их как
+    // экспорт привязки, разделы подключают контейнеры сразу, не дожидаясь ключа от другого своего устройства
+    void importDomainKeys() {
+        if (self_.empty() || !transport_.session()) return;
+        const auto saved = json::parse(parvane::storecrypt::readFile(storeDir() + "/domain-keys.json"), nullptr, false);
+        if (!saved.is_object() || saved.value("owner", std::string()) != self_) return;
+        const auto planner = saved.value("planner", std::string());
+        const auto cloud = saved.value("cloud", std::string());
+        if (!planner.empty() && planner != "null") plannerSync_.keysImport(json(planner));
+        if (!cloud.empty() && cloud != "[]" && cloud != "null") cloud_.keysImport(json(cloud));
+        plannerSync_.onEngineEvent();
+        cloud_.syncNow(true);
+        plannerDirty_ = cloudDirty_ = true;
+        LOGI("разделы — ключи «Плана» и «Облака» из копии ключей аккаунта применены");
+    }
+
+    void applyDomainKeys() {
+        importDomainKeys();
         applyWanted();
     }
 
@@ -985,6 +1007,10 @@ void sectionsEngineEvent(const std::string &domainName, const std::string &id) {
 
 void sectionsSessionChanged() {
     enqueue([](Hub &hub) { hub.syncSession(); });
+}
+
+void sectionsDomainKeys() {
+    enqueue([](Hub &hub) { hub.applyDomainKeys(); });
 }
 
 void sectionsAccountReset() {

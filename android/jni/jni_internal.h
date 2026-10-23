@@ -186,6 +186,7 @@ void resetCalls();
 // ── разделы ──────────────────────────────────────────────────────────────────
 void sectionsEngineEvent(const std::string &domainName, const std::string &id);
 void sectionsSessionChanged();
+void sectionsDomainKeys(); // ключи доменов из копии ключей аккаунта (`domain-keys.json`) — применить разделам
 void sectionsAccountReset();
 
 // ── выход и стирание (NAT-16) ────────────────────────────────────────────────
