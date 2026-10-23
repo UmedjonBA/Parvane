@@ -59,6 +59,9 @@ function put(name, text) {
   writeFileSync(file, text);
   adb('push', file, `/data/local/tmp/${name}`);
   adb('shell', 'chmod', '644', `/data/local/tmp/${name}`);
+  // Время файла — по часам эмулятора: X не выполняет команду «старше» своего запуска, а `adb push` ставит время
+  // компьютера (часы эмулятора бывают впереди — свежая команда выглядела старой)
+  adb('shell', 'touch', `/data/local/tmp/${name}`);
 }
 const xLog = () => {
   try {
@@ -124,9 +127,17 @@ async function expectEverythingOnX(label, expected, startMark, readyAt) {
     const line = xSince(mark).split('\n').find((l) => l.includes('e2e-dump: '));
     if (!line) return false;
     const dump = JSON.parse(line.slice(line.indexOf('e2e-dump: ') + 10));
+    // Каждый текст — в своём чате, последнее сообщение чата — последнее отправленное в него
+    const [groupTitle, channelTitle] = expected.titles;
+    const dmTitle = expected.peer.split('@')[0];
+    const inChat = (title, texts) => texts.filter((t) => !(dump.byChat?.[title] || []).includes(t))
+      .map((t) => `«${t}» в чате «${title}»`);
+    const lastIs = (title, text) => (dump.last?.[title] === text ? [] : [`последнее в «${title}»: «${dump.last?.[title]}» вместо «${text}»`]);
     const all = [...expected.titles.filter((t) => !dump.chats.includes(t)).map((t) => `чат «${t}»`),
-      ...[...expected.dmTexts, ...expected.groupTexts, ...expected.channelTexts]
-        .filter((t) => !dump.texts.includes(t)).map((t) => `сообщение «${t}»`)];
+      ...inChat(dmTitle, expected.dmTexts), ...inChat(groupTitle, expected.groupTexts),
+      ...inChat(channelTitle, expected.channelTexts),
+      ...lastIs(groupTitle, expected.groupTexts.at(-1)), ...lastIs(channelTitle, expected.channelTexts.at(-1)),
+      ...lastIs(dmTitle, expected.dmTexts.at(-1))];
     if (!all.length) return true;
     if (Date.now() > readyAt + FAST_MS) missing.push(...all);
     return Date.now() > readyAt + FAST_MS;
@@ -212,17 +223,23 @@ try {
   await check('D: X (подтверждение с web) — всё прежнее сразу', () => expectEverythingOnX('D', expected, mark, readyAt));
   await check('D: X — без «не удалось»', () => expectNoFailureOnX('D', mark));
 
-  // ── E. web alice3 — подтверждением с X (X — старое устройство; dev-хук автогранта) ──
+  // ── E. web alice3 — подтверждением с X (X — старое устройство): окно запроса на X, подтверждение ──
   await alice2.page.close();
-  put('parvane-autolink', '1');
+  mark = xLog().length;
   const alice3 = await login(await browser.newContext({ viewport: WIDE }), aliceNick, 'alice3 (подтверждение с X)');
   all.alice3 = alice3;
   await pullFor(TG_ALICE, 'ask');
+  await check('E: на X окно запроса входа с кодом', async () => {
+    await xWait(/привязка: запрос от нового устройства, код готов/, LINK_TIMEOUT_MS, mark);
+    await new Promise((r) => { setTimeout(r, 2500); });
+    execFileSync('bash', ['-c', `adb exec-out screencap -p > '${join(OUT, 'link-request-sheet.png')}'`]);
+  });
+  // Подтверждение — тем же вызовом, что кнопка «Подтвердить» окна
+  await xCommand({ op: 'link_grant' });
   await check('E: web (подтверждение с X) — всё прежнее сразу', async () => {
     await waitLog(alice3, /v2: устройство привязано грантом линковки/, LINK_TIMEOUT_MS);
     await expectEverythingFast(alice3, expected, Date.now());
   });
-  adb('shell', 'rm', '-f', '/data/local/tmp/parvane-autolink');
 } catch (error) {
   fail('сценарий прерван', error);
   for (const [name, session] of Object.entries(all)) {

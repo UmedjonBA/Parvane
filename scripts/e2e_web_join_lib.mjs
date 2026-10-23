@@ -333,6 +333,8 @@ export async function seedAccount(browser, suffix) {
   const channelTitle = `JC Channel ${suffix}`;
   const channelPost = `post-${suffix}`;
   await createChannel(alice1.page, channelTitle, bobNick);
+  // Сразу после создания в DOM ещё жив композер прежнего чата (группы) — канал открываем явно
+  await openGroupChatByTitle(alice1.page, channelTitle);
   await sendText(alice1.page, channelPost);
 
   const taskName = `jc-task-${suffix}`;

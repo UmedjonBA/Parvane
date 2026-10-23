@@ -174,6 +174,10 @@ object AccountUi {
                 }
             }
         }
+        org.drinkless.tdlib.Client.noticeSink = { text ->
+            val activity = UI.getUiContext() as? android.app.Activity
+            if (activity == null) false else { Sx.main.post { PvToast.showInWindow(activity, text) }; true }
+        }
         ParvaneCore.addListener { event ->
             when (event.optString("type")) {
                 "link_request" -> {

@@ -70,6 +70,8 @@ class Client private constructor(
         @JvmStatic
         @Volatile
         var deletionPrompt: ((atMs: Long, answer: (Boolean) -> Unit) -> Unit)? = null
+        /** Оверлей показывает служебное сообщение сам (true) — окно X не нужно. */
+        var noticeSink: ((String) -> Boolean)? = null
 
         /** Группа чата (групповой звонок): {gid, title, members, self}; null — не группа. */
         @JvmStatic
@@ -1266,8 +1268,12 @@ class Client private constructor(
     /** url ссылки-приглашения v2 → её link_id (вступившие, удаление отозванной, заявки по ссылке). */
     private val linkIds = ConcurrentHashMap<String, String>()
     /** Сервисное уведомление X (чат «Parvane»): привязка, ключ восстановления, предупреждения. */
-    private fun serviceNotice(key: String, text: String) =
+    // Служебные сообщения Parvane (вход, привязка, ключ восстановления) — полоской оверлея в стиле приложения, а не
+    // модальным окном X; без оверлея (тесты шва) — как раньше
+    private fun serviceNotice(key: String, text: String) {
+        if (key.startsWith("parvane_") && noticeSink?.invoke(text) == true) return
         postUpdate(TdApi.UpdateServiceNotification(key, TdApi.MessageText(TdApi.FormattedText(text, arrayOf()), null, null)))
+    }
     /** Служебное сообщение в чате (как TDLib messageCustomServiceAction): id стабильный — повтор не дублирует. */
     private fun chatServiceMessage(chatAddress: String, author: String, idSeed: String, text: String) {
         val id = java.util.UUID.nameUUIDFromBytes(idSeed.toByteArray()).toString()
@@ -2642,10 +2648,9 @@ class Client private constructor(
                 val device = event.optString("device_id")
                 val auto = org.parvane.libtd.BuildConfig.DEBUG && java.io.File("/data/local/tmp/parvane-autolink").canRead()
                 if (auto) io.execute { Log.i(TAG, "привязка (dev): грант ${if (ParvaneCore.linkGrant(device)) "выдан" else "не выдан"}") }
-                else {
-                    pendingLinkRequests[device] = event.optString("code")
-                    serviceNotice("parvane_link_request", uiText("link_request").replace("%s", event.optString("code")))
-                }
+                // Окно подтверждения рисует оверлей (шторка `AccountUi.confirmLink`) — служебное уведомление X поверх
+                // него было бы вторым окном с тем же кодом
+                else pendingLinkRequests[device] = event.optString("code")
             }
             // Запрос исчез (устройство вошло иным путём) либо грант выдан — подтверждать больше нечего
             "link_request_gone", "link_granted" -> pendingLinkRequests.remove(event.optString("device_id"))

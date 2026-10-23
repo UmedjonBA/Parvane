@@ -189,10 +189,17 @@ class ParvaneStore {
         val titles = org.json.JSONArray()
         chats.values.forEach { titles.put(it.title) }
         val texts = org.json.JSONArray()
-        messages.values.forEach { list ->
-            synchronized(list) { list.toList() }.forEach { m -> (m.content as? TdApi.MessageText)?.text?.text?.let { texts.put(it) } }
+        val byChat = JSONObject()
+        messages.forEach { (chatId, list) ->
+            val chatTexts = org.json.JSONArray()
+            synchronized(list) { list.toList() }.forEach { m ->
+                (m.content as? TdApi.MessageText)?.text?.text?.let { texts.put(it); chatTexts.put(it) }
+            }
+            byChat.put(chats[chatId]?.title ?: chatId.toString(), chatTexts)
         }
-        return JSONObject().put("chats", titles).put("texts", texts)
+        val last = JSONObject()
+        chats.values.forEach { c -> (c.lastMessage?.content as? TdApi.MessageText)?.text?.text?.let { last.put(c.title, it) } }
+        return JSONObject().put("chats", titles).put("texts", texts).put("byChat", byChat).put("last", last)
     }
 
     /** Файл cloud: file_id (uuid) + ключ/nonce blobcrypt + локальный путь после скачивания. */
