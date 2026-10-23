@@ -2265,6 +2265,9 @@ export interface LangPair {
   'ParvaneNickTaken': undefined;
   'ParvaneCreateAccount': undefined;
   'ParvaneHaveAccount': undefined;
+  'ParvaneAppDownloadOr': undefined;
+  'ParvaneAppDownload': undefined;
+  'ParvaneAppDownloadHint': undefined;
   'ParvaneRegisterTitle': undefined;
   'ParvaneRegisterText': undefined;
   'ParvaneRegisterTextEmail': undefined;

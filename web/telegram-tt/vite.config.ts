@@ -108,6 +108,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const plugins: PluginOption[] = [
     v2InviteRedirectPlugin(),
     cloudLinkRedirectPlugin(),
+    downloadPagePlugin(),
     buildVersionFilePlugin(APP_BUILD),
     buildGitInfoPlugin({
       appEnv,
@@ -188,6 +189,7 @@ export default defineConfig(({ mode }): UserConfig => {
     TG_PUBLIC_URL: baseUrl,
     TG_CSP: csp,
     TG_LINK_CSP: buildLinkCsp(appEnv),
+    TG_DOWNLOAD_CSP: DOWNLOAD_CSP,
     TG_APPLE_ICON: appleIcon,
     TG_MAIN_ICON: mainIcon,
     TG_MANIFEST: manifest,
@@ -245,10 +247,11 @@ export default defineConfig(({ mode }): UserConfig => {
         IMAGE_ASSET_RE.test(filePath) || TGS_ASSET_RE.test(filePath) ? false : undefined
       ),
       rolldownOptions: {
-        // Два входа: приложение и лёгкая публичная страница ссылки облака (spec 022)
+        // Входы: приложение, лёгкая публичная страница ссылки облака (spec 022) и страница скачивания APK
         input: {
           index: resolve(DIR_NAME, 'index.html'),
           s: resolve(DIR_NAME, 's.html'),
+          download: resolve(DIR_NAME, 'download.html'),
         },
         output: {
           // Группы в порядке приоритета. Зависимости попавшего в группу модуля идут в тот же кусок
@@ -455,6 +458,43 @@ function cloudLinkRedirectPlugin(): Plugin {
 // CSP публичной страницы ссылки: только свои скрипты и стили (встроенных нет), соединения — только
 // со своим origin (gateway по /ws) и явно заданным PARVANE_GATEWAY_ORIGIN (стенды). Картинки —
 // свои, `blob:` (просмотр расшифрованного) и `data:` (значки в таблице стилей).
+// Страница скачивания Android-приложения `/download` (вход `download.html`): к gateway не ходит, только `HEAD`
+// к файлу APK своего сервера; встроенные стили — у SVG QR-кода
+const DOWNLOAD_CSP = `
+  default-src 'none';
+  connect-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  font-src 'self' data:;
+  img-src 'self' blob: data:;
+  object-src 'none';
+  frame-src 'none';
+  base-uri 'none';
+  form-action 'none';`
+  .replace(/\s+/g, ' ').trim();
+const DOWNLOAD_PATH = /^\/download\/?$/;
+
+// `/download` отдаёт `download.html` с тем же адресом; то же правило — в Caddyfile прода
+function downloadPagePlugin(): Plugin {
+  type Middlewares = { use: (fn: (req: { url?: string }, res: unknown, next: () => void) => void) => void };
+  const install = (middlewares: Middlewares) => middlewares.use((req, res, next) => {
+    const [path, query] = (req.url || '').split('?');
+    if (DOWNLOAD_PATH.test(path)) {
+      req.url = `/download.html${query ? `?${query}` : ''}`;
+    }
+    next();
+  });
+  return {
+    name: 'parvane-download-page',
+    configureServer: (server) => {
+      install(server.middlewares);
+    },
+    configurePreviewServer: (server) => {
+      install(server.middlewares);
+    },
+  };
+}
+
 function buildLinkCsp(appEnv: string) {
   return `
   default-src 'none';

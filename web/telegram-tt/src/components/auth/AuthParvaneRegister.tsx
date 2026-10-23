@@ -15,6 +15,7 @@ import useLastCallback from '../../hooks/useLastCallback';
 import Icon from '../common/icons/Icon';
 import Button from '../ui/Button';
 import InputText from '../ui/InputText';
+import AuthAppDownload from './AuthAppDownload';
 import { isNickOrAddress } from './AuthParvane';
 
 type StateProps = Pick<GlobalState, 'auth'>;
@@ -177,6 +178,7 @@ const AuthParvaneRegister = ({ auth }: StateProps) => {
             {lang('ParvaneHaveAccount')}
           </Button>
         </form>
+        <AuthAppDownload />
       </div>
     </div>
   );

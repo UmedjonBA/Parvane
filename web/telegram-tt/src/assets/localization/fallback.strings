@@ -3092,6 +3092,9 @@
 "ParvaneNickTaken" = "This nickname is already taken.";
 "ParvaneCreateAccount" = "Create account";
 "ParvaneHaveAccount" = "I already have an account";
+"ParvaneAppDownloadOr" = "or";
+"ParvaneAppDownload" = "Download for Android";
+"ParvaneAppDownloadHint" = "Parvane app for your phone";
 "ParvaneRegisterTitle" = "New account";
 "ParvaneRegisterText" = "Pick a nickname and a password.";
 "ParvaneRegisterTextEmail" = "Pick a nickname and a password. We will send a confirmation code to your email.";

@@ -53,6 +53,10 @@
 	@cloudlink path_regexp cloudlink ^/s/([A-Za-z0-9_-]{22})$
 	redir @cloudlink /s.html?id={re.cloudlink.1} 302
 
+	# Страница скачивания Android-приложения: `/download` отдаёт вход сборки `download.html` (то же — плагин vite)
+	@downloadpage path /download /download/
+	rewrite @downloadpage /download.html
+
 	# APK для Android (spec 031, T078): отдельный каталог хоста ~/parvane/apk — deploy.sh подменяет web-dist целиком
 	# и его не трогает. Только *.apk; скачивание файлом, без кэша (новая версия под тем же именем)
 	@apk path_regexp apk ^/apk/[A-Za-z0-9._-]+\.apk$

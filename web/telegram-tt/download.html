@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru" translate="no" class="notranslate">
+
+<head>
+  <meta charset="UTF-8">
+
+  <title>Parvane для Android</title>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Parvane — мессенджер со сквозным шифрованием, планом, заметками и облаком. Скачать приложение для Android.">
+  <meta name="referrer" content="no-referrer">
+  <meta name="google" content="notranslate">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#1d2021">
+
+  <!-- Parvane: страница скачивания Android-приложения. Свой строгий CSP: скрипты и стили только свои,
+       соединения — только со своим сервером (размер и дата файла APK). -->
+  <meta http-equiv="Content-Security-Policy" content="%TG_DOWNLOAD_CSP%">
+
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="./favicon.ico" type="image/x-icon">
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+</head>
+
+<body>
+  <main id="page" class="page" data-download-page>
+    <section class="hero">
+      <img class="logo" alt="" width="112" height="112">
+      <h1 id="title" class="title">Parvane для Android</h1>
+      <p id="lead" class="lead"></p>
+      <a id="download" class="download" href="/apk/parvane-android-arm64.apk" download="parvane-android-arm64.apk">
+        <svg class="download-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v12m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span class="download-text">
+          <span id="download-title" class="download-title">Скачать APK</span>
+          <span id="download-meta" class="download-meta" data-apk-meta></span>
+        </span>
+      </a>
+      <p id="requirements" class="requirements"></p>
+      <p id="other-device" class="notice" hidden></p>
+    </section>
+
+    <section id="qr-card" class="card qr-card" hidden>
+      <div id="qr" class="qr" data-download-qr></div>
+      <div class="qr-text">
+        <h2 id="qr-title" class="card-title"></h2>
+        <p id="qr-hint" class="muted"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 id="steps-title" class="card-title"></h2>
+      <ol id="steps" class="steps"></ol>
+      <p id="warning" class="muted"></p>
+    </section>
+
+    <section class="features" id="features"></section>
+
+    <footer class="foot">
+      <a id="web-link" class="web-link" href="/"></a>
+    </footer>
+  </main>
+  <script type="module" src="./src/downloadPage/index.ts"></script>
+</body>
+
+</html>

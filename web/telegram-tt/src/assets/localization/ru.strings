@@ -1139,6 +1139,9 @@
 "ParvaneNickTaken" = "Этот ник уже занят.";
 "ParvaneCreateAccount" = "Создать аккаунт";
 "ParvaneHaveAccount" = "У меня уже есть аккаунт";
+"ParvaneAppDownloadOr" = "или";
+"ParvaneAppDownload" = "Скачать для Android";
+"ParvaneAppDownloadHint" = "Приложение Parvane для телефона";
 "ParvaneRegisterTitle" = "Новый аккаунт";
 "ParvaneRegisterText" = "Придумайте ник и пароль.";
 "ParvaneRegisterTextEmail" = "Придумайте ник и пароль. Мы отправим код подтверждения на вашу почту.";

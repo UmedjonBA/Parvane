@@ -23,6 +23,13 @@ type QrCodeStylingOptions = {
     color?: string;
     gradient?: QrCodeGradient;
   };
+  cornersDotOptions?: {
+    type?: string;
+    color?: string;
+  };
+  backgroundOptions?: {
+    color?: string;
+  };
   imageOptions?: {
     imageSize?: number;
     margin?: number;

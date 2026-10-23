@@ -87,8 +87,9 @@
 }
 
 #auth-phone-number-form {
+  // Parvane: место под кнопку «Далее» (появляется, когда ник введён) без пустоты до кнопки скачивания
   .form {
-    min-height: 26.25rem;
+    min-height: 19.5rem;
   }
 }
 
@@ -125,6 +126,96 @@
 
 .auth-button {
   margin-top: 2.5rem;
+}
+
+// Parvane: ссылка на страницу скачивания Android-приложения под формой
+.auth-app-download {
+  margin-top: 2rem;
+  padding-bottom: 1rem;
+}
+
+.auth-app-download-divider {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+
+  margin-bottom: 1rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+
+  &::before,
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--color-borders);
+  }
+}
+
+.auth-app-download-button {
+  display: flex;
+  gap: 0.875rem;
+  align-items: center;
+
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-borders);
+  border-radius: 1rem;
+
+  color: var(--color-text);
+  text-align: start;
+  text-decoration: none;
+
+  background: var(--color-background-secondary);
+
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+
+  &:hover,
+  &:focus-visible {
+    border-color: var(--color-primary);
+    color: var(--color-text);
+    text-decoration: none;
+    background: var(--color-background);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.auth-app-download-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+
+  font-size: 1.5rem;
+  color: var(--color-white);
+
+  background: var(--color-primary);
+}
+
+.auth-app-download-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.auth-app-download-title {
+  font-size: 1rem;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
+}
+
+.auth-app-download-subtitle {
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--color-text-secondary);
 }
 
 .auth-button + .auth-button {
