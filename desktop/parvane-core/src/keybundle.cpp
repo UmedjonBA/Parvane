@@ -233,4 +233,57 @@ std::string digestHex(const std::string &text) {
     return toHex(h, len);
 }
 
+namespace {
+
+nlohmann::json parseArray(const nlohmann::json &field) {
+    if (!field.is_string()) return nlohmann::json::array();
+    auto v = nlohmann::json::parse(field.get<std::string>(), nullptr, false);
+    return v.is_array() ? v : nlohmann::json::array();
+}
+
+bool hasPlannerKeys(const nlohmann::json &payload) {
+    if (!payload.is_object() || !payload.contains("planner") || !payload["planner"].is_string()) return false;
+    const auto &text = payload["planner"].get_ref<const std::string &>();
+    return !text.empty() && text != "null";
+}
+
+std::size_t keyCount(const nlohmann::json &entry) {
+    return entry.is_object() && entry.contains("keys") && entry["keys"].is_array() ? entry["keys"].size() : 0;
+}
+
+} // namespace
+
+nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &server) {
+    if (!server.is_object() || server.empty()) return own;
+    auto merged = own;
+    if (!hasPlannerKeys(own) && hasPlannerKeys(server)) merged["planner"] = server["planner"];
+    const auto ownCloud = parseArray(own.value("cloud", nlohmann::json()));
+    const auto serverCloud = parseArray(server.value("cloud", nlohmann::json()));
+    if (!serverCloud.empty()) {
+        auto cloud = nlohmann::json::array();
+        for (const auto &entry : ownCloud) {
+            const auto id = entry.is_object() ? entry.value("id", std::string()) : std::string();
+            auto pick = entry;
+            for (const auto &other : serverCloud) {
+                if (other.is_object() && other.value("id", std::string()) == id && keyCount(other) > keyCount(entry)) pick = other;
+            }
+            cloud.push_back(pick);
+        }
+        for (const auto &other : serverCloud) {
+            const auto id = other.is_object() ? other.value("id", std::string()) : std::string();
+            bool known = false;
+            for (const auto &entry : ownCloud) known = known || (entry.is_object() && entry.value("id", std::string()) == id);
+            if (!known) cloud.push_back(other);
+        }
+        merged["cloud"] = cloud.dump();
+    }
+    const auto serverHistory = server.value("history", nlohmann::json());
+    if (serverHistory.is_object() && !serverHistory.value("fileId", std::string()).empty()) {
+        const auto ownHistory = own.value("history", nlohmann::json());
+        const auto size = [](const nlohmann::json &h) { return h.is_object() ? h.value("size", std::int64_t(0)) : std::int64_t(0); };
+        if (!ownHistory.is_object() || size(ownHistory) < size(serverHistory)) merged["history"] = serverHistory;
+    }
+    return merged;
+}
+
 } // namespace parvane::keybundle

@@ -30,6 +30,8 @@ parvane::json g_linkPendingGrant;
 // и офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
 std::map<QString, parvane::linking::EphemeralKey> g_linkChallenges;
 QHash<QString, QString> g_linkOffersShown;
+// Окна подтверждения привязки по устройству (только main): запрос исчез — окно закрывается само
+QHash<QString, base::weak_qptr<Ui::GenericBox>> g_linkBoxes;
 bool g_linkOffersPolling = false;
 
 [[nodiscard]] std::int64_t NowMs() {
@@ -496,7 +498,24 @@ void PollLinkOffersOnce() {
 					{ "box_payload", resp.grant->boxPayload }, { "eph_pub", resp.grant->ephPub } };
 			}
 		}
+		// Уже вошедшие в журнал своих устройств (ключом восстановления, подтверждением) — не запрос: их оффер мог
+		// остаться на сервере до отзыва, а «новое устройство просит привязку» для них только путает
+		std::set<std::string> joined;
+		if (!resp.offers.empty()) {
+			if (const auto s = V2Ready()) {
+				try {
+					s->refreshPeerLog(SelfAddress().toStdString());
+				} catch (const std::exception &) {
+				}
+				for (auto &id : s->ownDevices()) {
+					joined.insert(std::move(id));
+				}
+			}
+		}
 		for (const auto &o : resp.offers) {
+			if (joined.count(o.deviceId)) {
+				continue;
+			}
 			offers.push_back(parvane::json{ { "device_id", o.deviceId }, { "eph_pub", o.ephPub },
 				{ "commitment", o.commitment }, { "signing_key", o.signingKey },
 				{ "challenge_pub", o.challengePub }, { "created_at", o.createdMs / 1000 } });
@@ -512,9 +531,29 @@ void PollLinkOffersOnce() {
 				live.insert(QString::fromStdString(o.value("device_id", std::string())));
 			}
 		}
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();) {
-			it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+		QStringList gone;
+		{
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();) {
+				it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+			}
+			for (auto it = g_linkOffersShown.begin(); it != g_linkOffersShown.end();) {
+				if (live.count(it.key())) {
+					++it;
+					continue;
+				}
+				gone.push_back(it.key());
+				it = g_linkOffersShown.erase(it);
+			}
+		}
+		if (!gone.isEmpty()) {
+			crl::on_main([gone] {
+				for (const auto &dev : gone) {
+					if (const auto box = g_linkBoxes.take(dev).get()) {
+						box->closeBox();
+					}
+				}
+			});
 		}
 	}
 	for (const auto &o : offers) {
@@ -582,7 +621,10 @@ void PollLinkOffersOnce() {
 			continue;
 		}
 		crl::on_main([dev, eph, signingKey, code] {
-			Ui::show(Ui::MakeConfirmBox({
+			if (const auto previous = g_linkBoxes.take(dev).get()) {
+				previous->closeBox();
+			}
+			g_linkBoxes[dev] = Ui::show(Ui::MakeConfirmBox({
 				.text = tr::lng_parvane_link_grant_confirm(tr::now, lt_code, code),
 				.confirmed = [dev, eph, signingKey](Fn<void()> &&close) {
 					crl::async([dev, eph, signingKey] { GrantLink(dev, eph, signingKey); });

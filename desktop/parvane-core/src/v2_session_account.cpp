@@ -577,6 +577,30 @@ void Session::refreshKeyBundleLocked(bool force) {
         if (const auto g = client_->call("groupKeysExport"); g.is_array() && !g.empty()) payload["groups"] = g.dump();
         const auto mark = keybundle::digestHex(payload.dump());
         if (!force && readStateFile("bundle-sent") == mark) return;
+        // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако», группы или полную
+        // историю (только что вошло), не должно стирать их из копии для следующих устройств
+        json server;
+        try {
+            const auto current = fetchRootBackupStateLocked().value("key_bundle", std::string());
+            if (!current.empty()) {
+                if (const auto opened = keybundle::open(bundleKey, cfg_.self, fromBase64(current))) server = *opened;
+            }
+        } catch (const std::exception &e) {
+            log(std::string("копия ключей аккаунта: серверная не прочитана: ") + e.what());
+            return; // без серверной копии не пишем — иначе могли бы её обеднить
+        }
+        if (server.is_object()) {
+            const auto ownGroups = payload.value("groups", std::string("[]"));
+            payload = keybundle::mergeWithServer(payload, server);
+            if (const auto sg = server.value("groups", std::string()); !sg.empty()) {
+                try {
+                    const auto groups = client_->call("groupKeysMerge", json{{"own", ownGroups}, {"server", sg}});
+                    if (groups.is_array() && !groups.empty()) payload["groups"] = groups.dump();
+                } catch (const std::exception &e) {
+                    log(std::string("копия ключей аккаунта: ключи групп не сведены: ") + e.what());
+                }
+            }
+        }
         auto sealed = keybundle::seal(bundleKey, cfg_.self, payload);
         if (sealed.size() > kBundleMaxBytes && payload.contains("groups")) {
             // Групп слишком много — без них (их перешлёт другое своё устройство, T142)
@@ -803,6 +827,11 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
         if (!bundleKey.empty() && !state.value("key_bundle", std::string()).empty()) {
             if (const auto opened = keybundle::open(bundleKey, cfg_.self, fromBase64(state.value("key_bundle", std::string())))) {
                 payload = *opened;
+            } else {
+                // Копия есть, но не открылась (испорчена, другой формат): «восстановление корнем» отозвало бы все
+                // прежние устройства — это не то, о чём просили
+                log("копия ключей аккаунта на сервере не открылась — вход по ней невозможен");
+                return {"failed", {}, {}, nullptr};
             }
         }
     }
@@ -840,7 +869,9 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
         }
     }
     joinWithGrant(material);
-    if (!waitReady(60000)) return {"failed", {}, {}, nullptr};
+    // Запись в журнал прошла, а подъём сорвался на временной ошибке — сессия повторяет сама; «не удалось» тут было
+    // бы неправдой (устройство входило в фоне, а группы и «План» из копии не применялись)
+    if (!waitReady(60000) && (needsLinking_ || stopping_ || !waitReady(120000))) return {"failed", {}, {}, nullptr};
     log("устройство привязано ключом восстановления (прежние устройства остались)");
     if (const auto groups = payload.value("groups", std::string()); !groups.empty()) applyBundleGroups(groups);
     return {"ok", payload.value("planner", std::string()), payload.value("cloud", std::string()),
@@ -849,7 +880,15 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
 
 // После запуска: копия корня на сервер, ключ восстановления — в Telegram, копия ключей аккаунта — сразу и
 // по таймеру (как web startRecoveryUpkeep).
+void Session::ackJoined() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    std::remove((cfg_.stateDir + "/joined-unacked").c_str());
+}
+
 void Session::startRecoveryUpkeepLocked() {
+    // Устройство вошло в журнал (ключом восстановления, грантом другого устройства, повтором после обрыва): хосту —
+    // забрать из копии ключей аккаунта группы, «План», «Облако», историю и отозвать оффер привязки
+    if (!readStateFile("joined-unacked").empty()) outbox_.push_back(json{{"type", "joined"}});
     try {
         uploadRootBackupLocked();
     } catch (const std::exception &e) {

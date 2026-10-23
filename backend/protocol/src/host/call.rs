@@ -181,6 +181,7 @@ impl HostClient {
                 parsed(self.join_with_grant(&m, a.n("otkCount")?)?)
             }
             "groupKeysExport" => parsed(c.group_keys_export_json()),
+            "groupKeysMerge" => parsed(crate::client::Client::group_keys_merge_json(&a.text("own")?, &a.text("server")?).map_err(err)?),
             "groupKeysImport" => parsed(events(&c.group_keys_import_json(&a.text("json")?).map_err(err)?)),
             "shareGroupsWithOwnDevices" => reqs(&c.share_groups_with_own_devices(&a.strings("devicesJson")?).map_err(cerr)?),
 

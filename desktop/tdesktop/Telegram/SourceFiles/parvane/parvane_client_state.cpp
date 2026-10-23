@@ -1615,6 +1615,10 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	if (type == "stateReady") {
 		Sections::OnSessionChanged();
 	}
+	if (type == "joined") {
+		crl::async([] { CompleteJoin(); });
+		return true;
+	}
 	const auto address = QString::fromStdString(ev.value("address", std::string()));
 	if (type == "groupUpdated") {
 		OnMainForAccount([address, info = ev.value("info", parvane::json()), isNew = ev.value("isNew", false)] {

@@ -523,6 +523,50 @@ fn group_keys_from_account_bundle_reach_recovered_device() {
     assert!(alice2.group_keys_import_json("не json").is_err());
 }
 
+/// Запись копии ключей аккаунта устройством, у которого ещё нет групп (только что вошло), не стирает их из копии:
+/// свои ключи + серверные для групп, которых у устройства нет; группа, которая есть у устройства, — только его.
+#[test]
+fn account_bundle_groups_merge_keeps_groups_device_lacks() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g1, req) = alice.group_create(GroupKind::Group, "Первая", &["bob@local".to_string()], perms.clone()).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g1.id));
+    let only_first = alice.group_keys_export_json();
+    let (g2, req) = alice.group_create(GroupKind::Group, "Вторая", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g2.id));
+    let server = alice.group_keys_export_json();
+    let count = |j: &str| serde_json::from_str::<Vec<String>>(j).unwrap().len();
+
+    // Устройство без групп: копия сервера целиком
+    assert_eq!(Client::group_keys_merge_json("[]", &server).unwrap(), server);
+    // Устройство знает только первую группу: своё по первой + серверное по второй, без дублей первой
+    let merged = Client::group_keys_merge_json(&only_first, &server).unwrap();
+    assert_eq!(count(&merged), count(&server), "{merged}");
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice2.group_keys_import_json(&merged).unwrap();
+    satisfy(&mut srv, &mut alice2, Need::GroupLog { group: g1.id.clone(), after: 0 });
+    satisfy(&mut srv, &mut alice2, Need::GroupLog { group: g2.id.clone(), after: 0 });
+    alice2.drain_ready();
+    let mut ids = alice2.group_ids();
+    ids.sort();
+    let mut want = vec![g1.id.clone(), g2.id.clone()];
+    want.sort();
+    assert_eq!(ids, want, "{:?}", alice2.last_error);
+    // Испорченная копия сервера — свои ключи остаются
+    assert_eq!(Client::group_keys_merge_json(&only_first, "мусор").unwrap(), only_first);
+    assert!(Client::group_keys_merge_json("мусор", &server).is_err());
+}
+
 /// Публичная группа без сообщений своему новому устройству (spec 030): ключи эпохи у вступившего лениво берутся из
 /// комплекта журнала при первом конверте; без сообщений их не было, и `share_groups_with_own_devices` группу
 /// пропускал — устройство, привязанное после вступления, публичный канал не узнавало вовсе.

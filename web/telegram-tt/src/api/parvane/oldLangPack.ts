@@ -293,6 +293,7 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
     + 'your chats again you will need your recovery key. Make sure you have saved it. Sign out?',
   ParvaneNeedsLinkingNotice: 'This device is not linked to your account yet. Reply to the Parvane bot in Telegram '
     + 'with your recovery key or confirm this device on another one',
+  ParvaneDeviceJoinedNotice: 'Device connected: chats, groups, Plan and files are here',
   'AccountSettings.Logout': 'Log Out',
   AccDescrGoBack: 'Go back',
 
@@ -1671,6 +1672,7 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
     + 'переписку, понадобится ключ восстановления. Убедитесь, что он сохранён. Выйти?',
   ParvaneNeedsLinkingNotice: 'Это устройство ещё не привязано к аккаунту. Ответьте боту Parvane в Telegram ключом '
     + 'восстановления или подтвердите устройство на другом',
+  ParvaneDeviceJoinedNotice: 'Устройство подключено: чаты, группы, «План» и файлы на месте',
   'AccountSettings.Logout': 'Выйти',
   AccDescrGoBack: 'Назад',
 

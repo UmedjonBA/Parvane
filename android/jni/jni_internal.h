@@ -178,6 +178,7 @@ void resetLinking();
 [[nodiscard]] json bundleHistory(const json &previous, bool force);
 void syncFromKeyBundle();
 void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome);
+void completeJoin(); // событие сессии `joined`: всё из копии ключей аккаунта, отзыв оффера
 
 // ── звонки ───────────────────────────────────────────────────────────────────
 void handleCallSignal(const std::string &from, bool group, const json &signal);

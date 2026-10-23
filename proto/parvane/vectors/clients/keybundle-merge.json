@@ -1,0 +1,129 @@
+{
+  "cases": [
+    {
+      "name": "новое устройство без «Плана», «Облака» и истории — всё с сервера",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "cloud": "[]"
+      },
+      "server": {
+        "grant": "old",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[{\"domain\":\"local\",\"id\":\"c1\",\"keys\":[[1,\"x\"]]}]",
+        "history": {
+          "fileId": "f1",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 1,
+          "mark": "m1",
+          "size": 5000
+        }
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[{\"domain\":\"local\",\"id\":\"c1\",\"keys\":[[1,\"x\"]]}]",
+        "history": {
+          "fileId": "f1",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 1,
+          "mark": "m1",
+          "size": 5000
+        }
+      }
+    },
+    {
+      "name": "своё полнее — своё; облако — объединение по id, у общего — с бо́льшим числом эпох",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[{\"domain\":\"local\",\"id\":\"c1\",\"keys\":[[1,\"x\"],[2,\"y\"]]}]",
+        "history": {
+          "fileId": "f2",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 2,
+          "mark": "m2",
+          "size": 6000
+        }
+      },
+      "server": {
+        "grant": "old",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[]}",
+        "cloud": "[{\"domain\":\"local\",\"id\":\"c1\",\"keys\":[[1,\"x\"]]},{\"domain\":\"local\",\"id\":\"c2\",\"keys\":[[1,\"z\"]]}]",
+        "history": {
+          "fileId": "f1",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 1,
+          "mark": "m1",
+          "size": 5000
+        }
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[{\"domain\":\"local\",\"id\":\"c1\",\"keys\":[[1,\"x\"],[2,\"y\"]]},{\"domain\":\"local\",\"id\":\"c2\",\"keys\":[[1,\"z\"]]}]",
+        "history": {
+          "fileId": "f2",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 2,
+          "mark": "m2",
+          "size": 6000
+        }
+      }
+    },
+    {
+      "name": "свой снимок истории меньше серверного — серверный",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "history": {
+          "fileId": "f3",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 3,
+          "mark": "m3",
+          "size": 100
+        }
+      },
+      "server": {
+        "grant": "old",
+        "history": {
+          "fileId": "f1",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 1,
+          "mark": "m1",
+          "size": 5000
+        }
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "history": {
+          "fileId": "f1",
+          "fileKey": "k",
+          "fileNonce": "n",
+          "at": 1,
+          "mark": "m1",
+          "size": 5000
+        }
+      }
+    },
+    {
+      "name": "сервер пуст — своё как есть",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[]"
+      },
+      "server": {},
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
+        "cloud": "[]"
+      }
+    }
+  ]
+}

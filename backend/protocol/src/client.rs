@@ -3123,6 +3123,33 @@ impl Client {
         Ok(self.group_keys_import(&raw))
     }
 
+    /// Поле `groups` копии ключей аккаунта при записи: свои ключи плюс ключи с сервера для групп, которых у этого
+    /// устройства ещё нет (только что вошедшее устройство не должно стирать из копии группы, журналы которых ещё
+    /// дочитывает). Группа определяется по `context.group.id`; негодные записи сервера отбрасываются.
+    pub fn group_keys_merge_json(own: &str, server: &str) -> Result<String> {
+        let decode = |text: &str| -> Result<Vec<(Vec<u8>, String)>> {
+            let v: Vec<String> = serde_json::from_str(text).map_err(|_| ProtoError::Malformed)?;
+            Ok(v.into_iter()
+                .filter_map(|s| {
+                    let raw = base64::engine::general_purpose::STANDARD.decode(&s).ok()?;
+                    let gk = GroupKeyShare::decode(raw.as_slice()).ok()?;
+                    let id = gk.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.id.clone())?;
+                    Some((id, s))
+                })
+                .collect())
+        };
+        let own = decode(own)?;
+        let server = decode(server).unwrap_or_default();
+        let known: std::collections::HashSet<_> = own.iter().map(|(id, _)| id.clone()).collect();
+        let mut out: Vec<String> = own.into_iter().map(|(_, s)| s).collect();
+        for (id, s) in server {
+            if !known.contains(&id) && !out.contains(&s) {
+                out.push(s);
+            }
+        }
+        serde_json::to_string(&out).map_err(|_| ProtoError::Malformed.into())
+    }
+
     /// Ключи текущей эпохи и входящие сессии Megolm всех групп, где мы
     /// участник (с флагом L2-набивки группы).
     fn own_group_shares(&mut self) -> Vec<(bool, GroupKeyShare)> {

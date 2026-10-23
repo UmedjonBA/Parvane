@@ -2055,6 +2055,7 @@ class Client private constructor(
                         TdApi.ChatFolderIcon("💼"), 3, false, LongArray(0), longArrayOf(chatId), LongArray(0), false, false, false, false, false, false, false, false)))
                     "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
                     "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
+                    "dump" -> { Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok() }
                     "search" -> handle(TdApi.SearchMessages(null, cmd.optString("query"), "", 50, null, null, 0, 0))
                     // голос в опросе по uuid сообщения — тот же путь, что тап по варианту в X (варианты рисуются на canvas, uiautomator их не видит)
                     "vote" -> store.messageByUuid(cmd.optString("uuid"))?.let { m -> handle(TdApi.SetPollAnswer(m.chatId, m.id, intArrayOf(cmd.optInt("option")))) } ?: TdApi.Error(404, "poll not found")
@@ -2646,6 +2647,8 @@ class Client private constructor(
                     serviceNotice("parvane_link_request", uiText("link_request").replace("%s", event.optString("code")))
                 }
             }
+            // Запрос исчез (устройство вошло иным путём) либо грант выдан — подтверждать больше нечего
+            "link_request_gone", "link_granted" -> pendingLinkRequests.remove(event.optString("device_id"))
             // RECOVER-2: ключ восстановления через бота Telegram
             "recovery" -> event.optString("state").takeIf { it != "idle" }?.let { st ->
                 Log.i(TAG, "ключ восстановления: $st")

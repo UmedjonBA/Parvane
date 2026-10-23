@@ -24,6 +24,8 @@
 //   {"type":"groupLeft","address"} — нас исключили/забанили, группа удалена;
 //   {"type":"groupUnconfirmed","address","members":[…]} — FR-028 (T080):
 //       участники без подтверждённой записи администратора;
+//   {"type":"joined"} — устройство вошло в журнал (любым путём), стек поднят: забрать всё из копии ключей
+//   аккаунта, отозвать оффер привязки, затем `ackJoined()`
 //   {"type":"ownDevicesAdded","devices":[…]} — T119: в своём журнале
 //       устройств появились новые устройства (первая проверка — без события);
 //   {"type":"stateReady"} — журнал личного состояния можно подключать
@@ -295,6 +297,10 @@ public:
     // Свои устройства по журналу v2 (id). У аккаунта на v2 новое устройство в
     // каталог v1 не попадает (T048) — список устройств клиента дополняется этим.
     [[nodiscard]] std::vector<std::string> ownDevices();
+    // Хост забрал всё из копии ключей аккаунта после события `joined` — больше его не слать.
+    void ackJoined();
+    // Ключи групп из копии ключей аккаунта (поле `groups`): группы появляются сразу, журналы дочитываются.
+    void applyBundleGroups(const std::string &groupsJson);
     // {"rotationNeeded":bool,"hasRoot":bool,"hasBackup":bool}: SSK раскрыт
     // отзывом и не сменён; корень лежит на устройстве (первое устройство без
     // ключа восстановления) / есть копия корня под ключом восстановления.
@@ -564,7 +570,6 @@ private:
     json fetchRootBackupStateLocked();
     void rememberBundleKeyLocked(const std::string &recoveryKey);
     void refreshKeyBundleLocked(bool force);
-    void applyBundleGroups(const std::string &groupsJson);
     void applyBundleGroupsLocked(const std::string &groupsJson);
     void queueRecoveryKeyLocked(const std::string &recoveryKey);
     void flushTelegramKeyLocked();

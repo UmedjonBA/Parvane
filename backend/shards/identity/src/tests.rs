@@ -734,6 +734,16 @@ async fn link_v2_commitment_challenge_reveal() {
     store_link_offer(&pool, "dave@local", "dev-new", "", "", "", true).await.unwrap();
     let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
     assert!(offers.is_empty());
+    // 6. Запоздалое раскрытие ключа после отзыва оффер не воскрешает (24 окт 2026: запрос привязки вошедшего
+    //    устройства появлялся у других снова)
+    assert!(store_link_offer(&pool, "dave@local", "dev-new", &n_pub, &commitment, "", false).await.is_err());
+    let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
+    assert!(offers.is_empty(), "раскрытие без оффера не создаёт оффер");
+    // 7. Устройство вошло в журнал — оффер снимается сервером
+    store_link_offer(&pool, "dave@local", "dev-new", "", &commitment, "SIGN-NEW==", false).await.unwrap();
+    crate::link::forget_link_offer(&pool, "dave@local", "dev-new").await.unwrap();
+    let (offers, _, _) = poll_link(&pool, "dave@local", "dev-old").await.unwrap();
+    assert!(offers.is_empty(), "оффер вошедшего устройства снят");
 }
 
 #[tokio::test]

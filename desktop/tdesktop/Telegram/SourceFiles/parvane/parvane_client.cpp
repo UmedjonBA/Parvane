@@ -8025,7 +8025,32 @@ void SyncFromKeyBundle() {
 	NoteDomainKeys(bundle.value("planner", std::string()), bundle.contains("cloud")
 		? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump())
 		: std::string());
+	// Группы — и здесь, а не только при «успешном» ответе входа по ключу: вход мог завершиться повтором в фоне
+	if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) {
+		s->applyBundleGroups(groups);
+	}
 	ApplyBundleHistory(bundle.value("history", nlohmann::json()), owner);
+}
+
+// Устройство вошло в журнал — любым путём (событие сессии `joined`): оффер привязки отзываем сразу, ключ у бота
+// отмечаем забранным, из копии ключей аккаунта забираем всё (группы, «План», «Облако», историю). Рабочий поток
+void CompleteJoin() {
+	const auto s = V2Ready();
+	if (!s) {
+		return;
+	}
+	RetractHistoryLinkOffer();
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		if (g_tgState != TelegramRecoveryState::Idle && g_tgState != TelegramRecoveryState::Done) {
+			g_tgState = TelegramRecoveryState::Done;
+		}
+	}
+	(void)s->pollTelegramKey(true);
+	SyncFromKeyBundle();
+	s->ackJoined();
+	PublishLinkingStatus();
+	LOG(("Parvane: вход — всё из копии ключей аккаунта забрано"));
 }
 
 // Снимок истории для копии ключей аккаунта (зовёт сессия движка на своём потоке).

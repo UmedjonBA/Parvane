@@ -81,8 +81,17 @@ std::string markPath() { return storeDir() + "/bundle-history-mark.txt"; }
 
 // Ключи «Плана» и «Облака» из копии ключей аккаунта: файл (переживает перезапуск до подключения разделов) и сразу
 // разделам — без этого «План» появлялся, только когда другое своё устройство присылало ключ само
-void noteDomainKeys(const std::string &planner, const std::string &cloud) {
-    if (planner.empty() && (cloud.empty() || cloud == "[]" || cloud == "null")) return;
+void noteDomainKeys(const std::string &plannerIn, const std::string &cloudIn) {
+    const auto isEmpty = [](const std::string &v) { return v.empty() || v == "[]" || v == "null"; };
+    if (isEmpty(plannerIn) && isEmpty(cloudIn)) return;
+    // Непустое не заменяем пустым: копия без «Плана» (записанная до исправления) не стирает ключ, уже полученный
+    auto planner = plannerIn;
+    auto cloud = cloudIn;
+    const auto saved = json::parse(parvane::storecrypt::readFile(storeDir() + "/domain-keys.json"), nullptr, false);
+    if (saved.is_object() && saved.value("owner", std::string()) == self()) {
+        if (isEmpty(planner)) planner = saved.value("planner", std::string());
+        if (isEmpty(cloud)) cloud = saved.value("cloud", std::string());
+    }
     parvane::storecrypt::writeFile(storeDir() + "/domain-keys.json",
                                    json{{"owner", self()}, {"planner", planner}, {"cloud", cloud}}.dump());
     sectionsDomainKeys();
@@ -227,15 +236,36 @@ void pollLinkOffersOnce() {
     } catch (const std::exception &) {
         return;
     }
+    // Уже вошедшие в журнал своих устройств (ключом восстановления, грантом другого устройства) — не запрос:
+    // их оффер мог остаться на сервере, а окно «Новое устройство просит привязку» для них только путает
+    std::set<std::string> joined;
+    if (!offers.empty()) {
+        if (const auto s = v2Ready()) {
+            try {
+                s->refreshPeerLog(self());
+            } catch (const std::exception &) {
+            }
+            for (auto &id : s->ownDevices()) joined.insert(std::move(id));
+        }
+    }
+    std::vector<std::string> gone;
     {
         std::set<std::string> live;
-        for (const auto &o : offers) live.insert(o.deviceId);
+        for (const auto &o : offers) if (!joined.count(o.deviceId)) live.insert(o.deviceId);
         std::lock_guard<std::mutex> lk(g_linkMu);
         for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();)
             it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+        // Запрос исчез (устройство вошло иным путём, отозвало оффер, истёк срок) — его окно закрывается
+        for (auto it = g_linkOffersShown.begin(); it != g_linkOffersShown.end();) {
+            if (live.count(it->first)) { ++it; continue; }
+            gone.push_back(it->first);
+            g_linkOfferEph.erase(it->first);
+            it = g_linkOffersShown.erase(it);
+        }
     }
+    for (const auto &id : gone) emit(json{{"type", "link_request_gone"}, {"device_id", id}});
     for (const auto &o : offers) {
-        if (o.deviceId.empty() || o.commitment.empty()) continue;
+        if (o.deviceId.empty() || o.commitment.empty() || joined.count(o.deviceId)) continue;
         std::optional<parvane::linking::EphemeralKey> own;
         {
             std::lock_guard<std::mutex> lk(g_linkMu);
@@ -523,10 +553,33 @@ void syncFromKeyBundle() {
         if (!bundle.is_object()) return;
         noteDomainKeys(bundle.value("planner", std::string()),
                        bundle.contains("cloud") ? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump()) : std::string());
+        // Группы — и здесь, а не только при «успешном» ответе входа по ключу: вход мог завершиться повтором в фоне
+        if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) s->applyBundleGroups(groups);
         applyBundleHistory(bundle.value("history", json()));
     } catch (const std::exception &e) {
         LOGE("копия ключей аккаунта: %s", e.what());
     }
+}
+
+// Устройство вошло в журнал — любым путём (ключ через бота, ключ руками, подтверждение с другого устройства, повтор
+// после обрыва; событие сессии `joined`): оффер привязки отзываем сразу, ключ у бота отмечаем забранным, из копии
+// ключей аккаунта забираем всё. Раньше это делал только «успешный» ответ входа по ключу — при временной ошибке
+// группы и «План» приходили через минуты, от другого своего устройства, а экран писал «привязка не удалась»
+void completeJoin() {
+    const auto s = v2Ready();
+    if (!s) return;
+    retractLinkOffer();
+    std::string state;
+    {
+        std::lock_guard<std::mutex> lk(g_tgMu);
+        state = g_tgState;
+    }
+    if (state != "idle" && state != "unavailable" && state != "done") setTelegramState("done");
+    (void)s->pollTelegramKey(true);
+    syncFromKeyBundle();
+    emit(json{{"type", "link"}, {"state", "joined"}});
+    s->ackJoined();
+    LOGI("вход: всё из копии ключей аккаунта забрано");
 }
 
 void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome) {

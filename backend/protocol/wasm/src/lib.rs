@@ -727,6 +727,12 @@ impl PvClient {
         self.inner.group_keys_import_json(json).map(|e| events_js(&e)).map_err(err_proto)
     }
 
+    /// Поле `groups` копии ключей при записи: свои ключи + серверные для групп, которых у устройства ещё нет.
+    #[wasm_bindgen(js_name = groupKeysMerge)]
+    pub fn group_keys_merge(&self, own: &str, server: &str) -> Result<String, JsValue> {
+        parvane_protocol::client::Client::group_keys_merge_json(own, server).map_err(err_proto)
+    }
+
     // ── планировщик (spec 010): контейнер домена parvane.planner.v1 ─────────
 
     /// Контейнер планировщика → {domain, id(hex)} | undefined.

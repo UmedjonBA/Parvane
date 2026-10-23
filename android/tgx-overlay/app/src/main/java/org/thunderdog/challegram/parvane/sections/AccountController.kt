@@ -183,7 +183,7 @@ object AccountUi {
                     Sx.main.post { confirmLink(device, code) }
                 }
                 "federation_error" -> federationToast(event.optString("reason"))
-                "link_granted" -> event.optString("device_id").let { dev -> Sx.main.post { linkDialogs.remove(dev)?.dismiss() } }
+                "link_granted", "link_request_gone" -> event.optString("device_id").let { dev -> Sx.main.post { linkDialogs.remove(dev)?.dismiss() } }
                 "recovery" -> if (event.optString("state") == "unavailable" || event.optString("state") == "expired")
                     Sx.main.post { UI.getUiContext()?.let { askRecoveryKey(it, rotate = false) {} } }
             }
@@ -210,46 +210,113 @@ object AccountUi {
         }
     }
 
-    /** Открытые окна подтверждения привязки по устройству: грант, выданный иным путём, их закрывает. */
-    private val linkDialogs = HashMap<String, AlertDialog>()
+    /** Открытые окна подтверждения привязки по устройству: грант, выданный иным путём, и исчезнувший запрос их закрывают. */
+    private val linkDialogs = HashMap<String, PvSheet>()
 
+    /**
+     * Запрос привязки нового устройства — шторка в стиле приложения (как web): код сверки крупно, «Отклонить» /
+     * «Подтвердить»; ход и исход — в самой шторке, а не всплывающей строкой. Окно закрывается само, если устройство
+     * вошло иным путём (ключом восстановления, подтверждением с другого устройства) или запрос исчез.
+     */
     private fun confirmLink(device: String, code: String) {
         val ctx = UI.getUiContext() ?: return
         linkDialogs.remove(device)?.dismiss()
-        linkDialogs[device] = AlertDialog.Builder(ctx, Theme.dialogTheme()).setTitle(Sx.t("Новое устройство", "New device"))
-            .setMessage(Sx.t("Новое устройство просит привязку к вашему аккаунту. Сверьте код — он должен совпадать на обоих устройствах:\n\n$code",
-                "A new device asks to be linked to your account. Compare the code — it must match on both devices:\n\n$code"))
-            .setPositiveButton(Sx.t("Подтвердить", "Confirm")) { _, _ ->
-                Sx.async({ ParvaneCore.linkGrant(device) }) { ok ->
-                    UI.showToast(if (ok == true) Sx.t("Устройство привязано", "Device linked") else Sx.t("Привязка не удалась", "Linking failed"), android.widget.Toast.LENGTH_SHORT)
+        val c = Pv.c
+        val sheet = PvSheet.create(ctx, Sx.t("Вход с нового устройства", "Sign-in from a new device"))
+        sheet.add(ctx.pvText(Sx.t("Кто-то входит в ваш аккаунт на новом устройстве. Подтвердите, только если это вы " +
+            "и код ниже совпадает с кодом на экране нового устройства.",
+            "Someone is signing in to your account on a new device. Confirm only if it is you and the code below " +
+            "matches the code on the new device’s screen."), 0.9375f, c.muted))
+        sheet.add(ctx.pvText(code, 1.75f, c.fg, semibold = true, mono = true).apply {
+            gravity = android.view.Gravity.CENTER
+            letterSpacing = 0.08f
+            setPadding(Pv.rem(1f), Pv.rem(1f), Pv.rem(1f), Pv.rem(1f))
+            background = Pv.shape(c.raised, 0.75f, c.line2)
+        })
+        val status = ctx.pvText("", 0.875f, c.muted).apply { visibility = android.view.View.GONE }
+        sheet.add(status, 0.5f)
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.END
+        }
+        lateinit var confirm: LinearLayout
+        val reject = ctx.pvButton(Sx.t("Отклонить", "Reject"), "ghost") { sheet.dismiss() }
+        confirm = ctx.pvButton(Sx.t("Подтвердить", "Confirm"), "acc") {
+            confirm.isEnabled = false
+            reject.isEnabled = false
+            confirm.alpha = 0.6f
+            status.visibility = android.view.View.VISIBLE
+            status.setTextColor(c.muted)
+            status.text = Sx.t("Передаём ключи новому устройству…", "Handing keys to the new device…")
+            Sx.async({ ParvaneCore.linkGrant(device) }) { ok ->
+                if (ok == true) {
+                    sheet.dismiss()
+                    UI.showToast(Sx.t("Устройство подключено", "Device connected"), android.widget.Toast.LENGTH_SHORT)
+                } else {
+                    confirm.isEnabled = true
+                    reject.isEnabled = true
+                    confirm.alpha = 1f
+                    status.setTextColor(c.red)
+                    status.text = Sx.t("Не удалось подтвердить. Если новое устройство уже вошло другим способом, ничего делать не нужно.",
+                        "Could not confirm. If the new device has already signed in another way, nothing else is needed.")
                 }
             }
-            .setNegativeButton(Sx.t("Отклонить", "Reject"), null)
-            .setOnDismissListener { if (linkDialogs[device]?.isShowing != true) linkDialogs.remove(device) }
-            .setCancelable(false).show()
+        }
+        row.addView(reject)
+        row.addView(confirm.apply { (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f) })
+        sheet.add(row)
+        sheet.onClose { if (linkDialogs[device] === sheet) linkDialogs.remove(device) }
+        linkDialogs[device] = sheet
+        sheet.show()
     }
 
     /** rotate — смена ключа подписи устройств (SSK) на привязанном устройстве; иначе — вход нового устройства. */
     fun askRecoveryKey(ctx: Context, rotate: Boolean, done: () -> Unit) {
-        val input = EditText(ctx).apply {
-            hint = Sx.t("Ключ восстановления", "Recovery key")
-            setTextColor(Sx.color(ColorId.text))
+        val c = Pv.c
+        val sheet = PvSheet.create(ctx, Sx.t("Ключ восстановления", "Recovery key"))
+        sheet.add(ctx.pvText(Sx.t("Ключ показывался при создании аккаунта и пришёл от бота в Telegram. Регистр и пробелы не важны.",
+            "The key was shown when the account was created and sent by the Telegram bot. Case and spaces do not matter."),
+            0.9375f, c.muted))
+        val input = with(Kn) { ctx.input(hint = "XXXX-XXXX-XXXX-…") }.apply {
+            typeface = Pv.mono()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         }
-        AlertDialog.Builder(ctx, Theme.dialogTheme()).setTitle(Sx.t("Ключ восстановления", "Recovery key"))
-            .setMessage(Sx.t("Ключ показывался при создании аккаунта и пришёл от бота в Telegram.", "The key was shown when the account was created and sent by the Telegram bot."))
-            .setView(ctx.vbox(Sx.dp(20f)).apply { addView(input) })
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val key = input.text.toString().trim()
-                if (key.isEmpty()) return@setPositiveButton
-                Sx.async({ if (rotate) ParvaneCore.rotateSsk(key) else ParvaneCore.recoverWithKey(key) }) { r ->
-                    UI.showToast(when (r) {
-                        "ok" -> Sx.t("Готово", "Done")
-                        "bad_key" -> Sx.t("Ключ не подошёл", "The key did not work")
-                        "no_backup" -> Sx.t("На сервере нет копии ключей аккаунта", "No account key backup on the server")
-                        else -> Sx.t("Не получилось, попробуйте позже", "Failed, try again later")
-                    }, android.widget.Toast.LENGTH_LONG)
+        sheet.add(input)
+        val status = ctx.pvText("", 0.875f, c.muted).apply { visibility = android.view.View.GONE }
+        sheet.add(status, 0.5f)
+        lateinit var ok: LinearLayout
+        ok = ctx.pvButton(if (rotate) Sx.t("Сменить ключ подписи", "Change signing key") else Sx.t("Войти", "Sign in"), "acc") {
+            val key = input.text.toString().trim()
+            if (key.isEmpty()) return@pvButton
+            ok.isEnabled = false
+            ok.alpha = 0.6f
+            status.visibility = android.view.View.VISIBLE
+            status.setTextColor(c.muted)
+            status.text = Sx.t("Проверяем ключ…", "Checking the key…")
+            Sx.async({ if (rotate) ParvaneCore.rotateSsk(key) else ParvaneCore.recoverWithKey(key) }) { r ->
+                if (r == "ok") {
+                    sheet.dismiss()
+                    UI.showToast(Sx.t("Готово", "Done"), android.widget.Toast.LENGTH_SHORT)
                     done()
+                    return@async
                 }
-            }.setNegativeButton(Sx.t("Отмена", "Cancel"), null).show()
+                ok.isEnabled = true
+                ok.alpha = 1f
+                status.setTextColor(c.red)
+                status.text = when (r) {
+                    "bad_key" -> Sx.t("Ключ не подошёл. Проверьте его в сообщении бота.", "The key did not work. Check it in the bot’s message.")
+                    "no_backup" -> Sx.t("На сервере нет копии ключей аккаунта", "No account key backup on the server")
+                    else -> Sx.t("Не получилось, попробуйте ещё раз", "Failed, try again")
+                }
+            }
+        }
+        sheet.add(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.END
+            addView(ctx.pvButton(Sx.t("Отмена", "Cancel"), "ghost") { sheet.dismiss() })
+            addView(ok.apply { (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f) })
+        })
+        sheet.show()
+        input.requestFocus()
     }
 }

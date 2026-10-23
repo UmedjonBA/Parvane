@@ -132,6 +132,19 @@ static void keyBundle() {
     check(kb::withBundleKey(R"({"ssk":"00"})", "QUJD") == R"({"bk":"QUJD","ssk":"00"})", "keybundle: ключ копии в грант (поле bk)");
     check(kb::readGrantBundleKey(R"({"bk":"QUJD"})") == "QUJD", "keybundle: ключ копии из гранта");
     check(json::parse(kb::withFreshLog(R"({"log":"aa"})", std::string("\x01\xff", 2)))["log"] == "01ff", "keybundle: свежий журнал (hex)");
+    // Слияние при записи — общие с web случаи: копия не «беднеет» от только что вошедшего устройства
+    const auto merge = json::parse(readText(vectorPath("keybundle-merge.json")), nullptr, false);
+    check(merge.is_object() && merge["cases"].is_array() && merge["cases"].size() >= 4, "keybundle: вектор слияния есть");
+    if (merge.is_object()) {
+        const auto normalize = [](json p) {
+            if (p.contains("cloud") && p["cloud"].is_string()) p["cloud"] = json::parse(p["cloud"].get<std::string>(), nullptr, false);
+            return p;
+        };
+        for (const auto &c : merge["cases"]) {
+            const auto got = kb::mergeWithServer(c["own"], c["server"]);
+            check(normalize(got) == normalize(c["merged"]), "keybundle: слияние — " + c.value("name", std::string()));
+        }
+    }
 }
 
 static void calls() {

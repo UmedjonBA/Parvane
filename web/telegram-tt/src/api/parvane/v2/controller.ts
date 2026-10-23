@@ -37,7 +37,8 @@ import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import { pickEscrowKey } from './escrowKey';
 import {
-  buildBundleMark, deriveBundleKey, type KeyBundleHistory, type KeyBundlePayload, openKeyBundle, readGrantBundleKey,
+  buildBundleMark, deriveBundleKey, type KeyBundleHistory, type KeyBundlePayload, mergeKeyBundlePayload, openKeyBundle,
+  readGrantBundleKey,
   sealKeyBundle,
   withBundleKey, withFreshLog,
 } from './keyBundle';
@@ -77,6 +78,10 @@ type Deps = {
   dropBundleHistory?: (replaced: KeyBundleHistory) => void;
   /** Стек поднят на устройстве с ключом копии ключей аккаунта: можно свериться с копией. */
   onBundleReady?: () => void;
+  /** Устройство вошло в журнал (ключом восстановления, грантом другого устройства, повтором после обрыва) и стек
+   * поднят: забрать из копии ключей аккаунта всё сразу, отозвать оффер привязки. Повторяется после перезагрузки,
+   * пока провайдер не подтвердит (`ackJoined`). */
+  onJoined?: () => void;
   /** Подпись этого устройства («Chrome, Android») — для сообщения бота. */
   describeDevice?: () => string;
   /** Сервер ответил UPGRADE_REQUIRED: версия клиента ниже min_supported. */
@@ -390,6 +395,8 @@ const LEGACY_BUNDLE_POLL_MS = 3000;
 // хранилище устройства, пока сервер не подтвердит запись в журнале
 const PENDING_GRANT_RECORD = 'v2-pending-grant';
 const PENDING_JOIN_RECORD = 'v2-pending-join';
+// Вступление в журнал прошло, а забрать всё из копии ключей аккаунта ещё не успели (переживает перезагрузку)
+const JOINED_UNACKED_RECORD = 'v2-joined-unacked';
 // Ключ восстановления нового корня, ещё не дошедший до владельца (Telegram либо
 // окно): переживает перезагрузку вкладки — иначе он потерян навсегда
 const PENDING_RECOVERY_KEY_RECORD = 'v2-pending-recovery-key';
@@ -999,17 +1006,23 @@ export function createV2Controller(deps: Deps) {
       if (!client.hasStateKey() && ownDevices.length <= 1 && client.ensureStateKey()) await persistUrgent();
       rootBackupB64 = rootBackupB64 || await storage.loadRecord<string>(ROOT_BACKUP_RECORD);
       await goLive(false);
-    })().then(() => {
-      if (ready) reconnectBackoff.reset();
+    })().then(async () => {
+      if (!ready) return;
+      reconnectBackoff.reset();
+      if (await storage?.loadRecord<boolean>(JOINED_UNACKED_RECORD).catch(() => undefined)) deps.onJoined?.();
     }).catch((e: unknown) => {
       starting = undefined;
       deps.log(`v2: запуск не удался: ${String(e)}`);
       // Вступление в журнал не завершено из-за связи — повторяем сами: соединение
       // могло остаться открытым, и повтор по его закрытию тогда не случится.
       // Обрыв на самом подключении (Welcome/Auth не пришли) закрытием сокета
-      // повтор не назначает — назначаем здесь
+      // повтор не назначает — назначаем здесь. Устройство уже в журнале, а подъём сорвался (подписка, запрос
+      // после вступления) — тоже повтор: иначе оно оставалось «вошедшим, но не готовым» до закрытия сокета
       const isConnectionLoss = !idConn?.isOpen && !(e instanceof V2Error);
-      if (joinRetry || isConnectionLoss) {
+      const isFatal = e instanceof V2Error
+        && (e.code === 'ERROR_CODE_REVOKED' || e.code === 'ERROR_CODE_UPGRADE_REQUIRED');
+      const isJoinedNotReady = !needsLinking && !ready && Boolean(client) && !isFatal;
+      if (joinRetry || isConnectionLoss || isJoinedNotReady) {
         joinRetry = false;
         scheduleReconnect();
       }
@@ -1087,6 +1100,7 @@ export function createV2Controller(deps: Deps) {
       await queueRecoveryKey(join.recoveryKey);
     } else {
       isJustJoined = true;
+      await storage.saveRecord(JOINED_UNACKED_RECORD, true);
     }
     // Запись в журнале принята: ключи устройства — на диск до снятия отметки вступления
     await persistUrgent();
@@ -1844,12 +1858,24 @@ export function createV2Controller(deps: Deps) {
       material.fill(0);
       const mark = await buildBundleMark(payload);
       if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
-      let sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
-      if (sealed.length > BUNDLE_MAX_BYTES && payload.groups) {
+      // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако», группы или полную
+      // историю (только что вошло), не должно стирать их из копии для следующих устройств
+      const server = await fetchKeyBundle();
+      const merged = mergeKeyBundlePayload(payload, server);
+      if (server?.groups) {
+        try {
+          const groups = client.groupKeysMerge(payload.groups || '[]', server.groups);
+          merged.groups = groups !== '[]' ? groups : undefined;
+        } catch (e) {
+          deps.log(`v2: ключи групп копии не сведены: ${String(e)}`);
+        }
+      }
+      let sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), merged);
+      if (sealed.length > BUNDLE_MAX_BYTES && merged.groups) {
         // Групп слишком много — без них (их перешлёт другое своё устройство, T142)
         deps.log('v2: ключи групп не помещаются в копию ключей аккаунта — копия без них');
-        payload.groups = undefined;
-        sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
+        merged.groups = undefined;
+        sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), merged);
       }
       if (sealed.length > BUNDLE_MAX_BYTES) {
         deps.log(`v2: копия ключей аккаунта слишком велика (${sealed.length} байт) — не отправлена`);
@@ -1911,6 +1937,30 @@ export function createV2Controller(deps: Deps) {
     await rememberBundleKey(key);
     deps.log('v2: ключ восстановления получен из ответа владельца боту — заводим копию ключей аккаунта');
     await refreshKeyBundle(true);
+  }
+
+  /** Провайдер забрал всё из копии ключей аккаунта после вступления — повторять `onJoined` больше не нужно. */
+  async function ackJoined() {
+    await storage?.deleteRecord(JOINED_UNACKED_RECORD).catch(() => undefined);
+  }
+
+  /** Вступление завершается в фоне (повтор после временной ошибки): ждать готовности до `timeoutMs`. */
+  async function waitJoined(timeoutMs: number) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (ready && !needsLinking) return true;
+      const hasPendingJoin = await storage?.loadRecord(PENDING_JOIN_RECORD).catch(() => undefined);
+      if (needsLinking && !starting && !hasPendingJoin) return false;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+    }
+    return ready && !needsLinking;
+  }
+
+  /** Ключи групп из копии ключей аккаунта (вход по ключу, привязка, повтор после обрыва). */
+  async function applyBundleGroupsFrom(groups: string | undefined) {
+    if (groups) await applyBundleGroups(groups);
   }
 
   /** Копия ключей аккаунта с сервера, открытая ключом копии этого устройства
@@ -4454,6 +4504,9 @@ export function createV2Controller(deps: Deps) {
     joinWithRecoveryKey,
     refreshKeyBundle,
     fetchKeyBundle,
+    ackJoined,
+    waitJoined,
+    applyBundleGroupsFrom,
     sendKeyToTelegram,
     hasTelegram,
     canSendKeyToTelegram,

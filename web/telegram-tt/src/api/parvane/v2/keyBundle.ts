@@ -42,6 +42,52 @@ export type KeyBundlePayload = {
   history?: KeyBundleHistory;
 };
 
+type DomainKeysJson = { id?: string; keys?: unknown[] };
+
+function parseDomainKeys(text: string | undefined): DomainKeysJson[] {
+  if (!text) return [];
+  try {
+    const value = JSON.parse(text) as unknown;
+    return Array.isArray(value) ? value.filter((v): v is DomainKeysJson => Boolean(v) && typeof v === 'object') : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasPlannerKeys(text: string | undefined) {
+  return Boolean(text) && text !== 'null';
+}
+
+/**
+ * Копия ключей аккаунта при записи (без групп — их сводит движок, `groupKeysMerge`): своё плюс то, чего у устройства
+ * ещё нет, с сервера. Только что вошедшее устройство не должно стирать из копии «План», «Облако» и историю, которые
+ * само ещё не получило, — иначе следующее новое устройство видело бы их через минуты (отзыв 23–24 окт 2026).
+ * Правила (общие с ядром, вектор `keybundle-merge.json`): «План» — свой, если есть; «Облако» — объединение по `id`,
+ * у общего — с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
+ */
+export function mergeKeyBundlePayload(own: KeyBundlePayload, server?: Partial<KeyBundlePayload>): KeyBundlePayload {
+  if (!server) return own;
+  const merged: KeyBundlePayload = { ...own };
+  if (!hasPlannerKeys(own.planner) && hasPlannerKeys(server.planner)) merged.planner = server.planner;
+  const ownCloud = parseDomainKeys(own.cloud);
+  const serverCloud = parseDomainKeys(server.cloud);
+  if (serverCloud.length) {
+    const cloud = ownCloud.map((entry) => {
+      const other = serverCloud.find((s) => s.id === entry.id);
+      return other && (other.keys?.length || 0) > (entry.keys?.length || 0) ? other : entry;
+    });
+    serverCloud.forEach((entry) => {
+      if (!ownCloud.some((o) => o.id === entry.id)) cloud.push(entry);
+    });
+    merged.cloud = JSON.stringify(cloud);
+  }
+  const serverHistory = server.history;
+  if (serverHistory?.fileId && (!own.history || (own.history.size || 0) < (serverHistory.size || 0))) {
+    merged.history = serverHistory;
+  }
+  return merged;
+}
+
 const encoder = new TextEncoder();
 
 function toBuffer(bytes: Uint8Array): ArrayBuffer {

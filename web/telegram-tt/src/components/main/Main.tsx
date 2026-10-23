@@ -302,6 +302,7 @@ const Main = ({
     checkChatInvite,
     showNotification,
     showDialog,
+    openLeftColumnContent,
   } = getActions();
 
   if (DEBUG && !DEBUG_isLogged) {
@@ -490,8 +491,23 @@ const Main = ({
   // Parvane: это устройство ещё не привязано к аккаунту (вход с нового устройства
   // или после полного выхода): без привязки оно не получает сообщений — сразу
   // ведём на экран «Устройства» (код для другого устройства, ключ восстановления)
+  // Экран «Устройства», открытый ради привязки, после входа закрывается сам: человек сразу видит чаты, а не экран
+  // привязки, под которым всё уже пришло (отзыв 24 окт 2026)
+  const isLinkingScreenAutoOpenedRef = useRef(false);
+  useEffect(() => {
+    const handleJoined = () => {
+      if (!isLinkingScreenAutoOpenedRef.current) return;
+      isLinkingScreenAutoOpenedRef.current = false;
+      openLeftColumnContent({ contentKey: LeftColumnContent.ChatList });
+      showNotification({ message: oldTranslate('ParvaneDeviceJoinedNotice') });
+    };
+    window.addEventListener('parvane-device-joined', handleJoined);
+    return () => window.removeEventListener('parvane-device-joined', handleJoined);
+  }, [openLeftColumnContent, showNotification]);
+
   useEffect(() => {
     const handleNeedsLinking = () => {
+      isLinkingScreenAutoOpenedRef.current = true;
       openSettingsScreen({ screen: SettingsScreens.ActiveSessions });
       showNotification({ message: oldTranslate('ParvaneNeedsLinkingNotice') });
     };

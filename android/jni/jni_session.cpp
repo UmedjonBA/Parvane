@@ -335,6 +335,10 @@ bool handleSessionEvent(const json &ev) {
         });
         return true;
     }
+    if (type == "joined") {
+        runDetached([] { completeJoin(); });
+        return true;
+    }
     if (type == "authRejected") {
         // JWT не принят: экран входа (учётные данные сняты, данные — нет; повторный вход продолжит историю)
         LOGE("v2: отказ авторизации");

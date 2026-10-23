@@ -615,7 +615,10 @@ export function createPlannerSync(deps: Deps) {
       deps.client()?.plannerKeysImport(json);
     } catch (e) {
       deps.log(`планировщик: ключи из экспорта линковки не приняты: ${String(e)}`);
+      return;
     }
+    // Ключ есть — подключаем «План» сразу, а не на следующем опросе (до минуты в фоне)
+    if (isWanted) void syncNow();
   }
 
   /** Событие движка `plannerChanged` (ключ принят / контейнер надо подключить). */

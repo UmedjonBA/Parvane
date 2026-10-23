@@ -314,6 +314,8 @@ void FireScheduledGated(const ScheduledItem &item);
 bool HandleV2SessionEvent(const parvane::json &ev);
 void PublishLinkingStatus();
 void SyncFromKeyBundle();
+void CompleteJoin(); // событие сессии `joined`: всё из копии ключей аккаунта, отзыв оффера (рабочий поток)
+void RetractHistoryLinkOffer();
 void StartTelegramRecovery(bool again);
 [[nodiscard]] QString PublicNameError(const std::string &reason);
 ChatData *AnnouncePublicCard(not_null<Main::Session*> session, const parvane::json &card);

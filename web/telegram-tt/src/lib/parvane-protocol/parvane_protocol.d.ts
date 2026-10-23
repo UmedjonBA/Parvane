@@ -255,6 +255,10 @@ export class PvClient {
      */
     groupKeysImport(json: string): string;
     /**
+     * Поле `groups` копии ключей при записи: свои ключи + серверные для групп, которых у устройства ещё нет.
+     */
+    groupKeysMerge(own: string, server: string): string;
+    /**
      * Группы, журнал которых известен устройству (hex id).
      */
     groupList(): string[];
@@ -889,6 +893,7 @@ export interface InitOutput {
     readonly pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupKeysExport: (a: number, b: number) => void;
     readonly pvclient_groupKeysImport: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_groupKeysMerge: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_groupList: (a: number, b: number) => void;
     readonly pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

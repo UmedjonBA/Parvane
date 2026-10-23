@@ -638,6 +638,9 @@ const v2Controller = createV2Controller({
   },
   // Журнал устройств v2 у аккаунта есть, а этого устройства в нём нет: оффер
   // линковки нужен, даже если история на устройстве уже есть
+  onJoined: () => {
+    void completeJoinFromBundle().catch((err: unknown) => logDebug(`вход: копия ключей не применена: ${String(err)}`));
+  },
   onNeedsLinking: () => {
     if (!linkRuntime.timer) void startHistoryLinkOffer();
     // Бот спросит у владельца ключ восстановления в Telegram (spec 015)
@@ -751,6 +754,7 @@ const connectionController = createConnectionController({
     v2Controller.reset();
     stopHistoryLink();
     stopTelegramRecovery('idle');
+    joinCompletedFor = undefined;
     syncController.reset();
     resetPackRegistries();
     messageController.resetSavedGifs();
@@ -1168,6 +1172,8 @@ const BUNDLE_HISTORY_MIN_MS = 30 * 60 * 1000;
 // Новое устройство перечитывает копию: прежнее устройство, увидев его в журнале,
 // кладёт туда свежий снимок истории
 const BUNDLE_RECHECK_DELAYS_MS = [60 * 1000, 5 * 60 * 1000];
+// Вход по ключу сорвался на временной ошибке: столько ждём, пока запись в журнал завершится повтором в фоне
+const JOIN_BACKGROUND_WAIT_MS = 60 * 1000;
 const BUNDLE_APPLIED_KEY = 'parvane:bundle-history:';
 // Опрос ответа владельца из Telegram: первый через 3 с, дальше интервал растёт
 // ×1,5 до 30 с (вместо запроса каждые 3 с четверть часа); по истечении
@@ -1178,9 +1184,20 @@ const TELEGRAM_KEY_POLL_GROWTH = 1.5;
 const TELEGRAM_KEY_WAIT_MS = 15 * 60 * 1000;
 
 type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
-const telegramRecovery: { state: TelegramRecoveryState; timer?: number; generation: number } = {
+const telegramRecovery: { state: TelegramRecoveryState; timer?: number; generation: number; startedAt?: number } = {
   state: 'idle', generation: 0,
 };
+
+// Человек ответил боту и вернулся в приложение — опрашиваем сразу, а не через растущий интервал (до 30 с; на
+// телефоне таймеры свёрнутой вкладки ещё и замирают)
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || telegramRecovery.state !== 'waiting') return;
+    if (!telegramRecovery.startedAt) return;
+    window.clearTimeout(telegramRecovery.timer);
+    scheduleTelegramPoll(telegramRecovery.generation, telegramRecovery.startedAt, 0);
+  });
+}
 
 function readAppliedBundleMark(owner: string) {
   try {
@@ -1268,14 +1285,47 @@ async function syncFromKeyBundle() {
   if (!bundle || store.self !== owner) return;
   if (bundle.planner) v2Controller.planner.keysImport(bundle.planner);
   if (bundle.cloud) v2Controller.cloud.keysImport(bundle.cloud);
+  await v2Controller.applyBundleGroupsFrom(bundle.groups)
+    .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
   await applyBundleHistory(bundle.history, owner)
     .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
+}
+
+// Устройство вошло в журнал — любым путём (ключ через бота, ключ руками, подтверждение с другого устройства, повтор
+// после обрыва): сразу отзываем оффер привязки, отмечаем ключ у бота забранным и забираем из копии ключей аккаунта
+// всё — группы, «План», «Облако», историю. Раньше это делал только «успешный» ответ входа по ключу, и при временной
+// ошибке (вход доделывался в фоне) группы и «План» приходили через минуты, от другого своего устройства
+let joinCompletedFor: string | undefined;
+
+async function completeJoinFromBundle() {
+  const owner = store.self;
+  window.dispatchEvent(new CustomEvent('parvane-device-joined'));
+  void retractLinkOffer();
+  if (telegramRecovery.state !== 'idle' && telegramRecovery.state !== 'unavailable') stopTelegramRecovery('done');
+  void v2Controller.pollTelegramKey(true);
+  if (joinCompletedFor === owner) {
+    await v2Controller.ackJoined();
+    return;
+  }
+  const bundle = await v2Controller.fetchKeyBundle();
+  if (store.self !== owner) return;
+  if (bundle) {
+    await v2Controller.applyBundleGroupsFrom(bundle.groups)
+      .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
+    await completeKeyJoin({
+      result: 'ok', planner: bundle.planner, cloud: bundle.cloud, history: bundle.history,
+    });
+  }
+  await v2Controller.ackJoined();
 }
 
 // Устройство вошло в журнал по ключу восстановления: ключи планировщика и
 // история — из копии ключей аккаунта, без участия других устройств
 async function completeKeyJoin(outcome: KeyJoinOutcome) {
   const owner = store.self;
+  if (joinCompletedFor === owner) return;
+  joinCompletedFor = owner;
+  window.dispatchEvent(new CustomEvent('parvane-device-joined'));
   void registerV2Wake();
   if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
   if (outcome.cloud) v2Controller.cloud.keysImport(outcome.cloud);
@@ -1307,7 +1357,8 @@ function scheduleTelegramPoll(generation: number, startedAt: number, delayMs: nu
     telegramRecovery.timer = undefined;
     void pollTelegramRecovery(generation, startedAt).then(() => {
       if (generation !== telegramRecovery.generation || telegramRecovery.state !== 'waiting') return;
-      const next = Math.min(TELEGRAM_KEY_POLL_MAX_MS, Math.round(delayMs * TELEGRAM_KEY_POLL_GROWTH));
+      const grown = Math.max(TELEGRAM_KEY_POLL_MS, Math.round(delayMs * TELEGRAM_KEY_POLL_GROWTH));
+      const next = Math.min(TELEGRAM_KEY_POLL_MAX_MS, grown);
       scheduleTelegramPoll(generation, startedAt, next);
     });
   }, delayMs);
@@ -1328,6 +1379,7 @@ async function startTelegramRecovery(again: boolean) {
   }
   logDebug('ключ восстановления: бот спросит владельца в Telegram');
   const startedAt = Date.now();
+  telegramRecovery.startedAt = startedAt;
   setTelegramRecoveryState('waiting');
   scheduleTelegramPoll(generation, startedAt, TELEGRAM_KEY_POLL_MS);
 }
@@ -1355,15 +1407,23 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
   setTelegramRecoveryState('joining');
   logDebug('ключ восстановления: получен ответ владельца из Telegram');
   const outcome = await v2Controller.joinWithRecoveryKey(reply.recovery_key, true);
-  if (generation !== telegramRecovery.generation) return;
-  if (outcome.result !== 'ok') {
-    logDebug(`ключ восстановления: вход не удался (${outcome.result})`);
-    setTelegramRecoveryState('failed');
+  if (outcome.result === 'ok') {
+    // Успешный вход завершаем, даже если состояние окна успели сменить (новая сессия, «прислать ещё раз»)
+    void v2Controller.pollTelegramKey(true);
+    stopTelegramRecovery('done');
+    await completeKeyJoin(outcome);
     return;
   }
-  void v2Controller.pollTelegramKey(true);
-  setTelegramRecoveryState('done');
-  await completeKeyJoin(outcome);
+  if (generation !== telegramRecovery.generation) return;
+  // Временная ошибка: запись в журнал повторяется в фоне — «не удалось» показывать рано
+  if (outcome.result === 'failed' && await v2Controller.waitJoined(JOIN_BACKGROUND_WAIT_MS)) {
+    logDebug('ключ восстановления: вход завершён повтором');
+    await completeJoinFromBundle();
+    return;
+  }
+  if (generation !== telegramRecovery.generation) return;
+  logDebug(`ключ восстановления: вход не удался (${outcome.result})`);
+  setTelegramRecoveryState('failed');
 }
 
 // Устройство каталога: `label` и `login_at` — как оно назвало себя при входе
@@ -1476,6 +1536,20 @@ function stopHistoryLink() {
   linkRuntime.challenge = undefined;
   linkRuntime.code = undefined;
   pendingLinkGrant = undefined;
+}
+
+// Устройство вошло в журнал: оффер привязки отзываем сразу, а не на следующем опросе — иначе другие устройства
+// успевают показать запрос привязки уже вошедшего устройства
+async function retractLinkOffer() {
+  const activeConnection = connection;
+  const hadOffer = Boolean(linkRuntime.timer || linkRuntime.commitment);
+  stopHistoryLink();
+  if (!activeConnection || !hadOffer) return;
+  try {
+    await activeConnection.request(TOPIC_LINK_OFFER, JSON.stringify({ token, device_id: ownDeviceId(), revoke: true }));
+  } catch {
+    // сервер вычистит по TTL
+  }
 }
 
 // Новое устройство (протокол v2, P-03/P-48): публикуем ОБЯЗАТЕЛЬСТВО на
@@ -3069,7 +3143,12 @@ const methods = {
     const outcome = await v2Controller.joinWithRecoveryKey(pickRecoveryKey(recoveryKey), false);
     if (outcome.result === 'ok') {
       stopTelegramRecovery('done');
+      void v2Controller.pollTelegramKey(true);
       await completeKeyJoin(outcome);
+    } else if (outcome.result === 'failed' && await v2Controller.waitJoined(JOIN_BACKGROUND_WAIT_MS)) {
+      // Временная ошибка, запись в журнал прошла повтором
+      await completeJoinFromBundle();
+      return 'ok';
     }
     return outcome.result;
   },
@@ -3107,6 +3186,10 @@ const methods = {
       // Свой грант пришёл в опросе чужих офферов — оставляем опросу своего оффера
       if (response.ok && response.grant && linkRuntime.timer) pendingLinkGrant = response.grant;
       if (!response.ok || !response.offers) return undefined;
+      // Уже вошедшие в журнал своих устройств (ключом восстановления, подтверждением) — не запрос: их оффер мог
+      // остаться на сервере до отзыва, а «новое устройство просит привязку» для них только путает
+      const joined = new Set(v2Controller.logDevices(store.self)?.v2 || []);
+      response.offers = response.offers.filter((offer) => !joined.has(offer.device_id));
       const live = new Set(response.offers.map((offer) => offer.device_id));
       Array.from(linkChallenges.keys()).forEach((deviceId) => {
         if (!live.has(deviceId)) linkChallenges.delete(deviceId);

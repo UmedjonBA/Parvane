@@ -331,7 +331,22 @@ int Session::reconnectAttempts() {
 }
 
 void Session::connectOnce() {
-    if (stopping_ || needsLinking_) return;
+    if (stopping_) return;
+    if (needsLinking_) {
+        // Устройство ждёт привязки, а соединение ID оборвалось (смена сети, сон телефона): без него не работают ни
+        // ответ боту, ни ключ руками — переоткрываем его (состояние «нужна привязка» connectLocked выставит заново)
+        bool isOpen = false;
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (id_ && id_->isOpen()) return;
+            std::string error;
+            (void)connectLocked(&error);
+            isOpen = id_ && id_->isOpen();
+            if (!isOpen) log("переподключение до привязки не удалось: " + error);
+        }
+        if (!isOpen && !stopping_) onIdClosed();
+        return;
+    }
     std::vector<json> events;
     std::string error;
     bool ok = false;
@@ -619,6 +634,9 @@ bool Session::connectLocked(std::string *error) {
                         if (const auto raw = crypto::b64decode(bk); raw && raw->size() == 32) writeStateFile("bundle-key", *raw);
                     }
                     justJoined_ = true;
+                    // Хост заберёт всё из копии ключей аккаунта, когда стек поднимется (событие `joined`); отметка
+                    // переживает перезапуск, пока хост не подтвердит (`ackJoined`)
+                    writeStateFile("joined-unacked", "1");
                     persistLocked();
                     std::fill(linkMaterial_.begin(), linkMaterial_.end(), '\0');
                     linkMaterial_.clear();

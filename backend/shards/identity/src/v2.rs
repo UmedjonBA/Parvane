@@ -1358,6 +1358,11 @@ async fn publish_certificate(ctx: &V2Ctx, req: &ShardRequest, r: pb::DevicePubli
             .map_err(db_err)?;
     }
     tx.commit().await.map_err(db_err)?;
+    // Устройство действует в журнале: его оффер привязки больше не нужен — иначе другие устройства аккаунта
+    // показывали бы «новое устройство просит привязку» для уже вошедшего (отзыв 24 окт 2026)
+    if let Err(e) = crate::link::forget_link_offer(&ctx.pool, &req.user, &req.device_id).await {
+        tracing::error!("оффер привязки вошедшего устройства не удалён: {e}");
+    }
     Ok(pb::DevicePublishCertificateResponse { one_time_keys_stored: stored }.encode_to_vec())
 }
 

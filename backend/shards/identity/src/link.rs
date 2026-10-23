@@ -25,6 +25,16 @@ pub(crate) async fn purge_stale_links(pool: &SqlitePool) -> Result<()> {
 /// (SHA-256 эфемерного ключа), ключ раскрывается тем же обработчиком после
 /// challenge старого устройства; сервер сверяет раскрытие с обязательством.
 /// Legacy-клиент шлёт eph_pub без commitment — принимаем как раньше.
+/// Устройство вошло в журнал (любым путём): его оффер и грант больше не нужны.
+pub(crate) async fn forget_link_offer(pool: &SqlitePool, username: &str, device_id: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
+        .bind(username)
+        .bind(device_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub(crate) async fn store_link_offer(
     pool: &SqlitePool,
     username: &str,
@@ -74,6 +84,11 @@ pub(crate) async fn store_link_offer(
         .rows_affected();
         if updated > 0 {
             return Ok(());
+        }
+        // Раскрытие ключа без оффера (его уже отозвали, устройство вошло, истёк срок): не воскрешаем оффер —
+        // иначе он снова появлялся у других устройств
+        if !eph_pub.is_empty() {
+            anyhow::bail!("оффер линковки не найден или истёк");
         }
     }
     // Новый оффер устройства заменяет прежний (и гасит старый грант — он
@@ -226,7 +241,13 @@ pub(crate) async fn handle_link_offer(
         Ok(req) => match verify_active_device(pool, decoding, &req.token, &req.device_id).await {
             Ok(username) => match store_link_offer(pool, &username, &req.device_id, &req.eph_pub, &req.commitment, &req.signing_key, req.revoke).await {
                 Ok(()) => {
-                    info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
+                    if req.revoke {
+                        info!("{} отозвал оффер линковки (устройство '{}')", username, req.device_id);
+                    } else if !req.eph_pub.is_empty() && !req.commitment.is_empty() {
+                        info!("{} раскрыл ключ оффера линковки (устройство '{}')", username, req.device_id);
+                    } else {
+                        info!("{} опубликовал оффер линковки (устройство '{}')", username, req.device_id);
+                    }
                     LinkOfferResponse { ok: true, error: None }
                 }
                 Err(e) => LinkOfferResponse { ok: false, error: Some(parvane_db::public_error(&e)) },

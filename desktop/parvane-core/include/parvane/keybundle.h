@@ -31,6 +31,11 @@ namespace parvane::keybundle {
 [[nodiscard]] std::string withFreshLog(const std::string &grant, const std::string &logResponse);
 [[nodiscard]] std::string withBundleKey(const std::string &grant, const std::string &bundleKeyB64);
 [[nodiscard]] std::string readGrantBundleKey(const std::string &grant);
+// Копия при записи (без групп — их сводит движок, `groupKeysMerge`): своё поверх серверного, а не вместо. Только что
+// вошедшее устройство не стирает из копии «План», «Облако» и историю, которых само ещё не получило. Правила — как
+// web `mergeKeyBundlePayload` (вектор `keybundle-merge.json`): «План» — свой, если есть; «Облако» — объединение по
+// `id`, у общего — с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
+[[nodiscard]] nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &server);
 // SHA-256 текста, hex.
 [[nodiscard]] std::string digestHex(const std::string &text);
 

@@ -184,6 +184,17 @@ class ParvaneStore {
     private val contentByUuid = ConcurrentHashMap<String, JSONObject>() // исходный content (для правок/пересылки)
     private var nextMessageId = 1L
 
+    /** Сценарии (dev): названия чатов и тексты сообщений, известные шву, — проверить, что всё пришло сразу. */
+    fun e2eDump(): JSONObject {
+        val titles = org.json.JSONArray()
+        chats.values.forEach { titles.put(it.title) }
+        val texts = org.json.JSONArray()
+        messages.values.forEach { list ->
+            synchronized(list) { list.toList() }.forEach { m -> (m.content as? TdApi.MessageText)?.text?.text?.let { texts.put(it) } }
+        }
+        return JSONObject().put("chats", titles).put("texts", texts)
+    }
+
     /** Файл cloud: file_id (uuid) + ключ/nonce blobcrypt + локальный путь после скачивания. */
     class FileRef(val id: Int, val remoteId: String, val key: String, val nonce: String,
                   val size: Long, val mime: String, @Volatile var path: String)

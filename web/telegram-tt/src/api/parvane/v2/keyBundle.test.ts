@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildBundleMark, canonicalRecoveryKey, deriveBundleKey, openKeyBundle, pickRecoveryKey, readGrantBundleKey,
-  sealKeyBundle, withBundleKey, withFreshLog,
+  buildBundleMark, canonicalRecoveryKey, deriveBundleKey, mergeKeyBundlePayload, openKeyBundle, pickRecoveryKey,
+  readGrantBundleKey, sealKeyBundle, withBundleKey, withFreshLog,
 } from './keyBundle';
 
 const KEY = '0123-4567-89AB-CDEF-GHJK-MNPQ-RSTV-WXYZ-0123-4567';
@@ -102,5 +104,18 @@ describe('копия ключей аккаунта под ключом восс�
     expect(mark).toMatch(/^[0-9a-f]{64}$/);
     expect(await buildBundleMark({ grant: 'a' })).toBe(mark);
     expect(await buildBundleMark({ grant: 'b' })).not.toBe(mark);
+  });
+});
+
+type MergeCase = { name: string; own: KeyBundlePayload; server: Partial<KeyBundlePayload>; merged: KeyBundlePayload };
+
+// Общие с ядром случаи (`proto/parvane/vectors/clients/keybundle-merge.json`): запись копии не «беднеет»
+describe('слияние копии ключей аккаунта с серверной при записи', () => {
+  const file = path.resolve(process.cwd(), '../../proto/parvane/vectors/clients/keybundle-merge.json');
+  const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: MergeCase[] };
+  const normalize = (p: KeyBundlePayload) => ({ ...p, cloud: p.cloud ? JSON.parse(p.cloud) as unknown : undefined });
+  it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    const server = Object.keys(c.server).length ? c.server : undefined;
+    expect(normalize(mergeKeyBundlePayload(c.own, server))).toEqual(normalize(c.merged));
   });
 });
