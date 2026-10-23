@@ -2398,6 +2398,24 @@ class Client private constructor(
         if (!detached && journalReplayed.compareAndSet(false, true)) ParvaneCore.replayJournal()
     }
 
+    // «Печатает» собеседника: продлевается каждым сигналом, без них через TYPING_TTL_MS снимается (как TDLib — иначе
+    // X показывал «печатает» бесконечно после отправленного сообщения)
+    private val typingUntil = ConcurrentHashMap<String, Long>()
+    private val TYPING_TTL_MS = 6000L
+    private fun showTyping(chatId: Long, userId: Long) {
+        if (typingUntil.put("$chatId:$userId", System.currentTimeMillis() + TYPING_TTL_MS) == null) Log.i(TAG, "печатает: чат $chatId")
+        postUpdate(TdApi.UpdateChatAction(chatId, null, TdApi.MessageSenderUser(userId), TdApi.ChatActionTyping()))
+        scheduledTick.schedule(Runnable {
+            val until = typingUntil["$chatId:$userId"] ?: return@Runnable
+            if (System.currentTimeMillis() >= until) cancelTyping(chatId, userId)
+        }, TYPING_TTL_MS + 100, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+    private fun cancelTyping(chatId: Long, userId: Long) {
+        if (typingUntil.remove("$chatId:$userId") == null) return
+        postUpdate(TdApi.UpdateChatAction(chatId, null, TdApi.MessageSenderUser(userId), TdApi.ChatActionCancel()))
+        Log.i(TAG, "печатает снято: чат $chatId")
+    }
+
     /** X хранит объект из updateNewChat/getChat и СРАВНИВАЕТ с ним позиции из updateChatLastMessage.
      *  Стор мутирует свой chat (positions/lastMessage) раньше, чем X обработает апдейт (поток
      *  апдейтов асинхронный) — X видел «позиция не изменилась» и не добавлял чат в список
@@ -2531,6 +2549,7 @@ class Client private constructor(
                 if (content.optString("kind") == "poll") Log.i(TAG, "опрос ${event.optString("id")}: ${store.polls.get(event.optString("id"))?.options?.size ?: 0} вариантов")
                 armTtl(msg, event.optString("id"), content) // spec 005: ttl_secs → таймер и удаление в срок
                 Log.i(TAG, "сообщение ${event.optString("id")} → чат ${msg.chatId} (${if (out) "исх" else "вх"})")
+                if (!out && from.isNotEmpty()) cancelTyping(msg.chatId, store.idOf(from)) // как TDLib: сообщение снимает «печатает»
                 if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
                 announceMessage(msg)
                 // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из перенесённой истории
@@ -2568,7 +2587,7 @@ class Client private constructor(
                 // L2-1: входящий typing чата с усиленной приватностью игнорируем
                 if (!l2.ephemeralAllowed(if (store.group(to) != null) to else from)) return
                 val chatId = store.group(to)?.chatId ?: store.idOf(from)
-                postUpdate(TdApi.UpdateChatAction(chatId, null, TdApi.MessageSenderUser(store.idOf(from)), TdApi.ChatActionTyping()))
+                showTyping(chatId, store.idOf(from))
             }
             "presence" -> {
                 val from = event.optString("from"); if (from.isEmpty()) return

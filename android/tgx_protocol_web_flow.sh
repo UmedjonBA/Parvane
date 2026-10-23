@@ -32,6 +32,11 @@ RCW=$?
 while read -r st rest; do [ "$st" = ok ] && ok "$rest" || bad "$rest"; done < <(grep -aE "^(ok|FAIL) " "$OUT/web-e2e.log")
 [ "$RCW" = 0 ] && ok "сценарий web ↔ X пройден" || { bad "сценарий web ↔ X упал (см. $OUT/web-e2e.log)"; tail -15 "$OUT/web-e2e.log"; }
 pkill -P "$WEB_PID" 2>/dev/null; kill "$WEB_PID" 2>/dev/null
+# «печатает» web: показанное X снимает сам (сообщением либо через 6 с без продления)
+if grep -aq "печатает: чат" "$TGX_LOG"; then
+  sleep 8
+  grep -aq "печатает снято" "$TGX_LOG" && ok "X: «печатает» web снято" || bad "X: «печатает» web не снято"
+fi
 tgx_no_crash
 kill "$TGX_LCP" 2>/dev/null
 finish "TGX WEB2-ANDROID2"

@@ -180,12 +180,28 @@ echo "   profile L2 row: $(grep -c 'parvaneCheckL2();\|parvaneBindL2(view, isUpd
 grep -q 'PARVANE_UPGRADE_REQUIRED' "$TDL" || perl -0pi -e 's/(        )(if \(!StringUtils\.isEmpty\(update\.type\) && \(update\.type\.startsWith\("AUTH_KEY_DROP"\))/$1if (!StringUtils.isEmpty(update.type) && update.type.startsWith("PARVANE_UPGRADE_REQUIRED")) { \/\/ Parvane: сервер отключил v1 — «обновите приложение»\n$1  c.openAlert(R.string.AppUpdateRequiredTitle, msg, Lang.getString(R.string.AppUpdateOk), (dialog, which) -> org.thunderdog.challegram.tool.Intents.openLink(BuildConfig.DOWNLOAD_URL), 0);\n$1} else $2/' "$TDL"
 echo "   upgrade dialog: $(grep -c 'PARVANE_UPGRADE_REQUIRED' "$TDL") (ожидается 1)"
 
+echo "== spec 031: R8 не трогает шов и оверлей (ядро зовёт их из C++ по имени: onEvent, media*) =="
+PG="$TGX/app/proguard-rules.pro"
+grep -q "parvane: шов и оверлей" "$PG" || cat >> "$PG" <<'PRO'
+
+# parvane: шов и оверлей — методы, которые ядро зовёт из C++ по имени (ParvaneCore.onEvent, ParvaneCalls.media*),
+# R8 иначе выбрасывает как неиспользуемые: release без событий ядра и звонков
+-keep class org.parvane.core.** { *; }
+-keep class org.thunderdog.challegram.parvane.** { *; }
+-keep class org.webrtc.ParvaneWebrtcInit { *; }
+PRO
+echo "   proguard: $(grep -c 'org.parvane.core' "$PG") (ожидается 1)"
+
 echo "== CMake: без libtdjni (наш шов — не JNI TDLib) =="
 CM="$TGX/app/jni/CMakeLists.txt"
 if grep -q "^  tdjni$" "$CM"; then
   sed -i '/^  tdjni$/d' "$CM"
 fi
 grep -q "parvane: tdjni убран" "$CM" || sed -i '1i # parvane: tdjni убран из линковки tgxjni (шов над parvane-core, см. android/setup-tgx.sh)' "$CM"
+# x86_64 release (только для проверки входа в эмуляторе) без LTO: при LTO-линковке под android24 потоковые переменные
+# webrtc уходят в __tls_get_addr, которого у bionic API 24 нет (emulated TLS теряется); arm64 — с LTO, как было
+perl -pi -e 's/"\$<\$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=full>"/"\$<\$<AND:\$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,\$<NOT:\$<STREQUAL:\${ANDROID_ABI},x86_64>>>:-flto=full>"/g' "$CM"
+echo "   LTO кроме x86_64: $(grep -c 'STREQUAL:${ANDROID_ABI},x86_64' "$CM") (ожидается 2)"
 
 echo "== spec 031: release без загрузки переводов с translations.telegram.org (T045; строки — в исходниках, как у debug) =="
 git -C "$TGX" checkout -q -- app/build.gradle.kts

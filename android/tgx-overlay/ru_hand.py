@@ -225,6 +225,7 @@ RU = {
     "HideAllChats": "Скрыть все чаты",
     "NoArchive": "Архив пуст",
     "OpenArchiveHint": "**Нет чатов**\n\nВсе ваши чаты в архиве",
+    "NoChatsText": "**Чатов пока нет**\n\nПригласите друзей и близких в Parvane",
     "ArchiveRead": "Прочитать все",
     "ArchivePin": "Закрепить в списке чатов",
     "ArchiveHide": "Скрыть из списка чатов",

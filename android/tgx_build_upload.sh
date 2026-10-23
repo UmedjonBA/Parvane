@@ -36,6 +36,15 @@ APKSIGNER=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/apksigner | tail -1)
   && echo "подпись: release-ключ Parvane" || { cat "$LOG/apksigner.txt"; exit 5; }
 aapt=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/aapt | tail -1)
 "$aapt" dump badging "$REL" | grep -q "application-debuggable" && { echo "APK debuggable — не выкладываем"; exit 6; }
+# Методы, которые ядро зовёт из C++ по имени, должны пережить R8 (иначе release без событий ядра и звонков)
+DEXDUMP=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/dexdump | tail -1)
+DX="$LOG/dex"; rm -rf "$DX"; mkdir -p "$DX"; (cd "$DX" && unzip -q -o "$REL" 'classes*.dex')
+for d in "$DX"/classes*.dex; do "$DEXDUMP" "$d" 2>/dev/null; done > "$DX/dump.txt"
+for m in onEvent mediaCreate mediaCreateOffer mediaAcceptOffer mediaSetRemoteAnswer mediaAddIce mediaSetVideo mediaSetMuted mediaClose; do
+  grep -q "name *: '$m'" "$DX/dump.txt" || { echo "R8 выбросил $m — release сломан (keep-правила setup-tgx.sh)"; exit 7; }
+done
+echo "методы для ядра в release на месте"
+rm -rf "$DX"
 ls -la --time-style=long-iso "$REL" ${REL64:+"$REL64"}
 cp "$REL" "$LOG/parvane-android-arm64.apk"; [ -n "$REL64" ] && cp "$REL64" "$LOG/parvane-android-x64.apk"; rm -f "$TGX"/app/build/outputs/apk/latestX64/release/*.apk
 [ "${1:-}" = "--no-upload" ] && { echo "RELEASE_DONE (без выкладки) $LOG"; exit 0; }
