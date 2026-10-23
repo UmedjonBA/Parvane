@@ -51,6 +51,7 @@ describe('копия ключей аккаунта под ключом восс�
     const payload = {
       grant: 'Z3JhbnQ=',
       planner: '{"domain":"local","id":"c1","keys":[]}',
+      groups: '["CgQ="]',
       history: {
         fileId: 'f1', fileKey: 'k', fileNonce: 'n', at: 1700000000000, mark: 'abc',
       },
@@ -75,7 +76,7 @@ describe('копия ключей аккаунта под ключом восс�
     const noGrant = await sealKeyBundle(key, ADDRESS, { grant: '' });
     expect(await openKeyBundle(key, ADDRESS, noGrant)).toBeUndefined();
     const broken = await sealKeyBundle(key, ADDRESS, {
-      grant: 'Zw==', history: { fileId: 'f1' },
+      grant: 'Zw==', history: { fileId: 'f1' }, groups: 7,
     } as unknown as Parameters<typeof sealKeyBundle>[2]);
     expect(await openKeyBundle(key, ADDRESS, broken))
       .toEqual({ grant: 'Zw==', planner: undefined, history: undefined });

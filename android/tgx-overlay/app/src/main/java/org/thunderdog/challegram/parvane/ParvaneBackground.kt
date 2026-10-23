@@ -32,7 +32,9 @@ import java.util.concurrent.Executors
  *   а адрес пробуждения отдаём серверу видом WEB_PUSH со своими ключами p256dh/auth: сервер шифрует пустое
  *   пробуждение (RFC 8291), содержимое не нужно — пробуждение само по себе сигнал. На пробуждение приложение на
  *   ~40 с поднимает сессию (служба переднего плана), забирает новое и показывает уведомления.
- * - Распространителя нет — постоянная служба связи «Parvane на связи» держит сессию.
+ * - Распространителя нет — по умолчанию фоновая задача системы (JobScheduler) раз в ~15 мин поднимает сессию на
+ *   полминуты без уведомления в шторке; постоянная служба «Parvane на связи» (мгновенно, но со значком, который
+ *   Android не даёт смахнуть) — только если пользователь выбрал её сам.
  * Сервер видит только адрес распространителя и моменты пробуждения — ни собеседника, ни текста.
  */
 object ParvaneBackground {
@@ -62,11 +64,18 @@ object ParvaneBackground {
         .queryBroadcastReceivers(Intent(ACTION_REGISTER), 0)
         .map { it.activityInfo.packageName }.distinct().filter { it != ctx.packageName }
 
-    /** Режим: «unifiedpush» (выбран распространитель) или «service» (постоянная служба). */
-    fun mode(): String = prefs().getString("mode", null) ?: if (distributors().isNotEmpty()) "unifiedpush" else "service"
+    /**
+     * Режим: «unifiedpush» (выбран распространитель), «periodic» (фоновая задача, по умолчанию без распространителя)
+     * или «service» (постоянная служба). До 23 окт 2026 «service» ставился сам — такой выбор переводится в «periodic».
+     */
+    fun mode(): String {
+        val p = prefs()
+        if (!p.getBoolean("mode_chosen", false) && p.getString("mode", null) == "service") p.edit().putString("mode", "periodic").apply()
+        return p.getString("mode", null) ?: if (distributors().isNotEmpty()) "unifiedpush" else "periodic"
+    }
 
     fun setMode(mode: String) {
-        prefs().edit().putString("mode", mode).apply()
+        prefs().edit().putString("mode", mode).putBoolean("mode_chosen", true).apply()
         io.execute { ensureChannel() }
     }
 
@@ -74,12 +83,19 @@ object ParvaneBackground {
     private fun ensureChannel() {
         if (!sessionReady) return
         if (prefs().getString("mode", null) == null) prefs().edit().putString("mode", mode()).apply()
-        if (mode() == "unifiedpush" && distributors().isNotEmpty()) {
+        val mode = mode()
+        if (mode == "unifiedpush" && distributors().isNotEmpty()) {
             ParvaneLinkService.stop(ctx)
+            ParvaneSyncJob.cancel(ctx)
             registerUnifiedPush()
+        } else if (mode == "service") {
+            unregisterUnifiedPush()
+            ParvaneSyncJob.cancel(ctx)
+            ParvaneLinkService.startPersistent(ctx)
         } else {
             unregisterUnifiedPush()
-            ParvaneLinkService.startPersistent(ctx)
+            ParvaneLinkService.stop(ctx)
+            ParvaneSyncJob.schedule(ctx)
         }
     }
 
@@ -139,7 +155,7 @@ object ParvaneBackground {
             val (k, a) = webPushKeys()
             val r = try { ParvanePush.register(ParvanePush.KIND_WEB_PUSH, endpoint, k, a) } catch (e: Throwable) { JSONObject().put("ok", false) }
             Log.i(TAG, "UnifiedPush: адрес ${if (r.optBoolean("ok")) "зарегистрирован" else "не принят сервером (${r.optString("error_code")})"}")
-            if (!r.optBoolean("ok")) ParvaneLinkService.startPersistent(ctx) // запасной путь
+            if (!r.optBoolean("ok")) ParvaneSyncJob.schedule(ctx) // запасной путь без значка в шторке
         }
     }
 
@@ -153,14 +169,14 @@ object ParvaneBackground {
     fun onUnregistered(token: String) {
         if (!ownToken(token)) return
         prefs().edit().remove("endpoint").apply()
-        Log.i(TAG, "UnifiedPush: распространитель снял регистрацию — постоянная служба")
-        ParvaneLinkService.startPersistent(ctx)
+        Log.i(TAG, "UnifiedPush: распространитель снял регистрацию — фоновая задача")
+        ParvaneSyncJob.schedule(ctx)
     }
 
     private fun toBase64Url(b: ByteArray) = Base64.encodeToString(b, Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
 }
 
-/** После перезагрузки телефона — снова на связи (режим службы; у UnifiedPush распространитель разбудит сам). */
+/** После перезагрузки телефона — снова на связи (режим службы; фоновую задачу система помнит сама, у UnifiedPush будит распространитель). */
 class ParvaneBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != "android.intent.action.MY_PACKAGE_REPLACED") return
@@ -202,7 +218,9 @@ class ParvaneLinkService : Service() {
             try {
                 if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
             } catch (e: Throwable) {
+                // Android 12+ не даёт поднять службу из фона по чужому пробуждению — разовая фоновая задача вместо неё
                 Log.w("ParvaneBackground", "служба связи не запущена: ${e.message}")
+                if (holdMs > 0) ParvaneSyncJob.runOnce(ctx)
             }
         }
 
@@ -222,9 +240,17 @@ class ParvaneLinkService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null)
             nm.createNotificationChannel(NotificationChannel(CHANNEL, if (ru) "Связь с сервером" else "Server connection", NotificationManager.IMPORTANCE_MIN))
+        // Нажатие ведёт в настройки канала: там значок можно скрыть, служба при этом работает
+        val settings = if (Build.VERSION.SDK_INT >= 26) Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, CHANNEL) else null
         val n: Notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.mipmap.app_notification)
             .setContentTitle(if (persistent) (if (ru) "Parvane на связи" else "Parvane is connected") else (if (ru) "Parvane получает сообщения" else "Parvane is fetching messages"))
+            .apply {
+                if (persistent) setContentText(if (ru) "Мгновенная доставка. Отключить: Профиль → Работа в фоне" else "Instant delivery. Turn off: Profile → Background delivery")
+                if (settings != null) setContentIntent(PendingIntent.getActivity(this@ParvaneLinkService, 1, settings, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            }
             .setOngoing(true).setShowWhen(false).build()
         if (Build.VERSION.SDK_INT >= 34) startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
         else startForeground(ID, n)
@@ -246,5 +272,67 @@ class ParvaneLinkService : Service() {
             TdlibManager.instance().current().decrementUiReferenceCount()
         }
         super.onDestroy()
+    }
+}
+
+/**
+ * Фоновая задача без уведомления: система запускает её раз в ~15 мин (когда есть сеть), задача на полминуты поднимает
+ * сессию — ядро забирает новое, шов показывает уведомления о сообщениях — и отпускает аккаунт X.
+ */
+class ParvaneSyncJob : android.app.job.JobService() {
+    companion object {
+        private const val JOB_ID = 0x5077
+        private const val JOB_ID_ONCE = 0x5078
+        private const val HOLD_MS = 30_000L
+
+        fun schedule(ctx: Context) {
+            val js = ctx.getSystemService(android.app.job.JobScheduler::class.java) ?: return
+            if (js.getPendingJob(JOB_ID) != null) return
+            val job = android.app.job.JobInfo.Builder(JOB_ID, android.content.ComponentName(ctx, ParvaneSyncJob::class.java))
+                .setRequiredNetworkType(android.app.job.JobInfo.NETWORK_TYPE_ANY)
+                .setPeriodic(15 * 60_000L)
+                .setPersisted(true)
+                .build()
+            val r = try { js.schedule(job) } catch (e: Throwable) { Log.w("ParvaneBackground", "фоновая задача: ${e.message}"); return }
+            Log.i("ParvaneBackground", "фоновая задача ${if (r == android.app.job.JobScheduler.RESULT_SUCCESS) "запланирована" else "не принята"}")
+        }
+
+        fun cancel(ctx: Context) {
+            ctx.getSystemService(android.app.job.JobScheduler::class.java)?.cancel(JOB_ID)
+        }
+
+        /** Разовый запуск сейчас (пробуждение UnifiedPush без права на службу): срочная задача, где система это умеет. */
+        fun runOnce(ctx: Context) {
+            val js = ctx.getSystemService(android.app.job.JobScheduler::class.java) ?: return
+            val b = android.app.job.JobInfo.Builder(JOB_ID_ONCE, android.content.ComponentName(ctx, ParvaneSyncJob::class.java))
+                .setRequiredNetworkType(android.app.job.JobInfo.NETWORK_TYPE_ANY)
+            if (Build.VERSION.SDK_INT >= 31) b.setExpedited(true) else b.setOverrideDeadline(0)
+            val r = try { js.schedule(b.build()) } catch (e: Throwable) { Log.w("ParvaneBackground", "разовая задача: ${e.message}"); return }
+            Log.i("ParvaneBackground", "разовая задача ${if (r == android.app.job.JobScheduler.RESULT_SUCCESS) "поставлена" else "не принята"}")
+        }
+    }
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var holding = false
+
+    override fun onStartJob(params: android.app.job.JobParameters): Boolean {
+        Log.i("ParvaneBackground", "фоновая задача: проверка нового")
+        holding = true
+        TdlibManager.instance().current().incrementUiReferenceCount()
+        ParvaneCore.networkAvailable()
+        handler.postDelayed({ release(); jobFinished(params, false) }, HOLD_MS)
+        return true
+    }
+
+    override fun onStopJob(params: android.app.job.JobParameters): Boolean {
+        handler.removeCallbacksAndMessages(null)
+        release()
+        return false
+    }
+
+    private fun release() {
+        if (!holding) return
+        holding = false
+        TdlibManager.instance().current().decrementUiReferenceCount()
     }
 }

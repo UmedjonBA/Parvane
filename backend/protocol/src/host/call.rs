@@ -180,6 +180,8 @@ impl HostClient {
                 let m = String::from_utf8(a.b("material")?).map_err(|_| malformed())?;
                 parsed(self.join_with_grant(&m, a.n("otkCount")?)?)
             }
+            "groupKeysExport" => parsed(c.group_keys_export_json()),
+            "groupKeysImport" => parsed(events(&c.group_keys_import_json(&a.text("json")?).map_err(err)?)),
             "shareGroupsWithOwnDevices" => reqs(&c.share_groups_with_own_devices(&a.strings("devicesJson")?).map_err(cerr)?),
 
             // ── журнал инбокса ──

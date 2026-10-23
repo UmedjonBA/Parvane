@@ -37,7 +37,8 @@ import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import { pickEscrowKey } from './escrowKey';
 import {
-  buildBundleMark, deriveBundleKey, type KeyBundleHistory, openKeyBundle, readGrantBundleKey, sealKeyBundle,
+  buildBundleMark, deriveBundleKey, type KeyBundleHistory, type KeyBundlePayload, openKeyBundle, readGrantBundleKey,
+  sealKeyBundle,
   withBundleKey, withFreshLog,
 } from './keyBundle';
 import {
@@ -1832,13 +1833,24 @@ export function createV2Controller(deps: Deps) {
       const history = deps.bundleHistory
         ? await deps.bundleHistory(previous, force).catch(() => previous)
         : previous;
-      const payload = {
-        grant: b64(material), planner: planner.keysExport(), cloud: cloud.keysExport(), history,
+      const groupKeys = client.groupKeysExport();
+      const payload: KeyBundlePayload = {
+        grant: b64(material),
+        planner: planner.keysExport(),
+        cloud: cloud.keysExport(),
+        groups: groupKeys !== '[]' ? groupKeys : undefined,
+        history,
       };
       material.fill(0);
       const mark = await buildBundleMark(payload);
       if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
-      const sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
+      let sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
+      if (sealed.length > BUNDLE_MAX_BYTES && payload.groups) {
+        // Групп слишком много — без них (их перешлёт другое своё устройство, T142)
+        deps.log('v2: ключи групп не помещаются в копию ключей аккаунта — копия без них');
+        payload.groups = undefined;
+        sealed = await sealKeyBundle(unb64(bundleKeyB64), deps.getSelf(), payload);
+      }
       if (sealed.length > BUNDLE_MAX_BYTES) {
         deps.log(`v2: копия ключей аккаунта слишком велика (${sealed.length} байт) — не отправлена`);
         return;
@@ -2040,6 +2052,26 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  /** Ключи групп из копии ключей аккаунта (spec 032): движок принимает их как
+   * пересылку своего устройства, журналы незнакомых групп дочитываются сразу —
+   * группы появляются, не дожидаясь, пока другое своё устройство их перешлёт. */
+  async function applyBundleGroups(groupsJson: string) {
+    await serial(async () => {
+      if (!client) return;
+      try {
+        const events = JSON.parse(client.groupKeysImport(groupsJson)) as EngineEvent[];
+        for (const ev of events) {
+          await applyEvent(ev);
+        }
+        await persistUrgent();
+        const count = events.filter((ev) => ev.type === 'groupChanged').length;
+        deps.log(`v2: ключи групп из копии ключей аккаунта применены (групп ${count})`);
+      } catch (e) {
+        deps.log(`v2: ключи групп из копии ключей аккаунта не применены: ${String(e)}`);
+      }
+    });
+  }
+
   /** Новое устройство входит в журнал по ключу восстановления: материал
    * привязки — из копии ключей аккаунта на сервере, прежние устройства
    * остаются. У аккаунта без копии (создан до spec 015) — прежний путь
@@ -2098,6 +2130,7 @@ export function createV2Controller(deps: Deps) {
       return { result: 'failed' };
     }
     deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
+    if (payload.groups) await applyBundleGroups(payload.groups);
     return {
       result: 'ok', planner: payload.planner, cloud: payload.cloud, history: payload.history,
     };

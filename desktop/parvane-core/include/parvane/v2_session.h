@@ -564,6 +564,8 @@ private:
     json fetchRootBackupStateLocked();
     void rememberBundleKeyLocked(const std::string &recoveryKey);
     void refreshKeyBundleLocked(bool force);
+    void applyBundleGroups(const std::string &groupsJson);
+    void applyBundleGroupsLocked(const std::string &groupsJson);
     void queueRecoveryKeyLocked(const std::string &recoveryKey);
     void flushTelegramKeyLocked();
     void adoptTelegramKeyLocked();

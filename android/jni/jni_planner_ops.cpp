@@ -6,6 +6,7 @@
 #include "jni_planner_ops.h"
 
 #include <parvane/sections/planner_forms.h>
+#include <parvane/sections/planner_groups.h>
 #include <parvane/sections/planner_health.h>
 #include <parvane/sections/planner_model.h>
 #include <parvane/sections/planner_quick.h>
@@ -429,6 +430,36 @@ json edit(State &s, const std::string &op, const json &a, const Context &c) {
         }
         return changed;
     }
+    // Группы (spec 032, как `PlannerGroupBar` web): ошибка — name | duplicate
+    if (op == "groupCreate") {
+        const auto err = createGroup(s, a.value("name", std::string()), a.value("color", 0), newId());
+        return err ? json{{"error", *err}} : json(true);
+    }
+    if (op == "groupRename") {
+        const auto err = renameGroup(s, a.value("from", std::string()), a.value("name", std::string()));
+        return err ? json{{"error", *err}} : json(true);
+    }
+    if (op == "groupColor") {
+        setGroupColor(s, a.value("name", std::string()), a.value("color", 0));
+        return true;
+    }
+    if (op == "groupDelete") {
+        deleteGroup(s, a.value("name", std::string()));
+        return true;
+    }
+    if (op == "groupAssign") {
+        std::vector<GroupPick> picks;
+        for (const auto &p : a.value("picks", json::array())) {
+            GroupPick g;
+            g.kind = p.value("kind", std::string("task")) == "event" ? SeriesKind::Event : SeriesKind::Task;
+            g.id = p.value("id", std::string());
+            if (p.contains("day") && p["day"].is_string() && !p["day"].get<std::string>().empty()) g.day = p["day"].get<std::string>();
+            g.isRepeat = p.value("isRepeat", false);
+            picks.push_back(g);
+        }
+        assignToGroup(s, picks, a.value("name", std::string()), a.value("withRepeats", true), newId());
+        return true;
+    }
     if (op == "list") {
         const auto name = a.value("name", std::string());
         if (name.empty()) return false;
@@ -442,7 +473,8 @@ json edit(State &s, const std::string &op, const json &a, const Context &c) {
 bool isEdit(const std::string &op) {
     static const std::set<std::string> kEdits = {"quickAdd", "taskDone", "stepDone", "status", "move", "save", "remove",
                                                  "food", "removeFood", "water", "removeHealth", "goals", "healthGoals",
-                                                 "settings", "list", "markReminded"};
+                                                 "settings", "list", "markReminded", "groupCreate", "groupRename",
+                                                 "groupColor", "groupDelete", "groupAssign"};
     return kEdits.count(op) > 0;
 }
 

@@ -573,9 +573,17 @@ void Session::refreshKeyBundleLocked(bool force) {
         if (const auto p = client_->call("plannerKeysExport"); !p.is_null()) payload["planner"] = p.dump();
         payload["cloud"] = client_->call("cloudKeysExport").dump();
         if (history.is_object()) payload["history"] = history;
+        // Ключи групп (spec 032): устройство, вошедшее ключом восстановления, видит группы сразу
+        if (const auto g = client_->call("groupKeysExport"); g.is_array() && !g.empty()) payload["groups"] = g.dump();
         const auto mark = keybundle::digestHex(payload.dump());
         if (!force && readStateFile("bundle-sent") == mark) return;
-        const auto sealed = keybundle::seal(bundleKey, cfg_.self, payload);
+        auto sealed = keybundle::seal(bundleKey, cfg_.self, payload);
+        if (sealed.size() > kBundleMaxBytes && payload.contains("groups")) {
+            // Групп слишком много — без них (их перешлёт другое своё устройство, T142)
+            log("ключи групп не помещаются в копию ключей аккаунта — копия без них");
+            payload.erase("groups");
+            sealed = keybundle::seal(bundleKey, cfg_.self, payload);
+        }
         if (sealed.empty()) return;
         if (sealed.size() > kBundleMaxBytes) {
             log("копия ключей аккаунта слишком велика (" + std::to_string(sealed.size()) + " байт) — не отправлена");
@@ -602,6 +610,37 @@ json Session::fetchKeyBundle() {
         return opened ? *opened : json(nullptr);
     } catch (const std::exception &) {
         return nullptr;
+    }
+}
+
+// Ключи групп из копии ключей аккаунта (spec 032): движок принимает их как пересылку своего устройства, журналы
+// незнакомых групп дочитываются сразу (`groupChanged` → syncGroupLocked) — группы появляются, не дожидаясь, пока
+// другое своё устройство выйдет в сеть и перешлёт их (T142).
+void Session::applyBundleGroups(const std::string &groupsJson) {
+    {
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        if (!client_) return;
+        applyBundleGroupsLocked(groupsJson);
+    }
+    flushAsync();
+}
+
+void Session::applyBundleGroupsLocked(const std::string &groupsJson) {
+    try {
+        const auto events = client_->call("groupKeysImport", json{{"json", groupsJson}});
+        std::vector<json> pending;
+        std::size_t groups = 0;
+        if (events.is_array()) {
+            for (const auto &ev : events) {
+                if (ev.is_object() && ev.value("type", std::string()) == "groupChanged") ++groups;
+                pending.push_back(ev);
+            }
+        }
+        absorbLocked(std::move(pending));
+        persistLocked();
+        log("ключи групп из копии ключей аккаунта применены (групп " + std::to_string(groups) + ")");
+    } catch (const std::exception &e) {
+        log(std::string("ключи групп из копии ключей аккаунта не применены: ") + e.what());
     }
 }
 
@@ -803,6 +842,7 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
     joinWithGrant(material);
     if (!waitReady(60000)) return {"failed", {}, {}, nullptr};
     log("устройство привязано ключом восстановления (прежние устройства остались)");
+    if (const auto groups = payload.value("groups", std::string()); !groups.empty()) applyBundleGroups(groups);
     return {"ok", payload.value("planner", std::string()), payload.value("cloud", std::string()),
             payload.contains("history") ? payload["history"] : json(nullptr)};
 }

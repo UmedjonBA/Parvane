@@ -79,6 +79,8 @@ export const pvclient_groupIngest: (a: number, b: number, c: number, d: number, 
 export const pvclient_groupInviteCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const pvclient_groupJoin: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const pvclient_groupKeysExport: (a: number, b: number) => void;
+export const pvclient_groupKeysImport: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupList: (a: number, b: number) => void;
 export const pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

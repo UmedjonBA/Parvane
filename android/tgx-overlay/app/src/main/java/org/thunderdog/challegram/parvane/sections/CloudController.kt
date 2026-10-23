@@ -1,58 +1,84 @@
 package org.thunderdog.challegram.parvane.sections
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.widget.ImageView
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import org.json.JSONArray
 import org.json.JSONObject
 import org.parvane.core.ParvaneSections
 import org.thunderdog.challegram.R
+import org.thunderdog.challegram.parvane.sections.Kn.ava
+import org.thunderdog.challegram.parvane.sections.Kn.listRow
 import org.thunderdog.challegram.telegram.Tdlib
-import org.thunderdog.challegram.theme.ColorId
-import org.thunderdog.challegram.theme.Theme
+import org.thunderdog.challegram.tool.UI
 import java.io.File
 
 /**
- * Parvane (spec 031, T066): раздел «Облако» — личный диск и совместные папки: папки и файлы с сортировкой и
- * поиском, загрузка из галереи/файлов (системный выбор документов), скачивание в «Загрузки», переименование,
- * перенос, корзина (восстановить / удалить навсегда), «Сделать общей», ссылки для людей без аккаунта (срок,
- * отзыв, продление), занятое место. Логика и шифрование — ядро (`CloudFiles`, правки дерева), экран — только вид.
+ * Parvane (spec 031, T066; вид spec 032): экран «Облако» — тот же вид, что вкладка «Файлы» в «Знаниях» ([CloudPane]);
+ * отдельным экраном открывается для выбора файла (меню чата «Отправить из облака», [onPick]).
  */
 class CloudController(context: Context, tdlib: Tdlib) : SectionController(context, tdlib),
     org.thunderdog.challegram.navigation.ActivityResultHandler {
     override val section = "files"
-    override val tab = ParvaneTabBar.Tab.PROFILE
+    override val tab = ParvaneTabBar.Tab.KNOWLEDGE
     override fun getId() = R.id.controller_parvaneCloud
     override fun getName(): CharSequence = if (onPick != null) Sx.t("Выберите файл", "Choose a file") else Sx.t("Облако", "Cloud")
 
     /** Режим выбора файла (меню чата «Отправить из облака»): узел и контейнер; экран закрывается сам. */
     var onPick: ((JSONObject, String) -> Unit)? = null
-    private var snap: JSONObject? = null
+    private lateinit var pane: CloudPane
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) = pane.onActivityResult(requestCode, resultCode, data)
+
+    override fun onBuilt() {
+        pane = CloudPane(context(), { render() }) { n, container ->
+            onPick?.let { pick -> navigateBack(); pick(n, container); true } ?: false
+        }
+        watch("cloud") { s -> pane.snap = s; render() }
+        render()
+        pane.refreshUsage()
+    }
+
+    private fun render(): Unit = rebuild { pane.render(this) }
+}
+
+/**
+ * Файлы облака в виде телефонной версии web (`Cloud.tsx`): строка пути «Облако / …» и сортировка пилюлей, чипы
+ * «Новая папка · Загрузить файл · Новая общая папка», строки с плитками (хранилище «Знания» — жёлтая, папки — синие,
+ * чужие — фиолетовые), в корне — «Доступные мне», «Мои ссылки», «Корзина», внизу — занятое место. Логика и
+ * шифрование — ядро (`CloudFiles`, правки дерева), здесь только вид.
+ */
+class CloudPane(private val context: Context, private val rerender: () -> Unit,
+                private val onPickFile: (JSONObject, String) -> Boolean = { _, _ -> false }) {
+    var snap: JSONObject? = null
+    private var place = "drive" // drive | shared | links | trash
     private var container: String? = null // null — личный диск
     private var folder: String? = null
-    private var view = "files" // files | trash | links
     private var sort = "name"
-    private var query = ""
+    private var descending = false
+    var query = ""
+        set(value) { field = value; rerender() }
     private var busy: String? = null
     private var links: JSONArray? = null
 
     companion object {
-        private const val PICK = 0x5071
+        const val PICK = 0x5071
     }
 
-    /** Результат системного выбора файлов (BaseActivity отдаёт верхнему контроллеру). */
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    private fun toast(text: String) = UI.showToast(text, android.widget.Toast.LENGTH_SHORT)
+
+    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode != PICK || resultCode != Activity.RESULT_OK || data == null) return
         val uris = mutableListOf<Uri>()
         data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri }
@@ -60,178 +86,257 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
         upload(uris)
     }
 
-    override fun onBuilt() {
-        watch("cloud") { s ->
-            snap = s
-            render()
-        }
-        if (snap == null) render()
+    fun refreshUsage() {
         Sx.async({ ParvaneSections.cloudCall("parvaneCloudUsage", "{}") }) { }
+        if (links == null) Sx.async({ ParvaneSections.cloudFiles("links") }) { r -> links = (r as? JSONObject)?.optJSONArray("links") ?: JSONArray(); rerender() }
     }
 
-    private fun containerId(): String? = container ?: snap?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
-
-    private fun nodes(): List<JSONObject> {
-        val id = containerId() ?: return emptyList()
-        return Sx.list(snap?.optJSONObject("state")?.optJSONObject("trees")?.optJSONObject(id)?.optJSONArray("nodes"))
+    /** Открыть папку хранилища заметок («Знания» / «Knowledge») в личном диске. */
+    fun openVault() {
+        place = "drive"; container = null
+        folder = vault()?.optString("id")
+        rerender()
     }
 
-    private fun shared(): List<JSONObject> = Sx.list(snap?.optJSONArray("containers")).filter { it.optString("kind") != "root" && it.optString("id") != snap?.optString("rootId") }
+    private fun rootId(): String? = snap?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
+    private fun containerId(): String? = container ?: rootId()
+    private fun nodesOf(id: String?): List<JSONObject> =
+        if (id == null) emptyList() else Sx.list(snap?.optJSONObject("state")?.optJSONObject("trees")?.optJSONObject(id)?.optJSONArray("nodes"))
+    private fun nodes(): List<JSONObject> = nodesOf(containerId())
+    private fun parentOf(n: JSONObject): String? = if (n.isNull("parent")) null else n.optString("parent").ifEmpty { null }
+    private fun shared(): List<JSONObject> = Sx.list(snap?.optJSONArray("containers")).filter { it.optString("kind") != "root" && it.optString("id") != rootId() }
+    private fun isService(n: JSONObject) = n.optString("name").startsWith(".parvane-")
+    private fun vault(): JSONObject? = nodesOf(rootId()).firstOrNull {
+        it.optString("kind") == "folder" && parentOf(it) == null && !it.optBoolean("trashed") && it.optString("name") in listOf("Знания", "Knowledge")
+    }
+    private fun trash(): List<JSONObject> = nodesOf(rootId()).filter { it.optBoolean("trashed") && it.optBoolean("trashTop", true) }
 
-    private fun render(): Unit = rebuild {
-        tabs(listOf("files" to Sx.t("Файлы", "Files"), "trash" to Sx.t("Корзина", "Trash"), "links" to Sx.t("Ссылки", "Links")), view) {
-            view = it
-            if (it == "links") loadLinks()
-            render()
+    /** «Назад» внутри файлов: на уровень вверх; false — уже корень. */
+    fun back(): Boolean {
+        when {
+            folder != null -> folder = nodes().firstOrNull { it.optString("id") == folder }?.let { parentOf(it) }
+            container != null -> { container = null; place = "shared" }
+            place != "drive" -> place = "drive"
+            else -> return false
         }
+        rerender()
+        return true
+    }
+
+    fun render(body: LinearLayout) {
+        body.setPadding(Pv.rem(1f), Pv.rem(1f), Pv.rem(1f), Pv.rem(1.5f))
         val s = snap
         val status = s?.optString("status") ?: "loading"
         if (s == null || status == "loading" || status == "needs-linking") {
-            placeholder(if (status == "needs-linking") Sx.t("Устройство ещё не привязано", "This device is not linked yet") else Sx.t("Загрузка облака…", "Loading cloud…"))
-            return@rebuild
+            if (status != "needs-linking") body.addView(MascotView(context), lp(t = Pv.rem(2.5f)).apply { gravity = Gravity.CENTER_HORIZONTAL; width = Pv.rem(4f) })
+            body.addView(context.pvText(if (status == "needs-linking") Sx.t("Устройство ещё не привязано — облако появится после привязки", "This device is not linked yet")
+                else Sx.t("Загрузка облака…", "Loading cloud…"), 0.9375f, Pv.c.muted).apply { gravity = Gravity.CENTER }, lp(t = Pv.rem(1.5f)))
+            return
         }
-        busy?.let { addView(context.label(it, 13f, ColorId.textNeutral).apply { layoutParams = lp(t = Sx.dp(6f), l = Sx.dp(18f)) }) }
-        s.optJSONObject("usage")?.let { u ->
-            val used = u.optLong("used_bytes", u.optLong("usedBytes", 0)) + u.optLong("links_bytes", 0)
-            val quota = u.optLong("quota_bytes", u.optLong("quotaBytes", 0))
-            if (quota > 0) addView(context.card().apply {
-                addView(context.label(Sx.t("Занято ${size(used)} из ${size(quota)}", "${size(used)} of ${size(quota)} used"), 13f, ColorId.textLight))
-                addView(context.bar(used.toDouble() / quota))
-            })
+        // Путь и сортировка (`.tools`)
+        val tools = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val path = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        fun crumb(title: String, first: Boolean, go: () -> Unit) {
+            if (!first) path.addView(context.pvText("/", 0.875f, Pv.c.faint))
+            path.addView(context.pvText(title, 0.875f, Pv.c.muted, maxLines = 1).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Pv.rem(0.625f), 0, Pv.rem(0.625f), 0)
+                maxWidth = Pv.rem(10f)
+                Pv.pressable(this, 0, 0.5f) { go() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Pv.rem(2.25f)))
         }
-        when (view) {
-            "trash" -> renderTrash()
-            "links" -> renderLinks()
-            else -> renderFiles()
+        if (query.isNotEmpty()) path.addView(context.pvText(Sx.t("Найдено: ${found().size}", "Found: ${found().size}"), 0.875f, Pv.c.muted))
+        else {
+            crumb(Sx.t("Облако", "Cloud"), true) { place = "drive"; container = null; folder = null; rerender() }
+            if (place != "drive") crumb(virtualName(place), false) { container = null; folder = null; rerender() }
+            container?.let { id -> crumb(shared().firstOrNull { it.optString("id") == id }?.optString("name").orEmpty().ifEmpty { Sx.t("Общая папка", "Shared folder") }, false) { folder = null; rerender() } }
+            val byId = nodes().associateBy { it.optString("id") }
+            val chain = mutableListOf<JSONObject>()
+            var cur = folder?.let { byId[it] }
+            while (cur != null) { chain.add(0, cur); cur = parentOf(cur)?.let { byId[it] } }
+            chain.forEach { p -> crumb(p.optString("name"), false) { folder = p.optString("id"); rerender() } }
         }
-    }
-
-    private fun LinearLayout.renderFiles() {
-        // где: личный диск или совместная папка
-        val places = context.hbox().apply { setPadding(Sx.dp(8f), Sx.dp(8f), Sx.dp(8f), 0) }
-        places.addView(context.chip(Sx.t("Мой диск", "My drive"), container == null) { container = null; folder = null; render() })
-        shared().forEach { c ->
-            places.addView(context.chip(c.optString("name").ifEmpty { Sx.t("Совместная", "Shared") }, container == c.optString("id")) {
-                container = c.optString("id"); folder = null; render()
-            })
+        tools.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(path) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = -Pv.rem(0.625f) })
+        if (place == "drive" || container != null) tools.addView(sortPill())
+        body.addView(tools, lp(b = Pv.rem(0.625f)))
+        busy?.let { body.addView(context.pvText(it, 0.8125f, Pv.c.accent), lp(b = Pv.rem(0.5f))) }
+        val canAdd = query.isEmpty() && (place == "drive" || (container != null && shared().firstOrNull { it.optString("id") == container }?.optString("role") != "reader"))
+        if (canAdd) {
+            val chips = FlowRow(context, Pv.rem(0.375f))
+            chips.addView(chip("folder", Sx.t("Новая папка", "New folder")) { newFolder() })
+            chips.addView(chip("upload", Sx.t("Загрузить файл", "Upload file")) { pick() })
+            if (place == "drive" && container == null && folder == null)
+                chips.addView(chip("users", Sx.t("Новая общая папка", "New shared folder")) { newShared() })
+            body.addView(chips, lp(b = Pv.rem(0.625f)))
         }
-        addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(places) })
-        val all = nodes()
-        val byId = all.associateBy { it.optString("id") }
-        // путь
-        val path = mutableListOf<JSONObject>()
-        var cur = folder?.let { byId[it] }
-        while (cur != null) { path.add(0, cur); cur = cur.takeUnless { it.isNull("parent") }?.optString("parent")?.takeIf { it.isNotEmpty() }?.let { byId[it] } }
-        val crumbs = context.hbox().apply { setPadding(Sx.dp(12f), Sx.dp(6f), Sx.dp(12f), 0) }
-        crumbs.addView(context.label(Sx.t("Корень", "Root"), 14f, ColorId.textLink).apply { setOnClickListener { folder = null; render() } })
-        path.forEach { p ->
-            crumbs.addView(context.label(" / ", 14f, ColorId.textLight))
-            crumbs.addView(context.label(p.optString("name"), 14f, ColorId.textLink).apply { setOnClickListener { folder = p.optString("id"); render() } })
-        }
-        addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(crumbs) })
-        val actions = context.hbox().apply { setPadding(Sx.dp(8f), Sx.dp(6f), Sx.dp(8f), 0) }
-        actions.addView(context.chip(Sx.t("Загрузить", "Upload"), false) { pick() })
-        actions.addView(context.chip(Sx.t("Новая папка", "New folder"), false) { newFolder() })
-        actions.addView(context.chip(Sx.t("Сортировка: ", "Sort: ") + when (sort) { "date" -> Sx.t("дата", "date"); "size" -> Sx.t("размер", "size"); else -> Sx.t("имя", "name") }, false) {
-            sort = when (sort) { "name" -> "date"; "date" -> "size"; else -> "name" }
-            render()
-        })
-        actions.addView(context.chip(Sx.t("Поиск", "Search"), query.isNotEmpty()) {
-            KnowledgeDialogs.askText(context(), Sx.t("Поиск по облаку", "Search cloud"), query) { q -> query = q; render() }
-        })
-        if (query.isNotEmpty()) actions.addView(context.chip("✕ $query", true) { query = ""; render() })
-        if (container != null) actions.addView(context.chip(Sx.t("Покинуть", "Leave"), false) { leaveShared() })
-        addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(actions) })
-        val visible = all.filter { !it.optBoolean("trashed") }.let { list ->
-            if (query.isNotEmpty()) list.filter { it.optString("name").contains(query, ignoreCase = true) }
-            else list.filter { ((if (it.isNull("parent")) null else it.optString("parent").ifEmpty { null })) == folder }
-        }.sortedWith(compareBy<JSONObject> { it.optString("kind") != "folder" }.then(when (sort) {
-            "date" -> compareByDescending { it.optLong("mtime") }
-            "size" -> compareByDescending { it.optLong("size") }
-            else -> compareBy { it.optString("name").lowercase() }
-        }))
-        if (visible.isEmpty()) placeholder(if (query.isEmpty()) Sx.t("Здесь пусто. «Загрузить» — добавить файлы", "Empty. Tap “Upload” to add files") else Sx.t("Ничего не найдено", "Nothing found"))
-        visible.forEach { n ->
-            addView(nodeRow(n) {
-                val pick = onPick
-                when {
-                    n.optString("kind") == "folder" -> { folder = n.optString("id"); query = ""; render() }
-                    pick != null -> { navigateBack(); pick(n, containerId() ?: "") }
-                    else -> fileMenu(n)
-                }
-            })
-        }
-    }
-
-    private fun nodeRow(n: JSONObject, onClick: () -> Unit): LinearLayout {
-        val ctx = context()
-        val isFolder = n.optString("kind") == "folder"
-        val row = ctx.hbox().apply {
-            setPadding(Sx.dp(12f), Sx.dp(10f), Sx.dp(12f), Sx.dp(10f))
-            layoutParams = lp(t = Sx.dp(6f), l = Sx.dp(12f), r = Sx.dp(12f))
-            pressable(onClick = onClick)
-            setOnLongClickListener { if (isFolder) folderMenu(n) else fileMenu(n); true }
-        }
-        row.addView(ImageView(ctx).apply {
-            setImageResource(if (isFolder) R.drawable.baseline_folder_24 else R.drawable.baseline_insert_drive_file_24)
-            colorFilter = PorterDuffColorFilter(Sx.color(if (isFolder) ColorId.iconActive else ColorId.icon), PorterDuff.Mode.SRC_IN)
-            layoutParams = LinearLayout.LayoutParams(Sx.dp(36f), Sx.dp(36f)).apply { rightMargin = Sx.dp(10f) }
-            scaleType = ImageView.ScaleType.CENTER
-        })
-        val texts = ctx.vbox().apply { layoutParams = lp(0, weight = 1f) }
-        texts.addView(ctx.label(n.optString("name"), 15f, maxLines = 1))
-        val meta = if (isFolder) Sx.t("Папка", "Folder") else listOf(size(n.optLong("size")), date(n.optLong("mtime"))).filter { it.isNotEmpty() }.joinToString(" · ")
-        texts.addView(ctx.label(meta, 13f, ColorId.textLight, maxLines = 1))
-        row.addView(texts)
-        return row
-    }
-
-    private fun LinearLayout.renderTrash() {
-        val trashed = nodes().filter { it.optBoolean("trashed") && it.optBoolean("trashTop", true) }
-        if (trashed.isEmpty()) { placeholder(Sx.t("Корзина пуста", "Trash is empty")); return }
-        addView(context.action(Sx.t("Очистить корзину", "Empty trash"), ColorId.textNegative) {
-            confirm(Sx.t("Удалить всё из корзины навсегда?", "Delete everything in trash forever?")) {
-                files("purge", JSONObject().put("nodes", JSONArray(trashed.map { it.optString("id") })))
-            }
-        })
-        trashed.forEach { n ->
-            addView(nodeRow(n) {
-                AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(n.optString("name"))
-                    .setItems(arrayOf(Sx.t("Восстановить", "Restore"), Sx.t("Удалить навсегда", "Delete forever"))) { _, which ->
-                        files(if (which == 0) "restore" else "purge", JSONObject().put("nodes", JSONArray().put(n.optString("id"))))
-                    }.show()
-            })
-        }
-    }
-
-    private fun LinearLayout.renderLinks() {
-        val list = Sx.list(links)
-        if (links == null) { placeholder(Sx.t("Загрузка ссылок…", "Loading links…")); return }
-        if (list.isEmpty()) placeholder(Sx.t("Ссылок нет. Создать — долгое нажатие на файле или папке", "No links. Long-press a file or folder to create one"))
-        list.forEach { l ->
-            val card = context.card()
-            card.addView(context.label(l.optString("name").ifEmpty { l.optString("id") }, 15f, bold = true))
-            val state = when (l.optString("state")) { "ready" -> ""; "revoked" -> Sx.t("отозвана", "revoked"); "expired" -> Sx.t("истекла", "expired"); else -> l.optString("state") }
-            val exp = l.optLong("expiresAt").takeIf { it > 0 }?.let { Sx.t("до ${date(it * 1000)}", "until ${date(it * 1000)}") } ?: Sx.t("без срока", "no expiry")
-            card.addView(context.label(listOf(state, exp, size(l.optLong("bytes"))).filter { it.isNotEmpty() }.joinToString(" · "), 13f, ColorId.textLight))
-            val url = l.optString("url")
-            val row = context.hbox()
-            if (url.isNotEmpty() && l.optString("state") == "ready") {
-                row.addView(context.chip(Sx.t("Копировать", "Copy"), false) { copy(url) })
-                row.addView(context.chip(Sx.t("Поделиться", "Share"), false) { share(url) })
-                row.addView(context.chip(Sx.t("Продлить", "Extend"), false) { ttl { d -> files("linkExtend", JSONObject().put("id", l.optString("id")).put("ttlDays", d)) { loadLinks() } } })
-                row.addView(context.chip(Sx.t("Отозвать", "Revoke"), false) {
-                    confirm(Sx.t("Отозвать ссылку?", "Revoke link?")) { files("linkRevoke", JSONObject().put("id", l.optString("id"))) { loadLinks() } }
+        if (place == "trash" && trash().isNotEmpty()) {
+            body.addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(context.pvText(Sx.t("Корзина хранится 30 дней", "Trash is kept for 30 days"), 0.8125f, Pv.c.muted),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(context.pvButton(Sx.t("Очистить", "Empty"), "danger") {
+                    PvSheet.confirm(context, Sx.t("Очистить корзину?", "Empty trash?"), Sx.t("Всё из корзины удалится навсегда.", "Everything in the trash is deleted forever."),
+                        Sx.t("Очистить", "Empty"), danger = true) {
+                        files("purge", JSONObject().put("container", rootId()).put("nodes", JSONArray(trash().map { it.optString("id") })))
+                    }
                 })
+            }, lp(b = Pv.rem(0.375f)))
+        }
+        val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(list, lp(l = -Pv.rem(0.625f), r = -Pv.rem(0.625f)))
+        var rows = 0
+        when {
+            query.isNotEmpty() -> found().forEach { list.addView(nodeRow(it)); rows++ }
+            place == "shared" && container == null -> shared().forEach { c ->
+                rows++
+                list.addView(context.listRow(context.ava(Pv.c.purple, icon = "folder"), c.optString("name").ifEmpty { Sx.t("Общая папка", "Shared folder") },
+                    Sx.t("Элементов: ${nodesOf(c.optString("id")).count { parentOf(it) == null && !it.optBoolean("trashed") && !isService(it) }}",
+                        "Items: ${nodesOf(c.optString("id")).count { parentOf(it) == null && !it.optBoolean("trashed") && !isService(it) }}"),
+                    onLong = { containerMenu(c) }) { container = c.optString("id"); folder = null; rerender() })
             }
-            card.addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) })
-            addView(card)
+            place == "links" -> Sx.list(links).forEach { l -> list.addView(linkRow(l)); rows++ }
+            place == "trash" -> trash().forEach { list.addView(nodeRow(it, inTrash = true)); rows++ }
+            else -> visible().forEach { list.addView(nodeRow(it)); rows++ }
+        }
+        if (rows == 0) list.addView(context.pvText(when {
+            query.isNotEmpty() -> Sx.t("Ничего не найдено", "Nothing found")
+            place == "shared" -> Sx.t("С вами пока ничем не поделились", "Nothing is shared with you yet")
+            place == "links" -> Sx.t("Ссылок пока нет. Создать — «⋮» у файла или папки", "No links yet. Create one from a file or folder menu")
+            place == "trash" -> Sx.t("Корзина пуста", "Trash is empty")
+            else -> Sx.t("Здесь пусто", "Empty here")
+        }, 0.9375f, Pv.c.muted).apply { gravity = Gravity.CENTER; setPadding(0, Pv.rem(2.5f), 0, Pv.rem(2.5f)) }, lp())
+        if (query.isEmpty() && place == "drive" && container == null && folder == null) {
+            val sharedCount = shared().size
+            list.addView(virtualRow("shared", if (sharedCount > 0) Sx.t("Папок: $sharedCount", "Folders: $sharedCount") else Sx.t("Пока пусто", "Nothing yet")))
+            val linkCount = links?.length() ?: 0
+            list.addView(virtualRow("links", if (linkCount > 0) Sx.t("Ссылок: $linkCount", "Links: $linkCount") else Sx.t("Ссылок пока нет", "No links yet")))
+            val trashCount = trash().size
+            list.addView(virtualRow("trash", if (trashCount > 0) Sx.t("Элементов: $trashCount", "Items: $trashCount") else Sx.t("Корзина пуста", "Trash is empty")))
+        }
+        s.optJSONObject("usage")?.let { u ->
+            // Ответ ядра `parvaneCloudUsage`: {used, quota, maxFile, linksBytes}; копии ссылок уже входят в used
+            val used = u.optLong("used", 0)
+            val quota = u.optLong("quota", 0)
+            if (quota > 0) body.addView(context.pvText(Sx.t("Занято ${size(used)} из ${size(quota)} · файлы шифруются на устройстве, сервер видит только зашифрованные блоки",
+                "${size(used)} of ${size(quota)} used · files are encrypted on the device, the server sees only encrypted blocks"),
+                0.8125f, Pv.c.muted), lp(t = Pv.rem(0.875f)))
+        }
+    }
+
+    private fun virtualName(view: String) = when (view) {
+        "shared" -> Sx.t("Доступные мне", "Shared with me")
+        "links" -> Sx.t("Мои ссылки", "My links")
+        else -> Sx.t("Корзина", "Trash")
+    }
+
+    private fun virtualRow(view: String, hint: String): View = context.listRow(
+        context.ava(Pv.c.fg, icon = when (view) { "shared" -> "users"; "links" -> "link"; else -> "trash" }), virtualName(view), hint) {
+        place = view; container = null; folder = null
+        if (view == "links") Sx.async({ ParvaneSections.cloudFiles("links") }) { r -> links = (r as? JSONObject)?.optJSONArray("links") ?: JSONArray(); rerender() }
+        rerender()
+    }
+
+    private fun chip(icon: String, text: String, onClick: () -> Unit): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(Pv.rem(0.75f), 0, Pv.rem(0.75f), 0)
+        addView(context.pvIcon(icon, Pv.c.muted, 1.125f).apply { (layoutParams as LinearLayout.LayoutParams).rightMargin = Pv.rem(0.375f) })
+        addView(context.pvText(text, 0.8125f, Pv.c.muted, maxLines = 1))
+        Pv.pressable(this, 0, 0.9375f, Pv.c.line2, onClick)
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Pv.rem(1.875f))
+    }
+
+    /** Сортировка (`.sortPill`): 2,625 rem, рамка line2; выбор — шторкой. */
+    private fun sortPill(): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(Pv.rem(1f), 0, Pv.rem(0.75f), 0)
+        addView(context.pvText(sortName(sort), 0.9375f, Pv.c.fg))
+        addView(context.pvIcon(if (descending) "down" else "up", Pv.c.fg, 1.125f).apply { (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.375f) })
+        Pv.pressable(this, Pv.c.panel, 1.3125f, Pv.c.line2) {
+            val keys = listOf("name", "date", "size")
+            PvSheet.choose(context, Sx.t("Сортировка", "Sort"), keys.map { k -> sortName(k) + if (k == sort) (if (descending) " ↓" else " ↑") else "" }) { i ->
+                if (keys[i] == sort) descending = !descending else { sort = keys[i]; descending = keys[i] != "name" }
+                rerender()
+            }
+        }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Pv.rem(2.625f))
+    }
+
+    private fun sortName(k: String) = when (k) { "date" -> Sx.t("Дата", "Date"); "size" -> Sx.t("Размер", "Size"); else -> Sx.t("Имя", "Name") }
+
+    private fun sorted(list: List<JSONObject>): List<JSONObject> {
+        val cmp: Comparator<JSONObject> = when (sort) {
+            "date" -> compareBy { it.optLong("mtime") }
+            "size" -> compareBy { it.optLong("size") }
+            else -> compareBy { it.optString("name").lowercase() }
+        }
+        return list.sortedWith(compareBy<JSONObject> { it.optString("kind") != "folder" }.then(if (descending) cmp.reversed() else cmp))
+    }
+
+    private fun visible() = sorted(nodes().filter { !it.optBoolean("trashed") && !isService(it) && parentOf(it) == folder })
+
+    private fun found(): List<JSONObject> {
+        val q = query.trim()
+        val all = (listOfNotNull(rootId()) + shared().map { it.optString("id") }).flatMap { nodesOf(it) }
+        return sorted(all.filter { !it.optBoolean("trashed") && !isService(it) && it.optString("name").contains(q, ignoreCase = true) })
+    }
+
+    private fun nodeRow(n: JSONObject, inTrash: Boolean = false): View {
+        val isFolder = n.optString("kind") == "folder"
+        val isVault = container == null && parentOf(n) == null && n.optString("id") == vault()?.optString("id")
+        val incoming = container != null && shared().firstOrNull { it.optString("id") == container }?.optString("kind") == "shared"
+        val color = when {
+            isVault -> Pv.c.yellow
+            incoming -> Pv.c.purple
+            isFolder -> Pv.c.blue
+            else -> Pv.c.fg
+        }
+        val mime = n.optString("mime")
+        val icon = if (isFolder) "folder" else if (mime.startsWith("image/")) "image" else "note"
+        val sub = when {
+            inTrash -> Sx.t("В корзине", "In trash")
+            isVault -> Sx.t("хранилище заметок · .md", "notes vault · .md")
+            isFolder -> Sx.t("Элементов: ${nodes().count { parentOf(it) == n.optString("id") && !it.optBoolean("trashed") && !isService(it) }}",
+                "Items: ${nodes().count { parentOf(it) == n.optString("id") && !it.optBoolean("trashed") && !isService(it) }}")
+            else -> listOf(size(n.optLong("size")), date(n.optLong("mtime"))).filter { it.isNotEmpty() }.joinToString(" · ")
+        }
+        val dots = context.pvIconButton("dots", Sx.t("Действия", "Actions"), Pv.c.muted) {
+            if (inTrash) trashMenu(n) else if (isFolder) folderMenu(n) else fileMenu(n)
+        }
+        return context.listRow(context.ava(color, icon = icon), n.optString("name"), sub, dots) {
+            when {
+                inTrash -> trashMenu(n)
+                isFolder -> { folder = n.optString("id"); query = ""; rerender() }
+                onPickFile(n, containerId() ?: "") -> Unit
+                else -> fileMenu(n)
+            }
+        }
+    }
+
+    private fun linkRow(l: JSONObject): View {
+        val state = when (l.optString("state")) { "ready", "active" -> ""; "revoked" -> Sx.t("отозвана", "revoked"); "expired" -> Sx.t("истекла", "expired"); else -> l.optString("state") }
+        val exp = l.optLong("expiresAt").takeIf { it > 0 }?.let { Sx.t("до ${date(it * 1000)}", "until ${date(it * 1000)}") } ?: Sx.t("без срока", "no expiry")
+        val sub = listOf(state, exp, size(l.optLong("bytes"))).filter { it.isNotEmpty() }.joinToString(" · ")
+        val active = l.optString("state") in listOf("ready", "active")
+        return context.listRow(context.ava(if (active) Pv.c.blue else Pv.c.muted, icon = "link"), l.optString("name").ifEmpty { l.optString("id") }, sub) {
+            val url = l.optString("url")
+            val items = mutableListOf<Pair<String, () -> Unit>>()
+            if (url.isNotEmpty() && active) {
+                items += Sx.t("Копировать", "Copy") to { copy(url) }
+                items += Sx.t("Поделиться", "Share") to { share(url) }
+                items += Sx.t("Продлить", "Extend") to { ttl { d -> files("linkExtend", JSONObject().put("id", l.optString("id")).put("ttlDays", d)) { loadLinks() } } }
+                items += Sx.t("Отозвать", "Revoke") to { files("linkRevoke", JSONObject().put("id", l.optString("id"))) { loadLinks() } }
+            }
+            if (items.isNotEmpty()) Kn.menu(context, l.optString("name").ifEmpty { Sx.t("Ссылка", "Link") }, items, dangerLast = true)
         }
     }
 
     private fun loadLinks(): Unit = Sx.async({ ParvaneSections.cloudFiles("links") }) { r ->
         links = (r as? JSONObject)?.optJSONArray("links") ?: JSONArray()
-        render()
+        rerender()
     }
 
     // ── действия ───────────────────────────────────────────────────────────────
@@ -248,15 +353,15 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
     private fun pick() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
             .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        try { context().startActivityForResult(intent, PICK) } catch (e: Throwable) { toast(Sx.t("Нет приложения для выбора файлов", "No file picker")) }
+        try { (context as Activity).startActivityForResult(intent, PICK) } catch (e: Throwable) { toast(Sx.t("Нет приложения для выбора файлов", "No file picker")) }
     }
 
     fun upload(uris: List<Uri>) {
         val target = containerId() ?: return
         val parent = folder
-        val ctx = context()
+        val ctx = context
         busy = Sx.t("Загрузка: ${uris.size}…", "Uploading ${uris.size}…")
-        render()
+        rerender()
         Sx.async({
             val tmp = File(ctx.cacheDir, "parvane-upload").apply { mkdirs() }
             var failed = 0
@@ -278,8 +383,8 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
         }) { failed ->
             busy = null
             if ((failed ?: 0) > 0) toast(Sx.t("Не загружено файлов: $failed", "Files not uploaded: $failed"))
-            Sx.async({ ParvaneSections.cloudCall("parvaneCloudUsage", "{}") }) { }
-            render()
+            refreshUsage()
+            rerender()
         }
     }
 
@@ -292,14 +397,15 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
     }
 
     private fun download(n: JSONObject) {
-        val ctx = context()
+        val ctx = context
         busy = Sx.t("Скачивание «${n.optString("name")}»…", "Downloading “${n.optString("name")}”…")
-        render()
+        rerender()
+        val from = containerId()
         Sx.async({
             val tmp = File(ctx.cacheDir, "parvane-download").apply { mkdirs() }
             val f = File(tmp, "d-" + System.nanoTime())
             try {
-                val r = ParvaneSections.cloudFiles("download", JSONObject().put("container", containerId()).put("node", n.optString("id")).put("out", f.absolutePath)) as? JSONObject
+                val r = ParvaneSections.cloudFiles("download", JSONObject().put("container", from).put("node", n.optString("id")).put("out", f.absolutePath)) as? JSONObject
                 if (r?.optBoolean("ok") != true) return@async false
                 saveToDownloads(ctx, f, n.optString("name"), n.optString("mime"))
             } finally {
@@ -308,7 +414,7 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
         }) { ok ->
             busy = null
             toast(if (ok == true) Sx.t("Сохранено в «Загрузки»", "Saved to Downloads") else Sx.t("Не скачано", "Download failed"))
-            render()
+            rerender()
         }
     }
 
@@ -329,102 +435,141 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
         return true
     }
 
-    private fun fileMenu(n: JSONObject) {
-        val items = listOf(
-            Sx.t("Скачать", "Download") to { download(n) },
-            Sx.t("Переименовать", "Rename") to { rename(n) },
-            Sx.t("Перенести", "Move") to { move(n) },
-            Sx.t("Ссылка для всех", "Public link") to { createLink(n) },
-            Sx.t("В корзину", "Move to trash") to { files("trash", JSONObject().put("nodes", JSONArray().put(n.optString("id")))) },
-        )
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(n.optString("name"))
-            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
-    }
+    private fun trash(n: JSONObject) = files("trash", JSONObject().put("nodes", JSONArray().put(n.optString("id"))))
+
+    private fun fileMenu(n: JSONObject) = Kn.menu(context, n.optString("name"), listOf(
+        Sx.t("Скачать", "Download") to { download(n) },
+        Sx.t("Переименовать", "Rename") to { rename(n) },
+        Sx.t("Переместить", "Move") to { move(n) },
+        Sx.t("Ссылка для всех", "Public link") to { createLink(n) },
+        Sx.t("В корзину", "Move to trash") to { trash(n) },
+    ), dangerLast = true)
 
     private fun folderMenu(n: JSONObject) {
-        val items = mutableListOf(
-            Sx.t("Открыть", "Open") to { folder = n.optString("id"); render() },
+        val items = mutableListOf<Pair<String, () -> Unit>>(
+            Sx.t("Открыть", "Open") to { folder = n.optString("id"); rerender() },
             Sx.t("Переименовать", "Rename") to { rename(n) },
-            Sx.t("Перенести", "Move") to { move(n) },
+            Sx.t("Переместить", "Move") to { move(n) },
             Sx.t("Ссылка для всех", "Public link") to { createLink(n) },
-            Sx.t("В корзину", "Move to trash") to { files("trash", JSONObject().put("nodes", JSONArray().put(n.optString("id")))) },
         )
-        if (container == null) items.add(3, Sx.t("Сделать общей", "Make shared") to {
+        if (container == null) items += Sx.t("Общий доступ", "Share") to {
             busy = Sx.t("Папка становится общей…", "Sharing folder…")
-            render()
-            files("shareFolder", JSONObject().put("node", n.optString("id"))) { busy = null; render() }
-        })
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(n.optString("name"))
-            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }.show()
+            rerender()
+            files("shareFolder", JSONObject().put("node", n.optString("id"))) { busy = null; rerender() }
+        }
+        items += Sx.t("В корзину", "Move to trash") to { trash(n) }
+        Kn.menu(context, n.optString("name"), items, dangerLast = true)
     }
 
-    private fun rename(n: JSONObject): Unit = KnowledgeDialogs.askText(context(), Sx.t("Новое имя", "New name"), n.optString("name")) { name ->
+    private fun trashMenu(n: JSONObject) = Kn.menu(context, n.optString("name"), listOf(
+        Sx.t("Восстановить", "Restore") to { files("restore", JSONObject().put("container", rootId()).put("nodes", JSONArray().put(n.optString("id")))) },
+        Sx.t("Удалить навсегда", "Delete forever") to { files("purge", JSONObject().put("container", rootId()).put("nodes", JSONArray().put(n.optString("id")))) },
+    ), dangerLast = true)
+
+    private fun containerMenu(c: JSONObject) = Kn.menu(context, c.optString("name"), listOf(
+        Sx.t("Покинуть папку", "Leave folder") to {
+            PvSheet.confirm(context, Sx.t("Покинуть совместную папку?", "Leave the shared folder?"), c.optString("name"), Sx.t("Покинуть", "Leave"), danger = true) {
+                Sx.async({ ParvaneSections.cloudCall("parvaneCloudLeave", JSONObject().put("container", c.optString("id")).toString()) }) { container = null; rerender() }
+            }
+        },
+    ), dangerLast = true)
+
+    private fun rename(n: JSONObject): Unit = Kn.askText(context, Sx.t("Новое имя", "New name"), n.optString("name")) { name ->
         files("rename", JSONObject().put("node", n.optString("id")).put("name", name))
     }
 
-    private fun newFolder(): Unit = KnowledgeDialogs.askText(context(), Sx.t("Название папки", "Folder name"), "") { name ->
+    private fun newFolder(): Unit = Kn.askText(context, Sx.t("Новая папка", "New folder"), "", Sx.t("Создать", "Create")) { name ->
         files("createFolder", JSONObject().put("name", name).put("parent", folder ?: ""))
+    }
+
+    /** Новая общая папка: папка в личном диске и сразу «Общий доступ». */
+    private fun newShared(): Unit = Kn.askText(context, Sx.t("Новая общая папка", "New shared folder"), "", Sx.t("Создать", "Create")) { name ->
+        files("createFolder", JSONObject().put("name", name).put("parent", "")) { r ->
+            val id = r?.optString("id")?.takeIf { it.isNotEmpty() } ?: nodes().firstOrNull { it.optString("name") == name && parentOf(it) == null }?.optString("id")
+            if (id != null) {
+                busy = Sx.t("Папка становится общей…", "Sharing folder…")
+                rerender()
+                files("shareFolder", JSONObject().put("node", id)) { busy = null; rerender() }
+            }
+        }
     }
 
     private fun move(n: JSONObject) {
         val folders = nodes().filter { it.optString("kind") == "folder" && !it.optBoolean("trashed") && it.optString("id") != n.optString("id") }
-        val names = listOf(Sx.t("Корень", "Root")) + folders.map { it.optString("name") }
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(Sx.t("Перенести в…", "Move to…"))
-            .setItems(names.toTypedArray()) { _, which ->
-                files("move", JSONObject().put("nodes", JSONArray().put(n.optString("id"))).put("parent", if (which == 0) "" else folders[which - 1].optString("id")))
-            }.show()
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        items += Sx.t("Облако (корень)", "Cloud (root)") to { files("move", JSONObject().put("nodes", JSONArray().put(n.optString("id"))).put("parent", "")) }
+        folders.forEach { f -> items += f.optString("name") to { files("move", JSONObject().put("nodes", JSONArray().put(n.optString("id"))).put("parent", f.optString("id"))) } }
+        Kn.menu(context, Sx.t("Переместить в…", "Move to…"), items)
     }
 
     private fun createLink(n: JSONObject): Unit = ttl { days ->
         busy = Sx.t("Создаётся ссылка…", "Creating link…")
-        render()
+        rerender()
         files("linkCreate", JSONObject().put("node", n.optString("id")).put("name", n.optString("name")).put("ttlDays", days)) { r ->
             busy = null
-            render()
+            loadLinks()
             r?.optJSONObject("link")?.optString("url")?.takeIf { it.isNotEmpty() }?.let { url ->
-                AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(Sx.t("Ссылка готова", "Link ready")).setMessage(url)
-                    .setPositiveButton(Sx.t("Копировать", "Copy")) { _, _ -> copy(url) }
-                    .setNeutralButton(Sx.t("Поделиться", "Share")) { _, _ -> share(url) }
-                    .setNegativeButton(android.R.string.ok, null).show()
+                Kn.menu(context, Sx.t("Ссылка готова", "Link ready"), listOf(
+                    Sx.t("Копировать", "Copy") to { copy(url) },
+                    Sx.t("Поделиться", "Share") to { share(url) },
+                ))
             }
         }
     }
 
     private fun ttl(done: (Int) -> Unit) {
         val values = intArrayOf(1, 7, 30, 0)
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(Sx.t("Срок ссылки", "Link expiry"))
-            .setItems(arrayOf(Sx.t("1 день", "1 day"), Sx.t("7 дней", "7 days"), Sx.t("30 дней", "30 days"), Sx.t("Без срока", "No expiry"))) { _, which -> done(values[which]) }
-            .show()
-        Unit
-    }
-
-    private fun leaveShared(): Unit = confirm(Sx.t("Покинуть совместную папку?", "Leave the shared folder?")) {
-        val id = container ?: return@confirm
-        Sx.async({ ParvaneSections.cloudCall("parvaneCloudLeave", JSONObject().put("container", id).toString()) }) { container = null; render() }
-    }
-
-    private fun confirm(text: String, then: () -> Unit) {
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setMessage(text)
-            .setPositiveButton(android.R.string.ok) { _, _ -> then() }.setNegativeButton(Sx.t("Отмена", "Cancel"), null).show()
+        PvSheet.choose(context, Sx.t("Срок ссылки", "Link expiry"),
+            listOf(Sx.t("1 день", "1 day"), Sx.t("7 дней", "7 days"), Sx.t("30 дней", "30 days"), Sx.t("Без срока", "No expiry"))) { done(values[it]) }
     }
 
     private fun copy(text: String) {
-        val cm = context().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         cm.setPrimaryClip(android.content.ClipData.newPlainText("Parvane", text))
         toast(Sx.t("Скопировано", "Copied"))
     }
 
     private fun share(text: String): Unit = try {
-        context().startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), null))
+        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), null))
     } catch (e: Throwable) { }
 
     private fun size(bytes: Long): String = when {
         bytes <= 0 -> ""
         bytes < 1024 -> "$bytes ${Sx.t("Б", "B")}"
-        bytes < 1024 * 1024 -> "${bytes / 1024} ${Sx.t("КБ", "KB")}"
+        bytes < 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f %s", bytes / 1024.0, Sx.t("КБ", "KB"))
         bytes < 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f %s", bytes / 1048576.0, Sx.t("МБ", "MB"))
-        else -> String.format(java.util.Locale.US, "%.2f %s", bytes / 1073741824.0, Sx.t("ГБ", "GB"))
+        else -> String.format(java.util.Locale.US, "%.1f %s", bytes / 1073741824.0, Sx.t("ГБ", "GB"))
     }
 
-    private fun date(ms: Long): String = if (ms <= 0) "" else java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(ms))
+    private fun date(ms: Long): String = if (ms <= 0) "" else java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(ms)).trimEnd('.')
+}
+
+/** Ряд с переносом (`flex-wrap`): дети слева направо, промежуток [gap] по обеим осям. */
+class FlowRow(context: Context, private val gap: Int) : ViewGroup(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val maxW = MeasureSpec.getSize(widthMeasureSpec)
+        var x = 0; var y = 0; var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            val lp = c.layoutParams
+            c.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST),
+                if (lp != null && lp.height > 0) MeasureSpec.makeMeasureSpec(lp.height, MeasureSpec.EXACTLY) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gap; rowH = 0 }
+            x += c.measuredWidth + gap
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+        setMeasuredDimension(maxW, y + rowH)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val maxW = r - l
+        var x = 0; var y = 0; var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gap; rowH = 0 }
+            c.layout(x, y, x + c.measuredWidth, y + c.measuredHeight)
+            x += c.measuredWidth + gap
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+    }
 }

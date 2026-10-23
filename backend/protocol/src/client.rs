@@ -3056,6 +3056,77 @@ impl Client {
         // Olm-сессии со своими устройствами — до сборки (иначе конверт для
         // устройства без сессии молча пропускается): Need::Bundle доберёт хост.
         self.check_peer(&me)?;
+        let shares = self.own_group_shares();
+        let mut out = vec![];
+        for (pad, share) in shares {
+            let c = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
+            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: pad || self.direct_must_pad(&me) };
+            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
+            out.push(OutRequest::anon("msg.deliver_sealed", &r));
+        }
+        // Ключ контейнера планировщика (spec 010) — тем же устройствам.
+        // … и ключи контейнеров облака (spec 016).
+        for c in self.planner_key_content().into_iter().chain(self.cloud_key_contents_for_own_devices()) {
+            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
+            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
+            if !r.envelopes.is_empty() {
+                out.push(OutRequest::anon("msg.deliver_sealed", &r));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Ключи групп для копии ключей аккаунта (spec 032): то же, что
+    /// [`Self::share_groups_with_own_devices`] шлёт своим устройствам, но
+    /// данными — закодированные `GroupKeyShare`. Устройство, вошедшее ключом
+    /// восстановления, применяет их [`Self::group_keys_import`] и видит группы
+    /// сразу, не дожидаясь, пока другое своё устройство выйдет в сеть.
+    pub fn group_keys_export(&mut self) -> Vec<Vec<u8>> {
+        self.own_group_shares().into_iter().map(|(_, s)| s.encode_to_vec()).collect()
+    }
+
+    /// Ключи групп из копии ключей аккаунта: как пересылка своего устройства.
+    /// Группа, журнала которой ещё нет, — событие `GroupChanged` (хост
+    /// дочитывает журнал, ключ ждёт в отложенных и применяется `drain_ready`).
+    /// Негодные записи пропускаются.
+    pub fn group_keys_import(&mut self, shares: &[Vec<u8>]) -> Vec<Event> {
+        let me = self.user.clone();
+        let mut out: Vec<Event> = vec![];
+        for raw in shares {
+            let Ok(gk) = GroupKeyShare::decode(raw.as_slice()) else { continue };
+            match self.accept_group_key(&me, &gk) {
+                Ok(()) => {}
+                Err(ClientError::Need(Need::GroupLog { group, .. })) => {
+                    let domain = gk.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.domain.clone()).unwrap_or_else(|| self.domain.clone());
+                    self.pending_keys.push((me.clone(), gk));
+                    if !out.iter().any(|e| matches!(e, Event::GroupChanged { group: g, .. } if g.id == group)) {
+                        out.push(Event::GroupChanged { seq: 0, group: Ref { domain, id: group }, version: 0 });
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        out.extend(self.retry_pending_groups());
+        out
+    }
+
+    /// [`Self::group_keys_export`] JSON-массивом base64 — поле `groups` копии ключей аккаунта.
+    pub fn group_keys_export_json(&mut self) -> String {
+        let v: Vec<String> = self.group_keys_export().iter().map(|b| base64::engine::general_purpose::STANDARD.encode(b)).collect();
+        serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// [`Self::group_keys_import`] из JSON-массива base64.
+    pub fn group_keys_import_json(&mut self, json: &str) -> Result<Vec<Event>> {
+        let v: Vec<String> = serde_json::from_str(json).map_err(|_| ProtoError::Malformed)?;
+        let raw = v.iter().map(|s| base64::engine::general_purpose::STANDARD.decode(s).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
+        Ok(self.group_keys_import(&raw))
+    }
+
+    /// Ключи текущей эпохи и входящие сессии Megolm всех групп, где мы
+    /// участник (с флагом L2-набивки группы).
+    fn own_group_shares(&mut self) -> Vec<(bool, GroupKeyShare)> {
+        let me = self.user.clone();
         let mut shares = vec![];
         for gid in self.group_ids() {
             let Some(state) = self.group_state(&gid).cloned() else { continue };
@@ -3082,23 +3153,7 @@ impl Client {
                 }));
             }
         }
-        let mut out = vec![];
-        for (pad, share) in shares {
-            let c = Content { kind: Some(content::Kind::GroupKey(share)), ..Default::default() };
-            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: pad || self.direct_must_pad(&me) };
-            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
-            out.push(OutRequest::anon("msg.deliver_sealed", &r));
-        }
-        // Ключ контейнера планировщика (spec 010) — тем же устройствам.
-        // … и ключи контейнеров облака (spec 016).
-        for c in self.planner_key_content().into_iter().chain(self.cloud_key_contents_for_own_devices()) {
-            let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
-            let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
-            if !r.envelopes.is_empty() {
-                out.push(OutRequest::anon("msg.deliver_sealed", &r));
-            }
-        }
-        Ok(out)
+        shares
     }
 
     /// Секреты своих ссылок-приглашений — другим ведущим приглашения группы

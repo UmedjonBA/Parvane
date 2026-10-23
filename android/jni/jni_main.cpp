@@ -666,7 +666,9 @@ void wipeAccountData(const char *why) {
         entries.push_back(it->path());
     for (const auto &path : entries) {
         const auto name = path.filename().string();
-        if (name == "store.key" || name == parvane::localfiles::kLogoutMarkerName) continue;
+        // Метка формата каталога остаётся: без неё вход после выхода (в том же процессе) пишет v2-ids.txt, и следующий
+        // запуск принимал каталог за v1 и стирал сессию (spec 032, найдено сценарием входа через интерфейс)
+        if (name == "store.key" || name == parvane::localfiles::kLogoutMarkerName || name == "layout-v2") continue;
         std::error_code rec;
         std::filesystem::remove_all(path, rec);
         if (rec) ++failed; else ++removed;

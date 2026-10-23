@@ -1120,6 +1120,12 @@ class Client private constructor(
         if (org.parvane.libtd.BuildConfig.DEBUG) startE2eHook()
     }
 
+    /** Перечитать группы сейчас и через 5 и 15 с (вход по ключу восстановления, привязка устройства). */
+    private fun resyncGroupsSoon() {
+        io.execute { syncGroups() }
+        for (delay in longArrayOf(5_000L, 15_000L)) scheduledTick.schedule(Runnable { io.execute { syncGroups() } }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
     /** Группы с сервера → basic group + чат в UI (idempotent). */
     // По одному: вызывают и событие ядра «группа», и io (создание, действия) — параллельно один поток отмечал чат
     // объявленным, а второй успевал послать UpdateChatTitle раньше его UpdateNewChat (X падал «updateChat not received»)
@@ -2098,6 +2104,11 @@ class Client private constructor(
                         Log.i(TAG, "смена ника → ${res.optString("result")} ${res.optString("address")}")
                         if (res.optString("result") == "ok") TdApi.Ok() else TdApi.Error(400, res.optString("result"))
                     }
+                    // RECOVER-2 (spec 032): вход нового устройства по ключу восстановления — как поле ключа экрана «Устройства»
+                    "recover_key" -> ParvaneCore.recoverWithKey(cmd.optString("key")).let { res ->
+                        Log.i(TAG, "вход по ключу → $res")
+                        if (res == "ok") TdApi.Ok() else TdApi.Error(400, res)
+                    }
                     "delete_account" -> ParvaneCore.deleteAccount(cmd.optString("password").ifEmpty { sessionPassword }).let { res ->
                         Log.i(TAG, "удаление аккаунта → ${res.optString("result")}")
                         if (res.optString("result") == "ok") TdApi.Ok() else TdApi.Error(400, res.optString("result"))
@@ -2617,6 +2628,7 @@ class Client private constructor(
                 // P-46: код сверки НЕ в logcat — только в UI через сервисное уведомление.
                 val state = event.optString("state")
                 Log.i(TAG, "привязка: $state")
+                if (state == "joined" || state == "imported") resyncGroupsSoon() // spec 032: группы — сразу после привязки
                 SeamText.of("link_$state")?.let { serviceNotice("parvane_link_$state", it.replace("%s", event.optString("code"))) }
             }
             // Устройству нужна привязка (LINK-1/RECOVER-2): оффер ядро публикует само, бот Telegram спросит ключ
@@ -2638,6 +2650,9 @@ class Client private constructor(
             "recovery" -> event.optString("state").takeIf { it != "idle" }?.let { st ->
                 Log.i(TAG, "ключ восстановления: $st")
                 SeamText.of("recovery_$st")?.let { serviceNotice("parvane_recovery_$st", it) }
+                // spec 032: после входа по ключу группы и каналы приходят из копии ключей аккаунта — перечитать их сразу
+                // и ещё дважды (журналы групп догоняются не мгновенно), не дожидаясь событий по каждой группе
+                if (st == "done") resyncGroupsSoon()
             }
             // RENAME-1: собеседник сменил ник — служебное сообщение в прежнем чате
             "peer_renamed" -> {

@@ -477,6 +477,52 @@ fn linked_device_gets_groups_from_own_device() {
     // у Боба нет способа выдать её за сессию Алисы (проверка в accept_group_key).
 }
 
+/// Ключи групп в копии ключей аккаунта (spec 032): устройство, вошедшее ключом восстановления, применяет
+/// `group_keys_export` своего прежнего устройства данными — без пересылки, — дочитывает журнал группы и читает
+/// сообщения участников; мусор и чужие записи пропускаются.
+#[test]
+fn group_keys_from_account_bundle_reach_recovered_device() {
+    let mut srv = Server::default();
+    let mut alice = setup(&mut srv, "alice@local");
+    let mut bob = setup(&mut srv, "bob@local");
+    let bob_dk = *bob.delivery_key();
+    alice_set_peer_key(&mut alice, &mut srv, &mut bob, bob_dk);
+    let perms = Permissions { send_messages: true, ..Default::default() };
+    let (g, req) = alice.group_create(GroupKind::Group, "Из копии", &["bob@local".to_string()], perms).unwrap();
+    srv.handle("alice@local", "d1", &req);
+    run(&mut srv, &mut alice, &mut |c| c.group_rotate_epoch(&g.id));
+    run(&mut srv, &mut alice, &mut |c| c.prepare_group(&g.id, &text("до копии")));
+    drain(&mut srv, &mut bob);
+    run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &text("боб до копии")));
+    drain(&mut srv, &mut alice);
+    let bundle = alice.group_keys_export_json();
+
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    assert!(alice2.group_ids().is_empty());
+    // Негодная запись среди годных не мешает
+    let mut raw: Vec<String> = serde_json::from_str(&bundle).unwrap();
+    raw.push("AAAA".into());
+    let ev = alice2.group_keys_import_json(&serde_json::to_string(&raw).unwrap()).unwrap();
+    let changed: Vec<_> = ev.iter().filter_map(|e| match e { Event::GroupChanged { group, .. } => Some(group.clone()), _ => None }).collect();
+    assert_eq!(changed.len(), 1, "{ev:?}");
+    satisfy(&mut srv, &mut alice2, Need::GroupLog { group: g.id.clone(), after: 0 });
+    alice2.drain_ready();
+    assert_eq!(alice2.group_ids(), vec![g.id.clone()], "{:?}", alice2.last_error);
+
+    run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &text("боб после ключа")));
+    let ev = drain(&mut srv, &mut alice2);
+    assert!(texts(&ev).contains(&("group".into(), "bob@local".into(), "боб после ключа".into())), "{ev:?} {:?}", alice2.last_error);
+    bob_learn(&mut alice2, "bob@local", bob_dk);
+    run(&mut srv, &mut alice2, &mut |c| c.prepare_group(&g.id, &text("с нового устройства")));
+    let ev = drain(&mut srv, &mut bob);
+    assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "с нового устройства".into())), "{ev:?} {:?}", bob.last_error);
+    assert!(alice2.group_keys_import_json("не json").is_err());
+}
+
 /// Публичная группа без сообщений своему новому устройству (spec 030): ключи эпохи у вступившего лениво берутся из
 /// комплекта журнала при первом конверте; без сообщений их не было, и `share_groups_with_own_devices` группу
 /// пропускал — устройство, привязанное после вступления, публичный канал не узнавало вовсе.

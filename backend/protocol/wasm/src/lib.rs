@@ -715,6 +715,18 @@ impl PvClient {
         self.inner.share_groups_with_own_devices(&devices).map(|r| reqs_js(&r)).map_err(err_client)
     }
 
+    /// Ключи групп для копии ключей аккаунта (spec 032) — JSON-массив base64.
+    #[wasm_bindgen(js_name = groupKeysExport)]
+    pub fn group_keys_export(&mut self) -> String {
+        self.inner.group_keys_export_json()
+    }
+
+    /// Ключи групп из копии ключей аккаунта → JSON-массив событий (`groupChanged` — дочитать журнал группы).
+    #[wasm_bindgen(js_name = groupKeysImport)]
+    pub fn group_keys_import(&mut self, json: &str) -> Result<String, JsValue> {
+        self.inner.group_keys_import_json(json).map(|e| events_js(&e)).map_err(err_proto)
+    }
+
     // ── планировщик (spec 010): контейнер домена parvane.planner.v1 ─────────
 
     /// Контейнер планировщика → {domain, id(hex)} | undefined.

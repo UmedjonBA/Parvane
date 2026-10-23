@@ -247,6 +247,14 @@ export class PvClient {
      */
     groupJoinPublic(group: string, secret_hex: string): any;
     /**
+     * Ключи групп для копии ключей аккаунта (spec 032) — JSON-массив base64.
+     */
+    groupKeysExport(): string;
+    /**
+     * Ключи групп из копии ключей аккаунта → JSON-массив событий (`groupChanged` — дочитать журнал группы).
+     */
+    groupKeysImport(json: string): string;
+    /**
      * Группы, журнал которых известен устройству (hex id).
      */
     groupList(): string[];
@@ -879,6 +887,8 @@ export interface InitOutput {
     readonly pvclient_groupInviteCreate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_groupJoin: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupJoinPublic: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvclient_groupKeysExport: (a: number, b: number) => void;
+    readonly pvclient_groupKeysImport: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupList: (a: number, b: number) => void;
     readonly pvclient_groupOpenEnvelope: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_groupRequestDecide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;

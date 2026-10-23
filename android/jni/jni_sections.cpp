@@ -295,6 +295,7 @@ public:
         texts_.open(dir.empty() ? std::string() : dir + "/sections-texts.json");
         if (!me.empty()) planner_.setUser(me);
         notesLoaded_ = false;
+        notesPrefetchAt_ = me.empty() ? 0 : nowMs() + kNotesPrefetchMs;
         notesSent_ = {};
         cloudSent_ = {};
         plannerSent_ = {};
@@ -327,6 +328,10 @@ public:
     void tick() {
         plannerSync_.tick();
         cloud_.tick();
+        if (notesPrefetchAt_ && nowMs() >= notesPrefetchAt_) {
+            notesPrefetchAt_ = 0;
+            loadNotesOnce();
+        }
         if (planner_.needsLinkingPoll() && nowMs() >= linkingPollAt_) {
             linkingPollAt_ = nowMs() + kLinkingPollMs;
             plannerDirty_ = true;
@@ -338,6 +343,7 @@ public:
         if (const auto at = plannerSync_.nextWakeMs()) result = std::min(result, *at);
         if (const auto at = cloud_.nextWakeMs()) result = std::min(result, *at);
         if (planner_.needsLinkingPoll()) result = std::min(result, linkingPollAt_);
+        if (notesPrefetchAt_) result = std::min(result, notesPrefetchAt_);
         if (planner_.notice(nowMs())) result = std::min(result, nowMs() + planner::PlannerStore::kNoticeHideMs);
         return result;
     }
@@ -441,20 +447,26 @@ private:
         if (cloudShown || paletteOpen_) cloud_.ensureSoon(true);
         cloud_.setActive(cloudShown);
         if (shown_ == "knowledge" || paletteOpen_) {
-            if (!notesLoaded_) {
-                notesLoaded_ = true;
-                auto options = notes::NotesOptions();
-                if (!g_russian) {
-                    options.guideLang = "en";
-                    options.vaultName = "Knowledge";
-                }
-                notes_.loadNotes(self_, options);
-            }
+            loadNotesOnce();
             if (!notesRelease_) notesRelease_ = notes_.retainNotes();
         } else if (notesRelease_) {
             std::exchange(notesRelease_, nullptr)();
         }
         plannerDirty_ = cloudDirty_ = true;
+    }
+
+    // Заметки читаются один раз на аккаунт: при открытии «Знаний» либо заранее, через kNotesPrefetchMs после входа
+    // (spec 032: первое открытие «Знаний» на телефоне висело на «Загрузке заметок», пока читались все тексты)
+    void loadNotesOnce() {
+        if (notesLoaded_ || self_.empty()) return;
+        notesLoaded_ = true;
+        auto options = notes::NotesOptions();
+        if (!g_russian) {
+            options.guideLang = "en";
+            options.vaultName = "Knowledge";
+        }
+        cloud_.ensureSoon(true);
+        notes_.loadNotes(self_, options);
     }
 
     void refreshPlanner() {
@@ -549,6 +561,8 @@ private:
     std::string self_;
     std::string shown_ = "chats";
     bool paletteOpen_ = false;
+    static constexpr std::int64_t kNotesPrefetchMs = 8000;
+    std::int64_t notesPrefetchAt_ = 0;
     bool notesLoaded_ = false;
     std::function<void()> notesRelease_;
     bool plannerDirty_ = false;

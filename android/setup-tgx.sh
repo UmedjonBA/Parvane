@@ -401,6 +401,111 @@ if ! grep -q "ParvaneTabBar.attachToMain" "$MC"; then
 fi
 grep -q "ParvaneTabBar.attachToMain" "$MC" && echo "   MainController: панель разделов" || { echo "   MainController: панель не вставлена"; exit 2; }
 
+echo "== spec 032: значок приложения — Parvane и на Android 8+ (адаптивный значок X с самолётиком не подменяет PNG) =="
+rm -f "$TGX/app/src/sinceOreo/res/mipmap-anydpi-v26/app_launcher.xml" "$TGX/app/src/sinceOreo/res/mipmap-anydpi-v26/app_launcher_round.xml"
+[ -e "$TGX/app/src/sinceOreo/res/mipmap-anydpi-v26/app_launcher.xml" ] && { echo "   адаптивный значок X не удалён"; exit 2; } || echo "   значок: PNG Parvane"
+
+echo "== spec 032: вход и регистрация одним экраном как web (пароль и подтверждение Telegram — тот же экран) =="
+rm -f "$TGX/app/src/main/java/org/thunderdog/challegram/ui/ParvaneNickController.java" "$TGX/app/src/main/java/org/thunderdog/challegram/ui/ParvaneRegisterController.java"
+MA="$TGX/app/src/main/java/org/thunderdog/challegram/MainActivity.java"
+python3 - "$MA" <<'PYMA'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "spec 032): экран входа" not in s:
+    old = """      case TdApi.AuthorizationStateWaitPassword.CONSTRUCTOR: {
+        TdApi.AuthorizationStateWaitPassword state = (TdApi.AuthorizationStateWaitPassword) authState;
+        PasswordController c = new PasswordController(this, tdlib);
+        c.setArguments(new PasswordController.Args(PasswordController.MODE_LOGIN, state));
+        return c;
+      }"""
+    assert old in s, "WaitPassword в MainActivity"
+    s = s.replace(old, """      case TdApi.AuthorizationStateWaitPassword.CONSTRUCTOR: {
+        return new ParvaneNickController(this, tdlib); // Parvane (spec 032): экран входа — пароль на том же экране
+      }""", 1)
+    old = """      case TdApi.AuthorizationStateWaitOtherDeviceConfirmation.CONSTRUCTOR: {
+        // Should never come to TGX.
+        break;
+      }"""
+    assert old in s, "WaitOtherDeviceConfirmation в MainActivity"
+    s = s.replace(old, """      case TdApi.AuthorizationStateWaitOtherDeviceConfirmation.CONSTRUCTOR: {
+        return new ParvaneNickController(this, tdlib); // Parvane: подтверждение входа в Telegram (2FA)
+      }""", 1)
+    old = """    if (c != null) {
+      navigation.initController(c);
+      c = new ParvaneNickController(this, account.tdlib());
+      navigation.insertController(c, 0);
+      return;
+    }"""
+    assert old in s, "initUnauthorizedController"
+    s = s.replace(old, """    if (c != null) {
+      navigation.initController(c);
+      if (!(c instanceof ParvaneNickController)) {
+        navigation.insertController(new ParvaneNickController(this, account.tdlib()), 0);
+      }
+      return;
+    }""", 1)
+    open(p, "w").write(s)
+PYMA
+grep -q "spec 032): экран входа" "$MA" && echo "   MainActivity: вход одним экраном" || { echo "   MainActivity: вход не пропатчен"; exit 2; }
+
+echo "== spec 032: шапка списка чатов как web (без ☰ и меню Telegram, «Чаты» + лупа, папки чипами) =="
+python3 - "$MC" <<'PYMC'
+import sys
+p = sys.argv[1]; s = open(p).read()
+# своя шапка (ниже) заменяет шапку X; прежний метод X остаётся под другим именем
+s = s.replace("  @Override\n  public View getCustomHeaderCell () {\n    if (displayTabsAtBottom()) {",
+              "  public View telegramCustomHeaderCell () {\n    if (displayTabsAtBottom()) {", 1)
+if "parvaneChips" not in s:
+    old = "  @Override\n  protected int getBackButton () {\n    return BackHeaderButton.TYPE_MENU;\n  }"
+    assert old in s, "getBackButton главного экрана"
+    s = s.replace(old, """  @Override
+  protected int getBackButton () {
+    return BackHeaderButton.TYPE_NONE; // Parvane (spec 032): меню Telegram нет — всё в «Профиле»
+  }
+
+  // Parvane (spec 032): шапка как web — «Чаты» и лупа; папки — чипами под шапкой (ParvaneChatsHeader)
+  public android.view.View parvaneChips, parvaneChipsBelow;
+  private android.view.View parvaneTitle;
+
+  @Override
+  public View getCustomHeaderCell () {
+    if (parvaneTitle == null) parvaneTitle = org.thunderdog.challegram.parvane.sections.ParvaneChatsHeader.title(this);
+    return parvaneTitle;
+  }
+
+  @Override
+  protected boolean swipeNavigationEnabled () {
+    return false; // свайп от края открывал боковое меню Telegram
+  }
+
+  public java.util.List<TdApi.ChatList> parvaneChatLists () {
+    return hasFolders() ? pagerChatLists : java.util.Collections.emptyList();
+  }
+
+  public TdApi.ChatFolderInfo[] parvaneFolderInfos () {
+    return chatFolderInfos;
+  }
+
+  public int parvaneCurrentPage () {
+    return getViewPager() != null ? getViewPager().getCurrentItem() : 0;
+  }
+
+  public void parvaneSelectPage (int position) {
+    if (getViewPager() != null) getViewPager().setCurrentItem(position, true);
+  }""", 1)
+    old = "      header.addLockButton(menu);\n      header.addSearchButton(menu, this);"
+    assert old in s, "меню главного экрана"
+    s = s.replace(old, "      header.addLockButton(menu);\n      menu.addView(org.thunderdog.challegram.parvane.sections.ParvaneChatsHeader.searchButton(this));", 1)
+    old = "  public void onPageSelected (int position, int actualPosition) {\n"
+    assert old in s, "onPageSelected"
+    s = s.replace(old, old + "    org.thunderdog.challegram.parvane.sections.ParvaneChatsHeader.select(this, position);\n", 1)
+    old = "    notifyPagerItemPositionsChanged();\n    ViewPager pager = getViewPager();"
+    assert old in s, "updatePagerSections"
+    s = s.replace(old, "    notifyPagerItemPositionsChanged();\n    org.thunderdog.challegram.parvane.sections.ParvaneChatsHeader.refresh(this);\n    ViewPager pager = getViewPager();", 1)
+open(p, "w").write(s)
+PYMC
+grep -q "parvaneChips" "$MC" && echo "   MainController: шапка и чипы папок" || { echo "   MainController: шапка не вставлена"; exit 2; }
+
 echo "== spec 031: фон — UnifiedPush и служба связи (манифест) =="
 git -C "$TGX" checkout -- app/src/main/AndroidManifest.xml 2>/dev/null
 python3 - "$TGX/app/src/main/AndroidManifest.xml" <<'PY'
@@ -416,6 +521,8 @@ if "SCHEDULE_EXACT_ALARM" not in s:
 comp = """    <!-- Parvane: работа в фоне без Firebase (spec 031) -->
     <service android:name="org.thunderdog.challegram.parvane.ParvaneLinkService" android:exported="false"
       android:foregroundServiceType="remoteMessaging" />
+    <service android:name="org.thunderdog.challegram.parvane.ParvaneSyncJob" android:exported="false"
+      android:permission="android.permission.BIND_JOB_SERVICE" />
     <receiver android:name="org.thunderdog.challegram.parvane.ParvaneUnifiedPushReceiver" android:exported="true">
       <intent-filter>
         <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />

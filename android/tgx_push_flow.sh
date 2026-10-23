@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Работа в фоне (spec 031, US4) после tgx_session_flow.sh (его стек и сессия X alice):
-#   1) служба связи «Parvane на связи» поднята (распространителя UnifiedPush в эмуляторе нет);
-#   2) X свёрнут, bob пишет — уведомление в шторке (уведомления X из шва, Notifications.kt);
+#   1) распространителя UnifiedPush в эмуляторе нет — по умолчанию фоновая задача системы (раз в ~15 мин), постоянной
+#      службы «Parvane на связи» со значком в шторке нет (отзыв 23 окт 2026: смахнуть его нельзя);
+#   2) X свёрнут, bob пишет — уведомление в шторке (уведомления X из шва, Notifications.kt); процесс X выгружен
+#      системой, bob пишет, фоновая задача (запуск принудительно через cmd jobscheduler) забирает и уведомляет;
 #   3) UnifiedPush: адрес тестового распространителя (приёмник на стенде, http://127.0.0.1:<порт>; шард push в
 #      тестовом режиме — сборка `--features insecure-test-transport` + PARVANE_PUSH_INSECURE_HTTP=1) уходит серверу
 #      видом WEB_PUSH;
@@ -17,11 +19,14 @@ tgx_env
 TGX_LOG="$OUT/logcat.txt"
 SB=$(ls -td /tmp/pv-tgx.* | head -1); B="$SB/bob"
 notif() { a shell dumpsys notification --noredact 2>/dev/null | tr -d '\r'; }
-tgx_stop; tgx_start
+tgx_stop; a shell run-as "$TGX_PKG" rm -f shared_prefs/parvane_background.xml >/dev/null 2>&1; tgx_start
 tgx_logwait "v2: готов" 90 && ok "X: сессия поднята" || bad "X: сессии нет"
+tgx_logwait "фоновая задача (запланирована|не принята)" 30 && grep -q "фоновая задача запланирована" "$TGX_LOG" \
+  && ok "без распространителя — фоновая задача системы" || bad "фоновая задача не запланирована"
 sleep 5
 notif > "$OUT/notif-1.txt"
-grep -q "Parvane на связи\|Parvane is connected" "$OUT/notif-1.txt" && ok "служба связи на переднем плане" || bad "нет уведомления службы связи"
+grep -q "Parvane на связи\|Parvane is connected" "$OUT/notif-1.txt" && bad "постоянное уведомление службы связи без выбора пользователя" \
+  || ok "постоянного значка «Parvane на связи» нет"
 # 2) свёрнуто — входящее → уведомление
 a shell input keyevent 3; sleep 2
 S="fon-$(date +%s)"; tgx_mark
@@ -29,6 +34,24 @@ BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOSEND=alice
 tgx_logwait "v2 ← входящее msg" 90 && ok "свёрнутый X получил сообщение" || bad "свёрнутый X не получил сообщение"
 sleep 4; notif > "$OUT/notif-2.txt"
 grep -q "$S" "$OUT/notif-2.txt" && ok "уведомление о сообщении в шторке" || bad "уведомления о сообщении нет"
+stop_pid "$BP"
+# 2б) процесс выгружен системой (не force-stop: тот снимает задачи), bob пишет, фоновая задача забирает
+# Задача, запущенная при старте, держит процесс 30 с (HOLD): пока она идёт, `am kill` процесс не выгружает,
+# а принудительный запуск задачи система пропускает — сперва дождаться её конца
+sleep 35
+# Выгрузка системой (задачи остаются). Липкая NetworkListenerService X поднимает процесс заново через ~1 с —
+# проверяется, что прежнего процесса нет
+XP0="$(a shell pidof "$TGX_PKG" | tr -d '\r')"
+a shell am kill "$TGX_PKG"; sleep 3
+[ -n "$XP0" ] && [ "$(a shell pidof "$TGX_PKG" | tr -d '\r')" != "$XP0" ] && ok "процесс X выгружен" || bad "процесс X не выгружен"
+S1="zadacha-$(date +%s)"; tgx_mark
+BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 "PARVANE_AUTOSEND=alice@local:$S1")
+wait_log "$B/td/log.txt" "autosend → alice@local" 60 || bad "bob не отправил"
+a shell cmd jobscheduler run -f "$TGX_PKG" 20599 >/dev/null 2>&1
+tgx_logwait "фоновая задача: проверка нового" 30 && ok "фоновая задача запущена" || bad "фоновая задача не запустилась"
+tgx_logwait "v2 ← входящее msg" 90 && ok "фоновая задача забрала сообщение" || bad "фоновая задача сообщения не получила"
+sleep 4; notif > "$OUT/notif-1b.txt"
+grep -q "$S1" "$OUT/notif-1b.txt" && ok "уведомление из фоновой задачи" || bad "уведомления из фоновой задачи нет"
 stop_pid "$BP"
 # 3) UnifiedPush: тестовый распространитель на стенде — приёмник POST шарда push
 UP_PORT="${PV_UP_PORT:-9400}"; UP_LOG="$OUT/distributor.log"; : > "$UP_LOG"

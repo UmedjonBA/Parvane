@@ -1,323 +1,273 @@
 package org.thunderdog.challegram.parvane.sections
 
 import android.content.Context
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.GridLayout
-import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import org.json.JSONArray
 import org.json.JSONObject
 import org.thunderdog.challegram.R
 import org.thunderdog.challegram.telegram.Tdlib
-import org.thunderdog.challegram.theme.ColorId
 
 /**
- * Parvane (spec 031, T061): раздел «План» — день (сводка загрузки, весь день, дела по времени, задачи без
- * времени, сроки), месяц (сетка с отметками дел), список (задачи без даты по спискам) и «Здоровье». Данные —
- * запросы `days`/`undated` к логике ядра по снимку «Плана»; правки — `taskDone`, редактор и «+».
+ * Parvane (spec 032): раздел «План» 1:1 с телефонной версией web (`Planner.tsx` ≤ 925 px). Шапка — вкладки
+ * «Календарь · Здоровье» и лупа; у календаря — строка периода и переключатель «Сегодня · День · Мес · Год · Список»
+ * с шестерёнкой. Данные — запросы к логике ядра (`days`, `health`, `undated`, `lists`), правки — её операциями;
+ * экраны только рисуют ([PlannerViews]).
  */
 class PlannerController(context: Context, tdlib: Tdlib) : SectionController(context, tdlib) {
-    override val section get() = if (mode == "health") "health" else "calendar"
+    override val section get() = if (tabHealth) "health" else "calendar"
     override val tab = ParvaneTabBar.Tab.PLAN
     override fun getId() = R.id.controller_parvanePlanner
-    override fun getName(): CharSequence = Sx.t("План", "Plan")
+    override fun getName(): CharSequence = Sx.t("План", "Planner")
 
-    private var mode = "day" // day | month | list | health
-    private var day = Sx.today()
-    private var monthAnchor = Sx.today()
-    private var status = "loading"
+    private val prefs get() = context().getSharedPreferences("parvane_planner_ui", Context.MODE_PRIVATE)
+
+    internal var tabHealth = false
+    /** today | week | month | year | agenda — как `calendarView` web, «Сегодня» — первое положение. */
+    internal var segment = "today"
+    internal var picked = Sx.today()
+    internal var layers = mutableSetOf("sleep", "food", "work")
+    internal var status = "loading"
     private var generation = 0
+    private var startAction: (() -> Unit)? = null
 
-    fun openHealth() = apply { mode = "health" }
+    fun openHealth() = apply { tabHealth = true }
+    fun openSettings() = apply { startAction = { PlannerEditor.openSettings(this) } }
+    fun openHealthGoals() = apply { tabHealth = true; startAction = { openHealthGoalsSheet() } }
 
     override fun onBuilt() {
+        segment = prefs.getString("segment", "today") ?: "today"
+        layers = (prefs.getStringSet("layers", setOf("sleep", "food", "work")) ?: setOf("sleep", "food", "work")).toMutableSet()
         watch("planner") { snap ->
             status = snap.optString("status", "loading")
-            snap.optJSONObject("notice")?.let { n -> showNotice(n) }
+            snap.optJSONObject("notice")?.let { PlannerViews.showNotice(this, it) }
             refresh()
         }
         if (Sx.last("planner") == null) refresh()
+        startAction?.let { a -> startAction = null; Sx.main.post { a() } }
     }
 
-    private var lastNotice = ""
-    private fun showNotice(n: JSONObject) {
-        val text = n.optString("text")
-        if (text.isEmpty() || text == lastNotice) return
-        lastNotice = text
-        if (n.optBoolean("canUndo")) {
-            context().let { ctx ->
-                android.app.AlertDialog.Builder(ctx, org.thunderdog.challegram.theme.Theme.dialogTheme())
-                    .setMessage(text)
-                    .setPositiveButton(Sx.t("Отменить", "Undo")) { _, _ -> org.parvane.core.ParvaneSections.plannerUndo(Sx.t("Отменено", "Undone")) }
-                    .setNegativeButton(android.R.string.ok, null).show()
-            }
+    override fun buildHeader(context: Context): View = header()
+
+    // ── шапка ────────────────────────────────────────────────────────────────────────
+
+    /** `.mtabs`: вкладки-пилюли «Календарь · Здоровье» и лупа; ниже — шапка календаря (`.hdr.calendarHdr`). */
+    private fun header(): View {
+        val ctx = context()
+        val c = Pv.c
+        val box = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(c.panel) }
+        val tabs = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(Pv.rem(0.625f), Pv.rem(0.375f), Pv.rem(0.5f), Pv.rem(0.375f))
+            background = pvBottomLine(c.panel)
+        }
+        fun tab(title: String, on: Boolean, onClick: () -> Unit) = ctx.pvText(title, 1.0625f, if (on) c.accent else c.muted, semibold = true).apply {
+            gravity = Gravity.CENTER
+            setPadding(Pv.rem(1f), 0, Pv.rem(1f), 0)
+            Pv.pressable(this, if (on) Pv.mix(c.accent, c.panel, 15) else 0, 1.25f, onClick = onClick)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Pv.rem(2.5f)).apply { rightMargin = Pv.rem(0.25f) }
+        }
+        tabs.addView(tab(Sx.t("Календарь", "Calendar"), !tabHealth) { switchTab(false) })
+        tabs.addView(tab(Sx.t("Здоровье", "Health"), tabHealth) { switchTab(true) })
+        tabs.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
+        tabs.addView(ctx.pvIconButton("search", Sx.t("Поиск по «Плану»", "Search the plan"), c.muted) { PlannerViews.openSearch(this) })
+        box.addView(tabs)
+        if (!tabHealth) box.addView(calendarHeader())
+        return box
+    }
+
+    private fun calendarHeader(): View {
+        val ctx = context()
+        val c = Pv.c
+        val hdr = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Pv.rem(0.75f), Pv.rem(0.5f), Pv.rem(0.75f), Pv.rem(0.5f))
+            background = pvBottomLine(c.panel)
+        }
+        if (segment != "today") {
+            // `.periodNav`: заголовок периода (1,0625 rem semibold, выбор месяца) и «Текущая дата», если день не сегодня
+            val nav = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            nav.addView(ctx.pvText(periodTitle(), 1.0625f, c.fg, semibold = true, maxLines = 1).apply {
+                setPadding(Pv.rem(0.375f), Pv.rem(0.25f), Pv.rem(0.375f), Pv.rem(0.25f))
+                Pv.pressable(this, 0, 0.5f) { PlannerViews.pickPeriod(this@PlannerController) }
+            })
+            nav.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
+            if (picked != Sx.today()) nav.addView(ctx.pvPill(Sx.t("Текущая дата", "Current date")) { pickDay(Sx.today()) })
+            hdr.addView(nav, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Pv.rem(2.75f)))
+        }
+        val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        // `.seg`: группа 0,1875 rem отступа на raised, выбранный — panel с тенью
+        val seg = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(Pv.rem(0.1875f), Pv.rem(0.1875f), Pv.rem(0.1875f), Pv.rem(0.1875f))
+            background = Pv.shape(c.raised, 1.125f)
+        }
+        val items = listOf("today" to Sx.t("Сегодня", "Today"), "week" to Sx.t("День", "Day"), "month" to Sx.t("Мес", "Mon"),
+            "year" to Sx.t("Год", "Year"), "agenda" to Sx.t("Список", "List"))
+        for ((value, title) in items) {
+            val on = value == segment
+            seg.addView(ctx.pvText(title, 0.875f, if (on) c.fg else c.muted).apply {
+                gravity = Gravity.CENTER
+                setPadding(Pv.rem(0.625f), 0, Pv.rem(0.625f), 0)
+                if (on) { background = Pv.shape(c.panel, 0.9375f); elevation = Pv.px(1.5f).toFloat() }
+                isClickable = true
+                setOnClickListener { switchSegment(value) }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Pv.rem(1.875f)))
+        }
+        row.addView(HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(seg)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(ctx.pvIconButton("settings", Sx.t("Настройки плана", "Planner settings"), c.muted) { PlannerEditor.openSettings(this) }.apply {
+            (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f)
+        })
+        hdr.addView(row)
+        return hdr
+    }
+
+    internal fun periodTitle(): String {
+        val cal = Sx.calendarOf(picked)
+        val y = cal.get(java.util.Calendar.YEAR)
+        val m = cal.get(java.util.Calendar.MONTH)
+        return when (segment) {
+            "year" -> "$y"
+            "agenda" -> PlannerViews.rangeTitle(picked, Sx.addDays(picked, 29))
+            else -> Sx.monthTitle(y, m)
         }
     }
 
-    fun refresh() {
-        val gen = ++generation
-        when (mode) {
-            "day" -> Sx.planner("days", JSONObject().put("from", day).put("to", day).put("layout", true)) { r ->
-                if (gen == generation) renderDay((r as? JSONObject)?.optJSONObject(day))
-            }
-            "month" -> {
-                val c = Sx.calendarOf(monthAnchor)
-                val y = c.get(java.util.Calendar.YEAR)
-                val m = c.get(java.util.Calendar.MONTH)
-                Sx.planner("monthGrid", JSONObject().put("year", y).put("month", m)) { keys ->
-                    val list = (keys as? org.json.JSONArray)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
-                    if (list.isEmpty()) return@planner
-                    Sx.planner("days", JSONObject().put("from", list.first()).put("to", list.last())) { r ->
-                        if (gen == generation) renderMonth(y, m, list, r as? JSONObject ?: JSONObject())
-                    }
-                }
-            }
-            "list" -> Sx.planner("undated") { r -> if (gen == generation) renderList(r as? JSONObject ?: JSONObject()) }
-            "health" -> Sx.planner("health", JSONObject().put("day", day)) { r ->
-                if (gen == generation) rebuild { header(); HealthView.render(this, this@PlannerController, day, r as? JSONObject) }
-            }
-        }
-    }
-
-    private fun setMode(next: String) {
-        mode = next
+    private fun switchTab(health: Boolean) {
+        if (tabHealth == health) return
+        tabHealth = health
         org.parvane.core.ParvaneSections.show(section)
+        setHeader(header())
         refresh()
     }
 
-    private fun LinearLayout.header() {
-        tabs(listOf("day" to Sx.t("День", "Day"), "month" to Sx.t("Месяц", "Month"), "list" to Sx.t("Задачи", "Tasks"),
-            "health" to Sx.t("Здоровье", "Health")), mode) { setMode(it) }
-        statusLine()?.let { addView(context.label(it, 13f, ColorId.textLight).apply { layoutParams = lp(l = Sx.dp(18f), t = Sx.dp(4f)) }) }
-        if (mode == "day" || mode == "health") {
-            val row = context.hbox().apply { setPadding(Sx.dp(8f), Sx.dp(6f), Sx.dp(8f), 0) }
-            row.addView(arrow(R.drawable.baseline_arrow_back_24) { day = Sx.addDays(day, -1); refresh() })
-            row.addView(context.label(Sx.dayTitle(day), 18f, bold = true).apply {
-                gravity = Gravity.CENTER
-                layoutParams = lp(0, weight = 1f)
-                setOnClickListener { pickDay() }
-            })
-            row.addView(arrow(R.drawable.baseline_arrow_back_24, flip = true) { day = Sx.addDays(day, 1); refresh() })
-            addView(row)
-            if (day != Sx.today()) addView(context.chip(Sx.t("К сегодня", "Go to today"), false) { day = Sx.today(); refresh() }.apply {
-                layoutParams = lp(ViewGroup.LayoutParams.WRAP_CONTENT, l = Sx.dp(16f), t = Sx.dp(4f))
-            })
+    internal fun switchSegment(value: String) {
+        segment = value
+        prefs.edit().putString("segment", value).apply()
+        setHeader(header())
+        refresh()
+    }
+
+    internal fun pickDay(day: String) {
+        picked = day
+        setHeader(header())
+        refresh()
+    }
+
+    internal fun toggleLayer(layer: String) {
+        if (!layers.remove(layer)) layers.add(layer)
+        prefs.edit().putStringSet("layers", layers).apply()
+        refresh()
+    }
+
+    /** Сдвиг периода стрелками и свайпом: день, месяц, год либо 30 дней. */
+    internal fun shift(sign: Int) {
+        val c = Sx.calendarOf(picked)
+        when (if (tabHealth) "today" else segment) {
+            "month" -> c.add(java.util.Calendar.MONTH, sign)
+            "year" -> c.add(java.util.Calendar.YEAR, sign)
+            "agenda" -> c.add(java.util.Calendar.DAY_OF_MONTH, 30 * sign)
+            "week" -> c.add(java.util.Calendar.DAY_OF_MONTH, 7 * sign)
+            else -> c.add(java.util.Calendar.DAY_OF_MONTH, sign)
         }
+        pickDay(Sx.dayOf(c))
     }
 
-    private fun statusLine(): String? = when (status) {
-        "ready" -> null
-        "needs-linking" -> Sx.t("Устройство ещё не привязано — «План» появится после привязки", "This device is not linked yet — the plan appears after linking")
-        "no-key" -> Sx.t("Нет ключа «Плана» на этом устройстве", "No plan key on this device")
-        "offline" -> Sx.t("Нет связи — показана сохранённая копия", "Offline — showing the saved copy")
-        else -> Sx.t("Загрузка…", "Loading…")
-    }
+    // ── данные ───────────────────────────────────────────────────────────────────────
 
-    private fun arrow(icon: Int, flip: Boolean = false, onClick: () -> Unit) = ImageView(context()).apply {
-        setImageResource(icon)
-        if (flip) rotation = 180f
-        colorFilter = PorterDuffColorFilter(Sx.color(ColorId.icon), PorterDuff.Mode.SRC_IN)
-        scaleType = ImageView.ScaleType.CENTER
-        layoutParams = LinearLayout.LayoutParams(Sx.dp(44f), Sx.dp(44f))
-        pressable(22f, Sx.color(ColorId.background), onClick)
-    }
-
-    private fun pickDay() {
-        val c = Sx.calendarOf(day)
-        android.app.DatePickerDialog(context(), org.thunderdog.challegram.theme.Theme.dialogTheme(), { _, y, m, d ->
-            day = String.format(java.util.Locale.US, "%04d-%02d-%02d", y, m + 1, d)
-            refresh()
-        }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH), c.get(java.util.Calendar.DAY_OF_MONTH)).show()
-    }
-
-    // ── день ───────────────────────────────────────────────────────────────────
-
-    private fun renderDay(d: JSONObject?): Unit = rebuild {
-        header()
-        if (d == null) {
-            placeholder(statusLine() ?: Sx.t("Нет данных", "No data"))
-            return@rebuild
+    fun refresh() {
+        val gen = ++generation
+        if (status != "ready" && Sx.last("planner") == null) {
+            rebuild { placeholder(Sx.t("Загрузка…", "Loading…")) }
+            return
         }
-        // сводка: загрузка дня по бюджету
-        val minutes = d.optInt("minutes")
-        val budget = d.optDouble("budget", 0.0)
-        addView(context.card().apply {
-            addView(context.label(Sx.t("Загрузка дня", "Day load"), 13f, ColorId.textLight))
-            addView(context.label(if (budget > 0) "${Sx.minutesLabel(minutes)} / ${Sx.minutesLabel(budget.toInt())}" else Sx.minutesLabel(minutes), 17f, bold = true))
-            addView(context.bar(d.optDouble("load", 0.0), if (d.optDouble("load", 0.0) > 1.0) ColorId.iconNegative else ColorId.progress))
-            val extra = mutableListOf<String>()
-            if (d.has("freeMinutes")) extra += Sx.t("свободно ${Sx.minutesLabel(d.optInt("freeMinutes"))}", "${Sx.minutesLabel(d.optInt("freeMinutes"))} free")
-            if (d.optInt("conflicts") > 0) extra += Sx.t("пересечений: ${d.optInt("conflicts")}", "overlaps: ${d.optInt("conflicts")}")
-            if (d.optInt("unrated") > 0) extra += Sx.t("без оценки: ${d.optInt("unrated")}", "unrated: ${d.optInt("unrated")}")
-            if (extra.isNotEmpty()) addView(context.label(extra.joinToString(" · "), 13f, ColorId.textLight).apply { layoutParams = lp(t = Sx.dp(6f)) })
-        })
-        val allDay = Sx.list(d.optJSONArray("allDay"))
-        if (allDay.isNotEmpty()) {
-            addView(context.sectionTitle(Sx.t("Весь день", "All day")))
-            allDay.forEach { addView(eventRow(it, Sx.t("весь день", "all day"))) }
-        }
-        val timed = Sx.list(d.optJSONArray("timed"))
-        if (timed.isNotEmpty()) {
-            addView(context.sectionTitle(Sx.t("По времени", "Scheduled")))
-            timed.sortedBy { Sx.toMinutes(it.optString("start")) }.forEach { t ->
-                val time = "${t.optString("start")}–${t.optString("end")}"
-                t.optJSONObject("task")?.let { addView(taskRow(it, time, t.optInt("color"))) }
-                    ?: t.optJSONObject("event")?.let { addView(eventRow(it, time, t.optInt("color"))) }
-            }
-        }
-        val untimed = Sx.list(d.optJSONArray("untimed"))
-        if (untimed.isNotEmpty()) {
-            addView(context.sectionTitle(Sx.t("Задачи", "Tasks")))
-            untimed.forEach { addView(taskRow(it, it.optInt("minutes").takeIf { m -> m > 0 }?.let { m -> Sx.minutesLabel(m) } ?: "")) }
-        }
-        val deadlines = Sx.list(d.optJSONArray("deadlines"))
-        if (deadlines.isNotEmpty()) {
-            addView(context.sectionTitle(Sx.t("Сроки", "Due")))
-            deadlines.forEach { addView(taskRow(it, Sx.t("срок", "due"))) }
-        }
-        if (allDay.isEmpty() && timed.isEmpty() && untimed.isEmpty() && deadlines.isEmpty())
-            placeholder(Sx.t("На этот день ничего нет. Нажмите «+», чтобы добавить", "Nothing planned. Tap “+” to add"))
-        addView(context.action(Sx.t("Новая задача", "New task")) { ItemEditor.open(this@PlannerController, "task", null, day) })
-        addView(context.action(Sx.t("Новое событие", "New event")) { ItemEditor.open(this@PlannerController, "event", null, day) })
-    }
-
-    private fun stripe(color: Int) = View(context()).apply {
-        background = rounded(if (color > 0) Sx.listColor(color) else Sx.color(ColorId.iconLight), 2f)
-        layoutParams = LinearLayout.LayoutParams(Sx.dp(4f), Sx.dp(36f)).apply { rightMargin = Sx.dp(10f) }
-    }
-
-    fun taskRow(task: JSONObject, meta: String, color: Int = 0): View {
-        val ctx = context()
-        val done = task.optString("status") == "done"
-        val row = ctx.hbox().apply {
-            setPadding(Sx.dp(12f), Sx.dp(10f), Sx.dp(12f), Sx.dp(10f))
-            layoutParams = lp(t = Sx.dp(6f), l = Sx.dp(12f), r = Sx.dp(12f))
-            pressable { ItemEditor.open(this@PlannerController, "task", task, task.optString("instanceDay", day)) }
-        }
-        row.addView(ImageView(ctx).apply {
-            setImageResource(if (done) R.drawable.baseline_check_circle_24 else R.drawable.baseline_check_box_outline_blank_24)
-            colorFilter = PorterDuffColorFilter(Sx.color(if (done) ColorId.iconPositive else ColorId.icon), PorterDuff.Mode.SRC_IN)
-            contentDescription = Sx.t(if (done) "Выполнено" else "Отметить выполненной", if (done) "Done" else "Mark done")
-            layoutParams = LinearLayout.LayoutParams(Sx.dp(36f), Sx.dp(36f)).apply { rightMargin = Sx.dp(8f) }
-            scaleType = ImageView.ScaleType.CENTER
-            setOnClickListener {
-                Sx.planner("taskDone", JSONObject().put("id", task.optString("id")).put("day", task.optString("instanceDay", ""))
-                    .put("done", !done).put("notice", if (!done) Sx.t("Задача выполнена", "Task done") else ""))
-            }
-        })
-        if (color > 0 || task.optString("project").isNotEmpty()) row.addView(stripe(color))
-        val texts = ctx.vbox().apply { layoutParams = lp(0, weight = 1f) }
-        texts.addView(ctx.label(task.optString("name"), 15f, if (done) ColorId.textLight else ColorId.text, maxLines = 2).apply {
-            if (done) paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
-        })
-        val sub = listOf(meta, task.optString("project"), stepsLabel(task)).filter { it.isNotEmpty() }.joinToString(" · ")
-        if (sub.isNotEmpty()) texts.addView(ctx.label(sub, 13f, ColorId.textLight, maxLines = 1))
-        row.addView(texts)
-        return row
-    }
-
-    private fun stepsLabel(task: JSONObject): String {
-        val steps = task.optJSONArray("steps") ?: return ""
-        if (steps.length() == 0) return ""
-        val done = (0 until steps.length()).count { steps.optJSONObject(it)?.optBoolean("isDone") == true }
-        return "$done/${steps.length()}"
-    }
-
-    fun eventRow(event: JSONObject, meta: String, color: Int = event.optInt("color")): View {
-        val ctx = context()
-        val row = ctx.hbox().apply {
-            setPadding(Sx.dp(12f), Sx.dp(10f), Sx.dp(12f), Sx.dp(10f))
-            layoutParams = lp(t = Sx.dp(6f), l = Sx.dp(12f), r = Sx.dp(12f))
-            pressable { ItemEditor.open(this@PlannerController, "event", event, event.optString("instanceDay", day)) }
-        }
-        row.addView(stripe(color))
-        val texts = ctx.vbox().apply { layoutParams = lp(0, weight = 1f) }
-        texts.addView(ctx.label(event.optString("name"), 15f, maxLines = 2))
-        val sub = listOfNotNull(meta, event.optString("description").lineSequence().firstOrNull()?.takeIf { it.isNotBlank() },
-            if (event.optBoolean("isHoliday")) Sx.t("выходной", "day off") else null).joinToString(" · ")
-        texts.addView(ctx.label(sub, 13f, ColorId.textLight, maxLines = 1))
-        row.addView(texts)
-        return row
-    }
-
-    // ── месяц ──────────────────────────────────────────────────────────────────
-
-    private fun renderMonth(year: Int, month0: Int, keys: List<String>, days: JSONObject): Unit = rebuild {
-        header()
-        val nav = context.hbox().apply { setPadding(Sx.dp(8f), Sx.dp(6f), Sx.dp(8f), 0) }
-        nav.addView(arrow(R.drawable.baseline_arrow_back_24) { monthAnchor = shiftMonth(-1); refresh() })
-        nav.addView(context.label(Sx.monthTitle(year, month0), 18f, bold = true).apply { gravity = Gravity.CENTER; layoutParams = lp(0, weight = 1f) })
-        nav.addView(arrow(R.drawable.baseline_arrow_back_24, flip = true) { monthAnchor = shiftMonth(1); refresh() })
-        addView(nav)
-        val grid = GridLayout(context).apply { columnCount = 7; setPadding(Sx.dp(8f), Sx.dp(4f), Sx.dp(8f), 0) }
-        val first = Sx.calendarOf(keys.first()).get(java.util.Calendar.DAY_OF_WEEK) - 1
-        for (i in 0 until 7) grid.addView(context.label(Sx.weekdayShort((first + i) % 7), 12f, ColorId.textLight).apply {
-            gravity = Gravity.CENTER
-        }, cell())
-        val today = Sx.today()
-        keys.forEach { key ->
-            val entry = days.optJSONObject(key)
-            val c = Sx.calendarOf(key)
-            val inMonth = c.get(java.util.Calendar.MONTH) == month0
-            val count = (entry?.optJSONArray("tasks")?.length() ?: 0) + (entry?.optJSONArray("events")?.length() ?: 0)
-            val box = context.vbox().apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                setPadding(0, Sx.dp(6f), 0, Sx.dp(6f))
-                val fill = when {
-                    key == today -> Sx.color(ColorId.fillingPositive)
-                    entry?.optBoolean("isHoliday") == true -> Sx.color(ColorId.fillingNegative)
-                    else -> Sx.color(ColorId.filling)
+        if (tabHealth) {
+            Sx.planner("health", JSONObject().put("day", picked)) { r ->
+                if (gen == generation) rebuild {
+                    page()
+                    PlannerViews.dateNav(this@PlannerController, this)
+                    HealthView.render(this, this@PlannerController, picked, r as? JSONObject,
+                        onExample = { QuickAdd.show(this@PlannerController, it) },
+                        onSettings = { openHealthGoalsSheet() },
+                        onDay = { pickDay(it) })
                 }
-                pressable(10f, fill) { day = key; setMode("day") }
-                addView(context.label("${c.get(java.util.Calendar.DAY_OF_MONTH)}", 15f,
-                    when {
-                        key == today -> ColorId.fillingPositiveContent
-                        inMonth -> ColorId.text
-                        else -> ColorId.textLight
-                    }, bold = key == today).apply { gravity = Gravity.CENTER })
-                addView(context.label(if (count > 0) "•".repeat(count.coerceAtMost(3)) else " ", 12f, ColorId.iconActive).apply { gravity = Gravity.CENTER })
             }
-            grid.addView(box, cell())
+            return
         }
-        addView(grid, lp())
-    }
-
-    private fun cell() = GridLayout.LayoutParams(GridLayout.spec(GridLayout.UNDEFINED, 1f), GridLayout.spec(GridLayout.UNDEFINED, 1f)).apply {
-        width = 0
-        setMargins(Sx.dp(2f), Sx.dp(2f), Sx.dp(2f), Sx.dp(2f))
-    }
-
-    private fun shiftMonth(n: Int): String {
-        val c = Sx.calendarOf(monthAnchor)
-        c.set(java.util.Calendar.DAY_OF_MONTH, 1)
-        c.add(java.util.Calendar.MONTH, n)
-        return Sx.dayOf(c)
-    }
-
-    // ── список задач без даты ──────────────────────────────────────────────────
-
-    private fun renderList(r: JSONObject): Unit = rebuild {
-        header()
-        val undated = Sx.list(r.optJSONArray("undated"))
-        if (undated.isEmpty()) placeholder(Sx.t("Задач без даты нет", "No undated tasks"))
-        undated.groupBy { it.optString("project") }.toSortedMap(compareBy { it.isEmpty() }).forEach { (project, tasks) ->
-            addView(context.sectionTitle(project.ifEmpty { Sx.t("Без списка", "No list") }))
-            tasks.forEach { t ->
-                val status = when (t.optString("status")) {
-                    "active" -> Sx.t("в работе", "in progress")
-                    else -> ""
+        when (segment) {
+            "today" -> load(gen, picked, picked) { days, health, undated ->
+                rebuild { page(); PlannerViews.dateNav(this@PlannerController, this); PlannerViews.today(this@PlannerController, this, days.optJSONObject(picked) ?: JSONObject(), health, undated) }
+            }
+            "week" -> load(gen, picked, picked, withUndated = false) { days, health, _ ->
+                val week = PlannerViews.weekKeys(picked)
+                Sx.planner("days", JSONObject().put("from", week.first()).put("to", week.last())) { strip ->
+                    if (gen == generation) rebuild { PlannerViews.dayView(this@PlannerController, this, days.optJSONObject(picked) ?: JSONObject(), health, strip as? JSONObject ?: JSONObject()) }
                 }
-                addView(taskRow(t, status))
+            }
+            "month" -> {
+                val c = Sx.calendarOf(picked)
+                Sx.planner("monthGrid", JSONObject().put("year", c.get(java.util.Calendar.YEAR)).put("month", c.get(java.util.Calendar.MONTH) + 1)) { keys ->
+                    val list = (keys as? JSONArray)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
+                    if (list.isEmpty() || gen != generation) return@planner
+                    load(gen, list.first(), list.last(), layout = false, withUndated = false) { days, health, _ ->
+                        Sx.planner("days", JSONObject().put("from", picked).put("to", picked).put("layout", true)) { one ->
+                            if (gen == generation) rebuild {
+                                page()
+                                PlannerViews.month(this@PlannerController, this, list, days, (one as? JSONObject)?.optJSONObject(picked) ?: JSONObject(), health)
+                            }
+                        }
+                    }
+                }
+            }
+            "year" -> {
+                val y = Sx.calendarOf(picked).get(java.util.Calendar.YEAR)
+                Sx.planner("days", JSONObject().put("from", "$y-01-01").put("to", "$y-12-31")) { r ->
+                    if (gen == generation) rebuild { page(); PlannerViews.year(this@PlannerController, this, y, r as? JSONObject ?: JSONObject()) }
+                }
+            }
+            "agenda" -> Sx.planner("days", JSONObject().put("from", picked).put("to", Sx.addDays(picked, 29)).put("layout", true)) { r ->
+                Sx.planner("lists") { lists ->
+                    if (gen == generation) rebuild { page(); PlannerViews.agenda(this@PlannerController, this, r as? JSONObject ?: JSONObject(), lists as? JSONArray ?: JSONArray()) }
+                }
             }
         }
-        val completed = Sx.list(r.optJSONArray("completed"))
-        if (completed.isNotEmpty()) {
-            addView(context.sectionTitle(Sx.t("Выполнено: ${completed.size}", "Completed: ${completed.size}")))
-            completed.take(30).forEach { addView(taskRow(it, "")) }
+    }
+
+    /** Отступы `.content` телефона: 0,875 / 1 / 1,5 rem. */
+    private fun LinearLayout.page() = setPadding(Pv.rem(1f), Pv.rem(0.875f), Pv.rem(1f), Pv.rem(1.5f))
+
+    private fun load(gen: Int, from: String, to: String, layout: Boolean = true, withUndated: Boolean = true,
+                     done: (JSONObject, JSONObject?, JSONObject?) -> Unit) {
+        Sx.planner("days", JSONObject().put("from", from).put("to", to).put("layout", layout)) { days ->
+            Sx.planner("health", JSONObject().put("day", picked)) { health ->
+                val finish = { undated: Any? ->
+                    if (gen == generation) done(days as? JSONObject ?: JSONObject(), health as? JSONObject, undated as? JSONObject)
+                }
+                if (withUndated) Sx.planner("undated") { finish(it) } else finish(null)
+            }
         }
-        addView(context.action(Sx.t("Новая задача", "New task")) { ItemEditor.open(this@PlannerController, "task", null, "") })
+    }
+
+    /** К вкладке «Здоровье» на выбранном дне (карточки «Сон»/«Еда», метки сна и калорий). */
+    internal fun openHealthTab() = switchTab(true)
+
+    internal fun scrollTo(y: Int) = scroll.post { scroll.scrollTo(0, y) }
+
+    internal fun toastText(text: String) = toast(text)
+
+    internal fun openHealthGoalsSheet() {
+        Sx.planner("health", JSONObject().put("day", picked)) { r ->
+            val sheet = PvSheet.create(context(), Sx.t("Настройки здоровья", "Health settings"))
+            val box = LinearLayout(context()).apply { orientation = LinearLayout.VERTICAL }
+            HealthView.renderGoals(box, this, r as? JSONObject)
+            sheet.add(box).show()
+        }
     }
 }

@@ -194,6 +194,7 @@ std::optional<json> open(const std::string &bundleKey, const std::string &addres
     json out{{"grant", v["grant"]}};
     if (v.contains("planner") && v["planner"].is_string()) out["planner"] = v["planner"];
     if (v.contains("cloud") && v["cloud"].is_string()) out["cloud"] = v["cloud"];
+    if (v.contains("groups") && v["groups"].is_string()) out["groups"] = v["groups"];
     if (v.contains("history") && v["history"].is_object()) {
         const auto &h = v["history"];
         if (h.contains("fileId") && h["fileId"].is_string() && h.contains("fileKey") && h["fileKey"].is_string()
