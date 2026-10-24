@@ -79,9 +79,15 @@ std::string downloadDecrypt(const json &coords, const char *id, const char *key,
 
 std::string markPath() { return storeDir() + "/bundle-history-mark.txt"; }
 
+// Сверки с копией ключей аккаунта идут из разных потоков (`stateReady` и `joined` одной пачкой, повторы после входа по
+// ключу, экспорт привязки): чтение-запись `domain-keys.json` и отметка применённого снимка истории — по одной, иначе
+// ключ мог потеряться, а история — импортироваться дважды
+std::recursive_mutex g_bundleMu;
+
 // Ключи «Плана» и «Облака» из копии ключей аккаунта: файл (переживает перезапуск до подключения разделов) и сразу
 // разделам — без этого «План» появлялся, только когда другое своё устройство присылало ключ само
 void noteDomainKeys(const std::string &plannerIn, const std::string &cloudIn) {
+    std::lock_guard<std::recursive_mutex> lk(g_bundleMu);
     const auto isEmpty = [](const std::string &v) { return v.empty() || v == "[]" || v == "null"; };
     if (isEmpty(plannerIn) && isEmpty(cloudIn)) return;
     // Непустое не заменяем пустым: копия без «Плана» (записанная до исправления) не стирает ключ, уже полученный
@@ -100,6 +106,7 @@ void noteDomainKeys(const std::string &plannerIn, const std::string &cloudIn) {
 
 void applyBundleHistory(const json &history) {
     if (!history.is_object()) return;
+    std::lock_guard<std::recursive_mutex> lk(g_bundleMu);
     const auto mark = history.value("mark", std::string());
     if (!mark.empty() && parvane::storecrypt::readFile(markPath()) == mark) return;
     try {
@@ -211,7 +218,11 @@ bool pollLinkGrantOnce() {
         }
     }
     try {
-        importV2History(downloadDecrypt(box, "file_id", "file_key", "file_nonce")); // LINK-1 п. 8
+        const auto stateJson = downloadDecrypt(box, "file_id", "file_key", "file_nonce");
+        importV2History(stateJson); // LINK-1 п. 8
+        // spec 010/016: ключи «Плана» и «Облака» старого устройства — разделы открываются сразу после привязки
+        const auto keys = parvane::keybundle::readLinkDomainKeys(stateJson);
+        noteDomainKeys(keys.planner, keys.cloud);
         emit(json{{"type", "link"}, {"state", "imported"}});
     } catch (const std::exception &e) {
         LOGE("привязка: экспорт: %s", e.what());
@@ -220,6 +231,18 @@ bool pollLinkGrantOnce() {
 }
 
 // ── старое устройство: офферы чужих устройств ───────────────────────────────
+
+// «Отклонить»: ключ сверки этого запроса забывается — выдать ему грант больше нельзя (ни окном, ни экраном устройств),
+// окно не всплывает снова (запрос числится показанным), шов и окна закрывают его событием `link_request_gone`.
+void declineLink(const std::string &deviceId) {
+    {
+        std::lock_guard<std::mutex> lk(g_linkMu);
+        g_linkChallenges.erase(deviceId);
+        g_linkOfferEph.erase(deviceId);
+    }
+    LOGI("привязка: запрос нового устройства отклонён");
+    emit(json{{"type", "link_request_gone"}, {"device_id", deviceId}});
+}
 
 void pollLinkOffersOnce() {
     const auto c = control();
@@ -314,6 +337,15 @@ bool grantLink(const std::string &deviceId) {
         // Экспорт привязки — формат web 2: история v2 (LINK-1 п. 8), ключи — грантом движка
         auto exported = json{{"linkVersion", 2}};
         if (auto rows = collectV2HistoryRows(); !rows.empty()) exported["v2History"] = std::move(rows);
+        // spec 010/016: ключи «Плана» и «Облака» — разделы нового устройства открываются сразу
+        if (const auto s = v2Ready()) {
+            try {
+                parvane::keybundle::putLinkDomainKeys(exported, s->engineCall("plannerKeysExport", json::object()),
+                                                      s->engineCall("cloudKeysExport", json::object()));
+            } catch (const std::exception &e) {
+                LOGE("привязка: ключи разделов не приложены: %s", e.what());
+            }
+        }
         auto enc = parvane::blobcrypt::encrypt(exported.dump());
         const auto fileId = c->uploadBlob(enc.ciphertext);
         json boxPlain{{"file_id", fileId}, {"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
@@ -548,6 +580,7 @@ json bundleHistory(const json &previous, bool force) {
 void syncFromKeyBundle() {
     const auto s = v2Ready();
     if (!s) return;
+    std::lock_guard<std::recursive_mutex> lk(g_bundleMu);
     try {
         const auto bundle = s->fetchKeyBundle();
         if (!bundle.is_object()) return;
@@ -586,9 +619,11 @@ void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
     noteDomainKeys(outcome.planner, outcome.cloud);
     applyBundleHistory(outcome.history);
     emit(json{{"type", "link"}, {"state", "joined"}});
-    runDetached([] {
+    // Повторные сверки — только пока в процессе тот же аккаунт (после выхода или смены аккаунта не идут)
+    runDetached([owner = self()] {
         for (const int delaySec : {20, 60, 180}) {
             std::this_thread::sleep_for(std::chrono::seconds(delaySec));
+            if (owner.empty() || self() != owner) return;
             syncFromKeyBundle();
         }
     });
@@ -638,7 +673,9 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeListDevices(JN
     return jreply(env, out);
 }
 
-// Выйти на устройстве: rotate=false — обычный выход (без смены ключей), true — отзыв со сменой ключей (пароль).
+// Выйти на устройстве: rotate=false — обычный выход (без смены ключей), true — отзыв со сменой ключей. Пароль нужен
+// при любом способе (P-07, как web и desktop): без него украденный разблокированный телефон выводил бы остальные
+// устройства из аккаунта.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(
         JNIEnv *env, jclass, jstring deviceId, jstring password, jboolean rotate) {
     const auto dev = jstr(env, deviceId);
@@ -647,16 +684,12 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRevokeDevice(
     if (!s || !c) return jreply(env, jfail("failed"));
     if (dev == parvane::v2::Session::deviceIdFor(v2StateDir(self()))) return jreply(env, jfail("bad_request"));
     try {
-        if (rotate != JNI_TRUE) {
-            if (s->signOutDevice(dev)) return jreply(env, json{{"ok", true}});
-        }
         // Пароль проверяет сервер (session.reauth); устройство журнала снимает подписанная запись
-        try {
-            parvane::v2::account::revokeDevice(*c, dev, jstr(env, password));
-        } catch (const parvane::v2::V2Error &e) {
-            if (e.code() != "ERROR_CODE_INVALID") throw;
-        }
-        const bool ok = s->revokeDevice(dev);
+        parvane::v2::account::revokeDevice(*c, dev, jstr(env, password));
+        // Сеанс сервера без устройства в журнале (старый вход): записи журнала не нужно — сервер сеанс уже погасил
+        const auto own = s->ownDevices();
+        if (std::find(own.begin(), own.end(), dev) == own.end()) return jreply(env, json{{"ok", true}});
+        const bool ok = rotate == JNI_TRUE ? s->revokeDevice(dev) : s->signOutDevice(dev);
         return jreply(env, ok ? json{{"ok", true}} : jfail("not_found"));
     } catch (const std::exception &e) {
         return jreply(env, jfail(errorCodeOf(e), e.what()));
@@ -673,6 +706,11 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeReportDeviceS
 // Старое устройство: подтвердить запрос нового (код сверен пользователем).
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkGrant(JNIEnv *env, jclass, jstring deviceId) {
     return grantLink(jstr(env, deviceId)) ? JNI_TRUE : JNI_FALSE;
+}
+
+// Старое устройство: отклонить запрос нового.
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkDecline(JNIEnv *env, jclass, jstring deviceId) {
+    declineLink(jstr(env, deviceId));
 }
 
 // Новое устройство: опубликовать оффер снова (после истечения).

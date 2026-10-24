@@ -90,6 +90,8 @@ object ParvaneCore {
         JSONObject(nativeRevokeDevice(deviceId, password, rotate))
     @JvmStatic fun reportDeviceStolen(deviceId: String): Boolean = nativeReportDeviceStolen(deviceId)
     @JvmStatic fun linkGrant(deviceId: String): Boolean = nativeLinkGrant(deviceId)
+    /** «Отклонить» запрос нового устройства: выдать ему грант больше нельзя. */
+    @JvmStatic fun linkDecline(deviceId: String) = nativeLinkDecline(deviceId)
     @JvmStatic fun linkOffer() = nativeLinkOffer()
     @JvmStatic fun telegramRecovery(again: Boolean) = nativeTelegramRecovery(again)
     @JvmStatic fun recoverWithKey(key: String): String = nativeRecoverWithKey(key)
@@ -227,6 +229,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeRevokeDevice(deviceId: String, password: String, rotate: Boolean): String
     @JvmStatic private external fun nativeReportDeviceStolen(deviceId: String): Boolean
     @JvmStatic private external fun nativeLinkGrant(deviceId: String): Boolean
+    @JvmStatic private external fun nativeLinkDecline(deviceId: String)
     @JvmStatic private external fun nativeLinkOffer()
     @JvmStatic private external fun nativeTelegramRecovery(again: Boolean)
     @JvmStatic private external fun nativeRecoverWithKey(key: String): String

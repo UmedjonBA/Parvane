@@ -700,6 +700,60 @@ pub fn migrate_snapshot_with(
     Ok(out)
 }
 
+/// Перенос локального состояния в журнал — только того, чего в журнале ещё нет: локальное устройства (у только что
+/// вошедшего — значения по умолчанию) не перебивает значения других устройств свежей меткой. Объекты сверяются по
+/// ключу карты (папка — id, собеседник, op_id, call_id, link_id, ref контейнера, список закрепа); регистры
+/// (порядок папок, умолчания уведомлений, контейнер «Плана», быстрая реакция) — по наличию.
+pub fn without_present(local: &StateSnapshot, current: &StateSnapshot) -> StateSnapshot {
+    use std::collections::HashSet;
+    fn keys<'a, T: Message + 'a>(items: impl Iterator<Item = Option<&'a T>>) -> HashSet<Vec<u8>> {
+        items.map(|k| k.map(|m| m.encode_to_vec()).unwrap_or_default()).collect()
+    }
+    fn has<T: Message>(set: &HashSet<Vec<u8>>, key: Option<&T>) -> bool {
+        set.contains(&key.map(|m| m.encode_to_vec()).unwrap_or_default())
+    }
+    let mut out = local.clone();
+    let folders: HashSet<u32> = current.folders.iter().map(|f| f.id).collect();
+    out.folders.retain(|f| !folders.contains(&f.id));
+    if current.folder_order.is_some() {
+        out.folder_order = None;
+    }
+    let blocked = keys(current.blocked.iter().map(|b| b.peer.as_ref()));
+    out.blocked.retain(|b| !has(&blocked, b.peer.as_ref()));
+    let notify = keys(current.notify.iter().map(|n| n.peer.as_ref()));
+    out.notify.retain(|n| !has(&notify, n.peer.as_ref()));
+    if current.notify_defaults.is_some() {
+        out.notify_defaults = None;
+    }
+    let drafts = keys(current.drafts.iter().map(|d| d.peer.as_ref()));
+    out.drafts.retain(|d| !has(&drafts, d.peer.as_ref()));
+    let scheduled: HashSet<&[u8]> = current.scheduled.iter().map(|m| m.op_id.as_slice()).collect();
+    out.scheduled.retain(|m| !scheduled.contains(m.op_id.as_slice()));
+    let sent: HashSet<&[u8]> = current.scheduled_sent.iter().map(Vec::as_slice).collect();
+    out.scheduled_sent.retain(|id| !sent.contains(id.as_slice()));
+    let archived = keys(current.archived.iter().map(Some));
+    out.archived.retain(|p| !has(&archived, Some(p)));
+    let pinned: HashSet<i32> = current.pinned.iter().map(|p| p.list).collect();
+    out.pinned.retain(|p| !pinned.contains(&p.list));
+    let calls: HashSet<&[u8]> = current.calls.iter().map(|c| c.call_id.as_slice()).collect();
+    out.calls.retain(|c| !calls.contains(c.call_id.as_slice()));
+    let cleared = keys(current.cleared.iter().map(|c| c.peer.as_ref()));
+    out.cleared.retain(|c| !has(&cleared, c.peer.as_ref()));
+    let invites: HashSet<&[u8]> = current.invites.iter().map(|i| i.link_id.as_slice()).collect();
+    out.invites.retain(|i| !invites.contains(i.link_id.as_slice()));
+    if current.planner_container.is_some() {
+        out.planner_container = None;
+    }
+    let containers = keys(current.cloud_containers.iter().map(|c| c.r#ref.as_ref()));
+    out.cloud_containers.retain(|c| !has(&containers, c.r#ref.as_ref()));
+    let unread = keys(current.unread_marks.iter().map(Some));
+    out.unread_marks.retain(|p| !has(&unread, Some(p)));
+    if current.quick_reaction.is_some() {
+        out.quick_reaction = None;
+    }
+    out
+}
+
 /// То же с op_id UUIDv7.
 pub fn migrate_snapshot(snapshot: &StateSnapshot, device_id: &str, clock: &mut LamportClock, ts_ms: i64) -> Result<Vec<StateOp>> {
     migrate_snapshot_with(snapshot, device_id, clock, ts_ms, new_op_id)
@@ -899,6 +953,42 @@ mod tests {
         assert_eq!(open_record(&key, "alice@x", &other, &rec.aead_ciphertext).unwrap_err(), ProtoError::Crypto);
         let wrong = StateKey::generate();
         assert_eq!(open_record(&wrong, "alice@x", &rec.op_id, &rec.aead_ciphertext).unwrap_err(), ProtoError::Crypto);
+    }
+
+    // Только что вошедшее устройство переносит свои значения по умолчанию: перебивать ими журнал нельзя
+    #[test]
+    fn migration_fills_only_missing() {
+        let mut journal = PersonalState::new();
+        let mut other = LamportClock::default();
+        for op in [
+            Op::FolderSet(Folder { id: 2, title: "Работа".into(), ..Default::default() }),
+            Op::QuickReaction(QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() }),
+            Op::BlockSet(BlockEntry { peer: Some(user("eve@x")), blocked_at_ms: 1 }),
+        ] {
+            journal.apply(&make_op(&mut other, "d1", 1, op).unwrap()).unwrap();
+        }
+        let local = StateSnapshot {
+            folders: vec![
+                Folder { id: 2, title: "по умолчанию".into(), ..Default::default() },
+                Folder { id: 3, title: "Своя".into(), ..Default::default() },
+            ],
+            quick_reaction: Some(QuickReaction { emoji: "👍".into(), custom_emoji_id: String::new() }),
+            blocked: vec![BlockEntry { peer: Some(user("eve@x")), blocked_at_ms: 9 }, BlockEntry { peer: Some(user("spam@x")), blocked_at_ms: 9 }],
+            ..Default::default()
+        };
+        let pruned = without_present(&local, &journal.snapshot());
+        assert_eq!(pruned.folders.iter().map(|f| f.id).collect::<Vec<_>>(), vec![3]);
+        assert!(pruned.quick_reaction.is_none());
+        assert_eq!(pruned.blocked.len(), 1);
+        let mut clock = LamportClock::new(100);
+        let ops = migrate_snapshot(&pruned, "d2", &mut clock, 2).unwrap();
+        assert!(journal.apply_all(&ops).is_empty());
+        let snap = journal.snapshot();
+        assert_eq!(snap.quick_reaction.unwrap().emoji, "🔥");
+        assert_eq!(snap.folders.iter().find(|f| f.id == 2).unwrap().title, "Работа");
+        assert!(snap.folders.iter().any(|f| f.id == 3));
+        // Пустой журнал (ключ только что сменён этим устройством) — переносится всё
+        assert_eq!(without_present(&local, &StateSnapshot::default()), local);
     }
 
     #[test]

@@ -92,17 +92,17 @@ class AccountController(context: Context, tdlib: Tdlib) : SectionController(cont
     }
 
     private fun revoke(device: String) {
-        AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(Sx.t("Выйти на устройстве", "Sign out the device"))
-            .setItems(arrayOf(Sx.t("Просто выйти", "Just sign out"), Sx.t("Выйти и сменить ключи (нужен пароль)", "Sign out and rotate keys (password)"))) { _, which ->
-                val go = { pw: String ->
-                    Sx.async({ ParvaneCore.revokeDevice(device, pw, which == 1) }) { r ->
-                        toast(if (r?.optBoolean("ok") == true) Sx.t("Устройство отключено", "Device signed out")
-                            else Sx.t("Не получилось: ${r?.optString("error_code")}", "Failed: ${r?.optString("error_code")}"))
-                        load()
-                    }
-                }
-                if (which == 1) password(Sx.t("Подтвердите паролем", "Confirm with password")) { go(it) } else go("")
-            }.show()
+        AccountUi.askTerminate(context(), 1) { answer ->
+            Sx.async({ ParvaneCore.revokeDevice(device, answer.password, answer.rotate) }) { r ->
+                val code = r?.optString("error_code").orEmpty()
+                toast(when {
+                    r?.optBoolean("ok") == true -> Sx.t("Устройство отключено", "Device signed out")
+                    code.contains("FORBIDDEN") -> Sx.t("Неверный пароль", "Wrong password")
+                    else -> Sx.t("Не получилось: $code", "Failed: $code")
+                })
+                load()
+            }
+        }
     }
 
     private fun stolen(device: String) {
@@ -174,6 +174,13 @@ object AccountUi {
                 }
             }
         }
+        // P-07: завершение сеансов с экрана устройств X — пароль и способ выхода (шов ждёт ответа)
+        org.drinkless.tdlib.Client.terminatePrompt = { count, answer ->
+            Sx.main.post {
+                val ctx = UI.getUiContext()
+                if (ctx == null) answer(null) else askTerminate(ctx, count, onCancel = { answer(null) }) { answer(it) }
+            }
+        }
         org.drinkless.tdlib.Client.noticeSink = { text ->
             val activity = UI.getUiContext() as? android.app.Activity
             if (activity == null) false else { Sx.main.post { PvToast.showInWindow(activity, text) }; true }
@@ -195,6 +202,45 @@ object AccountUi {
     }
 
     private val federationShown = HashMap<String, Long>()
+
+    /**
+     * Завершить сеанс(ы) другого своего устройства — как web и desktop (P-07): способ («просто выйти» либо «выйти и
+     * сменить ключи») и текущий пароль. Пустой пароль не принимается.
+     */
+    fun askTerminate(ctx: android.content.Context, count: Int, onCancel: () -> Unit = {}, done: (org.drinkless.tdlib.TerminateAnswer) -> Unit) {
+        val form = ctx.vbox(Sx.dp(20f))
+        form.addView(ctx.label(if (count > 1) Sx.t("Устройств: $count. Они выйдут из аккаунта.", "Devices: $count. They will be signed out.")
+            else Sx.t("Устройство выйдет из аккаунта.", "The device will be signed out."), 14f, ColorId.text))
+        val modes = android.widget.RadioGroup(ctx)
+        val plain = android.widget.RadioButton(ctx).apply {
+            id = android.view.View.generateViewId(); text = Sx.t("Просто выйти", "Just sign out"); setTextColor(Sx.color(ColorId.text))
+        }
+        val rotate = android.widget.RadioButton(ctx).apply {
+            id = android.view.View.generateViewId(); text = Sx.t("Выйти и сменить ключи", "Sign out and change keys"); setTextColor(Sx.color(ColorId.text))
+        }
+        modes.addView(plain)
+        modes.addView(rotate)
+        modes.check(plain.id)
+        form.addView(modes)
+        val input = EditText(ctx).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = Sx.t("Пароль", "Password")
+            setTextColor(Sx.color(ColorId.text))
+        }
+        form.addView(input)
+        var isAnswered = false
+        AlertDialog.Builder(ctx, Theme.dialogTheme())
+            .setTitle(if (count > 1) Sx.t("Завершить другие сеансы", "Terminate other sessions") else Sx.t("Завершить сеанс", "Terminate session"))
+            .setView(form)
+            .setPositiveButton(Sx.t("Завершить", "Terminate")) { _, _ ->
+                val pw = input.text.toString()
+                isAnswered = true
+                if (pw.isEmpty()) onCancel() else done(org.drinkless.tdlib.TerminateAnswer(pw, modes.checkedRadioButtonId == rotate.id))
+            }
+            .setNegativeButton(Sx.t("Отмена", "Cancel"), null)
+            .setOnDismissListener { if (!isAnswered) onCancel() }
+            .show()
+    }
 
     /** FED-1: понятная причина отказа другого сервера (как desktop/web); одна причина — не чаще раза в 10 с. */
     private fun federationToast(reason: String) {
@@ -244,7 +290,10 @@ object AccountUi {
             gravity = android.view.Gravity.END
         }
         lateinit var confirm: LinearLayout
-        val reject = ctx.pvButton(Sx.t("Отклонить", "Reject"), "ghost") { sheet.dismiss() }
+        val reject = ctx.pvButton(Sx.t("Отклонить", "Reject"), "ghost") {
+            sheet.dismiss()
+            Sx.async({ ParvaneCore.linkDecline(device) }) {}
+        }
         confirm = ctx.pvButton(Sx.t("Подтвердить", "Confirm"), "acc") {
             confirm.isEnabled = false
             reject.isEnabled = false

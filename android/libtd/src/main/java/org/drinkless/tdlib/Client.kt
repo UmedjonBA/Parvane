@@ -9,6 +9,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
+/** Ответ окна завершения сеансов: пароль и способ (true — выйти со сменой ключей). */
+data class TerminateAnswer(val password: String, val rotate: Boolean)
+
 /**
  * Parvane: shim класса TDLib `org.drinkless.tdlib.Client` поверх parvane-core.
  *
@@ -72,6 +75,15 @@ class Client private constructor(
         var deletionPrompt: ((atMs: Long, answer: (Boolean) -> Unit) -> Unit)? = null
         /** Оверлей показывает служебное сообщение сам (true) — окно X не нужно. */
         var noticeSink: ((String) -> Boolean)? = null
+
+        /**
+         * P-07: «Завершить» / «Завершить все другие сеансы» на экране устройств X — как web и desktop: пароль и способ
+         * («просто выйти» либо «выйти и сменить ключи») спрашивает окно оверлея; ответ — с любого потока, null — отмена.
+         * Нет окна — сеанс не завершается.
+         */
+        @JvmStatic
+        @Volatile
+        var terminatePrompt: ((count: Int, answer: (TerminateAnswer?) -> Unit) -> Unit)? = null
 
         /** Группа чата (групповой звонок): {gid, title, members, self}; null — не группа. */
         @JvmStatic
@@ -387,6 +399,30 @@ class Client private constructor(
         return latch.await(5, java.util.concurrent.TimeUnit.MINUTES) && answer.get()
     }
 
+    /** Пароль и способ завершения сеансов (`terminatePrompt`); null — отмена или нет окна. */
+    private fun askTerminate(count: Int): TerminateAnswer? {
+        // dev-хук сценариев (только debug): «signout|rotate <пароль>» из файла
+        if (org.parvane.libtd.BuildConfig.DEBUG) java.io.File("/data/local/tmp/parvane-terminate-answer").takeIf { it.canRead() }
+            ?.readText()?.trim()?.split(' ', limit = 2)?.takeIf { it.size == 2 }?.let { return TerminateAnswer(it[1], it[0] == "rotate") }
+        val prompt = terminatePrompt ?: return null
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val answer = java.util.concurrent.atomic.AtomicReference<TerminateAnswer?>(null)
+        prompt(count) { a -> answer.set(a); latch.countDown() }
+        return if (latch.await(5, java.util.concurrent.TimeUnit.MINUTES)) answer.get() else null
+    }
+
+    /** Завершить сеансы устройств: пароль проверяет сервер при любом способе выхода. */
+    private fun terminateDevices(devices: List<String>): TdApi.Object {
+        if (devices.isEmpty()) return TdApi.Ok()
+        val a = askTerminate(devices.size) ?: return TdApi.Error(400, uiText("terminate_cancelled"))
+        val codes = devices.map { ParvaneCore.revokeDevice(it, a.password, a.rotate) }.filter { !it.optBoolean("ok") }.map { it.optString("error_code") }
+        return when {
+            codes.isEmpty() -> TdApi.Ok()
+            codes.any { it.contains("FORBIDDEN") } -> TdApi.Error(400, uiText("terminate_bad_password"))
+            else -> TdApi.Error(400, uiText("terminate_failed"))
+        }
+    }
+
     private fun deletionDate(atMs: Long): String =
         java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.LONG, java.text.DateFormat.SHORT).format(java.util.Date(atMs))
 
@@ -505,16 +541,10 @@ class Client private constructor(
         is TdApi.SendCallRating, is TdApi.SendCallDebugInformation, is TdApi.SendCallLog, is TdApi.SendCallSignalingData -> TdApi.Ok()
         // Settings → Devices: устройства аккаунта из identity; отзыв = терминация сессии
         is TdApi.GetActiveSessions -> TdApi.Sessions(sessionsList(), 0)
-        // REVOKE-1: «Завершить» — обычный выход того устройства из журнала (без смены ключей, пароль не нужен);
-        // «выйти и сменить ключи» и «украдено» — экран устройств оверлея (ParvaneDevices)
-        is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { dev ->
-            val r = ParvaneCore.revokeDevice(dev, sessionPassword, rotate = false)
-            if (r.optBoolean("ok")) TdApi.Ok() else TdApi.Error(400, uiText(r.optString("error_code").ifEmpty { "failed" }))
-        } ?: TdApi.Error(404, "session not found")
-        is TdApi.TerminateAllOtherSessions -> {
-            sessionsList().filter { !it.isCurrent }.forEach { deviceById[it.id]?.let { ParvaneCore.revokeDevice(it, sessionPassword, rotate = false) } }
-            TdApi.Ok()
-        }
+        // REVOKE-1, P-07: «Завершить» и «Завершить все другие сеансы» — с паролем и выбором способа (окно оверлея), как
+        // web и desktop; «украдено» — экран устройств оверлея (ParvaneDevices)
+        is TdApi.TerminateSession -> deviceById[f.sessionId]?.let { terminateDevices(listOf(it)) } ?: TdApi.Error(404, "session not found")
+        is TdApi.TerminateAllOtherSessions -> terminateDevices(sessionsList().filter { !it.isCurrent }.mapNotNull { deviceById[it.id] })
         // Privacy-экран X: чёрный список из стора; пароль/TTL аккаунта — заглушки без ошибок
         is TdApi.GetBlockedMessageSenders -> store.blocked.toList().map { TdApi.MessageSenderUser(store.idOf(it)) as TdApi.MessageSender }
             .let { TdApi.MessageSenders(it.size, it.toTypedArray()) }
@@ -1132,6 +1162,8 @@ class Client private constructor(
     // По одному: вызывают и событие ядра «группа», и io (создание, действия) — параллельно один поток отмечал чат
     // объявленным, а второй успевал послать UpdateChatTitle раньше его UpdateNewChat (X падал «updateChat not received»)
     private val groupsLock = Any()
+    /** Чаты групп, убранные из списков событием `removed`: при возвращении группы позиции объявляются заново. */
+    private val hiddenGroupChats: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private fun syncGroups(): Unit = synchronized(groupsLock) { syncGroupsLocked() }
 
     private fun syncGroupsLocked() {
@@ -1165,6 +1197,8 @@ class Client private constructor(
             Log.i(TAG, "группа $gid: чат ${chat.id} создан=$created объявлен=$announced v${g.optLong("version", -1)} (было v$previousVersion)")
             if (announced) { postUpdate(TdApi.UpdateNewChat(chat.copyForUi())); announceScheduled(chat.id) }
             else postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
+            // Группа вернулась после `removed` (временное снятие, пока новое устройство догоняло журнал) — снова в списке
+            if (hiddenGroupChats.remove(chat.id)) chat.positions.forEach { p -> postUpdate(TdApi.UpdateChatPosition(chat.id, p)) }
             val version = g.optLong("version", -1L)
             if (!created && !announced && version >= 0 && version == previousVersion) continue
             // spec 003: права по умолчанию, описание, фото — открытые экраны X обновляются апдейтами
@@ -1240,6 +1274,10 @@ class Client private constructor(
             "v2_recovery_key" -> if (ru) "Ключ восстановления аккаунта (протокол v2). Сохраните его в надёжном месте — он показывается один раз и нужен, чтобы восстановить доступ без других устройств:\n%s"
                 else "Account recovery key (protocol v2). Store it somewhere safe — it is shown only once and is needed to regain access without your other devices:\n%s"
             "session_expired" -> if (ru) "Сессия истекла — войдите снова" else "Session expired — sign in again"
+            "session_not_in_log" -> if (ru) "Не в журнале устройств — старый вход" else "Not in the device log — old sign-in"
+            "terminate_cancelled" -> if (ru) "Сеанс не завершён" else "Session not terminated"
+            "terminate_bad_password" -> if (ru) "Неверный пароль — сеанс не завершён" else "Wrong password — session not terminated"
+            "terminate_failed" -> if (ru) "Не все сеансы удалось завершить" else "Some sessions could not be terminated"
             // spec 007: T080 — участник группы v2 без записи администратора; T119 — новое своё устройство
             "v2_unconfirmed_member" -> if (ru) "Сервер показывает %s в составе группы, но это не подтверждено записью администратора. Ключи шифрования этому участнику не передаются."
                 else "%s is listed in the group by the server, but no admin record confirms it. Encryption keys are not shared with them."
@@ -2368,9 +2406,11 @@ class Client private constructor(
             val created = (d.optLong("created_ms") / 1000).toInt().takeIf { it > 0 } ?: ts
             val current = d.optBoolean("current")
             val kind = d.optString("client_kind")
+            // Сеанс сервера без устройства в журнале (старый вход, устройство уже вышло) — подписан, а не выдан за устройство
+            val location = if (d.optBoolean("in_log", true)) "" else uiText("session_not_in_log")
             out += TdApi.Session(id, current, false, false, false, false,
                 when (kind) { "android" -> TdApi.SessionDeviceTypeAndroid(); "desktop" -> TdApi.SessionDeviceTypeLinux(); "web" -> TdApi.SessionDeviceTypeChrome(); else -> TdApi.SessionDeviceTypeUnknown() },
-                0, "Parvane", kind, true, dev.take(10), "", "", created, ts, "", "")
+                0, "Parvane", kind, true, dev.take(10), "", "", created, ts, "", location)
         }
         return out.sortedByDescending { it.isCurrent }.toTypedArray()
     }
@@ -2623,6 +2663,7 @@ class Client private constructor(
                 Log.i(TAG, "группа ${event.optString("group_id")}: $change v${event.optLong("version")}")
                 if (change == "removed") { // группа v2: исключены/забанены или удалена — убрать из списков
                     store.group(event.optString("group_id"))?.let { g ->
+                        hiddenGroupChats.add(g.chatId)
                         store.chatById(g.chatId)?.positions?.forEach { p -> postUpdate(TdApi.UpdateChatPosition(g.chatId, TdApi.ChatPosition(p.list, 0L, false, null))) }
                     }
                     return

@@ -144,7 +144,12 @@ void RevokeDevice(const QString &deviceId, Fn<void(bool)> done, const QString &p
 			auto journaled = false;
 			if (const auto s = V2Ready()) {
 				try {
-					if (rotateKeys ? s->revokeDevice(devStd) : s->signOutDevice(devStd)) {
+					const auto own = s->ownDevices();
+					if (std::find(own.begin(), own.end(), devStd) == own.end()) {
+						// Сеанс сервера без устройства в журнале (старый вход): сервер его уже погасил, записи не нужно
+						journaled = true;
+						LOG(("Parvane: сеанс %1 вне журнала устройств погашен сервером").arg(deviceId));
+					} else if (rotateKeys ? s->revokeDevice(devStd) : s->signOutDevice(devStd)) {
 						journaled = true;
 						LOG(("Parvane: v2: устройство %1 %2 в журнале устройств").arg(deviceId,
 							rotateKeys ? u"отозвано со сменой ключей"_q : u"вышло"_q));

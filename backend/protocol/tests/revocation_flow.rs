@@ -363,7 +363,8 @@ fn revocation_rotates_keys_epochs_and_ssk() {
     let sk = StateKey::generate();
     alice.set_state_key(sk.clone(), 1);
     alice3.set_state_key(sk.clone(), 1);
-    alice2.set_state_key(sk, 1);
+    alice2.set_state_key(sk.clone(), 1);
+    let old_sk = sk;
 
     // Знакомство: Боб знает ключ Алисы «из профиля», дальше — раздача по E2E.
     bob.set_peer_delivery_key("alice@local", alice.delivery_key().to_vec(), 1);
@@ -412,6 +413,7 @@ fn revocation_rotates_keys_epochs_and_ssk() {
     assert!(ev3.iter().any(|e| matches!(e, Event::StateKeyRotated { key_version: 2, .. })), "{ev3:?}");
     assert_eq!(alice3.state_key().unwrap().0.as_bytes(), alice.state_key().unwrap().0.as_bytes());
     assert_eq!(alice3.delivery_key(), alice.delivery_key());
+
 
     // Боб: получил новый ключ доступа и ключи новой эпохи; видит KEY-1 до смены SSK.
     drain(&mut srv, &mut bob);
@@ -474,6 +476,22 @@ fn revocation_rotates_keys_epochs_and_ssk() {
     drain(&mut srv, &mut alice3);
     run(&mut srv, &mut alice3, &mut |c| c.prepare_direct("bob@local", &text("с d3")));
     assert!(texts(&drain(&mut srv, &mut bob)).contains(&("alice@local".into(), "с d3".into())));
+
+    // Устройство, вошедшее по устаревшей копии ключей аккаунта (её последним записало отставшее устройство): ключи
+    // доставки и состояния — прежние. Пересылка своим новым устройствам доводит их до текущих.
+    let (ssk, entries, _, _) = alice.link_grant_material().unwrap();
+    let mut alice4 = Client::new("alice@local", "d4", "local").unwrap();
+    let reqs = alice4.join_with_ssk(ssk, entries, old_dk, gen0, 20).unwrap();
+    exec(&mut srv, &alice4, &reqs);
+    sync_own_log(&srv, &mut alice);
+    sync_own_log(&srv, &mut alice3);
+    alice4.set_state_key(old_sk, 1);
+    run(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d4".into()]));
+    let ev4 = drain(&mut srv, &mut alice4);
+    assert!(ev4.iter().any(|e| matches!(e, Event::StateKeyRotated { key_version: 2, .. })), "{ev4:?}");
+    assert_eq!(alice4.state_key().unwrap().0.as_bytes(), alice.state_key().unwrap().0.as_bytes());
+    assert_eq!(alice4.delivery_key(), alice.delivery_key());
+    assert_eq!(alice4.delivery_key_generation(), gen0 + 1);
     // Отзыв d3 (без SSK) смену SSK не требует.
     advance(11_000);
     drain(&mut srv, &mut alice);

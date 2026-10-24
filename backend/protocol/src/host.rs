@@ -247,6 +247,23 @@ pub fn l2_view_json(v: &L2View) -> String {
     json!({"active": v.active, "mine": v.mine, "enabledBy": v.enabled_by, "pad": v.pad, "ephemeralAllowed": v.ephemeral_allowed}).to_string()
 }
 
+/// spec 026: прежние адреса аккаунта — в материал гранта (поле `fa`): устройство, вошедшее после смены ника, читает
+/// записи журнала личного состояния, запечатанные под прежним адресом (формат общий с WASM).
+pub fn put_grant_former_names(c: &Client, m: &mut Value) {
+    let former = c.state_former_addresses();
+    if !former.is_empty() {
+        m["fa"] = json!(former);
+    }
+}
+
+/// Прежние адреса из материала гранта (поле `fa`); грант без поля принимается.
+pub fn apply_grant_former_names(c: &mut Client, v: &Value) {
+    if let Some(names) = v["fa"].as_array() {
+        let names: Vec<String> = names.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
+        c.adopt_former_names(&names);
+    }
+}
+
 /// Поле `pk` материала гранта линковки: ключи доступа собеседников старого
 /// устройства `[{"u": адрес, "k": hex, "g": поколение}]` (общее для C ABI и WASM).
 pub fn grant_peer_keys(c: &Client) -> Value {
@@ -356,6 +373,7 @@ impl HostClient {
             m["skv"] = json!(v);
         }
         m["pk"] = grant_peer_keys(&self.inner);
+        put_grant_former_names(&self.inner, &mut m);
         Ok(m.to_string())
     }
 
@@ -372,6 +390,7 @@ impl HostClient {
             self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
         }
         apply_grant_peer_keys(&mut self.inner, &v);
+        apply_grant_former_names(&mut self.inner, &v);
         Ok(reqs_json(&reqs))
     }
 
@@ -782,7 +801,7 @@ impl HostClient {
         let (k, _) = self.inner.state_key()?;
         Some(HostState {
             user: self.inner.user.clone(),
-            former: self.inner.former_addresses(),
+            former: self.inner.state_former_addresses(),
             device_id: self.inner.device_id.clone(),
             key: k.clone(),
             state: crate::state::PersonalState::new(),
@@ -872,9 +891,11 @@ impl HostState {
         self.seal_ops(ops)
     }
 
-    /// Первый запуск: локальные данные (StateSnapshot) → начальные записи.
+    /// Первый запуск: локальные данные (StateSnapshot) → начальные записи (только недостающие в журнале).
     pub fn migrate(&mut self, local_json: &str) -> Result<String, String> {
         let local: crate::pb::parvane::state::v1::StateSnapshot = serde_json::from_str(local_json).map_err(|_| err(ProtoError::Malformed))?;
+        // Только недостающее в журнале: своё по умолчанию не перебивает значения других устройств
+        let local = crate::state::without_present(&local, &self.state.snapshot());
         let ops = crate::state::migrate_snapshot(&local, &self.device_id, &mut self.clock, now_ms()).map_err(err)?;
         let mut out = Vec::new();
         for op in ops {

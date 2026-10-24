@@ -251,12 +251,56 @@ std::size_t keyCount(const nlohmann::json &entry) {
     return entry.is_object() && entry.contains("keys") && entry["keys"].is_array() ? entry["keys"].size() : 0;
 }
 
+// Брать ли «План» с сервера: своего нет либо у серверного того же контейнера больше эпох ключа
+bool pickPlannerKeys(const nlohmann::json &own, const nlohmann::json &server) {
+    if (!hasPlannerKeys(server)) return false;
+    if (!hasPlannerKeys(own)) return true;
+    const auto ownKeys = nlohmann::json::parse(own["planner"].get<std::string>(), nullptr, false);
+    const auto serverKeys = nlohmann::json::parse(server["planner"].get<std::string>(), nullptr, false);
+    return ownKeys.is_object() && serverKeys.is_object()
+        && ownKeys.value("id", std::string()) == serverKeys.value("id", std::string())
+        && keyCount(serverKeys) > keyCount(ownKeys);
+}
+
+nlohmann::json parseGrant(const nlohmann::json &field) {
+    if (!field.is_string()) return nlohmann::json();
+    const auto raw = crypto::b64decode(field.get<std::string>());
+    if (!raw) return nlohmann::json();
+    auto v = nlohmann::json::parse(*raw, nullptr, false);
+    return v.is_object() ? v : nlohmann::json();
+}
+
+std::int64_t readVersion(const nlohmann::json &grant, const char *field) {
+    return grant.contains(field) && grant[field].is_number() ? grant[field].get<std::int64_t>() : 0;
+}
+
+// Грант копии — свой, но ключи уровня аккаунта (личного состояния и доставки) — более новой версии из двух
+nlohmann::json mergeGrant(const nlohmann::json &own, const nlohmann::json &server) {
+    auto ownGrant = parseGrant(own);
+    const auto serverGrant = parseGrant(server);
+    if (!ownGrant.is_object() || !serverGrant.is_object()) return own;
+    bool changed = false;
+    if (serverGrant.contains("sk") && serverGrant["sk"].is_string()
+        && (!ownGrant.contains("sk") || !ownGrant["sk"].is_string() || readVersion(serverGrant, "skv") > readVersion(ownGrant, "skv"))) {
+        ownGrant["sk"] = serverGrant["sk"];
+        ownGrant["skv"] = serverGrant.contains("skv") ? serverGrant["skv"] : nlohmann::json();
+        changed = true;
+    }
+    if (serverGrant.contains("dk") && serverGrant["dk"].is_string() && readVersion(serverGrant, "gen") > readVersion(ownGrant, "gen")) {
+        ownGrant["dk"] = serverGrant["dk"];
+        ownGrant["gen"] = serverGrant["gen"];
+        changed = true;
+    }
+    return changed ? nlohmann::json(crypto::b64encode(ownGrant.dump())) : own;
+}
+
 } // namespace
 
 nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &server) {
     if (!server.is_object() || server.empty()) return own;
     auto merged = own;
-    if (!hasPlannerKeys(own) && hasPlannerKeys(server)) merged["planner"] = server["planner"];
+    if (own.contains("grant")) merged["grant"] = mergeGrant(own["grant"], server.value("grant", nlohmann::json()));
+    if (pickPlannerKeys(own, server)) merged["planner"] = server["planner"];
     const auto ownCloud = parseArray(own.value("cloud", nlohmann::json()));
     const auto serverCloud = parseArray(server.value("cloud", nlohmann::json()));
     if (!serverCloud.empty()) {
@@ -284,6 +328,36 @@ nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &
         if (!ownHistory.is_object() || size(ownHistory) < size(serverHistory)) merged["history"] = serverHistory;
     }
     return merged;
+}
+
+LinkDomainKeys readLinkDomainKeys(const std::string &stateJson) {
+    LinkDomainKeys out;
+    const auto state = nlohmann::json::parse(stateJson, nullptr, false);
+    if (!state.is_object()) return out;
+    const auto field = [&](const char *name) {
+        if (!state.contains(name)) return nlohmann::json();
+        const auto &raw = state[name];
+        return raw.is_string() ? nlohmann::json::parse(raw.get<std::string>(), nullptr, false) : raw;
+    };
+    const auto isKeys = [](const nlohmann::json &v) {
+        return v.is_object() && v.contains("domain") && v["domain"].is_string() && v.contains("id") && v["id"].is_string()
+            && v.contains("keys") && v["keys"].is_array();
+    };
+    const auto pick = [](const nlohmann::json &v) { return nlohmann::json{{"domain", v["domain"]}, {"id", v["id"]}, {"keys", v["keys"]}}; };
+    if (const auto planner = field("planner"); isKeys(planner)) out.planner = pick(planner).dump();
+    if (const auto cloud = field("cloud"); cloud.is_array()) {
+        auto containers = nlohmann::json::array();
+        for (const auto &c : cloud) {
+            if (isKeys(c)) containers.push_back(pick(c));
+        }
+        if (!containers.empty()) out.cloud = containers.dump();
+    }
+    return out;
+}
+
+void putLinkDomainKeys(nlohmann::json &exported, const nlohmann::json &planner, const nlohmann::json &cloud) {
+    if (planner.is_object()) exported["planner"] = planner.dump();
+    if (cloud.is_array() && !cloud.empty()) exported["cloud"] = cloud.dump();
 }
 
 } // namespace parvane::keybundle

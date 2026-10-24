@@ -394,9 +394,13 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     const desktop = readDesktopSource();
     expect(desktop).toContain(`kV2HistoryLimit = std::size_t(${r.v2History.limit})`);
     expect(desktop).toContain(`state["${r.v2History.exportField}"] = std::move(rows)`);
-    // spec 029: экспорт — формат web 2 (`{linkVersion: 2, v2History}`), материала v1 нет
-    expect(desktop).toContain('const auto exported = WithV2History(nlohmann::json{ { "linkVersion", 2 } }.dump());');
+    // spec 029: экспорт — формат web 2 (`{linkVersion: 2, v2History}`), материала v1 нет; ключи «Плана» и «Облака» —
+    // как у web (`planner`, `cloud`), в обе стороны
+    expect(desktop).toContain('auto base = nlohmann::json{ { "linkVersion", 2 } };');
+    expect(desktop).toContain('const auto exported = WithV2History(base.dump());');
+    expect(desktop).toContain('parvane::keybundle::putLinkDomainKeys(base,');
     expect(desktop).toContain('ImportV2History(stateJson)');
+    expect(desktop).toMatch(/readLinkDomainKeys\(stateJson\);\s+NoteDomainKeys\(keys\.planner, keys\.cloud\);/);
     expect(desktop).toContain('if (group && !known) {');
     expect(desktop).toContain('sm.read = true; // история, а не новые входящие');
     // android (spec 031): выдача и приём — формат web 2, материала v1 нет
@@ -405,8 +409,10 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     expect(android).toContain(`exported["${r.v2History.exportField}"] = std::move(rows)`);
     expect(android).toContain('auto exported = json{{"linkVersion", 2}};');
     expect(android).toContain(`state["${r.v2History.exportField}"]`);
-    expect(android)
-      .toContain('importV2History(downloadDecrypt(box, "file_id", "file_key", "file_nonce")); // LINK-1 п. 8');
+    expect(android).toContain('const auto stateJson = downloadDecrypt(box, "file_id", "file_key", "file_nonce");');
+    expect(android).toContain('importV2History(stateJson); // LINK-1 п. 8');
+    expect(android).toContain('parvane::keybundle::putLinkDomainKeys(exported,');
+    expect(android).toMatch(/readLinkDomainKeys\(stateJson\);\s+noteDomainKeys\(keys\.planner, keys\.cloud\);/);
     expect(android).toContain('if (in.group && !groupKnown(to)) {');
     expect(android).toContain('deferLinkedGroupRow(to, std::move(ev));');
     expect(android).toContain('ev["read"] = out ? row.value("read", false) : true; // история, а не новые входящие');
@@ -1237,15 +1243,15 @@ describe('REVOKE-1: отзыв своего устройства на v2', () =>
     const desktop = readDesktopSource();
     // «Выйти и сменить ключи» — отзыв с ротациями; иначе обычный выход (запись `sign_out`)
     expect(desktop).toMatch(
-      new RegExp('account::revokeDevice\\(\\*t, devStd, pwStd\\)[\\s\\S]{0,1500}'
+      new RegExp('account::revokeDevice\\(\\*t, devStd, pwStd\\)[\\s\\S]{0,2000}'
         + 'rotateKeys \\? s->revokeDevice\\(devStd\\) : s->signOutDevice\\(devStd\\)'),
     );
     expect(desktop).toContain('for (const auto &id : s->ownDevices()) {');
-    // android (spec 031): «Выйти и сменить ключи» — отзыв с ротациями (пароль — session.reauth), иначе обычный выход
+    // android (spec 031): «Выйти и сменить ключи» — отзыв с ротациями, иначе обычный выход; пароль (session.reauth) —
+    // при любом способе, как desktop и web (P-07)
     const android = readAndroidJni('jni_account.cpp');
-    expect(android).toMatch(new RegExp('if \\(rotate != JNI_TRUE\\) \\{\\s+if \\(s->signOutDevice\\(dev\\)\\)'
-      + '[\\s\\S]{0,500}parvane::v2::account::revokeDevice\\(\\*c, dev, jstr\\(env, password\\)\\);'
-      + '[\\s\\S]{0,300}const bool ok = s->revokeDevice\\(dev\\);'));
+    expect(android).toMatch(new RegExp('parvane::v2::account::revokeDevice\\(\\*c, dev, jstr\\(env, password\\)\\);'
+      + '[\\s\\S]{0,400}const bool ok = rotate == JNI_TRUE \\? s->revokeDevice\\(dev\\) : s->signOutDevice\\(dev\\);'));
     expect(android).toContain('for (const auto &id : s->ownDevices()) inLog.insert(id);');
     expect(android).toContain('out["left_devices"] = s->leftSskHolders();');
     // Смена SSK: держатель корня — сам, иначе ключом восстановления (экран устройств)

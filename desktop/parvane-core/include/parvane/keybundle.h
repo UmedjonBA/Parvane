@@ -33,9 +33,22 @@ namespace parvane::keybundle {
 [[nodiscard]] std::string readGrantBundleKey(const std::string &grant);
 // Копия при записи (без групп — их сводит движок, `groupKeysMerge`): своё поверх серверного, а не вместо. Только что
 // вошедшее устройство не стирает из копии «План», «Облако» и историю, которых само ещё не получило. Правила — как
-// web `mergeKeyBundlePayload` (вектор `keybundle-merge.json`): «План» — свой, если есть; «Облако» — объединение по
-// `id`, у общего — с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
+// web `mergeKeyBundlePayload` (вектор `keybundle-merge.json`): грант — свой, но ключ личного состояния (`sk`/`skv`) и
+// ключ доставки (`dk`/`gen`) — более новой версии из двух; «План» — свой, если есть, но серверный при том же
+// контейнере с бо́льшим числом эпох; «Облако» — объединение по `id`, у общего — с бо́льшим числом эпох; история — свой
+// снимок, если он не меньше серверного.
 [[nodiscard]] nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &server);
+
+// Экспорт привязки (LINK-1, формат web `linkHistory.ts`): ключи «Плана» и «Облака» старого устройства — строками JSON
+// движка, как в копии ключей (`plannerKeysImport`/`cloudKeysImport`). Поле может быть строкой либо объектом
+// (прежняя форма); мусор и отсутствующее поле — пустая строка.
+struct LinkDomainKeys {
+    std::string planner;
+    std::string cloud;
+};
+[[nodiscard]] LinkDomainKeys readLinkDomainKeys(const std::string &stateJson);
+// Ключи «Плана» и «Облака» в экспорт привязки (`planner`/`cloud` — ответы движка `plannerKeysExport`/`cloudKeysExport`)
+void putLinkDomainKeys(nlohmann::json &exported, const nlohmann::json &planner, const nlohmann::json &cloud);
 // SHA-256 текста, hex.
 [[nodiscard]] std::string digestHex(const std::string &text);
 

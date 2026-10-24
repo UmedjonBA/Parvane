@@ -364,6 +364,42 @@ fn direct_group_multidevice_and_restore() {
     assert!(texts(&ev).contains(&("group".into(), "alice@local".into(), "группа после восстановления".into())), "{ev:?}");
 }
 
+/// Грант несёт прежние адреса аккаунта (поле `fa`, spec 026): устройство, вошедшее после смены ника, открывает записи
+/// журнала личного состояния, запечатанные под прежним адресом.
+#[test]
+fn link_grant_carries_former_addresses() {
+    use parvane_protocol::host::{apply_grant_former_names, put_grant_former_names};
+    let mut srv = Server::default();
+    let mut alice = Client::new("alice@local", "d1", "local").unwrap();
+    let (reqs, root) = alice.create_identity(10).unwrap();
+    for r in &reqs {
+        srv.handle("alice@local", "d1", r);
+    }
+    let mut material = serde_json::json!({});
+    put_grant_former_names(&alice, &mut material);
+    assert!(material.get("fa").is_none(), "без смены ника поля нет");
+    let plan = alice.rename_prepare(&root.root.to_bytes(), "alicia@local").unwrap();
+    alice.rename_apply(&plan).unwrap();
+    put_grant_former_names(&alice, &mut material);
+    assert_eq!(material["fa"], serde_json::json!(["alice@local"]));
+
+    let mut later = Client::new("alicia@local", "d3", "local").unwrap();
+    apply_grant_former_names(&mut later, &material);
+    assert_eq!(later.state_former_addresses(), vec!["alice@local".to_string()]);
+    // Мусор и свой текущий адрес пропускаются, грант без поля принимается
+    apply_grant_former_names(&mut later, &serde_json::json!({ "fa": ["не адрес", "alicia@local", 5] }));
+    apply_grant_former_names(&mut later, &serde_json::json!({}));
+    assert_eq!(later.state_former_addresses(), vec!["alice@local".to_string()]);
+    // Запись личного состояния под прежним адресом открывается сессией нового устройства
+    let key = parvane_protocol::state::StateKey::generate();
+    let mut clock = parvane_protocol::state::LamportClock::default();
+    let op = parvane_protocol::state::make_op(&mut clock, "d1", 1, parvane_protocol::pb::parvane::state::v1::state_op::Op::QuickReaction(
+        parvane_protocol::pb::parvane::state::v1::QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() })).unwrap();
+    let rec = parvane_protocol::state::seal_op(&key, "alice@local", &op).unwrap();
+    let opened = later.state_former_addresses().iter().find_map(|a| parvane_protocol::state::open_record(&key, a, &rec.op_id, &rec.aead_ciphertext).ok());
+    assert_eq!(opened, Some(op));
+}
+
 /// Грант линковки несёт ключи доступа собеседников (поле `pk`): привязанное
 /// устройство пишет и звонит знакомым по ключу сразу — звонок по слепому жетону
 /// сервер не принимает, а жетонов всего 50 в сутки.
@@ -450,8 +486,8 @@ fn linked_device_gets_groups_from_own_device() {
     // Чужому и своему же устройству пересылать нечего.
     assert!(alice.share_groups_with_own_devices(&["d1".into(), "нет-такого".into()]).unwrap().is_empty());
     let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
-    // ключи эпохи + по сессии Megolm на каждого писавшего (alice, bob)
-    assert_eq!(shared.len(), 3, "пересылок: {}", shared.len());
+    // ключи эпохи + по сессии Megolm на каждого писавшего (alice, bob) + ключ доставки
+    assert_eq!(shared.len(), 4, "пересылок: {}", shared.len());
     let ev = drain(&mut srv, &mut alice2);
     assert!(ev.iter().any(|e| matches!(e, Event::GroupChanged { .. })), "{ev:?} {:?}", alice2.last_error);
     assert_eq!(alice2.group_ids(), vec![g.id.clone()], "{:?}", alice2.last_error);
@@ -1547,7 +1583,7 @@ fn planner_container_shared_with_own_devices_and_rotated_on_revoke() {
     }
     alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
     let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
-    assert_eq!(shared.len(), 1, "ключ контейнера без групп: {}", shared.len());
+    assert_eq!(shared.len(), 2, "ключ доставки и ключ контейнера без групп: {}", shared.len());
     let ev = drain(&mut srv, &mut alice2);
     assert!(ev.iter().any(|e| matches!(e, Event::PlannerChanged { head_seq: 0, .. })), "{ev:?}");
     assert!(!alice2.planner_is_attached());
@@ -1832,7 +1868,7 @@ fn cloud_drive_on_own_devices_and_rotated_on_revoke() {
     }
     alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
     let shared = run_collect(&mut srv, &mut alice, &mut |c| c.share_groups_with_own_devices(&["d2".into()]));
-    assert_eq!(shared.len(), 1, "ключ контейнера облака");
+    assert_eq!(shared.len(), 2, "ключ доставки и ключ контейнера облака");
     let ev = drain(&mut srv, &mut alice2);
     assert!(ev.iter().any(|e| matches!(e, Event::CloudChanged { id: i, .. } if *i == id)), "{ev:?}");
     assert!(!alice2.cloud_is_attached(&id));

@@ -113,7 +113,16 @@ type MergeCase = { name: string; own: KeyBundlePayload; server: Partial<KeyBundl
 describe('слияние копии ключей аккаунта с серверной при записи', () => {
   const file = path.resolve(process.cwd(), '../../proto/parvane/vectors/clients/keybundle-merge.json');
   const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: MergeCase[] };
-  const normalize = (p: KeyBundlePayload) => ({ ...p, cloud: p.cloud ? JSON.parse(p.cloud) as unknown : undefined });
+  const decodeGrant = (grant: string) => {
+    try {
+      return JSON.parse(Buffer.from(grant, 'base64').toString('utf8')) as unknown;
+    } catch {
+      return grant;
+    }
+  };
+  const normalize = (p: KeyBundlePayload) => ({
+    ...p, grant: decodeGrant(p.grant), cloud: p.cloud ? JSON.parse(p.cloud) as unknown : undefined,
+  });
   it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     const server = Object.keys(c.server).length ? c.server : undefined;
     expect(normalize(mergeKeyBundlePayload(c.own, server))).toEqual(normalize(c.merged));

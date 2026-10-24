@@ -35,6 +35,23 @@ class ClientHonestUiTest {
         return f.readText()
     }
 
+    // P-07: завершение сеансов с экрана устройств X — только с паролем, введённым сейчас, при любом способе выхода
+    @Test
+    fun sessionTerminationAsksPassword() {
+        val src = clientSource()
+        val handlers = src.substringAfter("is TdApi.TerminateSession ->").substringBefore("is TdApi.GetBlockedMessageSenders")
+        assertTrue("TerminateSession/TerminateAllOtherSessions — через terminateDevices", handlers.contains("terminateDevices(") &&
+            handlers.contains("is TdApi.TerminateAllOtherSessions -> terminateDevices("))
+        assertTrue("пароль процесса для завершения сеансов не используется", !handlers.contains("sessionPassword"))
+        val fn = src.substringAfter("private fun terminateDevices(").substringBefore("private fun deletionDate")
+        assertTrue("пароль и способ спрашивает окно", fn.contains("askTerminate(") && fn.contains("a.password") && fn.contains("a.rotate"))
+        val jni = listOf(File("../jni/jni_account.cpp"), File("jni/jni_account.cpp")).firstOrNull { it.exists() }
+            ?: throw AssertionError("нет jni_account.cpp")
+        val revoke = jni.readText().substringAfter("Java_org_parvane_core_ParvaneCore_nativeRevokeDevice").substringBefore("JNIEXPORT")
+        assertTrue("пароль проверяется до выхода любым способом",
+            revoke.indexOf("account::revokeDevice(") in 0 until revoke.indexOf("signOutDevice("))
+    }
+
     @Test
     fun everyManagementFunctionHasHandler() {
         val src = clientSource()

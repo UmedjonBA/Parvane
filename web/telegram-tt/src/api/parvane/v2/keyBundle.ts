@@ -11,6 +11,8 @@
 // Ключ копии устройство хранит у себя (сам ключ восстановления — нет) и передаёт
 // привязанным устройствам, чтобы любое из них могло обновить копию.
 
+import { base64ToBytes, bytesToBase64 } from './base64';
+
 const MAGIC = [0x50, 0x56, 0x4b, 0x42];
 const VERSION = 1;
 const NONCE_LEN = 12;
@@ -58,17 +60,75 @@ function hasPlannerKeys(text: string | undefined) {
   return Boolean(text) && text !== 'null';
 }
 
+function parsePlannerKeys(text: string | undefined): DomainKeysJson | undefined {
+  if (!hasPlannerKeys(text)) return undefined;
+  try {
+    const value = JSON.parse(text!) as unknown;
+    return value && typeof value === 'object' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Брать ли «План» с сервера: своего нет либо у серверного того же контейнера больше эпох ключа. */
+function pickPlannerKeys(own: string | undefined, server: string | undefined) {
+  if (!hasPlannerKeys(server)) return false;
+  if (!hasPlannerKeys(own)) return true;
+  const ownKeys = parsePlannerKeys(own);
+  const serverKeys = parsePlannerKeys(server);
+  return Boolean(ownKeys && serverKeys && ownKeys.id === serverKeys.id
+    && (serverKeys.keys?.length || 0) > (ownKeys.keys?.length || 0));
+}
+
+type GrantJson = Record<string, unknown>;
+
+function parseGrant(text: string | undefined): GrantJson | undefined {
+  if (!text) return undefined;
+  try {
+    const value = JSON.parse(new TextDecoder().decode(base64ToBytes(text))) as unknown;
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as GrantJson : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readVersion(grant: GrantJson, field: string) {
+  return typeof grant[field] === 'number' ? grant[field] : 0;
+}
+
+/** Грант копии — свой, но ключи уровня аккаунта (личного состояния и доставки) — более новой версии из двух. */
+function mergeGrant(own: string, server: string | undefined): string {
+  const ownGrant = parseGrant(own);
+  const serverGrant = parseGrant(server);
+  if (!ownGrant || !serverGrant) return own;
+  let isChanged = false;
+  if (typeof serverGrant.sk === 'string'
+    && (typeof ownGrant.sk !== 'string' || readVersion(serverGrant, 'skv') > readVersion(ownGrant, 'skv'))) {
+    ownGrant.sk = serverGrant.sk;
+    ownGrant.skv = serverGrant.skv;
+    isChanged = true;
+  }
+  if (typeof serverGrant.dk === 'string' && readVersion(serverGrant, 'gen') > readVersion(ownGrant, 'gen')) {
+    ownGrant.dk = serverGrant.dk;
+    ownGrant.gen = serverGrant.gen;
+    isChanged = true;
+  }
+  return isChanged ? bytesToBase64(encoder.encode(JSON.stringify(ownGrant))) : own;
+}
+
 /**
  * Копия ключей аккаунта при записи (без групп — их сводит движок, `groupKeysMerge`): своё плюс то, чего у устройства
  * ещё нет, с сервера. Только что вошедшее устройство не должно стирать из копии «План», «Облако» и историю, которые
  * само ещё не получило, — иначе следующее новое устройство видело бы их через минуты (отзыв 23–24 окт 2026).
- * Правила (общие с ядром, вектор `keybundle-merge.json`): «План» — свой, если есть; «Облако» — объединение по `id`,
- * у общего — с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
+ * Правила (общие с ядром, вектор `keybundle-merge.json`): грант — свой, но ключ личного состояния (`sk`/`skv`) и ключ
+ * доставки (`dk`/`gen`) — более новой версии из двух (отставшее устройство не откатывает их у следующих); «План» —
+ * свой, если есть, но серверный при том же контейнере с бо́льшим числом эпох; «Облако» — объединение по `id`, у общего —
+ * с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
  */
 export function mergeKeyBundlePayload(own: KeyBundlePayload, server?: Partial<KeyBundlePayload>): KeyBundlePayload {
   if (!server) return own;
-  const merged: KeyBundlePayload = { ...own };
-  if (!hasPlannerKeys(own.planner) && hasPlannerKeys(server.planner)) merged.planner = server.planner;
+  const merged: KeyBundlePayload = { ...own, grant: mergeGrant(own.grant, server.grant) };
+  if (pickPlannerKeys(own.planner, server.planner)) merged.planner = server.planner;
   const ownCloud = parseDomainKeys(own.cloud);
   const serverCloud = parseDomainKeys(server.cloud);
   if (serverCloud.length) {

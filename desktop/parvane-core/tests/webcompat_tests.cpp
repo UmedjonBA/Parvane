@@ -132,12 +132,31 @@ static void keyBundle() {
     check(kb::withBundleKey(R"({"ssk":"00"})", "QUJD") == R"({"bk":"QUJD","ssk":"00"})", "keybundle: ключ копии в грант (поле bk)");
     check(kb::readGrantBundleKey(R"({"bk":"QUJD"})") == "QUJD", "keybundle: ключ копии из гранта");
     check(json::parse(kb::withFreshLog(R"({"log":"aa"})", std::string("\x01\xff", 2)))["log"] == "01ff", "keybundle: свежий журнал (hex)");
+    // Экспорт привязки: ключи «Плана» и «Облака» — строками JSON движка (как пишет web) и прежней формой объекта
+    {
+        const auto planner = json{{"domain", "local"}, {"id", "aa"}, {"keys", json::array({json::array({1, "k1"})})}};
+        const auto cloud = json::array({json{{"domain", "local"}, {"id", "c1"}, {"keys", json::array()}}, json{{"id", 5}}});
+        json exported{{"linkVersion", 2}};
+        kb::putLinkDomainKeys(exported, planner, cloud);
+        check(exported["planner"].is_string() && exported["cloud"].is_string(), "keybundle: ключи доменов в экспорт привязки строками");
+        const auto read = kb::readLinkDomainKeys(exported.dump());
+        check(json::parse(read.planner, nullptr, false) == planner, "keybundle: «План» из экспорта привязки");
+        check(json::parse(read.cloud, nullptr, false) == json::array({cloud[0]}), "keybundle: «Облако» из экспорта привязки, мусор отброшен");
+        const auto legacy = kb::readLinkDomainKeys(json{{"planner", planner}}.dump());
+        check(json::parse(legacy.planner, nullptr, false) == planner && legacy.cloud.empty(), "keybundle: «План» объектом (прежняя форма)");
+        check(kb::readLinkDomainKeys(R"({"linkVersion":2,"planner":"null","cloud":"[]"})").planner.empty(), "keybundle: пустой экспорт — без ключей");
+    }
     // Слияние при записи — общие с web случаи: копия не «беднеет» от только что вошедшего устройства
     const auto merge = json::parse(readText(vectorPath("keybundle-merge.json")), nullptr, false);
     check(merge.is_object() && merge["cases"].is_array() && merge["cases"].size() >= 4, "keybundle: вектор слияния есть");
     if (merge.is_object()) {
         const auto normalize = [](json p) {
             if (p.contains("cloud") && p["cloud"].is_string()) p["cloud"] = json::parse(p["cloud"].get<std::string>(), nullptr, false);
+            if (p.contains("grant") && p["grant"].is_string()) {
+                const auto raw = parvane::crypto::b64decode(p["grant"].get<std::string>());
+                const auto grant = raw ? json::parse(*raw, nullptr, false) : json();
+                if (grant.is_object()) p["grant"] = grant;
+            }
             return p;
         };
         for (const auto &c : merge["cases"]) {

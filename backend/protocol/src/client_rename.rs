@@ -25,6 +25,27 @@ impl Client {
         self.former_own.iter().map(|(_, log)| log.user.clone()).collect()
     }
 
+    /// Прежние адреса для журнала личного состояния: с журналами (устройство было при смене ника) и только по имени
+    /// (из гранта — устройство вошло позже).
+    pub fn state_former_addresses(&self) -> Vec<String> {
+        let mut out = self.former_addresses();
+        for a in &self.former_names {
+            if !out.contains(a) && *a != self.user {
+                out.push(a.clone());
+            }
+        }
+        out
+    }
+
+    /// Прежние адреса из гранта своего устройства (`join_with_grant`): негодные и свой текущий пропускаются.
+    pub fn adopt_former_names(&mut self, names: &[String]) {
+        for a in names.iter().filter(|a| crate::address::is_valid_address(a) && **a != self.user) {
+            if self.former_names.len() < MAX_FORMER_NAMES && !self.former_names.contains(a) {
+                self.former_names.push(a.clone());
+            }
+        }
+    }
+
     /// Прочие адреса личности `user` (смена ника): для своей — прежние и текущий, для собеседника — цепочка
     /// проверенных журналов (`Rename` в старом ведёт на генезис нового с тем же корнем).
     pub fn aliases_of(&self, user: &str) -> Vec<String> {

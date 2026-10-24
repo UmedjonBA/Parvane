@@ -304,7 +304,15 @@ try {
   assert.equal(accepted.user, alice1.address);
   await waitLog(alice2, /устройство привязано ключом восстановления \(прежние устройства остались\)/, JOIN_TIMEOUT_MS);
   await waitLog(alice2, /v2: готов/, JOIN_TIMEOUT_MS);
-  await devices.locator('[data-telegram-recovery="done"]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  // Экран «Устройства», открытый сам из-за непривязанности, после входа закрывается (событие `parvane-device-joined`);
+  // если он ещё на месте — на нём отметка «готово»
+  const doneDeadline = Date.now() + STEP_TIMEOUT_MS;
+  // eslint-disable-next-line no-await-in-loop
+  while (!(await devices.locator('[data-telegram-recovery="done"]').isVisible()) && await devices.isVisible()) {
+    if (Date.now() > doneDeadline) throw new Error('после входа экран «Устройства» не закрылся и не показал «готово»');
+    // eslint-disable-next-line no-await-in-loop
+    await alice2.page.waitForTimeout(300);
+  }
   await shoot(alice2.page, 'devices-done-wide');
   console.log('OK: новое устройство вошло по ответу боту, первое устройство выключено');
   await closeSettings(alice2.page);

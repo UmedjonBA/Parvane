@@ -367,6 +367,8 @@ const GROUPS_RESHARED_RECORD = 'v2-groups-reshared-v1';
 const ROOT_BACKUP_RECORD = 'v2-root-backup';
 // Какая копия корня уже лежит на сервере (чтобы не слать при каждом запуске)
 const ROOT_BACKUP_SENT_RECORD = 'v2-root-backup-sent';
+// Копия корня, полученная грантом (не этим устройством выпущенная): на сервер не пишется
+const ROOT_BACKUP_RECEIVED_RECORD = 'v2-root-backup-received';
 // Копия корня, запечатанная ключом администратора сервера (страховка: потеряны
 // и устройства, и ключ восстановления)
 const ROOT_ESCROW_RECORD = 'v2-root-escrow';
@@ -1088,6 +1090,12 @@ export function createV2Controller(deps: Deps) {
     if (join.rootBackup) {
       rootBackupB64 = join.rootBackup;
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
+      if (!join.recoveryKey) {
+        // Копию корня, полученную грантом (не созданную здесь вместе с аккаунтом), устройство на сервер не пишет:
+        // она могла устареть (копию перевыпустили), а запись другой копии стирает на сервере и копию ключей аккаунта
+        await storage.saveRecord(ROOT_BACKUP_SENT_RECORD, rootBackupB64);
+        await storage.saveRecord(ROOT_BACKUP_RECEIVED_RECORD, rootBackupB64);
+      }
     }
     if (join.bundleKey) {
       bundleKeyB64 = join.bundleKey;
@@ -1662,6 +1670,7 @@ export function createV2Controller(deps: Deps) {
     ready = false;
     if (storage) await deleteEngineState(storage);
     await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(ROOT_BACKUP_RECEIVED_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
@@ -1733,8 +1742,12 @@ export function createV2Controller(deps: Deps) {
     // Без копии для администратора отметка — прежнего вида (сама копия корня)
     const sent = escrow ? `${rootBackupB64}|${escrow}` : rootBackupB64;
     if (await storage.loadRecord<string>(ROOT_BACKUP_SENT_RECORD) === sent) return;
+    // Полученная грантом копия корня не пишется (только страховка для администратора, если есть)
+    const isReceived = await storage.loadRecord<string>(ROOT_BACKUP_RECEIVED_RECORD) === rootBackupB64;
+    if (isReceived && !escrow) return;
     await call('id', 'identity.root.backup_set', pv.encodeMessage(
-      'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ backup: rootBackupB64, escrow }),
+      'parvane.identity.v2.RootBackupSetRequest',
+      JSON.stringify({ backup: isReceived ? undefined : rootBackupB64, escrow }),
     ));
     await storage.saveRecord(ROOT_BACKUP_SENT_RECORD, sent);
   }
@@ -2550,8 +2563,10 @@ export function createV2Controller(deps: Deps) {
       deps.log('v2: SSK сменён корнем');
       // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
       await rememberBundleKey(recoveryKey);
-      void refreshKeyBundle(true);
-      void uploadRootBackup().catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`));
+      // Сначала копия корня, потом копия ключей: запись другой копии корня стирает на сервере копию ключей
+      void uploadRootBackup()
+        .catch((e: unknown) => deps.log(`v2: копия корня на сервер не ушла: ${String(e)}`))
+        .then(() => refreshKeyBundle(true));
       return 'ok';
     } catch (e) {
       deps.log(`v2: смена SSK не удалась: ${String(e)}`);

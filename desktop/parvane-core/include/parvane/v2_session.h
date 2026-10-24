@@ -655,6 +655,11 @@ private:
     // смены, если ключ менял это устройство) либо локальное состояние хоста.
     bool stateRekeyed_ = false;
     std::optional<json> stateCarry_;
+    // Ключ сменило другое своё устройство (`stateKeyRotated`): его записей под новым ключом может ещё не быть —
+    // локальное не переносим (оно перебило бы перенос того устройства), хосту снимка не отдаём, журнал переподключаем
+    // позже (как web `attach(…, 'peer')`)
+    bool stateRekeyPeer_ = false;
+    int stateRekeyPeerTries_ = 0; // повторов без записей; после потолка — перенос своего (журнал под ключом пуст)
     std::deque<std::string> pendingAppends_;
     std::atomic<bool> ready_{false};
     std::atomic<bool> needsLinking_{false};

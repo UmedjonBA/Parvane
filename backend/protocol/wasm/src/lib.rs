@@ -282,6 +282,7 @@ impl PvClient {
             m["skv"] = json!(v);
         }
         m["pk"] = parvane_protocol::host::grant_peer_keys(&self.inner);
+        parvane_protocol::host::put_grant_former_names(&self.inner, &mut m);
         Ok(m.to_string().into_bytes())
     }
 
@@ -300,6 +301,7 @@ impl PvClient {
             self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
         }
         parvane_protocol::host::apply_grant_peer_keys(&mut self.inner, &v);
+        parvane_protocol::host::apply_grant_former_names(&mut self.inner, &v);
         Ok(reqs_js(&reqs))
     }
 
@@ -1398,7 +1400,7 @@ impl PvClient {
         let (k, _) = self.inner.state_key()?;
         Some(PvState {
             user: self.inner.user.clone(),
-            former: self.inner.former_addresses(),
+            former: self.inner.state_former_addresses(),
             device_id: self.inner.device_id.clone(),
             key: k.clone(),
             state: parvane_protocol::state::PersonalState::new(),

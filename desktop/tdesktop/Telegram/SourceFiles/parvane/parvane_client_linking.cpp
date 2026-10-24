@@ -1,6 +1,8 @@
 // Parvane fork: привязка устройства (LINK-1), история при линковке, копия ключей (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
 
+#include <parvane/keybundle.h>
+
 namespace Parvane {
 
 // ── Авто-линковка истории (паритет web provider.ts / linking.ts) ─────────────
@@ -414,6 +416,9 @@ bool PollLinkGrantOnce() {
 	}
 	LOG(("Parvane: линковка: экспорт получен"));
 	ImportV2History(stateJson); // LINK-1 п. 8: история v2-эпохи
+	// spec 010/016: ключи «Плана» и «Облака» старого устройства — разделы открываются сразу после привязки
+	const auto keys = parvane::keybundle::readLinkDomainKeys(stateJson);
+	NoteDomainKeys(keys.planner, keys.cloud);
 	return true;
 }
 
@@ -447,8 +452,19 @@ void GrantLink(const QString &deviceId, const QString &ephPub, const QString &si
 		return;
 	}
 	try {
-		// Экспорт линковки — формат web 2: история v2-эпохи (LINK-1 п. 8), ключи — грантом движка
-		const auto exported = WithV2History(nlohmann::json{ { "linkVersion", 2 } }.dump());
+		// Экспорт линковки — формат web 2: история v2-эпохи (LINK-1 п. 8), ключи «Плана» и «Облака» (spec 010/016),
+		// ключи устройства — грантом движка
+		auto base = nlohmann::json{ { "linkVersion", 2 } };
+		if (const auto s = V2Ready()) {
+			try {
+				parvane::keybundle::putLinkDomainKeys(base,
+					s->engineCall("plannerKeysExport", nlohmann::json::object()),
+					s->engineCall("cloudKeysExport", nlohmann::json::object()));
+			} catch (const std::exception &e) {
+				LOG(("Parvane: линковка: ключи разделов не приложены: %1").arg(QString::fromUtf8(e.what())));
+			}
+		}
+		const auto exported = WithV2History(base.dump());
 		auto enc = parvane::blobcrypt::encrypt(exported);
 		const auto fileId = t->uploadBlob(enc.ciphertext);
 		parvane::json boxPlain = {{"file_id", fileId},

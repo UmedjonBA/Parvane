@@ -124,6 +124,72 @@
         "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}",
         "cloud": "[]"
       }
+    },
+    {
+      "name": "грант: ключи состояния и доставки на сервере новее — берутся серверные, остальное своё",
+      "own": {
+        "grant": "eyJzc2siOiJmZiIsImxvZyI6IjAxIiwic2siOiJhYSIsInNrdiI6MSwiZGsiOiJkMSIsImdlbiI6MX0="
+      },
+      "server": {
+        "grant": "eyJzc2siOiJlZSIsImxvZyI6IjAyIiwic2siOiJiYiIsInNrdiI6MiwiZGsiOiJkMiIsImdlbiI6M30="
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiIsImxvZyI6IjAxIiwic2siOiJiYiIsInNrdiI6MiwiZGsiOiJkMiIsImdlbiI6M30="
+      }
+    },
+    {
+      "name": "грант: свои ключи новее — грант свой",
+      "own": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiYWEiLCJza3YiOjMsImRrIjoiZDEiLCJnZW4iOjJ9"
+      },
+      "server": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiYmIiLCJza3YiOjIsImRrIjoiZDIiLCJnZW4iOjF9"
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiYWEiLCJza3YiOjMsImRrIjoiZDEiLCJnZW4iOjJ9"
+      }
+    },
+    {
+      "name": "грант: своего ключа состояния нет — серверный",
+      "own": {
+        "grant": "eyJzc2siOiJmZiIsImRrIjoiZDEiLCJnZW4iOjF9"
+      },
+      "server": {
+        "grant": "eyJzc2siOiJmZiIsInNrIjoiYmIiLCJza3YiOjEsImRrIjoiZDEiLCJnZW4iOjF9"
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiIsImRrIjoiZDEiLCJnZW4iOjEsInNrIjoiYmIiLCJza3YiOjF9"
+      }
+    },
+    {
+      "name": "«План»: тот же контейнер, у серверного больше эпох — серверный",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}"
+      },
+      "server": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"],[2,\"k2\"]]}"
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"],[2,\"k2\"]]}"
+      }
+    },
+    {
+      "name": "«План»: у сервера другой контейнер — свой",
+      "own": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}"
+      },
+      "server": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"bb\",\"keys\":[[1,\"k1\"],[2,\"k2\"]]}"
+      },
+      "merged": {
+        "grant": "eyJzc2siOiJmZiJ9",
+        "planner": "{\"domain\":\"local\",\"id\":\"aa\",\"keys\":[[1,\"k1\"]]}"
+      }
     }
   ]
 }

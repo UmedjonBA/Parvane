@@ -39,6 +39,9 @@ constexpr int kStateSyncPages = 1000;
 constexpr std::int64_t kEpochRetryMs = 11000;
 // Проверка расписания партии жетонов (FR-063): срок задаёт движок, здесь — шаг.
 constexpr std::int64_t kTokenCheckMs = 60 * 60 * 1000;
+// Ключ личного состояния сменён другим устройством, его записей ещё нет: повтор подключения журнала
+constexpr std::int64_t kStateRekeyRetryMs = 8000;
+constexpr int kStateRekeyRetries = 15;
 // Партия меньше суточной квоты: квота на аккаунт, её делят все его устройства.
 constexpr std::size_t kTokenBatch = 20;
 // Квота — на аккаунт и сутки: если партия целиком в остаток не влезает (его
@@ -628,6 +631,10 @@ bool Session::connectLocked(std::string *error) {
                     writeStateFile("device", auth.deviceId);
                     if (const auto backup = grantRootBackup(linkMaterial_); !backup.empty()) {
                         writeStateFile("root-backup", backup);
+                        // Полученную копию корня устройство на сервер не пишет: она могла устареть (копию
+                        // перевыпустили), а запись другой копии стирает на сервере и копию ключей аккаунта
+                        writeStateFile("root-backup-sent", toBase64(backup));
+                        writeStateFile("root-backup-received", toBase64(backup));
                     }
                     // Ключ копии ключей аккаунта (spec 015): и это устройство обновляет копию
                     if (const auto bk = keybundle::readGrantBundleKey(linkMaterial_); !bk.empty()) {
@@ -1475,7 +1482,7 @@ void Session::dropIdentityLocked() {
     client_.reset();
     state_.reset();
     pendingAppends_.clear();
-    for (const char *name : {"state", "root", "root-backup", "root-backup-sent", "own-devices", "state-migrated"}) {
+    for (const char *name : {"state", "root", "root-backup", "root-backup-sent", "root-backup-received", "own-devices", "state-migrated"}) {
         std::remove((cfg_.stateDir + "/" + name).c_str());
     }
     needsLinking_ = true;
@@ -1490,8 +1497,11 @@ void Session::uploadRootBackupLocked() {
     // Без копии для администратора отметка — прежнего вида (сама копия корня)
     const auto mark = escrow.empty() ? b64 : b64 + "|" + toBase64(escrow);
     if (readStateFile("root-backup-sent") == mark) return;
-    json req{{"backup", b64}};
+    json req = json::object();
+    // Полученная грантом копия корня не пишется (только страховка для администратора, если есть)
+    if (readStateFile("root-backup-received") != b64) req["backup"] = b64;
     if (!escrow.empty()) req["escrow"] = toBase64(escrow);
+    if (req.empty()) return;
     call(false, "identity.root.backup_set", encodeMessage("parvane.identity.v2.RootBackupSetRequest", req));
     writeStateFile("root-backup-sent", mark);
 }
@@ -1810,12 +1820,13 @@ std::string Session::rotateSsk(const std::string &recoveryKey) {
         if (!recoveryKey.empty()) {
             // Новый SSK — в копию ключей аккаунта (ключ восстановления сейчас в руках)
             rememberBundleKeyLocked(recoveryKey);
-            refreshKeyBundleLocked(true);
+            // Сначала копия корня, потом копия ключей: запись другой копии корня стирает на сервере копию ключей
             try {
                 uploadRootBackupLocked();
             } catch (const std::exception &e) {
                 log(std::string("копия корня на сервер не ушла: ") + e.what());
             }
+            refreshKeyBundleLocked(true);
         }
     } catch (const std::exception &e) {
         log(std::string("смена SSK не удалась: ") + e.what());
@@ -1947,7 +1958,7 @@ void Session::absorbLocked(std::vector<json> events) {
             // Своё устройство передало (новый) ключ личного состояния — журнал заново.
             state_.reset();
             pendingAppends_.clear();
-            stateRekeyed_ = true;
+            stateRekeyPeer_ = true;
             outbox_.push_back(json{{"type", "stateReady"}});
             continue;
         }
@@ -3209,6 +3220,24 @@ json Session::stateAttach(const json &local) {
         return nullptr;
     }
     const bool readable = pullStateLocked();
+    if (stateRekeyPeer_ && !readable && !stateRekeyed_ && ++stateRekeyPeerTries_ <= kStateRekeyRetries) {
+        // Записей под новым ключом ещё нет: пустой снимок стёр бы папки и блок-лист у хоста, а своё локальное
+        // перебило бы перенос сменившего ключ устройства — ждём его записей
+        state_.reset();
+        log("журнал состояния: ключ сменён другим устройством, его записей ещё нет — повтор через 8 с");
+        postDelayed(kStateRekeyRetryMs, [this] {
+            {
+                std::lock_guard<std::recursive_mutex> relock(engineMu_);
+                if (!stateRekeyPeer_) return;
+                outbox_.push_back(json{{"type", "stateReady"}});
+            }
+            flush();
+        });
+        return nullptr;
+    }
+    if (stateRekeyPeer_ && !readable) stateRekeyed_ = true; // никто не перенёс за 2 мин — своё (журнал под ключом пуст)
+    stateRekeyPeer_ = false;
+    stateRekeyPeerTries_ = 0;
     if (stateRekeyed_ && !readable) {
         // Ключ состояния сменён, записей под новым ключом ещё нет: пустой снимок
         // стёр бы папки и блок-лист у хоста — переносим состояние под новый ключ.

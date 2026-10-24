@@ -327,6 +327,9 @@ void ImportV2History(const std::string &stateJson);
 } // namespace Internal
 using namespace Internal;
 
+// Ключи «Плана» и «Облака» (копия ключей аккаунта, экспорт привязки) — разделам и в файл (parvane_client.cpp)
+void NoteDomainKeys(const std::string &planner, const std::string &cloud);
+
 // Выход со стиранием (NAT-16): новый вход ждёт его конца и снимает ограду записи хранилища; false — выход ещё
 // идёт (вход отложить). Звать не с главного потока (ждёт до 30 с).
 [[nodiscard]] bool PrepareForLogin();

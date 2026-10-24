@@ -392,6 +392,9 @@ pub struct Client {
     pub last_error: Option<ProtoError>,
     /// spec 026: свои прежние адреса — записи и журнал каждого (закрыт `Rename`).
     former_own: Vec<(Vec<SignedOp>, DeviceLog)>,
+    /// spec 026: свои прежние адреса, известные только по имени (устройство вошло после смены ника — грант их несёт):
+    /// записи журнала личного состояния, запечатанные под прежним адресом, открываются.
+    former_names: Vec<String>,
 }
 
 /// Чей это эфемерный канал (T127).
@@ -439,6 +442,8 @@ fn seen_hash(key: &[u8]) -> SeenHash {
 }
 /// Сколько вытесненных Olm-сессий держать на устройство собеседника.
 const MAX_OLD_SESSIONS: usize = 4;
+/// spec 026: прежних адресов по имени (из гранта) — не больше
+const MAX_FORMER_NAMES: usize = 32;
 
 impl Client {
     /// Новое устройство (свежий Olm-аккаунт, HPKE, ключ доступа к доставке).
@@ -498,6 +503,7 @@ impl Client {
             cloud_authors: BTreeMap::new(),
             last_error: None,
             former_own: vec![],
+            former_names: vec![],
         })
     }
 
@@ -3064,9 +3070,15 @@ impl Client {
             let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
             out.push(OutRequest::anon("msg.deliver_sealed", &r));
         }
+        // Ключи личного состояния и доставки: устройство, вошедшее по устаревшей копии ключей аккаунта, иначе
+        // осталось бы на прежней версии навсегда (рассылка была только при ротации). Принимается лишь более новая.
+        let mut account = vec![self.delivery_key_content()];
+        if let Some((k, v)) = self.state_key.as_ref() {
+            account.push(Content { kind: Some(content::Kind::StateKey(k.to_share(&self.user, *v)?)), ..Default::default() });
+        }
         // Ключ контейнера планировщика (spec 010) — тем же устройствам.
         // … и ключи контейнеров облака (spec 016).
-        for c in self.planner_key_content().into_iter().chain(self.cloud_key_contents_for_own_devices()) {
+        for c in account.into_iter().chain(self.planner_key_content()).chain(self.cloud_key_contents_for_own_devices()) {
             let o = SealOpts { op_id: sign::new_op_id(), ts_ms: now_ms(), l2: self.direct_must_pad(&me) };
             let r = self.seal_for_opts(&me, &own, &me, &c, Access::DeliveryKey(self.dk.key().to_vec()), o)?;
             if !r.envelopes.is_empty() {
@@ -3455,6 +3467,7 @@ impl Client {
             ssk: self.ssk.as_ref().map(|k| b(&k.to_bytes())),
             own_entries: self.own_entries.iter().map(|e| b(&e.encode_to_vec())).collect(),
             former_own: self.former_own.iter().map(|(entries, log)| (log.user.clone(), entries.iter().map(|e| b(&e.encode_to_vec())).collect())).collect(),
+            former_names: self.former_names.clone(),
             my_cert: self.my_cert.as_ref().map(|c| b(&c.encode_to_vec())),
             cert_serial: self.cert_serial,
             peers: self
@@ -3572,6 +3585,7 @@ impl Client {
             }
             c.former_own.push((ops, log));
         }
+        c.former_names = p.former_names.iter().filter(|a| crate::address::is_valid_address(a)).take(MAX_FORMER_NAMES).cloned().collect();
         c.my_cert = p.my_cert.as_deref().map(|s| d(s).and_then(|b| SignedDeviceCertificate::decode(b.as_slice()).map_err(|_| ProtoError::Malformed))).transpose()?;
         c.cert_serial = p.cert_serial;
         for (u, r) in &p.trust {
@@ -3820,6 +3834,8 @@ struct Persisted {
     /// spec 026: свои прежние адреса и их журналы.
     #[serde(default)]
     former_own: Vec<(String, Vec<String>)>,
+    #[serde(default)]
+    former_names: Vec<String>,
     my_cert: Option<String>,
     cert_serial: u64,
     peers: Vec<PersistedPeer>,

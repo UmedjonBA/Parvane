@@ -7975,11 +7975,17 @@ int StopTelegramRecovery(TelegramRecoveryState state) {
 	return AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q);
 }
 
+// Сверки с копией ключей аккаунта идут из разных потоков (событие сессии, повторы после входа по ключу, экспорт
+// привязки): отметка применённого снимка истории и файл ключей разделов — по одной, иначе история импортировалась бы
+// дважды, а ключ мог потеряться
+std::recursive_mutex g_bundleMutex;
+
 // Снимок истории из копии ключей аккаунта: owner-блоб облака, зашифрованный JSON {linkVersion, v2History}.
 void ApplyBundleHistory(const nlohmann::json &history, const QString &owner) {
 	if (!history.is_object() || SelfAddress() != owner) {
 		return;
 	}
+	std::lock_guard<std::recursive_mutex> bundleLock(g_bundleMutex);
 	const auto mark = QString::fromStdString(history.value("mark", std::string()));
 	if (!mark.isEmpty() && QString::fromUtf8(StoreRead(AppliedBundleMarkPath(owner))) == mark) {
 		return;
@@ -8018,6 +8024,7 @@ void SyncFromKeyBundle() {
 	if (!s || owner.isEmpty()) {
 		return;
 	}
+	std::lock_guard<std::recursive_mutex> bundleLock(g_bundleMutex);
 	// Рабочий поток без перехвата выше: поле копии не того вида (`value` бросает) не должно ронять приложение
 	try {
 		const auto bundle = s->fetchKeyBundle();
@@ -8193,6 +8200,7 @@ void StartTelegramRecovery(bool again) {
 // Ключи «Плана» и «Облака» из копии ключей аккаунта ждут своих разделов (их синхронизация — в ядре, spec 029
 // этап 4): файл в tdata, разделы забирают его при подключении.
 void NoteDomainKeys(const std::string &planner, const std::string &cloud) {
+	std::lock_guard<std::recursive_mutex> bundleLock(g_bundleMutex);
 	if (planner.empty() && (cloud.empty() || cloud == "[]" || cloud == "null")) {
 		return;
 	}
