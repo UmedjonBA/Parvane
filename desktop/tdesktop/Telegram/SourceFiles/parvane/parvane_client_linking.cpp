@@ -640,6 +640,9 @@ void ScheduleLinkOffersPoll() {
 	crl::on_main([] {
 		base::call_delayed(kLinkOffersPollMs, [] {
 			if (!SessionActive()) {
+				// Цепочка остановлена — следующий вход (в том же процессе) запустит опрос заново
+				std::lock_guard<std::mutex> lk(g_sessionMutex);
+				g_linkOffersPolling = false;
 				return;
 			}
 			crl::async([] {

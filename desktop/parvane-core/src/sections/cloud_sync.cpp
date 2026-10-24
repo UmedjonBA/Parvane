@@ -398,7 +398,12 @@ void CloudSync::discover() {
         if (owner == self && entry == entries.end()) continue;
         if (!isAttached(id)) {
             lost_.erase(id);
-            attach(id);
+            // Один не подключившийся контейнер не останавливает остальные (раньше исключение обрывало весь обход)
+            try {
+                attach(id);
+            } catch (const std::exception &e) {
+                t_.log("облако: контейнер " + shortId(id) + " не подключён: " + e.what());
+            }
         }
     }
     // Подключённый чужой контейнер пропал из списка — доступ отозван
@@ -409,6 +414,9 @@ void CloudSync::discover() {
     int own_count = 0;
     for (const auto &p : onServer) own_count += p.second == self;
     ownOnServer_ = own_count;
+    ownWithoutEntry_ = static_cast<int>(std::count_if(onServer.begin(), onServer.end(), [&](const auto &p) {
+        return p.second == self && std::none_of(entries.begin(), entries.end(), [&](const CloudStateEntry &e) { return e.id == p.first; });
+    }));
     isDiscovered_ = true;
 }
 
@@ -449,6 +457,14 @@ std::optional<std::string> CloudSync::ensureRoot(bool createIfMissing) {
         return std::nullopt;
     }
     if (!createIfMissing) return std::nullopt;
+    // Новый диск — только когда его точно нет: свой контейнер без записи журнала состояния может оказаться диском,
+    // запись которого ещё не дочитана. Второй диск с меньшим id подменил бы настоящий на всех устройствах
+    discover();
+    if (rootId()) return ensureRoot(false);
+    if (ownWithoutEntry_ > 0) {
+        t_.log("облако: личный диск не создан — на сервере есть свой контейнер без записи журнала состояния");
+        throw d::BusError("ERROR_CODE_UNAVAILABLE");
+    }
     return createContainer("root", "");
 }
 
@@ -941,6 +957,8 @@ void CloudSync::leaveNow(const std::string &id) {
 }
 
 void CloudSync::leave(const std::string &id) {
+    // Покинуть можно только чужую папку: своя «покинутая» исчезла бы на всех своих устройствах (запись `removed`)
+    if (const auto c = findEngine(id); c && c->owner == t_.self()) throw d::BusError("ERROR_CODE_INVALID");
     std::optional<CloudStateEntry> entry;
     for (const auto &e : liveEntries()) {
         if (e.id == id) entry = e;
@@ -1066,6 +1084,7 @@ void CloudSync::reset() {
     isDirty_ = false;
     revision_ += 1;
     ownOnServer_.reset();
+    ownWithoutEntry_ = 0;
     lastError_.reset();
 }
 

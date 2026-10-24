@@ -89,6 +89,10 @@ impl Client {
     /// Ключи подписи устройств своего аккаунта → автор (кэш переживает отзыв
     /// устройства: операции отозванного в истории остаются читаемыми).
     fn planner_author_map(&mut self) -> HashMap<[u8; 32], DomainAuthor> {
+        // Вышедшие сами устройства — тоже (см. `cloud_author_map`)
+        for e in self.own_log.eras.iter().filter(|e| !e.revoked) {
+            self.planner_authors.entry(e.key).or_insert_with(|| e.device_id.clone());
+        }
         for (id, d) in &self.own_log.devices {
             if let Ok(k) = d.olm_ed25519() {
                 self.planner_authors.insert(k, id.clone());

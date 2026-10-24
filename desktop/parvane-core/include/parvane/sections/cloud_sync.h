@@ -216,6 +216,8 @@ private:
     bool isDirty_ = false;
     std::uint64_t revision_ = 0;
     std::optional<int> ownOnServer_;
+    // Свои контейнеры на сервере без записи журнала состояния (по последнему обходу): новый диск при них не заводим
+    int ownWithoutEntry_ = 0;
     std::optional<std::string> lastError_;
 };
 

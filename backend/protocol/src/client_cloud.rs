@@ -130,6 +130,11 @@ impl Client {
         let logs = std::iter::once((&me, &self.own_log)).chain(self.peers.iter().filter_map(|(u, p)| p.log.as_ref().map(|l| (u, l))));
         let mut fresh = vec![];
         for (user, log) in logs {
+            // Устройства, вышедшие сами (не отозванные чужой рукой), остаются авторами своих прежних операций: иначе
+            // новое устройство не подключало контейнер, созданный ушедшим устройством (кэш есть только у старых)
+            for e in log.eras.iter().filter(|e| !e.revoked) {
+                fresh.push((e.key, user.clone(), e.device_id.clone()));
+            }
             for (id, d) in &log.devices {
                 if let Ok(k) = d.olm_ed25519() {
                     fresh.push((k, user.clone(), id.clone()));

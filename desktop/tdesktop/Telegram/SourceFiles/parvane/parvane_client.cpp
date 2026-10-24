@@ -8018,18 +8018,23 @@ void SyncFromKeyBundle() {
 	if (!s || owner.isEmpty()) {
 		return;
 	}
-	const auto bundle = s->fetchKeyBundle();
-	if (!bundle.is_object() || SelfAddress() != owner) {
-		return;
+	// Рабочий поток без перехвата выше: поле копии не того вида (`value` бросает) не должно ронять приложение
+	try {
+		const auto bundle = s->fetchKeyBundle();
+		if (!bundle.is_object() || SelfAddress() != owner) {
+			return;
+		}
+		NoteDomainKeys(bundle.value("planner", std::string()), bundle.contains("cloud")
+			? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump())
+			: std::string());
+		// Группы — и здесь, а не только при «успешном» ответе входа по ключу: вход мог завершиться повтором в фоне
+		if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) {
+			s->applyBundleGroups(groups);
+		}
+		ApplyBundleHistory(bundle.value("history", nlohmann::json()), owner);
+	} catch (const std::exception &e) {
+		LOG(("Parvane: копия ключей аккаунта не применена: %1").arg(QString::fromUtf8(e.what())));
 	}
-	NoteDomainKeys(bundle.value("planner", std::string()), bundle.contains("cloud")
-		? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump())
-		: std::string());
-	// Группы — и здесь, а не только при «успешном» ответе входа по ключу: вход мог завершиться повтором в фоне
-	if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) {
-		s->applyBundleGroups(groups);
-	}
-	ApplyBundleHistory(bundle.value("history", nlohmann::json()), owner);
 }
 
 // Устройство вошло в журнал — любым путём (событие сессии `joined`): оффер привязки отзываем сразу, ключ у бота

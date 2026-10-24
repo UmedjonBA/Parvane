@@ -162,6 +162,8 @@ export function createCloudSync(deps: Deps) {
   let rootCache: { entries: CloudStateEntry[]; id: string | undefined } | undefined;
   // Сколько своих контейнеров облака назвал сервер при последнем опросе списка
   let ownOnServer: number | undefined;
+  // Свои контейнеры на сервере без записи журнала состояния (по последнему обходу): новый диск при них не заводим
+  let ownWithoutEntry = 0;
   let lastError: string | undefined;
 
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -366,7 +368,13 @@ export function createCloudSync(deps: Deps) {
       if (owner === self && !entry) continue;
       if (!client.cloudIsAttached(id)) {
         lost.delete(id);
-        await attach(id);
+        // Один не подключившийся контейнер не останавливает остальные (раньше исключение обрывало весь обход, и
+        // синхронизация облака стояла: «долгая загрузка» и пустые «Файлы»)
+        try {
+          await attach(id);
+        } catch (e) {
+          deps.log(`облако: контейнер ${id.slice(0, 8)}… не подключён: ${String(e)}`);
+        }
       }
     }
     // Подключённый чужой контейнер пропал из списка — доступ отозван
@@ -374,6 +382,7 @@ export function createCloudSync(deps: Deps) {
       if (c.owner !== self && !onServer.has(c.id) && listed.has(domainOf(c.id).toLowerCase())) dropContainer(c.id);
     });
     ownOnServer = [...onServer.values()].filter((owner) => owner === self).length;
+    ownWithoutEntry = [...onServer].filter(([id, owner]) => owner === self && !entries.some((e) => e.id === id)).length;
     isDiscovered = true;
   }
 
@@ -418,6 +427,14 @@ export function createCloudSync(deps: Deps) {
       return undefined;
     }
     if (!createIfMissing) return undefined;
+    // Новый диск — только когда его точно нет: свой контейнер без записи журнала состояния может оказаться диском,
+    // запись которого ещё не дочитана. Второй диск с меньшим id подменил бы настоящий на всех устройствах
+    await discover();
+    if (rootId()) return ensureRoot(false);
+    if (ownWithoutEntry > 0) {
+      deps.log('облако: личный диск не создан — на сервере есть свой контейнер без записи журнала состояния');
+      throw new V2Error('ERROR_CODE_UNAVAILABLE');
+    }
     return createContainer('root');
   }
 
@@ -1013,6 +1030,7 @@ export function createCloudSync(deps: Deps) {
     rootCache = undefined;
     revision += 1;
     ownOnServer = undefined;
+    ownWithoutEntry = 0;
     lastError = undefined;
   }
 

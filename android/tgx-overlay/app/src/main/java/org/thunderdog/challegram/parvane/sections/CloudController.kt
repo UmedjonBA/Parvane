@@ -104,7 +104,10 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         if (id == null) emptyList() else Sx.list(snap?.optJSONObject("state")?.optJSONObject("trees")?.optJSONObject(id)?.optJSONArray("nodes"))
     private fun nodes(): List<JSONObject> = nodesOf(containerId())
     private fun parentOf(n: JSONObject): String? = if (n.isNull("parent")) null else n.optString("parent").ifEmpty { null }
-    private fun shared(): List<JSONObject> = Sx.list(snap?.optJSONArray("containers")).filter { it.optString("kind") != "root" && it.optString("id") != rootId() }
+    // Все контейнеры, кроме личного диска (поиск по id); свои общие папки — в корне диска, чужие — в «Доступные мне»
+    private fun others(): List<JSONObject> = Sx.list(snap?.optJSONArray("containers")).filter { it.optString("kind") != "root" && it.optString("id") != rootId() }
+    private fun owned(): List<JSONObject> = others().filter { it.optString("kind") == "owned" }
+    private fun shared(): List<JSONObject> = others().filter { it.optString("kind") != "owned" }
     private fun isService(n: JSONObject) = n.optString("name").startsWith(".parvane-")
     private fun vault(): JSONObject? = nodesOf(rootId()).firstOrNull {
         it.optString("kind") == "folder" && parentOf(it) == null && !it.optBoolean("trashed") && it.optString("name") in listOf("Знания", "Knowledge")
@@ -115,7 +118,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
     fun back(): Boolean {
         when {
             folder != null -> folder = nodes().firstOrNull { it.optString("id") == folder }?.let { parentOf(it) }
-            container != null -> { container = null; place = "shared" }
+            container != null -> { place = if (owned().any { it.optString("id") == container }) "drive" else "shared"; container = null }
             place != "drive" -> place = "drive"
             else -> return false
         }
@@ -149,7 +152,7 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         else {
             crumb(Sx.t("Облако", "Cloud"), true) { place = "drive"; container = null; folder = null; rerender() }
             if (place != "drive") crumb(virtualName(place), false) { container = null; folder = null; rerender() }
-            container?.let { id -> crumb(shared().firstOrNull { it.optString("id") == id }?.optString("name").orEmpty().ifEmpty { Sx.t("Общая папка", "Shared folder") }, false) { folder = null; rerender() } }
+            container?.let { id -> crumb(others().firstOrNull { it.optString("id") == id }?.optString("name").orEmpty().ifEmpty { Sx.t("Общая папка", "Shared folder") }, false) { folder = null; rerender() } }
             val byId = nodes().associateBy { it.optString("id") }
             val chain = mutableListOf<JSONObject>()
             var cur = folder?.let { byId[it] }
@@ -161,7 +164,14 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         if (place == "drive" || container != null) tools.addView(sortPill())
         body.addView(tools, lp(b = Pv.rem(0.625f)))
         busy?.let { body.addView(context.pvText(it, 0.8125f, Pv.c.accent), lp(b = Pv.rem(0.5f))) }
-        val canAdd = query.isEmpty() && (place == "drive" || (container != null && shared().firstOrNull { it.optString("id") == container }?.optString("role") != "reader"))
+        // Пустой диск без причины выглядел как «Здесь пусто» — состояние синхронизации показываем явно
+        when (status) {
+            "no-key" -> Sx.t("Ключ личного диска ещё не получен — откройте Parvane на другом своём устройстве",
+                "The drive key has not arrived yet — open Parvane on another of your devices")
+            "offline" -> Sx.t("Нет связи с сервером — показано сохранённое", "No connection — showing saved files")
+            else -> null
+        }?.let { body.addView(context.pvText(it, 0.8125f, Pv.c.muted), lp(b = Pv.rem(0.5f))) }
+        val canAdd = query.isEmpty() && (place == "drive" || (container != null && others().firstOrNull { it.optString("id") == container }?.optString("role") != "reader"))
         if (canAdd) {
             val chips = FlowRow(context, Pv.rem(0.375f))
             chips.addView(chip("folder", Sx.t("Новая папка", "New folder")) { newFolder() })
@@ -189,16 +199,13 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         var rows = 0
         when {
             query.isNotEmpty() -> found().forEach { list.addView(nodeRow(it)); rows++ }
-            place == "shared" && container == null -> shared().forEach { c ->
-                rows++
-                list.addView(context.listRow(context.ava(Pv.c.purple, icon = "folder"), c.optString("name").ifEmpty { Sx.t("Общая папка", "Shared folder") },
-                    Sx.t("Элементов: ${nodesOf(c.optString("id")).count { parentOf(it) == null && !it.optBoolean("trashed") && !isService(it) }}",
-                        "Items: ${nodesOf(c.optString("id")).count { parentOf(it) == null && !it.optBoolean("trashed") && !isService(it) }}"),
-                    onLong = { containerMenu(c) }) { container = c.optString("id"); folder = null; rerender() })
-            }
+            place == "shared" && container == null -> shared().forEach { c -> list.addView(containerRow(c, isOwn = false)); rows++ }
             place == "links" -> Sx.list(links).forEach { l -> list.addView(linkRow(l)); rows++ }
             place == "trash" -> trash().forEach { list.addView(nodeRow(it, inTrash = true)); rows++ }
-            else -> visible().forEach { list.addView(nodeRow(it)); rows++ }
+            else -> {
+                if (container == null && folder == null) owned().forEach { c -> list.addView(containerRow(c, isOwn = true)); rows++ }
+                visible().forEach { list.addView(nodeRow(it)); rows++ }
+            }
         }
         if (rows == 0) list.addView(context.pvText(when {
             query.isNotEmpty() -> Sx.t("Ничего не найдено", "Nothing found")
@@ -280,14 +287,14 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
 
     private fun found(): List<JSONObject> {
         val q = query.trim()
-        val all = (listOfNotNull(rootId()) + shared().map { it.optString("id") }).flatMap { nodesOf(it) }
+        val all = (listOfNotNull(rootId()) + others().map { it.optString("id") }).flatMap { nodesOf(it) }
         return sorted(all.filter { !it.optBoolean("trashed") && !isService(it) && it.optString("name").contains(q, ignoreCase = true) })
     }
 
     private fun nodeRow(n: JSONObject, inTrash: Boolean = false): View {
         val isFolder = n.optString("kind") == "folder"
         val isVault = container == null && parentOf(n) == null && n.optString("id") == vault()?.optString("id")
-        val incoming = container != null && shared().firstOrNull { it.optString("id") == container }?.optString("kind") == "shared"
+        val incoming = container != null && others().firstOrNull { it.optString("id") == container }?.optString("kind") == "shared"
         val color = when {
             isVault -> Pv.c.yellow
             incoming -> Pv.c.purple
@@ -464,6 +471,24 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
     private fun trashMenu(n: JSONObject) = Kn.menu(context, n.optString("name"), listOf(
         Sx.t("Восстановить", "Restore") to { files("restore", JSONObject().put("container", rootId()).put("nodes", JSONArray().put(n.optString("id")))) },
         Sx.t("Удалить навсегда", "Delete forever") to { files("purge", JSONObject().put("container", rootId()).put("nodes", JSONArray().put(n.optString("id")))) },
+    ), dangerLast = true)
+
+    private fun containerRow(c: JSONObject, isOwn: Boolean): View {
+        val top = nodesOf(c.optString("id")).count { parentOf(it) == null && !it.optBoolean("trashed") && !isService(it) }
+        return context.listRow(context.ava(if (isOwn) Pv.c.blue else Pv.c.purple, icon = if (isOwn) "users" else "folder"),
+            c.optString("name").ifEmpty { Sx.t("Общая папка", "Shared folder") },
+            if (isOwn) Sx.t("Объектов: $top · общая", "Items: $top · shared") else Sx.t("Элементов: $top", "Items: $top"),
+            onLong = { if (isOwn) ownContainerMenu(c) else containerMenu(c) }) { container = c.optString("id"); folder = null; rerender() }
+    }
+
+    /** Своя общая папка: удалить её (для всех участников) — не «покинуть». */
+    private fun ownContainerMenu(c: JSONObject) = Kn.menu(context, c.optString("name"), listOf(
+        Sx.t("Удалить общую папку", "Delete shared folder") to {
+            PvSheet.confirm(context, Sx.t("Удалить общую папку?", "Delete the shared folder?"),
+                Sx.t("Папка и её файлы удалятся у всех участников.", "The folder and its files are deleted for everyone."), Sx.t("Удалить", "Delete"), danger = true) {
+                Sx.async({ ParvaneSections.cloudCall("parvaneCloudRemoveShared", JSONObject().put("container", c.optString("id")).toString()) }) { container = null; rerender() }
+            }
+        },
     ), dangerLast = true)
 
     private fun containerMenu(c: JSONObject) = Kn.menu(context, c.optString("name"), listOf(

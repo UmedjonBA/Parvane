@@ -1893,6 +1893,49 @@ fn cloud_drive_on_own_devices_and_rotated_on_revoke() {
     assert!(alice.cloud_snapshot_request(&id, 1).unwrap().is_none());
 }
 
+/// Личный диск создан устройством, которое потом вышло: новое устройство всё равно подключает его по ключу из
+/// копии ключей аккаунта (прод, 24 окт 2026: автор генезиса искался только среди действующих устройств, и диск со
+/// всеми заметками не подключался ни на одном новом устройстве — кэш авторов был только у старых)
+#[test]
+fn cloud_drive_of_signed_out_creator_attaches_on_new_device() {
+    let mut srv = Server::default();
+    let mut cloud = MiniCloud::default();
+    let mut alice = setup(&mut srv, "alice@local");
+
+    // d2 создаёт личный диск и пишет в него
+    let mut alice2 = Client::new("alice@local", "d2", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice2.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d2", &r);
+    }
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+    let (id, create) = alice2.cloud_create(1).unwrap();
+    cloud.handle(&mut srv, "alice@local", "d2", &create);
+    cloud_edit(&mut cloud, &mut srv, &mut alice2, &id, serde_json::json!([cloud_folder(1, None, "Знания"), cloud_file(2, Some(1), "заметка.md")]));
+    // d1 получает ключ и подключает диск, пока d2 действует
+    run_collect(&mut srv, &mut alice2, &mut |c| c.share_groups_with_own_devices(&["d1".into()]));
+    drain(&mut srv, &mut alice);
+    alice.cloud_attach(&cloud.get(&id).get_response(), &cloud.get(&id).grants_response(0)).unwrap();
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice, &id).applied, 2);
+
+    // d2 выходит сам
+    let leave = alice2.leave_request().unwrap();
+    srv.handle("alice@local", "d2", &leave);
+    alice.ingest_log("alice@local", srv.logs["alice@local"][alice.log_version("alice@local") as usize..].to_vec()).unwrap();
+
+    // d3 входит позже и получает ключ диска экспортом (копия ключей аккаунта)
+    let mut alice3 = Client::new("alice@local", "d3", "local").unwrap();
+    let (ssk, entries, dk, gen) = alice.link_grant_material().unwrap();
+    for r in alice3.join_with_ssk(ssk, entries, dk, gen, 10).unwrap() {
+        srv.handle("alice@local", "d3", &r);
+    }
+    alice3.cloud_keys_import(&alice.cloud_keys_export()).unwrap();
+    assert_eq!(alice3.cloud_attach(&cloud.get(&id).get_response(), &cloud.get(&id).grants_response(0)).unwrap(), id);
+    assert!(alice3.cloud_has_key(&id));
+    assert_eq!(cloud_pull(&cloud, &mut srv, &mut alice3, &id).applied, 2);
+    assert_eq!(cloud_names(&alice3, &id), vec!["Знания", "заметка.md"]);
+}
+
 /// Грант незнакомцу: первое сообщение требует жетон (`Need::Token`). Хост
 /// добирает и повторяет — повтор обязан выдать грант, ключ и приглашение, а не
 /// пустой список (раньше грант оставался применённым локально после `Need`).

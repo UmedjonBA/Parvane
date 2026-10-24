@@ -4,8 +4,8 @@
 // На первом устройстве Алисы: переписка с Бобом, группа и канал с сообщениями, задача «Плана», папка и файл
 // «Облака». Затем новые устройства Алисы входят тремя способами:
 //   1. ответом боту в Telegram, первое устройство В СЕТИ;
-//   2. ответом боту, все прежние устройства ЗАКРЫТЫ, а копию ключей аккаунта последним писало устройство,
-//      само вошедшее по копии (копия не должна «беднеть» от устройства к устройству);
+//   2. ответом боту, все прежние устройства ЗАКРЫТЫ, первое (создатель диска и «Плана») ВЫШЛО из аккаунта, а копию
+//      ключей аккаунта последним писало устройство, само вошедшее по копии (копия не должна «беднеть»);
 //   3. ключом восстановления, введённым руками на экране «Устройства»;
 //   4. подтверждением с другого своего устройства (код сверки).
 // После каждого входа не позже FAST_MS видны: личный чат и его история, группа и её история, канал и его пост,
@@ -16,7 +16,9 @@ import assert from 'node:assert/strict';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
-import { assertNoPageErrors, findMessage, linkSecondDevice, openPrivateChatStrict, sendText } from './e2e_web_helpers.mjs';
+import {
+  assertNoPageErrors, findMessage, linkSecondDevice, logOut, openPrivateChatStrict, sendText,
+} from './e2e_web_helpers.mjs';
 import {
   LOGIN_TIMEOUT_MS, WIDE, expectEverythingFast, expectJoinState, expectNoOfferAfterJoin, joinByTelegram, joinByTypedKey,
   login, pullFor, seedAccount, TG_ALICE, waitBundleWrite,
@@ -42,8 +44,12 @@ try {
   await expectJoinState(alice2, 'done');
   await expectNoOfferAfterJoin(alice2, alice1.address, [alice1]);
 
-  // ── 2. Копию ключей последним пишет вошедшее по копии устройство; все прежние закрыты ──
+  // ── 2. Копию ключей последним пишет вошедшее по копии устройство; все прежние закрыты, а первое (создатель
+  // личного диска, «Плана» и папок) ВЫШЛО из аккаунта: прод 24 окт 2026 — автор генезиса контейнера искался только
+  // среди действующих устройств, и диск со всеми заметками не подключался ни на одном новом устройстве ──
   await waitBundleWrite(alice2, 150000, bundleWritesAtJoin2);
+  await logOut(alice1.page);
+  console.log('OK: первое устройство вышло из аккаунта');
   await alice1.page.close();
   await alice2.page.close();
   const alice3 = await login(await browser.newContext({ viewport: WIDE }), aliceNick, 'alice3 (бот, все закрыты)');

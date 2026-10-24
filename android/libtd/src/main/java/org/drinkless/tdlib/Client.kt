@@ -2704,8 +2704,8 @@ class Client private constructor(
             // T119: в журнале своих устройств появилось новое — сервисное уведомление (как «новый вход»)
             "new_device" -> {
                 Log.i(TAG, "v2: новое своё устройство (${event.optInt("count")})")
-                postUpdate(TdApi.UpdateServiceNotification("parvane_new_device",
-                    TdApi.MessageText(TdApi.FormattedText(uiText("v2_new_device"), arrayOf()), null, null)))
+                // Полоской приложения, а не окном X: на старом устройстве оно вставало вторым поверх шторки подтверждения
+                serviceNotice("parvane_new_device", uiText("v2_new_device"))
             }
             // L2-1: набор чатов с активным режимом (v2-сессия: при готовности и при каждом изменении) — кэш для
             // typing/presence и строки-переключателя; собеседник L2-чата больше не «в сети»

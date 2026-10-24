@@ -24,6 +24,7 @@ static const std::int64_t kDay = 24LL * 60 * 60 * 1000;
 // Поддельный движок облака: контейнеры по id
 struct Box {
     bool attached = false;
+    bool attachFails = false; // движок отвергает подключение (автор генезиса не опознан)
     bool key = true;
     std::int64_t seq = 0, grantVersion = 0, epoch = 1;
     std::string owner = "alice@local", role = "owner", name, domainName;
@@ -87,6 +88,7 @@ struct Engine {
             // Поддельный кодек: тело ответа container.get — JSON с id
             const auto got = json::parse(d::fromBase64(a["getResponse"].get<std::string>()));
             const auto id = got.value("id", std::string());
+            if (boxes[id].attachFails) throw std::runtime_error("Proto(Forbidden)");
             boxes[id].attached = true;
             return json(id);
         };
@@ -283,6 +285,37 @@ static void lifecycleTests() {
         check(r.sync.nextWakeMs() == r.t.now, "отправка очереди — сразу после правки");
         r.sync.tick();
         check(!r.sync.hasPending(id) && r.t.countSent("domain.op.append") == 1, "очередь отправлена");
+    }
+    {
+        // Прод, 24 окт 2026: личный диск не подключался, и исключение обрывало обход — остальное облако не синхронизировалось
+        Rig r;
+        r.entries.push_back({"aa01", "local", "root", "", false, ""});
+        r.entries.push_back({"bb02", "local", "owned", "", false, ""});
+        r.server("aa01", r.t.me).attachFails = true;
+        r.server("bb02", r.t.me);
+        r.sync.ensure(true);
+        check(!r.e.boxes["aa01"].attached && r.e.boxes["bb02"].attached, "не подключившийся контейнер не останавливает обход");
+    }
+    {
+        // Свой контейнер на сервере без записи журнала — может оказаться диском: второй диск не заводится
+        Rig r;
+        r.server("ee05", r.t.me);
+        bool threw = false;
+        try {
+            r.sync.apply("root", json::array({json{{"op", "create"}, {"id", "n1"}, {"kind", "folder"}, {"name", "x"}}}));
+        } catch (const d::BusError &e) {
+            threw = e.code() == "ERROR_CODE_UNAVAILABLE";
+        }
+        check(threw && r.e.created == 0 && r.recorded.empty(), "при своём контейнере без записи личный диск не создаётся");
+        bool left = false;
+        try {
+            r.entries.push_back({"ee05", "local", "owned", "", false, ""});
+            r.sync.ensure(true);
+            r.sync.leave("ee05");
+        } catch (const d::BusError &e) {
+            left = e.code() == "ERROR_CODE_INVALID";
+        }
+        check(left && r.recorded.empty(), "свою папку «покинуть» нельзя");
     }
     {
         Rig r;

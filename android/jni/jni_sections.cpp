@@ -298,6 +298,19 @@ public:
         applyWanted();
     }
 
+    // `stateReady` приходит и при той же сессии (журнал состояния подключён позже, ключ состояния прислало другое
+    // своё устройство) — тогда записи облака и «Плана» стали видны только сейчас: обойти контейнеры заново
+    void sessionChanged() {
+        const bool isSame = v2Any() == transport_.session();
+        syncSession();
+        if (!isSame || self_.empty() || !transport_.session()) return;
+        importDomainKeys();
+        plannerSync_.onEngineEvent();
+        cloud_.syncNow(true);
+        plannerDirty_ = cloudDirty_ = true;
+        applyWanted();
+    }
+
     void resetAccount() {
         flushRecords();
         transport_.setSession(nullptr);
@@ -1006,7 +1019,7 @@ void sectionsEngineEvent(const std::string &domainName, const std::string &id) {
 }
 
 void sectionsSessionChanged() {
-    enqueue([](Hub &hub) { hub.syncSession(); });
+    enqueue([](Hub &hub) { hub.sessionChanged(); });
 }
 
 void sectionsDomainKeys() {
