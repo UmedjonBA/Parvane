@@ -990,9 +990,9 @@ object CanvasMedia {
             } catch (e: Throwable) { null }
             Sx.main.post {
                 loading -= url
-                // Недоступное превью не запоминается: новая попытка через RETRY_MS
-                if (info == null || !info.hasContent) failedAt[url] = System.currentTimeMillis()
-                if (info != null && info.hasContent) links.put(url, info)
+                // Сбой (нет связи) — новая попытка через RETRY_MS; сайт без превью запоминается пустым, а не
+                // спрашивается заново каждые 15 с, пока холст открыт
+                if (info == null) failedAt[url] = System.currentTimeMillis() else links.put(url, info)
                 ready()
             }
         }
@@ -1015,7 +1015,8 @@ object CanvasMedia {
 
     private fun sample(o: android.graphics.BitmapFactory.Options): Int {
         var s = 1
-        while (max(o.outWidth, o.outHeight) / (s * 2) >= MAX_SIDE) s *= 2
+        // Сторона не больше MAX_SIDE: картинка 4000 px иначе занимала бы до 26 МБ памяти вместо 6
+        while (max(o.outWidth, o.outHeight) / s > MAX_SIDE) s *= 2
         return s
     }
 

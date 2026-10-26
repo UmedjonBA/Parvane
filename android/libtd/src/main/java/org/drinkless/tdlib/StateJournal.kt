@@ -97,7 +97,9 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     private fun peers(chatIds: List<Long>, key: String? = null): JSONArray = JSONArray().also { a ->
         chatIds.forEach { id -> resolver.addressOf(id)?.let(::peerOf)?.let { a.put(it) } }
-        key?.let { k -> synchronized(unresolved) { unresolved[k]?.toList() } }?.forEach { a.put(it) }
+        // Отложенный чат, который уже есть в chatIds (шов узнал группу, и её успели добавить), дважды не класть
+        key?.let { k -> synchronized(unresolved) { unresolved[k]?.toList() } }
+            ?.filter { addressOf(it)?.let(resolver::chatIdOf)?.let(chatIds::contains) != true }?.forEach { a.put(it) }
     }
     /** Чаты записей журнала; не известные шву (группа ещё не подключена) с [key] запоминаются для [build]. */
     private fun chatIds(peers: JSONArray?, key: String? = null): List<Long> {
@@ -151,7 +153,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         }
         val archived = JSONArray()
         local.archivedChatIds().forEach { id -> resolver.addressOf(id)?.let(::peerOf)?.let { archived.put(it) } }
-        synchronized(unresolved) { unresolved["archived"]?.toList() }?.forEach { archived.put(it) }
+        synchronized(unresolved) { unresolved["archived"]?.toList() }
+            ?.filter { addressOf(it)?.let(resolver::chatIdOf)?.let(local::isArchived) != true }?.forEach { archived.put(it) }
         val scheduled = JSONArray()
         queue.all().forEach { item ->
             if (item.localPath != null) return@forEach // медиа отложенного — локальная копия, в журнал не переносится

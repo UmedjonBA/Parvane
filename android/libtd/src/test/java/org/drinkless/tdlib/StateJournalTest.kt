@@ -97,11 +97,16 @@ class StateJournalTest {
         assertEquals(1, written.getJSONArray("pinned_peers").length())
 
         knowsGroup = true
+        // Группу узнали, снимок ещё не спроецирован заново: синк в это окно не стирает её из папки
+        val between = j.build(other, ScheduledQueue(b) { 1000L }).getJSONArray("folders").getJSONObject(0)
+        assertEquals(2, between.getJSONArray("include_peers").length())
         val ch = j.project(snap, other, ScheduledQueue(b) { 1000L })
         assertTrue(ch.folders)
         assertEquals(listOf(11L, -21L), other.folders.all().single().included)
         assertEquals(listOf(-21L), other.folders.all().single().pinned)
         assertFalse(j.hasUnresolved)
+        val after = j.build(other, ScheduledQueue(b) { 1000L }).getJSONArray("folders").getJSONObject(0)
+        assertEquals("без повторов", 2, after.getJSONArray("include_peers").length())
     }
 
     /** T132 (FR-039, правило STATE-2): настройки уведомлений — вид журнала, чужие поля записи не стираются. */
