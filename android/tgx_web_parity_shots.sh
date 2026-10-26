@@ -56,6 +56,14 @@ for line in "созвон сегодня $H:00 45 мин" "задача сдат
   tgx_mark; tgx_cmd "{\"op\":\"planner_add\",\"text\":\"$line\"}"
 done
 tgx_mark; tgx_cmd '{"op":"note_create","title":"Список книг","text":"# Список книг\n\n- [ ] Мастер и Маргарита\n- [x] Пикник на обочине\n\nСм. [[Идеи]] #чтение"}'
+# Холст с картинкой облака и ссылкой (карточки файла и ссылки рисуются содержимым, а не пустыми рамками)
+tgx_mark; tgx_cmd '{"op":"sections","section":"knowledge"}'; sleep 6
+a push "$HERE/tgx-overlay/app/src/main/res/drawable-nodpi/parvane_mascot.png" /data/local/tmp/pv-pic.png >/dev/null 2>&1
+a shell chmod 644 /data/local/tmp/pv-pic.png
+tgx_mark; tgx_cmd '{"op":"cloud_upload","path":"/data/local/tmp/pv-pic.png","name":"Маскот.png","mime":"image/png"}'
+tgx_logwait "cloud_upload →" 60 >/dev/null || bad "картинка в облако не загружена"
+tgx_mark; tgx_cmd '{"op":"canvas_create","title":"Доска","text":"{\"nodes\":[{\"id\":\"f1\",\"type\":\"file\",\"file\":\"Маскот.png\",\"x\":0,\"y\":0,\"width\":300,\"height\":300},{\"id\":\"l1\",\"type\":\"link\",\"url\":\"https://example.org\",\"x\":340,\"y\":0,\"width\":320,\"height\":160},{\"id\":\"t1\",\"type\":\"text\",\"text\":\"Идея на доске\",\"x\":340,\"y\":200,\"width\":250,\"height\":80}],\"edges\":[]}"}'
+tgx_logwait "canvas_create →" 30 >/dev/null || bad "холст не создан"
 tgx_mark; tgx_cmd '{"op":"sections","section":"chats"}'
 tgx_stop; tgx_start; tgx_logwait "v2: готов" 90; sleep 5
 
@@ -96,6 +104,7 @@ tab 'Знания|Knowledge'; sleep 2
 for t in "Граф|Graph:graph" "Холст|Canvas:canvas" "Файлы|Files:files"; do
   tab "${t%%:*}" && shot "knowledge-${t##*:}" 3
 done
+tab 'Холст|Canvas'; tab 'Доска' && shot knowledge-canvas-media 8
 tab 'Холст|Canvas'; tab 'Холст из графа|Canvas from graph' && shot knowledge-canvas-from-graph 3
 tab 'Чаты|Chats' && shot chats-back
 tgx_no_crash

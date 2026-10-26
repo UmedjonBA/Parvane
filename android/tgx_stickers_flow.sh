@@ -54,7 +54,7 @@ xlog "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)" 30 && ok "X:
 sleep 3; ad exec-out screencap -p > "$OUT/01-list.png"
 
 # 2. X → desktop: стикер из встроенного пака через панель
-ui_reset; ad shell input tap 540 330; sleep 4; ad exec-out screencap -p > "$OUT/02-chat.png"
+ui_reset; ui_open_chat; sleep 4; ad exec-out screencap -p > "$OUT/02-chat.png"
 xlog "→ X UpdateNewChat|UpdateChatLastMessage" 5 >/dev/null
 # кнопка эмодзи слева от поля ввода → панель; вкладка стикеров по описанию
 ui_tap 'btn_emoji|Emoji|Эмодзи' 5 || ad shell input tap 72 2208
@@ -86,7 +86,7 @@ stop_pid "$BP"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_EMOJI_DIR="$EMOJI" PARVANE_AUTOSEND="alice@local:emoji-ping-$STAMP" PARVANE_AUTOEMOJI="alice@local:TestEmoji:01-2728.png")
 wait_log "$B/td/log.txt" "эмодзи-пак «TestEmoji» загружен" 60 && ok "bob: эмодзи-пак загружен" || bad "bob: эмодзи-пак не загружен"
 xlog "пак TestEmoji получен" 90 && ok "X: emoji_packs зарегистрирован" || bad "X: пак эмодзи не зарегистрирован"
-ui_reset; ad shell input tap 540 330; sleep 5; ad exec-out screencap -p > "$OUT/06-emoji-chat.png"
+ui_reset; ui_open_chat; sleep 5; ad exec-out screencap -p > "$OUT/06-emoji-chat.png"
 xlog "эмодзи $DOC_EXPECTED → TestEmoji/01-2728.png" 60 && ok "X: кастом-эмодзи разрешён, docId по EMOJI-1 ($DOC_EXPECTED)" || bad "X: эмодзи $DOC_EXPECTED не разрешён"
 
 ad logcat -d -v time > "$OUT/logcat.txt"

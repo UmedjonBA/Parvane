@@ -32,6 +32,14 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
 
     override fun onBuilt() = render()
 
+    private var photoAvatar: org.thunderdog.challegram.widget.AvatarView? = null
+
+    override fun destroy() {
+        photoAvatar?.performDestroy()
+        photoAvatar = null
+        super.destroy()
+    }
+
     override fun onFocus() {
         super.onFocus()
         render()
@@ -111,7 +119,14 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
         val name = me?.let { listOf(it.firstName, it.lastName).filter { s -> s.isNotEmpty() }.joinToString(" ") }?.ifEmpty { null }
             ?: Sx.t("Мой профиль", "My profile")
         val avatarColor = Pv.c.let { c -> intArrayOf(c.red, c.orange, c.purple, c.green, c.aqua, c.blue)[((me?.id ?: 0L) % 6).toInt().let { if (it < 0) -it else it }] }
-        addView(PvAvatar(context, name, avatarColor, Pv.rem(3.5f)), LinearLayout.LayoutParams(Pv.rem(3.5f), Pv.rem(3.5f)).apply { rightMargin = Pv.rem(0.875f) })
+        // Фото профиля — штатным аватаром X (то же, что в «Моём профиле»); без фото — буква, как web
+        photoAvatar?.performDestroy()
+        photoAvatar = null
+        val avatar: android.view.View = if (me?.profilePhoto != null) org.thunderdog.challegram.widget.AvatarView(context).apply {
+            setUser(tdlib, me, false)
+            photoAvatar = this
+        } else PvAvatar(context, name, avatarColor, Pv.rem(3.5f))
+        addView(avatar, LinearLayout.LayoutParams(Pv.rem(3.5f), Pv.rem(3.5f)).apply { rightMargin = Pv.rem(0.875f) })
         val info = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         info.addView(context.pvText(name, 1.125f, Pv.c.fg, semibold = true, maxLines = 1))
         me?.usernames?.activeUsernames?.firstOrNull()?.takeIf { it != name }?.let {

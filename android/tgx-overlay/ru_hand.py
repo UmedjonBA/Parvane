@@ -14,6 +14,8 @@ RU = {
     "language_dateFormatLocale": "ru-RU",
     "language_rtl": "0",
     "language_continueInLanguage": "Продолжить на русском",
+    # ── пустая папка чатов (Lang.getMarkdownString: **…** — жирным) ──
+    "FolderNoChatsToDisplay": "**В папке пока нет чатов**\n\nНастройте папку, чтобы добавить в неё чаты.",
     # ── устройства / код-пароль ──
     "Devices": "Устройства", "PasscodeTitle": "Код-пароль", "SessionsTitle": "Активные сессии",
     "ActiveDevices": "Активные устройства", "OtherDevices": "Другие устройства", "ThisDevice": "Это устройство",

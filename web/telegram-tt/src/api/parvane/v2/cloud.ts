@@ -377,6 +377,16 @@ export function createCloudSync(deps: Deps) {
         }
       }
     }
+    // Папка, удалённая на другом своём устройстве: контейнер на сервере остаётся, а запись журнала снята — забыть и здесь
+    engineContainers().forEach((c) => {
+      if (lost.has(c.id) || !entries.find((e) => e.id === c.id)?.isRemoved) return;
+      client.cloudForget(c.id);
+      touch();
+      outboxes.delete(c.id);
+      lost.add(c.id);
+      deps.log(`облако: контейнер ${c.id.slice(0, 8)}… удалён на другом устройстве`);
+      deps.onChanged();
+    });
     // Подключённый чужой контейнер пропал из списка — доступ отозван
     engineContainers().forEach((c) => {
       if (c.owner !== self && !onServer.has(c.id) && listed.has(domainOf(c.id).toLowerCase())) dropContainer(c.id);
@@ -826,7 +836,9 @@ export function createCloudSync(deps: Deps) {
     const self = deps.self();
     const entries = deps.stateEntries();
     const root = rootId();
-    return engineContainers().filter((c) => !lost.has(c.id)).map((c) => {
+    // Удалённая запись журнала — папки больше нет (до обхода `discover` контейнер ещё в движке)
+    const isGone = (id: string) => lost.has(id) || Boolean(entries.find((e) => e.id === id)?.isRemoved);
+    return engineContainers().filter((c) => !isGone(c.id)).map((c) => {
       const entry = entries.find((e) => e.id === c.id);
       let kind: CloudContainerKind = 'owned';
       if (c.id === root) kind = 'root';

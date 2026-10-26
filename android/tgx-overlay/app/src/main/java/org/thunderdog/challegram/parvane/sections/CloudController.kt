@@ -377,8 +377,10 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
                 val f = File(tmp, "u$i")
                 try {
                     ctx.contentResolver.openInputStream(uri)?.use { input -> f.outputStream().use { input.copyTo(it) } }
-                    val r = ParvaneSections.cloudFiles("upload", JSONObject().put("container", target).put("parent", parent ?: "")
-                        .put("path", f.absolutePath).put("name", name).put("mime", mime)) as? JSONObject
+                    val args = JSONObject().put("container", target).put("parent", parent ?: "")
+                        .put("path", f.absolutePath).put("name", name).put("mime", mime)
+                    val thumb = CloudThumbs.attach(args, f, mime)
+                    val r = try { ParvaneSections.cloudFiles("upload", args) as? JSONObject } finally { thumb?.delete() }
                     if (r?.optBoolean("ok") != true) failed++
                 } catch (e: Throwable) {
                     failed++
@@ -595,6 +597,45 @@ class FlowRow(context: Context, private val gap: Int) : ViewGroup(context) {
             c.layout(x, y, x + c.measuredWidth, y + c.measuredHeight)
             x += c.measuredWidth + gap
             rowH = maxOf(rowH, c.measuredHeight)
+        }
+    }
+}
+
+/**
+ * Миниатюра картинки при загрузке в облако, как web (`cloudDrive.ts`): JPEG не больше 320 точек по длинной стороне.
+ * Без неё «Файлы» и мелкие карточки холста на других устройствах показывали значок вместо картинки.
+ */
+object CloudThumbs {
+    private const val MAX_SIDE = 320
+    private const val QUALITY = 80
+
+    /** Кладёт `thumbPath`/`thumbWidth`/`thumbHeight` в [args]; возвращает временный файл (удалить после загрузки). */
+    fun attach(args: JSONObject, file: File, mime: String?): File? {
+        if (mime?.startsWith("image/") != true || mime == "image/svg+xml") return null
+        return try {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_SIDE) sample *= 2
+            val src = android.graphics.BitmapFactory.decodeFile(file.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: return null
+            val k = minOf(1f, MAX_SIDE.toFloat() / maxOf(src.width, src.height))
+            val w = maxOf(1, (src.width * k).toInt())
+            val h = maxOf(1, (src.height * k).toInt())
+            val scaled = if (w == src.width && h == src.height) src else android.graphics.Bitmap.createScaledBitmap(src, w, h, true)
+            // JPEG без прозрачности: прозрачное — на белом
+            val out = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.RGB_565)
+            android.graphics.Canvas(out).apply { drawColor(0xffffffff.toInt()); drawBitmap(scaled, 0f, 0f, null) }
+            if (scaled !== src) scaled.recycle()
+            src.recycle()
+            val thumb = File(file.parentFile, file.name + ".thumb.jpg")
+            thumb.outputStream().use { out.compress(android.graphics.Bitmap.CompressFormat.JPEG, QUALITY, it) }
+            out.recycle()
+            args.put("thumbPath", thumb.absolutePath).put("thumbWidth", w).put("thumbHeight", h)
+            thumb
+        } catch (e: Throwable) {
+            null
         }
     }
 }

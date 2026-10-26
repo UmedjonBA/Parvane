@@ -406,6 +406,18 @@ void CloudSync::discover() {
             }
         }
     }
+    // Папка, удалённая на другом своём устройстве («Удалить общую папку», «Закрыть доступ» web): контейнер на сервере
+    // остаётся, а запись журнала снята — здесь его тоже забыть (раньше он висел общей папкой до переустановки)
+    for (const auto &c : engineContainers()) {
+        const auto entry = std::find_if(entries.begin(), entries.end(), [&](const CloudStateEntry &e) { return e.id == c.id; });
+        if (entry == entries.end() || !entry->isRemoved || lost_.count(c.id)) continue;
+        if (hasClient()) engine("cloudForget", json{{"id", c.id}});
+        touch();
+        outboxes_.erase(c.id);
+        lost_.insert(c.id);
+        t_.log("облако: контейнер " + shortId(c.id) + " удалён на другом устройстве");
+        if (hooks_.onChanged) hooks_.onChanged();
+    }
     // Подключённый чужой контейнер пропал из списка — доступ отозван
     for (const auto &c : engineContainers()) {
         const bool present = std::any_of(onServer.begin(), onServer.end(), [&](const auto &p) { return p.first == c.id; });
@@ -870,6 +882,8 @@ std::vector<CloudContainerInfo> CloudSync::containers() {
     for (const auto &c : engineContainers()) {
         if (lost_.count(c.id) || c.role.empty()) continue;
         const auto entry = std::find_if(entries.begin(), entries.end(), [&](const CloudStateEntry &e) { return e.id == c.id; });
+        // Удалённая запись журнала — папки больше нет (до обхода `discover` контейнер ещё в движке)
+        if (entry != entries.end() && entry->isRemoved) continue;
         std::string kind = "owned";
         if (root == c.id) kind = "root";
         else if (c.owner != self) kind = entry != entries.end() && entry->status == "accepted" ? "shared" : "invite";

@@ -33,7 +33,7 @@ echo "PUUID=$PUUID"
 sleep 3; ad exec-out screencap -p > "$OUT/01-list.png"
 
 # 2. X голосует тапом по первому варианту (сначала — к списку чатов)
-ui_reset; ad shell input tap 540 330; sleep 4; ui_close_panel; ad exec-out screencap -p > "$OUT/02-chat.png"
+ui_reset; ui_open_chat; sleep 4; ui_close_panel; ad exec-out screencap -p > "$OUT/02-chat.png"
 # Варианты X рисует на canvas (в дереве uiautomator их нет): тап по первой строке последнего
 # пузыря (опрос — последнее сообщение, ~445 px над его низом); если UI-тап не попал —
 # тот же путь шва (SetPollAnswer) через e2e-хук, чтобы проверить голосование детерминированно
@@ -59,7 +59,7 @@ wait_log "$B/td/log.txt" "опрос $PUUID — .* от alice@local" 60 || bad "
 # 4. best-effort: X создаёт опрос через меню вложений
 # меню вложений X сначала просит доступ к фото/видео — выдаём заранее (и на всякий случай жмём «Разрешить»)
 for perm in READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_EXTERNAL_STORAGE; do ad shell pm grant org.parvane.tgx android.permission.$perm 2>/dev/null; done
-ui_reset; ad shell input tap 540 330; sleep 4; ui_close_panel
+ui_reset; ui_open_chat; sleep 4; ui_close_panel
 # при тексте в поле (черновик из tgx_ttl_scheduled_flow.sh) скрепка заменяется кнопкой отправки — очищаем поле (Ctrl+A, Del)
 ad shell input tap 540 2208; sleep 1; ad shell input keycombination 113 29; ad shell input keyevent 67; sleep 1; ad shell input keyevent 111; sleep 1
 ui_tap 'id/msg_attach' 5 || ad shell input tap 890 2208; sleep 3

@@ -1465,7 +1465,7 @@ describe('STATE-2: личное состояние — целиком в жур�
     const kinds = journal.match(/val KINDS = listOf\(([^)]*)\)/)![1];
     r.kinds.forEach((kind) => expect(kinds, kind).toContain(`"${kind}"`));
     expect(journal).toContain(`.put("list", "${r.mainPinList}")`);
-    expect(journal).toContain('out.put("unread_marks", peers(local.unreadMarkedChatIds()))');
+    expect(journal).toContain('out.put("unread_marks", peers(local.unreadMarkedChatIds(), "unread"))');
     expect(journal).toContain('snap.optJSONObject("quick_reaction")?.let { r ->');
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/StateJournalTest.kt'))
       .toContain('fun pinsUnreadAndReactionRoundTrip()');

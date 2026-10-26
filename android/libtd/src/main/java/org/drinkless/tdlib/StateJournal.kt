@@ -95,11 +95,35 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         else V2_GROUP_PREFIX + hex
     }
 
-    private fun peers(chatIds: List<Long>): JSONArray = JSONArray().also { a ->
+    private fun peers(chatIds: List<Long>, key: String? = null): JSONArray = JSONArray().also { a ->
         chatIds.forEach { id -> resolver.addressOf(id)?.let(::peerOf)?.let { a.put(it) } }
+        key?.let { k -> synchronized(unresolved) { unresolved[k]?.toList() } }?.forEach { a.put(it) }
     }
-    private fun chatIds(peers: JSONArray?): List<Long> =
-        if (peers == null) emptyList() else (0 until peers.length()).mapNotNull { addressOf(peers.optJSONObject(it))?.let(resolver::chatIdOf) }
+    /** Чаты записей журнала; не известные шву (группа ещё не подключена) с [key] запоминаются для [build]. */
+    private fun chatIds(peers: JSONArray?, key: String? = null): List<Long> {
+        val ids = ArrayList<Long>()
+        val missing = ArrayList<JSONObject>()
+        if (peers != null) for (i in 0 until peers.length()) {
+            val peer = peers.optJSONObject(i) ?: continue
+            val id = addressOf(peer)?.let(resolver::chatIdOf)
+            if (id != null) ids += id else missing += peer
+        }
+        if (key != null) synchronized(unresolved) {
+            if (missing.isEmpty()) unresolved.remove(key) else unresolved[key] = missing
+            hasUnresolved = unresolved.isNotEmpty()
+        }
+        return ids
+    }
+
+    /**
+     * Чаты из журнала, которых шов ещё не знает (группа не подключена — устройство только вошло): ключ — место в
+     * снимке (папка, закреп, архив, «непрочитано»). Проекция их пропускает, а [build] возвращает на место: иначе
+     * синк этого устройства стёр бы их из папок на всех устройствах. Шов заново проецирует снимок, когда узнаёт
+     * новые группы ([hasUnresolved]).
+     */
+    private val unresolved = HashMap<String, List<JSONObject>>()
+    @Volatile var hasUnresolved = false
+        private set
 
     // ── локальные данные → желаемый снимок (виды [KINDS]) ───────────────────
     fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null): JSONObject {
@@ -107,7 +131,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val order = JSONArray()
         local.folders.all().forEach { f ->
             folders.put(JSONObject().put("id", f.id).put("title", f.title).put("emoticon", f.icon)
-                .put("include_peers", peers(f.included)).put("exclude_peers", peers(f.excluded)).put("pinned_peers", peers(f.pinned))
+                .put("include_peers", peers(f.included, "folder:${f.id}:in")).put("exclude_peers", peers(f.excluded, "folder:${f.id}:ex"))
+                .put("pinned_peers", peers(f.pinned, "folder:${f.id}:pin"))
                 .put("contacts", f.includeContacts).put("non_contacts", f.includeNonContacts).put("groups", f.includeGroups)
                 .put("channels", f.includeChannels).put("bots", f.includeBots).put("exclude_muted", f.excludeMuted)
                 .put("exclude_read", f.excludeRead).put("exclude_archived", f.excludeArchived).put("color", f.colorId))
@@ -126,6 +151,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         }
         val archived = JSONArray()
         local.archivedChatIds().forEach { id -> resolver.addressOf(id)?.let(::peerOf)?.let { archived.put(it) } }
+        synchronized(unresolved) { unresolved["archived"]?.toList() }?.forEach { archived.put(it) }
         val scheduled = JSONArray()
         queue.all().forEach { item ->
             if (item.localPath != null) return@forEach // медиа отложенного — локальная копия, в журнал не переносится
@@ -141,8 +167,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val out = JSONObject().put("folders", folders).put("folder_order", JSONObject().put("ids", order)).put("blocked", blocked)
             .put("drafts", drafts).put("archived", archived).put("scheduled", scheduled)
         // STATE-2: закреп главного списка, отметки «непрочитано», быстрая реакция (как web/desktop)
-        out.put("pinned", JSONArray().put(JSONObject().put("list", "PIN_LIST_MAIN").put("peers", peers(local.pinnedChatIds()))))
-        out.put("unread_marks", peers(local.unreadMarkedChatIds()))
+        out.put("pinned", JSONArray().put(JSONObject().put("list", "PIN_LIST_MAIN").put("peers", peers(local.pinnedChatIds(), "pins"))))
+        out.put("unread_marks", peers(local.unreadMarkedChatIds(), "unread"))
         out.put("quick_reaction", local.quickReaction().takeIf { it.isNotEmpty() }?.let { JSONObject().put("emoji", it) } ?: JSONObject())
         // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
         if (notify != null) {
@@ -221,11 +247,13 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val list = snap.optJSONArray("folders") ?: JSONArray()
         val order = snap.optJSONObject("folder_order")?.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
         val next = LinkedHashMap<Int, Folders.Folder>()
+        synchronized(unresolved) { unresolved.keys.removeAll { it.startsWith("folder:") }; hasUnresolved = unresolved.isNotEmpty() }
         for (i in 0 until list.length()) {
             val o = list.optJSONObject(i) ?: continue
             val id = o.optInt("id"); if (id <= 1) continue
             next[id] = Folders.Folder(id, o.optString("title"), o.optString("emoticon"), o.optInt("color", -1),
-                chatIds(o.optJSONArray("pinned_peers")), chatIds(o.optJSONArray("include_peers")), chatIds(o.optJSONArray("exclude_peers")),
+                chatIds(o.optJSONArray("pinned_peers"), "folder:$id:pin"), chatIds(o.optJSONArray("include_peers"), "folder:$id:in"),
+                chatIds(o.optJSONArray("exclude_peers"), "folder:$id:ex"),
                 o.optBoolean("exclude_muted"), o.optBoolean("exclude_read"), o.optBoolean("exclude_archived"),
                 o.optBoolean("contacts"), o.optBoolean("non_contacts"), o.optBoolean("bots"), o.optBoolean("groups"), o.optBoolean("channels"))
         }
@@ -265,7 +293,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     private fun projectArchived(snap: JSONObject, local: ChatLocalState, ch: Changes) {
         val list = snap.optJSONArray("archived") ?: JSONArray()
-        val next = (0 until list.length()).mapNotNull { addressOf(list.optJSONObject(it))?.let(resolver::chatIdOf) }.toSet()
+        val next = chatIds(list, "archived").toSet()
         val cur = local.archivedChatIds().toSet()
         (next - cur).forEach { local.setArchived(it, true); ch.archived += it }
         (cur - next).forEach { local.setArchived(it, false); ch.archived += it }
@@ -275,7 +303,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         snap.optJSONArray("pinned")?.let { lists ->
             val main = (0 until lists.length()).mapNotNull { lists.optJSONObject(it) }
                 .firstOrNull { it.optString("list", "PIN_LIST_MAIN") == "PIN_LIST_MAIN" }
-            val next = chatIds(main?.optJSONArray("peers"))
+            val next = chatIds(main?.optJSONArray("peers"), "pins")
             val cur = local.pinnedChatIds()
             if (next != cur) {
                 ch.pinned += (next + cur).toSet()
@@ -283,7 +311,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
             }
         }
         snap.optJSONArray("unread_marks")?.let { a ->
-            val next = chatIds(a).toSet()
+            val next = chatIds(a, "unread").toSet()
             val cur = local.unreadMarkedChatIds().toSet()
             (next - cur).forEach { local.setMarkedUnread(it, true); ch.unread += it }
             (cur - next).forEach { local.setMarkedUnread(it, false); ch.unread += it }

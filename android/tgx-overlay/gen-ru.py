@@ -46,6 +46,8 @@ items = re.findall(r'<string name="([^"]+)"([^>]*)>(.*?)</string>', xml, re.S)
 def esc(s):
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     s = s.replace("'", "\\'").replace('"', '\\"')
+    # Перенос строки — экранированным \n: настоящий перевод строки aapt схлопывает в пробел
+    s = s.replace("\n", "\\n")
     return s
 
 out, n_hand, n_desk = [], 0, 0

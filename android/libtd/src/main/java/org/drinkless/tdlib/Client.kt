@@ -1164,7 +1164,20 @@ class Client private constructor(
     private val groupsLock = Any()
     /** Чаты групп, убранные из списков событием `removed`: при возвращении группы позиции объявляются заново. */
     private val hiddenGroupChats: MutableSet<Long> = ConcurrentHashMap.newKeySet()
-    private fun syncGroups(): Unit = synchronized(groupsLock) { syncGroupsLocked() }
+    private fun syncGroups() {
+        synchronized(groupsLock) { syncGroupsLocked() }
+        reprojectUnresolved()
+    }
+
+    /**
+     * Папки, закреп, архив и «непрочитано» из журнала ссылались на группы, которых шов не знал (вход нового
+     * устройства: группы приходят позже журнала) — теперь, возможно, знает: снимок проецируется заново.
+     */
+    private fun reprojectUnresolved() {
+        if (!stateJournal.hasUnresolved || !stateAttached || detached) return
+        val snap = lastStateSnap ?: return
+        synchronized(stateLock) { applyState(snap) }
+    }
 
     private fun syncGroupsLocked() {
         val arr = try { ParvaneCore.listGroups() } catch (e: Throwable) { Log.w(TAG, "группы: ${e.message}"); return }
@@ -2014,7 +2027,10 @@ class Client private constructor(
     }
 
     /** Сведённый снимок → локальные файлы шва и апдейты X. */
+    /** Последний снимок журнала — для повторной проекции, когда шов узнаёт новые группы. */
+    @Volatile private var lastStateSnap: JSONObject? = null
     private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
+        lastStateSnap = snap
         projectCleared(snap)
         val l = store.local ?: return
         val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null)
@@ -2125,6 +2141,14 @@ class Client private constructor(
                         val root = org.parvane.core.ParvaneSections.snapshot("cloud")?.optString("rootId").orEmpty()
                         sectionsResult("cloud_folder", org.parvane.core.ParvaneSections.cloudFiles("createFolder", JSONObject().put("container", root).put("name", cmd.optString("name"))))
                     }
+                    // Файл устройства в корень личного диска (картинка для карточки холста в сценарии снимков)
+                    "cloud_upload" -> {
+                        val root = org.parvane.core.ParvaneSections.snapshot("cloud")?.optString("rootId").orEmpty()
+                        sectionsResult("cloud_upload", org.parvane.core.ParvaneSections.cloudFiles("upload", JSONObject().put("container", root)
+                            .put("path", cmd.optString("path")).put("name", cmd.optString("name")).put("mime", cmd.optString("mime", "application/octet-stream"))))
+                    }
+                    "canvas_create" -> sectionsResult("canvas_create", org.parvane.core.ParvaneSections.notes("saveCanvas",
+                        JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     // REPORT-1: штатная жалоба X на чат (последние N входящих) — причина и комментарий
                     "report" -> {
                         val ids = store.history(chatId, 0, 0, 50).messages.filter { !it.isOutgoing }.take(cmd.optInt("last", 1)).map { it.id }.toLongArray()
@@ -2193,7 +2217,9 @@ class Client private constructor(
                     val nodes = snap.optJSONObject("state")?.optJSONObject("trees")?.optJSONObject(root)?.optJSONArray("nodes")
                     val top = (0 until (nodes?.length() ?: 0)).mapNotNull { nodes!!.optJSONObject(it) }
                         .filter { (it.isNull("parent") || it.optString("parent").isEmpty()) && !it.optBoolean("trashed") }.map { it.optString("name") }
-                    Log.i(TAG, "cloud: status=${snap.optString("status")} корень=$top")
+                    val shared = (0 until (snap.optJSONArray("containers")?.length() ?: 0)).mapNotNull { snap.optJSONArray("containers")!!.optJSONObject(it) }
+                        .filter { it.optString("kind") != "root" }.map { "${it.optString("name")}:${it.optString("kind")}" }
+                    Log.i(TAG, "cloud: status=${snap.optString("status")} корень=$top папки=$shared")
                 }
             }
     }

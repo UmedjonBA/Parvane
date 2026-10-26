@@ -36,8 +36,10 @@ object CloudBridge {
             files.count { f ->
                 val path = f.path ?: return@count false
                 val name = File(path).name.let { n -> if (n.contains('.')) n else n + extFor(f.mimeType) }
-                val r = ParvaneSections.cloudFiles("upload", JSONObject().put("container", root).put("path", path)
-                    .put("name", name).put("mime", f.mimeType ?: "application/octet-stream")) as? JSONObject
+                val args = JSONObject().put("container", root).put("path", path)
+                    .put("name", name).put("mime", f.mimeType ?: "application/octet-stream")
+                val thumb = CloudThumbs.attach(args, File(path), f.mimeType)
+                val r = try { ParvaneSections.cloudFiles("upload", args) as? JSONObject } finally { thumb?.delete() }
                 r?.optBoolean("ok") == true
             }
         }) { n ->

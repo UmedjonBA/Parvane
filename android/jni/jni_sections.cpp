@@ -10,6 +10,8 @@
 #include <parvane/sections/cloud_files.h>
 #include <parvane/sections/export_source.h>
 #include <parvane/sections/cloud_sync.h>
+#include <parvane/sections/notes_canvas_files.h>
+#include <parvane/sections/notes_canvas_images.h>
 #include <parvane/sections/notes_store.h>
 #include <parvane/sections/planner_store.h>
 #include <parvane/sections/planner_sync.h>
@@ -861,6 +863,34 @@ json cloudFilesOp(Hub &hub, const std::string &op, const json &a) {
         std::ofstream out(s("out"), std::ios::binary | std::ios::trunc);
         out.write(jpeg->data(), std::streamsize(jpeg->size()));
         return bool(out);
+    }
+    // Карточка файла на холсте «Знаний» (как web `CanvasFileBody`): файл личного диска по пути карточки; у картинки
+    // — сам файл (не больше предела) либо миниатюра облака в `out`, у прочих — только имя и размер
+    if (op == "canvasFile") {
+        const auto all = treeNodes(hub, container);
+        const auto *node = notes::resolveDrivePath(all, s("path"));
+        if (!node) return json{{"found", false}};
+        json r{{"found", true}, {"name", node->name}, {"size", node->size}, {"type", cloud::fileTypeLabel(node->name)},
+               {"image", "none"}};
+        auto source = notes::canvasImageSource(node, a.value("full", true) ? notes::CanvasImageQuality::Full
+                                                                            : notes::CanvasImageQuality::Thumb);
+        // Мелкой карточке хватило бы миниатюры, но её нет (файл загружен без неё, например с телефона) — сам файл
+        if (source == notes::CanvasImageSource::None)
+            source = notes::canvasImageSource(node, notes::CanvasImageQuality::Full);
+        if (s("out").empty() || source == notes::CanvasImageSource::None) return r;
+        std::optional<std::string> bytes;
+        bool full = false;
+        if (source == notes::CanvasImageSource::Full) {
+            auto got = files.download(container, node->id);
+            if (got.ok) bytes = std::move(got.bytes), full = true;
+        }
+        // Не прочитавшаяся картинка (нет связи) остаётся миниатюрой
+        if (!bytes && node->thumb) bytes = files.thumb(json(*node));
+        if (!bytes) return r;
+        std::ofstream out(s("out"), std::ios::binary | std::ios::trunc);
+        out.write(bytes->data(), std::streamsize(bytes->size()));
+        if (out) r["image"] = full ? "full" : "thumb";
+        return r;
     }
     if (op == "createFolder")
         return hub.drive().applyOps(container, cloud::createFolderOps(treeNodes(hub, container), parent, s("name"), cloud::newCloudNodeId()));

@@ -43,6 +43,7 @@ const WEB_TASK = `Полить кактус ${S}`;
 const WEB_EVENT = `Шахматы ${S}`;
 const WEB_FOLDER = `Черновики ${S}`;
 const WEB_NOTE = `Идеи ${S}`;
+const WEB_SHARED = `Общая ${S}`;
 const X_TASK = `Купить хлеб ${W}`;
 const X_FOLDER = `С телефона ${S}`;
 const X_NOTE = `Заметка с телефона ${S}`;
@@ -208,6 +209,17 @@ try {
     await page.getByRole('button', { name: 'Create', exact: true }).click();
     await cloud.item(WEB_FOLDER).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   });
+  await step(`web: в «Облаке» общая папка «${WEB_SHARED}»`, async () => {
+    await cloud.root();
+    await cloud.add('New shared folder');
+    await page.locator('#parvane-cloud-shared-name').fill(WEB_SHARED);
+    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    const sheet = page.locator('.Modal .modal-dialog').filter({ hasText: 'Access to' });
+    await sheet.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+    await sheet.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await cloud.root();
+    await cloud.folderRow(WEB_SHARED).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  });
   await step(`web: в «Знаниях» заметка «${WEB_NOTE}»`, async () => {
     await sidebar.getByRole('tab', { name: 'Knowledge' }).click();
     await knowledge.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
@@ -267,6 +279,8 @@ try {
   xMark = linkedMark;
   await check(`X: папка web «${WEB_FOLDER}» в «Облаке»`, () => xWait(cloudRe(WEB_FOLDER)));
   await check(`X: заметка web «${WEB_NOTE}» в «Знаниях»`, () => xWait(notesRe(WEB_NOTE)));
+  // Своя общая папка — отдельный контейнер; телефон обязан подключить его (прод 26 окт: общих папок не было)
+  await check(`X: общая папка web «${WEB_SHARED}» в «Облаке»`, () => xWait(new RegExp(`cloud: status=ready .*папки=\\[[^\\]]*${escapeRegExp(WEB_SHARED)}:owned`)));
 
   // ── 4. X заводит своё → web видит ≤ 60 с ──────────────────────────────────
   const timed = async (label, fn) => {

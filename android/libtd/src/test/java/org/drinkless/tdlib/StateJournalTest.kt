@@ -67,6 +67,43 @@ class StateJournalTest {
         assertFalse(ch2.reaction)
     }
 
+    /**
+     * Новое устройство получает журнал раньше своих групп: папка с группой проецируется без неё, но синк этого
+     * устройства не стирает группу из папки (иначе папка пустела у всех), а когда группа известна — она в папке.
+     */
+    @Test
+    fun folderKeepsGroupUnknownToThisDevice() {
+        val a = tmp()
+        val local = ChatLocalState(a)
+        local.folders.create(TdApi.ChatFolder(TdApi.ChatFolderName(TdApi.FormattedText("Учёба", arrayOf()), false), null, -1, false,
+            longArrayOf(-21L), longArrayOf(11L, -21L), LongArray(0), false, false, false, false, false, false, false, false))
+        val snap = StateJournal(ParvaneProtocol.stateCodec, resolver()).build(local, ScheduledQueue(a) { 1000L })
+
+        val b = tmp()
+        val other = ChatLocalState(b)
+        var knowsGroup = false
+        val partial = object : StateJournal.Resolver {
+            override fun addressOf(chatId: Long) = ids.entries.firstOrNull { it.value == chatId && (knowsGroup || it.value > 0) }?.key
+            override fun chatIdOf(address: String) = ids[address]?.takeIf { knowsGroup || it > 0 }
+            override fun domain() = "local"
+            override fun isKnownV2Group(hex: String) = knowsGroup && ids.containsKey("v2g:$hex")
+        }
+        val j = StateJournal(ParvaneProtocol.stateCodec, partial)
+        j.project(snap, other, ScheduledQueue(b) { 1000L })
+        assertEquals(listOf(11L), other.folders.all().single().included)
+        assertTrue(j.hasUnresolved)
+        val written = j.build(other, ScheduledQueue(b) { 1000L }).getJSONArray("folders").getJSONObject(0)
+        assertEquals("группа осталась в папке журнала", 2, written.getJSONArray("include_peers").length())
+        assertEquals(1, written.getJSONArray("pinned_peers").length())
+
+        knowsGroup = true
+        val ch = j.project(snap, other, ScheduledQueue(b) { 1000L })
+        assertTrue(ch.folders)
+        assertEquals(listOf(11L, -21L), other.folders.all().single().included)
+        assertEquals(listOf(-21L), other.folders.all().single().pinned)
+        assertFalse(j.hasUnresolved)
+    }
+
     /** T132 (FR-039, правило STATE-2): настройки уведомлений — вид журнала, чужие поля записи не стираются. */
     @Test
     fun notifySettingsRoundTripThroughSnapshot() {

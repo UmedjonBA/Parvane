@@ -273,6 +273,24 @@ static void lifecycleTests() {
         check(r.sync.containers().size() == 1, "забытая папка экрану не показывается");
     }
     {
+        // Своя общая папка удалена на другом устройстве: запись журнала снята, контейнер на сервере остался
+        Rig r;
+        r.entries.push_back({"aa01", "local", "root", "", false, ""});
+        r.entries.push_back({"ff06", "local", "owned", "", false, ""});
+        r.server("aa01", r.t.me);
+        r.server("ff06", r.t.me).name = "Общая";
+        r.sync.ensure(true);
+        auto list = r.sync.containers();
+        check(list.size() == 2 && list[1].kind == "owned", "своя общая папка показывается");
+        r.entries[1].isRemoved = true;
+        check(r.sync.containers().size() == 1, "снятая запись журнала — папка не показывается сразу");
+        r.sync.syncNow();
+        check(std::count(r.e.forgotten.begin(), r.e.forgotten.end(), "ff06") == 1, "удалённая на другом устройстве папка забыта");
+        r.sync.syncNow();
+        check(!r.e.boxes["ff06"].attached || std::count(r.e.forgotten.begin(), r.e.forgotten.end(), "ff06") == 1,
+              "и не подключается заново");
+    }
+    {
         Rig r;
         r.sync.ensure(false);
         check(r.e.created == 0 && !r.sync.rootId(), "без правок личный диск не создаётся");

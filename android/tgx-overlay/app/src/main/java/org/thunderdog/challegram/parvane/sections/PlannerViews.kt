@@ -893,6 +893,19 @@ object PlannerViews {
             }
         }
 
+        // Блоки мерятся шириной своей колонки: с шириной 0 из LayoutParams текст внутри оставался нулевой ширины
+        // и не рисовался, хотя сам блок onLayout растягивал (пустые блоки во вкладке «День»)
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            val w = measuredWidth - hoursWidth
+            for (i in 0 until childCount) {
+                val v = getChildAt(i)
+                val lanes = (v.tag as? FloatArray) ?: continue
+                v.measure(MeasureSpec.makeMeasureSpec((w / lanes[1]).toInt(), MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(v.layoutParams.height, MeasureSpec.EXACTLY))
+            }
+        }
+
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
             super.onLayout(changed, l, t, r, b)
             val w = width - hoursWidth

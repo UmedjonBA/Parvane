@@ -83,7 +83,7 @@ stop_pid "$BP"
 BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:метка-места-$STAMP" PARVANE_AUTOLOCATION="alice@local:$P0")
 wait_log "$B/td/log.txt" "геолокация → alice@local" 60 && ok "bob отправил локацию" || bad "bob не отправил локацию"
 xlog "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)" 60 >/dev/null
-ui_reset; ad shell input tap 540 330; sleep 6; ad exec-out screencap -p > "$OUT/02-location.png"
+ui_reset; ui_open_chat; sleep 6; ad exec-out screencap -p > "$OUT/02-location.png"
 xlog "карта 55\.7558[0-9]*,37\.617[0-9]* z15 [0-9]+x[0-9]+ тайлов=[1-9][0-9]*/[0-9]+" 60 && ok "MAP-1 (X): карта собрана из тайлов preview" || bad "MAP-1 (X): карта не собрана (см. $OUT/02-location.png)"
 xlog "тайл 15/[0-9]+/[0-9]+ через preview" 10 && ok "MAP-1 (X): тайлы шли через preview" || bad "MAP-1 (X): нет маркера «через preview»"
 ad exec-out screencap -p > "$OUT/03-map.png"

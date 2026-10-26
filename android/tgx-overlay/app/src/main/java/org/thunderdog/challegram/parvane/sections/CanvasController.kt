@@ -549,14 +549,15 @@ class CanvasBoardView(
     }
 
     private fun titleOf(n: JSONObject): String = when (n.optString("type")) {
-        "file" -> noteOf(n)?.optString("title") ?: n.optString("file").substringAfterLast('/').removeSuffix(".md")
+        "file" -> if (isNoteFile(n)) noteOf(n)?.optString("title") ?: n.optString("file").substringAfterLast('/').removeSuffix(".md")
+            else n.optString("file").substringAfterLast('/')
         "link" -> n.optString("url")
         "group" -> n.optString("label")
         else -> ""
     }
 
     private fun bodyOf(n: JSONObject): String = when (n.optString("type")) {
-        "file" -> noteOf(n)?.let { NoteText.bodyWithoutProperties(it.optString("text")).replace(Regex("""\[\[([^\]|]+)(\|[^\]]+)?]]"""), "$1") } ?: ""
+        "file" -> noteOf(n)?.takeIf { isNoteFile(n) }?.let { NoteText.bodyWithoutProperties(it.optString("text")).replace(Regex("""\[\[([^\]|]+)(\|[^\]]+)?]]"""), "$1") } ?: ""
         "text" -> n.optString("text")
         else -> ""
     }
@@ -623,6 +624,18 @@ class CanvasBoardView(
             canvas.clipRect(r)
             val pad = 10f * k
             var y = r.top + pad
+            val type = n.optString("type")
+            if (type == "link" || (type == "file" && !isNoteFile(n))) {
+                if (type == "link") drawLink(canvas, n, r, pad) else drawFile(canvas, n, r, pad)
+                canvas.restore()
+                if (dim) {
+                    fill.color = Kn.boardFill()
+                    fill.alpha = 166
+                    canvas.drawRoundRect(r, rad, rad, fill)
+                    fill.alpha = 255
+                }
+                continue
+            }
             val title = titleOf(n)
             if (title.isNotEmpty()) {
                 val note = if (n.optString("type") == "file") noteOf(n) else null
@@ -654,6 +667,105 @@ class CanvasBoardView(
                 fill.alpha = 255
             }
         }
+    }
+
+    private fun isNoteFile(n: JSONObject) = n.optString("pvNote").isNotEmpty() ||
+        n.optString("file").substringAfterLast('/').let { it.length > 3 && it.endsWith(".md", ignoreCase = true) }
+
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+    /** Картинка по ширине области с обрезкой краёв (`object-fit: cover`). */
+    private fun drawCover(canvas: Canvas, bmp: android.graphics.Bitmap, area: RectF) {
+        if (area.width() <= 0f || area.height() <= 0f) return
+        val s = max(area.width() / bmp.width, area.height() / bmp.height)
+        val w = area.width() / s
+        val h = area.height() / s
+        val src = android.graphics.Rect(((bmp.width - w) / 2).toInt(), ((bmp.height - h) / 2).toInt(), ((bmp.width + w) / 2).toInt(), ((bmp.height + h) / 2).toInt())
+        canvas.drawBitmap(bmp, src, area, bitmapPaint)
+    }
+
+    private fun drawEllipsized(canvas: Canvas, value: String, paint: TextPaint, x: Float, baseline: Float, width: Float) {
+        val shown = android.text.TextUtils.ellipsize(value, paint, width.coerceAtLeast(1f), android.text.TextUtils.TruncateAt.END)
+        canvas.drawText(shown, 0, shown.length, x, baseline, paint)
+    }
+
+    /** Карточка файла облака (`CanvasFileBody`): картинка либо значок с типом, внизу имя и размер. */
+    private fun drawFile(canvas: Canvas, n: JSONObject, r: RectF, pad: Float) {
+        val c = Pv.c
+        val path = n.optString("file")
+        val onScreen = RectF.intersects(r, RectF(0f, 0f, width.toFloat(), height.toFloat()))
+        val info = if (onScreen) CanvasMedia.file(context, path, r.width() >= 320f * density) { invalidate() } else null
+        val foot = 30f * k
+        val body = RectF(r.left, r.top, r.right, r.bottom - foot)
+        val bmp = info?.image
+        if (bmp != null) drawCover(canvas, bmp, body)
+        else {
+            titlePaint.color = c.faint
+            titlePaint.textSize = 18f * k
+            titlePaint.textAlign = Paint.Align.CENTER
+            val label = info?.type?.takeIf { it.isNotEmpty() } ?: path.substringAfterLast('.', "").uppercase().take(6).ifEmpty { "FILE" }
+            canvas.drawText(label, body.centerX(), body.centerY() + 6f * k, titlePaint)
+            titlePaint.textAlign = Paint.Align.LEFT
+        }
+        fill.color = c.panel
+        canvas.drawRect(r.left, r.bottom - foot, r.right, r.bottom, fill)
+        val name = info?.name?.takeIf { it.isNotEmpty() } ?: path.substringAfterLast('/')
+        val size = when {
+            info != null -> CanvasMedia.size(info.size)
+            else -> ""
+        }
+        text.color = c.muted
+        text.textSize = 10f * k
+        val sizeW = if (size.isEmpty()) 0f else text.measureText(size) + 8f * k
+        titlePaint.color = c.fg
+        titlePaint.textSize = 11f * k
+        val base = r.bottom - foot / 2 + 4f * k
+        drawEllipsized(canvas, name, titlePaint, r.left + pad, base, r.width() - pad * 2 - sizeW)
+        if (size.isNotEmpty()) canvas.drawText(size, r.right - pad - text.measureText(size), base, text)
+    }
+
+    /** Карточка-ссылка (`CanvasLinkBody`): картинка страницы, заголовок, описание, внизу узел сайта. */
+    private fun drawLink(canvas: Canvas, n: JSONObject, r: RectF, pad: Float) {
+        val c = Pv.c
+        val url = n.optString("url")
+        val onScreen = RectF.intersects(r, RectF(0f, 0f, width.toFloat(), height.toFloat()))
+        val info = if (onScreen) CanvasMedia.link(url) { invalidate() } else null
+        val foot = 26f * k
+        var y = r.top
+        info?.image?.let { bmp ->
+            val h = min(r.height() * 0.5f, (r.width() * bmp.height / max(1, bmp.width)).coerceAtLeast(40f * k))
+            drawCover(canvas, bmp, RectF(r.left, r.top, r.right, r.top + h))
+            y += h
+        }
+        y += pad
+        val w = (r.width() - pad * 2).toInt().coerceAtLeast(1)
+        val room = r.bottom - foot - y
+        val title = info?.title.orEmpty()
+        val description = info?.description.orEmpty()
+        if (title.isNotEmpty() && room > 12f * k) {
+            titlePaint.color = c.fg
+            titlePaint.textSize = 12f * k
+            val lines = max(1, min(2, (room / (titlePaint.textSize * 1.3f)).toInt()))
+            val l = StaticLayout.Builder.obtain(title, 0, title.length, titlePaint, w).setMaxLines(lines)
+                .setEllipsize(android.text.TextUtils.TruncateAt.END).build()
+            canvas.save(); canvas.translate(r.left + pad, y); l.draw(canvas); canvas.restore()
+            y += l.height + 4f * k
+        }
+        val shown = description.ifEmpty { if (info == null || !info.hasContent) url else "" }
+        if (shown.isNotEmpty() && r.bottom - foot - y > 10f * k) {
+            text.color = c.muted
+            text.textSize = 10f * k
+            val lines = max(1, ((r.bottom - foot - y) / (text.textSize * 1.3f)).toInt())
+            val l = StaticLayout.Builder.obtain(shown, 0, shown.length, text, w).setMaxLines(lines)
+                .setEllipsize(android.text.TextUtils.TruncateAt.END).build()
+            canvas.save(); canvas.translate(r.left + pad, y); l.draw(canvas); canvas.restore()
+        }
+        fill.color = c.blue
+        canvas.drawCircle(r.left + pad + 3f * k, r.bottom - foot / 2, 3f * k, fill)
+        text.color = c.muted
+        text.textSize = 10f * k
+        drawEllipsized(canvas, info?.site?.takeIf { it.isNotEmpty() } ?: CanvasMedia.host(url), text, r.left + pad + 10f * k,
+            r.bottom - foot / 2 + 3.5f * k, r.width() - pad * 2 - 10f * k)
     }
 
     /** Точка выхода стрелки: середина стороны карточки, обращённой к цели, и направление наружу. */
@@ -768,7 +880,8 @@ class CanvasBoardView(
     private fun menu(n: JSONObject) {
         val items = mutableListOf<Pair<String, () -> Unit>>()
         when (n.optString("type")) {
-            "file" -> items += Sx.t("Открыть заметку", "Open note") to { open(n) }
+            "file" -> if (isNoteFile(n)) items += Sx.t("Открыть заметку", "Open note") to { open(n) }
+            "link" -> items += Sx.t("Открыть ссылку", "Open link") to { open(n) }
             "text" -> items += Sx.t("Изменить текст", "Edit text") to { edit(n) }
             "group" -> items += Sx.t("Переименовать", "Rename") to { open(n) }
         }
@@ -789,4 +902,133 @@ class CanvasBoardView(
         }
         return true
     }
+}
+
+/**
+ * Картинки карточек холста (как web `CanvasFileBody`/`CanvasLinkBody`): файл личного диска по пути карточки —
+ * миниатюра облака, у крупной на экране карточки — сам файл; у ссылки — превью страницы через шард preview (на чужой
+ * сайт телефон не ходит). Всё в памяти (не больше [MAX_BYTES] картинок), в файл холста не пишется; ненайденное и
+ * недоступное повторяется не раньше чем через [RETRY_MS] — облако могло ещё не загрузиться.
+ */
+object CanvasMedia {
+    class FileInfo(val name: String, val size: Long, val type: String, val image: android.graphics.Bitmap?, val askedFull: Boolean)
+    class LinkInfo(val title: String, val description: String, val site: String, val image: android.graphics.Bitmap?) {
+        val hasContent get() = title.isNotEmpty() || description.isNotEmpty() || image != null
+    }
+
+    private const val MAX_BYTES = 96 * 1024 * 1024
+    private const val RETRY_MS = 15_000L
+    private const val MAX_SIDE = 1280
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "parvane-canvas-media") }
+    private val files = object : android.util.LruCache<String, FileInfo>(MAX_BYTES) {
+        override fun sizeOf(key: String, value: FileInfo) = (value.image?.byteCount ?: 0) + 256
+    }
+    private val links = object : android.util.LruCache<String, LinkInfo>(MAX_BYTES / 4) {
+        override fun sizeOf(key: String, value: LinkInfo) = (value.image?.byteCount ?: 0) + 256
+    }
+    private val loading = HashSet<String>()
+    private val failedAt = HashMap<String, Long>()
+
+    private fun busy(key: String): Boolean {
+        if (key in loading) return true
+        val at = failedAt[key] ?: return false
+        if (System.currentTimeMillis() - at < RETRY_MS) return true
+        failedAt.remove(key)
+        return false
+    }
+
+    /** Файл карточки; `full` — карточка на экране крупная, нужен сам файл. Готово позже — `ready()` на главном потоке. */
+    fun file(context: Context, path: String, full: Boolean, ready: () -> Unit): FileInfo? {
+        val have = files.get(path)
+        if (have != null && (!full || have.askedFull)) return have
+        val key = "$path|$full"
+        if (busy(key)) return have
+        val root = (Sx.last("cloud") ?: ParvaneSections.snapshot("cloud"))?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
+            ?: return have
+        loading += key
+        worker.execute {
+            val out = java.io.File(context.cacheDir, "parvane-canvas-${Integer.toHexString(path.hashCode())}")
+            val info = try {
+                val r = ParvaneSections.cloudFiles("canvasFile", JSONObject().put("container", root).put("path", path)
+                    .put("full", full).put("out", out.absolutePath)) as? JSONObject
+                if (r == null || !r.optBoolean("found")) null else {
+                    val kind = r.optString("image")
+                    val bmp = if (kind == "full" || kind == "thumb") decode(out) else null
+                    FileInfo(r.optString("name"), r.optLong("size"), r.optString("type"), bmp, full)
+                }
+            } catch (e: Throwable) { null } finally { out.delete() }
+            Sx.main.post {
+                loading -= key
+                if (info == null) failedAt[key] = System.currentTimeMillis()
+                else {
+                    // Не прочитавшийся файл (нет связи) оставляет прежнюю миниатюру
+                    val old = files.get(path)?.image
+                    files.put(path, if (info.image == null && old != null) FileInfo(info.name, info.size, info.type, old, full) else info)
+                }
+                ready()
+            }
+        }
+        return have
+    }
+
+    /** Превью ссылки: нет — ещё грузится (null) либо пустое (`hasContent == false`). */
+    fun link(url: String, ready: () -> Unit): LinkInfo? {
+        links.get(url)?.let { return it }
+        if (busy(url)) return null
+        loading += url
+        worker.execute {
+            val info = try {
+                val wp = org.parvane.core.ParvaneCore.previewFetch(url, 8000)
+                // Картинку рисуем только растровую: SVG может нести сценарий
+                val mime = wp.optString("image_mime").lowercase()
+                val bmp = wp.optString("image").takeIf { it.isNotEmpty() && mime in listOf("image/jpeg", "image/png", "image/webp", "image/gif") }?.let {
+                    val bytes = android.util.Base64.decode(it, android.util.Base64.DEFAULT)
+                    decodeBytes(bytes)
+                }
+                LinkInfo(wp.optString("title").trim().take(200), wp.optString("description").replace(Regex("\\s+"), " ").trim().take(400),
+                    wp.optString("site_name").trim(), bmp)
+            } catch (e: Throwable) { null }
+            Sx.main.post {
+                loading -= url
+                // Недоступное превью не запоминается: новая попытка через RETRY_MS
+                if (info == null || !info.hasContent) failedAt[url] = System.currentTimeMillis()
+                if (info != null && info.hasContent) links.put(url, info)
+                ready()
+            }
+        }
+        return null
+    }
+
+    private fun decode(file: java.io.File): android.graphics.Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0) return null
+        return android.graphics.BitmapFactory.decodeFile(file.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample(bounds) })
+    }
+
+    private fun decodeBytes(bytes: ByteArray): android.graphics.Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0) return null
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample(bounds) })
+    }
+
+    private fun sample(o: android.graphics.BitmapFactory.Options): Int {
+        var s = 1
+        while (max(o.outWidth, o.outHeight) / (s * 2) >= MAX_SIDE) s *= 2
+        return s
+    }
+
+    /** Размер файла для карточки: «0 B», «1.5 KB», «12 MB» (`formatCardSize`). */
+    fun size(bytes: Long): String {
+        var v = max(0L, bytes).toDouble()
+        var unit = 0
+        val units = listOf("B", "KB", "MB", "GB")
+        while (v >= 1024 && unit < units.size - 1) { v /= 1024; unit++ }
+        val t = if (v >= 10 || unit == 0) Math.round(v).toString() else String.format(java.util.Locale.US, "%.1f", v).removeSuffix(".0")
+        return "$t ${units[unit]}"
+    }
+
+    /** Узел сайта без `www.`; адрес не разобрать — он сам. */
+    fun host(url: String): String = try { android.net.Uri.parse(url).host?.removePrefix("www.")?.takeIf { it.isNotEmpty() } ?: url } catch (e: Throwable) { url }
 }

@@ -80,9 +80,14 @@ ui_in_chat() {
   ui_dump || return 1
   grep -q 'id/msg_input' "$UI_XML"
 }
+# Открыть чат списка по имени (по умолчанию bob). Под шапкой чатов (spec 032) бывает строка папок — нажатие по
+# координатам первой строки (540,330) попадало в неё, и чат не открывался (MAP-1 в tgx_folders_preview_flow, 26 окт)
+ui_open_chat() {
+  ui_tap "${1:-^bob$}" 15 || timeout 25 adb shell input tap 540 500
+}
 ui_close_panel() {
   timeout 25 adb shell input keyevent 4; sleep 2
-  if ! ui_in_chat; then timeout 25 adb shell input tap 540 330; sleep 4; fi
+  if ! ui_in_chat; then ui_open_chat; sleep 3; fi
 }
 # После `am force-stop` процесс X может пережить паузу в 2 с (или подняться заново службой X до
 # `logcat -c`): маркеры старта попадали в стёртый буфер (tgx_conformance_flow.sh, 27 сен 2026).

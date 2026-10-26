@@ -21,7 +21,7 @@ kill $(pgrep -f "workdir $SB/bob/t[d]") 2>/dev/null; sleep 2
 BP=$(start_client "$SB/bob" bob@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOSEND="alice@local:privet-$STAMP")
 wait_log "$SB/bob/td/log.txt" "autosend → alice@local" 40 && echo "bob отправил" || echo "bob НЕ отправил"
 sleep 8; a exec-out screencap -p > $OUT/01-list.png
-a shell input tap 540 330; sleep 6; a exec-out screencap -p > $OUT/02-chat.png   # первый чат в списке
+. "$(dirname "${BASH_SOURCE[0]}")/tgx_ui.sh"; ui_open_chat; sleep 6; a exec-out screencap -p > $OUT/02-chat.png   # чат bob
 a shell input tap 360 2208; sleep 1; a shell input text "otvet-$STAMP"; sleep 1; a exec-out screencap -p > $OUT/03-typed.png
 a shell input tap 1010 2208; sleep 1; a exec-out screencap -p > $OUT/04-sent-1s.png; sleep 5; a exec-out screencap -p > $OUT/04-sent.png  # кнопка отправки (правый низ)
 wait_log "$SB/bob/td/log.txt" "входящее msg .*alice@local.*otvet-$STAMP" 30 && echo "bob получил ответ из X" || echo "bob НЕ получил ответ"
