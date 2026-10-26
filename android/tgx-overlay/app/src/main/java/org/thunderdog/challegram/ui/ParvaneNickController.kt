@@ -72,6 +72,15 @@ class ParvaneNickController(context: Context, tdlib: Tdlib) : ViewController<Voi
     override fun onCreateView(context: Context): View {
         root = FrameLayout(context).apply { setBackgroundColor(Theme.getColor(ColorId.filling)) }
         root.coverHeaderArea()
+        // Смена темы (ночной режим): форма шага строится заново цветами новой темы, введённое остаётся
+        Pv.onTheme(root) {
+            root.setBackgroundColor(Theme.getColor(ColorId.filling))
+            if (root.childCount > 0 && !inProgress) {
+                val typed = editTexts(root).map { it.text.toString() }
+                show(step)
+                editTexts(root).zip(typed).forEach { (e, t) -> if (t.isNotEmpty()) { e.setText(t); e.setSelection(t.length) } }
+            }
+        }
         tdlib.listeners().addAuthorizationChangeListener(this)
         applyState(tdlib.authorizationState())
         Thread({
@@ -115,6 +124,12 @@ class ParvaneNickController(context: Context, tdlib: Tdlib) : ViewController<Voi
     // ── вид ──────────────────────────────────────────────────────────────────────────
 
     private val accent get() = Theme.getColor(ColorId.fillingPositive)
+
+    private fun editTexts(v: View): List<android.widget.EditText> = when (v) {
+        is android.widget.EditText -> listOf(v)
+        is ViewGroup -> (0 until v.childCount).flatMap { editTexts(v.getChildAt(it)) }
+        else -> emptyList()
+    }
 
     private fun show(next: Step) {
         step = next

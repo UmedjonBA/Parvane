@@ -70,16 +70,25 @@ object ParvaneTabBar {
     }
 
     fun create(context: Context, owner: ViewController<*>, current: Tab): View {
-        val c = Pv.c
         val bar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(Pv.rem(0.375f), Pv.rem(0.25f), Pv.rem(0.375f), Pv.rem(0.25f))
-            // Линия `--pv-line` сверху, фон `--pv-panel`
-            background = LayerDrawable(arrayOf(GradientDrawable().apply { setColor(c.line) }, GradientDrawable().apply { setColor(c.panel) }))
-                .apply { setLayerInset(1, 0, Pv.px(1f), 0, 0) }
             isClickable = true // нажатия мимо кнопок не проходят в список под панелью
         }
+        val badge = arrayOfNulls<TextView>(1)
+        fill(context, owner, current, bar, badge)
+        if (badge[0] != null) trackUnread(owner, bar, badge)
+        // Смена темы (ночной режим): панель — та же, кнопки заново цветами новой темы
+        Pv.onTheme(bar) { bar.removeAllViews(); fill(context, owner, current, bar, badge); trackUnread(owner, bar, badge, attach = false) }
+        return bar
+    }
+
+    private fun fill(context: Context, owner: ViewController<*>, current: Tab, bar: LinearLayout, badgeOut: Array<TextView?>) {
+        val c = Pv.c
+        // Линия `--pv-line` сверху, фон `--pv-panel`
+        bar.background = LayerDrawable(arrayOf(GradientDrawable().apply { setColor(c.line) }, GradientDrawable().apply { setColor(c.panel) }))
+            .apply { setLayerInset(1, 0, Pv.px(1f), 0, 0) }
         var badge: TextView? = null
         fun item(icon: String, title: String, tab: Tab, onClick: () -> Unit) {
             val selected = tab == current
@@ -135,18 +144,20 @@ object ParvaneTabBar {
         })
         item("book", Sx.t("Знания", "Knowledge"), Tab.KNOWLEDGE) { open(owner, Tab.KNOWLEDGE, current) }
         item("user", Sx.t("Профиль", "Profile"), Tab.PROFILE) { open(owner, Tab.PROFILE, current) }
-        badge?.let { trackUnread(owner, bar, it) }
-        return bar
+        badgeOut[0] = badge
     }
 
     /** Число чатов с непрочитанным (как `chatsCount` папки «Все» в web), до 99+. */
-    private fun trackUnread(owner: ViewController<*>, bar: View, badge: TextView) {
+    /** Счётчик в [holder] (после смены темы там новый вид); [attach] — подписаться на счётчики (один раз на панель). */
+    private fun trackUnread(owner: ViewController<*>, bar: View, holder: Array<TextView?>, attach: Boolean = true) {
         val tdlib = owner.tdlib()
         fun update() {
+            val badge = holder[0] ?: return
             val n = try { tdlib.getMainCounter().chatCount } catch (e: Throwable) { 0 }
             badge.text = if (n > 99) "99+" else n.toString()
             badge.visibility = if (n > 0) View.VISIBLE else View.GONE
         }
+        if (!attach) { update(); return }
         val listener = object : org.thunderdog.challegram.telegram.CounterChangeListener {
             override fun onChatCounterChanged(chatList: TdApi.ChatList, counter: org.thunderdog.challegram.telegram.TdlibCounter, availabilityChanged: Boolean, totalCount: Int, unreadCount: Int, unreadUnmutedCount: Int) {
                 if (chatList is TdApi.ChatListMain) Sx.main.post { update() }

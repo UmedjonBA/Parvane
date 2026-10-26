@@ -26,6 +26,7 @@ class AccountController(context: Context, tdlib: Tdlib) : SectionController(cont
     override fun getName(): CharSequence = Sx.t("Аккаунт и устройства", "Account and devices")
 
     override fun onBuilt() { load() }
+    override fun repaint() = load()
 
     private fun load() {
         rebuild { placeholder(Sx.t("Загрузка…", "Loading…")) }

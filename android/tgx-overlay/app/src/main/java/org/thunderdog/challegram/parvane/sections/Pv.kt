@@ -60,6 +60,33 @@ object Pv {
 
     fun rem(r: Float): Int = Sx.dp(r * 16f)
 
+    /**
+     * Перекрасить вид, когда X сменит тему (ночной режим по системе/датчику, выбор в «Оформлении»): наши виды берут
+     * цвета [c] при создании, сами они не перекрашиваются. Слушатель держится, пока вид в окне; вид, снятый с экрана
+     * во время смены, перекрашивается при возвращении.
+     */
+    fun onTheme(view: View, recolor: () -> Unit) {
+        var builtFor = themeId()
+        fun sync() { val id = themeId(); if (id != builtFor) { builtFor = id; recolor() } }
+        val listener = object : org.thunderdog.challegram.theme.ThemeChangeListener {
+            override fun needsTempUpdates() = false
+            override fun onThemeColorsChanged(areTemp: Boolean, state: org.thunderdog.challegram.theme.ColorState?) {}
+            override fun onThemeChanged(fromTheme: org.thunderdog.challegram.theme.ThemeDelegate, toTheme: org.thunderdog.challegram.theme.ThemeDelegate) {
+                view.post { sync() }
+                // X переключает тему с анимацией: номер темы (и [c]) новый сразу, а Theme.getColor ещё ~0,3 с отдаёт
+                // промежуточные цвета — видам на цветах X (экран входа) нужна вторая перекраска после неё
+                view.postDelayed({ if (view.isAttachedToWindow) recolor() }, 700)
+            }
+        }
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) { ThemeManager.instance().addThemeListener(listener); v.post { sync() } }
+            override fun onViewDetachedFromWindow(v: View) { ThemeManager.instance().removeThemeListener(listener) }
+        })
+        if (view.isAttachedToWindow) ThemeManager.instance().addThemeListener(listener)
+    }
+
+    private fun themeId(): Int = try { ThemeManager.instance().currentThemeId() } catch (e: Throwable) { 11 }
+
     /** Значки шрифта Telegram, которые web рисует в «Плане» (`eats`, `darkmode`, флажок срока, часы), — линейными контурами. */
     val extraIcons: Map<String, List<PvIcons.S>> = mapOf(
         "eats" to listOf(PvIcons.S("M12 7.5c-1.6-1.4-6.5-1.4-6.5 3.5 0 4.2 2.6 9 4.8 9 .9 0 1.1-.5 1.7-.5s.8.5 1.7.5c2.2 0 4.8-4.8 4.8-9 0-4.9-4.9-4.9-6.5-3.5z"),

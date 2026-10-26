@@ -51,6 +51,7 @@ class PlannerController(context: Context, tdlib: Tdlib) : SectionController(cont
     }
 
     override fun buildHeader(context: Context): View = header()
+    override fun repaint() = refresh()
 
     // ── шапка ────────────────────────────────────────────────────────────────────────
 

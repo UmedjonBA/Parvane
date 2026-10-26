@@ -70,6 +70,8 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
         watch("notes") { render(it) }
     }
 
+    override fun repaint() { lastSnap?.let { render(it) } }
+
     private fun note(snap: JSONObject?) = Sx.list(snap?.optJSONArray("notes")).firstOrNull { it.optString("id") == noteId }
 
     private fun startEdit() {

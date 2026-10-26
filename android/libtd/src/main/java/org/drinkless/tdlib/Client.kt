@@ -2149,6 +2149,17 @@ class Client private constructor(
                     }
                     "canvas_create" -> sectionsResult("canvas_create", org.parvane.core.ParvaneSections.notes("saveCanvas",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
+                    // Состав сохранённого холста по названию (сценарий режима выделения): узлы, группы, связи
+                    "canvas_get" -> {
+                        val c = org.parvane.core.ParvaneSections.snapshot("notes")?.optJSONArray("canvases")?.let { a ->
+                            (0 until a.length()).mapNotNull { a.optJSONObject(it) }.firstOrNull { it.optString("title") == cmd.optString("title") }
+                        }
+                        val doc = c?.optString("text")?.let { try { JSONObject(it) } catch (e: Exception) { null } }
+                        val nodes = doc?.optJSONArray("nodes")
+                        val groups = nodes?.let { a -> (0 until a.length()).count { a.optJSONObject(it)?.optString("type") == "group" } } ?: -1
+                        Log.i(TAG, "холст ${cmd.optString("title")}: узлов=${nodes?.length() ?: -1} групп=$groups связей=${doc?.optJSONArray("edges")?.length() ?: -1}")
+                        TdApi.Ok()
+                    }
                     // REPORT-1: штатная жалоба X на чат (последние N входящих) — причина и комментарий
                     "report" -> {
                         val ids = store.history(chatId, 0, 0, 50).messages.filter { !it.isOutgoing }.take(cmd.optInt("last", 1)).map { it.id }.toLongArray()

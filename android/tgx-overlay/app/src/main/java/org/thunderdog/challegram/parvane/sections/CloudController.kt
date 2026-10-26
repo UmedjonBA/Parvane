@@ -51,6 +51,7 @@ class CloudController(context: Context, tdlib: Tdlib) : SectionController(contex
     }
 
     private fun render(): Unit = rebuild { pane.render(this) }
+    override fun repaint() = render()
 }
 
 /**

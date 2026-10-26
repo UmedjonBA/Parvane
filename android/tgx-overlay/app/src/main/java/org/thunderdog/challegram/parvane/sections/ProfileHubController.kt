@@ -31,6 +31,7 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
     override fun getName(): CharSequence = Sx.t("Профиль", "Profile")
 
     override fun onBuilt() = render()
+    override fun repaint() = render()
 
     private var photoAvatar: org.thunderdog.challegram.widget.AvatarView? = null
 

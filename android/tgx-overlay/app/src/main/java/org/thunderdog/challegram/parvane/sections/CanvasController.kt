@@ -61,6 +61,8 @@ class CanvasController(context: Context, tdlib: Tdlib) : SectionController(conte
         contentSlot.addView(b, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         watch("notes") { b.setSnapshot(it) }
     }
+
+    override fun repaint() { board?.repaint() }
 }
 
 /** Холст из графа (порт `canvasFromGraph` web): карточка на заметку, кластеры по папкам с группами, стрелки по ссылкам. */
@@ -242,6 +244,13 @@ class KnowledgeCanvasBoard(context: Context, private val owner: ViewController<*
     private fun canvases() = Sx.list(snap?.optJSONArray("canvases"))
     private fun notes() = Sx.list(snap?.optJSONArray("notes"))
 
+    /** Тема сменилась: чипы и инструменты заново, поле рисуется цветами темы на лету. */
+    fun repaint() {
+        setBackgroundColor(Kn.boardFill())
+        snap?.let { setSnapshot(it) }
+        board?.invalidate()
+    }
+
     fun setSnapshot(s: JSONObject) {
         snap = s
         val list = canvases()
@@ -303,11 +312,14 @@ class KnowledgeCanvasBoard(context: Context, private val owner: ViewController<*
                 if (url.length > "https://".length) b.addCard(JSONObject().put("type", "link").put("url", url), 320, 160)
             }
         }
-        tool("group", Sx.t("Группа", "Group")) {
-            Kn.askText(context, Sx.t("Название группы", "Group name"), Sx.t("Группа", "Group")) { label -> b.addGroup(label) }
+        // Есть выделенное — обернуть его в группу (как web `KnowledgeCanvasWrap`), иначе новая группа
+        tool("group", if (b.hasSelection) Sx.t("Обернуть в группу", "Wrap in group") else Sx.t("Группа", "Group")) {
+            if (b.hasSelection) b.wrapSelected()
+            else Kn.askText(context, Sx.t("Название группы", "Group name"), Sx.t("Группа", "Group")) { label -> b.addGroup(label) }
         }
-        tool("link", Sx.t("Связать", "Connect"), enabled = b.selectedId != null, on = b.connecting) { b.toggleConnect() }
-        tool("trash", Sx.t("Удалить", "Delete"), enabled = b.selectedId != null) { b.deleteSelected() }
+        tool("link", Sx.t("Связать", "Connect"), enabled = b.canConnect, on = b.connecting) { b.toggleConnect() }
+        tool("select", Sx.t("Выбрать несколько", "Select several"), on = b.selectMode) { b.toggleSelectMode() }
+        tool("trash", Sx.t("Удалить", "Delete"), enabled = b.hasSelection) { b.deleteSelected() }
         fun sideTool(icon: String, desc: String, enabled: Boolean = true, action: () -> Unit) {
             side.addView(context.boardTool(icon, desc, enabled, false, action).apply {
                 if (side.childCount > 0) (layoutParams as LinearLayout.LayoutParams).topMargin = Pv.rem(0.375f)
@@ -411,10 +423,20 @@ class CanvasBoardView(
     private var fitted = false
     private var dragging: JSONObject? = null
     private var moved = false
-    var selectedId: String? = null
-        private set
+    /** Выделенные узлы по порядку выделения (web `CanvasSelection.nodes`). */
+    private val selected = LinkedHashSet<String>()
+    /** Единственный выделенный узел — для связывания и меню карточки. */
+    val selectedId: String? get() = selected.singleOrNull()
+    val hasSelection get() = selected.isNotEmpty()
+    val canConnect get() = selectedId?.let { id -> list().firstOrNull { it.optString("id") == id }?.optString("type") != "group" } == true
     var connecting = false
         private set
+    /** «Выбрать несколько»: нажатие добавляет карточку к выделению или убирает, протяжка по пустому месту — рамка. */
+    var selectMode = false
+        private set
+    private var marquee: RectF? = null
+    private var marqueeFrom: Pair<Float, Float>? = null
+    private var marqueeBase: Set<String> = emptySet()
     var query: String = ""
         set(value) { field = value; invalidate() }
     private val undoStack = ArrayDeque<String>()
@@ -447,6 +469,7 @@ class CanvasBoardView(
     }
 
     private fun commit() {
+        prune()
         changed(doc)
         invalidate()
         onState()
@@ -468,13 +491,93 @@ class CanvasBoardView(
 
     private fun newId() = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
 
+    /** Выделение без узлов, которых в документе уже нет (после отмены/повтора). */
+    private fun prune() {
+        val ids = list().map { it.optString("id") }.toSet()
+        selected.retainAll(ids)
+        if (selectedId == null) connecting = false
+    }
+
+    private fun select(id: String?) {
+        selected.clear()
+        id?.let { selected.add(it) }
+    }
+
+    private fun isSelected(n: JSONObject) = n.optString("id") in selected
+
+    fun toggleSelectMode() {
+        selectMode = !selectMode
+        connecting = false
+        invalidate()
+        onState()
+    }
+
+    fun selectAll() {
+        selected.clear()
+        list().forEach { selected.add(it.optString("id")) }
+        connecting = false
+        invalidate()
+        onState()
+    }
+
+    /** Обернуть выделенное в группу с полем 20 (web `wrapInGroup`): группа встаёт перед первым обёрнутым узлом. */
+    fun wrapSelected() {
+        val wrapped = list().filter { isSelected(it) }
+        if (wrapped.isEmpty()) return
+        remember()
+        val rs = wrapped.map { rect(it) }
+        val pad = 20
+        val l = rs.minOf { it.left }.toInt() - pad; val t = rs.minOf { it.top }.toInt() - pad
+        val r = rs.maxOf { it.right }.toInt() + pad; val b = rs.maxOf { it.bottom }.toInt() + pad
+        val g = JSONObject().put("id", newId()).put("type", "group").put("x", l).put("y", t).put("width", r - l).put("height", b - t)
+        val first = wrapped.first()
+        val all = JSONArray()
+        for (n in list()) { if (n === first) all.put(g); all.put(n) }
+        doc.put("nodes", all)
+        select(g.optString("id"))
+        commit()
+    }
+
+    /** Копия выделенного со сдвигом 20 и связями между копиями (web `pasteClip`); выделяются копии. */
+    fun duplicateSelected() {
+        val src = list().filter { isSelected(it) }
+        if (src.isEmpty()) return
+        remember()
+        val map = HashMap<String, String>()
+        for (n in src) {
+            val id = newId()
+            map[n.optString("id")] = id
+            nodes().put(JSONObject(n.toString()).put("id", id).put("x", n.optDouble("x").toInt() + 20).put("y", n.optDouble("y").toInt() + 20))
+        }
+        for (i in 0 until edges().length()) {
+            val e = edges().optJSONObject(i) ?: continue
+            val from = map[e.optString("fromNode")] ?: continue
+            val to = map[e.optString("toNode")] ?: continue
+            edges().put(JSONObject(e.toString()).put("id", newId()).put("fromNode", from).put("toNode", to))
+        }
+        selected.clear()
+        selected.addAll(map.values)
+        commit()
+    }
+
+    /** Узлы в рамке (web `nodesInRect`): карточка — если рамка её задела, группа — только целиком внутри. */
+    private fun inMarquee(screenRect: RectF): List<String> {
+        val (l, t) = world(screenRect.left, screenRect.top)
+        val (r, b) = world(screenRect.right, screenRect.bottom)
+        val area = RectF(l, t, r, b)
+        return list().filter {
+            val nr = rect(it)
+            if (it.optString("type") == "group") area.contains(nr) else RectF.intersects(area, nr)
+        }.map { it.optString("id") }
+    }
+
     /** Новая карточка в середине видимой части поля. */
     fun addCard(node: JSONObject, w: Int, h: Int) {
         remember()
         val (cx, cy) = world(width / 2f, height / 2f)
         node.put("id", newId()).put("x", (cx - w / 2).toInt()).put("y", (cy - h / 2).toInt()).put("width", w).put("height", h)
         nodes().put(node)
-        selectedId = node.optString("id")
+        select(node.optString("id"))
         commit()
     }
 
@@ -499,16 +602,18 @@ class CanvasBoardView(
         onState()
     }
 
+    /** Удалить выделенное вместе со связями; содержимое удалённой группы остаётся (web `removeSelection`). */
     fun deleteSelected() {
-        val id = selectedId ?: return
+        if (selected.isEmpty()) return
+        val ids = selected.toSet()
         remember()
         val keep = JSONArray()
-        for (i in 0 until nodes().length()) nodes().optJSONObject(i)?.takeIf { it.optString("id") != id }?.let { keep.put(it) }
+        for (i in 0 until nodes().length()) nodes().optJSONObject(i)?.takeIf { it.optString("id") !in ids }?.let { keep.put(it) }
         doc.put("nodes", keep)
         val keepEdges = JSONArray()
-        for (i in 0 until edges().length()) edges().optJSONObject(i)?.takeIf { it.optString("fromNode") != id && it.optString("toNode") != id }?.let { keepEdges.put(it) }
+        for (i in 0 until edges().length()) edges().optJSONObject(i)?.takeIf { it.optString("fromNode") !in ids && it.optString("toNode") !in ids }?.let { keepEdges.put(it) }
         doc.put("edges", keepEdges)
-        selectedId = null
+        selected.clear()
         connecting = false
         commit()
     }
@@ -579,8 +684,8 @@ class CanvasBoardView(
             val rad = 8f * k
             fill.color = Pv.alpha(c.fg, 3)
             canvas.drawRoundRect(r, rad, rad, fill)
-            stroke.color = if (n.optString("id") == selectedId) c.accent else c.line2
-            stroke.strokeWidth = (if (n.optString("id") == selectedId) 2f else 1f) * density
+            stroke.color = if (isSelected(n)) c.accent else c.line2
+            stroke.strokeWidth = (if (isSelected(n)) 2f else 1f) * density
             canvas.drawRoundRect(r, rad, rad, stroke)
             titlePaint.color = c.muted
             titlePaint.textSize = 12f * k
@@ -592,7 +697,7 @@ class CanvasBoardView(
             val e = edges().optJSONObject(i) ?: continue
             val a = byId[e.optString("fromNode")]?.let { screen(rect(it)) } ?: continue
             val b = byId[e.optString("toNode")]?.let { screen(rect(it)) } ?: continue
-            val on = selectedId != null && (e.optString("fromNode") == selectedId || e.optString("toNode") == selectedId)
+            val on = e.optString("fromNode") in selected || e.optString("toNode") in selected
             val color = if (on) c.accent else Pv.mix(c.fg, c.panel, 55)
             edgePaint.color = color
             headPaint.color = color
@@ -614,7 +719,7 @@ class CanvasBoardView(
             fill.color = c.panel
             fill.alpha = 255
             canvas.drawRoundRect(r, rad, rad, fill)
-            val sel = n.optString("id") == selectedId
+            val sel = isSelected(n)
             stroke.color = if (sel || (searching && !dim)) c.accent else c.line2
             stroke.strokeWidth = (if (sel) 2f else 1f) * density
             stroke.pathEffect = if (sel && connecting) DashPathEffect(floatArrayOf(6f * density, 4f * density), 0f) else null
@@ -666,6 +771,13 @@ class CanvasBoardView(
                 canvas.drawRoundRect(r, rad, rad, fill)
                 fill.alpha = 255
             }
+        }
+        marquee?.let { m ->
+            fill.color = Pv.alpha(c.accent, 12)
+            canvas.drawRect(m, fill)
+            stroke.color = c.accent
+            stroke.strokeWidth = 1f * density
+            canvas.drawRect(m, stroke)
         }
     }
 
@@ -812,25 +924,41 @@ class CanvasBoardView(
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean {
             dragging = hit(e.x, e.y)
+            marqueeFrom = if (selectMode && dragging == null) e.x to e.y else null
             return true
         }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             val d = dragging
-            if (d != null) {
+            val from = marqueeFrom
+            if (from != null) {
+                // Рамка добавляет задетое к прежнему выделению (web: рамка в режиме выбора — добавляющая)
+                if (marquee == null) marqueeBase = selected.toSet()
+                val m = RectF(min(from.first, e2.x), min(from.second, e2.y), max(from.first, e2.x), max(from.second, e2.y))
+                marquee = m
+                selected.clear()
+                selected.addAll(marqueeBase)
+                selected.addAll(inMarquee(m))
+                connecting = false
+            } else if (d != null) {
                 if (!moved) remember()
                 moved = true
                 val ddx = dx / k
                 val ddy = dy / k
-                d.put("x", d.optDouble("x") - ddx)
-                d.put("y", d.optDouble("y") - ddy)
-                // Группа двигается вместе с карточками внутри
-                if (d.optString("type") == "group") {
-                    val g = rect(d)
-                    list().filter { it !== d && it.optString("type") != "group" && g.contains(rect(it).centerX() + ddx, rect(it).centerY() + ddy) }.forEach {
-                        it.put("x", it.optDouble("x") - ddx)
-                        it.put("y", it.optDouble("y") - ddy)
-                    }
+                // Выделенная карточка тянет за собой всё выделенное, невыделенная — только себя
+                val moving = if (isSelected(d)) list().filter { isSelected(it) } else listOf(d)
+                val shifted = HashSet<JSONObject>()
+                fun shift(n: JSONObject) {
+                    if (!shifted.add(n)) return
+                    n.put("x", n.optDouble("x") - ddx)
+                    n.put("y", n.optDouble("y") - ddy)
                 }
+                // Группа двигается вместе с карточками внутри (их место — до сдвига)
+                val inside = moving.filter { it.optString("type") == "group" }.flatMap { g ->
+                    val gr = rect(g)
+                    list().filter { it !== g && it.optString("type") != "group" && gr.contains(rect(it).centerX(), rect(it).centerY()) }
+                }
+                moving.forEach { shift(it) }
+                inside.forEach { shift(it) }
             } else { ox -= dx; oy -= dy }
             invalidate()
             return true
@@ -842,25 +970,30 @@ class CanvasBoardView(
                 remember()
                 edges().put(JSONObject().put("id", newId()).put("fromNode", from).put("toNode", n.optString("id")))
                 connecting = false
-                selectedId = n.optString("id")
+                select(n.optString("id"))
                 commit()
                 return true
             }
             when {
-                n == null -> { selectedId = null; connecting = false }
+                selectMode -> {
+                    if (n != null) { val id = n.optString("id"); if (!selected.remove(id)) selected.add(id) }
+                    connecting = false
+                }
+                n == null -> { select(null); connecting = false }
                 n.optString("id") == selectedId -> open(n)
-                else -> { selectedId = n.optString("id"); connecting = false }
+                else -> { select(n.optString("id")); connecting = false }
             }
             invalidate()
             onState()
             return true
         }
         override fun onLongPress(e: MotionEvent) {
-            val n = hit(e.x, e.y) ?: return
-            selectedId = n.optString("id")
+            val n = hit(e.x, e.y)
+            if (n == null) { boardMenu(); return }
+            if (!isSelected(n)) select(n.optString("id"))
             invalidate()
             onState()
-            menu(n)
+            if (selected.size > 1) selectionMenu() else menu(n)
         }
     })
 
@@ -885,9 +1018,31 @@ class CanvasBoardView(
             "text" -> items += Sx.t("Изменить текст", "Edit text") to { edit(n) }
             "group" -> items += Sx.t("Переименовать", "Rename") to { open(n) }
         }
-        items += Sx.t("Связать с карточкой…", "Connect to card…") to { connecting = true; invalidate(); onState() }
+        if (n.optString("type") != "group") items += Sx.t("Связать с карточкой…", "Connect to card…") to { connecting = true; invalidate(); onState() }
+        items += Sx.t("Дублировать", "Duplicate") to { duplicateSelected() }
+        items += Sx.t("Обернуть в группу", "Wrap in group") to { wrapSelected() }
         items += Sx.t("Удалить", "Delete") to { deleteSelected() }
         Kn.menu(context, titleOf(n).ifEmpty { n.optString("text").take(40) }.ifEmpty { Sx.t("Карточка", "Card") }, items, dangerLast = true)
+    }
+
+    /** Меню нескольких выделенных (web — пункты `CanvasSelectionBar` для набора узлов). */
+    private fun selectionMenu() {
+        Kn.menu(context, Sx.t("Выделено: ${selected.size}", "Selected: ${selected.size}"), listOf(
+            Sx.t("Дублировать", "Duplicate") to { duplicateSelected() },
+            Sx.t("Обернуть в группу", "Wrap in group") to { wrapSelected() },
+            Sx.t("Снять выделение", "Deselect") to { select(null); invalidate(); onState() },
+            Sx.t("Удалить", "Delete") to { deleteSelected() },
+        ), dangerLast = true)
+    }
+
+    /** Долгое нажатие на пустое место поля (web — меню поля). */
+    private fun boardMenu() {
+        if (list().isEmpty()) return
+        Kn.menu(context, Sx.t("Холст", "Canvas"), listOf(
+            Sx.t("Выделить всё", "Select all") to { selectAll() },
+            (if (selectMode) Sx.t("Выйти из выбора", "Stop selecting") else Sx.t("Выбрать несколько", "Select several")) to { toggleSelectMode() },
+            Sx.t("Вписать", "Fit") to { fit() },
+        ))
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -899,6 +1054,8 @@ class CanvasBoardView(
             if (moved) commit()
             moved = false
             dragging = null
+            marqueeFrom = null
+            if (marquee != null) { marquee = null; invalidate(); onState() }
         }
         return true
     }

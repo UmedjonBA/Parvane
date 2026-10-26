@@ -7,6 +7,7 @@
 #      текстом, «Знания» (заметки, заметка, граф, холст, файлы), «Профиль».
 # Проверки — только что экраны открываются и X не падает; сверка — глазами по снимкам.
 #   ./tgx_web_parity_shots.sh [OUT_DIR]
+# PV_TGX_THEME=<ThemeId X> — снимать в этой теме (10 — Gruvbox тёмная, как эталон web; список — tgx_theme_shots.sh).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${1:-/tmp/pv-tgx-parity}"; mkdir -p "$OUT"
@@ -28,9 +29,15 @@ a shell pm grant "$TGX_PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&
 a shell rm -f /data/local/tmp/parvane-e2e-cmd /data/local/tmp/parvane-autolink /data/local/tmp/parvane-autologin >/dev/null 2>&1
 a reverse "tcp:$PV_GW_WS_PORT" "tcp:$PV_GW_WS_PORT" >/dev/null 2>&1
 tgx_put parvane-gateway "ws://127.0.0.1:$PV_GW_WS_PORT/ws"
+if [ -n "${PV_TGX_THEME:-}" ]; then tgx_put parvane-theme "$PV_TGX_THEME"; else a shell rm -f /data/local/tmp/parvane-theme; fi
 tgx_start
 sleep 8; shot auth-start 1
 ui_tap '^(СОЗДАТЬ АККАУНТ|CREATE ACCOUNT)$' 15 && shot auth-register || bad "нет кнопки «Создать аккаунт»"
+# Тема применяется на лету через 5 с после запуска (как ночной режим): фон экрана входа — цвета новой темы, а не прежней
+if [ -n "${PV_TGX_THEME:-}" ] && [ "$PV_TGX_THEME" = 10 ]; then
+  l=$(magick "$(ls "$OUT"/*-auth-register.png | tail -1)" -crop 1x1+540+2000 -colorspace Gray -format "%[fx:int(255*u)]" info: 2>/dev/null)
+  [ "${l:-255}" -lt 100 ] && ok "экран входа перекрашен в тёмную тему (яркость $l)" || bad "экран входа не перекрашен (яркость ${l:-?})"
+fi
 ui_tap '^(У МЕНЯ УЖЕ ЕСТЬ АККАУНТ|I ALREADY HAVE AN ACCOUNT)$' 10 || a shell input keyevent 4
 sleep 2; a shell input text "$NICK"; shot auth-nick 1
 ui_tap '^(ДАЛЕЕ|NEXT)$' 10 || bad "нет кнопки «Далее»"
@@ -105,8 +112,39 @@ for t in "Граф|Graph:graph" "Холст|Canvas:canvas" "Файлы|Files:fil
   tab "${t%%:*}" && shot "knowledge-${t##*:}" 3
 done
 tab 'Холст|Canvas'; tab 'Доска' && shot knowledge-canvas-media 8
+# Режим «Выбрать несколько» (web `data-canvas-select-mode`): рамка по пустому месту из левого нижнего угла задевает все три
+# карточки, «Обернуть в группу» кладёт их в одну группу; холст сохраняется через 1 с
+close  # «Доска» уже открыта — нажатие на её чип открыло меню холста
+if tab 'Выбрать несколько|Select several'; then
+  a shell input swipe 40 2000 1000 600 900; shot knowledge-canvas-selected 1
+  tab 'Обернуть в группу|Wrap in group' && shot knowledge-canvas-wrapped 3
+  tgx_mark; tgx_cmd '{"op":"canvas_get","title":"Доска"}'
+  tgx_logwait "холст Доска: узлов=4 групп=1 связей=0" 20 >/dev/null && ok "холст: рамка выделила все карточки, обёрнуты в группу" \
+    || bad "холст: выделение рамкой и обёртка не сработали"
+  tab 'Отменить|Undo'; tab 'Выбрать несколько|Select several'
+else bad "холст: нет инструмента «Выбрать несколько»"
+fi
 tab 'Холст|Canvas'; tab 'Холст из графа|Canvas from graph' && shot knowledge-canvas-from-graph 3
 tab 'Чаты|Chats' && shot chats-back
+# Смена темы на лету (ночной режим по системе): открытые экраны перекрашиваются — фон полосы папок под шапкой чатов
+# и фон раздела «Знания» берут цвет новой темы. Dev-хук перечитывает parvane-theme раз в 2 с.
+if [ -n "${PV_TGX_THEME:-}" ]; then
+  # яркость точки снимка 0…255: x y файл
+  lum() { magick "$3" -crop "1x1+$1+$2" -colorspace Gray -format "%[fx:int(255*u)]" info: 2>/dev/null; }
+  flip() { # flip <ThemeId> <light|dark> <имя снимка> <x> <y>
+    tgx_mark; tgx_put parvane-theme "$1"; tgx_logwait "тема \(dev\): $1" 20 >/dev/null || { bad "тема $1 на лету не применена"; return; }
+    shot "$3" 3; local f; f=$(ls "$OUT"/*-"$3".png | tail -1); local l; l=$(lum "$4" "$5" "$f")
+    if { [ "$2" = light ] && [ "${l:-0}" -gt 150 ]; } || { [ "$2" = dark ] && [ "${l:-255}" -lt 100 ]; }; then ok "тема на лету: $3 ($2, яркость $l)"
+    else bad "тема на лету: $3 не перекрашен (ждали $2, яркость ${l:-?})"; fi
+  }
+  flip 11 light theme-live-chats-light 1060 330
+  tab 'Знания|Knowledge'; sleep 2
+  flip "$PV_TGX_THEME" dark theme-live-knowledge-dark 30 1500
+  flip 11 light theme-live-knowledge-light 30 1500
+  tab 'Чаты|Chats'; sleep 2
+  flip "$PV_TGX_THEME" dark theme-live-chats-dark 1060 330
+  a shell rm -f /data/local/tmp/parvane-theme
+fi
 tgx_no_crash
 kill "$TGX_LCP" 2>/dev/null
 echo "снимки: $OUT ($N)"

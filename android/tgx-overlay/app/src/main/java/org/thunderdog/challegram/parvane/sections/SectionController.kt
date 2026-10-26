@@ -57,6 +57,12 @@ abstract class SectionController(context: Context, tdlib: Tdlib) : ViewControlle
         root.addView(ParvaneTabBar.create(context, this, tab), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ParvaneTabBar.height()))
         setHeader(buildHeader(context))
         addThemeInvalidateListener(root)
+        // Панель разделов перекрашивается сама (ParvaneTabBar.create)
+        Pv.onTheme(root) {
+            root.setBackgroundColor(Pv.c.panel)
+            setHeader(buildHeader(context))
+            repaint()
+        }
         root.coverHeaderArea()
         onBuilt()
         return root
@@ -83,6 +89,9 @@ abstract class SectionController(context: Context, tdlib: Tdlib) : ViewControlle
 
     /** Вид построен: подписки на данные. */
     protected open fun onBuilt() {}
+
+    /** Тема сменилась: шапка и нижняя панель уже новые — перестроить тело (цвета берутся при создании видов). */
+    protected open fun repaint() {}
 
     protected fun watch(domain: String, cb: (org.json.JSONObject) -> Unit) {
         unwatch += Sx.watch(domain, cb)

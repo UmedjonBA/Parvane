@@ -28,6 +28,7 @@ object ParvaneChatsHeader {
         setPadding(Pv.rem(1f), 0, 0, 0)
         // HeaderView X двигает шапку отступами — параметры FrameLayout (с отступами), иначе ClassCastException
         layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, org.thunderdog.challegram.unsorted.Size.getHeaderPortraitSize(), Gravity.TOP)
+        Pv.onTheme(this) { setTextColor(Pv.c.fg) }
     }
 
     /** Лупа справа (линейный значок web). */
@@ -36,6 +37,7 @@ object ParvaneChatsHeader {
         owner.onMenuItemPressed(R.id.menu_btn_search, null)
     }.apply {
         layoutParams = LinearLayout.LayoutParams(Pv.rem(3f), ViewGroup.LayoutParams.MATCH_PARENT)
+        Pv.onTheme(this) { (getChildAt(0) as? ImageView)?.setImageDrawable(PvIconDrawable("search", Pv.c.muted, Pv.rem(1.375f))) }
     }
 
     /** Полоса чипов над списком; показывается, только если папок больше одной. */
@@ -56,6 +58,7 @@ object ParvaneChatsHeader {
         contentView.addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, chipsHeight(), Gravity.TOP))
         owner.parvaneChips = scroll
         owner.parvaneChipsBelow = below
+        Pv.onTheme(scroll) { scroll.setBackgroundColor(Pv.c.panel); refresh(owner) }
         refresh(owner)
     }
 

@@ -131,6 +131,8 @@ class GroupCallController(context: Context, tdlib: Tdlib) : SectionController(co
         else -> state
     }
 
+    override fun repaint() = render()
+
     private fun render(): Unit = rebuild {
         addView(context.label(title.ifEmpty { currentTitle }, 22f, bold = true).apply {
             gravity = Gravity.CENTER

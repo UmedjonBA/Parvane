@@ -128,6 +128,12 @@ class KnowledgeController(context: Context, tdlib: Tdlib) : SectionController(co
         render()
     }
 
+    override fun repaint() {
+        canvasBoard?.repaint()
+        graphBoard?.invalidate()
+        render()
+    }
+
     override fun onBuilt() {
         cloud = CloudPane(context(), { if (view == "files") render() })
         watch("notes") { s ->
