@@ -2135,6 +2135,8 @@ class Client private constructor(
                     // разделы (spec 031): те же вызовы ядра, что экраны «План», «Знания», «Облако»
                     "sections" -> { watchSectionsForE2e(); org.parvane.core.ParvaneSections.show(cmd.optString("section", "calendar")); TdApi.Ok() }
                     "planner_add" -> sectionsResult("planner_add", org.parvane.core.ParvaneSections.planner("quickAdd", JSONObject().put("text", cmd.optString("text"))))
+                    // любая операция «Плана» экранов по имени (save, remove…): {"op":"planner_op","name":…,"args":{…}}
+                    "planner_op" -> sectionsResult("planner_op", org.parvane.core.ParvaneSections.planner(cmd.optString("name"), cmd.optJSONObject("args") ?: JSONObject()))
                     "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     "cloud_folder" -> {

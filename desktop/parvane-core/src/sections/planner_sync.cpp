@@ -564,9 +564,10 @@ void PlannerSync::ensure(bool isBackground) {
     }
     isWanted_ = true;
     scheduleSync();
-    const bool client = hasClient();
+    // Движок до готовности сессии не спрашиваем: его вызов ждёт конца подключения (замок движка) либо бросает
+    const bool client = hasClient() && t_.isReady();
     t_.log(std::string("планировщик: запуск (контейнер ") + (client && isAttached() ? "есть" : "нет") + ", ключ "
-           + (client && hasKey() ? "есть" : "нет") + ", seq " + std::to_string(headSeq()) + ")");
+           + (client && hasKey() ? "есть" : "нет") + ", seq " + std::to_string(client ? headSeq() : 0) + ")");
     loadPending();
     syncNow();
 }

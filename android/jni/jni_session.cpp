@@ -442,6 +442,8 @@ void startSession() {
         g_v2 = s;
     }
     s->start();
+    // Разделы — сразу: сохранённый вид «Плана» и «Знаний» показывается до подключения к серверу
+    sectionsSessionChanged();
     const auto presence = ++g_presenceGen;
     runDetached([presence] { presenceLoop(presence); });
     LOGI("v2: сессия запускается (движок %s)", parvane::v2::engineVersion().c_str());

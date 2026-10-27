@@ -44,6 +44,8 @@ constexpr auto kCloudChunkBytes = std::size_t(512 * 1024); // web CLOUD_CHUNK_BY
 constexpr auto kDriveBucket = "BLOB_BUCKET_DRIVE";
 constexpr auto kIdleWaitMs = std::int64_t(60 * 1000);
 constexpr auto kLinkingPollMs = std::int64_t(3000);
+// Сохранённый вид разделов пишется не чаще раза в столько (web PLANNER_VIEW_SAVE_DELAY_MS)
+constexpr auto kViewSaveDelayMs = std::int64_t(2000);
 
 std::atomic<bool> g_russian{true};
 
@@ -251,6 +253,12 @@ json canvasJson(const notes::CanvasRef &c) {
 std::mutex g_snapMu;
 std::map<std::string, std::string> g_snapshots;
 
+// Последнее состояние «Плана» для запросов экранов: читаются на потоке вызова, не в очереди хаба — тот ходит в сеть
+// (синк «Плана» и облака), и запрос «дни»/«здоровье» ждал его, пока на экране висела «Загрузка»
+std::shared_ptr<const planner::State> g_plannerView;
+// Правки «Плана», поставленные в очередь хаба и ещё не применённые: пока они есть, запрос идёт через очередь (порядок)
+std::atomic<int> g_plannerEditsQueued{0};
+
 void publishSnapshot(const std::string &domainName, const json &snapshot) {
     {
         std::lock_guard<std::mutex> lk(g_snapMu);
@@ -272,7 +280,7 @@ public:
         const auto session = v2Any();
         const auto me = session ? session->self() : std::string();
         if (session == transport_.session()) return;
-        flushRecords();
+        flushRecords(true);
         transport_.setSession(session);
         if (me != self_) switchAccount(me);
         importDomainKeys();
@@ -282,7 +290,8 @@ public:
     // Ключи «Плана» и «Облака» из копии ключей аккаунта (вход по ключу восстановления): движок принимает их как
     // экспорт привязки, разделы подключают контейнеры сразу, не дожидаясь ключа от другого своего устройства
     void importDomainKeys() {
-        if (self_.empty() || !transport_.session()) return;
+        // До готовности сессии движок не поднят (вызов ждал бы конца подключения) — `stateReady` позовёт снова
+        if (self_.empty() || !transport_.isReady()) return;
         const auto saved = json::parse(parvane::storecrypt::readFile(storeDir() + "/domain-keys.json"), nullptr, false);
         if (!saved.is_object() || saved.value("owner", std::string()) != self_) return;
         const auto planner = saved.value("planner", std::string());
@@ -314,7 +323,7 @@ public:
     }
 
     void resetAccount() {
-        flushRecords();
+        flushRecords(true);
         transport_.setSession(nullptr);
         switchAccount(std::string());
     }
@@ -331,6 +340,7 @@ public:
         records_.open(dir.empty() ? std::string() : dir + "/sections-records.json");
         texts_.open(dir.empty() ? std::string() : dir + "/sections-texts.json");
         if (!me.empty()) planner_.setUser(me);
+        openView(dir.empty() ? std::string() : dir + "/sections-view.json");
         notesLoaded_ = false;
         notesPrefetchAt_ = me.empty() ? 0 : nowMs() + kNotesPrefetchMs;
         notesSent_ = {};
@@ -368,6 +378,7 @@ public:
         if (notesPrefetchAt_ && nowMs() >= notesPrefetchAt_) {
             notesPrefetchAt_ = 0;
             loadNotesOnce();
+            if (!notesLoaded_ && !self_.empty()) notesPrefetchAt_ = nowMs() + kNotesPrefetchMs;
         }
         if (planner_.needsLinkingPoll() && nowMs() >= linkingPollAt_) {
             linkingPollAt_ = nowMs() + kLinkingPollMs;
@@ -382,6 +393,7 @@ public:
         if (planner_.needsLinkingPoll()) result = std::min(result, linkingPollAt_);
         if (notesPrefetchAt_) result = std::min(result, notesPrefetchAt_);
         if (planner_.notice(nowMs())) result = std::min(result, nowMs() + planner::PlannerStore::kNoticeHideMs);
+        if (viewDirty_) result = std::min(result, viewSaveAt_);
         return result;
     }
 
@@ -424,7 +436,7 @@ public:
         } catch (const std::exception &e) {
             LOGE("разделы — правки «Плана» не досланы: %s", e.what());
         }
-        flushRecords();
+        flushRecords(true);
     }
 
 private:
@@ -496,6 +508,10 @@ private:
     // (spec 032: первое открытие «Знаний» на телефоне висело на «Загрузке заметок», пока читались все тексты)
     void loadNotesOnce() {
         if (notesLoaded_ || self_.empty()) return;
+        // Без подключения и без сохранённого вида читать нечего (вызов движка ждал бы конца подключения) — после
+        // `stateReady` раздел позовёт снова
+        const bool isConnected = transport_.isReady();
+        if (!isConnected && !viewCloud_) return;
         notesLoaded_ = true;
         auto options = notes::NotesOptions();
         if (!g_russian) {
@@ -503,12 +519,25 @@ private:
             options.vaultName = "Knowledge";
         }
         cloud_.ensureSoon(true);
+        // Облако ещё не прочитано (сессия не подключена) — заметки по сохранённому виду, как были
+        if (!isConnected) notes_.setCloudData(*viewCloud_);
         notes_.loadNotes(self_, options);
+    }
+
+    [[nodiscard]] bool isCloudCached() {
+        const auto status = cloud_.status();
+        return viewCloud_ && (status == "loading" || status == "needs-linking");
     }
 
     void refreshPlanner() {
         auto result = planner::EngineStateResult();
         result.status = plannerSync_.status();
+        // Движок поднимается только с подключением сессии, а до того его вызов ждёт конца подключения (замок
+        // движка) либо бросает — экраны остаются на сохранённом виде
+        if (!transport_.isReady()) {
+            if (planner_.applyEngineResult(result)) ++plannerRevision_;
+            return;
+        }
         result.state = plannerSync_.stateJson();
         result.sizeBytes = plannerSync_.sizeBytes();
         result.hasPending = plannerSync_.hasPending();
@@ -518,9 +547,36 @@ private:
         } catch (const std::exception &e) {
             LOGE("разделы — состояние «Плана» не разобрано: %s", e.what());
         }
+        // Вид для следующего запуска — только состояние сервера без неотправленных правок (web `rememberPlannerView`)
+        if (result.status == "ready" && !result.hasPending && result.state && result.state->is_object()
+            && viewPlanner_ != *result.state) {
+            viewPlanner_ = *result.state;
+            markViewDirty();
+        }
     }
 
     void refreshCloud() {
+        if (!transport_.isReady()) {
+            // Вызовы облака — это вызовы движка (см. refreshPlanner): до подключения — сохранённый вид
+            const auto status = transport_.needsLinking() ? std::string("needs-linking") : std::string("loading");
+            const bool isCached = viewCloud_ && status == "loading";
+            const auto key = std::make_tuple(isCached ? std::string("cached") : status, std::string(), std::uint64_t(0),
+                                             std::string(), usage_ ? usage_->dump() : std::string(), std::size_t(0));
+            if (key == cloudSent_) return;
+            cloudSent_ = key;
+            if (!isCached) {
+                publishSnapshot("cloud", json{{"state", json{{"status", status}}}, {"status", status}, {"rootId", json()},
+                                              {"containers", json::array()}, {"lastError", json()},
+                                              {"usage", usage_ ? *usage_ : json()}, {"revision", 0}});
+                return;
+            }
+            const auto &v = *viewCloud_;
+            if (notesLoaded_) notes_.setCloudData(v);
+            publishSnapshot("cloud", json{{"state", v}, {"status", "cached"}, {"rootId", v.contains("rootId") ? v["rootId"] : json()},
+                                          {"containers", v.value("containers", json::array())}, {"lastError", json()},
+                                          {"usage", usage_ ? *usage_ : json()}, {"revision", 0}});
+            return;
+        }
         json state;
         try {
             state = drive_.state();
@@ -532,10 +588,23 @@ private:
         const auto containers = cloud_.containers();
         const auto lastError = cloud_.lastError();
         const auto revision = cloud_.revision();
+        if (status == "ready" && state.is_object() && state.value("status", std::string()) == "ready" && viewCloud_ != state) {
+            viewCloud_ = state;
+            markViewDirty();
+        }
         const auto key = std::make_tuple(status, rootId.value_or(std::string()), revision, lastError.value_or(std::string()),
                                          usage_ ? usage_->dump() : std::string(), containers.size());
         if (key == cloudSent_) return;
         cloudSent_ = key;
+        // Сессия не подключена — сохранённый вид (статус cached: экраны рисуют его, а не «Загрузку»)
+        if (isCloudCached()) {
+            const auto &v = *viewCloud_;
+            if (notesLoaded_) notes_.setCloudData(v);
+            publishSnapshot("cloud", json{{"state", v}, {"status", "cached"}, {"rootId", v.contains("rootId") ? v["rootId"] : json()},
+                                          {"containers", v.value("containers", json::array())}, {"lastError", json()},
+                                          {"usage", usage_ ? *usage_ : json()}, {"revision", revision}});
+            return;
+        }
         if (notesLoaded_) notes_.setCloudData(state);
         auto list = json::array();
         for (const auto &c : containers) list.push_back(cloud::toJson(c));
@@ -551,6 +620,7 @@ private:
                                          notice ? notice->text : std::string(), plannerRevision_);
         if (key == plannerSent_) return;
         plannerSent_ = key;
+        storePlannerView();
         const auto lastError = plannerSync_.lastError();
         publishSnapshot("planner", json{{"state", planner_.state()}, {"status", planner_.status()}, {"isLoaded", planner_.isLoaded()},
                                         {"isCached", planner_.isCached()}, {"canUndo", planner_.canUndo()},
@@ -578,10 +648,54 @@ private:
                                       {"revision", notes_.revision()}});
     }
 
-    void flushRecords() {
+    void flushRecords(bool force = false) {
         records_.flush();
         texts_.flush();
+        if (viewDirty_ && (force || nowMs() >= viewSaveAt_)) saveView();
     }
+
+    // ── сохранённый вид разделов: «План» и облако (заметки «Знаний» — из него) для запуска без сети ──
+    // Движок поднимает свои данные только после подключения сессии к серверу; до того экраны показывали
+    // «Загрузку», хотя всё есть на устройстве. Файл — под storecrypt в каталоге аккаунта (стирается при выходе)
+    void openView(const std::string &path) {
+        viewPath_ = path;
+        viewPlanner_.reset();
+        viewCloud_.reset();
+        viewDirty_ = false;
+        if (path.empty()) return;
+        const auto saved = json::parse(parvane::storecrypt::readFile(path), nullptr, false);
+        if (!saved.is_object()) return;
+        if (const auto it = saved.find("planner"); it != saved.end() && it->is_object()) {
+            viewPlanner_ = *it;
+            planner_.showCached(*it);
+            ++plannerRevision_;
+        }
+        if (const auto it = saved.find("cloud"); it != saved.end() && it->is_object()) viewCloud_ = *it;
+        LOGI("разделы — сохранённый вид: «План» %s, облако %s", viewPlanner_ ? "есть" : "нет", viewCloud_ ? "есть" : "нет");
+    }
+
+    void markViewDirty() {
+        if (!viewDirty_) viewSaveAt_ = nowMs() + kViewSaveDelayMs;
+        viewDirty_ = true;
+    }
+
+    void saveView() {
+        viewDirty_ = false;
+        if (viewPath_.empty()) return;
+        json out = json::object();
+        if (viewPlanner_) out["planner"] = *viewPlanner_;
+        if (viewCloud_) out["cloud"] = *viewCloud_;
+        if (!parvane::storecrypt::writeFile(viewPath_, out.dump())) LOGE("разделы — сохранённый вид не записан");
+    }
+
+public:
+    void storePlannerView() {
+        auto view = std::make_shared<const planner::State>(planner_.state());
+        std::lock_guard<std::mutex> lk(g_snapMu);
+        g_plannerView = std::move(view);
+    }
+
+private:
 
     SessionTransport transport_;
     FileRecords records_;
@@ -611,6 +725,11 @@ private:
     std::tuple<std::uint64_t, int, std::string, std::string, const void *> notesSent_;
     std::tuple<std::string, std::string, std::uint64_t, std::string, std::string, std::size_t> cloudSent_;
     std::optional<json> usage_;
+    std::string viewPath_;
+    std::optional<json> viewPlanner_;
+    std::optional<json> viewCloud_;
+    bool viewDirty_ = false;
+    std::int64_t viewSaveAt_ = 0;
 };
 
 void PlannerHost::apply(const std::vector<planner::PlannerChange> &changes) {
@@ -1060,6 +1179,7 @@ void sectionsAccountReset() {
     {
         std::lock_guard<std::mutex> lk(g_snapMu);
         g_snapshots.clear();
+        g_plannerView.reset();
     }
     enqueue([](Hub &hub) { hub.resetAccount(); });
 }
@@ -1115,18 +1235,24 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneSections_nativePlannerRe
         return JNI_FALSE;
     }
     const auto text = jstr(env, notice);
+    ++g_plannerEditsQueued;
     enqueue([state = std::move(state), text](Hub &hub) {
         hub.plannerStore().update([&](planner::State &s) { s = state; }, text.empty() ? std::nullopt : std::optional(text), nowMs());
         hub.bumpPlanner();
+        hub.storePlannerView();
+        --g_plannerEditsQueued;
     });
     return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativePlannerUndo(JNIEnv *env, jclass, jstring notice) {
     const auto text = jstr(env, notice);
+    ++g_plannerEditsQueued;
     enqueue([text](Hub &hub) {
         hub.plannerStore().undo(text, nowMs());
         hub.bumpPlanner();
+        hub.storePlannerView();
+        --g_plannerEditsQueued;
     });
 }
 
@@ -1181,13 +1307,45 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativePlanner(JN
     const auto o = jstr(env, op);
     auto args = json::parse(jstr(env, argsJson), nullptr, false);
     if (!args.is_object()) args = json::object();
-    return jreply(env, ask([o, args](Hub &hub) -> json {
+    const auto contextNow = [] {
         const auto now = nowMs();
         auto ctx = plannerops::Context();
         ctx.today = localDate(now, "%Y-%m-%d");
         const auto hm = localDate(now, "%H:%M");
         ctx.nowMinutes = std::stoi(hm.substr(0, 2)) * 60 + std::stoi(hm.substr(3, 2));
         ctx.lang = g_russian ? "ru" : "en";
+        return ctx;
+    };
+    // Запрос — по последнему состоянию на потоке вызова (Kotlin зовёт с io), пока в очереди нет правок «Плана»
+    if (o != "offerAccept" && o != "offerResponse" && !plannerops::isEdit(o) && g_plannerEditsQueued.load() == 0) {
+        std::shared_ptr<const planner::State> view;
+        {
+            std::lock_guard<std::mutex> lk(g_snapMu);
+            view = g_plannerView;
+        }
+        if (view) {
+            try {
+                return jreply(env, plannerops::query(*view, o, args, contextNow()));
+            } catch (const std::exception &e) {
+                LOGE("«План» — запрос %s: %s", o.c_str(), e.what());
+                return jreply(env, json());
+            }
+        }
+    }
+    const bool isEdit = plannerops::isEdit(o);
+    if (isEdit) ++g_plannerEditsQueued;
+    return jreply(env, ask([o, args, contextNow, isEdit](Hub &hub) -> json {
+        struct Done {
+            Hub &hub;
+            bool isEdit;
+            ~Done() {
+                if (!isEdit) return;
+                hub.storePlannerView();
+                --g_plannerEditsQueued;
+            }
+        } done{hub, isEdit};
+        const auto now = nowMs();
+        const auto ctx = contextNow();
         // Задание в чат (TASK-1): «Принять» — запись в «План» правкой движка (дубль не создаётся), ответ — текстом ядра
         if (o == "offerAccept") {
             if (hub.self().empty()) return "unavailable";

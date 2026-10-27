@@ -630,7 +630,7 @@ object PlannerViews {
                 if (isDone) paintFlags = paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
             })
             texts.addView(ctx.pvText(sub, 0.75f, c.muted, mono = true, maxLines = 1))
-            note?.lineSequence()?.firstOrNull { it.isNotBlank() }?.let { texts.addView(ctx.pvText(it.trim(), 0.8125f, c.muted, maxLines = 1)) }
+            descriptionLine(note)?.let { texts.addView(ctx.pvText(it, 0.8125f, c.muted, maxLines = 1)) }
             addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             Pv.pressable(this, Pv.mix(color, base, 16), 0.375f) {
                 if (task != null) PlannerEditor.open(owner, "task", task.optString("id"), task.optString("instanceDay").ifEmpty { day })
@@ -836,6 +836,11 @@ object PlannerViews {
         owner.scrollTo(grid.yOf(maxOf(0, firstMinute - 60)))
     }
 
+    /** Первая непустая строка описания без разметки ссылок (web `formatDescriptionLine`). */
+    fun descriptionLine(description: String?): String? = description?.lineSequence()?.firstOrNull { it.isNotBlank() }
+        ?.trim()?.replace(Regex("""\[\[([^\]|]+)(?:\|([^\]]+))?]]""")) { m -> m.groupValues[2].trim().ifEmpty { m.groupValues[1].trim() } }
+        ?.takeIf { it.isNotEmpty() }
+
     /** Сетка часов одного дня (`PlannerWeek` с `isSingle`): час 3,5 rem, подписи 2,875 rem, вне окон дня — тень bg 35 %. */
     class DayGridView(ctx: Context, private val owner: PlannerController, private val dayKey: String, private val day: JSONObject,
                       private val health: JSONObject?) : FrameLayout(ctx) {
@@ -864,6 +869,10 @@ object PlannerViews {
                         setPadding(Pv.rem(0.4375f + 0.1875f), Pv.rem(0.1875f), Pv.rem(0.4375f), Pv.rem(0.1875f))
                         addView(context.pvText(item.optString("name"), 0.8125f, c.fg, semibold = true, maxLines = 2))
                         addView(context.pvText("${item.optString("start")}–${item.optString("end")}", 0.6875f, c.muted, mono = true, maxLines = 1))
+                        // Описание — третьей строкой (web `weekBlockNote`): видно, когда блок достаточно высок
+                        descriptionLine((task ?: event)?.optString("description"))?.let {
+                            addView(context.pvText(it, 0.75f, c.muted, maxLines = 1))
+                        }
                         background = android.graphics.drawable.LayerDrawable(arrayOf(
                             Pv.shape(Pv.mix(color, c.panel, 20), 0.375f, c.panel),
                             android.graphics.drawable.GradientDrawable().apply {
@@ -950,15 +959,18 @@ object PlannerViews {
             canvas.drawLine(hoursWidth.toFloat(), 0f, hoursWidth.toFloat(), height.toFloat(), p)
             text.color = c.faint
             for (h in 1 until 24) canvas.drawText(Sx.clock(h * 60), (hoursWidth - Pv.rem(0.5f)).toFloat(), h * hour + text.textSize / 3f, text)
-            // «Сейчас»
-            if (dayKey == Sx.today()) {
-                val now = java.util.Calendar.getInstance().let { it.get(java.util.Calendar.HOUR_OF_DAY) * 60 + it.get(java.util.Calendar.MINUTE) }
-                val y = yOf(now).toFloat()
-                p.color = c.red
-                canvas.drawRect(hoursWidth.toFloat(), y - Pv.px(1f), w, y + Pv.px(1f), p)
-                canvas.drawCircle(hoursWidth.toFloat(), y, Pv.rem(0.25f).toFloat(), p)
-            }
             super.onDraw(canvas)
+        }
+
+        // «Сейчас» — поверх блоков (web `weekNow`): onDraw идёт до детей, и блок дела закрывал полоску
+        override fun dispatchDraw(canvas: Canvas) {
+            super.dispatchDraw(canvas)
+            if (dayKey != Sx.today()) return
+            val now = java.util.Calendar.getInstance().let { it.get(java.util.Calendar.HOUR_OF_DAY) * 60 + it.get(java.util.Calendar.MINUTE) }
+            val y = yOf(now).toFloat()
+            p.color = Pv.c.red; p.style = Paint.Style.FILL
+            canvas.drawRect(hoursWidth.toFloat(), y - Pv.px(1f), width.toFloat(), y + Pv.px(1f), p)
+            canvas.drawCircle(hoursWidth.toFloat(), y, Pv.rem(0.25f).toFloat(), p)
         }
     }
 
