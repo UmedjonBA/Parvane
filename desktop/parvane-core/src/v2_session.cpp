@@ -1,6 +1,7 @@
 // Parvane fork: клиентская сессия протокола v2 (см. v2_session.h).
 #include "parvane/v2_session.h"
 
+#include "parvane/blobcrypt.h"
 #include "parvane/crypto.h"
 #include "parvane/keybundle.h"
 #include "parvane/l2_ticker.h"
@@ -1477,6 +1478,28 @@ std::string Session::downloadBlobCap(const std::string &fileId, const std::strin
         });
 }
 
+// Потолок фото группы: аватар — картинка, а не файл (20 МиБ сырых байт)
+static constexpr std::size_t kGroupPhotoMaxPlain = 20u << 20;
+
+Session::GroupPhotoUpload Session::uploadGroupPhoto(const std::string &plain) {
+    if (plain.empty() || plain.size() > kGroupPhotoMaxPlain) throw std::runtime_error("v2: фото группы пустое или слишком большое");
+    const auto secret = blobcrypt::newGroupPhotoSecret();
+    const auto keys = blobcrypt::deriveGroupPhotoKeys(secret);
+    const auto cipher = blobcrypt::sealGroupPhoto(plain, secret);
+    if (secret.empty() || !keys || cipher.empty()) throw std::runtime_error("v2: фото группы не зашифровано");
+    return {uploadBlob(cipher, keys->capability), toBase64(secret)};
+}
+
+std::optional<std::string> Session::downloadGroupPhoto(const std::string &fileId, const std::string &secretB64,
+                                                       const std::string &domain) {
+    const auto secret = fromBase64Safe(secretB64);
+    if (!secret) return std::nullopt;
+    const auto keys = blobcrypt::deriveGroupPhotoKeys(*secret);
+    if (!keys) return std::nullopt;
+    const auto cipher = downloadBlobCap(fileId, keys->capability, domain, blobcrypt::maxCipherSize(kGroupPhotoMaxPlain));
+    return blobcrypt::openGroupPhoto(cipher, *secret);
+}
+
 // ── новое устройство без других устройств (T130, FR-066) ───────────────────
 
 void Session::dropIdentityLocked() {
@@ -1554,6 +1577,7 @@ std::string Session::recoverWithKey(const std::string &recoveryKey) {
             needsLinking_ = false;
             // Ключ в руках — копия ключей аккаунта под ним (spec 015)
             std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
             rememberBundleKeyLocked(recoveryKey);
             log("устройство восстановлено ключом восстановления (прежние устройства отозваны)");
         } catch (const std::exception &e) {
@@ -1615,6 +1639,7 @@ std::string Session::resetIdentity(const std::string &password) {
     if (!recoveryKey.empty()) {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
         std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
         rememberBundleKeyLocked(recoveryKey);
         queueRecoveryKeyLocked(recoveryKey);
     }
@@ -2638,7 +2663,13 @@ bool Session::changeGroup(const std::string &address, const json &change, std::s
                     ? p[key].get<std::string>() : g->value(have, std::string());
             };
             resolved = json{{"set_info", {{"name", pick("name", "name")}, {"about", pick("about", "about")},
-                                          {"avatar_file_id", pick("avatar_file_id", "avatarFileId")}}}};
+                                          {"avatar_file_id", pick("avatar_file_id", "avatarFileId")},
+                                          // Ключ фото частной группы (A0089-5) идёт со своим файлом: меняется файл —
+                                          // ключ из патча (нет — открытое фото), иначе прежний из журнала
+                                          {"avatar_key", (p.is_object() && p.contains("avatar_file_id"))
+                                                             ? ((p.contains("avatar_key") && p["avatar_key"].is_string())
+                                                                    ? p["avatar_key"].get<std::string>() : std::string())
+                                                             : g->value("avatarKey", std::string())}}}};
         }
         json reqJson;
         try {
@@ -3061,13 +3092,14 @@ json Session::checkInvite(const std::string &url) {
         const auto members = check.value("members", json(0));
         // Описание и фото (T159) — из подписанного журнала группы (сервер отдаёт
         // его по ссылке), а не со слов сервера; журнал не-участника не храним.
-        std::string about, avatar;
+        std::string about, avatar, avatarKey;
         if (!isMember && !hex.empty()) {
             try {
                 syncGroupLocked(hex, parsed->value("linkId", std::string()));
                 if (const auto info = client_->groupInfo(hex)) {
                     about = info->value("about", std::string());
                     avatar = info->value("avatarFileId", std::string());
+                    avatarKey = info->value("avatarKey", std::string());
                 }
             } catch (const std::exception &e) {
                 log(std::string("превью ссылки: журнал группы не прочитан: ") + e.what());
@@ -3078,6 +3110,7 @@ json Session::checkInvite(const std::string &url) {
                     {"name", check.value("name", std::string())},
                     {"about", about},
                     {"avatar", avatar},
+                    {"avatarKey", avatarKey},
                     {"membersCount", members.is_number() ? members.get<std::int64_t>() : 0},
                     {"isRequestNeeded", check.value("requires_approval", false)},
                     {"isChannel", check.value("kind", std::string()) == "GROUP_KIND_CHANNEL"},

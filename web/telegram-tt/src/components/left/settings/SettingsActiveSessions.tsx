@@ -40,6 +40,7 @@ type StateProps = GlobalState['activeSessions'];
 type TelegramRecoveryState = 'idle' | 'unavailable' | 'waiting' | 'joining' | 'done' | 'failed' | 'limit' | 'expired';
 type LinkStatus = {
   isPending: boolean; code?: string; canRecover?: boolean; hasEscrow?: boolean; telegram?: TelegramRecoveryState;
+  telegramCode?: string;
 };
 // Parvane (spec 015): бот просит владельца ответить ключом восстановления в Telegram
 const TELEGRAM_RECOVERY_TEXT: Partial<Record<TelegramRecoveryState, string>> = {
@@ -462,7 +463,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
   }
 
   // Parvane (spec 015): бот ждёт ответа владельца с ключом восстановления
-  function renderTelegramRecovery(state: TelegramRecoveryState) {
+  function renderTelegramRecovery(state: TelegramRecoveryState, verifyCode?: string) {
     const textKey = TELEGRAM_RECOVERY_TEXT[state];
     if (!textKey) return undefined;
     return (
@@ -474,6 +475,11 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
           <p className="settings-item-description-larger" data-telegram-recovery={state}>
             {oldLang(textKey)}
           </p>
+          {state === 'waiting' && Boolean(verifyCode) && (
+            <p className="settings-item-description-larger" data-telegram-code={verifyCode}>
+              {oldLang('ParvaneTgRecoverCode', verifyCode)}
+            </p>
+          )}
           {state !== 'joining' && state !== 'done' && (
             <ListItem icon="send" narrow ripple onClick={handleRequestTelegramKey}>
               {oldLang('ParvaneTgRecoverAgain')}
@@ -670,7 +676,7 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     <div className="settings-content custom-scroll SettingsActiveSessions">
       {currentSession && renderCurrentSession(currentSession)}
       {Boolean(linkStatus?.telegram) && (linkStatus.canRecover || linkStatus.telegram === 'done')
-        && renderTelegramRecovery(linkStatus.telegram)}
+        && renderTelegramRecovery(linkStatus.telegram, linkStatus.telegramCode)}
       {Boolean(linkStatus?.isPending) && renderLinkPending(linkStatus.code)}
       {Boolean(linkStatus?.canRecover) && renderRecover()}
       {Boolean(linkOffers.length) && renderLinkOffers()}

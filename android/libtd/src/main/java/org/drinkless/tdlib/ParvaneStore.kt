@@ -611,7 +611,10 @@ class ParvaneStore {
         val group = groupsByGid[to]
         val chat = if (group != null) chats[group.chatId] ?: return null else ensurePeer(if (out) to else from).second
         val msgId = nextMessageId++ shl 20 // как серверные id TDLib (кратны 2^20)
-        if (content.optString("kind") == "poll") polls.register(uuid, from, content) // spec 005: до contentFrom
+        if (content.optString("kind") == "poll") {
+            polls.isMember = { gid, address -> roleOf(groupsByGid[gid], address) != null } // POLL-1: голос в личку принимает автор от участника
+            polls.register(uuid, from, content, to, group != null, self)
+        } // spec 005: до contentFrom
         val msg = TdApi.Message().apply {
             id = msgId
             chatId = chat.id

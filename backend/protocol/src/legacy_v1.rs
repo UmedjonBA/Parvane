@@ -397,6 +397,7 @@ pub fn inner(v: &Value) -> Result<LegacyInner> {
         "poll_vote" => content::Kind::PollVote(PollVote {
             poll: uuid_ref(s(m, "poll")),
             option_indexes: indexes(m.get("options")),
+            ..Default::default()
         }),
         "poll_close" => content::Kind::PollClose(PollClose { poll: uuid_ref(s(m, "poll")) }),
         "skdm" => {

@@ -117,7 +117,8 @@ struct GroupInfo {
     std::string created_by;
     std::vector<GroupMember> members;
     // spec 003 — все поля необязательны на проводе
-    std::string avatar; // file_id фото в cloud (открытый объект), пусто — нет фото
+    std::string avatar; // file_id фото в cloud (открытый объект либо шифрованный блоб частной группы), пусто — нет фото
+    std::string avatar_key; // секрет фото частной группы (base64, SetInfo.avatar_key; GPHOTO-1), пусто — фото открытое
     std::string about;  // описание, ≤255 символов
     DefaultPermissions default_permissions;
     std::uint64_t version = 0; // ревизия сведений: применять при version >= локальной (GROUP-1)
@@ -133,6 +134,7 @@ struct GroupInfo {
             for (const auto &m : *it) g.members.push_back(GroupMember::fromJson(m));
         }
         if (auto it = j.find("avatar"); it != j.end() && it->is_string()) g.avatar = it->get<std::string>();
+        if (auto it = j.find("avatar_key"); it != j.end() && it->is_string()) g.avatar_key = it->get<std::string>();
         if (auto it = j.find("about"); it != j.end() && it->is_string()) g.about = it->get<std::string>();
         if (auto it = j.find("default_permissions"); it != j.end() && it->is_object()) {
             g.default_permissions = DefaultPermissions::fromJson(*it);

@@ -217,6 +217,7 @@ extern QHash<QString, QString> g_displayNames;
 extern QHash<QString, QString> g_notifyExceptions;
 extern QHash<QString, QString> g_notifyDefaults;
 extern QHash<QString, QString> g_avatarFileIds;
+extern QHash<QString, QString> g_groupAvatarKeys; // адрес группы → секрет фото частной группы (base64, GPHOTO-1)
 extern QSet<QString> g_avatarDownloaded;
 extern QHash<QString, QImage> g_avatarImages;
 extern QHash<QString, quint64> g_groupVersions;
@@ -357,7 +358,7 @@ void OnAuthRejected(const QString &reason);
 void handleTypingFrame(const std::string &payload);
 std::optional<parvane::GroupInfo> GroupInfoFor(const QString &gid);
 [[nodiscard]] QString findGroupIdByName(const QString &name);
-[[nodiscard]] nlohmann::json V2SetInfo( const nlohmann::json &info, std::optional<std::string> name, std::optional<std::string> about, std::optional<std::string> avatar);
+[[nodiscard]] nlohmann::json V2SetInfo( const nlohmann::json &info, std::optional<std::string> name, std::optional<std::string> about, std::optional<std::string> avatar, std::optional<std::string> avatarKey = std::nullopt);
 void AnnounceRename(const QString &from, const QString &to);
 void MarkPeerDeleted(const QString &address, bool deleted);
 void SaveScheduledLocked();

@@ -288,6 +288,43 @@ fn texts(ev: &[Event]) -> Vec<(String, String, String)> {
         .collect()
 }
 
+/// Доказательство авторства из события: подтверждает автора, op_id и текст; чужое имя, чужой текст и порча — отказ.
+fn check_proofs(ev: &[Event], author: &str, body: &str) {
+    use parvane_protocol::report::verify_message_proof;
+    let (op_id, proof) = ev
+        .iter()
+        .find_map(|e| match e {
+            Event::Direct { op_id, proof, content: Content { kind: Some(content::Kind::Text(t)), .. }, .. }
+            | Event::Group { op_id, proof, content: Content { kind: Some(content::Kind::Text(t)), .. }, .. }
+                if t.text == body => Some((op_id.clone(), proof.clone())),
+            _ => None,
+        })
+        .expect("событие с текстом");
+    assert!(!proof.is_empty(), "доказательство не приложено");
+    let info = verify_message_proof(&proof, &op_id, author, body, &[]).expect("подпись автора верна");
+    assert!(!info.device_id.is_empty());
+    // Контекст беседы: группа — только своя; личное сообщение за групповое не выдать
+    let is_group = ev.iter().any(|e| matches!(e, Event::Group { op_id: o, .. } if *o == op_id));
+    if is_group {
+        let gid = ev.iter().find_map(|e| match e { Event::Group { op_id: o, group, .. } if *o == op_id => Some(group.id.clone()), _ => None }).unwrap();
+        assert!(verify_message_proof(&proof, &op_id, author, body, &gid).is_ok());
+        assert!(verify_message_proof(&proof, &op_id, author, body, &[7u8; 16]).is_err());
+    } else {
+        assert!(verify_message_proof(&proof, &op_id, author, body, &[7u8; 16]).is_err());
+    }
+    // Только начало текста тоже подтверждается (в жалобе текст урезан); пустой — вложение
+    assert!(verify_message_proof(&proof, &op_id, author, &body[..body.char_indices().nth(2).map(|(i, _)| i).unwrap_or(body.len())], &[]).is_ok());
+    assert!(verify_message_proof(&proof, &op_id, author, "", &[]).is_ok());
+    // Подделка: другой автор, другой текст, другой op_id, порча байта
+    assert!(verify_message_proof(&proof, &op_id, "mallory@local", body, &[]).is_err());
+    assert!(verify_message_proof(&proof, &op_id, author, "совсем другое", &[]).is_err());
+    assert!(verify_message_proof(&proof, &[0u8; 16], author, body, &[]).is_err());
+    let mut bad = proof.clone();
+    let mid = bad.len() / 2;
+    bad[mid] ^= 1;
+    assert!(verify_message_proof(&bad, &op_id, author, body, &[]).is_err());
+}
+
 fn setup(srv: &mut Server, user: &str) -> Client {
     let mut c = Client::new(user, "d1", "local").unwrap();
     let (reqs, _root) = c.create_identity(10).unwrap();
@@ -326,6 +363,7 @@ fn direct_group_multidevice_and_restore() {
     run(&mut srv, &mut alice, &mut |c| c.prepare_direct("bob@local", &text("привет")));
     let ev = drain(&mut srv, &mut bob);
     assert_eq!(texts(&ev), vec![("alice@local".into(), "alice@local".into(), "привет".into())]);
+    check_proofs(&ev, "alice@local", "привет");
     // Своё второе устройство получило копию (чат = Боб).
     let ev2 = drain(&mut srv, &mut alice2);
     assert!(texts(&ev2).contains(&("bob@local".into(), "alice@local".into(), "привет".into())), "{ev2:?}");
@@ -348,6 +386,8 @@ fn direct_group_multidevice_and_restore() {
     run(&mut srv, &mut bob, &mut |c| c.prepare_group(&g.id, &text("ответ в группу")));
     let ev = drain(&mut srv, &mut alice);
     assert!(texts(&ev).contains(&("group".into(), "bob@local".into(), "ответ в группу".into())), "{ev:?}");
+    // REPORT-1 (A0008-2): событие несёт доказательство авторства — Алиса проверяет сообщение Боба
+    check_proofs(&ev, "bob@local", "ответ в группу");
     let ev = drain(&mut srv, &mut alice2);
     assert!(texts(&ev).contains(&("group".into(), "bob@local".into(), "ответ в группу".into())), "{ev:?}");
 
@@ -1433,7 +1473,7 @@ fn ephemeral_typing_and_presence() {
     assert!(!gt.body.windows(11).any(|w| w == b"alice@local"), "автор виден серверу");
     let gq: mpb::EphemeralGroupTypingRequest = decode_checked(&gt.body, Origin::Client).unwrap();
     let send_pk = bob.group_state(&g.id).unwrap().send_public_key.unwrap();
-    verify_group_typing(&send_pk, &g, gq.epoch, &gq.nonce, &gq.payload, &gq.epoch_signature).unwrap();
+    verify_group_typing(&send_pk, &g, gq.epoch, &gq.channel_id, &gq.nonce, &gq.payload, &gq.epoch_signature).unwrap();
     match bob.open_ephemeral(&gt.body) {
         Some(Event::Typing { group: Some(id), from, action, .. }) => {
             assert_eq!((id, from.as_str(), action), (g.id.clone(), "alice@local", TypingAction::RecordingVoice as i32));

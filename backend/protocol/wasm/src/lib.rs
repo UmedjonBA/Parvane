@@ -102,16 +102,32 @@ fn disp(d: Disposition) -> &'static str {
     }
 }
 
+fn b64_std(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Доказательство авторства (base64), если есть (REPORT-1, A0008-2).
+fn with_proof(mut v: Value, proof: &[u8]) -> Value {
+    if !proof.is_empty() {
+        {
+            use base64::Engine as _;
+            v["proof"] = json!(base64::engine::general_purpose::STANDARD.encode(proof));
+        }
+    }
+    v
+}
+
 fn event_json(e: &Event) -> Value {
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content, disposition } => json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content_json(content), "disposition": disp(*disposition)
-        }),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content, disposition } => json!({
+        }), proof),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content, disposition, proof } => with_proof(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content_json(content), "disposition": disp(*disposition)
-        }),
+        }), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
@@ -1286,7 +1302,7 @@ impl PvClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "migratedFrom": s.migrated_from,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64_std(&s.avatar_key), "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch,
             // ENG-06: и после ухода устройства участника — новую эпоху начинает тот, кто вправе
             "epochStale": s.epoch_stale || self.inner.group_rekey_pending(&s.group.id),
@@ -1583,6 +1599,36 @@ pub fn seal_report(admin_public: &[u8], reporter: &str, plaintext: &[u8]) -> Res
     parvane_protocol::report::seal_report(plaintext, reporter, &key).map_err(err_proto)
 }
 
+/// REPORT-1 (A0008-2): подтвердить авторство сообщения из жалобы — `proof` (из события) и `op_id`
+/// (UUID-строка), автор и начало текста совпадают с подписанным; `group_hex` не пуст — и группа беседы. Возвращает JSON `{ok, root?, deviceId?}`.
+#[wasm_bindgen(js_name = verifyMessageProof)]
+pub fn verify_message_proof(proof: &[u8], op_id: &str, author: &str, text: &str, group_hex: &str) -> String {
+    let group = hex::decode(group_hex).unwrap_or_else(|_| vec![0]);
+    let verdict = parvane_protocol::report::op_id_from_str(op_id)
+        .and_then(|op| parvane_protocol::report::verify_message_proof(proof, &op, author, text, &group).ok());
+    match verdict {
+        Some(i) => json!({"ok": true, "root": hex::encode(i.root_key), "deviceId": i.device_id, "tsMs": i.ts_ms}),
+        None => json!({"ok": false}),
+    }
+    .to_string()
+}
+
+/// A0023-1: эфемерная пара для ответа владельца через Telegram — 64 байта: приватный ‖ публичный.
+#[wasm_bindgen(js_name = recoveryTgKeypair)]
+pub fn recovery_tg_keypair() -> Vec<u8> {
+    let (sk, pk) = parvane_protocol::recovery_tg::generate();
+    let mut out = sk.to_vec();
+    out.extend_from_slice(&pk);
+    out
+}
+
+/// A0023-1: открыть запечатанный сервером ответ владельца приватным ключом пары.
+#[wasm_bindgen(js_name = recoveryTgOpen)]
+pub fn recovery_tg_open(secret: &[u8], user: &str, device_id: &str, sealed: &[u8]) -> Result<String, JsValue> {
+    let opened = parvane_protocol::recovery_tg::open(secret, user, device_id, sealed).map_err(err_proto)?;
+    Ok(String::from_utf8_lossy(&opened).into_owned())
+}
+
 #[wasm_bindgen(js_name = generateRecoveryKey)]
 pub fn generate_recovery_key() -> String {
     parvane_protocol::recovery::RecoveryKey::generate().to_display().to_string()
@@ -1871,6 +1917,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
         "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
         "parvane.identity.v2.RootBackupGetResponse" => ipb::RootBackupGetResponse,
         "parvane.identity.v2.RecoveryTgPollResponse" => ipb::RecoveryTgPollResponse,
+        "parvane.identity.v2.RecoveryTgRequestResponse" => ipb::RecoveryTgRequestResponse,
         "parvane.identity.v2.TelegramPullResponse" => ipb::TelegramPullResponse,
         "parvane.identity.v2.TelegramReplyResponse" => ipb::TelegramReplyResponse,
         "parvane.identity.v2.PrivacyGetResponse" => ipb::PrivacyGetResponse,

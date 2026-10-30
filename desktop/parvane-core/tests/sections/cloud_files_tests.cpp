@@ -440,7 +440,11 @@ static void linkTests() {
               && manifest["items"][0]["key"] == "ka" && manifest["name"] == "Отпуск",
           "список ссылки: копии файла и миниатюры, ключ исходного блоба");
     const auto owner = d::fromBase64(published["owner_record"].get<std::string>());
-    check(owner.size() > 4 && owner[3] == 2 && owner[0] == 0, "запись владельца: эпоха ключа диска впереди (u32 BE)");
+    check(owner.size() > 16 && owner[3] == 2 && std::uint8_t(owner[0]) == 0x80,
+          "запись владельца: эпоха ключа диска впереди (u32 BE) с признаком случайного nonce, затем nonce");
+    const auto ownerNonce = owner.substr(4, 12);
+    check(blobs.openWithKey(owner.substr(16), driveKey, d::toBase64(ownerNonce)).has_value(),
+          "запись владельца вскрывается nonce из самой записи");
 
     // Список своих ссылок: название и адрес — из записи владельца
     r.t.busFns["cloud.link.list"] = [&published](const fake::Sent &) {
@@ -455,6 +459,21 @@ static void linkTests() {
               && list["links"][0]["bytes"] == 80,
           "свои ссылки: свежие первыми, название и адрес из записи владельца");
     check(list["links"][1]["state"] == "expired" && !list["links"][1].contains("url"), "без записи владельца — без адреса");
+    // Старый формат (u32 эпоха | шифртекст, nonce из link_id) читается
+    {
+        const auto legacyNonce = blobs.sha256("parvane-link-ownerLink1234567890abcd").substr(0, 12);
+        const auto plain = owner.substr(16);
+        const auto inner = blobs.openWithKey(plain, driveKey, d::toBase64(ownerNonce)).value();
+        const auto legacy = owner.substr(0, 4) + blobs.sealWithKey(inner, d::fromBase64(driveKey), legacyNonce);
+        auto legacyWire = legacy;
+        legacyWire[0] = 0;
+        r.t.busFns["cloud.link.list"] = [legacyWire](const fake::Sent &) {
+            return json{{"links", json::array({json{{"linkId", "Link1234567890abcd"}, {"state", 2},
+                                                     {"ownerRecord", d::toBase64(legacyWire)}}})}}.dump();
+        };
+        const auto old = files.links("https://srv.example");
+        check(old["links"][0]["name"] == "Отпуск" && old["links"][0]["url"] == url, "старая запись владельца читается");
+    }
     r.keys = json::array();
     check(!files.links("x")["links"][0].contains("name"), "ключа диска нет — название не читается");
 

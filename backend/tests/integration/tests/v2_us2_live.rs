@@ -476,7 +476,7 @@ fn group_typing_req(send_key: &ed25519_dalek::SigningKey, g: &Ref, epoch: u64, c
     let payload = ch.seal(&eph::typing(from, TypingAction::Typing, now_ms())).unwrap();
     let mut nonce = vec![0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
-    let sig = group::sign_group_typing(send_key, g, epoch, &nonce, &payload);
+    let sig = group::sign_group_typing(send_key, g, epoch, &ch.id, &nonce, &payload);
     mpb::EphemeralGroupTypingRequest { group: Some(g.clone()), epoch, payload, nonce, epoch_signature: sig, channel_id: ch.id.to_vec() }
 }
 

@@ -98,6 +98,10 @@ export type WireMessageContent = {
   shuffle?: boolean;
   hide_results?: boolean;
   poll?: string;
+  // POLL-1: kind=poll_vote от автора анонимного опроса — итоги (число голосов по вариантам, без адресов)
+  tally?: boolean;
+  counts?: number[];
+  voters?: number;
   // kind=chat_mode (протокол v2, FR-036): участник включил/выключил режим
   // «усиленная приватность» (L2) — служебное сообщение чата
   l2?: boolean;
@@ -132,7 +136,8 @@ export type WireMessageContent = {
   reported?: WireReportedMessage[];
 };
 
-export type WireReportedMessage = { op_id: string; author: string; text: string; ts: number };
+// `proof` — подпись автора (core.v2.MessageProof, base64): получатель проверяет авторство без истории (A0008-2)
+export type WireReportedMessage = { op_id: string; author: string; text: string; ts: number; proof?: string };
 
 export interface WireReactor { user: string; emoji: string; ts: number }
 
@@ -158,6 +163,8 @@ export type WireStoredMessage = {
   // Строка собрана из события движка v2 (spec 007) или своей отправки — её id
   // выбирает отправитель; строки кэша без пометки — история прежних сборок
   origin?: 'v2';
+  // Доказательство авторства полученного сообщения (core.v2.MessageProof, base64); прикладывается к жалобе
+  proof?: string;
 };
 
 // Права участников по умолчанию (spec 003): позитивные флаги «разрешено».

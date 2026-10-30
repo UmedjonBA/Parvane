@@ -26,6 +26,8 @@ const MANIFEST_NONCE_LABEL = 'parvane-link-manifest';
 const OWNER_NONCE_LABEL = 'parvane-link-owner';
 const NONCE_BYTES = 12;
 const EPOCH_BYTES = 4;
+/** Старший бит поля эпохи: после него идёт случайный nonce (A0066-2); без бита — старый формат, nonce из link_id. */
+const OWNER_RANDOM_NONCE_FLAG = 0x80000000;
 const LINK_ID_RE = /^[A-Za-z0-9_-]{16,32}$/;
 const LINK_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 // Служебные файлы разделов (метки хранилища заметок) в ссылку не идут
@@ -327,26 +329,39 @@ export async function openManifest(cipher: Uint8Array, linkKey: Uint8Array, link
   return plain ? parseManifest(new TextDecoder().decode(plain)) : undefined;
 }
 
-/** Запись владельца на провод: `u32 BE эпоха | шифртекст` под ключом личного диска. */
-export async function sealOwnerRecord(record: LinkOwnerRecord, driveKey: Uint8Array, linkId: string) {
+/** Запись владельца на провод: `u32 BE (эпоха | 0x80000000) | nonce(12) | шифртекст` под ключом личного диска. */
+export async function sealOwnerRecord(record: LinkOwnerRecord, driveKey: Uint8Array, _linkId?: string) {
   const plain = new TextEncoder().encode(JSON.stringify({ v: MANIFEST_VERSION, ...record }));
-  const cipher = await encryptBlobWithKey(plain, driveKey, await labelNonce(OWNER_NONCE_LABEL, linkId));
-  const out = new Uint8Array(EPOCH_BYTES + cipher.length);
-  new DataView(out.buffer).setUint32(0, record.epoch, false);
-  out.set(cipher, EPOCH_BYTES);
+  const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
+  const cipher = await encryptBlobWithKey(plain, driveKey, nonce);
+  const out = new Uint8Array(EPOCH_BYTES + NONCE_BYTES + cipher.length);
+  new DataView(out.buffer).setUint32(0, (record.epoch | OWNER_RANDOM_NONCE_FLAG) >>> 0, false);
+  out.set(nonce, EPOCH_BYTES);
+  out.set(cipher, EPOCH_BYTES + NONCE_BYTES);
   return out;
 }
 
-/** Прочитать запись владельца; `driveKeys` — ключи личного диска по эпохам (base64). */
+/** Прочитать запись владельца; `driveKeys` — ключи личного диска по эпохам (base64). Старый формат читается. */
 export async function openOwnerRecord(
   wire: Uint8Array, driveKeys: Map<number, string>, linkId: string,
 ): Promise<LinkOwnerRecord | undefined> {
   if (wire.length <= EPOCH_BYTES) return undefined;
-  const epoch = new DataView(wire.buffer, wire.byteOffset, wire.byteLength).getUint32(0, false);
+  const head = new DataView(wire.buffer, wire.byteOffset, wire.byteLength).getUint32(0, false);
+  const random = (head & OWNER_RANDOM_NONCE_FLAG) !== 0;
+  const epoch = (head & ~OWNER_RANDOM_NONCE_FLAG) >>> 0;
   const key = driveKeys.get(epoch);
   if (!key) return undefined;
-  const nonce = await labelNonce(OWNER_NONCE_LABEL, linkId);
-  const plain = await decryptBlob(wire.subarray(EPOCH_BYTES), key, bytesToBase64(nonce));
+  let nonce: Uint8Array;
+  let cipher: Uint8Array;
+  if (random) {
+    if (wire.length <= EPOCH_BYTES + NONCE_BYTES) return undefined;
+    nonce = wire.subarray(EPOCH_BYTES, EPOCH_BYTES + NONCE_BYTES);
+    cipher = wire.subarray(EPOCH_BYTES + NONCE_BYTES);
+  } else {
+    nonce = await labelNonce(OWNER_NONCE_LABEL, linkId);
+    cipher = wire.subarray(EPOCH_BYTES);
+  }
+  const plain = await decryptBlob(cipher, key, bytesToBase64(nonce));
   if (!plain) return undefined;
   try {
     const raw = JSON.parse(new TextDecoder().decode(plain)) as Partial<LinkOwnerRecord> & { v?: number };

@@ -568,6 +568,43 @@
       "client": {
         "class": "message",
         "v1": {
+          "counts": [
+            3,
+            0,
+            2
+          ],
+          "kind": "poll_vote",
+          "tally": true,
+          "voters": 5
+        }
+      },
+      "expect": {
+        "content": {
+          "poll_vote": {
+            "counts": [
+              3,
+              0,
+              2
+            ],
+            "poll": {
+              "op_id": "AQIDBAUGBwgJCgsMDQ4PEA=="
+            },
+            "tally": true,
+            "voters": 5
+          }
+        },
+        "disposition": "show",
+        "ok": true
+      },
+      "input": {
+        "content_hex": "321e0a120a100102030405060708090a0b0c0d0e0f1018012003200020022805"
+      },
+      "name": "poll-vote-tally"
+    },
+    {
+      "client": {
+        "class": "message",
+        "v1": {
           "kind": "poll_close"
         }
       },

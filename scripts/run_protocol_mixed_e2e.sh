@@ -65,6 +65,8 @@ case "$PAIR" in
     export PARVANE_E2E_ESCROW_KEY_FILE="$ESCROW_DIR/admin.key"
     PARVANE_ESCROW_PUBLIC_KEY="$("$ROOT/backend/target/debug/escrow_admin" keygen "$PARVANE_E2E_ESCROW_KEY_FILE")"
     export PARVANE_ESCROW_PUBLIC_KEY
+    # ID-03: web принимает объявленный сервером ключ, только если он закреплён в сборке
+    export VITE_PARVANE_ESCROW_PUBLIC_KEY="$PARVANE_ESCROW_PUBLIC_KEY"
     ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
   state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;

@@ -34,6 +34,7 @@ inline constexpr const char *kCloudDomain = "cloud.v1";
 inline constexpr const char *kCloudOutboxRecord = "cloud-outbox:";
 inline constexpr const char *kCloudGcRecord = "cloud-gc";
 inline constexpr const char *kCloudRemoteDomainsRecord = "cloud-remote-domains";
+inline constexpr const char *kCloudOwnBlobsRecord = "cloud-own-blobs";
 inline constexpr std::size_t kGcKeep = 2000;
 inline constexpr std::int64_t kSyncActiveMs = 8000;
 inline constexpr std::int64_t kSyncIdleMs = 60000;
@@ -106,6 +107,9 @@ public:
     std::string apply(const std::string &container, const json &ops);
     // Дослать очередь контейнера и стереть блобы удалённого; true — сервер принял всё
     bool flush(const std::string &id);
+    // Блоб, который это устройство само загрузило либо скопировало в облако: сборка мусора стирает на сервере
+    // только такие (поле uploader в описании блоба пишет автор операции и для чужой записи не доказательство)
+    void noteOwnBlob(const std::string &fileId);
     void syncNow(bool shouldDiscover = false);
     void tick();
     [[nodiscard]] std::optional<std::int64_t> nextWakeMs() const;
@@ -202,6 +206,7 @@ private:
     // Чужие контейнеры, в которых доступа больше нет (сервер ответил NOT_FOUND)
     std::set<std::string> lost_;
     std::optional<std::vector<std::string>> gcDone_;
+    std::optional<std::vector<std::string>> ownBlobs_;
     std::set<std::string> gcChecked_;
     std::map<std::string, std::int64_t> trashCheckedAt_;
     std::optional<std::set<std::string>> remoteDomains_;

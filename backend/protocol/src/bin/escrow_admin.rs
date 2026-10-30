@@ -77,7 +77,33 @@ fn open_report(path: &str, reporter: &str, sealed_hex: &str) -> Result<(), Strin
     let text = parvane_protocol::report::open_report(&sealed, reporter, &secret)
         .map_err(|e| format!("жалоба не открылась (чужой ключ, другой автор или порча): {e}"))?;
     println!("{}", String::from_utf8_lossy(&text));
+    println!("{}", verify_report_messages(&text));
     Ok(())
+}
+
+/// A0008-2: у каждого приложенного сообщения — проверка подписи автора (`proof`: исходная операция и сертификат
+/// устройства). Цепочка корень → SSK → устройство → подпись проверяется здесь; соответствие корня адресу автора
+/// администратор сверяет с журналом устройств сервера (корень печатается). Без подтверждения — «НЕ ПОДТВЕРЖДЕНО».
+fn verify_report_messages(text: &[u8]) -> String {
+    use base64::Engine as _;
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(text) else { return "сообщения: жалоба не JSON".into() };
+    let Some(items) = v.get("messages").and_then(|m| m.as_array()) else { return "сообщения: нет".into() };
+    let mut out = String::new();
+    for (i, m) in items.iter().enumerate() {
+        let field = |k: &str| m.get(k).and_then(|x| x.as_str()).unwrap_or("");
+        let verdict = base64::engine::general_purpose::STANDARD
+            .decode(field("proof"))
+            .ok()
+            .zip(parvane_protocol::report::op_id_from_str(field("op_id")))
+            .and_then(|(proof, op)| parvane_protocol::report::verify_message_proof(&proof, &op, field("author"), field("text"), &[]).ok());
+        let line = match verdict {
+            Some(info) => format!("сообщение {}: подтверждено подписью устройства {}, корень {}", i + 1, info.device_id, hex::encode(info.root_key)),
+            None => format!("сообщение {}: НЕ ПОДТВЕРЖДЕНО (нет подписи автора либо она не сошлась)", i + 1),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
 fn main() -> ExitCode {

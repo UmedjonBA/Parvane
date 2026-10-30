@@ -137,6 +137,70 @@ describe('ParvaneStore messages', () => {
   });
 });
 
+// REPORT-1 (A0008-2): сообщение, которого нет в своей истории, принимается только с подписью автора
+describe('ParvaneStore mod report proofs', () => {
+  const hex = 'cd'.repeat(16);
+  const make = () => {
+    const store = new ParvaneStore();
+    store.registerGroup({
+      group_id: `v2g:${hex}`,
+      name: 'g',
+      kind: 'group',
+      created_by: 'bob@x.test',
+      members: [{ address: 'bob@x.test', role: 'member' }, { address: 'eve@x.test', role: 'member' }],
+      version: 1,
+    });
+    return store;
+  };
+  const report = (store: ParvaneStore, reported: { op_id: string; author: string; text: string; proof?: string }[]) => (
+    store.buildApiMessage({
+      id: 'r1',
+      from: 'bob@x.test',
+      to: 'admin@x.test',
+      ts: 2000,
+      content: {
+        kind: 'mod_report',
+        text: 'fallback',
+        report_group: { domain: 'x.test', id: Buffer.from(hex, 'hex').toString('base64') },
+        reported: reported.map((m) => ({ ...m, ts: 5 })),
+      },
+    }).content
+  );
+
+  it('marks a message proven when the signature checks out for this group, text and author', () => {
+    const store = make();
+    const calls: unknown[][] = [];
+    store.verifyProof = (...args) => {
+      calls.push(args);
+      return args[0] === 'good';
+    };
+    const content = report(store, [
+      { op_id: 'op-1', author: 'eve@x.test', text: 'signed words', proof: 'good' },
+      { op_id: 'op-2', author: 'eve@x.test', text: 'forged words', proof: 'bad' },
+      { op_id: 'op-3', author: 'eve@x.test', text: 'no proof at all' },
+      { op_id: 'op-4', author: 'mallory@x.test', text: 'not a member', proof: 'good' },
+    ]);
+    expect(content.modReport?.messages).toEqual([
+      {
+        uuid: 'op-1',
+        authorId: store.getIdForAddress('eve@x.test', 'user'),
+        text: 'signed words',
+        date: 5,
+        isProven: true,
+      },
+    ]);
+    // Проверка идёт для группы отчёта и текста из жалобы (вложение без подписи — пустой текст)
+    expect(calls[0]).toEqual(['good', 'op-1', 'eve@x.test', 'signed words', hex]);
+  });
+
+  it('shows plain text when the engine cannot confirm anything', () => {
+    const store = make();
+    const content = report(store, [{ op_id: 'op-1', author: 'eve@x.test', text: 'x', proof: 'good' }]);
+    expect(content.modReport).toBeUndefined();
+    expect(content.text?.text).toBe('fallback');
+  });
+});
+
 describe('ParvaneStore ids', () => {
   const fnv = (value: string) => {
     let hash = 0x811c9dc5;

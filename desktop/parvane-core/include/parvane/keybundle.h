@@ -8,6 +8,7 @@
 // AAD = "PVKB" ‖ версия ‖ адрес. Общие векторы с web — proto/parvane/vectors/clients/keybundle-*.json.
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -27,6 +28,10 @@ namespace parvane::keybundle {
 // nullopt — чужой ключ/адрес, испорченные байты или нет `grant`.
 [[nodiscard]] std::optional<nlohmann::json> open(const std::string &bundleKey, const std::string &address,
                                                  const std::string &bytes);
+// Номер записи копии (A0073-2, защита от отката сервером): поле `seq` в зашифрованном содержимом, целое > 0; нет поля
+// или мусор — 0 (копия старого формата). Устройство хранит наибольший виденный и не принимает копию с меньшим.
+[[nodiscard]] std::uint64_t seqOf(const nlohmann::json &payload);
+[[nodiscard]] bool isRolledBack(const nlohmann::json &payload, std::uint64_t seenSeq);
 // Журнал устройств в материале гранта — свежий ответ `identity.device.log_sync` (hex), ключ копии — поле `bk`.
 [[nodiscard]] std::string withFreshLog(const std::string &grant, const std::string &logResponse);
 [[nodiscard]] std::string withBundleKey(const std::string &grant, const std::string &bundleKeyB64);

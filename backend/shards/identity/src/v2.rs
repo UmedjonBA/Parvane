@@ -989,22 +989,27 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !ratelimit::window_rate_ok("tg-key-ask", &req.user, 6) {
                 return Err(ErrorCode::RateLimited);
             }
-            if !recovery_tg::request_key(telegram_id, &req.user, &req.device_id, r.client.trim(), r.again, now_unix()) {
-                return Err(ErrorCode::Unavailable);
+            // A0023-1: эфемерный ключ — 32 байта X25519 либо пусто (прежний клиент)
+            if !r.eph_public.is_empty() && r.eph_public.len() != 32 {
+                return Err(ErrorCode::Invalid);
             }
+            let Some(code) = recovery_tg::request_key(telegram_id, &req.user, &req.device_id, r.client.trim(), &r.eph_public, r.again, now_unix()) else {
+                return Err(ErrorCode::Unavailable);
+            };
             info!("Устройство '{}' пользователя {} просит ключ восстановления через Telegram", req.device_id, req.user);
-            Ok(pb::RecoveryTgRequestResponse {}.encode_to_vec())
+            Ok(pb::RecoveryTgRequestResponse { code }.encode_to_vec())
         }
         "identity.recovery.tg_poll" => {
             require_user(&req)?;
             let r: pb::RecoveryTgPollRequest = body(&req)?;
-            let (mut recovery_key, pending) = recovery_tg::poll(&req.user, &req.device_id, r.done, now_unix());
+            let view = recovery_tg::poll(&req.user, &req.device_id, r.done, now_unix());
+            let mut recovery_key = view.recovery_key;
             // Действующее устройство без копии ключей аккаунта забирает ответ
             // владельца, чтобы завести копию (см. `peek_reply`)
-            if recovery_key.is_empty() && !pending && !r.done && load_log(ctx, &req.user).await?.active(&req.device_id).is_some() {
+            if recovery_key.is_empty() && !view.pending && !r.done && load_log(ctx, &req.user).await?.active(&req.device_id).is_some() {
                 recovery_key = recovery_tg::peek_reply(&req.user, now_unix());
             }
-            Ok(pb::RecoveryTgPollResponse { recovery_key, pending }.encode_to_vec())
+            Ok(pb::RecoveryTgPollResponse { recovery_key, pending: view.pending, sealed_key: view.sealed, code: view.code }.encode_to_vec())
         }
         "identity.telegram.pull" => {
             let r: pb::TelegramPullRequest = body(&req)?;
@@ -1022,15 +1027,30 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                 .await
                 .map_err(db_err)?;
             let Some((user,)) = owner else { return reply("no_account", "") };
-            if !recovery_tg::has_request(&user, now_unix()) {
+            // A0023-1: ответ закрывает конкретный запрос (номер из сообщения бота)
+            let Some(target) = recovery_tg::target(&user, r.request_id, now_unix()) else {
                 return reply("no_request", &user);
-            }
+            };
             if !ratelimit::window_rate_ok("tg-key-reply", &r.telegram_id.to_string(), 10) {
                 return Err(ErrorCode::RateLimited);
             }
             let log = load_log(ctx, &user).await?;
             let Some(key) = verified_recovery_key(ctx, &user, &r.text, &log).await? else { return reply("bad_key", &user) };
-            if !recovery_tg::store_reply(&user, &key, now_unix()) {
+            let stored = if target.eph_public.is_empty() {
+                // Прежний клиент без эфемерного ключа: открытый текст
+                recovery_tg::store_reply(&user, target.request_id, None, Some(&key), now_unix())
+            } else {
+                let sealed = parvane_protocol::recovery_tg::seal(&target.eph_public, &user, &target.device_id, key.as_bytes()).map_err(|_| ErrorCode::Invalid)?;
+                // Открытый ключ нужен серверу, только если у аккаунта нет копии ключей: действующее
+                // устройство заведёт её из ответа (`peek_reply`)
+                let has_bundle: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM root_backup WHERE user = ? AND key_bundle IS NOT NULL")
+                    .bind(&user)
+                    .fetch_optional(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+                recovery_tg::store_reply(&user, target.request_id, Some(sealed), has_bundle.is_none().then_some(key.as_str()), now_unix())
+            };
+            if !stored {
                 return reply("no_request", &user);
             }
             info!("Владелец {} ответил боту ключом восстановления", user);

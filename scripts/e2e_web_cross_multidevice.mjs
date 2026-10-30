@@ -31,8 +31,8 @@ const PASSWORD = 'Parvane-xmulti-e2e-password';
 const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
   || new URL('../desktop/build-probe/bin/Telegram', import.meta.url).pathname;
 const GATEWAY_TCP_URL = process.env.PARVANE_E2E_GATEWAY_TCP_URL;
-// Второе устройство до привязки — только сессия; «v2: готов» будет после линковки
-const DESKTOP_READY = /сессия поднята для/;
+// Второе устройство до привязки — корня не создаёт и просит линковку; «v2: готов» будет после неё
+const DESKTOP_READY = /нужна линковка/;
 const LINK_TIMEOUT_MS = 90000;
 
 assert(GATEWAY_TCP_URL, 'PARVANE_E2E_GATEWAY_TCP_URL is required');
@@ -187,7 +187,10 @@ try {
   await bobWeb.page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await closeSettings(bobWeb.page);
 
-  await waitDesktopLog(desktopWorkdir, /линковка: история получена/, LINK_TIMEOUT_MS, desktop);
+  // v2: грант + экспорт истории получены, устройство вступило в журнал устройств
+  await waitDesktopLog(desktopWorkdir, /линковка: грант v2 получен/, LINK_TIMEOUT_MS, desktop);
+  await waitDesktopLog(desktopWorkdir, /v2: устройство привязано грантом линковки/, 60000, desktop);
+  await waitDesktopLog(desktopWorkdir, /v2: готов/, 60000, desktop);
   await waitDesktopLog(desktopWorkdir, new RegExp(`входящее msg [\\w-]+ \\(${esc(alice)}\\): ${oldText}`), 60000, desktop);
 
   // ── живое: читают оба устройства bob ──────────────────────────────────────

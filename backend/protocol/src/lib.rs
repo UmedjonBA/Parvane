@@ -28,6 +28,7 @@ pub mod msg;
 pub mod olm;
 pub mod policy;
 pub mod recovery;
+pub mod recovery_tg;
 pub mod registry_gen;
 pub mod report;
 pub mod routing;

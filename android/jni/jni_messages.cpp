@@ -247,6 +247,15 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeDownloadFile(
     const auto fid = jstr(env, fileId);
     if (!isSafeFileId(fid)) { LOGE("downloadFile: недопустимый file_id"); return jout(env, ""); } // NAT-04
     if (const auto cached = readMediaCache(fid)) return jout(env, mediaWorkCopy(fid, *cached));
+    // Фото частной группы (A0089-5, GPHOTO-1): в `key` — секрет из журнала группы (base64), ключи PVB2 и capability
+    // выводит ядро; расшифрованное кладётся в кэш как обычный аватар
+    if (jstr(env, kind) == "group_photo") {
+        const auto s = v2Ready();
+        const auto plain = s ? s->downloadGroupPhoto(fid, jstr(env, key)) : std::nullopt;
+        if (!plain) { LOGE("downloadFile %s: фото группы не получено", fid.c_str()); return jout(env, ""); }
+        writeMediaCache(fid, *plain);
+        return jout(env, mediaWorkCopy(fid, *plain));
+    }
     const auto k = jstr(env, key), n = jstr(env, nonce);
     const auto cap = parvane::chatrules::chatBlobCipherCap(jstr(env, kind), std::uint64_t(std::max<jlong>(sizeBytes, 0)));
     const auto d = downloadChatBlob(fid, cap);

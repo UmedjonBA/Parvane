@@ -320,12 +320,20 @@ bool ApplyGroupInfo(
 		? channelPerms
 		: gi.default_permissions));
 	chat->setAbout(QString::fromStdString(gi.about));
-	// Фото группы — открытый объект cloud, как аватар пользователя.
+	// Фото группы: частная — шифровано секретом журнала (GPHOTO-1), публичная — открытый объект cloud.
 	const auto avatar = QString::fromStdString(gi.avatar);
 	if (!avatar.isEmpty()) {
+		// Ключ — до NoteAvatar: загрузка читает его из g_groupAvatarKeys (GPHOTO-1)
+		const auto avatarKey = QString::fromStdString(gi.avatar_key);
+		if (avatarKey.isEmpty()) {
+			g_groupAvatarKeys.remove(gid);
+		} else {
+			g_groupAvatarKeys.insert(gid, avatarKey);
+		}
 		NoteAvatar(gid, avatar);
 		applyAvatar(chat, gid);
 	} else if (g_avatarFileIds.contains(gid)) {
+		g_groupAvatarKeys.remove(gid);
 		g_avatarFileIds.remove(gid);
 		g_avatarImages.remove(gid);
 		chat->setPhoto(MTP_chatPhotoEmpty());
@@ -461,7 +469,8 @@ void GroupV1Gone(GroupOpDone done) {
 		const nlohmann::json &info,
 		std::optional<std::string> name,
 		std::optional<std::string> about,
-		std::optional<std::string> avatar) {
+		std::optional<std::string> avatar,
+		std::optional<std::string> avatarKey) {
 	if (!info.is_object()) {
 		return nullptr;
 	}
@@ -471,6 +480,8 @@ void GroupV1Gone(GroupOpDone done) {
 	if (name) patch["name"] = *name;
 	if (about) patch["about"] = *about;
 	if (avatar) patch["avatar_file_id"] = *avatar;
+	// Секрет фото частной группы идёт со своим файлом (GPHOTO-1); без него — открытое фото
+	if (avatarKey) patch["avatar_key"] = *avatarKey;
 	return { { "set_info_patch", std::move(patch) } };
 }
 
@@ -498,9 +509,28 @@ void SetGroupAbout(const QString &groupId, const QString &about, GroupOpDone don
 }
 
 void ClearGroupPhoto(const QString &groupId, GroupOpDone done) {
-	if (RunV2GroupChange(u"SETINFO clear_avatar '%1'"_q.arg(groupId), groupId, [](const nlohmann::json &info) {
+	// Снятое фото удаляется с сервера (GPHOTO-1); id берём из журнала в тот же момент, что и запись
+	const auto previous = std::make_shared<std::string>();
+	if (RunV2GroupChange(u"SETINFO clear_avatar '%1'"_q.arg(groupId), groupId, [previous](const nlohmann::json &info) {
+			if (info.is_object()) {
+				*previous = info.value("avatarFileId", std::string());
+			}
 			return V2SetInfo(info, std::nullopt, std::nullopt, std::string());
-		}, done)) {
+		}, [done, previous](bool ok, const QString &error) {
+			if (ok && !previous->empty()) {
+				crl::async([fileId = *previous] {
+					if (const auto t = ControlSnapshot()) {
+						try {
+							t->deleteBlob(fileId);
+						} catch (const std::exception &) {
+						}
+					}
+				});
+			}
+			if (done) {
+				done(ok, error);
+			}
+		})) {
 		return;
 	}
 	GroupV1Gone(std::move(done));
@@ -577,10 +607,26 @@ void SetGroupPhoto(const QString &groupId, const QImage &image, GroupOpDone done
 	const auto gid = groupId.toStdString();
 	crl::async([=] {
 		const auto t = ControlSnapshot();
-		std::string fileId;
-		if (t && !bytesStd.empty()) {
+		const auto s = V2Ready();
+		// Публичная группа — открытый блоб, как раньше; частная — PVB2 + capability, секрет в журнале (GPHOTO-1)
+		const auto known = s ? s->groupInfo(gid) : nlohmann::json();
+		// Поле может прийти null — value() на null бросает и роняет поток
+		const auto str = [&](const char *key) {
+			const auto it = known.is_object() ? known.find(key) : known.end();
+			return (it != known.end() && it->is_string()) ? it->get<std::string>() : std::string();
+		};
+		const auto isPublicGroup = !str("publicName").empty();
+		const auto previous = str("avatarFileId");
+		std::string fileId, secret;
+		if (t && s && !bytesStd.empty()) {
 			try {
-				fileId = t->uploadBlob(bytesStd, /*isPublic=*/true);
+				if (isPublicGroup) {
+					fileId = t->uploadBlob(bytesStd, /*isPublic=*/true);
+				} else {
+					auto up = s->uploadGroupPhoto(bytesStd);
+					fileId = std::move(up.fileId);
+					secret = std::move(up.secretB64);
+				}
 			} catch (const std::exception &e) {
 				LOG(("Parvane: фото группы %1 не загружено: %2")
 					.arg(groupId, QString::fromUtf8(e.what())));
@@ -594,9 +640,25 @@ void SetGroupPhoto(const QString &groupId, const QImage &image, GroupOpDone done
 			});
 			return;
 		}
-		if (RunV2GroupChange(u"SETINFO avatar '%1'"_q.arg(groupId), groupId, [fileId](const nlohmann::json &info) {
-				return V2SetInfo(info, std::nullopt, std::nullopt, fileId);
-			}, done)) {
+		// Прежний блоб удаляется после записи (чужой блоб сервер не отдаст на удаление — это не ошибка)
+		const auto dropPrevious = [t, previous, fileId] {
+			if (t && !previous.empty() && previous != fileId) {
+				try {
+					t->deleteBlob(previous);
+				} catch (const std::exception &) {
+				}
+			}
+		};
+		if (RunV2GroupChange(u"SETINFO avatar '%1'"_q.arg(groupId), groupId, [fileId, secret](const nlohmann::json &info) {
+				return V2SetInfo(info, std::nullopt, std::nullopt, fileId, secret);
+			}, [done, dropPrevious](bool ok, const QString &error) {
+				if (ok) {
+					crl::async(dropPrevious);
+				}
+				if (done) {
+					done(ok, error);
+				}
+			})) {
 			return;
 		}
 		GroupV1Gone(done);
@@ -914,20 +976,29 @@ namespace {
 constexpr auto kPublicImageMaxSide = 2048;
 } // namespace
 
-void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done) {
+void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done, const QString &avatarKey) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
 	const auto fid = fileId.toStdString();
+	const auto key = avatarKey.toStdString();
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		std::string bytes;
 		if (t) {
 			try {
-				auto d = DownloadChatBlob(
-					fid,
-					parvane::chatrules::chatBlobCipherCap("avatar", 0));
-				if (d.ok) {
-					bytes = std::move(d.bytes);
+				if (!key.empty()) {
+					// Фото частной группы по секрету из её журнала (GPHOTO-1)
+					const auto s = V2Ready();
+					if (auto plain = s ? s->downloadGroupPhoto(fid, key) : std::nullopt) {
+						bytes = std::move(*plain);
+					}
+				} else {
+					auto d = DownloadChatBlob(
+						fid,
+						parvane::chatrules::chatBlobCipherCap("avatar", 0));
+					if (d.ok) {
+						bytes = std::move(d.bytes);
+					}
 				}
 			} catch (const std::exception &) {
 			}
@@ -1067,6 +1138,7 @@ void CheckGroupInvite(const QString &token,
 				p.name = QString::fromStdString(r.value("name", std::string()));
 				p.about = QString::fromStdString(r.value("about", std::string()));
 				p.avatar = QString::fromStdString(r.value("avatar", std::string()));
+				p.avatarKey = QString::fromStdString(r.value("avatarKey", std::string()));
 				p.kind = r.value("isChannel", false) ? u"channel"_q : u"group"_q;
 				p.members = int(r.value("membersCount", std::int64_t(0)));
 				p.requestNeeded = r.value("isRequestNeeded", false);
@@ -1325,6 +1397,15 @@ void ReportMessages(
 			{ "text", text.left(kReportTextMax).toStdString() },
 			{ "ts", std::int64_t(item->date()) },
 		});
+		// Подпись автора лежит рядом с полученным сообщением (A0008-2); без неё получатель жалобы
+		// не подтвердит авторство — сообщение останется «не подтверждённым»
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			const auto cached = g_v2Cache.constFind(uuid);
+			if (cached != g_v2Cache.constEnd() && !cached->proof.empty()) {
+				reported.back()["proof"] = cached->proof;
+			}
+		}
 	}
 	const auto chat = address.toStdString();
 	const auto self = SelfAddress().toStdString();

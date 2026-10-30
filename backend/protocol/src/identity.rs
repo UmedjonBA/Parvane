@@ -491,6 +491,12 @@ impl DeviceLog {
         self.eras.iter().any(|e| e.key.as_slice() == key && e.from <= version && e.until.is_none_or(|u| version < u))
     }
 
+    /// A0007-2: версия журнала, на которой последний раз отозвано чужой рукой устройство (0 — отзывов не было).
+    /// Записи группы после отметки обязаны ссылаться на версию не ниже.
+    pub fn revocation_floor(&self) -> u64 {
+        self.eras.iter().filter(|e| e.revoked).filter_map(|e| e.until).max().unwrap_or(0)
+    }
+
     /// ENG-08: запись без версии журнала (до поля `signer_log_version`) — ключ действует сейчас либо
     /// перестал действовать без чужого отзыва (выход устройства, смена SSK).
     pub fn key_known_unrevoked(&self, key: &[u8]) -> bool {

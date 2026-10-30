@@ -450,7 +450,7 @@ impl Client {
         if p.keys.get(p.access.epoch).is_none() {
             return Ok(vec![]);
         }
-        let rotate = dom::sign_rotate(&self.acc, &p.access, ts_ms)?;
+        let rotate = dom::sign_rotate_at(&self.acc, &p.access, ts_ms, Some(p.head_seq))?;
         p.access.apply(&rotate, &resolve, &no_groups)?;
         p.grants.push(rotate.clone());
         p.keys.insert(p.access.epoch, dom::new_epoch_key());

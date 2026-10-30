@@ -77,6 +77,61 @@ pub fn open_report(blob: &[u8], reporter: &str, admin_secret: &[u8; 32]) -> Resu
     Ok(Zeroizing::new(pt))
 }
 
+/// Что подтвердило доказательство авторства.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofInfo {
+    /// Корень личности автора (его адрес к корню привязывает журнал устройств на сервере).
+    pub root_key: [u8; 32],
+    pub device_id: String,
+    pub ts_ms: i64,
+}
+
+/// `op_id` из текстового вида (UUID с дефисами либо без).
+pub fn op_id_from_str(s: &str) -> Option<Vec<u8>> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    let b = hex::decode(hex).ok()?;
+    (b.len() == 16).then_some(b)
+}
+
+/// Подтвердить авторство сообщения из жалобы (REPORT-1, A0008-2): цепочка «корень → SSK → сертификат
+/// устройства → подпись операции» верна, сертификат выдан `author`, `op_id` и (если не пусто) начало
+/// текста совпадают с подписанными. Без `text` (вложение без подписи) текст не сверяется. `group_id` не пуст —
+/// операция подписана именно для этой группы (контекст беседы), иначе чужое сообщение можно выдать за групповое.
+pub fn verify_message_proof(proof: &[u8], op_id: &[u8], author: &str, text: &str, group_id: &[u8]) -> Result<ProofInfo> {
+    use crate::codec::decode_checked;
+    use crate::limits::Origin;
+    use crate::pb::parvane::core::v2::MessageProof;
+    use crate::pb::parvane::msg::v2::{content, Content};
+    if proof.is_empty() || proof.len() > crate::msg::MAX_PROOF_LEN {
+        return Err(ProtoError::Malformed);
+    }
+    let p: MessageProof = decode_checked(proof, Origin::Client)?;
+    let cert = p.sender.as_ref().ok_or(ProtoError::InvalidField("sender"))?;
+    let op = p.op.as_ref().ok_or(ProtoError::InvalidField("op"))?;
+    let device = crate::identity::verify_certificate(cert, Some(author))?;
+    let v = crate::sign::verify_op(op, crate::msg::MSG_DOMAIN, crate::msg::CONTENT_OP, Some(&device.olm_ed25519()?))?;
+    if v.header.op_id != op_id {
+        return Err(ProtoError::ContextMismatch);
+    }
+    if !group_id.is_empty() {
+        match &v.header.conversation {
+            Some(crate::pb::parvane::core::v2::op_header::Conversation::Group(ctx)) if ctx.group.as_ref().is_some_and(|g| g.id == group_id) => {}
+            _ => return Err(ProtoError::ContextMismatch),
+        }
+    }
+    let signed: Content = decode_checked(&v.payload, Origin::Client)?;
+    let signed_text = match &signed.kind {
+        Some(content::Kind::Text(t)) => t.text.as_str(),
+        Some(content::Kind::Media(m)) => m.caption.as_str(),
+        Some(_) => "",
+        None => return Err(ProtoError::Malformed),
+    };
+    if !text.is_empty() && !signed_text.starts_with(text) {
+        return Err(ProtoError::ContextMismatch);
+    }
+    Ok(ProofInfo { root_key: device.root_key, device_id: device.cert.device_id.clone(), ts_ms: v.header.ts_ms })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

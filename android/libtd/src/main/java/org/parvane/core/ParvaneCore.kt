@@ -155,6 +155,8 @@ object ParvaneCore {
     // жалобы (REPORT-1)
     /** "sent" | "unavailable" | "failed" */
     fun submitReport(reportJson: String): String = nativeSubmitReport(reportJson)
+    /** Подпись автора полученного сообщения для жалобы (core.v2.MessageProof, base64); пусто — нет. */
+    fun messageProof(uuid: String): String = nativeMessageProof(uuid)
     fun checkModReport(contentJson: String, reporter: String): JSONObject? =
         nativeCheckModReport(contentJson, reporter).takeIf { it != "null" }?.let { JSONObject(it) }
 
@@ -252,6 +254,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativePublicJoin(hex: String, secretHex: String): String
     @JvmStatic private external fun nativePublicHistory(groupId: String, beforeSeq: Long): String
     @JvmStatic private external fun nativeSubmitReport(reportJson: String): String
+    @JvmStatic private external fun nativeMessageProof(uuid: String): String
     @JvmStatic private external fun nativeCheckModReport(contentJson: String, reporter: String): String
     @JvmStatic private external fun nativeResolve(addressesJson: String): String
     @JvmStatic private external fun nativeSearch(query: String): String

@@ -125,9 +125,9 @@ fn need<T>(n: Need) -> CResult<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// Сообщение (или мутация как содержимое) личного чата.
-    Direct { seq: u64, chat: String, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition },
+    Direct { seq: u64, chat: String, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition, proof: Vec<u8> },
     /// Сообщение группы.
-    Group { seq: u64, group: Ref, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition },
+    Group { seq: u64, group: Ref, from: String, device: String, op_id: Vec<u8>, ts_ms: i64, content: Content, disposition: Disposition, proof: Vec<u8> },
     /// Запись истории/сообщение v1 (разбор — legacy_v1).
     LegacyV1 { seq: u64, json: Vec<u8> },
     /// Изменился журнал группы — синхронизировать.
@@ -1829,7 +1829,7 @@ impl Client {
         let payload = c.seal(&ephemeral::typing(&self.user, action, now_ms()))?;
         let mut nonce = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-        let epoch_signature = group::sign_group_typing(&send, &state.group, epoch, &nonce, &payload);
+        let epoch_signature = group::sign_group_typing(&send, &state.group, epoch, &c.id, &nonce, &payload);
         Ok(Some(OutRequest::anon(
             "ephemeral.group_typing",
             &mpb::EphemeralGroupTypingRequest { group: Some(state.group.clone()), epoch, payload, nonce: nonce.to_vec(), epoch_signature, channel_id: c.id.to_vec() },
@@ -2431,7 +2431,7 @@ impl Client {
             }
             _ => {}
         }
-        Ok(vec![Event::Direct { seq, chat, from: sender, device: dev_id, op_id, ts_ms: ts, content: opened.content, disposition: opened.disposition }])
+        Ok(vec![Event::Direct { seq, chat, from: sender, device: dev_id, op_id, ts_ms: ts, content: opened.content, disposition: opened.disposition, proof: opened.proof }])
     }
 
     // ── группы ──────────────────────────────────────────────────────────────
@@ -2553,6 +2553,23 @@ impl Client {
     fn own_signer_version(&self, state: Option<&GroupState>) -> u64 {
         let seen = state.and_then(|s| s.signer_versions.get(&self.user)).copied().unwrap_or(0);
         self.own_log.version.max(seen)
+    }
+
+    /// A0007-2: отметки отзыва для записи группы — участники (кроме нас), чей известный нам журнал устройств
+    /// содержит отзыв новее порога, уже записанного в группе. Отозванное устройство после этого не пишет от
+    /// их имени, сколько бы ни ссылалось на версию «до отзыва».
+    fn revocation_floors(&self, state: &GroupState) -> Vec<gpb::RevokedFloor> {
+        let mut out = Vec::new();
+        for user in state.members.keys().filter(|u| **u != self.user) {
+            let floor = self.peer_log(user).map(|l| l.revocation_floor()).unwrap_or(0);
+            if floor > state.signer_versions.get(user).copied().unwrap_or(0) {
+                out.push(gpb::RevokedFloor { user: user.clone(), min_log_version: floor });
+            }
+            if out.len() >= 16 {
+                break;
+            }
+        }
+        out
     }
 
     /// Домен сервера группы (spec 028): из журнала, иначе из ожидающего ключа,
@@ -2821,7 +2838,8 @@ impl Client {
     /// применить локально (отказ сервера хост лечит пересинхронизацией).
     fn group_entry(&mut self, group_id: &[u8], change: Change) -> Result<GroupStateEntry> {
         let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
-        let entry = group::build_entry_as(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)), self.own_signer_hint())?;
+        let floors = self.revocation_floors(&state);
+        let entry = group::build_entry_full(&self.acc, Some(&state), &self.domain, change, now_ms(), self.own_signer_version(Some(&state)), self.own_signer_hint(), floors)?;
         let next = {
             let resolve = self.signer_resolver();
             let (signer_as, root_of) = (self.signer_resolver_as(), self.root_resolver());
@@ -3488,6 +3506,7 @@ impl Client {
             ts_ms: opened.op.header.ts_ms,
             content: opened.content,
             disposition: opened.disposition,
+            proof: opened.proof,
         }])
     }
 

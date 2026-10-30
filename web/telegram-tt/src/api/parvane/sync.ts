@@ -55,6 +55,8 @@ type SyncDependencies = {
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
   refreshPollMessage: (uuid: string) => void;
+  // POLL-1: у автора анонимного опроса изменились голоса — опубликовать итоги (с задержкой и сверкой)
+  onAnonymousVote?: (uuid: string) => void;
   // spec 011: задания в чат — карточки и решения (восстанавливаются из кэша истории)
   taskOffers: TaskOfferStore;
   refreshTaskOfferMessage: (uuid: string) => void;
@@ -138,6 +140,7 @@ export function createSyncController(deps: SyncDependencies) {
           noRevote: fields.noRevote,
           shuffle: fields.shuffle,
           hideResults: fields.hideResults,
+          isGroup: deps.getStore().isGroupAddress(stored.to),
         },
       );
       return false;
@@ -145,11 +148,47 @@ export function createSyncController(deps: SyncDependencies) {
     if (content.kind === 'poll_vote') {
       const pollUuid = content.poll;
       const options = (content.options || []).map(Number).filter((idx) => !Number.isNaN(idx));
+      if (!pollUuid || !stored.from) return true;
+      const store = deps.getStore();
+      const atMs = stored.ts ? stored.ts * 1000 : undefined;
+      const inChat = deps.polls.isInChat(pollUuid, pollChatIdOf(stored));
+      // POLL-1: итоги анонимного опроса — только от автора опроса и только из его группы
+      if (content.tally) {
+        if (inChat && deps.polls.applyTally(
+          pollUuid, stored.from, content.counts || [], Number(content.voters) || 0,
+        )) {
+          deps.refreshPollMessage(pollUuid);
+        }
+        return true;
+      }
       // P-44: голос — только из чата опроса (иначе участник другого чата
       // голосовал бы в чужом опросе по uuid)
-      if (pollUuid && stored.from && deps.polls.isInChat(pollUuid, pollChatIdOf(stored))) {
-        deps.polls.applyVote(pollUuid, stored.from, options, stored.ts ? stored.ts * 1000 : undefined);
+      if (inChat) {
+        // POLL-1: участник анонимного опроса группы считает только свой голос; чужие — в итогах автора
+        if (deps.polls.isTallyOnly(pollUuid) && stored.from !== store.self) return true;
+        deps.polls.applyVote(pollUuid, stored.from, options, atMs);
         deps.refreshPollMessage(pollUuid);
+        if (deps.polls.getAuthor(pollUuid) === store.self) deps.onAnonymousVote?.(pollUuid);
+        return true;
+      }
+      // POLL-1: голос анонимного опроса группы — личное сообщение автору (адреса автора голоса группа не видит)
+      if (deps.polls.isAnonymousGroup(pollUuid)) {
+        const author = deps.polls.getAuthor(pollUuid);
+        const groupChatId = deps.polls.getChatId(pollUuid);
+        const groupAddress = groupChatId ? store.getAddressForId(groupChatId) : undefined;
+        const info = groupAddress ? store.getGroupInfo(groupAddress) : undefined;
+        const toAddress = store.canonicalAddress(stored.to);
+        if (stored.from === store.self && author && toAddress === store.canonicalAddress(author)) {
+          // Свой голос (повтор из журнала или с другого устройства)
+          deps.polls.applyVote(pollUuid, store.self, options, atMs);
+          deps.refreshPollMessage(pollUuid);
+        } else if (author === store.self && toAddress === store.canonicalAddress(store.self)
+          && info?.members.some((m) => m.role !== 'banned'
+            && store.canonicalAddress(m.address) === store.canonicalAddress(stored.from))) {
+          deps.polls.applyVote(pollUuid, stored.from, options, atMs);
+          deps.refreshPollMessage(pollUuid);
+          deps.onAnonymousVote?.(pollUuid);
+        }
       }
       return true;
     }

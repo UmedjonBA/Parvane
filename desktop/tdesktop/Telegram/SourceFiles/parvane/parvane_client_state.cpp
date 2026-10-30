@@ -140,6 +140,7 @@ void MigrateGroupIfOwner(const parvane::GroupInfo &gi) {
 		}
 	}
 	gi.avatar = g.value("avatarFileId", std::string());
+	gi.avatar_key = g.value("avatarKey", std::string());
 	gi.about = g.value("about", std::string());
 	gi.default_permissions = V2Permissions(g.value("defaultPermissions", parvane::json()));
 	gi.version = g.value("version", std::uint64_t(0));

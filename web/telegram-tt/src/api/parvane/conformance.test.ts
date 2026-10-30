@@ -1330,6 +1330,53 @@ describe('RECOVER-1: смена корня собеседника, восста�
   });
 });
 
+describe('GPHOTO-1: фото частной группы шифруется, секрет — в SetInfo.avatar_key', () => {
+  const r = rule('GPHOTO-1') as unknown as {
+    secretBytes: number;
+    derive: { domain: string; labels: string[] };
+    vector: { capability: string; key: string; nonce: string };
+  };
+
+  it('схема: avatar_key — поле 4 SetInfo; движок хранит и отдаёт ключ', () => {
+    const proto = readRepo('proto/parvane/group/v2/group.proto');
+    expect(proto).toContain(`bytes avatar_key = 4 [(parvane.core.v2.max_len) = ${r.secretBytes}];`);
+    expect(readRepo('backend/protocol/src/group.rs')).toContain('s.avatar_key = i.avatar_key.clone();');
+    expect(readRepo('backend/protocol/src/host.rs')).toContain('"avatarKey"');
+    expect(readRepo('backend/protocol/wasm/src/lib.rs')).toContain('"avatarKey"');
+  });
+
+  it('web: те же метки вывода, секрет едет с файлом, правка названия ключ сохраняет', () => {
+    const photo = readRepo('web/telegram-tt/src/api/parvane/groupPhoto.ts');
+    expect(photo).toContain(`const DOMAIN = '${r.derive.domain}';`);
+    r.derive.labels.forEach((label) => expect(photo).toContain(`derive('${label}', secret)`));
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('avatar_key: patch.avatarFileId !== undefined');
+    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
+      .toContain('mediaService.uploadGroupPhoto(photo, mimeType)');
+  });
+
+  it('desktop и android: тот же вывод в ядре, ключ идёт со своим файлом, читатель качает по секрету', () => {
+    const blob = readRepo('desktop/parvane-core/src/blobcrypt.cpp');
+    expect(blob).toContain(`"${r.derive.domain}"`);
+    r.derive.labels.forEach((label) => expect(blob).toContain(`groupPhotoLabel("${label}", `));
+    expect(readRepo('desktop/parvane-core/tests/blobcrypt_tests.cpp')).toContain(r.vector.capability);
+    const core = readRepo('desktop/parvane-core/src/v2_session.cpp');
+    expect(core).toContain('{"avatar_key", (p.is_object() && p.contains("avatar_file_id"))');
+    expect(readRepo('desktop/parvane-core/src/v2_session_groups.cpp'))
+      .toContain('{"avatar_key", avatarFileId ? avatarKey.value_or(std::string())');
+    const desktop = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_groups.cpp');
+    expect(desktop).toContain('s->uploadGroupPhoto(bytesStd)');
+    expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'))
+      .toContain('s->downloadGroupPhoto(fid, groupKey)');
+    const jni = readRepo('android/jni/jni_groups.cpp');
+    expect(jni).toContain('s->uploadGroupPhoto(bytes)');
+    expect(jni).toContain('s->setGroupInfo(gid, std::nullopt, std::nullopt, fileId, secret)');
+    expect(readRepo('android/jni/jni_messages.cpp')).toContain('s->downloadGroupPhoto(fid, jstr(env, key))');
+    expect(readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt'))
+      .toContain('ParvaneCore.downloadFile(avatar, avatarKey, "", "group_photo")');
+  });
+});
+
 describe('CAP-1: блобы вложений v2-чата — по секрету capability', () => {
   const r = rule('CAP-1') as unknown as {
     uploadMethods: string[];
@@ -2016,6 +2063,31 @@ describe('REPORT-1: жалоба админам группы — карточк�
     expect(r.clients.web).toContain('e2e_web_reports.mjs');
   });
 
+  // A0008-2: подписанная операция автора в жалобе — клиент админа проверяет авторство, без подтверждения сообщение
+  // не принимается (карточка) либо помечено «НЕ ПОДТВЕРЖДЕНО» (escrow_admin open-report)
+  it('подпись автора: схема, движок и три клиента', () => {
+    const content = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(content).toContain('bytes proof = 5 [(parvane.core.v2.max_len) = 16384];');
+    expect(readRepo('proto/parvane/core/v2/envelope.proto')).toContain('message MessageProof {');
+    expect(readRepo('backend/protocol/src/report.rs')).toContain('pub fn verify_message_proof(');
+    expect(readRepo('backend/protocol/src/bin/escrow_admin.rs')).toContain('НЕ ПОДТВЕРЖДЕНО');
+    // web: подпись хранится рядом с сообщением, прикладывается и проверяется движком
+    expect(readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts'))
+      .toContain('proof: author !== self ? ev.proof : undefined');
+    expect(readRepo('web/telegram-tt/src/api/parvane/messages.ts'))
+      .toContain('(await deps.localState.loadHistoryRecord(uuid))?.proof');
+    expect(readRepo('web/telegram-tt/src/api/parvane/store.ts')).toContain('this.verifyProof?.(');
+    // desktop и android: ядро проверяет через validateModReport, сообщения хранят подпись
+    expect(readRepo('desktop/parvane-core/src/v2_content.cpp')).toContain('verifyProof(op, author,');
+    expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp'))
+      .toContain('parvane::v2::verifyMessageProof(opId, author, text, groupHex, proof)');
+    expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client_groups.cpp'))
+      .toContain('reported.back()["proof"] = cached->proof;');
+    expect(readAndroidJni('jni_groups.cpp'))
+      .toContain('parvane::v2::verifyMessageProof(opId, author, text, groupHex, proof)');
+    expect(readAndroidKt('Client.kt')).toContain('ParvaneCore.messageProof(uuid)');
+  });
+
   // spec 031: android шлёт жалобы из штатного окна X, админу — карточка с кнопками после проверки своими данными
   it('android: жалоба разбирается, показывается и отправляется', () => {
     expect(readAndroidKt('ParvaneStore.kt')).toContain('"mod_report" -> textContent(c)');
@@ -2364,6 +2436,28 @@ describe('RECOVER-2: новое устройство по ключу восст�
       .toMatch(/"needs_linking" -> \{[\s\S]{0,200}ParvaneCore\.telegramRecovery\(false\)/);
     expect(r.clients.android).not.toContain('ОТКРЫТО');
   });
+
+  // A0023-1: ответ владельца достаётся устройству, чей запрос он закрывает (эфемерный ключ + код сверки)
+  it('п. 7: запрос привязан к устройству во всех клиентах', () => {
+    const proto = readRepo('proto/parvane/identity/v2/identity.proto');
+    ['bytes eph_public = 3', 'string code = 1', 'bytes sealed_key = 3', 'uint64 request_id = 7',
+      'uint64 request_id = 4']
+      .forEach((field) => expect(proto, field).toContain(field));
+    const queue = readRepo('backend/shards/identity/src/recovery_tg.rs');
+    expect(queue).toContain('const PENDING_MAX: usize = 3;');
+    expect(queue).not.toContain('конкурирующ');
+    const engine = readRepo('backend/protocol/src/recovery_tg.rs');
+    expect(engine).toContain('pub fn open(');
+    const controller = readRepo('web/telegram-tt/src/api/parvane/v2/controller.ts');
+    expect(controller).toContain('pv.recoveryTgKeypair()');
+    expect(controller).toContain('pv.recoveryTgOpen(telegramEph.secret');
+    const session = readDesktopSession();
+    expect(session).toContain('v2::engineCall("recoveryTgKeypair")');
+    expect(session).toContain('v2::engineCall("recoveryTgOpen"');
+    expect(readAndroidJni('jni_account.cpp')).toContain('setTelegramState("waiting", s->telegramCode());');
+    const bot = readRepo('backend/infra/telegram-bot/parvane_tg_bot.py');
+    expect(bot).toContain('reply_request_body(SECRET, telegram_id, text, request_id)');
+  });
 });
 
 // Прод, 5–10 окт 2026: шард call читал PARVANE_DOMAIN, а compose его не задавал — шард считал домен
@@ -2501,5 +2595,43 @@ describe('PACK-2: один набор стикеров от разных отп�
     expect(messages).toContain('Java_org_parvane_core_ParvaneCore_nativePackHash');
     expect(r.clients.android).not.toContain('ОТКРЫТО');
     expect(r.clients.android).toContain('hashTag');
+  });
+});
+
+describe('POLL-1: анонимный опрос группы — голос только автору, итоги автора без адресов', () => {
+  const r = rule('POLL-1') as unknown as { maxTally: number };
+
+  it('схема: итоги — поля 3..5 PollVote', () => {
+    const proto = readRepo('proto/parvane/msg/v2/content.proto');
+    expect(proto).toContain('bool tally = 3;');
+    expect(proto).toContain('repeated uint32 counts = 4');
+    expect(proto).toContain('uint32 voters = 5;');
+  });
+
+  it('web: голос анонимного опроса идёт автору, итоги принимаются только от автора', () => {
+    const messages = readRepo('web/telegram-tt/src/api/parvane/messages.ts');
+    expect(messages).toContain('await publishInner(author, { kind: \'poll_vote\', poll: uuid, options: indices });');
+    const polls = readRepo('web/telegram-tt/src/api/parvane/polls.ts');
+    expect(polls).toContain(`const MAX_TALLY = ${r.maxTally.toLocaleString('en-US').replace(/,/g, '_')};`);
+    expect(polls).toContain('if (!entry || !entry.author || entry.author !== from) return false;');
+    expect(readRepo('web/telegram-tt/src/api/parvane/sync.ts')).toContain('if (content.tally) {');
+  });
+
+  it('desktop и android: та же маршрутизация голоса и приём итогов только от автора', () => {
+    const poll = readRepo('desktop/parvane-core/include/parvane/poll.h');
+    expect(poll).toContain(`constexpr std::int64_t kMaxTally = ${r.maxTally.toLocaleString('en-US').replace(/,/g, "'")};`);
+    expect(poll).toContain('[[nodiscard]] inline VoteRoute routeVote(const VoteCtx &x) {');
+    expect(readRepo('desktop/parvane-core/tests/poll_tests.cpp')).toContain('POLL-1: анонимный опрос группы');
+    const client = readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp');
+    expect(client).toContain('parvane::poll::routeVote(x)');
+    expect(client).toContain('voter != it->author');
+    expect(client).toContain('voteTo = it->author;');
+    const store = readRepo('android/libtd/src/main/java/org/drinkless/tdlib/PollStore.kt');
+    expect(store).toContain('private const val MAX_TALLY = 10_000_000L');
+    expect(store).toContain('if (!e.isAnonymousGroup || from != e.owner || to != e.chat) return false');
+    expect(readRepo('android/libtd/src/main/java/org/drinkless/tdlib/Client.kt'))
+      .toContain('if (anonymous) entry.owner else address');
+    expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/PollStoreTest.kt'))
+      .toContain('authorCountsPrivateVotesAndPublishesAddressFreeTally');
   });
 });

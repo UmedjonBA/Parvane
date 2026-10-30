@@ -11,6 +11,7 @@
 //! - ошибка — строка JSON `{"need":…}` / `{"error":…}`; незнакомое имя — `{"error":"UnknownCall"}`.
 
 use prost::Message;
+use zeroize::Zeroizing;
 use serde_json::{json, Value};
 
 use super::{b64, cerr, err, events, l2_view_json, op_id, req_json, revocation_json, unb64, HostClient, HostState};
@@ -543,7 +544,26 @@ pub fn call_static(name: &str, args: &Value) -> R {
             let key: [u8; 32] = a.b("adminPublic")?.try_into().map_err(|_| missing("adminPublic"))?;
             json!(b64(&crate::report::seal_report(&a.b("plaintext")?, a.s("reporter")?, &key).map_err(err)?))
         }
+        // REPORT-1 (A0008-2): проверка доказательства авторства сообщения из жалобы; {ok, root?, deviceId?}
+        "verifyMessageProof" => {
+            let op = crate::report::op_id_from_str(a.s("opId")?).ok_or_else(|| missing("opId"))?;
+            match crate::report::verify_message_proof(&a.b("proof")?, &op, a.s("author")?, a.s("text")?, &hex::decode(a.se("groupHex")).map_err(|_| missing("groupHex"))?) {
+                Ok(i) => json!({"ok": true, "root": hex::encode(i.root_key), "deviceId": i.device_id, "tsMs": i.ts_ms}),
+                Err(_) => json!({"ok": false}),
+            }
+        }
         "generateRecoveryKey" => json!(super::generate_recovery_key().as_str()),
+        // A0023-1: эфемерная пара для ответа владельца через Telegram — 64 байта: приватный ‖ публичный
+        "recoveryTgKeypair" => {
+            let (sk, pk) = crate::recovery_tg::generate();
+            let mut out = Zeroizing::new(sk.to_vec());
+            out.extend_from_slice(&pk);
+            json!(b64(&out))
+        }
+        "recoveryTgOpen" => {
+            let opened = crate::recovery_tg::open(&a.b("secret")?, a.s("user")?, a.s("deviceId")?, &a.b("sealed")?).map_err(err)?;
+            json!(String::from_utf8_lossy(&opened).into_owned())
+        }
         "encodeHello" => json!(b64(&super::encode_hello(i32::try_from(a.i("channel")?).map_err(|_| missing("channel"))?, a.se("clientKind"), a.se("clientVersion")))),
         "encodeAuth" => json!(b64(&super::encode_auth(a.s("token")?))),
         "encodeRequest" => {

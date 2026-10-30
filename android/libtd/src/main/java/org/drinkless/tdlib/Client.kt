@@ -301,6 +301,18 @@ class Client private constructor(
             scheduledTick.schedule(Runnable { resultHandler?.let { h -> handlerThread.execute { h.onResult(TdApi.Ok()) } } }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             return
         }
+        // генерация файлов (как TDLib): ответы X приходят, пока поток отправки ждёт результат, — обрабатываем сразу,
+        // не через пул io (иначе заблокированные отправки заняли бы все потоки и Finish не дошёл бы)
+        if (function is TdApi.FinishFileGeneration || function is TdApi.SetFileGenerationProgress || function is TdApi.WriteGeneratedFilePart) {
+            when (function) {
+                is TdApi.FinishFileGeneration -> mediaGen.finish(function.generationId, function.error)
+                is TdApi.SetFileGenerationProgress -> mediaGen.touch(function.generationId)
+                is TdApi.WriteGeneratedFilePart -> mediaGen.touch(function.generationId)
+                else -> {}
+            }
+            resultHandler?.let { h -> handlerThread.execute { h.onResult(TdApi.Ok()) } }
+            return
+        }
         io.execute {
             val result = try {
                 handle(function)
@@ -1230,7 +1242,10 @@ class Client private constructor(
             if (avatar.isEmpty()) {
                 if (previousAvatar.isNotEmpty()) store.clearGroupPhoto(gid)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
             } else if (avatar != previousAvatar) {
-                val path = ParvaneCore.downloadFile(avatar, "", "")
+                // Фото частной группы шифровано секретом из журнала группы (GPHOTO-1): ядро выводит ключи само
+                val avatarKey = g.optString("avatar_key", "")
+                val path = if (avatarKey.isNotEmpty()) ParvaneCore.downloadFile(avatar, avatarKey, "", "group_photo")
+                           else ParvaneCore.downloadFile(avatar, "", "")
                 if (path.isNotEmpty()) store.setGroupPhoto(gid, avatar, path)?.let { postUpdate(TdApi.UpdateChatPhoto(it.id, it.photo)) }
             }
         }
@@ -1555,22 +1570,60 @@ class Client private constructor(
         msg.content = content
         return TdApi.UpdateMessageContent(msg.chatId, msg.id, content)
     }
-    private fun onPollService(content: JSONObject, from: String) {
+    private fun onPollService(content: JSONObject, from: String, to: String = "", inGroup: Boolean = true) {
         val uuid = content.optString("poll"); if (uuid.isEmpty()) return
         val changed = if (content.optString("kind") == "poll_close") {
             Log.i(TAG, "опрос $uuid закрыт"); store.polls.close(uuid, from)
+        } else if (PollStore.isTally(content)) {
+            // POLL-1: итоги анонимного опроса — только от автора и только из чата опроса
+            val counts = content.optJSONArray("counts")?.let { a -> (0 until a.length()).map { a.optLong(it) } } ?: emptyList()
+            val ok = inGroup && store.polls.applyTally(uuid, from, to, counts, content.optLong("voters"))
+            if (ok && from == store.self) store.polls.markPublished(uuid, content)
+            ok
         } else {
             val idx = content.optJSONArray("options")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
-            Log.i(TAG, "голос $from → опрос $uuid $idx"); store.polls.applyVote(uuid, from, idx)
+            val entry = store.polls.get(uuid)
+            if (entry == null) {
+                store.polls.applyVote(uuid, from, idx, to, inGroup) // опроса ещё нет — отложено, проверка при его приходе
+            } else {
+                val route = store.polls.route(uuid, store.self, from, to, inGroup && to == entry.chat)
+                if (!route.count) { Log.i(TAG, "голос в опросе $uuid не засчитан (чужой чат или анонимный опрос)"); false }
+                else {
+                    Log.i(TAG, "голос $from → опрос $uuid $idx")
+                    val applied = store.polls.applyVote(uuid, from, idx)
+                    if (applied && route.publish) scheduleTally(uuid)
+                    applied
+                }
+            }
         }
         if (changed) pollUpdate(uuid)?.let { postUpdate(it) }
+    }
+    // POLL-1: автор публикует в группу итоги анонимного опроса (несколько голосов подряд — одной публикацией)
+    private val tallyScheduled = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private fun scheduleTally(uuid: String) {
+        if (!tallyScheduled.add(uuid)) return
+        scheduledTick.schedule(Runnable {
+            tallyScheduled.remove(uuid)
+            val e = store.polls.get(uuid) ?: return@Runnable
+            val content = store.polls.tallyToPublish(uuid, store.self) ?: return@Runnable
+            ParvaneCore.sendContent(e.chat, content.toString(), "")
+        }, 1500L, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
     private fun pollVote(chatId: Long, messageId: Long, optionIds: List<Int>): TdApi.Object {
         val uuid = store.uuidOf(chatId, messageId) ?: return TdApi.Error(404, "message not found")
         val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
         if (store.polls.get(uuid) == null) return TdApi.Error(404, "poll not found")
         if (store.polls.get(uuid)!!.closed) return TdApi.Error(400, "poll closed")
-        val sent = ParvaneCore.sendContent(address, PollStore.voteContent(uuid, optionIds).toString(), "")
+        // POLL-1: голос анонимного опроса группы идёт только автору (не в группу); автор считает сам и публикует итоги
+        val entry = store.polls.get(uuid)!!
+        val anonymous = entry.isAnonymousGroup
+        if (anonymous && entry.owner == store.self) {
+            store.polls.applyVote(uuid, store.self, optionIds)
+            scheduleTally(uuid)
+            pollUpdate(uuid)?.let { postUpdate(it) }
+            return TdApi.Ok()
+        }
+        val sent = ParvaneCore.sendContent(if (anonymous) entry.owner else address, PollStore.voteContent(uuid, optionIds).toString(), "")
         if (sent.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
         store.polls.applyVote(uuid, store.self, optionIds)
         Log.i(TAG, "голос ${store.self} → опрос $uuid $optionIds")
@@ -1599,6 +1652,27 @@ class Client private constructor(
         // не применить, и молча отправлять неотредактированный файл нельзя — отказ
         is TdApi.InputFileGenerated -> if (MediaEdits.needsGeneration(input.conversion)) null else input.originalPath
         else -> null
+    }
+
+    private val mediaGen = MediaGeneration()
+
+    /**
+     * Файл для отправки с учётом генерации X: правки (обрезка, рисунок, вырезка видео) X рисует сам по
+     * UpdateFileGenerationStart, шов ждёт FinishFileGeneration и отправляет готовый файл. Результат — путь (String)
+     * либо TdApi.Error (генерация не удалась / не дождались): неотредактированный оригинал не отправляем.
+     */
+    private fun resolveMedia(input: TdApi.InputFile?): Any {
+        if (input is TdApi.InputFileGenerated && MediaEdits.needsGeneration(input.conversion)) {
+            val ctx = try { Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null) as? android.content.Context } catch (e: Throwable) { null }
+            val dir = java.io.File(ctx?.cacheDir ?: java.io.File(System.getProperty("java.io.tmpdir") ?: "."), "parvane-gen")
+            val dest = java.io.File(dir, "gen-${System.nanoTime()}.${MediaGeneration.extensionFor(input.conversion, input.originalPath ?: "")}").path
+            return when (val r = mediaGen.generate(input.originalPath ?: "", input.conversion ?: "", dest,
+                { postUpdate(it) }, { postUpdate(it) })) {
+                is MediaGeneration.Result.Ready -> r.path
+                is MediaGeneration.Result.Failed -> { Log.w(TAG, "генерация файла не удалась: ${r.reason}"); TdApi.Error(500, "не удалось применить правки к файлу (${r.reason})") }
+            }
+        }
+        return localPath(input) ?: TdApi.Error(400, "нет файла")
     }
 
     /** Подготовленный контент: JSON провода + локальный файл (медиа) или null. */
@@ -1656,9 +1730,9 @@ class Client private constructor(
                 Prepared(JSONObject().put("kind", "text").put("text", uidAddr?.let { "@" + it.substringBefore('@') } ?: (c.contact?.firstName ?: "")), null, true)
             }
             is TdApi.InputMessagePhoto -> Prepared(JSONObject().put("kind", "photo").put("mime", "image/jpeg").put("width", c.photo.width).put("height", c.photo.height).put("caption", cap(c.caption)),
-                localPath(c.photo?.photo) ?: return TdApi.Error(400, "нет файла"), false)
+                when (val r = resolveMedia(c.photo?.photo)) { is String -> r; else -> return r as TdApi.Object }, false)
             is TdApi.InputMessageVideo -> Prepared(JSONObject().put("kind", "video").put("mime", "video/mp4").put("width", c.video.width).put("height", c.video.height).put("duration_secs", c.video.duration).put("caption", cap(c.caption)),
-                localPath(c.video?.video) ?: return TdApi.Error(400, "нет файла"), false)
+                when (val r = resolveMedia(c.video?.video)) { is String -> r; else -> return r as TdApi.Object }, false)
             is TdApi.InputMessageDocument -> {
                 val path = localPath(c.document?.document) ?: return TdApi.Error(400, "нет файла")
                 val name = path.substringAfterLast('/')
@@ -1909,6 +1983,8 @@ class Client private constructor(
         }
     }
     private val REPORT_SUBMIT = ":send"
+    /** Предел суммарного размера подписей авторов в жалобе (знаков base64; предел жалобы серверу — 200 КиБ). */
+    private val REPORT_PROOFS_MAX = 100 * 1024
     private fun reportChat(chatId: Long, optionId: String, messageIds: LongArray, comment: String): TdApi.Object {
         val address = store.addressOf(chatId) ?: return TdApi.Error(404, "chat not found")
         val admins = if (messageIds.isEmpty()) emptyList() else reportAdmins(address)
@@ -1932,8 +2008,15 @@ class Client private constructor(
                 else -> ""
             }.ifEmpty { "[media]" }
             fallback += text
-            reported.put(JSONObject().put("op_id", uuid).put("author", author).put("text", text.take(4096)).put("ts", m.date.toLong()))
+            val item = JSONObject().put("op_id", uuid).put("author", author).put("text", text.take(4096)).put("ts", m.date.toLong())
+            // Подпись автора лежит рядом с полученным сообщением (REPORT-1, A0008-2); без неё получатель жалобы
+            // не подтвердит авторство — сообщение останется «не подтверждённым»
+            if (author != store.self) ParvaneCore.messageProof(uuid).takeIf { it.isNotEmpty() }?.let { item.put("proof", it) }
+            reported.put(item)
         }
+        // Жалоба ограничена по размеру: подписи — лишь пока всё помещается (иначе без них, а не отказ)
+        if ((0 until reported.length()).sumOf { reported.getJSONObject(it).optString("proof").length } > REPORT_PROOFS_MAX)
+            for (i in 0 until reported.length()) reported.getJSONObject(i).remove("proof")
         val outcome = if (admins.isNotEmpty() && reported.length() > 0) {
             val hex = address.removePrefix(StateJournal.V2_GROUP_PREFIX)
             val content = JSONObject().put("kind", "mod_report")
@@ -2629,6 +2712,10 @@ class Client private constructor(
                 val chatMode = L2Mode.isChatMode(content)
                 if (peer.isEmpty() && !(chatMode && event.optBoolean("group"))) return
                 if (!out && store.blocked.contains(from)) return // заблокирован — не показываем
+                // POLL-1: голос анонимного опроса группы — личное сообщение автору; чата с участником он не заводит
+                if (PollStore.isService(content.optString("kind")) && !event.optBoolean("group")) {
+                    onPollService(content, if (out) store.self else from, to, false); return
+                }
                 var sender = from
                 if (event.optBoolean("group")) {
                     if (store.group(to) == null) syncGroups() // группа завелась на другом устройстве
@@ -2640,7 +2727,7 @@ class Client private constructor(
                 } else {
                     ensurePeer(peer, announce = true)
                 }
-                if (PollStore.isService(content.optString("kind"))) { onPollService(content, from); return }
+                if (PollStore.isService(content.optString("kind"))) { onPollService(content, if (out) store.self else from, to, event.optBoolean("group")); return }
                 // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
                 // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
                 if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника
@@ -2755,7 +2842,9 @@ class Client private constructor(
             // RECOVER-2: ключ восстановления через бота Telegram
             "recovery" -> event.optString("state").takeIf { it != "idle" }?.let { st ->
                 Log.i(TAG, "ключ восстановления: $st")
-                SeamText.of("recovery_$st")?.let { serviceNotice("parvane_recovery_$st", it) }
+                val tgCode = event.optString("code")
+                val noticeText = if (st == "waiting" && tgCode.isNotEmpty()) SeamText.of("recovery_waiting_code")?.replace("%s", tgCode) else SeamText.of("recovery_$st")
+                noticeText?.let { serviceNotice("parvane_recovery_$st", it) }
                 // spec 032: после входа по ключу группы и каналы приходят из копии ключей аккаунта — перечитать их сразу
                 // и ещё дважды (журналы групп догоняются не мгновенно), не дожидаясь событий по каждой группе
                 if (st == "done") resyncGroupsSoon()

@@ -128,6 +128,19 @@ static void keyBundle() {
             parvane::crypto::b64decode(desktop.value("sealed", std::string())).value_or(std::string())) : std::nullopt;
         check(opened && *opened == desktop["payload"], "keybundle: файл desktop открывается обратно");
     }
+    // A0073-2: номер записи копии — защита от отката сервером
+    {
+        const auto key = kb::deriveBundleKey("0123-4567-89AB-CDEF-GHJK-MNPQ-RSTV-WXYZ-0123-4567", "alice@local");
+        const auto sealed7 = key ? kb::seal(*key, "alice@local", json{{"grant", "Z3JhbnQ="}, {"seq", 7}}) : std::string();
+        const auto old = key ? kb::seal(*key, "alice@local", json{{"grant", "Z3JhbnQ="}}) : std::string();
+        const auto o7 = key ? kb::open(*key, "alice@local", sealed7) : std::nullopt;
+        const auto o0 = key ? kb::open(*key, "alice@local", old) : std::nullopt;
+        check(o7 && kb::seqOf(*o7) == 7, "keybundle: номер записи переживает запечатывание");
+        check(o0 && kb::seqOf(*o0) == 0 && !o0->contains("seq"), "keybundle: копия старого формата — номер 0");
+        check(o7 && kb::isRolledBack(json{{"seq", 4}}, 5) && !kb::isRolledBack(*o7, 7) && !kb::isRolledBack(*o7, 5),
+              "keybundle: копия с номером меньше виденного — откат");
+        check(kb::isRolledBack(json::object(), 1) && !kb::isRolledBack(json::object(), 0), "keybundle: без номера старее любого виденного");
+    }
     check(!kb::canonicalRecoveryKey("UUUU-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA"), "keybundle: «U» — не ключ");
     check(kb::withBundleKey(R"({"ssk":"00"})", "QUJD") == R"({"bk":"QUJD","ssk":"00"})", "keybundle: ключ копии в грант (поле bk)");
     check(kb::readGrantBundleKey(R"({"bk":"QUJD"})") == "QUJD", "keybundle: ключ копии из гранта");

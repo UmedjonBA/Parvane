@@ -3,8 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildBundleMark, canonicalRecoveryKey, deriveBundleKey, mergeKeyBundlePayload, openKeyBundle, pickRecoveryKey,
-  readGrantBundleKey, sealKeyBundle, withBundleKey, withFreshLog,
+  buildBundleMark, canonicalRecoveryKey, deriveBundleKey, isBundleRolledBack, mergeKeyBundlePayload, openKeyBundle,
+  pickRecoveryKey, readBundleSeq, readGrantBundleKey, sealKeyBundle, withBundleKey, withFreshLog,
 } from './keyBundle';
 
 const KEY = '0123-4567-89AB-CDEF-GHJK-MNPQ-RSTV-WXYZ-0123-4567';
@@ -126,5 +126,25 @@ describe('слияние копии ключей аккаунта с серве�
   it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     const server = Object.keys(c.server).length ? c.server : undefined;
     expect(normalize(mergeKeyBundlePayload(c.own, server))).toEqual(normalize(c.merged));
+  });
+});
+
+describe('номер копии ключей аккаунта: защита от отката сервером (A0073-2)', () => {
+  it('номер переживает запечатывание; копия старого формата — без номера', async () => {
+    const key = (await deriveBundleKey(KEY, ADDRESS))!;
+    const sealed = await sealKeyBundle(key, ADDRESS, { grant: 'Z3JhbnQ=', seq: 7 });
+    expect((await openKeyBundle(key, ADDRESS, sealed))?.seq).toBe(7);
+    const legacy = await sealKeyBundle(key, ADDRESS, { grant: 'Z3JhbnQ=' });
+    expect(readBundleSeq((await openKeyBundle(key, ADDRESS, legacy))?.seq)).toBe(0);
+    const junk = await sealKeyBundle(key, ADDRESS, { grant: 'Z3JhbnQ=', seq: -3 });
+    expect(readBundleSeq((await openKeyBundle(key, ADDRESS, junk))?.seq)).toBe(0);
+  });
+
+  it('копия с номером меньше виденного — откат', () => {
+    expect(isBundleRolledBack({ seq: 4 }, 5)).toBe(true);
+    expect(isBundleRolledBack({}, 1)).toBe(true);
+    expect(isBundleRolledBack({ seq: 5 }, 5)).toBe(false);
+    expect(isBundleRolledBack({ seq: 6 }, 5)).toBe(false);
+    expect(isBundleRolledBack({}, 0)).toBe(false);
   });
 });

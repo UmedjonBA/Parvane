@@ -420,7 +420,8 @@ export interface ApiModReport {
   groupChatId?: string;
   reason: string;
   comment?: string;
-  messages: { uuid: string; authorId: string; text: string; date: number }[];
+  // `isProven` — автор подтверждён подписью из жалобы (сообщения нет в своей истории)
+  messages: { uuid: string; authorId: string; text: string; date: number; isProven?: boolean }[];
 }
 
 // Parvane (ARTICLE-1): статья — заметка «Знаний» в Markdown

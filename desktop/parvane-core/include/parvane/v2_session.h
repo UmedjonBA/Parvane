@@ -223,6 +223,18 @@ public:
     std::string downloadBlobCap(const std::string &fileId, const std::string &capability32,
                                 const std::string &domain = std::string(), std::size_t maxBytes = 0);
 
+    // ── фото частной группы (A0089-5, GPHOTO-1) ──
+    // Зашифровать фото новым секретом (PVB2 + capability, ключи выводятся из секрета) и загрузить.
+    // secretB64 — значение `SetInfo.avatar_key`. Бросает.
+    struct GroupPhotoUpload {
+        std::string fileId;
+        std::string secretB64;
+    };
+    GroupPhotoUpload uploadGroupPhoto(const std::string &plain);
+    // Скачать и расшифровать фото по секрету из журнала группы; nullopt — не скачалось или подделка.
+    std::optional<std::string> downloadGroupPhoto(const std::string &fileId, const std::string &secretB64,
+                                                  const std::string &domain = std::string());
+
     // ── новое устройство без других устройств (T130, FR-066) ──
     // Сессия ждёт линковку (needsLinking), а других устройств аккаунта нет.
     // Вход по ключу восстановления: корень — из копии на сервере, новый SSK,
@@ -272,6 +284,8 @@ public:
     std::string requestTelegramKey(bool again);
     // Ответ владельца боту: {"recovery_key"?, "pending"}; null — сбой. done — ключ применён.
     json pollTelegramKey(bool done);
+    // Код сверки запроса ключа (то же число в сообщении бота); пусто — запроса нет или сервер старый.
+    std::string telegramCode();
     // Вход нового устройства по ключу восстановления: из копии ключей аккаунта (прежние устройства
     // остаются), у аккаунта без копии — прежним путём recoverWithKey.
     KeyJoinOutcome joinWithRecoveryKey(const std::string &recoveryKey, bool viaTelegram);
@@ -350,7 +364,7 @@ public:
     // Изменение группы записью журнала (proto3-JSON group.v2.GroupChange:
     // {"remove_member":{"member":{"address":…}}}, {"ban":…}, {"set_info":…},
     // …). Смена состава/прав → новая эпоха. false — отклонено.
-    // Правка сведений — {"set_info_patch": {name?, about?, avatar_file_id?}}:
+    // Правка сведений — {"set_info_patch": {name?, about?, avatar_file_id?, avatar_key?}}:
     // недостающие поля сессия берёт из журнала сама (атомарно с записью).
     // errorCode (если задан) при отказе получает код, как у v1-шарда group.*:
     // "forbidden" | "bad_request" | "not_found" | "rate_limited" | "failed".
@@ -390,7 +404,8 @@ public:
     // ── группы: сведения, ссылки, публичные (spec 023/024) — как web controller.ts ──
     // Имя/описание/фото одной записью set_info; недостающие поля — из журнала (атомарно).
     bool setGroupInfo(const std::string &address, const std::optional<std::string> &name,
-                      const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId);
+                      const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId,
+                      const std::optional<std::string> &avatarKey = std::nullopt);
     // Правка действующей ссылки (название, срок в секундах, лимит); счётчик вступивших прежний.
     bool editInvite(const std::string &address, const std::string &url, const std::string &title, std::int64_t expiresAt,
                     std::uint32_t usageLimit);
@@ -569,6 +584,10 @@ private:
     json fetchRootBackupStateLocked();
     void rememberBundleKeyLocked(const std::string &recoveryKey);
     void refreshKeyBundleLocked(bool force);
+    // Копия ключей аккаунта с сервера принимается, только если её номер не меньше виденного этим устройством
+    // (A0073-2); принятый номер запоминается. Откат — nullopt и запись в журнал.
+    std::optional<json> acceptBundleLocked(const std::optional<json> &opened);
+    std::uint64_t seenBundleSeq() const;
     void applyBundleGroupsLocked(const std::string &groupsJson);
     void queueRecoveryKeyLocked(const std::string &recoveryKey);
     void flushTelegramKeyLocked();
@@ -628,6 +647,10 @@ private:
     std::string serverKey_;
     std::string domain_;
     std::string deviceId_;
+    // A0023-1: эфемерная пара X25519 запроса ключа через Telegram и код сверки (под engineMu_)
+    std::string tgEphSecret_;
+    std::string tgEphPublic_;
+    std::string tgCode_;
     std::vector<json> outbox_;       // под engineMu_: события наружу по порядку
     std::recursive_mutex flushMu_;   // один отдающий за раз (порядок onEvent)
     std::set<std::string> publishedGroups_;

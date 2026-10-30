@@ -171,6 +171,7 @@ struct LinkingStatus {
 	bool needsLinking = false;
 	TelegramRecoveryState telegram = TelegramRecoveryState::Idle;
 	QString linkCode; // код сверки с другим устройством (после его отклика)
+	QString telegramCode; // код сверки с сообщением бота (A0023-1): отвечать ключом можно только на сообщение с тем же кодом
 };
 [[nodiscard]] LinkingStatus CurrentLinkingStatus();
 [[nodiscard]] rpl::producer<> LinkingStatusChanges();
@@ -631,6 +632,7 @@ struct GroupInvitePreview {
 	QString name;
 	QString kind; // group | channel
 	QString avatar;
+	QString avatarKey; // секрет фото частной группы (base64), пусто — фото открытое
 	QString about;
 	int members = 0;
 	bool requestNeeded = false;
@@ -668,7 +670,7 @@ void RevokeGroupInvite(const QString &groupId, const QString &token, GroupOpDone
 void DeleteGroupInvite(const QString &groupId, const QString &token, GroupOpDone done);
 // Открытый объект cloud (фото группы, аватар) → картинка на main-потоке;
 // пустая QImage при сбое. Для модалки «Join group» (FR-041: фото в превью).
-void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done);
+void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done, const QString &avatarKey = QString());
 void CheckGroupInvite(const QString &token,
 	Fn<void(bool ok, GroupInvitePreview preview, const QString &error)> done);
 void JoinGroupByInvite(const QString &token,

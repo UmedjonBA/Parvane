@@ -51,12 +51,15 @@ std::string g_tgState = "idle"; // idle|waiting|joining|done|failed|expired|unav
 int g_tgGeneration = 0;
 constexpr std::int64_t kTelegramKeyWaitMs = 30 * 60 * 1000;
 
-void setTelegramState(const std::string &state) {
+void setTelegramState(const std::string &state, const std::string &code = std::string()) {
     {
         std::lock_guard<std::mutex> lk(g_tgMu);
         g_tgState = state;
     }
-    emit(json{{"type", "recovery"}, {"state", state}});
+    // A0023-1: код сверки с сообщением бота — в событии ожидания
+    json ev{{"type", "recovery"}, {"state", state}};
+    if (!code.empty()) ev["code"] = code;
+    emit(ev);
 }
 
 bool historyRowOk(const json &row) {
@@ -747,7 +750,7 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeTelegramRecovery(
             setTelegramState(requested == "no_telegram" ? "unavailable" : requested == "limit" ? "limit" : "failed");
             return;
         }
-        setTelegramState("waiting");
+        setTelegramState("waiting", s->telegramCode());
         pollTelegramLoop(generation);
     });
 }

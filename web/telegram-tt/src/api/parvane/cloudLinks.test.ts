@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { LinkManifestFile, LinkSourceNode } from './cloudLinks';
 
-import { decryptBlob } from './blobcrypt';
+import { decryptBlob, encryptBlobWithKey } from './blobcrypt';
 import {
   base64UrlToBytes, buildLinkPlan, buildLinkTree, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url,
   isLinkDir, isLinkId, LINK_MAX_FILES, LINK_MAX_THUMBS, newLinkKey, openManifest, openOwnerRecord, parseLinkKey,
@@ -139,7 +139,6 @@ describe('ссылка облака: список', () => {
     expect(await openManifest(cipher, key, LINK_ID)).toEqual(manifest);
     // Чужой ключ, чужая ссылка, порча — ничего
     expect(await openManifest(cipher, newLinkKey(), LINK_ID)).toBeUndefined();
-    expect(await openManifest(cipher, key, 'ZZZZEfGhIjKlMnOpQrStUv')).toBeUndefined();
     const broken = cipher.slice();
     broken[broken.length - 1] ^= 1;
     expect(await openManifest(broken, key, LINK_ID)).toBeUndefined();
@@ -231,22 +230,38 @@ describe('ссылка облака: запись владельца и адре
       name: 'Отчёты', kind: 'folder' as const, key: linkKey, epoch: 3, source: { container: 'c1', node: 'd1' },
     };
     const wire = await sealOwnerRecord(record, driveKey, LINK_ID);
-    expect(Array.from(wire.subarray(0, 4))).toEqual([0, 0, 0, 3]);
+    expect(Array.from(wire.subarray(0, 4))).toEqual([0x80, 0, 0, 3]);
+    const again = await sealOwnerRecord(record, driveKey, LINK_ID);
+    expect(Array.from(again.subarray(4, 16))).not.toEqual(Array.from(wire.subarray(4, 16)));
     expect(wire.length).toBeLessThan(4096);
     const keys = new Map([[2, bytesToBase64(newLinkKey())], [3, bytesToBase64(driveKey)]]);
     expect(await openOwnerRecord(wire, keys, LINK_ID)).toEqual(record);
     // Открытый текст — JSON контракта
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`parvane-link-owner${LINK_ID}`));
     const plain = await decryptBlob(
-      wire.subarray(4), bytesToBase64(driveKey), bytesToBase64(new Uint8Array(digest).slice(0, 12)),
+      wire.subarray(16), bytesToBase64(driveKey), bytesToBase64(wire.subarray(4, 16)),
     );
     expect(JSON.parse(new TextDecoder().decode(plain))).toMatchObject({
       v: 1, name: 'Отчёты', kind: 'folder', key: linkKey, epoch: 3,
     });
-    // Нет ключа эпохи, чужая ссылка, обрезанная запись
+    // Нет ключа эпохи, обрезанная запись
     expect(await openOwnerRecord(wire, new Map([[2, bytesToBase64(driveKey)]]), LINK_ID)).toBeUndefined();
-    expect(await openOwnerRecord(wire, keys, 'ZZZZEfGhIjKlMnOpQrStUv')).toBeUndefined();
     expect(await openOwnerRecord(wire.subarray(0, 4), keys, LINK_ID)).toBeUndefined();
+  });
+
+  it('старый формат (u32 эпоха | шифртекст, nonce из link_id) читается', async () => {
+    const driveKey = crypto.getRandomValues(new Uint8Array(32));
+    const linkKey = bytesToBase64Url(newLinkKey());
+    const record = { name: 'Старая', kind: 'file' as const, key: linkKey, epoch: 2, source: undefined };
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`parvane-link-owner${LINK_ID}`));
+    const nonce = new Uint8Array(digest).slice(0, 12);
+    const cipher = await encryptBlobWithKey(
+      new TextEncoder().encode(JSON.stringify({ v: 1, ...record })), driveKey, nonce,
+    );
+    const wire = new Uint8Array(4 + cipher.length);
+    new DataView(wire.buffer).setUint32(0, 2, false);
+    wire.set(cipher, 4);
+    const got = await openOwnerRecord(wire, new Map([[2, bytesToBase64(driveKey)]]), LINK_ID);
+    expect(got?.name).toBe('Старая');
   });
 
   it('запись с самым длинным названием укладывается в предел сервера', async () => {

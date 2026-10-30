@@ -109,9 +109,15 @@ void RunWork(not_null<QObject*> guard, Fn<QString()> work, Fn<void(QString)> don
 	});
 }
 
-[[nodiscard]] QString TelegramStateText(TelegramRecoveryState state) {
+[[nodiscard]] QString TelegramStateText(const LinkingStatus &status) {
+	const auto state = status.telegram;
 	switch (state) {
-	case TelegramRecoveryState::Waiting: return tr::lng_parvane_tg_recover_waiting(tr::now);
+	case TelegramRecoveryState::Waiting:
+		return status.telegramCode.isEmpty()
+			? tr::lng_parvane_tg_recover_waiting(tr::now)
+			: tr::lng_parvane_tg_recover_waiting(tr::now)
+				+ u"\n\n"_q
+				+ tr::lng_parvane_tg_recover_code(tr::now, lt_code, status.telegramCode);
 	case TelegramRecoveryState::Joining: return tr::lng_parvane_tg_recover_joining(tr::now);
 	case TelegramRecoveryState::Done: return tr::lng_parvane_tg_recover_done(tr::now);
 	case TelegramRecoveryState::Failed: return tr::lng_parvane_tg_recover_failed(tr::now);
@@ -164,7 +170,7 @@ void FillLinking(
 		container,
 		tr::lng_parvane_tg_recover_title(),
 		rpl::duplicate(status) | rpl::map([](const LinkingStatus &s) {
-			return TelegramStateText(s.telegram);
+			return TelegramStateText(s);
 		}));
 	const auto againWrap = container->add(object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 		container,

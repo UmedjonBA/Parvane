@@ -92,6 +92,7 @@ struct Incoming {
     std::string emoji;
     bool remove = false; // Reaction: снять
     bool unpin = false;  // Pin: открепить
+    std::string proof;   // Message: core.v2.MessageProof (base64) — подпись автора для жалобы (REPORT-1, A0008-2)
 };
 // Не "direct"/"group" или без opId → Kind::None. disposition "stub" и виды, которых
 // клиент не знает (контакт, служебные ключи и т.п.) → Kind::Stub.
@@ -109,15 +110,26 @@ struct ReportCheck {
     std::string group;                // "v2g:<hex>"
     std::vector<std::string> opIds;   // сообщения группы из жалобы, найденные в своей истории
     std::vector<std::string> authors; // их авторы (по своей истории), без повторов
+    std::vector<std::string> provenOpIds; // подмножество opIds: нет в своей истории, автор подтверждён подписью (A0008-2)
     std::string text;                 // текст карточки — из своей истории, не из жалобы
 };
 // nullopt — карточку не показывать: не жалоба, группа не v2, отправитель не участник группы (по своим сведениям),
 // ни одного сообщения этой группы в своей истории. Сообщения чужой группы и неизвестные — отбрасываются, автор и текст
 // жалобы игнорируются.
+// Сообщение, которого нет в своей истории, принимается только если `verifyProof` подтвердил подпись автора из жалобы
+// (`reported[].proof`); без проверяющего такие сообщения отбрасываются, как раньше.
+using ProofVerifier = std::function<bool(const std::string &opId, const std::string &author, const std::string &text,
+                                         const std::string &groupHex, const std::string &proofB64)>;
 [[nodiscard]] std::optional<ReportCheck> validateModReport(
     const json &content,
     const std::string &reporter,
     const std::function<std::vector<std::string>(const std::string &group)> &membersOf,
-    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup);
+    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup,
+    const ProofVerifier &verifyProof = {});
+
+// Подпись автора сообщения верна (движок: цепочка «корень → устройство → операция», автор, op_id, начало текста и
+// группа беседы совпадают с подписанными); "[media]" — вложение без подписи, текст не сверяется.
+[[nodiscard]] bool verifyMessageProof(const std::string &opId, const std::string &author, const std::string &text,
+                                      const std::string &groupHex, const std::string &proofB64);
 
 } // namespace parvane::v2

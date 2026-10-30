@@ -75,4 +75,23 @@ struct Header {
     return plainBytes == 0 ? 0 : plainBytes + kHeaderLen + kTagLen * (plainBytes / kMinChunkSize + 1);
 }
 
+// ── Фото частной группы (A0089-5, правило GPHOTO-1) ──
+// В записи журнала группы (`SetInfo.avatar_key`) едет один 32-байтный секрет; из него все клиенты одинаково выводят
+// SHA-256("parvane/group-avatar/v1/" + метка + секрет): `cap` — capability блоба (32 байта), `key` — ключ PVB2
+// (32 байта), `nonce` — первые 12 байт метки `nonce`. Сервер видит шифртекст и хэш capability.
+struct GroupPhotoKeys {
+    std::string capability; // сырые 32 байта
+    std::string key;        // сырые 32 байта
+    std::string nonce;      // сырые 12 байт
+};
+
+// nullopt — секрет не 32 байта.
+[[nodiscard]] std::optional<GroupPhotoKeys> deriveGroupPhotoKeys(const std::string &secret32);
+// Новый случайный секрет (32 сырых байта); пусто — нет источника случайности.
+[[nodiscard]] std::string newGroupPhotoSecret();
+// Шифртекст PVB2 фото под секретом; пусто — ошибка.
+[[nodiscard]] std::string sealGroupPhoto(const std::string &plain, const std::string &secret32);
+// Расшифровать скачанный блоб фото; nullopt — подделка / чужой секрет.
+[[nodiscard]] std::optional<std::string> openGroupPhoto(const std::string &cipher, const std::string &secret32);
+
 } // namespace parvane::blobcrypt

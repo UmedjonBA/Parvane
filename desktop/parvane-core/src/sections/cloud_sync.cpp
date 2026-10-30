@@ -622,6 +622,28 @@ int CloudSync::sendOutbox(const std::string &id) {
     return rejected;
 }
 
+void CloudSync::noteOwnBlob(const std::string &fileId) {
+    if (fileId.empty()) return;
+    if (!ownBlobs_) {
+        ownBlobs_.emplace();
+        try {
+            if (const auto v = records_.load(kCloudOwnBlobsRecord); v && v->is_array()) {
+                for (const auto &f : *v) {
+                    if (f.is_string()) ownBlobs_->push_back(f.get<std::string>());
+                }
+            }
+        } catch (const std::exception &) {
+        }
+    }
+    if (std::find(ownBlobs_->begin(), ownBlobs_->end(), fileId) != ownBlobs_->end()) return;
+    ownBlobs_->push_back(fileId);
+    if (ownBlobs_->size() > kGcKeep) ownBlobs_->erase(ownBlobs_->begin(), ownBlobs_->end() - kGcKeep);
+    try {
+        records_.save(kCloudOwnBlobsRecord, json(*ownBlobs_));
+    } catch (const std::exception &) {
+    }
+}
+
 void CloudSync::collectGarbage(const std::string &id) {
     const auto self = t_.self();
     if (!hasClient() || self.empty()) return;
@@ -641,10 +663,22 @@ void CloudSync::collectGarbage(const std::string &id) {
         }
     }
     std::set<std::string> done(gcDone_->begin(), gcDone_->end());
+    if (!ownBlobs_) {
+        ownBlobs_.emplace();
+        try {
+            if (const auto v = records_.load(kCloudOwnBlobsRecord); v && v->is_array()) {
+                for (const auto &f : *v) {
+                    if (f.is_string()) ownBlobs_->push_back(f.get<std::string>());
+                }
+            }
+        } catch (const std::exception &) {
+        }
+    }
+    const std::set<std::string> own(ownBlobs_->begin(), ownBlobs_->end());
     bool hasChanges = false;
     for (const auto &blob : purged) {
         const auto fileId = blob.value("fileId", std::string());
-        if (blob.value("uploader", std::string()) != self || done.count(fileId)) continue;
+        if (blob.value("uploader", std::string()) != self || done.count(fileId) || !own.count(fileId)) continue;
         try {
             if (hooks_.deleteBlob) hooks_.deleteBlob(fileId);
         } catch (const std::exception &e) {
@@ -1219,6 +1253,7 @@ json CloudDrive::writeText(const json &args) {
         }
         const auto mime = mimeArg.empty() ? std::string("text/markdown") : mimeArg;
         const auto uploaded = blobs_.upload(args.value("text", std::string()), mime);
+        cloud_.noteOwnBlob(uploaded.value("fileId", std::string()));
         json blob{{"fileId", uploaded.value("fileId", std::string())},
                   {"key", uploaded.value("key", std::string())},
                   {"nonce", uploaded.value("nonce", std::string())},

@@ -104,6 +104,30 @@ int main() {
         auto back = decrypt(ct, keyB64, nonceB64);
         check(back.has_value() && *back == plain, "v2 vector: round-trip");
     }
+    // фото частной группы (GPHOTO-1): общий вектор с web (секрет 1..32)
+    {
+        std::string secret;
+        for (int i = 1; i <= 32; ++i) secret.push_back(static_cast<char>(i));
+        const auto k = deriveGroupPhotoKeys(secret);
+        const auto hexOf = [](const std::string &s) {
+            std::string out;
+            char b[3];
+            for (unsigned char c : s) { std::snprintf(b, sizeof b, "%02x", c); out += b; }
+            return out;
+        };
+        check(k.has_value(), "GPHOTO-1: ключи выведены");
+        check(k && hexOf(k->capability) == "19cd81b03ce6d287485c70b72571c74a2edac62fd5418737d7edc6b55f8411e3", "GPHOTO-1: capability");
+        check(k && hexOf(k->key) == "9afab6a58c6441be27962c9ee7ac075a4506252d4d840268bd3a33601e665e42", "GPHOTO-1: ключ PVB2");
+        check(k && hexOf(k->nonce) == "af79ac7f89284db688e10912", "GPHOTO-1: nonce");
+        check(!deriveGroupPhotoKeys("short").has_value(), "GPHOTO-1: секрет не 32 байта отвергается");
+        const auto fresh = newGroupPhotoSecret();
+        const auto sealed = sealGroupPhoto("jpeg-bytes", fresh);
+        check(!sealed.empty() && sealed.find("jpeg-bytes") == std::string::npos, "GPHOTO-1: фото зашифровано");
+        const auto opened = openGroupPhoto(sealed, fresh);
+        check(opened && *opened == "jpeg-bytes", "GPHOTO-1: round-trip");
+        check(!openGroupPhoto(sealed, newGroupPhotoSecret()).has_value(), "GPHOTO-1: чужой секрет не открывает");
+    }
+
 
     std::printf(g_fail ? "\nПРОВАЛЫ: %d\n" : "\nВСЕ ОК\n", g_fail);
     return g_fail ? 1 : 0;

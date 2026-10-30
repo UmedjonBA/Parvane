@@ -26,7 +26,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PASSWORD = 'Parvane-v2-e2e-password';
 const V2_SEED = { 'parvane:proto': 'v2' };
 const UNKNOWN_COUNT = 10;
-const STUB_TEXT = 'This message is not supported by your version of Parvane';
+const STUB_TEXT = 'This kind of message is not supported in this version of Parvane';
 
 const tcpUrl = process.env.PARVANE_E2E_GATEWAY_TCP_URL;
 assert(tcpUrl, 'PARVANE_E2E_GATEWAY_TCP_URL is required');

@@ -45,7 +45,7 @@ inline json incomingJson(const Incoming &in) {
 // знает, приходит с content {"kind":"unsupported"} → TdApi.MessageUnsupported.
 inline json messageEvent(const Incoming &in, const std::string &self, std::int64_t nowSec) {
     const bool out = in.from == self;
-    return json{{"type", "message"}, {"id", in.id}, {"from", in.from}, {"to", in.to},
+    auto event = json{{"type", "message"}, {"id", in.id}, {"from", in.from}, {"to", in.to},
                 {"ts", in.ts ? in.ts : nowSec},
                 {"text", in.content.value("text", in.content.value("caption", std::string()))},
                 {"out", out}, {"kind", parvane::contentKind(in.content)}, {"read", false},
@@ -53,6 +53,9 @@ inline json messageEvent(const Incoming &in, const std::string &self, std::int64
                 {"reply_to", in.replyTo.empty() ? json() : json(in.replyTo)},
                 {"edited", false}, {"pinned", false}, {"reactions", json::array()},
                 {"group", in.group}, {"proto", 2}};
+    // Подпись автора (A0008-2) едет в журнал вместе с событием и возвращается при реплее — к жалобе
+    if (!out && !in.proof.empty()) event["proof"] = in.proof;
+    return event;
 }
 
 // ── режим «усиленная приватность» (L2, правило L2-1; spec 007, T079) ─────────

@@ -3859,6 +3859,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_needs_linking_notice" = "This device is not linked to your account yet. Reply to the Parvane bot in Telegram with your recovery key or confirm this device on another one.";
 "lng_parvane_tg_recover_title" = "Confirm in Telegram";
 "lng_parvane_tg_recover_waiting" = "The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key (the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.";
+"lng_parvane_tg_recover_code" = "Verification code: {code}. The bot message you reply to must show the same code; if the code differs, do not send the key.";
 "lng_parvane_tg_recover_joining" = "Key received. Connecting this device…";
 "lng_parvane_tg_recover_done" = "This device is connected. Your chats and planner are loading.";
 "lng_parvane_tg_recover_failed" = "Could not connect this device. Check your connection and try again.";

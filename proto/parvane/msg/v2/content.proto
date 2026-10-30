@@ -267,6 +267,13 @@ message PollVote {
   MessageRef poll = 1;
   // Пусто — отзыв голоса.
   repeated uint32 option_indexes = 2 [(parvane.core.v2.max_items) = 12];
+  // POLL-1 (анонимный опрос группы): итоги от автора опроса. Голос анонимного опроса уходит ТОЛЬКО автору
+  // опроса личным сообщением (без адреса автора голоса участникам), а автор публикует в группу итоги:
+  // `tally = true`, `counts` — число голосов по вариантам (по порядку), `voters` — число проголосовавших.
+  // Участники принимают итоги только от автора опроса; в итогах нет ни одного адреса.
+  bool tally = 3;
+  repeated uint32 counts = 4 [(parvane.core.v2.max_items) = 12];
+  uint32 voters = 5;
 }
 
 message PollClose {
@@ -403,6 +410,8 @@ message ReportedMessage {
   parvane.core.v2.UserRef author = 2;
   string text = 3 [(parvane.core.v2.max_len) = 4096];
   int64 ts_ms = 4;
+  // Сериализованный core.v2.MessageProof: подписанная операция автора. Нет — сообщение «не подтверждено».
+  bytes proof = 5 [(parvane.core.v2.max_len) = 16384];
 }
 
 message Article {

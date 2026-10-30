@@ -3,6 +3,7 @@
 
 import init, * as pv from '../../../lib/parvane-protocol/parvane_protocol';
 import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url';
+import { base64ToBytes } from './base64';
 
 export type Protocol = typeof pv;
 export type {
@@ -10,11 +11,15 @@ export type {
 } from '../../../lib/parvane-protocol/parvane_protocol';
 
 let loading: Promise<Protocol> | undefined;
+let loaded: Protocol | undefined;
 
 /** Загрузить и инициализировать движок (один раз на страницу). */
 export function loadProtocol(): Promise<Protocol> {
   if (!loading) {
-    loading = init({ module_or_path: wasmUrl }).then(() => pv).catch((error: unknown) => {
+    loading = init({ module_or_path: wasmUrl }).then(() => {
+      loaded = pv;
+      return pv;
+    }).catch((error: unknown) => {
       loading = undefined;
       throw error;
     });
@@ -32,5 +37,20 @@ export function parseEngineError(e: unknown): EngineError {
     return JSON.parse(String(e)) as EngineError;
   } catch {
     return { error: String(e) };
+  }
+}
+
+/** REPORT-1 (A0008-2): подпись автора сообщения из жалобы верна — цепочка «корень → устройство → операция»,
+ * автор, `op_id`, начало текста и (если задан `groupHex`) группа беседы совпадают с подписанными.
+ * Движок не загружен — нет. */
+export function verifyMessageProof(
+  proofB64: string, opId: string, author: string, text: string, groupHex = '',
+): boolean {
+  if (!loaded || !proofB64) return false;
+  try {
+    const bytes = base64ToBytes(proofB64);
+    return Boolean((JSON.parse(pv.verifyMessageProof(bytes, opId, author, text, groupHex)) as { ok?: boolean }).ok);
+  } catch {
+    return false;
   }
 }

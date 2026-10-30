@@ -195,6 +195,7 @@ std::optional<json> open(const std::string &bundleKey, const std::string &addres
     if (v.contains("planner") && v["planner"].is_string()) out["planner"] = v["planner"];
     if (v.contains("cloud") && v["cloud"].is_string()) out["cloud"] = v["cloud"];
     if (v.contains("groups") && v["groups"].is_string()) out["groups"] = v["groups"];
+    if (v.contains("seq") && v["seq"].is_number_integer() && v["seq"].get<std::int64_t>() > 0) out["seq"] = v["seq"];
     if (v.contains("history") && v["history"].is_object()) {
         const auto &h = v["history"];
         if (h.contains("fileId") && h["fileId"].is_string() && h.contains("fileKey") && h["fileKey"].is_string()
@@ -204,6 +205,16 @@ std::optional<json> open(const std::string &bundleKey, const std::string &addres
         }
     }
     return out;
+}
+
+std::uint64_t seqOf(const json &payload) {
+    if (!payload.is_object() || !payload.contains("seq") || !payload["seq"].is_number_integer()) return 0;
+    const auto value = payload["seq"].get<std::int64_t>();
+    return value > 0 ? static_cast<std::uint64_t>(value) : 0;
+}
+
+bool isRolledBack(const json &payload, std::uint64_t seenSeq) {
+    return seqOf(payload) < seenSeq;
 }
 
 std::string withFreshLog(const std::string &grant, const std::string &logResponse) {

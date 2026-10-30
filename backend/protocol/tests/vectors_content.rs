@@ -125,6 +125,12 @@ fn positive() -> Vec<(&'static str, Value, Value)> {
             msg(json!({"kind": "poll", "question": "Что?"})),
         ),
         ("poll-vote", json!({"poll_vote": {"poll": {"op_id": OP}, "option_indexes": [0, 2]}}), msg(json!({"kind": "poll_vote", "options": [0, 2]}))),
+        // POLL-1: итоги анонимного опроса от автора (без адресов)
+        (
+            "poll-vote-tally",
+            json!({"poll_vote": {"poll": {"op_id": OP}, "tally": true, "counts": [3, 0, 2], "voters": 5}}),
+            msg(json!({"kind": "poll_vote", "tally": true, "counts": [3, 0, 2], "voters": 5})),
+        ),
         ("poll-close", json!({"poll_close": {"poll": {"op_id": OP}}}), msg(json!({"kind": "poll_close"}))),
         ("contact", json!({"contact": {"first_name": "Анна", "last_name": "К", "phone": "+10000000000", "user": {"address": "anna@local"}}}), json!({"class": "stub"})),
         ("receipt-read", json!({"receipt": {"kind": "RECEIPT_KIND_READ", "messages": [{"op_id": OP}, {"op_id": OP2}]}}), mutation.clone()),

@@ -190,10 +190,13 @@ export const pvstate_plannerContainerSet: (a: number, b: number, c: number, d: n
 export const pvstate_sentGuard: (a: number, b: number) => void;
 export const pvstate_snapshot: (a: number, b: number) => void;
 export const pvstate_syncRequest: (a: number, b: number) => void;
+export const recoveryTgKeypair: (a: number) => void;
+export const recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
 export const sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const splitSyncResponse: (a: number, b: number, c: number) => void;
 export const start: () => void;
+export const verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
 export const verifyServerDescriptor: (a: number, b: number, c: number) => void;
 export const version: (a: number) => void;
 export const __wbindgen_export: (a: number, b: number) => number;

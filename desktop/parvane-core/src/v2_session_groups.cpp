@@ -69,7 +69,8 @@ bool Session::applyGroupChangeLocked(const std::string &hex, const json &change)
 }
 
 bool Session::setGroupInfo(const std::string &address, const std::optional<std::string> &name,
-                           const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId) {
+                           const std::optional<std::string> &about, const std::optional<std::string> &avatarFileId,
+                           const std::optional<std::string> &avatarKey) {
     if (!ready_ || !isGroupAddress(address)) return false;
     const auto hex = groupHex(address);
     bool ok = false;
@@ -80,10 +81,13 @@ bool Session::setGroupInfo(const std::string &address, const std::optional<std::
         if (!current) return false;
         const json next{{"name", name.value_or(current->value("name", std::string()))},
                         {"about", about.value_or(current->value("about", std::string()))},
-                        {"avatar_file_id", avatarFileId.value_or(current->value("avatarFileId", std::string()))}};
+                        {"avatar_file_id", avatarFileId.value_or(current->value("avatarFileId", std::string()))},
+                        // Ключ фото частной группы идёт со своим файлом (A0089-5): новый файл без ключа — открытое фото
+                        {"avatar_key", avatarFileId ? avatarKey.value_or(std::string()) : current->value("avatarKey", std::string())}};
         const bool same = next["name"] == current->value("name", std::string())
             && next["about"] == current->value("about", std::string())
-            && next["avatar_file_id"] == current->value("avatarFileId", std::string());
+            && next["avatar_file_id"] == current->value("avatarFileId", std::string())
+            && next["avatar_key"] == current->value("avatarKey", std::string());
         // Ничего не меняется — записи в журнале не будет
         ok = same || applyGroupChangeLocked(hex, json{{"set_info", next}});
     }

@@ -187,7 +187,7 @@ void handleV2Event(const json &ev) {
     if (in.kind == Kind::None) return;
     if (in.kind == Kind::Message || in.kind == Kind::Stub) {
         if (!markSeen(in.id)) return; // повтор
-        noteMessage(in.id, in.from, in.chat, in.content);
+        noteMessage(in.id, in.from, in.chat, in.content, in.from == me ? std::string() : in.proof);
         // P-46: в logcat — только id и вид
         LOGI("v2 ← %s msg %s (%s)", in.from == me ? "своё" : "входящее", in.id.c_str(),
              parvane::contentKind(in.content).c_str());

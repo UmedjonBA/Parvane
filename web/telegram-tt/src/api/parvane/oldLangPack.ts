@@ -221,6 +221,8 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneTgRecoverTitle: 'Confirm in Telegram',
   ParvaneTgRecoverWaiting: 'The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key '
     + '(the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.',
+  ParvaneTgRecoverCode: 'Verification code: %@. The bot message you reply to must show the same code; '
+    + 'if the code differs, do not send the key.',
   ParvaneTgRecoverJoining: 'Key received. Connecting this device…',
   ParvaneTgRecoverDone: 'This device is connected. Your chats and planner are loading.',
   ParvaneTgRecoverFailed: 'Could not connect this device. Check your connection and try again.',
@@ -1601,6 +1603,8 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneTgRecoverTitle: 'Подтвердите вход в Telegram',
   ParvaneTgRecoverWaiting: 'Бот Parvane отправил вам сообщение в Telegram. Ответьте на него ключом восстановления '
     + '(бот присылал ключ в этот же чат) — на этом устройстве появятся ваши чаты и план.',
+  ParvaneTgRecoverCode: 'Код сверки: %@. В сообщении бота, на которое вы отвечаете, должен быть такой же код; '
+    + 'если код другой — не присылайте ключ.',
   ParvaneTgRecoverJoining: 'Ключ получен. Подключаем устройство…',
   ParvaneTgRecoverDone: 'Устройство подключено. Чаты и план загружаются.',
   ParvaneTgRecoverFailed: 'Не удалось подключить устройство. Проверьте связь и попробуйте ещё раз.',

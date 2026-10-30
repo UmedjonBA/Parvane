@@ -482,9 +482,11 @@ async fn group_typing(sh: &Shared, r: EphemeralGroupTypingRequest) -> Result<(),
         return Err(ErrorCode::Expired);
     }
     let pk: [u8; 32] = info.send_public_key.as_slice().try_into().map_err(|_| ErrorCode::Forbidden)?;
-    parvane_protocol::group::verify_group_typing(&pk, &g, r.epoch, &r.nonce, &r.payload, &r.epoch_signature)
+    // Подпись покрывает channel_id (A0015-2); прежняя (без канала) — только от старых клиентов.
+    parvane_protocol::group::verify_group_typing(&pk, &g, r.epoch, &r.channel_id, &r.nonce, &r.payload, &r.epoch_signature)
+        .or_else(|_| parvane_protocol::group::verify_group_typing_legacy(&pk, &g, r.epoch, &r.nonce, &r.payload, &r.epoch_signature))
         .map_err(|_| ErrorCode::Forbidden)?;
-    // Канал в подписанные данные не входит (wire не меняем): хотя бы не в чужой канал присутствия.
+    // Публикация в канал присутствия запрещена независимо от подписи.
     sh.eph.typing_publish(&r.channel_id, Instant::now())?;
     sh.eph.group_nonce_fresh(&g.id, &r.nonce, Instant::now())?;
     // Подписчики получают тот же вид, что и личный typing: (channel_id, payload).

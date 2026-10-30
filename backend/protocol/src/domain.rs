@@ -456,31 +456,42 @@ pub fn sign_grant(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Gra
     if level == GrantLevel::Unspecified {
         return Err(ProtoError::InvalidField("level"));
     }
-    sign_grant_entry(signer, access, OP_GRANT, Some(grantee), level, access.epoch, ts_ms)
+    sign_grant_entry(signer, access, OP_GRANT, Some(grantee), level, access.epoch, ts_ms, None)
 }
 
 /// Подписать отзыв: новая эпоха `epoch + 1` (ключ новой эпохи раздаётся всем,
 /// кроме отозванного).
 pub fn sign_revoke(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Grantee, ts_ms: i64) -> Result<SignedOp> {
+    sign_revoke_at(signer, access, grantee, ts_ms, None)
+}
+
+/// Отзыв с границей эпохи (A0006-1): `boundary_seq` — голова журнала операций,
+/// принятая автором; позже неё операции прежней эпохи клиенты отвергают.
+pub fn sign_revoke_at(signer: &dyn OpSigner, access: &ContainerAccess, grantee: &Grantee, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
-    sign_grant_entry(signer, access, OP_REVOKE, Some(grantee), GrantLevel::Unspecified, next, ts_ms)
+    sign_grant_entry(signer, access, OP_REVOKE, Some(grantee), GrantLevel::Unspecified, next, ts_ms, boundary_seq)
 }
 
 /// Подписать смену эпохи (spec 010): `epoch + 1`, гранты прежние; новый ключ
 /// раздаётся всем получателям ключа (кроме отозванных устройств владельца —
 /// у них его больше нет по E2E).
 pub fn sign_rotate(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64) -> Result<SignedOp> {
+    sign_rotate_at(signer, access, ts_ms, None)
+}
+
+/// Смена эпохи с границей (см. `sign_revoke_at`).
+pub fn sign_rotate_at(signer: &dyn OpSigner, access: &ContainerAccess, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
     let next = access.epoch.checked_add(1).ok_or(ProtoError::InvalidField("key_epoch"))?;
-    sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms)
+    sign_grant_entry(signer, access, OP_ROTATE, None, GrantLevel::Unspecified, next, ts_ms, boundary_seq)
 }
 
 /// Подписать выход участника (spec 016): сам получатель гранта снимает свой
 /// грант; эпоха не меняется — сменить её должен админ, увидев запись.
 pub fn sign_leave(signer: &dyn OpSigner, access: &ContainerAccess, me: &Grantee, ts_ms: i64) -> Result<SignedOp> {
-    sign_grant_entry(signer, access, OP_LEAVE, Some(me), GrantLevel::Unspecified, access.epoch, ts_ms)
+    sign_grant_entry(signer, access, OP_LEAVE, Some(me), GrantLevel::Unspecified, access.epoch, ts_ms, None)
 }
 
-fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64) -> Result<SignedOp> {
+fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &str, grantee: Option<&Grantee>, level: GrantLevel, key_epoch: u64, ts_ms: i64, boundary_seq: Option<u64>) -> Result<SignedOp> {
     let r = access.container_ref()?.clone();
     let g = Grant {
         container: Some(r.clone()),
@@ -489,6 +500,7 @@ fn sign_grant_entry(signer: &dyn OpSigner, access: &ContainerAccess, op_type: &s
         key_epoch,
         version: access.version + 1,
         prev_hash: access.head_hash().to_vec(),
+        epoch_boundary_seq: boundary_seq,
     };
     sign::sign_op(signer, header(op_type, &r, ts_ms), g.encode_to_vec())
 }
@@ -510,6 +522,9 @@ pub struct ContainerAccess {
     pub grants: BTreeMap<Grantee, GrantLevel>,
     /// Кто вправе писать в каждой эпохе (для проверки автора истории).
     writers: BTreeMap<u64, BTreeSet<Grantee>>,
+    /// Границы эпох (A0006-1): новая эпоха -> seq, позже которого операции
+    /// прежних эпох не принимаются. Нет записи — граница не заявлена.
+    boundaries: BTreeMap<u64, u64>,
 }
 
 impl ContainerAccess {
@@ -523,7 +538,7 @@ impl ContainerAccess {
         }
         let mut writers = BTreeMap::new();
         writers.insert(FIRST_EPOCH, BTreeSet::new());
-        Ok(Self { container, owner, epoch: FIRST_EPOCH, version: 0, hashes: vec![entry_hash(genesis)], grants: BTreeMap::new(), writers })
+        Ok(Self { container, owner, epoch: FIRST_EPOCH, version: 0, hashes: vec![entry_hash(genesis)], grants: BTreeMap::new(), writers, boundaries: BTreeMap::new() })
     }
 
     /// Генезис + записи по порядку.
@@ -635,6 +650,9 @@ impl ContainerAccess {
             self.epoch = next;
             let w: BTreeSet<Grantee> = self.grants.iter().filter(|(_, l)| **l >= GrantLevel::Write).map(|(g, _)| g.clone()).collect();
             self.writers.insert(next, w);
+            if let Some(b) = g.epoch_boundary_seq {
+                self.boundaries.insert(next, b);
+            }
             self.version += 1;
             self.hashes.push(entry_hash(op));
             self.container.key_epoch = self.epoch;
@@ -656,6 +674,9 @@ impl ContainerAccess {
             self.epoch = next;
             let w: BTreeSet<Grantee> = self.grants.iter().filter(|(_, l)| **l >= GrantLevel::Write).map(|(g, _)| g.clone()).collect();
             self.writers.insert(next, w);
+            if let Some(b) = g.epoch_boundary_seq {
+                self.boundaries.insert(next, b);
+            }
             None
         } else {
             if level == GrantLevel::Unspecified {
@@ -683,7 +704,7 @@ impl ContainerAccess {
             return Err(ProtoError::ContextMismatch);
         }
         let seal = verify_op_seal(op)?;
-        self.author_at(&seal, op.key_epoch, resolve, groups)
+        self.author_at(&seal, op.key_epoch, op.seq, resolve, groups)
     }
 
     pub fn check_snapshot_author(&self, s: &Snapshot, resolve: KeyResolver, groups: Membership) -> Result<Author> {
@@ -691,13 +712,23 @@ impl ContainerAccess {
             return Err(ProtoError::ContextMismatch);
         }
         let seal = verify_snapshot_seal(s)?;
-        self.author_at(&seal, s.key_epoch, resolve, groups)
+        self.author_at(&seal, s.key_epoch, s.upto_seq, resolve, groups)
     }
 
-    fn author_at(&self, seal: &VerifiedSeal, epoch: u64, resolve: KeyResolver, groups: Membership) -> Result<Author> {
+    /// Граница эпохи (A0006-1): `seq` (у снимка — `upto_seq`) не выше границы
+    /// каждой смены эпохи после `epoch`, у которой граница заявлена.
+    fn within_epoch_boundary(&self, epoch: u64, seq: u64) -> bool {
+        self.boundaries.range(epoch.saturating_add(1)..).all(|(_, b)| seq <= *b)
+    }
+
+    fn author_at(&self, seal: &VerifiedSeal, epoch: u64, seq: u64, resolve: KeyResolver, groups: Membership) -> Result<Author> {
         if epoch > self.epoch {
             // Журнал грантов отстаёт — сначала догнать.
             return Err(ProtoError::Expired);
+        }
+        if !self.within_epoch_boundary(epoch, seq) {
+            // Операция/снимок прежней эпохи позже границы: ключ той эпохи у бывшего редактора остался.
+            return Err(ProtoError::Forbidden);
         }
         let a = resolve(&seal.signer).ok_or(ProtoError::Forbidden)?;
         if !a.names().any(|u| self.could_write_at(u, epoch, groups)) {

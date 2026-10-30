@@ -12,6 +12,7 @@
 #include "parvane/v2_engine.h"
 #include "parvane/v2_link.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -213,6 +214,7 @@ json Session::renameAccount(const std::string &nick, const std::string &password
         }
         if (const auto key = keybundle::deriveBundleKey(recoveryKey, newAddress)) writeStateFile("bundle-key", *key);
         std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
         persistLocked();
         log("ник сменён");
         out = json{{"result", "ok"}, {"address", r.value("address", newAddress)}, {"token", r.value("token", std::string())}};
@@ -245,6 +247,7 @@ bool Session::followOwnRename(const std::string &engineSelf) {
             encodeMessage("parvane.identity.v2.DeviceLogSyncRequest", json{{"user", {{"address", cfg_.self}}}, {"after_version", "0"}}));
         runRequestsLocked(client_->call("renameFollow", json{{"logResponse", toBase64(fresh)}}));
         std::remove((cfg_.stateDir + "/bundle-sent").c_str());
+        std::remove((cfg_.stateDir + "/bundle-seq").c_str());
         persistLocked();
         log("ник сменён на другом устройстве — устройство перешло на новый адрес");
         return true;
@@ -534,6 +537,28 @@ std::string Session::buildGrantMaterialLocked() {
     return backup.empty() ? material : grantWithRootBackup(material, backup);
 }
 
+std::uint64_t Session::seenBundleSeq() const {
+    const auto text = readStateFile("bundle-seq");
+    std::uint64_t value = 0;
+    for (const char c : text) {
+        if (c < '0' || c > '9' || value > UINT64_MAX / 10 - 1) return value;
+        value = value * 10 + static_cast<std::uint64_t>(c - '0');
+    }
+    return value;
+}
+
+std::optional<json> Session::acceptBundleLocked(const std::optional<json> &opened) {
+    if (!opened) return std::nullopt;
+    const auto seen = seenBundleSeq();
+    if (keybundle::isRolledBack(*opened, seen)) {
+        log("копия ключей аккаунта на сервере старее виденной (" + std::to_string(keybundle::seqOf(*opened)) + " < "
+            + std::to_string(seen) + ") — отклонена");
+        return std::nullopt;
+    }
+    if (keybundle::seqOf(*opened) > seen) writeStateFile("bundle-seq", std::to_string(keybundle::seqOf(*opened)));
+    return opened;
+}
+
 void Session::refreshKeyBundleLocked(bool force) {
     const auto bundleKey = readStateFile("bundle-key");
     if (!ready_ || !client_ || bundleKey.size() != 32) return;
@@ -564,7 +589,9 @@ void Session::refreshKeyBundleLocked(bool force) {
         try {
             const auto current = fetchRootBackupStateLocked().value("key_bundle", std::string());
             if (!current.empty()) {
-                if (const auto opened = keybundle::open(bundleKey, cfg_.self, fromBase64(current))) server = *opened;
+                if (const auto opened = acceptBundleLocked(keybundle::open(bundleKey, cfg_.self, fromBase64(current)))) {
+                    server = *opened;
+                }
             }
         } catch (const std::exception &e) {
             log(std::string("копия ключей аккаунта: серверная не прочитана: ") + e.what());
@@ -582,6 +609,9 @@ void Session::refreshKeyBundleLocked(bool force) {
                 }
             }
         }
+        // Номер записи строго больше виденного (своего и серверного): откат сервера не спрячет новую копию
+        const auto nextSeq = std::max(seenBundleSeq(), keybundle::seqOf(server)) + 1;
+        payload["seq"] = nextSeq;
         auto sealed = keybundle::seal(bundleKey, cfg_.self, payload);
         if (sealed.size() > kBundleMaxBytes && payload.contains("groups")) {
             // Групп слишком много — без них (их перешлёт другое своё устройство, T142)
@@ -597,6 +627,7 @@ void Session::refreshKeyBundleLocked(bool force) {
         call(false, "identity.root.backup_set",
              encodeMessage("parvane.identity.v2.RootBackupSetRequest", json{{"key_bundle", toBase64(sealed)}}));
         writeStateFile("bundle-sent", mark);
+        writeStateFile("bundle-seq", std::to_string(nextSeq));
         if (history.is_object()) writeStateFile("bundle-history", history.dump());
         log("копия ключей аккаунта обновлена на сервере");
     } catch (const std::exception &e) {
@@ -611,7 +642,7 @@ json Session::fetchKeyBundle() {
     try {
         const auto bundle = fetchRootBackupStateLocked().value("key_bundle", std::string());
         if (bundle.empty()) return nullptr;
-        const auto opened = keybundle::open(key, cfg_.self, fromBase64(bundle));
+        const auto opened = acceptBundleLocked(keybundle::open(key, cfg_.self, fromBase64(bundle)));
         return opened ? *opened : json(nullptr);
     } catch (const std::exception &) {
         return nullptr;
@@ -759,9 +790,19 @@ std::string Session::requestTelegramKey(bool again) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!needsLinking_ || ready_ || !id_) return "failed";
     try {
-        call(false, "identity.recovery.tg_request",
-             encodeMessage("parvane.identity.v2.RecoveryTgRequestRequest",
-                           json{{"client", cfg_.deviceDescription}, {"again", again}}));
+        // A0023-1: эфемерная пара X25519 — приватная часть остаётся здесь, ответ владельца сервер запечатывает
+        // на публичную; код сверки назначает сервер, его же показывает бот
+        if (tgEphPublic_.size() != 32) {
+            const auto pair = fromBase64(v2::engineCall("recoveryTgKeypair").get<std::string>());
+            if (pair.size() != 64) return "failed";
+            tgEphSecret_ = pair.substr(0, 32);
+            tgEphPublic_ = pair.substr(32);
+        }
+        const auto resp = decodeMessage("parvane.identity.v2.RecoveryTgRequestResponse",
+            call(false, "identity.recovery.tg_request",
+                 encodeMessage("parvane.identity.v2.RecoveryTgRequestRequest",
+                               json{{"client", cfg_.deviceDescription}, {"again", again}, {"eph_public", toBase64(tgEphPublic_)}})));
+        tgCode_ = resp.is_object() ? resp.value("code", std::string()) : std::string();
         return "sent";
     } catch (const std::exception &e) {
         const auto code = codeOf(e);
@@ -772,12 +813,39 @@ std::string Session::requestTelegramKey(bool again) {
     }
 }
 
+std::string Session::telegramCode() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    return tgCode_;
+}
+
 json Session::pollTelegramKey(bool done) {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!id_) return nullptr;
     try {
-        return decodeMessage("parvane.identity.v2.RecoveryTgPollResponse",
+        auto r = decodeMessage("parvane.identity.v2.RecoveryTgPollResponse",
             call(false, "identity.recovery.tg_poll", encodeMessage("parvane.identity.v2.RecoveryTgPollRequest", json{{"done", done}})));
+        if (!r.is_object()) return r;
+        const auto code = r.value("code", std::string());
+        if (!code.empty()) tgCode_ = code;
+        if (done) {
+            tgEphSecret_.assign(tgEphSecret_.size(), '\0');
+            tgEphSecret_.clear();
+            tgEphPublic_.clear();
+            tgCode_.clear();
+            return r;
+        }
+        const auto sealed = r.value("sealed_key", std::string());
+        if (!sealed.empty() && tgEphSecret_.size() == 32) {
+            try {
+                r["recovery_key"] = v2::engineCall("recoveryTgOpen", json{{"secret", toBase64(tgEphSecret_)}, {"user", cfg_.self},
+                                                                         {"deviceId", deviceId_}, {"sealed", sealed}})
+                                        .get<std::string>();
+            } catch (const std::exception &) {
+                // Ответ не на наш ключ (запрос начат заново) — ждём следующий
+                r["recovery_key"] = std::string();
+            }
+        }
+        return r;
     } catch (const std::exception &) {
         return nullptr;
     }
@@ -806,8 +874,12 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
         }
         if (const auto key = keybundle::deriveBundleKey(recoveryKey, cfg_.self)) bundleKey = *key;
         if (!bundleKey.empty() && !state.value("key_bundle", std::string()).empty()) {
-            if (const auto opened = keybundle::open(bundleKey, cfg_.self, fromBase64(state.value("key_bundle", std::string())))) {
+            const auto raw = keybundle::open(bundleKey, cfg_.self, fromBase64(state.value("key_bundle", std::string())));
+            if (const auto opened = acceptBundleLocked(raw)) {
                 payload = *opened;
+            } else if (raw) {
+                // Откат копии сервером: «восстановление корнем» отозвало бы все прежние устройства (A0073-2)
+                return {"failed", {}, {}, nullptr};
             } else {
                 // Копия есть, но не открылась (испорчена, другой формат): «восстановление корнем» отозвало бы все
                 // прежние устройства — это не то, о чём просили
@@ -826,7 +898,9 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
             try {
                 const auto bundle = fetchRootBackupStateLocked().value("key_bundle", std::string());
                 if (!bundle.empty()) {
-                    if (const auto opened = keybundle::open(bundleKey, cfg_.self, fromBase64(bundle))) payload = *opened;
+                    const auto raw = keybundle::open(bundleKey, cfg_.self, fromBase64(bundle));
+                    if (const auto opened = acceptBundleLocked(raw)) payload = *opened;
+                    else if (raw) return {"failed", {}, {}, nullptr};
                 }
             } catch (const std::exception &) {
             }

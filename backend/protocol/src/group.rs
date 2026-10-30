@@ -30,7 +30,7 @@ use crate::pb::parvane::core::v2::{
     GroupContext, GroupEnvelope, GroupEnvelopeInner, GroupInviteKeyAnnounce, GroupStateEntry, OpHeader, Ref, SignedOp,
 };
 use crate::pb::parvane::group::v2::{
-    group_change::Change, AdminRights, GroupChange, GroupKind, GroupStateChange, Permissions, Role,
+    group_change::Change, AdminRights, GroupChange, GroupKind, GroupStateChange, Permissions, RevokedFloor, Role,
 };
 use crate::pb::parvane::msg::v2::{content, Content, MediaKind};
 use crate::sign::{self, ctx, OpSigner};
@@ -112,6 +112,9 @@ pub struct GroupState {
     pub name: String,
     pub about: String,
     pub avatar_file_id: String,
+    /// Секрет фото частной группы (A0089-5): из него выводятся ключ PVB2 и capability блоба; пусто — фото открытое
+    /// (публичная группа, записи до A0089-5).
+    pub avatar_key: Vec<u8>,
     /// Прежний `group_id` группы v1, из которой эта переведена (T180); иначе пусто.
     pub migrated_from: String,
     pub default_permissions: Permissions,
@@ -366,6 +369,8 @@ pub fn apply_with(
     }
     let change = sc.change.as_ref().and_then(|c| c.change.as_ref()).ok_or(ProtoError::InvalidField("change"))?;
     let now = v.header.ts_ms;
+    // A0007-2: отметки отзыва принимаются от самого пользователя либо админа
+    let floors_by_admin = state.is_some_and(|st| st.is_owner(&signer.user) || st.admin_can(&signer.user, |r| r.ban_users));
 
     let mut s = match state {
         None => {
@@ -402,6 +407,7 @@ pub fn apply_with(
                 name: cr.name.clone(),
                 about: cr.about.clone(),
                 avatar_file_id: String::new(),
+                avatar_key: Vec::new(),
                 migrated_from: cr.migrated_from.clone(),
                 default_permissions: cr.default_permissions.unwrap_or_default(),
                 owner: signer.user.clone(),
@@ -566,7 +572,11 @@ pub fn apply_with(
             }
             s.name = i.name.clone();
             s.about = i.about.clone();
+            if !i.avatar_key.is_empty() && (i.avatar_key.len() != 32 || i.avatar_file_id.is_empty()) {
+                return Err(ProtoError::InvalidField("avatar_key"));
+            }
             s.avatar_file_id = i.avatar_file_id.clone();
+            s.avatar_key = i.avatar_key.clone();
         }
         Change::SetPrivacyMode(m) => {
             // Право — как у изменения сведений группы; новой эпохи не требует
@@ -751,6 +761,12 @@ pub fn apply_with(
     }
     s.version = entry.version;
     s.hashes.push(entry_hash(op));
+    for f in &sc.floors {
+        if f.min_log_version > 0 && (f.user == signer.user || floors_by_admin) && s.members.contains_key(&f.user) {
+            let max = s.signer_versions.entry(f.user.clone()).or_default();
+            *max = (*max).max(f.min_log_version);
+        }
+    }
     if sc.signer_log_version > 0 {
         let max = s.signer_versions.entry(signer.user.clone()).or_default();
         *max = (*max).max(sc.signer_log_version);
@@ -786,6 +802,21 @@ pub fn build_entry_as(
     signer_log_version: u64,
     signer_address: &str,
 ) -> Result<GroupStateEntry> {
+    build_entry_full(signer, state, domain, change, ts_ms, signer_log_version, signer_address, vec![])
+}
+
+/// То же с отметками отзыва (A0007-2).
+#[allow(clippy::too_many_arguments)]
+pub fn build_entry_full(
+    signer: &dyn OpSigner,
+    state: Option<&GroupState>,
+    domain: &str,
+    change: Change,
+    ts_ms: i64,
+    signer_log_version: u64,
+    signer_address: &str,
+    floors: Vec<RevokedFloor>,
+) -> Result<GroupStateEntry> {
     if !address::is_valid_domain(domain) {
         return Err(ProtoError::BadAddress);
     }
@@ -800,6 +831,7 @@ pub fn build_entry_as(
         change: Some(GroupChange { change: Some(change) }),
         signer_log_version,
         signer_address: signer_address.to_string(),
+        floors,
     };
     let header = OpHeader {
         domain: GROUP_DOMAIN.into(),
@@ -956,14 +988,25 @@ pub fn open_envelope(env: &GroupEnvelope, envelope_key: &[u8; 32]) -> Result<Gro
     decode_checked(&pt, Origin::Client)
 }
 
-/// Подпись «печатает» в группе ключом отправки эпохи (D-07).
-pub fn sign_group_typing(send_key: &dyn OpSigner, group: &Ref, epoch: u64, nonce: &[u8], payload: &[u8]) -> Vec<u8> {
+/// Подпись «печатает» в группе ключом отправки эпохи (D-07). С A0015-2 в подписанные данные
+/// входит `channel_id` (контекст `GROUP_TYPING_V2`): перенос подписи в другой канал не проходит.
+pub fn sign_group_typing(send_key: &dyn OpSigner, group: &Ref, epoch: u64, channel_id: &[u8], nonce: &[u8], payload: &[u8]) -> Vec<u8> {
     let mut p = envelope_aad(group, epoch, nonce);
+    p.extend_from_slice(channel_id);
     p.extend_from_slice(payload);
-    sign::sign_ctx(send_key, ctx::GROUP_TYPING, &[&p])
+    sign::sign_ctx(send_key, ctx::GROUP_TYPING_V2, &[&p])
 }
 
-pub fn verify_group_typing(send_public_key: &[u8; 32], group: &Ref, epoch: u64, nonce: &[u8], payload: &[u8], sig: &[u8]) -> Result<()> {
+pub fn verify_group_typing(send_public_key: &[u8; 32], group: &Ref, epoch: u64, channel_id: &[u8], nonce: &[u8], payload: &[u8], sig: &[u8]) -> Result<()> {
+    let mut p = envelope_aad(group, epoch, nonce);
+    p.extend_from_slice(channel_id);
+    p.extend_from_slice(payload);
+    sign::verify_ctx(send_public_key, sig, ctx::GROUP_TYPING_V2, &[&p])
+}
+
+/// Прежняя подпись без `channel_id` — приём от клиентов старых сборок на переходе (канал присутствия
+/// всё равно закрыт `typing_publish`). Клиенты её больше не выпускают.
+pub fn verify_group_typing_legacy(send_public_key: &[u8; 32], group: &Ref, epoch: u64, nonce: &[u8], payload: &[u8], sig: &[u8]) -> Result<()> {
     let mut p = envelope_aad(group, epoch, nonce);
     p.extend_from_slice(payload);
     sign::verify_ctx(send_public_key, sig, ctx::GROUP_TYPING, &[&p])
@@ -1007,6 +1050,60 @@ mod tests {
 
     /// ENG-08: запись проверяется по ключу, действовавшему в версии журнала устройств подписанта, и
     /// версии одного пользователя в журнале группы не убывают.
+    /// A0007-2: отметка отзыва от админа поднимает порог пользователя — отозванное устройство не пишет
+    /// со ссылкой на версию «до отзыва», а прежние записи остаются принятыми.
+    #[test]
+    fn revocation_floor_blocks_stale_signer_version() {
+        let w = World::new(&["alice@x", "bob@x"]);
+        let bob = w.keys["bob@x"].verifying_key().to_bytes();
+        let resolve = |k: &[u8; 32], _v: u64| {
+            let (u, _) = w.keys.iter().find(|(_, sk)| &sk.verifying_key().to_bytes() == k)?;
+            Some(SignerInfo { user: u.clone(), root_key: w.roots[u] })
+        };
+        let create = Create { kind: GroupKind::Group as i32, members: vec![UserRef { address: "bob@x".into() }], ..Default::default() };
+        let g = build_entry_at(w.k("alice@x"), None, "x", Change::Create(create), 1, 0).unwrap();
+        let s = apply(None, &g, &resolve).unwrap();
+        let rights = AdminRights { change_info: true, ..Default::default() };
+        let promo = build_entry(w.k("alice@x"), Some(&s), "x", Change::SetRole(SetRole { member: ur("bob@x"), role: Role::Admin as i32, rights: Some(rights) }), 1).unwrap();
+        let s = apply(Some(&s), &promo, &resolve).unwrap();
+        // Боб (старая эра, версия 2) пишет законно
+        let old = build_entry_at(w.k("bob@x"), Some(&s), "x", Change::SetInfo(SetInfo { name: "n".into(), ..Default::default() }), 2, 2).unwrap();
+        let _ = bob;
+        // Владелец видит отзыв устройства Боба на версии 5 и ставит отметку
+        let mark = build_entry_full(
+            w.k("alice@x"),
+            Some(&s),
+            "x",
+            Change::SetInfo(SetInfo { name: "m".into(), ..Default::default() }),
+            2,
+            0,
+            "",
+            vec![RevokedFloor { user: "bob@x".into(), min_log_version: 5 }],
+        )
+        .unwrap();
+        let s2 = apply(Some(&s), &mark, &resolve).unwrap();
+        assert_eq!(s2.signer_versions.get("bob@x"), Some(&5));
+        // Запись Боба до отметки принимается (история не теряется), после — со старой версией нет
+        assert!(apply(Some(&s), &old, &resolve).is_ok());
+        let stale = build_entry_at(w.k("bob@x"), Some(&s2), "x", Change::SetInfo(SetInfo { name: "z".into(), ..Default::default() }), 3, 2).unwrap();
+        assert_eq!(apply(Some(&s2), &stale, &resolve).err(), Some(ProtoError::Forbidden));
+        // Участник без права не может поднять чужой порог
+        let s3 = apply(Some(&s2), &build_entry_at(w.k("bob@x"), Some(&s2), "x", Change::SetInfo(SetInfo { name: "q".into(), ..Default::default() }), 3, 5).unwrap(), &resolve).unwrap();
+        let evil = build_entry_full(
+            w.k("bob@x"),
+            Some(&s3),
+            "x",
+            Change::SetInfo(SetInfo { name: "e".into(), ..Default::default() }),
+            4,
+            5,
+            "",
+            vec![RevokedFloor { user: "alice@x".into(), min_log_version: 99 }],
+        )
+        .unwrap();
+        let s4 = apply(Some(&s3), &evil, &resolve);
+        assert!(s4.map(|s| s.signer_versions.get("alice@x").is_none()).unwrap_or(true));
+    }
+
     #[test]
     fn signer_log_version_is_checked_and_monotonic() {
         let w = World::new(&["alice@x", "bob@x"]);
@@ -1062,6 +1159,24 @@ mod tests {
         )
         .unwrap();
         apply(None, &e, &w.resolve()).unwrap()
+    }
+
+    #[test]
+    fn set_info_keeps_avatar_key() {
+        // A0089-5: ключ фото частной группы едет в записи SetInfo; кривой ключ отвергается
+        let w = World::new(&["alice@x", "bob@x"]);
+        let s = genesis(&w);
+        let info = |key: Vec<u8>, file: &str| Change::SetInfo(SetInfo { name: "G".into(), avatar_file_id: file.into(), avatar_key: key, ..Default::default() });
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", info(vec![7; 32], "f1"), 1).unwrap();
+        let s2 = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert_eq!((s2.avatar_file_id.as_str(), s2.avatar_key.as_slice()), ("f1", &[7u8; 32][..]));
+        // смена на открытое фото (публичная группа / старый клиент) ключ снимает
+        let e = build_entry(w.k("alice@x"), Some(&s2), "x", info(Vec::new(), "f2"), 1).unwrap();
+        assert!(apply(Some(&s2), &e, &w.resolve()).unwrap().avatar_key.is_empty());
+        let bad = build_entry(w.k("alice@x"), Some(&s2), "x", info(vec![1; 5], "f3"), 1).unwrap();
+        assert!(apply(Some(&s2), &bad, &w.resolve()).is_err());
+        let orphan = build_entry(w.k("alice@x"), Some(&s2), "x", info(vec![1; 32], ""), 1).unwrap();
+        assert!(apply(Some(&s2), &orphan, &w.resolve()).is_err());
     }
 
     #[test]
@@ -1362,5 +1477,23 @@ mod tests {
         assert!(s.content_allowed("bob@x", &edit(false), 0));
         assert!(!s.content_allowed("bob@x", &edit(true), 0));
         assert!(s.content_allowed("alice@x", &article(1), 0));
+    }
+}
+
+#[cfg(test)]
+mod typing_sig_tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+
+    #[test]
+    fn group_typing_signature_covers_channel_id() {
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let g = Ref { domain: "local".into(), id: vec![1; 16] };
+        let (ch_a, ch_b, nonce) = ([1u8; 16], [2u8; 16], [3u8; 16]);
+        let sig = sign_group_typing(&sk, &g, 5, &ch_a, &nonce, b"pl");
+        verify_group_typing(&pk, &g, 5, &ch_a, &nonce, b"pl", &sig).unwrap();
+        assert!(verify_group_typing(&pk, &g, 5, &ch_b, &nonce, b"pl", &sig).is_err(), "другой канал");
+        assert!(verify_group_typing_legacy(&pk, &g, 5, &nonce, b"pl", &sig).is_err(), "контексты разные");
     }
 }

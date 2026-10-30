@@ -125,17 +125,25 @@ fn disp(d: Disposition) -> &'static str {
     }
 }
 
+/// Доказательство авторства (`proof`, base64) — в событие, если есть (REPORT-1, A0008-2).
+fn with_proof(mut v: Value, proof: &[u8]) -> Value {
+    if !proof.is_empty() {
+        v["proof"] = json!(b64(proof));
+    }
+    v
+}
+
 fn event_json(e: &Event) -> Value {
     let content = |c: &Content| serde_json::to_value(c).unwrap_or(Value::Null);
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition } => json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition } => json!({
+        }), proof),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }),
+        }), proof),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
@@ -591,7 +599,7 @@ impl HostClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "migratedFrom": s.migrated_from,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&s.avatar_key), "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),
@@ -1225,6 +1233,7 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
         "parvane.identity.v2.DeviceListResponse" => ipb::DeviceListResponse,
         "parvane.identity.v2.RootBackupGetResponse" => ipb::RootBackupGetResponse,
         "parvane.identity.v2.RecoveryTgPollResponse" => ipb::RecoveryTgPollResponse,
+        "parvane.identity.v2.RecoveryTgRequestResponse" => ipb::RecoveryTgRequestResponse,
         "parvane.identity.v2.TelegramPullResponse" => ipb::TelegramPullResponse,
         "parvane.identity.v2.TelegramReplyResponse" => ipb::TelegramReplyResponse,
         "parvane.identity.v2.PrivacyGetResponse" => ipb::PrivacyGetResponse,

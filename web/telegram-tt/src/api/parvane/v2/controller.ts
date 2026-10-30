@@ -38,7 +38,8 @@ import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import { pickEscrowKey } from './escrowKey';
 import {
-  buildBundleMark, deriveBundleKey, type KeyBundleHistory, type KeyBundlePayload, mergeKeyBundlePayload, openKeyBundle,
+  buildBundleMark, deriveBundleKey, isBundleRolledBack, type KeyBundleHistory, type KeyBundlePayload,
+  mergeKeyBundlePayload, openKeyBundle, readBundleSeq,
   readGrantBundleKey,
   sealKeyBundle,
   withBundleKey, withFreshLog,
@@ -131,6 +132,8 @@ type Deps = {
   // `groupCallId` — попарный сигнал внутри группового звонка (T141)
   // Режим L2 (spec 025): скачать вложение заранее, при получении
   prefetchMedia?: (content: WireMessageContent) => void;
+  /** Фото частной группы из журнала: секрет для вывода ключей скачивания (A0089-5). */
+  rememberGroupPhoto?: (fileId: string, avatarKey: string) => void;
   onCallSignal?: (
     from: string, signal: WireCallSignal | WireGroupInvite, groupCallId?: string, device?: string,
   ) => void;
@@ -148,6 +151,8 @@ type EngineGroupInfo = {
   name: string;
   about: string;
   avatarFileId: string;
+  /** Секрет фото частной группы (base64, A0089-5); пусто — фото открытое. */
+  avatarKey?: string;
   migratedFrom?: string;
   owner: string;
   members: { user: string; role: number; mutedUntilMs: number; rights?: WireAdminRights }[];
@@ -284,6 +289,8 @@ type EngineEvent = {
   device?: string;
   opId?: string;
   tsMs?: number;
+  // Доказательство авторства (core.v2.MessageProof, base64) — для жалобы
+  proof?: string;
   content?: V2Content;
   disposition?: string;
   group?: { domain: string; id: string };
@@ -387,6 +394,8 @@ const KEY_RECORD = 'v2-storage-key';
 const BUNDLE_KEY_RECORD = 'v2-bundle-key';
 const BUNDLE_SENT_RECORD = 'v2-bundle-sent';
 const BUNDLE_HISTORY_RECORD = 'v2-bundle-history';
+// Наибольший номер копии ключей аккаунта, виденный этим устройством (A0073-2: защита от отката сервером)
+const BUNDLE_SEQ_RECORD = 'v2-bundle-seq';
 const BUNDLE_FIRST_DELAY_MS = 8000;
 const BUNDLE_REFRESH_MS = 60 * 1000;
 const BUNDLE_MAX_BYTES = 250000;
@@ -1609,6 +1618,7 @@ export function createV2Controller(deps: Deps) {
         ts: Math.floor((ev.tsMs || Date.now()) / 1000),
         content: wire,
         reply_to: b64ToUuid(c.reply_to?.op_id),
+        proof: author !== self ? ev.proof : undefined,
       };
       messages.set(stored);
       await deps.applyExternal(stored);
@@ -1706,6 +1716,7 @@ export function createV2Controller(deps: Deps) {
     await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_HISTORY_RECORD).catch(() => undefined);
+    await storage?.deleteRecord(BUNDLE_SEQ_RECORD).catch(() => undefined);
     bundleKeyB64 = undefined;
     rootBackupB64 = undefined;
     client?.free();
@@ -1904,8 +1915,11 @@ export function createV2Controller(deps: Deps) {
       if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
       // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако», группы или полную
       // историю (только что вошло), не должно стирать их из копии для следующих устройств
+      const seen = await loadSeenBundleSeq();
       const server = await fetchKeyBundle();
       const merged = mergeKeyBundlePayload(payload, server);
+      // Номер записи строго больше виденного (своего и серверного): откат сервера не спрячет новую копию
+      merged.seq = Math.max(seen, readBundleSeq(server?.seq)) + 1;
       if (server?.groups) {
         try {
           const groups = client.groupKeysMerge(payload.groups || '[]', server.groups);
@@ -1929,6 +1943,7 @@ export function createV2Controller(deps: Deps) {
         'parvane.identity.v2.RootBackupSetRequest', JSON.stringify({ key_bundle: b64(sealed) }),
       ));
       await storage.saveRecord(BUNDLE_SENT_RECORD, mark);
+      await storage.saveRecord(BUNDLE_SEQ_RECORD, merged.seq);
       if (history) await storage.saveRecord(BUNDLE_HISTORY_RECORD, history);
       if (previous && history && previous.fileId !== history.fileId) deps.dropBundleHistory?.(previous);
       deps.log('v2: копия ключей аккаунта обновлена на сервере');
@@ -2007,13 +2022,34 @@ export function createV2Controller(deps: Deps) {
     if (groups) await applyBundleGroups(groups);
   }
 
+  async function loadSeenBundleSeq() {
+    return readBundleSeq(await storage?.loadRecord<number>(BUNDLE_SEQ_RECORD).catch(() => undefined));
+  }
+
+  /** Принять копию с сервера: номер не меньше виденного этим устройством (A0073-2). Откат — undefined и запись в
+   * журнал; принятый номер запоминается. */
+  async function acceptBundle(payload: KeyBundlePayload | undefined) {
+    if (!payload) return undefined;
+    const seen = await loadSeenBundleSeq();
+    if (isBundleRolledBack(payload, seen)) {
+      deps.log(`v2: копия ключей аккаунта на сервере старее виденной (${readBundleSeq(payload.seq)} < ${seen})`
+        + ' — отклонена');
+      return undefined;
+    }
+    const seq = readBundleSeq(payload.seq);
+    if (seq > seen) await storage?.saveRecord(BUNDLE_SEQ_RECORD, seq).catch(() => undefined);
+    return payload;
+  }
+
   /** Копия ключей аккаунта с сервера, открытая ключом копии этого устройства
    * (новое устройство перечитывает её ради свежего снимка истории). */
   async function fetchKeyBundle() {
     if (!ready || !bundleKeyB64) return undefined;
     try {
       const bundle = (await fetchRootBackupState())?.key_bundle;
-      return bundle ? await openKeyBundle(unb64(bundleKeyB64), deps.getSelf(), unb64(bundle)) : undefined;
+      return bundle
+        ? await acceptBundle(await openKeyBundle(unb64(bundleKeyB64), deps.getSelf(), unb64(bundle)))
+        : undefined;
     } catch {
       return undefined;
     }
@@ -2112,15 +2148,34 @@ export function createV2Controller(deps: Deps) {
     return Boolean(ready && rootBackupB64 && !bundleKeyB64 && await hasTelegram());
   }
 
+  /** A0023-1: эфемерная пара X25519 этого запроса — приватная часть остаётся только здесь, ответ владельца
+   * сервер запечатывает на публичную; код сверки назначает сервер, его же показывает бот. */
+  let telegramEph: { secret: Uint8Array; public: Uint8Array } | undefined;
+  let telegramCode = '';
+
+  /** Код сверки текущего запроса ключа через Telegram (пусто — запроса нет или сервер старый). */
+  function getTelegramCode() {
+    return telegramCode;
+  }
+
   /** Новое устройство: попросить бота спросить ключ восстановления у владельца. */
   async function requestTelegramKey(again: boolean): Promise<TelegramKeyRequest> {
     if (starting) await starting.catch(() => undefined);
     if (!pv || !needsLinking || ready) return 'failed';
     try {
-      await call('id', 'identity.recovery.tg_request', pv.encodeMessage(
-        'parvane.identity.v2.RecoveryTgRequestRequest',
-        JSON.stringify({ client: deps.describeDevice?.() || '', again }),
-      ));
+      if (!telegramEph) {
+        const pair = pv.recoveryTgKeypair();
+        telegramEph = { secret: pair.slice(0, 32), public: pair.slice(32) };
+        pair.fill(0);
+      }
+      const resp = JSON.parse(pv.decodeMessage(
+        'parvane.identity.v2.RecoveryTgRequestResponse',
+        await call('id', 'identity.recovery.tg_request', pv.encodeMessage(
+          'parvane.identity.v2.RecoveryTgRequestRequest',
+          JSON.stringify({ client: deps.describeDevice?.() || '', again, eph_public: b64(telegramEph.public) }),
+        )),
+      )) as { code?: string };
+      telegramCode = resp.code || '';
       return 'sent';
     } catch (e) {
       if (e instanceof V2Error && e.code === 'ERROR_CODE_NOT_FOUND') return 'no_telegram';
@@ -2131,16 +2186,30 @@ export function createV2Controller(deps: Deps) {
   }
 
   /** Ответ владельца боту: ключ (если уже есть) и жив ли запрос. `done` —
-   * ключ применён, сервер его стирает. */
+   * ключ применён, сервер его стирает. Запечатанный ответ открывается приватным ключом запроса. */
   async function pollTelegramKey(done: boolean) {
     if (!pv) return undefined;
     try {
-      return JSON.parse(pv.decodeMessage(
+      const r = JSON.parse(pv.decodeMessage(
         'parvane.identity.v2.RecoveryTgPollResponse',
         await call('id', 'identity.recovery.tg_poll', pv.encodeMessage(
           'parvane.identity.v2.RecoveryTgPollRequest', JSON.stringify({ done }),
         )),
-      )) as { recovery_key?: string; pending?: boolean };
+      )) as { recovery_key?: string; pending?: boolean; sealed_key?: string; code?: string };
+      if (r.code) telegramCode = r.code;
+      if (done) {
+        telegramEph?.secret.fill(0);
+        telegramEph = undefined;
+        telegramCode = '';
+      } else if (r.sealed_key && telegramEph && ownDeviceId) {
+        try {
+          r.recovery_key = pv.recoveryTgOpen(telegramEph.secret, deps.getSelf(), ownDeviceId, unb64(r.sealed_key));
+        } catch {
+          // Ответ не на наш ключ (запрос начат заново) — ждём следующий
+          r.recovery_key = '';
+        }
+      }
+      return r;
     } catch {
       return undefined;
     }
@@ -2194,9 +2263,13 @@ export function createV2Controller(deps: Deps) {
       probe.free();
     }
     const bundleKey = await deriveBundleKey(recoveryKey, self).catch(() => undefined);
-    let payload = bundleKey && state.key_bundle
+    const opened = bundleKey && state.key_bundle
       ? await openKeyBundle(bundleKey, self, unb64(state.key_bundle))
       : undefined;
+    let payload = await acceptBundle(opened);
+    // Копия открылась, но старее виденной: сервер откатил её. «Восстановление корнем» отозвало бы все прежние
+    // устройства, поэтому отказываем (A0073-2)
+    if (opened && !payload) return { result: 'failed' };
     if (bundleKey && !payload && viaTelegram) {
       deps.log('v2: копии ключей аккаунта на сервере нет — ждём, заведёт ли её другое устройство');
       const deadline = Date.now() + LEGACY_BUNDLE_WAIT_MS;
@@ -2205,7 +2278,9 @@ export function createV2Controller(deps: Deps) {
           setTimeout(resolve, LEGACY_BUNDLE_POLL_MS);
         });
         const bundle = (await fetchRootBackupState().catch(() => undefined))?.key_bundle;
-        payload = bundle ? await openKeyBundle(bundleKey, self, unb64(bundle)) : undefined;
+        const polled = bundle ? await openKeyBundle(bundleKey, self, unb64(bundle)) : undefined;
+        payload = await acceptBundle(polled);
+        if (polled && !payload) return { result: 'failed' };
       }
     }
     if (!bundleKey || !payload) {
@@ -3383,6 +3458,7 @@ export function createV2Controller(deps: Deps) {
   }
 
   function toWireGroupInfo(hex: string, g: EngineGroupInfo): WireGroupInfo {
+    if (g.avatarFileId && g.avatarKey) deps.rememberGroupPhoto?.(g.avatarFileId, g.avatarKey);
     return {
       group_id: groupAddress(hex),
       name: g.name,
@@ -3624,7 +3700,10 @@ export function createV2Controller(deps: Deps) {
    * «Edit» шлёт название и описание одновременно), собранные по снимку «до»,
    * откатывали друг друга — вторая возвращала прежнее название.
    */
-  async function setGroupInfo(address: string, patch: { name?: string; about?: string; avatarFileId?: string }) {
+  async function setGroupInfo(
+    address: string,
+    patch: { name?: string; about?: string; avatarFileId?: string; avatarKey?: string },
+  ) {
     if (!ready || !client || !isV2GroupAddress(address)) return false;
     const hex = groupHex(address);
     return serial(async () => {
@@ -3634,9 +3713,11 @@ export function createV2Controller(deps: Deps) {
         name: patch.name ?? current.name,
         about: patch.about ?? current.about ?? '',
         avatar_file_id: patch.avatarFileId ?? current.avatarFileId ?? '',
+        // Ключ идёт вместе со своим файлом: новый файл без ключа (публичная группа) — открытое фото
+        avatar_key: patch.avatarFileId !== undefined ? (patch.avatarKey ?? '') : (current.avatarKey ?? ''),
       };
       const isSame = next.name === current.name && next.about === (current.about || '')
-        && next.avatar_file_id === (current.avatarFileId || '');
+        && next.avatar_file_id === (current.avatarFileId || '') && next.avatar_key === (current.avatarKey || '');
       // Ничего не меняется — записи в журнале не будет (право всё равно проверил бы движок)
       return isSame ? true : applyGroupChange(hex, { set_info: next });
     });
@@ -4576,6 +4657,7 @@ export function createV2Controller(deps: Deps) {
     canSendKeyToTelegram,
     requestTelegramKey,
     pollTelegramKey,
+    getTelegramCode,
     resetIdentity,
     leave,
     pollOwnDevices,

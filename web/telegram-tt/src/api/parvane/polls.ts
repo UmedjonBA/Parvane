@@ -3,6 +3,8 @@
 // закрытие kind=poll_close. Синтез ApiMessagePoll из накопленного состояния.
 // Quiz: correct-индексы и solution едут в kind=poll и раскрываются клиентом
 // только после собственного голоса или закрытия (как в Telegram).
+// POLL-1 (анонимный опрос группы): голос уходит ТОЛЬКО автору опроса личным сообщением, автор публикует в группу
+// итоги (`poll_vote` с `tally`: счётчики без адресов). Остальные участники адресов голосующих не получают.
 // Срок (`close_ms`), запрет переголосования, перемешивание и скрытые до срока
 // итоги тоже едут в kind=poll и соблюдаются клиентами.
 
@@ -26,13 +28,21 @@ type PollEntry = {
   shuffle: boolean;
   hideResults: boolean;
   votes: Map<string, number[]>; // адрес голосующего → выбранные индексы
+  // POLL-1: опрос в группе; итоги от автора (у не-автора вместо подсчёта голосов); последние опубликованные автором
+  isGroup: boolean;
+  tally?: { counts: number[]; voters: number };
+  published?: string;
 };
+
+// Потолок числа в итогах: чужой счётчик не должен ломать вёрстку
+const MAX_TALLY = 10_000_000;
 
 type PollOptions = {
   isPublic?: boolean; isMultiple?: boolean; isQuiz?: boolean; correct?: number[]; solution?: string;
   // P-44: автор опроса — только он может закрыть
   author?: string;
   closeAt?: number; createdAt?: number; noRevote?: boolean; shuffle?: boolean; hideResults?: boolean;
+  isGroup?: boolean;
 };
 
 const RECENT_VOTERS_LIMIT = 3;
@@ -90,6 +100,7 @@ export class PollStore {
       noRevote: Boolean(opts?.noRevote),
       shuffle: Boolean(opts?.shuffle),
       hideResults: Boolean(opts?.hideResults),
+      isGroup: Boolean(opts?.isGroup),
       votes: new Map(),
     });
     this.scheduleExpire(uuid);
@@ -113,6 +124,50 @@ export class PollStore {
   isInChat(uuid: string, chatId: string) {
     const entry = this.byUuid.get(uuid);
     return Boolean(entry && entry.chatId === chatId);
+  }
+
+  // POLL-1: анонимный опрос группы — голоса идут автору в личку, итоги публикует он
+  isAnonymousGroup(uuid: string) {
+    const entry = this.byUuid.get(uuid);
+    return Boolean(entry && entry.isGroup && !entry.isPublic && entry.author);
+  }
+
+  getAuthor(uuid: string) {
+    return this.byUuid.get(uuid)?.author;
+  }
+
+  // Участник (не автор) анонимного опроса группы чужие голоса не считает — только итоги автора
+  isTallyOnly(uuid: string) {
+    const entry = this.byUuid.get(uuid);
+    return Boolean(entry && this.isAnonymousGroup(uuid) && entry.author !== this.self);
+  }
+
+  // Итоги принимаются только от автора опроса; счётчики приводятся к числу вариантов
+  applyTally(uuid: string, from: string, counts: number[], voters: number) {
+    const entry = this.byUuid.get(uuid);
+    if (!entry || !entry.author || entry.author !== from) return false;
+    const clean = entry.options.map((_, idx) => {
+      const value = Number(counts[idx]);
+      return Number.isInteger(value) && value >= 0 ? Math.min(value, MAX_TALLY) : 0;
+    });
+    const total = Number.isInteger(voters) && voters >= 0 ? Math.min(voters, MAX_TALLY) : 0;
+    entry.tally = { counts: clean, voters: total };
+    if (from === this.self) entry.published = JSON.stringify(entry.tally);
+    return true;
+  }
+
+  // Итоги автора из его собственного подсчёта; undefined — публиковать нечего (то же уже опубликовано)
+  buildTallyToPublish(uuid: string) {
+    const entry = this.byUuid.get(uuid);
+    if (!entry || entry.author !== this.self || !this.isAnonymousGroup(uuid)) return undefined;
+    const counts = entry.options.map(() => 0);
+    entry.votes.forEach((choices) => choices.forEach((idx) => {
+      if (counts[idx] !== undefined) counts[idx] += 1;
+    }));
+    const tally = { counts, voters: entry.votes.size };
+    if (entry.published === JSON.stringify(tally)) return undefined;
+    entry.published = JSON.stringify(tally);
+    return tally;
   }
 
   // `atMs` — время голоса (у истории — время отправки), чтобы срок не отбрасывал старые голоса после reload
@@ -173,7 +228,7 @@ export class PollStore {
     const entry = this.byUuid.get(uuid);
     if (!entry) return undefined;
 
-    const countByOption = entry.options.map(() => 0);
+    let countByOption = entry.options.map(() => 0);
     let totalVoters = 0;
     const recentVoterIds: string[] = [];
     const myChoices = entry.votes.get(this.self) || [];
@@ -186,6 +241,12 @@ export class PollStore {
         if (countByOption[idx] !== undefined) countByOption[idx] += 1;
       });
     });
+
+    // POLL-1: у участника анонимного опроса группы счётчики — итоги автора
+    if (entry.tally && this.isTallyOnly(uuid)) {
+      countByOption = entry.tally.counts.slice();
+      totalVoters = entry.tally.voters;
+    }
 
     // Правильные ответы и пояснение раскрываются только после собственного
     // голоса или закрытия — до того quiz выглядит как обычный опрос

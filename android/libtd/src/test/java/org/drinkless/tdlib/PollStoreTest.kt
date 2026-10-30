@@ -83,4 +83,83 @@ class PollStoreTest {
         assertEquals("poll_vote", PollStore.voteContent("late", listOf(0)).getString("kind"))
         assertEquals("late", PollStore.closeContent("late").getString("poll"))
     }
+
+    // ── POLL-1: анонимный опрос группы ──────────────────────────────────────
+
+    private fun anon(self: String): PollStore {
+        val s = PollStore()
+        s.isMember = { chat, address -> chat == "group:g1" && address in setOf("alice@local", "bob@local", "carol@local") }
+        s.register("p", "alice@local", PollStore.buildContent("Q", listOf("a", "b", "c"), false, false, false, emptyList(), ""), "group:g1", true, self)
+        return s
+    }
+
+    @Test
+    fun anonymousGroupPollIsRecognised() {
+        assertTrue(anon("bob@local").get("p")!!.isAnonymousGroup)
+        val pub = PollStore(); pub.register("q", "alice@local", PollStore.buildContent("Q", listOf("a", "b"), true, false, false, emptyList(), ""), "group:g1", true)
+        assertFalse(pub.get("q")!!.isAnonymousGroup)
+        val dm = PollStore(); dm.register("r", "alice@local", PollStore.buildContent("Q", listOf("a", "b"), false, false, false, emptyList(), ""), "bob@local", false)
+        assertFalse(dm.get("r")!!.isAnonymousGroup)
+    }
+
+    @Test
+    fun participantCountsOnlyAuthorTally() {
+        val s = anon("bob@local")
+        // чужой голос из группы не считается, свой — считается и в группу не публикуется
+        assertFalse(s.route("p", "bob@local", "carol@local", "group:g1", true).count)
+        val own = s.route("p", "bob@local", "bob@local", "group:g1", true)
+        assertTrue(own.count && !own.publish)
+        s.applyVote("p", "bob@local", listOf(1))
+        // свой голос автору в личку (журнал) считается; не автору — нет
+        assertTrue(s.route("p", "bob@local", "bob@local", "alice@local", false).count)
+        assertFalse(s.route("p", "bob@local", "bob@local", "dave@local", false).count)
+        // итоги — только от автора и только из группы опроса
+        assertFalse(s.applyTally("p", "carol@local", "group:g1", listOf(9, 9, 9), 27))
+        assertFalse(s.applyTally("p", "alice@local", "other-group", listOf(9, 9, 9), 27))
+        assertTrue(s.applyTally("p", "alice@local", "group:g1", listOf(2, 3, -1, 7), 5))
+        val poll = s.toTdPoll("p", "bob@local", idOf)!!
+        assertEquals(5, poll.totalVoterCount)
+        assertEquals(2, poll.options[0].voterCount); assertEquals(3, poll.options[1].voterCount); assertEquals(0, poll.options[2].voterCount)
+        assertTrue(poll.options[1].isChosen)
+        assertTrue(poll.isAnonymous)
+        assertEquals(0, poll.recentVoterIds.size)
+    }
+
+    @Test
+    fun authorCountsPrivateVotesAndPublishesAddressFreeTally() {
+        val s = anon("alice@local")
+        // голос участника в личку автору: засчитан и вызывает публикацию; не участник — нет; чужое личное — нет
+        val vote = s.route("p", "alice@local", "bob@local", "alice@local", false)
+        assertTrue(vote.count && vote.publish)
+        assertFalse(s.route("p", "alice@local", "mallory@local", "alice@local", false).count)
+        assertFalse(s.route("p", "alice@local", "bob@local", "erin@local", false).count)
+        s.applyVote("p", "bob@local", listOf(0)); s.applyVote("p", "carol@local", listOf(0)); s.applyVote("p", "alice@local", listOf(2))
+        val tally = s.tallyToPublish("p", "alice@local")!!
+        assertTrue(PollStore.isTally(tally))
+        assertEquals("[2,0,1]", tally.getJSONArray("counts").toString()); assertEquals(3, tally.getInt("voters"))
+        assertFalse(tally.toString().contains("@"))
+        assertNull(s.tallyToPublish("p", "alice@local")) // то же самое повторно не публикуем
+        s.applyVote("p", "bob@local", emptyList()) // отзыв
+        assertEquals(2, s.tallyToPublish("p", "alice@local")!!.getInt("voters"))
+        assertNull(s.tallyToPublish("p", "bob@local")) // не автор итогов не публикует
+    }
+
+    @Test
+    fun publicPollAndDirectChatKeepOldRoutes() {
+        val pub = PollStore(); pub.register("q", "alice@local", PollStore.buildContent("Q", listOf("a", "b"), true, false, false, emptyList(), ""), "group:g1", true, "bob@local")
+        assertTrue(pub.route("q", "bob@local", "carol@local", "group:g1", true).count)
+        assertFalse(pub.route("q", "bob@local", "carol@local", "bob@local", false).count) // личный голос публичного опроса не принимается
+        assertNull(pub.tallyToPublish("q", "alice@local"))
+    }
+
+    @Test
+    fun voteBeforePollIsRoutedOnRegister() {
+        val s = PollStore()
+        s.isMember = { _, a -> a == "bob@local" }
+        s.applyVote("p", "bob@local", listOf(1), "alice@local", false)    // личный голос пришёл раньше опроса
+        s.applyVote("p", "carol@local", listOf(0), "group:g1", true)      // и групповой
+        s.register("p", "alice@local", PollStore.buildContent("Q", listOf("a", "b"), false, false, false, emptyList(), ""), "group:g1", true, "alice@local")
+        val e = s.get("p")!!
+        assertEquals(setOf("bob@local", "carol@local"), e.votes.keys) // автор принимает оба (carol — голос в группе, как у старых клиентов)
+    }
 }

@@ -3095,6 +3095,7 @@ export interface LangPair {
   'ParvaneModReportLabel': undefined;
   'ParvaneModReportUnknownGroup': undefined;
   'ParvaneModReportSummary': undefined;
+  'ParvaneModReportProven': undefined;
   'ParvaneModDelete': undefined;
   'ParvaneModBan': undefined;
   'ParvaneModDeleted': undefined;

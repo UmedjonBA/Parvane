@@ -14,6 +14,10 @@ lng_parvane_tg_recover_waiting
 The Parvane bot has sent you a message in Telegram. Reply to it with your recovery key (the bot sent the key to the same chat earlier) — your chats and planner will appear on this device.
 Бот Parvane отправил вам сообщение в Telegram. Ответьте на него ключом восстановления (бот присылал ключ в этот же чат) — на этом устройстве появятся ваши чаты и план.
 
+lng_parvane_tg_recover_code
+Verification code: {code}. The bot message you reply to must show the same code; if the code differs, do not send the key.
+Код сверки: {code}. В сообщении бота, на которое вы отвечаете, должен быть такой же код; если код другой — не присылайте ключ.
+
 lng_parvane_tg_recover_joining
 Key received. Connecting this device…
 Ключ получен. Подключаем устройство…

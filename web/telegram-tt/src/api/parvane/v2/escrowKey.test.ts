@@ -13,4 +13,9 @@ describe('ключ копии корня для администратора (ID
     expect(pickEscrowKey('cGlubmVk', 'b3RoZXI=')).toBe('');
     expect(pickEscrowKey('cGlubmVk', '')).toBe('');
   });
+
+  it('закреплённый ключ в base64url без «=» совпадает с объявленным стандартным base64', () => {
+    expect(pickEscrowKey('a-b_cw', 'a+b/cw==')).toBe('a+b/cw==');
+    expect(pickEscrowKey('a-b_cw', 'a+b/cx==')).toBe('');
+  });
 });

@@ -3,6 +3,7 @@
 
 #include "parvane/call.h"
 #include "parvane/poll.h"
+#include "parvane/v2_engine.h"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -643,6 +644,12 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
     } else if (kind == "poll_vote") {
         json v{{"option_indexes", c.contains("options") && c["options"].is_array() ? c["options"] : json::array()}};
         if (!str(c, "poll").empty()) v["poll"] = ::parvane::v2::ref(str(c, "poll"));
+        // POLL-1: итоги анонимного опроса от автора (счётчики без адресов)
+        if (c.value("tally", false)) {
+            v["tally"] = true;
+            v["counts"] = c.contains("counts") && c["counts"].is_array() ? c["counts"] : json::array();
+            if (c.contains("voters")) v["voters"] = c["voters"];
+        }
         out["poll_vote"] = v;
     } else if (kind == "poll_close") {
         json v = json::object();
@@ -695,6 +702,7 @@ std::optional<json> toV2(const json &v1In, const std::string &replyTo) {
                 messages.push_back(json{{"op_id", uuidToB64(str(m, "op_id"))}, {"author", {{"address", str(m, "author")}}},
                                         {"text", str(m, "text")},
                                         {"ts_ms", std::to_string(m.value("ts", 0LL) * 1000)}});
+                if (!str(m, "proof").empty()) messages.back()["proof"] = str(m, "proof");
             }
             t["messages"] = messages;
         }
@@ -793,6 +801,11 @@ std::optional<json> fromV2(const json &c) {
         if (v.contains("poll")) {
             if (auto u = b64ToUuid(str(v["poll"], "op_id"))) out["poll"] = *u;
         }
+        if (v.value("tally", false)) {
+            out["tally"] = true;
+            out["counts"] = v.contains("counts") && v["counts"].is_array() ? v["counts"] : json::array();
+            out["voters"] = v.contains("voters") ? v["voters"] : json(0);
+        }
     } else if (c.contains("poll_close") && c["poll_close"].is_object()) {
         out = json{{"kind", "poll_close"}};
         if (c["poll_close"].contains("poll")) {
@@ -862,6 +875,7 @@ std::optional<json> fromV2(const json &c) {
                 const auto &ts = m.contains("ts_ms") ? m["ts_ms"] : json(0);
                 const auto ms = ts.is_number() ? ts.get<long long>() : ts.is_string() ? std::atoll(ts.get<std::string>().c_str()) : 0LL;
                 reported.push_back(json{{"op_id", *id}, {"author", author}, {"text", str(m, "text")}, {"ts", ms / 1000}});
+                if (!str(m, "proof").empty()) reported.back()["proof"] = str(m, "proof");
             }
         }
         out["reported"] = reported;
@@ -887,6 +901,7 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     if (type != "direct" && type != "group") return in;
     in.id = str(ev, "opId");
     in.from = str(ev, "from");
+    in.proof = str(ev, "proof");
     if (in.id.empty() || in.from.empty()) return in;
     if (type == "group") {
         // Группа v2: сообщение — в чат группы, автор — из проверенной подписи.
@@ -987,7 +1002,8 @@ std::optional<ReportCheck> validateModReport(
     const json &content,
     const std::string &reporter,
     const std::function<std::vector<std::string>(const std::string &group)> &membersOf,
-    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup) {
+    const std::function<std::optional<ReportLocalMessage>(const std::string &opId)> &lookup,
+    const ProofVerifier &verifyProof) {
     constexpr std::size_t kMaxMessages = 50;
     constexpr std::size_t kMaxText = 1000;
     if (!content.is_object() || content.value("kind", std::string()) != "mod_report" || reporter.empty()) {
@@ -1016,6 +1032,21 @@ std::optional<ReportCheck> validateModReport(
         const auto op = m["op_id"].get<std::string>();
         if (op.empty() || std::find(out.opIds.begin(), out.opIds.end(), op) != out.opIds.end()) continue;
         const auto local = lookup(op);
+        if (!local && verifyProof && m.contains("author") && m["author"].is_string()) {
+            // Нет в своей истории (A0008-2): подпись автора из жалобы; автор — участник группы
+            const auto author = m["author"].get<std::string>();
+            const auto text = str(m, "text");
+            if (!author.empty() && std::find(members.begin(), members.end(), author) != members.end()
+                && verifyProof(op, author, text == "[media]" ? std::string() : text, hex, str(m, "proof"))) {
+                out.opIds.push_back(op);
+                out.provenOpIds.push_back(op);
+                if (std::find(out.authors.begin(), out.authors.end(), author) == out.authors.end()) {
+                    out.authors.push_back(author);
+                }
+                texts.push_back(text.empty() ? std::string("[media]") : text);
+                continue;
+            }
+        }
         if (!local || local->chat != out.group || local->author.empty()) continue;
         out.opIds.push_back(op);
         if (std::find(out.authors.begin(), out.authors.end(), local->author) == out.authors.end()) {
@@ -1038,6 +1069,18 @@ std::optional<ReportCheck> validateModReport(
         out.text += "\xE2\x80\xA6"; // …
     }
     return out;
+}
+
+bool verifyMessageProof(const std::string &opId, const std::string &author, const std::string &text,
+                        const std::string &groupHex, const std::string &proofB64) {
+    if (proofB64.empty()) return false;
+    try {
+        const auto verdict = engineCall("verifyMessageProof", json{{"proof", proofB64}, {"opId", opId}, {"author", author},
+                                                                    {"text", text}, {"groupHex", groupHex}});
+        return verdict.is_object() && verdict.value("ok", false);
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 } // namespace parvane::v2

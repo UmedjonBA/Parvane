@@ -38,6 +38,8 @@ pub mod ctx {
     pub const SERVER_DESCRIPTOR: &[u8] = b"parvane/v2/server-descriptor\0";
     pub const GROUP_ENVELOPE: &[u8] = b"parvane/v2/group-env\0";
     pub const GROUP_TYPING: &[u8] = b"parvane/v2/group-typing\0";
+    /// Подпись «печатает» группы с channel_id (A0015-2); прежняя GROUP_TYPING — только приём от старых клиентов.
+    pub const GROUP_TYPING_V2: &[u8] = b"parvane/v2/group-typing2\0";
     pub const GROUP_JOIN: &[u8] = b"parvane/v2/group-join\0";
     pub const GROUP_ENTRY_HASH: &[u8] = b"parvane/v2/group-entry\0";
     pub const GROUP_GENESIS: &[u8] = b"parvane/v2/group-genesis\0";
@@ -63,6 +65,7 @@ pub mod ctx {
         SERVER_DESCRIPTOR,
         GROUP_ENVELOPE,
         GROUP_TYPING,
+        GROUP_TYPING_V2,
         GROUP_JOIN,
         GROUP_ENTRY_HASH,
         GROUP_GENESIS,

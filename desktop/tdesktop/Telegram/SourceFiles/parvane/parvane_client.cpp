@@ -195,6 +195,7 @@ QHash<QString, QString> g_notifyExceptions; // адрес → JSON настро�
 QHash<QString, QString> g_notifyDefaults;   // users|groups|channels → JSON
 bool g_applyingNotify = false;              // применяем чужое — не зеркалим назад
 QHash<QString, QString> g_avatarFileIds; // адрес → file_id аватара (cloud)
+QHash<QString, QString> g_groupAvatarKeys; // адрес группы → секрет фото частной группы (base64, GPHOTO-1)
 QSet<QString> g_avatarDownloaded;        // аватары, уже скачанные/в процессе
 QHash<QString, QImage> g_avatarImages;   // адрес → скачанная картинка (кэш для
                                          // повторной установки: ensurePeerUser с
@@ -295,7 +296,16 @@ struct PollState {
 	bool shuffle = false;
 	bool hideResults = false;
 	bool multiple = false;     // несколько вариантов в одном голосе
+	// POLL-1 (анонимный опрос группы): голоса идут автору в личку, участник считает только итоги автора
+	bool isGroup = false;
+	bool hasTally = false;
+	QVector<int> tallyCounts;
+	int tallyVoters = 0;
+	QString publishedTally;    // автор: последние опубликованные итоги (не слать то же самое повторно)
 
+	[[nodiscard]] bool anonymousGroup() const {
+		return parvane::poll::isAnonymousGroup(isGroup, publicVoters, author.toStdString());
+	}
 	[[nodiscard]] parvane::poll::VoteRules rules() const {
 		return { .closed = closed, .closeAtMs = closeAtMs, .quiz = quiz, .noRevote = noRevote };
 	}
@@ -310,6 +320,7 @@ struct PendingPollVote {
 	QString voter;
 	QVector<int> options;
 	QString chat;          // чат, из которого пришёл голос (P-44)
+	QString to;            // кому адресован (POLL-1: личный голос автору)
 	std::int64_t tsMs = 0; // момент голоса (срок/без переголосования)
 };
 QHash<QString, QVector<PendingPollVote>> g_pendingPollVotes;
@@ -1527,6 +1538,9 @@ void HandleV2Event(const parvane::json &ev) {
 		sm.to = in.to;
 		sm.ts = in.ts ? in.ts : QDateTime::currentSecsSinceEpoch();
 		sm.content = in.content;
+		if (in.from != self) {
+			sm.proof = in.proof; // подпись автора — к жалобе (REPORT-1, A0008-2)
+		}
 		if (!in.replyTo.empty()) {
 			sm.reply_to = in.replyTo;
 		}
@@ -5616,6 +5630,10 @@ QHash<QString, QString> g_cardContent;
 			.author = row->from,
 			.text = text ? *text : std::string(),
 		};
+	}, [](const std::string &opId, const std::string &author, const std::string &text,
+			const std::string &groupHex, const std::string &proof) {
+		// Сообщения нет в своей истории — подпись автора из жалобы (A0008-2)
+		return parvane::v2::verifyMessageProof(opId, author, text, groupHex, proof);
 	});
 }
 
@@ -5781,6 +5799,8 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 	const auto fid = fileId.toStdString();
 	const auto id = IdForAddress(address);
 	const auto photoId = docIdFromFileId(fileId);
+	// Фото частной группы шифровано секретом из журнала группы (GPHOTO-1)
+	const auto groupKey = g_groupAvatarKeys.value(address).toStdString();
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		if (!t) {
@@ -5788,13 +5808,22 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 		}
 		std::string bytes;
 		try {
-			auto d = DownloadChatBlob(
-				fid,
-				parvane::chatrules::chatBlobCipherCap("avatar", 0));
-			if (!d.ok) {
-				return;
+			if (!groupKey.empty()) {
+				const auto s = V2Ready();
+				auto plain = s ? s->downloadGroupPhoto(fid, groupKey) : std::nullopt;
+				if (!plain) {
+					return;
+				}
+				bytes = std::move(*plain);
+			} else {
+				auto d = DownloadChatBlob(
+					fid,
+					parvane::chatrules::chatBlobCipherCap("avatar", 0));
+				if (!d.ok) {
+					return;
+				}
+				bytes = std::move(d.bytes);
 			}
-			bytes = std::move(d.bytes);
 		} catch (const std::exception &) {
 			return;
 		}
@@ -6440,9 +6469,17 @@ void applyPollState(not_null<Main::Session*> session, const PollState &st) {
 	const auto myVote = st.votes.value(self);
 	auto counts = QVector<int>(st.answers, 0);
 	auto total = 0;
+	// POLL-1: участник анонимного опроса группы показывает итоги автора, а не свой подсчёт
+	const auto tallyOnly = st.anonymousGroup() && st.author != self;
 	// spec 024: итоги скрыты до срока — у всех, кроме автора
 	const auto hidden = st.hideResults && !st.closedNow() && st.author != self;
-	for (auto i = st.votes.constBegin(); i != st.votes.constEnd() && !hidden; ++i) {
+	if (tallyOnly && st.hasTally && !hidden) {
+		total = st.tallyVoters;
+		for (auto i = 0; i != st.answers && i != st.tallyCounts.size(); ++i) {
+			counts[i] = st.tallyCounts[i];
+		}
+	}
+	for (auto i = st.votes.constBegin(); i != st.votes.constEnd() && !hidden && !(tallyOnly && st.hasTally); ++i) {
 		if (i.value().isEmpty()) {
 			continue; // отозванный голос
 		}
@@ -6523,6 +6560,69 @@ void applyPollState(not_null<Main::Session*> session, const PollState &st) {
 	session->data().sendWebPageGamePollTodoListNotifications();
 }
 
+// POLL-1: куда засчитать голос (чистая логика — parvane::poll::routeVote, тесты в parvane-core)
+[[nodiscard]] parvane::poll::VoteRoute RoutePollVote(
+		const PollState &st,
+		const QString &voter,
+		const QString &to,
+		const QString &voteChat) {
+	parvane::poll::VoteCtx x;
+	x.anonGroup = st.anonymousGroup();
+	x.inPollChat = (voteChat == st.chatAddress);
+	x.self = SelfAddress().toStdString();
+	x.author = st.author.toStdString();
+	x.voter = voter.toStdString();
+	x.to = to.toStdString();
+	const auto role = GroupRoleOf(st.chatAddress, voter);
+	x.voterIsMember = !role.isEmpty() && role != u"banned"_q;
+	return parvane::poll::routeVote(x);
+}
+
+// POLL-1: автор публикует в группу итоги анонимного опроса (счётчики без адресов). Несколько голосов подряд и
+// повтор истории при запуске сливаются в одну публикацию; то же, что опубликовано, не шлётся.
+QSet<QString> g_pollTallyScheduled;
+void SchedulePollTally(const QString &uuid) {
+	if (g_pollTallyScheduled.contains(uuid)) {
+		return;
+	}
+	g_pollTallyScheduled.insert(uuid);
+	base::call_delayed(1500, [uuid] {
+		g_pollTallyScheduled.remove(uuid);
+		const auto it = g_pollsByUuid.find(uuid);
+		if (it == g_pollsByUuid.end() || !it->anonymousGroup() || it->author != SelfAddress()) {
+			return;
+		}
+		auto tally = parvane::poll::Tally();
+		tally.counts.assign(std::size_t(std::max(it->answers, 0)), 0);
+		for (auto i = it->votes.constBegin(); i != it->votes.constEnd(); ++i) {
+			if (i.value().isEmpty()) {
+				continue;
+			}
+			++tally.voters;
+			for (const auto option : i.value()) {
+				if (option >= 0 && option < it->answers) {
+					++tally.counts[std::size_t(option)];
+				}
+			}
+		}
+		const auto content = parvane::poll::tallyContent(uuid.toStdString(), tally);
+		const auto signature = QString::fromStdString(content.dump());
+		if (it->publishedTally == signature) {
+			return;
+		}
+		it->publishedTally = signature;
+		parvane::StoredMessage own;
+		own.id = parvane::newUuidV7();
+		own.from = SelfAddress().toStdString();
+		own.to = it->chatAddress.toStdString();
+		own.ts = QDateTime::currentSecsSinceEpoch();
+		own.content = content;
+		g_uuidToMsgId.insert(QString::fromStdString(own.id), 0);
+		HistoryAppend(own);
+		sendInnerAsync(it->chatAddress, content, own.id);
+	});
+}
+
 // Голос/закрытие с шины (и свои на воспроизведении журнала). Не отображается
 // как сообщение. Опрос ещё не пришёл — откладываем до его инъекции.
 void handlePollService(
@@ -6546,6 +6646,23 @@ void handlePollService(
 	const auto it = g_pollsByUuid.find(pollUuid);
 	// P-44: голос — только из чата опроса; закрыть может только автор
 	const auto to = QString::fromStdString(sm.to);
+	// POLL-1: итоги анонимного опроса — только от автора и только из чата опроса
+	if (kind == "poll_vote" && parvane::poll::isTallyContent(sm.content)) {
+		if (it == g_pollsByUuid.end() || !it->anonymousGroup() || voter != it->author
+			|| !parvane::v2::isGroupAddress(sm.to) || to != it->chatAddress) {
+			return;
+		}
+		const auto tally = parvane::poll::readTally(sm.content, it->answers);
+		it->hasTally = true;
+		it->tallyCounts = QVector<int>(tally.counts.begin(), tally.counts.end());
+		it->tallyVoters = tally.voters;
+		if (voter == SelfAddress()) {
+			it->publishedTally = QString::fromStdString(
+				parvane::poll::tallyContent(pollUuid.toStdString(), tally).dump());
+		}
+		applyPollState(session, *it);
+		return;
+	}
 	const auto voteChat = parvane::v2::isGroupAddress(sm.to)
 		? to
 		: (voter == SelfAddress() ? to : voter);
@@ -6558,7 +6675,7 @@ void handlePollService(
 		} else if (g_pendingPollVotes.size() < kMaxPendingPolls || g_pendingPollVotes.contains(pollUuid)) {
 			auto &queue = g_pendingPollVotes[pollUuid];
 			if (queue.size() < kMaxPendingPollVotes) {
-				queue.push_back({ voter, options, voteChat, std::int64_t(sm.ts) * 1000 });
+				queue.push_back({ voter, options, voteChat, to, std::int64_t(sm.ts) * 1000 });
 			}
 		}
 		return;
@@ -6569,8 +6686,8 @@ void handlePollService(
 			return;
 		}
 		it->closed = true;
-	} else if (voteChat != it->chatAddress) {
-		LOG(("Parvane: голос в опросе %1 из чужого чата — отброшен").arg(pollUuid));
+	} else if (const auto route = RoutePollVote(*it, voter, to, voteChat); !route.count) {
+		LOG(("Parvane: голос в опросе %1 не засчитан (чужой чат или анонимный опрос)").arg(pollUuid));
 		return;
 	} else if (!parvane::poll::acceptsVote(it->rules(), it->votes.contains(voter), sm.ts * 1000)) {
 		LOG(("Parvane: голос в опросе %1 от %2 не принят (срок/без переголосования)").arg(pollUuid, voter));
@@ -6579,6 +6696,9 @@ void handlePollService(
 		it->votes.remove(voter);
 	} else {
 		it->votes.insert(voter, NormalizePollVote(options, it->answers, it->multiple));
+	}
+	if (kind == "poll_vote" && it->anonymousGroup() && it->author == SelfAddress()) {
+		SchedulePollTally(pollUuid); // POLL-1: автор публикует обновлённые итоги
 	}
 	applyPollState(session, *it);
 	LOG(("Parvane: опрос %1 — %2 от %3")
@@ -6638,6 +6758,7 @@ void injectPollMessage(
 	st.uuid = uuid;
 	st.pollId = std::uint64_t(docIdFromFileId(uuid));
 	st.chatAddress = isGroup ? toStr : (isOwn ? toStr : from);
+	st.isGroup = isGroup;
 	st.quiz = sm.content.value("quiz", false);
 	st.publicVoters = sm.content.value("public", false);
 	st.solution = QString::fromStdString(
@@ -6678,10 +6799,14 @@ void injectPollMessage(
 	// Отложенные голоса/закрытие (пришли раньше опроса).
 	for (const auto &pending : g_pendingPollVotes.take(uuid)) {
 		// те же проверки P-44, что у живого голоса
-		if (pending.chat != st.chatAddress
+		const auto route = RoutePollVote(st, pending.voter, pending.to, pending.chat);
+		if (!route.count
 			|| !parvane::poll::acceptsVote(st.rules(), st.votes.contains(pending.voter), pending.tsMs)) {
 			LOG(("Parvane: отложенный голос в опросе %1 от %2 не принят").arg(uuid, pending.voter));
 			continue;
+		}
+		if (route.publish) {
+			SchedulePollTally(uuid);
 		}
 		if (pending.options.isEmpty()) {
 			st.votes.remove(pending.voter);
@@ -7746,15 +7871,24 @@ bool MirrorPollVotes(
 		{ "poll", uuid.toStdString() },
 		{ "options", jopts },
 	};
+	// POLL-1: голос анонимного опроса группы идёт только автору (не в группу); автор считает сам и публикует итоги
+	auto voteTo = it->chatAddress;
+	if (it->anonymousGroup()) {
+		if (it->author == self) {
+			SchedulePollTally(uuid);
+			return true;
+		}
+		voteTo = it->author;
+	}
 	parvane::StoredMessage own;
 	own.id = parvane::newUuidV7();
 	own.from = self.toStdString();
-	own.to = it->chatAddress.toStdString();
+	own.to = voteTo.toStdString();
 	own.ts = QDateTime::currentSecsSinceEpoch();
 	own.content = content;
 	g_uuidToMsgId.insert(QString::fromStdString(own.id), 0); // эхо не показываем
 	HistoryAppend(own); // журнал: свой выбор переживёт рестарт
-	sendInnerAsync(it->chatAddress, content, own.id);
+	sendInnerAsync(voteTo, content, own.id);
 	LOG(("Parvane: голос в опросе %1 (%2 вариантов)")
 		.arg(uuid)
 		.arg(idx.size()));
@@ -8080,6 +8214,7 @@ constexpr crl::time kBundleRecheckDelays[] = { 60 * crl::time(1000), 5 * 60 * cr
 std::mutex g_tgMutex;
 int g_tgGeneration = 0;
 TelegramRecoveryState g_tgState = TelegramRecoveryState::Idle;
+QString g_tgCode; // под g_tgMutex
 
 LinkingStatus g_linkingStatus; // только main
 rpl::event_stream<> g_linkingChanges;
@@ -8090,6 +8225,7 @@ void PublishLinkingStatus() {
 	{
 		std::lock_guard<std::mutex> lk(g_tgMutex);
 		status.telegram = g_tgState;
+		status.telegramCode = (g_tgState == TelegramRecoveryState::Waiting) ? g_tgCode : QString();
 	}
 	status.linkCode = CurrentLinkCode();
 	crl::on_main([status] {
@@ -8344,6 +8480,10 @@ void StartTelegramRecovery(bool again) {
 		return;
 	}
 	LOG(("Parvane: ключ восстановления: бот спросит владельца в Telegram"));
+	{
+		std::lock_guard<std::mutex> lk(g_tgMutex);
+		g_tgCode = QString::fromStdString(s->telegramCode());
+	}
 	SetTelegramState(TelegramRecoveryState::Waiting);
 	ScheduleTelegramPoll(generation, QDateTime::currentMSecsSinceEpoch(), kTelegramKeyPollMs);
 }
@@ -10425,6 +10565,7 @@ void ResetAccountState(const char *why) {
 	g_notifyDefaults.clear();
 	g_applyingNotify = false;
 	g_avatarFileIds.clear();
+	g_groupAvatarKeys.clear();
 	g_avatarDownloaded.clear();
 	g_avatarImages.clear();
 	g_groupVersions.clear();
@@ -10486,6 +10627,7 @@ void ResetAccountState(const char *why) {
 		std::lock_guard<std::mutex> lk(g_tgMutex);
 		++g_tgGeneration; // опрос ключа восстановления через Telegram прежнего входа — прочь
 		g_tgState = TelegramRecoveryState::Idle;
+		g_tgCode.clear();
 	}
 	g_linkingStatus = LinkingStatus();
 	g_linkingChanges.fire({});
@@ -11599,7 +11741,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 								LOG(("Parvane: AUTOGROUPJOIN превью: фото группы %1x%2")
 									.arg(image.width()).arg(image.height()));
 							}
-						});
+						}, p.avatarKey);
 					}
 					if (p.alreadyMember) {
 						LOG(("Parvane: AUTOGROUPJOIN join → ok %1 (уже участник)").arg(p.groupId));

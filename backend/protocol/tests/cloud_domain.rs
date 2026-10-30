@@ -437,3 +437,59 @@ proptest! {
         prop_assert_eq!(from_snapshot.purged_blobs(), s1.purged_blobs());
     }
 }
+
+/// A0006-1: граница эпохи в записи отзыва/смены эпохи. Операция и снимок прежней эпохи позже границы
+/// отвергаются клиентом, до границы остаются в силе; запись без границы (старый клиент) проверки не вводит.
+#[test]
+fn epoch_boundary_rejects_old_epoch_after_cut() {
+    use parvane_protocol::domain::{
+        new_container, new_epoch_key, no_groups, seal_op, seal_snapshot, sign_grant, sign_revoke, sign_revoke_at, sign_rotate_at, Author, ContainerAccess,
+        Grantee,
+    };
+    use parvane_protocol::pb::parvane::core::v2::GrantLevel;
+    use parvane_protocol::sign::generate_signing_key;
+    let (a, b) = (generate_signing_key(), generate_signing_key());
+    let (ka, kb) = (a.verifying_key().to_bytes(), b.verifying_key().to_bytes());
+    let res = move |k: &[u8; 32]| -> Option<Author> {
+        if *k == ka {
+            Some(Author::new("alice@local", "a1"))
+        } else if *k == kb {
+            Some(Author::new("bob@local", "b1"))
+        } else {
+            None
+        }
+    };
+    let (container, genesis) = new_container(&a, "local", parvane_protocol::domain::cloud::DOMAIN_NAME, "alice@local", 1).unwrap();
+    let mut acc = ContainerAccess::from_genesis(&genesis, &res).unwrap();
+    let bob = Grantee::User("bob@local".into());
+    acc.apply(&sign_grant(&a, &acc, &bob, GrantLevel::Write, 2).unwrap(), &res, &no_groups).unwrap();
+    let key1 = new_epoch_key();
+    let with_seq = |seq: u64| {
+        let mut op = seal_op(&b, &acc.container, 1, &key1, b"x", 3).unwrap();
+        op.seq = seq;
+        op
+    };
+    assert!(acc.check_op_author(&with_seq(9), &res, &no_groups).is_ok(), "до отзыва граница не задана");
+
+    // Граница 5: операции эпохи 1 с seq <= 5 в силе, позже - нет; снимок - по upto_seq.
+    let mut bounded = acc.clone();
+    bounded.apply(&sign_revoke_at(&a, &bounded, &bob, 4, Some(5)).unwrap(), &res, &no_groups).unwrap();
+    assert_eq!(bounded.epoch, 2);
+    assert!(bounded.check_op_author(&with_seq(5), &res, &no_groups).is_ok());
+    assert_eq!(bounded.check_op_author(&with_seq(6), &res, &no_groups).err(), Some(parvane_protocol::ProtoError::Forbidden));
+    let snap = |upto: u64| seal_snapshot(&b, &container, 1, &key1, upto, b"s", 5).unwrap();
+    assert!(bounded.check_snapshot_author(&snap(5), &res, &no_groups).is_ok());
+    assert_eq!(bounded.check_snapshot_author(&snap(6), &res, &no_groups).err(), Some(parvane_protocol::ProtoError::Forbidden));
+
+    // Смена эпохи с границей действует так же; граница переживает следующую смену.
+    let mut rotated = acc.clone();
+    rotated.apply(&sign_rotate_at(&a, &rotated, 4, Some(7)).unwrap(), &res, &no_groups).unwrap();
+    rotated.apply(&sign_rotate_at(&a, &rotated, 5, Some(20)).unwrap(), &res, &no_groups).unwrap();
+    assert!(rotated.check_op_author(&with_seq(7), &res, &no_groups).is_ok());
+    assert_eq!(rotated.check_op_author(&with_seq(8), &res, &no_groups).err(), Some(parvane_protocol::ProtoError::Forbidden));
+
+    // Запись старого образца без границы: как раньше.
+    let mut legacy = acc.clone();
+    legacy.apply(&sign_revoke(&a, &legacy, &bob, 4).unwrap(), &res, &no_groups).unwrap();
+    assert!(legacy.check_op_author(&with_seq(99), &res, &no_groups).is_ok());
+}

@@ -101,6 +101,7 @@ struct StoredMessage {
     std::int64_t updated_at = 0;
     std::vector<ReactionSummary> reactions;
     bool pinned = false;
+    std::string proof; // core.v2.MessageProof (base64): подпись автора полученного сообщения для жалобы (A0008-2)
     json copies = json::array(); // per-device копии (InboxPush; в sync — пусто)
 
     static StoredMessage fromJson(const json &j) {
@@ -118,6 +119,7 @@ struct StoredMessage {
         m.read = j.value("read", false);
         m.updated_at = j.value("updated_at", std::int64_t(0));
         m.pinned = j.value("pinned", false);
+        m.proof = j.value("proof", std::string());
         if (auto it = j.find("reactions"); it != j.end() && it->is_array()) {
             for (const auto &r : *it) {
                 ReactionSummary rs;
@@ -152,6 +154,9 @@ struct StoredMessage {
         };
         if (reply_to) {
             j["reply_to"] = *reply_to;
+        }
+        if (!proof.empty()) {
+            j["proof"] = proof;
         }
         if (!reactions.empty()) {
             json arr = json::array();

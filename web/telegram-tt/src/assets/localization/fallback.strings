@@ -4133,6 +4133,7 @@
 "ParvaneModReportTitle" = "Messages in «{group}»";
 "ParvaneModReportUnknownGroup" = "a group";
 "ParvaneModReportSummary" = "Report on messages";
+"ParvaneModReportProven" = "Author confirmed by signature";
 "ParvaneModDelete" = "Delete messages";
 "ParvaneModBan" = "Ban in group";
 "ParvaneModDeleted" = "Messages deleted";

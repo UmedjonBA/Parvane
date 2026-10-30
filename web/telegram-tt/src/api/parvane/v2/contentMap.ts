@@ -72,7 +72,9 @@ export type V2Content = {
     // int64 в JSON движка — строкой
     close_ms?: string | number; no_revote?: boolean; shuffle?: boolean; hide_results?: boolean;
   };
-  poll_vote?: { poll?: V2MessageRef; option_indexes?: number[] };
+  poll_vote?: {
+    poll?: V2MessageRef; option_indexes?: number[]; tally?: boolean; counts?: number[]; voters?: number;
+  };
   poll_close?: { poll?: V2MessageRef };
   receipt?: { kind?: string; messages?: V2MessageRef[] };
   edit?: { target?: V2MessageRef; text?: V2Text; location?: V2Location };
@@ -92,7 +94,9 @@ export type V2Content = {
     reason?: string;
     comment?: string;
     text?: string;
-    messages?: { op_id?: string; author?: { address?: string }; text?: string; ts_ms?: string | number }[];
+    messages?: {
+      op_id?: string; author?: { address?: string }; text?: string; ts_ms?: string | number; proof?: string;
+    }[];
   };
   // Режим «усиленная приватность» (L2, FR-036): предпочтение участника
   // личного чата; proto3-JSON опускает `l2: false`
@@ -354,6 +358,10 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
         poll_vote: {
           poll: c.poll ? ref(c.poll) : undefined,
           option_indexes: (c.options as number[] | undefined) || [],
+          // POLL-1: итоги анонимного опроса от автора
+          tally: c.tally || undefined,
+          counts: c.tally ? c.counts || [] : undefined,
+          voters: c.tally ? c.voters || undefined : undefined,
         },
       };
       break;
@@ -393,6 +401,7 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
           text: c.text || undefined,
           messages: c.reported?.map((m) => ({
             op_id: uuidToB64(m.op_id), author: { address: m.author }, text: m.text, ts_ms: String(m.ts * 1000),
+            proof: m.proof || undefined,
           })),
         },
       };
@@ -492,7 +501,12 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
       hide_results: c.poll.hide_results || undefined,
     };
   } else if (c.poll_vote) {
-    out = { kind: 'poll_vote', poll: b64ToUuid(c.poll_vote.poll?.op_id), options: c.poll_vote.option_indexes || [] };
+    out = {
+      kind: 'poll_vote',
+      poll: b64ToUuid(c.poll_vote.poll?.op_id),
+      options: c.poll_vote.option_indexes || [],
+      ...(c.poll_vote.tally ? { tally: true, counts: c.poll_vote.counts || [], voters: c.poll_vote.voters || 0 } : {}),
+    };
   } else if (c.poll_close) {
     out = { kind: 'poll_close', poll: b64ToUuid(c.poll_close.poll?.op_id) };
   } else if (c.chat_mode) {
@@ -541,6 +555,7 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
         author: m.author?.address || '',
         text: m.text || '',
         ts: Math.floor(Number(m.ts_ms || 0) / 1000),
+        proof: m.proof || undefined,
       })).filter((m) => m.op_id && m.author),
     };
   } else if (c.task_response) {

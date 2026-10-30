@@ -428,14 +428,17 @@ static void lifecycleTests() {
             json{{"id", "new"}, {"kind", "file"}, {"name", "b.txt"}, {"trashed", true}, {"trashTop", true}, {"trashedAt", now - kDay}},
         });
         b.purged = json::array({json{{"fileId", "f1"}, {"uploader", r.t.me}}, json{{"fileId", "f2"}, {"uploader", "bob@local"}},
-                                json{{"fileId", "f3"}, {"uploader", r.t.me}}, json{{"fileId", "f4"}, {"uploader", r.t.me}}});
+                                json{{"fileId", "f3"}, {"uploader", r.t.me}}, json{{"fileId", "f4"}, {"uploader", r.t.me}},
+                                json{{"fileId", "f5"}, {"uploader", r.t.me}}});
+        // f5 — uploader назван своим адресом, но это устройство блоб не загружало (запись чужого автора): не стирать
+        for (const auto *own : {"f1", "f3", "f4"}) r.sync.noteOwnBlob(own);
         r.deleteErrors["f3"] = "ERROR_CODE_NOT_FOUND";
         r.deleteErrors["f4"] = "ERROR_CODE_UNAVAILABLE";
         r.sync.ensure(true);
         const auto &ops = r.e.boxes["aa01"].preparedOps;
         check(ops.size() == 1 && ops[0] == json::array({json{{"op", "purge"}, {"id", "old"}, {"at", now}}}),
               "корзина: пролежавшее дольше 30 дней стирается устройством владельца");
-        check(r.deleted == std::vector<std::string>{"f1"}, "сборка блобов: только свои, чужие не трогаются");
+        check(r.deleted == std::vector<std::string>{"f1"}, "сборка блобов: только свои и только загруженные этим устройством");
         const auto gc = r.records.load(kCloudGcRecord);
         check(gc && *gc == json::array({"f1", "f3"}), "стёртое и уже отсутствующее (NOT_FOUND) — в записи; сбой — повтор позже");
         r.sync.syncNow();

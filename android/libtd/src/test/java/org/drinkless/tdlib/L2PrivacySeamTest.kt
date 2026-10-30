@@ -352,6 +352,16 @@ class L2PrivacySeamTest {
         assertTrue("typing в L2-чат ядро не шлёт", source("jni/jni_messages.cpp").contains("if (l2Active(chat)) return;"))
     }
 
+    @Test
+    fun recoveryTelegramCodeIsShownToTheOwnerDevice() {
+        // A0023-1: код сверки с сообщением бота доезжает до уведомления ожидания ключа (RU и EN) и подставляется
+        val text = source("libtd/src/main/java/org/drinkless/tdlib/SeamText.kt")
+        assertTrue(text.contains("\"recovery_waiting_code\" -> if (ru) \"Бот Parvane в Telegram спросит ключ восстановления. Код сверки: %s"))
+        assertTrue(text.contains("Verification code: %s"))
+        assertTrue(source("libtd/src/main/java/org/drinkless/tdlib/Client.kt").contains("SeamText.of(\"recovery_waiting_code\")?.replace(\"%s\", tgCode)"))
+        assertTrue(source("jni/jni_account.cpp").contains("if (!code.empty()) ev[\"code\"] = code;"))
+    }
+
     private fun source(path: String): String =
         listOf(File(path), File("../$path"), File(path.removePrefix("libtd/"))).firstOrNull { it.exists() }?.readText()
             ?: throw AssertionError("нет $path рядом с модулем")

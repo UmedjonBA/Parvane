@@ -40,7 +40,9 @@ import { buildWebPage } from './store';
 import {
   buildOfferEvent, findOfferInPlan, getTaskOfferKind, taskOfferText, taskResponseText,
 } from './taskOffers';
-import { newMessageId, type WireMessageContent, type WirePackRef } from './wire';
+import {
+  newMessageId, type WireMessageContent, type WirePackRef, type WireReportedMessage,
+} from './wire';
 
 type MessageDependencies = {
   getConnection: () => GatewayConnection | undefined;
@@ -139,6 +141,8 @@ const REPORT_COMMENT_MAX = 1024;
 const REPORT_TEXT_MAX = 4096;
 const REPORT_FALLBACK_MAX = 600;
 const REPORT_MEDIA_PLACEHOLDER = '[media]';
+// Предел суммарного размера подписей в жалобе серверу (знаков base64; предел жалобы — 200 КиБ вместе с текстом)
+const REPORT_PROOFS_MAX = 100 * 1024;
 const V2_GROUP_PREFIX = 'v2g:';
 
 // Поля статьи: название в пределах схемы и `text` — для клиентов без окна чтения
@@ -593,6 +597,24 @@ export function createMessageController(deps: MessageDependencies) {
     }
   }
 
+  // POLL-1: автор анонимного опроса группы публикует итоги (счётчики без адресов). Несколько голосов подряд
+  // (и повтор истории при запуске) сливаются в одну публикацию; то же, что уже опубликовано, не шлётся
+  const tallyTimers = new Map<string, number>();
+
+  function scheduleAnonymousTally(uuid: string) {
+    if (tallyTimers.has(uuid)) return;
+    tallyTimers.set(uuid, window.setTimeout(() => {
+      tallyTimers.delete(uuid);
+      const tally = deps.polls.buildTallyToPublish(uuid);
+      const chatId = deps.polls.getChatId(uuid);
+      const groupAddress = chatId ? store().getAddressForId(chatId) : undefined;
+      if (!tally || !groupAddress) return;
+      void publishInner(groupAddress, {
+        kind: 'poll_vote', poll: uuid, options: [], tally: true, counts: tally.counts, voters: tally.voters,
+      }).catch(() => undefined);
+    }, 1500));
+  }
+
   async function sendPoll(chat: ApiChat, newPoll: {
     summary: {
       question: { text: string };
@@ -634,6 +656,7 @@ export function createMessageController(deps: MessageDependencies) {
       author: currentStore.self,
       isPublic: Boolean(newPoll.summary.isPublic),
       isMultiple: Boolean(newPoll.summary.isMultipleChoice),
+      isGroup: currentStore.isGroupAddress(toAddress),
       isQuiz,
       correct: newPoll.correctAnswers,
       solution: newPoll.solution,
@@ -1302,6 +1325,18 @@ export function createMessageController(deps: MessageDependencies) {
       const indices = options.map(Number).filter((value) => !Number.isNaN(value));
       deps.polls.applyVote(uuid, currentStore.self, indices);
       refreshPollMessage(uuid);
+      // POLL-1: голос анонимного опроса группы идёт только автору опроса (не в группу); автор — публикует итоги
+      if (deps.polls.isAnonymousGroup(uuid)) {
+        const author = deps.polls.getAuthor(uuid);
+        if (author === currentStore.self) {
+          scheduleAnonymousTally(uuid);
+          return true;
+        }
+        if (author) {
+          await publishInner(author, { kind: 'poll_vote', poll: uuid, options: indices });
+          return true;
+        }
+      }
       await publishInner(toAddress, { kind: 'poll_vote', poll: uuid, options: indices });
       return true;
     },
@@ -1582,17 +1617,26 @@ export function createMessageController(deps: MessageDependencies) {
       }
       const reason = option.slice(0, -REPORT_SUBMIT_MARK.length);
       const comment = (description || '').slice(0, REPORT_COMMENT_MAX);
-      const reported = messageIds.map((id) => {
+      // Подпись автора (A0008-2): хранится рядом с полученным сообщением; без неё получатель жалобы
+      // видит сообщение «не подтверждённым» (своё сообщение и пересланное без подписи — тоже)
+      const reported = (await Promise.all(messageIds.map(async (id) => {
         const message = currentStore.getMessage(peer.id, id);
         const uuid = currentStore.getUuidForMessage(peer.id, id);
         const author = message?.senderId ? currentStore.getAddressForId(message.senderId) : undefined;
         if (!message || !uuid || !author) return undefined;
         // Без текста (фото, видео, стикер) — пометка: само вложение жалоба не несёт
         const text = message.content.text?.text || REPORT_MEDIA_PLACEHOLDER;
+        const proof = author === currentStore.self ? undefined : (await deps.localState.loadHistoryRecord(uuid))?.proof;
         return {
-          op_id: uuid, author, text: text.slice(0, REPORT_TEXT_MAX), ts: message.date,
+          op_id: uuid, author, text: text.slice(0, REPORT_TEXT_MAX), ts: message.date, proof,
         };
-      }).filter(Boolean);
+      }))).filter(Boolean) as WireReportedMessage[];
+      // Жалоба ограничена по размеру: подписи — лишь пока всё помещается (иначе без них, а не отказ)
+      if (reported.reduce((sum, m) => sum + (m.proof?.length || 0), 0) > REPORT_PROOFS_MAX) {
+        reported.forEach((m) => {
+          delete m.proof;
+        });
+      }
       if (admins.length && reported.length) {
         const groupHex = address.slice(V2_GROUP_PREFIX.length);
         const content: WireMessageContent = {
@@ -1832,6 +1876,7 @@ export function createMessageController(deps: MessageDependencies) {
     rememberSavedGif,
     resetSavedGifs,
     refreshPollMessage,
+    scheduleAnonymousTally,
     refreshTaskOfferMessage,
   };
 }

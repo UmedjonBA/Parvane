@@ -91,10 +91,16 @@ TEXT_KEY = (
     "Никому его не пересылайте: с этим ключом и паролем можно войти в ваш аккаунт."
 )
 TEXT_KEY_ASK = (
-    "Вход в аккаунт {user} в " + APP_NAME + " с нового устройства{client}.\n\n"
+    "Вход в аккаунт {user} в " + APP_NAME + " с нового устройства{client}.{code}\n\n"
     "Если это вы — ответьте на это сообщение ключом восстановления (я присылал его "
     "сюда, в этот чат). После этого на новом устройстве появятся ваши чаты и план.\n\n"
-    "Если входите не вы — ничего не присылайте и смените пароль в " + APP_NAME + "."
+    "Если входите не вы или код не совпадает с кодом на экране вашего устройства — ничего не "
+    "присылайте и смените пароль в " + APP_NAME + "."
+)
+TEXT_KEY_ASK_CODE = "\n\nКод сверки: <b>{code}</b> — он должен совпасть с кодом на экране нового устройства."
+TEXT_KEY_WHICH = (
+    "Сейчас ждут ключ несколько устройств. Ответьте ключом именно на то сообщение, "
+    "код сверки в котором совпадает с кодом на экране вашего устройства."
 )
 TEXT_KEY_OK = "Ключ принят ✅\nВозвращайтесь в " + APP_NAME + " — устройство подключится само."
 TEXT_KEY_BAD = (
@@ -289,12 +295,15 @@ def parse_pull_response(body: bytes) -> list[dict]:
         out.append({
             "id": _first(f, 1, 0), "telegram_id": _first(f, 2, 0), "kind": text(3),
             "user": text(4), "recovery_key": text(5), "client": text(6),
+            "request_id": _first(f, 7, 0), "code": text(8),
         })
     return out
 
 
-def reply_request_body(secret: str, telegram_id: int, text: str) -> bytes:
-    return _field_str(1, secret) + _field_varint(2, telegram_id) + _field_str(3, text)
+def reply_request_body(secret: str, telegram_id: int, text: str, request_id: int = 0) -> bytes:
+    body = _field_str(1, secret) + _field_varint(2, telegram_id) + _field_str(3, text)
+    # A0023-1: номер запроса из сообщения, на которое ответил владелец — ключ достанется только его устройству
+    return body + (_field_varint(4, request_id) if request_id else b"")
 
 
 def parse_reply_response(body: bytes) -> dict:
@@ -323,11 +332,13 @@ def deliver(message: dict) -> None:
     elif message["kind"] == "ask":
         ASKED[int(chat_id)] = time.time()
         client = f" ({html_escape(message['client'])})" if message["client"] else ""
-        tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
-                text=TEXT_KEY_ASK.format(user=user, client=client),
-                reply_markup=json.dumps({
-                    "force_reply": True, "input_field_placeholder": "Ключ восстановления",
-                }))
+        code = TEXT_KEY_ASK_CODE.format(code=html_escape(message["code"])) if message.get("code") else ""
+        sent = tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
+                       text=TEXT_KEY_ASK.format(user=user, client=client, code=code),
+                       reply_markup=json.dumps({
+                           "force_reply": True, "input_field_placeholder": "Ключ восстановления",
+                       }))
+        remember_ask(int(chat_id), int(message.get("request_id") or 0), int((sent or {}).get("message_id") or 0))
     else:
         log.warning("неизвестный вид сообщения сервера: %s", message["kind"])
 
@@ -362,6 +373,8 @@ async def pull_loop():
 
 ASKED: dict[int, float] = {}
 KEY_REPLIES: dict[int, list[float]] = {}
+# telegram_id → {номер запроса устройства: {message_id сообщения-просьбы, at}}
+ASK_REQUESTS: dict[int, dict[int, dict]] = {}
 
 
 def looks_like_recovery_key(text: str) -> bool:
@@ -392,10 +405,32 @@ def anon_id(telegram_id: int) -> str:
     return hashlib.sha256(f"{SECRET}:{telegram_id}".encode()).hexdigest()[:8]
 
 
-async def handle_key_reply(chat_id: int, telegram_id: int, text: str) -> bool:
+def remember_ask(telegram_id: int, request_id: int, message_id: int, now: float | None = None) -> None:
+    """Запомнить, какой запрос устройства какому сообщению бота соответствует."""
+    now = now or time.time()
+    live = {r: v for r, v in ASK_REQUESTS.get(telegram_id, {}).items() if now - v["at"] <= ASK_TTL_S}
+    live[request_id] = {"message_id": message_id, "at": now}
+    ASK_REQUESTS[telegram_id] = live
+
+
+def resolve_ask(telegram_id: int, reply_to_message_id: int = 0, now: float | None = None) -> int | None:
+    """Номер запроса, на который отвечает владелец: по сообщению, на которое он ответил, а без
+    ответа-цитаты — единственный живой запрос. None — неясно, на какой именно (A0023-1)."""
+    now = now or time.time()
+    live = {r: v for r, v in ASK_REQUESTS.get(telegram_id, {}).items() if now - v["at"] <= ASK_TTL_S}
+    if reply_to_message_id:
+        for request_id, v in live.items():
+            if v["message_id"] == reply_to_message_id:
+                return request_id
+    if len(live) == 1:
+        return next(iter(live))
+    return None
+
+
+async def handle_key_reply(chat_id: int, telegram_id: int, text: str, request_id: int = 0) -> bool:
     """Текст владельца — ключ восстановления? True — сервер ждал ключ (ответ боту дан)."""
     try:
-        ok_body, code = await gateway_call(METHOD_TELEGRAM_REPLY, reply_request_body(SECRET, telegram_id, text))
+        ok_body, code = await gateway_call(METHOD_TELEGRAM_REPLY, reply_request_body(SECRET, telegram_id, text, request_id))
     except Exception as error:  # noqa: BLE001
         log.error("gateway недоступен: %s", error)
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_DOWN)
@@ -436,9 +471,14 @@ async def handle_message(message: dict):
     if not text.startswith("/start"):
         # Не команда: возможно, это ключ восстановления в ответ на просьбу бота
         tg_id = int(sender.get("id", 0))
-        if text and looks_like_recovery_key(text) and key_reply_allowed(tg_id) \
-                and await handle_key_reply(chat_id, tg_id, text):
-            return
+        if text and looks_like_recovery_key(text) and key_reply_allowed(tg_id):
+            reply_to = int((message.get("reply_to_message") or {}).get("message_id") or 0)
+            request_id = resolve_ask(tg_id, reply_to)
+            if request_id is None:
+                tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_WHICH)
+                return
+            if await handle_key_reply(chat_id, tg_id, text, request_id):
+                return
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_HELP)
         return
     parts = text.split(maxsplit=1)

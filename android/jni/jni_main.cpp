@@ -299,7 +299,7 @@ void journalReplay() {
         const auto to = m.value("to", "");
         const bool group = m.value("group", false);
         const auto chat = group ? to : (from == self() ? to : from);
-        noteMessage(id, from, chat, m.value("content", json::object()));
+        noteMessage(id, from, chat, m.value("content", json::object()), m.value("proof", std::string()));
         restoreMeta(id, m.value("by", json::object()), m.value("pinned", false));
         auto ev = m;
         ev["replay"] = true; // история с диска: шов не уведомляет
@@ -320,11 +320,12 @@ std::mutex g_capMu;
 std::map<std::string, std::string> g_caps;
 } // namespace
 
-void noteMessage(const std::string &id, const std::string &from, const std::string &chat, const json &content) {
+void noteMessage(const std::string &id, const std::string &from, const std::string &chat, const json &content,
+                 const std::string &proof) {
     if (id.empty()) return;
     rememberBlobCaps(content);
     std::lock_guard<std::mutex> lk(g_msgMu);
-    g_msgs[id] = MsgRow{from, chat, content};
+    g_msgs[id] = MsgRow{from, chat, content, proof};
 }
 
 std::optional<MsgRow> messageRow(const std::string &id) {
@@ -467,7 +468,7 @@ json groupJson(const std::string &address, const json &info) {
         perms[k] = flag(p, k);
     return json{{"group_id", address}, {"name", strOf(info, "name")},
                 {"kind", numOf(info, "kind", 1) == 2 ? "channel" : "group"}, {"created_by", strOf(info, "owner")},
-                {"members", members}, {"avatar", strOf(info, "avatarFileId")},
+                {"members", members}, {"avatar", strOf(info, "avatarFileId")}, {"avatar_key", strOf(info, "avatarKey")},
                 {"about", strOf(info, "about")}, {"default_permissions", perms},
                 {"version", numOf(info, "version", std::uint64_t(0))}, {"pending_requests", numOf(info, "pendingRequests", -1)},
                 {"public_name", strOf(info, "publicName")}, {"is_public", (info.contains("isPublic") && info["isPublic"].is_boolean() && info["isPublic"].get<bool>())},

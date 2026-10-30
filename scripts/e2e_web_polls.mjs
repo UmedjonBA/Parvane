@@ -202,6 +202,8 @@ try {
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await bobSession.page.keyboard.press('Escape');
   await bobSession.page.waitForTimeout(400);
+  // Меню могло закрыться раньше Escape — тогда Escape закрыл и чат: открываем группу снова
+  if (!await bobRevote.isVisible()) await openGroupChat(bobSession.page, groupTitle);
   await bobRevote.click({ button: 'right' });
   await bobSession.page.getByRole('menuitem', { name: 'Reply' }).first()
     .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });

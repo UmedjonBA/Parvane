@@ -140,13 +140,28 @@ pub struct Opened {
     pub op: VerifiedOp,
     pub content: Content,
     pub disposition: Disposition,
+    /// `MessageProof` (исходная подпись автора + сертификат устройства) для жалобы; пусто — слишком велик.
+    pub proof: Vec<u8>,
 }
 
-fn finish(sender: VerifiedDevice, op: VerifiedOp) -> Result<Opened> {
+/// Предел доказательства авторства (совпадает с `ReportedMessage.proof`).
+pub const MAX_PROOF_LEN: usize = 16 * 1024;
+
+/// Собрать доказательство авторства сообщения; пусто, если не помещается в жалобу.
+pub fn message_proof(sender_cert: &SignedDeviceCertificate, op: &SignedOp) -> Vec<u8> {
+    let proof = crate::pb::parvane::core::v2::MessageProof { op: Some(op.clone()), sender: Some(sender_cert.clone()) }.encode_to_vec();
+    if proof.len() > MAX_PROOF_LEN {
+        Vec::new()
+    } else {
+        proof
+    }
+}
+
+fn finish(sender: VerifiedDevice, op: VerifiedOp, proof: Vec<u8>) -> Result<Opened> {
     let mut content: Content = decode_checked(&op.payload, Origin::Client)?;
     let disposition = unknown::content_disposition(&content, &op.header.critical_fields);
     content_guard::sanitize_content(&mut content);
-    Ok(Opened { sender, op, content, disposition })
+    Ok(Opened { sender, op, content, disposition, proof })
 }
 
 /// Открытый сигнал звонка: отправитель проверен, подпись, аудитория и привязка
@@ -243,7 +258,8 @@ pub fn open_sealed_op_mode(
     }
     v.require_audience(me)?;
     seen.insert_once(&seen_key(&[sender.user().as_bytes(), sender.cert.device_id.as_bytes(), &v.header.op_id]))?;
-    finish(sender, v).map(|m| OpenedSealed::Message(Box::new(m)))
+    let proof = message_proof(cert, &op);
+    finish(sender, v, proof).map(|m| OpenedSealed::Message(Box::new(m)))
 }
 
 /// Подписать содержимое группового сообщения (с головой журнала, D-03).
@@ -305,7 +321,8 @@ pub fn open_group(
     }
     v.require_target(&state.group)?;
     let op_key = seen_key(&[sender.user().as_bytes(), sender.cert.device_id.as_bytes(), &v.header.op_id]);
-    let opened = finish(sender, v)?;
+    let proof = message_proof(cert, op);
+    let opened = finish(sender, v, proof)?;
     // Автор вправе писать по журналу (fail-closed) и по типу содержимого (GROUP-2).
     if !state.content_allowed(opened.sender.user(), &opened.content, now_ms) {
         return Err(ProtoError::Forbidden);

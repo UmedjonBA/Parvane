@@ -109,6 +109,21 @@ int main() {
         }
         check(wrong, "importRootBackup: чужой ключ отвергнут");
     }
+    // ── A0023-1: эфемерная пара для ответа владельца через Telegram ────────
+    {
+        const auto pair = v2::fromBase64(v2::engineCall("recoveryTgKeypair").get<std::string>());
+        check(pair.size() == 64, "recoveryTgKeypair: приватный и публичный ключ по 32 байта");
+        const auto other = v2::fromBase64(v2::engineCall("recoveryTgKeypair").get<std::string>());
+        check(pair != other, "recoveryTgKeypair: пары разные");
+        bool rejected = false;
+        try {
+            (void)v2::engineCall("recoveryTgOpen", json{{"secret", v2::toBase64(pair.substr(0, 32))}, {"user", "alice@local"},
+                                                       {"deviceId", "dev1"}, {"sealed", v2::toBase64(std::string(60, 'x'))}});
+        } catch (const v2::EngineError &) {
+            rejected = true;
+        }
+        check(rejected, "recoveryTgOpen: посторонний шифртекст отвергнут");
+    }
     // ── C2-01: планировщик анонимных соединений ───────────────────────────
     {
         v2::AnonPlanner p;
@@ -207,6 +222,17 @@ int main() {
         const auto vb = v2::fromV2(*vv);
         check(vb && (*vb)["poll"] == "0192f0e4-1a2b-7c3d-8e4f-001122334455" && (*vb)["options"] == json::array({1}),
               "poll_vote туда и обратно");
+        // POLL-1: итоги анонимного опроса от автора едут в том же виде (счётчики, без адресов)
+        const json tally = {{"kind", "poll_vote"}, {"poll", "0192f0e4-1a2b-7c3d-8e4f-001122334455"},
+                            {"options", json::array()}, {"tally", true}, {"counts", json::array({3, 0, 2})}, {"voters", 5}};
+        const auto tv = v2::toV2(tally);
+        check(tv && (*tv)["poll_vote"]["tally"] == true && (*tv)["poll_vote"]["counts"] == json::array({3, 0, 2}),
+              "poll_vote tally → v2");
+        const auto tb = v2::fromV2(*tv);
+        check(tb && (*tb)["tally"] == true && (*tb)["counts"] == json::array({3, 0, 2}) && (*tb)["voters"] == 5
+                  && (*tb)["poll"] == "0192f0e4-1a2b-7c3d-8e4f-001122334455",
+              "poll_vote tally туда и обратно");
+        check(!vb->contains("tally"), "обычный голос без tally");
     }
     {
         const json sticker = {{"kind", "sticker"}, {"file_id", "s1"}, {"filename", "😀"},
@@ -300,6 +326,24 @@ int main() {
         const auto report = reportV2 ? v2::fromV2(*reportV2) : std::nullopt;
         check(report && *report == reportV1, "mod_report туда и обратно");
         check(v2::v2Kind(json{{"mod_report", json::object()}}) == "mod_report", "v2Kind: mod_report");
+        // A0008-2: подпись автора (proof) в жалобе переживает туда и обратно
+        auto reportProof = reportV1;
+        reportProof["reported"][0]["proof"] = "AQID";
+        const auto reportProofV2 = v2::toV2(reportProof);
+        check(reportProofV2 && (*reportProofV2)["mod_report"]["messages"][0]["proof"] == "AQID", "mod_report → v2 с подписью автора");
+        const auto reportProofBack = reportProofV2 ? v2::fromV2(*reportProofV2) : std::nullopt;
+        check(reportProofBack && *reportProofBack == reportProof, "mod_report с подписью туда и обратно");
+        // Событие движка с подписью: интерпретатор отдаёт её клиенту для хранения рядом с сообщением
+        const auto signedIn = v2::interpretDirect(json{{"type", "direct"}, {"opId", "op-9"}, {"from", "eve@local"}, {"chat", "eve@local"},
+                                                       {"tsMs", 1700000000000LL}, {"proof", "AQID"},
+                                                       {"content", {{"text", {{"text", "привет"}}}}}}, "me@local");
+        check(signedIn.kind == v2::Incoming::Kind::Message && signedIn.proof == "AQID", "interpretDirect: подпись автора из события");
+        parvane::StoredMessage stored;
+        stored.id = "op-9";
+        stored.proof = "AQID";
+        check(parvane::StoredMessage::fromJson(stored.toJson()).proof == "AQID", "StoredMessage: подпись переживает журнал");
+        check(!v2::verifyMessageProof("0192f0e4-1a2b-7c3d-8e4f-001122334455", "eve@local", "x", "", "AQID") && !v2::verifyMessageProof("x", "eve@local", "x", "", ""),
+              "verifyMessageProof: мусор вместо подписи — нет");
         // Опросы: срок, без переголосования, перемешивание, скрытые итоги — как web
         const json pollV1{{"kind", "poll"}, {"question", "Куда?"}, {"options", json::array({"лес", "море"})}, {"close_ms", 1800000000000LL},
                           {"no_revote", true}, {"shuffle", true}, {"hide_results", true}};
@@ -753,6 +797,44 @@ int main() {
                   && !v2::validateModReport(json{{"kind", "text"}}, "dave@local", members, lookup)
                   && !v2::validateModReport(json::array(), "dave@local", members, lookup),
               "жалоба: битая группа, не жалоба, не объект — без карточки");
+    }
+
+    // A0008-2: сообщения нет в своей истории — принимаем только с подписью автора; без неё отбрасываем
+    {
+        const std::string hex = "00112233445566778899aabbccddeeff";
+        const auto group = v2::groupAddress(hex);
+        const auto members = [&](const std::string &) { return std::vector<std::string>{"admin@local", "dave@local", "erin@local"}; };
+        const auto lookup = [&](const std::string &op) -> std::optional<v2::ReportLocalMessage> {
+            if (op == "own") return v2::ReportLocalMessage{group, "erin@local", "из истории"};
+            return std::nullopt;
+        };
+        const auto content = json{{"kind", "mod_report"},
+                                  {"report_group", {{"domain", "local"}, {"id", v2::hexToB64(hex)}}},
+                                  {"reported", json::array({{{"op_id", "own"}, {"author", "erin@local"}},
+                                                            {{"op_id", "signed"}, {"author", "erin@local"}, {"text", "подписано"}, {"proof", "good"}},
+                                                            {{"op_id", "forged"}, {"author", "erin@local"}, {"text", "подделка"}, {"proof", "bad"}},
+                                                            {{"op_id", "nosig"}, {"author", "erin@local"}, {"text", "без подписи"}},
+                                                            {{"op_id", "stranger"}, {"author", "frank@local"}, {"text", "чужой"}, {"proof", "good"}},
+                                                            {{"op_id", "media"}, {"author", "dave@local"}, {"text", "[media]"}, {"proof", "good"}}})}};
+        auto asked = std::vector<std::string>();
+        const auto verifier = [&](const std::string &op, const std::string &author, const std::string &text, const std::string &g,
+                                  const std::string &proof) {
+            asked.push_back(op + "|" + author + "|" + text + "|" + g);
+            return proof == "good";
+        };
+        const auto checked = v2::validateModReport(content, "dave@local", members, lookup, verifier);
+        check(checked && checked->opIds == std::vector<std::string>{"own", "signed", "media"}
+                  && checked->provenOpIds == std::vector<std::string>{"signed", "media"},
+              "жалоба: нет в истории — только с верной подписью автора-участника");
+        check(checked && checked->text.find("подписано") != std::string::npos && checked->text.find("подделка") == std::string::npos
+                  && checked->text.find("без подписи") == std::string::npos && checked->text.find("чужой") == std::string::npos,
+              "жалоба: в карточке подписанное, без подделок и неподтверждённого");
+        check(std::find(asked.begin(), asked.end(), "signed|erin@local|подписано|" + hex) != asked.end()
+                  && std::find(asked.begin(), asked.end(), "media|dave@local||" + hex) != asked.end(),
+              "жалоба: проверяющему уходят op_id, автор, текст (вложение — пустой) и группа");
+        const auto without = v2::validateModReport(content, "dave@local", members, lookup);
+        check(without && without->opIds == std::vector<std::string>{"own"} && without->provenOpIds.empty(),
+              "жалоба: без проверяющего — только своя история, как раньше");
     }
 
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);

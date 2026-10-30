@@ -300,6 +300,14 @@ message GroupEnvelopeInner {
 }
 
 // Расшифрованное Megolm-сообщение группы.
+// Доказательство авторства сообщения (REPORT-1, A0008-2): исходная подписанная операция и сертификат
+// устройства-автора. Получатель хранит его рядом с сообщением и прикладывает к жалобе; проверяющий
+// (админ группы, администратор сервера) сам проверяет цепочку «корень → SSK → устройство → подпись».
+message MessageProof {
+  SignedOp op = 1;
+  SignedDeviceCertificate sender = 2;
+}
+
 message GroupPlaintext {
   SignedDeviceCertificate sender = 1;
   SignedOp op = 2;

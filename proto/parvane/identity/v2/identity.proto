@@ -723,8 +723,16 @@ message RecoveryTgRequestRequest {
   // Владелец просит прислать сообщение ещё раз. Без этого повторный запрос
   // того же устройства, пока прежний ждёт ответа, новое сообщение не шлёт.
   bool again = 2;
+  // A0023-1: эфемерный открытый ключ X25519 устройства. Есть — ответ владельца
+  // запечатывается на него (`RecoveryTgPollResponse.sealed_key`), и запрос не
+  // подменить чужим; нет (прежние клиенты) — ключ отдаётся открытым текстом.
+  bytes eph_public = 3 [(parvane.core.v2.max_len) = 32];
 }
-message RecoveryTgRequestResponse {}
+message RecoveryTgRequestResponse {
+  // Короткий код сверки (6 цифр, назначает сервер). Бот показывает владельцу тот же код
+  // в просьбе ответить ключом; владелец отвечает только на сообщение с кодом своего экрана.
+  string code = 1 [(parvane.core.v2.max_len) = 16];
+}
 
 message RecoveryTgPollRequest {
   // Ключ получен и применён — стереть его на сервере.
@@ -735,6 +743,11 @@ message RecoveryTgPollResponse {
   string recovery_key = 1 [(parvane.core.v2.max_len) = 64];
   // Запрос ещё ждёт ответа (false — истёк или не создавался).
   bool pending = 2;
+  // Ответ владельца, запечатанный на `eph_public` запроса (`enc ‖ шифртекст`, см.
+  // `parvane_protocol::recovery_tg`); пусто — владелец ещё не ответил либо запрос без ключа.
+  bytes sealed_key = 3 [(parvane.core.v2.max_len) = 128];
+  // Код сверки запроса (как в сообщении бота) — для экрана после перезапуска клиента.
+  string code = 4 [(parvane.core.v2.max_len) = 16];
 }
 
 message TelegramOutMessage {
@@ -745,6 +758,10 @@ message TelegramOutMessage {
   string user = 4 [(parvane.core.v2.max_len) = 255];
   string recovery_key = 5 [(parvane.core.v2.max_len) = 64];
   string client = 6 [(parvane.core.v2.max_len) = 64];
+  // Для "ask": номер запроса устройства и код сверки с экрана устройства. Бот
+  // возвращает номер в ответе, чтобы ключ достался именно этому устройству.
+  uint64 request_id = 7;
+  string code = 8 [(parvane.core.v2.max_len) = 16];
 }
 message TelegramPullRequest {
   string secret = 1 [(parvane.core.v2.max_len) = 256];
@@ -760,6 +777,9 @@ message TelegramReplyRequest {
   string secret = 1 [(parvane.core.v2.max_len) = 256];
   int64 telegram_id = 2;
   string text = 3 [(parvane.core.v2.max_len) = 256];
+  // Номер запроса из сообщения бота ("ask"), на которое ответил владелец. 0 — старый бот:
+  // принимается, только если у аккаунта ровно один живой запрос.
+  uint64 request_id = 4;
 }
 message TelegramReplyResponse {
   // "ok" | "bad_key" | "no_request" | "no_account"

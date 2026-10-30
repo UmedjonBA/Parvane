@@ -232,12 +232,13 @@ message EphemeralGroupTypingRequest {
   // Шифртекст на ключ конверта эпохи.
   bytes payload = 3 [(parvane.core.v2.max_len) = 256];
   bytes nonce = 4 [(parvane.core.v2.max_len) = 16];
-  // Ключ отправки эпохи над "parvane/v2/group-typing\0" ‖ domain ‖ "\0" ‖ id ‖
-  // epoch(u64 BE) ‖ nonce ‖ payload.
+  // Ключ отправки эпохи над "parvane/v2/group-typing2\0" ‖ domain ‖ "\0" ‖ id ‖
+  // epoch(u64 BE) ‖ nonce ‖ channel_id ‖ payload (A0015-2). Прежняя подпись
+  // "parvane/v2/group-typing\0" без channel_id принимается сервером от старых клиентов.
   bytes epoch_signature = 5 [(parvane.core.v2.max_len) = 64];
   // Канал «печатает» группы: id, выведенный клиентами из ключа конверта эпохи
-  // (ephemeral.rs, `EphChannel::group_typing`). Подписью не покрыт: payload
-  // запечатан на ключ канала с AAD = id, перенос в другой канал не расшифруется.
+  // (ephemeral.rs, `EphChannel::group_typing`). Покрыт подписью (group-typing2);
+  // payload запечатан на ключ канала с AAD = id.
   bytes channel_id = 6 [(parvane.core.v2.max_len) = 16];
 }
 message EphemeralGroupTypingResponse {}

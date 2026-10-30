@@ -271,4 +271,44 @@ std::optional<std::string> decrypt(const std::string &ciphertext, const std::str
     return decryptV1(ciphertext, *key, *nonce);
 }
 
+
+// ── Фото частной группы (A0089-5): см. blobcrypt.h ──
+namespace {
+std::string groupPhotoLabel(const char *label, const std::string &secret) {
+    const std::string input = std::string("parvane/group-avatar/v1/") + label + secret;
+    unsigned char out[EVP_MAX_MD_SIZE];
+    unsigned int len = 0;
+    if (EVP_Digest(input.data(), input.size(), out, &len, EVP_sha256(), nullptr) != 1 || len != 32) return {};
+    return std::string(reinterpret_cast<const char *>(out), len);
+}
+} // namespace
+
+std::optional<GroupPhotoKeys> deriveGroupPhotoKeys(const std::string &secret32) {
+    if (secret32.size() != 32) return std::nullopt;
+    GroupPhotoKeys k;
+    k.capability = groupPhotoLabel("cap", secret32);
+    k.key = groupPhotoLabel("key", secret32);
+    k.nonce = groupPhotoLabel("nonce", secret32).substr(0, 12);
+    if (k.capability.size() != 32 || k.key.size() != 32 || k.nonce.size() != 12) return std::nullopt;
+    return k;
+}
+
+std::string newGroupPhotoSecret() {
+    std::string s(32, '\0');
+    if (RAND_bytes(reinterpret_cast<unsigned char *>(&s[0]), 32) != 1) return {};
+    return s;
+}
+
+std::string sealGroupPhoto(const std::string &plain, const std::string &secret32) {
+    const auto k = deriveGroupPhotoKeys(secret32);
+    if (!k || plain.empty()) return {};
+    return encryptWithKey(plain, k->key, k->nonce);
+}
+
+std::optional<std::string> openGroupPhoto(const std::string &cipher, const std::string &secret32) {
+    const auto k = deriveGroupPhotoKeys(secret32);
+    if (!k) return std::nullopt;
+    return decrypt(cipher, parvane::crypto::b64encode(k->key), parvane::crypto::b64encode(k->nonce));
+}
+
 } // namespace parvane::blobcrypt

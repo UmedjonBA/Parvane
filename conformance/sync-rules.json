@@ -1379,9 +1379,9 @@
       ],
       "fallbackField": "text",
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (mod_report), store.ts (buildModReportContent), messages.ts (reportMessages: причина → комментарий → админам группы либо администратору сервера), components/middle/message/ModReportCard.tsx; сценарий scripts/e2e_web_reports.mjs",
-        "desktop": "desktop/parvane-core/src/v2_content.cpp (toV2/fromV2: mod_report ↔ v2, как web), include/parvane/messenger.h (contentText: показ полем text), src/v2_session_account.cpp (submitReport — жалоба администратору сервера: sealReport движка ключом report_public_key, identity.report.submit); tdesktop parvane_client.cpp (ReportMessages из штатного окна api_report.cpp; CardMarkup — карточка у админа «Удалить сообщения»/«Заблокировать в группе», HandleCardButton pv:moddel/pv:modban); тест tests/v2_tests.cpp (mod_report туда и обратно; карточка mod_report показывается текстом)",
-        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt reportChat (штатное окно жалобы X: причина → комментарий → карточкой mod_report админам группы с правом удалять/банить, иначе — администратору сервера ParvaneCore.submitReport → android/jni/jni_groups.cpp nativeSubmitReport → Session::submitReport, identity.report.submit); у админа — карточка с кнопками «Удалить сообщения»/«Заблокировать» после проверки своими данными (nativeCheckModReport → validateModReport ядра; android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt); без проверки — поле text (ParvaneStore.kt contentFrom) — тест CardsTest.modReportOnlyWhenCheckedAndArticleAlways (JVM); сценарий android/tgx_account_flow.sh шаг 1 (жалоба X на чат через штатный путь ReportChat → администратору сервера, «жалоба (spam) → sent»)"
+        "web": "web/telegram-tt/src/api/parvane/v2/contentMap.ts (mod_report), store.ts (buildModReportContent), messages.ts (reportMessages: причина → комментарий → админам группы либо администратору сервера; подпись автора из истории — `proof`), v2/engine.ts (verifyMessageProof), components/middle/message/ModReportCard.tsx (A0008-2: «Автор подтверждён подписью»); тест store.test.ts (mod report proofs); сценарий scripts/e2e_web_reports.mjs",
+        "desktop": "desktop/parvane-core/src/v2_content.cpp (toV2/fromV2: mod_report ↔ v2, как web), include/parvane/messenger.h (contentText: показ полем text), src/v2_session_account.cpp (submitReport — жалоба администратору сервера: sealReport движка ключом report_public_key, identity.report.submit); tdesktop parvane_client.cpp (ReportMessages из штатного окна api_report.cpp; CardMarkup — карточка у админа «Удалить сообщения»/«Заблокировать в группе», HandleCardButton pv:moddel/pv:modban); тест tests/v2_tests.cpp (mod_report туда и обратно; карточка mod_report показывается текстом); A0008-2: StoredMessage.proof, validateModReport(…, verifyProof), v2::verifyMessageProof, parvane_client.cpp (CheckModReport, ReportMessages прикладывает подпись) — тест v2_tests.cpp («жалоба: нет в истории — только с верной подписью автора-участника»)",
+        "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/Client.kt reportChat (штатное окно жалобы X: причина → комментарий → карточкой mod_report админам группы с правом удалять/банить, иначе — администратору сервера ParvaneCore.submitReport → android/jni/jni_groups.cpp nativeSubmitReport → Session::submitReport, identity.report.submit); у админа — карточка с кнопками «Удалить сообщения»/«Заблокировать» после проверки своими данными (nativeCheckModReport → validateModReport ядра; android/libtd/src/main/java/org/drinkless/tdlib/Cards.kt); без проверки — поле text (ParvaneStore.kt contentFrom) — тест CardsTest.modReportOnlyWhenCheckedAndArticleAlways (JVM); A0008-2: подпись автора — jni MsgRow.proof/nativeMessageProof, Client.kt reportChat прикладывает, nativeCheckModReport принимает не из истории только с верной подписью; сценарий android/tgx_account_flow.sh шаг 1 (жалоба X на чат через штатный путь ReportChat → администратору сервера, «жалоба (spam) → sent»)"
       }
     },
     {
@@ -1402,6 +1402,7 @@
       "bundleMagic": "PVKB",
       "bundleKdfSalt": "parvane/v2/key-bundle",
       "grantBundleKeyField": "bk",
+      "bundleSeqField": "seq",
       "methods": [
         "identity.recovery.tg_send",
         "identity.recovery.tg_request",
@@ -1514,6 +1515,49 @@
         "web": "web/telegram-tt/src/api/parvane/v2/address.ts (destFor, federationReason), v2/controller.ts (call(..., dest), groupDomainOf, requestForeignTokens, setBlobDomain), v2/cloud.ts (domainOf), v2/bridge.ts (identity.profile.resolve по доменам), provider.ts (поиск ник@сервер), messages.ts + components/main/Main.tsx (причины); тесты v2/address.test.ts, сценарий scripts/run_web_federation_e2e.sh; сервер — parvane-integration --test v2_federation_live",
         "desktop": "parvane-core include/parvane/v2_engine.h (OutRequest.dest), v2_link.h (Connection::request с dest), v2_control.h (Control::call с dest), src/v2_session.cpp (groupDomainLocked, requestForeignTokensLocked), src/v2_content.cpp (Media.blob_domain); tdesktop parvane_client.cpp (NoteFederationFailure — причины отказа строками EN+RU). Сценарий desktop/verify_federation.sh (зелёный 19 окт 2026) (два локальных сервера a.parvane.test/b.parvane.test с шардом federation на тестовом транспорте, по клиенту на сервер, личное письмо в обе стороны; verify_lib.sh — порты стека PV_NATS_PORT/PV_GW_WS_PORT/PV_GW_TCP_PORT, PV_FEDERATION_PEERS). tests/v2_tests.cpp проверяет только перенос blob_domain",
         "android": "spec 031: адресат запросов (dest_domain), жетоны сервера адресата, домены групп и блобов — общее ядро (те же исходники parvane_core, что desktop: v2_session, v2_account, v2_control, v2_content; сторож android/tools/check_core_sources.sh); профиль адреса чужого сервера — android/jni/jni_account.cpp nativeResolve (resolveProfiles по доменам, federation_error); причины отказа (FEDERATION_UNAVAILABLE, DOMAIN_BLOCKED/REFUSED/UNREACHABLE, SERVER_KEY_CHANGED) — событие federation_error JNI (noteFederationFailure в jni_main.cpp: отправка и профиль адреса) → понятный тост на языке UI (tgx-overlay .../parvane/sections/AccountController.kt AccountUi.federationToast, не чаще раза в 10 с на причину); сценарий android/tgx_federation_flow.sh — два стека (a/b.parvane.test), переписка X ↔ desktop через федерацию в обе стороны, недоступный сервер → отказ «unreachable»"
+      }
+    },
+    {
+      "id": "GPHOTO-1",
+      "title": "Фото частной группы v2 шифруется (PVB2 + capability); секрет — в записи журнала SetInfo.avatar_key",
+      "recordField": "SetInfo.avatar_key",
+      "secretBytes": 32,
+      "derive": {
+        "domain": "parvane/group-avatar/v1/",
+        "labels": [
+          "cap",
+          "key",
+          "nonce"
+        ],
+        "hash": "SHA-256",
+        "nonceBytes": 12
+      },
+      "vector": {
+        "secretHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        "capability": "19cd81b03ce6d287485c70b72571c74a2edac62fd5418737d7edc6b55f8411e3",
+        "key": "9afab6a58c6441be27962c9ee7ac075a4506252d4d840268bd3a33601e665e42",
+        "nonce": "af79ac7f89284db688e10912"
+      },
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/groupPhoto.ts (deriveGroupPhotoKeys), media.ts (uploadGroupPhoto, rememberGroupPhoto), provider.ts (editChatPhoto), v2/controller.ts (setGroupInfo, toWireGroupInfo)",
+        "desktop": "desktop/parvane-core/src/blobcrypt.cpp (deriveGroupPhotoKeys, sealGroupPhoto, openGroupPhoto), v2_session.cpp (uploadGroupPhoto, downloadGroupPhoto, changeGroup set_info_patch), v2_session_groups.cpp (setGroupInfo); tdesktop parvane_client_groups.cpp (SetGroupPhoto, ClearGroupPhoto, FetchPublicImage), parvane_client.cpp (DownloadAvatar, g_groupAvatarKeys)",
+        "android": "android/jni/jni_groups.cpp (nativeGroupSetPhoto, nativeGroupSetInfo), jni_messages.cpp (nativeDownloadFile, kind group_photo), jni_main.cpp (avatar_key в сведениях группы); Client.kt (syncGroups — загрузка по avatar_key)"
+      }
+    },
+    {
+      "id": "POLL-1",
+      "title": "Анонимный опрос группы: голос идёт только автору опроса личным сообщением, автор публикует итоги без адресов",
+      "contentKind": "poll_vote",
+      "tallyFields": {
+        "tally": "PollVote.tally = 3",
+        "counts": "PollVote.counts = 4 (по вариантам)",
+        "voters": "PollVote.voters = 5"
+      },
+      "maxTally": 10000000,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/polls.ts (isAnonymousGroup, isTallyOnly, applyTally, buildTallyToPublish), sync.ts (handlePollContent), messages.ts (sendPollVote, scheduleAnonymousTally), v2/contentMap.ts",
+        "desktop": "desktop/parvane-core/include/parvane/poll.h (isAnonymousGroup, routeVote, readTally, tallyContent), src/v2_content.cpp (poll_vote tally); tdesktop parvane_client.cpp (RoutePollVote, SchedulePollTally, handlePollService, MirrorPollVotes)",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/PollStore.kt (route, applyTally, tallyToPublish), Client.kt (onPollService, pollVote, scheduleTally), ParvaneStore.kt (polls.register)"
       }
     }
   ]

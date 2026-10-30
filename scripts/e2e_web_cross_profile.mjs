@@ -194,6 +194,12 @@ try {
   await stopDesktop(desktop);
   desktop = spawnDesktop(desktopWorkdir, libraryShim, { PARVANE_AUTOLOGIN: `${alice}:${PASSWORD}` });
   await waitDesktopLog(desktopWorkdir, /v2: готов/, 90000, desktop);
+  // Настройки после правки профиля остаются открытыми — вернуться к списку чатов
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (await bobWeb.page.locator('#telegram-search-input').isVisible()) break;
+    await bobWeb.page.keyboard.press('Escape');
+    await bobWeb.page.waitForTimeout(500);
+  }
   await openPrivateChatStrict(bobWeb.page, alice);
   await sendText(bobWeb.page, `after-profile-${suffix}`);
   // Телефон bob десктоп-alice не получает (P-19) — в маркере поле пустое

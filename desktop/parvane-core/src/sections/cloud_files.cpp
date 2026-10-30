@@ -14,6 +14,8 @@ namespace {
 constexpr const char *kDriveBucket = "BLOB_BUCKET_DRIVE";
 constexpr std::size_t kCapabilityBytes = 32;
 constexpr std::size_t kNonceBytes = 12;
+// Старший бит поля эпохи записи владельца: далее случайный nonce (A0066-2); без бита — старый формат.
+constexpr std::uint32_t kOwnerRandomNonceFlag = 0x80000000u;
 constexpr std::size_t kMoveChunkFiles = 20;
 constexpr std::int64_t kMoveChunkBytes = 64LL * 1024 * 1024;
 constexpr int kLinkAddRounds = 6;
@@ -348,6 +350,7 @@ json CloudFiles::upload(const UploadRequest &request) {
         }
         const auto mime = request.mime.empty() ? std::string("application/octet-stream") : request.mime;
         const auto uploaded = blobs.upload(request.bytes, mime);
+        drive_.sync().noteOwnBlob(str(uploaded, "fileId"));
         std::optional<json> thumb;
         if (request.thumb && !request.thumb->jpeg.empty()) {
             try {
@@ -355,6 +358,7 @@ json CloudFiles::upload(const UploadRequest &request) {
                 const auto cipher = blobs.sealWithKey(request.thumb->jpeg, d::fromBase64(str(uploaded, "key")), nonce);
                 const auto capability = blobs.randomBytes(kCapabilityBytes);
                 const auto fileId = blobs.uploadCipher(cipher, capability);
+                drive_.sync().noteOwnBlob(fileId);
                 thumb = json{{"fileId", fileId}, {"nonce", d::toBase64(nonce)}, {"capability", d::toBase64(capability)},
                              {"width", request.thumb->width}, {"height", request.thumb->height}};
             } catch (const std::exception &e) {
@@ -440,6 +444,7 @@ std::pair<std::string, std::string> CloudFiles::copyDriveBlob(const std::string 
                                                    {"capability_hash", d::toBase64(blobs.sha256(fresh))}});
     const auto copyId = str(copy, "fileId", "file_id");
     if (copyId.empty()) throw d::BusError("ERROR_CODE_INVALID");
+    drive_.sync().noteOwnBlob(copyId);
     return {copyId, d::toBase64(fresh)};
 }
 
@@ -706,10 +711,21 @@ std::optional<json> CloudFiles::readLink(const json &reply, const std::map<std::
         return info;
     }
     if (wire.size() <= 4) return info;
-    const auto key = keys.find(readU32be(wire));
+    const auto head = readU32be(wire);
+    const bool randomNonce = (head & kOwnerRandomNonceFlag) != 0;
+    const auto key = keys.find(std::int64_t(head & ~kOwnerRandomNonceFlag));
     if (key == keys.end()) return info;
-    const auto plain = drive_.blobs().openWithKey(wire.substr(4), key->second,
-                                                  d::toBase64(labelNonce(kOwnerNonceLabel, id)));
+    std::string nonce;
+    std::string cipher;
+    if (randomNonce) {
+        if (wire.size() <= 4 + kNonceBytes) return info;
+        nonce = wire.substr(4, kNonceBytes);
+        cipher = wire.substr(4 + kNonceBytes);
+    } else {
+        nonce = labelNonce(kOwnerNonceLabel, id);
+        cipher = wire.substr(4);
+    }
+    const auto plain = drive_.blobs().openWithKey(cipher, key->second, d::toBase64(nonce));
     if (!plain) return info;
     const auto record = parseOwnerRecord(*plain);
     if (!record) return info;
@@ -834,8 +850,9 @@ json CloudFiles::createLink(const std::string &container, const std::optional<st
         const auto key = toBase64Url(linkKey);
         const std::pair<std::string, std::string> source{container, node.value_or("")};
         const auto ownerPlain = ownerRecordJson(plan.name, plan.kind, key, epoch, source).dump();
-        const auto ownerRecord = u32be(std::uint32_t(epoch))
-            + blobs.sealWithKey(ownerPlain, d::fromBase64(driveKey), labelNonce(kOwnerNonceLabel, linkId));
+        const auto ownerNonce = blobs.randomBytes(kNonceBytes);
+        const auto ownerRecord = u32be(std::uint32_t(epoch) | kOwnerRandomNonceFlag) + ownerNonce
+            + blobs.sealWithKey(ownerPlain, d::fromBase64(driveKey), ownerNonce);
         if (ownerRecord.size() > kLinkOwnerRecordMaxBytes) throw d::BusError("ERROR_CODE_INVALID");
         const auto published = call("cloud.link.publish", json{{"link_id", linkId}, {"manifest", d::toBase64(manifest)},
                                                                {"owner_record", d::toBase64(ownerRecord)}});

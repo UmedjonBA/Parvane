@@ -314,7 +314,7 @@ export function createGroupController(deps: GroupDependencies) {
   // с change_info в правах по умолчанию
   async function setGroupInfo(
     groupId: string,
-    patch: { about?: string; avatarFileId?: string; clearAvatar?: boolean },
+    patch: { about?: string; avatarFileId?: string; avatarKey?: string; clearAvatar?: boolean },
   ) {
     const v2 = v2Of(groupId);
     const current = v2?.groupInfo(groupId);
@@ -328,6 +328,7 @@ export function createGroupController(deps: GroupDependencies) {
     return v2.setGroupInfo(groupId, {
       about: patch.about,
       avatarFileId: patch.clearAvatar ? '' : (patch.avatarFileId || undefined),
+      avatarKey: patch.clearAvatar ? '' : patch.avatarKey,
     });
   }
 

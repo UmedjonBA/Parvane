@@ -41,7 +41,7 @@ import { bytesToBase64 } from './v2/base64';
 import {
   createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
-import { loadProtocol } from './v2/engine';
+import { loadProtocol, verifyMessageProof } from './v2/engine';
 import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
 import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
 import { createMessageIndex } from './v2/messageIndex';
@@ -569,6 +569,7 @@ const syncController = createSyncController({
   media: mediaService,
   polls,
   refreshPollMessage: refreshPollMessageFromSync,
+  onAnonymousVote: (uuid) => messageController.scheduleAnonymousTally(uuid),
   taskOffers,
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
@@ -605,6 +606,9 @@ const v2Controller = createV2Controller({
     if (!content.file_id || (content.size_bytes || 0) > L2_PREFETCH_MAX_BYTES) return;
     mediaService.rememberKeys(content);
     void mediaService.downloadBlob(content.file_id).catch(() => undefined);
+  },
+  rememberGroupPhoto: (fileId, avatarKey) => {
+    void mediaService.rememberGroupPhoto(fileId, avatarKey);
   },
   getToken: () => token,
   getSelf: () => store.self,
@@ -741,6 +745,7 @@ const connectionController = createConnectionController({
     // P-18: presence — по конкретным собеседникам, подписка при появлении адреса
     store.onUserRegistered = (peerId) => subscribePresence(peerId);
     store.getLangString = getLangStringByKey;
+    store.verifyProof = verifyMessageProof;
     // Смена ника (spec 026): прежние адреса ведут в прежние чаты
     for (const [from, to] of localState.loadRenames()) store.registerUserRename(from, to);
   },
@@ -2197,21 +2202,37 @@ const methods = {
   hideChatJoinRequest: groupController.hideChatJoinRequest,
   hideAllChatJoinRequests: groupController.hideAllChatJoinRequests,
   checkChatInvite: groupController.checkChatInvite,
-  // Фото группы — как аватар пользователя: открытый объект cloud
-  // (publicAccess), затем group.setinfo{avatar_file_id}; без файла — снять
+  // Фото частной группы шифруется как вложение (PVB2 + capability), секрет уходит в запись журнала
+  // group.setinfo{avatar_file_id, avatar_key} (A0089-5, GPHOTO-1); публичной группы — открытый объект, как аватар
+  // пользователя. Прежний блоб удаляется (если он наш — иначе сервер откажет, это не ошибка)
   async editChatPhoto({ chatId, photo }: { chatId: string; accessHash?: string; photo?: File | ApiPhoto }) {
     const groupId = store.getAddressForId(chatId);
     if (!groupId || !connection) return undefined;
-    if (!photo) return groupController.setGroupInfo(groupId, { clearAvatar: true });
+    const known = store.getGroupInfo(groupId);
+    const previous = known?.avatar;
+    const dropPrevious = <T>(result: T, fresh?: string): T => {
+      if (result && previous && previous !== fresh) {
+        void getV2Bridge().control.deleteBlob(previous).catch(() => undefined);
+      }
+      return result;
+    };
+    if (!photo) return dropPrevious(await groupController.setGroupInfo(groupId, { clearAvatar: true }));
     if (!(photo instanceof File)) return undefined;
-    const { fileId } = await mediaService.uploadBlob(
-      photo,
-      photo.name || 'group.jpg',
-      photo.type || 'image/jpeg',
-      { publicAccess: true },
-    );
-    mediaService.cacheBlob(fileId, photo, photo.type || 'image/jpeg');
-    return groupController.setGroupInfo(groupId, { avatarFileId: fileId });
+    const mimeType = photo.type || 'image/jpeg';
+    if (known?.public_name) {
+      const { fileId } = await mediaService.uploadBlob(
+        photo,
+        photo.name || 'group.jpg',
+        mimeType,
+        { publicAccess: true },
+      );
+      mediaService.cacheBlob(fileId, photo, mimeType);
+      return dropPrevious(await groupController.setGroupInfo(groupId, { avatarFileId: fileId }), fileId);
+    }
+    const { fileId, avatarKey } = await mediaService.uploadGroupPhoto(photo, mimeType);
+    const result = await groupController.setGroupInfo(groupId, { avatarFileId: fileId, avatarKey });
+    if (!result) void getV2Bridge().control.deleteBlob(fileId).catch(() => undefined);
+    return dropPrevious(result, fileId);
   },
   // tt зовёт при удалении «не текущего» фото профиля; у группы фото одно
   deleteProfilePhotos() {
@@ -3135,6 +3156,8 @@ const methods = {
       isPending,
       // spec 015: бот спрашивает ключ восстановления у владельца в Telegram
       telegram: telegramRecovery.state,
+      // A0023-1: код сверки с сообщением бота (владелец отвечает ключом только на сообщение с тем же кодом)
+      telegramCode: telegramRecovery.state === 'waiting' ? v2Controller.getTelegramCode() || undefined : undefined,
       code: isPending ? linkRuntime.code : undefined,
       // v2: у аккаунта есть журнал устройств, а это устройство в него не входит —
       // кроме линковки, есть вход по ключу восстановления и сброс личности

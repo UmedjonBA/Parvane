@@ -2223,6 +2223,7 @@
 "ParvaneModReportTitle" = "Сообщения в «{group}»";
 "ParvaneModReportUnknownGroup" = "группе";
 "ParvaneModReportSummary" = "Жалоба на сообщения";
+"ParvaneModReportProven" = "Автор подтверждён подписью";
 "ParvaneModDelete" = "Удалить сообщения";
 "ParvaneModBan" = "Заблокировать в группе";
 "ParvaneModDeleted" = "Сообщения удалены";

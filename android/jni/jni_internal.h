@@ -100,8 +100,10 @@ struct MsgRow {
     std::string from;
     std::string chat; // собеседник либо "v2g:<hex>"
     json content;
+    std::string proof; // core.v2.MessageProof (base64): подпись автора полученного сообщения для жалобы (A0008-2)
 };
-void noteMessage(const std::string &id, const std::string &from, const std::string &chat, const json &content);
+void noteMessage(const std::string &id, const std::string &from, const std::string &chat, const json &content,
+                 const std::string &proof = std::string());
 [[nodiscard]] std::optional<MsgRow> messageRow(const std::string &id);
 void updateMessageContent(const std::string &id, const json &content);
 void forgetMessage(const std::string &id);

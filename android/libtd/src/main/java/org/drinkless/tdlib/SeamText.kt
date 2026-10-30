@@ -69,6 +69,9 @@ internal object SeamText {
             else "A new device asks to be linked to your account. Verification code:\n%s\nConfirm in Settings → Devices if the codes match."
         // ключ восстановления через Telegram (RECOVER-2)
         "recovery_waiting" -> if (ru) "Бот Parvane в Telegram спросит ключ восстановления — ответьте ему ключом." else "The Parvane bot in Telegram will ask for your recovery key — reply with it."
+        // A0023-1: код сверки — тот же, что в сообщении бота; отвечать ключом можно только на сообщение с таким кодом
+        "recovery_waiting_code" -> if (ru) "Бот Parvane в Telegram спросит ключ восстановления. Код сверки: %s — ответьте ключом на сообщение бота с таким же кодом; если код другой, ключ не присылайте."
+            else "The Parvane bot in Telegram will ask for your recovery key. Verification code: %s — reply with the key to the bot message showing the same code; if the code differs, do not send the key."
         "recovery_joining" -> if (ru) "Ключ получен, устройство подключается…" else "Key received, connecting this device…"
         "recovery_done" -> if (ru) "Устройство подключено по ключу восстановления." else "Device connected with the recovery key."
         "recovery_failed" -> if (ru) "Не удалось войти по ключу восстановления" else "Could not sign in with the recovery key"

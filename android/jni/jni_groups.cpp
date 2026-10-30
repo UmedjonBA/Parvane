@@ -136,7 +136,16 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetInfo(
     const auto s = v2ReadyForSend();
     if (!s) return jreply(env, jfail("failed"));
     try {
+        std::string previous;
+        if (clearAvatar == JNI_TRUE) {
+            const auto known = s->groupInfo(gid);
+            if (known.is_object() && known.contains("avatarFileId") && known["avatarFileId"].is_string()) previous = known["avatarFileId"].get<std::string>();
+        }
         const bool ok = s->setGroupInfo(gid, nm, ab, clearAvatar == JNI_TRUE ? std::optional<std::string>(std::string()) : std::nullopt);
+        // Снятое фото удаляется с сервера (GPHOTO-1)
+        if (ok && !previous.empty()) {
+            if (const auto c = control()) { try { c->deleteBlob(previous); } catch (const std::exception &) {} }
+        }
         return jreply(env, ok ? json{{"ok", true}} : jfail("forbidden"));
     } catch (const std::exception &e) {
         return jreply(env, jfail(errorCodeOf(e), e.what()));
@@ -152,10 +161,31 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGroupSetPhoto(
         const auto c = control();
         const auto s = v2ReadyForSend();
         if (!c || !s) throw std::runtime_error("сессия не готова");
-        const auto fileId = c->uploadBlob(bytes, /*isPublic=*/true);
-        if (fileId.empty()) throw std::runtime_error("блоб не принят");
         const auto gid = jstr(env, groupId);
-        if (!s->setGroupInfo(gid, std::nullopt, std::nullopt, fileId)) return jreply(env, jfail("forbidden"));
+        // Публичная группа — открытый блоб, как раньше; частная — PVB2 + capability, секрет в записи журнала (GPHOTO-1)
+        const auto known = s->groupInfo(gid);
+        const auto textOf = [&](const char *k) {
+            return known.is_object() && known.contains(k) && known[k].is_string() ? known[k].get<std::string>() : std::string();
+        };
+        const bool isPublicGroup = !textOf("publicName").empty();
+        const auto previous = textOf("avatarFileId");
+        std::string fileId, secret;
+        if (isPublicGroup) {
+            fileId = c->uploadBlob(bytes, /*isPublic=*/true);
+        } else {
+            auto up = s->uploadGroupPhoto(bytes);
+            fileId = std::move(up.fileId);
+            secret = std::move(up.secretB64);
+        }
+        if (fileId.empty()) throw std::runtime_error("блоб не принят");
+        if (!s->setGroupInfo(gid, std::nullopt, std::nullopt, fileId, secret)) {
+            try { c->deleteBlob(fileId); } catch (const std::exception &) {}
+            return jreply(env, jfail("forbidden"));
+        }
+        // Прежний блоб — с сервера (чужой сервер не отдаст на удаление — не ошибка)
+        if (!previous.empty() && previous != fileId) {
+            try { c->deleteBlob(previous); } catch (const std::exception &) {}
+        }
         writeMediaCache(fileId, bytes);
         return jreply(env, json{{"ok", true}, {"file_id", fileId}, {"path", mediaWorkCopy(fileId, bytes)}});
     } catch (const std::exception &e) {
@@ -404,6 +434,12 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSubmitReport(J
     try { return jout(env, s->submitReport(report)); } catch (const std::exception &) { return jout(env, "failed"); }
 }
 
+// Подпись автора полученного сообщения (core.v2.MessageProof, base64) для жалобы; "" — нет (своё, пересланное, старое).
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeMessageProof(JNIEnv *env, jclass, jstring uuid) {
+    const auto row = messageRow(jstr(env, uuid));
+    return jout(env, row ? row->proof : std::string());
+}
+
 // Карточка жалобы админу группы (mod_report): проверена по своим данным — группа, участник, сообщения из своей
 // истории (ревью 21 окт). → {"group","ops":[…],"authors":[…],"text"} | null.
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCheckModReport(JNIEnv *env, jclass, jstring contentJson, jstring reporter) {
@@ -416,9 +452,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCheckModReport
                 if (!row) return std::nullopt;
                 return parvane::v2::ReportLocalMessage{row->chat, row->from,
                                                         row->content.value("text", row->content.value("caption", std::string()))};
-            });
+            },
+            // Сообщения нет в своей истории — подпись автора из жалобы (A0008-2)
+            [](const std::string &opId, const std::string &author, const std::string &text, const std::string &groupHex,
+               const std::string &proof) { return parvane::v2::verifyMessageProof(opId, author, text, groupHex, proof); });
         if (!check) return jout(env, "null");
-        return jreply(env, json{{"group", check->group}, {"ops", check->opIds}, {"authors", check->authors}, {"text", check->text}});
+        return jreply(env, json{{"group", check->group}, {"ops", check->opIds}, {"authors", check->authors},
+                                {"proven", check->provenOpIds}, {"text", check->text}});
     } catch (const std::exception &e) {
         LOGE("nativeCheckModReport: %s", e.what());
         return jout(env, "null");

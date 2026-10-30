@@ -676,7 +676,7 @@ impl Client {
         if !c.access.can_admin(&me, &no_groups) {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
-        let revoke = dom::sign_revoke(&self.acc, &c.access, &dom::Grantee::User(user.to_string()), ts_ms)?;
+        let revoke = dom::sign_revoke_at(&self.acc, &c.access, &dom::Grantee::User(user.to_string()), ts_ms, Some(c.head_seq))?;
         c.access.apply(&revoke, &resolve, &no_groups)?;
         c.grants.push(revoke.clone());
         c.keys.insert(c.access.epoch, dom::new_epoch_key());
@@ -695,7 +695,7 @@ impl Client {
         if !c.access.can_admin(&me, &no_groups) || c.keys.get(c.access.epoch).is_none() {
             return Err(ClientError::Proto(ProtoError::Forbidden));
         }
-        let rotate = dom::sign_rotate(&self.acc, &c.access, ts_ms)?;
+        let rotate = dom::sign_rotate_at(&self.acc, &c.access, ts_ms, Some(c.head_seq))?;
         c.access.apply(&rotate, &resolve, &no_groups)?;
         c.grants.push(rotate.clone());
         c.keys.insert(c.access.epoch, dom::new_epoch_key());

@@ -142,6 +142,7 @@ const ProfileInfo = ({
     openStickerSet,
     openPrivacySettingsNoticeModal,
     loadMoreProfilePhotos,
+    loadFullUser,
     openUniqueGiftBySlug,
     openProfileRatingModal,
   } = getActions();
@@ -189,6 +190,15 @@ const ProfileInfo = ({
   }, [profileColorOption, theme, collectibleEmojiStatus]);
 
   const hasPatternBackground = profileColorSet?.bgColors || backgroundEmoji;
+
+  // Профиль открыт (в том числе повторно: правая колонка остаётся
+  // смонтированной) — перечитать сведения (bio, дата рождения, цвет, личный
+  // канал): PrivateChatInfo шапки грузит их один раз при монтировании, и без
+  // этого открытая позже карточка показывала устаревшее (SC-011)
+  const hasUser = Boolean(user);
+  useEffect(() => {
+    if (hasUser && isActive !== false) loadFullUser({ userId: peerId });
+  }, [hasUser, peerId, isActive]);
 
   useEffect(() => {
     if (photos.length - currentPhotoIndex <= LOAD_MORE_THRESHOLD) {

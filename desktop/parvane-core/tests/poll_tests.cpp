@@ -38,6 +38,46 @@ int main() {
     closed.closed = true;
     check(!acceptsVote(closed, false, 1), "закрытый опрос голосов не принимает");
     check(parvane::poll::isClosedAt(timed, 100000) && !parvane::poll::isClosedAt(timed, 99999), "закрыт с наступлением срока");
+    // POLL-1: анонимный опрос группы
+    using parvane::poll::VoteCtx;
+    using parvane::poll::routeVote;
+    check(parvane::poll::isAnonymousGroup(true, false, "alice@local") && !parvane::poll::isAnonymousGroup(true, true, "alice@local")
+        && !parvane::poll::isAnonymousGroup(false, false, "alice@local") && !parvane::poll::isAnonymousGroup(true, false, ""),
+        "анонимный — только в группе, не публичный и с известным автором");
+    {
+        const auto t = parvane::poll::readTally(json::parse(R"({"kind":"poll_vote","tally":true,"counts":[2,-1,1.5,99999999999,7],"voters":-3})"), 3);
+        check(t.counts.size() == 3 && t.counts[0] == 2 && t.counts[1] == 0 && t.counts[2] == 0 && t.voters == 0, "итоги: размер по вариантам, отрицательные и дробные — 0");
+        const auto big = parvane::poll::readTally(json::parse(R"({"counts":[99999999999],"voters":99999999999})"), 1);
+        check(big.counts[0] == 10000000 && big.voters == 10000000, "итоги: потолок");
+        const auto c = parvane::poll::tallyContent("p1", parvane::poll::Tally{{3, 0, 2}, 5});
+        check(parvane::poll::isTallyContent(c) && c["counts"].size() == 3 && c["voters"] == 5 && c.dump().find('@') == std::string::npos,
+            "итоги автора: без адресов");
+        check(!parvane::poll::isTallyContent(json::parse(R"({"kind":"poll_vote","options":[1]})")), "обычный голос — не итоги");
+    }
+    {
+        VoteCtx x;
+        x.anonGroup = true; x.self = "bob@local"; x.author = "alice@local";
+        x.voter = "carol@local"; x.inPollChat = true;
+        check(!routeVote(x).count, "участник: чужой голос из группы анонимного опроса не считается");
+        x.voter = "bob@local";
+        check(routeVote(x).count && !routeVote(x).publish, "участник: свой голос считается, итоги не публикует");
+        x.inPollChat = false; x.to = "alice@local";
+        check(routeVote(x).count, "участник: свой голос автору в личку (журнал) считается");
+        x.to = "dave@local";
+        check(!routeVote(x).count, "участник: свой голос не автору не считается");
+        VoteCtx a;
+        a.anonGroup = true; a.self = "alice@local"; a.author = "alice@local";
+        a.voter = "carol@local"; a.to = "alice@local"; a.inPollChat = false;
+        check(!routeVote(a).count, "автор: голос в личку не от участника группы отброшен");
+        a.voterIsMember = true;
+        check(routeVote(a).count && routeVote(a).publish, "автор: голос участника в личку — считает и публикует итоги");
+        a.to = "erin@local";
+        check(!routeVote(a).count, "автор: чужое личное сообщение (не ему) не считается");
+        a.to = "alice@local"; a.anonGroup = false;
+        check(!routeVote(a).count, "публичный опрос: голос в личку не принимается");
+        a.inPollChat = true;
+        check(routeVote(a).count && !routeVote(a).publish, "публичный опрос: голос в группе считается как раньше");
+    }
     std::printf("=== итог: %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

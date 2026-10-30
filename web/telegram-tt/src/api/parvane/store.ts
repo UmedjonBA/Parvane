@@ -119,6 +119,8 @@ export class ParvaneStore {
   // Строка локализации для служебных сообщений чата. Устанавливает провайдер:
   // импорт lang-провайдера в этот слой тянет UI-модули
   getLangString?: (key: string) => string | undefined;
+  // Проверка подписи автора сообщения из жалобы (движок v2, A0008-2); не задана — подписи не подтверждаются
+  verifyProof?: (proof: string, opId: string, author: string, text: string, groupHex: string) => boolean;
 
   // Адрес чата с учётом перевода группы из v1 в v2 (T180)
   canonicalAddress(address: string) {
@@ -243,15 +245,34 @@ export class ParvaneStore {
     )));
     if (!info || !isMember) return fallback;
     const groupChatId = this.getIdForAddress(group, 'group');
-    const messages: { uuid: string; authorId: string; text: string; date: number }[] = [];
+    const messages: { uuid: string; authorId: string; text: string; date: number; isProven?: boolean }[] = [];
     for (const m of content.reported.slice(0, REPORT_MAX_MESSAGES)) {
       if (!m.op_id || messages.some((q) => q.uuid === m.op_id)) continue;
       const key = this.msgKeyByUuid.get(m.op_id);
-      if (!key || key.chatId !== groupChatId) continue;
-      const local = this.messageByIdByChatId.get(key.chatId)?.get(key.id);
-      if (!local?.senderId) continue;
+      if (key) {
+        // Свой кэш — источник истины: автор и текст берём из него, а не из жалобы
+        if (key.chatId !== groupChatId) continue;
+        const local = this.messageByIdByChatId.get(key.chatId)?.get(key.id);
+        if (!local?.senderId) continue;
+        messages.push({
+          uuid: m.op_id, authorId: local.senderId, text: local.content.text?.text || '[media]', date: local.date,
+        });
+        continue;
+      }
+      // Сообщения нет в своей истории (A0008-2): принимаем, только если приложена подпись автора — цепочка
+      // «корень → устройство → операция», `op_id`, автор, текст и группа беседы сходятся с подписанными.
+      // Без подписи (или с неверной) сообщение отбрасывается: действия карточки к нему не применить
+      const author = m.author ? this.canonicalAddress(m.author) : '';
+      const isMemberAuthor = Boolean(author && info.members.some((q) => (
+        q.role !== 'banned' && this.canonicalAddress(q.address) === author
+      )));
+      const signedText = m.text === '[media]' ? '' : m.text;
+      const groupHex = group.slice(V2_GROUP_ADDRESS_PREFIX.length);
+      if (!isMemberAuthor || !m.proof || !this.verifyProof?.(m.proof, m.op_id, m.author, signedText, groupHex)) {
+        continue;
+      }
       messages.push({
-        uuid: m.op_id, authorId: local.senderId, text: local.content.text?.text || '[media]', date: local.date,
+        uuid: m.op_id, authorId: this.getIdForAddress(author, 'user'), text: m.text, date: m.ts, isProven: true,
       });
     }
     if (!messages.length) return fallback;

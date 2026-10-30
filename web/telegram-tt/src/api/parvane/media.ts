@@ -26,6 +26,7 @@ import {
 import { createCipherSource } from './cloudBlobs';
 import { apiEntitiesToWire } from './entities';
 import { getV2Bridge } from './gateway';
+import { deriveGroupPhotoKeys, GROUP_PHOTO_SECRET_LEN, newGroupPhotoSecret } from './groupPhoto';
 import { encodeThumbnail, shrinkImage, thumbBytes } from './mediaThumb';
 import {
   buildWireEvent,
@@ -624,7 +625,46 @@ export function createMediaService(deps: MediaDependencies) {
     return { blob: new Blob([plain as BlobPart], { type: mimeType }), mimeType };
   }
 
+  // Фото частной группы (A0089-5): ключи выводятся из секрета журнала группы асинхронно — скачивание ждёт
+  const groupPhotoReady = new Map<string, Promise<void>>();
+
+  // Запомнить секрет фото группы из журнала (или только что созданный): вывести ключ PVB2 и capability
+  function rememberGroupPhoto(fileId: string, secretB64: string, mimeType = 'image/jpeg') {
+    if (!fileId || !secretB64 || groupPhotoReady.has(fileId)) return groupPhotoReady.get(fileId);
+    let secret: Uint8Array;
+    try {
+      secret = base64ToBytes(secretB64);
+    } catch {
+      return undefined;
+    }
+    if (secret.length !== GROUP_PHOTO_SECRET_LEN) return undefined;
+    const ready = deriveGroupPhotoKeys(secret).then((keys) => {
+      keysByFileId.set(fileId, { keyB64: bytesToBase64(keys.key), nonceB64: bytesToBase64(keys.nonce) });
+      capByFileId.set(fileId, bytesToBase64(keys.capability));
+      mimeByFileId.set(fileId, mimeType);
+    }).catch(() => {
+      groupPhotoReady.delete(fileId);
+    });
+    groupPhotoReady.set(fileId, ready);
+    return ready;
+  }
+
+  // Загрузка фото частной группы: PVB2 под ключами из нового секрета + capability; секрет уходит в SetInfo
+  async function uploadGroupPhoto(file: Blob, mimeType: string) {
+    requireConnection();
+    const v2 = deps.getV2?.();
+    if (!v2?.isReady()) throw new Error('стек v2 не готов — фото группы не загружено');
+    const secret = newGroupPhotoSecret();
+    const keys = await deriveGroupPhotoKeys(secret);
+    const fileId = await uploadAttachmentStream(v2, createCipherSource(file, keys.key, keys.nonce), keys.capability);
+    const avatarKey = bytesToBase64(secret);
+    await rememberGroupPhoto(fileId, avatarKey, mimeType);
+    cacheBlob(fileId, file, mimeType);
+    return { fileId, avatarKey };
+  }
+
   async function downloadBlob(fileId: string): Promise<CachedMedia> {
+    await groupPhotoReady.get(fileId);
     const cap = capTransportFor(fileId);
     if (cap) return downloadBlobByCap(cap.v2, fileId, cap.capability);
     return downloadBlobOwned(fileId);
@@ -1490,7 +1530,9 @@ export function createMediaService(deps: MediaDependencies) {
     messageToWireContent,
     rememberKeys,
     rememberCapability,
+    rememberGroupPhoto,
     uploadBlob,
+    uploadGroupPhoto,
   };
 }
 

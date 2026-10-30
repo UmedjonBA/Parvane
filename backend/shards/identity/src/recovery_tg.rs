@@ -36,23 +36,41 @@ struct OutMessage {
     user: String,
     recovery_key: Zeroizing<String>,
     client: String,
+    /// Для "ask": запрос устройства, которому адресована просьба.
+    request_id: u64,
+    code: String,
     created: i64,
     sent_at: i64,
 }
 
+/// Запрос ключа с одного нового устройства. На аккаунт их несколько (до `PENDING_MAX`):
+/// ответ владельца привязан к номеру запроса, а не к «последнему запросившему» (A0023-1).
 struct Pending {
+    request_id: u64,
     device_id: String,
     created: i64,
+    /// Эфемерный открытый ключ X25519 устройства; пусто — прежний клиент (ответ открытым текстом).
+    eph_public: Vec<u8>,
+    /// Код сверки: назначает сервер, показывают бот и экран устройства.
+    code: String,
+    /// Ответ владельца, запечатанный на `eph_public`.
+    sealed: Option<Vec<u8>>,
+    /// Открытый ключ: прежние клиенты без `eph_public` и аккаунты без копии ключей (см. `peek_reply`).
     recovery_key: Option<Zeroizing<String>>,
 }
 
 #[derive(Default)]
 struct State {
     next_id: u64,
+    next_request: u64,
     out: Vec<OutMessage>,
-    /// Пользователь → запрос ключа с нового устройства (один на аккаунт).
-    pending: HashMap<String, Pending>,
+    /// Пользователь → запросы ключа с новых устройств.
+    pending: HashMap<String, Vec<Pending>>,
 }
+
+/// Сколько устройств аккаунта могут одновременно ждать ключ. Больше — отказ, а не вытеснение:
+/// знающий пароль не должен выдавливать запрос владельца.
+const PENDING_MAX: usize = 3;
 
 fn state() -> MutexGuard<'static, State> {
     static STATE: OnceLock<Mutex<State>> = OnceLock::new();
@@ -66,10 +84,14 @@ fn wake() -> &'static Notify {
 
 fn purge(st: &mut State, now: i64) {
     st.out.retain(|m| now - m.created < OUT_TTL_SECS);
-    st.pending.retain(|_, p| now - p.created < REQUEST_TTL_SECS);
+    for list in st.pending.values_mut() {
+        list.retain(|p| now - p.created < REQUEST_TTL_SECS);
+    }
+    st.pending.retain(|_, list| !list.is_empty());
 }
 
-fn enqueue(st: &mut State, telegram_id: i64, kind: &'static str, user: &str, recovery_key: &str, client: &str, now: i64) -> bool {
+#[allow(clippy::too_many_arguments)]
+fn enqueue(st: &mut State, telegram_id: i64, kind: &'static str, user: &str, recovery_key: &str, client: &str, request: (u64, &str), now: i64) -> bool {
     if st.out.len() >= OUT_MAX {
         return false;
     }
@@ -81,6 +103,8 @@ fn enqueue(st: &mut State, telegram_id: i64, kind: &'static str, user: &str, rec
         user: user.to_string(),
         recovery_key: Zeroizing::new(recovery_key.to_string()),
         client: client.chars().filter(|c| !c.is_control()).take(CLIENT_LABEL_MAX).collect(),
+        request_id: request.0,
+        code: request.1.to_string(),
         created: now,
         sent_at: 0,
     });
@@ -93,65 +117,128 @@ pub(crate) fn send_key(telegram_id: i64, user: &str, recovery_key: &str, now: i6
     let mut st = state();
     purge(&mut st, now);
     st.out.retain(|m| !(m.kind == KIND_KEY && m.user == user));
-    let queued = enqueue(&mut st, telegram_id, KIND_KEY, user, recovery_key, "", now);
+    let queued = enqueue(&mut st, telegram_id, KIND_KEY, user, recovery_key, "", (0, ""), now);
     drop(st);
     wake().notify_waiters();
     queued
 }
 
-/// Новое устройство просит ключ: бот спросит владельца. Повторный запрос того
-/// же устройства, пока прежний ждёт ответа, сообщение не дублирует (клиент
-/// повторяет запрос при каждом переподключении); `again` — владелец сам
-/// попросил прислать сообщение ещё раз.
-pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client: &str, again: bool, now: i64) -> bool {
+/// Шесть цифр кода сверки, не совпадающих с кодами других живых запросов аккаунта.
+fn fresh_code(taken: &[Pending]) -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    loop {
+        let code = format!("{:06}", rng.gen_range(0..1_000_000u32));
+        if !taken.iter().any(|p| p.code == code) {
+            return code;
+        }
+    }
+}
+
+/// Новое устройство просит ключ: бот спросит владельца. Возвращает код сверки (`None` — очередь
+/// бота полна либо у аккаунта уже `PENDING_MAX` живых запросов других устройств).
+/// Запрос привязан к устройству: чужой запрос ни замещает, ни гасит его (A0023-1).
+/// Повтор того же устройства с тем же ключом сообщение не дублирует (клиент повторяет запрос
+/// при каждом переподключении); `again` — владелец сам попросил прислать сообщение ещё раз.
+/// Другой эфемерный ключ у того же устройства — клиент перезапущен: запрос начинается заново.
+pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client: &str, eph_public: &[u8], again: bool, now: i64) -> Option<String> {
     let mut st = state();
     purge(&mut st, now);
-    if !again && st.pending.get(user).is_some_and(|p| p.device_id == device_id) {
-        return true;
+    let list = st.pending.entry(user.to_string()).or_default();
+    let mut resend: Option<(u64, String)> = None;
+    if let Some(i) = list.iter().position(|p| p.device_id == device_id) {
+        if list[i].eph_public == eph_public {
+            if !again {
+                return Some(list[i].code.clone());
+            }
+            resend = Some((list[i].request_id, list[i].code.clone()));
+        } else {
+            let old = list.remove(i).request_id;
+            st.out.retain(|m| !(m.kind == KIND_ASK && m.request_id == old));
+        }
     }
-    // Запрос другого устройства, пока прежний жив: ответ владельца нельзя
-    // привязать к конкретному запросу, поэтому гасим оба (иначе ключ достанется
-    // тому, кто запросил последним). Владелец повторит вход, когда пожелает.
-    if st.pending.get(user).is_some_and(|p| p.device_id != device_id) {
-        st.pending.remove(user);
-        st.out.retain(|m| !(m.kind == KIND_ASK && m.user == user));
-        return false;
-    }
-    st.pending.insert(user.to_string(), Pending { device_id: device_id.to_string(), created: now, recovery_key: None });
-    st.out.retain(|m| !(m.kind == KIND_ASK && m.user == user));
-    let queued = enqueue(&mut st, telegram_id, KIND_ASK, user, "", client, now);
+    let (request_id, code) = match resend {
+        Some(r) => r,
+        None => {
+            let list = st.pending.entry(user.to_string()).or_default();
+            if list.len() >= PENDING_MAX {
+                if list.is_empty() {
+                    st.pending.remove(user);
+                }
+                return None;
+            }
+            let code = fresh_code(list);
+            st.next_request += 1;
+            let request_id = st.next_request;
+            st.pending.entry(user.to_string()).or_default().push(Pending {
+                request_id,
+                device_id: device_id.to_string(),
+                created: now,
+                eph_public: eph_public.to_vec(),
+                code: code.clone(),
+                sealed: None,
+                recovery_key: None,
+            });
+            (request_id, code)
+        }
+    };
+    st.out.retain(|m| !(m.kind == KIND_ASK && m.request_id == request_id));
+    let queued = enqueue(&mut st, telegram_id, KIND_ASK, user, "", client, (request_id, &code), now);
     drop(st);
     wake().notify_waiters();
-    queued
+    queued.then_some(code)
 }
 
 /// Аккаунт ждёт ответа владельца (есть запрос нового устройства).
+#[cfg(test)]
 pub(crate) fn has_request(user: &str, now: i64) -> bool {
     let mut st = state();
     purge(&mut st, now);
     st.pending.contains_key(user)
 }
 
-/// Проверенный ключ из ответа владельца — запросившему устройству.
-pub(crate) fn store_reply(user: &str, recovery_key: &str, now: i64) -> bool {
-    let mut st = state();
-    purge(&mut st, now);
-    match st.pending.get_mut(user) {
-        Some(p) => {
-            p.recovery_key = Some(Zeroizing::new(recovery_key.to_string()));
-            true
-        }
-        None => false,
-    }
+/// Устройство, на запрос которого отвечает владелец.
+pub(crate) struct Target {
+    pub request_id: u64,
+    pub device_id: String,
+    pub eph_public: Vec<u8>,
 }
 
-/// Действующее устройство аккаунта без копии ключей (аккаунт создан до spec 015)
-/// забирает ключ из ответа владельца, чтобы завести копию: тогда новое устройство
-/// войдёт по ней, и прежние устройства не придётся отзывать.
+/// Запрос, который закрывает ответ владельца: по номеру из сообщения бота; без номера (старый бот) —
+/// единственный живой запрос аккаунта, при нескольких — никакой.
+pub(crate) fn target(user: &str, request_id: u64, now: i64) -> Option<Target> {
+    let mut st = state();
+    purge(&mut st, now);
+    let list = st.pending.get(user)?;
+    let p = if request_id == 0 {
+        if list.len() != 1 {
+            return None;
+        }
+        &list[0]
+    } else {
+        list.iter().find(|p| p.request_id == request_id)?
+    };
+    Some(Target { request_id: p.request_id, device_id: p.device_id.clone(), eph_public: p.eph_public.clone() })
+}
+
+/// Проверенный ключ из ответа владельца — запросившему устройству: запечатанный на его ключ либо
+/// (прежний клиент, аккаунт без копии ключей) открытым текстом.
+pub(crate) fn store_reply(user: &str, request_id: u64, sealed: Option<Vec<u8>>, plain: Option<&str>, now: i64) -> bool {
+    let mut st = state();
+    purge(&mut st, now);
+    let Some(p) = st.pending.get_mut(user).and_then(|l| l.iter_mut().find(|p| p.request_id == request_id)) else { return false };
+    p.sealed = sealed;
+    p.recovery_key = plain.map(|k| Zeroizing::new(k.to_string()));
+    true
+}
+
+/// Действующее устройство аккаунта без копии ключей (аккаунт создан до spec 015) забирает ключ
+/// из ответа владельца, чтобы завести копию: тогда новое устройство войдёт по ней, и прежние
+/// устройства не придётся отзывать. Открытый ключ хранится только в этом случае и у прежних клиентов.
 pub(crate) fn peek_reply(user: &str, now: i64) -> String {
     let mut st = state();
     purge(&mut st, now);
-    st.pending.get(user).and_then(|p| p.recovery_key.as_ref()).map(|k| k.to_string()).unwrap_or_default()
+    st.pending.get(user).and_then(|l| l.iter().find_map(|p| p.recovery_key.as_ref())).map(|k| k.to_string()).unwrap_or_default()
 }
 
 const GROUPS: usize = 10;
@@ -205,21 +292,35 @@ pub(crate) fn key_candidates(text: &str) -> Vec<String> {
     out
 }
 
-/// Опрос нового устройства: (ключ или пусто, запрос ещё жив). `done` — ключ
-/// применён, стереть.
-pub(crate) fn poll(user: &str, device_id: &str, done: bool, now: i64) -> (String, bool) {
+/// Ответ на опрос нового устройства.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct PollView {
+    /// Открытый ключ (только запрос без эфемерного ключа).
+    pub recovery_key: String,
+    pub sealed: Vec<u8>,
+    pub pending: bool,
+    pub code: String,
+}
+
+/// Опрос нового устройства. `done` — ключ применён, стереть.
+pub(crate) fn poll(user: &str, device_id: &str, done: bool, now: i64) -> PollView {
     let mut st = state();
     purge(&mut st, now);
-    let mine = st.pending.get(user).is_some_and(|p| p.device_id == device_id);
-    if !mine {
-        return (String::new(), false);
-    }
+    let Some(list) = st.pending.get_mut(user) else { return PollView::default() };
+    let Some(i) = list.iter().position(|p| p.device_id == device_id) else { return PollView::default() };
     if done {
-        st.pending.remove(user);
-        return (String::new(), false);
+        let gone = list.remove(i).request_id;
+        st.out.retain(|m| !(m.kind == KIND_ASK && m.request_id == gone));
+        return PollView::default();
     }
-    let key = st.pending.get(user).and_then(|p| p.recovery_key.as_ref()).map(|k| k.to_string()).unwrap_or_default();
-    (key, true)
+    let p = &list[i];
+    PollView {
+        // Запрос с эфемерным ключом открытым текстом не отдаётся никогда
+        recovery_key: if p.eph_public.is_empty() { p.recovery_key.as_ref().map(|k| k.to_string()).unwrap_or_default() } else { String::new() },
+        sealed: p.sealed.clone().unwrap_or_default(),
+        pending: true,
+        code: p.code.clone(),
+    }
 }
 
 fn take_out(acks: &[u64], now: i64) -> Vec<pb::TelegramOutMessage> {
@@ -238,6 +339,8 @@ fn take_out(acks: &[u64], now: i64) -> Vec<pb::TelegramOutMessage> {
                 user: m.user.clone(),
                 recovery_key: m.recovery_key.to_string(),
                 client: m.client.clone(),
+                request_id: m.request_id,
+                code: m.code.clone(),
             }
         })
         .collect()
@@ -293,7 +396,7 @@ mod tests {
     fn client_label_is_bounded() {
         let mut st = State::default();
         let long = format!("Chrome\n{}", "я".repeat(5000));
-        assert!(enqueue(&mut st, 1, KIND_ASK, "a@x", "", &long, 0));
+        assert!(enqueue(&mut st, 1, KIND_ASK, "a@x", "", &long, (1, "000001"), 0));
         let label = &st.out[0].client;
         assert!(label.chars().count() <= CLIENT_LABEL_MAX && !label.contains('\n'));
     }
@@ -322,52 +425,85 @@ mod tests {
         pull(&[replaced[0].id], 0, now).await;
 
         // Запрос нового устройства: один вопрос, повтор не дублирует
+        let k1 = [1u8; 32];
+        let k2 = [2u8; 32];
         assert!(!has_request("b@x", now));
-        assert!(request_key(22, "b@x", "dev-1", "Chrome, Android", false, now));
+        let code = request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, false, now).expect("код");
+        assert_eq!(code.len(), 6);
         let asks = pull(&[], 0, now + 1).await;
         assert_eq!(asks.len(), 1);
-        // Бот доставил вопрос; переподключение клиента новый вопрос не шлёт
+        assert_eq!((asks[0].code.as_str(), asks[0].request_id > 0), (code.as_str(), true));
+        // Бот доставил вопрос; переподключение клиента новый вопрос не шлёт и код не меняет
         assert!(pull(&[asks[0].id], 0, now + 1).await.is_empty());
-        assert!(request_key(22, "b@x", "dev-1", "Chrome, Android", false, now + 2));
+        assert_eq!(request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, false, now + 2), Some(code.clone()));
         assert!(pull(&[], 0, now + 2).await.is_empty());
-        // «Прислать ещё раз» — шлёт
-        assert!(request_key(22, "b@x", "dev-1", "Chrome, Android", true, now + 2));
+        // «Прислать ещё раз» — шлёт тот же запрос
+        assert_eq!(request_key(22, "b@x", "dev-1", "Chrome, Android", &k1, true, now + 2), Some(code.clone()));
         let again = pull(&[], 0, now + 2).await;
         assert_eq!(again.len(), 1);
+        assert_eq!(again[0].request_id, asks[0].request_id);
         pull(&[again[0].id], 0, now + 2).await;
         assert_eq!((asks[0].kind.as_str(), asks[0].client.as_str()), ("ask", "Chrome, Android"));
         assert!(asks[0].recovery_key.is_empty());
         assert!(has_request("b@x", now + 1));
+        let rid_b = asks[0].request_id;
 
-        // Конкурирующее устройство гасит оба запроса, ключ ему не достаётся
-        assert!(request_key(22, "c@x", "dev-1", "Chrome", false, now));
-        assert!(!request_key(22, "c@x", "dev-2", "Chrome, Android", false, now + 1));
-        assert!(!has_request("c@x", now + 1));
-        assert!(!store_reply("c@x", "KEY-C", now + 2));
+        // A0023-1: запрос другого устройства не замещает и не гасит первый, у него свой код и номер;
+        // ответ владельца достаётся тому, на чей запрос он отвечает
+        let code2 = request_key(22, "b@x", "dev-evil", "Chrome, Android", &k2, false, now + 2).expect("второй запрос");
+        assert_ne!(code2, code);
+        let evil_ask = pull(&[], 0, now + 2).await;
+        assert_eq!(evil_ask.len(), 1);
+        let rid_evil = evil_ask[0].request_id;
+        assert_ne!(rid_evil, rid_b);
+        pull(&[evil_ask[0].id], 0, now + 2).await;
+        // Без номера при двух живых запросах ответ не принимается
+        assert!(target("b@x", 0, now + 3).is_none());
+        let t = target("b@x", rid_b, now + 3).expect("цель");
+        assert_eq!((t.device_id.as_str(), t.eph_public.as_slice()), ("dev-1", &k1[..]));
+        assert!(target("b@x", rid_b + 1000, now + 3).is_none());
+        assert!(store_reply("b@x", rid_b, Some(vec![9; 40]), None, now + 3));
+        // Чужое устройство ничего не получает; тому, чей запрос, — запечатанный ответ, но не открытый
+        assert!(poll("b@x", "dev-evil", false, now + 3).sealed.is_empty());
+        let mine = poll("b@x", "dev-1", false, now + 3);
+        assert_eq!((mine.sealed.as_slice(), mine.recovery_key.as_str(), mine.pending, mine.code.as_str()), (&[9u8; 40][..], "", true, code.as_str()));
+        assert_eq!(peek_reply("b@x", now + 3), "", "открытого ключа сервер не держит");
+        // Повторный опрос (обрыв связи у клиента) отдаёт ответ снова — до `done`
+        assert_eq!(poll("b@x", "dev-1", false, now + 4).sealed.len(), 40);
+        assert_eq!(poll("b@x", "dev-1", true, now + 5), PollView::default());
+        // Чужой запрос остался жив
+        assert!(poll("b@x", "dev-evil", false, now + 5).pending);
+        assert!(has_request("b@x", now + 5));
+        // Новый эфемерный ключ того же устройства начинает запрос заново
+        assert!(request_key(22, "b@x", "dev-evil", "x", &k1, false, now + 6).is_some());
+        assert_eq!(target("b@x", rid_evil, now + 6).map(|t| t.request_id), None, "прежний номер сгорел");
 
-        // До ответа ключа нет; ответ виден только запросившему устройству
-        assert_eq!(poll("b@x", "dev-1", false, now + 2), (String::new(), true));
-        assert!(store_reply("b@x", "KEY-B", now + 3));
-        assert_eq!(poll("b@x", "dev-2", false, now + 3), (String::new(), false));
-        assert_eq!(poll("b@x", "dev-1", false, now + 3), ("KEY-B".to_string(), true));
-        // Повторный опрос (обрыв связи у клиента) отдаёт ключ снова — до `done`
-        assert_eq!(poll("b@x", "dev-1", false, now + 4), ("KEY-B".to_string(), true));
-        assert_eq!(poll("b@x", "dev-1", true, now + 5), (String::new(), false));
-        assert!(!has_request("b@x", now + 5));
+        // Лимит одновременных запросов аккаунта: больше — отказ, прежние не вытесняются
+        assert!(request_key(22, "l@x", "d1", "", &k1, false, now).is_some());
+        assert!(request_key(22, "l@x", "d2", "", &k1, false, now).is_some());
+        assert!(request_key(22, "l@x", "d3", "", &k1, false, now).is_some());
+        assert!(request_key(22, "l@x", "d4", "", &k1, false, now).is_none());
+        assert!(poll("l@x", "d1", false, now).pending);
+
+        // Прежний клиент без эфемерного ключа: ответ открытым текстом, единственный запрос — без номера
+        assert!(request_key(66, "o@x", "dev-old", "", &[], false, now).is_some());
+        let old = target("o@x", 0, now).expect("единственный запрос");
+        assert!(store_reply("o@x", old.request_id, None, Some("KEY-O"), now));
+        assert_eq!(poll("o@x", "dev-old", false, now).recovery_key, "KEY-O");
+        assert_eq!(poll("o@x", "dev-x", false, now), PollView::default());
+        // Запрос с эфемерным ключом открытым текстом не отдаётся, даже если он сохранён для копии ключей
+        assert!(request_key(67, "p@x", "dev-p", "", &k1, false, now).is_some());
+        let tp = target("p@x", 0, now).expect("цель");
+        assert!(store_reply("p@x", tp.request_id, Some(vec![1; 40]), Some("KEY-P"), now));
+        let pv = poll("p@x", "dev-p", false, now);
+        assert_eq!((pv.recovery_key.as_str(), pv.sealed.len()), ("", 40));
+        assert_eq!(peek_reply("p@x", now), "KEY-P");
 
         // Ответ без запроса не принимается; запрос истекает
-        assert!(!store_reply("c@x", "KEY-C", now));
-        assert!(request_key(33, "c@x", "dev-9", "", false, now));
+        assert!(!store_reply("c@x", 1, None, Some("KEY-C"), now));
+        assert!(request_key(33, "c@x", "dev-9", "", &[], false, now).is_some());
         assert!(!has_request("c@x", now + REQUEST_TTL_SECS));
-        assert!(!store_reply("c@x", "KEY-C", now + REQUEST_TTL_SECS));
-
-        // Действующее устройство видит ответ владельца, пока запрос жив
-        assert!(request_key(55, "e@x", "dev-new", "", false, now));
-        assert_eq!(peek_reply("e@x", now), "");
-        assert!(store_reply("e@x", "KEY-E", now));
-        assert_eq!(peek_reply("e@x", now), "KEY-E");
-        poll("e@x", "dev-new", true, now);
-        assert_eq!(peek_reply("e@x", now), "");
+        assert!(target("c@x", 0, now + REQUEST_TTL_SECS).is_none());
 
         // Ожидание: сообщение, появившееся во время опроса, будит его
         reset_for_tests();

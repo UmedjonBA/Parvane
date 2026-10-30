@@ -778,6 +778,16 @@ export function parseLegacyStored(json_bytes: Uint8Array): string;
 export function protoMajor(): number;
 
 /**
+ * A0023-1: эфемерная пара для ответа владельца через Telegram — 64 байта: приватный ‖ публичный.
+ */
+export function recoveryTgKeypair(): Uint8Array;
+
+/**
+ * A0023-1: открыть запечатанный сервером ответ владельца приватным ключом пары.
+ */
+export function recoveryTgOpen(secret: Uint8Array, user: string, device_id: string, sealed: Uint8Array): string;
+
+/**
  * Прогнать набор векторов conformance движком (тест клиента на своей сборке).
  */
 export function runConformanceVectors(suite: string, json: string): number;
@@ -798,6 +808,12 @@ export function splitSyncResponse(bytes: Uint8Array): any;
  * Инициализация модуля: часы браузера для движка.
  */
 export function start(): void;
+
+/**
+ * REPORT-1 (A0008-2): подтвердить авторство сообщения из жалобы — `proof` (из события) и `op_id`
+ * (UUID-строка), автор и начало текста совпадают с подписанным; `group_hex` не пуст — и группа беседы. Возвращает JSON `{ok, root?, deviceId?}`.
+ */
+export function verifyMessageProof(proof: Uint8Array, op_id: string, author: string, text: string, group_hex: string): string;
 
 /**
  * Проверить описатель сервера → JSON {domain, serverKey(hex)}.
@@ -1002,10 +1018,13 @@ export interface InitOutput {
     readonly pvstate_sentGuard: (a: number, b: number) => void;
     readonly pvstate_snapshot: (a: number, b: number) => void;
     readonly pvstate_syncRequest: (a: number, b: number) => void;
+    readonly recoveryTgKeypair: (a: number) => void;
+    readonly recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly splitSyncResponse: (a: number, b: number, c: number) => void;
     readonly start: () => void;
+    readonly verifyMessageProof: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly verifyServerDescriptor: (a: number, b: number, c: number) => void;
     readonly version: (a: number) => void;
     readonly __wbindgen_export: (a: number, b: number) => number;

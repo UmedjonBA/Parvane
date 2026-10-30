@@ -42,6 +42,9 @@ export type KeyBundlePayload = {
   // Ключи групп (`groupKeysExport`, JSON-массив base64): группы видны сразу после входа по ключу
   groups?: string;
   history?: KeyBundleHistory;
+  // Монотонный номер записи копии (A0073-2): устройство помнит наибольший виденный и не принимает копию с меньшим
+  // (откат сервера на старую версию). Нет поля — копия старого формата, номер 0.
+  seq?: number;
 };
 
 type DomainKeysJson = { id?: string; keys?: unknown[] };
@@ -241,10 +244,21 @@ export async function openKeyBundle(
       cloud: typeof payload.cloud === 'string' ? payload.cloud : undefined,
       groups: typeof payload.groups === 'string' ? payload.groups : undefined,
       history: isHistory(payload.history) ? payload.history : undefined,
+      seq: readBundleSeq(payload.seq) || undefined,
     };
   } catch {
     return undefined;
   }
+}
+
+/** Номер записи копии: целое неотрицательное число; всё прочее (нет поля, мусор) — 0, как у копии старого формата. */
+export function readBundleSeq(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/** Не откатил ли сервер копию: номер меньше наибольшего виденного этим устройством. */
+export function isBundleRolledBack(payload: Pick<KeyBundlePayload, 'seq'>, seenSeq: number): boolean {
+  return readBundleSeq(payload.seq) < seenSeq;
 }
 
 function isHistory(value: unknown): value is KeyBundleHistory {

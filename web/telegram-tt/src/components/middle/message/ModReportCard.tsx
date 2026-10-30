@@ -74,6 +74,7 @@ const ModReportCard = ({
         <div key={m.uuid} className={styles.quote} data-mod-message={m.uuid}>
           <span className={styles.author}>{authorName(m.authorId)}</span>
           <span className={styles.text}>{m.text}</span>
+          {m.isProven && <span className={styles.proven} data-mod-proven>{lang('ParvaneModReportProven')}</span>}
         </div>
       ))}
       {(isDeleted || isBanned) && (
