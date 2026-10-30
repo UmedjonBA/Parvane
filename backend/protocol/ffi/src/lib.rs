@@ -877,6 +877,42 @@ pub unsafe extern "C" fn pv_client_presence_allowed(c: *const PvClient) -> bool 
 })).unwrap_or_else(|_| true)
 }
 
+// ── журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2) ────────────────
+
+/// Сессия журнала истории (непрозрачный указатель, освобождать `pv_history_free`).
+pub struct PvHistorySession {
+    inner: host::HostHistory,
+}
+
+/// Сессия журнала истории: ключ истории — из текущего и прежних ключей личного состояния клиента; null —
+/// ключа состояния нет. Курсор и строки хранит хост.
+#[no_mangle]
+pub unsafe extern "C" fn pv_client_history_session(c: *const PvClient) -> *mut PvHistorySession {
+    catch_unwind(AssertUnwindSafe(|| match c.as_ref().and_then(|c| c.inner.history_session()) {
+        Some(inner) => Box::into_raw(Box::new(PvHistorySession { inner })),
+        None => ptr::null_mut(),
+    }))
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pv_history_free(s: *mut PvHistorySession) {
+    if !s.is_null() {
+        drop(Box::from_raw(s));
+    }
+}
+
+/// Вызвать функцию сессии журнала истории по имени WASM `PvHistory.call` (`syncRequest`, `ingest`, `seal`,
+/// …; статические `history*` — тоже, без сессии — `pv_call`). Соглашения — как у `pv_client_call`.
+#[no_mangle]
+pub unsafe extern "C" fn pv_history_call(s: *mut PvHistorySession, name: *const c_char, args: *const c_char, err: *mut *mut c_char) -> *mut c_char {
+    guard(err, ptr::null_mut(), || {
+        let s = s.as_mut().ok_or_else(bad_arg)?;
+        let name = str_arg(name).ok_or_else(bad_arg)?;
+        s.inner.call(name, &parse_args(args)?).map(|v| cstring(v.to_string()))
+    })
+}
+
 // ── журнал личного состояния (T098, STATE-1) ────────────────────────────────
 
 /// Сессия журнала личного состояния (непрозрачный указатель,
@@ -1598,6 +1634,19 @@ mod tests {
             let snap = take(pv_state_call(s, n.as_ptr(), a.as_ptr(), &mut err));
             assert!(err.is_null() && snap.starts_with('{'), "{snap}");
             pv_state_free(s);
+            // Журнал истории (spec 033): сессия, запечатывание, статическая функция через pv_call
+            let h = pv_client_history_session(c);
+            assert!(!h.is_null());
+            let (n, a) = (CString::new("syncRequest").unwrap(), CString::new(r#"{"afterSeq":3,"skipChunks":true}"#).unwrap());
+            let body = take(pv_history_call(h, n.as_ptr(), a.as_ptr(), &mut err));
+            assert!(err.is_null() && body.starts_with('"'), "{body}");
+            let (n, a) = (CString::new("historyCanDelete").unwrap(), CString::new(r#"{"chatKind":"user","author":"bob@local","deleter":"alice@local"}"#).unwrap());
+            assert_eq!(take(pv_history_call(h, n.as_ptr(), a.as_ptr(), &mut err)), "true");
+            assert_eq!(take(pv_call(n.as_ptr(), a.as_ptr(), &mut err)), "true");
+            let (n, a) = (CString::new("nope").unwrap(), CString::new("{}").unwrap());
+            assert!(pv_history_call(h, n.as_ptr(), a.as_ptr(), &mut err).is_null());
+            assert!(take(err).contains("UnknownCall"));
+            pv_history_free(h);
             pv_client_free(c);
         }
     }

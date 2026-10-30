@@ -23,6 +23,11 @@ typedef struct PvAnonPlanner PvAnonPlanner;
 typedef struct PvClient PvClient;
 
 /**
+ * Сессия журнала истории (непрозрачный указатель, освобождать `pv_history_free`).
+ */
+typedef struct PvHistorySession PvHistorySession;
+
+/**
  * Сессия журнала личного состояния (непрозрачный указатель,
  * освобождать `pv_state_free`).
  */
@@ -491,6 +496,23 @@ char *pv_client_l2_active_chats(const struct PvClient *c);
  * Публиковать ли своё присутствие: false, пока L2 активен хотя бы в одном чате.
  */
 bool pv_client_presence_allowed(const struct PvClient *c);
+
+/**
+ * Сессия журнала истории: ключ истории — из текущего и прежних ключей личного состояния клиента; null —
+ * ключа состояния нет. Курсор и строки хранит хост.
+ */
+struct PvHistorySession *pv_client_history_session(const struct PvClient *c);
+
+void pv_history_free(struct PvHistorySession *s);
+
+/**
+ * Вызвать функцию сессии журнала истории по имени WASM `PvHistory.call` (`syncRequest`, `ingest`, `seal`,
+ * …; статические `history*` — тоже, без сессии — `pv_call`). Соглашения — как у `pv_client_call`.
+ */
+char *pv_history_call(struct PvHistorySession *s,
+                      const char *name,
+                      const char *args,
+                      char **err);
 
 bool pv_client_has_state_key(const struct PvClient *c);
 

@@ -299,6 +299,11 @@ export class PvClient {
      */
     hasStateKey(): boolean;
     /**
+     * Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
+     * из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+     */
+    historySession(): PvHistory | undefined;
+    /**
      * Восстановить корень из копии (сверяется с журналом устройств); корень
      * остаётся в памяти до `forgetRoot()` и возвращается хосту.
      */
@@ -624,6 +629,19 @@ export class PvClient {
 }
 
 /**
+ * Сессия журнала истории аккаунта (spec 033): `call(name, argsJson)` → JSON-текст результата (имена и
+ * аргументы — `specs/033-history-sync/contracts/engine-api.md`: `syncRequest`, `ingest`, `seal`,
+ * `headRequest`, `ingestHead`, `getRequest`, `commitRequest`, `ingestAppend`, `ingestCommit`; статические
+ * `history*` — тоже). Ошибка — исключение со строкой JSON `{"error": …}`.
+ */
+export class PvHistory {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    call(name: string, args_json: string): string;
+}
+
+/**
  * Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
  * шифрование записей ключом личного состояния из клиента (ключ не выходит
  * в JS). Курсор — в памяти: при запуске журнал читается с начала.
@@ -762,6 +780,14 @@ export function grantRootBackup(material: Uint8Array): Uint8Array | undefined;
 export function grantWithRootBackup(material: Uint8Array, backup: Uint8Array): Uint8Array;
 
 /**
+ * Статические функции журнала истории (spec 033) по имени: `historyApply`, `historyMerge`, `historyView`,
+ * `historyIsUnread`, `historyMarkMerge`, `historyMarkAfter`, `historyCanDelete`, `historyRowFromWire`,
+ * `historySegmentKey`, `historySegmentDigest`, `historyNeedsReplace`, `historyCompact`, `historySummary`,
+ * `historyApplyMany`, `historyNewStamp`, `historyUnreadKinds`. Результат — JSON-текст.
+ */
+export function historyCall(name: string, args_json: string): string;
+
+/**
  * Разобрать ссылку-приглашение → JSON `{kind: "v2", domain, linkId(hex)}` |
  * `{kind: "legacy", token}` (исключение — не ссылка-приглашение).
  */
@@ -831,6 +857,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_pvanonplanner_free: (a: number, b: number) => void;
     readonly __wbg_pvclient_free: (a: number, b: number) => void;
+    readonly __wbg_pvhistory_free: (a: number, b: number) => void;
     readonly __wbg_pvstate_free: (a: number, b: number) => void;
     readonly decodeFrame: (a: number, b: number, c: number) => void;
     readonly decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -846,6 +873,7 @@ export interface InitOutput {
     readonly generateRecoveryKey: (a: number) => void;
     readonly grantRootBackup: (a: number, b: number, c: number) => void;
     readonly grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly historyCall: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly parseInvite: (a: number, b: number, c: number) => void;
     readonly parseLegacyStored: (a: number, b: number, c: number) => void;
     readonly protoMajor: () => number;
@@ -921,6 +949,7 @@ export interface InitOutput {
     readonly pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
     readonly pvclient_hasRoot: (a: number) => number;
     readonly pvclient_hasStateKey: (a: number) => number;
+    readonly pvclient_historySession: (a: number) => number;
     readonly pvclient_importRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importRootBackupFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_importState: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1003,6 +1032,7 @@ export interface InitOutput {
     readonly pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly pvhistory_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
     readonly pvstate_claimDue: (a: number, b: number, c: number) => void;

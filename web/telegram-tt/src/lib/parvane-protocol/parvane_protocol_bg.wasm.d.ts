@@ -3,6 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_pvanonplanner_free: (a: number, b: number) => void;
 export const __wbg_pvclient_free: (a: number, b: number) => void;
+export const __wbg_pvhistory_free: (a: number, b: number) => void;
 export const __wbg_pvstate_free: (a: number, b: number) => void;
 export const decodeFrame: (a: number, b: number, c: number) => void;
 export const decodeMessage: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -18,6 +19,7 @@ export const encodeUploadChunk: (a: number, b: number, c: number, d: number, e: 
 export const generateRecoveryKey: (a: number) => void;
 export const grantRootBackup: (a: number, b: number, c: number) => void;
 export const grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
+export const historyCall: (a: number, b: number, c: number, d: number, e: number) => void;
 export const parseInvite: (a: number, b: number, c: number) => void;
 export const parseLegacyStored: (a: number, b: number, c: number) => void;
 export const protoMajor: () => number;
@@ -93,6 +95,7 @@ export const pvclient_groupsRekeyPending: (a: number) => number;
 export const pvclient_hasPeerDeliveryKey: (a: number, b: number, c: number) => number;
 export const pvclient_hasRoot: (a: number) => number;
 export const pvclient_hasStateKey: (a: number) => number;
+export const pvclient_historySession: (a: number) => number;
 export const pvclient_importRootBackup: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_importRootBackupFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvclient_importState: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -175,6 +178,7 @@ export const pvclient_tokenRequest: (a: number, b: number, c: number, d: number,
 export const pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const pvhistory_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
 export const pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;
 export const pvstate_claimDue: (a: number, b: number, c: number) => void;

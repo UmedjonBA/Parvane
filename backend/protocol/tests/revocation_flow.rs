@@ -553,7 +553,7 @@ fn receipts_and_read_tracking() {
         _ => None,
     });
     let (from, c) = edit.expect("правка");
-    assert!(parvane_protocol::msg::mutation_authorized(&c, &from, "alice@local", false));
+    assert!(parvane_protocol::msg::mutation_authorized(&c, &from, "alice@local", false, false));
 
     // D-15: квитанция незнакомцу (нет его ключа доступа) не уходит и не тратит жетонов.
     let (mut dave, _) = setup(&mut srv, "dave@local");

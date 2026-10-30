@@ -2245,6 +2245,7 @@ dependencies = [
 name = "parvane-protocol"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "base64 0.22.1",
  "blind-rsa-signatures",
  "chacha20poly1305 0.10.1",

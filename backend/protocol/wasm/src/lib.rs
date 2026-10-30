@@ -132,6 +132,7 @@ fn event_json(e: &Event) -> Value {
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
         Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
+        Event::Journal { kind, seq } => json!({"type": "journal", "journal": match kind { 1 => "state", 2 => "history", _ => "unknown" }, "seq": seq}),
         Event::Call { from, device, call_id, ts_ms, signal } => json!({
             "type": "call", "from": from, "device": device, "callId": hex::encode(call_id), "tsMs": ts_ms,
             "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
@@ -1370,6 +1371,44 @@ pub fn parse_invite(url: &str) -> Result<String, JsValue> {
     }
 }
 
+/// Сессия журнала истории аккаунта (spec 033): `call(name, argsJson)` → JSON-текст результата (имена и
+/// аргументы — `specs/033-history-sync/contracts/engine-api.md`: `syncRequest`, `ingest`, `seal`,
+/// `headRequest`, `ingestHead`, `getRequest`, `commitRequest`, `ingestAppend`, `ingestCommit`; статические
+/// `history*` — тоже). Ошибка — исключение со строкой JSON `{"error": …}`.
+#[wasm_bindgen]
+pub struct PvHistory {
+    inner: parvane_protocol::host::HostHistory,
+}
+
+#[wasm_bindgen]
+impl PvHistory {
+    pub fn call(&mut self, name: &str, args_json: &str) -> Result<String, JsValue> {
+        let args = parse_call_args(args_json)?;
+        self.inner.call(name, &args).map(|v| v.to_string()).map_err(|e| JsValue::from_str(&e))
+    }
+}
+
+fn parse_call_args(args_json: &str) -> Result<Value, JsValue> {
+    let t = args_json.trim();
+    if t.is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(t).map_err(|_| err_proto(ProtoError::Malformed))
+}
+
+/// Статические функции журнала истории (spec 033) по имени: `historyApply`, `historyMerge`, `historyView`,
+/// `historyIsUnread`, `historyMarkMerge`, `historyMarkAfter`, `historyCanDelete`, `historyRowFromWire`,
+/// `historySegmentKey`, `historySegmentDigest`, `historyNeedsReplace`, `historyCompact`, `historySummary`,
+/// `historyApplyMany`, `historyNewStamp`, `historyUnreadKinds`. Результат — JSON-текст.
+#[wasm_bindgen(js_name = historyCall)]
+pub fn history_call(name: &str, args_json: &str) -> Result<String, JsValue> {
+    let args = parse_call_args(args_json)?;
+    match parvane_protocol::host::history::call_static(name, &args) {
+        Some(r) => r.map(|v| v.to_string()).map_err(|e| JsValue::from_str(&e)),
+        None => Err(JsValue::from_str(r#"{"error":"UnknownCall"}"#)),
+    }
+}
+
 /// Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
 /// шифрование записей ключом личного состояния из клиента (ключ не выходит
 /// в JS). Курсор — в памяти: при запуске журнал читается с начала.
@@ -1406,6 +1445,17 @@ impl PvClient {
         }
         self.inner.set_state_key(parvane_protocol::state::StateKey::generate(), 1);
         true
+    }
+
+    /// Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
+    /// из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+    #[wasm_bindgen(js_name = historySession)]
+    pub fn history_session(&self) -> Option<PvHistory> {
+        let keys = self.inner.state_keys_all();
+        let former = self.inner.state_former_addresses();
+        parvane_protocol::history::HistorySession::new(&self.inner.user, &former, &self.inner.device_id, &keys)
+            .ok()
+            .map(|s| PvHistory { inner: parvane_protocol::host::HostHistory::new(s) })
     }
 
     /// Сессия журнала личного состояния на текущем ключе (undefined — ключа нет).
@@ -1883,6 +1933,11 @@ pub fn encode_message(type_name: &str, json: &str) -> Result<Vec<u8>, JsValue> {
         "parvane.preview.v2.MapTileRequest" => parvane_protocol::pb::parvane::preview::v2::MapTileRequest,
         "parvane.push.v1.RegisterRequest" => parvane_protocol::pb::parvane::push::v1::RegisterRequest,
         "parvane.push.v1.UnregisterRequest" => parvane_protocol::pb::parvane::push::v1::UnregisterRequest,
+        "parvane.history.v1.AppendRequest" => parvane_protocol::pb::parvane::history::v1::AppendRequest,
+        "parvane.history.v1.SyncRequest" => parvane_protocol::pb::parvane::history::v1::SyncRequest,
+        "parvane.history.v1.HeadRequest" => parvane_protocol::pb::parvane::history::v1::HeadRequest,
+        "parvane.history.v1.GetRequest" => parvane_protocol::pb::parvane::history::v1::GetRequest,
+        "parvane.history.v1.CommitRequest" => parvane_protocol::pb::parvane::history::v1::CommitRequest,
     }
 }
 
@@ -1939,6 +1994,12 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, JsValue> 
         "parvane.preview.v2.LinkResponse" => parvane_protocol::pb::parvane::preview::v2::LinkResponse,
         "parvane.preview.v2.MapTileResponse" => parvane_protocol::pb::parvane::preview::v2::MapTileResponse,
         "parvane.push.v1.DescribeResponse" => parvane_protocol::pb::parvane::push::v1::DescribeResponse,
+        "parvane.history.v1.AppendResponse" => parvane_protocol::pb::parvane::history::v1::AppendResponse,
+        "parvane.history.v1.SyncResponse" => parvane_protocol::pb::parvane::history::v1::SyncResponse,
+        "parvane.history.v1.HeadResponse" => parvane_protocol::pb::parvane::history::v1::HeadResponse,
+        "parvane.history.v1.GetResponse" => parvane_protocol::pb::parvane::history::v1::GetResponse,
+        "parvane.history.v1.CommitResponse" => parvane_protocol::pb::parvane::history::v1::CommitResponse,
+        "parvane.msg.v2.JournalNotice" => parvane_protocol::pb::parvane::msg::v2::JournalNotice,
     }
 }
 

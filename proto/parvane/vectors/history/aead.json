@@ -1,0 +1,360 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "key_hex": "d9eb7ff52d43ac0c3d87e71e2e1cb16542f3966f60c460d891c508126302210a"
+      },
+      "input": {
+        "address": "alice@x",
+        "kind": "derive",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "ключ истории"
+    },
+    {
+      "expect": {
+        "key_hex": "dedce38554f5a2030c3abfafe95ab731c4078d5fd7e8d8ce14ade1cdeed1f723"
+      },
+      "input": {
+        "address": "al@x",
+        "kind": "derive",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "ключ истории под прежним адресом другой"
+    },
+    {
+      "expect": {
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "ok": true
+      },
+      "input": {
+        "address": "alice@x",
+        "batch": {
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "gone": {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "2000"
+                },
+                "target": "01923a4b-5c6d-7002-8000-000000000002"
+              }
+            }
+          ],
+          "ts_ms": "1700000000000"
+        },
+        "chunk": false,
+        "kind": "seal",
+        "nonce_hex": "070707070707070707070707",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "запечатать"
+    },
+    {
+      "expect": {
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a98871a2a9decbe3a598bf21f5e38833e3bff",
+        "ok": true
+      },
+      "input": {
+        "address": "alice@x",
+        "batch": {
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "gone": {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "2000"
+                },
+                "target": "01923a4b-5c6d-7002-8000-000000000002"
+              }
+            }
+          ],
+          "ts_ms": "1700000000000"
+        },
+        "chunk": true,
+        "kind": "seal",
+        "nonce_hex": "070707070707070707070707",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "запечатать сегмент"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "address": "alice@x",
+        "batch": {
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "gone": {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "2000"
+                },
+                "target": "01923a4b-5c6d-7002-8000-000000000002"
+              }
+            }
+          ],
+          "ts_ms": "1700000000000"
+        },
+        "chunk": false,
+        "kind": "seal",
+        "nonce_hex": "070707070707070707070707",
+        "op_id_hex": "00000000000000000000000000000000",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "op_id записи не UUIDv7"
+    },
+    {
+      "expect": {
+        "batch": {
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "gone": {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "2000"
+                },
+                "target": "01923a4b-5c6d-7002-8000-000000000002"
+              }
+            }
+          ],
+          "ts_ms": "1700000000000"
+        },
+        "ok": true
+      },
+      "input": {
+        "address": "alice@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "chunk": false,
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "открыть"
+    },
+    {
+      "expect": {
+        "batch": {
+          "device_id": "d1",
+          "ops": [
+            {
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-7001-8000-000000000001",
+                "ts_ms": "1000"
+              }
+            },
+            {
+              "gone": {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "2000"
+                },
+                "target": "01923a4b-5c6d-7002-8000-000000000002"
+              }
+            }
+          ],
+          "ts_ms": "1700000000000"
+        },
+        "ok": true
+      },
+      "input": {
+        "address": "al@x",
+        "aead_hex": "0707070707070707070707079da2a6c60b992b076ccfdd23f9d2635c370e033f047ff730e78f5d8a4d3918d3592b57980906213e05d4280d9ee88535ae743d42ca1bb45cb5d2f069cf148c06723a5e4e2aa2c1a52e447734d72aad635ca720f525e78d4180f972c3dbd0e4602de5d9315937e046cfd80f224cda23fa8f880d1898661fca6d464be4e5da64b7f6570b977e83f3d715ed7ae694ec45ae17122d13fbf7cd05674e88d5235f5ee4ea5a06ecdcffc92ddf87690e0abe3e1cb5323d",
+        "chunk": false,
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "открыть под прежним адресом"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "eve@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "chunk": false,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "чужой журнал (другой адрес в AAD)"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "alice@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "chunk": false,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000002",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "перенос под другой op_id"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "alice@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "chunk": true,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "подмена флага chunk"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "al@x",
+        "aead_hex": "0707070707070707070707079da2a6c60b992b076ccfdd23f9d2635c370e033f047ff730e78f5d8a4d3918d3592b57980906213e05d4280d9ee88535ae743d42ca1bb45cb5d2f069cf148c06723a5e4e2aa2c1a52e447734d72aad635ca720f525e78d4180f972c3dbd0e4602de5d9315937e046cfd80f224cda23fa8f880d1898661fca6d464be4e5da64b7f6570b977e83f3d715ed7ae694ec45ae17122d13fbf7cd05674e88d5235f5ee4ea5a06ecdcffc92ddf87690e0abe3e1cb5323d",
+        "chunk": false,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "ключ под другим адресом"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "alice@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f310",
+        "chunk": false,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "name": "чужой ключ состояния"
+    },
+    {
+      "expect": {
+        "error": "Crypto"
+      },
+      "input": {
+        "address": "alice@x",
+        "aead_hex": "0707070707070707070707076907206cf04c4474e00bcfb324ede249bb4ace0a116fc63dc2f307f55210fe35810d3d19cfb8ca5499662a89c2400d7a79bd5a474bd289fcf64f82500e89524dc7533dd38b7189a0dc1b5ca954d9fbe1dec52ffd3e97bee4cd45cdba5a6bd3bff6ff6880ad3cec5b15a464b147eebf3701a57eb470cbe53a4b598b38d7adba04549eb2cc16fee639ca661da8fab99e0573fc743f44f6c8ab9abbb75d139deb435a988703ed495d304a8bec230ea3ac20b5f311",
+        "chunk": false,
+        "key_address": "alice@x",
+        "kind": "open",
+        "op_id_hex": "01923a4b5c6d70018000000000000001",
+        "state_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "name": "порча тега"
+    }
+  ],
+  "description": "ключ истории = HKDF-SHA256(ключ состояния, \"parvane/history/v1\", адрес); AES-256-GCM, AAD = \"parvane/v2/history\\0\" ‖ адрес ‖ op_id ‖ chunk",
+  "suite": "history/aead"
+}

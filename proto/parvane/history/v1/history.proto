@@ -1,0 +1,207 @@
+// Журнал истории аккаунта (spec 033; правила HIST-1, HIST-2, READ-2).
+// Сервер (шард messenger) хранит только шифртекст записей: AEAD (AES-256-GCM) на ключе истории =
+// HKDF-SHA256(ключ личного состояния, salt "parvane/history/v1", info = адрес), AAD =
+// "parvane/v2/history\0" ‖ адрес ‖ op_id ‖ chunk (1 байт). Открытый текст записи — HistoryBatch.
+// Сведение строки сообщения (RowState) — чистые функции движка (backend/protocol/src/history.rs).
+syntax = "proto3";
+
+package parvane.history.v1;
+
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+import "parvane/state/v1/state.proto";
+
+// Журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2). Сервер хранит только шифртекст записей
+// (AEAD на ключе истории = HKDF от ключа личного состояния); пишут и читают устройства аккаунта.
+service HistoryService {
+  rpc Append(AppendRequest) returns (AppendResponse) {
+    option (parvane.core.v2.method) = { name: "history.append" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_MSG kind: METHOD_KIND_CALL shard: "messenger" };
+  }
+  rpc Sync(SyncRequest) returns (SyncResponse) {
+    option (parvane.core.v2.method) = { name: "history.sync" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "messenger" };
+  }
+  rpc Head(HeadRequest) returns (HeadResponse) {
+    option (parvane.core.v2.method) = { name: "history.head" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "messenger" };
+  }
+  rpc Get(GetRequest) returns (GetResponse) {
+    option (parvane.core.v2.method) = { name: "history.get" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "messenger" };
+  }
+  rpc Commit(CommitRequest) returns (CommitResponse) {
+    option (parvane.core.v2.method) = { name: "history.checkpoint.commit" channel: METHOD_CHANNEL_ID rate: RATE_CLASS_REQ kind: METHOD_KIND_CALL shard: "messenger" };
+  }
+}
+
+message HistoryRecord {
+  uint64 seq = 1 [(parvane.core.v2.actor) = ACTOR_SERVER_SET];
+  bytes op_id = 2 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 3 [(parvane.core.v2.max_len) = 262144];
+  // Сегмент или сводка контрольной точки.
+  bool chunk = 4;
+}
+
+message AppendRequest {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 2 [(parvane.core.v2.max_len) = 262144];
+  bool chunk = 3;
+}
+message AppendResponse { uint64 seq = 1; }
+
+message SyncRequest {
+  uint64 after_seq = 1;
+  uint32 max_bytes = 2;
+  // Не отдавать записи-сегменты (их новое устройство берёт через history.get).
+  bool skip_chunks = 3;
+}
+message SyncResponse {
+  repeated HistoryRecord records = 1 [(parvane.core.v2.max_items) = 1024];
+  bool more = 2;
+  uint64 head_seq = 3;
+  // after_seq < upto_seq текущей точки: записи до неё свёрнуты — сначала точка.
+  Checkpoint compacted = 4;
+}
+
+message Checkpoint {
+  uint64 id = 1;
+  uint64 upto_seq = 2;
+  uint64 summary_seq = 3;
+  repeated uint64 chunk_seqs = 4 [(parvane.core.v2.max_items) = 100000];
+  int64 created_ms = 5;
+}
+
+message HeadRequest {}
+message HeadResponse {
+  uint64 head_seq = 1;
+  Checkpoint checkpoint = 2;
+}
+
+// Записи по номерам (только свои; отсутствующие пропускаются), страница ≤ 716 800 байт — не поместившиеся
+// клиент запрашивает снова.
+message GetRequest { repeated uint64 seqs = 1 [(parvane.core.v2.max_items) = 256]; }
+message GetResponse { repeated HistoryRecord records = 1 [(parvane.core.v2.max_items) = 256]; }
+
+// CAS: принимается, только если текущая точка = expected_checkpoint_id (0 — точки ещё нет); иначе DUPLICATE
+// (точку уже сменило другое устройство). summary_seq и chunk_seqs — записи этого пользователя с chunk = true,
+// не дальше upto_seq; upto_seq — не дальше головы и не раньше прежней точки (иначе INVALID).
+// Сервер удаляет записи seq ≤ upto_seq, кроме chunk_seqs и summary_seq новой точки, и сегменты прежней точки,
+// не вошедшие в новую.
+message CommitRequest {
+  uint64 expected_checkpoint_id = 1;
+  uint64 upto_seq = 2;
+  uint64 summary_seq = 3;
+  repeated uint64 chunk_seqs = 4 [(parvane.core.v2.max_items) = 100000];
+}
+message CommitResponse { uint64 checkpoint_id = 1; }
+
+// ── Открытый текст записи (внутри AEAD) ──────────────────────────────────
+
+message HistoryBatch {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  int64 ts_ms = 2;
+  repeated HistoryOp ops = 3 [(parvane.core.v2.max_items) = 4096];
+}
+
+message Stamp {
+  int64 ts_ms = 1;
+  bytes op_id = 2 [(parvane.core.v2.max_len) = 16];
+}
+
+enum GoneScope {
+  GONE_SCOPE_UNSPECIFIED = 0;
+  GONE_SCOPE_EVERYONE = 1;
+  GONE_SCOPE_ME = 2;
+}
+
+message MessageRow {
+  bytes id = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  string from = 3 [(parvane.core.v2.max_len) = 255];
+  int64 ts_ms = 4;
+  // JSON строки в формате экспорта привязки (content, reply_to, …), без id/from/to/ts.
+  bytes body = 5 [(parvane.core.v2.max_len) = 262144];
+}
+
+message Gone {
+  bytes target = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  Stamp stamp = 3;
+  GoneScope scope = 4;
+}
+
+message Edit {
+  bytes target = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  Stamp stamp = 3;
+  bytes body = 4 [(parvane.core.v2.max_len) = 262144];
+}
+
+message React {
+  bytes target = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  string user = 3 [(parvane.core.v2.max_len) = 255];
+  Stamp stamp = 4;
+  string emoji = 5 [(parvane.core.v2.max_len) = 64];
+}
+
+message Pin {
+  bytes target = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  Stamp stamp = 3;
+  bool pinned = 4;
+}
+
+message ReadMark {
+  parvane.state.v1.Peer chat = 1;
+  int64 up_to_ts_ms = 2;
+  bytes up_to_id = 3 [(parvane.core.v2.max_len) = 16];
+}
+
+message Reaction {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  Stamp stamp = 2;
+  string emoji = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+message RowState {
+  bytes target = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  MessageRow row = 3;
+  Stamp edit_stamp = 4;
+  bytes edit_body = 5 [(parvane.core.v2.max_len) = 262144];
+  repeated Reaction reacts = 6 [(parvane.core.v2.max_items) = 1024];
+  Stamp pin_stamp = 7;
+  bool pinned = 8;
+  Gone gone = 9;
+}
+
+message SegmentRef {
+  string key = 1 [(parvane.core.v2.max_len) = 400];
+  bytes digest = 2 [(parvane.core.v2.max_len) = 32];
+  uint64 seq = 3;
+}
+
+message ChatSummary {
+  parvane.state.v1.Peer chat = 1;
+  RowState last = 2;
+  ReadMark mark = 3;
+  uint32 unread = 4;
+  uint32 rows = 5;
+}
+
+message Summary {
+  int64 tombstones_since_ms = 1;
+  repeated ChatSummary chats = 2 [(parvane.core.v2.max_items) = 100000];
+  repeated SegmentRef segments = 3 [(parvane.core.v2.max_items) = 100000];
+}
+
+message HistoryOp {
+  oneof op {
+    MessageRow row = 1;
+    Gone gone = 2;
+    Edit edit = 3;
+    React react = 4;
+    Pin pin = 5;
+    ReadMark read = 6;
+    RowState state = 7;
+    Summary summary = 8;
+  }
+}

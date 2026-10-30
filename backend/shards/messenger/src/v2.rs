@@ -10,6 +10,8 @@
 //!   identity) или слепой жетон (одноразовость — здесь), один получатель на
 //!   запрос (D-05), только v2-устройства получателя (T072).
 //! - Журнал личного состояния (`state.append/sync`, шифртекст) — `v2_state`.
+//! - Журнал истории аккаунта (`history.*`, шифртекст, контрольные точки; spec 033) — `v2_history`; после
+//!   `state.append` и `history.append` прочим устройствам пользователя — живое `JournalNotice`.
 
 use crate::*;
 use parvane_protocol::codec::decode_checked;
@@ -18,7 +20,8 @@ use parvane_protocol::pb::parvane::core::v2::{
     sealed_envelope::Access, DeliveryKeyCheckRequest, DeliveryKeyCheckResponse, DevicesOfRequest, DevicesOfResponse,
     ErrorCode, ShardRequest, TokenCheckRequest, TokenCheckResponse,
 };
-use parvane_protocol::pb::parvane::msg::v2::{self as mpb, inbox_record, InboxRecord};
+use parvane_protocol::pb::parvane::history::v1 as hpb;
+use parvane_protocol::pb::parvane::msg::v2::{self as mpb, inbox_record, InboxRecord, JournalKind};
 use parvane_protocol::pb::parvane::state::v1 as spb;
 use parvane_protocol::registry_gen::{inbox_subject, INBOX_PREFIX, INTERNAL_DELIVERY_KEY_CHECK, INTERNAL_DEVICES_OF, INTERNAL_TOKEN_CHECK};
 use parvane_protocol::schema::MethodInfo;
@@ -157,9 +160,10 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             crate::v2_groups::deliver_group(ctx, r).await
         }
         "state.append" => {
-            let (user, _) = me(&req)?;
+            let (user, device) = me(&req)?;
             let r: spb::AppendRequest = body(&req)?;
             let seq = crate::v2_state::append(&ctx.v2, &user, &r, crate::v2_state::StateLimits::from_env()).await?;
+            notify_journal(&user, &device, JournalKind::State, seq);
             Ok(spb::AppendResponse { seq }.encode_to_vec())
         }
         "state.sync" => {
@@ -167,9 +171,66 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let r: spb::SyncRequest = body(&req)?;
             Ok(crate::v2_state::sync(&ctx.v2, &user, &r).await?.encode_to_vec())
         }
+        // Журнал истории аккаунта (spec 033)
+        "history.append" => {
+            let (user, device) = me(&req)?;
+            let r: hpb::AppendRequest = body(&req)?;
+            let (seq, fresh) = crate::v2_history::append_new(&ctx.v2, &user, &r, crate::v2_history::HistoryLimits::from_env()).await?;
+            // Повтор записи (обрыв связи, второе устройство пишет то же) никого не будит
+            if fresh {
+                notify_journal(&user, &device, JournalKind::History, seq);
+            }
+            Ok(hpb::AppendResponse { seq }.encode_to_vec())
+        }
+        "history.sync" => {
+            let (user, _) = me(&req)?;
+            let r: hpb::SyncRequest = body(&req)?;
+            Ok(crate::v2_history::sync(&ctx.v2, &user, &r).await?.encode_to_vec())
+        }
+        "history.head" => {
+            let (user, _) = me(&req)?;
+            let _: hpb::HeadRequest = body(&req)?;
+            Ok(crate::v2_history::head(&ctx.v2, &user).await?.encode_to_vec())
+        }
+        "history.get" => {
+            let (user, _) = me(&req)?;
+            let r: hpb::GetRequest = body(&req)?;
+            Ok(crate::v2_history::get(&ctx.v2, &user, &r).await?.encode_to_vec())
+        }
+        "history.checkpoint.commit" => {
+            let (user, _) = me(&req)?;
+            let r: hpb::CommitRequest = body(&req)?;
+            Ok(crate::v2_history::commit(&ctx.v2, &user, &r).await?.encode_to_vec())
+        }
         name if name.starts_with("group.") => crate::v2_groups::dispatch(ctx, m, req).await,
         _ => Err(ErrorCode::Unavailable),
     }
+}
+
+/// Живое уведомление `JournalNotice` (spec 033) прочим устройствам пользователя после записи в журнал
+/// состояния или истории: без содержимого, seq записи инбокса = 0 (как `DeviceAddedNotice`). В фоне — ответ
+/// на append не ждёт списка устройств; без рантайма v2 (юнит-тесты) — ничего.
+fn notify_journal(user: &str, device: &str, kind: JournalKind, seq: u64) {
+    let Some(ctx) = ctx() else { return };
+    let (user, device) = (user.to_string(), device.to_string());
+    tokio::spawn(async move {
+        let devs = match ctx.devices_of(&user).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("v2: уведомление журнала {}: устройства не получены: {:?}", user, e);
+                return;
+            }
+        };
+        let owner = inbox_owner(&user, &devs).to_string();
+        let rec = InboxRecord { seq: 0, received_ms: 0, item: Some(inbox_record::Item::Journal(mpb::JournalNotice { kind: kind as i32, seq })) };
+        let bytes = rec.encode_to_vec();
+        for d in devs.v2_device_ids.iter().filter(|d| **d != device) {
+            let Ok(subject) = inbox_subject(&owner, d) else { continue };
+            if let Err(e) = ctx.nc.publish(subject, bytes.clone().into()).await {
+                warn!("v2: уведомление журнала не отправлено: {}", e);
+            }
+        }
+    });
 }
 
 /// Пользователь и устройство идентифицированной сессии.

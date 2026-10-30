@@ -49,6 +49,7 @@
 | `link/` | LINK-1: обязательство нового устройства и код сверки (12 цифр) | `new_pub_b64`, `old_pub_b64` → `commitment_of_new_b64`, `sas` |
 | `call/` | сигнал звонка v1 (JSON шарда call) ↔ v2 (`parvane.call.v2.CallSignal`, proto3-JSON), личный и групповой | `direction` (`to_v2`/`from_v2`), `v1` либо `v2`, `group_call_id`? → `v2` либо `v1` (`null` — не передаётся), `ice`? |
 | `content/` | все виды содержимого (CONTENT-1): байты ↔ proto3-JSON, лимиты, показ/заглушка, содержимое UI клиентов | `content_hex`, `critical_fields`? → `content`, `disposition`; `client` (`class`, `v1`) |
+| `history/` | журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): сведение строки (`merge`), непрочитанное, маркеры и права удаления (`unread`), сегменты, горизонт, строка формата привязки (`segment`), ключ истории и записи (`aead`) | `kind` случая + proto3-JSON сообщений `history.v1` (id сообщений — UUID-строки) |
 | `conformance/` | правила conformance как векторы (T088) | (US3) |
 
 Все наборы прогоняет `parvane_protocol::conformance::run(<набор>, <json>)` —
@@ -57,7 +58,8 @@
 что работает в клиенте. Имена наборов: `seal/sealed`, `seal/group`,
 `invite/links`, `state/merge`, `content/kinds`, `l2/mode`, `codec/frames`,
 `sign/ops`, `device_log/alice`, `group_log/group`, `content_guard/content`,
-`legacy_v1/messages`, `call/signals`, `link/sas`. Там, где работу делает сам
+`legacy_v1/messages`, `call/signals`, `link/sas`, `history/merge`, `history/unread`,
+`history/segment`, `history/aead`. Там, где работу делает сам
 клиент (содержимое UI, сигнал звонка, линковка), тест клиента дополнительно
 сверяет собственную перекладку с теми же файлами: web —
 `src/api/parvane/protocol.vectors.test.ts`, desktop/android (ядро) —
@@ -66,6 +68,6 @@
 `call/signals.json` и `link/sas.json` написаны вручную (движок их не порождает):
 при правке — прогнать тест движка и оба клиентских.
 
-Остальные файлы генерируются тестами `vectors_*` в `backend/protocol/tests/` при
+Остальные файлы генерируются тестами `vectors_*` (`history/` — `history_vectors.rs`) в `backend/protocol/tests/` при
 `PARVANE_REGEN_VECTORS=1 cargo test -p parvane-protocol` (только при изменении
 схемы/движка; результат коммитится) и ими же проверяются.

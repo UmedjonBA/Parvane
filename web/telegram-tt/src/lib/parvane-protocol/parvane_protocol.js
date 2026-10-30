@@ -1532,6 +1532,15 @@ export class PvClient {
         return ret !== 0;
     }
     /**
+     * Сессия журнала истории аккаунта (spec 033; undefined — ключа личного состояния нет). Ключ истории —
+     * из текущего и прежних ключей состояния, прежние адреса — как у `stateSession`.
+     * @returns {PvHistory | undefined}
+     */
+    historySession() {
+        const ret = wasm.pvclient_historySession(this.__wbg_ptr);
+        return ret === 0 ? undefined : PvHistory.__wrap(ret);
+    }
+    /**
      * Восстановить корень из копии (сверяется с журналом устройств); корень
      * остаётся в памяти до `forgetRoot()` и возвращается хосту.
      * @param {Uint8Array} blob
@@ -3165,6 +3174,65 @@ export class PvClient {
 if (Symbol.dispose) PvClient.prototype[Symbol.dispose] = PvClient.prototype.free;
 
 /**
+ * Сессия журнала истории аккаунта (spec 033): `call(name, argsJson)` → JSON-текст результата (имена и
+ * аргументы — `specs/033-history-sync/contracts/engine-api.md`: `syncRequest`, `ingest`, `seal`,
+ * `headRequest`, `ingestHead`, `getRequest`, `commitRequest`, `ingestAppend`, `ingestCommit`; статические
+ * `history*` — тоже). Ошибка — исключение со строкой JSON `{"error": …}`.
+ */
+export class PvHistory {
+    static __wrap(ptr) {
+        const obj = Object.create(PvHistory.prototype);
+        obj.__wbg_ptr = ptr;
+        PvHistoryFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        PvHistoryFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_pvhistory_free(ptr, 0);
+    }
+    /**
+     * @param {string} name
+     * @param {string} args_json
+     * @returns {string}
+     */
+    call(name, args_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(args_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.pvhistory_call(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr3 = r0;
+            var len3 = r1;
+            if (r3) {
+                ptr3 = 0; len3 = 0;
+                throw takeObject(r2);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) PvHistory.prototype[Symbol.dispose] = PvHistory.prototype.free;
+
+/**
  * Журнал личного состояния устройства (R10, T098): сведение LWW (STATE-1),
  * шифрование записей ключом личного состояния из клиента (ключ не выходит
  * в JS). Курсор — в памяти: при запуске журнал читается с начала.
@@ -3890,6 +3958,44 @@ export function grantWithRootBackup(material, backup) {
 }
 
 /**
+ * Статические функции журнала истории (spec 033) по имени: `historyApply`, `historyMerge`, `historyView`,
+ * `historyIsUnread`, `historyMarkMerge`, `historyMarkAfter`, `historyCanDelete`, `historyRowFromWire`,
+ * `historySegmentKey`, `historySegmentDigest`, `historyNeedsReplace`, `historyCompact`, `historySummary`,
+ * `historyApplyMany`, `historyNewStamp`, `historyUnreadKinds`. Результат — JSON-текст.
+ * @param {string} name
+ * @param {string} args_json
+ * @returns {string}
+ */
+export function historyCall(name, args_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(args_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.historyCall(retptr, ptr0, len0, ptr1, len1);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        var ptr3 = r0;
+        var len3 = r1;
+        if (r3) {
+            ptr3 = 0; len3 = 0;
+            throw takeObject(r2);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
  * Разобрать ссылку-приглашение → JSON `{kind: "v2", domain, linkId(hex)}` |
  * `{kind: "legacy", token}` (исключение — не ссылка-приглашение).
  * @param {string} url
@@ -4366,6 +4472,9 @@ const PvAnonPlannerFinalization = (typeof FinalizationRegistry === 'undefined')
 const PvClientFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvclient_free(ptr, 1));
+const PvHistoryFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_pvhistory_free(ptr, 1));
 const PvStateFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pvstate_free(ptr, 1));

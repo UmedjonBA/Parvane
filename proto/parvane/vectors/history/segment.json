@@ -1,0 +1,557 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "key": "u:bob@x|2024-02",
+        "ok": true
+      },
+      "input": {
+        "kind": "key",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "1709164800000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "ключ: личный чат"
+    },
+    {
+      "expect": {
+        "key": "g:x:42424242424242424242424242424242|2024-02",
+        "ok": true
+      },
+      "input": {
+        "kind": "key",
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImIifX0=",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7002-8000-000000000002",
+            "ts_ms": "1709164799999"
+          },
+          "target": "01923a4b-5c6d-7002-8000-000000000002"
+        }
+      },
+      "name": "ключ: группа, последняя миллисекунда января"
+    },
+    {
+      "expect": {
+        "key": "u:bob@x|2024-03",
+        "ok": true
+      },
+      "input": {
+        "kind": "key",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "pin_stamp": {
+            "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+            "ts_ms": "1710028800000"
+          },
+          "pinned": true,
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1712620800000"
+              },
+              "user": "bob@x"
+            }
+          ],
+          "target": "01923a4b-5c6d-7003-8000-000000000003"
+        }
+      },
+      "name": "ключ: сирота — по самой ранней метке"
+    },
+    {
+      "expect": {
+        "digest_hex": "6bd46a2c95b33e0d9ad43ef7b53fa0c866a2ebc663f48b8a926f73c9274cf2ce"
+      },
+      "input": {
+        "kind": "digest",
+        "states": [
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7001-8000-000000000001",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7001-8000-000000000001"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1709164800005"
+              },
+              "target": "01923a4b-5c6d-7004-8000-000000000004"
+            },
+            "row": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7004-8000-000000000004",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7004-8000-000000000004"
+          }
+        ]
+      },
+      "name": "отпечаток"
+    },
+    {
+      "expect": {
+        "digest_hex": "6bd46a2c95b33e0d9ad43ef7b53fa0c866a2ebc663f48b8a926f73c9274cf2ce"
+      },
+      "input": {
+        "kind": "digest",
+        "states": [
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1709164800005"
+              },
+              "target": "01923a4b-5c6d-7004-8000-000000000004"
+            },
+            "row": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7004-8000-000000000004",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7004-8000-000000000004"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7001-8000-000000000001",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7001-8000-000000000001"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7001-8000-000000000001",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7001-8000-000000000001"
+          }
+        ]
+      },
+      "name": "отпечаток не зависит от порядка и повторов"
+    },
+    {
+      "expect": {
+        "states": [
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC00YDQtdCy0L3QtdC1LCDQvdC+INC20LjQstC+0LUifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7005-8000-000000000005",
+              "ts_ms": "1000"
+            },
+            "target": "01923a4b-5c6d-7005-8000-000000000005"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "pin_stamp": {
+              "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+              "ts_ms": "1710028800000"
+            },
+            "pinned": true,
+            "reacts": [
+              {
+                "emoji": "👍",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "1712620800000"
+                },
+                "user": "bob@x"
+              }
+            ],
+            "target": "01923a4b-5c6d-7003-8000-000000000003"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1726444799000"
+              },
+              "target": "01923a4b-5c6d-7006-8000-000000000006"
+            },
+            "target": "01923a4b-5c6d-7006-8000-000000000006"
+          }
+        ]
+      },
+      "input": {
+        "kind": "compact",
+        "now_ms": 1726444800000,
+        "states": [
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1709164800005"
+              },
+              "target": "01923a4b-5c6d-7004-8000-000000000004"
+            },
+            "row": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7004-8000-000000000004",
+              "ts_ms": "1709164800000"
+            },
+            "target": "01923a4b-5c6d-7004-8000-000000000004"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC00YDQtdCy0L3QtdC1LCDQvdC+INC20LjQstC+0LUifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7005-8000-000000000005",
+              "ts_ms": "1000"
+            },
+            "target": "01923a4b-5c6d-7005-8000-000000000005"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "pin_stamp": {
+              "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+              "ts_ms": "1710028800000"
+            },
+            "pinned": true,
+            "reacts": [
+              {
+                "emoji": "👍",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "1712620800000"
+                },
+                "user": "bob@x"
+              }
+            ],
+            "target": "01923a4b-5c6d-7003-8000-000000000003"
+          },
+          {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1726444799000"
+              },
+              "target": "01923a4b-5c6d-7006-8000-000000000006"
+            },
+            "target": "01923a4b-5c6d-7006-8000-000000000006"
+          }
+        ]
+      },
+      "name": "свёртка за горизонтом 180 суток"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "op": {
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn0sInJlcGx5X3RvIjoiMDE5MmEzYjQtYzVkNi03ZThmLTkwMTItMzQ1Njc4OWFiY2QwIn0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "0192a3b4-c5d6-7e8f-9012-3456789abcde",
+            "ts_ms": "1709164800250"
+          }
+        }
+      },
+      "input": {
+        "chat": {
+          "user": {
+            "address": "bob@x"
+          }
+        },
+        "kind": "row_from_wire",
+        "row": {
+          "content": {
+            "kind": "text",
+            "text": "hi"
+          },
+          "edited": false,
+          "from": "bob@x",
+          "id": "0192a3b4-c5d6-7e8f-9012-3456789abcde",
+          "order": 7,
+          "origin": "v2",
+          "pinned": false,
+          "reactions": [],
+          "read": true,
+          "reply_to": "0192a3b4-c5d6-7e8f-9012-3456789abcd0",
+          "to": "alice@x",
+          "ts": 1709164800.25,
+          "updated_at": 5
+        }
+      },
+      "name": "строка формата привязки"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "chat": {
+          "user": {
+            "address": "bob@x"
+          }
+        },
+        "kind": "row_from_wire",
+        "row": {
+          "from": "bob@x",
+          "id": "0192a3b4-c5d6-7e8f-9012-3456789abcde",
+          "ts": 1
+        }
+      },
+      "name": "строка формата привязки: без содержимого"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "chat": {
+          "user": {
+            "address": "bob@x"
+          }
+        },
+        "kind": "row_from_wire",
+        "row": {
+          "content": {
+            "kind": "text"
+          },
+          "from": "bob@x",
+          "id": "x",
+          "ts": 1
+        }
+      },
+      "name": "строка формата привязки: неверный id"
+    },
+    {
+      "expect": {
+        "error": "BadAddress"
+      },
+      "input": {
+        "chat": {
+          "user": {
+            "address": "bob@x"
+          }
+        },
+        "kind": "row_from_wire",
+        "row": {
+          "content": {
+            "kind": "text"
+          },
+          "from": "bob",
+          "id": "0192a3b4-c5d6-7e8f-9012-3456789abcde",
+          "ts": 1
+        }
+      },
+      "name": "строка формата привязки: неверный автор"
+    },
+    {
+      "expect": {
+        "replace": true
+      },
+      "input": {
+        "cursor": 5,
+        "kind": "needs_replace",
+        "last_full_sync_ms": 10,
+        "tombstones_since_ms": 20,
+        "upto_seq": 6
+      },
+      "name": "замена: надгробия свёрнуты после полной синхронизации, курсор до точки"
+    },
+    {
+      "expect": {
+        "replace": false
+      },
+      "input": {
+        "cursor": 5,
+        "kind": "needs_replace",
+        "last_full_sync_ms": 30,
+        "tombstones_since_ms": 20,
+        "upto_seq": 6
+      },
+      "name": "замена: свёрнуты до полной синхронизации"
+    },
+    {
+      "expect": {
+        "replace": false
+      },
+      "input": {
+        "cursor": 6,
+        "kind": "needs_replace",
+        "last_full_sync_ms": 10,
+        "tombstones_since_ms": 20,
+        "upto_seq": 6
+      },
+      "name": "замена: курсор уже за точкой"
+    }
+  ],
+  "description": "HIST-2: сегменты контрольной точки, горизонт надгробий, режим замены; строка формата привязки",
+  "suite": "history/segment"
+}

@@ -1,0 +1,2123 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiEhIn19",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+            "ts_ms": "3000"
+          },
+          "pin_stamp": {
+            "op_id": "01923a4b-5c6d-70a8-8000-0000000000a8",
+            "ts_ms": "6000"
+          },
+          "pinned": true,
+          "reacts": [
+            {
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a5-8000-0000000000a5",
+                "ts_ms": "4000"
+              },
+              "user": "alice@x"
+            },
+            {
+              "emoji": "❤",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "2600"
+              },
+              "user": "bob@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "привет!!"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "editTsMs": 3000,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7001-8000-000000000001",
+          "orphan": false,
+          "pinned": true,
+          "reactions": [
+            {
+              "count": 1,
+              "emoji": "❤",
+              "users": [
+                "bob@x"
+              ]
+            }
+          ],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7001-8000-000000000001",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQuNCy0LXRgiEhIn19",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "2500"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001",
+              "user": "alice@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "❤",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "2600"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001",
+              "user": "bob@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a5-8000-0000000000a5",
+                "ts_ms": "4000"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001",
+              "user": "alice@x"
+            }
+          },
+          {
+            "pin": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "pinned": true,
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a6-8000-0000000000a6",
+                "ts_ms": "5000"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001"
+            }
+          },
+          {
+            "pin": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a7-8000-0000000000a7",
+                "ts_ms": "5500"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001"
+            }
+          },
+          {
+            "pin": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "pinned": true,
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a8-8000-0000000000a8",
+                "ts_ms": "6000"
+              },
+              "target": "01923a4b-5c6d-7001-8000-000000000001"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          [
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            0,
+            1,
+            2
+          ],
+          [
+            8,
+            0,
+            7,
+            1,
+            6,
+            2,
+            5,
+            3,
+            4,
+            4,
+            3,
+            5,
+            2,
+            6,
+            1,
+            7,
+            0,
+            8
+          ]
+        ]
+      },
+      "name": "сообщение, правки, реакции, закреп"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+              "ts_ms": "3000"
+            },
+            "target": "01923a4b-5c6d-7002-8000-000000000002"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7002-8000-000000000002",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7002-8000-000000000002"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7002-8000-000000000002",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGB0LXQutGA0LXRgiJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7002-8000-000000000002",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC10YnRkSJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7002-8000-000000000002"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "2100"
+              },
+              "target": "01923a4b-5c6d-7002-8000-000000000002",
+              "user": "alice@x"
+            }
+          },
+          {
+            "pin": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "pinned": true,
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "2200"
+              },
+              "target": "01923a4b-5c6d-7002-8000-000000000002"
+            }
+          },
+          {
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-7002-8000-000000000002"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2,
+            2,
+            1,
+            3,
+            0,
+            4
+          ]
+        ]
+      },
+      "name": "удаление у всех стирает тело, правку, реакции и закреп"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "5000"
+            },
+            "target": "01923a4b-5c6d-7003-8000-000000000003"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7003-8000-000000000003",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7003-8000-000000000003"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7003-8000-000000000003",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "5000"
+              },
+              "target": "01923a4b-5c6d-7003-8000-000000000003"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC+0L/QvtC30LTQsNCy0YjQtdC1In19",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7003-8000-000000000003",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "удаление до сообщения: строка не появляется"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC90L7QstGL0Lkg0YLQtdC60YHRgiJ9fQ==",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+            "ts_ms": "2000"
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGB0YLQsNGA0YvQuSDRgtC10LrRgdGCIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7004-8000-000000000004",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7004-8000-000000000004"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "новый текст"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "editTsMs": 2000,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7004-8000-000000000004",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC90L7QstGL0Lkg0YLQtdC60YHRgiJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7004-8000-000000000004"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGB0YLQsNGA0YvQuSDRgtC10LrRgdGCIn19",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7004-8000-000000000004",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "правка до сообщения применяется, когда оно придёт"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "pin_stamp": {
+            "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+            "ts_ms": "1100"
+          },
+          "pinned": true,
+          "reacts": [
+            {
+              "emoji": "🔥",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1000"
+              },
+              "user": "bob@x"
+            }
+          ],
+          "target": "01923a4b-5c6d-7005-8000-000000000005"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "edited": false,
+          "id": "01923a4b-5c6d-7005-8000-000000000005",
+          "orphan": true,
+          "pinned": false,
+          "reactions": [],
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "🔥",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1000"
+              },
+              "target": "01923a4b-5c6d-7005-8000-000000000005",
+              "user": "bob@x"
+            }
+          },
+          {
+            "pin": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "pinned": true,
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "1100"
+              },
+              "target": "01923a4b-5c6d-7005-8000-000000000005"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "сирота без сообщения не видна"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCw0LvRjNGE0LAifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7006-8000-000000000006",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7006-8000-000000000006"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "альфа"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7006-8000-000000000006",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCx0LXRgtCwIn19",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7006-8000-000000000006",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCw0LvRjNGE0LAifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7006-8000-000000000006",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "два тела одного сообщения — меньшее"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6InkifX0=",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+            "ts_ms": "2000"
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6InoifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7007-8000-000000000007",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7007-8000-000000000007"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "y"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "editTsMs": 2000,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7007-8000-000000000007",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7007-8000-000000000007"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6InkifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7007-8000-000000000007"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6InoifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7007-8000-000000000007",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1,
+            1,
+            0,
+            2
+          ]
+        ]
+      },
+      "name": "ничья метки правки — по байтам тела"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_ME",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-7008-8000-000000000008"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "alice@x",
+            "id": "01923a4b-5c6d-7008-8000-000000000008",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7008-8000-000000000008"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": true,
+          "deletedScope": "me",
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923a4b-5c6d-7008-8000-000000000008",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGB0LLQvtGRIn19",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "alice@x",
+              "id": "01923a4b-5c6d-7008-8000-000000000008",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7008-8000-000000000008"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "удалить только у меня"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+              "ts_ms": "3000"
+            },
+            "target": "01923a4b-5c6d-7009-8000-000000000009"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7009-8000-000000000009",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7009-8000-000000000009"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7009-8000-000000000009",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7009-8000-000000000009",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7009-8000-000000000009"
+            }
+          },
+          {
+            "gone": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-7009-8000-000000000009"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1,
+            1,
+            0,
+            2
+          ]
+        ]
+      },
+      "name": "удаление позже удаления — побеждает позднее"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "1200"
+              },
+              "user": "alice@x"
+            },
+            {
+              "emoji": "😂",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "1400"
+              },
+              "user": "bob@x"
+            },
+            {
+              "emoji": "😂",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "1300"
+              },
+              "user": "carol@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8In19",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "carol@x",
+            "id": "01923a4b-5c6d-700a-8000-00000000000a",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-700a-8000-00000000000a"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "всем"
+            }
+          },
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:x:42424242424242424242424242424242",
+          "deleted": false,
+          "edited": false,
+          "from": "carol@x",
+          "id": "01923a4b-5c6d-700a-8000-00000000000a",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [
+            {
+              "count": 2,
+              "emoji": "😂",
+              "users": [
+                "bob@x",
+                "carol@x"
+              ]
+            },
+            {
+              "count": 1,
+              "emoji": "👍",
+              "users": [
+                "alice@x"
+              ]
+            }
+          ],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8In19",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "carol@x",
+              "id": "01923a4b-5c6d-700a-8000-00000000000a",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1100"
+              },
+              "target": "01923a4b-5c6d-700a-8000-00000000000a",
+              "user": "bob@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "1200"
+              },
+              "target": "01923a4b-5c6d-700a-8000-00000000000a",
+              "user": "alice@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "emoji": "😂",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "1300"
+              },
+              "target": "01923a4b-5c6d-700a-8000-00000000000a",
+              "user": "carol@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "emoji": "😂",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "1400"
+              },
+              "target": "01923a4b-5c6d-700a-8000-00000000000a",
+              "user": "bob@x"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          [
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          [
+            4,
+            0,
+            3,
+            1,
+            2,
+            2,
+            1,
+            3,
+            0,
+            4
+          ]
+        ]
+      },
+      "name": "группа: реакции нескольких участников"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "user": "alice@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-700b-8000-00000000000b",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-700b-8000-00000000000b"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "a"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-700b-8000-00000000000b",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [
+            {
+              "count": 1,
+              "emoji": "👍",
+              "users": [
+                "alice@x"
+              ]
+            }
+          ],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-700b-8000-00000000000b",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-700b-8000-00000000000b",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-700b-8000-00000000000b",
+              "user": "alice@x"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-700b-8000-00000000000b",
+              "user": "alice@x"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            1,
+            2,
+            0,
+            3
+          ]
+        ]
+      },
+      "name": "повторы одного события"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImIifX0=",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+            "ts_ms": "3000"
+          },
+          "reacts": [
+            {
+              "emoji": "❤",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "2500"
+              },
+              "user": "alice@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-700c-8000-00000000000c",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-700c-8000-00000000000c"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "b"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "editTsMs": 3000,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-700c-8000-00000000000c",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [
+            {
+              "count": 1,
+              "emoji": "❤",
+              "users": [
+                "alice@x"
+              ]
+            }
+          ],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "state": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "reacts": [
+                {
+                  "emoji": "👍",
+                  "stamp": {
+                    "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                    "ts_ms": "2000"
+                  },
+                  "user": "alice@x"
+                }
+              ],
+              "row": {
+                "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "from": "bob@x",
+                "id": "01923a4b-5c6d-700c-8000-00000000000c",
+                "ts_ms": "1000"
+              },
+              "target": "01923a4b-5c6d-700c-8000-00000000000c"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImIifX0=",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-700c-8000-00000000000c"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "emoji": "❤",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "2500"
+              },
+              "target": "01923a4b-5c6d-700c-8000-00000000000c",
+              "user": "alice@x"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1,
+            1,
+            0,
+            2
+          ]
+        ]
+      },
+      "name": "состояние целиком как событие"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-700e-8000-00000000000e",
+            "ts_ms": "1"
+          }
+        },
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-700d-8000-00000000000d",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-700d-8000-00000000000d"
+        }
+      },
+      "name": "чужая цель"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "gone": {
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "scope": "GONE_SCOPE_ME",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "1"
+            },
+            "target": "01923a4b-5c6d-700d-8000-00000000000d"
+          }
+        },
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-700d-8000-00000000000d",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-700d-8000-00000000000d"
+        }
+      },
+      "name": "чужой чат"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "1"
+            },
+            "target": "01923a4b-5c6d-700d-8000-00000000000d"
+          }
+        }
+      },
+      "name": "удаление без области"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "read": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+            "up_to_ts_ms": "1"
+          }
+        }
+      },
+      "name": "маркер — не событие строки"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "edit": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImIifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "stamp": {
+              "op_id": "AQID",
+              "ts_ms": "1"
+            },
+            "target": "01923a4b-5c6d-700d-8000-00000000000d"
+          }
+        }
+      },
+      "name": "метка не 16 байт"
+    },
+    {
+      "expect": {
+        "error": "InvalidField"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "edit": {
+            "body": "WzEsMl0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-700d-8000-00000000000d"
+          }
+        }
+      },
+      "name": "правка — не JSON-объект"
+    },
+    {
+      "expect": {
+        "error": "BadAddress"
+      },
+      "input": {
+        "kind": "apply",
+        "op": {
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6IngifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "не адрес",
+            "id": "01923a4b-5c6d-700f-8000-00000000000f",
+            "ts_ms": "1"
+          }
+        }
+      },
+      "name": "неверный адрес автора"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "5"
+              },
+              "user": "alice@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7010-8000-000000000010",
+            "ts_ms": "1"
+          },
+          "target": "01923a4b-5c6d-7010-8000-000000000010"
+        }
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7010-8000-000000000010",
+            "ts_ms": "1"
+          },
+          "target": "01923a4b-5c6d-7010-8000-000000000010"
+        },
+        "b": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "5"
+              },
+              "user": "alice@x"
+            }
+          ],
+          "target": "01923a4b-5c6d-7010-8000-000000000010"
+        },
+        "kind": "merge"
+      },
+      "name": "свести два состояния"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7010-8000-000000000010",
+            "ts_ms": "1"
+          },
+          "target": "01923a4b-5c6d-7010-8000-000000000010"
+        },
+        "b": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImEifX0=",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7010-8000-000000000010",
+            "ts_ms": "1"
+          },
+          "target": "01923a4b-5c6d-7010-8000-000000000010"
+        },
+        "kind": "merge"
+      },
+      "name": "свести состояния разных чатов"
+    }
+  ],
+  "description": "HIST-1: сведение строки сообщения не зависит от порядка и повторов; удалённое не воскресает",
+  "suite": "history/merge"
+}

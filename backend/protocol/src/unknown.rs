@@ -45,7 +45,8 @@ pub fn record_disposition(rec: &InboxRecord) -> Disposition {
         | Some(inbox_record::Item::LegacyV1(_)) => Disposition::Show,
         Some(inbox_record::Item::GroupState(_))
         | Some(inbox_record::Item::DeviceRevoked(_))
-        | Some(inbox_record::Item::DeviceAdded(_)) => Disposition::Skip,
+        | Some(inbox_record::Item::DeviceAdded(_))
+        | Some(inbox_record::Item::Journal(_)) => Disposition::Skip,
     }
 }
 

@@ -139,6 +139,9 @@ pub enum Event {
     /// Новое устройство в журнале своего пользователя (T119): живое событие,
     /// хосту — перечитать свой журнал и показать уведомление.
     DeviceAdded { device_id: String, log_version: u64 },
+    /// Новая запись в журнале личного состояния (`kind` = 1) или истории (`kind` = 2) своего пользователя
+    /// (spec 033): живое событие без места в журнале инбокса — хосту сразу синхронизировать этот журнал.
+    Journal { kind: i32, seq: u64 },
     /// Своё другое устройство сменило ключ личного состояния (после отзыва
     /// устройства): хост перешифровывает журнал состояния новым ключом.
     StateKeyRotated { seq: u64, key_version: u32 },
@@ -335,6 +338,9 @@ pub struct Client {
     token_keys: Vec<TokenKey>,
     /// Ключ личного состояния и его версия (общий для своих устройств).
     state_key: Option<(StateKey, u32)>,
+    /// Прежние ключи личного состояния (после ротации, spec 033): записи журнала истории, запечатанные ими,
+    /// остаются читаемыми. Новые сначала, не больше `FORMER_STATE_KEYS_MAX`.
+    former_state_keys: Vec<(StateKey, u32)>,
     /// Учёт доставки/прочтения своих сообщений (T074).
     reads: msg::ReadTracker,
     /// Отзывы, последствия которых уже выполнены этим устройством (T124).
@@ -444,6 +450,8 @@ fn seen_hash(key: &[u8]) -> SeenHash {
 const MAX_OLD_SESSIONS: usize = 4;
 /// spec 026: прежних адресов по имени (из гранта) — не больше
 const MAX_FORMER_NAMES: usize = 32;
+/// Сколько прежних ключей личного состояния помнить (журнал истории, spec 033).
+const FORMER_STATE_KEYS_MAX: usize = 16;
 
 impl Client {
     /// Новое устройство (свежий Olm-аккаунт, HPKE, ключ доступа к доставке).
@@ -476,6 +484,7 @@ impl Client {
             stock: TokenStock::new(),
             token_keys: vec![],
             state_key: None,
+            former_state_keys: Vec::new(),
             reads: msg::ReadTracker::new(),
             revocations_done: BTreeSet::new(),
             trust: RootTrust::default(),
@@ -1936,11 +1945,28 @@ impl Client {
     /// Ключ личного состояния (первое устройство — `StateKey::generate`,
     /// связанное — из гранта линковки).
     pub fn set_state_key(&mut self, key: StateKey, version: u32) {
-        self.state_key = Some((key, version));
+        self.replace_state_key(key, version);
     }
 
     pub fn state_key(&self) -> Option<(&StateKey, u32)> {
         self.state_key.as_ref().map(|(k, v)| (k, *v))
+    }
+
+    /// Текущий ключ личного состояния и прежние (новые сначала) — для журнала истории (spec 033).
+    pub fn state_keys_all(&self) -> Vec<(&StateKey, u32)> {
+        self.state_key.iter().chain(self.former_state_keys.iter()).map(|(k, v)| (k, *v)).collect()
+    }
+
+    /// Сменить ключ личного состояния, сохранив прежний среди прежних (если он другой).
+    fn replace_state_key(&mut self, key: StateKey, version: u32) {
+        if let Some((old, ov)) = self.state_key.take() {
+            if old.as_bytes() != key.as_bytes() && !self.former_state_keys.iter().any(|(k, _)| k.as_bytes() == old.as_bytes()) {
+                self.former_state_keys.insert(0, (old, ov));
+                self.former_state_keys.truncate(FORMER_STATE_KEYS_MAX);
+            }
+        }
+        self.former_state_keys.retain(|(k, _)| k.as_bytes() != key.as_bytes());
+        self.state_key = Some((key, version));
     }
 
     // ── отзыв устройства (T124; D-11, D-12, D-16) ───────────────────────────
@@ -2031,7 +2057,7 @@ impl Client {
         if let Some(v) = self.state_key.as_ref().map(|(_, v)| v.saturating_add(1)) {
             let k = StateKey::generate();
             let share = k.to_share(&self.user, v)?;
-            self.state_key = Some((k, v));
+            self.replace_state_key(k, v);
             let c = Content { kind: Some(content::Kind::StateKey(share)), ..Default::default() };
             o.requests.extend(self.seal_to_own_devices(&c)?);
             o.state_key_version = Some(v);
@@ -2188,6 +2214,10 @@ impl Client {
             if let Some(inbox_record::Item::DeviceAdded(d)) = &rec.item {
                 return Ok(vec![Event::DeviceAdded { device_id: d.device_id.clone(), log_version: d.log_version }]);
             }
+            // Уведомление журнала (spec 033): тоже мимо курсора инбокса.
+            if let Some(inbox_record::Item::Journal(j)) = &rec.item {
+                return Ok(vec![Event::Journal { kind: j.kind, seq: j.seq }]);
+            }
             // Сигнал звонка (D-08) — тоже мимо журнала. Обычное сообщение без
             // места в журнале не принимаем: его источник — только журнал.
             if let Some(inbox_record::Item::Sealed(env)) = &rec.item {
@@ -2215,6 +2245,7 @@ impl Client {
                 vec![Event::DeviceRevoked { seq, device_id: d.device_id }]
             }
             Some(inbox_record::Item::DeviceAdded(d)) => vec![Event::DeviceAdded { device_id: d.device_id, log_version: d.log_version }],
+            Some(inbox_record::Item::Journal(j)) => vec![Event::Journal { kind: j.kind, seq: j.seq }],
             Some(inbox_record::Item::Sealed(env)) => match self.open_sealed(seq, &env) {
                 Ok(e) => e,
                 Err(ClientError::Need(n)) => return Err(ClientError::Need(n)),
@@ -2375,7 +2406,7 @@ impl Client {
                 }
                 let (k, v) = StateKey::from_share(sk, &self.user)?;
                 if self.state_key.as_ref().is_none_or(|(_, cur)| v > *cur) {
-                    self.state_key = Some((k, v));
+                    self.replace_state_key(k, v);
                     return Ok(vec![Event::StateKeyRotated { seq, key_version: v }]);
                 }
                 return Ok(vec![Event::Internal { seq }]);
@@ -3577,6 +3608,7 @@ impl Client {
                 .collect(),
             token_keys: self.token_keys.iter().map(|k| b(&k.encode_to_vec())).collect(),
             state_key: self.state_key.as_ref().map(|(k, v)| (b(k.as_bytes()), *v)),
+            former_state_keys: self.former_state_keys.iter().map(|(k, v)| (b(k.as_bytes()), *v)).collect(),
             reads: self.reads.clone(),
             revocations_done: self.revocations_done.iter().cloned().collect(),
             trust: self.peers.keys().filter_map(|u| self.trust.get(u).map(|r| (u.clone(), b(r)))).collect(),
@@ -3732,6 +3764,12 @@ impl Client {
             c.foreign_tokens.insert(pf.domain.to_ascii_lowercase(), f);
         }
         c.state_key = p.state_key.as_ref().map(|(k, v)| d(k).and_then(|b| StateKey::from_bytes(&b).map_err(|_| ProtoError::Malformed)).map(|k| (k, *v))).transpose()?;
+        c.former_state_keys = p
+            .former_state_keys
+            .iter()
+            .take(FORMER_STATE_KEYS_MAX)
+            .map(|(k, v)| d(k).and_then(|b| StateKey::from_bytes(&b).map_err(|_| ProtoError::Malformed)).map(|k| (k, *v)))
+            .collect::<Result<_>>()?;
         c.reads = p.reads;
         c.revocations_done = p.revocations_done.into_iter().collect();
         // Прежний формат: сырые ключи без момента записи — считаем свежими.
@@ -3931,6 +3969,9 @@ struct Persisted {
     token_keys: Vec<String>,
     #[serde(default)]
     state_key: Option<(String, u32)>,
+    /// Прежние ключи личного состояния (spec 033).
+    #[serde(default)]
+    former_state_keys: Vec<(String, u32)>,
     #[serde(default)]
     reads: msg::ReadTracker,
     #[serde(default)]

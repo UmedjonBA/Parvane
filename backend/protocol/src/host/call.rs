@@ -27,6 +27,8 @@ use crate::pb::parvane::msg::v2::Content;
 type R = Result<Value, String>;
 
 const UNKNOWN: &str = r#"{"error":"UnknownCall"}"#;
+/// Ошибка незнакомого имени (для соседних модулей единой точки входа).
+pub(crate) const UNKNOWN_CALL: &str = UNKNOWN;
 
 fn missing(k: &'static str) -> String {
     err(ProtoError::InvalidField(k))
@@ -533,6 +535,10 @@ impl HostState {
 
 /// Функции без клиента (имена свободных функций WASM).
 pub fn call_static(name: &str, args: &Value) -> R {
+    // Журнал истории (spec 033): `historyApply`, `historyView`, …
+    if let Some(r) = super::history::call_static(name, args) {
+        return r;
+    }
     let a = Args(args);
     Ok(match name {
         "version" => json!(crate::version()),
@@ -621,6 +627,9 @@ pub const NOT_ROUTED: &[(&str, &str)] = &[
     ("new", "конструктор — pv_client_new"),
     ("importState", "конструктор — pv_client_import"),
     ("stateSession", "создаёт сессию журнала — pv_client_state_session"),
+    ("historySession", "создаёт сессию журнала истории — pv_client_history_session"),
+    ("historyCall", "диспетчер статических функций `history*` WASM — у хостов это call_static / pv_call"),
+    ("call", "PvHistory.call — pv_history_call (HostHistory::call)"),
     ("assign", "PvAnonPlanner — pv_anon_planner_*"),
     ("expired", "PvAnonPlanner — pv_anon_planner_*"),
     ("closed", "PvAnonPlanner — pv_anon_planner_*"),

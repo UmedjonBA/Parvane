@@ -13,7 +13,10 @@
 //! (чистка содержимого), `legacy_v1/messages` (разбор v1-диалектов клиентов),
 //! `call/signals` (сигнал звонка v1 ↔ v2: перекладку делают клиенты, движок
 //! сверяет, что их proto3-JSON — допустимый `CallSignal`), `link/sas` (LINK-1:
-//! обязательство и код сверки считают клиенты, движок сверяет формулу).
+//! обязательство и код сверки считают клиенты, движок сверяет формулу), с spec 033 — `history/merge`
+//! (HIST-1: любой порядок и повторы событий строки — тот же канонический `RowState` и тот же вид),
+//! `history/unread` (READ-2: непрочитанное, маркеры, права удаления), `history/segment` (HIST-2: ключи и
+//! отпечатки сегментов, горизонт, строка формата привязки) и `history/aead` (ключ истории и записи журнала).
 
 use serde_json::Value;
 
@@ -60,6 +63,7 @@ pub fn run(suite: &str, json: &str) -> Result<usize, String> {
             "legacy_v1/messages" => legacy_case(case),
             "call/signals" => call_case(case),
             "link/sas" => link_case(case),
+            "history/merge" | "history/unread" | "history/segment" | "history/aead" => history_case(suite, case),
             _ => return Err(format!("неизвестный набор {suite}")),
         };
         r.map_err(|e| format!("{suite}/{name}: {e}"))?;
@@ -531,6 +535,163 @@ fn link_case(case: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// ── журнал истории (spec 033) ───────────────────────────────────────────────
+
+fn hjson<T: serde::de::DeserializeOwned>(v: &Value, key: &str) -> Result<T, String> {
+    crate::host::history::from_json(v.get(key).ok_or_else(|| format!("нет поля {key}"))?).map_err(|e| format!("{key}: {e}"))
+}
+
+fn hjson_opt<T: serde::de::DeserializeOwned>(v: &Value, key: &str) -> Result<Option<T>, String> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => hjson(v, key).map(Some),
+    }
+}
+
+fn hlist<T: serde::de::DeserializeOwned>(v: &Value, key: &str) -> Result<Vec<T>, String> {
+    v.get(key).and_then(Value::as_array).ok_or_else(|| format!("нет поля {key}"))?.iter().map(|x| crate::host::history::from_json(x).map_err(|e| format!("{key}: {e}"))).collect()
+}
+
+fn same(got: &Value, expect: &Value, what: &str) -> Result<(), String> {
+    if got == expect {
+        Ok(())
+    } else {
+        Err(format!("{what}: {got} вместо {expect}"))
+    }
+}
+
+fn history_case(suite: &str, case: &Value) -> Result<(), String> {
+    use crate::history as h;
+    use crate::host::history::to_json;
+    use crate::pb::parvane::history::v1::{HistoryBatch, HistoryOp, ReadMark, RowState};
+    let input = &case["input"];
+    let expect = &case["expect"];
+    let kind = input.get("kind").and_then(Value::as_str).unwrap_or("");
+    match (suite, kind) {
+        ("history/merge", "") => {
+            let ops: Vec<HistoryOp> = hlist(input, "ops")?;
+            for order in input["orders"].as_array().ok_or("нет orders")? {
+                let mut st: Option<RowState> = None;
+                for i in order.as_array().ok_or("порядок")?.iter().filter_map(Value::as_u64) {
+                    let op = ops.get(i as usize).ok_or("индекс вне ops")?;
+                    st = Some(h::apply(st.as_ref(), op).map_err(|e| format!("операция {i}: {}", e.kind()))?);
+                }
+                let st = st.ok_or("пустой порядок")?;
+                same(&to_json(&st), &expect["state"], &format!("состояние при порядке {order}"))?;
+                same(&h::view(&st).map_err(|e| e.kind().to_string())?, &expect["view"], "вид")?;
+            }
+            Ok(())
+        }
+        ("history/merge", "apply") => {
+            let state: Option<RowState> = hjson_opt(input, "state")?;
+            expect_outcome(&h::apply(state.as_ref(), &hjson(input, "op")?), expect)
+        }
+        ("history/merge", "merge") => {
+            let r = h::merge(&hjson(input, "a")?, &hjson(input, "b")?);
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(s) => same(&to_json(&s), &expect["state"], "состояние"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/unread", "unread") => {
+            let mark: Option<ReadMark> = hjson_opt(input, "mark")?;
+            let r = h::is_unread(&hjson(input, "state")?, mark.as_ref(), input["self"].as_str().unwrap_or(""));
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(u) => same(&Value::Bool(u), &expect["unread"], "непрочитано"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/unread", "mark_merge") => {
+            let (a, b): (Option<ReadMark>, Option<ReadMark>) = (hjson_opt(input, "a")?, hjson_opt(input, "b")?);
+            let r = h::mark_merge(a.as_ref(), b.as_ref());
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(m) => same(&m.as_ref().map_or(Value::Null, to_json), &expect["mark"], "маркер"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/unread", "mark_after") => {
+            let mark: Option<ReadMark> = hjson_opt(input, "mark")?;
+            let id = h::parse_id(input["id"].as_str().unwrap_or("")).map_err(|e| e.kind().to_string())?;
+            let r = h::mark_after(mark.as_ref(), input["ts_ms"].as_i64().ok_or("нет ts_ms")?, &id);
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(a) => same(&Value::Bool(a), &expect["after"], "после маркера"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/unread", "can_delete") => {
+            let k = h::ChatKind::parse(input["chat_kind"].as_str().unwrap_or("")).map_err(|e| e.kind().to_string())?;
+            let r = h::can_delete(k, str_field(input, "author")?, str_field(input, "deleter")?, input["deleter_is_admin"].as_bool().unwrap_or(false));
+            same(&Value::Bool(r), &expect["allowed"], "право удаления")
+        }
+        ("history/segment", "key") => {
+            let r = h::segment_key(&hjson(input, "state")?);
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(k) => same(&Value::String(k), &expect["key"], "ключ сегмента"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/segment", "digest") => {
+            let d = h::segment_digest(&hlist::<RowState>(input, "states")?).map_err(|e| e.kind().to_string())?;
+            eq_hex(&d, expect, "digest_hex")
+        }
+        ("history/segment", "compact") => {
+            let out = h::compact(&hlist::<RowState>(input, "states")?, input["now_ms"].as_i64().ok_or("нет now_ms")?).map_err(|e| e.kind().to_string())?;
+            same(&Value::Array(out.iter().map(to_json).collect()), &expect["states"], "свёртка")
+        }
+        ("history/segment", "row_from_wire") => {
+            let r = h::row_from_wire(&input["row"], &hjson(input, "chat")?);
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(op) => same(&to_json(&op), &expect["op"], "строка"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/segment", "needs_replace") => {
+            let n = |k: &str| input[k].as_i64().ok_or_else(|| format!("нет {k}"));
+            let r = h::needs_replace(n("last_full_sync_ms")?, n("tombstones_since_ms")?, n("cursor")? as u64, n("upto_seq")? as u64);
+            same(&Value::Bool(r), &expect["replace"], "замена")
+        }
+        ("history/aead", "derive") => {
+            let sk = crate::state::StateKey::from_bytes(&hex_field(input, "state_key_hex")?).map_err(|e| e.kind().to_string())?;
+            eq_hex(h::HistoryKey::derive(&sk, str_field(input, "address")?).as_bytes(), expect, "key_hex")
+        }
+        ("history/aead", "seal") => {
+            let sk = crate::state::StateKey::from_bytes(&hex_field(input, "state_key_hex")?).map_err(|e| e.kind().to_string())?;
+            let address = str_field(input, "address")?;
+            let batch: HistoryBatch = hjson(input, "batch")?;
+            let nonce: [u8; 12] = hex_field(input, "nonce_hex")?.try_into().map_err(|_| "nonce_hex")?;
+            let r = h::seal_with_nonce(&h::HistoryKey::derive(&sk, address), address, &hex_field(input, "op_id_hex")?, input["chunk"].as_bool().unwrap_or(false), &batch, nonce);
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(a) => eq_hex(&a.aead_ciphertext, expect, "aead_hex"),
+                Err(_) => Ok(()),
+            }
+        }
+        ("history/aead", "open") => {
+            let sk = crate::state::StateKey::from_bytes(&hex_field(input, "state_key_hex")?).map_err(|e| e.kind().to_string())?;
+            let key_address = input.get("key_address").and_then(Value::as_str).unwrap_or(str_field(input, "address")?);
+            let r = h::open_record(
+                &h::HistoryKey::derive(&sk, key_address),
+                str_field(input, "address")?,
+                &hex_field(input, "op_id_hex")?,
+                input["chunk"].as_bool().unwrap_or(false),
+                &hex_field(input, "aead_hex")?,
+            );
+            expect_outcome(&r, expect)?;
+            match r {
+                Ok(b) => same(&to_json(&b), &expect["batch"], "пачка"),
+                Err(_) => Ok(()),
+            }
+        }
+        _ => Err(format!("неизвестный вид случая {kind:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +724,10 @@ mod tests {
             ("legacy_v1/messages", "legacy_v1/messages.json", 40),
             ("call/signals", "call/signals.json", 30),
             ("link/sas", "link/sas.json", 5),
+            ("history/merge", "history/merge.json", 8),
+            ("history/unread", "history/unread.json", 8),
+            ("history/segment", "history/segment.json", 8),
+            ("history/aead", "history/aead.json", 6),
         ] {
             let n = run(suite, &read(file)).unwrap();
             assert!(n >= least, "{suite}: {n}");

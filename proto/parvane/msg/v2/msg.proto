@@ -163,6 +163,10 @@ message InboxRecord {
     // событие без записи в журнал (seq = 0); офлайн-устройства узнают о нём
     // из собственного журнала устройств при синхронизации.
     DeviceAddedNotice device_added = 15;
+    // Новая запись в журнале личного состояния или истории пользователя (spec 033): живое событие без записи
+    // в журнал инбокса (seq = 0), messenger будит прочие устройства пользователя после state.append и
+    // history.append. Без содержимого — устройство само тянет журнал от курсора.
+    JournalNotice journal = 16;
   }
 }
 
@@ -183,6 +187,18 @@ message DeviceAddedNotice {
   string device_id = 1 [(parvane.core.v2.max_len) = 64];
   // Версия журнала устройств, в которой устройство добавлено.
   uint64 log_version = 2;
+}
+
+enum JournalKind {
+  JOURNAL_KIND_UNSPECIFIED = 0;
+  JOURNAL_KIND_STATE = 1;
+  JOURNAL_KIND_HISTORY = 2;
+}
+
+message JournalNotice {
+  JournalKind kind = 1;
+  // seq новой записи журнала.
+  uint64 seq = 2;
 }
 
 message InboxSyncRequest {

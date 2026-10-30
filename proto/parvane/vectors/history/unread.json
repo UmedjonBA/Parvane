@@ -1,0 +1,681 @@
+{
+  "cases": [
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "входящее без маркера"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "3000"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "входящее до маркера"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "2000"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "входящее равно маркеру"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "2000"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "тот же миг, id больше маркера"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7009-8000-000000000009",
+          "up_to_ts_ms": "1999"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "входящее после маркера"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC80L7RkSJ9fQ==",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "alice@x",
+            "id": "01923a4b-5c6d-7002-8000-000000000002",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7002-8000-000000000002"
+        }
+      },
+      "name": "своё"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJjaGF0X21vZGUiLCJsMiI6dHJ1ZX19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7003-8000-000000000003",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7003-8000-000000000003"
+        }
+      },
+      "name": "служебное chat_mode"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "3000"
+            },
+            "target": "01923a4b-5c6d-7004-8000-000000000004"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7004-8000-000000000004",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7004-8000-000000000004"
+        }
+      },
+      "name": "удалённое"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1000"
+              },
+              "user": "bob@x"
+            }
+          ],
+          "target": "01923a4b-5c6d-7005-8000-000000000005"
+        }
+      },
+      "name": "сирота"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "1000"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQsNCy0LrQsCJ9fQ==",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+            "ts_ms": "2500"
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGC0LXQutGB0YIifX0=",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7006-8000-000000000006",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7006-8000-000000000006"
+        }
+      },
+      "name": "правленое входящее"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "kind": "unread",
+        "mark": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000"
+        },
+        "self": "alice@x",
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "маркер другого чата"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "ok": true
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "b": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: больший по времени"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "ok": true
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "b": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: то же время — больший id"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "ok": true
+      },
+      "input": {
+        "b": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: один маркер"
+    },
+    {
+      "expect": {
+        "mark": null,
+        "ok": true
+      },
+      "input": {
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: нет маркеров"
+    },
+    {
+      "expect": {
+        "error": "ContextMismatch"
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "1"
+        },
+        "b": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров разных чатов"
+    },
+    {
+      "expect": {
+        "after": true,
+        "ok": true
+      },
+      "input": {
+        "id": "01923a4b-5c6d-7001-8000-000000000001",
+        "kind": "mark_after",
+        "ts_ms": 1
+      },
+      "name": "сдвиг маркера: без маркера"
+    },
+    {
+      "expect": {
+        "after": true,
+        "ok": true
+      },
+      "input": {
+        "id": "01923a4b-5c6d-7000-8000-000000000000",
+        "kind": "mark_after",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "ts_ms": 6
+      },
+      "name": "сдвиг маркера: позже"
+    },
+    {
+      "expect": {
+        "after": false,
+        "ok": true
+      },
+      "input": {
+        "id": "01923a4b-5c6d-7001-8000-000000000001",
+        "kind": "mark_after",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "ts_ms": 5
+      },
+      "name": "сдвиг маркера: равно"
+    },
+    {
+      "expect": {
+        "after": false,
+        "ok": true
+      },
+      "input": {
+        "id": "01923a4b-5c6d-7009-8000-000000000009",
+        "kind": "mark_after",
+        "mark": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7001-8000-000000000001",
+          "up_to_ts_ms": "5"
+        },
+        "ts_ms": 4
+      },
+      "name": "сдвиг маркера: раньше"
+    },
+    {
+      "expect": {
+        "allowed": true
+      },
+      "input": {
+        "author": "alice@x",
+        "chat_kind": "user",
+        "deleter": "alice@x",
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: личный чат: своё"
+    },
+    {
+      "expect": {
+        "allowed": true
+      },
+      "input": {
+        "author": "bob@x",
+        "chat_kind": "user",
+        "deleter": "alice@x",
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: личный чат: чужое у всех"
+    },
+    {
+      "expect": {
+        "allowed": true
+      },
+      "input": {
+        "author": "alice@x",
+        "chat_kind": "group",
+        "deleter": "alice@x",
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: группа: своё"
+    },
+    {
+      "expect": {
+        "allowed": false
+      },
+      "input": {
+        "author": "bob@x",
+        "chat_kind": "group",
+        "deleter": "alice@x",
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: группа: чужое без права"
+    },
+    {
+      "expect": {
+        "allowed": true
+      },
+      "input": {
+        "author": "bob@x",
+        "chat_kind": "group",
+        "deleter": "alice@x",
+        "deleter_is_admin": true,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: группа: чужое админом с правом"
+    }
+  ],
+  "description": "READ-2: непрочитанное считается от маркера; маркер только растёт; права удаления у всех",
+  "suite": "history/unread"
+}

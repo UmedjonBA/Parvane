@@ -18,6 +18,7 @@ pub mod ephemeral;
 pub mod error;
 pub mod federation;
 pub mod group;
+pub mod history;
 pub mod host;
 pub mod identity;
 pub mod invite;

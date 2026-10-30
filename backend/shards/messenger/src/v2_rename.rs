@@ -40,7 +40,7 @@ pub(crate) async fn serve(ctx: Arc<V2>) {
     }
 }
 
-/// Журналы инбокса устройств (ключ — из адреса и устройства), личное состояние, членство и заявки.
+/// Журналы инбокса устройств (ключ — из адреса и устройства), личное состояние, журнал истории, членство и заявки.
 pub(crate) async fn rename(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
     if n.purge {
         return purge(ctx, n).await;
@@ -52,6 +52,12 @@ pub(crate) async fn rename(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error
         merge_queue(&mut tx, "inbox_log", "device", "seq", "inbox_device", "device", &from, &to).await?;
     }
     merge_queue(&mut tx, "user_state_log", "user", "seq", "user_state_head", "user", old, new).await?;
+    // Журнал истории (spec 033): записи прежнего адреса сохраняют seq — контрольная точка переходит вместе с ними
+    merge_queue(&mut tx, "user_history_log", "user", "seq", "user_history_head", "user", old, new).await?;
+    if sqlx::query("SELECT 1 FROM user_history_checkpoint WHERE user = ?").bind(old).fetch_optional(&mut *tx).await?.is_some() {
+        sqlx::query("DELETE FROM user_history_checkpoint WHERE user = ?").bind(new).execute(&mut *tx).await?;
+        sqlx::query("UPDATE user_history_checkpoint SET user = ? WHERE user = ?").bind(new).bind(old).execute(&mut *tx).await?;
+    }
     for (table, column) in [("group_members_v2", "member"), ("group_join_requests_v2", "user"), ("public_join_points", "user")] {
         sqlx::query(&format!("UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?")).bind(new).bind(old).execute(&mut *tx).await?;
         sqlx::query(&format!("DELETE FROM {table} WHERE {column} = ?")).bind(old).execute(&mut *tx).await?;
@@ -98,7 +104,7 @@ async fn merge_queue(
     Ok(())
 }
 
-/// Удаление аккаунта (spec 027): журналы инбокса устройств, личное состояние, заявки и точки публичных групп.
+/// Удаление аккаунта (spec 027): журналы инбокса устройств, личное состояние, журнал истории, заявки и точки публичных групп.
 /// Членство в группах — запись их журналов (подписана), индекс участников не трогается: доставка удалённому
 /// аккаунту уже не принимается (устройств у него нет).
 async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
@@ -111,6 +117,9 @@ async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
     }
     sqlx::query("DELETE FROM user_state_log WHERE user = ?").bind(address).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM user_state_head WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    for table in ["user_history_log", "user_history_head", "user_history_checkpoint"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE user = ?")).bind(address).execute(&mut *tx).await?;
+    }
     sqlx::query("DELETE FROM group_join_requests_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM public_join_points WHERE user = ?").bind(address).execute(&mut *tx).await?;
     tx.commit().await?;

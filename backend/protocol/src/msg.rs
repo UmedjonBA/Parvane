@@ -434,14 +434,24 @@ pub fn mutation_targets(c: &Content) -> Vec<&[u8]> {
 }
 
 /// Вправе ли `sender` применить мутацию к сообщению автора `target_author`
-/// (у получателя; сервер этого не видит). `sender_is_admin` — админ группы
-/// с правом удаления (для личных чатов — false).
-pub fn mutation_authorized(c: &Content, sender: &str, target_author: &str, sender_is_admin: bool) -> bool {
+/// (у получателя; сервер этого не видит). `direct` — личный чат (иначе группа);
+/// `sender_is_admin` — админ группы с правом удаления (для личных чатов — false).
+pub fn mutation_authorized(c: &Content, sender: &str, target_author: &str, sender_is_admin: bool, direct: bool) -> bool {
     match &c.kind {
         // Править можно только своё.
         Some(content::Kind::Edit(_)) => sender == target_author,
-        // Удалить у всех — автор или админ группы; «только у себя» — только свои копии.
-        Some(content::Kind::Delete(d)) => sender == target_author || (d.for_everyone && sender_is_admin),
+        // Удалить у всех: личный чат — любой из двух участников (spec 033, как Telegram; права — та же
+        // функция `history::can_delete`); группа — автор или админ с правом. «Только у себя» — только свои копии.
+        Some(content::Kind::Delete(d)) => {
+            sender == target_author
+                || (d.for_everyone
+                    && crate::history::can_delete(
+                        if direct { crate::history::ChatKind::User } else { crate::history::ChatKind::Group },
+                        target_author,
+                        sender,
+                        sender_is_admin,
+                    ))
+        }
         Some(content::Kind::Reaction(_)) | Some(content::Kind::Receipt(_)) | Some(content::Kind::Pin(_)) => true,
         _ => false,
     }
@@ -627,11 +637,17 @@ mod tests {
         assert_eq!(t.apply("alice@x", &ChatKey::Direct("bob@x".into()), "bob@x", &rd(std::slice::from_ref(&id2)), 13), vec![id2.clone()]);
         // Права мутаций.
         let e = edit_text(&id1, Text { text: "x".into(), ..Default::default() });
-        assert!(mutation_authorized(&e, "a", "a", false) && !mutation_authorized(&e, "b", "a", true));
+        assert!(mutation_authorized(&e, "a", "a", false, false) && !mutation_authorized(&e, "b", "a", true, false));
+        assert!(!mutation_authorized(&e, "b", "a", false, true), "чужое не правится и в личном чате");
         let d = delete(std::slice::from_ref(&id1), true).unwrap();
-        assert!(mutation_authorized(&d, "b", "a", true) && !mutation_authorized(&d, "b", "a", false));
-        assert!(!mutation_authorized(&delete(std::slice::from_ref(&id1), false).unwrap(), "b", "a", true));
-        assert!(mutation_authorized(&reaction(&id1, "👍", false), "b", "a", false));
+        // Группа: чужое у всех — только админ с правом
+        assert!(mutation_authorized(&d, "b", "a", true, false) && !mutation_authorized(&d, "b", "a", false, false));
+        // Личный чат: чужое у всех — любой участник (spec 033)
+        assert!(mutation_authorized(&d, "b", "a", false, true));
+        // «Только у себя» чужого — нигде
+        assert!(!mutation_authorized(&delete(std::slice::from_ref(&id1), false).unwrap(), "b", "a", true, false));
+        assert!(!mutation_authorized(&delete(std::slice::from_ref(&id1), false).unwrap(), "b", "a", false, true));
+        assert!(mutation_authorized(&reaction(&id1, "👍", false), "b", "a", false, false));
         assert_eq!(mutation_targets(&pin(&id1, false, true)), vec![id1.as_slice()]);
         assert!(receipt(ReceiptKind::Read, &[]).is_err());
         assert!(!is_trackable(&d) && is_trackable(&text("x")));

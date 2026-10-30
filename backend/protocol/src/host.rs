@@ -148,6 +148,7 @@ fn event_json(e: &Event) -> Value {
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
         Event::DeviceAdded { device_id, log_version } => json!({"type": "deviceAdded", "deviceId": device_id, "logVersion": log_version}),
+        Event::Journal { kind, seq } => json!({"type": "journal", "journal": match kind { 1 => "state", 2 => "history", _ => "unknown" }, "seq": seq}),
         Event::Call { from, device, call_id, ts_ms, signal } => json!({
             "type": "call", "from": from, "device": device, "callId": hex::encode(call_id), "tsMs": ts_ms,
             "signal": serde_json::to_value(signal).unwrap_or(Value::Null)
@@ -305,6 +306,8 @@ fn key32(b: &[u8]) -> Result<[u8; 32], String> {
 }
 
 pub mod call;
+pub mod history;
+pub use history::HostHistory;
 
 /// Разбор числовых полей гранта линковки (общий для обвязок host/wasm): `gen` обязателен, `skv` обязателен
 /// при `sk`, оба — без усечения. Прежде отсутствующее поле молча давало 1 и ключи расходились без ошибки.
@@ -815,6 +818,14 @@ impl HostClient {
         true
     }
 
+    /// Сессия журнала истории аккаунта (spec 033): ключ истории — из текущего и прежних ключей личного
+    /// состояния, прежние адреса — как у журнала состояния. None — ключа состояния нет.
+    pub fn history_session(&self) -> Option<HostHistory> {
+        let keys = self.inner.state_keys_all();
+        let former = self.inner.state_former_addresses();
+        crate::history::HistorySession::new(&self.inner.user, &former, &self.inner.device_id, &keys).ok().map(HostHistory::new)
+    }
+
     /// Сессия журнала личного состояния на текущем ключе (None — ключа нет).
     pub fn state_session(&self) -> Option<HostState> {
         let (k, _) = self.inner.state_key()?;
@@ -1199,6 +1210,11 @@ pub fn encode_message(type_name: &str, json_text: &str) -> Result<Vec<u8>, Strin
         "parvane.preview.v2.MapTileRequest" => crate::pb::parvane::preview::v2::MapTileRequest,
         "parvane.push.v1.RegisterRequest" => crate::pb::parvane::push::v1::RegisterRequest,
         "parvane.push.v1.UnregisterRequest" => crate::pb::parvane::push::v1::UnregisterRequest,
+        "parvane.history.v1.AppendRequest" => crate::pb::parvane::history::v1::AppendRequest,
+        "parvane.history.v1.SyncRequest" => crate::pb::parvane::history::v1::SyncRequest,
+        "parvane.history.v1.HeadRequest" => crate::pb::parvane::history::v1::HeadRequest,
+        "parvane.history.v1.GetRequest" => crate::pb::parvane::history::v1::GetRequest,
+        "parvane.history.v1.CommitRequest" => crate::pb::parvane::history::v1::CommitRequest,
     }
 }
 
@@ -1255,6 +1271,12 @@ pub fn decode_message(type_name: &str, bytes: &[u8]) -> Result<String, String> {
         "parvane.preview.v2.LinkResponse" => crate::pb::parvane::preview::v2::LinkResponse,
         "parvane.preview.v2.MapTileResponse" => crate::pb::parvane::preview::v2::MapTileResponse,
         "parvane.push.v1.DescribeResponse" => crate::pb::parvane::push::v1::DescribeResponse,
+        "parvane.history.v1.AppendResponse" => crate::pb::parvane::history::v1::AppendResponse,
+        "parvane.history.v1.SyncResponse" => crate::pb::parvane::history::v1::SyncResponse,
+        "parvane.history.v1.HeadResponse" => crate::pb::parvane::history::v1::HeadResponse,
+        "parvane.history.v1.GetResponse" => crate::pb::parvane::history::v1::GetResponse,
+        "parvane.history.v1.CommitResponse" => crate::pb::parvane::history::v1::CommitResponse,
+        "parvane.msg.v2.JournalNotice" => crate::pb::parvane::msg::v2::JournalNotice,
     }
 }
 
