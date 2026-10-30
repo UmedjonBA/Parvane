@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <parvane/call.h>
+#include <parvane/history_sync.h>
 #include <parvane/linking.h>
 #include <parvane/v2_content.h>
 #include <parvane_protocol.h>
@@ -209,6 +210,50 @@ static void runLinkClient() {
     }
 }
 
+// spec 033 (HIST-1, HIST-2, READ-2): сведение строк через ту же JSON-границу, что у хоста (`historyApplyMany` +
+// `historyView` C ABI), — в каждом порядке вектора итог совпадает с ожидаемым; ключ чата ядра — как у движка.
+static void runHistoryClient() {
+    using nlohmann::json;
+    std::string text;
+    ++g_total;
+    if (!readFile("history/merge.json", text)) {
+        ++g_fail;
+        std::printf("  FAIL  history/merge (клиент) — нет файла\n");
+        return;
+    }
+    const auto file = json::parse(text, nullptr, false);
+    int checked = 0, failed = 0;
+    for (const auto &c : file.value("cases", json::array())) {
+        const auto &in = c["input"];
+        if (in.contains("kind") || !in.contains("ops") || !in.contains("orders")) continue;
+        const auto &expect = c["expect"];
+        for (const auto &order : in["orders"]) {
+            ++checked;
+            json ops = json::array();
+            for (const auto &i : order) ops.push_back(in["ops"][i.get<std::size_t>()]);
+            try {
+                const auto st = parvane::history::call("historyApplyMany", json{{"ops", ops}});
+                const auto view = parvane::history::call("historyView", json{{"state", st}});
+                const bool ok = st == expect["state"] && view == expect["view"]
+                    && parvane::history::chatKeyOfState(st) == view.value("chatKey", std::string());
+                if (!ok) {
+                    ++failed;
+                    std::printf("  FAIL  history/merge (клиент) %s\n", c.value("name", std::string()).c_str());
+                }
+            } catch (const std::exception &e) {
+                ++failed;
+                std::printf("  FAIL  history/merge (клиент) %s: %s\n", c.value("name", std::string()).c_str(), e.what());
+            }
+        }
+    }
+    if (failed || checked < 8) {
+        ++g_fail;
+        std::printf("  FAIL  history/merge (клиент): порядков %d, расхождений %d\n", checked, failed);
+    } else {
+        std::printf("  ok    history/merge (клиент): %d порядков\n", checked);
+    }
+}
+
 int main() {
     std::printf("=== parvane-core protocol vectors (C ABI, %s) ===\n", PARVANE_VECTORS_DIR);
     run("seal/sealed", "seal/sealed.json");
@@ -233,6 +278,12 @@ int main() {
     runCallClient();
     run("link/sas", "link/sas.json", 5);
     runLinkClient();
+    // spec 033: журнал истории — сведение строк, маркер, сегменты, AEAD ключа истории
+    run("history/merge", "history/merge.json", 8);
+    run("history/unread", "history/unread.json", 8);
+    run("history/segment", "history/segment.json", 8);
+    run("history/aead", "history/aead.json", 6);
+    runHistoryClient();
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

@@ -917,6 +917,7 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     }
     const auto tsMs = ev.contains("tsMs") && ev["tsMs"].is_number() ? ev["tsMs"].get<std::int64_t>() : 0;
     in.ts = tsMs / 1000;
+    in.tsMs = tsMs;
     if (str(ev, "disposition") == "stub") {
         in.kind = Incoming::Kind::Stub;
         in.content = unsupportedContent();
@@ -943,6 +944,7 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     }
     if (kind == "delete") {
         in.kind = Incoming::Kind::Delete;
+        in.forEveryone = c["delete"].value("for_everyone", false);
         if (c["delete"].contains("targets") && c["delete"]["targets"].is_array()) {
             for (const auto &r : c["delete"]["targets"]) {
                 if (auto t = target(r); !t.empty()) in.targets.push_back(t);

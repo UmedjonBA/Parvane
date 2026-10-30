@@ -28,8 +28,12 @@
 //   аккаунта, отозвать оффер привязки, затем `ackJoined()`
 //   {"type":"ownDevicesAdded","devices":[…]} — T119: в своём журнале
 //       устройств появились новые устройства (первая проверка — без события);
-//   {"type":"stateReady"} — журнал личного состояния можно подключать
-//       (после запуска и после смены ключа состояния);
+//   {"type":"stateReady"[,"rotated":true]} — журнал личного состояния можно подключать
+//       (после запуска и после смены ключа состояния — тогда rotated: журнал истории открывает сессию движка
+//       заново и пишет контрольную точку под новым ключом, HIST-2);
+//   {"type":"journal","journal":"state"|"history","seq"} — живое уведомление журнала (JournalNotice, spec 033):
+//       state — хосту синхронизировать журнал личного состояния сейчас (stateSync), history — журналу истории
+//       (parvane::history::HistorySync::onSessionEvent). Опрос журналов — только страховка.
 //   {"type":"groupL2","address","enabled":bool,"by":адрес,"id":uuid,"tsMs"}
 //       — политика «усиленная приватность» (L2) группы изменилась по журналу
 //       (или мы вошли в L2-группу): клиент показывает служебное сообщение
@@ -75,6 +79,7 @@ class Client;
 class Connection;
 class L2Ticker;
 class StateSession;
+class HistorySession;
 
 struct SessionConfig {
     // ws://…/ws, wss://…/ws или host:port (TCP с преамбулой PVN2).
@@ -108,9 +113,6 @@ struct SessionConfig {
     std::string pinnedEscrowKey;
     // Описание этого устройства для бота (запрос ключа восстановления: «Parvane Desktop, Linux»).
     std::string deviceDescription = "Parvane Desktop";
-    // Указатель на снимок истории для копии ключей аккаунта (как web `deps.bundleHistory`): хост выгружает
-    // историю блобом и возвращает {fileId, fileKey, fileNonce, at, mark, size}; null/не задан — прежний.
-    std::function<nlohmann::json(const nlohmann::json &previous, bool force)> bundleHistory;
 };
 
 // Итог входа нового устройства по ключу восстановления (как web `KeyJoinOutcome`).
@@ -118,7 +120,7 @@ struct KeyJoinOutcome {
     std::string result; // "ok" | "bad_key" | "no_backup" | "failed"
     std::string planner; // ключи планировщика из копии ключей аккаунта ("" — нет)
     std::string cloud;   // ключи облака (JSON-массив строкой)
-    nlohmann::json history; // указатель на снимок истории или null
+    // Истории здесь нет (spec 033): новое устройство получает её из журнала истории аккаунта (history_sync.h)
 };
 
 class Session {
@@ -213,6 +215,14 @@ public:
     // Сведённый снимок журнала личного состояния (planner_container, cloud_containers); null — журнала нет.
     json stateSnapshot();
     [[nodiscard]] std::string serverDomain() const { return domainNow(); }
+    // ── журнал истории аккаунта (spec 033, history_sync.h) ──
+    // Сессия журнала истории движка (ключ — из ключей личного состояния); nullptr — сессия не готова или ключа нет.
+    std::unique_ptr<HistorySession> openHistorySession();
+    // Собеседник журнала истории (proto3-JSON state.v1.Peer) по адресу чата клиента: адрес пользователя или
+    // "v2g:<hex>" (домен группы — из её журнала, иначе свой сервер). null — не адрес.
+    json historyPeer(const std::string &address);
+    // Обратно: Peer → адрес чата клиента ("" — не собеседник).
+    [[nodiscard]] static std::string historyAddress(const json &peer);
     // Журнал устройств собеседника — перечитать (участник совместной папки облака).
     void refreshPeerLog(const std::string &user);
     // Скачать блоб целиком по секрету: анонимный канал, одноразовое соединение

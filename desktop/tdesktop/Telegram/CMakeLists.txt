@@ -39,7 +39,8 @@ set(parvane_client_sources
     ${src_loc}/parvane/parvane_client_state.cpp
     ${src_loc}/parvane/parvane_client_devices.cpp
     ${src_loc}/parvane/parvane_client_linking.cpp
-    ${src_loc}/parvane/parvane_client_export.cpp)
+    ${src_loc}/parvane/parvane_client_export.cpp
+    ${src_loc}/parvane/parvane_client_history.cpp)
 if (PARVANE_DEV)
     set_source_files_properties(${parvane_client_sources}
         PROPERTIES COMPILE_DEFINITIONS PARVANE_DEV=1)

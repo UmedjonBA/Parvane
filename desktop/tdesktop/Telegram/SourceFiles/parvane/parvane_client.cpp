@@ -32,9 +32,6 @@ void DecCacheRemove(const QString &id);
 [[nodiscard]] nlohmann::json DecCacheSnapshot();
 void OnAuthRejected(const QString &reason); // fwd: отказ JWT → экран входа
 void ApplyNotifyBlob(const QString &json);   // fwd: настройки уведомлений с другого устройства
-void NoteReported(const std::vector<std::string> &ids);     // fwd (READ-1)
-void NoteConfirmedRead(const std::vector<std::string> &ids); // fwd (READ-1, сервер уже знает)
-void AppendReadJournal(const std::vector<std::string> &ids); // fwd (worker)
 [[nodiscard]] QString GatewayUrl();                          // fwd: адрес gateway (v2-сессия)
 void SaveFolders(not_null<Main::Session*> session);          // fwd: папки → tdata (журнал состояния v2)
 // fwd: изменение группы v2 записью журнала (раздел «Протокол v2: группы…»).
@@ -56,8 +53,6 @@ namespace Internal {
 
 // Привязка устройства и копия ключей аккаунта (определены ниже).
 [[nodiscard]] bool HeadlessUi();
-[[nodiscard]] nlohmann::json CollectV2HistoryRows();
-void ImportV2History(const std::string &stateJson);
 [[nodiscard]] QString CurrentLinkCode();
 void PublishLinkingStatus();
 void StartTelegramRecovery(bool again);
@@ -66,11 +61,9 @@ void SyncFromKeyBundle();
 // Время звонка приглашения в групповой звонок (как web getRingTimeoutMs)
 constexpr auto kGroupRingTimeout = crl::time(45000);
 [[nodiscard]] QString StateSyncedPath();
-nlohmann::json BuildBundleHistory(const nlohmann::json &previous, bool force);
 
 // Протокол v2 (определены ниже, раздел «Протокол v2»).
 void LoadV2Ids();
-void V2CacheReplayed(const std::vector<parvane::StoredMessage> &msgs);
 
 not_null<UserData*> ensurePeerUser(
 	not_null<Main::Session*> session,
@@ -170,7 +163,6 @@ base::weak_ptr<Main::Session> g_sessionWeak;
 QHash<QString, qint64> g_uuidToMsgId; // UUID сообщения → синтетический MsgId
 QHash<qint64, QString> g_msgIdToUuid; // обратная карта (для delete/edit/read своих)
 QQueue<QString> g_pendingOwnUuids;    // uuid'ы своих ТЕКСТ-отправок, ждут эха (main)
-QHash<qint64, QVector<QString>> g_unreadIncoming; // peerId → uuid'ы непрочит. входящих
 QHash<QString, QString> g_displayNames; // адрес → отображаемое имя (из каталога)
 // Когда последний раз спрашивали каталог о профиле адреса (мс от старта).
 // Раньше здесь было QSet «уже спрашивали», из-за чего профиль резолвился РОВНО
@@ -180,15 +172,6 @@ QHash<QString, QString> g_displayNames; // адрес → отображаемо
 // дёргать identity на каждое сообщение.
 QHash<QString, qint64> g_resolvedAt;
 constexpr qint64 kProfileTtlMs = 10 * 60 * 1000;
-// READ-1 (conformance): прочитанное ЭТИМ устройством. Журнал на диске
-// (переживает рестарт — бейдж не возвращается), очередь неподтверждённых
-// (msg.chat.read уходит без ответа — повторяем, пока сервер не вернёт
-// read=true / ReadNotice) и счётчик попыток. Под g_sessionMutex.
-QSet<QString> g_reportedRead;
-QSet<QString> g_unconfirmedRead;
-QHash<QString, int> g_readRetries;
-constexpr int kReadRetryMax = 3;
-constexpr int kReadRetryPerPass = 50;
 // Уведомления (кросс-девайс): наш снимок блоба веба {defaults, exceptions}.
 // Только main-поток.
 QHash<QString, QString> g_notifyExceptions; // адрес → JSON настроек
@@ -678,54 +661,42 @@ void WriteMediaCache(const QString &fileId, const std::string &bytes) {
 	return base.isEmpty() ? u"file"_q : base;
 }
 
-[[nodiscard]] QString HistoryPath() {
-	auto self = SelfAddress();
-	if (self.isEmpty()) {
-		self = u"anon"_q;
-	}
-	QString safe;
-	for (const auto ch : self) {
-		safe += (ch.isLetterOrNumber() || ch == '@' || ch == '.' || ch == '-')
-			? ch : QChar('_');
-	}
-	return cWorkingDir() + u"tdata/parvane-history-"_q + safe + u".jsonl"_q;
-}
-
-// Файл журнала истории — под одним замком: дозапись и перезаписи (прочтение, скрытые) идут с разных
-// потоков, и перезапись, прочитавшая файл до дозаписи, стирала новое входящее (verify_protocol_v2_keys_backup).
-std::mutex g_historyFileMutex;
-
+// ── Журнал истории (spec 033) ───────────────────────────────────────────────
+// Строки хранит журнал истории аккаунта ядра (RowState: удаление, правка, реакции, закреп сведены движком;
+// parvane_client_history.cpp). Своё отправленное этим устройством — в журнал сразу (≤ 300 мс), входящее — с
+// задержкой, если другое своё устройство его ещё не записало.
 void HistoryAppend(const parvane::StoredMessage &sm) {
-	if (sm.id.empty()) {
-		return;
-	}
-	std::lock_guard<std::mutex> lk(g_historyFileMutex);
-	StoreAppendLine(HistoryPath(), QString::fromStdString(sm.toJson().dump()));
+	HistoryRecordMessage(sm, /*own=*/true);
 }
 
-// Воспроизвести локальную историю в UI при старте (до первого sync). Дедуп по
-// uuid делает injectOnMain; live=false → без ack и без пере-записи в журнал.
-void ReplayHistory() {
+// Точное время входящих v2 (мс) — для строки журнала (StoredMessage хранит секунды). Под g_v2Mutex.
+QHash<QString, qint64> g_inboundTsMs;
+
+// Воспроизвести локальную историю в UI при старте (до первого sync) — из хранилища строк журнала истории:
+// удалённое (надгробия) и сироты не показываются. Дедуп по uuid делает injectOnMain; live=false → без ack и без
+// повторной записи в журнал. Счётчики — от маркера «прочитано до» (READ-2), не от потока вставок.
+// Не главный поток: открытие хранилища и перенос прежнего журнала ждутся здесь; then — на главном после вставки.
+void ReplayHistory(std::function<void()> then = nullptr) {
+	EnsureHistory(SelfAddress());
+	WaitHistoryReady();
 	std::vector<parvane::StoredMessage> msgs;
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		try {
-			msgs.push_back(parvane::StoredMessage::fromJson(
-				nlohmann::json::parse(line.toStdString())));
-		} catch (const std::exception &) {
+	for (const auto &state : HistoryAllStates()) {
+		if (auto sm = StoredFromHistory(state); sm && !sm->deleted) {
+			msgs.push_back(std::move(*sm));
 		}
 	}
 	if (msgs.empty()) {
+		if (then) {
+			crl::on_main(std::move(then));
+		}
 		return;
 	}
-	// Журнал пишется в порядке прихода, и перенесённая история (снимок web) могла лечь в него не по времени —
-	// тогда сообщение 12 окт стояло выше сообщения 11 окт (spec 030). Строка, которая старше уже показанных
+	// Хранилище отдаёт строки по id (UUIDv7 — по времени отправителя). Строка, которая старше уже показанных
 	// больше чем на окно «живого» сообщения (ORDER-1, 300 с), встаёт на своё место по времени; мелкий разнобой
-	// часов (живые сообщения) порядок прихода сохраняет. Почти упорядоченный журнал — за линейное время.
+	// часов порядок сохраняет. Почти упорядоченный список — за линейное время.
 	{
 		constexpr auto kLiveWindowSecs = std::int64_t(300);
-		// Сортировки здесь нет и быть не должно (ORDER-1: близкие по времени сообщения — порядком прихода). Вставка
-		// дорога лишь для журнала, где не на месте много строк; перенос истории пишет строки уже по времени
-		// (`ImportV2History`), так что обычно проход ниже ничего не двигает
+		// Сортировки здесь нет и быть не должно (ORDER-1: близкие по времени сообщения — порядком id)
 		auto misplaced = false;
 		auto latest = std::numeric_limits<std::int64_t>::min();
 		for (const auto &sm : msgs) {
@@ -746,20 +717,218 @@ void ReplayHistory() {
 		}
 	}
 	LoadV2Ids();
-	V2CacheReplayed(msgs); // правки/реакции v2 после рестарта находят сообщение
+	const auto self = SelfAddress().toStdString();
+	for (const auto &sm : msgs) {
+		// Мутации v2 (правка, удаление, реакция) после рестарта находят сообщение
+		const auto chat = parvane::v2::isGroupAddress(sm.to) ? sm.to : (sm.from == self ? sm.to : sm.from);
+		V2NoteMessage(sm, QString::fromStdString(chat));
+	}
 	const auto n = int(msgs.size());
-	crl::on_main([msgs = std::move(msgs)]() mutable {
+	crl::on_main([msgs = std::move(msgs), then = std::move(then)]() mutable {
 		if (const auto session = g_sessionWeak.get()) {
 			injectOnMain(session, msgs, /*live=*/false);
+			for (const auto &address : HistoryMarkedChats()) {
+				ApplyReadState(address);
+			}
+		}
+		if (then) {
+			then();
 		}
 	});
 	LOG(("Parvane: история: воспроизведено %1 сообщений из журнала").arg(n));
 }
 
+// История чата tdesktop по адресу (без создания пользователя/группы); nullptr — чат ещё не показан.
+[[nodiscard]] History *LoadedHistoryFor(not_null<Main::Session*> session, const QString &address) {
+	if (address.isEmpty()) {
+		return nullptr;
+	}
+	if (address == SelfAddress()) {
+		return session->data().historyLoaded(session->user());
+	}
+	if (address.contains('@')) {
+		return session->data().historyLoaded(peerFromUser(UserId(BareId(IdForAddress(address)))));
+	}
+	return session->data().historyLoaded(peerFromChat(ChatId(BareId(IdForAddress(address)))));
+}
+
+// ✓✓ своих сообщений (квитанции собеседников): по чату — время последнего прочитанного своего (мс),
+// tdata/parvane-outbox-read-<адрес>.json. Главный поток.
+QHash<QString, qint64> g_outboxReadTs;
+QString g_outboxReadOwner;
+
+[[nodiscard]] QString OutboxReadPath(const QString &self) {
+	return AccountFilePath(u"parvane-outbox-read-"_q, self, u".json"_q);
+}
+
+void LoadOutboxRead() {
+	const auto self = SelfAddress();
+	if (self.isEmpty() || g_outboxReadOwner == self) {
+		return;
+	}
+	g_outboxReadOwner = self;
+	g_outboxReadTs.clear();
+	const auto j = parvane::json::parse(StoreRead(OutboxReadPath(self)).toStdString(), nullptr, false);
+	if (j.is_object()) {
+		for (auto it = j.begin(); it != j.end(); ++it) {
+			if (it.value().is_number()) {
+				g_outboxReadTs.insert(QString::fromStdString(it.key()), it.value().get<qint64>());
+			}
+		}
+	}
+}
+
+void ApplyOutboxRead(not_null<History*> history, const QString &address) {
+	LoadOutboxRead();
+	const auto until = g_outboxReadTs.value(address, 0);
+	if (!until) {
+		return;
+	}
+	auto best = qint64(0);
+	for (const auto &state : HistoryStatesOfChat(address)) {
+		const auto pos = parvane::history::rowPos(state);
+		if (!pos || pos->tsMs > until || !IsHistorySelf(state["row"].value("from", std::string()))) {
+			continue;
+		}
+		best = std::max(best, g_uuidToMsgId.value(QString::fromStdString(pos->id), 0));
+	}
+	if (best > 0 && history->outboxReadTillId() < MsgId(best)) {
+		history->outboxRead(MsgId(best));
+	}
+}
+
+void NoteOutboxRead(const QString &address, const std::vector<std::string> &targets) {
+	LoadOutboxRead();
+	auto until = g_outboxReadTs.value(address, 0);
+	const auto before = until;
+	for (const auto &target : targets) {
+		const auto state = HistoryState(QString::fromStdString(target));
+		const auto pos = state ? parvane::history::rowPos(*state) : std::nullopt;
+		if (pos && IsHistorySelf((*state)["row"].value("from", std::string()))) {
+			until = std::max(until, qint64(pos->tsMs));
+		}
+	}
+	if (until == before) {
+		return;
+	}
+	g_outboxReadTs.insert(address, until);
+	auto j = parvane::json::object();
+	for (auto it = g_outboxReadTs.cbegin(); it != g_outboxReadTs.cend(); ++it) {
+		j[it.key().toStdString()] = it.value();
+	}
+	if (const auto path = OutboxReadPath(SelfAddress()); !path.isEmpty()) {
+		StoreWrite(path, QByteArray::fromStdString(j.dump()));
+	}
+	if (const auto session = g_sessionWeak.get()) {
+		if (const auto history = LoadedHistoryFor(session, address)) {
+			ApplyOutboxRead(history, address);
+			LOG(("Parvane: своё прочитано ✓✓ в %1").arg(address));
+		}
+	}
+}
+
+// Счётчик непрочитанного чата tdesktop — от маркера «прочитано до» (READ-2): число непрочитанных считает движок
+// (historyIsUnread), tdesktop получает «прочитано до последней прочитанной строки» и это число. Перенос и догрузка
+// истории счётчик не раздувают: он не прибавляется на вставку, а выставляется заново.
+void ApplyReadState(const QString &address) {
+	const auto session = g_sessionWeak.get();
+	const auto sync = HistorySyncNow();
+	if (!session || !sync || address.isEmpty()) {
+		return;
+	}
+	const auto history = LoadedHistoryFor(session, address);
+	if (!history) {
+		return;
+	}
+	const auto rs = sync->readState(HistoryChatKey(address).toStdString());
+	const auto readId = g_uuidToMsgId.value(QString::fromStdString(rs.lastReadId), 0);
+	if (!history->folderKnown()) {
+		history->clearFolder();
+	}
+	if (readId > 0) {
+		history->inboxRead(MsgId(readId), rs.unread);
+	} else if (history->unreadCountKnown() || rs.unread > 0) {
+		history->setUnreadCount(rs.unread);
+		history->updateChatListEntry();
+	}
+	ApplyOutboxRead(history, address);
+}
+
+// Строки, изменённые журналом истории или мутацией (главный поток): показать новые, обновить правленые/реакции/
+// закреп, убрать удалённые; счётчики затронутых чатов — от маркера.
+void ShowHistoryStates(const std::vector<parvane::json> &states) {
+	const auto session = g_sessionWeak.get();
+	if (!session || states.empty()) {
+		return;
+	}
+	auto out = std::vector<parvane::StoredMessage>();
+	auto chats = QSet<QString>();
+	for (const auto &state : states) {
+		auto view = parvane::json();
+		auto sm = StoredFromHistory(state, &view);
+		if (!sm) {
+			continue; // сирота — ждёт сообщение
+		}
+		const auto chat = HistoryChatAddress(view.value("chat", parvane::json()));
+		chats.insert(chat);
+		const auto uuid = QString::fromStdString(sm->id);
+		{
+			std::lock_guard<std::mutex> lk(g_v2Mutex);
+			auto users = QHash<QString, QString>();
+			for (const auto &r : view.value("reactions", parvane::json::array())) {
+				for (const auto &u : r.value("users", parvane::json::array())) {
+					if (u.is_string()) {
+						users.insert(QString::fromStdString(u.get<std::string>()), QString::fromStdString(r.value("emoji", std::string())));
+					}
+				}
+			}
+			g_v2Reactions.insert(uuid, users);
+		}
+		if (!sm->deleted) {
+			V2NoteMessage(*sm, chat);
+		}
+		out.push_back(std::move(*sm));
+	}
+	if (out.empty()) {
+		return;
+	}
+	injectOnMain(session, out, /*live=*/false);
+	for (const auto &chat : chats) {
+		ApplyReadState(chat);
+	}
+}
+
+// Режим замены (HIST-2: устройство не синхронизировалось дольше горизонта) — хранилище заменено контрольной
+// точкой: убрать показанное, чего в ней нет, и воспроизвести историю заново.
+void ReplaceHistoryOnMain() {
+	const auto session = g_sessionWeak.get();
+	if (!session) {
+		return;
+	}
+	auto drop = std::vector<std::pair<QString, qint64>>();
+	for (auto it = g_uuidToMsgId.cbegin(); it != g_uuidToMsgId.cend(); ++it) {
+		if (it.value() == 0) {
+			continue;
+		}
+		const auto state = HistoryState(it.key());
+		if (!state || !state->contains("row") || state->contains("gone")) {
+			drop.emplace_back(it.key(), it.value());
+		}
+	}
+	for (const auto &[uuid, msgId] : drop) {
+		if (const auto item = session->data().nonChannelMessage(MsgId(msgId))) {
+			item->destroy();
+		}
+		g_msgIdToUuid.remove(msgId);
+		g_uuidToMsgId.insert(uuid, 0);
+	}
+	LOG(("Parvane: журнал истории: история заменена контрольной точкой (убрано %1)").arg(int(drop.size())));
+	crl::async([] { ReplayHistory(); });
+}
+
 // ── Очищенные/удалённые чаты (msg.chat.clear, «для меня») ────────────────────
-// uuid скрытых сообщений: сервер исключает их из sync, но локальный журнал
-// (HistoryPath) воспроизвёл бы их при старте → журнал переписываем без них, а
-// набор персистим на случай гонки (sync до перезаписи, второе устройство).
+// uuid скрытых сообщений: строки убираются из хранилища журнала истории (с устройства; в журнале аккаунта они
+// остаются и не принимаются обратно — dropRow), набор персистим на случай гонки (второе устройство).
 QSet<QString> g_clearedUuids; // под g_sessionMutex
 // Применённая граница очистки чата из журнала личного состояния v2 (T145):
 // адрес → время (мс), не позже которого сообщения скрыты. Под g_sessionMutex.
@@ -801,109 +970,6 @@ void AppendCleared(const QStringList &uuids) {
 	return g_clearedUuids.contains(uuid);
 }
 
-// Переписать журнал истории без скрытых сообщений (иначе воскреснут при старте).
-void RewriteHistoryWithout(const QSet<QString> &uuids) {
-	std::lock_guard<std::mutex> lk(g_historyFileMutex);
-	QStringList kept;
-	auto dropped = 0;
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		auto id = QString();
-		try {
-			const auto j = nlohmann::json::parse(line.toStdString());
-			id = QString::fromStdString(j.value("id", std::string()));
-		} catch (const std::exception &) {
-		}
-		if (!id.isEmpty() && uuids.contains(id)) {
-			++dropped;
-			continue;
-		}
-		kept.push_back(line);
-	}
-	if (!dropped) {
-		return;
-	}
-	StoreWriteLines(HistoryPath(), kept);
-}
-
-// Журнал истории хранит `read` на момент записи, а он append-only: receipt
-// собеседника на СВОЁ сообщение раньше жил только в памяти → после рестарта
-// реплей показывал одну галочку, хотя sync курсор уже прошёл эту мутацию и
-// повторно её не отдавал (10 сен 2026). Перезаписываем записи с read=true.
-// Воркер; файл под мьютексом — параллельные перезаписи теряли бы правки.
-void MarkHistoryRead(const QSet<QString> &uuids) {
-	std::lock_guard<std::mutex> lk(g_historyFileMutex);
-	QStringList kept;
-	auto changed = 0;
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		try {
-			auto j = nlohmann::json::parse(line.toStdString());
-			const auto id = QString::fromStdString(j.value("id", std::string()));
-			if (!id.isEmpty() && uuids.contains(id) && !j.value("read", false)) {
-				j["read"] = true;
-				++changed;
-				kept.push_back(QString::fromStdString(j.dump()));
-				continue;
-			}
-		} catch (const std::exception &) {
-		}
-		kept.push_back(line);
-	}
-	if (!changed) {
-		return;
-	}
-	StoreWriteLines(HistoryPath(), kept);
-}
-
-// Локально забыть скрытые сообщения (карты uuid, медиа-контент, кэш расшифровки)
-// и удалить их из UI. uuids — уже в g_clearedUuids.
-// Кросс-девайс прочитанное: пометить сообщения прочитанными на ЭТОМ устройстве
-// (я прочитал их на другом). Снимаем из непрочитанного и двигаем бейдж чата.
-void MarkUuidsReadLocal(not_null<Main::Session*> session, const QSet<QString> &uuids) {
-	// В журнал прочитанного — иначе после рестарта реплей журнала истории
-	// снова покажет их непрочитанными (запись read в журнале — на момент
-	// получения).
-	{
-		auto ids = std::vector<std::string>();
-		ids.reserve(uuids.size());
-		for (const auto &uuid : uuids) {
-			ids.push_back(uuid.toStdString());
-		}
-		// Сюда приходят receipts, которые сервер УЖЕ знает (sync read=true,
-		// ReadNotice с другого устройства) — это подтверждение, а не наш
-		// отчёт. Раньше клалось в g_unconfirmedRead → RetryUnconfirmedReads
-		// слал msg.chat.read заново → сервер обновлял updated_at → следующий
-		// sync снова отдавал те же uuid в readSet → снова сюда: вечный цикл
-		// (9000 повторов за вечер 10 сен 2026, rate_limited на gateway, а все
-		// другие устройства пересинхронизировали эти сообщения каждые 3 с).
-		NoteConfirmedRead(ids);
-		crl::async([ids = std::move(ids)] { AppendReadJournal(ids); });
-	}
-	auto maxByHistory = QHash<History*, MsgId>();
-	for (const auto &uuid : uuids) {
-		const auto found = g_uuidToMsgId.constFind(uuid);
-		if (found == g_uuidToMsgId.constEnd() || found.value() == 0) {
-			continue;
-		}
-		const auto msgId = MsgId(found.value());
-		// Убираем из списков непрочитанного по всем пирам
-		for (auto it = g_unreadIncoming.begin(); it != g_unreadIncoming.end(); ++it) {
-			it.value().removeAll(uuid);
-		}
-		if (const auto item = session->data().nonChannelMessage(msgId)) {
-			const auto history = item->history();
-			auto &cur = maxByHistory[history];
-			if (msgId > cur) {
-				cur = msgId;
-			}
-		}
-	}
-	for (auto it = maxByHistory.constBegin(); it != maxByHistory.constEnd(); ++it) {
-		if (it.value() > 0) {
-			it.key()->inboxRead(it.value()); // двигает бейдж непрочитанного
-		}
-	}
-}
-
 void ForgetClearedOnMain(not_null<Main::Session*> session, const QSet<QString> &uuids) {
 	for (const auto &uuid : uuids) {
 		const auto found = g_uuidToMsgId.find(uuid);
@@ -919,7 +985,7 @@ void ForgetClearedOnMain(not_null<Main::Session*> session, const QSet<QString> &
 		g_uuidToMsgId.insert(uuid, 0); // обработано, больше не показываем
 		DecCacheRemove(uuid);
 	}
-	RewriteHistoryWithout(uuids);
+	HistoryEraseLocal(uuids); // с устройства; в журнале остаются, граница очистки их скрывает
 }
 
 // ── TTL самоуничтожения по чату (persist в tdata/parvane-ttl.json) ────────────
@@ -1351,16 +1417,6 @@ bool V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer) {
 	return g_v2Ids.contains(QString::fromStdString(uuid));
 }
 
-// Строка журнала после рестарта — в кэш правок/реакций, если она из v2.
-void V2CacheReplayed(const std::vector<parvane::StoredMessage> &msgs) {
-	std::lock_guard<std::mutex> lk(g_v2Mutex);
-	for (const auto &sm : msgs) {
-		const auto uuid = QString::fromStdString(sm.id);
-		if (g_v2Ids.contains(uuid) && !g_v2Cache.contains(uuid)) {
-			g_v2Cache.insert(uuid, sm);
-		}
-	}
-}
 
 // Отправить содержимое собеседнику, в группу или себе («Избранное») протоколом v2 (spec 029 — другого
 // нет). Возвращает id сообщения; бросает при сбое (собеседник без журнала v2, сессия не готова, вид не
@@ -1408,50 +1464,56 @@ std::string TrySendV2(
 	return id;
 }
 
-// Мутация сообщения v2-чата (правка/удаление/реакция/закреп/прочтение) —
-// E2E-содержимым v2 собеседнику. false — сообщение не v2 (идти по v1).
-bool TryMutateV2(const QString &uuid, const parvane::json &content) {
+// Отправка мутации с повтором до успеха (READ-1 п. 3, FR-014): сессия не готова или сбой сети — через 2, 4, 8 … с
+// (до 8 попыток), только пока аккаунт тот же. Тот же op_id: получатель отбросит повтор.
+void SendMutationWithRetry(
+		const std::string &peer,
+		const parvane::json &content,
+		const std::string &opId,
+		int attempt,
+		std::uint64_t generation) {
+	crl::async([=] {
+		if (!AccountGenerationIs(generation)) {
+			return;
+		}
+		const auto kind = QString::fromStdString(parvane::v2::v2Kind(content));
+		try {
+			const auto s = V2Ready();
+			if (!s) {
+				throw std::runtime_error("сессия v2 не готова");
+			}
+			s->sendContent(peer, content, opId);
+			LOG(("Parvane: v2 → %1 %2 (%3)").arg(QString::fromStdString(peer), kind, QString::fromStdString(opId)));
+		} catch (const std::exception &e) {
+			LOG(("Parvane: v2: %1 для %2 не отправлено (попытка %3): %4")
+				.arg(kind, QString::fromStdString(peer)).arg(attempt + 1).arg(QString::fromUtf8(e.what())));
+			if (attempt + 1 >= 8) {
+				return;
+			}
+			crl::on_main([=] {
+				base::call_delayed(crl::time(2000) << std::min(attempt, 5), [=] {
+					SendMutationWithRetry(peer, content, opId, attempt + 1, generation);
+				});
+			});
+		}
+	});
+}
+
+// Мутация сообщения v2-чата (правка/удаление/реакция/закреп/прочтение) — E2E-содержимым v2 собеседнику или группе
+// (копии своим устройствам делает движок). opId — id операции (метка журнала истории той же операции); пусто —
+// новый. false — сообщение не v2 (неизвестно, в каком чате).
+bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId) {
 	const auto peer = V2PeerOf(uuid);
 	if (peer.isEmpty()) {
 		return false;
 	}
-	const auto peerStd = peer.toStdString();
-	crl::async([peerStd, content, uuid] {
-		const auto s = V2Ready();
-		if (!s) {
-			LOG(("Parvane: v2: мутация %1 не отправлена — сессия v2 не готова").arg(uuid));
-			return;
-		}
-		try {
-			s->sendContent(peerStd, content, parvane::v2::newUuidV7());
-			LOG(("Parvane: v2 → %1 %2 для %3")
-				.arg(QString::fromStdString(peerStd),
-					QString::fromStdString(parvane::v2::v2Kind(content)), uuid));
-		} catch (const std::exception &e) {
-			LOG(("Parvane: v2: мутация %1 не отправлена: %2")
-				.arg(uuid, QString::fromUtf8(e.what())));
-		}
-	});
+	SendMutationWithRetry(
+		peer.toStdString(),
+		content,
+		opId.empty() ? parvane::v2::newUuidV7() : opId,
+		0,
+		AccountGeneration());
 	return true;
-}
-
-// Сводка реакций сообщения из известных v2-реакций (под g_v2Mutex).
-std::vector<parvane::ReactionSummary> V2ReactionsLocked(const QString &uuid, const std::string &self) {
-	std::map<std::string, parvane::ReactionSummary> by;
-	const auto users = g_v2Reactions.value(uuid);
-	for (auto it = users.cbegin(); it != users.cend(); ++it) {
-		auto &r = by[it.value().toStdString()];
-		r.emoji = it.value().toStdString();
-		++r.count;
-		if (it.key().toStdString() == self) {
-			r.mine = true;
-		}
-	}
-	auto out = std::vector<parvane::ReactionSummary>();
-	for (auto &[emoji, r] : by) {
-		out.push_back(r);
-	}
-	return out;
 }
 
 // События v2-сессии (группы, свои устройства, журнал состояния) — ниже по
@@ -1519,6 +1581,121 @@ std::string sendGroupContent(
 	}
 }
 
+// Мутация из инбокса (правка, удаление, реакция, закреп, квитанция) — операцией журнала истории (HIST-1): сведение
+// и права — движком, неизвестная цель — сирота (применится, когда сообщение придёт). Главный поток (права группы).
+void ApplyIncomingMutation(const parvane::v2::Incoming &in) {
+	using Kind = parvane::v2::Incoming::Kind;
+	const auto self = SelfAddress().toStdString();
+	const auto chatAddress = QString::fromStdString(in.chat);
+	const auto chat = HistoryPeerFor(chatAddress);
+	if (chat.is_null()) {
+		return;
+	}
+	const auto isGroup = parvane::v2::isGroupAddress(in.chat);
+	const auto stamp = parvane::history::stampOf(in.tsMs, in.id);
+	auto changed = std::vector<parvane::json>();
+	// Чат строки сравнивается ключом истории: домен группы в строке может быть другим (выбран сведением)
+	const auto chatKey = parvane::history::chatKeyOf(chat);
+	const auto sameChat = [&](const parvane::json &state) {
+		return parvane::history::chatKeyOfState(state) == chatKey;
+	};
+	if (in.kind == Kind::Read) {
+		if (in.from != self) {
+			// Квитанция собеседника о МОИХ сообщениях → ✓✓ (переживает перезапуск: отметка по чату)
+			NoteOutboxRead(chatAddress, in.targets);
+			return;
+		}
+		// Копия своей квитанции с другого своего устройства — маркер «прочитано до» (READ-2, быстрая дорога)
+		auto best = parvane::json();
+		for (const auto &target : in.targets) {
+			const auto state = HistoryState(QString::fromStdString(target));
+			if (!state || !sameChat(*state)) {
+				continue;
+			}
+			if (const auto m = parvane::history::markAt(*state); m.is_object()) {
+				best = best.is_null()
+					? m
+					: parvane::history::call("historyMarkMerge", { { "a", best }, { "b", m } });
+			}
+		}
+		if (const auto sync = HistorySyncNow(); sync && best.is_object()) {
+			sync->advanceMark(best, /*own=*/false); // пишет в журнал устройство, где прочитали
+			ApplyReadState(chatAddress);
+		}
+		return;
+	}
+	for (const auto &target : in.targets) {
+		const auto state = HistoryState(QString::fromStdString(target));
+		auto op = parvane::json();
+		switch (in.kind) {
+		case Kind::Edit: {
+			if (!in.content.is_object()) {
+				continue;
+			}
+			// Новое содержимое целиком (правка перекрывает `content` строки): текст, подпись медиа, геопозиция
+			auto content = in.content;
+			if (state) {
+				parvane::json view;
+				if (const auto sm = StoredFromHistory(*state, &view); sm && !sm->deleted) {
+					content = sm->content;
+					const auto nk = parvane::contentKind(in.content);
+					if (nk == "location") {
+						for (auto f = in.content.begin(); f != in.content.end(); ++f) {
+							content[f.key()] = f.value();
+						}
+					} else if (parvane::contentKind(sm->content) == "text") {
+						content["text"] = in.content.value("text", std::string());
+						content["entities"] = in.content.contains("entities")
+							? in.content["entities"] : parvane::json::array();
+					} else {
+						content["caption"] = in.content.value("text", std::string());
+						content["entities"] = in.content.contains("entities")
+							? in.content["entities"] : parvane::json::array();
+					}
+				}
+			}
+			// Править можно только своё: автор правки — в операции, движок сверит его с автором строки (и для
+			// сироты — когда строка придёт)
+			op = parvane::history::editOp(target, chat, stamp, { { "content", content } },
+				in.from == self ? std::string() : in.from);
+		} break;
+		case Kind::Delete: {
+			if (!in.forEveryone && in.from != self) {
+				continue; // «только у себя» чужого устройства сюда не приходит
+			}
+			const auto everyone = in.forEveryone;
+			// Право — движок: автор удаления и «админ с правом» — в операции (by/by_admin); у строки журнала и у
+			// сироты (кандидат до прихода строки) движок сам сверяет их с автором строки (личный чат — любой участник)
+			const auto isAdmin = everyone && in.from != self && isGroup
+				&& GroupAdminRightsOf(chatAddress, QString::fromStdString(in.from)).delete_messages;
+			op = parvane::history::goneOp(target, chat, stamp, everyone,
+				in.from == self ? std::string() : in.from, isAdmin);
+		} break;
+		case Kind::Reaction:
+			op = parvane::history::reactOp(target, chat, in.from, stamp, in.remove ? std::string() : in.emoji);
+			break;
+		case Kind::Pin:
+			op = parvane::history::pinOp(target, chat, stamp, !in.unpin);
+			break;
+		default:
+			continue;
+		}
+		// Цель должна лежать в чате события: мутация из другого чата не трогает чужое сообщение
+		if (state && !sameChat(*state)) {
+			LOG(("Parvane: v2: мутация для %1 пришла из другого чата — пропуск").arg(QString::fromStdString(target)));
+			continue;
+		}
+		if (const auto next = HistoryRecordOp(op, /*own=*/false); next.is_object()) {
+			changed.push_back(next);
+		} else if (!state) {
+			LOG(("Parvane: v2: мутация для неизвестного %1 — ждёт сообщение").arg(QString::fromStdString(target)));
+		}
+	}
+	if (!changed.empty()) {
+		ShowHistoryStates(changed);
+	}
+}
+
 // Событие движка (рабочий поток v2-сессии) → строки конвейера UI.
 void HandleV2Event(const parvane::json &ev) {
 	if (HandleV2SessionEvent(ev)) {
@@ -1530,103 +1707,43 @@ void HandleV2Event(const parvane::json &ev) {
 	if (in.kind == Kind::None) {
 		return;
 	}
-	auto out = std::vector<parvane::StoredMessage>();
-	if (in.kind == Kind::Message || in.kind == Kind::Stub) {
-		parvane::StoredMessage sm;
-		sm.id = in.id;
-		sm.from = in.from;
-		sm.to = in.to;
-		sm.ts = in.ts ? in.ts : QDateTime::currentSecsSinceEpoch();
-		sm.content = in.content;
-		if (in.from != self) {
-			sm.proof = in.proof; // подпись автора — к жалобе (REPORT-1, A0008-2)
-		}
-		if (!in.replyTo.empty()) {
-			sm.reply_to = in.replyTo;
-		}
-		if (!V2NoteMessage(sm, QString::fromStdString(in.chat))) {
-			return; // чужой повтор известного id — не принимаем
-		}
-		if (in.from != self) {
-			V2NoteRoot(V2Ready(), in.from);
-		}
-		LOG(("Parvane: v2 ← %1 msg %2 (%3)")
-			.arg(QString::fromStdString(in.from), QString::fromStdString(in.id),
-				QString::fromStdString(parvane::contentKind(in.content))));
-		out.push_back(std::move(sm));
-	} else {
-		std::lock_guard<std::mutex> lk(g_v2Mutex);
-		for (const auto &target : in.targets) {
-			const auto uuid = QString::fromStdString(target);
-			auto it = g_v2Cache.find(uuid);
-			if (it == g_v2Cache.end()) {
-				LOG(("Parvane: v2: мутация для неизвестного %1 — пропуск").arg(uuid));
-				continue;
-			}
-			// Цель должна лежать в чате события: мутация из другого чата не трогает чужое сообщение
-			if (const auto known = g_v2Ids.value(uuid);
-					!known.isEmpty() && known != QString::fromStdString(in.chat)) {
-				LOG(("Parvane: v2: мутация для %1 пришла из другого чата — пропуск").arg(uuid));
-				continue;
-			}
-			auto sm = it.value();
-			switch (in.kind) {
-			case Kind::Edit: {
-				if (sm.from != in.from || !in.content.is_object()) {
-					continue; // править можно только своё
-				}
-				const auto nk = parvane::contentKind(in.content);
-				if (nk == "location") {
-					for (auto f = in.content.begin(); f != in.content.end(); ++f) {
-						sm.content[f.key()] = f.value();
-					}
-				} else if (parvane::contentKind(sm.content) == "text") {
-					sm.content["text"] = in.content.value("text", std::string());
-					sm.content["entities"] = in.content.contains("entities")
-						? in.content["entities"] : parvane::json::array();
-				} else {
-					sm.content["caption"] = in.content.value("text", std::string());
-					sm.content["entities"] = in.content.contains("entities")
-						? in.content["entities"] : parvane::json::array();
-				}
-				sm.edited = true;
-			} break;
-			case Kind::Delete:
-				if (sm.from != in.from) {
-					continue; // удалить у всех можно только своё
-				}
-				sm.deleted = true;
-				break;
-			case Kind::Reaction: {
-				auto &users = g_v2Reactions[uuid];
-				const auto author = QString::fromStdString(in.from);
-				if (in.remove) {
-					users.remove(author);
-				} else {
-					users.insert(author, QString::fromStdString(in.emoji));
-				}
-				sm.reactions = V2ReactionsLocked(uuid, self);
-			} break;
-			case Kind::Pin:
-				sm.pinned = !in.unpin;
-				break;
-			case Kind::Read:
-				if (sm.from != self || in.from == self) {
-					continue; // квитанция собеседника о МОЁМ сообщении
-				}
-				sm.read = true;
-				break;
-			default:
-				continue;
-			}
-			it.value() = sm;
-			out.push_back(sm);
-		}
+	if (in.group && ev.contains("group") && ev["group"].is_object()) {
+		NoteHistoryGroupDomain(QString::fromStdString(in.chat), ev["group"].value("domain", std::string()));
 	}
-	if (out.empty()) {
+	if (in.kind != Kind::Message && in.kind != Kind::Stub) {
+		crl::on_main([in, generation = AccountGeneration()] {
+			if (AccountGenerationIs(generation) && g_sessionWeak.get()) {
+				ApplyIncomingMutation(in);
+			}
+		});
 		return;
 	}
-	crl::on_main([out = std::move(out)] {
+	parvane::StoredMessage sm;
+	sm.id = in.id;
+	sm.from = in.from;
+	sm.to = in.to;
+	sm.ts = in.ts ? in.ts : QDateTime::currentSecsSinceEpoch();
+	sm.content = in.content;
+	if (in.from != self) {
+		sm.proof = in.proof; // подпись автора — к жалобе (REPORT-1, A0008-2)
+	}
+	if (!in.replyTo.empty()) {
+		sm.reply_to = in.replyTo;
+	}
+	if (!V2NoteMessage(sm, QString::fromStdString(in.chat))) {
+		return; // чужой повтор известного id — не принимаем
+	}
+	if (in.tsMs > 0) {
+		std::lock_guard<std::mutex> lk(g_v2Mutex);
+		g_inboundTsMs.insert(QString::fromStdString(in.id), in.tsMs);
+	}
+	if (in.from != self) {
+		V2NoteRoot(V2Ready(), in.from);
+	}
+	LOG(("Parvane: v2 ← %1 msg %2 (%3)")
+		.arg(QString::fromStdString(in.from), QString::fromStdString(in.id),
+			QString::fromStdString(parvane::contentKind(in.content))));
+	crl::on_main([out = std::vector<parvane::StoredMessage>{ std::move(sm) }] {
 		if (const auto session = g_sessionWeak.get()) {
 			injectOnMain(session, out, /*live=*/true);
 		}
@@ -1812,9 +1929,6 @@ void StartV2Locked() {
 		}
 	};
 	cfg.deviceDescription = "Parvane Desktop, " + QSysInfo::prettyProductName().toStdString();
-	cfg.bundleHistory = [](const nlohmann::json &previous, bool force) {
-		return BuildBundleHistory(previous, force);
-	};
 	if (!ParvaneDevEnv("PARVANE_AUTOLOGIN") || !RecoveryKeyFileForE2e().isEmpty()) {
 		cfg.onRecoveryKey = [](const std::string &key) { HandleRecoveryKey(key); };
 	}
@@ -1834,6 +1948,12 @@ void StartV2Locked() {
 		}
 	}
 	s->start();
+	// Журнал истории аккаунта (spec 033) — вне g_sessionMutex: его поток читает границы очистки под ним
+	crl::async([self = g_selfAddress, generation = AccountGeneration()] {
+		if (AccountGenerationIs(generation)) {
+			StartHistorySync(self);
+		}
+	});
 	LOG(("Parvane: v2: сессия запускается (%1, движок %2)")
 		.arg(url, QString::fromStdString(parvane::v2::engineVersion())));
 }
@@ -2077,61 +2197,6 @@ void PlayRingtone(bool outgoing);
 void StopRingtone();
 
 // Адрес gateway: "host:port" / "tcp://host:port" (TCP, dev) либо
-
-// ── READ-1: журнал прочитанного + очередь подтверждения ─────────────────────
-[[nodiscard]] QString ReadJournalPath() {
-	return cWorkingDir() + u"tdata/parvane-read.txt"_q;
-}
-
-// main-поток, ДО воспроизведения журнала истории (AfterSessionReady).
-void LoadReadJournal() {
-	const auto lines = StoreReadLines(ReadJournalPath());
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	for (const auto &line : lines) {
-		g_reportedRead.insert(line);
-	}
-}
-
-void AppendReadJournal(const std::vector<std::string> &ids) { // worker
-	for (const auto &id : ids) {
-		StoreAppendLine(ReadJournalPath(), QString::fromStdString(id));
-	}
-}
-
-[[nodiscard]] bool IsReportedRead(const QString &uuid) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	return g_reportedRead.contains(uuid);
-}
-
-void NoteReported(const std::vector<std::string> &ids) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	for (const auto &id : ids) {
-		const auto q = QString::fromStdString(id);
-		g_reportedRead.insert(q);
-		g_unconfirmedRead.insert(q);
-	}
-}
-
-void ConfirmReads(const std::vector<std::string> &ids) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	for (const auto &id : ids) {
-		const auto q = QString::fromStdString(id);
-		g_unconfirmedRead.remove(q);
-		g_readRetries.remove(q);
-	}
-}
-
-// Receipt известен серверу (sync/ReadNotice): помним как отчитанный, чтобы не
-// слать msg.chat.read повторно, и снимаем ожидание подтверждения.
-void NoteConfirmedRead(const std::vector<std::string> &ids) {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	for (const auto &id : ids) {
-		const auto q = QString::fromStdString(id);
-		g_reportedRead.insert(q);
-		g_unconfirmedRead.remove(q);
-		g_readRetries.remove(q);
-	}
-}
 
 // ── уведомления: снимок блоба веба + персист ────────────────────────────────
 [[nodiscard]] QString NotifyStatePath() {
@@ -3269,32 +3334,14 @@ QString AccountFilePath(const QString &prefix, const QString &address, const QSt
 	return path;
 }
 
-// Журнал истории прежнего адреса — под новым: свои сообщения прежнего адреса становятся своими нового.
+// Журнал истории прежнего адреса — под новым (spec 033: строки RowState не переписываются — автор своих строк остаётся
+// прежним адресом, как у остальных устройств аккаунта; маркеры, курсор и очередь переезжают как есть).
 void MoveHistoryFile(const QString &oldAddress, const QString &newAddress) {
-	const auto from = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(oldAddress) + u".jsonl"_q;
-	const auto to = cWorkingDir() + u"tdata/parvane-history-"_q + SafeAddressPart(newAddress) + u".jsonl"_q;
-	// Ревью 21 окт, вечер (1.5): под замком журнала — дозапись с рабочего потока не теряется между чтением и записью
-	std::lock_guard<std::mutex> lock(g_historyFileMutex);
-	if (!QFile::exists(from)) {
-		return;
-	}
-	const auto oldStd = oldAddress.toStdString();
-	const auto newStd = newAddress.toStdString();
-	auto lines = StoreReadLines(from);
-	for (auto &line : lines) {
-		auto row = parvane::json::parse(line.toStdString(), nullptr, false);
-		if (!row.is_object()) {
-			continue;
-		}
-		for (const auto key : { "from", "to" }) {
-			if (row.value(key, std::string()) == oldStd) {
-				row[key] = newStd;
-			}
-		}
-		line = QString::fromStdString(row.dump());
-	}
-	if (StoreWriteLines(to, lines)) {
-		QFile::remove(from);
+	MoveHistoryFiles(oldAddress, newAddress); // и остановить журнал прежнего адреса
+	const auto from = AccountFilePath(u"parvane-history-"_q, oldAddress, u".jsonl"_q);
+	const auto to = AccountFilePath(u"parvane-history-"_q, newAddress, u".jsonl"_q);
+	if (!from.isEmpty() && !to.isEmpty() && QFile::exists(from) && !QFile::exists(to)) {
+		QFile::rename(from, to);
 	}
 }
 
@@ -3329,7 +3376,7 @@ void MoveAccountLocal(const QString &oldAddress, const QString &newAddress) {
 	for (const auto &[prefix, suffix] : std::vector<std::pair<QString, QString>>{
 			{ u"parvane-cleared-"_q, u".txt"_q },
 			{ u"parvane-trust-"_q, u".txt"_q },
-			{ u"parvane-bundle-history-"_q, u".txt"_q },
+			{ u"parvane-outbox-read-"_q, u".json"_q },
 			{ u"parvane-domain-keys-"_q, u".json"_q } }) {
 		const auto from = tdata + prefix + SafeAddressPart(oldAddress) + suffix;
 		const auto to = tdata + prefix + SafeAddressPart(newAddress) + suffix;
@@ -3533,25 +3580,17 @@ void MirrorClearHistory(not_null<PeerData*> peer) {
 	// позднего скрываемого сообщения — остальные свои устройства скрывают всё,
 	// что не позже неё.
 	auto clearedUntilMs = std::int64_t(0);
-	// uuid всех сообщений этого диалога берём из локального журнала (HistoryPath):
-	// именно он воспроизводит переписку при старте и переживает пере-создание
-	// сессии в headless, тогда как HistoryItem'ы и реестр nonChannelMessage
-	// эфемерны. Диалог сообщения — собеседник (для своих исходящих это `to`).
+	// uuid всех сообщений этого диалога — из хранилища журнала истории: оно воспроизводит переписку при старте
+	// и переживает пере-создание сессии в headless, тогда как HistoryItem'ы и реестр nonChannelMessage эфемерны.
 	auto uuids = QSet<QString>();
-	// Журнал истории зашифрован построчно (P-13) — читать через хранилище
-	// (чтение файла напрямую после P-13 не находило ни одной строки).
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		const auto j = nlohmann::json::parse(line.toStdString(), nullptr, false);
-		if (!j.is_object()) {
+	for (const auto &state : HistoryStatesOfChat(peerAddr)) {
+		const auto id = QString::fromStdString(state.value("target", std::string()));
+		if (id.isEmpty()) {
 			continue;
 		}
-		const auto id = QString::fromStdString(j.value("id", std::string()));
-		const auto from = QString::fromStdString(j.value("from", std::string()));
-		const auto to = QString::fromStdString(j.value("to", std::string()));
-		const auto dialog = (from == self) ? to : from;
-		if (!id.isEmpty() && dialog == peerAddr) {
-			uuids.insert(id);
-			clearedUntilMs = std::max(clearedUntilMs, j.value("ts", std::int64_t(0)) * 1000 + 999);
+		uuids.insert(id);
+		if (const auto pos = parvane::history::rowPos(state)) {
+			clearedUntilMs = std::max(clearedUntilMs, std::int64_t(pos->tsMs));
 		}
 	}
 	// Плюс всё, что уже инъецировано в текущей сессии (на случай сообщений,
@@ -3585,7 +3624,7 @@ void MirrorClearHistory(not_null<PeerData*> peer) {
 		g_uuidToMsgId.insert(uuid, 0);
 		DecCacheRemove(uuid);
 	}
-	RewriteHistoryWithout(uuids);
+	HistoryEraseLocal(uuids);
 	LOG(("Parvane: очистка чата %1 — скрыто %2 сообщений")
 		.arg(peerAddr).arg(uuids.size()));
 	// Свои устройства на v2 узнают об очистке из журнала личного состояния:
@@ -3622,35 +3661,55 @@ void ForwardMediaReshared(const QString &toAddress, const QString &contentJson, 
 	sendContentAsync(toAddress, contentJson.toStdString());
 }
 
+// Своя мутация сообщения → операция журнала истории (сразу, ≤ 300 мс) с тем же op_id, что и E2E-мутация
+// собеседнику: свои устройства, получившие копию из инбокса, узнают её в журнале и не пишут второй раз.
+namespace {
+[[nodiscard]] QString OwnMutationTarget(MsgId msgId) {
+	return g_msgIdToUuid.value(msgId.bare);
+}
+
+void RecordOwnMutation(const parvane::json &op) {
+	if (const auto next = HistoryRecordOp(op, /*own=*/true); next.is_object()) {
+		ShowHistoryStates({ next });
+	}
+}
+} // namespace
+
 void MirrorReact(not_null<HistoryItem*> item, const QString &emoji) {
-	const auto it = g_msgIdToUuid.find(item->id.bare);
-	if (it == g_msgIdToUuid.end()) {
+	const auto uuid = OwnMutationTarget(item->id);
+	if (uuid.isEmpty()) {
 		return; // неизвестное сообщение (нет uuid) — не реагируем
 	}
-	const auto uuid = it.value().toStdString();
-	const auto from = SelfAddress().toStdString();
-	const auto token = Token().toStdString();
+	const auto uuidStd = uuid.toStdString();
 	const auto emojiStd = emoji.toStdString();
-	if (TryMutateV2(it.value(), parvane::json{{"reaction", {
-			{"target", parvane::v2::ref(uuid)},
+	const auto opId = parvane::v2::newUuidV7();
+	if (TryMutateV2(uuid, parvane::json{{"reaction", {
+			{"target", parvane::v2::ref(uuidStd)},
 			{"emoji", emojiStd},
-			{"remove", emojiStd.empty()}}}})) {
-		return; // сообщение v2-чата: реакция — E2E-содержимым v2
+			{"remove", emojiStd.empty()}}}}, opId)) {
+		const auto chat = HistoryPeerFor(V2PeerOf(uuid));
+		if (!chat.is_null()) {
+			RecordOwnMutation(parvane::history::reactOp(uuidStd, chat, SelfAddress().toStdString(),
+				parvane::history::stampOf(QDateTime::currentMSecsSinceEpoch(), opId), emojiStd));
+		}
 	}
 }
 
 void MirrorPin(not_null<HistoryItem*> item, bool pin) {
-	const auto it = g_msgIdToUuid.find(item->id.bare);
-	if (it == g_msgIdToUuid.end()) {
+	const auto uuid = OwnMutationTarget(item->id);
+	if (uuid.isEmpty()) {
 		return;
 	}
-	const auto uuid = it.value().toStdString();
-	const auto from = SelfAddress().toStdString();
-	const auto token = Token().toStdString();
-	if (TryMutateV2(it.value(), parvane::json{{"pin", {
-			{"target", parvane::v2::ref(uuid)},
-			{"unpin", !pin}}}})) {
-		return;
+	const auto uuidStd = uuid.toStdString();
+	const auto opId = parvane::v2::newUuidV7();
+	if (TryMutateV2(uuid, parvane::json{{"pin", {
+			{"target", parvane::v2::ref(uuidStd)},
+			{"unpin", !pin}}}}, opId)) {
+		const auto chat = HistoryPeerFor(V2PeerOf(uuid));
+		if (!chat.is_null()) {
+			RecordOwnMutation(parvane::history::pinOp(uuidStd, chat,
+				parvane::history::stampOf(QDateTime::currentMSecsSinceEpoch(), opId), pin));
+		}
 	}
 }
 
@@ -3740,27 +3799,47 @@ void handleTypingFrame(const std::string &payload) {
 	});
 }
 
+// Удаление (HIST-1): «у всех» — E2E-мутация собеседнику/группе и надгробие everyone в журнале; права — движком
+// (личный чат — любое сообщение, как Telegram; группа — своё или админом с правом); «только у меня» — только
+// надгробие me в журнале истории (собеседнику ничего, на всех своих устройствах сообщения нет).
 void MirrorDelete(std::int64_t msgId, bool forEveryone) {
-	// «Удалить только у меня» (флажок снят) в шину не зеркалим: иначе сообщение
-	// стёрлось бы и у собеседника.
-	if (!forEveryone) {
-		return;
-	}
-	// Удаляем «у всех» только СВОИ сообщения (шард проверяет автора). Ищем uuid
-	// по локальному msgId; неизвестный (чужое/несинхронизированное) — no-op.
 	const auto it = g_msgIdToUuid.find(msgId);
 	if (it == g_msgIdToUuid.end()) {
 		return;
 	}
-	const auto uuid = it.value().toStdString();
-	const auto from = SelfAddress().toStdString();
-	const auto token = Token().toStdString();
-	if (TryMutateV2(it.value(), parvane::json{{"delete", {
-			{"targets", parvane::json::array({ parvane::v2::ref(uuid) })},
-			{"for_everyone", true}}}})) {
-		LOG(("Parvane: удаление своего msg %1 [v2]").arg(it.value()));
+	const auto uuid = it.value();
+	const auto uuidStd = uuid.toStdString();
+	const auto state = HistoryState(uuid);
+	auto chatAddress = V2PeerOf(uuid);
+	if (state) {
+		chatAddress = HistoryChatAddress(state->value("chat", parvane::json()));
+	}
+	const auto chat = HistoryPeerFor(chatAddress);
+	if (chat.is_null()) {
 		return;
 	}
+	const auto self = SelfAddress();
+	auto everyone = forEveryone;
+	if (everyone && state && state->contains("row")) {
+		const auto isGroup = parvane::v2::isGroupAddress(chatAddress.toStdString());
+		everyone = parvane::history::call("historyCanDelete", {
+			{ "chatKind", isGroup ? "group" : "user" },
+			{ "author", (*state)["row"].value("from", std::string()) },
+			{ "deleter", HistorySelves() },
+			{ "deleterIsAdmin", isGroup && GroupAdminRightsOf(chatAddress, self).delete_messages } }).get<bool>();
+		if (!everyone) {
+			LOG(("Parvane: удаление у всех %1 не разрешено — только у себя").arg(uuid));
+		}
+	}
+	const auto opId = parvane::v2::newUuidV7();
+	if (everyone) {
+		TryMutateV2(uuid, parvane::json{{"delete", {
+			{"targets", parvane::json::array({ parvane::v2::ref(uuidStd) })},
+			{"for_everyone", true}}}}, opId);
+	}
+	HistoryRecordOp(parvane::history::goneOp(uuidStd, chat,
+		parvane::history::stampOf(QDateTime::currentMSecsSinceEpoch(), opId), everyone), /*own=*/true);
+	LOG(("Parvane: удаление msg %1 — %2").arg(uuid, everyone ? u"у всех"_q : u"только у меня"_q));
 }
 
 // Публикация правки своего сообщения (msg.chat.edit) с новым E2E-контентом:
@@ -3796,7 +3875,13 @@ void publishEditAsync(
 			}
 		}
 		cacheOwnOutgoing(uuid, from, content);
-		TryMutateV2(uuidQ, parvane::json{{"edit", edit}});
+		const auto opId = parvane::v2::newUuidV7();
+		TryMutateV2(uuidQ, parvane::json{{"edit", edit}}, opId);
+		if (const auto chat = HistoryPeerFor(V2PeerOf(uuidQ)); !chat.is_null()) {
+			HistoryRecordOp(parvane::history::editOp(uuid, chat,
+				parvane::history::stampOf(QDateTime::currentMSecsSinceEpoch(), opId),
+				{ { "content", content } }), /*own=*/true);
+		}
 		return;
 	}
 }
@@ -3847,60 +3932,73 @@ void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text) {
 	publishEditAsync(to, uuid, content);
 }
 
-void MirrorRead(std::int64_t peerId) {
-	// Отмечаем прочитанными все непрочитанные входящие от пира (msg.chat.read →
-	// у отправителя ✓✓). Собираем uuid'ы и чистим, чтобы не слать повторно.
-	const auto it = g_unreadIncoming.find(peerId);
-	if (it == g_unreadIncoming.end() || it.value().isEmpty()) {
+// Прочтение чата до сообщения tillId (Histories::readInboxTill; личные чаты и группы): маркер «прочитано до» —
+// в журнал истории (≤ 1 с, остальные свои устройства обнуляют счётчик, READ-2); квитанции READ авторам — только о
+// сообщениях, которые этот сдвиг сделал прочитанными, с повтором до успеха (READ-1 п. 3). Главный поток.
+void MirrorReadTill(not_null<History*> history, MsgId tillId) {
+	const auto sync = HistorySyncNow();
+	if (!sync || tillId <= 0) {
 		return;
 	}
-	auto ids = std::vector<std::string>();
-	// v2-сообщения: квитанция прочтения — E2E-содержимым v2 их автору.
-	auto v2ByPeer = QHash<QString, parvane::json>();
-	for (const auto &u : it.value()) {
-		if (const auto peer = V2PeerOf(u); !peer.isEmpty()) {
-			auto &list = v2ByPeer[peer];
-			if (!list.is_array()) {
-				list = parvane::json::array();
-			}
-			list.push_back(parvane::v2::ref(u.toStdString()));
+	QString address;
+	const auto peer = history->peer;
+	if (const auto user = peer->asUser()) {
+		address = user->isSelf() ? SelfAddress() : AddressForId(std::uint64_t(peerToUser(user->id).bare));
+	} else if (peer->isChat()) {
+		std::lock_guard<std::mutex> lk(g_sessionMutex);
+		address = g_chatIdToGroupId.value(std::uint64_t(peerToChat(peer->id).bare));
+	}
+	if (address.isEmpty()) {
+		return;
+	}
+	// Последняя видимая строка чата, показанная не дальше tillId
+	auto mark = parvane::json();
+	auto best = std::optional<parvane::history::RowPos>();
+	for (const auto &state : HistoryStatesOfChat(address)) {
+		const auto pos = parvane::history::rowPos(state);
+		if (!pos || state.contains("gone")) {
 			continue;
 		}
-		ids.push_back(u.toStdString());
-	}
-	it.value().clear();
-	if (!v2ByPeer.isEmpty()) {
-		auto v2ids = std::vector<std::string>();
-		for (auto p = v2ByPeer.cbegin(); p != v2ByPeer.cend(); ++p) {
-			for (const auto &r : p.value()) {
-				if (const auto u = parvane::v2::b64ToUuid(r.value("op_id", std::string()))) {
-					v2ids.push_back(*u);
-				}
-			}
+		const auto msgId = g_uuidToMsgId.value(QString::fromStdString(pos->id), 0);
+		if (msgId <= 0 || msgId > tillId.bare) {
+			continue;
 		}
-		// READ-1: отчитано (квитанцию доставит движок, v1-повторы не нужны).
-		crl::async([v2ids] {
-			NoteConfirmedRead(v2ids);
-			AppendReadJournal(v2ids);
-		});
+		if (!best || pos->tsMs > best->tsMs || (pos->tsMs == best->tsMs && pos->id > best->id)) {
+			best = pos;
+			mark = parvane::history::markAt(state);
+		}
 	}
-	for (auto p = v2ByPeer.cbegin(); p != v2ByPeer.cend(); ++p) {
-		const auto first = p.value().empty()
-			? QString()
-			: QString::fromStdString(parvane::v2::b64ToUuid(
-				p.value()[0].value("op_id", std::string())).value_or(std::string()));
-		TryMutateV2(first, parvane::json{{"receipt", {
-			{"kind", "RECEIPT_KIND_READ"},
-			{"messages", p.value()}}}});
-	}
-	if (ids.empty()) {
+	if (!mark.is_object()) {
 		return;
 	}
-	// Сообщения прежней эпохи (v1) — отчитывать некому: только локально, чтобы бейдж не вернулся
-	crl::async([ids] {
-		NoteConfirmedRead(ids);
-		AppendReadJournal(ids);
-	});
+	const auto read = sync->advanceMark(mark, /*own=*/true);
+	ApplyReadState(address);
+	if (read.empty()) {
+		return;
+	}
+	auto refs = parvane::json::array();
+	auto first = QString();
+	const auto flush = [&] {
+		if (!refs.empty()) {
+			TryMutateV2(first, parvane::json{{"receipt", {
+				{"kind", "RECEIPT_KIND_READ"},
+				{"messages", refs}}}});
+		}
+		refs = parvane::json::array();
+		first.clear();
+	};
+	for (const auto &state : read) {
+		const auto id = state.value("target", std::string());
+		if (first.isEmpty()) {
+			first = QString::fromStdString(id);
+		}
+		refs.push_back(parvane::v2::ref(id));
+		if (refs.size() >= 500) {
+			flush();
+		}
+	}
+	flush();
+	LOG(("Parvane: прочитано в %1: %2 сообщений, маркер в журнал истории").arg(address).arg(int(read.size())));
 }
 
 namespace Internal {
@@ -6826,9 +6924,6 @@ void injectPollMessage(
 	g_msgIdToUuid.insert(msgId.bare, uuid);
 	g_mediaContentByMsgId.insert(msgId.bare,
 		QString::fromStdString(sm.content.dump())); // для пересылки опроса
-	if (!isOwn && !isGroup && !IsReportedRead(uuid)) {
-		g_unreadIncoming[peerId].push_back(uuid);
-	}
 	const auto item = session->data().addNewMessage(
 		msgId,
 		buildMessage(authorId, peerId, isOwn, sm.ts, QString(),
@@ -7122,12 +7217,6 @@ void injectOnMain(
 						LOG(("Parvane: своё прочитано ✓✓ msg %1").arg(uuid));
 					}
 				}
-				// В журнал — чтобы ✓✓ пережило рестарт (раз на uuid за сессию)
-				static QSet<QString> journaled;
-				if (!journaled.contains(uuid)) {
-					journaled.insert(uuid);
-					crl::async([uuid] { MarkHistoryRead({ uuid }); });
-				}
 			}
 			// не continue — ниже contains→continue пропустит уже инъецированное
 		}
@@ -7157,7 +7246,18 @@ void injectOnMain(
 		// При воспроизведении журнала (live=false) НЕ пишем повторно. TTL-сообщения
 		// эфемерны — НЕ журналируем (иначе воскреснут при рестарте).
 		if (live && TtlFromContent(sm.content) == 0) {
-			HistoryAppend(sm);
+			// Журнал истории аккаунта (spec 033): входящее — с задержкой, если другое своё устройство не записало
+			auto tsMs = qint64(0);
+			{
+				std::lock_guard<std::mutex> lk(g_v2Mutex);
+				tsMs = g_inboundTsMs.take(uuid);
+			}
+			HistoryRecordMessage(sm, /*own=*/false, tsMs);
+			if (sm.from == selfStd) {
+				// Своё с другого своего устройства: всё входящее до него прочитано (READ-2) — счётчик от маркера
+				const auto chat = QString::fromStdString(sm.to); // своё: чат — адресат (собеседник или группа)
+				crl::on_main([chat] { ApplyReadState(chat); });
+			}
 		} else if (const auto ttl = TtlFromContent(sm.content); ttl > 0) {
 			// Эфемерное: после TTL плейнтекст не должен остаться в кэше расшифровки.
 			base::call_delayed(ttl * crl::time(1000), [uuid] {
@@ -7450,9 +7550,6 @@ void injectOnMain(
 				g_packRefByDocId.insert(docIdFromFileId(fileId),
 					QString::fromStdString(c["pack_ref"].dump()));
 			}
-			if (!out && !sm.read && !IsReportedRead(uuid)) {
-				g_unreadIncoming[peerId].push_back(uuid);
-			}
 			const auto jstr = [&](const char *k) {
 				return (c.contains(k) && c[k].is_string())
 					? QString::fromStdString(c[k].get<std::string>()) : QString();
@@ -7492,11 +7589,6 @@ void injectOnMain(
 		const auto msgId = MsgId(g_nextMsgId++);
 		g_uuidToMsgId.insert(uuid, msgId.bare);
 		g_msgIdToUuid.insert(msgId.bare, uuid);
-		// read=true у входящего — мой receipt уже есть на сервере (прочитано на
-		// любом устройстве); журнал прочитанного — READ-1 этого устройства.
-		if (!out && !sm.read && !IsReportedRead(uuid)) {
-			g_unreadIncoming[peerId].push_back(uuid);
-		}
 		const auto entities = Api::EntitiesToMTP(
 			session,
 			entitiesFromJson(parvane::contentEntities(sm.content)),
@@ -7570,21 +7662,7 @@ void injectOnMain(
 		}
 	}
 	if (added > 0) {
-		{
-		// READ-1: входящие, которые ЭТО устройство уже читало (журнал на диске),
-		// после воспроизведения/синка не должны возвращать бейдж.
-		auto reported = QSet<QString>();
-		for (const auto &sm : msgs) {
-			const auto q = QString::fromStdString(sm.id);
-			if (sm.from != selfStd && IsReportedRead(q)) {
-				reported.insert(q);
-			}
-		}
-		if (!reported.isEmpty()) {
-			MarkUuidsReadLocal(session, reported);
-		}
-	}
-	LOG(("Parvane: инъецировано %1 сообщений").arg(added));
+		LOG(("Parvane: инъецировано %1 сообщений").arg(added));
 	}
 }
 
@@ -8201,14 +8279,12 @@ void SetStrangersAllowed(bool allowed) {
 }
 
 // ── spec 015: новое устройство без других устройств, копия ключей аккаунта ─────
-// Как web provider.ts (startTelegramRecovery, completeKeyJoin, buildBundleHistory, applyBundleHistory).
+// Как web provider.ts (startTelegramRecovery, completeKeyJoin). Снимка истории в копии ключей нет (spec 033).
 namespace Internal {
 
 constexpr auto kTelegramKeyPollMs = 3000;
 constexpr auto kTelegramKeyPollMaxMs = 30000;
 constexpr auto kTelegramKeyWaitMs = std::int64_t(15 * 60 * 1000);
-constexpr auto kBundleHistorySmallBytes = std::int64_t(512 * 1024);
-constexpr auto kBundleHistoryMinMs = std::int64_t(30 * 60 * 1000);
 constexpr crl::time kBundleRecheckDelays[] = { 60 * crl::time(1000), 5 * 60 * crl::time(1000) };
 
 std::mutex g_tgMutex;
@@ -8259,54 +8335,13 @@ int StopTelegramRecovery(TelegramRecoveryState state) {
 	return g_tgGeneration == generation && g_tgState == state;
 }
 
-[[nodiscard]] QString AppliedBundleMarkPath(const QString &self) {
-	// Ревью 21 окт, вечер (1.6): адрес в имени — только проверенный и безопасной частью ("" — не писать)
-	return AccountFilePath(u"parvane-bundle-history-"_q, self, u".txt"_q);
-}
-
 // Сверки с копией ключей аккаунта идут из разных потоков (событие сессии, повторы после входа по ключу, экспорт
 // привязки): отметка применённого снимка истории и файл ключей разделов — по одной, иначе история импортировалась бы
 // дважды, а ключ мог потеряться
 std::recursive_mutex g_bundleMutex;
 
-// Снимок истории из копии ключей аккаунта: owner-блоб облака, зашифрованный JSON {linkVersion, v2History}.
-void ApplyBundleHistory(const nlohmann::json &history, const QString &owner) {
-	if (!history.is_object() || SelfAddress() != owner) {
-		return;
-	}
-	std::lock_guard<std::recursive_mutex> bundleLock(g_bundleMutex);
-	const auto mark = QString::fromStdString(history.value("mark", std::string()));
-	if (!mark.isEmpty() && QString::fromUtf8(StoreRead(AppliedBundleMarkPath(owner))) == mark) {
-		return;
-	}
-	const auto t = ControlSnapshot();
-	if (!t) {
-		return;
-	}
-	try {
-		const auto d = DownloadChatBlob(history.value("fileId", std::string()));
-		if (!d.ok) {
-			LOG(("Parvane: копия ключей: снимок истории не скачался (%1)").arg(QString::fromStdString(d.error)));
-			return;
-		}
-		const auto plain = parvane::blobcrypt::decrypt(d.bytes,
-			history.value("fileKey", std::string()), history.value("fileNonce", std::string()));
-		if (!plain || SelfAddress() != owner) {
-			LOG(("Parvane: копия ключей: снимок истории не расшифровался"));
-			return;
-		}
-		ImportV2History(*plain);
-		if (!mark.isEmpty()) {
-			StoreWrite(AppliedBundleMarkPath(owner), mark.toUtf8());
-		}
-		LOG(("Parvane: копия ключей: снимок истории применён"));
-	} catch (const std::exception &e) {
-		LOG(("Parvane: копия ключей: история не применена: %1").arg(QString::fromUtf8(e.what())));
-	}
-}
-
-// Свериться с копией ключей аккаунта: снимок истории свежее применённого (его мог положить другой своё
-// устройство). Ключи планировщика и облака — в файл ожидания до разделов «План» и «Облако».
+// Свериться с копией ключей аккаунта: группы, ключи планировщика и облака (их мог положить другое своё устройство)
+// — в файл ожидания до разделов «План» и «Облако». Истории в копии нет (spec 033: журнал истории аккаунта).
 void SyncFromKeyBundle() {
 	const auto s = V2Ready();
 	const auto owner = SelfAddress();
@@ -8327,14 +8362,14 @@ void SyncFromKeyBundle() {
 		if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) {
 			s->applyBundleGroups(groups);
 		}
-		ApplyBundleHistory(bundle.value("history", nlohmann::json()), owner);
 	} catch (const std::exception &e) {
 		LOG(("Parvane: копия ключей аккаунта не применена: %1").arg(QString::fromUtf8(e.what())));
 	}
 }
 
 // Устройство вошло в журнал — любым путём (событие сессии `joined`): оффер привязки отзываем сразу, ключ у бота
-// отмечаем забранным, из копии ключей аккаунта забираем всё (группы, «План», «Облако», историю). Рабочий поток
+// отмечаем забранным, из копии ключей аккаунта забираем группы, «План», «Облако» (историю приносит журнал истории
+// аккаунта: вход по контрольной точке). Рабочий поток
 void CompleteJoin() {
 	const auto s = V2Ready();
 	if (!s) {
@@ -8352,48 +8387,6 @@ void CompleteJoin() {
 	s->ackJoined();
 	PublishLinkingStatus();
 	LOG(("Parvane: вход — всё из копии ключей аккаунта забрано"));
-}
-
-// Снимок истории для копии ключей аккаунта (зовёт сессия движка на своём потоке).
-nlohmann::json BuildBundleHistory(const nlohmann::json &previous, bool force) {
-	const auto owner = SelfAddress();
-	const auto size = previous.is_object() ? previous.value("size", std::int64_t(0)) : std::int64_t(0);
-	const auto at = previous.is_object() ? previous.value("at", std::int64_t(0)) : std::int64_t(0);
-	if (previous.is_object() && !force && size > kBundleHistorySmallBytes
-		&& QDateTime::currentMSecsSinceEpoch() - at < kBundleHistoryMinMs) {
-		return previous;
-	}
-	auto rows = CollectV2HistoryRows();
-	if (rows.empty()) {
-		return previous;
-	}
-	const auto exportJson = nlohmann::json{ { "linkVersion", 2 }, { "v2History", std::move(rows) } }.dump();
-	const auto mark = parvane::keybundle::digestHex(exportJson);
-	if (previous.is_object() && previous.value("mark", std::string()) == mark) {
-		return previous;
-	}
-	const auto t = ControlSnapshot();
-	if (!t) {
-		return previous;
-	}
-	auto enc = parvane::blobcrypt::encrypt(exportJson);
-	if (enc.ciphertext.empty()) {
-		return previous;
-	}
-	const auto fileId = t->uploadBlob(enc.ciphertext);
-	if (fileId.empty() || SelfAddress() != owner) {
-		return previous;
-	}
-	StoreWrite(AppliedBundleMarkPath(owner), QByteArray::fromStdString(mark));
-	LOG(("Parvane: копия ключей: снимок истории загружен (%1 байт)").arg(qint64(exportJson.size())));
-	return nlohmann::json{
-		{ "fileId", fileId },
-		{ "fileKey", enc.keyB64 },
-		{ "fileNonce", enc.nonceB64 },
-		{ "at", QDateTime::currentMSecsSinceEpoch() },
-		{ "mark", mark },
-		{ "size", std::int64_t(exportJson.size()) },
-	};
 }
 
 void ScheduleTelegramPoll(int generation, std::int64_t startedMs, int delayMs);
@@ -8510,11 +8503,11 @@ void NoteDomainKeys(const std::string &planner, const std::string &cloud) {
 	Sections::ApplyDomainKeys(self.toStdString(), planner, cloud);
 }
 
-// Устройство вошло в журнал по ключу восстановления: ключи доменов и история — из копии ключей аккаунта
+// Устройство вошло в журнал по ключу восстановления: ключи доменов — из копии ключей аккаунта (история — журнал
+// истории аккаунта, HIST-1)
 void CompleteKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
 	const auto owner = SelfAddress();
 	NoteDomainKeys(outcome.planner, outcome.cloud);
-	ApplyBundleHistory(outcome.history, owner);
 	for (const auto delay : kBundleRecheckDelays) {
 		crl::on_main([=] {
 			base::call_delayed(delay, [=] {
@@ -10488,7 +10481,6 @@ void ResetSessionBoundState() {
 	g_uuidToMsgId.clear();
 	g_msgIdToUuid.clear();
 	g_pendingOwnUuids.clear();
-	g_unreadIncoming.clear();
 	g_mediaContentByMsgId.clear();
 	g_stickerPackDirs.clear();
 	g_packRefByDocId.clear();
@@ -10534,6 +10526,9 @@ bool AccountGenerationIs(std::uint64_t generation) {
 void ResetAccountState(const char *why) {
 	++g_accountGeneration; // отложенные задачи прежнего аккаунта больше ничего не сделают
 	ResetSessionBoundState();
+	StopHistorySync(); // журнал истории прежнего аккаунта (spec 033)
+	g_outboxReadTs.clear();
+	g_outboxReadOwner.clear();
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		g_scheduled.clear();
@@ -10547,9 +10542,6 @@ void ResetAccountState(const char *why) {
 		g_peerTtl.clear();
 		g_currentCallPeer.clear();
 		g_currentCallVideo = false;
-		g_reportedRead.clear();
-		g_unconfirmedRead.clear();
-		g_readRetries.clear();
 		g_presenceSubscribedIds.clear();
 		g_clearedUuids.clear();
 		g_clearedUntilMs.clear();
@@ -10602,6 +10594,7 @@ void ResetAccountState(const char *why) {
 		g_v2Ids.clear();
 		g_v2Cache.clear();
 		g_v2Reactions.clear();
+		g_inboundTsMs.clear();
 		g_v2IdsLoaded = false;
 	}
 	{
@@ -10754,7 +10747,6 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			session->account().forcedLogOut();
 			return;
 		}
-		LoadReadJournal();  // READ-1: до воспроизведения журнала истории
 		LoadNotifyState();  // снимок настроек уведомлений
 		LoadBlockedState(); // блок-лист (применяется к пользователям по мере появления)
 		LoadDialogState();  // архив и закреп (применяются после воспроизведения истории)
@@ -10902,12 +10894,16 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 		// восстанавливает переписку после рестарта/релогина; новые сообщения sync
 		// добавит поверх (дедуп по uuid).
 		LoadV2GroupCache(session); // группы v2 — до истории (её сообщения идут в их чаты)
-		ReplayHistory();
-		// Архив и закреп — после истории (её инъекция стоит в очереди main раньше).
-		crl::on_main([weak] {
-			if (const auto s = weak.get()) {
-				ApplyDialogState(s);
+		// Хранилище журнала истории и перенос прежнего файла — фоном (spec 033); архив и закреп — после вставки
+		crl::async([weak, generation = AccountGeneration()] {
+			if (!AccountGenerationIs(generation)) {
+				return;
 			}
+			ReplayHistory([weak] {
+				if (const auto s = weak.get()) {
+					ApplyDialogState(s);
+				}
+			});
 		});
 		RestoreScheduled(); // запланированные сообщения: восстановить очередь+таймеры
 
@@ -11027,6 +11023,100 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 					session->api().deleteConversation(user, false);
 				});
 			}
+		}
+
+		// spec 033 (verify_history_sync.sh): PARVANE_AUTOHISTORY=<op>:<адрес>[:<текст>]@<сек>[,…] —
+		//   delete-all:<адрес>:<текст> — удалить «у всех» сообщение чата с этим текстом (своё или собеседника);
+		//   delete-me:<адрес>:<текст>  — «только у меня»;  read:<адрес> — прочитать чат (readInboxTill).
+		// PARVANE_AUTOHISTORYCHECK=<адрес>@<период, с> — строка «проверка истории <адрес>: непрочитано N (tdesktop M),
+		// тексты [a|b]» по хранилищу журнала истории.
+		if (const char *hv = ParvaneDevEnv("PARVANE_AUTOHISTORY"); hv && *hv) {
+			for (const auto &item : QString::fromUtf8(hv).split(',', Qt::SkipEmptyParts)) {
+				const auto at = item.lastIndexOf('@');
+				if (at <= 0) {
+					continue;
+				}
+				const auto parts = item.left(at).split(':');
+				const auto secs = std::max(item.mid(at + 1).toInt(), 1);
+				if (parts.size() < 2) {
+					continue;
+				}
+				base::call_delayed(secs * crl::time(1000), [parts] {
+					const auto session = g_sessionWeak.get();
+					if (!session) {
+						return;
+					}
+					const auto op = parts[0];
+					const auto address = parts[1];
+					const auto text = parts.size() > 2 ? parts.mid(2).join(':') : QString();
+					RegisterPeer(address);
+					const auto history = HistoryForAddress(session, address);
+					if (!history) {
+						LOG(("Parvane: autohistory %1 → %2: чата нет").arg(op, address));
+						return;
+					}
+					auto lastId = qint64(0);
+					auto found = qint64(0);
+					for (const auto &state : HistoryStatesOfChat(address)) {
+						const auto sm = StoredFromHistory(state);
+						if (!sm || sm->deleted) {
+							continue;
+						}
+						const auto msgId = g_uuidToMsgId.value(QString::fromStdString(sm->id), 0);
+						lastId = std::max(lastId, msgId);
+						if (!text.isEmpty() && sm->text().value_or(std::string()) == text.toStdString()) {
+							found = msgId;
+						}
+					}
+					if (op == u"read"_q) {
+						LOG(("Parvane: autohistory read → %1").arg(address));
+						if (lastId > 0) {
+							session->data().histories().readInboxTill(history, MsgId(lastId));
+						}
+						return;
+					}
+					const auto item = found ? session->data().message(history->peer->id, MsgId(found)) : nullptr;
+					if (!item) {
+						LOG(("Parvane: autohistory %1 → %2: сообщение не найдено").arg(op, address));
+						return;
+					}
+					const auto everyone = (op == u"delete-all"_q);
+					LOG(("Parvane: autohistory %1 → %2 msg %3").arg(op, address).arg(found));
+					session->data().histories().deleteMessages(history, { MTP_int(found) }, everyone);
+					item->destroy();
+				});
+			}
+		}
+		if (const char *hc = ParvaneDevEnv("PARVANE_AUTOHISTORYCHECK"); hc && *hc) {
+			const auto spec = QString::fromUtf8(hc);
+			const auto at = spec.lastIndexOf('@');
+			const auto address = at > 0 ? spec.left(at) : spec;
+			const auto period = std::max(at > 0 ? spec.mid(at + 1).toInt() : 5, 1);
+			const auto timer = new base::Timer([address] {
+				const auto session = g_sessionWeak.get();
+				const auto sync = HistorySyncNow();
+				if (!session || !sync) {
+					return;
+				}
+				auto rows = std::vector<std::pair<std::int64_t, QString>>();
+				for (const auto &state : HistoryStatesOfChat(address)) {
+					if (const auto sm = StoredFromHistory(state); sm && !sm->deleted) {
+						rows.emplace_back(sm->ts, QString::fromStdString(sm->text().value_or(std::string("?"))));
+					}
+				}
+				std::stable_sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+				auto texts = QStringList();
+				for (const auto &[ts, t] : rows) {
+					texts.push_back(t);
+				}
+				const auto history = LoadedHistoryFor(session, address);
+				LOG(("Parvane: проверка истории %1: непрочитано %2 (tdesktop %3), тексты [%4]")
+					.arg(address)
+					.arg(sync->readState(HistoryChatKey(address).toStdString()).unread)
+					.arg(history ? history->unreadCount() : -1)
+					.arg(LogSecret(texts.join('|'))));
+			});
+			timer->callEach(period * crl::time(1000));
 		}
 
 		// Debug-automute для e2e: PARVANE_AUTOMUTE=цель[,цель]:<секунды>; цель —

@@ -764,7 +764,10 @@ class Client private constructor(
                 postUpdate(TdApi.UpdateChatIsMarkedAsUnread(f.chatId, false))
                 scheduleStateFlush("unread")
             }
-            f.messageIds.forEach { id -> store.uuidOf(f.chatId, id)?.let { ParvaneCore.markRead(it) } }
+            // READ-2: маркер «прочитано до» чата (журнал истории, другие свои устройства) и квитанции — в ядре; счётчик
+            // сразу локально, затем точное число от маркера событием read_state
+            val viewed: List<String> = f.messageIds.toList().mapNotNull { id -> store.uuidOf(f.chatId, id) }
+            if (viewed.isNotEmpty()) ParvaneCore.markRead(viewed)
             store.markInboxRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
             notifications.onRead(f.chatId, f.messageIds.maxOrNull() ?: 0)?.let { postUpdate(it) }
             TdApi.Ok()
@@ -1961,6 +1964,7 @@ class Client private constructor(
             if (until <= 0 || (clearedUntilMs[address] ?: 0L) >= until) continue
             clearedUntilMs[address] = until
             val chatId = store.group(address)?.chatId ?: store.idOf(address)
+            io.execute { ParvaneCore.clearChatLocal(address, until) } // журнал истории устройства (граница ChatCleared)
             val uuids = store.uuidsOfChatUntil(chatId, until / 1000)
             if (uuids.isEmpty()) continue
             store.removeMessages(uuids).forEach { postUpdate(it) }
@@ -2228,6 +2232,15 @@ class Client private constructor(
                     // READ-1: прочитать чат целиком (как прокрутка до конца в X); счётчик непрочитанного в лог
                     "read" -> handle(TdApi.ViewMessages(chatId, store.history(chatId, 0, 0, 100).messages.map { it.id }.toLongArray(), null, true))
                     "unread" -> { Log.i(TAG, "непрочитано $peer: ${store.chatById(chatId)?.unreadCount ?: -1}"); TdApi.Ok() }
+                    // spec 033 (HIST-1, READ-2): что показывает чат — бейдж и тексты по порядку; удалить сообщение по тексту
+                    // тем же путём, что окно X («у всех» — everyone, иначе «только у меня»)
+                    "history" -> {
+                        val texts = store.history(chatId, 0, 0, 1000).messages.reversed().mapNotNull { (it.content as? TdApi.MessageText)?.text?.text }
+                        Log.i(TAG, "проверка истории $peer: непрочитано ${store.chatById(chatId)?.unreadCount ?: -1}, тексты [${texts.joinToString("|")}]")
+                        TdApi.Ok()
+                    }
+                    "delete" -> store.history(chatId, 0, 0, 1000).messages.firstOrNull { (it.content as? TdApi.MessageText)?.text?.text == cmd.optString("text") }
+                        ?.let { m -> handle(TdApi.DeleteMessages(chatId, longArrayOf(m.id), cmd.optBoolean("everyone"))) } ?: TdApi.Error(404, "message not found")
                     // STATE-2 notify: что X показывает для чата (мут из журнала личного состояния)
                     "notify" -> { Log.i(TAG, "уведомления $peer: muteFor=${store.chatById(chatId)?.notificationSettings?.muteFor ?: -1}"); TdApi.Ok() }
                     // разделы (spec 031): те же вызовы ядра, что экраны «План», «Знания», «Облако»
@@ -2450,7 +2463,8 @@ class Client private constructor(
     private val announcedChats = ConcurrentHashMap.newKeySet<Long>()
     private val journalReplayed = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** Что можно делать с сообщением (паритет TDLib): своё — править (текст) и удалять у всех; чужое — только у себя. */
+    /** Что можно делать с сообщением (паритет TDLib): своё — править (текст); удалить у всех (HIST-1) — в личном чате
+     *  любое сообщение (как Telegram), в группе — своё либо админу с правом удалять; у себя — всегда. */
     fun messageProperties(chatId: Long, messageId: Long): TdApi.MessageProperties? {
         val uuid = store.uuidOf(chatId, messageId) ?: return null
         val m = store.messageByUuid(uuid) ?: return null
@@ -2458,7 +2472,7 @@ class Client private constructor(
         val text = m.content is TdApi.MessageText
         return TdApi.MessageProperties(
             false, false, false, /*canBeCopied*/ true, false, false,
-            /*canBeDeletedOnlyForSelf*/ true, /*canBeDeletedForAllUsers*/ own, /*canBeEdited*/ own && text,
+            /*canBeDeletedOnlyForSelf*/ true, /*canBeDeletedForAllUsers*/ store.canDeleteForEveryone(chatId, own), /*canBeEdited*/ own && text,
             /*canBeForwarded*/ true, false, /*canBePinned*/ true, /*canBeReplied*/ true, false, /*canBeSaved*/ true,
             false, /*canDeleteReactions*/ false, false, false, false, false, false, false, false, false, false,
             /*canGetReadDate*/ false, false, false, false, false, false, /*canReportChat*/ true, false, false, false, false, false, false)
@@ -2752,18 +2766,26 @@ class Client private constructor(
                 if (!out && from.isNotEmpty()) cancelTyping(msg.chatId, store.idOf(from)) // как TDLib: сообщение снимает «печатает»
                 if (chatMode) Log.i(TAG, "режим L2 чата ${msg.chatId}: ${if (content.optBoolean("l2")) "включён" else "выключен"} (служебное ${event.optString("id")}, ${if (out) "своё" else "чужое"})")
                 announceMessage(msg)
-                // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из перенесённой истории
-                if (!out && !event.optBoolean("read") && !event.optBoolean("replay"))
+                // Уведомление X: входящее непрочитанное, не из журнала (реплей) и не из журнала истории аккаунта (догрузка)
+                if (!out && !event.optBoolean("read") && !event.optBoolean("replay") && !event.optBoolean("history"))
                     notifications.onIncoming(msg, isMuted(to.takeIf { event.optBoolean("group") } ?: from, event.optBoolean("group")))?.let { postUpdate(it) }
             }
-            // ReadNotice / read_message_ids: Я прочитал на другом устройстве → входящие
-            "read" -> {
-                val ids = event.optJSONArray("ids") ?: return
-                val uuids = (0 until ids.length()).map { ids.getString(it) }
-                store.markInboxReadUuids(uuids).forEach { postUpdate(it) }
-                uuids.mapNotNull { store.messageByUuid(it) }.groupBy { it.chatId }
-                    .forEach { (chat, ms) -> notifications.onRead(chat, ms.maxOf { it.id })?.let { postUpdate(it) } }
+            // READ-2: счётчик чата от маркера «прочитано до» журнала истории (прочитано здесь, на другом своём
+            // устройстве, своё отправленное, перенос истории) — выставляется заново, а не прибавляется
+            "read_state" -> {
+                val chat = event.optString("chat")
+                store.applyReadState(chat, event.optInt("unread"), event.optString("last_read_id"))?.let { u ->
+                    postUpdate(u)
+                    notifications.onRead(u.chatId, u.lastReadInboxMessageId)?.let { postUpdate(it) }
+                }
             }
+            // HIST-2: история заменена контрольной точкой — показанного, чего в ней нет, больше нет
+            "history_replaced" -> {
+                val keep = event.optJSONArray("keep")?.let { a -> (0 until a.length()).map { a.optString(it) }.toHashSet() } ?: hashSetOf()
+                store.removeMessages(store.allUuids().filter { it !in keep }).forEach { postUpdate(it) }
+            }
+            // Живое уведомление журнала личного состояния (JournalNotice{STATE}) — синк сейчас, опрос — страховка
+            "state_journal" -> if (stateAttached) io.execute { try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}") } }
             "outbox_read" -> store.markOutboxRead(event.optString("id"))?.let { postUpdate(it) }
             "edited" -> event.optJSONObject("content")?.let { c ->
                 store.applyEdit(event.optString("id"), c, event.optLong("edit_date")).forEach { postUpdate(it) }

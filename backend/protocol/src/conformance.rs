@@ -295,6 +295,15 @@ fn str_field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
     v.get(key).and_then(Value::as_str).ok_or_else(|| format!("нет поля {key}"))
 }
 
+/// Адрес или набор адресов (строка либо массив строк) — свои адреса истории (текущий и прежние).
+fn addr_set(v: &Value) -> Vec<&str> {
+    match v {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+        _ => vec![],
+    }
+}
+
 fn origin_of(input: &Value) -> Origin {
     if input.get("origin").and_then(Value::as_str) == Some("server") {
         Origin::Server
@@ -596,7 +605,8 @@ fn history_case(suite: &str, case: &Value) -> Result<(), String> {
         }
         ("history/unread", "unread") => {
             let mark: Option<ReadMark> = hjson_opt(input, "mark")?;
-            let r = h::is_unread(&hjson(input, "state")?, mark.as_ref(), input["self"].as_str().unwrap_or(""));
+            let selves = addr_set(&input["self"]);
+            let r = h::is_unread(&hjson(input, "state")?, mark.as_ref(), &selves);
             expect_outcome(&r, expect)?;
             match r {
                 Ok(u) => same(&Value::Bool(u), &expect["unread"], "непрочитано"),
@@ -624,7 +634,8 @@ fn history_case(suite: &str, case: &Value) -> Result<(), String> {
         }
         ("history/unread", "can_delete") => {
             let k = h::ChatKind::parse(input["chat_kind"].as_str().unwrap_or("")).map_err(|e| e.kind().to_string())?;
-            let r = h::can_delete(k, str_field(input, "author")?, str_field(input, "deleter")?, input["deleter_is_admin"].as_bool().unwrap_or(false));
+            let deleters = addr_set(&input["deleter"]);
+            let r = h::can_delete(k, str_field(input, "author")?, &deleters, input["deleter_is_admin"].as_bool().unwrap_or(false));
             same(&Value::Bool(r), &expect["allowed"], "право удаления")
         }
         ("history/segment", "key") => {

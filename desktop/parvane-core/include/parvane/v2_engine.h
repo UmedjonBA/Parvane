@@ -20,6 +20,7 @@
 struct PvClient;
 struct PvAnonPlanner;
 struct PvStateSession;
+struct PvHistorySession;
 
 namespace parvane::v2 {
 
@@ -355,6 +356,26 @@ public:
 private:
     explicit StateSession(PvStateSession *s) : s_(s) {}
     PvStateSession *s_ = nullptr;
+};
+
+// Сессия журнала истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): шифрование и разбор записей — в движке
+// (`pv_client_history_session`, контракт `specs/033-history-sync/contracts/engine-api.md`). Ключ истории выводится из
+// текущего и прежних ключей личного состояния клиента на момент открытия — после смены ключа сессию открыть заново.
+// Курсор, голову журнала и строки хранит хост (`parvane::history::HistorySync`). Не потокобезопасна.
+class HistorySession {
+public:
+    // nullptr — у клиента нет ключа личного состояния.
+    [[nodiscard]] static std::unique_ptr<HistorySession> open(const Client &client);
+    ~HistorySession();
+    HistorySession(const HistorySession &) = delete;
+    HistorySession &operator=(const HistorySession &) = delete;
+    // Функция сессии по имени WASM `PvHistory.call` (`syncRequest`, `ingest`, `seal`, …; статические `history*` —
+    // тоже). Бросает EngineError.
+    json call(const std::string &name, const json &args = json::object());
+
+private:
+    explicit HistorySession(PvHistorySession *s) : s_(s) {}
+    PvHistorySession *s_ = nullptr;
 };
 
 } // namespace parvane::v2

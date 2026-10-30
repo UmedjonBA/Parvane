@@ -256,18 +256,20 @@ try {
   await createTask(alice1.page, taskName);
   await closePlanner(alice1.page);
 
-  // Копия ключей аккаунта со свежей историей и ключами планировщика — на сервере:
-  // первая копия уходит сразу после запуска, обновлённая — по минутной проверке
-  // (снимок, сделанный до переписки, не годится — ждём следующий)
+  // Копия ключей аккаунта с ключами планировщика — на сервере (первая уходит сразу после запуска, обновлённая — по
+  // минутной проверке), а переписка — в журнале истории аккаунта (spec 033: истории в копии больше нет; своё
+  // пишется через ≤ 300 мс, входящее — через 1–5 с)
   const countLog = (needle) => alice1.logs.filter((line) => line.includes(needle)).length;
-  const snapshotsBefore = countLog('снимок истории загружен');
+  const journalBefore = countLog('история: в журнал записано');
   const writesBefore = countLog('копия ключей аккаунта обновлена');
   const snapshotDeadline = Date.now() + 150000;
-  while (countLog('снимок истории загружен') === snapshotsBefore
+  while (countLog('история: в журнал записано') === journalBefore
     || countLog('копия ключей аккаунта обновлена') === writesBefore) {
-    assert(Date.now() < snapshotDeadline, `копия ключей с историей не ушла на сервер:\n${alice1.logs.slice(-15).join('\n')}`);
+    assert(Date.now() < snapshotDeadline, `копия ключей или журнал истории не на сервере:\n${alice1.logs.slice(-15).join('\n')}`);
     await alice1.page.waitForTimeout(1000);
   }
+  // Входящее (ответ Боба) пишется с задержкой до 5 с
+  await alice1.page.waitForTimeout(6000);
 
   // ── 2–3. Первое устройство ЗАКРЫТО; новое входит по ответу боту ──
   await alice1.page.close();
@@ -415,7 +417,7 @@ try {
     await findMessage(bob.page, fromCarol).first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
     await waitLog(carol1, /копия ключей аккаунта обновлена на сервере/, 60000);
     // Делаем аккаунт «прежним»: у устройства нет ключа копии, на сервере нет копии
-    await dropSecureRecords(carol1.page, carol1.address, ['v2-bundle-key', 'v2-bundle-sent', 'v2-bundle-history']);
+    await dropSecureRecords(carol1.page, carol1.address, ['v2-bundle-key', 'v2-bundle-sent']);
     const identityDb = new DatabaseSync(join(BACKEND_DIR, 'identity.db-v2.db'));
     identityDb.exec('PRAGMA busy_timeout = 5000');
     identityDb.prepare('UPDATE root_backup SET key_bundle = NULL WHERE user = ?').run(carol1.address);

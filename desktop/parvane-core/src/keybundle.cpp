@@ -196,14 +196,8 @@ std::optional<json> open(const std::string &bundleKey, const std::string &addres
     if (v.contains("cloud") && v["cloud"].is_string()) out["cloud"] = v["cloud"];
     if (v.contains("groups") && v["groups"].is_string()) out["groups"] = v["groups"];
     if (v.contains("seq") && v["seq"].is_number_integer() && v["seq"].get<std::int64_t>() > 0) out["seq"] = v["seq"];
-    if (v.contains("history") && v["history"].is_object()) {
-        const auto &h = v["history"];
-        if (h.contains("fileId") && h["fileId"].is_string() && h.contains("fileKey") && h["fileKey"].is_string()
-            && h.contains("fileNonce") && h["fileNonce"].is_string() && h.contains("at") && h["at"].is_number()
-            && h.contains("mark") && h["mark"].is_string()) {
-            out["history"] = h;
-        }
-    }
+    // Снимка истории в копии больше нет (spec 033, HIST-1): прежнее поле `history` не читается — история приходит из
+    // журнала истории аккаунта
     return out;
 }
 
@@ -332,12 +326,8 @@ nlohmann::json mergeWithServer(const nlohmann::json &own, const nlohmann::json &
         }
         merged["cloud"] = cloud.dump();
     }
-    const auto serverHistory = server.value("history", nlohmann::json());
-    if (serverHistory.is_object() && !serverHistory.value("fileId", std::string()).empty()) {
-        const auto ownHistory = own.value("history", nlohmann::json());
-        const auto size = [](const nlohmann::json &h) { return h.is_object() ? h.value("size", std::int64_t(0)) : std::int64_t(0); };
-        if (!ownHistory.is_object() || size(ownHistory) < size(serverHistory)) merged["history"] = serverHistory;
-    }
+    // spec 033: правила «больший снимок истории победил» нет — поле `history` из копии уходит (и своё, и серверное)
+    merged.erase("history");
     return merged;
 }
 

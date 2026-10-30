@@ -59,7 +59,8 @@ add_library(parvane_core STATIC
     ${CORE}/src/v2_account.cpp
     ${CORE}/src/v2_session.cpp
     ${CORE}/src/v2_session_account.cpp
-    ${CORE}/src/v2_session_groups.cpp)
+    ${CORE}/src/v2_session_groups.cpp
+    ${CORE}/src/history_sync.cpp)
 target_include_directories(parvane_core PUBLIC
     ${CORE}/include
     ${BACKEND}/protocol/ffi/include                    # parvane_protocol.h (cbindgen)
@@ -83,6 +84,7 @@ add_library(parvane_jni SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_session.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_messages.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/jni_history.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_groups.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_account.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_calls.cpp

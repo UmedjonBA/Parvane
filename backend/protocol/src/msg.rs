@@ -448,7 +448,7 @@ pub fn mutation_authorized(c: &Content, sender: &str, target_author: &str, sende
                     && crate::history::can_delete(
                         if direct { crate::history::ChatKind::User } else { crate::history::ChatKind::Group },
                         target_author,
-                        sender,
+                        &[sender],
                         sender_is_admin,
                     ))
         }

@@ -4,6 +4,7 @@
 
 #include <parvane/blobcrypt.h>
 #include <parvane/chat_rules.h>
+#include <parvane/history_sync.h>
 #include <parvane/messenger.h>
 #include <parvane/pack_archive.h>
 #include <parvane/storecrypt.h>
@@ -12,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <thread>
 
@@ -34,25 +36,45 @@ std::string sendV2(const std::string &to, const json &content, const std::string
     return id;
 }
 
-// Своё отправленное → событие шва и строка журнала (эхо движок своим не отдаёт).
+// Своё отправленное → строка журнала истории (≤ 300 мс, сдвигает маркер чата) и событие шва (эхо движок своим не
+// отдаёт).
 void emitOwn(const std::string &id, const std::string &to, const json &content, const std::string &replyTo) {
     (void)markSeen(id);
     noteMessage(id, self(), to, content);
-    emit(json{{"type", "message"}, {"id", id}, {"from", self()}, {"to", to}, {"ts", nowSec()},
-              {"text", content.value("text", content.value("caption", std::string()))}, {"out", true},
-              {"kind", parvane::contentKind(content)}, {"read", false}, {"content", content},
-              {"reply_to", replyTo.empty() ? json() : json(replyTo)}, {"group", isGroupAddress(to)}, {"proto", 2}});
+    const auto ms = nowMs();
+    auto ev = json{{"type", "message"}, {"id", id}, {"from", self()}, {"to", to}, {"ts", ms / 1000},
+                   {"text", content.value("text", content.value("caption", std::string()))}, {"out", true},
+                   {"kind", parvane::contentKind(content)}, {"read", false}, {"content", content},
+                   {"reply_to", replyTo.empty() ? json() : json(replyTo)}, {"group", isGroupAddress(to)}, {"proto", 2}};
+    (void)historyRecordMessageEvent(ev, /*own=*/true, ms);
+    emit(ev);
 }
 
-// Мутация сообщения (правка/удаление/реакция/закреп/квитанция) — содержимым v2 в чат сообщения, в фоне.
-bool mutate(const std::string &uuid, const json &content) {
+// Своя правка/реакция/закреп → операция журнала истории с тем же op_id, что и мутация v2 собеседнику: свои
+// устройства, получившие копию из инбокса, узнают её в журнале и не пишут второй раз.
+void recordOwnMutation(const std::string &uuid, const std::string &opId,
+                       const std::function<json(const json &peer, const json &stamp)> &build) {
+    std::string chat;
+    if (const auto st = historyState(uuid)) chat = parvane::v2::Session::historyAddress(st->value("chat", json()));
+    if (chat.empty()) if (const auto row = messageRow(uuid)) chat = row->chat;
+    const auto peer = historyPeerOf(chat);
+    if (peer.is_null()) return;
+    try {
+        (void)historyRecordOwnOp(build(peer, parvane::history::stampOf(nowMs(), opId)));
+    } catch (const std::exception &e) {
+        LOGE("журнал истории: своя мутация %s не записана: %s", uuid.c_str(), e.what());
+    }
+}
+
+// Мутация сообщения (правка/удаление/реакция/закреп) — содержимым v2 в чат сообщения, в фоне.
+bool mutate(const std::string &uuid, const json &content, const std::string &opId = parvane::v2::newUuidV7()) {
     const auto row = messageRow(uuid);
     if (!row || row->chat.empty()) return false;
-    runDetached([chat = row->chat, content, uuid] {
+    runDetached([chat = row->chat, content, uuid, opId] {
         const auto s = v2ReadyForSend();
         if (!s) { LOGE("v2: мутация %s не отправлена — сессия не готова", uuid.c_str()); return; }
         try {
-            s->sendContent(chat, content, parvane::v2::newUuidV7());
+            s->sendContent(chat, content, opId);
             LOGI("v2 → %s для %s", parvane::v2::v2Kind(content).c_str(), uuid.c_str());
         } catch (const std::exception &e) {
             LOGE("v2: мутация %s не отправлена: %s", uuid.c_str(), e.what());
@@ -309,7 +331,13 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(JNIEnv *
             if (const auto m = parvane::v2::toV2(parvane::textContent(text, parvane::contentEntities(content)))) edit["text"] = (*m)["text"];
         }
         updateMessageContent(id, content);
-        if (!mutate(id, json{{"edit", edit}})) return JNI_FALSE;
+        const auto opId = parvane::v2::newUuidV7();
+        if (!mutate(id, json{{"edit", edit}}, opId)) return JNI_FALSE;
+        recordOwnMutation(id, opId, [&](const json &peer, const json &stamp) {
+            auto stored = content;
+            stored.erase("local_path");
+            return parvane::history::editOp(id, peer, stamp, json{{"content", stored}}, self());
+        });
         emit(json{{"type", "edited"}, {"id", id}, {"content", content}, {"edit_date", nowSec()}});
         return JNI_TRUE;
     } catch (const std::exception &e) {
@@ -318,14 +346,20 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(JNIEnv *
     }
 }
 
-// Удалить у всех (своё; админ группы — любое): удаление v2. forMe — только у себя (журнал «скрытых»).
+// Удаление (HIST-1): «у всех» — по праву движка (личный чат — любое сообщение, как Telegram; группа — своё либо
+// админу с правом) мутация v2 собеседнику и надгробие everyone в журнале; «только у меня» — только надгробие me в
+// журнале истории (собеседнику ничего, на всех своих устройствах сообщения нет).
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeDelete(JNIEnv *env, jclass, jstring uuid, jboolean forEveryone) {
     const auto id = jstr(env, uuid);
-    const bool all = forEveryone == JNI_TRUE;
-    if (all && !mutate(id, json{{"delete", {{"targets", json::array({parvane::v2::ref(id)})}, {"for_everyone", true}}}}))
-        return JNI_FALSE;
+    std::string chat;
+    bool everyone = false;
+    if (!historyDelete(id, forEveryone == JNI_TRUE, &chat, &everyone)) return JNI_FALSE;
+    const auto opId = parvane::v2::newUuidV7();
+    if (everyone) (void)mutate(id, json{{"delete", {{"targets", json::array({parvane::v2::ref(id)})}, {"for_everyone", true}}}}, opId);
     forgetMessage(id);
     emit(json{{"type", "deleted"}, {"id", id}});
+    historyRecordDelete(id, chat, everyone, opId);
+    LOGI("удаление msg %s — %s", id.c_str(), everyone ? "у всех" : "только у меня");
     return JNI_TRUE;
 }
 
@@ -333,33 +367,45 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeDelete(JNIEnv
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeReact(JNIEnv *env, jclass, jstring uuid, jstring emoji) {
     const auto id = jstr(env, uuid), em = jstr(env, emoji);
     const bool remove = em.empty() || ownReactionOf(id) == em;
-    if (!mutate(id, json{{"reaction", {{"target", parvane::v2::ref(id)}, {"emoji", remove ? std::string() : em}, {"remove", remove}}}}))
+    const auto opId = parvane::v2::newUuidV7();
+    if (!mutate(id, json{{"reaction", {{"target", parvane::v2::ref(id)}, {"emoji", remove ? std::string() : em}, {"remove", remove}}}}, opId))
         return JNI_FALSE;
+    recordOwnMutation(id, opId, [&](const json &peer, const json &stamp) {
+        return parvane::history::reactOp(id, peer, self(), stamp, remove ? std::string() : em);
+    });
     emit(metaEvent(id, std::make_pair(self(), remove ? std::string() : em), std::nullopt));
     return JNI_TRUE;
 }
 
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativePin(JNIEnv *env, jclass, jstring uuid, jboolean pinned) {
     const auto id = jstr(env, uuid);
-    if (!mutate(id, json{{"pin", {{"target", parvane::v2::ref(id)}, {"unpin", pinned != JNI_TRUE}}}})) return JNI_FALSE;
+    const auto opId = parvane::v2::newUuidV7();
+    if (!mutate(id, json{{"pin", {{"target", parvane::v2::ref(id)}, {"unpin", pinned != JNI_TRUE}}}}, opId)) return JNI_FALSE;
+    recordOwnMutation(id, opId, [&](const json &peer, const json &stamp) {
+        return parvane::history::pinOp(id, peer, stamp, pinned == JNI_TRUE);
+    });
     emit(metaEvent(id, std::nullopt, pinned == JNI_TRUE));
     return JNI_TRUE;
 }
 
-// READ-1: прочитано локально (журнал) — ДО квитанции; квитанцию автору доставляет движок.
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeMarkRead(JNIEnv *env, jclass, jstring uuid) {
-    const auto id = jstr(env, uuid);
-    journalAppend(json{{"type", "read"}, {"ids", json::array({id})}});
-    const auto row = messageRow(id);
-    if (row && row->from != self())
-        (void)mutate(id, json{{"receipt", {{"kind", "RECEIPT_KIND_READ"}, {"messages", json::array({parvane::v2::ref(id)})}}}});
+// READ-2 / READ-1: показанные сообщения прочитаны — маркер «прочитано до» чата сдвигается (в журнал истории ≤ 1 с,
+// другие свои устройства обнуляют счётчик), квитанции READ авторам — только о ставших прочитанными, с повтором.
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeMarkRead(JNIEnv *env, jclass, jstring idsJson) {
+    const auto arr = json::parse(jstr(env, idsJson), nullptr, false);
+    std::vector<std::string> ids;
+    if (arr.is_array()) for (const auto &v : arr) if (v.is_string()) ids.push_back(v.get<std::string>());
+    try {
+        historyMarkRead(ids);
+    } catch (const std::exception &e) {
+        LOGE("nativeMarkRead: %s", e.what());
+    }
 }
 
 // TTL: забыть сообщение — строку в памяти, кэш медиа и рабочую копию.
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeForget(JNIEnv *env, jclass, jstring uuidJ, jstring fileIdJ) {
     const auto uuid = jstr(env, uuidJ), fid = jstr(env, fileIdJ);
     forgetMessage(uuid);
-    journalRemoveIds({uuid});
+    historyForget(uuid);
     if (isSafeFileId(fid)) {
         std::error_code ec;
         std::filesystem::remove(storeDir() + "/media-cache/" + fid, ec);
@@ -374,12 +420,19 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeClearChat(JNIEnv 
     const auto arr = json::parse(jstr(env, idsJson), nullptr, false);
     if (arr.is_array()) for (const auto &v : arr) if (v.is_string()) ids.insert(v.get<std::string>());
     for (const auto &id : ids) forgetMessage(id);
-    journalRemoveIds(ids);
+    historyClearChat(chat, static_cast<std::int64_t>(untilMs), ids);
     runDetached([chat, untilMs] {
         if (const auto s = v2ReadyForSend()) {
             try { s->stateChatCleared(chat, static_cast<std::int64_t>(untilMs)); } catch (const std::exception &e) { LOGE("очистка чата: %s", e.what()); }
         }
     });
+}
+
+// Очистка чата «у себя», пришедшая журналом личного состояния с другого своего устройства: строки — прочь из
+// хранилища истории и не принимаются из журнала (граница ChatCleared).
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeClearChatLocal(JNIEnv *env, jclass, jstring address, jlong untilMs) {
+    const auto chat = jstr(env, address);
+    historyClearChat(chat, static_cast<std::int64_t>(untilMs), {});
 }
 
 // ── наборы стикеров PVPK1 (PACK-1/2), превью, карта ──────────────────────────

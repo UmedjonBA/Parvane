@@ -166,11 +166,15 @@ std::string ownReactionOf(const std::string &uuid) {
     return r == it->second.end() ? std::string() : r->second;
 }
 
-// Из журнала после рестарта: авторы реакций и закреп.
-void restoreMeta(const std::string &uuid, const json &by, bool pinned) {
+// Из строки журнала истории (сведённой движком): авторы реакций и закреп — целиком.
+void replaceMeta(const std::string &uuid, const json &by, bool pinned) {
     std::lock_guard<std::mutex> lk(g_reactMu);
-    if (by.is_object()) for (auto it = by.begin(); it != by.end(); ++it) if (it.value().is_string()) g_reactions[uuid][it.key()] = it.value();
-    if (pinned) g_pinned[uuid] = true;
+    auto &mine = g_reactions[uuid];
+    mine.clear();
+    if (by.is_object())
+        for (auto it = by.begin(); it != by.end(); ++it)
+            if (it.value().is_string() && !it.value().get<std::string>().empty()) mine[it.key()] = it.value().get<std::string>();
+    g_pinned[uuid] = pinned;
 }
 
 void resetReactions() {
@@ -185,67 +189,25 @@ void handleV2Event(const json &ev) {
     const auto in = parvane::v2::interpretDirect(ev, me);
     using Kind = parvane::v2::Incoming::Kind;
     if (in.kind == Kind::None) return;
+    // Домен сервера группы — ключ чата журнала истории (HIST-1)
+    if (in.group && ev.contains("group") && ev["group"].is_object())
+        historyNoteGroupDomain(in.chat, ev["group"].value("domain", std::string()));
     if (in.kind == Kind::Message || in.kind == Kind::Stub) {
         if (!markSeen(in.id)) return; // повтор
-        noteMessage(in.id, in.from, in.chat, in.content, in.from == me ? std::string() : in.proof);
         // P-46: в logcat — только id и вид
         LOGI("v2 ← %s msg %s (%s)", in.from == me ? "своё" : "входящее", in.id.c_str(),
              parvane::contentKind(in.content).c_str());
         auto msg = parvane::android_v2::messageEvent(in, me, nowSec());
-        if (in.group && !groupKnown(in.chat)) {
-            // Группа ещё не прочитана из журнала (первое сообщение обогнало список групп): Kotlin подтянет её
-            // по флагу group; событие — сразу (шов объявит чат после syncGroups)
-        }
+        // Журнал истории (spec 033): строка сводится с мутациями, пришедшими раньше; удалённое раньше прихода —
+        // не показывается; своё с другого устройства сдвигает маркер
+        if (!historyRecordMessageEvent(msg, /*own=*/false, in.tsMs)) return;
+        noteMessage(in.id, in.from, in.chat, msg.value("content", in.content), in.from == me ? std::string() : in.proof);
         emit(msg);
         return;
     }
-    if (in.kind == Kind::Read && in.from == me) {
-        // Я прочитал на другом своём устройстве → входящие прочитаны
-        if (!in.targets.empty()) emit(json{{"type", "read"}, {"ids", in.targets}});
-        return;
-    }
-    for (const auto &uuid : in.targets) {
-        const auto row = messageRow(uuid);
-        if (!row) { LOGI("v2: мутация для неизвестного %s — пропуск", uuid.c_str()); continue; }
-        switch (in.kind) {
-        case Kind::Edit: {
-            if (row->from != in.from || !in.content.is_object()) continue; // править можно только своё
-            auto content = row->content;
-            const auto nk = parvane::contentKind(in.content);
-            if (nk == "location") {
-                for (auto f = in.content.begin(); f != in.content.end(); ++f) content[f.key()] = f.value();
-            } else if (parvane::contentKind(content) == "text") {
-                content["text"] = in.content.value("text", std::string());
-                content["entities"] = in.content.contains("entities") ? in.content["entities"] : json::array();
-            } else {
-                content["caption"] = in.content.value("text", std::string());
-                content["entities"] = in.content.contains("entities") ? in.content["entities"] : json::array();
-            }
-            updateMessageContent(uuid, content);
-            emit(json{{"type", "edited"}, {"id", uuid}, {"content", content}, {"edit_date", nowSec()}});
-        } break;
-        case Kind::Delete:
-            if (row->from != in.from) continue; // удалить у всех можно только своё
-            forgetMessage(uuid);
-            emit(json{{"type", "deleted"}, {"id", uuid}});
-            break;
-        case Kind::Reaction:
-            if (!in.chat.empty() && row->chat != in.chat) continue; // мутация только внутри чата сообщения (WEB-08)
-            emit(metaEvent(uuid, std::make_pair(in.from, in.remove ? std::string() : in.emoji), std::nullopt));
-            break;
-        case Kind::Pin:
-            if (!in.chat.empty() && row->chat != in.chat) continue;
-            emit(metaEvent(uuid, std::nullopt, !in.unpin));
-            break;
-        case Kind::Read:
-            if (!in.chat.empty() && row->chat != in.chat) continue;
-            if (row->from != me) continue; // квитанция собеседника о МОЁМ сообщении
-            emit(json{{"type", "outbox_read"}, {"id", uuid}, {"by", in.from}, {"at", in.ts ? in.ts : nowSec()}});
-            break;
-        default:
-            break;
-        }
-    }
+    // Правка, удаление, реакция, закреп, квитанция — операции журнала истории (HIST-1, READ-2): сведение и права —
+    // движком, неизвестная цель — сирота (применится, когда сообщение придёт)
+    historyApplyIncomingMutation(in);
 }
 
 namespace {
@@ -256,6 +218,7 @@ bool handleSessionEvent(const json &ev) {
     if (type == "groupUpdated") {
         const auto info = ev.value("info", json::object());
         cacheGroupInfo(address, &info);
+        historyNoteGroupInfo(address, info);
         std::vector<std::string> mem;
         for (const auto &m : info.value("members", json::array())) mem.push_back(m.value("user", std::string()));
         noteGroupMembers(address, mem);
@@ -329,12 +292,19 @@ bool handleSessionEvent(const json &ev) {
         emit(json{{"type", "new_device"}, {"count", ev.value("devices", json::array()).size()}});
         return true;
     }
+    if (type == "journal") {
+        // Живое уведомление журнала (JournalNotice, spec 033): история — журналу истории; личное состояние — шву
+        if (ev.value("journal", std::string()) == "history") historySessionEvent(ev);
+        else emit(json{{"type", "state_journal"}});
+        return true;
+    }
     if (type == "stateReady") {
+        historySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
         sectionsSessionChanged(); // «План», «Облако»: журнал состояния подключён
         emit(json{{"type", "state_ready"}});
         runDetached([] {
             startLinkingWorkers(); // роль «старого» устройства: опрос чужих офферов
-            syncFromKeyBundle();   // снимок истории свежее применённого — с другого своего устройства
+            syncFromKeyBundle();   // ключи «Плана»/«Облака» и группы из копии ключей аккаунта
         });
         return true;
     }
@@ -364,8 +334,11 @@ bool handleSessionEvent(const json &ev) {
         const auto msg = parvane::android_v2::groupL2Event(ev, self(), nowSec());
         const auto id = msg.value("id", std::string());
         if (id.empty() || !markSeen(id)) return true;
-        noteMessage(id, msg.value("from", std::string()), address, msg.value("content", json::object()));
-        emit(msg);
+        auto shown = msg;
+        if (!historyRecordMessageEvent(shown, /*own=*/false)) return true;
+        shown["read"] = true; // служебное: квитанции слать некому
+        noteMessage(id, msg.value("from", std::string()), address, shown.value("content", json::object()));
+        emit(shown);
         return true;
     }
     if (type == "callSignal") {
@@ -434,7 +407,7 @@ void startSession() {
         // событие прежней сессии (выход, перезапуск под новым ником) — мимо
         if (g_sessionGen == gen && self() == owner) handleV2Event(ev);
     };
-    cfg.bundleHistory = [](const json &previous, bool force) { return bundleHistory(previous, force); };
+    // spec 033: истории в копии ключей нет — новое устройство читает журнал истории аккаунта (jni_history.cpp)
     cfg.onRecoveryKey = [](const std::string &key) {
         LOGI("v2: ключ восстановления выдан — показ пользователю");
         emit(json{{"type", "recovery_key"}, {"key", key}});
@@ -445,6 +418,7 @@ void startSession() {
         g_v2 = s;
     }
     s->start();
+    historyStart(); // журнал истории аккаунта (spec 033): открытие и перенос прежнего журнала — в фоне
     // Разделы — сразу: сохранённый вид «Плана» и «Знаний» показывается до подключения к серверу
     sectionsSessionChanged();
     const auto presence = ++g_presenceGen;
@@ -478,6 +452,7 @@ void resetAccountMemory() {
     resetGroups();
     resetLinking();
     l2Forget();
+    historyReset();
 }
 
 } // namespace

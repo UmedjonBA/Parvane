@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "data/data_chat_participant_status.h" // ChatAdminRights (spec 004)
+#include "data/data_msg_id.h" // MsgId (MirrorReadTill, spec 033)
 
 #include <rpl/producer.h>
 
@@ -476,16 +477,17 @@ void EnsureDefaultLanguage();
 // переписывается без них. Зовётся из ApiWrap::deleteHistory до локальной очистки.
 void MirrorClearHistory(not_null<PeerData*> peer);
 
-// Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
-// синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
+// Удаление сообщения (spec 033, HIST-1): forEveryone — «у всех» (личный чат — и сообщение собеседника; группа —
+// своё или админом с правом; права — движок), иначе «только у меня» (только журнал истории своих устройств).
+// msgId — локальный синтетический id; неизвестное — no-op.
 void MirrorDelete(std::int64_t msgId, bool forEveryone = true);
 
 // Правит текст СВОЕГО сообщения (msg.chat.edit). Аналогично MirrorDelete.
 void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text);
 
-// Отмечает прочитанными непрочитанные входящие от пира (msg.chat.read → ✓✓ у
-// отправителя). peerId — локальный id пира (bare). Вызывается из readInbox.
-void MirrorRead(std::int64_t peerId);
+// Прочтение чата до сообщения tillId (spec 033, READ-2): маркер «прочитано до» — в журнал истории, квитанции READ
+// авторам ставших прочитанными (с повтором). Личные чаты и группы; зовёт Histories::readInboxTill.
+void MirrorReadTill(not_null<History*> history, MsgId tillId);
 
 // Синтезирует (идемпотентно) пира по адресу и возвращает его UserData — чтобы
 // начать чат по адресу. Используется в поиске (PeerSearch) вместо MTProto.

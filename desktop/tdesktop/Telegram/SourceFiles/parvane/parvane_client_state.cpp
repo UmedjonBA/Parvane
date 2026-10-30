@@ -1099,7 +1099,6 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 	if (!snap.contains("cleared") || !snap["cleared"].is_array()) {
 		return;
 	}
-	const auto self = SelfAddress();
 	auto fresh = QHash<QString, qint64>();
 	for (const auto &entry : snap["cleared"]) {
 		const auto address = StateAddressOf(entry.value("peer", parvane::json()));
@@ -1120,26 +1119,15 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 		return;
 	}
 	auto uuids = QSet<QString>();
-	// Журнал истории зашифрован построчно (P-13) — читать через хранилище
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		const auto j = nlohmann::json::parse(line.toStdString(), nullptr, false);
-		if (!j.is_object()) {
-			continue;
+	// Строки личных чатов из хранилища журнала истории (spec 033); граница очистки группы на них не действует
+	for (auto it = fresh.constBegin(); it != fresh.constEnd(); ++it) {
+		for (const auto &state : HistoryStatesOfChat(it.key())) {
+			const auto pos = parvane::history::rowPos(state);
+			const auto id = QString::fromStdString(state.value("target", std::string()));
+			if (!id.isEmpty() && (!pos || pos->tsMs <= it.value())) {
+				uuids.insert(id);
+			}
 		}
-		const auto id = QString::fromStdString(j.value("id", std::string()));
-		const auto from = QString::fromStdString(j.value("from", std::string()));
-		const auto to = QString::fromStdString(j.value("to", std::string()));
-		// Строки группы — не личный чат: граница очистки собеседника на них не действует
-		if (parvane::v2::isGroupAddress(to.toStdString())) {
-			continue;
-		}
-		const auto dialog = (from == self) ? to : from;
-		const auto found = fresh.constFind(dialog);
-		if (id.isEmpty() || found == fresh.constEnd()
-			|| j.value("ts", std::int64_t(0)) * 1000 > found.value()) {
-			continue;
-		}
-		uuids.insert(id);
 	}
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -1542,8 +1530,9 @@ void AttachStateJournal() {
 			if (!g_stateTimer) {
 				g_stateTimer = std::make_unique<base::Timer>([] { StateSyncNow(); });
 			}
-			// SC-009: правка с другого устройства видна ≤ 10 с (как web, 8 с)
-			g_stateTimer->callEach(8 * crl::time(1000));
+			// Правка с другого устройства приходит живым уведомлением журнала (JournalNotice, spec 033) — опрос
+			// раз в 60 с только страховка
+			g_stateTimer->callEach(60 * crl::time(1000));
 			LOG(("Parvane: v2: журнал личного состояния подключён (папки, отложенные)"));
 		});
 	});
@@ -1619,6 +1608,17 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 	}
 	if (type == "stateReady") {
 		Sections::OnSessionChanged();
+		OnHistorySessionEvent(ev); // журнал истории: сессия движка заново (после смены ключа — точка, HIST-2)
+	}
+	if (type == "journal") {
+		// Живое уведомление журнала (JournalNotice, spec 033): история — журналу истории, личное состояние — синк
+		// журнала состояния сейчас (опрос — страховка)
+		if (ev.value("journal", std::string()) == "state") {
+			OnMainForAccount([] { StateSyncNow(); });
+		} else {
+			OnHistorySessionEvent(ev);
+		}
+		return true;
 	}
 	if (type == "joined") {
 		crl::async([] { CompleteJoin(); });

@@ -1294,7 +1294,7 @@
               "id": "QkJCQkJCQkJCQkJCQkJCQg=="
             }
           },
-          "chatKey": "g:x:42424242424242424242424242424242",
+          "chatKey": "g:42424242424242424242424242424242",
           "deleted": false,
           "edited": false,
           "from": "carol@x",
@@ -1627,6 +1627,1650 @@
         ]
       },
       "name": "повторы одного события"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC+0YDQuNCz0LjQvdCw0LsifX0=",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7014-8000-000000000014",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7014-8000-000000000014"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "оригинал"
+            }
+          },
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": false,
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7014-8000-000000000014",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0L7QtNC80LXQvdCwIn19",
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7014-8000-000000000014"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC+0YDQuNCz0LjQvdCw0LsifX0=",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7014-8000-000000000014",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "группа: правка не автором до сообщения не применяется"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC80L7RkSJ9fQ==",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "alice@x",
+            "id": "01923a4b-5c6d-7015-8000-000000000015",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7015-8000-000000000015"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "моё"
+            }
+          },
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": false,
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923a4b-5c6d-7015-8000-000000000015",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0L7QtNC80LXQvdCwIn19",
+              "by": "bob@x",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7015-8000-000000000015"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC80L7RkSJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "alice@x",
+              "id": "01923a4b-5c6d-7015-8000-000000000015",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "личный чат: правка собеседником МОЕГО сообщения до него не применяется"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQsNCy0LrQsCDQsNCy0YLQvtGA0LAifX0=",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+            "ts_ms": "2000"
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCwIn19",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7016-8000-000000000016",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7016-8000-000000000016"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "правка автора"
+            }
+          },
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": false,
+          "editTsMs": 2000,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7016-8000-000000000016",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0YDQsNCy0LrQsCDQsNCy0YLQvtGA0LAifX0=",
+              "by": "bob@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7016-8000-000000000016"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0L7QtNC80LXQvdCwIn19",
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "9000"
+              },
+              "target": "01923a4b-5c6d-7016-8000-000000000016"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCwIn19",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7016-8000-000000000016",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1,
+            1,
+            0,
+            2
+          ]
+        ]
+      },
+      "name": "правка автором до сообщения применяется, поддельная более поздняя — нет"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC20LjQstC+0LUifX0=",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7017-8000-000000000017",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7017-8000-000000000017"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "живое"
+            }
+          },
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": false,
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7017-8000-000000000017",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7017-8000-000000000017"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC20LjQstC+0LUifX0=",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7017-8000-000000000017",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "группа: удаление чужого участником до сообщения не действует"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "gone": {
+            "by": "bob@x",
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-7018-8000-000000000018"
+          },
+          "row": {
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7018-8000-000000000018",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7018-8000-000000000018"
+        },
+        "view": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7018-8000-000000000018",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "bob@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7018-8000-000000000018"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGD0LTQsNC70ZHQvdC90L7QtSJ9fQ==",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7018-8000-000000000018",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "группа: удаление автором до сообщения действует"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "gone": {
+            "by": "carol@x",
+            "by_admin": true,
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-7019-8000-000000000019"
+          },
+          "row": {
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7019-8000-000000000019",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-7019-8000-000000000019"
+        },
+        "view": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-7019-8000-000000000019",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "carol@x",
+              "by_admin": true,
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-7019-8000-000000000019"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGD0LTQsNC70ZHQvdC90L7QtSJ9fQ==",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-7019-8000-000000000019",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "группа: удаление админом с правом до сообщения действует"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "gone": {
+            "by": "bob@x",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-701a-8000-00000000001a"
+          },
+          "row": {
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "alice@x",
+            "id": "01923a4b-5c6d-701a-8000-00000000001a",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-701a-8000-00000000001a"
+        },
+        "view": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "chatKey": "u:bob@x",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "alice@x",
+          "id": "01923a4b-5c6d-701a-8000-00000000001a",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "bob@x",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-701a-8000-00000000001a"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC80L7RkSJ9fQ==",
+              "chat": {
+                "user": {
+                  "address": "bob@x"
+                }
+              },
+              "from": "alice@x",
+              "id": "01923a4b-5c6d-701a-8000-00000000001a",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "личный чат: удаление собеседником моего сообщения у всех действует"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "pending_edits": [
+            {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC+0YIg0LDQstGC0L7RgNCwIn19",
+              "by": "bob@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            },
+            {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0L7QtNC80LXQvdCwIn19",
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          ],
+          "pending_gones": [
+            {
+              "by": "alice@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "1500"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            },
+            {
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "4000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          ],
+          "target": "01923a4b-5c6d-701b-8000-00000000001b"
+        },
+        "view": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": false,
+          "edited": false,
+          "id": "01923a4b-5c6d-701b-8000-00000000001b",
+          "orphan": true,
+          "pinned": false,
+          "reactions": [],
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC+0YIg0LDQstGC0L7RgNCwIn19",
+              "by": "bob@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC/0L7QtNC80LXQvdCwIn19",
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "3000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          },
+          {
+            "gone": {
+              "by": "carol@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "4000"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          },
+          {
+            "gone": {
+              "by": "alice@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "1500"
+              },
+              "target": "01923a4b-5c6d-701b-8000-00000000001b"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3
+          ],
+          [
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            0
+          ],
+          [
+            2,
+            3,
+            0,
+            1
+          ],
+          [
+            3,
+            0,
+            1,
+            2
+          ],
+          [
+            3,
+            0,
+            2,
+            1,
+            1,
+            2,
+            0,
+            3
+          ]
+        ]
+      },
+      "name": "сирота хранит кандидатов разных авторов"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "gone": {
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "scope": "GONE_SCOPE_EVERYONE",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70b4-8000-0000000000b4",
+              "ts_ms": "1000"
+            },
+            "target": "01923a4b-5c6d-701c-8000-00000000001c"
+          },
+          "row": {
+            "chat": {
+              "group": {
+                "domain": "x",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-701c-8000-00000000001c",
+            "ts_ms": "500"
+          },
+          "target": "01923a4b-5c6d-701c-8000-00000000001c"
+        },
+        "view": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": true,
+          "deletedScope": "everyone",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-701c-8000-00000000001c",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 500,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "u0@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a0-8000-0000000000a0",
+                "ts_ms": "5000"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u1@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "5001"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u2@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "5002"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u3@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a3-8000-0000000000a3",
+                "ts_ms": "5003"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u4@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a4-8000-0000000000a4",
+                "ts_ms": "5004"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u5@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a5-8000-0000000000a5",
+                "ts_ms": "5005"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u6@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a6-8000-0000000000a6",
+                "ts_ms": "5006"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u7@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a7-8000-0000000000a7",
+                "ts_ms": "5007"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u8@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a8-8000-0000000000a8",
+                "ts_ms": "5008"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u9@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a9-8000-0000000000a9",
+                "ts_ms": "5009"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u10@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70aa-8000-0000000000aa",
+                "ts_ms": "5010"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "by": "u11@x",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70ab-8000-0000000000ab",
+                "ts_ms": "5011"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "gone": {
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_EVERYONE",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70b4-8000-0000000000b4",
+                "ts_ms": "1000"
+              },
+              "target": "01923a4b-5c6d-701c-8000-00000000001c"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItGD0LTQsNC70ZHQvdC90L7QtSJ9fQ==",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-701c-8000-00000000001c",
+              "ts_ms": "500"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          [
+            13,
+            12,
+            11,
+            10,
+            9,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            0
+          ],
+          [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            0,
+            1
+          ],
+          [
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            0,
+            1,
+            2
+          ],
+          [
+            13,
+            0,
+            12,
+            1,
+            11,
+            2,
+            10,
+            3,
+            9,
+            4,
+            8,
+            5,
+            7,
+            6,
+            6,
+            7,
+            5,
+            8,
+            4,
+            9,
+            3,
+            10,
+            2,
+            11,
+            1,
+            12,
+            0,
+            13
+          ]
+        ]
+      },
+      "name": "наплыв поддельных удалений не вытесняет своё"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "edit_body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8ISJ9fQ==",
+          "edit_stamp": {
+            "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+            "ts_ms": "1200"
+          },
+          "reacts": [
+            {
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1100"
+              },
+              "user": "alice@x"
+            }
+          ],
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8In19",
+            "chat": {
+              "group": {
+                "domain": "y.example",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-701d-8000-00000000001d",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-701d-8000-00000000001d"
+        },
+        "view": {
+          "body": {
+            "content": {
+              "kind": "text",
+              "text": "всем!"
+            }
+          },
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": false,
+          "editTsMs": 1200,
+          "edited": true,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-701d-8000-00000000001d",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [
+            {
+              "count": 1,
+              "emoji": "👍",
+              "users": [
+                "alice@x"
+              ]
+            }
+          ],
+          "tsMs": 1000,
+          "visible": true
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8In19",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-701d-8000-00000000001d",
+              "ts_ms": "1000"
+            }
+          },
+          {
+            "react": {
+              "chat": {
+                "group": {
+                  "domain": "y.example",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "emoji": "👍",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "1100"
+              },
+              "target": "01923a4b-5c6d-701d-8000-00000000001d",
+              "user": "alice@x"
+            }
+          },
+          {
+            "edit": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCy0YHQtdC8ISJ9fQ==",
+              "by": "bob@x",
+              "chat": {
+                "group": {
+                  "domain": "y.example",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a2-8000-0000000000a2",
+                "ts_ms": "1200"
+              },
+              "target": "01923a4b-5c6d-701d-8000-00000000001d"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1,
+            2
+          ],
+          [
+            2,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            0
+          ],
+          [
+            2,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            1,
+            1,
+            0,
+            2
+          ]
+        ]
+      },
+      "name": "группа под двумя доменами — одна строка, домен больший"
+    },
+    {
+      "expect": {
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "gone": {
+            "by": "alice@x",
+            "chat": {
+              "group": {
+                "domain": "y.example",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "scope": "GONE_SCOPE_ME",
+            "stamp": {
+              "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+              "ts_ms": "2000"
+            },
+            "target": "01923a4b-5c6d-701e-8000-00000000001e"
+          },
+          "row": {
+            "chat": {
+              "group": {
+                "domain": "y.example",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-701e-8000-00000000001e",
+            "ts_ms": "1000"
+          },
+          "target": "01923a4b-5c6d-701e-8000-00000000001e"
+        },
+        "view": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "chatKey": "g:42424242424242424242424242424242",
+          "deleted": true,
+          "deletedScope": "me",
+          "edited": false,
+          "from": "bob@x",
+          "id": "01923a4b-5c6d-701e-8000-00000000001e",
+          "orphan": false,
+          "pinned": false,
+          "reactions": [],
+          "tsMs": 1000,
+          "visible": false
+        }
+      },
+      "input": {
+        "ops": [
+          {
+            "gone": {
+              "by": "alice@x",
+              "chat": {
+                "group": {
+                  "domain": "y.example",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "scope": "GONE_SCOPE_ME",
+              "stamp": {
+                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                "ts_ms": "2000"
+              },
+              "target": "01923a4b-5c6d-701e-8000-00000000001e"
+            }
+          },
+          {
+            "row": {
+              "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItCwIn19",
+              "chat": {
+                "group": {
+                  "domain": "x",
+                  "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+                }
+              },
+              "from": "bob@x",
+              "id": "01923a4b-5c6d-701e-8000-00000000001e",
+              "ts_ms": "1000"
+            }
+          }
+        ],
+        "orders": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            0,
+            0,
+            1
+          ]
+        ]
+      },
+      "name": "группа под двумя доменами: сирота, затем строка"
     },
     {
       "expect": {

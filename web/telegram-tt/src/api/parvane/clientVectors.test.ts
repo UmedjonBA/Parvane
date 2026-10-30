@@ -20,8 +20,15 @@ const KEYBACKUP_PASSWORD = 'Vector-pass-2026';
 const KEYBACKUP_PAYLOAD: KeyBackupPayload = {
   deviceId: 'vec-device-1',
   v2: { key: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=', state: 'c3RhdGUtYnl0ZXM=' },
-  v2History: [{ chat: 'bob@local', id: '0192f1a2-0000-7000-8000-000000000001', text: 'привет' }],
 };
+
+// Истории в копиях больше нет (spec 033): прежние поля `v2History` (копия ключей) и `history` (копия ключей
+// аккаунта) в файлах векторов допустимы, но не читаются
+function withoutHistory<T extends object>(payload: T): T {
+  type Legacy = T & { v2History?: unknown; history?: unknown };
+  const { v2History: _v2History, history: _history, ...rest } = payload as Legacy;
+  return rest as T;
+}
 
 function vectorPath(name: string) {
   return path.join(DIR, name);
@@ -39,14 +46,15 @@ describe('Векторы форматов клиентов: копия ключ�
     const web = JSON.parse(readFileSync(webFile, 'utf8')) as {
       password: string; payload: KeyBackupPayload; file: unknown;
     };
-    expect(await importEncryptedBackup(web.password, JSON.stringify(web.file))).toEqual(web.payload);
+    expect(await importEncryptedBackup(web.password, JSON.stringify(web.file))).toEqual(withoutHistory(web.payload));
 
     const desktopFile = vectorPath('keybackup-desktop.json');
     expect(existsSync(desktopFile)).toBe(true);
     const desktop = JSON.parse(readFileSync(desktopFile, 'utf8')) as {
       password: string; payload: KeyBackupPayload; file: unknown;
     };
-    expect(await importEncryptedBackup(desktop.password, JSON.stringify(desktop.file))).toEqual(desktop.payload);
+    expect(await importEncryptedBackup(desktop.password, JSON.stringify(desktop.file)))
+      .toEqual(withoutHistory(desktop.payload));
     await expect(importEncryptedBackup('wrong-password', JSON.stringify(desktop.file))).rejects.toThrow();
   });
 });
@@ -57,9 +65,6 @@ const BUNDLE_PAYLOAD: KeyBundlePayload = {
   grant: 'eyJzc2siOiIwMCJ9',
   planner: '{"id":"aa"}',
   cloud: '[]',
-  history: {
-    fileId: 'f1', fileKey: 'k1', fileNonce: 'n1', at: 1760000000000, mark: 'm1', size: 42,
-  },
 };
 // Ключ в окружающем тексте, длинное тире, буквы-двойники; ничего похожего — исходный текст
 const PICK_CASES = [
@@ -97,7 +102,7 @@ describe('Векторы форматов клиентов: копия ключ�
     };
     const key = (await deriveBundleKey(web.recoveryKey, web.address))!;
     expect(b64(key)).toBe(web.bundleKey);
-    expect(await openKeyBundle(key, web.address, unb64(web.sealed))).toEqual(web.payload);
+    expect(await openKeyBundle(key, web.address, unb64(web.sealed))).toEqual(withoutHistory(web.payload));
     expect(await openKeyBundle(key, 'other@parvane.example', unb64(web.sealed))).toBeUndefined();
     web.pick.forEach(({ input, output }) => expect(pickRecoveryKey(input)).toBe(output));
 
@@ -107,7 +112,8 @@ describe('Векторы форматов клиентов: копия ключ�
       recoveryKey: string; address: string; sealed: string; payload: KeyBundlePayload;
     };
     const desktopKey = (await deriveBundleKey(desktop.recoveryKey, desktop.address))!;
-    expect(await openKeyBundle(desktopKey, desktop.address, unb64(desktop.sealed))).toEqual(desktop.payload);
+    expect(await openKeyBundle(desktopKey, desktop.address, unb64(desktop.sealed)))
+      .toEqual(withoutHistory(desktop.payload));
   });
 });
 

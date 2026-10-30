@@ -172,11 +172,6 @@ void Histories::clearAll() {
 
 void Histories::readInbox(not_null<History*> history) {
 	DEBUG_LOG(("Reading: readInbox called."));
-	// Parvane: получатель прочитал диалог → отмечаем входящие прочитанными
-	// (msg.chat.read → ✓✓ у отправителя). Только 1-на-1 (пользователь).
-	if (const auto user = history->peer->asUser()) {
-		Parvane::MirrorRead(peerToUser(user->id).bare);
-	}
 	if (history->lastServerMessageKnown()) {
 		const auto last = history->lastServerMessage();
 		DEBUG_LOG(("Reading: last known, reading till %1."
@@ -257,6 +252,9 @@ void Histories::readInboxTill(
 	DEBUG_LOG(("Reading: readInboxTill %1, force %2."
 		).arg(tillId.bare
 		).arg(Logs::b(force)));
+	// Parvane (spec 033, READ-2): прочтение до tillId — маркер «прочитано до» в журнал истории аккаунта (все свои
+	// устройства обнуляют счётчик) и квитанции READ авторам; личные чаты и группы.
+	Parvane::MirrorReadTill(history, tillId);
 
 	const auto syncGuard = gsl::finally([&] {
 		DEBUG_LOG(("Reading: in guard, unread %1."

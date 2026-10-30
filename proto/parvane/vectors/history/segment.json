@@ -31,7 +31,7 @@
     },
     {
       "expect": {
-        "key": "g:x:42424242424242424242424242424242|2024-02",
+        "key": "g:42424242424242424242424242424242|2024-02",
         "ok": true
       },
       "input": {
@@ -59,6 +59,37 @@
         }
       },
       "name": "ключ: группа, последняя миллисекунда января"
+    },
+    {
+      "expect": {
+        "key": "g:42424242424242424242424242424242|2024-02",
+        "ok": true
+      },
+      "input": {
+        "kind": "key",
+        "state": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImIifX0=",
+            "chat": {
+              "group": {
+                "domain": "y.example",
+                "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7002-8000-000000000002",
+            "ts_ms": "1709164799999"
+          },
+          "target": "01923a4b-5c6d-7002-8000-000000000002"
+        }
+      },
+      "name": "ключ: группа под другим доменом — тот же ключ"
     },
     {
       "expect": {
@@ -285,19 +316,21 @@
                 "address": "bob@x"
               }
             },
-            "gone": {
-              "chat": {
-                "user": {
-                  "address": "bob@x"
-                }
-              },
-              "scope": "GONE_SCOPE_ME",
-              "stamp": {
-                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
-                "ts_ms": "1726444799000"
-              },
-              "target": "01923a4b-5c6d-7006-8000-000000000006"
-            },
+            "pending_gones": [
+              {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "1726444799000"
+                },
+                "target": "01923a4b-5c6d-7006-8000-000000000006"
+              }
+            ],
             "target": "01923a4b-5c6d-7006-8000-000000000006"
           }
         ]
@@ -385,19 +418,21 @@
                 "address": "bob@x"
               }
             },
-            "gone": {
-              "chat": {
-                "user": {
-                  "address": "bob@x"
-                }
-              },
-              "scope": "GONE_SCOPE_ME",
-              "stamp": {
-                "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
-                "ts_ms": "1726444799000"
-              },
-              "target": "01923a4b-5c6d-7006-8000-000000000006"
-            },
+            "pending_gones": [
+              {
+                "chat": {
+                  "user": {
+                    "address": "bob@x"
+                  }
+                },
+                "scope": "GONE_SCOPE_ME",
+                "stamp": {
+                  "op_id": "01923a4b-5c6d-70a1-8000-0000000000a1",
+                  "ts_ms": "1726444799000"
+                },
+                "target": "01923a4b-5c6d-7006-8000-000000000006"
+              }
+            ],
             "target": "01923a4b-5c6d-7006-8000-000000000006"
           }
         ]

@@ -2,8 +2,10 @@
 // рядом с копией корня (`RootBackupSet.key_bundle`) и несёт то же, что получает
 // устройство при привязке с другого устройства: материал гранта движка (ключ
 // подписи устройств, журнал, ключ доставки, ключ личного состояния), ключи
-// планировщика и указатель на снимок истории. По ней новое устройство входит в
-// журнал устройств с одним ключом восстановления, а прежние устройства остаются.
+// планировщика, облака и групп. По ней новое устройство входит в журнал устройств
+// с одним ключом восстановления, а прежние устройства остаются. Истории в копии нет
+// (spec 033): её новое устройство читает из журнала истории аккаунта ключом,
+// выведенным из ключа личного состояния.
 //
 // Формат: "PVKB" ‖ версия (1) ‖ nonce (12) ‖ AES-256-GCM(JSON),
 // ключ = HKDF-SHA256(ikm = ключ восстановления в каноничной записи без «-»,
@@ -20,18 +22,6 @@ const HEADER_LEN = MAGIC.length + 1;
 const KEY_CHARS = 40;
 const SALT = 'parvane/v2/key-bundle';
 
-export type KeyBundleHistory = {
-  fileId: string;
-  fileKey: string;
-  fileNonce: string;
-  // Время снимка, мс: новое устройство перечитывает копию и берёт снимок свежее
-  at: number;
-  // Отпечаток содержимого: устройство не перезаливает неизменившуюся историю
-  mark: string;
-  // Размер снимка, байт: небольшую историю обновляем чаще
-  size?: number;
-};
-
 export type KeyBundlePayload = {
   // Материал гранта движка (`linkGrantMaterial`), base64
   grant: string;
@@ -41,7 +31,6 @@ export type KeyBundlePayload = {
   cloud?: string;
   // Ключи групп (`groupKeysExport`, JSON-массив base64): группы видны сразу после входа по ключу
   groups?: string;
-  history?: KeyBundleHistory;
   // Монотонный номер записи копии (A0073-2): устройство помнит наибольший виденный и не принимает копию с меньшим
   // (откат сервера на старую версию). Нет поля — копия старого формата, номер 0.
   seq?: number;
@@ -121,12 +110,13 @@ function mergeGrant(own: string, server: string | undefined): string {
 
 /**
  * Копия ключей аккаунта при записи (без групп — их сводит движок, `groupKeysMerge`): своё плюс то, чего у устройства
- * ещё нет, с сервера. Только что вошедшее устройство не должно стирать из копии «План», «Облако» и историю, которые
- * само ещё не получило, — иначе следующее новое устройство видело бы их через минуты (отзыв 23–24 окт 2026).
+ * ещё нет, с сервера. Только что вошедшее устройство не должно стирать из копии «План» и «Облако», которые само ещё
+ * не получило, — иначе следующее новое устройство видело бы их через минуты (отзыв 23–24 окт 2026).
  * Правила (общие с ядром, вектор `keybundle-merge.json`): грант — свой, но ключ личного состояния (`sk`/`skv`) и ключ
  * доставки (`dk`/`gen`) — более новой версии из двух (отставшее устройство не откатывает их у следующих); «План» —
  * свой, если есть, но серверный при том же контейнере с бо́льшим числом эпох; «Облако» — объединение по `id`, у общего —
- * с бо́льшим числом эпох; история — свой снимок, если он не меньше серверного.
+ * с бо́льшим числом эпох. Поле `history` (снимок истории до spec 033) не пишется и не читается: правило «больший
+ * снимок победил» возвращало удалённое (HIST-1).
  */
 export function mergeKeyBundlePayload(own: KeyBundlePayload, server?: Partial<KeyBundlePayload>): KeyBundlePayload {
   if (!server) return own;
@@ -143,10 +133,6 @@ export function mergeKeyBundlePayload(own: KeyBundlePayload, server?: Partial<Ke
       if (!ownCloud.some((o) => o.id === entry.id)) cloud.push(entry);
     });
     merged.cloud = JSON.stringify(cloud);
-  }
-  const serverHistory = server.history;
-  if (serverHistory?.fileId && (!own.history || (own.history.size || 0) < (serverHistory.size || 0))) {
-    merged.history = serverHistory;
   }
   return merged;
 }
@@ -243,7 +229,6 @@ export async function openKeyBundle(
       planner: typeof payload.planner === 'string' ? payload.planner : undefined,
       cloud: typeof payload.cloud === 'string' ? payload.cloud : undefined,
       groups: typeof payload.groups === 'string' ? payload.groups : undefined,
-      history: isHistory(payload.history) ? payload.history : undefined,
       seq: readBundleSeq(payload.seq) || undefined,
     };
   } catch {
@@ -259,13 +244,6 @@ export function readBundleSeq(value: unknown): number {
 /** Не откатил ли сервер копию: номер меньше наибольшего виденного этим устройством. */
 export function isBundleRolledBack(payload: Pick<KeyBundlePayload, 'seq'>, seenSeq: number): boolean {
   return readBundleSeq(payload.seq) < seenSeq;
-}
-
-function isHistory(value: unknown): value is KeyBundleHistory {
-  if (!value || typeof value !== 'object') return false;
-  const history = value as Partial<KeyBundleHistory>;
-  return typeof history.fileId === 'string' && typeof history.fileKey === 'string'
-    && typeof history.fileNonce === 'string' && typeof history.at === 'number' && typeof history.mark === 'string';
 }
 
 /** Журнал устройств в материале гранта заменяется свежим ответом сервера

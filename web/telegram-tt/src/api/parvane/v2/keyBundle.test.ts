@@ -54,9 +54,6 @@ describe('копия ключей аккаунта под ключом восс�
       grant: 'Z3JhbnQ=',
       planner: '{"domain":"local","id":"c1","keys":[]}',
       groups: '["CgQ="]',
-      history: {
-        fileId: 'f1', fileKey: 'k', fileNonce: 'n', at: 1700000000000, mark: 'abc',
-      },
     };
     const sealed = await sealKeyBundle(key, ADDRESS, payload);
     expect(decoder.decode(sealed.subarray(0, 4))).toBe('PVKB');
@@ -73,7 +70,7 @@ describe('копия ключей аккаунта под ключом восс�
     expect(await openKeyBundle(key, ADDRESS, sealed.subarray(0, 10))).toBeUndefined();
   });
 
-  it('копия без материала привязки не принимается, лишние и битые поля отбрасываются', async () => {
+  it('копия без материала привязки не принимается, битые поля и прежний снимок истории отбрасываются', async () => {
     const key = (await deriveBundleKey(KEY, ADDRESS))!;
     const noGrant = await sealKeyBundle(key, ADDRESS, { grant: '' });
     expect(await openKeyBundle(key, ADDRESS, noGrant)).toBeUndefined();
@@ -81,7 +78,7 @@ describe('копия ключей аккаунта под ключом восс�
       grant: 'Zw==', history: { fileId: 'f1' }, groups: 7,
     } as unknown as Parameters<typeof sealKeyBundle>[2]);
     expect(await openKeyBundle(key, ADDRESS, broken))
-      .toEqual({ grant: 'Zw==', planner: undefined, history: undefined });
+      .toEqual({ grant: 'Zw==', planner: undefined });
   });
 
   it('журнал в материале привязки заменяется свежим, остальное не трогается', () => {
@@ -109,7 +106,14 @@ describe('копия ключей аккаунта под ключом восс�
 
 type MergeCase = { name: string; own: KeyBundlePayload; server: Partial<KeyBundlePayload>; merged: KeyBundlePayload };
 
-// Общие с ядром случаи (`proto/parvane/vectors/clients/keybundle-merge.json`): запись копии не «беднеет»
+// Общие с ядром случаи (`proto/parvane/vectors/clients/keybundle-merge.json`): запись копии не «беднеет».
+// Снимка истории в копии больше нет (spec 033, HIST-1): поле `history` вектора (если оно ещё есть) не сводится и
+// в сравнении не участвует, случай только про историю проверяет, что она не переносится
+const withoutHistory = <T extends object>(p: T) => {
+  const { history: _history, ...rest } = p as T & { history?: unknown };
+  return rest;
+};
+
 describe('слияние копии ключей аккаунта с серверной при записи', () => {
   const file = path.resolve(process.cwd(), '../../proto/parvane/vectors/clients/keybundle-merge.json');
   const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: MergeCase[] };
@@ -121,11 +125,13 @@ describe('слияние копии ключей аккаунта с серве�
     }
   };
   const normalize = (p: KeyBundlePayload) => ({
-    ...p, grant: decodeGrant(p.grant), cloud: p.cloud ? JSON.parse(p.cloud) as unknown : undefined,
+    ...withoutHistory(p), grant: decodeGrant(p.grant), cloud: p.cloud ? JSON.parse(p.cloud) as unknown : undefined,
   });
   it.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    const server = Object.keys(c.server).length ? c.server : undefined;
-    expect(normalize(mergeKeyBundlePayload(c.own, server))).toEqual(normalize(c.merged));
+    const server = Object.keys(c.server).length ? withoutHistory(c.server) : undefined;
+    const merged = mergeKeyBundlePayload(withoutHistory(c.own) as KeyBundlePayload, server);
+    expect(merged).not.toHaveProperty('history');
+    expect(normalize(merged)).toEqual(normalize(c.merged));
   });
 });
 

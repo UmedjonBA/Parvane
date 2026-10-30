@@ -643,6 +643,25 @@ bool Client::hasStateKey() const { return pv_client_has_state_key(c_); }
 
 bool Client::ensureStateKey() { return pv_client_ensure_state_key(c_); }
 
+// ── журнал истории аккаунта (spec 033) ─────────────────────────────────────
+
+std::unique_ptr<HistorySession> HistorySession::open(const Client &client) {
+    auto *s = pv_client_history_session(client.raw());
+    if (!s) return nullptr;
+    return std::unique_ptr<HistorySession>(new HistorySession(s));
+}
+
+HistorySession::~HistorySession() {
+    if (s_) pv_history_free(s_);
+}
+
+json HistorySession::call(const std::string &name, const json &args) {
+    char *err = nullptr;
+    const auto a = args.dump();
+    char *out = pv_history_call(s_, name.c_str(), a.c_str(), &err);
+    return parseOrThrow(result(out, err));
+}
+
 // ── журнал личного состояния ────────────────────────────────────────────────
 
 std::unique_ptr<StateSession> StateSession::open(const Client &client) {

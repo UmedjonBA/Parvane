@@ -36,6 +36,11 @@ const SUITES: [string, string, number][] = [
   ['legacy_v1/messages', 'legacy_v1/messages.json', 40],
   ['call/signals', 'call/signals.json', 30],
   ['link/sas', 'link/sas.json', 5],
+  // spec 033: журнал истории аккаунта — сведение строки, непрочитанное и маркеры, сегменты и горизонт, AEAD записи
+  ['history/merge', 'history/merge.json', 3],
+  ['history/unread', 'history/unread.json', 5],
+  ['history/segment', 'history/segment.json', 5],
+  ['history/aead', 'history/aead.json', 2],
 ];
 
 type CallCase = {

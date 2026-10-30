@@ -1756,7 +1756,7 @@ bool Session::revokeDevice(const std::string &deviceId) {
             pendingAppends_.clear();
             stateRekeyed_ = true;
             stateCarry_ = std::move(carry);
-            outbox_.push_back(json{{"type", "stateReady"}});
+            outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
         }
         sskExposed = client_->ownSskExposed();
         if (sskExposed) outbox_.push_back(json{{"type", "sskRotationNeeded"}});
@@ -1994,7 +1994,8 @@ void Session::absorbLocked(std::vector<json> events) {
             state_.reset();
             pendingAppends_.clear();
             stateRekeyPeer_ = true;
-            outbox_.push_back(json{{"type", "stateReady"}});
+            // rotated — журнал истории открывает сессию заново и пишет точку под новым ключом (HIST-2)
+            outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
             continue;
         }
         if (type == "call") {
@@ -3220,6 +3221,43 @@ void Session::checkOwnDevicesLocked() {
     } catch (const std::exception &e) {
         log(std::string("группы новому своему устройству не пересланы: ") + e.what());
     }
+}
+
+// ── журнал истории аккаунта (spec 033) ─────────────────────────────────────
+
+std::unique_ptr<HistorySession> Session::openHistorySession() {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!client_ || !ready_) return nullptr;
+    return HistorySession::open(*client_);
+}
+
+json Session::historyPeer(const std::string &address) {
+    if (address.empty()) return nullptr;
+    if (isGroupAddress(address)) {
+        const auto hex = groupHex(address);
+        if (hex.size() != 32) return nullptr;
+        std::lock_guard<std::recursive_mutex> lk(engineMu_);
+        return json{{"group", {{"domain", groupDomainLocked(hex)}, {"id", hexToB64(hex)}}}};
+    }
+    if (address.find('@') == std::string::npos) return nullptr;
+    return json{{"user", {{"address", address}}}};
+}
+
+std::string Session::historyAddress(const json &peer) {
+    if (!peer.is_object()) return {};
+    if (peer.contains("user") && peer["user"].is_object()) return peer["user"].value("address", std::string());
+    if (peer.contains("group") && peer["group"].is_object()) {
+        const auto raw = fromBase64Safe(peer["group"].value("id", std::string()));
+        if (!raw || raw->size() != 16) return {};
+        static const char *d = "0123456789abcdef";
+        std::string hex;
+        for (unsigned char c : *raw) {
+            hex.push_back(d[c >> 4]);
+            hex.push_back(d[c & 15]);
+        }
+        return groupAddress(hex);
+    }
+    return {};
 }
 
 // ── журнал личного состояния (T098) ────────────────────────────────────────

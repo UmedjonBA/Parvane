@@ -1041,7 +1041,7 @@ json cloudFilesOp(Hub &hub, const std::string &op, const json &a) {
 }
 
 // ── выгрузка данных (T039, как desktop parvane_data_export) ──────────────────
-// Снимок переписки — из журнала истории устройства (свёртка по uuid), имена чатов и контакты даёт Kotlin;
+// Снимок переписки — из хранилища журнала истории (видимые строки, spec 033), имена чатов и контакты даёт Kotlin;
 // «План» и облако — хаб разделов; вложения — кэш устройства либо сервер (расшифровка ключом из содержимого).
 json exportSnapshot(const json &meta) {
     const auto session = v2Any();
@@ -1049,7 +1049,7 @@ json exportSnapshot(const json &meta) {
     const auto names = meta.value("chats", json::object());
     std::map<std::string, json> chats;
     std::vector<std::string> order;
-    for (const auto &e : journalFold()) {
+    for (const auto &e : historyRows()) {
         const auto out = e.value("out", false);
         const auto group = e.value("group", false);
         const auto chat = group ? e.value("to", std::string()) : (out ? e.value("to", std::string()) : e.value("from", std::string()));

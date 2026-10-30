@@ -52,177 +52,9 @@ bool g_linkOffersPolling = false;
 		&& QString::fromUtf8(std::getenv("QT_QPA_PLATFORM")) == u"offscreen"_q;
 }
 
-// ── LINK-1 п. 8 (spec 007, T138, SC-002): история v2-эпохи при линковке ────
-// Сообщения v2 запечатаны под устройства, существовавшие при отправке: новому
-// устройству сервер их не отдаст, а грант движка несёт только ключи. Старое
-// устройство кладёт уже расшифрованные строки v2 в экспорт линковки (поле
-// `v2History` рядом с decCache; формат строки — StoredMessage, общий с web
-// `v2/linkHistory.ts`), новое применяет их как строки v2.
-constexpr auto kV2HistoryLimit = std::size_t(20000);
-constexpr auto kLinkedGroupRetryMs = crl::time(3000);
-constexpr auto kLinkedGroupRetries = 40;
-
-[[nodiscard]] bool V2HistoryRowOk(const nlohmann::json &row) {
-	try {
-		if (!row.is_object()
-			|| !row.contains("content")
-			|| !row["content"].is_object()
-			|| row.value("id", std::string()).empty()
-			|| row.value("from", std::string()).empty()
-			|| row.value("to", std::string()).empty()
-			|| !row.contains("ts")
-			|| !row["ts"].is_number()) {
-			return false;
-		}
-		if (row.contains("deleted") && row["deleted"].is_boolean() && row["deleted"].get<bool>()) {
-			return false;
-		}
-		const auto &content = row["content"];
-		const auto kind = content.value("kind", std::string());
-		if (kind.empty() || kind == "encrypted" || kind == "group_encrypted") {
-			return false;
-		}
-		return TtlFromContent(content) == 0; // эфемерное не переносится
-	} catch (const std::exception &) {
-		return false;
-	}
-}
-
-// Строки v2 из журнала истории (с правками и реакциями из кэша v2) — для
-// экспорта линковки и ручной копии ключей.
-[[nodiscard]] nlohmann::json CollectV2HistoryRows() {
-	LoadV2Ids();
-	auto rows = nlohmann::json::array();
-	auto seen = std::set<std::string>();
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		try {
-			auto row = nlohmann::json::parse(line.toStdString());
-			const auto id = row.value("id", std::string());
-			if (id.empty() || !IsV2Message(id) || !seen.insert(id).second) {
-				continue;
-			}
-			{
-				std::lock_guard<std::mutex> lk(g_v2Mutex);
-				const auto it = g_v2Cache.find(QString::fromStdString(id));
-				if (it != g_v2Cache.end()) {
-					row = it.value().toJson();
-				}
-			}
-			if (!V2HistoryRowOk(row)) {
-				continue;
-			}
-			for (const auto key : { "copies", "updated_at", "origin" }) {
-				row.erase(key);
-			}
-			rows.push_back(std::move(row));
-		} catch (const std::exception &) {
-		}
-	}
-	if (rows.size() > kV2HistoryLimit) {
-		rows.erase(rows.begin(), rows.begin() + (rows.size() - kV2HistoryLimit));
-	}
-	return rows;
-}
-
-// Старое устройство: экспорт линковки + история v2-эпохи.
-[[nodiscard]] std::string WithV2History(const std::string &exported) {
-	auto rows = CollectV2HistoryRows();
-	if (rows.empty()) {
-		return exported;
-	}
-	try {
-		auto state = nlohmann::json::parse(exported);
-		const auto count = int(rows.size());
-		state["v2History"] = std::move(rows);
-		LOG(("Parvane: линковка: в экспорт добавлена история v2 (%1 сообщений)").arg(count));
-		return state.dump();
-	} catch (const std::exception &) {
-		return exported;
-	}
-}
-
-// Новое устройство: применить привезённые строки. Строки групп v2 ждут, пока
-// группа появится из журнала групп (иначе сообщение ушло бы в чат с «адресом»).
-void ApplyLinkedV2History(std::vector<parvane::StoredMessage> rows, QString owner, int attempt) {
-	crl::on_main([rows = std::move(rows), owner, attempt]() mutable {
-		const auto session = g_sessionWeak.get();
-		if (!session || SelfAddress() != owner) {
-			return;
-		}
-		auto ready = std::vector<parvane::StoredMessage>();
-		auto waiting = std::vector<parvane::StoredMessage>();
-		for (auto &sm : rows) {
-			const auto group = parvane::v2::isGroupAddress(sm.to);
-			const auto known = [&] {
-				std::lock_guard<std::mutex> lk(g_sessionMutex);
-				return g_knownGroups.contains(QString::fromStdString(sm.to));
-			}();
-			if (group && !known) {
-				waiting.push_back(std::move(sm));
-			} else {
-				ready.push_back(std::move(sm));
-			}
-		}
-		if (!ready.empty()) {
-			LOG(("Parvane: линковка: история v2 перенесена (%1 сообщений)").arg(int(ready.size())));
-			injectOnMain(session, ready, /*live=*/true);
-		}
-		if (waiting.empty() || attempt >= kLinkedGroupRetries) {
-			return;
-		}
-		base::call_delayed(kLinkedGroupRetryMs, [waiting = std::move(waiting), owner, attempt]() mutable {
-			ApplyLinkedV2History(std::move(waiting), owner, attempt + 1);
-		});
-	});
-}
-
-void ImportV2History(const std::string &stateJson) {
-	auto out = std::vector<parvane::StoredMessage>();
-	const auto owner = SelfAddress();
-	const auto self = owner.toStdString();
-	try {
-		const auto state = nlohmann::json::parse(stateJson);
-		if (!state.is_object() || !state.contains("v2History") || !state["v2History"].is_array()) {
-			return;
-		}
-		LoadV2Ids();
-		auto seen = std::set<std::string>(); // повтор строки в том же снимке (отметка V2NoteMessage — после цикла)
-		for (const auto &row : state["v2History"]) {
-			if (out.size() >= kV2HistoryLimit) {
-				break;
-			}
-			try {
-				if (!V2HistoryRowOk(row)) {
-					continue;
-				}
-				auto sm = parvane::StoredMessage::fromJson(row);
-				if (sm.id.empty() || IsV2Message(sm.id) || !seen.insert(sm.id).second) {
-					continue;
-				}
-				if (sm.from != self) {
-					sm.read = true; // история, а не новые входящие
-				}
-				out.push_back(std::move(sm));
-			} catch (const std::exception &) {
-			}
-		}
-	} catch (const std::exception &) {
-		return;
-	}
-	// Перенос истории (экспорт линковки, снимок из копии ключей) — по времени отправки: строки снимка web идут
-	// не по порядку, а id сообщения выдаётся по порядку вставки (ORDER-1), и сообщение 12 окт вставало выше
-	// сообщения 11 окт (spec 030)
-	std::stable_sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.ts < b.ts; });
-	for (const auto &sm : out) {
-		const auto chat = parvane::v2::isGroupAddress(sm.to)
-			? sm.to
-			: (sm.from == self) ? sm.to : sm.from;
-		V2NoteMessage(sm, QString::fromStdString(chat));
-	}
-	if (!out.empty()) {
-		ApplyLinkedV2History(std::move(out), owner, 0);
-	}
-}
+// ── LINK-1 п. 8 (spec 033): истории в экспорте привязки нет — новое устройство получает её из журнала истории
+// аккаунта (вход по контрольной точке, HIST-2); экспорт несёт только ключи «Плана» и «Облака». Прежнее поле
+// поле истории прежнего формата не пишется и не читается.
 
 // Воркер: публикует оффер (identity.link.offer: commitment + signing_key, без
 // ключа) и запускает опрос гранта.
@@ -411,7 +243,7 @@ bool PollLinkGrantOnce() {
 		}
 	}
 	if (!joined) {
-		LOG(("Parvane: линковка: движок не принял грант — экспорт истории и ключей разделов не применяется"));
+		LOG(("Parvane: линковка: движок не принял грант — ключи разделов из экспорта не применяются"));
 		return true;
 	}
 	std::string stateJson;
@@ -434,7 +266,6 @@ bool PollLinkGrantOnce() {
 		return true;
 	}
 	LOG(("Parvane: линковка: экспорт получен"));
-	ImportV2History(stateJson); // LINK-1 п. 8: история v2-эпохи
 	// spec 010/016: ключи «Плана» и «Облака» старого устройства — разделы открываются сразу после привязки
 	const auto keys = parvane::keybundle::readLinkDomainKeys(stateJson);
 	NoteDomainKeys(keys.planner, keys.cloud);
@@ -483,7 +314,7 @@ void GrantLink(const QString &deviceId, const QString &ephPub, const QString &si
 				LOG(("Parvane: линковка: ключи разделов не приложены: %1").arg(QString::fromUtf8(e.what())));
 			}
 		}
-		const auto exported = WithV2History(base.dump());
+		const auto exported = base.dump();
 		auto enc = parvane::blobcrypt::encrypt(exported);
 		const auto fileId = t->uploadBlob(enc.ciphertext);
 		parvane::json boxPlain = {{"file_id", fileId},
@@ -698,7 +529,7 @@ void ScheduleLinkOffersPoll() {
 }
 
 bool ExportKeyBackup(const QString &path, const QString &password, QString *error) {
-	// Формат web 2 (keyBackup.ts): {deviceId, v2: устройство движка, v2History} — сервер историю заново не отдаст
+	// Формат web 2 (keyBackup.ts): {deviceId, v2: устройство движка}; истории в копии нет (spec 033: журнал истории)
 	const auto s = V2Ready();
 	if (!s) {
 		*error = tr::lng_parvane_keys_not_ready(tr::now);
@@ -709,10 +540,6 @@ bool ExportKeyBackup(const QString &path, const QString &password, QString *erro
 		payload["deviceId"] = OwnDeviceId();
 		if (auto device = s->deviceBackup(); device.is_object()) {
 			payload["v2"] = std::move(device);
-		}
-		if (auto rows = CollectV2HistoryRows(); !rows.empty()) {
-			LOG(("Parvane: копия ключей: история v2 (%1 сообщений)").arg(int(rows.size())));
-			payload["v2History"] = std::move(rows);
 		}
 	} catch (const std::exception &) {
 	}
@@ -749,16 +576,13 @@ bool ImportKeyBackup(const QString &path, const QString &password, QString *erro
 		*error = tr::lng_parvane_keys_import_bad_password(tr::now);
 		return false;
 	}
-	// История v2 из копии сливается с журналом. Устройство копии (`v2`) десктоп не перенимает: своя личность
-	// устройства сохраняется, в журнал устройств оно входит привязкой или ключом восстановления.
+	// Устройство копии (`v2`) десктоп не перенимает: своя личность устройства сохраняется, в журнал устройств оно
+	// входит привязкой или ключом восстановления. Историю приносит журнал истории аккаунта (spec 033).
 	try {
 		const auto parsed = nlohmann::json::parse(*state);
 		if (!parsed.is_object() || !parsed.contains("v2")) {
 			*error = tr::lng_parvane_keys_import_failed(tr::now);
 			return false;
-		}
-		if (parsed.contains("v2History") && parsed["v2History"].is_array()) {
-			ImportV2History(nlohmann::json{ { "v2History", parsed["v2History"] } }.dump());
 		}
 	} catch (const std::exception &) {
 		*error = tr::lng_parvane_keys_import_bad_password(tr::now);

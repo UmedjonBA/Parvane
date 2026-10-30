@@ -125,6 +125,11 @@ message Gone {
   parvane.state.v1.Peer chat = 2;
   Stamp stamp = 3;
   GoneScope scope = 4;
+  // Кто удалил (адрес автора мутации; пусто — своё действие/записи до появления поля) и удалил ли админ группы с
+  // правом удалять. Удаление EVERYONE действительно, если by пусто, by = автор строки, by_admin или чат личный;
+  // ME — всегда. Пока строка неизвестна, удаление хранится кандидатом (RowState.pending_gones).
+  string by = 5 [(parvane.core.v2.max_len) = 255];
+  bool by_admin = 6;
 }
 
 message Edit {
@@ -132,6 +137,8 @@ message Edit {
   parvane.state.v1.Peer chat = 2;
   Stamp stamp = 3;
   bytes body = 4 [(parvane.core.v2.max_len) = 262144];
+  // Автор правки (пусто — своя/записи до появления поля). Действительна, если пусто либо = автор строки.
+  string by = 5 [(parvane.core.v2.max_len) = 255];
 }
 
 message React {
@@ -171,6 +178,11 @@ message RowState {
   Stamp pin_stamp = 7;
   bool pinned = 8;
   Gone gone = 9;
+  // Строка ещё неизвестна (сирота): правки и удаления — кандидатами, победитель выбирается среди действительных,
+  // когда строка придёт (автор сверяется с row.from). По одному на автора (наибольшая метка); всегда действительные
+  // (своё, админ, личный чат, ME) — в одной корзине без вытеснения, остальные — не больше 8 с наибольшими метками.
+  repeated Edit pending_edits = 10 [(parvane.core.v2.max_items) = 16];
+  repeated Gone pending_gones = 11 [(parvane.core.v2.max_items) = 16];
 }
 
 message SegmentRef {

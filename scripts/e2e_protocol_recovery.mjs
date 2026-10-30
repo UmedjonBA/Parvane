@@ -121,19 +121,20 @@ try {
   const answer = `rc-answer-${suffix}`;
   await sendText(sessions.bob1.page, answer);
   await findMessage(alicePage, answer).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // Копия корня и копия ключей аккаунта (со снимком истории) должны быть на сервере
-  // до потери устройства
-  // (снимок, сделанный до этих сообщений, не годится — ждём следующий: проверка раз в минуту)
+  // Копия корня и копия ключей аккаунта должны быть на сервере до потери устройства, переписка — в журнале
+  // истории аккаунта (spec 033: истории в копии ключей больше нет; входящее пишется через 1–5 с)
   const countLog = (needle) => logs.bob1.filter((l) => l.includes(needle)).length;
-  const snapshotsBefore = countLog('снимок истории загружен');
+  const journalBefore = countLog('история: в журнал записано');
   const writesBefore = countLog('копия ключей аккаунта обновлена');
   for (let waited = 0; waited < 150; waited++) {
-    if (countLog('снимок истории загружен') > snapshotsBefore
+    if (countLog('история: в журнал записано') > journalBefore
       && countLog('копия ключей аккаунта обновлена') > writesBefore) break;
     // eslint-disable-next-line no-await-in-loop
     await sessions.bob1.page.waitForTimeout(1000);
   }
-  assert.ok(countLog('копия ключей аккаунта обновлена') > writesBefore, 'bob1: копия ключей с историей не ушла на сервер');
+  assert.ok(countLog('копия ключей аккаунта обновлена') > writesBefore, 'bob1: копия ключей не ушла на сервер');
+  assert.ok(countLog('история: в журнал записано') > journalBefore, 'bob1: переписка не записана в журнал истории');
+  await sessions.bob1.page.waitForTimeout(6000);
   assert.ok(!logs.bob1.some((l) => l.includes('копия корня на сервер не ушла')), logs.bob1.slice(-20).join(' | '));
 
   // ── bob1 потеряно ───────────────────────────────────────────────────────────

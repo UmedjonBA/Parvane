@@ -7,7 +7,7 @@ import { base64ToBytes } from './base64';
 
 export type Protocol = typeof pv;
 export type {
-  PvClient, PvState,
+  PvClient, PvHistory, PvState,
 } from '../../../lib/parvane-protocol/parvane_protocol';
 
 let loading: Promise<Protocol> | undefined;
@@ -53,4 +53,10 @@ export function verifyMessageProof(
   } catch {
     return false;
   }
+}
+
+/** Статическая функция журнала истории движка (spec 033, `historyCall`): результат — разобранный JSON. Отказ
+ * (`{"error": …}`) либо не инициализированный движок — исключение. */
+export function historyStatic<T>(name: string, args: unknown = {}): T {
+  return JSON.parse(pv.historyCall(name, JSON.stringify(args))) as T;
 }

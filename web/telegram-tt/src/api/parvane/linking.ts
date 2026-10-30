@@ -14,7 +14,7 @@ const SAS_V2_DIGITS = 12;
 const SAS_V2_INFO = 'parvane-link-sas-v2';
 
 export type LinkBoxPayload = {
-  // Экспорт истории v2-эпохи (`{ linkVersion: 2, v2History }`, LINK-1 п. 8) —
+  // Экспорт привязки (`{ linkVersion: 2, planner, cloud }`, LINK-1 п. 8; истории в нём нет — spec 033) —
   // зашифрованный блоб в cloud, в боксе только координаты
   file_id: string;
   file_key: string;

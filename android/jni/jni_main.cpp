@@ -1,5 +1,5 @@
-// Parvane Android (spec 031): окружение JNI — загрузка, очередь событий в Kotlin, хранилище, журнал истории
-// (ORDER-1), сообщения в памяти, кэш групп и режима L2, кэш медиа, стирание данных при выходе (NAT-16).
+// Parvane Android (spec 031): окружение JNI — загрузка, очередь событий в Kotlin, хранилище, сообщения в памяти,
+// кэш групп и режима L2, кэш медиа, стирание данных при выходе (NAT-16). Журнал истории — jni_history.cpp (spec 033).
 #include "jni_internal.h"
 
 #include <parvane/gateway_ws_transport.h>
@@ -115,20 +115,9 @@ void emitLoop() {
     }
 }
 
-bool journaledType(const std::string &t) {
-    return t == "message" || t == "edited" || t == "deleted" || t == "meta" || t == "outbox_read" || t == "read";
-}
-
-// TTL (spec 005): сообщение с ttl_secs не переживает перезапуск — не журналируем (как web/desktop).
-bool hasTtl(const json &event) {
-    const auto it = event.find("content");
-    return it != event.end() && it->is_object() && it->value("ttl_secs", 0) > 0;
-}
-
 } // namespace
 
 void emit(const json &event) {
-    if (journaledType(event.value("type", "")) && !hasTtl(event)) journalAppend(event);
     if (!g_vm || !g_coreClass || !g_onEvent) return;
     {
         std::lock_guard<std::mutex> lk(g_emitMu);
@@ -153,161 +142,6 @@ void noteFederationFailure(const std::string &error) {
             emit(json{{"type", "federation_error"}, {"reason", reason}});
             return;
         }
-}
-
-// ── журнал истории ───────────────────────────────────────────────────────────
-
-namespace {
-
-std::mutex g_journalMu;
-// Флаг реплея — только потока реплея: события ядра с других потоков в это время пишутся в журнал (NAT-06)
-thread_local bool t_replaying = false;
-std::string journalPath() { return storeDir() + "/journal.jsonl"; }
-
-// Строка, которая старше уже показанных больше чем на окно «живого» сообщения (ORDER-1, 300 с), встаёт на своё
-// место по времени (перенесённая история могла лечь не по порядку); близкие по времени — порядком прихода.
-// Сортировки здесь нет и быть не должно (как desktop ReplayHistory).
-void placeByTime(std::vector<json> &msgs) {
-    constexpr std::int64_t kLiveWindowSecs = 300;
-    bool misplaced = false;
-    auto latest = std::numeric_limits<std::int64_t>::min();
-    for (const auto &m : msgs) {
-        const auto ts = m.value("ts", std::int64_t(0));
-        misplaced = misplaced || (ts + kLiveWindowSecs < latest);
-        latest = std::max(latest, ts);
-    }
-    if (!misplaced) return;
-    std::vector<json> ordered;
-    ordered.reserve(msgs.size());
-    for (auto &m : msgs) {
-        const auto ts = m.value("ts", std::int64_t(0));
-        auto at = ordered.size();
-        while (at > 0 && ordered[at - 1].value("ts", std::int64_t(0)) > ts + kLiveWindowSecs) --at;
-        ordered.insert(ordered.begin() + std::ptrdiff_t(at), std::move(m));
-    }
-    msgs = std::move(ordered);
-}
-
-} // namespace
-
-void journalAppend(const json &event) {
-    if (t_replaying) return;
-    const auto path = journalPath();
-    if (path.size() < 2) return;
-    std::lock_guard<std::mutex> lk(g_journalMu);
-    parvane::storecrypt::appendLine(path, event.dump());
-}
-
-namespace {
-
-// Свёртка журнала; вызывающий держит g_journalMu.
-std::vector<json> journalFoldLocked() {
-    std::vector<std::string> order;
-    std::map<std::string, json> msgs;
-    for (const auto &line : parvane::storecrypt::readLines(journalPath())) {
-        auto e = json::parse(line, nullptr, false);
-        if (!e.is_object()) continue;
-        const auto t = e.value("type", "");
-        const auto id = e.value("id", "");
-        if (t == "message") {
-            if (id.empty()) continue;
-            if (!msgs.count(id)) order.push_back(id);
-            auto &m = msgs[id];
-            // повтор (правка своего, своё эхо) — содержимое новое, мета прежняя
-            if (m.is_object()) {
-                e["reactions"] = m.value("reactions", json::array());
-                e["by"] = m.value("by", json::object());
-                e["pinned"] = m.value("pinned", false);
-                if (m.value("read", false)) e["read"] = true;
-            }
-            m = e;
-        } else if (t == "edited") {
-            auto it = msgs.find(id);
-            if (it != msgs.end()) { it->second["content"] = e["content"]; it->second["edited"] = true; }
-        } else if (t == "deleted") {
-            msgs.erase(id);
-        } else if (t == "meta") {
-            auto it = msgs.find(id);
-            if (it != msgs.end()) {
-                it->second["reactions"] = e.value("reactions", json::array());
-                it->second["by"] = e.value("by", json::object());
-                it->second["pinned"] = e.value("pinned", false);
-            }
-        } else if (t == "outbox_read") {
-            auto it = msgs.find(id);
-            if (it != msgs.end()) it->second["read"] = true;
-        } else if (t == "read") {
-            for (const auto &x : e.value("ids", json::array())) {
-                if (!x.is_string()) continue;
-                auto it = msgs.find(x.get<std::string>());
-                if (it != msgs.end()) it->second["read"] = true;
-            }
-        }
-    }
-    std::vector<json> out;
-    out.reserve(order.size());
-    for (const auto &id : order) if (msgs.count(id)) out.push_back(std::move(msgs[id]));
-    placeByTime(out);
-    return out;
-}
-
-void journalRewriteLocked(const std::vector<json> &messages) {
-    std::vector<std::string> lines;
-    lines.reserve(messages.size());
-    for (const auto &m : messages) lines.push_back(m.dump());
-    parvane::storecrypt::writeLines(journalPath(), lines);
-}
-
-} // namespace
-
-std::vector<json> journalFold() {
-    std::lock_guard<std::mutex> lk(g_journalMu);
-    return journalFoldLocked();
-}
-
-void journalRewrite(const std::vector<json> &messages) {
-    std::lock_guard<std::mutex> lk(g_journalMu);
-    journalRewriteLocked(messages);
-}
-
-// Свёртка → правка → перезапись под одним замком: дописанное другими потоками между ними не теряется (NAT-06).
-void journalTransform(const std::function<void(std::vector<json> &)> &edit) {
-    std::lock_guard<std::mutex> lk(g_journalMu);
-    auto msgs = journalFoldLocked();
-    edit(msgs);
-    journalRewriteLocked(msgs);
-}
-
-void journalRemoveIds(const std::set<std::string> &ids) {
-    if (ids.empty()) return;
-    journalTransform([&](std::vector<json> &msgs) {
-        msgs.erase(std::remove_if(msgs.begin(), msgs.end(), [&](const json &m) { return ids.count(m.value("id", "")) > 0; }),
-                   msgs.end());
-    });
-}
-
-// Реплей в Kotlin по ПЕРВОМУ LoadChats/GetChats от X (не сразу после готовности: X на переходе в Ready сбрасывает
-// состояние). Без g_mu: события идут в Kotlin синхронно, а его обработчики зовут ядро.
-void journalReplay() {
-    auto msgs = journalFold();
-    if (msgs.empty()) return;
-    t_replaying = true;
-    for (const auto &m : msgs) {
-        const auto id = m.value("id", "");
-        (void)markSeen(id);
-        const auto from = m.value("from", "");
-        const auto to = m.value("to", "");
-        const bool group = m.value("group", false);
-        const auto chat = group ? to : (from == self() ? to : from);
-        noteMessage(id, from, chat, m.value("content", json::object()), m.value("proof", std::string()));
-        restoreMeta(id, m.value("by", json::object()), m.value("pinned", false));
-        auto ev = m;
-        ev["replay"] = true; // история с диска: шов не уведомляет
-        emitNow(ev);
-    }
-    t_replaying = false;
-    journalTransform([](std::vector<json> &) {}); // компакция — с тем, что пришло за время реплея
-    LOGI("журнал: восстановлено %zu сообщений", msgs.size());
 }
 
 // ── сообщения в памяти ───────────────────────────────────────────────────────
@@ -501,6 +335,7 @@ json groupListJson() {
     }
     auto out = json::array();
     for (auto it = source.begin(); it != source.end(); ++it) {
+        historyNoteGroupInfo(it.key(), it.value()); // кто удаляет чужое у всех (HIST-1)
         auto g = groupJson(it.key(), it.value());
         std::vector<std::string> mem;
         for (const auto &m : g["members"]) mem.push_back(m.value("address", std::string()));
@@ -797,6 +632,6 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JN
     return parvane::storecrypt::writeFile(jstr(env, pathJ), jstr(env, textJ)) ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { journalReplay(); }
+JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { historyReplay(); }
 
 } // extern "C"

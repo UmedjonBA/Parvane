@@ -99,7 +99,8 @@ inline const char *ParvaneDevEnv(const char *name) {
 #include <parvane/local_files.h>     // parvane-core (временный каталог, стирание при выходе, строки журнала)
 #include "parvane/parvane_local_files.h" // временный каталог экземпляра, LogSecret
 #include <parvane/ids.h>             // parvane-core (newUuidV7)
-#include <parvane/keybundle.h>       // parvane-core: отпечаток снимка истории (spec 015)
+#include <parvane/keybundle.h>       // parvane-core: копия ключей аккаунта (spec 015)
+#include <parvane/history_sync.h>    // parvane-core: журнал истории аккаунта (spec 033)
 #include <parvane/call_manager.h>    // parvane-core (оркестрация звонка)
 #include <parvane/stub_media_backend.h> // parvane-core (медиа-заглушка Э4)
 #include "parvane/parvane_webrtc_backend.h" // реальный webrtc-движок (Э3-b)
@@ -253,7 +254,6 @@ bool StoreWrite(const QString &path, const QByteArray &data);
 [[nodiscard]] std::optional<std::string> ReadMediaCache(const QString &fileId);
 void WriteMediaCache(const QString &fileId, const std::string &bytes);
 [[nodiscard]] bool IsSafeFileId(const QString &fileId);
-[[nodiscard]] QString HistoryPath();
 void AppendCleared(const QStringList &uuids);
 [[nodiscard]] bool IsCleared(const QString &uuid);
 void ForgetClearedOnMain(not_null<Main::Session*> session, const QSet<QString> &uuids);
@@ -322,11 +322,60 @@ void StartTelegramRecovery(bool again);
 ChatData *AnnouncePublicCard(not_null<Main::Session*> session, const parvane::json &card);
 [[nodiscard]] QString CurrentLinkCode();
 [[nodiscard]] bool HeadlessUi();
-[[nodiscard]] nlohmann::json CollectV2HistoryRows();
-void ImportV2History(const std::string &stateJson);
+
+// ── журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2; parvane_client_history.cpp) ──
+// Хранилище строк RowState и журнал ядра (parvane::history::HistorySync) текущего аккаунта; прежний журнал
+// (StoredMessage построчно) и parvane-read.txt переводятся один раз. Без сети; не под g_sessionMutex.
+void EnsureHistory(const QString &self);
+void StartHistorySync(const QString &self); // рабочий поток журнала (после подъёма v2-сессии)
+void WaitHistoryReady();                    // хранилище открыто и прежний журнал перенесён (не главный поток)
+void StopHistorySync();                     // выход, сброс, смена адреса: не ждёт (поток журнала дорабатывает фоном)
+[[nodiscard]] std::shared_ptr<parvane::history::HistorySync> HistorySyncNow();
+void OnHistorySessionEvent(const parvane::json &ev); // journal:history, stateReady
+// Собеседник журнала (state.v1.Peer) по адресу чата клиента ("v2g:<hex>" — группа) и обратно; ключ чата движка.
+[[nodiscard]] parvane::json HistoryPeerFor(const QString &chatAddress);
+[[nodiscard]] QString HistoryChatAddress(const parvane::json &peer);
+// Ключ чата истории: у группы — без домена ("g:<hex>", как `historyChatKey` движка), домен группы на ключ не влияет.
+[[nodiscard]] QString HistoryChatKey(const QString &chatAddress);
+// Домен группы для Peer строк журнала. authoritative — из события движка (журнал группы); из строк журнала истории
+// (false) — только если домен ещё не известен (строка несёт домен, выбранный сведением, а не обязательно настоящий).
+void NoteHistoryGroupDomain(const QString &address, const std::string &domain, bool authoritative = true);
+// Свой ли адрес: текущий или прежний (смена ника, spec 026) — по сессии журнала движка (`selfAddresses`).
+[[nodiscard]] bool IsHistorySelf(const std::string &address);
+// Свои адреса (текущий первым) — аргумент `self`/`deleter` функций движка истории.
+[[nodiscard]] parvane::json HistorySelves();
+// Сообщение → строка журнала (own — отправлено этим устройством, иначе входящее). tsMs — точное время (0 — sm.ts).
+// Исчезающее и нерасшифрованное не пишется. Результат — RowState или null.
+parvane::json HistoryRecordMessage(const parvane::StoredMessage &sm, bool own, std::int64_t tsMs = 0);
+// Мутация (gone/edit/react/pin) → строка. Автор чужой мутации — в самой операции (by): сверяет движок.
+// requiredAuthor — запасная проверка ядра в памяти (desktop не использует).
+parvane::json HistoryRecordOp(const parvane::json &op, bool own, const std::string &requiredAuthor = std::string());
+[[nodiscard]] std::optional<parvane::json> HistoryState(const QString &uuid);
+// RowState → строка клиента по historyView (удалённое — deleted = true; сирота — nullopt).
+[[nodiscard]] std::optional<parvane::StoredMessage> StoredFromHistory(
+	const parvane::json &state,
+	parvane::json *viewOut = nullptr);
+[[nodiscard]] std::vector<parvane::json> HistoryStatesOfChat(const QString &chatAddress);
+[[nodiscard]] std::vector<parvane::json> HistoryAllStates();
+[[nodiscard]] std::vector<QString> HistoryMarkedChats();
+void HistoryEraseLocal(const QSet<QString> &uuids); // очистка чата «у себя»: строки — только с устройства
+void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress);
+// Мост к UI (parvane_client.cpp, главный поток): строки от журнала, счётчик чата от маркера, замена истории.
+void ShowHistoryStates(const std::vector<parvane::json> &states);
+void ApplyReadState(const QString &chatAddress);
+void ReplaceHistoryOnMain();
+void NoteOutboxRead(const QString &address, const std::vector<std::string> &targets); // квитанции собеседника → ✓✓
+extern QHash<QString, qint64> g_outboxReadTs;
+extern QString g_outboxReadOwner;
+// Мутация сообщения v2-чата собеседнику/группе с повтором до успеха (parvane_client.cpp).
+bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId = std::string());
 
 } // namespace Internal
 using namespace Internal;
+
+// Права админа участника группы (роль owner/admin — эффективные, иначе пусто; parvane_client_groups.cpp).
+[[nodiscard]] parvane::AdminRights GroupAdminRightsOf(const QString &gid, const QString &address);
+
 
 // Ключи «Плана» и «Облака» (копия ключей аккаунта, экспорт привязки) — разделам и в файл (parvane_client.cpp)
 void NoteDomainKeys(const std::string &planner, const std::string &cloud);

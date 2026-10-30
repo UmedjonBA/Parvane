@@ -363,6 +363,104 @@
     },
     {
       "expect": {
+        "ok": true,
+        "unread": false
+      },
+      "input": {
+        "kind": "unread",
+        "self": [
+          "alice@x",
+          "al@x"
+        ],
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC00L4g0YHQvNC10L3RiyDQvdC40LrQsCJ9fQ==",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "al@x",
+            "id": "01923a4b-5c6d-7007-8000-000000000007",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7007-8000-000000000007"
+        }
+      },
+      "name": "своё под прежним адресом (набор своих)"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "self": [
+          "alice@x"
+        ],
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ItC00L4g0YHQvNC10L3RiyDQvdC40LrQsCJ9fQ==",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "al@x",
+            "id": "01923a4b-5c6d-7007-8000-000000000007",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7007-8000-000000000007"
+        }
+      },
+      "name": "своё под прежним адресом без прежнего в наборе"
+    },
+    {
+      "expect": {
+        "ok": true,
+        "unread": true
+      },
+      "input": {
+        "kind": "unread",
+        "self": [
+          "alice@x",
+          "al@x"
+        ],
+        "state": {
+          "chat": {
+            "user": {
+              "address": "bob@x"
+            }
+          },
+          "row": {
+            "body": "eyJjb250ZW50Ijp7ImtpbmQiOiJ0ZXh0IiwidGV4dCI6ImhpIn19",
+            "chat": {
+              "user": {
+                "address": "bob@x"
+              }
+            },
+            "from": "bob@x",
+            "id": "01923a4b-5c6d-7001-8000-000000000001",
+            "ts_ms": "2000"
+          },
+          "target": "01923a4b-5c6d-7001-8000-000000000001"
+        }
+      },
+      "name": "входящее при наборе своих"
+    },
+    {
+      "expect": {
         "error": "ContextMismatch"
       },
       "input": {
@@ -507,6 +605,123 @@
         "kind": "mark_merge"
       },
       "name": "сведение маркеров: нет маркеров"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "ok": true
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "b": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: группа под двумя доменами"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "ok": true
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "b": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7000-8000-000000000000",
+          "up_to_ts_ms": "7"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: группа под двумя доменами, больший маркер — с меньшим доменом"
+    },
+    {
+      "expect": {
+        "mark": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "ok": true
+      },
+      "input": {
+        "a": {
+          "chat": {
+            "group": {
+              "domain": "x",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "b": {
+          "chat": {
+            "group": {
+              "domain": "y.example",
+              "id": "QkJCQkJCQkJCQkJCQkJCQg=="
+            }
+          },
+          "up_to_id": "01923a4b-5c6d-7002-8000-000000000002",
+          "up_to_ts_ms": "5"
+        },
+        "kind": "mark_merge"
+      },
+      "name": "сведение маркеров: группа под двумя доменами, равные маркеры"
     },
     {
       "expect": {
@@ -674,6 +889,37 @@
         "kind": "can_delete"
       },
       "name": "право удаления: группа: чужое админом с правом"
+    },
+    {
+      "expect": {
+        "allowed": true
+      },
+      "input": {
+        "author": "al@x",
+        "chat_kind": "group",
+        "deleter": [
+          "alice@x",
+          "al@x"
+        ],
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: группа, своё под прежним адресом (набор своих)"
+    },
+    {
+      "expect": {
+        "allowed": false
+      },
+      "input": {
+        "author": "al@x",
+        "chat_kind": "group",
+        "deleter": [
+          "alice@x"
+        ],
+        "deleter_is_admin": false,
+        "kind": "can_delete"
+      },
+      "name": "право удаления: группа, своё под прежним адресом без прежнего"
     }
   ],
   "description": "READ-2: непрочитанное считается от маркера; маркер только растёт; права удаления у всех",

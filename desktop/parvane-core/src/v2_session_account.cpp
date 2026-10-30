@@ -390,7 +390,7 @@ void Session::applyRevocationLocked(const json &outcome) {
         state_.reset();
         pendingAppends_.clear();
         stateRekeyed_ = true;
-        outbox_.push_back(json{{"type", "stateReady"}});
+        outbox_.push_back(json{{"type", "stateReady"}, {"rotated", true}});
     }
     if (client_->ownSskExposed()) outbox_.push_back(json{{"type", "sskRotationNeeded"}});
     log("устройство отозвано (ротаций " + std::to_string(requests.size() - 1) + ")");
@@ -565,26 +565,16 @@ void Session::refreshKeyBundleLocked(bool force) {
     try {
         const auto material = buildGrantMaterialLocked();
         if (material.empty()) return;
-        auto previous = json::parse(readStateFile("bundle-history"), nullptr, false);
-        if (!previous.is_object()) previous = nullptr;
-        json history = previous;
-        if (cfg_.bundleHistory) {
-            try {
-                history = cfg_.bundleHistory(previous, force);
-            } catch (const std::exception &) {
-                history = previous;
-            }
-        }
+        // Снимка истории в копии нет (spec 033, HIST-1): история нового устройства — журнал истории аккаунта
         json payload{{"grant", toBase64(material)}};
         if (const auto p = client_->call("plannerKeysExport"); !p.is_null()) payload["planner"] = p.dump();
         payload["cloud"] = client_->call("cloudKeysExport").dump();
-        if (history.is_object()) payload["history"] = history;
         // Ключи групп (spec 032): устройство, вошедшее ключом восстановления, видит группы сразу
         if (const auto g = client_->call("groupKeysExport"); g.is_array() && !g.empty()) payload["groups"] = g.dump();
         const auto mark = keybundle::digestHex(payload.dump());
         if (!force && readStateFile("bundle-sent") == mark) return;
-        // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако», группы или полную
-        // историю (только что вошло), не должно стирать их из копии для следующих устройств
+        // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако» или группы (только что
+        // вошло), не должно стирать их из копии для следующих устройств
         json server;
         try {
             const auto current = fetchRootBackupStateLocked().value("key_bundle", std::string());
@@ -628,7 +618,7 @@ void Session::refreshKeyBundleLocked(bool force) {
              encodeMessage("parvane.identity.v2.RootBackupSetRequest", json{{"key_bundle", toBase64(sealed)}}));
         writeStateFile("bundle-sent", mark);
         writeStateFile("bundle-seq", std::to_string(nextSeq));
-        if (history.is_object()) writeStateFile("bundle-history", history.dump());
+        std::remove((cfg_.stateDir + "/bundle-history").c_str()); // указатель на снимок истории до spec 033
         log("копия ключей аккаунта обновлена на сервере");
     } catch (const std::exception &e) {
         log(std::string("копия ключей аккаунта не обновлена: ") + e.what());
@@ -857,20 +847,20 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
     std::string bundleKey;
     {
         std::lock_guard<std::recursive_mutex> lk(engineMu_);
-        if (ready_ || !needsLinking_ || !id_ || storageKey_.size() != 32) return {"failed", {}, {}, nullptr};
+        if (ready_ || !needsLinking_ || !id_ || storageKey_.size() != 32) return {"failed", {}, {}};
         json state;
         try {
             state = fetchRootBackupStateLocked();
         } catch (const std::exception &e) {
             log(std::string("копия корня не получена: ") + e.what());
-            return {"failed", {}, {}, nullptr};
+            return {"failed", {}, {}};
         }
         const auto backup = state.value("backup", std::string());
-        if (backup.empty()) return {"no_backup", {}, {}, nullptr};
+        if (backup.empty()) return {"no_backup", {}, {}};
         try {
             (void)importRootBackupFor(cfg_.self, fromBase64(backup), recoveryKey);
         } catch (const std::exception &) {
-            return {"bad_key", {}, {}, nullptr};
+            return {"bad_key", {}, {}};
         }
         if (const auto key = keybundle::deriveBundleKey(recoveryKey, cfg_.self)) bundleKey = *key;
         if (!bundleKey.empty() && !state.value("key_bundle", std::string()).empty()) {
@@ -879,12 +869,12 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
                 payload = *opened;
             } else if (raw) {
                 // Откат копии сервером: «восстановление корнем» отозвало бы все прежние устройства (A0073-2)
-                return {"failed", {}, {}, nullptr};
+                return {"failed", {}, {}};
             } else {
                 // Копия есть, но не открылась (испорчена, другой формат): «восстановление корнем» отозвало бы все
                 // прежние устройства — это не то, о чём просили
                 log("копия ключей аккаунта на сервере не открылась — вход по ней невозможен");
-                return {"failed", {}, {}, nullptr};
+                return {"failed", {}, {}};
             }
         }
     }
@@ -900,7 +890,7 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
                 if (!bundle.empty()) {
                     const auto raw = keybundle::open(bundleKey, cfg_.self, fromBase64(bundle));
                     if (const auto opened = acceptBundleLocked(raw)) payload = *opened;
-                    else if (raw) return {"failed", {}, {}, nullptr};
+                    else if (raw) return {"failed", {}, {}};
                 }
             } catch (const std::exception &) {
             }
@@ -908,7 +898,7 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
     }
     if (bundleKey.empty() || payload.is_null()) {
         log("копии ключей аккаунта на сервере нет — восстановление корнем");
-        return {recoverWithKey(recoveryKey), {}, {}, nullptr};
+        return {recoverWithKey(recoveryKey), {}, {}};
     }
     std::string material;
     {
@@ -920,17 +910,16 @@ KeyJoinOutcome Session::joinWithRecoveryKey(const std::string &recoveryKeyIn, bo
                                                 toBase64(bundleKey));
         } catch (const std::exception &e) {
             log(std::string("вход по ключу восстановления не удался: ") + e.what());
-            return {"failed", {}, {}, nullptr};
+            return {"failed", {}, {}};
         }
     }
     joinWithGrant(material);
     // Запись в журнал прошла, а подъём сорвался на временной ошибке — сессия повторяет сама; «не удалось» тут было
     // бы неправдой (устройство входило в фоне, а группы и «План» из копии не применялись)
-    if (!waitReady(60000) && (needsLinking_ || stopping_ || !waitReady(120000))) return {"failed", {}, {}, nullptr};
+    if (!waitReady(60000) && (needsLinking_ || stopping_ || !waitReady(120000))) return {"failed", {}, {}};
     log("устройство привязано ключом восстановления (прежние устройства остались)");
     if (const auto groups = payload.value("groups", std::string()); !groups.empty()) applyBundleGroups(groups);
-    return {"ok", payload.value("planner", std::string()), payload.value("cloud", std::string()),
-            payload.contains("history") ? payload["history"] : json(nullptr)};
+    return {"ok", payload.value("planner", std::string()), payload.value("cloud", std::string())};
 }
 
 // После запуска: копия корня на сервер, ключ восстановления — в Telegram, копия ключей аккаунта — сразу и
@@ -942,7 +931,7 @@ void Session::ackJoined() {
 
 void Session::startRecoveryUpkeepLocked() {
     // Устройство вошло в журнал (ключом восстановления, грантом другого устройства, повтором после обрыва): хосту —
-    // забрать из копии ключей аккаунта группы, «План», «Облако», историю и отозвать оффер привязки
+    // забрать из копии ключей аккаунта группы, «План», «Облако» и отозвать оффер привязки (история — журнал истории)
     if (!readStateFile("joined-unacked").empty()) outbox_.push_back(json{{"type", "joined"}});
     try {
         uploadRootBackupLocked();

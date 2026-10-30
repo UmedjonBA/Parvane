@@ -598,6 +598,15 @@ const Main = ({
     return () => window.removeEventListener('parvane-report', handleReport);
   }, [showNotification]);
 
+  // Parvane (spec 033): удаление не ушло (сбой связи, отказ) — сообщение осталось, молча не теряем
+  useEffect(() => {
+    const handleDeleteFailed = () => {
+      showNotification({ message: oldTranslate('ParvaneDeleteFailed') });
+    };
+    window.addEventListener('parvane-delete-failed', handleDeleteFailed);
+    return () => window.removeEventListener('parvane-delete-failed', handleDeleteFailed);
+  }, [showNotification]);
+
   // Parvane: identity отклонил запись профиля целиком (пустое или слишком
   // длинное имя, протухший токен) — молча оставлять экран с непринятыми
   // значениями нельзя

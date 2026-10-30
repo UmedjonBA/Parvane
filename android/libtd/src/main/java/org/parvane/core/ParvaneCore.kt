@@ -110,10 +110,13 @@ object ParvaneCore {
     fun delete(uuid: String, forEveryone: Boolean = true): Boolean = nativeDelete(uuid, forEveryone)
     fun react(uuid: String, emoji: String): Boolean = nativeReact(uuid, emoji)
     fun pin(uuid: String, pinned: Boolean): Boolean = nativePin(uuid, pinned)
-    fun markRead(uuid: String) = nativeMarkRead(uuid)
+    /** Показанные сообщения прочитаны: маркер «прочитано до» в журнал истории, квитанции — ставшим прочитанными (READ-2). */
+    fun markRead(uuids: List<String>) = nativeMarkRead(JSONArray(uuids).toString())
     fun forget(uuid: String, fileId: String) = nativeForget(uuid, fileId)
     /** «Удалить чат у себя»: граница в журнал состояния, сообщения чата — прочь локально. */
     fun clearChat(address: String, untilMs: Long, uuids: List<String>) = nativeClearChat(address, untilMs, JSONArray(uuids).toString())
+    /** Очистка чата «у себя» с другого своего устройства (журнал состояния) — строки прочь из журнала истории устройства. */
+    fun clearChatLocal(address: String, untilMs: Long) = nativeClearChatLocal(address, untilMs)
     fun replayJournal() = nativeReplayJournal()
 
     // ── группы ───────────────────────────────────────────────────────────────
@@ -225,9 +228,10 @@ object ParvaneCore {
     @JvmStatic private external fun nativeDelete(uuid: String, forEveryone: Boolean): Boolean
     @JvmStatic private external fun nativeReact(uuid: String, emoji: String): Boolean
     @JvmStatic private external fun nativePin(uuid: String, pinned: Boolean): Boolean
-    @JvmStatic private external fun nativeMarkRead(uuid: String)
+    @JvmStatic private external fun nativeMarkRead(idsJson: String)
     @JvmStatic private external fun nativeForget(uuid: String, fileId: String)
     @JvmStatic private external fun nativeClearChat(address: String, untilMs: Long, idsJson: String)
+    @JvmStatic private external fun nativeClearChatLocal(address: String, untilMs: Long)
     @JvmStatic private external fun nativeReplayJournal()
     @JvmStatic private external fun nativeListGroups(): String
     @JvmStatic private external fun nativeCreateGroup(name: String, kind: String, membersJson: String): String

@@ -1,11 +1,11 @@
 // Parvane Android (spec 031): общее состояние JNI-фасада над parvane-core — только протокол v2
 // (v1 удалён, как в desktop spec 029). Модули: jni_main (события, хранилище, журнал истории),
-// jni_session (вход, сессия, события движка), jni_messages (переписка, медиа), jni_groups, jni_account
+// jni_session (вход, сессия, события движка), jni_history (журнал истории аккаунта, spec 033), jni_messages (переписка, медиа), jni_groups, jni_account
 // (устройства, привязка, ключи, аккаунт, журнал состояния). Одна сессия на процесс, один аккаунт.
 //
 // Потоки и замки (NAT-06): g_mu — учётные данные и карты сообщений (никогда не держится во время сети);
 // g_v2Mu — указатели на сессию/управление; сеть — без них. События в Kotlin — только через очередь emit()
-// (отдельный поток, по порядку), кроме реплея журнала (emitNow, синхронно).
+// (отдельный поток, по порядку), кроме реплея журнала истории (emitNow, синхронно).
 #pragma once
 
 #include <jni.h>
@@ -79,21 +79,38 @@ extern bool g_debugBuild;        // debug-сборка (dev-хуки, логи �
 [[nodiscard]] std::string errorCodeOf(const std::exception &e);
 
 // ── события в Kotlin ─────────────────────────────────────────────────────────
-void emit(const json &event);    // через очередь; журналируемые виды пишутся в журнал истории
+void emit(const json &event);    // через очередь
 void emitNow(const json &event); // синхронно (реплей журнала)
 // FED-1: отказ федерации (код в тексте ошибки) → событие federation_error{reason} (disabled|blocked|refused|unreachable|
 // key_changed); остальные ошибки — ничего. Как desktop NoteFederationFailure / web federationReason.
 void noteFederationFailure(const std::string &error);
 
-// ── журнал истории (как parvane-history-*.jsonl desktop) ─────────────────────
-// События message/edited/deleted/meta/outbox_read/read/group; свёртка по uuid, порядок ORDER-1.
-void journalAppend(const json &event);
-[[nodiscard]] std::vector<json> journalFold();
-void journalRewrite(const std::vector<json> &messages);
-// Свёртка → правка → перезапись под одним замком журнала (дописанное другими потоками не теряется).
-void journalTransform(const std::function<void(std::vector<json> &)> &edit);
-void journalReplay();
-void journalRemoveIds(const std::set<std::string> &ids);
+// ── журнал истории аккаунта (spec 033, jni_history.cpp; ядро parvane::history::HistorySync) ─────────────
+// Строки RowState (FileRowStore ядра), маркеры «прочитано до», события шва message/edited/meta/deleted/read_state.
+void historyStart();   // рабочий поток журнала (после старта сессии v2)
+void historyReset();   // выход, смена аккаунта, смена ника: остановить и забыть
+void historySessionEvent(const json &ev); // {"type":"journal","journal":"history"} | stateReady
+// Домен группы для Peer строк журнала; authoritative = false (из строк журнала) — только если ещё не известен.
+void historyNoteGroupDomain(const std::string &address, const std::string &domain, bool authoritative = true);
+void historyNoteGroupInfo(const std::string &address, const json &info); // кто в группе удаляет чужое
+[[nodiscard]] bool historyGroupCanDelete(const std::string &group, const std::string &user);
+[[nodiscard]] json historyPeerOf(const std::string &chatAddress); // state.v1.Peer; null — не чат
+// Событие "message" (своё — own, иначе входящее) → строка журнала; событие дополняется по сведённой строке (правки,
+// реакции, закреп, пришедшие раньше, прочитано). false — сообщение удалено раньше прихода: не показывать.
+bool historyRecordMessageEvent(json &event, bool own, std::int64_t tsMs = 0);
+json historyRecordOwnOp(const json &op); // своя правка/реакция/закреп → журнал ≤ 300 мс
+[[nodiscard]] std::optional<json> historyState(const std::string &id);
+void historyApplyIncomingMutation(const parvane::v2::Incoming &in); // Edit/Delete/Reaction/Pin/Read
+// Удаление: чат сообщения и «у всех» ли (право — historyCanDelete движка). false — сообщение неизвестно.
+bool historyDelete(const std::string &id, bool forEveryone, std::string *chatOut, bool *everyoneOut);
+void historyRecordDelete(const std::string &id, const std::string &chat, bool everyone, const std::string &opId);
+void historyMarkRead(const std::vector<std::string> &ids); // маркер + квитанции о ставших прочитанными, с повтором
+void historyEmitReadState(const std::string &chat);
+[[nodiscard]] std::vector<json> historyRows(); // видимые строки событиями "message", порядок ORDER-1
+void historyReplay(); // в Kotlin по первому LoadChats: строки + счётчики от маркера
+void historyClearChat(const std::string &chat, std::int64_t untilMs, const std::set<std::string> &ids);
+void historyForget(const std::string &id);
+void historyMoveFiles(const std::string &oldAddress, const std::string &newAddress);
 
 // ── сообщения в памяти (из журнала и живых событий) ──────────────────────────
 struct MsgRow {
@@ -131,7 +148,7 @@ void handleV2Event(const json &ev);
 [[nodiscard]] json metaEvent(const std::string &uuid, const std::optional<std::pair<std::string, std::string>> &reaction,
                              std::optional<bool> pinned);
 [[nodiscard]] std::string ownReactionOf(const std::string &uuid);
-void restoreMeta(const std::string &uuid, const json &by, bool pinned);
+void replaceMeta(const std::string &uuid, const json &by, bool pinned); // авторы реакций и закреп — из строки журнала
 void resetReactions();
 void startSession(); // без g_mu
 void stopSession();
@@ -172,12 +189,9 @@ void writeMediaCache(const std::string &fileId, const std::string &bytes);
 [[nodiscard]] std::string tempDir(const std::string &kind);
 
 // ── привязка устройства и копия ключей ───────────────────────────────────────
-[[nodiscard]] json collectV2HistoryRows();
-void importV2History(const std::string &stateJson);
 void startLinkOffer();
 void startLinkingWorkers();
 void resetLinking();
-[[nodiscard]] json bundleHistory(const json &previous, bool force);
 void syncFromKeyBundle();
 void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome);
 void completeJoin(); // событие сессии `joined`: всё из копии ключей аккаунта, отзыв оффера

@@ -86,12 +86,14 @@ struct Incoming {
     std::string to;   // адресат v1-строки: собеседник (своё) или self (входящее); группа — chat
     bool group = false;
     std::int64_t ts = 0; // секунды
+    std::int64_t tsMs = 0; // то же время в миллисекундах (метка журнала истории, spec 033)
     json content;        // Message — v1-содержимое (в т.ч. chat_mode); Edit — новое v1 (text/location)
     std::string replyTo;
     std::vector<std::string> targets; // Edit/Delete/Reaction/Pin/Read
     std::string emoji;
     bool remove = false; // Reaction: снять
     bool unpin = false;  // Pin: открепить
+    bool forEveryone = true; // Delete: у всех (false — «только у себя», приходит только от своих устройств)
     std::string proof;   // Message: core.v2.MessageProof (base64) — подпись автора для жалобы (REPORT-1, A0008-2)
 };
 // Не "direct"/"group" или без opId → Kind::None. disposition "stub" и виды, которых

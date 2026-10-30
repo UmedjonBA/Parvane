@@ -277,10 +277,10 @@ try {
   await findMessage(bob1Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await openPrivateChatStrict(bob2Page, alice);
   await findMessage(bob2Page, after).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  // ── T138 (SC-002, LINK-1 п. 8): история v2-эпохи на новом устройстве ────────
+  // ── История до привязки на новом устройстве (spec 033, HIST-1/HIST-2) ────────
   // Сообщения до линковки запечатаны под одно устройство bob1 — сервер их bob2
-  // не отдаст; они приезжают в экспорте линковки.
-  await waitLog('bob2', 'линковка: история v2 перенесена');
+  // не отдаст; они приходят из журнала истории аккаунта (экспорт привязки истории больше не несёт).
+  await waitLog('bob2', 'история: журнал подключён');
   await findMessage(bob2Page, before).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await findMessage(bob2Page, beforeOwn).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   assert.equal(await findMessage(bob2Page, before).count(), 1, 'bob2: сообщение истории v2 задвоилось');

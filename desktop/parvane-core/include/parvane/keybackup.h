@@ -3,7 +3,8 @@
 //   {"v":2,"kdf":"pbkdf2-sha256","iterations":600000,"salt":b64,"iv":b64,"data":b64}
 // data = AES-256-GCM(key, iv, payloadJson) || tag(16)  (как WebCrypto),
 // key = PBKDF2-SHA256(password, salt, iterations) → 32 байта.
-// payloadJson — {"deviceId", "v2": устройство v2 (Session::deviceBackup), "v2History"?: строки истории}.
+// payloadJson — {"deviceId", "v2": устройство v2 (Session::deviceBackup)}. Строк истории в файле нет (spec 033: история —
+// журнал истории аккаунта; прежнее поле `v2History` не читается).
 // Импорт проверяет конверт до KDF (P-48): итерации ≤ 5 млн (не ниже 310 тыс.), соль 16–64 байт, iv 12,
 // данные ≤ 16 МиБ. Общие векторы с web — proto/parvane/vectors/clients/keybackup-*.json.
 #pragma once

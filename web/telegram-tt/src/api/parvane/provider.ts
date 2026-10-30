@@ -27,7 +27,7 @@ import type {
 import type { ServerInfo } from './connectionController';
 import type { GatewayConnection } from './gateway';
 import type { PackFile, StoredPack } from './stickerPacks';
-import type { WireStoredMessage, WireUserInfo } from './wire';
+import type { WireUserInfo } from './wire';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
 import {
@@ -39,11 +39,15 @@ import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } fr
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { bytesToBase64 } from './v2/base64';
 import {
-  createV2Controller, isV2GroupAddress, type KeyJoinOutcome, type V2DeviceBackup,
+  createV2Controller, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
 import { loadProtocol, verifyMessageProof } from './v2/engine';
-import { digestHex, type KeyBundleHistory, pickRecoveryKey } from './v2/keyBundle';
-import { collectV2History, parseLinkCloudKeys, parseLinkPlannerKeys, parseV2History } from './v2/linkHistory';
+import { createHistoryJournal } from './v2/history';
+import {
+  type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
+} from './v2/historyModel';
+import { pickRecoveryKey } from './v2/keyBundle';
+import { parseLinkCloudKeys, parseLinkPlannerKeys } from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import {
@@ -65,6 +69,7 @@ import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
 import { buildBuiltinGifs, BUILTIN_GIF_TAGS } from './gifs';
 import { createGroupController } from './groups';
+import { createHistoryRows } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
 import {
@@ -549,6 +554,82 @@ const messageIndex = createMessageIndex({
   loadOne: (uuid) => localState.loadHistoryRecord(uuid),
 });
 
+// Журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): строки — сведённым состоянием движка в кэше истории,
+// журнал на сервере — для остальных своих устройств (уже подключённых, долго бывших офлайн и новых)
+const historyRows = createHistoryRows({
+  self: () => store.self,
+  // Прежние адреса (смена ника) — из сессии журнала движка; до её подключения — прежние ники из store
+  selves: () => {
+    const fromEngine = historyJournal.selfAddresses();
+    return fromEngine.length ? fromEngine : store.formerAddresses(store.self);
+  },
+  domain: () => v2Controller.serverDomain(),
+  index: messageIndex,
+  loadAll: () => localState.loadHistoryRecords(),
+  saveRecord: (stored) => localState.saveHistoryRecord(stored),
+  deleteRecord: (uuid) => localState.deleteHistoryRecord(uuid),
+  updateOwnJournal: (stored) => localState.updateOwnJournalEntry(stored),
+  flush: () => localState.flushHistoryNow(),
+  show: (stored) => syncController.showRow(stored),
+  onChatsTouched: (addresses) => {
+    addresses.forEach((address) => {
+      const chatId = store.getIdForAddress(address, address.includes('@') ? 'user' : 'group');
+      syncController.pushReadState(chatId);
+      syncController.pushMentionState(chatId);
+    });
+  },
+  loadMarks: () => localState.loadReadMarks(),
+  saveMark: (address, mark) => localState.saveReadMark(address, mark),
+  loadClearedUntil: () => localState.loadClearedUntil(),
+  // Очередь журнала живёт и до его подключения (сохраняется на диск, уходит после подъёма стека)
+  journal: () => historyJournal,
+  log: logDebug,
+});
+
+const historyJournal = createHistoryJournal({
+  rows: historyRows,
+  loadState: () => localState.loadHistorySync(),
+  saveState: (value) => localState.saveHistorySync(value),
+  loadOutbox: () => localState.loadHistoryOutbox(),
+  saveOutbox: (value) => localState.saveHistoryOutbox(value),
+  onWiped: (uuids) => {
+    void syncController.forgetMessages(uuids, true);
+  },
+  takeLegacyReadUuids: () => localState.takeLegacyReadUuids(),
+  onMigrated: () => localState.dropLegacyReadUuids(),
+  log: logDebug,
+});
+
+// Своё отправленное (любым путём отправки): строка журнала истории и сдвиг маркера чата (ответил — прочитал)
+localState.setOwnSentListener((entry) => {
+  const address = store.resolveChatAddress(entry);
+  const chat = peerForAddress(address, v2Controller.serverDomain());
+  if (!chat || entry.content.ttl_secs) return;
+  try {
+    // Время строки — момент отправки в мс (секунды строки округлены вниз и легли бы раньше входящих той же секунды)
+    const tsMs = Math.max(entry.ts * MS_IN_SECOND, Date.now());
+    void historyRows.ingest(rowOpFromStored(entry, chat, tsMs), { source: 'own' })
+      .then((stored) => historyRows.advanceMark(address, stored ? rowTsMs(stored) : tsMs, entry.id))
+      .catch((err: unknown) => logDebug(`история: своё сообщение не записано: ${String(err)}`));
+  } catch (err) {
+    logDebug(`история: своё сообщение не записано: ${String(err)}`);
+  }
+});
+
+/** «Удалить только у меня» (FR-016): надгробие области ME — только в журнал истории, собеседнику ничего. */
+async function deleteForMe(address: string, uuids: string[]) {
+  const chat = peerForAddress(address, v2Controller.serverDomain());
+  if (!chat) {
+    // Чат вне журнала (история прежних эпох): только локально
+    await syncController.forgetMessages(uuids);
+    return;
+  }
+  for (const target of uuids) {
+    const op: HOp = { gone: { target, chat, stamp: newStamp(), scope: 'GONE_SCOPE_ME', by: store.self } };
+    await historyRows.ingest(op, { source: 'own' });
+  }
+}
+
 /** Аккаунт собеседника удалён (spec 027): «Удалённый аккаунт» в списке, шапке и профиле */
 function markPeerDeleted(address: string) {
   if (!store.markUserDeleted(address)) return;
@@ -574,6 +655,7 @@ const syncController = createSyncController({
   refreshTaskOfferMessage: refreshTaskOfferMessageFromSync,
   rememberSavedGif: rememberSavedGifFromSync,
   rememberStored: messageIndex.set,
+  history: { isUnread: historyRows.isUnread, ensureMarks: historyRows.ensureMarks },
   sendUpdate,
   log: logDebug,
 });
@@ -622,9 +704,13 @@ const v2Controller = createV2Controller({
     window.dispatchEvent(new CustomEvent('parvane-recovery-key'));
   },
   describeDevice: describeThisDevice,
-  bundleHistory: (previous, force) => buildBundleHistory(previous, force),
-  dropBundleHistory: (replaced) => {
-    void mediaService.deleteFile(replaced.fileId).catch(() => undefined);
+  history: { ingest: historyRows.ingest, advanceMark: historyRows.advanceMark },
+  onHistoryReady: (host, rekey) => {
+    void historyJournal.attach(host, rekey);
+  },
+  onJournal: (journal) => {
+    if (journal === 'history') historyJournal.onNotice();
+    else void stateJournal.syncNow();
   },
   onBundleReady: () => {
     void syncFromKeyBundle();
@@ -647,7 +733,7 @@ const v2Controller = createV2Controller({
   },
   onNewOwnDevices: (deviceIds) => {
     window.dispatchEvent(new CustomEvent('parvane-new-device', { detail: { count: deviceIds.length } }));
-    // Новому устройству — свежий снимок истории в копии ключей аккаунта (spec 015)
+    // Новому устройству — свежая копия ключей аккаунта («План», «Облако», группы; spec 015). История — из журнала
     void v2Controller.refreshKeyBundle(true);
   },
   // Журнал устройств v2 у аккаунта есть, а этого устройства в нём нет: оффер
@@ -662,7 +748,11 @@ const v2Controller = createV2Controller({
     // Экран «Устройства» покажет код линковки и вход по ключу восстановления
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('parvane-needs-linking'));
   },
-  onGroupUpdated: (info, isNew) => groupController.applyV2Group(info, isNew),
+  onGroupUpdated: (info, isNew) => {
+    groupController.applyV2Group(info, isNew);
+    // Строки журнала истории, пришедшие раньше группы, — в её чат
+    void syncController.releaseGroupRows(info.group_id);
+  },
   onGroupLeft: (address) => groupController.removeV2Group(address),
   onUnconfirmedMembers: (address, members) => groupController.announceUnconfirmed(address, members),
   // Планировщик на сервере (spec 010): контейнер объявляется в журнале состояния
@@ -682,6 +772,7 @@ const v2Controller = createV2Controller({
     void refreshV2Privacy();
     // Устройство, привязанное после входа, готово только теперь — напоминания запускаются и здесь
     startReminders();
+    messageController.resumeReceipts();
     return stateJournal.attach(host, rekey);
   },
   onL2Changed: (address) => applyL2Change(address),
@@ -713,6 +804,7 @@ getV2Bridge().setSessionProof(v2Controller.sessionProof);
 
 messageController = createMessageController({
   v2: v2Controller,
+  history: { deleteForMe, advanceMark: (address, tsMs, id) => historyRows.advanceMark(address, tsMs, id) },
   recordChatCleared: (address, untilMs) => stateJournal.recordChatCleared(address, untilMs),
   getConnection: () => connection,
   getStore: () => store,
@@ -768,6 +860,8 @@ const connectionController = createConnectionController({
   taskOffers,
   onNewSession: () => {
     stateJournal.reset();
+    historyJournal.reset();
+    historyRows.reset();
     v2Controller.reset();
     stopHistoryLink();
     stopTelegramRecovery('idle');
@@ -1183,17 +1277,8 @@ async function registerV2Wake() {
 
 // ── Копия ключей аккаунта и ключ восстановления через Telegram (spec 015) ────
 
-// Снимок истории в копии ключей аккаунта — вся расшифрованная история одним
-// блобом: небольшой перезаливается, как только изменился (проверка раз в минуту),
-// большой — не чаще раза в полчаса (кроме появления нового своего устройства)
-const BUNDLE_HISTORY_SMALL_BYTES = 512 * 1024;
-const BUNDLE_HISTORY_MIN_MS = 30 * 60 * 1000;
-// Новое устройство перечитывает копию: прежнее устройство, увидев его в журнале,
-// кладёт туда свежий снимок истории
-const BUNDLE_RECHECK_DELAYS_MS = [60 * 1000, 5 * 60 * 1000];
 // Вход по ключу сорвался на временной ошибке: столько ждём, пока запись в журнал завершится повтором в фоне
 const JOIN_BACKGROUND_WAIT_MS = 60 * 1000;
-const BUNDLE_APPLIED_KEY = 'parvane:bundle-history:';
 // Опрос ответа владельца из Telegram: первый через 3 с, дальше интервал растёт
 // ×1,5 до 30 с (вместо запроса каждые 3 с четверть часа); по истечении
 // TELEGRAM_KEY_WAIT_MS опрос останавливается («истекло», можно попросить снова)
@@ -1218,70 +1303,6 @@ if (typeof document !== 'undefined') {
   });
 }
 
-function readAppliedBundleMark(owner: string) {
-  try {
-    return localStorage.getItem(BUNDLE_APPLIED_KEY + owner) || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function rememberAppliedBundleMark(owner: string, mark: string) {
-  try {
-    localStorage.setItem(BUNDLE_APPLIED_KEY + owner, mark);
-  } catch {
-    // без localStorage снимок просто применится ещё раз (строки не дублируются)
-  }
-}
-
-// Устройство с ключом копии: снимок расшифрованной истории — блобом в cloud
-// (случайный ключ, координаты — в копии ключей под ключом восстановления)
-async function buildBundleHistory(previous: KeyBundleHistory | undefined, force: boolean) {
-  const isLarge = (previous?.size || 0) > BUNDLE_HISTORY_SMALL_BYTES;
-  if (previous && !force && isLarge && Date.now() - previous.at < BUNDLE_HISTORY_MIN_MS) return previous;
-  const owner = store.self;
-  await localState.flushHistoryNow();
-  const rows = collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal());
-  if (!rows.length) return previous;
-  const exportJson = JSON.stringify({ linkVersion: 2, v2History: rows });
-  const mark = await digestHex(exportJson);
-  if (previous?.mark === mark) return previous;
-  const upload = await mediaService.uploadBlob(
-    new Blob([exportJson]), 'account-history', 'application/octet-stream', { encrypt: true },
-  );
-  if (!upload.mediaKeys || store.self !== owner) return previous;
-  rememberAppliedBundleMark(owner, mark);
-  logDebug(`копия ключей: снимок истории загружен (${rows.length} строк)`);
-  return {
-    fileId: upload.fileId,
-    fileKey: upload.mediaKeys.keyB64,
-    fileNonce: upload.mediaKeys.nonceB64,
-    at: Date.now(),
-    mark,
-    size: exportJson.length,
-  };
-}
-
-async function applyBundleHistory(history: KeyBundleHistory | undefined, owner: string) {
-  if (!history || store.self !== owner || readAppliedBundleMark(owner) === history.mark) return;
-  mediaService.rememberKeys({
-    kind: 'file', file_id: history.fileId, file_key: history.fileKey, file_nonce: history.fileNonce,
-  });
-  const media = await mediaService.downloadBlob(history.fileId);
-  if (!media) {
-    logDebug('копия ключей: снимок истории не скачался из cloud');
-    return;
-  }
-  const rows = parseV2History(await media.blob.text());
-  if (store.self !== owner) return;
-  // Строки — после ресинка, как при привязке с другого устройства
-  await syncController.ensureSynced()
-    .catch((err: unknown) => logDebug(`копия ключей: ресинк перед историей не выполнен: ${String(err)}`));
-  await applyLinkedV2History(rows, owner);
-  rememberAppliedBundleMark(owner, history.mark);
-  logDebug(`копия ключей: снимок истории применён (${rows.length} строк)`);
-}
-
 const cloudDrive = createCloudDrive({
   log: logDebug,
   self: () => store.self,
@@ -1296,8 +1317,8 @@ const cloudDrive = createCloudDrive({
   addressOf: (chatId) => store.getAddressForId(chatId),
 });
 
-// Свериться с копией ключей аккаунта на сервере: ключи планировщика и снимок
-// истории свежее применённого (его мог положить другое своё устройство)
+// Свериться с копией ключей аккаунта на сервере: ключи планировщика, облака и групп (их мог положить другое своё
+// устройство). История — из журнала истории аккаунта (spec 033), не из копии
 async function syncFromKeyBundle() {
   const owner = store.self;
   const bundle = await v2Controller.fetchKeyBundle();
@@ -1306,13 +1327,11 @@ async function syncFromKeyBundle() {
   if (bundle.cloud) v2Controller.cloud.keysImport(bundle.cloud);
   await v2Controller.applyBundleGroupsFrom(bundle.groups)
     .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
-  await applyBundleHistory(bundle.history, owner)
-    .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
 }
 
 // Устройство вошло в журнал — любым путём (ключ через бота, ключ руками, подтверждение с другого устройства, повтор
 // после обрыва): сразу отзываем оффер привязки, отмечаем ключ у бота забранным и забираем из копии ключей аккаунта
-// всё — группы, «План», «Облако», историю. Раньше это делал только «успешный» ответ входа по ключу, и при временной
+// всё — группы, «План», «Облако» (историю устройство берёт из журнала истории). Раньше это делал только «успешный» ответ входа по ключу, и при временной
 // ошибке (вход доделывался в фоне) группы и «План» приходили через минуты, от другого своего устройства
 let joinCompletedFor: string | undefined;
 
@@ -1331,16 +1350,14 @@ async function completeJoinFromBundle() {
   if (bundle) {
     await v2Controller.applyBundleGroupsFrom(bundle.groups)
       .catch((err: unknown) => logDebug(`копия ключей: группы не применены: ${String(err)}`));
-    await completeKeyJoin({
-      result: 'ok', planner: bundle.planner, cloud: bundle.cloud, history: bundle.history,
-    });
+    completeKeyJoin({ result: 'ok', planner: bundle.planner, cloud: bundle.cloud });
   }
   await v2Controller.ackJoined();
 }
 
-// Устройство вошло в журнал по ключу восстановления: ключи планировщика и
-// история — из копии ключей аккаунта, без участия других устройств
-async function completeKeyJoin(outcome: KeyJoinOutcome) {
+// Устройство вошло в журнал по ключу восстановления: ключи планировщика и облака — из копии ключей аккаунта,
+// история — из журнала истории аккаунта (spec 033), без участия других устройств
+function completeKeyJoin(outcome: KeyJoinOutcome) {
   const owner = store.self;
   if (joinCompletedFor === owner) return;
   joinCompletedFor = owner;
@@ -1348,13 +1365,6 @@ async function completeKeyJoin(outcome: KeyJoinOutcome) {
   void registerV2Wake();
   if (outcome.planner) v2Controller.planner.keysImport(outcome.planner);
   if (outcome.cloud) v2Controller.cloud.keysImport(outcome.cloud);
-  await applyBundleHistory(outcome.history, owner)
-    .catch((err: unknown) => logDebug(`копия ключей: история не применена: ${String(err)}`));
-  BUNDLE_RECHECK_DELAYS_MS.forEach((delay) => {
-    window.setTimeout(() => {
-      if (store.self === owner) void syncFromKeyBundle();
-    }, delay);
-  });
   window.dispatchEvent(new CustomEvent('parvane-devices-changed'));
 }
 
@@ -1430,7 +1440,7 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
     // Успешный вход завершаем, даже если состояние окна успели сменить (новая сессия, «прислать ещё раз»)
     void v2Controller.pollTelegramKey(true);
     stopTelegramRecovery('done');
-    await completeKeyJoin(outcome);
+    completeKeyJoin(outcome);
     return;
   }
   if (generation !== telegramRecovery.generation) return;
@@ -1503,15 +1513,12 @@ function detectPlatformName() {
 // Новое устройство (не записано в журнал устройств v2) после логина публикует
 // оффер с эфемерным ECDH-ключом и опрашивает грант; старое устройство в
 // Settings → Devices показывает запрос с SAS-кодом, подтверждение выгружает
-// шифрованный экспорт истории v2-эпохи и грант движка в cloud и передаёт
+// шифрованный экспорт (ключи «Плана» и «Облака») и грант движка в cloud и передаёт
 // ECDH-бокс с координатами. Новое устройство вступает в журнал по гранту
-// (joinV2WithLinkGrant) и применяет историю (applyLinkedV2History)
+// (joinV2WithLinkGrant); историю оно читает из журнала истории аккаунта (spec 033)
 
 const LINK_GRANT_POLL_MS = 5000;
 const LINK_OFFER_LIFETIME_MS = 10 * 60 * 1000;
-// LINK-1 п. 8: сколько ждать появления группы v2 для привезённых строк
-const LINKED_GROUP_RETRY_MS = 3000;
-const LINKED_GROUP_RETRIES = 40;
 
 type LinkRuntime = {
   generation: number;
@@ -1693,56 +1700,22 @@ async function pollHistoryLinkGrant(generation: number) {
     logDebug('линковка: экспорт не скачался из cloud');
     return;
   }
-  let v2History: WireStoredMessage[];
   let plannerKeys: string | undefined;
   let cloudKeys: string | undefined;
   try {
     const exportText = await media.blob.text();
-    v2History = parseV2History(exportText);
     plannerKeys = parseLinkPlannerKeys(exportText);
     cloudKeys = parseLinkCloudKeys(exportText);
   } catch (err) {
     logDebug(`линковка: экспорт не прочитан: ${String(err)}`);
     return;
   }
-  logDebug(`линковка: экспорт получен (${v2History.length} строк истории)`);
+  logDebug('линковка: экспорт получен');
   await joinV2WithLinkGrant(boxPayload.v2);
   // spec 010: ключи контейнера планировщика старого устройства
   if (plannerKeys) v2Controller.planner.keysImport(plannerKeys);
   // spec 016: ключи контейнеров облака старого устройства
   if (cloudKeys) v2Controller.cloud.keysImport(cloudKeys);
-  // Строки истории — после полного ресинка, а не вперемешку с ним: применённая
-  // посреди ресинка строка (замечено на своих исходящих) временами не доходила до UI
-  await syncController.ensureSynced()
-    .catch((err: unknown) => logDebug(`линковка: ресинк перед историей v2 не выполнен: ${String(err)}`));
-  await applyLinkedV2History(v2History, store.self);
-}
-
-// LINK-1 п. 8 (SC-002): история v2-эпохи — строками старого устройства. Строки
-// групп v2 ждут, пока группа появится из журнала групп (после вступления
-// устройства в журнал устройств), иначе сообщение ушло бы в чат с «адресом»
-async function applyLinkedV2History(rows: WireStoredMessage[], owner: string, attempt = 0) {
-  if (!rows.length || store.self !== owner) return;
-  const waiting: WireStoredMessage[] = [];
-  const clearedUntil = localState.loadClearedUntil();
-  for (const stored of rows) {
-    // Чат очищен «у себя» позже этой строки — привезённая история её не воскрешает
-    if (stored.ts * MS_IN_SECOND <= (clearedUntil[store.resolveChatAddress(stored)] || 0)) continue;
-    if (isV2GroupAddress(stored.to) && !store.isGroupAddress(stored.to)) {
-      waiting.push(stored);
-    } else {
-      // Входящие истории — прочитаны (иначе всё привезённое стало бы «новым»)
-      await syncController.applyExternal(stored.from === owner ? stored : { ...stored, read: true }, true);
-    }
-  }
-  await localState.flushHistoryNow();
-  if (rows.length > waiting.length) {
-    logDebug(`линковка: история v2 перенесена (${rows.length - waiting.length} сообщений)`);
-  }
-  if (!waiting.length || attempt >= LINKED_GROUP_RETRIES) return;
-  window.setTimeout(() => {
-    void applyLinkedV2History(waiting, owner, attempt + 1);
-  }, LINKED_GROUP_RETRY_MS);
 }
 
 // LINK-1 v2: материал гранта движка лежит отдельным блобом; по нему устройство
@@ -3181,7 +3154,7 @@ const methods = {
     if (outcome.result === 'ok') {
       stopTelegramRecovery('done');
       void v2Controller.pollTelegramKey(true);
-      await completeKeyJoin(outcome);
+      completeKeyJoin(outcome);
     } else if (outcome.result === 'failed' && await v2Controller.waitJoined(JOIN_BACKGROUND_WAIT_MS)) {
       // Временная ошибка, запись в журнал прошла повтором
       await completeJoinFromBundle();
@@ -3257,11 +3230,9 @@ const methods = {
       if (!own.shownEph || offer.eph_pub !== own.shownEph) return undefined;
       if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
 
-      // LINK-1 п. 8: строки v2-эпохи новому устройству сервер не отдаст
-      await localState.flushHistoryNow();
+      // LINK-1 п. 8: ключи разделов; истории в экспорте нет — новое устройство читает журнал истории (spec 033)
       const exportJson = JSON.stringify({
         linkVersion: 2,
-        v2History: collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal()),
         // spec 010: ключи контейнера планировщика — чтобы раздел открылся сразу после привязки
         planner: v2Controller.planner.keysExport(),
         // spec 016: ключи контейнеров облака (личный диск, совместные папки)
@@ -3347,13 +3318,10 @@ const methods = {
   async parvaneExportE2eKeys({ password }: { password: string }) {
     const deviceId = ownDeviceId();
     if (!store.self || !deviceId) return undefined;
-    // Копия несёт устройство v2 с историей v2-эпохи: сервер v2 не отдаст её
-    // заново, а сообщения запечатаны под устройства журнала (T152)
-    await localState.flushHistoryNow();
+    // Копия несёт устройство v2 (T152); история — в журнале истории аккаунта, его читает тот же ключ (spec 033)
     const v2 = await v2Controller.exportBackup();
     if (!v2) return undefined;
-    const v2History = collectV2History(await localState.loadHistoryRecords(), await localState.readOwnJournal());
-    return { payload: await exportEncryptedBackup(password, { deviceId, v2, v2History }) };
+    return { payload: await exportEncryptedBackup(password, { deviceId, v2 }) };
   },
 
   async parvaneImportE2eKeys({ payload, password }: { payload: string; password: string }) {
@@ -3373,10 +3341,6 @@ const methods = {
       syncController.reset();
       resetPackRegistries();
       sendUpdate({ '@type': 'requestSync' });
-      if (backup.v2History) {
-        await applyLinkedV2History(parseV2History(JSON.stringify({ v2History: backup.v2History })), store.self);
-        await localState.flushHistoryNow();
-      }
       return true;
     } catch (err) {
       logDebug(`импорт ключей не удался: ${String(err)}`);
@@ -4172,6 +4136,8 @@ const methods = {
     // Стор прежнего аккаунта не должен отвечать на запросы между logout и
     // следующим входом
     store = new ParvaneStore();
+    historyJournal.reset();
+    historyRows.reset();
     messageController.reset();
     localState.reset();
     polls.reset();

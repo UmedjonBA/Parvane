@@ -11,12 +11,15 @@
 import type { WireCallSignal } from '../callengine';
 import type { BlobSession } from '../cloudBlobs';
 import type { WireGroupInvite } from '../groupcall';
+import type { HistoryIngestContext, HistorySource } from '../historyRows';
 import type {
-  WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireReactor, WireStoredMessage,
+  WireAdminRights, WireDefaultPermissions, WireGroupInfo, WireMessageContent, WireStoredMessage,
 } from '../wire';
 import type { CloudStateEntry } from './cloud';
 import type { V2Content } from './contentMap';
 import type { Protocol, PvClient } from './engine';
+import type { HistoryHost } from './history';
+import type { EditPatch, HOp } from './historyModel';
 import type { StateJournalHost } from './stateJournal';
 
 import { SecureE2eStorage } from '../secureStorage';
@@ -38,7 +41,10 @@ import { createDeferredWrite } from './deferredWrite';
 import { loadProtocol, parseEngineError } from './engine';
 import { pickEscrowKey } from './escrowKey';
 import {
-  buildBundleMark, deriveBundleKey, isBundleRolledBack, type KeyBundleHistory, type KeyBundlePayload,
+  applyEditPatch, compareMarkPoint, encodeBody, isJournalable, peerForAddress, rowOpFromStored, rowTsMs,
+} from './historyModel';
+import {
+  buildBundleMark, deriveBundleKey, isBundleRolledBack, type KeyBundlePayload,
   mergeKeyBundlePayload, openKeyBundle, readBundleSeq,
   readGrantBundleKey,
   sealKeyBundle,
@@ -73,11 +79,15 @@ type Deps = {
   onNeedsLinking?: () => void;
   /** Ключ восстановления нового корня — показать пользователю один раз. */
   onRecoveryKey: (recoveryKey: string) => void;
-  /** Снимок истории для копии ключей аккаунта (spec 015): прежний указатель,
-   * если история не менялась, либо указатель на свежий снимок. */
-  bundleHistory?: (previous: KeyBundleHistory | undefined, force: boolean) => Promise<KeyBundleHistory | undefined>;
-  /** Прежний снимок истории заменён в копии на сервере — его блоб больше не нужен. */
-  dropBundleHistory?: (replaced: KeyBundleHistory) => void;
+  /** Хранилище строк журнала истории (spec 033): события переписки — операциями над строкой. */
+  history?: {
+    ingest: (op: HOp, ctx: HistoryIngestContext) => Promise<WireStoredMessage | undefined>;
+    advanceMark: (address: string, tsMs: number, id: string, source?: HistorySource) => Promise<boolean>;
+  };
+  /** Журнал истории аккаунта можно подключать (ключ личного состояния есть); `rekey` — как у `onStateReady`. */
+  onHistoryReady?: (host: HistoryHost, rekey?: 'self' | 'peer') => void;
+  /** Живое уведомление `JournalNotice`: другое своё устройство дописало журнал состояния или истории. */
+  onJournal?: (journal: 'state' | 'history') => void;
   /** Стек поднят на устройстве с ключом копии ключей аккаунта: можно свериться с копией. */
   onBundleReady?: () => void;
   /** Устройство вошло в журнал (ключом восстановления, грантом другого устройства, повтором после обрыва) и стек
@@ -248,7 +258,6 @@ export type KeyJoinOutcome = {
   result: SskRotationResult;
   planner?: string;
   cloud?: string;
-  history?: KeyBundleHistory;
 };
 export type TelegramKeyRequest = 'sent' | 'no_telegram' | 'limit' | 'failed';
 // Итог отзыва устройства (движок: `revokeDevice`)
@@ -298,6 +307,8 @@ type EngineEvent = {
   signal?: V2CallSignal;
   // `cloudChanged`: id контейнера облака (hex)
   id?: string;
+  // `journal` (spec 033): какой журнал дописан другим своим устройством
+  journal?: 'state' | 'history';
 };
 
 const STATE_RECORD = 'v2-engine';
@@ -393,7 +404,6 @@ const KEY_RECORD = 'v2-storage-key';
 // указатель на снимок истории в ней
 const BUNDLE_KEY_RECORD = 'v2-bundle-key';
 const BUNDLE_SENT_RECORD = 'v2-bundle-sent';
-const BUNDLE_HISTORY_RECORD = 'v2-bundle-history';
 // Наибольший номер копии ключей аккаунта, виденный этим устройством (A0073-2: защита от отката сервером)
 const BUNDLE_SEQ_RECORD = 'v2-bundle-seq';
 const BUNDLE_FIRST_DELAY_MS = 8000;
@@ -892,6 +902,7 @@ export function createV2Controller(deps: Deps) {
     // живут на соединении — после обрыва оформляются заново)
     void ensureEphemeral([...loadStickyPeers(), ...publishedGroups, ...ephChats]);
     deps.onStateReady?.(stateHost);
+    deps.onHistoryReady?.(historyHost);
     void refreshOwnDevices().catch((e: unknown) => deps.log(`v2: журнал своих устройств: ${String(e)}`));
     void startRecoveryUpkeep();
   }
@@ -1266,17 +1277,6 @@ export function createV2Controller(deps: Deps) {
     await deps.applyExternal(next);
   }
 
-  function reactionList(reactors: WireReactor[]) {
-    const counts = new Map<string, { count: number; mine: boolean }>();
-    reactors.forEach(({ emoji, user }) => {
-      const c = counts.get(emoji) || { count: 0, mine: false };
-      c.count += 1;
-      if (user === deps.getSelf()) c.mine = true;
-      counts.set(emoji, c);
-    });
-    return Array.from(counts, ([emoji, c]) => ({ emoji, count: c.count, mine: c.mine }));
-  }
-
   // Планировщик на сервере (spec 010): жизненный цикл контейнера и очередь — `./planner`
   const planner = createPlannerSync({
     log: deps.log,
@@ -1526,70 +1526,87 @@ export function createV2Controller(deps: Deps) {
         await deps.applyExternal(stub);
         return;
       }
+      // Журнал истории (spec 033): мутации — операциями над строкой (`historyApply` хранилища строк). Неизвестная
+      // цель — сирота, применяется, когда сообщение придёт (HIST-1). Права проверяет движок по автору мутации `by`
+      // (и `by_admin` у удаления) — в том числе когда сообщение придёт позже: правка — только автором строки,
+      // удаление у всех — автором, админом группы с правом либо любым участником личного чата
+      const chatAddress = isGroup ? to : peer;
+      const hpeer = peerForAddress(chatAddress, serverDomain);
+      // Своё действие этого устройства (отправлено отсюда) — в журнал сразу; копия с другого своего устройства и
+      // входящее — с задержкой, если его к тому времени нет в журнале
+      const source = author === self && !ev.seq ? 'own' : 'inbox';
+      const stamp = { ts_ms: String(ev.tsMs || Date.now()), op_id: ev.opId };
+      const history = deps.history;
       if (c.edit?.target) {
         const target = b64ToUuid(c.edit.target.op_id);
-        if (target) {
-          await update(target, (m) => {
-            if (m.from !== author || !inThisChat(m)) return m;
-            const content = { ...m.content };
-            if (c.edit!.text) {
-              const t = v2ToWire({ text: c.edit!.text })!;
-              if (content.kind === 'text') {
-                Object.assign(content, { text: t.text, entities: t.entities, webpage: t.webpage });
-              } else {
-                Object.assign(content, { caption: t.text, entities: t.entities });
-              }
-            }
-            if (c.edit!.location) Object.assign(content, v2ToWire({ location: c.edit!.location }));
-            return { ...m, content, edited: true };
-          });
+        if (!target || !hpeer || !history) return;
+        const patch: EditPatch = {};
+        if (c.edit.text) {
+          const t = v2ToWire({ text: c.edit.text })!;
+          Object.assign(patch, { text: t.text, entities: t.entities, webpage: t.webpage });
         }
+        if (c.edit.location) patch.fields = v2ToWire({ location: c.edit.location });
+        const known = await knownMessage(target);
+        const isVisible = known && !known.deleted && inThisChat(known);
+        const body = isVisible ? { content: applyEditPatch(known.content, patch) } : { edit_patch: patch };
+        await history.ingest({ edit: { target, chat: hpeer, stamp, body: encodeBody(body), by: author } }, {
+          source, author,
+        });
         return;
       }
       if (c.delete?.targets) {
+        if (!hpeer || !history) return;
+        // Своя копия «только у меня» (прежние версии слали её мутацией) — область ME; остальное — у всех
+        const scope = author === self && !c.delete.for_everyone ? 'GONE_SCOPE_ME' : 'GONE_SCOPE_EVERYONE';
+        // Чужое сообщение группы удаляет и админ с правом удалять (жалоба, spec 024): право подписанта
+        // проверил движок (`mutation_authorized`), здесь — что автор мутации и правда такой админ
+        const isAdmin = isGroup && canDeleteInGroup(ev.group!.id, author);
         for (const t of c.delete.targets) {
           const target = b64ToUuid(t.op_id);
-
-          // Чужое сообщение группы удаляет и админ с правом удалять (жалоба, spec 024): право подписанта
-          // проверил движок (`mutation_authorized`), здесь — что автор мутации и правда такой админ
-          const canDeleteOthers = isGroup && canDeleteInGroup(ev.group!.id, author);
           if (target) {
-            await update(target, (m) => ((m.from === author || canDeleteOthers) && inThisChat(m)
-              ? { ...m, deleted: true } : m));
+            await history.ingest({
+              gone: {
+                target, chat: hpeer, stamp, scope, by: author, by_admin: isAdmin || undefined,
+              },
+            }, { source, author, isAdmin });
           }
         }
         return;
       }
       if (c.reaction?.target) {
         const target = b64ToUuid(c.reaction.target.op_id);
-        const known = target ? await knownMessage(target) : undefined;
-        if (target && known && inThisChat(known)) {
-          // Основа — сохранённый список строки (а не память вкладки): после
-          // перезагрузки счётчики не начинаются с нуля
-          const emoji = c.reaction.remove ? '' : c.reaction.emoji || '';
-          const ts = Math.floor((ev.tsMs || Date.now()) / 1000);
-          await update(target, (m) => {
-            const reactors = (m.reactors || []).filter((r) => r.user !== author);
-            if (emoji) reactors.push({ user: author, emoji, ts });
-            return { ...m, reactors, reactions: reactionList(reactors) };
-          });
-        }
+        if (!target || !hpeer || !history) return;
+        const emoji = c.reaction.remove ? '' : c.reaction.emoji || '';
+        await history.ingest({ react: { target, chat: hpeer, user: author, stamp, emoji } }, { source, author });
         return;
       }
       if (c.pin?.target) {
         const target = b64ToUuid(c.pin.target.op_id);
-        if (target) await update(target, (m) => (inThisChat(m) ? { ...m, pinned: !c.pin!.unpin } : m));
+        if (!target || !hpeer || !history) return;
+        await history.ingest({ pin: { target, chat: hpeer, stamp, pinned: !c.pin.unpin } }, { source, author });
         return;
       }
       if (c.receipt?.messages) {
-        // Своя квитанция (копия с другого своего устройства) меняет только
-        // исходящие, а помечает она чужие сообщения — применять нечего
-        if (c.receipt.kind === 'RECEIPT_KIND_READ' && author !== self) {
+        if (c.receipt.kind !== 'RECEIPT_KIND_READ') return;
+        if (author === self) {
+          // Копия своей квитанции с другого своего устройства (READ-2, быстрая дорога): маркер чата — до самой
+          // поздней из прочитанных там строк
+          let best: { tsMs: number; id: string } | undefined;
           for (const t of c.receipt.messages) {
             const target = b64ToUuid(t.op_id);
-
-            // Квитанция — только на своё исходящее в этом чате
-            if (target) await update(target, (m) => (inThisChat(m) && m.from === self ? { ...m, read: true } : m));
+            const known = target ? await knownMessage(target) : undefined;
+            if (!known || !inThisChat(known)) continue;
+            const tsMs = rowTsMs(known);
+            if (!best || compareMarkPoint(tsMs, known.id, best.tsMs, best.id) > 0) best = { tsMs, id: known.id };
+          }
+          if (best) await history?.advanceMark(chatAddress, best.tsMs, best.id, 'inbox');
+          return;
+        }
+        for (const t of c.receipt.messages) {
+          const target = b64ToUuid(t.op_id);
+          // Квитанция — только на своё исходящее в этом чате (✓✓, локальная пометка строки)
+          if (target) {
+            await update(target, (m) => (inThisChat(m) && m.from === self && !m.read ? { ...m, read: true } : m));
           }
         }
         return;
@@ -1620,8 +1637,20 @@ export function createV2Controller(deps: Deps) {
         reply_to: b64ToUuid(c.reply_to?.op_id),
         proof: author !== self ? ev.proof : undefined,
       };
-      messages.set(stored);
-      await deps.applyExternal(stored);
+      const hpeerRow = isJournalable(stored) ? peerForAddress(isGroup ? to : peer, serverDomain) : undefined;
+      let rowOp: HOp | undefined;
+      try {
+        rowOp = hpeerRow && deps.history ? rowOpFromStored(stored, hpeerRow, ev.tsMs) : undefined;
+      } catch (e) {
+        deps.log(`v2: сообщение ${ev.opId} — вне журнала истории (${String(e)})`);
+      }
+      if (rowOp && deps.history) {
+        // Строка журнала истории: сводится с тем, что уже известно о сообщении (удалено раньше прихода — не появится)
+        await deps.history.ingest(rowOp, { source: author === self && !ev.seq ? 'own' : 'inbox' });
+      } else {
+        messages.set(stored);
+        await deps.applyExternal(stored);
+      }
       // Собеседник (или своё другое устройство) сменил режим L2 личного чата
       if (c.chat_mode) announceL2(author === self ? chat : author);
       // Чат в режиме L2 (spec 025): вложение качается сразу, а не при просмотре — по скачиванию не видно,
@@ -1644,7 +1673,12 @@ export function createV2Controller(deps: Deps) {
       if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
     }
     // Своё устройство передало (новый) ключ личного состояния — журнал заново
-    if (ev.type === 'stateKeyRotated') deps.onStateReady?.(stateHost, 'peer');
+    if (ev.type === 'stateKeyRotated') {
+      deps.onStateReady?.(stateHost, 'peer');
+      deps.onHistoryReady?.(historyHost, 'peer');
+    }
+    // Своё другое устройство дописало журнал (spec 033): забрать сразу, без ожидания опроса
+    if (ev.type === 'journal' && ev.journal) deps.onJournal?.(ev.journal);
   }
 
   // Новое своё устройство (T119): свой журнал устройств — источник истины,
@@ -1715,7 +1749,6 @@ export function createV2Controller(deps: Deps) {
     await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_KEY_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
-    await storage?.deleteRecord(BUNDLE_HISTORY_RECORD).catch(() => undefined);
     await storage?.deleteRecord(BUNDLE_SEQ_RECORD).catch(() => undefined);
     bundleKeyB64 = undefined;
     rootBackupB64 = undefined;
@@ -1743,7 +1776,7 @@ export function createV2Controller(deps: Deps) {
   // Сообщения v2 запечатаны под устройства журнала: чтобы другой браузер читал
   // новые сообщения после импорта копии, он должен стать ЭТИМ устройством —
   // копия несёт состояние движка (ключи устройства, сессии, группы) под паролем
-  // копии. Истории v2 в состоянии движка нет — она едет строками (`v2History`).
+  // копии. История — в журнале истории аккаунта (spec 033): тот же ключ личного состояния её открывает.
 
   async function exportBackup(): Promise<V2DeviceBackup | undefined> {
     if (!ready || !client || !storage || !storageKey) return undefined;
@@ -1898,23 +1931,19 @@ export function createV2Controller(deps: Deps) {
       // материале новое устройство всё равно заменит свежим
       const material = buildGrantMaterial();
       if (!material) return;
-      const previous = await storage.loadRecord<KeyBundleHistory>(BUNDLE_HISTORY_RECORD);
-      const history = deps.bundleHistory
-        ? await deps.bundleHistory(previous, force).catch(() => previous)
-        : previous;
       const groupKeys = client.groupKeysExport();
       const payload: KeyBundlePayload = {
         grant: b64(material),
         planner: planner.keysExport(),
         cloud: cloud.keysExport(),
         groups: groupKeys !== '[]' ? groupKeys : undefined,
-        history,
       };
       material.fill(0);
       const mark = await buildBundleMark(payload);
-      if (await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
-      // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако», группы или полную
-      // историю (только что вошло), не должно стирать их из копии для следующих устройств
+      if (!force && await storage.loadRecord<string>(BUNDLE_SENT_RECORD) === mark) return;
+      // Своё — поверх серверного, а не вместо: устройство, ещё не получившее «План», «Облако» или группы (только
+      // что вошло), не должно стирать их из копии для следующих устройств. Истории в копии нет (spec 033): новое
+      // устройство берёт её из журнала истории аккаунта
       const seen = await loadSeenBundleSeq();
       const server = await fetchKeyBundle();
       const merged = mergeKeyBundlePayload(payload, server);
@@ -1944,8 +1973,6 @@ export function createV2Controller(deps: Deps) {
       ));
       await storage.saveRecord(BUNDLE_SENT_RECORD, mark);
       await storage.saveRecord(BUNDLE_SEQ_RECORD, merged.seq);
-      if (history) await storage.saveRecord(BUNDLE_HISTORY_RECORD, history);
-      if (previous && history && previous.fileId !== history.fileId) deps.dropBundleHistory?.(previous);
       deps.log('v2: копия ключей аккаунта обновлена на сервере');
     } catch (e) {
       deps.log(`v2: копия ключей аккаунта не обновлена: ${String(e)}`);
@@ -1963,8 +1990,7 @@ export function createV2Controller(deps: Deps) {
     }, BUNDLE_REFRESH_MS);
     legacyKeyTimer = legacyKeyTimer || setInterval(() => void adoptTelegramKey(), LEGACY_KEY_POLL_MS);
     if (bundleKeyB64) deps.onBundleReady?.();
-    // Только что привязанное устройство сначала забирает историю из копии
-    // (иначе его неполный снимок встал бы на место снимка прежнего устройства)
+    // Только что привязанное устройство первую копию не пишет: «План», «Облако» и группы оно ещё не получило
     if (isJustJoined) {
       isJustJoined = false;
       return;
@@ -2041,8 +2067,7 @@ export function createV2Controller(deps: Deps) {
     return payload;
   }
 
-  /** Копия ключей аккаунта с сервера, открытая ключом копии этого устройства
-   * (новое устройство перечитывает её ради свежего снимка истории). */
+  /** Копия ключей аккаунта с сервера, открытая ключом копии этого устройства. */
   async function fetchKeyBundle() {
     if (!ready || !bundleKeyB64) return undefined;
     try {
@@ -2301,7 +2326,7 @@ export function createV2Controller(deps: Deps) {
     deps.log('v2: устройство привязано ключом восстановления (прежние устройства остались)');
     if (payload.groups) await applyBundleGroups(payload.groups);
     return {
-      result: 'ok', planner: payload.planner, cloud: payload.cloud, history: payload.history,
+      result: 'ok', planner: payload.planner, cloud: payload.cloud,
     };
   }
 
@@ -2512,7 +2537,10 @@ export function createV2Controller(deps: Deps) {
       deps.log(`v2: устройство отозвано (ротаций ${rotations.length}, эпох ждут админа ${
         outcome.epochsNeedAdmin.length})`);
       // Ключ личного состояния сменён — журнал состояния заново под новым ключом
-      if (outcome.stateKeyVersion !== undefined) deps.onStateReady?.(stateHost, 'self');
+      if (outcome.stateKeyVersion !== undefined) {
+        deps.onStateReady?.(stateHost, 'self');
+        deps.onHistoryReady?.(historyHost, 'self');
+      }
     });
     if (client?.ownSskExposed()) deps.onSskRotationNeeded?.();
   }
@@ -4444,6 +4472,13 @@ export function createV2Controller(deps: Deps) {
 
   // ── журнал личного состояния (T098): хост — stateJournal.ts ─────────────────
 
+  // Журнал истории аккаунта (spec 033): сессия — ключ из ключа личного состояния
+  const historyHost: HistoryHost = {
+    openSession: () => (ready ? client?.historySession() : undefined),
+    call: (method, body) => call('id', method, body),
+    log: deps.log,
+  };
+
   const stateHost: StateJournalHost = {
     openSession: () => (ready ? client?.stateSession() : undefined),
     call: (method, body) => call('id', method, body),
@@ -4629,6 +4664,8 @@ export function createV2Controller(deps: Deps) {
     isReady: () => ready,
     needsLinking: () => needsLinking,
     deviceId: () => ownDeviceId,
+    /** Домен своего сервера (группы v2 живут на нём). */
+    serverDomain: () => serverDomain,
     /** Строка истории по id (своя отправка либо кэш истории) — для правки. */
     storedMessage: knownMessage,
     /** Планировщик на сервере (spec 010). */
@@ -4729,8 +4766,9 @@ export function createV2Controller(deps: Deps) {
     publishPresence,
     watchPresence,
     tryEdit,
-    tryDelete: (to: string, uuids: string[]) => tryMutation(to, {
-      delete: { targets: uuids.map(ref), for_everyone: true },
+    // `forEveryone` — «удалить у всех» (выбор пользователя); «только у меня» мутацией не шлётся вовсе (spec 033)
+    tryDelete: (to: string, uuids: string[], forEveryone = true) => tryMutation(to, {
+      delete: { targets: uuids.map(ref), for_everyone: forEveryone },
     }),
     tryReact: (to: string, uuid: string, emoji: string) => tryMutation(to, {
       reaction: { target: ref(uuid), emoji, remove: !emoji },

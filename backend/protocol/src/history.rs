@@ -115,17 +115,47 @@ fn check_stamp(s: &Option<Stamp>, field: &'static str) -> Result<Stamp> {
     Ok(s.clone())
 }
 
+/// Ключ чата в истории: личный — как `state::peer_key` (`u:<адрес>`), группа — `g:<hex id>` БЕЗ домена (id группы —
+/// 32 случайных байта, уникален глобально; домен группы хост может ещё не знать, и строки одной группы не должны
+/// расходиться по двум ключам). Им сравниваются чаты строки, маркера и операции, строится ключ сегмента, сводка и
+/// `historyView.chatKey`.
+pub fn history_chat_key(p: &Peer) -> Result<String> {
+    match &p.kind {
+        Some(peer::Kind::Group(r)) => {
+            address::check_ref(r)?;
+            Ok(format!("g:{}", hex::encode(&r.id)))
+        }
+        _ => peer_key(p),
+    }
+}
+
 fn chat_key(p: &Option<Peer>) -> Result<String> {
-    peer_key(p.as_ref().ok_or(ProtoError::InvalidField("chat"))?)
+    history_chat_key(p.as_ref().ok_or(ProtoError::InvalidField("chat"))?)
 }
 
 /// Проверка, что `chat` вложенного сообщения (если задан) — тот же чат.
 fn same_chat(p: &Option<Peer>, key: &str) -> Result<()> {
     match p {
         None => Ok(()),
-        Some(p) if peer_key(p)? == key => Ok(()),
+        Some(p) if history_chat_key(p)? == key => Ok(()),
         Some(_) => Err(ProtoError::ContextMismatch),
     }
+}
+
+/// Детерминированный выбор `Peer` одного чата (ключи истории равны): у группы с разными доменами — лексикографически
+/// больший домен (ассоциативно, коммутативно, идемпотентно); у пользователя `Peer` и так один.
+fn pick_chat(a: Option<Peer>, b: Option<&Peer>) -> Option<Peer> {
+    let Some(b) = b else { return a };
+    let Some(a) = a else { return Some(b.clone()) };
+    match (&a.kind, &b.kind) {
+        (Some(peer::Kind::Group(x)), Some(peer::Kind::Group(y))) if y.domain > x.domain => Some(b.clone()),
+        _ => Some(a),
+    }
+}
+
+/// Свой ли адрес: набор своих адресов — текущий и прежние (смена ника, spec 026).
+fn is_self(selves: &[&str], a: &str) -> bool {
+    selves.iter().any(|s| *s == a)
 }
 
 /// Тело строки/правки: пусто либо JSON-объект.
@@ -164,19 +194,113 @@ fn later<'a, T: Message>(a: (&'a Stamp, &'a T), b: (&'a Stamp, &'a T)) -> bool {
     }
 }
 
-/// Ключ выбора строки при двух разных телах одного сообщения: заголовок без тела, затем тело.
+/// Ключ выбора строки при двух разных телах одного сообщения: заголовок без тела и без чата (чат выбирается
+/// отдельно — одна группа может прийти под разными доменами), затем тело.
 fn row_key(r: &MessageRow) -> (Vec<u8>, &[u8]) {
-    let head = MessageRow { body: vec![], ..r.clone() };
+    let head = MessageRow { body: vec![], chat: None, ..r.clone() };
     (head.encode_to_vec(), r.body.as_slice())
 }
 
 // ---------------------------------------------------------------------------
 // Сведение RowState.
 
+/// Не больше стольких кандидатов-правок и кандидатов-удалений от разных авторов у сироты (кроме всегда
+/// действительных — их корзина не вытесняется).
+pub const MAX_PENDING_AUTHORS: usize = 8;
+
+/// Удаление действительно для строки автора `row_from` в чате вида `kind`: ME, своё (by пусто), автор строки,
+/// админ группы с правом, любой участник личного чата.
+fn gone_valid(g: &Gone, row_from: &str, kind: Option<ChatKind>) -> bool {
+    g.scope == GoneScope::Me as i32 || gone_always_valid(g, kind) || g.by == row_from
+}
+
+/// Удаление действительно для любой строки (не зависит от автора).
+fn gone_always_valid(g: &Gone, kind: Option<ChatKind>) -> bool {
+    g.scope == GoneScope::Me as i32 || g.by.is_empty() || g.by_admin || kind == Some(ChatKind::User)
+}
+
+/// Правка действительна, если она своя (by пусто) или от автора строки.
+fn edit_valid(e: &Edit, row_from: &str) -> bool {
+    e.by.is_empty() || e.by == row_from
+}
+
+/// Кандидаты сироты: по ключу автора — наибольшая метка (ничья — байты значения); всегда действительные — в
+/// корзине `""` без вытеснения, остальные авторы — не больше [`MAX_PENDING_AUTHORS`] с наибольшими метками.
+/// Свойство: `top_k(per_key_max(A ∪ B))` ассоциативно и коммутативно.
+fn reduce_pending<T: Message + Clone>(items: Vec<T>, key: impl Fn(&T) -> String, stamp: impl Fn(&T) -> Stamp) -> Vec<T> {
+    let mut by_key: BTreeMap<String, T> = BTreeMap::new();
+    for it in items {
+        let k = key(&it);
+        let replace = match by_key.get(&k) {
+            None => true,
+            Some(cur) => later((&stamp(cur), cur), (&stamp(&it), &it)),
+        };
+        if replace {
+            by_key.insert(k, it);
+        }
+    }
+    let always = by_key.remove("");
+    let mut rest: Vec<(String, T)> = by_key.into_iter().collect();
+    // Наибольшие метки первыми (ничья — байты значения), остаток вытесняется
+    rest.sort_by(|(_, a), (_, b)| {
+        stamp_cmp(&stamp(b), &stamp(a)).then_with(|| b.encode_to_vec().cmp(&a.encode_to_vec()))
+    });
+    rest.truncate(MAX_PENDING_AUTHORS);
+    let mut out: Vec<(String, T)> = rest;
+    if let Some(a) = always {
+        out.push((String::new(), a));
+    }
+    out.sort_by(|(a, _), (b, _)| a.cmp(b));
+    out.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Наибольший по метке (ничья — байты значения) из списка.
+fn latest<T: Message + Clone>(items: impl Iterator<Item = T>, stamp: impl Fn(&T) -> Stamp) -> Option<T> {
+    let mut best: Option<T> = None;
+    for it in items {
+        best = match best {
+            None => Some(it),
+            Some(cur) => Some(if later((&stamp(&cur), &cur), (&stamp(&it), &it)) { it } else { cur }),
+        };
+    }
+    best
+}
+
+fn check_by(by: &str) -> Result<()> {
+    if by.is_empty() {
+        Ok(())
+    } else {
+        check_address(by)
+    }
+}
+
 /// Проверить состояние и привести его к канонической форме. Возвращает ключ чата.
+///
+/// Правки и удаления сначала собираются в кандидатов (`edit_stamp`/`edit_body` и `gone` — тоже кандидаты; у
+/// записей без `by` он пуст — своё). Строка известна — побеждает наибольший среди ДЕЙСТВИТЕЛЬНЫХ для её автора,
+/// недействительные выбрасываются; строки нет — кандидаты хранятся (`pending_*`), не сводясь «максимумом» между
+/// действительным и недействительным (иначе подделка чужого могла бы победить, пока строка неизвестна).
 fn canonical(mut s: RowState) -> Result<(RowState, String)> {
     id16(&s.target, "target")?;
     let key = chat_key(&s.chat)?;
+    // Чат состояния — детерминированно по всем вложенным (одна группа под разными доменами)
+    let mut chat = s.chat.take();
+    for p in s
+        .row
+        .iter()
+        .map(|r| &r.chat)
+        .chain(s.pending_edits.iter().map(|e| &e.chat))
+        .chain(s.pending_gones.iter().map(|g| &g.chat))
+        .chain(s.gone.iter().map(|g| &g.chat))
+        .flatten()
+    {
+        if history_chat_key(p)? != key {
+            return Err(ProtoError::ContextMismatch);
+        }
+        chat = pick_chat(chat, Some(p));
+    }
+    s.chat = chat;
+    let kind = s.chat.as_ref().and_then(chat_kind_of);
     if let Some(r) = s.row.as_mut() {
         if r.id != s.target {
             return Err(ProtoError::ContextMismatch);
@@ -186,13 +310,38 @@ fn canonical(mut s: RowState) -> Result<(RowState, String)> {
         check_json_object(&r.body, "row.body")?;
         r.chat = s.chat.clone();
     }
-    match &s.edit_stamp {
-        Some(_) => {
-            check_stamp(&s.edit_stamp, "edit_stamp")?;
-            check_json_object(&s.edit_body, "edit_body")?;
-        }
+    // Кандидаты правок
+    let mut edits = std::mem::take(&mut s.pending_edits);
+    match s.edit_stamp.take() {
+        Some(st) => edits.push(Edit { target: s.target.clone(), chat: None, stamp: Some(st), body: std::mem::take(&mut s.edit_body), by: String::new() }),
         None if !s.edit_body.is_empty() => return Err(ProtoError::InvalidField("edit_body")),
         None => {}
+    }
+    for e in edits.iter_mut() {
+        if e.target != s.target {
+            return Err(ProtoError::ContextMismatch);
+        }
+        same_chat(&e.chat, &key)?;
+        check_stamp(&e.stamp, "edit.stamp")?;
+        check_json_object(&e.body, "edit.body")?;
+        check_by(&e.by)?;
+        e.chat = s.chat.clone();
+    }
+    // Кандидаты удалений
+    let mut gones = std::mem::take(&mut s.pending_gones);
+    gones.extend(s.gone.take());
+    for g in gones.iter_mut() {
+        if g.target != s.target {
+            return Err(ProtoError::ContextMismatch);
+        }
+        same_chat(&g.chat, &key)?;
+        check_stamp(&g.stamp, "gone.stamp")?;
+        match GoneScope::try_from(g.scope) {
+            Ok(GoneScope::Everyone) | Ok(GoneScope::Me) => {}
+            _ => return Err(ProtoError::InvalidField("gone.scope")),
+        }
+        check_by(&g.by)?;
+        g.chat = s.chat.clone();
     }
     match &s.pin_stamp {
         Some(_) => {
@@ -209,17 +358,27 @@ fn canonical(mut s: RowState) -> Result<(RowState, String)> {
         put_reaction(&mut by_user, r);
     }
     s.reacts = by_user.into_values().collect();
-    if let Some(g) = s.gone.as_mut() {
-        if g.target != s.target {
-            return Err(ProtoError::ContextMismatch);
+    let edit_stamp_of = |e: &Edit| e.stamp.clone().unwrap_or_default();
+    let gone_stamp_of = |g: &Gone| g.stamp.clone().unwrap_or_default();
+    match s.row.as_ref().map(|r| r.from.clone()) {
+        Some(from) => {
+            // Значение правки для ничьей — тело (как до появления `by`)
+            let edit = latest(edits.into_iter().filter(|e| edit_valid(e, &from)), edit_stamp_of)
+                .map(|e| (e.stamp.unwrap_or_default(), e.body));
+            let gone = latest(gones.into_iter().filter(|g| gone_valid(g, &from, kind)), gone_stamp_of);
+            if let Some((st, body)) = edit {
+                s.edit_stamp = Some(st);
+                s.edit_body = body;
+            }
+            s.gone = gone;
         }
-        same_chat(&g.chat, &key)?;
-        check_stamp(&g.stamp, "gone.stamp")?;
-        match GoneScope::try_from(g.scope) {
-            Ok(GoneScope::Everyone) | Ok(GoneScope::Me) => {}
-            _ => return Err(ProtoError::InvalidField("gone.scope")),
+        None => {
+            s.pending_edits = reduce_pending(edits, |e| e.by.clone(), edit_stamp_of);
+            s.pending_gones =
+                reduce_pending(gones, |g| if gone_always_valid(g, kind) { String::new() } else { g.by.clone() }, gone_stamp_of);
         }
-        g.chat = s.chat.clone();
+    }
+    if s.gone.is_some() {
         // Надгробие: содержимого и мутаций больше нет.
         if let Some(r) = s.row.as_mut() {
             r.body.clear();
@@ -257,26 +416,18 @@ pub fn merge(a: &RowState, b: &RowState) -> Result<RowState> {
         (Some(x), Some(y)) => Some(if row_key(&y) < row_key(&x) { y } else { x }),
         (x, y) => x.or(y),
     };
-    let gone = match (a.gone, b.gone) {
-        (Some(x), Some(y)) => {
-            let (sx, sy) = (x.stamp.clone().unwrap_or_default(), y.stamp.clone().unwrap_or_default());
-            Some(if later((&sx, &x), (&sy, &y)) { y } else { x })
-        }
-        (x, y) => x.or(y),
+    // Правки и удаления — кандидатами обеих сторон; победителя выберет канонизация (по автору строки)
+    let edit_of = |st: Option<Stamp>, body: Vec<u8>, target: &[u8]| {
+        st.map(|st| Edit { target: target.to_vec(), chat: None, stamp: Some(st), body, by: String::new() })
     };
-    let (edit_stamp, edit_body) = match (a.edit_stamp, b.edit_stamp) {
-        (Some(x), Some(y)) => {
-            let (bx, by) = (a.edit_body, b.edit_body);
-            if later((&x, &bx), (&y, &by)) {
-                (Some(y), by)
-            } else {
-                (Some(x), bx)
-            }
-        }
-        (Some(x), None) => (Some(x), a.edit_body),
-        (None, Some(y)) => (Some(y), b.edit_body),
-        (None, None) => (None, vec![]),
-    };
+    let mut pending_edits = a.pending_edits;
+    pending_edits.extend(b.pending_edits);
+    pending_edits.extend(edit_of(a.edit_stamp, a.edit_body, &a.target));
+    pending_edits.extend(edit_of(b.edit_stamp, b.edit_body, &a.target));
+    let mut pending_gones = a.pending_gones;
+    pending_gones.extend(b.pending_gones);
+    pending_gones.extend(a.gone);
+    pending_gones.extend(b.gone);
     let (pin_stamp, pinned) = match (a.pin_stamp, b.pin_stamp) {
         (Some(x), Some(y)) => {
             if later((&x, &a.pinned), (&y, &b.pinned)) {
@@ -291,7 +442,19 @@ pub fn merge(a: &RowState, b: &RowState) -> Result<RowState> {
     };
     let mut reacts = a.reacts;
     reacts.extend(b.reacts);
-    let out = RowState { target: a.target, chat: a.chat, row, edit_stamp, edit_body, reacts, pin_stamp, pinned, gone };
+    let out = RowState {
+        target: a.target,
+        chat: pick_chat(a.chat, b.chat.as_ref()),
+        row,
+        edit_stamp: None,
+        edit_body: vec![],
+        reacts,
+        pin_stamp,
+        pinned,
+        gone: None,
+        pending_edits,
+        pending_gones,
+    };
     canonical(out).map(|(s, _)| s)
 }
 
@@ -299,14 +462,8 @@ pub fn merge(a: &RowState, b: &RowState) -> Result<RowState> {
 pub fn op_to_state(op: &HistoryOp) -> Result<RowState> {
     let s = match &op.op {
         Some(Op::Row(r)) => RowState { target: r.id.clone(), chat: r.chat.clone(), row: Some(r.clone()), ..Default::default() },
-        Some(Op::Gone(g)) => RowState { target: g.target.clone(), chat: g.chat.clone(), gone: Some(g.clone()), ..Default::default() },
-        Some(Op::Edit(e)) => RowState {
-            target: e.target.clone(),
-            chat: e.chat.clone(),
-            edit_stamp: Some(check_stamp(&e.stamp, "edit.stamp")?),
-            edit_body: e.body.clone(),
-            ..Default::default()
-        },
+        Some(Op::Gone(g)) => RowState { target: g.target.clone(), chat: g.chat.clone(), pending_gones: vec![g.clone()], ..Default::default() },
+        Some(Op::Edit(e)) => RowState { target: e.target.clone(), chat: e.chat.clone(), pending_edits: vec![e.clone()], ..Default::default() },
         Some(Op::React(r)) => RowState {
             target: r.target.clone(),
             chat: r.chat.clone(),
@@ -446,8 +603,9 @@ fn mark_cmp(ts: i64, id: &[u8], m: &ReadMark) -> Ordering {
     (ts, id).cmp(&(m.up_to_ts_ms, m.up_to_id.as_slice()))
 }
 
-/// Непрочитано ли сообщение: строка есть, не удалена, не своя, вид не служебный и `(ts, id)` после маркера.
-pub fn is_unread(s: &RowState, mark: Option<&ReadMark>, self_address: &str) -> Result<bool> {
+/// Непрочитано ли сообщение: строка есть, не удалена, не своя (автор не из `selves` — текущий и прежние адреса
+/// аккаунта), вид не служебный и `(ts, id)` после маркера.
+pub fn is_unread(s: &RowState, mark: Option<&ReadMark>, selves: &[&str]) -> Result<bool> {
     let (s, key) = canonical(s.clone())?;
     if let Some(m) = mark {
         if check_mark(m)? != key {
@@ -455,7 +613,7 @@ pub fn is_unread(s: &RowState, mark: Option<&ReadMark>, self_address: &str) -> R
         }
     }
     let Some(row) = &s.row else { return Ok(false) };
-    if s.gone.is_some() || row.from == self_address {
+    if s.gone.is_some() || is_self(selves, &row.from) {
         return Ok(false);
     }
     match content_kind(&row.body) {
@@ -472,7 +630,10 @@ pub fn mark_merge(a: Option<&ReadMark>, b: Option<&ReadMark>) -> Result<Option<R
             if check_mark(x)? != check_mark(y)? {
                 return Err(ProtoError::ContextMismatch);
             }
-            Ok(Some(if mark_cmp(y.up_to_ts_ms, &y.up_to_id, x) == Ordering::Greater { y.clone() } else { x.clone() }))
+            let mut m = if mark_cmp(y.up_to_ts_ms, &y.up_to_id, x) == Ordering::Greater { y.clone() } else { x.clone() };
+            // Чат маркера — детерминированно (одна группа под разными доменами)
+            m.chat = pick_chat(x.chat.clone(), y.chat.as_ref());
+            Ok(Some(m))
         }
         (Some(x), None) | (None, Some(x)) => {
             check_mark(x)?;
@@ -511,13 +672,13 @@ impl ChatKind {
     }
 }
 
-/// Вправе ли `deleter` удалить «у всех» сообщение `author`: личный чат — любой из двух участников (как
-/// Telegram); группа — автор или админ с правом удалять сообщения. «Только у себя» — всегда (это журнал
-/// своего аккаунта, собеседнику ничего не уходит).
-pub fn can_delete(kind: ChatKind, author: &str, deleter: &str, deleter_is_admin: bool) -> bool {
+/// Вправе ли удаляющий (`deleters` — его адреса: текущий и прежние после смены ника) удалить «у всех» сообщение
+/// `author`: личный чат — любой из двух участников (как Telegram); группа — автор или админ с правом удалять
+/// сообщения. «Только у себя» — всегда (это журнал своего аккаунта, собеседнику ничего не уходит).
+pub fn can_delete(kind: ChatKind, author: &str, deleters: &[&str], deleter_is_admin: bool) -> bool {
     match kind {
         ChatKind::User => true,
-        ChatKind::Group => author == deleter || deleter_is_admin,
+        ChatKind::Group => is_self(deleters, author) || deleter_is_admin,
     }
 }
 
@@ -563,7 +724,7 @@ pub fn row_from_wire(row: &Value, chat: &Peer) -> Result<HistoryOp> {
     if !o.get("content").is_some_and(Value::is_object) {
         return Err(ProtoError::InvalidField("content"));
     }
-    peer_key(chat)?;
+    history_chat_key(chat)?;
     let body: Map<String, Value> =
         o.iter().filter(|(k, _)| !WIRE_NON_BODY_FIELDS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
     let body = serde_json::to_vec(&sorted_json(Value::Object(body))).map_err(|_| ProtoError::Malformed)?;
@@ -592,17 +753,19 @@ pub fn year_month(ts_ms: i64) -> String {
     format!("{y:04}-{m:02}")
 }
 
-/// Все метки мутаций состояния.
+/// Все метки мутаций состояния (и кандидатов сироты).
 fn stamps(s: &RowState) -> impl Iterator<Item = &Stamp> {
     s.gone
         .iter()
+        .chain(s.pending_gones.iter())
         .filter_map(|g| g.stamp.as_ref())
         .chain(s.edit_stamp.iter())
+        .chain(s.pending_edits.iter().filter_map(|e| e.stamp.as_ref()))
         .chain(s.pin_stamp.iter())
         .chain(s.reacts.iter().filter_map(|r| r.stamp.as_ref()))
 }
 
-/// Ключ сегмента: ключ чата + `|` + `YYYY-MM` (UTC) от времени строки (сирота — от самой ранней метки).
+/// Ключ сегмента: ключ чата истории ([`history_chat_key`]) + `|` + `YYYY-MM` (UTC) от времени строки (сирота — от самой ранней метки).
 pub fn segment_key(s: &RowState) -> Result<String> {
     let (s, key) = canonical(s.clone())?;
     let ts = match &s.row {
@@ -916,6 +1079,18 @@ impl HistorySession {
         &self.user
     }
 
+    /// Свои адреса: текущий первым, затем прежние (смена ника) — набор `self` для [`is_unread`], [`can_delete`] и
+    /// проверки «своё отправленное сдвигает маркер».
+    pub fn self_addresses(&self) -> Vec<String> {
+        let mut out = vec![self.user.clone()];
+        for k in &self.keys {
+            if !out.contains(&k.address) {
+                out.push(k.address.clone());
+            }
+        }
+        out
+    }
+
     /// Тело `history.sync`.
     pub fn sync_request(&self, after_seq: u64, skip_chunks: bool, max_bytes: u32) -> Vec<u8> {
         SyncRequest { after_seq, max_bytes, skip_chunks }.encode_to_vec()
@@ -1056,12 +1231,12 @@ mod tests {
         })
     }
     fn gone(id: u8, s: Stamp, scope: GoneScope) -> HistoryOp {
-        gone_op(Gone { target: vec![id; 16], chat: Some(user("bob@x")), stamp: Some(s), scope: scope as i32 })
+        gone_op(Gone { target: vec![id; 16], chat: Some(user("bob@x")), stamp: Some(s), scope: scope as i32, ..Default::default() })
     }
 
     #[test]
     fn orphan_then_row_then_gone() {
-        let e = edit_op(Edit { target: vec![1; 16], chat: Some(user("bob@x")), stamp: Some(st(5, 1)), body: br#"{"content":{"kind":"text","text":"b"}}"#.to_vec() });
+        let e = edit_op(Edit { target: vec![1; 16], chat: Some(user("bob@x")), stamp: Some(st(5, 1)), body: br#"{"content":{"kind":"text","text":"b"}}"#.to_vec(), ..Default::default() });
         let s = apply(None, &e).unwrap();
         let v = view(&s).unwrap();
         assert_eq!((v["orphan"].as_bool(), v["visible"].as_bool()), (Some(true), Some(false)));
@@ -1093,12 +1268,12 @@ mod tests {
     #[test]
     fn unread_and_marks() {
         let s = apply(None, &row(5, "bob@x", 2000, "hi")).unwrap();
-        assert!(is_unread(&s, None, "alice@x").unwrap());
-        assert!(!is_unread(&s, None, "bob@x").unwrap(), "своё");
+        assert!(is_unread(&s, None, &["alice@x"]).unwrap());
+        assert!(!is_unread(&s, None, &["bob@x"]).unwrap(), "своё");
         let m = ReadMark { chat: Some(user("bob@x")), up_to_ts_ms: 2000, up_to_id: vec![5; 16] };
-        assert!(!is_unread(&s, Some(&m), "alice@x").unwrap());
+        assert!(!is_unread(&s, Some(&m), &["alice@x"]).unwrap());
         let m2 = ReadMark { chat: Some(user("bob@x")), up_to_ts_ms: 1999, up_to_id: vec![9; 16] };
-        assert!(is_unread(&s, Some(&m2), "alice@x").unwrap());
+        assert!(is_unread(&s, Some(&m2), &["alice@x"]).unwrap());
         assert_eq!(mark_merge(Some(&m), Some(&m2)).unwrap(), Some(m.clone()));
         assert_eq!(mark_merge(Some(&m2), Some(&m)).unwrap(), Some(m.clone()));
         assert!(!mark_after(Some(&m), 2000, &[5; 16]).unwrap());
@@ -1110,17 +1285,17 @@ mod tests {
             ts_ms: 3000,
             body: br#"{"content":{"kind":"chat_mode","l2":true}}"#.to_vec(),
         });
-        assert!(!is_unread(&apply(None, &mode).unwrap(), None, "alice@x").unwrap(), "служебное");
+        assert!(!is_unread(&apply(None, &mode).unwrap(), None, &["alice@x"]).unwrap(), "служебное");
         let wrong = ReadMark { chat: Some(group()), up_to_ts_ms: 0, up_to_id: vec![0; 16] };
-        assert_eq!(is_unread(&s, Some(&wrong), "alice@x").unwrap_err(), ProtoError::ContextMismatch);
+        assert_eq!(is_unread(&s, Some(&wrong), &["alice@x"]).unwrap_err(), ProtoError::ContextMismatch);
     }
 
     #[test]
     fn delete_rights() {
-        assert!(can_delete(ChatKind::User, "bob@x", "alice@x", false));
-        assert!(can_delete(ChatKind::Group, "bob@x", "bob@x", false));
-        assert!(!can_delete(ChatKind::Group, "bob@x", "alice@x", false));
-        assert!(can_delete(ChatKind::Group, "bob@x", "alice@x", true));
+        assert!(can_delete(ChatKind::User, "bob@x", &["alice@x"], false));
+        assert!(can_delete(ChatKind::Group, "bob@x", &["bob@x"], false));
+        assert!(!can_delete(ChatKind::Group, "bob@x", &["alice@x"], false));
+        assert!(can_delete(ChatKind::Group, "bob@x", &["alice@x"], true));
         assert!(ChatKind::parse("channel").is_err());
     }
 

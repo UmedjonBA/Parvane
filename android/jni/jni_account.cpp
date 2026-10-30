@@ -1,6 +1,6 @@
 // Parvane Android (spec 031): аккаунт и устройство — устройства и отзыв (REVOKE-1), привязка в обе роли
 // (LINK-1), ключ восстановления через Telegram и вход нового устройства без других (RECOVER-2), сброс личности
-// и смена SSK (RECOVER-1), копия ключей формата 2, копия ключей аккаунта (снимок истории), смена ника
+// и смена SSK (RECOVER-1), копия ключей формата 2, копия ключей аккаунта (ключи разделов, группы), смена ника
 // (RENAME-1), удаление аккаунта (DELETE-1), профиль, поиск (FED-1), журнал личного состояния (STATE-1/2),
 // приватность и режим L2. Порт desktop parvane_client_{linking,devices}.cpp и parvane_client.cpp.
 #include "jni_internal.h"
@@ -26,7 +26,6 @@ namespace pvjni {
 namespace {
 
 constexpr std::int64_t kLinkOfferLifetimeMs = 10 * 60 * 1000;
-constexpr std::size_t kV2HistoryLimit = 20000;
 
 // Новое устройство: оффер привязки (пока ждём грант).
 std::mutex g_linkMu;
@@ -62,17 +61,6 @@ void setTelegramState(const std::string &state, const std::string &code = std::s
     emit(ev);
 }
 
-bool historyRowOk(const json &row) {
-    if (!row.is_object() || !row.contains("content") || !row["content"].is_object()) return false;
-    for (const auto *key : {"id", "from", "to"})
-        if (!row.contains(key) || !row[key].is_string() || row[key].get<std::string>().empty()) return false;
-    if (!row.contains("ts") || !row["ts"].is_number()) return false;
-    if (row.value("deleted", false)) return false;
-    const auto kind = parvane::contentKind(row["content"]);
-    if (kind.empty() || kind == "encrypted" || kind == "group_encrypted") return false;
-    return row["content"].value("ttl_secs", 0) == 0; // эфемерное не переносится
-}
-
 std::string downloadDecrypt(const json &coords, const char *id, const char *key, const char *nonce) {
     const auto d = downloadChatBlob(coords.value(id, std::string()));
     if (!d.ok) throw std::runtime_error("блоб не скачался: " + d.error);
@@ -81,11 +69,8 @@ std::string downloadDecrypt(const json &coords, const char *id, const char *key,
     return *plain;
 }
 
-std::string markPath() { return storeDir() + "/bundle-history-mark.txt"; }
-
 // Сверки с копией ключей аккаунта идут из разных потоков (`stateReady` и `joined` одной пачкой, повторы после входа по
-// ключу, экспорт привязки): чтение-запись `domain-keys.json` и отметка применённого снимка истории — по одной, иначе
-// ключ мог потеряться, а история — импортироваться дважды
+// ключу, экспорт привязки): чтение-запись `domain-keys.json` — по одной, иначе ключ мог потеряться
 std::recursive_mutex g_bundleMu;
 
 // Ключи «Плана» и «Облака» из копии ключей аккаунта: файл (переживает перезапуск до подключения разделов) и сразу
@@ -106,20 +91,6 @@ void noteDomainKeys(const std::string &plannerIn, const std::string &cloudIn) {
                                    json{{"owner", self()}, {"planner", planner}, {"cloud", cloud}}.dump());
     sectionsDomainKeys();
     emit(json{{"type", "sections"}, {"domain", "keys"}});
-}
-
-void applyBundleHistory(const json &history) {
-    if (!history.is_object()) return;
-    std::lock_guard<std::recursive_mutex> lk(g_bundleMu);
-    const auto mark = history.value("mark", std::string());
-    if (!mark.empty() && parvane::storecrypt::readFile(markPath()) == mark) return;
-    try {
-        importV2History(downloadDecrypt(history, "fileId", "fileKey", "fileNonce"));
-        if (!mark.empty()) parvane::storecrypt::writeFile(markPath(), mark);
-        LOGI("копия ключей: снимок истории применён");
-    } catch (const std::exception &e) {
-        LOGE("копия ключей: история не применена: %s", e.what());
-    }
 }
 
 // ── новое устройство: оффер и грант ─────────────────────────────────────────
@@ -223,7 +194,7 @@ bool pollLinkGrantOnce() {
     }
     try {
         const auto stateJson = downloadDecrypt(box, "file_id", "file_key", "file_nonce");
-        importV2History(stateJson); // LINK-1 п. 8
+        // spec 033: истории в экспорте привязки нет — новое устройство читает журнал истории аккаунта (HIST-1/2)
         // spec 010/016: ключи «Плана» и «Облака» старого устройства — разделы открываются сразу после привязки
         const auto keys = parvane::keybundle::readLinkDomainKeys(stateJson);
         noteDomainKeys(keys.planner, keys.cloud);
@@ -352,9 +323,9 @@ bool grantLink(const std::string &deviceId) {
         return false;
     }
     try {
-        // Экспорт привязки — формат web 2: история v2 (LINK-1 п. 8), ключи — грантом движка
+        // Экспорт привязки — формат web 2 без истории (spec 033: история — журнал истории аккаунта), ключи — грантом
+        // движка
         auto exported = json{{"linkVersion", 2}};
-        if (auto rows = collectV2HistoryRows(); !rows.empty()) exported["v2History"] = std::move(rows);
         // spec 010/016: ключи «Плана» и «Облака» — разделы нового устройства открываются сразу
         if (const auto s = v2Ready()) {
             try {
@@ -450,63 +421,6 @@ void pollTelegramLoop(int generation) {
 
 // ── публичные для модулей ────────────────────────────────────────────────────
 
-json collectV2HistoryRows() {
-    auto rows = json::array();
-    for (auto &m : journalFold()) {
-        json row{{"id", m.value("id", std::string())}, {"from", m.value("from", std::string())},
-                 {"to", m.value("to", std::string())}, {"ts", m.value("ts", std::int64_t(0))},
-                 {"content", m.value("content", json::object())}, {"read", m.value("read", false)},
-                 {"edited", m.value("edited", false)}, {"pinned", m.value("pinned", false)}};
-        if (m.contains("reply_to") && m["reply_to"].is_string()) row["reply_to"] = m["reply_to"];
-        row["content"].erase("local_path");
-        if (historyRowOk(row)) rows.push_back(std::move(row));
-    }
-    if (rows.size() > kV2HistoryLimit) rows.erase(rows.begin(), rows.begin() + std::ptrdiff_t(rows.size() - kV2HistoryLimit));
-    return rows;
-}
-
-// Привезённая история (экспорт привязки, копия ключей, снимок копии ключей аккаунта) — по времени отправки
-// (ORDER-1: строки снимка web идут не по порядку); строки групп ждут появления группы.
-void importV2History(const std::string &stateJson) {
-    const auto state = json::parse(stateJson, nullptr, false);
-    if (!state.is_object() || !state.contains("v2History") || !state["v2History"].is_array()) return;
-    const auto me = self();
-    std::vector<json> rows;
-    for (const auto &row : state["v2History"]) {
-        if (rows.size() >= kV2HistoryLimit) break;
-        if (historyRowOk(row)) rows.push_back(row);
-    }
-    std::stable_sort(rows.begin(), rows.end(), [](const json &a, const json &b) { return a.value("ts", std::int64_t(0)) < b.value("ts", std::int64_t(0)); });
-    int taken = 0;
-    for (const auto &row : rows) {
-        parvane::v2::Incoming in;
-        in.kind = parvane::v2::Incoming::Kind::Message;
-        in.id = row["id"].get<std::string>();
-        in.from = row["from"].get<std::string>();
-        const auto to = row["to"].get<std::string>();
-        const bool out = in.from == me;
-        in.group = isGroupAddress(to);
-        in.chat = in.group ? to : (out ? to : in.from);
-        in.to = in.group ? to : (out ? to : me);
-        in.ts = row["ts"].get<std::int64_t>();
-        in.content = row["content"];
-        if (row.contains("reply_to") && row["reply_to"].is_string()) in.replyTo = row["reply_to"].get<std::string>();
-        if (!markSeen(in.id)) continue;
-        noteMessage(in.id, in.from, in.chat, in.content);
-        auto ev = parvane::android_v2::messageEvent(in, me, nowSec());
-        ev["read"] = out ? row.value("read", false) : true; // история, а не новые входящие
-        ev["edited"] = row.value("edited", false);
-        ev["pinned"] = row.value("pinned", false);
-        ++taken;
-        if (in.group && !groupKnown(to)) {
-            deferLinkedGroupRow(to, std::move(ev));
-            continue;
-        }
-        emit(ev);
-    }
-    if (taken) LOGI("история v2 перенесена (%d сообщений)", taken);
-}
-
 void startLinkOffer() {
     {
         std::lock_guard<std::mutex> lk(g_linkMu);
@@ -569,33 +483,6 @@ void resetLinking() {
     g_tgState = "idle";
 }
 
-// Снимок истории для копии ключей аккаунта (зовёт сессия на своём потоке).
-json bundleHistory(const json &previous, bool force) {
-    constexpr std::int64_t kSmallBytes = 256 * 1024;
-    constexpr std::int64_t kMinMs = 6 * 60 * 60 * 1000;
-    const auto size = previous.is_object() ? previous.value("size", std::int64_t(0)) : 0;
-    const auto at = previous.is_object() ? previous.value("at", std::int64_t(0)) : 0;
-    if (previous.is_object() && !force && size > kSmallBytes && nowMs() - at < kMinMs) return previous;
-    auto rows = collectV2HistoryRows();
-    if (rows.empty()) return previous;
-    const auto exportJson = json{{"linkVersion", 2}, {"v2History", std::move(rows)}}.dump();
-    const auto mark = parvane::keybundle::digestHex(exportJson);
-    if (previous.is_object() && previous.value("mark", std::string()) == mark) return previous;
-    const auto c = control();
-    if (!c) return previous;
-    try {
-        auto enc = parvane::blobcrypt::encrypt(exportJson);
-        const auto fileId = c->uploadBlob(enc.ciphertext);
-        if (fileId.empty()) return previous;
-        parvane::storecrypt::writeFile(markPath(), mark);
-        return json{{"fileId", fileId}, {"fileKey", enc.keyB64}, {"fileNonce", enc.nonceB64}, {"at", nowMs()},
-                    {"mark", mark}, {"size", std::int64_t(exportJson.size())}};
-    } catch (const std::exception &e) {
-        LOGE("копия ключей: снимок истории не загружен: %s", e.what());
-        return previous;
-    }
-}
-
 void syncFromKeyBundle() {
     const auto s = v2Ready();
     if (!s) return;
@@ -607,7 +494,6 @@ void syncFromKeyBundle() {
                        bundle.contains("cloud") ? (bundle["cloud"].is_string() ? bundle["cloud"].get<std::string>() : bundle["cloud"].dump()) : std::string());
         // Группы — и здесь, а не только при «успешном» ответе входа по ключу: вход мог завершиться повтором в фоне
         if (const auto groups = bundle.value("groups", std::string()); !groups.empty()) s->applyBundleGroups(groups);
-        applyBundleHistory(bundle.value("history", json()));
     } catch (const std::exception &e) {
         LOGE("копия ключей аккаунта: %s", e.what());
     }
@@ -636,7 +522,7 @@ void completeJoin() {
 
 void completeKeyJoin(parvane::v2::KeyJoinOutcome outcome) {
     noteDomainKeys(outcome.planner, outcome.cloud);
-    applyBundleHistory(outcome.history);
+    // spec 033: истории в копии ключей нет (KeyJoinOutcome::history удалён) — история из журнала истории
     emit(json{{"type", "link"}, {"state", "joined"}});
     // Повторные сверки — только пока в процессе тот же аккаунт (после выхода или смены аккаунта не идут)
     runDetached([owner = self()] {
@@ -793,14 +679,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRotateSsk(JNIE
 
 // ── копия ключей формата 2 (вручную) ─────────────────────────────────────────
 
-// {deviceId, v2: устройство движка, v2History} под паролем → файл (JSON); "" — нет.
+// {deviceId, v2: устройство движка} под паролем → файл (JSON); "" — нет. Истории в копии нет (spec 033).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeExportKeys(JNIEnv *env, jclass, jstring password) {
     const auto s = v2Ready();
     if (!s) return jout(env, "");
     try {
         json payload{{"deviceId", parvane::v2::Session::deviceIdFor(v2StateDir(self()))}};
         if (auto device = s->deviceBackup(); device.is_object()) payload["v2"] = std::move(device);
-        if (auto rows = collectV2HistoryRows(); !rows.empty()) payload["v2History"] = std::move(rows);
         if (!payload.contains("v2")) return jout(env, "");
         return jout(env, parvane::keybackup::exportEncrypted(payload.dump(), jstr(env, password)));
     } catch (const std::exception &e) {
@@ -809,14 +694,13 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeExportKeys(JNI
     }
 }
 
-// 1 — история перенесена; −1 — неверный пароль/битый файл; −2 — копия не формата 2.
+// 1 — копия прочитана; −1 — неверный пароль/битый файл; −2 — копия не формата 2. История — журнал истории (spec 033).
 JNIEXPORT jint JNICALL Java_org_parvane_core_ParvaneCore_nativeImportKeys(JNIEnv *env, jclass, jstring fileJson, jstring password) {
     try {
         const auto state = parvane::keybackup::importEncrypted(jstr(env, fileJson), jstr(env, password));
         if (!state) return -1;
         const auto parsed = json::parse(*state, nullptr, false);
         if (!parsed.is_object() || !parsed.contains("v2")) return -2;
-        if (parsed.contains("v2History")) importV2History(json{{"v2History", parsed["v2History"]}}.dump());
         return 1;
     } catch (const std::exception &e) {
         LOGE("nativeImportKeys: %s", e.what());
@@ -838,15 +722,12 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRenameAccount(
         const auto newAddress = out.value("address", std::string());
         if (!parvane::accountfiles::isValidAddress(newAddress)) return jreply(env, json{{"result", "failed"}});
         const auto token = out.value("token", std::string());
-        // Сессия — под новым адресом: каталог состояния переезжает, журнал истории — свои строки нового адреса
+        // Сессия — под новым адресом: каталог состояния и файлы журнала истории переезжают (строки не переписываются:
+        // автор своих — прежний адрес, как у остальных устройств; ключ истории движок выводит и из прежнего адреса)
         stopSession();
         std::error_code ec;
         std::filesystem::rename(v2StateDir(oldAddress), v2StateDir(newAddress), ec);
-        journalTransform([&](std::vector<json> &msgs) {
-            for (auto &m : msgs)
-                for (const auto *k : {"from", "to"})
-                    if (m.value(k, std::string()) == oldAddress) m[k] = newAddress;
-        });
+        historyMoveFiles(oldAddress, newAddress);
         {
             std::lock_guard<std::mutex> lk(g_mu);
             g_self = newAddress;

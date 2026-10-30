@@ -11,7 +11,7 @@ import type { ParvaneStore } from './store';
 import type { createSyncController } from './sync';
 import type { TaskOfferStore } from './taskOffers';
 import type { createV2Controller } from './v2/controller';
-import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
+import { ApiMessageEntityTypes } from '../types';
 
 import { federationReason } from './v2/address';
 import { bytesToBase64 } from './v2/base64';
@@ -69,10 +69,21 @@ type MessageDependencies = {
   // «Удалить чат у себя» — в журнал личного состояния v2 (T145): остальные свои
   // устройства скрывают сообщения чата не позже границы (мс)
   recordChatCleared?: (address: string, untilMs: number) => void;
+  // Журнал истории аккаунта (spec 033): «удалить только у меня» — только запись журнала; маркер «прочитано до»
+  history?: {
+    deleteForMe: (address: string, uuids: string[]) => Promise<void>;
+    advanceMark: (address: string, tsMs: number, id: string) => Promise<boolean>;
+  };
 };
 
 const PACK_REF_CACHE_LIMIT = 64;
 const MS_IN_SECOND = 1000;
+// Удаление у всех: целей в одной мутации не больше (`Delete.targets`, лимит схемы)
+const DELETE_TARGETS_MAX = 500;
+// Квитанция прочтения собеседнику — до успеха (READ-1 п. 3): повтор с растущей паузой
+const RECEIPT_RETRY_MS = 5000;
+const RECEIPT_RETRY_MAX_MS = 120000;
+const RECEIPT_PENDING_CAP = 2000;
 
 type CachedPackRef = { recipients: string[]; ref: WirePackRef };
 
@@ -182,6 +193,113 @@ export function createMessageController(deps: MessageDependencies) {
       .map(({ address: member }) => member);
   }
 
+  // Удаление не прошло (сбой связи, движок отказал): сообщение остаётся, пользователь видит причину
+  function notifyDeleteFailed() {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('parvane-delete-failed'));
+  }
+
+  // ── квитанции прочтения собеседнику: очередь до успеха (READ-1 п. 3) ─────────
+  const pendingReceipts = new Map<string, Set<string>>();
+  let receiptsOwner = '';
+  let receiptTimer: ReturnType<typeof setTimeout> | undefined;
+  let receiptDelay = RECEIPT_RETRY_MS;
+
+  function hydrateReceipts() {
+    const self = store().self;
+    if (receiptsOwner === self) return;
+    receiptsOwner = self;
+    pendingReceipts.clear();
+    Object.entries(deps.localState.loadPendingReceipts()).forEach(([address, uuids]) => {
+      pendingReceipts.set(address, new Set(uuids));
+    });
+  }
+
+  function persistReceipts() {
+    let left = RECEIPT_PENDING_CAP;
+    const out: Record<string, string[]> = {};
+    pendingReceipts.forEach((uuids, address) => {
+      const list = Array.from(uuids).slice(-left);
+      left -= list.length;
+      if (list.length) out[address] = list;
+    });
+    deps.localState.savePendingReceipts(out);
+  }
+
+  function queueReceipts(address: string, uuids: string[]) {
+    hydrateReceipts();
+    const set = pendingReceipts.get(address) || new Set<string>();
+    uuids.forEach((uuid) => set.add(uuid));
+    pendingReceipts.set(address, set);
+    persistReceipts();
+    scheduleReceipts(0);
+  }
+
+  function scheduleReceipts(delayMs: number) {
+    if (receiptTimer) clearTimeout(receiptTimer);
+    receiptTimer = setTimeout(() => {
+      receiptTimer = undefined;
+      void flushReceipts();
+    }, delayMs);
+  }
+
+  async function flushReceipts() {
+    hydrateReceipts();
+    let hasFailed = false;
+    for (const [address, uuids] of Array.from(pendingReceipts)) {
+      const list = Array.from(uuids);
+      try {
+        for (let i = 0; i < list.length; i += DELETE_TARGETS_MAX) {
+          // false — чат не v2 (история прежней эпохи): квитанцию слать некуда
+          await deps.v2?.tryRead(address, list.slice(i, i + DELETE_TARGETS_MAX));
+        }
+        pendingReceipts.delete(address);
+      } catch (error) {
+        hasFailed = true;
+        deps.log(`квитанция прочтения не отправлена, повтор через ${receiptDelay / MS_IN_SECOND} с: ${String(error)}`);
+      }
+    }
+    persistReceipts();
+    if (hasFailed) {
+      scheduleReceipts(receiptDelay);
+      receiptDelay = Math.min(receiptDelay * 2, RECEIPT_RETRY_MAX_MS);
+    } else {
+      receiptDelay = RECEIPT_RETRY_MS;
+    }
+  }
+
+  // «Удалить у всех» допустимо: личный чат — любое сообщение (как Telegram), группа — своё либо админу с правом
+  // удалять (то же правило проверяют получатели — `historyCanDelete`)
+  function canDeleteForEveryone(address: string, uuid: string) {
+    const currentStore = store();
+    if (!currentStore.isGroupAddress(address)) return true;
+    if (currentStore.getMessageByUuid(uuid)?.isOutgoing) return true;
+    const me = deps.v2?.groupInfo(address)?.members.find((member) => member.address === currentStore.self);
+    return Boolean(me && (me.role === 'owner' || (me.role === 'admin'
+      && (!me.admin_rights || me.admin_rights.delete_messages))));
+  }
+
+  /** Сдвинуть маркер чата до прочитанных строк; входящим, бывшим непрочитанными, — квитанция собеседнику. */
+  async function readUpTo(chat: ApiChat, messages: ApiMessage[]) {
+    const currentStore = store();
+    const address = currentStore.getAddressForId(chat.id);
+    if (!address) return;
+    const newlyRead: string[] = [];
+    let best: { tsMs: number; id: string } | undefined;
+    messages.forEach((message) => {
+      const uuid = currentStore.getUuidForMessage(chat.id, message.id);
+      const meta = uuid ? deps.sync.rowMeta(uuid) : undefined;
+      if (!uuid || !meta) return;
+      if (deps.sync.isUnreadIncoming(chat.id, message)) newlyRead.push(uuid);
+      if (!best || meta.tsMs > best.tsMs || (meta.tsMs === best.tsMs && meta.id > best.id)) {
+        best = { tsMs: meta.tsMs, id: meta.id };
+      }
+    });
+    if (best) await deps.history?.advanceMark(address, best.tsMs, best.id);
+    // Протокол v2: квитанция прочтения — E2E-содержимое собеседнику (FR-035)
+    if (newlyRead.length && isV2Routable(address) && address !== currentStore.self) queueReceipts(address, newlyRead);
+  }
+
   function notifyReport(outcome: 'sent' | 'unavailable' | 'failed') {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('parvane-report', { detail: { outcome } }));
@@ -203,6 +321,10 @@ export function createMessageController(deps: MessageDependencies) {
   // Смена аккаунта / logout: ничего из сессии прежнего пользователя не должно
   // пережить (persist считается от текущего self)
   function reset() {
+    if (receiptTimer) clearTimeout(receiptTimer);
+    receiptTimer = undefined;
+    pendingReceipts.clear();
+    receiptsOwner = '';
     uuidBySentLocalKey.clear();
     uploadedPackRefs.clear();
     liveLocations.forEach((entry) => {
@@ -1170,14 +1292,35 @@ export function createMessageController(deps: MessageDependencies) {
       return undefined;
     },
 
-    async deleteMessages({ chat, messageIds }: { chat: ApiChat; messageIds: number[] }) {
-      if (!connection()) return undefined;
+    // «Удалить у всех» — по выбору пользователя (как Telegram): в личном чате и чужое, в группе — своё либо по
+    // праву админа; мутация v2 собеседнику и своим устройствам, плюс запись журнала истории. «Только у меня» —
+    // ТОЛЬКО журнал истории (spec 033, FR-016): собеседник ничего не получает, свои устройства — из журнала
+    async deleteMessages({ chat, messageIds, shouldDeleteForAll }: {
+      chat: ApiChat; messageIds: number[]; shouldDeleteForAll?: boolean;
+    }) {
       const currentStore = store();
       const address = currentStore.getAddressForId(chat.id);
       const uuids = messageIds.map((id) => currentStore.getUuidForMessage(chat.id, id)).filter(Boolean);
-      // Чат v2 — мутацией v2; чат без v2 (история v1) — только локально
-      if (address && isV2Routable(address) && await deps.v2?.isV2Chat(address)) {
-        await deps.v2!.tryDelete(address, uuids);
+      if (!address || !uuids.length) return undefined;
+      const forAll = shouldDeleteForAll && address !== currentStore.self && isV2Routable(address)
+        ? uuids.filter((uuid) => canDeleteForEveryone(address, uuid)) : [];
+      const forMe = uuids.filter((uuid) => !forAll.includes(uuid));
+      try {
+        if (forAll.length && await deps.v2?.isV2Chat(address)) {
+          for (let i = 0; i < forAll.length; i += DELETE_TARGETS_MAX) {
+            await deps.v2!.tryDelete(address, forAll.slice(i, i + DELETE_TARGETS_MAX), true);
+          }
+        } else {
+          forMe.push(...forAll);
+        }
+        if (forMe.length) {
+          if (!deps.history) throw new Error('history journal is unavailable');
+          await deps.history.deleteForMe(address, forMe);
+        }
+      } catch (error) {
+        deps.log(`удаление не выполнено: ${String(error)}`);
+        notifyDeleteFailed();
+        return undefined;
       }
       uuids.forEach((uuid) => deps.sync.markDeleted(uuid));
       deps.sendUpdate({ '@type': 'deleteMessages', ids: messageIds, chatId: chat.id });
@@ -1202,9 +1345,19 @@ export function createMessageController(deps: MessageDependencies) {
         if (message.isOutgoing) ownUuids.push(uuid);
       });
       const chatAddress = currentStore.getAddressForId(chat.id);
-      if (shouldDeleteForAll && ownUuids.length
+      // «Удалить и у собеседника»: в личном чате — вся переписка (как Telegram), в группе — свои сообщения
+      const forAll = chatAddress && !currentStore.isGroupAddress(chatAddress) ? uuids : ownUuids;
+      if (shouldDeleteForAll && forAll.length && chatAddress !== currentStore.self
         && chatAddress && isV2Routable(chatAddress) && await deps.v2?.isV2Chat(chatAddress)) {
-        await deps.v2!.tryDelete(chatAddress, ownUuids);
+        try {
+          for (let i = 0; i < forAll.length; i += DELETE_TARGETS_MAX) {
+            await deps.v2!.tryDelete(chatAddress, forAll.slice(i, i + DELETE_TARGETS_MAX), true);
+          }
+        } catch (error) {
+          deps.log(`удаление чата у собеседника не выполнено: ${String(error)}`);
+          notifyDeleteFailed();
+          return undefined;
+        }
       }
       const address = chatAddress;
       if (address && !currentStore.isGroupAddress(address)) {
@@ -1389,70 +1542,29 @@ export function createMessageController(deps: MessageDependencies) {
       return Promise.resolve(true);
     },
 
-    markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
-      const currentStore = store();
-      const history = currentStore.getMessages(chat.id);
-      const readAddress = currentStore.getAddressForId(chat.id);
-      const newlyRead: string[] = [];
-      history.forEach((message) => {
-        if (message.isOutgoing || (maxId && message.id > maxId)) return;
-        // Служебные сообщения чата квитанцией прочтения не подтверждаются
-        if (message.content.action) return;
-        const uuid = currentStore.getUuidForMessage(chat.id, message.id);
-        if (!uuid || deps.sync.hasReportedRead(uuid)) return;
-        deps.sync.markReportedRead(uuid);
-        newlyRead.push(uuid);
-      });
-      // Протокол v2: квитанция прочтения — E2E-содержимое собеседнику (FR-035)
-      if (newlyRead.length && readAddress && isV2Routable(readAddress)) {
-        void deps.v2?.tryRead(readAddress, newlyRead).catch((error: unknown) => {
-          deps.log(`квитанция прочтения не отправлена: ${String(error)}`);
-        });
+    // Прочтение (READ-2): маркер «прочитано до» чата сдвигается до прочитанного и пишется в журнал истории (≤ 1 с);
+    // счётчик и `lastReadInboxMessageId` для tt — пересчётом от маркера (`pushReadState`). Двигать локальный
+    // read-state tt обязательно: tt сам обновляет `lastReadInboxMessageId` только при `unreadCount > 0`, и
+    // застывший старый id ломал вставку новых сообщений в окно (стрелка ↓)
+    async markMessageListRead({ chat, maxId }: { chat: ApiChat; maxId?: number }) {
+      const history = store().getMessages(chat.id);
+      const readUpToId = maxId ?? history[history.length - 1]?.id;
+      if (readUpToId) {
+        await readUpTo(chat, history.filter((message) => message.id <= readUpToId && !message.content.action));
       }
-      // ВАЖНО: двигаем и ЛОКАЛЬНЫЙ read-state tt. Сам tt в markMessageListRead
-      // обновляет lastReadInboxMessageId только при unreadCount>0 (ранний
-      // выход), а мы unreadCount вживую не ведём → lastReadInboxMessageId
-      // застывал на снапшоте fetchChats. Тогда selectFirstUnreadId вечно
-      // указывал на старое входящее; как только оно выпадало из окна (длинный
-      // чат / прокрутка), reducer newMessage ОТКАЗЫВАЛСЯ добавлять новые
-      // сообщения в окно (стрелка ↓, «сообщение появляется только по ↓»).
-      const readUpTo = maxId ?? history[history.length - 1]?.id;
-      if (readUpTo) {
-        let lastReadInbox = 0;
-        let unreadCount = 0;
-        history.forEach((message) => {
-          if (message.isOutgoing || !message.senderId) return;
-          if (message.id <= readUpTo) {
-            if (message.id > lastReadInbox) lastReadInbox = message.id;
-          } else {
-            unreadCount += 1;
-          }
-        });
-        deps.sendUpdate({
-          '@type': 'updateThreadReadState',
-          chatId: chat.id,
-          threadId: MAIN_THREAD_ID,
-          readState: { lastReadInboxMessageId: lastReadInbox || readUpTo, unreadCount },
-        });
-      }
+      deps.sync.pushReadState(chat.id);
       deps.sync.pushMentionState(chat.id);
-      return Promise.resolve(undefined);
+      return undefined;
     },
 
+    // Упоминания: квитанции по каждому (маркер чата не сдвигается — остальное непрочитанное остаётся)
     readAllMentions({ chat }: { chat: ApiChat }) {
-      // Прочитанность у Parvane помессаджная: квитанция по каждому упоминанию
       const currentStore = store();
       const readAddress = currentStore.getAddressForId(chat.id);
-      const newlyRead: string[] = [];
-      deps.sync.collectUnreadMentions(chat.id).forEach((id) => {
-        const uuid = currentStore.getUuidForMessage(chat.id, id);
-        if (!uuid || deps.sync.hasReportedRead(uuid)) return;
-        deps.sync.markReportedRead(uuid);
-        newlyRead.push(uuid);
-      });
-      if (newlyRead.length && readAddress && isV2Routable(readAddress)) {
-        void deps.v2?.tryRead(readAddress, newlyRead).catch(() => undefined);
-      }
+      const uuids = deps.sync.collectUnreadMentions(chat.id)
+        .map((id) => currentStore.getUuidForMessage(chat.id, id))
+        .filter((uuid): uuid is string => Boolean(uuid));
+      if (uuids.length && readAddress && isV2Routable(readAddress)) queueReceipts(readAddress, uuids);
       deps.sync.pushMentionState(chat.id);
       return Promise.resolve(true);
     },
@@ -1869,6 +1981,11 @@ export function createMessageController(deps: MessageDependencies) {
 
   return {
     reset,
+    // Квитанции, не ушедшие до перезагрузки или обрыва, — снова в путь (READ-1 п. 3)
+    resumeReceipts: () => {
+      hydrateReceipts();
+      if (pendingReceipts.size) scheduleReceipts(0);
+    },
     sendMessageWithUuid,
     ensureSavedGifsHydrated,
     getSavedGifs: () => savedGifs,

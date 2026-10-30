@@ -35,31 +35,16 @@ std::string ExportSnapshotJson(const QStringList &contacts) {
 	const auto isSelf = [&](const QString &address) {
 		return !address.isEmpty() && (address == self || LatestAddress(address) == self);
 	};
-	// Последняя строка журнала по id (порядок — первого появления); правки и реакции — из кэша v2
+	// Строки журнала истории (spec 033): правки, реакции и закреп уже сведены движком, удалённые — надгробия
 	auto order = std::vector<std::string>();
 	auto rows = std::map<std::string, nlohmann::json>();
-	for (const auto &line : StoreReadLines(HistoryPath())) {
-		try {
-			auto row = nlohmann::json::parse(line.toStdString());
-			const auto id = row.value("id", std::string());
-			if (id.empty()) {
-				continue;
-			}
-			if (!rows.contains(id)) {
-				order.push_back(id);
-			}
-			rows[id] = std::move(row);
-		} catch (const std::exception &) {
+	for (const auto &state : HistoryAllStates()) {
+		const auto sm = StoredFromHistory(state);
+		if (!sm || sm->id.empty()) {
+			continue;
 		}
-	}
-	{
-		std::lock_guard<std::mutex> lk(g_v2Mutex);
-		for (auto &[id, row] : rows) {
-			const auto it = g_v2Cache.find(QString::fromStdString(id));
-			if (it != g_v2Cache.end()) {
-				row = it.value().toJson();
-			}
-		}
+		order.push_back(sm->id);
+		rows[sm->id] = sm->toJson();
 	}
 	auto list = std::vector<nlohmann::json>();
 	list.reserve(order.size());

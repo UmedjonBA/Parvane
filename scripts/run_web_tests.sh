@@ -161,6 +161,9 @@ log "Telegram two-factor login e2e"
 log "Recovery key via Telegram: a new device joins by replying to the bot"
 "$ROOT/scripts/run_web_telegram_recovery_e2e.sh"
 
+log "History sync between own devices (spec 033): deletions, read state, new devices"
+"$ROOT/scripts/run_web_history_sync_e2e.sh"
+
 # Настоящий бот против поддельного Bot API — нужен python с websockets (см. раннер)
 if [[ -x "${PARVANE_E2E_BOT_PYTHON:-$ROOT/local-workdirs/tg-bot-venv/bin/python}" ]]; then
   log "Telegram bot (real bot, fake Bot API)"

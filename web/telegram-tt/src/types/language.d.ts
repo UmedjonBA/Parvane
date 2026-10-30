@@ -255,6 +255,7 @@ export interface LangPair {
   'ParvaneInviteBanned': undefined;
   'ParvaneInviteFailed': undefined;
   'ParvaneProfileSaveFailed': undefined;
+  'ParvaneDeleteFailed': undefined;
   'ParvaneInviteOffline': undefined;
   'ParvaneInviteLinkFailed': undefined;
   'ParvaneInviteRevoked': undefined;

@@ -33,7 +33,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/sync.ts — курсора синка v1 нет с T110 (7 окт 2026): история из кэша (restoreFromCache) и журнала исходящих, новое отдаёт инбокс v2 своим курсором (движок)",
         "desktop": "desktop — курсора синка v1 нет со spec 029 (18 окт 2026, v1 удалён из desktop): лента поднимается из локального журнала истории (parvane_client.cpp ReplayHistory, HistoryAppend после вставки), новое отдаёт инбокс v2 своим курсором (движок)",
-        "android": "spec 031: курсора синка v1 нет — новое отдаёт инбокс v2 (курсор ведёт движок в общем ядре v2_session), показанное пишется в журнал истории android/jni/jni_main.cpp (journalAppend до показа, journalFold/journalReplay; каталог v1 — cursors.json, pending.json, dec-cache.jsonl — только стирается при первом запуске) — сценарий эмулятора android/tgx_conformance_flow.sh шаг 1 («устройство отсутствовало»: X выключен, bob шлёт 3 сообщения, после запуска все три в чате, сверка по uuid)"
+        "android": "spec 031: курсора синка v1 нет — новое отдаёт инбокс v2 (курсор ведёт движок в общем ядре v2_session); spec 033: показанное пишется в журнал истории аккаунта (android/jni/jni_history.cpp historyRecordMessageEvent до показа, хранилище строк RowState — FileRowStore ядра; реплей historyReplay; каталог v1 — cursors.json, pending.json, dec-cache.jsonl — только стирается при первом запуске) — сценарий эмулятора android/tgx_conformance_flow.sh шаг 1 («устройство отсутствовало»: X выключен, bob шлёт 3 сообщения, после запуска все три в чате, сверка по uuid)"
       }
     },
     {
@@ -80,9 +80,9 @@
         }
       ],
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/localState.ts (loadReadUuids/saveReadUuids) + sync.ts (markReportedRead); квитанция — E2E-содержимое v2 (messages.ts tryRead), повтора msg.chat.read нет с T110",
+        "web": "spec 033: прочитанное своими устройствами — READ-2 (маркер в журнале истории); здесь — квитанция v2 собеседнику до успеха: web/telegram-tt/src/api/parvane/messages.ts (queueReceipts/flushReceipts, повтор с растущей паузой), localState.ts (loadPendingReceipts/savePendingReceipts); локального списка readuuids/reportedReadUuids нет (перенесён в маркеры один раз)",
         "desktop": "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (g_reportedRead, tdata/parvane-read.txt, MirrorRead: квитанция — E2E-содержимое v2 RECEIPT_KIND_READ через движок); повтора msg.chat.read нет со spec 029",
-        "android": "spec 031: android/jni/jni_messages.cpp nativeMarkRead — строка read в журнал истории ДО квитанции, квитанция автору — E2E-содержимое v2 (receipt RECEIPT_KIND_READ) через движок; свёртка журнала (android/jni/jni_main.cpp journalFold) держит прочитанное после рестарта; повтора msg.chat.read нет — сценарий android/tgx_conformance_flow.sh шаг 2 (bob видит ✓✓, после перезапуска X счётчик не возвращается)"
+        "android": "spec 033: прочитанное своими устройствами — READ-2 (маркер в журнале истории, android/jni/jni_history.cpp historyMarkRead); квитанция автору — E2E-содержимое v2 (receipt RECEIPT_KIND_READ) только о ставших прочитанными, с повтором до успеха (очередь в history-local-<адрес>.json, переживает перезапуск); повтора msg.chat.read нет — сценарий android/tgx_conformance_flow.sh шаг 2 (bob видит ✓✓, после перезапуска X счётчик не возвращается)"
       }
     },
     {
@@ -588,33 +588,15 @@
         ],
         "secondDeviceCreatesRoot": false
       },
-      "v2History": {
-        "exportField": "v2History",
-        "rowKeys": [
-          "id",
-          "from",
-          "to",
-          "ts",
-          "content"
-        ],
-        "optionalRowKeys": [
-          "reply_to",
-          "edited",
-          "reactions",
-          "pinned",
-          "read"
-        ],
-        "limit": 20000,
-        "skips": [
-          "deleted",
-          "ttl",
-          "encrypted",
-          "group_encrypted",
-          "chat_mode without origin v2"
-        ],
-        "exportsPreV2Rows": true,
-        "incomingRead": true,
-        "groupRowsWaitForGroup": true
+      "history": {
+        "historyInExport": false,
+        "removedExportField": "v2History",
+        "historySource": "журнал истории аккаунта (HIST-1, HIST-2) — spec 033",
+        "exportKeys": [
+          "linkVersion",
+          "planner",
+          "cloud"
+        ]
       },
       "ownDeviceGroups": {
         "engineMethod": "shareGroupsWithOwnDevices",
@@ -635,9 +617,9 @@
         "sas": "5659 7031 8371"
       },
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/linking.ts (ECDH, commitment, SAS v2), provider.ts (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` + грант движка вторым блобом; с T110 материала v1 и transfer нет), v2/linkHistory.ts, keyBackup.ts (ручная копия — устройство v2 + история)",
+        "web": "web/telegram-tt/src/api/parvane/linking.ts (ECDH, commitment, SAS v2), provider.ts (оффер/challenge/грант; экспорт — `{linkVersion: 2, planner, cloud}` + грант движка вторым блобом; истории в экспорте нет со spec 033 — журнал истории), v2/linkKeys.ts, keyBackup.ts (ручная копия — устройство v2, без истории)",
         "desktop": "desktop/parvane-core/src/v2_link.cpp, linking.cpp (commitment, SAS v2), tdesktop parvane_client.cpp (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` (WithV2History, ImportV2History) + грант движка вторым блобом; со spec 029 материала v1 и transfer нет)",
-        "android": "spec 031: android/jni/jni_account.cpp — обе роли: новое устройство (startLinkOffer, pollLinkGrantOnce: SAS sasCodeV2, грант только под свой challenge, грант движка вторым блобом → Session::joinWithGrant, история importV2History; строки групп ждут группу — deferLinkedGroupRow/flushLinkedGroupRows) и старое (pollLinkOffersOnce: commitmentMatches, grantLink: экспорт {linkVersion: 2, v2History} + материал linkGrantMaterial); материала v1 нет — сценарий android/tgx_protocol_link_flow.sh (X в обеих ролях)"
+        "android": "spec 031: android/jni/jni_account.cpp — обе роли: новое устройство (startLinkOffer, pollLinkGrantOnce: SAS sasCodeV2, грант только под свой challenge, грант движка вторым блобом → Session::joinWithGrant) и старое (pollLinkOffersOnce: commitmentMatches, grantLink: экспорт {linkVersion: 2, planner, cloud} + материал linkGrantMaterial); истории в экспорте нет со spec 033 — журнал истории аккаунта (jni_history.cpp); материала v1 нет — сценарий android/tgx_protocol_link_flow.sh (X в обеих ролях)"
       }
     },
     {
@@ -1077,7 +1059,7 @@
         "show_previews",
         "silent"
       ],
-      "syncIntervalMs": 8000,
+      "syncIntervalMs": 60000,
       "v1BlobWhenJournaled": [
         "group_add"
       ],
@@ -1088,7 +1070,8 @@
         "web": "web/telegram-tt/src/api/parvane/v2/stateJournal.ts (notify), provider.ts (refreshV2Privacy; v1-блоба msg.chat.setnotify нет с T110 — group_add в приватности v2), v2/controller.ts (getPrivacy)",
         "desktop": "desktop/parvane-core/src/v2_session.cpp (fetchPrivacyLocked); tdesktop parvane_client.cpp (kV2StateKinds, ProjectNotify, ProjectBlocked, ProjectDialogs; v1-блоба настроек нет со spec 029 — PublishNotifyBlob пуст, правка → ScheduleStateFlush(\"notify\")); desktop/verify_protocol_v2_state.sh",
         "android": "spec 031: android/libtd/src/main/java/org/drinkless/tdlib/StateJournal.kt (KINDS: folders, blocked, drafts, archived, scheduled, notify, pinned, unread, reaction) + Client.kt (ToggleChatIsPinned, ToggleChatIsMarkedAsUnread, SetDefaultReactionType); приватность — события сессии privacy / privacy_saved (android/jni/jni_session.cpp) → PrivacyPrefs.kt (своя неподтверждённая правка сильнее) — тесты libtd StateJournalTest.pinsUnreadAndReactionRoundTrip, notifySettingsRoundTripThroughSnapshot (JVM)"
-      }
+      },
+      "journalNotice": "spec 033: запись state.append будит прочие свои устройства событием инбокса JournalNotice{STATE} → немедленный синк; опрос — страховка раз в 60 с"
     },
     {
       "id": "ACCESS-1",
@@ -1392,7 +1375,7 @@
       "clients": {
         "web": "web/telegram-tt/src/api/parvane/store.ts (allocateMessageId, LIVE_ORDER_WINDOW_SECS, compareStoredOrder), sync.ts (persistHistory с order, restoreFromCache), messages.ts (appendOwnJournal: время нажатия и order); тест store.test.ts; сценарий scripts/e2e_web_saved_messages.mjs (часы собеседника −30 с)",
         "desktop": "parvane_client.cpp (spec 029): id сообщения — счётчик g_nextMsgId по порядку прихода (лента tdesktop упорядочена по id), а не время отправителя; место сохраняет журнал истории (ReplayHistory в порядке записи). Отличие от п. 3: догон и перенос истории тоже встают по порядку прихода (инбокс v2 отдаёт их в порядке очереди сервера)",
-        "android": "spec 031: как desktop — id сообщения выдаёт шов по порядку прихода (android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt putMessage: nextMessageId++), а не из времени отправителя; место сохраняет журнал истории (android/jni/jni_main.cpp: journalFold в порядке записи, placeByTime — только строка старше показанных больше чем на окно 300 с встаёт по времени; сортировки нет); перенос истории (importV2History) — по времени отправки"
+        "android": "spec 031: как desktop — id сообщения выдаёт шов по порядку прихода (android/libtd/src/main/java/org/drinkless/tdlib/ParvaneStore.kt putMessage: nextMessageId++), а не из времени отправителя; место сохраняет журнал истории (spec 033: android/jni/jni_history.cpp historyRows — строки хранилища RowState в порядке id, placeByTime — только строка старше показанных больше чем на окно 300 с встаёт по времени; сортировки нет)"
       }
     },
     {
@@ -1411,9 +1394,100 @@
         "identity.telegram.reply"
       ],
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (buildBundleHistory, startTelegramRecovery); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
+        "web": "web/telegram-tt/src/api/parvane/v2/keyBundle.ts (формат копии; поля history нет со spec 033), v2/controller.ts (refreshKeyBundle, joinWithRecoveryKey, finishJoin — привязка переживает обрыв), provider.ts (startTelegramRecovery, completeKeyJoin; история — журнал истории); тесты v2/keyBundle.test.ts, v2Link.test.ts; сценарии scripts/e2e_web_telegram_recovery.mjs, scripts/e2e_web_telegram_bot.mjs",
         "desktop": "desktop/parvane-core/src/keybundle.cpp (формат PVKB: deriveBundleKey, seal, open, pickRecoveryKey), src/v2_session_account.cpp (refreshKeyBundleLocked — копия ключей аккаунта на сервер, joinWithRecoveryKey — вход по копии без отзыва прежних устройств, иначе прежний recoverWithKey; sendKeyToTelegram, requestTelegramKey, pollTelegramKey); tdesktop parvane_client.cpp (StartTelegramRecovery, PollTelegramRecovery, RecoverWithKey), parvane_account_ui.cpp (FillLinking — ввод ключа, FillReadyExtras — ключ в Telegram); тесты tests/webcompat_tests.cpp (keyBundle: копия web открывается, ключ выделяется из текста как в web), живой tests/v2_session_tests.cpp через tests/run_v2_session_live.sh (spec 015: копия ключей аккаунта на сервере, вход по ключу восстановления, прежнее устройство осталось в журнале)",
-        "android": "spec 031: то же ядро, что desktop (keybundle.cpp, v2_session_account.cpp): android/jni/jni_account.cpp nativeTelegramRecovery (requestTelegramKey → pollTelegramKey → joinWithRecoveryKey), nativeRecoverWithKey (ввод ключа вручную), снимок истории копии ключей — bundleHistory/syncFromKeyBundle/completeKeyJoin (ключи «Плана» и «Облака» — noteDomainKeys), nativeSendKeyToTelegram; android/libtd/src/main/java/org/drinkless/tdlib/Client.kt — needs_linking → telegramRecovery, состояние recovery — уведомление; ввод ключа — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/AccountController.kt; сценария эмулятора с ботом нет"
+        "android": "spec 031: то же ядро, что desktop (keybundle.cpp, v2_session_account.cpp): android/jni/jni_account.cpp nativeTelegramRecovery (requestTelegramKey → pollTelegramKey → joinWithRecoveryKey), nativeRecoverWithKey (ввод ключа вручную), syncFromKeyBundle/completeKeyJoin (ключи «Плана» и «Облака» — noteDomainKeys, группы; истории в копии нет со spec 033 — журнал истории аккаунта), nativeSendKeyToTelegram; android/libtd/src/main/java/org/drinkless/tdlib/Client.kt — needs_linking → telegramRecovery, состояние recovery — уведомление; ввод ключа — android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/AccountController.kt; сценарий входа без других устройств — android/tgx_history_sync_flow.sh (история из журнала)"
+      },
+      "bundleHistory": false
+    },
+    {
+      "id": "HIST-1",
+      "title": "Удалённое не воскресает ни из какого источника; событие раньше сообщения применяется; «только у меня» — только журнал",
+      "vectors": "proto/parvane/vectors/history/merge.json",
+      "engineSuite": "history/merge",
+      "ownDelayMs": 300,
+      "markDelayMs": 1000,
+      "incomingDelayMs": [
+        1000,
+        5000
+      ],
+      "pollMs": 60000,
+      "goneScopes": [
+        "GONE_SCOPE_EVERYONE",
+        "GONE_SCOPE_ME"
+      ],
+      "deleteForMeSendsToPeer": false,
+      "directChatDeleteAnyForEveryone": true,
+      "mutationAuthorFields": [
+        "Edit.by",
+        "Gone.by",
+        "Gone.by_admin"
+      ],
+      "maxPendingAuthors": 8,
+      "journalSkips": [
+        "ttl",
+        "encrypted",
+        "group_encrypted",
+        "unsupported"
+      ],
+      "removed": [
+        "buildBundleHistory",
+        "applyBundleHistory",
+        "collectV2History",
+        "parseV2History",
+        "applyLinkedV2History",
+        "v2History",
+        "bundleHistory",
+        "reportedReadUuids",
+        "readuuids"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/historyModel.ts (строка ↔ JSON движка), historyRows.ts (m:<uuid>.hs, надгробия, сироты, historyCanDelete), v2/history.ts (очередь 300 мс / 1–5 с с проверкой «уже в журнале», JournalNotice, опрос 60 с, перенос один раз), v2/controller.ts applyEvent (Delete/Edit/Reaction/Pin → операции), messages.ts deleteMessages (область по выбору); тесты historyRows.test.ts, v2/history.test.ts, protocol.vectors.test.ts (history/*); сценарий scripts/run_web_history_sync_e2e.sh",
+        "desktop": "desktop/parvane-core/src/history_sync.cpp (HistorySync: очередь 300 мс / 1 с / 1–5 с, «уже в журнале», JournalNotice, опрос 60 с, перенос один раз, мутация до строки ждёт автора; FileRowStore), tdesktop parvane_client_history.cpp (хранилище RowState, перенос прежнего журнала), parvane_client.cpp ApplyIncomingMutation / MirrorDelete («у всех» по historyCanDelete, «только у меня» — только журнал); тесты parvane_history_sync_tests, parvane_protocol_vectors_tests (history/*); сценарий desktop/verify_history_sync.sh",
+        "android": "spec 033: то же ядро, что desktop (desktop/parvane-core/src/history_sync.cpp, в android/jni/CMakeLists.txt): android/jni/jni_history.cpp — хранилище строк RowState (FileRowStore ядра: history-<адрес>.jsonl, надгробия и сироты не теряются при свёртке), перенос прежнего journal.jsonl один раз (convertLegacyJournal), события шва из строк (showStates: message/edited/meta/deleted, удалённое не показывается), historyApplyIncomingMutation (Delete/Edit/Reaction/Pin операциями с by/by_admin, права — движок, неизвестная цель — сирота); android/jni/jni_messages.cpp nativeDelete («у всех» по historyCanDelete — мутация v2 + надгробие EVERYONE, «только у меня» — только надгробие ME), свои правка/реакция/закреп — операции журнала с op_id мутации; Kotlin Client.kt messageProperties (canDeleteForEveryone: личный чат — и чужое); тест libtd ParvaneStoreHistoryTest; сценарий android/tgx_history_sync_flow.sh"
+      }
+    },
+    {
+      "id": "HIST-2",
+      "title": "Контрольная точка журнала истории (сегменты по чату и месяцу, сводка, CAS), горизонт надгробий 180 дней, откат сервера не принимается",
+      "vectors": "proto/parvane/vectors/history/segment.json",
+      "engineSuite": "history/segment",
+      "checkpointRecords": 5000,
+      "checkpointAgeMs": 86400000,
+      "checkpointJitterMs": 60000,
+      "tombstoneHorizonDays": 180,
+      "casFailure": "DUPLICATE — не повторять до новой точки",
+      "rekeyForcesReupload": true,
+      "newDeviceOrder": [
+        "history.head",
+        "summary",
+        "segments newest first",
+        "history.sync(after=upto, skip_chunks)"
+      ],
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/v2/history.ts (bootstrap, loadCheckpoint, buildCheckpoint, orderSegments, historyNeedsReplace, откат головы); тест v2/history.test.ts (фальшивый сервер журнала)",
+        "desktop": "desktop/parvane-core/src/history_sync.cpp (joinLocked, loadCheckpointLocked, buildCheckpointLocked, откат головы, stateReady rotated → перезалив); тест parvane_history_sync_tests (вход по точке, сегменты, CAS, откат, горизонт → замена)",
+        "android": "spec 033: ядро desktop/parvane-core/src/history_sync.cpp (вход по точке, сегменты свежими первыми, historyNeedsReplace → замена, точки, откат головы, stateReady rotated → перезалив); android/jni/jni_history.cpp — сессия движка Session::openHistorySession, запросы busRequest канала ID, события сессии journal/stateReady → HistorySync::onSessionEvent (jni_session.cpp), замена — событие history_replaced (Client.kt убирает показанное, чего нет в точке); сценарий android/tgx_history_sync_flow.sh (новое устройство — история из журнала)"
+      }
+    },
+    {
+      "id": "READ-2",
+      "title": "Прочитанное на одном своём устройстве прочитано на всех, включая новое: маркер «прочитано до» в журнале истории, счётчики только от маркера",
+      "vectors": "proto/parvane/vectors/history/unread.json",
+      "engineSuite": "history/unread",
+      "markMovers": [
+        "read",
+        "own sent message",
+        "own READ receipt copy",
+        "journal read op"
+      ],
+      "markWriteDelayMs": 1000,
+      "otherDeviceBadgeMs": 2000,
+      "historyImportAddsUnread": false,
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/historyRows.ts (advanceMark, isUnread → historyIsUnread; маркеры rm:<адрес>), sync.ts isUnreadIncoming (только от маркера), messages.ts markMessageListRead, v2/controller.ts (копия своей квитанции), provider.ts setOwnSentListener; тест historyRows.test.ts; сценарий scripts/run_web_history_sync_e2e.sh",
+        "desktop": "tdesktop data_histories.cpp readInboxTill → Parvane::MirrorReadTill (маркер в журнал, квитанции с повтором), parvane_client.cpp ApplyReadState (History::inboxRead от маркера) и копия своей квитанции в ApplyIncomingMutation; ядро HistorySync::advanceMark/readState; тест parvane_history_sync_tests, сценарий desktop/verify_history_sync.sh",
+        "android": "spec 033: android/jni/jni_history.cpp — historyMarkRead (Client.kt ViewMessages → ParvaneCore.markRead: маркер чата в журнал ≤ 1 с, квитанции о ставших прочитанными с повтором), копия своей квитанции READ — advanceMark(own=false), своё сообщение с любого устройства — маркер в ядре; счётчик — событие read_state от HistorySync::readState (historyIsUnread) → ParvaneStore.applyReadState (выставляется заново, догрузка истории его не раздувает; removeMessages снимает удалённое непрочитанное со счётчика); тест libtd ParvaneStoreHistoryTest; сценарий android/tgx_history_sync_flow.sh (бейдж 0 на втором, новом устройстве и после перезапуска)"
       }
     },
     {

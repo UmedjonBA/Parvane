@@ -169,6 +169,24 @@ impl Args<'_> {
     fn bytes(&self, k: &'static str) -> Result<Vec<u8>, String> {
         unb64(self.s(k)?)
     }
+    /// Адрес или набор адресов (строка ИЛИ массив строк; пустой набор — отказ): свои адреса — текущий и прежние.
+    fn addrs(&self, k: &'static str) -> Result<Vec<String>, String> {
+        let out: Vec<String> = match self.get(k) {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(a)) => {
+                a.iter().map(|x| x.as_str().map(str::to_string).ok_or_else(|| missing(k))).collect::<Result<_, _>>()?
+            }
+            _ => return Err(missing(k)),
+        };
+        if out.is_empty() {
+            return Err(missing(k));
+        }
+        Ok(out)
+    }
+}
+
+fn refs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
 }
 
 fn checkpoint_json(c: &Checkpoint) -> Value {
@@ -199,7 +217,8 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
             "historyView" => history::view(&a.msg("state")?).map_err(err)?,
             "historyIsUnread" => {
                 let mark: Option<ReadMark> = a.opt("mark")?;
-                json!(history::is_unread(&a.msg("state")?, mark.as_ref(), a.s("self")?).map_err(err)?)
+                let selves = a.addrs("self")?;
+                json!(history::is_unread(&a.msg("state")?, mark.as_ref(), &refs(&selves)).map_err(err)?)
             }
             "historyMarkMerge" => {
                 let (x, y): (Option<ReadMark>, Option<ReadMark>) = (a.opt("a")?, a.opt("b")?);
@@ -212,7 +231,8 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
             }
             "historyCanDelete" => {
                 let kind = ChatKind::parse(a.s("chatKind")?).map_err(err)?;
-                json!(history::can_delete(kind, a.s("author")?, a.s("deleter")?, a.flag("deleterIsAdmin")))
+                let deleters = a.addrs("deleter")?;
+                json!(history::can_delete(kind, a.s("author")?, &refs(&deleters), a.flag("deleterIsAdmin")))
             }
             "historyRowFromWire" => {
                 let row = match a.get("row").ok_or_else(|| missing("row"))? {
@@ -221,6 +241,7 @@ pub fn call_static(name: &str, args: &Value) -> Option<R> {
                 };
                 to_json(&history::row_from_wire(&row, &a.msg::<Peer>("chat")?).map_err(err)?)
             }
+            "historyChatKey" => json!(history::history_chat_key(&a.msg::<Peer>("chat")?).map_err(err)?),
             "historySegmentKey" => json!(history::segment_key(&a.msg("state")?).map_err(err)?),
             "historySegmentDigest" => json!(b64(&history::segment_digest(&a.list::<RowState>("states")?).map_err(err)?)),
             "historyNeedsReplace" => {
@@ -307,6 +328,18 @@ impl HostHistory {
             "ingestAppend" => {
                 let r: AppendResponse = crate::codec::decode_checked(&a.bytes("resp")?, crate::limits::Origin::Server).map_err(err)?;
                 json!({"seq": r.seq})
+            }
+            "selfAddresses" => json!(s.self_addresses()),
+            // Статические функции со своими адресами по умолчанию (`self`/`deleter` не заданы — адреса сессии)
+            "historyIsUnread" | "historyCanDelete" => {
+                let k = if name == "historyIsUnread" { "self" } else { "deleter" };
+                let mut args = args.clone();
+                if a.get(k).is_none() {
+                    if let Value::Object(m) = &mut args {
+                        m.insert(k.to_string(), json!(s.self_addresses()));
+                    }
+                }
+                return call_static(name, &args).unwrap_or_else(|| Err(super::call::UNKNOWN_CALL.to_string()));
             }
             "ingestCommit" => {
                 let r: CommitResponse = crate::codec::decode_checked(&a.bytes("resp")?, crate::limits::Origin::Server).map_err(err)?;

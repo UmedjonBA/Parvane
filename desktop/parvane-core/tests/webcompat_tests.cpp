@@ -36,6 +36,16 @@ static std::string readText(const std::string &path) {
     return ss.str();
 }
 
+// Истории в копиях больше нет (spec 033): прежние поля `history` (копия ключей) и `v2History` (ручная копия) векторов
+// в сравнении не участвуют — так же, как в web `clientVectors.test.ts`.
+static json withoutHistory(json p) {
+    if (p.is_object()) {
+        p.erase("history");
+        p.erase("v2History");
+    }
+    return p;
+}
+
 static bool regen() {
     const char *v = std::getenv("PARVANE_REGEN_VECTORS");
     return v && std::string(v) == "1";
@@ -56,9 +66,7 @@ static void keyBackup() {
     const auto desktopPath = vectorPath("keybackup-desktop.json");
     if (regen() || readText(desktopPath).empty()) {
         const json payload{{"deviceId", "vec-device-desktop"},
-                           {"v2", {{"key", "HxweHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgE="}, {"state", "ZGVza3RvcC1zdGF0ZQ=="}}},
-                           {"v2History", json::array({json{{"chat", "alice@local"}, {"id", "0192f1a2-0000-7000-8000-0000000000aa"},
-                                                           {"text", "с компьютера"}}})}};
+                           {"v2", {{"key", "HxweHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgE="}, {"state", "ZGVza3RvcC1zdGF0ZQ=="}}}};
         const auto file = parvane::keybackup::exportEncrypted(payload.dump(), "Desktop-vector-2026");
         std::ofstream(desktopPath) << json{{"password", "Desktop-vector-2026"}, {"payload", payload},
                                            {"file", json::parse(file)}}.dump(2) << "\n";
@@ -96,7 +104,8 @@ static void keyBundle() {
         check(key && parvane::crypto::b64encode(*key) == web.value("bundleKey", std::string()), "keybundle: ключ копии совпал с web (HKDF)");
         const auto sealed = parvane::crypto::b64decode(web.value("sealed", std::string())).value_or(std::string());
         const auto opened = key ? kb::open(*key, web.value("address", std::string()), sealed) : std::nullopt;
-        check(opened && *opened == web["payload"], "keybundle: копия web открыта, содержимое совпало");
+        check(opened && *opened == withoutHistory(web["payload"]), "keybundle: копия web открыта, содержимое совпало");
+        check(opened && !opened->contains("history"), "keybundle: прежний снимок истории из копии не читается (spec 033)");
         check(key && !kb::open(*key, "other@parvane.example", sealed), "keybundle: чужой адрес (AAD) — отказ");
         bool pickOk = true;
         for (const auto &c : web["pick"]) {
@@ -113,9 +122,7 @@ static void keyBundle() {
     if (regen() || readText(desktopPath).empty()) {
         const std::string recoveryKey = "Z9Y8-X7W6-V5T4-S3R2-Q1P0-N9M8-K7J6-H5G4-F3E2-D1C0";
         const std::string address = "gleb@parvane.example";
-        const json payload{{"grant", "eyJzc2siOiJmZiJ9"}, {"cloud", "[]"},
-                           {"history", {{"fileId", "f2"}, {"fileKey", "k2"}, {"fileNonce", "n2"}, {"at", 1760000000001LL},
-                                        {"mark", "m2"}}}};
+        const json payload{{"grant", "eyJzc2siOiJmZiJ9"}, {"cloud", "[]"}};
         const auto key = kb::deriveBundleKey(recoveryKey, address);
         const auto sealed = key ? kb::seal(*key, address, payload) : std::string();
         std::ofstream(desktopPath) << json{{"recoveryKey", recoveryKey}, {"address", address},
@@ -126,7 +133,7 @@ static void keyBundle() {
         const auto key = kb::deriveBundleKey(desktop.value("recoveryKey", std::string()), desktop.value("address", std::string()));
         const auto opened = key ? kb::open(*key, desktop.value("address", std::string()),
             parvane::crypto::b64decode(desktop.value("sealed", std::string())).value_or(std::string())) : std::nullopt;
-        check(opened && *opened == desktop["payload"], "keybundle: файл desktop открывается обратно");
+        check(opened && *opened == withoutHistory(desktop["payload"]), "keybundle: файл desktop открывается обратно");
     }
     // A0073-2: номер записи копии — защита от отката сервером
     {
@@ -164,6 +171,7 @@ static void keyBundle() {
     check(merge.is_object() && merge["cases"].is_array() && merge["cases"].size() >= 4, "keybundle: вектор слияния есть");
     if (merge.is_object()) {
         const auto normalize = [](json p) {
+            p = withoutHistory(p);
             if (p.contains("cloud") && p["cloud"].is_string()) p["cloud"] = json::parse(p["cloud"].get<std::string>(), nullptr, false);
             if (p.contains("grant") && p["grant"].is_string()) {
                 const auto raw = parvane::crypto::b64decode(p["grant"].get<std::string>());
@@ -174,7 +182,8 @@ static void keyBundle() {
         };
         for (const auto &c : merge["cases"]) {
             const auto got = kb::mergeWithServer(c["own"], c["server"]);
-            check(normalize(got) == normalize(c["merged"]), "keybundle: слияние — " + c.value("name", std::string()));
+            check(normalize(got) == normalize(c["merged"]) && !got.contains("history"),
+                  "keybundle: слияние — " + c.value("name", std::string()));
         }
     }
 }

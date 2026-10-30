@@ -639,7 +639,8 @@ class ParvaneStore {
         chat.lastMessage = msg
         chat.positions = positionsFor(chat.id, ts)
         if (!out && !read) chat.unreadCount += 1
-        if (!out && read && msgId > chat.lastReadInboxMessageId) chat.lastReadInboxMessageId = msgId
+        // Прочитанное, пришедшее позже непрочитанного (догрузка истории), границу прочтения не двигает (READ-2)
+        if (!out && read && chat.unreadCount == 0 && msgId > chat.lastReadInboxMessageId) chat.lastReadInboxMessageId = msgId
         if (out && read) chat.lastReadOutboxMessageId = msgId
         return msg
     }
@@ -674,15 +675,19 @@ class ParvaneStore {
         return out
     }
 
-    /** Удаление (tombstone с сервера или своё). */
+    /** Удаление (надгробие журнала истории, своё «у всех»/«только у меня», очистка): удалённое непрочитанное входящее
+     *  снимается и со счётчика чата (бейдж не остаётся висеть на сообщении, которого нет). */
     @Synchronized
     fun removeMessages(uuids: List<String>): List<TdApi.Update> {
         val byChat = HashMap<Long, ArrayList<Long>>()
+        val unreadGone = HashMap<Long, Int>()
         for (uuid in uuids) {
             val msg = msgByUuid.remove(uuid) ?: continue
             uuidByMsg.remove(key(msg.chatId, msg.id)); contentByUuid.remove(uuid)
             messages[msg.chatId]?.removeAll { it.id == msg.id }
             byChat.getOrPut(msg.chatId) { ArrayList() }.add(msg.id)
+            if (!msg.isOutgoing && msg.id > (chats[msg.chatId]?.lastReadInboxMessageId ?: Long.MAX_VALUE))
+                unreadGone[msg.chatId] = (unreadGone[msg.chatId] ?: 0) + 1
         }
         val out = ArrayList<TdApi.Update>()
         byChat.forEach { (chatId, ids) ->
@@ -690,9 +695,47 @@ class ParvaneStore {
             chats[chatId]?.let { chat ->
                 chat.lastMessage = messages[chatId]?.lastOrNull()
                 out += TdApi.UpdateChatLastMessage(chatId, chat.lastMessage, chat.positions)
+                val gone = unreadGone[chatId] ?: 0
+                if (gone > 0 && chat.unreadCount > 0) {
+                    chat.unreadCount = maxOf(0, chat.unreadCount - gone)
+                    out += TdApi.UpdateChatReadInbox(chatId, chat.lastReadInboxMessageId, chat.unreadCount)
+                }
             }
         }
         return out
+    }
+
+    /** Все известные uuid (замена истории контрольной точкой, HIST-2). */
+    fun allUuids(): List<String> = msgByUuid.keys.toList()
+
+    /** Счётчик чата от маркера «прочитано до» журнала истории (READ-2): число непрочитанных считает движок, граница
+     *  прочтения — последняя прочитанная строка (не назад). null — чата нет или ничего не изменилось. */
+    @Synchronized
+    fun applyReadState(address: String, unread: Int, lastReadUuid: String): TdApi.UpdateChatReadInbox? {
+        val chatId = groupsByGid[address]?.chatId ?: idByAddress[address] ?: return null
+        val chat = chats[chatId] ?: return null
+        val list = messages[chatId] ?: emptyList<TdApi.Message>()
+        val lastRead = msgByUuid[lastReadUuid]?.takeIf { it.chatId == chatId }?.id ?: 0L
+        // Всё прочитано — граница у последнего входящего; иначе у последней прочитанной строки
+        val target = if (unread <= 0) list.lastOrNull { !it.isOutgoing }?.id ?: lastRead else lastRead
+        val readTill = maxOf(chat.lastReadInboxMessageId, target)
+        val count = maxOf(0, unread)
+        if (count == chat.unreadCount && readTill == chat.lastReadInboxMessageId) return null
+        chat.unreadCount = count
+        chat.lastReadInboxMessageId = readTill
+        return TdApi.UpdateChatReadInbox(chatId, readTill, count)
+    }
+
+    /** «Удалить у всех» (HIST-1, как Telegram): в личном чате — любое сообщение; в группе и канале — своё либо
+     *  владельцу/админу с правом удалять. Окончательно решает движок (historyCanDelete) при отправке и приёме. */
+    fun canDeleteForEveryone(chatId: Long, own: Boolean): Boolean {
+        val g = groupsByChatId[chatId] ?: return true
+        if (own) return true
+        return when (roleOf(g, self)) {
+            "owner" -> true
+            "admin" -> g.adminRights[self]?.optBoolean("delete_messages", true) ?: true
+            else -> false
+        }
     }
 
     /**
@@ -721,18 +764,6 @@ class ParvaneStore {
         chat.lastReadInboxMessageId = msgId
         chat.unreadCount = (messages[chatId] ?: emptyList<TdApi.Message>()).count { !it.isOutgoing && it.id > msgId }
         return TdApi.UpdateChatReadInbox(chatId, msgId, chat.unreadCount)
-    }
-
-    /** Прочитано на другом устройстве (ReadNotice / read_message_ids): по uuid → по чатам. */
-    @Synchronized
-    fun markInboxReadUuids(uuids: List<String>): List<TdApi.Update> {
-        val maxByChat = HashMap<Long, Long>()
-        for (uuid in uuids) {
-            val msg = msgByUuid[uuid] ?: continue
-            if (msg.isOutgoing) continue
-            if ((maxByChat[msg.chatId] ?: 0L) < msg.id) maxByChat[msg.chatId] = msg.id
-        }
-        return maxByChat.mapNotNull { (chatId, msgId) -> markInboxRead(chatId, msgId) }
     }
 
     /** Собеседник прочитал моё сообщение (read=true у своего в sync). */

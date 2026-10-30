@@ -1,11 +1,13 @@
 import type { ApiMessage, ApiUpdate, ApiVideo } from '../types';
 import type { GatewayConnection } from './gateway';
+import type { RowMeta } from './historyRows';
 import type { PollStore } from './polls';
 import type { TaskOfferStore } from './taskOffers';
 import { MAIN_THREAD_ID } from '../types';
 
 import { getLangStringByKey } from '../../util/localization';
 import { diagLog } from '../../util/parvaneDiag';
+import { rowTsMs } from './v2/historyModel';
 import { createBatchedResolver } from './batchedResolver';
 import { isContentAllowedForMember } from './groups';
 import { readPollFields } from './polls';
@@ -49,8 +51,11 @@ type SyncDependencies = {
     saveNotifyExceptions: (map: Record<string, Record<string, unknown>>) => void;
     loadNotifyDefaults: () => Record<string, Record<string, unknown>>;
     saveNotifyDefaults: (map: Record<string, Record<string, unknown>>) => void;
-    loadReadUuids: () => string[];
-    saveReadUuids: (uuids: string[]) => void;
+  };
+  // Журнал истории (spec 033, READ-2): непрочитанное — от маркера «прочитано до» чата (движок)
+  history?: {
+    isUnread: (meta: RowMeta) => boolean;
+    ensureMarks: () => Promise<void>;
   };
   media: { rememberKeys: (content: WireMessageContent) => void };
   polls: PollStore;
@@ -69,6 +74,7 @@ type SyncDependencies = {
 
 type WireFlags = { read: boolean; deleted: boolean; pinned: boolean; snapshot: string };
 const MS_IN_SECOND = 1000;
+const V2_GROUP_PREFIX = 'v2g:';
 // perf A3: имена и профили — одним запросом списком за окно сбора, с памятью
 const NAMES_BATCH_DELAY_MS = 200;
 const NAMES_TTL_MS = 10 * 60 * 1000;
@@ -79,7 +85,29 @@ export function createSyncController(deps: SyncDependencies) {
   let syncPromise: Promise<void> | undefined;
   const wireFlagsByUuid = new Map<string, WireFlags>();
   const readOutboxMaxByChatId = new Map<string, number>();
-  const reportedReadUuids = new Set<string>();
+  // Автор, время (мс), вид и чат строки по uuid — для подсчёта непрочитанного от маркера (READ-2)
+  const rowMetaByUuid = new Map<string, RowMeta>();
+  // Строки группы v2, которую устройство ещё не знает (журнал истории раньше журнала группы): лежат в кэше и
+  // показываются, когда группа появится, — иначе легли бы в чат с «адресом» группы
+  const rowsAwaitingGroup = new Map<string, WireStoredMessage[]>();
+
+  function holdForGroup(stored: WireStoredMessage) {
+    const store = deps.getStore();
+    if (!stored.to.startsWith(V2_GROUP_PREFIX) || store.isGroupAddress(stored.to)) return false;
+    const list = rowsAwaitingGroup.get(stored.to) || [];
+    rowsAwaitingGroup.set(stored.to, [...list.filter((m) => m.id !== stored.id), stored]);
+    return true;
+  }
+
+  /** Группа v2 появилась: строки, ждавшие её, — на экран. */
+  async function releaseGroupRows(address: string) {
+    const list = rowsAwaitingGroup.get(address);
+    if (!list || !deps.getStore().isGroupAddress(address)) return;
+    rowsAwaitingGroup.delete(address);
+    for (const stored of list) await applyStoredUpdate(stored, false, false);
+    const chatId = deps.getStore().getIdForAddress(address, 'group');
+    pushReadState(chatId);
+  }
   const announcedThreadChatIds = new Set<string>();
   // Собеседники, уже объявленные UI (updateUser/updateChat) в этой сессии
   const announcedPeers = new Set<string>();
@@ -109,8 +137,18 @@ export function createSyncController(deps: SyncDependencies) {
     names.reset();
     inFlightByUuid.clear();
     readOutboxMaxByChatId.clear();
-    reportedReadUuids.clear();
-    deps.localState.loadReadUuids().forEach((uuid) => reportedReadUuids.add(uuid));
+    rowMetaByUuid.clear();
+    rowsAwaitingGroup.clear();
+  }
+
+  function rememberRowMeta(stored: WireStoredMessage) {
+    rowMetaByUuid.set(stored.id, {
+      id: stored.id,
+      chat: deps.getStore().resolveChatAddress(stored),
+      from: stored.from,
+      tsMs: rowTsMs(stored),
+      kind: stored.content.kind,
+    });
   }
 
   function resetPromise() {
@@ -403,18 +441,8 @@ export function createSyncController(deps: SyncDependencies) {
     });
   }
 
-  // Локальный журнал прочитанного пишем с задержкой: markMessageListRead
-  // помечает пачку сообщений подряд, а localStorage синхронный.
-  let persistReadTimer: ReturnType<typeof setTimeout> | undefined;
-  function persistReadUuids() {
-    if (persistReadTimer) return;
-    persistReadTimer = setTimeout(() => {
-      persistReadTimer = undefined;
-      deps.localState.saveReadUuids([...reportedReadUuids]);
-    }, 500);
-  }
-
-  async function forgetMessages(uuids: string[]) {
+  // `isReplace` — история заменяется точкой журнала (HIST-2): чаты не помечаются удалёнными
+  async function forgetMessages(uuids: string[], isReplace?: boolean) {
     const store = deps.getStore();
     const idsByChatId = new Map<string, number[]>();
     uuids.forEach((uuid) => {
@@ -429,7 +457,7 @@ export function createSyncController(deps: SyncDependencies) {
     });
     idsByChatId.forEach((ids, chatId) => {
       deps.sendUpdate({ '@type': 'deleteMessages', ids, chatId });
-      if (!store.getMessages(chatId).length) {
+      if (!store.getMessages(chatId).length && !isReplace) {
         const address = store.getAddressForId(chatId);
         if (address && !store.isGroupAddress(address)) deps.localState.markChatDeleted(address);
         deps.sendUpdate({ '@type': 'deleteHistory', chatId });
@@ -474,16 +502,17 @@ export function createSyncController(deps: SyncDependencies) {
   }
 
   // ЕДИНЫЙ предикат «входящее не прочитано» — для стартового состояния
-  // (provider), пересчёта после кросс-девайс прочтения и упоминаний. Раньше
-  // пересчёт считал непрочитанным всё без uuid — записи о звонках и служебные
-  // сообщения (у них нет uuid, квитанция прочтения невозможна), и бейдж «1»
-  // возвращался на чат, где последним был звонок (10 сен 2026).
+  // (provider), пересчёта после прочтения и упоминаний. Записи о звонках и служебные
+  // сообщения (без uuid) прочитаны всегда (бейдж «1» на чате, где последним был звонок, 10 сен 2026).
+  // С spec 033 (READ-2) — только от маркера «прочитано до» чата: строка после маркера, и движок считает её
+  // непрочитанной (`historyIsUnread`); прочитанное на любом своём устройстве сдвигает маркер журналом истории
   function isUnreadIncoming(chatId: string, message: ApiMessage) {
     if (message.isOutgoing || !message.senderId) return false;
     if (message.content.action) return false;
     const uuid = store_().getUuidForMessage(chatId, message.id);
-    if (!uuid) return false;
-    return !wireFlagsByUuid.get(uuid)?.read && !reportedReadUuids.has(uuid);
+    const meta = uuid ? rowMetaByUuid.get(uuid) : undefined;
+    if (!meta || !deps.history) return false;
+    return deps.history.isUnread(meta);
   }
 
   function store_() {
@@ -567,6 +596,7 @@ export function createSyncController(deps: SyncDependencies) {
   // движок (E2E-1 в v2 — сертификат устройства и подпись записи)
   function applyStoredUpdateUnserialized(stored: WireStoredMessage, shouldPersist: boolean) {
     const store = deps.getStore();
+    if (!shouldPersist && holdForGroup(stored)) return;
     // Заблокированный контакт: входящее личное сообщение не показываем и не
     // роутим в его чат (в группах блок участника так не работает — только 1-1)
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self
@@ -608,7 +638,8 @@ export function createSyncController(deps: SyncDependencies) {
     // надгробие рисовалось новым сообщением «🗑 Сообщение удалено», а у автора
     // после собственного удаления оно так же воскресало из эха инбокса
     if (stored.deleted) {
-      deps.localState.deleteHistoryRecord(stored.id);
+      // Надгробие журнала истории остаётся в кэше (удалённое не воскресает ни из какого источника, HIST-1)
+      if (shouldPersist) persistHistory(stored);
       const existing = store.getMessageByUuid(stored.id);
       if (existing) {
         store.removeMessage(existing.chatId, existing.id);
@@ -619,6 +650,7 @@ export function createSyncController(deps: SyncDependencies) {
 
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
+    rememberRowMeta(stored);
     // Кэш истории: живые строки и строки протокола v2 — восстановление из кэша
     // (shouldPersist=false) не переписывает само себя
     if (shouldPersist) persistHistory(stored.order ? stored : { ...stored, order: message.id });
@@ -672,11 +704,11 @@ export function createSyncController(deps: SyncDependencies) {
     }
   }
 
-  // Строка кэша: расшифрованный stored без TTL и без tombstone
+  // Строка кэша: расшифрованный stored без TTL; надгробие журнала истории (`hs`) хранится, прежнее — стирается
   function persistHistory(stored: WireStoredMessage) {
     if (stored.from === deps.getStore().self) deps.localState.updateOwnJournalEntry(stored);
     if (stored.content.ttl_secs) return;
-    if (stored.deleted) {
+    if (stored.deleted && !stored.hs) {
       deps.localState.deleteHistoryRecord(stored.id);
       return;
     }
@@ -720,6 +752,7 @@ export function createSyncController(deps: SyncDependencies) {
     stored: WireStoredMessage, blocked: Set<string>, clearedUntil: Record<string, number> | undefined, nowSecs: number,
   ): ApiMessage | undefined {
     const store = deps.getStore();
+    if (holdForGroup(stored)) return undefined;
     if (!store.isGroupAddress(stored.to) && stored.from && stored.from !== store.self && blocked.has(stored.from)) {
       return undefined;
     }
@@ -732,11 +765,13 @@ export function createSyncController(deps: SyncDependencies) {
     deps.rememberStored?.(stored);
     wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
     if (stored.deleted) {
-      deps.localState.deleteHistoryRecord(stored.id);
+      // Надгробие и сирота журнала истории хранятся, но не показываются
+      if (!stored.hs) deps.localState.deleteHistoryRecord(stored.id);
       return undefined;
     }
     const message = store.buildApiMessage(stored);
     store.putMessage(message);
+    rememberRowMeta(stored);
     rememberWebPage(stored);
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
     if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
@@ -753,6 +788,8 @@ export function createSyncController(deps: SyncDependencies) {
   async function runFullSync() {
     const store = deps.getStore();
     deps.groups.registerCachedV2?.();
+    // Маркеры «прочитано до» — до первого подсчёта непрочитанного
+    await deps.history?.ensureMarks().catch(() => undefined);
 
     if (await restoreFromCache()) {
       isSynced = true;
@@ -780,6 +817,7 @@ export function createSyncController(deps: SyncDependencies) {
       wireFlagsByUuid.set(stored.id, buildWireFlags(stored));
       const message = store.buildApiMessage(stored);
       store.putMessage(message);
+      rememberRowMeta(stored);
       rememberWebPage(stored);
       persistHistory(stored);
       if (message.isOutgoing && (stored.read || isSelfChat(message.chatId))) {
@@ -844,8 +882,15 @@ export function createSyncController(deps: SyncDependencies) {
     if (!isBulk) await deps.localState.flushHistoryNow();
   }
 
+  // Строка журнала истории (spec 033): её уже записало хранилище строк — только показ
+  function showRow(stored: WireStoredMessage) {
+    return applyStoredUpdate(stored, false, false);
+  }
+
   return {
     applyExternal,
+    showRow,
+    releaseGroupRows,
     announcePeer,
     collectUnreadMentions,
     ensureSynced,
@@ -854,17 +899,13 @@ export function createSyncController(deps: SyncDependencies) {
     announceKeyChange,
     announceRename,
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
-    hasReportedRead: (uuid: string) => reportedReadUuids.has(uuid),
+    rowMeta: (uuid: string) => rowMetaByUuid.get(uuid),
     isSynced: () => isSynced,
     isUnreadIncoming,
     pushReadState,
     markDeleted: (uuid: string) => {
       const flags = wireFlagsByUuid.get(uuid);
       if (flags) flags.deleted = true;
-    },
-    markReportedRead: (uuid: string) => {
-      reportedReadUuids.add(uuid);
-      persistReadUuids();
     },
     reset,
     resetPromise,

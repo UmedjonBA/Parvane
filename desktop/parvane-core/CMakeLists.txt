@@ -69,7 +69,8 @@ add_library(parvane_core STATIC
     src/v2_account.cpp
     src/v2_session.cpp
     src/v2_session_account.cpp
-    src/v2_session_groups.cpp)
+    src/v2_session_groups.cpp
+    src/history_sync.cpp)
 add_dependencies(parvane_core parvane_protocol_build)
 target_include_directories(parvane_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -103,7 +104,8 @@ option(PARVANE_CORE_BUILD_PROBE "Build parvane-core tests" ON)
 if (PARVANE_CORE_BUILD_PROBE)
     set(PARVANE_VECTORS ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 v2_session
-              l2_ticker reconnect_backoff queue_watchdog transport local_files blob_download dev_hooks chat_rules)
+              l2_ticker reconnect_backoff queue_watchdog transport local_files blob_download dev_hooks chat_rules
+              history_sync)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
     endforeach()
@@ -121,7 +123,8 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     enable_testing()
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
-              reconnect_backoff queue_watchdog protocol_vectors webcompat transport local_files blob_download dev_hooks chat_rules)
+              reconnect_backoff queue_watchdog protocol_vectors webcompat transport local_files blob_download dev_hooks chat_rules
+              history_sync)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

@@ -3,6 +3,8 @@
 // `TOPIC_*` — имена запросов прежней формы, которые мост `v2/bridge.ts`
 // переводит в методы v2.
 
+import type { HRowState } from './v2/historyModel';
+
 export type WireTextEntity = {
   type: string;
   offset: number;
@@ -165,6 +167,10 @@ export type WireStoredMessage = {
   origin?: 'v2';
   // Доказательство авторства полученного сообщения (core.v2.MessageProof, base64); прикладывается к жалобе
   proof?: string;
+  // Сведённое состояние строки журнала истории (spec 033, `parvane.history.v1.RowState` в JSON движка) — источник
+  // истины; видимые поля строки выше — его вид (`historyView`). Удалённая строка остаётся надгробием
+  // (`deleted`, без содержимого), сирота (мутация раньше сообщения) — тоже скрыта
+  hs?: HRowState;
 };
 
 // Права участников по умолчанию (spec 003): позитивные флаги «разрешено».

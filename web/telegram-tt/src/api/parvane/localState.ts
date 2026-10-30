@@ -1,6 +1,8 @@
 import type { SendMessageParams } from '../../types';
 import type { ApiChat, ApiMessage, ApiUpdate } from '../types';
 import type { ParvaneStore } from './store';
+import type { HistorySyncState } from './v2/history';
+import type { HReadMark } from './v2/historyModel';
 import type { WireStoredMessage } from './wire';
 
 import { SecureE2eStorage } from './secureStorage';
@@ -71,6 +73,7 @@ export function createLocalState(deps: LocalStateDependencies) {
   // Журнал личного состояния (T098) слушает правки пользователя; запись
   // пришедшего из журнала (applyingJournal) слушателя не будит
   let changeListener: ((kind: LocalStateKind) => void) | undefined;
+  let ownSentListener: ((entry: WireStoredMessage) => void) | undefined;
   let applyingJournal = false;
   // Перед отправкой отложенного журнал проверяет, не отправило ли его другое устройство
   let scheduledGate: ((opId: string) => Promise<boolean>) | undefined;
@@ -633,6 +636,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     // сообщений догоняются по `updated_at` и перезаписывают запись
     saveHistoryRecord(entry);
     void flushHistoryQueue();
+    // Журнал истории (spec 033): своё отправленное — строкой журнала и сдвигом маркера чата
+    ownSentListener?.(entry);
   }
 
   // Своё сообщение изменилось (правка/удаление, протокол v2 — без серверной
@@ -791,28 +796,76 @@ export function createLocalState(deps: LocalStateDependencies) {
     notifyChange('reaction');
   }
 
-  // Прочитанное ЭТИМ устройством. Раньше жило только в памяти, поэтому после
-  // перезагрузки непрочитанность считалась заново по серверному флагу: если
-  // msg.chat.read не дошёл (кадр потерян, вкладку закрыли до ответа), бейдж
-  // возвращался. Держим локальный журнал и объединяем его с серверным флагом.
-  const READ_UUIDS_CAP = 5000;
+  // Прежний учёт прочитанного (список uuid в localStorage, до spec 033) — только для разового переноса в маркеры
+  // «прочитано до» (журнал истории, FR-024); после переноса стирается
+  const LEGACY_READ_PART = 'readuuids';
 
-  function loadReadUuids(): string[] {
+  function takeLegacyReadUuids(): string[] {
     try {
-      return JSON.parse(localStorage.getItem(storageKey('readuuids')) || '[]');
+      const list = JSON.parse(localStorage.getItem(storageKey(LEGACY_READ_PART)) || '[]') as unknown;
+      return Array.isArray(list) ? list.filter((uuid): uuid is string => typeof uuid === 'string') : [];
     } catch {
       return [];
     }
   }
 
-  function saveReadUuids(uuids: string[]) {
-    // Обрезаем сверху: список только растёт, а полезен лишь свежий хвост.
-    const tail = uuids.length > READ_UUIDS_CAP ? uuids.slice(-READ_UUIDS_CAP) : uuids;
+  function dropLegacyReadUuids() {
     try {
-      localStorage.setItem(storageKey('readuuids'), JSON.stringify(tail));
+      localStorage.removeItem(storageKey(LEGACY_READ_PART));
     } catch {
-      // квота исчерпана — переживём, серверный флаг остаётся источником истины
+      // приватный режим — останется до выхода
     }
+  }
+
+  // Квитанции прочтения собеседникам, ещё не принятые сервером (READ-1 п. 3): адрес → uuid; повтор до успеха
+  // переживает перезагрузку
+  function loadPendingReceipts(): Record<string, string[]> {
+    try {
+      const map = JSON.parse(localStorage.getItem(storageKey('receipts')) || '{}') as unknown;
+      return map && typeof map === 'object' && !Array.isArray(map) ? map as Record<string, string[]> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function savePendingReceipts(map: Record<string, string[]>) {
+    try {
+      if (Object.keys(map).length) localStorage.setItem(storageKey('receipts'), JSON.stringify(map));
+      else localStorage.removeItem(storageKey('receipts'));
+    } catch {
+      // квота — повтор живёт до перезагрузки
+    }
+  }
+
+  // ── журнал истории (spec 033): маркеры «прочитано до», курсор, очередь записи ─────────────
+  const READ_MARK_PREFIX = 'rm:';
+
+  async function loadReadMarks(): Promise<Record<string, HReadMark>> {
+    const storage = await secureStorage();
+    if (!storage) return {};
+    const rows = await storage.loadRecordsByPrefix<{ address: string; mark: HReadMark }>(READ_MARK_PREFIX);
+    return Object.fromEntries(rows.filter((row) => row?.address && row.mark).map((row) => [row.address, row.mark]));
+  }
+
+  function saveReadMark(address: string, mark: HReadMark) {
+    void secureStorage()?.then((storage) => storage.saveRecord(`${READ_MARK_PREFIX}${address}`, { address, mark }))
+      .catch(() => undefined);
+  }
+
+  async function loadHistorySync(): Promise<HistorySyncState | undefined> {
+    return (await secureStorage())?.loadRecord<HistorySyncState>('hsync');
+  }
+
+  async function saveHistorySync(value: HistorySyncState) {
+    await (await secureStorage())?.saveRecord('hsync', value);
+  }
+
+  async function loadHistoryOutbox<T>(): Promise<T | undefined> {
+    return (await secureStorage())?.loadRecord<T>('hsync-outbox');
+  }
+
+  async function saveHistoryOutbox(value: unknown) {
+    await (await secureStorage())?.saveRecord('hsync-outbox', value);
   }
 
   // Постоянные инвайт-ссылки групп, полученные на этом устройстве:
@@ -1098,6 +1151,9 @@ export function createLocalState(deps: LocalStateDependencies) {
     setChangeListener: (listener?: (kind: LocalStateKind) => void) => {
       changeListener = listener;
     },
+    setOwnSentListener: (listener?: (entry: WireStoredMessage) => void) => {
+      ownSentListener = listener;
+    },
     setScheduledHooks: (hooks?: { gate: (opId: string) => Promise<boolean>; sent: (opId: string) => void }) => {
       scheduledGate = hooks?.gate;
       scheduledSent = hooks?.sent;
@@ -1122,7 +1178,16 @@ export function createLocalState(deps: LocalStateDependencies) {
     loadNonContacts,
     loadDeletedChats,
     loadUnreadMarks,
-    loadReadUuids,
+    takeLegacyReadUuids,
+    loadPendingReceipts,
+    savePendingReceipts,
+    dropLegacyReadUuids,
+    loadReadMarks,
+    saveReadMark,
+    loadHistorySync,
+    saveHistorySync,
+    loadHistoryOutbox,
+    saveHistoryOutbox,
     loadRepairAttempts,
     markChatDeleted,
     unmarkChatDeleted,
@@ -1149,7 +1214,6 @@ export function createLocalState(deps: LocalStateDependencies) {
     takeLegacyUnreadMarks,
     loadQuickReaction,
     saveQuickReaction,
-    saveReadUuids,
     saveRepairAttempts,
     saveDraft,
     saveFolders,

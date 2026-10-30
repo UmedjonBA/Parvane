@@ -3092,11 +3092,9 @@ bool HistoryItem::canDeleteForEveryone(TimeId now) const {
 	const auto peer = _history->peer;
 	const auto &config = _history->session().serverConfig();
 	const auto messageToMyself = peer->isSelf();
-	const auto messageTooOld = messageToMyself
-		? false
-		: peer->isUser()
-		? (now - date() >= config.revokePrivateTimeLimit)
-		: (now - date() >= config.revokeTimeLimit);
+	// Parvane (spec 033, как Telegram): «удалить у всех» — без срока давности; права — движок (historyCanDelete)
+	const auto messageTooOld = false;
+	(void)config;
 	if (!isRegular() || messageToMyself || messageTooOld || isPost()) {
 		return false;
 	}
@@ -3121,7 +3119,7 @@ bool HistoryItem::canDeleteForEveryone(TimeId now) const {
 				return false;
 			}
 		} else if (peer->isUser()) {
-			return config.revokePrivateInbox;
+			return true; // Parvane (spec 033): в личном чате «у всех» — и сообщение собеседника
 		} else {
 			return false;
 		}

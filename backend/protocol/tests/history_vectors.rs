@@ -36,8 +36,16 @@ fn user(a: &str) -> Peer {
 }
 
 fn group() -> Peer {
-    Peer { kind: Some(peer::Kind::Group(Ref { domain: "x".into(), id: vec![0x42; 16] })) }
+    group_on("x")
 }
+
+/// Та же группа (id) под другим доменом: хост, не знающий домена группы, подставляет свой.
+fn group_on(domain: &str) -> Peer {
+    Peer { kind: Some(peer::Kind::Group(Ref { domain: domain.into(), id: vec![0x42; 16] })) }
+}
+
+/// Прежний адрес «меня» (смена ника, spec 026).
+const ME_OLD: &str = "al@x";
 
 /// id сообщения: UUIDv7-подобные 16 байт с номером в конце.
 fn mid(n: u8) -> Vec<u8> {
@@ -67,7 +75,7 @@ fn row(id: u8, from: &str, ts: i64, t: &str) -> HistoryOp {
 }
 
 fn gone_in(chat: &Peer, id: u8, s: Stamp, scope: GoneScope) -> HistoryOp {
-    h::gone_op(Gone { target: mid(id), chat: Some(chat.clone()), stamp: Some(s), scope: scope as i32 })
+    h::gone_op(Gone { target: mid(id), chat: Some(chat.clone()), stamp: Some(s), scope: scope as i32, ..Default::default() })
 }
 
 fn gone(id: u8, s: Stamp, scope: GoneScope) -> HistoryOp {
@@ -75,7 +83,17 @@ fn gone(id: u8, s: Stamp, scope: GoneScope) -> HistoryOp {
 }
 
 fn edit(id: u8, s: Stamp, t: &str) -> HistoryOp {
-    h::edit_op(Edit { target: mid(id), chat: Some(user(PEER)), stamp: Some(s), body: body(json!({"content": {"kind": "text", "text": t}})) })
+    edit_by(&user(PEER), id, s, t, "")
+}
+
+/// Правка от автора `by` (пусто — своя/запись до появления поля).
+fn edit_by(chat: &Peer, id: u8, s: Stamp, t: &str, by: &str) -> HistoryOp {
+    h::edit_op(Edit { target: mid(id), chat: Some(chat.clone()), stamp: Some(s), body: body(json!({"content": {"kind": "text", "text": t}})), by: by.into() })
+}
+
+/// Удаление от автора `by`; `admin` — удалил админ группы с правом.
+fn gone_by(chat: &Peer, id: u8, s: Stamp, scope: GoneScope, by: &str, admin: bool) -> HistoryOp {
+    h::gone_op(Gone { target: mid(id), chat: Some(chat.clone()), stamp: Some(s), scope: scope as i32, by: by.into(), by_admin: admin })
 }
 
 fn react_in(chat: &Peer, id: u8, who: &str, s: Stamp, emoji: &str) -> HistoryOp {
@@ -164,6 +182,63 @@ fn gen_merge() -> Value {
         ),
         merge_case("повторы одного события", vec![row(11, PEER, 1_000, "a"), row(11, PEER, 1_000, "a"), react(11, ME, st(2_000, 1), "👍"), react(11, ME, st(2_000, 1), "👍")]),
     ];
+    // Автор мутации сверяется с автором строки (в том числе когда мутация пришла раньше строки)
+    cases.push(merge_case(
+        "группа: правка не автором до сообщения не применяется",
+        vec![edit_by(&g, 20, st(2_000, 1), "подмена", "carol@x"), row_in(&g, 20, PEER, 1_000, text("оригинал"))],
+    ));
+    cases.push(merge_case(
+        "личный чат: правка собеседником МОЕГО сообщения до него не применяется",
+        vec![edit_by(&user(PEER), 21, st(2_000, 1), "подмена", PEER), row(21, ME, 1_000, "моё")],
+    ));
+    cases.push(merge_case(
+        "правка автором до сообщения применяется, поддельная более поздняя — нет",
+        vec![edit_by(&g, 22, st(2_000, 1), "правка автора", PEER), edit_by(&g, 22, st(9_000, 2), "подмена", "carol@x"), row_in(&g, 22, PEER, 1_000, text("а"))],
+    ));
+    cases.push(merge_case(
+        "группа: удаление чужого участником до сообщения не действует",
+        vec![gone_by(&g, 23, st(2_000, 1), GoneScope::Everyone, "carol@x", false), row_in(&g, 23, PEER, 1_000, text("живое"))],
+    ));
+    cases.push(merge_case(
+        "группа: удаление автором до сообщения действует",
+        vec![gone_by(&g, 24, st(2_000, 1), GoneScope::Everyone, PEER, false), row_in(&g, 24, PEER, 1_000, text("удалённое"))],
+    ));
+    cases.push(merge_case(
+        "группа: удаление админом с правом до сообщения действует",
+        vec![gone_by(&g, 25, st(2_000, 1), GoneScope::Everyone, "carol@x", true), row_in(&g, 25, PEER, 1_000, text("удалённое"))],
+    ));
+    cases.push(merge_case(
+        "личный чат: удаление собеседником моего сообщения у всех действует",
+        vec![gone_by(&user(PEER), 26, st(2_000, 1), GoneScope::Everyone, PEER, false), row(26, ME, 1_000, "моё")],
+    ));
+    cases.push(merge_case(
+        "сирота хранит кандидатов разных авторов",
+        vec![
+            edit_by(&g, 27, st(2_000, 1), "от автора", PEER),
+            edit_by(&g, 27, st(3_000, 2), "подмена", "carol@x"),
+            gone_by(&g, 27, st(4_000, 3), GoneScope::Everyone, "carol@x", false),
+            gone_by(&g, 27, st(1_500, 4), GoneScope::Me, ME, false),
+        ],
+    ));
+    // Наплыв поддельных авторов не вытесняет всегда действительное удаление
+    let mut flood: Vec<HistoryOp> = (0..12u8).map(|i| gone_by(&g, 28, st(5_000 + i64::from(i), i), GoneScope::Everyone, &format!("u{i}@x"), false)).collect();
+    flood.push(gone_by(&g, 28, st(1_000, 20), GoneScope::Everyone, "", false));
+    flood.push(row_in(&g, 28, PEER, 500, text("удалённое")));
+    cases.push(merge_case("наплыв поддельных удалений не вытесняет своё", flood));
+    // Одна группа под двумя доменами (хост не знал домена) — одна строка; чат — с большим доменом
+    let gy = group_on("y.example");
+    cases.push(merge_case(
+        "группа под двумя доменами — одна строка, домен больший",
+        vec![
+            row_in(&g, 29, PEER, 1_000, text("всем")),
+            react_in(&gy, 29, ME, st(1_100, 1), "👍"),
+            edit_by(&gy, 29, st(1_200, 2), "всем!", PEER),
+        ],
+    ));
+    cases.push(merge_case(
+        "группа под двумя доменами: сирота, затем строка",
+        vec![gone_by(&gy, 30, st(2_000, 1), GoneScope::Me, ME, false), row_in(&g, 30, PEER, 1_000, text("а"))],
+    ));
     // Полное состояние как событие (миграция, сегмент точки) — сводится с остальными так же.
     let full = fold(&[&row(12, PEER, 1_000, "a"), &react(12, ME, st(2_000, 1), "👍")]);
     cases.push(merge_case("состояние целиком как событие", vec![HistoryOp { op: Some(Op::State(full)) }, edit(12, st(3_000, 2), "b"), react(12, ME, st(2_500, 3), "❤")]));
@@ -230,6 +305,16 @@ fn gen_unread() -> Value {
         }
         cases.push(json!({"name": name, "input": input, "expect": {"ok": true, "unread": unread}}));
     }
+    // Смена ника: своё под прежним адресом — не входящее, если прежний адрес в наборе своих
+    let own_old = fold(&[&row(7, ME_OLD, 2_000, "до смены ника")]);
+    for (name, selves, unread) in [
+        ("своё под прежним адресом (набор своих)", json!([ME, ME_OLD]), false),
+        ("своё под прежним адресом без прежнего в наборе", json!([ME]), true),
+        ("входящее при наборе своих", json!([ME, ME_OLD]), true),
+    ] {
+        let s = if name.starts_with("входящее") { &incoming } else { &own_old };
+        cases.push(json!({"name": name, "input": {"kind": "unread", "state": to_json(s), "self": selves}, "expect": {"ok": true, "unread": unread}}));
+    }
     let wrong = ReadMark { chat: Some(group()), up_to_ts_ms: 0, up_to_id: mid(0) };
     cases.push(json!({"name": "маркер другого чата", "input": {"kind": "unread", "state": to_json(&incoming), "mark": to_json(&wrong), "self": ME}, "expect": err_v("ContextMismatch")}));
     for (name, a, b, out) in [
@@ -246,6 +331,17 @@ fn gen_unread() -> Value {
             input["b"] = to_json(&b);
         }
         cases.push(json!({"name": format!("сведение маркеров: {name}"), "input": input, "expect": {"ok": true, "mark": out.as_ref().map_or(Value::Null, to_json)}}));
+    }
+    // Одна группа под двумя доменами: маркеры сводятся, чат — с большим доменом (в любом порядке)
+    let gm = |d: &str, ts: i64, id: u8| ReadMark { chat: Some(group_on(d)), up_to_ts_ms: ts, up_to_id: mid(id) };
+    for (name, a, b) in [
+        ("группа под двумя доменами", gm("x", 5, 2), gm("y.example", 7, 0)),
+        ("группа под двумя доменами, больший маркер — с меньшим доменом", gm("y.example", 5, 2), gm("x", 7, 0)),
+        ("группа под двумя доменами, равные маркеры", gm("x", 5, 2), gm("y.example", 5, 2)),
+    ] {
+        let out = h::mark_merge(Some(&a), Some(&b)).unwrap();
+        assert_eq!(out, h::mark_merge(Some(&b), Some(&a)).unwrap(), "сведение маркеров коммутативно");
+        cases.push(json!({"name": format!("сведение маркеров: {name}"), "input": {"kind": "mark_merge", "a": to_json(&a), "b": to_json(&b)}, "expect": {"ok": true, "mark": out.as_ref().map_or(Value::Null, to_json)}}));
     }
     cases.push(json!({"name": "сведение маркеров разных чатов", "input": {"kind": "mark_merge", "a": to_json(&mark(1, 1)), "b": to_json(&wrong)}, "expect": err_v("ContextMismatch")}));
     for (name, m, ts, id, after) in [
@@ -269,6 +365,9 @@ fn gen_unread() -> Value {
     ] {
         cases.push(json!({"name": format!("право удаления: {name}"), "input": {"kind": "can_delete", "chat_kind": kind, "author": author, "deleter": deleter, "deleter_is_admin": admin}, "expect": {"allowed": allowed}}));
     }
+    for (name, deleter, allowed) in [("своё под прежним адресом (набор своих)", json!([ME, ME_OLD]), true), ("своё под прежним адресом без прежнего", json!([ME]), false)] {
+        cases.push(json!({"name": format!("право удаления: группа, {name}"), "input": {"kind": "can_delete", "chat_kind": "group", "author": ME_OLD, "deleter": deleter, "deleter_is_admin": false}, "expect": {"allowed": allowed}}));
+    }
     json!({"suite": "history/unread", "description": "READ-2: непрочитанное считается от маркера; маркер только растёт; права удаления у всех", "cases": cases})
 }
 
@@ -279,7 +378,16 @@ fn gen_segment() -> Value {
     let in_user = fold(&[&row(1, PEER, FEB29_2024, "a")]);
     let in_group = fold(&[&row_in(&group(), 2, PEER, FEB29_2024 - 1, text("b"))]);
     let orphan = fold(&[&react(3, PEER, st(FEB29_2024 + 40 * 86_400_000, 1), "👍"), &pin(3, st(FEB29_2024 + 10 * 86_400_000, 2), true)]);
-    for (name, s) in [("личный чат", &in_user), ("группа, последняя миллисекунда января", &in_group), ("сирота — по самой ранней метке", &orphan)] {
+    // Ключ группы не зависит от домена (id группы уникален глобально)
+    let in_group_other = fold(&[&row_in(&group_on("y.example"), 2, PEER, FEB29_2024 - 1, text("b"))]);
+    assert_eq!(h::segment_key(&in_group).unwrap(), h::segment_key(&in_group_other).unwrap());
+    assert!(h::segment_key(&in_group).unwrap().starts_with("g:4242"), "ключ группы без домена");
+    for (name, s) in [
+        ("личный чат", &in_user),
+        ("группа, последняя миллисекунда января", &in_group),
+        ("группа под другим доменом — тот же ключ", &in_group_other),
+        ("сирота — по самой ранней метке", &orphan),
+    ] {
         cases.push(json!({"name": format!("ключ: {name}"), "input": {"kind": "key", "state": to_json(s)}, "expect": {"ok": true, "key": h::segment_key(s).unwrap()}}));
     }
     let deleted = fold(&[&row(4, PEER, FEB29_2024, "x"), &gone(4, st(FEB29_2024 + 5, 1), GoneScope::Everyone)]);
@@ -432,15 +540,31 @@ fn session_roundtrip_through_host_json() {
     let v = s.call("historyView", &json!({"state": st0})).unwrap();
     assert_eq!((v["visible"].as_bool(), v["id"].as_str()), (Some(true), Some(h::uuid_string(&mid(1)).as_str())));
     assert!(s.call("nope", &json!({})).unwrap_err().contains("UnknownCall"));
+    // Свои адреса сессии и `self`/`deleter` по умолчанию; `self` — строка или массив
+    assert_eq!(s.call("selfAddresses", &json!({})).unwrap(), json!(["alice@local"]));
+    let own = s.call("historyApply", &json!({"op": to_json(&row_in(&user("bob@local"), 3, "alice@local", 1_000, text("моё")))})).unwrap();
+    assert_eq!(s.call("historyIsUnread", &json!({"state": own})).unwrap(), json!(false), "своё — по адресам сессии");
+    assert_eq!(s.call("historyIsUnread", &json!({"state": st0})).unwrap(), json!(true));
+    let call = parvane_protocol::host::call::call_static;
+    assert_eq!(call("historyIsUnread", &json!({"state": own, "self": ["al@local", "alice@local"]})).unwrap(), json!(false));
+    assert_eq!(call("historyIsUnread", &json!({"state": own, "self": "al@local"})).unwrap(), json!(true));
+    assert!(call("historyIsUnread", &json!({"state": own, "self": []})).is_err(), "пустой набор своих — отказ");
+    assert_eq!(call("historyCanDelete", &json!({"chatKind": "group", "author": "al@local", "deleter": ["alice@local", "al@local"]})).unwrap(), json!(true));
+    assert_eq!(s.call("historyCanDelete", &json!({"chatKind": "group", "author": "alice@local"})).unwrap(), json!(true));
+    // Ключ чата истории: группа без домена
+    let gk = call("historyChatKey", &json!({"chat": to_json(&group_on("y.example"))})).unwrap();
+    assert_eq!(gk, json!(format!("g:{}", "42".repeat(16))));
+    assert_eq!(call("historyChatKey", &json!({"chat": to_json(&user("bob@local"))})).unwrap(), json!("u:bob@local"));
 }
 
 // ── свойство: порядок, повторы и разбиение не влияют на итог ────────────────
 
 #[derive(Debug, Clone)]
 enum Spec {
-    Row { from: u8, t: u8 },
-    Gone { ts: u8, n: u8, me: bool },
-    Edit { ts: u8, n: u8, t: u8 },
+    // Автор строки одного id один (его подписал движок); тела могут различаться
+    Row { t: u8 },
+    Gone { ts: u8, n: u8, me: bool, by: u8, admin: bool },
+    Edit { ts: u8, n: u8, t: u8, by: u8 },
     React { who: u8, ts: u8, n: u8, e: u8 },
     Pin { ts: u8, n: u8, on: bool },
 }
@@ -448,25 +572,50 @@ enum Spec {
 fn arb_spec() -> impl Strategy<Value = Spec> {
     // Малые пространства значений — чтобы чаще совпадали метки (ничьи).
     prop_oneof![
-        (0u8..2, 0u8..3).prop_map(|(from, t)| Spec::Row { from, t }),
-        (0u8..4, 0u8..2, any::<bool>()).prop_map(|(ts, n, me)| Spec::Gone { ts, n, me }),
-        (0u8..4, 0u8..2, 0u8..3).prop_map(|(ts, n, t)| Spec::Edit { ts, n, t }),
+        (0u8..3).prop_map(|t| Spec::Row { t }),
+        (0u8..4, 0u8..2, any::<bool>(), 0u8..4, prop::bool::weighted(0.2)).prop_map(|(ts, n, me, by, admin)| Spec::Gone { ts, n, me, by, admin }),
+        (0u8..4, 0u8..2, 0u8..3, 0u8..4).prop_map(|(ts, n, t, by)| Spec::Edit { ts, n, t, by }),
         (0u8..3, 0u8..4, 0u8..2, 0u8..3).prop_map(|(who, ts, n, e)| Spec::React { who, ts, n, e }),
         (0u8..4, 0u8..2, any::<bool>()).prop_map(|(ts, n, on)| Spec::Pin { ts, n, on }),
     ]
 }
 
-fn build(s: &Spec) -> HistoryOp {
+// Авторы мутаций: «своё» (пусто), я, автор строки (PEER), посторонний
+const BYS: [&str; 4] = ["", ME, PEER, "carol@x"];
+
+fn build(s: &Spec, chat: &Peer) -> HistoryOp {
     let users = [ME, PEER, "carol@x"];
     let texts = ["a", "bb", "ccc"];
     let emojis = ["", "👍", "❤"];
     match *s {
-        Spec::Row { from, t } => row(1, users[from as usize], 1_000, texts[t as usize]),
-        Spec::Gone { ts, n, me } => gone(1, st(i64::from(ts) * 10, n), if me { GoneScope::Me } else { GoneScope::Everyone }),
-        Spec::Edit { ts, n, t } => edit(1, st(i64::from(ts) * 10, n), texts[t as usize]),
-        Spec::React { who, ts, n, e } => react(1, users[who as usize], st(i64::from(ts) * 10, n), emojis[e as usize]),
-        Spec::Pin { ts, n, on } => pin(1, st(i64::from(ts) * 10, n), on),
+        Spec::Row { t } => row_in(chat, 1, PEER, 1_000, text(texts[t as usize])),
+        Spec::Gone { ts, n, me, by, admin } => gone_by(chat, 1, st(i64::from(ts) * 10, n), if me { GoneScope::Me } else { GoneScope::Everyone }, BYS[by as usize], admin),
+        Spec::Edit { ts, n, t, by } => edit_by(chat, 1, st(i64::from(ts) * 10, n), texts[t as usize], BYS[by as usize]),
+        Spec::React { who, ts, n, e } => react_in(chat, 1, users[who as usize], st(i64::from(ts) * 10, n), emojis[e as usize]),
+        Spec::Pin { ts, n, on } => h::pin_op(Pin { target: mid(1), chat: Some(chat.clone()), stamp: Some(st(i64::from(ts) * 10, n)), pinned: on }),
     }
+}
+
+/// Мутация действительна для строки автора PEER (правило движка): правка — своя или автора; удаление — ME, своё,
+/// автора, админа или любое в личном чате.
+fn valid_for_peer_row(s: &Spec, is_group: bool) -> bool {
+    match *s {
+        Spec::Edit { by, .. } => matches!(BYS[by as usize], "" | PEER),
+        Spec::Gone { me, by, admin, .. } => me || admin || !is_group || matches!(BYS[by as usize], "" | PEER),
+        _ => true,
+    }
+}
+
+/// Состояние без чата (у строки и вложенных) — для сравнения итогов, различающихся только доменом группы.
+fn without_chat(mut s: RowState) -> Vec<u8> {
+    s.chat = None;
+    if let Some(r) = s.row.as_mut() {
+        r.chat = None;
+    }
+    if let Some(g) = s.gone.as_mut() {
+        g.chat = None;
+    }
+    s.encode_to_vec()
 }
 
 /// Детерминированный ГПСЧ (xorshift64*) для перестановок внутри случая proptest.
@@ -488,9 +637,21 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
     #[test]
-    fn merge_is_order_repeat_and_split_independent(specs in prop::collection::vec(arb_spec(), 1..14), seed in 1u64..u64::MAX) {
-        let ops: Vec<HistoryOp> = specs.iter().map(build).collect();
+    fn merge_is_order_repeat_and_split_independent(
+        specs in prop::collection::vec(arb_spec(), 1..14), seed in 1u64..u64::MAX, is_group in any::<bool>(),
+        doms in prop::collection::vec(0usize..3, 14),
+    ) {
+        // Группа — каждое событие под одним из доменов (хост, не знающий домена группы, подставляет свой)
+        const DOMS: [&str; 3] = ["x", "y.example", "a.test"];
+        let chat_of = |i: usize| if is_group { group_on(DOMS[doms[i]]) } else { user(PEER) };
+        let ops: Vec<HistoryOp> = specs.iter().enumerate().map(|(i, s)| build(s, &chat_of(i))).collect();
         let base = fold(&ops.iter().collect::<Vec<_>>()).encode_to_vec();
+        // Строка известна — итог тот же, что без недействительных мутаций (подделка не влияет ни при каком порядке);
+        // домен группы в итоге — наибольший из ВСЕХ событий, поэтому сравнение — без чата
+        if specs.iter().any(|s| matches!(s, Spec::Row { .. })) {
+            let valid: Vec<&HistoryOp> = specs.iter().zip(&ops).filter(|(s, _)| valid_for_peer_row(s, is_group)).map(|(_, o)| o).collect();
+            prop_assert_eq!(without_chat(fold(&valid)), without_chat(RowState::decode(base.as_slice()).unwrap()));
+        }
         let mut rng = Rng(seed);
         for _ in 0..4 {
             // Перестановка с повторами
@@ -521,6 +682,10 @@ proptest! {
         prop_assert_eq!(&h::merge(&s, &s).unwrap().encode_to_vec(), &base);
         if s.gone.is_some() {
             prop_assert!(s.row.as_ref().is_none_or(|r| r.body.is_empty()) && s.reacts.is_empty() && s.edit_stamp.is_none() && !s.pinned);
+        }
+        // Кандидаты — только у сироты
+        if s.row.is_some() {
+            prop_assert!(s.pending_edits.is_empty() && s.pending_gones.is_empty());
         }
     }
 }

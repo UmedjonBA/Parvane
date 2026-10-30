@@ -1,13 +1,13 @@
 // Ручная копия ключей устройства (перенос на другой браузер): конверт
 // PBKDF2-SHA256 + AES-GCM под паролем пользователя. Содержимое — устройство v2
-// (состояние движка), история v2-эпохи и id устройства (T152); с T110 (7 окт
-// 2026) материала v1 (Olm) в копии нет — конверт версии 2, копии версии 1
-// (с Olm-аккаунтом) не читаются.
+// (состояние движка) и id устройства (T152); с T110 (7 окт 2026) материала v1
+// (Olm) в копии нет — конверт версии 2, копии версии 1 (с Olm-аккаунтом) не
+// читаются. Истории в копии нет (spec 033): устройство из копии читает журнал
+// истории аккаунта тем же ключом личного состояния.
 
 export type KeyBackupPayload = {
   deviceId: string;
   v2: unknown;
-  v2History?: unknown;
 };
 
 const EXPORT_VERSION = 2;
@@ -121,5 +121,5 @@ export async function importEncryptedBackup(password: string, raw: string): Prom
   if (!payload || typeof payload.deviceId !== 'string' || !payload.v2 || typeof payload.v2 !== 'object') {
     throw new Error('Key backup: no v2 device in the payload.');
   }
-  return { deviceId: payload.deviceId, v2: payload.v2, v2History: payload.v2History };
+  return { deviceId: payload.deviceId, v2: payload.v2 };
 }
