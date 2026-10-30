@@ -315,7 +315,10 @@ async function readTextsOf(nodes: CloudNode[]): Promise<Map<string, TextContent>
 
 // Тексты файлов хранилища в `texts`: сначала память, потом кэш устройства, остальное — у облака
 async function readTexts(files: VaultFile[]) {
+  // Проход прежнего аккаунта, пережившего смену, не пишет тексты в память и кэш нового
+  const userId = notesUserId;
   const cache = await loadTextCache();
+  if (userId !== notesUserId) return;
   const needed: CloudNode[] = [];
   files.forEach(({ node }) => {
     const fileId = node.blob?.fileId;
@@ -329,6 +332,7 @@ async function readTexts(files: VaultFile[]) {
   });
   if (needed.length) {
     const got = await readTextsOf(needed);
+    if (userId !== notesUserId) return;
     got.forEach((content, id) => texts.set(id, content));
     storeTexts(needed.filter((node) => got.has(node.id)).map((node) => ({ node: node.id, ...got.get(node.id)! })));
   }
@@ -342,7 +346,10 @@ async function syncFromCloud(data: CloudDriveState | undefined) {
   const nodes = rootId ? getNodes(rootId, data) : [];
   const vault = findVault(nodes);
   const files = vaultFilesOf(nodes, vault);
+  const userId = notesUserId;
   await readTexts(files);
+  // Аккаунт сменился за время чтения: результат прохода прежнего аккаунта не применяется
+  if (userId !== notesUserId) return;
   // Заметка, у которой не изменились ни версия файла, ни папка, ни название, ни время, остаётся прежним
   // объектом: экраны и кэши по объекту (разбор, превью, граф) её не пересчитывают
   const previousNotes = new Map(getNotes().map((note) => [note.id, note]));
@@ -538,8 +545,9 @@ async function runSync() {
     isDirty = false;
     const data = getCloudData();
     if (data !== undefined && data === lastSyncedData) continue;
+    const userId = notesUserId;
     await syncFromCloud(data);
-    lastSyncedData = data;
+    if (userId === notesUserId) lastSyncedData = data;
   }
 }
 

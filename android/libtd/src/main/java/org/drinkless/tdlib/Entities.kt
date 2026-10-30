@@ -10,13 +10,18 @@ import org.json.JSONObject
  * Смещения — UTF-16 (и у провода, и у TdApi). Неизвестные типы пропускаются.
  */
 object Entities {
-    fun fromWire(arr: JSONArray?): Array<TdApi.TextEntity> {
+    /** [text] — текст сообщения: если задан, смещения обрезаются по его длине (UTF-16), вылезающие целиком отбрасываются. */
+    fun fromWire(arr: JSONArray?, text: String? = null): Array<TdApi.TextEntity> {
         if (arr == null) return emptyArray()
         val out = ArrayList<TdApi.TextEntity>()
         for (i in 0 until arr.length()) {
             val e = arr.optJSONObject(i) ?: continue
-            val offset = e.optInt("offset", -1); val length = e.optInt("length", 0)
+            val offset = e.optInt("offset", -1); var length = e.optInt("length", 0)
             if (offset < 0 || length <= 0) continue
+            if (text != null) {
+                if (offset >= text.length) continue
+                length = minOf(length, text.length - offset)
+            }
             val data = if (e.isNull("data")) "" else e.optString("data")
             val type: TdApi.TextEntityType = when (e.optString("type")) {
                 "bold" -> TdApi.TextEntityTypeBold()
@@ -27,7 +32,8 @@ object Entities {
                 "pre" -> if (data.isNotEmpty()) TdApi.TextEntityTypePreCode(data) else TdApi.TextEntityTypePre()
                 "blockquote" -> TdApi.TextEntityTypeBlockQuote()
                 "spoiler" -> TdApi.TextEntityTypeSpoiler()
-                "text_url" -> TdApi.TextEntityTypeTextUrl(data)
+                // схемы кроме http/https (tg:, intent:, file:, javascript:) из чужого текста не принимаем (как web P-44)
+                "text_url" -> if (isWebUrl(data)) TdApi.TextEntityTypeTextUrl(data) else continue
                 "url" -> TdApi.TextEntityTypeUrl()
                 "mention" -> TdApi.TextEntityTypeMention()
                 "custom_emoji" -> TdApi.TextEntityTypeCustomEmoji(data.toLongOrNull() ?: continue)
@@ -37,6 +43,8 @@ object Entities {
         }
         return out.toTypedArray()
     }
+
+    fun isWebUrl(u: String): Boolean = u.startsWith("http://", ignoreCase = true) || u.startsWith("https://", ignoreCase = true)
 
     fun toWire(entities: Array<TdApi.TextEntity>?): JSONArray? {
         if (entities == null || entities.isEmpty()) return null

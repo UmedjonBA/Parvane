@@ -115,3 +115,17 @@ describe('withAutoEntities', () => {
     ]);
   });
 });
+
+describe('detectAutoEntities: худшие строки', () => {
+  it('одно слово на 16 КиБ разбирается быстро и без разметки', () => {
+    const start = Date.now();
+    expect(detectAutoEntities('1.'.repeat(8192))).toEqual([]);
+    expect(detectAutoEntities('a'.repeat(16384))).toEqual([]);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
+  it('обычный длинный текст со ссылкой размечается', () => {
+    const text = `${'слово '.repeat(600)}https://example.com`;
+    expect(detectAutoEntities(text).map((e) => e.type)).toEqual([ApiMessageEntityTypes.Url]);
+  });
+});

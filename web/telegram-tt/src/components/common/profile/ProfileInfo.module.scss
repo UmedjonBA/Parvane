@@ -449,11 +449,6 @@
   max-width: 100%;
 }
 
-.pinnedGifts {
-  position: absolute;
-  inset: 0;
-}
-
 @include mixins.on-active-vt('profileAvatar') {
   &::view-transition-group(.photoDashes) {
     z-index: 1;

@@ -68,9 +68,6 @@ object ParvaneWebrtc : ParvaneCalls.MediaEngine {
         ParvaneCalls.engine = this
     }
 
-    /** ICE-серверы — заранее и по сроку (не с потока ядра). */
-    fun prefetchIce() = worker.execute { refreshIce() }
-
     private fun refreshIce() {
         if (System.currentTimeMillis() < iceUntilMs && iceServers.isNotEmpty()) return
         try {
@@ -111,8 +108,6 @@ object ParvaneWebrtc : ParvaneCalls.MediaEngine {
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             .createPeerConnectionFactory().also { factory = it }
     }
-
-    fun eglContext(): EglBase.Context? = eglBase?.eglBaseContext
 
     override fun create(handle: Long) {
         conns[handle] = Conn(handle)

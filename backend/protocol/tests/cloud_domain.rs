@@ -309,6 +309,17 @@ fn snapshot_roundtrips_and_drops_old_tombstones() {
 }
 
 #[test]
+fn snapshot_stamps_pass_the_lamport_guard() {
+    // A0005-7: метка снимка около u64::MAX отвергается, обычная — проходит и возвращает максимум.
+    let st = apply_all(&[folder(1, None, "A", 2, "d"), file(2, Some(1), "x.txt", 9, "d")]);
+    let snap = st.to_snapshot(0);
+    let guard = LamportGuard::default();
+    assert_eq!(cloud::guard_snapshot(&guard, &snap, 2).unwrap(), 9);
+    let evil = apply_all(&[folder(1, None, "A", u64::MAX - 1, "d")]).to_snapshot(0);
+    assert!(cloud::guard_snapshot(&guard, &evil, 1).is_err());
+}
+
+#[test]
 fn eight_thousand_nodes_fit_the_snapshot_and_view_is_fast() {
     let mut st = CloudState::default();
     let mut guard = LamportGuard::default();

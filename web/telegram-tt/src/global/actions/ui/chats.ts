@@ -10,7 +10,6 @@ import {
   exitMessageSelectMode,
   updateChatTranslationTone,
   updateCurrentMessageList,
-  updateMessageTranslationTone,
   updateRequestedChatTranslation,
 } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
@@ -234,13 +233,6 @@ addActionHandler('closeDeleteChatFolderModal', (global, actions, payload): Actio
   }, tabId);
 });
 
-addActionHandler('closeChatlistModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  return updateTabState(global, {
-    chatlistModal: undefined,
-  }, tabId);
-});
-
 addActionHandler('requestChatTranslation', (global, actions, payload): ActionReturnType => {
   const { chatId, toLanguageCode, tabId = getCurrentTabId() } = payload;
   const tabState = selectTabState(global, tabId);
@@ -252,11 +244,6 @@ addActionHandler('requestChatTranslation', (global, actions, payload): ActionRet
 addActionHandler('setChatTranslationTone', (global, actions, payload): ActionReturnType => {
   const { chatId, tone, tabId = getCurrentTabId() } = payload;
   return updateChatTranslationTone(global, chatId, tone, tabId);
-});
-
-addActionHandler('setMessageTranslationTone', (global, actions, payload): ActionReturnType => {
-  const { chatId, messageId, tone, tabId = getCurrentTabId() } = payload;
-  return updateMessageTranslationTone(global, chatId, messageId, tone, tabId);
 });
 
 addActionHandler('closeChatInviteModal', (global, actions, payload): ActionReturnType => {

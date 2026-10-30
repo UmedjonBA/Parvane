@@ -414,15 +414,6 @@ rpl::producer<bool> IsContactValue(not_null<UserData*> user) {
 	});
 }
 
-rpl::producer<bool> CanShareContactValue(not_null<UserData*> user) {
-	return user->session().changes().peerFlagsValue(
-		user,
-		UpdateFlag::CanShareContact
-	) | rpl::map([=] {
-		return user->canShareThisContact();
-	});
-}
-
 rpl::producer<bool> CanAddContactValue(not_null<UserData*> user) {
 	using namespace rpl::mappers;
 	if (user->isBot() || user->isSelf() || user->isInaccessible()) {
@@ -689,16 +680,6 @@ rpl::producer<bool> CanAddMemberValue(not_null<PeerData*> peer) {
 		});
 	}
 	return rpl::single(false);
-}
-
-rpl::producer<int> FullReactionsCountValue(
-		not_null<Main::Session*> session) {
-	const auto reactions = &session->data().reactions();
-	return rpl::single(rpl::empty) | rpl::then(
-		reactions->defaultUpdates()
-	) | rpl::map([=] {
-		return int(reactions->list(Data::Reactions::Type::Active).size());
-	}) | rpl::distinct_until_changed();
 }
 
 rpl::producer<bool> CanViewParticipantsValue(

@@ -274,7 +274,7 @@ import sys
 mv, msc = sys.argv[1], sys.argv[2]
 s = open(mv).read()
 old = "      if (allMessages.length == 1 && playListAddMode != TGPlayerController.ADD_MODE_NONE) {"
-new = ("      if (allMessages.length == 1 && downloadedFiles.size() == 1) { // Parvane: сохранить в облако\n"
+new = ("      if (allMessages.length == 1 && downloadedFiles.size() == 1 && msg.canBeSaved()) { // Parvane: сохранить в облако (не в каналах с запретом сохранения)\n"
        "        ids.append(R.id.btn_parvaneSaveToCloud);\n"
        "        strings.append(R.string.ParvaneSaveToCloud);\n"
        "        icons.append(R.drawable.baseline_cloud_download_24);\n"
@@ -590,6 +590,79 @@ open(p, "w").write(s)
 PY
 grep -q "Parvane: ни Google Play" "$TGX/app/src/main/java/org/thunderdog/challegram/util/AppUpdater.java" && echo "   проверка обновлений отключена" || { echo "   AppUpdater не пропатчен"; exit 2; }
 
+echo "== ревью кода X: точечные защитные правки (интенты, gzip, quoted-printable, FileProvider, журнал) =="
+python3 - "$TGX/app/src/main/java/org/thunderdog/challegram" <<'PYSEC'
+import sys
+d = sys.argv[1]
+def patch(rel, old, new, marker):
+    p = d + "/" + rel
+    s = open(p).read()
+    if marker in s:
+        return
+    assert s.count(old) == 1, rel + ': якорь ' + old[:50]
+    open(p, "w").write(s.replace(old, new, 1))
+# B0339-4: OPEN_CHAT из внешнего интента — несуществующий аккаунт не должен ронять приложение
+patch("MainActivity.java",
+  "      if (accountId != TdlibAccount.NO_ID && chatId != 0) {\n        openMessagesController(accountId, chatId, messageId);",
+  "      if (accountId != TdlibAccount.NO_ID && chatId != 0 && TdlibManager.instance().hasAccount(accountId)) { // Parvane: аккаунт из интента проверяем\n        openMessagesController(accountId, chatId, messageId);",
+  "// Parvane: аккаунт из интента проверяем")
+# B0339-3: gzip без лимита (zip-бомба)
+patch("U.java",
+  "    try (BufferedSource buffer = Okio.buffer(Okio.source(new GZIPInputStream(new FileInputStream(path))))) {\n      return buffer.readString(StringUtils.UTF_8);\n",
+  "    try (GZIPInputStream in = new GZIPInputStream(new FileInputStream(path))) { // Parvane: не больше 16 МиБ после распаковки\n"
+  "      final int limit = 16 * 1024 * 1024;\n"
+  "      final ByteArrayOutputStream out = new ByteArrayOutputStream();\n"
+  "      final byte[] chunk = new byte[16 * 1024];\n"
+  "      int read;\n"
+  "      while ((read = in.read(chunk)) != -1) {\n"
+  "        if (out.size() + read > limit) {\n"
+  "          Log.w(Log.TAG_GIF_LOADER, \"gzip is too large, path: %s\", path);\n"
+  "          return null;\n"
+  "        }\n"
+  "        out.write(chunk, 0, read);\n"
+  "      }\n"
+  "      return new String(out.toByteArray(), StringUtils.UTF_8);\n",
+  "// Parvane: не больше 16 МиБ после распаковки")
+# B0339-5: quoted-printable — границы и неверные цифры
+patch("U.java",
+  "          final int u = Character.digit((char) bytes[++i], 16);\n          final int l = Character.digit((char) bytes[++i], 16);\n          buffer.write((char) ((u << 4) + l));\n",
+  "          final int u = i + 2 < bytes.length ? Character.digit((char) bytes[i + 1], 16) : -1; // Parvane: границы и hex-цифры\n"
+  "          final int l = u >= 0 ? Character.digit((char) bytes[i + 2], 16) : -1;\n"
+  "          if (u >= 0 && l >= 0) {\n"
+  "            buffer.write((u << 4) + l);\n"
+  "            i += 2;\n"
+  "          } else {\n"
+  "            buffer.write(b);\n"
+  "          }\n",
+  "// Parvane: границы и hex-цифры")
+# B0338-5: выход за корень — префикс только по границе каталога
+patch("FileProvider.java",
+  "      if (!file.getPath().startsWith(root.getPath())) {",
+  "      if (!file.getPath().equals(root.getPath()) && !file.getPath().startsWith(root.getPath() + File.separator)) { // Parvane: граница каталога",
+  "// Parvane: граница каталога")
+patch("FileProvider.java",
+  "        if (path.startsWith(rootPath) && (mostSpecific == null",
+  "        if ((path.equals(rootPath) || path.startsWith(rootPath.endsWith(\"/\") ? rootPath : rootPath + \"/\")) && (mostSpecific == null // Parvane: граница корня",
+  "// Parvane: граница корня")
+# B0374-1: токен устройства не пишем в журнал
+patch("telegram/Tdlib.java",
+  "\"Successfully registered device token:%s, accountId:%d, otherUserIdsCount:%d\", deviceToken, accountId,",
+  "\"Successfully registered device token, accountId:%d, otherUserIdsCount:%d\", accountId,",
+  "registered device token, accountId")
+# B0374-2: clientData чата не пишем в журнал
+patch("telegram/Tdlib.java",
+  "Log.e(\"Cannot set clientData: %s, chatId:%d, clientData:%s\", TD.toErrorString(object), chatId, data);",
+  "Log.e(\"Cannot set clientData: %s, chatId:%d\", TD.toErrorString(object), chatId);",
+  "Cannot set clientData: %s, chatId:%d\"")
+# B0374-3: sessionsInfo может быть ещё не загружен
+patch("telegram/Tdlib.java",
+  "      return sessionsInfo.currentSession;",
+  "      return sessionsInfo != null ? sessionsInfo.currentSession : null; // Parvane: до загрузки сеансов",
+  "// Parvane: до загрузки сеансов")
+PYSEC
+for f in MainActivity.java U.java FileProvider.java telegram/Tdlib.java; do :; done
+echo "   ревью X: hasAccount $(grep -c 'аккаунт из интента проверяем' "$TGX/app/src/main/java/org/thunderdog/challegram/MainActivity.java") (1), gzip-лимит $(grep -c '16 МиБ после' "$TGX/app/src/main/java/org/thunderdog/challegram/U.java") (1)"
+
 echo "== local.properties / keystore =="
 KEYPROPS="${PARVANE_KEYSTORE_PROPS:-$KEYS/keystore.properties}" # выпуск — keystore-release.properties (T077)
 [ -f "$KEYPROPS" ] || { echo "нет $KEYPROPS (см. BUILD-android.md)"; exit 2; }
@@ -607,6 +680,198 @@ youtube.api_key=
 tgx.extension=none
 PROPS
 echo "   $TGX/local.properties записан"
+
+# Ревью кода (fix-021, low): мелкие дефекты X, не зависящие от шва (идемпотентно: якорь после правки исчезает)
+TGXP="$TGX/app/src/main/java/org/thunderdog/challegram"
+# CustomEmojiId: Parcel читал байт disableAnimations, которого writeToParcel не писал; newArray возвращал массив длины 0
+perl -0pi -e 's/(public void writeToParcel \(Parcel dest, int flags\) \{\n    dest\.writeLong\(customEmojiId\);\n)/$1    dest.writeByte((byte) (disableAnimations ? 1 : 0));\n/; s/return new CustomEmojiId\[0\];/return new CustomEmojiId[size];/' "$TGXP/emoji/CustomEmojiId.java"
+# ImageFormatDetector: isWebP читал buffer[8..11] из 8-байтового буфера (AIOOBE на любом RIFF-файле)
+perl -0pi -e 's/byte\[\] buffer = new byte\[8\];/byte[] buffer = new byte[12];/; s/if \(fis\.read\(buffer, 0, 8\) == 8\) \{/if (fis.read(buffer, 0, 12) == 12) {/' "$TGXP/loader/ImageFormatDetector.java"
+# TGPlayerController: флаг «следующий» брался из byUserRequest при пересылке на UI-поток
+perl -0pi -e 's/(flags \|= __PLAY_FLAG_BY_USER_REQUEST;\n      if \()byUserRequest(\)\n        flags \|= __PLAY_FLAG_NEXT;)/$1isNext$2/' "$TGXP/player/TGPlayerController.java"
+# DisplayInformation.toAbsolutePath: путь из LevelDB не должен выходить из каталога (../)
+perl -0pi -e 's/(File file = new File\(parentDir, externalRelativePath\);\n          try \{\n            )return file\.getCanonicalPath\(\);(\n          \} catch \(IOException \| SecurityException ignored\) \{\n            )return file\.getAbsolutePath\(\);/$1String canonical = file.getCanonicalPath();\n            return canonical.startsWith(parentDir.getCanonicalPath() + File.separator) ? canonical : null; \/\/ Parvane: без выхода из каталога$2return null;/' "$TGXP/telegram/DisplayInformation.java"
+# TGWebPage.open: rippleButton бывает null (превью без кнопки)
+perl -0pi -e 's/if \(getType\(\) == TYPE_TELEGRAM_BACKGROUND\) \{\n(\s*parent\.tdlib\(\)\.ui\(\)\.openUrl\(parent\.controller\(\), url, rippleButton\.firstButton)/if (getType() == TYPE_TELEGRAM_BACKGROUND && rippleButton != null) {\n$1/' "$TGXP/data/TGWebPage.java"
+
+# Ревью кода (fix-022, security): мелкие дефекты X (идемпотентно: правка либо применяется, либо уже стоит; иначе — ошибка)
+python3 - "$TGXP" "$TGX" <<'PY'
+import sys
+P, ROOT = sys.argv[1], sys.argv[2]
+def rep(path, old, new, mark=None):
+    s = open(path, encoding='utf-8').read()
+    if (mark or new) in s:
+        return
+    if s.count(old) != 1:
+        print('   fix-022: якорь не найден ровно один раз в', path, ':', old[:60]); sys.exit(2)
+    open(path, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+# B0378-3: звук с непроверяемым URI — звук по умолчанию, а не исходная строка; getPath() бывает null
+f = P + '/telegram/TdlibNotificationManager.java'
+rep(f, "      return uri == null ? null : uri.toString();\n    } catch (Throwable ignored) { }\n    return soundUri;",
+       "      return uri == null ? null : uri.toString();\n    } catch (Throwable ignored) { }\n    return null; // Parvane: непроверенный URI не отдаём")
+rep(f, "uri.getPath().matches(\"^/ringtones", "uri.getPath() != null && uri.getPath().matches(\"^/ringtones")
+# B0379-1: notifyPreferenceChanged без слушателей
+rep(P + '/telegram/TdlibSettingsManager.java',
+    "  private void notifyPreferenceChanged (long key, boolean value) {\n    for (",
+    "  private void notifyPreferenceChanged (long key, boolean value) {\n    if (preferenceListeners == null) return; // Parvane: слушателей может не быть\n    for (")
+# B0379-4: isLoading не сбрасывался при перезапуске — запрос после рестарта никогда не уходил
+rep(P + '/telegram/TdlibSingleton.java',
+    "      contextId++;\n      data = null;\n      callbacksList",
+    "      contextId++;\n      data = null;\n      isLoading = false; // Parvane: ответ прежней эпохи отброшен, новый запрос разрешён\n      callbacksList")
+# B0379-2: незнакомое действие чата — «…», а не исключение в UI-потоке
+rep(P + '/telegram/TdlibStatusManager.java',
+    "        default:\n          throw new IllegalArgumentException(Integer.toString(effectiveAction.getConstructor()));\n      }\n\n      this.effectiveText",
+    "        default:\n          this.effectiveText = Strings.ELLIPSIS; // Parvane: без падения на неизвестном действии\n          return;\n      }\n\n      this.effectiveText")
+# B0384-1: сравнение хостов — по границе точки (evilexample.com != example.com)
+rep(P + '/tool/Strings.java',
+    "return h1.equals(h2) || h1.endsWith(h2) || h2.endsWith(h1);",
+    "return h1.equals(h2) || h1.endsWith(\".\" + h2) || h2.endsWith(\".\" + h1);")
+# B0386-4: indexOfUser возвращает -1, а не 0
+rep(P + '/ui/CreateGroupController.java',
+    "    int i = indexOfUser(user.id);\n    if (i != 0) {\n      members.get(i).setUser(user, 0);",
+    "    int i = indexOfUser(user.id);\n    if (i != -1) {\n      members.get(i).setUser(user, 0);")
+# B0380-4: файл темы не больше 1 МиБ и строка не длиннее 64 КиБ
+f = P + '/telegram/TdlibUi.java'
+rep(f, "THEME_FILE_EXTENSION) && TD.isFileLoadedAndExists(document.document);",
+       "THEME_FILE_EXTENSION) && TD.isFileLoadedAndExists(document.document) && document.document.size <= 1024 * 1024;")
+rep(f, "          lineIndex++;\n          line = line.trim();",
+       "          lineIndex++;\n          if (line.length() > 65536) break; // Parvane: файл темы не должен быть мусором\n          line = line.trim();")
+# B0390-1 (MAP-1): карта Google Maps SDK обходит preview — только внешнее приложение по действию пользователя
+rep(f, "    if (!U.isGooglePlayServicesAvailable(context.context())) {\n      return Intents.openMap(",
+       "    if (true) { // Parvane: MAP-1, без Google Maps SDK\n      return Intents.openMap(")
+# B0389-1: внутренние файлы приложения — весь dataDir, обе ветки share-intent
+rep(P + '/U.java',
+    "    File dir = UI.getAppContext().getFilesDir();\n    return !StringUtils.isEmpty(pathString) && pathString.startsWith(dir.getPath());",
+    "    File dir = UI.getAppContext().getFilesDir().getParentFile(); // Parvane: весь dataDir (databases, shared_prefs, no_backup…)\n    String root = dir != null ? normalizeFilePath(dir.getPath()) : UI.getAppContext().getFilesDir().getPath();\n    return !StringUtils.isEmpty(pathString) && (pathString.equals(root) || pathString.startsWith(root + File.separator));")
+f = P + '/ui/MainController.java'
+rep(f, "        throw new IllegalArgumentException(\"Unknown parcelable type: \" + parcelable);\n      }\n      if (addShareUri(",
+       "        throw new IllegalArgumentException(\"Unknown parcelable type: \" + parcelable);\n      }\n      if (U.isInternalUri(uri)) {\n        throw new IllegalArgumentException(\"Tried to share internal file: \" + uri.toString());\n      }\n      if (addShareUri(")
+# B0389-2: vCard — не больше 1 МиБ символов, склейка QUOTED-PRINTABLE не длиннее 4 КиБ
+rep(f, "          String line;\n          while ((line = bufferedReader.readLine()) != null) {\n            String[] args = line.split(\":\");",
+       "          String line;\n          int vcardChars = 0;\n          while ((line = bufferedReader.readLine()) != null) {\n            vcardChars += line.length();\n            if (vcardChars > 1024 * 1024) break; // Parvane: предел размера vCard\n            String[] args = line.split(\":\");")
+rep(f, "while (currentName.endsWith(\"=\")) {", "while (currentName.endsWith(\"=\") && currentName.length() < 4096) {")
+# B0378-5: каталог «ресурсов/обновлений» Telegram по публичному нику не запрашиваем
+rep(P + '/telegram/TdlibResourceManager.java',
+    "  private void withChat (RunnableLong callback)  {\n    tdlib.awaitInitialization",
+    "  private void withChat (RunnableLong callback)  {\n    if (true) { callback.runWithLong(0); return; } // Parvane: канал ресурсов Telegram не используется\n    tdlib.awaitInitialization")
+# B0388-1: игры ботов — без JS-моста, только https
+rep(P + '/ui/GameController.java',
+    "    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {\n      webView.addJavascriptInterface(new WebViewProxy(this), \"TelegramWebviewProxy\");\n    }\n    if (getArguments() != null) {\n      webView.loadUrl(getArguments().gameUrl);",
+    "    if (getArguments() != null && getArguments().gameUrl != null && getArguments().gameUrl.startsWith(\"https://\")) { // Parvane: без JS-моста, только https\n      webView.getSettings().setAllowFileAccess(false);\n      webView.loadUrl(getArguments().gameUrl);")
+# B0386-1/3: чтение адресной книги не нужно — разрешения READ_CONTACTS нет
+mf = ROOT + '/app/src/main/AndroidManifest.xml'
+s = open(mf, encoding='utf-8').read()
+line = '  <uses-permission android:name="android.permission.READ_CONTACTS" />\n'
+if line in s:
+    open(mf, 'w', encoding='utf-8').write(s.replace(line, '', 1))
+PY
+
+# Ревью кода (fix-023, low): мелкие дефекты экранов X (идемпотентно: правка либо применяется, либо уже стоит; иначе — ошибка)
+python3 - "$TGXP" <<'PY'
+import sys
+P = sys.argv[1]
+def rep(path, old, new):
+    s = open(path, encoding='utf-8').read()
+    if new in s:
+        return
+    if s.count(old) != 1:
+        print('   fix-023: якорь не найден ровно один раз в', path, ':', old[:60]); sys.exit(2)
+    open(path, 'w', encoding='utf-8').write(s.replace(old, new, 1))
+mc = P + '/ui/MessagesController.java'
+# B0391-1: без Google Play Services — запасной LocationManager, а не NPE на null-локации
+rep(mc, "    } catch (Throwable t) {\n      shareCurrentLocation(destroyKeyboard, null);\n    }",
+        "    } catch (Throwable t) {\n      shareCurrentLocationViaManager(destroyKeyboard); // Parvane: без GMS — запасной путь\n    }")
+rep(mc, "    if (getChatId() == currentShareLocationChatId) {\n      send(new TdApi.InputMessageLocation(new TdApi.Location(location.getLatitude()",
+        "    if (location != null && getChatId() == currentShareLocationChatId) { // Parvane: location бывает null\n      send(new TdApi.InputMessageLocation(new TdApi.Location(location.getLatitude()")
+# B0391-3: id места от отправителя в путь URL — только в кодировке
+rep(mc, "\"https://foursquare.com/v/\" + venueId,", "\"https://foursquare.com/v/\" + Uri.encode(venueId),")
+# B0392-1: пустой результат выбора аудио
+rep(mc, "case Intents.ACTIVITY_RESULT_AUDIO: {\n        final Uri path = data.getData();",
+        "case Intents.ACTIVITY_RESULT_AUDIO: {\n        final Uri path = data != null ? data.getData() : null; // Parvane: data бывает null")
+# B0398-4: выбор мелодии без data
+rep(P + '/ui/SettingsNotificationController.java',
+    "if (resultCode == Activity.RESULT_OK && (requestCode == Intents.ACTIVITY_RESULT_RINGTONE ||",
+    "if (resultCode == Activity.RESULT_OK && data != null && (requestCode == Intents.ACTIVITY_RESULT_RINGTONE ||")
+# B0398-2: режим «Никто» не должен разрешать новые чаты от незнакомых
+rep(P + '/ui/SettingsPrivacyKeyController.java',
+    "boolean allowNewChatsFromUnknownUsers = currentRules().getMode() != PrivacySettings.Mode.CONTACTS;",
+    "boolean allowNewChatsFromUnknownUsers = currentRules().getMode() == PrivacySettings.Mode.EVERYBODY; // Parvane: «Никто» = не разрешать")
+# B0399-2: открытие списка стикеров из хаба, где у экрана нет SettingsController
+rep(P + '/ui/SettingsStickersController.java',
+    "    super.setArguments(args);\n    ArrayList<TGStickerSetInfo> stickerSets = args.getStickerSets(isEmoji());",
+    "    super.setArguments(args);\n    if (args == null) return; // Parvane: хаб профиля не передаёт SettingsController\n    ArrayList<TGStickerSetInfo> stickerSets = args.getStickerSets(isEmoji());")
+# B0397-1: отладочное меню по долгому нажатию — только в debug-сборке
+rep(P + '/ui/SettingsController.java',
+    "    if (viewId == R.id.btn_build) {\n      showBuildOptions(true);\n      return true;",
+    "    if (viewId == R.id.btn_build) {\n      showBuildOptions(BuildConfig.DEBUG); // Parvane: в release без отладочных пунктов\n      return true;")
+# B0400-1: мульти-экспорт файлов доводим до выбора приложения; null-URI отбрасываем
+sc = P + '/ui/ShareController.java'
+rep(sc, "      File file = new File(info.path);\n      uris.add(U.contentUriFromFile(file));\n    }\n    intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);\n  }",
+        "      File file = new File(info.path);\n      Uri uri = U.contentUriFromFile(file);\n      if (uri == null) {\n        return; // Parvane: файл вне FileProvider — не отправляем часть\n      }\n      uris.add(uri);\n    }\n    intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);\n    context.startActivity(Intent.createChooser(intent, title));\n  }")
+# B0400-2: старые vCard не копятся в каталоге приложения
+rep(sc, "        if (!FileUtils.createDirectory(vcfCacheDirectory))\n          return;\n",
+        "        if (!FileUtils.createDirectory(vcfCacheDirectory))\n          return;\n        File[] staleVcf = vcfCacheDirectory.listFiles(); // Parvane: прежние экспорты удаляем\n        if (staleVcf != null) {\n          for (File stale : staleVcf) {\n            stale.delete();\n          }\n        }\n")
+# B0401-1: строка текстового файла — не длиннее 64 КиБ
+rep(P + '/ui/TextController.java',
+    "        while ((line = br.readLine()) != null) {\n          checkProgress(i);",
+    "        while ((line = br.readLine()) != null) {\n          if (line.length() > 65536) line = line.substring(0, 65536); // Parvane: предел длины строки\n          checkProgress(i);")
+# B0402-3: встроенный браузер — без смешанного контента и сторонних cookie
+wk = P + '/ui/WebkitController.java'
+rep(wk, "WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "WebSettings.MIXED_CONTENT_NEVER_ALLOW")
+rep(wk, "CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);", "CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);")
+# B0405-3: CollageContext.rebuild — индексы с size - 1
+rep(P + '/util/CollageContext.java',
+    "for (int i = size; i >= wrappersLength; i--) {", "for (int i = size - 1; i >= wrappersLength; i--) {")
+# B0405-4: пересекающиеся ImageSpan из вставленного HTML — оставляем вставку по умолчанию
+rep(P + '/util/ExternalEmojiFilter.java',
+    "throw new IllegalStateException(\"Intersecting ImageSpan\");", "return null; // Parvane: пересечение — вставка по умолчанию")
+# B0405-5: границы сущностей входящего сообщения
+rep(P + '/util/NonBubbleEmojiLayout.java',
+    "            int end = start + entity.length;\n            if (index != start &&",
+    "            int end = start + entity.length;\n            if (start < index || end < start || end > formattedText.text.length()) {\n              return false; // Parvane: сущность вне текста\n            }\n            if (index != start &&")
+PY
+
+echo "== ревью кода X (fix-024): текст сообщений, комментарий звонка и токен Huawei не пишутся в журнал; копия сущности хранит ссылку =="
+python3 - "$TGX" <<'PYLOG'
+import sys
+T = sys.argv[1]
+def patch(rel, old, new, marker):
+    p = T + "/" + rel
+    s = open(p).read()
+    if marker in s:
+        return
+    assert s.count(old) == 1, rel + ': якорь ' + old[:50]
+    open(p, "w").write(s.replace(old, new, 1))
+TXT = "app/src/main/java/org/thunderdog/challegram/util/text/"
+# B0406-1: расшифрованный текст сообщения не в журнал — только длина
+patch(TXT + "Text.java",
+  'Log.w(Log.TAG_SPEED_TEXT, "Text.set took %dms for %d chars, maxWidth: %d, text:\\n%s", ms, in.length(), maxWidth, in);',
+  'Log.w(Log.TAG_SPEED_TEXT, "Text.set took %dms for %d chars, maxWidth: %d", ms, in.length(), maxWidth); // Parvane: текст не в журнал',
+  "// Parvane: текст не в журнал")
+patch(TXT + "Text.java",
+  'Log.w(Log.TAG_SPEED_TEXT, "Couldn\'t parse %d chars for max width: %d, fontSize: %f, text:\\n%s", cause, in.length(), maxWidth, Settings.instance().getChatFontSize(), in);',
+  'Log.w(Log.TAG_SPEED_TEXT, "Couldn\'t parse %d chars for max width: %d, fontSize: %f", cause, in.length(), maxWidth, Settings.instance().getChatFontSize()); // Parvane: текст не в журнал',
+  "getChatFontSize()); // Parvane: текст не в журнал")
+# B0406-2: createCopy теряет ссылку и кнопку
+patch(TXT + "TextEntityCustom.java",
+  "    if (mathematicalExpression != null) {\n      copy.setMathematicalExpression(mathematicalExpression);\n    }\n    return copy;",
+  "    if (mathematicalExpression != null) {\n      copy.setMathematicalExpression(mathematicalExpression);\n    }\n"
+  "    if (linkType != LINK_TYPE_NONE || link != null) { // Parvane: копия сохраняет ссылку и кнопку\n"
+  "      copy.setLink(linkOffset, linkLength, linkType, link, linkCached);\n"
+  "    }\n"
+  "    if (button != null) {\n      copy.setButton(button);\n    }\n    return copy;",
+  "// Parvane: копия сохраняет ссылку и кнопку")
+# B0408-2: комментарий оценки звонка — только длина
+patch("app/src/main/java/org/thunderdog/challegram/voip/gui/VoIPFeedbackActivity.java",
+  'Log.i(Log.TAG_VOIP, "Submitting call feedback, call_id: %d, rating: %d, comment: %s", callId, rating, comment);',
+  'Log.i(Log.TAG_VOIP, "Submitting call feedback, call_id: %d, rating: %d, comment length: %d", callId, rating, comment.length()); // Parvane: комментарий не в журнал',
+  "// Parvane: комментарий не в журнал")
+# B0437-3: push-токен Huawei не в журнал
+patch("extension/hms/src/main/kotlin/tgx/extension/hms/HuaweiDeviceTokenRetriever.kt",
+  'PushManagerBridge.log("HMS: successfully fetched token: %s", token)',
+  'PushManagerBridge.log("HMS: successfully fetched token (%d chars)", token.length) // Parvane: токен не в журнал',
+  "// Parvane: токен не в журнал")
+PYLOG
 
 if [ "${1:-}" = "--build" ]; then
   echo "== сборка assembleLatestArm64Debug (долго: ffmpeg/libvpx/webrtc) =="

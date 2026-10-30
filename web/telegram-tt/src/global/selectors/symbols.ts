@@ -37,11 +37,6 @@ const TON_EMOTICON: Record<number, string> = {
   50: `${3}\u{FE0F}\u20E3`,
 };
 
-export function selectIsStickerFavorite<T extends GlobalState>(global: T, sticker: ApiSticker) {
-  const { stickers } = global.stickers.favorite;
-  return stickers && stickers.some(({ id }) => id === sticker.id);
-}
-
 export function selectCurrentStickerSearch<T extends GlobalState>(
   global: T,
   ...[tabId = getCurrentTabId()]: TabArgs<T>

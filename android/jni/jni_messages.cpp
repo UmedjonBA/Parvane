@@ -153,22 +153,6 @@ using namespace pvjni;
 
 extern "C" {
 
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendText(JNIEnv *env, jclass, jstring to, jstring text) {
-    const auto toStd = jstr(env, to);
-    const auto content = parvane::textContent(jstr(env, text));
-    try {
-        const auto id = sendV2(toStd, content, std::string());
-        emitOwn(id, toStd, content, std::string());
-        LOGI("отправлено msg %s", id.c_str());
-        return jout(env, id);
-    } catch (const std::exception &e) {
-        LOGE("sendText: %s", e.what());
-        noteFederationFailure(e.what());
-        emit(json{{"type", "send_failed"}, {"to", toStd}, {"error_code", errorCodeOf(e)}});
-        return jout(env, "");
-    }
-}
-
 // Содержимое любого вида (текст с ответом, опрос, геопозиция, карточки разделов, стикер по ссылке на пак).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendContent(
         JNIEnv *env, jclass, jstring to, jstring contentJson, jstring replyTo) {
@@ -362,17 +346,6 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeMarkRead(JNIEnv *
         (void)mutate(id, json{{"receipt", {{"kind", "RECEIPT_KIND_READ"}, {"messages", json::array({parvane::v2::ref(id)})}}}});
 }
 
-// Кто прочитал своё сообщение (E2E-квитанции, «Просмотрено»): [{"user","at"}].
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeReaders(JNIEnv *env, jclass, jstring uuid) {
-    auto out = json::array();
-    if (const auto s = v2Ready()) {
-        try {
-            for (const auto &[user, at] : s->readers(jstr(env, uuid))) out.push_back(json{{"user", user}, {"at", at}});
-        } catch (const std::exception &) {}
-    }
-    return jreply(env, out);
-}
-
 // TTL: забыть сообщение — строку в памяти, кэш медиа и рабочую копию.
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeForget(JNIEnv *env, jclass, jstring uuidJ, jstring fileIdJ) {
     const auto uuid = jstr(env, uuidJ), fid = jstr(env, fileIdJ);
@@ -443,7 +416,8 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackFetch(JNIE
         }
         if (files.empty()) {
             if (fid.empty()) throw std::runtime_error("нет file_id");
-            const auto d = downloadChatBlob(fid);
+            // предел шифртекста — размер архива PVPK1 с запасом: чужой pack_ref не заставит читать блоб целиком
+            const auto d = downloadChatBlob(fid, parvane::blobcrypt::maxCipherSize(parvane::pack::kMaxBytes + (1u << 20)));
             if (!d.ok) throw std::runtime_error(d.error);
             const auto dec = parvane::blobcrypt::decrypt(d.bytes, ref.value("key", std::string()), ref.value("nonce", std::string()));
             if (!dec) throw std::runtime_error("архив не расшифровался");
@@ -539,23 +513,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePreviewFetch(J
         result = json{{"url", url}, {"site_name", host}};
     }
     return jreply(env, result);
-}
-
-// Картинка превью (base64 из превью) → вложение-фото для webpage.photo: {file_id,file_key,file_nonce,capability,…}.
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeUploadPreviewPhoto(JNIEnv *env, jclass, jstring imageB64, jint w, jint h) {
-    try {
-        const auto bytes = parvane::v2::fromBase64Safe(jstr(env, imageB64));
-        if (!bytes || bytes->empty()) return jout(env, "");
-        auto enc = parvane::blobcrypt::encrypt(*bytes);
-        json photo{{"kind", "photo"}, {"mime", "image/jpeg"}, {"size_bytes", bytes->size()}, {"width", w}, {"height", h},
-                   {"file_key", enc.keyB64}, {"file_nonce", enc.nonceB64}};
-        photo["file_id"] = uploadChatBlob(enc.ciphertext, photo);
-        writeMediaCache(photo["file_id"].get<std::string>(), *bytes);
-        return jreply(env, photo);
-    } catch (const std::exception &e) {
-        LOGE("картинка превью не загружена: %s", e.what());
-        return jout(env, "");
-    }
 }
 
 // Тайл карты z/x/y — только preview.map.tile (MAP-1). PNG байтами; null — нет.

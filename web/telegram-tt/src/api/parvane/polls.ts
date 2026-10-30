@@ -122,7 +122,13 @@ export class PollStore {
     if (entry.closeAt && atMs > entry.closeAt + CLOSE_GRACE_MS) return;
     // Quiz и опрос без переголосования: голос финален
     if ((entry.isQuiz || entry.noRevote) && entry.votes.has(voter)) return;
-    if (options.length) entry.votes.set(voter, options);
+    // Голос чужой: берём только целые индексы существующих вариантов, без повторов;
+    // в опросе с одним ответом — не больше одного варианта (иначе счётчики накручиваются)
+    const clean = Array.from(new Set(options.filter(
+      (idx) => Number.isInteger(idx) && idx >= 0 && idx < entry.options.length,
+    )));
+    const accepted = entry.isMultiple ? clean : clean.slice(0, 1);
+    if (accepted.length) entry.votes.set(voter, accepted);
     else entry.votes.delete(voter); // пустой = отзыв голоса
   }
 
@@ -153,7 +159,8 @@ export class PollStore {
   // Адреса проголосовавших за конкретный вариант (для «кто голосовал»)
   getVoters(uuid: string, optionIndex: number): string[] {
     const entry = this.byUuid.get(uuid);
-    if (!entry) return [];
+    // Анонимный опрос: кто за что голосовал, не раскрываем (счётчики остаются)
+    if (!entry || !entry.isPublic) return [];
     const voters: string[] = [];
     entry.votes.forEach((choices, voter) => {
       if (choices.includes(optionIndex)) voters.push(voter);

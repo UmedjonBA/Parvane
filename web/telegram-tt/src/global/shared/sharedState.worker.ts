@@ -1,7 +1,6 @@
 import type { SharedState } from '../types';
 import type { WorkerBoundMessageEvent } from './sharedStateConnector';
 
-import { deepFreeze } from '../../util/data/freeze';
 import { deepDiff, type DiffObject } from '../../util/deepDiff';
 import { deepMerge } from '../../util/deepMerge';
 
@@ -75,6 +74,3 @@ function broadcast(message: ClientBoundMessageEvent, ignorePort?: MessagePort) {
     }
   }
 }
-
-// DEBUG
-(self as any).getState = () => deepFreeze(state);

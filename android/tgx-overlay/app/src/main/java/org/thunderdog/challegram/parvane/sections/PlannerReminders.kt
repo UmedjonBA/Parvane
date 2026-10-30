@@ -86,12 +86,22 @@ object PlannerReminders {
     }
 
     private fun pending(key: String, title: String, start: String, flags: Int): PendingIntent? {
+        val code = requestCode(key)
         val intent = Intent(ctx, ParvaneReminderReceiver::class.java).setAction(ACTION).putExtra("key", key)
-            .putExtra("title", title).putExtra("start", start)
-        return PendingIntent.getBroadcast(ctx, key.hashCode(), intent, flags or PendingIntent.FLAG_IMMUTABLE)
+            .putExtra("title", title).putExtra("start", start).putExtra("rc", code)
+        return PendingIntent.getBroadcast(ctx, code, intent, flags or PendingIntent.FLAG_IMMUTABLE)
     }
 
-    fun notify(context: Context, key: String, title: String, start: String) {
+    /** Свой номер на каждый ключ (hashCode двух ключей может совпасть — тогда они делили бы будильник и уведомление). */
+    private fun requestCode(key: String): Int {
+        val p = prefs()
+        if (p.contains("rc:$key")) return p.getInt("rc:$key", 0)
+        val next = p.getInt("rc_next", 1)
+        p.edit().putInt("rc:$key", next).putInt("rc_next", next + 1).apply()
+        return next
+    }
+
+    fun notify(context: Context, key: String, title: String, start: String, notificationId: Int = key.hashCode()) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val ru = java.util.Locale.getDefault().language == "ru"
         if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null)
@@ -106,7 +116,7 @@ object PlannerReminders {
             .setAutoCancel(true)
             .apply { open?.let { setContentIntent(it) } }
             .build()
-        nm.notify(key.hashCode(), n)
+        nm.notify(notificationId, n)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).let { p ->
             p.edit().putStringSet("shown", (p.getStringSet("shown", emptySet())!! + key)).apply()
         }
@@ -117,6 +127,7 @@ object PlannerReminders {
 class ParvaneReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val key = intent.getStringExtra("key") ?: return
-        PlannerReminders.notify(context, key, intent.getStringExtra("title") ?: "", intent.getStringExtra("start") ?: "")
+        PlannerReminders.notify(context, key, intent.getStringExtra("title") ?: "", intent.getStringExtra("start") ?: "",
+            intent.getIntExtra("rc", key.hashCode()))
     }
 }

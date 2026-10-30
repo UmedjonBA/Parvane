@@ -153,6 +153,33 @@ QByteArray SerializeString(const QByteArray &value) {
 	return result;
 }
 
+// Ссылки из чужих данных: только безопасные схемы (без javascript:, data:).
+[[nodiscard]] bool IsSafeLink(const QByteArray &value) {
+	const auto trimmed = value.trimmed().toLower();
+	return trimmed.startsWith("http://")
+		|| trimmed.startsWith("https://")
+		|| trimmed.startsWith("tg://")
+		|| trimmed.startsWith("mailto:")
+		|| trimmed.startsWith("tel:");
+}
+
+// Строка для вставки внутрь одинарных кавычек JS: всё, кроме ASCII
+// букв/цифр/пробела, кодируется \uXXXX.
+[[nodiscard]] QString EscapeForJsString(const QString &value) {
+	auto result = QString();
+	result.reserve(value.size() * 2);
+	for (const auto ch : value) {
+		const auto code = ch.unicode();
+		if (code < 128 && (ch.isLetterOrNumber() || code == ' ')) {
+			result.append(ch);
+		} else {
+			result.append(u"\\u"_q
+				+ QString::number(code, 16).rightJustified(4, '0'));
+		}
+	}
+	return result;
+}
+
 QByteArray SerializeList(const std::vector<QByteArray> &values) {
 	const auto count = values.size();
 	if (count == 1) {
@@ -272,9 +299,9 @@ QByteArray FormatText(
 			"onclick=\"return ShowBotCommand("
 			+ SerializeString('"' + text.mid(1) + '"')
 			+ ")\">" + text + "</a>";
-		case Type::Url: return "<a href=\""
-			+ text
-			+ "\">" + text + "</a>";
+		case Type::Url: return IsSafeLink(part.text)
+			? ("<a href=\"" + text + "\">" + text + "</a>")
+			: text;
 		case Type::Email: return "<a href=\"mailto:"
 			+ text
 			+ "\">" + text + "</a>";
@@ -282,9 +309,11 @@ QByteArray FormatText(
 		case Type::Italic: return "<em>" + text + "</em>";
 		case Type::Code: return "<code>" + text + "</code>";
 		case Type::Pre: return "<pre>" + text + "</pre>";
-		case Type::TextUrl: return "<a href=\""
-			+ SerializeString(part.additional)
-			+ "\">" + text + "</a>";
+		case Type::TextUrl: return IsSafeLink(part.additional)
+			? ("<a href=\""
+				+ SerializeString(part.additional)
+				+ "\">" + text + "</a>")
+			: text;
 		case Type::MentionName: return "<a href=\"\" "
 			"onclick=\"return ShowMentionName()\">" + text + "</a>";
 		case Type::Phone: return "<a href=\"tel:"
@@ -1316,8 +1345,11 @@ auto HtmlWriter::Wrap::pushMessage(
 				: (serviceFrom + " disabled chat theme");
 		}
 		return isChannel
-			? ("Channel theme was changed to " + data.emoji).toUtf8()
-			: (serviceFrom + " changed chat theme to " + data.emoji).toUtf8();
+			? ("Channel theme was changed to "
+				+ SerializeString(data.emoji.toUtf8()))
+			: (serviceFrom
+				+ " changed chat theme to "
+				+ SerializeString(data.emoji.toUtf8()));
 	}, [&](const ActionChatJoinedByRequest &data) {
 		return serviceFrom
 			+ " joined group by request";
@@ -1331,7 +1363,7 @@ auto HtmlWriter::Wrap::pushMessage(
 		}
 		return serviceFrom
 			+ " sent you a gift for "
-			+ data.cost
+			+ SerializeString(data.cost)
 			+ ": Telegram Premium for "
 			+ QString::number(data.days).toUtf8()
 			+ " days.";
@@ -1735,11 +1767,14 @@ auto HtmlWriter::Wrap::pushMessage(
 						: QString())
 					+ (u"Type: "_q
 						+ HistoryMessageMarkupButton::TypeToString(button));
-				const auto link = (button.type == Type::Url)
+				const auto link = (button.type == Type::Url
+						&& IsSafeLink(button.data))
 					? button.data
 					: QByteArray();
 				const auto onclick = (button.type != Type::Url)
-					? ("return ShowTextCopied('" + content + "');").toUtf8()
+					? ("return ShowTextCopied('"
+						+ EscapeForJsString(content)
+						+ "');").toUtf8()
 					: QByteArray();
 				block.append(pushTag("div", { { "class", "bot_button" } }));
 				block.append(pushTag("a", {
@@ -1749,7 +1784,7 @@ auto HtmlWriter::Wrap::pushMessage(
 						: Attribute{ "onclick", onclick },
 				}));
 				block.append(pushTag("div"));
-				block.append(button.text.toUtf8());
+				block.append(SerializeString(button.text.toUtf8()));
 				block.append(popTag());
 				block.append(popTag());
 				block.append(popTag());

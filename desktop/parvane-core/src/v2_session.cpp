@@ -1212,12 +1212,13 @@ std::vector<std::pair<std::string, std::int64_t>> Session::readers(const std::st
 }
 
 // Участники моих групп v2 (кроме меня).
-std::set<std::string> Session::coMembersLocked() {
+std::set<std::string> Session::coMembersLocked(bool includePublic) {
     std::set<std::string> out;
     if (!client_) return out;
     for (const auto &hex : client_->groupList()) {
         const auto g = client_->groupInfo(hex);
         if (!g || g->value("deleted", false) || !g->contains("members")) continue;
+        if (!includePublic && g->contains("publicName") && !(*g)["publicName"].is_null()) continue;
         bool mine = false;
         for (const auto &m : (*g)["members"]) mine = mine || m.value("user", std::string()) == cfg_.self;
         if (!mine) continue;
@@ -1302,7 +1303,9 @@ void Session::openPendingRecords() {
 void Session::reciprocateKeysLocked() {
     if (!ready_ || !client_) return;
     bool shared = false;
-    for (const auto &member : coMembersLocked()) {
+    // Встречно отвечаем ключом только участникам закрытых групп: в публичной группе «соучастником» может быть любой
+    // вступивший, и ключ доступа автоматически уходил бы незнакомцам (A0072-2)
+    for (const auto &member : coMembersLocked(false)) {
         if (reciprocated_.count(member) || !client_->hasPeerDeliveryKey(member)) continue;
         reciprocated_.insert(member);
         try {
@@ -1482,8 +1485,15 @@ void Session::dropIdentityLocked() {
     client_.reset();
     state_.reset();
     pendingAppends_.clear();
+    // Вердикт «replaced» приходит голым ответом сервера без доказательства сброса (A0072-1): файлы личности не
+    // стираются, а уходят в карантин `replaced-<мс>` рядом — настоящий сброс ничего не теряет, а подмену можно откатить
+    const std::string quarantine = cfg_.stateDir + "/replaced-" + std::to_string(nowMs());
+    const bool hasQuarantine = ::mkdir(quarantine.c_str(), 0700) == 0;
     for (const char *name : {"state", "root", "root-backup", "root-backup-sent", "root-backup-received", "own-devices", "state-migrated"}) {
-        std::remove((cfg_.stateDir + "/" + name).c_str());
+        const std::string from = cfg_.stateDir + "/" + name;
+        if (!hasQuarantine || std::rename(from.c_str(), (quarantine + "/" + name).c_str()) != 0) {
+            std::remove(from.c_str());
+        }
     }
     needsLinking_ = true;
     outbox_.push_back(json{{"type", "needsLinking"}});

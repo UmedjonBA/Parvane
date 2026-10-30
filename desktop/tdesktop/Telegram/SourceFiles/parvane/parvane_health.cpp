@@ -77,11 +77,6 @@ constexpr auto kOnGoalMinutes = 10;  // среднее ближе этого к 
 	return IsRussianUi() ? "ru" : "en";
 }
 
-[[nodiscard]] int NowMinutes() {
-	const auto now = QTime::currentTime();
-	return now.hour() * 60 + now.minute();
-}
-
 [[nodiscard]] QString MealLabel(const std::string &meal) {
 	if (meal == "breakfast") return tr::lng_parvane_health_meal_breakfast(tr::now);
 	if (meal == "lunch") return tr::lng_parvane_health_meal_lunch(tr::now);
@@ -97,30 +92,6 @@ constexpr auto kOnGoalMinutes = 10;  // среднее ближе этого к 
 
 [[nodiscard]] not_null<QWidget*> SheetParent(not_null<Window::SessionController*> controller) {
 	return controller->widget()->bodyWidget();
-}
-
-// Запись строки ввода текстом — как web `PlannerQuickInput` (без словаря правок и истории строк)
-bool ApplyQuickText(not_null<Window::SessionController*> controller, const QString &text) {
-	const auto state = CurrentState();
-	auto context = planner::QuickContext();
-	context.today = PlannerForms::TodayKey();
-	context.nowMinutes = NowMinutes();
-	context.dayStart = state.settings.dayStart;
-	context.dayEnd = state.settings.dayEnd;
-	context.lang = QuickLang();
-	const auto draft = planner::parseQuickInput(S(text), context);
-	if (text.trimmed().isEmpty() || draft.error) {
-		PlannerForms::ShowError(controller, tr::lng_parvane_health_quick_bad(tr::now));
-		return false;
-	}
-	const auto today = context.today;
-	const auto name = draft.name.empty() ? text.trimmed() : Q(draft.name);
-	Sections::UpdatePlanner([=](planner::State &state) {
-		planner::applyQuickDraft(state, draft, today, planner::randomUuid);
-	}, (draft.kind == "goal")
-		? tr::lng_parvane_health_notice_goals_saved(tr::now)
-		: tr::lng_parvane_planner_notice_added(tr::now, lt_name, name));
-	return true;
 }
 
 // Сводка целей одной строкой (web `goalsSection`)
@@ -384,9 +355,11 @@ public:
 		_nav = Ui::CreateChild<DateNav>(this, [=](int delta) {
 			_day = planner::addDays(_day, delta);
 			_pickedSleepDay = std::string();
+			_editingSleepId = std::string(); // правка сна относится к показанному дню
 			rebuild();
 		}, [=] {
 			_day = PlannerForms::TodayKey();
+			_editingSleepId = std::string();
 			rebuild();
 		});
 		_column = Ui::CreateChild<Ui::VerticalLayout>(this);
@@ -566,10 +539,13 @@ void Content::addNutrition(not_null<Grid*> grid) {
 		isClosed,
 		false,
 		Tone::Green));
+	// целевое значение берём из отрисованного состояния, а не переключаем флаг в записи: два быстрых нажатия
+	// или правка с другого устройства не должны перевернуть результат
+	const auto target = !isClosed;
 	closed->setOnChange([=](bool) {
 		Sections::UpdatePlanner([=](planner::State &state) {
 			auto &record = state.nutrition[day];
-			record.isComplete = !record.isComplete;
+			record.isComplete = target;
 		}, isClosed ? tr::lng_parvane_health_day_reopened(tr::now) : tr::lng_parvane_health_day_closed(tr::now));
 	});
 	// Белки, жиры, углеводы, клетчатка; сахар и соль — пределы
@@ -1033,7 +1009,6 @@ void Content::addRoutine(not_null<Card*> card) {
 			column.day = key;
 			column.number = QString::number(PlannerForms::DateOf(key).day());
 			column.isScreenDay = (key == day);
-			column.name = FormatDayShort(key);
 			const auto records = planner::getSleepRecords(state, key);
 			const auto main = planner::getDailyRecord(state, "sleep", key);
 			const auto night = ranges::find(routine.nights, key, &planner::SleepNight::day);
@@ -1304,11 +1279,6 @@ private:
 
 };
 
-QPointer<Kit::Sheet> &QuickSheet() {
-	static auto result = QPointer<Kit::Sheet>();
-	return result;
-}
-
 } // namespace
 
 void OpenQuickEntry(not_null<Window::SessionController*> controller, const QString &text) {
@@ -1319,46 +1289,6 @@ void OpenQuickEntry(not_null<Window::SessionController*> controller, const QStri
 		.created = nullptr,
 		.more = [=] { PlannerUi::OpenTaskEditor(controller, std::string(), std::string()); },
 	});
-}
-
-[[maybe_unused]] void OpenSimpleQuickEntry(not_null<Window::SessionController*> controller, const QString &text) {
-	if (const auto old = QuickSheet().data()) {
-		old->requestClose();
-	}
-	const auto sheet = Kit::Sheet::Show(SheetParent(controller), Kit::Sheet::Descriptor{
-		.title = tr::lng_parvane_planner_title_new(tr::now),
-		.closeName = tr::lng_parvane_planner_close(tr::now),
-	});
-	QuickSheet() = sheet.get();
-	const auto weak = QPointer<Kit::Sheet>(sheet.get());
-	const auto field = sheet->add(object_ptr<Kit::Field>(
-		sheet->content(),
-		Kit::Field::Kind::Input,
-		rpl::single(tr::lng_parvane_health_quick_placeholder(tr::now)),
-		text));
-	const auto submit = [=] {
-		if (ApplyQuickText(controller, field->text())) {
-			if (const auto strong = weak.data()) {
-				strong->requestClose();
-			}
-		}
-	};
-	field->submits() | rpl::on_next(submit, field->lifetime());
-	const auto buttons = sheet->addButtons();
-	buttons->add(object_ptr<Kit::PushButton>(
-		buttons,
-		tr::lng_parvane_health_quick_add(tr::now),
-		Kit::PushButton::Kind::Accent))->setClickedCallback(submit);
-	buttons->add(object_ptr<Kit::PushButton>(
-		buttons,
-		tr::lng_parvane_planner_cancel(tr::now),
-		Kit::PushButton::Kind::Ghost))->setClickedCallback([=] {
-		if (const auto strong = weak.data()) {
-			strong->requestClose();
-		}
-	});
-	field->setFocusFast();
-	field->input()->setCursorPosition(text.size());
 }
 
 void OpenGoals(not_null<Window::SessionController*> controller) {

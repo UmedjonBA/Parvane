@@ -2191,7 +2191,8 @@ impl Client {
             // Сигнал звонка (D-08) — тоже мимо журнала. Обычное сообщение без
             // места в журнале не принимаем: его источник — только журнал.
             if let Some(inbox_record::Item::Sealed(env)) = &rec.item {
-                let events = self.open_sealed(0, env)?;
+                // Только сигналы звонка: прочее содержимое не должно ни действовать, ни метиться «виденным»
+                let events = self.open_sealed_mode(0, env, true)?;
                 return Ok(events.into_iter().filter(|e| matches!(e, Event::Call { .. })).collect());
             }
         }
@@ -2206,7 +2207,9 @@ impl Client {
                 None => vec![Event::Skipped { seq }],
             },
             Some(inbox_record::Item::DeviceRevoked(d)) => {
-                if d.device_id != self.device_id {
+                // Запись инбокса не подписана: забываем устройство только если его отзыв есть в проверенном
+                // журнале; иначе хост перечитает журнал и вызовет `on_own_device_revoked`.
+                if d.device_id != self.device_id && self.own_log.revoked.contains(&d.device_id) {
                     self.forget_revoked_device(&d.device_id);
                 }
                 vec![Event::DeviceRevoked { seq, device_id: d.device_id }]
@@ -2247,6 +2250,10 @@ impl Client {
     }
 
     fn open_sealed(&mut self, seq: u64, env: &crate::pb::parvane::core::v2::SealedEnvelope) -> CResult<Vec<Event>> {
+        self.open_sealed_mode(seq, env, false)
+    }
+
+    fn open_sealed_mode(&mut self, seq: u64, env: &crate::pb::parvane::core::v2::SealedEnvelope, call_only: bool) -> CResult<Vec<Event>> {
         // spec 026: конверт, запечатанный на свой прежний адрес (отправитель ещё не знал о смене ника)
         let me = match env.recipient.as_ref() {
             Some(r) if r.device_id == self.device_id && r.address != self.user && self.is_own_address(&r.address) => r.clone(),
@@ -2325,7 +2332,7 @@ impl Client {
             Ok(pt)
         };
         let mut seen = SeenAdapter { c: &mut self.seen, list: &mut self.seen_list };
-        let opened = match msg::open_sealed_op(&inner, &me, &|_d: &VerifiedDevice| true, &mut decrypt, &mut seen)? {
+        let opened = match msg::open_sealed_op_mode(&inner, &me, &|_d: &VerifiedDevice| true, &mut decrypt, &mut seen, call_only)? {
             msg::OpenedSealed::Message(m) => *m,
             msg::OpenedSealed::Call(call) => {
                 // Звонок «живёт» у звонящего (цель операции подписана вместе с
@@ -2386,7 +2393,7 @@ impl Client {
             Some(content::Kind::DeliveryKey(k)) if sender != self.user => {
                 if k.delivery_key.len() == 32 {
                     let p = self.peers.entry(sender.clone()).or_default();
-                    if p.delivery_key.as_ref().map(|(_, g)| k.generation > *g).unwrap_or(true) {
+                    if crate::access::generation_step_ok(p.delivery_key.as_ref().map(|(_, g)| *g).unwrap_or(0), k.generation) {
                         p.delivery_key = Some((k.delivery_key.clone(), k.generation));
                     }
                 }
@@ -2411,7 +2418,7 @@ impl Client {
                     Err(ClientError::Need(Need::GroupLog { group, .. })) => {
                         // Домен группы — из контекста ключа (группа может жить на другом сервере, spec 028)
                         let domain = gk.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.domain.clone()).unwrap_or_else(|| self.domain.clone());
-                        self.pending_keys.push((sender, gk));
+                        self.push_pending_key(sender, gk);
                         let g = Ref { domain, id: group };
                         Ok(vec![Event::GroupChanged { seq, group: g, version: 0 }])
                     }
@@ -3026,10 +3033,23 @@ impl Client {
             } else {
                 None
             };
+            // Принятый ключ конверта эпохи другим значением не заменяется (админ иначе мог бы
+            // выборочно отключить участников от группы); исключение — раздача с приватным
+            // ключом отправки, сверенным с журналом (проверен выше).
+            if let Some(known) = self.epoch_keys.get(&(g.id.clone(), ctx.epoch)) {
+                if *known.envelope_key != ek && send_sk.is_none() {
+                    return Err(ClientError::Proto(ProtoError::Forbidden));
+                }
+            }
             self.epoch_keys.insert((g.id.clone(), ctx.epoch), EpochKeys { envelope_key: Zeroizing::new(ek), send_sk });
         }
         if !gk.megolm_session_key.is_empty() {
             let inb = MegolmInbound::from_session_key(&gk.megolm_session_key)?;
+            // Ключ сессии автора знают все участники: известную сессию другого отправителя
+            // чужая раздача не перехватывает (иначе сообщения автора отвергались бы как BadCertificate).
+            if self.megolm_in.get(&inb.session_id()).is_some_and(|known| known.sender != sender) {
+                return Err(ClientError::Proto(ProtoError::Forbidden));
+            }
             self.megolm_in.insert(inb.session_id(), Inbound { group: g.id.clone(), epoch: ctx.epoch, sender: sender.to_string(), session: inb });
         }
         if !gk.megolm_exported.is_empty() {
@@ -3110,7 +3130,7 @@ impl Client {
                 Ok(()) => {}
                 Err(ClientError::Need(Need::GroupLog { group, .. })) => {
                     let domain = gk.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.domain.clone()).unwrap_or_else(|| self.domain.clone());
-                    self.pending_keys.push((me.clone(), gk));
+                    self.push_pending_key(me.clone(), gk);
                     if !out.iter().any(|e| matches!(e, Event::GroupChanged { group: g, .. } if g.id == group)) {
                         out.push(Event::GroupChanged { seq: 0, group: Ref { domain, id: group }, version: 0 });
                     }
@@ -3235,6 +3255,20 @@ impl Client {
     /// Забрать принятые секреты ссылок-приглашений: пары (группа, ссылка).
     pub fn take_shared_invites(&mut self) -> Vec<(Vec<u8>, String)> {
         std::mem::take(&mut self.shared_invites)
+    }
+
+    /// Отложить раздачу ключей группы, журнал которой ещё не получен. Очередь ограничена (по
+    /// 4 записи на группу и 256 всего): собеседник иначе мог бы раздувать состояние и экспорт
+    /// раздачами для выдуманных id групп. Лишние отбрасываются.
+    fn push_pending_key(&mut self, sender: String, gk: GroupKeyShare) {
+        const PER_GROUP: usize = 4;
+        const TOTAL: usize = 256;
+        let gid = |k: &GroupKeyShare| k.context.as_ref().and_then(|c| c.group.as_ref()).map(|r| r.id.clone()).unwrap_or_default();
+        let id = gid(&gk);
+        if self.pending_keys.len() >= TOTAL || self.pending_keys.iter().filter(|(_, k)| gid(k) == id).count() >= PER_GROUP {
+            return;
+        }
+        self.pending_keys.push((sender, gk));
     }
 
     /// После `group_ingest`: применить отложенные ключи и открыть отложенные
@@ -3365,6 +3399,11 @@ impl Client {
     /// Сообщение публичной группы сеансом из конверта: (plaintext, индекс, автор по сертификату).
     fn open_public_session(&self, inner: &GroupEnvelopeInner) -> CResult<(Vec<u8>, u32, String)> {
         let mut inb = MegolmInbound::from_session_key(&inner.public_session)?;
+        // Сеанс из конверта обязан быть тем, что заявлен в `megolm_session_id`: иначе отметки повтора
+        // ставились бы по чужому id сессии и глушили подлинные сообщения другого автора.
+        if inb.session_id().as_bytes() != inner.megolm_session_id.as_slice() {
+            return Err(ClientError::Proto(ProtoError::ContextMismatch));
+        }
         let (pt, index) = inb.decrypt(&inner.megolm_message)?;
         let author = msg::group_plaintext_author(&pt).ok_or(ProtoError::BadCertificate)?;
         Ok((pt, index, author))

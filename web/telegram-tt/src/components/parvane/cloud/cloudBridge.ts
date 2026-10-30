@@ -1,6 +1,7 @@
 import type { CloudChatFile } from '../../../api/parvane/cloudDrive';
 
 import { createSignal } from '../../../util/signals';
+import { normalizeName } from './cloudModel';
 
 // Parvane (spec 016): мост между чатами и облаком. Меню сообщения и меню
 // вложений только оставляют запрос; диалоги выбора папки и файлов живут в
@@ -39,7 +40,8 @@ export function buildCloudChatFile(media: DownloadableMedia, messageDate?: numbe
   const stamp = moment.toISOString().slice(0, 19).replace(/[:T]/g, '-');
   return {
     fileId: media.id,
-    name: media.fileName || `${base}_${stamp}.${extension}`,
+    // Имя приходит из чужого сообщения — приводим к допустимому для облака до загрузки блоба
+    name: normalizeName(media.fileName || `${base}_${stamp}.${extension}`),
     mime: media.mimeType || (media.mediaType === 'photo' ? 'image/jpeg' : 'application/octet-stream'),
     size: media.size || 0,
   };

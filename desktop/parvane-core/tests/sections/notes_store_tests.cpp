@@ -66,6 +66,7 @@ public:
     json &treeNodes() { return data["trees"][DRIVE]["nodes"]; }
     std::string drive = "synced";
     std::vector<json> applied;
+    std::vector<json> chatSaves;
 
     // Правки дерева (create / move / trash) — как их применил бы движок
     json applyOps(const json &args) {
@@ -109,6 +110,10 @@ public:
         }
         if (method == "parvaneCloudCheckDrive") return json(drive);
         if (method == "parvaneCloudApply") return applyOps(args);
+        if (method == "parvaneCloudSaveFromChat") {
+            chatSaves.push_back(args);
+            return json{{"ok", true}};
+        }
         if (method != "parvaneCloudWriteText") return json();
         writes.push_back(args);
         const auto id = args.contains("node") ? args["node"].get<std::string>()
@@ -461,6 +466,24 @@ int main() {
         check(ok, "вход другим аккаунтом: только его заметки");
     }
 
+    std::printf("=== notes_store: вложения из чата ===\n");
+    {
+        // A0077-3: имя от собеседника не становится заметкой или холстом хранилища, путь и знаки убираются
+        Fake fake;
+        NotesStore store(fake);
+        open(fake, store, TREE, TEXTS);
+        const auto renamed = store.saveChatFilesToVault(
+            VAULT, {NotesStore::ChatFile{"f1", "Главная.canvas", "application/json", 10},
+                    NotesStore::ChatFile{"f2", "../x/Идея.md", "text/markdown", 10}});
+        bool ok = renamed && fake.chatSaves.size() == 2;
+        if (ok) {
+            const auto a = fake.chatSaves[0]["file"]["name"].get<std::string>();
+            const auto b = fake.chatSaves[1]["file"]["name"].get<std::string>();
+            ok = a == "Главная.canvas.file" && b.find('/') == std::string::npos && b.find(".md") != std::string::npos
+                && b.rfind(".md") != b.size() - 3;
+        }
+        check(ok, "вложение .canvas/.md получает суффикс, путь в имени очищается");
+    }
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

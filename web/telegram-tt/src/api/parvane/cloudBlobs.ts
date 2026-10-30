@@ -126,7 +126,9 @@ export async function withRetry<T>(fn: () => Promise<T>, signal?: AbortSignal): 
     } catch (e) {
       if (attempt >= MAX_ATTEMPTS || !isRetryable(e)) throw e;
       const hinted = e instanceof V2Error ? e.retryAfterMs : 0;
-      await pause(Math.max(hinted, Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1))), signal);
+      // Подсказка сервера не длиннее четырёх максимальных пауз: иначе retry_after на часы подвесил бы скачивание
+      const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1));
+      await pause(Math.max(Math.min(hinted, RETRY_MAX_MS * 4), backoff), signal);
     }
   }
 }
@@ -342,6 +344,8 @@ export async function downloadCloudBlob(
       for (let index = first; index < first + count; index++) {
         const part = got.parts.get(index);
         if (!part) throw new V2Error('ERROR_CODE_UNAVAILABLE');
+        // Часть длиннее облачного чанка — ответ не по протоколу (раздувает память)
+        if (part.length > CLOUD_CHUNK_BYTES) throw new V2Error('ERROR_CODE_INVALID');
         parts.push(part);
       }
       let buffer = concat(parts);

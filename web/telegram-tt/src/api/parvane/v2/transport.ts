@@ -20,6 +20,7 @@ type Pending = {
   resolve: (body: Uint8Array) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  timeoutMs: number;
   chunks?: (chunk: { index: number; last: boolean; data: Uint8Array; error?: string }) => void;
 };
 
@@ -94,6 +95,10 @@ export class V2Connection {
         const err = new Error('v2: соединение закрыто');
         this.pending.forEach((p) => {
           clearTimeout(p.timer);
+          // Поток чанков узнаёт об обрыве сразу, а не по второму тайм-ауту
+          p.chunks?.({
+            index: 0, last: true, data: new Uint8Array(), error: 'ERROR_CODE_UNAVAILABLE',
+          });
           p.reject(err);
         });
         this.pending.clear();
@@ -159,7 +164,7 @@ export class V2Connection {
         reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
       }, timeoutMs);
       this.pending.set(id, {
-        resolve, reject, timer, chunks,
+        resolve, reject, timer, timeoutMs, chunks,
       });
       // dest — сервер объекта запроса (spec 028): свой сервер перешлёт его чужому
       ws.send(new Uint8Array(
@@ -234,6 +239,14 @@ export class V2Connection {
         if (f.last) {
           clearTimeout(p.timer);
           this.pending.delete(Number(f.id));
+        } else {
+          // Тайм-аут потока — бездействие, а не общая длительность: долгое скачивание идущими чанками не рвётся
+          clearTimeout(p.timer);
+          const chunkId = Number(f.id);
+          p.timer = setTimeout(() => {
+            this.pending.delete(chunkId);
+            p.reject(new V2Error('ERROR_CODE_UNAVAILABLE'));
+          }, p.timeoutMs);
         }
         return;
       }

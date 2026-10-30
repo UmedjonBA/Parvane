@@ -11,27 +11,6 @@ log() {
   printf '\n== %s ==\n' "$*"
 }
 
-# Известный красный шаг: раннер падает и на чистом HEAD (см. раздел Gate status
-# в web/WEB-A4-MATRIX.md). Под `set -Eeuo pipefail` он обрывал весь прогон, и
-# идущие следом раннеры не выполнялись ни разу. Запускаем нефатально и
-# докладываем итог в конце.
-KNOWN_RED_FAILED=()
-KNOWN_RED_PASSED=()
-
-known_red() {
-  local reason="$1"
-  shift
-  local name
-  name="$(basename "$1")"
-  if "$@"; then
-    printf '\n!! %s: известный красный шаг ПРОШЁЛ — снять пометку известного падения\n' "$name"
-    KNOWN_RED_PASSED+=("$name")
-  else
-    printf '\n!! %s: ИЗВЕСТНОЕ ПАДЕНИЕ (%s) — прогон продолжается\n' "$name" "$reason"
-    KNOWN_RED_FAILED+=("$name ($reason)")
-  fi
-}
-
 cd "$WEB_ROOT"
 
 if [[ "${PARVANE_WEB_SKIP_INSTALL:-0}" != "1" ]]; then
@@ -47,9 +26,6 @@ npm test
 
 log "Production build"
 npm run build:production
-
-log "Mocked build"
-npm run build:mocked
 
 log "Live-stack browser e2e"
 npm run test:playwright
@@ -71,7 +47,6 @@ log "Three-browser groups e2e"
 
 log "Three-browser group admin e2e"
 # 15–16 сен шаг был известным красным (пикер New Channel, e2e_web_group_admin.mjs:185);
-# 17 сен прошёл 2/2 — пометка known_red снята, при повторном падении вернуть обёртку
 "$ROOT/scripts/run_web_group_admin_e2e.sh"
 "$ROOT/scripts/run_web_group_info_e2e.sh"
 
@@ -220,12 +195,4 @@ log "Cross-client custom emoji packs Web <-> desktop e2e"
 "$ROOT/scripts/run_web_cross_emoji_e2e.sh"
 
 log "Итог"
-if [[ ${#KNOWN_RED_FAILED[@]} -eq 0 && ${#KNOWN_RED_PASSED[@]} -eq 0 ]]; then
-  printf 'все раннеры зелёные\n'
-fi
-for name in ${KNOWN_RED_FAILED[@]+"${KNOWN_RED_FAILED[@]}"}; do
-  printf 'ИЗВЕСТНОЕ ПАДЕНИЕ: %s\n' "$name"
-done
-for name in ${KNOWN_RED_PASSED[@]+"${KNOWN_RED_PASSED[@]}"}; do
-  printf 'НЕОЖИДАННО ЗЕЛЁНЫЙ (снять пометку): %s\n' "$name"
-done
+printf 'все раннеры зелёные\n'

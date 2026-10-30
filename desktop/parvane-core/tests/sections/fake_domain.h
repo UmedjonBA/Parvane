@@ -68,11 +68,6 @@ public:
         for (const auto &s : sent) n += s.method == method;
         return n;
     }
-    int countEngine(const std::string &name) const {
-        int n = 0;
-        for (const auto &c : engineCalls) n += c.first == name;
-        return n;
-    }
     // Последний вызов движка с этим именем (аргументы); нет — null
     json lastEngine(const std::string &name) const {
         for (auto it = engineCalls.rbegin(); it != engineCalls.rend(); ++it) {

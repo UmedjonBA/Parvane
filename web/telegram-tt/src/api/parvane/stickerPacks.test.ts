@@ -25,6 +25,17 @@ function bytesOf(...values: number[]) {
 }
 
 describe('PVPK1 container', () => {
+  it('rejects an index with a negative size (no repeated reads of the same bytes)', () => {
+    const index = new TextEncoder().encode(JSON.stringify([
+      { name: 'a.png', size: 4 }, { name: 'b.png', size: -4 }, { name: 'c.png', size: 4 },
+    ]));
+    const head = new Uint8Array(9 + index.length + 4);
+    head.set(new TextEncoder().encode('PVPK1'), 0);
+    new DataView(head.buffer).setUint32(5, index.length, true);
+    head.set(index, 9);
+    expect(parsePvpkArchive(head)).toBeUndefined();
+  });
+
   it('round-trips files and keeps byte layout parsable', () => {
     const files = [
       { name: '01-1f600.png', data: bytesOf(1, 2, 3) },

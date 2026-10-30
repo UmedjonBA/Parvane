@@ -40,6 +40,7 @@ json g_linkPendingGrant;
 // Старое устройство: свой эфемерный ключ на каждый challenge и офферы, уже показанные пользователю.
 std::map<std::string, parvane::linking::EphemeralKey> g_linkChallenges;
 std::map<std::string, std::string> g_linkOffersShown;
+std::map<std::string, std::string> g_linkCommit; // device_id → обязательство, увиденное до выставления challenge
 std::map<std::string, std::string> g_linkOfferEph; // device_id → раскрытый ключ (для гранта по подтверждению)
 std::atomic<int> g_linkWorkerGen{0}; // поколение идущего опроса (0 — нет): старый после сброса не мешает новому
 std::atomic<int> g_linkGeneration{0};
@@ -238,6 +239,7 @@ void declineLink(const std::string &deviceId) {
     {
         std::lock_guard<std::mutex> lk(g_linkMu);
         g_linkChallenges.erase(deviceId);
+        g_linkCommit.erase(deviceId);
         g_linkOfferEph.erase(deviceId);
     }
     LOGI("привязка: запрос нового устройства отклонён");
@@ -283,6 +285,7 @@ void pollLinkOffersOnce() {
             if (live.count(it->first)) { ++it; continue; }
             gone.push_back(it->first);
             g_linkOfferEph.erase(it->first);
+            g_linkCommit.erase(it->first);
             it = g_linkOffersShown.erase(it);
         }
     }
@@ -301,9 +304,21 @@ void pollLinkOffersOnce() {
             try { parvane::v2::account::linkChallenge(*c, o.deviceId, key->publicB64()); } catch (const std::exception &) { continue; }
             std::lock_guard<std::mutex> lk(g_linkMu);
             g_linkChallenges.insert_or_assign(o.deviceId, *key);
+            g_linkCommit[o.deviceId] = o.commitment; // закрепляем: другое обязательство позже не принимаем
             continue;
         }
         if (o.challengePub != own->publicB64() || o.ephPub.empty()) continue;
+        {
+            std::lock_guard<std::mutex> lk(g_linkMu);
+            const auto pin = g_linkCommit.find(o.deviceId);
+            if (pin == g_linkCommit.end() || pin->second != o.commitment) {
+                LOGE("привязка: обязательство оффера изменилось после challenge");
+                continue;
+            }
+            // код уже показан для другого ключа — новый ephPub без нового challenge не принимаем
+            const auto shown = g_linkOffersShown.find(o.deviceId);
+            if (shown != g_linkOffersShown.end() && shown->second != o.ephPub) continue;
+        }
         if (!parvane::linking::commitmentMatches(o.ephPub, o.commitment)) {
             LOGE("привязка: ключ оффера не соответствует обязательству");
             continue;
@@ -327,7 +342,7 @@ bool grantLink(const std::string &deviceId) {
     {
         std::lock_guard<std::mutex> lk(g_linkMu);
         if (const auto it = g_linkChallenges.find(deviceId); it != g_linkChallenges.end()) own = it->second;
-        ephPub = g_linkOfferEph[deviceId];
+        if (const auto it = g_linkOfferEph.find(deviceId); it != g_linkOfferEph.end()) ephPub = it->second;
     }
     if (!c || !own || ephPub.empty()) {
         LOGE("привязка: нет своего challenge для устройства");
@@ -543,6 +558,7 @@ void resetLinking() {
     g_linkActive = false;
     g_linkPendingGrant = json();
     g_linkChallenges.clear();
+    g_linkCommit.clear();
     g_linkOffersShown.clear();
     g_linkOfferEph.clear();
     std::lock_guard<std::mutex> tk(g_tgMu);
@@ -713,11 +729,6 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkDecline(JNIEn
     declineLink(jstr(env, deviceId));
 }
 
-// Новое устройство: опубликовать оффер снова (после истечения).
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeLinkOffer(JNIEnv *, jclass) {
-    runDetached([] { startLinkOffer(); });
-}
-
 // ── ключ восстановления (RECOVER-1/2) ────────────────────────────────────────
 
 // Новое устройство: бот попросит владельца ответить ключом. again — «прислать ещё раз».
@@ -774,44 +785,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRotateSsk(JNIE
     } catch (const std::exception &e) {
         LOGE("nativeRotateSsk: %s", e.what());
         return jout(env, "failed");
-    }
-}
-
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeSendKeyToTelegram(JNIEnv *env, jclass, jstring key) {
-    try {
-        const auto s = v2Ready();
-        return jout(env, s ? s->sendKeyToTelegram(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
-    } catch (const std::exception &e) {
-        LOGE("nativeSendKeyToTelegram: %s", e.what());
-        return jout(env, "failed");
-    }
-}
-
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreEscrowCopy(JNIEnv *env, jclass, jstring key) {
-    try {
-        const auto s = v2Ready();
-        return jout(env, s ? s->storeEscrowCopy(parvane::keybundle::pickRecoveryKey(jstr(env, key))) : std::string("failed"));
-    } catch (const std::exception &e) {
-        LOGE("nativeStoreEscrowCopy: %s", e.what());
-        return jout(env, "failed");
-    }
-}
-
-// {"rotationNeeded","hasRoot","hasBackup","needsLinking","telegram":state}
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRecoveryState(JNIEnv *env, jclass) {
-    try {
-        json out = json::object();
-        const auto s = v2Any();
-        out["needsLinking"] = s && s->needsLinking();
-        if (s && s->isReady()) out.update(s->sskState());
-        {
-            std::lock_guard<std::mutex> lk(g_tgMu);
-            out["telegram"] = g_tgState;
-        }
-        return jreply(env, out);
-    } catch (const std::exception &e) {
-        LOGE("nativeRecoveryState: %s", e.what());
-        return jreply(env, json::object());
     }
 }
 
@@ -979,12 +952,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeFingerprint(JN
     const auto s = v2Ready();
     if (!s) return jout(env, "");
     try { return jout(env, parvane::v2::fingerprintOf(s->rootKeyOf(jstr(env, user)))); } catch (const std::exception &) { return jout(env, ""); }
-}
-
-// Профиль не нашёлся — не удалён ли аккаунт собеседника (событие peer_deleted).
-JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeCheckPeerDeleted(JNIEnv *env, jclass, jstring user) {
-    const auto s = v2Ready();
-    try { return s && s->checkPeerDeleted(jstr(env, user)) ? JNI_TRUE : JNI_FALSE; } catch (const std::exception &) { return JNI_FALSE; }
 }
 
 // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────────

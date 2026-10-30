@@ -170,6 +170,14 @@ static void minutesRange() {
     check(of(90) == 90 && of(kOfferMaxMinutes) == kOfferMaxMinutes, "минуты в пределах — как есть");
     check(!of(4294967295u) && !of(2147483648.0) && !of(1e300) && !of(kOfferMaxMinutes + 1),
           "uint32 4294967295, 2^31, 1e300, больше недели — нет длительности (без переполнения int)");
+    {
+        const auto bad = OfferFields::fromContent(nlohmann::json{{"name", "x"}, {"day", "завтра"}, {"start", std::string(400, '9')},
+                                                                  {"due", "2026-13-45x"}});
+        const auto good = OfferFields::fromContent(nlohmann::json{{"name", "x"}, {"day", "2026-10-21"}, {"start", "14:30"},
+                                                                   {"due", "2026-10-25"}});
+        check(!bad.day && !bad.start && !bad.due && good.day && good.start && good.due,
+              "день, время и срок вне формата отбрасываются (движок такое отвергает)");
+    }
     check(!of(0) && !of(-5) && !of(std::numeric_limits<double>::quiet_NaN()), "0, отрицательное, NaN — нет");
     check(offerEventEnd("10:00", 2147483647) == "23:59" && offerEventEnd("bad", 30) == "00:30",
           "конец события: без переполнения и исключения при негодном начале");

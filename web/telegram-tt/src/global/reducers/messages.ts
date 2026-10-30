@@ -331,6 +331,9 @@ export function deleteChatMessages<T extends GlobalState>(
   messageIds.forEach((messageId) => {
     const message = byId[messageId];
     if (!message) return;
+    // Перевод и пересказ удаляются для любого потока: в Parvane все сообщения — главный поток
+    global = clearMessageTranslation(global, chatId, messageId);
+    global = clearMessageSummary(global, chatId, messageId);
     if (!shouldPreserveMedia) {
       const statefulContent = getMessageStatefulContent(global, message);
       const hashes = getAllMessageMediaHashes(message, statefulContent);
@@ -348,8 +351,6 @@ export function deleteChatMessages<T extends GlobalState>(
     const threadMessages = updatedThreads.get(threadId) || [];
     threadMessages.push(messageId);
     updatedThreads.set(threadId, threadMessages);
-    global = clearMessageTranslation(global, chatId, messageId);
-    global = clearMessageSummary(global, chatId, messageId);
   });
 
   const deletedForwardedPosts = Object.values(pickTruthy(byId, messageIds)).filter(

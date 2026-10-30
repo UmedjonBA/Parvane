@@ -1782,7 +1782,11 @@ void TaskForm::submit() {
 	if (!_minutes.empty()) {
 		auto ok = false;
 		const auto number = Q(_minutes).toDouble(&ok);
-		task.minutes = (ok && std::isfinite(number)) ? int(std::round(number)) : 0;
+		// диапазон — до приведения к int (вне диапазона приведение не определено); 0 отвергнет validateTask
+		const auto inRange = ok && std::isfinite(number)
+			&& number >= planner::kMinTaskMinutes
+			&& number <= planner::kMinutesInDay;
+		task.minutes = inRange ? int(std::round(number)) : 0;
 	}
 	task.day = repeat ? std::nullopt : NonEmpty(_day);
 	task.start = NonEmpty(_start);

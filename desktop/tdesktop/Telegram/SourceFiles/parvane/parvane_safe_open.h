@@ -21,11 +21,13 @@
 
 namespace Parvane {
 
-// Больше этого пикселей картинку из чужих байтов не разбираем вовсе (до чтения, по заголовку)
-inline constexpr qint64 kDecodeMaxPixels = qint64(128) * 1024 * 1024;
+// Больше этого пикселей картинку из чужих байтов не разбираем вовсе (до чтения, по заголовку): 40 Мпикс — 160 МиБ кадра
+inline constexpr qint64 kDecodeMaxPixels = qint64(40) * 1000 * 1000;
+// Предел выделения Qt под кадр (МиБ): без размера в заголовке или при ошибке заголовка больше не выделится
+inline constexpr int kDecodeAllocationLimitMb = 192;
 
 // Картинка из чужих байтов не крупнее `maxSide` по длинной стороне (0 — без уменьшения): JPEG уменьшается уже при
-// разборе, прочие — сразу после; заявленные в заголовке больше kDecodeMaxPixels пикселей — пустая картинка.
+// разборе, прочие — сразу после; формат не из белого списка, нет размера в заголовке или больше kDecodeMaxPixels пикселей — пустая картинка.
 [[nodiscard]] inline QImage DecodeImageBounded(const QByteArray &bytes, int maxSide) {
 	auto buffer = QBuffer();
 	buffer.setData(bytes);
@@ -33,15 +35,21 @@ inline constexpr qint64 kDecodeMaxPixels = qint64(128) * 1024 * 1024;
 		return QImage();
 	}
 	auto reader = QImageReader(&buffer);
+	// Байты чужие: разбираем только форматы из белого списка (не все установленные плагины Qt — TGA, TIFF, XPM…)
+	// и только с размером в заголовке, чтобы предел площади действовал всегда
+	const auto format = reader.format().toLower();
+	if (format != "jpeg" && format != "jpg" && format != "png" && format != "gif"
+		&& format != "webp" && format != "bmp") {
+		return QImage();
+	}
+	reader.setAllocationLimit(kDecodeAllocationLimitMb);
 	reader.setAutoTransform(true);
 	const auto size = reader.size();
-	if (size.isValid()) {
-		if (qint64(size.width()) * size.height() > kDecodeMaxPixels) {
-			return QImage();
-		}
-		if (maxSide > 0 && std::max(size.width(), size.height()) > maxSide) {
-			reader.setScaledSize(size.scaled(maxSide, maxSide, Qt::KeepAspectRatio));
-		}
+	if (!size.isValid() || qint64(size.width()) * size.height() > kDecodeMaxPixels) {
+		return QImage();
+	}
+	if (maxSide > 0 && std::max(size.width(), size.height()) > maxSide) {
+		reader.setScaledSize(size.scaled(maxSide, maxSide, Qt::KeepAspectRatio));
 	}
 	auto image = reader.read();
 	if (!image.isNull() && maxSide > 0 && std::max(image.width(), image.height()) > maxSide) {

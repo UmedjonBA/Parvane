@@ -91,7 +91,7 @@ void L2Ticker::start() {
                 std::unique_lock<std::mutex> lk(mu_);
                 if (!active && queue_.empty()) {
                     // Режима нет — ждём, пока его включат (refresh) или придёт запись
-                    wakeCv_.wait(lk, [&] { return stopping_.load() || !queue_.empty(); });
+                    wakeCv_.wait(lk, [&] { return stopping_.load() || !queue_.empty() || (deps_.isActive && deps_.isActive()); });
                     if (stopping_) return;
                 }
             }
@@ -106,7 +106,10 @@ void L2Ticker::start() {
     });
 }
 
-void L2Ticker::refresh() { wakeCv_.notify_all(); }
+void L2Ticker::refresh() {
+    { std::lock_guard<std::mutex> lk(mu_); } // не терять пробуждение между проверкой предиката и ожиданием
+    wakeCv_.notify_all();
+}
 
 void L2Ticker::stop() {
     stopping_ = true;

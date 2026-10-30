@@ -22,6 +22,12 @@ type Found = {
   isLoose?: boolean;
 };
 type Numbers = Record<string, number>;
+
+// Словарь без прототипа: слово «constructor» или «toString» из текста не находит унаследованное свойство
+function dictionary(entries: Numbers): Numbers {
+  // eslint-disable-next-line no-null/no-null
+  return Object.assign(Object.create(null) as Numbers, entries);
+}
 type Matcher = (
   at: (index: number) => string | undefined,
   isJoined: (index: number, isHyphenOk?: boolean) => boolean,
@@ -34,7 +40,7 @@ const MAX_HOUR = 23;
 const FIRST_TENS = 20;
 const TEN = 10;
 
-const RU_CARDINALS: Numbers = {
+const RU_CARDINALS: Numbers = dictionary({
   ноль: 0,
   один: 1,
   одна: 1,
@@ -67,9 +73,9 @@ const RU_CARDINALS: Numbers = {
   семьдесят: 70,
   восемьдесят: 80,
   девяносто: 90,
-};
+});
 // Родительный падеж: «с десяти до двенадцати», «без пятнадцати пять»
-const RU_GENITIVES: Numbers = {
+const RU_GENITIVES: Numbers = dictionary({
   одного: 1,
   одной: 1,
   двух: 2,
@@ -94,9 +100,9 @@ const RU_GENITIVES: Numbers = {
   тридцати: 30,
   сорока: 40,
   пятидесяти: 50,
-};
+});
 // «Третьего» в «полтретьего» — идёт третий час: 2:30
-const RU_HOUR_OF: Numbers = {
+const RU_HOUR_OF: Numbers = dictionary({
   первого: 1,
   второго: 2,
   третьего: 3,
@@ -109,7 +115,7 @@ const RU_HOUR_OF: Numbers = {
   десятого: 10,
   одиннадцатого: 11,
   двенадцатого: 12,
-};
+});
 const RU_HALF = new Set(['пол', 'половина', 'половине', 'половину']);
 const RU_MINUTE = new Set(['минут', 'минута', 'минуты', 'минуту']);
 const RU_AT = new Set(['в', 'с', 'до']);
@@ -117,7 +123,7 @@ const RU_FROM_TO = new Set(['с', 'до']);
 const RU_DAYPART = new Set(['дня', 'ночи']);
 const RU_HOUR = /^час(?:а|ов)?$/;
 
-const EN_CARDINALS: Numbers = {
+const EN_CARDINALS: Numbers = dictionary({
   zero: 0,
   one: 1,
   two: 2,
@@ -146,7 +152,7 @@ const EN_CARDINALS: Numbers = {
   seventy: 70,
   eighty: 80,
   ninety: 90,
-};
+});
 const EN_AT = new Set(['at', 'from', 'to', 'till', 'until', 'by']);
 const EN_PAST = new Set(['past', 'after']);
 const EN_MINUTE = new Set(['minute', 'minutes']);

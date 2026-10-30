@@ -421,12 +421,21 @@ int PlannerSync::prepareLocal() {
     for (size_t i = 0; i < changes.size(); i += kMaxChangesPerOp) {
         json chunk = json::array();
         for (size_t k = i; k < changes.size() && k < i + kMaxChangesPerOp; ++k) chunk.push_back(changes[k]);
-        try {
-            const auto local = engine("plannerPrepareLocal", json{{"changesJson", json{{"changes", chunk}}}});
-            outbox_.push_back({local.value("opId", std::string()), local.value("op", std::string())});
-            prepared += 1;
-        } catch (const std::exception &e) {
-            t_.log(std::string("планировщик: правка отвергнута движком: ") + e.what());
+        const auto prepareChunk = [&](const json &part) {
+            try {
+                const auto local = engine("plannerPrepareLocal", json{{"changesJson", json{{"changes", part}}}});
+                outbox_.push_back({local.value("opId", std::string()), local.value("op", std::string())});
+                prepared += 1;
+                return true;
+            } catch (const std::exception &e) {
+                t_.log(std::string("планировщик: правка отвергнута движком: ") + e.what());
+                return false;
+            }
+        };
+        // Одна негодная правка (например, поле задания из чата вне схемы) не уносит остальные: пакет, который
+        // движок отверг, повторяется по одной правке (A0082-1)
+        if (!prepareChunk(chunk) && chunk.size() > 1) {
+            for (const auto &single : chunk) prepareChunk(json::array({single}));
         }
     }
     saveOutbox();
@@ -437,8 +446,14 @@ int PlannerSync::prepareLocal() {
 void PlannerSync::sendOutbox() {
     if (!isAttached()) return;
     loadOutbox();
+    int expiredRetries = 0;  // подряд на одной операции: постоянный EXPIRED не должен крутить цикл бесконечно
+    std::string expiredFor;
     while (!outbox_.empty()) {
         const auto item = outbox_.front();
+        if (item.opId != expiredFor) {
+            expiredFor = item.opId;
+            expiredRetries = 0;
+        }
         if (!hasKey()) {
             setStatus("no-key");
             return;
@@ -454,6 +469,12 @@ void PlannerSync::sendOutbox() {
                 if (const auto ref = currentRef()) pullGrants(*ref);
                 if (!hasKey()) {
                     setStatus("no-key");
+                    return;
+                }
+                if (++expiredRetries > 3) {
+                    // Ключ есть, а эпоха всё равно устарела: ждём новых грантов позже, а не крутимся (A0068-1)
+                    setStatus("no-key");
+                    scheduleRetry();
                     return;
                 }
                 continue;

@@ -141,8 +141,12 @@ object NoteText {
         }
     }
 
+    private const val MAX_INLINE = 4000
+
     // Строчная разметка: ссылки, затем жирный/курсив/код/зачёркнутый, теги
     private fun inline(out: SpannableStringBuilder, line: String, onWiki: (String) -> Unit, onUrl: (String) -> Unit) {
+        // регэкспы ниже на длинной строке с непарными маркерами квадратичны: сверхдлинную строку показываем как есть
+        if (line.length > MAX_INLINE) { out.append(line); return }
         val c = Pv.c
         data class Mark(val range: IntRange, val shown: String, val apply: (SpannableStringBuilder, Int, Int) -> Unit)
         val marks = mutableListOf<Mark>()

@@ -7,8 +7,8 @@ import type {
 } from './notesCanvas';
 
 import {
-  addEdge, CANVAS_PRESET_COLORS, edgeAnchors, findNode, newCanvasId, nodesInGroup, parseCanvas, serializeCanvas,
-  updateEdge,
+  addEdge, boundsOfRects, CANVAS_PRESET_COLORS, edgeAnchors, findNode, newCanvasId, nodesInGroup, parseCanvas,
+  serializeCanvas, updateEdge,
 } from './notesCanvas';
 
 export type CanvasHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
@@ -536,18 +536,6 @@ function inflateRect(rect: CanvasRect, by: number): CanvasRect {
 
 function unionRect(a: CanvasRect, b: CanvasRect): CanvasRect {
   return boundsOfRects([a, b])!;
-}
-
-function boundsOfRects(rects: CanvasRect[]): CanvasRect | undefined {
-  if (!rects.length) return undefined;
-  const x = Math.min(...rects.map((rect) => rect.x));
-  const y = Math.min(...rects.map((rect) => rect.y));
-  return {
-    x,
-    y,
-    width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x,
-    height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y,
-  };
 }
 
 function distanceToSegment(point: CanvasPoint, a: CanvasPoint, b: CanvasPoint) {

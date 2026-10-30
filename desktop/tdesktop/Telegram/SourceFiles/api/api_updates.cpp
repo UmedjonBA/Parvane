@@ -56,7 +56,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
-#include "history/history_streamed_drafts.h"
 #include "history/history_unread_things.h"
 #include "core/application.h"
 #include "storage/storage_account.h"
@@ -84,13 +83,6 @@ constexpr auto kNoUpdatesTimeout = 60 * 1000;
 
 // If nothing is received in 1 min when was a sleepmode we ping.
 constexpr auto kNoUpdatesAfterSleepTimeout = 60 * crl::time(1000);
-
-enum class DataIsLoadedResult {
-	NotLoaded = 0,
-	FromNotLoaded = 1,
-	MentionNotLoaded = 2,
-	Ok = 3,
-};
 
 [[nodiscard]] bool PeerDataIsLoaded(
 		not_null<Data::Session*> owner,
@@ -1106,14 +1098,6 @@ void Updates::handleSendActionUpdate(
 	} else if (action.type() == mtpc_sendMessageEmojiInteractionSeen) {
 		const auto &data = action.c_sendMessageEmojiInteractionSeen();
 		handleEmojiInteraction(peer, qs(data.vemoticon()));
-		return;
-	} else if (action.type() == mtpc_sendMessageTextDraftAction) {
-		const auto &data = action.c_sendMessageTextDraftAction();
-		history->streamedDrafts().apply(rootId, fromId, when, data);
-		return;
-	} else if (action.type() == mtpc_sendMessageRichMessageDraftAction) {
-		const auto &data = action.c_sendMessageRichMessageDraftAction();
-		history->streamedDrafts().apply(rootId, fromId, when, data);
 		return;
 	}
 	session().data().sendActionManager().registerFor(

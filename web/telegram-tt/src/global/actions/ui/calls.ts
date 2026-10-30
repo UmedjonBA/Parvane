@@ -7,13 +7,11 @@ import type {
 
 import { requestNextMutation } from '../../../lib/fasterdom/fasterdom';
 import { ARE_CALLS_SUPPORTED } from '../../../util/browser/windowEnvironment';
-import { copyTextToClipboard } from '../../../util/clipboard';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { omit } from '../../../util/iteratees';
 import * as langProvider from '../../../util/oldLangProvider';
 import safePlay from '../../../util/safePlay';
 import { callApi } from '../../../api/gramjs';
-import { getMainUsername } from '../../helpers';
 import {
   addActionHandler, getGlobal,
   setGlobal,
@@ -21,7 +19,7 @@ import {
 import { updateGroupCall } from '../../reducers/calls';
 import { updateTabState } from '../../reducers/tabs';
 import {
-  selectChat, selectChatFullInfo, selectIsCurrentUserFrozen,
+  selectChat, selectIsCurrentUserFrozen,
   selectTabState, selectUser,
 } from '../../selectors';
 import { selectActiveGroupCall, selectChatGroupCall, selectGroupCall } from '../../selectors/calls';
@@ -129,66 +127,6 @@ addActionHandler('toggleGroupCallPanel', (global, actions, payload): ActionRetur
   return updateTabState(global, {
     isCallPanelVisible: 'force' in (payload || {}) ? force : !selectTabState(global, tabId).isCallPanelVisible,
   }, tabId);
-});
-
-addActionHandler('createGroupCall', async (global, actions, payload): Promise<void> => {
-  const { chatId, tabId = getCurrentTabId() } = payload;
-
-  const chat = selectChat(global, chatId);
-  if (!chat) {
-    return;
-  }
-
-  const result = await callApi('createGroupCall', {
-    peer: chat,
-  });
-
-  if (!result) return;
-
-  global = getGlobal();
-  global = updateGroupCall(global, result.id, {
-    ...result,
-    chatId,
-  });
-  setGlobal(global);
-
-  actions.requestMasterAndJoinGroupCall({ id: result.id, accessHash: result.accessHash, tabId });
-});
-
-addActionHandler('createGroupCallInviteLink', async (global, actions, payload): Promise<void> => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  const groupCall = selectActiveGroupCall(global);
-
-  if (!groupCall || !groupCall.chatId) {
-    return;
-  }
-
-  const chat = selectChat(global, groupCall.chatId);
-  if (!chat) {
-    return;
-  }
-
-  const hasPublicUsername = Boolean(getMainUsername(chat));
-
-  let inviteLink = selectChatFullInfo(global, chat.id)?.inviteLink;
-  if (hasPublicUsername) {
-    inviteLink = await callApi('exportGroupCallInvite', {
-      call: groupCall,
-      canSelfUnmute: false,
-    });
-  }
-
-  if (!inviteLink) {
-    return;
-  }
-
-  copyTextToClipboard(inviteLink);
-  actions.showNotification({
-    message: {
-      key: 'LinkCopied',
-    },
-    tabId,
-  });
 });
 
 addActionHandler('joinVoiceChatByLink', async (global, actions, payload): Promise<void> => {

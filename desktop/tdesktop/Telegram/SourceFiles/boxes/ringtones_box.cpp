@@ -285,60 +285,6 @@ void RingtonesBox(
 	session->api().ringtones().requestList();
 	rebuild();
 
-	// Parvane: свои звуки уведомлений — облако MTProto (account.uploadRingtone), в Parvane нет.
-	if (constexpr auto kParvaneUploadSound = false; kParvaneUploadSound) {
-	const auto upload = box->addRow(
-		Settings::CreateButtonWithIcon(
-			container,
-			tr::lng_ringtones_box_upload_button(),
-			st::ringtonesBoxButton,
-			{
-				&st::settingsIconAdd,
-				Settings::IconType::Round,
-				&st::windowBgActive
-			}),
-		style::margins());
-	upload->addClickHandler([=] {
-		const auto delay = st::ringtonesBoxButton.ripple.hideDuration;
-		base::call_delayed(delay, crl::guard(box, [=] {
-			const auto callback = [=](const FileDialog::OpenResult &result) {
-				auto mime = QString();
-				auto name = QString();
-				auto content = result.remoteContent;
-				if (!result.paths.isEmpty()) {
-					auto info = QFileInfo(result.paths.front());
-					mime = Core::MimeTypeForFile(info).name();
-					name = info.fileName();
-					auto f = QFile(result.paths.front());
-					if (f.open(QIODevice::ReadOnly)) {
-						content = f.readAll();
-						f.close();
-					}
-				} else {
-					mime = Core::MimeTypeForData(content).name();
-					name = "audio";
-				}
-				const auto &ringtones = session->api().ringtones();
-				if (int(content.size()) > ringtones.maxSize()) {
-					box->getDelegate()->show(Ui::MakeInformBox(
-						tr::lng_ringtones_error_max_size(
-							tr::now,
-							lt_size,
-							Ui::FormatSizeText(ringtones.maxSize()))));
-					return;
-				}
-
-				session->api().ringtones().upload(name, mime, content);
-			};
-			FileDialog::GetOpenPath(
-				box.get(),
-				tr::lng_ringtones_box_upload_choose(tr::now),
-				"Audio files (*.mp3)",
-				crl::guard(box, callback));
-		}));
-	});
-	} // Parvane: kParvaneUploadSound
-
 	if (volumeController.volume && volumeController.saveVolume) {
 		auto saveAndTestVolume = [=](ushort currentVolume) {
 			state->presavedVolume = currentVolume;

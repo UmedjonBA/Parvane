@@ -3,19 +3,15 @@ import { throttleWithFullyIdle } from '../../../lib/teact/heavyAnimation';
 import type { ApiUserStatus } from '../../../api/types';
 import type { ActionReturnType } from '../../types';
 
-import { isUserId } from '../../../util/entities/ids';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import {
   deleteContact,
   replaceUserStatuses,
-  updateChat,
-  updateChatFullInfo,
   updatePeerStoriesHidden,
   updateUser,
   updateUserFullInfo,
 } from '../../reducers';
-import {
-  selectChatFullInfo, selectIsChatWithSelf, selectIsCurrentUserPremium, selectUser, selectUserFullInfo,
+import { selectIsChatWithSelf, selectIsCurrentUserPremium, selectUser,
 } from '../../selectors';
 
 const updateStatusesOnFullyIdle = throttleWithFullyIdle(flushStatusUpdates);
@@ -71,17 +67,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       return global;
     }
 
-    case 'updateRequestUserUpdate': {
-      actions.loadFullUser({ userId: update.id });
-      break;
-    }
-
-    case 'updateUserEmojiStatus': {
-      global = updateUser(global, update.userId, { emojiStatus: update.emojiStatus });
-      global = updateChat(global, update.userId, { emojiStatus: update.emojiStatus });
-      return global;
-    }
-
     case 'updateUserStatus': {
       // Status updates come very often so we throttle them
       pendingStatusUpdates[update.userId] = update.status;
@@ -93,72 +78,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       const { id, fullInfo } = update;
 
       return updateUserFullInfo(global, id, fullInfo);
-    }
-
-    case 'updateBotMenuButton': {
-      const { botId, button } = update;
-
-      const targetUserFullInfo = selectUserFullInfo(global, botId);
-      if (!targetUserFullInfo?.botInfo) {
-        return undefined;
-      }
-
-      return updateUserFullInfo(global, botId, {
-        botInfo: {
-          ...targetUserFullInfo.botInfo,
-          menuButton: button,
-        },
-      });
-    }
-
-    case 'updateBotCommands': {
-      const { peerId, botId, commands } = update;
-
-      if (!isUserId(peerId)) {
-        const targetChatFullInfo = selectChatFullInfo(global, peerId);
-        if (!targetChatFullInfo?.botCommands) {
-          actions.loadFullChat({ chatId: peerId, force: true });
-          return undefined;
-        }
-
-        const botCommands = targetChatFullInfo.botCommands.filter((command) => command.botId !== botId);
-        if (commands) {
-          botCommands.push(...commands);
-        }
-
-        return updateChatFullInfo(global, peerId, { botCommands });
-      }
-
-      if (peerId !== botId) {
-        return undefined;
-      }
-
-      const targetUserFullInfo = selectUserFullInfo(global, botId);
-      if (!targetUserFullInfo?.botInfo) {
-        return undefined;
-      }
-
-      return updateUserFullInfo(global, botId, {
-        botInfo: {
-          ...targetUserFullInfo.botInfo,
-          commands,
-        },
-      });
-    }
-
-    case 'updatePeerSettings': {
-      const { id, settings } = update;
-
-      const targetUserFullInfo = selectUserFullInfo(global, id);
-      if (!targetUserFullInfo?.botInfo) {
-        actions.loadFullUser({ userId: id });
-        return undefined;
-      }
-
-      global = updateUserFullInfo(global, id, {
-        settings,
-      });
-      return global;
     }
   }
 

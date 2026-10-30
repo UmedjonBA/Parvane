@@ -12,8 +12,7 @@ import { oldSetLanguage, setTimeFormat as setLegacyTimeFormat } from '../../../u
 import { applyPerformanceSettings } from '../../../util/perfomanceSettings';
 import switchTheme from '../../../util/switchTheme';
 import { updatePeerColors } from '../../../util/theme';
-import { callApi, setShouldEnableDebugLog } from '../../../api/gramjs';
-import { addTabStateResetterAction } from '../../helpers/meta';
+import { setShouldEnableDebugLog } from '../../../api/gramjs';
 import {
   addActionHandler, getActions, setGlobal,
 } from '../../index';
@@ -25,7 +24,7 @@ import { selectSharedSettings } from '../../selectors/sharedState';
 let prevGlobal: GlobalState | undefined;
 
 addCallback((global: GlobalState) => {
-  const { updatePageTitle, updateShouldDebugExportedSenders, updateShouldEnableDebugLog } = getActions();
+  const { updatePageTitle, updateShouldEnableDebugLog } = getActions();
 
   const oldGlobal = prevGlobal;
   prevGlobal = global;
@@ -78,22 +77,13 @@ addCallback((global: GlobalState) => {
     updatePageTitle();
   }
 
-  if (sharedSettings.shouldForceHttpTransport !== oldSharedSettings.shouldForceHttpTransport) {
-    callApi('setForceHttpTransport', Boolean(sharedSettings.shouldForceHttpTransport));
-  }
-
   if (sharedSettings.shouldAllowHttpTransport !== oldSharedSettings.shouldAllowHttpTransport) {
-    callApi('setAllowHttpTransport', Boolean(sharedSettings.shouldAllowHttpTransport));
     if (!sharedSettings.shouldAllowHttpTransport && sharedSettings.shouldForceHttpTransport) {
       global = updateSharedSettings(global, {
         shouldForceHttpTransport: false,
       });
       setGlobal(global);
     }
-  }
-
-  if (sharedSettings.shouldDebugExportedSenders !== oldSharedSettings.shouldDebugExportedSenders) {
-    updateShouldDebugExportedSenders();
   }
 
   if (sharedSettings.shouldCollectDebugLogs !== oldSharedSettings.shouldCollectDebugLogs) {
@@ -111,11 +101,6 @@ addActionHandler('updateShouldEnableDebugLog', (global): ActionReturnType => {
     setShouldEnableDebugLog(false);
     disableDebugConsole();
   }
-});
-
-addActionHandler('updateShouldDebugExportedSenders', (global): ActionReturnType => {
-  const settings = selectSharedSettings(global);
-  callApi('setShouldDebugExportedSenders', Boolean(settings.shouldDebugExportedSenders));
 });
 
 addActionHandler('setSettingOption', (global, actions, payload): ActionReturnType => {
@@ -231,12 +216,3 @@ addActionHandler('closeShareChatFolderModal', (global, actions, payload): Action
     shareFolderScreen: undefined,
   }, tabId);
 });
-
-addActionHandler('openPasskeyModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  return updateTabState(global, {
-    isPasskeyModalOpen: true,
-  }, tabId);
-});
-
-addTabStateResetterAction('closePasskeyModal', 'isPasskeyModalOpen');

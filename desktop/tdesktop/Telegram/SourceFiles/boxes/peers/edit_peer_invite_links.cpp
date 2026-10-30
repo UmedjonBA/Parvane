@@ -52,18 +52,6 @@ enum class Color {
 using InviteLinkData = Api::InviteLink;
 using InviteLinksSlice = Api::PeerInviteLinks;
 
-struct InviteLinkAction {
-	enum class Type {
-		Copy,
-		Share,
-		Edit,
-		Revoke,
-		Delete,
-	};
-	QString link;
-	Type type = Type::Copy;
-};
-
 class Row;
 
 using SubscriptionRightLabel = Settings::SubscriptionRightLabel;

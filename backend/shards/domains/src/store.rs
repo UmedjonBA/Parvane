@@ -41,7 +41,16 @@ pub const MAX_GRANT_LOG: u64 = 4096;
 /// Элементов на страницу (по схеме: max_items = 1024).
 pub const PAGE_ITEMS: usize = 1024;
 /// Кэш «ключ устройства → автор».
-const OWNER_TTL: Duration = Duration::from_secs(60);
+const OWNER_TTL: Duration = Duration::from_secs(15);
+/// Предел кэша владельцев ключей (память шарда не растёт от потока чужих ключей).
+const OWNERS_MAX: usize = 10_000;
+/// Операций в журнале одного контейнера и всех контейнеров владельца (диск шарда не безграничен).
+const MAX_OPS_PER_CONTAINER: u64 = 100_000;
+const MAX_OPS_PER_OWNER: i64 = 500_000;
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
 const KEY_OWNER_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Domains {
@@ -160,6 +169,12 @@ impl Domains {
     /// Запомнить владельца ключа (кэш identity; в тестах — вместо identity).
     pub fn remember_key(&self, key: [u8; 32], author: Author) {
         if let Ok(mut g) = self.owners.lock() {
+            if g.len() >= OWNERS_MAX && !g.contains_key(&key) {
+                g.retain(|_, (at, _)| at.elapsed() < OWNER_TTL);
+                if g.len() >= OWNERS_MAX {
+                    g.clear();
+                }
+            }
             g.insert(key, (Instant::now(), author));
         }
     }
@@ -449,6 +464,18 @@ impl Domains {
         }
         let seal = domain::verify_op_seal(&op).map_err(code)?;
         self.author_is_caller(&seal.signer, user).await?;
+        // Квота журнала: на контейнер и на владельца (иначе писатель, в т.ч. с чужого сервера, растит диск без предела).
+        if m.head_seq >= env_u64("PARVANE_DOMAINS_MAX_OPS_PER_CONTAINER", MAX_OPS_PER_CONTAINER) {
+            return Err(ErrorCode::Limit);
+        }
+        let (owner_ops,): (i64,) = sqlx::query_as("SELECT COALESCE(SUM(head_seq), 0) FROM containers WHERE owner = ?")
+            .bind(&m.owner)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+        if owner_ops >= env_u64("PARVANE_DOMAINS_MAX_OPS_PER_OWNER", MAX_OPS_PER_OWNER as u64) as i64 {
+            return Err(ErrorCode::Limit);
+        }
         let stored = ContainerOp { seq: 0, ..op }.encode_to_vec();
         let mut tx = parvane_db::begin_write(&self.pool).await.map_err(db_err)?;
         // UPDATE первым — берёт блокировку записи, seq без гонок.

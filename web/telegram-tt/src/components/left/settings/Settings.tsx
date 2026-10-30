@@ -9,16 +9,13 @@ import { SettingsScreens } from '../../../types';
 import { selectTabState } from '../../../global/selectors';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
 
-import useTwoFaReducer from '../../../hooks/reducers/useTwoFaReducer';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useScrollNotch from '../../../hooks/useScrollNotch';
 
 import Transition from '../../ui/Transition';
 import SettingsFolders from './folders/SettingsFolders';
 import SettingsPasscode from './passcode/SettingsPasscode';
-import PrivacyMessages from './PrivacyMessages';
 import SettingsActiveSessions from './SettingsActiveSessions';
-import SettingsActiveWebsites from './SettingsActiveWebsites';
 import SettingsCustomEmoji from './SettingsCustomEmoji';
 import SettingsDataStorage from './SettingsDataStorage';
 import SettingsDoNotTranslate from './SettingsDoNotTranslate';
@@ -31,39 +28,16 @@ import SettingsHeader from './SettingsHeader';
 import SettingsLanguage from './SettingsLanguage';
 import SettingsMain from './SettingsMain';
 import SettingsNotifications from './SettingsNotifications';
-import SettingsPasskeys from './SettingsPasskeys';
 import SettingsPerformance from './SettingsPerformance';
 import SettingsPrivacy from './SettingsPrivacy';
 import SettingsPrivacyBlockedUsers from './SettingsPrivacyBlockedUsers';
-import SettingsPrivacyVisibility from './SettingsPrivacyVisibility';
-import SettingsPrivacyVisibilityExceptionList from './SettingsPrivacyVisibilityExceptionList';
 import SettingsQuickReaction from './SettingsQuickReaction';
 import SettingsStickers from './SettingsStickers';
-import SettingsTwoFa from './twoFa/SettingsTwoFa';
 
 import './Settings.scss';
 
 const TRANSITION_RENDER_COUNT = Object.keys(SettingsScreens).length / 2;
 const TRANSITION_DURATION = 200;
-
-const TWO_FA_SCREENS = [
-  SettingsScreens.TwoFaDisabled,
-  SettingsScreens.TwoFaNewPassword,
-  SettingsScreens.TwoFaNewPasswordConfirm,
-  SettingsScreens.TwoFaNewPasswordHint,
-  SettingsScreens.TwoFaNewPasswordEmail,
-  SettingsScreens.TwoFaNewPasswordEmailCode,
-  SettingsScreens.TwoFaCongratulations,
-  SettingsScreens.TwoFaEnabled,
-  SettingsScreens.TwoFaChangePasswordCurrent,
-  SettingsScreens.TwoFaChangePasswordNew,
-  SettingsScreens.TwoFaChangePasswordConfirm,
-  SettingsScreens.TwoFaChangePasswordHint,
-  SettingsScreens.TwoFaTurnOff,
-  SettingsScreens.TwoFaRecoveryEmailCurrentPassword,
-  SettingsScreens.TwoFaRecoveryEmail,
-  SettingsScreens.TwoFaRecoveryEmailCode,
-];
 
 const PASSCODE_SCREENS = [
   SettingsScreens.PasscodeDisabled,
@@ -173,7 +147,6 @@ const Settings: FC<OwnProps> = ({
 
   const containerRef = useRef<HTMLDivElement>();
 
-  const [twoFaState, twoFaDispatch] = useTwoFaReducer();
   const [privacyPasscode, setPrivacyPasscode] = useState<string>('');
 
   useScrollNotch({
@@ -236,11 +209,9 @@ const Settings: FC<OwnProps> = ({
       [SettingsScreens.PrivacyMessages]: PRIVACY_MESSAGES_SCREENS.includes(activeScreen),
     };
 
-    const isTwoFaScreen = TWO_FA_SCREENS.includes(activeScreen);
     const isPasscodeScreen = PASSCODE_SCREENS.includes(activeScreen);
     const isFoldersScreen = FOLDERS_SCREENS.includes(activeScreen);
     const isPrivacyScreen = PRIVACY_SCREENS.includes(activeScreen)
-      || isTwoFaScreen
       || isPasscodeScreen
       || Object.keys(privacyAllowScreens).map(Number).includes(activeScreen)
       || Object.values(privacyAllowScreens).includes(true);
@@ -332,13 +303,6 @@ const Settings: FC<OwnProps> = ({
             onReset={handleReset}
           />
         );
-      case SettingsScreens.ActiveWebsites:
-        return (
-          <SettingsActiveWebsites
-            isActive={isScreenActive}
-            onReset={handleReset}
-          />
-        );
       case SettingsScreens.PrivacyBlockedUsers:
         return (
           <SettingsPrivacyBlockedUsers
@@ -346,75 +310,6 @@ const Settings: FC<OwnProps> = ({
             onReset={handleReset}
           />
         );
-      case SettingsScreens.PrivacyPhoneNumber:
-      case SettingsScreens.PrivacyLastSeen:
-      case SettingsScreens.PrivacyProfilePhoto:
-      case SettingsScreens.PrivacyBio:
-      case SettingsScreens.PrivacyBirthday:
-      case SettingsScreens.PrivacyGifts:
-      case SettingsScreens.PrivacyPhoneCall:
-      case SettingsScreens.PrivacyForwarding:
-      case SettingsScreens.PrivacyVoiceMessages:
-      case SettingsScreens.PrivacyGroupChats:
-        return (
-          <SettingsPrivacyVisibility
-            screen={currentScreen}
-            isActive={isScreenActive || privacyAllowScreens[currentScreen]}
-            onReset={handleReset}
-          />
-        );
-
-      case SettingsScreens.PrivacyPhoneNumberAllowedContacts:
-      case SettingsScreens.PrivacyLastSeenAllowedContacts:
-      case SettingsScreens.PrivacyProfilePhotoAllowedContacts:
-      case SettingsScreens.PrivacyBioAllowedContacts:
-      case SettingsScreens.PrivacyBirthdayAllowedContacts:
-      case SettingsScreens.PrivacyGiftsAllowedContacts:
-      case SettingsScreens.PrivacyPhoneCallAllowedContacts:
-      case SettingsScreens.PrivacyPhoneP2PAllowedContacts:
-      case SettingsScreens.PrivacyForwardingAllowedContacts:
-      case SettingsScreens.PrivacyVoiceMessagesAllowedContacts:
-      case SettingsScreens.PrivacyGroupChatsAllowedContacts:
-      case SettingsScreens.PrivacyNoPaidMessages:
-        return (
-          <SettingsPrivacyVisibilityExceptionList
-            isAllowList
-            usersOnly={currentScreen === SettingsScreens.PrivacyNoPaidMessages}
-            withPremiumCategory={currentScreen === SettingsScreens.PrivacyGroupChatsAllowedContacts}
-            withMiniAppsCategory={currentScreen === SettingsScreens.PrivacyGiftsAllowedContacts}
-            screen={currentScreen}
-            isActive={isScreenActive || privacyAllowScreens[currentScreen]}
-            onReset={handleReset}
-          />
-        );
-
-      case SettingsScreens.PrivacyPhoneNumberDeniedContacts:
-      case SettingsScreens.PrivacyLastSeenDeniedContacts:
-      case SettingsScreens.PrivacyProfilePhotoDeniedContacts:
-      case SettingsScreens.PrivacyBioDeniedContacts:
-      case SettingsScreens.PrivacyBirthdayDeniedContacts:
-      case SettingsScreens.PrivacyGiftsDeniedContacts:
-      case SettingsScreens.PrivacyPhoneCallDeniedContacts:
-      case SettingsScreens.PrivacyPhoneP2PDeniedContacts:
-      case SettingsScreens.PrivacyForwardingDeniedContacts:
-      case SettingsScreens.PrivacyVoiceMessagesDeniedContacts:
-      case SettingsScreens.PrivacyGroupChatsDeniedContacts:
-        return (
-          <SettingsPrivacyVisibilityExceptionList
-            screen={currentScreen}
-            isActive={isScreenActive}
-            onReset={handleReset}
-          />
-        );
-
-      case SettingsScreens.PrivacyMessages:
-        return (
-          <PrivacyMessages
-            isActive={isScreenActive}
-            onReset={handleReset}
-          />
-        );
-
       case SettingsScreens.Folders:
       case SettingsScreens.FoldersCreateFolder:
       case SettingsScreens.FoldersEditFolder:
@@ -431,33 +326,6 @@ const Settings: FC<OwnProps> = ({
             shownScreen={activeScreen}
             state={foldersState}
             dispatch={foldersDispatch}
-            isActive={isScreenActive}
-            onReset={handleReset}
-          />
-        );
-
-      case SettingsScreens.TwoFaDisabled:
-      case SettingsScreens.TwoFaNewPassword:
-      case SettingsScreens.TwoFaNewPasswordConfirm:
-      case SettingsScreens.TwoFaNewPasswordHint:
-      case SettingsScreens.TwoFaNewPasswordEmail:
-      case SettingsScreens.TwoFaNewPasswordEmailCode:
-      case SettingsScreens.TwoFaCongratulations:
-      case SettingsScreens.TwoFaEnabled:
-      case SettingsScreens.TwoFaChangePasswordCurrent:
-      case SettingsScreens.TwoFaChangePasswordNew:
-      case SettingsScreens.TwoFaChangePasswordConfirm:
-      case SettingsScreens.TwoFaChangePasswordHint:
-      case SettingsScreens.TwoFaTurnOff:
-      case SettingsScreens.TwoFaRecoveryEmailCurrentPassword:
-      case SettingsScreens.TwoFaRecoveryEmail:
-      case SettingsScreens.TwoFaRecoveryEmailCode:
-        return (
-          <SettingsTwoFa
-            currentScreen={currentScreen}
-            state={twoFaState}
-            dispatch={twoFaDispatch}
-            shownScreen={activeScreen}
             isActive={isScreenActive}
             onReset={handleReset}
           />
@@ -486,14 +354,6 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.Performance:
         return (
           <SettingsPerformance
-            isActive={isScreenActive}
-            onReset={handleReset}
-          />
-        );
-
-      case SettingsScreens.Passkeys:
-        return (
-          <SettingsPasskeys
             isActive={isScreenActive}
             onReset={handleReset}
           />

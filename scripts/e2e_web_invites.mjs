@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 // записи журнала группы): состояния active/expired/exhausted/revoked, список
 // отозванных, declined; сверяется список ссылок клиента. Заявки группы v2 —
 // scripts/e2e_protocol_groups.mjs. Запуск: scripts/run_web_invites_e2e.sh
-import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 

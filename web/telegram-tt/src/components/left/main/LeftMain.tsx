@@ -10,7 +10,6 @@ import { IS_TAURI } from '../../../util/browser/globalEnvironment';
 import buildClassName from '../../../util/buildClassName';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
-import useForumPanelRender from '../../../hooks/useForumPanelRender';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useShowTransitionDeprecated from '../../../hooks/useShowTransitionDeprecated';
@@ -20,7 +19,6 @@ import Transition from '../../ui/Transition';
 import LeftSearch from '../search/LeftSearch.async';
 import ChatFolders from './ChatFolders';
 import ContactList from './ContactList.async';
-import ForumPanel from './forum/ForumPanel';
 import LeftMainHeader from './LeftMainHeader';
 
 import './LeftMain.scss';
@@ -33,10 +31,8 @@ type OwnProps = {
   shouldSkipTransition?: boolean;
   foldersDispatch: FolderEditDispatch;
   isAppUpdateAvailable?: boolean;
-  isForumPanelOpen?: boolean;
   isClosingSearch?: boolean;
   onSearchQuery: (query: string) => void;
-  onTopicSearch: NoneToVoidFunction;
   isAccountFrozen?: boolean;
   onReset: () => void;
   isFoldersSidebarShown?: boolean;
@@ -54,22 +50,13 @@ const LeftMain: FC<OwnProps> = ({
   shouldSkipTransition,
   foldersDispatch,
   isAppUpdateAvailable,
-  isForumPanelOpen,
   onSearchQuery,
   onReset,
-  onTopicSearch,
   isAccountFrozen,
   isFoldersSidebarShown,
 }) => {
   const [tauriUpdate, setTauriUpdate] = useState<Update>();
   const [isTauriUpdateDownloading, setIsTauriUpdateDownloading] = useState(false);
-
-  const {
-    shouldRenderForumPanel, handleForumPanelAnimationEnd,
-    handleForumPanelAnimationStart, isAnimationStarted,
-  } = useForumPanelRender(isForumPanelOpen);
-  const isForumPanelRendered = isForumPanelOpen && content === LeftColumnContent.ChatList;
-  const isForumPanelVisible = isForumPanelRendered && isAnimationStarted;
 
   const {
     shouldRender: shouldRenderUpdateButton,
@@ -118,7 +105,6 @@ const LeftMain: FC<OwnProps> = ({
   return (
     <div id="LeftColumn-main">
       <LeftMainHeader
-        shouldHideSearch={isForumPanelVisible}
         content={content}
         contactsFilter={contactsFilter}
         onSearchQuery={onSearchQuery}
@@ -141,7 +127,6 @@ const LeftMain: FC<OwnProps> = ({
               return (
                 <ChatFolders
                   foldersDispatch={foldersDispatch}
-                  isForumPanelOpen={isForumPanelVisible}
                   isFoldersSidebarShown={isFoldersSidebarShown}
                 />
               );
@@ -171,15 +156,6 @@ const LeftMain: FC<OwnProps> = ({
         >
           {lang('UpdateTelegram')}
         </Button>
-      )}
-      {shouldRenderForumPanel && (
-        <ForumPanel
-          isOpen={isForumPanelOpen}
-          isHidden={!isForumPanelRendered}
-          onTopicSearch={onTopicSearch}
-          onOpenAnimationStart={handleForumPanelAnimationStart}
-          onCloseAnimationEnd={handleForumPanelAnimationEnd}
-        />
       )}
       {/* Parvane: карандаша Telegram нет. Новое сообщение, группа, канал и запись в план — в меню «Написать»
           шапки списка (компьютер) и в меню «+» нижней панели (телефон) */}

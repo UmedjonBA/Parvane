@@ -842,7 +842,8 @@ std::optional<std::string> resolveDate(const S &text, const std::string &today, 
     if (const auto relative = lang.relativeOf(text)) return addDays(today, *relative);
     Match m;
     if (lang.inParts->exec(text, 0, m)) {
-        const double count = lang.countOf(m.has(1) ? std::optional<S>(m.str(text, 1)) : std::nullopt);
+        // число вне разумного: приведение double → long long вне диапазона — UB (A0080-2)
+        const double count = std::min(lang.countOf(m.has(1) ? std::optional<S>(m.str(text, 1)) : std::nullopt), 100000.0);
         const auto unit = lang.unitOf(m.str(text, 2));
         return unit == "monthly" ? addMonths(today, (long long)count)
                                  : addDays(today, (long long)(unit == "weekly" ? count * kDaysInWeek : count));
@@ -1393,7 +1394,7 @@ QuickDraft parseGoal(const S &rest, const QuickContext &ctx, const Lang &lang) {
              changes.dayEnd = jsNumber(g[3]) * kMinutesInHour + (g.truthy(4) ? jsNumber(g[4]) : 0);
          });
     take("(?:" + names.at("budget") + ")\\s*(" + NUM + ")\\s*(?:" + words.hour + ")?",
-         [&](const G &g) { changes.budget = jsRound(toNumber(g[1]) * kMinutesInHour); });
+         [&](const G &g) { changes.budget = jsRound(std::min(toNumber(g[1]), 1000.0) * kMinutesInHour); });
     const bool isWindowValid = !changes.dayStart || !changes.dayEnd || *changes.dayStart < *changes.dayEnd;
     QuickDraft draft = healthDraft("goal", ctx);
     draft.day = std::nullopt;
@@ -2237,6 +2238,8 @@ QuickDraft parseLine(const S &typed, const QuickContext &ctx, const Lang &lang) 
 // Язык разбора: строка без букв либо с буквами одного языка словаря разбирается этим языком (без букв —
 // языком интерфейса); смешанная — обоими словарями, берётся разбор, распознавший больше; при равенстве —
 // язык интерфейса
+constexpr size_t kMaxParsedLength = 2000; // единиц UTF-16
+
 QuickDraft parseMasked(const S &text, const QuickContext &ctx) {
     const std::string lang = ctx.lang && !ctx.lang->empty() ? *ctx.lang : "ru";
     const std::string other = lang == "ru" ? "en" : "ru";
@@ -2260,6 +2263,14 @@ json num(double v) {
 } // namespace
 
 QuickDraft parseQuickInput(const std::string &typedUtf8, const QuickContext &ctx) {
+    // Потолок разбора (A0080-1/A0081-1): десятки выражений с откатом на строке из статьи или чужого задания
+    // дают подвисание. UI режет ввод на 300; длиннее kMaxParsedLength — простая задача без разбора, текст цел
+    if (fromUtf8(typedUtf8).size() > kMaxParsedLength) {
+        QuickDraft plain;
+        plain.name = typedUtf8;
+        if (trim(fromUtf8(typedUtf8)).empty()) plain.error = "name";
+        return plain;
+    }
     const auto masked = maskNameLinks16(fromUtf8(typedUtf8));
     const S &linked = masked.text;
     const auto remind = has(ctx.skip, "remind") ? std::nullopt : findRemind(linked);

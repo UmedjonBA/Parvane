@@ -153,3 +153,12 @@ describe('числительные: исходные слова', () => {
     expect(toSourceOffset(4, edits, true)).toBe('в десять тридцать'.length);
   });
 });
+
+describe('слова из прототипа объекта', () => {
+  it('«constructor» и «toString» не становятся числами', () => {
+    ['ru', 'en'].forEach((lang) => {
+      expect(rewriteNumerals('constructor at toString', lang as NumeralLang).text).toBe('constructor at toString');
+    });
+    expect(rewriteNumerals('полconstructor', 'ru').text).toBe('полconstructor');
+  });
+});

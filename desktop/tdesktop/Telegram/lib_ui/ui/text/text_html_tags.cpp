@@ -716,6 +716,15 @@ void AppendEscaped(QString &result, QStringView text, bool preserveNewlines) {
 	if (const auto common = DecodeCommonNamedEntity(entity)) {
 		return common;
 	}
+	if (entity.isEmpty()) {
+		return std::nullopt;
+	}
+	for (const auto ch : entity) {
+		const auto code = ch.unicode();
+		if (code > 127 || !ch.isLetterOrNumber()) {
+			return std::nullopt;
+		}
+	}
 	const auto key = entity.toString();
 	const auto cached = cache.constFind(key);
 	if (cached != cache.cend()) {

@@ -84,12 +84,18 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(64usize);
+    let max_per_client = std::env::var("PARVANE_GATEWAY_MAX_CONNS_PER_CLIENT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64usize);
     let limits = Arc::new(Limits {
         conns: Arc::new(Semaphore::new(max_conns)),
         per_ip: Arc::new(Mutex::new(HashMap::new())),
         max_per_ip,
+        per_client: Arc::new(Mutex::new(HashMap::new())),
+        max_per_client,
     });
-    info!("Лимиты соединений: всего {}, на IP {}", max_conns, max_per_ip);
+    info!("Лимиты соединений: всего {}, на IP {}, на клиента за прокси {}", max_conns, max_per_ip, max_per_client);
 
     // TCP-листенер (нативный клиент, протокол v2 с преамбулой PVN2).
     let tcp = TcpListener::bind(&tcp_bind).await.context("bind TCP")?;
@@ -101,7 +107,7 @@ async fn main() -> Result<()> {
             loop {
                 match tcp.accept().await {
                     Ok((stream, peer)) => {
-                        let Some(guard) = admit(&limits, peer.ip()) else {
+                        let Some(guard) = admit(&limits, peer.ip(), false) else {
                             warn!("tcp {}: соединение отклонено (лимит)", peer);
                             continue; // stream дропается → сокет закрыт
                         };
@@ -124,14 +130,15 @@ async fn main() -> Result<()> {
     info!("Gateway WebSocket на {}", ws_bind);
     loop {
         let (stream, peer) = ws.accept().await?;
-        let Some(guard) = admit(&limits, peer.ip()) else {
+        let Some(guard) = admit(&limits, peer.ip(), true) else {
             warn!("ws {}: соединение отклонено (лимит)", peer);
             continue;
         };
         let v2 = v2.clone();
+        let limits = limits.clone();
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(e) = handle_ws(stream, v2).await {
+            if let Err(e) = handle_ws(stream, v2, limits).await {
                 warn!("ws {}: {}", peer, e);
             }
         });

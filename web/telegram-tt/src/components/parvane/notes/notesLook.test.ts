@@ -54,3 +54,12 @@ describe('заметки: начало текста для карточки', ()
     expect(line.text).toHaveLength(140);
   });
 });
+
+describe('заметки: разбор подписи без квадратичного времени', () => {
+  it('строка из «[[» без закрытия', () => {
+    const started = Date.now();
+    previewLines({ title: 'x', text: '[['.repeat(40000) }, 4);
+    previewLines({ title: 'x', text: '[[a|'.repeat(20000) }, 4);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+});

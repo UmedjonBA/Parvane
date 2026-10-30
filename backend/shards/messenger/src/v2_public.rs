@@ -273,7 +273,8 @@ pub(crate) async fn dispatch(ctx: &V2, name: &str, req: ShardRequest) -> Reply {
             } else {
                 return Err(ErrorCode::Forbidden);
             };
-            let before = if r.before_seq == 0 { i64::MAX } else { r.before_seq as i64 };
+            // Постороннему before_seq не действует: превью — только последние сообщения ленты (A0023-3)
+            let before = if r.before_seq == 0 || !is_member { i64::MAX } else { r.before_seq as i64 };
             let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
                 "SELECT seq, envelope FROM public_group_messages WHERE group_id = ? AND seq > ? AND seq < ? ORDER BY seq DESC LIMIT ?",
             )

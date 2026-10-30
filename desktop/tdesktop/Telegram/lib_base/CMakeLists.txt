@@ -31,8 +31,6 @@ PRIVATE
     base/platform/linux/base_last_input_linux.h
     base/platform/linux/base_layout_switch_linux.cpp
     base/platform/linux/base_layout_switch_linux.h
-    base/platform/linux/base_linux_allocation_tracer.cpp
-    base/platform/linux/base_linux_allocation_tracer.h
     base/platform/linux/base_linux_app_launch_context.cpp
     base/platform/linux/base_linux_app_launch_context.h
     base/platform/linux/base_linux_dbus_utilities.cpp
@@ -186,7 +184,6 @@ PRIVATE
     base/integration.cpp
     base/integration.h
     base/invoke_queued.h
-    base/last_used_cache.h
     base/last_user_input.cpp
     base/last_user_input.h
     base/match_method.h
@@ -216,21 +213,17 @@ PRIVATE
     base/runtime_composer.h
     base/screen_reader_state.cpp
     base/screen_reader_state.h
-    base/single_instance.cpp
-    base/single_instance.h
     base/system_unlock.h
     base/thread_safe_wrap.h
     base/timer.cpp
     base/timer.h
     base/timer_rpl.h
     base/type_traits.h
-    base/unique_any.h
     base/unique_function.h
     base/unique_qptr.h
     base/unixtime.cpp
     base/unixtime.h
     base/variant.h
-    base/virtual_method.h
     base/weak_ptr.h
     base/weak_qptr.h
     base/zlib_help.h

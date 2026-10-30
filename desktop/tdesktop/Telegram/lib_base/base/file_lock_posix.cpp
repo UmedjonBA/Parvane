@@ -26,6 +26,8 @@ bool KillProcess(pid_t pid) {
 		usleep(10000);
 		if (++attempts == 50) {
 			signal = SIGKILL;
+		} else if (attempts > 550) {
+			return false;
 		}
 	}
 }

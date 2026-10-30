@@ -337,6 +337,8 @@ const ChatExtra = ({
   const [securityInfo, setSecurityInfo] = useState<SecurityInfo | undefined>();
   const showSecurityKey = Boolean(user && !isSelf && chatId);
   useEffect(() => {
+    // Отпечаток прежнего собеседника не показываем новому, пока не пришёл ответ (или если запрос упал)
+    setSecurityInfo(undefined);
     if (!showSecurityKey) return;
     let isCancelled = false;
     const fetchSecurity = callApi as unknown as (method: string, args: unknown) => Promise<SecurityInfo | undefined>;

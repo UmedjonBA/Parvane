@@ -7,12 +7,10 @@ import { ManagementScreens } from '../../../types';
 
 import { selectCurrentManagementType } from '../../../global/selectors';
 
-import ManageBot from './ManageBot';
 import ManageChannel from './ManageChannel';
 import ManageChatAdministrators from './ManageChatAdministrators';
 import ManageChatPrivacyType from './ManageChatPrivacyType';
 import ManageChatRemovedUsers from './ManageChatRemovedUsers';
-import ManageDiscussion from './ManageDiscussion';
 import ManageGroup from './ManageGroup';
 import ManageGroupAdminRights from './ManageGroupAdminRights';
 import ManageGroupMembers from './ManageGroupMembers';
@@ -23,9 +21,7 @@ import ManageInvite from './ManageInvite';
 import ManageInviteInfo from './ManageInviteInfo';
 import ManageInvites from './ManageInvites';
 import ManageJoinRequests from './ManageJoinRequests';
-import ManageReactions from './ManageReactions';
 import ManageUser from './ManageUser';
-import NewDiscussionGroup from './NewDiscussionGroup.tsx';
 
 export type OwnProps = {
   chatId: string;
@@ -56,15 +52,6 @@ const Management: FC<OwnProps & StateProps> = ({
   switch (currentScreen) {
     case ManagementScreens.Initial: {
       switch (managementType) {
-        case 'bot':
-          return (
-            <ManageBot
-              key={chatId}
-              userId={chatId}
-              onClose={onClose}
-              isActive={isActive}
-            />
-          );
         case 'user':
           return (
             <ManageUser
@@ -123,16 +110,6 @@ const Management: FC<OwnProps & StateProps> = ({
       return (
         <ManageChatPrivacyType
           chatId={chatId}
-          isActive={isActive}
-          onClose={onClose}
-        />
-      );
-
-    case ManagementScreens.Discussion:
-      return (
-        <ManageDiscussion
-          chatId={chatId}
-          onScreenSelect={onScreenSelect}
           isActive={isActive}
           onClose={onClose}
         />
@@ -203,16 +180,6 @@ const Management: FC<OwnProps & StateProps> = ({
         />
       );
 
-    case ManagementScreens.NewDiscussionGroup:
-      return (
-        <NewDiscussionGroup
-          chatId={chatId}
-          onScreenSelect={onScreenSelect}
-          isActive={isActive}
-          onClose={onClose}
-        />
-      );
-
     case ManagementScreens.ChatNewAdminRights:
     case ManagementScreens.ChatAdminRights:
       return (
@@ -266,14 +233,6 @@ const Management: FC<OwnProps & StateProps> = ({
         />
       );
 
-    case ManagementScreens.Reactions:
-      return (
-        <ManageReactions
-          chatId={chatId}
-          isActive={isActive}
-          onClose={onClose}
-        />
-      );
     case ManagementScreens.InviteInfo:
       return (
         <ManageInviteInfo

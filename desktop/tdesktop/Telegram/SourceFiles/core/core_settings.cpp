@@ -943,11 +943,18 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 		auto prefsCount = quint32();
 		stream >> prefsCount;
 		auto prefs = base::flat_map<QByteArray, QByteArray>();
+		if (prefsCount > 4096) {
+			stream.setStatus(QDataStream::ReadCorruptData);
+			prefsCount = 0;
+		}
 		prefs.reserve(prefsCount);
 		for (auto i = quint32(); i != prefsCount; ++i) {
 			auto key = QByteArray();
 			auto value = QByteArray();
 			stream >> key >> value;
+			if (stream.status() != QDataStream::Ok) {
+				break;
+			}
 			prefs.emplace(std::move(key), std::move(value));
 		}
 		if (stream.status() == QDataStream::Ok) {

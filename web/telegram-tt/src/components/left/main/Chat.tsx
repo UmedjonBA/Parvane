@@ -77,7 +77,6 @@ import ListItem from '../../ui/ListItem';
 import ChatFolderModal from '../ChatFolderModal.async';
 import MuteChatModal from '../MuteChatModal.async';
 import ChatBadge from './ChatBadge';
-import ChatCallStatus from './ChatCallStatus';
 import ChatTags from './ChatTags';
 
 import './Chat.scss';
@@ -441,9 +440,6 @@ const Chat: FC<OwnProps & StateProps> = ({
             isOnAvatar
           />
         </div>
-        {chat.isCallActive && chat.isCallNotEmpty && (
-          <ChatCallStatus isMobile={isMobile} isSelected={isSelected} isActive={withInterfaceAnimations} />
-        )}
       </div>
       <div className="info">
         <div className="info-row">

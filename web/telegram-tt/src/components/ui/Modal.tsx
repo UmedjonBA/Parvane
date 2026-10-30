@@ -20,7 +20,6 @@ import useShowTransition from '../../hooks/useShowTransition';
 
 import Button, { type OwnProps as ButtonProps } from './Button';
 import Menu from './Menu';
-import ModalStarBalanceBar from './ModalStarBalanceBar';
 import Portal from './Portal';
 
 import './Modal.scss';
@@ -52,8 +51,6 @@ export type OwnProps = {
   dialogContent?: React.ReactNode;
   moreMenuItems?: TeactNode;
   headerRightToolBar?: TeactNode;
-  withBalanceBar?: boolean;
-  currencyInBalanceBar?: 'TON' | 'XTR';
   isCondensedHeader?: boolean;
   noFreezeOnClose?: boolean;
   onClose: NoneToVoidFunction;
@@ -104,9 +101,7 @@ const Modal = (props: OwnProps) => {
     dialogContent,
     moreMenuItems,
     headerRightToolBar: headerToolBar,
-    withBalanceBar,
     isCondensedHeader,
-    currencyInBalanceBar = 'XTR',
   } = useFrozenProps(props, shouldFreeze);
 
   const localDialogRef = useRef<HTMLDivElement>();
@@ -263,7 +258,6 @@ const Modal = (props: OwnProps) => {
     noBackdrop && 'transparent-backdrop',
     isSlim && 'slim',
     isLowStackPriority && 'low-priority',
-    withBalanceBar && 'with-balance-bar',
   );
 
   const modalDialogClassName = buildClassName(
@@ -276,12 +270,6 @@ const Modal = (props: OwnProps) => {
       <>
         <div className="modal-container">
           <div className="modal-backdrop" onClick={!noBackdropClose ? onClose : undefined} />
-          {withBalanceBar && (
-            <ModalStarBalanceBar
-              isModalOpen={isOpen}
-              currency={currencyInBalanceBar}
-            />
-          )}
           <div className={modalDialogClassName} ref={actualDialogRef} style={dialogStyle}>
             {renderHeader()}
             {headerToolBar}

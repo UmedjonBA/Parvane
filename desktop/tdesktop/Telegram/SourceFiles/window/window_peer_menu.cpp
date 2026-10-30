@@ -32,11 +32,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/delete_messages_box.h"
 #include "boxes/max_invite_box.h"
 #include "boxes/moderate_messages_box.h"
-#include "boxes/select_future_owner_box.h"
 #include "boxes/choose_filter_box.h"
 #include "boxes/create_poll_box.h"
 #include "boxes/edit_todo_list_box.h"
-#include "boxes/pin_messages_box.h"
 #include "boxes/premium_limits_box.h"
 #include "boxes/report_messages_box.h"
 #include "boxes/peers/add_bot_to_chat_box.h"
@@ -3923,33 +3921,6 @@ Fn<void()> DeleteAndLeaveHandler(
 		return [=] {
 			Parvane::LeaveGroup(gid);
 			session->data().deleteConversationLocally(peer);
-		};
-	}
-	const auto isCreator = [&] {
-		if (const auto channel = peer->asChannel()) {
-			return channel->amCreator();
-		} else if (const auto chat = peer->asChat()) {
-			return chat->amCreator();
-		}
-		return false;
-	}();
-	if (isCreator) {
-		const auto requestId = std::make_shared<mtpRequestId>(0);
-		return [=] {
-			if (controller->showFrozenError() || (*requestId > 0)) {
-				return;
-			}
-			*requestId = peer->session().api().request(
-				MTPmessages_GetFutureChatCreatorAfterLeave(
-					peer->input()
-			)).done([=](const MTPUser &result) {
-				*requestId = 0;
-				const auto user = peer->owner().processUser(result);
-				controller->show(Box(SelectFutureOwnerbox, peer, user));
-			}).fail([=](const MTP::Error &error) {
-				*requestId = 0;
-				controller->show(Box(DeleteChatBox, peer));
-			}).send();
 		};
 	}
 	return [=] {

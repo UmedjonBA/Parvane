@@ -218,6 +218,13 @@ void FinishTransfer(const QString &id, const json &result) {
 		t->done = t->total;
 		if (t->kind == u"upload"_q) {
 			St().uploads.erase(id);
+			// «Сохранено в облако» — по итогу последней выгрузки, а не при постановке в очередь
+			const auto &list = St().transfers;
+			if (std::none_of(list.begin(), list.end(), [&](const Transfer &o) {
+				return o.id != id && o.kind == u"upload"_q && o.state == u"active"_q;
+			})) {
+				ShowNotice(u"saved"_q);
+			}
 		}
 		QTimer::singleShot(kDoneHideMs, [=] { DismissTransfer(id); });
 	} else if (result.value("canceled", false) || (t->cancel && t->cancel->load())) {
@@ -1000,16 +1007,16 @@ QImage Thumb(const std::string &container, const CloudNode &node) {
 	}, [key](QImage image) {
 		auto &st = St();
 		st.thumbLoading.erase(key);
-		if (image.isNull()) {
-			return;
-		}
+		// неудачу тоже запоминаем (пустая картинка в кэше): иначе каждая отрисовка запрашивает миниатюру заново
 		st.thumbs[key] = image;
 		st.thumbOrder.push_back(key);
 		while (int(st.thumbOrder.size()) > kThumbCache) {
 			st.thumbs.erase(st.thumbOrder.front());
 			st.thumbOrder.pop_front();
 		}
-		FireStore();
+		if (!image.isNull()) {
+			FireStore();
+		}
 	});
 	return QImage();
 }
@@ -1046,6 +1053,7 @@ void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QStr
 			return std::make_pair(paths, error);
 		}
 		auto files = cloud::CloudFiles(w.drive);
+		auto index = 0;
 		for (const auto &[container, node] : list) {
 			const auto got = files.download(container, node);
 			if (!got.ok) {
@@ -1053,7 +1061,12 @@ void DownloadToTemp(const std::vector<Entry> &entries, Fn<void(QStringList, QStr
 				continue;
 			}
 			// Имя выбирает загрузивший (совместная папка): только последней частью пути, без «..» и скрытых
-			const auto path = QDir(dir).filePath(SafeLocalName(Q(got.name)));
+			// каждый файл — в своём подкаталоге: одноимённые файлы из разных папок не затирают друг друга
+			const auto fileDir = QDir(dir).filePath(QString::number(++index));
+			if (!QDir().mkpath(fileDir)) {
+				continue;
+			}
+			const auto path = QDir(fileDir).filePath(SafeLocalName(Q(got.name)));
 			if (WriteTempFile(path, got.bytes)) {
 				paths.push_back(path);
 			}

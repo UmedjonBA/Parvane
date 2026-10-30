@@ -71,6 +71,8 @@ const MIN_OFFSET = 0.5;
 const SEPARATION_PASSES = 200;
 // Новая карточка ищет место вокруг связанных с ней: шаг — половина клетки, не дальше стольких колец
 const SPOT_MAX_RINGS = 240;
+// Бюджет сверок «клетка × узел» одного поиска: на плотном поле или с огромным узлом поиск не крутится минутами
+const SPOT_MAX_CHECKS = 2_000_000;
 // Блок несвязанных заметок встаёт под холстом, если холст заметно шире своей высоты, иначе — справа
 const BLOCK_WIDE_RATIO = 2;
 
@@ -450,6 +452,7 @@ function findSpot(
   const baseX = Math.round((around.x + around.width / 2 - width / 2) / CANVAS_GRID) * CANVAS_GRID;
   const baseY = Math.round((around.y + around.height / 2 - height / 2) / CANVAS_GRID) * CANVAS_GRID;
   const clearance = gap / 2;
+  let checks = 0;
   for (let ring = 0; ring <= SPOT_MAX_RINGS; ring++) {
     const cells: { i: number; j: number; distance: number }[] = [];
     for (let i = -ring; i <= ring; i++) {
@@ -460,6 +463,8 @@ function findSpot(
     }
     cells.sort((a, b) => a.distance - b.distance || b.j - a.j || b.i - a.i);
     for (const { i, j } of cells) {
+      checks += taken.length + 1;
+      if (checks > SPOT_MAX_CHECKS) return undefined;
       const rect = {
         x: baseX + i * stepX, y: baseY + j * stepY, width, height,
       };

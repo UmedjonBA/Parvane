@@ -305,7 +305,7 @@ export function createMediaService(deps: MediaDependencies) {
           sizeBytes: got.size,
           chunkBytes: got.chunks > 1 ? head.length : got.size,
           totalChunks: got.chunks,
-          mimeType: mimeByFileId.get(fileId) || 'application/octet-stream',
+          mimeType: safeBlobMime(mimeByFileId.get(fileId)),
         });
       }
       got.parts.forEach((bytes, index) => {
@@ -592,11 +592,20 @@ export function createMediaService(deps: MediaDependencies) {
   ): Promise<CachedMedia> {
     const head = await v2.downloadBlobCap(fileId, capability, 0, CAP_DOWNLOAD_BATCH);
     noteE2eDownload(fileId, 0, CAP_DOWNLOAD_BATCH - 1, head.parts);
+    // Геометрию от сервера проверяем так же, как fetchChunkRangeCap: ответ с гигантским числом
+    // чанков или частей не должен гнать клиент в бесконечную загрузку и память
+    const chunk0 = head.parts.get(0);
+    if (!chunk0 || head.size > MAX_FILE_BYTES || !head.chunks || chunk0.length > MAX_CHUNK_BYTES
+      || (head.chunks > 1 && (!chunk0.length || head.chunks > Math.ceil(head.size / chunk0.length)))) {
+      return undefined;
+    }
     const parts = new Map(head.parts);
     for (let first = CAP_DOWNLOAD_BATCH; first < head.chunks; first += CAP_DOWNLOAD_BATCH) {
       const next = await v2.downloadBlobCap(fileId, capability, first, CAP_DOWNLOAD_BATCH);
       noteE2eDownload(fileId, first, first + CAP_DOWNLOAD_BATCH - 1, next.parts);
-      next.parts.forEach((bytes, index) => parts.set(index, bytes));
+      next.parts.forEach((bytes, index) => {
+        if (bytes.length <= MAX_CHUNK_BYTES) parts.set(index, bytes);
+      });
     }
     const ordered: Uint8Array[] = [];
     for (let index = 0; index < head.chunks; index++) {
@@ -987,7 +996,12 @@ export function createMediaService(deps: MediaDependencies) {
     if (content.pack_ref?.file_id && content.pack_ref.blob_domain) {
       deps.getV2?.()?.setBlobDomain?.(content.pack_ref.file_id, content.pack_ref.blob_domain);
     }
-    if (content.file_id && content.file_key && content.file_nonce) {
+    // Ключ, уже известный для file_id, другим сообщением не подменяется (иначе чужое сообщение с
+    // тем же file_id подсунуло бы свои ключ, MIME, секрет и миниатюру чужому вложению)
+    const known = content.file_id ? keysByFileId.get(content.file_id) : undefined;
+    const isReplacement = Boolean(known
+      && (known.keyB64 !== content.file_key || known.nonceB64 !== content.file_nonce));
+    if (content.file_id && content.file_key && content.file_nonce && !isReplacement) {
       keysByFileId.set(content.file_id, { keyB64: content.file_key, nonceB64: content.file_nonce });
       if (content.mime) mimeByFileId.set(content.file_id, content.mime);
       // Секрет скачивания (v2): блоб без гранта на нас — только анонимным каналом
@@ -1138,7 +1152,8 @@ export function createMediaService(deps: MediaDependencies) {
           ? await withTimeout(uploadPreviewPhoto(wp.image, wp.image_mime), PREVIEW_PHOTO_TIMEOUT_MS)
           : undefined;
         return {
-          url: wp.url,
+          // Адрес — из текста отправителя: сервер превью не может подменить ссылку карточки
+          url: fallback.url,
           site_name: wp.site_name || fallback.site_name,
           title: wp.title,
           description: wp.description,

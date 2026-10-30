@@ -386,3 +386,18 @@ describe('заметки: кэш разбора по объекту заметк
     expect(buildNotesIndex([note]).search('ёЛКА').map(({ id }) => id)).toEqual(['a']);
   });
 });
+
+describe('заметки: разбор длинных строк не квадратичен', () => {
+  it('серии обратных кавычек разной длины и свойство без двоеточия — быстро', () => {
+    const started = Date.now();
+    const ticks = Array.from({ length: 4000 }, (_, i) => '`'.repeat(1 + (i % 7))).join('a');
+    parseNote(ticks);
+    parseNote(`---\na${' '.repeat(60000)}b\n---\nтекст`);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it('код в строке по-прежнему гасится: ссылка внутри `…` не ссылка', () => {
+    expect(parseNote('`[[A]]` и [[B]] и ``[[C]] ` x``').links).toEqual(['B']);
+    expect(parseNote('---\nkey: value\n---\n').properties).toEqual({ key: 'value' });
+  });
+});

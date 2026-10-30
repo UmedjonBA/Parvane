@@ -24,6 +24,16 @@ use crate::pb::parvane::msg::v2 as mpb;
 
 pub const DAY_MS: i64 = 86_400_000;
 
+/// Наибольший принимаемый скачок поколения ключа доступа за одно сообщение. Поколение растёт на 1 при
+/// каждом отзыве устройства; без предела украденное устройство закрепило бы `u64::MAX`, и ротация
+/// после отзыва стала бы невозможной (D-11).
+pub const MAX_GENERATION_JUMP: u64 = 1024;
+
+/// Новое поколение принимается: строго больше текущего и не дальше `MAX_GENERATION_JUMP`.
+pub fn generation_step_ok(current: u64, new: u64) -> bool {
+    new > current && new - current <= MAX_GENERATION_JUMP
+}
+
 fn rand_u64() -> u64 {
     rand::RngCore::next_u64(&mut rand::rngs::OsRng)
 }
@@ -93,7 +103,7 @@ impl OwnDeliveryKey {
     /// сообщением.
     pub fn rotate(&mut self, exclude: &[String]) -> Vec<String> {
         self.key = rand32();
-        self.generation += 1;
+        self.generation = self.generation.saturating_add(1);
         for e in exclude {
             self.shared.remove(e);
         }
@@ -103,7 +113,7 @@ impl OwnDeliveryKey {
     /// Принять ключ от своего другого устройства (более новое поколение).
     pub fn adopt(&mut self, key: &[u8], generation: u64) -> bool {
         let Ok(k) = <[u8; 32]>::try_from(key) else { return false };
-        if generation <= self.generation {
+        if !generation_step_ok(self.generation, generation) {
             return false;
         }
         self.key = k;
@@ -372,6 +382,13 @@ mod tests {
         assert!(other.adopt(k.key(), 2));
         assert!(!other.adopt(&old, 1));
         assert_eq!(other.key(), k.key());
+        // A0002-2: скачок поколения в u64::MAX не закрепляется, ротация не переполняется
+        assert!(!other.adopt(&old, u64::MAX));
+        assert!(!other.adopt(&old, 2 + MAX_GENERATION_JUMP + 1));
+        assert_eq!(other.generation(), 2);
+        let mut top = OwnDeliveryKey::from_parts(old, u64::MAX, BTreeMap::new());
+        top.rotate(&[]);
+        assert_eq!(top.generation(), u64::MAX);
     }
 
     fn tok(n: u8) -> AnonToken {

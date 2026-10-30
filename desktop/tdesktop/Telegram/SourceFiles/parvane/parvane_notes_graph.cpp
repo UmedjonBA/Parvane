@@ -322,7 +322,10 @@ protected:
 	void mouseReleaseEvent(QMouseEvent *e) override {
 		const auto index = indexAt(e->pos());
 		if (index >= 0 && _chosen) {
-			_chosen(_options[index].path);
+			// обработчик закрывает само меню (оно удаляется вместе с _chosen) — зовём копию, пока замыкание живо
+			const auto chosen = _chosen;
+			const auto path = _options[index].path;
+			chosen(path);
 		}
 	}
 
@@ -1478,6 +1481,10 @@ void NotesGraph::paintEvent(QPaintEvent *e) {
 	}
 	p.setOpacity(1.);
 	p.restore();
+}
+
+void ResetGraphPlaces() {
+	PlacedById().clear();
 }
 
 } // namespace Parvane::Knowledge

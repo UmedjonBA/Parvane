@@ -121,6 +121,11 @@ function toId(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined;
 }
 
+/** Адрес карточки-ссылки: только http(s); прочие схемы (javascript:, data: …) ссылкой не становятся */
+export function isSafeCanvasUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+}
+
 function toNumber(value: unknown, fallback: number) {
   if (typeof value !== 'number' && typeof value !== 'string') return fallback;
   if (typeof value === 'string' && !value.trim()) return fallback;
@@ -163,8 +168,11 @@ export function parseCanvas(text: string): CanvasParseResult {
       return;
     }
     nodeIds.add(id);
+    // Негодный адрес карточки-ссылки из чужого файла/вставки отбрасывается: карточка рисуется без ссылки
+    const isBadUrl = item.type === 'link' && 'url' in item && !isSafeCanvasUrl(item.url);
+    const safe = isBadUrl ? { ...item, url: undefined } : item;
     nodes.push({
-      ...item,
+      ...safe,
       id,
       type: item.type,
       x: toNumber(item.x, 0),
@@ -328,15 +336,21 @@ export function moveNode(doc: CanvasDoc, id: string, dx: number, dy: number): Ca
 
 // ── геометрия ────────────────────────────────────────────────────────────────
 
-function boundsOfRects(rects: CanvasRect[]): CanvasRect | undefined {
+export function boundsOfRects(rects: CanvasRect[]): CanvasRect | undefined {
   if (!rects.length) return undefined;
-  const x = Math.min(...rects.map((rect) => rect.x));
-  const y = Math.min(...rects.map((rect) => rect.y));
+  // Циклом, не Math.min(...): spread сотен тысяч аргументов бросает RangeError
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const rect of rects) {
+    if (rect.x < x0) x0 = rect.x;
+    if (rect.y < y0) y0 = rect.y;
+    if (rect.x + rect.width > x1) x1 = rect.x + rect.width;
+    if (rect.y + rect.height > y1) y1 = rect.y + rect.height;
+  }
   return {
-    x,
-    y,
-    width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x,
-    height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y,
+    x: x0, y: y0, width: x1 - x0, height: y1 - y0,
   };
 }
 

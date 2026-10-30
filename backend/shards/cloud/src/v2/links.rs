@@ -208,8 +208,12 @@ impl Runtime {
         }
         if map.len() >= RATE_TRACKED_MAX {
             map.retain(|_, w| now.saturating_duration_since(w.start) < RATE_WINDOW);
+            // Все окна живы: вытесняем старейшее, а не отказываем новой ссылке — иначе чужие ссылки,
+            // заполнившие счётчик, закрывали бы доступ настоящим.
             if map.len() >= RATE_TRACKED_MAX {
-                return Err(Refusal { code: ErrorCode::RateLimited, retry_after_ms: BUSY_RETRY_MS });
+                if let Some(oldest) = map.iter().min_by_key(|(_, w)| w.start).map(|(k, _)| *k) {
+                    map.remove(&oldest);
+                }
             }
         }
         map.insert(*key, RateWindow { start: now, count: 1 });
@@ -1150,14 +1154,13 @@ mod tests {
         for i in 0..RATE_TRACKED_MAX as u32 {
             assert!(rt.hit(&key(i), t0).is_ok());
         }
-        // Счётчик полон живыми окнами: новая ссылка получает отказ, память не растёт.
-        let full = rt.hit(&key(u32::MAX), t0).unwrap_err();
-        assert_eq!((full.code, full.retry_after_ms), (ErrorCode::RateLimited, BUSY_RETRY_MS));
+        // Счётчик полон живыми окнами: новая ссылка обслуживается, вытесняя старейшее окно; память не растёт.
+        assert!(rt.hit(&key(u32::MAX), t0 + Duration::from_secs(1)).is_ok());
         assert_eq!(rt.rate.lock().unwrap().len(), RATE_TRACKED_MAX);
         // Уже отслеживаемая — обслуживается.
         assert!(rt.hit(&key(0), t0).is_ok());
         // Окна истекли — место освобождается.
-        assert!(rt.hit(&key(u32::MAX), t0 + RATE_WINDOW).is_ok());
+        assert!(rt.hit(&key(u32::MAX - 1), t0 + RATE_WINDOW + Duration::from_secs(2)).is_ok());
         assert_eq!(rt.rate.lock().unwrap().len(), 1);
     }
 

@@ -7,7 +7,7 @@ import { callApi } from '../../../api/gramjs';
 import { getUserFirstOrLastName } from '../../helpers';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import {
-  updateChat, updateChatFullInfo, updateManagement, updateManagementProgress, updateUserFullInfo,
+  updateChat, updateChatFullInfo, updateManagement, updateManagementProgress,
 } from '../../reducers';
 import {
   selectChat, selectCurrentMessageList, selectIsCurrentUserFrozen,
@@ -393,21 +393,6 @@ addActionHandler('hideAllChatJoinRequests', async (global, actions, payload): Pr
   global = updateChatFullInfo(global, chatId, {
     recentRequesterIds: [],
     requestsPending: 0,
-  });
-  setGlobal(global);
-});
-
-addActionHandler('hidePeerSettingsBar', async (global, actions, payload): Promise<void> => {
-  const { peerId } = payload;
-  const user = selectUser(global, peerId);
-  if (!user) return;
-
-  const result = await callApi('hidePeerSettingsBar', user);
-  if (!result) return;
-
-  global = getGlobal();
-  global = updateUserFullInfo(global, peerId, {
-    settings: undefined,
   });
   setGlobal(global);
 });

@@ -175,6 +175,25 @@ void FillThumbnailOverlay(
 	return result;
 }
 
+// Управляющие символы двунаправленного текста в имени файла позволяют
+// подменить видимое расширение (RLO) — вырезаем их.
+[[nodiscard]] QString StripBidiControls(const QString &value) {
+	auto result = QString();
+	result.reserve(value.size());
+	for (const auto ch : value) {
+		const auto code = ch.unicode();
+		if ((code >= 0x202A && code <= 0x202E)
+			|| (code >= 0x2066 && code <= 0x2069)
+			|| code == 0x200E
+			|| code == 0x200F
+			|| code == 0x061C) {
+			continue;
+		}
+		result.append(ch);
+	}
+	return result;
+}
+
 void FillWaveform(VoiceData *roundData) {
 	if (!roundData || !roundData->waveform.empty()) {
 		return;
@@ -456,7 +475,8 @@ void Document::createComponents() {
 void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 	named->name.setText(
 		st::semiboldTextStyle,
-		CleanTagSymbols(Ui::Text::FormatSongNameFor(_data).string()));
+		CleanTagSymbols(StripBidiControls(
+			Ui::Text::FormatSongNameFor(_data).string())));
 }
 
 QSize Document::countOptimalSize() {

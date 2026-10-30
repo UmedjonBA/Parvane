@@ -3,7 +3,7 @@ import {
 } from 'vitest';
 
 import {
-  diagLog, flushDiag, getDiagEntries, summarize,
+  diagLog, flushDiag, getDiagEntries, scrubErrorText, summarize,
 } from './parvaneDiag';
 
 describe('parvaneDiag summarize', () => {
@@ -56,5 +56,21 @@ describe('parvaneDiag persistence (perf A12)', () => {
     // Нечего дописывать — повторной записи нет
     flushDiag();
     expect(setItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parvaneDiag secrets in urls and errors', () => {
+  it('cuts the fragment of a url field (cloud link key lives after #)', () => {
+    const out = summarize({ url: 'https://srv.example/s/abc#k=SECRETKEYSECRETKEY' });
+    expect(out).not.toContain('SECRET');
+  });
+
+  it('scrubs url queries, emails and long tokens from error text', () => {
+    const out = scrubErrorText(
+      'fail https://srv.example/s/a?x=1#k=SECRETSECRET to bob@mail.example tok AAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    );
+    expect(out).not.toContain('SECRET');
+    expect(out).not.toContain('bob@');
+    expect(out).not.toContain('AAAAAAAAAAAA');
   });
 });

@@ -307,7 +307,12 @@ export class V2Bridge {
         for (const [domain, group] of byDomain) {
           try {
             const remote = await c.call('identity.profile.resolve', { users: group }, undefined, domain);
-            found.push(...list(remote, 'profiles').map(profileToV1));
+            // Чужой сервер вправе отвечать только за свои адреса из запроса: имя и аватар остальных не принимаем
+            const asked = new Set(group.map(({ address }) => String(address).toLowerCase()));
+            found.push(...list(remote, 'profiles').map(profileToV1).filter((profile) => {
+              const username = String(profile.username).toLowerCase();
+              return asked.has(username) && username.split('@')[1] === domain;
+            }));
           } catch {
             // Сервер недоступен или федерация выключена — профиль неизвестен, как несуществующий адрес
           }

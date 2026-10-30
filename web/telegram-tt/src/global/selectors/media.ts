@@ -4,7 +4,6 @@ import type {
 import {
   type ApiMessage,
   type MediaContainer,
-  type SizeTarget,
 } from '../../api/types';
 
 import { NSFW_RESTRICTION_REASON } from '../../config';
@@ -13,7 +12,6 @@ import {
   getMessageContent,
   getMessageDocument,
   getMessageInvoice,
-  getMessageMediaHash,
   getMessagePhoto,
   getMessageSingleCustomEmoji,
   getMessageSingleRegularEmoji,
@@ -88,16 +86,6 @@ export function selectMessageMediaThumbnail<T extends GlobalState>(global: T, me
 export function selectMessageMediaThumbDataUri<T extends GlobalState>(global: T, message: MediaContainer) {
   const thumbnail = selectMessageMediaThumbnail(global, message);
   return thumbnail?.dataUri;
-}
-
-export function selectMessageMediaHash<T extends GlobalState>(
-  global: T,
-  message: MediaContainer,
-  target: SizeTarget,
-) {
-  const webPage = selectWebPageFromMessage(global, message);
-
-  return getMessageMediaHash(message, { webPage }, target);
 }
 
 export function selectMessageMediaDuration<T extends GlobalState>(global: T, message: MediaContainer) {

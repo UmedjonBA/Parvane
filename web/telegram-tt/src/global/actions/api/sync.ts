@@ -227,15 +227,6 @@ async function loadAndReplaceMessages<T extends GlobalState>(global: T, actions:
     }
 
     setGlobal(global);
-
-    if (currentChat?.isForum) {
-      actions.loadTopics({ chatId: currentChatId!, force: true });
-      if (currentThreadId && currentThreadId !== MAIN_THREAD_ID) {
-        actions.loadTopicById({
-          chatId: currentChatId!, topicId: Number(currentThreadId), shouldCloseChatOnError: true,
-        });
-      }
-    }
   }
 
   global = getGlobal();

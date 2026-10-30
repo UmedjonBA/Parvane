@@ -22,6 +22,9 @@ const CALL_TIMEOUT_MS = 15000;
 export const BLOB_TIMEOUT_MS = 60000;
 const UPLOAD_CHUNK_BYTES = 512 * 1024;
 const DOWNLOAD_BATCH = 256;
+// Потолок блоба в памяти (аватары, блобы линковки) и чанка: размер задаёт ответ сервера, ему не верим без предела
+const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 8 * 1024 * 1024;
 
 /** Тело `cloud.blob.upload_chunk`: движком из байт (A7), иначе JSON с base64. */
 export function encodeUploadChunkBody(
@@ -62,6 +65,9 @@ export class V2Control {
 
   private token?: string;
 
+  // Растёт при каждом `close()`: открытие, начатое до него, устарело
+  private generation = 0;
+
   constructor(private readonly url: () => string, private readonly getToken: () => string | undefined) {}
 
   /** Токен сменился (перевыпуск, другой аккаунт) — соединение открывается заново. */
@@ -72,10 +78,21 @@ export class V2Control {
     if (this.opening && this.token === token) return this.opening;
     this.close();
     this.token = token;
+    const { generation } = this;
     const opening = (async () => {
       const pv = await loadProtocol();
       const conn = await openConnection(pv, this.url());
-      await conn.auth(token);
+      try {
+        await conn.auth(token);
+      } catch (e) {
+        conn.close();
+        throw e;
+      }
+      // Пока шла авторизация, соединение могли сменить (другой JWT) либо закрыть: устаревшее не занимает место текущего
+      if (this.generation !== generation || this.token !== token) {
+        conn.close();
+        throw new V2Error('ERROR_CODE_UNAVAILABLE');
+      }
       conn.onClose = () => {
         if (this.conn === conn) this.conn = undefined;
       };
@@ -97,8 +114,9 @@ export class V2Control {
       try {
         return await run(pv, conn);
       } catch (err) {
-        // Обрыв соединения — один повтор на свежем; отказ метода — наверх
-        const isLost = !conn.isOpen || (err instanceof V2Error && err.code === 'ERROR_CODE_UNAVAILABLE');
+        // Обрыв соединения — один повтор на свежем; отказ метода и тайм-аут ответа на живом соединении — наверх
+        // (запрос мог дойти и выполниться: повтор неидемпотентного метода задвоил бы его)
+        const isLost = !conn.isOpen;
         if (attempt > 0 || !isLost) throw err;
         if (this.conn === conn) this.conn = undefined;
         conn.close();
@@ -149,7 +167,7 @@ export class V2Control {
   }
 
   /** Чанки блоба, доступного аккаунту (свой, открытый либо с v1-грантом), начиная с `firstChunk`. */
-  downloadChunks(fileId: string, firstChunk: number, chunkCount: number) {
+  downloadChunks(fileId: string, firstChunk: number, chunkCount: number, maxBytes = MAX_DOWNLOAD_BYTES) {
     return this.withConnection(async (pv, conn) => {
       const method = 'cloud.blob.download';
       const body = pv.encodeMethodRequest(method, JSON.stringify({
@@ -163,10 +181,16 @@ export class V2Control {
       });
       const meta = JSON.parse(pv.decodeMethodResponse(method, await conn.stream(method, body, (chunk) => {
         if (chunk.error) streamError = chunk.error;
-        else if (chunk.data.length) parts.set(chunk.index, chunk.data);
+        else if (chunk.data.length) {
+          // Индекс вне запрошенного окна и слишком крупный чанк — ответ сервера не доверяем
+          const isInWindow = chunk.index >= firstChunk && chunk.index < firstChunk + chunkCount;
+          if (!isInWindow || chunk.data.length > MAX_CHUNK_BYTES) streamError = 'ERROR_CODE_INVALID';
+          else parts.set(chunk.index, chunk.data);
+        }
         if (chunk.last) finish?.();
       }, BLOB_TIMEOUT_MS))) as { size?: string | number; chunks?: number };
       // Метаданные приходят первыми; чанки — следом кадрами того же запроса
+      if (Number(meta.size || 0) > maxBytes) throw new V2Error('ERROR_CODE_LIMIT');
       const totalChunks = meta.chunks || 0;
       const expected = Math.min(chunkCount, Math.max(0, totalChunks - firstChunk));
       if (expected > 0 && parts.size < expected && !streamError) {
@@ -181,10 +205,10 @@ export class V2Control {
   }
 
   /** Блоб целиком. */
-  async downloadBlob(fileId: string): Promise<Uint8Array> {
+  async downloadBlob(fileId: string, maxBytes = MAX_DOWNLOAD_BYTES): Promise<Uint8Array> {
     const pieces: Uint8Array[] = [];
     for (let first = 0; ; first += DOWNLOAD_BATCH) {
-      const { parts, totalChunks } = await this.downloadChunks(fileId, first, DOWNLOAD_BATCH);
+      const { parts, totalChunks } = await this.downloadChunks(fileId, first, DOWNLOAD_BATCH, maxBytes);
       for (let index = first; index < Math.min(totalChunks, first + DOWNLOAD_BATCH); index++) {
         const part = parts.get(index);
         if (!part) throw new V2Error('ERROR_CODE_UNAVAILABLE');
@@ -206,6 +230,7 @@ export class V2Control {
   }
 
   close() {
+    this.generation += 1;
     this.conn?.close();
     this.conn = undefined;
     this.opening = undefined;

@@ -1004,7 +1004,8 @@ void OpenExternalLink(const QString &url, const QString &shown, bool alwaysConfi
 	const auto open = [=] {
 		QDesktopServices::openUrl(parsed);
 	};
-	if (!alwaysConfirm && !md::linkNeedsConfirmation(shown.toStdString(), trimmed.toStdString())) {
+	// mailto: из чужого текста несёт произвольные параметры (cc, bcc, body) — всегда с подтверждением и полным адресом
+	if (!alwaysConfirm && scheme != u"mailto"_q && !md::linkNeedsConfirmation(shown.toStdString(), trimmed.toStdString())) {
 		open();
 		return;
 	}

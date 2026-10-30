@@ -122,24 +122,6 @@ if cmake --build "$PC/build" -j6 >"$TMP/pc-build.log" 2>&1; then
         fail "parvane_core_tests"
     fi
 
-    # ── 4. C++ messenger-тесты parvane-core (send/sync/edit/read/delivered) ────
-    log "4. parvane-core messenger tests (C++)"
-    # Живой тест ходит в шарды по v1 (NATS JSON), а v1 с сервера удалён (T110, 7 окт 2026).
-    # Перевод ядра desktop на v2 — его T110, после решения пользователя вернуться к desktop.
-    echo "messenger: ПРОПУЩЕН (v1-тест ядра desktop, сервер без v1)"
-
-    # ── 5. C++ cloud-тесты parvane-core (upload чанками/download/list) ─────────
-    log "5. parvane-core cloud tests (C++)"
-    # Живой тест ходит в шарды по v1 (NATS JSON), а v1 с сервера удалён (T110, 7 окт 2026).
-    # Перевод ядра desktop на v2 — его T110, после решения пользователя вернуться к desktop.
-    echo "cloud: ПРОПУЩЕН (v1-тест ядра desktop, сервер без v1)"
-
-    # ── 6. C++ call-тесты parvane-core (сигналинг + история) ───────────────────
-    log "6. parvane-core call tests (C++)"
-    # Живой тест ходит в шарды по v1 (NATS JSON), а v1 с сервера удалён (T110, 7 окт 2026).
-    # Перевод ядра desktop на v2 — его T110, после решения пользователя вернуться к desktop.
-    echo "call: ПРОПУЩЕН (v1-тест ядра desktop, сервер без v1)"
-
     # ── 7. C++ crypto-тесты parvane-core (Ed25519, без бэкенда) ────────────────
     log "7. parvane-core crypto tests (C++)"
     if "$PC/build/parvane_crypto_tests"; then

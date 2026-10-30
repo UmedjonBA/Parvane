@@ -237,63 +237,6 @@ void Tag::paintEvent(QPaintEvent *e) {
 	paintFocusRing(p, r, radius);
 }
 
-// ── образец цвета ────────────────────────────────────────────────────────────
-
-Swatch::Swatch(QWidget *parent, std::optional<Tone> tone, const QString &accessibleName)
-: Button(parent)
-, _tone(tone) {
-	setAccessibleName(accessibleName);
-	// Круг 1.75rem и поле 0.125rem под обводку выбранного (`outline` рисуется снаружи круга)
-	const auto side = Rem(1.75) + 2 * Rem(0.125);
-	setNaturalWidth(side);
-	resize(side, side);
-}
-
-void Swatch::setActive(bool active) {
-	if (_active != active) {
-		_active = active;
-		accessibilityStateChanged({ .selected = true });
-		update();
-	}
-}
-
-Ui::AccessibilityState Swatch::accessibilityState() const {
-	return { .pressed = isDown(), .selected = _active };
-}
-
-void Swatch::paintEvent(QPaintEvent *e) {
-	auto p = QPainter(this);
-	PainterHighQualityEnabler hq(p);
-	const auto outline = double(Rem(0.125));
-	const auto circle = QRectF(rect()).adjusted(outline, outline, -outline, -outline);
-	p.setPen(Qt::NoPen);
-	if (_active || (focusVisible() && hasFocus())) {
-		p.setBrush(ToneColor(Tone::Accent));
-		p.drawEllipse(QRectF(rect()));
-	}
-	// Кольцо `--pv-panel` 0.1875rem, внутри — цвет списка
-	p.setBrush(ToneColor(Tone::Panel));
-	p.drawEllipse(circle);
-	if (_tone) {
-		const auto ring = double(Rem(0.1875));
-		p.setBrush(ToneColor(*_tone));
-		p.drawEllipse(circle.adjusted(ring, ring, -ring, -ring));
-	} else {
-		// `.swatchNone`: `inset 0 0 0 1px --pv-line2`
-		auto pen = QPen(ToneColor(Tone::Line2));
-		const auto line = double(Px(1));
-		pen.setWidthF(line);
-		p.setPen(pen);
-		p.setBrush(Qt::NoBrush);
-		p.drawEllipse(circle.adjusted(line / 2., line / 2., -line / 2., -line / 2.));
-	}
-	if (isOver() || isDown()) {
-		p.setPen(Qt::NoPen);
-		p.setBrush(Mix(Tone::Fg, isDown() ? 0.12 : 0.06));
-		p.drawEllipse(circle);
-	}
-}
-
 // ── поле ввода ───────────────────────────────────────────────────────────────
 
 struct Field::Styles {

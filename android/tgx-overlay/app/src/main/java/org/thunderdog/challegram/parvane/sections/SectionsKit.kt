@@ -88,6 +88,9 @@ object Sx {
 
     fun last(domain: String): JSONObject? = cache[domain]
 
+    /** Выход из аккаунта: расшифрованные снимки прежнего владельца не отдаём следующему. */
+    fun clearCache() { cache.clear() }
+
     // ── даты ────────────────────────────────────────────────────────────────────
     private val dayFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
     fun today(): String = dayFormat.format(java.util.Date())

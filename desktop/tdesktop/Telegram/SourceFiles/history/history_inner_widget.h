@@ -45,7 +45,6 @@ class ElementOverlayHost;
 class EmptyPainter;
 class Element;
 class TranslateTracker;
-class ReadMetricsTracker;
 struct PinnedId;
 struct SelectedQuote;
 class AboutView;
@@ -304,8 +303,6 @@ private:
 
 	void onTouchSelect();
 	void onTouchScrollTimer();
-	void markReadMetricsStale();
-	void registerReadMetricsActivity();
 
 	[[nodiscard]] static int SelectionViewOffset(
 		not_null<const HistoryInner*> inner,
@@ -575,8 +572,6 @@ private:
 	std::unique_ptr<HistoryView::AboutView> _aboutView;
 	std::unique_ptr<HistoryView::EmptyPainter> _emptyPainter;
 	std::unique_ptr<HistoryView::TranslateTracker> _translateTracker;
-	std::unique_ptr<HistoryView::ReadMetricsTracker> _readMetricsTracker;
-	bool _readMetricsStale = false;
 	rpl::event_stream<not_null<DocumentData*>> _sendIntroSticker;
 
 	mutable History *_curHistory = nullptr;

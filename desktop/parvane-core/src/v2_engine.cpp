@@ -102,7 +102,6 @@ json engineCall(const std::string &name, const json &args) {
     return parseOrThrow(result(out, err));
 }
 
-std::string encodePing(std::uint64_t nonce) { return takeBytes(pv_encode_ping(nonce)); }
 
 json decodeFrame(const std::string &bytes) {
     char *err = nullptr;
@@ -214,12 +213,6 @@ std::string Client::linkGrantMaterial() {
 json Client::joinWithGrant(const std::string &material, std::size_t otk) {
     char *err = nullptr;
     char *out = pv_client_join_with_grant(c_, material.c_str(), otk, &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::otkRequest(std::size_t n) {
-    char *err = nullptr;
-    char *out = pv_client_otk_request(c_, n, &err);
     return parseOrThrow(result(out, err));
 }
 
@@ -591,18 +584,6 @@ json Client::ephOpen(const std::string &body) const {
     auto v = json::parse(take(pv_client_eph_open(c_, reinterpret_cast<const std::uint8_t *>(body.data()), body.size())),
                          nullptr, false);
     return v.is_array() ? v : json::array();
-}
-
-json Client::legacyDevicesRequest(const json &devices) {
-    char *err = nullptr;
-    char *out = pv_client_legacy_devices_request(c_, devices.dump().c_str(), &err);
-    return parseOrThrow(result(out, err));
-}
-
-json Client::legacyDeliverRequest(const std::string &messageId, const std::string &sendPayloadJson) const {
-    char *err = nullptr;
-    char *out = pv_client_legacy_deliver_request(c_, messageId.c_str(), sendPayloadJson.c_str(), &err);
-    return parseOrThrow(result(out, err));
 }
 
 std::size_t Client::tokenCount() const { return pv_client_token_count(c_); }

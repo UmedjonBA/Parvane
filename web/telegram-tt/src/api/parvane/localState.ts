@@ -55,6 +55,12 @@ const JOURNAL_MAX_ENTRIES = 5000;
 // Запись журнала исходящих на одно сообщение (perf A6)
 const JOURNAL_PREFIX = 'j:';
 
+// Записи с личным содержимым, ключи которых несут не адрес, а числовой id аккаунта либо ничего (пути папок «Знаний»,
+// набранные строки и словарь правок быстрого ввода «Плана»): по адресу их не найти — при выходе стираются по префиксу
+const DEVICE_PERSONAL_PREFIXES = [
+  'parvane:knowledge-collapsed', 'parvane:knowledge-graph-folders', 'parvane:quick-history:', 'parvane:quick-learned:',
+];
+
 export function createLocalState(deps: LocalStateDependencies) {
   const scheduledQueue: ScheduledEntry[] = [];
   let isScheduledLoaded = false;
@@ -471,7 +477,22 @@ export function createLocalState(deps: LocalStateDependencies) {
     notifyChange('scheduled');
   }
 
+  // Записи, которые уже отправляются: ворота журнала асинхронны, а проверка срока идёт по интервалу —
+  // без отметки тот же срок успевал бы сработать второй раз и отправить сообщение дважды
+  const firingScheduled = new Set<string>();
+
   async function fireScheduled(entry: ScheduledEntry) {
+    const firingKey = `${entry.chatId}:${entry.id}`;
+    if (firingScheduled.has(firingKey)) return;
+    firingScheduled.add(firingKey);
+    try {
+      await fireScheduledOnce(entry);
+    } finally {
+      firingScheduled.delete(firingKey);
+    }
+  }
+
+  async function fireScheduledOnce(entry: ScheduledEntry) {
     // Отложенное из журнала: первое устройство, заметившее срок, отправляет его
     // с op_id отложенного; другое устройство уже отправило — только убрать
     if (entry.opId && scheduledGate && !(await scheduledGate(entry.opId))) {
@@ -952,7 +973,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key?.startsWith('parvane:') && (key.endsWith(suffix) || key.includes(`${suffix}:`))) keys.push(key);
+      if (key?.startsWith('parvane:') && (key.endsWith(suffix) || key.includes(`${suffix}:`)
+        || DEVICE_PERSONAL_PREFIXES.some((prefix) => key.startsWith(prefix)))) keys.push(key);
     }
     keys.forEach((key) => localStorage.removeItem(key));
     resetSecureCaches();
@@ -995,11 +1017,28 @@ export function createLocalState(deps: LocalStateDependencies) {
       if (key.endsWith(suffix)) moves.push([key, `${key.slice(0, -suffix.length)}:${newUser}`]);
       else if (key.includes(`${suffix}:`)) moves.push([key, key.replace(`${suffix}:`, `:${newUser}:`)]);
     }
-    for (const [from, to] of moves) {
-      const value = localStorage.getItem(from);
-      if (typeof value === 'string') localStorage.setItem(to, value);
-      localStorage.removeItem(from);
+    // Сначала пишем все новые ключи и только потом убираем старые: переполненная квота посреди
+    // переноса не должна оставить половину данных под новым адресом, а половину потерять
+    const written: string[] = [];
+    try {
+      for (const [from, to] of moves) {
+        const value = localStorage.getItem(from);
+        if (typeof value !== 'string') continue;
+        localStorage.setItem(to, value);
+        written.push(to);
+      }
+    } catch {
+      written.forEach((key) => {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          // откат best effort
+        }
+      });
+      resetSecureCaches();
+      return;
     }
+    for (const [from] of moves) localStorage.removeItem(from);
     resetSecureCaches();
   }
 

@@ -114,6 +114,10 @@ void RecentPeers::applyLocal(QByteArray serialized) {
 		"Start RecentPeers read, count: %1, version: %2."
 		).arg(count
 		).arg(streamAppVersion));
+	if (count > quint32(kLimit)) {
+		DEBUG_LOG(("Suggestions: Bad RecentPeers local, count too big."));
+		count = kLimit;
+	}
 	_list.reserve(count);
 	for (auto i = 0; i != int(count); ++i) {
 		const auto streamPosition = stream.underlying().device()->pos();

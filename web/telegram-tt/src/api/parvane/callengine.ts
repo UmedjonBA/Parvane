@@ -21,6 +21,8 @@ export type CallState =
 
 // Кратковременный сетевой провал WebRTC чинит сам — рвём только по таймауту
 const DISCONNECT_GRACE_MS = 10000;
+// Кандидаты до ответа не копим без предела: сигнал с чужого устройства не должен раздувать память
+const MAX_PENDING_CANDIDATES = 64;
 // Недозвон: авто-отбой у звонящего (сервер запишет missed) и авто-скрытие
 // входящего у собеседника
 export const RING_TIMEOUT_MS = 45000;
@@ -306,7 +308,7 @@ export class CallEngine {
           const candidate = decodeIceCandidate(signal.candidate);
           if (!candidate) break;
           if (this.pc && this.remoteReady) await this.pc.addIceCandidate(candidate).catch(() => undefined);
-          else this.pendingCandidates.push(candidate);
+          else if (this.pendingCandidates.length < MAX_PENDING_CANDIDATES) this.pendingCandidates.push(candidate);
         }
         break;
       case 'media':

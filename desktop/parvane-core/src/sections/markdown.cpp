@@ -16,6 +16,7 @@ using namespace notes::text;
 
 // Отступ вложенного пункта: два пробела либо табуляция на уровень
 constexpr int kIndentStep = 2;
+constexpr size_t kMaxTableCells = 2000; // потолок ячеек одной таблицы (шапка + строки)
 
 bool isAllSpace(const U32 &s, size_t from) {
     for (size_t i = from; i < s.size(); ++i) {
@@ -599,10 +600,17 @@ std::vector<MdBlock> parseMarkdown(const std::string &markdown, const std::strin
             MdBlock block;
             block.type = MdBlockType::Table;
             block.header = splitRow(line);
+            // потолок столбцов: строки дополняются до ширины шапки, без предела память квадратична от длины статьи
+            if (block.header.size() > 64) block.header.resize(64);
             std::vector<MdAlign> align;
             for (const auto &cell : splitRow(lines[i + 1])) align.push_back(alignOf(cell));
             size_t next = i + 2;
             while (next < lines.size() && lines[next].find(U'|') != U32::npos && !trimU(lines[next]).empty()) {
+                // потолок ячеек таблицы: каждая — виджет в Qt-клиентах, статья собеседника не должна их плодить без предела
+                if ((block.rows.size() + 2) * std::max<size_t>(block.header.size(), 1) > kMaxTableCells) {
+                    ++next; // лишние строки таблицы съедаем, не показывая
+                    continue;
+                }
                 const auto cells = splitRow(lines[next]);
                 std::vector<std::string> row;
                 for (size_t c = 0; c < block.header.size(); ++c) row.push_back(c < cells.size() ? cells[c] : "");

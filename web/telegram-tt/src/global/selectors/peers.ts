@@ -1,4 +1,4 @@
-import type { ApiPeer, ApiSavedGifts, ApiStarGiftCollection } from '../../api/types';
+import type { ApiPeer, ApiSavedGifts } from '../../api/types';
 import type { GlobalState, TabArgs } from '../types';
 
 import { SERVICE_NOTIFICATIONS_USER_ID } from '../../config';
@@ -46,13 +46,6 @@ export function selectPeerSavedGifts<T extends GlobalState>(
   ...[tabId = getCurrentTabId()]: TabArgs<T>
 ): ApiSavedGifts | undefined {
   return selectPeerCollectionSavedGifts(global, peerId, 'all', tabId);
-}
-
-export function selectPeerStarGiftCollections<T extends GlobalState>(
-  global: T,
-  peerId: string,
-): ApiStarGiftCollection[] | undefined {
-  return global.starGiftCollections?.byPeerId[peerId];
 }
 
 export function selectPeerPaidMessagesStars<T extends GlobalState>(

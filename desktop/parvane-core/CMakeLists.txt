@@ -47,7 +47,6 @@ add_custom_target(parvane_protocol_build ALL
 
 # ── parvane_core ─────────────────────────────────────────────────────────────
 add_library(parvane_core STATIC
-    src/gateway_transport.cpp
     src/gateway_ws_transport.cpp
     src/linking.cpp
     src/blobcrypt.cpp

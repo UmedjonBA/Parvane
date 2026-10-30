@@ -163,7 +163,6 @@ import useTextLanguage from '../../../hooks/useTextLanguage';
 import useDetectChatLanguage from './hooks/useDetectChatLanguage';
 import useFocusMessageListElement from './hooks/useFocusMessageListElement';
 import useInnerHandlers from './hooks/useInnerHandlers';
-import useMessageReadMetrics from './hooks/useMessageReadMetrics';
 import useMessageTranslation from './hooks/useMessageTranslation';
 import useOuterHandlers from './hooks/useOuterHandlers';
 
@@ -488,7 +487,6 @@ const Message = ({
   observeIntersectionForBottom,
   observeIntersectionForLoading,
   observeIntersectionForPlaying,
-  isMessageListActive,
   isQuickPreview,
   onMessageUnmount,
 }: OwnProps & StateProps) => {
@@ -581,22 +579,7 @@ const Message = ({
   const isLocal = isMessageLocal(message);
   const isOwn = isOwnMessage(message);
   const isScheduled = messageListType === 'scheduled' || message.isScheduled;
-  const readMetricsMessage = album?.mainMessage || message;
-  const canReportReadMetrics = messageListType === 'thread'
-    && threadId === MAIN_THREAD_ID
-    && !isQuickPreview
-    && !isLocal
-    && readMetricsMessage.viewsCount !== undefined;
   const hasMessageReply = isReplyToMessage(message) && !shouldHideReply;
-
-  useMessageReadMetrics({
-    messageRef: ref,
-    containerRef,
-    chatId,
-    messageId: readMetricsMessage.id,
-    isEnabled: canReportReadMetrics,
-    isMessageListActive,
-  });
 
   const { paidMedia } = getMessageContent(message);
   const { photo: paidMediaPhoto, video: paidMediaVideo } = getSingularPaidMedia(paidMedia);

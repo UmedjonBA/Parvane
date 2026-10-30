@@ -24,13 +24,11 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import SquareTabList from '../../ui/SquareTabList';
 import Transition from '../../ui/Transition';
 import AudioResults from './AudioResults';
-import BotAppResults from './BotAppResults';
 import ChatMessageResults from './ChatMessageResults';
 import ChatResults from './ChatResults';
 import FileResults from './FileResults';
 import LinkResults from './LinkResults';
 import MediaResults from './MediaResults';
-import PublicPostsResults from './PublicPostsResults';
 
 import './LeftSearch.scss';
 
@@ -169,20 +167,6 @@ const LeftSearch: FC<OwnProps & StateProps> = ({
                 <AudioResults
                   key="voice"
                   isVoice
-                  searchQuery={searchQuery}
-                />
-              );
-            case GlobalSearchContent.BotApps:
-              return (
-                <BotAppResults
-                  key="botApps"
-                  searchQuery={searchQuery}
-                />
-              );
-            case GlobalSearchContent.PublicPosts:
-              return (
-                <PublicPostsResults
-                  key="publicPosts"
                   searchQuery={searchQuery}
                 />
               );

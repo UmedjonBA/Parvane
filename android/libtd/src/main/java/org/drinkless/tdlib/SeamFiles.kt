@@ -24,6 +24,9 @@ object SeamFiles {
     fun read(file: File): String = codec?.read(file.path) ?: file.readText()
 
     fun write(file: File, text: String) {
-        if (codec?.write(file.path, text) != true) file.writeText(text)
+        val c = codec
+        if (c == null) { file.writeText(text); return }
+        // Ядро отказалось писать (нет ключа Keystore, storecrypt::setRequired) — открытым текстом не пишем (NAT-13)
+        if (!c.write(file.path, text)) android.util.Log.w("SeamFiles", "запись ${file.name} отклонена ядром — на диск не пишется")
     }
 }

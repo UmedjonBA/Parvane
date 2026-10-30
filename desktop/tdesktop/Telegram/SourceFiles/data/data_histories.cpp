@@ -780,7 +780,7 @@ void Histories::deleteMessages(
 	// Parvane: зеркалим удаление СВОИХ сообщений в шину (msg.chat.delete).
 	// Для чужих/неизвестных MirrorDelete — no-op (шард проверяет автора).
 	for (const auto &id : ids) {
-		Parvane::MirrorDelete(id.v);
+		Parvane::MirrorDelete(id.v, revoke);
 	}
 	sendRequest(history, RequestType::Delete, [=](Fn<void()> finish) {
 		const auto done = [=](const MTPmessages_AffectedMessages &result) {

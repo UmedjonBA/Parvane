@@ -7,8 +7,8 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiChat, ApiExportedInvite } from '../../../api/types';
 import { ManagementScreens } from '../../../types';
 
-import { STICKER_SIZE_INVITES, TME_LINK_PREFIX } from '../../../config';
-import { getMainUsername, isChatChannel } from '../../../global/helpers';
+import { STICKER_SIZE_INVITES } from '../../../config';
+import { getMainUsername, getPublicChatLink, isChatChannel } from '../../../global/helpers';
 import { selectChat, selectTabState } from '../../../global/selectors';
 import { copyTextToClipboard } from '../../../util/clipboard';
 import { formatCountdown, MILLISECONDS_IN_DAY } from '../../../util/dates/oldDateFormat';
@@ -104,7 +104,7 @@ const ManageInvites: FC<OwnProps & StateProps> = ({
 
   const chatMainUsername = useMemo(() => chat && getMainUsername(chat), [chat]);
   const primaryInvite = exportedInvites?.find(({ isPermanent }) => isPermanent);
-  const primaryInviteLink = chatMainUsername ? `${TME_LINK_PREFIX}${chatMainUsername}` : primaryInvite?.link;
+  const primaryInviteLink = chatMainUsername ? getPublicChatLink(chatMainUsername) : primaryInvite?.link;
   const temporalInvites = useMemo(() => {
     const invites = chat?.hasUsername ? exportedInvites : exportedInvites?.filter(({ isPermanent }) => !isPermanent);
     return invites?.sort(inviteComparator);

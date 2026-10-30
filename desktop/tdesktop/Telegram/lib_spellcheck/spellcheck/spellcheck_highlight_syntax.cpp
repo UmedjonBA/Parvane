@@ -161,8 +161,8 @@ void QueuedHighlighter::process(Request request) {
 	const auto hash = request.hash;
 	if (offset != request.text.size()) {
 		// Something went wrong.
-		LOG(("Highlighting Error: for language '%1', text: %2"
-			).arg(request.language, request.text));
+		LOG(("Highlighting Error: for language '%1', text length: %2"
+			).arg(request.language).arg(request.text.size()));
 		entities.clear();
 	}
 	crl::on_main([hash, entities = std::move(entities)]() mutable {

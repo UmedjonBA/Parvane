@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -147,7 +148,8 @@ inline double numberOf(const std::string &part) {
     for (char c : t) {
         if (!isDigit(c)) return NAN;
     }
-    return std::stod(t);
+    // strtod, не stod: на сотнях цифр stod бросает out_of_range (A0079-1), strtod даёт inf
+    return std::strtod(t.c_str(), nullptr);
 }
 
 inline std::vector<std::string> split(const std::string &s, char sep) {

@@ -104,6 +104,10 @@ impl Drop for OwnerSlot {
     }
 }
 
+/// Сколько запрос ждёт свободного места шарда и сколько живёт обработчик (зависший вызов не держит место вечно).
+const PERMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+const HANDLER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Подписаться на все методы роли и обслуживать их параллельно (≤ `concurrency`).
 pub async fn serve(nc: async_nats::Client, shard: &'static str, concurrency: usize, handler: Handler) -> Result<(), async_nats::SubscribeError> {
     serve_with(nc, shard, concurrency, None, handler).await
@@ -130,11 +134,20 @@ pub async fn serve_with(
                 warn!("v2 {}: запрос без reply", m.name);
                 continue;
             };
-            let Ok(permit) = sem.clone().acquire_owned().await else { break };
-            let nc = nc.clone();
-            let handler = handler.clone();
-            let owner_slots = owner_slots.clone();
+            let (sem, nc, handler, owner_slots) = (sem.clone(), nc.clone(), handler.clone(), owner_slots.clone());
+            // Место ждём в задаче запроса, а не в диспетчере: один занятый шард не блокирует приём остальных
+            // подписок; ожидание ограничено, потом RATE_LIMITED (A0022-1)
             tokio::spawn(async move {
+                let permit = match tokio::time::timeout(PERMIT_WAIT, sem.acquire_owned()).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(_)) => return,
+                    Err(_) => {
+                        if let Err(e) = nc.publish(reply, rate_limited_reply(OWNER_BUSY_RETRY_MS).into()).await {
+                            error!("v2 {}: ответ не отправлен: {e}", m.name);
+                        }
+                        return;
+                    }
+                };
                 let _permit = permit;
                 let out = match decode_checked::<ShardRequest>(&msg.payload, Origin::Server) {
                     Ok(req) if req.method == m.name => {
@@ -144,9 +157,13 @@ pub async fn serve_with(
                         };
                         match slot {
                             None => rate_limited_reply(OWNER_BUSY_RETRY_MS),
-                            Some(_slot) => match handler(m, req).await {
-                                Ok(b) => ok_reply(b),
-                                Err(code) => error_reply(code),
+                            Some(_slot) => match tokio::time::timeout(HANDLER_TIMEOUT, handler(m, req)).await {
+                                Ok(Ok(b)) => ok_reply(b),
+                                Ok(Err(code)) => error_reply(code),
+                                Err(_) => {
+                                    error!("v2 {}: обработчик не уложился в {} с", m.name, HANDLER_TIMEOUT.as_secs());
+                                    error_reply(ErrorCode::Unavailable)
+                                }
                             },
                         }
                     }

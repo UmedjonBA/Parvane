@@ -247,11 +247,13 @@ ChooseFilterValidator::LimitData ChooseFilterValidator::limitReached(
 
 	const auto list = _history->owner().chatsFilters().list();
 	const auto i = ranges::find(list, filterId, &Data::ChatFilter::id);
+	if (i == end(list)) {
+		return { .reached = false, .count = 0 };
+	}
 	const auto limit = _history->owner().pinnedChatsLimit(filterId);
 	const auto &chatsList = always ? i->always() : i->never();
 	return {
-		.reached = (i != end(list))
-			&& !ranges::contains(chatsList, _history)
+		.reached = !ranges::contains(chatsList, _history)
 			&& (chatsList.size() >= limit),
 		.count = int(chatsList.size()),
 	};

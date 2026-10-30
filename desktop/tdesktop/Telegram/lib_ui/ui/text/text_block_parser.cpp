@@ -678,7 +678,11 @@ void BlockParser::parseEmojiFromCurrent() {
 
 bool BlockParser::isInvalidEntity(const EntityInText &entity) const {
 	const auto length = entity.length();
-	return (_start + entity.offset() + length > _end) || (length <= 0);
+	const auto offset = entity.offset();
+	const auto total = int64(_end - _start);
+	return (offset < 0)
+		|| (length <= 0)
+		|| (int64(offset) + int64(length) > total);
 }
 
 bool BlockParser::isLinkEntity(const EntityInText &entity) const {

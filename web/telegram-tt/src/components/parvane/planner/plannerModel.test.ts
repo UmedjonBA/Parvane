@@ -841,3 +841,15 @@ describe('планировщик: задачи без даты', () => {
     expect(getUndatedTasks(state).map(({ id }) => id)).toEqual(['c', 'b', 'a']);
   });
 });
+
+describe('планировщик: ряд с негодной датой', () => {
+  it('начало не дата — обход не бесконечен и ничего не даёт', () => {
+    ['daily', 'weekly', 'monthly', 'yearly'].forEach((kind) => {
+      const repeat = {
+        kind: kind as 'daily', interval: 1, weekdays: [1], startDay: 'не-дата',
+      };
+      expect(expandRepeat(repeat, '2026-11-01', '2026-11-30')).toEqual([]);
+    });
+    expect(expandRepeat({ kind: 'daily', interval: 1, endDay: 'xx' }, '2026-11-01', '2026-11-30')).toEqual([]);
+  });
+});

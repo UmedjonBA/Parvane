@@ -33,7 +33,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/gift_premium_box.h"
 #include "boxes/edit_privacy_box.h"
 #include "boxes/premium_preview_box.h"
-#include "boxes/preview_ai_tone_box.h"
 #include "boxes/sticker_set_box.h"
 #include "boxes/star_gift_box.h"
 #include "boxes/language_box.h"
@@ -265,42 +264,6 @@ bool ShowTheme(
 		&controller->window(),
 		match->captured(1),
 		fromMessageId);
-	controller->window().activate();
-	return true;
-}
-
-bool ShowAiStyle(
-		Window::SessionController *controller,
-		const Match &match,
-		const QVariant &context) {
-	if (!controller) {
-		return false;
-	}
-	const auto slug = match->captured(1);
-	Core::App().hideMediaView();
-	const auto weak = base::make_weak(controller);
-	auto &tones = controller->session().data().aiComposeTones();
-	tones.resolve(slug, [=](Data::AiComposeTone tone) {
-		const auto strong = weak.get();
-		if (!strong) {
-			return;
-		}
-		strong->window().show(Box(
-			PreviewAiToneBox,
-			&strong->session(),
-			std::move(tone),
-			weak));
-	}, [=](const MTP::Error &error) {
-		const auto strong = weak.get();
-		if (!strong) {
-			return;
-		} else if (error.type() == u"AICOMPOSE_TONE_SLUG_INVALID"_q) {
-			strong->window().showToast(
-				tr::lng_ai_compose_tone_invalid(tr::now));
-		} else if (!MTP::IgnoreError(error)) {
-			strong->window().showToast(error.type());
-		}
-	});
 	controller->window().activate();
 	return true;
 }
@@ -1637,10 +1600,6 @@ const std::vector<LocalUrlHandler> &LocalUrlHandlers() {
 		{
 			u"^addtheme/?\\?slug=([a-zA-Z0-9\\.\\_]+)(&|$)"_q,
 			ShowTheme
-		},
-		{
-			u"^addstyle/?\\?slug=([a-zA-Z0-9\\.\\_]+)(&|$)"_q,
-			ShowAiStyle
 		},
 		{
 			u"^setlanguage/?(\\?lang=([a-zA-Z0-9\\.\\_\\-]+))?(&|$)"_q,

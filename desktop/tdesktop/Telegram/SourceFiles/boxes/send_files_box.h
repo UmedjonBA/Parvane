@@ -121,10 +121,6 @@ struct SendFilesBoxDescriptor {
 
 class SendFilesBox : public Ui::BoxContent {
 public:
-	enum class SendLimit {
-		One,
-		Many
-	};
 	SendFilesBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,

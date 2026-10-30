@@ -214,7 +214,9 @@ public:
 			std::function<void(std::string)> onAnswer) override {
 		if (!ensurePc()) { return; }
 		_pendingLocal = std::move(onAnswer);
-		setRemote("offer", remoteSdp, [this] { setLocalThenReport(); });
+		setRemote("offer", remoteSdp, [this, alive = _alive] {
+			if (alive->load()) setLocalThenReport();
+		});
 	}
 
 	void setRemoteAnswer(const std::string &sdp) override {
@@ -235,6 +237,7 @@ public:
 	void setWantVideo(bool on) override { _wantVideo = on; }
 
 	void close() override {
+		_alive->store(false); // отложенные колбэки SDP-наблюдателей после этого ничего не делают
 		if (_remoteVideoSink) {
 			Parvane::CloseNativeCallPanel();
 		}
@@ -412,7 +415,9 @@ private:
 	void setLocalThenReport() {
 		webrtc::scoped_refptr<webrtc::SetLocalDescriptionObserverInterface> obs(
 			new rtc::RefCountedObject<SetSdpObserver>(
-				[this](webrtc::RTCError) { reportLocal(); }));
+				[this, alive = _alive](webrtc::RTCError) {
+					if (alive->load()) reportLocal();
+				}));
 		_pc->SetLocalDescription(obs);
 	}
 
@@ -450,6 +455,8 @@ private:
 	bool _wantVideo = false;
 	std::unique_ptr<PcObserver> _observer;
 	std::function<void(std::string)> _pendingLocal;
+	// Флаг жизни для колбэков, что приходят из потока сигналинга webrtc уже после close()/деструктора
+	std::shared_ptr<std::atomic<bool>> _alive = std::make_shared<std::atomic<bool>>(true);
 };
 
 } // namespace

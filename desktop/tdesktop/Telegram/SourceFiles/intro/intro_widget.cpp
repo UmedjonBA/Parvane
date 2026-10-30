@@ -7,14 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "intro/intro_widget.h"
 
-#include "intro/intro_start.h"
-#include "intro/intro_phone.h"
-#include "intro/intro_qr.h"
 #include "intro/intro_parvane.h" // Parvane fork
 #include "parvane/parvane_lang.h" // Parvane: ссылка смены языка без облака Telegram
-#include "intro/intro_code.h"
-#include "intro/intro_signup.h"
-#include "intro/intro_password_check.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
 #include "lang/lang_cloud_manager.h"
@@ -451,9 +445,6 @@ void Widget::appendStep(Step *step) {
 			moveToStep(step, action, animate);
 		}
 	});
-	step->setShowResetCallback([=] {
-		showResetButton();
-	});
 	step->setShowTermsCallback([=] {
 		showTerms();
 	});
@@ -465,24 +456,6 @@ void Widget::appendStep(Step *step) {
 	step->setAcceptTermsCallback([=](Fn<void()> callback) {
 		acceptTerms(callback);
 	});
-}
-
-void Widget::showResetButton() {
-	if (!_resetAccount) {
-		auto entity = object_ptr<Ui::RoundButton>(
-			this,
-			tr::lng_signin_reset_account(),
-			st::introResetButton);
-		entity->setTextTransform(Ui::RoundButtonTextTransform::ToUpper);
-		_resetAccount.create(this, std::move(entity));
-		_resetAccount->hide(anim::type::instant);
-		_resetAccount->entity()->setClickedCallback([this] { resetAccount(); });
-		updateControlsGeometry();
-	}
-	_resetAccount->show(anim::type::normal);
-	if (_changeLanguage) {
-		_changeLanguage->hide(anim::type::normal);
-	}
 }
 
 void Widget::showTerms() {
@@ -512,120 +485,6 @@ void Widget::showTerms() {
 
 void Widget::acceptTerms(Fn<void()> callback) {
 	showTerms(callback);
-}
-
-void Widget::resetAccount() {
-	if (_resetRequest || !_api) {
-		return;
-	}
-
-	const auto callback = crl::guard(this, [this] {
-		if (_resetRequest) {
-			return;
-		}
-		_resetRequest = _api->request(MTPaccount_DeleteAccount(
-			MTP_flags(0),
-			MTP_string("Forgot password"),
-			MTPInputCheckPasswordSRP()
-		)).done([=] {
-			_resetRequest = 0;
-
-			getData()->controller->hideLayer();
-			if (getData()->phone.isEmpty()) {
-				moveToStep(
-					new QrWidget(this, _account, getData()),
-					StackAction::Replace,
-					Animate::Back);
-			} else {
-				moveToStep(
-					new SignupWidget(this, _account, getData()),
-					StackAction::Replace,
-					Animate::Forward);
-			}
-		}).fail([=](const MTP::Error &error) {
-			_resetRequest = 0;
-
-			const auto &type = error.type();
-			if (type.startsWith(u"2FA_CONFIRM_WAIT_"_q)) {
-				const auto seconds = base::StringViewMid(
-					type,
-					u"2FA_CONFIRM_WAIT_"_q.size()).toInt();
-				const auto days = (seconds + 59) / 86400;
-				const auto hours = ((seconds + 59) % 86400) / 3600;
-				const auto minutes = ((seconds + 59) % 3600) / 60;
-				auto when = tr::lng_minutes(tr::now, lt_count, minutes);
-				if (days > 0) {
-					const auto daysCount = tr::lng_days(
-						tr::now,
-						lt_count,
-						days);
-					const auto hoursCount = tr::lng_hours(
-						tr::now,
-						lt_count,
-						hours);
-					when = tr::lng_signin_reset_in_days(
-						tr::now,
-						lt_days_count,
-						daysCount,
-						lt_hours_count,
-						hoursCount,
-						lt_minutes_count,
-						when);
-				} else if (hours > 0) {
-					const auto hoursCount = tr::lng_hours(
-						tr::now,
-						lt_count,
-						hours);
-					when = tr::lng_signin_reset_in_hours(
-						tr::now,
-						lt_hours_count,
-						hoursCount,
-						lt_minutes_count,
-						when);
-				}
-				Ui::show(Ui::MakeInformBox(tr::lng_signin_reset_wait(
-					tr::now,
-					lt_phone_number,
-					Ui::FormatPhone(getData()->phone),
-					lt_when,
-					when)));
-			} else if (type == u"2FA_RECENT_CONFIRM"_q) {
-				Ui::show(Ui::MakeInformBox(
-					tr::lng_signin_reset_cancelled()));
-			} else if (!MTP::IgnoreError(error)) {
-				getData()->controller->hideLayer();
-				getStep()->showError(rpl::single(type));
-			}
-		}).send();
-	});
-
-	Ui::show(Ui::MakeConfirmBox({
-		.text = tr::lng_signin_sure_reset(),
-		.confirmed = callback,
-		.confirmText = tr::lng_signin_reset(),
-		.confirmStyle = &st::attentionBoxButton,
-	}));
-}
-
-void Widget::getNearestDC() {
-	if (!_api) {
-		return;
-	}
-	_nearestDcRequestId = _api->request(MTPhelp_GetNearestDc(
-	)).done([=](const MTPNearestDc &result) {
-		_nearestDcRequestId = 0;
-		const auto &nearest = result.c_nearestDc();
-		DEBUG_LOG(("Got nearest dc, country: %1, nearest: %2, this: %3"
-			).arg(qs(nearest.vcountry())
-			).arg(nearest.vnearest_dc().v
-			).arg(nearest.vthis_dc().v));
-		_account->suggestMainDcId(nearest.vnearest_dc().v);
-		const auto nearestCountry = qs(nearest.vcountry());
-		if (getData()->country != nearestCountry) {
-			getData()->country = nearestCountry;
-			getData()->updated.fire({});
-		}
-	}).send();
 }
 
 void Widget::showTerms(Fn<void()> callback) {

@@ -1321,6 +1321,9 @@ void OverlayWidget::RendererRhi::paintRecognitionOverlay(
 	overlay.setDevicePixelRatio(_factor);
 	overlay.fill(QColor(0, 0, 0, int(77 * opacity)));
 
+	if (image.isNull() || image.width() <= 0) {
+		return;
+	}
 	const auto scale = rect.width() / float(image.width());
 	{
 		auto p = QPainter(&overlay);

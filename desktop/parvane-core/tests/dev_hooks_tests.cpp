@@ -51,11 +51,11 @@ int main() {
     check(!dh::allowed("1", "wss://parvane.duckdns.org:20443/ws"), "флаг + прод — выключены");
     check(!dh::allowed("1", ""), "флаг без адреса (прод по умолчанию) — выключены");
 
-    // ── PARVANE_CA_DIRS: по умолчанию разрешено (Android), desktop выключает ──
-    check(parvane::GatewayWsTransport::envCaDirsAllowed(), "CA_DIRS: по умолчанию разрешено (Android)");
-    parvane::GatewayWsTransport::setEnvCaDirsAllowed(false);
-    check(!parvane::GatewayWsTransport::envCaDirsAllowed(), "CA_DIRS: desktop выключает");
+    // ── PARVANE_CA_DIRS: по умолчанию выключено, Android включает явно в JNI_OnLoad ──
+    check(!parvane::GatewayWsTransport::envCaDirsAllowed(), "CA_DIRS: по умолчанию выключено");
     parvane::GatewayWsTransport::setEnvCaDirsAllowed(true);
+    check(parvane::GatewayWsTransport::envCaDirsAllowed(), "CA_DIRS: Android включает явно");
+    parvane::GatewayWsTransport::setEnvCaDirsAllowed(false);
 
     // ── отчёт об ошибке: в релизе — память строк, при содержимом в журнале — без журнала ──
     {

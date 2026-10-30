@@ -10,7 +10,6 @@ import org.json.JSONObject
  */
 object ParvanePush {
     const val KIND_WEB_PUSH = "WAKE_KIND_WEB_PUSH"
-    const val KIND_UNIFIED_PUSH = "WAKE_KIND_UNIFIED_PUSH"
 
     init {
         ParvaneCore

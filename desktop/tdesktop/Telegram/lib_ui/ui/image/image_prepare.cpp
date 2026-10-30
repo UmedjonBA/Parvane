@@ -1314,9 +1314,9 @@ bool IsProgressiveJpeg(const QByteArray &bytes) {
 }
 
 QByteArray MakeProgressiveJpeg(const QByteArray &bytes) {
-	struct jpeg_decompress_struct srcinfo;
-	struct jpeg_compress_struct dstinfo;
-	struct my_error_mgr jerr;
+	struct jpeg_decompress_struct srcinfo = {};
+	struct jpeg_compress_struct dstinfo = {};
+	struct my_error_mgr jerr = {};
 	unsigned char* outbuffer = nullptr;
 	long unsigned int outsize = 0;
 

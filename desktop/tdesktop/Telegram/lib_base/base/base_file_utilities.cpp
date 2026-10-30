@@ -25,6 +25,10 @@ QString FileNameFromUserString(QString name) {
 		0x202E, // RTL Override
 		0x2066, // LTR Isolate
 		0x2067, // RTL Isolate
+		0x202C, // Pop Directional Formatting
+		0x2068, // First Strong Isolate
+		0x2069, // Pop Directional Isolate
+		0x061C, // Arabic Letter Mark
 		'/', '\\', '<', '>', ':', '"', '|', '?', '*' };
 	for (auto &ch : name) {
 		if (ch.unicode() < 32 || ranges::find(kBad, ch.unicode()) != end(kBad)) {

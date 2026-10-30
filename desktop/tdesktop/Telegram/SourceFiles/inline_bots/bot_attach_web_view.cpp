@@ -55,9 +55,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "inline_bots/inline_bot_confirm_prepared.h"
 #include "inline_bots/inline_bot_downloads.h"
 #include "inline_bots/inline_bot_storage.h"
-#ifdef TDESKTOP_IV_EDITOR
-#include "iv/editor/iv_editor_session.h"
-#endif // TDESKTOP_IV_EDITOR
 #include "iv/iv_instance.h"
 #include "lang/lang_keys.h"
 #include "main/main_app_config.h"
@@ -239,18 +236,6 @@ constexpr auto kPopularAppBotsLimit = 100;
 	}, [&](const MTPDjoinChatBotResultWebView &) {
 		return QString();
 	});
-}
-
-[[nodiscard, maybe_unused]] Ui::LocationPickerConfig ResolveMapsConfig(
-		not_null<Main::Session*> session) {
-	const auto &appConfig = session->appConfig();
-	auto map = appConfig.get<base::flat_map<QString, QString>>(
-		u"tdesktop_config_map"_q,
-		base::flat_map<QString, QString>());
-	return {
-		.mapsToken = map[u"maps"_q],
-		.geoToken = map[u"geo"_q],
-	};
 }
 
 [[nodiscard]] Window::SessionController *WindowForThread(
@@ -2838,64 +2823,6 @@ void AttachWebView::toggleInMenu(
 			callback(false);
 		}
 	}).send();
-}
-
-void ChooseAndSendLocation(
-		not_null<Window::SessionController*> controller,
-		const Ui::LocationPickerConfig &config,
-		Api::SendAction action) {
-	const auto weak = base::make_weak(controller);
-	const auto session = &controller->session();
-	if (const auto picker = session->locationPickers().lookup(action)) {
-		picker->activate();
-		return;
-	}
-	struct State {
-		SendPaymentHelper sendPayment;
-		Fn<void(Data::InputVenue, Api::SendAction)> send;
-	};
-	const auto state = std::make_shared<State>();
-	state->send = [=](Data::InputVenue venue, Api::SendAction action) {
-		if (const auto strong = weak.get()) {
-			const auto withPaymentApproved = [=](int stars) {
-				if (const auto onstack = state->send) {
-					auto copy = action;
-					copy.options.starsApproved = stars;
-					onstack(venue, copy);
-				}
-			};
-			const auto checked = state->sendPayment.check(
-				strong,
-				action.history->peer,
-				action.options,
-				1,
-				withPaymentApproved);
-			if (!checked) {
-				return;
-			}
-		}
-		state->send = nullptr;
-		if (venue.justLocation()) {
-			Api::SendLocation(action, venue.lat, venue.lon);
-		} else {
-			Api::SendVenue(action, venue);
-		}
-	};
-	const auto callback = [=](Data::InputVenue venue) {
-		state->send(venue, action);
-	};
-	const auto picker = Ui::LocationPicker::Show({
-		.parent = controller->widget(),
-		.config = config,
-		.chooseLabel = tr::lng_maps_point_send(),
-		.recipient = action.history->peer,
-		.session = session,
-		.callback = crl::guard(session, callback),
-		.quit = [] { Shortcuts::Launch(Shortcuts::Command::Quit); },
-		.storageId = session->local().resolveStorageIdBots(),
-		.closeRequests = controller->content()->death(),
-	});
-	session->locationPickers().emplace(action, picker);
 }
 
 std::unique_ptr<Ui::DropdownMenu> MakeAttachBotsMenu(

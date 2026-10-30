@@ -2918,16 +2918,6 @@
   gap: 0.5rem;
 }
 
-.repeatBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  align-items: flex-start;
-
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--pv-line);
-}
-
 .stepForm {
   display: flex;
   gap: 0.5rem;
@@ -3020,22 +3010,6 @@
   flex-direction: column;
   gap: 0.75rem;
   padding: 0.25rem 0 0.75rem;
-}
-
-// Запись ряда: правило повтора и подсказка
-.seriesBox {
-  margin: 0;
-  padding: 0.625rem 0.75rem;
-  border: 1px dashed var(--pv-line2);
-  border-radius: var(--planner-radius-small);
-
-  font-size: 0.875rem;
-
-  :global(.icon) {
-    margin-inline-end: 0.5rem;
-    font-size: 1rem;
-    vertical-align: -0.125rem;
-  }
 }
 
 // Галочка «описание для всех повторов» под полем описания

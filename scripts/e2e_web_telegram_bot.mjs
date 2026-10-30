@@ -244,7 +244,7 @@ try {
   mark = sent.length;
   ownerWrites(TG_ALICE, key);
   await botSays(TG_ALICE, (m) => m.text.includes('Ключ принят'), mark);
-  await devices.locator('[data-telegram-recovery="done"]').waitFor({ state: 'visible', timeout: JOIN_TIMEOUT_MS });
+  // Экран «Устройства», открытый ради привязки, после входа закрывается сам (24 окт 2026) — ждём готовности движка
   const readyDeadline = Date.now() + JOIN_TIMEOUT_MS;
   while (!second.logs.some((line) => line.includes('[parvane] v2: готов'))) {
     assert(Date.now() < readyDeadline, 'новое устройство не поднялось');

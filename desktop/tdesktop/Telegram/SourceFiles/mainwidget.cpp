@@ -3023,14 +3023,9 @@ void MainWidget::activate() {
 void MainWidget::handleStartFiles(
 		QStringList interprets,
 		QStringList paths) {
-	for (const auto &interpret : interprets) {
-		const auto error = Support::InterpretSendPath(
-			_controller,
-			interpret);
-		if (!error.isEmpty()) {
-			_controller->show(Ui::MakeInformBox(error));
-		}
-	}
+	// Служебный режим поддержки Telegram (interpret: из командной строки
+	// отправлял файл по пути без подтверждения) в Parvane отключён.
+	Q_UNUSED(interprets);
 	if (!paths.isEmpty()) {
 		const auto chosen = [=](not_null<Data::Thread*> thread) {
 			return sendPaths(thread, paths);

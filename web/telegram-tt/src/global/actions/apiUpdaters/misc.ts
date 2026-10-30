@@ -1,31 +1,25 @@
 import type { ActionReturnType } from '../../types';
 
 import { SERVICE_NOTIFICATIONS_USER_ID } from '../../../config';
-import { applyLangPackDifference, getTranslationFn, requestLangPackDifference } from '../../../util/localization';
-import { isChatChannel, selectTabBrowserState } from '../../helpers';
+import { applyLangPackDifference, getTranslationFn } from '../../../util/localization';
 import { getPeerTitle } from '../../helpers/peers';
 import { addActionHandler, setGlobal } from '../../index';
 import {
   addBlockedUser,
   addChats,
-  addStoriesForPeer,
   addUsers,
   removeBlockedUser,
   removePeerStory,
   replaceWebPage,
   updateFullWebPage,
-  updateLastReadStoryForPeer,
   updatePeerStory,
-  updatePeersWithStories,
   updatePoll,
   updateStealthMode,
 } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
 import { updateThreadInfo } from '../../reducers/threads';
 import {
-  selectChat,
   selectPeer,
-  selectPeerStories,
   selectPeerStory,
   selectTabState,
 } from '../../selectors';
@@ -70,149 +64,13 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
         return removeBlockedUser(global, update.id);
       }
 
-    case 'updateResetContactList':
-      global = {
-        ...global,
-        contactList: {
-          userIds: [],
-        },
-      };
-      setGlobal(global);
-      break;
-
     case 'updateConfig':
       actions.loadConfig();
       break;
 
-    case 'updateAiComposeTones':
-      actions.loadAiComposeTones();
-      break;
-
-    case 'updateNewAuthorization': {
-      // Load more info about this session
-      actions.loadAuthorizations();
-      break;
-    }
-
-    case 'updateFavoriteStickers':
-      actions.loadFavoriteStickers();
-      break;
-
-    case 'updateRecentStickers':
-      actions.loadRecentStickers();
-      break;
-
-    case 'updateRecentReactions':
-      actions.loadRecentReactions();
-      break;
-
-    case 'updateRecentEmojiStatuses':
-      actions.loadRecentEmojiStatuses();
-      break;
-
-    case 'updateSavedReactionTags':
-      actions.loadSavedReactionTags();
-      break;
-
-    case 'updateMoveStickerSetToTop': {
-      const oldOrder = update.isCustomEmoji ? global.customEmojis.added.setIds : global.stickers.added.setIds;
-      if (!oldOrder?.some((id) => id === update.id)) return global;
-      const newOrder = [update.id, ...oldOrder.filter((id) => id !== update.id)];
-      actions.reorderStickerSets({ order: newOrder, isCustomEmoji: update.isCustomEmoji });
-      break;
-    }
-
     case 'updateStickerSets':
       actions.loadStickerSets();
       break;
-
-    case 'updateStickerSetsOrder': {
-      // Filter out invalid set IDs, which may be sent by the server
-      const order = update.order.filter((setId) => Boolean(global.stickers.setsById[setId]));
-
-      actions.reorderStickerSets({ order, isCustomEmoji: update.isCustomEmoji });
-      break;
-    }
-
-    case 'updateSavedGifs':
-      actions.loadSavedGifs();
-      break;
-
-    case 'updatePrivacy':
-      global = {
-        ...global,
-        settings: {
-          ...global.settings,
-          privacy: {
-            ...global.settings.privacy,
-            [update.key]: update.rules,
-          },
-        },
-      };
-      setGlobal(global);
-      break;
-
-    case 'updateWebViewResultSent':
-      Object.values(global.byTabId).forEach((tabState) => {
-        Object.entries(selectTabBrowserState(tabState).openedTabs).forEach(([tabKey, browserTab]) => {
-          if (browserTab.type === 'webApp' && browserTab.webApp.queryId === update.queryId) {
-            actions.resetDraftReplyInfo({ tabId: tabState.id });
-            actions.closeBrowserTab({ key: tabKey, skipClosingConfirmation: true, tabId: tabState.id });
-          }
-        });
-      });
-      break;
-
-    case 'updateJoinChatWebViewDecision': {
-      const { peerId, queryId, result } = update;
-      const chat = selectChat(global, peerId);
-
-      Object.values(global.byTabId).forEach((tabState) => {
-        const tabId = tabState.id;
-        Object.entries(selectTabBrowserState(tabState).openedTabs).forEach(([webAppKey, browserTab]) => {
-          if (browserTab.type !== 'webApp') return;
-          const { webApp } = browserTab;
-          if (webApp.queryId !== queryId) return;
-
-          const isChannel = webApp.isJoinChatBroadcast ?? Boolean(chat && isChatChannel(chat));
-
-          if (result.type === 'webView') {
-            const { botId, peerId: webAppPeerId, isJoinChatBroadcast } = webApp;
-            actions.closeBrowserTab({ key: webAppKey, skipClosingConfirmation: true, tabId });
-            actions.openChatInviteWebView({
-              botId,
-              url: result.url,
-              queryId,
-              peerId: webAppPeerId || peerId,
-              isBroadcast: isJoinChatBroadcast ?? isChannel,
-              tabId,
-            });
-            return;
-          }
-
-          actions.closeBrowserTab({ key: webAppKey, skipClosingConfirmation: true, tabId });
-
-          if (result.type === 'approved') {
-            actions.openChat({ id: peerId, tabId });
-            actions.showNotification({
-              message: { key: isChannel ? 'ActionChannelJoinedByRequestChannelYou' : 'ActionJoinedByRequestYou' },
-              tabId,
-            });
-          } else if (result.type === 'declined') {
-            actions.showNotification({
-              message: { key: isChannel ? 'RequestToJoinChannelDeclined' : 'RequestToJoinGroupDeclined' },
-              tabId,
-            });
-          } else if (result.type === 'queued') {
-            actions.showNotification({
-              message: { key: isChannel ? 'RequestToJoinChannelSentDescription' : 'RequestToJoinGroupSentDescription' },
-              tabId,
-            });
-          }
-        });
-      });
-      break;
-    }
 
     case 'updateWebPage': {
       const { webPage } = update;
@@ -225,19 +83,8 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       break;
     }
 
-    case 'updateStory':
-      global = addStoriesForPeer(global, update.peerId, { [update.story.id]: update.story });
-      global = updatePeersWithStories(global, { [update.peerId]: selectPeerStories(global, update.peerId)! });
-      setGlobal(global);
-      break;
-
     case 'deleteStory':
       global = removePeerStory(global, update.peerId, update.storyId);
-      setGlobal(global);
-      break;
-
-    case 'updateReadStories':
-      global = updateLastReadStoryForPeer(global, update.peerId, update.lastReadId);
       setGlobal(global);
       break;
 
@@ -254,34 +101,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       global = updateStealthMode(global, update.stealthMode);
       setGlobal(global);
       break;
-
-    case 'updateAttachMenuBots':
-      actions.loadAttachBots();
-      break;
-
-    case 'updatePremiumFloodWait': {
-      actions.processPremiumFloodWait({
-        isUpload: update.isUpload,
-      });
-      break;
-    }
-
-    case 'updatePaidReactionPrivacy': {
-      global = {
-        ...global,
-        settings: {
-          ...global.settings,
-          paidReactionPrivacy: update.private,
-        },
-      };
-      setGlobal(global);
-      break;
-    }
-
-    case 'updateLangPackTooLong': {
-      requestLangPackDifference(update.langCode);
-      break;
-    }
 
     case 'updateLangPack': {
       applyLangPackDifference(update.version, update.strings, update.keysToRemove);

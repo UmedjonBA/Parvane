@@ -282,7 +282,10 @@ bool VideoTrack::Sink::decodeFrame(
 		not_null<Frame*> frame) {
 	const auto native = nativeVideoFrame.video_frame_buffer()->ToI420();
 	const auto size = QSize{ native->width(), native->height() };
-	if (size.isEmpty()) {
+	constexpr auto kMaxFrameSide = 4096;
+	if (size.isEmpty()
+		|| size.width() > kMaxFrameSide
+		|| size.height() > kMaxFrameSide) {
 		frame->format = FrameFormat::None;
 		return false;
 	}
@@ -318,7 +321,10 @@ bool VideoTrack::Sink::decodeFrame(
 		size,
 		AV_PIX_FMT_BGRA,
 		&_decodeContext);
-	Assert(_decodeContext != nullptr);
+	if (!_decodeContext) {
+		frame->format = FrameFormat::None;
+		return false;
+	}
 
 	// AV_NUM_DATA_POINTERS defined in AVFrame struct
 	const uint8_t *src[AV_NUM_DATA_POINTERS] = {

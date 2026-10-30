@@ -20,8 +20,6 @@ static void check(bool ok, const std::string &name) {
 }
 
 static json J(const char *text) { return json::parse(text); }
-static json arr(const std::vector<json> &v) { return json(v); }
-
 static std::string kindOf(const json &change) { return change.begin().key(); }
 
 static const json *findById(const std::vector<json> &changes, const std::string &kind, const std::string &id) {
@@ -667,6 +665,24 @@ int main() {
         const auto echo = fromEngineState(engine);
         check(json(echo.tasks[0]) == json(draft.tasks[0]) && diffChanges(draft, echo).empty(),
               "эхо движка с переиспользованными объектами даёт пустую разницу");
+    }
+
+    {
+        // A0078-1 / A0079: значения вне диапазона и глубокая вложенность не дают UB и не падают
+        json engine = DIFF_ENGINE;
+        engine["tasks"][0]["remind"] = 1e12;
+        engine["tasks"][0]["minutes"] = 1e12;
+        engine["tasks"][0]["start"] = std::string(400, '9');
+        const auto state = fromEngineState(engine);
+        check(state.tasks[0].remind && *state.tasks[0].remind == 2147483647, "remind 1e12 насыщается, а не UB");
+        check(state.tasks[0].minutes && *state.tasks[0].minutes <= 100000, "minutes ограничены");
+        check(toMinutes(std::string(400, '9') + ":00") == 0 && toMinutes("99999999999:00") >= 0,
+              "toMinutes на длинной строке цифр не бросает");
+        json deep = engine;
+        deep["health"] = json::array({json{{"id", "h1"}, {"day", "2026-01-01"}, {"kind", "workout"},
+                                           {"details", "{\"ex\":" + std::string(100000, '[') + std::string(100000, ']') + "}"}}});
+        const auto deepState = fromEngineState(deep);
+        check(!deepState.health.empty() && !deepState.health[0].exercises, "details глубиной 100000 отвергаются без падения");
     }
 
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);

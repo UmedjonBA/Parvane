@@ -107,4 +107,14 @@ class ParvaneStoreGroupTest {
         // старый сервер без ревизии при известной — пропуск
         assertNull(s.ensureGroup("g1", "old", listOf("alice@local", "carol@local"), "alice@local", emptyMap(), JSONObject("""{"group_id":"g1"}""").put("version", -1)))
     }
+
+    // PUBLIC-1: флажки «читать без вступления» / «видят историю» берутся из сведений группы, а не включаются заново
+    @Test
+    fun publicFlagsComeFromGroupInfo() {
+        val s = store()
+        val i = info(1).put("is_public", true).put("public_name", "demo_group").put("public_preview", false).put("public_history", false)
+        s.ensureGroup("g1", "G", listOf("alice@local", "carol@local"), "alice@local", emptyMap(), i)
+        assertFalse(s.group("g1")!!.publicPreview)
+        assertFalse(s.group("g1")!!.publicHistory)
+    }
 }

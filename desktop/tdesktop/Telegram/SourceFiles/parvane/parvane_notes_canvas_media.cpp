@@ -53,6 +53,8 @@ struct State {
 	std::set<std::string> previewsLoading;
 
 	std::optional<notes::CanvasImageQuality> quality;
+	// Поколение: Reset() увеличивает, ответы заданий прежнего аккаунта отбрасываются
+	std::uint64_t generation = 0;
 };
 
 State &S();
@@ -85,6 +87,11 @@ void ReadImage(
 		int maxSide,
 		std::int64_t maxPlainBytes,
 		std::function<void(QImage)> done) {
+	done = [generation = S().generation, done = std::move(done)](QImage image) {
+		if (S().generation == generation) {
+			done(std::move(image));
+		}
+	};
 	Sections::Ask<QImage>([=](Sections::Workers &w) {
 		try {
 			const auto read = w.drive.readText(container, nodeId, cloud::withMaxBytes(blob, maxPlainBytes));
@@ -146,6 +153,24 @@ State &S() {
 }
 
 } // namespace
+
+void Reset() {
+	auto &s = S();
+	++s.generation;
+	s.cache.reset(); // сам вернёт адреса через revokeUrl; новый создаст S() при следующем обращении
+	s.timers.clear();
+	s.fullByUrl.clear();
+	s.urlByFile.clear();
+	s.thumbs.clear();
+	s.thumbOrder.clear();
+	s.thumbsLoading.clear();
+	s.thumbsFailed.clear();
+	s.previews.clear();
+	s.previewOrder.clear();
+	s.previewsLoading.clear();
+	s.quality.reset();
+	s.updated.fire({});
+}
 
 rpl::producer<> Updated() {
 	return S().updated.events();
@@ -255,6 +280,7 @@ const Preview *LinkPreview(const std::string &url) {
 		return nullptr;
 	}
 	s.previewsLoading.insert(url);
+	const auto generation = s.generation;
 	Sections::Ask<std::optional<Preview>>([url](Sections::Workers &w) -> std::optional<Preview> {
 		auto source = std::optional<notes::LinkPreviewSource>();
 		try {
@@ -288,8 +314,11 @@ const Preview *LinkPreview(const std::string &url) {
 			result.image = Decode(raw.toStdString(), 1280);
 		}
 		return result;
-	}, [url](std::optional<Preview> result) {
+	}, [url, generation](std::optional<Preview> result) {
 		auto &s = S();
+		if (s.generation != generation) {
+			return;
+		}
 		s.previewsLoading.erase(url);
 		if (!result) {
 			return;

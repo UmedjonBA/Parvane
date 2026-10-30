@@ -6,12 +6,12 @@ import {
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
 import type {
-  ApiAvailableReaction, ApiChat, ApiChatFullInfo, ApiExportedInvite,
+  ApiChat, ApiChatFullInfo, ApiExportedInvite,
 } from '../../../api/types';
 import { ApiMediaFormat } from '../../../api/types';
 import { ManagementProgress, ManagementScreens } from '../../../types';
 
-import { getChatAvatarHash, getHasAdminRight, isChatChannel, isChatPublic } from '../../../global/helpers';
+import { getChatAvatarHash, getHasAdminRight, isChatPublic } from '../../../global/helpers';
 import { selectChat, selectChatFullInfo, selectIsChatRestricted, selectTabState } from '../../../global/selectors';
 import { formatInteger } from '../../../util/textFormat';
 
@@ -22,7 +22,6 @@ import useMedia from '../../../hooks/useMedia';
 import useOldLang from '../../../hooks/useOldLang';
 
 import Island from '../../gili/layout/Island';
-import Switch from '../../gili/primitives/Switch';
 import AvatarEditable from '../../ui/AvatarEditable';
 import ConfirmDialog from '../../ui/ConfirmDialog';
 import FloatingActionButton from '../../ui/FloatingActionButton';
@@ -35,7 +34,6 @@ import './Management.scss';
 
 // Parvane (spec 003): фото, описание и заявки — на сервере; тип канала,
 // обсуждения (треды вне продукта), реакции и автоперевод — вне контракта
-const IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED = false;
 // Публичная группа (spec 023): тип «Публичная/Частная» с именем
 const IS_CHANNEL_TYPE_SUPPORTED = true;
 const IS_CHANNEL_PHOTO_SUPPORTED = true;
@@ -56,9 +54,6 @@ type StateProps = {
   canChangeInfo?: boolean;
   canInvite?: boolean;
   exportedInvites?: ApiExportedInvite[];
-  availableReactions?: ApiAvailableReaction[];
-  hasAutoTranslation?: boolean;
-  canToggleAutoTranslation?: boolean;
 };
 
 const CHANNEL_TITLE_EMPTY = 'Channel title can\'t be empty';
@@ -73,11 +68,8 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   canInvite,
   exportedInvites,
   isActive,
-  availableReactions,
   onScreenSelect,
   onClose,
-  hasAutoTranslation,
-  canToggleAutoTranslation,
 }) => {
   const {
     updateChat,
@@ -87,12 +79,10 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
     openChat,
     loadExportedChatInvites,
     loadChatJoinRequests,
-    toggleAutoTranslation,
   } = getActions();
 
   const currentTitle = chat?.title || '';
   const currentAbout = chatFullInfo?.about || '';
-  const hasLinkedChat = Boolean(chatFullInfo?.linkedChatId);
 
   const [isDeleteDialogOpen, openDeleteDialog, closeDeleteDialog] = useFlag();
   const [isProfileFieldsTouched, setIsProfileFieldsTouched] = useState(false);
@@ -104,12 +94,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
   const currentAvatarBlobUrl = useMedia(imageHash, false, ApiMediaFormat.BlobUrl);
   const lang = useOldLang();
 
-  const hasAutoTranslationAvailable = chat && isChatChannel(chat);
-
-  const handleAutoTranslationChange = useLastCallback(() => {
-    toggleAutoTranslation({ chatId, isEnabled: !hasAutoTranslation });
-  });
-
   useHistoryBack({
     isActive,
     onBack: onClose,
@@ -120,23 +104,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
     loadExportedChatInvites({ chatId });
     loadExportedChatInvites({ chatId, isRevoked: true });
     if (IS_CHANNEL_REQUESTS_SUPPORTED) loadChatJoinRequests({ chatId });
-  }, [chatId, canInvite]);
-
-  // Parvane (GROUP-1): уведомление об изменении ссылок/заявок — перечитать
-  useEffect(() => {
-    if (!canInvite) return undefined;
-    const handleGroupChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ chatId?: string; change?: string }>).detail;
-      if (detail?.chatId !== chatId) return;
-      if (detail.change === 'invites') {
-        loadExportedChatInvites({ chatId });
-        loadExportedChatInvites({ chatId, isRevoked: true });
-      } else if (detail.change === 'requests') {
-        loadChatJoinRequests({ chatId });
-      }
-    };
-    window.addEventListener('parvane-group-changed', handleGroupChanged);
-    return () => window.removeEventListener('parvane-group-changed', handleGroupChanged);
   }, [chatId, canInvite]);
 
   useEffect(() => {
@@ -153,14 +120,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
 
   const handleClickEditType = useLastCallback(() => {
     onScreenSelect(ManagementScreens.ChatPrivacyType);
-  });
-
-  const handleClickDiscussion = useLastCallback(() => {
-    onScreenSelect(ManagementScreens.Discussion);
-  });
-
-  const handleClickReactions = useLastCallback(() => {
-    onScreenSelect(ManagementScreens.Reactions);
   });
 
   const handleClickAdministrators = useLastCallback(() => {
@@ -227,20 +186,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
     openChat({ id: undefined });
   });
 
-  const chatReactionsDescription = useMemo(() => {
-    if (!chatFullInfo?.enabledReactions) {
-      return lang('ReactionsOff');
-    }
-
-    if (chatFullInfo.enabledReactions.type === 'all') {
-      return lang('ReactionsAll');
-    }
-
-    const enabledLength = chatFullInfo.enabledReactions.allowed.length;
-    const totalLength = availableReactions?.filter((reaction) => !reaction.isInactive).length || 0;
-
-    return totalLength ? `${enabledLength} / ${totalLength}` : enabledLength.toString();
-  }, [availableReactions, chatFullInfo?.enabledReactions, lang]);
   const isChannelPublic = useMemo(() => isChatPublic(chat), [chat]);
 
   const isRestricted = selectIsChatRestricted(getGlobal(), chatId);
@@ -290,17 +235,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
               <span className="subtitle">{isChannelPublic ? lang('TypePublic') : lang('TypePrivate')}</span>
             </ListItem>
           )}
-          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
-            <ListItem
-              icon="message"
-              multiline
-              onClick={handleClickDiscussion}
-              disabled={!canChangeInfo}
-            >
-              <span className="title">{lang('Discussion')}</span>
-              <span className="subtitle">{hasLinkedChat ? lang('DiscussionUnlink') : lang('Add')}</span>
-            </ListItem>
-          )}
           {canInvite && <ManageJoinMode chatId={chatId} exportedInvites={exportedInvites} />}
           {IS_CHANNEL_REQUESTS_SUPPORTED && Boolean(chat.joinRequests?.length) && (
             <ListItem
@@ -313,36 +247,6 @@ const ManageChannel: FC<OwnProps & StateProps> = ({
                 {formatInteger(chat.joinRequests.length)}
               </span>
             </ListItem>
-          )}
-          {IS_CHANNEL_EXTRA_SETTINGS_SUPPORTED && (
-            <>
-              <ListItem
-                icon="heart-outline"
-                multiline
-                onClick={handleClickReactions}
-                disabled={!canChangeInfo}
-              >
-                <span className="title">{lang('Reactions')}</span>
-                <span className="subtitle" dir="auto">
-                  {chatReactionsDescription}
-                </span>
-              </ListItem>
-              {hasAutoTranslationAvailable && (
-                <ListItem
-                  icon="language"
-                  narrow
-                  ripple
-                  disabled={!canToggleAutoTranslation}
-                  onClick={handleAutoTranslationChange}
-                >
-                  <span>{lang('AutomaticTranslation')}</span>
-                  <Switch
-                    id="auto-translation"
-                    checked={Boolean(hasAutoTranslation)}
-                  />
-                </ListItem>
-              )}
-            </>
           )}
         </Island>
         <Island>
@@ -416,11 +320,6 @@ export default memo(withGlobal<OwnProps>(
     const { management } = selectTabState(global);
     const { progress } = management;
     const { invites } = management.byChatId[chatId] || {};
-    const minLevelToToggleAutoTranslation = global.appConfig.channelAutoTranslationLevelMin;
-    const hasAutoTranslation = chat?.hasAutoTranslation;
-    const chatBoostLevel = chat?.level;
-    const canToggleAutoTranslation = chatBoostLevel && minLevelToToggleAutoTranslation
-      ? chatBoostLevel >= minLevelToToggleAutoTranslation : false;
     return {
       chat,
       chatFullInfo: selectChatFullInfo(global, chatId),
@@ -430,9 +329,6 @@ export default memo(withGlobal<OwnProps>(
       // Parvane: владелец канала — isCreator без adminRights, ссылка ему тоже нужна
       canInvite: chat.isCreator || getHasAdminRight(chat, 'inviteUsers'),
       exportedInvites: invites,
-      availableReactions: global.reactions.availableReactions,
-      hasAutoTranslation,
-      canToggleAutoTranslation,
     };
   },
   (global, { chatId }) => {

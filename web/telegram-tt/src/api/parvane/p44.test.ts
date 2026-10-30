@@ -21,6 +21,28 @@ describe('P-44: polls authorization', () => {
   });
 });
 
+describe('A0031: poll votes', () => {
+  it('drops duplicate/out-of-range indexes, one choice unless multiple', () => {
+    const polls = new PollStore();
+    polls.register('s', 'c', 'q', ['x', 'y', 'z'], { author: 'a@l', isPublic: true });
+    polls.applyVote('s', 'bob@l', [1, 1, 1, 7, -1, 2]);
+    expect(polls.build('s')!.results.resultByOption['1'].votersCount).toBe(1);
+    expect(polls.build('s')!.results.resultByOption['2'].votersCount).toBe(0);
+    polls.register('m', 'c', 'q', ['x', 'y', 'z'], { isMultiple: true, isPublic: true });
+    polls.applyVote('m', 'bob@l', [0, 0, 2, 9]);
+    expect(polls.getVoters('m', 0)).toEqual(['bob@l']);
+    expect(polls.build('m')!.results.resultByOption['0'].votersCount).toBe(1);
+  });
+
+  it('does not reveal voters of an anonymous poll', () => {
+    const polls = new PollStore();
+    polls.register('anon', 'c', 'q', ['x', 'y'], {});
+    polls.applyVote('anon', 'bob@l', [0]);
+    expect(polls.getVoters('anon', 0)).toEqual([]);
+    expect(polls.build('anon')!.results.resultByOption['0'].votersCount).toBe(1);
+  });
+});
+
 describe('P-44: entities', () => {
   it('drops unsafe text_url schemes and clamps ranges', () => {
     const entities = wireEntitiesToApi([

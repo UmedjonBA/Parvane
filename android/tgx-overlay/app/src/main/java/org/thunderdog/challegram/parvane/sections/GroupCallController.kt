@@ -76,13 +76,14 @@ class GroupCallController(context: Context, tdlib: Tdlib) : SectionController(co
                 when (e.optString("state")) {
                     "invite" -> Sx.main.post { invite(e) }
                     "invite_closed" -> Sx.main.post { inviteDialog?.dismiss(); inviteDialog = null }
-                    "peer" -> { peers[e.optString("peer")] = e.optString("peer_state"); notifyWatchers() }
-                    "media" -> {
+                    // peers/mutedPeers читает render() на главном потоке — меняем их там же, а не на потоке событий ядра
+                    "peer" -> Sx.main.post { peers[e.optString("peer")] = e.optString("peer_state"); notifyWatchers() }
+                    "media" -> Sx.main.post {
                         if (e.optBoolean("audio_muted")) mutedPeers += e.optString("peer") else mutedPeers -= e.optString("peer")
                         notifyWatchers()
                     }
-                    "declined" -> { peers[e.optString("peer")] = "declined:" + e.optString("reason"); notifyWatchers() }
-                    "left" -> { active = false; notifyWatchers() }
+                    "declined" -> Sx.main.post { peers[e.optString("peer")] = "declined:" + e.optString("reason"); notifyWatchers() }
+                    "left" -> Sx.main.post { active = false; notifyWatchers() }
                 }
             }
         }

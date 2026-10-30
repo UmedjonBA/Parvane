@@ -88,10 +88,7 @@ executed one at a time; `scripts/run_web_tests.sh` lists every scenario.
   to abort the run at the 6th of 39 runners, so the 33 later ones — including
   `run_web_honest_ui_e2e.sh`, `run_web_video_stream_e2e.sh`,
   `run_web_cross_emoji_e2e.sh` and `run_gateway_rate_limit_e2e.sh` — never
-  executed. Not included on purpose: `scripts/e2e_web_prod_smoke.mjs` (smoke run
-  against a deployed stack with explicit
-  `PARVANE_E2E_BASE_URL`/`PARVANE_E2E_GATEWAY_URL`) and
-  `scripts/e2e_web_storage_probe.mjs` (manual storage diagnostics).
+  executed. The old prod-smoke and storage-probe scripts were removed (prod smoke is `e2e_web_prod_v2_smoke.mjs`).
 - Engine scope: startup/login runs on Chromium, Firefox, WebKit, and the iOS
   viewport; the deep logout and profile flows run on Chromium and Firefox
   because the local Playwright WebKit build crashes sporadically in long

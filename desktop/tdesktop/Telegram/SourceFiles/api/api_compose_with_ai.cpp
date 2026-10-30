@@ -203,6 +203,11 @@ void TriggerAiApplyInPlace(
 		not_null<Ui::InputField*> field,
 		TextWithEntities fullFieldText,
 		Fn<void(TextWithTags textWithTags, int cursor)> applyToField) {
+	// Parvane: черновик не уходит наружу, пока сервер не отдал тоны AI
+	// (в Parvane список всегда пуст — запроса не будет).
+	if (session->data().aiComposeTones().list().empty()) {
+		return;
+	}
 	const auto slug = AiApplyBoundSlug();
 	if (slug.isEmpty()) {
 		show->showToast(tr::lng_ai_compose_apply_unbound(tr::now));

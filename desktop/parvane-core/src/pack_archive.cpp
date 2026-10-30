@@ -106,9 +106,14 @@ std::vector<Entry> parse(const std::string &bytes) {
     std::size_t offset = 9 + static_cast<std::size_t>(len);
     for (const auto &e : index) {
         if (!e.is_object()) return {};
-        const auto name = basename(e.value("name", std::string()));
-        const auto size = e.value("size", std::size_t(0));
-        if (name.empty() || offset + size > bytes.size()) return {};
+        // поля чужого индекса: тип проверяем явно (иначе nlohmann бросает, а -1 становится SIZE_MAX)
+        const auto nameIt = e.find("name");
+        const auto sizeIt = e.find("size");
+        if (nameIt == e.end() || !nameIt->is_string()) return {};
+        if (sizeIt == e.end() || !sizeIt->is_number_unsigned()) return {};
+        const auto name = basename(nameIt->get<std::string>());
+        const auto size = sizeIt->get<std::uint64_t>();
+        if (name.empty() || offset > bytes.size() || size > bytes.size() - offset) return {};
         if (isAllowedExtension(name) && size > 0) out.push_back({name, bytes.substr(offset, size)});
         offset += size;
     }

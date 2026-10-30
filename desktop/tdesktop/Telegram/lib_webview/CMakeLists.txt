@@ -35,15 +35,6 @@ PRIVATE
     webview/platform/linux/webview_linux_webkitgtk_library.h
     webview/platform/linux/webview_linux_webkitgtk.cpp
     webview/platform/linux/webview_linux_webkitgtk.h
-
-    webview/platform/win/webview_win.cpp
-    webview/platform/win/webview_win.h
-    webview/platform/win/webview_windows_data_stream.cpp
-    webview/platform/win/webview_windows_data_stream.h
-    webview/platform/win/webview_windows_edge_chromium.cpp
-    webview/platform/win/webview_windows_edge_chromium.h
-    webview/platform/win/webview_windows_edge_html.cpp
-    webview/platform/win/webview_windows_edge_html.h
 )
 
 target_include_directories(lib_webview

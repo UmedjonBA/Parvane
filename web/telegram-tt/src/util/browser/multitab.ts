@@ -400,6 +400,8 @@ export function handleMessage({ data }: { data: BroadcastChannelMessage }) {
       const {
         name, messageId, token, args, withCallback,
       } = data;
+      // Сообщение приходит из канала: имя метода — строка, аргументы — массив
+      if (typeof name !== 'string' || !Array.isArray(args)) return;
 
       const argsWithCallback = (withCallback ? [...args, (...callbackArgs: any[]) => {
         channel.postMessage({

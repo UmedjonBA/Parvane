@@ -235,8 +235,12 @@ void Stickers::incrementSticker(not_null<DocumentData*> document) {
 		if (set->dates.empty()) {
 			session().api().requestSpecialStickersForce(false, true, false);
 		} else {
-			Assert(set->dates.size() == set->stickers.size());
-			set->dates.erase(set->dates.begin() + index);
+			if (set->dates.size() == set->stickers.size()) {
+				set->dates.erase(set->dates.begin() + index);
+			} else {
+				// Рассинхрон данных с диска: пересоздаём даты.
+				set->dates.clear();
+			}
 		}
 		set->stickers.removeAt(index);
 		for (auto i = set->emoji.begin(); i != set->emoji.end();) {

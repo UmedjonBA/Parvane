@@ -101,8 +101,6 @@ struct CloudView {
 // Правка «Плана» (web `updatePlanner`): разница уходит на сервер пакетом; уведомление с «Отменить», если задано
 void UpdatePlanner(std::function<void(planner::State&)> mutate, const QString &notice = QString());
 void UndoPlanner(const QString &notice);
-// Правки дерева облака (`parvaneCloudApply`); `done(ok)` — на главном потоке
-void ApplyCloud(const std::string &container, json ops, std::function<void(bool)> done = nullptr);
 // Метод провайдера облака по имени web (`parvaneCloud*`); ответ — на главном потоке (nullopt — отказ)
 void CallCloud(const std::string &method, json args, std::function<void(std::optional<json>)> done);
 
@@ -112,8 +110,6 @@ void CallCloud(const std::string &method, json args, std::function<void(std::opt
 void SetShownSection(Section section);
 // Палитра Ctrl+K открыта/закрыта: пока открыта, заметки и облако читаются (как web `retainNotes` палитры)
 void SetPaletteOpen(bool open);
-// Окно видно/скрыто (опрос 8 с только при видимом окне)
-void SetWindowVisible(bool visible);
 // Событие движка v2 (`plannerChanged`, `cloudChanged`); зовётся из потока сессии
 void OnEngineEvent(const json &event);
 // Сессия сменилась (вход, выход, смена аккаунта): модули сбрасываются и подключаются заново

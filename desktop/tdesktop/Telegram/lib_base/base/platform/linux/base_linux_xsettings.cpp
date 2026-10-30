@@ -175,6 +175,10 @@ public:
 					qint32,
 					data + offset + local_offset);
 				local_offset+=4;
+				if (value_length < 0) {
+					qWarning("Negative value length in XSETTINGS");
+					return;
+				}
 				VALIDATE_LENGTH(value_length);
 				QByteArray value_string(
 					data + offset + local_offset,

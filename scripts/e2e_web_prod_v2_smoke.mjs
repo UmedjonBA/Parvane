@@ -8,6 +8,7 @@
 //   PARVANE_E2E_BASE_URL=https://host:20443 PARVANE_E2E_GATEWAY_URL=wss://host:20443/ws \
 //   PARVANE_TELEGRAM_BOT=<bot> PARVANE_TELEGRAM_SECRET=<секрет> node scripts/e2e_web_prod_v2_smoke.mjs
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 
@@ -27,7 +28,8 @@ import {
 } from './e2e_web_helpers.mjs';
 import { botConfirmV2 } from './e2e_tg_confirm_v2.mjs';
 
-const PASSWORD = 'Parvane-prod-smoke-1';
+// пароль на прогон случайный (аккаунты остаются на проде до очистки)
+const PASSWORD = `Pv1-${randomBytes(12).toString('hex')}`;
 const SECRET = process.env.PARVANE_TELEGRAM_SECRET;
 const BOT = process.env.PARVANE_TELEGRAM_BOT;
 assert(SECRET && BOT, 'PARVANE_TELEGRAM_BOT/SECRET are required');

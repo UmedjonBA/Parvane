@@ -88,6 +88,19 @@ struct DecodeOptionsResult {
 	if (!compressed || (*compressed).isEmpty()) {
 		return result;
 	}
+	// qUncompress верит заявленному размеру в заголовке: ограничиваем вход.
+	constexpr auto kMaxCompressed = 64 * 1024;
+	constexpr auto kMaxDecoded = 64 * 1024;
+	if ((*compressed).size() < 4 || (*compressed).size() > kMaxCompressed) {
+		return result;
+	}
+	const auto declared = (quint32(quint8((*compressed)[0])) << 24)
+		| (quint32(quint8((*compressed)[1])) << 16)
+		| (quint32(quint8((*compressed)[2])) << 8)
+		| quint32(quint8((*compressed)[3]));
+	if (declared > kMaxDecoded) {
+		return result;
+	}
 	const auto decoded = qUncompress(*compressed);
 	if (decoded.isEmpty()) {
 		return result;

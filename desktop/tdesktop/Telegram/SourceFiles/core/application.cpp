@@ -1263,10 +1263,7 @@ void Application::checkStartUrls() {
 		cRefStartUrls() = ranges::views::all(
 			cRefStartUrls()
 		) | ranges::views::filter([&](const QUrl &url) {
-			if (url.scheme() == u"tonsite"_q) {
-				iv().showTonSite(url.toString(), {});
-				return false;
-			} else if (_lastActivePrimaryWindow) {
+			if (_lastActivePrimaryWindow) {
 				const auto local = TryConvertUrlToLocal(url.toString());
 				return !openLocalUrl(local, {});
 			}

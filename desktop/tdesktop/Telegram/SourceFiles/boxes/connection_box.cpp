@@ -118,13 +118,14 @@ using ProxyData = MTP::ProxyData;
 		return QString();
 	}
 	return path
-		+ "?server=" + proxy.host + "&port=" + QString::number(proxy.port)
+		+ "?server=" + qthelp::url_encode(proxy.host)
+		+ "&port=" + QString::number(proxy.port)
 		+ ((proxy.type == Type::Socks5 && !proxy.user.isEmpty())
 			? "&user=" + qthelp::url_encode(proxy.user) : "")
 		+ ((proxy.type == Type::Socks5 && !proxy.password.isEmpty())
 			? "&pass=" + qthelp::url_encode(proxy.password) : "")
 		+ ((proxy.type == Type::Mtproto && !proxy.password.isEmpty())
-			? "&secret=" + proxy.password : "");
+			? "&secret=" + qthelp::url_encode(proxy.password) : "");
 }
 
 [[nodiscard]] QString ProxyDataToLocalLink(const ProxyData &proxy) {

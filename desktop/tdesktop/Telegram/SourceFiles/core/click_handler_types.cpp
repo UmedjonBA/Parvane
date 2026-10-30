@@ -148,6 +148,8 @@ void ExportToCalendar(TimeId date, const QString &messageText) {
 	description.replace('\\', u"\\\\"_q);
 	description.replace(';', u"\\;"_q);
 	description.replace(',', u"\\,"_q);
+	description.replace(u"\r\n"_q, u"\\n"_q);
+	description.replace('\r', u"\\n"_q);
 	description.replace('\n', u"\\n"_q);
 	const auto uid = base::RandomValue<uint64>();
 	const auto content = u"BEGIN:VCALENDAR\r\n"
@@ -269,6 +271,11 @@ void HiddenUrlClickHandler::Open(QString url, QVariant context) {
 	if (const auto external = UrlClickHandler::ExternalUrlFromInternalUrl(url);
 			!external.isEmpty()) {
 		url = external;
+	}
+	// Parvane: «internal:url:<адрес>» из текста сообщения не должна
+	// обходить окно «Открыть ссылку?» — идём обычным путём с подтверждением.
+	while (url.startsWith(u"internal:url:"_q, Qt::CaseInsensitive)) {
+		url = url.mid(QString(u"internal:url:"_q).size());
 	}
 	url = Core::TryConvertUrlToLocal(url);
 	if (Core::InternalPassportOrOAuthLink(url)) {

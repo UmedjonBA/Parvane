@@ -190,6 +190,15 @@ describe('isContentAllowedForMember (FR-009, только на клиентах)
       entities: [{ type: 'MessageEntityBold', offset: 0, length: 2 }],
     }))).toBe(true);
   });
+
+  it('embed_links скрывает голую ссылку без сущностей и ссылку в подписи медиа', () => {
+    expect(isContentAllowedForMember({ embed_links: false }, text({ text: 'смотри https://example.com' }))).toBe(false);
+    expect(isContentAllowedForMember({ embed_links: false }, text({ text: 'пишите на example.org' }))).toBe(false);
+    expect(isContentAllowedForMember({ embed_links: false }, { kind: 'photo', caption: 'https://example.com' }))
+      .toBe(false);
+    expect(isContentAllowedForMember({ embed_links: false }, { kind: 'photo', caption: 'просто фото' })).toBe(true);
+    expect(isContentAllowedForMember(undefined, text({ text: 'смотри https://example.com' }))).toBe(true);
+  });
 });
 
 // Вступление по заявке (spec 014): основная ссылка группы

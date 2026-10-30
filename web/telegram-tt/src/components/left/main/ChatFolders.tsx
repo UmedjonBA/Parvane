@@ -19,7 +19,6 @@ import { buildFolderColors } from '../../../util/folderColors';
 import { getParvaneSection } from '../../../util/parvaneSection';
 import { resolveTransitionName } from '../../../util/resolveTransitionName';
 
-import useDerivedState from '../../../hooks/useDerivedState';
 import useFolderTabs from '../../../hooks/useFolderTabs';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
@@ -27,7 +26,6 @@ import useLastCallback from '../../../hooks/useLastCallback';
 import useScrolledState from '../../../hooks/useScrolledState';
 import useShowTransition from '../../../hooks/useShowTransition';
 
-import StoryRibbon from '../../story/StoryRibbon';
 import Transition from '../../ui/Transition';
 import ChatFolderTabList from './ChatFolderTabList';
 import ChatList from './ChatList';
@@ -97,16 +95,7 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
     updateScrollState(activeList ?? undefined);
   }, [activeChatFolder, updateScrollState]);
 
-  const {
-    ref,
-    shouldRender: shouldRenderStoryRibbon,
-    getIsClosing: getIsStoryRibbonClosing,
-  } = useShowTransition({
-    isOpen: isStoryRibbonShown,
-    className: false,
-    withShouldRender: true,
-  });
-  const isStoryRibbonClosing = useDerivedState(getIsStoryRibbonClosing);
+  const ref = useRef<HTMLDivElement>();
 
   const scrollToTop = useLastCallback(() => {
     const activeList = ref.current?.querySelector<HTMLElement>('#LeftColumn .chat-list.Transition_slide-active');
@@ -267,12 +256,8 @@ const ChatFolders: FC<OwnProps & StateProps> = ({
   return (
     <div
       ref={ref}
-      className={buildClassName(
-        'ChatFolders',
-        shouldRenderStoryRibbon && 'with-story-ribbon',
-      )}
+      className="ChatFolders"
     >
-      {shouldRenderStoryRibbon && <StoryRibbon isClosing={isStoryRibbonClosing} />}
       <div className={buildClassName(
         'ChatFolders-content',
         shouldRenderFolders && 'with-tabs',

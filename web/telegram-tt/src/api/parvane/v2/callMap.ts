@@ -147,6 +147,21 @@ export function groupCallIdFromV2(signal: V2CallSignal): string | undefined {
   return b64ToUuid(signal.groupCallId || signal.group_call_id) || undefined;
 }
 
+const PARTICIPANT_MAX_LENGTH = 256;
+
+/** Адреса участников приглашения: без пустых, без повторов, без заведомо негодных (не `имя@сервер`, с пробелами,
+ * слишком длинных) — по списку устройство рассылает отказы. Число не режем: превышение лимита приём отвергает целиком. */
+export function cleanParticipants(addresses: string[]): string[] {
+  const seen = new Set<string>();
+  addresses.forEach((address) => {
+    if (!address || address.length > PARTICIPANT_MAX_LENGTH || /\s/.test(address) || !/^[^@]+@[^@]+$/.test(address)) {
+      return;
+    }
+    seen.add(address);
+  });
+  return [...seen];
+}
+
 /** Приглашение в групповой звонок из события движка; `undefined` — другой сигнал. */
 export function groupInviteFromV2(signal: V2CallSignal): WireGroupInvite | undefined {
   const ring = signal.groupRing || signal.group_ring;
@@ -157,7 +172,7 @@ export function groupInviteFromV2(signal: V2CallSignal): WireGroupInvite | undef
   return {
     type: 'group_invite',
     group_call_id: groupCallId,
-    participants: (ring.participants || []).map(({ address }) => address || '').filter(Boolean),
+    participants: cleanParticipants((ring.participants || []).map(({ address }) => address || '')),
     media: ring.video ? 'video' : 'audio',
     ...(groupId?.length && groupId.length <= 64 && { group: `v2g:${bytesToHex(groupId)}` }),
     ...(title && { title }),

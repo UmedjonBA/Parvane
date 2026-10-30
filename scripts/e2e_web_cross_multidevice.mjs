@@ -31,10 +31,13 @@ const PASSWORD = 'Parvane-xmulti-e2e-password';
 const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
   || new URL('../desktop/build-probe/bin/Telegram', import.meta.url).pathname;
 const GATEWAY_TCP_URL = process.env.PARVANE_E2E_GATEWAY_TCP_URL;
-const DESKTOP_READY = /E2E-устройство готово/;
+// Второе устройство до привязки — только сессия; «v2: готов» будет после линковки
+const DESKTOP_READY = /сессия поднята для/;
 const LINK_TIMEOUT_MS = 90000;
 
 assert(GATEWAY_TCP_URL, 'PARVANE_E2E_GATEWAY_TCP_URL is required');
+// dev-хуки desktop и пароль в окружении — только против локального стека
+assert(/^(?:[a-z]+:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(GATEWAY_TCP_URL), 'PARVANE_E2E_GATEWAY_TCP_URL must point to loopback');
 if (!existsSync(DESKTOP_BIN)) {
   console.log(`SKIP: desktop binary is not built (${DESKTOP_BIN})`);
   process.exit(0);

@@ -25,8 +25,9 @@ import {
   answerCloudInvite, canEditContainer, createCloudFolder, downloadCloudNode, emptyCloudTrash, getActiveContainerId,
   getCloudData, getCloudLinks, getCloudNotice, getCloudPlace, getCloudPrefs, getCloudStatus, getCloudUsage,
   getContainer, getHasCloudTransfers, getIsCloudLoaded, getNodes, getTrash, hideCloudNotice, leaveCloudFolder,
-  loadCloud, moveCloudNodes, moveCloudNodesAcross, purgeCloudNodes, refreshCloud, refreshCloudLinks, renameCloudNode,
-  restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs, shareCloudFolder, trashCloudNodes, uploadCloudFiles,
+  loadCloud, moveCloudNodes, moveCloudNodesAcross, peerLabel, purgeCloudNodes, refreshCloud, refreshCloudLinks,
+  renameCloudNode, restoreCloudNodes, setCloudActive, setCloudPlace, setCloudPrefs, shareCloudFolder, trashCloudNodes,
+  uploadCloudFiles,
 } from './cloudStore';
 
 import useSelector from '../../../hooks/data/useSelector';
@@ -99,7 +100,7 @@ function keyOf(entry: Entry) {
 }
 
 function nameOf(address: string) {
-  return address.split('@')[0];
+  return peerLabel(address);
 }
 
 // Parvane (spec 016): «Файлы» — личное файловое хранилище одним списком по прототипу (`vCloud`): поиск по

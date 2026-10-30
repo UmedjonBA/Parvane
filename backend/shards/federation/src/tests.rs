@@ -90,3 +90,27 @@ fn insecure_transport_never_ships() {
         assert!(!text.contains("PARVANE_FEDERATION_INSECURE_HTTP"), "{f}: тестовый транспорт");
     }
 }
+
+#[tokio::test]
+async fn failed_discovery_is_remembered_and_rate_limited() {
+    let cfg = crate::config::Config {
+        enabled: true,
+        domain: "own.example".into(),
+        bind: "127.0.0.1:0".into(),
+        endpoints: Default::default(),
+        blocked: Default::default(),
+        rate_burst: 3.0,
+        rate_per_sec: 1.0,
+        insecure_http: false,
+        well_known_file: None,
+    };
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().connect("sqlite::memory:").await.unwrap();
+    let Ok(nc) = async_nats::ConnectOptions::new().retry_on_initial_connect().connect("nats://127.0.0.1:1").await else { return };
+    let fed = crate::peers::Fed::new(cfg, pool, nc);
+    assert!(fed.discovery_allowed("junk.example").is_ok());
+    fed.discovery_failed("junk.example");
+    assert!(fed.discovery_allowed("junk.example").is_err(), "неудачное обнаружение не повторяется сразу");
+    // Общий счётчик: поток разных доменов упирается в предел обращений в минуту.
+    let denied = (0..200).filter(|i| fed.discovery_allowed(&format!("d{i}.example")).is_err()).count();
+    assert!(denied > 0, "обращения за описателем ограничены");
+}

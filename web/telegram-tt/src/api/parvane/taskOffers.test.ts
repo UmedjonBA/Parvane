@@ -131,3 +131,32 @@ describe('задание в чат (spec 011, TASK-1)', () => {
     expect(v2Class(response)).toBe('message');
   });
 });
+
+describe('день чужой карточки', () => {
+  it('негодный day отбрасывается при регистрации', () => {
+    const store = new TaskOfferStore();
+    store.setSelf('bob@local');
+    store.setPeerIdResolver((address) => `id:${address}`);
+    store.register('u2', 'chat', { kind: 'task_offer', name: 'Х', day: 'не-дата' }, 'alice@local');
+    expect(store.build('u2')!.day).toBeUndefined();
+  });
+});
+
+describe('решения по заданию (A0036-2)', () => {
+  it('решение из чужого чата не принимается, ожидающие решения ограничены', () => {
+    const store = new TaskOfferStore();
+    store.setSelf('bob@local');
+    store.setPeerIdResolver((address) => `id:${address}`);
+    store.register('u3', 'chat-a', { kind: 'task_offer', name: 'Х' }, 'alice@local');
+    store.applyResponse('u3', 'mallory@local', true, 10, 'chat-b');
+    expect(store.build('u3')!.responses).toEqual([]);
+    store.applyResponse('u3', 'carol@local', true, 10, 'chat-a');
+    expect(store.build('u3')!.responses).toHaveLength(1);
+    // Поток решений по неизвестным карточкам не копится без предела
+    for (let i = 0; i < 1000; i++) store.applyResponse(`flood${i}`, 'mallory@local', true, 1);
+    store.register('flood0', 'chat-a', { kind: 'task_offer', name: 'Х' }, 'alice@local');
+    expect(store.build('flood0')!.responses).toEqual([]);
+    store.register('flood999', 'chat-a', { kind: 'task_offer', name: 'Х' }, 'alice@local');
+    expect(store.build('flood999')!.responses).toHaveLength(1);
+  });
+});

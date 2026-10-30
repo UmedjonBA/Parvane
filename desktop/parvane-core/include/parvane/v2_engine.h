@@ -61,7 +61,6 @@ private:
 // spec 029: функция движка без клиента по имени WASM-обвязки (`encodeHello`, `parseInvite`, …): аргументы —
 // объект (байты — base64), результат — значение JSON. Бросает EngineError.
 [[nodiscard]] json engineCall(const std::string &name, const json &args = json::object());
-[[nodiscard]] std::string encodePing(std::uint64_t nonce);
 // Кадр сервера → JSON {"kind":"welcome"|"authOk"|"response"|"event"|"chunk"|
 // "ping"|"pong"|"unknown", …}; тела — base64. Бросает EngineError.
 [[nodiscard]] json decodeFrame(const std::string &bytes);
@@ -165,7 +164,6 @@ public:
     // Бросают EngineError.
     [[nodiscard]] std::string linkGrantMaterial();
     [[nodiscard]] json joinWithGrant(const std::string &material, std::size_t otk);
-    [[nodiscard]] json otkRequest(std::size_t n);
     [[nodiscard]] json syncRequest();
     [[nodiscard]] json ackRequest();
     // Ответ identity.device.log_sync_anon → "new"|"known"|"rootChanged".
@@ -288,12 +286,6 @@ public:
     [[nodiscard]] json ephPresence(bool online, std::int64_t lastSeenMs) const;
     // Событие подписки ephemeral → события typing/presence (см. host.rs).
     [[nodiscard]] json ephOpen(const std::string &body) const;
-    // Опубликовать/сократить свой список v1-устройств → запрос
-    // identity.device.log_append. Свой журнал запись получает синком.
-    [[nodiscard]] json legacyDevicesRequest(const json &devices);
-    // v1 SendPayload (JSON) с копиями для v1-устройств → запрос msg.deliver_legacy.
-    [[nodiscard]] json legacyDeliverRequest(const std::string &messageId,
-                                            const std::string &sendPayloadJson) const;
     [[nodiscard]] std::size_t tokenCount() const;
     // FR-063: пора получать суточную партию жетонов (хост проверяет таймером, не
     // перед тратой) и её размер — вся суточная квота.

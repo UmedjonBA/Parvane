@@ -92,12 +92,10 @@ import ChatLanguageModal from './ChatLanguageModal.async';
 import { DropAreaState } from './composer/DropArea';
 import EmojiInteractionAnimation from './EmojiInteractionAnimation.async';
 import FloatingActionButtons from './FloatingActionButtons';
-import FrozenAccountPlaceholder from './FrozenAccountPlaceholder';
 import MessageList from './MessageList';
 import MessageSelectToolbar from './MessageSelectToolbar';
 import MiddleHeader from './MiddleHeader';
 import MiddleHeaderPanes from './MiddleHeaderPanes';
-import PremiumRequiredPlaceholder from './PremiumRequiredPlaceholder';
 import ReactorListModal from './ReactorListModal.async';
 import MiddleSearch from './search/MiddleSearch.async';
 
@@ -507,9 +505,7 @@ function MiddleColumn({
 
   const composerRestrictionMessage = messageSendingRestrictionReason
     || forumComposerPlaceholder
-    || (shouldBlockSendInMonoforum ? lang('MonoforumComposerPlaceholder') : undefined)
-    || (isContactRequirePremium ? <PremiumRequiredPlaceholder userId={chatId!} /> : undefined)
-    || (isAccountFrozen && freezeAppealChat?.id !== chatId ? <FrozenAccountPlaceholder /> : undefined);
+    || (shouldBlockSendInMonoforum ? lang('MonoforumComposerPlaceholder') : undefined);
 
   // CSS Variables calculation doesn't work properly with transforms, so we calculate transform values in JS
   const {

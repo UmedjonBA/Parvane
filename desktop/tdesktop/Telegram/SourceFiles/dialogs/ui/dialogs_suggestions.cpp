@@ -2791,7 +2791,7 @@ rpl::producer<TopPeersList> TopPeersContent(
 		const auto now = base::unixtime::now();
 		for (const auto &peer : top) {
 			const auto user = peer->asUser();
-			if (user->isInaccessible()) {
+			if (!user || user->isInaccessible()) {
 				continue;
 			}
 			const auto self = user && user->isSelf();

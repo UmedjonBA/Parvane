@@ -7,6 +7,8 @@
 #include "jni_planner_ops.h"
 
 #include <parvane/blobcrypt.h>
+#include <parvane/chat_rules.h>
+#include <parvane/messenger.h>
 #include <parvane/sections/cloud_files.h>
 #include <parvane/sections/export_source.h>
 #include <parvane/sections/cloud_sync.h>
@@ -353,10 +355,6 @@ public:
         shown_ = section;
         applyWanted();
     }
-    void setPaletteOpen(bool open) {
-        paletteOpen_ = open;
-        applyWanted();
-    }
     void setVisible(bool visible) {
         plannerSync_.setVisible(visible);
         cloud_.setVisible(visible);
@@ -428,16 +426,6 @@ public:
     FileRecords &texts() { return texts_; }
     const std::string &self() const { return self_; }
     [[nodiscard]] std::string vaultName() const { return g_russian ? "Знания" : "Knowledge"; }
-
-    void shutdown() {
-        try {
-            plannerSync_.pageHide();
-            plannerSync_.flush();
-        } catch (const std::exception &e) {
-            LOGE("разделы — правки «Плана» не досланы: %s", e.what());
-        }
-        flushRecords(true);
-    }
 
 private:
     planner::PlannerHooks plannerHooks() {
@@ -1097,7 +1085,10 @@ public:
             for (const auto &m : chat.value("messages", json::array())) {
                 const auto &c = m.value("content", json::object());
                 const auto fileId = c.value("file_id", std::string());
-                if (!fileId.empty()) keys_[fileId] = {c.value("file_key", std::string()), c.value("file_nonce", std::string())};
+                if (!fileId.empty()) {
+                    keys_[fileId] = {c.value("file_key", std::string()), c.value("file_nonce", std::string())};
+                    caps_[fileId] = parvane::chatrules::chatBlobCipherCap(parvane::contentKind(c), c.value("size_bytes", std::int64_t(0)));
+                }
             }
     }
     std::optional<json> callParvane(const std::string &method, const json &args) override {
@@ -1126,7 +1117,10 @@ public:
             if (!isSafeFileId(fileId)) return std::nullopt;
             bytes = readMediaCache(fileId);
             if (!bytes) {
-                const auto d = downloadChatBlob(fileId);
+                const auto cp = caps_.find(fileId);
+                // предел шифртекста по заявленному размеру и виду; неизвестный файл — не качаем
+                if (cp == caps_.end()) return std::nullopt;
+                const auto d = downloadChatBlob(fileId, cp->second);
                 const auto it = keys_.find(fileId);
                 if (d.ok && it != keys_.end()) bytes = parvane::blobcrypt::decrypt(d.bytes, it->second.first, it->second.second);
             }
@@ -1157,6 +1151,7 @@ private:
     json snapshot_;
     std::function<bool()> canceled_;
     std::map<std::string, std::pair<std::string, std::string>> keys_;
+    std::map<std::string, std::size_t> caps_;
 };
 
 std::atomic<bool> g_exportCanceled{false};
@@ -1199,20 +1194,6 @@ JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativeShow(JNIEnv *
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativeVisible(JNIEnv *, jclass, jboolean visible) {
     const bool v = visible == JNI_TRUE;
     enqueue([v](Hub &hub) { hub.setVisible(v); });
-}
-
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativePaletteOpen(JNIEnv *, jclass, jboolean open) {
-    const bool o = open == JNI_TRUE;
-    enqueue([o](Hub &hub) { hub.setPaletteOpen(o); });
-}
-
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativeSetLanguage(JNIEnv *, jclass, jboolean russian) {
-    g_russian = russian == JNI_TRUE;
-}
-
-// Сессия сменилась (вход, привязка): поток разделов переподключается.
-JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneSections_nativeSessionChanged(JNIEnv *, jclass) {
-    enqueue([](Hub &hub) { hub.syncSession(); });
 }
 
 // Последний снимок: planner | notes | cloud ("" — ещё нет).
@@ -1270,22 +1251,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudCall(
     } catch (const std::exception &e) {
         LOGE("nativeCloudCall: %s", e.what());
         return jreply(env, json());
-    }
-}
-
-// Правки дерева облака. Блокирующий. → true — применено.
-JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudApply(JNIEnv *env, jclass, jstring container, jstring opsJson) {
-    try {
-        const auto c = jstr(env, container);
-        const auto ops = json::parse(jstr(env, opsJson), nullptr, false);
-        const auto r = ask([c, ops](Hub &hub) -> json {
-            const auto result = hub.drive().applyOps(c, ops);
-            return !result.is_object() || !result.contains("error");
-        });
-        return r.is_boolean() && r.get<bool>() ? JNI_TRUE : JNI_FALSE;
-    } catch (const std::exception &e) {
-        LOGE("nativeCloudApply: %s", e.what());
-        return JNI_FALSE;
     }
 }
 

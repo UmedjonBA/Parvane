@@ -18,6 +18,8 @@ use crate::pb::parvane::msg::v2::CloudInvite;
 
 /// Сколько ключей может ждать подключения контейнера или журнала грантов.
 const CLOUD_PENDING_KEYS: usize = 64;
+/// Сколько ключей контейнеров удерживается от одного чужого отправителя.
+const CLOUD_PENDING_PER_SENDER: usize = 8;
 
 /// Локальное состояние одного контейнера облака.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +34,9 @@ struct CloudLocal {
     snapshot_seq: u64,
     /// Операции журнала, ждущие ключа своей эпохи (в порядке seq).
     pending_ops: Vec<ContainerOp>,
+    /// Наибольшая эпоха ключа среди принятых операций этого запуска: сервер принимает операцию только в
+    /// текущей эпохе, значит в журнале эпоха не убывает (убывающая — вставка старым ключом).
+    last_op_epoch: u64,
     /// JSON дерева для хоста по ревизии состояния — C1/A8.
     json_cache: JsonCache,
 }
@@ -114,11 +119,9 @@ fn cloud_log_users(genesis: &SignedOp, entries: &[SignedOp]) -> Vec<String> {
 
 fn restore_guard(max: u64) -> DomainGuard {
     let mut guard = DomainGuard::default();
-    // Поднять до сохранённого максимума шагами в пределах допустимого скачка.
-    while guard.max_seen() < max {
-        let next = guard.max_seen().saturating_add(dom::LAMPORT_MAX_JUMP).min(max);
-        let _ = guard.check(&dom::Stamp::new(next, "restore"));
-    }
+    // Сохранённый максимум уже проверен ранее: поднять напрямую (цикл по шагам 2^20 для метки около
+    // u64::MAX шёл бы ~2^44 итераций).
+    guard.raise(max);
     guard
 }
 
@@ -265,7 +268,8 @@ impl Client {
                 head_seq: 0,
                 snapshot_seq: 0,
                 pending_ops: vec![],
-                json_cache: JsonCache::default(),
+                last_op_epoch: 0,
+            json_cache: JsonCache::default(),
             },
         );
         Ok((id, OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) })))
@@ -303,6 +307,7 @@ impl Client {
             head_seq: existing.as_ref().map_or(0, |c| c.head_seq),
             snapshot_seq: existing.as_ref().map_or(0, |c| c.snapshot_seq),
             pending_ops: existing.map(|c| c.pending_ops).unwrap_or_default(),
+            last_op_epoch: 0,
             json_cache: JsonCache::default(),
         };
         self.cloud.insert(id.clone(), local);
@@ -374,12 +379,12 @@ impl Client {
         Ok(version)
     }
 
-    fn cloud_open_one(c: &mut CloudLocal, op: &ContainerOp, author_device: &str) -> Result<usize> {
+    fn cloud_open_one(c: &mut CloudLocal, op: &ContainerOp, author: &DomainAuthor) -> Result<usize> {
         let key = c.keys.get(op.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_op(op, &c.access.container, key)?;
         let decoded = cloud::decode_batch(&pt)?;
         cloud::guard_batch(&mut c.guard, &decoded)?;
-        c.state.apply_batch(&decoded, author_device)
+        c.state.apply_batch_from(&decoded, author)
     }
 
     /// Применить отложенные операции, для которых появился ключ.
@@ -395,7 +400,7 @@ impl Client {
                 continue;
             }
             if let Ok(a) = c.access.check_op_author(&op, &resolve, &no_groups) {
-                applied += Self::cloud_open_one(c, &op, &a.device_id).unwrap_or(0);
+                applied += Self::cloud_open_one(c, &op, &a).unwrap_or(0);
             }
         }
         applied
@@ -423,14 +428,20 @@ impl Client {
                 break;
             }
             match c.access.check_op_author(&op, &resolve, &no_groups) {
+                Ok(_) if op.key_epoch < c.last_op_epoch => {
+                    // Эпоха убывает вдоль журнала: операция вставлена ключом, уже сменённым ротацией
+                    self.last_error = Some(ProtoError::Forbidden);
+                    c.head_seq = op.seq;
+                }
                 Ok(a) => {
                     c.head_seq = op.seq;
+                    c.last_op_epoch = op.key_epoch;
                     if c.keys.get(op.key_epoch).is_none() {
                         out.missing_epoch = Some(op.key_epoch);
                         c.pending_ops.push(op);
                         continue;
                     }
-                    match Self::cloud_open_one(c, &op, &a.device_id) {
+                    match Self::cloud_open_one(c, &op, &a) {
                         Ok(n) => out.applied += n,
                         Err(e) => self.last_error = Some(e),
                     }
@@ -462,7 +473,10 @@ impl Client {
         let key = c.keys.get(s.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_snapshot(&s, &c.access.container, key)?;
         let decoded = cloud::decode_snapshot(&pt)?;
+        // Метки снимка проходят ту же защиту, что и метки операций: негодная метка — отказ всему снимку
+        let snap_max = cloud::guard_snapshot(&c.guard, &decoded, s.upto_seq)?;
         c.state.merge_snapshot(&decoded)?;
+        c.guard.raise(snap_max);
         c.head_seq = c.head_seq.max(s.upto_seq);
         c.snapshot_seq = c.snapshot_seq.max(s.upto_seq);
         // Метки снимка — в часы (иначе свои следующие метки могут оказаться ниже).
@@ -744,7 +758,16 @@ impl Client {
             }
         }
         // Контейнер не подключён либо журнал грантов раздающего новее нашего.
-        if self.cloud_pending_keys.len() < CLOUD_PENDING_KEYS {
+        // Очередь ограничена раздельно: ключи своих устройств (новое устройство) имеют свой потолок и не
+        // вытесняются посторонними; от каждого чужого отправителя — не больше CLOUD_PENDING_PER_SENDER.
+        let own = sender == self.user;
+        let (mine, total) = self.cloud_pending_keys.iter().fold((0usize, 0usize), |(m, t), (u, _)| (m + usize::from(u == sender), t + usize::from(*u == self.user)));
+        let fits = if own {
+            total < CLOUD_PENDING_KEYS
+        } else {
+            mine < CLOUD_PENDING_PER_SENDER && self.cloud_pending_keys.len() - total < CLOUD_PENDING_KEYS
+        };
+        if fits {
             self.cloud_pending_keys.push((sender.to_string(), share.clone()));
         }
         vec![Event::CloudChanged { seq, id }]
@@ -827,7 +850,7 @@ impl Client {
         let id = access.container_ref()?.id.clone();
         self.cloud.insert(
             id,
-            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, json_cache: JsonCache::default() },
+            CloudLocal { genesis, grants, access, keys, guard: restore_guard(pc.guard_max), state, head_seq: pc.head_seq, snapshot_seq: pc.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default() },
         );
         Ok(())
     }

@@ -76,7 +76,7 @@ const PREVIEW_HEADING = /^#+\s+(.*)$/;
 function plainInline(text: string) {
   return text
     .replace(/ \^t[a-z0-9]{4,12}\s*$/, '')
-    .replace(/\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (link, title: string, alias?: string) => alias?.trim() || title)
+    .replace(/\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g, (link, title: string, alias?: string) => alias?.trim() || title)
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/`/g, '')
     .trim();
@@ -117,7 +117,7 @@ export function previewOf(note: Pick<NoteEntry, 'title' | 'text'>) {
   for (const raw of parseNoteCached(note).body.split('\n')) {
     const item = raw.replace(/^#+\s*|^\s*[-*+] (\[[ xX]\] )?/, '')
       .replace(/ \^t[a-z0-9]{4,12}\s*$/, '')
-      .replace(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g, '$1')
+      .replace(/\[\[([^[\]|]+)(\|[^[\]]+)?\]\]/g, '$1')
       .replace(/`/g, '')
       .trim();
     if (item && item.toLowerCase() !== title) {

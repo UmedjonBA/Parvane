@@ -20,7 +20,6 @@ import {
 } from './e2e_web_helpers.mjs';
 
 const PASSWORD = 'Parvane-media-kinds-e2e-password';
-const RECORD_MS = 2000;
 
 // id видео из состояния страницы: миниатюр на проводе нет, пузырь просит их
 // отдельным запросом document<id>?size=x

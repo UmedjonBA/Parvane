@@ -238,6 +238,11 @@ void changePassword(Control &c, const std::string &oldPassword, const std::strin
                  json{{"old_password", oldPassword}, {"new_password", newPassword}});
 }
 
+static std::string lower(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char ch) { return char(std::tolower(ch)); });
+    return v;
+}
+
 std::vector<Profile> resolveProfiles(Control &c, const std::vector<std::string> &addresses,
                                      std::string *federationError) {
     auto users = json::array();
@@ -258,8 +263,14 @@ std::vector<Profile> resolveProfiles(Control &c, const std::vector<std::string> 
     }
     for (const auto &[domain, group] : byDomain) {
         try {
+            // чужой сервер отвечает только за свой домен и только за спрошенные адреса
+            std::set<std::string> asked;
+            for (const auto &u : group) asked.insert(lower(u.value("address", std::string())));
             for (auto &p : profilesOf(c.call("identity.profile.resolve", json{{"users", group}}, 15000, domain),
                                       "profiles")) {
+                const auto addr = lower(p.address);
+                const auto at = addr.rfind('@');
+                if (at == std::string::npos || addr.substr(at + 1) != domain || !asked.count(addr)) continue;
                 out.push_back(std::move(p));
             }
         } catch (const V2Error &e) {

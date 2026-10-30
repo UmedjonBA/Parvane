@@ -5,14 +5,14 @@
 # кэш тайлов (офлайн, как verify_location_map.sh); свой второй preview без учётки NATS отвергает.
 #   1. папка через e2e-хук (CreateChatFolder с чатом bob) → «папка 1 «Work»: 1 чатов»,
 #      рестарт X → UpdateChatFolders и позиция ChatListFolder;
-#   2. bob-desktop шлёт текст со ссылкой → X: MessageText.linkPreview («превью … → …» у
+#   2. bob-desktop шлёт текст со ссылкой → X: MessageText.linkPreview («превью получено» у
 #      отправителя-десктопа; у X — «linkPreview=<site>» при разборе);
-#      X шлёт текст со ссылкой (хук send) → «превью https://… → example.com» (через preview);
+#      X шлёт текст со ссылкой (хук send) → «превью получено» (через preview; адрес в журнал не пишется);
 #   3. bob-desktop шлёт локацию (PARVANE_AUTOLOCATION) → X: GetMapThumbnailFile →
 #      «карта … тайлов=N/N» (тайлы только из preview);
 #   4. bob меняет день рождения/телефон (PARVANE_AUTOPROFILE) → X: «профиль bob@local: birthday=…»;
 #      X ставит день рождения (хук) → desktop bob видит (профиль alice);
-#   5. глобальный поиск (хук search) → «поиск «…»: n совпадений».
+#   5. глобальный поиск (хук search) → «поиск: n совпадений» (текст запроса в журнал не пишется).
 set -u
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +56,7 @@ PY
 
 # 1. папка
 x_cmd "{\"op\":\"folder\",\"peer\":\"bob@local\",\"title\":\"Work\"}"
-xlog "папка [0-9]+ «Work»: 1 чатов" 30 && ok "X: папка создана с чатом bob" || bad "X: папка не создана"
+xlog "папка [0-9]+: 1 чатов" 30 && ok "X: папка создана с чатом bob" || bad "X: папка не создана"
 xlog "→ X UpdateChatFolders" 10 && ok "X: UpdateChatFolders ушёл в UI" || bad "X: UpdateChatFolders не отправлен"
 x_restart
 xlog "→ X UpdateChatFolders" 30 && ok "X: папки восстановлены после рестарта" || bad "X: папки потеряны"
@@ -74,7 +74,7 @@ IN_NOW=0
 for _ in $(seq 1 20); do IN_NOW=$(adb logcat -d 2>/dev/null | grep -acE "сообщение [0-9a-f-]{36} → чат [0-9-]+ \(вх\)"); [ "$IN_NOW" -gt "$IN_BEFORE" ] && break; sleep 3; done
 [ "$IN_NOW" -gt "$IN_BEFORE" ] && ok "X: текст со ссылкой принят" || bad "X: текст не принят"
 x_cmd "{\"op\":\"send\",\"peer\":\"bob@local\",\"text\":\"ответ https://example.org/x-$STAMP\"}"
-xlog "превью https://example.org/x-$STAMP → " 40 && ok "X: превью запрошено у preview при отправке (FAIL-1: с деградацией)" || bad "X: превью не запрошено"
+xlog "превью получено" 40 && ok "X: превью запрошено у preview при отправке (FAIL-1: с деградацией)" || bad "X: превью не запрошено"
 wait_log "$B/td/log.txt" "x-$STAMP" 60 && ok "bob получил текст из X" || bad "bob не получил"
 
 # 3. карта через preview (MAP-1)
@@ -103,7 +103,7 @@ wait_log "$B/td/log.txt" "профиль alice@local: .*1990-03-07|birthday=1990
 
 # 5. глобальный поиск
 x_cmd "{\"op\":\"search\",\"query\":\"page-$STAMP\"}"
-xlog "поиск «page-$STAMP»: [1-9][0-9]* совпадений" 30 && ok "X: глобальный поиск нашёл сообщение" || bad "X: поиск не нашёл"
+xlog "поиск: [1-9][0-9]* совпадений" 30 && ok "X: глобальный поиск нашёл сообщение" || bad "X: поиск не нашёл"
 
 ad logcat -d -v time > "$OUT/logcat.txt"
 grep -qE "FATAL EXCEPTION|E/AndroidRuntime" "$OUT/logcat.txt" && bad "краш (AndroidRuntime)" || ok "X без крашей"

@@ -115,7 +115,8 @@ public:
 private:
     void markLoaded();
     void setLocalState(State state);
-    void sendChanges(const std::vector<PlannerChange> &changes);
+    // false — провайдер отверг правки (вызывающий не стирает записи устройства)
+    bool sendChanges(const std::vector<PlannerChange> &changes);
     void publishNotice(std::optional<PlannerNotice> notice, std::int64_t nowMs);
     void migrateLearned();
     void migrateQuickHistory();

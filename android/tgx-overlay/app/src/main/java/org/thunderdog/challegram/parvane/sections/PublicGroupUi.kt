@@ -41,11 +41,13 @@ object PublicGroupUi {
         }
         val preview = CheckBox(ctx).apply {
             text = Sx.t("Можно читать без вступления", "Can be read without joining")
-            isChecked = true; setTextColor(Sx.color(ColorId.text)); form.addView(this)
+            isChecked = if (info.optBoolean("isPublic")) info.optBoolean("preview", true) else true
+            setTextColor(Sx.color(ColorId.text)); form.addView(this)
         }
         val history = CheckBox(ctx).apply {
             text = Sx.t("Вступившие видят прежние сообщения", "New members see earlier messages")
-            isChecked = true; setTextColor(Sx.color(ColorId.text)); form.addView(this)
+            isChecked = if (info.optBoolean("isPublic")) info.optBoolean("history", true) else true
+            setTextColor(Sx.color(ColorId.text)); form.addView(this)
         }
         form.addView(ctx.label(Sx.t("Сообщения публичной группы может прочитать любой вступивший и сервер.",
             "Messages of a public group can be read by anyone who joins and by the server."), 13f, ColorId.textLight).apply {

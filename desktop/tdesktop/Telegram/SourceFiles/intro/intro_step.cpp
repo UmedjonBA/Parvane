@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_step.h"
 
 #include "intro/intro_widget.h"
-#include "intro/intro_signup.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "lang/lang_keys.h"
@@ -153,28 +152,6 @@ void Step::goReplace(Step *step, Animate animate) {
 	if (_goCallback) {
 		_goCallback(step, StackAction::Replace, animate);
 	}
-}
-
-void Step::finish(const MTPauth_Authorization &auth, QImage &&photo) {
-	auth.match([&](const MTPDauth_authorization &data) {
-		if (data.vuser().type() != mtpc_user
-			|| !data.vuser().c_user().is_self()) {
-			showError(rpl::single(Lang::Hard::ServerError())); // wtf?
-			return;
-		}
-		finish(data.vuser(), std::move(photo));
-	}, [&](const MTPDauth_authorizationSignUpRequired &data) {
-		if (const auto terms = data.vterms_of_service()) {
-			terms->match([&](const MTPDhelp_termsOfService &data) {
-				getData()->termsLock = Window::TermsLock::FromMTP(
-					nullptr,
-					data);
-			});
-		} else {
-			getData()->termsLock = Window::TermsLock();
-		}
-		goReplace<SignupWidget>(Animate::Forward);
-	});
 }
 
 void Step::finish(const MTPUser &user, QImage &&photo) {
@@ -363,40 +340,6 @@ bool Step::paintAnimated(QPainter &p, QRect clip) {
 	paintContentSnapshot(p, _coverAnimation.contentSnapshotNow, arrivingAlpha, 1. - hideCoverMethod);
 
 	return true;
-}
-
-void Step::fillSentCodeData(const MTPDauth_sentCode &data) {
-	const auto bad = [](const char *type) {
-		LOG(("API Error: Should not be '%1'.").arg(type));
-	};
-	getData()->codeByTelegram = false;
-	getData()->codeByFragmentUrl = QString();
-	data.vtype().match([&](const MTPDauth_sentCodeTypeApp &data) {
-		getData()->codeByTelegram = true;
-		getData()->codeLength = data.vlength().v;
-	}, [&](const MTPDauth_sentCodeTypeSms &data) {
-		getData()->codeLength = data.vlength().v;
-	}, [&](const MTPDauth_sentCodeTypeFragmentSms &data) {
-		getData()->codeByFragmentUrl = qs(data.vurl());
-		getData()->codeLength = data.vlength().v;
-	}, [&](const MTPDauth_sentCodeTypeCall &data) {
-		getData()->codeLength = data.vlength().v;
-	}, [&](const MTPDauth_sentCodeTypeFlashCall &) {
-		bad("FlashCall");
-	}, [&](const MTPDauth_sentCodeTypeMissedCall &) {
-		bad("MissedCall");
-	}, [&](const MTPDauth_sentCodeTypeFirebaseSms &) {
-		bad("FirebaseSms");
-	}, [&](const MTPDauth_sentCodeTypeEmailCode &data) {
-		getData()->emailPatternLogin = qs(data.vemail_pattern());
-		getData()->codeLength = data.vlength().v;
-	}, [&](const MTPDauth_sentCodeTypeSmsWord &) {
-		bad("SmsWord");
-	}, [&](const MTPDauth_sentCodeTypeSmsPhrase &) {
-		bad("SmsPhrase");
-	}, [&](const MTPDauth_sentCodeTypeSetUpEmailRequired &) {
-		getData()->emailStatus = EmailStatus::SetupRequired;
-	});
 }
 
 void Step::showDescription() {

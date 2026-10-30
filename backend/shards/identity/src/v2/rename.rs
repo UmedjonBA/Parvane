@@ -281,14 +281,25 @@ async fn rename_v2(
 /// Неподтверждённые переносы — повторить (идемпотентно у шардов).
 pub(crate) async fn fanout_pending(nc: &Client, pool: &SqlitePool) {
     let rows: Vec<(String, String, String, String)> =
-        match sqlx::query_as("SELECT old_address, new_address, shard, device_ids FROM rename_fanout ORDER BY created_ms LIMIT 64").fetch_all(pool).await {
+        // По 16 самых старых на шард: не отвечающий шард не занимает все 64 места выборки (A0018-7)
+        match sqlx::query_as(
+            "SELECT old_address, new_address, shard, device_ids FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY shard ORDER BY created_ms) AS rn FROM rename_fanout) WHERE rn <= 16 ORDER BY created_ms LIMIT 64",
+        )
+        .fetch_all(pool)
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 error!("identity: перенос ника шардам: {}", e);
                 return;
             }
         };
+    let mut down: Vec<String> = Vec::new();
     for (old, new, shard, ids) in rows {
+        // Шард уже не ответил в этом обходе — остальные его строки ждут следующего (не тратим по 5 с на каждую)
+        if down.contains(&shard) {
+            continue;
+        }
         let Some((_, subject)) = FANOUT.iter().find(|(s, _)| *s == shard) else { continue };
         let notice = RenameNotice {
             old_address: old.clone(),
@@ -303,6 +314,7 @@ pub(crate) async fn fanout_pending(nc: &Client, pool: &SqlitePool) {
             let _ = sqlx::query("DELETE FROM rename_fanout WHERE old_address = ? AND shard = ?").bind(&old).bind(&shard).execute(pool).await;
             info!("identity: {} принят шардом {}", if new.is_empty() { "стирание аккаунта" } else { "перенос ника" }, shard);
         } else {
+            down.push(shard.clone());
             warn!("identity: шард {} не подтвердил {} — повтор позже", shard, if new.is_empty() { "стирание аккаунта" } else { "перенос ника" });
         }
     }

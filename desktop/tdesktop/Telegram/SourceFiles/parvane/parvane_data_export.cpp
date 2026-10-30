@@ -167,6 +167,10 @@ public:
 				const auto fileId = text(content, "file_id");
 				if (!fileId.empty()) {
 					_keys[fileId] = { text(content, "file_key"), text(content, "file_nonce") };
+					_caps[fileId] = { text(content, "kind"),
+						(content.contains("size_bytes") && content["size_bytes"].is_number_integer())
+							? content["size_bytes"].get<std::int64_t>()
+							: std::int64_t(0) };
 				}
 			}
 		}
@@ -193,9 +197,12 @@ public:
 		if (method == "parvaneExportMedia") {
 			const auto fileId = args.value("fileId", std::string());
 			const auto i = _keys.find(fileId);
+			const auto cap = _caps.find(fileId);
+			const auto kind = (cap != _caps.end()) ? cap->second.first : std::string();
+			const auto size = (cap != _caps.end()) ? cap->second.second : std::int64_t(0);
 			bytes = (i != _keys.end())
-				? ExportMediaBytes(fileId, i->second.first, i->second.second)
-				: ExportMediaBytes(fileId, std::string(), std::string());
+				? ExportMediaBytes(fileId, i->second.first, i->second.second, kind, size)
+				: ExportMediaBytes(fileId, std::string(), std::string(), kind, size);
 		} else if (method == "parvaneCloudExportBlob") {
 			const auto container = args.value("container", std::string());
 			const auto node = args.value("node", std::string());
@@ -231,6 +238,7 @@ private:
 	json _planner;
 	std::function<bool()> _canceled;
 	std::map<std::string, std::pair<std::string, std::string>> _keys;
+	std::map<std::string, std::pair<std::string, std::int64_t>> _caps; // вид и заявленный размер — потолок скачивания
 
 };
 
@@ -321,6 +329,8 @@ void Run(
 			post([bridge] { bridge->failed(tr::lng_parvane_export_error_write(tr::now)); });
 			return;
 		}
+		// архив — личные данные: только владельцу (не по umask)
+		file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 		auto writeFailed = false;
 		const auto canceled = [bridge] { return bridge->canceled.load(); };
 		auto host = Host(json::parse(snapshot, nullptr, false), planner, canceled);

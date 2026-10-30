@@ -1128,6 +1128,10 @@ void ProjectCleared(not_null<Main::Session*> session, const parvane::json &snap)
 		const auto id = QString::fromStdString(j.value("id", std::string()));
 		const auto from = QString::fromStdString(j.value("from", std::string()));
 		const auto to = QString::fromStdString(j.value("to", std::string()));
+		// Строки группы — не личный чат: граница очистки собеседника на них не действует
+		if (parvane::v2::isGroupAddress(to.toStdString())) {
+			continue;
+		}
 		const auto dialog = (from == self) ? to : from;
 		const auto found = fresh.constFind(dialog);
 		if (id.isEmpty() || found == fresh.constEnd()

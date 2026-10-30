@@ -4,7 +4,7 @@
 import type { CanvasDoc, CanvasNode, CanvasRect } from './notesCanvas';
 import type { CanvasHandle, CanvasSize } from './notesCanvasEdit';
 
-import { findNode, nodesInGroup } from './notesCanvas';
+import { boundsOfRects, findNode, nodesInGroup } from './notesCanvas';
 import { CANVAS_CARD_MIN, moveNodes } from './notesCanvasEdit';
 
 // Направляющая: `axis: 'x'` — вертикальная линия при x = `at` от y = `from` до y = `to`; `'y'` — горизонтальная
@@ -137,12 +137,5 @@ function guidesOf(rect: CanvasRect, others: CanvasRect[], axis: Axis, lines: num
 }
 
 function boundsOf(rects: CanvasRect[]): CanvasRect {
-  const x = Math.min(...rects.map((rect) => rect.x));
-  const y = Math.min(...rects.map((rect) => rect.y));
-  return {
-    x,
-    y,
-    width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x,
-    height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y,
-  };
+  return boundsOfRects(rects)!;
 }

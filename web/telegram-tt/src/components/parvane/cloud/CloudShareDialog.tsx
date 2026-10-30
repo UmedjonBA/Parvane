@@ -9,7 +9,7 @@ import buildClassName from '../../../util/buildClassName';
 import { callApi } from '../../../api/gramjs';
 import { validateName } from './cloudModel';
 import {
-  getCloudData, getCloudLinks, getCloudPlace, getContainer, linkOfSource, setCloudPlace, showCloudNotice,
+  getCloudData, getCloudLinks, getCloudPlace, getContainer, linkOfSource, peerLabel, setCloudPlace, showCloudNotice,
   unshareCloudFolder,
 } from './cloudStore';
 
@@ -42,7 +42,7 @@ const USER_CHAT_TYPES = ['users'] as const;
 const SHARE_ROLES: ShareRole[] = ['reader', 'editor'];
 
 function nameOf(address: string) {
-  return address.split('@')[0];
+  return peerLabel(address);
 }
 
 // Шторка доступа к совместной папке: создание, участники и их права «Просмотр / Правка» (владелец),

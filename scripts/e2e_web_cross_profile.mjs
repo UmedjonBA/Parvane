@@ -28,6 +28,8 @@ const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
 const GATEWAY_TCP_URL = process.env.PARVANE_E2E_GATEWAY_TCP_URL;
 
 assert(GATEWAY_TCP_URL, 'PARVANE_E2E_GATEWAY_TCP_URL is required');
+// dev-хуки desktop и пароль в окружении — только против локального стека
+assert(/^(?:[a-z]+:\/\/)?(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/i.test(GATEWAY_TCP_URL), 'PARVANE_E2E_GATEWAY_TCP_URL must point to loopback');
 if (!existsSync(DESKTOP_BIN)) {
   console.log(`SKIP: desktop binary is not built (${DESKTOP_BIN})`);
   process.exit(0);
@@ -123,7 +125,7 @@ try {
     PARVANE_AUTOGROUP: `${groupTitle}:${bob}`,
     PARVANE_AUTOPROFILE: `bio=${bio};phone=${phone};color=${color};channel=${groupTitle}:8`,
   });
-  await waitDesktopLog(desktopWorkdir, /E2E-устройство готово/, 90000, desktop);
+  await waitDesktopLog(desktopWorkdir, /v2: готов/, 90000, desktop);
   const created = await waitDesktopLog(
     desktopWorkdir, // v1 — UUID группы, v2 — `v2g:<hex>` (маркер «группа v2 '…' создана»)
     new RegExp(`группа (?:v2 )?'${esc(groupTitle)}' создана.*?(v2g:[0-9a-f]{32}|[0-9a-f-]{36})`), 60000, desktop,
@@ -191,7 +193,7 @@ try {
   // Десктоп перечитывает профиль собеседника при запуске/входящем сообщении
   await stopDesktop(desktop);
   desktop = spawnDesktop(desktopWorkdir, libraryShim, { PARVANE_AUTOLOGIN: `${alice}:${PASSWORD}` });
-  await waitDesktopLog(desktopWorkdir, /E2E-устройство готово/, 90000, desktop);
+  await waitDesktopLog(desktopWorkdir, /v2: готов/, 90000, desktop);
   await openPrivateChatStrict(bobWeb.page, alice);
   await sendText(bobWeb.page, `after-profile-${suffix}`);
   // Телефон bob десктоп-alice не получает (P-19) — в маркере поле пустое

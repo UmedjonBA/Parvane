@@ -24,7 +24,8 @@ import {
   b64ToUuid, uuidToB64, type V2Content, type V2Text, v2ToWire, wireToV2,
 } from './contentMap';
 import { isV2GroupAddress } from './controller';
-import { pollDelay } from './l2';
+import { isTimerSyncMode, pollDelay } from './l2';
+import { V2Error } from './transport';
 
 /** Что журналу нужно от v2-стека (контроллер). */
 export type StateJournalHost = {
@@ -166,6 +167,13 @@ const CLOUD_STATUSES: Record<string, CloudStateEntry['status']> = {
   [CLOUD_STATUS_NAMES.declined]: 'declined', 2: 'declined',
 };
 
+/** Отказ сервера, после которого повтор той же записи бессмысленен (в отличие от сбоя связи и лимита частоты). */
+export function isFinalAppendRejection(e: unknown) {
+  return e instanceof V2Error && [
+    'ERROR_CODE_INVALID', 'ERROR_CODE_FORBIDDEN', 'ERROR_CODE_DUPLICATE',
+  ].includes(e.code);
+}
+
 export function createStateJournal(deps: Deps) {
   let host: StateJournalHost | undefined;
   let session: PvState | undefined;
@@ -215,7 +223,8 @@ export function createStateJournal(deps: Deps) {
     isVisibilityListened = true;
     document.addEventListener('visibilitychange', () => {
       if (!session) return;
-      if (!document.hidden) {
+      // Режим L2: возврат на вкладку не должен вызывать опрос вне ритма таймера (spec 025)
+      if (!document.hidden && !isTimerSyncMode()) {
         void syncNow().catch((e: unknown) => deps.log(`v2: синк журнала состояния: ${String(e)}`));
       } else {
         scheduleSync();
@@ -399,7 +408,13 @@ export function createStateJournal(deps: Deps) {
 
   async function pushAppends() {
     while (host && pendingAppends.length) {
-      await host.call('state.append', pendingAppends[0]);
+      try {
+        await host.call('state.append', pendingAppends[0]);
+      } catch (e) {
+        // Окончательно отвергнутая запись иначе стояла бы в голове очереди и блокировала все следующие
+        if (!isFinalAppendRejection(e)) throw e;
+        deps.log(`v2: запись журнала состояния отвергнута сервером (${(e as V2Error).code}) и снята с очереди`);
+      }
       pendingAppends.shift();
     }
   }

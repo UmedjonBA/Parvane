@@ -1787,7 +1787,13 @@ fn cloud_names(c: &Client, id: &[u8]) -> Vec<String> {
 }
 
 /// Локальная правка → отправка (как делает хост web).
-fn cloud_edit(cloud: &mut MiniCloud, srv: &mut Server, c: &mut Client, id: &[u8], ops: serde_json::Value) {
+fn cloud_edit(cloud: &mut MiniCloud, srv: &mut Server, c: &mut Client, id: &[u8], mut ops: serde_json::Value) {
+    // Блоб загружает сам автор правки (иначе движок получателя отвергает пакет).
+    for op in ops.as_array_mut().into_iter().flatten() {
+        if let Some(b) = op.get_mut("blob").and_then(|b| b.as_object_mut()) {
+            b.insert("uploader".into(), serde_json::Value::String(c.user.clone()));
+        }
+    }
     let local = c.cloud_prepare_local(id, &serde_json::json!({ "ops": ops }).to_string()).unwrap();
     let req = c.cloud_seal(id, &local.op, &local.op_id, 1).unwrap();
     cloud.handle(srv, &c.user.clone(), &c.device_id.clone(), &req);

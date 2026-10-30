@@ -216,38 +216,6 @@ private:
 	return result;
 }
 
-// Столбец с промежутками: виджеты по порядку (видимые), у каждого — отступ сверху
-class Column final : public Ui::RpWidget {
-public:
-	using RpWidget::RpWidget;
-
-	void add(not_null<Ui::RpWidget*> widget, int top) {
-		_items.push_back({ widget, top });
-		widget->heightValue() | rpl::skip(1) | rpl::on_next([=] {
-			resizeToWidth(width());
-		}, widget->lifetime());
-	}
-
-protected:
-	int resizeGetHeight(int newWidth) override {
-		auto y = 0;
-		for (const auto &[widget, top] : _items) {
-			if (widget->isHidden()) {
-				continue;
-			}
-			y += top;
-			widget->resizeToWidth(newWidth);
-			widget->moveToLeft(0, y, newWidth);
-			y += widget->height();
-		}
-		return y;
-	}
-
-private:
-	std::vector<std::pair<not_null<Ui::RpWidget*>, int>> _items;
-
-};
-
 // Путь файла от корня диска (`папка/вложенная/имя`)
 [[nodiscard]] std::string DrivePath(
 		const std::vector<parvane::sections::cloud::CloudNode> &nodes,
@@ -877,7 +845,7 @@ void NoteView::toggleTask(int line, bool done) {
 	if (!_data.note) {
 		return;
 	}
-	SaveNote(_data.note->id, notes::setTaskDone(_data.note->text, line, done), std::nullopt);
+	SaveNote(_data.note->id, notes::setTaskDone(_data.note->text, line, done), _data.note->text);
 }
 
 void NoteView::askDelete() {

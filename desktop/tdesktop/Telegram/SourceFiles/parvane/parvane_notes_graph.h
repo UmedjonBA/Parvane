@@ -165,4 +165,7 @@ private:
 
 };
 
+// Места точек прежнего аккаунта при выходе забываются (id и названия заметок не должны жить в памяти дальше)
+void ResetGraphPlaces();
+
 } // namespace Parvane::Knowledge

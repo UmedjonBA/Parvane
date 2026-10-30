@@ -473,7 +473,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_forum_all_messages" = "All Messages";
 "lng_forum_create_new_topic" = "Create New Thread";
 "lng_dlg_search_for_messages" = "Search for messages";
-"lng_update_telegram" = "Update Telegram";
+"lng_update_telegram" = "Update Parvane";
 "lng_dlg_search_in" = "Search messages in";
 "lng_dlg_search_from" = "From: {user}";
 "lng_chat_menu" = "Chat menu";
@@ -2336,7 +2336,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_sure_delete_selected_days#other" = "{count} selected days";
 
 "lng_message_empty" = "Empty Message";
-"lng_message_unsupported" = "This message is not supported by your version of Telegram. Please update to the latest version in Settings > Advanced, or install it from {link}. If you are already using the latest version, this message might depend on a feature that is not yet implemented.";
+"lng_message_unsupported" = "This message is not supported by your version of Parvane. Please update to the latest version in Settings > Advanced, or install it from {link}. If you are already using the latest version, this message might depend on a feature that is not yet implemented.";
 "lng_message_not_found" = "Message doesn't exist.";
 
 "lng_duration_minsec_minutes#one" = "{count} min";
@@ -3927,6 +3927,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_parvane_keys_import_bad_password" = "Wrong password or damaged file";
 "lng_parvane_keys_import_failed" = "This backup does not fit this account";
 "lng_parvane_keys_not_ready" = "Keys are not ready yet — wait a few seconds after signing in";
+"lng_parvane_mute_hour" = "Mute for 1 hour";
+"lng_parvane_ban_member" = "Ban from group";
+"lng_parvane_ban_member_sure" = "Ban this member from the group?";
+"lng_parvane_open_map" = "Open map";
+"lng_parvane_open_map_sure" = "The exact coordinates will be sent to a third-party map service. Open the map?";
 
 "lng_group_invite_members#one" = "{count} member, among them:";
 "lng_group_invite_members#other" = "{count} members, among them:";

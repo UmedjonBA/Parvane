@@ -59,10 +59,11 @@ for db in "${DBS[@]}"; do
   fi
   chmod 600 "$out"
   if [[ -n "$AGE_RECIPIENT" ]]; then
+    # при сбое age открытую копию не оставляем (set -e прервал бы скрипт раньше rm)
     if [[ -f "$AGE_RECIPIENT" ]]; then
-      age -R "$AGE_RECIPIENT" -o "$out.age" "$out"
+      age -R "$AGE_RECIPIENT" -o "$out.age" "$out" || { rm -f "$out" "$out.age"; echo "age не смог зашифровать $out" >&2; exit 1; }
     else
-      age -r "$AGE_RECIPIENT" -o "$out.age" "$out"
+      age -r "$AGE_RECIPIENT" -o "$out.age" "$out" || { rm -f "$out" "$out.age"; echo "age не смог зашифровать $out" >&2; exit 1; }
     fi
     chmod 600 "$out.age"
     rm -f "$out"

@@ -53,6 +53,10 @@ pub const MAX_RECORD: usize = 262_144;
 /// запись с большей меткой отвергается, чтобы ни одно устройство не упёрлось
 /// в переполнение часов.
 pub const MAX_LAMPORT: u64 = (1 << 53) - 1;
+/// Принимаемый потолок метки личного состояния: 2^40 (честные метки — порядка числа операций). Запись с
+/// MAX_LAMPORT замораживала бы журнал у всех устройств (следующая метка не помещается), а ключ состояния
+/// знают только свои устройства. Проверка от порядка применения не зависит — все клиенты отвергают одно и то же.
+pub const ACCEPT_LAMPORT_CEILING: u64 = 1 << 40;
 /// Зарезервированные id папок: 0 — «все чаты», 1 — архив.
 const RESERVED_FOLDER_IDS: [u32; 2] = [0, 1];
 
@@ -206,7 +210,7 @@ impl LamportClock {
 
     /// Метка для новой операции (строго больше всех увиденных).
     pub fn tick(&mut self) -> Result<u64> {
-        let next = self.last.checked_add(1).filter(|v| *v <= MAX_LAMPORT).ok_or(ProtoError::InvalidField("lamport"))?;
+        let next = self.last.checked_add(1).filter(|v| *v <= ACCEPT_LAMPORT_CEILING).ok_or(ProtoError::InvalidField("lamport"))?;
         self.last = next;
         Ok(next)
     }
@@ -317,7 +321,7 @@ fn op_id16(b: &[u8], field: &'static str) -> Result<OpId> {
 
 fn check_header(op: &StateOp) -> Result<()> {
     op_id16(&op.op_id, "op_id")?;
-    if op.lamport == 0 || op.lamport > MAX_LAMPORT {
+    if op.lamport == 0 || op.lamport > ACCEPT_LAMPORT_CEILING {
         return Err(ProtoError::InvalidField("lamport"));
     }
     if !address::is_valid_device_id(&op.device_id) {
@@ -1137,6 +1141,16 @@ mod tests {
     fn clock_limits() {
         let mut c = LamportClock::new(MAX_LAMPORT);
         assert!(c.tick().is_err());
+        // Аномальный скачок (журнал не замораживается): запись и метка выше потолка отвергаются
+        let mut c = LamportClock::new(ACCEPT_LAMPORT_CEILING);
+        assert!(c.tick().is_err());
+        let mut s = PersonalState::new();
+        let mut c = LamportClock::new(ACCEPT_LAMPORT_CEILING - 1);
+        let ok = make_op(&mut c, "d1", 0, Op::QuickReaction(QuickReaction { emoji: "👍".into(), custom_emoji_id: String::new() })).unwrap();
+        s.apply(&ok).unwrap();
+        let mut frozen = ok.clone();
+        frozen.lamport = MAX_LAMPORT;
+        assert!(s.apply(&frozen).is_err());
         let mut c = LamportClock::default();
         c.observe(10);
         assert_eq!(c.tick().unwrap(), 11);

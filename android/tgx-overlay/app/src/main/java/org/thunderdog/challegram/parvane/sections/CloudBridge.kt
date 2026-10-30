@@ -69,6 +69,12 @@ object CloudBridge {
         else -> ""
     }
 
+    /** Выход из аккаунта: расшифрованные копии файлов облака, отправленных в чаты, не остаются в кэше. */
+    @JvmStatic
+    fun clearSendCache(ctx: android.content.Context) {
+        try { File(ctx.cacheDir, "parvane-send").deleteRecursively() } catch (_: Throwable) {}
+    }
+
     /** Меню чата → «Отправить из облака»: выбор файла в «Облаке», скачивание и отправка документом. */
     @JvmStatic
     fun attachFromCloud(owner: ViewController<*>, chatId: Long) {
@@ -77,6 +83,8 @@ object CloudBridge {
             toast(Sx.t("Файл готовится…", "Preparing file…"))
             Sx.async({
                 val dir = File(owner.context().cacheDir, "parvane-send").apply { mkdirs() }
+                // открытые копии прежних отправок не копим: старше часа удаляем (текущая отправка уже загружена)
+                dir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 3_600_000L }?.forEach { it.delete() }
                 val out = File(dir, node.optString("name").replace('/', '_').ifEmpty { "file" })
                 val r = ParvaneSections.cloudFiles("download", JSONObject().put("container", container).put("node", node.optString("id")).put("out", out.absolutePath)) as? JSONObject
                 if (r?.optBoolean("ok") == true) out else null

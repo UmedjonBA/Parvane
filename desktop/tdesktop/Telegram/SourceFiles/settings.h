@@ -25,7 +25,6 @@ inline Type &cRef##Name() { \
 	return g##Name; \
 }
 
-DeclareSetting(Qt::LayoutDirection, LangDir);
 inline bool rtl() {
 	return style::RightToLeft();
 }
@@ -83,13 +82,11 @@ DeclareSetting(bool, DebugMode);
 DeclareReadSetting(bool, ManyInstance);
 DeclareSetting(bool, Quit);
 
-DeclareSetting(QByteArray, LocalSalt);
 DeclareSetting(int, ScreenScale);
 DeclareSetting(int, ConfigScale);
 
 class DocumentData;
 
-typedef QList<QPair<DocumentData*, int16>> RecentStickerPackOld;
 typedef QVector<QPair<uint64, ushort>> RecentStickerPreload;
 typedef QVector<QPair<DocumentData*, ushort>> RecentStickerPack;
 DeclareSetting(RecentStickerPreload, RecentStickersPreload);

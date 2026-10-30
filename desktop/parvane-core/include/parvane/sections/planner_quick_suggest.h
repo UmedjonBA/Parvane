@@ -114,8 +114,6 @@ struct HistoryResult {
 HistoryResult recordHistoryLine(const QuickHistory &history, const std::string &typed, const std::string &key);
 QuickHistory forgetSuggestion(const QuickHistory &history, const std::string &key,
                               const std::vector<std::string> &texts);
-bool hasHistory(const QuickHistory &history);
-
 // ── история в данных «Плана» ─────────────────────────────────────────────────
 
 std::string quickLineId(const std::string &text, bool isHidden = false);

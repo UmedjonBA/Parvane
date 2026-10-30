@@ -11,6 +11,7 @@
 #include <QtCore/QAbstractEventDispatcher>
 #include <QtCore/QAbstractNativeEventFilter>
 #include <QtCore/QSocketNotifier>
+#include <QtCore/QTimer>
 #include <QtGui/QGuiApplication>
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
@@ -232,6 +233,8 @@ xcb_timestamp_t GetTimestamp(xcb_connection_t *connection) {
 		return XCB_CURRENT_TIME;
 	}
 
+	// Do not hang forever if the X server never answers.
+	QTimer::singleShot(2000, &loop, &QEventLoop::quit);
 	loop.exec();
 	return timestamp;
 }

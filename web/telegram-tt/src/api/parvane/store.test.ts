@@ -93,4 +93,78 @@ describe('ParvaneStore messages', () => {
     const rows = [row('reply', 100, 130001), row('legacy', 90), row('mine', 130, 130000)];
     expect(rows.sort(compareStoredOrder).map((r) => r.id)).toEqual(['legacy', 'mine', 'reply']);
   });
+
+  // REPORT-1: цитаты жалобы сверяются с собственной историей группы у админа
+  it('builds a mod report card only from verified history of the group', () => {
+    const store = new ParvaneStore();
+    const hex = 'ab'.repeat(16);
+    const group = `v2g:${hex}`;
+    const member = 'bob@x.test';
+    store.registerGroup({
+      group_id: group,
+      name: 'g',
+      kind: 'group',
+      created_by: member,
+      members: [{ address: member, role: 'member' }, { address: 'eve@x.test', role: 'member' }],
+      version: 1,
+    });
+    const chatId = store.getIdForAddress(group, 'group');
+    const authorId = store.getIdForAddress('carol@x.test');
+    const id = store.allocateMessageId(chatId, 'op-real', 1000);
+    store.putMessage({
+      id, chatId, senderId: authorId, content: { text: { text: 'real text' } }, date: 1000, isOutgoing: false,
+    });
+    const report = (from: string, ops: string[]) => store.buildApiMessage({
+      id: 'r1',
+      from,
+      to: 'admin@x.test',
+      ts: 2000,
+      content: {
+        kind: 'mod_report',
+        text: 'fallback',
+        report_group: { domain: 'x.test', id: Buffer.from(hex, 'hex').toString('base64') },
+        reported: ops.map((op) => ({ op_id: op, author: 'dave@x.test', text: 'fake', ts: 1 })),
+      },
+    }).content;
+    const ok = report(member, ['op-real', 'op-fake']);
+    expect(ok.modReport?.messages).toEqual([
+      { uuid: 'op-real', authorId, text: 'real text', date: 1000 },
+    ]);
+    // Не участник группы, либо ни одного сообщения из своей истории — только текст
+    expect(report('mallory@x.test', ['op-real']).modReport).toBeUndefined();
+    expect(report(member, ['op-fake']).modReport).toBeUndefined();
+    expect(report(member, ['op-fake']).text?.text).toBe('fallback');
+  });
+});
+
+describe('ParvaneStore ids', () => {
+  const fnv = (value: string) => {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return String(hash >>> 1);
+  };
+
+  it('does not merge two different addresses whose 31-bit hashes collide', () => {
+    const seen = new Map<string, string>();
+    let pair: [string, string] | undefined;
+    for (let i = 0; !pair && i < 400000; i++) {
+      const address = `user${i}@local`;
+      const id = fnv(address);
+      const other = seen.get(id);
+      if (other) pair = [other, address];
+      else seen.set(id, address);
+    }
+    expect(pair).toBeDefined();
+    const store = new ParvaneStore();
+    const idA = store.getIdForAddress(pair![0], 'user');
+    const idB = store.getIdForAddress(pair![1], 'user');
+    expect(idB).not.toBe(idA);
+    expect(store.getAddressForId(idA)).toBe(pair![0]);
+    expect(store.getAddressForId(idB)).toBe(pair![1]);
+    // повторный запрос даёт тот же id
+    expect(store.getIdForAddress(pair![1], 'user')).toBe(idB);
+  });
 });

@@ -146,8 +146,6 @@ private:
 
 };
 
-// Столбец с промежутком между элементами (`.stack`, `.editor`, `.cardRowBody`…)
-[[nodiscard]] object_ptr<Ui::VerticalLayout> MakeColumn(QWidget *parent);
 // Элемент столбца с промежутком сверху (у первого — без него)
 template <typename Widget>
 Widget *AddTo(not_null<Ui::VerticalLayout*> column, object_ptr<Widget> &&child, int gap) {
@@ -522,27 +520,6 @@ private:
 	Ui::RpWidget *_prompt = nullptr;
 	bool _confirmAll = false;
 	Fn<void(planner::DescriptionScope)> _change;
-
-};
-
-// Сворачиваемый блок «Повтор и детали» (web PlannerDetailsFold): открыт ли — привычка устройства
-class DetailsFold final : public Ui::RpWidget {
-public:
-	DetailsFold(QWidget *parent, const QString &summary);
-
-	[[nodiscard]] not_null<Ui::VerticalLayout*> body() const;
-	void setSummary(const QString &summary);
-
-protected:
-	int resizeGetHeight(int newWidth) override;
-	void paintEvent(QPaintEvent *e) override;
-
-private:
-	void toggle();
-
-	Kit::Button *_toggle = nullptr;
-	QString _summary;
-	Ui::VerticalLayout *_body = nullptr;
 
 };
 

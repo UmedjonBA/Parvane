@@ -5,10 +5,8 @@ import type {
   ApiChatFolder,
   ApiChatFullInfo,
   ApiChatInviteInfo,
-  ApiMessage,
   ApiPeer,
   ApiPeerColorCollectible,
-  ApiPreparedInlineMessage,
   ApiThreadInfo,
   ApiTopic,
 } from '../../api/types';
@@ -22,12 +20,11 @@ import { MAIN_THREAD_ID } from '../../api/types';
 
 import {
   ANONYMOUS_USER_ID,
-  ARCHIVED_FOLDER_ID, GENERAL_TOPIC_ID, REPLIES_USER_ID, TME_LINK_PREFIX,
+  ARCHIVED_FOLDER_ID, GENERAL_TOPIC_ID, REPLIES_USER_ID,
   VERIFICATION_CODES_USER_ID,
 } from '../../config';
 import { formatDateToString, formatTime } from '../../util/dates/oldDateFormat';
 import { getPeerIdDividend, isUserId } from '../../util/entities/ids';
-import { getServerTime } from '../../util/serverTime';
 import { selectIsChatRestricted } from '../selectors';
 import { getGlobal } from '..';
 import { isSystemBot } from './bots';
@@ -92,10 +89,16 @@ export function getChatTitle(lang: OldLangFn | LangFn, chat: ApiChat, isSelf = f
   return chat.title || lang('HiddenName');
 }
 
+// Parvane: публичное имя группы открывается по адресу этого сервера (`<сервер>/@имя`), а не по t.me —
+// тот ведёт на аккаунт Telegram с тем же именем
+export function getPublicChatLink(username: string) {
+  return `${globalThis.location?.origin || ''}/@${username}`;
+}
+
 export function getChatLink(chat: ApiChat) {
   const activeUsername = getMainUsername(chat);
 
-  return activeUsername ? `${TME_LINK_PREFIX}${activeUsername}` : undefined;
+  return activeUsername ? getPublicChatLink(activeUsername) : undefined;
 }
 
 export function getChatAvatarHash(
@@ -431,20 +434,4 @@ export function getCustomPeerFromInvite(invite: ApiChatInviteInfo): CustomPeer {
     isVerified,
     fakeType: isFake ? 'fake' : isScam ? 'scam' : undefined,
   };
-}
-
-export function getMockPreparedMessageFromResult(botId: string, preparedMessage: ApiPreparedInlineMessage) {
-  const { result } = preparedMessage;
-
-  const inlineButtons = result?.sendMessage?.replyMarkup?.inlineButtons;
-
-  return {
-    chatId: botId,
-    content: result.sendMessage.content,
-    date: getServerTime(),
-    id: 0,
-    isOutgoing: true,
-    viaBotId: botId,
-    inlineButtons,
-  } satisfies ApiMessage;
 }

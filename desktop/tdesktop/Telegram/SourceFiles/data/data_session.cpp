@@ -31,7 +31,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
-#include "history/history_streamed_drafts.h"
 #include "history/view/media/history_view_media.h"
 #include "history/view/history_view_element.h"
 #include "inline_bots/inline_bot_layout_item.h"
@@ -3220,19 +3219,6 @@ HistoryItem *Session::addNewMessage(
 	const auto peerId = PeerFromMessage(data);
 	if (!peerId || data.type() == mtpc_messageEmpty) {
 		return nullptr;
-	}
-
-	if (type == NewMessageType::Unread
-		&& data.type() == mtpc_message) {
-		if (const auto h = historyLoaded(peerId)) {
-			if (const auto streamed = h->streamedDraftsIfExists()) {
-				if (const auto adopted = streamed->adoptIncoming(
-						data.c_message())) {
-					CheckForSwitchInlineButton(adopted);
-					return adopted;
-				}
-			}
-		}
 	}
 
 	const auto result = history(peerId)->addNewMessage(

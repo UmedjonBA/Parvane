@@ -389,7 +389,7 @@ DownloadResult CloudFiles::download(const std::string &container, const std::str
     }
     result.name = str(*found, "name");
     try {
-        const auto bytes = drive_.blobs().download(withDomain((*found)["blob"]));
+        const auto bytes = drive_.blobs().download(withMaxBytes(withDomain((*found)["blob"]), num(*found, "size"))); // потолок по размеру узла
         if (!bytes) {
             result.error = "not-found";
             return result;

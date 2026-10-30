@@ -91,6 +91,14 @@ function truncate(value: string, max = 48) {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
+// Текст ошибки может нести ссылку с ключом во фрагменте, адрес, токен или ключ: журнал уходит с отчётом
+export function scrubErrorText(value: string) {
+  return value
+    .replace(/https?:\/\/[^\s"')]+/gi, (url) => `${url.split(/[?#]/)[0]}…`)
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '<email>')
+    .replace(/[A-Za-z0-9+/_=-]{24,}/g, '<token>');
+}
+
 export function summarize(value: unknown, depth = 0): string | undefined {
   if (typeof value === 'undefined' || (typeof value === 'object' && !value)) return undefined;
   // Строка верхнего уровня — это аргумент вызова целиком (пароль в
@@ -109,7 +117,7 @@ export function summarize(value: unknown, depth = 0): string | undefined {
     if (item === undefined || typeof item === 'function') return;
     if (typeof item === 'string' && URL_LIKE_KEYS.has(key)) {
       // медиа-хэши без query (там могут быть координаты карты)
-      parts.push(`${key}:"${truncate(item.split('?')[0], 40)}"`);
+      parts.push(`${key}:"${truncate(item.split(/[?#]/)[0], 40)}"`);
       return;
     }
     if (typeof item === 'string' && !STRING_KEYS_ALLOWED.has(key)) {
@@ -174,12 +182,12 @@ export function installParvaneDiag() {
   load();
   diagLog('nav', `${truncate(navigator.userAgent, 80)} online=${navigator.onLine}`);
   window.addEventListener('error', (event) => {
-    diagLog('err', truncate(`${event.message} @${event.filename}:${event.lineno}`, 200));
+    diagLog('err', truncate(scrubErrorText(`${event.message} @${event.filename}:${event.lineno}`), 200));
   });
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason as { message?: string } | string | undefined;
     const text = typeof reason === 'string' ? reason : reason?.message || 'unknown';
-    diagLog('err', `unhandled: ${truncate(text, 200)}`);
+    diagLog('err', `unhandled: ${truncate(scrubErrorText(String(text)), 200)}`);
   });
   window.addEventListener('online', () => diagLog('nav', 'online'));
   window.addEventListener('offline', () => diagLog('nav', 'offline'));
@@ -192,7 +200,8 @@ export function installParvaneDiag() {
   const originalError = console.error;
   // eslint-disable-next-line no-console
   console.error = (...args: unknown[]) => {
-    diagLog('cerr', truncate(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '), 200));
+    const text = args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ');
+    diagLog('cerr', truncate(scrubErrorText(text), 200));
     originalError.apply(console, args);
   };
 }

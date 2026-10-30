@@ -208,20 +208,23 @@ public:
 			u"%t"_q,
 			QString::fromLatin1(QUrl::toPercentEncoding(toCode)));
 		const auto requestUrl = QUrl(url);
-		if (!requestUrl.isValid()) {
+		if (!requestUrl.isValid()
+			|| requestUrl.scheme().toLower() != u"https"_q) {
 			done(TranslateProviderResult{
 				.error = TranslateProviderError::Unknown,
 			});
 			return;
 		}
 		auto networkRequest = QNetworkRequest(requestUrl);
+		networkRequest.setTransferTimeout(15000);
 		const auto reply = _network.get(networkRequest);
 		QObject::connect(reply, &QNetworkReply::finished, [=] {
 			auto result = TranslateProviderResult();
 			if (reply->error() != QNetworkReply::NoError) {
 				result.error = TranslateProviderError::Unknown;
 			} else {
-				const auto body = reply->readAll();
+				constexpr auto kMaxResponseSize = qint64(1024 * 1024);
+				const auto body = reply->read(kMaxResponseSize);
 				const auto formatted = FormatJsonResponse(body).value_or(
 					QString::fromUtf8(body));
 				result.text = TextWithEntities{ formatted };

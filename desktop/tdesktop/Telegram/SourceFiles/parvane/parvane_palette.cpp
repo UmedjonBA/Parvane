@@ -650,9 +650,10 @@ void Palette::render() {
 			const auto row = _list->add(
 				object_ptr<PaletteRow>(_list, found),
 				style::margins(0, Kit::Rem(0.125), 0, 0));
-			row->setClickedCallback([=] {
+			// Нажатие выполняет именно ту запись, на которую нажали, — без пересчёта поиска (он пересоздал бы список)
+			row->setClickedCallback([=, run = found.entry->run] {
 				_selected = index;
-				runSelected();
+				close(run);
 			});
 			_rows.push_back(row);
 			_flat.push_back(found.entry);

@@ -2,7 +2,6 @@ import type { ApiUser } from '../../../api/types';
 import type { ActionReturnType } from '../../types';
 import { ManagementProgress } from '../../../types';
 
-import { BOT_VERIFICATION_PEERS_LIMIT } from '../../../config';
 import { isUserId } from '../../../util/entities/ids';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { buildCollectionByKey, unique } from '../../../util/iteratees';
@@ -32,7 +31,6 @@ import {
   selectIsChatRestricted,
   selectIsCurrentUserFrozen,
   selectIsCurrentUserPremium,
-  selectPeer,
   selectPeerPhotos,
   selectTabState,
   selectUser,
@@ -167,47 +165,6 @@ addActionHandler('loadCommonChats', async (global, actions, payload): Promise<vo
   setGlobal(global);
 });
 
-addActionHandler('toggleNoPaidMessagesException', async (global, actions, payload): Promise<void> => {
-  const { userId, shouldRefundCharged } = payload;
-  const user = selectUser(global, userId);
-  if (!user) {
-    return;
-  }
-
-  const result = await callApi('toggleNoPaidMessagesException',
-    { user, shouldRefundCharged });
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = updateUserFullInfo(global, userId, {
-    settings: undefined,
-  });
-  setGlobal(global);
-});
-
-addActionHandler('openChatRefundModal', async (global, actions, payload): Promise<void> => {
-  const { userId, tabId = getCurrentTabId() } = payload;
-  const user = selectUser(global, userId);
-  if (!user) {
-    return;
-  }
-
-  const starsAmount = await callApi('fetchPaidMessagesRevenue', { user });
-  if (starsAmount === undefined) return;
-
-  global = getGlobal();
-  global = updateTabState(global, {
-    chatRefundModal: {
-      userId,
-      starsToRefund: starsAmount,
-    },
-  }, tabId);
-
-  setGlobal(global);
-});
-
 addActionHandler('updateContact', async (global, actions, payload): Promise<void> => {
   const {
     userId, firstName, lastName, shouldSharePhoneNumber, note,
@@ -223,21 +180,18 @@ addActionHandler('updateContact', async (global, actions, payload): Promise<void
   global = updateManagementProgress(global, ManagementProgress.InProgress, tabId);
   setGlobal(global);
 
-  let result;
-  if (!user.isContact && user.phoneNumber && !note) {
-    result = await callApi('importContact', { phone: user.phoneNumber, firstName, lastName });
-  } else {
-    const { id, accessHash } = user;
-    result = await callApi('updateContact', {
-      id,
-      accessHash,
-      phoneNumber: '',
-      firstName,
-      lastName,
-      shouldSharePhoneNumber,
-      note,
-    });
-  }
+  // Parvane: «телефон» профиля задаёт сам собеседник — по нему контакт не ищется и не добавляется,
+  // только по id пользователя (адрес берётся из стора)
+  const { id, accessHash } = user;
+  const result = await callApi('updateContact', {
+    id,
+    accessHash,
+    phoneNumber: '',
+    firstName,
+    lastName,
+    shouldSharePhoneNumber,
+    note,
+  });
 
   if (result) {
     actions.loadPeerSettings({ peerId: userId });
@@ -429,22 +383,6 @@ addActionHandler('importContact', async (global, actions, payload): Promise<void
   setGlobal(global);
 });
 
-addActionHandler('reportSpam', async (global, actions, payload): Promise<void> => {
-  const { chatId, tabId = getCurrentTabId() } = payload;
-  const peer = selectPeer(global, chatId);
-  if (!peer) {
-    return;
-  }
-
-  const result = await callApi('reportSpam', peer);
-  if (!result) return;
-
-  actions.showNotification({
-    message: langProvider.oldTranslate('ReportPeer.AlertSuccess'),
-    tabId,
-  });
-});
-
 addActionHandler('setEmojiStatus', async (global, actions, payload): Promise<void> => {
   const {
     emojiStatus, referrerWebAppKey, tabId = getCurrentTabId(),
@@ -501,31 +439,6 @@ addActionHandler('setEmojiStatus', async (global, actions, payload): Promise<voi
       tabId,
     });
   }
-});
-
-addActionHandler('saveCloseFriends', async (global, actions, payload): Promise<void> => {
-  const { userIds } = payload;
-
-  const result = await callApi('saveCloseFriends', userIds);
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global.contactList?.userIds.forEach((userId) => {
-    const { isCloseFriend } = global.users.byId[userId] || {};
-    if (isCloseFriend && !userIds.includes(userId)) {
-      global = updateUser(global, userId, {
-        isCloseFriend: undefined,
-      });
-    }
-  });
-  userIds.forEach((userId) => {
-    global = updateUser(global, userId, {
-      isCloseFriend: true,
-    });
-  });
-  setGlobal(global);
 });
 
 addActionHandler('openSuggestedStatusModal', async (global, actions, payload): Promise<void> => {
@@ -587,23 +500,6 @@ addActionHandler('loadPeerSettings', async (global, actions, payload): Promise<v
 
   global = getGlobal();
   global = updateUserFullInfo(global, peerId, { settings });
-  setGlobal(global);
-});
-
-addActionHandler('markBotVerificationInfoShown', (global, actions, payload): ActionReturnType => {
-  const { peerId } = payload;
-
-  const currentPeerIds = global.settings.botVerificationShownPeerIds;
-  const newPeerIds = unique([peerId, ...currentPeerIds]).slice(0, BOT_VERIFICATION_PEERS_LIMIT);
-
-  global = {
-    ...global,
-    settings: {
-      ...global.settings,
-      botVerificationShownPeerIds: newPeerIds,
-    },
-  };
-
   setGlobal(global);
 });
 

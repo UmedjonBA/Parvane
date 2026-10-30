@@ -2,7 +2,7 @@ import type { CloudNode } from '../../../components/parvane/cloud/cloudModel';
 import type { Protocol, PvClient } from './engine';
 
 import { expiredTrashOf } from '../../../components/parvane/cloud/cloudModel';
-import { pollDelay } from './l2';
+import { isTimerSyncMode, pollDelay } from './l2';
 import { V2Error } from './transport';
 
 // Parvane (spec 016): раздел «Облако» — контейнеры домена `cloud.v1` (шард
@@ -92,10 +92,14 @@ export const CLOUD_DOMAIN = 'cloud.v1';
 const OUTBOX_RECORD = 'cloud-outbox:';
 // Блобы стёртых файлов, уже удалённые с сервера этим устройством
 const GC_RECORD = 'cloud-gc';
+// Блобы, загруженные или скопированные самим этим устройством: uploader в узле папки задаёт автор операции,
+// стирать на сервере можно только то, что мы сами положили (иначе участник папки укажет чужой file_id)
+const OWN_BLOBS_RECORD = 'cloud-own-blobs';
 // Серверы, приглашавшие в совместные папки (spec 028): папка живёт у владельца, и её видно только в
 // списке его сервера — до подключения домен известен лишь из приглашения
 const REMOTE_DOMAINS_RECORD = 'cloud-remote-domains';
 const GC_KEEP = 2000;
+const OWN_BLOBS_KEEP = 20000;
 const SYNC_ACTIVE_MS = 8000;
 const SYNC_IDLE_MS = 60000;
 const RETRY_OFFLINE_MS = 15000;
@@ -144,6 +148,7 @@ export function createCloudSync(deps: Deps) {
   // Чужие контейнеры, в которых доступа больше нет (сервер ответил NOT_FOUND)
   const lost = new Set<string>();
   let gcDone: string[] | undefined;
+  let ownBlobs: string[] | undefined;
   // Контейнеры, у которых сборка блобов и срок корзины уже проверялись (и когда)
   const gcChecked = new Set<string>();
   const trashCheckedAt = new Map<string, number>();
@@ -339,6 +344,7 @@ export function createCloudSync(deps: Deps) {
     liveEntries().filter((e) => e.domain).forEach((e) => domains.add(e.domain.toLowerCase()));
     const onServer = new Map<string, string>();
     const listed = new Set<string>();
+    const withContainers = new Set<string>();
     for (const domain of domains) {
       let resp: Uint8Array;
       try {
@@ -355,9 +361,24 @@ export function createCloudSync(deps: Deps) {
         containers?: { ref?: { id?: string }; owner?: { address?: string } }[];
       };
       (list.containers || []).forEach((c) => {
-        if (c.ref?.id) onServer.set(b64ToHex(c.ref.id), c.owner?.address || '');
+        if (c.ref?.id) {
+          onServer.set(b64ToHex(c.ref.id), c.owner?.address || '');
+          withContainers.add(domain);
+        }
       });
     }
+    // Чужой сервер, из которого пришло приглашение, но контейнеров для нас там нет (письмо без папки): не опрашивать вечно
+    const remotes = await loadRemoteDomains();
+    let isPruned = false;
+    for (const domain of [...remotes]) {
+      const isKnown = engineContainers().some((c) => domainOf(c.id).toLowerCase() === domain)
+        || liveEntries().some((e) => e.domain?.toLowerCase() === domain);
+      if (listed.has(domain) && !withContainers.has(domain) && !isKnown) {
+        remotes.delete(domain);
+        isPruned = true;
+      }
+    }
+    if (isPruned) await deps.saveRecord(REMOTE_DOMAINS_RECORD, [...remotes]).catch(() => undefined);
     const self = deps.self();
     const entries = deps.stateEntries();
     for (const [id, owner] of onServer) {
@@ -586,6 +607,16 @@ export function createCloudSync(deps: Deps) {
     return rejected;
   }
 
+  /** Запомнить блоб, который это устройство само загрузило/скопировало в облако (сборка мусора трогает только такие). */
+  async function noteOwnBlob(fileId: string) {
+    if (!fileId) return;
+    ownBlobs = ownBlobs || (await deps.loadRecord<string[]>(OWN_BLOBS_RECORD).catch(() => undefined)) || [];
+    if (ownBlobs.includes(fileId)) return;
+    ownBlobs.push(fileId);
+    ownBlobs = ownBlobs.slice(-OWN_BLOBS_KEEP);
+    await deps.saveRecord(OWN_BLOBS_RECORD, ownBlobs).catch(() => undefined);
+  }
+
   /** Блобы окончательно удалённых файлов, загруженные этим аккаунтом, — стереть на сервере. */
   async function collectGarbage(id: string) {
     const client = deps.client();
@@ -596,9 +627,11 @@ export function createCloudSync(deps: Deps) {
     if (!purged.length) return;
     gcDone = gcDone || (await deps.loadRecord<string[]>(GC_RECORD).catch(() => undefined)) || [];
     const done = new Set(gcDone);
+    ownBlobs = ownBlobs || (await deps.loadRecord<string[]>(OWN_BLOBS_RECORD).catch(() => undefined)) || [];
+    const own = new Set(ownBlobs);
     let hasChanges = false;
     for (const blob of purged) {
-      if (blob.uploader !== self || done.has(blob.fileId)) continue;
+      if (blob.uploader !== self || done.has(blob.fileId) || !own.has(blob.fileId)) continue;
       try {
         await deps.deleteBlob(blob.fileId);
       } catch (e) {
@@ -695,7 +728,7 @@ export function createCloudSync(deps: Deps) {
     document.addEventListener('visibilitychange', () => {
       if (!isWanted) return;
       // Вкладка снова видна при открытом разделе: догнать сразу
-      if (!document.hidden && isActive) void syncNow();
+      if (!document.hidden && isActive && !isTimerSyncMode()) void syncNow();
       else scheduleSync();
     });
   }
@@ -774,7 +807,7 @@ export function createCloudSync(deps: Deps) {
     }
     if (isActive === active) return;
     isActive = active;
-    if (active && !isHidden()) void syncNow(true);
+    if (active && !isHidden() && !isTimerSyncMode()) void syncNow(true);
     else scheduleSync();
   }
 
@@ -1033,6 +1066,7 @@ export function createCloudSync(deps: Deps) {
     snapshotTried.clear();
     lost.clear();
     gcDone = undefined;
+    ownBlobs = undefined;
     gcChecked.clear();
     trashCheckedAt.clear();
     isWanted = false;
@@ -1066,6 +1100,7 @@ export function createCloudSync(deps: Deps) {
     unshare,
     answerInvite,
     noteRemoteDomain,
+    noteOwnBlob,
     leave,
     removeFolder,
     rotate,

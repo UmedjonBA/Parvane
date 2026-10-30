@@ -291,14 +291,12 @@ impl PvClient {
     pub fn join_with_grant(&mut self, material: &[u8], otk_count: usize) -> Result<Array, JsValue> {
         let v: Value = serde_json::from_slice(material).map_err(|_| err_proto(ProtoError::Malformed))?;
         let h = |k: &str| hex::decode(v[k].as_str().unwrap_or("")).map_err(|_| err_proto(ProtoError::Malformed));
-        let log = ipb::DeviceLogSyncResponse::decode(h("log")?.as_slice()).map_err(|_| err_proto(ProtoError::Malformed))?;
-        let reqs = self
-            .inner
-            .join_with_ssk(key32(&h("ssk")?)?, log.entries, key32(&h("dk")?)?, v["gen"].as_u64().unwrap_or(1), otk_count)
-            .map_err(err_proto)?;
-        if v.get("sk").is_some_and(|s| s.is_string()) {
+        let log: ipb::DeviceLogSyncResponse = decode_checked(h("log")?.as_slice(), Origin::Server).map_err(err_proto)?;
+        let (gen, skv) = parvane_protocol::host::grant_numbers(&v).map_err(err_proto)?;
+        let reqs = self.inner.join_with_ssk(key32(&h("ssk")?)?, log.entries, key32(&h("dk")?)?, gen, otk_count).map_err(err_proto)?;
+        if let Some(skv) = skv {
             let k = parvane_protocol::state::StateKey::from_bytes(&h("sk")?).map_err(|_| err_proto(ProtoError::Malformed))?;
-            self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
+            self.inner.set_state_key(k, skv);
         }
         parvane_protocol::host::apply_grant_peer_keys(&mut self.inner, &v);
         parvane_protocol::host::apply_grant_former_names(&mut self.inner, &v);

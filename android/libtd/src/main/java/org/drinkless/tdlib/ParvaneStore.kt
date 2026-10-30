@@ -94,6 +94,8 @@ class ParvaneStore {
         // PUBLIC-1 (spec 023): публичная группа и её имя в общем пространстве ников
         var isPublic: Boolean = false
         var publicName: String = ""
+        var publicPreview: Boolean = true
+        var publicHistory: Boolean = true
     }
 
     // ── spec 004: чистые маппинги для экранов управления X (JVM-тесты) ──────────
@@ -180,7 +182,7 @@ class ParvaneStore {
     // сообщения чата по возрастанию id; uuid → сообщение; (chatId,msgId) → uuid
     private val messages = ConcurrentHashMap<Long, ArrayList<TdApi.Message>>()
     private val msgByUuid = ConcurrentHashMap<String, TdApi.Message>()
-    private val uuidByMsg = ConcurrentHashMap<Long, String>()      // (chatId<<20 ^ msgId) → uuid
+    private val uuidByMsg = ConcurrentHashMap<Pair<Long, Long>, String>() // (chatId, msgId) → uuid
     private val contentByUuid = ConcurrentHashMap<String, JSONObject>() // исходный content (для правок/пересылки)
     private var nextMessageId = 1L
 
@@ -222,8 +224,13 @@ class ParvaneStore {
             h = h xor (b.toLong() and 0xff)
             h *= 1099511628211L
         }
-        val id = (h and MAX_USER_ID).let { if (it == 0L) 1L else it }
-        addressById[id] = address
+        var id = (h and MAX_USER_ID).let { if (it == 0L) 1L else it }
+        // Коллизия 40-битного хеша: id занят другим адресом — берём следующий свободный, чужой чат не перехватывается
+        while (true) {
+            val prev = addressById.putIfAbsent(id, address)
+            if (prev == null || prev == address) break
+            id = if (id >= MAX_USER_ID) 1L else id + 1
+        }
         id
     }
 
@@ -432,7 +439,11 @@ class ParvaneStore {
 
     /** Текст с сущностями провода (bold/italic/…/custom_emoji — spec 005) и превью ссылки отправителя (`webpage`). */
     private fun textContent(c: JSONObject): TdApi.MessageText =
-        TdApi.MessageText(TdApi.FormattedText(if (c.isNull("text")) "" else c.optString("text"), Entities.fromWire(c.optJSONArray("entities"))), LinkPreviews.linkPreviewOf(c.optJSONObject("webpage")), null)
+        run {
+            val txt = if (c.isNull("text")) "" else c.optString("text")
+            val ents = Entities.fromWire(c.optJSONArray("entities"), txt)
+            TdApi.MessageText(TdApi.FormattedText(txt, ents), LinkPreviews.linkPreviewOf(c.optJSONObject("webpage"), txt, ents), null)
+        }
 
 
     private fun reactionsFrom(arr: JSONArray?): TdApi.MessageInteractionInfo? {
@@ -524,6 +535,9 @@ class ParvaneStore {
             g.pendingRequests = info.optInt("pending_requests", -1).coerceAtLeast(0)
             g.isPublic = info.optBoolean("is_public", false)
             g.publicName = if (info.isNull("public_name")) "" else info.optString("public_name", "")
+            // без поля (старый мост) — прежнее умолчание «включено»; движок отдаёт флажки группы как есть
+            g.publicPreview = info.optBoolean("public_preview", true)
+            g.publicHistory = info.optBoolean("public_history", true)
         }
         val chat = chats[g.chatId] ?: TdApi.Chat().apply {
             id = g.chatId
@@ -627,7 +641,7 @@ class ParvaneStore {
         return msg
     }
 
-    private fun key(chatId: Long, msgId: Long) = (chatId shl 20) xor msgId
+    private fun key(chatId: Long, msgId: Long) = chatId to msgId
     fun uuidOf(chatId: Long, msgId: Long): String? = uuidByMsg[key(chatId, msgId)]
     fun messageByUuid(uuid: String): TdApi.Message? = msgByUuid[uuid]
     fun contentOf(uuid: String): JSONObject? = contentByUuid[uuid]
@@ -741,9 +755,6 @@ class ParvaneStore {
     @Synchronized
     fun notifyView(): StateJournal.NotifyView =
         StateJournal.NotifyView(JSONObject(notifyDefaults.toString()), JSONObject(notifyExceptions.toString()))
-    /** v1-блоб, когда настройки уведомлений ведёт журнал личного состояния (STATE-2): только то, что исполняет
-     *  сервер (`group_add`), — списка заглушённых чатов в открытом блобе нет. */
-    fun minimalNotifyBlob(): String = JSONObject().also { if (groupAddPolicy.isNotEmpty()) it.put("group_add", groupAddPolicy) }.toString()
     private fun muteFor(s: JSONObject?): Int {
         if (s == null || !s.has("mutedUntil") || s.isNull("mutedUntil")) return 0
         val until = s.optLong("mutedUntil")

@@ -454,6 +454,11 @@ EmojiInteractionsBunch EmojiInteractions::Parse(const QByteArray &json) {
 		LOG(("API Error: Empty interactions list."));
 		return {};
 	}
+	constexpr auto kMaxInteractionsInBunch = 64;
+	if (actions.size() > kMaxInteractionsInBunch) {
+		LOG(("API Error: Too many interactions: %1").arg(actions.size()));
+		return {};
+	}
 	auto result = EmojiInteractionsBunch();
 	for (const auto interaction : actions) {
 		const auto object = interaction.toObject();

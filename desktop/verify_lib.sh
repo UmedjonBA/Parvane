@@ -14,8 +14,6 @@
 #   PV_GATEWAY_ENV="A=1 B=2"  — дополнительное окружение gateway (и при gateway_restart);
 #   PV_SHARD_ENV="A=1 B=2"    — дополнительное окружение ВСЕХ шардов;
 #   PV_DOMAIN=local           — домен сервера (PARVANE_DOMAIN всех шардов и gateway);
-#   PV_NATS_ACL=0             — NATS без ACL (только для старых android-сценариев,
-#                               которые ходят в шину `nats req` напрямую);
 #   PV_FEDERATION_PORT=<порт> — поднять ещё шард federation (HTTP без TLS: бинарь
 #                               собран с `--features insecure-test-transport`); всем
 #                               шардам — PARVANE_FEDERATION=on и PARVANE_S2S_ENDPOINT;
@@ -95,7 +93,7 @@ wait_port() { # wait_port <port> [попыток по 0.2 с = 50]
 shard_start() {
   local s="$1"; shift
   local creds=()
-  [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER="$s" PARVANE_NATS_PASS="$(nats_pass "$s")")
+  creds=(PARVANE_NATS_USER="$s" PARVANE_NATS_PASS="$(nats_pass "$s")")
   # Федерация (spec 028): identity описывает свой вход s2s в server.describe
   local fed=()
   [ -n "${PV_FEDERATION_PORT:-}" ] && fed=(PARVANE_FEDERATION=on PARVANE_S2S_ENDPOINT="http://127.0.0.1:$PV_FEDERATION_PORT")
@@ -127,14 +125,10 @@ stack_up() {
   fi
   command -v nats-server >/dev/null || { echo "нет nats-server в PATH"; exit 2; }
   stack_reap   # хвост прошлого прогона на тех же портах
-  if [ "${PV_NATS_ACL:-1}" = 1 ]; then
-    local penv=() r
-    for r in $PV_NATS_ROLES; do penv+=("PARVANE_$(echo "$r" | tr a-z A-Z)_PASS=$(nats_pass "$r")"); done
-    env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$PV_NATS_PORT" \
-      >"$SB/nats.log" 2>&1 & PIDS+=($!)
-  else
-    nats-server -a 127.0.0.1 -p "$PV_NATS_PORT" >"$SB/nats.log" 2>&1 & PIDS+=($!)
-  fi
+  local penv=() r
+  for r in $PV_NATS_ROLES; do penv+=("PARVANE_$(echo "$r" | tr a-z A-Z)_PASS=$(nats_pass "$r")"); done
+  env "${penv[@]}" nats-server -c "$ROOT/../backend/infra/nats/server.prod.conf" -a 127.0.0.1 -p "$PV_NATS_PORT" \
+    >"$SB/nats.log" 2>&1 & PIDS+=($!)
   wait_port "$PV_NATS_PORT" || { echo "nats-server не поднялся (см. $SB/nats.log)"; exit 2; }
   # headless-клиенты перелогиниваются ~1-2 раза/с с 127.0.0.1 — лимиты по IP
   # и логину (identity) для e2e снимаем, иначе через ~15 с интро замирает
@@ -171,7 +165,7 @@ stack_start() { # stack_start <scratch> [env-для-identity]
 GW_PID=""
 gateway_start() {
   local creds=()
-  [ "${PV_NATS_ACL:-1}" = 1 ] && creds=(PARVANE_NATS_USER=gateway PARVANE_NATS_PASS="$(nats_pass gateway)")
+  creds=(PARVANE_NATS_USER=gateway PARVANE_NATS_PASS="$(nats_pass gateway)")
   # shellcheck disable=SC2086
   env PARVANE_NATS_URL="nats://127.0.0.1:$PV_NATS_PORT" "${creds[@]}" PARVANE_DOMAIN="$PV_DOMAIN" \
     PARVANE_GATEWAY_TCP_BIND="127.0.0.1:$PV_GW_TCP_PORT" PARVANE_GATEWAY_BIND="127.0.0.1:$PV_GW_WS_PORT" \

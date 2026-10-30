@@ -577,3 +577,24 @@ describe('холст: идентификаторы и проверки знач�
     expect(isCanvasPresetColor(undefined)).toBe(false);
   });
 });
+
+describe('холст: адрес карточки-ссылки', () => {
+  it('негодный адрес из файла отбрасывается, http(s) остаётся', () => {
+    const text = JSON.stringify({
+      nodes: [
+        { id: 'a', type: 'link', url: 'javascript:alert(1)' },
+        { id: 'b', type: 'link', url: 'https://example.org/x' },
+      ],
+    });
+    const { nodes } = parseCanvas(text).doc;
+    expect(nodes[0].url).toBeUndefined();
+    expect(nodes[1].url).toBe('https://example.org/x');
+  });
+
+  it('границы сотен тысяч прямоугольников считаются без RangeError', () => {
+    const nodes = Array.from({ length: 300000 }, (_, i) => ({
+      id: String(i), type: 'text', x: i, y: 0, width: 5, height: 5,
+    }));
+    expect(() => boundsOf({ nodes, edges: [] })).not.toThrow();
+  });
+});

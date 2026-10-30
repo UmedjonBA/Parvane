@@ -30,6 +30,8 @@ function buildHashedId(value: string): string {
 // (L2) и тексты на случай, когда языковой пакет ещё не загружен
 // ORDER-1: сообщение с временем в этих пределах от «сейчас» считается живым
 const LIVE_ORDER_WINDOW_SECS = 300;
+// Жалоба: сколько сообщений принимаем (как kMaxMessages в validateModReport)
+const REPORT_MAX_MESSAGES = 50;
 
 // Порядок восстановления: сохранённое место в ленте (ORDER-1), у строк без него — время
 export function compareStoredOrder(left: WireStoredMessage, right: WireStoredMessage) {
@@ -138,10 +140,6 @@ export class ParvaneStore {
     return this.deletedUsers.delete(this.canonicalAddress(address));
   }
 
-  isUserDeleted(address: string) {
-    return this.deletedUsers.has(this.canonicalAddress(address));
-  }
-
   // Смена ника (spec 026): прежний адрес пользователя ведёт на новый, чат остаётся прежним (id — от самого
   // первого адреса цепочки). Возвращает false, если перенос уже известен
   registerUserRename(oldAddress: string, newAddress: string): boolean {
@@ -179,8 +177,16 @@ export class ParvaneStore {
     if (!existingKind) this.kindByAddress.set(address, actualKind);
 
     const seed = this.migratedFrom.get(address) ?? address;
-    const raw = buildHashedId(actualKind === 'user' ? seed : `group:${seed}`);
-    const id = actualKind === 'user' ? raw : `-${raw}`;
+    // id — 31-битный хэш: при коллизии с ДРУГИМ адресом пробуем соседний (повтор детерминирован), иначе чужой
+    // адрес слился бы с чатом контакта. Тот же адрес после смены ника (общий seed) id сохраняет
+    let id = '';
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const base = actualKind === 'user' ? seed : `group:${seed}`;
+      const raw = buildHashedId(attempt ? `${base}#${attempt}` : base);
+      id = actualKind === 'user' ? raw : `-${raw}`;
+      const holder = this.addressById.get(id);
+      if (!holder || holder === address || (this.migratedFrom.get(holder) ?? holder) === seed) break;
+    }
     const isNew = !this.addressById.has(id);
     this.addressById.set(id, address);
     if (isNew && actualKind === 'user' && address !== this.self) this.onUserRegistered?.(id, address);
@@ -226,16 +232,36 @@ export class ParvaneStore {
     const { content } = stored;
     const group = content.report_group?.id
       ? `${V2_GROUP_ADDRESS_PREFIX}${b64ToHex(content.report_group.id)}` : undefined;
-    if (!group || !content.reported?.length) return { text: { text: content.text || '⚠️' } };
+    const fallback = { text: { text: content.text || '⚠️' } };
+    if (!group || !content.reported?.length) return fallback;
+    // Сверка с собственной историей (как validateModReport в parvane-core): жалобу принимаем только от
+    // участника группы, автора и текст берём из своего кэша по op_id; неизвестное отбрасываем
+    const info = this.getGroupInfo(group);
+    const sender = stored.from ? this.canonicalAddress(stored.from) : undefined;
+    const isMember = Boolean(info && sender && info.members.some((m) => (
+      m.role !== 'banned' && this.canonicalAddress(m.address) === sender
+    )));
+    if (!info || !isMember) return fallback;
+    const groupChatId = this.getIdForAddress(group, 'group');
+    const messages: { uuid: string; authorId: string; text: string; date: number }[] = [];
+    for (const m of content.reported.slice(0, REPORT_MAX_MESSAGES)) {
+      if (!m.op_id || messages.some((q) => q.uuid === m.op_id)) continue;
+      const key = this.msgKeyByUuid.get(m.op_id);
+      if (!key || key.chatId !== groupChatId) continue;
+      const local = this.messageByIdByChatId.get(key.chatId)?.get(key.id);
+      if (!local?.senderId) continue;
+      messages.push({
+        uuid: m.op_id, authorId: local.senderId, text: local.content.text?.text || '[media]', date: local.date,
+      });
+    }
+    if (!messages.length) return fallback;
     return {
       modReport: {
         mediaType: 'modReport',
-        groupChatId: this.isGroupAddress(group) ? this.getIdForAddress(group, 'group') : undefined,
+        groupChatId,
         reason: content.reason || 'other',
         comment: content.comment || undefined,
-        messages: content.reported.map((m) => ({
-          uuid: m.op_id, authorId: this.getIdForAddress(m.author), text: m.text, date: m.ts,
-        })),
+        messages,
       },
     };
   }
@@ -887,11 +913,6 @@ function buildMessageContent(
       // Вид, который эта версия не знает (протокол v2, spec 007): пустое
       // содержимое — нативная заглушка Web A `MessageUnsupported`
       return {};
-    case 'encrypted':
-    case 'group_encrypted':
-      // Сюда попадают sealed-сообщения без ключа этого устройства (например,
-      // залогинились на новом устройстве — старые E2E прочитать нельзя)
-      return { text: { text: '🔒 Зашифровано для другого устройства' } };
     default:
       return { text: { text: `📎 ${content.kind}: ${content.filename || content.file_id || ''}` } };
   }

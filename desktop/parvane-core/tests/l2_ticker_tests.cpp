@@ -102,6 +102,26 @@ int main() {
         check(r == "ok" && sends.load() >= 3 && t.coversSent() >= 2, "поток тактов: запись и пустышки по таймеру");
     }
     {
+        // Поток запущен при выключенном режиме: включение + refresh() сразу запускает пустышки
+        std::atomic<bool> on{false};
+        std::atomic<int> sends{0};
+        parvane::v2::L2Ticker t(parvane::v2::L2Ticker::Deps{
+            [&] { return on.load(); },
+            [&](const std::string &, const std::string &, const std::string &) {
+                ++sends;
+                return std::string("ok");
+            },
+            [] { return std::make_optional(std::make_pair(std::string("cover"), std::string())); },
+            nullptr, 20, 5});
+        t.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        on = true;
+        t.refresh();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        t.stop();
+        check(sends.load() >= 2 && t.coversSent() >= 2, "режим включили после start() — пустышки идут без настоящих записей");
+    }
+    {
         // Ошибка отправки возвращается тому, кто ждал запись
         parvane::v2::L2Ticker t(parvane::v2::L2Ticker::Deps{
             [] { return true; },

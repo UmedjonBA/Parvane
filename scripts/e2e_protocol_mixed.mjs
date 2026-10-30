@@ -15,14 +15,12 @@ import {
   dismissRecoveryKeyDialog,
   LOGIN_TIMEOUT_MS,
   addReaction,
-  createGroupViaUi,
   deleteMessage,
   expectMediaFlowing,
   dumpDiagJournal,
   editText,
   findMessage,
   findMessageContainer,
-  openGroupChatByTitle,
   openPrivateChatStrict,
   pinMessage,
   preparePage,
@@ -342,15 +340,14 @@ try {
   const suffix = `${Date.now()}-${process.pid}`;
   const alice = `v2a-${suffix}@local`;
   const bob = `v2b-${suffix}@local`;
-  const bobIsV2 = true; // T110: роли v1 нет
 
   aliceSession = await preparePage(aliceContext, alice, PASSWORD, { seedLocalStorage: V2_SEED });
   bobSession = await preparePage(bobContext, bob, PASSWORD, { seedLocalStorage: V2_SEED });
   await waitLog('alice', 'v2: готов');
-  if (bobIsV2) await waitLog('bob', 'v2: готов');
+  await waitLog('bob', 'v2: готов');
   const aliceRecovery = await dismissRecoveryKeyDialog(aliceSession.page);
   assert.ok(aliceRecovery, 'alice: не показан ключ восстановления нового корня v2');
-  if (bobIsV2) await dismissRecoveryKeyDialog(bobSession.page);
+  await dismissRecoveryKeyDialog(bobSession.page);
 
   await openPrivateChatStrict(aliceSession.page, bob);
   await openPrivateChatStrict(bobSession.page, alice);
@@ -399,73 +396,24 @@ try {
     const files = count('SELECT COUNT(*) FROM files');
     const grants = count('SELECT COUNT(*) FROM file_grants');
     assert.ok(files >= 3, `в cloud меньше трёх блобов (${files})`);
-    if (bobIsV2) assert.equal(grants, 0, `cloud хранит гранты получателям для блобов v2-чата (${grants})`);
-    else assert.ok(grants >= 1, 'пара с v1-участником: блоб без гранта получателю');
+    assert.equal(grants, 0, `cloud хранит гранты получателям для блобов v2-чата (${grants})`);
   }
 
-  if (bobIsV2) await runL2Scenario(aliceSession.page, bobSession.page);
-  if (bobIsV2) await runV2CallScenario(aliceSession.page, bobSession.page);
+  await runL2Scenario(aliceSession.page, bobSession.page);
+  await runV2CallScenario(aliceSession.page, bobSession.page);
 
-  // Группа из v2- и v1-участника: журнала устройств v2 у bob нет, группа обязана
-  // создаться по v1 (Megolm) и работать в обе стороны
-  const groupTitle = `GM-${suffix.slice(-6)}`;
-  const groupFromAlice = `v2-group-a-${suffix}`;
-  const groupFromBob = `v2-group-b-${suffix}`;
-  if (!bobIsV2) {
-    await createGroupViaUi(aliceSession.page, groupTitle, [bob.split('@')[0]]);
-    // Композер лички ещё в DOM, пока открывается группа — без явного открытия
-    // сообщение уходило в личный чат
-    await openGroupChatByTitle(aliceSession.page, groupTitle);
-    await sendInActiveChat(aliceSession.page, groupFromAlice);
-    await openGroupChatByTitle(bobSession.page, groupTitle);
-    await findMessage(bobSession.page, groupFromAlice).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await sendInActiveChat(bobSession.page, groupFromBob);
-    await findMessage(aliceSession.page, groupFromBob).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    assert.ok(!logs.alice.some((l) => l.includes('v2: группа создана')),
-      'alice: группа с v1-участником создана по v2');
-    await openPrivateChatStrict(bobSession.page, alice);
-  }
 
   // История после перезагрузки (состояние движка в шифрованном IDB).
   await aliceSession.page.reload();
   await openPrivateChatStrict(aliceSession.page, bob).catch(() => undefined);
   await findMessage(aliceSession.page, edited).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Запись о звонке по v2 возвращается из журнала личного состояния
-  if (bobIsV2) await callEntry(aliceSession.page, 'Outgoing Call').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await callEntry(aliceSession.page, 'Outgoing Call').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // Свои служебные сообщения о режиме переживают перезагрузку
-  if (bobIsV2) {
-    await serviceMessage(aliceSession.page, 'You enabled enhanced privacy')
-      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await serviceMessage(aliceSession.page, 'You disabled enhanced privacy')
-      .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-  }
-
-  // Переход bob на v2 на том же устройстве: история, созданная до перехода
-  // (личка и группа v1), читается; переписка после перехода идёт в обе стороны
-  if (!bobIsV2) {
-    const bobPage = bobSession.page;
-    // Сид v1 ставится init-скриптом при каждой загрузке — переход на v2 тоже
-    // init-скриптом (выполняются по порядку регистрации)
-    await bobPage.addInitScript(() => localStorage.setItem('parvane:proto', 'v2'));
-    await reloadPage(bobPage);
-    await waitLog('bob', 'v2: готов');
-    await dismissRecoveryKeyDialog(bobPage);
-    await openPrivateChatStrict(bobPage, alice);
-    await findMessage(bobPage, edited).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await findMessageContainer(bobPage, photoCaption).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    assert.ok(await voiceBubbles(bobPage).count() >= 2, 'bob: голосовые до перехода пропали');
-    const afterUpgrade = `v2-after-upgrade-${suffix}`;
-    await sendInActiveChat(bobPage, afterUpgrade);
-    await openPrivateChatStrict(aliceSession.page, bob);
-    await findMessage(aliceSession.page, afterUpgrade).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    const afterUpgradeBack = `v2-after-upgrade-back-${suffix}`;
-    await sendInActiveChat(aliceSession.page, afterUpgradeBack);
-    await findMessage(bobPage, afterUpgradeBack).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await openGroupChatByTitle(bobPage, groupTitle);
-    await findMessage(bobPage, groupFromAlice).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    await findMessage(bobPage, groupFromBob).waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    assert.ok(!logs.bob.some((l) => l.includes('запуск не удался')), `bob: ${logs.bob.join(' | ')}`);
-  }
+  await serviceMessage(aliceSession.page, 'You enabled enhanced privacy')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await serviceMessage(aliceSession.page, 'You disabled enhanced privacy')
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
 
   assert.ok(!logs.alice.some((l) => l.includes('запуск не удался')), `alice: ${logs.alice.join(' | ')}`);
   console.log(`e2e_protocol_mixed (${PAIR}): OK`);

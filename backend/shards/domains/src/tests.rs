@@ -320,3 +320,18 @@ async fn key_rotate_and_container_list() {
     // Список отражает новую эпоху.
     assert_eq!(list("alice@local", "parvane.planner.v1").await[0].key_epoch, 2);
 }
+
+#[tokio::test]
+async fn op_log_has_quota() {
+    let d = setup().await;
+    let alice = device(&d, "alice@local", "a1");
+    let (c, genesis) = domain::new_container(&alice, "local", sample::DOMAIN_NAME, "alice@local", 1).unwrap();
+    let cref = c.r#ref.clone().unwrap();
+    let _: DomainContainerCreateResponse = resp(call(&d, "alice@local", "domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }).await.unwrap());
+    let k1 = domain::new_epoch_key();
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 1, "a1", "v1")).await, Ok(1));
+    // Журнал дошёл до предела контейнера: дальше запись отвергается, а не растит диск.
+    sqlx::query("UPDATE containers SET head_seq = 100000").execute(&d.pool).await.unwrap();
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 2, "a1", "v2")).await, Err(ErrorCode::Limit));
+    let _ = cref;
+}

@@ -545,3 +545,15 @@ export interface ApiUniqueStarGiftValueInfo {
   fragmentListedCount?: number;
   fragmentListedUrl?: string;
 }
+
+export type ApiCredentials = {
+  data: {
+    cardNumber: string;
+    cardholder: string;
+    expiryMonth: string;
+    expiryYear: string;
+    cvv: string;
+    country: string;
+    zip: string;
+  };
+};

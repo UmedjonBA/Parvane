@@ -22,10 +22,6 @@ inline QString ServerError() {
 	return u"Internal server error."_q;
 }
 
-inline QString ClearPathFailed() {
-	return u"Clear failed :("_q;
-}
-
 inline QString ProxyConfigError() {
 	return u"The proxy you are using is not configured correctly and will be disabled. Please find another one."_q;
 }

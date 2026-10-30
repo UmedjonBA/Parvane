@@ -37,7 +37,6 @@ endif()
 
 # ── ядро: тот же список, что у desktop (сторож сверяет) ─────────────────────
 add_library(parvane_core STATIC
-    ${CORE}/src/gateway_transport.cpp
     ${CORE}/src/gateway_ws_transport.cpp
     ${CORE}/src/linking.cpp
     ${CORE}/src/blobcrypt.cpp

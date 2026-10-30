@@ -57,6 +57,8 @@ constexpr auto kCardMaxWidthRem = 24.;
 
 // Наибольшая сторона картинки статьи и заметки на экране: крупнее — уменьшается при разборе
 constexpr auto kEmbedImageMaxSide = 2560;
+// Вложение чужой статьи по «Воспроизвести»/«Скачать» — не крупнее (как «Сохранить» в окне статьи); 0 снимал потолок вовсе
+constexpr auto kEmbedFileMaxBytes = int64_t(512) * 1024 * 1024;
 
 // Файл, выбранный пользователем («Сохранить как»)
 [[nodiscard]] bool WriteFile(const QString &path, const QByteArray &bytes) {
@@ -289,7 +291,7 @@ private:
 			});
 		} else {
 			const auto name = _source.name;
-			LoadChatMediaBytes(_source.media, 0, [=](std::optional<QByteArray> bytes) {
+			LoadChatMediaBytes(_source.media, kEmbedFileMaxBytes, [=](std::optional<QByteArray> bytes) {
 				if (!bytes) {
 					finish(QString());
 					return;
@@ -318,7 +320,7 @@ private:
 				weak->_busy = true;
 				weak->update();
 			}
-			LoadChatMediaBytes(media, 0, [=](std::optional<QByteArray> bytes) {
+			LoadChatMediaBytes(media, kEmbedFileMaxBytes, [=](std::optional<QByteArray> bytes) {
 				const auto ok = bytes && WriteFile(path, *bytes);
 				if (!weak) {
 					return;

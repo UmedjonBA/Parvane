@@ -21,7 +21,6 @@ import { hasStoredSession, storeSession } from '../../../util/sessions';
 import switchTheme from '../../../util/switchTheme';
 import { getSystemTheme, setSystemThemeChangeCallback } from '../../../util/systemTheme';
 import { startWebsync, stopWebsync } from '../../../util/websync';
-import { callApi } from '../../../api/gramjs';
 import { clearCaching, setupCaching } from '../../cache';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import { updateSharedSettings } from '../../reducers';
@@ -52,7 +51,6 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
   const { isMasterTab, tabId = getCurrentTabId() } = payload;
 
   if (isMasterTab === selectTabState(global, tabId).isMasterTab) {
-    callApi('broadcastLocalDbUpdateFull');
     return;
   }
 
@@ -104,8 +102,6 @@ addActionHandler('onSomeTabSwitchedMultitabRole', async (global): Promise<void> 
     const session = JSON.parse(sessionJson);
     storeSession(session);
   }
-
-  callApi('broadcastLocalDbUpdateFull');
 });
 
 addActionHandler('initShared', (): ActionReturnType => {

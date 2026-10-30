@@ -569,27 +569,6 @@ private:
 
 };
 
-// `.swatch`: круг 1.75rem цвета списка в кольце `--pv-panel`; пустой — `.swatchNone`; выбран — `.swatchActive`.
-class Swatch final : public Button {
-public:
-	Swatch(QWidget *parent, std::optional<Tone> tone, const QString &accessibleName);
-
-	void setActive(bool active);
-	[[nodiscard]] bool active() const {
-		return _active;
-	}
-
-	Ui::AccessibilityState accessibilityState() const override;
-
-protected:
-	void paintEvent(QPaintEvent *e) override;
-
-private:
-	std::optional<Tone> _tone;
-	bool _active = false;
-
-};
-
 // ── поля ввода ───────────────────────────────────────────────────────────────
 
 // Ui::InputField со стилем набора:

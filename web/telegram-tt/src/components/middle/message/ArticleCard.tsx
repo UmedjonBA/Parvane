@@ -67,7 +67,7 @@ function buildPreview(article: ApiArticle) {
   }
   const text = lines.slice(0, PREVIEW_LINES).join('\n')
     .replace(/\*\*|`|\[\[|\]\]/g, '')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    .replace(/\[([^\]\n]{1,300})\]\([^)\n]{1,1000}\)/g, '$1');
   return text.length > PREVIEW_MAX_LENGTH ? `${text.slice(0, PREVIEW_MAX_LENGTH)}…` : text;
 }
 

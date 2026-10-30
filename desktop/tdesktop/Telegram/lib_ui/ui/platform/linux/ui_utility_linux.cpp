@@ -291,9 +291,11 @@ std::optional<uint> XCBCurrentWorkspace() {
 		return std::nullopt;
 	}
 
-	return (reply->type == XCB_ATOM_CARDINAL)
-		? std::make_optional(
-			*reinterpret_cast<ulong*>(xcb_get_property_value(reply.get())))
+	return (reply->type == XCB_ATOM_CARDINAL
+		&& reply->format == 32
+		&& xcb_get_property_value_length(reply.get()) >= int(sizeof(uint32_t)))
+		? std::make_optional(ulong(
+			*reinterpret_cast<uint32_t*>(xcb_get_property_value(reply.get()))))
 		: std::nullopt;
 }
 
@@ -330,9 +332,11 @@ std::optional<uint> XCBWindowWorkspace(xcb_window_t window) {
 		return std::nullopt;
 	}
 
-	return (reply->type == XCB_ATOM_CARDINAL)
-		? std::make_optional(
-			*reinterpret_cast<ulong*>(xcb_get_property_value(reply.get())))
+	return (reply->type == XCB_ATOM_CARDINAL
+		&& reply->format == 32
+		&& xcb_get_property_value_length(reply.get()) >= int(sizeof(uint32_t)))
+		? std::make_optional(ulong(
+			*reinterpret_cast<uint32_t*>(xcb_get_property_value(reply.get()))))
 		: std::nullopt;
 }
 

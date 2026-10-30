@@ -141,6 +141,11 @@ fn tile_in_range(z: u32, x: u32, y: u32) -> bool {
     z <= TILE_MAX_ZOOM && x < (1u32 << z) && y < (1u32 << z)
 }
 
+/// Сигнатура PNG: в кэш тайлов попадает только картинка.
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+}
+
 async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u8>> {
     let key = format!("{z}/{x}/{y}");
     let cached: Option<(Vec<u8>, i64)> =
@@ -157,6 +162,8 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
     let client = reqwest::Client::builder()
         // P-49: без HTTPS_PROXY из окружения — иначе резолв/пиннинг обходились бы через прокси
         .no_proxy()
+        // редиректы не идём: тайловый сервер не должен отправить нас на внутренний адрес (A0019-1)
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_millis(CONNECT_TIMEOUT_MS))
         .timeout(std::time::Duration::from_millis(TOTAL_TIMEOUT_MS))
         .user_agent(USER_AGENT)
@@ -173,6 +180,9 @@ async fn resolve_tile(pool: &SqlitePool, z: u32, x: u32, y: u32) -> Result<Vec<u
     let bytes = response.bytes().await.context("тело тайла")?;
     if bytes.is_empty() || bytes.len() > TILE_MAX_BYTES {
         anyhow::bail!("тайл: неверный размер {}", bytes.len());
+    }
+    if !is_png(&bytes) {
+        anyhow::bail!("тайл: не PNG");
     }
     let png = bytes.to_vec();
     sqlx::query("INSERT OR REPLACE INTO map_tiles (tile_key, png, fetched_at) VALUES (?, ?, ?)")
@@ -458,6 +468,8 @@ async fn store_cache(pool: &SqlitePool, url: &str, resolved: &ResolvedPreview, i
     if let Err(e) = stored {
         warn!("кэш превью: запись не удалась: {e}");
     }
+    // Просроченные строки не копятся: по времени ответа не видно давнего запроса чужого URL (A0019-2)
+    let _ = sqlx::query("DELETE FROM previews WHERE fetched_at < ?").bind(now_unix() - CACHE_TTL_SECS.max(NEG_CACHE_TTL_SECS)).execute(pool).await;
     if let Err(e) = trim_preview_cache(pool, preview_cache_max()).await {
         warn!("кэш превью: {e:#}");
     }
@@ -910,6 +922,7 @@ mod tests {
             assert_eq!(image_mime_of(bad), None, "{bad}");
         }
         assert_eq!(sniff_image(PNG), Some("image/png"));
+        assert!(is_png(PNG) && !is_png(b"<html>not a tile</html>"));
         assert_eq!(sniff_image(JPEG), Some("image/jpeg"));
         assert_eq!(sniff_image(b"GIF89a\x01\x00"), Some("image/gif"));
         assert_eq!(sniff_image(b"GIF87a\x01\x00"), Some("image/gif"));
@@ -1359,7 +1372,7 @@ mod tests {
         };
         for (i, url) in ["a", "b", "c"].into_iter().enumerate() {
             store_cache(&pool, url, &entry(url), false).await;
-            sqlx::query("UPDATE previews SET fetched_at = ? WHERE url = ?").bind(100 + i as i64).bind(url).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE previews SET fetched_at = ? WHERE url = ?").bind(now_unix() - 100 + i as i64).bind(url).execute(&pool).await.unwrap();
         }
         assert_eq!(cached_urls(&pool).await, ["a", "b", "c"]);
         // Единственный тест, который трогает эту переменную

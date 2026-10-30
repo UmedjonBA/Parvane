@@ -99,6 +99,7 @@ class Client private constructor(
             val c = boundClient ?: return null
             val g = c.store.groupByChat(chatId) ?: return null
             return JSONObject().put("gid", g.gid).put("isPublic", g.isPublic).put("name", g.publicName)
+                .put("preview", g.publicPreview).put("history", g.publicHistory)
                 .put("owner", g.createdBy == c.store.self).put("kind", c.store.groupKind[g.gid] ?: "group")
         }
 
@@ -294,6 +295,12 @@ class Client private constructor(
 
     fun send(function: TdApi.Function<*>, resultHandler: ResultHandler?, exceptionHandler: ExceptionHandler?) {
         if (closed) return
+        if (function is TdApi.SetAlarm) {
+            // runOnTdlibThread у X: ответ через timeout секунд, не занимая поток пула io
+            val delayMs = if (function.seconds > 0) (function.seconds * 1000).toLong() else 0L
+            scheduledTick.schedule(Runnable { resultHandler?.let { h -> handlerThread.execute { h.onResult(TdApi.Ok()) } } }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            return
+        }
         io.execute {
             val result = try {
                 handle(function)
@@ -372,7 +379,7 @@ class Client private constructor(
             r.optBoolean("ok") -> {
                 // P-07: пароль держим только в памяти процесса — отзыв устройства
                 // (TerminateSession) требует его; на диск не пишем.
-                sessionPassword = password
+                if (org.parvane.libtd.BuildConfig.DEBUG) sessionPassword = password
                 finishLogin(r.optString("address"))
             }
             r.optBoolean("twofa_required") && r.optString("login_token").isNotEmpty() -> {
@@ -849,7 +856,7 @@ class Client private constructor(
         is TdApi.CreateChatFolder -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             val fo = l.folders.create(f.folder)
-            Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
+            Log.i(TAG, "папка ${fo.id}: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
             scheduleStateFlush("folders")
             fo.toInfo()
@@ -857,7 +864,7 @@ class Client private constructor(
         is TdApi.EditChatFolder -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             val fo = l.folders.edit(f.chatFolderId, f.folder) ?: return@run TdApi.Error(404, "folder not found")
-            Log.i(TAG, "папка ${fo.id} «${fo.title}»: ${refreshFolderPositions().count { it == fo.id }} чатов")
+            Log.i(TAG, "папка ${fo.id}: ${refreshFolderPositions().count { it == fo.id }} чатов")
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
             scheduleStateFlush("folders")
             fo.toInfo()
@@ -887,14 +894,14 @@ class Client private constructor(
                 .sortedByDescending { it.date }
             val from = (f.offset ?: "").toIntOrNull() ?: 0
             val page = all.drop(from).take(if (f.limit > 0) f.limit else 50)
-            Log.i(TAG, "поиск «$q»: ${all.size} совпадений")
+            Log.i(TAG, "поиск: ${all.size} совпадений")
             TdApi.FoundMessages(all.size, page.toTypedArray(), if (from + page.size < all.size) (from + page.size).toString() else "")
         }
         is TdApi.GetLinkPreview -> run { // только через шард preview (как web/desktop); отключено → 404
             if (f.linkPreviewOptions?.isDisabled == true) return@run TdApi.Error(404, "link preview disabled")
             val url = f.linkPreviewOptions?.url?.takeIf { it.isNotEmpty() } ?: Entities.firstUrl(f.text?.text, f.text?.entities) ?: return@run TdApi.Error(404, "no url")
             val wp = ParvaneCore.previewFetch(url, 1500)
-            Log.i(TAG, "превью $url → ${wp.optString("site_name")}")
+            Log.i(TAG, "превью получено")
             LinkPreviews.linkPreviewOf(wp) ?: TdApi.Error(404, "no preview")
         }
         is TdApi.GetMapThumbnailFile -> mapThumbnail(f.location, f.zoom, f.width, f.height, f.scale)
@@ -1249,7 +1256,7 @@ class Client private constructor(
 
     // ── spec 004: хелперы экранов управления ────────────────────────────────
     /** Функции, которым запрещена молчаливая Ok-заглушка (управление группой). */
-    private val NO_OK_STUB = setOf("DeleteChatFolder", "ReorderChatFolders", "SetBirthdate", "SetAccentColor", "SetProfileAccentColor", "SetPersonalChat",
+    private val NO_OK_STUB = setOf("DeleteAccount", "DeleteChatFolder", "ReorderChatFolders", "SetBirthdate", "SetAccentColor", "SetProfileAccentColor", "SetPersonalChat",
         "SetChatMessageAutoDeleteTime", "EditMessageSchedulingState", "SetChatDraftMessage", "AddChatToList",
         "SetPollAnswer", "StopPoll", "ChangeStickerSet", "AddFavoriteSticker", "RemoveFavoriteSticker", "RemoveRecentSticker", "AddSavedAnimation", "RemoveSavedAnimation",
         "SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
@@ -1345,6 +1352,10 @@ class Client private constructor(
             "incoming" -> {
                 val peer = event.optString("peer")
                 if (peer.isEmpty()) return
+                if (store.blocked.contains(peer)) { // заблокированный: звонок не показываем, сразу сбрасываем
+                    io.execute { try { org.parvane.core.ParvaneCalls.hangup() } catch (e: Throwable) { Log.w(TAG, "звонок заблокированного: ${e.message}") } }
+                    return
+                }
                 // приглашение может прийти повторно (копия инбокса) — тот же звонок, не второй
                 if (calls.current?.let { it.peer == peer && !it.outgoing } == true) return
                 ensurePeer(peer, announce = true)
@@ -1445,7 +1456,9 @@ class Client private constructor(
         if (loc == null || width <= 0 || height <= 0) return TdApi.Error(400, "bad map request")
         val z = if (zoom <= 0) MapGeometry.DEFAULT_ZOOM else zoom
         val name = MapGeometry.fileName(loc.latitude, loc.longitude, z, width, height, scale.toDouble())
-        val out = java.io.File(java.io.File(boundDir, "media"), name)
+        // имя файла на диске — хеш: координаты точек переписки в именах каталога media не остаются
+        val diskName = "map-" + java.security.MessageDigest.getInstance("SHA-256").digest(name.toByteArray()).take(16).joinToString("") { "%02x".format(it) } + ".png"
+        val out = java.io.File(java.io.File(boundDir, "media"), diskName)
         if (out.exists() && out.length() > 0) return store.fileFor("map:$name", "", "", out.length(), "image/png", out.absolutePath)
         val g = MapGeometry.compute(loc.latitude, loc.longitude, z, width, height, scale.toDouble())
         if (g.tiles.isEmpty()) return TdApi.Error(404, "no tiles")
@@ -1545,7 +1558,7 @@ class Client private constructor(
     private fun onPollService(content: JSONObject, from: String) {
         val uuid = content.optString("poll"); if (uuid.isEmpty()) return
         val changed = if (content.optString("kind") == "poll_close") {
-            Log.i(TAG, "опрос $uuid закрыт"); store.polls.close(uuid)
+            Log.i(TAG, "опрос $uuid закрыт"); store.polls.close(uuid, from)
         } else {
             val idx = content.optJSONArray("options")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
             Log.i(TAG, "голос $from → опрос $uuid $idx"); store.polls.applyVote(uuid, from, idx)
@@ -1571,7 +1584,7 @@ class Client private constructor(
         if (e.owner != store.self) return TdApi.Error(400, uiText("forbidden"))
         val sent = ParvaneCore.sendContent(address, PollStore.closeContent(uuid).toString(), "")
         if (sent.isEmpty()) return TdApi.Error(500, "не отправлено (E2E/сеть)")
-        store.polls.close(uuid); Log.i(TAG, "опрос $uuid закрыт")
+        store.polls.close(uuid, store.self); Log.i(TAG, "опрос $uuid закрыт")
         pollUpdate(uuid)?.let { postUpdate(it) }
         return TdApi.Ok()
     }
@@ -1582,7 +1595,9 @@ class Client private constructor(
 
     private fun localPath(input: TdApi.InputFile?): String? = when (input) {
         is TdApi.InputFileLocal -> input.path
-        is TdApi.InputFileGenerated -> input.originalPath // X сжимает фото генерацией — берём оригинал
+        // X сжимает фото генерацией — берём оригинал; но правки (обрезка, рисунок, вырезка видео) без генерации
+        // не применить, и молча отправлять неотредактированный файл нельзя — отказ
+        is TdApi.InputFileGenerated -> if (MediaEdits.needsGeneration(input.conversion)) null else input.originalPath
         else -> null
     }
 
@@ -1608,7 +1623,7 @@ class Client private constructor(
                 val disabled = c.linkPreviewOptions?.isDisabled == true
                 if (url != null && !disabled) {
                     val wp = try { ParvaneCore.previewFetch(url, 1500) } catch (e: Throwable) { null }
-                    if (wp != null && wp.has("url")) { content.put("webpage", wp); Log.i(TAG, "превью $url → ${wp.optString("site_name")}") }
+                    if (wp != null && wp.has("url")) { content.put("webpage", wp); Log.i(TAG, "превью получено") }
                 }
                 Prepared(content, null, true)
             }
@@ -2397,7 +2412,7 @@ class Client private constructor(
                 Log.i(TAG, "autologin (dev): регистрация ${if (reg.optBoolean("ok")) "ok" else reg.optString("error_code")}")
                 r = ParvaneCore.login(user, password)
             }
-            if (r.optBoolean("ok")) { sessionPassword = password; finishLogin(r.optString("address")) }
+            if (r.optBoolean("ok")) { if (org.parvane.libtd.BuildConfig.DEBUG) sessionPassword = password; finishLogin(r.optString("address")) }
             else Log.w(TAG, "autologin (dev): вход не удался ${r.optString("error_code")}")
         }
     }
@@ -2418,7 +2433,7 @@ class Client private constructor(
                 Thread.sleep(2000)
                 if (!ParvaneCore.registerStatus(address, loginToken)) continue
                 val r = ParvaneCore.login(address, password, loginToken)
-                if (r.optBoolean("ok")) { sessionPassword = password; finishLogin(r.optString("address")) }
+                if (r.optBoolean("ok")) { if (org.parvane.libtd.BuildConfig.DEBUG) sessionPassword = password; finishLogin(r.optString("address")) }
                 else { Log.w(TAG, "2FA: ${r.optString("error")}"); setAuth(TdApi.AuthorizationStateWaitPassword("", false, false, "")) }
                 return@execute
             }
@@ -2545,7 +2560,7 @@ class Client private constructor(
     // conformance PROFILE-1 (spec 005): профиль перечитывается по TTL (10 мин; для e2e —
     // /data/local/tmp/parvane-profile-ttl в мс), а не один раз за сессию; тик раз в 60 с
     private val resolvedAt = ConcurrentHashMap<String, Long>()
-    private val profileTtlMs: Long = java.io.File("/data/local/tmp/parvane-profile-ttl").takeIf { it.canRead() }
+    private val profileTtlMs: Long = (if (org.parvane.libtd.BuildConfig.DEBUG) java.io.File("/data/local/tmp/parvane-profile-ttl").takeIf { it.canRead() } else null)
         ?.readText()?.trim()?.toLongOrNull() ?: (10L * 60 * 1000)
     private fun profileStale(address: String): Boolean = (System.currentTimeMillis() - (resolvedAt[address] ?: 0L)) > profileTtlMs
     private val profileTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-profile-ttl").apply { isDaemon = true } }.also { ex ->
@@ -2570,7 +2585,8 @@ class Client private constructor(
                     if (a.isEmpty()) continue
                     store.setProfile(a, u)
                     resolvedAt[a] = System.currentTimeMillis()
-                    Log.i(TAG, "профиль $a: birthday=${u.optString("birthday")} color=${u.optInt("name_color", -1)} phone=${u.optString("phone")}")
+                    // Телефон в журнал не пишем — только есть ли он (P-19: чужой телефон не виден)
+                    Log.i(TAG, "профиль $a: birthday=${u.optString("birthday")} color=${u.optInt("name_color", -1)} phone=${if (u.optString("phone").isEmpty()) "" else "<есть>"}")
                     val (user, chat, _) = store.ensurePeer(a)
                     postUpdate(TdApi.UpdateUser(user))
                     if (announcedChats.contains(chat.id)) postUpdate(TdApi.UpdateChatTitle(chat.id, chat.title))
@@ -2679,6 +2695,7 @@ class Client private constructor(
             }
             "typing" -> {
                 val from = event.optString("from"); if (from.isEmpty()) return
+                if (store.blocked.contains(from)) return // заблокированный: «печатает» не показываем
                 ensurePeer(from, announce = true)
                 val to = event.optString("to")
                 // L2-1: входящий typing чата с усиленной приватностью игнорируем
@@ -2688,6 +2705,7 @@ class Client private constructor(
             }
             "presence" -> {
                 val from = event.optString("from"); if (from.isEmpty()) return
+                if (store.blocked.contains(from)) return // заблокированный: «в сети» не показываем
                 if (!l2.ephemeralAllowed(from)) return // L2-1: «в сети» собеседника L2-чата не показываем
                 store.setOnline(from, (System.currentTimeMillis() / 1000 + 90).toInt())?.let { postUpdate(it) }
             }

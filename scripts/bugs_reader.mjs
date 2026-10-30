@@ -78,7 +78,10 @@ try {
         return out;
       });
       for (const doc of docs) {
-        const dest = path.join(REPORTS_DIR, `${title.replace(/[^\w.@-]+/g, '_')}-${doc.name}`);
+        // имя вложения задаёт отправитель: только basename и безопасные символы, путь не выходит из REPORTS_DIR
+        const safeName = path.basename(String(doc.name)).replace(/[^\w.@-]+/g, '_');
+        const dest = path.join(REPORTS_DIR, `${title.replace(/[^\w.@-]+/g, '_')}-${safeName}`);
+        if (!path.resolve(dest).startsWith(path.resolve(REPORTS_DIR) + path.sep)) continue;
         if (!doc.text) {
           console.log(`  ! не прочитался: ${doc.name} ${doc.error || ''}`);
           continue;

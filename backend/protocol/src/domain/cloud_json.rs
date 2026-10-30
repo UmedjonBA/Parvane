@@ -239,4 +239,25 @@ mod tests {
             assert!(batch_from_json(&bad.to_string()).is_err(), "{bad}");
         }
     }
+
+    /// Чужой `uploader` в блобе операции отвергается: иначе устройство жертвы сотрёт свой блоб (сборка мусора).
+    #[test]
+    fn batch_from_other_uploader_is_rejected() {
+        let key = B64.encode([1u8; 32]);
+        let nonce = B64.encode([2u8; 12]);
+        let cap = B64.encode([3u8; 32]);
+        let id = "0b".repeat(16);
+        let file = |uploader: &str| {
+            json!({"ops": [{"op": "create", "id": id, "kind": "file", "parent": null, "name": "a.pdf",
+                "blob": {"fileId": "f1", "key": key, "nonce": nonce, "capability": cap, "size": 10, "chunks": 1,
+                         "mime": "application/pdf", "uploader": uploader}}]})
+        };
+        let author = super::super::Author::new("mallory@local", "d1");
+        for (uploader, ok) in [("victim@local", false), ("mallory@local", true)] {
+            let mut batch = batch_from_json(&file(uploader).to_string()).unwrap();
+            stamp_batch(&mut batch, "d1", &mut LamportGuard::default());
+            let mut st = CloudState::default();
+            assert_eq!(st.apply_batch_from(&batch, &author).is_ok(), ok, "{uploader}");
+        }
+    }
 }

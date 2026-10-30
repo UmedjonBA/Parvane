@@ -471,7 +471,8 @@ private:
     void post(Task t);
     void postDelayed(std::int64_t delayMs, Task t);
     // T185: участники общих групп v2 и обмен ключами доступа для группового звонка
-    std::set<std::string> coMembersLocked();
+    // includePublic=false: участники публичных групп (читаемых чужими) не считаются (A0072-2)
+    std::set<std::string> coMembersLocked(bool includePublic = true);
     bool acquirePeerKey(const std::string &peer);
     void reciprocateKeysLocked();
     std::set<std::string> reciprocated_;
@@ -558,8 +559,6 @@ private:
     // Подписаться на эфемерные каналы чатов (движок отдаёт только новые).
     void ensureEphemeralLocked(const std::vector<std::string> &chats);
     // Жизненный цикл аккаунта (v2_session_account.cpp).
-    // Ответ log_sync собеседника: удалён / ник сменён / смена корня — действия как web refreshPeerLog.
-    bool absorbPeerLogLocked(const std::string &user, const std::string &resp);
     bool isDeletedLog(const std::string &resp) const;
     void followPeerRenameLocked(const std::string &user, const std::string &verdict);
     void rekeyAfterDeviceRemovalLocked();

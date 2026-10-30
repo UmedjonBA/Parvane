@@ -119,6 +119,7 @@ const UsernameChangeModal = ({ isOpen, currentNick, onClose }: OwnProps) => {
           <input
             id="parvane-rename-key"
             className="form-control"
+            type="password"
             autoComplete="off"
             spellCheck={false}
             value={recoveryKey}

@@ -33,19 +33,16 @@ import useResizeObserver from '../../../hooks/useResizeObserver';
 
 import PeerChip from '../../common/PeerChip';
 import ParvaneIcon from '../../main/ParvaneIcon';
-import StoryToggler from '../../story/StoryToggler';
 import Button from '../../ui/Button';
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
 import SearchInput from '../../ui/SearchInput';
 import ShowTransition from '../../ui/ShowTransition';
 import ConnectionStatusOverlay from '../ConnectionStatusOverlay';
-import StatusButton from './StatusButton';
 
 import './LeftMainHeader.scss';
 
 // Parvane: emoji-статусы завязаны на premium Telegram
-const IS_EMOJI_STATUS_SUPPORTED = false;
 
 type OwnProps = {
   shouldHideSearch?: boolean;
@@ -115,7 +112,6 @@ const LeftMainHeader = ({
   const lang = useLang();
   const { isMobile } = useAppLayout();
 
-  const areContactsVisible = content === LeftColumnContent.Contacts;
   const isChatList = content === LeftColumnContent.ChatList;
   // Parvane: шапка списка чатов по прототипу — заголовок «Чаты», поиск пилюлей (на телефоне — значком)
   // и на компьютере кнопка «Написать». Поле поиска то же: по фокусу оно разворачивается во всю шапку,
@@ -214,8 +210,6 @@ const LeftMainHeader = ({
     ? lang('SearchFriends')
     : lang('Search');
 
-  const withStoryToggler = !isSearchFocused && !selectedSearchDate && !globalSearchChatId && !areContactsVisible;
-
   const searchContent = useMemo(() => {
     return (
       <>
@@ -291,9 +285,6 @@ const LeftMainHeader = ({
           onEnter={handleSearchEnter}
         >
           {searchContent}
-          <StoryToggler
-            canShow={withStoryToggler}
-          />
         </SearchInput>
         {isChatsHeader && !isMobile && (
           <div className="left-header-compose-wrapper">
@@ -323,7 +314,6 @@ const LeftMainHeader = ({
           </div>
         )}
         {/* Parvane: кнопка emoji-статуса (звёздочка premium) — подписок нет */}
-        {IS_EMOJI_STATUS_SUPPORTED && isCurrentUserPremium && <StatusButton />}
         {hasPasscode && (
           <Button
             round

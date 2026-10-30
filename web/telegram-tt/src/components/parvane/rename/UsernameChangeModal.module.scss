@@ -5,9 +5,9 @@
 .hint,
 .note {
   margin: 0 0 0.75rem;
-  color: var(--color-text-secondary);
   font-size: 0.875rem;
   line-height: 1.35;
+  color: var(--color-text-secondary);
 }
 
 .label {
@@ -19,8 +19,8 @@
 
 .nickRow {
   display: flex;
-  align-items: center;
   gap: 0.25rem;
+  align-items: center;
 }
 
 .at {
@@ -33,20 +33,20 @@
 
 .error {
   margin: 0.75rem 0 0;
-  color: var(--color-error);
   font-size: 0.875rem;
+  color: var(--color-error);
 }
 
 .done {
   margin: 0.75rem 0 0;
-  color: var(--color-text-green);
   font-size: 0.875rem;
+  color: var(--color-text-green);
 }
 
 .buttons {
   display: flex;
-  justify-content: flex-end;
   gap: 0.5rem;
+  justify-content: flex-end;
   margin-top: 1rem;
 
   :global(.Button) {

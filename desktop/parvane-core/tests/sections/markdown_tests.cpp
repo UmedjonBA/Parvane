@@ -88,6 +88,28 @@ int main() {
     std::printf("=== parvane-core markdown tests ===\n");
     std::printf("-- markdown\n");
     {
+        // таблица с тысячами столбцов в шапке не раздувает строки: ширина ограничена 64
+        std::string head = "|", sep = "|";
+        for (int i = 0; i < 3000; ++i) { head += "a|"; sep += "---|"; }
+        const auto blocks = parseMarkdown(head + "\n" + sep + "\n|x|\n|y|");
+        bool ok = false;
+        for (const auto &b : blocks) {
+            if (b.type == MdBlockType::Table) ok = b.header.size() <= 64 && b.rows.size() == 2 && b.rows[0].size() <= 64;
+        }
+        check(ok, "таблица: число столбцов ограничено");
+    }
+    {
+        // тысячи строк не плодят ячейки без предела: всего не больше 2000 (шапка + строки)
+        std::string text = "|a|b|\n|---|---|\n";
+        for (int i = 0; i < 5000; ++i) text += "|x|y|\n";
+        const auto blocks = parseMarkdown(text);
+        size_t cells = 0;
+        for (const auto &b : blocks) {
+            if (b.type == MdBlockType::Table) cells = b.header.size() * (b.rows.size() + 1);
+        }
+        check(cells > 0 && cells <= 2000, "таблица: число ячеек ограничено");
+    }
+    {
         const std::string text = lines({"---", "tags: [a]", "---", "# Поход", "", "## Вещи", "- палатка", "  - колышки",
             "- [x] спальник", "1. выйти", "2. дойти", "> мысль", "> дальше", "", "```", "code # не заголовок", "```",
             "---", "![[карта.png]]", "строка", "вторая"});

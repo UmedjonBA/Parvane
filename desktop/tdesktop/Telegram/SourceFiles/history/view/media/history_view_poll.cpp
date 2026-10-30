@@ -600,7 +600,8 @@ struct PollThumbnailData {
 					const auto controller = my.sessionWindow.get();
 					if (!controller
 						|| (&controller->session() != session)) {
-						UrlClickHandler::Open(url);
+						// Без окна нужной сессии подтверждение показать
+						// негде — ссылку не открываем.
 						return;
 					}
 					controller->show(Box(

@@ -45,8 +45,6 @@ type OwnProps = {
   onGifAddCaption?: (gif: ApiVideo) => void;
   onRemoveSymbol: VoidFunction;
   onEmojiSelect: (emoji: string) => void;
-  closeBotCommandMenu?: VoidFunction;
-  closeSendAsMenu?: VoidFunction;
   isSymbolMenuForced?: boolean;
   isAttachmentModal?: boolean;
   canSendPlainText?: boolean;
@@ -78,8 +76,6 @@ const SymbolMenuButton: FC<OwnProps> = ({
   onGifAddCaption,
   onRemoveSymbol,
   onEmojiSelect,
-  closeBotCommandMenu,
-  closeSendAsMenu,
 }) => {
   const {
     setStickerSearchQuery,
@@ -104,8 +100,6 @@ const SymbolMenuButton: FC<OwnProps> = ({
   );
 
   const handleActivateSymbolMenu = useLastCallback(() => {
-    closeBotCommandMenu?.();
-    closeSendAsMenu?.();
     openSymbolMenu();
     const triggerEl = triggerRef.current;
     if (!triggerEl) return;
@@ -135,7 +129,6 @@ const SymbolMenuButton: FC<OwnProps> = ({
 
     messageInput?.blur();
     setTimeout(() => {
-      closeBotCommandMenu?.();
       openSymbolMenu();
     }, MOBILE_KEYBOARD_HIDE_DELAY_MS);
   });

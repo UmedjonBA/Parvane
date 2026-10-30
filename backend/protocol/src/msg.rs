@@ -190,6 +190,19 @@ pub fn open_sealed_op(
     decrypt: &mut OlmDecrypt<'_>,
     seen: &mut dyn SeenStore,
 ) -> Result<OpenedSealed> {
+    open_sealed_op_mode(inner, me, device_active, decrypt, seen, false)
+}
+
+/// То же; `call_only` — принимать только сигнал звонка (живой канал `seq = 0` идёт мимо журнала,
+/// сообщение там недопустимо): обычная операция отвергается ДО отметки «видели».
+pub fn open_sealed_op_mode(
+    inner: &SealedInner,
+    me: &DeviceRef,
+    device_active: &dyn Fn(&VerifiedDevice) -> bool,
+    decrypt: &mut OlmDecrypt<'_>,
+    seen: &mut dyn SeenStore,
+    call_only: bool,
+) -> Result<OpenedSealed> {
     let cert = inner.sender.as_ref().ok_or(ProtoError::InvalidField("sender"))?;
     let sender = verify_certificate(cert, None)?;
     if !device_active(&sender) {
@@ -218,6 +231,9 @@ pub fn open_sealed_op(
             return Ok(OpenedSealed::Call(Box::new(OpenedCall { sender, op: v, signal })));
         }
     };
+    if call_only {
+        return Err(ProtoError::ContextMismatch);
+    }
     // Контекст беседы: мне — direct_peer == я; копия с моего другого устройства —
     // отправитель я сам.
     let own_copy = sender.user() == me.address;

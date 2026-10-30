@@ -8,7 +8,7 @@ import type { ApiChatMember, ApiUserStatus } from '../../../api/types';
 import { ManagementScreens, NewChatMembersProgress } from '../../../types';
 
 import {
-  getHasAdminRight, isChatBasicGroup,
+  getHasAdminRight,
   isChatChannel, isUserBot, isUserRightBanned, sortUserIds,
 } from '../../../global/helpers';
 import { filterPeersByQuery } from '../../../global/helpers/peers';
@@ -16,7 +16,6 @@ import { selectChat, selectChatFullInfo, selectTabState } from '../../../global/
 import { unique } from '../../../util/iteratees';
 import sortChatIds from '../../common/helpers/sortChatIds';
 
-import usePeerStoriesPolling from '../../../hooks/polling/usePeerStoriesPolling';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useInfiniteScroll from '../../../hooks/useInfiniteScroll';
 import useKeyboardListNavigation from '../../../hooks/useKeyboardListNavigation';
@@ -26,8 +25,7 @@ import useOldLang from '../../../hooks/useOldLang';
 
 import NothingFound from '../../common/NothingFound';
 import PrivateChatInfo from '../../common/PrivateChatInfo';
-import Island, { IslandDescription } from '../../gili/layout/Island';
-import Switch from '../../gili/primitives/Switch';
+import Island from '../../gili/layout/Island';
 import FloatingActionButton from '../../ui/FloatingActionButton';
 import InfiniteScroll from '../../ui/InfiniteScroll';
 import InputText from '../../ui/InputText';
@@ -57,8 +55,6 @@ type StateProps = {
   globalUserIds?: string[];
   currentUserId?: string;
   canDeleteMembers?: boolean;
-  areParticipantsHidden?: boolean;
-  canHideParticipants?: boolean;
 };
 
 const ManageGroupMembers: FC<OwnProps & StateProps> = ({
@@ -77,15 +73,13 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
   searchQuery,
   currentUserId,
   canDeleteMembers,
-  areParticipantsHidden,
-  canHideParticipants,
   onClose,
   onScreenSelect,
   onChatMemberSelect,
 }) => {
   const {
     openChat, setUserSearchQuery, closeManagement,
-    toggleParticipantsHidden, setNewChatMembersDialogState, toggleManagement,
+    setNewChatMembersDialogState, toggleManagement,
   } = getActions();
   const oldLang = useOldLang();
   const lang = useLang();
@@ -113,8 +107,6 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
 
     return noAdmins ? userIds.filter((userId) => !adminIds.includes(userId)) : userIds;
   }, [members, userStatusesById, noAdmins, adminIds]);
-
-  usePeerStoriesPolling(memberIds);
 
   const displayedIds = useMemo(() => {
     // No need for expensive global updates on users, so we avoid them
@@ -168,10 +160,6 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
     setDeletingUserId(undefined);
   });
 
-  const handleToggleParticipantsHidden = useLastCallback(() => {
-    toggleParticipantsHidden({ chatId, isEnabled: !areParticipantsHidden });
-  });
-
   const handleNewMemberDialogOpen = useLastCallback(() => {
     toggleManagement();
     setNewChatMembersDialogState({ newChatMembersProgress: NewChatMembersProgress.InProgress });
@@ -210,19 +198,6 @@ const ManageGroupMembers: FC<OwnProps & StateProps> = ({
     <div className="Management ManageGroupMembers">
       <div className="panel-content">
         {noAdmins && renderSearchField()}
-        {canHideParticipants && !isChannel && (
-          <>
-            <Island>
-              <ListItem icon="group" ripple onClick={handleToggleParticipantsHidden}>
-                <span>{oldLang('ChannelHideMembers')}</span>
-                <Switch checked={Boolean(areParticipantsHidden)} />
-              </ListItem>
-            </Island>
-            <IslandDescription>
-              {oldLang(areParticipantsHidden ? 'GroupMembers.MembersHiddenOn' : 'GroupMembers.MembersHiddenOff')}
-            </IslandDescription>
-          </>
-        )}
         {viewportIds?.length ? (
           <Island className="island-list">
             <InfiniteScroll
@@ -280,15 +255,11 @@ export default memo(withGlobal<OwnProps>(
   (global, { chatId }): Complete<StateProps> => {
     const chat = selectChat(global, chatId);
     const { statusesById: userStatusesById } = global.users;
-    const { members, adminMembersById, areParticipantsHidden } = selectChatFullInfo(global, chatId) || {};
+    const { members, adminMembersById } = selectChatFullInfo(global, chatId) || {};
     const isChannel = chat && isChatChannel(chat);
     const { userIds: localContactIds } = global.contactList || {};
-    const hiddenMembersMinCount = global.appConfig.hiddenMembersMinCount;
 
     const canDeleteMembers = chat && (chat.isCreator || getHasAdminRight(chat, 'banUsers'));
-
-    const canHideParticipants = canDeleteMembers && !isChatBasicGroup(chat) && chat.membersCount !== undefined
-      && hiddenMembersMinCount !== undefined && chat.membersCount >= hiddenMembersMinCount;
 
     const canAddMembers = chat && ((getHasAdminRight(chat, 'inviteUsers')
       || (!isChannel && !isUserRightBanned(chat, 'inviteUsers')))
@@ -303,7 +274,6 @@ export default memo(withGlobal<OwnProps>(
     } = selectTabState(global).userSearch;
 
     return {
-      areParticipantsHidden: Boolean(chat && areParticipantsHidden),
       members,
       canAddMembers,
       adminMembersById,
@@ -316,7 +286,6 @@ export default memo(withGlobal<OwnProps>(
       localUserIds,
       canDeleteMembers,
       currentUserId: global.currentUserId,
-      canHideParticipants,
     };
   },
 )(ManageGroupMembers));

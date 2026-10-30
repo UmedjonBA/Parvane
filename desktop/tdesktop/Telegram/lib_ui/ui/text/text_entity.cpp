@@ -2548,7 +2548,9 @@ TextForMimeData TextForMimeData::WithExpandedLinks(
 			if (!data.startsWith(u"internal:"_q)
 				&& (data != UrlClickHandler::EncodeForOpening(
 					text.text.mid(entity.offset(), entity.length())))) {
-				const auto till = entity.offset() + entity.length();
+				const auto till = std::min(
+					entity.offset() + entity.length(),
+					int(text.text.size()));
 				if (const auto add = till - from; add > 0) {
 					result.expanded.append(text.text.data() + from, add);
 					from = till;

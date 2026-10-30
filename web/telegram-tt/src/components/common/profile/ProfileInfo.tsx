@@ -6,7 +6,6 @@ import type {
   ApiPeerColorOption,
   ApiPeerPhotos,
   ApiPeerProfileColorSet,
-  ApiSavedGifts,
   ApiSticker,
   ApiTopic,
   ApiUser,
@@ -30,7 +29,6 @@ import {
   selectPeerHasProfileBackground,
   selectPeerPhotos,
   selectPeerProfileColor,
-  selectPeerSavedGifts,
   selectTabState,
   selectTheme,
   selectTopic,
@@ -64,7 +62,6 @@ import FullNameTitle from '../FullNameTitle.tsx';
 import Icon from '../icons/Icon.tsx';
 import TopicIcon from '../TopicIcon.tsx';
 import ProfilePhoto from './ProfilePhoto';
-import ProfilePinnedGifts from './ProfilePinnedGifts.tsx';
 import RadialPatternBackground from './RadialPatternBackground.tsx';
 
 import './ProfileInfo.scss';
@@ -97,7 +94,6 @@ type StateProps = {
   profileColorOption?: ApiPeerColorOption<ApiPeerProfileColorSet>;
   theme: ThemeKey;
   isPlain?: boolean;
-  savedGifts?: ApiSavedGifts;
   hasAvatar?: boolean;
   isSystemAccount?: boolean;
 };
@@ -136,7 +132,6 @@ const ProfileInfo = ({
   profileColorOption,
   theme,
   isPlain,
-  savedGifts,
   hasAvatar,
   isSystemAccount,
   onExpand,
@@ -149,7 +144,6 @@ const ProfileInfo = ({
     loadMoreProfilePhotos,
     openUniqueGiftBySlug,
     openProfileRatingModal,
-    loadPeerSavedGifts,
   } = getActions();
 
   const oldLang = useOldLang();
@@ -196,25 +190,11 @@ const ProfileInfo = ({
 
   const hasPatternBackground = profileColorSet?.bgColors || backgroundEmoji;
 
-  const pinnedGifts = useMemo(() => {
-    return savedGifts?.gifts.filter((gift) => {
-      if (gift.gift.type === 'starGiftUnique') {
-        return gift.isPinned && gift.gift.slug !== collectibleEmojiStatus?.slug;
-      }
-
-      return gift.isPinned;
-    });
-  }, [savedGifts, collectibleEmojiStatus?.slug]);
-
   useEffect(() => {
     if (photos.length - currentPhotoIndex <= LOAD_MORE_THRESHOLD) {
       loadMoreProfilePhotos({ peerId });
     }
   }, [currentPhotoIndex, peerId, photos.length]);
-
-  useEffect(() => {
-    loadPeerSavedGifts({ peerId });
-  }, [peerId]);
 
   // Set the current avatar photo to the last selected photo in Media Viewer after it is closed
   useEffect(() => {
@@ -510,15 +490,6 @@ const ProfileInfo = ({
           yPosition={isPlain ? PATTERN_PLAIN_Y_SHIFT : PATTERN_Y_SHIFT}
         />
       )}
-      {Boolean(pinnedGifts?.length) && (
-        <ProfilePinnedGifts
-          peerId={peerId}
-          gifts={pinnedGifts}
-          isExpanded={isExpanded}
-          className={styles.pinnedGifts}
-          withGlow={!isPlain}
-        />
-      )}
       {isExpanded && (
         <div className={styles.photoWrapper} style={createVtnStyle('photoWrapper', true)}>
           {renderPhotoTabs()}
@@ -640,7 +611,6 @@ export default memo(withGlobal<OwnProps>(
     const theme = selectTheme(global);
 
     const hasBackground = selectPeerHasProfileBackground(global, peerId);
-    const savedGifts = selectPeerSavedGifts(global, peerId);
     const hasAvatar = Boolean(peer?.avatarPhotoId);
 
     const isAnonymousForwards = isAnonymousForwardsChat(peerId);
@@ -663,7 +633,6 @@ export default memo(withGlobal<OwnProps>(
       profileColorOption: profileColor,
       theme,
       isPlain: !hasBackground,
-      savedGifts,
       hasAvatar,
       isSystemAccount,
     };

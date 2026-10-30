@@ -5,6 +5,7 @@
 #   scripts/run_prod_scenario.sh e2e_web_voice.mjs
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ "${1:-}" =~ ^e2e_[A-Za-z0-9_]+\.mjs$ ]] || { echo "сценарий должен называться e2e_*.mjs (без путей)" >&2; exit 2; }
 SRC="$ROOT/scripts/$1"
 TMP="$ROOT/scripts/tmp_prod_$1"
 

@@ -125,27 +125,6 @@ void BlockedPeers::unblock(
 	}
 }
 
-bool BlockedPeers::blockAlreadySent(
-		not_null<PeerData*> peer,
-		bool blocking,
-		Fn<void(bool success)> done) {
-	const auto i = _blockRequests.find(peer);
-	if (i == end(_blockRequests)) {
-		return false;
-	} else if (i->second.blocking == blocking) {
-		if (done) {
-			i->second.callbacks.push_back(std::move(done));
-		}
-		return true;
-	}
-	const auto callbacks = base::take(i->second.callbacks);
-	_blockRequests.erase(i);
-	for (const auto &callback : callbacks) {
-		callback(false);
-	}
-	return false;
-}
-
 void BlockedPeers::reload() {
 	if (_requestId) {
 		return;

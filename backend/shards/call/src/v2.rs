@@ -93,8 +93,12 @@ impl RecipientLimits {
     /// Допустить сигнал адресату `user`; `ring` — первый сигнал звонка.
     pub(crate) fn allow(&mut self, user: &str, ring: bool, now: Instant) -> Result<(), ErrorCode> {
         if self.map.len() > MAX_CACHE {
-            let (burst, window) = (self.burst, RINGING_WINDOW);
-            self.map.retain(|_, s| s.tokens < burst || s.rings.back().is_some_and(|t| now.saturating_duration_since(*t) < window));
+            // Запись нужна, пока бюджет не пополнился до полного (с учётом прошедшего времени) или есть вызов в окне.
+            let (burst, per_sec, window) = (self.burst, self.per_sec, RINGING_WINDOW);
+            self.map.retain(|_, s| {
+                let refilled = s.tokens + now.saturating_duration_since(s.at).as_secs_f64() * per_sec;
+                refilled < burst || s.rings.back().is_some_and(|t| now.saturating_duration_since(*t) < window)
+            });
         }
         let s = self.map.entry(user.to_string()).or_insert(RecipientState { tokens: self.burst, at: now, rings: VecDeque::new() });
         let dt = now.saturating_duration_since(s.at).as_secs_f64();
@@ -197,10 +201,12 @@ pub(crate) fn check_envelopes(envs: &[SealedEnvelope]) -> Result<(String, Access
     let first = envs.first().ok_or(ErrorCode::Invalid)?;
     let user = first.recipient.as_ref().ok_or(ErrorCode::Invalid)?.address.clone();
     let access = first.access.clone().ok_or(ErrorCode::Forbidden)?;
+    // Один конверт на устройство: повтор усиливал бы запрос (один токен лимита) в десятки событий.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for e in envs {
         let rc = e.recipient.as_ref().ok_or(ErrorCode::Invalid)?;
         parvane_protocol::address::check_device(rc).map_err(|_| ErrorCode::Invalid)?;
-        if rc.address != user || e.access.as_ref() != Some(&access) {
+        if rc.address != user || e.access.as_ref() != Some(&access) || !seen.insert(rc.device_id.as_str()) {
             return Err(ErrorCode::Invalid);
         }
         if e.hpke_enc.len() != 32 || e.ciphertext.is_empty() {
@@ -337,6 +343,20 @@ mod tests {
         let mut none = env("bob@local", "d1", 1);
         none.access = None;
         assert_eq!(check_envelopes(&[none]).unwrap_err(), ErrorCode::Forbidden);
+        // Повтор устройства усиливал бы поток: один токен лимита — много событий.
+        assert_eq!(check_envelopes(&[env("bob@local", "d1", 1), env("bob@local", "d1", 1)]).unwrap_err(), ErrorCode::Invalid);
+    }
+
+    #[test]
+    fn stale_recipients_are_pruned() {
+        let mut l = RecipientLimits::new(200.0, 20.0);
+        let t0 = Instant::now();
+        for i in 0..=MAX_CACHE {
+            assert_eq!(l.allow(&format!("u{i}@local"), false, t0), Ok(()));
+        }
+        // Спустя минуту бюджеты пополнились, вызовов в окне нет — записи убираются.
+        assert_eq!(l.allow("late@local", false, t0 + Duration::from_secs(120)), Ok(()));
+        assert!(l.map.len() < 10, "устаревшие записи удалены, а не копятся: {}", l.map.len());
     }
 
     #[test]

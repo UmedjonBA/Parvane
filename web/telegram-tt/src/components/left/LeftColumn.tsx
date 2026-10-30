@@ -57,10 +57,8 @@ type StateProps = {
   isChatOpen: boolean;
   isAppUpdateAvailable?: boolean;
   isForumPanelOpen?: boolean;
-  forumPanelChatId?: string;
   isClosingSearch?: boolean;
   archiveSettings: GlobalState['archiveSettings'];
-  isArchivedStoryRibbonShown?: boolean;
   isAccountFrozen?: boolean;
   hasProfileBackground?: boolean;
 };
@@ -95,10 +93,8 @@ function LeftColumn({
   isChatOpen,
   isAppUpdateAvailable,
   isForumPanelOpen,
-  forumPanelChatId,
   isClosingSearch,
   archiveSettings,
-  isArchivedStoryRibbonShown,
   isAccountFrozen,
   hasProfileBackground,
   isFoldersSidebarShown,
@@ -398,12 +394,6 @@ function LeftColumn({
     }
   });
 
-  const handleTopicSearch = useLastCallback(() => {
-    openLeftColumnContent({ contentKey: LeftColumnContent.GlobalSearch });
-    setGlobalSearchQuery({ query: '' });
-    setGlobalSearchChatId({ id: forumPanelChatId });
-  });
-
   useEffect(
     () => {
       const isArchived = contentKey === LeftColumnContent.Archived;
@@ -504,11 +494,8 @@ function LeftColumn({
           <ArchivedChats
             isActive={isActive}
             onReset={handleReset}
-            onTopicSearch={handleTopicSearch}
             foldersDispatch={foldersDispatch}
-            isForumPanelOpen={isForumPanelOpen}
             archiveSettings={archiveSettings}
-            isStoryRibbonShown={isArchivedStoryRibbonShown}
           />
         );
       case ContentType.Settings:
@@ -558,8 +545,6 @@ function LeftColumn({
             onReset={handleReset}
             shouldSkipTransition={shouldSkipHistoryAnimations}
             isAppUpdateAvailable={isAppUpdateAvailable}
-            isForumPanelOpen={isForumPanelOpen}
-            onTopicSearch={handleTopicSearch}
             isAccountFrozen={isAccountFrozen}
             isFoldersSidebarShown={isFoldersSidebarShown}
           />
@@ -597,9 +582,6 @@ export default memo(withGlobal<OwnProps>(
       activeChatFolder,
       leftColumn,
       nextFoldersAction,
-      storyViewer: {
-        isArchivedRibbonShown,
-      },
     } = tabState;
     const {
       currentUserId,
@@ -614,7 +596,6 @@ export default memo(withGlobal<OwnProps>(
     const currentChat = selectCurrentChat(global);
     const isChatOpen = Boolean(currentChat?.id);
     const isForumPanelOpen = selectIsForumPanelOpen(global);
-    const forumPanelChatId = tabState.forumPanelChatId;
     const isAccountFrozen = selectIsCurrentUserFrozen(global);
 
     return {
@@ -629,10 +610,8 @@ export default memo(withGlobal<OwnProps>(
       isChatOpen,
       isAppUpdateAvailable,
       isForumPanelOpen,
-      forumPanelChatId,
       isClosingSearch: tabState.globalSearch.isClosing,
       archiveSettings,
-      isArchivedStoryRibbonShown: isArchivedRibbonShown,
       isAccountFrozen,
       hasProfileBackground: currentUserId
         ? selectPeerHasProfileBackground(global, currentUserId) : undefined,

@@ -388,7 +388,9 @@ void OnAccountLogOut(not_null<Main::Account*> account);
 [[nodiscard]] std::optional<std::string> ExportMediaBytes(
 	const std::string &fileId,
 	const std::string &fileKey,
-	const std::string &fileNonce);
+	const std::string &fileNonce,
+	const std::string &kind = std::string(),
+	std::int64_t declaredSize = 0);
 
 // Профиль в identity (setname): bio / дата рождения (ISO YYYY-MM-DD, пусто —
 // очистить) / телефон / индекс цвета имени. Меняются только присланные поля.
@@ -475,7 +477,7 @@ void MirrorClearHistory(not_null<PeerData*> peer);
 
 // Удаляет СВОЁ сообщение «у всех» (msg.chat.delete). msgId — локальный
 // синтетический id; uuid ищется в обратной карте. Чужое/неизвестное — no-op.
-void MirrorDelete(std::int64_t msgId);
+void MirrorDelete(std::int64_t msgId, bool forEveryone = true);
 
 // Правит текст СВОЕГО сообщения (msg.chat.edit). Аналогично MirrorDelete.
 void MirrorEdit(not_null<HistoryItem*> item, const TextWithEntities &text);

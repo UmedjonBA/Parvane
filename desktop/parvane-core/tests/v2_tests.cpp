@@ -557,29 +557,6 @@ int main() {
         check(refused, "prepareCall без журнала собеседника → need (как prepareDirect)");
     }
 
-    // ── v1-устройства в переходный период (FR-054/FR-058) ──
-    {
-        auto c = v2::Client::create("alice@local", "d1", "local");
-        (void)c->createIdentity(1);
-        const auto before = c->logDevices("alice@local");
-        check(!before.value("legacySet", true) && before.value("legacyKeys", json::array()).empty(),
-              "legacy: до публикации списка v1-устройств нет");
-        const std::string key(43, 'A'); // 32 нулевых байта в base64 без дополнения
-        const auto req = c->legacyDevicesRequest(json::array({json{{"deviceId", "old"}, {"identity", key}, {"signing", key}}}));
-        check(req.value("method", "") == "identity.device.log_append", "legacy: список v1-устройств → identity.device.log_append");
-        check(!c->logDevices("alice@local").value("legacySet", true),
-              "legacy: свой журнал не меняется до подтверждения сервера");
-        bool refused = false;
-        try {
-            (void)c->legacyDevicesRequest(json::array({json{{"deviceId", "old"}, {"identity", "!"}, {"signing", key}}}));
-        } catch (const std::exception &) {
-            refused = true;
-        }
-        check(refused, "legacy: кривой ключ устройства отклонён");
-        const auto deliver = c->legacyDeliverRequest("0199b6a0-0000-7000-8000-000000000001", R"({"to":"bob@local"})");
-        check(deliver.value("method", "") == "msg.deliver_legacy", "legacy: копии v1-устройствам → msg.deliver_legacy");
-    }
-
     // ── spec 029, T026: обёртки T013–T025 по именам WASM (C ABI-уровень, без стека) ──
     {
         auto c = v2::Client::create("alice@local", "d1", "local");

@@ -115,12 +115,13 @@ std::vector<DnsEntry> ParseDnsResponse(
 		const auto object = elem.toObject();
 		if (typeRestriction) {
 			const auto typeIt = object.find("type");
-			const auto type = int(base::SafeRound((*typeIt).toDouble()));
-			if (!(*typeIt).isDouble()) {
+			if (typeIt == object.constEnd() || !(*typeIt).isDouble()) {
 				LOG(("Config Error: Not a number in type field "
 					"in Answer array in dns response JSON."));
 				continue;
-			} else if (type != *typeRestriction) {
+			}
+			const auto type = int(base::SafeRound((*typeIt).toDouble()));
+			if (type != *typeRestriction) {
 				continue;
 			}
 		}

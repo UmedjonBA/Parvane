@@ -8,9 +8,6 @@ import type {
   ApiAvailableEffect,
   ApiAvailableReaction,
   ApiBotCommand,
-  ApiBotInlineMediaResult,
-  ApiBotInlineResult,
-  ApiBotMenuButton,
   ApiChat,
   ApiChatFullInfo,
   ApiDisallowedGifts,
@@ -18,7 +15,6 @@ import type {
   ApiFormattedText,
   ApiMessage,
   ApiMessageEntity,
-  ApiNewMediaTodo,
   ApiPeer,
   ApiQuickReply,
   ApiReaction,
@@ -121,10 +117,7 @@ import {
 } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 import { formatMediaDuration } from '../../util/dates/oldDateFormat';
-import { processDeepLink } from '../../util/deeplink';
-import { tryParseDeepLink } from '../../util/deepLinkParser';
 import deleteLastCharacterOutsideSelection from '../../util/deleteLastCharacterOutsideSelection';
-import calcTextLineHeightAndCount from '../../util/element/calcTextLineHeightAndCount';
 import { processMessageInputForCustomEmoji } from '../../util/emoji/customEmojiManager';
 import { isUserId } from '../../util/entities/ids';
 import { fetchBlob } from '../../util/files';
@@ -170,13 +163,11 @@ import useShowTransitionDeprecated from '../../hooks/useShowTransitionDeprecated
 import { useStateRef } from '../../hooks/useStateRef';
 import useSyncEffect from '../../hooks/useSyncEffect';
 import useAttachmentModal from '../middle/composer/hooks/useAttachmentModal';
-import useChatCommandTooltip from '../middle/composer/hooks/useChatCommandTooltip';
 import useClipboardPaste from '../middle/composer/hooks/useClipboardPaste';
 import useCustomEmojiTooltip from '../middle/composer/hooks/useCustomEmojiTooltip';
 import useDraft from '../middle/composer/hooks/useDraft';
 import useEditing from '../middle/composer/hooks/useEditing';
 import useEmojiTooltip from '../middle/composer/hooks/useEmojiTooltip';
-import useInlineBotTooltip from '../middle/composer/hooks/useInlineBotTooltip';
 import useLoadLinkPreview from '../middle/composer/hooks/useLoadLinkPreview';
 import useMentionTooltip from '../middle/composer/hooks/useMentionTooltip';
 import usePaidMessageConfirmation from '../middle/composer/hooks/usePaidMessageConfirmation';
@@ -186,35 +177,25 @@ import useVoiceRecording from '../middle/composer/hooks/useVoiceRecording';
 
 import AttachmentModal from '../middle/composer/AttachmentModal.async';
 import AttachMenu from '../middle/composer/AttachMenu';
-import BotCommandMenu from '../middle/composer/BotCommandMenu.async';
-import BotKeyboardMenu from '../middle/composer/BotKeyboardMenu';
-import BotMenuButton from '../middle/composer/BotMenuButton';
-import ChatCommandTooltip from '../middle/composer/ChatCommandTooltip.async';
 import ComposerEmbeddedMessage from '../middle/composer/ComposerEmbeddedMessage';
 import CustomEmojiTooltip from '../middle/composer/CustomEmojiTooltip.async';
 import CustomSendMenu from '../middle/composer/CustomSendMenu.async';
 import DropArea, { DropAreaState } from '../middle/composer/DropArea.async';
 import EmojiTooltip from '../middle/composer/EmojiTooltip.async';
-import InlineBotTooltip from '../middle/composer/InlineBotTooltip.async';
 import MentionTooltip from '../middle/composer/MentionTooltip.async';
 import MessageInput from '../middle/composer/MessageInput';
 import RecordModeMenu, { type RecordMode } from '../middle/composer/RecordModeMenu';
 import RoundVideoRecorder from '../middle/composer/RoundVideoRecorder';
-import SendAsMenu from '../middle/composer/SendAsMenu.async';
 import StickerTooltip from '../middle/composer/StickerTooltip.async';
 import SymbolMenuButton from '../middle/composer/SymbolMenuButton';
-import ToDoListModal from '../middle/composer/ToDoListModal.async';
 import VoiceRecordBar from '../middle/composer/VoiceRecordBar';
 import WebPagePreview from '../middle/composer/WebPagePreview';
 import MessageEffect from '../middle/message/MessageEffect';
 import ReactionSelector from '../middle/message/reactions/ReactionSelector';
 import Button from '../ui/Button';
-import ResponsiveHoverButton from '../ui/ResponsiveHoverButton';
-import Spinner from '../ui/Spinner';
 import TextTimer from '../ui/TextTimer';
 import Transition from '../ui/Transition';
 import AnimatedCounter from './AnimatedCounter';
-import Avatar from './Avatar';
 import Icon from './icons/Icon';
 import PaymentMessageConfirmDialog from './PaymentMessageConfirmDialog';
 import ReactionAnimatedEmoji from './reactions/ReactionAnimatedEmoji';
@@ -284,16 +265,13 @@ type StateProps = {
   emojiKeywords?: Record<string, string[]>;
   topInlineBotIds?: string[];
   topGuestBotIds?: string[];
-  isInlineBotLoading: boolean;
   inlineBots?: Record<string, false | InlineBotSettings>;
   botCommands?: ApiBotCommand[] | false;
-  botMenuButton?: ApiBotMenuButton;
   sendAsPeer?: ApiPeer;
   sendAsId?: string;
   editingDraft?: ApiFormattedText;
   requestedDraft?: ApiFormattedText;
   requestedDraftFiles?: File[];
-  attachBots: GlobalState['attachMenu']['bots'];
   attachMenuPeerType?: ApiAttachMenuPeerType;
   theme: ThemeKey;
   fileSizeLimit: number;
@@ -355,7 +333,6 @@ const CAN_SWITCH_RECORD_MODE = IS_VOICE_RECORDING_SUPPORTED && IS_VIDEO_RECORDIN
 // When voice recording is active, composer placeholder will hide to prevent overlapping
 const SCREEN_WIDTH_TO_HIDE_PLACEHOLDER = 600; // px
 
-const MOBILE_KEYBOARD_HIDE_DELAY_MS = 100;
 const SELECT_MODE_TRANSITION_MS = 200;
 const SENDING_ANIMATION_DURATION = 350;
 const MOUNT_ANIMATION_DURATION = 430;
@@ -416,15 +393,12 @@ const Composer = ({
   emojiKeywords,
   recentEmojis,
   inlineBots,
-  isInlineBotLoading,
   botCommands,
   sendAsPeer,
   sendAsId,
   editingDraft,
   requestedDraft,
   requestedDraftFiles,
-  botMenuButton,
-  attachBots,
   attachMenuPeerType,
   attachmentSettings,
   theme,
@@ -476,8 +450,6 @@ const Composer = ({
     saveDraft,
     showDialog,
     openTodoListModal,
-    closeTodoListModal,
-    openAiMessageEditorModal,
     clearAiMessageEditorPendingResult,
     loadScheduledHistory,
     openThread,
@@ -485,7 +457,6 @@ const Composer = ({
     sendInlineBotResult,
     loadSendAs,
     resetOpenChatWithDraft,
-    callAttachBot,
     addRecentCustomEmoji,
     showNotification,
     showAllowedMessageTypesNotification,
@@ -525,7 +496,6 @@ const Composer = ({
   const isInMessageList = type === 'messageList';
   const isInStoryViewer = type === 'story';
   const sendAsPeerIds = isInMessageList ? chat?.sendAsPeerIds : undefined;
-  const canShowSendAs = Boolean(sendAsPeerIds?.length);
   // Prevent Symbol Menu from closing when calendar is open
   const [isSymbolMenuForced, forceShowSymbolMenu, cancelForceShowSymbolMenu] = useFlag();
   const sendMessageAction = useSendMessageAction(chatId, threadId);
@@ -535,7 +505,7 @@ const Composer = ({
   const canMediaBeReplaced = editingMessage && canEditMedia(editingMessage);
 
   const isMonoforum = chat?.isMonoforum;
-  const { emojiSet, members: groupChatMembers, botCommands: chatBotCommands } = chatFullInfo || {};
+  const { emojiSet, members: groupChatMembers } = chatFullInfo || {};
   const chatEmojiSetId = emojiSet?.id;
 
   const canSchedule = !paidMessagesStars && !isMonoforum;
@@ -772,10 +742,7 @@ const Composer = ({
     });
   }, [editingMessage, replyToMessage, shouldOpenMessageMediaEditor, handleSetAttachments]);
 
-  const [isBotKeyboardOpen, openBotKeyboard, closeBotKeyboard] = useFlag();
-  const [isBotCommandMenuOpen, openBotCommandMenu, closeBotCommandMenu] = useFlag();
   const [isSymbolMenuOpen, openSymbolMenu, closeSymbolMenu] = useFlag();
-  const [isSendAsMenuOpen, openSendAsMenu, closeSendAsMenu] = useFlag();
   const [isHoverDisabled, disableHover, enableHover] = useFlag();
 
   const {
@@ -941,41 +908,6 @@ const Composer = ({
     clearAiMessageEditorPendingResult();
   }, [aiMessageEditorPendingResult, chatId, clearDraft,
     clearAiMessageEditorPendingResult, saveDraft, setHtml, threadId]);
-
-  const {
-    isOpen: isInlineBotTooltipOpen,
-    botId: inlineBotId,
-    isGallery: isInlineBotTooltipGallery,
-    switchPm: inlineBotSwitchPm,
-    switchWebview: inlineBotSwitchWebview,
-    results: inlineBotResults,
-    closeTooltip: closeInlineBotTooltip,
-    help: inlineBotHelp,
-    loadMore: loadMoreForInlineBot,
-  } = useInlineBotTooltip(
-    Boolean(canUseInlineBots && isInMessageList && isReady && isForCurrentMessageList && !hasAttachments),
-    chatId,
-    getHtml,
-    inlineBots,
-  );
-
-  const hasQuickReplies = Boolean(quickReplies && Object.keys(quickReplies).length);
-
-  const {
-    isOpen: isChatCommandTooltipOpen,
-    close: closeChatCommandTooltip,
-    filteredBotCommands: botTooltipCommands,
-    filteredQuickReplies: quickReplyCommands,
-  } = useChatCommandTooltip(
-    Boolean(isInMessageList
-      && isReady
-      && isForCurrentMessageList
-      && ((botCommands && botCommands?.length) || chatBotCommands?.length || (hasQuickReplies && canSendQuickReplies))),
-    getHtml,
-    botCommands,
-    chatBotCommands,
-    canSendQuickReplies ? quickReplies : undefined,
-  );
 
   useDraft({
     draft,
@@ -1497,35 +1429,6 @@ const Composer = ({
     openTodoListModal({ chatId });
   });
 
-  const handleOpenAiEditor = useLastCallback(() => {
-    const { text, entities } = parseHtmlAsFormattedText(getHtml());
-    openAiMessageEditorModal({
-      chatId,
-      text: { text, entities },
-    });
-  });
-
-  const handleClickBotMenu = useLastCallback(() => {
-    if (botMenuButton?.type !== 'webApp') {
-      return;
-    }
-
-    const parsedLink = tryParseDeepLink(botMenuButton.url);
-
-    if (parsedLink?.type === 'publicUsernameOrBotLink' && parsedLink.appName) {
-      processDeepLink(botMenuButton.url);
-    } else {
-      callAttachBot({
-        chatId, url: botMenuButton.url, threadId,
-      });
-    }
-  });
-
-  const handleActivateBotCommandMenu = useLastCallback(() => {
-    closeSymbolMenu();
-    openBotCommandMenu();
-  });
-
   const handleMessageSchedule = useLastCallback((
     args: ScheduledMessageArgs,
     scheduledAt: number,
@@ -1698,83 +1601,6 @@ const Composer = ({
     }
   });
 
-  const handleInlineBotSelect = useLastCallback((
-    inlineResult: ApiBotInlineResult | ApiBotInlineMediaResult, isSilent?: boolean, isScheduleRequested?: boolean,
-  ) => {
-    if ((!currentMessageList && !storyId) || !inlineBotId) {
-      return;
-    }
-
-    isSilent = isSilent || isSilentPosting;
-
-    if (isInScheduledList || isScheduleRequested) {
-      requestCalendar((scheduledAt, scheduleRepeatPeriod) => {
-        handleActionWithPaymentConfirmation(
-          handleMessageSchedule,
-          {
-            id: inlineResult.id,
-            queryId: inlineResult.queryId,
-            isSilent,
-          },
-          scheduledAt,
-          scheduleRepeatPeriod,
-          currentMessageList!,
-        );
-      });
-    } else {
-      handleActionWithPaymentConfirmation(
-        sendInlineBotResult,
-        {
-          id: inlineResult.id,
-          queryId: inlineResult.queryId,
-          threadId,
-          chatId,
-          isSilent,
-        },
-      );
-    }
-
-    const messageInput = document.querySelector<HTMLDivElement>(editableInputCssSelector);
-    if (IS_IOS && messageInput && messageInput === document.activeElement) {
-      applyIosAutoCapitalizationFix(messageInput);
-    }
-
-    clearDraft({ chatId, threadId, isLocalOnly: true });
-    requestMeasure(() => {
-      resetComposer(false, Boolean(isScheduleRequested && !isInScheduledList) || isPaidSendDeferred);
-    });
-  });
-
-  const handleBotCommandSelect = useLastCallback(() => {
-    clearDraft({ chatId, threadId, isLocalOnly: true });
-    requestMeasure(() => {
-      resetComposer();
-    });
-  });
-
-  const handleToDoListSend = useLastCallback((todo: ApiNewMediaTodo) => {
-    if (!currentMessageList) {
-      return;
-    }
-
-    if (isInScheduledList) {
-      requestCalendar((scheduledAt, scheduleRepeatPeriod) => {
-        handleActionWithPaymentConfirmation(
-          handleMessageSchedule,
-          { todo },
-          scheduledAt,
-          scheduleRepeatPeriod,
-          currentMessageList,
-        );
-      });
-    } else {
-      handleActionWithPaymentConfirmation(
-        sendMessage,
-        { messageList: currentMessageList, todo, isSilent: isSilentPosting },
-      );
-    }
-  });
-
   const sendSilent = useLastCallback((additionalArgs?: ScheduledMessageArgs) => {
     if (isInScheduledList) {
       requestCalendar((scheduledAt, scheduleRepeatPeriod) => {
@@ -1791,24 +1617,6 @@ const Composer = ({
     } else {
       void handleSend(true);
     }
-  });
-
-  const handleSendAsMenuOpen = useLastCallback(() => {
-    const messageInput = document.querySelector<HTMLDivElement>(editableInputCssSelector);
-
-    if (!isMobile || messageInput !== document.activeElement) {
-      closeBotCommandMenu();
-      closeSymbolMenu();
-      openSendAsMenu();
-      return;
-    }
-
-    messageInput?.blur();
-    setTimeout(() => {
-      closeBotCommandMenu();
-      closeSymbolMenu();
-      openSendAsMenu();
-    }, MOBILE_KEYBOARD_HIDE_DELAY_MS);
   });
 
   useEffect(() => {
@@ -1891,31 +1699,10 @@ const Composer = ({
 
   const html = useDerivedState(() => getHtml(), [getHtml]);
   const hasText = Boolean(html);
-  const [shouldShowAiButton, setShouldShowAiButton] = useState(false);
 
-  useEffect(() => {
-    if (hasAttachments) {
-      return;
-    }
-
-    requestMeasure(() => {
-      const input = inputRef.current;
-      if (!html || !input) {
-        setShouldShowAiButton(false);
-        return;
-      }
-      const { totalLines } = calcTextLineHeightAndCount(input, true);
-      setShouldShowAiButton(totalLines >= 3);
-    });
-  }, [html, hasAttachments]);
-
-  const withBotMenuButton = isChatWithBot && botMenuButton?.type === 'webApp' && !editingMessage
-    && messageListType === 'thread';
-  const isBotMenuButtonOpen = withBotMenuButton && !hasText && !activeRecording;
-
-  const isComposerHasFocus = isBotKeyboardOpen || isSymbolMenuOpen || isEmojiTooltipOpen || isSendAsMenuOpen
-    || isMentionTooltipOpen || isInlineBotTooltipOpen || isBotCommandMenuOpen || isAttachMenuOpen
-    || isStickerTooltipOpen || isChatCommandTooltipOpen || isCustomEmojiTooltipOpen || isBotMenuButtonOpen
+  const isComposerHasFocus = isSymbolMenuOpen || isEmojiTooltipOpen
+    || isMentionTooltipOpen || isAttachMenuOpen
+    || isStickerTooltipOpen || isCustomEmojiTooltipOpen
     || isCustomSendMenuOpen || Boolean(activeRecording) || attachments.length > 0 || isInputHasFocus;
   const isReactionSelectorOpen = isComposerHasFocus && !isReactionPickerOpen && isInStoryViewer && !isAttachMenuOpen
     && !isSymbolMenuOpen;
@@ -2214,9 +2001,6 @@ const Composer = ({
     }
   }, [mainButtonState, handleEditComplete, handleSendWithConfirmation]);
 
-  const withBotCommands = isChatWithBot && botMenuButton?.type === 'commands' && !editingMessage
-    && botCommands !== false && !activeRecording;
-
   const effectEmoji = areEffectsSupported && effect?.emoticon;
 
   const {
@@ -2314,36 +2098,11 @@ const Composer = ({
         canScheduleUntilOnline={canScheduleUntilOnline && !isViewOnceEnabled}
         paidMessagesStars={paidMessagesStars}
       />
-      <ToDoListModal
-        modal={todoListModal}
-        onClear={closeTodoListModal}
-        onSend={handleToDoListSend}
-      />
-      <SendAsMenu
-        isOpen={isSendAsMenuOpen}
-        onClose={closeSendAsMenu}
-        chatId={chatId}
-        selectedSendAsId={sendAsId}
-        sendAsPeerIds={sendAsPeerIds}
-        isCurrentUserPremium={isCurrentUserPremium}
-      />
       <MentionTooltip
         isOpen={isMentionTooltipOpen}
         filteredUsers={mentionFilteredUsers}
         onInsertUserName={insertMention}
         onClose={closeMentionTooltip}
-      />
-      <ChatCommandTooltip
-        isOpen={isChatCommandTooltipOpen}
-        chatId={chatId}
-        withUsername={Boolean(chatBotCommands)}
-        botCommands={botTooltipCommands}
-        quickReplies={quickReplyCommands}
-        getHtml={getHtml}
-        self={currentUser!}
-        quickReplyMessages={quickReplyMessages}
-        onClick={handleBotCommandSelect}
-        onClose={closeChatCommandTooltip}
       />
       {isInMessageList && (
         <>
@@ -2400,22 +2159,6 @@ const Composer = ({
             </g>
           </svg>
         )}
-        {isInMessageList && (
-          <InlineBotTooltip
-            isOpen={isInlineBotTooltipOpen}
-            botId={inlineBotId}
-            isGallery={isInlineBotTooltipGallery}
-            inlineBotResults={inlineBotResults}
-            switchPm={inlineBotSwitchPm}
-            switchWebview={inlineBotSwitchWebview}
-            loadMore={loadMoreForInlineBot}
-            isSavedMessages={isChatWithSelf}
-            canSendGifs={canSendGifs}
-            isCurrentUserPremium={isCurrentUserPremium}
-            onSelectResult={handleInlineBotSelect}
-            onClose={closeInlineBotTooltip}
-          />
-        )}
         <div
           className={buildClassName(
             'message-input-wrapper',
@@ -2424,50 +2167,6 @@ const Composer = ({
           )}
           style={peerColorStyle}
         >
-          {isInMessageList && (
-            <>
-              {withBotMenuButton && (
-                <BotMenuButton
-                  isOpen={isBotMenuButtonOpen}
-                  text={botMenuButton.text}
-                  isDisabled={Boolean(activeRecording)}
-                  onClick={handleClickBotMenu}
-                />
-              )}
-              {withBotCommands && (
-                <ResponsiveHoverButton
-                  className={buildClassName(
-                    'bot-commands', 'composer-action-button', isBotCommandMenuOpen && 'activated',
-                  )}
-                  round
-                  disabled={botCommands === undefined}
-                  color="translucent"
-                  onActivate={handleActivateBotCommandMenu}
-                  ariaLabel="Open bot command keyboard"
-                >
-                  <Icon name="menu" />
-                </ResponsiveHoverButton>
-              )}
-              {canShowSendAs && sendAsPeer && (
-                <Button
-                  round
-                  color="translucent"
-                  onClick={isSendAsMenuOpen ? closeSendAsMenu : handleSendAsMenuOpen}
-                  ariaLabel={oldLang('SendMessageAsTitle')}
-                  className={buildClassName(
-                    'send-as-button',
-                    'composer-action-button',
-                    shouldAnimateSendAsButtonRef.current && 'appear-animation',
-                  )}
-                >
-                  <Avatar
-                    peer={sendAsPeer}
-                    size="tiny"
-                  />
-                </Button>
-              )}
-            </>
-          )}
           {!isNeedPremium && (
             <AttachMenu
               chatId={chatId}
@@ -2485,10 +2184,7 @@ const Composer = ({
               onFileSelect={handleFileSelect}
               onTodoListCreate={handleTodoListCreate}
               isScheduled={isInScheduledList}
-              attachBots={isInMessageList ? attachBots : undefined}
-              peerType={attachMenuPeerType}
               shouldCollectDebugLogs={shouldCollectDebugLogs}
-              theme={theme}
               onMenuOpen={onAttachMenuOpen}
               onMenuClose={onAttachMenuClose}
               messageListType={messageListType}
@@ -2496,17 +2192,6 @@ const Composer = ({
               menuPositionX={isInMessageList ? 'left' : 'right'}
             />
           )}
-          <Button
-            round
-            faded
-            className={buildClassName('ai-composer-button', (!shouldShowAiButton
-              || hasAttachments) && 'ai-composer-button-hidden')}
-            color="translucent"
-            ariaLabel={lang('AiMessageEditor')}
-            iconName="ai"
-            tabIndex={shouldShowAiButton && !hasAttachments ? 0 : -1}
-            onClick={handleOpenAiEditor}
-          />
           <MessageInput
             ref={inputRef}
             id={inputId}
@@ -2520,11 +2205,10 @@ const Composer = ({
             isActive={!hasAttachments}
             getHtml={getHtml}
             placeholder={placeholder}
-            forcedPlaceholder={inlineBotHelp}
             canAutoFocus={isReady && isForCurrentMessageList && !hasAttachments && isInMessageList}
             noFocusInterception={hasAttachments}
             shouldSuppressFocus={isMobile && isSymbolMenuOpen}
-            shouldSuppressTextFormatter={isEmojiTooltipOpen || isMentionTooltipOpen || isInlineBotTooltipOpen}
+            shouldSuppressTextFormatter={isEmojiTooltipOpen || isMentionTooltipOpen}
             onUpdate={setHtml}
             onSend={onSend}
             onSuppressedFocus={closeSymbolMenu}
@@ -2535,9 +2219,6 @@ const Composer = ({
           />
           {isInMessageList && (
             <>
-              {isInlineBotLoading && Boolean(inlineBotId) && (
-                <Spinner color="gray" />
-              )}
               <Transition
                 className="composer-action-buttons-container"
                 slideClassName="composer-action-buttons"
@@ -2593,28 +2274,6 @@ const Composer = ({
                         iconName="cash-circle"
                       />
                     )}
-                    {Boolean(botKeyboardMessageId) && !activeRecording && !editingMessage && (
-                      <>
-                        <ResponsiveHoverButton
-                          className={buildClassName('composer-action-button', isBotKeyboardOpen && 'activated')}
-                          round
-                          color="translucent"
-                          noClickActivation
-                          onActivate={openBotKeyboard}
-                          ariaLabel={lang('AriaComposerBotKeyboard')}
-                        >
-                          <Icon name="bot-command" />
-                        </ResponsiveHoverButton>
-                        {!isMobile && (
-                          <BotKeyboardMenu
-                            messageId={botKeyboardMessageId}
-                            threadId={threadId}
-                            isOpen={isBotKeyboardOpen}
-                            onClose={closeBotKeyboard}
-                          />
-                        )}
-                      </>
-                    )}
                   </>
                 )}
               </Transition>
@@ -2664,28 +2323,11 @@ const Composer = ({
               onCustomEmojiSelect={handleCustomEmojiSelect}
               onRemoveSymbol={removeSymbol}
               onEmojiSelect={insertTextAndUpdateCursor}
-              closeBotCommandMenu={closeBotCommandMenu}
-              closeSendAsMenu={closeSendAsMenu}
               isSymbolMenuForced={isSymbolMenuForced}
               canSendPlainText={!isComposerBlocked}
               inputCssSelector={editableInputCssSelector}
               idPrefix={type}
               forceDarkTheme={isInStoryViewer}
-            />
-          )}
-          {isMobile && isInMessageList && Boolean(botKeyboardMessageId) && (
-            <BotKeyboardMenu
-              messageId={botKeyboardMessageId}
-              threadId={threadId}
-              isOpen={isBotKeyboardOpen}
-              onClose={closeBotKeyboard}
-            />
-          )}
-          {isInMessageList && botCommands && (
-            <BotCommandMenu
-              isOpen={isBotCommandMenuOpen}
-              botCommands={botCommands}
-              onClose={closeBotCommandMenu}
             />
           )}
         </div>
@@ -2973,15 +2615,12 @@ export default memo(withGlobal<OwnProps>(
       baseEmojiKeywords: baseEmojiKeywords?.keywords,
       emojiKeywords: emojiKeywords?.keywords,
       inlineBots: tabState.inlineBots.byUsername,
-      isInlineBotLoading: tabState.inlineBots.isLoading,
       botCommands: userFullInfo ? (userFullInfo.botInfo?.commands || false) : undefined,
-      botMenuButton: userFullInfo?.botInfo?.menuButton,
       sendAsPeer,
       sendAsId,
       editingDraft,
       requestedDraft,
       requestedDraftFiles,
-      attachBots: global.attachMenu.bots,
       attachMenuPeerType: selectChatType(global, chatId),
       theme: selectTheme(global),
       fileSizeLimit: selectCurrentLimit(global, 'uploadMaxFileparts') * MAX_UPLOAD_FILEPART_SIZE,
@@ -2994,7 +2633,8 @@ export default memo(withGlobal<OwnProps>(
       isReactionPickerOpen: selectIsReactionPickerOpen(global),
       canBuyPremium: !isCurrentUserPremium && !selectIsPremiumPurchaseBlocked(global),
       canPlayAnimatedEmojis: selectCanPlayAnimatedEmojis(global),
-      canSendOneTimeMedia: !isChatWithSelf && isChatWithUser && !isChatWithBot && !isInScheduledList,
+      // Parvane: «один просмотр» в v2 не реализован (провайдер не читает ttlSeconds) — не обещаем
+      canSendOneTimeMedia: false,
       shouldCollectDebugLogs,
       sentStoryReaction,
       stealthMode: global.stories.stealthMode,

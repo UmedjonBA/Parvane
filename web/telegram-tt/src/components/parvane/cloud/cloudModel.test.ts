@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canMoveInto, childrenOf, CLOUD_TRASH_LIFETIME_MS, type CloudNode, decodeTextPreview, expiredTrashOf, fileTypeLabel,
-  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, pathOf, searchNodes, sizeOf, sortNodes,
+  folderStats, freeName, isServiceNode, kindOfFile, listedNodes, namesIn, normalizeName, pathOf, searchNodes, sizeOf,
+  sortNodes,
   subtreeOf, trashDaysLeft, trashOf, usageOf, validateName,
 } from './cloudModel';
 
@@ -36,6 +37,13 @@ const TREE: CloudNode[] = [
 ];
 
 describe('облако: модель дерева', () => {
+  it('имя из недоверенного источника приводится к допустимому', () => {
+    expect(normalizeName(' a/b\u0085c ')).toBe('a_b_c');
+    expect(normalizeName('..')).toBe('file');
+    expect(normalizeName('\u0001', 'x')).toBe('_');
+    expect(validateName(normalizeName('я'.repeat(300)))).toBeUndefined();
+  });
+
   it('проверка имени совпадает с движком', () => {
     expect(validateName('отчёт.pdf')).toBeUndefined();
     expect(validateName('   ')).toBe('empty');
@@ -43,6 +51,8 @@ describe('облако: модель дерева', () => {
     expect(validateName('a\\b')).toBe('bad-chars');
     expect(validateName('a\u0001b')).toBe('bad-chars');
     expect(validateName('..')).toBe('reserved');
+    expect(validateName(' a')).toBe('bad-chars');
+    expect(validateName('a\u0085b')).toBe('bad-chars');
     expect(validateName('я'.repeat(128))).toBe('too-long');
     expect(validateName('я'.repeat(127))).toBeUndefined();
   });

@@ -230,19 +230,22 @@ fn varint_len(mut v: usize) -> usize {
     n
 }
 
-/// Дополнить `padding` так, чтобы сериализация точно попала в корзину.
+/// Дополнить `padding` так, чтобы сериализация точно попала в корзину. Если в эту корзину точно не
+/// попасть (поле `padding` — тег + varint длины + p байт, из-за скачка varint некоторые остатки
+/// недостижимы), берётся следующая: иначе длина payload выдавала бы размер сигнала.
 fn pad_inner(inner: &mut EphemeralInner) -> Result<()> {
     inner.padding.clear();
     let base = inner.encoded_len();
-    let target = INNER_BUCKETS.iter().copied().find(|b| base + 2 <= *b).ok_or(ProtoError::FieldLimit("ephemeral"))?;
-    // Поле padding: тег (1) + varint длины + p байт == target - base.
-    let room = target - base;
-    let mut p = room.saturating_sub(2);
-    while p > 0 && 1 + varint_len(p) + p > room {
-        p -= 1;
+    for target in INNER_BUCKETS.iter().copied().filter(|b| base + 2 <= *b) {
+        let room = target - base;
+        // 1 (тег) + vl (длина varint) + p == room, где vl == varint_len(p) и p > 0.
+        if let Some(p) = (1..=3usize).filter_map(|vl| room.checked_sub(1 + vl)).find(|p| *p > 0 && 1 + varint_len(*p) + *p == room) {
+            inner.padding = vec![0u8; p];
+            debug_assert_eq!(inner.encoded_len(), target);
+            return Ok(());
+        }
     }
-    inner.padding = vec![0u8; p];
-    Ok(())
+    Err(ProtoError::FieldLimit("ephemeral"))
 }
 
 /// Сигнал «печатает».
@@ -290,6 +293,17 @@ mod tests {
         assert_eq!(got.from.unwrap().address, "very.long.address.of.someone@example.org");
         let p = c.seal(&presence("a@x", true, 0, 5)).unwrap();
         assert_eq!(p.len(), a.len());
+    }
+
+    /// Длина payload не зависит от адреса и в «неудобных» остатках (скачок varint): либо ровно корзина, либо следующая.
+    #[test]
+    fn every_inner_length_hits_a_bucket() {
+        for n in 1..=250 {
+            let mut inner = presence(&format!("{}@x", "a".repeat(n)), true, 1_700_000_000_000, 1_700_000_000_000);
+            if pad_inner(&mut inner).is_ok() {
+                assert!(INNER_BUCKETS.contains(&inner.encoded_len()), "{n}: {}", inner.encoded_len());
+            }
+        }
     }
 
     #[test]

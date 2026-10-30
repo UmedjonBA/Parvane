@@ -271,6 +271,10 @@ impl GroupState {
             Some(content::Kind::Poll(_)) => p.send_polls,
             Some(content::Kind::Text(t)) => p.embed_links || t.preview.is_none(),
             Some(content::Kind::Pin(_)) => p.pin_messages,
+            // Статья с вложениями — это медиа; правка с превью ссылки — встраивание ссылок (иначе запрет
+            // GROUP-2 обходится отправкой через статью или правку)
+            Some(content::Kind::Article(a)) => p.send_media || a.media.is_empty(),
+            Some(content::Kind::Edit(e)) => p.embed_links || e.text.as_ref().is_none_or(|t| t.preview.is_none()),
             _ => true,
         }
     }
@@ -444,8 +448,8 @@ pub fn apply_with(
         Change::Create(_) => return Err(ProtoError::BrokenChain),
         Change::AddMember(a) => {
             let m = user_of(&a.member)?;
-            let ok = s.admin_can(&actor, |r| r.invite_users)
-                || (is_member && s.kind == GroupKind::Group && s.default_permissions.invite_users);
+            let admin_invites = s.admin_can(&actor, |r| r.invite_users);
+            let ok = admin_invites || (is_member && s.kind == GroupKind::Group && s.default_permissions.invite_users);
             if !ok || s.members.contains_key(&m) || s.banned.contains(&m) {
                 return forbid();
             }
@@ -456,7 +460,9 @@ pub fn apply_with(
             // между заявкой и одобрением, не считаем — участник при этом добавляется
             if !a.via_link_id.is_empty() {
                 let id: [u8; 32] = a.via_link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("via_link_id"))?;
-                if let Some(l) = s.invite_links.get_mut(&id) {
+                // Счёт — только от админа с правом приглашать и только по ссылке «по заявке»: иначе участник
+                // накручивал бы счётчик чужой ссылки до её лимита.
+                if let Some(l) = s.invite_links.get_mut(&id).filter(|l| l.announce.requires_approval && admin_invites) {
                     l.note_join(m.clone(), now);
                 }
             }
@@ -633,7 +639,13 @@ pub fn apply_with(
             if !ok || a.link_public_key.len() != 32 {
                 return forbid();
             }
-            s.invite_links.insert(link_id(&a.link_public_key), InviteLink { announce: a.clone(), creator: actor, uses: 0, created_ms: now, joins: Vec::new() });
+            // Ключ с уже известным id (действующий либо отозванный) не принимается: перезапись вернула бы
+            // отозванную ссылку и обнулила счётчик входов.
+            let lid = link_id(&a.link_public_key);
+            if s.invite_links.contains_key(&lid) || s.revoked_links.contains_key(&lid) {
+                return forbid();
+            }
+            s.invite_links.insert(lid, InviteLink { announce: a.clone(), creator: actor, uses: 0, created_ms: now, joins: Vec::new() });
         }
         Change::InviteKeyRevoke(r) => {
             let id: [u8; 32] = r.link_id.as_slice().try_into().map_err(|_| ProtoError::InvalidField("link_id"))?;
@@ -1185,19 +1197,41 @@ mod tests {
         let l = &s.invite_links[&link_id(&pubkey)];
         assert_eq!((l.announce.title.as_str(), l.announce.usage_limit, l.uses), ("после", 5, 1));
         assert_eq!(l.joins.iter().map(|(u, _)| u.as_str()).collect::<Vec<_>>(), ["dave@x"]);
-        // Одобренная заявка по ссылке считается в ней
-        let add = AddMember { via_link_id: id.clone(), member: ur("erin@x") };
+        // Ссылка не «по заявке»: via_link_id не накручивает её счётчик
+        let add = AddMember { via_link_id: id.clone(), member: ur("frank@x") };
         let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(add), 5).unwrap();
         let s = apply(Some(&s), &e, &w.resolve()).unwrap();
-        let l = &s.invite_links[&link_id(&pubkey)];
-        assert_eq!(l.uses, 2);
-        assert_eq!(l.joins.last().map(|(u, _)| u.as_str()), Some("erin@x"));
-        let json = s.invites_json();
-        assert_eq!(json[0]["joins"].as_array().map(Vec::len), Some(2));
-        // Отозванную — не править
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKeyRevoke(InviteKeyRevoke { link_id: id.clone() }), 6).unwrap();
+        assert_eq!(s.invite_links[&link_id(&pubkey)].uses, 1);
+        // Ссылка «по заявке»: одобренная админом заявка считается в ней, участник без права — нет
+        let link2 = sign::generate_signing_key();
+        let pub2 = link2.verifying_key().to_bytes().to_vec();
+        let id2 = link_id(&pub2).to_vec();
+        let ann2 = GroupInviteKeyAnnounce { link_public_key: pub2.clone(), requires_approval: true, ..Default::default() };
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKey(ann2.clone()), 6).unwrap();
         let s = apply(Some(&s), &e, &w.resolve()).unwrap();
-        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("снова", 0)), 7).unwrap();
+        // Тот же ключ второй раз (и отозванный позже) не принимается: ссылка не «воскресает»
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKey(ann2), 7).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "повторный ключ");
+        let by_bob = AddMember { via_link_id: id2.clone(), member: ur("erin@x") };
+        let e = build_entry(w.k("bob@x"), Some(&s), "x", Change::AddMember(by_bob), 7).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        assert_eq!(s.invite_links[&link_id(&pub2)].uses, 0, "участник без права приглашать не считается");
+        let add = AddMember { via_link_id: id2.clone(), member: ur("gina@x") };
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(add), 8).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let l = &s.invite_links[&link_id(&pub2)];
+        assert_eq!(l.uses, 1);
+        assert_eq!(l.joins.last().map(|(u, _)| u.as_str()), Some("gina@x"));
+        let json = s.invites_json();
+        assert_eq!(json[0]["joins"].as_array().map(Vec::len), Some(1));
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKeyRevoke(InviteKeyRevoke { link_id: id2 }), 9).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKey(GroupInviteKeyAnnounce { link_public_key: pub2, ..Default::default() }), 10).unwrap();
+        assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "отозванная ссылка не воскресает");
+        // Отозванную — не править
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteKeyRevoke(InviteKeyRevoke { link_id: id.clone() }), 11).unwrap();
+        let s = apply(Some(&s), &e, &w.resolve()).unwrap();
+        let e = build_entry(w.k("alice@x"), Some(&s), "x", Change::InviteEdit(edit("снова", 0)), 12).unwrap();
         assert!(apply(Some(&s), &e, &w.resolve()).is_err(), "отозванная ссылка");
     }
 
@@ -1303,5 +1337,30 @@ mod tests {
         }
         let add = build_entry(w.k("alice@x"), Some(&s), "x", Change::AddMember(AddMember { via_link_id: Vec::new(), member: ur("extra@x") }), 2).unwrap();
         assert_eq!(apply(Some(&s), &add, &w.resolve()), Err(ProtoError::FieldLimit("members")));
+    }
+
+    /// GROUP-2: статья с вложениями — медиа, правка с превью — ссылка; админу можно всё.
+    #[test]
+    fn content_allowed_covers_article_and_edit() {
+        use crate::pb::parvane::msg::v2::{Article, Edit, LinkPreview, Media, Text};
+        let w = World::new(&["alice@x", "bob@x"]);
+        let mut s = genesis(&w);
+        s.default_permissions = Permissions { send_messages: true, ..Default::default() };
+        let article = |media: usize| Content {
+            kind: Some(content::Kind::Article(Article { media: vec![Media::default(); media], ..Default::default() })),
+            ..Default::default()
+        };
+        let edit = |preview: bool| Content {
+            kind: Some(content::Kind::Edit(Edit {
+                text: Some(Text { preview: preview.then(LinkPreview::default), ..Default::default() }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(s.content_allowed("bob@x", &article(0), 0));
+        assert!(!s.content_allowed("bob@x", &article(1), 0));
+        assert!(s.content_allowed("bob@x", &edit(false), 0));
+        assert!(!s.content_allowed("bob@x", &edit(true), 0));
+        assert!(s.content_allowed("alice@x", &article(1), 0));
     }
 }

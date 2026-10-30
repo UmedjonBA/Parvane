@@ -1,5 +1,6 @@
 // Parvane fork (spec 029, фаза 4): перенос 1:1 web `notes/notesModel.test.ts`.
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <optional>
@@ -436,6 +437,15 @@ int main() {
     testRename();
     testDaily();
     testCache();
+    {
+        // A0077-1: враждебная строка (незакрытые серии кавычек и '[') разбирается за ограниченное время
+        std::string hostile;
+        for (int i = 0; i < 40000; ++i) hostile += "a``[";
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)parseNote("# T\n" + hostile + "\n");
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        check(ms < 3000, "длинная строка с кавычками и скобками разбирается не квадратично");
+    }
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

@@ -38,11 +38,4 @@ void hideLayer(anim::type animated) {
 	}
 }
 
-bool isLayerShown() {
-	const auto window = Core::IsAppLaunched()
-		? Core::App().activePrimaryWindow()
-		: nullptr;
-	return window && window->isLayerShown();
-}
-
 } // namespace Ui

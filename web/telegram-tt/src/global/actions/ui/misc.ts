@@ -481,14 +481,6 @@ addActionHandler('openGame', (global, actions, payload): ActionReturnType => {
   setGlobal(global);
 });
 
-addActionHandler('closeGame', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    openedGame: undefined,
-  }, tabId);
-});
-
 addActionHandler('requestConfetti', (global, actions, payload): ActionReturnType => {
   const {
     tabId = getCurrentTabId(), ...rest
@@ -863,13 +855,6 @@ addActionHandler('closeInviteViaLinkModal', (global, actions, payload): ActionRe
   }, tabId);
 });
 
-addActionHandler('closeCollectibleInfoModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload ?? {};
-  return updateTabState(global, {
-    collectibleInfoModal: undefined,
-  }, tabId);
-});
-
 addActionHandler('openQrCodeModal', (global, actions, payload): ActionReturnType => {
   const { peerId, tabId = getCurrentTabId() } = payload;
   return updateTabState(global, {
@@ -990,16 +975,6 @@ addActionHandler('openTwoFaCheckModal', (global, actions, payload): ActionReturn
   }, tabId);
 });
 
-addTabStateResetterAction('closeTwoFaCheckModal', 'isTwoFaCheckModalOpen');
-
-addActionHandler('openQuickChatPicker', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    isQuickChatPickerOpen: true,
-  }, tabId);
-});
-
 addTabStateResetterAction('closeQuickChatPicker', 'isQuickChatPickerOpen');
 
 addActionHandler('openCocoonModal', (global, actions, payload): ActionReturnType => {
@@ -1008,8 +983,6 @@ addActionHandler('openCocoonModal', (global, actions, payload): ActionReturnType
     isCocoonModalOpen: true,
   }, tabId);
 });
-
-addTabStateResetterAction('closeCocoonModal', 'isCocoonModalOpen');
 
 addActionHandler('requestMessageMediaEditor', (global, actions, payload): ActionReturnType => {
   const { tabId = getCurrentTabId() } = payload || {};

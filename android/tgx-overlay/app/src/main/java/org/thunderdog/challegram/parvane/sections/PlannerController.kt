@@ -34,7 +34,6 @@ class PlannerController(context: Context, tdlib: Tdlib) : SectionController(cont
     private var generation = 0
     private var startAction: (() -> Unit)? = null
 
-    fun openHealth() = apply { tabHealth = true }
     fun openSettings() = apply { startAction = { PlannerEditor.openSettings(this) } }
     fun openHealthGoals() = apply { tabHealth = true; startAction = { openHealthGoalsSheet() } }
 

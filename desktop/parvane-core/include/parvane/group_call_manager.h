@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -144,6 +145,7 @@ private:
     std::string gcid_;
     std::string media_ = "audio";
     std::map<std::string, std::unique_ptr<CallSession>> peers_;
+    std::set<std::string> members_; // участники текущего звонка (из приглашения/startCall)
     std::optional<PendingInvite> pending_;
     // Замолчавшие звонки: id → {срок, тихо (решено своим устройством)}.
     std::map<std::string, std::pair<std::chrono::steady_clock::time_point, bool>> silenced_;

@@ -17,7 +17,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
-#include "history/history_streamed_drafts.h"
 #include "history/history_translation.h"
 #include "history/history_unread_things.h"
 #include "core/ui_integration.h"
@@ -195,9 +194,6 @@ void History::itemRemoved(not_null<HistoryItem*> item) {
 	}
 	if (const auto sublist = item->savedSublist()) {
 		sublist->applyItemRemoved(item->id);
-	}
-	if (const auto streamed = _streamedDrafts.get()) {
-		streamed->applyItemRemoved(item);
 	}
 	if (const auto chat = peer->asChat()) {
 		if (const auto to = chat->getMigrateToChannel()) {
@@ -1644,10 +1640,7 @@ void History::newItemAdded(not_null<HistoryItem*> item, NewAddType type) {
 			inboxRead(item);
 		}
 	}
-	if (type != NewAddType::StreamedDraftFinish) {
-		// In StreamedDraftFinish setRealId() already incremented this.
-		item->incrementReplyToTopCounter();
-	}
+	item->incrementReplyToTopCounter();
 	if (!folderKnown()) {
 		owner().histories().requestDialogEntry(this);
 	}
@@ -4035,17 +4028,6 @@ void History::checkLocalMessages() {
 	}
 }
 
-HistoryStreamedDrafts &History::streamedDrafts() {
-	if (!_streamedDrafts) {
-		_streamedDrafts = std::make_unique<HistoryStreamedDrafts>(this);
-	}
-	return *_streamedDrafts;
-}
-
-HistoryStreamedDrafts *History::streamedDraftsIfExists() const {
-	return _streamedDrafts.get();
-}
-
 HistoryItem *History::joinedMessageInstance() const {
 	return _joinedMessage;
 }
@@ -4204,7 +4186,6 @@ void History::clear(ClearType type, bool markEmpty) {
 	_unreadBarView = nullptr;
 	_firstUnreadView = nullptr;
 	removeJoinedMessage();
-	base::take(_streamedDrafts);
 
 	forgetScrollState();
 	blocks.clear();

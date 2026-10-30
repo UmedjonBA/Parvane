@@ -62,8 +62,8 @@ private:
 	uLong read(voidpf stream, void* buf, uLong size) {
 		uLong toRead = 0;
 		if (!_error) {
-			if (_data.size() > int(_position)) {
-				toRead = qMin(size, uLong(_data.size() - _position));
+			if (uLong(_data.size()) > _position) {
+				toRead = qMin(size, uLong(_data.size()) - _position);
 				memcpy(buf, _data.constData() + _position, toRead);
 				_position += toRead;
 			}
@@ -97,12 +97,19 @@ private:
 
 	long seek(voidpf stream, uLong offset, int origin) {
 		if (!_error) {
+			const auto limit = uLong(_data.size());
 			switch (origin) {
 			case ZLIB_FILEFUNC_SEEK_SET: _position = offset; break;
-			case ZLIB_FILEFUNC_SEEK_CUR: _position += offset; break;
-			case ZLIB_FILEFUNC_SEEK_END: _position = _data.size() + offset; break;
+			case ZLIB_FILEFUNC_SEEK_CUR:
+				_position = (offset > limit || _position > limit)
+					? (limit + 1)
+					: (_position + offset);
+				break;
+			case ZLIB_FILEFUNC_SEEK_END:
+				_position = (offset > limit) ? (limit + 1) : (limit + offset);
+				break;
 			}
-			if (int(_position) > _data.size()) {
+			if (_position > limit) {
 				_error = -1;
 			}
 		}

@@ -253,7 +253,12 @@ void PeerListGlobalSearchController::searchOnServer() {
 			return; // запрос устарел
 		}
 		_requestId = 0;
+		constexpr auto kMaxResults = 50;
+		auto count = 0;
 		for (const auto &address : addrs) {
+			if (address.isEmpty() || ++count > kMaxResults) {
+				break;
+			}
 			const auto user = Parvane::EnsurePeer(_session, address);
 			delegate()->peerListSearchAddRow(not_null<PeerData*>(user.get()));
 		}

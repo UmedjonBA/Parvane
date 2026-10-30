@@ -1,5 +1,7 @@
 // Parvane fork: привязка устройства (LINK-1), история при линковке, копия ключей (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include <chrono>
+#include <thread>
 
 #include <parvane/keybundle.h>
 
@@ -374,6 +376,9 @@ bool PollLinkGrantOnce() {
 	}
 	// LINK-1 v2: материал гранта движка (SSK, журнал устройств, ключ доставки,
 	// ключ личного состояния) лежит отдельным блобом — как web joinV2WithLinkGrant.
+	// Экспорт (история, ключи разделов) применяем ТОЛЬКО после того, как движок принял грант: материал гранта
+	// проверяется по подписанному журналу устройств аккаунта, а подложенный сервером бокс этой проверки не пройдёт.
+	auto joined = false;
 	if (box.contains("v2") && box["v2"].is_object()) {
 		if (const auto s = V2AwaitNeedsLinking()) {
 			try {
@@ -387,6 +392,16 @@ bool PollLinkGrantOnce() {
 				if (material) {
 					LOG(("Parvane: линковка: грант v2 получен — устройство вступает в журнал устройств"));
 					s->joinWithGrant(std::move(*material));
+					// вступление асинхронное: ждём готовности сессии; негодный грант вернёт её в «нужна линковка»
+					for (auto i = 0; i != 240 && !joined; ++i) {
+						if (V2Ready()) {
+							joined = true;
+						} else if (V2NeedsLinking()) {
+							break;
+						} else {
+							std::this_thread::sleep_for(std::chrono::milliseconds(250));
+						}
+					}
 				} else {
 					LOG(("Parvane: линковка: грант v2 не скачался или не расшифровался"));
 				}
@@ -394,6 +409,10 @@ bool PollLinkGrantOnce() {
 				LOG(("Parvane: линковка: грант v2: %1").arg(QString::fromUtf8(e.what())));
 			}
 		}
+	}
+	if (!joined) {
+		LOG(("Parvane: линковка: движок не принял грант — экспорт истории и ключей разделов не применяется"));
+		return true;
 	}
 	std::string stateJson;
 	try {
@@ -678,10 +697,6 @@ void ScheduleLinkOffersPoll() {
 	return cWorkingDir() + u"tdata/parvane-backup-done"_q;
 }
 
-bool KeyBackupDone() {
-	return QFile::exists(BackupMarkerPath());
-}
-
 bool ExportKeyBackup(const QString &path, const QString &password, QString *error) {
 	// Формат web 2 (keyBackup.ts): {deviceId, v2: устройство движка, v2History} — сервер историю заново не отдаст
 	const auto s = V2Ready();
@@ -807,13 +822,6 @@ void StartHistoryLinking() {
 		PollLinkOffersOnce();
 		ScheduleLinkOffersPoll();
 	}
-}
-
-// Код линковки (новое устройство, пока ждём грант); пусто — не ждём или
-// старое устройство ещё не прислало challenge (v2: код появляется после него).
-QString HistoryLinkCode() {
-	std::lock_guard<std::mutex> lk(g_sessionMutex);
-	return g_linkActive ? g_linkCode : QString();
 }
 
 // Выход из аккаунта / вход другим (ревью 21 окт 2026, вечер): оффер, ключи и показанные офферы прежнего — прочь

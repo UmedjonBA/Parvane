@@ -181,7 +181,15 @@ FrameGenerator::Frame FrameGenerator::Impl::renderCurrent(
 	}
 	const auto dx = (size.width() - scaled.width()) / 2;
 	const auto dy = (size.height() - scaled.height()) / 2;
-	Assert(dx >= 0 && dy >= 0 && (!dx || !dy));
+	if (dx < 0 || dy < 0 || (dx && dy)) {
+		// Поворот из метаданных чужого файла не поместился в size.
+		LOG(("Webm Error: Bad rotated frame size %1x%2 for %3x%4"
+			).arg(scaled.width()
+			).arg(scaled.height()
+			).arg(size.width()
+			).arg(size.height()));
+		return {};
+	}
 
 	const auto srcFormat = (frame->format == AV_PIX_FMT_NONE)
 		? _codec->pix_fmt

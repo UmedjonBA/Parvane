@@ -7,6 +7,7 @@
 #include "parvane/parvane_planner_settings.h"
 
 #include "lang/lang_keys.h"
+#include "base/weak_ptr.h"
 #include "mainwindow.h"
 #include "window/window_session_controller.h"
 
@@ -42,6 +43,8 @@ QPointer<Kit::Sheet> &CurrentSheet() {
 		not_null<Window::SessionController*> controller,
 		not_null<Kit::Sheet*> sheet) {
 	const auto weak = QPointer<Kit::Sheet>(sheet.get());
+	// ответ рабочего потока приходит позже — окно к тому времени могло закрыться (выход из аккаунта)
+	const auto weakController = base::make_weak(controller.get());
 	return Forms::EditorHost{
 		.controller = controller,
 		.close = [=] {
@@ -50,7 +53,9 @@ QPointer<Kit::Sheet> &CurrentSheet() {
 			}
 		},
 		.openTask = [=](std::string taskId, std::string day) {
-			OpenTaskEditor(controller, taskId, day);
+			if (const auto strong = weakController.get()) {
+				OpenTaskEditor(strong, taskId, day);
+			}
 		},
 		.footer = sheet->footer(),
 	};

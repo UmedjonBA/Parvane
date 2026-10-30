@@ -80,7 +80,8 @@ void CallManager::handleSignal(const std::string &from, const CallSignalIn &sig)
         return;
     }
     // Остальные сигналы — активной сессии, если callId совпадает.
-    if (session_ && sig.call_id == session_->callId()) {
+    // сигнал не от собеседника звонка игнорируем (call_id один раз виден в invite)
+    if (session_ && from == peer_ && sig.call_id == session_->callId()) {
         if (sig.type == "media") {
             if (cb_.onMediaState) cb_.onMediaState(from, sig.audio_muted, sig.video_muted);
             return;

@@ -24,10 +24,12 @@ const SettingsSignOut = () => {
   const [isLastDevice, setIsLastDevice] = useState(false);
 
   const open = useLastCallback(() => {
-    setIsLastDevice(false);
+    // Пока ответ не пришёл (или запрос упал), показываем строгое предупреждение, а не обычное
+    setIsLastDevice(true);
     setIsOpen(true);
     void (callApi as unknown as (name: string) => Promise<boolean | undefined>)('parvaneIsLastDevice')
-      .then((isLast) => setIsLastDevice(Boolean(isLast)));
+      .then((isLast) => setIsLastDevice(isLast !== false))
+      .catch(() => undefined);
   });
 
   const close = useLastCallback(() => setIsOpen(false));

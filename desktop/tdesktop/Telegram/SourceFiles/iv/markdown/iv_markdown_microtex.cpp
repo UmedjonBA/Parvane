@@ -422,8 +422,4 @@ MicrotexRenderResult RenderWithMicrotex(const MicrotexRenderRequest &request) {
 	return result;
 }
 
-bool MicrotexBackendLinked() {
-	return true;
-}
-
 } // namespace Iv::Markdown

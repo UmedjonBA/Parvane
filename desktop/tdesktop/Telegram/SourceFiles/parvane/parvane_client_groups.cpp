@@ -1,5 +1,6 @@
 // Parvane fork: группы: сведения, управление, ссылки, заявки, публичные (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include "parvane/parvane_safe_open.h" // DecodeImageBounded
 #include <parvane/chat_rules.h> // parvane-core: потолок скачивания картинки
 
 namespace Parvane {
@@ -356,8 +357,8 @@ bool ApplyGroupInfo(
 		.arg(gid)
 		.arg(gi.version)
 		.arg(source)
-		.arg(QString::fromStdString(gi.about))
-		.arg(avatar.isEmpty() ? u"-"_q : avatar)
+		.arg(LogSecret(QString::fromStdString(gi.about)))
+		.arg(avatar.isEmpty() ? u"-"_q : LogSecret(avatar))
 		.arg(QString::fromStdString(gi.default_permissions.toJson().dump()))
 		.arg(QString::fromStdString(selfRole))
 		.arg(gi.pending_requests > 0 ? gi.pending_requests : 0)
@@ -909,6 +910,10 @@ void CreateGroupInvite(const QString &groupId, const QString &title, int expireD
 	done(false, {}, u"bad_request"_q);
 }
 
+namespace {
+constexpr auto kPublicImageMaxSide = 2048;
+} // namespace
+
 void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray bytes)> done) {
 	const auto self = SelfAddress().toStdString();
 	const auto token = Token().toStdString();
@@ -927,10 +932,13 @@ void FetchPublicImage(const QString &fileId, Fn<void(QImage image, QByteArray by
 			} catch (const std::exception &) {
 			}
 		}
-		crl::on_main([=] {
-			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
-			auto image = QImage();
-			if (qb.isEmpty() || !image.loadFromData(qb)) {
+		// Разбор чужих байтов — на воркере и с пределом размера
+		const auto qb = QByteArray(bytes.data(), int(bytes.size()));
+		auto image = qb.isEmpty()
+			? QImage()
+			: DecodeImageBounded(qb, kPublicImageMaxSide);
+		crl::on_main([done, image = std::move(image), qb]() mutable {
+			if (image.isNull()) {
 				done(QImage(), QByteArray());
 				return;
 			}
@@ -1021,7 +1029,7 @@ void EditGroupInvite(const QString &groupId, const QString &url, const QString &
 				}
 			}
 		}
-		LOG(("Parvane: INVITE edit %1 → %2 (v2)").arg(url, ok ? u"ok"_q : u"отказ"_q));
+		LOG(("Parvane: INVITE edit %1 → %2 (v2)").arg(LogSecret(url), ok ? u"ok"_q : u"отказ"_q));
 		crl::on_main([=] { done(ok, link, ok ? QString() : u"failed"_q); });
 	});
 }

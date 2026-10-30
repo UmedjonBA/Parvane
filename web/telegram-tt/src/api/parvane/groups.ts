@@ -8,8 +8,9 @@ import type { createV2Controller, V2InviteRecord, V2PublicCard } from './v2/cont
 import type {
   WireDefaultPermissions, WireGroupInfo, WireGroupMember, WireMessageContent,
 } from './wire';
-import { MAIN_THREAD_ID } from '../types';
+import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
+import { detectAutoEntities } from './autoEntities';
 import { getActiveGroupMemberAddresses } from './e2eSendPolicy';
 import {
   fromBannedRights, normalizePermissions, toAdminRights, toWireAdminRights,
@@ -63,6 +64,12 @@ export function isContentAllowedForMember(perms: WireDefaultPermissions | undefi
     if (content.entities?.some((e) => linkTypes.includes(e.type))) {
       return false;
     }
+  }
+  if (!p.embed_links) {
+    // Голая ссылка без сущностей и ссылка в подписи медиа — тоже ссылка: приёмник сам размечает её
+    // при показе (autoEntities), значит и проверять надо по тому же разбору
+    const body = content.kind === 'text' ? content.text : content.caption;
+    if (body && detectAutoEntities(body).some((e) => e.type === ApiMessageEntityTypes.Url)) return false;
   }
   return true;
 }
@@ -598,7 +605,8 @@ export function createGroupController(deps: GroupDependencies) {
     const groupId = groupChatId ? store.getAddressForId(groupChatId) : undefined;
     const member = store.getAddressForId(userId);
     const v2 = groupId ? v2Of(groupId) : undefined;
-    if (!v2 || !groupId || !member) return false;
+    // Себя по жалобе не банят
+    if (!v2 || !groupId || !member || store.isSelfAddress(member)) return false;
     return v2.changeGroup(groupId, { ban: { member: { address: member } } });
   }
 

@@ -220,10 +220,6 @@ try {
     90000,
     desktop,
   );
-  if (!desktopIsV2) {
-    assert.ok(!webLogs.some((l) => l.includes('v2: группа создана')),
-      'web создал группу v2 с участником на v1 (D-13)');
-  }
   assert.ok(!/блоб НЕ расшифрован/.test(readDesktopLog(bobWorkdir)), 'desktop: есть нерасшифрованные блобы');
   console.log(`e2e_protocol_mixed_desktop (${PAIR}): OK`);
 } catch (error) {

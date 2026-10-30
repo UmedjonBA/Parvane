@@ -542,7 +542,7 @@ void HunspellService::readFile() {
 		|| (info.size() > 100 * 1024)
 		|| !f.open(QIODevice::ReadOnly)) {
 		if (info.isDir()) {
-			QDir(info.path()).removeRecursively();
+			QDir(info.filePath()).removeRecursively();
 		}
 		return;
 	}

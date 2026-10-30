@@ -127,7 +127,6 @@ import {
   selectPeerFullInfo,
   selectSimilarChannelIds,
   selectStickerSet,
-  selectSupportChat,
   selectTabState,
   selectTopic,
   selectTopics,
@@ -512,22 +511,6 @@ addActionHandler('openLinkedChat', async (global, actions, payload): Promise<voi
 
   if (chatFullInfo?.fullInfo?.linkedChatId) {
     actions.openChat({ id: chatFullInfo.fullInfo.linkedChatId, tabId });
-  }
-});
-
-addActionHandler('openSupportChat', async (global, actions, payload): Promise<void> => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  const chat = selectSupportChat(global);
-  if (chat) {
-    actions.openChat({ id: chat.id, shouldReplaceHistory: true, tabId });
-    return;
-  }
-
-  actions.openChat({ id: TMP_CHAT_ID, shouldReplaceHistory: true, tabId });
-
-  const result = await callApi('fetchChat', { type: 'support' });
-  if (result) {
-    actions.openChat({ id: result.chatId, shouldReplaceHistory: true, tabId });
   }
 });
 
@@ -1319,24 +1302,6 @@ addActionHandler('loadRecommendedChatFolders', async (global): Promise<void> => 
       chatFolders: {
         ...global.chatFolders,
         recommended: recommendedChatFolders,
-      },
-    };
-    setGlobal(global);
-  }
-});
-
-addActionHandler('toggleDialogFilterTags', async (global, actions, payload): Promise<void> => {
-  const { isEnabled } = payload;
-
-  const result = await callApi('toggleDialogFilterTags', isEnabled);
-
-  if (result) {
-    global = getGlobal();
-    global = {
-      ...global,
-      chatFolders: {
-        ...global.chatFolders,
-        areTagsEnabled: isEnabled,
       },
     };
     setGlobal(global);
@@ -2957,27 +2922,6 @@ addActionHandler('editTopic', async (global, actions, payload): Promise<void> =>
   actions.closeEditTopicPanel({ tabId });
 });
 
-addActionHandler('toggleTopicPinned', (global, actions, payload): ActionReturnType => {
-  const {
-    chatId, topicId, isPinned, tabId = getCurrentTabId(),
-  } = payload;
-
-  const { topicsPinnedLimit } = global.appConfig;
-  const chat = selectChat(global, chatId);
-  const topics = selectTopics(global, chatId);
-  if (!chat || !topics || !topicsPinnedLimit) return;
-
-  if (isPinned && Object.values(topics).filter((topic) => topic.isPinned).length >= topicsPinnedLimit) {
-    actions.showNotification({
-      message: langProvider.oldTranslate('LimitReachedPinnedTopics', topicsPinnedLimit, 'i'),
-      tabId,
-    });
-    return;
-  }
-
-  void callApi('togglePinnedTopic', { chat, topicId, isPinned });
-});
-
 addActionHandler('checkChatlistInvite', async (global, actions, payload): Promise<void> => {
   const { slug, tabId = getCurrentTabId() } = payload;
 
@@ -2999,101 +2943,6 @@ addActionHandler('checkChatlistInvite', async (global, actions, payload): Promis
   }, tabId);
 
   setGlobal(global);
-});
-
-addActionHandler('joinChatlistInvite', async (global, actions, payload): Promise<void> => {
-  const { invite, peerIds, tabId = getCurrentTabId() } = payload;
-
-  const peers = peerIds.map((peerId) => selectChat(global, peerId)).filter(Boolean);
-  const currentNotJoinedCount = peers.filter((peer) => peer.isNotJoined).length;
-
-  const existingFolder = 'folderId' in invite ? selectChatFolder(global, invite.folderId) : undefined;
-  const folderTitle = ('title' in invite ? invite.title : existingFolder?.title)!;
-
-  try {
-    const result = await callApi('joinChatlistInvite', { slug: invite.slug, peers });
-    if (!result) return;
-
-    if (existingFolder) {
-      actions.showNotification({
-        title: {
-          key: 'FolderLinkNotificationUpdatedTitle',
-          variables: {
-            title: folderTitle.text,
-          },
-        },
-        message: {
-          key: 'FolderLinkNotificationUpdatedSubtitle',
-          variables: {
-            count: currentNotJoinedCount,
-          },
-          options: {
-            pluralValue: currentNotJoinedCount,
-          },
-        },
-        tabId,
-      });
-
-      return;
-    }
-
-    actions.showNotification({
-      title: {
-        key: 'FolderLinkNotificationAddedTitle',
-        variables: {
-          title: folderTitle.text,
-        },
-      },
-      message: {
-        key: 'FolderLinkNotificationAddedSubtitle',
-        variables: {
-          count: currentNotJoinedCount,
-        },
-        options: {
-          pluralValue: currentNotJoinedCount,
-        },
-      },
-      tabId,
-    });
-  } catch (error) {
-    if ((error as ApiError).message === 'CHATLISTS_TOO_MUCH') {
-      actions.openLimitReachedModal({ limit: 'chatlistJoined', tabId });
-    } else {
-      actions.showDialog({ data: { type: 'error', ...(error as ApiError), hasErrorKey: true }, tabId });
-    }
-  }
-});
-
-addActionHandler('leaveChatlist', async (global, actions, payload): Promise<void> => {
-  const { folderId, peerIds, tabId = getCurrentTabId() } = payload;
-
-  const folder = selectChatFolder(global, folderId);
-
-  const peers = peerIds?.map((peerId) => selectChat(global, peerId)).filter(Boolean) || [];
-
-  const result = await callApi('leaveChatlist', { folderId, peers });
-
-  if (!result) return;
-  if (!folder) return;
-
-  actions.showNotification({
-    title: {
-      key: 'FolderLinkNotificationDeletedTitle',
-      variables: {
-        title: folder.title.text,
-      },
-    },
-    message: {
-      key: 'FolderLinkNotificationDeletedSubtitle',
-      variables: {
-        count: peers.length,
-      },
-      options: {
-        pluralValue: peers.length,
-      },
-    },
-    tabId,
-  });
 });
 
 addActionHandler('loadChatlistInvites', async (global, actions, payload): Promise<void> => {

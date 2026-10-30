@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use prost::Message;
 
-use super::{LamportGuard, Stamp, StateCache};
+use super::{Author, LamportGuard, Stamp, StateCache};
 use crate::codec::decode_checked;
 use crate::error::{ProtoError, Result};
 use crate::limits::Origin;
@@ -275,6 +275,23 @@ impl CloudState {
             return Err(ProtoError::ContextMismatch);
         }
         Ok(batch.ops.iter().filter(|op| self.apply(op).is_ok()).count())
+    }
+
+    /// Пакет чужой операции: то же, что `apply_batch`, но блоб файла обязан быть загружен самим автором
+    /// (`uploader` — один из его адресов). Иначе участник папки записал бы чужой `uploader`, и устройство
+    /// жертвы при сборке мусора стёрло бы свой блоб (облачный файл другой папки, медиа чата).
+    pub fn apply_batch_from(&mut self, batch: &CloudBatch, author: &Author) -> Result<usize> {
+        for op in &batch.ops {
+            let blob = match op.op.as_ref() {
+                Some(cloud_op::Op::Create(c)) => c.blob.as_ref(),
+                Some(cloud_op::Op::SetBlob(s)) => s.blob.as_ref(),
+                _ => None,
+            };
+            if blob.is_some_and(|b| !author.names().any(|n| n == b.uploader)) {
+                return Err(ProtoError::ContextMismatch);
+            }
+        }
+        self.apply_batch(batch, &author.device_id)
     }
 
     /// Название контейнера (совместной папки).
@@ -665,6 +682,22 @@ pub fn guard_batch(guard: &mut LamportGuard, batch: &CloudBatch) -> Result<()> {
         guard.check(&s)?;
     }
     Ok(())
+}
+
+/// Метки снимка против часов (D-16 для снимка): наибольший lamport не выше того, что могли накопить
+/// `upto_seq` операций, каждая из которых проходила `LamportGuard` (скачок не больше
+/// `LAMPORT_MAX_JUMP`). Иначе метка ~u64::MAX навсегда выигрывала бы любую правку узла, а подъём
+/// часов шагами по 2^20 зависал бы. Возвращает наибольшую метку (поднять часы — после слияния).
+pub fn guard_snapshot(guard: &LamportGuard, s: &CloudSnapshot, upto_seq: u64) -> Result<u64> {
+    let mut max = s.meta.as_ref().and_then(|m| m.stamp.as_ref()).map_or(0, |x| x.lamport);
+    for e in &s.entries {
+        max = max.max(e.create_lamport).max(e.move_lamport).max(e.blob_lamport).max(e.trash_lamport);
+    }
+    let limit = guard.max_seen().saturating_add(super::LAMPORT_MAX_JUMP.saturating_mul(upto_seq.max(1)));
+    if max > limit {
+        return Err(ProtoError::InvalidField("lamport"));
+    }
+    Ok(max)
 }
 
 /// Проставить метки операциям локального пакета: каждой — следующую метку

@@ -29,6 +29,7 @@ identity.telegram.confirm с общим секретом; identity привяз�
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -53,6 +54,16 @@ POLL_TIMEOUT_S = 50
 GATEWAY_TIMEOUT_S = 15
 # Сколько ждём нажатия кнопки; токены identity живут 10–15 мин, берём меньше.
 PENDING_TTL_S = 300
+# Сколько ждём ответ-ключ после просьбы бота (ask): только в этот срок текст идёт на сервер.
+ASK_TTL_S = 3600
+# Пределы очереди ожидающих подтверждений: на Telegram-пользователя и всего (память бота).
+PENDING_PER_USER = 3
+PENDING_MAX = 1000
+# Локальный лимит ответов-ключей на Telegram-пользователя: окно и число попыток.
+KEY_REPLY_WINDOW_S = 60
+KEY_REPLY_MAX = 6
+# Ключ восстановления: 10 групп по 4 символа (XXXX-XXXX-…), дефисы и пробелы допускаются.
+KEY_CHARS = 40
 
 TEXT_HELP = (
     f"Это бот подтверждения регистрации и входа в {APP_NAME}.\n\n"
@@ -310,6 +321,7 @@ def deliver(message: dict) -> None:
         tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
                 text=TEXT_KEY.format(user=user, key=html_escape(message["recovery_key"])))
     elif message["kind"] == "ask":
+        ASKED[int(chat_id)] = time.time()
         client = f" ({html_escape(message['client'])})" if message["client"] else ""
         tg_call("sendMessage", chat_id=chat_id, parse_mode="HTML",
                 text=TEXT_KEY_ASK.format(user=user, client=client),
@@ -340,12 +352,44 @@ async def pull_loop():
         for message in parse_pull_response(ok_body):
             try:
                 await loop.run_in_executor(None, deliver, message)
-                log.info("сообщение %s (%s) доставлено tg %s", message["id"], message["kind"], message["telegram_id"])
+                log.info("сообщение %s (%s) доставлено", message["id"], message["kind"])
             except Exception as error:  # noqa: BLE001
                 # Владелец мог заблокировать бота — сервер повторит и снимет по сроку
-                log.warning("сообщение %s не доставлено tg %s: %s", message["id"], message["telegram_id"], error)
+                log.warning("сообщение %s не доставлено: %s", message["id"], error)
                 continue
             acks.append(message["id"])
+
+
+ASKED: dict[int, float] = {}
+KEY_REPLIES: dict[int, list[float]] = {}
+
+
+def looks_like_recovery_key(text: str) -> bool:
+    """Текст похож на ключ восстановления (40 букв/цифр без дефисов и пробелов)."""
+    compact = "".join(ch for ch in text if ch != "-" and not ch.isspace())
+    return len(compact) == KEY_CHARS and compact.isascii() and compact.isalnum()
+
+
+def key_reply_allowed(telegram_id: int, now: float | None = None) -> bool:
+    """Отправлять ли текст серверу: сервер недавно просил ключ у этого владельца,
+    текст похож на ключ и локальный лимит попыток не исчерпан (A0000-2/3)."""
+    now = now or time.time()
+    asked = ASKED.get(telegram_id)
+    if asked is None or now - asked > ASK_TTL_S:
+        ASKED.pop(telegram_id, None)
+        return False
+    recent = [t for t in KEY_REPLIES.get(telegram_id, []) if now - t < KEY_REPLY_WINDOW_S]
+    if len(recent) >= KEY_REPLY_MAX:
+        KEY_REPLIES[telegram_id] = recent
+        return False
+    recent.append(now)
+    KEY_REPLIES[telegram_id] = recent
+    return True
+
+
+def anon_id(telegram_id: int) -> str:
+    """Обезличенная метка для журнала: короткий хеш вместо Telegram id (A0000-4)."""
+    return hashlib.sha256(f"{SECRET}:{telegram_id}".encode()).hexdigest()[:8]
 
 
 async def handle_key_reply(chat_id: int, telegram_id: int, text: str) -> bool:
@@ -360,11 +404,11 @@ async def handle_key_reply(chat_id: int, telegram_id: int, text: str) -> bool:
         if code == ERROR_RATE_LIMITED:
             tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_LIMIT)
             return True
-        log.warning("ответ с ключом tg %s: код ошибки %s", telegram_id, code)
+        log.warning("ответ с ключом %s: код ошибки %s", anon_id(telegram_id), code)
         return False
     result = parse_reply_response(ok_body)["result"]
     if result == "ok":
-        log.info("ключ восстановления принят от tg %s", telegram_id)
+        log.info("ключ восстановления принят от %s", anon_id(telegram_id))
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_KEY_OK)
         return True
     if result == "bad_key":
@@ -391,7 +435,9 @@ async def handle_message(message: dict):
     text = (message.get("text") or "").strip()
     if not text.startswith("/start"):
         # Не команда: возможно, это ключ восстановления в ответ на просьбу бота
-        if text and await handle_key_reply(chat_id, int(sender.get("id", 0)), text):
+        tg_id = int(sender.get("id", 0))
+        if text and looks_like_recovery_key(text) and key_reply_allowed(tg_id) \
+                and await handle_key_reply(chat_id, tg_id, text):
             return
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_HELP)
         return
@@ -401,6 +447,12 @@ async def handle_message(message: dict):
         tg_call("sendMessage", chat_id=chat_id, text=TEXT_HELP)
         return
     purge_pending()
+    tg_id = int(sender["id"])
+    mine = [k for k, v in PENDING.items() if v["tg_id"] == tg_id]
+    if len(mine) >= PENDING_PER_USER:  # самый старый запрос уступает место новому
+        PENDING.pop(min(mine, key=lambda k: PENDING[k]["created"]), None)
+    if len(PENDING) >= PENDING_MAX:
+        PENDING.pop(min(PENDING, key=lambda k: PENDING[k]["created"]), None)
     # P-15: НЕ подтверждаем по Start. Кладём запрос в ожидание и спрашиваем явно.
     # callback_data ограничен 64 байтами, поэтому в кнопку кладём короткий
     # случайный id, а сам токен держим у себя.
@@ -408,7 +460,7 @@ async def handle_message(message: dict):
     PENDING[pending_id] = {
         "token": token,
         "chat_id": chat_id,
-        "tg_id": int(sender["id"]),
+        "tg_id": tg_id,
         "name": sender_display(sender),
         "created": time.time(),
     }
@@ -449,7 +501,7 @@ async def handle_callback(callback: dict):
         finish(TEXT_EXPIRED, alert="Это не ваш запрос")
         return
     if action == "r":
-        log.info("отклонено tg %s", pending["tg_id"])
+        log.info("отклонено %s", anon_id(pending["tg_id"]))
         finish(TEXT_REJECTED)
         return
     try:
@@ -462,11 +514,11 @@ async def handle_callback(callback: dict):
         user = result.get("user") or ""
         nick = user.split("@")[0] if user else "?"
         kind = result.get("kind") or "register"
-        log.info("подтверждён %s (%s) для tg %s (%s)", user, kind, pending["tg_id"], pending["name"])
+        log.info("подтверждён (%s) для %s", kind, anon_id(pending["tg_id"]))
         text = TEXT_OK_LOGIN if kind == "login" else TEXT_OK
         finish(text.format(user=f"@{nick}"))
     else:
-        log.warning("отказ для tg %s: %s", pending["tg_id"], result.get("error"))
+        log.warning("отказ для %s: %s", anon_id(pending["tg_id"]), result.get("error"))
         finish(TEXT_FAIL.format(error=result.get("error", "неизвестная ошибка")))
 
 

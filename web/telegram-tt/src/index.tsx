@@ -14,7 +14,6 @@ import { enableStrict, requestMutation } from './lib/fasterdom/fasterdom';
 import { selectChat, selectCurrentMessageList, selectPeerFullInfo, selectTabState } from './global/selectors';
 import { selectSharedSettings } from './global/selectors/sharedState';
 import { betterView } from './util/betterView';
-import { IS_TAURI } from './util/browser/globalEnvironment';
 import listenOtherClients from './util/browser/listenOtherClients';
 import {
   getIsAloneTab, listenTabLifecycle, markTabOpen, requestGlobal, subscribeToMultitabBroadcastChannel,
@@ -24,8 +23,6 @@ import { establishMultitabRole, subscribeToMasterChange } from './util/establish
 import { initGlobal } from './util/init';
 import { initLocalization } from './util/localization';
 import { onBeforeUnload } from './util/schedulers';
-import initTauriApi from './util/tauri/initTauriApi';
-import setupTauriListeners from './util/tauri/setupTauriListeners';
 import updateWebmanifest from './util/updateWebmanifest';
 
 import App from './components/App';
@@ -39,11 +36,6 @@ applyColorSchemeClass(readStoredColorScheme());
 
 if (STRICTERDOM_ENABLED) {
   enableStrict();
-}
-
-if (IS_TAURI) {
-  initTauriApi();
-  setupTauriListeners();
 }
 
 init();
@@ -69,7 +61,6 @@ async function init() {
   getActions().init();
 
   getActions().updateShouldEnableDebugLog();
-  getActions().updateShouldDebugExportedSenders();
 
   const global = getGlobal();
 

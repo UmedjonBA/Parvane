@@ -133,9 +133,17 @@ auto ProcessAlternativeName(Info &&info) {
 	auto infosCount = qint32(0);
 	auto infos = std::vector<Info>();
 	stream >> hash >> infosCount;
+	if (stream.status() != QDataStream::Ok
+		|| infosCount < 0
+		|| infosCount > 1000) {
+		return FileData();
+	}
 	for (auto i = 0; i < infosCount; i++) {
 		auto info = QByteArray();
 		stream >> info;
+		if (stream.status() != QDataStream::Ok) {
+			return FileData();
+		}
 		infos.push_back(DeserializeInfo(info));
 	}
 	return (stream.status() != QDataStream::Ok)

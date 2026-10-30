@@ -5,7 +5,7 @@ import {
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
-import type { ApiMessage, ApiMessageSearchContext, ApiSponsoredPeer } from '../../../api/types';
+import type { ApiMessage, ApiMessageSearchContext } from '../../../api/types';
 import { LoadMoreDirection } from '../../../types';
 
 import { ALL_FOLDER_ID, GLOBAL_SUGGESTED_CHANNELS_ID } from '../../../config';
@@ -27,7 +27,6 @@ import useAppLayout from '../../../hooks/useAppLayout';
 import useContextMenuHandlers from '../../../hooks/useContextMenuHandlers';
 import useEffectOnce from '../../../hooks/useEffectOnce';
 import useHorizontalScroll from '../../../hooks/useHorizontalScroll';
-import { useIntersectionObserver } from '../../../hooks/useIntersectionObserver';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
@@ -43,7 +42,6 @@ import Transition from '../../ui/Transition';
 import ChatMessage from './ChatMessage';
 import DateSuggest from './DateSuggest';
 import LeftSearchResultChat from './LeftSearchResultChat';
-import LeftSearchResultSponsored from './LeftSearchResultSponsored';
 import RecentContacts from './RecentContacts';
 
 import './ChatResults.scss';
@@ -63,7 +61,6 @@ type StateProps = {
   accountPeerIds?: string[];
   globalPeerIds?: string[];
   foundIds?: SearchResultKey[];
-  sponsoredPeer?: ApiSponsoredPeer;
   globalMessagesByChatId?: Record<string, { byId: Record<number, ApiMessage> }>;
   fetchingStatus?: { chats?: boolean; messages?: boolean };
   suggestedChannelIds?: string[];
@@ -71,7 +68,6 @@ type StateProps = {
 
 const MIN_QUERY_LENGTH_FOR_GLOBAL_SEARCH = 4;
 const LESS_LIST_ITEMS_AMOUNT = 5;
-const INTERSECTION_THROTTLE = 200;
 
 const runThrottled = throttle((cb) => cb(), 500, false);
 
@@ -88,7 +84,6 @@ const ChatResults: FC<OwnProps & StateProps> = ({
   globalMessagesByChatId,
   fetchingStatus,
   suggestedChannelIds,
-  sponsoredPeer,
   onReset,
   onSearchDateSelect,
 }) => {
@@ -346,12 +341,6 @@ const ChatResults: FC<OwnProps & StateProps> = ({
 
   const shouldRenderTopPeers = !searchQuery && !searchDate && !isChannelList;
 
-  const { observe } = useIntersectionObserver({
-    rootRef: containerRef,
-    throttleMs: INTERSECTION_THROTTLE,
-    isDisabled: !shouldRenderTopPeers,
-  });
-
   if (shouldRenderTopPeers) {
     return <RecentContacts onReset={onReset} />;
   }
@@ -434,9 +423,6 @@ const ChatResults: FC<OwnProps & StateProps> = ({
             )}
             {lang('DialogListSearchSectionGlobal')}
           </h3>
-          {sponsoredPeer && (
-            <LeftSearchResultSponsored sponsoredPeer={sponsoredPeer} observeIntersection={observe} />
-          )}
           {globalResults.map((id, index) => {
             if (!shouldShowMoreGlobal && index >= LESS_LIST_ITEMS_AMOUNT) {
               return undefined;
@@ -515,7 +501,7 @@ export default memo(withGlobal<OwnProps>(
     }
 
     const {
-      fetchingStatus, globalResults, localResults, resultsByType, sponsoredPeer,
+      fetchingStatus, globalResults, localResults, resultsByType,
     } = selectTabState(global).globalSearch;
     const { peerIds: globalPeerIds } = globalResults || {};
     const { peerIds: accountPeerIds } = localResults || {};
@@ -531,7 +517,6 @@ export default memo(withGlobal<OwnProps>(
       foundIds,
       globalMessagesByChatId,
       fetchingStatus,
-      sponsoredPeer,
       suggestedChannelIds: similarChannelIds,
     };
   },

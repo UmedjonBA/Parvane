@@ -115,7 +115,6 @@ protected:
 	void setDescriptionText(v::text::data &&descriptionText);
 	bool paintAnimated(QPainter &p, QRect clip);
 
-	void fillSentCodeData(const MTPDauth_sentCode &type);
 
 	void showDescription();
 	void hideDescription();
@@ -123,7 +122,6 @@ protected:
 	[[nodiscard]] not_null<Data*> getData() const {
 		return _data;
 	}
-	void finish(const MTPauth_Authorization &auth, QImage &&photo = {});
 	void finish(const MTPUser &user, QImage &&photo = {});
 	void createSession(
 		const MTPUser &user,

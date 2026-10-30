@@ -180,7 +180,9 @@ export function parsePvpkArchive(bytes: Uint8Array): PackFile[] | undefined {
   let offset = 9 + len;
   for (const entry of index) {
     const name = String(entry.name || '').split(/[\\/]/).pop() || '';
-    const size = Number(entry.size) || 0;
+    const size = Number(entry?.size) || 0;
+    // Отрицательный/дробный размер сдвигает смещение назад: тот же кусок читался бы много раз — архив бракуем
+    if (!Number.isInteger(size) || size < 0) return undefined;
     if (offset + size > bytes.length) break;
     if (name && size > 0 && getPackFileMime(name)) {
       files.push({ name, data: bytes.slice(offset, offset + size).buffer });

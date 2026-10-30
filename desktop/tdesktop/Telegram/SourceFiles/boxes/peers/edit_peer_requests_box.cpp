@@ -367,6 +367,11 @@ void RequestsBoxController::loadMoreRows() {
 		_loadRequestId = -1;
 		Parvane::ListJoinRequests(gid, crl::guard(this, [=](bool ok, std::vector<Parvane::GroupJoinRequest> list, const QString &) {
 			_loadRequestId = 0;
+			if (!ok) {
+				// Сбой не показываем как «заявок нет»: список не считаем
+				// загруженным, повтор — при следующей подгрузке.
+				return;
+			}
 			for (const auto &r : list) {
 				const auto user = Parvane::EnsureUser(&session(), r.member);
 				_offsetDate = r.date;

@@ -16,12 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "parvane/parvane_client.h"
 
 namespace Api {
-namespace {
-
-constexpr auto kMinSponsoredQueryLength = 4;
-
-} // namespace
-
 PeerSearch::PeerSearch(not_null<Main::Session*> session, Type type)
 : _session(session)
 , _type(type) {

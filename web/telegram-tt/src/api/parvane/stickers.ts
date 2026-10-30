@@ -152,7 +152,10 @@ export function renderBuiltinStickerBlob(id: string): Promise<Blob> | undefined 
   const cached = renderedBlobs.get(id);
   if (cached) return cached;
   const isAnimated = id.startsWith(ANIM_PREFIX);
-  const index = Number(id.slice(isAnimated ? ANIM_PREFIX.length : STATIC_PREFIX.length));
+  const indexText = id.slice(isAnimated ? ANIM_PREFIX.length : STATIC_PREFIX.length);
+  const index = Number(indexText);
+  // Только каноничный id (`01`, `1.0`, ` 1` дали бы тот же стикер под другим ключом кэша — повторная отрисовка)
+  if (String(index) !== indexText) return undefined;
   const emoji = id.startsWith(STATIC_PREFIX) ? (isAnimated ? ANIM_EMOJIS : EMOJIS)[index] : undefined;
   if (!emoji || !Number.isInteger(index)) return undefined;
   const rendering = isAnimated ? recordAnimatedSticker(emoji) : renderEmoji(emoji);
@@ -170,10 +173,6 @@ export async function buildBuiltinStickerSet() {
 
 export function getStickerBlobMime(id: string) {
   return id.startsWith(ANIM_PREFIX) ? 'video/webm' : 'image/png';
-}
-
-export function getBuiltinSetId() {
-  return SET_ID;
 }
 
 export function isBuiltinStickerId(id: string) {

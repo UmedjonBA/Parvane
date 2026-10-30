@@ -6,7 +6,6 @@ import type { ActionReturnType, GlobalState, TabArgs } from '../../types';
 
 import { BIRTHDAY_NUMBERS_SET, RESTRICTED_EMOJI_SET } from '../../../config';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import { buildCollectionByKey } from '../../../util/iteratees';
 import * as langProvider from '../../../util/oldLangProvider';
 import { pause, throttle } from '../../../util/schedulers';
 import searchWords from '../../../util/searchWords';
@@ -17,7 +16,6 @@ import {
 } from '../../index';
 import {
   rebuildStickersForEmoji,
-  replaceAnimatedEmojis,
   updateCustomEmojiForEmoji,
   updateCustomEmojiSets,
   updateGifSearch,
@@ -126,33 +124,6 @@ addActionHandler('loadFavoriteStickers', async (global): Promise<void> => {
   setGlobal(global);
 });
 
-addActionHandler('loadPremiumStickers', async (global): Promise<void> => {
-  const { hash } = global.stickers.premium || {};
-
-  if (selectIsCurrentUserFrozen(global)) {
-    return;
-  }
-
-  const result = await callApi('fetchStickersForEmoji', { emoji: '⭐️⭐️', hash });
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-
-  global = {
-    ...global,
-    stickers: {
-      ...global.stickers,
-      premium: {
-        hash: result.hash,
-        stickers: result.stickers,
-      },
-    },
-  };
-  setGlobal(global);
-});
-
 addActionHandler('loadGreetingStickers', async (global): Promise<void> => {
   const { hash } = global.stickers.greeting || {};
 
@@ -226,57 +197,6 @@ addActionHandler('loadDiceStickers', async (global): Promise<void> => {
   setGlobal(global);
 });
 
-addActionHandler('loadPremiumGifts', async (global): Promise<void> => {
-  const stickerSet = await callApi('fetchPremiumGifts');
-  if (!stickerSet) {
-    return;
-  }
-
-  const { set, stickers } = stickerSet;
-
-  global = getGlobal();
-  global = {
-    ...global,
-    premiumGifts: { ...set, stickers },
-  };
-  setGlobal(global);
-});
-
-addActionHandler('loadTonGifts', async (global): Promise<void> => {
-  const stickerSet = await callApi('fetchTonGifts');
-  if (!stickerSet) {
-    return;
-  }
-
-  const { set, stickers } = stickerSet;
-
-  global = getGlobal();
-  global = {
-    ...global,
-    tonGifts: { ...set, stickers },
-  };
-  setGlobal(global);
-});
-
-addActionHandler('loadDefaultTopicIcons', async (global): Promise<void> => {
-  const stickerSet = await callApi('fetchDefaultTopicIcons');
-  if (!stickerSet) {
-    return;
-  }
-  global = getGlobal();
-
-  const { set, stickers } = stickerSet;
-
-  const fullSet = { ...set, stickers };
-
-  global = updateStickerSet(global, fullSet.id, fullSet);
-  global = {
-    ...global,
-    defaultTopicIconsId: fullSet.id,
-  };
-  setGlobal(global);
-});
-
 addActionHandler('loadDefaultStatusIcons', async (global): Promise<void> => {
   const stickerSet = await callApi('fetchDefaultStatusEmojis');
   if (!stickerSet) {
@@ -292,56 +212,11 @@ addActionHandler('loadDefaultStatusIcons', async (global): Promise<void> => {
   setGlobal(global);
 });
 
-addActionHandler('loadUserCollectibleStatuses', async (global, actions): Promise<void> => {
-  setGlobal(global);
-
-  const { hash } = global.collectibleEmojiStatuses || {};
-
-  const result = await callApi('fetchCollectibleEmojiStatuses', { hash });
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-
-  global = {
-    ...global,
-    collectibleEmojiStatuses: {
-      hash: result.hash,
-      statuses: result.statuses,
-    },
-  };
-  setGlobal(global);
-  const documentIds = result.statuses.map(({ documentId }) => documentId);
-
-  actions.loadCustomEmojis({ ids: documentIds });
-});
-
 addActionHandler('loadStickers', (global, actions, payload): ActionReturnType => {
   const { stickerSetInfo } = payload;
   const cachedSet = selectStickerSet(global, stickerSetInfo);
   if (cachedSet && cachedSet.count === cachedSet?.stickers?.length) return; // Already fully loaded
   void loadStickers(global, actions, stickerSetInfo);
-});
-
-addActionHandler('loadAnimatedEmojis', async (global): Promise<void> => {
-  const [emojis, effects] = await Promise.all([
-    callApi('fetchAnimatedEmojis'),
-    callApi('fetchAnimatedEmojiEffects'),
-  ]);
-  if (!emojis || !effects) {
-    return;
-  }
-
-  global = getGlobal();
-
-  global = replaceAnimatedEmojis(global, { ...emojis.set, stickers: emojis.stickers });
-  global = {
-    ...global,
-    animatedEmojiEffects: { ...effects.set, stickers: effects.stickers },
-  };
-
-  setGlobal(global);
 });
 
 addActionHandler('loadBirthdayNumbersStickers', async (global): Promise<void> => {
@@ -381,22 +256,6 @@ addActionHandler('loadRestrictedEmojiStickers', async (global): Promise<void> =>
     restrictedEmoji: { ...emojis.set, stickers: emojis.stickers },
   };
 
-  setGlobal(global);
-});
-
-addActionHandler('loadGenericEmojiEffects', async (global): Promise<void> => {
-  const stickerSet = await callApi('fetchGenericEmojiEffects');
-  if (!stickerSet) {
-    return;
-  }
-  global = getGlobal();
-
-  const { set, stickers } = stickerSet;
-
-  global = {
-    ...global,
-    genericEmojiEffects: { ...set, stickers },
-  };
   setGlobal(global);
 });
 
@@ -811,34 +670,6 @@ addActionHandler('clearCustomEmojiForEmoji', (global): ActionReturnType => {
       forEmoji: {},
     },
   };
-});
-
-addActionHandler('loadFeaturedEmojiStickers', async (global): Promise<void> => {
-  const featuredStickers = await callApi('fetchFeaturedEmojiStickers', {});
-  if (!featuredStickers) {
-    return;
-  }
-
-  global = getGlobal();
-  global = {
-    ...global,
-    customEmojis: {
-      ...global.customEmojis,
-      featuredIds: featuredStickers.sets.map(({ id }) => id),
-      byId: {
-        ...global.customEmojis.byId,
-        ...buildCollectionByKey(featuredStickers.sets.flatMap((set) => set.stickers || []), 'id'),
-      },
-    },
-    stickers: {
-      ...global.stickers,
-      setsById: {
-        ...global.stickers.setsById,
-        ...buildCollectionByKey(featuredStickers.sets, 'id'),
-      },
-    },
-  };
-  setGlobal(global);
 });
 
 addActionHandler('openStickerSet', async (global, actions, payload): Promise<void> => {

@@ -59,6 +59,21 @@ int main() {
         check(parse(forged).empty(), "индекс требует больше байт, чем есть → пусто");
     }
 
+    for (const char *badIdx : {R"([{"name":"a.png","size":-1},{"name":"b.png","size":1}])", R"([{"name":"a.png","size":"5"}])",
+                               R"([{"name":5,"size":1}])", R"([{"name":"a.png"}])"}) {
+        // враждебный индекс: отрицательный/нестроковый size и name не должны бросать и раздувать разбор
+        std::string forged("PVPK1");
+        const std::string idx = badIdx;
+        const auto l = static_cast<std::uint32_t>(idx.size());
+        forged.append(reinterpret_cast<const char *>(&l), 4);
+        forged.append(idx);
+        forged.append("xxxxxxxxxx");
+        bool threw = false;
+        std::vector<Entry> r;
+        try { r = parse(forged); } catch (...) { threw = true; }
+        check(!threw && r.empty(), "индекс с полями не того типа/знака → пусто без исключения", idx);
+    }
+
     // ── расширения/mime ──
     check(isAllowedExtension("A.WEBP") && isAllowedExtension("x.tgs") && !isAllowedExtension("x.jpg"), "расширения без учёта регистра");
     check(mimeForName("a.png") == "image/png" && mimeForName("a.webm") == "video/webm" && mimeForName("a.tgs") == "application/x-tgsticker" && mimeForName("a.gif").empty(), "mime по расширению");

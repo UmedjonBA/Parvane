@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 export const DESKTOP_BIN = process.env.PARVANE_E2E_DESKTOP_BIN
   || new URL('../desktop/build-probe/bin/Telegram', import.meta.url).pathname;
-export const DESKTOP_READY_PATTERN = /E2E-устройство готово/;
+export const DESKTOP_READY_PATTERN = /v2: готов/;
 
 // Без собранного бинаря сценарий не проверяет ничего — печатаем SKIP и
 // выходим с 0, как остальные кросс-сценарии

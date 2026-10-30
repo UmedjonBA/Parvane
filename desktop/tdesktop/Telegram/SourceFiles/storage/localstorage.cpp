@@ -86,12 +86,6 @@ int32 _oldSettingsVersion = 0;
 bool _settingsRewriteNeeded = false;
 bool _settingsWriteAllowed = false;
 
-enum class WriteMapWhen {
-	Now,
-	Fast,
-	Soon,
-};
-
 bool CheckStreamStatus(QDataStream &stream) {
 	if (stream.status() != QDataStream::Ok) {
 		LOG(("Bad data stream status: %1").arg(stream.status()));

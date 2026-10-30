@@ -140,9 +140,6 @@ private:
 	void showControls();
 	void hideControls();
 
-	void showResetButton();
-	void resetAccount();
-
 	void showTerms();
 	void acceptTerms(Fn<void()> callback);
 	void hideAndDestroy(object_ptr<Ui::FadeWrap<Ui::RpWidget>> widget);
@@ -160,7 +157,6 @@ private:
 		details::Animate animate);
 	void appendStep(details::Step *step);
 
-	void getNearestDC();
 	void showTerms(Fn<void()> callback);
 
 	// FloatDelegate

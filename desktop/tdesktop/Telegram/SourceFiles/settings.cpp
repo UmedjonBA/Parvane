@@ -9,8 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/emoji_config.h"
 
-Qt::LayoutDirection gLangDir = Qt::LeftToRight;
-
 bool gInstallBetaVersion = AppBetaVersion;
 uint64 gAlphaVersion = AppAlphaVersion;
 uint64 gRealAlphaVersion = AppAlphaVersion;
@@ -38,9 +36,6 @@ bool gNoStartUpdate = false;
 bool gStartToSettings = false;
 bool gDebugMode = false;
 
-uint32 gConnectionsInSession = 1;
-
-QByteArray gLocalSalt;
 int gScreenScale = style::kScaleAuto;
 int gConfigScale = style::kScaleAuto;
 
@@ -53,11 +48,6 @@ bool gPasswordRecovered = false;
 int32 gPasscodeBadTries = 0;
 crl::time gPasscodeLastTry = 0;
 
-float64 gRetinaFactor = 1.;
-int32 gIntRetinaFactor = 1;
 
 int gOtherOnline = 0;
 
-int32 gAutoDownloadPhoto = 0; // all auto download
-int32 gAutoDownloadAudio = 0;
-int32 gAutoDownloadGif = 0;

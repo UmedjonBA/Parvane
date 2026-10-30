@@ -3,6 +3,7 @@
 #include "data/data_message_reactions.h" // PARVANE_AUTOSTATE react
 #include "parvane/parvane_article_view.h"
 #include "parvane/parvane_local_files.h"
+#include "parvane/parvane_safe_open.h" // DecodeImageBounded
 #include "data/data_photo_media.h"
 #include "boxes/share_box.h" // хук PARVANE_AUTOFORWARD_MULTI: колбэк окна выбора чатов
 #include <parvane/chat_rules.h> // parvane-core: потолок вложения, пересылка в группу (spec 030)
@@ -10,6 +11,7 @@
 #include <thread>
 #include <deque>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QStandardPaths>
 #include <QtGui/QImageReader>
 
@@ -292,6 +294,7 @@ struct PollState {
 	bool noRevote = false;
 	bool shuffle = false;
 	bool hideResults = false;
+	bool multiple = false;     // несколько вариантов в одном голосе
 
 	[[nodiscard]] parvane::poll::VoteRules rules() const {
 		return { .closed = closed, .closeAtMs = closeAtMs, .quiz = quiz, .noRevote = noRevote };
@@ -303,8 +306,16 @@ struct PollState {
 QHash<QString, PollState> g_pollsByUuid;   // uuid опроса → состояние
 QHash<quint64, QString> g_pollUuidById;    // PollId → uuid опроса
 // Голоса/закрытия, пришедшие РАНЬШЕ самого опроса (сортировка не гарантирована).
-QHash<QString, QVector<QPair<QString, QVector<int>>>> g_pendingPollVotes;
-QSet<QString> g_pendingPollClose;
+struct PendingPollVote {
+	QString voter;
+	QVector<int> options;
+	QString chat;          // чат, из которого пришёл голос (P-44)
+	std::int64_t tsMs = 0; // момент голоса (срок/без переголосования)
+};
+QHash<QString, QVector<PendingPollVote>> g_pendingPollVotes;
+QHash<QString, QString> g_pendingPollClose; // uuid опроса → кто прислал закрытие (закрыть может только автор)
+constexpr auto kMaxPendingPolls = 256;      // очереди отложенного не растут без предела
+constexpr auto kMaxPendingPollVotes = 256;
 qint64 g_nextMsgId = 1;               // серверный диапазон (0 < id < 2^56)
 std::unique_ptr<base::Timer> g_pumpTimer; // периодический sync (main-поток)
 rpl::lifetime g_finalizeLifetime;         // подписка newItemAdded (main-поток)
@@ -1289,18 +1300,33 @@ void LoadV2Ids() {
 	g_v2IdsLoaded = true;
 }
 
-void V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer) {
+bool V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer) {
 	const auto uuid = QString::fromStdString(sm.id);
 	bool fresh = false;
+	bool rejected = false;
 	{
 		std::lock_guard<std::mutex> lk(g_v2Mutex);
 		fresh = !g_v2Ids.contains(uuid);
-		g_v2Ids.insert(uuid, peer);
-		g_v2Cache.insert(uuid, sm);
+		// Первая запись побеждает: id задаёт отправитель, и чужое сообщение с уже
+		// известным id не должно подменять автора/чат в кэше (иначе правка или
+		// удаление проходят проверку автора от имени жертвы).
+		if (!fresh) {
+			const auto known = g_v2Cache.constFind(uuid);
+			rejected = (known != g_v2Cache.constEnd() && known->from != sm.from);
+		}
+		if (!rejected) {
+			g_v2Ids.insert(uuid, peer);
+			g_v2Cache.insert(uuid, sm);
+		}
+	}
+	if (rejected) {
+		LOG(("Parvane: v2 — повтор id %1 от другого автора/чата отброшен").arg(uuid));
+		return false;
 	}
 	if (fresh) {
 		StoreAppendLine(V2IdsPath(), uuid + u' ' + peer);
 	}
+	return true;
 }
 
 // Собеседник v2-сообщения ("" — сообщение v1).
@@ -1504,7 +1530,9 @@ void HandleV2Event(const parvane::json &ev) {
 		if (!in.replyTo.empty()) {
 			sm.reply_to = in.replyTo;
 		}
-		V2NoteMessage(sm, QString::fromStdString(in.chat));
+		if (!V2NoteMessage(sm, QString::fromStdString(in.chat))) {
+			return; // чужой повтор известного id — не принимаем
+		}
 		if (in.from != self) {
 			V2NoteRoot(V2Ready(), in.from);
 		}
@@ -1519,6 +1547,12 @@ void HandleV2Event(const parvane::json &ev) {
 			auto it = g_v2Cache.find(uuid);
 			if (it == g_v2Cache.end()) {
 				LOG(("Parvane: v2: мутация для неизвестного %1 — пропуск").arg(uuid));
+				continue;
+			}
+			// Цель должна лежать в чате события: мутация из другого чата не трогает чужое сообщение
+			if (const auto known = g_v2Ids.value(uuid);
+					!known.isEmpty() && known != QString::fromStdString(in.chat)) {
+				LOG(("Parvane: v2: мутация для %1 пришла из другого чата — пропуск").arg(uuid));
 				continue;
 			}
 			auto sm = it.value();
@@ -1963,7 +1997,11 @@ void sendTextAsync(
 // Публикует готовый MessageContent (для пересылки медиа — блоб уже в cloud).
 void sendContentAsync(const QString &toAddress, const std::string &contentJson) {
 	const auto to = toAddress.toStdString();
+	const auto generation = AccountGeneration();
 	crl::async([=] {
+		if (!AccountGenerationIs(generation)) {
+			return; // содержимое прежнего аккаунта — не от имени следующего
+		}
 		try {
 			const auto content = parvane::json::parse(contentJson);
 			const auto id = parvane::v2::isGroupAddress(to)
@@ -2505,7 +2543,16 @@ void RegisterPeer(const QString &rawAddress) {
 	const auto address = LatestAddress(rawAddress); // писать — по последнему нику
 	{
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		g_idToAddress.insert(quint64(IdForAddress(address)), address);
+		const auto id = quint64(IdForAddress(address));
+		// id — усечённый 48-битный хэш: коллизию (другой адрес на тот же id) не
+		// принимаем, первая запись побеждает — иначе подобранный ник перехватит
+		// исходящие чужого чата.
+		const auto it = g_idToAddress.constFind(id);
+		if (it != g_idToAddress.constEnd() && it.value() != address) {
+			LOG(("Parvane: коллизия id пира %1 — адрес %2 не принят").arg(id).arg(address));
+			return;
+		}
+		g_idToAddress.insert(id, address);
 	}
 	EnsurePresenceSubscription(address);
 }
@@ -2810,6 +2857,24 @@ bool StartSession() {
 			const auto titleQ = QString::fromStdString(title);
 			const auto video = (media == "video");
 			crl::on_main([=] {
+				// Те же фильтры, что у личных звонков: заблокированный и «звонки — никто» не звонят
+				const auto session = g_sessionWeak.get();
+				const auto sender = session
+					? session->data().userLoaded(UserId(BareId(IdForAddress(fromQ))))
+					: nullptr;
+				if (g_privacyCallsNobody.load() || (sender && sender->isBlocked())) {
+					LOG(("Parvane: приглашение в групповой звонок от %1 отклонено (блок или «звонки: никто»)")
+						.arg(fromQ));
+					crl::async([gcid] {
+						std::shared_ptr<parvane::GroupCallManager> g;
+						{
+							std::lock_guard<std::mutex> lk(g_sessionMutex);
+							g = g_groupCallManager;
+						}
+						if (g) g->expireInvite(gcid);
+					});
+					return;
+				}
 				ShowIncomingGroupCall(fromQ, groupQ, titleQ, video);
 				base::call_delayed(kGroupRingTimeout, [gcid] {
 					std::lock_guard<std::mutex> lk(g_sessionMutex);
@@ -3661,7 +3726,12 @@ void handleTypingFrame(const std::string &payload) {
 	});
 }
 
-void MirrorDelete(std::int64_t msgId) {
+void MirrorDelete(std::int64_t msgId, bool forEveryone) {
+	// «Удалить только у меня» (флажок снят) в шину не зеркалим: иначе сообщение
+	// стёрлось бы и у собеседника.
+	if (!forEveryone) {
+		return;
+	}
 	// Удаляем «у всех» только СВОИ сообщения (шард проверяет автора). Ищем uuid
 	// по локальному msgId; неизвестный (чужое/несинхронизированное) — no-op.
 	const auto it = g_msgIdToUuid.find(msgId);
@@ -4583,6 +4653,19 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 			continue;
 		}
 		const auto dest = CustomEmojiRoot() + u"/"_q + SanitizePackName(rawName);
+		// Квота: автоматически принятые паки ограничены (число каталогов и новых
+		// паков за запуск), иначе поток сообщений с уникальными именами заполнит
+		// диск и замедлит старт (LoadLocalCustomEmoji декодирует всё в UI-потоке).
+		constexpr auto kMaxEmojiPackDirs = 64;
+		constexpr auto kMaxAutoPacksPerRun = 16;
+		static auto autoPacksThisRun = 0;
+		if (!QDir(dest).exists()
+			&& (autoPacksThisRun >= kMaxAutoPacksPerRun
+				|| QDir(CustomEmojiRoot()).entryList(
+					QDir::Dirs | QDir::NoDotAndDotDot).size() >= kMaxEmojiPackDirs)) {
+			LOG(("Parvane: эмодзи-пак «%1» не принят — достигнута квота автоприёма").arg(rawName));
+			continue;
+		}
 		// Защита от подмены: НЕ перезаписываем уже существующий пак (свой или
 		// ранее полученный) — иначе отправитель, зная имя, подменил бы содержимое
 		// (и docId, детерминированный от имени|файла). Существующий пак уже
@@ -4591,6 +4674,7 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 			g_emojiPackMaterialized.insert(rawName);
 			continue;
 		}
+		++autoPacksThisRun;
 		g_packInstallBusy.insert(fileId);
 		const auto fidStd = fileId.toStdString();
 		const auto weak = base::make_weak(session.get());
@@ -5197,7 +5281,17 @@ void ResolveNames(const QStringList &addresses) {
 					continue;
 				}
 				if (j.contains("bio") && j["bio"].is_string()) {
-					user->setAbout(QString::fromStdString(j["bio"].get<std::string>()));
+					// Ключ безопасности (KEY-1) всегда первой строкой: био от сервера/собеседника
+					// не должно его перекрывать или подделывать.
+					auto about = QString::fromStdString(j["bio"].get<std::string>());
+					if (it.key() != SelfAddress()) {
+						if (const auto rootFp = V2RootFingerprint(it.key()); !rootFp.isEmpty()) {
+							about = tr::lng_parvane_security_key_profile(tr::now)
+								+ u"\n"_q + rootFp
+								+ (about.isEmpty() ? QString() : (u"\n\n"_q + about));
+						}
+					}
+					user->setAbout(about);
 				}
 				if (j.contains("birthday") && j["birthday"].is_string()) {
 					const auto parts = QString::fromStdString(
@@ -5227,11 +5321,11 @@ void ResolveNames(const QStringList &addresses) {
 						: QString();
 				};
 				LOG(("Parvane: профиль %1: bio=%2 phone=%3 color=%4 channel=%5 birthday=%6")
-					.arg(it.key(), str("bio"), str("phone"))
+					.arg(it.key(), LogSecret(str("bio")), LogSecret(str("phone")))
 					.arg((j.contains("name_color") && j["name_color"].is_number_integer())
 						? j["name_color"].get<int>()
 						: -1)
-					.arg(str("personal_channel"), str("birthday")));
+					.arg(str("personal_channel"), LogSecret(str("birthday"))));
 			}
 		});
 	});
@@ -5348,7 +5442,7 @@ void RequestPreviewPhoto(PhotoId photoId, const nlohmann::json &photo) {
 				if (d.ok) {
 					if (const auto plain = parvane::blobcrypt::decrypt(d.bytes, key, nonce)) {
 						bytes = QByteArray::fromStdString(*plain);
-						image.loadFromData(bytes);
+						image = DecodeImageBounded(bytes, 4096);
 					}
 				}
 			} catch (const std::exception &e) {
@@ -5533,7 +5627,9 @@ QHash<QString, QString> g_cardContent;
 	const auto kind = parvane::contentKind(content);
 	if (kind == "task_offer" && !out) {
 		// Задание в чат (spec 011, TASK-1): «В план» / «В календарь» и «Отклонить»; запись плана — по карточке
-		g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		if (!g_cardContent.contains(uuid)) { // первая запись побеждает: повтор uuid не подменяет карточку
+			g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		}
 		const auto offer = parvane::sections::planner::OfferFields::fromContent(content);
 		const auto event = (parvane::sections::planner::offerKind(offer) == "event");
 		return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
@@ -5547,7 +5643,9 @@ QHash<QString, QString> g_cardContent;
 	}
 	if (kind == "article") {
 		// Статья (ARTICLE-1): окно чтения и «Сохранить в заметки»
-		g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		if (!g_cardContent.contains(uuid)) { // первая запись побеждает: повтор uuid не подменяет карточку
+			g_cardContent.insert(uuid, QString::fromStdString(content.dump()));
+		}
 		return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
 			MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
 				CardButton(tr::lng_parvane_article_read(tr::now), u"pv:article:"_q + uuid),
@@ -5563,12 +5661,14 @@ QHash<QString, QString> g_cardContent;
 		LOG(("Parvane: жалоба %1 не подтверждена своими данными — без карточки").arg(uuid));
 		return std::nullopt;
 	}
-	g_cardContent.insert(uuid, QString::fromStdString(parvane::json{
-		{ "kind", "mod_report" },
-		{ "group", check->group },
-		{ "ops", check->opIds },
-		{ "authors", check->authors },
-	}.dump()));
+	if (!g_cardContent.contains(uuid)) { // первая запись побеждает: повтор uuid не подменяет проверенную карточку
+		g_cardContent.insert(uuid, QString::fromStdString(parvane::json{
+			{ "kind", "mod_report" },
+			{ "group", check->group },
+			{ "ops", check->opIds },
+			{ "authors", check->authors },
+		}.dump()));
+	}
 	// Жалоба на сообщения группы — админу: удалить их у всех либо заблокировать автора в группе
 	return MTP_replyInlineMarkup(MTP_vector<MTPKeyboardButtonRow>({
 		MTP_keyboardButtonRow(MTP_vector<MTPKeyboardButton>({
@@ -5699,7 +5799,12 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 			return;
 		}
 		const auto addressCopy = address;
-		crl::on_main([id, bytes, photoId, addressCopy] {
+		// Чужие байты — на воркере и с потолком размера (на главный поток уходит готовая картинка)
+		auto decoded = DecodeImageBounded(QByteArray(bytes.data(), int(bytes.size())), 2048);
+		if (decoded.isNull()) {
+			return;
+		}
+		crl::on_main([id, bytes, photoId, addressCopy, decoded] {
 			const auto session = g_sessionWeak.get();
 			if (!session) {
 				return;
@@ -5713,10 +5818,7 @@ void DownloadAvatar(const QString &address, const QString &fileId) {
 				return;
 			}
 			const auto qb = QByteArray(bytes.data(), int(bytes.size()));
-			auto image = QImage();
-			if (!image.loadFromData(qb) || image.isNull()) {
-				return;
-			}
+			auto image = decoded;
 			g_avatarImages.insert(addressCopy, image); // кэш для повторной установки
 			peer->setUserpicInMemory(photoId,
 				Images::FromImageInMemory(image, "JPG", qb));
@@ -6050,8 +6152,7 @@ void injectPhotoOnMain(
 			raw = f.readAll();
 		}
 	}
-	auto image = QImage();
-	image.loadFromData(raw);
+	auto image = DecodeImageBounded(raw, 4096);
 	if (image.isNull()) {
 		// не изображение — показываем как документ (с атрибутами по kind)
 		injectMediaOnMain(session, from, senderId, authorId, out, ts, msgId,
@@ -6200,7 +6301,9 @@ void pumpMediaDownload(
 				}
 				bytes = std::move(*dec);
 			}
-			WriteMediaCache(fileId, bytes);
+			if (ttlSecs <= 0) {
+				WriteMediaCache(fileId, bytes); // эфемерное (TTL) в постоянный кэш не кладём
+			}
 		}
 		const auto path = WriteMediaWorkCopy(fileId + u"_"_q + SafeFileName(filename), bytes);
 		if (path.isEmpty()) {
@@ -6312,6 +6415,21 @@ void pumpMediaDownload(
 		poll,
 		results,
 		MTPMessageMedia());         // attached_media
+}
+
+// Голос: только допустимые индексы без повторов; в опросе с одним вариантом — не больше одного.
+[[nodiscard]] QVector<int> NormalizePollVote(const QVector<int> &options, int answers, bool multiple) {
+	auto out = QVector<int>();
+	for (const auto option : options) {
+		if (option < 0 || option >= answers || out.contains(option)) {
+			continue;
+		}
+		out.push_back(option);
+		if (!multiple) {
+			break;
+		}
+	}
+	return out;
 }
 
 // Применяет агрегат голосов к зарегистрированному PollData (через штатный
@@ -6426,19 +6544,25 @@ void handlePollService(
 		}
 	}
 	const auto it = g_pollsByUuid.find(pollUuid);
-	if (it == g_pollsByUuid.end()) {
-		if (kind == "poll_close") {
-			g_pendingPollClose.insert(pollUuid);
-		} else {
-			g_pendingPollVotes[pollUuid].push_back({ voter, options });
-		}
-		return;
-	}
 	// P-44: голос — только из чата опроса; закрыть может только автор
 	const auto to = QString::fromStdString(sm.to);
 	const auto voteChat = parvane::v2::isGroupAddress(sm.to)
 		? to
 		: (voter == SelfAddress() ? to : voter);
+	if (it == g_pollsByUuid.end()) {
+		// Опрос ещё не пришёл: откладываем вместе с чатом/временем, проверки P-44 — при инъекции опроса
+		if (kind == "poll_close") {
+			if (g_pendingPollClose.size() < kMaxPendingPolls || g_pendingPollClose.contains(pollUuid)) {
+				g_pendingPollClose.insert(pollUuid, voter);
+			}
+		} else if (g_pendingPollVotes.size() < kMaxPendingPolls || g_pendingPollVotes.contains(pollUuid)) {
+			auto &queue = g_pendingPollVotes[pollUuid];
+			if (queue.size() < kMaxPendingPollVotes) {
+				queue.push_back({ voter, options, voteChat, std::int64_t(sm.ts) * 1000 });
+			}
+		}
+		return;
+	}
 	if (kind == "poll_close") {
 		if (!it->author.isEmpty() && voter != it->author) {
 			LOG(("Parvane: закрытие опроса %1 не автором (%2) — отброшено").arg(pollUuid, voter));
@@ -6454,7 +6578,7 @@ void handlePollService(
 	} else if (options.isEmpty()) {
 		it->votes.remove(voter);
 	} else {
-		it->votes.insert(voter, options);
+		it->votes.insert(voter, NormalizePollVote(options, it->answers, it->multiple));
 	}
 	applyPollState(session, *it);
 	LOG(("Parvane: опрос %1 — %2 от %3")
@@ -6530,6 +6654,7 @@ void injectPollMessage(
 		st.noRevote = rules.noRevote;
 		st.shuffle = sm.content.value("shuffle", false);
 		st.hideResults = sm.content.value("hide_results", false);
+		st.multiple = sm.content.value("multiple", false);
 		// Срок наступит — опрос перерисуется закрытым (итоги откроются)
 		if (const auto left = st.closeAtMs - QDateTime::currentMSecsSinceEpoch(); st.closeAtMs && left > 0) {
 			base::call_delayed(crl::time(left + 500), [uuid] {
@@ -6551,15 +6676,25 @@ void injectPollMessage(
 	}
 	g_pollUuidById.insert(st.pollId, uuid);
 	// Отложенные голоса/закрытие (пришли раньше опроса).
-	for (const auto &[voter, options] : g_pendingPollVotes.take(uuid)) {
-		if (options.isEmpty()) {
-			st.votes.remove(voter);
+	for (const auto &pending : g_pendingPollVotes.take(uuid)) {
+		// те же проверки P-44, что у живого голоса
+		if (pending.chat != st.chatAddress
+			|| !parvane::poll::acceptsVote(st.rules(), st.votes.contains(pending.voter), pending.tsMs)) {
+			LOG(("Parvane: отложенный голос в опросе %1 от %2 не принят").arg(uuid, pending.voter));
+			continue;
+		}
+		if (pending.options.isEmpty()) {
+			st.votes.remove(pending.voter);
 		} else {
-			st.votes.insert(voter, options);
+			st.votes.insert(pending.voter, NormalizePollVote(pending.options, st.answers, st.multiple));
 		}
 	}
-	if (g_pendingPollClose.remove(uuid)) {
-		st.closed = true;
+	if (const auto closer = g_pendingPollClose.take(uuid); !closer.isEmpty()) {
+		if (st.author.isEmpty() || closer == st.author) {
+			st.closed = true;
+		} else {
+			LOG(("Parvane: отложенное закрытие опроса %1 не автором (%2) — отброшено").arg(uuid, closer));
+		}
 	}
 	const auto msgId = MsgId(g_nextMsgId++);
 	g_uuidToMsgId.insert(uuid, msgId.bare);
@@ -6770,12 +6905,14 @@ void injectOnMain(
 			const auto found = g_uuidToMsgId.find(uuid);
 			if (found != g_uuidToMsgId.end() && found.value() != 0) {
 				const auto isOwn = (from == self);
-				const auto peerAddr = isOwn
-					? QString::fromStdString(sm.to) : from;
+				const auto toD = QString::fromStdString(sm.to);
+				const auto peerAddr = isOwn ? toD : from;
 				const auto peerId = IdForAddress(peerAddr);
-				const auto full = FullMsgId(
-					peerFromUser(UserId(BareId(peerId))),
-					MsgId(found.value()));
+				// групповое сообщение лежит в истории группы (chat-пир), а не автора
+				const auto dialogPeer = g_knownGroups.contains(toD)
+					? peerFromChat(ChatId(BareId(IdForAddress(toD))))
+					: peerFromUser(UserId(BareId(peerId)));
+				const auto full = FullMsgId(dialogPeer, MsgId(found.value()));
 				if (const auto item = session->data().message(full)) {
 					item->destroy();
 				}
@@ -6938,6 +7075,22 @@ void injectOnMain(
 					continue;
 				}
 			}
+			// conformance GROUP-2: опрос участника без права опросов (или без права писать) не показываем —
+			// проверка стоит раньше инъекции, иначе опрос обходит фильтр прав группы ниже.
+			{
+				const auto pollTo = QString::fromStdString(sm.to);
+				const auto authorAddr = QString::fromStdString(sm.from);
+				const auto info = g_groupInfo.constFind(pollTo);
+				if (g_knownGroups.contains(pollTo)
+					&& authorAddr != SelfAddress()
+					&& info != g_groupInfo.constEnd()
+					&& GroupRoleOf(pollTo, authorAddr) == u"member"_q
+					&& !parvane::isContentAllowedForMember(info.value().default_permissions, sm.content)) {
+					LOG(("Parvane: опрос %1 от %2 скрыт правами группы").arg(uuid, authorAddr));
+					g_uuidToMsgId.insert(uuid, 0);
+					continue;
+				}
+			}
 			injectPollMessage(session, sm);
 			++added;
 			continue;
@@ -7066,7 +7219,7 @@ void injectOnMain(
 					h->clearFolder();
 				}
 				LOG(("Parvane: групповое %1 в %2 от %3: %4")
-					.arg(uuid, toStr, from, gtextQ));
+					.arg(uuid, toStr, from, LogSecret(gtextQ)));
 			}
 			++added;
 			continue;
@@ -9213,15 +9366,6 @@ void StopRingtone() {
 	g_ringtone = nullptr;
 }
 
-void LeaveGroupCall() {
-	std::shared_ptr<parvane::GroupCallManager> g;
-	{
-		std::lock_guard<std::mutex> lk(g_sessionMutex);
-		g = g_groupCallManager;
-	}
-	if (g) g->leave(); // без g_sessionMutex: колбэки менеджера берут его сами
-}
-
 void EndCallsForLogout() {
 	std::shared_ptr<parvane::CallManager> m;
 	std::shared_ptr<parvane::GroupCallManager> g;
@@ -9344,6 +9488,7 @@ void StartGroupCall(const QString &groupId, bool video) {
 
 // Входящее приглашение в групповой звонок: экран группы (известна — её аватар и название, иначе пригласивший).
 void ShowIncomingGroupCall(const QString &from, const QString &group, const QString &title, bool video) {
+	(void)title;
 	const auto session = g_sessionWeak.get();
 	if (!session) {
 		return;
@@ -9351,9 +9496,8 @@ void ShowIncomingGroupCall(const QString &from, const QString &group, const QStr
 	PeerData *peer = nullptr;
 	if (!group.isEmpty() && g_knownGroups.contains(group)) {
 		peer = ensureGroupChat(session, group, g_knownGroups.value(group), 0);
-	} else if (!group.isEmpty() && !title.isEmpty()) {
-		peer = ensureGroupChat(session, group, title, 0);
 	} else {
+		// неизвестную группу из приглашения не синтезируем (название присылает пригласивший)
 		peer = EnsurePeer(session, from);
 	}
 	PlayRingtone(/*outgoing=*/false);
@@ -9535,9 +9679,11 @@ namespace Internal {
 	// Строки клиента этого запуска — из памяти (parvane-core logpriv): релиз их на диск не пишет (ревью 21 окт),
 	// содержимое (текст, координаты, токены) в них уже скрыто. Выход со стиранием память чистит. Ревью 21 окт 2026:
 	// и в dev — через фильтр релиза: при PARVANE_LOG_CONTENT=1 журнал не прикладывается вовсе (logpriv::reportLines).
+	// Адреса собеседников (nick@сервер) серверу отчётов не нужны — прячем.
+	static const auto address = QRegularExpression(u"[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+"_q);
 	auto out = QStringList();
 	for (const auto &line : parvane::logpriv::reportLines()) {
-		out.push_back(QString::fromStdString(line).trimmed());
+		out.push_back(QString::fromStdString(line).trimmed().replace(address, u"<адрес>"_q));
 	}
 	return out;
 }
@@ -9738,6 +9884,9 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 	if (action == u"moddel"_q || action == u"modban"_q) {
 		// Только проверенное при показе карточки (CheckModReport): группа, свои сообщения этой группы и их авторы
 		// по своей истории. Жалоба отправителя здесь не читается (ревью 21 окт, вечер, 2.1)
+		if (parvane::contentKind(content) != "mod_report") {
+			return true; // действие модерации — только над проверенной карточкой жалобы
+		}
 		const auto gidStd = content.value("group", std::string());
 		const auto gid = QString::fromStdString(gidStd);
 		if (!parvane::v2::isGroupAddress(gidStd)) {
@@ -9781,9 +9930,24 @@ bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data) {
 					authors.insert(QString::fromStdString(author.get<std::string>()));
 				}
 			}
+			// Авторы — те, кто по своей истории писал в эту группу в сообщениях карточки (как проверка ops у moddel)
+			auto known = QSet<QString>();
+			{
+				std::lock_guard<std::mutex> lk(g_v2Mutex);
+				for (const auto &op : content.value("ops", parvane::json::array())) {
+					if (!op.is_string()) {
+						continue;
+					}
+					const auto key = QString::fromStdString(op.get<std::string>());
+					const auto cached = g_v2Cache.constFind(key);
+					if (cached != g_v2Cache.constEnd() && g_v2Ids.value(key) == gid) {
+						known.insert(QString::fromStdString(cached->from));
+					}
+				}
+			}
 			const auto self = SelfAddress();
 			for (const auto &author : authors) {
-				if (!author.isEmpty() && author != self) {
+				if (!author.isEmpty() && author != self && known.contains(author)) {
 					BanMember(gid, author, true);
 				}
 			}

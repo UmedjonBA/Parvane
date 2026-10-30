@@ -31,11 +31,6 @@ constexpr std::int64_t kLegacyBundleWaitMs = 45000;
 constexpr std::int64_t kLegacyBundlePollMs = 3000;
 constexpr std::int64_t kEpochRetryMsShared = 11000;
 
-std::int64_t epochMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch()).count();
-}
-
 std::string codeOf(const std::exception &e) {
     if (const auto *v = dynamic_cast<const V2Error *>(&e)) return v->code();
     return e.what();
@@ -57,20 +52,6 @@ bool Session::isDeletedLog(const std::string &resp) const {
     } catch (const std::exception &) {
         return false;
     }
-}
-
-// Ответ log_sync собеседника (как web refreshPeerLog): удалён — событие peerDeleted; иначе принять;
-// смена корня — KEY-1; ник сменён — перенос чата. false — журнала нет (удалён).
-bool Session::absorbPeerLogLocked(const std::string &user, const std::string &resp) {
-    if (isDeletedLog(resp)) {
-        outbox_.push_back(json{{"type", "peerDeleted"}, {"user", user}});
-        return false;
-    }
-    const auto verdict = client_->ingestLog(user, resp);
-    if (verdict == "rootChanged") acceptPeerRootLocked(user);
-    if (verdict == "moved" || verdict == "renamed") followPeerRenameLocked(user, verdict);
-    rekeyAfterDeviceRemovalLocked();
-    return true;
 }
 
 bool Session::checkPeerDeleted(const std::string &user) {

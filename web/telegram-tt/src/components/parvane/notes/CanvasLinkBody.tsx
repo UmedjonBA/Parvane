@@ -3,6 +3,7 @@ import { memo, useEffect, useState } from '../../../lib/teact/teact';
 import type { LinkPreview, LinkPreviewSource } from './notesCanvasFiles';
 
 import { callApi } from '../../../api/gramjs';
+import { isSafeCanvasUrl } from './notesCanvas';
 import { buildLinkPreview, hasPreviewContent, hostOf } from './notesCanvasFiles';
 
 import useLang from '../../../hooks/useLang';
@@ -65,13 +66,16 @@ function imageUrlOf(preview: LinkPreview) {
 
 // Содержимое карточки-ссылки: картинка, заголовок и описание страницы (их добывает шард `preview` —
 // браузер на чужой сайт не ходит), узел сайта и кнопка «открыть в новой вкладке»
-const CanvasLinkBody = ({ url }: OwnProps) => {
+const CanvasLinkBody = ({ url: rawUrl }: OwnProps) => {
+  const isSafe = isSafeCanvasUrl(rawUrl);
+  const url = isSafe ? rawUrl.trim() : '';
   const lang = useLang();
   const [preview, setPreview] = useState<Loaded>();
 
   useEffect(() => {
     let isActual = true;
     setPreview(undefined);
+    if (!url) return undefined;
     void loadPreview(url).then((loaded) => {
       if (isActual) setPreview(loaded);
     });
@@ -80,7 +84,7 @@ const CanvasLinkBody = ({ url }: OwnProps) => {
     };
   }, [url]);
 
-  const state = !preview ? 'loading' : hasPreviewContent(preview) ? 'ready' : 'none';
+  const state = !url ? 'none' : !preview ? 'loading' : hasPreviewContent(preview) ? 'ready' : 'none';
 
   return (
     <div className={styles.canvasLink} data-canvas-link={state}>
@@ -96,22 +100,24 @@ const CanvasLinkBody = ({ url }: OwnProps) => {
         )}
         {preview?.title && <div className={styles.canvasLinkTitle}>{preview.title}</div>}
         {preview?.description && <div className={styles.canvasLinkDescription}>{preview.description}</div>}
-        {state === 'none' && <div className={styles.canvasLinkUrl}>{url}</div>}
+        {state === 'none' && <div className={styles.canvasLinkUrl}>{url || rawUrl}</div>}
       </div>
       <div className={styles.canvasLinkFoot}>
         <PvIcon name="link" isSmall />
         <span className={styles.canvasLinkHost}>{preview?.siteName || hostOf(url)}</span>
-        <a
-          className={styles.canvasLinkOpen}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={lang('KnowledgeCanvasLinkOpen')}
-          aria-label={lang('KnowledgeCanvasLinkOpen')}
-          data-canvas-open
-        >
-          <PvIcon name="open" isSmall />
-        </a>
+        {isSafe && (
+          <a
+            className={styles.canvasLinkOpen}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={lang('KnowledgeCanvasLinkOpen')}
+            aria-label={lang('KnowledgeCanvasLinkOpen')}
+            data-canvas-open
+          >
+            <PvIcon name="open" isSmall />
+          </a>
+        )}
       </div>
     </div>
   );

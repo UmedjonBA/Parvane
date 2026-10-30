@@ -92,7 +92,6 @@ body {
 
 .title {
   margin: 0 0 0.5rem;
-
   font-size: 1.875rem;
   font-weight: 600;
   line-height: 1.2;
@@ -101,7 +100,6 @@ body {
 .lead {
   max-width: 30rem;
   margin: 0 0 1.75rem;
-
   font-size: 1.0625rem;
   color: var(--muted);
 }
@@ -186,7 +184,6 @@ body {
   padding: 1.25rem 1.375rem;
   border: 1px solid var(--line);
   border-radius: 1.25rem;
-
   background: var(--panel);
 }
 
@@ -209,13 +206,13 @@ body {
 }
 
 .qr {
+  overflow: hidden;
   flex-shrink: 0;
 
   width: 12.5rem;
   height: 12.5rem;
   padding: 0;
   border-radius: 1rem;
-  overflow: hidden;
 
   background: #fbf1c7;
 }
@@ -227,20 +224,17 @@ body {
 }
 
 .steps {
+  counter-reset: step;
   margin: 0 0 1rem;
   padding: 0;
-
   list-style: none;
-  counter-reset: step;
 }
 
 .steps li {
+  counter-increment: step;
   position: relative;
-
   margin-bottom: 0.625rem;
   padding-inline-start: 2.5rem;
-
-  counter-increment: step;
 }
 
 .steps li::before {
@@ -275,7 +269,6 @@ body {
   padding: 1rem 1.125rem;
   border: 1px solid var(--line);
   border-radius: 1rem;
-
   background: var(--raised);
 }
 

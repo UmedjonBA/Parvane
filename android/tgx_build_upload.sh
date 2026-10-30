@@ -34,6 +34,15 @@ REL64=$(ls "$TGX"/app/build/outputs/apk/latestX64/release/*.apk 2>/dev/null | he
 APKSIGNER=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/apksigner | tail -1)
 "$APKSIGNER" verify --print-certs "$REL" > "$LOG/apksigner.txt" 2>&1 && grep -q "CN=Parvane" "$LOG/apksigner.txt" \
   && echo "подпись: release-ключ Parvane" || { cat "$LOG/apksigner.txt"; exit 5; }
+# Отпечаток закреплён в android/release-cert.sha256 (SHA-256 сертификата, hex) или PV_CERT_SHA256: одного CN мало —
+# другой ключ с тем же CN выложил бы APK, который не обновит установленное приложение.
+PIN="${PV_CERT_SHA256:-$(cat "$(dirname "$0")/release-cert.sha256" 2>/dev/null | tr -d ' :\n' | tr A-F a-f)}"
+if [ -n "$PIN" ]; then
+  GOT=$(grep -m1 "certificate SHA-256 digest" "$LOG/apksigner.txt" | sed 's/.*: *//' | tr -d ' :' | tr A-F a-f)
+  [ "$GOT" = "$(echo "$PIN" | tr -d ' :' | tr A-F a-f)" ] || { echo "отпечаток подписи $GOT не совпал с закреплённым"; exit 5; }
+else
+  echo "ВНИМАНИЕ: отпечаток подписи не закреплён (android/release-cert.sha256) — проверен только CN"
+fi
 aapt=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/aapt | tail -1)
 "$aapt" dump badging "$REL" | grep -q "application-debuggable" && { echo "APK debuggable — не выкладываем"; exit 6; }
 # Методы, которые ядро зовёт из C++ по имени, должны пережить R8 (иначе release без событий ядра и звонков)

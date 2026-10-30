@@ -29,7 +29,6 @@ import {
   getMainUsername,
   getWebAppKey,
   isChatAdmin,
-  isUserBot,
   isUserRightBanned,
   prepareMessageReplyInfo,
 } from '../../helpers';
@@ -292,7 +291,7 @@ addActionHandler('restartBot', async (global, actions, payload): Promise<void> =
   void sendBotCommand(chat, MAIN_THREAD_ID, '/start', undefined, selectSendAs(global, chatId), lastMessageId);
 });
 
-addActionHandler('queryInlineBot', async (global, actions, payload): Promise<void> => {
+addActionHandler('queryInlineBot', (global, actions, payload): void => {
   const {
     chatId, username, query, offset,
     tabId = getCurrentTabId(),
@@ -303,32 +302,16 @@ addActionHandler('queryInlineBot', async (global, actions, payload): Promise<voi
     return;
   }
 
-  let inlineBotData = selectTabState(global, tabId).inlineBots.byUsername[username];
+  const inlineBotData = selectTabState(global, tabId).inlineBots.byUsername[username];
   if (inlineBotData === false) {
     return;
   }
 
   if (inlineBotData === undefined) {
-    const { user: inlineBot } = await callApi('getChatByUsername', username) || {};
-    global = getGlobal();
-    if (!inlineBot || !isUserBot(inlineBot) || !inlineBot.botPlaceholder) {
-      global = replaceInlineBotSettings(global, username, false, tabId);
-      setGlobal(global);
-      return;
-    }
-
-    inlineBotData = {
-      id: inlineBot.id,
-      query: '',
-      offset: '',
-      switchPm: undefined,
-      canLoadMore: true,
-      results: [],
-      cacheTime: 0,
-    };
-
-    global = replaceInlineBotSettings(global, username, inlineBotData, tabId);
+    // Parvane: ботов нет — ник из набираемого текста на сервер не уходит (поиск ника раскрыл бы набранное)
+    global = replaceInlineBotSettings(global, username, false, tabId);
     setGlobal(global);
+    return;
   }
 
   if (query === inlineBotData.query && !inlineBotData.canLoadMore) {

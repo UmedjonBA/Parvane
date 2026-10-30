@@ -102,6 +102,9 @@ mod anon_hygiene {
         // ID — личность есть, IP нет; PRE — только IP.
         let id = anon::shard_request(method("msg.inbox.sync").unwrap(), &full(), vec![]);
         assert_eq!((id.user.as_str(), id.device_id.as_str(), id.client_ip.as_str()), ("alice@local", "d1", ""));
+        assert!(id.token.is_empty(), "токен сессии не уходит шарду messenger");
+        let ident = METHODS.iter().find(|m| m.channel == CH_ID && m.shard == "identity").unwrap();
+        assert!(!anon::shard_request(ident, &full(), vec![]).token.is_empty());
         let pre = METHODS.iter().find(|m| m.channel == CH_PRE).unwrap();
         let p = anon::shard_request(pre, &full(), vec![]);
         assert!(p.user.is_empty() && p.token.is_empty() && p.client_ip == "203.0.113.7");

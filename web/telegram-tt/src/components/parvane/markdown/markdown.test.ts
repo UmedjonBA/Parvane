@@ -96,4 +96,14 @@ describe('markdown', () => {
   it('звёздочки внутри слова — не курсив', () => {
     expect(parseInline('2*3*4')).toEqual([{ type: 'text', text: '2*3*4' }]);
   });
+
+  it('длинная строка без закрывающих знаков разбирается быстро (не квадратично)', () => {
+    const started = Date.now();
+    parseMarkdown(`![a](${'b'.repeat(64000)}`);
+    parseMarkdown('['.repeat(64000));
+    parseInline('['.repeat(64000));
+    parseInline(`[a](${'b'.repeat(64000)}`);
+    renameEmbeds(`![a](${'b'.repeat(64000)}`, new Map());
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
 });

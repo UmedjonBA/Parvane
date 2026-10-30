@@ -213,7 +213,6 @@ public:
 		};
 		std::vector<Bar> bars;
 		bool untimed = false;
-		QString name; // для озвучки
 	};
 	struct Data {
 		planner::SleepAxis axis;

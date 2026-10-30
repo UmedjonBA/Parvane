@@ -645,7 +645,7 @@
     },
     {
       "name": " пробел ",
-      "error": null
+      "error": "bad-chars"
     },
     {
       "name": "tab\tв",

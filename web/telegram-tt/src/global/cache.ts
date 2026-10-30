@@ -15,7 +15,6 @@ import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../api/types';
 import {
   ALL_FOLDER_ID, ANIMATION_LEVEL_DEFAULT,
   ARCHIVED_FOLDER_ID,
-  DEBUG,
   FOLDERS_POSITION_DEFAULT,
   GLOBAL_STATE_CACHE_ARCHIVED_CHAT_LIST_LIMIT,
   GLOBAL_STATE_CACHE_CHAT_LIST_LIMIT,
@@ -36,7 +35,6 @@ import {
 import { GLOBAL_STATE_CACHE_KEY } from '../util/multiaccount';
 import { encryptSession } from '../util/passcode';
 import { onBeforeUnload, throttle } from '../util/schedulers';
-import { hasStoredSession } from '../util/sessions';
 import { selectThreadInfo } from './selectors/threads';
 import { addActionHandler, getGlobal } from './index';
 import { INITIAL_GLOBAL_STATE, INITIAL_PERFORMANCE_STATE_MED } from './initialState';
@@ -110,10 +108,6 @@ export function cacheSharedState(state: SharedState) {
   return MAIN_IDB_STORE.set(SHARED_STATE_CACHE_KEY, state);
 }
 
-export function loadCachedGlobal() {
-  return MAIN_IDB_STORE.get<GlobalState>(GLOBAL_STATE_CACHE_KEY);
-}
-
 export function loadCachedSharedState() {
   return MAIN_IDB_STORE.get<SharedState>(SHARED_STATE_CACHE_KEY);
 }
@@ -162,24 +156,6 @@ export function initCache() {
   addActionHandler('reset', resetCache);
 }
 
-export async function loadCache(initialState: GlobalState): Promise<GlobalState | undefined> {
-  if (GLOBAL_STATE_CACHE_DISABLED) {
-    return undefined;
-  }
-
-  const cache = await readCache(initialState);
-
-  if (cache.passcode.hasPasscode || hasStoredSession()) {
-    setupCaching();
-
-    return cache;
-  } else {
-    clearCaching();
-
-    return undefined;
-  }
-}
-
 export function setupCaching() {
   isCaching = true;
   unsubscribeFromBeforeUnload = onBeforeUnload(updateCacheForced, true);
@@ -194,48 +170,6 @@ export function clearCaching() {
   if (unsubscribeFromBeforeUnload) {
     unsubscribeFromBeforeUnload();
   }
-}
-
-async function readCache(initialState: GlobalState): Promise<GlobalState> {
-  if (DEBUG) {
-    // eslint-disable-next-line no-console
-    console.time('global-state-cache-read');
-  }
-
-  const json = localStorage.getItem(GLOBAL_STATE_CACHE_KEY);
-  const cachedFromLocalStorage = json ? JSON.parse(json) as GlobalState : undefined;
-  if (cachedFromLocalStorage) localStorage.removeItem(GLOBAL_STATE_CACHE_KEY);
-
-  let cached = cachedFromLocalStorage || await loadCachedGlobal();
-  const cachedSharedState = await loadCachedSharedState();
-  const sharedState = cachedSharedState || initialState.sharedState;
-
-  if (cached) {
-    cached = {
-      ...cached,
-      sharedState,
-    };
-  }
-
-  if (DEBUG) {
-    // eslint-disable-next-line no-console
-    console.timeEnd('global-state-cache-read');
-  }
-
-  if (cached) {
-    migrateCache(cached, initialState);
-  }
-
-  const newState: GlobalState = {
-    ...initialState,
-    ...cached,
-    sharedState: {
-      ...sharedState,
-      ...cached?.sharedState, // Allow migration to override shared state
-    },
-  };
-
-  return newState;
 }
 
 export function migrateCache(cached: GlobalState, initialState: GlobalState) {

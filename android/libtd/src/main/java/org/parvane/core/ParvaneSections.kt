@@ -16,16 +16,12 @@ object ParvaneSections {
     /** chats | calendar | health | knowledge | files */
     fun show(section: String) = nativeShow(section)
     fun setVisible(visible: Boolean) = nativeVisible(visible)
-    fun setPaletteOpen(open: Boolean) = nativePaletteOpen(open)
-    fun setLanguage(russian: Boolean) = nativeSetLanguage(russian)
-    fun sessionChanged() = nativeSessionChanged()
     fun snapshot(domain: String): JSONObject? = nativeSnapshot(domain).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     fun plannerReplace(stateJson: String, notice: String = ""): Boolean = nativePlannerReplace(stateJson, notice)
     fun plannerUndo(notice: String) = nativePlannerUndo(notice)
     /** Метод провайдера облака по имени web (`parvaneCloud*`); null — отказ. */
     fun cloudCall(method: String, argsJson: String): Any? = nativeCloudCall(method, argsJson).let { org.json.JSONTokener(it).nextValue() }
         .takeIf { it != JSONObject.NULL }
-    fun cloudApply(container: String, opsJson: String): Boolean = nativeCloudApply(container, opsJson)
     /** Операция заметок: create, save, saveOrRestore, rename, delete, move, freeTitle, createFolder, renameFolder,
      *  deleteFolder, saveCanvas, renameCanvas, deleteCanvas, openDaily, readDaily, restoreGuide, consumeGuideOpen,
      *  applyPlanner, saveChatFiles, refresh. */
@@ -55,13 +51,9 @@ object ParvaneSections {
     @JvmStatic private external fun nativePlanner(op: String, argsJson: String): String
     @JvmStatic private external fun nativeShow(section: String)
     @JvmStatic private external fun nativeVisible(visible: Boolean)
-    @JvmStatic private external fun nativePaletteOpen(open: Boolean)
-    @JvmStatic private external fun nativeSetLanguage(russian: Boolean)
-    @JvmStatic private external fun nativeSessionChanged()
     @JvmStatic private external fun nativeSnapshot(domain: String): String
     @JvmStatic private external fun nativePlannerReplace(stateJson: String, notice: String): Boolean
     @JvmStatic private external fun nativePlannerUndo(notice: String)
     @JvmStatic private external fun nativeCloudCall(method: String, argsJson: String): String
-    @JvmStatic private external fun nativeCloudApply(container: String, opsJson: String): Boolean
     @JvmStatic private external fun nativeNotes(op: String, argsJson: String): String
 }

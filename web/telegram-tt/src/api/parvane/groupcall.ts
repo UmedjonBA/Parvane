@@ -65,6 +65,7 @@ type GroupCallCallbacks = {
 // допускает до 32, но аудио-mesh больше восьми деградирует
 export const GROUP_CALL_MAX_PARTICIPANTS = 8;
 const PEER_CONNECT_TIMEOUT_MS = 45000;
+const MAX_PENDING_CANDIDATES = 64;
 // Сколько ждать восстановления попарного соединения после `disconnected`
 export const PEER_DISCONNECT_GRACE_MS = 10000;
 
@@ -178,7 +179,7 @@ class MeshPeerSession {
           const candidate = decodeIceCandidate(signal.candidate);
           if (!candidate) break;
           if (this.pc && this.remoteReady) await this.pc.addIceCandidate(candidate).catch(() => undefined);
-          else this.pendingCandidates.push(candidate);
+          else if (this.pendingCandidates.length < MAX_PENDING_CANDIDATES) this.pendingCandidates.push(candidate);
         }
         break;
       case 'reject':
@@ -335,6 +336,11 @@ export class GroupCallEngine {
 
   private groupCallId?: string;
 
+  // Участники ТЕКУЩЕГО звонка: попарный invite и добор по group_invite принимаются
+  // только от них. Иначе любой, чей адрес знает цель, мог бы втянуть клиент в
+  // mesh-сессию (микрофон уходит ему) просто попарным invite во время звонка
+  private allowed = new Set<string>();
+
   private media: CallMedia = 'audio';
 
   private localStream?: MediaStream;
@@ -371,8 +377,10 @@ export class GroupCallEngine {
   }
 
   joinMesh(groupCallId: string, participants: string[], media: CallMedia) {
+    if (this.groupCallId !== groupCallId) this.allowed.clear();
     this.groupCallId = groupCallId;
     this.media = media || 'audio';
+    participants.forEach((peer) => this.allowed.add(peer));
     for (const peer of participants) {
       if (peer === this.self || this.sessions.has(peer)) continue;
       // Лимит mesh держим и при ДОБОРЕ участников в идущий звонок, а не только
@@ -397,7 +405,8 @@ export class GroupCallEngine {
     if (signal.type === 'group_invite') {
       // Приглашение в идущий звонок (новые участники) — достраиваем mesh;
       // новое приглашение решает контроллер (согласие пользователя)
-      if (this.groupCallId === signal.group_call_id) {
+      // и только от уже допущенного участника (добор чужим адресом — отказ)
+      if (this.groupCallId === signal.group_call_id && this.allowed.has(from)) {
         this.joinMesh(signal.group_call_id, signal.participants, signal.media);
       }
       return;
@@ -408,7 +417,8 @@ export class GroupCallEngine {
       return;
     }
     let session = this.sessions.get(from);
-    if (!session && signal.type === 'invite' && this.groupCallId) {
+    if (!session && signal.type === 'invite' && this.groupCallId
+      && this.allowed.has(from)) {
       session = new MeshPeerSession(from, this, this.cb);
       this.sessions.set(from, session);
     }
@@ -449,6 +459,7 @@ export class GroupCallEngine {
     this.sessions.clear();
     this.stopLocalStream();
     this.groupCallId = undefined;
+    this.allowed.clear();
     this.cb.onEnded();
   }
 
@@ -457,6 +468,7 @@ export class GroupCallEngine {
     if (this.groupCallId && !this.sessions.size) {
       this.stopLocalStream();
       this.groupCallId = undefined;
+      this.allowed.clear();
       this.cb.onEnded();
     }
   }
@@ -478,6 +490,12 @@ export class GroupCallEngine {
   private async requestLocalStream(media: CallMedia, generation: number) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: media === 'video' });
+      if (this.localStreamGeneration !== generation) {
+        // Звонок успели закрыть, пока шёл запрос: поток никому не нужен — гасим, иначе
+        // индикатор микрофона/камеры горит
+        stream.getTracks().forEach((track) => track.stop());
+        return undefined;
+      }
       this.localStream = stream;
       return stream;
     } catch {
@@ -490,6 +508,8 @@ export class GroupCallEngine {
   }
 
   private stopLocalStream() {
+    // Запрос потока, ещё не вернувшийся, станет устаревшим (см. requestLocalStream)
+    this.localStreamGeneration += 1;
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.localStream = undefined;
     this.localStreamPromise = undefined;

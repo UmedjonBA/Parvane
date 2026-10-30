@@ -31,6 +31,8 @@ describe('выход стирает записи аккаунта', () => {
   it('все записи адреса, и только его', () => {
     const own = [
       `parvane:hist:${SELF}`, `parvane:v2groups:${SELF}`, `parvane:invites:${SELF}`, `parvane:v2peers:${SELF}`,
+      'parvane:knowledge-collapsed', 'parvane:knowledge-graph-folders', 'parvane:quick-history:123',
+      'parvane:quick-learned:123',
       `parvane:readuuids:${SELF}`, `parvane:strangers:${SELF}`, `parvane:kind:${SELF}:notify`,
     ];
     const kept = [

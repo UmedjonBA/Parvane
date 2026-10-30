@@ -13,17 +13,15 @@ import {
   SUPPORTED_PHOTO_CONTENT_TYPES,
   SUPPORTED_VIDEO_CONTENT_TYPES,
 } from '../../../config';
-import { requestMeasure, requestMutation } from '../../../lib/fasterdom/fasterdom';
+import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { getAttachmentMediaType } from '../../../global/helpers';
 import { selectChatFullInfo, selectIsChatWithSelf, selectTabState } from '../../../global/selectors';
 import { selectCurrentLimit } from '../../../global/selectors/limits';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
-import calcTextLineHeightAndCount from '../../../util/element/calcTextLineHeightAndCount';
 import { validateFiles } from '../../../util/files';
 import { formatStarsAsIcon } from '../../../util/localization/format';
-import parseHtmlAsFormattedText from '../../../util/parseHtmlAsFormattedText';
 import { removeAllSelections } from '../../../util/selection';
 import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
 import { getTextWithEntitiesAsHtml } from '../../common/helpers/renderTextWithEntities';
@@ -163,7 +161,7 @@ const AttachmentModal = ({
   const svgRef = useRef<SVGSVGElement>();
   const {
     addRecentCustomEmoji, addRecentEmoji, updateAttachmentSettings, resetMessageMediaEditorRequest,
-    updateShouldSaveAttachmentsCompression, openAiMessageEditorModal, clearAiMessageEditorPendingResult,
+    updateShouldSaveAttachmentsCompression, clearAiMessageEditorPendingResult,
   } = getActions();
 
   const lang = useLang();
@@ -184,8 +182,6 @@ const AttachmentModal = ({
 
   const [isSymbolMenuOpen, openSymbolMenu, closeSymbolMenu] = useFlag();
   const [editingAttachmentIndex, setEditingAttachmentIndex] = useState<number | undefined>(undefined);
-  const [shouldShowAiButton, setShouldShowAiButton] = useState(false);
-  const html = useDerivedState(() => getHtml(), [getHtml]);
   const editingAttachment = editingAttachmentIndex !== undefined
     ? attachments[editingAttachmentIndex] : undefined;
 
@@ -320,27 +316,6 @@ const AttachmentModal = ({
     handleContextMenuClose,
     handleContextMenuHide,
   } = useContextMenuHandlers(mainButtonRef, !canShowCustomSendMenu || !isOpen);
-
-  useEffect(() => {
-    requestMeasure(() => {
-      const input = inputRef.current;
-      if (!html || !input) {
-        setShouldShowAiButton(false);
-        return;
-      }
-      const { totalLines } = calcTextLineHeightAndCount(input, true);
-      setShouldShowAiButton(totalLines >= 3);
-    });
-  }, [html, isOpen]);
-
-  const handleOpenAiEditor = useLastCallback(() => {
-    const { text, entities } = parseHtmlAsFormattedText(getHtml());
-    openAiMessageEditorModal({
-      chatId,
-      text: { text, entities },
-      isFromAttachment: true,
-    });
-  });
 
   const sendAttachments = useLastCallback((
     isSilent?: boolean, scheduledAt?: number | true, scheduleRepeatPeriod?: number,
@@ -809,16 +784,6 @@ const AttachmentModal = ({
             styles.captionWrapper,
           )}
         >
-          <Button
-            round
-            size="tiny"
-            color="translucent"
-            tabIndex={shouldShowAiButton ? 0 : -1}
-            className={buildClassName(styles.aiButton, !shouldShowAiButton && styles.aiButtonHidden)}
-            onClick={handleOpenAiEditor}
-            ariaLabel={lang('AiMessageEditor')}
-            iconName="ai"
-          />
           <MentionTooltip
             isOpen={isMentionTooltipOpen}
             filteredUsers={mentionFilteredUsers}

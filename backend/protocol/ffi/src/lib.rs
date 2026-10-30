@@ -9,7 +9,7 @@
 //! - ошибка возвращается через `char** err` (JSON `{"need":…}`/`{"error":…}`),
 //!   её тоже освобождает `parvane_protocol_string_free`.
 //! Паника через границу невозможна: движок без паник (clippy deny), а каждая
-//! функция дополнительно обёрнута в `catch_unwind`.
+//! функция (кроме `*_free` и версий) дополнительно обёрнута в `catch_unwind`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::missing_safety_doc)]
 
@@ -332,10 +332,13 @@ pub unsafe extern "C" fn pv_client_prepare_call(c: *mut PvClient, peer: *const c
 /// повторить).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_delivery_key_rejected(c: *mut PvClient, peer: *const c_char) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_mut(), str_arg(peer)) {
         (Some(c), Some(p)) => c.inner.delivery_key_rejected(p),
         _ => false,
     }
+})).unwrap_or_else(|_| false)
 }
 
 /// Кто прочитал своё сообщение (по E2E-квитанциям) — JSON-массив
@@ -353,10 +356,13 @@ pub unsafe extern "C" fn pv_client_readers(c: *const PvClient, id: *const c_char
 /// с ним (слепой жетон для звонков не годится).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_has_peer_delivery_key(c: *const PvClient, peer: *const c_char) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(peer)) {
         (Some(c), Some(p)) => c.inner.has_peer_delivery_key(p),
         _ => false,
     }
+})).unwrap_or_else(|_| false)
 }
 
 // ── отзыв своего устройства (T128; D-11, D-12, D-16) ────────────────────────
@@ -431,15 +437,21 @@ pub unsafe extern "C" fn pv_client_rotate_ssk(c: *mut PvClient, root: *const u8,
 /// Свой SSK раскрыт (отозвано державшее его устройство) и ещё не сменён.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_own_ssk_exposed(c: *const PvClient) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.own_ssk_exposed()).unwrap_or(false)
+})).unwrap_or_else(|_| false)
 }
 
 /// ID-01: доказательство устройства для `identity.session.issue` — 64 байта
 /// подписи, base64 в C-строке (освобождать `pv_string_free`); null — нет клиента.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_session_proof(c: *const PvClient, ts_ms: i64) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     let Some(c) = c.as_ref() else { return ptr::null_mut() };
     cstring(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, c.inner.session_proof(ts_ms)))
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 // ── эфемерные каналы: «печатает» и присутствие (T127) ───────────────────────
@@ -458,9 +470,12 @@ pub unsafe extern "C" fn pv_client_eph_subscribe(c: *mut PvClient, chats_json: *
 /// Соединение пересоздано — подписок на эфемерные каналы больше нет.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_eph_reset(c: *mut PvClient) {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     if let Some(c) = c.as_mut() {
         c.inner.eph_reset();
     }
+})).unwrap_or_else(|_| ())
 }
 
 /// «Печатает»: `chat` — адрес собеседника либо hex группы, `action` — номер
@@ -625,15 +640,20 @@ pub unsafe extern "C" fn pv_client_prepare_group(c: *mut PvClient, group: *const
 /// Версия журнала группы на устройстве (0 — журнала нет или id битый).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_group_version(c: *const PvClient, group: *const c_char) -> u64 {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(group)) {
         (Some(c), Some(g)) => c.inner.group_version(g).unwrap_or(0),
         _ => 0,
     }
+})).unwrap_or_else(|_| 0)
 }
 
 /// D-03: версия журнала группы, от которой отстаём; −1 — не отстаём.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_group_behind(c: *const PvClient, group: *const c_char) -> i64 {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(group)) {
         (Some(c), Some(g)) => match c.inner.group_behind(g) {
             Ok(Some(v)) => i64::try_from(v).unwrap_or(i64::MAX),
@@ -641,23 +661,30 @@ pub unsafe extern "C" fn pv_client_group_behind(c: *const PvClient, group: *cons
         },
         _ => -1,
     }
+})).unwrap_or_else(|_| -1)
 }
 
 /// Забыть журнал группы (запись отвергнута сервером — перечитать с начала).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_group_forget(c: *mut PvClient, group: *const c_char) {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     if let (Some(c), Some(g)) = (c.as_mut(), str_arg(group)) {
         let _ = c.inner.group_forget(g);
     }
+})).unwrap_or_else(|_| ())
 }
 
 /// Группы, журнал которых известен устройству — JSON-массив hex id.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_group_list(c: *const PvClient) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match c.as_ref() {
         Some(c) => cstring(c.inner.group_list()),
         None => cstring("[]".into()),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Сведения группы по журналу (JSON: участники, роли, права, эпоха, ссылки).
@@ -716,10 +743,13 @@ pub unsafe extern "C" fn pv_parse_invite(url: *const c_char, err: *mut *mut c_ch
 /// Устройства пользователя по журналу → JSON `{"v2":[…],"legacy":[…]}`.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_log_devices(c: *const PvClient, user: *const c_char) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(user)) {
         (Some(c), Some(u)) => cstring(c.inner.log_devices(u)),
         _ => cstring(r#"{"v2":[],"legacy":[]}"#.into()),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Опубликовать/сократить свой список v1-устройств (FR-058): JSON
@@ -753,19 +783,28 @@ pub unsafe extern "C" fn pv_client_legacy_deliver_request(
 /// Запас слепых жетонов.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_token_count(c: *const PvClient) -> usize {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.token_count()).unwrap_or(0)
+})).unwrap_or_else(|_| 0)
 }
 
 /// Пора получать суточную партию жетонов (FR-063: по расписанию, не перед тратой).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_token_refill_due(c: *const PvClient) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.token_refill_due()).unwrap_or(false)
+})).unwrap_or_else(|_| false)
 }
 
 /// Размер партии жетонов — вся суточная квота.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_token_batch_size(c: *const PvClient) -> usize {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.token_batch_size()).unwrap_or(0)
+})).unwrap_or_else(|_| 0)
 }
 
 // ── режим «усиленная приватность» (L2, T079) ────────────────────────────────
@@ -785,10 +824,13 @@ pub unsafe extern "C" fn pv_client_l2_set_direct(c: *mut PvClient, peer: *const 
 /// `{"active","mine","enabledBy":[адреса],"pad","ephemeralAllowed"}`.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_l2_direct(c: *const PvClient, peer: *const c_char) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(peer)) {
         (Some(c), Some(p)) => cstring(c.inner.l2_direct(p)),
         _ => ptr::null_mut(),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Состояние L2 группы (тот же JSON): политика журнала группы + личное
@@ -805,25 +847,34 @@ pub unsafe extern "C" fn pv_client_l2_group(c: *const PvClient, group: *const c_
 /// Личное предпочтение L2 в группе (свои исходящие выравниваются).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_l2_set_group_pref(c: *mut PvClient, group: *const c_char, enabled: bool) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_mut(), str_arg(group)) {
         (Some(c), Some(g)) => c.inner.l2_set_group_pref(g, enabled).is_ok(),
         _ => false,
     }
+})).unwrap_or_else(|_| false)
 }
 
 /// Чаты с активным L2: `{"direct":[адреса собеседников],"groups":[hex id]}`.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_l2_active_chats(c: *const PvClient) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match c.as_ref() {
         Some(c) => cstring(c.inner.l2_active_chats()),
         None => cstring(r#"{"direct":[],"groups":[]}"#.into()),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Публиковать ли своё присутствие: false, пока L2 активен хотя бы в одном чате.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_presence_allowed(c: *const PvClient) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.presence_allowed()).unwrap_or(true)
+})).unwrap_or_else(|_| true)
 }
 
 // ── журнал личного состояния (T098, STATE-1) ────────────────────────────────
@@ -836,23 +887,32 @@ pub struct PvStateSession {
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_has_state_key(c: *const PvClient) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_ref().map(|c| c.inner.has_state_key()).unwrap_or(false)
+})).unwrap_or_else(|_| false)
 }
 
 /// Создать ключ личного состояния, если его нет. true — создан сейчас
 /// (состояние клиента нужно сохранить).
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_ensure_state_key(c: *mut PvClient) -> bool {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     c.as_mut().map(|c| c.inner.ensure_state_key()).unwrap_or(false)
+})).unwrap_or_else(|_| false)
 }
 
 /// Сессия журнала на текущем ключе; null — ключа нет.
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_state_session(c: *const PvClient) -> *mut PvStateSession {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match c.as_ref().and_then(|c| c.inner.state_session()) {
         Some(inner) => Box::into_raw(Box::new(PvStateSession { inner })),
         None => ptr::null_mut(),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 #[no_mangle]
@@ -875,10 +935,13 @@ pub unsafe extern "C" fn pv_state_call(s: *mut PvStateSession, name: *const c_ch
 /// Тело `state.sync` от курсора сессии.
 #[no_mangle]
 pub unsafe extern "C" fn pv_state_sync_request(s: *const PvStateSession) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match s.as_ref() {
         Some(s) => PvBytes::from_vec(s.inner.sync_request()),
         None => PvBytes::empty(),
     }
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 /// Ответ `state.sync` → `{"more","applied","rejected"}`.
@@ -893,10 +956,13 @@ pub unsafe extern "C" fn pv_state_ingest(s: *mut PvStateSession, resp: *const u8
 /// Сведённое состояние — proto3-JSON `state.v1.StateSnapshot`.
 #[no_mangle]
 pub unsafe extern "C" fn pv_state_snapshot(s: *const PvStateSession) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match s.as_ref() {
         Some(s) => cstring(s.inner.snapshot()),
         None => cstring("{}".into()),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Желаемое хостом состояние по видам (`kinds_json` — JSON-массив имён) →
@@ -921,10 +987,13 @@ pub unsafe extern "C" fn pv_state_migrate(s: *mut PvStateSession, local_json: *c
 /// Отложенные, которые отправляет это устройство (JSON `ScheduledMessage[]`).
 #[no_mangle]
 pub unsafe extern "C" fn pv_state_claim_due(s: *mut PvStateSession, now_ms: i64) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match s.as_mut() {
         Some(s) => cstring(s.inner.claim_due(now_ms)),
         None => cstring("[]".into()),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Отметка «отложенное отправлено» → JSON-массив base64 тел `state.append`.
@@ -993,34 +1062,49 @@ pub unsafe extern "C" fn pv_state_load_sent_guard(s: *mut PvStateSession, ids_js
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_log_version(c: *const PvClient, user: *const c_char) -> u64 {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match (c.as_ref(), str_arg(user)) {
         (Some(c), Some(u)) => c.inner.log_version(u),
         _ => 0,
     }
+})).unwrap_or_else(|_| 0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_client_set_peer_delivery_key(c: *mut PvClient, user: *const c_char, key: *const u8, len: usize, generation: u64) {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     if let (Some(c), Some(u)) = (c.as_mut(), str_arg(user)) {
         c.inner.set_peer_delivery_key(u, bytes_arg(key, len), generation);
     }
+})).unwrap_or_else(|_| ())
 }
 
 // ── кадры и помощники ───────────────────────────────────────────────────────
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_encode_hello(channel: i32, kind: *const c_char, version: *const c_char) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     PvBytes::from_vec(host::encode_hello(channel, str_arg(kind).unwrap_or(""), str_arg(version).unwrap_or("")))
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_encode_auth(token: *const c_char) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     PvBytes::from_vec(host::encode_auth(str_arg(token).unwrap_or("")))
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn pv_encode_request(id: u64, method: *const c_char, body: *const u8, len: usize, timeout_ms: u32) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     PvBytes::from_vec(host::encode_request(id, str_arg(method).unwrap_or(""), bytes_arg(body, len), timeout_ms))
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 /// Запрос объекту сервера `dest` (spec 028, FED-1; пусто — свой сервер), с дополнением кадра до кратного
@@ -1035,6 +1119,8 @@ pub unsafe extern "C" fn pv_encode_request_to(
     dest: *const c_char,
     pad_to: u32,
 ) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     let req = parvane_protocol::pb::parvane::core::v2::Request {
         id,
         method: str_arg(method).unwrap_or("").into(),
@@ -1048,11 +1134,15 @@ pub unsafe extern "C" fn pv_encode_request_to(
     } else {
         parvane_protocol::codec::encode_frame(parvane_protocol::pb::parvane::core::v2::frame::Kind::Request(req))
     })
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 #[no_mangle]
 pub extern "C" fn pv_encode_ping(nonce: u64) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     PvBytes::from_vec(host::encode_ping(nonce))
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 #[no_mangle]
@@ -1133,20 +1223,26 @@ pub unsafe extern "C" fn pv_from_base64(s: *const c_char, err: *mut *mut c_char)
 /// восстановления (поле `rb`) → новая строка материала. NULL — ошибка.
 #[no_mangle]
 pub unsafe extern "C" fn pv_grant_with_root_backup(material: *const c_char, backup: *const u8, len: usize) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     let Some(m) = str_arg(material) else { return ptr::null_mut() };
     match host::grant_with_root_backup(m.as_bytes(), bytes_arg(backup, len)) {
         Ok(v) => cstring(String::from_utf8_lossy(&v).into_owned()),
         Err(_) => ptr::null_mut(),
     }
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Копия корня из материала гранта (пустой буфер — гранта без копии).
 #[no_mangle]
 pub unsafe extern "C" fn pv_grant_root_backup(material: *const c_char) -> PvBytes {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     match str_arg(material).and_then(|m| host::grant_root_backup(m.as_bytes())) {
         Some(v) => PvBytes::from_vec(v),
         None => PvBytes::empty(),
     }
+})).unwrap_or_else(|_| PvBytes::empty())
 }
 
 /// T130: корень (32 байта) из копии под ключом восстановления на устройстве
@@ -1212,7 +1308,10 @@ pub struct PvAnonPlanner {
 
 #[no_mangle]
 pub extern "C" fn pv_anon_planner_new() -> *mut PvAnonPlanner {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     Box::into_raw(Box::new(PvAnonPlanner { inner: parvane_protocol::access::AnonPlanner::new() }))
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 #[no_mangle]
@@ -1238,23 +1337,32 @@ pub unsafe extern "C" fn pv_anon_planner_assign(p: *mut PvAnonPlanner, method: *
 /// Соединения, серия которых истекла, — JSON-массив номеров (закрыть).
 #[no_mangle]
 pub unsafe extern "C" fn pv_anon_planner_expired(p: *mut PvAnonPlanner, now_ms: i64) -> *mut c_char {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     let Some(p) = p.as_mut() else { return cstring("[]".into()) };
     let ids: Vec<String> = p.inner.expired(now_ms).into_iter().map(|c| c.to_string()).collect();
     cstring(format!("[{}]", ids.join(",")))
+})).unwrap_or_else(|_| ptr::null_mut())
 }
 
 /// Соединение закрылось (обрыв/таймаут) — больше не выдавать.
 #[no_mangle]
 pub unsafe extern "C" fn pv_anon_planner_closed(p: *mut PvAnonPlanner, conn: u64) {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     if let Some(p) = p.as_mut() {
         p.inner.closed(conn);
     }
+})).unwrap_or_else(|_| ())
 }
 
 /// Открытых соединений с получателем (для тестов/диагностики).
 #[no_mangle]
 pub unsafe extern "C" fn pv_anon_planner_open_count(p: *const PvAnonPlanner) -> usize {
+    // A0001-1: паника в движке не пересекает границу C
+    catch_unwind(AssertUnwindSafe(|| {
     p.as_ref().map(|p| p.inner.open_count()).unwrap_or(0)
+})).unwrap_or_else(|_| 0)
 }
 
 #[cfg(test)]

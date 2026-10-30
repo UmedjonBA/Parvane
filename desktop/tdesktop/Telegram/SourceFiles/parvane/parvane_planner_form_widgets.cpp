@@ -637,10 +637,6 @@ int FieldsGrid::resizeGetHeight(int newWidth) {
 	return std::max(y - gap, 0);
 }
 
-object_ptr<Ui::VerticalLayout> MakeColumn(QWidget *parent) {
-	return object_ptr<Ui::VerticalLayout>(parent);
-}
-
 object_ptr<Kit::Label> SmallText(QWidget *parent, const QString &text, Tone tone, int px) {
 	auto st = Kit::Label::Style{ .px = px, .tone = tone, .multiline = true };
 	return object_ptr<Kit::Label>(parent, text, st);
@@ -2078,113 +2074,6 @@ int DescriptionScopeBox::resizeGetHeight(int newWidth) {
 	_column->resizeToWidth(newWidth);
 	_column->moveToLeft(0, 0, newWidth);
 	return _column->height();
-}
-
-namespace {
-
-bool &DetailsOpen() {
-	static auto result = false;
-	return result;
-}
-
-} // namespace
-
-DetailsFold::DetailsFold(QWidget *parent, const QString &summary)
-: RpWidget(parent)
-, _summary(summary) {
-	Kit::RepaintOnTones(this);
-	class Toggle final : public Kit::Button {
-	public:
-		Toggle(QWidget *parent, Fn<QString()> summary)
-		: Button(parent)
-		, _summaryText(std::move(summary)) {
-			setAccessibleName(tr::lng_parvane_planner_details(tr::now));
-			Kit::RepaintOnTones(this);
-			setNaturalWidth(-1);
-			resize(width(), Rem(3.25));
-		}
-
-	protected:
-		void paintEvent(QPaintEvent *e) override {
-			auto p = QPainter(this);
-			const auto icon = Rem(1.125);
-			const auto label = Font(Kit::kBodyPx, true);
-			const auto small = Font(13);
-			const auto summary = _summaryText();
-			const auto textWidth = std::max(width() - icon - Rem(0.625), 0);
-			const auto total = label->height + (summary.isEmpty() ? 0 : small->height);
-			auto y = (height() - total) / 2;
-			p.setFont(label->f);
-			p.setPen(ToneColor(Tone::Fg));
-			p.drawText(0, y + label->ascent, label->elided(tr::lng_parvane_planner_details(tr::now), textWidth));
-			if (!summary.isEmpty()) {
-				y += label->height;
-				p.setFont(small->f);
-				p.setPen(ToneColor(Tone::Muted));
-				p.drawText(0, y + small->ascent, small->elided(summary, textWidth));
-			}
-			PaintGlyph(
-				p,
-				DetailsOpen() ? u"up"_q : u"down"_q,
-				ToneColor(Tone::Muted),
-				QRect(width() - icon, (height() - icon) / 2, icon, icon));
-		}
-
-	private:
-		Fn<QString()> _summaryText;
-
-	};
-	_toggle = Ui::CreateChild<Toggle>(this, [=] { return _summary; });
-	_toggle->setClickedCallback([=] { toggle(); });
-	_body = Ui::CreateChild<Ui::VerticalLayout>(this);
-	_body->setVisible(DetailsOpen());
-	_body->heightValue() | rpl::on_next([=] {
-		if (width() > 0) {
-			resizeToWidth(width());
-		}
-	}, lifetime());
-}
-
-not_null<Ui::VerticalLayout*> DetailsFold::body() const {
-	return _body;
-}
-
-void DetailsFold::setSummary(const QString &summary) {
-	_summary = summary;
-	_toggle->update();
-}
-
-void DetailsFold::toggle() {
-	DetailsOpen() = !DetailsOpen();
-	_body->setVisible(DetailsOpen());
-	_toggle->update();
-	resizeToWidth(width());
-}
-
-int DetailsFold::resizeGetHeight(int newWidth) {
-	// `.detailsFold`: поля 0 0.75rem, рамка; `.detailsBody`: поля 0.25rem 0 0.75rem
-	const auto pad = Rem(0.75);
-	const auto inner = std::max(newWidth - 2 * pad, 1);
-	_toggle->resizeToWidth(inner);
-	_toggle->moveToLeft(pad, 0, newWidth);
-	auto height = _toggle->height();
-	if (!_body->isHidden()) {
-		_body->resizeToWidth(inner);
-		_body->moveToLeft(pad, height + Rem(0.25), newWidth);
-		height += Rem(0.25) + _body->height() + Rem(0.75);
-	}
-	return height;
-}
-
-void DetailsFold::paintEvent(QPaintEvent *e) {
-	auto p = QPainter(this);
-	PainterHighQualityEnabler hq(p);
-	auto pen = QPen(ToneColor(Tone::Line2));
-	pen.setWidthF(Px(1));
-	p.setPen(pen);
-	p.setBrush(Qt::NoBrush);
-	const auto half = Px(1) / 2.;
-	p.drawRoundedRect(QRectF(rect()).adjusted(half, half, -half, -half), RadiusSmall(), RadiusSmall());
 }
 
 KindSwitch::KindSwitch(QWidget *parent, std::vector<QString> labels, int active, Fn<void(int)> change)

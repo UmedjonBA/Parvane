@@ -40,7 +40,7 @@ QByteArray stripComments(const QByteArray &content) {
 		auto nextChar = (ch + 1 == end) ? 0 : *(ch + 1);
 
 		if (insideComment == InsideComment::None && currentChar == '"') {
-			auto escaped = ((ch > begin) && *(ch - 1) == '\\') && ((ch - 1 < begin) || *(ch - 2) != '\\');
+			auto escaped = ((ch > begin) && *(ch - 1) == '\\') && ((ch - begin < 2) || *(ch - 2) != '\\');
 			if (!escaped) {
 				insideString = !insideString;
 			}

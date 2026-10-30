@@ -71,10 +71,6 @@ RuleScope ruleScopeOf(const std::string &scope) {
     return RuleScope::Following;
 }
 
-json itemJson(const SeriesItem &item) {
-    return std::visit([](const auto &v) { return json(v); }, item);
-}
-
 json timedJson(const State &s, const TimedLayout &t) {
     auto j = json{{"name", t.item.name}, {"start", t.item.start}, {"end", t.item.end},
                   {"lane", t.lane}, {"lanes", t.lanes}, {"right", t.right}};

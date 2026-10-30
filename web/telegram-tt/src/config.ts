@@ -1,6 +1,4 @@
-import type {
-  ApiLimitTypeForPromo, ApiPremiumSection, ApiReactionEmoji,
-} from './api/types';
+import type { ApiReactionEmoji } from './api/types';
 import type {
   GiftProfileFilterOptions,
   ResaleGiftsFilterOptions,
@@ -13,9 +11,6 @@ export const APP_NAME = import.meta.env.TG_APP_NAME || 'Parvane';
 export const PARVANE_LEGACY_APP_VERSION = 'parvane-legacy-v1';
 
 export const PRODUCTION_HOSTNAME = 'web.telegram.org';
-export const PRODUCTION_URL = 'https://web.telegram.org/a';
-export const WEB_VERSION_BASE = 'https://web.telegram.org/'; // Used to redirect to other versions
-export const BASE_URL = import.meta.env.TG_PUBLIC_URL;
 export const ACCOUNT_QUERY = 'account';
 
 export const IS_MOCKED_CLIENT = import.meta.env.TG_APP_MOCKED_CLIENT === '1';
@@ -105,16 +100,10 @@ export const PROFILE_SENSITIVE_AREA = 500;
 export const TOPIC_LIST_SENSITIVE_AREA = 600;
 
 // Public Posts Search defaults
-export const PUBLIC_POSTS_SEARCH_DEFAULT_STARS_AMOUNT = 10;
-export const PUBLIC_POSTS_SEARCH_DEFAULT_TOTAL_DAILY = 2;
 
 // Suggested Posts defaults
 export const TON_CURRENCY_CODE = 'TON';
 export const VERIFY_AGE_MIN_DEFAULT = 18;
-
-export const STORY_VIEWS_MIN_SEARCH = 15;
-export const STORY_MIN_REACTIONS_SORT = 10;
-export const STORY_VIEWS_MIN_CONTACTS_FILTER = 20;
 
 export const MEDIA_TIMESTAMP_SAVE_MINIMUM_DURATION = 30; // 30s
 
@@ -374,7 +363,6 @@ export const REPLIES_USER_ID = '1271266957'; // TODO For Test connection ID must
 export const VERIFICATION_CODES_USER_ID = '489000';
 export const ANONYMOUS_USER_ID = '2666000';
 export const RESTRICTED_EMOJI_SET_ID = '7173162320003080';
-export const COCOON_EMOJI_ID = '5197252827247841976';
 export const LOCAL_MESSAGES_LIMIT = 1e6; // 1M
 export const CHANNEL_ID_BASE = 10n ** 12n;
 export const DEFAULT_GIF_SEARCH_BOT_USERNAME = 'gif';
@@ -387,16 +375,9 @@ export const MAX_MEDIA_FILES_FOR_ALBUM = 10;
 export const MAX_ACTIVE_PINNED_CHATS = 5;
 export const SCHEDULED_WHEN_ONLINE = 0x7FFFFFFE;
 export const LANG_PACKS = ['android', 'ios', 'tdesktop', 'macos'] as const;
-export const FEEDBACK_URL = 'https://bugs.telegram.org/?tag_ids=41&sort=time';
-export const FAQ_URL = 'https://telegram.org/faq';
-export const PRIVACY_URL = 'https://telegram.org/privacy';
-export const MINI_APP_TOS_URL = 'https://telegram.org/tos/mini-apps';
 export const GENERAL_TOPIC_ID = 1;
 export const FRESH_AUTH_PERIOD = 86400; // 1 day
 export const GIVEAWAY_BOOST_PER_PREMIUM = 4;
-export const GIVEAWAY_MAX_ADDITIONAL_CHANNELS = 10;
-export const GIVEAWAY_MAX_ADDITIONAL_USERS = 10;
-export const GIVEAWAY_MAX_ADDITIONAL_COUNTRIES = 10;
 export const FRAGMENT_PHONE_CODE = '888';
 export const FRAGMENT_PHONE_LENGTH = 11;
 export const BOT_VERIFICATION_PEERS_LIMIT = 20;
@@ -446,36 +427,6 @@ export const PREMIUM_FEATURE_SECTIONS = [
   'todo',
   'pm_noforwards',
 ] as const;
-
-export const PREMIUM_BOTTOM_VIDEOS: ApiPremiumSection[] = [
-  'faster_download',
-  'voice_to_text',
-  'advanced_chat_management',
-  'infinite_reactions',
-  'profile_badge',
-  'animated_userpics',
-  'emoji_status',
-  'translations',
-  'saved_tags',
-  'last_seen',
-  'message_privacy',
-  'effects',
-  'todo',
-];
-
-export const PREMIUM_LIMITS_ORDER: ApiLimitTypeForPromo[] = [
-  'channels',
-  'dialogFolderPinned',
-  'channelsPublic',
-  'savedGifs',
-  'stickersFaved',
-  'aboutLength',
-  'captionLength',
-  'dialogFilters',
-  'dialogFiltersChats',
-  'moreAccounts',
-  'recommendedChannels',
-];
 
 export const DEFAULT_GIFT_PROFILE_FILTER_OPTIONS: GiftProfileFilterOptions = {
   sortType: 'byDate',

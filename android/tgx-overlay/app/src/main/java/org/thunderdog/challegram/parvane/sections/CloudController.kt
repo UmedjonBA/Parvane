@@ -441,7 +441,15 @@ class CloudPane(private val context: Context, private val rerender: () -> Unit,
         }
         @Suppress("DEPRECATION")
         val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        f.copyTo(File(dir, name), overwrite = true)
+        // имя узла задаёт любой редактор общей папки: берём только последнее звено пути и не перезаписываем чужое
+        val safe = name.replace('\\', '/').substringAfterLast('/').trim().trimStart('.').ifEmpty { "file" }
+        val base = safe.substringBeforeLast('.', safe)
+        val ext = if (safe.contains('.')) "." + safe.substringAfterLast('.') else ""
+        var target = File(dir, safe)
+        var n = 1
+        while (target.exists()) target = File(dir, "$base ($n)$ext").also { n++ }
+        if (target.canonicalFile.parentFile != dir.canonicalFile) return false
+        f.copyTo(target, overwrite = false)
         return true
     }
 

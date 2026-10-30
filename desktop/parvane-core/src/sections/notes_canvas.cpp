@@ -383,9 +383,37 @@ std::string newCanvasId(const CanvasRandom &random) {
 
 // ── разбор и запись ──────────────────────────────────────────────────────────
 
+namespace {
+// Глубина вложенности скобок текста (строки пропускаются). Копирование, сравнение и запись незнакомых полей
+// рекурсивны, поэтому слишком глубокий документ отвергается до разбора.
+bool isTooDeep(std::string_view text, std::size_t limit) {
+    std::size_t depth = 0;
+    bool inString = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (inString) {
+            if (c == '\\') ++i;
+            else if (c == '"') inString = false;
+        } else if (c == '"') {
+            inString = true;
+        } else if (c == '{' || c == '[') {
+            if (++depth > limit) return true;
+        } else if ((c == '}' || c == ']') && depth > 0) {
+            --depth;
+        }
+    }
+    return false;
+}
+constexpr std::size_t kMaxJsonDepth = 64;
+} // namespace
+
 CanvasParseResult parseCanvas(std::string_view text) {
     CanvasParseResult result;
     if (canvasjs::trim(text).empty()) return result;
+    if (isTooDeep(text, kMaxJsonDepth)) {
+        result.error = CanvasParseError::Json;
+        return result;
+    }
 
     CanvasJson raw = CanvasJson::parse(text.begin(), text.end(), nullptr, false);
     if (raw.is_discarded()) {

@@ -72,7 +72,6 @@ import SuggestedPostRejected from './actions/SuggestedPostRejected';
 import ContextMenuContainer from './ContextMenuContainer';
 import InlineButtons from './InlineButtons';
 import Reactions from './reactions/Reactions';
-import SimilarChannels from './SimilarChannels';
 
 import styles from './ActionMessage.module.scss';
 
@@ -567,13 +566,6 @@ const ActionMessage = ({
             observeIntersectionForLoading={observeIntersectionForLoading}
             observeIntersectionForPlaying={observeIntersectionForPlaying}
             onClick={shouldRenderGiftOfferButtons ? handleClick : undefined}
-          />
-        );
-
-      case 'channelJoined':
-        return (
-          <SimilarChannels
-            chatId={message.chatId}
           />
         );
 

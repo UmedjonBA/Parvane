@@ -1278,8 +1278,12 @@ void CloudScreen::rebuild() {
 				hasRows = true;
 				const auto state = Q(link.value("state", std::string()));
 				const auto kind = Q(link.value("kind", std::string()));
-				const auto expires = link.value("expiresAt", std::int64_t(0));
-				const auto created = link.value("createdAt", std::int64_t(0));
+				// метки из ответа сервера: в разумный диапазон (до 9999 года), иначе `* 1000` переполнит int64
+				const auto clampSeconds = [](std::int64_t value) {
+					return std::clamp<std::int64_t>(value, 0, 253402300799);
+				};
+				const auto expires = clampSeconds(link.value("expiresAt", std::int64_t(0)));
+				const auto created = clampSeconds(link.value("createdAt", std::int64_t(0)));
 				const auto term = (state == u"preparing"_q)
 					? tr::lng_parvane_cloud_link_unfinished(tr::now)
 					: (state == u"expired"_q)

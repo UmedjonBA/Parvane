@@ -1235,7 +1235,7 @@ void InnerWidget::addEvents(Direction direction, const QVector<MTPChannelAdminLo
 		const auto &data = event.data();
 		const auto id = data.vid().v;
 		if (_eventIds.find(id) != _eventIds.end()) {
-			return;
+			continue;
 		}
 		const auto rememberRealMsgId = (antiSpamUserId
 			== peerToUser(peerFromUser(data.vuser_id())));

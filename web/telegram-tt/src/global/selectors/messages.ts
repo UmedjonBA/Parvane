@@ -23,7 +23,6 @@ import type {
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../../api/types';
 
 import {
-  GENERAL_TOPIC_ID,
   SERVICE_NOTIFICATIONS_USER_ID,
   WEB_APP_PLATFORM,
 } from '../../config';
@@ -459,19 +458,6 @@ export function selectCanDeleteOwnerTopic<T extends GlobalState>(global: T, chat
   });
 
   return !hasNotOutgoingMessages;
-}
-
-export function selectCanDeleteTopic<T extends GlobalState>(global: T, chatId: string, topicId: number) {
-  const chat = selectChat(global, chatId);
-  if (!chat) return false;
-
-  if (topicId === GENERAL_TOPIC_ID) return false;
-
-  return chat.isBotForum
-    || chat.isCreator
-    || getHasAdminRight(chat, 'deleteMessages')
-    || (chat.isForum
-      && selectCanDeleteOwnerTopic(global, chat.id, topicId));
 }
 
 export function selectCanReplyToMessage<T extends GlobalState>(global: T, message: ApiMessage, threadId: ThreadId) {
@@ -1288,15 +1274,6 @@ export function selectShouldSchedule<T extends GlobalState>(
   return selectCurrentMessageList(global, tabId)?.type === 'scheduled';
 }
 
-export function selectCanSchedule<T extends GlobalState>(
-  global: T,
-  ...[tabId = getCurrentTabId()]: TabArgs<T>
-) {
-  const chatId = selectCurrentMessageList(global, tabId)?.chatId;
-  const paidMessagesStars = chatId ? selectPeerPaidMessagesStars(global, chatId) : undefined;
-  return !paidMessagesStars;
-}
-
 export function selectCanScheduleUntilOnline<T extends GlobalState>(global: T, id: string) {
   const isChatWithSelf = selectIsChatWithSelf(global, id);
   const chatBot = selectBot(global, id);
@@ -1434,9 +1411,14 @@ export function selectForwardsCanBeSentToChat<T extends GlobalState>(
   const isSavedMessages = toChatId ? selectIsChatWithSelf(global, toChatId) : undefined;
   const isChatWithBot = toChatId ? selectIsChatWithBot(global, toChatId) : undefined;
   const options = getAllowedAttachmentOptions(chat, chatFullInfo, isChatWithBot, isSavedMessages);
-  return !messageIds!.some((messageId) => сheckMessageSendingDenied(chatMessages[messageId], options));
+  const isPrivateChat = isUserId(chat.id);
+  return !messageIds!.some((messageId) => (
+    сheckMessageSendingDenied(chatMessages[messageId], options, isPrivateChat)
+  ));
 }
-function сheckMessageSendingDenied(message: ApiMessage, options: IAllowedAttachmentOptions) {
+function сheckMessageSendingDenied(
+  message: ApiMessage, options: IAllowedAttachmentOptions, isPrivateChat = false,
+) {
   const isVoice = message.content.voice;
   const isRoundVideo = message.content.video?.isRound;
   const isPhoto = message.content.photo;
@@ -1448,7 +1430,16 @@ function сheckMessageSendingDenied(message: ApiMessage, options: IAllowedAttach
   const isPlainText = message.content.text
     && !isVoice && !isRoundVideo && !isSticker && !isDocument && !isAudio && !isVideo && !isPhoto && !isGif;
 
-  return (isVoice && !options.canSendVoices)
+  // GROUP-2: опросы и ссылки — отдельные права группы
+  const isPoll = Boolean(message.content.pollId);
+  const hasLink = Boolean(message.content.webPage) || Boolean(message.content.text?.entities?.some(
+    (entity) => entity.type === ApiMessageEntityTypes.Url || entity.type === ApiMessageEntityTypes.TextUrl,
+  ));
+
+  // в личных чатах canAttachPolls всегда false (опрос там не создают), но пересылать его можно
+  return (isPoll && !isPrivateChat && !options.canAttachPolls)
+    || (hasLink && !options.canAttachEmbedLinks)
+    || (isVoice && !options.canSendVoices)
     || (isRoundVideo && !options.canSendRoundVideos)
     || (isSticker && !options.canSendStickers)
     || (isDocument && !options.canSendDocuments)

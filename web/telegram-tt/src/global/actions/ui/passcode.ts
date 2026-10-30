@@ -16,11 +16,10 @@ import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import { INITIAL_GLOBAL_STATE } from '../../initialState';
 import { clearPasscodeSettings, updatePasscodeSettings } from '../../reducers';
 
-let noLockOnUnload = false;
 onBeforeUnload(() => {
   const global = getGlobal();
   if (!global.isInited) return;
-  if (global.passcode.hasPasscode && !noLockOnUnload && Object.keys(global.byTabId).length === 1) {
+  if (global.passcode.hasPasscode && Object.keys(global.byTabId).length === 1) {
     clearStoredSession();
   }
 });
@@ -138,8 +137,4 @@ addActionHandler('setPasscodeError', (global, actions, payload): ActionReturnTyp
 
 addActionHandler('clearPasscodeError', (global): ActionReturnType => {
   return updatePasscodeSettings(global, { error: undefined });
-});
-
-addActionHandler('skipLockOnUnload', (): ActionReturnType => {
-  noLockOnUnload = true;
 });

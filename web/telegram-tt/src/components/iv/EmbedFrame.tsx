@@ -30,9 +30,17 @@ const EmbedFrame = ({ block, title }: OwnProps) => {
     return block.url || extractInstantViewEmbedUrl(block.html!);
   }, [block.html, block.url]);
 
+  const embedOrigin = useMemo(() => {
+    try {
+      return embedUrl ? new URL(embedUrl, window.location.href).origin : undefined;
+    } catch {
+      return undefined;
+    }
+  }, [embedUrl]);
+
   useEffect(() => {
     function handleMessage(event: MessageEvent<string>) {
-      if (!isMessageFromIframe(event, frameRef.current)) {
+      if (!isMessageFromIframe(event, frameRef.current, embedOrigin)) {
         return;
       }
 
@@ -60,7 +68,7 @@ const EmbedFrame = ({ block, title }: OwnProps) => {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [embedOrigin]);
 
   if (!embedUrl) {
     return undefined;

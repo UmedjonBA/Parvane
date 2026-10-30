@@ -2,6 +2,7 @@ import type { ApiPeerColors } from '../api/types';
 
 import { PEER_COLOR_BG_ACTIVE_OPACITY, PEER_COLOR_BG_OPACITY, PEER_COLOR_GRADIENT_STEP } from '../config';
 import { fastRaf } from './schedulers';
+import { validateHexColor } from './themeStyle';
 
 const GENERAL_VARIABLES = new Map<string, string>();
 const LIGHT_VARIABLES = new Map<string, string>();
@@ -72,6 +73,8 @@ export function updatePeerColors(
 
   Object.entries(peerColors).forEach(([key, value]) => {
     if (!value.colors) return;
+    // значения попадают в <style> строкой: только #rrggbb
+    if (!value.colors.every(validateHexColor) || !(value.darkColors || []).every(validateHexColor)) return;
     setPeerColor(key, value.colors, value.darkColors);
   });
 }

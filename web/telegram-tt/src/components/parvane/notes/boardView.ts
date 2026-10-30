@@ -34,10 +34,17 @@ export function fitRects(
   rects: BoardRect[], width: number, height: number, top: number, bottom: number, side = 20,
 ): BoardView {
   if (!rects.length || !width || !height) return { scale: 1, x: width / 2, y: height / 2 };
-  const x0 = Math.min(...rects.map((r) => r.x));
-  const y0 = Math.min(...rects.map((r) => r.y));
-  const x1 = Math.max(...rects.map((r) => r.x + r.width));
-  const y1 = Math.max(...rects.map((r) => r.y + r.height));
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  // Циклом, не Math.min(...): spread сотен тысяч аргументов бросает RangeError
+  for (const r of rects) {
+    if (r.x < x0) x0 = r.x;
+    if (r.y < y0) y0 = r.y;
+    if (r.x + r.width > x1) x1 = r.x + r.width;
+    if (r.y + r.height > y1) y1 = r.y + r.height;
+  }
   const roomY = Math.max(1, height - top - bottom);
   const scale = clampBoardScale(Math.min(
     Math.max(1, width - side * 2) / Math.max(1, x1 - x0), roomY / Math.max(1, y1 - y0), BOARD_FIT_MAX_SCALE,

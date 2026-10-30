@@ -22,23 +22,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_document.h"
 #include "history/view/media/history_view_contact.h"
 #include "history/view/media/history_view_location.h"
-#include "history/view/media/history_view_game.h"
-#include "history/view/media/history_view_giveaway.h"
-#include "history/view/media/history_view_invoice.h"
 #include "history/view/media/history_view_media_generic.h"
 #include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_call.h"
 #include "history/view/media/history_view_web_page.h"
 #include "history/view/media/history_view_poll.h"
 #include "history/view/media/history_view_theme_document.h"
-#include "history/view/media/history_view_todo_list.h"
-#include "history/view/media/history_view_slot_machine.h"
-#include "history/view/media/history_view_dice.h"
 #include "history/view/media/history_view_service_box.h"
-#include "history/view/media/history_view_story_mention.h"
 #include "history/view/media/history_view_premium_gift.h"
 #include "history/view/media/history_view_unique_gift.h"
-#include "history/view/media/history_view_userpic_suggestion.h"
 #include "dialogs/ui/dialogs_message_view.h"
 #include "ui/boxes/emoji_stake_box.h"
 #include "ui/controls/ton_common.h"
@@ -1026,15 +1018,6 @@ std::unique_ptr<HistoryView::Media> MediaPhoto::createView(
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
 	if (_chat) {
-		if (realParent->isUserpicSuggestion()) {
-			return std::make_unique<HistoryView::ServiceBox>(
-				message,
-				std::make_unique<HistoryView::UserpicSuggestion>(
-					message,
-					_chat,
-					_photo,
-					st::msgServicePhotoWidth));
-		}
 		return std::make_unique<HistoryView::Photo>(
 			message,
 			_chat,
@@ -2125,10 +2108,7 @@ std::unique_ptr<HistoryView::Media> MediaGame::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
-	return std::make_unique<HistoryView::Game>(
-		message,
-		_game,
-		_consumedText);
+	return nullptr;
 }
 
 MediaInvoice::MediaInvoice(
@@ -2315,7 +2295,7 @@ std::unique_ptr<HistoryView::Media> MediaInvoice::createView(
 			message,
 			_invoice.extendedMedia);
 	}
-	return std::make_unique<HistoryView::Invoice>(message, &_invoice);
+	return nullptr;
 }
 
 MediaPoll::MediaPoll(
@@ -2477,10 +2457,7 @@ std::unique_ptr<HistoryView::Media> MediaTodoList::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
-	return std::make_unique<HistoryView::TodoList>(
-		message,
-		_todolist,
-		replacing);
+	return nullptr;
 }
 
 MediaDice::MediaDice(
@@ -2566,13 +2543,7 @@ std::unique_ptr<HistoryView::Media> MediaDice::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
-	return ::Stickers::DicePacks::IsSlot(_emoji)
-		? std::make_unique<HistoryView::UnwrappedMedia>(
-			message,
-			std::make_unique<HistoryView::SlotMachine>(message, this))
-		: std::make_unique<HistoryView::UnwrappedMedia>(
-			message,
-			std::make_unique<HistoryView::Dice>(message, this));
+	return nullptr;
 }
 
 ClickHandlerPtr MediaDice::makeHandler() const {
@@ -2974,9 +2945,7 @@ std::unique_ptr<HistoryView::Media> MediaStory::createView(
 		_unsupported = true;
 		return nullptr;
 	} else if (_mention) {
-		return std::make_unique<HistoryView::ServiceBox>(
-			message,
-			std::make_unique<HistoryView::StoryMention>(message, story));
+		return nullptr;
 	} else {
 		realParent->setText(story->caption());
 		if (const auto photo = story->photo()) {
@@ -3041,9 +3010,7 @@ std::unique_ptr<HistoryView::Media> MediaGiveawayStart::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
-	return std::make_unique<HistoryView::MediaGeneric>(
-		message,
-		HistoryView::GenerateGiveawayStart(message, &_data));
+	return nullptr;
 }
 
 MediaGiveawayResults::MediaGiveawayResults(
@@ -3092,9 +3059,7 @@ std::unique_ptr<HistoryView::Media> MediaGiveawayResults::createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
 		HistoryView::Element *replacing) {
-	return std::make_unique<HistoryView::MediaGeneric>(
-		message,
-		HistoryView::GenerateGiveawayResults(message, &_data));
+	return nullptr;
 }
 
 } // namespace Data

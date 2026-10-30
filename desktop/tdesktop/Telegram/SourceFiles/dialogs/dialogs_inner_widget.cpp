@@ -4094,8 +4094,8 @@ void InnerWidget::searchReceived(
 		if (toPreview || !uniquePeers || !hasHistoryInResults(history)) {
 			const auto index = int(results.size());
 			const auto repaint = toPreview
-				? Fn<void()>([=] { repaintSearchResult(index); })
-				: [=] { repaintPreviewResult(index); };
+				? Fn<void()>([=] { repaintPreviewResult(index); })
+				: Fn<void()>([=] { repaintSearchResult(index); });
 			results.push_back(
 				std::make_unique<FakeRow>(key, item, repaint));
 			trackResultsHistory(history);

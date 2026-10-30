@@ -113,6 +113,11 @@ bool TranslateTracker::add(
 		bool skipDependencies) {
 	Expects(_addedInBunch >= 0);
 
+	// Parvane: пока слежение за языком выключено (всегда), тексты чужих
+	// сообщений не копируются в очередь распознавания/перевода.
+	if (!_trackingLanguage.current()) {
+		return false;
+	}
 	if ((item->out() && !item->history()->peer->autoTranslation())
 		|| item->isService()
 		|| !item->isRegular()

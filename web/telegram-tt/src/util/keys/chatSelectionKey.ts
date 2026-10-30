@@ -15,10 +15,6 @@ export function includesChatSelectionKey(arr: ChatSelectionKey[], key: ChatSelec
   return arr.some((k) => areChatSelectionKeysEqual(k, key));
 }
 
-export function findChatSelectionKeyIndex(arr: ChatSelectionKey[], key: ChatSelectionKey): number {
-  return arr.findIndex((k) => areChatSelectionKeysEqual(k, key));
-}
-
 export function getChatSelectionKeyHash(key: ChatSelectionKey): string {
   return key.topicId !== undefined ? `${key.peerId}:${key.topicId}` : key.peerId;
 }

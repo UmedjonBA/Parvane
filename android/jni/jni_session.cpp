@@ -230,12 +230,15 @@ void handleV2Event(const json &ev) {
             emit(json{{"type", "deleted"}, {"id", uuid}});
             break;
         case Kind::Reaction:
+            if (!in.chat.empty() && row->chat != in.chat) continue; // мутация только внутри чата сообщения (WEB-08)
             emit(metaEvent(uuid, std::make_pair(in.from, in.remove ? std::string() : in.emoji), std::nullopt));
             break;
         case Kind::Pin:
+            if (!in.chat.empty() && row->chat != in.chat) continue;
             emit(metaEvent(uuid, std::nullopt, !in.unpin));
             break;
         case Kind::Read:
+            if (!in.chat.empty() && row->chat != in.chat) continue;
             if (row->from != me) continue; // квитанция собеседника о МОЁМ сообщении
             emit(json{{"type", "outbox_read"}, {"id", uuid}, {"by", in.from}, {"at", in.ts ? in.ts : nowSec()}});
             break;
@@ -503,10 +506,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerInfo(JNI
     return jreply(env, out);
 }
 
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeServerDomain(JNIEnv *env, jclass) {
-    return jout(env, serverDomainOr(std::string()));
-}
-
 // identity.session.issue → {ok, address, error_code, twofa_required, login_token, telegram_bot, confirm_required,
 // deletion_at_ms}. loginToken — подтверждённый в Telegram токен второго фактора; cancelDeletion — восстановить
 // аккаунт, ждущий удаления (spec 027).
@@ -613,33 +612,6 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeConfirmEmail(J
         out["error_code"] = errorCodeOf(e);
     }
     return jreply(env, out);
-}
-
-// 2FA: enabled < 0 — прочитать; иначе включить/выключить (свежий пароль). → {ok, enabled, telegram_linked, error_code}
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeTwoFactor(JNIEnv *env, jclass, jint enabled, jstring password) {
-    json out{{"ok", false}};
-    const auto c = control();
-    if (!c) return jreply(env, jfail("failed"));
-    try {
-        const auto r = enabled < 0 ? parvane::v2::account::getTwoFactor(*c)
-                                   : parvane::v2::account::setTwoFactor(*c, enabled > 0, jstr(env, password));
-        writeTrust(self(), r.trustSecret);
-        out = json{{"ok", true}, {"enabled", r.enabled}, {"telegram_linked", r.telegramLinked}, {"telegram_bot", r.telegramBot}};
-    } catch (const std::exception &e) {
-        out["error_code"] = errorCodeOf(e);
-    }
-    return jreply(env, out);
-}
-
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeChangePassword(JNIEnv *env, jclass, jstring oldPw, jstring newPw) {
-    const auto c = control();
-    if (!c) return jreply(env, jfail("failed"));
-    try {
-        parvane::v2::account::changePassword(*c, jstr(env, oldPw), jstr(env, newPw));
-        return jreply(env, json{{"ok", true}});
-    } catch (const std::exception &e) {
-        return jreply(env, jfail(errorCodeOf(e)));
-    }
 }
 
 JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStartSession(JNIEnv *, jclass) {

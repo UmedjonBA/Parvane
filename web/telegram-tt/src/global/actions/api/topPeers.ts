@@ -5,7 +5,6 @@ import { unique } from '../../../util/iteratees';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi } from '../../../api/gramjs';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
-import { selectPeer } from '../../selectors';
 
 const TOP_PEERS_CACHE_TTL = 24 * 60 * 60; // 24 hours
 
@@ -62,29 +61,6 @@ addActionHandler('loadTopPeers', async (global, actions, payload): Promise<void>
     isDisabled: undefined,
   });
   setGlobal(global);
-});
-
-addActionHandler('removeTopPeer', async (global, actions, payload): Promise<void> => {
-  const { category, peerId } = payload;
-  const current = global.topPeerCategories[category];
-  if (!current) {
-    return;
-  }
-
-  const peerIds = current.peerIds.filter((id) => id !== peerId);
-  const { [peerId]: removedRating, ...ratingsByPeerId } = current.ratingsByPeerId;
-
-  global = updateTopPeerCategory(global, category, {
-    ...current,
-    peerIds,
-    ratingsByPeerId,
-  });
-  setGlobal(global);
-
-  const peer = selectPeer(global, peerId);
-  if (peer) {
-    await callApi('resetTopPeerRating', { category, peer });
-  }
 });
 
 addActionHandler('bumpTopPeerRating', (global, actions, payload): ActionReturnType => {

@@ -296,6 +296,9 @@ bool BusinessInfo::timezonesLoaded() const {
 }
 
 QString FindClosestTimezoneId(const std::vector<Timezone> &list) {
+	if (list.empty()) {
+		return QString();
+	}
 	const auto local = QDateTime::currentDateTime();
 	const auto utc = QDateTime(local.date(), local.time(), Qt::UTC);
 	const auto shift = base::unixtime::now() - (TimeId)::time(nullptr);

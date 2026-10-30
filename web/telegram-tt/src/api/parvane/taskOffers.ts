@@ -22,6 +22,11 @@ type OfferEntry = {
   responses: Map<string, { isAccepted: boolean; ts: number }>;
 };
 
+const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+const PENDING_RESPONSES_LIMIT = 200;
+const RESPONSES_PER_OFFER_LIMIT = 500;
+
 export class TaskOfferStore {
   private byUuid = new Map<string, OfferEntry>();
 
@@ -53,7 +58,8 @@ export class TaskOfferStore {
       name: content.name || '',
       description: content.description || '',
       steps: content.steps || [],
-      day: content.day || undefined,
+      // День из чужой карточки — только настоящая дата: иначе «План» выбрал бы несуществующий день
+      day: content.day && DAY_RE.test(content.day) ? content.day : undefined,
       start: content.start || undefined,
       minutes: content.minutes || undefined,
       due: content.due || undefined,
@@ -75,17 +81,23 @@ export class TaskOfferStore {
     return this.byUuid.get(uuid);
   }
 
-  applyResponse(uuid: string, from: string, isAccepted: boolean, ts: number) {
+  // `chatId` — чат, откуда пришло решение: для известной карточки оно принимается только из её чата.
+  // Решения до самой карточки копятся ограниченно (иначе поток чужих uuid раздувал бы память)
+  applyResponse(uuid: string, from: string, isAccepted: boolean, ts: number, chatId?: string) {
     const entry = this.byUuid.get(uuid);
-    const responses = entry?.responses || this.pendingResponses.get(uuid) || new Map();
-    if (!entry && !this.pendingResponses.has(uuid)) this.pendingResponses.set(uuid, responses);
+    if (entry && chatId !== undefined && entry.chatId !== chatId) return;
+    if (!entry && !this.pendingResponses.has(uuid)) {
+      if (this.pendingResponses.size >= PENDING_RESPONSES_LIMIT) {
+        const oldest = this.pendingResponses.keys().next().value;
+        if (oldest !== undefined) this.pendingResponses.delete(oldest);
+      }
+      this.pendingResponses.set(uuid, new Map());
+    }
+    const responses = entry?.responses || this.pendingResponses.get(uuid)!;
     const previous = responses.get(from);
     if (previous && previous.ts > ts) return;
+    if (!previous && responses.size >= RESPONSES_PER_OFFER_LIMIT) return;
     responses.set(from, { isAccepted, ts });
-  }
-
-  getDecision(uuid: string, address: string) {
-    return this.byUuid.get(uuid)?.responses.get(address)?.isAccepted;
   }
 
   // Содержимое карточки для нативного UI (как `PollStore.build`)
@@ -124,7 +136,6 @@ type OfferFields = {
   name: string; steps?: string[]; day?: string; start?: string; minutes?: number; due?: string;
 };
 
-const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DEFAULT_EVENT_MINUTES = 60;
 const LAST_MINUTE = 1439;

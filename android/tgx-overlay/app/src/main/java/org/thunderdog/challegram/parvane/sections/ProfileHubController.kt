@@ -102,6 +102,8 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
         })
         add(context.pvCard().apply {
             addView(context.pvTileRow("logout", Sx.t("Выйти", "Log Out"), danger = true, chevron = false) {
+                CloudBridge.clearSendCache(context())
+                Sx.clearCache()
                 tdlib.ui().logOut(this@ProfileHubController, false)
             }, lp())
         })

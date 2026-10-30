@@ -91,6 +91,14 @@ static CanvasNode withFields(CanvasNode node, CanvasJson fields) {
 static void parsing() {
     std::printf("--- холст: разбор\n");
     {
+        // враждебная глубина незнакомого поля не должна уходить в рекурсию копирования/записи
+        const std::string deep = R"({"nodes":[],"edges":[],"x":)" + std::string(5000, '[') + std::string(5000, ']') + "}";
+        const auto tooDeep = parseCanvas(deep);
+        check(tooDeep.error && *tooDeep.error == CanvasParseError::Json, "слишком глубокий документ отвергается");
+        const auto fine = parseCanvas(R"({"nodes":[],"edges":[],"x":[[["a]"]]]})");
+        check(!fine.error, "умеренная вложенность и скобка в строке — принимаются");
+    }
+    {
         const auto result = parseCanvas(SAMPLE);
         const auto &doc = result.doc;
         bool ok = !result.error && result.dropped == CanvasDropped{0, 0};

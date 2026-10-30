@@ -5,9 +5,9 @@
 .hint,
 .note {
   margin: 0 0 0.75rem;
-  color: var(--color-text-secondary);
   font-size: 0.875rem;
   line-height: 1.35;
+  color: var(--color-text-secondary);
 }
 
 .progress {
@@ -16,22 +16,25 @@
 
 .bar {
   overflow: hidden;
+
   height: 0.375rem;
   margin-bottom: 0.5rem;
   border-radius: 0.1875rem;
+
   background: var(--color-background-secondary);
 }
 
 .fill {
   height: 100%;
   background: var(--color-primary);
+  /* stylelint-disable-next-line plugin/no-low-performance-animation-properties -- полоса прогресса */
   transition: width 0.2s ease;
 }
 
 .done {
   margin-top: 0.75rem;
-  color: var(--color-text-green);
   font-size: 0.875rem;
+  color: var(--color-text-green);
 
   p {
     margin: 0 0 0.5rem;
@@ -40,14 +43,14 @@
 
 .error {
   margin: 0.75rem 0 0;
-  color: var(--color-error);
   font-size: 0.875rem;
+  color: var(--color-error);
 }
 
 .buttons {
   display: flex;
-  justify-content: flex-end;
   gap: 0.5rem;
+  justify-content: flex-end;
   margin-top: 1rem;
 
   :global(.Button) {

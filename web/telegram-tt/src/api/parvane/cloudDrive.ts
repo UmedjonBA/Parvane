@@ -13,7 +13,8 @@ import {
   downloadCloudBlob, uploadCloudBlob, withRetry,
 } from './cloudBlobs';
 import {
-  base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, LINK_MANIFEST_MAX_BYTES,
+  base64ToBytes, buildLinkPlan, buildLinkUrl, buildManifest, bytesToBase64, bytesToBase64Url, isLinkId,
+  LINK_MANIFEST_MAX_BYTES,
   LINK_MAX_FILES, LINK_MAX_THUMBS, LINK_OWNER_RECORD_MAX_BYTES, type LinkKind, type LinkManifestThumb, newLinkKey,
   openOwnerRecord, runPool, sealManifest, sealOwnerRecord,
 } from './cloudLinks';
@@ -681,6 +682,10 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
     };
   }
 
+  // Идентификаторы ссылок, уже выданные сервером в этой сессии: nonce записи владельца выводится
+  // из link_id при долгоживущем ключе диска, повтор id дал бы повтор nonce (GCM)
+  const issuedLinkIds = new Set<string>();
+
   async function revokeLink(linkId: string) {
     await withRetry(() => deps.transport().blobCall('cloud.link.revoke', { link_id: linkId }));
     usage = undefined;
@@ -716,7 +721,8 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       throw e;
     });
     const linkId = created.linkId || created.link_id;
-    if (!linkId) throw new V2Error('ERROR_CODE_INVALID');
+    if (!linkId || !isLinkId(linkId) || issuedLinkIds.has(linkId)) throw new V2Error('ERROR_CODE_INVALID');
+    issuedLinkIds.add(linkId);
     try {
       const copies = new Map<string, {
         fileId: string; blobSize: number; chunks: number; thumb?: LinkManifestThumb;

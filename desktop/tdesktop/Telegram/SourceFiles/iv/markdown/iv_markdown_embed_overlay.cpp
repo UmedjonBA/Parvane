@@ -310,7 +310,13 @@ bool EmbedOverlay::startEmbed(
 				showWebviewError(GenericWebviewErrorText());
 			}
 		} else if (!request.url.isEmpty()) {
-			_webview->navigate(request.url);
+			// В webview уходят только http(s): file:, javascript: и прочее — отказ.
+			const auto scheme = QUrl(request.url).scheme().toLower();
+			if (scheme != u"https"_q && scheme != u"http"_q) {
+				showWebviewError(GenericWebviewErrorText());
+			} else {
+				_webview->navigate(request.url);
+			}
 		} else {
 			showWebviewError(GenericWebviewErrorText());
 		}
@@ -1008,9 +1014,15 @@ QMargins EmbedOverlay::contentPadding() const {
 }
 
 int EmbedOverlay::cssPixelsToQt(int value) const {
-	return (value > 0)
-		? std::max(static_cast<int>(std::round(value * _cssToQtScale)), 1)
-		: 0;
+	if (value <= 0) {
+		return 0;
+	}
+	// double -> int вне диапазона int даёт UB: режем до 1 << 20 пикселей.
+	constexpr auto kMaxQtPixels = double(1 << 20);
+	const auto scaled = std::min(
+		std::round(double(value) * _cssToQtScale),
+		kMaxQtPixels);
+	return std::max(static_cast<int>(scaled), 1);
 }
 
 QByteArray EmbedOverlay::htmlRequestId() {

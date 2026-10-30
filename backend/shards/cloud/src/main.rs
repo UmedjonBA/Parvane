@@ -254,6 +254,11 @@ pub(crate) async fn store_chunk_raw(
     if raw.len() > max_chunk_bytes() {
         return Err(reject(RejectKind::Limit, format!("чанк больше лимита {} байт", max_chunk_bytes())));
     }
+    // Пустой чанк в квоту байт не попадает, а строку в таблице занимает: допустим только единственный
+    // нулевой чанк (пустой файл).
+    if raw.is_empty() && (chunk_index != 0 || total_chunks > 1) {
+        return Err(reject(RejectKind::Invalid, "пустой чанк"));
+    }
     let mut tx = parvane_db::begin_write(pool).await?;
     let finalized: Option<(String,)> = sqlx::query_as("SELECT owner FROM files WHERE id = ?")
         .bind(file_id)

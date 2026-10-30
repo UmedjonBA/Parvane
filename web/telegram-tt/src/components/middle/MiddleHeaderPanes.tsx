@@ -2,17 +2,13 @@ import { memo, useLayoutEffect, useRef, useSignal } from '@teact';
 import { setExtraStyles } from '@teact/teact-dom';
 import { withGlobal } from '../../global';
 
-import type { ApiChat, ApiUserFullInfo } from '../../api/types';
 import type { MessageListType, ThreadId } from '../../types';
 import type { Signal } from '../../util/signals';
-import { MAIN_THREAD_ID } from '../../api/types';
 
 import { requestForcedReflow, requestMeasure, requestMutation } from '../../lib/fasterdom/fasterdom';
 import {
   selectCanAnimateRightColumn,
-  selectChat,
   selectCurrentMiddleSearch,
-  selectUserFullInfo,
 } from '../../global/selectors';
 import buildClassName from '../../util/buildClassName';
 import { REM } from '../common/helpers/mediaDimensions';
@@ -23,13 +19,8 @@ import useShowTransition from '../../hooks/useShowTransition';
 import { useSignalEffect } from '../../hooks/useSignalEffect';
 import { applyAnimationState, PANE_GAP_REM, type PaneState } from './hooks/useHeaderPane';
 
-import GroupCallTopPane from '../calls/group/GroupCallTopPane';
 import AudioPlayer from './panes/AudioPlayer';
-import BotAdPane from './panes/BotAdPane';
-import BotVerificationPane from './panes/BotVerificationPane';
-import ChatReportPane from './panes/ChatReportPane';
 import HeaderPinnedMessage from './panes/HeaderPinnedMessage';
-import PaidMessageChargePane from './panes/PaidMessageChargePane';
 
 import styles from './MiddleHeaderPanes.module.scss';
 
@@ -44,8 +35,6 @@ type OwnProps = {
 };
 
 type StateProps = {
-  chat?: ApiChat;
-  userFullInfo?: ApiUserFullInfo;
   withRightColumnAnimation?: boolean;
   isMiddleSearchOpen?: boolean;
 };
@@ -64,23 +53,14 @@ const MiddleHeaderPanes = ({
   chatId,
   threadId,
   messageListType,
-  chat,
-  userFullInfo,
   getCurrentPinnedIndex,
   getLoadingPinnedId,
   withRightColumnAnimation,
   isMiddleSearchOpen,
   onFocusPinnedMessage,
 }: OwnProps & StateProps) => {
-  const { settings } = userFullInfo || {};
-
   const [getAudioPlayerState, setAudioPlayerState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
   const [getPinnedState, setPinnedState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
-  const [getGroupCallState, setGroupCallState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
-  const [getChatReportState, setChatReportState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
-  const [getBotAdState, setBotAdState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
-  const [getBotVerificationState, setBotVerificationState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
-  const [getPaidMessageChargeState, setPaidMessageChargeState] = useSignal<PaneState>(FALLBACK_PANE_STATE);
 
   const isFirstRenderRef = useRef(true);
   const prevPanesHeightRef = useRef(0);
@@ -111,16 +91,10 @@ const MiddleHeaderPanes = ({
 
   useSignalEffect(() => {
     const audioPlayerState = getAudioPlayerState();
-    const botVerificationState = getBotVerificationState();
     const pinnedState = getPinnedState();
-    const groupCallState = getGroupCallState();
-    const chatReportState = getChatReportState();
-    const botAdState = getBotAdState();
-    const paidMessageState = getPaidMessageChargeState();
 
     // Keep in sync with the order of the panes in the DOM
-    const stateArray = [audioPlayerState, groupCallState,
-      chatReportState, botVerificationState, pinnedState, botAdState, paidMessageState];
+    const stateArray = [audioPlayerState, pinnedState];
 
     const isFirstRender = isFirstRenderRef.current;
     const gapPx = PANE_GAP_REM * REM;
@@ -199,8 +173,7 @@ const MiddleHeaderPanes = ({
         };
       });
     });
-  }, [getAudioPlayerState, getGroupCallState, getPinnedState,
-    getChatReportState, getBotAdState, getBotVerificationState, getPaidMessageChargeState]);
+  }, [getAudioPlayerState, getPinnedState]);
 
   if (!shouldRender) return undefined;
 
@@ -219,28 +192,6 @@ const MiddleHeaderPanes = ({
       <AudioPlayer
         onPaneStateChange={setAudioPlayerState}
       />
-      {threadId === MAIN_THREAD_ID && !chat?.isForum && (
-        <GroupCallTopPane
-          chatId={chatId}
-          onPaneStateChange={setGroupCallState}
-        />
-      )}
-      <ChatReportPane
-        chatId={chatId}
-        canAddContact={settings?.canAddContact}
-        canBlockContact={settings?.canBlockContact}
-        canReportSpam={settings?.canReportSpam}
-        isAutoArchived={settings?.isAutoArchived}
-        onPaneStateChange={setChatReportState}
-      />
-      <BotVerificationPane
-        peerId={chatId}
-        onPaneStateChange={setBotVerificationState}
-      />
-      <PaidMessageChargePane
-        peerId={chatId}
-        onPaneStateChange={setPaidMessageChargeState}
-      />
       <HeaderPinnedMessage
         chatId={chatId}
         threadId={threadId}
@@ -251,25 +202,13 @@ const MiddleHeaderPanes = ({
         onPaneStateChange={setPinnedState}
         isReopen={isReopen}
       />
-      <BotAdPane
-        chatId={chatId}
-        messageListType={messageListType}
-        onPaneStateChange={setBotAdState}
-      />
     </div>
   );
 };
 
 export default memo(withGlobal<OwnProps>(
-  (global, {
-    chatId,
-  }): Complete<StateProps> => {
-    const chat = selectChat(global, chatId);
-    const userFullInfo = selectUserFullInfo(global, chatId);
-
+  (global): Complete<StateProps> => {
     return {
-      chat,
-      userFullInfo,
       withRightColumnAnimation: selectCanAnimateRightColumn(global),
       isMiddleSearchOpen: Boolean(selectCurrentMiddleSearch(global)),
     };

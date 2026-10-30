@@ -81,69 +81,6 @@ inline json contentWebpage(const json &content) {
     return json();
 }
 
-// ── SendPayload (msg.chat.send) ──────────────────────────────────────────────
-struct SendPayload {
-    std::string to;
-    json content;                          // обычно textContent(...)
-    std::optional<std::string> reply_to;   // id сообщения-родителя
-    json copies = json::array();           // per-device копии (MessageDeviceCopy[])
-    // P-10 (SEND-1): Ed25519-подпись `send:<message_id>:<ciphertext>` ключом
-    // sender_signing_key из content — доказательство владения ключом.
-    std::string signature;
-
-    // Строка, которую подписывает отправитель E2E-сообщения.
-    static std::string signedStatement(const std::string &messageId, const std::string &ciphertext) {
-        return "send:" + messageId + ":" + ciphertext;
-    }
-
-    json toJson() const {
-        json j{{"to", to}, {"content", content}};
-        if (reply_to) j["reply_to"] = *reply_to;
-        if (copies.is_array() && !copies.empty()) j["copies"] = copies;
-        if (!signature.empty()) j["signature"] = signature;
-        return j;
-    }
-};
-
-// ── SyncRequestPayload (msg.sync.request) ────────────────────────────────────
-struct SyncRequestPayload {
-    std::string last_seen_id;     // id-курсор; "" / нулевой uuid = с начала
-    std::int64_t since_updated = 0; // курсор мутаций (правки/удаления/прочтения)
-    // Мультидевайс: device_id (подмена шифртекста per-device копией на сервере),
-    // Ed25519 signing_key устройства + подпись `sync:<last_seen_id>:<since_updated>`
-    // (свои sealed-исходящие в выдаче), доказанные ключи прежних устройств.
-    std::string device_id;
-    std::string sender_signing_key;
-    std::string signature;
-    json extra_signing = json::array(); // [{signing_key, signature}]
-    // v2-линковка (P-48): подписанные прежними устройствами переносы владения
-    // их исходящими — `link-transfer:<user>:<old>:<new>`; сервер отдаёт
-    // sealed-исходящие тех ключей без приватного материала на этом устройстве.
-    json transfers = json::array(); // [{old_signing_key, signature}]
-
-    // Строка, которую подписывает устройство.
-    std::string signedPayload() const {
-        return "sync:" + last_seen_id + ":" + std::to_string(since_updated);
-    }
-
-    json toJson() const {
-        json j{{"last_seen_id", last_seen_id},
-               {"since_updated", since_updated},
-               {"device_id", device_id}};
-        if (!sender_signing_key.empty() && !signature.empty()) {
-            j["sender_signing_key"] = sender_signing_key;
-            j["signature"] = signature;
-        }
-        if (extra_signing.is_array() && !extra_signing.empty()) {
-            j["extra_signing"] = extra_signing;
-        }
-        if (transfers.is_array() && !transfers.empty()) {
-            j["transfers"] = transfers;
-        }
-        return j;
-    }
-};
-
 // ── StoredMessage (элемент msg.sync.response) ────────────────────────────────
 struct ReactionSummary {
     std::string emoji;
@@ -224,55 +161,6 @@ struct StoredMessage {
             j["reactions"] = std::move(arr);
         }
         return j;
-    }
-};
-
-// ── SyncResponsePayload (msg.sync.response) ──────────────────────────────────
-struct SyncResponsePayload {
-    std::vector<StoredMessage> messages;
-    // Кросс-девайс: id сообщений, прочитанных запросившим на другом устройстве.
-    std::vector<std::string> read_message_ids;
-    // Кросс-девайс: настройки уведомлений пользователя (JSON-блоб веба:
-    // {defaults, exceptions}); пусто — нет.
-    std::string notify_settings;
-
-    // Принимает либо ПОЛНЫЙ конверт ParvaneEvent<SyncResponsePayload>, либо
-    // голый payload — messenger отвечает конвертом, но устойчивость не вредит.
-    static SyncResponsePayload fromJson(const json &j) {
-        const json *payload = &j;
-        if (auto it = j.find("payload"); it != j.end() && it->is_object())
-            payload = &*it;
-        SyncResponsePayload r;
-        if (auto it = payload->find("messages");
-                it != payload->end() && it->is_array()) {
-            r.messages.reserve(it->size());
-            for (const auto &m : *it)
-                r.messages.push_back(StoredMessage::fromJson(m));
-        }
-        if (auto it = payload->find("notify_settings");
-            it != payload->end() && it->is_string())
-            r.notify_settings = it->get<std::string>();
-        if (auto it = payload->find("read_message_ids");
-                it != payload->end() && it->is_array()) {
-            for (const auto &m : *it)
-                if (m.is_string()) r.read_message_ids.push_back(m.get<std::string>());
-        }
-        return r;
-    }
-};
-
-// ── DeliveredPayload (msg.chat.delivered) ────────────────────────────────────
-struct DeliveredPayload {
-    std::string message_id;
-
-    // Принимает ПОЛНЫЙ конверт ParvaneEvent<DeliveredPayload> или голый payload.
-    static DeliveredPayload fromJson(const json &j) {
-        const json *payload = &j;
-        if (auto it = j.find("payload"); it != j.end() && it->is_object())
-            payload = &*it;
-        DeliveredPayload d;
-        d.message_id = payload->value("message_id", std::string());
-        return d;
     }
 };
 

@@ -269,7 +269,7 @@ void V2NoteRoot(const std::shared_ptr<parvane::v2::Session> &s, const std::strin
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2NeedsLinking();
 [[nodiscard]] std::shared_ptr<parvane::v2::Session> V2AwaitNeedsLinking();
 void LoadV2Ids();
-void V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer);
+bool V2NoteMessage(const parvane::StoredMessage &sm, const QString &peer);
 [[nodiscard]] bool IsV2Message(const std::string &uuid);
 [[nodiscard]] PrivacyLocal LoadPrivacyLocal(const QString &self);
 void SavePrivacyLocal(const QString &self, const PrivacyLocal &p);

@@ -143,14 +143,6 @@ MimeType MimeTypeForData(const QByteArray &data) {
 	return MimeType(QMimeDatabase().mimeTypeForData(data));
 }
 
-bool IsMimeStickerLottie(const QString &mime) {
-	return (mime == u"application/x-tgsticker"_q);
-}
-
-bool IsMimeStickerWebm(const QString &mime) {
-	return (mime == u"video/webm"_q);
-}
-
 bool IsMimeStickerAnimated(const QString &mime) {
 	return (mime == u"application/x-tgsticker"_q);
 }
@@ -291,7 +283,9 @@ wsf wsh xbap xll xlsb xlsm xnk xs"_q
 applescript action app bin command csh osx workflow terminal url caction \
 mpkg pkg scpt scptd xhtm xhtml webarchive"_q
 #else // Q_OS_WIN || Q_OS_MAC
-		u"bin csh deb desktop ksh out pet pkg pup rpm run sh shar slp zsh"_q
+		u"\
+appimage bash bin csh deb desktop jar ksh out pet pkg pl pup py rb rpm \
+run sh shar slp zsh"_q
 #endif // !Q_OS_WIN && !Q_OS_MAC
 	);
 

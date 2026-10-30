@@ -18,7 +18,7 @@ class ClientHonestUiTest {
         "DeleteAllRevokedChatInviteLinks", "ReplacePrimaryChatInviteLink", "GetChatInviteLinkMembers",
         "GetInternalLinkType", "CheckChatInviteLink", "JoinChatByInviteLink", "GetChatJoinRequests", "ProcessChatJoinRequest",
     )
-    private val noStub = listOf("SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
+    private val noStub = listOf("DeleteAccount", "SetChatDescription", "SetChatPhoto", "SetChatPermissions", "ProcessChatJoinRequest",
         "DeleteRevokedChatInviteLink", "DeleteAllRevokedChatInviteLinks", "EditChatInviteLink",
         // spec 005
         "ChangeStickerSet", "AddFavoriteSticker", "RemoveFavoriteSticker", "RemoveRecentSticker", "AddSavedAnimation", "RemoveSavedAnimation",

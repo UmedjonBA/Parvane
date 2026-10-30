@@ -750,6 +750,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.link.challenge" => {
             require_user(&req)?;
             let r: pb::LinkChallengeRequest = body(&req)?;
+            // Привязку подтверждает только устройство из журнала: сессия, вошедшая одним паролем, не
+            // может занять чужой оффер своим challenge или грантом (срыв привязки нового устройства).
+            if !log_has_active_device(&req.user, &req.device_id).await {
+                return Err(ErrorCode::Forbidden);
+            }
             let v = v1_call(nc, json!({"token": req.token, "device_id": r.device_id, "eph_pub": r.eph_pub}), |msg| handle_link_challenge(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
             Ok(pb::LinkChallengeResponse {}.encode_to_vec())
@@ -757,6 +762,11 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
         "identity.link.grant" => {
             require_user(&req)?;
             let r: pb::LinkGrantRequest = body(&req)?;
+            // Привязку подтверждает только устройство из журнала: сессия, вошедшая одним паролем, не
+            // может занять чужой оффер своим challenge или грантом (срыв привязки нового устройства).
+            if !log_has_active_device(&req.user, &req.device_id).await {
+                return Err(ErrorCode::Forbidden);
+            }
             let p = json!({"token": req.token, "device_id": r.device_id, "box_payload": r.box_payload, "eph_pub": r.eph_pub});
             let v = v1_call(nc, p, |msg| handle_link_grant(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
@@ -1467,6 +1477,10 @@ async fn devices_of(ctx: &V2Ctx, user: &str) -> Result<DevicesOfResponse, ErrorC
 
 async fn delivery_key_check(ctx: &V2Ctx, r: &DeliveryKeyCheckRequest) -> DeliveryKeyCheckResponse {
     let r = &DeliveryKeyCheckRequest { user: rename::canonical_address(&ctx.v2, &r.user).await, ..r.clone() };
+    // Аккаунт ждёт удаления: доставка не принимается и мимо кэша устройств у messenger
+    if delete::pending_until(&ctx.v2, &r.user).await.is_some() {
+        return DeliveryKeyCheckResponse { key_ok: false, strangers_allowed: false };
+    }
     let stored: Option<(Vec<u8>,)> = sqlx::query_as("SELECT key_hash FROM delivery_keys WHERE user = ?")
         .bind(&r.user)
         .fetch_optional(&ctx.v2)
@@ -1630,6 +1644,9 @@ fn day_now() -> i64 {
 impl V2Ctx {
     /// Ключи выпуска: сегодня и вчера (жетон принимается до конца следующих суток).
     async fn rotate_token_keys(&self) {
+        // Замок записи держится всю ротацию: два одновременных вызова не сгенерируют два ключа дня,
+        // второй прочтёт файл первого (A0017-5)
+        let mut guard = self.issuers.write().await;
         let today = day_now();
         let mut keys = Vec::new();
         for day in [today - 1, today] {
@@ -1672,7 +1689,7 @@ impl V2Ctx {
                 }
             }
         }
-        *self.issuers.write().await = keys;
+        *guard = keys;
     }
 
     async fn key_list(&self) -> parvane_protocol::pb::parvane::core::v2::SignedTokenKeyList {

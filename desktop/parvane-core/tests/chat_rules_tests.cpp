@@ -56,7 +56,8 @@ int main() {
     check(cr::canForwardToGroup("owner", true, readOnly, photo), "владелец канала публикует");
     check(!cr::canForwardToGroup("member", true, all, text), "подписчик канала не публикует");
     check(!cr::canForwardToGroup("banned", false, all, text), "исключённый — ничего");
-    check(cr::canForwardToGroup("", false, noMedia, photo), "роль неизвестна — решает композер");
+    check(!cr::canForwardToGroup("", false, noMedia, photo) && cr::canForwardToGroup("", false, noMedia, text),
+          "роль неизвестна — как участник (закрыто по умолчанию)");
 
     std::printf("%s (%d)\n", g_fail ? "FAIL" : "OK", g_fail);
     return g_fail ? 1 : 0;

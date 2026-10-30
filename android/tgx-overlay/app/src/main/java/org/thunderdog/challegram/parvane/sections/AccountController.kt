@@ -111,9 +111,15 @@ class AccountController(context: Context, tdlib: Tdlib) : SectionController(cont
             .setMessage(Sx.t("Устройство будет отключено, ключи — сменены, собеседники получат предупреждение. Продолжить?",
                 "The device will be signed out, keys rotated and contacts warned. Continue?"))
             .setPositiveButton(Sx.t("Украдено", "Stolen")) { _, _ ->
-                Sx.async({ ParvaneCore.reportDeviceStolen(device) }) { ok ->
-                    toast(if (ok == true) Sx.t("Устройство отключено", "Device signed out") else Sx.t("Не получилось", "Failed"))
-                    load()
+                // Ядро принимает «украдено» только у уже вышедших устройств: активное сначала отключаем со сменой ключей.
+                password(Sx.t("Подтвердите паролем", "Confirm with password")) { pw ->
+                    Sx.async({
+                        val r = ParvaneCore.revokeDevice(device, pw, true)
+                        if (r?.optBoolean("ok") == true) ParvaneCore.reportDeviceStolen(device) else false
+                    }) { ok ->
+                        toast(if (ok == true) Sx.t("Устройство отключено", "Device signed out") else Sx.t("Не получилось", "Failed"))
+                        load()
+                    }
                 }
             }.setNegativeButton(Sx.t("Отмена", "Cancel"), null).show()
     }
@@ -125,7 +131,7 @@ class AccountController(context: Context, tdlib: Tdlib) : SectionController(cont
         }
         val nick = field(Sx.t("Новый ник", "New username"), InputType.TYPE_CLASS_TEXT)
         val pw = field(Sx.t("Пароль", "Password"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
-        val key = field(Sx.t("Ключ восстановления (если спросит)", "Recovery key (if asked)"), InputType.TYPE_CLASS_TEXT)
+        val key = field(Sx.t("Ключ восстановления (если спросит)", "Recovery key (if asked)"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD).apply { imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING }
         form.addView(context().label(Sx.t("Собеседники увидят, что вы сменили ник. Старый ник освободится.",
             "Contacts will see that you changed your username. The old one becomes free."), 12f, ColorId.textLight))
         AlertDialog.Builder(context(), Theme.dialogTheme()).setTitle(Sx.t("Смена ника", "Change username")).setView(form)
@@ -334,6 +340,7 @@ object AccountUi {
         val input = with(Kn) { ctx.input(hint = "XXXX-XXXX-XXXX-…") }.apply {
             typeface = Pv.mono()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
         }
         sheet.add(input)
         val status = ctx.pvText("", 0.875f, c.muted).apply { visibility = android.view.View.GONE }

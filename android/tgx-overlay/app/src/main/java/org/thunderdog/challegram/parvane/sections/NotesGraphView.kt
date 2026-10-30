@@ -35,7 +35,7 @@ object NotesGraph {
     const val ATTRACTION = 0.6
     const val ITERATIONS = 400
     const val WORK_BUDGET = 50_000_000.0
-    const val MARGIN = 24.0
+    const val MAX_LAYOUT_NODES = 4000
     const val MIN_RADIUS = 6f
     const val MAX_RADIUS = 28f
     const val ARROW = 7f
@@ -149,7 +149,8 @@ object NotesGraph {
             if (a != null && b != null && a != b) a to b else null
         }
         val pairs = count.toDouble() * (count - 1) / 2
-        val iterations = if (count > 1) min(ITERATIONS.toDouble(), max(1.0, kotlin.math.floor(WORK_BUDGET / max(pairs, 1.0)))).toInt() else 0
+        // выше предела пар раскладка на главном потоке стоила бы секунд даже за одну итерацию — остаётся начальное рассеяние
+        val iterations = if (count > MAX_LAYOUT_NODES) 0 else if (count > 1) min(ITERATIONS.toDouble(), max(1.0, kotlin.math.floor(WORK_BUDGET / max(pairs, 1.0)))).toInt() else 0
         var temperature = START_TEMPERATURE
         val cooling = Math.pow(COOLING, ITERATIONS.toDouble() / max(iterations, 1))
         val fx = DoubleArray(count)

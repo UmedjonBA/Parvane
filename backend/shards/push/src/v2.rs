@@ -57,8 +57,8 @@ pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool, vapid: Arc<Vap
 
     let mut inbox = nc.subscribe(INBOX_WILDCARD).await?;
     let collapser = Arc::new(Mutex::new(Collapser::default()));
-    spawn_alarm_loop(ctx.clone(), collapser.clone());
     let sem = Arc::new(tokio::sync::Semaphore::new(handler_concurrency()));
+    spawn_alarm_loop(ctx.clone(), collapser.clone(), sem.clone());
     tokio::spawn(async move {
         while let Some(msg) = inbox.next().await {
             // Полезная нагрузку журнала не читаем: важен только факт записи.
@@ -67,7 +67,16 @@ pub(crate) async fn run(nc: async_nats::Client, pool: SqlitePool, vapid: Arc<Vap
             if !admitted {
                 continue;
             }
-            let Ok(permit) = sem.clone().acquire_owned().await else { break };
+            // Семафор не ждём: медленные endpoint'ы не должны останавливать приём событий журнала —
+            // пробуждение сверх потолка отбрасывается (устройство догонит при следующем) (A0020-1)
+            let permit = match sem.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                    debug!("v2 push: все места пробуждений заняты — пробуждение отброшено");
+                    continue;
+                }
+                Err(_) => break,
+            };
             let (ctx, token) = (ctx.clone(), token.to_string());
             tokio::spawn(async move {
                 let _p = permit;
@@ -236,7 +245,7 @@ async fn take_due_alarms(pool: &SqlitePool, now: i64) -> sqlx::Result<Vec<String
 
 /// Цикл будильника: раз в `ALARM_TICK` будит устройства с наступившим моментом (через то же схлопывание, что
 /// пробуждение по записи: недавно разбуженное устройство само проверит напоминания).
-fn spawn_alarm_loop(ctx: Arc<Ctx>, collapser: Arc<Mutex<Collapser>>) {
+fn spawn_alarm_loop(ctx: Arc<Ctx>, collapser: Arc<Mutex<Collapser>>, sem: Arc<tokio::sync::Semaphore>) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(ALARM_TICK);
         loop {
@@ -250,9 +259,19 @@ fn spawn_alarm_loop(ctx: Arc<Ctx>, collapser: Arc<Mutex<Collapser>>) {
             };
             for token in tokens {
                 let admitted = collapser.lock().unwrap_or_else(|e| e.into_inner()).admit(&token, Instant::now());
-                if admitted {
-                    wake_device(&ctx, &token).await;
+                if !admitted {
+                    continue;
                 }
+                // Через общий семафор и отдельной задачей: цикл не стоит на медленном endpoint'е
+                let Ok(permit) = sem.clone().try_acquire_owned() else {
+                    debug!("v2 push: все места пробуждений заняты — будильник отброшен");
+                    continue;
+                };
+                let ctx = ctx.clone();
+                tokio::spawn(async move {
+                    let _p = permit;
+                    wake_device(&ctx, &token).await;
+                });
             }
         }
     });
@@ -290,7 +309,7 @@ async fn wake_device(ctx: &Ctx, token: &str) {
                 continue;
             }
         };
-        match tokio::time::timeout(Duration::from_secs(15), client.execute(request)).await {
+        match tokio::time::timeout(Duration::from_secs(6), client.execute(request)).await {
             Ok(Ok(resp)) if resp.status().is_success() => debug!("v2 push: пробуждение отправлено"),
             Ok(Ok(resp)) if resp.status() == reqwest::StatusCode::NOT_FOUND || resp.status() == reqwest::StatusCode::GONE => {
                 // Канал мёртв (подписка отозвана) — вычищаем.

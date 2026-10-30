@@ -200,6 +200,8 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // pending-аккаунт и вела на экран подтверждения чужого ника
   // Адрес аккаунта из последнего ответа выдачи токена (spec 026: прежний ник ведёт на новый)
   let lastIssuedAddress: string | undefined;
+  // Последний requestServerInfo не дозвонился и вернул заготовку по хосту страницы
+  let isServerInfoFallback = false;
   // spec 027: следующий вход паролем отменяет удаление аккаунта
   let shouldCancelDeletion = false;
 
@@ -399,10 +401,14 @@ export function createConnectionController(deps: ConnectionDependencies) {
       let user = canonicalAddress(input, info.domain);
 
       const nextToken = savedToken
-        || await issueToken(activeConnection, user, password, info.confirm === 'none', loginToken);
+        || await issueToken(
+          activeConnection, user, password, info.confirm === 'none' && !isServerInfoFallback, loginToken,
+        );
       // spec 026: ник сменён (на другом устройстве) — вход прежним ником выписал токен нового адреса;
       // локальное этого устройства переезжает под новый адрес до запуска движка
-      if (!savedToken && lastIssuedAddress && lastIssuedAddress !== user) {
+      // Переезд — только внутри домена сервера: ответ с чужим доменом локальное не переносит
+      const isSameDomain = lastIssuedAddress?.slice(lastIssuedAddress.indexOf('@') + 1) === info.domain;
+      if (!savedToken && lastIssuedAddress && lastIssuedAddress !== user && isSameDomain) {
         deps.log(`ник аккаунта сменён — устройство переходит на новый адрес`);
         await deps.onAccountRenamed?.(user, lastIssuedAddress);
         user = lastIssuedAddress;
@@ -487,6 +493,7 @@ export function createConnectionController(deps: ConnectionDependencies) {
   // хосту страницы: e2e и dev ходят на localhost, где identity по умолчанию
   // отвечает за домен «local»
   async function requestServerInfo(activeConnection: GatewayConnection): Promise<ServerInfo> {
+    isServerInfoFallback = false;
     try {
       const raw = await activeConnection.request(TOPIC_IDENTITY_SERVER_INFO, JSON.stringify({}));
       const info = JSON.parse(raw) as {
@@ -506,6 +513,9 @@ export function createConnectionController(deps: ConnectionDependencies) {
     } catch (err) {
       deps.log(`server.info недоступен, домен по хосту: ${String(err)}`);
     }
+    // Параметры сервера не получены: неявную регистрацию при входе не включаем (опечатка в пароле
+    // или нике при сбое server.info не должна превращаться в попытку завести аккаунт)
+    isServerInfoFallback = true;
     return fallbackServerInfo();
   }
 

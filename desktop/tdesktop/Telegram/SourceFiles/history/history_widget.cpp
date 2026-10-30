@@ -81,6 +81,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
 #include "data/data_drafts.h"
+#include "data/data_ai_compose_tones.h"
 #include "data/data_session.h"
 #include "data/data_todo_list.h"
 #include "data/data_web_page.h"
@@ -109,7 +110,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_drag_area.h"
 #include "history/history_inner_widget.h"
 #include "history/history_item_components.h"
-#include "history/history_streamed_drafts.h"
 #include "history/history_unread_things.h"
 #include "history/admin_log/history_admin_log_section.h"
 #include "history/view/controls/compose_controls_common.h"
@@ -146,9 +146,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_subsection_tabs.h"
 #include "history/view/history_view_translate_bar.h"
 #include "history/view/media/history_view_media.h"
-#ifdef TDESKTOP_IV_EDITOR
-#include "iv/editor/iv_editor_session.h"
-#endif // TDESKTOP_IV_EDITOR
 #include "core/click_handler_types.h"
 #include "chat_helpers/field_autocomplete.h"
 #include "chat_helpers/tabbed_panel.h"
@@ -4014,9 +4011,7 @@ void HistoryWidget::newItemAdded(not_null<HistoryItem*> item) {
 		}
 		return;
 	}
-	if (!item->history()->streamedDrafts().hasFor(item)) {
-		_itemRevealPending.emplace(item);
-	}
+	_itemRevealPending.emplace(item);
 }
 
 void HistoryWidget::maybeMarkReactionsRead(not_null<HistoryItem*> item) {
@@ -4795,6 +4790,9 @@ void HistoryWidget::setupSendMenu(
 }
 
 void HistoryWidget::showAiComposeBox() {
+	if (session().data().aiComposeTones().list().empty()) {
+		return;
+	}
 	const auto text = prepareTextForEditMsg();
 	if (text.text.isEmpty()) {
 		return;
@@ -9329,9 +9327,6 @@ void HistoryWidget::editMessage(
 		not_null<HistoryItem*> item,
 		const TextSelection &selection) {
 	if (item->richPage()) {
-#ifdef TDESKTOP_IV_EDITOR
-		Iv::Editor::ShowEditBox(controller(), item);
-#endif // TDESKTOP_IV_EDITOR
 		return;
 	} else if (_chooseTheme) {
 		toggleChooseChatTheme(_peer);

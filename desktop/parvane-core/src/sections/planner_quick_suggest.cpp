@@ -673,10 +673,6 @@ QuickHistory forgetSuggestion(const QuickHistory &history, const std::string &ke
     return next;
 }
 
-bool hasHistory(const QuickHistory &history) {
-    return !history.lines.empty() || !history.hidden.empty();
-}
-
 // ── история в данных «Плана» ─────────────────────────────────────────────────
 
 std::string quickLineId(const std::string &value, bool isHidden) {

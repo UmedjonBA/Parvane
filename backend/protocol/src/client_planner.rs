@@ -30,6 +30,9 @@ struct PlannerLocal {
     snapshot_seq: u64,
     /// Операции журнала, ждущие ключа своей эпохи (в порядке seq).
     pending_ops: Vec<ContainerOp>,
+    /// Наибольшая эпоха ключа среди принятых операций этого запуска: сервер принимает операцию только в
+    /// текущей эпохе, значит в журнале эпоха не убывает (убывающая — вставка старым ключом).
+    last_op_epoch: u64,
     /// JSON состояния для хоста по (ревизия, head_seq) — C1.
     json_cache: JsonCache,
 }
@@ -152,6 +155,7 @@ impl Client {
             head_seq: 0,
             snapshot_seq: 0,
             pending_ops: vec![],
+            last_op_epoch: 0,
             json_cache: JsonCache::default(),
         });
         Ok(OutRequest::id("domain.container.create", &DomainContainerCreateRequest { genesis: Some(genesis) }))
@@ -186,6 +190,7 @@ impl Client {
             head_seq: existing.as_ref().map(|p| p.head_seq).unwrap_or(0),
             snapshot_seq: existing.as_ref().map(|p| p.snapshot_seq).unwrap_or(0),
             pending_ops: existing.map(|p| p.pending_ops).unwrap_or_default(),
+            last_op_epoch: 0,
             json_cache: JsonCache::default(),
         };
         self.planner = Some(local);
@@ -278,7 +283,13 @@ impl Client {
                 continue;
             }
             match p.access.check_op_author(&op, &resolve, &no_groups) {
+                Ok(_) if op.key_epoch < p.last_op_epoch => {
+                    // Эпоха убывает вдоль журнала: операция вставлена ключом, уже сменённым ротацией
+                    self.last_error = Some(ProtoError::Forbidden);
+                    p.head_seq = op.seq;
+                }
                 Ok(a) => {
+                    p.last_op_epoch = op.key_epoch;
                     if p.keys.get(op.key_epoch).is_none() {
                         out.missing_epoch = Some(op.key_epoch);
                         p.head_seq = op.seq;
@@ -318,17 +329,14 @@ impl Client {
         let key = p.keys.get(s.key_epoch).ok_or(ProtoError::Crypto)?;
         let pt = dom::open_snapshot(&s, &p.access.container, key)?;
         let decoded = planner::decode_snapshot(&pt)?;
+        // Метки снимка — в часы до слияния (иначе свои следующие метки могут оказаться ниже, а метка
+        // u64::MAX навсегда победила бы); негодная метка — отказ всему снимку.
+        planner::guard_snapshot(&mut p.guard, &decoded, s.upto_seq)?;
         p.state.merge_snapshot(&decoded)?;
         if s.upto_seq > p.head_seq {
             p.head_seq = s.upto_seq;
         }
         p.snapshot_seq = p.snapshot_seq.max(s.upto_seq);
-        // Метки снимка — в часы (иначе свои следующие метки могут оказаться ниже).
-        for t in p.state.tasks.values() {
-            if let Some(s) = t.name.as_ref().and_then(|f| f.stamp.as_ref()) {
-                let _ = p.guard.check(&dom::Stamp::new(s.lamport, &s.device_id));
-            }
-        }
         Ok(p.head_seq)
     }
 
@@ -367,7 +375,8 @@ impl Client {
     /// Снимок по порогу (R5): после `SNAPSHOT_EVERY` операций с прошлого снимка.
     pub fn planner_snapshot_request(&mut self, ts_ms: i64) -> CResult<Option<OutRequest>> {
         let p = self.planner.as_mut().ok_or(ClientError::Proto(ProtoError::NotFound))?;
-        if p.head_seq < p.snapshot_seq.saturating_add(planner::SNAPSHOT_EVERY) {
+        // Операции, ждущие ключа эпохи, в снимок не входят, а курсор их уже прошёл — снимок их потерял бы.
+        if p.head_seq < p.snapshot_seq.saturating_add(planner::SNAPSHOT_EVERY) || !p.pending_ops.is_empty() {
             return Ok(None);
         }
         let epoch = p.access.epoch;
@@ -517,7 +526,7 @@ impl Client {
             }
         }
         let pending_ops = pp.pending_ops.iter().map(|o| ContainerOp::decode(unb64(o)?.as_slice()).map_err(|_| ProtoError::Malformed)).collect::<Result<Vec<_>>>()?;
-        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, json_cache: JsonCache::default() });
+        self.planner = Some(PlannerLocal { genesis, grants, access, keys, guard, state, head_seq: pp.head_seq, snapshot_seq: pp.snapshot_seq, pending_ops, last_op_epoch: 0, json_cache: JsonCache::default() });
         Ok(())
     }
 }

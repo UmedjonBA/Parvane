@@ -21,6 +21,9 @@ namespace Parvane::NotesUi::CanvasMedia {
 namespace notes = parvane::sections::notes;
 namespace cloud = parvane::sections::cloud;
 
+// Выход из аккаунта: картинки, превью и настройка забываются, поздние ответы прежнего аккаунта отбрасываются
+void Reset();
+
 // Что-то загрузилось — карточкам перерисоваться
 [[nodiscard]] rpl::producer<> Updated();
 

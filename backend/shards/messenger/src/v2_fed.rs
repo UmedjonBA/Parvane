@@ -110,6 +110,29 @@ fn err_reply(code: ErrorCode) -> Vec<u8> {
     ShardResponse { result: Some(shard_response::Result::Error(PbError { code: code as i32, retry_after_ms: 0 })) }.encode_to_vec()
 }
 
+/// Записей в минуту от одного чужого домена одному нашему получателю: сервер без членства получателя в его
+/// группе не заполняет журнал инбокса чужого пользователя (A0018-2). Число записей настоящей группы за минуту
+/// заведомо меньше.
+const PUSH_PER_MIN: u32 = 240;
+
+fn push_rate_ok(origin: &str, recipient: &str, per_min: u32) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static RATES: Mutex<Option<HashMap<(String, String), (Instant, u32)>>> = Mutex::new(None);
+    let Ok(mut guard) = RATES.lock() else { return false };
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() > 50_000 {
+        map.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(60));
+    }
+    let slot = map.entry((origin.to_string(), recipient.to_string())).or_insert((Instant::now(), 0));
+    if slot.0.elapsed() >= Duration::from_secs(60) {
+        *slot = (Instant::now(), 0);
+    }
+    slot.1 += 1;
+    slot.1 <= per_min
+}
+
 /// Запись группы с другого сервера своим участникам (шард federation проверил кадр;
 /// здесь — повторно: группа домена-отправителя, получатели — свои).
 async fn inbox_push(ctx: &V2, req: ShardRequest) -> Result<(), ErrorCode> {
@@ -127,6 +150,10 @@ async fn inbox_push(ctx: &V2, req: ShardRequest) -> Result<(), ErrorCode> {
     for r in p.recipients {
         if foreign_domain(&r.address).is_some() {
             return Err(ErrorCode::Forbidden);
+        }
+        if !push_rate_ok(&origin, &r.address, PUSH_PER_MIN) {
+            warn!("messenger: чужой домен {} превысил частоту записей получателю", origin);
+            continue;
         }
         let Ok(devs) = ctx.devices_of(&r.address).await else { continue };
         let owner = crate::v2::inbox_owner(&r.address, &devs).to_string();
@@ -182,5 +209,20 @@ pub(crate) async fn serve(ctx: Arc<V2>) {
             };
             let _ = ctx.nc.publish(reply, bytes.into()).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_rate_limits_per_origin_and_recipient() {
+        for _ in 0..3 {
+            assert!(push_rate_ok("far.example", "ann@near.example", 3));
+        }
+        assert!(!push_rate_ok("far.example", "ann@near.example", 3), "сверх потолка — отказ");
+        assert!(push_rate_ok("far.example", "bob@near.example", 3), "другой получатель не затронут");
+        assert!(push_rate_ok("other.example", "ann@near.example", 3), "другой домен не затронут");
     }
 }

@@ -2,7 +2,6 @@ import type { ApiPrivacySettings, ApiUsername } from '../../../api/types';
 import type { ActionReturnType } from '../../types';
 import {
   ProfileEditProgress,
-  SettingsScreens,
   UPLOADING_WALLPAPER_SLUG,
 } from '../../../types';
 
@@ -12,17 +11,15 @@ import {
   MUTE_INDEFINITE_TIMESTAMP,
   UNMUTE_TIMESTAMP,
 } from '../../../config';
-import { toCredentialCreationOptions } from '../../../util/browser/passkeys';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import { buildCollectionByKey } from '../../../util/iteratees';
 import { requestPermission, subscribe, unsubscribe } from '../../../util/notifications';
 import requestActionTimeout from '../../../util/requestActionTimeout';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi } from '../../../api/gramjs';
 import { buildApiInputPrivacyRules } from '../../helpers';
-import { addActionHandler, getGlobal, getPromiseActions, setGlobal } from '../../index';
+import { addActionHandler, getGlobal, setGlobal } from '../../index';
 import {
-  addBlockedUser, addNotifyExceptions, deletePeerPhoto,
+  addBlockedUser, deletePeerPhoto,
   removeBlockedUser, replaceSettings, updateChat,
   updateNotifyDefaults, updateSharedSettings, updateUser, updateUserFullInfo,
 } from '../../reducers';
@@ -316,17 +313,6 @@ addActionHandler('unblockUser', async (global, actions, payload): Promise<void> 
   setGlobal(global);
 });
 
-addActionHandler('loadNotificationExceptions', async (global): Promise<void> => {
-  const result = await callApi('fetchNotificationExceptions');
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = addNotifyExceptions(global, result);
-  setGlobal(global);
-});
-
 addActionHandler('loadNotificationSettings', async (global): Promise<void> => {
   const [signUpNotification, notifyDefaults] = await Promise.all([
     callApi('fetchContactSignUpSetting'),
@@ -384,19 +370,6 @@ addActionHandler('updateWebNotificationSettings', async (global, actions, payloa
       setGlobal(global);
     }
   }
-});
-
-addActionHandler('updateContactSignUpNotification', async (global, actions, payload): Promise<void> => {
-  const { isSilent } = payload;
-
-  const result = await callApi('updateContactSignUpNotification', isSilent);
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = replaceSettings(global, { hasContactJoinedNotifications: !isSilent });
-  setGlobal(global);
 });
 
 addActionHandler('loadLanguages', async (global): Promise<void> => {
@@ -541,75 +514,9 @@ addActionHandler('setPrivacyVisibility', async (global, actions, payload): Promi
   setGlobal(global);
 });
 
-addActionHandler('setPrivacySettings', async (global, actions, payload): Promise<void> => {
-  const {
-    privacyKey, isAllowList, updatedIds, isPremiumAllowed, botsPrivacy,
-  } = payload;
-  const {
-    privacy: { [privacyKey]: settings },
-  } = global.settings;
-
-  if (!settings) {
-    return;
-  }
-
-  if (privacyKey === 'noPaidMessages') {
-    global = getGlobal();
-    const idsForUpdate = [
-      ...updatedIds.filter((id) => !settings.allowUserIds.includes(id)),
-      ...settings.allowUserIds.filter((id) => !updatedIds.includes(id)),
-    ];
-
-    idsForUpdate.forEach((userId) => {
-      global = updateUserFullInfo(global, userId, {
-        settings: undefined,
-      });
-    });
-    setGlobal(global);
-  }
-
-  const rules = buildApiInputPrivacyRules(global, {
-    visibility: settings.visibility,
-    isUnspecified: settings.isUnspecified,
-    shouldAllowPremium: isPremiumAllowed,
-    allowedIds: isAllowList ? updatedIds : [...settings.allowUserIds, ...settings.allowChatIds],
-    blockedIds: !isAllowList ? updatedIds : [...settings.blockUserIds, ...settings.blockChatIds],
-    botsPrivacy,
-  });
-
-  const result = await callApi('setPrivacySettings', privacyKey, rules);
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = {
-    ...global,
-    settings: {
-      ...global.settings,
-      privacy: {
-        ...global.settings.privacy,
-        [privacyKey]: result.rules,
-      },
-    },
-  };
-  setGlobal(global);
-});
-
 addActionHandler('updateIsOnline', (global, actions, payload): ActionReturnType => {
   if (global.connectionState !== 'connectionStateReady') return;
   callApi('updateIsOnline', payload.isOnline);
-});
-
-addActionHandler('loadContentSettings', async (global): Promise<void> => {
-  if (selectIsCurrentUserFrozen(global)) return;
-
-  const result = await callApi('fetchContentSettings');
-  if (!result) return;
-
-  global = getGlobal();
-  global = replaceSettings(global, result);
-  setGlobal(global);
 });
 
 addActionHandler('updateContentSettings', async (global, actions, payload): Promise<void> => {
@@ -691,75 +598,6 @@ addActionHandler('loadConfig', async (global): Promise<void> => {
   global = {
     ...global,
     config,
-  };
-  setGlobal(global);
-});
-
-addActionHandler('loadPromoData', async (global): Promise<void> => {
-  const promoData = await callApi('fetchPromoData');
-
-  global = getGlobal();
-  const timeout = (promoData?.expires || 0) - getServerTime();
-  if (timeout > 0) {
-    requestActionTimeout({
-      action: 'loadPromoData',
-      payload: undefined,
-    }, timeout * 1000);
-  }
-
-  global = {
-    ...global,
-    promoData,
-  };
-  setGlobal(global);
-});
-
-addActionHandler('dismissSuggestion', async (global, actions, payload): Promise<void> => {
-  const { suggestion } = payload;
-  await callApi('dismissSuggestion', suggestion);
-
-  actions.loadPromoData();
-});
-
-addActionHandler('loadPeerColors', async (global): Promise<void> => {
-  const generalHash = global.peerColors?.generalHash;
-  const profileHash = global.peerColors?.profileHash;
-  const [generalResult, profileResult] = await Promise.all([
-    callApi('fetchPeerColors', generalHash),
-    callApi('fetchPeerProfileColors', profileHash),
-  ]);
-
-  if (!generalResult && !profileResult) return;
-
-  global = getGlobal();
-
-  const currentPeerColors = global.peerColors! || {};
-
-  global = {
-    ...global,
-    peerColors: {
-      ...currentPeerColors,
-      general: generalResult?.colors || currentPeerColors.general,
-      generalHash: generalResult?.hash || currentPeerColors.generalHash,
-      profile: profileResult?.colors || currentPeerColors.profile,
-      profileHash: profileResult?.hash || currentPeerColors.profileHash,
-    },
-  };
-  setGlobal(global);
-});
-
-addActionHandler('loadTimezones', async (global): Promise<void> => {
-  const hash = global.timezones?.hash;
-  const result = await callApi('fetchTimezones', hash);
-  if (!result) return;
-
-  global = getGlobal();
-  global = {
-    ...global,
-    timezones: {
-      byId: buildCollectionByKey(result.timezones, 'id'),
-      hash: result.hash,
-    },
   };
   setGlobal(global);
 });
@@ -973,54 +811,4 @@ addActionHandler('loadPasskeys', async (global): Promise<void> => {
     },
   };
   setGlobal(global);
-});
-
-addActionHandler('startPasskeyRegistration', async (global, actions, payload): Promise<void> => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  const preparedOptions = await callApi('initPasskeyRegistration');
-  if (!preparedOptions) return;
-
-  const options = toCredentialCreationOptions(preparedOptions);
-  const credential = await navigator.credentials.create(options).catch((e: unknown) => {
-    if (e instanceof DOMException && e.name === 'NotAllowedError') {
-      actions.showNotification({
-        message: {
-          key: 'PasskeyCreateError',
-        },
-        tabId,
-      });
-      return undefined;
-    }
-    throw e;
-  });
-  if (!credential) return;
-  const publicKeyCredential = credential as PublicKeyCredential;
-
-  const result = await callApi('registerPasskey', publicKeyCredential.toJSON() as RegistrationResponseJSON);
-  if (!result) return;
-
-  await getPromiseActions().loadPasskeys();
-  actions.openSettingsScreen({ screen: SettingsScreens.Passkeys, tabId });
-});
-
-addActionHandler('deletePasskey', async (global, actions, payload): Promise<void> => {
-  const { id } = payload;
-
-  const passkeys = global.settings.passkeys;
-  if (passkeys?.length) {
-    const filteredPasskeys = passkeys.filter((passkey) => passkey.id !== id);
-    global = {
-      ...global,
-      settings: {
-        ...global.settings,
-        passkeys: filteredPasskeys,
-      },
-    };
-    setGlobal(global);
-  }
-
-  await callApi('deletePasskey', { id });
-
-  actions.loadPasskeys();
 });

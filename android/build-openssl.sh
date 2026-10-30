@@ -7,6 +7,12 @@ NDK="${ANDROID_NDK_HOME:?задай ANDROID_NDK_HOME}"
 ABI="${1:-arm64-v8a}"
 API="${ANDROID_API:-24}"
 VER="${OPENSSL_VER:-3.5.1}"
+# SHA-256 архива (совпадает с openssl-3.5.1.tar.gz.sha256 с GitHub Releases); для другой версии — OPENSSL_SHA256
+case "$VER" in
+  3.5.1) OPENSSL_SHA256_DEFAULT=529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f ;;
+  *) OPENSSL_SHA256_DEFAULT= ;;
+esac
+OPENSSL_SHA256="${OPENSSL_SHA256:-$OPENSSL_SHA256_DEFAULT}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$ROOT/prebuilt/openssl"
 SRC="$ROOT/.build/openssl-$VER"
@@ -24,6 +30,9 @@ if [ ! -d "$SRC" ]; then
   echo "== качаю OpenSSL $VER =="
   curl -fsSL -o "$ROOT/.build/openssl.tar.gz" \
     "https://github.com/openssl/openssl/releases/download/openssl-$VER/openssl-$VER.tar.gz"
+  [ -n "$OPENSSL_SHA256" ] || { echo "нет SHA-256 для OpenSSL $VER: задай OPENSSL_SHA256"; exit 3; }
+  echo "$OPENSSL_SHA256  $ROOT/.build/openssl.tar.gz" | sha256sum -c - \
+    || { echo "контрольная сумма OpenSSL не совпала"; rm -f "$ROOT/.build/openssl.tar.gz"; exit 3; }
   tar -xzf "$ROOT/.build/openssl.tar.gz" -C "$ROOT/.build"
 fi
 

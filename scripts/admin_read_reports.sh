@@ -44,7 +44,8 @@ IDS=()
 while IFS='|' read -r id reporter created sealed; do
   [[ "$id" =~ ^[0-9]+$ && "$reporter" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || continue
   echo "── жалоба №$id от $reporter, $(date -d "@$((created / 1000))" '+%Y-%m-%d %H:%M:%S %Z')"
-  if "$ADMIN" open-report "$KEY_FILE" "$reporter" "$sealed"; then
+  # текст жалобы задаёт её автор: управляющие символы (ESC, OSC) на терминал не пускаем, \n и \t оставляем
+  if "$ADMIN" open-report "$KEY_FILE" "$reporter" "$sealed" | LC_ALL=C tr -d '\000-\010\013-\037\177'; then
     IDS+=("$id")
   else
     echo "   (не открылась — другой ключ администратора?)"

@@ -13,6 +13,9 @@ import {
 } from './exportModel';
 import { createZipWriter, ExportError, throwIfAborted } from './exportZip';
 
+// Глубже папки не обходим (как kExportMaxDepth в desktop)
+const EXPORT_MAX_DEPTH = 64;
+
 export type ExportOptions = { includeMedia: boolean; includeCloud: boolean };
 
 export type ExportStage = 'prepare' | 'chats' | 'planner' | 'notes' | 'contacts' | 'cloud' | 'finishing';
@@ -83,18 +86,20 @@ export function treeFilePaths(
     else byParent.set(key, [node]);
   });
   const seen = new Set<string>();
-  const walk = (parent: string | undefined, dir: string) => {
+  const walk = (parent: string | undefined, dir: string, depth: number) => {
+    // Глубже предела не спускаемся (дерево совместной папки задаёт любой её редактор), как kExportMaxDepth в desktop
+    if (depth > EXPORT_MAX_DEPTH) return;
     const taken = new Set<string>();
     const children = (byParent.get(parent) || []).slice().sort(byName);
     children.forEach((node) => {
       if (seen.has(node.id)) return;
       seen.add(node.id);
       const name = uniqueName(taken, sanitizeFileName(node.name, node.kind));
-      if (node.kind === 'folder') walk(node.id, `${dir}${name}/`);
+      if (node.kind === 'folder') walk(node.id, `${dir}${name}/`, depth + 1);
       else if (node.blob && accept(node)) out.push({ node, path: `${dir}${name}` });
     });
   };
-  walk(root, prefix);
+  walk(root, prefix, 0);
   return out;
 }
 

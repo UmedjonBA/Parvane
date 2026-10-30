@@ -6,6 +6,8 @@
 
 import type { WireMessageContent, WirePackRef, WireTextEntity } from '../wire';
 
+const ARTICLE_RECV_MAX_LENGTH = 65536;
+
 // proto3-JSON: имена полей как в схеме, enum — строками, bytes — base64,
 // 64-битные — строками.
 export type V2Entity = {
@@ -520,9 +522,10 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
   } else if (c.article) {
     out = {
       kind: 'article',
-      title: c.article.title || '',
-      markdown: c.article.markdown || '',
-      text: c.article.text || undefined,
+      title: (c.article.title || '').slice(0, ARTICLE_RECV_MAX_LENGTH),
+      // Предел длины и при приёме: у отправителя он 65 536, но модифицированный клиент шлёт любую длину
+      markdown: (c.article.markdown || '').slice(0, ARTICLE_RECV_MAX_LENGTH),
+      text: c.article.text?.slice(0, ARTICLE_RECV_MAX_LENGTH) || undefined,
       article_media: c.article.media?.length ? c.article.media.map(mediaFromV2) : undefined,
     };
   } else if (c.mod_report) {

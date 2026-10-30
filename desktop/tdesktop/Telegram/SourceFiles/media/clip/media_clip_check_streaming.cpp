@@ -84,7 +84,11 @@ bool CheckStreamingSupport(
 			auto atomSize64Bytes = bytes::make_span(atomSize64);
 			return ReadBigEndian<uint64>(atomSize64Bytes);
 		}();
-		if (position + length > size) {
+		// Размер атома меньше заголовка не двигает позицию (бесконечный
+		// цикл), а position + length не должен переполняться.
+		if (length < uint64(kHeaderSize)
+			|| uint64(position) > uint64(size)
+			|| length > uint64(size) - uint64(position)) {
 			break;
 		}
 		device->seek(position + length);

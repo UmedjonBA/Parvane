@@ -29,6 +29,15 @@ use crate::store;
 const DESCRIPTOR_TTL: Duration = Duration::from_secs(3600);
 /// Предел тела описателя.
 const DESCRIPTOR_MAX_BYTES: usize = 64 * 1024;
+/// Неудачное обнаружение домена не повторяется столько (поток кадров с произвольным origin_domain
+/// иначе превращал бы шард в усилитель исходящих HTTPS-запросов).
+const DISCOVERY_FAIL_TTL: Duration = Duration::from_secs(300);
+/// Новых обращений за описателем в минуту на весь шард.
+const DISCOVERY_PER_MINUTE: u32 = 60;
+/// Предел таблиц отрицательного кэша и проверенных соседей.
+const PEERS_MAX: usize = 5_000;
+/// Кэш соседа сбрасывается неверной подписью не чаще, чем раз в столько (ключ сменился — перечитаем).
+const FORGET_MIN_AGE: Duration = Duration::from_secs(60);
 /// Таймаут исходящего вызова по умолчанию.
 pub const DEFAULT_TIMEOUT_MS: u32 = 10_000;
 
@@ -62,11 +71,22 @@ pub struct Fed {
     pub nc: Client,
     peers: Mutex<HashMap<String, Peer>>,
     buckets: std::sync::Mutex<HashMap<String, (f64, Instant)>>,
+    /// Домены, обнаружение которых не удалось, и общий счётчик обращений за описателем.
+    failed: std::sync::Mutex<HashMap<String, Instant>>,
+    discovery: std::sync::Mutex<(Instant, u32)>,
 }
 
 impl Fed {
     pub fn new(cfg: Config, pool: SqlitePool, nc: Client) -> Arc<Self> {
-        Arc::new(Fed { cfg, pool, nc, peers: Mutex::new(HashMap::new()), buckets: std::sync::Mutex::new(HashMap::new()) })
+        Arc::new(Fed {
+            cfg,
+            pool,
+            nc,
+            peers: Mutex::new(HashMap::new()),
+            buckets: std::sync::Mutex::new(HashMap::new()),
+            failed: std::sync::Mutex::new(HashMap::new()),
+            discovery: std::sync::Mutex::new((Instant::now(), 0)),
+        })
     }
 
     /// Домен закрыт: выключенная федерация, чёрный список окружения или администратора.
@@ -102,8 +122,44 @@ impl Fed {
         self.cfg.endpoints.get(domain).cloned().unwrap_or_else(|| format!("https://{domain}"))
     }
 
+    /// Можно ли сейчас обратиться за описателем: не в отрицательном кэше и не сверх общего счётчика.
+    pub(crate) fn discovery_allowed(&self, domain: &str) -> Result<(), PbError> {
+        if let Ok(f) = self.failed.lock() {
+            if f.get(domain).is_some_and(|at| at.elapsed() < DISCOVERY_FAIL_TTL) {
+                return Err(err(ErrorCode::DomainUnreachable, 30_000));
+            }
+        }
+        let Ok(mut d) = self.discovery.lock() else { return Err(err(ErrorCode::Unavailable, 1000)) };
+        if d.0.elapsed() >= Duration::from_secs(60) {
+            *d = (Instant::now(), 0);
+        }
+        if d.1 >= DISCOVERY_PER_MINUTE {
+            return Err(err(ErrorCode::RateLimited, 10_000));
+        }
+        d.1 += 1;
+        Ok(())
+    }
+
+    pub(crate) fn discovery_failed(&self, domain: &str) {
+        if let Ok(mut f) = self.failed.lock() {
+            if f.len() >= PEERS_MAX {
+                f.retain(|_, at| at.elapsed() < DISCOVERY_FAIL_TTL);
+                if f.len() >= PEERS_MAX {
+                    f.clear();
+                }
+            }
+            f.insert(domain.to_string(), Instant::now());
+        }
+    }
+
     /// Проверенный сервер домена: из кэша либо по описателю с закреплением ключа.
     pub async fn trust(&self, domain: &str) -> Result<Peer, PbError> {
+        self.trust_with(domain, true).await
+    }
+
+    /// То же, но `persist = false` ключ не закрепляет: входящий кадр закрепляет сервер только после
+    /// проверки подписи (`confirm_pin`), иначе любой домен с описателем попадал бы в `servers` и рассылки.
+    pub async fn trust_with(&self, domain: &str, persist: bool) -> Result<Peer, PbError> {
         if !parvane_protocol::address::is_valid_domain(domain) || self.cfg.is_own(domain) {
             return Err(err(ErrorCode::Invalid, 0));
         }
@@ -114,9 +170,19 @@ impl Fed {
         if pinned.as_ref().is_some_and(|p| p.state == "key_changed") {
             return Err(err(ErrorCode::ServerKeyChanged, 0));
         }
+        self.discovery_allowed(domain)?;
         let base = self.base_of(domain);
-        let body = self.http_get(&format!("{base}/.well-known/parvane")).await.map_err(|_| err(ErrorCode::DomainUnreachable, 30_000))?;
-        let signed: SignedServerDescriptor = serde_json::from_slice(&body).map_err(|_| err(ErrorCode::DomainUnreachable, 30_000))?;
+        let body = match self.http_get(&format!("{base}/.well-known/parvane")).await {
+            Ok(b) => b,
+            Err(()) => {
+                self.discovery_failed(domain);
+                return Err(err(ErrorCode::DomainUnreachable, 30_000));
+            }
+        };
+        let Ok(signed) = serde_json::from_slice::<SignedServerDescriptor>(&body) else {
+            self.discovery_failed(domain);
+            return Err(err(ErrorCode::DomainUnreachable, 30_000));
+        };
         let pin = pinned.as_ref().map(|p| p.key);
         let trusted = match federation::verify_descriptor(&signed, domain, pin.as_ref()) {
             Ok(t) => t,
@@ -125,21 +191,42 @@ impl Fed {
                 let _ = store::set_state(&self.pool, domain, "key_changed").await;
                 return Err(err(ErrorCode::ServerKeyChanged, 0));
             }
-            Err(_) => return Err(err(ErrorCode::DomainUnreachable, 30_000)),
+            Err(_) => {
+                self.discovery_failed(domain);
+                return Err(err(ErrorCode::DomainUnreachable, 30_000));
+            }
         };
-        if pin.is_none() {
+        if pin.is_none() && persist {
             info!("федерация: закреплён ключ сервера {}", domain);
             store::pin(&self.pool, domain, &trusted.server_key, now_ms()).await.map_err(|_| err(ErrorCode::Unavailable, 1000))?;
         }
         let endpoint = endpoint_of(&trusted, &base);
         let peer = Peer { trusted, endpoint, fetched: Instant::now() };
-        self.peers.lock().await.insert(domain.to_string(), peer.clone());
+        let mut peers = self.peers.lock().await;
+        if peers.len() >= PEERS_MAX {
+            peers.retain(|_, p| p.fetched.elapsed() < DESCRIPTOR_TTL);
+        }
+        if peers.len() < PEERS_MAX {
+            peers.insert(domain.to_string(), peer.clone());
+        }
         Ok(peer)
     }
 
-    /// Забыть кэш (подпись ответа не сошлась — перечитать описатель).
+    /// Закрепить ключ сервера, чей кадр прошёл проверку подписи (первый контакт по входящему).
+    pub async fn confirm_pin(&self, domain: &str, peer: &Peer) {
+        if matches!(store::pinned(&self.pool, domain).await, Ok(None)) {
+            info!("федерация: закреплён ключ сервера {}", domain);
+            let _ = store::pin(&self.pool, domain, &peer.trusted.server_key, now_ms()).await;
+        }
+    }
+
+    /// Забыть кэш (подпись ответа не сошлась — перечитать описатель). Не чаще раза в минуту на домен:
+    /// иначе поддельные кадры от имени соседа заставляли бы перечитывать его описатель каждый раз.
     pub async fn forget(&self, domain: &str) {
-        self.peers.lock().await.remove(domain);
+        let mut peers = self.peers.lock().await;
+        if peers.get(domain).is_some_and(|p| p.fetched.elapsed() >= FORGET_MIN_AGE) {
+            peers.remove(domain);
+        }
     }
 
     // ── HTTP ────────────────────────────────────────────────────────────────

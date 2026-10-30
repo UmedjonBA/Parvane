@@ -214,6 +214,14 @@ async fn v2_delete_live() {
 
         // Без свежего пароля — нет
         assert_eq!(alice.id.call("identity.account.delete", vec![]), Err(ErrorCode::ReauthRequired));
+        // Сессия без устройства журнала (утёкший пароль) удалить аккаунт не может (A0017-1)
+        {
+            let (mut probe, _) = Conn::connect(&addr, Channel::Identified);
+            let t = issue(&mut probe, &a_user, "intruder", false).expect("вход чужого устройства");
+            let mut intruder = auth(&addr, &t.token).expect("токен чужого устройства");
+            intruder.call("identity.session.reauth", ipb::SessionReauthRequest { password: PASSWORD.into() }.encode_to_vec()).expect("reauth чужого");
+            assert_eq!(intruder.call("identity.account.delete", vec![]), Err(ErrorCode::Forbidden));
+        }
         let resp = delete(&mut alice);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
         assert!(resp.deletion_at_ms > now, "срок в будущем");
@@ -223,7 +231,7 @@ async fn v2_delete_live() {
         assert!(log.deleted && log.entries.is_empty(), "журнал удаляемого: {log:?}");
         assert!(!search(&mut bob, &nick).contains(&a_user), "удаляемый не ищется");
         let r = bob.op(&mut |c| c.prepare_direct(&a_user, &text("в пустоту")));
-        eprintln!("доставка удаляемому: {r:?}");
+        assert!(r.is_err(), "доставка удаляемому аккаунту должна быть отвергнута: {r:?}");
 
         // Сессии и токены закрыты; вход паролем без отмены — без токена, со сроком
         let (mut probe, _) = Conn::connect(&addr, Channel::Identified);

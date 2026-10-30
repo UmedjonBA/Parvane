@@ -245,12 +245,11 @@ services:
       PARVANE_DOMAIN: ${PARVANE_DOMAIN:-${PARVANE_PUBLIC_HOST}}
       PARVANE_GATEWAY_BIND: 0.0.0.0:9222
       PARVANE_GATEWAY_TCP_BIND: 0.0.0.0:9223
-      # За Caddy все WS-клиенты приходят с ОДНОГО IP (контейнер caddy), поэтому
-      # per-IP лимит по умолчанию (64) стал бы общим потолком на всех веб-юзеров
-      # и per-IP защита не различала бы клиентов. Поднимаем до глобального лимита;
-      # защита от abuse — на уровне conn-лимита и (позже) rate-limit в Caddy.
+      # За Caddy все WS-клиенты приходят с адреса контейнера caddy: пир-прокси ограничен только
+      # общим лимитом, а квота на клиента (PARVANE_GATEWAY_MAX_CONNS_PER_CLIENT, по умолчанию 64)
+      # считается по X-Forwarded-For (GW-01/GW-02).
       PARVANE_GATEWAY_MAX_CONNS: "2000"
-      PARVANE_GATEWAY_MAX_CONNS_PER_IP: "2000"
+      PARVANE_GATEWAY_MAX_CONNS_PER_IP: "64"
       PARVANE_LOG_LEVEL: info
     mem_limit: 1g
     pids_limit: 512
@@ -297,6 +296,18 @@ services:
     mem_limit: 256m
     pids_limit: 64
     network_mode: "service:caddy"
+    # entrypoint от root делает chown тома и tor сбрасывает права на пользователя tor —
+    # остальные привилегии не нужны
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - caddy
     volumes:

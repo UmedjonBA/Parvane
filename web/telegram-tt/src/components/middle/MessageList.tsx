@@ -40,7 +40,6 @@ import {
   selectIsChatProtected,
   selectIsChatWithSelf,
   selectIsCurrentUserFrozen,
-  selectIsCurrentUserPremium,
   selectIsInSelectMode,
   selectIsViewportNewest,
   selectMonoforumChannel,
@@ -152,11 +151,9 @@ type StateProps = {
   isForum?: boolean;
   currentUserId: string;
   isAccountFrozen?: boolean;
-  areAdsEnabled?: boolean;
   channelJoinInfo?: ApiChatFullInfo['joinInfo'];
   isChatProtected?: boolean;
   hasCustomGreeting?: boolean;
-  isAppConfigLoaded?: boolean;
   monoforumChannelId?: string;
   canTranslate?: boolean;
   translationLanguage?: string;
@@ -256,13 +253,11 @@ const MessageList = ({
   currentUserId,
   isContactRequirePremium,
   paidMessagesStars,
-  areAdsEnabled,
   channelJoinInfo,
   isChatProtected,
   isAccountFrozen,
   hasCustomGreeting,
   monoforumChannelId,
-  isAppConfigLoaded,
   canTranslate,
   translationLanguage,
   shouldAutoTranslate,
@@ -272,7 +267,7 @@ const MessageList = ({
   onScrollDownToggle,
 }: OwnProps & StateProps) => {
   const {
-    loadViewportMessages, setScrollOffset, loadSponsoredMessages, loadMessageReactions, copyMessagesByIds,
+    loadViewportMessages, setScrollOffset, loadMessageReactions, copyMessagesByIds,
     loadMessageViews, loadPeerStoriesByIds, loadFactChecks, requestChatTranslation,
   } = getActions();
 
@@ -400,13 +395,6 @@ const MessageList = ({
   useSyncEffect(() => {
     memoFirstUnreadIdRef.current = firstUnreadId;
   }, [firstUnreadId]);
-
-  useEffect(() => {
-    const canHaveAds = isChannelChat || isBot;
-    if (areAdsEnabled && canHaveAds && isSynced && isReady && isAppConfigLoaded) {
-      loadSponsoredMessages({ peerId: chatId });
-    }
-  }, [chatId, isSynced, isReady, isChannelChat, isBot, areAdsEnabled, isAppConfigLoaded]);
 
   // Updated only once when messages are loaded (as we want the unread divider to keep its position)
   useSyncEffect(() => {
@@ -1267,7 +1255,6 @@ const MessageList = ({
       />
     ) : activeKey === Content.MessageList ? (
       <MessageListContent
-        canShowAds={areAdsEnabled && isChannelChat}
         chatId={chatId}
         isComments={isComments}
         isChannelChat={isChannelChat}
@@ -1373,12 +1360,9 @@ export default memo(withGlobal<OwnProps>(
     const chatFullInfo = !isUserId(chatId) ? selectChatFullInfo(global, chatId) : undefined;
     const isEmptyThread = selectThreadInfo(global, chatId, threadId)?.messagesCount === 0;
 
-    const isCurrentUserPremium = selectIsCurrentUserPremium(global);
-    const areAdsEnabled = !isCurrentUserPremium || selectUserFullInfo(global, currentUserId)?.areAdsEnabled;
     const isAccountFrozen = selectIsCurrentUserFrozen(global);
 
     const hasCustomGreeting = Boolean(userFullInfo?.businessIntro);
-    const isAppConfigLoaded = global.isAppConfigLoaded;
 
     const monoforumChannelId = selectMonoforumChannel(global, chatId)?.id;
     const canTranslate = selectCanTranslateChat(global, chatId) && !chatFullInfo?.isTranslationDisabled;
@@ -1398,7 +1382,6 @@ export default memo(withGlobal<OwnProps>(
 
     return {
       isActive,
-      areAdsEnabled,
       isChatLoaded: true,
       isRestricted,
       restrictionReasons,
@@ -1433,7 +1416,6 @@ export default memo(withGlobal<OwnProps>(
       lastMessage: withLastMessageWhenPreloading ? lastMessage : undefined,
       isAccountFrozen,
       hasCustomGreeting,
-      isAppConfigLoaded,
       monoforumChannelId,
       canTranslate,
       translationLanguage,

@@ -39,21 +39,27 @@ pub fn safe_mime(mime: &str) -> &'static str {
     INLINE_MIME.iter().find(|m| **m == base).copied().unwrap_or(OCTET_STREAM)
 }
 
-pub fn is_inline(mime: &str) -> bool {
-    safe_mime(mime) != OCTET_STREAM
+/// Невидимые символы форматирования Юникода (категория Cf: bidi-управление, нулевой ширины, BOM, мягкий
+/// перенос): ими подделывают вид имени файла и адреса.
+fn is_format_char(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
 }
 
-/// URL допустим для открытия: схема http/https, без пробелов и управляющих
-/// символов, ≤ 2048 байт.
+/// URL допустим для открытия: схема http/https, без пробелов, управляющих символов и символов
+/// форматирования, без `user@` перед хостом (маскировка адреса), ≤ 2048 байт.
 pub fn safe_url(url: &str) -> Option<&str> {
     let u = url.trim();
-    if u.is_empty() || u.len() > 2048 || u.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if u.is_empty() || u.len() > 2048 || u.chars().any(|c| c.is_control() || c.is_whitespace() || is_format_char(c)) {
         return None;
     }
     let lower = u.to_ascii_lowercase();
     let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"))?;
     // Хост непустой.
     if rest.is_empty() || rest.starts_with('/') {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
         return None;
     }
     Some(u)
@@ -94,16 +100,34 @@ pub fn sanitize_entities(text: &str, entities: &mut Vec<Entity>) {
     });
 }
 
-/// Безопасное имя файла.
+/// Имена устройств Windows: файл с таким именем (с любым расширением) на ней не создать.
+fn is_reserved_name(stem: &str) -> bool {
+    let up = stem.to_ascii_uppercase();
+    matches!(up.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (up.len() == 4 && (up.starts_with("COM") || up.starts_with("LPT")) && up.as_bytes()[3].is_ascii_digit() && up.as_bytes()[3] != b'0')
+}
+
+/// Безопасное имя файла: без путей, управляющих и невидимых символов, ведущих точек, хвостовых точек и
+/// пробелов, зарезервированных имён Windows; не длиннее 255 байт.
 pub fn safe_file_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let cleaned: String = base.chars().filter(|c| !c.is_control() && !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')).collect();
-    let trimmed = cleaned.trim().trim_start_matches('.');
+    let cleaned: String =
+        base.chars().filter(|c| !c.is_control() && !is_format_char(*c) && !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')).collect();
+    let trimmed = cleaned.trim().trim_start_matches('.').trim_end_matches(['.', ' ']);
     if trimmed.is_empty() {
-        "file".to_string()
-    } else {
-        trimmed.chars().take(255).collect()
+        return "file".to_string();
     }
+    let mut out = String::new();
+    if is_reserved_name(trimmed.split('.').next().unwrap_or("").trim_end()) {
+        out.push('_');
+    }
+    for c in trimmed.chars() {
+        if out.len() + c.len_utf8() > 255 {
+            break;
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn sanitize_text(t: &mut Text) {
@@ -208,5 +232,20 @@ mod tests {
         assert_eq!(safe_file_name("..\\..\\a.exe"), "a.exe");
         assert_eq!(safe_file_name(".bashrc"), "bashrc");
         assert_eq!(safe_file_name(""), "file");
+        // bidi-подмена расширения, зарезервированные имена Windows, хвостовые точки, длина в байтах.
+        assert_eq!(safe_file_name("photo\u{202E}gpj.exe"), "photogpj.exe");
+        assert_eq!(safe_file_name("CON.txt"), "_CON.txt");
+        assert_eq!(safe_file_name("lpt1"), "_lpt1");
+        assert_eq!(safe_file_name("com0.txt"), "com0.txt");
+        assert_eq!(safe_file_name("a.txt. . "), "a.txt");
+        assert!(safe_file_name(&"я".repeat(200)).len() <= 255);
+    }
+
+    #[test]
+    fn url_userinfo_and_format_chars() {
+        for bad in ["https://bank.example@evil.example/", "http://a@b", "https://exa\u{202E}mple.org/", "https://x.org\u{200B}/"] {
+            assert!(safe_url(bad).is_none(), "{bad}");
+        }
+        assert!(safe_url("https://example.org/p?mail=a@b").is_some());
     }
 }

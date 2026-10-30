@@ -374,6 +374,9 @@ bool PreparedList::hasGroupOption(bool slowmode) const {
 bool PreparedList::hasSendImagesAsPhotosOption(bool slowmode) const {
 	using Type = PreparedFile::Type;
 	if (slowmode) {
+		if (files.empty()) {
+			return false;
+		}
 		const auto t = files.front().type;
 		return (files.size() == 1)
 			&& (t == Type::Photo || t == Type::Video);
@@ -385,7 +388,8 @@ bool PreparedList::hasSendImagesAsPhotosOption(bool slowmode) const {
 bool PreparedList::canHaveEditorHintLabel() const {
 	for (const auto &file : files) {
 		if ((file.type == PreparedFile::Type::Photo)
-			&& !Core::IsMimeSticker(file.information->filemime)) {
+			&& (!file.information
+				|| !Core::IsMimeSticker(file.information->filemime))) {
 			return true;
 		}
 	}

@@ -16,7 +16,6 @@ import assert from 'node:assert/strict';
 // одна на оба устройства; сверяется список ссылок клиента. Запуск:
 // scripts/run_web_multidevice_e2e.sh. Журнал личного состояния v2 —
 // scripts/e2e_protocol_state_sync.mjs (пара state-sync)
-import { join } from 'node:path';
 
 import { chromium } from '../web/telegram-tt/node_modules/playwright/index.mjs';
 

@@ -2,6 +2,7 @@
 #include "parvane/sections/notes_store.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <random>
 
@@ -926,7 +927,14 @@ std::optional<std::map<std::string, std::string>> NotesStore::saveChatFilesToVau
     }
     std::map<std::string, std::string> renamed;
     for (const auto &file : files) {
-        const auto name = cloud::freeName(taken, file.name.empty() ? "file" : file.name);
+        // Имя задаёт отправитель: путь и служебные знаки убираем, а .md/.canvas в корне хранилища проход синка
+        // принял бы за заметку или холст с подобранным содержимым — такому имени добавляется суффикс (A0077-3)
+        auto base = cleanTitle(file.name);
+        if (base.empty()) base = "file";
+        std::string lower = base;
+        for (auto &c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (endsWith(lower, kNoteExtension) || endsWith(lower, kCanvasExtension)) base += ".file";
+        const auto name = cloud::freeName(taken, base);
         taken.push_back(name);
         const auto result = host_.callParvane("parvaneCloudSaveFromChat", json{
             {"file", {{"fileId", file.fileId}, {"name", name}, {"mime", file.mime}, {"size", file.size}}},
@@ -1013,13 +1021,17 @@ bool NotesStore::saveNote(const std::string &noteId, const std::string &draft, c
     }
     if (text == note.text) return true;
     auto result = writeNote(note, text, note.fileId);
-    if (result && result->ok && result->conflict) {
-        // Заметку тем временем изменило другое устройство: сводим построчно от общей версии
-        text = reconcileNote(note, note.text, text, *result->conflict, vaultName);
+    // Заметку тем временем изменило другое устройство: сводим построчно от общей версии. Каждое новое расхождение
+    // сводится заново с той чужой версией, что пришла в ответе, — перезапись вслепую только после трёх попыток (A0077-2)
+    std::string mergeBase = note.text;
+    for (int attempt = 0; attempt < 3 && result && result->ok && result->conflict; ++attempt) {
+        const std::string theirs = *result->conflict;
+        text = reconcileNote(note, mergeBase, text, theirs, vaultName);
+        mergeBase = theirs;  // следующее расхождение — от только что сведённой чужой версии
         result = writeNote(note, text, result->fileId);
-        // Второе расхождение подряд — пишем свою версию: чужая уже сохранена копией либо сведена
-        if (result && result->ok && result->conflict) result = writeNote(note, text, std::nullopt);
     }
+    // Расхождения не кончаются — пишем свою версию: чужая последняя уже сведена в text
+    if (result && result->ok && result->conflict) result = writeNote(note, text, std::nullopt);
     if (!result || !result->ok || !result->fileId) {
         notify("failed", note.title);
         return false;

@@ -61,15 +61,6 @@ struct Spec {
 
 [[nodiscard]] std::vector<Spec> AllSpecs();
 
-[[nodiscard]] Spec MakeBirthdayContactsSpec();
-[[nodiscard]] Spec MakeBirthdaySetupSpec();
-[[nodiscard]] Spec MakeCustomPromoSpec();
-[[nodiscard]] Spec MakeGiftAuctionsSpec();
-[[nodiscard]] Spec MakeLowCreditsSubsSpec();
-[[nodiscard]] Spec MakePremiumGraceSpec();
-[[nodiscard]] Spec MakePremiumOfferSpec();
-[[nodiscard]] Spec MakeUnreviewedAuthSpec();
-[[nodiscard]] Spec MakeUserpicSetupSpec();
 
 } // namespace TopBarSuggestions
 } // namespace Dialogs

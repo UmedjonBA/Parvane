@@ -45,7 +45,7 @@ const PREVIEW_BINDINGS: &[(&str, &str)] = &[];
 
 const PUSH_BINDINGS: &[(&str, &str)] = &[];
 
-fn role_contracts() -> [RoleContract; 9] {
+fn role_contracts() -> [RoleContract; 11] {
     [
         RoleContract {
             name: "identity",
@@ -86,6 +86,18 @@ fn role_contracts() -> [RoleContract; 9] {
             name: "push",
             subscribe: PUSH_NATS_SUBSCRIBE,
             publish: PUSH_NATS_PUBLISH,
+        },
+        // domains и federation: v2-блоки генерирует реестр, а не-v2 права (только свой ящик ответов и запросы
+        // в шину) сверяются здесь (B0116-5)
+        RoleContract {
+            name: "domains",
+            subscribe: &["_INBOX.domains.>"],
+            publish: &[REQUEST_INBOX],
+        },
+        RoleContract {
+            name: "federation",
+            subscribe: &["_INBOX.federation.>"],
+            publish: &[REQUEST_INBOX],
         },
         RoleContract {
             name: "gateway",

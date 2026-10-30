@@ -103,15 +103,24 @@ pub async fn prune_nonces(pool: &SqlitePool, now_ms: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
-pub async fn outbox_put(pool: &SqlitePool, dest: &str, payload: &[u8], now_ms: i64) -> sqlx::Result<()> {
-    sqlx::query("INSERT INTO outbox (dest_domain, payload, attempts, next_ms, created_ms) VALUES (?, ?, 0, ?, ?)")
-        .bind(dest)
-        .bind(payload)
-        .bind(now_ms)
-        .bind(now_ms)
-        .execute(pool)
-        .await?;
-    Ok(())
+/// Писем в очереди на один домен: сверх — не принимаем (недоступный сервер не копит очередь без предела).
+pub const OUTBOX_MAX_PER_DEST: i64 = 20_000;
+
+/// `false` — очередь домена полна, письмо не поставлено.
+pub async fn outbox_put(pool: &SqlitePool, dest: &str, payload: &[u8], now_ms: i64) -> sqlx::Result<bool> {
+    let r = sqlx::query(
+        "INSERT INTO outbox (dest_domain, payload, attempts, next_ms, created_ms)
+         SELECT ?, ?, 0, ?, ? WHERE (SELECT COUNT(*) FROM outbox WHERE dest_domain = ?) < ?",
+    )
+    .bind(dest)
+    .bind(payload)
+    .bind(now_ms)
+    .bind(now_ms)
+    .bind(dest)
+    .bind(OUTBOX_MAX_PER_DEST)
+    .execute(pool)
+    .await?;
+    Ok(r.rows_affected() == 1)
 }
 
 pub type OutboxRow = (i64, String, Vec<u8>, i64, i64);

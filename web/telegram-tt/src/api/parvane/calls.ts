@@ -57,6 +57,7 @@ const BUSY_OVERLAY_MS = 2500;
 // Сколько групповых звонков держим в «уже отработанных»: больше приглашений в
 // окне одного таймаута вызова не бывает
 const BUSY_GROUP_CALL_LIMIT = 64;
+const MAX_BUFFERED_GROUP_SIGNALS = 256;
 
 type CallWindowState = {
   state: string;
@@ -712,7 +713,12 @@ export function createCallController(deps: CallDependencies) {
     callWindow.pendingGroup = true;
     callWindow.pendingGroupTitle = inviteGroupTitle(
       invite,
-      (group) => store.getGroupInfo(group)?.name,
+      // Своё название — только если пригласивший действует в этой группе; иначе приглашению
+      // нельзя подставить имя чужой знакомой группы
+      (group) => {
+        const info = store.getGroupInfo(group);
+        return info?.members.some((m) => m.address === from && m.role !== 'banned') ? info.name : undefined;
+      },
       () => findGroupTitleForParticipants(invite.participants),
     );
     pendingGroupInvite.title = callWindow.pendingGroupTitle;
@@ -731,6 +737,9 @@ export function createCallController(deps: CallDependencies) {
       // личный вызов (listeners.onIncoming) — иначе заблокированный по-прежнему
       // может заставить клиент звонить, начав групповой звонок
       if (deps.isBlocked(from)) return;
+      // Список участников ограничен лимитом mesh и содержит самого пригласившего: иначе
+      // приглашение раздувает рассылку отказов и буфер (отказы веером на любые адреса)
+      if (signal.participants.length > GROUP_CALL_MAX_PARTICIPANTS || !signal.participants.includes(from)) return;
       if (groupEngine.currentGroupCallId === signal.group_call_id) {
         void groupEngine.handleSignal(from, signal);
         return;
@@ -765,7 +774,9 @@ export function createCallController(deps: CallDependencies) {
         }
         return;
       }
-      pendingGroupInvite.buffered.push({ from, signal, isAuthenticated });
+      if (pendingGroupInvite.buffered.length < MAX_BUFFERED_GROUP_SIGNALS) {
+        pendingGroupInvite.buffered.push({ from, signal, isAuthenticated });
+      }
       return;
     }
     // Не в этом звонке (личный разговор / отклонили) — парный invite отбиваем

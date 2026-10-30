@@ -150,8 +150,15 @@ fn err(code: ErrorCode, retry_after_ms: u32) -> Error {
     Error { code: code as i32, retry_after_ms }
 }
 
+/// GW-01: сколько ждём места в выходной очереди. Клиент, переставший читать сокет, иначе
+/// останавливал бы цикл `serve` вместе с его таймаутами и держал слот соединения.
+const SEND_TIMEOUT_SECS: u64 = 10;
+
 async fn send(tx: &mpsc::Sender<Vec<u8>>, kind: frame::Kind) -> bool {
-    tx.send(codec::encode_frame(kind)).await.is_ok()
+    matches!(
+        tokio::time::timeout(Duration::from_secs(SEND_TIMEOUT_SECS), tx.send(codec::encode_frame(kind))).await,
+        Ok(Ok(()))
+    )
 }
 
 async fn respond(tx: &mpsc::Sender<Vec<u8>>, id: u64, r: Result<Vec<u8>, Error>) {
@@ -401,6 +408,9 @@ impl Session {
         if !anon::events_allowed(self.channel) {
             return Err(ErrorCode::Forbidden);
         }
+        if subjects.is_empty() {
+            return Err(ErrorCode::Invalid);
+        }
         if self.sub_count + subjects.len() > MAX_SUBS {
             return Err(ErrorCode::Limit);
         }
@@ -474,6 +484,8 @@ async fn group_typing(sh: &Shared, r: EphemeralGroupTypingRequest) -> Result<(),
     let pk: [u8; 32] = info.send_public_key.as_slice().try_into().map_err(|_| ErrorCode::Forbidden)?;
     parvane_protocol::group::verify_group_typing(&pk, &g, r.epoch, &r.nonce, &r.payload, &r.epoch_signature)
         .map_err(|_| ErrorCode::Forbidden)?;
+    // Канал в подписанные данные не входит (wire не меняем): хотя бы не в чужой канал присутствия.
+    sh.eph.typing_publish(&r.channel_id, Instant::now())?;
     sh.eph.group_nonce_fresh(&g.id, &r.nonce, Instant::now())?;
     // Подписчики получают тот же вид, что и личный typing: (channel_id, payload).
     let out = EphemeralTypingRequest { channel_id: r.channel_id.clone(), payload: r.payload.clone() }.encode_to_vec();
@@ -629,6 +641,8 @@ pub(crate) async fn serve(mut in_rx: mpsc::Receiver<Vec<u8>>, tx: mpsc::Sender<V
     let mut reverify = tokio::time::interval(Duration::from_secs(crate::reverify_secs()));
     reverify.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     reverify.tick().await;
+    // GW-01: простой анонимной сессии считается от последнего Request; Ping/Pong его не продлевают.
+    let mut last_request = Instant::now();
     loop {
         let need_auth = channel == Channel::Identified && !s.authed();
         // GW-02: анонимный канал без входа не держит слот сутками — только
@@ -636,7 +650,7 @@ pub(crate) async fn serve(mut in_rx: mpsc::Receiver<Vec<u8>>, tx: mpsc::Sender<V
         let wait = if need_auth {
             deadline.saturating_duration_since(Instant::now())
         } else if channel == Channel::AnonymousDelivery {
-            Duration::from_secs(crate::limits::anon_idle_secs())
+            Duration::from_secs(crate::limits::anon_idle_secs()).saturating_sub(last_request.elapsed())
         } else {
             Duration::from_secs(86_400)
         };
@@ -675,9 +689,19 @@ pub(crate) async fn serve(mut in_rx: mpsc::Receiver<Vec<u8>>, tx: mpsc::Sender<V
                             }
                         }
                     }
-                    Some(frame::Kind::Request(r)) => s.handle_request(r).await,
+                    Some(frame::Kind::Request(r)) => {
+                        last_request = Instant::now();
+                        s.handle_request(r).await;
+                        // Выходная очередь не освободилась за SEND_TIMEOUT — клиент не читает: закрываем.
+                        match tokio::time::timeout(Duration::from_secs(SEND_TIMEOUT_SECS), tx.reserve()).await {
+                            Ok(Ok(_)) => {}
+                            _ => break,
+                        }
+                    }
                     Some(frame::Kind::Ping(p)) => {
-                        send(&tx, frame::Kind::Pong(Pong { nonce: p.nonce })).await;
+                        if !send(&tx, frame::Kind::Pong(Pong { nonce: p.nonce })).await {
+                            break;
+                        }
                     }
                     Some(frame::Kind::Pong(_)) => {}
                     _ => respond(&tx, 0, Err(err(ErrorCode::Invalid, 0))).await,
@@ -690,11 +714,21 @@ pub(crate) async fn serve(mut in_rx: mpsc::Receiver<Vec<u8>>, tx: mpsc::Sender<V
                 }
             }
             r = revoked.recv(), if s.authed() => {
-                if let Ok((u, d)) = r {
-                    if u == s.user && d == s.device {
-                        send(&tx, frame::Kind::Event(Event { kind: "session.revoked".into(), ..Default::default() })).await;
-                        break;
+                match r {
+                    Ok((u, d)) => {
+                        if u == s.user && d == s.device {
+                            send(&tx, frame::Kind::Event(Event { kind: "session.revoked".into(), ..Default::default() })).await;
+                            break;
+                        }
                     }
+                    // GW-04: уведомления пропущены (переполнение канала) — своё могло потеряться; сверяем токен сразу.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if verify(&sh.nats, &s.token).await.is_err() {
+                            send(&tx, frame::Kind::Event(Event { kind: "session.revoked".into(), ..Default::default() })).await;
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {}
                 }
             }
         }

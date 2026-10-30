@@ -435,11 +435,6 @@ void RegisterSettingsHandlers(Router &router) {
 	});
 
 	router.add(u"settings"_q, {
-		.path = u"emoji-status"_q,
-		.action = AliasTo{ u"chats"_q, u"emoji-status"_q },
-	});
-
-	router.add(u"settings"_q, {
 		.path = u"profile-color"_q,
 		.action = AliasTo{ u"settings"_q, u"edit/your-color"_q },
 	});

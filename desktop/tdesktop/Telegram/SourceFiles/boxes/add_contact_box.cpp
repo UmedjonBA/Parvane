@@ -1656,22 +1656,3 @@ void EditNameBox::save() {
 		Data::PeerUpdate::Flag::Name);
 	closeBox();
 }
-
-void EditNameBox::saveSelfFail(const QString &error) {
-	if (error == "NAME_NOT_MODIFIED") {
-		_user->setName(
-			TextUtilities::SingleLine(_first->getLastText().trimmed()),
-			TextUtilities::SingleLine(_last->getLastText().trimmed()),
-			QString(),
-			TextUtilities::SingleLine(_user->username()));
-		closeBox();
-	} else if (error == "FIRSTNAME_INVALID") {
-		_first->setFocus();
-		_first->showError();
-	} else if (error == "LASTNAME_INVALID") {
-		_last->setFocus();
-		_last->showError();
-	} else {
-		_first->setFocus();
-	}
-}

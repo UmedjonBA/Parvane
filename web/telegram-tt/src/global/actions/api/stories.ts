@@ -696,23 +696,6 @@ addActionHandler('selectStoryAlbum', (global, actions, payload): ActionReturnTyp
   actions.loadPeerProfileStories({ peerId, tabId });
 });
 
-addActionHandler('loadAlbumStories', async (global, actions, payload): Promise<void> => {
-  const { peerId, albumId, offsetId } = payload;
-  const peer = selectPeer(global, peerId);
-  if (!peer) return;
-
-  const result = await callApi('fetchAlbumStories', {
-    peer,
-    albumId,
-    offset: offsetId || 0,
-  });
-  if (!result) return;
-
-  global = getGlobal();
-  global = addStoriesForPeer(global, peerId, result.stories, result.pinnedIds);
-  setGlobal(global);
-});
-
 addActionHandler('resetSelectedStoryAlbum', (global, actions, payload): ActionReturnType => {
   const { tabId = getCurrentTabId() } = payload || {};
 

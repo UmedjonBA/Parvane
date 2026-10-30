@@ -55,24 +55,6 @@ addActionHandler('closeNewContactDialog', (global, actions, payload): ActionRetu
   return closeNewContactDialog(global, tabId);
 });
 
-addActionHandler('closeSuggestedStatusModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    suggestedStatusModal: undefined,
-  }, tabId);
-});
-
-addTabStateResetterAction('closeChatRefundModal', 'chatRefundModal');
-
-addActionHandler('openDisableSharingAboutModal', (global, actions, payload): ActionReturnType => {
-  const { userId, tabId = getCurrentTabId() } = payload;
-
-  return updateTabState(global, {
-    disableSharingAboutModal: { userId },
-  }, tabId);
-});
-
 addTabStateResetterAction('closeDisableSharingAboutModal', 'disableSharingAboutModal');
 
 addActionHandler('openProfileRatingModal', (global, actions, payload): ActionReturnType => {
@@ -85,8 +67,6 @@ addActionHandler('openProfileRatingModal', (global, actions, payload): ActionRet
     },
   }, tabId);
 });
-
-addTabStateResetterAction('closeProfileRatingModal', 'profileRatingModal');
 
 addActionHandler('openRankModal', (global, actions, payload): ActionReturnType => {
   const { tabId = getCurrentTabId(), ...rest } = payload;

@@ -1,5 +1,5 @@
 import type { FC } from '../../../../lib/teact/teact';
-import { memo, useCallback, useEffect } from '../../../../lib/teact/teact';
+import { memo, useEffect } from '../../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../../global';
 
 import type { ApiLimitTypeWithModal } from '../../../../api/types';
@@ -19,7 +19,6 @@ import useOldLang from '../../../../hooks/useOldLang';
 
 import Button from '../../../ui/Button';
 import Modal from '../../../ui/Modal';
-import PremiumLimitsCompare from './PremiumLimitsCompare';
 
 import styles from './PremiumLimitReachedModal.module.scss';
 
@@ -134,16 +133,11 @@ const PremiumLimitReachedModal: FC<OwnProps & StateProps> = ({
   isPremium,
   canBuyPremium,
 }) => {
-  const { closeLimitReachedModal, openPremiumModal } = getActions();
+  const { closeLimitReachedModal } = getActions();
   const lang = useLang();
   const oldLang = useOldLang();
 
   const [isClosing, startClosing, stopClosing] = useFlag();
-
-  const handleClick = useCallback(() => {
-    openPremiumModal();
-    startClosing();
-  }, [openPremiumModal, startClosing]);
 
   useEffect(() => {
     if (!limit && isClosing) stopClosing();
@@ -162,7 +156,6 @@ const PremiumLimitReachedModal: FC<OwnProps & StateProps> = ({
     valueFormatter,
   });
   const icon = limit && LIMIT_ICON[limit];
-  const canUpgrade = canBuyPremium && !isPremium;
 
   return (
     <Modal
@@ -172,25 +165,14 @@ const PremiumLimitReachedModal: FC<OwnProps & StateProps> = ({
       title={title}
       className={styles.root}
     >
-      {!canUpgrade && (
-        <div className={styles.limitBadge}>
-          <i className={buildClassName(styles.limitIcon, icon, 'icon')} />
-          <div className={styles.limitValue}>
-            {valueFormatter?.(
-              lang, isPremium ? premiumValue : defaultValue,
-            ) || (isPremium ? premiumValue : defaultValue)}
-          </div>
+      <div className={styles.limitBadge}>
+        <i className={buildClassName(styles.limitIcon, icon, 'icon')} />
+        <div className={styles.limitValue}>
+          {valueFormatter?.(
+            lang, isPremium ? premiumValue : defaultValue,
+          ) || (isPremium ? premiumValue : defaultValue)}
         </div>
-      )}
-
-      {canUpgrade && (
-        <PremiumLimitsCompare
-          className={styles.limitCompare}
-          leftValue={valueFormatter?.(lang, defaultValue) || defaultValue?.toString()}
-          rightValue={valueFormatter?.(lang, premiumValue) || premiumValue?.toString()}
-          floatingBadgeIcon={icon}
-        />
-      )}
+      </div>
 
       <div>
         {renderText(description || '', ['simple_markdown', 'br'])}
@@ -203,22 +185,8 @@ const PremiumLimitReachedModal: FC<OwnProps & StateProps> = ({
           onClick={startClosing}
           color="primary"
         >
-          {lang(canUpgrade ? 'Cancel' : 'OK')}
+          {lang('OK')}
         </Button>
-        {canUpgrade
-          && (
-            <Button
-              className="confirm-dialog-button"
-              isText
-              onClick={handleClick}
-              color="primary"
-              iconName="double-badge"
-              iconClassName={styles.x2}
-              iconAlignment="end"
-            >
-              {lang('IncreaseLimit')}
-            </Button>
-          )}
       </div>
     </Modal>
   );

@@ -175,7 +175,9 @@ export function createSyncController(deps: SyncDependencies) {
       return;
     }
     if (content.kind === 'task_response' && content.offer && stored.from) {
-      deps.taskOffers.applyResponse(content.offer, stored.from, Boolean(content.accepted), stored.ts);
+      deps.taskOffers.applyResponse(
+        content.offer, stored.from, Boolean(content.accepted), stored.ts, pollChatIdOf(stored),
+      );
       deps.refreshTaskOfferMessage(content.offer);
     }
   }
@@ -204,7 +206,10 @@ export function createSyncController(deps: SyncDependencies) {
       JSON.stringify({ usernames: addresses }),
     );
     try {
-      const users = (JSON.parse(raw) as { users?: WireUserInfo[] }).users || [];
+      const asked = new Set(addresses);
+      // Применяем только то, что спрашивали: сервер identity не вправе подсунуть профили чужих адресов
+      const users = ((JSON.parse(raw) as { users?: WireUserInfo[] }).users || [])
+        .filter((userInfo) => asked.has(userInfo.username));
       const store = deps.getStore();
       const found = new Set(users.map((u) => u.username));
       const missing = addresses.filter((address) => !found.has(address) && address !== store.self);
@@ -809,7 +814,6 @@ export function createSyncController(deps: SyncDependencies) {
     pushMentionState,
     announceKeyChange,
     announceRename,
-    getFlags: (uuid: string) => wireFlagsByUuid.get(uuid),
     getReadOutboxMax: (chatId: string) => readOutboxMaxByChatId.get(chatId),
     hasReportedRead: (uuid: string) => reportedReadUuids.has(uuid),
     isSynced: () => isSynced,

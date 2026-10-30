@@ -15,6 +15,10 @@ import { isSafeEntityUrl } from './entities';
 
 const MAX_TEXT_LENGTH = 16384;
 const MAX_AUTO_ENTITIES = 100;
+// Выражения почты и голого домена на длинном «слове» без пробелов работают за квадрат:
+// 16 КиБ одного токена — сотни миллисекунд на каждую сборку сообщения. Разметку такого
+// текста не делаем: настоящие ссылки и адреса в токен такой длины не бывают
+const MAX_TOKEN_LENGTH = 2048;
 
 // Зоны голых доменов (`example.com`): без списка любое «файл.txt» или «т.е.»
 // становилось бы ссылкой. Ссылки со схемой распознаются при любой зоне
@@ -108,6 +112,7 @@ function hostOf(url: string) {
 
 export function detectAutoEntities(text: string): ApiMessageEntity[] {
   if (!text || text.length > MAX_TEXT_LENGTH) return [];
+  if (text.length > MAX_TOKEN_LENGTH && text.split(/\s+/).some((token) => token.length > MAX_TOKEN_LENGTH)) return [];
   const found: ApiMessageEntity[] = [];
   const isFree = (range: Range) => !found.some((entity) => overlaps(entity, range));
   const push = (type: ApiMessageEntityTypes, offset: number, length: number) => {

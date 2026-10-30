@@ -10,7 +10,6 @@ import {
   MEDIA_PROGRESSIVE_CACHE_NAME,
 } from '../../../config';
 import { updateAppBadge } from '../../../util/appBadge';
-import { toCredentialRequestOptions } from '../../../util/browser/passkeys';
 import {
   IS_WEBAUTHN_SUPPORTED,
   IS_WEBM_SUPPORTED, MAX_BUFFER_SIZE, PLATFORM_ENV,
@@ -128,24 +127,6 @@ addActionHandler('setAuthPassword', (global, actions, payload): ActionReturnType
   });
 });
 
-addActionHandler('loginWithPasskey', async (global, actions, payload): Promise<void> => {
-  const passkeyOption = global.auth.passkeyOption;
-  if (!passkeyOption) return;
-
-  const credential = await navigator.credentials.get(toCredentialRequestOptions(passkeyOption)).catch((e: unknown) => {
-    actions.showNotification({
-      message: {
-        key: 'PasskeyLoginError',
-      },
-      tabId: getCurrentTabId(),
-    });
-  });
-  if (!credential) return;
-
-  const publicKeyCredential = credential as PublicKeyCredential;
-  callApi('restartAuthWithPasskey', publicKeyCredential.toJSON() as AuthenticationResponseJSON);
-});
-
 addActionHandler('uploadProfilePhoto', async (global, actions, payload): Promise<void> => {
   const {
     file, isFallback, isVideo, videoTs, bot,
@@ -166,17 +147,6 @@ addActionHandler('uploadProfilePhoto', async (global, actions, payload): Promise
   if (!userId) return;
 
   actions.loadFullUser({ userId });
-});
-
-addActionHandler('signUp', (global, actions, payload): ActionReturnType => {
-  const { firstName, lastName } = payload;
-
-  void callApi('provideAuthRegistration', { firstName, lastName });
-
-  return updateAuth(global, {
-    isLoading: true,
-    errorKey: undefined,
-  });
 });
 
 addActionHandler('parvaneStartRegistration', (global): ActionReturnType => {
@@ -254,7 +224,8 @@ addActionHandler('signOut', async (global, actions, payload): Promise<void> => {
   try {
     resetInitialLocationHash();
     resetLocationHash();
-    await Promise.race([callApi('destroy'), pause(3000)]);
+    // Дольше LEAVE_TIMEOUT_MS провайдера (5 с): экран входа не раньше стирания ключей
+    await Promise.race([callApi('destroy'), pause(6500)]);
     await forceWebsync(false);
   } catch (err) {
     // Do nothing
@@ -342,20 +313,6 @@ addActionHandler('disconnect', (): ActionReturnType => {
 
 addActionHandler('destroyConnection', (): ActionReturnType => {
   void callApiLocal('destroy', true, true);
-});
-
-addActionHandler('loadNearestCountry', async (global): Promise<void> => {
-  if (global.connectionState !== 'connectionStateReady') {
-    return;
-  }
-
-  const authNearestCountry = await callApi('fetchNearestCountry');
-
-  global = getGlobal();
-  global = updateAuth(global, {
-    nearestCountry: authNearestCountry,
-  });
-  setGlobal(global);
 });
 
 addActionHandler('setDeviceToken', (global, actions, payload): ActionReturnType => {

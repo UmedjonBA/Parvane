@@ -64,8 +64,10 @@ int MinItemHeight(Type type, int width) {
 	case Type::Video:
 	case Type::RoundFile: {
 		auto itemsLeft = st::infoMediaSkip;
-		auto itemsInRow = (width - itemsLeft)
-			/ (st::infoMediaMinGridSize + st::infoMediaSkip);
+		const auto itemsInRow = std::max(
+			(width - itemsLeft)
+				/ (st::infoMediaMinGridSize + st::infoMediaSkip),
+			1);
 		return (st::infoMediaMinGridSize + st::infoMediaSkip) / itemsInRow;
 	} break;
 

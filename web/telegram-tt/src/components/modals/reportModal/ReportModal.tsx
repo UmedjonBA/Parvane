@@ -33,7 +33,7 @@ const ReportModal = ({
   modal,
 }: OwnProps) => {
   const {
-    reportMessages, reportStory, closeReportModal, openPreviousReportModal,
+    reportMessages, closeReportModal, openPreviousReportModal,
   } = getActions();
   const lang = useOldLang();
   const isOpen = Boolean(modal);
@@ -44,17 +44,12 @@ const ReportModal = ({
 
   const handleOptionClick = useLastCallback((e, option: string) => {
     const {
-      messageIds, subject, peerId, chatId,
+      messageIds, subject, chatId,
     } = modal!;
     if (!messageIds) return;
     switch (subject) {
       case 'message':
         reportMessages({ chatId: chatId!, messageIds, option });
-        break;
-      case 'story':
-        reportStory({
-          storyId: messageIds[0], peerId: peerId!, option,
-        });
         break;
     }
   });
@@ -106,7 +101,7 @@ const ReportModal = ({
         <div className={buildClassName('modal-title', styles.modalTitle, hasSubtitle && styles.titleMultiline)}>
           <h3 className={buildClassName(styles.title, renderingDepth && styles.hasDepth)}>
             {isOptionsSection
-              ? lang(modal?.subject === 'story' ? 'ReportStory' : 'Report')
+              ? lang('Report')
               : translateParvane(lang, renderingSection?.title)}
           </h3>
           {isOptionsSection && renderingSection.subtitle && (
@@ -150,18 +145,13 @@ const ReportModal = ({
 
   const sendMessageReportHandler = useLastCallback(() => {
     const {
-      messageIds, subject, peerId, chatId,
+      messageIds, subject, chatId,
     } = modal!;
     const option = isCommentSection ? renderingSection.option : undefined;
     switch (subject) {
       case 'message':
         reportMessages({
           chatId: chatId!, messageIds, option, description: text,
-        });
-        break;
-      case 'story':
-        reportStory({
-          storyId: messageIds?.[0], peerId: peerId!, option, description: text,
         });
         break;
     }
@@ -174,7 +164,7 @@ const ReportModal = ({
       header={header}
       onClose={closeReportMessageModalHandler}
       contentClassName={styles.content}
-      className={buildClassName(styles.root, modal?.subject === 'story' && 'component-theme-dark')}
+      className={styles.root}
     >
       <Transition
         name="slide"

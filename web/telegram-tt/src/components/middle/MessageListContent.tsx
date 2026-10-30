@@ -46,14 +46,12 @@ import MiniTable, { type TableEntry } from '../common/MiniTable';
 import ActionMessage from './message/ActionMessage';
 import Message from './message/Message';
 import SenderGroupContainer from './message/SenderGroupContainer';
-import SponsoredMessage from './message/SponsoredMessage';
 import MessageListAccountInfo from './MessageListAccountInfo';
 import MessageListBottomMarker from './MessageListBottomMarker';
 
 import actionMessageStyles from './message/ActionMessage.module.scss';
 
 interface OwnProps {
-  canShowAds?: boolean;
   chatId: string;
   threadId: ThreadId;
   messageIds: number[];
@@ -108,7 +106,6 @@ function senderGroupContainsOriginalId(
 }
 
 const MessageListContent = ({
-  canShowAds,
   chatId,
   threadId,
   messageIds,
@@ -168,7 +165,6 @@ const MessageListContent = ({
 
   const areDatesClickable = !isSavedDialog && !isSchedule;
   const isPrivate = isUserId(chatId);
-  const shouldRenderSponsoredMessage = canShowAds && isViewportNewest;
   const shouldHideComments = hasLinkedChat === false || !isChannelChat || Boolean(isChatMonoforum);
 
   const {
@@ -659,16 +655,6 @@ const MessageListContent = ({
         <MessageListBottomMarker
           key="bottom-marker"
           isFocused={shouldScrollToBottom}
-          className={shouldRenderSponsoredMessage ? 'with-sponsored' : undefined}
-        />
-      )}
-      {shouldRenderSponsoredMessage && (
-        <SponsoredMessage
-          key={chatId}
-          chatId={chatId}
-          containerRef={containerRef}
-          observeIntersectionForLoading={observeIntersectionForLoading}
-          observeIntersectionForPlaying={observeIntersectionForPlaying}
         />
       )}
     </div>

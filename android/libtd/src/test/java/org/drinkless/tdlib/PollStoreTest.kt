@@ -45,7 +45,9 @@ class PollStoreTest {
         assertEquals(listOf("bob@local", "carol@local"), s.voters("p", 1))
         assertTrue(s.applyVote("p", "bob@local", emptyList())) // отзыв
         assertEquals(1, s.toTdPoll("p", "x", idOf)!!.totalVoterCount)
-        assertTrue(s.close("p")); assertFalse(s.close("p"))
+        assertFalse(s.close("p", "mallory@local")) // чужое закрытие не принимается
+        assertFalse(s.toTdPoll("p", "x", idOf)!!.isClosed)
+        assertTrue(s.close("p", "alice@local")); assertFalse(s.close("p", "alice@local"))
         assertFalse(s.applyVote("p", "eve@local", listOf(0)))
         assertTrue(s.toTdPoll("p", "x", idOf)!!.isClosed)
     }
@@ -68,9 +70,15 @@ class PollStoreTest {
     fun votesBeforePollAreBuffered() {
         val s = PollStore()
         assertFalse(s.applyVote("late", "bob@local", listOf(0)))
-        assertFalse(s.close("late"))
+        assertFalse(s.close("late", "mallory@local"))
+        assertFalse(s.close("late", "alice@local"))
         val e = s.register("late", "alice@local", PollStore.buildContent("Q", listOf("a"), true, false, false, emptyList(), ""))!!
         assertEquals(1, e.votes.size); assertTrue(e.closed)
+        // отложенное закрытие от чужого не закрывает опрос, когда он приходит
+        val s2 = PollStore()
+        assertFalse(s2.close("x", "mallory@local"))
+        val e2 = s2.register("x", "alice@local", PollStore.buildContent("Q", listOf("a"), true, false, false, emptyList(), ""))!!
+        assertFalse(e2.closed)
         assertTrue(PollStore.isService("poll_vote") && PollStore.isService("poll_close") && !PollStore.isService("poll"))
         assertEquals("poll_vote", PollStore.voteContent("late", listOf(0)).getString("kind"))
         assertEquals("late", PollStore.closeContent("late").getString("poll"))

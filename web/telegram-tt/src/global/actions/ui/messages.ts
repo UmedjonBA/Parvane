@@ -19,6 +19,7 @@ import { compact, findLast } from '../../../util/iteratees';
 import { getTranslationFn } from '../../../util/localization';
 import parseHtmlAsFormattedText from '../../../util/parseHtmlAsFormattedText';
 import { getServerTime } from '../../../util/serverTime';
+import { escapeHtml } from '../../../components/middle/composer/helpers/cleanHtml';
 import versionNotification from '../../../versionNotification.txt?raw';
 import {
   getMediaFilename,
@@ -65,7 +66,6 @@ import {
 } from '../../selectors';
 import { selectMessageDownloadableMedia } from '../../selectors/media';
 import { selectDraft, selectReplyStack, selectThreadInfo } from '../../selectors/threads';
-import { getPeerStarsForMessage } from '../api/messages';
 
 import { getIsMobile } from '../../../hooks/useAppLayout';
 
@@ -787,8 +787,6 @@ addActionHandler('openTodoListModal', (global, actions, payload): ActionReturnTy
   }, tabId);
 });
 
-addTabStateResetterAction('closeTodoListModal', 'todoListModal');
-
 addActionHandler('checkVersionNotification', (global, actions): ActionReturnType => {
   if (CHANGELOG_DATETIME && Date.now() > CHANGELOG_DATETIME + VERSION_NOTIFICATION_DURATION) {
     return;
@@ -976,26 +974,6 @@ addActionHandler('closeReportModal', (global, actions, payload): ActionReturnTyp
   }, tabId);
 });
 
-addActionHandler('openPreviousReportAdModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  const reportAdModal = selectTabState(global, tabId).reportAdModal;
-  if (!reportAdModal) {
-    return undefined;
-  }
-
-  if (reportAdModal.sections.length === 1) {
-    actions.closeReportAdModal({ tabId });
-    return undefined;
-  }
-
-  return updateTabState(global, {
-    reportAdModal: {
-      ...reportAdModal,
-      sections: reportAdModal.sections.slice(0, -1),
-    },
-  }, tabId);
-});
-
 addActionHandler('openPreviousReportModal', (global, actions, payload): ActionReturnType => {
   const { tabId = getCurrentTabId() } = payload || {};
   const reportModal = selectTabState(global, tabId).reportModal;
@@ -1023,13 +1001,6 @@ addActionHandler('openPaidReactionModal', (global, actions, payload): ActionRetu
   }, tabId);
 });
 
-addActionHandler('closePaidReactionModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  return updateTabState(global, {
-    paidReactionModal: undefined,
-  }, tabId);
-});
-
 addActionHandler('openSuggestMessageModal', (global, actions, payload): ActionReturnType => {
   const { chatId, messageId, tabId = getCurrentTabId() } = payload;
   return updateTabState(global, {
@@ -1037,24 +1008,10 @@ addActionHandler('openSuggestMessageModal', (global, actions, payload): ActionRe
   }, tabId);
 });
 
-addActionHandler('closeSuggestMessageModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  return updateTabState(global, {
-    suggestMessageModal: undefined,
-  }, tabId);
-});
-
 addActionHandler('openSuggestedPostApprovalModal', (global, actions, payload): ActionReturnType => {
   const { chatId, messageId, tabId = getCurrentTabId() } = payload;
   return updateTabState(global, {
     suggestedPostApprovalModal: { chatId, messageId },
-  }, tabId);
-});
-
-addActionHandler('closeSuggestedPostApprovalModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-  return updateTabState(global, {
-    suggestedPostApprovalModal: undefined,
   }, tabId);
 });
 
@@ -1081,9 +1038,10 @@ function copyTextForMessages(global: GlobalState, chatId: string, messageIds: nu
   messages.forEach((message) => {
     const sender = isChatChannel(chat) ? chat : selectSender(global, message);
     const senderTitle = `> ${sender ? getPeerTitle(lang, sender) : message.forwardInfo?.hiddenUserName || ''}:`;
+    const senderTitleHtml = escapeHtml(senderTitle);
     const statefulContent = getMessageStatefulContent(global, message);
 
-    resultHtml.push(senderTitle);
+    resultHtml.push(senderTitleHtml);
     resultHtml.push(`${renderMessageSummaryHtml(lang, message)}\n`);
 
     resultText.push(senderTitle);
@@ -1132,65 +1090,6 @@ addActionHandler('openAboutAdsModal', (global, actions, payload): ActionReturnTy
       sponsorInfo,
     },
   }, tabId);
-});
-
-addActionHandler('closeAboutAdsModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    aboutAdsModal: undefined,
-  }, tabId);
-});
-
-addActionHandler('closePreparedInlineMessageModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    preparedMessageModal: undefined,
-  }, tabId);
-});
-
-addActionHandler('closeSharePreparedMessageModal', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  return updateTabState(global, {
-    sharePreparedMessageModal: undefined,
-  }, tabId);
-});
-
-addActionHandler('updateSharePreparedMessageModalSendArgs', async (global, actions, payload): Promise<void> => {
-  const { args, tabId = getCurrentTabId() } = payload || {};
-  const tabState = selectTabState(global, tabId);
-
-  if (!tabState.sharePreparedMessageModal) {
-    return;
-  }
-
-  if (!args) {
-    global = updateTabState(global, {
-      sharePreparedMessageModal: {
-        ...tabState.sharePreparedMessageModal,
-        pendingSendArgs: undefined,
-      },
-    }, tabId);
-    setGlobal(global);
-    return;
-  }
-
-  const starsForSendMessage = await getPeerStarsForMessage(global, args.peerId);
-
-  global = getGlobal();
-  global = updateTabState(global, {
-    sharePreparedMessageModal: {
-      ...tabState.sharePreparedMessageModal,
-      pendingSendArgs: {
-        peerId: args.peerId,
-        threadId: args.threadId,
-        starsForSendMessage,
-      },
-    },
-  }, tabId);
-  setGlobal(global);
 });
 
 addActionHandler('openQuickPreview', (global, actions, payload): ActionReturnType => {

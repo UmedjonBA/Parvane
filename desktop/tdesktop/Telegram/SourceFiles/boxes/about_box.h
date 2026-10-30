@@ -15,5 +15,4 @@ void ArchiveHintBox(
 	bool unarchiveOnNewMessage,
 	Fn<void()> onUnarchive);
 
-QString telegramFaqLink();
 QString currentVersionText();

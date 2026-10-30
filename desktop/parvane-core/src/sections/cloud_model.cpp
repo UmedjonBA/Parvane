@@ -120,11 +120,14 @@ std::string getExtension(std::string_view name) {
 }
 
 std::optional<NameError> validateName(std::string_view name) {
-    if (u::trim32(u::decode(name)).empty()) return NameError::Empty;
+    const auto cps = u::decode(name);
+    if (u::trim32(cps).empty()) return NameError::Empty;
+    // Как движок (`cloud::check_name`): пробелы по краям запрещены
+    if (u::trim32(cps) != cps) return NameError::BadChars;
     if (static_cast<int64_t>(name.size()) > kNameMaxBytes) return NameError::TooLong;
-    for (const char c : name) {
-        const auto b = static_cast<unsigned char>(c);
-        if (b == '/' || b == '\\' || b < 0x20 || b == 0x7F) return NameError::BadChars;
+    // Управляющие — как `c.is_control()` движка: C0, DEL и C1
+    for (const char32_t c : cps) {
+        if (c == U'/' || c == U'\\' || c < 0x20 || (c >= 0x7F && c <= 0x9F)) return NameError::BadChars;
     }
     if (name == "." || name == "..") return NameError::Reserved;
     return std::nullopt;

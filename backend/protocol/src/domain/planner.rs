@@ -502,6 +502,7 @@ fn task_edit_stamp(t: &Task) -> (u64, String) {
     see(t.repeat.as_ref().and_then(|f| f.stamp.as_ref()));
     see(t.origin.as_ref().and_then(|f| f.stamp.as_ref()));
     see(t.source.as_ref().and_then(|f| f.stamp.as_ref()));
+    see(t.remind.as_ref().and_then(|f| f.stamp.as_ref()));
     for o in &t.occurrences {
         see(o.stamp.as_ref());
     }
@@ -547,6 +548,7 @@ impl PlannerState {
             .chain(e.all_day.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.is_holiday.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.color.as_ref().and_then(|f| f.stamp.as_ref()))
+            .chain(e.remind.as_ref().and_then(|f| f.stamp.as_ref()))
             .chain(e.occurrences.iter().filter_map(|o| o.stamp.as_ref()))
         {
             if (s.lamport, s.device_id.as_str()) > (best.0, best.1.as_str()) {
@@ -898,6 +900,8 @@ impl PlannerState {
 
     /// Слить снимок (идемпотентно).
     pub fn merge_snapshot(&mut self, s: &PlannerSnapshot) -> Result<()> {
+        // Формат всех меток снимка (lamport != 0, device_id) — до любого слияния.
+        snapshot_stamps(s)?;
         self.cache.touch();
         for t in &s.tasks {
             check_task(t)?;
@@ -1089,6 +1093,44 @@ pub fn op_stamps(op: &PlannerOp) -> Result<Vec<Stamp>> {
         return Err(ProtoError::InvalidField("changes"));
     }
     Ok(out)
+}
+
+/// Все метки снимка: те же регистры, что у операции (снимок — полный набор изменений).
+pub fn snapshot_stamps(s: &PlannerSnapshot) -> Result<Vec<Stamp>> {
+    let mut changes = Vec::new();
+    let mut add = |c: change::Change| changes.push(Change { change: Some(c) });
+    s.tasks.iter().for_each(|x| add(change::Change::Task(x.clone())));
+    s.events.iter().for_each(|x| add(change::Change::Event(x.clone())));
+    s.lists.iter().for_each(|x| add(change::Change::List(x.clone())));
+    s.nutrition.iter().for_each(|x| add(change::Change::NutritionDay(x.clone())));
+    if let Some(x) = &s.settings {
+        add(change::Change::Settings(x.clone()));
+    }
+    if let Some(x) = &s.goals {
+        add(change::Change::Goals(x.clone()));
+    }
+    s.goal_periods.iter().for_each(|x| add(change::Change::GoalPeriod(x.clone())));
+    s.health.iter().for_each(|x| add(change::Change::Health(x.clone())));
+    s.learned.iter().for_each(|x| add(change::Change::Learned(x.clone())));
+    s.quick_lines.iter().for_each(|x| add(change::Change::QuickLine(x.clone())));
+    s.reminded.iter().for_each(|x| add(change::Change::Reminded(x.clone())));
+    if changes.is_empty() {
+        return Ok(vec![]);
+    }
+    op_stamps(&PlannerOp { changes })
+}
+
+/// Метки снимка в часы (D-16 для снимка): формат верен, а наибольший lamport не выше того, что могли
+/// накопить `upto_seq` операций, каждая из которых проходила `LamportGuard` (скачок не больше
+/// `LAMPORT_MAX_JUMP`). Иначе метка u64::MAX навсегда выигрывала бы любую правку регистра.
+pub fn guard_snapshot(guard: &mut LamportGuard, s: &PlannerSnapshot, upto_seq: u64) -> Result<()> {
+    let max = snapshot_stamps(s)?.iter().map(|x| x.lamport).max().unwrap_or(0);
+    let limit = guard.max_seen().saturating_add(super::LAMPORT_MAX_JUMP.saturating_mul(upto_seq.max(1)));
+    if max > limit {
+        return Err(ProtoError::InvalidField("lamport"));
+    }
+    guard.raise(max);
+    Ok(())
 }
 
 /// Проверить метки операции в порядке журнала (D-16).

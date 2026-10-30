@@ -1,14 +1,12 @@
 import type {
   ApiAttachment,
   ApiChat,
-  ApiChatType,
   ApiDraft,
   ApiError,
   ApiInputMessageReplyInfo,
   ApiInputStoryReplyInfo,
   ApiInputSuggestedPostInfo,
   ApiMessage,
-  ApiMessageReadMetric,
   ApiOnProgress,
   ApiStory,
   ApiUser,
@@ -33,7 +31,6 @@ import {
   MAX_MEDIA_FILES_FOR_ALBUM,
   MESSAGE_ID_REQUIRED_ERROR,
   MESSAGE_LIST_SLICE,
-  RE_TELEGRAM_LINK,
   SERVICE_NOTIFICATIONS_USER_ID,
   STARS_CURRENCY_CODE,
   SUPPORTED_AUDIO_CONTENT_TYPES,
@@ -78,7 +75,7 @@ import {
   splitMessagesForForwarding,
 } from '../../helpers';
 import { isChatAdmin } from '../../helpers/chats';
-import { isApiPeerChat, isApiPeerUser } from '../../helpers/peers';
+import { isApiPeerChat } from '../../helpers/peers';
 import {
   addActionHandler, getActions, getGlobal, getPromiseActions, setGlobal,
 } from '../../index';
@@ -95,7 +92,6 @@ import {
   safeReplacePinnedIds,
   safeReplaceViewportIds,
   updateChat,
-  updateChatFullInfo,
   updateChatMessage,
   updateGlobalSearch,
   updateListedIds,
@@ -103,11 +99,8 @@ import {
   updateMessageTranslation,
   updateOutlyingLists,
   updatePeerFullInfo,
-  updateQuickReplies,
-  updateQuickReplyMessages,
   updateRequestedMessageTranslation,
   updateScheduledMessages,
-  updateSponsoredMessage,
   updateTopicWithState,
   updateUnreadCounters,
   updateUploadByMessageKey,
@@ -138,7 +131,6 @@ import {
   selectFocusedMessageId,
   selectForwardsCanBeSentToChat,
   selectForwardsContainVoiceMessages,
-  selectIsChatBotNotStarted,
   selectIsChatRestricted,
   selectIsChatWithSelf,
   selectIsCurrentUserFrozen,
@@ -756,24 +748,6 @@ addActionHandler('editMessage', (global, actions, payload): ActionReturnType => 
   })();
 });
 
-addActionHandler('editTodo', (global, actions, payload): ActionReturnType => {
-  const {
-    chatId, todo, messageId,
-  } = payload;
-
-  const chat = selectChat(global, chatId);
-  const message = selectChatMessage(global, chatId, messageId);
-  if (!chat || !message) {
-    return;
-  }
-
-  callApi('editTodo', {
-    chat,
-    message,
-    todo,
-  });
-});
-
 addActionHandler('cancelUploadMedia', (global, actions, payload): ActionReturnType => {
   const { chatId, messageId } = payload;
 
@@ -1120,25 +1094,6 @@ addActionHandler('deleteMessages', (global, actions, payload): ActionReturnType 
   if (editingId && messageIds.includes(editingId)) {
     actions.setEditingId({ messageId: undefined, tabId });
   }
-});
-
-addActionHandler('resetLocalPaidMessages', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
-
-  const notifications = selectTabState(global, tabId).notifications;
-  if (!notifications || !notifications.length) return global;
-
-  notifications.forEach((notification) => {
-    if (notification.type === 'paidMessage') {
-      const action = notification.dismissAction;
-      if (action && !Array.isArray(action)) {
-        // @ts-ignore
-        actions[action.action](action.payload);
-      }
-      actions.dismissNotification({ localId: notification.localId, tabId });
-    }
-  });
-  return global;
 });
 
 addActionHandler('deleteParticipantHistory', (global, actions, payload): ActionReturnType => {
@@ -1563,23 +1518,6 @@ addActionHandler('toggleTodoCompleted', (global, actions, payload): ActionReturn
   setGlobal(global);
 
   callApi('toggleTodoCompleted', { chat, messageId: message.id, completedIds, incompletedIds });
-});
-addActionHandler('appendTodoList', (global, actions, payload): ActionReturnType => {
-  const {
-    chatId, items, messageId,
-  } = payload;
-
-  const chat = selectChat(global, chatId);
-  const message = selectChatMessage(global, chatId, messageId);
-  if (!chat || !message) {
-    return;
-  }
-
-  callApi('appendTodoList', {
-    chat,
-    message,
-    items,
-  });
 });
 
 addActionHandler('cancelPollVote', (global, actions, payload): ActionReturnType => {
@@ -2249,19 +2187,6 @@ addActionHandler('loadSeenBy', async (global, actions, payload): Promise<void> =
   setGlobal(global);
 });
 
-addActionHandler('saveDefaultSendAs', (global, actions, payload): ActionReturnType => {
-  const { chatId, sendAsId } = payload;
-  const chat = selectChat(global, chatId);
-  const sendAsChat = selectChat(global, sendAsId) || selectUser(global, sendAsId);
-  if (!chat || !sendAsChat) {
-    return undefined;
-  }
-
-  void callApi('saveDefaultSendAs', { sendAs: sendAsChat, chat });
-
-  return updateChatFullInfo(global, chatId, { sendAsId });
-});
-
 addActionHandler('loadSendAs', async (global, actions, payload): Promise<void> => {
   const { chatId } = payload;
   const chat = selectChat(global, chatId);
@@ -2283,58 +2208,6 @@ addActionHandler('loadSendAs', async (global, actions, payload): Promise<void> =
   global = getGlobal();
   global = updateChat(global, chatId, { sendAsPeerIds: result });
   setGlobal(global);
-});
-
-addActionHandler('loadSendPaidReactionsAs', async (global, actions, payload): Promise<void> => {
-  const { chatId } = payload;
-  const chat = selectChat(global, chatId);
-  if (!chat) {
-    return;
-  }
-
-  const result = await callApi('fetchSendAs', { chat, isForPaidReactions: true });
-  if (!result) {
-    global = getGlobal();
-    global = updateChat(global, chatId, {
-      sendPaidReactionsAsPeerIds: [],
-    });
-    setGlobal(global);
-
-    return;
-  }
-
-  global = getGlobal();
-  global = updateChat(global, chatId, { sendPaidReactionsAsPeerIds: result });
-  setGlobal(global);
-});
-
-addActionHandler('loadSponsoredMessages', async (global, actions, payload): Promise<void> => {
-  if (selectIsCurrentUserFrozen(global)) return;
-
-  const { peerId } = payload;
-  const peer = selectPeer(global, peerId);
-  if (!peer) {
-    return;
-  }
-
-  if (isApiPeerUser(peer) && selectIsChatBotNotStarted(global, peer.id)) {
-    return;
-  }
-
-  const result = await callApi('fetchSponsoredMessages', { peer });
-  if (!result) {
-    return;
-  }
-
-  global = getGlobal();
-  global = updateSponsoredMessage(global, peerId, result.messages[0]);
-  setGlobal(global);
-});
-
-addActionHandler('viewSponsored', (global, actions, payload): ActionReturnType => {
-  const { randomId } = payload;
-
-  void callApi('viewSponsoredMessage', { random: randomId });
 });
 
 addActionHandler('clickSponsored', (global, actions, payload): ActionReturnType => {
@@ -2478,57 +2351,6 @@ addActionHandler('loadUnreadPollVotes', async (global, actions, payload): Promis
   });
 
   setGlobal(global);
-});
-
-addActionHandler('approveSuggestedPost', async (global, actions, payload): Promise<void> => {
-  const { chatId, messageId, scheduleDate, tabId = getCurrentTabId() } = payload;
-  const chat = selectChat(global, chatId);
-  if (!chat) return;
-
-  const message = selectChatMessage(global, chatId, messageId);
-
-  const isAdmin = selectIsMonoforumAdmin(global, chatId);
-
-  if (!isAdmin && message?.suggestedPostInfo?.price?.amount) {
-    const neededAmount = message.suggestedPostInfo.price.amount;
-    const isCurrencyStars = message.suggestedPostInfo.price.currency === STARS_CURRENCY_CODE;
-
-    if (isCurrencyStars) {
-      const currentBalance = global.stars?.balance?.amount || 0;
-      if (neededAmount > currentBalance) {
-        actions.openStarsBalanceModal({
-          topup: {
-            balanceNeeded: neededAmount,
-          },
-          tabId,
-        });
-        return;
-      }
-    } else {
-      const currentTonBalance = global.ton?.balance?.amount || 0;
-      if (neededAmount > currentTonBalance) {
-        actions.openStarsBalanceModal({
-          currency: TON_CURRENCY_CODE,
-          tabId,
-        });
-        return;
-      }
-    }
-  }
-
-  const result = await callApi('toggleSuggestedPostApproval', {
-    chat,
-    messageId,
-    reject: false,
-    scheduleDate,
-  });
-
-  if (!result) return;
-
-  actions.showNotification({
-    message: { key: 'SuggestedPostApproved' },
-    tabId,
-  });
 });
 
 addActionHandler('rejectSuggestedPost', async (global, actions, payload): Promise<void> => {
@@ -2734,7 +2556,8 @@ addActionHandler('openUrl', async (global, actions, payload): Promise<void> => {
 
   const isWhitelisted = appConfig.whitelistedDomains.includes(parsedUrl.hostname);
 
-  const shouldDisplayModal = !urlWithProtocol.match(RE_TELEGRAM_LINK) && !shouldSkipModal && !isWhitelisted;
+  // Parvane: ссылки на telegram.org — сторонний сайт, как любой другой: окно с настоящим адресом
+  const shouldDisplayModal = !shouldSkipModal && !isWhitelisted;
 
   if (shouldDisplayModal) {
     actions.toggleSafeLinkModal({ url: isMixedScript ? parsedUrl.toString() : urlWithProtocol, tabId });
@@ -3243,50 +3066,6 @@ addActionHandler('loadMessageViews', async (global, actions, payload): Promise<v
   setGlobal(global);
 });
 
-const SEND_READ_METRICS_TIMEOUT = 1000;
-let readMetricsReportTimeout: number | undefined;
-let readMetricsToReport: Record<string, ApiMessageReadMetric[]> = {};
-
-function reportMessageReadMetrics() {
-  if (readMetricsReportTimeout) {
-    clearTimeout(readMetricsReportTimeout);
-    readMetricsReportTimeout = undefined;
-  }
-
-  const currentReadMetricsToReport = readMetricsToReport;
-  readMetricsToReport = {};
-
-  const global = getGlobal();
-  if (selectIsCurrentUserFrozen(global)) return;
-
-  Object.entries(currentReadMetricsToReport).forEach(([chatId, metrics]) => {
-    if (!metrics.length) return;
-
-    const chat = selectChat(global, chatId);
-    if (!chat) return;
-
-    void callApi('reportMessageReadMetrics', { chat, metrics });
-  });
-}
-
-addActionHandler('scheduleMessageReadMetricsReport', (global, actions, payload): ActionReturnType => {
-  const { chatId, metrics } = payload;
-
-  if (!metrics.length) return undefined;
-
-  if (!readMetricsReportTimeout) {
-    readMetricsReportTimeout = window.setTimeout(reportMessageReadMetrics, SEND_READ_METRICS_TIMEOUT);
-  }
-
-  if (!readMetricsToReport[chatId]) {
-    readMetricsToReport[chatId] = [];
-  }
-
-  readMetricsToReport[chatId].push(...metrics);
-
-  return undefined;
-});
-
 addActionHandler('loadFactChecks', async (global, actions, payload): Promise<void> => {
   const { chatId, ids } = payload;
 
@@ -3308,11 +3087,6 @@ addActionHandler('loadFactChecks', async (global, actions, payload): Promise<voi
   });
 
   setGlobal(global);
-});
-
-addActionHandler('loadPaidReactionPrivacy', (): ActionReturnType => {
-  callApi('fetchPaidReactionPrivacy');
-  return undefined;
 });
 
 addActionHandler('loadOutboxReadDate', async (global, actions, payload): Promise<void> => {
@@ -3351,29 +3125,6 @@ addActionHandler('loadOutboxReadDate', async (global, actions, payload): Promise
       setGlobal(global);
     }
   }
-});
-
-addActionHandler('loadQuickReplies', async (global): Promise<void> => {
-  const result = await callApi('fetchQuickReplies');
-  if (!result) return;
-
-  global = getGlobal();
-  global = updateQuickReplyMessages(global, buildCollectionByKey(result.messages, 'id'));
-  global = updateQuickReplies(global, result.quickReplies);
-
-  setGlobal(global);
-});
-
-addActionHandler('sendQuickReply', (global, actions, payload): ActionReturnType => {
-  const { chatId, quickReplyId } = payload;
-  const chat = selectChat(global, chatId);
-  if (!chat) return global;
-  callApi('sendQuickReply', {
-    chat,
-    shortcutId: quickReplyId,
-  });
-
-  return global;
 });
 
 addActionHandler('copyMessageLink', async (global, actions, payload): Promise<void> => {
@@ -3464,24 +3215,6 @@ addActionHandler('openPreparedInlineMessageModal', async (global, actions, paylo
       message: result,
       webAppKey,
       botId,
-    },
-  }, tabId);
-  setGlobal(global);
-});
-
-addActionHandler('openSharePreparedMessageModal', (global, actions, payload): ActionReturnType => {
-  const {
-    webAppKey, message, tabId = getCurrentTabId(),
-  } = payload;
-
-  const supportedFilters = message.peerTypes?.filter((type): type is ApiChatType => type !== 'self');
-
-  global = getGlobal();
-  global = updateTabState(global, {
-    sharePreparedMessageModal: {
-      webAppKey,
-      filter: supportedFilters,
-      message,
     },
   }, tabId);
   setGlobal(global);

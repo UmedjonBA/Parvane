@@ -5,8 +5,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <random>
 #include <string>
+
+#include <openssl/rand.h>
 
 namespace parvane {
 
@@ -25,9 +26,15 @@ inline std::string newUuidV7() {
     using namespace std::chrono;
     const std::uint64_t ms =
         duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-    static thread_local std::mt19937_64 rng(std::random_device{}());
-    const std::uint64_t r = rng();
-    const std::uint16_t randA = static_cast<std::uint16_t>(rng() & 0x0FFF);
+    // криптостойкий ГСЧ: call_id — единственная «неугадываемая» привязка сигналов звонка
+    std::uint64_t r = 0;
+    std::uint64_t r2 = 0;
+    if (RAND_bytes(reinterpret_cast<unsigned char *>(&r), sizeof(r)) != 1 ||
+        RAND_bytes(reinterpret_cast<unsigned char *>(&r2), sizeof(r2)) != 1) {
+        r = static_cast<std::uint64_t>(ms) * 0x9E3779B97F4A7C15ull;
+        r2 = r >> 13;
+    }
+    const std::uint16_t randA = static_cast<std::uint16_t>(r2 & 0x0FFF);
 
     std::uint8_t b[16];
     b[0] = (ms >> 40) & 0xFF;

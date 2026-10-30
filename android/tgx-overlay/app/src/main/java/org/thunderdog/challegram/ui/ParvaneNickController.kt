@@ -359,7 +359,7 @@ class ParvaneNickController(context: Context, tdlib: Tdlib) : ViewController<Voi
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = Pv.rem(1f) })
         form.addView(org.thunderdog.challegram.parvane.sections.MascotView(context()), LinearLayout.LayoutParams(Pv.rem(3f), Pv.rem(3f)).apply { topMargin = Pv.rem(1.5f) })
         note(form, Sx.t("Ждём подтверждения в Telegram…", "Waiting for confirmation in Telegram…"), 0f)
-        if (!isLogin) textButton(form, Sx.t("Я нажал Start", "I pressed Start"), top = 1f) { pollOnce(pollGeneration) }
+        if (!isLogin) textButton(form, Sx.t("Я нажал Start", "I pressed Start"), top = 1f) { startPolling() }
         textButton(form, Sx.t("Отмена", "Cancel"), top = 0f) { pollGeneration++; if (isLogin) cancelLogin() else show(Step.NICK) }
         if (!isLogin) try { context().startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) } catch (e: Throwable) { }
     }

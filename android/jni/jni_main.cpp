@@ -471,6 +471,8 @@ json groupJson(const std::string &address, const json &info) {
                 {"about", strOf(info, "about")}, {"default_permissions", perms},
                 {"version", numOf(info, "version", std::uint64_t(0))}, {"pending_requests", numOf(info, "pendingRequests", -1)},
                 {"public_name", strOf(info, "publicName")}, {"is_public", (info.contains("isPublic") && info["isPublic"].is_boolean() && info["isPublic"].get<bool>())},
+                {"public_preview", (info.contains("publicPreview") && info["publicPreview"].is_boolean() && info["publicPreview"].get<bool>())},
+                {"public_history", (info.contains("publicHistory") && info["publicHistory"].is_boolean() && info["publicHistory"].get<bool>())},
                 {"proto", 2}};
 }
 
@@ -795,12 +797,5 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JN
 }
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { journalReplay(); }
-
-// Последние строки журнала клиента — для «Сообщить об ошибке» (без содержимого: logpriv).
-JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeRecentLog(JNIEnv *env, jclass) {
-    std::string out;
-    for (const auto &line : parvane::logpriv::recent()) out += line + "\n";
-    return jout(env, out);
-}
 
 } // extern "C"

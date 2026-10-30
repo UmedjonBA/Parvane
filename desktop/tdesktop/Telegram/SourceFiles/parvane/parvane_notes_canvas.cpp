@@ -1273,7 +1273,8 @@ void Board::paintLinkBody(QPainter &p, const CanvasNode &node, QRectF card) {
 		const auto paintWrapped = [&](const QString &text, const QFont &font, QColor color, int maxLines) {
 			auto layout = QStringList();
 			const auto metrics = QFontMetricsF(font);
-			auto rest = text;
+			// показываем не больше нужного на maxLines строк: подбор длины строки на длинном адресе иначе квадратичен
+			auto rest = text.left(maxLines * 120);
 			while (!rest.isEmpty() && layout.size() < maxLines) {
 				auto count = rest.size();
 				while (count > 1 && metrics.horizontalAdvance(rest.left(count)) > width) {

@@ -195,6 +195,7 @@ void AskAndSaveArticle(const std::string &title, const std::string &markdown, co
 	auto files = json::array();
 	auto total = int64_t(0);
 	auto skipped = false;
+	auto unknownSize = false; // размер заявляет отправитель: 0/нет — не доверяем, спрашиваем
 	auto seen = std::set<std::string>();
 	for (const auto &name : md::embedNames(markdown)) {
 		const auto found = FindMedia(media, name);
@@ -208,6 +209,9 @@ void AskAndSaveArticle(const std::string &title, const std::string &markdown, co
 			skipped = true;
 			continue;
 		}
+		if (declared <= 0.) {
+			unknownSize = true;
+		}
 		total += int64_t(std::max(declared, 0.));
 		files.push_back(*found);
 	}
@@ -217,7 +221,7 @@ void AskAndSaveArticle(const std::string &title, const std::string &markdown, co
 			lt_size,
 			Knowledge::FormatSize(kArticleSaveFileMaxBytes)));
 	}
-	if (total <= kArticleSaveConfirmBytes || files.empty()) {
+	if ((total <= kArticleSaveConfirmBytes && !unknownSize) || files.empty()) {
 		SaveArticle(title, markdown, files);
 		return;
 	}

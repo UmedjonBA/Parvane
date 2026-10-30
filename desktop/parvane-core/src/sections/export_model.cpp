@@ -2,6 +2,7 @@
 // `exportRun.ts` (пути облака, сборка архива из источника).
 #include "parvane/sections/export_model.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -202,7 +203,7 @@ std::string renderMedia(const ExportMedia &media, const ExportLabels &labels) {
     const std::string name = media.fileName && !media.fileName->empty()
         ? *media.fileName
         : (media.path.size() >= 6 ? media.path.substr(6) : std::string());
-    return "<div class=\"media\"><a href=\"" + href + "\">" + escapeHtml(name) + "</a></div>";
+    return "<div class=\"media\"><a href=\"" + href + "\" download>" + escapeHtml(name) + "</a></div>";
 }
 
 ojson reactionsJson(const std::vector<ExportReaction> &reactions) {
@@ -777,7 +778,8 @@ std::vector<ExportCloudFile> cloudExportFiles(const std::vector<ExportCloudTree>
             file.size = node.size;
             if (node.blob && node.blob->is_object() && node.blob->contains("size")
                 && (*node.blob)["size"].is_number()) {
-                file.size = static_cast<int64_t>((*node.blob)["size"].get<double>());
+                // размер из чужого дерева: зажать до безопасного целого, иначе приведение double → int64 не определено
+                file.size = static_cast<int64_t>(std::clamp((*node.blob)["size"].get<double>(), 0.0, 9007199254740992.0));
             }
             if (node.mtime) file.mtime = node.mtime;
             out.push_back(std::move(file));

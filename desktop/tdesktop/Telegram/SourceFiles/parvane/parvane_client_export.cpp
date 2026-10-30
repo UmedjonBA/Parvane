@@ -1,5 +1,6 @@
 // Parvane fork: данные разделов и выгрузка данных (spec 029, T038 — вынесено из parvane_client.cpp).
 #include "parvane/parvane_client_internal.h"
+#include <parvane/chat_rules.h> // chatBlobCipherCap
 
 namespace Parvane {
 
@@ -197,7 +198,9 @@ std::string ExportSnapshotJson(const QStringList &contacts) {
 std::optional<std::string> ExportMediaBytes(
 		const std::string &fileId,
 		const std::string &fileKey,
-		const std::string &fileNonce) {
+		const std::string &fileNonce,
+		const std::string &kind,
+		std::int64_t declaredSize) {
 	const auto id = QString::fromStdString(fileId);
 	if (!IsSafeFileId(id)) {
 		return std::nullopt;
@@ -218,7 +221,8 @@ std::optional<std::string> ExportMediaBytes(
 		return std::nullopt;
 	}
 	try {
-		auto d = DownloadChatBlob(fileId);
+		// Потолок шифртекста — по виду и заявленному размеру (как при показе), а не общий 2 ГиБ
+		auto d = DownloadChatBlob(fileId, parvane::chatrules::chatBlobCipherCap(kind, declaredSize));
 		if (!d.ok) {
 			LOG(("Parvane: выгрузка — вложение %1 не скачано: %2").arg(id, QString::fromStdString(d.error)));
 			return std::nullopt;

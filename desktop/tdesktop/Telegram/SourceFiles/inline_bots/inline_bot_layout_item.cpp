@@ -254,7 +254,10 @@ QString ItemBase::getResultThumbLetter() const {
 
 		parts = domain.split('@').constLast().split('.');
 		if (parts.size() > 1) {
-			return parts.at(parts.size() - 2).at(0).toUpper();
+			const auto name = parts.at(parts.size() - 2);
+			if (!name.isEmpty()) {
+				return name.at(0).toUpper();
+			}
 		}
 	}
 	if (!_result->_title.isEmpty()) {

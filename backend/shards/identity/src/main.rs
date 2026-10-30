@@ -19,9 +19,6 @@ use parvane_types::{
 mod auth;
 mod ratelimit;
 mod users;
-mod prekeys;
-#[allow(unused_imports)]
-pub(crate) use prekeys::*;
 mod devices;
 mod link;
 mod login;

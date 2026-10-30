@@ -6,6 +6,8 @@
 //
 #include "webview/webview_embed.h"
 
+#include <limits>
+
 #include "webview/webview_data_stream.h"
 #include "webview/webview_dialog.h"
 #include "webview/webview_interface.h"
@@ -406,7 +408,15 @@ void ParseRangeHeaderFor(DataRequest &request, std::string_view header) {
 			finishFrom,
 			finishTill,
 			request.limit);
-		if (done.ec != std::errc() || done.ptr != finishTill) {
+		if (done.ec != std::errc()
+			|| done.ptr != finishTill
+			|| request.limit < 0
+			|| request.limit == std::numeric_limits<std::int64_t>::max()) {
+			request.limit = 0;
+			return unsupported();
+		}
+		if (startTill == startFrom) {
+			// Suffix range "bytes=-N" needs the total size, unsupported.
 			request.limit = 0;
 			return unsupported();
 		}

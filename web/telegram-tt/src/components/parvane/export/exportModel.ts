@@ -182,6 +182,8 @@ export function sanitizeFileName(name: string, fallback = 'file') {
   let clean = name
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, '_')
+    // Знаки направления текста и нулевой ширины (маскируют расширение: `fdp.exe` → `exe.pdf`)
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '')
     // Части-«точки» (`..` из пути) убираются: `../../a` → `_a`
     .replace(/(^|_)\.+(?=_|$)/g, '$1')
     .replace(/_{2,}/g, '_')

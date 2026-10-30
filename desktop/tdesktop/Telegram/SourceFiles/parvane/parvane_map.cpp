@@ -8,6 +8,7 @@
 #include "main/main_session.h"
 #include "parvane/parvane_client.h"
 #include "parvane/parvane_local_files.h" // LogSecret
+#include "parvane/parvane_safe_open.h" // DecodeImageBounded
 #include "ui/image/image_location_factory.h" // Images::FromImageInMemory
 
 #include <parvane/map_tiles.h> // parvane-core
@@ -20,6 +21,7 @@
 
 #include <atomic>
 #include <future>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -51,7 +53,7 @@ std::set<PointKey> g_requested; // точки, для которых склей�
 std::map<PointKey, FailedMap> g_failed;   // ждут повтора
 std::map<PointKey, int> g_attempts;       // сколько повторов уже сделано
 bool g_retryScheduled = false;
-std::unique_ptr<parvane::map::TileClient> g_tiles;
+std::shared_ptr<parvane::map::TileClient> g_tiles; // воркер склейки держит свою копию: сброс его не рушит
 std::atomic<int> g_built{ 0 };
 
 // Запомнить неудачу и взвести один общий таймер повтора (любой поток).
@@ -111,6 +113,9 @@ void RequestLocationMap(
 	const auto lat = point.lat();
 	const auto lon = point.lon();
 	const auto key = std::make_pair(lat, lon);
+	if (!std::isfinite(lat) || !std::isfinite(lon)) {
+		return; // NaN/inf в ключе дедупа ломает порядок std::set
+	}
 	auto bus = SnapshotBus();
 	if (!bus.control) {
 		LOG(("Parvane: карта локации не собрана %1,%2: нет транспорта")
@@ -118,16 +123,16 @@ void RequestLocationMap(
 		noteFailed(session.get(), image.get(), key);
 		return;
 	}
-	parvane::map::TileClient *tiles = nullptr;
+	std::shared_ptr<parvane::map::TileClient> tiles;
 	{
 		std::lock_guard<std::mutex> lk(g_mapMutex);
 		if (!g_requested.insert(key).second) {
 			return; // уже собираем / собрали в этой сессии
 		}
 		if (!g_tiles) {
-			g_tiles = std::make_unique<parvane::map::TileClient>();
+			g_tiles = std::make_shared<parvane::map::TileClient>();
 		}
-		tiles = g_tiles.get();
+		tiles = g_tiles;
 	}
 	// Размер и DPR-масштаб — штатные (пузырь 320×240 / scale), зум — как в вебе
 	// (16, а не 13 из ComputeLocation), чтобы карты на клиентах совпадали.
@@ -189,8 +194,11 @@ void RequestLocationMap(
 				if (pngs[i].empty()) {
 					continue;
 				}
-				auto tile = QImage();
-				if (!tile.loadFromData(pngs[i].data(), int(pngs[i].size()), "PNG")) {
+				// тайл от сервера: разбор с пределом размера (256 px на единицу масштаба)
+				const auto tile = DecodeImageBounded(
+					QByteArray::fromRawData(reinterpret_cast<const char*>(pngs[i].data()), int(pngs[i].size())),
+					256 * std::max(1, int(std::ceil(native.scale))));
+				if (tile.isNull()) {
 					continue;
 				}
 				const auto &t = geometry.tiles[i];

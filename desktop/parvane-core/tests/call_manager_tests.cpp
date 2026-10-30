@@ -138,6 +138,9 @@ int main() {
         // carol звонит занятому bob — «занято»
         carol.placeCall("bob@local", "audio");
         check(waitFor([&] { return carol.state() == CallState::Ended; }), "занятый собеседник — отказ «занято»");
+        // сигнал с верным call_id, но не от собеседника, звонок не рвёт
+        bob.handleV2Signal("mallory@local", rejectSignal(bob.callId(), "declined"));
+        check(bob.state() != CallState::Ended, "сигнал не от собеседника игнорируется");
         alice.hangup();
         check(waitFor([&] { return bob.state() == CallState::Ended; }), "отбой доходит до собеседника");
         // spec 024: входящий, принятый другим своим устройством, закрывается молча — без отказа звонящему

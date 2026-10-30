@@ -23,8 +23,10 @@
 //! `parvane_v2rt::serve` (он отвечает только одним сообщением) здесь не
 //! используется; кодирование ответов и разбор тела — из `parvane_v2rt`.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use async_nats::Client;
@@ -75,11 +77,40 @@ pub(crate) struct V2Ctx {
     pub pool_v2: SqlitePool,
     /// Состояние ссылок в памяти: частота по ссылке, потоки скачивания.
     pub links: links::Runtime,
+    /// Серверные копии (`cloud.blob.copy`, `cloud.link.add`) по владельцам: начало окна и скопированные байты.
+    copy_budget: Mutex<HashMap<String, (Instant, u64)>>,
+}
+
+/// Окно учёта серверных копий на владельца.
+const COPY_WINDOW: Duration = Duration::from_secs(3600);
+/// Пауза между пакетами копии: замок записи SQLite не занят непрерывно.
+const COPY_BATCH_PAUSE: Duration = Duration::from_millis(5);
+
+/// Сколько байт серверных копий владелец может заказать за окно (CLD: копия читает и пишет столько же).
+fn copy_bytes_per_hour() -> u64 {
+    std::env::var("PARVANE_CLOUD_COPY_BYTES_PER_HOUR").ok().and_then(|v| v.parse().ok()).unwrap_or(20 * 1024 * 1024 * 1024)
 }
 
 impl V2Ctx {
     pub(crate) fn new(pool: SqlitePool, pool_v2: SqlitePool) -> Self {
-        V2Ctx { pool, pool_v2, links: links::Runtime::new() }
+        V2Ctx { pool, pool_v2, links: links::Runtime::new(), copy_budget: Mutex::new(HashMap::new()) }
+    }
+
+    /// Списать `size` байт из часового бюджета серверных копий владельца; сверх предела — `RATE_LIMITED`.
+    fn charge_copy(&self, owner: &str, size: u64, now: Instant, limit: u64) -> Result<(), ErrorCode> {
+        let mut map = self.copy_budget.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() > 10_000 {
+            map.retain(|_, (start, _)| now.saturating_duration_since(*start) < COPY_WINDOW);
+        }
+        let e = map.entry(owner.to_string()).or_insert((now, 0));
+        if now.saturating_duration_since(e.0) >= COPY_WINDOW {
+            *e = (now, 0);
+        }
+        if e.1.saturating_add(size) > limit {
+            return Err(ErrorCode::RateLimited);
+        }
+        e.1 += size;
+        Ok(())
     }
 }
 
@@ -236,7 +267,7 @@ pub(crate) async fn run(nc: Client, ctx: Arc<V2Ctx>) -> Result<()> {
                 if m.kind == MethodKind::Stream as i32 {
                     // Анонимные скачивания по ссылкам — не больше своего числа
                     // потоков разом, иначе они заняли бы все обработчики шарда.
-                    let _link_stream = if m.name == links::DOWNLOAD {
+                    let _link_stream = if m.name == links::DOWNLOAD || (m.name == "cloud.blob.download_cap" && req.user.is_empty()) {
                         match ctx.links.stream_slot() {
                             Ok(slot) => Some(slot),
                             Err(r) => {
@@ -650,8 +681,12 @@ async fn abort_copy(ctx: &V2Ctx, what: &'static str, file_id: &str) {
 
 /// Перенести чанки источника пакетами и завершить загрузку обычным путём.
 async fn copy_chunks(ctx: &V2Ctx, what: &'static str, owner: &str, source: &str, file_id: &str, size: i64, total: i64) -> Result<(), ErrorCode> {
+    ctx.charge_copy(owner, size.max(0) as u64, Instant::now(), copy_bytes_per_hour())?;
     let mut from = 0;
     while from < total {
+        if from > 0 {
+            tokio::time::sleep(COPY_BATCH_PAUSE).await;
+        }
         sqlx::query(
             "INSERT INTO chunks (file_id, chunk_index, data)
              SELECT ?, chunk_index, data FROM chunks WHERE file_id = ? AND chunk_index >= ? AND chunk_index < ?",
@@ -1045,6 +1080,24 @@ mod tests {
         let v1_id = uuid::Uuid::now_v7().to_string();
         store_chunk_raw(&c.pool, "alice@local", &v1_id, 0, 2, b"v1".to_vec(), BUCKET_MEDIA).await.unwrap();
         assert_eq!(up_chunk(&c, "alice@local", &v1_id, 1, b"x").await.unwrap_err(), ErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn empty_chunks_are_rejected() {
+        let c = ctx().await;
+        // Пустой единственный чанк (пустой файл) допустим, пустые чанки с индексом > 0 — нет.
+        let id = up_chunk(&c, "e@local", "", 0, b"").await.unwrap();
+        assert_eq!(up_chunk(&c, "e@local", &id, 1, b"").await.unwrap_err(), ErrorCode::Invalid);
+    }
+
+    #[tokio::test]
+    async fn copy_budget_is_per_owner_and_hourly() {
+        let c = ctx().await;
+        let t0 = Instant::now();
+        assert_eq!(c.charge_copy("a@local", 60, t0, 100), Ok(()));
+        assert_eq!(c.charge_copy("a@local", 60, t0, 100), Err(ErrorCode::RateLimited));
+        assert_eq!(c.charge_copy("b@local", 60, t0, 100), Ok(()), "бюджет у каждого владельца свой");
+        assert_eq!(c.charge_copy("a@local", 60, t0 + COPY_WINDOW, 100), Ok(()), "окно истекло");
     }
 
     #[tokio::test]

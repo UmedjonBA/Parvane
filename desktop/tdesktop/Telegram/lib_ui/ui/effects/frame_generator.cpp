@@ -57,14 +57,28 @@ FrameGenerator::Frame ImageFrameGenerator::renderCurrent(
 	auto result = QImage(size, QImage::Format_ARGB32_Premultiplied);
 	result.fill(Qt::transparent);
 
+	// With ByExpanding the scaled image may be bigger than the target.
 	const auto skipx = (size.width() - scaled.width()) / 2;
 	const auto skipy = (size.height() - scaled.height()) / 2;
+	const auto srcX = std::max(-skipx, 0);
+	const auto srcY = std::max(-skipy, 0);
+	const auto dstX = std::max(skipx, 0);
+	const auto dstY = std::max(skipy, 0);
+	const auto copyWidth = std::min(
+		scaled.width() - srcX,
+		size.width() - dstX);
+	const auto copyHeight = std::min(
+		scaled.height() - srcY,
+		size.height() - dstY);
+	if (copyWidth <= 0 || copyHeight <= 0) {
+		return { .image = std::move(result), .last = true };
+	}
 	const auto srcPerLine = scaled.bytesPerLine();
 	const auto dstPerLine = result.bytesPerLine();
-	const auto lineBytes = scaled.width() * 4;
-	auto src = scaled.constBits();
-	auto dst = result.bits() + (skipx * 4) + (skipy * srcPerLine);
-	for (auto y = 0, height = scaled.height(); y != height; ++y) {
+	const auto lineBytes = copyWidth * 4;
+	auto src = scaled.constBits() + (srcY * srcPerLine) + (srcX * 4);
+	auto dst = result.bits() + (dstY * dstPerLine) + (dstX * 4);
+	for (auto y = 0; y != copyHeight; ++y) {
 		memcpy(dst, src, lineBytes);
 		src += srcPerLine;
 		dst += dstPerLine;

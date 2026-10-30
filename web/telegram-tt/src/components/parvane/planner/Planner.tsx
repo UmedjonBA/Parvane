@@ -186,6 +186,8 @@ const Planner = () => {
   }, [today]);
 
   const pickDay = useLastCallback((day: string) => {
+    // День из запроса снаружи (карточка задания в чате) мог прийти не датой — тогда выбор не меняется
+    if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(day)) return;
     setPicked(day);
     // Открытая форма создания следует за выбранным днём
     if (formParams) setFormParams({ ...formParams, day, slot: undefined });

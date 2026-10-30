@@ -65,7 +65,7 @@ enum class StickerSetOpen {
 // ── пересылка в группу (GROUP-2, сторона отправителя) ────────────────────────
 // Своя роль в группе-получателе: владелец и админ шлют всё; участник канала не публикует; участник группы —
 // только разрешённые правами по умолчанию виды; исключённый — ничего. Роль неизвестна (сведения группы ещё
-// не пришли) — решает штатная проверка композера, здесь не режем.
+// не пришли, иное значение) — как у участника: запрет закрыт по умолчанию (B0174-3).
 [[nodiscard]] inline bool canForwardToGroup(const std::string &ownRole, bool channel,
                                             const DefaultPermissions &perms, const json &content) {
     if (ownRole == "owner" || ownRole == "admin") {
@@ -74,10 +74,7 @@ enum class StickerSetOpen {
     if (ownRole == "banned") {
         return false;
     }
-    if (ownRole == "member") {
-        return !channel && isContentAllowedForMember(perms, content);
-    }
-    return true;
+    return !channel && isContentAllowedForMember(perms, content);
 }
 
 } // namespace parvane::chatrules

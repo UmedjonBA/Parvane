@@ -51,3 +51,10 @@ describe('картинка превью ссылки', () => {
     expect(video?.webpage?.photo).toBeUndefined();
   });
 });
+
+describe('статья во входящем', () => {
+  it('длина статьи ограничена при приёме', () => {
+    const wire = v2ToWire({ article: { title: 't', markdown: 'x'.repeat(200000) } });
+    expect((wire as { markdown: string }).markdown.length).toBe(65536);
+  });
+});

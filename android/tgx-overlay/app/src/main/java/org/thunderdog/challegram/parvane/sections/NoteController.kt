@@ -226,8 +226,3 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
         }
     }
 }
-
-/** Прежнее имя диалога ввода (его зовут экраны облака). */
-object KnowledgeDialogs {
-    fun askText(context: Context, title: String, value: String, done: (String) -> Unit) = Kn.askText(context, title, value, done = done)
-}

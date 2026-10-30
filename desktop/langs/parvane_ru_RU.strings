@@ -10107,3 +10107,8 @@
 "lng_parvane_keys_import_bad_password" = "Неверный пароль или повреждённый файл";
 "lng_parvane_keys_import_failed" = "Копия не подошла к этому аккаунту";
 "lng_parvane_keys_not_ready" = "Ключи ещё не готовы — подождите несколько секунд после входа";
+"lng_parvane_mute_hour" = "Замьютить на час";
+"lng_parvane_ban_member" = "Забанить в группе";
+"lng_parvane_ban_member_sure" = "Забанить этого участника в группе?";
+"lng_parvane_open_map" = "Открыть карту";
+"lng_parvane_open_map_sure" = "Точные координаты будут переданы стороннему картографическому сервису. Открыть карту?";

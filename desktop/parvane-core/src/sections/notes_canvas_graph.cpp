@@ -267,8 +267,10 @@ bool isApart(const CanvasRect &a, const CanvasRect &b, double clearance) {
 // Свободное место для карточки рядом с `around`: клетки сетки перебираются кольцами от середины рамки наружу, в
 // кольце — от ближних к дальним, при равенстве сначала ниже и правее. Место свободно, если карточка с просветом в
 // половину `gap` не задевает ни одного узла, включая группы
+// `budget` — общий запас проверок «задевает узел» на весь пересчёт: исчерпан — места нет (карточка уйдёт в блок),
+// иначе большой холст считается O(n²·240²) на вызывающем потоке
 std::optional<CanvasPoint> findSpot(const CanvasRect &around, const std::vector<CanvasRect> &taken, double width,
-                                    double height, double gap) {
+                                    double height, double gap, long &budget) {
     const double stepX = snapUp((width + gap) / 2);
     const double stepY = snapUp((height + gap) / 2);
     const double baseX = canvasjs::round((around.x + around.width / 2 - width / 2) / kCanvasGrid) * kCanvasGrid;
@@ -294,6 +296,8 @@ std::optional<CanvasPoint> findSpot(const CanvasRect &around, const std::vector<
         });
         for (const auto &cell : cells) {
             const CanvasRect rect{baseX + cell.i * stepX, baseY + cell.j * stepY, width, height};
+            budget -= static_cast<long>(taken.size()) + 1;
+            if (budget < 0) return std::nullopt;
             const bool isFree = std::all_of(taken.begin(), taken.end(),
                                             [&](const CanvasRect &other) { return isApart(rect, other, clearance); });
             if (isFree) return CanvasPoint{rect.x, rect.y};
@@ -648,6 +652,8 @@ GraphRefreshResult refreshCanvasFromGraph(const CanvasDoc &doc, const std::vecto
         }
     }
 
+    long spotBudget = 20000000; // запас проверок на все findSpot этого пересчёта
+
     // Ссылки между существующими заметками: название ведёт к первой заметке с ним
     std::map<std::string, std::vector<std::string>> links;
     std::map<std::string, std::set<std::string>> neighbours;
@@ -733,7 +739,7 @@ GraphRefreshResult refreshCanvasFromGraph(const CanvasDoc &doc, const std::vecto
                 others.push_back(inside.count(taken[i].id) ? taken[i].rect()
                                                            : inflate(taken[i].rect(), kCanvasGroupPadding, apart));
             }
-            const auto spot = findSpot(boundsOfRects(near).value_or(frame), others, width, height, gap);
+            const auto spot = findSpot(boundsOfRects(near).value_or(frame), others, width, height, gap, spotBudget);
             if (!spot) {
                 rest.push_back(note);
                 continue;
@@ -762,7 +768,7 @@ GraphRefreshResult refreshCanvasFromGraph(const CanvasDoc &doc, const std::vecto
             if (around) {
                 std::vector<CanvasRect> rects;
                 for (const auto &node : taken) rects.push_back(node.rect());
-                spot = findSpot(*around, rects, width, height, gap);
+                spot = findSpot(*around, rects, width, height, gap, spotBudget);
             }
             if (!spot) {
                 rest.push_back(note);

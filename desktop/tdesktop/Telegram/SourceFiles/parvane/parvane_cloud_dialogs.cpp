@@ -37,6 +37,7 @@ using Kind = Btn::Kind;
 
 constexpr auto kPreviewMaxBytes = std::int64_t(256) * 1024 * 1024; // web PREVIEW_MAX_BYTES_DESKTOP
 constexpr auto kPreviewTextChars = 64 * 1024; // длиннее в окне не показываем — Qt рисует текст целиком
+constexpr auto kPreviewImageMaxBytes = std::int64_t(40) * 1024 * 1024; // картинка крупнее — заглушка «скачайте файл» (как миниатюры)
 constexpr auto kPreviewImageMaxSide = 4096; // картинка просмотра — не крупнее (разбор с уменьшением)
 constexpr auto kCopiedHideMs = 2500;
 
@@ -1038,7 +1039,9 @@ void FillPreview(Sheet *sheet, std::shared_ptr<PreviewArgs> args) {
 	const auto isText = (kind == cloud::FileKind::Text);
 	// Видео, звук и PDF desktop в окне не проигрывает (в web — средствами браузера): тип файла и «Скачать»
 	const auto viewable = (kind == cloud::FileKind::Photo) || isText;
-	const auto tooLarge = node.size > (isText ? std::min(kPreviewMaxBytes, cloud::kTextPreviewMaxBytes) : kPreviewMaxBytes);
+	const auto tooLarge = node.size > (isText
+		? std::min(kPreviewMaxBytes, cloud::kTextPreviewMaxBytes)
+		: std::min(kPreviewMaxBytes, kPreviewImageMaxBytes));
 	const auto canPreview = viewable && !tooLarge;
 	const auto typeLabel = Q(cloud::fileTypeLabel(node.name));
 	sheet->setTitle(Q(node.name));
@@ -1075,7 +1078,9 @@ void FillPreview(Sheet *sheet, std::shared_ptr<PreviewArgs> args) {
 		const auto weak = QPointer<PreviewArt>(art);
 		const auto id = node.id;
 		// Ревью 21 окт 2026 (2.2): `node.size` называет загрузивший — потолок скачивания тот же, что у проверки выше
-		const auto previewMax = isText ? std::min(kPreviewMaxBytes, cloud::kTextPreviewMaxBytes) : kPreviewMaxBytes;
+		const auto previewMax = isText
+			? std::min(kPreviewMaxBytes, cloud::kTextPreviewMaxBytes)
+			: std::min(kPreviewMaxBytes, kPreviewImageMaxBytes);
 		OpenBlob(args->entry, [=](std::optional<QByteArray> bytes) {
 			if (!weak) {
 				return;
@@ -1215,8 +1220,8 @@ void ShowCloudSaveDialog(not_null<Window::SessionController*> controller, const 
 		.nodes = NodesOf(root),
 		.confirm = tr::lng_parvane_cloud_save_here(tr::now),
 		.submit = [=](std::optional<std::string> target, std::optional<std::string>) {
+			// уведомление «Сохранено» покажет итог выгрузки (FinishTransfer), а при сбое — код ошибки
 			UploadFiles(root.empty() ? std::string("root") : root, target, paths);
-			ShowNotice(u"saved"_q);
 		},
 	});
 }

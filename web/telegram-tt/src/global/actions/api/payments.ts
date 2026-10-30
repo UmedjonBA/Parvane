@@ -1,9 +1,8 @@
 import type {
-  ApiInputInvoice, ApiInputInvoicePremiumGiftStars, ApiInputInvoiceStarGift,
+  ApiCredentials, ApiInputInvoice, ApiInputInvoicePremiumGiftStars, ApiInputInvoiceStarGift,
   ApiInputInvoiceStarGiftAuctionBid, ApiInputInvoiceStarGiftResale,
   ApiRequestInputInvoice,
 } from '../../../api/types';
-import type { ApiCredentials } from '../../../components/payment/PaymentModal';
 import type { RegularLangFnParameters } from '../../../util/localization';
 import type {
   ActionReturnType, GlobalState, TabArgs,

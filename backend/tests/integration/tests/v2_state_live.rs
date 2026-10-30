@@ -21,12 +21,9 @@ use parvane_protocol::pb::parvane::state::v1::{peer, state_op::Op, AppendRequest
 use parvane_protocol::pb::parvane::core::v2::UserRef;
 use parvane_protocol::state::{self as st, LamportClock, PersonalState, StateKey};
 use prost::Message;
-use serde_json::{json, Value};
 
 mod v2common;
 use v2common::Device;
-
-const PASSWORD: &str = "e2e-Test-pass-2026";
 
 struct Stack {
     children: Vec<Child>,
@@ -157,11 +154,6 @@ async fn start() -> Option<(Stack, async_nats::Client)> {
     Some((stack, nc))
 }
 
-async fn nreq(nc: &async_nats::Client, subject: &str, body: Value) -> Value {
-    let r = nc.request(subject.to_string(), body.to_string().into()).await.unwrap();
-    serde_json::from_slice(&r.payload).unwrap_or(Value::Null)
-}
-
 /// v2-клиент по TCP.
 struct V2 {
     s: TcpStream,
@@ -267,7 +259,7 @@ fn user_peer(a: &str) -> Peer {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_state_live() {
-    let Some((stack, nc)) = start().await else { return };
+    let Some((stack, _nc)) = start().await else { return };
     let mut f = Failures(vec![]);
     let n = free_port();
     let (alice, bob, carol) = (format!("sa{n}@local"), format!("sb{n}@local"), format!("sc{n}@local"));
@@ -275,7 +267,7 @@ async fn v2_state_live() {
         register(&stack.gateway_tcp, u).await;
     }
     let (ta1, ta2, tb) = (token(&stack.gateway_tcp, &alice, "dev1").await, token(&stack.gateway_tcp, &alice, "dev2").await, token(&stack.gateway_tcp, &bob, "devb").await);
-    let tc = token(&stack.gateway_tcp, &carol, "devc").await;
+    let _tc = token(&stack.gateway_tcp, &carol, "devc").await;
 
     // ── state.append / state.sync ──
     let addr = stack.gateway_tcp.clone();

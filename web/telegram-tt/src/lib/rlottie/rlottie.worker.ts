@@ -1,6 +1,7 @@
 import type { CancellableCallback } from '../../util/PostMessageConnector';
 
 import Module, { allocate, intArrayFromString } from './rlottie-wasm';
+import { MAX_LOTTIE_JSON_BYTES, readStreamLimited } from './readLimited';
 import { createWorkerInterface } from '../../util/createPostMessageInterface';
 
 let rLottieApi: Record<string, AnyFunction>;
@@ -13,6 +14,7 @@ const rLottieApiPromise = new Promise<void>((resolve) => {
       buffer: Module.cwrap('lottie_buffer', 'number', ['number']),
       render: Module.cwrap('lottie_render', '', ['number', 'number']),
       loadFromData: Module.cwrap('lottie_load_from_data', 'number', ['number', 'number']),
+      free: Module.cwrap('free', '', ['number']),
     };
 
     resolve();
@@ -47,6 +49,8 @@ async function init(
   const stringOnWasmHeap = allocate(intArrayFromString(json), 'i8', 0);
   const handle = rLottieApi.init();
   const framesCount = rLottieApi.loadFromData(handle, stringOnWasmHeap);
+  // rlottie разбирает свою копию строки, буфер больше не нужен
+  rLottieApi.free(stringOnWasmHeap);
   rLottieApi.resize(handle, imgSize, imgSize);
 
   const imageData = new ImageData(imgSize, imgSize);
@@ -74,6 +78,7 @@ async function changeData(
   const stringOnWasmHeap = allocate(intArrayFromString(json), 'i8', 0);
   const { handle } = renderers.get(key)!;
   const framesCount = rLottieApi.loadFromData(handle, stringOnWasmHeap);
+  rLottieApi.free(stringOnWasmHeap);
 
   const { reduceFactor, msPerFrame, reducedFramesCount } = calcParams(json, isLowPriority, framesCount);
 
@@ -86,7 +91,9 @@ async function extractJson(tgsUrl: string) {
 
   // Support deprecated JSON format cached locally
   if (contentType?.startsWith('text/')) {
-    return response.text();
+    const text = await response.text();
+    if (text.length > MAX_LOTTIE_JSON_BYTES) throw new Error('Lottie JSON is too large');
+    return text;
   }
 
   if (!response.body) {
@@ -95,8 +102,7 @@ async function extractJson(tgsUrl: string) {
 
   // Prefer native gzip decompression over library. This use case has ~same speed
   const decompressionStream = response.body.pipeThrough(new DecompressionStream('gzip'));
-  const result = await new Response(decompressionStream).text();
-  return result;
+  return readStreamLimited(decompressionStream);
 }
 
 function calcParams(json: string, isLowPriority: boolean, framesCount: number) {

@@ -87,40 +87,10 @@ void TranslateBox(
 	});
 }
 
-bool SkipTranslate(TextWithEntities textWithEntities) {
+bool SkipTranslate(TextWithEntities) {
 	// Parvane (spec 029 R7): перевода нет (messages.translateText — MTProto, офлайн-переводчика нет) — все пункты
 	// «Перевести» (сообщение, выделение, описание профиля) скрыты отсюда.
-	if (constexpr auto kParvaneTranslate = false; !kParvaneTranslate) {
-		return true;
-	}
-	const auto &text = textWithEntities.text;
-	if (text.isEmpty()) {
-		return true;
-	}
-	if (!Core::App().settings().translateButtonEnabled()) {
-		return true;
-	}
-	constexpr auto kFirstChunk = size_t(100);
-	auto hasLetters = (text.size() >= kFirstChunk);
-	for (auto i = 0; i < kFirstChunk; i++) {
-		if (i >= text.size()) {
-			break;
-		}
-		if (text.at(i).isLetter()) {
-			hasLetters = true;
-			break;
-		}
-	}
-	if (!hasLetters) {
-		return true;
-	}
-#ifndef TDESKTOP_DISABLE_SPELLCHECK
-	const auto result = Platform::Language::Recognize(text);
-	const auto skip = Core::App().settings().skipTranslationLanguages();
-	return result.known() && ranges::contains(skip, result);
-#else
-	return false;
-#endif
+	return true;
 }
 
 object_ptr<BoxContent> EditSkipTranslationLanguages() {

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from '@teact';
+import { memo, useEffect, useMemo, useRef } from '@teact';
 import { getActions } from '../../../global';
 
 import type { GlobalState } from '../../../global/types';
@@ -33,7 +33,6 @@ import Loading from '../../ui/Loading';
 import Archive from './Archive';
 import Chat from './Chat';
 import EmptyFolder from './EmptyFolder';
-import ChatListPanes from './panes/ChatListPanes';
 
 type OwnProps = {
   className?: string;
@@ -87,7 +86,6 @@ const ChatList = ({
     openLeftColumnContent,
   } = getActions();
   const containerRef = useRef<HTMLDivElement>();
-  const [panesHeight, setPanesHeight] = useState(0);
 
   const isArchived = folderType === 'archived';
   const isAllFolder = folderType === 'all';
@@ -107,7 +105,7 @@ const ChatList = ({
 
   const {
     orderDiffById, shiftDiff, getAnimationType, onReorderAnimationEnd: onReorderAnimationEnd,
-  } = useOrderDiff(orderedIds, panesHeight);
+  } = useOrderDiff(orderedIds, 0);
 
   const chatListSlice = noVirtualization
     ? Math.max(CHAT_LIST_SLICE, orderedIds?.length || 0)
@@ -209,7 +207,7 @@ const ChatList = ({
       const isPinned = viewportOffset + i < pinnedCount;
       const offsetTop = noAbsolutePositioning
         ? undefined
-        : panesHeight + archiveHeight + (viewportOffset + i) * CHAT_HEIGHT_PX;
+        : archiveHeight + (viewportOffset + i) * CHAT_HEIGHT_PX;
 
       return (
         <Chat
@@ -234,7 +232,7 @@ const ChatList = ({
     });
   }
 
-  const totalHeight = chatsHeight + archiveHeight + panesHeight;
+  const totalHeight = chatsHeight + archiveHeight;
 
   return (
     <InfiniteScroll
@@ -251,7 +249,6 @@ const ChatList = ({
       onLoadMore={getMore}
       onScroll={onScroll}
     >
-      {isAllFolder && <ChatListPanes key="panes" onHeightChange={setPanesHeight} />}
       {shouldDisplayArchive && (
         <Archive
           key="archive"
@@ -259,7 +256,7 @@ const ChatList = ({
           onClick={handleArchivedClick}
           onDragEnter={handleArchivedDragEnter}
           animationType={getAnimationType(ARCHIVE_ANIMATION_ID)}
-          offsetTop={panesHeight}
+          offsetTop={0}
           isFoldersSidebarShown={isFoldersSidebarShown}
         />
       )}

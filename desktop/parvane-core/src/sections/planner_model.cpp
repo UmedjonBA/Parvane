@@ -70,7 +70,8 @@ Parts parts(const std::string &day) {
     auto num = [&](size_t i) {
         if (i >= chunks.size()) return 0LL;
         const double v = util::numberOf(chunks[i]);
-        return std::isfinite(v) ? static_cast<long long>(v) : 0LL;
+        // вне диапазона приведение double→long long — UB (A0079-1)
+        return (std::isfinite(v) && std::fabs(v) < 1e15) ? static_cast<long long>(v) : 0LL;
     };
     return {num(0), static_cast<int>(num(1)), static_cast<int>(num(2))};
 }
@@ -816,7 +817,8 @@ int toMinutes(const std::string &time) {
     const double hours = util::numberOf(chunks[0]);
     const double minutes = chunks.size() > 1 ? util::numberOf(chunks[1]) : NAN;
     const double total = hours * 60 + minutes;
-    return std::isfinite(total) ? static_cast<int>(total) : 0;
+    // вне диапазона приведение double→int — UB (A0079-1)
+    return (std::isfinite(total) && std::fabs(total) < 1e9) ? static_cast<int>(total) : 0;
 }
 
 std::string toTime(int minutes) {

@@ -24,72 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/cloud_password/settings_cloud_password_common.h" // Parvane: AddPasswordField
 
 namespace Api {
-namespace {
-
-constexpr auto TestApiId = 17349;
-constexpr auto SnapApiId = 611335;
-constexpr auto DesktopApiId = 2040;
-
-Authorizations::Entry ParseEntry(const MTPDauthorization &data) {
-	auto result = Authorizations::Entry();
-
-	result.hash = data.is_current() ? 0 : data.vhash().v;
-	result.incomplete = data.is_password_pending();
-	result.callsDisabled = data.is_call_requests_disabled();
-
-	const auto apiId = result.apiId = data.vapi_id().v;
-	const auto isTest = (apiId == TestApiId);
-	const auto isDesktop = (apiId == DesktopApiId)
-		|| (apiId == SnapApiId)
-		|| isTest;
-
-	const auto appName = isDesktop
-		? u"Telegram Desktop%1"_q.arg(isTest ? " (GitHub)" : QString())
-		: qs(data.vapp_name());// + u" for "_q + qs(d.vplatform());
-	const auto appVer = [&] {
-		const auto version = qs(data.vapp_version());
-		if (isDesktop) {
-			const auto verInt = version.toInt();
-			if (version == QString::number(verInt)) {
-				return Core::FormatVersionDisplay(verInt);
-			}
-		} else {
-			if (const auto index = version.indexOf('('); index >= 0) {
-				return version.mid(index);
-			}
-		}
-		return version;
-	}();
-
-	result.name = result.hash
-		? qs(data.vdevice_model())
-		: Core::App().settings().deviceModel();
-
-	const auto country = qs(data.vcountry());
-	//const auto platform = qs(data.vplatform());
-	//const auto &countries = countriesByISO2();
-	//const auto j = countries.constFind(country);
-	//if (j != countries.cend()) {
-	//	country = QString::fromUtf8(j.value()->name);
-	//}
-	result.system = qs(data.vsystem_version());
-	result.platform = qs(data.vplatform());
-	result.activeTime = data.vdate_active().v
-		? data.vdate_active().v
-		: data.vdate_created().v;
-	result.info = QString("%1%2").arg(
-		appName,
-		appVer.isEmpty() ? QString() : (' ' + appVer));
-	result.ip = qs(data.vip());
-	result.active = result.hash
-		? Authorizations::ActiveDateString(result.activeTime)
-		: tr::lng_status_online(tr::now);
-	result.location = country;
-
-	return result;
-}
-
-} // namespace
 
 Authorizations::Authorizations(not_null<ApiWrap*> api)
 : _api(&api->instance())
@@ -242,7 +176,15 @@ void Authorizations::requestTerminate(
 				(*shared)(MTP_boolTrue());
 				return;
 			}
-			Parvane::RevokeDevice(ids[i], [=](bool) { (*step)(i + 1); }, *password, *rotateKeys);
+			Parvane::RevokeDevice(ids[i], [=](bool ok) {
+				if (!ok) {
+					// Отказ сервера/шины: цепочку не продолжаем, записи
+					// остаются в списке, вызывающий получает отказ.
+					(*shared)(MTP_boolFalse());
+					return;
+				}
+				(*step)(i + 1);
+			}, *password, *rotateKeys);
 		};
 		if (ids.empty()) {
 			(*step)(0);

@@ -1,7 +1,11 @@
 import { PASSCODE_IDB_STORE } from './browser/idb';
 
 const IV_LENGTH = 12;
-const SALT = 'harder better faster stronger';
+// Прежний ключ — SHA-256(код + общая константа) без растяжения; читаем только для переноса
+const LEGACY_SALT = 'harder better faster stronger';
+const KDF_SALT_KEY = 'kdfSalt';
+const KDF_SALT_LENGTH = 16;
+export const PBKDF2_ITERATIONS = 600000;
 
 let currentPasscodeHash: ArrayBuffer | undefined;
 
@@ -16,7 +20,9 @@ export function setPasscodeHash(passcodeHash: ArrayBuffer) {
 }
 
 export async function setupPasscode(passcode: string) {
-  currentPasscodeHash = await sha256(passcode);
+  const salt = crypto.getRandomValues(new Uint8Array(KDF_SALT_LENGTH));
+  currentPasscodeHash = await deriveKey(passcode, salt);
+  await PASSCODE_IDB_STORE.set(KDF_SALT_KEY, Array.from(salt));
 }
 
 export async function encryptSession(sessionJson?: string, globalJson?: string, sharedStateJson?: string) {
@@ -73,7 +79,8 @@ export async function decryptSessionByCurrentHash() {
 }
 
 export async function decryptSession(passcode: string) {
-  const passcodeHash = await sha256(passcode);
+  const salt = await loadSalt();
+  const passcodeHash = salt ? await deriveKey(passcode, salt) : await legacySha256(passcode);
 
   const [sessionEncrypted, globalEncrypted, sharedStateEncrypted] = await Promise.all([
     load('sessionEncrypted'),
@@ -97,6 +104,11 @@ export async function decryptSession(passcode: string) {
 
     currentPasscodeHash = passcodeHash;
 
+    if (!salt) {
+      // Перенос со слабого ключа на PBKDF2 с солью установки: сначала шифртексты, затем соль
+      await upgradeLegacyKey(passcode, sessionJson, globalJson, sharedStateJson);
+    }
+
     return { sessionJson, globalJson, sharedStateJson };
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -114,8 +126,40 @@ export function clearEncryptedSession() {
   return PASSCODE_IDB_STORE.clear();
 }
 
-function sha256(plaintext: string) {
-  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${plaintext}${SALT}`));
+function legacySha256(plaintext: string) {
+  return crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${plaintext}${LEGACY_SALT}`));
+}
+
+export async function deriveKey(passcode: string, salt: BufferSource) {
+  const material = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(passcode), 'PBKDF2', false, ['deriveBits'],
+  );
+  return crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERATIONS,
+    },
+    material,
+    256,
+  );
+}
+
+async function loadSalt() {
+  const stored = await PASSCODE_IDB_STORE.get<number[]>(KDF_SALT_KEY);
+  return stored ? new Uint8Array(stored) : undefined;
+}
+
+async function upgradeLegacyKey(
+  passcode: string, sessionJson: string, globalJson: string, sharedStateJson?: string,
+) {
+  const salt = crypto.getRandomValues(new Uint8Array(KDF_SALT_LENGTH));
+  const key = await deriveKey(passcode, salt);
+  await Promise.all([
+    store('sessionEncrypted', await aesEncrypt(sessionJson, key)),
+    store('globalEncrypted', await aesEncrypt(globalJson, key)),
+    sharedStateJson ? store('sharedStateEncrypted', await aesEncrypt(sharedStateJson, key)) : undefined,
+  ]);
+  await PASSCODE_IDB_STORE.set(KDF_SALT_KEY, Array.from(salt));
+  currentPasscodeHash = key;
 }
 
 function store(key: string, value: ArrayBuffer) {

@@ -472,10 +472,6 @@ function mondayBased(weekday: number) {
   return (weekday + 6) % 7;
 }
 
-export function isRepeating(item: PlannerSeriesItem) {
-  return Boolean(item.repeat);
-}
-
 // Отметки экземпляров по дню — один проход по массиву на массив; в черновике массив дописывается на
 // месте (`push`), поэтому запись проверяется ещё и по длине
 const occurrenceMaps = new WeakMap<PlannerOccurrence[], { size: number; byDay: Map<string, PlannerOccurrence> }>();
@@ -525,15 +521,18 @@ function compileRepeat(repeat: PlannerRepeat): CompiledRepeat {
   if (compiled) return compiled;
   const { kind, interval } = repeat;
   const start = repeat.startDay ? epochDays(repeat.startDay) : undefined;
+  const end = repeat.endDay ? epochDays(repeat.endDay) : undefined;
   const positions = [...new Set(repeat.weekdays || [])].map(mondayBased).sort((a, b) => a - b);
   const startPosition = start === undefined ? 0 : mondayBased(weekdayOfEpoch(start));
   const startParts = repeat.startDay ? parts(repeat.startDay) : { year: 0, month: 0, date: 0 };
   compiled = {
     kind,
     interval,
-    isValid: Number.isInteger(interval) && interval >= 1,
+    // Даты правила — настоящие даты: с NaN сравнения ложны и обход дней не заканчивался бы
+    isValid: Number.isInteger(interval) && interval >= 1 && (start === undefined || Number.isFinite(start))
+      && (end === undefined || Number.isFinite(end)),
     start,
-    end: repeat.endDay ? epochDays(repeat.endDay) : undefined,
+    end,
     count: repeat.count || undefined,
     positions,
     weekdayMask: positions.reduce((mask, position) => mask | (1 << ((position + 1) % 7)), 0),
@@ -604,6 +603,7 @@ function forEachRepeatDay(repeat: PlannerRepeat, fromDay: string, toDay: string,
   if (!rule.isValid || fromDay > toDay) return;
   const from = epochDays(fromDay);
   const to = epochDays(toDay);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return;
   const lo = rule.start === undefined ? from : Math.max(from, rule.start);
   const hi = rule.end === undefined ? to : Math.min(to, rule.end);
   if (lo > hi) return;
@@ -1306,11 +1306,6 @@ export function countConflicts(state: PlannerState, day: string) {
     }
   }
   return count;
-}
-
-// Доля дневного бюджета 0…1 — по ней красится день (зелёный → жёлтый → красный)
-export function getLoadFraction(state: PlannerState, minutes: number) {
-  return state.budget > 0 ? Math.min(1, minutes / state.budget) : 0;
 }
 
 export function getDayAvailability(state: PlannerState, day: string) {

@@ -63,8 +63,6 @@ const LINK_RE = /\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g;
 const TAG_RE = /(^|\s)#([\p{L}\p{N}_/-]+)/gu;
 const LETTER_RE = /\p{L}/u;
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-const INLINE_CODE_RE = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g;
-const PROPERTY_RE = /^([^\s:#-][^:]*?)\s*:(?:\s+(.*))?$/;
 const PROPERTY_ITEM_RE = /^\s*-(?:\s+(.*))?$/;
 const QUOTED_START_RE = /^["'[\]{}#&*!|>%@`]/;
 
@@ -340,7 +338,7 @@ function parseProperties(lines: string[]) {
       continue;
     }
 
-    const pair = PROPERTY_RE.exec(line);
+    const pair = matchProperty(line);
     if (!pair) return undefined;
     const value = (pair[2] || '').trim();
     listKey = value ? undefined : pair[1];
@@ -412,7 +410,7 @@ function maskCode(lines: string[]) {
     } else if (match) {
       fence = match[1];
     } else {
-      masked.push(line.replace(INLINE_CODE_RE, (code) => ' '.repeat(code.length)));
+      masked.push(maskInlineCode(line));
       fenced.push(false);
       return;
     }
@@ -420,6 +418,62 @@ function maskCode(lines: string[]) {
     fenced.push(true);
   });
   return { masked, fenced };
+}
+
+// Содержимое `…` строки заменяется пробелами той же длины. Линейный разбор вместо регулярного выражения
+// (на серии обратных кавычек разной длины без пары оно квадратично): открывающая серия из k знаков закрывается
+// ближайшей позже серией ровно из k знаков, с хотя бы одним знаком между ними; не нашлась — пробуются
+// более короткие ограждения из хвоста той же серии
+function maskInlineCode(line: string) {
+  if (!line.includes('`')) return line;
+  const runs: { at: number; length: number }[] = [];
+  for (let i = 0; i < line.length;) {
+    if (line[i] !== '`') {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (line[end] === '`') end++;
+    runs.push({ at: i, length: end - i });
+    i = end;
+  }
+  const byLength = new Map<number, number[]>();
+  runs.forEach((run, n) => byLength.set(run.length, [...(byLength.get(run.length) || []), n]));
+  const cursor = new Map<number, number>();
+  const closingOf = (after: number, length: number) => {
+    const list = byLength.get(length) || [];
+    let at = cursor.get(length) || 0;
+    while (at < list.length && list[at] <= after) at++;
+    cursor.set(length, at);
+    return at < list.length ? runs[list[at]] : undefined;
+  };
+  let out = '';
+  let from = 0;
+  for (let n = 0; n < runs.length; n++) {
+    const run = runs[n];
+    if (run.at < from) continue;
+    for (let fence = run.length; fence >= 1; fence--) {
+      const closing = closingOf(n, fence);
+      if (!closing) continue;
+      const start = run.at + run.length - fence;
+      const end = closing.at + fence;
+      out += line.slice(from, start) + ' '.repeat(end - start);
+      from = end;
+      break;
+    }
+  }
+  return out + line.slice(from);
+}
+
+// Разбор строки свойства «ключ: значение» без регулярного выражения с ленивым квантификатором (квадратично
+// на длинной строке без двоеточия): ключ — до первого «:», за которым конец строки либо пробельный знак
+function matchProperty(line: string): [string, string, string | undefined] | undefined {
+  if (!line || /[\s:#-]/.test(line[0])) return undefined;
+  const colon = line.indexOf(':');
+  if (colon === -1) return undefined;
+  const rest = line.slice(colon + 1);
+  if (rest && !/^\s/.test(rest)) return undefined;
+  return [line, line.slice(0, colon).trimEnd(), rest ? rest.replace(/^\s+/, '') : undefined];
 }
 
 function findLinks(maskedLine: string) {
@@ -495,7 +549,7 @@ function stripMarkdown(line: string) {
     .replace(/^\d+[.)]\s+/, '')
     .replace(MARKER_RE, '')
     .replace(LINK_RE, (link, target: string, alias?: string) => (alias || target).trim())
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/!?\[([^[\]]*)\]\([^)\n]{0,1000}\)/g, '$1')
     .replace(/(\*\*|__|~~|==|`)/g, '')
     .replace(/(^|[^\p{L}\p{N}])[*_]([^*_]+)[*_](?![\p{L}\p{N}])/gu, '$1$2')
     .replace(/\s+/g, ' ')

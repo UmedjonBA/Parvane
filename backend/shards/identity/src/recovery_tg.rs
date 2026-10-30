@@ -23,6 +23,8 @@ const REDELIVER_SECS: i64 = 15;
 const REQUEST_TTL_SECS: i64 = 900;
 /// Очередь бота не растёт без предела (бот выключен, а клиенты шлют).
 const OUT_MAX: usize = 2048;
+/// Подпись устройства в вопросе боту: клиент задаёт её сам, поэтому длина и знаки ограничены.
+const CLIENT_LABEL_MAX: usize = 64;
 
 pub(crate) const KIND_KEY: &str = "key";
 pub(crate) const KIND_ASK: &str = "ask";
@@ -78,7 +80,7 @@ fn enqueue(st: &mut State, telegram_id: i64, kind: &'static str, user: &str, rec
         kind,
         user: user.to_string(),
         recovery_key: Zeroizing::new(recovery_key.to_string()),
-        client: client.to_string(),
+        client: client.chars().filter(|c| !c.is_control()).take(CLIENT_LABEL_MAX).collect(),
         created: now,
         sent_at: 0,
     });
@@ -106,6 +108,14 @@ pub(crate) fn request_key(telegram_id: i64, user: &str, device_id: &str, client:
     purge(&mut st, now);
     if !again && st.pending.get(user).is_some_and(|p| p.device_id == device_id) {
         return true;
+    }
+    // Запрос другого устройства, пока прежний жив: ответ владельца нельзя
+    // привязать к конкретному запросу, поэтому гасим оба (иначе ключ достанется
+    // тому, кто запросил последним). Владелец повторит вход, когда пожелает.
+    if st.pending.get(user).is_some_and(|p| p.device_id != device_id) {
+        st.pending.remove(user);
+        st.out.retain(|m| !(m.kind == KIND_ASK && m.user == user));
+        return false;
     }
     st.pending.insert(user.to_string(), Pending { device_id: device_id.to_string(), created: now, recovery_key: None });
     st.out.retain(|m| !(m.kind == KIND_ASK && m.user == user));
@@ -279,6 +289,15 @@ mod tests {
         assert!(key_candidates(&key.replace('-', " слово и ещё ")).is_empty());
     }
 
+    #[test]
+    fn client_label_is_bounded() {
+        let mut st = State::default();
+        let long = format!("Chrome\n{}", "я".repeat(5000));
+        assert!(enqueue(&mut st, 1, KIND_ASK, "a@x", "", &long, 0));
+        let label = &st.out[0].client;
+        assert!(label.chars().count() <= CLIENT_LABEL_MAX && !label.contains('\n'));
+    }
+
     // Состояние общее на процесс — тесты модуля идут одним тестом, по своим адресам
     #[tokio::test]
     async fn queue_and_requests() {
@@ -319,6 +338,12 @@ mod tests {
         assert_eq!((asks[0].kind.as_str(), asks[0].client.as_str()), ("ask", "Chrome, Android"));
         assert!(asks[0].recovery_key.is_empty());
         assert!(has_request("b@x", now + 1));
+
+        // Конкурирующее устройство гасит оба запроса, ключ ему не достаётся
+        assert!(request_key(22, "c@x", "dev-1", "Chrome", false, now));
+        assert!(!request_key(22, "c@x", "dev-2", "Chrome, Android", false, now + 1));
+        assert!(!has_request("c@x", now + 1));
+        assert!(!store_reply("c@x", "KEY-C", now + 2));
 
         // До ответа ключа нет; ответ виден только запросившему устройству
         assert_eq!(poll("b@x", "dev-1", false, now + 2), (String::new(), true));

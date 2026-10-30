@@ -476,10 +476,6 @@ PRIVATE
     boxes/peer_lists_box.h
     boxes/passcode_box.cpp
     boxes/passcode_box.h
-    boxes/phone_banned_box.cpp
-    boxes/phone_banned_box.h
-    boxes/pin_messages_box.cpp
-    boxes/pin_messages_box.h
     boxes/premium_limits_box.cpp
     boxes/premium_limits_box.h
     boxes/premium_preview_box.cpp
@@ -490,8 +486,6 @@ PRIVATE
     boxes/report_messages_box.h
     boxes/ringtones_box.cpp
     boxes/ringtones_box.h
-    boxes/select_future_owner_box.cpp
-    boxes/select_future_owner_box.h
     boxes/self_destruction_box.cpp
     boxes/self_destruction_box.h
     boxes/send_credits_box.cpp
@@ -530,12 +524,8 @@ PRIVATE
     boxes/compose_ai_box.h
     boxes/create_ai_tone_box.cpp
     boxes/create_ai_tone_box.h
-    boxes/preview_ai_tone_box.cpp
-    boxes/preview_ai_tone_box.h
     boxes/translate_box.cpp
     boxes/translate_box.h
-    boxes/unconfirmed_auth_denied_box.cpp
-    boxes/unconfirmed_auth_denied_box.h
     boxes/url_auth_box.cpp
     boxes/url_auth_box.h
     boxes/username_box.cpp
@@ -954,18 +944,8 @@ PRIVATE
     dialogs/dialogs_search_posts.h
     dialogs/dialogs_top_bar_suggestion.cpp
     dialogs/dialogs_top_bar_suggestion.h
-    dialogs/dialogs_top_bar_suggestion_test.cpp
     dialogs/suggestions/suggestion.cpp
     dialogs/suggestions/suggestion.h
-    dialogs/suggestions/suggestion_birthday_contacts.cpp
-    dialogs/suggestions/suggestion_birthday_setup.cpp
-    dialogs/suggestions/suggestion_custom_promo.cpp
-    dialogs/suggestions/suggestion_gift_auctions.cpp
-    dialogs/suggestions/suggestion_low_credits_subs.cpp
-    dialogs/suggestions/suggestion_premium_grace.cpp
-    dialogs/suggestions/suggestion_premium_offer.cpp
-    dialogs/suggestions/suggestion_unreviewed_auth.cpp
-    dialogs/suggestions/suggestion_userpic_setup.cpp
     dialogs/dialogs_widget.cpp
     dialogs/dialogs_widget.h
     editor/color_picker.cpp
@@ -1036,20 +1016,12 @@ PRIVATE
     history/view/media/history_view_contact.h
     history/view/media/history_view_custom_emoji.cpp
     history/view/media/history_view_custom_emoji.h
-    history/view/media/history_view_dice.cpp
-    history/view/media/history_view_dice.h
     history/view/media/history_view_document.cpp
     history/view/media/history_view_document.h
     history/view/media/history_view_file.cpp
     history/view/media/history_view_file.h
-    history/view/media/history_view_game.cpp
-    history/view/media/history_view_game.h
     history/view/media/history_view_gif.cpp
     history/view/media/history_view_gif.h
-    history/view/media/history_view_giveaway.cpp
-    history/view/media/history_view_giveaway.h
-    history/view/media/history_view_invoice.cpp
-    history/view/media/history_view_invoice.h
     history/view/media/history_view_large_emoji.cpp
     history/view/media/history_view_large_emoji.h
     history/view/media/history_view_location.cpp
@@ -1082,25 +1054,17 @@ PRIVATE
     history/view/media/history_view_service_box.h
     history/view/media/history_view_similar_channels.cpp
     history/view/media/history_view_similar_channels.h
-    history/view/media/history_view_slot_machine.cpp
-    history/view/media/history_view_slot_machine.h
     history/view/media/history_view_sticker.cpp
     history/view/media/history_view_sticker.h
     history/view/media/history_view_sticker_player.cpp
     history/view/media/history_view_sticker_player.h
     history/view/media/history_view_sticker_player_abstract.h
-    history/view/media/history_view_story_mention.cpp
-    history/view/media/history_view_story_mention.h
     history/view/media/history_view_suggest_decision.cpp
     history/view/media/history_view_suggest_decision.h
     history/view/media/history_view_theme_document.cpp
     history/view/media/history_view_theme_document.h
-    history/view/media/history_view_todo_list.cpp
-    history/view/media/history_view_todo_list.h
     history/view/media/history_view_unique_gift.cpp
     history/view/media/history_view_unique_gift.h
-    history/view/media/history_view_userpic_suggestion.cpp
-    history/view/media/history_view_userpic_suggestion.h
     history/view/media/history_view_web_page.cpp
     history/view/media/history_view_web_page.h
     history/view/reactions/history_view_reactions.cpp
@@ -1171,8 +1135,6 @@ PRIVATE
     history/view/history_view_quick_action.h
     history/view/history_view_reaction_preview.cpp
     history/view/history_view_reaction_preview.h
-    history/view/history_view_read_metrics_tracker.cpp
-    history/view/history_view_read_metrics_tracker.h
     history/view/history_view_reply.cpp
     history/view/history_view_reply.h
     history/view/history_view_reply_button.cpp
@@ -1233,8 +1195,6 @@ PRIVATE
     history/history_inner_widget_accessibility.h
     history/history_location_manager.cpp
     history/history_location_manager.h
-    history/history_streamed_drafts.cpp
-    history/history_streamed_drafts.h
     history/history_translation.cpp
     history/history_translation.h
     history/history_unread_things.cpp
@@ -1424,36 +1384,18 @@ PRIVATE
     inline_bots/inline_results_inner.h
     inline_bots/inline_results_widget.cpp
     inline_bots/inline_results_widget.h
-    intro/intro_code.cpp
-    intro/intro_code.h
-    intro/intro_email.cpp
-    intro/intro_email.h
-    intro/intro_password_check.cpp
-    intro/intro_password_check.h
-    intro/intro_phone.cpp
-    intro/intro_phone.h
-    intro/intro_qr.cpp
-    intro/intro_qr.h
     intro/intro_parvane.cpp
     intro/intro_parvane.h
-    intro/intro_signup.cpp
-    intro/intro_signup.h
-    intro/intro_start.cpp
-    intro/intro_start.h
     intro/intro_step.cpp
     intro/intro_step.h
     intro/intro_widget.cpp
     intro/intro_widget.h
     iv/iv_cached_media.cpp
     iv/iv_cached_media.h
-#    iv/editor/iv_editor_session.cpp
-#    iv/editor/iv_editor_session.h
     iv/iv_delegate_impl.cpp
     iv/iv_delegate_impl.h
     iv/iv_instance.cpp
     iv/iv_instance.h
-    iv/iv_rich_message_serializer.cpp
-    iv/iv_rich_message_serializer.h
     iv/iv_rich_page.cpp
     iv/iv_rich_page.h
     lang/lang_cloud_manager.cpp
@@ -1790,10 +1732,6 @@ PRIVATE
     platform/platform_tray.h
     platform/platform_webauthn.h
     platform/platform_window_title.h
-    profile/profile_block_widget.cpp
-    profile/profile_block_widget.h
-    profile/profile_cover_drop_area.cpp
-    profile/profile_cover_drop_area.h
     settings/business/settings_away_message.cpp
     settings/business/settings_away_message.h
     settings/business/settings_shortcut_messages.cpp

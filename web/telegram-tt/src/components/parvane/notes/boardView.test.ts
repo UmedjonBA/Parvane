@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { BoardRect, BoardView } from './boardView';
 
-import { revealRects } from './boardView';
+import { fitRects, revealRects } from './boardView';
 
 const WIDTH = 1000;
 const HEIGHT = 700;
@@ -55,5 +55,14 @@ describe('revealRects', () => {
     const zoomed: BoardView = { scale: 2, x: 0, y: 0 };
     const next = revealRects(zoomed, [{ x: 900, y: 0, width: 250, height: 140 }], WIDTH, HEIGHT, TOP, BOTTOM);
     expect(next.scale).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('fitRects: очень много прямоугольников', () => {
+  it('не падает на сотнях тысяч (spread бросал RangeError)', () => {
+    const rects = Array.from({ length: 300000 }, (_, i) => ({
+      x: i, y: i, width: 10, height: 10,
+    }));
+    expect(() => fitRects(rects, 800, 600, 0, 0)).not.toThrow();
   });
 });

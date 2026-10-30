@@ -64,7 +64,7 @@ pub(crate) async fn handle_tcp(stream: TcpStream, v2: Arc<crate::v2::Shared>) ->
     Ok(())
 }
 
-pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>) -> Result<()> {
+pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>, limits: Arc<Limits>) -> Result<()> {
     let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
         max_message_size: Some(MAX_FRAME_BYTES),
         max_frame_size: Some(MAX_FRAME_BYTES),
@@ -72,7 +72,8 @@ pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>) -> 
     };
     let peer_ip = stream.peer_addr().map(|a| a.ip()).ok();
     let mut forwarded: Option<String> = None;
-    let ws = tokio_tungstenite::accept_hdr_async_with_config(
+    // GW-01: рукопожатие не бессрочное — иначе сокет без запроса держит слот.
+    let handshake = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
          resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
@@ -84,10 +85,17 @@ pub(crate) async fn handle_ws(stream: TcpStream, v2: Arc<crate::v2::Shared>) -> 
             Ok(resp)
         },
         Some(config),
-    )
-    .await
-    .context("WS handshake")?;
+    );
+    let ws = tokio::time::timeout(Duration::from_secs(AUTH_TIMEOUT_SECS), handshake)
+        .await
+        .context("WS handshake: таймаут")?
+        .context("WS handshake")?;
     let client_ip = client_ip_from(peer_ip, forwarded.as_deref());
+    // GW-01: за Caddy адрес пира — прокси, лимит на адрес клиента считаем по X-Forwarded-For.
+    let Ok(_client_guard) = crate::limits::admit_client(&limits, peer_ip, &client_ip) else {
+        warn!("ws {}: лимит соединений на адрес клиента", client_ip);
+        return Ok(());
+    };
     let (mut write, mut read) = ws.split();
     // Первый кадр решает протокол: двоичный Hello → v2, текст (v1) → отказ.
     let first = match tokio::time::timeout(Duration::from_secs(AUTH_TIMEOUT_SECS), read.next()).await {

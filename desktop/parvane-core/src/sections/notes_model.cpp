@@ -137,9 +137,14 @@ std::optional<FenceMatch> matchFence(const U32 &line) {
 }
 
 // INLINE_CODE_RE = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g — код заменяется пробелами (по кодовой точке на знак)
+// Потолок поиска закрывающей пары на одной строке: без него незакрытые серии кавычек и '[' дают O(n^2)
+// на враждебной заметке (A0077-1); дальше окна разметка считается текстом
+constexpr size_t kMaxScanSpan = 4096;
+constexpr size_t kMaxMaskedLine = 16384;
+
 U32 maskInlineCode(const U32 &line) {
     U32 out = line;
-    const size_t n = line.size();
+    const size_t n = std::min(line.size(), kMaxMaskedLine);
     size_t p = 0;
     while (p < n) {
         if (line[p] != '`') {
@@ -150,7 +155,7 @@ U32 maskInlineCode(const U32 &line) {
         while (runEnd < n && line[runEnd] == '`') ++runEnd;
         const size_t width = runEnd - p;
         size_t end = 0;
-        for (size_t c = runEnd; c < n; ++c) {
+        for (size_t c = runEnd; c < n && c < runEnd + kMaxScanSpan; ++c) {
             if (line[c] == '`') continue;
             const size_t close = c + 1;
             if (close + width > n) break;
@@ -383,12 +388,14 @@ U32 stripMarkdown(const U32 &line) {
         size_t p = 0;
         auto tryAt = [&](size_t open, size_t &end, U32 &label) {
             if (open >= n || s[open] != '[') return false;
+            // окно поиска ограничено: на строке из тысяч '[' поиск до конца строки был O(n^2) (A0077-1)
+            const size_t lim = std::min(n, open + kMaxScanSpan);
             size_t j = open + 1;
-            while (j < n && s[j] != ']') ++j;
-            if (j + 1 >= n || s[j + 1] != '(') return false;
+            while (j < lim && s[j] != ']') ++j;
+            if (j + 1 >= lim || s[j + 1] != '(') return false;
             size_t k = j + 2;
-            while (k < n && s[k] != ')') ++k;
-            if (k >= n) return false;
+            while (k < lim && s[k] != ')') ++k;
+            if (k >= lim) return false;
             label = s.substr(open + 1, j - open - 1);
             end = k + 1;
             return true;

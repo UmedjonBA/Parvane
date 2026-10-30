@@ -140,6 +140,7 @@ void APIClient::createTokenWithData(
 				"InvalidTokenJson",
 				"Could not parse token.",
 			});
+			return;
 		}
 		finishWithToken(std::move(token));
 	});

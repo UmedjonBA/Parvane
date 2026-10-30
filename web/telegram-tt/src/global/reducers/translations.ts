@@ -93,33 +93,6 @@ export function updateMessageTranslations<T extends GlobalState>(
   return global;
 }
 
-export function clearChatTranslations<T extends GlobalState>(
-  global: T, chatId: string, toLanguageCode: string,
-) {
-  const chatTranslations = global.translations.byChatId[chatId];
-  if (!chatTranslations) return global;
-
-  const filteredByLangCode = Object.fromEntries(
-    Object.entries(chatTranslations.byLangCode).filter(([cacheKey]) => {
-      return parseTranslationCacheKey(cacheKey).languageCode !== toLanguageCode;
-    }),
-  );
-
-  return {
-    ...global,
-    translations: {
-      ...global.translations,
-      byChatId: {
-        ...global.translations.byChatId,
-        [chatId]: {
-          ...chatTranslations,
-          byLangCode: filteredByLangCode,
-        },
-      },
-    },
-  };
-}
-
 export function updateRequestedChatTranslation<T extends GlobalState>(
   global: T, chatId: string, toLanguageCode?: string, tone?: TranslationTone, ...[tabId = getCurrentTabId()]: TabArgs<T>
 ) {
@@ -136,21 +109,6 @@ export function updateRequestedChatTranslation<T extends GlobalState>(
           tone: tone !== undefined ? tone : existingChat?.tone,
         },
       },
-    },
-  }, tabId);
-
-  return global;
-}
-
-export function removeRequestedChatTranslation<T extends GlobalState>(
-  global: T, chatId: string, ...[tabId = getCurrentTabId()]: TabArgs<T>
-) {
-  const tabState = selectTabState(global, tabId);
-
-  global = updateTabState(global, {
-    requestedTranslations: {
-      ...tabState.requestedTranslations,
-      byChatId: omit(tabState.requestedTranslations.byChatId, [chatId]),
     },
   }, tabId);
 

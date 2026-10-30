@@ -34,7 +34,7 @@ import {
   ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
 } from '../../config';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
-import { diagLog } from '../../util/parvaneDiag';
+import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
 import { bytesToBase64 } from './v2/base64';
@@ -167,11 +167,13 @@ let plannerViewLogged = false;
 function rememberPlannerView(json: string) {
   if (json === plannerViewSaved) return;
   plannerViewSaved = json;
+  // Аккаунт фиксируем сейчас: к срабатыванию таймера активным может стать другой
+  const owner = store.self;
   if (plannerViewTimer) clearTimeout(plannerViewTimer);
   plannerViewTimer = setTimeout(async () => {
     plannerViewTimer = undefined;
     const self = store.self;
-    if (!self) return;
+    if (!self || self !== owner) return;
     const storage = await SecureE2eStorage.open(self).catch(() => undefined);
     await storage?.saveRecord(PLANNER_VIEW_RECORD, plannerViewSaved).then(() => {
       if (!plannerViewLogged) logDebug('планировщик: снимок для запуска без сети сохранён');
@@ -243,7 +245,15 @@ async function buildUploadedWallpaper(slug: string, blob: Blob, fileName: string
     },
   };
 }
-const PARVANE_APP_CONFIG: ApiAppConfig = { ...DEFAULT_APP_CONFIG, hash: 1 };
+// Списки доверенных доменов Telegram (t.me, telegram.org…) в Parvane не нужны: все внешние ссылки идут
+// через окно подтверждения, без автовхода и без Telegram URL-авторизации
+const PARVANE_APP_CONFIG: ApiAppConfig = {
+  ...DEFAULT_APP_CONFIG,
+  hash: 1,
+  whitelistedDomains: [],
+  urlAuthDomains: [],
+  autologinDomains: [],
+};
 // Быстрая реакция, пока пользователь её не выбирал (как у Telegram)
 const DEFAULT_QUICK_REACTION: ApiReaction = { type: 'emoji', emoticon: '👍' };
 // Срок ответа fetchConfig: tt перечитывает его по таймеру (меньше суток — без переполнения setTimeout)
@@ -737,7 +747,9 @@ const connectionController = createConnectionController({
   unlockStorage: (user) => ensureStorageUnlocked(user),
   describeDevice: describeThisDevice,
   wipeDevice: async (user) => {
-    localState.clearUserData(user);
+    // Отзыв устройства сообщает сам сервер и подтвердить его по журналу здесь нельзя, поэтому
+    // стираем только ключи устройства (они отозваны в любом случае), а локальную историю и
+    // настройки не трогаем: лживый ответ сервера иначе уничтожал бы их безвозвратно
     // Отложенная запись состояния движка (perf A1) не должна лечь поверх стирания
     await v2Controller.settleState().catch(() => undefined);
     await SecureE2eStorage.clear(user);
@@ -928,6 +940,8 @@ async function pollTelegramConfirmation(generation: number): Promise<boolean> {
     const address = await connectionController.connectAndLogin(user, password, mode === 'login' ? linkToken : '');
     saveLoginAddress(address);
     await persistSessionCredential(address, password);
+    // Вход выполнен: пароль в памяти модуля больше не нужен
+    pendingLoginPassword = '';
   } catch (err) {
     logDebug(`логин после подтверждения в Telegram не удался: ${String(err)}`);
     pendingLoginAddress = user;
@@ -1514,7 +1528,8 @@ let pendingLinkGrant: { box_payload: string; eph_pub: string } | undefined;
 
 // Старое устройство: свой эфемерный ключ на каждый challenge (по целевому
 // устройству). Приватный ключ живёт только в памяти вкладки.
-type LinkChallengeState = { keyPair: CryptoKeyPair; pub: string };
+// `shownEph` — ключ нового устройства, по которому посчитан ПОКАЗАННЫЙ код сверки: грант допустим только под него
+type LinkChallengeState = { keyPair: CryptoKeyPair; pub: string; shownEph?: string };
 const linkChallenges = new Map<string, LinkChallengeState>();
 
 type LinkOfferWire = {
@@ -1777,6 +1792,7 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
     logDebug(`линковка: ключ оффера ${offer.device_id} не соответствует обязательству`);
     return undefined;
   }
+  own.shownEph = offer.eph_pub;
   return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
 }
 
@@ -2583,8 +2599,12 @@ const methods = {
     });
   },
 
-  searchMessagesGlobal({ query }: { query?: string }) {
-    return Promise.resolve(buildSearchResults(searchLocalMessages(query)));
+  searchMessagesGlobal({ query, type }: { query?: string; type?: string }) {
+    // Вкладки поиска по типу («Музыка», «Ссылки», «Медиа») получают только сообщения своего типа
+    const found = searchLocalMessages(query);
+    return Promise.resolve(buildSearchResults(
+      type && type !== 'text' ? found.filter((m) => matchesMediaType(m, type)) : found,
+    ));
   },
 
   searchMessagesInChat({ peer, query, type }: { peer: { id: string }; query?: string; type?: string }) {
@@ -3103,12 +3123,6 @@ const methods = {
     await methods.provideAuthPassword(pendingLoginPassword);
   },
 
-  // Проверка ника до смены: формат и занятость (поиск в каталоге не выдаёт занятые прежние ники — их держит сервер)
-  parvaneCheckNick({ nick }: { nick: string }) {
-    const value = nick.trim().toLowerCase();
-    return { isValid: /^[a-z0-9][a-z0-9_.-]{1,63}$/.test(value), current: store.self.split('@')[0] };
-  },
-
   // ── Авто-линковка истории: методы для Settings → Devices ────────────────────
 
   // Новое устройство: статус собственного оффера (код показывается в UI,
@@ -3216,6 +3230,8 @@ const methods = {
       const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
       const own = linkChallenges.get(deviceId);
       if (!offer || !own || !offer.commitment || !offer.eph_pub || offer.challenge_pub !== own.pub) return undefined;
+      // Сервер мог подменить ключ между показом кода и подтверждением: запечатываем только под показанный
+      if (!own.shownEph || offer.eph_pub !== own.shownEph) return undefined;
       if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
 
       // LINK-1 п. 8: строки v2-эпохи новому устройству сервер не отдаст
@@ -3325,7 +3341,11 @@ const methods = {
       // под device_id из копии — иначе сессия v2 представилась бы серверу другим
       // устройством
       v2Controller.reset();
-      await v2Controller.importBackup(backup.v2 as V2DeviceBackup);
+      // Копия без ключа/состояния устройства v2 не принимается: иначе браузер остался бы без ключей молча
+      if (!await v2Controller.importBackup(backup.v2 as V2DeviceBackup)) {
+        logDebug('импорт ключей: копия не содержит устройство v2');
+        return undefined;
+      }
       connectionController.rememberDeviceId(store.self, backup.deviceId);
       syncController.reset();
       resetPackRegistries();
@@ -4108,21 +4128,19 @@ const methods = {
     // Полный выход: устройство убирает себя из аккаунта, пока соединение живо, —
     // иначе у остальных устройств оставался бы «призрак» в списке. Нет связи —
     // не дольше LEAVE_TIMEOUT_MS: локальное стирание идёт в любом случае (WEB-11)
+    reminderScheduler.stop();
     if (!noSessionClear) {
-      await Promise.race([
-        v2Controller.leave(),
+      // Оба сетевых шага идут одновременно: вместе они ждут не дольше LEAVE_TIMEOUT_MS, и выход (`signOut`
+      // ждёт destroy ограниченное время) не оставляет ключи устройства на диске при плохой связи
+      const withTimeout = (run: Promise<unknown>) => Promise.race([
+        run,
         new Promise<void>((resolve) => {
           setTimeout(resolve, LEAVE_TIMEOUT_MS);
         }),
       ]);
-    }
-    reminderScheduler.stop();
-    if (!noSessionClear) {
-      await Promise.race([
-        v2Controller.pushSetAlarms([]).catch(() => undefined),
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, LEAVE_TIMEOUT_MS);
-        }),
+      await Promise.all([
+        withTimeout(v2Controller.leave()),
+        withTimeout(v2Controller.pushSetAlarms([]).catch(() => undefined)),
       ]);
       await clearWorkerReminders().catch(() => undefined);
     }
@@ -4137,6 +4155,12 @@ const methods = {
     taskOffers.reset();
     if (!noSessionClear) {
       clearLoginStorage();
+      // Диагностический журнал прежнего аккаунта не переживает полный выход
+      try {
+        clearDiag();
+      } catch {
+        // журнал недоступен — выход не должен падать
+      }
       if (user) {
         localState.clearUserData(user);
         await SecureE2eStorage.clear(user);
@@ -4204,22 +4228,23 @@ function searchLocalMessages(query: string | undefined, chatId?: string): ApiMes
     .sort((a, b) => b.date - a.date);
 }
 
+function matchesMediaType(message: ApiMessage, type: string): boolean {
+  const c = message.content;
+  switch (type) {
+    case 'media': return Boolean(c.photo || (c.video && !c.video.isRound && !c.video.isGif));
+    case 'documents': return Boolean(c.document);
+    case 'links': return Boolean(c.text?.text && (/https?:\/\//.test(c.text.text) || c.text.entities?.some(
+      (e) => e.type === ApiMessageEntityTypes.Url || e.type === ApiMessageEntityTypes.TextUrl,
+    )));
+    case 'voice': return Boolean(c.voice || (c.video && c.video.isRound));
+    case 'audio': return Boolean(c.audio);
+    case 'gif': return Boolean(c.video?.isGif);
+    default: return false;
+  }
+}
+
 function filterMediaMessages(chatId: string, type: string): ApiMessage[] {
-  const matches = (message: ApiMessage): boolean => {
-    const c = message.content;
-    switch (type) {
-      case 'media': return Boolean(c.photo || (c.video && !c.video.isRound && !c.video.isGif));
-      case 'documents': return Boolean(c.document);
-      case 'links': return Boolean(c.text?.text && (/https?:\/\//.test(c.text.text) || c.text.entities?.some(
-        (e) => e.type === ApiMessageEntityTypes.Url || e.type === ApiMessageEntityTypes.TextUrl,
-      )));
-      case 'voice': return Boolean(c.voice || (c.video && c.video.isRound));
-      case 'audio': return Boolean(c.audio);
-      case 'gif': return Boolean(c.video?.isGif);
-      default: return false;
-    }
-  };
-  return store.getMessages(chatId).filter(matches).sort((a, b) => b.date - a.date);
+  return store.getMessages(chatId).filter((m) => matchesMediaType(m, type)).sort((a, b) => b.date - a.date);
 }
 
 function buildSearchResults(messages: ApiMessage[]) {
@@ -4278,7 +4303,10 @@ function consumeStartupCredentials() {
 // ── интерфейс connector'а ────────────────────────────────────────────────────
 
 export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<T>): MethodResponse<T> {
-  const method = (methods as Record<string, AnyFunction>)[fnName as string];
+  // Только собственные методы: имя приходит и по межвкладочному каналу, `constructor`/`__proto__` исключены
+  const method = Object.prototype.hasOwnProperty.call(methods, fnName)
+    ? (methods as Record<string, AnyFunction>)[fnName as string]
+    : undefined;
   if (!method) {
     // parvaneDiag: пропуск метода виден в журнале — по нему сценарий обхода
     // UI ловит действия, которые молча ничего не делают. Заглушки Telegram
@@ -4297,7 +4325,8 @@ export function callApi<T extends keyof Methods>(fnName: T, ...args: MethodArgs<
   const result = method(...args) as MethodResponse<T>;
   if (result && typeof (result as Promise<unknown>).catch === 'function') {
     (result as Promise<unknown>).catch((error: unknown) => {
-      diagLog('api-err', `${String(fnName)}: ${error instanceof Error ? error.message : String(error)}`);
+      const text = error instanceof Error ? error.message : String(error);
+      diagLog('api-err', `${String(fnName)}: ${scrubErrorText(text)}`);
     });
   }
   return result;

@@ -54,11 +54,6 @@ private:
 		bool blocking = false;
 	};
 
-	[[nodiscard]] bool blockAlreadySent(
-		not_null<PeerData*> peer,
-		bool blocking,
-		Fn<void(bool success)> done = nullptr);
-
 	const not_null<Main::Session*> _session;
 
 	MTP::Sender _api;

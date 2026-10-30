@@ -31,18 +31,11 @@ import useWindowSize from '../../hooks/window/useWindowSize';
 
 import Transition from '../ui/Transition';
 import AddChatMembers from './AddChatMembers';
-import CreateTopic from './CreateTopic.async';
-import EditTopic from './EditTopic.async';
 import GifSearch from './GifSearch.async';
 import Management from './management/Management.async';
 import PollResults from './PollResults.async';
 import Profile from './Profile';
 import RightHeader from './RightHeader';
-import BoostStatistics from './statistics/BoostStatistics';
-import MessageStatistics from './statistics/MessageStatistics.async';
-import MonetizationStatistics from './statistics/MonetizationStatistics';
-import Statistics from './statistics/Statistics.async';
-import StoryStatistics from './statistics/StoryStatistics.async';
 import StickerSearch from './StickerSearch.async';
 
 import './RightColumn.scss';
@@ -391,26 +384,12 @@ const RightColumn: FC<OwnProps & StateProps> = ({
           />
         );
 
-      case RightColumnContent.Statistics:
-        return <Statistics chatId={chatId!} />;
-      case RightColumnContent.BoostStatistics:
-        return <BoostStatistics />;
-      case RightColumnContent.MonetizationStatistics:
-        return <MonetizationStatistics />;
-      case RightColumnContent.MessageStatistics:
-        return <MessageStatistics chatId={chatId!} isActive={isOpen && isActive} />;
-      case RightColumnContent.StoryStatistics:
-        return <StoryStatistics chatId={chatId!} isActive={isOpen && isActive} />;
       case RightColumnContent.StickerSearch:
         return <StickerSearch onClose={close} isActive={isOpen && isActive} />;
       case RightColumnContent.GifSearch:
         return <GifSearch onClose={close} isActive={isOpen && isActive} />;
       case RightColumnContent.PollResults:
         return <PollResults onClose={close} isActive={isOpen && isActive} />;
-      case RightColumnContent.CreateTopic:
-        return <CreateTopic onClose={close} isActive={isOpen && isActive} />;
-      case RightColumnContent.EditTopic:
-        return <EditTopic onClose={close} isActive={isOpen && isActive} />;
     }
 
     return undefined; // Unreachable

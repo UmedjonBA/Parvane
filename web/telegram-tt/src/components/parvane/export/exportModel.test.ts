@@ -50,6 +50,7 @@ describe('export file names', () => {
     expect(sanitizeFileName('../../etc/passwd')).toBe('_etc_passwd');
     expect(sanitizeFileName('a:b*c?d"e<f>g|h')).toBe('a_b_c_d_e_f_g_h');
     expect(sanitizeFileName('   ')).toBe('file');
+    expect(sanitizeFileName('photo\u202Egpj.exe')).toBe('photogpj.exe');
     expect(sanitizeFileName('CON.txt', 'x')).toBe('x');
     expect(sanitizeFileName('Привет мир')).toBe('Привет мир');
     const long = sanitizeFileName(`${'a'.repeat(200)}.jpeg`);

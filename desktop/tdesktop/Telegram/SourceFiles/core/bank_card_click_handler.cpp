@@ -48,6 +48,15 @@ void RequestResolveBankCard(
 		const QString &bankCard,
 		Fn<void(BankCardData)> done,
 		Fn<void(QString)> fail) {
+	// Parvane: номер карты не уходит на сервер Telegram ни при каких
+	// условиях — запрос не отправляется, меню показывает отказ.
+	if (true) {
+		Q_UNUSED(state);
+		Q_UNUSED(bankCard);
+		Q_UNUSED(done);
+		fail(u"PARVANE_NO_MTPROTO"_q);
+		return;
+	}
 	state->sender.request(MTPpayments_GetBankCardData(
 		MTP_string(bankCard)
 	)).done([=](const MTPpayments_BankCardData &result) {

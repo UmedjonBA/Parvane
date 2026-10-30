@@ -36,12 +36,6 @@ enum class SharedMediaType : signed char;
 
 namespace Info::Profile {
 
-inline auto ToSingleLine() {
-	return rpl::map([](const QString &text) {
-		return TextUtilities::SingleLine(text);
-	});
-}
-
 rpl::producer<not_null<PeerData*>> MigratedOrMeValue(
 	not_null<PeerData*> peer);
 
@@ -98,8 +92,6 @@ struct LinkWithUrl {
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<QString> InviteToChatAbout(
 	not_null<UserData*> user);
-[[nodiscard]] rpl::producer<bool> CanShareContactValue(
-	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<bool> CanAddContactValue(
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<Data::Birthday> BirthdayValue(
@@ -136,8 +128,6 @@ struct LinkWithUrl {
 	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> CanAddMemberValue(
 	not_null<PeerData*> peer);
-[[nodiscard]] rpl::producer<int> FullReactionsCountValue(
-	not_null<Main::Session*> peer);
 [[nodiscard]] rpl::producer<bool> CanViewParticipantsValue(
 	not_null<ChannelData*> megagroup);
 

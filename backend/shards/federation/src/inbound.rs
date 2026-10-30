@@ -103,7 +103,7 @@ async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
         return full(StatusCode::FORBIDDEN, Some("blocked"), None);
     }
     // Описатель отправителя — его ключ проверяет подпись кадра (закрепление при первом контакте).
-    let peer = match fed.trust(&origin).await {
+    let peer = match fed.trust_with(&origin, false).await {
         Ok(p) => p,
         Err(e) => {
             warn!("федерация: входящий от {}: сервер не проверен (код {})", origin, e.code);
@@ -119,6 +119,8 @@ async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>) -> Response<Body> {
             return full(StatusCode::BAD_REQUEST, None, None);
         }
     };
+    // Подпись сошлась — теперь сервер можно закрепить (при первом контакте).
+    fed.confirm_pin(&origin, &peer).await;
     // Повтор — по базе (переживает перезапуск в окне свежести).
     if !store::nonce_fresh(&fed.pool, &origin, &v.nonce, now).await.unwrap_or(false) {
         return full(StatusCode::BAD_REQUEST, None, None);

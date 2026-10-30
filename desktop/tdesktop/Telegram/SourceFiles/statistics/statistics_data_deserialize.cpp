@@ -97,6 +97,12 @@ Data::StatisticalChart StatisticalChartFromJSON(const QByteArray &json) {
 		}
 		result.measure();
 	}
+	for (const auto &line : result.lines) {
+		if (line.y.size() != result.x.size()) {
+			LOG(("API Error: Stats graph line/x size mismatch."));
+			return {};
+		}
+	}
 	if (result.maxValue == result.minValue) {
 		if (result.minValue) {
 			result.minValue = 0;

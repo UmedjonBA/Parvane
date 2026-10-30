@@ -105,11 +105,26 @@ QString filedialogNextFilename(
 		const QString &cur,
 		const QString &path) {
 	QDir directory(path.isEmpty() ? cDialogLastPath() : path);
-	int32 extIndex = name.lastIndexOf('.');
-	QString prefix = name, extension;
+	// Имя приходит от отправителя: оставляем только последнюю часть пути,
+	// чтобы "../x" и абсолютный путь не выводили запись за каталог.
+	auto safeName = name;
+	const auto lastSlash = qMax(
+		safeName.lastIndexOf('/'),
+		safeName.lastIndexOf('\\'));
+	if (lastSlash >= 0) {
+		safeName = safeName.mid(lastSlash + 1);
+	}
+	if (safeName == u"."_q || safeName == u".."_q) {
+		safeName = QString();
+	}
+	if (safeName.isEmpty()) {
+		safeName = u"file"_q;
+	}
+	int32 extIndex = safeName.lastIndexOf('.');
+	QString prefix = safeName, extension;
 	if (extIndex >= 0) {
-		extension = name.mid(extIndex);
-		prefix = name.mid(0, extIndex);
+		extension = safeName.mid(extIndex);
+		prefix = safeName.mid(0, extIndex);
 	}
 	const auto dir = directory.absolutePath();
 	const auto nameBase = (dir.endsWith('/') ? dir : (dir + '/')) + prefix;

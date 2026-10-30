@@ -2,6 +2,8 @@
 #include "parvane/parvane_sections_data.h"
 
 #include "parvane/parvane_client.h"
+#include "parvane/parvane_notes_canvas_media.h"
+#include "parvane/parvane_notes_graph.h"
 
 #include <parvane/blobcrypt.h>
 #include <parvane/v2_engine.h>
@@ -16,7 +18,9 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 
+#include <atomic>
 #include <chrono>
+#include <limits>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -35,19 +39,6 @@ constexpr auto kLinkingPollMs = std::int64_t(3000); // web: опрос «Пла�
 
 [[nodiscard]] std::int64_t NowMs() {
 	return QDateTime::currentMSecsSinceEpoch();
-}
-
-[[nodiscard]] std::string RandomHex(int bytes) {
-	static thread_local std::mt19937_64 rng(std::random_device{}());
-	static const char digits[] = "0123456789abcdef";
-	auto result = std::string();
-	result.reserve(bytes * 2);
-	for (auto i = 0; i != bytes; ++i) {
-		const auto b = std::uint8_t(rng() & 0xFF);
-		result.push_back(digits[b >> 4]);
-		result.push_back(digits[b & 0x0F]);
-	}
-	return result;
 }
 
 // ── транспорт поверх v2-сессии ─────────────────────────────────────────────────
@@ -164,11 +155,8 @@ public:
 			throw domain::BusError("ERROR_CODE_UNAVAILABLE");
 		}
 		const auto sealed = parvane::blobcrypt::encrypt(bytes);
-		auto capability = std::string(32, '\0');
-		static thread_local std::mt19937_64 rng(std::random_device{}());
-		for (auto &ch : capability) {
-			ch = char(rng() & 0xFF);
-		}
+		// секрет доступа — только из CSPRNG (mt19937_64 с 32-битной затравкой предсказуем)
+		const auto capability = randomBytes(32);
 		auto fileId = std::string();
 		try {
 			fileId = session->uploadBlob(sealed.ciphertext, capability, kCloudChunkBytes, kDriveBucket);
@@ -813,7 +801,18 @@ void Run() {
 	hub->shutdown();
 }
 
+// Поколение аккаунта: OnAccountReset увеличивает его; задание помнит поколение, в котором поставлено, и всё, что оно
+// отправит на главный поток (снимки, ответы Ask), отбрасывается, если аккаунт успел смениться
+constexpr auto kNoJobGeneration = std::numeric_limits<std::uint64_t>::max();
+std::atomic<std::uint64_t> AccountGeneration{ 0 };
+thread_local std::uint64_t JobGeneration = kNoJobGeneration;
+
 void Enqueue(std::function<void(Hub&)> job) {
+	job = [generation = AccountGeneration.load(), job = std::move(job)](Hub &hub) {
+		JobGeneration = generation;
+		job(hub);
+		JobGeneration = kNoJobGeneration;
+	};
 	auto &t = Worker();
 	{
 		auto lock = std::lock_guard(t.mutex);
@@ -861,7 +860,12 @@ void Hub::SetNotes(std::shared_ptr<const NotesView> view) {
 } // namespace
 
 void PostMain(std::function<void()> fn) {
-	crl::on_main([fn = std::move(fn)] { fn(); });
+	const auto generation = (JobGeneration == kNoJobGeneration) ? AccountGeneration.load() : JobGeneration;
+	crl::on_main([generation, fn = std::move(fn)] {
+		if (generation == AccountGeneration.load()) {
+			fn();
+		}
+	});
 }
 
 void Post(std::function<void(Workers&)> job) {
@@ -915,23 +919,6 @@ void UndoPlanner(const QString &notice) {
 	});
 }
 
-void ApplyCloud(const std::string &container, json ops, std::function<void(bool)> done) {
-	Enqueue([container, ops = std::move(ops), done = std::move(done)](Hub &hub) {
-		auto ok = false;
-		try {
-			const auto result = hub.drive().applyOps(container, ops);
-			ok = !result.is_object() || !result.contains("error");
-		} catch (const std::exception &e) {
-			LOG(("Parvane: разделы — правка облака не применена: %1").arg(QString::fromUtf8(e.what())));
-		}
-		hub.markCloudDirty();
-		hub.markNotesDirty();
-		if (done) {
-			PostMain([done, ok] { done(ok); });
-		}
-	});
-}
-
 void CallCloud(const std::string &method, json args, std::function<void(std::optional<json>)> done) {
 	Enqueue([method, args = std::move(args), done = std::move(done)](Hub &hub) {
 		auto result = std::optional<json>();
@@ -959,10 +946,6 @@ void SetPaletteOpen(bool open) {
 	Enqueue([open](Hub &hub) { hub.setPaletteOpen(open); });
 }
 
-void SetWindowVisible(bool visible) {
-	Enqueue([visible](Hub &hub) { hub.setVisible(visible); });
-}
-
 void OnEngineEvent(const json &event) {
 	Enqueue([event](Hub &hub) { hub.engineEvent(event); });
 }
@@ -978,10 +961,13 @@ void ApplyDomainKeys(std::string owner, std::string planner, std::string cloud) 
 }
 
 void OnAccountReset() {
+	++AccountGeneration; // запоздалые снимки и ответы прежнего аккаунта на главном потоке не применятся
 	// Экранам и палитре — сразу пустые снимки (окно «Статья», палитра Ctrl+K читают их), модули — потоком разделов
 	Hub::SetPlanner(std::make_shared<PlannerView>());
 	Hub::SetCloud(std::make_shared<CloudView>());
 	Hub::SetNotes(std::make_shared<NotesView>());
+	NotesUi::CanvasMedia::Reset();
+	Knowledge::ResetGraphPlaces();
 	Enqueue([](Hub &hub) { hub.resetAccount(); });
 }
 

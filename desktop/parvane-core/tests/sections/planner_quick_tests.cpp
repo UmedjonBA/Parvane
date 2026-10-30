@@ -1415,6 +1415,20 @@ int main() {
               "обычная длительность по первому слову названия");
     }
 
+    {
+        // A0080: потолок длины входа и числа вне диапазона целого
+        const std::string longLine(5000, 'a');
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto longDraft = parse(longLine + " завтра в 10:00");
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        check(longDraft.kind == "task" && !longDraft.day && ms < 2000, "слишком длинная строка не разбирается и остаётся названием");
+        const auto big = parse("созвон через 99999999999999999999 дней");
+        check(big.day.has_value() || !big.day, "огромное «через N дней» не падает");
+        const auto goal = parse("цель бюджет 99999999999 ч");
+        check(!goal.goalChanges || !goal.goalChanges->budget || *goal.goalChanges->budget <= 1000 * 60,
+              "огромный бюджет ограничен");
+    }
+
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

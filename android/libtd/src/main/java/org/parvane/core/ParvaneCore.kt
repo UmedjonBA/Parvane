@@ -58,7 +58,6 @@ object ParvaneCore {
         nativeInit(gatewayUrl, storeDir, StoreKey.load(java.io.File(storeDir)), debug)
 
     // ── вход и аккаунт ───────────────────────────────────────────────────────
-    fun serverDomain(): String = nativeServerDomain()
     /** {ok, address, error_code, twofa_required, login_token, telegram_bot, confirm_required, deletion_at_ms} */
     fun login(user: String, password: String, loginToken: String = "", cancelDeletion: Boolean = false): JSONObject =
         JSONObject(nativeLogin(user, password, loginToken, cancelDeletion))
@@ -66,9 +65,6 @@ object ParvaneCore {
     @JvmStatic fun register(user: String, password: String, email: String): JSONObject = JSONObject(nativeRegister(user, password, email))
     @JvmStatic fun registerStatus(user: String, token: String): Boolean = nativeRegisterStatus(user, token)
     @JvmStatic fun confirmEmail(user: String, code: String): JSONObject = JSONObject(nativeConfirmEmail(user, code))
-    /** enabled < 0 — прочитать; 0/1 — выключить/включить (свежий пароль). */
-    @JvmStatic fun twoFactor(enabled: Int, password: String = ""): JSONObject = JSONObject(nativeTwoFactor(enabled, password))
-    @JvmStatic fun changePassword(oldPassword: String, newPassword: String): JSONObject = JSONObject(nativeChangePassword(oldPassword, newPassword))
     fun startSession(): Boolean = nativeStartSession()
     fun networkAvailable() = nativeNetworkAvailable()
     /** {"ready","needsLinking","engine","self","reconnectAttempts"} */
@@ -92,20 +88,14 @@ object ParvaneCore {
     @JvmStatic fun linkGrant(deviceId: String): Boolean = nativeLinkGrant(deviceId)
     /** «Отклонить» запрос нового устройства: выдать ему грант больше нельзя. */
     @JvmStatic fun linkDecline(deviceId: String) = nativeLinkDecline(deviceId)
-    @JvmStatic fun linkOffer() = nativeLinkOffer()
     @JvmStatic fun telegramRecovery(again: Boolean) = nativeTelegramRecovery(again)
     @JvmStatic fun recoverWithKey(key: String): String = nativeRecoverWithKey(key)
-    @JvmStatic fun resetIdentity(password: String): String = nativeResetIdentity(password)
     @JvmStatic fun rotateSsk(key: String): String = nativeRotateSsk(key)
-    @JvmStatic fun sendKeyToTelegram(key: String): String = nativeSendKeyToTelegram(key)
-    @JvmStatic fun storeEscrowCopy(key: String): String = nativeStoreEscrowCopy(key)
-    @JvmStatic fun recoveryState(): JSONObject = JSONObject(nativeRecoveryState())
     // копия ключей формата 2 (как web): import → 1 ок, −1 пароль/файл, −2 не формат 2
     @JvmStatic fun exportKeys(password: String): String = nativeExportKeys(password)
     @JvmStatic fun importKeys(fileJson: String, password: String): Int = nativeImportKeys(fileJson, password)
 
     // ── переписка ────────────────────────────────────────────────────────────
-    fun sendText(to: String, text: String): String = nativeSendText(to, text)
     fun sendContent(to: String, contentJson: String, replyTo: String): String = nativeSendContent(to, contentJson, replyTo)
     fun sendMedia(to: String, path: String, contentJson: String, replyTo: String): String = nativeSendMedia(to, path, contentJson, replyTo)
     /** Пересылка в несколько чатов → {адрес: новый id | ""}. */
@@ -121,8 +111,6 @@ object ParvaneCore {
     fun react(uuid: String, emoji: String): Boolean = nativeReact(uuid, emoji)
     fun pin(uuid: String, pinned: Boolean): Boolean = nativePin(uuid, pinned)
     fun markRead(uuid: String) = nativeMarkRead(uuid)
-    /** Кто прочитал своё сообщение: [{"user","at"}]. */
-    fun readers(uuid: String): JSONArray = JSONArray(nativeReaders(uuid))
     fun forget(uuid: String, fileId: String) = nativeForget(uuid, fileId)
     /** «Удалить чат у себя»: граница в журнал состояния, сообщения чата — прочь локально. */
     fun clearChat(address: String, untilMs: Long, uuids: List<String>) = nativeClearChat(address, untilMs, JSONArray(uuids).toString())
@@ -177,7 +165,6 @@ object ParvaneCore {
     /** Аватар (открытый блоб) + identity; вернёт file_id или "". */
     fun setAvatar(path: String): String = nativeSetAvatar(path)
     fun fingerprint(user: String): String = nativeFingerprint(user)
-    fun checkPeerDeleted(user: String): Boolean = nativeCheckPeerDeleted(user)
 
     // ── журнал личного состояния (STATE-1/2) ─────────────────────────────────
     fun stateAttach(localJson: String): JSONObject? = nativeStateAttach(localJson).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
@@ -199,24 +186,15 @@ object ParvaneCore {
     fun storeWrite(path: String, text: String): Boolean = nativeStoreWrite(path, text)
     fun packFetch(refJson: String): JSONObject = JSONObject(nativePackFetch(refJson))
     fun packRefFor(dir: String, rawName: String): JSONObject = JSONObject(nativePackRefFor(dir, rawName))
-    fun packHash(dir: String): String = nativePackHash(dir)
     fun previewFetch(url: String, timeoutMs: Int): JSONObject = JSONObject(nativePreviewFetch(url, timeoutMs))
-    /** Картинка превью (base64) → вложение-фото для webpage.photo; null — нет. */
-    fun uploadPreviewPhoto(imageB64: String, width: Int, height: Int): JSONObject? =
-        nativeUploadPreviewPhoto(imageB64, width, height).takeIf { it.isNotEmpty() }?.let { JSONObject(it) }
     fun mapTile(z: Int, x: Int, y: Int): ByteArray = nativeMapTile(z, x, y) ?: ByteArray(0)
-    /** Последние строки журнала клиента без содержимого — «Сообщить об ошибке». */
-    fun recentLog(): String = nativeRecentLog()
 
     @JvmStatic private external fun nativeInit(gatewayUrl: String, storeDir: String, storeKey: ByteArray, debug: Boolean)
-    @JvmStatic private external fun nativeServerDomain(): String
     @JvmStatic private external fun nativeLogin(user: String, password: String, loginToken: String, cancelDeletion: Boolean): String
     @JvmStatic private external fun nativeServerInfo(): String
     @JvmStatic private external fun nativeRegister(user: String, password: String, email: String): String
     @JvmStatic private external fun nativeRegisterStatus(user: String, token: String): Boolean
     @JvmStatic private external fun nativeConfirmEmail(user: String, code: String): String
-    @JvmStatic private external fun nativeTwoFactor(enabled: Int, password: String): String
-    @JvmStatic private external fun nativeChangePassword(oldPassword: String, newPassword: String): String
     @JvmStatic private external fun nativeStartSession(): Boolean
     @JvmStatic private external fun nativeNetworkAvailable()
     @JvmStatic private external fun nativeStatus(): String
@@ -230,17 +208,11 @@ object ParvaneCore {
     @JvmStatic private external fun nativeReportDeviceStolen(deviceId: String): Boolean
     @JvmStatic private external fun nativeLinkGrant(deviceId: String): Boolean
     @JvmStatic private external fun nativeLinkDecline(deviceId: String)
-    @JvmStatic private external fun nativeLinkOffer()
     @JvmStatic private external fun nativeTelegramRecovery(again: Boolean)
     @JvmStatic private external fun nativeRecoverWithKey(key: String): String
-    @JvmStatic private external fun nativeResetIdentity(password: String): String
     @JvmStatic private external fun nativeRotateSsk(key: String): String
-    @JvmStatic private external fun nativeSendKeyToTelegram(key: String): String
-    @JvmStatic private external fun nativeStoreEscrowCopy(key: String): String
-    @JvmStatic private external fun nativeRecoveryState(): String
     @JvmStatic private external fun nativeExportKeys(password: String): String
     @JvmStatic private external fun nativeImportKeys(fileJson: String, password: String): Int
-    @JvmStatic private external fun nativeSendText(to: String, text: String): String
     @JvmStatic private external fun nativeSendContent(to: String, contentJson: String, replyTo: String): String
     @JvmStatic private external fun nativeSendMedia(to: String, path: String, contentJson: String, replyTo: String): String
     @JvmStatic private external fun nativeForward(toJson: String, uuid: String): String
@@ -252,7 +224,6 @@ object ParvaneCore {
     @JvmStatic private external fun nativeReact(uuid: String, emoji: String): Boolean
     @JvmStatic private external fun nativePin(uuid: String, pinned: Boolean): Boolean
     @JvmStatic private external fun nativeMarkRead(uuid: String)
-    @JvmStatic private external fun nativeReaders(uuid: String): String
     @JvmStatic private external fun nativeForget(uuid: String, fileId: String)
     @JvmStatic private external fun nativeClearChat(address: String, untilMs: Long, idsJson: String)
     @JvmStatic private external fun nativeReplayJournal()
@@ -287,7 +258,6 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSetProfile(fieldsJson: String): Boolean
     @JvmStatic private external fun nativeSetAvatar(path: String): String
     @JvmStatic private external fun nativeFingerprint(user: String): String
-    @JvmStatic private external fun nativeCheckPeerDeleted(user: String): Boolean
     @JvmStatic private external fun nativeStateAttach(localJson: String): String
     @JvmStatic private external fun nativeStateSync(desiredJson: String, kindsJson: String): String
     @JvmStatic private external fun nativeStateScheduledSent(opIdB64: String): Boolean
@@ -295,16 +265,17 @@ object ParvaneCore {
     @JvmStatic private external fun nativeStateCall(name: String, argsJson: String): Boolean
     @JvmStatic private external fun nativeRevokeContactAccess(peer: String): Boolean
     @JvmStatic private external fun nativeSetPrivacy(groupAddNobody: Boolean, strangersAllowed: Boolean): Boolean
-    @JvmStatic private external fun nativeSetCallsPresencePrivacy(callsNobody: Boolean, presenceNobody: Boolean): Boolean
     @JvmStatic private external fun nativeL2Available(chat: String): Boolean
     @JvmStatic private external fun nativeSetL2(chat: String, enabled: Boolean): String
     @JvmStatic private external fun nativeStoreRead(path: String): String
     @JvmStatic private external fun nativeStoreWrite(path: String, text: String): Boolean
     @JvmStatic private external fun nativePackFetch(refJson: String): String
-    @JvmStatic private external fun nativePackRefFor(dir: String, rawName: String): String
+    @JvmStatic private external fun nativeSetCallsPresencePrivacy(callsNobody: Boolean, presenceNobody: Boolean): Boolean
+    @JvmStatic fun resetIdentity(password: String): String = nativeResetIdentity(password)
+    fun packHash(dir: String): String = nativePackHash(dir)
+    @JvmStatic private external fun nativeResetIdentity(password: String): String
     @JvmStatic private external fun nativePackHash(dir: String): String
+    @JvmStatic private external fun nativePackRefFor(dir: String, rawName: String): String
     @JvmStatic private external fun nativePreviewFetch(url: String, timeoutMs: Int): String
-    @JvmStatic private external fun nativeUploadPreviewPhoto(imageB64: String, width: Int, height: Int): String
     @JvmStatic private external fun nativeMapTile(z: Int, x: Int, y: Int): ByteArray?
-    @JvmStatic private external fun nativeRecentLog(): String
 }

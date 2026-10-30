@@ -107,12 +107,16 @@ bool PlannerStore::migrateLegacy(const EngineStateResult &result, const json &le
                                  const std::string &prefix) {
     if (isMigrating_ || result.status != "ready" || !isLegacyPlannerRecord(legacyRecord)) return false;
     isMigrating_ = true;
+    // Исключение хоста не должно оставить перенос навсегда «идущим» (A0081-3)
+    struct Reset {
+        bool &flag;
+        ~Reset() { flag = false; }
+    } reset{isMigrating_};
     const auto changes = legacyToChanges(normalized, prefix);
     const int count = static_cast<int>(normalized.tasks.size() + normalized.events.size() + normalized.nutrition.size());
     host_.apply(changes);
     host_.flush();
     host_.markMigrated(count);
-    isMigrating_ = false;
     return true;
 }
 
@@ -131,8 +135,8 @@ void PlannerStore::migrateLearned() {
     // «Отменить» прежней правки вернуло бы и состояние без словаря
     stateBeforeLastChange_.reset();
     setLocalState(draft);
-    sendChanges(diffChanges(previous, draft));
-    host_.resetLocalLearned();
+    // Запись устройства стирается, только если провайдер принял правки (A0081-3)
+    if (sendChanges(diffChanges(previous, draft))) host_.resetLocalLearned();
 }
 
 // История ввода с устройства вливается в «План» и стирается; отметки о переносе нет — перенесённое стёрто
@@ -143,8 +147,7 @@ void PlannerStore::migrateQuickHistory() {
     draft.quickLines = host_.mergeLocalHistory(previous.quickLines);
     stateBeforeLastChange_.reset();
     setLocalState(draft);
-    sendChanges(diffChanges(previous, draft));
-    host_.resetLocalHistory();
+    if (sendChanges(diffChanges(previous, draft))) host_.resetLocalHistory();
 }
 
 // Черновик экрана: показан он, а не состояние движка — следующий ответ движка применяется обязательно
@@ -153,12 +156,14 @@ void PlannerStore::setLocalState(State state) {
     state_ = std::move(state);
 }
 
-void PlannerStore::sendChanges(const std::vector<PlannerChange> &changes) {
-    if (changes.empty()) return;
+bool PlannerStore::sendChanges(const std::vector<PlannerChange> &changes) {
+    if (changes.empty()) return true;
     try {
         host_.apply(changes);
+        return true;
     } catch (const std::exception &) {
         // Правки не переданы провайдеру
+        return false;
     }
 }
 

@@ -917,3 +917,30 @@ fn five_thousand_ops_apply_and_snapshot_fast() {
     assert!(bytes.len() < SNAPSHOT_WARN_BYTES, "снимок {} байт", bytes.len());
     assert!(elapsed.as_secs_f64() < 1.0, "5000 операций и снимок заняли {elapsed:?}");
 }
+
+// ── метки снимка проходят LamportGuard (D-16) ──────────────────────────────
+
+#[test]
+fn snapshot_with_huge_lamport_is_rejected_and_normal_one_raises_guard() {
+    let mut evil = PlannerState::default();
+    evil.apply_op(&op(vec![change::Change::Task(task("t1", "обычная", u64::MAX - 1, "d1"))]), "d1").unwrap();
+    let evil_snap = evil.to_snapshot();
+    let mut guard = LamportGuard::default();
+    // Метка u64::MAX - 1 в снимке из 5 операций недостижима.
+    assert!(planner::guard_snapshot(&mut guard, &evil_snap, 5).is_err());
+    assert_eq!(guard.max_seen(), 0);
+
+    let mut ok = PlannerState::default();
+    ok.apply_op(&op(vec![change::Change::Task(task("t1", "обычная", 40, "d1"))]), "d1").unwrap();
+    let mut snap = ok.to_snapshot();
+    snap.settings = Some(Settings { stamp: st(70, "d1"), ..Default::default() });
+    planner::guard_snapshot(&mut guard, &snap, 5).unwrap();
+    // Часы подняты по метке настроек, а не только по названию задачи.
+    assert_eq!(guard.max_seen(), 70);
+    assert!(guard.tick() > 70);
+
+    // Нулевая метка (формат) отвергается и самим слиянием.
+    let mut bad = snap.clone();
+    bad.tasks[0].name = s("x", 0, "d1");
+    assert!(PlannerState::default().merge_snapshot(&bad).is_err());
+}

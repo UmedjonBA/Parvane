@@ -64,6 +64,11 @@ pub(crate) async fn account_delete(ctx: &V2Ctx, req: &ShardRequest) -> Reply {
         return Ok(pb::AccountDeleteResponse { deletion_at_ms: at }.encode_to_vec());
     }
     let log = load_log(ctx, &address).await?;
+    // Удалять аккаунт с журналом может только действующее устройство журнала: сессия по утёкшему паролю без
+    // устройства (или с отозванным) не должна стирать аккаунт (A0017-1)
+    if !log.devices.is_empty() && log.active(&req.device_id).is_none() {
+        return Err(ErrorCode::Forbidden);
+    }
     let devices: Vec<String> = log.devices.keys().chain(log.revoked.iter()).cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
     let at = now_ms() + delete_delay_ms();
     sqlx::query("INSERT OR IGNORE INTO account_deletions (address, requested_ms, purge_at_ms, device_ids) VALUES (?, ?, ?, ?)")

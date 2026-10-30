@@ -394,6 +394,12 @@ void Account::setMtpAuthorization(const QByteArray &serialized) {
 				"Could not read keys count from mtp authorization."));
 			return;
 		}
+		constexpr auto kMaxKeysCount = 64;
+		if (count < 0 || count > kMaxKeysCount) {
+			LOG(("MTP Error: "
+				"Bad keys count in mtp authorization."));
+			return;
+		}
 		keys.reserve(count);
 		for (auto i = 0; i != count; ++i) {
 			const auto dcId = Serialize::read<qint32>(stream);

@@ -12,7 +12,6 @@ export type CloudFileKind = 'photo' | 'video' | 'audio' | 'pdf' | 'text' | 'othe
 export type CloudNameError = 'empty' | 'too-long' | 'bad-chars' | 'reserved';
 
 export const CLOUD_NAME_MAX_BYTES = 255;
-export const CLOUD_MAX_NODES = 8000;
 // Срок корзины: старше — стирает устройство владельца при синхронизации
 export const CLOUD_TRASH_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 // Текстовый файл крупнее в просмотре не открывается (его можно скачать)
@@ -20,8 +19,8 @@ export const CLOUD_TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SERVICE_PREFIX = '.parvane-';
 const TYPE_LABEL_MAX_LENGTH = 8;
-// eslint-disable-next-line no-control-regex
-const BAD_NAME_CHARS = /[/\\\u0000-\u001f\u007f]/;
+// Как `c.is_control()` движка: C0, DEL и C1
+const BAD_NAME_CHARS = /[/\\\p{Cc}]/u;
 const PHOTO_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv']);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'ogg', 'oga', 'opus', 'm4a', 'wav', 'flac', 'aac']);
@@ -51,10 +50,23 @@ export function getExtension(name: string) {
 /** Проверка имени — та же, что в движке (`cloud::check_name`). */
 export function validateName(name: string): CloudNameError | undefined {
   if (!name.trim()) return 'empty';
+  // Движок отвергает и имя с пробелами по краям (`n.trim() != n`)
+  if (name.trim() !== name) return 'bad-chars';
   if (byteLength(name) > CLOUD_NAME_MAX_BYTES) return 'too-long';
   if (BAD_NAME_CHARS.test(name)) return 'bad-chars';
   if (name === '.' || name === '..') return 'reserved';
   return undefined;
+}
+
+/**
+ * Имя из недоверенного источника (имя файла с диска, файл из чужого сообщения) приводится к допустимому:
+ * запрещённые знаки — `_`, края обрезаются, длина — по байтам; пустое/`.`/`..` — `fallback`.
+ */
+export function normalizeName(name: string, fallback = 'file') {
+  let clean = name.replace(/[/\\\p{Cc}]/gu, '_').trim();
+  while (clean && byteLength(clean) > CLOUD_NAME_MAX_BYTES) clean = clean.slice(0, -1);
+  clean = clean.trim();
+  return !clean || clean === '.' || clean === '..' ? fallback : clean;
 }
 
 /** Свободное имя среди соседей: «отчёт.pdf» → «отчёт (2).pdf». */

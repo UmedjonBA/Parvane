@@ -38,7 +38,7 @@ const OBJECT_URL_LIFETIME_MS = 60000;
 // Миниатюры качаются, когда строка видна, не больше двух разом: у ссылки предел обращений в минуту
 const THUMB_PARALLEL = 2;
 const IMAGE_MIMES = new Set([
-  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp', 'image/svg+xml',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp',
 ]);
 const IMAGE_EXTENSIONS: Record<string, string> = {
   png: 'image/png',

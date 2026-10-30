@@ -1,6 +1,7 @@
 //! Своё → чужой сервер (spec 028, R3, R10): запросы `v2.federation.out` от
 //! gateway и шардов; доставка по очереди с повтором до суток.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -103,12 +104,12 @@ async fn handle(fed: &Arc<Fed>, reply: String, payload: &[u8]) {
         federation_out::Kind::InboxPush(p) => {
             let req = S2sRequest { kind: Some(s2s_request::Kind::InboxPush(p)) };
             let r = store::outbox_put(&fed.pool, &dest, &req.encode_to_vec(), now_ms()).await;
-            return publish(fed, &reply, if r.is_ok() { reply_ok(vec![]) } else { reply_err(err(ErrorCode::Unavailable, 1000)) }).await;
+            return publish(fed, &reply, if matches!(r, Ok(true)) { reply_ok(vec![]) } else { reply_err(err(ErrorCode::Unavailable, 1000)) }).await;
         }
         federation_out::Kind::AccountGone(g) => {
             let req = S2sRequest { kind: Some(s2s_request::Kind::AccountGone(g)) };
             let r = store::outbox_put(&fed.pool, &dest, &req.encode_to_vec(), now_ms()).await;
-            return publish(fed, &reply, if r.is_ok() { reply_ok(vec![]) } else { reply_err(err(ErrorCode::Unavailable, 1000)) }).await;
+            return publish(fed, &reply, if matches!(r, Ok(true)) { reply_ok(vec![]) } else { reply_err(err(ErrorCode::Unavailable, 1000)) }).await;
         }
         federation_out::Kind::KeyOwner(k) => S2sRequest { kind: Some(s2s_request::Kind::KeyOwner(k)) },
         federation_out::Kind::PrivacyOf(p) => S2sRequest { kind: Some(s2s_request::Kind::PrivacyOf(p)) },
@@ -170,38 +171,69 @@ async fn forward_stream(fed: &Arc<Fed>, reply: &str, dest: &str, req: S2sRequest
     }
 }
 
-/// Доставка из очереди: повтор 1, 2, 4 … ≤ 3600 с, до суток от постановки.
+/// Писем одного домена за тик и выбрано строк за тик.
+const OUTBOX_PER_DEST_TICK: usize = 8;
+const OUTBOX_TICK_ROWS: i64 = 256;
+
+/// Доставка из очереди: повтор 1, 2, 4 … ≤ 3600 с, до суток от постановки. Домены обслуживаются
+/// параллельно (одна задача на домен): медленный сервер не задерживает доставку остальным.
 async fn outbox_loop(fed: Arc<Fed>) {
     let mut t = tokio::time::interval(Duration::from_secs(1));
+    let busy: Arc<std::sync::Mutex<HashSet<String>>> = Arc::new(std::sync::Mutex::new(HashSet::new()));
     loop {
         t.tick().await;
         let now = now_ms();
         let _ = store::prune_nonces(&fed.pool, now).await;
-        let rows = match store::outbox_due(&fed.pool, now, 32).await {
+        let rows = match store::outbox_due(&fed.pool, now, OUTBOX_TICK_ROWS).await {
             Ok(r) => r,
             Err(e) => {
                 error!("федерация: очередь не прочитана: {}", e);
                 continue;
             }
         };
-        for (id, dest, payload, attempts, created_ms) in rows {
-            let Ok(req) = S2sRequest::decode(payload.as_slice()) else {
-                let _ = store::outbox_done(&fed.pool, id).await;
+        let mut by_dest: HashMap<String, Vec<store::OutboxRow>> = HashMap::new();
+        for row in rows {
+            let list = by_dest.entry(row.1.clone()).or_default();
+            if list.len() < OUTBOX_PER_DEST_TICK {
+                list.push(row);
+            }
+        }
+        for (dest, rows) in by_dest {
+            // Домен ещё занят прошлой пачкой — не берём те же письма второй раз.
+            if !busy.lock().map(|mut b| b.insert(dest.clone())).unwrap_or(false) {
                 continue;
-            };
-            match fed.call(&dest, &req, 0, None).await {
-                Ok(_) => {
-                    let _ = store::outbox_done(&fed.pool, id).await;
+            }
+            let (fed, busy) = (fed.clone(), busy.clone());
+            tokio::spawn(async move {
+                deliver_batch(&fed, now, rows).await;
+                if let Ok(mut b) = busy.lock() {
+                    b.remove(&dest);
                 }
-                Err(e) if now - created_ms > OUTBOX_MAX_AGE_MS => {
-                    warn!("федерация: доставка на {} не удалась за сутки (код {}), снята", dest, e.code);
-                    let _ = store::outbox_done(&fed.pool, id).await;
-                }
-                Err(e) => {
-                    let backoff = (1000i64 << attempts.clamp(0, 12)).min(OUTBOX_MAX_BACKOFF_MS);
-                    let next = now + backoff.max(i64::from(e.retry_after_ms));
-                    let _ = store::outbox_retry(&fed.pool, id, attempts + 1, next).await;
-                }
+            });
+        }
+    }
+}
+
+async fn deliver_batch(fed: &Fed, now: i64, rows: Vec<store::OutboxRow>) {
+    for (id, dest, payload, attempts, created_ms) in rows {
+        let Ok(req) = S2sRequest::decode(payload.as_slice()) else {
+            let _ = store::outbox_done(&fed.pool, id).await;
+            continue;
+        };
+        match fed.call(&dest, &req, 0, None).await {
+            Ok(_) => {
+                let _ = store::outbox_done(&fed.pool, id).await;
+            }
+            Err(e) if now - created_ms > OUTBOX_MAX_AGE_MS => {
+                warn!("федерация: доставка на {} не удалась за сутки (код {}), снята", dest, e.code);
+                let _ = store::outbox_done(&fed.pool, id).await;
+            }
+            Err(e) => {
+                let backoff = (1000i64 << attempts.clamp(0, 12)).min(OUTBOX_MAX_BACKOFF_MS);
+                let next = now_ms() + backoff.max(i64::from(e.retry_after_ms));
+                let _ = store::outbox_retry(&fed.pool, id, attempts + 1, next).await;
+                // Сервер не отвечает — остальные письма ему подождут до следующей попытки.
+                break;
             }
         }
     }

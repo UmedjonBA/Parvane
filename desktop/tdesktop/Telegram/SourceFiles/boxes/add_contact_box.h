@@ -264,7 +264,6 @@ protected:
 private:
 	void submit();
 	void save();
-	void saveSelfFail(const QString &error);
 
 	const not_null<UserData*> _user;
 	MTP::Sender _api;

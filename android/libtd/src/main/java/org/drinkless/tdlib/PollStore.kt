@@ -21,7 +21,7 @@ class PollStore {
 
     private val byUuid = HashMap<String, Entry>()
     private val pendingVotes = HashMap<String, ArrayList<Pair<String, List<Int>>>>() // голоса до прихода опроса
-    private val pendingClose = HashSet<String>()
+    private val pendingClose = HashMap<String, HashSet<String>>() // uuid → отправители закрытия до прихода опроса
 
     fun get(uuid: String): Entry? = byUuid[uuid]
 
@@ -38,13 +38,19 @@ class PollStore {
                 correct, if (c.isNull("solution")) "" else c.optString("solution"), from)
         }
         pendingVotes.remove(uuid)?.forEach { (voter, idx) -> applyVote(uuid, voter, idx) }
-        if (pendingClose.remove(uuid)) e.closed = true
+        if (pendingClose.remove(uuid)?.contains(e.owner) == true) e.closed = true
         return e
     }
 
     /** `poll_vote`: true — агрегат изменился (или отложен до прихода опроса). */
     fun applyVote(uuid: String, voter: String, indices: List<Int>): Boolean {
-        val e = byUuid[uuid] ?: run { pendingVotes.getOrPut(uuid) { ArrayList() }.add(voter to indices); return false }
+        val e = byUuid[uuid] ?: run {
+            if (pendingVotes.size < MAX_PENDING || pendingVotes.containsKey(uuid)) {
+                val list = pendingVotes.getOrPut(uuid) { ArrayList() }
+                if (list.size < MAX_PENDING) list.add(voter to indices)
+            }
+            return false
+        }
         if (e.closed) return false
         if (e.isQuiz && e.votes.containsKey(voter)) return false // в викторине голос финален
         val clean = indices.filter { it in e.options.indices }.distinct()
@@ -52,8 +58,16 @@ class PollStore {
         return true
     }
 
-    fun close(uuid: String): Boolean {
-        val e = byUuid[uuid] ?: run { pendingClose.add(uuid); return false }
+    /** `poll_close`: закрыть может только владелец опроса ([from]); закрытие до прихода опроса ждёт, но проверяется при регистрации. */
+    fun close(uuid: String, from: String): Boolean {
+        val e = byUuid[uuid] ?: run {
+            if (pendingClose.size < MAX_PENDING || pendingClose.containsKey(uuid)) {
+                val set = pendingClose.getOrPut(uuid) { HashSet() }
+                if (set.size < MAX_PENDING) set.add(from)
+            }
+            return false
+        }
+        if (from != e.owner) return false
         if (e.closed) return false
         e.closed = true; return true
     }
@@ -86,6 +100,7 @@ class PollStore {
     }
 
     companion object {
+        private const val MAX_PENDING = 256 // отложенные голоса/закрытия неизвестных опросов не растут без предела
         /** Контент `kind=poll` с ОБОИМИ наборами имён (web + desktop). */
         fun buildContent(question: String, options: List<String>, isPublic: Boolean, isMultiple: Boolean, isQuiz: Boolean,
                          correct: List<Int>, solution: String): JSONObject {

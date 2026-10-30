@@ -187,7 +187,7 @@ bool DeleteDirectory(QString path) {
 		const auto fname = path + '/' + p->d_name;
 		const auto encoded = QFile::encodeName(fname);
 		struct stat statbuf;
-		if (!stat(encoded.constData(), &statbuf)) {
+		if (!lstat(encoded.constData(), &statbuf)) {
 			if (S_ISDIR(statbuf.st_mode)) {
 				if (!DeleteDirectory(fname)) {
 					closedir(d);

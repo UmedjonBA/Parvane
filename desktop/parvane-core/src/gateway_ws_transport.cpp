@@ -99,7 +99,7 @@ std::string sslError() {
 } // namespace
 
 namespace {
-std::atomic<bool> g_envCaDirsAllowed{true}; // Android (JNI) задаёт PARVANE_CA_DIRS; desktop выключает
+std::atomic<bool> g_envCaDirsAllowed{false}; // по умолчанию выключено (B0174-4); Android (JNI) и тест транспорта включают явно
 } // namespace
 
 void GatewayWsTransport::setEnvCaDirsAllowed(bool allowed) {
@@ -140,10 +140,6 @@ GatewayWsTransport::Endpoint GatewayWsTransport::parseUrl(const std::string &url
         throw GatewayError("gateway ws: некорректный URL " + url);
     }
     return ep;
-}
-
-void GatewayWsTransport::connect(const std::string &host, int port) {
-    connectUrl("wss://" + host + ":" + std::to_string(port) + "/ws");
 }
 
 void GatewayWsTransport::connectUrl(const std::string &url) {
@@ -191,11 +187,8 @@ void GatewayWsTransport::connectUrl(const std::string &url) {
         fd_ = -1;
         throw;
     }
-    upgradeRequiredConn_ = false;
     running_ = true;
     reader_ = std::thread(&GatewayWsTransport::readerLoop, this);
-    lastUrl_ = url;
-    closedByUser_ = false;
 }
 
 void GatewayWsTransport::tlsConnect(const std::string &host) {
@@ -406,12 +399,6 @@ void GatewayWsTransport::sendFrame(unsigned char opcode, const std::string &payl
     }
 }
 
-void GatewayWsTransport::sendLine(const std::string &frame) {
-    std::lock_guard<std::mutex> lk(writeMu_);
-    if (fd_ < 0 || !running_) throw GatewayError("gateway ws: не подключено");
-    sendFrame(0x1, frame);
-}
-
 void GatewayWsTransport::sendBinary(const std::string &frame) {
     std::lock_guard<std::mutex> lk(writeMu_);
     if (fd_ < 0 || !running_) throw GatewayError("gateway ws: не подключено");
@@ -473,7 +460,14 @@ void GatewayWsTransport::readerLoop() {
             }
             if (opcode == 0xA) continue; // pong
             if (opcode == 0x1 || opcode == 0x2 || opcode == 0x0) {
-                if (opcode != 0x0) messageOpcode = opcode;
+                if (opcode != 0x0) {
+                    messageOpcode = opcode;
+                    message.clear(); // новое сообщение начинается с начального кадра
+                } else if (message.empty() && messageOpcode == 0) {
+                    continue; // продолжение без начального кадра
+                }
+                // потолок собираемого из фрагментов сообщения (как у одного кадра) — защита от OOM
+                if (message.size() + payload.size() > (64u << 20)) { running_ = false; break; }
                 message += payload;
                 if (fin) {
                     // NAT-14: исключение обработчика (кадр сервера с полем не того типа, сбой выше по
@@ -481,18 +475,16 @@ void GatewayWsTransport::readerLoop() {
                     try {
                         if (messageOpcode == 0x2 && binaryHandler_) {
                             binaryHandler_(std::move(message));
-                        } else {
-                            dispatch(message);
                         }
                     } catch (...) {
                     }
                     message.clear();
+                    messageOpcode = 0;
                 }
             }
         }
     }
     running_ = false;
-    abortPending("соединение с gateway потеряно"); // ждущие request не висят до таймаута
     if (closedHandler_) {
         try {
             closedHandler_();
@@ -502,7 +494,6 @@ void GatewayWsTransport::readerLoop() {
 }
 
 void GatewayWsTransport::close() {
-    closedByUser_ = true;
     if (fd_ < 0) return;
     running_ = false;
     ::shutdown(fd_, SHUT_RDWR);
@@ -517,7 +508,6 @@ void GatewayWsTransport::close() {
         ::close(fd_);
         fd_ = -1;
     }
-    abortPending("соединение с gateway закрыто");
 }
 
 } // namespace parvane

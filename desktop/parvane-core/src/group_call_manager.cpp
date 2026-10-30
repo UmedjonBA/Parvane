@@ -158,6 +158,8 @@ void GroupCallManager::joinMesh(const std::string &gcid,
         sendGcid_ = gcid;
     }
     media_ = media.empty() ? "audio" : media;
+    members_.clear();
+    members_.insert(participants.begin(), participants.end());
     for (const auto &peer : participants) {
         if (peer == self_) {
             continue;
@@ -193,6 +195,14 @@ void GroupCallManager::handleSignal(const std::string &from, const CallSignalIn 
         return;
     }
     if (sig.type == "group_invite") {
+        // список участников — слова отправителя: потолок, иначе по потоку очереди на каждый адрес
+        constexpr std::size_t kMaxParticipants = 64;
+        if (sig.participants.size() > kMaxParticipants) {
+            CallSignalIn capped = sig;
+            capped.participants.resize(kMaxParticipants);
+            handleSignal(from, capped);
+            return;
+        }
         const auto busyElsewhere = cb_.isBusy && cb_.isBusy();
         std::optional<PendingInvite> started;
         {
@@ -201,7 +211,7 @@ void GroupCallManager::handleSignal(const std::string &from, const CallSignalIn 
             if (pending_ && pending_->gcid == sig.group_call_id) return; // уже ждёт решения
             if (busyElsewhere || !gcid_.empty() || pending_) {
                 // «Занят» — всем участникам сразу, один раз на звонок; замолчавший — не отвечаем вовсе
-                if (!isSilenced(sig.group_call_id)) declineCall(sig.group_call_id, sig.participants, "busy");
+                if (!isSilenced(sig.group_call_id)) declineCall(sig.group_call_id, {from}, "busy"); // «занят» — только пригласившему, не адресам из его списка
                 silence(sig.group_call_id, false);
                 return;
             }
@@ -267,6 +277,7 @@ void GroupCallManager::handleMeshSignalLocked(const std::string &from, const Cal
         if (s && sig.type != "invite" && !s->callId().empty() && sig.call_id != s->callId()) return;
     } else if (sig.type == "invite") {
         if (gcid_.empty()) return; // не в звонке — парный invite некуда принять
+        if (members_.count(from) == 0) return; // парный invite — только от участника этого звонка
         // Инвайт от участника, для которого сессии ещё нет (мы — answerer).
         s = ensureSession(from, sig.media.empty() ? "audio" : sig.media);
     }
@@ -330,6 +341,7 @@ void GroupCallManager::leave() {
         if (s) s->hangup();
     }
     peers_.clear();
+    members_.clear();
     gcid_.clear();
     std::lock_guard<std::mutex> sl(sendMutex_);
     sendGcid_.clear();

@@ -230,6 +230,16 @@ describe('cloud paths', () => {
     expect(notes.map((n) => n.path)).toEqual(['Plan.md', 'Sub_dir/Deep.md', 'plan (2).md']);
   });
 
+  it('stops descending below the depth limit', () => {
+    const chain = Array.from({ length: 100 }, (_, i) => node({
+      id: `d${i}`, kind: 'folder', parent: i ? `d${i - 1}` : undefined, name: 'd',
+    }));
+    const deep = [...chain, node({ id: 'deepfile', parent: 'd99', name: 'x.txt' }),
+      node({ id: 'top', parent: 'd0', name: 'ok.txt' })];
+    const paths = treeFilePaths(deep, '').map((f) => f.path);
+    expect(paths).toEqual(['d/ok.txt']);
+  });
+
   it('puts each container in its own folder', () => {
     const files = cloudExportFiles([
       { id: 'root', name: 'My files', nodes },

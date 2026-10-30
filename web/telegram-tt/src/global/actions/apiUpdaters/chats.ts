@@ -3,7 +3,7 @@ import type { ActionReturnType } from '../../types';
 import { MAIN_THREAD_ID } from '../../../api/types';
 
 import { ARCHIVED_FOLDER_ID, MAX_ACTIVE_PINNED_CHATS, SERVICE_NOTIFICATIONS_USER_ID } from '../../../config';
-import { buildCollectionByKey, omit } from '../../../util/iteratees';
+import { omit } from '../../../util/iteratees';
 import { isLocalMessageId } from '../../../util/keys/messageKey';
 import { closeMessageNotifications, notifyAboutMessage } from '../../../util/notifications';
 import { checkIfHasUnreadReactions, isChatChannel } from '../../helpers';
@@ -14,31 +14,25 @@ import {
   addChatListIds,
   addUnreadMentions,
   deleteChatMessages,
-  deletePeerPhoto,
   leaveChat,
   removeUnreadMentions,
   replaceChatMessages,
-  replacePeerPhotos,
-  replacePinnedTopicIds,
   updateChat,
   updateChatFullInfo,
   updateChatListType,
   updateChatParticipantRank,
   updatePeerStoriesHidden,
-  updateTopic,
 } from '../../reducers';
 import { removeUnreadReactions } from '../../reducers/reactions';
 import { updateTabState } from '../../reducers/tabs';
 import { addUnreadMessageToCounter, replaceThreadLocalStateParam } from '../../reducers/threads';
 import {
   selectChat,
-  selectChatFullInfo,
   selectChatListType,
   selectChatMessages,
   selectCommonBoxChatId,
   selectCurrentMessageList,
   selectIsChatListed,
-  selectPeer,
   selectTabState,
 } from '../../selectors';
 import { selectThreadLocalStateParam, selectThreadReadState } from '../../selectors/threads';
@@ -297,21 +291,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       };
     }
 
-    case 'updatePinnedSavedDialogIds': {
-      const { ids } = update;
-
-      return {
-        ...global,
-        chats: {
-          ...global.chats,
-          orderedPinnedIds: {
-            ...global.chats.orderedPinnedIds,
-            saved: ids.length ? ids : undefined,
-          },
-        },
-      };
-    }
-
     case 'updateChatPinned': {
       const { id, isPinned } = update;
       const listType = selectChatListType(global, id);
@@ -344,30 +323,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
           orderedPinnedIds: {
             ...global.chats.orderedPinnedIds,
             [listType]: newOrderedPinnedIds.length ? newOrderedPinnedIds : undefined,
-          },
-        },
-      };
-    }
-
-    case 'updateSavedDialogPinned': {
-      const { id, isPinned } = update;
-
-      const { saved: orderedPinnedIds } = global.chats.orderedPinnedIds;
-
-      let newOrderedPinnedIds = orderedPinnedIds || [];
-      if (!isPinned) {
-        newOrderedPinnedIds = newOrderedPinnedIds.filter((pinnedId) => pinnedId !== id);
-      } else if (!newOrderedPinnedIds.includes(id)) {
-        newOrderedPinnedIds = [id, ...newOrderedPinnedIds];
-      }
-
-      return {
-        ...global,
-        chats: {
-          ...global.chats,
-          orderedPinnedIds: {
-            ...global.chats.orderedPinnedIds,
-            saved: newOrderedPinnedIds.length ? newOrderedPinnedIds : undefined,
           },
         },
       };
@@ -422,65 +377,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       };
     }
 
-    case 'updateRecommendedChatFolders': {
-      const { folders } = update;
-
-      return {
-        ...global,
-        chatFolders: {
-          ...global.chatFolders,
-          recommended: folders,
-        },
-      };
-    }
-
-    case 'updateChatMembers': {
-      const targetChatFullInfo = selectChatFullInfo(global, update.id);
-      const { replacedMembers, addedMember, deletedMemberId } = update;
-      if (!targetChatFullInfo) {
-        return undefined;
-      }
-
-      let shouldUpdate = false;
-      let members = targetChatFullInfo?.members
-        ? [...targetChatFullInfo.members]
-        : [];
-
-      if (replacedMembers) {
-        members = replacedMembers;
-        shouldUpdate = true;
-      } else if (addedMember) {
-        if (
-          !members.length
-          || !members.some((m) => m.userId === addedMember.userId)
-        ) {
-          members.push(addedMember);
-          shouldUpdate = true;
-        }
-      } else if (members.length && deletedMemberId) {
-        const deleteIndex = members.findIndex((m) => m.userId === deletedMemberId);
-        if (deleteIndex > -1) {
-          members.slice(deleteIndex, 1);
-          shouldUpdate = true;
-        }
-      }
-
-      if (shouldUpdate) {
-        const adminMembers = members.filter(({ isOwner, isAdmin }) => isOwner || isAdmin);
-        // TODO Kicked members?
-
-        global = updateChat(global, update.id, { membersCount: members.length });
-        global = updateChatFullInfo(global, update.id, {
-          members,
-          adminMembersById: buildCollectionByKey(adminMembers, 'userId'),
-        });
-
-        return global;
-      }
-
-      return undefined;
-    }
-
     case 'updateChatParticipantRank': {
       return updateChatParticipantRank(global, update.id, update.userId, update.rank);
     }
@@ -498,51 +394,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       return global;
     }
 
-    case 'updatePendingJoinRequests': {
-      const { chatId, requestsPending, recentRequesterIds } = update;
-      const chat = global.chats.byId[chatId];
-      if (!chat) {
-        return undefined;
-      }
-
-      global = updateChatFullInfo(global, chatId, {
-        requestsPending,
-        recentRequesterIds,
-      });
-      setGlobal(global);
-
-      actions.loadChatJoinRequests({ chatId });
-      return undefined;
-    }
-
-    case 'updatePinnedTopic': {
-      const { chatId, topicId, isPinned } = update;
-
-      const chat = global.chats.byId[chatId];
-      if (!chat) {
-        return undefined;
-      }
-
-      global = updateTopic(global, chatId, topicId, {
-        isPinned,
-      });
-      setGlobal(global);
-
-      return undefined;
-    }
-
-    case 'updatePinnedTopicsOrder': {
-      const { chatId, order } = update;
-
-      const chat = global.chats.byId[chatId];
-      if (!chat) return undefined;
-
-      global = replacePinnedTopicIds(global, chatId, order);
-      setGlobal(global);
-
-      return undefined;
-    }
-
     case 'updateTopic': {
       const { chatId, topicId } = update;
 
@@ -552,74 +403,6 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
       actions.loadTopicById({ chatId, topicId });
 
       return undefined;
-    }
-
-    case 'updateTopics': {
-      const { chatId } = update;
-
-      const chat = selectChat(global, chatId);
-      if (!chat?.isForum) return undefined;
-
-      actions.loadTopics({ chatId, force: true });
-
-      return undefined;
-    }
-
-    case 'updateDiscussion': {
-      const { chatId, threadId } = update;
-
-      actions.loadDiscussion({ chatId, threadId });
-
-      return undefined;
-    }
-
-    case 'updateViewForumAsMessages': {
-      const { chatId, isEnabled } = update;
-
-      const chat = selectChat(global, chatId);
-      if (!chat?.isForum) return undefined;
-
-      global = updateChat(global, chatId, {
-        isForumAsMessages: isEnabled,
-      });
-      setGlobal(global);
-      break;
-    }
-
-    case 'updateNewProfilePhoto': {
-      const { peerId, photo } = update;
-
-      global = updateChat(global, peerId, {
-        avatarPhotoId: photo.id,
-      });
-      setGlobal(global);
-
-      actions.loadMoreProfilePhotos({ peerId, shouldInvalidateCache: true });
-
-      break;
-    }
-
-    case 'updateDeleteProfilePhoto': {
-      const { peerId, photoId } = update;
-
-      const peer = selectPeer(global, peerId);
-      if (!peer) {
-        return undefined;
-      }
-
-      if (!photoId || peer.avatarPhotoId === photoId) {
-        global = updateChat(global, peerId, {
-          avatarPhotoId: undefined,
-        });
-        global = replacePeerPhotos(global, peerId, undefined);
-      } else {
-        global = deletePeerPhoto(global, peerId, photoId);
-      }
-      setGlobal(global);
-
-      actions.loadMoreProfilePhotos({ peerId, shouldInvalidateCache: true });
-
-      break;
     }
   }
 

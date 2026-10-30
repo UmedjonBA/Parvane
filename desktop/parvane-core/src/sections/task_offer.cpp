@@ -112,6 +112,11 @@ std::optional<OfferInPlan> parseOfferInPlanKey(const std::optional<std::string> 
 
 std::string offerPlannerView(const std::string &kind) { return kind == "event" ? "calendar" : "today"; }
 
+namespace {
+bool isDayKey(const std::string &day);
+bool isClock(const std::string &time);
+} // namespace
+
 OfferFields OfferFields::fromContent(const nlohmann::json &content) {
     auto result = OfferFields();
     if (!content.is_object()) return result;
@@ -127,9 +132,13 @@ OfferFields OfferFields::fromContent(const nlohmann::json &content) {
             if (step.is_string()) result.steps.push_back(step.get<std::string>());
         }
     }
+    // Поля вне формата движок отвергает целиком (и карточка «принималась» без задания): негодные отбрасываются
     result.day = text("day");
+    if (result.day && !isDayKey(*result.day)) result.day = std::nullopt;
     result.start = text("start");
+    if (result.start && !isClock(*result.start)) result.start = std::nullopt;
     result.due = text("due");
+    if (result.due && !isDayKey(*result.due)) result.due = std::nullopt;
     if (const auto i = content.find("minutes"); i != content.end() && i->is_number()) {
         const auto value = i->get<double>();
         // `content.minutes || undefined`; ревью 21 окт 2026 (2.3): число от собеседника — до int(value) проверить

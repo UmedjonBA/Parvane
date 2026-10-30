@@ -65,6 +65,12 @@ const SafeLink = ({
     return false;
   });
 
+  // Средняя кнопка мыши (auxclick) не должна обходить окно подтверждения
+  const handleAuxClick = useLastCallback((e: React.MouseEvent<HTMLAnchorElement, MouseEvent>) => {
+    if (e.button !== 1) return;
+    handleClick(e);
+  });
+
   if (!url) {
     return undefined;
   }
@@ -82,6 +88,7 @@ const SafeLink = ({
       rel="noopener noreferrer"
       className={classNames}
       onClick={handleClick}
+      onAuxClick={handleAuxClick}
       dir={isRtl ? 'rtl' : 'auto'}
       data-entity-type={entityType}
     >

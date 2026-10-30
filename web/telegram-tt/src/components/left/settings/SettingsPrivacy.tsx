@@ -35,6 +35,7 @@ const callParvane = callApi as unknown as (method: string, args: unknown) => Pro
 
 // Новый PIN хранилища не короче (WEB-15; та же проверка — в `secureStorage.setStoragePin`)
 const STORAGE_PIN_MIN_LENGTH = 8;
+const KEYS_PASSWORD_MIN_LENGTH = 8;
 
 type OwnProps = {
   isActive?: boolean;
@@ -301,6 +302,11 @@ const SettingsPrivacy = ({
   const handleExportE2eKeys = useLastCallback(async () => {
     const password = window.prompt(oldLang('ParvaneKeysPasswordPrompt'));
     if (!password) return;
+    // Копия держит закрытые ключи и историю: короткий пароль подбирается офлайн
+    if (password.length < KEYS_PASSWORD_MIN_LENGTH) {
+      showNotification({ message: oldLang('ParvaneKeysPasswordTooShort') });
+      return;
+    }
     const result = await callParvane('parvaneExportE2eKeys', { password }) as { payload: string } | undefined;
     if (!result) {
       showNotification({ message: oldLang('ParvaneKeysExportFailed') });

@@ -11,6 +11,7 @@
 #include "base/bytes.h"
 #include "base/assertion.h"
 
+#include <limits>
 #include <QDataStream>
 #include <QIODevice>
 #include <range/v3/numeric/accumulate.hpp>
@@ -337,6 +338,9 @@ Cache::ReadResult Cache::readCompressedFrame(
 		part.subspan(0, sizeof(length)));
 	const auto bytes = part.subspan(sizeof(length));
 
+	if (length == std::numeric_limits<qint32>::min()) {
+		return { false };
+	}
 	const auto xored = (length < 0);
 	if (xored) {
 		length = -length;

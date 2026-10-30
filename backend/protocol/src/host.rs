@@ -298,6 +298,19 @@ fn key32(b: &[u8]) -> Result<[u8; 32], String> {
 
 pub mod call;
 
+/// Разбор числовых полей гранта линковки (общий для обвязок host/wasm): `gen` обязателен, `skv` обязателен
+/// при `sk`, оба — без усечения. Прежде отсутствующее поле молча давало 1 и ключи расходились без ошибки.
+pub fn grant_numbers(v: &Value) -> Result<(u64, Option<u32>), ProtoError> {
+    let gen = v.get("gen").and_then(Value::as_u64).filter(|g| *g > 0).ok_or(ProtoError::Malformed)?;
+    let skv = if v.get("sk").is_some_and(Value::is_string) {
+        let n = v.get("skv").and_then(Value::as_u64).ok_or(ProtoError::Malformed)?;
+        Some(u32::try_from(n).map_err(|_| ProtoError::Malformed)?)
+    } else {
+        None
+    };
+    Ok((gen, skv))
+}
+
 /// Обёртка клиента для нативных хостов.
 pub struct HostClient {
     pub inner: Client,
@@ -380,14 +393,12 @@ impl HostClient {
     pub fn join_with_grant(&mut self, material: &str, otk: usize) -> Result<String, String> {
         let v: Value = serde_json::from_str(material).map_err(|_| err(ProtoError::Malformed))?;
         let h = |k: &str| hex::decode(v[k].as_str().unwrap_or("")).map_err(|_| err(ProtoError::Malformed));
-        let log = ipb::DeviceLogSyncResponse::decode(h("log")?.as_slice()).map_err(|_| err(ProtoError::Malformed))?;
-        let reqs = self
-            .inner
-            .join_with_ssk(key32(&h("ssk")?)?, log.entries, key32(&h("dk")?)?, v["gen"].as_u64().unwrap_or(1), otk)
-            .map_err(err)?;
-        if v.get("sk").is_some_and(|s| s.is_string()) {
+        let log: ipb::DeviceLogSyncResponse = decode_checked(h("log")?.as_slice(), Origin::Server).map_err(err)?;
+        let (gen, skv) = grant_numbers(&v).map_err(err)?;
+        let reqs = self.inner.join_with_ssk(key32(&h("ssk")?)?, log.entries, key32(&h("dk")?)?, gen, otk).map_err(err)?;
+        if let Some(skv) = skv {
             let k = crate::state::StateKey::from_bytes(&h("sk")?).map_err(|_| err(ProtoError::Malformed))?;
-            self.inner.set_state_key(k, v["skv"].as_u64().unwrap_or(1) as u32);
+            self.inner.set_state_key(k, skv);
         }
         apply_grant_peer_keys(&mut self.inner, &v);
         apply_grant_former_names(&mut self.inner, &v);
@@ -1246,6 +1257,17 @@ pub fn from_b64(s: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grant_numbers_are_required_and_not_truncated() {
+        assert_eq!(grant_numbers(&json!({"gen": 3})).unwrap(), (3, None));
+        assert_eq!(grant_numbers(&json!({"gen": 3, "sk": "00", "skv": 7})).unwrap(), (3, Some(7)));
+        // Нет gen (усечённый грант) или нет skv при ключе состояния — отказ, а не молчаливая единица.
+        assert!(grant_numbers(&json!({})).is_err());
+        assert!(grant_numbers(&json!({"gen": 3, "sk": "00"})).is_err());
+        // skv вне u32 не усекается.
+        assert!(grant_numbers(&json!({"gen": 3, "sk": "00", "skv": 4_294_967_297u64})).is_err());
+    }
 
     /// A7: тело чанка из байт совпадает с прежним путём (JSON + base64).
     #[test]

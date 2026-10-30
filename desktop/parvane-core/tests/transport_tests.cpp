@@ -388,6 +388,7 @@ int main() {
         }
         std::fclose(f);
         ::setenv("PARVANE_CA_DIRS", dir, 1);
+        parvane::GatewayWsTransport::setEnvCaDirsAllowed(true); // по умолчанию выключено (B0174-4)
     }
 
     // ── 1. NAT-08: чтение и запись одного TLS-соединения не пересекаются ─────────────────

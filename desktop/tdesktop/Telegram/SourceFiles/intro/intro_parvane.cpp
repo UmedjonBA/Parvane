@@ -26,6 +26,7 @@
 
 #include <QtWidgets/QLineEdit>
 #include <QtCore/QDateTime>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QLocale>
 #include <QtCore/QFile>
 
@@ -180,8 +181,17 @@ void ParvaneWidget::startTelegram(
 	_tgMode = mode;
 	_tgGeneration++;
 	_tgStartedAt = QDateTime::currentSecsSinceEpoch();
-	const auto botName = bot.isEmpty() ? _serverBot : bot;
-	const auto link = u"https://t.me/"_q + botName + u"?start="_q + token;
+	// Имя бота пришло от сервера: допускаем только имя Telegram-бота
+	// (латиница, цифры, «_»), иначе в ссылку могут попасть чужие символы.
+	static const auto kBotName = QRegularExpression(
+		u"^[A-Za-z0-9_]{3,64}$"_q);
+	const auto candidate = bot.isEmpty() ? _serverBot : bot;
+	const auto botName = kBotName.match(candidate).hasMatch()
+		? candidate
+		: QString();
+	const auto link = botName.isEmpty()
+		? QString()
+		: (u"https://t.me/"_q + botName + u"?start="_q + token);
 	_tgLink->setText(link);
 	// Headless e2e (dev): токен виден в логе, «бот» подтверждает через gateway. Релиз — отметка вместо токена:
 	// токен подтверждает вход в аккаунт (ревью 21 окт, вечер)
@@ -314,6 +324,9 @@ bool ParvaneWidget::backToLogin() {
 	++_tgGeneration;     // опрос Telegram прежней стадии — прочь
 	++_requestGeneration; // идущий запрос не продолжит вход
 	_requesting = false;
+	// Пароль и токен экрана Telegram в памяти виджета не оставляем.
+	_tgPassword = QString();
+	_tgToken = QString();
 	hideError();
 	setStage(Stage::Login);
 	return true;

@@ -25,6 +25,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Потолок записей каждого кэша групп: при переполнении кэш сбрасывается (перечитается из БД), память не растёт
+/// без предела от потока созданных групп (A0018-4).
+const CACHE_MAX: usize = 20_000;
+
 /// Кэш состояний групп и владельцев ключей.
 #[derive(Default)]
 pub(crate) struct GroupCache {
@@ -78,6 +82,9 @@ async fn key_owner(ctx: &V2, key: &[u8; 32], claimed: Option<&str>) -> Result<Op
     }
     let info = SignerInfo { user: o.user, root_key: o.root_key.as_slice().try_into().unwrap_or([0u8; 32]) };
     if let Ok(mut g) = ctx.groups.owners.lock() {
+        if g.len() >= CACHE_MAX {
+            g.clear();
+        }
         g.insert(*key, (Instant::now(), info.clone(), o.aliases.clone()));
     }
     Ok(Some((info, o.aliases)))
@@ -181,6 +188,9 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
         }
     }
     if let (Some(s), Ok(mut g)) = (state.as_ref(), ctx.groups.states.lock()) {
+        if g.len() >= CACHE_MAX {
+            g.clear();
+        }
         g.insert(group_id.to_vec(), s.clone());
     }
     Ok(state)
@@ -234,10 +244,9 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     }
     // MSG-10: «кто может добавлять меня в группы» (FR-040) соблюдалось только в
     // группах v1. Новый участник, кроме самого актора (вступление по ссылке),
-    // подавшего заявку и состава переносимой v1-группы (GROUP-4), должен
-    // разрешать добавление.
-    let is_migration = prev.is_none() && !next.migrated_from.is_empty();
-    if grew && !is_migration {
+    // подавшего заявку, должен разрешать добавление. Исключения для генезиса с
+    // `migrated_from` больше нет (v1 удалён, A0018-1): поле клиент заполняет сам.
+    if grew {
         for m in next.members.keys() {
             if m == actor || prev.as_ref().is_some_and(|p| p.members.contains_key(m)) {
                 continue;
@@ -263,6 +272,9 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
         if let Ok(mut le) = ctx.groups.last_epoch.lock() {
             if le.get(&g.id).is_some_and(|t| t.elapsed() < Duration::from_millis(group::EPOCH_MIN_INTERVAL_MS as u64)) {
                 return Err(ErrorCode::RateLimited);
+            }
+            if le.len() >= CACHE_MAX {
+                le.retain(|_, t| t.elapsed() < Duration::from_millis(group::EPOCH_MIN_INTERVAL_MS as u64));
             }
             le.insert(g.id.clone(), Instant::now());
         }
@@ -297,6 +309,9 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     }
     tx.commit().await.map_err(db_err)?;
     if let Ok(mut c) = ctx.groups.states.lock() {
+        if c.len() >= CACHE_MAX {
+            c.clear();
+        }
         c.insert(g.id.clone(), next.clone());
     }
     crate::v2_public::after_append(ctx, prev.as_ref(), &next, actor).await;
@@ -342,6 +357,31 @@ async fn notify_invite_admins(ctx: &V2, s: &GroupState) {
             }
         }
     }
+}
+
+/// Версия последней записи, которой `u` вышел из группы, исключён или забанен.
+async fn exit_version(ctx: &V2, group_id: &[u8], u: &str) -> Result<Option<i64>, ErrorCode> {
+    let rows: Vec<(i64, Vec<u8>, Option<String>)> =
+        sqlx::query_as("SELECT version, entry, signer_user FROM group_state_log WHERE group_id = ? ORDER BY version")
+            .bind(group_id)
+            .fetch_all(&ctx.v2)
+            .await
+            .map_err(db_err)?;
+    let mut last = None;
+    for (version, e, signer) in rows {
+        let Ok(entry) = GroupStateEntry::decode(e.as_slice()) else { continue };
+        let target = |m: &Option<UserRef>| m.as_ref().map(|m| m.address.as_str()) == Some(u);
+        let out = match change_of(&entry) {
+            Some(Change::RemoveMember(c)) => target(&c.member),
+            Some(Change::Ban(c)) => target(&c.member),
+            Some(Change::Leave(_)) => signer.as_deref() == Some(u),
+            _ => false,
+        };
+        if out {
+            last = Some(version);
+        }
+    }
+    Ok(last)
 }
 
 fn is_member(s: &GroupState, u: &str) -> bool {
@@ -466,10 +506,14 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             if !is_member(&s, &user) && was.is_none() && !s.banned.contains(&user) && !by_link {
                 return Err(ErrorCode::Forbidden);
             }
-            let rows: Vec<(Vec<u8>, Option<String>)> =
-                sqlx::query_as("SELECT entry, signer_user FROM group_state_log WHERE group_id = ? AND version > ? ORDER BY version LIMIT 1025")
+            // Бывший участник и забаненный — только до записи своего выхода/исключения (A0023-2)
+            let upto = if is_member(&s, &user) || by_link { i64::MAX } else { exit_version(ctx, &g.id, &user).await?.unwrap_or(i64::MAX) };
+            let rows: Vec<(Vec<u8>, Option<String>)> = sqlx::query_as(
+                "SELECT entry, signer_user FROM group_state_log WHERE group_id = ? AND version > ? AND version <= ? ORDER BY version LIMIT 1025",
+            )
                     .bind(&g.id)
                     .bind(r.after_version as i64)
+                    .bind(upto)
                     .fetch_all(&ctx.v2)
                     .await
                     .map_err(db_err)?;
@@ -581,6 +625,13 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
             }
             let l = s.invite_links.get(&id).ok_or(ErrorCode::NotFound)?;
             if l.announce.requires_approval {
+                // Истёкшая или исчерпанная ссылка заявок не принимает — как в `group.invite.check` (A0018-5)
+                if l.announce.expires_ms > 0 && now_ms() > l.announce.expires_ms {
+                    return Err(ErrorCode::Expired);
+                }
+                if l.announce.usage_limit > 0 && l.uses >= l.announce.usage_limit {
+                    return Err(ErrorCode::Limit);
+                }
                 // Заявка: админ одобрит записью AddMember. Секрет ссылки
                 // подтверждается подписью вступления (сервер без секрета её не сделает).
                 let parts = group::join_signing_parts(&s.group, s.version + 1, &s.head_hash(), &j.joiner_root_key);

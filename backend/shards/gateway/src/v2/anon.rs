@@ -47,7 +47,8 @@ pub(crate) fn shard_request(m: &MethodInfo, s: &SessionIdentity<'_>, body: Vec<u
         method: m.name.to_string(),
         user: if id { s.user.to_string() } else { String::new() },
         device_id: if id { s.device.to_string() } else { String::new() },
-        token: if id { s.token.to_string() } else { String::new() },
+        // Токен сессии читает только identity — другим шардам он не уходит (A0022-5)
+        token: if id && m.shard == "identity" { s.token.to_string() } else { String::new() },
         client_ip: if m.channel == CH_PRE { s.client_ip.to_string() } else { String::new() },
         body,
         reauth_fresh: id && s.reauth_fresh,

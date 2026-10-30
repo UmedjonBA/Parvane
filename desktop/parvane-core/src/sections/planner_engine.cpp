@@ -2,6 +2,7 @@
 #include "parvane/sections/planner_engine.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <map>
 #include <optional>
@@ -59,17 +60,25 @@ std::optional<double> numOpt(const json &j, const char *key) {
     return std::nullopt;
 }
 
+// double → int с насыщением: приведение вне диапазона и NaN — UB (A0078-1)
+int toInt(double v) {
+    if (!std::isfinite(v)) return 0;
+    if (v >= 2147483647.0) return 2147483647;
+    if (v <= -2147483648.0) return INT_MIN;
+    return static_cast<int>(v);
+}
+
 std::optional<int> intOpt(const json &j, const char *key) {
     const auto v = numOpt(j, key);
     if (!v) return std::nullopt;
-    return static_cast<int>(*v);
+    return toInt(*v);
 }
 
 std::vector<int> intList(const json *v) {
     std::vector<int> out;
     if (!v || !v->is_array()) return out;
     for (const auto &x : *v) {
-        if (x.is_number()) out.push_back(x.get<int>());
+        if (x.is_number()) out.push_back(toInt(x.get<double>()));
     }
     return out;
 }
@@ -97,16 +106,16 @@ std::optional<Repeat> repeatFrom(const json *repeat, const json *legacyWeekdays 
     if (truthy(repeat) && repeat->is_object() && contains(kRepeatKinds, str(*repeat, "kind"))) {
         Repeat r;
         r.kind = str(*repeat, "kind");
-        const int interval = static_cast<int>(num(*repeat, "interval"));
+        const int interval = toInt(num(*repeat, "interval"));
         r.interval = interval ? interval : 1;
         if (r.kind == "weekly") {
             if (const auto *w = field(*repeat, "weekdays"); present(w)) r.weekdays = intList(w);
         }
-        const int monthDay = static_cast<int>(num(*repeat, "monthDay"));
+        const int monthDay = toInt(num(*repeat, "monthDay"));
         if (r.kind == "monthly" && monthDay) r.monthDay = monthDay;
         r.startDay = str(*repeat, "startDay");
         r.endDay = strOrNone(*repeat, "endDay");
-        const int count = static_cast<int>(num(*repeat, "count"));
+        const int count = toInt(num(*repeat, "count"));
         if (count) r.count = count;
         return r;
     }
@@ -175,6 +184,24 @@ FoodEntry entryFrom(const json &e) {
 // Подробности записи здоровья — JSON; негодные — запись остаётся без них
 std::optional<json> parseDetails(const std::string &details) {
     if (details.empty()) return std::nullopt;
+    // глубина вложенности проверяется до разбора: рекурсивный разбор «[[[[…» валит стек (A0078-1)
+    {
+        int depth = 0;
+        bool inString = false;
+        for (size_t i = 0; i < details.size(); ++i) {
+            const char c = details[i];
+            if (inString) {
+                if (c == '\\') ++i;
+                else if (c == '"') inString = false;
+            } else if (c == '"') {
+                inString = true;
+            } else if (c == '[' || c == '{') {
+                if (++depth > 32) return std::nullopt;
+            } else if (c == ']' || c == '}') {
+                --depth;
+            }
+        }
+    }
     auto parsed = json::parse(details, nullptr, false);
     if (parsed.is_discarded()) return std::nullopt;
     return parsed;
@@ -587,7 +614,7 @@ State fromEngineState(const json &engine) {
             list.id = str(l, "id");
             list.name = str(l, "name");
             list.order = num(l, "order");
-            if (const int color = static_cast<int>(num(l, "color")); color) list.color = color;
+            if (const int color = toInt(num(l, "color")); color) list.color = color;
             sorted.push_back(list);
         }
     }
@@ -627,6 +654,7 @@ State fromEngineState(const json &engine) {
             task.start = strOrNone(t, "start");
             task.due = strOrNone(t, "due");
             task.minutes = intOpt(t, "minutes");
+            if (task.minutes && *task.minutes > 100000) task.minutes = 100000;  // суммы минут в int (A0079-2)
             task.repeat = repeatFrom(field(t, "repeat"));
             task.occurrences = occurrencesFrom(field(t, "occurrences"));
             task.origin = originFrom(field(t, "origin"));
@@ -654,7 +682,7 @@ State fromEngineState(const json &engine) {
             event.origin = originFrom(field(e, "origin"));
             if (truthy(field(e, "allDay"))) event.isAllDay = true;
             if (truthy(field(e, "isHoliday"))) event.isHoliday = true;
-            if (const int color = static_cast<int>(num(e, "color")); color) event.color = color;
+            if (const int color = toInt(num(e, "color")); color) event.color = color;
             event.remind = intOpt(e, "remind");
             // Группа — по id списка, как у задачи
             if (const auto listId = str(e, "listId"); !listId.empty()) {
@@ -697,14 +725,14 @@ State fromEngineState(const json &engine) {
             built.goalPeriods.push_back(GoalRecord{str(p, "id"), str(p, "startDay"), str(p, "endDay"), goalValuesFrom(&p)});
         }
     }
-    built.budget = hasSettings && present(field(*settings, "budget")) ? static_cast<int>(num(*settings, "budget"))
+    built.budget = hasSettings && present(field(*settings, "budget")) ? toInt(num(*settings, "budget"))
                                                                        : empty.budget;
     if (hasSettings) {
-        built.settings.dayStart = static_cast<int>(num(*settings, "dayStart"));
-        built.settings.dayEnd = static_cast<int>(num(*settings, "dayEnd"));
-        built.settings.lunchStart = static_cast<int>(num(*settings, "lunchStart"));
-        built.settings.lunchEnd = static_cast<int>(num(*settings, "lunchEnd"));
-        built.settings.margin = static_cast<int>(num(*settings, "margin"));
+        built.settings.dayStart = toInt(num(*settings, "dayStart"));
+        built.settings.dayEnd = toInt(num(*settings, "dayEnd"));
+        built.settings.lunchStart = toInt(num(*settings, "lunchStart"));
+        built.settings.lunchEnd = toInt(num(*settings, "lunchEnd"));
+        built.settings.margin = toInt(num(*settings, "margin"));
     } else {
         built.settings = defaultSettings();
     }

@@ -37,11 +37,6 @@ enum class SeparateType {
 	SharedMedia,
 };
 
-struct SeparateSharedMedia {
-	not_null<Data::Thread*> thread;
-	Storage::SharedMediaType type = {};
-};
-
 struct SeparateId {
 	SeparateId(std::nullptr_t);
 	SeparateId(not_null<Main::Account*> account);

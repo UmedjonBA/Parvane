@@ -819,6 +819,11 @@ impl LamportGuard {
         Ok(())
     }
 
+    /// Поднять максимум до уже проверенной метки (слияние снимка).
+    pub fn raise(&mut self, to: u64) {
+        self.max_seen = self.max_seen.max(to);
+    }
+
     /// Следующая локальная метка.
     pub fn tick(&mut self) -> u64 {
         self.max_seen = self.max_seen.saturating_add(1);

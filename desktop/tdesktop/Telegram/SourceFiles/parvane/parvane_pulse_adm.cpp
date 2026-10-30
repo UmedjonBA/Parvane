@@ -13,7 +13,9 @@
 #include <pulse/error.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace Parvane {
@@ -24,6 +26,11 @@ constexpr int kRate = 48000;
 constexpr int kChannels = 1;
 constexpr int kSamples10ms = kRate / 100; // 480
 constexpr int kBytes10ms = kSamples10ms * 2 * kChannels;
+// Сбой звукового сервера: пауза между попытками, число подряд идущих ошибок до переоткрытия потока и число
+// неудачных переоткрытий до выхода из цикла (иначе поток крутился бы вхолостую на 100% ядра)
+constexpr auto kRetryPause = std::chrono::milliseconds(10);
+constexpr int kErrorsBeforeReopen = 20;
+constexpr int kMaxReopenFailures = 5;
 
 pa_simple *openStream(pa_stream_direction_t dir, const char *name) {
 	pa_sample_spec ss;
@@ -56,6 +63,8 @@ public:
 	}
 
 	int32_t RegisterAudioCallback(webrtc::AudioTransport *cb) override {
+		// под замком: рабочие потоки вызывают транспорт тоже под ним, снятый транспорт уже не вызовется
+		auto lock = std::lock_guard(_transportMutex);
 		_transport = cb;
 		return 0;
 	}
@@ -116,33 +125,68 @@ public:
 	bool Recording() const override { return _recording; }
 
 private:
+	// Ошибка потока: пауза, а после серии ошибок — переоткрытие; true — продолжать, false — сдаться
+	bool recover(pa_simple *&stream, pa_stream_direction_t dir, const char *name, int &errors, int &failures) {
+		std::this_thread::sleep_for(kRetryPause);
+		if (++errors < kErrorsBeforeReopen) {
+			return true;
+		}
+		errors = 0;
+		if (stream) {
+			pa_simple_free(stream);
+			stream = nullptr;
+		}
+		stream = openStream(dir, name);
+		if (stream) {
+			failures = 0;
+			return true;
+		}
+		if (++failures >= kMaxReopenFailures) {
+			LOG(("Parvane: PulseAudio %1 недоступен, поток остановлен").arg(name));
+			return false;
+		}
+		return true;
+	}
+
 	void playLoop() {
 		int16_t buf[kSamples10ms];
+		auto errors = 0, failures = 0;
 		while (_playing) {
 			size_t out = 0;
 			int64_t elapsed = 0, ntp = 0;
-			if (_transport) {
-				_transport->NeedMorePlayData(kSamples10ms, 2, kChannels,
-					kRate, buf, out, &elapsed, &ntp);
+			{
+				auto lock = std::lock_guard(_transportMutex);
+				if (_transport) {
+					_transport->NeedMorePlayData(kSamples10ms, 2, kChannels,
+						kRate, buf, out, &elapsed, &ntp);
+				}
 			}
 			if (out == 0) {
 				std::memset(buf, 0, sizeof(buf));
 				out = kSamples10ms;
 			}
 			int err = 0;
-			if (_play) {
-				pa_simple_write(_play, buf, out * 2 * kChannels, &err);
+			if (_play && pa_simple_write(_play, buf, out * 2 * kChannels, &err) >= 0) {
+				errors = 0;
+			} else if (!recover(_play, PA_STREAM_PLAYBACK, "call-out", errors, failures)) {
+				break;
 			}
 		}
 	}
 	void recLoop() {
 		int16_t buf[kSamples10ms];
+		auto errors = 0, failures = 0;
 		while (_recording) {
 			int err = 0;
 			if (!_rec || pa_simple_read(_rec, buf, kBytes10ms, &err) < 0) {
+				if (!recover(_rec, PA_STREAM_RECORD, "call-in", errors, failures)) {
+					break;
+				}
 				continue;
 			}
+			errors = 0;
 			uint32_t newMicLevel = 0;
+			auto lock = std::lock_guard(_transportMutex);
 			if (_transport) {
 				_transport->RecordedDataIsAvailable(buf, kSamples10ms, 2,
 					kChannels, kRate, 0, 0, 0, false, newMicLevel);
@@ -150,6 +194,7 @@ private:
 		}
 	}
 
+	std::mutex _transportMutex;
 	webrtc::AudioTransport *_transport = nullptr;
 	pa_simple *_play = nullptr;
 	pa_simple *_rec = nullptr;

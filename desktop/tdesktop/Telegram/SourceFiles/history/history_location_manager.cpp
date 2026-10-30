@@ -8,9 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_location_manager.h"
 
 #include "mainwidget.h"
+#include "core/application.h"
 #include "core/file_utilities.h"
 #include "lang/lang_keys.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/image/image.h"
+#include "window/window_controller.h"
 #include "data/data_file_origin.h"
 #include "platform/platform_specific.h"
 
@@ -23,9 +26,24 @@ QString LocationClickHandler::copyToClipboardContextItemText() const {
 }
 
 void LocationClickHandler::onClick(ClickContext context) const {
-	Platform::LaunchMaps(_point, [text = _text] {
-		File::OpenUrl(text);
-	});
+	// MAP-1: точные координаты уходят стороннему картографическому
+	// сервису только после явного согласия пользователя.
+	const auto window = Core::App().activeWindow();
+	if (!window) {
+		return;
+	}
+	const auto point = _point;
+	const auto text = _text;
+	window->show(Ui::MakeConfirmBox({
+		.text = tr::lng_parvane_open_map_sure(),
+		.confirmed = [=](Fn<void()> close) {
+			close();
+			Platform::LaunchMaps(point, [=] {
+				File::OpenUrl(text);
+			});
+		},
+		.confirmText = tr::lng_parvane_open_map(),
+	}));
 }
 
 void LocationClickHandler::setup() {

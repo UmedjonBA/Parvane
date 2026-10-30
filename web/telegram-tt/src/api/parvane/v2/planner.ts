@@ -1,6 +1,6 @@
 import type { Protocol, PvClient } from './engine';
 
-import { pollDelay } from './l2';
+import { isTimerSyncMode, pollDelay } from './l2';
 import { coalesceChanges } from './plannerCoalesce';
 import { V2Error } from './transport';
 
@@ -22,6 +22,8 @@ type Chan = 'id' | 'anon';
 type OutReq = { chan: Chan; method: string; body: Uint8Array; dest?: string };
 
 type OutboxItem = { opId: string; op: string };
+// Повторов отправки одной операции после EXPIRED за проход (сервер, всегда отвечающий EXPIRED, не держит цикл вечно)
+const SEND_EXPIRED_RETRIES = 3;
 type ContainerRef = { domain: string; id: string };
 
 type Deps = {
@@ -385,8 +387,15 @@ export function createPlannerSync(deps: Deps) {
     const client = deps.client();
     if (!client || !client.plannerIsAttached()) return;
     await loadOutbox();
+    // Повторы после EXPIRED на одну операцию за проход: сервер, всегда отвечающий EXPIRED, не должен держать цикл вечно
+    let expiredRetries = 0;
+    let expiredOpId = '';
     while (outbox.length) {
       const item = outbox[0];
+      if (item.opId !== expiredOpId) {
+        expiredOpId = item.opId;
+        expiredRetries = 0;
+      }
       if (!client.plannerHasKey()) {
         setStatus('no-key');
         return;
@@ -398,7 +407,8 @@ export function createPlannerSync(deps: Deps) {
         const code = errorCode(e);
         if (code === 'ERROR_CODE_DUPLICATE') {
           // Уже принято до обрыва — считаем отправленным
-        } else if (code === 'ERROR_CODE_EXPIRED') {
+        } else if (code === 'ERROR_CODE_EXPIRED' && expiredRetries < SEND_EXPIRED_RETRIES) {
+          expiredRetries += 1;
           // Эпоха сменилась другим устройством: догнать гранты, ключ придёт по E2E
           const ref = currentRef();
           if (ref) await pullGrants(ref);
@@ -537,7 +547,7 @@ export function createPlannerSync(deps: Deps) {
     document.addEventListener('visibilitychange', () => {
       if (!isWanted) return;
       // Вкладка снова видна: догнать сразу, дальше — по обычному расписанию
-      if (!document.hidden && isActive) void syncNow();
+      if (!document.hidden && isActive && !isTimerSyncMode()) void syncNow();
       else scheduleSync();
     });
   }
@@ -590,7 +600,7 @@ export function createPlannerSync(deps: Deps) {
     if (isActive === active) return;
     isActive = active;
     if (!isWanted) return;
-    if (active && !isHidden()) void syncNow();
+    if (active && !isHidden() && !isTimerSyncMode()) void syncNow();
     else scheduleSync();
   }
 

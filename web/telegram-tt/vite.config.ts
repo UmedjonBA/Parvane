@@ -36,7 +36,6 @@ const DEV_BUNDLE_WARMUP_CLIENT_FILES = [
   'src/bundles/main.ts',
   'src/bundles/extra.ts',
   'src/bundles/calls.ts',
-  'src/bundles/stars.ts',
   'src/bundles/parvane.ts',
   'src/bundles/mediaEditor.ts',
 ];
@@ -212,12 +211,6 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     resolve: {
       tsconfigPaths: true,
-      alias: [
-        ...(appMockedClient === '1' ? [{
-          find: /^(?:\.\/client|(?:\.\.\/)*lib\/gramjs\/client)\/TelegramClient$/,
-          replacement: resolve(DIR_NAME, 'src/lib/gramjs/client/MockClient.ts'),
-        }] : []),
-      ],
     },
     css: {
       modules: {

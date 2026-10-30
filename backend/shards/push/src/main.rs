@@ -164,8 +164,8 @@ async fn ensure_vapid_keys(pool: &SqlitePool, db_path: &str) -> Result<VapidKeys
 /// короткий таймаут, чтобы медленный push-сервис не держал воркер.
 fn build_http_client(builder: reqwest::ClientBuilder) -> Result<reqwest::Client> {
     builder
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(6))
+        .connect_timeout(Duration::from_secs(3))
         .user_agent("parvane-push/0.1")
         .build()
         .context("HTTP-клиент push")

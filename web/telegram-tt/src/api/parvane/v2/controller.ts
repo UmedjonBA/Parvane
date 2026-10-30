@@ -27,6 +27,7 @@ import {
   callSignalFromV2, callSignalToV2, groupCallIdFromV2, groupInviteFromV2, type V2CallSignal,
 } from './callMap';
 import { createCloudSync } from './cloud';
+import { coMembersOf } from './coMembers';
 import {
   b64ToUuid, ref, v2Class, v2ToWire, wireToV2,
 } from './contentMap';
@@ -296,6 +297,9 @@ const STATE_RECORD = 'v2-engine';
 // Состояние движка байтами (perf A1): прежняя запись `v2-engine` хранила base64
 // в JSON — читается как запасной вариант и удаляется после первой записи байтами
 const STATE_BYTES_RECORD = 'v2-engine-bin';
+// Состояние движка, снятое при «личность сброшена» (со слов сервера, подпись корня не проверена): не стирается
+// безвозвратно, живёт до успешной привязки/восстановления этого устройства
+const DROPPED_STATE_RECORD = 'v2-engine-dropped';
 // Отложенная запись состояния движка: не чаще раза в PERSIST_DEBOUNCE_MS и не
 // позже PERSIST_MAX_DELAY_MS после первого изменения; перед ack, при уходе со
 // страницы и в важных местах (вступление, отзыв, ротации) — сразу
@@ -580,6 +584,23 @@ export function createV2Controller(deps: Deps) {
     await stateWriter.settled();
     await target.deleteRecord(STATE_BYTES_RECORD).catch(() => undefined);
     await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+  }
+
+  /** Снять состояние движка с рабочего места, но оставить копию: решение «личность сброшена» принято по ответу
+   * сервера, и ошибочное стирание ключей устройства необратимо. Копия уходит после успешной привязки. */
+  async function archiveEngineState(target: SecureE2eStorage) {
+    const bytes = await loadEngineState(target).catch(() => undefined);
+    if (bytes) await target.saveBytesRecord(DROPPED_STATE_RECORD, bytes).catch(() => undefined);
+    await deleteEngineState(target);
+  }
+
+  /** Новое состояние движка (восстановление, сброс личности): оба вида записи — иначе прежний снимок побеждает. */
+  async function saveFreshEngineState(target: SecureE2eStorage, fresh: PvClient, key: Uint8Array) {
+    stateWriter.discard();
+    await stateWriter.settled();
+    await target.saveBytesRecord(STATE_BYTES_RECORD, fresh.export(key));
+    await target.deleteRecord(STATE_RECORD).catch(() => undefined);
+    await target.deleteRecord(DROPPED_STATE_RECORD).catch(() => undefined);
   }
 
   /** Повтор подключения через задержку ряда повторов (или заданную). */
@@ -903,6 +924,8 @@ export function createV2Controller(deps: Deps) {
         // spec 026: ник сменён на другом своём устройстве — перейти на новый адрес
         const engineSelf = client.selfAddress();
         if (engineSelf !== self && !(await followOwnRename(engineSelf, self))) {
+          // Прежний снимок не должен победить при следующем запуске (иначе привязка новой личности не состоится)
+          await archiveEngineState(storage);
           client.free();
           client = undefined;
           needsLinking = true;
@@ -1102,6 +1125,7 @@ export function createV2Controller(deps: Deps) {
       await storage.saveRecord(BUNDLE_KEY_RECORD, bundleKeyB64);
     }
     needsLinking = false;
+    await storage.deleteRecord(DROPPED_STATE_RECORD).catch(() => undefined);
     if (join.recoveryKey) {
       await reloadAfterCreateForTest();
       await rememberBundleKey(join.recoveryKey);
@@ -1428,7 +1452,14 @@ export function createV2Controller(deps: Deps) {
   /** Метод блобов шарда cloud по имени метода реестра: proto3-JSON → proto3-JSON. */
   async function blobCall<T>(method: string, request: unknown): Promise<T> {
     if (!pv || !ready) throw new V2Error('ERROR_CODE_UNAVAILABLE');
-    return blobControl.call(method, request as V2Json, BLOB_TIMEOUT_MS) as Promise<T>;
+    const reply = await blobControl.call(method, request as V2Json, BLOB_TIMEOUT_MS) as T;
+    if (method === 'cloud.blob.upload_complete' || method === 'cloud.blob.copy') {
+      // Свой блоб: сборка мусора облака стирает на сервере только такие
+      const r = reply as { fileId?: string; file_id?: string } | undefined;
+      const id = r?.fileId || r?.file_id;
+      if (id) await cloud.noteOwnBlob(id);
+    }
+    return reply;
   }
 
   async function applyEvent(ev: EngineEvent) {
@@ -1668,7 +1699,7 @@ export function createV2Controller(deps: Deps) {
   async function dropIdentity() {
     deps.log('v2: личность аккаунта сброшена другим устройством — нужна линковка этого устройства');
     ready = false;
-    if (storage) await deleteEngineState(storage);
+    if (storage) await archiveEngineState(storage);
     await storage?.deleteRecord(ROOT_BACKUP_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_BACKUP_RECEIVED_RECORD).catch(() => undefined);
     await storage?.deleteRecord(ROOT_ESCROW_RECORD).catch(() => undefined);
@@ -2266,7 +2297,7 @@ export function createV2Controller(deps: Deps) {
       await run(fresh.recoverWithRoot(ownLog, OTK_COUNT) as OutReq[]);
       await sealRootEscrow(fresh);
       fresh.forgetRoot();
-      await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
+      await saveFreshEngineState(storage, fresh, storageKey);
       rootBackupB64 = b64(backup);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
       needsLinking = false;
@@ -2306,7 +2337,7 @@ export function createV2Controller(deps: Deps) {
       fresh.forgetRoot();
       created.rootSecret.fill(0);
       await storage.saveRecord(ROOT_BACKUP_RECORD, rootBackupB64);
-      await storage.saveRecord(STATE_RECORD, b64(fresh.export(storageKey)));
+      await saveFreshEngineState(storage, fresh, storageKey);
       needsLinking = false;
       await storage.deleteRecord(BUNDLE_SENT_RECORD).catch(() => undefined);
       await rememberBundleKey(recoveryKey);
@@ -2654,8 +2685,9 @@ export function createV2Controller(deps: Deps) {
    * прежнего (закрыт `Rename`) и нового адреса, затем этот — под новым (сертификат в журнал нового адреса). */
   async function followOwnRename(engineSelf: string, self: string): Promise<boolean> {
     if (!pv || !client) return false;
-    const old = await call('anon', 'identity.device.log_sync_anon', pv.encodeMessage(
-      'parvane.identity.v2.DeviceLogSyncAnonRequest',
+    // Свой прежний адрес — ID-каналом: анонимный запрос о себе связал бы соединение с пользователем (C2-01)
+    const old = await call('id', 'identity.device.log_sync', pv.encodeMessage(
+      'parvane.identity.v2.DeviceLogSyncRequest',
       JSON.stringify({ user: { address: engineSelf }, after_version: String(client.logVersion(engineSelf)) }),
     ), destForUser(engineSelf, serverDomain));
     client.ingestLog(engineSelf, old);
@@ -2885,15 +2917,9 @@ export function createV2Controller(deps: Deps) {
   }
 
   // Участники моих групп v2 (кроме меня)
-  function coMembers(): Set<string> {
-    const self = deps.getSelf();
-    const out = new Set<string>();
-    client?.groupList().forEach((hex) => {
-      const g = readGroup(hex);
-      if (!g || g.deleted || !g.members.some(({ user }) => user === self)) return;
-      g.members.filter(({ user }) => user !== self).forEach(({ user }) => out.add(user));
-    });
-    return out;
+  function coMembers(isPrivateOnly = false): Set<string> {
+    const groups = (client?.groupList() || []).map((hex) => readGroup(hex));
+    return coMembersOf(groups, deps.getSelf(), isPrivateOnly);
   }
 
   // Участник общей группы прислал свой ключ доступа (собирается звонить) — отвечаем
@@ -2913,7 +2939,8 @@ export function createV2Controller(deps: Deps) {
   async function reciprocateKeys() {
     if (!client || !ready) return;
     let isShared = false;
-    for (const member of coMembers()) {
+    // Только участники закрытых групп: в публичной своего ключа доставки случайному вступившему не отдаём
+    for (const member of coMembers(true)) {
       if (reciprocated.has(member) || !client.hasPeerDeliveryKey(member)) continue;
       reciprocated.add(member);
       const requests = await withNeeds(() => client!.shareDeliveryKey(member) as OutReq[]);
@@ -3011,7 +3038,8 @@ export function createV2Controller(deps: Deps) {
   /** Запомнить сервер блоба; свой домен и пустой — не храним (обычный запрос). */
   function setBlobDomain(fileId: string, domain?: string) {
     const d = destFor(domain, serverDomain);
-    if (fileId && d) blobDomains.set(fileId, d);
+    // Первый сервер остаётся: чужое сообщение/узел папки с тем же file_id не перенаправит скачивание
+    if (fileId && d && !blobDomains.has(fileId)) blobDomains.set(fileId, d);
   }
 
   async function streamBlobCap(
@@ -3294,7 +3322,8 @@ export function createV2Controller(deps: Deps) {
 
   /** Домен сервера группы (spec 028): из журнала/ключа движка, до вступления — из ссылки. */
   function groupDomainOf(hex: string) {
-    return inviteGroupDomains.get(hex) || client?.groupDomain(hex) || serverDomain;
+    // Домен известной движку группы — главный: ответ чужого сервера на invite.check не переопределяет его
+    return client?.groupDomain(hex) || inviteGroupDomains.get(hex) || serverDomain;
   }
 
   function groupRequestBody(hex: string, after: bigint | number, linkId?: string) {
@@ -4085,6 +4114,14 @@ export function createV2Controller(deps: Deps) {
     return 'failed';
   }
 
+  /** Запомнить сервер группы из ссылки — только для группы, которой движок ещё не знает, и если сервер в ответе
+   * не называет другой домен, чем ссылка. */
+  function noteInviteDomain(hex: string, dest: string | undefined, claimed?: string) {
+    if (!hex || !dest || client?.groupDomain(hex)) return;
+    if (claimed && claimed.toLowerCase() !== dest.toLowerCase()) return;
+    inviteGroupDomains.set(hex, dest);
+  }
+
   /** Сервер группы по домену ссылки; ссылка с хостом этой страницы — своя (`destForInvite`). */
   function inviteDest(domain: string) {
     return destForInvite(domain, serverDomain, typeof window !== 'undefined' ? window.location.hostname : undefined);
@@ -4111,27 +4148,38 @@ export function createV2Controller(deps: Deps) {
       const dest = inviteDest(parsed.domain);
       const check = await inviteGroup(parsed.linkId, dest);
       const hex = b64ToHex(check.group?.id || '');
-      if (hex && dest) inviteGroupDomains.set(hex, dest);
+      noteInviteDomain(hex, dest, check.group?.domain);
       const self = deps.getSelf();
       // Описание и фото — из подписанного журнала группы (сервер отдаёт его по
       // ссылке), а не со слов сервера; журнал не-участника после чтения не храним
-      let preview: { about?: string; avatar?: string } | undefined;
+      let preview: {
+        about?: string; avatar?: string; name?: string; isChannel?: boolean; members?: number;
+      } | undefined;
       if (hex && !readGroup(hex)?.members.some(({ user }) => user === self)) {
         preview = await serial(async () => {
           await syncGroup(hex, parsed.linkId);
           const g = readGroup(hex);
           client!.groupForget(hex);
-          return { about: g?.about || undefined, avatar: g?.avatarFileId || undefined };
+          // Превью прочитано, вступления нет — домен из ссылки больше не нужен
+          inviteGroupDomains.delete(hex);
+          return {
+            about: g?.about || undefined,
+            avatar: g?.avatarFileId || undefined,
+            // Название, вид и состав — из подписанного журнала, данные сервера — запасные
+            name: g?.name || undefined,
+            isChannel: g ? g.kind === GROUP_KIND_CHANNEL : undefined,
+            members: g ? g.members.length : undefined,
+          };
         }).catch(() => undefined);
       }
       return {
         address: groupAddress(hex),
         about: preview?.about,
         avatar: preview?.avatar,
-        name: check.name || '',
-        membersCount: check.members || 0,
+        name: preview?.name || check.name || '',
+        membersCount: preview?.members ?? (check.members || 0),
         isRequestNeeded: Boolean(check.requires_approval),
-        isChannel: check.kind === 'GROUP_KIND_CHANNEL',
+        isChannel: preview?.isChannel ?? check.kind === 'GROUP_KIND_CHANNEL',
         isMember: Boolean(readGroup(hex)?.members.some(({ user }) => user === self)),
       };
     } catch (e) {
@@ -4148,7 +4196,7 @@ export function createV2Controller(deps: Deps) {
       const check = await inviteGroup(parsed.linkId, dest);
       const hex = b64ToHex(check.group?.id || '');
       // Группа другого сервера (spec 028): журнал и запись вступления — её серверу
-      if (hex && dest) inviteGroupDomains.set(hex, dest);
+      noteInviteDomain(hex, dest, check.group?.domain);
       return await serial(async () => {
         await syncGroup(hex, parsed.linkId);
         const req = client!.groupJoin(url) as OutReq;
@@ -4163,6 +4211,7 @@ export function createV2Controller(deps: Deps) {
         const join = JSON.parse(pv.decodeMessage('parvane.group.v2.JoinResponse', resp)) as { pending?: boolean };
         if (join.pending) {
           client!.groupForget(hex);
+          inviteGroupDomains.delete(hex);
           return { status: 'requested' as const };
         }
         await persistUrgent();
@@ -4638,6 +4687,8 @@ export function createV2Controller(deps: Deps) {
       peers.clear();
       messages.clear();
       publishedGroups.clear();
+      inviteGroupDomains.clear();
+      blobDomains.clear();
       pendingRequests.clear();
       rotateTimers.forEach((timer) => clearTimeout(timer));
       rotateTimers.clear();

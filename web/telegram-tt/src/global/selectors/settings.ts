@@ -3,10 +3,6 @@ import type { GlobalState } from '../types';
 import { ACCOUNT_SLOT, getAccountsInfo } from '../../util/multiaccount';
 import { selectSharedSettings } from './sharedState';
 
-export function selectNotifySettings<T extends GlobalState>(global: T) {
-  return global.settings.byKey;
-}
-
 export function selectNotifyDefaults<T extends GlobalState>(global: T) {
   return global.settings.notifyDefaults;
 }
@@ -27,14 +23,6 @@ export function selectCanSetPasscode<T extends GlobalState>(global: T) {
 
 export function selectTranslationLanguage<T extends GlobalState>(global: T) {
   return global.settings.byKey.translationLanguage || selectLanguageCode(global);
-}
-
-export function selectNewNoncontactPeersRequirePremium<T extends GlobalState>(global: T) {
-  return global.settings.byKey.shouldNewNonContactPeersRequirePremium;
-}
-
-export function selectNonContactPeersPaidStars<T extends GlobalState>(global: T) {
-  return global.settings.byKey.nonContactPeersPaidStars;
 }
 
 export function selectShouldHideReadMarks<T extends GlobalState>(global: T) {

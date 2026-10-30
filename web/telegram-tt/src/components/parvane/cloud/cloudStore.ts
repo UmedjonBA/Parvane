@@ -6,7 +6,7 @@ import type { CloudContainerInfo } from '../../../api/parvane/v2/cloud';
 import { createSignal } from '../../../util/signals';
 import { callApi } from '../../../api/gramjs';
 import {
-  type CloudNode, type CloudSort, freeName, namesIn, sizeOf, subtreeOf, trashOf, usageOf,
+  type CloudNode, type CloudSort, freeName, namesIn, normalizeName, sizeOf, trashOf, usageOf,
 } from './cloudModel';
 
 // Parvane (spec 016): состояние раздела «Облако» — сигналы поверх контейнеров
@@ -252,6 +252,17 @@ export function getContainer(id?: string, data = getCloudData()): CloudContainer
   return id ? data?.containers.find((c) => c.id === id) : undefined;
 }
 
+/**
+ * Подпись человека в облаке: ник для своего сервера, полный адрес для чужого — иначе `alice@чужой.сервер`
+ * выглядит как свой контакт `alice` (федерация, spec 028). Свой сервер — по владельцу личного диска.
+ */
+export function peerLabel(address: string, data = getCloudData()) {
+  const [nick, domain] = address.split('@');
+  const selfDomain = data?.containers.find((c) => c.kind === 'root')?.owner.split('@')[1];
+  if (!domain || !selfDomain || domain.toLowerCase() === selfDomain.toLowerCase()) return nick;
+  return address;
+}
+
 export function getNodes(id?: string, data = getCloudData()): CloudNode[] {
   return (id && data?.trees[id]?.nodes) || [];
 }
@@ -455,7 +466,7 @@ function applyTransferEvent(event: CloudTransferEvent) {
   }
 }
 
-export function dismissCloudTransfer(id: string) {
+function dismissCloudTransfer(id: string) {
   setCloudTransfers(getCloudTransfers().filter((t) => t.id !== id));
   uploadSpecs.delete(id);
 }
@@ -498,7 +509,7 @@ export async function uploadCloudFilesTo(
   const added: CloudTransfer[] = [];
   files.forEach((file) => {
     const id = `up-${Date.now()}-${++transferSeq}`;
-    const name = freeName(taken, file.name || 'file');
+    const name = freeName(taken, normalizeName(file.name || 'file'));
     taken.add(name);
     uploadSpecs.set(id, {
       container, parent, name, file,
@@ -634,10 +645,4 @@ export async function extendCloudLink(linkId: string, ttlDays: number) {
   if (!result?.ok) showCloudNotice(result?.error || 'rejected');
   await refreshCloudLinks();
   return Boolean(result?.ok);
-}
-
-/** Все файлы узлов с вложенными (для отчёта «сколько освободится»). */
-export function countFiles(container: string, nodes: CloudNode[]) {
-  const all = getNodes(container);
-  return nodes.reduce((sum, n) => sum + subtreeOf(all, n.id).filter((x) => x.kind === 'file').length, 0);
 }
