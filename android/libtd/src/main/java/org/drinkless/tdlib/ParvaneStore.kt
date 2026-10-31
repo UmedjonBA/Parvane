@@ -613,7 +613,8 @@ class ParvaneStore {
         val msgId = nextMessageId++ shl 20 // как серверные id TDLib (кратны 2^20)
         if (content.optString("kind") == "poll") {
             polls.isMember = { gid, address -> roleOf(groupsByGid[gid], address) != null } // POLL-1: голос в личку принимает автор от участника
-            polls.register(uuid, from, content, to, group != null, self)
+            // чат опроса — адрес группы либо собеседника (не получатель: у входящего в личном чате это свой адрес)
+            polls.register(uuid, from, content, if (group != null || out) to else from, group != null, self)
         } // spec 005: до contentFrom
         val msg = TdApi.Message().apply {
             id = msgId

@@ -258,7 +258,15 @@ class PlannerController(context: Context, tdlib: Tdlib) : SectionController(cont
     /** К вкладке «Здоровье» на выбранном дне (карточки «Сон»/«Еда», метки сна и калорий). */
     internal fun openHealthTab() = switchTab(true)
 
-    internal fun scrollTo(y: Int) = scroll.post { scroll.scrollTo(0, y) }
+    private var scrollKey: String? = null
+
+    /** Прокрутка сетки дня — только при смене дня либо вида: обновления снимка не сбивают прокрутку пользователя. */
+    internal fun scrollTo(y: Int) {
+        val key = "$tabHealth|$segment|$picked"
+        if (key == scrollKey) return
+        scrollKey = key
+        requestedScroll = y
+    }
 
     internal fun toastText(text: String) = toast(text)
 

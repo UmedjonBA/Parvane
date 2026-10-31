@@ -1573,7 +1573,8 @@ class Client private constructor(
         msg.content = content
         return TdApi.UpdateMessageContent(msg.chatId, msg.id, content)
     }
-    private fun onPollService(content: JSONObject, from: String, to: String = "", inGroup: Boolean = true) {
+    /** [chat] — чат, в котором пришло служебное: адрес группы либо собеседника личного чата. */
+    private fun onPollService(content: JSONObject, from: String, to: String, chat: String, inGroup: Boolean) {
         val uuid = content.optString("poll"); if (uuid.isEmpty()) return
         val changed = if (content.optString("kind") == "poll_close") {
             Log.i(TAG, "опрос $uuid закрыт"); store.polls.close(uuid, from)
@@ -1587,9 +1588,9 @@ class Client private constructor(
             val idx = content.optJSONArray("options")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
             val entry = store.polls.get(uuid)
             if (entry == null) {
-                store.polls.applyVote(uuid, from, idx, to, inGroup) // опроса ещё нет — отложено, проверка при его приходе
+                store.polls.applyVote(uuid, from, idx, to, chat) // опроса ещё нет — отложено, проверка при его приходе
             } else {
-                val route = store.polls.route(uuid, store.self, from, to, inGroup && to == entry.chat)
+                val route = store.polls.route(uuid, store.self, from, to, chat == entry.chat)
                 if (!route.count) { Log.i(TAG, "голос в опросе $uuid не засчитан (чужой чат или анонимный опрос)"); false }
                 else {
                     Log.i(TAG, "голос $from → опрос $uuid $idx")
@@ -2728,7 +2729,7 @@ class Client private constructor(
                 if (!out && store.blocked.contains(from)) return // заблокирован — не показываем
                 // POLL-1: голос анонимного опроса группы — личное сообщение автору; чата с участником он не заводит
                 if (PollStore.isService(content.optString("kind")) && !event.optBoolean("group")) {
-                    onPollService(content, if (out) store.self else from, to, false); return
+                    onPollService(content, if (out) store.self else from, to, peer, false); return
                 }
                 var sender = from
                 if (event.optBoolean("group")) {
@@ -2741,7 +2742,7 @@ class Client private constructor(
                 } else {
                     ensurePeer(peer, announce = true)
                 }
-                if (PollStore.isService(content.optString("kind"))) { onPollService(content, if (out) store.self else from, to, event.optBoolean("group")); return }
+                if (PollStore.isService(content.optString("kind"))) { onPollService(content, if (out) store.self else from, to, if (event.optBoolean("group")) to else peer, event.optBoolean("group")); return }
                 // conformance GROUP-2: запрещённый вид от участника без роли — не показываем
                 // (владелец/админ/self/неизвестная роль — показываем; оценка при приёме)
                 if (event.optBoolean("group") && !out && !chatMode) { // смена режима — запись журнала группы, не содержимое участника

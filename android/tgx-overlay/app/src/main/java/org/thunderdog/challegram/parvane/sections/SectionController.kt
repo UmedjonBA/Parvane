@@ -102,12 +102,18 @@ abstract class SectionController(context: Context, tdlib: Tdlib) : ViewControlle
         view?.let { pinnedSlot.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
     }
 
-    /** Перестроить тело, сохранив прокрутку. */
+    /** Прокрутка, которую попросил вид во время `fill()` (иначе `rebuild` вернёт прежнюю). */
+    protected var requestedScroll: Int? = null
+
+    /** Перестроить тело, сохранив прокрутку (либо поставив запрошенную видом). */
     protected fun rebuild(fill: LinearLayout.() -> Unit) {
-        val y = scroll.scrollY
+        val prev = scroll.scrollY
+        requestedScroll = null
         pinnedSlot.removeAllViews()
         body.removeAllViews()
         body.fill()
+        val y = requestedScroll ?: prev
+        requestedScroll = null
         scroll.post { scroll.scrollTo(0, y) }
     }
 

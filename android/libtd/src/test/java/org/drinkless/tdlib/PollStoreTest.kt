@@ -156,10 +156,25 @@ class PollStoreTest {
     fun voteBeforePollIsRoutedOnRegister() {
         val s = PollStore()
         s.isMember = { _, a -> a == "bob@local" }
-        s.applyVote("p", "bob@local", listOf(1), "alice@local", false)    // личный голос пришёл раньше опроса
-        s.applyVote("p", "carol@local", listOf(0), "group:g1", true)      // и групповой
+        s.applyVote("p", "bob@local", listOf(1), "alice@local", "bob@local")    // личный голос пришёл раньше опроса
+        s.applyVote("p", "carol@local", listOf(0), "group:g1", "group:g1")    // и групповой
         s.register("p", "alice@local", PollStore.buildContent("Q", listOf("a", "b"), false, false, false, emptyList(), ""), "group:g1", true, "alice@local")
         val e = s.get("p")!!
         assertEquals(setOf("bob@local", "carol@local"), e.votes.keys) // автор принимает оба (carol — голос в группе, как у старых клиентов)
+    }
+
+    // Опрос личного чата: чат опроса — адрес собеседника; голоса собеседника и своего другого устройства
+    // приходят «в чате опроса» и засчитываются (регрессия 028d15cc: личный голос считался «чужим чатом»)
+    @Test
+    fun directChatPollVotesCount() {
+        val s = PollStore()
+        s.register("d", "bob@local", PollStore.buildContent("Q", listOf("a", "b"), true, false, false, emptyList(), ""), "bob@local", false, "alice@local")
+        assertTrue(s.route("d", "alice@local", "bob@local", "alice@local", true).count) // голос bob → alice
+        assertTrue(s.route("d", "alice@local", "alice@local", "bob@local", true).count) // свой голос с другого устройства
+        // голос раньше опроса — отложен с чатом и засчитан при приходе опроса
+        val late = PollStore()
+        assertFalse(late.applyVote("d", "alice@local", listOf(1), "bob@local", "bob@local"))
+        late.register("d", "bob@local", PollStore.buildContent("Q", listOf("a", "b"), true, false, false, emptyList(), ""), "bob@local", false, "alice@local")
+        assertEquals(listOf(1), late.get("d")!!.votes["alice@local"])
     }
 }

@@ -36,7 +36,8 @@ class PollStore {
     /** POLL-1: действующий участник группы [chat] (знает только автор); ставит [ParvaneStore]. */
     var isMember: (chat: String, address: String) -> Boolean = { _, _ -> false }
 
-    private class PendingVote(val voter: String, val indices: List<Int>, val to: String, val inGroup: Boolean)
+    /** `chat` — чат, в котором пришёл голос: адрес группы либо собеседника личного чата. */
+    private class PendingVote(val voter: String, val indices: List<Int>, val to: String, val chat: String)
 
     private val byUuid = HashMap<String, Entry>()
     private val pendingVotes = HashMap<String, ArrayList<PendingVote>>() // голоса до прихода опроса
@@ -57,7 +58,7 @@ class PollStore {
                 correct, if (c.isNull("solution")) "" else c.optString("solution"), from, chat, isGroup)
         }
         pendingVotes.remove(uuid)?.forEach { p ->
-            if (route(uuid, self, p.voter, p.to, p.inGroup && p.to == e.chat).count) applyVote(uuid, p.voter, p.indices)
+            if (route(uuid, self, p.voter, p.to, p.chat == e.chat).count) applyVote(uuid, p.voter, p.indices)
         }
         if (pendingClose.remove(uuid)?.contains(e.owner) == true) e.closed = true
         return e
@@ -105,11 +106,11 @@ class PollStore {
     fun markPublished(uuid: String, content: JSONObject) { byUuid[uuid]?.published = content.toString() }
 
     /** `poll_vote`: true — агрегат изменился (или отложен до прихода опроса). */
-    fun applyVote(uuid: String, voter: String, indices: List<Int>, pendingTo: String = "", pendingInGroup: Boolean = true): Boolean {
+    fun applyVote(uuid: String, voter: String, indices: List<Int>, pendingTo: String = "", pendingChat: String = ""): Boolean {
         val e = byUuid[uuid] ?: run {
             if (pendingVotes.size < MAX_PENDING || pendingVotes.containsKey(uuid)) {
                 val list = pendingVotes.getOrPut(uuid) { ArrayList() }
-                if (list.size < MAX_PENDING) list.add(PendingVote(voter, indices, pendingTo, pendingInGroup))
+                if (list.size < MAX_PENDING) list.add(PendingVote(voter, indices, pendingTo, pendingChat))
             }
             return false
         }

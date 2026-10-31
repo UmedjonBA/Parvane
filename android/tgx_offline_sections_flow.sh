@@ -15,6 +15,9 @@ TGX_LOG="$OUT/logcat.txt"
 SB=$(ls -td /tmp/pv-tgx.* | head -1)
 tab() { ui_tap "^($1)\$" 10 >/dev/null || echo "   нет на экране: $1"; }
 has() { ui_dump; [ -n "$(ui_bounds "$1")" ]; }
+# Сетка открывается на подъёме либо на первом деле дня (как web): днём задача на текущий час бывает ниже экрана —
+# прокрутить сетку вниз, пока блок не появится
+find_down() { local i; for i in 0 1 2 3 4 5 6 7; do has "$1" && return 0; a shell input swipe 540 1800 540 1100 400; sleep 1; done; return 1; }
 
 a reverse "tcp:$PV_GW_WS_PORT" "tcp:$PV_GW_WS_PORT" >/dev/null 2>&1
 tgx_start; tgx_logwait "v2: готов" 90 >/dev/null || bad "сессия не поднялась"; sleep 3
@@ -29,7 +32,7 @@ tgx_mark
 tgx_cmd "{\"op\":\"planner_op\",\"name\":\"save\",\"args\":{\"kind\":\"task\",\"day\":\"$TODAY\",\"item\":{\"name\":\"Сверка сетки\",\"description\":\"Описание в блоке сетки\",\"day\":\"$TODAY\",\"start\":\"$START\",\"minutes\":60}}}"
 tgx_logwait "planner_op → ok" 20 >/dev/null || bad "задача не записана"
 tab 'План|Planner'; tab 'День|Day'; sleep 2
-if has '^Описание в блоке сетки$'; then ok "описание задачи видно в блоке сетки «День»"; else bad "описания задачи нет в блоке сетки"; fi
+if find_down '^Описание в блоке сетки$'; then ok "описание задачи видно в блоке сетки «День»"; else bad "описания задачи нет в блоке сетки"; fi
 tgx_shot "$OUT/01-day-grid.png"
 # Полоска «сейчас» поверх блока: в середине блока (по x подписи названия) есть красная строка пикселей
 XY=$(ui_bounds '^Сверка сетки$')
@@ -57,7 +60,7 @@ tgx_logwait "сохранённый вид: «План» есть, облако 
   || bad "сохранённого вида разделов нет"
 sleep 4
 tab 'План|Planner'; sleep 2
-if has '^Сверка сетки$'; then ok "«План» без связи показывает записи сразу"; else bad "«План» без связи пуст"; fi
+if find_down '^Сверка сетки$'; then ok "«План» без связи показывает записи сразу"; else bad "«План» без связи пуст"; fi
 has '^(Загрузка…|Loading…)$' && bad "«План» без связи висит на «Загрузке»"
 tgx_shot "$OUT/02-planner-offline.png"
 tab 'Знания|Knowledge'; sleep 3
@@ -72,7 +75,7 @@ a reverse "tcp:$PV_GW_WS_PORT" "tcp:$PV_GW_WS_PORT" >/dev/null 2>&1
 tgx_logwait "v2: готов" 120 >/dev/null && ok "связь вернулась — сессия подключилась" || bad "после возвращения связи сессия не поднялась"
 sleep 3
 tab 'План|Planner'; sleep 2
-has '^Сверка сетки$' && ok "«План» после подключения на месте" || bad "«План» после подключения пуст"
+find_down '^Сверка сетки$' && ok "«План» после подключения на месте" || bad "«План» после подключения пуст"
 tgx_mark
 tgx_cmd "{\"op\":\"planner_add\",\"text\":\"Проверка правки после связи\"}"
 tgx_logwait "planner_add → ok" 20 >/dev/null && ok "правка «Плана» после подключения проходит" || bad "правка «Плана» после подключения отвергнута"

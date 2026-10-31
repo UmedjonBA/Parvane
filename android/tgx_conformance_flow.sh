@@ -43,7 +43,8 @@ BP=$(start_client "$B" bob@local PARVANE_NO_LINK_OFFER=1)
 wait_log "$BL" "v2: готов" 90 || bad "bob: v2 не поднялся"
 tgx_mark
 tgx_cmd '{"op":"read","peer":"bob@local"}' && ok "X: чат bob прочитан (ViewMessages)" || bad "X: прочтение не выполнено"
-wait_log "$BL" "своё прочитано ✓✓ msg ${OFF[2]}" 60 && ok "READ-1: bob увидел прочтение X" || bad "READ-1: квитанция X до bob не дошла"
+# spec 033 (READ-2): desktop применяет квитанцию маркером «прочитано до» чата — строка «✓✓ в <адрес>»
+wait_log "$BL" "своё прочитано ✓✓ (msg ${OFF[2]}|в alice@local)" 60 && ok "READ-1: bob увидел прочтение X" || bad "READ-1: квитанция X до bob не дошла"
 tgx_stop; tgx_start
 tgx_logwait "v2: готов" 90 || bad "X: сессии нет после перезапуска"
 tgx_cmd '{"op":"unread","peer":"bob@local"}' || true
