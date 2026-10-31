@@ -373,6 +373,8 @@ bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::s
 } // namespace Internal
 using namespace Internal;
 
+// Устройство вошло по ключу восстановления: ключи разделов из копии (parvane_client.cpp)
+void CompleteKeyJoin(parvane::v2::KeyJoinOutcome outcome);
 // Права админа участника группы (роль owner/admin — эффективные, иначе пусто; parvane_client_groups.cpp).
 [[nodiscard]] parvane::AdminRights GroupAdminRightsOf(const QString &gid, const QString &address);
 

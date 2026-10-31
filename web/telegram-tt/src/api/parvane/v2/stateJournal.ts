@@ -53,6 +53,8 @@ type Deps = {
     list: () => Promise<V2SharedInvite[]>;
     merge: (invites: V2SharedInvite[]) => Promise<void>;
   };
+  /** Записи приняты сервером — другие вкладки этого браузера (то же устройство) догоняют сразу. */
+  onAppended?: () => void;
   log: (message: string) => void;
 };
 
@@ -407,6 +409,15 @@ export function createStateJournal(deps: Deps) {
   }
 
   async function pushAppends() {
+    const had = pendingAppends.length;
+    try {
+      await pushAppendsUnnotified();
+    } finally {
+      if (had && pendingAppends.length < had) deps.onAppended?.();
+    }
+  }
+
+  async function pushAppendsUnnotified() {
     while (host && pendingAppends.length) {
       try {
         await host.call('state.append', pendingAppends[0]);

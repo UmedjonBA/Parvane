@@ -1093,6 +1093,11 @@ bool HistorySync::pullLocked() {
             if (!more) break;
         }
     }
+    if (!rows.empty() || !marks.empty()) {
+        std::lock_guard<std::mutex> lk(mu_);
+        log("применено строк " + std::to_string(rows.size()) + ", маркеров " + std::to_string(marks.size()) + " (курсор "
+            + std::to_string(meta_.value("cursor", std::uint64_t(0))) + ")");
+    }
     deliver(rows, marks);
     return ok;
 }

@@ -50,6 +50,7 @@ import { pickRecoveryKey } from './v2/keyBundle';
 import { parseLinkCloudKeys, parseLinkPlannerKeys } from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
+import { createTabSignal } from './v2/tabSignal';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
@@ -477,6 +478,7 @@ const stateJournal = createStateJournal({
     list: () => v2Controller.allInvites(),
     merge: (invites) => v2Controller.mergeSharedInvites(invites),
   },
+  onAppended: () => journalTabs.post('state'),
   log: logDebug,
 });
 
@@ -597,7 +599,14 @@ const historyJournal = createHistoryJournal({
   },
   takeLegacyReadUuids: () => localState.takeLegacyReadUuids(),
   onMigrated: () => localState.dropLegacyReadUuids(),
+  onWritten: () => journalTabs.post('history'),
   log: logDebug,
+});
+
+// Вкладки одного браузера — одно устройство: сервер их друг о друге не будит (`JournalNotice` — прочим устройствам)
+const journalTabs = createTabSignal(() => store.self, (kind) => {
+  if (kind === 'history') historyJournal.onNotice();
+  else void stateJournal.syncNow().catch(() => undefined);
 });
 
 // Своё отправленное (любым путём отправки): строка журнала истории и сдвиг маркера чата (ответил — прочитал)
@@ -706,6 +715,7 @@ const v2Controller = createV2Controller({
   describeDevice: describeThisDevice,
   history: { ingest: historyRows.ingest, advanceMark: historyRows.advanceMark },
   onHistoryReady: (host, rekey) => {
+    journalTabs.listen();
     void historyJournal.attach(host, rekey);
   },
   onJournal: (journal) => {

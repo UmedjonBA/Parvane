@@ -1,5 +1,5 @@
 import {
-  memo, useEffect, useMemo, useRef, useState,
+  memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
 
 import type { PvIconName } from '../notes/PvIcon';
@@ -43,10 +43,15 @@ const CloudNameDialogBase = ({
   const [hasTried, setHasTried] = useState(false);
   const inputRef = useRef<HTMLInputElement>();
 
-  useEffect(() => {
-    if (!isOpen) return;
-    setName(initialName || '');
-    setHasTried(false);
+  // Имя — только при открытии окна и в том же кадре, что и само поле (layout-эффект): обычный эффект мог
+  // выполниться уже после ввода и вернуть прежнее имя — «Сохранить» тогда молча ничего не менял (cloud_links)
+  const wasOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      setName(initialName || '');
+      setHasTried(false);
+    }
+    wasOpenRef.current = isOpen;
   }, [isOpen, initialName]);
 
   // Поле получает фокус, когда шторка уже на экране

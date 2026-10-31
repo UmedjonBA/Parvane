@@ -1483,7 +1483,7 @@ void SendMutationWithRetry(
 				throw std::runtime_error("сессия v2 не готова");
 			}
 			s->sendContent(peer, content, opId);
-			LOG(("Parvane: v2 → %1 %2 (%3)").arg(QString::fromStdString(peer), kind, QString::fromStdString(opId)));
+			LOG(("Parvane: v2 → %1 %2 для операции %3").arg(QString::fromStdString(peer), kind, QString::fromStdString(opId)));
 		} catch (const std::exception &e) {
 			LOG(("Parvane: v2: %1 для %2 не отправлено (попытка %3): %4")
 				.arg(kind, QString::fromStdString(peer)).arg(attempt + 1).arg(QString::fromUtf8(e.what())));

@@ -135,6 +135,15 @@ try {
   await shoot(page, 'note-media');
   // Перезагрузка: файлы берутся из облака заново. Раздел переживает перезагрузку — хелпер ждёт список чатов
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Chats' }).click();
+  // Диагностика зависшей перезагрузки: диалог ухода со страницы и неотправленные сообщения
+  page.on('dialog', (dialog) => console.log(`диалог ${dialog.type()}: ${dialog.message()}`));
+  const pending = await page.evaluate(() => {
+    const g = window.__parvaneGetGlobal?.();
+    if (!g) return 'нет global';
+    return Object.values(g.messages.byChatId).flatMap((c) => Object.values(c.byId || {}))
+      .filter((m) => m.sendingState).map((m) => `${m.id}:${m.sendingState}`);
+  }).catch((e) => String(e));
+  console.log(`перед перезагрузкой: неотправленные ${JSON.stringify(pending)}`);
   await relogin(page, PASSWORD);
   await page.locator('#FoldersSidebar').getByRole('tab', { name: 'Knowledge' }).click();
   await knowledge.locator(`[data-note-row="${title}"]`).first().click();
@@ -222,6 +231,7 @@ try {
   const dir = process.env.PARVANE_E2E_BACKEND_LOG_DIR || '.';
   for (const [name, s] of Object.entries(sessions)) {
     await s.page.screenshot({ path: `${dir}/article-${name}.png` }).catch(() => {});
+    console.log(`--- ${name} (журнал провайдера) ---\n${(s.logs || []).slice(-80).join('\n')}`);
   }
   throw err;
 } finally {

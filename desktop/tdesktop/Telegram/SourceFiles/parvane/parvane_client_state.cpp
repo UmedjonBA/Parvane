@@ -1816,9 +1816,18 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 				if (!s) {
 					return;
 				}
-				const auto result = recover.isEmpty()
-					? s->resetIdentity(password.toStdString())
-					: s->recoverWithKey(recover.toStdString());
+				// Вход по ключу — как в окне входа (RECOVER-2): из копии ключей аккаунта, прежние устройства остаются,
+				// ключ личного состояния — из копии (журнал истории читается); без копии — прежний путь корнем
+				auto result = std::string();
+				if (recover.isEmpty()) {
+					result = s->resetIdentity(password.toStdString());
+				} else {
+					auto outcome = s->joinWithRecoveryKey(recover.toStdString(), false);
+					result = outcome.result;
+					if (result == "ok") {
+						CompleteKeyJoin(std::move(outcome));
+					}
+				}
 				LOG(("Parvane: v2: %1 → %2")
 					.arg(recover.isEmpty() ? u"autoreset"_q : u"autorecover"_q,
 						QString::fromStdString(result)));

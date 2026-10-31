@@ -661,7 +661,26 @@ export async function reloadPage(page) {
     requestAnimationFrame(() => setTimeout(resolve, 0));
     globalThis.__parvaneE2eReloadMarker = Date.now();
   })).catch(() => undefined);
+  // Закрытие раздела/оверлея снимает свою запись истории отложенным `history.go(-1)` (useHistoryBack): переход
+  // по истории, ещё идущий в момент reload, отменял перезагрузку (старый документ оставался, article). Ждём тишины
+  // `popstate` (300 мс, не дольше 3 с)
+  await page.evaluate(() => new Promise((resolve) => {
+    const started = Date.now();
+    let last = Date.now();
+    const onPop = () => { last = Date.now(); };
+    window.addEventListener('popstate', onPop);
+    const tick = () => {
+      if (Date.now() - last >= 300 || Date.now() - started >= 3000) {
+        window.removeEventListener('popstate', onPop);
+        resolve(undefined);
+      } else {
+        setTimeout(tick, 50);
+      }
+    };
+    setTimeout(tick, 50);
+  })).catch(() => undefined);
   try {
+    let lastReloadState;
     for (let attempt = 0; ; attempt++) {
       try {
         await page.reload({ waitUntil: 'domcontentloaded' });
@@ -676,6 +695,15 @@ export async function reloadPage(page) {
               .filter((e) => e.responseEnd === 0).map((e) => e.name).slice(0, 10),
           })).catch((e) => `evaluate failed: ${e.message}`);
           console.error(`--- reload diag ---\n${JSON.stringify(state)}\n--- console tail ---\n${consoleTail.join('\n')}`);
+          lastReloadState = typeof state === 'object' ? state : undefined;
+        }
+        // Перезагрузка, проглоченная навигацией внутри страницы (закрытие раздела/оверлея через history.back()):
+        // старый документ жив, новый не начинался — выдаём перезагрузку ещё раз
+        const isSwallowed = err?.name === 'TimeoutError' && lastReloadState?.oldDocument === true;
+        if (isSwallowed && attempt < 2) {
+          // Страховка: в логе сценария видно, что перезагрузка не началась с первого раза
+          console.error('--- reload diag: перезагрузка не началась (старый документ жив) — повтор ---');
+          continue;
         }
         if (attempt >= 2 || !/ERR_ABORTED|frame was detached/.test(String(err?.message))) throw err;
         await page.waitForLoadState('domcontentloaded').catch(() => {});

@@ -68,6 +68,8 @@ type Deps = {
   /** Прежний учёт прочитанного (перенос, FR-024) — uuid прочитанных входящих; после переноса — стереть. */
   takeLegacyReadUuids?: () => string[];
   onMigrated?: () => void;
+  /** Записи приняты сервером — другие вкладки этого браузера (то же устройство) догоняют сразу. */
+  onWritten?: () => void;
   log: (message: string) => void;
   now?: () => number;
   random?: () => number;
@@ -432,7 +434,10 @@ export function createHistoryJournal(deps: Deps) {
       ops.forEach(noteSeen);
       retryDelay = RETRY_BASE_MS;
       // Маркер для сценариев и диагностики: операции устройства уже в журнале аккаунта
-      if (written) deps.log(`история: в журнал записано (записей ${written}, операций ${ops.length})`);
+      if (written) {
+        deps.log(`история: в журнал записано (записей ${written}, операций ${ops.length})`);
+        deps.onWritten?.();
+      }
     } catch (e) {
       deps.log(`история: запись не принята, повтор через ${retryDelay / 1000} с: ${String(e)}`);
       setTimeout(() => scheduleFlush(0), retryDelay);
