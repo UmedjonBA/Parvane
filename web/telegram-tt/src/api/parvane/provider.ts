@@ -1339,6 +1339,7 @@ async function completeJoinFromBundle() {
   const owner = store.self;
   window.dispatchEvent(new CustomEvent('parvane-device-joined'));
   void retractLinkOffer();
+  void v2Controller.dropJoinKey();
   if (telegramRecovery.state !== 'idle' && telegramRecovery.state !== 'unavailable') stopTelegramRecovery('done');
   void v2Controller.pollTelegramKey(true);
   if (joinCompletedFor === owner) {
@@ -1400,6 +1401,13 @@ async function startTelegramRecovery(again: boolean) {
   if (telegramRecovery.state === 'joining' || (telegramRecovery.state === 'waiting' && !again)) return;
   stopTelegramRecovery('idle');
   const generation = telegramRecovery.generation;
+  // Ответ боту уже получен, а вход прервался (обрыв связи, перезагрузка) — входим тем же ключом
+  const savedKey = again ? undefined : await v2Controller.loadJoinKey();
+  if (savedKey && generation === telegramRecovery.generation) {
+    logDebug('ключ восстановления: вход по полученному ранее ответу владельца');
+    await joinWithTelegramKey(generation, savedKey);
+    return;
+  }
   const requested = await v2Controller.requestTelegramKey(again);
   if (generation !== telegramRecovery.generation) return;
   if (requested !== 'sent') {
@@ -1433,9 +1441,16 @@ async function pollTelegramRecovery(generation: number, startedAt: number) {
   }
   window.clearTimeout(telegramRecovery.timer);
   telegramRecovery.timer = undefined;
-  setTelegramRecoveryState('joining');
   logDebug('ключ восстановления: получен ответ владельца из Telegram');
-  const outcome = await v2Controller.joinWithRecoveryKey(reply.recovery_key, true);
+  await v2Controller.saveJoinKey(reply.recovery_key);
+  await joinWithTelegramKey(generation, reply.recovery_key);
+}
+
+// Вход по ключу из ответа боту; ключ хранится до исхода (обрыв и перезагрузка посреди входа его не теряют)
+async function joinWithTelegramKey(generation: number, recoveryKey: string) {
+  setTelegramRecoveryState('joining');
+  const outcome = await v2Controller.joinWithRecoveryKey(recoveryKey, true);
+  if (outcome.result !== 'failed') void v2Controller.dropJoinKey();
   if (outcome.result === 'ok') {
     // Успешный вход завершаем, даже если состояние окна успели сменить (новая сессия, «прислать ещё раз»)
     void v2Controller.pollTelegramKey(true);

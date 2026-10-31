@@ -266,6 +266,8 @@ async fn v2_history_live() {
             chat: Some(chat(&bob)),
             stamp: Some(h::new_stamp(1_700_000_001_000)),
             scope: GoneScope::Everyone as i32,
+            by: alice.clone(),
+            by_admin: false,
         });
         let r1 = seal(&s1, vec![m1.clone()], false);
         f.check("append-1", append(&mut d1.id, &r1[0]) == Ok(1), "");

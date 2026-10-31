@@ -425,6 +425,10 @@ const JOINED_UNACKED_RECORD = 'v2-joined-unacked';
 // Ключ восстановления нового корня, ещё не дошедший до владельца (Telegram либо
 // окно): переживает перезагрузку вкладки — иначе он потерян навсегда
 const PENDING_RECOVERY_KEY_RECORD = 'v2-pending-recovery-key';
+// Ключ восстановления из ответа владельца боту, по которому устройство ещё не вошло: ответ сервер отдаёт один раз,
+// и обрыв связи или перезагрузка посреди входа иначе теряли его (вход заново — новый вопрос боту). Лежит в
+// шифрованном хранилище устройства до окончания входа
+const JOIN_KEY_RECORD = 'v2-join-recovery-key';
 // e2e-хук (только диаг-сборка): перезагрузить вкладку сразу после того, как сервер
 // принял журнал нового корня, — как телефон, выгрузивший вкладку в этот момент
 const RELOAD_AFTER_CREATE_KEY = 'parvane:e2e:reloadAfterCreate';
@@ -4666,6 +4670,14 @@ export function createV2Controller(deps: Deps) {
     deviceId: () => ownDeviceId,
     /** Домен своего сервера (группы v2 живут на нём). */
     serverDomain: () => serverDomain,
+    /** Ключ из ответа боту — до окончания входа (переживает перезагрузку). */
+    saveJoinKey: async (recoveryKey: string) => {
+      await storage?.saveRecord(JOIN_KEY_RECORD, recoveryKey).catch(() => undefined);
+    },
+    loadJoinKey: async () => storage?.loadRecord<string>(JOIN_KEY_RECORD).catch(() => undefined),
+    dropJoinKey: async () => {
+      await storage?.deleteRecord(JOIN_KEY_RECORD).catch(() => undefined);
+    },
     /** Строка истории по id (своя отправка либо кэш истории) — для правки. */
     storedMessage: knownMessage,
     /** Планировщик на сервере (spec 010). */

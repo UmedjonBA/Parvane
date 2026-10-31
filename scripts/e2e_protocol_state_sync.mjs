@@ -85,7 +85,7 @@ names.forEach((who) => {
   contexts[who].on('page', (page) => {
     page.on('console', (m) => {
       const t = m.text();
-      if (t.includes('[parvane] v2') || t.includes('линковк')) logs[who].push(t);
+      if (t.includes('[parvane] v2') || t.includes('линковк') || t.includes('[parvane] история:')) logs[who].push(t);
       consoleTail[who].push(`${m.type()}: ${t.slice(0, 300)}`);
       if (consoleTail[who].length > 80) consoleTail[who].shift();
     });

@@ -168,10 +168,11 @@ try {
   await waitDesktopLog(bobWorkdir, /v2: устройство привязано грантом линковки/, 60000, desktop);
   await waitDesktopLog(bobWorkdir, /журнал личного состояния подключён/, 90000, desktop);
 
-  // История v2-эпохи (LINK-1 п. 8): «до» запечатано только под bob1
-  await waitDesktopLog(bobWorkdir, /линковка: история v2 перенесена \([1-9]\d* сообщений\)/, 60000, desktop);
+  // История до привязки: «до» запечатано только под bob1 — приходит из журнала истории аккаунта (spec 033; экспорт
+  // привязки истории больше не несёт)
+  await waitDesktopLog(bobWorkdir, /журнал истории аккаунта запущен/, 60000, desktop);
   await waitDesktopLog(
-    bobWorkdir, new RegExp(`входящее msg [\\w-]+ \\(${escapeRegExp(alice)}\\): ${escapeRegExp(before)}`), 30000, desktop,
+    bobWorkdir, new RegExp(`входящее msg [\\w-]+ \\(${escapeRegExp(alice)}\\): ${escapeRegExp(before)}`), 60000, desktop,
   );
 
   // ── Журнал личного состояния web → desktop (SC-009) ────────────────────────

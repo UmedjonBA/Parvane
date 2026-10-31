@@ -653,7 +653,15 @@ export function createSyncController(deps: SyncDependencies) {
     rememberRowMeta(stored);
     // Кэш истории: живые строки и строки протокола v2 — восстановление из кэша
     // (shouldPersist=false) не переписывает само себя
-    if (shouldPersist) persistHistory(stored.order ? stored : { ...stored, order: message.id });
+    if (shouldPersist) {
+      persistHistory(stored.order ? stored : { ...stored, order: message.id });
+    } else if (stored.hs && stored.order === undefined) {
+      // Строка журнала истории уже записана хранилищем строк — без места в ленте (ORDER-1): дописываем его, иначе
+      // после перезагрузки живое сообщение встало бы по часам отправителя
+      const placed = { ...stored, order: message.id };
+      deps.localState.saveHistoryRecord(placed);
+      deps.rememberStored?.(placed);
+    }
     if (stored.content.kind === 'gif' && message.content.video) deps.rememberSavedGif(message.content.video);
 
     if (!isKnown) {

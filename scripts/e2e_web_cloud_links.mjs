@@ -431,7 +431,7 @@ try {
 } catch (err) {
   if (session?.page) {
     await session.page.screenshot({ path: `${BACKEND_DIR}/cloud-links-failure.png` }).catch(() => undefined);
-    const tail = (session.logs || []).filter((l) => l.includes('облако') || l.includes('v2:')).slice(-40);
+    const tail = (session.logs || []).slice(-80);
     console.log(tail.join('\n'));
   }
   if (visitorPage && !visitorPage.isClosed()) {

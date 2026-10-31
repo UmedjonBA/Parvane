@@ -65,8 +65,11 @@ case "$PAIR" in
     export PARVANE_E2E_ESCROW_KEY_FILE="$ESCROW_DIR/admin.key"
     PARVANE_ESCROW_PUBLIC_KEY="$("$ROOT/backend/target/debug/escrow_admin" keygen "$PARVANE_E2E_ESCROW_KEY_FILE")"
     export PARVANE_ESCROW_PUBLIC_KEY
-    # ID-03: web принимает объявленный сервером ключ, только если он закреплён в сборке
+    # ID-03: web принимает объявленный сервером ключ, только если он закреплён в сборке. Ключ новый на каждый
+    # прогон — готовый dist (PARVANE_E2E_SKIP_WEB_BUILD=1 у серии сценариев) его не знает, и копия корня не
+    # делалась никогда («сервер объявил ключ, но он не закреплён в сборке»): этой паре dist собирается всегда
     export VITE_PARVANE_ESCROW_PUBLIC_KEY="$PARVANE_ESCROW_PUBLIC_KEY"
+    export PARVANE_E2E_SKIP_WEB_BUILD=0
     ;;
   state-sync) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync.mjs" ;;
   state-sync-desktop) SCRIPT="$ROOT/scripts/e2e_protocol_state_sync_desktop.mjs" ;;

@@ -404,6 +404,14 @@ HistorySync::HistorySync(HistorySyncConfig cfg) : cfg_(std::move(cfg)) {
         }
     }
     const auto t = now();
+    // Входящее, не записанное до остановки: снова в очередь (после первого sync — та же проверка «уже в журнале»)
+    if (pending.is_object() && pending.contains("incoming") && pending["incoming"].is_array()) {
+        for (const auto &x : pending["incoming"]) {
+            if (x.is_object() && x.contains("op") && !str(x, "key").empty()) {
+                incoming_.push_back(Incoming{x["op"], str(x, "key"), t + cfg_.incomingMinMs});
+            }
+        }
+    }
     if (!pendingOwn_.empty()) ownDue_ = t;
     if (!pendingMarks_.empty()) marksDue_ = t;
 }
@@ -558,7 +566,10 @@ void HistorySync::savePendingLocked() {
     if (!cfg_.store) return;
     json marks = json::object();
     for (const auto &[k, m] : pendingMarks_) marks[k] = m;
-    cfg_.store->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}});
+    // Входящее ждёт записи 1–5 с: на диске, чтобы остановка или падение процесса в этом окне его не теряли
+    json incoming = json::array();
+    for (const auto &x : incoming_) incoming.push_back(json{{"op", x.op}, {"key", x.key}});
+    cfg_.store->setAux("pending", json{{"ops", pendingOwn_}, {"marks", marks}, {"incoming", incoming}});
 }
 
 json HistorySync::applyToStore(const json &op, bool *changed) {
@@ -659,6 +670,7 @@ json HistorySync::record(const json &op, bool own, const std::string &requiredAu
             savePendingLocked();
         } else if (!key.empty() && !seen_.count(key)) {
             incoming_.push_back(Incoming{op, key, now() + randomIn(cfg_.incomingMinMs, cfg_.incomingMaxMs)});
+            savePendingLocked();
         }
     }
     // Своё сообщение (с любого своего устройства) — всё входящее до него прочитано (FR-011)
@@ -1130,6 +1142,7 @@ bool HistorySync::flushLocked(bool includeIncoming, bool dueOnly) {
     }
     if (ops.empty()) {
         std::lock_guard<std::mutex> lk(mu_);
+        if (includeIncoming) savePendingLocked(); // уже бывшее в журнале снято с очереди
         if (!ownCount) ownDue_ = pendingOwn_.empty() ? 0 : ownDue_;
         if (marksSent.empty()) marksDue_ = pendingMarks_.empty() ? 0 : marksDue_;
         return true;
@@ -1143,6 +1156,7 @@ bool HistorySync::flushLocked(bool includeIncoming, bool dueOnly) {
             x.due = t + cfg_.retryMs;
             incoming_.push_back(std::move(x));
         }
+        savePendingLocked();
         if (ownCount) ownDue_ = t + cfg_.retryMs;
         if (!marksSent.empty()) marksDue_ = t + cfg_.retryMs;
         if (isCode(e, "ERROR_CODE_LIMIT")) {

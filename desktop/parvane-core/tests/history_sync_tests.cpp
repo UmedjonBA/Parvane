@@ -710,6 +710,30 @@ int main() {
         check(k1 == k2, "один сегмент для строк группы под двумя доменами", k1 + " / " + k2);
     }
 
+    // Остановка в окне задержки входящего (1–5 с) и падение процесса: очередь — на диске, новый HistorySync на том же
+    // хранилище дописывает строку в журнал (verify_history_sync: «четыре-…» не доезжало до нового устройства)
+    {
+        FakeServer s7;
+        Device x("qx", s7, blob, key), y("qy", s7, blob, key);
+        x.sync->syncNow();
+        x.sync->record(hs::rowOpFromWire(wire(uid(50), kBob, kSelf, 5000, "в окне"), bobChat()), false);
+        x.sync->record(hs::goneOp(uid(51), bobChat(), hs::stampOf(5100, uid(52)), true, kBob), false);
+        check(s7.headSeq() == 0, "входящее ещё не записано (окно задержки)");
+        x.reopen(s7); // остановка до окна; новый HistorySync на том же хранилище
+        check(x.sync->status().value("pendingIncoming", 0) == 2, "очередь входящего восстановлена с диска");
+        x.sync->syncNow();
+        x.sync->flushNow();
+        check(s7.headSeq() >= 1, "после перезапуска входящее записано в журнал");
+        y.sync->syncNow();
+        check(y.visible(uid(50)) && y.store->get(uid(51)).has_value(), "строка и мутация дошли до другого устройства");
+        const auto head = s7.headSeq();
+        y.sync->record(hs::rowOpFromWire(wire(uid(50), kBob, kSelf, 5000, "в окне"), bobChat()), false);
+        y.reopen(s7);
+        y.sync->syncNow();
+        y.sync->flushNow();
+        check(s7.headSeq() == head, "восстановленное входящее, уже бывшее в журнале, не дублируется");
+    }
+
     // Фоновый поток: своё уходит само ≤ 300 мс, уведомление журнала — sync сразу
     {
         FakeServer s6;

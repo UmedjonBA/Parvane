@@ -99,7 +99,12 @@ try {
   await dialog.locator('#parvane-rename-password').fill(PASSWORD);
   const reloaded = a.waitForEvent('load', { timeout: RENAME_TIMEOUT_MS });
   await dialog.getByRole('button', { name: 'Change', exact: true }).click();
-  await dialog.locator('[data-rename-done]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS });
+  // «Ник сменён» видно ~0,4 с до перезагрузки вкладки — под нагрузкой кадр с ним может не отрисоваться раньше
+  // reload; признак успеха — перезагрузка и новый ник ниже
+  await Promise.race([
+    dialog.locator('[data-rename-done]').waitFor({ state: 'visible', timeout: RENAME_TIMEOUT_MS }).catch(() => undefined),
+    reloaded,
+  ]);
   await reloaded;
   await a.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await poll(() => ownUsername(a), (u) => u === newNick, 'свой ник после перезагрузки', RENAME_TIMEOUT_MS);
