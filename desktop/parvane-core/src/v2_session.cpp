@@ -457,6 +457,33 @@ void Session::connectOnce() {
     onIdClosed();
 }
 
+std::string Session::linkChallengeWrap(const std::string &deviceId, const std::string &commitment,
+                                       const std::string &challengePub, const std::string &secret) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_) return {};
+    try {
+        const auto r = client_->call("linkChallengeWrap", json{{"deviceId", deviceId}, {"commitment", commitment},
+                                                               {"challengePub", challengePub},
+                                                               {"secret", toBase64(secret)}});
+        return r.is_string() ? r.get<std::string>() : std::string();
+    } catch (const std::exception &) {
+        return {};
+    }
+}
+
+std::string Session::linkChallengeUnwrap(const std::string &deviceId, const std::string &commitment,
+                                         const std::string &challengePub, const std::string &wrapB64) {
+    std::lock_guard<std::recursive_mutex> lk(engineMu_);
+    if (!ready_ || !client_ || wrapB64.empty()) return {};
+    try {
+        const auto r = client_->call("linkChallengeUnwrap", json{{"deviceId", deviceId}, {"commitment", commitment},
+                                                                 {"challengePub", challengePub}, {"wrap", wrapB64}});
+        return r.is_string() ? fromBase64(r.get<std::string>()) : std::string();
+    } catch (const std::exception &) {
+        return {};
+    }
+}
+
 std::string Session::linkGrantMaterial() {
     std::lock_guard<std::recursive_mutex> lk(engineMu_);
     if (!ready_ || !client_) return {};

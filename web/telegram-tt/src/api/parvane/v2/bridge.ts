@@ -380,6 +380,7 @@ export class V2Bridge {
             signing_key: str(o, 'signingKey', 'signing_key'),
             created_at: Math.floor(int(o, 'createdMs', 'created_ms') / 1000),
             challenge_pub: str(o, 'challengePub', 'challenge_pub'),
+            challenge_wrap: str(o, 'challengeWrap', 'challenge_wrap'),
           })),
         };
         const grant = r.grant as V2Json | undefined;
@@ -393,7 +394,9 @@ export class V2Bridge {
         return out;
       }
       case 'identity.link.challenge':
-        await c.call('identity.link.challenge', { device_id: str(p, 'device_id'), eph_pub: str(p, 'eph_pub') });
+        await c.call('identity.link.challenge', {
+          device_id: str(p, 'device_id'), eph_pub: str(p, 'eph_pub'), wrap: str(p, 'wrap'),
+        });
         return { ok: true };
       case 'identity.link.grant':
         await c.call('identity.link.grant', {

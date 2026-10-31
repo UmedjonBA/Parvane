@@ -318,6 +318,9 @@ pub struct LinkOfferInfo {
     /// Эфемерный ключ старого устройства, уже приложенный к офферу (v2).
     #[serde(default)]
     pub challenge_pub: String,
+    /// LINK-1 п. 13: обёртка закрытой части ключа challenge для других своих устройств (base64).
+    #[serde(default)]
+    pub challenge_wrap: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +351,9 @@ pub struct LinkChallengeRequest {
     /// ЦЕЛЕВОЕ (новое) устройство
     pub device_id: String,
     pub eph_pub: String,
+    /// LINK-1 п. 13: обёртка закрытой части eph_pub для своих устройств (base64; пусто — без обёртки).
+    #[serde(default)]
+    pub wrap: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -425,8 +425,9 @@ content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
    `commitment = base64(SHA-256(raw eph_pub))` и своим `signing_key`;
    сам `eph_pub` НЕ раскрывается.
 2. **Challenge** — старое устройство шлёт `identity.link.challenge`
-   `{device_id: <новое>, eph_pub: <свой эфемерный P-256>}`. Сервер фиксирует
-   первый challenge и не даёт его заменить.
+   `{device_id: <новое>, eph_pub: <свой эфемерный P-256>, wrap}`. Сервер фиксирует
+   первый challenge и не даёт его заменить; `wrap` — обёртка ключа для других
+   своих устройств (п. 13).
 3. **Раскрытие** — новое устройство видит `challenge` в `identity.link.poll`
    и переотправляет оффер с `eph_pub` и тем же `commitment`; сервер (и старое
    устройство) сверяют `SHA-256(eph_pub) == commitment`.
@@ -525,6 +526,38 @@ content) + `parvane_client.cpp` `prepareIncoming`/`injectOnMain`; android
     устройство, вошедшее по копии, которую последним записало отставшее устройство, оставалось на прежнем ключе
     личного состояния навсегда (новые записи журнала не читались, свои — не читались другими). Тест — движок
     `revocation_flow.rs revocation_rotates_keys_epochs_and_ssk`.
+
+13. **Запрос виден и подтверждаем на ЛЮБОМ старом устройстве (31 окт 2026, решение пользователя)** — раньше
+    challenge «забирало» первое ответившее устройство: остальные видели в оффере чужой `challenge_pub`, не знали его
+    закрытой части и запрос не показывали (прод-подобный стенд 31 окт: телефон открыл шторку, desktop с
+    автоподтверждением запрос не увидел). Теперь устройство, выставляющее challenge, кладёт рядом обёртку закрытой
+    части своего ключа (32 байта P-256, big-endian):
+    `ctx = "parvane/v2/link-challenge\0" ‖ u32be‖адрес ‖ u32be‖устройство-цель ‖ u32be‖commitment ‖ u32be‖challenge_pub`
+    (строки — как на проводе, base64), `key = HKDF-SHA256(ikm = SSK seed, salt — нет, info = ctx)`,
+    `wrap = nonce(12) ‖ AES-256-GCM(key, nonce, d, aad = ctx)`; поле `LinkChallengeRequest.wrap`, сервер хранит его
+    рядом с первым challenge (`link_offers.challenge_wrap`, миграция identity `0018`) и отдаёт всем старым устройствам
+    в `LinkOffer.challenge_wrap`. Повтор challenge тем же ключом обёртку не меняет; новый оффер сбрасывает обе.
+    Другое старое устройство открывает обёртку движком (`linkChallengeUnwrap`), проверяет, что закрытая часть даёт
+    именно `challenge_pub`, показывает тот же код `SHA-256("parvane-link-sas-v2" ‖ new ‖ challenge)` и по
+    подтверждению запечатывает грант ЭТИМ ключом. Новое устройство не меняется: код один на всех устройствах, грант
+    принимается под ключ challenge (п. 5), кто бы из старых его ни выдал. Сервер принимает грант только под
+    зафиксированный challenge (грант под чужой ключ оффер не гасит) и после гранта убирает оффер — у остальных
+    старых устройств окно закрывается (web — диалог подтверждения на экране «Устройства», desktop —
+    `g_linkBoxes`, android — событие `link_request_gone`). Безопасность LINK-1 не ослаблена: ключ обёртки выводится из
+    SSK, которого у сервера нет; открыть обёртку могут ровно устройства, способные выдать грант (материал гранта
+    требует SSK); открытие доказывает, что challenge выставило своё устройство к ЭТОМУ обязательству и ключу (AAD и
+    info), — сервер не может ни подставить свой challenge другим старым устройствам, ни перенести чужой на другой
+    оффер, а ключ challenge по-прежнему появляется после обязательства и до раскрытия ключа нового устройства.
+    Обёртка не открылась (устройство без SSK, клиент без п. 13, подмена) — запрос на этом устройстве не показывается,
+    как раньше. Отказ на android (`declineLink`) запоминается по обязательству — ключ из обёртки не возвращает запрос.
+    Реализация: движок `backend/protocol/src/link.rs` (`Client::link_challenge_wrap/unwrap`, WASM
+    `linkChallengeWrap/Unwrap`, хосты — `call("linkChallengeWrap"/"linkChallengeUnwrap")`), identity `link.rs`
+    `store_link_challenge`/`store_link_grant`; web `provider.ts describeLinkOffer`/`adoptLinkChallenge`, `linking.ts`
+    (`generateLinkChallengeKey`, `exportLinkPrivateScalar`, `importLinkPrivateScalar`); ядро
+    `linking.h EphemeralKey::privateScalar/fromPrivateScalar`, `Session::linkChallengeWrap/Unwrap`; desktop
+    `parvane_client_linking.cpp AdoptLinkChallenge`; android `jni_account.cpp adoptLinkChallenge`. Тесты: движок
+    `link::tests`, identity `link_challenge_shared_by_all_old_devices`, живой `parvane-integration --test v2_link_live`,
+    web `conformance.test.ts` (LINK-1 п. 13), ядро `linking_tests` (обмен закрытой частью).
 
 Legacy-офферы v1 (без `commitment`, 6-значный код от одного ключа) не
 обслуживаются старым устройством. Код сверки не пишется в логи release-сборок.

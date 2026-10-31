@@ -374,6 +374,14 @@ export class PvClient {
      */
     legacyDevicesRequest(devices_json: string): any;
     /**
+     * LINK-1 п. 13: открыть обёртку challenge другого своего устройства → секрет (байты).
+     */
+    linkChallengeUnwrap(device_id: string, commitment: string, challenge_pub: string, wrap: Uint8Array): Uint8Array;
+    /**
+     * LINK-1 п. 13: обёртка закрытой части ключа challenge (секрет — байты) для своих устройств.
+     */
+    linkChallengeWrap(device_id: string, commitment: string, challenge_pub: string, secret: Uint8Array): Uint8Array;
+    /**
      * Материал гранта линковки: JSON {ssk, entries[], deliveryKey, gen} (hex/байты).
      */
     linkGrantMaterial(): Uint8Array;
@@ -965,6 +973,8 @@ export interface InitOutput {
     readonly pvclient_leftSskHolders: (a: number) => number;
     readonly pvclient_legacyDeliverRequest: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly pvclient_legacyDevicesRequest: (a: number, b: number, c: number, d: number) => void;
+    readonly pvclient_linkChallengeUnwrap: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly pvclient_linkChallengeWrap: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly pvclient_linkGrantMaterial: (a: number, b: number) => void;
     readonly pvclient_logDevices: (a: number, b: number, c: number, d: number) => void;
     readonly pvclient_logVersion: (a: number, b: number, c: number) => bigint;

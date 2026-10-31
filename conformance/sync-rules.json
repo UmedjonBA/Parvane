@@ -620,6 +620,19 @@
         "web": "web/telegram-tt/src/api/parvane/linking.ts (ECDH, commitment, SAS v2), provider.ts (оффер/challenge/грант; экспорт — `{linkVersion: 2, planner, cloud}` + грант движка вторым блобом; истории в экспорте нет со spec 033 — журнал истории), v2/linkKeys.ts, keyBackup.ts (ручная копия — устройство v2, без истории)",
         "desktop": "desktop/parvane-core/src/v2_link.cpp, linking.cpp (commitment, SAS v2), tdesktop parvane_client.cpp (оффер/challenge/грант; экспорт — `{linkVersion: 2, v2History}` (WithV2History, ImportV2History) + грант движка вторым блобом; со spec 029 материала v1 и transfer нет)",
         "android": "spec 031: android/jni/jni_account.cpp — обе роли: новое устройство (startLinkOffer, pollLinkGrantOnce: SAS sasCodeV2, грант только под свой challenge, грант движка вторым блобом → Session::joinWithGrant) и старое (pollLinkOffersOnce: commitmentMatches, grantLink: экспорт {linkVersion: 2, planner, cloud} + материал linkGrantMaterial); истории в экспорте нет со spec 033 — журнал истории аккаунта (jni_history.cpp); материала v1 нет — сценарий android/tgx_protocol_link_flow.sh (X в обеих ролях)"
+      },
+      "sharedChallenge": {
+        "since": "2026-10-31",
+        "wrapLabel": "parvane/v2/link-challenge\u0000",
+        "wrapKdf": "HKDF-SHA256(ssk, info=ctx)",
+        "wrapCipher": "AES-256-GCM, nonce 12, aad=ctx",
+        "requestField": "LinkChallengeRequest.wrap",
+        "offerField": "LinkOffer.challenge_wrap",
+        "engineCalls": [
+          "linkChallengeWrap",
+          "linkChallengeUnwrap"
+        ],
+        "grantOnlyUnderFixedChallenge": true
       }
     },
     {

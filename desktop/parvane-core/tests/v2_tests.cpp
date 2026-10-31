@@ -1,6 +1,7 @@
 // Parvane fork: протокол v2 без стека (spec 007, T061–T063): C ABI движка
 // слинкован и отвечает, владение памятью, ошибки need/error, отображение
 // содержимого v2 ↔ v1 и разбор событий "direct" для конвейера клиента.
+#include "parvane/linking.h"
 #include <cstdio>
 #include <string>
 
@@ -539,6 +540,41 @@ int main() {
             refused = true;
         }
         check(refused, "устройство без SSK грант не выдаёт");
+
+        // LINK-1 п. 13: ключ challenge первого устройства — второму через обёртку под SSK; тот же ключ, тот же код
+        const auto chal = parvane::linking::EphemeralKey::generate();
+        const auto scalar = chal->privateScalar();
+        const std::string commit = "Y29tbWl0bWVudA==";
+        const auto wrap = first->call("linkChallengeWrap", json{{"deviceId", "d9"}, {"commitment", commit},
+                                                                {"challengePub", chal->publicB64()},
+                                                                {"secret", v2::toBase64(scalar)}}).get<std::string>();
+        const auto opened = v2::fromBase64(second->call("linkChallengeUnwrap", json{{"deviceId", "d9"}, {"commitment", commit},
+                                                                 {"challengePub", chal->publicB64()}, {"wrap", wrap}}).get<std::string>());
+        const auto adopted = parvane::linking::EphemeralKey::fromPrivateScalar(opened, chal->publicB64());
+        check(scalar.size() == 32 && opened == scalar && adopted && adopted->publicB64() == chal->publicB64(),
+              "обёртка challenge: второе своё устройство получает тот же ключ");
+        const auto peer = parvane::linking::EphemeralKey::generate();
+        const auto box = adopted->seal(peer->publicB64(), "grant");
+        check(box && peer->open(chal->publicB64(), *box).value_or("") == "grant",
+              "грант, запечатанный принятым ключом, открывается под ключ challenge");
+        auto stranger = v2::Client::create("mallory@local", "m1", "local");
+        (void)stranger->createIdentity(1);
+        bool strangerRefused = false;
+        try {
+            (void)stranger->call("linkChallengeUnwrap", json{{"deviceId", "d9"}, {"commitment", commit},
+                                                            {"challengePub", chal->publicB64()}, {"wrap", wrap}});
+        } catch (const std::exception &) {
+            strangerRefused = true;
+        }
+        check(strangerRefused, "обёртку challenge чужой аккаунт не открывает");
+        bool movedRefused = false;
+        try {
+            (void)second->call("linkChallengeUnwrap", json{{"deviceId", "d9"}, {"commitment", "b3RoZXI="},
+                                                          {"challengePub", chal->publicB64()}, {"wrap", wrap}});
+        } catch (const std::exception &) {
+            movedRefused = true;
+        }
+        check(movedRefused, "обёртка к другому офферу не открывается");
     }
 
     {

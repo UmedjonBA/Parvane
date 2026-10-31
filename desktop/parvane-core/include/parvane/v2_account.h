@@ -132,6 +132,8 @@ void linkOffer(Control &c, const std::string &ephPub, const std::string &commitm
                const std::string &signingKey, bool revoke);
 struct LinkOffer {
     std::string deviceId, ephPub, commitment, signingKey, challengePub;
+    // LINK-1 п. 13: обёртка закрытой части ключа challenge под SSK (base64); пусто — challenge без обёртки.
+    std::string challengeWrap;
     std::int64_t createdMs = 0;
 };
 struct LinkGrant {
@@ -143,7 +145,9 @@ struct LinkPoll {
     std::string challenge;
 };
 [[nodiscard]] LinkPoll linkPoll(Control &c);
-void linkChallenge(Control &c, const std::string &deviceId, const std::string &ephPub);
+// wrap — LINK-1 п. 13: обёртка закрытой части ephPub для своих устройств (Session::linkChallengeWrap); пусто — без.
+void linkChallenge(Control &c, const std::string &deviceId, const std::string &ephPub,
+                   const std::string &wrap = std::string());
 void linkGrant(Control &c, const std::string &deviceId, const std::string &boxPayload,
                const std::string &ephPub);
 

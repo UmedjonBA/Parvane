@@ -694,6 +694,53 @@ async fn link_grant_requires_live_offer_and_reoffer_voids_grant() {
     assert!(grant.is_none(), "грант под старый эфемерный ключ погашен");
 }
 
+/// LINK-1 п. 13 (31 окт 2026): запрос виден ВСЕМ старым устройствам вместе с обёрткой первого challenge; грант
+/// выдаёт любое из них ключом этого challenge; после гранта оффер пропадает у всех; грант под чужой ключ оффер не
+/// гасит.
+#[tokio::test]
+async fn link_challenge_shared_by_all_old_devices() {
+    let pool = test_pool().await;
+    insert_user(&pool, "erin@local").await;
+    let n_pub_raw = [5u8; 65];
+    let n_pub = B64.encode(n_pub_raw);
+    let commitment = B64.encode(Sha256::digest(n_pub_raw));
+    store_link_offer(&pool, "erin@local", "dev-new", "", &commitment, "SIGN==", false).await.unwrap();
+    // Два старых устройства видят оффер
+    for dev in ["dev-phone", "dev-desk"] {
+        let (offers, _, _) = poll_link(&pool, "erin@local", dev).await.unwrap();
+        assert_eq!(offers.len(), 1, "{dev} видит запрос");
+        assert_eq!(offers[0].challenge_pub, "");
+    }
+    // Телефон выставил challenge с обёрткой первым; второй challenge (desk) — отказ, обёртку не затирает
+    store_link_challenge(&pool, "erin@local", "dev-new", "PHONE-PUB==", "PHONE-WRAP==").await.unwrap();
+    assert!(store_link_challenge(&pool, "erin@local", "dev-new", "DESK-PUB==", "DESK-WRAP==").await.is_err());
+    // Повтор тем же ключом с другой обёрткой зафиксированную не меняет
+    store_link_challenge(&pool, "erin@local", "dev-new", "PHONE-PUB==", "OTHER==").await.unwrap();
+    store_link_offer(&pool, "erin@local", "dev-new", &n_pub, &commitment, "", false).await.unwrap();
+    for dev in ["dev-phone", "dev-desk"] {
+        let (offers, _, _) = poll_link(&pool, "erin@local", dev).await.unwrap();
+        assert_eq!(offers[0].eph_pub, n_pub, "{dev}: ключ раскрыт");
+        assert_eq!(offers[0].challenge_pub, "PHONE-PUB==", "{dev}: один challenge у всех");
+        assert_eq!(offers[0].challenge_wrap, "PHONE-WRAP==", "{dev}: обёртка видна всем");
+    }
+    // Грант под ключ проигравшего challenge — отказ, оффер жив
+    assert!(store_link_grant(&pool, "erin@local", "dev-new", "BOX==", "DESK-PUB==").await.is_err());
+    let (offers, _, _) = poll_link(&pool, "erin@local", "dev-phone").await.unwrap();
+    assert_eq!(offers.len(), 1, "чужой грант оффер не гасит");
+    // Desktop (не выставлявший challenge) выдаёт грант ключом общего challenge — принят
+    store_link_grant(&pool, "erin@local", "dev-new", "BOX==", "PHONE-PUB==").await.unwrap();
+    for dev in ["dev-phone", "dev-desk"] {
+        let (offers, _, _) = poll_link(&pool, "erin@local", dev).await.unwrap();
+        assert!(offers.is_empty(), "{dev}: после гранта запрос исчез");
+    }
+    let (_, g, _) = poll_link(&pool, "erin@local", "dev-new").await.unwrap();
+    assert_eq!(g.map(|g| g.eph_pub).as_deref(), Some("PHONE-PUB=="));
+    // Переоффер сбрасывает challenge и обёртку
+    store_link_offer(&pool, "erin@local", "dev-new", "", &commitment, "SIGN==", false).await.unwrap();
+    let (offers, _, _) = poll_link(&pool, "erin@local", "dev-desk").await.unwrap();
+    assert_eq!((offers[0].challenge_pub.as_str(), offers[0].challenge_wrap.as_str()), ("", ""));
+}
+
 #[tokio::test]
 async fn link_v2_commitment_challenge_reveal() {
     let pool = test_pool().await;
@@ -713,9 +760,9 @@ async fn link_v2_commitment_challenge_reveal() {
     assert!(ch.is_none());
     // 2. Старое прикладывает свой эфемерный ключ; второй challenge другим
     //    ключом (подмена стороны) — отказ.
-    store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==").await.unwrap();
-    assert!(store_link_challenge(&pool, "dave@local", "dev-new", "MALLORY==").await.is_err());
-    assert!(store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==").await.is_ok(), "повтор того же — идемпотентен");
+    store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==", "").await.unwrap();
+    assert!(store_link_challenge(&pool, "dave@local", "dev-new", "MALLORY==", "").await.is_err());
+    assert!(store_link_challenge(&pool, "dave@local", "dev-new", "O-PUB==", "").await.is_ok(), "повтор того же — идемпотентен");
     let (_, _, ch) = poll_link(&pool, "dave@local", "dev-new").await.unwrap();
     assert_eq!(ch.as_deref(), Some("O-PUB=="));
     // 3. Раскрытие: ключ, не соответствующий обязательству, — отказ.

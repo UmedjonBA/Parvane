@@ -105,12 +105,41 @@ wait_log "$L1" "AUTOGROUPINVITE '$G' create → ok" 90 && ok "alice1: ссылк
 wait_log "$L2" "v2: ссылки-приглашения с других своих устройств: [1-9]" 30 \
   && ok "alice2: ссылка alice1 пришла из журнала личного состояния (T160)" || bad "alice2: ссылка alice1 не пришла"
 
-if grep -qE "запись не открыта|ошибка записи|E2E не удался" "$L1" "$L2" "$BL"; then
+# ── LINK-1 п. 13: запрос третьего устройства виден ОБОИМ старым, подтверждает второе ─────────────────────
+# alice1 без автоподтверждения выставляет challenge первой и показывает окно с кодом; alice2 видит чужой challenge,
+# открывает обёртку ключа (ключ из SSK), показывает тот же код и выдаёт грант; у alice1 запрос снимается.
+stop_pid "$P1"; stop_pid "$P2"
+A3="$SB/alice3"; L3="$A3/td/log.txt"
+P1=$(start_client "$A1" alice@local)
+wait_log "$L1" "v2: готов" 90 && ok "alice1 (без автоподтверждения) поднялась" || bad "alice1: v2 не поднялся"
+P3=$(start_client "$A3" alice@local)
+wait_log "$L3" "линковка: оффер \(обязательство\) опубликован" 90 && ok "alice3 опубликовала оффер" || bad "alice3 без оффера"
+wait_log "$L1" "линковка: challenge к [^ ]+ выставлен$" 60 && ok "alice1 выставила challenge с обёрткой" \
+  || bad "alice1: challenge с обёрткой не выставлен"
+wait_log "$L1" "запрос переноса истории от устройства [^ ]+, код готов" 60 && ok "alice1 показала запрос с кодом" \
+  || bad "alice1: запрос alice3 не показан"
+P2=$(start_client "$A2" alice@local PARVANE_AUTOLINK_GRANT=1)
+wait_log "$L2" "challenge к [^ ]+ выставило другое своё устройство" 90 \
+  && ok "alice2 приняла challenge alice1 из обёртки" || bad "alice2: challenge alice1 не принят"
+wait_log "$L2" "запрос переноса истории от устройства [^ ]+, код готов" 30 && ok "alice2 тоже показала запрос" \
+  || bad "alice2: запрос alice3 не показан"
+wait_log "$L2" "линковка: грант выдан" 60 && ok "alice2 выдала грант" || bad "alice2: грант не выдан"
+wait_log "$L3" "v2: устройство привязано грантом линковки" 90 && ok "alice3 вступила по гранту alice2" \
+  || bad "alice3 не вступила в журнал устройств"
+wait_log "$L1" "линковка: запрос устройства [^ ]+ снят" 30 && ok "alice1: окно запроса закрылось" \
+  || bad "alice1: запрос не снят после гранта alice2"
+grep -q "линковка: грант выдан" "$L1" && bad "alice1 выдала грант без подтверждения" || ok "alice1 грант не выдавала"
+sas_of() { grep -aoE "код сверки [0-9]{4} [0-9]{4} [0-9]{4}" "$1" | tail -1 | cut -d' ' -f3-; }
+C1=$(sas_of "$L1"); C2=$(sas_of "$L2"); C3=$(sas_of "$L3")
+[ -n "$C3" ] && [ "$C1" = "$C3" ] && [ "$C2" = "$C3" ] && ok "код сверки один на трёх устройствах ($C3)" \
+  || bad "коды сверки различаются: alice1='$C1' alice2='$C2' alice3='$C3'"
+
+if grep -qE "запись не открыта|ошибка записи|E2E не удался" "$L1" "$L2" "$L3" "$BL"; then
   bad "в логах есть сбои записей v2"
 else
   ok "сбоев записей v2 нет"
 fi
-grep -qiE "Fatal|Unexpected in " "$L1" "$L2" "$BL" && bad "фатальная ошибка" || ok "без фатальных ошибок"
-stop_pid "$P1"; stop_pid "$P2"; stop_pid "$PB"
+grep -qiE "Fatal|Unexpected in " "$L1" "$L2" "$L3" "$BL" && bad "фатальная ошибка" || ok "без фатальных ошибок"
+stop_pid "$P1"; stop_pid "$P2"; stop_pid "$P3"; stop_pid "$PB"
 stack_stop
 finish "verify_protocol_v2_link"

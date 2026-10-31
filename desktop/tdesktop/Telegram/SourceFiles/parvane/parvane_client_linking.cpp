@@ -30,9 +30,14 @@ bool g_linkActive = false;
 // офферов тоже. Грант, пришедший туда, ждёт здесь ближайшего опроса своего
 // оффера (иначе терялся: опрос офферов каждые 10 с съедал его раньше).
 parvane::json g_linkPendingGrant;
-// Старое устройство: свой эфемерный ключ на каждый challenge (device_id → ключ)
-// и офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
-std::map<QString, parvane::linking::EphemeralKey> g_linkChallenges;
+// Старое устройство: ключ challenge на каждый оффер (device_id → ключ и обязательство, к которому он относится) —
+// свой либо (LINK-1 п. 13) ключ challenge другого своего устройства из обёртки под SSK: запрос виден и подтверждаем
+// на любом старом устройстве, код у всех один. И офферы, уже показанные пользователю (device_id → раскрытый eph_pub).
+struct LinkChallengeKey {
+	parvane::linking::EphemeralKey key;
+	std::string commitment;
+};
+std::map<QString, LinkChallengeKey> g_linkChallenges;
 QHash<QString, QString> g_linkOffersShown;
 // Окна подтверждения привязки по устройству (только main): запрос исчез — окно закрывается само
 QHash<QString, base::weak_qptr<Ui::GenericBox>> g_linkBoxes;
@@ -294,7 +299,7 @@ void GrantLink(const QString &deviceId, const QString &ephPub, const QString &si
 		std::lock_guard<std::mutex> lk(g_sessionMutex);
 		t = g_control;
 		if (const auto it = g_linkChallenges.find(deviceId); it != g_linkChallenges.end()) {
-			own = it->second;
+			own = it->second.key;
 		}
 	}
 	if (!t || !own) {
@@ -345,6 +350,32 @@ void GrantLink(const QString &deviceId, const QString &ephPub, const QString &si
 	}
 }
 
+// LINK-1 п. 13: ключ challenge другого своего устройства — из обёртки, открываемой ключом из SSK. Открытие доказывает,
+// что challenge выставило своё устройство к ЭТОМУ обязательству и ключу.
+std::optional<parvane::linking::EphemeralKey> AdoptLinkChallenge(const QString &dev, const std::string &commitment,
+		const std::string &challengePub, const std::string &wrap) {
+	if (wrap.empty()) {
+		return std::nullopt;
+	}
+	const auto s = V2Ready();
+	if (!s) {
+		return std::nullopt;
+	}
+	auto scalar = s->linkChallengeUnwrap(dev.toStdString(), commitment, challengePub, wrap);
+	if (scalar.empty()) {
+		LOG(("Parvane: линковка: обёртка challenge к %1 не открылась").arg(dev));
+		return std::nullopt;
+	}
+	auto key = parvane::linking::EphemeralKey::fromPrivateScalar(scalar, challengePub);
+	std::fill(scalar.begin(), scalar.end(), '\0');
+	if (!key || key->publicB64() != challengePub) {
+		LOG(("Parvane: линковка: ключ challenge к %1 не сходится с открытым").arg(dev));
+		return std::nullopt;
+	}
+	LOG(("Parvane: линковка: challenge к %1 выставило другое своё устройство — запрос показываем и здесь").arg(dev));
+	return key;
+}
+
 // Воркер (старое устройство): опрос чужих офферов → challenge → после
 // раскрытия ключа подтверждение с SAS-кодом. Legacy-офферы v1 (без
 // обязательства) не обслуживаются.
@@ -384,7 +415,8 @@ void PollLinkOffersOnce() {
 			}
 			offers.push_back(parvane::json{ { "device_id", o.deviceId }, { "eph_pub", o.ephPub },
 				{ "commitment", o.commitment }, { "signing_key", o.signingKey },
-				{ "challenge_pub", o.challengePub }, { "created_at", o.createdMs / 1000 } });
+				{ "challenge_pub", o.challengePub }, { "challenge_wrap", o.challengeWrap },
+				{ "created_at", o.createdMs / 1000 } });
 		}
 	} catch (const std::exception &) {
 		return;
@@ -418,6 +450,7 @@ void PollLinkOffersOnce() {
 					if (const auto box = g_linkBoxes.take(dev).get()) {
 						box->closeBox();
 					}
+					LOG(("Parvane: линковка: запрос устройства %1 снят (грант выдан или оффер отозван)").arg(dev));
 				}
 			});
 		}
@@ -434,34 +467,55 @@ void PollLinkOffersOnce() {
 		if (dev.isEmpty() || commitment.empty()) {
 			continue;
 		}
+		const auto challengeWrap = o.value("challenge_wrap", std::string());
 		std::optional<parvane::linking::EphemeralKey> own;
 		{
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
 			if (const auto it = g_linkChallenges.find(dev); it != g_linkChallenges.end()) {
-				own = it->second;
+				if (it->second.commitment == commitment) {
+					own = it->second.key;
+				} else {
+					g_linkChallenges.erase(it); // новое устройство переофферило — ключ относился к прежнему
+				}
 			}
 		}
-		if (!own && !challengePub.empty()) {
-			continue; // challenge выставило другое наше устройство
+		if (!challengePub.empty() && (!own || challengePub != own->publicB64())) {
+			// LINK-1 п. 13: challenge выставило другое наше устройство (или наш проиграл гонку) — ключ из обёртки
+			// под SSK. Не открылась — challenge не нашего аккаунта либо подмена: запрос не показываем
+			own = AdoptLinkChallenge(dev, commitment, challengePub, challengeWrap);
+			if (!own) {
+				continue;
+			}
+			std::lock_guard<std::mutex> lk(g_sessionMutex);
+			g_linkChallenges.insert_or_assign(dev, LinkChallengeKey{ *own, commitment });
 		}
 		if (!own || challengePub.empty()) {
-			// Нет challenge (или новое устройство переофферило — сервер его
-			// сбросил): шлём свой ключ; при повторе — тот же (идемпотентно).
+			// Нет challenge: шлём свой ключ с обёрткой для своих устройств; при повторе — тот же (идемпотентно).
 			auto key = own ? own : parvane::linking::EphemeralKey::generate();
 			if (!key) {
 				continue;
 			}
+			std::string wrap;
+			if (const auto s = V2Ready()) {
+				auto scalar = key->privateScalar();
+				if (!scalar.empty()) {
+					wrap = s->linkChallengeWrap(dev.toStdString(), commitment, key->publicB64(), scalar);
+					std::fill(scalar.begin(), scalar.end(), '\0');
+				}
+			}
 			try {
-				parvane::v2::account::linkChallenge(*t, dev.toStdString(), key->publicB64());
+				parvane::v2::account::linkChallenge(*t, dev.toStdString(), key->publicB64(), wrap);
 			} catch (const std::exception &) {
 				continue;
 			}
+			LOG(("Parvane: линковка: challenge к %1 выставлен%2")
+				.arg(dev, wrap.empty() ? u" (без обёртки)"_q : QString()));
 			std::lock_guard<std::mutex> lk(g_sessionMutex);
-			g_linkChallenges.insert_or_assign(dev, *key);
+			g_linkChallenges.insert_or_assign(dev, LinkChallengeKey{ *key, commitment });
 			continue;
 		}
-		if (challengePub != own->publicB64() || eph.isEmpty()) {
-			continue; // ждём раскрытия ключа (или это чужой challenge)
+		if (eph.isEmpty()) {
+			continue; // ждём раскрытия ключа
 		}
 		if (!parvane::linking::commitmentMatches(eph.toStdString(), commitment)) {
 			LOG(("Parvane: линковка: ключ оффера %1 не соответствует обязательству").arg(dev));

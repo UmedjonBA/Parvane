@@ -464,6 +464,73 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
     rule9.shareFields.forEach((field) => expect(proto).toMatch(new RegExp(`(bytes|string) ${field} = \\d+`)));
   });
 
+  // LINK-1 п. 13 (31 окт 2026): запрос виден и подтверждаем на любом старом устройстве — ключ challenge другим своим
+  // устройствам обёрткой под SSK, код у всех один
+  it('п. 13: ключ challenge — другим своим устройствам обёрткой под SSK, код и грант те же', async () => {
+    const shared = (r as unknown as {
+      sharedChallenge: { requestField: string; offerField: string; engineCalls: string[];
+        grantOnlyUnderFixedChallenge: boolean; };
+    }).sharedChallenge;
+    expect(shared.grantOnlyUnderFixedChallenge).toBe(true);
+    const { PvClient } = await import('../../lib/parvane-protocol/parvane_protocol');
+    const {
+      exportLinkPrivateScalar, exportLinkPublicKey, generateLinkChallengeKey, generateLinkKeyPair,
+      importLinkPrivateScalar, linkCommitment, openLinkBox, sasCodeV2, sealLinkBox,
+    } = await import('./linking');
+    const first = new PvClient('alice@local', 'd1', 'local');
+    first.createIdentity(1);
+    const second = new PvClient('alice@local', 'd2', 'local');
+    second.joinWithGrant(first.linkGrantMaterial(), 1);
+    const stranger = new PvClient('mallory@local', 'm1', 'local');
+    stranger.createIdentity(1);
+
+    const fresh = await generateLinkKeyPair();
+    const newPub = await exportLinkPublicKey(fresh);
+    const commitment = await linkCommitment(newPub);
+    const challenge = await generateLinkChallengeKey();
+    const challengePub = await exportLinkPublicKey(challenge);
+    const scalar = await exportLinkPrivateScalar(challenge.privateKey);
+    expect(scalar.length).toBe(32);
+    const wrap = first.linkChallengeWrap('d3', commitment, challengePub, scalar);
+    const opened = second.linkChallengeUnwrap('d3', commitment, challengePub, wrap);
+    expect(Array.from(opened)).toEqual(Array.from(scalar));
+    expect(() => stranger.linkChallengeUnwrap('d3', commitment, challengePub, wrap)).toThrow();
+    const otherCommitment = await linkCommitment(challengePub);
+    expect(() => second.linkChallengeUnwrap('d3', otherCommitment, challengePub, wrap)).toThrow();
+    const adopted = await importLinkPrivateScalar(opened, challengePub);
+    expect(adopted).toBeDefined();
+    // Чужой открытый ключ к закрытой части не подходит
+    expect(await importLinkPrivateScalar(opened, newPub)).toBeUndefined();
+    // Грант второго устройства новое открывает под ключ challenge — код у всех один
+    const box = await sealLinkBox(adopted!, newPub, { file_id: 'f', file_key: 'k', file_nonce: 'n' });
+    expect((await openLinkBox(fresh.privateKey, challengePub, box))?.file_id).toBe('f');
+    expect(await sasCodeV2(newPub, challengePub)).toMatch(/^\d{4} \d{4} \d{4}$/);
+    [first, second, stranger].forEach((client) => client.free());
+
+    // Провод и клиенты
+    const proto = readRepo('proto/parvane/identity/v2/identity.proto');
+    expect(proto).toContain('string wrap = 3');
+    expect(proto).toContain('string challenge_wrap = 7');
+    expect(shared.requestField).toBe('LinkChallengeRequest.wrap');
+    expect(shared.offerField).toBe('LinkOffer.challenge_wrap');
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('own = await adoptLinkChallenge(offer);');
+    expect(provider).toContain('v2Controller.linkChallengeWrap(offer.device_id, offer.commitment, state.pub, scalar)');
+    expect(readRepo('web/telegram-tt/src/api/parvane/v2/bridge.ts')).toContain('wrap: str(p, \'wrap\')');
+    const engine = readRepo('backend/protocol/src/host/call.rs');
+    shared.engineCalls.forEach((name) => expect(engine).toContain(`"${name}" =>`));
+    const desktop = readDesktopSource();
+    expect(desktop).toContain('own = AdoptLinkChallenge(dev, commitment, challengePub, challengeWrap);');
+    expect(desktop).toContain('parvane::v2::account::linkChallenge(*t, dev.toStdString(), key->publicB64(), wrap);');
+    const android = readAndroidJni('jni_account.cpp');
+    expect(android).toContain('own = adoptLinkChallenge(o);');
+    expect(android).toContain('parvane::v2::account::linkChallenge(*c, o.deviceId, key->publicB64(), wrap);');
+    expect(android).toContain('emit(json{{"type", "link_request_gone"}, {"device_id", id}});');
+    const server = readRepo('backend/shards/identity/src/link.rs');
+    expect(server).toContain('challenge_wrap = CASE WHEN challenge_wrap');
+    expect(server).toContain('Под зафиксированный challenge — только его ключом');
+  });
+
   it('правило LINK-1 задокументировано в sync-rules.json', () => {
     expect(r.sasDigits).toBe(12);
     expect(r.sasInfo).toBe('parvane-link-sas-v2');
@@ -2849,14 +2916,18 @@ describe('READ-2: прочитанное на одном своём устрой
     const engine = readRepo('backend/protocol/src/history.rs');
     expect(engine).toContain('pub fn history_chat_key(p: &Peer) -> Result<String> {');
     expect(engine).toContain('Ok(format!("g:{}", hex::encode(&r.id)))');
-    expect(engine).toContain('pub fn is_unread(s: &RowState, mark: Option<&ReadMark>, selves: &[&str]) -> Result<bool> {');
+    expect(engine).toContain(
+      'pub fn is_unread(s: &RowState, mark: Option<&ReadMark>, selves: &[&str]) -> Result<bool> {',
+    );
     expect(engine).toContain('pub fn self_addresses(&self) -> Vec<String> {');
     const host = readRepo('backend/protocol/src/host/history.rs');
     expect(host).toContain('"selfAddresses" => json!(s.self_addresses()),');
     expect(host).toContain('"historyChatKey" =>');
     // web: свои адреса — из сессии журнала
-    expect(readRepo('web/telegram-tt/src/api/parvane/v2/history.ts')).toContain("selves = callSession<string[]>('selfAddresses');");
-    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts')).toContain('const fromEngine = historyJournal.selfAddresses();');
+    expect(readRepo('web/telegram-tt/src/api/parvane/v2/history.ts'))
+      .toContain('selves = callSession<string[]>(\'selfAddresses\');');
+    expect(readRepo('web/telegram-tt/src/api/parvane/provider.ts'))
+      .toContain('const fromEngine = historyJournal.selfAddresses();');
     // ядро: ключ группы без домена, свои адреса из сессии
     const core = readRepo('desktop/parvane-core/src/history_sync.cpp');
     expect(core).toContain('return "g:" + hexOf(*raw);');

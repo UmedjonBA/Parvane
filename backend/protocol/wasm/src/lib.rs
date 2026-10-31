@@ -303,6 +303,18 @@ impl PvClient {
         Ok(m.to_string().into_bytes())
     }
 
+    /// LINK-1 п. 13: обёртка закрытой части ключа challenge (секрет — байты) для своих устройств.
+    #[wasm_bindgen(js_name = linkChallengeWrap)]
+    pub fn link_challenge_wrap(&self, device_id: &str, commitment: &str, challenge_pub: &str, secret: &[u8]) -> Result<Vec<u8>, JsValue> {
+        self.inner.link_challenge_wrap(device_id, commitment, challenge_pub, secret).map_err(err_proto)
+    }
+
+    /// LINK-1 п. 13: открыть обёртку challenge другого своего устройства → секрет (байты).
+    #[wasm_bindgen(js_name = linkChallengeUnwrap)]
+    pub fn link_challenge_unwrap(&self, device_id: &str, commitment: &str, challenge_pub: &str, wrap: &[u8]) -> Result<Vec<u8>, JsValue> {
+        self.inner.link_challenge_unwrap(device_id, commitment, challenge_pub, wrap).map(|s| s.to_vec()).map_err(err_proto)
+    }
+
     /// Новое устройство после линковки: материал гранта (см. linkGrantMaterial).
     #[wasm_bindgen(js_name = joinWithGrant)]
     pub fn join_with_grant(&mut self, material: &[u8], otk_count: usize) -> Result<Array, JsValue> {

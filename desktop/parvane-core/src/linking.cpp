@@ -1,6 +1,7 @@
 // Parvane fork: см. linking.h. OpenSSL 3 EVP.
 #include "parvane/linking.h"
 
+#include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -204,6 +205,75 @@ std::optional<EphemeralKey> EphemeralKey::fromPrivateDerB64(const std::string &p
     EphemeralKey k;
     k._pubB64 = b64encode(pub);
     k._privB64 = privB64;
+    return k;
+}
+
+std::string EphemeralKey::privateScalar() const {
+    const auto der = b64decode(_privB64);
+    if (!der) {
+        return {};
+    }
+    auto pkey = privateFromDer(*der);
+    if (!pkey) {
+        return {};
+    }
+    BIGNUM *d = nullptr;
+    if (EVP_PKEY_get_bn_param(pkey.get(), OSSL_PKEY_PARAM_PRIV_KEY, &d) != 1 || !d) {
+        return {};
+    }
+    std::string out(32, '\0');
+    const int n = BN_bn2binpad(d, reinterpret_cast<unsigned char *>(out.data()), 32);
+    BN_clear_free(d);
+    return n == 32 ? out : std::string();
+}
+
+std::optional<EphemeralKey> EphemeralKey::fromPrivateScalar(const std::string &scalar32, const std::string &pubB64) {
+    const auto pub = b64decode(pubB64);
+    if (scalar32.size() != 32 || !pub || pub->size() != 65 || static_cast<unsigned char>((*pub)[0]) != 0x04) {
+        return std::nullopt;
+    }
+    BIGNUM *d = BN_bin2bn(reinterpret_cast<const unsigned char *>(scalar32.data()), 32, nullptr);
+    if (!d) {
+        return std::nullopt;
+    }
+    OSSL_PARAM_BLD *bld = OSSL_PARAM_BLD_new();
+    if (!bld) {
+        BN_clear_free(d);
+        return std::nullopt;
+    }
+    OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, "prime256v1", 0);
+    OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY, pub->data(), pub->size());
+    OSSL_PARAM_BLD_push_BN(bld, OSSL_PKEY_PARAM_PRIV_KEY, d);
+    OSSL_PARAM *params = OSSL_PARAM_BLD_to_param(bld);
+    OSSL_PARAM_BLD_free(bld);
+    BN_clear_free(d);
+    if (!params) {
+        return std::nullopt;
+    }
+    std::unique_ptr<EVP_PKEY_CTX, CtxDel> ctx(EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr));
+    EVP_PKEY *raw = nullptr;
+    const bool built = ctx && EVP_PKEY_fromdata_init(ctx.get()) == 1
+        && EVP_PKEY_fromdata(ctx.get(), &raw, EVP_PKEY_KEYPAIR, params) == 1;
+    OSSL_PARAM_free(params);
+    if (!built || !raw) {
+        return std::nullopt;
+    }
+    Pkey pkey(raw);
+    // Открытый ключ обязан быть d·G: иначе грант запечатался бы ключом, под который новое устройство не откроет
+    std::unique_ptr<EVP_PKEY_CTX, CtxDel> check(EVP_PKEY_CTX_new_from_pkey(nullptr, pkey.get(), nullptr));
+    if (!check || EVP_PKEY_pairwise_check(check.get()) != 1) {
+        return std::nullopt;
+    }
+    unsigned char *der = nullptr;
+    const int derlen = i2d_PrivateKey(pkey.get(), &der);
+    if (derlen <= 0) {
+        return std::nullopt;
+    }
+    std::string priv(reinterpret_cast<char *>(der), static_cast<size_t>(derlen));
+    OPENSSL_clear_free(der, static_cast<size_t>(derlen));
+    EphemeralKey k;
+    k._pubB64 = b64encode(*pub);
+    k._privB64 = b64encode(priv);
     return k;
 }
 

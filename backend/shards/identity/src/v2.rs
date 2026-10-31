@@ -738,6 +738,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
                     signing_key: s(o, "signing_key"),
                     created_ms: o["created_at"].as_i64().unwrap_or(0) * 1000,
                     challenge_pub: s(o, "challenge_pub"),
+                    challenge_wrap: s(o, "challenge_wrap"),
                 })
                 .collect();
             let grant = v.get("grant").filter(|g| g.is_object()).map(|g| pb::LinkGrant {
@@ -755,7 +756,7 @@ async fn dispatch(ctx: &V2Ctx, m: &'static MethodInfo, req: ShardRequest) -> Rep
             if !log_has_active_device(&req.user, &req.device_id).await {
                 return Err(ErrorCode::Forbidden);
             }
-            let v = v1_call(nc, json!({"token": req.token, "device_id": r.device_id, "eph_pub": r.eph_pub}), |msg| handle_link_challenge(nc, pool, dec, msg)).await?;
+            let v = v1_call(nc, json!({"token": req.token, "device_id": r.device_id, "eph_pub": r.eph_pub, "wrap": r.wrap}), |msg| handle_link_challenge(nc, pool, dec, msg)).await?;
             v1_ok(&v)?;
             Ok(pb::LinkChallengeResponse {}.encode_to_vec())
         }

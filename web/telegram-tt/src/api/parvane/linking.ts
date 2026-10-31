@@ -38,6 +38,53 @@ export async function exportLinkPublicKey(keyPair: CryptoKeyPair): Promise<strin
   return bytesToBase64(new Uint8Array(raw));
 }
 
+// LINK-1 п. 13: ключ challenge старого устройства — извлекаемый: его закрытая часть (32 байта) заворачивается
+// движком под ключ из SSK, чтобы другие свои устройства показали тот же код и могли выдать грант
+export async function generateLinkChallengeKey() {
+  return crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  );
+}
+
+// Закрытая часть P-256 — 32 байта big-endian (JWK `d`)
+export async function exportLinkPrivateScalar(privateKey: CryptoKey): Promise<Uint8Array> {
+  const jwk = await crypto.subtle.exportKey('jwk', privateKey);
+  return base64UrlToBytes(jwk.d || '');
+}
+
+// Закрытый ключ challenge из 32 байт и известного открытого ключа (несжатая точка). undefined — пара не сходится
+// (проверка ECDH с временным ключом: общий секрет с обеих сторон должен совпасть)
+export async function importLinkPrivateScalar(scalar: Uint8Array, pubB64: string): Promise<CryptoKey | undefined> {
+  try {
+    const pub = base64ToBytes(pubB64);
+    if (scalar.length !== 32 || pub.length !== 65 || pub[0] !== 4) return undefined;
+    const privateKey = await crypto.subtle.importKey('jwk', {
+      kty: 'EC',
+      crv: 'P-256',
+      d: bytesToBase64Url(scalar),
+      x: bytesToBase64Url(pub.subarray(1, 33)),
+      y: bytesToBase64Url(pub.subarray(33, 65)),
+      ext: false,
+    }, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    const probe = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    const challengePublic = await crypto.subtle.importKey(
+      'raw', bytesToBuffer(pub), { name: 'ECDH', namedCurve: 'P-256' }, false, [],
+    );
+    const viaScalar = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: probe.publicKey }, privateKey, 256,
+    ));
+    const viaPublic = new Uint8Array(await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: challengePublic }, probe.privateKey, 256,
+    ));
+    if (viaScalar.length !== viaPublic.length || viaScalar.some((b, i) => b !== viaPublic[i])) return undefined;
+    return privateKey;
+  } catch {
+    return undefined;
+  }
+}
+
 // 6-значный код из отпечатка эфемерного ключа НОВОГО устройства: обе стороны
 // считают его от одного и того же оффера
 export async function sasCodeForEphPub(ephPubB64: string): Promise<string> {
@@ -153,4 +200,13 @@ function base64ToBytes(data: string) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function bytesToBase64Url(bytes: Uint8Array) {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(data: string) {
+  const b64 = data.replace(/-/g, '+').replace(/_/g, '/');
+  return base64ToBytes(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
 }

@@ -348,6 +348,7 @@ LinkPoll linkPoll(Control &c) {
             offer.signingKey = str2(o, "signingKey", "signing_key");
             offer.createdMs = int2(o, "createdMs", "created_ms");
             offer.challengePub = str2(o, "challengePub", "challenge_pub");
+            offer.challengeWrap = str2(o, "challengeWrap", "challenge_wrap");
             out.offers.push_back(std::move(offer));
         }
     }
@@ -358,8 +359,8 @@ LinkPoll linkPoll(Control &c) {
     return out;
 }
 
-void linkChallenge(Control &c, const std::string &deviceId, const std::string &ephPub) {
-    (void)c.call("identity.link.challenge", json{{"device_id", deviceId}, {"eph_pub", ephPub}});
+void linkChallenge(Control &c, const std::string &deviceId, const std::string &ephPub, const std::string &wrap) {
+    (void)c.call("identity.link.challenge", json{{"device_id", deviceId}, {"eph_pub", ephPub}, {"wrap", wrap}});
 }
 
 void linkGrant(Control &c, const std::string &deviceId, const std::string &boxPayload, const std::string &ephPub) {

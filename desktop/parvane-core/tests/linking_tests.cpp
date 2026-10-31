@@ -69,6 +69,16 @@ int main() {
           "sasCodeV2: другой ключ старого устройства → другой код");
     check(sasCodeV2("не-base64!", oldB64).empty(), "sasCodeV2: мусор → пусто");
 
+    // LINK-1 п. 13: закрытая часть 32 байта ↔ ключ (обёртка challenge под SSK для своих устройств)
+    const auto scalar = a->privateScalar();
+    check(scalar.size() == 32, "privateScalar: 32 байта");
+    const auto back = EphemeralKey::fromPrivateScalar(scalar, a->publicB64());
+    check(back && back->publicB64() == a->publicB64(), "fromPrivateScalar: тот же открытый ключ");
+    const auto viaBack = back ? back->seal(b->publicB64(), plain) : std::nullopt;
+    check(viaBack && b->open(a->publicB64(), *viaBack).value_or("") == plain, "fromPrivateScalar: бокс открывается под исходный ключ");
+    check(!EphemeralKey::fromPrivateScalar(scalar, b->publicB64()).has_value(), "fromPrivateScalar: чужой открытый ключ → nullopt");
+    check(!EphemeralKey::fromPrivateScalar(scalar.substr(0, 31), a->publicB64()).has_value(), "fromPrivateScalar: не 32 байта → nullopt");
+
     std::printf("%s\n", g_fail ? "FAILED" : "ALL OK");
     return g_fail ? 1 : 0;
 }

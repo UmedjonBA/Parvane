@@ -142,7 +142,13 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     const status = await callParvane('parvaneGetLinkStatus') as LinkStatus | undefined;
     setLinkStatus(status);
     const offers = await callParvane('parvaneListLinkOffers') as { offers: LinkOffer[] } | undefined;
-    setLinkOffers(offers?.offers || []);
+    const liveOffers = offers?.offers || [];
+    setLinkOffers(liveOffers);
+    // LINK-1 п. 13: запрос подтвердило другое своё устройство (или он истёк) — окно подтверждения закрывается
+    setConfirmingOffer((current) => (
+      current && !liveOffers.some((offer) => offer.deviceId === current.deviceId && offer.code === current.code)
+        ? undefined : current
+    ));
     setSskState(await callParvane('parvaneGetSskState') as SskState | undefined);
     const left = await callParvane('parvaneGetLeftDevices') as { deviceIds: string[] } | undefined;
     setLeftDevices(left?.deviceIds || []);

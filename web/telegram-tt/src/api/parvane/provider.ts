@@ -37,7 +37,7 @@ import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
 import { DEFAULT_APP_CONFIG } from '../../limits';
-import { bytesToBase64 } from './v2/base64';
+import { base64ToBytes, bytesToBase64 } from './v2/base64';
 import {
   createV2Controller, type KeyJoinOutcome, type V2DeviceBackup,
 } from './v2/controller';
@@ -74,8 +74,11 @@ import { createHistoryRows } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
 import { langPackMethods } from './langPacks';
 import {
+  exportLinkPrivateScalar,
   exportLinkPublicKey,
+  generateLinkChallengeKey,
   generateLinkKeyPair,
+  importLinkPrivateScalar,
   type LinkBoxPayload,
   linkCommitment,
   linkCommitmentMatches,
@@ -1563,10 +1566,12 @@ const linkRuntime: LinkRuntime = { generation: 0 };
 // ближайший опрос своего оффера
 let pendingLinkGrant: { box_payload: string; eph_pub: string } | undefined;
 
-// Старое устройство: свой эфемерный ключ на каждый challenge (по целевому
-// устройству). Приватный ключ живёт только в памяти вкладки.
-// `shownEph` — ключ нового устройства, по которому посчитан ПОКАЗАННЫЙ код сверки: грант допустим только под него
-type LinkChallengeState = { keyPair: CryptoKeyPair; pub: string; shownEph?: string };
+// Старое устройство: ключ challenge на каждый оффер (по целевому устройству) — свой либо (LINK-1 п. 13) ключ
+// challenge другого своего устройства из обёртки под SSK: запрос виден и подтверждаем на любом старом устройстве,
+// код у всех один. Приватный ключ живёт только в памяти вкладки.
+// `commitment` — обязательство оффера, к которому относится ключ; `shownEph` — ключ нового устройства, по которому
+// посчитан ПОКАЗАННЫЙ код сверки: грант допустим только под него
+type LinkChallengeState = { privateKey: CryptoKey; pub: string; commitment: string; shownEph?: string };
 const linkChallenges = new Map<string, LinkChallengeState>();
 
 type LinkOfferWire = {
@@ -1576,6 +1581,7 @@ type LinkOfferWire = {
   commitment?: string;
   signing_key?: string;
   challenge_pub?: string;
+  challenge_wrap?: string;
 };
 
 function stopHistoryLink() {
@@ -1769,25 +1775,47 @@ async function joinV2WithLinkGrant(coords: LinkBoxPayload['v2']) {
 // только от ключа, который сервер мог подменить.
 async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: string; code?: string } | undefined> {
   if (!offer.commitment) return undefined;
-  const own = linkChallenges.get(offer.device_id);
-  if (offer.challenge_pub && own && offer.challenge_pub !== own.pub) {
-    // Challenge выставило другое наше устройство — грант отсюда невозможен
-    return undefined;
+  let own = linkChallenges.get(offer.device_id);
+  if (own && own.commitment !== offer.commitment) {
+    // Новое устройство переофферило: прежний ключ относился к другому обязательству
+    linkChallenges.delete(offer.device_id);
+    own = undefined;
+  }
+  if (offer.challenge_pub && (!own || offer.challenge_pub !== own.pub)) {
+    // LINK-1 п. 13: challenge выставило другое наше устройство (или наш challenge проиграл гонку) — берём его ключ
+    // из обёртки под SSK. Не открылась — challenge не нашего аккаунта либо подмена: запрос не показываем
+    own = await adoptLinkChallenge(offer);
+    if (!own) return undefined;
+    linkChallenges.set(offer.device_id, own);
   }
   if (!own || !offer.challenge_pub) {
-    // Нет challenge (или новое устройство переофферило — сервер его сбросил):
-    // шлём свой ключ; при повторе — тот же (сервер принимает идемпотентно)
-    const keyPair = own?.keyPair || await generateLinkKeyPair();
-    const pub = own?.pub || await exportLinkPublicKey(keyPair);
+    // Нет challenge: шлём свой ключ с обёрткой для своих устройств; при повторе — тот же (сервер принимает
+    // идемпотентно)
+    let state = own;
+    if (!state) {
+      const keyPair = await generateLinkChallengeKey();
+      state = {
+        privateKey: keyPair.privateKey, pub: await exportLinkPublicKey(keyPair), commitment: offer.commitment,
+      };
+    }
+    let wrap = '';
+    try {
+      const scalar = await exportLinkPrivateScalar(state.privateKey);
+      const wrapped = v2Controller.linkChallengeWrap(offer.device_id, offer.commitment, state.pub, scalar);
+      scalar.fill(0);
+      if (wrapped) wrap = bytesToBase64(wrapped);
+    } catch {
+      // без обёртки запрос подтверждается только здесь (как до LINK-1 п. 13)
+    }
     try {
       const raw = await connection!.request(TOPIC_LINK_CHALLENGE, JSON.stringify({
-        token, device_id: offer.device_id, eph_pub: pub,
+        token, device_id: offer.device_id, eph_pub: state.pub, wrap,
       }));
       if (!(JSON.parse(raw) as { ok?: boolean }).ok) return undefined;
     } catch {
       return undefined;
     }
-    linkChallenges.set(offer.device_id, { keyPair, pub });
+    linkChallenges.set(offer.device_id, state);
     return { deviceId: offer.device_id };
   }
   if (!offer.eph_pub) return { deviceId: offer.device_id };
@@ -1797,6 +1825,31 @@ async function describeLinkOffer(offer: LinkOfferWire): Promise<{ deviceId: stri
   }
   own.shownEph = offer.eph_pub;
   return { deviceId: offer.device_id, code: await sasCodeV2(offer.eph_pub, own.pub) };
+}
+
+// LINK-1 п. 13: ключ challenge другого своего устройства — из обёртки, открываемой ключом из SSK. Открытие
+// доказывает, что challenge выставило своё устройство к ЭТОМУ обязательству и ключу
+async function adoptLinkChallenge(offer: LinkOfferWire): Promise<LinkChallengeState | undefined> {
+  if (!offer.commitment || !offer.challenge_pub || !offer.challenge_wrap) return undefined;
+  let scalar: Uint8Array | undefined;
+  try {
+    scalar = v2Controller.linkChallengeUnwrap(
+      offer.device_id, offer.commitment, offer.challenge_pub, base64ToBytes(offer.challenge_wrap),
+    );
+  } catch {
+    return undefined;
+  }
+  if (!scalar) {
+    logDebug(`линковка: обёртка challenge к ${offer.device_id} не открылась`);
+    return undefined;
+  }
+  const privateKey = await importLinkPrivateScalar(scalar, offer.challenge_pub);
+  scalar.fill(0);
+  if (!privateKey) {
+    logDebug(`линковка: ключ challenge к ${offer.device_id} не сходится с открытым`);
+    return undefined;
+  }
+  return { privateKey, pub: offer.challenge_pub, commitment: offer.commitment };
 }
 
 // Отзыв устройства: пароль проверяет мост (identity.device.revoke), сам отзыв —
@@ -3251,6 +3304,7 @@ const methods = {
       const offer = poll.ok ? poll.offers?.find((entry) => entry.device_id === deviceId) : undefined;
       const own = linkChallenges.get(deviceId);
       if (!offer || !own || !offer.commitment || !offer.eph_pub || offer.challenge_pub !== own.pub) return undefined;
+      if (own.commitment !== offer.commitment) return undefined;
       // Сервер мог подменить ключ между показом кода и подтверждением: запечатываем только под показанный
       if (!own.shownEph || offer.eph_pub !== own.shownEph) return undefined;
       if (!(await linkCommitmentMatches(offer.eph_pub, offer.commitment))) return undefined;
@@ -3275,7 +3329,7 @@ const methods = {
       );
       v2Material?.fill(0);
 
-      const box = await sealLinkBox(own.keyPair.privateKey, offer.eph_pub, {
+      const box = await sealLinkBox(own.privateKey, offer.eph_pub, {
         file_id: upload.fileId,
         file_key: upload.mediaKeys.keyB64,
         file_nonce: upload.mediaKeys.nonceB64,

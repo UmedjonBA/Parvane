@@ -179,6 +179,8 @@ impl HostClient {
 
             // ── линковка ──
             "linkGrantMaterial" => json!(b64(self.link_grant_material()?.as_bytes())),
+            "linkChallengeWrap" => json!(b64(&c.link_challenge_wrap(a.s("deviceId")?, a.s("commitment")?, a.s("challengePub")?, &Zeroizing::new(a.b("secret")?)).map_err(err)?)),
+            "linkChallengeUnwrap" => json!(b64(&c.link_challenge_unwrap(a.s("deviceId")?, a.s("commitment")?, a.s("challengePub")?, &a.b("wrap")?).map_err(err)?)),
             "joinWithGrant" => {
                 let m = String::from_utf8(a.b("material")?).map_err(|_| malformed())?;
                 parsed(self.join_with_grant(&m, a.n("otkCount")?)?)

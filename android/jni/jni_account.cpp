@@ -36,8 +36,11 @@ std::string g_linkCode;
 std::int64_t g_linkStartedMs = 0;
 bool g_linkActive = false;
 json g_linkPendingGrant;
-// Старое устройство: свой эфемерный ключ на каждый challenge и офферы, уже показанные пользователю.
+// Старое устройство: ключ challenge на каждый оффер — свой либо (LINK-1 п. 13) ключ challenge другого своего устройства
+// из обёртки под SSK (запрос виден и подтверждаем на любом старом устройстве, код у всех один) — и офферы, уже
+// показанные пользователю.
 std::map<std::string, parvane::linking::EphemeralKey> g_linkChallenges;
+std::map<std::string, std::string> g_linkDeclined; // device_id → обязательство отклонённого здесь запроса
 std::map<std::string, std::string> g_linkOffersShown;
 std::map<std::string, std::string> g_linkCommit; // device_id → обязательство, увиденное до выставления challenge
 std::map<std::string, std::string> g_linkOfferEph; // device_id → раскрытый ключ (для гранта по подтверждению)
@@ -212,12 +215,35 @@ bool pollLinkGrantOnce() {
 void declineLink(const std::string &deviceId) {
     {
         std::lock_guard<std::mutex> lk(g_linkMu);
+        // LINK-1 п. 13: ключ challenge снова взялся бы из обёртки — запоминаем отказ по обязательству
+        if (const auto it = g_linkCommit.find(deviceId); it != g_linkCommit.end()) g_linkDeclined[deviceId] = it->second;
         g_linkChallenges.erase(deviceId);
         g_linkCommit.erase(deviceId);
         g_linkOfferEph.erase(deviceId);
     }
     LOGI("привязка: запрос нового устройства отклонён");
     emit(json{{"type", "link_request_gone"}, {"device_id", deviceId}});
+}
+
+// LINK-1 п. 13: ключ challenge другого своего устройства — из обёртки, открываемой ключом из SSK. Открытие доказывает,
+// что challenge выставило своё устройство к ЭТОМУ обязательству и ключу.
+std::optional<parvane::linking::EphemeralKey> adoptLinkChallenge(const parvane::v2::account::LinkOffer &o) {
+    if (o.challengeWrap.empty()) return std::nullopt;
+    const auto s = v2Ready();
+    if (!s) return std::nullopt;
+    auto scalar = s->linkChallengeUnwrap(o.deviceId, o.commitment, o.challengePub, o.challengeWrap);
+    if (scalar.empty()) {
+        LOGE("привязка: обёртка challenge не открылась");
+        return std::nullopt;
+    }
+    auto key = parvane::linking::EphemeralKey::fromPrivateScalar(scalar, o.challengePub);
+    std::fill(scalar.begin(), scalar.end(), '\0');
+    if (!key || key->publicB64() != o.challengePub) {
+        LOGE("привязка: ключ challenge не сходится с открытым");
+        return std::nullopt;
+    }
+    LOGI("привязка: challenge выставило другое своё устройство — запрос показываем и здесь");
+    return key;
 }
 
 void pollLinkOffersOnce() {
@@ -254,6 +280,8 @@ void pollLinkOffersOnce() {
         std::lock_guard<std::mutex> lk(g_linkMu);
         for (auto it = g_linkChallenges.begin(); it != g_linkChallenges.end();)
             it = live.count(it->first) ? std::next(it) : g_linkChallenges.erase(it);
+        for (auto it = g_linkDeclined.begin(); it != g_linkDeclined.end();)
+            it = live.count(it->first) ? std::next(it) : g_linkDeclined.erase(it);
         // Запрос исчез (устройство вошло иным путём, отозвало оффер, истёк срок) — его окно закрывается
         for (auto it = g_linkOffersShown.begin(); it != g_linkOffersShown.end();) {
             if (live.count(it->first)) { ++it; continue; }
@@ -269,13 +297,37 @@ void pollLinkOffersOnce() {
         std::optional<parvane::linking::EphemeralKey> own;
         {
             std::lock_guard<std::mutex> lk(g_linkMu);
+            if (const auto d = g_linkDeclined.find(o.deviceId); d != g_linkDeclined.end() && d->second == o.commitment) continue;
+            const auto pin = g_linkCommit.find(o.deviceId);
+            if (pin != g_linkCommit.end() && pin->second != o.commitment && o.challengePub.empty()) {
+                // новое устройство переофферило (сервер сбросил challenge) — прежний ключ относился к другому офферу
+                g_linkChallenges.erase(o.deviceId);
+                g_linkCommit.erase(pin);
+            }
             if (const auto it = g_linkChallenges.find(o.deviceId); it != g_linkChallenges.end()) own = it->second;
         }
-        if (!own && !o.challengePub.empty()) continue; // challenge выставило другое наше устройство
+        if (!o.challengePub.empty() && (!own || o.challengePub != own->publicB64())) {
+            // LINK-1 п. 13: challenge выставило другое наше устройство (или наш проиграл гонку) — ключ из обёртки
+            // под SSK. Не открылась — challenge не нашего аккаунта либо подмена: запрос не показываем
+            own = adoptLinkChallenge(o);
+            if (!own) continue;
+            std::lock_guard<std::mutex> lk(g_linkMu);
+            g_linkChallenges.insert_or_assign(o.deviceId, *own);
+            g_linkCommit[o.deviceId] = o.commitment;
+        }
         if (!own || o.challengePub.empty()) {
             auto key = own ? own : parvane::linking::EphemeralKey::generate();
             if (!key) continue;
-            try { parvane::v2::account::linkChallenge(*c, o.deviceId, key->publicB64()); } catch (const std::exception &) { continue; }
+            // обёртка закрытой части ключа для своих устройств (ключ из SSK): они покажут тот же код
+            std::string wrap;
+            if (const auto s = v2Ready()) {
+                auto scalar = key->privateScalar();
+                if (!scalar.empty()) {
+                    wrap = s->linkChallengeWrap(o.deviceId, o.commitment, key->publicB64(), scalar);
+                    std::fill(scalar.begin(), scalar.end(), '\0');
+                }
+            }
+            try { parvane::v2::account::linkChallenge(*c, o.deviceId, key->publicB64(), wrap); } catch (const std::exception &) { continue; }
             std::lock_guard<std::mutex> lk(g_linkMu);
             g_linkChallenges.insert_or_assign(o.deviceId, *key);
             g_linkCommit[o.deviceId] = o.commitment; // закрепляем: другое обязательство позже не принимаем
@@ -475,6 +527,7 @@ void resetLinking() {
     g_linkActive = false;
     g_linkPendingGrant = json();
     g_linkChallenges.clear();
+    g_linkDeclined.clear();
     g_linkCommit.clear();
     g_linkOffersShown.clear();
     g_linkOfferEph.clear();

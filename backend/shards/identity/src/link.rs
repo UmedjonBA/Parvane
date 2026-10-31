@@ -94,8 +94,8 @@ pub(crate) async fn store_link_offer(
     // Новый оффер устройства заменяет прежний (и гасит старый грант — он
     // зашифрован на уже потерянный эфемерный ключ).
     sqlx::query(
-        "INSERT OR REPLACE INTO link_offers (username, device_id, eph_pub, created_at, commitment, challenge_pub, signing_key)
-         VALUES (?, ?, ?, ?, ?, '', ?)",
+        "INSERT OR REPLACE INTO link_offers (username, device_id, eph_pub, created_at, commitment, challenge_pub, signing_key, challenge_wrap)
+         VALUES (?, ?, ?, ?, ?, '', ?, '')",
     )
     .bind(username)
     .bind(device_id)
@@ -123,21 +123,32 @@ pub(crate) fn link_commitment_matches(eph_pub_b64: &str, commitment_b64: &str) -
 /// v2: challenge старого устройства к офферу целевого. Первый challenge
 /// фиксируется; замена другим ключом невозможна (иначе сервер/третий подменил
 /// бы сторону, с которой считается SAS).
+///
+/// LINK-1 п. 13: рядом с ключом хранится обёртка его закрытой части для других своих
+/// устройств (сервер её не открывает): запрос виден и подтверждаем на любом старом
+/// устройстве, код сверки у всех один. Обёртка фиксируется вместе с первым challenge;
+/// повтор тем же ключом может только дописать её, если её ещё не было.
 pub(crate) async fn store_link_challenge(
     pool: &SqlitePool,
     username: &str,
     target_device: &str,
     eph_pub: &str,
+    wrap: &str,
 ) -> Result<()> {
     if eph_pub.is_empty() || eph_pub.len() > LINK_EPH_PUB_MAX {
         anyhow::bail!("некорректный эфемерный ключ");
     }
+    if wrap.len() > LINK_EPH_PUB_MAX {
+        anyhow::bail!("некорректная обёртка challenge");
+    }
     purge_stale_links(pool).await?;
     let updated = sqlx::query(
-        "UPDATE link_offers SET challenge_pub = ?
+        "UPDATE link_offers SET challenge_pub = ?,
+                challenge_wrap = CASE WHEN challenge_wrap = '' THEN ? ELSE challenge_wrap END
           WHERE username = ? AND device_id = ? AND (challenge_pub = '' OR challenge_pub = ?)",
     )
     .bind(eph_pub)
+    .bind(wrap)
     .bind(username)
     .bind(target_device)
     .bind(eph_pub)
@@ -158,8 +169,8 @@ pub(crate) async fn poll_link(
     device_id: &str,
 ) -> Result<(Vec<LinkOfferInfo>, Option<LinkGrantInfo>, Option<String>)> {
     purge_stale_links(pool).await?;
-    let offers: Vec<(String, String, i64, String, String, String)> = sqlx::query_as(
-        "SELECT device_id, eph_pub, created_at, commitment, signing_key, challenge_pub FROM link_offers
+    let offers: Vec<(String, String, i64, String, String, String, String)> = sqlx::query_as(
+        "SELECT device_id, eph_pub, created_at, commitment, signing_key, challenge_pub, challenge_wrap FROM link_offers
           WHERE username = ? AND device_id != ? ORDER BY created_at",
     )
     .bind(username)
@@ -185,8 +196,8 @@ pub(crate) async fn poll_link(
     Ok((
         offers
             .into_iter()
-            .map(|(device_id, eph_pub, created_at, commitment, signing_key, challenge_pub)| LinkOfferInfo {
-                device_id, eph_pub, created_at, commitment, signing_key, challenge_pub,
+            .map(|(device_id, eph_pub, created_at, commitment, signing_key, challenge_pub, challenge_wrap)| LinkOfferInfo {
+                device_id, eph_pub, created_at, commitment, signing_key, challenge_pub, challenge_wrap,
             })
             .collect(),
         grant.map(|(box_payload, eph_pub)| LinkGrantInfo { box_payload, eph_pub }),
@@ -210,14 +221,20 @@ pub(crate) async fn store_link_grant(
         anyhow::bail!("некорректный эфемерный ключ");
     }
     purge_stale_links(pool).await?;
-    let removed = sqlx::query("DELETE FROM link_offers WHERE username = ? AND device_id = ?")
+    // Под зафиксированный challenge — только его ключом: грант под другой ключ новое устройство всё равно
+    // отвергнет (LINK-1 п. 5), а оффер при этом был бы уже погашен — привязка срывалась бы. Оффер без
+    // challenge (legacy) — как раньше.
+    let removed = sqlx::query(
+        "DELETE FROM link_offers WHERE username = ? AND device_id = ? AND (challenge_pub = '' OR challenge_pub = ?)",
+    )
         .bind(username)
         .bind(target_device)
+        .bind(eph_pub)
         .execute(pool)
         .await?
         .rows_affected();
     if removed == 0 {
-        anyhow::bail!("оффер линковки не найден или истёк");
+        anyhow::bail!("оффер линковки не найден, истёк или challenge другого ключа");
     }
     sqlx::query("INSERT OR REPLACE INTO link_grants (username, device_id, box, eph_pub, created_at) VALUES (?, ?, ?, ?, ?)")
         .bind(username)
@@ -290,7 +307,7 @@ pub(crate) async fn handle_link_challenge(
     let Some(reply) = msg.reply.clone() else { return };
     let resp = match serde_json::from_slice::<LinkChallengeRequest>(&msg.payload) {
         Ok(req) => match verify_active_user(pool, decoding, &req.token).await {
-            Ok(username) => match store_link_challenge(pool, &username, &req.device_id, &req.eph_pub).await {
+            Ok(username) => match store_link_challenge(pool, &username, &req.device_id, &req.eph_pub, &req.wrap).await {
                 Ok(()) => LinkChallengeResponse { ok: true, error: None },
                 Err(e) => LinkChallengeResponse { ok: false, error: Some(parvane_db::public_error(&e)) },
             },

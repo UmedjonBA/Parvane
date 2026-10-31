@@ -30,6 +30,9 @@ emu_boot() {
     # shellcheck disable=SC2086
     emulator -avd "${AVD:-parvane33}" -no-window -audio none -no-boot-anim -gpu "${EMU_GPU:-host}" -no-snapshot \
       -memory 2048 ${EMU_EXTRA:-} > "$out/emulator.log" 2>&1 &
+    # эмулятор переживает сценарий (его берут следующие) — не ребёнок для `wait` в stack_stop, иначе сценарий,
+    # первым поднявший эмулятор, висит в конце навсегда
+    disown
     for _ in $(seq 1 150); do [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break; sleep 2; done
   fi
   [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] || return 1

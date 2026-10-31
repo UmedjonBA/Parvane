@@ -1904,6 +1904,74 @@ export class PvClient {
         }
     }
     /**
+     * LINK-1 п. 13: открыть обёртку challenge другого своего устройства → секрет (байты).
+     * @param {string} device_id
+     * @param {string} commitment
+     * @param {string} challenge_pub
+     * @param {Uint8Array} wrap
+     * @returns {Uint8Array}
+     */
+    linkChallengeUnwrap(device_id, commitment, challenge_pub, wrap) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(device_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(commitment, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(challenge_pub, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passArray8ToWasm0(wrap, wasm.__wbindgen_export);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.pvclient_linkChallengeUnwrap(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v5 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v5;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * LINK-1 п. 13: обёртка закрытой части ключа challenge (секрет — байты) для своих устройств.
+     * @param {string} device_id
+     * @param {string} commitment
+     * @param {string} challenge_pub
+     * @param {Uint8Array} secret
+     * @returns {Uint8Array}
+     */
+    linkChallengeWrap(device_id, commitment, challenge_pub, secret) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(device_id, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(commitment, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(challenge_pub, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passArray8ToWasm0(secret, wasm.__wbindgen_export);
+            const len3 = WASM_VECTOR_LEN;
+            wasm.pvclient_linkChallengeWrap(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v5 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v5;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Материал гранта линковки: JSON {ssk, entries[], deliveryKey, gen} (hex/байты).
      * @returns {Uint8Array}
      */

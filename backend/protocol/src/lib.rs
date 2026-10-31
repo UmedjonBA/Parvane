@@ -25,6 +25,7 @@ pub mod invite;
 pub mod l2;
 pub mod legacy_v1;
 pub mod limits;
+pub mod link;
 pub mod msg;
 pub mod olm;
 pub mod policy;

@@ -865,6 +865,9 @@ message LinkOffer {
   string signing_key = 4 [(parvane.core.v2.max_len) = 512];
   int64 created_ms = 5;
   string challenge_pub = 6 [(parvane.core.v2.max_len) = 512];
+  // LINK-1 п. 13: закрытая часть ключа challenge, зашифрованная ключом из SSK аккаунта (base64). Другие старые
+  // устройства с тем же SSK открывают её, показывают тот же код сверки и могут выдать грант.
+  string challenge_wrap = 7 [(parvane.core.v2.max_len) = 512];
 }
 
 message LinkGrant {
@@ -887,6 +890,8 @@ message LinkChallengeRequest {
   // Целевое (новое) устройство.
   string device_id = 1 [(parvane.core.v2.max_len) = 64];
   string eph_pub = 2 [(parvane.core.v2.max_len) = 512];
+  // LINK-1 п. 13: обёртка закрытой части eph_pub для своих устройств (см. LinkOffer.challenge_wrap).
+  string wrap = 3 [(parvane.core.v2.max_len) = 512];
 }
 message LinkChallengeResponse {}
 

@@ -186,6 +186,13 @@ public:
     // LINK-1 v2. Старое устройство: материал гранта движка для своего нового
     // устройства (пусто — сессия не готова или у устройства нет SSK). Блокирующий.
     [[nodiscard]] std::string linkGrantMaterial();
+    // LINK-1 п. 13: обёртка закрытой части ключа challenge (secret — байты) для своих устройств, ключ из SSK →
+    // base64; "" — сессия не готова или у устройства нет SSK. Блокирующий (только движок).
+    [[nodiscard]] std::string linkChallengeWrap(const std::string &deviceId, const std::string &commitment,
+                                                const std::string &challengePub, const std::string &secret);
+    // Открыть обёртку challenge другого своего устройства → закрытая часть (байты); "" — не своя или подмена.
+    [[nodiscard]] std::string linkChallengeUnwrap(const std::string &deviceId, const std::string &commitment,
+                                                  const std::string &challengePub, const std::string &wrapB64);
     // Новое устройство (needsLinking): принять материал гранта, записать себя в
     // журнал устройств и поднять сессию. Не блокирует; исход — событие готовности
     // или снова needsLinking (событие `needsLinking`).

@@ -771,6 +771,18 @@ impl Client {
         Ok((ssk.to_bytes(), self.own_entries.clone(), *self.dk.key(), self.dk.generation()))
     }
 
+    /// LINK-1 п. 13: обёртка закрытой части ключа challenge для своих устройств (только держатель SSK).
+    pub fn link_challenge_wrap(&self, target: &str, commitment: &str, challenge_pub: &str, secret: &[u8]) -> Result<Vec<u8>> {
+        let ssk = self.ssk.as_ref().ok_or(ProtoError::Forbidden)?;
+        crate::link::wrap_challenge(&ssk.to_bytes(), &self.user, target, commitment, challenge_pub, secret)
+    }
+
+    /// LINK-1 п. 13: открыть обёртку challenge, выставленного другим своим устройством.
+    pub fn link_challenge_unwrap(&self, target: &str, commitment: &str, challenge_pub: &str, wrap: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        let ssk = self.ssk.as_ref().ok_or(ProtoError::Forbidden)?;
+        crate::link::unwrap_challenge(&ssk.to_bytes(), &self.user, target, commitment, challenge_pub, wrap)
+    }
+
     /// Пополнить одноразовые прекеи.
     pub fn otk_request(&mut self, n: usize) -> OutRequest {
         let (otks, fb) = self.signed_otks(n);

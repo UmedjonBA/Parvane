@@ -4589,6 +4589,33 @@ export function createV2Controller(deps: Deps) {
     }
   }
 
+  /**
+   * LINK-1 п. 13: обёртка закрытой части ключа challenge для своих устройств (ключ из SSK); undefined — устройство
+   * без SSK (гранта оно не выдаст) или движок не готов.
+   */
+  function linkChallengeWrap(
+    deviceId: string, commitment: string, challengePub: string, secret: Uint8Array,
+  ): Uint8Array | undefined {
+    if (!ready || !client) return undefined;
+    try {
+      return client.linkChallengeWrap(deviceId, commitment, challengePub, secret);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** LINK-1 п. 13: открыть обёртку challenge другого своего устройства; undefined — не своя или подмена. */
+  function linkChallengeUnwrap(
+    deviceId: string, commitment: string, challengePub: string, wrap: Uint8Array,
+  ): Uint8Array | undefined {
+    if (!ready || !client) return undefined;
+    try {
+      return client.linkChallengeUnwrap(deviceId, commitment, challengePub, wrap);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Материал гранта по текущему состоянию движка; undefined — устройство без SSK. */
   function buildGrantMaterial(): Uint8Array | undefined {
     if (!client) return undefined;
@@ -4685,6 +4712,8 @@ export function createV2Controller(deps: Deps) {
     cloud,
     blobCall,
     linkGrantMaterial,
+    linkChallengeWrap,
+    linkChallengeUnwrap,
     joinWithGrant,
     revokeDevice,
     signOutDevice,

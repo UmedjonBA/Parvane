@@ -26,6 +26,11 @@ public:
     // Приватный ключ (PKCS#8 DER, base64) — только для персиста в памяти процесса.
     [[nodiscard]] std::string privateDerB64() const { return _privB64; }
     static std::optional<EphemeralKey> fromPrivateDerB64(const std::string &privB64);
+    // LINK-1 п. 13: закрытая часть — 32 байта big-endian (для обёртки ключа challenge под SSK своим устройствам);
+    // "" — ошибка.
+    [[nodiscard]] std::string privateScalar() const;
+    // Ключ из закрытой части и известного открытого ключа (base64 несжатой точки); nullopt — пара не сходится.
+    static std::optional<EphemeralKey> fromPrivateScalar(const std::string &scalar32, const std::string &pubB64);
 
     // Запечатать plaintext для пира с публичным ключом peerPubB64 → бокс (base64).
     [[nodiscard]] std::optional<std::string> seal(const std::string &peerPubB64,

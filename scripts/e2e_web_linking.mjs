@@ -120,6 +120,7 @@ const browser = await chromium.launch();
 const aliceContext = await browser.newContext();
 const bobDevice1Context = await browser.newContext();
 const bobDevice2Context = await browser.newContext();
+const bobDevice3Context = await browser.newContext();
 
 try {
   const suffix = `${Date.now()}-${process.pid}`;
@@ -214,17 +215,59 @@ try {
   await findMessage(bobDevice2.page, afterLink).first()
     .waitFor({ state: 'visible', timeout: SIBLING_SYNC_TIMEOUT_MS });
 
+  // ── LINK-1 п. 13: запрос третьего устройства виден ОБОИМ старым, подтверждает второе ──────────────
+  // Первое открывает «Устройства» раньше и выставляет challenge; второе берёт его ключ из обёртки под SSK,
+  // показывает тот же код и выдаёт грант; у первого запрос пропадает
+  const bobDevice3 = await preparePage(bobDevice3Context, bob, PASSWORD);
+  const dev3Screen = await openDevicesScreen(bobDevice3.page);
+  await dev3Screen.getByText(/Waiting for your other device/)
+    .waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  const firstOld = await openDevicesScreen(bobDevice1.page);
+  const firstOffer = firstOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  await firstOffer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+  const firstCode = (await firstOffer.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  const dev3Pending = dev3Screen.getByText(/confirm code \d{4} \d{4} \d{4}/);
+  await dev3Pending.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+  const thirdCode = (await dev3Pending.textContent()).match(/(\d{4} \d{4} \d{4})/)[1];
+  assert.equal(firstCode, thirdCode, 'первое старое устройство: код не совпал с новым');
+  const secondOld = await openDevicesScreen(bobDevice2.page);
+  const secondOffer = secondOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ }).first();
+  await secondOffer.waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+  const secondCode = (await secondOffer.textContent()).match(/Code: (\d{4} \d{4} \d{4})/)[1];
+  assert.equal(secondCode, thirdCode, 'второе старое устройство: код не совпал с новым');
+  const isThirdLinked = bobDevice3.page.waitForEvent('console', {
+    predicate: (message) => message.text().includes('[parvane] v2: готов'),
+    timeout: LINK_TIMEOUT_MS,
+  });
+  await secondOffer.locator('.ListItem-button').click();
+  const secondTransfer = bobDevice2.page.getByRole('button', { name: 'Transfer', exact: true });
+  await secondTransfer.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await secondTransfer.click();
+  await bobDevice2.page.getByText('History transferred').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  await isThirdLinked;
+  // Запрос подтверждён вторым — у первого он пропадает со следующим опросом экрана
+  await firstOld.locator('.ListItem').filter({ hasText: /Code: \d{4}/ })
+    .waitFor({ state: 'detached', timeout: SIBLING_SYNC_TIMEOUT_MS });
+  await closeSettings(bobDevice1.page);
+  await closeSettings(bobDevice2.page);
+  await closeSettings(bobDevice3.page);
+  await openPrivateChatStrict(bobDevice3.page, alice);
+  await findMessage(bobDevice3.page, afterLink).first()
+    .waitFor({ state: 'visible', timeout: LINK_TIMEOUT_MS });
+
   assertNoPageErrors({
     alice: aliceSession,
     'bob-device-1': bobDevice1,
     'bob-device-2': bobDevice2,
+    'bob-device-3': bobDevice3,
   });
 
-  console.log('OK: авто-линковка — коды совпали, подтверждение передало историю (входящие, исходящие, группа) без ручного экспорта, новые сообщения видны на обоих устройствах');
+  console.log('OK: авто-линковка — коды совпали (и на двух старых устройствах для третьего, подтвердило второе), подтверждение передало историю (входящие, исходящие, группа) без ручного экспорта, новые сообщения видны на обоих устройствах');
 } catch (err) {
   const dir = new URL('../web/telegram-tt/test-results/', import.meta.url).pathname;
   for (const [name, context] of [
     ['alice', aliceContext], ['bob-dev1', bobDevice1Context], ['bob-dev2', bobDevice2Context],
+    ['bob-dev3', bobDevice3Context],
   ]) {
     const page = context.pages()[0];
     if (page) await page.screenshot({ path: `${dir}linking-${name}.png` }).catch(() => {});
