@@ -2,19 +2,19 @@
 # Выпуск Android (spec 031, T077/T078): наш модуль (libparvane_jni.so) → setup-tgx.sh с release-keystore →
 # X arm64 release (+ x64 release для проверки входа в эмуляторе) → apksigner verify → на прод в ~/parvane/apk/
 # (Caddy отдаёт /apk/*; прежний файл — копией *.prev-<дата>.apk для отката). Только release (NAT-03): debug-APK
-# debuggable и несёт dev-хуки. Ключ — /mnt/hdd/ub/android/keys/keystore-release.properties (вне git).
+# debuggable и несёт dev-хуки. Ключ — /home/ub/AppData/android/keys/keystore-release.properties (вне git).
 #   ./tgx_build_upload.sh [--no-upload]
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export JAVA_HOME=/mnt/hdd/ub/android/jdk-17 ANDROID_HOME=/mnt/hdd/ub/android/sdk ANDROID_NDK_HOME=/mnt/hdd/ub/android/android-ndk-r27c
-export PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$HOME/.local/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH
-TGX=/mnt/hdd/ub/android/tgx
+export JAVA_HOME=/home/ub/AppData/android/jdk-17 ANDROID_HOME=/home/ub/AppData/android/sdk ANDROID_NDK_HOME=/home/ub/AppData/android/android-ndk-r27c
+export PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$HOME/.local/bin:/home/ub/AppData/android/sdk/platform-tools:$PATH
+TGX=/home/ub/AppData/android/tgx
 LOG=${PV_RELEASE_LOG:-/tmp/pv-release}; mkdir -p "$LOG"
-export PARVANE_KEYSTORE_PROPS=/mnt/hdd/ub/android/keys/keystore-release.properties
+export PARVANE_KEYSTORE_PROPS=/home/ub/AppData/android/keys/keystore-release.properties
 [ -f "$PARVANE_KEYSTORE_PROPS" ] || { echo "нет $PARVANE_KEYSTORE_PROPS"; exit 2; }
 cd "$HERE"
 echo "== :app:assembleRelease (libparvane_jni.so) =="
-/mnt/hdd/ub/android/gradle-8.9/bin/gradle :app:assembleRelease --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx3g > "$LOG/app-gradle.log" 2>&1 \
+/home/ub/AppData/android/gradle-8.9/bin/gradle :app:assembleRelease --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx3g > "$LOG/app-gradle.log" 2>&1 \
   || { grep -E "error:|What went wrong|FAILED" -A3 "$LOG/app-gradle.log" | head -20; exit 10; }
 ./setup-tgx.sh > "$LOG/setup.log" 2>&1 || { tail -20 "$LOG/setup.log"; exit 2; }
 echo "== X arm64 + x64 release =="
@@ -24,14 +24,14 @@ echo "== X arm64 + x64 release =="
 # (__tls_get_addr); эмулятор x86_64 запускает arm64-APK трансляцией ARM
 TARGETS="assembleLatestArm64Release"; [ "${PV_RELEASE_X64:-0}" = 1 ] && TARGETS="$TARGETS assembleLatestX64Release"
 for T in $TARGETS; do
-  (cd "$TGX" && JAVA_HOME=/mnt/hdd/ub/android/jdk-21 PATH=/mnt/hdd/ub/android/jdk-21/bin:$PATH \
+  (cd "$TGX" && JAVA_HOME=/home/ub/AppData/android/jdk-21 PATH=/home/ub/AppData/android/jdk-21/bin:$PATH \
     ./gradlew "$T" --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs=-Xmx4g >> "$LOG/tgx-gradle.log" 2>&1) \
     || { grep -E "^e: |error:|What went wrong" -A3 "$LOG/tgx-gradle.log" | head -30; exit 3; }
 done
 REL=$(ls "$TGX"/app/build/outputs/apk/latestArm64/release/*.apk 2>/dev/null | head -1)
 REL64=$(ls "$TGX"/app/build/outputs/apk/latestX64/release/*.apk 2>/dev/null | head -1)
 [ -n "$REL" ] || { echo "release-APK не найден"; exit 4; }
-APKSIGNER=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/apksigner | tail -1)
+APKSIGNER=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/apksigner | tail -1)
 "$APKSIGNER" verify --print-certs "$REL" > "$LOG/apksigner.txt" 2>&1 && grep -q "CN=Parvane" "$LOG/apksigner.txt" \
   && echo "подпись: release-ключ Parvane" || { cat "$LOG/apksigner.txt"; exit 5; }
 # Отпечаток закреплён в android/release-cert.sha256 (SHA-256 сертификата, hex) или PV_CERT_SHA256: одного CN мало —
@@ -43,10 +43,10 @@ if [ -n "$PIN" ]; then
 else
   echo "ВНИМАНИЕ: отпечаток подписи не закреплён (android/release-cert.sha256) — проверен только CN"
 fi
-aapt=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/aapt | tail -1)
+aapt=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/aapt | tail -1)
 "$aapt" dump badging "$REL" | grep -q "application-debuggable" && { echo "APK debuggable — не выкладываем"; exit 6; }
 # Методы, которые ядро зовёт из C++ по имени, должны пережить R8 (иначе release без событий ядра и звонков)
-DEXDUMP=$(ls -d /mnt/hdd/ub/android/sdk/build-tools/*/dexdump | tail -1)
+DEXDUMP=$(ls -d /home/ub/AppData/android/sdk/build-tools/*/dexdump | tail -1)
 DX="$LOG/dex"; rm -rf "$DX"; mkdir -p "$DX"; (cd "$DX" && unzip -q -o "$REL" 'classes*.dex')
 for d in "$DX"/classes*.dex; do "$DEXDUMP" "$d" 2>/dev/null; done > "$DX/dump.txt"
 for m in onEvent mediaCreate mediaCreateOffer mediaAcceptOffer mediaSetRemoteAnswer mediaAddIce mediaSetVideo mediaSetMuted mediaClose; do

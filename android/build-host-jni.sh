@@ -7,7 +7,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-JDK="${JDK_HOME:-${JAVA_HOME:-/mnt/hdd/ub/android/jdk-17}}"
+JDK="${JDK_HOME:-${JAVA_HOME:-/home/ub/AppData/android/jdk-17}}"
 OUT="$ROOT/.build/host-jni"
 PROTO_LIB="$REPO/backend/target/debug/libparvane_protocol_ffi.a"
 # cargo сам решает, нужна ли пересборка (обычно уже собрано desktop/parvane-core)

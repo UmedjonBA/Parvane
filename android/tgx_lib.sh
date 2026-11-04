@@ -8,11 +8,11 @@
 #   tgx_cmd <json>   — команда e2e-хука шва (/data/local/tmp/parvane-e2e-cmd), ждёт её выполнения
 #   tgx_logwait <regex> [сек=60] — дождаться строки в logcat (поток пишется в $TGX_LOG)
 # Логи шва: тег parvane (ядро/JNI) и ParvaneClient (Kotlin).
-TGX="${TGX_DIR:-/mnt/hdd/ub/android/tgx}"
+TGX="${TGX_DIR:-/home/ub/AppData/android/tgx}"
 TGX_PKG=org.parvane.tgx
 a() { timeout 25 adb "$@"; } # эмулятор может умереть — каждая команда с таймаутом
 tgx_env() {
-  export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
+  export ANDROID_HOME=/home/ub/AppData/android/sdk JAVA_HOME=/home/ub/AppData/android/jdk-17
   export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
   export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$HOME/.local/bin:$PATH"
   local mesa="${PV_MESA:-$HOME/.local/mesa-26.2.1}"

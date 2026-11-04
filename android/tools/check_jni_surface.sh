@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SO="${1:-$ROOT/.build/core-x86_64/libparvane_jni.so}"
-NM=/mnt/hdd/ub/android/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
+NM=/home/ub/AppData/android/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
 want=$(for f in "$ROOT"/libtd/src/main/java/org/parvane/core/*.kt; do
   cls=$(basename "$f" .kt)
   grep -oE 'external fun [A-Za-z0-9_]+' "$f" | awk -v c="$cls" '{print "Java_org_parvane_core_" c "_" $3}'

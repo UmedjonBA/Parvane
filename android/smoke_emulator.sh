@@ -7,7 +7,7 @@
 # Требует: собранный app-x86_64-debug.apk (dev-хуки extras только в debug, P-12), образ system-images;android-34;google_apis;x86_64.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/../desktop/verify_lib.sh"
-export ANDROID_HOME=/mnt/hdd/ub/android/sdk JAVA_HOME=/mnt/hdd/ub/android/jdk-17
+export ANDROID_HOME=/home/ub/AppData/android/sdk JAVA_HOME=/home/ub/AppData/android/jdk-17
 # avdmanager кладёт AVD по XDG (~/.config/.android/avd), а emulator ищет в ~/.android —
 # один путь для обоих
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"; mkdir -p "$ANDROID_AVD_HOME"

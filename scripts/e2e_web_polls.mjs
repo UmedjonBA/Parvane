@@ -64,14 +64,17 @@ async function fillPollOptions(page, options) {
   }
 }
 
+const VOTE_BUTTON_TIMEOUT_MS = 3000;
+
 async function voteInPoll(poll, optionText) {
   const option = poll.getByText(optionText, { exact: true }).first();
   await option.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await option.click();
-  const voteButton = poll.getByText('Vote', { exact: true });
-  if (await voteButton.isVisible().catch(() => false)) {
-    await voteButton.click();
-  }
+  // Кнопка Vote (режим с чекбоксами) появляется не сразу после клика по варианту
+  const voteButton = poll.getByText('Vote', { exact: true }).first();
+  const hasVoteButton = await voteButton.waitFor({ state: 'visible', timeout: VOTE_BUTTON_TIMEOUT_MS })
+    .then(() => true, () => false);
+  if (hasVoteButton) await voteButton.click();
 }
 
 const browser = await chromium.launch();

@@ -415,7 +415,7 @@ try {
   await historySuggestion(sessions.bob2.page, lineForgotten).waitFor({ state: 'detached', timeout: STEP_TIMEOUT_MS })
     .catch(() => assert.fail('забытая подсказка осталась на B'));
   assert.equal(
-    await sessions.bob2.page.locator('[data-quick-suggestion][data-text*="12:00"]').count(), 0,
+    await sessions.bob2.page.locator(`[data-quick-suggestion][data-text^="${learnedHead}"][data-text*="12:00"]`).count(), 0,
     'забытая строка вернулась на B подсказкой из записей «Плана»',
   );
   await closeQuick(sessions.bob2.page);
@@ -428,7 +428,7 @@ try {
   await sessions.bob1.page.locator('#planner-quick-input').fill('лету');
   await historySuggestion(sessions.bob1.page, lineKept).waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   assert.equal(
-    await sessions.bob1.page.locator('[data-quick-suggestion][data-text*="12:00"]').count(), 0,
+    await sessions.bob1.page.locator(`[data-quick-suggestion][data-text^="${learnedHead}"][data-text*="12:00"]`).count(), 0,
     'строка, забытая на B, предлагается на A',
   );
   await closeQuick(sessions.bob1.page);

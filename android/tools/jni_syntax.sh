@@ -4,7 +4,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
-NDK="${ANDROID_NDK_HOME:-/mnt/hdd/ub/android/android-ndk-r27c}"
+NDK="${ANDROID_NDK_HOME:-/home/ub/AppData/android/android-ndk-r27c}"
 CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
 files=("$@")
 [ ${#files[@]} -eq 0 ] && files=("$ROOT"/jni/*.cpp)

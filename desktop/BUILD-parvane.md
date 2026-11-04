@@ -110,9 +110,10 @@ setsid nohup nice -n 15 ninja -C build-probe -j1 >/tmp/pv-link.log 2>&1 </dev/nu
 Линкер — `lld` (`-fuse-ld=lld` в кэше CMake, бинарь в `~/.local/bin`), пик
 свопа ~13 ГБ, около получаса. Своп на 30 ГБ обязателен.
 
-**Путь к репозиторию — строго `/home/ub/Projects/active/Parvane`.** Это симлинк
-на `/mnt/hdd/ub/Projects/active/Parvane`, и кэш CMake сконфигурирован под
-`/home/...`. Запуск `cmake --build` из `/mnt/hdd/...` заставляет CMake
+**Путь к репозиторию — строго `/home/ub/Projects/active/Parvane`.** С 3 ноя 2026
+`/home` — сам раздел HDD (`/dev/sda1`, он же смонтирован в `/mnt/hdd`, так что
+тот же каталог виден как `/mnt/hdd/home/ub/...`; прежнего `/mnt/hdd/ub/...` нет),
+а кэш CMake сконфигурирован под `/home/...`. Запуск `cmake --build` по другому пути заставляет CMake
 переразрешить пути, объектники переезжают в другой подкаталог и все ~3600
 готовых обесцениваются — полная пересборка на пустом месте (8 сен 2026 так и
 случилось). Правка `parvane-core/CMakeLists.txt` тоже вызывает переконфигурацию,

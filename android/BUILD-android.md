@@ -15,7 +15,7 @@
    из `../backend` + cmake/ninja `jni/` → `libparvane_core.a`); OpenSSL — `./build-openssl.sh <ABI>` один раз.
 2. Наш модуль (шов + `libparvane_jni.so`) и JVM-тесты: `gradle :libtd:testDebugUnitTest :app:assembleRelease`
    (JDK 17, Gradle 8.9 — пути в `local-workdirs/spec031/pipeline.sh`).
-3. Оверлей и X: `./setup-tgx.sh` (клон `/mnt/hdd/ub/android/tgx`, JDK 21) → `./gradlew assembleLatestX64Debug`
+3. Оверлей и X: `./setup-tgx.sh` (клон `/home/ub/AppData/android/tgx`, JDK 21) → `./gradlew assembleLatestX64Debug`
    (эмулятор) либо выпуск `./tgx_build_upload.sh` (release-ключ `keys/keystore-release.properties`,
    `assembleLatestArm64Release`, `apksigner verify`, выкладка в `~/parvane/apk/` прода с копией прежнего файла;
    Caddy отдаёт `/apk/*.apk`).
@@ -27,8 +27,8 @@
 
 ## Сделано (стадия 1: тулчейн + ядро под NDK) — ✅ РАБОТАЕТ
 
-- **NDK r27c** на HDD: `/mnt/hdd/ub/android/android-ndk-r27c`
-  (`export ANDROID_NDK_HOME=/mnt/hdd/ub/android/android-ndk-r27c`).
+- **NDK r27c** на HDD: `/home/ub/AppData/android/android-ndk-r27c`
+  (`export ANDROID_NDK_HOME=/home/ub/AppData/android/android-ndk-r27c`).
 - **Rust-таргеты Android** + `cargo-ndk` установлены (aarch64/armv7/x86_64/x86).
 - **OpenSSL 3.5.1 статически под arm64-v8a** собран: `./build-openssl.sh arm64-v8a`
   → `android/prebuilt/openssl/arm64-v8a/{include,lib/libssl.a,lib/libcrypto.a}`.
@@ -43,7 +43,7 @@ OpenSSL/e2e берутся готовыми префиксами под ABI. Ф�
 
 ### Как пересобрать (один ABI)
 ```
-export ANDROID_NDK_HOME=/mnt/hdd/ub/android/android-ndk-r27c
+export ANDROID_NDK_HOME=/home/ub/AppData/android/android-ndk-r27c
 cd android
 ./build-openssl.sh arm64-v8a     # один раз на ABI (небыстро)
 ./build-core.sh   arm64-v8a      # cargo-ndk e2e + cmake/ninja core
@@ -83,21 +83,21 @@ Compose-приложении с тем же контрактом, что у Tele
   тестовый прод `wss://parvane.duckdns.org:20443/ws` (`Client.gatewayUrl`).
 
 ### Тулчейн приложения (на HDD, без root)
-- JDK 17 Temurin: `/mnt/hdd/ub/android/jdk-17`
-- SDK: `/mnt/hdd/ub/android/sdk` (platforms;android-34, build-tools;34.0.0,
+- JDK 17 Temurin: `/home/ub/AppData/android/jdk-17`
+- SDK: `/home/ub/AppData/android/sdk` (platforms;android-34, build-tools;34.0.0,
   platform-tools, cmake;3.22.1; emulator + system-images;android-34;google_apis;x86_64);
   NDK r27c подключён симлинком `sdk/ndk/27.2.12479018` (AGP ищет strip там —
   с `ndkPath` вне SDK .so уходил в APK нестрипнутым, 27 МБ вместо 11)
-- Gradle 8.9: `/mnt/hdd/ub/android/gradle-8.9/bin/gradle`
-- TDLib для генерации TdApi: `/mnt/hdd/ub/android/td` (build/td/generate/td_generate_java_api)
+- Gradle 8.9: `/home/ub/AppData/android/gradle-8.9/bin/gradle`
+- TDLib для генерации TdApi: `/home/ub/AppData/android/td` (build/td/generate/td_generate_java_api)
 
 ```
-export JAVA_HOME=/mnt/hdd/ub/android/jdk-17 ANDROID_HOME=/mnt/hdd/ub/android/sdk \
-       ANDROID_NDK_HOME=/mnt/hdd/ub/android/android-ndk-r27c \
+export JAVA_HOME=/home/ub/AppData/android/jdk-17 ANDROID_HOME=/home/ub/AppData/android/sdk \
+       ANDROID_NDK_HOME=/home/ub/AppData/android/android-ndk-r27c \
        PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$PATH
 cd android
 ./build-openssl.sh arm64-v8a && ./build-core.sh arm64-v8a   # один раз (префиксы под ABI)
-/mnt/hdd/ub/android/gradle-8.9/bin/gradle :app:assembleDebug --no-daemon
+/home/ub/AppData/android/gradle-8.9/bin/gradle :app:assembleDebug --no-daemon
 # → app/build/outputs/apk/debug/app-debug.apk (arm64-v8a, ~80 МБ debug)
 ```
 `local.properties` (sdk.dir) — локальный, в gitignore. Gradle сам собирает
@@ -118,7 +118,7 @@ cd android
 ## Стадия 3: Telegram X поверх шва — состояние на 8 сен 2026
 
 Форк Telegram X (GPL-3, `TGX-Android/Telegram-X`, коммит в `android/tgx.commit`)
-живёт вне репозитория: `/mnt/hdd/ub/android/tgx` (клон с сабмодулями ~7.5 ГБ).
+живёт вне репозитория: `/home/ub/AppData/android/tgx` (клон с сабмодулями ~7.5 ГБ).
 В репозитории — оверлей и скрипты:
 
 - `setup-tgx.sh [--build]` — накладывает оверлей на клон: модуль `tdlib` → наш

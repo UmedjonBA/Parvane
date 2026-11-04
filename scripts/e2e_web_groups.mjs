@@ -87,13 +87,18 @@ async function selectPickerRow(page, containerSelector, name) {
   assert.fail(`picker row for ${name} is never selected in ${containerSelector}`);
 }
 
+const VOTE_BUTTON_TIMEOUT_MS = 3000;
+
 async function voteInPoll(poll, optionText) {
   const option = poll.getByText(optionText, { exact: true }).first();
   await option.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   await option.click();
-  // Режим с чекбоксами требует подтверждения кнопкой Vote
-  const voteButton = poll.getByText('Vote', { exact: true });
-  if (await voteButton.count()) await voteButton.first().click();
+  // Режим с чекбоксами требует подтверждения кнопкой Vote; она появляется не сразу после
+  // клика по варианту — проверка `count()` без ожидания пропускала её и голос не уходил
+  const voteButton = poll.getByText('Vote', { exact: true }).first();
+  const hasVoteButton = await voteButton.waitFor({ state: 'visible', timeout: VOTE_BUTTON_TIMEOUT_MS })
+    .then(() => true, () => false);
+  if (hasVoteButton) await voteButton.click();
 }
 
 async function openGroupChat(page, title) {

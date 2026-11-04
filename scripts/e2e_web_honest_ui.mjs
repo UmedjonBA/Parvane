@@ -243,7 +243,13 @@ try {
   // Перевод — встроенным переводчиком браузера (spec 024); в Chromium он есть, пункт показан
   assert.equal(await page.getByRole('menuitem', { name: /Translate/ }).count(), 1,
     'message menu: Translate is shown when the browser has a translator');
-  await page.keyboard.press('Escape');
+  // Меню ловит Escape не с первого кадра — иначе его подложка перехватывает следующий клик по списку чатов
+  const replyItem = page.getByRole('menuitem', { name: 'Reply' });
+  for (let attempt = 0; attempt < 5 && await replyItem.isVisible(); attempt++) {
+    await page.keyboard.press('Escape');
+    await replyItem.waitFor({ state: 'hidden', timeout: 2000 }).catch(() => {});
+  }
+  assert.equal(await replyItem.isVisible(), false, 'message menu did not close');
 
   // ── «Кто отреагировал» (FR-081) ───────────────────────────────────────────
   // В ГРУППЕ селектор реакций не монтируется вовсе: провайдер не отдаёт
@@ -314,7 +320,9 @@ try {
     await fillRightSearch('Search sticker sets', query);
     const builtinSet = right.locator('.StickerSearch [data-sticker-set-id="parvane-builtin"]');
     await builtinSet.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
-    assert(await builtinSet.locator('.StickerButton').count() > 0, `sticker search "${query}": no stickers shown`);
+    // Набор прежнего запроса виден, пока перерисовывается новый результат, — стикеры ждутся, а не считаются сразу
+    await builtinSet.locator('.StickerButton').first().waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS })
+      .catch(() => assert.fail(`sticker search "${query}": no stickers shown`));
   }
   await fillRightSearch('Search sticker sets', `zzqx${suffix}`);
   await right.locator('.StickerSearch [data-sticker-search-empty]')

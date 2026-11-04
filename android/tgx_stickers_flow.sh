@@ -12,7 +12,7 @@
 #   4. без крашей.
 # GIF в эмуляторе не гоняется (у desktop нет хука отправки gif) — маппинг покрыт JVM-тестом.
 set -u
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/mnt/hdd/ub/android/sdk/platform-tools:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/home/ub/AppData/android/sdk/platform-tools:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$ROOT/../desktop/verify_lib.sh"
 . "$(dirname "${BASH_SOURCE[0]}")/tgx_ui.sh" # ROOT после verify_lib.sh указывает на desktop/ (verify_paths.sh)

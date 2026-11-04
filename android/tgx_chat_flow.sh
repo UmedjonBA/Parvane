@@ -6,7 +6,7 @@
 # поле ввода (360,2208), кнопка отправки (1010,2208).
 #   ./tgx_chat_flow.sh
 set -u
-export PATH="/mnt/hdd/ub/android/sdk/platform-tools:$HOME/.local/bin:$PATH"
+export PATH="/home/ub/AppData/android/sdk/platform-tools:$HOME/.local/bin:$PATH"
 . "$(dirname "${BASH_SOURCE[0]}")/../desktop/verify_lib.sh"
 OUT=/tmp/pv-tgx-chat; mkdir -p $OUT
 a() { timeout 25 adb "$@"; }  # каждая adb-команда с таймаутом

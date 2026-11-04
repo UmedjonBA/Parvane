@@ -4,7 +4,7 @@
 # Вход — ник/пароль от прода (по умолчанию APK ходит на wss://parvane.duckdns.org:20443/ws),
 # ключи — линковка: подтвердить на вебе/десктопе. Логи: adb logcat -s parvane ParvaneClient tgx AndroidRuntime
 set -u
-export JAVA_HOME=/mnt/hdd/ub/android/jdk-17 ANDROID_HOME=/mnt/hdd/ub/android/sdk ANDROID_SDK_ROOT=/mnt/hdd/ub/android/sdk
+export JAVA_HOME=/home/ub/AppData/android/jdk-17 ANDROID_HOME=/home/ub/AppData/android/sdk ANDROID_SDK_ROOT=/home/ub/AppData/android/sdk
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
 # обход падения qemu после апдейта mesa 26.2.2 (см. CLAUDE.md): пользовательская mesa 26.2.1 + хостовый GPU
@@ -17,7 +17,7 @@ if [ -d "$PV_MESA/usr/lib" ]; then
   EMU_GPU="${EMU_GPU:-host}"
 fi
 AVD="${AVD:-parvane33}"
-APK="${APK:-$(ls -t /mnt/hdd/ub/android/tgx/app/build/outputs/apk/latestX64/debug/*-x64-debug.apk 2>/dev/null | head -1)}"
+APK="${APK:-$(ls -t /home/ub/AppData/android/tgx/app/build/outputs/apk/latestX64/debug/*-x64-debug.apk 2>/dev/null | head -1)}"
 a() { timeout 25 adb "$@"; }
 if [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; then
   echo "== эмулятор $AVD (окно) =="
