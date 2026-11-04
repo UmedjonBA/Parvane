@@ -246,15 +246,28 @@ json readStateEvent(Hist &h, const std::string &chat, const std::string &chatKey
 // Строки, изменившиеся от журнала или чужой мутации, → события шва: новые — "message", правка — "edited", реакции и
 // закреп — "meta", надгробие — "deleted"; затем счётчики затронутых чатов (READ-2: пачка счётчик не раздувает —
 // он выставляется заново от маркера).
+void placeByTime(std::vector<json> &msgs);
+
 void showStates(Hist &h, const std::vector<json> &states) {
     const auto me = self();
     std::map<std::string, std::string> chats; // адрес → ключ чата
-    for (const auto &st : states) {
+    // Строка, менявшаяся в пачке несколько раз, показывается последним состоянием
+    std::map<std::string, std::size_t> lastAt;
+    for (std::size_t i = 0; i < states.size(); ++i) {
+        const auto view = viewOf(states[i]);
+        if (!view.empty()) lastAt[view.value("id", std::string())] = i;
+    }
+    // Новые строки догрузки встают как при реплее с диска (по id — UUIDv7, затем placeByTime), а не порядком операций
+    // журнала: на новом устройстве близкие по времени сообщения иначе шли вперемешку (ORDER-1)
+    std::vector<json> fresh;
+    for (std::size_t i = 0; i < states.size(); ++i) {
+        const auto &st = states[i];
         const auto view = viewOf(st);
         if (view.empty() || view.value("orphan", true)) continue; // сирота ждёт сообщение
         const auto id = view.value("id", std::string());
         const auto chat = parvane::v2::Session::historyAddress(view.value("chat", json()));
         if (id.empty() || chat.empty()) continue;
+        if (lastAt[id] != i) continue;
         chats[chat] = view.value("chatKey", std::string());
         if (!view.value("visible", false)) {
             forgetMessage(id);
@@ -271,7 +284,7 @@ void showStates(Hist &h, const std::vector<json> &states) {
                 deferLinkedGroupRow(chat, std::move(ev));
                 continue;
             }
-            emit(ev);
+            fresh.push_back(std::move(ev));
             continue;
         }
         const auto content = contentOfView(view);
@@ -286,6 +299,10 @@ void showStates(Hist &h, const std::vector<json> &states) {
         }
         emit(metaEventOf(view, me));
     }
+    std::stable_sort(fresh.begin(), fresh.end(),
+                     [](const json &a, const json &b) { return a.value("id", std::string()) < b.value("id", std::string()); });
+    placeByTime(fresh);
+    for (auto &ev : fresh) emit(ev);
     for (const auto &[chat, key] : chats) emit(readStateEvent(h, chat, key));
 }
 

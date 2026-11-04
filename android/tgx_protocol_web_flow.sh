@@ -20,6 +20,9 @@ export PARVANE_GATEWAY_ORIGIN="${PARVANE_GATEWAY_ORIGIN:-ws://127.0.0.1:* ws://l
 if [ "${PARVANE_E2E_SKIP_WEB_BUILD:-0}" != 1 ]; then
   (cd "$REPO/web/telegram-tt" && npm run build:production >"$OUT/web-build.log" 2>&1) && ok "web собран (диаг-сборка)" || { bad "web не собрался"; finish "TGX WEB2-ANDROID2"; }
 fi
+# Звонки сценария: микрофон и камера выданы заранее (после pm clear в tgx_fresh их нет — X ждал бы системного окна)
+a shell pm grant "$TGX_PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1
+a shell pm grant "$TGX_PKG" android.permission.CAMERA >/dev/null 2>&1
 tgx_stop; tgx_start
 tgx_logwait "v2: готов" 90 && ok "X: сессия поднята" || bad "X: сессии нет"
 (cd "$REPO/web/telegram-tt" && node_modules/.bin/vite preview --host 127.0.0.1 --port "$WEB_PORT" --strictPort >"$OUT/web.log" 2>&1) &
