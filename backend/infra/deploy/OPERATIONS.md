@@ -24,7 +24,7 @@ docker compose up -d                        # применить изменён�
 ## Регистрация (открытая, подтверждение через Telegram-бота или почту)
 Пароля на сайт больше нет (снят 2026-09-05). Регистрация: ник + пароль →
 экран «Confirm via Telegram» (deep link `t.me/<bot>?start=<token>`) → Start в
-боте → клиент логинится сам. Бот живёт на VPS 213.155.15.139
+боте → клиент логинится сам. Бот живёт на VPS 84.19.3.252
 (`backend/infra/telegram-bot`, юнит `parvane-tg-bot`, env `/etc/parvane/tg-bot.env`),
 потому что с прод-сервера api.telegram.org недоступен. В `.env` identity:
 ```
@@ -44,7 +44,7 @@ identity | grep Telegram` на проде.
 токены входа в `login_links` (10 мин, одноразовые). Бот отвечает «Вход
 подтверждён» (поле `kind: login` в ответе identity.telegram.confirm).
 Обновление бота на VPS: `scp backend/infra/telegram-bot/parvane_tg_bot.py
-root@213.155.15.139:/opt/parvane-tg-bot/ && ssh root@213.155.15.139 systemctl
+root@84.19.3.252:/opt/parvane-tg-bot/ && ssh root@84.19.3.252 systemctl
 restart parvane-tg-bot`.
 
 Запасной вариант — почта (когда появится SMTP): убрать PARVANE_TELEGRAM_*,
@@ -207,27 +207,30 @@ docker compose restart cloud        # чистка при старте; без �
 ## TURN на VPS (звонки с мобильных сетей)
 Relay хостера (192.168.0.20, «кривой» range-DNAT) снаружи недостижим: звонок с
 телефона (CGNAT/VPN) висел на «exchanging encryption keys» и падал. TURN/STUN
-поднят на VPS 213.155.15.139 (публичный IP, тот же хост, что Telegram-бот):
+поднят на VPS 84.19.3.252 (публичный IP, тот же хост, что Telegram-бот):
 - бинарь `/usr/local/bin/parvane-turn` (backend/infra/turn, сборка:
   `podman run --rm --network=host -v $PWD:/src:Z -w /src -e CGO_ENABLED=0
   golang:1-alpine go build -o parvane-turn .`), systemd `parvane-turn`,
   env `/etc/parvane/turn.env` (TURN_SECRET = PARVANE_TURN_SECRET прода,
-  UDP+TCP 3478, relay 49160-49400, TURN_PUBLIC_IP=213.155.15.139).
-- прод `.env`: `PARVANE_TURN_URL=turn:213.155.15.139:3478?transport=udp,
-  turn:213.155.15.139:3478?transport=tcp`, `PARVANE_STUN_URLS=stun:213.155.15.139:3478`
+  UDP+TCP 3478, relay 49160-49400, TURN_PUBLIC_IP=84.19.3.252).
+- с 5 ноя 2026 — на этом VPS (прежний 213.155.15.139 из сети пользователя недостижим). Служба под `DynamicUser`;
+  порты открывает `parvane-turn-fw.service` — дописывает правила в таблицу `inet ubfw` после каждой загрузки
+  `ub-firewall.service` (файл файрвола sing-box не трогаем).
+- прод `.env`: `PARVANE_TURN_URL=turn:84.19.3.252:3478?transport=udp,
+  turn:84.19.3.252:3478?transport=tcp`, `PARVANE_STUN_URLS=stun:84.19.3.252:3478`
   (call-шард принимает список URL через запятую; compose подставляет старый
   локальный TURN, если переменные не заданы).
 - локальный контейнер `turn` из compose и его сборка из deploy.sh удалены
   (6 сен 2026); PARVANE_TURN_RELAY_IP/MIN/MAX_PORT в .env прода больше не
   используются.
-- проверка снаружи: `TURN_URL=turn:213.155.15.139:3478?transport=udp
+- проверка снаружи: `TURN_URL=turn:84.19.3.252:3478?transport=udp
   TURN_USER=<expiry>:probe@local TURN_PASS=<base64 HMAC-SHA1(secret, user)>
   node scripts/e2e_turn_relay_check.mjs` → `RELAY OK` с relay-кандидатом
-  213.155.15.139. Логи: `journalctl -u parvane-turn -f` на VPS.
+  84.19.3.252. Логи: `journalctl -u parvane-turn -f` на VPS.
 
 ## Проброс хостера: замер 14 сен 2026 (после «исправления» админом)
 Админ убрал случайность range-DNAT, но не более того. Измерено снаружи
-(слушатели на сервере / VPS 213.155.15.139 как внешний наблюдатель):
+(слушатели на сервере / VPS 84.19.3.252 как внешний наблюдатель):
 - **Внутрь**: внешний `20160+k` → внутренний `49160+k` стабильно по всему
   диапазону (раньше — случайный порт). «Те же порты» (20160→20160) НЕ сделаны.
 - **Наружу**: ОТВЕТ на входящий поток NAT переписывает верно (VPS → 20170 →

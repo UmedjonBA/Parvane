@@ -313,7 +313,7 @@ services:
     volumes:
       - tor-data:/var/lib/tor
 
-  # TURN/STUN вынесен на VPS 213.155.15.139 (см. OPERATIONS.md «TURN на VPS»):
+  # TURN/STUN вынесен на VPS 84.19.3.252 (см. OPERATIONS.md «TURN на VPS»):
   # relay хостера снаружи недостижим. Локальный контейнер turn удалён.
 
 volumes:
