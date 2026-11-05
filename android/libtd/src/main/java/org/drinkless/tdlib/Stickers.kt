@@ -19,6 +19,8 @@ class Stickers(
     private val root: File,
     private val post: (TdApi.Update) -> Unit,
     private val core: Core = RealCore,
+    /** PACK-3: записи наборов в журнале состояния изменились своей правкой — дослать вид `packs`. */
+    private val journalChanged: () -> Unit = {},
 ) {
     /** Мост к ядру (подменяется в JVM-тестах). */
     interface Core {
@@ -31,6 +33,8 @@ class Stickers(
     }
 
     val index = PackIndex(root)
+    /** PACK-3: рабочая копия записей вида `packs` журнала личного состояния и сопоставление ключей. */
+    val journal = PackJournal(root)
     private val stateFile = File(root, "stickers-state.json")
     private val recent = ArrayList<String>()     // "setId:name"
     private val favorite = ArrayList<String>()
@@ -121,12 +125,82 @@ class Stickers(
         return TdApi.Stickers(out.toTypedArray())
     }
     fun change(setId: Long, isInstalled: Boolean, isArchived: Boolean): TdApi.Object {
+        val r = applyChange(setId, isInstalled, isArchived)
+        if (r !is TdApi.Ok) return r
+        val p = index.bySetId(setId) ?: return r
+        // PACK-3: установка — запись журнала, удаление — запись снимается; архив набор не снимает (остаётся своим)
+        if (isInstalled && !isArchived) { if (recordInJournal(p)) journalChanged() }
+        else if (!isInstalled && journal.forget(setId) != null) journalChanged()
+        return r
+    }
+    private fun applyChange(setId: Long, isInstalled: Boolean, isArchived: Boolean): TdApi.Object {
         val p = index.bySetId(setId) ?: return TdApi.Error(404, "sticker set not found")
         if (isInstalled && !ensureMaterialized(p)) return TdApi.Error(400, "pack not available")
         if (!index.change(setId, isInstalled, isArchived)) return TdApi.Error(400, "builtin pack cannot be removed")
         Log.i(TAG, "пак ${p.rawName} ${if (isInstalled && !isArchived) "установлен: ${p.files.size} ${if (p.isEmoji) "эмодзи" else "стикеров"}" else if (isArchived) "в архиве" else "удалён"}")
         post(TdApi.UpdateInstalledStickerSets(PackIndex.stickerType(p.isEmoji), index.installedIds(p.isEmoji)))
         return TdApi.Ok()
+    }
+
+    // ── журнал личного состояния (PACK-3) ──────────────────────────────────
+    /**
+     * Установленный набор → запись журнала ссылкой на архив (полученный набор — его `pack_ref`; свой без ссылки —
+     * архив загружается тем же путём, что при отправке). Встроенные не пишутся (они есть у всех). true — запись новая.
+     */
+    private fun recordInJournal(p: PackIndex.Pack): Boolean {
+        if (p.builtin) return false
+        val ref = p.ref ?: packRefForSend(p, emptyList())
+        if (ref == null || ref.optString("file_id").isEmpty()) { Log.w(TAG, "стикеры: набор ${p.setId} не записан в журнал — архив не загружен"); return false }
+        val before = journal.records().toString()
+        journal.record(ref, p.isEmoji, p.setId) ?: return false
+        if (journal.records().toString() == before) return false
+        Log.i(TAG, "стикеры: набор ${p.setId} записан в журнал состояния")
+        return true
+    }
+
+    /**
+     * Проекция журнала: снятые на другом своём устройстве наборы — снять здесь, недостающие — скачать архив по
+     * ссылке и поставить (без подтверждения). Сеть — блокирует: звать не с потока X.
+     */
+    @Synchronized fun applyJournal(pr: PackJournal.Projection) {
+        for (setId in pr.removed) {
+            val p = index.bySetId(setId) ?: continue
+            if (!p.installed || p.builtin) continue
+            if (applyChange(setId, false, false) is TdApi.Ok) Log.i(TAG, "стикеры: набор $setId снят (журнал состояния)")
+        }
+        for (rec in pr.records) {
+            val key = rec.optString("set_id")
+            val ref = rec.optJSONObject("ref") ?: continue
+            // PACK-2: тот же набор у этого устройства — один набор; id — по правилам этого клиента
+            val p = journal.localIdOf(key)?.let(index::bySetId) ?: index.registerReceived(ref, rec.optBoolean("emoji"))
+            journal.setLocalId(key, p.setId)
+            if (p.installed) continue
+            if (applyChange(p.setId, true, false) is TdApi.Ok) Log.i(TAG, "стикеры: набор ${p.setId} установлен из журнала состояния")
+            else Log.w(TAG, "стикеры: набор ${p.setId} из журнала не установлен (архив недоступен)")
+        }
+    }
+
+    /**
+     * Наборы, установленные до PACK-3, — в журнал один раз на устройство (дальше журнал главнее). Набор без ссылки
+     * на архив пропускается (своих наборов шов не создаёт — такие бывают только встроенные). true — записи добавлены.
+     */
+    @Synchronized fun migrateToJournal(): Boolean {
+        if (journal.isMigrated()) return false
+        val have = journal.keys()
+        var added = 0; var skipped = 0
+        for (p in index.all()) {
+            if (p.builtin || !p.installed) continue
+            val ref = p.ref
+            val key = ref?.let(PackJournal::keyOf)
+            if (ref == null || key == null) { skipped++; Log.w(TAG, "стикеры: набор ${p.setId} без ссылки на архив — в журнал не перенесён"); continue }
+            if (key in have) { journal.setLocalId(key, p.setId); continue }
+            journal.record(ref, p.isEmoji, p.setId)
+            Log.i(TAG, "стикеры: набор ${p.setId} записан в журнал состояния")
+            added++
+        }
+        journal.markMigrated()
+        if (added > 0 || skipped > 0) Log.i(TAG, "стикеры: перенос в журнал состояния — записано $added, без ссылки $skipped")
+        return added > 0
     }
 
     // ── недавние / избранные ───────────────────────────────────────────────

@@ -69,6 +69,18 @@ a push "$HERE/tgx-overlay/app/src/main/res/drawable-nodpi/parvane_mascot.png" /d
 a shell chmod 644 /data/local/tmp/pv-pic.png
 tgx_mark; tgx_cmd '{"op":"cloud_upload","path":"/data/local/tmp/pv-pic.png","name":"Маскот.png","mime":"image/png"}'
 tgx_logwait "cloud_upload →" 60 >/dev/null || bad "картинка в облако не загружена"
+# Заметка с картинкой из облака, заголовком = названию (не повторяется), пунктом и кодом со ссылкой (4 ноя 2026)
+tgx_mark; tgx_cmd '{"op":"note_create","title":"Картинка в заметке","text":"# Картинка в заметке\n\nТекст до картинки.\n![[Маскот.png]]\n- [ ] Отметь меня\n\n`[[Код]]` — код, не ссылка"}'
+tgx_logwait "note_create →" 30 >/dev/null || bad "заметка с картинкой не создана"
+# Видео в заметке (5 ноя 2026): нажатие — плеер X, как видео в чате
+CLIP="$OUT/clip.mp4"
+ffmpeg -y -loglevel error -f lavfi -i testsrc=duration=2:size=320x240:rate=15 -c:v mpeg4 -pix_fmt yuv420p "$CLIP"
+a push "$CLIP" /data/local/tmp/pv-clip.mp4 >/dev/null 2>&1
+a shell chmod 644 /data/local/tmp/pv-clip.mp4
+tgx_mark; tgx_cmd '{"op":"cloud_upload","path":"/data/local/tmp/pv-clip.mp4","name":"Ролик.mp4","mime":"video/mp4"}'
+tgx_logwait "cloud_upload →" 60 >/dev/null || bad "видео в облако не загружено"
+tgx_mark; tgx_cmd '{"op":"note_create","title":"Видео в заметке","text":"Ролик ниже.\n![[Ролик.mp4]]"}'
+tgx_logwait "note_create →" 30 >/dev/null || bad "заметка с видео не создана"
 tgx_mark; tgx_cmd '{"op":"canvas_create","title":"Доска","text":"{\"nodes\":[{\"id\":\"f1\",\"type\":\"file\",\"file\":\"Маскот.png\",\"x\":0,\"y\":0,\"width\":300,\"height\":300},{\"id\":\"l1\",\"type\":\"link\",\"url\":\"https://example.org\",\"x\":340,\"y\":0,\"width\":320,\"height\":160},{\"id\":\"t1\",\"type\":\"text\",\"text\":\"Идея на доске\",\"x\":340,\"y\":200,\"width\":250,\"height\":80}],\"edges\":[]}"}'
 tgx_logwait "canvas_create →" 30 >/dev/null || bad "холст не создан"
 tgx_mark; tgx_cmd '{"op":"sections","section":"chats"}'
@@ -108,6 +120,23 @@ tab 'Знания|Knowledge' && shot knowledge 4
 tab 'Список книг' && shot note-open
 swipe_up 600; shot note-scroll 1
 tab 'Знания|Knowledge'; sleep 2
+tgx_mark
+tab 'Картинка в заметке' && shot note-embed 6
+tgx_logwait "заметка: встроенная картинка показана" 30 >/dev/null && ok "заметка: картинка из облака показана" \
+  || bad "заметка: картинка из облака не показана"
+tab 'Знания|Knowledge'; sleep 2
+tgx_mark
+tab 'Видео в заметке'
+# Ролик залит без миниатюры: заставка — кадр из самого ролика (NoteController.loadVideoPoster)
+tgx_logwait "заметка: кадр видео показан" 60 >/dev/null && ok "заметка: у видео без миниатюры есть кадр-заставка" \
+  || bad "заметка: у видео нет кадра-заставки"
+shot note-video 2
+ui_tap '^▶' 15 || bad "заметка: у видео нет кнопки воспроизведения"
+tgx_logwait "заметка: видео открыто плеером X" 60 >/dev/null && ok "заметка: видео открыто плеером X" \
+  || bad "заметка: видео не открылось плеером X"
+shot note-video-player 4
+a shell input keyevent 4; sleep 2
+tab 'Знания|Knowledge'; sleep 2
 for t in "Граф|Graph:graph" "Холст|Canvas:canvas" "Файлы|Files:files"; do
   tab "${t%%:*}" && shot "knowledge-${t##*:}" 3
 done
@@ -145,6 +174,14 @@ if [ -n "${PV_TGX_THEME:-}" ]; then
   flip "$PV_TGX_THEME" dark theme-live-chats-dark 1060 330
   a shell rm -f /data/local/tmp/parvane-theme
 fi
+# «Сообщить об ошибке» (4 ноя 2026): получатель — bugs@<домен своего адреса>; на стенде — desktop-клиент bugs@local
+BG="$SB/bugs"; BGL="$BG/td/log.txt"
+PBG=$(start_client "$BG" bugs@local PARVANE_NO_LINK_OFFER=1)
+wait_log "$BGL" "v2: готов" 90 || bad "bugs@local не поднялся"
+tgx_mark; tgx_cmd '{"op":"bug_report","text":"проверка отчёта с Android"}'
+tgx_logwait "отчёт об ошибке → отправлен" 60 >/dev/null && ok "X: отчёт об ошибке отправлен на bugs@local" || bad "X: отчёт об ошибке не отправлен"
+wait_log "$BGL" "входящее медиа .*kind=file" 90 && ok "bugs@local: файл отчёта пришёл" || bad "bugs@local: отчёта нет"
+stop_pid "$PBG"
 tgx_no_crash
 kill "$TGX_LCP" 2>/dev/null
 echo "снимки: $OUT ($N)"

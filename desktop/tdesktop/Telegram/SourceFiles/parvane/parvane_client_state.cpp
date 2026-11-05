@@ -274,8 +274,16 @@ void ApplyV2Group(const QString &address, const parvane::json &info, bool isNew)
 // Черновики tdesktop хранит в своём локальном хранилище, блок-лист и архив у
 // десктопа локально не ведутся (MTProto заглушён) — эти виды журнал не трогает.
 const std::vector<std::string> kV2StateKinds{
-	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts", "unread", "reaction",
+	"folders", "scheduled", "notify", "blocked", "archived", "pinned", "drafts", "unread", "reaction", "packs",
 };
+// PACK-3: записи вида `packs` (state.v1.StickerPack) — зеркало журнала на этом устройстве, файл аккаунта
+// `tdata/parvane-sticker-packs-<адрес>.json` {self, packs, migrated}. Только main.
+parvane::json g_stickerPackRecords = parvane::json::array();
+bool g_stickerPacksLoaded = false;
+bool g_stickerPacksMigrated = false;   // наборы, стоявшие до PACK-3, перенесены в журнал
+bool g_stickerPacksMigrating = false;
+QSet<QString> g_stickerPacksTried;     // ключи, установка которых из журнала уже запускалась в этом запуске
+void LoadStickerPacksLocal();
 // T024: черновики (как web stateJournal drafts) — адрес → {text, entities, dateMs}. Только main; файл в tdata.
 struct DraftEntry {
 	QString text;
@@ -500,6 +508,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	} else if (!g_quickEmoji.isEmpty()) {
 		quickReaction["emoji"] = g_quickEmoji.toStdString();
 	}
+	LoadStickerPacksLocal();
 	auto drafts = parvane::json::array();
 	LoadDraftsLocal();
 	for (auto it = g_drafts.constBegin(); it != g_drafts.constEnd(); ++it) {
@@ -531,6 +540,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 			parvane::json{ { "list", "PIN_LIST_MAIN" }, { "peers", std::move(pinnedPeers) } } }) },
 		{ "unread_marks", std::move(unreadMarks) },
 		{ "quick_reaction", std::move(quickReaction) },
+		{ "sticker_packs", g_stickerPackRecords },
 	};
 }
 
@@ -581,6 +591,7 @@ std::unique_ptr<base::Timer> g_stateTimer;
 		{ "drafts", digest(canon("drafts", false)) },
 		{ "unread", digest(canon("unread_marks", false)) },
 		{ "reaction", digest(canon("quick_reaction", true)) },
+		{ "packs", digest(canon("sticker_packs", false)) },
 	};
 }
 
@@ -1049,6 +1060,159 @@ void ProjectUnreadAndReaction(not_null<Main::Session*> session, const parvane::j
 		.arg(!custom.isEmpty() ? (u"custom:"_q + custom) : emoji.isEmpty() ? u"по умолчанию"_q : emoji));
 }
 
+// ── PACK-3: свои наборы стикеров/эмодзи (вид `packs`) ───────────────────────
+[[nodiscard]] QString StickerPacksPath() {
+	return AccountFilePath(u"parvane-sticker-packs-"_q, SelfAddress(), u".json"_q);
+}
+
+void LoadStickerPacksLocal() { // main
+	if (g_stickerPacksLoaded) {
+		return;
+	}
+	const auto path = StickerPacksPath();
+	if (path.isEmpty()) {
+		return; // адрес ещё неизвестен — прочитаем позже
+	}
+	g_stickerPacksLoaded = true;
+	const auto j = parvane::json::parse(StoreRead(path).toStdString(), nullptr, false);
+	if (!j.is_object() || j.value("self", std::string()) != SelfAddress().toStdString()) {
+		return;
+	}
+	const auto packs = j.value("packs", parvane::json::array());
+	g_stickerPackRecords = packs.is_array() ? packs : parvane::json::array();
+	g_stickerPacksMigrated = j.value("migrated", false);
+}
+
+void SaveStickerPacksLocal() { // main
+	const auto path = StickerPacksPath();
+	if (path.isEmpty()) {
+		return;
+	}
+	const auto j = parvane::json{
+		{ "self", SelfAddress().toStdString() },
+		{ "packs", g_stickerPackRecords },
+		{ "migrated", g_stickerPacksMigrated },
+	};
+	StoreWrite(path, QByteArray::fromStdString(j.dump()));
+}
+
+[[nodiscard]] QString StickerPackRecordKey(const parvane::json &record) {
+	if (!record.is_object() || !record.contains("ref") || !record["ref"].is_object()
+		|| record["ref"].value("file_id", std::string()).empty()) {
+		return QString();
+	}
+	return QString::fromStdString(record.value("set_id", std::string()));
+}
+
+// Записи журнала, которых на устройстве нет, — поставить (раз за запуск на ключ). Пока идёт перенос
+// стоявших до PACK-3 наборов, ждём: полураспакованный каталог перенос принял бы за новый набор.
+void InstallMissingStickerPacks() { // main
+	if (g_stickerPacksMigrating) {
+		return;
+	}
+	for (const auto &record : g_stickerPackRecords) {
+		const auto key = StickerPackRecordKey(record);
+		if (key.isEmpty() || g_stickerPacksTried.contains(key)) {
+			continue;
+		}
+		g_stickerPacksTried.insert(key);
+		InstallStickerPackFromJournal(record);
+	}
+}
+
+// Наборы из журнала → установить недостающие. Снятия набора на desktop нет (локальный набор tdesktop
+// убрать нечем — «Удалить набор» уходит в MTProto), поэтому пропавшая из журнала запись набор не трогает.
+void ProjectStickerPacks(const parvane::json &snap) { // main
+	LoadStickerPacksLocal();
+	auto next = parvane::json::array();
+	if (snap.contains("sticker_packs") && snap["sticker_packs"].is_array()) {
+		for (const auto &record : snap["sticker_packs"]) {
+			if (!StickerPackRecordKey(record).isEmpty()) {
+				next.push_back(record);
+			}
+		}
+	}
+	if (next != g_stickerPackRecords) {
+		auto kept = QSet<QString>();
+		for (const auto &record : next) {
+			kept.insert(StickerPackRecordKey(record));
+		}
+		for (const auto &record : g_stickerPackRecords) {
+			const auto key = StickerPackRecordKey(record);
+			if (!key.isEmpty() && !kept.contains(key)) {
+				g_stickerPacksTried.remove(key);
+				LOG(("Parvane: стикеры: набор %1 убран из журнала состояния — на desktop набор остаётся").arg(key));
+			}
+		}
+		g_stickerPackRecords = std::move(next);
+		SaveStickerPacksLocal();
+	}
+	InstallMissingStickerPacks();
+}
+
+void RecordStickerPack(const parvane::json &ref, bool emoji) { // main
+	LoadStickerPacksLocal();
+	const auto archive = PackArchiveRef(ref);
+	const auto key = PackJournalKey(archive);
+	if (key.empty() || archive.value("file_id", std::string()).empty()) {
+		LOG(("Parvane: стикеры: набор не записан в журнал — нет ссылки на архив"));
+		return;
+	}
+	auto record = parvane::json{
+		{ "set_id", key },
+		{ "ref", archive },
+		{ "added_ms", std::to_string(QDateTime::currentMSecsSinceEpoch()) },
+	};
+	if (emoji) {
+		record["emoji"] = true;
+	}
+	auto next = parvane::json::array();
+	for (const auto &item : g_stickerPackRecords) {
+		if (item.value("set_id", std::string()) != key) {
+			next.push_back(item);
+		}
+	}
+	next.push_back(std::move(record));
+	g_stickerPackRecords = std::move(next);
+	g_stickerPacksTried.insert(QString::fromStdString(key)); // набор стоит здесь
+	SaveStickerPacksLocal();
+	LOG(("Parvane: стикеры: набор %1 записан в журнал состояния").arg(QString::fromStdString(key)));
+	ScheduleStateFlush("packs");
+}
+
+// Наборы, стоявшие на устройстве до PACK-3, — в журнал один раз (дальше журнал главнее). Звать при подключении
+// журнала ДО проекции снимка: установки из журнала ждут конца переноса.
+void MigrateStickerPacksOnce(const parvane::json &snap) { // main
+	LoadStickerPacksLocal();
+	if (g_stickerPacksMigrated || g_stickerPacksMigrating) {
+		return;
+	}
+	auto recorded = QSet<QString>();
+	for (const auto &record : g_stickerPackRecords) {
+		recorded.insert(StickerPackRecordKey(record));
+	}
+	if (snap.is_object() && snap.contains("sticker_packs") && snap["sticker_packs"].is_array()) {
+		for (const auto &record : snap["sticker_packs"]) {
+			recorded.insert(StickerPackRecordKey(record));
+		}
+	}
+	g_stickerPacksMigrating = true;
+	UploadLocalStickerPacksForJournal(recorded, [](std::vector<parvane::json> refs, bool complete) {
+		g_stickerPacksMigrating = false;
+		for (const auto &ref : refs) {
+			RecordStickerPack(ref, false);
+		}
+		if (complete) {
+			g_stickerPacksMigrated = true;
+			SaveStickerPacksLocal();
+		}
+		LOG(("Parvane: стикеры: перенос установленных наборов в журнал состояния — %1 записано%2")
+			.arg(int(refs.size()))
+			.arg(complete ? QString() : u" (не всё, повтор при следующем подключении)"_q));
+		InstallMissingStickerPacks();
+	});
+}
+
 // Архив и закреп основного списка из журнала → локальные списки → чаты.
 void ProjectDialogs(not_null<Main::Session*> session, const parvane::json &snap) {
 	auto archived = QSet<QString>();
@@ -1270,6 +1434,7 @@ void ProjectState(not_null<Main::Session*> session, const parvane::json &snap) {
 	ProjectBlocked(session, snap);
 	ProjectDialogs(session, snap);
 	ProjectUnreadAndReaction(session, snap);
+	ProjectStickerPacks(snap);
 	ProjectDrafts(session, snap);
 	g_stateApplying = false;
 	SaveFolders(session);
@@ -1525,6 +1690,7 @@ void AttachStateJournal() {
 				return;
 			}
 			g_stateAttached = true;
+			MigrateStickerPacksOnce(snap); // PACK-3: до проекции — установки из журнала ждут переноса
 			ProjectState(session, snap);
 			SaveStateSynced(BuildLocalState(session));
 			if (!g_stateTimer) {
@@ -2003,6 +2169,11 @@ void ResetStateAccountData() {
 	g_stateSyncedSaved.clear();
 	g_migrationTriedAt.clear();
 	g_groupPublic.clear();
+	g_stickerPackRecords = parvane::json::array();
+	g_stickerPacksLoaded = false;
+	g_stickerPacksMigrated = false;
+	g_stickerPacksMigrating = false;
+	g_stickerPacksTried.clear();
 }
 
 } // namespace Parvane

@@ -125,7 +125,10 @@ void ConvertLegacyLocked(parvane::history::FileRowStore &store, const QString &s
 	const auto selfStd = self.toStdString();
 	auto last = std::map<std::string, parvane::json>(); // id → последняя строка (журнал дописывался)
 	for (auto &row : legacy) {
-		last[row.value("id", std::string())] = std::move(row);
+		// Ключ — до переноса: в `a = b` (C++17) правая часть вычисляется первой, и operator= по значению
+		// опустошил бы `row` раньше `row.value("id")` (4 ноя 2026: падение при первом запуске на прежнем журнале)
+		auto id = row.value("id", std::string());
+		last[std::move(id)] = std::move(row);
 	}
 	auto converted = 0;
 	auto marks = std::map<std::string, parvane::json>();

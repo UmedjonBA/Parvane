@@ -4919,6 +4919,48 @@ void MaterializeEmojiPacks(not_null<Main::Session*> session,
 	return out;
 }
 
+// Воркер: скачать архив набора по ссылке, проверить отпечаток (PACK-2) и
+// распаковать в dest. Число распакованных файлов; 0 — не вышло. Общая часть
+// установки из окна набора и из журнала состояния (PACK-3).
+[[nodiscard]] int DownloadPackArchiveTo(
+		const std::string &fileId,
+		const std::string &key,
+		const std::string &nonce,
+		const std::string &contentHash,
+		const QString &dest,
+		const QString &shown) {
+	if (!ControlSnapshot()) {
+		return 0;
+	}
+	try {
+		auto d = DownloadChatBlob(
+			fileId,
+			parvane::chatrules::chatBlobCipherCap("pack", 0));
+		if (!d.ok) {
+			return 0;
+		}
+		auto bytes = std::string();
+		if (key.empty()) {
+			bytes = std::move(d.bytes);
+		} else if (auto dec = parvane::blobcrypt::decrypt(d.bytes, key, nonce)) {
+			bytes = std::move(*dec);
+		}
+		// PACK-2: архив обязан дать заявленный отпечаток —
+		// иначе отправитель подменил бы картинки чужого набора
+		if (!bytes.empty() && !contentHash.empty()
+			&& !parvane::pack::archiveMatchesContentHash(bytes, contentHash)) {
+			LOG(("Parvane: пак «%1»: содержимое архива не совпало с отпечатком — отвергнут")
+				.arg(shown));
+			return 0;
+		}
+		return bytes.empty() ? 0 : UnpackPackArchive(bytes, dest);
+	} catch (const std::exception &e) {
+		LOG(("Parvane: установка пака не удалась: %1")
+			.arg(QString::fromUtf8(e.what())));
+	}
+	return 0;
+}
+
 } // namespace Internal
 
 void LoadLocalStickerPacks(not_null<Main::Session*> session); // ниже по файлу
@@ -4966,41 +5008,9 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 				close();
 				g_packInstallBusy.insert(fileId);
 				const auto fid = fileId.toStdString();
-				const auto self = SelfAddress().toStdString();
-				const auto token = Token().toStdString();
 				crl::async([=] {
-					const auto t = ControlSnapshot();
-					auto unpacked = 0;
-					if (t) {
-						try {
-							auto d = DownloadChatBlob(
-								fid,
-								parvane::chatrules::chatBlobCipherCap("pack", 0));
-							if (d.ok) {
-								auto bytes = std::string();
-								if (key.empty()) {
-									bytes = std::move(d.bytes);
-								} else if (auto dec = parvane::blobcrypt::decrypt(
-										d.bytes, key, nonce)) {
-									bytes = std::move(*dec);
-								}
-								// PACK-2: архив обязан дать заявленный отпечаток —
-								// иначе отправитель подменил бы картинки чужого набора
-								if (!bytes.empty() && !contentHash.empty()
-									&& !parvane::pack::archiveMatchesContentHash(bytes, contentHash)) {
-									LOG(("Parvane: пак «%1»: содержимое архива не совпало с отпечатком — отвергнут")
-										.arg(shown));
-									bytes.clear();
-								}
-								if (!bytes.empty()) {
-									unpacked = UnpackPackArchive(bytes, dest);
-								}
-							}
-						} catch (const std::exception &e) {
-							LOG(("Parvane: установка пака не удалась: %1")
-								.arg(QString::fromUtf8(e.what())));
-						}
-					}
+					const auto unpacked = DownloadPackArchiveTo(
+						fid, key, nonce, contentHash, dest, shown);
 					crl::on_main([=] {
 						g_packInstallBusy.remove(fileId);
 						if (unpacked > 0) {
@@ -5010,6 +5020,8 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 							LOG(("Parvane: пак «%1» установлен (%2 шт)")
 								.arg(shown)
 								.arg(unpacked));
+							// PACK-3: набор — на все свои устройства
+							RecordStickerPack(ref, false);
 							Ui::show(Ui::MakeInformBox(
 								tr::lng_parvane_sticker_set_added(tr::now, lt_name, shown, lt_amount, QString::number(unpacked))));
 						} else {
@@ -5054,6 +5066,165 @@ void InstallStickerPackFromDocument(DocumentData *document) {
 				}
 			}
 			install(root + u"/"_q + shown, shown);
+		});
+	});
+}
+
+// ── PACK-3: свои наборы на всех своих устройствах ───────────────────────────
+// Ключ записи журнала — общий для клиентов: "h:" + отпечаток (PACK-2), без
+// отпечатка — "n:" + нормализованное имя. Локальный набор desktop (каталог в
+// StickerPacksRoot) по ключу находится так же, как при установке из окна
+// набора: по отпечатку содержимого либо по имени каталога.
+std::string PackJournalKey(const parvane::json &ref) {
+	if (!ref.is_object()) {
+		return {};
+	}
+	const auto hash = ref.value("content_hash", std::string());
+	if (!hash.empty()) {
+		return "h:" + hash;
+	}
+	const auto name = ref.value("name", std::string());
+	return name.empty() ? std::string() : ("n:" + parvane::pack::sanitizeName(name));
+}
+
+// Ссылка на архив набора → state.v1.PackArchive (только поля схемы).
+parvane::json PackArchiveRef(const parvane::json &ref) {
+	auto out = parvane::json::object();
+	if (!ref.is_object()) {
+		return out;
+	}
+	for (const auto field : { "file_id", "name", "key", "nonce", "capability", "content_hash", "blob_domain" }) {
+		const auto value = ref.value(field, std::string());
+		if (!value.empty()) {
+			out[field] = value;
+		}
+	}
+	if (ref.contains("count") && ref["count"].is_number_integer() && ref["count"].get<std::int64_t>() > 0) {
+		out["count"] = ref["count"].get<std::int64_t>();
+	}
+	return out;
+}
+
+// Запись журнала, которой нет на устройстве: скачать и поставить без окна
+// подтверждения (набор поставлен своим же устройством). Main.
+void InstallStickerPackFromJournal(const parvane::json &record) {
+	const auto setKey = QString::fromStdString(record.value("set_id", std::string()));
+	const auto ref = record.value("ref", parvane::json::object());
+	const auto fileId = QString::fromStdString(ref.value("file_id", std::string()));
+	if (setKey.isEmpty() || fileId.isEmpty() || g_packInstallBusy.contains(fileId)) {
+		return;
+	}
+	RememberBlobCaps(ref);
+	if (record.value("emoji", false)) {
+		// Набор эмодзи — тем же путём, что пак из сообщения (каталог по имени, EMOJI-1)
+		if (const auto s = g_sessionWeak.get()) {
+			MaterializeEmojiPacks(s, parvane::json{ { "emoji_packs", parvane::json::array({ ref }) } });
+			LOG(("Parvane: стикеры: набор %1 (эмодзи) из журнала состояния — материализация").arg(setKey));
+		}
+		return;
+	}
+	const auto name = SanitizePackName(QString::fromStdString(ref.value("name", std::string())));
+	const auto key = ref.value("key", std::string());
+	const auto nonce = ref.value("nonce", std::string());
+	const auto contentHash = ref.value("content_hash", std::string());
+	const auto root = StickerPacksRoot();
+	const auto generation = AccountGeneration();
+	g_packInstallBusy.insert(fileId);
+	crl::async([=] {
+		// Тот же набор уже стоит (PACK-2: по отпечатку; без него — по имени)
+		auto dest = QString();
+		if (contentHash.empty()) {
+			if (!QDir(root + u"/"_q + name).exists()) {
+				dest = root + u"/"_q + name;
+			}
+		} else if (FindInstalledPackByHash(root, contentHash).isEmpty()) {
+			auto shown = name;
+			if (QDir(root + u"/"_q + shown).exists()) {
+				shown = DistinctPackName(name, contentHash);
+			}
+			if (!QDir(root + u"/"_q + shown).exists()) {
+				dest = root + u"/"_q + shown;
+			}
+		}
+		const auto unpacked = dest.isEmpty()
+			? 0
+			: DownloadPackArchiveTo(fileId.toStdString(), key, nonce, contentHash, dest, name);
+		crl::on_main([=] {
+			g_packInstallBusy.remove(fileId);
+			if (!AccountGenerationIs(generation) || dest.isEmpty()) {
+				return;
+			}
+			if (unpacked <= 0) {
+				LOG(("Parvane: стикеры: набор %1 из журнала не установлен (архив недоступен)").arg(setKey));
+				return;
+			}
+			if (const auto s = g_sessionWeak.get()) {
+				LoadLocalStickerPacks(s);
+			}
+			LOG(("Parvane: стикеры: набор %1 установлен из журнала состояния").arg(setKey));
+		});
+	});
+}
+
+// Перенос наборов, стоявших до PACK-3: у набора без записи в журнале архив
+// загружается в облако (как при отправке стикера, по capability) и ссылка
+// уходит в done. complete = false — часть не загрузилась (перенос повторить).
+void UploadLocalStickerPacksForJournal(
+		const QSet<QString> &recorded,
+		Fn<void(std::vector<parvane::json> refs, bool complete)> done) {
+	const auto root = StickerPacksRoot();
+	const auto generation = AccountGeneration();
+	crl::async([=] {
+		auto refs = std::vector<parvane::json>();
+		auto complete = true;
+		const auto rootDir = QDir(root);
+		const auto names = rootDir.exists()
+			? rootDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)
+			: QStringList();
+		for (const auto &packName : names) {
+			if (!AccountGenerationIs(generation)) {
+				return;
+			}
+			const auto dir = rootDir.filePath(packName);
+			const auto archive = BuildPackArchive(dir);
+			if (archive.empty()) {
+				continue;
+			}
+			const auto hash = parvane::pack::archiveContentHashB64(archive);
+			const auto byHash = QString::fromStdString("h:" + hash);
+			const auto byName = QString::fromStdString(
+				"n:" + parvane::pack::sanitizeName(packName.toStdString()));
+			if ((!hash.empty() && recorded.contains(byHash)) || recorded.contains(byName)) {
+				continue;
+			}
+			try {
+				auto penc = parvane::blobcrypt::encrypt(archive);
+				if (penc.ciphertext.empty()) {
+					complete = false;
+					continue;
+				}
+				const auto pfid = UploadBlobWith(penc.ciphertext, { kBlobCapabilityMark });
+				auto ref = parvane::json{
+					{ "file_id", pfid },
+					{ "name", ReadRawPackName(dir, packName).toStdString() },
+					{ "count", int(QDir(dir).entryList(
+						{ u"*.webp"_q, u"*.png"_q, u"*.tgs"_q, u"*.webm"_q },
+						QDir::Files).size()) },
+					{ "key", penc.keyB64 },
+					{ "nonce", penc.nonceB64 } };
+				AttachBlobCap(ref, pfid);
+				AttachPackContentHash(ref, archive);
+				refs.push_back(std::move(ref));
+			} catch (const std::exception &e) {
+				complete = false;
+				LOG(("Parvane: стикеры: набор «%1» не загружен для журнала: %2")
+					.arg(packName, QString::fromUtf8(e.what())));
+			}
+		}
+		crl::on_main([=] {
+			if (AccountGenerationIs(generation)) {
+				done(refs, complete);
+			}
 		});
 	});
 }
@@ -9822,6 +9993,34 @@ namespace Internal {
 }
 
 } // namespace Internal
+
+bool OpenVideoInViewer(const QString &path, const QString &name, const QString &mime, int64 size) {
+	const auto session = g_sessionWeak.get();
+	const auto window = Core::App().activePrimaryWindow();
+	const auto controller = window ? window->sessionController() : nullptr;
+	if (!session || !controller || path.isEmpty() || !QFileInfo::exists(path)) {
+		return false;
+	}
+	// Документ — локальный, id из пути (один файл заметки — один документ на сессию); размеры кадра и
+	// длительность просмотрщик берёт из самого файла
+	const auto docId = std::int64_t(IdForAddress(u"note-video:"_q + path) & ~(std::uint64_t(1) << 63));
+	const auto mtpDoc = buildLocalMtpDocument(
+		session,
+		docId,
+		u"video"_q,
+		mime.isEmpty() ? u"video/mp4"_q : mime,
+		size > 0 ? size : QFileInfo(path).size(),
+		name,
+		base::unixtime::now(),
+		0,
+		0,
+		0,
+		path);
+	const auto doc = session->data().processDocument(mtpDoc);
+	doc->setLocation(Core::FileLocation(path));
+	controller->openDocument(doc, true, Window::SessionController::MessageContext());
+	return true;
+}
 
 void SendBugReport(not_null<Main::Session*> session, const QString &description, Fn<void(QString)> done) {
 	const auto address = BugReportAddress();

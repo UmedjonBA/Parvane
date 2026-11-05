@@ -13,7 +13,8 @@
 
 export const PARVANE_DIAG_ENABLED = true;
 export const PARVANE_BUG_REPORT_ADDRESS = (
-  (import.meta.env?.VITE_PARVANE_BUG_REPORT_TO as string | undefined) || 'bugs@server'
+  // Без домена — на своём сервере (провайдер дописывает домен своего адреса): bugs@<домен сервера>
+  (import.meta.env?.VITE_PARVANE_BUG_REPORT_TO as string | undefined) || 'bugs'
 );
 
 export type DiagEntry = {

@@ -3095,7 +3095,8 @@ void ActionsFiller::fillUserActions(not_null<UserData*> user) {
 			addEnhancedPrivacyAction(user); // Parvane: режим L2 чата
 		}
 	}
-	if (!user->isSelf() && !user->isSupport() && !user->isVerifyCodes()) {
+	// Parvane fork: служебные уведомления (777000) — не собеседник, блокировать нечего
+	if (!user->isSelf() && !user->isSupport() && !user->isVerifyCodes() && !user->isServiceUser()) {
 		if (user->isBot()) {
 			addBotCommandActions(user);
 			_wrap->add(CreateSkipWidget(_wrap, st::infoBlockButtonSkip));

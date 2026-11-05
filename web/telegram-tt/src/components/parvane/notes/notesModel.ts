@@ -99,7 +99,8 @@ export function parseNote(text: string): ParsedNote {
   const tasks: NoteTask[] = [];
   lines.forEach((line, index) => {
     if (fenced[index]) return;
-    findLinks(masked[index]).forEach(({ target }) => {
+    findLinks(masked[index]).forEach(({ target, from }) => {
+      if (isFileEmbed(masked[index], from, target)) return;
       const key = normalizeNoteTitle(target);
       if (key && !links.has(key)) links.set(key, target.trim());
     });
@@ -474,6 +475,16 @@ function matchProperty(line: string): [string, string, string | undefined] | und
   const rest = line.slice(colon + 1);
   if (rest && !/^\s/.test(rest)) return undefined;
   return [line, line.slice(0, colon).trimEnd(), rest ? rest.replace(/^\s+/, '') : undefined];
+}
+
+// Встроенный файл `![[фото.jpg]]` — вложение заметки, не ссылка на заметку: граф не рисует его узлом «заметки ещё
+// нет» (решение пользователя 5 ноя 2026, как Obsidian по умолчанию). Встроенная заметка (`![[Заметка]]`,
+// `![[Заметка.md]]`) остаётся ссылкой. То же в ядре desktop/android (`notes_model.cpp isFileEmbed`)
+function isFileEmbed(maskedLine: string, from: number, target: string) {
+  if (from === 0 || maskedLine[from - 1] !== '!') return false;
+  const name = target.trim().split('#')[0];
+  const ext = /\.([A-Za-z0-9]{1,8})$/.exec(name.slice(name.lastIndexOf('/') + 1))?.[1];
+  return Boolean(ext) && ext.toLowerCase() !== 'md';
 }
 
 function findLinks(maskedLine: string) {

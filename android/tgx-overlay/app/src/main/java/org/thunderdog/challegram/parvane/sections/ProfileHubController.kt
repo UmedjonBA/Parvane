@@ -22,7 +22,7 @@ import org.thunderdog.challegram.ui.SettingsThemeController
 /**
  * Parvane (spec 032): вкладка «Профиль» 1:1 с телефонной версией web (`SettingsMain`): карточка аккаунта,
  * «Мессенджер — экраны настроек Telegram» (экраны X), «Parvane» (настройки плана, цели здоровья, хранилище
- * заметок, оформление), «Ещё» (ночной режим, работа в фоне, выгрузка), «Выйти» и версия.
+ * заметок, оформление), «Ещё» (ночной режим, работа в фоне, выгрузка, «Сообщить об ошибке»), «Выйти» и версия.
  */
 class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(context, tdlib) {
     override val section = "chats"
@@ -98,6 +98,9 @@ class ProfileHubController(context: Context, tdlib: Tdlib) : SectionController(c
             row("refresh", Sx.t("Работа в фоне", "Background delivery"), backgroundSubtitle()) { chooseBackground() }
             row("download", Sx.t("Выгрузить мои данные", "Export my data"), Sx.t("ZIP: переписка, «План», заметки", "ZIP: chats, plan, notes")) {
                 DataExport.start(context())
+            }
+            row("flag", Sx.t("Сообщить об ошибке", "Report a bug"), Sx.t("Описание и журнал приложения", "Description and app log")) {
+                BugReport.show(context())
             }
         })
         add(context.pvCard().apply {

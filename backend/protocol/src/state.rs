@@ -33,7 +33,7 @@ use crate::limits::Origin;
 use crate::pb::parvane::core::v2::UserRef;
 use crate::pb::parvane::state::v1::{
     peer, state_op::Op, AppendRequest, BlockEntry, CallRecord, ChatCleared, Draft, Folder, FolderOrder, GroupInvite, NotifyDefaults, Peer,
-    CloudContainer, CloudContainerRole, PlannerContainer, QuickReaction,
+    CloudContainer, CloudContainerRole, PlannerContainer, QuickReaction, StickerPack, StickerPackKey,
     PeerKey, PeerNotify, PinList, PinnedOrder, ScheduledMessage, ScheduledRef, StateKeyShare, StateOp, StateRecord, StateSnapshot,
 };
 
@@ -303,6 +303,8 @@ pub struct PersonalState {
     unread_marks: BTreeMap<String, Lww<Peer>>,
     // Быстрая реакция: LWW-регистр.
     quick_reaction: Option<Lww<QuickReaction>>,
+    // Свои наборы стикеров и эмодзи (PACK-3) по set_id: запись целиком по метке.
+    sticker_packs: BTreeMap<String, Lww<StickerPack>>,
     max_lamport: u64,
 }
 
@@ -364,6 +366,24 @@ fn check_folder(f: &Folder) -> Result<()> {
 }
 
 /// Эмодзи либо id собственного эмодзи (десятичный), не оба; оба пусты — реакция по умолчанию.
+const MAX_PACK_SET_ID: usize = 128;
+
+fn pack_key(set_id: &str) -> Result<String> {
+    if set_id.is_empty() || set_id.len() > MAX_PACK_SET_ID {
+        return Err(ProtoError::InvalidField("sticker_pack"));
+    }
+    Ok(set_id.to_string())
+}
+
+// Набор без ссылки на архив скачать нечем — такую запись не принимаем
+fn check_sticker_pack(p: &StickerPack) -> Result<String> {
+    let key = pack_key(&p.set_id)?;
+    match p.r#ref.as_ref() {
+        Some(r) if !r.file_id.is_empty() => Ok(key),
+        _ => Err(ProtoError::InvalidField("sticker_pack")),
+    }
+}
+
 fn check_quick_reaction(r: &QuickReaction) -> Result<()> {
     let is_custom_valid = r.custom_emoji_id.is_empty() || r.custom_emoji_id.bytes().all(|b| b.is_ascii_digit());
     if !is_custom_valid || (!r.emoji.is_empty() && !r.custom_emoji_id.is_empty()) {
@@ -522,6 +542,14 @@ impl PersonalState {
                 check_quick_reaction(r)?;
                 put_reg(&mut self.quick_reaction, &stamp, r.clone());
             }
+            Some(Op::StickerPackSet(p)) => {
+                let k = check_sticker_pack(p)?;
+                put(&mut self.sticker_packs, k, &stamp, Some(p.clone()));
+            }
+            Some(Op::StickerPackRemove(p)) => {
+                let k = pack_key(&p.set_id)?;
+                put(&mut self.sticker_packs, k, &stamp, None);
+            }
             Some(Op::ChatCleared(c)) => {
                 let k = opt_peer_key(&c.peer)?;
                 if c.cleared_until_ms <= 0 {
@@ -564,6 +592,7 @@ impl PersonalState {
             cloud_containers: live(&self.cloud_containers),
             unread_marks: live(&self.unread_marks),
             quick_reaction: self.quick_reaction.as_ref().and_then(|e| e.value.clone()),
+            sticker_packs: live(&self.sticker_packs),
         }
     }
 
@@ -689,6 +718,7 @@ pub fn migrate_snapshot_with(
             .map(|p| Op::UnreadMarkSet(PeerKey { peer: Some(p.clone()) })),
     );
     kinds.extend(snapshot.quick_reaction.clone().map(Op::QuickReaction));
+    kinds.extend(snapshot.sticker_packs.iter().cloned().map(Op::StickerPackSet));
 
     let mut scratch = PersonalState::new();
     let mut out = Vec::with_capacity(kinds.len());
@@ -755,6 +785,8 @@ pub fn without_present(local: &StateSnapshot, current: &StateSnapshot) -> StateS
     if current.quick_reaction.is_some() {
         out.quick_reaction = None;
     }
+    let packs: HashSet<&str> = current.sticker_packs.iter().map(|p| p.set_id.as_str()).collect();
+    out.sticker_packs.retain(|p| !packs.contains(p.set_id.as_str()));
     out
 }
 
@@ -778,11 +810,12 @@ pub struct Managed {
     pub pinned: bool,
     pub unread: bool,
     pub reaction: bool,
+    pub packs: bool,
 }
 
 impl Managed {
     /// Из списка имён (`folders`, `blocked`, `notify`, `drafts`, `scheduled`,
-    /// `archived`, `pinned`, `unread`, `reaction`); незнакомые имена пропускаются.
+    /// `archived`, `pinned`, `unread`, `reaction`, `packs`); незнакомые имена пропускаются.
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
         let mut m = Managed::default();
         for n in names {
@@ -796,6 +829,7 @@ impl Managed {
                 "pinned" => m.pinned = true,
                 "unread" => m.unread = true,
                 "reaction" => m.reaction = true,
+                "packs" => m.packs = true,
                 _ => {}
             }
         }
@@ -915,6 +949,20 @@ pub fn diff_ops(current: &StateSnapshot, desired: &StateSnapshot, m: Managed) ->
         for (k, p) in &cur {
             if !want.contains_key(k) {
                 out.push(Op::UnreadMarkRemove(PeerKey { peer: Some(p.clone()) }));
+            }
+        }
+    }
+    if m.packs {
+        let cur = keyed(&current.sticker_packs, |p| pack_key(&p.set_id).ok());
+        let want = keyed(&desired.sticker_packs, |p| check_sticker_pack(p).ok());
+        for (k, p) in &want {
+            if cur.get(k) != Some(p) {
+                out.push(Op::StickerPackSet(p.clone()));
+            }
+        }
+        for k in cur.keys() {
+            if !want.contains_key(k) {
+                out.push(Op::StickerPackRemove(StickerPackKey { set_id: k.clone() }));
             }
         }
     }
@@ -1103,6 +1151,47 @@ mod tests {
         // Неуправляемое (звонки) разница не трогает.
         assert_eq!(got.calls.len(), 1);
         assert!(diff_ops(&got, &desired, m).is_empty());
+    }
+
+    #[test]
+    fn sticker_packs_diff_and_merge() {
+        use crate::pb::parvane::state::v1::PackArchive as PackRef;
+        let pack = |id: &str, file: &str| StickerPack {
+            set_id: id.into(),
+            r#ref: Some(PackRef { file_id: file.into(), name: id.into(), count: 3, ..Default::default() }),
+            emoji: false,
+            added_ms: 1,
+        };
+        let mut s = PersonalState::new();
+        let mut c = LamportClock::default();
+        let m = Managed::from_names(["packs"]);
+        let mut desired = s.snapshot();
+        desired.sticker_packs = vec![pack("cats", "f1"), pack("dogs", "f2")];
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert_eq!(s.snapshot().sticker_packs, desired.sticker_packs);
+        assert!(diff_ops(&s.snapshot(), &desired, m).is_empty());
+        // Новый архив того же набора — запись заменяется; снятый набор — надгробие
+        desired.sticker_packs = vec![pack("cats", "f9")];
+        for op in diff_ops(&s.snapshot(), &desired, m) {
+            s.apply(&make_op(&mut c, "d1", 0, op).unwrap()).unwrap();
+        }
+        assert_eq!(s.snapshot().sticker_packs, desired.sticker_packs);
+        // Другое устройство: перенос снимка без журнала даёт те же записи
+        let mut clock = LamportClock::default();
+        let ops = migrate_snapshot(&s.snapshot(), "d2", &mut clock, 0).unwrap();
+        let mut other = PersonalState::new();
+        for op in &ops {
+            other.apply(op).unwrap();
+        }
+        assert_eq!(other.snapshot().sticker_packs, s.snapshot().sticker_packs);
+        // Неуправляемый вид разница не трогает; набор без архива и пустой id — отказ
+        assert!(diff_ops(&s.snapshot(), &PersonalState::new().snapshot(), Managed::from_names(["unread"])).is_empty());
+        let no_ref = StickerPack { set_id: "x".into(), r#ref: None, emoji: false, added_ms: 0 };
+        assert!(s.apply(&make_op(&mut c, "d1", 0, Op::StickerPackSet(no_ref)).unwrap()).is_err());
+        let empty = StickerPackKey { set_id: String::new() };
+        assert!(s.apply(&make_op(&mut c, "d1", 0, Op::StickerPackRemove(empty)).unwrap()).is_err());
     }
 
     #[test]

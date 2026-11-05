@@ -15,10 +15,14 @@
 #include "core/file_utilities.h"
 #include "core/mime_type.h"
 #include "lang/lang_keys.h"
+#include "media/clip/media_clip_reader.h"
+#include "ui/chat/attach/attach_prepare.h"
 #include "ui/painter.h"
 
 #include <crl/crl_async.h>
 #include <crl/crl_on_main.h>
+
+#include <map>
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -60,6 +64,16 @@ constexpr auto kEmbedImageMaxSide = 2560;
 // Вложение чужой статьи по «Воспроизвести»/«Скачать» — не крупнее (как «Сохранить» в окне статьи); 0 снимал потолок вовсе
 constexpr auto kEmbedFileMaxBytes = int64_t(512) * 1024 * 1024;
 
+// Видео облака без миниатюры (залито до 5 ноя 2026 или клиентом без кадра): заставка — кадр самого ролика, если он
+// не больше этого (как web `VIDEO_THUMB_BACKFILL_MAX`); крупнее — карточка «Воспроизвести»
+constexpr auto kVideoFrameMaxBytes = int64_t(64) * 1024 * 1024;
+
+// Кадры роликов без миниатюры за время работы — по fileId блоба, чтобы не качать ролик на каждом открытии заметки
+[[nodiscard]] std::map<std::string, QImage> &VideoFrames() {
+	static auto frames = std::map<std::string, QImage>();
+	return frames;
+}
+
 // Файл, выбранный пользователем («Сохранить как»)
 [[nodiscard]] bool WriteFile(const QString &path, const QByteArray &bytes) {
 	auto f = QFile(path);
@@ -79,6 +93,10 @@ public:
 		setCursor(isMissing() ? style::cur_default : style::cur_pointer);
 		if (isImage()) {
 			startImage();
+		} else if (isVideoPoster()) {
+			startPoster();
+		} else if (isVideoWithoutThumb()) {
+			startVideoFrame();
 		}
 		resize(width(), resizeGetHeight(width()));
 	}
@@ -91,7 +109,7 @@ public:
 
 protected:
 	int resizeGetHeight(int newWidth) override {
-		if (isImage() && !_image.isNull()) {
+		if ((isImage() || hasPoster()) && !_image.isNull()) {
 			const auto size = imageSize(newWidth);
 			return size.height();
 		}
@@ -101,12 +119,15 @@ protected:
 	void paintEvent(QPaintEvent *e) override {
 		auto p = QPainter(this);
 		PainterHighQualityEnabler hq(p);
-		if (isImage() && !_image.isNull()) {
+		if ((isImage() || hasPoster()) && !_image.isNull()) {
 			const auto size = imageSize(width());
 			auto path = QPainterPath();
 			path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), Rem(0.5), Rem(0.5));
 			p.setClipPath(path);
 			p.drawImage(QRect(QPoint(), size), _image);
+			if (hasPoster()) {
+				paintPlayButton(p, QRect(QPoint(), size));
+			}
 			return;
 		}
 		paintCard(p);
@@ -132,6 +153,86 @@ private:
 	}
 	[[nodiscard]] bool isPlayable() const {
 		return _kind == cloud::FileKind::Video || _kind == cloud::FileKind::Audio;
+	}
+	// Видео облака с миниатюрой — кадром со значком ▶ (как web MediaEmbed); файл до нажатия не качается
+	[[nodiscard]] bool isVideoPoster() const {
+		return _source.type == EmbedSource::Type::Cloud
+			&& _kind == cloud::FileKind::Video
+			&& _source.node.thumb.has_value()
+			&& !_source.node.thumb->is_null();
+	}
+
+	[[nodiscard]] bool isVideoWithoutThumb() const {
+		return _source.type == EmbedSource::Type::Cloud
+			&& _kind == cloud::FileKind::Video
+			&& !isVideoPoster()
+			&& _source.size > 0
+			&& _source.size <= kVideoFrameMaxBytes
+			&& !BlobFileId(_source.node).empty();
+	}
+	[[nodiscard]] bool hasPoster() const {
+		return isVideoPoster() || _videoFrame;
+	}
+
+	// Ролик качается во временный каталог экземпляра, кадр (≤ 1 с) берёт тот же разбор, что и миниатюра при заливке
+	void startVideoFrame() {
+		const auto key = BlobFileId(_source.node);
+		if (const auto i = VideoFrames().find(key); i != VideoFrames().end()) {
+			_videoFrame = true;
+			setImage(i->second);
+			return;
+		}
+		const auto weak = QPointer<EmbedView>(this);
+		Cloud::DownloadToTemp({ Cloud::Entry{ _source.container, _source.node } }, [=](QStringList paths, QString) {
+			if (paths.isEmpty()) {
+				return;
+			}
+			const auto path = paths.front();
+			crl::async([=] {
+				const auto prepared = ::Media::Clip::PrepareForSending(path, QByteArray());
+				auto frame = QImage();
+				if (const auto video = std::get_if<Ui::PreparedFileInformation::Video>(&prepared.media)) {
+					frame = video->thumbnail;
+				}
+				QFile::remove(path);
+				crl::on_main([=] {
+					if (frame.isNull()) {
+						return;
+					}
+					VideoFrames()[key] = frame;
+					if (weak) {
+						weak->_videoFrame = true;
+						weak->setImage(frame);
+					}
+				});
+			});
+		});
+	}
+
+	void startPoster() {
+		const auto refresh = [=] {
+			auto image = CanvasMedia::Thumb(_source.container, _source.node);
+			if (!image.isNull() && image.cacheKey() != _image.cacheKey()) {
+				setImage(std::move(image));
+			}
+		};
+		refresh();
+		CanvasMedia::Updated() | rpl::on_next(refresh, lifetime());
+	}
+
+	void paintPlayButton(QPainter &p, QRect area) {
+		const auto d = Rem(3);
+		const auto c = area.center();
+		p.setPen(Qt::NoPen);
+		p.setBrush(ToneColor(Tone::Accent));
+		p.drawEllipse(QRect(c.x() - d / 2, c.y() - d / 2, d, d));
+		const auto t = d / 3.;
+		auto triangle = QPolygonF();
+		triangle << QPointF(c.x() - t * 0.4, c.y() - t / 2.)
+			<< QPointF(c.x() - t * 0.4, c.y() + t / 2.)
+			<< QPointF(c.x() + t * 0.6, c.y());
+		p.setBrush(ToneColor(Tone::Bg));
+		p.drawPolygon(triangle);
 	}
 
 	[[nodiscard]] QSize imageSize(int available) const {
@@ -282,7 +383,12 @@ private:
 			weak->_failed = path.isEmpty();
 			weak->update();
 			if (!path.isEmpty()) {
-				QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+				// Видео — плеером просмотрщика tdesktop (как видео в чате), прочее — системой
+				const auto inViewer = (weak->_kind == cloud::FileKind::Video)
+					&& OpenVideoInViewer(path, weak->_source.name, Q(weak->_source.mime), weak->_source.size);
+				if (!inViewer) {
+					QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+				}
 			}
 		};
 		if (_source.type == EmbedSource::Type::Cloud) {
@@ -339,6 +445,7 @@ private:
 	std::string _acquired;
 	bool _busy = false;
 	bool _failed = false;
+	bool _videoFrame = false; // заставка — кадр ролика без миниатюры (startVideoFrame)
 
 };
 

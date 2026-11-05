@@ -1068,7 +1068,8 @@ class CanvasBoardView(
  * недоступное повторяется не раньше чем через [RETRY_MS] — облако могло ещё не загрузиться.
  */
 object CanvasMedia {
-    class FileInfo(val name: String, val size: Long, val type: String, val image: android.graphics.Bitmap?, val askedFull: Boolean)
+    class FileInfo(val name: String, val size: Long, val type: String, val image: android.graphics.Bitmap?, val askedFull: Boolean,
+                   val node: String = "", val mime: String = "", val kind: String = "")
     class LinkInfo(val title: String, val description: String, val site: String, val image: android.graphics.Bitmap?) {
         val hasContent get() = title.isNotEmpty() || description.isNotEmpty() || image != null
     }
@@ -1126,6 +1127,36 @@ object CanvasMedia {
             }
         }
         return have
+    }
+
+    /** Встроенный файл заметки (`![[имя]]`): файл ищет ядро, как web `resolveEmbed` (рядом с заметкой, потом по
+     *  диску); у картинки — сам файл (сторона ≤ [MAX_SIDE]). Нет в кэше — null, готово позже — `ready()`. */
+    fun embed(context: Context, name: String, noteId: String, ready: () -> Unit): FileInfo? {
+        val key = "embed|$noteId|$name"
+        files.get(key)?.let { return it }
+        if (busy(key)) return null
+        val root = (Sx.last("cloud") ?: ParvaneSections.snapshot("cloud"))?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
+            ?: return null
+        loading += key
+        worker.execute {
+            val out = java.io.File(context.cacheDir, "parvane-embed-${Integer.toHexString(key.hashCode())}")
+            val info = try {
+                val r = ParvaneSections.cloudFiles("noteEmbed", JSONObject().put("container", root).put("name", name)
+                    .put("note", noteId).put("full", true).put("out", out.absolutePath)) as? JSONObject
+                if (r == null || !r.optBoolean("found")) null else {
+                    val kind = r.optString("image")
+                    FileInfo(r.optString("name"), r.optLong("size"), r.optString("type"),
+                        if (kind == "full" || kind == "thumb") decode(out) else null, true,
+                        r.optString("node"), r.optString("mime"), r.optString("kind"))
+                }
+            } catch (e: Throwable) { null } finally { out.delete() }
+            Sx.main.post {
+                loading -= key
+                if (info == null) failedAt[key] = System.currentTimeMillis() else files.put(key, info)
+                ready()
+            }
+        }
+        return null
     }
 
     /** Превью ссылки: нет — ещё грузится (null) либо пустое (`hasContent == false`). */

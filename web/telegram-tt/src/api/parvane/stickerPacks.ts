@@ -373,6 +373,12 @@ export function registerReceivedPackRef(ref: WirePackRef, from?: string): string
   return setId;
 }
 
+// Ключ своего набора в журнале состояния (PACK-3) — общий для всех клиентов: отпечаток содержимого (PACK-2),
+// у старых ссылок без него — имя набора. Локальный id набора у клиентов свой (разные хеши), он сюда не идёт
+export function packJournalKey(ref: Pick<WirePackRef, 'content_hash' | 'name'>) {
+  return ref.content_hash ? `h:${ref.content_hash}` : `n:${sanitizePackName(ref.name || 'Pack')}`;
+}
+
 // Эмодзи-пак, приложенный к тексту (emoji_packs): регистрируем как обычный
 // pack_ref + помним сырое имя для docId
 export function registerReceivedEmojiPackRef(ref: WirePackRef, from?: string): string {

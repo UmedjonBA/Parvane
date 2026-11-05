@@ -15,6 +15,7 @@ import org.json.JSONObject
  * Блок-лист шва раньше жил только в памяти — теперь переживает рестарт через журнал.
  * Настройки уведомлений (T132, FR-039) — тоже вид журнала: открытый v1-блоб
  * `msg.chat.setnotify` списка заглушённых больше не несёт (правило STATE-2).
+ * Свои наборы стикеров и эмодзи (PACK-3) — вид `packs`, рабочая копия записей — [PackJournal].
  * Порт web `src/api/parvane/v2/stateJournal.ts`. Чистый JVM-класс: движок и
  * адресация — через [Codec]/[Resolver].
  */
@@ -55,8 +56,10 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val unread = HashSet<Long>()
         /** STATE-2: сменилась быстрая реакция. */
         var reaction = false
+        /** PACK-3: записи наборов стикеров изменились (поставить недостающие, снять убранные). */
+        var packs: PackJournal.Projection? = null
         fun any() = blocked.isNotEmpty() || folders || drafts.isNotEmpty() || archived.isNotEmpty() || scheduledAdded.isNotEmpty() ||
-            scheduledRemoved.isNotEmpty() || notify != null || pinned.isNotEmpty() || unread.isNotEmpty() || reaction
+            scheduledRemoved.isNotEmpty() || notify != null || pinned.isNotEmpty() || unread.isNotEmpty() || reaction || packs != null
     }
 
     /**
@@ -128,7 +131,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         private set
 
     // ── локальные данные → желаемый снимок (виды [KINDS]) ───────────────────
-    fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null): JSONObject {
+    fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null,
+              packs: PackJournal? = null): JSONObject {
         val folders = JSONArray()
         val order = JSONArray()
         local.folders.all().forEach { f ->
@@ -173,6 +177,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         out.put("pinned", JSONArray().put(JSONObject().put("list", "PIN_LIST_MAIN").put("peers", peers(local.pinnedChatIds(), "pins"))))
         out.put("unread_marks", peers(local.unreadMarkedChatIds(), "unread"))
         out.put("quick_reaction", local.quickReaction().takeIf { it.isNotEmpty() }?.let { JSONObject().put("emoji", it) } ?: JSONObject())
+        // PACK-3: свои наборы стикеров и эмодзи — рабочая копия записей (без неё вид `packs` в желаемом не меняется)
+        if (packs != null) out.put("sticker_packs", packs.records())
         // Настройки уведомлений (FR-039): кто заглушён — только своим устройствам, сервер этого не видит
         if (notify != null) {
             val list = JSONArray()
@@ -193,8 +199,10 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
     }
 
     // ── сведённый снимок → локальные данные ───────────────────────────────────
-    fun project(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet(), notify: NotifyView? = null): Changes {
+    fun project(snap: JSONObject, local: ChatLocalState, queue: ScheduledQueue, blockedSet: MutableSet<String> = HashSet(), notify: NotifyView? = null,
+                packs: PackJournal? = null): Changes {
         val ch = Changes()
+        if (packs != null) ch.packs = packs.project(snap.optJSONArray("sticker_packs"))
         if (notify != null) projectNotify(snap, notify, ch)
         val bl = snap.optJSONArray("blocked") ?: JSONArray()
         val want = (0 until bl.length()).mapNotNull { addressOf(bl.optJSONObject(it)?.optJSONObject("peer")) }.filter { it.contains('@') }.toSet()
@@ -351,7 +359,7 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
 
     companion object {
         /** Виды, которые ведёт шов (остальные виды журнала не трогаются). */
-        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction")
+        val KINDS = listOf("folders", "blocked", "drafts", "archived", "scheduled", "notify", "pinned", "unread", "reaction", "packs")
         private val NOTIFY_SCOPES = listOf("users", "groups", "channels")
         const val V2_GROUP_PREFIX = "v2g:"
         private val HEX32 = Regex("^[0-9a-f]{32}$")

@@ -26,8 +26,9 @@ import type {
   OnApiUpdate } from '../types';
 import type { ServerInfo } from './connectionController';
 import type { GatewayConnection } from './gateway';
+import type { LocalStickerPack } from './localState';
 import type { PackFile, StoredPack } from './stickerPacks';
-import type { WireUserInfo } from './wire';
+import type { WirePackRef, WireUserInfo } from './wire';
 import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 
 import {
@@ -115,7 +116,10 @@ import {
   isEmojiPackSetId,
   loadInstalledPacks,
   packContentHash,
+  packJournalKey,
   parsePvpkArchive,
+  registerReceivedEmojiPackRef,
+  registerReceivedPackRef,
   removeInstalledPack,
   resetPackRegistries,
   resolveSetIdByShortName,
@@ -482,8 +486,136 @@ const stateJournal = createStateJournal({
     merge: (invites) => v2Controller.mergeSharedInvites(invites),
   },
   onAppended: () => journalTabs.post('state'),
+  // Наборы приходят из журнала после входа — к этому моменту провайдер собран
+  applyStickerPacks: (packs, removed) => {
+    void applyJournalStickerPacks(packs, removed)
+      .catch((e: unknown) => logDebug(`стикеры: наборы из журнала не применены: ${String(e)}`));
+  },
   log: logDebug,
 });
+
+// ── Свои наборы стикеров и эмодзи на всех своих устройствах (PACK-3, 5 ноя 2026) ─────────────────────────
+// Установленный набор записывается в журнал личного состояния ссылкой на архив в облаке (тот же `pack_ref`, что у
+// стикера в сообщении); другие свои устройства скачивают архив и ставят набор под тем же id
+
+/** Установить набор по id (архив — из ссылки, зарегистрированной ранее). Эмодзи ли он; undefined — не вышло. */
+async function installCustomPack(stickerSetId: string): Promise<boolean | undefined> {
+  if (!isCustomPackSetId(stickerSetId)) return undefined;
+  const resolved = await resolveCustomPack(stickerSetId);
+  if (!resolved) return undefined;
+  const isEmoji = isEmojiPackSetId(stickerSetId) || Boolean(resolved.pack.isEmoji);
+  const rawName = resolved.pack.rawName || (isEmoji ? getEmojiPackRawName(stickerSetId) : undefined);
+  await saveInstalledPack(store.self, {
+    ...resolved.pack,
+    // Набор — тот, по которому пак пришёл: у одноимённого пака другого
+    // отправителя он свой (PACK-1/EMOJI-1), и хранение обязано их различать
+    setId: stickerSetId,
+    isEmoji: isEmoji || undefined,
+    rawName,
+    aliases: isEmoji ? getEmojiPackNames(stickerSetId, resolved.pack).filter((name) => name !== rawName) : undefined,
+  });
+  const built = buildCustomSet(stickerSetId, resolved.pack, INSTALLED_PACK_DATE);
+  registerPackBlobs(built.blobs);
+  sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
+  return isEmoji;
+}
+
+async function uninstallCustomPack(stickerSetId: string) {
+  const pack = await findInstalledPackBySetId(store.self, stickerSetId);
+  if (!pack) return false;
+  await removeInstalledPack(store.self, stickerSetId);
+  sendUpdate({ '@type': 'updateStickerSet', id: stickerSetId, stickerSet: { installedDate: undefined } });
+  return true;
+}
+
+// Ключ журнала → локальный id набора на этом устройстве (у клиентов разные хеши id; журнал несёт общий ключ)
+function packLocalIds(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(`parvane:pack-local-ids:${store.self}`) || '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function savePackLocalId(key: string, setId: string | undefined) {
+  const ids = packLocalIds();
+  if (setId) ids[key] = setId;
+  else delete ids[key];
+  try {
+    localStorage.setItem(`parvane:pack-local-ids:${store.self}`, JSON.stringify(ids));
+  } catch {
+    // Квота: сопоставление восстановится при следующей установке
+  }
+}
+
+async function recordStickerPack(setId: string, isEmoji: boolean) {
+  try {
+    // Набор пришёл в сообщении — его архив уже в облаке; свой — загружается (тем же путём, что при отправке)
+    const ref = getReceivedPackRef(setId) || await messageController.packRefForSet(setId);
+    if (!ref?.file_id) {
+      logDebug(`стикеры: набор ${setId} не записан в журнал — архив не загружен`);
+      return;
+    }
+    const key = packJournalKey(ref);
+    savePackLocalId(key, setId);
+    const packs = localState.loadStickerPacks().filter((p) => p.set_id !== key);
+    packs.push({ set_id: key, ref: { ...ref }, emoji: isEmoji || undefined, added_ms: String(Date.now()) });
+    localState.saveStickerPacks(packs);
+    logDebug(`стикеры: набор ${setId} записан в журнал состояния`);
+  } catch (e) {
+    logDebug(`стикеры: набор ${setId} не записан в журнал: ${String(e)}`);
+  }
+}
+
+function forgetStickerPack(setId: string) {
+  const key = Object.entries(packLocalIds()).find(([, id]) => id === setId)?.[0];
+  if (!key) return;
+  savePackLocalId(key, undefined);
+  const packs = localState.loadStickerPacks();
+  if (!packs.some((p) => p.set_id === key)) return;
+  localState.saveStickerPacks(packs.filter((p) => p.set_id !== key));
+}
+
+// Журнал: недостающие наборы скачать и поставить, убранные на другом устройстве — снять
+async function applyJournalStickerPacks(packs: LocalStickerPack[], removed: string[]) {
+  const ids = packLocalIds();
+  for (const key of removed) {
+    const setId = ids[key];
+    savePackLocalId(key, undefined);
+    if (setId && await uninstallCustomPack(setId)) logDebug(`стикеры: набор ${setId} снят (журнал состояния)`);
+  }
+  for (const pack of packs) {
+    const ref = pack.ref as WirePackRef;
+    // PACK-2: тот же набор (по отпечатку) у получателя — один набор; id — по правилам этого клиента
+    const setId = pack.emoji ? registerReceivedEmojiPackRef(ref) : registerReceivedPackRef(ref);
+    savePackLocalId(pack.set_id, setId);
+    if (await findInstalledPackBySetId(store.self, setId)) continue;
+    const isEmoji = await installCustomPack(setId);
+    logDebug(isEmoji === undefined
+      ? `стикеры: набор ${setId} из журнала не установлен (архив недоступен)`
+      : `стикеры: набор ${setId} установлен из журнала состояния`);
+  }
+}
+
+// Наборы, установленные до PACK-3, — в журнал один раз на устройство (дальше журнал главнее)
+async function syncInstalledPacksOnce() {
+  const key = `parvane:packs-synced:${store.self}`;
+  try {
+    if (localStorage.getItem(key) === '1') return;
+  } catch {
+    return;
+  }
+  const recorded = new Set(localState.loadStickerPacks().map((p) => p.set_id));
+  for (const pack of await loadInstalledPacks(store.self)) {
+    const setId = getPackSetId(pack);
+    if (!recorded.has(setId)) await recordStickerPack(setId, Boolean(pack.isEmoji));
+  }
+  try {
+    localStorage.setItem(key, '1');
+  } catch {
+    // приватный режим — перенос повторится и сойдётся
+  }
+}
 
 // «Удалить чат у себя» на другом своём устройстве (T145): граница очистки
 // пришла журналом личного состояния — скрываем сообщения чата не позже неё
@@ -786,7 +918,11 @@ const v2Controller = createV2Controller({
     // Устройство, привязанное после входа, готово только теперь — напоминания запускаются и здесь
     startReminders();
     messageController.resumeReceipts();
-    return stateJournal.attach(host, rekey);
+    const attached = stateJournal.attach(host, rekey);
+    // PACK-3: наборы, установленные до синхронизации, — в журнал (после подключения, чтобы не затереть журнал)
+    void Promise.resolve(attached).then(() => syncInstalledPacksOnce())
+      .catch((e: unknown) => logDebug(`стикеры: перенос наборов в журнал: ${String(e)}`));
+    return attached;
   },
   onL2Changed: (address) => applyL2Change(address),
   onCallSignal: (from, signal, groupCallId, device) => callController.handleV2Signal(from, signal, groupCallId, device),
@@ -2653,7 +2789,10 @@ const methods = {
 
   // chatId пользователя по ТОЧНОМУ адресу (поиск identity — подстрочный, и
   // порядок результатов задаёт сервер): нужен для адреса отчётов о багах
-  async parvaneResolveExactAddress({ address }: { address: string }) {
+  async parvaneResolveExactAddress({ address: name }: { address: string }) {
+    // Адрес без домена (получатель отчётов `bugs`) — на своём сервере: домен берётся из своего адреса
+    const selfDomain = store.self?.split('@')[1];
+    const address = name.includes('@') || !selfDomain ? name : `${name}@${selfDomain}`;
     const result = await methods.searchChats({ query: address });
     const expectedId = store.getIdForAddress(address);
     return result.globalResultIds.includes(expectedId) ? expectedId : undefined;
@@ -3013,31 +3152,15 @@ const methods = {
   },
 
   async installStickerSet({ stickerSetId }: { stickerSetId: string }) {
-    if (!isCustomPackSetId(stickerSetId)) return undefined;
-    const resolved = await resolveCustomPack(stickerSetId);
-    if (!resolved) return undefined;
-    const isEmoji = isEmojiPackSetId(stickerSetId) || Boolean(resolved.pack.isEmoji);
-    const rawName = resolved.pack.rawName || (isEmoji ? getEmojiPackRawName(stickerSetId) : undefined);
-    await saveInstalledPack(store.self, {
-      ...resolved.pack,
-      // Набор — тот, по которому пак пришёл: у одноимённого пака другого
-      // отправителя он свой (PACK-1/EMOJI-1), и хранение обязано их различать
-      setId: stickerSetId,
-      isEmoji: isEmoji || undefined,
-      rawName,
-      aliases: isEmoji ? getEmojiPackNames(stickerSetId, resolved.pack).filter((name) => name !== rawName) : undefined,
-    });
-    const built = buildCustomSet(stickerSetId, resolved.pack, INSTALLED_PACK_DATE);
-    registerPackBlobs(built.blobs);
-    sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
+    const isEmoji = await installCustomPack(stickerSetId);
+    if (isEmoji === undefined) return undefined;
+    void recordStickerPack(stickerSetId, isEmoji);
     return true;
   },
 
   async uninstallStickerSet({ stickerSetId }: { stickerSetId: string }) {
-    const pack = await findInstalledPackBySetId(store.self, stickerSetId);
-    if (!pack) return undefined;
-    await removeInstalledPack(store.self, stickerSetId);
-    sendUpdate({ '@type': 'updateStickerSet', id: stickerSetId, stickerSet: { installedDate: undefined } });
+    if (!await uninstallCustomPack(stickerSetId)) return undefined;
+    forgetStickerPack(stickerSetId);
     return true;
   },
 
@@ -3063,6 +3186,7 @@ const methods = {
     const built = buildApiStickerSetFromPack(pack, INSTALLED_PACK_DATE);
     registerPackBlobs(built.blobs);
     sendUpdate({ '@type': 'updateStickerSet', id: built.set.id, stickerSet: built.set });
+    void recordStickerPack(getPackSetId(pack), false);
     return { title: finalName, count: packFiles.length };
   },
 

@@ -46,6 +46,13 @@ const NoteEmbed = ({
     return typeof url === 'string' ? url : undefined;
   });
 
+  // Видео без миниатюры (загружено раньше): кадр снимается и дописывается в облако для всех устройств
+  const loadVideoPoster = useLastCallback(async () => {
+    if (!driveId || !node) return undefined;
+    const url = await callParvane('parvaneCloudBackfillThumb', { container: driveId, node: node.id });
+    return typeof url === 'string' ? url : undefined;
+  });
+
   const handleDownload = useLastCallback(() => {
     if (driveId && node) void downloadCloudNode(driveId, node, DOWNLOAD_MEMORY_BYTES);
   });
@@ -58,16 +65,19 @@ const NoteEmbed = ({
     );
   }
 
+  const kind = node ? kindOfFile(node.mime || '', node.name) : undefined;
+  const thumbLoader = node?.thumb ? loadThumb : kind === 'video' ? loadVideoPoster : undefined;
+
   return (
     <MediaEmbed
       name={node?.name || embed.name}
       alt={embed.alt}
       isMissing={!node}
-      kind={node ? kindOfFile(node.mime || '', node.name) : undefined}
+      kind={kind}
       size={node?.size}
       cacheKey={node?.blob?.fileId}
       load={load}
-      loadThumb={node?.thumb ? loadThumb : undefined}
+      loadThumb={thumbLoader}
       onDownload={handleDownload}
     />
   );

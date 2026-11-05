@@ -62,17 +62,15 @@ bool Adaptive::isThreeColumn() const {
 	return _layout.current() == WindowLayout::ThreeColumn;
 }
 
+// Parvane fork (5 ноя 2026): широкой раскладки чата нет, как в web — свои сообщения справа, чужие слева при любой
+// ширине окна. Широкий режим tdesktop рисует все сообщения слева с аватарками и не сдвигает свои вправо
+// (`Message::countGeometry`), поэтому в широком окне «всё слева» — отзыв пользователя.
 rpl::producer<bool> Adaptive::chatWideValue() const {
-	return rpl::combine(
-		_chatLayout.value(
-		) | rpl::map(rpl::mappers::_1 == Adaptive::ChatLayout::Wide),
-		Core::App().settings().adaptiveForWideValue()
-	) | rpl::map(rpl::mappers::_1 && rpl::mappers::_2);
+	return rpl::single(false);
 }
 
 bool Adaptive::isChatWide() const {
-	return Core::App().settings().adaptiveForWide()
-		&& (_chatLayout.current() == Adaptive::ChatLayout::Wide);
+	return false;
 }
 
 } // namespace Window

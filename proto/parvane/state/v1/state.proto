@@ -267,6 +267,35 @@ message QuickReaction {
   string custom_emoji_id = 2 [(parvane.core.v2.max_len) = 32];
 }
 
+// Свой набор стикеров или собственных эмодзи (5 ноя 2026, PACK-3): установленный на одном устройстве набор
+// появляется на всех своих. Архив набора лежит в облаке (PVB2 по секрету capability, CAP-1); ссылка — та же, что в
+// сообщении со стикером. Карта по `set_id` (id набора у клиентов: PACK-2 — по отпечатку содержимого).
+// Архив набора — поля как у `parvane.msg.v2.PackRef` (content.proto сам импортирует эту схему — общий тип дал бы
+// цикл импорта): клиент перекладывает ссылку из сообщения один к одному.
+message PackArchive {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  string name = 2 [(parvane.core.v2.max_len) = 64];
+  uint32 count = 3;
+  bytes key = 4 [(parvane.core.v2.max_len) = 32];
+  bytes nonce = 5 [(parvane.core.v2.max_len) = 24];
+  bytes capability = 6 [(parvane.core.v2.max_len) = 32];
+  bytes content_hash = 7 [(parvane.core.v2.max_len) = 32];
+  string blob_domain = 8 [(parvane.core.v2.max_len) = 128];
+}
+
+message StickerPack {
+  string set_id = 1 [(parvane.core.v2.max_len) = 128];
+  PackArchive ref = 2;
+  // Набор собственных эмодзи (иначе — стикеры).
+  bool emoji = 3;
+  // Время установки (порядок наборов в панели: раньше установленные — выше).
+  int64 added_ms = 4;
+}
+
+message StickerPackKey {
+  string set_id = 1 [(parvane.core.v2.max_len) = 128];
+}
+
 // Операция журнала личного состояния — открытый текст записи StateRecord.
 // op_id совпадает с op_id записи (входит в AAD).
 message StateOp {
@@ -308,6 +337,8 @@ message StateOp {
     PeerKey unread_mark_set = 33;
     PeerKey unread_mark_remove = 34;
     QuickReaction quick_reaction = 35;
+    StickerPack sticker_pack_set = 36;
+    StickerPackKey sticker_pack_remove = 37;
   }
 }
 
@@ -334,4 +365,5 @@ message StateSnapshot {
   repeated CloudContainer cloud_containers = 15 [(parvane.core.v2.max_items) = 300];
   repeated Peer unread_marks = 16 [(parvane.core.v2.max_items) = 100000];
   QuickReaction quick_reaction = 17;
+  repeated StickerPack sticker_packs = 18 [(parvane.core.v2.max_items) = 500];
 }

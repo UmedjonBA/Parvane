@@ -25,7 +25,19 @@ type ScheduledEntry = {
 
 // Вид локальных данных, изменённых пользователем (журнал личного состояния, T098)
 export type LocalStateKind = 'folders' | 'blocked' | 'drafts' | 'scheduled' | 'archived' | 'pinned' | 'notify'
-  | 'unread' | 'reaction';
+  | 'unread' | 'reaction' | 'packs';
+
+// Свой набор стикеров/эмодзи в журнале состояния (`state.v1.StickerPack`, PACK-3): id набора и ссылка на архив
+// в облаке — поля `PackArchive` (как `pack_ref` сообщения: bytes — base64)
+export type LocalStickerPack = {
+  set_id: string;
+  ref: {
+    file_id: string; name?: string; count?: number; key?: string; nonce?: string; capability?: string;
+    content_hash?: string; blob_domain?: string;
+  };
+  emoji?: boolean;
+  added_ms?: string;
+};
 
 // Быстрая реакция: эмодзи либо id собственного эмодзи (журнал состояния, `state.v1.QuickReaction`)
 export type LocalQuickReaction = { emoji?: string; documentId?: string };
@@ -796,6 +808,26 @@ export function createLocalState(deps: LocalStateDependencies) {
     notifyChange('reaction');
   }
 
+  function loadStickerPacks(): LocalStickerPack[] {
+    try {
+      const list = JSON.parse(localStorage.getItem(storageKey('stickerpacks')) || '[]') as unknown;
+      return Array.isArray(list)
+        ? (list as LocalStickerPack[]).filter((p) => typeof p?.set_id === 'string' && p.ref?.file_id)
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveStickerPacks(packs: LocalStickerPack[]) {
+    try {
+      localStorage.setItem(storageKey('stickerpacks'), JSON.stringify(packs));
+    } catch {
+      // Квота: запись уйдёт в журнал из памяти вкладки, пока она жива
+    }
+    notifyChange('packs');
+  }
+
   // Прежний учёт прочитанного (список uuid в localStorage, до spec 033) — только для разового переноса в маркеры
   // «прочитано до» (журнал истории, FR-024); после переноса стирается
   const LEGACY_READ_PART = 'readuuids';
@@ -1214,6 +1246,8 @@ export function createLocalState(deps: LocalStateDependencies) {
     takeLegacyUnreadMarks,
     loadQuickReaction,
     saveQuickReaction,
+    loadStickerPacks,
+    saveStickerPacks,
     saveRepairAttempts,
     saveDraft,
     saveFolders,

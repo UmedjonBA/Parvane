@@ -263,6 +263,24 @@ std::vector<LinkMatch> matchLinks(const U32 &s) {
     return out;
 }
 
+// Встроенный файл `![[фото.jpg]]` — вложение заметки, не ссылка на заметку: граф не рисует его узлом «заметки ещё
+// нет» (решение пользователя 5 ноя 2026, как Obsidian по умолчанию). Встроенная заметка (`![[Заметка]]`,
+// `![[Заметка.md]]`) остаётся ссылкой. Порт web `notesModel.ts isFileEmbed`.
+bool isFileEmbed(const U32 &line, const LinkMatch &link) {
+    if (link.from == 0 || line[link.from - 1] != U'!') return false;
+    U32 target = trimU(link.target);
+    if (const auto hash = target.find(U'#'); hash != U32::npos) target = target.substr(0, hash);
+    const auto dot = target.rfind(U'.');
+    const auto slash = target.rfind(U'/');
+    if (dot == U32::npos || (slash != U32::npos && dot < slash)) return false;
+    const U32 ext = target.substr(dot + 1);
+    if (ext.empty() || ext.size() > 8) return false;
+    for (const auto ch : ext) {
+        if (!((ch >= U'a' && ch <= U'z') || (ch >= U'A' && ch <= U'Z') || (ch >= U'0' && ch <= U'9'))) return false;
+    }
+    return toLower(ext) != U"md";
+}
+
 std::vector<LinkMatch> findLinks(const U32 &maskedLine) {
     std::vector<LinkMatch> out;
     for (auto &link : matchLinks(maskedLine)) {
@@ -767,6 +785,7 @@ ParsedNote parseNote(const std::string &text) {
     for (size_t index = 0; index < lines.size(); ++index) {
         if (masked.fenced[index]) continue;
         for (const auto &link : findLinks(masked.masked[index])) {
+            if (isFileEmbed(masked.masked[index], link)) continue;
             const std::string key = normalizeNoteTitle(encode(link.target));
             const bool isKnown = std::any_of(links.begin(), links.end(), [&](const auto &item) {
                 return item.first == key;

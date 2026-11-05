@@ -9,7 +9,7 @@
 
 import type { ApiChatFolder, ApiDraft, ApiMessageEntity, ApiUpdate } from '../../types';
 import type {
-  createLocalState, JournalScheduled, LocalQuickReaction, LocalStateKind,
+  createLocalState, JournalScheduled, LocalQuickReaction, LocalStateKind, LocalStickerPack,
 } from '../localState';
 import type { ParvaneStore } from '../store';
 import type { WireCallRecord } from '../wire';
@@ -55,6 +55,8 @@ type Deps = {
   };
   /** Записи приняты сервером — другие вкладки этого браузера (то же устройство) догоняют сразу. */
   onAppended?: () => void;
+  /** Свои наборы стикеров из журнала (PACK-3): установить недостающие, снять убранные (`removed`). */
+  applyStickerPacks?: (packs: LocalStickerPack[], removed: string[]) => void;
   log: (message: string) => void;
 };
 
@@ -106,6 +108,7 @@ type SSnapshot = {
   notify_defaults?: { users?: SNotify; groups?: SNotify; channels?: SNotify };
   unread_marks?: SPeer[];
   quick_reaction?: SQuickReaction;
+  sticker_packs?: LocalStickerPack[];
   [key: string]: unknown;
 };
 // `state.v1.GroupInvite`: ссылка-приглашение группы v2 (bytes — base64)
@@ -128,10 +131,10 @@ type LocalNotify = Record<string, unknown>;
 const NOTIFY_DEFAULT_TYPES = ['users', 'groups', 'channels'] as const;
 
 const MANAGED_KINDS: LocalStateKind[] = [
-  'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify', 'unread', 'reaction',
+  'folders', 'blocked', 'drafts', 'scheduled', 'archived', 'pinned', 'notify', 'unread', 'reaction', 'packs',
 ];
 // Виды, появившиеся в журнале позже первого переноса (миграция — один раз на вид)
-const LATE_KINDS: LocalStateKind[] = ['notify', 'unread', 'reaction'];
+const LATE_KINDS: LocalStateKind[] = ['notify', 'unread', 'reaction', 'packs'];
 const PIN_LIST_MAIN = 'PIN_LIST_MAIN';
 // Причина завершения звонка (`call.v2.HangupReason`): имя и числовое значение
 const HANGUP_NORMAL = 'HANGUP_REASON_NORMAL';
@@ -265,6 +268,7 @@ export function createStateJournal(deps: Deps) {
   function isKindEmpty(snap: SSnapshot, kind: LocalStateKind) {
     if (kind === 'notify') return !snap.notify?.length && !snap.notify_defaults;
     if (kind === 'unread') return !snap.unread_marks?.length;
+    if (kind === 'packs') return !snap.sticker_packs?.length;
     return !snap.quick_reaction;
   }
 
@@ -661,6 +665,8 @@ export function createStateJournal(deps: Deps) {
           pick.unread_marks = full.unread_marks;
         } else if (kind === 'reaction') {
           pick.quick_reaction = full.quick_reaction;
+        } else if (kind === 'packs') {
+          pick.sticker_packs = full.sticker_packs;
         }
       });
       return pick;
@@ -693,6 +699,7 @@ export function createStateJournal(deps: Deps) {
       ],
       unread_marks: localState.loadUnreadMarks().map(peerOf).filter(isPeer),
       quick_reaction: reactionToState(localState.loadQuickReaction()),
+      sticker_packs: localState.loadStickerPacks(),
     };
   }
 
@@ -757,6 +764,7 @@ export function createStateJournal(deps: Deps) {
       projectDrafts(snap);
       projectUnreadMarks(snap);
       projectQuickReaction(snap);
+      projectStickerPacks(snap);
     });
     projectScheduled(snap);
     projectCalls(snap);
@@ -894,6 +902,16 @@ export function createStateJournal(deps: Deps) {
         readState: { hasUnreadMark: isAdded || undefined },
       });
     });
+  }
+
+  function projectStickerPacks(snap: SSnapshot) {
+    const { localState } = deps;
+    const before = localState.loadStickerPacks();
+    const next = (snap.sticker_packs || []).filter((p) => p?.set_id && p.ref?.file_id);
+    if (JSON.stringify(before) === JSON.stringify(next)) return;
+    localState.saveStickerPacks(next);
+    const kept = new Set(next.map((p) => p.set_id));
+    deps.applyStickerPacks?.(next, before.filter((p) => !kept.has(p.set_id)).map((p) => p.set_id));
   }
 
   function projectQuickReaction(snap: SSnapshot) {

@@ -620,15 +620,19 @@ object CloudThumbs {
 
     /** Кладёт `thumbPath`/`thumbWidth`/`thumbHeight` в [args]; возвращает временный файл (удалить после загрузки). */
     fun attach(args: JSONObject, file: File, mime: String?): File? {
-        if (mime?.startsWith("image/") != true || mime == "image/svg+xml") return null
+        val isVideo = mime?.startsWith("video/") == true
+        if ((!isVideo && mime?.startsWith("image/") != true) || mime == "image/svg+xml") return null
         return try {
-            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            var sample = 1
-            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_SIDE) sample *= 2
-            val src = android.graphics.BitmapFactory.decodeFile(file.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
-                ?: return null
+            // Видео — кадр около 1 с (5 ноя 2026: превью видео в заметках и облаке, как web makeThumb)
+            val src = if (isVideo) videoFrame(file) ?: return null else {
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_SIDE) sample *= 2
+                android.graphics.BitmapFactory.decodeFile(file.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                    ?: return null
+            }
             val k = minOf(1f, MAX_SIDE.toFloat() / maxOf(src.width, src.height))
             val w = maxOf(1, (src.width * k).toInt())
             val h = maxOf(1, (src.height * k).toInt())
@@ -645,6 +649,19 @@ object CloudThumbs {
             thumb
         } catch (e: Throwable) {
             null
+        }
+    }
+
+    private fun videoFrame(file: File): android.graphics.Bitmap? {
+        val r = android.media.MediaMetadataRetriever()
+        return try {
+            r.setDataSource(file.absolutePath)
+            val ms = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            r.getFrameAtTime(minOf(1_000_000L, ms * 100), android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } catch (e: Throwable) {
+            null
+        } finally {
+            try { r.release() } catch (_: Throwable) {}
         }
     }
 }

@@ -145,7 +145,7 @@ const MediaEmbed = ({
       return ['player', (
         <figure className={styles.figure}>
           {kind === 'video' ? (
-            <video className={styles.video} src={playerUrl} controls autoPlay playsInline />
+            <video className={styles.video} src={playerUrl} poster={thumbUrl} controls autoPlay playsInline />
           ) : (
             <audio className={styles.audio} src={playerUrl} controls autoPlay />
           )}

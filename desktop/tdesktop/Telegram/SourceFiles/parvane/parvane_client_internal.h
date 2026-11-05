@@ -370,6 +370,9 @@ extern QString g_outboxReadOwner;
 // Мутация сообщения v2-чата собеседнику/группе с повтором до успеха (parvane_client.cpp).
 bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::string &opId = std::string());
 
+// PACK-3 (parvane_client_state.cpp): набор поставлен на этом устройстве — запись в журнал состояния (main).
+void RecordStickerPack(const parvane::json &ref, bool emoji);
+
 } // namespace Internal
 using namespace Internal;
 
@@ -439,6 +442,15 @@ void EndCallsForLogout();
 // `tdata/<prefix><адрес>…<suffix>` с безопасной частью имени (SafeAddressPart); "" — адрес недопустим
 // (parvane::accountfiles::isValidAddress). Файл прежних версий с сырым адресом в имени переименовывается.
 [[nodiscard]] QString AccountFilePath(const QString &prefix, const QString &address, const QString &suffix);
+// ── PACK-3: свои наборы стикеров/эмодзи на всех своих устройствах (вид `packs` журнала состояния) ──
+// parvane_client.cpp: ключ записи ("h:"+отпечаток либо "n:"+имя), ссылка → state.v1.PackArchive,
+// установка набора из записи журнала без окна (main), загрузка архивов наборов без записи (перенос, done — main).
+[[nodiscard]] std::string PackJournalKey(const parvane::json &ref);
+[[nodiscard]] parvane::json PackArchiveRef(const parvane::json &ref);
+void InstallStickerPackFromJournal(const parvane::json &record);
+void UploadLocalStickerPacksForJournal(
+	const QSet<QString> &recorded,
+	Fn<void(std::vector<parvane::json> refs, bool complete)> done);
 // Части сброса в файлах своей темы.
 void ResetStateAccountData();    // parvane_client_state.cpp: черновики, журнал состояния, кэш групп v2
 void ResetGroupsAccountData();   // parvane_client_groups.cpp: превью публичных групп

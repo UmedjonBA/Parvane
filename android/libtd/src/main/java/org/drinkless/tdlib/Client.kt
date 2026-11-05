@@ -85,6 +85,26 @@ class Client private constructor(
         @Volatile
         var terminatePrompt: ((count: Int, answer: (TerminateAnswer?) -> Unit) -> Unit)? = null
 
+        /**
+         * «Сообщить об ошибке» (как desktop `SendBugReport`, web `ParvaneBugReportModal`): описание и журнал клиента этого
+         * запуска — обычным E2E-сообщением с JSON-вложением на `bugs@<домен своего адреса>`. Адреса в журнале скрыты.
+         * Блокирует — звать не с главного потока. Ответ: "sent" | "not_found" | "failed".
+         */
+        @JvmStatic
+        fun sendBugReport(description: String, log: List<String>, version: String, dir: java.io.File): String =
+            boundClient?.bugReport(description, log, version, dir) ?: "failed"
+
+        /**
+         * Видео заметки, уже скачанное в файл, — `TdApi.Video` с «скачанным» файлом шва: экран заметки открывает его
+         * штатным плеером X (как видео в чате). null — шов не подключён.
+         */
+        @JvmStatic
+        fun localVideo(path: String, name: String, mime: String, size: Long, width: Int, height: Int, durationSecs: Int): TdApi.Video? {
+            val c = boundClient ?: return null
+            val file = c.store.fileFor("local:$path", "", "", size, mime.ifEmpty { "video/mp4" }, path)
+            return TdApi.Video(durationSecs, width, height, name, mime.ifEmpty { "video/mp4" }, false, true, null, null, file)
+        }
+
         /** Группа чата (групповой звонок): {gid, title, members, self}; null — не группа. */
         @JvmStatic
         fun groupForChat(chatId: Long): JSONObject? {
@@ -272,7 +292,8 @@ class Client private constructor(
     private val io = Executors.newFixedThreadPool(4) { r -> Thread(r, "parvane-io") }
     private val store = ParvaneStore()
     // spec 005: стикеры/GIF/кастом-эмодзи (панель X) — каталог ядра известен после SetTdlibParameters
-    private val stickers by lazy { Stickers(store, java.io.File(boundDir), ::postUpdate) }
+    // PACK-3: своя установка/удаление набора — вид `packs` журнала личного состояния
+    private val stickers by lazy { Stickers(store, java.io.File(boundDir), ::postUpdate, Stickers.RealCore) { scheduleStateFlush("packs") } }
 
     @Volatile private var authState: TdApi.AuthorizationState = TdApi.AuthorizationStateWaitTdlibParameters()
     @Volatile private var pendingNick: String = ""
@@ -1733,10 +1754,16 @@ class Client private constructor(
                 val uidAddr = c.contact?.userId?.let { store.addressOf(it) }
                 Prepared(JSONObject().put("kind", "text").put("text", uidAddr?.let { "@" + it.substringBefore('@') } ?: (c.contact?.firstName ?: "")), null, true)
             }
-            is TdApi.InputMessagePhoto -> Prepared(JSONObject().put("kind", "photo").put("mime", "image/jpeg").put("width", c.photo.width).put("height", c.photo.height).put("caption", cap(c.caption)),
-                when (val r = resolveMedia(c.photo?.photo)) { is String -> r; else -> return r as TdApi.Object }, false)
-            is TdApi.InputMessageVideo -> Prepared(JSONObject().put("kind", "video").put("mime", "video/mp4").put("width", c.video.width).put("height", c.video.height).put("duration_secs", c.video.duration).put("caption", cap(c.caption)),
-                when (val r = resolveMedia(c.video?.video)) { is String -> r; else -> return r as TdApi.Object }, false)
+            is TdApi.InputMessagePhoto -> {
+                val path = when (val r = resolveMedia(c.photo?.photo)) { is String -> r; else -> return r as TdApi.Object }
+                Prepared(JSONObject().put("kind", "photo").put("mime", "image/jpeg").put("width", c.photo.width).put("height", c.photo.height).put("caption", cap(c.caption))
+                    .also { o -> MediaThumb.of(path, video = false)?.let { o.put("thumbnail", it) } }, path, false)
+            }
+            is TdApi.InputMessageVideo -> {
+                val path = when (val r = resolveMedia(c.video?.video)) { is String -> r; else -> return r as TdApi.Object }
+                Prepared(JSONObject().put("kind", "video").put("mime", "video/mp4").put("width", c.video.width).put("height", c.video.height).put("duration_secs", c.video.duration).put("caption", cap(c.caption))
+                    .also { o -> MediaThumb.of(path, video = true)?.let { o.put("thumbnail", it) } }, path, false)
+            }
             is TdApi.InputMessageDocument -> {
                 val path = localPath(c.document?.document) ?: return TdApi.Error(400, "нет файла")
                 val name = path.substringAfterLast('/')
@@ -1884,14 +1911,14 @@ class Client private constructor(
     @Volatile private var stateTimerStarted = false
     private fun attachStateJournal() {
         val l = store.local ?: return
-        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
+        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
         if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
         // T150: несохранённая правка (до подключения или перед остановкой процесса) — в журнал раньше проекции
         val dirty = loadStateDirty()
         var effective: JSONObject = snap
         if (dirty.isNotEmpty()) {
             val r = synchronized(stateLock) {
-                ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString(), dirty.toList())
+                ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), dirty.toList())
             }
             if (r != null) {
                 clearStateDirty()
@@ -1907,6 +1934,8 @@ class Client private constructor(
         if (!marker.exists()) try { marker.writeText("1") } catch (e: Exception) { }
         applyState(effective, projectNotify = !keepLocalNotify)
         if (keepLocalNotify) scheduleStateFlush("notify")
+        // PACK-3: наборы, установленные до журнала, — записями один раз на устройство (после проекции: журнал главнее)
+        io.execute { try { if (stickers.migrateToJournal()) scheduleStateFlush("packs") } catch (e: Throwable) { Log.w(TAG, "стикеры: перенос в журнал: ${e.message}") } }
         Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
         if (!stateTimerStarted) {
             stateTimerStarted = true
@@ -1919,7 +1948,7 @@ class Client private constructor(
         synchronized(stateLock) {
             if (!stateAttached || detached) return
             val l = store.local ?: return
-            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView()).toString(), StateJournal.KINDS) ?: return
+            val r = ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), StateJournal.KINDS) ?: return
             clearStateDirty()
             if (r.optBoolean("changed")) r.optJSONObject("snapshot")?.let { applyState(it) }
         }
@@ -2136,8 +2165,10 @@ class Client private constructor(
         lastStateSnap = snap
         projectCleared(snap)
         val l = store.local ?: return
-        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null)
+        val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null, stickers.journal)
         if (!ch.any()) return
+        // PACK-3: архивы наборов скачиваются — не под замком журнала
+        ch.packs?.let { pr -> io.execute { try { stickers.applyJournal(pr) } catch (e: Throwable) { Log.w(TAG, "стикеры: журнал состояния: ${e.message}") } } }
         ch.notify?.let { blob ->
             store.applyNotifyBlob(blob).forEach { postUpdate(it) }
             Log.i(TAG, "журнал состояния → уведомления (${blob.optJSONObject("exceptions")?.length() ?: 0} чатов, ${blob.optJSONObject("defaults")?.length() ?: 0} умолчаний)")
@@ -2146,7 +2177,7 @@ class Client private constructor(
             val id = store.idOf(a)
             postUpdate(TdApi.UpdateChatBlockList(id, if (store.blocked.contains(a)) TdApi.BlockListMain() else null))
         }
-        Log.i(TAG, "журнал состояния → блок=${ch.blocked.size} папки=${ch.folders} черновики=${ch.drafts.size} архив=${ch.archived.size} отложенные=+${ch.scheduledAdded.size}/-${ch.scheduledRemoved.size} закреп=${ch.pinned.size} непрочитано=${ch.unread.size} реакция=${ch.reaction}")
+        Log.i(TAG, "журнал состояния → блок=${ch.blocked.size} папки=${ch.folders} черновики=${ch.drafts.size} архив=${ch.archived.size} отложенные=+${ch.scheduledAdded.size}/-${ch.scheduledRemoved.size} закреп=${ch.pinned.size} непрочитано=${ch.unread.size} реакция=${ch.reaction} наборы=${ch.packs?.records?.size ?: "-"}/-${ch.packs?.removed?.size ?: 0}")
         if (ch.folders) { refreshFolderPositions(); postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false)) }
         ch.drafts.forEach { id ->
             val chat = store.chatById(id) ?: return@forEach
@@ -2249,6 +2280,9 @@ class Client private constructor(
                     "planner_add" -> sectionsResult("planner_add", org.parvane.core.ParvaneSections.planner("quickAdd", JSONObject().put("text", cmd.optString("text"))))
                     // любая операция «Плана» экранов по имени (save, remove…): {"op":"planner_op","name":…,"args":{…}}
                     "planner_op" -> sectionsResult("planner_op", org.parvane.core.ParvaneSections.planner(cmd.optString("name"), cmd.optJSONObject("args") ?: JSONObject()))
+                    // «Сообщить об ошибке» тем же путём, что окно «Профиля» (журнал — строки команды)
+                    "bug_report" -> TdApi.Text(bugReport(cmd.optString("text"), listOf("e2e: строка журнала с адресом bob@local"),
+                        "e2e", java.io.File(System.getProperty("java.io.tmpdir") ?: "/data/local/tmp")))
                     "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     "cloud_folder" -> {
@@ -2437,6 +2471,42 @@ class Client private constructor(
         Log.i(TAG, "публичная группа $gid: вступили")
         syncGroups()
         return TdApi.FailedToAddMembers(arrayOf())
+    }
+
+    private fun bugReport(description: String, log: List<String>, version: String, dir: java.io.File): String {
+        val self = store.self
+        val domain = self.substringAfter('@', "")
+        if (domain.isEmpty()) return "failed"
+        val address = "bugs@$domain"
+        // Точное совпадение адреса: первый результат поиска выбирает сервер
+        val users = try { ParvaneCore.search(address).optJSONArray("users") } catch (e: Throwable) { null }
+        val found = users != null && (0 until users.length()).any { users.optJSONObject(it)?.optString("username") == address }
+        if (!found) { Log.i(TAG, "отчёт об ошибке — адрес получателя не найден"); return "not_found" }
+        val hide = Regex("""[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+""")
+        val report = JSONObject()
+            .put("version", version)
+            .put("client", "android")
+            .put("platform", "Android ${android.os.Build.VERSION.RELEASE} (${android.os.Build.MODEL})")
+            .put("reportedAt", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date()))
+            .put("description", description)
+            .put("storeInfo", JSONObject().put("self", self))
+            .put("log", org.json.JSONArray(log.map { hide.replace(it, "<адрес>") }))
+        // Прошлые отчёты уже отправлены (файл читается при отправке) — каталог чистится перед новым
+        val out = java.io.File(dir, "parvane-bug").apply { deleteRecursively(); mkdirs() }
+        val file = java.io.File(out, "parvane-bug-${System.currentTimeMillis()}.json")
+        return try {
+            file.writeText(report.toString(1))
+            ensurePeer(address, announce = true)
+            val r = handle(TdApi.SendMessage(store.idOf(address), null, null, null, null,
+                TdApi.InputMessageDocument(TdApi.InputDocument(TdApi.InputFileLocal(file.absolutePath), null, false),
+                    TdApi.FormattedText(description.take(1000), arrayOf()))))
+            Log.i(TAG, "отчёт об ошибке → ${if (r is TdApi.Error) "сбой" else "отправлен"} (${log.size} строк журнала)")
+            if (r is TdApi.Error) "failed" else "sent"
+        } catch (e: Throwable) {
+            Log.w(TAG, "отчёт об ошибке не отправлен: ${e.javaClass.simpleName}")
+            "failed"
+        }
     }
 
     private fun searchNicks(query: String, limit: Int): TdApi.Object {

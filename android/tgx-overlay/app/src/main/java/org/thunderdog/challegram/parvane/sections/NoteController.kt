@@ -41,6 +41,9 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     override fun getName(): CharSequence = title.ifEmpty { Sx.t("Заметка", "Note") }
 
     companion object {
+        /** Предел ролика для кадра-заставки без миниатюры (как web `VIDEO_THUMB_BACKFILL_MAX`). */
+        private const val VIDEO_POSTER_MAX = 64L * 1024 * 1024
+
         fun open(owner: ViewController<*>, id: String, edit: Boolean = false) {
             owner.navigateTo(NoteController(owner.context(), owner.tdlib()).also { it.noteId = id; it.editing = edit })
         }
@@ -73,6 +76,149 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     override fun repaint() { lastSnap?.let { render(it) } }
 
     private fun note(snap: JSONObject?) = Sx.list(snap?.optJSONArray("notes")).firstOrNull { it.optString("id") == noteId }
+
+    /** Встроенный файл заметки (web `NoteEmbed`): картинка — сам файл из облака по ширине экрана; пока грузится,
+     *  не картинка или не нашёлся — подпись с именем. */
+    /** Файл заметки — во временный каталог, который отдаёт FileProvider X (`files/media`), и системным приложением. */
+    private fun openEmbed(context: Context, info: CanvasMedia.FileInfo) {
+        val root = (Sx.last("cloud") ?: ParvaneSections.snapshot("cloud"))?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
+            ?: return toast(Sx.t("Облако ещё загружается", "Cloud is still loading"))
+        toast(Sx.t("Открываем «${info.name}»…", "Opening “${info.name}”…"))
+        Sx.async({
+            val dir = java.io.File(context.filesDir, "media/parvane-notes").apply { deleteRecursively(); mkdirs() }
+            // Имя выбирает автор заметки или редактор папки: только безопасные символы, без пути
+            val f = java.io.File(dir, info.name.substringAfterLast('/').replace(Regex("""[^\p{L}\p{N}._ -]+"""), "_").ifEmpty { "file" })
+            val r = ParvaneSections.cloudFiles("download", JSONObject().put("container", root).put("node", info.node).put("out", f.absolutePath)) as? JSONObject
+            if (r?.optBoolean("ok") == true) f else null
+        }) { f ->
+            if (f == null) { toast(Sx.t("Не скачано — нет связи?", "Download failed — offline?")); return@async }
+            if (info.kind == "video" && openInPlayer(f, info)) return@async
+            val activity = org.thunderdog.challegram.tool.UI.getContext(context)
+            if (activity == null || !org.thunderdog.challegram.tool.Intents.openFile(activity, f, info.mime.ifEmpty { "application/octet-stream" }))
+                toast(Sx.t("Нет приложения, чтобы открыть файл", "No app to open the file"))
+        }
+    }
+
+    /** Видео заметки — штатным плеером X (как видео в чате: перемотка, время, звук, во весь экран). */
+    private fun openInPlayer(file: java.io.File, info: CanvasMedia.FileInfo): Boolean = try {
+        val meta = android.media.MediaMetadataRetriever()
+        val (w, h, secs) = try {
+            meta.setDataSource(file.absolutePath)
+            Triple(meta.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0,
+                meta.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0,
+                ((meta.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000).toInt())
+        } finally { meta.release() }
+        val video = org.drinkless.tdlib.Client.localVideo(file.absolutePath, info.name, info.mime, file.length(), w, h, secs)
+        val activity = org.thunderdog.challegram.tool.UI.getContext(context)
+        if (video == null || activity == null) false else {
+            val item = org.thunderdog.challegram.mediaview.data.MediaItem(activity, tdlib, video, null, null,
+                org.drinkless.tdlib.TdApi.FormattedText("", arrayOf()), false)
+            val stack = org.thunderdog.challegram.mediaview.data.MediaStack(activity, tdlib)
+            stack.set(item)
+            org.thunderdog.challegram.mediaview.MediaViewController.openWithStack(this, stack, info.name, null, false)
+            android.util.Log.i("ParvaneSections", "заметка: видео открыто плеером X")
+            true
+        }
+    } catch (e: Throwable) {
+        android.util.Log.w("ParvaneSections", "заметка: плеер X не открылся: ${e.javaClass.simpleName}")
+        false
+    }
+
+    /** Кадр видео без миниатюры облака: ролик до 64 МБ скачивается во временный файл, кадр (≤ 1 с) кэшируется
+     *  JPEG по узлу облака — повторно не качается. Ролик больше — остаётся строкой «Воспроизвести». */
+    private fun loadVideoPoster(context: Context, info: CanvasMedia.FileInfo, done: (android.graphics.Bitmap?) -> Unit) {
+        if (info.size > VIDEO_POSTER_MAX) return done(null)
+        val root = (Sx.last("cloud") ?: ParvaneSections.snapshot("cloud"))?.optString("rootId")?.takeIf { it.isNotEmpty() && it != "null" }
+            ?: return done(null)
+        val dir = java.io.File(context.cacheDir, "parvane-note-posters").apply { mkdirs() }
+        val key = info.node.replace(Regex("""[^A-Za-z0-9_-]+"""), "_").take(96).ifEmpty { return done(null) }
+        val jpg = java.io.File(dir, "$key.jpg")
+        Sx.async({
+            if (jpg.isFile) return@async android.graphics.BitmapFactory.decodeFile(jpg.absolutePath)
+            val tmp = java.io.File(dir, "$key.video")
+            try {
+                val r = ParvaneSections.cloudFiles("download", JSONObject().put("container", root).put("node", info.node).put("out", tmp.absolutePath)) as? JSONObject
+                if (r?.optBoolean("ok") != true) return@async null
+                val meta = android.media.MediaMetadataRetriever()
+                val frame = try {
+                    meta.setDataSource(tmp.absolutePath)
+                    val ms = meta.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                    meta.getFrameAtTime(minOf(1_000_000L, ms * 100), android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } finally { try { meta.release() } catch (_: Throwable) {} }
+                frame?.also { b -> jpg.outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) } }
+            } catch (e: Throwable) {
+                null
+            } finally {
+                tmp.delete()
+            }
+        }) { bmp ->
+            if (bmp != null) android.util.Log.i("ParvaneSections", "заметка: кадр видео показан (${bmp.width}×${bmp.height})")
+            done(bmp)
+        }
+    }
+
+    private fun embedView(context: Context, name: String): View {
+        val box = android.widget.FrameLayout(context)
+        val caption = context.pvText("▫ " + name.substringAfterLast('/'), 0.875f, Pv.c.muted)
+        val image = android.widget.ImageView(context).apply {
+            adjustViewBounds = true
+            scaleType = android.widget.ImageView.ScaleType.FIT_START
+            visibility = View.GONE
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) =
+                    outline.setRoundRect(0, 0, view.width, view.height, Pv.rem(0.5f).toFloat())
+            }
+        }
+        box.addView(image, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(caption)
+        val play = context.pvText("▶", 1.25f, Pv.c.bg).apply {
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(Pv.c.accent)
+            }
+        }
+        box.addView(play, android.widget.FrameLayout.LayoutParams(Pv.rem(3f), Pv.rem(3f), Gravity.CENTER))
+        val id = noteId
+        fun showPoster(bmp: android.graphics.Bitmap, info: CanvasMedia.FileInfo) {
+            image.setImageBitmap(bmp)
+            image.visibility = View.VISIBLE
+            caption.visibility = View.GONE
+            play.visibility = View.VISIBLE
+            box.setOnClickListener { openEmbed(context, info) }
+        }
+        fun show(info: CanvasMedia.FileInfo?) {
+            // Видео с миниатюрой облака — кадр со значком ▶, нажатие — плеер X
+            if (info != null && info.kind == "video" && info.image != null) {
+                showPoster(info.image, info)
+                return
+            }
+            // Видео без миниатюры (залито до 5 ноя 2026 или клиентом без кадра) — кадр из самого ролика
+            // (как web `loadVideoPoster`); пока кадра нет, видна строка «Воспроизвести»
+            if (info != null && info.kind == "video" && info.node.isNotEmpty()) {
+                loadVideoPoster(context, info) { bmp -> if (bmp != null) showPoster(bmp, info) }
+            }
+            if (info != null && (info.image == null || info.kind == "video" || info.kind == "audio")) {
+                // Не картинка (как desktop `EmbedView`): видео и звук — «Воспроизвести» системным проигрывателем,
+                // прочее — «Скачать» (открыть системным приложением)
+                val playable = info.kind == "video" || info.kind == "audio"
+                val action = if (playable) Sx.t("Воспроизвести", "Play") else Sx.t("Открыть", "Open")
+                caption.text = "${if (playable) "▶" else "▫"} ${info.name} · ${CanvasMedia.size(info.size)} · $action"
+                caption.setTextColor(Pv.c.accent)
+                caption.setOnClickListener { openEmbed(context, info) }
+                return
+            }
+            val bmp = info?.image ?: return
+            image.setImageBitmap(bmp)
+            image.visibility = View.VISIBLE
+            caption.visibility = View.GONE
+            android.util.Log.i("ParvaneSections", "заметка: встроенная картинка показана (${bmp.width}×${bmp.height})")
+        }
+        show(CanvasMedia.embed(context, name, id) { show(CanvasMedia.embed(context, name, id) {}) })
+        return box
+    }
 
     private fun startEdit() {
         editing = true
@@ -137,12 +283,21 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
             }
             val all = Sx.list(snap.optJSONArray("notes"))
             val body = NoteText.bodyWithoutProperties(n.optString("text"))
+            // Тело — хвост текста заметки (свойства в начале срезаны): номер строки тела + сдвиг = строка в тексте
+            val bodyOffset = n.optString("text").lines().size - body.lines().size
             if (body.isBlank()) addView(context.pvText(Sx.t("Пусто — нажмите «Изменить»", "Empty — tap “Edit”"), 1f, Pv.c.faint))
-            else addView(context.pvText(NoteText.render(body, { t -> openTitle(all, t) }, { url -> openUrl(url) }), 1f, Pv.c.fg).apply {
-                movementMethod = LinkMovementMethod.getInstance()
-                setLineSpacing(0f, 1.5f / 1.2f)
-                highlightColor = Pv.alpha(Pv.c.accent, 22)
-            })
+            else NoteText.parts(body).forEachIndexed { i, part ->
+                when (part) {
+                    is NoteText.Part.Text -> addView(context.pvText(NoteText.render(part.text, { t -> openTitle(all, t) }, { url -> openUrl(url) },
+                        title = if (i == 0) n.optString("title") else "", lineBase = bodyOffset + part.startLine,
+                        onTask = { line, done -> setTask(n, line, done) }), 1f, Pv.c.fg).apply {
+                        movementMethod = LinkMovementMethod.getInstance()
+                        setLineSpacing(0f, 1.5f / 1.2f)
+                        highlightColor = Pv.alpha(Pv.c.accent, 22)
+                    })
+                    is NoteText.Part.Embed -> addView(embedView(context, part.name), lp(t = Pv.rem(0.5f), b = Pv.rem(0.5f)))
+                }
+            }
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(context.pvButton(Sx.t("Изменить", "Edit"), icon = "edit") { startEdit() })
@@ -183,6 +338,14 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
         if (!url.startsWith("https://") && !url.startsWith("http://")) return
         PvSheet.confirm(context(), Sx.t("Открыть ссылку?", "Open link?"), url, Sx.t("Открыть", "Open")) {
             try { context().startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Throwable) { }
+        }
+    }
+
+    /** Галочка пункта (как desktop `NoteView::toggleTask`): ядро меняет `[ ]`/`[x]` в строке и сохраняет заметку. */
+    private fun setTask(n: JSONObject, line: Int, done: Boolean) {
+        val args = JSONObject().put("id", noteId).put("text", n.optString("text")).put("line", line).put("done", done)
+        Sx.async({ ParvaneSections.notes("setTask", args.toString()) }) { ok ->
+            if (ok == true) Sx.last("notes")?.let { render(it) } else toast(Sx.t("Не сохранено — нет связи?", "Not saved — offline?"))
         }
     }
 

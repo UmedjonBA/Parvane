@@ -13,6 +13,7 @@
 #include <parvane/sections/export_source.h>
 #include <parvane/sections/cloud_sync.h>
 #include <parvane/sections/notes_canvas_files.h>
+#include <parvane/sections/notes_embeds.h>
 #include <parvane/sections/notes_canvas_images.h>
 #include <parvane/sections/notes_store.h>
 #include <parvane/sections/planner_store.h>
@@ -835,6 +836,11 @@ json notesOp(Hub &hub, const std::string &op, const json &a) {
         return id ? json(*id) : json();
     }
     if (op == "save") return n.saveNote(s("id"), s("text"), vault, optString(a, "baseText"));
+    // Галочка пункта в просмотре (как desktop NoteView::toggleTask): строка — номер в тексте заметки целиком
+    if (op == "setTask") {
+        const auto text = s("text");
+        return n.saveNote(s("id"), notes::setTaskDone(text, a.value("line", -1), a.value("done", false)), vault, text);
+    }
     if (op == "saveOrRestore") {
         const auto r = n.saveNoteOrRestore(s("id"), s("title"), s("text"), vault, optString(a, "baseText"));
         return json{{"status", r.status}, {"id", r.id}, {"title", r.title}};
@@ -973,12 +979,18 @@ json cloudFilesOp(Hub &hub, const std::string &op, const json &a) {
     }
     // Карточка файла на холсте «Знаний» (как web `CanvasFileBody`): файл личного диска по пути карточки; у картинки
     // — сам файл (не больше предела) либо миниатюра облака в `out`, у прочих — только имя и размер
-    if (op == "canvasFile") {
+    // Встроенный файл заметки (`![[имя]]`, `![](путь)`; как web `NoteEmbed`, desktop `NoteView`): файл ищется
+    // `notes::resolveEmbed` — рядом с заметкой, потом по всему диску; дальше — как карточка холста
+    if (op == "canvasFile" || op == "noteEmbed") {
         const auto all = treeNodes(hub, container);
-        const auto *node = notes::resolveDrivePath(all, s("path"));
+        const auto noteId = s("note");
+        const auto *node = op == "noteEmbed"
+            ? notes::resolveEmbed(all, s("name"), noteId.empty() ? std::nullopt : std::optional<std::string>(noteId))
+            : notes::resolveDrivePath(all, s("path"));
         if (!node) return json{{"found", false}};
         json r{{"found", true}, {"name", node->name}, {"size", node->size}, {"type", cloud::fileTypeLabel(node->name)},
-               {"image", "none"}};
+               {"image", "none"}, {"node", node->id}, {"mime", node->mime},
+               {"kind", cloud::fileKindName(cloud::kindOfFile(node->mime, node->name))}};
         auto source = notes::canvasImageSource(node, a.value("full", true) ? notes::CanvasImageQuality::Full
                                                                             : notes::CanvasImageQuality::Thumb);
         // Мелкой карточке хватило бы миниатюры, но её нет (файл загружен без неё, например с телефона) — сам файл

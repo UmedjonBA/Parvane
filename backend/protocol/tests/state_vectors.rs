@@ -486,6 +486,8 @@ fn gen_migration() -> Value {
             cloud_containers: vec![],
         unread_marks: vec![user("bob@x")],
         quick_reaction: Some(QuickReaction { emoji: "🔥".into(), custom_emoji_id: String::new() }),
+        // Свои наборы (PACK-3) — тест движка `sticker_packs_diff_and_merge`; вектор переноса прежний
+        sticker_packs: vec![],
     };
     let mut clock = LamportClock::new(10);
     let ops = state::migrate_snapshot_with(&local, "dev-m", &mut clock, 0, counter_ids()).unwrap();

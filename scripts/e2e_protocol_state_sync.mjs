@@ -85,7 +85,8 @@ names.forEach((who) => {
   contexts[who].on('page', (page) => {
     page.on('console', (m) => {
       const t = m.text();
-      if (t.includes('[parvane] v2') || t.includes('линковк') || t.includes('[parvane] история:')) logs[who].push(t);
+      if (t.includes('[parvane] v2') || t.includes('линковк') || t.includes('[parvane] история:')
+        || t.includes('[parvane] стикеры:')) logs[who].push(t);
       consoleTail[who].push(`${m.type()}: ${t.slice(0, 300)}`);
       if (consoleTail[who].length > 80) consoleTail[who].shift();
     });
@@ -477,6 +478,34 @@ try {
 
   // Сервер хранит только шифртекст журнала состояния
   assert.deepEqual(serverFilesContaining(folderName), [], 'название папки лежит в БД сервера открытым');
+
+  // ── PACK-3: свой набор стикеров — на всех своих устройствах ───────────────
+  // bob1 создаёт набор из своих файлов → архив в облако, запись в журнал; bob2 ставит набор сам;
+  // снятие на bob2 снимает набор и на bob1
+  const packName = `Набор ${suffix.slice(-6)}`;
+  const created = await bob1Page.evaluate(async (name) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#d65d0e';
+    ctx.fillRect(8, 8, 48, 48);
+    const blob = await new Promise((resolve) => { canvas.toBlob(resolve, 'image/png'); });
+    const file = new File([blob], 'cat.png', { type: 'image/png' });
+    return window.__parvaneDiagCallApi('parvaneCreateStickerPack', { name, files: [file] });
+  }, packName);
+  assert.ok(created?.title, `bob1: набор не создан: ${JSON.stringify(created)}`);
+  await waitLog('bob1', 'записан в журнал состояния');
+  await waitLog('bob2', 'установлен из журнала состояния');
+  const packOnBob2 = async () => bob2Page.evaluate(async (title) => {
+    const got = await window.__parvaneDiagCallApi('fetchStickerSets', {});
+    return (got?.sets || []).find((set) => set.title === title)?.id;
+  }, created.title);
+  const bob2SetId = await packOnBob2();
+  assert.ok(bob2SetId, 'bob2: набор bob1 не появился среди установленных');
+  await bob2Page.evaluate((id) => window.__parvaneDiagCallApi('uninstallStickerSet', { stickerSetId: id }), bob2SetId);
+  await waitLog('bob1', 'снят (журнал состояния)');
+  console.log('OK: PACK-3 — свой набор стикеров появился на втором устройстве, снятие — на обоих');
 
   for (const who of names) {
     assert.ok(!logs[who].some((l) => l.includes('запуск не удался')), `${who}: ${logs[who].join(' | ')}`);

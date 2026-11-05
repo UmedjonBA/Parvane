@@ -1568,6 +1568,20 @@
       }
     },
     {
+      "id": "PACK-3",
+      "title": "Свои наборы стикеров и эмодзи — на всех своих устройствах (журнал личного состояния, вид packs)",
+      "kind": "packs",
+      "record": "state.v1 sticker_pack_set/sticker_pack_remove; снимок sticker_packs: {set_id, ref (поля PackRef сообщения), emoji, added_ms}",
+      "setId": "общий для клиентов ключ: h:<content_hash> (PACK-2), без отпечатка — n:<sanitizeName(name)>; локальный id набора у клиента свой",
+      "behaviour": "установка набора — запись со ссылкой на архив в облаке (свой набор — архив загружается, как при отправке стикера); снятие — надгробие; другие свои устройства скачивают архив и ставят набор, снятый в журнале — снимают; наборы, установленные до правила, переносятся в журнал один раз на устройство",
+      "status": "5 ноя 2026: движок (state.rs, тест sticker_packs_diff_and_merge), web (пара state-sync: создание на одном устройстве, установка и снятие на другом) и android (PackJournalTest) готовы; desktop — запись и установка из журнала без теста, снятие не применяет (в tdesktop нет локального снятия набора) — открыто",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/provider.ts (recordStickerPack, forgetStickerPack, applyJournalStickerPacks, syncInstalledPacksOnce), v2/stateJournal.ts (вид packs, projectStickerPacks), stickerPacks.ts (packJournalKey), localState.ts (loadStickerPacks/saveStickerPacks)",
+        "desktop": "ЧАСТИЧНО: parvane_client_state.cpp (вид packs, ProjectStickerPacks, RecordStickerPack, MigrateStickerPacksOnce), parvane_client.cpp (InstallStickerPackFromJournal, UploadLocalStickerPacksForJournal); снятие из журнала не применяется, теста нет",
+        "android": "libtd Stickers.kt (applyJournal, migrateToJournal, запись при установке/снятии), PackJournal.kt, StateJournal.kt (вид packs); тест PackJournalTest"
+      }
+    },
+    {
       "id": "CALL-2",
       "title": "Приглашение в групповой звонок несёт ссылку на группу и её название; известная группа — своё название, неизвестная — из приглашения",
       "fields": {

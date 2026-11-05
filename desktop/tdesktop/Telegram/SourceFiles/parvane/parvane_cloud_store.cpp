@@ -8,6 +8,8 @@
 #include <parvane/storecrypt.h>
 
 #include "core/file_utilities.h"
+#include "media/clip/media_clip_reader.h"
+#include "ui/chat/attach/attach_prepare.h"
 #include "lang/lang_instance.h"
 #include "lang/lang_keys.h"
 #include "settings.h"
@@ -291,9 +293,19 @@ void RunUpload(const QString &id) {
 		request.mime = QMimeDatabase().mimeTypeForFile(info).name().toStdString();
 		const auto bytes = file.readAll();
 		request.bytes = bytes.toStdString();
-		// Миниатюра картинки: JPEG не больше 320 px по длинной стороне (web makeThumb)
-		if (QString::fromStdString(request.mime).startsWith(u"image/"_q) && bytes.size() <= kThumbSourceMaxBytes) {
-			auto image = QImage::fromData(bytes);
+		// Миниатюра картинки и кадр видео (5 ноя 2026; превью видео в заметках и облаке): JPEG не больше 320 px
+		// по длинной стороне (web makeThumb). Кадр — тем же разбором, что при отправке видео в чат
+		const auto mimeQ = QString::fromStdString(request.mime);
+		auto image = QImage();
+		if (mimeQ.startsWith(u"image/"_q) && bytes.size() <= kThumbSourceMaxBytes) {
+			image = QImage::fromData(bytes);
+		} else if (mimeQ.startsWith(u"video/"_q)) {
+			const auto prepared = ::Media::Clip::PrepareForSending(spec.path, QByteArray());
+			if (const auto video = std::get_if<Ui::PreparedFileInformation::Video>(&prepared.media)) {
+				image = video->thumbnail;
+			}
+		}
+		{
 			if (!image.isNull()) {
 				if (std::max(image.width(), image.height()) > kThumbMaxSide) {
 					image = image.scaled(kThumbMaxSide, kThumbMaxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);

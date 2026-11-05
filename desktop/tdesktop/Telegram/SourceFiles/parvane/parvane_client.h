@@ -261,6 +261,9 @@ bool ToggleSavedGif(not_null<DocumentData*> document, bool saved);
 // «Сообщить об ошибке»: описание + журнал клиента JSON-вложением на bugs@<свой сервер>
 // (PARVANE_BUG_REPORT_TO — другой адрес); done("sent" | "not_found" | "failed"). Только main.
 void SendBugReport(not_null<Main::Session*> session, const QString &description, Fn<void(QString)> done);
+// Видео заметки (файл уже во временном каталоге Parvane) — в штатном просмотрщике tdesktop, как видео в чате
+// (плеер, время, звук, во весь экран). false — открыть нечем (нет сессии/окна): вызывающий открывает файл системой.
+bool OpenVideoInViewer(const QString &path, const QString &name, const QString &mime, int64 size);
 
 // Кнопка карточки сообщения (inline-кнопка с данными "pv:…"): true — обработана здесь. Только main.
 bool HandleCardButton(not_null<HistoryItem*> item, const QByteArray &data);

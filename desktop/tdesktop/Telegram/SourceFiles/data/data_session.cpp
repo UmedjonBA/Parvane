@@ -5343,19 +5343,20 @@ void Session::serviceNotification(
 		const MTPMessageMedia &media,
 		bool invertMedia) {
 	const auto date = base::unixtime::now();
-	if (!peerLoaded(PeerData::kServiceNotificationsId)) {
+	// Parvane fork (5 ноя 2026): служебные уведомления — от «Parvane», без телефона Telegram; имя пишется каждый
+	// раз (прежние установки помнят «Telegram» из кэша)
+	{
 		processUser(MTP_user(
 			MTP_flags(
 				MTPDuser::Flag::f_first_name
-				| MTPDuser::Flag::f_phone
 				| MTPDuser::Flag::f_status
 				| MTPDuser::Flag::f_verified),
 			MTP_long(peerToUser(PeerData::kServiceNotificationsId).bare),
 			MTPlong(), // access_hash
-			MTP_string("Telegram"),
+			MTP_string("Parvane"),
 			MTPstring(), // last_name
 			MTPstring(), // username
-			MTP_string("42777"),
+			MTPstring(), // phone
 			MTP_userProfilePhotoEmpty(),
 			MTP_userStatusRecently(MTP_flags(0)),
 			MTPint(), // bot_info_version

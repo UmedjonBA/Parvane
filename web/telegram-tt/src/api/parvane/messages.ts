@@ -1981,6 +1981,8 @@ export function createMessageController(deps: MessageDependencies) {
 
   return {
     reset,
+    // Ссылка на архив набора в облаке (PACK-3: свой набор — в журнал состояния); архив уже загружен — тот же
+    packRefForSet: (setId: string) => buildPackRefForSet(setId, ''),
     // Квитанции, не ушедшие до перезагрузки или обрыва, — снова в путь (READ-1 п. 3)
     resumeReceipts: () => {
       hydrateReceipts();

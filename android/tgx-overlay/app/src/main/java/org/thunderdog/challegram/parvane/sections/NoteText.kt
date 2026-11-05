@@ -20,7 +20,7 @@ import android.view.View
  * Parvane (spec 031/032): Markdown заметок «Знаний» для просмотра, вид web (`Markdown.module.scss`): заголовки — акцент и
  * оранжевый, пункты списка — маркер `--pv-faint`, галочки задач, цитаты с полосой акцента, код — оранжевым на
  * подложке, ссылки `[[Заметка]]` — фиолетовым (нажатие — открыть заметку), #теги — цветом aqua, обычные ссылки.
- * Без HTML и без сети: картинки и встраивания показываются подписью.
+ * Без HTML. Встроенный файл отдельной строкой экран заметки показывает картинкой (`parts`), посреди строки — подписью.
  */
 object NoteText {
     private val wiki = Regex("""\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?]]""")
@@ -56,20 +56,64 @@ object NoteText {
             else if (fenced) ""
             else inlineCode.replace(line) { " ".repeat(it.value.length) }
         }
-        return wiki.findAll(masked).map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.distinct().toList()
+        return wiki.findAll(masked).filterNot { isFileEmbed(masked, it) }
+            .map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.distinct().toList()
+    }
+
+    /** Встраивание файла (`![[x.png]]`, расширение не `.md`) — не связь графа (web `notesModel.ts isFileEmbed`,
+     *  ядро `notes_model.cpp`): иначе файлы заметок висят в графе бледными «несуществующими заметками». */
+    private fun isFileEmbed(text: String, match: MatchResult): Boolean {
+        val from = match.range.first
+        if (from == 0 || text[from - 1] != '!') return false
+        val name = match.groupValues[1].trim().substringAfterLast('/')
+        val ext = Regex("""\.([A-Za-z0-9]{1,8})$""").find(name)?.groupValues?.get(1) ?: return false
+        return !ext.equals("md", ignoreCase = true)
     }
 
     private val inlineCode = Regex("""(`+)(?!`)[\s\S]*?[^`]\1(?!`)""")
 
-    fun render(text: String, onWiki: (String) -> Unit, onUrl: (String) -> Unit): CharSequence {
+    /** Кусок тела заметки: текст либо встроенный файл отдельной строкой (`![[имя]]`, `![](путь)`) — его экран
+     *  заметки показывает картинкой (web `NoteEmbed`); встраивание посреди строки и внутри кода остаётся подписью. */
+    sealed class Part { class Text(val text: String, val startLine: Int) : Part(); class Embed(val name: String) : Part() }
+
+    private val embedLine = Regex("""^\s*(?:!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?]]|!\[[^\]]*]\(([^)\s]+)\))\s*$""")
+
+    fun parts(text: String): List<Part> {
+        val out = mutableListOf<Part>()
+        val buf = StringBuilder()
+        var start = 0
+        var fenced = false
+        for ((index, line) in text.lines().withIndex()) {
+            if (buf.isEmpty()) start = index
+            if (line.trimStart().startsWith("```")) fenced = !fenced
+            val m = if (fenced) null else embedLine.find(line)
+            val name = m?.let { it.groupValues[1].ifEmpty { android.net.Uri.decode(it.groupValues[2]) }.trim() }
+            // Внешний адрес (http) — без сети не грузим, остаётся подписью
+            if (name == null || name.isEmpty() || name.startsWith("http://") || name.startsWith("https://")) {
+                buf.append(line).append('\n'); continue
+            }
+            if (buf.isNotBlank()) out += Part.Text(buf.toString().trimEnd('\n'), start)
+            buf.setLength(0)
+            out += Part.Embed(name)
+        }
+        if (buf.isNotBlank()) out += Part.Text(buf.toString().trimEnd('\n'), start)
+        return out
+    }
+
+    /** [title] — название заметки: заголовок с тем же текстом первым блоком не показывается (web `parseMarkdown`). */
+    /** [onTask] — нажатие на галочку пункта: номер строки ([lineBase] + строка в [text]) и новое состояние. */
+    fun render(text: String, onWiki: (String) -> Unit, onUrl: (String) -> Unit, title: String = "",
+               lineBase: Int = 0, onTask: ((line: Int, done: Boolean) -> Unit)? = null): CharSequence {
         val c = Pv.c
         val out = SpannableStringBuilder()
         var inCode = false
         var frontMatter = false
+        var anyBlock = false
+        val ownTitle = title.trim().lowercase()
         text.lines().forEachIndexed { index, raw ->
             if (index == 0 && raw.trim() == "---") { frontMatter = true; return@forEachIndexed }
             if (frontMatter) { if (raw.trim() == "---") frontMatter = false; return@forEachIndexed }
-            if (raw.trimStart().startsWith("```")) { inCode = !inCode; return@forEachIndexed }
+            if (raw.trimStart().startsWith("```")) { inCode = !inCode; anyBlock = true; return@forEachIndexed }
             val start = out.length
             if (inCode) {
                 out.append(raw).append('\n')
@@ -80,6 +124,8 @@ object NoteText {
             }
             var line = raw
             val heading = Regex("""^(#{1,6})\s+(.*)$""").find(line)
+            if (heading != null && !anyBlock && ownTitle.isNotEmpty() && heading.groupValues[2].trim().lowercase() == ownTitle) return@forEachIndexed
+            if (raw.isNotBlank()) anyBlock = true
             val task = Regex("""^\s*[-*]\s+\[([ xX])]\s+(.*)$""").find(line)
             val bullet = Regex("""^\s*[-*+]\s+(.*)$""").find(line)
             val numbered = Regex("""^\s*(\d+)[.)]\s+(.*)$""").find(line)
@@ -98,7 +144,11 @@ object NoteText {
             line = embed.replace(line) { m -> "▫ " + (m.groupValues[1].ifEmpty { m.groupValues[2].ifEmpty { m.groupValues[3] } }) }
             out.append(prefix)
             if (prefix.isNotEmpty() && task != null) {
-                out.setSpan(ForegroundColorSpan(if (task.groupValues[1].isBlank()) c.line2 else c.task), start, start + prefix.length,
+                val done = task.groupValues[1].isNotBlank()
+                // Галочка нажимается (web `NoteView` чекбокс): ширина — сам значок и пробелы после него
+                if (onTask != null) out.setSpan(Link(if (done) c.task else c.line2, false) { onTask(lineBase + index, !done) },
+                    start, start + prefix.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                else out.setSpan(ForegroundColorSpan(if (done) c.task else c.line2), start, start + prefix.length,
                     Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             if (prefix.isNotEmpty() && numbered != null) {
@@ -153,6 +203,15 @@ object NoteText {
         fun add(r: Regex, shown: (MatchResult) -> String, apply: (MatchResult) -> (SpannableStringBuilder, Int, Int) -> Unit) {
             r.findAll(line).forEach { m -> if (marks.none { it.range.first <= m.range.last && m.range.first <= it.range.last }) marks += Mark(m.range, shown(m), apply(m)) }
         }
+        // Код — первым: `[[…]]` и *…* внутри кода остаются текстом кода (web `maskCode`)
+        add(code, { m -> m.groupValues[1] }) { _ ->
+            ({ s, a, b ->
+                s.setSpan(TypefaceSpan("monospace"), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                s.setSpan(RelativeSizeSpan(0.8125f), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                s.setSpan(ForegroundColorSpan(c.orange), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                s.setSpan(BackgroundColorSpan(c.hover), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+        }
         add(wiki, { m -> m.groupValues[2].ifEmpty { m.groupValues[1] } }) { m ->
             val title = m.groupValues[1].trim()
             ({ s, a, b ->
@@ -163,14 +222,6 @@ object NoteText {
         add(link, { m -> m.groupValues[1] }) { m ->
             val url = m.groupValues[2]
             ({ s, a, b -> s.setSpan(Link(c.blue, true) { onUrl(url) }, a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) })
-        }
-        add(code, { m -> m.groupValues[1] }) { _ ->
-            ({ s, a, b ->
-                s.setSpan(TypefaceSpan("monospace"), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                s.setSpan(RelativeSizeSpan(0.8125f), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                s.setSpan(ForegroundColorSpan(c.orange), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                s.setSpan(BackgroundColorSpan(c.hover), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            })
         }
         add(bold, { m -> m.groupValues[1] }) { _ -> ({ s, a, b -> s.setSpan(StyleSpan(Typeface.BOLD), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }) }
         add(strike, { m -> m.groupValues[1] }) { _ -> ({ s, a, b -> s.setSpan(StrikethroughSpan(), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }) }

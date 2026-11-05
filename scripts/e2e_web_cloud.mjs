@@ -8,6 +8,7 @@
 // Запуск: scripts/run_web_cloud_e2e.sh
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -416,6 +417,18 @@ try {
   const leaks = plaintextLeaks([SECRET_TEXT, SECRET_NAME, 'дневник', 'снимок.png', 'отчёт.pdf', '%PDF-1.4']);
   assert.deepEqual(leaks, [], 'в базах сервера найден открытый текст');
   console.log('OK: в базах сервера нет имён файлов и содержимого открытым текстом');
+
+  // ── Видео: миниатюра из кадра при загрузке (4 ноя 2026 — у видео превью не было) ─
+  // Playwright-Chromium без H.264 — VP9-in-MP4, как e2e_web_media_kinds
+  const videoPath = `${BACKEND_DIR}/e2e-cloud-video.mp4`;
+  execFileSync('ffmpeg', [
+    '-y', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=320x240:rate=15',
+    '-c:v', 'libvpx-vp9', '-b:v', '120k', '-pix_fmt', 'yuv420p', videoPath,
+  ], { stdio: 'ignore' });
+  await upload([{ name: 'ролик.mp4', mimeType: 'video/mp4', buffer: readFileSync(videoPath) }]);
+  await item('ролик.mp4').waitFor({ state: 'visible', timeout: 60000 });
+  await item('ролик.mp4').locator('img[data-thumb]').waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+  console.log('OK: у загруженного видео — миниатюра из кадра');
 
   // ── Телефон: вход и возврат нижней панелью, без горизонтальной прокрутки ─
   await sidebar.getByRole('tab', { name: 'Chats' }).click();

@@ -135,6 +135,8 @@ const THUMB_QUALITY = 0.8;
 // Картинки крупнее декодировать ради миниатюры не будем (память вкладки)
 const THUMB_SOURCE_MAX_BYTES = 40 * 1024 * 1024;
 const THUMB_CACHE = 300;
+// Превью видео без миниатюры дописывается только для файлов не крупнее этого (качается целиком)
+const VIDEO_THUMB_BACKFILL_MAX = 64 * 1024 * 1024;
 // Миниатюр качается не больше четырёх разом: список из 30 картинок иначе качал бы все 30 сразу
 const THUMB_PARALLEL = 4;
 // Содержимое для просмотра (картинки холста, предпросмотр): кэш по байтам, не по счёту —
@@ -279,6 +281,7 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
   const moves = new Map<string, AbortController>();
   const links = new Map<string, AbortController>();
   const thumbs = new Map<string, Promise<string | undefined>>();
+  const backfills = new Map<string, Promise<string | undefined>>();
   const previews = new Map<string, { loading: Promise<Blob | undefined>; bytes: number }>();
   let previewBytes = 0;
   const runThumb = createLimiter(THUMB_PARALLEL);
@@ -328,19 +331,74 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
   }
 
   /** Миниатюра картинки: JPEG не больше 320 px по длинной стороне. */
+  // Кадр видео для миниатюры (4 ноя 2026: у видео в облаке не было превью ни в одном клиенте): локальный файл —
+  // во вне-DOM <video>, кадр около 1 с (не чёрная заставка начала); не загрузилось за 15 с — без миниатюры
+  type ThumbFrame = { source: CanvasImageSource; width: number; height: number; done: () => void };
+
+  async function videoFrame(file: Blob): Promise<ThumbFrame | undefined> {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    const done = () => {
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(url);
+    };
+    const wait = (event: string, ms: number) => new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), ms);
+      video.addEventListener(event, () => {
+        clearTimeout(timer);
+        resolve(true);
+      }, { once: true });
+      video.addEventListener('error', () => {
+        clearTimeout(timer);
+        resolve(false);
+      }, { once: true });
+    });
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = url;
+    if (!await wait('loadeddata', 15000) || !video.videoWidth) {
+      done();
+      return undefined;
+    }
+    const at = Number.isFinite(video.duration) ? Math.min(1, video.duration / 10) : 0;
+    if (at > 0) {
+      video.currentTime = at;
+      await wait('seeked', 5000);
+    }
+    return {
+      source: video, width: video.videoWidth, height: video.videoHeight, done,
+    };
+  }
+
   async function makeThumb(file: Blob): Promise<{ blob: Blob; width: number; height: number } | undefined> {
-    if (!file.type.startsWith('image/') || file.size > THUMB_SOURCE_MAX_BYTES) return undefined;
-    if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return undefined;
+    const isVideo = file.type.startsWith('video/');
+    // У видео кадр не требует чтения файла целиком — предел размера только для картинок
+    if (!isVideo && (!file.type.startsWith('image/') || file.size > THUMB_SOURCE_MAX_BYTES)) return undefined;
+    if (typeof document === 'undefined' || (!isVideo && typeof createImageBitmap !== 'function')) return undefined;
     try {
-      const bitmap = await createImageBitmap(file);
-      const scale = Math.min(1, THUMB_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
-      const width = Math.max(1, Math.round(bitmap.width * scale));
-      const height = Math.max(1, Math.round(bitmap.height * scale));
+      let frame: ThumbFrame | undefined;
+      if (isVideo) {
+        frame = await videoFrame(file);
+      } else {
+        const bitmap = await createImageBitmap(file);
+        frame = {
+          source: bitmap, width: bitmap.width, height: bitmap.height, done: () => bitmap.close(),
+        };
+      }
+      if (!frame) return undefined;
+      const scale = Math.min(1, THUMB_MAX_SIDE / Math.max(frame.width, frame.height));
+      const width = Math.max(1, Math.round(frame.width * scale));
+      const height = Math.max(1, Math.round(frame.height * scale));
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
-      canvas.getContext('2d')!.drawImage(bitmap, 0, 0, width, height);
-      bitmap.close();
+      try {
+        canvas.getContext('2d')!.drawImage(frame.source, 0, 0, width, height);
+      } finally {
+        frame.done();
+      }
       const blob = await new Promise<Blob | undefined>((resolve) => {
         canvas.toBlob((b) => resolve(b || undefined), 'image/jpeg', THUMB_QUALITY);
       });
@@ -1086,6 +1144,59 @@ export function createCloudDrive(deps: Deps, caps: Partial<CloudDriveLimits> = {
       })), (url) => {
         if (url) URL.revokeObjectURL(url);
       }).catch(() => undefined);
+    },
+
+    /** Превью видео без миниатюры (загружено до 5 ноя 2026 либо клиентом без кадра): кадр снимается
+     * здесь и дописывается в узел (`setBlob` с тем же содержимым) — дальше превью видно на всех
+     * устройствах. Только видео не больше [VIDEO_THUMB_BACKFILL_MAX] (файл качается тем же кэшем, что
+     * плеер). Записать нельзя (папка только для чтения, нет связи) — превью только на этом экране. */
+    async parvaneCloudBackfillThumb({ container, node }: {
+      container: string; node: string;
+    }): Promise<string | undefined> {
+      const found = findNode(container, node);
+      // С миниатюрой — обычный `parvaneCloudThumb`
+      if (!found?.blob || found.thumb || !found.mime?.startsWith('video/')) return undefined;
+      if (found.blob.size > VIDEO_THUMB_BACKFILL_MAX) return undefined;
+      const { blob, mime } = found;
+      const key = `${container}:${node}:${blob.fileId}`;
+      let pending = backfills.get(key);
+      if (!pending) {
+        pending = (async () => {
+          const file = await rememberPreview(blob.fileId, blob.size, () => runPreview(() => inSmallSeries(
+            (session) => loadBlob(blob, mime, session),
+          )));
+          if (!file) return undefined;
+          const picture = await makeThumb(file.type ? file : new Blob([file], { type: mime }));
+          if (!picture) return undefined;
+          const local = URL.createObjectURL(picture.blob);
+          try {
+            const up = await uploadCloudBlob(deps.transport(), picture.blob, { key: blob.key });
+            const current = findNode(container, node);
+            // Содержимое сменилось или кадр уже дописало другое устройство — свою запись не делаем
+            if (current?.blob?.fileId === blob.fileId && !current.thumb) {
+              await deps.cloud().apply(container, [{
+                op: 'setBlob',
+                id: node,
+                blob: current.blob,
+                mtime: current.mtime,
+                thumb: {
+                  fileId: up.fileId,
+                  nonce: up.nonce,
+                  capability: up.capability,
+                  width: picture.width,
+                  height: picture.height,
+                },
+              }]);
+              deps.log(`облако: превью видео дописано (${node})`);
+            }
+          } catch (e) {
+            deps.log(`облако: превью видео не записано: ${String(e)}`);
+          }
+          return local;
+        })().catch(() => undefined);
+        backfills.set(key, pending);
+      }
+      return pending;
     },
 
     /** Переместить узлы в папку другого контейнера (личный диск ↔ совместная папка). */

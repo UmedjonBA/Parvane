@@ -914,7 +914,8 @@ void BuildChatBackgroundSection(SectionBuilder &builder) {
 		};
 	});
 
-	builder.add(nullptr, [] {
+	// Parvane fork: широкой раскладки нет (`Window::Adaptive::isChatWide`) — пункт и его поиск скрыты
+	if (false) builder.add(nullptr, [] {
 		return SearchEntry{
 			.id = u"chat/adaptive-layout"_q,
 			.title = tr::lng_settings_adaptive_wide(tr::now),
@@ -1960,10 +1961,8 @@ void SetupChatBackground(
 		tile->toggle(shown(), anim::type::instant);
 	}, tile->lifetime());
 
-	adaptive->toggleOn(controller->adaptive().chatLayoutValue(
-	) | rpl::map([](Window::Adaptive::ChatLayout layout) {
-		return (layout == Window::Adaptive::ChatLayout::Wide);
-	}));
+	// Parvane fork: широкой раскладки нет — переключатель не показывается
+	adaptive->hide(anim::type::instant);
 
 	adaptive->entity()->checkedChanges(
 	) | rpl::on_next([=](bool checked) {
