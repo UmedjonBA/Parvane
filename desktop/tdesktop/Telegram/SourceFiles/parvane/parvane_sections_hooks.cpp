@@ -2,7 +2,7 @@
 // «Знания» и «Облако» без UI: действия по таймеру и маркеры снимков в журнале.
 //
 //   PARVANE_AUTOPLANNER=task:<название>@<сек>[,event:<название>|<день>|<начало>|<конец>@<сек>]
-//   PARVANE_AUTONOTES=note:<заголовок>|<текст>@<сек>
+//   PARVANE_AUTONOTES=note:<заголовок>|<текст>@<сек> (текст `file=<путь>` — из файла: в нём можно `,` и `@`)
 //   PARVANE_AUTOCLOUD=folder:<имя>@<сек>
 //
 // Маркеры (на каждое изменение снимка, повтор одной и той же строки не пишется):
@@ -17,6 +17,7 @@
 #include <parvane/sections/cloud_sync.h>
 
 #include <QtCore/QDateTime>
+#include <QtCore/QFile>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
@@ -124,7 +125,12 @@ void RunNotesStep(const HookStep &step) {
 	}
 	const auto parts = step.arg.split('|');
 	const auto title = parts.value(0).toStdString();
-	const auto text = parts.mid(1).join('|').toStdString();
+	auto raw = parts.mid(1).join('|');
+	if (raw.startsWith(u"file="_q)) {
+		auto file = QFile(raw.mid(5));
+		raw = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+	}
+	const auto text = raw.toStdString();
 	SetShownSection(Section::Knowledge); // хранилище заметок поднимается с разделом
 	After(5, [=] {
 		Ask<std::string>([=](Workers &w) -> std::string {

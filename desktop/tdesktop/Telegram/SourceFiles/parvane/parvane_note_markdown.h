@@ -40,6 +40,8 @@ private:
 
 	MarkdownCallbacks _callbacks;
 	std::vector<Entry> _entries;
+	// Идёт своя раскладка: изменения высоты блоков в ней не запускают раскладку заново
+	bool _inLayout = false;
 
 };
 

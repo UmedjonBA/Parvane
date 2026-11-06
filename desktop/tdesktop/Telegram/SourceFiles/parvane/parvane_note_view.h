@@ -4,9 +4,16 @@
 // сюда); на узком экране и в панели графа — ещё и «Связи». Встроенные файлы — карточкой файла личного диска.
 #pragma once
 
+#include "base/timer.h"
+
 #include "parvane/parvane_knowledge_common.h"
+#include "parvane/parvane_note_markdown.h"
 
 #include "base/unique_qptr.h"
+
+namespace Ui {
+class ScrollArea;
+} // namespace Ui
 
 #include <QtGui/QImage>
 
@@ -41,6 +48,7 @@ struct NoteCallbacks {
 	Fn<void()> back; // только на узком экране
 	Fn<void(std::string noteId)> deleted; // заметка ушла в корзину
 	Fn<void(std::string noteId)> pickFolder; // перенос в другую папку; пусто — папка не кнопка
+	Fn<void(bool editing)> editingChanged; // правка открыта/закрыта: раздел убирает список и «Связи»
 };
 
 class NoteView final : public Ui::RpWidget {
@@ -54,6 +62,8 @@ public:
 
 	// Открыть правку с выделенным куском текста (позиции — байты UTF-8 текста заметки)
 	void requestEdit(size_t from, size_t to);
+	// Высота видимой области раздела: правка на широком экране занимает её целиком (редактор и просмотр)
+	void setViewportHeight(int height);
 
 protected:
 	int resizeGetHeight(int newWidth) override;
@@ -69,6 +79,11 @@ private:
 
 	void startEdit();
 	void cancelEdit();
+	void rebuildPreview();
+	void refreshEditing();
+	void syncFromEditor();
+	void syncFromPreview();
+	[[nodiscard]] MarkdownCallbacks markdownCallbacks(bool withTasks);
 	void save();
 	void toggleTask(int line, bool done);
 	void askDelete();
@@ -103,6 +118,18 @@ private:
 	base::unique_qptr<Ui::RpWidget> _tools;
 	base::unique_qptr<Kit::Field> _editor;
 	base::unique_qptr<MarkdownView> _markdown;
+	// Правка: живой просмотр текста (широкий экран — справа от редактора, узкий — вместо него по кнопке)
+	base::unique_qptr<Ui::ScrollArea> _previewScroll;
+	MarkdownView *_preview = nullptr;
+	int _viewportHeight = 0;
+	bool _inLayout = false;
+	// Прокрутку одной панели двигает другая: её событие не должно двигать первую в ответ
+	bool _drivingEditor = false;
+	bool _drivingPreview = false;
+	NotesIconButton *_previewToggle = nullptr;
+	bool _previewShown = false;
+	bool _reportedEditing = false;
+	base::Timer _previewTimer;
 	base::unique_qptr<Ui::RpWidget> _buttons;
 	base::unique_qptr<Ui::RpWidget> _planned;
 	base::unique_qptr<NoteLinks> _links;

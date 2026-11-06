@@ -28,6 +28,10 @@ object ParvaneSections {
     fun notes(op: String, argsJson: String = "{}"): Any? = nativeNotes(op, argsJson).let { org.json.JSONTokener(it).nextValue() }
         .takeIf { it != JSONObject.NULL }
 
+    /** Markdown заметки для показа (разбор ядра, тот же, что web и desktop): блоки вида web с кусками строк. */
+    fun markdown(text: String, title: String = ""): org.json.JSONArray =
+        try { org.json.JSONArray(nativeMarkdown(text, title)) } catch (e: Throwable) { org.json.JSONArray() }
+
     /** «План»/«Здоровье»: запрос (days, undated, lists, settings, health, monthGrid, week, quickParse, stats, slots) либо
      *  правка (quickAdd, taskDone, stepDone, status, move, save, remove, food, removeFood, water, removeHealth, goals,
      *  healthGoals, settings, list) — логика ядра; правка с `notice` даёт «Отменить». */
@@ -56,4 +60,5 @@ object ParvaneSections {
     @JvmStatic private external fun nativePlannerUndo(notice: String)
     @JvmStatic private external fun nativeCloudCall(method: String, argsJson: String): String
     @JvmStatic private external fun nativeNotes(op: String, argsJson: String): String
+    @JvmStatic private external fun nativeMarkdown(text: String, title: String): String
 }

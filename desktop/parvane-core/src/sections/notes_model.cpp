@@ -26,12 +26,18 @@ struct TaskMatch {
     std::optional<U32> rest;
 };
 
-// TASK_RE = /^(\s*[-*+]\s+\[)([ xX])(\](?:\s+(.*))?)$/
+// TASK_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])(\](?:\s+(.*))?)$/ (пункт с галочкой и в нумерованном списке)
 std::optional<TaskMatch> matchTask(const U32 &s) {
     const size_t n = s.size();
     size_t i = 0;
     while (i < n && isSpace(s[i])) ++i;
-    if (i >= n || (s[i] != '-' && s[i] != '*' && s[i] != '+')) return std::nullopt;
+    if (i < n && isAsciiDigit(s[i])) {
+        const size_t digits = i;
+        while (i < n && isAsciiDigit(s[i])) ++i;
+        if (i - digits > 9 || i >= n || (s[i] != '.' && s[i] != ')')) return std::nullopt;
+    } else if (i >= n || (s[i] != '-' && s[i] != '*' && s[i] != '+')) {
+        return std::nullopt;
+    }
     ++i;
     const size_t wsStart = i;
     while (i < n && isSpace(s[i])) ++i;

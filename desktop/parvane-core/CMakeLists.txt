@@ -135,7 +135,8 @@ if (PARVANE_CORE_BUILD_PROBE)
         target_link_libraries(parvane_sections_${t} PRIVATE parvane_sections)
         target_include_directories(parvane_sections_${t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/sections)
         # Векторы разделов web → desktop (T037): webcompat_sections_tests читает proto/parvane/vectors/clients
-        target_compile_definitions(parvane_sections_${t} PRIVATE PARVANE_VECTORS_DIR="${PARVANE_VECTORS}")
+        target_compile_definitions(parvane_sections_${t} PRIVATE PARVANE_VECTORS_DIR="${PARVANE_VECTORS}"
+            PARVANE_CONFORMANCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../conformance")
         add_test(NAME sections_${t} COMMAND parvane_sections_${t})
     endforeach()
     # Живой: v2-сессия против стека (tests/run_v2_session_live.sh)

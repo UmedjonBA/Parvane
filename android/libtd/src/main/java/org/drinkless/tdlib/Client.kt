@@ -2210,9 +2210,11 @@ class Client private constructor(
     // ── e2e-хук команд (только для сценариев эмулятора: /data/local/tmp/parvane-e2e-cmd) ──
     private val e2eTick = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "parvane-e2e").apply { isDaemon = true } }
     @Volatile private var lastE2eCmd = ""
-    private val e2eHookStartedMs = System.currentTimeMillis()
     private fun startE2eHook() {
         val f = java.io.File("/data/local/tmp/parvane-e2e-cmd")
+        // Команда прошлого процесса — та, что уже лежит в файле при запуске. Сравнивать с часами нельзя: часы
+        // эмулятора выправляются после старта («Clock is valid now»), и свежая команда казалась старой (6 ноя 2026)
+        val staleKey = try { if (f.canRead()) "${f.lastModified()}:${f.readText()}" else null } catch (_: Throwable) { null }
         e2eTick.scheduleWithFixedDelay({
             try {
                 if (!f.canRead()) return@scheduleWithFixedDelay
@@ -2220,11 +2222,10 @@ class Client private constructor(
                 // без дедупа по (mtime, текст) команда выполнялась каждые 3 с (повторные send/folder, 27 сен 2026)
                 // Команда прошлого процесса (файл root не удаляется, дедуп в памяти пуст) повторно не выполняется:
                 // повтор после рестарта объявлял чат раньше локального состояния — черновик и архив «терялись»
-                if (f.lastModified() < e2eHookStartedMs) return@scheduleWithFixedDelay
                 // До подключения сессии (локальное состояние чатов не загружено) команда ждёт
                 if (store.local == null) return@scheduleWithFixedDelay
                 val text = f.readText(); val key = "${f.lastModified()}:$text"
-                if (key == lastE2eCmd) return@scheduleWithFixedDelay
+                if (key == lastE2eCmd || key == staleKey) return@scheduleWithFixedDelay
                 lastE2eCmd = key
                 val cmd = JSONObject(text); f.delete()
                 val peer = cmd.optString("peer")

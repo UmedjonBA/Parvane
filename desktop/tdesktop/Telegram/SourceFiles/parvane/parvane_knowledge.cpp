@@ -357,6 +357,8 @@ private:
 	PaneBody *_pane = nullptr;
 	NoteView *_noteView = nullptr;
 	int _noteViewMode = -1;
+	// Правка заметки на широком экране: список и «Связи» убраны, место — редактору и просмотру
+	bool _noteEditing = false;
 	base::unique_qptr<RichText> _pickText;
 	NotesGraph *_graph = nullptr;
 	base::unique_qptr<Ui::RpWidget> _canvas;
@@ -958,6 +960,7 @@ void KnowledgeScreen::refreshPane() {
 		if (!_noteView || _noteView->noteId() != note->id || _noteViewMode != mode) {
 			_noteViewMode = mode;
 			delete _noteView;
+			_noteEditing = false;
 			_pickText = nullptr;
 			_noteView = Ui::CreateChild<NoteView>(_pane, NoteOptions{
 				.hasLinks = !hasSide(),
@@ -971,6 +974,17 @@ void KnowledgeScreen::refreshPane() {
 					}
 				},
 				.pickFolder = [=](std::string id) { askMove(id); },
+				.editingChanged = [=](bool editing) {
+					if (_noteEditing != editing) {
+						_noteEditing = editing;
+						refreshSide();
+						relayout();
+						if (editing) {
+							// Правка занимает видимую область целиком — с начала заметки
+							_paneScroll->scrollToY(0);
+						}
+					}
+				},
 			});
 			_noteView->show();
 			_pane->setChild(_noteView, !narrow);
@@ -983,6 +997,7 @@ void KnowledgeScreen::refreshPane() {
 		_pane->setChild(nullptr, true);
 		delete _noteView;
 		_noteView = nullptr;
+		_noteEditing = false;
 	}
 	if (!_pickText) {
 		// `.pickNote`: подсказка с образцом [[ссылки]] (не нажимается), не шире 52ch
@@ -1011,7 +1026,7 @@ void KnowledgeScreen::refreshPane() {
 
 void KnowledgeScreen::refreshSide() {
 	const auto note = (_view == View::Notes) ? openNote() : nullptr;
-	const auto shown = hasSide() && note;
+	const auto shown = hasSide() && note && !(_noteEditing && !isNarrow());
 	_side->setVisible(shown);
 	_sideResizer->setVisible(shown);
 	if (!shown) {
@@ -1240,7 +1255,7 @@ void KnowledgeScreen::relayout() {
 	const auto note = openNote();
 	const auto isNoteShown = isNotes && note;
 	const auto isNoteAlone = narrow && isNoteShown;
-	const auto listShown = isNotes && !isNoteAlone;
+	const auto listShown = isNotes && !isNoteAlone && !(_noteEditing && isNoteShown && !narrow);
 	const auto paneShown = isNotes && (!narrow || isNoteShown);
 	_listScroll->setVisible(listShown);
 	_listResizer->setVisible(listShown && !narrow);
@@ -1265,6 +1280,9 @@ void KnowledgeScreen::relayout() {
 		_paneScroll->setGeometry(0, 0, cw, ch);
 	}
 	if (paneShown) {
+		if (_noteView) {
+			_noteView->setViewportHeight(_paneScroll->height());
+		}
 		_pane->resizeToWidth(_paneScroll->width());
 	}
 	if (_graph && !_graph->isHidden()) {

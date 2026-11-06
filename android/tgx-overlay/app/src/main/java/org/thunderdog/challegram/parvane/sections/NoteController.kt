@@ -3,7 +3,6 @@ package org.thunderdog.challegram.parvane.sections
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.text.method.LinkMovementMethod
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -35,6 +34,10 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     private var editing = false
     private var baseText: String? = null
     private var editor: EditText? = null
+    // Правка: текст черновика (переживает переключение на просмотр) и что показано — редактор либо просмотр
+    private var draft: String? = null
+    private var previewShown = false
+    private var previewToggle: View? = null
     private var title = ""
     private var lastSnap: JSONObject? = null
 
@@ -223,13 +226,16 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     private fun startEdit() {
         editing = true
         editor = null
+        draft = null
+        previewShown = false
         lastSnap?.let { render(it) }
     }
 
-    private fun render(snap: JSONObject) {
+    private fun render(snap: JSONObject, force: Boolean = false) {
         lastSnap = snap
         val n = note(snap)
-        if (editing && editor != null) return // правка не перебивается снимком
+        if (editing && (editor != null || previewShown) && !force) return // правка не перебивается снимком
+        showPreviewToggle(editing && n != null)
         setHeader(header(n))
         rebuild {
             setPadding(Pv.rem(1f), Pv.rem(0.875f), Pv.rem(1f), Pv.rem(1.5f))
@@ -261,43 +267,37 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
                 Pv.pressable(this, Pv.c.raised, 0.75f) { move(snap) }
             })
             addView(props, lp(t = Pv.rem(0.375f), b = Pv.rem(1.125f)))
+            val all = Sx.list(snap.optJSONArray("notes"))
+            if (editing && previewShown) {
+                // Просмотр черновика (телефон: одно окно, переключение кнопкой в углу)
+                baseText = baseText ?: n.optString("text")
+                addView(markdown(all, n, withTasks = false).render(draft ?: n.optString("text"), n.optString("title")), lp())
+                addView(editButtons(), lp(t = Pv.rem(1f)))
+                return@rebuild
+            }
             if (editing) {
                 baseText = n.optString("text")
-                val field = context.input(n.optString("text"), Sx.t("Пишите в Markdown: # заголовок, - [ ] задача, [[ссылка]]",
+                val field = context.input(draft ?: n.optString("text"), Sx.t("Пишите в Markdown: # заголовок, - [ ] задача, [[ссылка]]",
                     "Write Markdown: # heading, - [ ] task, [[link]]"), multiline = true).apply {
                     minLines = 14
                     setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15f)
                     typeface = Pv.mono()
                 }
                 editor = field
+                field.addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: android.text.Editable?) { draft = s?.toString() }
+                })
                 addView(field, lp())
-                addView(LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    addView(context.pvButton(Sx.t("Сохранить", "Save"), "acc", icon = "check") { save() })
-                    addView(context.pvButton(Sx.t("Отмена", "Cancel"), "ghost") { cancelEdit() }.apply {
-                        (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f)
-                    })
-                }, lp(t = Pv.rem(1f)))
+                addView(editButtons(), lp(t = Pv.rem(1f)))
                 field.requestFocus()
                 return@rebuild
             }
-            val all = Sx.list(snap.optJSONArray("notes"))
             val body = NoteText.bodyWithoutProperties(n.optString("text"))
-            // Тело — хвост текста заметки (свойства в начале срезаны): номер строки тела + сдвиг = строка в тексте
-            val bodyOffset = n.optString("text").lines().size - body.lines().size
             if (body.isBlank()) addView(context.pvText(Sx.t("Пусто — нажмите «Изменить»", "Empty — tap “Edit”"), 1f, Pv.c.faint))
-            else NoteText.parts(body).forEachIndexed { i, part ->
-                when (part) {
-                    is NoteText.Part.Text -> addView(context.pvText(NoteText.render(part.text, { t -> openTitle(all, t) }, { url -> openUrl(url) },
-                        title = if (i == 0) n.optString("title") else "", lineBase = bodyOffset + part.startLine,
-                        onTask = { line, done -> setTask(n, line, done) }), 1f, Pv.c.fg).apply {
-                        movementMethod = LinkMovementMethod.getInstance()
-                        setLineSpacing(0f, 1.5f / 1.2f)
-                        highlightColor = Pv.alpha(Pv.c.accent, 22)
-                    })
-                    is NoteText.Part.Embed -> addView(embedView(context, part.name), lp(t = Pv.rem(0.5f), b = Pv.rem(0.5f)))
-                }
-            }
+            // Разбор ядра по всему тексту: номера строк — строки текста заметки (свойства в начале — тоже строки)
+            else addView(markdown(all, n, withTasks = true).render(n.optString("text"), n.optString("title")), lp())
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(context.pvButton(Sx.t("Изменить", "Edit"), icon = "edit") { startEdit() })
@@ -320,7 +320,52 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     private fun cancelEdit() {
         editing = false
         editor = null
+        draft = null
+        previewShown = false
         lastSnap?.let { render(it) }
+    }
+
+    private fun editButtons(): View = LinearLayout(context()).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(context.pvButton(Sx.t("Сохранить", "Save"), "acc", icon = "check") { save() })
+        addView(context.pvButton(Sx.t("Отмена", "Cancel"), "ghost") { cancelEdit() }.apply {
+            (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f)
+        })
+    }
+
+    private fun markdown(all: List<JSONObject>, n: JSONObject, withTasks: Boolean) = NoteMarkdown(
+        context(),
+        onNote = { t -> openTitle(all, t) },
+        onUrl = { url -> openUrl(url) },
+        onTask = if (withTasks) { line, done -> setTask(n, line, done) } else null,
+        embed = { name -> embedView(context(), name) },
+        scroll = { scroll },
+    )
+
+    /** Кнопка «правка ↔ просмотр» в правом нижнем углу: поверх прокрутки, всегда на месте. */
+    private fun showPreviewToggle(shown: Boolean) {
+        previewToggle?.let { contentSlot.removeView(it) }
+        previewToggle = null
+        if (!shown) return
+        val ctx = context()
+        val button = android.widget.FrameLayout(ctx).apply {
+            contentDescription = if (previewShown) Sx.t("Вернуться к правке", "Back to editor") else Sx.t("Показать просмотр", "Show preview")
+            addView(ctx.pvIcon(if (previewShown) "edit" else "eye", Pv.c.accentInk, 1.5f),
+                android.widget.FrameLayout.LayoutParams(Pv.rem(1.5f), Pv.rem(1.5f), Gravity.CENTER))
+            Pv.pressable(this, Pv.c.accent, 1.5f) { togglePreview() }
+            elevation = Pv.rem(0.375f).toFloat()
+        }
+        contentSlot.addView(button, android.widget.FrameLayout.LayoutParams(Pv.rem(3f), Pv.rem(3f), Gravity.BOTTOM or Gravity.END).apply {
+            setMargins(0, 0, Pv.rem(1f), Pv.rem(1f))
+        })
+        previewToggle = button
+    }
+
+    private fun togglePreview() {
+        editor?.text?.toString()?.let { draft = it }
+        previewShown = !previewShown
+        editor = null
+        lastSnap?.let { render(it, force = true) }
     }
 
     private fun openTitle(all: List<JSONObject>, t: String) {
@@ -335,7 +380,8 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     }
 
     private fun openUrl(url: String) {
-        if (!url.startsWith("https://") && !url.startsWith("http://")) return
+        val lower = url.lowercase()
+        if (!lower.startsWith("https://") && !lower.startsWith("http://") && !lower.startsWith("mailto:")) return
         PvSheet.confirm(context(), Sx.t("Открыть ссылку?", "Open link?"), url, Sx.t("Открыть", "Open")) {
             try { context().startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (e: Throwable) { }
         }
@@ -350,13 +396,15 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
     }
 
     private fun save() {
-        val text = editor?.text?.toString() ?: return
+        val text = editor?.text?.toString() ?: draft ?: note(lastSnap)?.optString("text") ?: return
         val args = JSONObject().put("id", noteId).put("text", text)
         baseText?.let { args.put("baseText", it) }
         Sx.async({ ParvaneSections.notes("save", args.toString()) }) { ok ->
             if (ok == true) {
                 editing = false
                 editor = null
+                draft = null
+                previewShown = false
                 Sx.last("notes")?.let { render(it) }
             } else toast(Sx.t("Не сохранено — нет связи?", "Not saved — offline?"))
         }

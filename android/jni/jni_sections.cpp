@@ -11,6 +11,7 @@
 #include <parvane/messenger.h>
 #include <parvane/sections/cloud_files.h>
 #include <parvane/sections/export_source.h>
+#include <parvane/sections/markdown.h>
 #include <parvane/sections/cloud_sync.h>
 #include <parvane/sections/notes_canvas_files.h>
 #include <parvane/sections/notes_embeds.h>
@@ -1263,6 +1264,55 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeCloudCall(
     } catch (const std::exception &e) {
         LOGE("nativeCloudCall: %s", e.what());
         return jreply(env, json());
+    }
+}
+
+namespace {
+
+// Разбор Markdown для показа (тот же, что web и desktop): блоки JSON вида web, у каждой строки — её куски (`parts`;
+// таблица — `headerParts`/`rowParts`, callout — `titleParts`)
+void addMarkdownParts(json &blocks) {
+    namespace md = parvane::sections::markdown;
+    const auto parts = [](const json &text) { return md::toJson(md::parseInline(text.get<std::string>())); };
+    for (auto &block : blocks) {
+        const auto type = block.value("type", std::string());
+        if (type == "heading" || type == "paragraph") {
+            block["parts"] = parts(block["text"]);
+        } else if (type == "list") {
+            for (auto &item : block["items"]) {
+                item["parts"] = parts(item["text"]);
+                if (item.contains("blocks")) addMarkdownParts(item["blocks"]);
+            }
+        } else if (type == "quote") {
+            if (block.contains("callout")) block["callout"]["titleParts"] = parts(block["callout"]["title"]);
+            addMarkdownParts(block["blocks"]);
+        } else if (type == "table") {
+            auto header = json::array();
+            for (const auto &cell : block["header"]) header.push_back(parts(cell));
+            block["headerParts"] = std::move(header);
+            auto rows = json::array();
+            for (const auto &row : block["rows"]) {
+                auto cells = json::array();
+                for (const auto &cell : row) cells.push_back(parts(cell));
+                rows.push_back(std::move(cells));
+            }
+            block["rowParts"] = std::move(rows);
+        }
+    }
+}
+
+} // namespace
+
+// Markdown заметки для показа: блоки с кусками строк. Чистая функция ядра — без хаба и сети.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneSections_nativeMarkdown(JNIEnv *env, jclass, jstring text, jstring title) {
+    try {
+        namespace md = parvane::sections::markdown;
+        auto blocks = md::toJson(md::parseMarkdown(jstr(env, text), jstr(env, title)));
+        addMarkdownParts(blocks);
+        return jreply(env, blocks);
+    } catch (const std::exception &e) {
+        LOGE("nativeMarkdown: %s", e.what());
+        return jreply(env, json::array());
     }
 }
 

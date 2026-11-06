@@ -153,8 +153,12 @@ public:
 	void setInlines(const std::vector<md::MdInline> &parts, Fn<bool(const std::string&)> noteExists = nullptr);
 	void setMarkdown(const std::string &text, Fn<bool(const std::string&)> noteExists = nullptr);
 	void setPlain(const QString &text);
+	// Блок кода: моноширинный текст, подсветка по языку (libprisma, как код в сообщениях)
+	void setCode(const QString &text, const QString &language);
 	void setTone(Tone tone);
 	void setOpenNote(Fn<void(QString)> callback);
+	// Ссылка `#раздел`: id заголовка этого же текста
+	void setOpenAnchor(Fn<void(QString)> callback);
 
 	[[nodiscard]] int naturalTextWidth() const;
 
@@ -177,7 +181,10 @@ private:
 	TextWithEntities _marked;
 	Ui::Text::String _text;
 	Fn<void(QString)> _openNote;
+	Fn<void(QString)> _openAnchor;
 	ClickHandlerPtr _pressed;
+	bool _syntax = false;
+	rpl::lifetime _highlightLifetime;
 
 };
 

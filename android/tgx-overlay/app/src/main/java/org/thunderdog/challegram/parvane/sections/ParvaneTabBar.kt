@@ -213,7 +213,12 @@ object ParvaneTabBar {
     }
 
     private fun open(owner: ViewController<*>, tab: Tab, current: Tab) {
-        if (tab == current) return
+        if (tab == current) {
+            // нажатие на свою вкладку из вложенного экрана (заметка, запись) — назад к корню вкладки, как в Telegram
+            val isRoot = owner is PlannerController || owner is KnowledgeController || owner is ProfileHubController
+            if (tab != Tab.CHATS && !isRoot) owner.navigateBack()
+            return
+        }
         val nav = owner.navigationController() ?: return
         if (tab == Tab.CHATS) {
             // назад к списку чатов: всё над корнем снимается

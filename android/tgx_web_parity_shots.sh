@@ -136,6 +136,35 @@ tgx_logwait "заметка: видео открыто плеером X" 60 >/de
   || bad "заметка: видео не открылось плеером X"
 shot note-video-player 4
 a shell input keyevent 4; sleep 2
+# Markdown заметки (MD-1, 6 ноя 2026): тестовый файл со всеми конструкциями — разбор ядра, показ NoteMarkdown;
+# правка — одно окно и кнопка «Просмотр» в правом нижнем углу, на месте при прокрутке
+tab 'Знания|Knowledge'; sleep 2
+MD_JSON="$(python3 -c 'import json,sys; print(json.dumps({"op":"note_create","title":"Тест","text":open(sys.argv[1]).read()}))' \
+  "$HERE/../conformance/markdown/all-constructs.md")"
+tgx_mark; tgx_cmd "$MD_JSON"
+tgx_logwait "note_create →" 30 >/dev/null || bad "заметка Markdown не создана"
+tab 'Тест' && shot md-open 3
+for i in 1 2 3 4 5 6; do swipe_up 400; shot "md-scroll-$i" 1; done
+tgx_no_crash
+corner() { # кнопка «правка ↔ просмотр» в правом нижнем углу экрана 1080×2400 (над нижней панелью)
+  ui_dump; local xy; xy=$(ui_bounds '^(Показать просмотр|Show preview|Вернуться к правке|Back to editor)$')
+  [ -n "$xy" ] && [ "${xy%% *}" -gt 850 ] && [ "${xy##* }" -gt 1700 ]
+}
+if tab 'Изменить|Edit'; then
+  shot md-edit 2
+  corner && ok "правка: кнопка просмотра в углу" || bad "правка: кнопки просмотра нет в правом нижнем углу"
+  tab 'Показать просмотр|Show preview' && shot md-preview 3
+  swipe_up 500; swipe_up 500; shot md-preview-scrolled 1
+  corner && ok "просмотр: кнопка в углу после прокрутки" || bad "просмотр: кнопка ушла при прокрутке"
+  tab 'Вернуться к правке|Back to editor' && shot md-edit-back 2
+  # «Отмена» — под полем правки, а в нём весь длинный файл: листать до кнопки
+  for i in 1 2 3 4 5 6 7 8 9 10; do ui_dump; [ -n "$(ui_bounds '^(Отмена|Cancel)$')" ] && break; swipe_up 300; done
+  tab 'Отмена|Cancel'
+  sleep 1; ui_dump; [ -z "$(ui_bounds '^(Показать просмотр|Show preview)$')" ] && ok "правка: «Отмена» вернула просмотр" || bad "правка: «Отмена» не нажата"
+else
+  bad "заметка Markdown: нет кнопки «Изменить»"
+fi
+tgx_no_crash
 tab 'Знания|Knowledge'; sleep 2
 for t in "Граф|Graph:graph" "Холст|Canvas:canvas" "Файлы|Files:files"; do
   tab "${t%%:*}" && shot "knowledge-${t##*:}" 3

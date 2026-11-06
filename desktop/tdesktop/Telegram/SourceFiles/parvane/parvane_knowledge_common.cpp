@@ -16,6 +16,8 @@
 #include "lang/lang_keys.h"
 #include "ui/basic_click_handlers.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/chat/chat_style.h"
+#include "spellcheck/spellcheck_highlight_syntax.h"
 #include "window/window_controller.h"
 #include "ui/painter.h"
 #include "ui/style/style_core.h"
@@ -272,31 +274,45 @@ struct RichText::Colors {
 	Colors()
 	: link(st::windowActiveTextFg->c)
 	, mono(ToneColor(Tone::Orange))
+	, mark(MarkColor())
 	, palette(st::defaultTextPalette)
 	, style(st::defaultTextStyle) {
 		palette.linkFg = link.color();
 		palette.monoFg = mono.color();
+		palette.markBg = mark.color();
 		palette.selectLinkFg = link.color();
 		palette.selectMonoFg = mono.color();
 		refresh();
 	}
 
+	// `==выделение==` — подложка `--pv-yellow` 35 % (web `.mark`)
+	[[nodiscard]] static QColor MarkColor() {
+		auto result = ToneColor(Tone::Yellow);
+		result.setAlphaF(0.35);
+		return result;
+	}
+
 	void refresh() {
 		mono.update(ToneColor(Tone::Orange));
+		mark.update(MarkColor());
 		pens[0] = QPen(ToneColor(Tone::Purple));
 		pens[1] = QPen(ToneColor(Tone::Red));
 		pens[2] = QPen(ToneColor(Tone::Aqua));
 		for (auto i = 0; i != int(pens.size()); ++i) {
 			special[i] = Ui::Text::SpecialColor{ .pen = &pens[i], .penSelected = &pens[i] };
 		}
+		// Цвета подсветки кода — те же, что у кода в сообщениях
+		syntax = Ui::SyntaxHighlightColors(style::main_palette::get());
 	}
 
 	style::owned_color link;
 	style::owned_color mono;
+	style::owned_color mark;
 	style::TextPalette palette;
 	style::TextStyle style;
 	std::array<QPen, 3> pens;
 	std::array<Ui::Text::SpecialColor, 3> special;
+	std::vector<Ui::Text::SpecialColor> syntax;
 };
 
 namespace {
@@ -306,6 +322,7 @@ constexpr auto kNoteColor = 1;
 constexpr auto kMissingColor = 2;
 constexpr auto kTagColor = 3;
 const auto kNoteScheme = u"pvnote:"_q;
+const auto kAnchorScheme = u"pvanchor:"_q;
 
 [[nodiscard]] TextWithEntities BuildMarked(
 		const std::vector<md::MdInline> &parts,
@@ -322,18 +339,27 @@ const auto kNoteScheme = u"pvnote:"_q;
 		const auto add = [&](EntityType type, const QString &data = QString()) {
 			result.entities.push_back(EntityInText(type, offset, length, data));
 		};
+		// Начертания (как web `renderStyled`)
+		if (part.style & md::kMdBold) add(EntityType::Bold);
+		if (part.style & md::kMdItalic) add(EntityType::Italic);
+		if (part.style & md::kMdStrike) add(EntityType::StrikeOut);
+		if (part.style & md::kMdUnderline) add(EntityType::Underline);
+		if (part.style & md::kMdCode) add(EntityType::Code);
+		if (part.style & md::kMdMark) add(EntityType::Marked);
+		if (part.style & md::kMdSub) add(EntityType::Subscript);
+		if (part.style & md::kMdSup) add(EntityType::Superscript);
 		switch (part.type) {
-		case md::MdInlineType::Bold: add(EntityType::Bold); break;
-		case md::MdInlineType::Italic: add(EntityType::Italic); break;
-		case md::MdInlineType::Strike: add(EntityType::StrikeOut); break;
-		case md::MdInlineType::Code: add(EntityType::Code); break;
 		case md::MdInlineType::Tag: add(EntityType::Colorized, QString(QChar(kTagColor))); break;
 		case md::MdInlineType::Note: {
 			const auto exists = !noteExists || noteExists(part.target);
 			add(EntityType::CustomUrl, kNoteScheme + Q(part.target));
 			add(EntityType::Colorized, QString(QChar(exists ? kNoteColor : kMissingColor)));
 		} break;
-		case md::MdInlineType::Link: add(EntityType::CustomUrl, Q(part.url)); break;
+		case md::MdInlineType::Link:
+			add(EntityType::CustomUrl, part.url.starts_with('#')
+				? (kAnchorScheme + Q(part.url.substr(1)))
+				: Q(part.url));
+			break;
 		case md::MdInlineType::Text: break;
 		}
 	}
@@ -345,7 +371,11 @@ const auto kNoteScheme = u"pvnote:"_q;
 RichText::RichText(QWidget *parent, Style st)
 : RpWidget(parent)
 , _st(st)
-, _colors(std::make_unique<Colors>()) {
+, _colors(std::make_unique<Colors>())
+// Без минимальной ширины (по умолчанию бесконечной) высота считалась без переносов по ширине — строка, длиннее
+// виджета, рисовалась в несколько строк, а место получала под одну (остальное обрезалось). Слово длиннее этой
+// ширины переносится по буквам
+, _text(Kit::Rem(2)) {
 	setMouseTracking(true);
 	refreshStyle();
 	TonesChanges() | rpl::on_next([=] {
@@ -375,6 +405,32 @@ void RichText::setMarkdown(const std::string &text, Fn<bool(const std::string&)>
 void RichText::setPlain(const QString &text) {
 	_marked = TextWithEntities{ text };
 	apply();
+}
+
+void RichText::setCode(const QString &text, const QString &language) {
+	_syntax = true;
+	auto marked = TextWithEntities{ text };
+	if (!language.isEmpty() && !text.isEmpty()) {
+		marked.entities.push_back(EntityInText(EntityType::Pre, 0, int(text.size()), language));
+		_highlightLifetime.destroy();
+		if (const auto id = Spellchecker::TryHighlightSyntax(marked)) {
+			// Подсветка считается в фоне: по готовности — ещё раз, уже с цветами
+			Spellchecker::HighlightReady(
+			) | rpl::filter(rpl::mappers::_1 == id) | rpl::take(1) | rpl::on_next([=] {
+				setCode(text, language);
+			}, _highlightLifetime);
+		}
+		// Подложку блока рисует сам блок: остаются только цвета подсветки
+		marked.entities.erase(std::remove_if(marked.entities.begin(), marked.entities.end(), [](const EntityInText &entity) {
+			return entity.type() == EntityType::Pre;
+		}), marked.entities.end());
+	}
+	_marked = std::move(marked);
+	apply();
+}
+
+void RichText::setOpenAnchor(Fn<void(QString)> callback) {
+	_openAnchor = std::move(callback);
 }
 
 void RichText::setTone(Tone tone) {
@@ -424,7 +480,9 @@ void RichText::paintEvent(QPaintEvent *e) {
 		.availableWidth = width(),
 		.clip = e->rect(),
 		.palette = &_colors->palette,
-		.colors = std::span<Ui::Text::SpecialColor>(_colors->special),
+		.colors = _syntax
+			? std::span<Ui::Text::SpecialColor>(_colors->syntax)
+			: std::span<Ui::Text::SpecialColor>(_colors->special),
 	});
 }
 
@@ -466,6 +524,10 @@ void RichText::mouseReleaseEvent(QMouseEvent *e) {
 	if (url.startsWith(kNoteScheme)) {
 		if (_openNote) {
 			_openNote(url.mid(kNoteScheme.size()));
+		}
+	} else if (url.startsWith(kAnchorScheme)) {
+		if (_openAnchor) {
+			_openAnchor(url.mid(kAnchorScheme.size()));
 		}
 	} else if (!url.isEmpty()) {
 		// Ревью 21 окт 2026 (2.3): не UrlClickHandler (он превращает t.me во внутренний tg:// и открывает скрытые

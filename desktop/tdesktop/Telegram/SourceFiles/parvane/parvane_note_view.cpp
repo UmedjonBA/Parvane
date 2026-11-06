@@ -26,6 +26,7 @@
 #include "lang/lang_keys.h"
 #include "ui/painter.h"
 #include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/scroll_area.h"
 #include "styles/style_basic.h"
 #include "styles/style_widgets.h"
 
@@ -38,6 +39,11 @@
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <QtGui/QTextCursor>
+#include <QtGui/QTextBlock>
+#include <QtGui/QTextLayout>
+#include <QtGui/QTextDocument>
+#include <QtGui/QAbstractTextDocumentLayout>
+#include <QtWidgets/QTextEdit>
 #include <QtGui/QtEvents>
 
 namespace Parvane::Knowledge {
@@ -296,7 +302,8 @@ NoteView::NoteView(QWidget *parent, NoteOptions options, NoteCallbacks callbacks
 : RpWidget(parent)
 , _options(options)
 , _callbacks(std::move(callbacks))
-, _titleStyle(std::make_unique<TitleStyle>()) {
+, _titleStyle(std::make_unique<TitleStyle>())
+, _previewTimer([=] { rebuildPreview(); }) {
 	TonesChanges() | rpl::on_next([=] {
 		_titleStyle->refresh(isEditing());
 		if (_titleField) {
@@ -332,6 +339,9 @@ void NoteView::setData(NoteData data) {
 		_shownTitle = note.title;
 		_editor = nullptr;
 		_tools = nullptr;
+		_preview = nullptr;
+		_previewScroll = nullptr;
+		_previewShown = false;
 		_base = std::nullopt;
 		_selection = std::nullopt;
 		_saving = false;
@@ -346,6 +356,7 @@ void NoteView::setData(NoteData data) {
 	rebuildButtons();
 	rebuildPlanned();
 	rebuildLinks();
+	refreshEditing();
 	relayout();
 }
 
@@ -355,6 +366,7 @@ void NoteView::rebuildTitle() {
 	_titleField = nullptr;
 	_title = nullptr;
 	_barToggle = nullptr;
+	_previewToggle = nullptr;
 	_bar = nullptr;
 	_backButton = nullptr;
 	if (_options.narrow) {
@@ -370,6 +382,19 @@ void NoteView::rebuildTitle() {
 			u"edit"_q,
 			tr::lng_parvane_notes_edit(tr::now)));
 		_barToggle = toggle;
+		// Правка на узком экране: «правка ↔ просмотр» (видна только в правке)
+		const auto preview = bar->add(object_ptr<NotesIconButton>(
+			bar,
+			u"eye"_q,
+			IsRussian() ? u"Просмотр"_q : u"Preview"_q));
+		_previewToggle = preview;
+		preview->setClickedCallback([=] {
+			crl::on_main(this, [=] {
+				_previewShown = !_previewShown;
+				refreshEditing();
+				relayout();
+			});
+		});
 		toggle->setClickedCallback([=] {
 			crl::on_main(this, [=] {
 				if (isEditing()) {
@@ -515,9 +540,8 @@ object_ptr<Ui::RpWidget> NoteView::createEmbed(QWidget *parent, const md::MdBloc
 	return CreateEmbedView(parent, std::move(source));
 }
 
-void NoteView::rebuildBody() {
+MarkdownCallbacks NoteView::markdownCallbacks(bool withTasks) {
 	const auto &note = *_data.note;
-	_shownText = note.text;
 	const auto index = _data.index;
 	const auto noteId = note.id;
 	// Пункты, ставшие задачами «Плана»: метка пункта → задача
@@ -525,14 +549,14 @@ void NoteView::rebuildBody() {
 	for (const auto &task : notes::getNoteTasks(_data.planner, noteId)) {
 		byMarker.emplace(notes::markerOfTask(task), task);
 	}
-	auto callbacks = MarkdownCallbacks{
+	return MarkdownCallbacks{
 		.noteExists = [=](const std::string &target) {
 			return index && index->byTitle(target) != nullptr;
 		},
 		.openNote = _callbacks.openTitle,
-		.toggleTask = [=](int line, bool done) {
+		.toggleTask = withTasks ? Fn<void(int, bool)>([=](int line, bool done) {
 			toggleTask(line, done);
-		},
+		}) : Fn<void(int, bool)>(),
 		.taskTail = [byMarker = std::move(byMarker)](const std::string &text) {
 			const auto split = notes::splitTaskMarker(text);
 			auto when = QString();
@@ -555,6 +579,12 @@ void NoteView::rebuildBody() {
 			return createEmbed(parent, block);
 		},
 	};
+}
+
+void NoteView::rebuildBody() {
+	const auto &note = *_data.note;
+	_shownText = note.text;
+	auto callbacks = markdownCallbacks(true);
 	const auto view = Ui::CreateChild<MarkdownView>(this, std::move(callbacks));
 	view->setBlocks(md::parseMarkdown(note.text, note.title));
 	view->show();
@@ -654,10 +684,24 @@ void NoteView::rebuildLinks() {
 }
 
 void NoteView::relayout() {
-	resizeToWidth(width());
+	if (!_inLayout) {
+		resizeToWidth(width());
+	}
+}
+
+void NoteView::setViewportHeight(int height) {
+	if (_viewportHeight == height) {
+		return;
+	}
+	_viewportHeight = height;
+	if (isEditing()) {
+		relayout();
+	}
 }
 
 int NoteView::resizeGetHeight(int newWidth) {
+	const auto guard = gsl::finally([&, was = _inLayout] { _inLayout = was; });
+	_inLayout = true;
 	const auto narrow = _options.narrow;
 	auto y = 0;
 	if (_bar) {
@@ -686,22 +730,74 @@ int NoteView::resizeGetHeight(int newWidth) {
 	place(_title.get(), 0, inner);
 	place(_props.get(), Rem(0.375), inner);
 	y += Rem(1.125);
-	if (_tools) {
-		place(_tools.get(), 0, inner);
-		y += Rem(0.5);
-	}
-	if (_editor) {
-		place(_editor.get(), 0, inner);
+	const auto setEditorHeight = [&](int min, int max) {
+		const auto input = _editor->input();
+		input->setMinHeight(min);
+		input->setMaxHeight(max);
+	};
+	if (_editor && _preview && !narrow) {
+		// Правка на широком экране: слева редактор (с кнопками вставки), справа просмотр; обе панели — одной
+		// высоты на всю видимую область, листаются сами и синхронно (по строкам текста)
+		const auto gap = Rem(1.25);
+		const auto half = std::max((inner - gap) / 2, 1);
+		const auto top = y;
+		_tools->show();
+		_tools->resizeToWidth(half);
+		_tools->moveToLeft(padX, top, newWidth);
+		const auto editorTop = top + _tools->height() + Rem(0.5);
+		const auto below = (_buttons ? _buttons->height() + Rem(1) : 0) + Rem(1.375);
+		const auto fill = std::max(_viewportHeight - editorTop - below, Rem(18));
+		setEditorHeight(fill, fill);
+		_editor->show();
+		_editor->resizeToWidth(half);
+		_editor->moveToLeft(padX, editorTop, newWidth);
+		const auto previewWidth = std::max(inner - half - gap, 1);
+		_previewScroll->setGeometry(padX + half + gap, editorTop, previewWidth, _editor->height());
+		_preview->resizeToWidth(previewWidth);
+		_previewScroll->show();
+		y = editorTop + _editor->height();
+	} else if (_editor && _preview && _previewShown) {
+		// Узкий экран, просмотр: вместо редактора (текст правки сохраняется)
+		if (_tools) {
+			_tools->hide();
+		}
+		_editor->hide();
+		_preview->resizeToWidth(inner);
+		_previewScroll->setGeometry(padX, y, inner, _preview->height());
+		_previewScroll->show();
+		y += _preview->height();
 	} else {
-		place(_markdown.get(), 0, inner);
+		if (_previewScroll) {
+			_previewScroll->hide();
+		}
+		if (_tools) {
+			_tools->show();
+			place(_tools.get(), 0, inner);
+			y += Rem(0.5);
+		}
+		if (_editor) {
+			setEditorHeight(Rem(18.75), Rem(4000));
+			_editor->show();
+			place(_editor.get(), 0, inner);
+		} else {
+			place(_markdown.get(), 0, inner);
+		}
 	}
 	place(_buttons.get(), Rem(1), inner);
 	y += Rem(1.375);
 	const auto maxWidth = std::min(inner, Kit::Font(Kit::kBodyPx)->width(QChar('0')) * 70);
+	// На время правки «Запланировано» и «Связи» убраны: место — редактору и просмотру (как web)
+	const auto editing = isEditing();
 	if (_planned) {
-		place(_planned.get(), 0, maxWidth);
+		_planned->setVisible(!editing);
 	}
 	if (_links) {
+		_links->setVisible(!editing);
+	}
+	if (_planned && !editing) {
+		place(_planned.get(), 0, maxWidth);
+	}
+	if (_links && !editing) {
 		place(_links.get(), _planned ? Rem(1.375) : 0, maxWidth);
 	}
 	y += narrow ? Rem(1.5) : 0;
@@ -727,8 +823,16 @@ void NoteView::startEdit() {
 		crl::on_main(this, [=] { cancelEdit(); });
 	}, field->lifetime());
 	field->heightValue() | rpl::skip(1) | rpl::on_next([=] { relayout(); }, field->lifetime());
+	// Просмотр догоняет текст с небольшой задержкой (разбор на каждое нажатие не нужен)
+	field->textChanges() | rpl::on_next([=] {
+		_previewTimer.callOnce(150);
+	}, field->lifetime());
+	field->input()->scrollTop().changes() | rpl::on_next([=] {
+		syncFromEditor();
+	}, field->lifetime());
 	field->show();
 	_editor.reset(field);
+	_previewShown = false;
 
 	// Файл с диска, перетаскиванием либо из буфера (web `NoteView`: drop, paste) — в облако, в папку заметки
 	field->input()->setMimeDataHook([=](not_null<const QMimeData*> data, Ui::InputField::MimeAction action) {
@@ -774,6 +878,8 @@ void NoteView::startEdit() {
 
 	_markdown = nullptr;
 	_shownText.clear();
+	rebuildPreview();
+	refreshEditing();
 	_titleStyle->refresh(true);
 	if (_titleField) {
 		_titleField->update();
@@ -796,14 +902,185 @@ void NoteView::startEdit() {
 	}
 }
 
+void NoteView::rebuildPreview() {
+	if (!_editor || !_data.note) {
+		return;
+	}
+	if (!_previewScroll) {
+		const auto scroll = Ui::CreateChild<Ui::ScrollArea>(this);
+		_preview = scroll->setOwnedWidget(
+			object_ptr<MarkdownView>(scroll, markdownCallbacks(false))).data();
+		_preview->heightValue() | rpl::skip(1) | rpl::on_next([=] {
+			relayout();
+		}, _preview->lifetime());
+		scroll->scrollTopChanges() | rpl::on_next([=] {
+			syncFromPreview();
+		}, scroll->lifetime());
+		_previewScroll.reset(scroll);
+	}
+	_preview->setBlocks(md::parseMarkdown(S(_editor->text()), _data.note->title));
+	relayout();
+}
+
+namespace {
+
+struct LineAnchor {
+	double line = 0.;
+	int top = 0;
+};
+
+// Верх каждой строки текста в редакторе и низ документа последним. Поле tdesktop держит текст одним абзацем
+// документа с разделителями строк (U+2028), поэтому строки ищутся по позициям разделителей в раскладке абзаца
+[[nodiscard]] std::vector<int> EditorLineTops(not_null<Ui::InputField*> input) {
+	const auto document = input->rawTextEdit()->document();
+	const auto layout = document->documentLayout();
+	auto result = std::vector<int>();
+	for (auto block = document->begin(); block != document->end(); block = block.next()) {
+		const auto top = layout->blockBoundingRect(block).top();
+		const auto text = block.text();
+		const auto lines = block.layout();
+		const auto push = [&](int position) {
+			const auto line = lines ? lines->lineForTextPosition(position) : QTextLine();
+			result.push_back(int(top + (line.isValid() ? line.y() : 0.)));
+		};
+		push(0);
+		for (auto i = 0; i != int(text.size()); ++i) {
+			const auto c = text[i];
+			if (c == QChar::LineSeparator || c == QChar::ParagraphSeparator || c == u'\n') {
+				push(i + 1);
+			}
+		}
+	}
+	result.push_back(int(layout->documentSize().height()));
+	return result;
+}
+
+// Опоры просмотра: строка текста → верх блока (виджеты с `pvLine`), только возрастающие по обоим; концы — 0 и низ
+[[nodiscard]] std::vector<LineAnchor> PreviewAnchors(not_null<QWidget*> preview, int lineCount) {
+	auto anchors = std::vector<LineAnchor>();
+	for (const auto child : preview->findChildren<QWidget*>()) {
+		const auto line = child->property("pvLine");
+		if (line.isValid() && child->isVisibleTo(preview)) {
+			anchors.push_back({ line.toDouble(), child->mapTo(preview.get(), QPoint()).y() });
+		}
+	}
+	ranges::sort(anchors, [](const LineAnchor &a, const LineAnchor &b) {
+		return (a.line != b.line) ? (a.line < b.line) : (a.top < b.top);
+	});
+	auto result = std::vector<LineAnchor>{ { 0., 0 } };
+	for (const auto &anchor : anchors) {
+		if (anchor.line > result.back().line && anchor.top > result.back().top) {
+			result.push_back(anchor);
+		}
+	}
+	if (double(lineCount) > result.back().line) {
+		result.push_back({ double(lineCount), std::max(preview->height(), result.back().top + 1) });
+	}
+	return result;
+}
+
+[[nodiscard]] double Interpolate(double from, double to, double fromValue, double toValue, double at) {
+	return fromValue + (to > from ? (at - from) / (to - from) : 0.) * (toValue - fromValue);
+}
+
+} // namespace
+
+void NoteView::syncFromEditor() {
+	if (_drivingEditor || !_editor || !_preview || !_previewScroll || _options.narrow) {
+		return;
+	}
+	const auto tops = EditorLineTops(_editor->input());
+	const auto scrollTop = _editor->input()->scrollTop().current();
+	auto line = double(tops.size() - 1);
+	for (auto i = 0; i + 1 < int(tops.size()); ++i) {
+		if (scrollTop < tops[i + 1]) {
+			line = Interpolate(tops[i], tops[i + 1], i, i + 1, scrollTop);
+			break;
+		}
+	}
+	const auto anchors = PreviewAnchors(_preview, int(tops.size()) - 1);
+	auto target = double(_preview->height());
+	for (auto i = 1; i < int(anchors.size()); ++i) {
+		if (line <= anchors[i].line) {
+			target = Interpolate(anchors[i - 1].line, anchors[i].line, anchors[i - 1].top, anchors[i].top, line);
+			break;
+		}
+	}
+	const auto to = std::clamp(int(std::round(target)), 0, _previewScroll->scrollTopMax());
+	if (std::abs(to - _previewScroll->scrollTop()) >= 1) {
+		_drivingPreview = true;
+		_previewScroll->scrollToY(to);
+		_drivingPreview = false;
+	}
+}
+
+void NoteView::syncFromPreview() {
+	if (_drivingPreview || !_editor || !_preview || _options.narrow) {
+		return;
+	}
+	const auto tops = EditorLineTops(_editor->input());
+	const auto anchors = PreviewAnchors(_preview, int(tops.size()) - 1);
+	const auto scrollTop = _previewScroll->scrollTop();
+	auto line = anchors.back().line;
+	for (auto i = 1; i < int(anchors.size()); ++i) {
+		if (scrollTop <= anchors[i].top) {
+			line = Interpolate(anchors[i - 1].top, anchors[i].top, anchors[i - 1].line, anchors[i].line, scrollTop);
+			break;
+		}
+	}
+	const auto index = std::clamp(int(line), 0, std::max(int(tops.size()) - 2, 0));
+	const auto target = (tops.size() < 2)
+		? 0.
+		: Interpolate(index, index + 1, tops[index], tops[index + 1], line);
+	const auto input = _editor->input();
+	const auto to = std::clamp(int(std::round(target)), 0, input->scrollTopMax());
+	if (std::abs(to - input->scrollTop().current()) >= 1) {
+		_drivingEditor = true;
+		input->scrollTo(to);
+		_drivingEditor = false;
+	}
+}
+
+void NoteView::refreshEditing() {
+	const auto editing = isEditing();
+	if (_previewToggle) {
+		// Кнопка «просмотр» есть только в правке; вне её — без места в шапке
+		_previewToggle->setVisible(editing);
+		_previewToggle->setIcon(_previewShown ? u"edit"_q : u"eye"_q);
+		if (!editing) {
+			_previewToggle->resize(0, _previewToggle->height());
+		} else if (!_previewToggle->width()) {
+			_previewToggle->resize(_previewToggle->height(), _previewToggle->height());
+		}
+		if (_bar) {
+			_bar->resizeToWidth(_bar->width());
+		}
+	}
+	if (_reportedEditing != editing) {
+		_reportedEditing = editing;
+		if (_callbacks.editingChanged) {
+			// Раскладку раздела меняем не посреди обработчика нажатия
+			crl::on_main(this, [=] {
+				if (_callbacks.editingChanged) {
+					_callbacks.editingChanged(_reportedEditing);
+				}
+			});
+		}
+	}
+}
+
 void NoteView::cancelEdit() {
 	if (!isEditing()) {
 		return;
 	}
 	_editor = nullptr;
 	_tools = nullptr;
+	_preview = nullptr;
+	_previewScroll = nullptr;
+	_previewShown = false;
 	_base = std::nullopt;
 	_saving = false;
+	refreshEditing();
 	_titleStyle->refresh(false);
 	if (_titleField) {
 		_titleField->update();
