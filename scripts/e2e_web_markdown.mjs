@@ -90,6 +90,55 @@ try {
   await visible(preview.getByText('Добавлено в правке'), 'просмотр следует за текстом');
   await shot('edit-split');
   await editor.fill(FIXTURE);
+
+  // Панели одной высоты; прокрутка синхронна по строкам текста в обе стороны
+  await page.waitForTimeout(500);
+  const [editorHeight, previewHeight] = [(await editor.boundingBox()).height, (await preview.boundingBox()).height];
+  assert.ok(Math.abs(editorHeight - previewHeight) < 60 && editorHeight > 500,
+    `редактор ${editorHeight} и просмотр ${previewHeight} одной высоты на весь экран`);
+  // Верх строки текста в textarea — по зеркалу (как useSplitScrollSync)
+  const lineTop = (needle) => editor.evaluate((element, wanted) => {
+    const style = getComputedStyle(element);
+    const mirror = document.createElement('div');
+    for (const name of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'tabSize',
+      'paddingTop', 'paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth', 'boxSizing']) {
+      mirror.style[name] = style[name];
+    }
+    Object.assign(mirror.style, {
+      position: 'absolute', visibility: 'hidden', left: '-10000px', width: `${element.clientWidth}px`,
+      whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+    });
+    const lines = element.value.split('\n');
+    lines.forEach((line) => { const row = document.createElement('div'); row.textContent = line || '\u200b'; mirror.appendChild(row); });
+    document.body.appendChild(mirror);
+    const top = mirror.children[lines.indexOf(wanted)].offsetTop;
+    mirror.remove();
+    return { top, lineHeight: parseFloat(style.lineHeight) || 20 };
+  }, needle);
+  // Просмотр → редактор
+  await preview.evaluate((element) => {
+    const heading = element.querySelector('[data-md-id="9-таблицы"]');
+    element.scrollTop = heading.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop;
+  });
+  const tablesLine = await lineTop('## 9. Таблицы');
+  await page.waitForFunction(([wanted, slack]) => {
+    const element = document.querySelector('#knowledge-note-editor');
+    return Math.abs(element.scrollTop - wanted) <= slack;
+  }, [tablesLine.top, tablesLine.lineHeight * 2], { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('прокрутка просмотра к «9. Таблицы» не поставила эту строку вверх редактора'));
+  // Редактор → просмотр
+  const mathLine = await lineTop('## 17. Математика (LaTeX)');
+  await editor.evaluate((element, top) => { element.scrollTop = top; }, mathLine.top);
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('[data-note-preview]');
+    const heading = pane?.querySelector('[data-md-id="17-математика-latex"]');
+    if (!heading) return false;
+    const offset = heading.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    return offset > -40 && offset < 60;
+  }, undefined, { timeout: STEP_TIMEOUT_MS })
+    .catch(() => assert.fail('прокрутка редактора к «17. Математика» не поставила заголовок вверх просмотра'));
+  await shot('edit-sync');
+  console.log('OK: правка — панели одной высоты, прокрутка синхронна по строкам в обе стороны');
   await note.getByRole('button', { name: 'Save' }).click();
   await visible(body, 'текст заметки после сохранения');
   await visible(knowledge.locator('[data-notes-list]'), 'список заметок вернулся после правки');

@@ -23,6 +23,7 @@ import { displayTitle, formatDayShort, isDayTitle } from './notesLook';
 import { parseNote, setTaskDone } from './notesModel';
 import { nearestPlanned, notePlanLine } from './notesPlanned';
 import { getNoteTasks, markerOfTask } from './notesTasks';
+import useSplitScrollSync from './useSplitScrollSync';
 
 import useDerivedState from '../../../hooks/useDerivedState';
 import useFlag from '../../../hooks/useFlag';
@@ -82,6 +83,7 @@ const NoteView = ({
   const [isPreview, showPreview, hidePreview] = useFlag();
   const baseRef = useRef<string>();
   const editorRef = useRef<HTMLTextAreaElement>();
+  const previewRef = useRef<HTMLElement>();
   const handledRequestRef = useRef<number>();
   const selectionRef = useRef<{ from: number; to: number }>();
   const [title, setTitle] = useState(note.title);
@@ -132,6 +134,9 @@ const NoteView = ({
   }, [isEditing, onEditingChange]);
 
   useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
+
+  // Широкий экран: редактор и просмотр листаются вместе (по строкам текста)
+  useSplitScrollSync(editorRef, previewRef, draft, isEditing && !isCompact);
   const isDaily = note.isDaily && isDayTitle(note.title);
   const parsed = useMemo(() => parseNote(note.text), [note.text]);
   const blocks = useMemo(() => parseMarkdown(note.text, note.title), [note.text, note.title]);
@@ -325,7 +330,11 @@ const NoteView = ({
     : note.folder ? folderCaption(note.folder) : lang('KnowledgeRoot');
 
   return (
-    <article className={styles.note} data-note-id={note.id} data-note-title={note.title}>
+    <article
+      className={buildClassName(styles.note, isEditing && !isCompact && styles.noteEditing)}
+      data-note-id={note.id}
+      data-note-title={note.title}
+    >
       {onBack && (
         <header className={buildClassName(kit.hdr, styles.noteBar)}>
           <h1 className={buildClassName(kit.hdrSmall, kit.muted, kit.grow)}>{folderName}</h1>
@@ -392,6 +401,26 @@ const NoteView = ({
             </span>
           )}
         </div>
+        {isEditing && !(isCompact && isPreview) && (
+          <div className={styles.editorTools} data-note-insert>
+            <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleChooseFiles}>
+              <PvIcon name="upload" isSmall />
+              {lang('KnowledgeInsertFile')}
+            </button>
+            <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={openCloudPicker}>
+              <PvIcon name="cloud" isSmall />
+              {lang('KnowledgeInsertFromCloud')}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className={styles.hiddenInput}
+              data-note-insert-input
+              onChange={handlePickedFiles}
+            />
+          </div>
+        )}
         {isEditing ? (
           <div
             className={buildClassName(styles.editSplit, isCompact && styles.editSplitCompact)}
@@ -399,24 +428,6 @@ const NoteView = ({
           >
             {(!isCompact || !isPreview) && (
               <div className={styles.editPane}>
-                <div className={styles.editorTools} data-note-insert>
-                  <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleChooseFiles}>
-                    <PvIcon name="upload" isSmall />
-                    {lang('KnowledgeInsertFile')}
-                  </button>
-                  <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={openCloudPicker}>
-                    <PvIcon name="cloud" isSmall />
-                    {lang('KnowledgeInsertFromCloud')}
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    className={styles.hiddenInput}
-                    data-note-insert-input
-                    onChange={handlePickedFiles}
-                  />
-                </div>
                 <textarea
                   ref={editorRef}
                   id="knowledge-note-editor"
@@ -433,6 +444,7 @@ const NoteView = ({
             )}
             {(!isCompact || isPreview) && (
               <section
+                ref={previewRef}
                 className={buildClassName(styles.previewPane, !isCompact && 'custom-scroll')}
                 aria-label={lang('KnowledgePreviewTitle')}
                 data-note-preview
@@ -499,7 +511,7 @@ const NoteView = ({
             </>
           )}
         </div>
-        {!isDaily && Boolean(shownPlanned.length) && (
+        {!isDaily && !isEditing && Boolean(shownPlanned.length) && (
           <section className={buildClassName(kit.card, styles.planned)} data-note-planned>
             <div className={kit.cardHead}>
               <h3 className={buildClassName(kit.cardTitle, kit.grow)}>{lang('KnowledgePlanned')}</h3>
@@ -533,7 +545,7 @@ const NoteView = ({
             ))}
           </section>
         )}
-        {hasLinks && (
+        {hasLinks && !isEditing && (
           <NoteLinks
             className={styles.linksInline}
             note={note}

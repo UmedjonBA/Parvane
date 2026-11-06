@@ -131,28 +131,35 @@ function renderBlocks(
             role="heading"
             aria-level={block.level}
             data-md-id={block.id}
+            data-md-line={block.line}
             className={buildClassName(styles.heading, styles[`heading${block.level}`])}
           >
             {renderInline(block.text, context)}
           </div>
         );
       case 'paragraph':
-        return <p key={key} className={styles.paragraph}>{renderInline(block.text, context)}</p>;
+        return (
+          <p key={key} className={styles.paragraph} data-md-line={block.line}>{renderInline(block.text, context)}</p>
+        );
       case 'quote':
-        return block.callout ? renderCallout(key, block.callout, block.blocks, context, onToggle) : (
-          <blockquote key={key} className={styles.quote}>{renderBlocks(block.blocks, context, onToggle)}</blockquote>
+        return block.callout ? renderCallout(key, block.line, block.callout, block.blocks, context, onToggle) : (
+          <blockquote key={key} className={styles.quote} data-md-line={block.line}>
+            {renderBlocks(block.blocks, context, onToggle)}
+          </blockquote>
         );
       case 'code':
-        return <CodeView key={key} text={block.text} language={block.lang} />;
+        return <CodeView key={key} text={block.text} language={block.lang} line={block.line} />;
       case 'rule':
-        return <hr key={key} className={styles.rule} />;
+        return <hr key={key} className={styles.rule} data-md-line={block.line} />;
       case 'embed':
         return (
-          <div key={key} className={styles.embed} data-md-embed={block.name}>{context.renderEmbed(block)}</div>
+          <div key={key} className={styles.embed} data-md-embed={block.name} data-md-line={block.line}>
+            {context.renderEmbed(block)}
+          </div>
         );
       case 'table':
         return (
-          <div key={key} className={styles.tableWrap}>
+          <div key={key} className={styles.tableWrap} data-md-line={block.line}>
             <table className={styles.table}>
               <thead>
                 <tr>
@@ -190,7 +197,7 @@ function renderBlocks(
 }
 
 function renderCallout(
-  key: string, callout: MdCallout, blocks: MdBlock[], context: Context,
+  key: string, line: number, callout: MdCallout, blocks: MdBlock[], context: Context,
   onToggle: (e: React.ChangeEvent<HTMLInputElement>) => void,
 ) {
   const tone = CALLOUT_TONES[callout.kind] || 'accent';
@@ -200,14 +207,20 @@ function renderCallout(
     : undefined;
   if (callout.fold) {
     return (
-      <details key={key} className={className} data-callout={callout.kind} open={callout.fold === 'open'}>
+      <details
+        key={key}
+        className={className}
+        data-callout={callout.kind}
+        data-md-line={line}
+        open={callout.fold === 'open'}
+      >
         <summary className={styles.calloutSummary}>{title}</summary>
         {body}
       </details>
     );
   }
   return (
-    <div key={key} className={className} data-callout={callout.kind}>
+    <div key={key} className={className} data-callout={callout.kind} data-md-line={line}>
       {title}
       {body}
     </div>
@@ -220,7 +233,7 @@ function renderItem(item: MdListItem, context: Context, onToggle: (e: React.Chan
     ? <div className={styles.itemBlocks}>{renderBlocks(item.blocks, context, onToggle)}</div> : undefined;
   if (item.isChecked === undefined) {
     return (
-      <li key={item.line} className={styles.item} style={indent}>
+      <li key={item.line} className={styles.item} style={indent} data-md-line={item.line}>
         <span className={styles.marker} aria-hidden>
           {item.number !== undefined ? `${item.number}.` : '•'}
         </span>
@@ -238,6 +251,7 @@ function renderItem(item: MdListItem, context: Context, onToggle: (e: React.Chan
       className={buildClassName(styles.item, styles.task, item.isChecked && styles.taskDone)}
       style={indent}
       data-checked={String(item.isChecked)}
+      data-md-line={item.line}
     >
       {item.number !== undefined && <span className={styles.marker} aria-hidden>{`${item.number}.`}</span>}
       <div className={styles.itemBody}>
@@ -318,7 +332,7 @@ function safeDecode(value: string) {
 }
 
 // Блок кода: подсветка по языку info string (та же, что у кода в сообщениях), язык подписью
-const CodeView = memo(({ text, language }: { text: string; language?: string }) => {
+const CodeView = memo(({ text, language, line }: { text: string; language?: string; line: number }) => {
   const { result: highlighted } = useAsync(() => {
     if (!language) return Promise.resolve(undefined);
     return import('../../../util/highlightCode')
@@ -327,7 +341,7 @@ const CodeView = memo(({ text, language }: { text: string; language?: string }) 
   }, [language, text]);
 
   return (
-    <div className={styles.codeBlock} data-md-code={language}>
+    <div className={styles.codeBlock} data-md-code={language} data-md-line={line}>
       {language && <span className={styles.codeLang}>{language}</span>}
       <pre className={styles.pre}>{highlighted ?? text}</pre>
     </div>
