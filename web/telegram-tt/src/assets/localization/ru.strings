@@ -2372,3 +2372,11 @@
 "VoipPeerIncompatible" = "Приложение **{user}** использует несовместимый протокол. Собеседнику нужно обновить приложение, прежде чем вы сможете ему позвонить.";
 "NoUsernameFound" = "Имя пользователя не найдено";
 "VoipIncoming" = "Входящий звонок";
+"MdCalloutNote" = "Примечание";
+"MdCalloutTip" = "Совет";
+"MdCalloutImportant" = "Важно";
+"MdCalloutWarning" = "Предупреждение";
+"MdCalloutCaution" = "Осторожно";
+"KnowledgePreviewShow" = "Показать просмотр";
+"KnowledgePreviewHide" = "Вернуться к правке";
+"KnowledgePreviewTitle" = "Просмотр";

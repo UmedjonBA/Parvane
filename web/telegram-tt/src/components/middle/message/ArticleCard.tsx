@@ -1,8 +1,9 @@
 import { memo, useMemo } from '../../../lib/teact/teact';
 
 import type { ApiArticle } from '../../../api/types';
+import type { MdBlock } from '../../parvane/markdown/markdown';
 
-import { parseMarkdown } from '../../parvane/markdown/markdown';
+import { inlineText, parseMarkdown } from '../../parvane/markdown/markdown';
 
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
@@ -57,17 +58,20 @@ const ArticleCard = ({ article }: OwnProps) => {
 // Начало текста без разметки: первые строки абзацев, списков и цитат
 function buildPreview(article: ApiArticle) {
   const lines: string[] = [];
-  for (const block of parseMarkdown(article.markdown, article.title)) {
-    if (lines.length >= PREVIEW_LINES) break;
-    if (block.type === 'paragraph' || block.type === 'quote' || block.type === 'heading') {
-      lines.push(...block.text.split('\n'));
-    } else if (block.type === 'list') {
-      lines.push(...block.items.map((item) => `• ${item.text}`));
+  const collect = (blocks: MdBlock[]) => {
+    for (const block of blocks) {
+      if (lines.length >= PREVIEW_LINES) break;
+      if (block.type === 'paragraph' || block.type === 'heading') {
+        lines.push(...inlineText(block.text).split('\n'));
+      } else if (block.type === 'quote') {
+        collect(block.blocks);
+      } else if (block.type === 'list') {
+        lines.push(...block.items.map((item) => `• ${inlineText(item.text)}`));
+      }
     }
-  }
-  const text = lines.slice(0, PREVIEW_LINES).join('\n')
-    .replace(/\*\*|`|\[\[|\]\]/g, '')
-    .replace(/\[([^\]\n]{1,300})\]\([^)\n]{1,1000}\)/g, '$1');
+  };
+  collect(parseMarkdown(article.markdown, article.title));
+  const text = lines.slice(0, PREVIEW_LINES).join('\n');
   return text.length > PREVIEW_MAX_LENGTH ? `${text.slice(0, PREVIEW_MAX_LENGTH)}…` : text;
 }
 

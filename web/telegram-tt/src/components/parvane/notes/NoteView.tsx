@@ -61,6 +61,8 @@ type OwnProps = {
   onDelete: (noteId: string) => void;
   // Перенос в другую папку: открыть выбор папки
   onPickFolder?: (noteId: string) => void;
+  // Правка открыта/закрыта: раздел на это время убирает список заметок и «Связи»
+  onEditingChange?: (isEditing: boolean) => void;
 };
 
 const MARKER = / \^(t[a-z0-9]{4,12})\s*$/;
@@ -73,9 +75,11 @@ const EDITOR_LINE_HEIGHT = 22;
 // Ниже — «Запланировано» (записи «Плана» со ссылкой сюда), на узком экране ещё и «Связи»
 const NoteView = ({
   note, index, planner, planned, onBack, hasLinks, isGraphHidden, editRequest, onOpenTitle, onSave, onRename,
-  onDelete, onPickFolder,
+  onDelete, onPickFolder, onEditingChange,
 }: OwnProps) => {
   const [draft, setDraft] = useState<string>();
+  // Узкий экран: правка и просмотр — одно окно, переключаются закреплённой кнопкой
+  const [isPreview, showPreview, hidePreview] = useFlag();
   const baseRef = useRef<string>();
   const editorRef = useRef<HTMLTextAreaElement>();
   const handledRequestRef = useRef<number>();
@@ -117,6 +121,17 @@ const NoteView = ({
   }, [draft]);
 
   const isEditing = draft !== undefined;
+  const isCompact = Boolean(onBack);
+  const previewBlocks = useMemo(
+    () => (draft !== undefined ? parseMarkdown(draft, note.title) : []), [draft, note.title],
+  );
+
+  useEffect(() => {
+    if (!isEditing) hidePreview();
+    onEditingChange?.(isEditing);
+  }, [isEditing, onEditingChange]);
+
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
   const isDaily = note.isDaily && isDayTitle(note.title);
   const parsed = useMemo(() => parseNote(note.text), [note.text]);
   const blocks = useMemo(() => parseMarkdown(note.text, note.title), [note.text, note.title]);
@@ -378,38 +393,62 @@ const NoteView = ({
           )}
         </div>
         {isEditing ? (
-          <>
-            <div className={styles.editorTools} data-note-insert>
-              <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleChooseFiles}>
-                <PvIcon name="upload" isSmall />
-                {lang('KnowledgeInsertFile')}
-              </button>
-              <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={openCloudPicker}>
-                <PvIcon name="cloud" isSmall />
-                {lang('KnowledgeInsertFromCloud')}
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className={styles.hiddenInput}
-                data-note-insert-input
-                onChange={handlePickedFiles}
-              />
-            </div>
-            <textarea
-              ref={editorRef}
-              id="knowledge-note-editor"
-              className={buildClassName(kit.textarea, styles.editor)}
-              value={draft}
-              placeholder={lang('KnowledgeEditorPlaceholder')}
-              aria-label={note.title}
-              onChange={handleDraft}
-              onDragOver={handleEditorDragOver}
-              onDrop={handleEditorDrop}
-              onPaste={handleEditorPaste}
-            />
-          </>
+          <div
+            className={buildClassName(styles.editSplit, isCompact && styles.editSplitCompact)}
+            data-note-edit={isCompact ? (isPreview ? 'preview' : 'editor') : 'split'}
+          >
+            {(!isCompact || !isPreview) && (
+              <div className={styles.editPane}>
+                <div className={styles.editorTools} data-note-insert>
+                  <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={handleChooseFiles}>
+                    <PvIcon name="upload" isSmall />
+                    {lang('KnowledgeInsertFile')}
+                  </button>
+                  <button type="button" className={buildClassName(kit.btn, kit.btnGhost)} onClick={openCloudPicker}>
+                    <PvIcon name="cloud" isSmall />
+                    {lang('KnowledgeInsertFromCloud')}
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className={styles.hiddenInput}
+                    data-note-insert-input
+                    onChange={handlePickedFiles}
+                  />
+                </div>
+                <textarea
+                  ref={editorRef}
+                  id="knowledge-note-editor"
+                  className={buildClassName(kit.textarea, styles.editor)}
+                  value={draft}
+                  placeholder={lang('KnowledgeEditorPlaceholder')}
+                  aria-label={note.title}
+                  onChange={handleDraft}
+                  onDragOver={handleEditorDragOver}
+                  onDrop={handleEditorDrop}
+                  onPaste={handleEditorPaste}
+                />
+              </div>
+            )}
+            {(!isCompact || isPreview) && (
+              <section
+                className={buildClassName(styles.previewPane, !isCompact && 'custom-scroll')}
+                aria-label={lang('KnowledgePreviewTitle')}
+                data-note-preview
+              >
+                {!isCompact && <span className={styles.previewLabel}>{lang('KnowledgePreviewTitle')}</span>}
+                <div className={styles.md}>
+                  <MarkdownBlocks
+                    blocks={previewBlocks}
+                    renderNote={renderNoteLink}
+                    renderEmbed={renderEmbed}
+                    taskTail={taskTail}
+                  />
+                </div>
+              </section>
+            )}
+          </div>
         ) : (
           <div className={styles.md} data-note-body>
             <MarkdownBlocks
@@ -505,6 +544,21 @@ const NoteView = ({
           />
         )}
       </div>
+      {isEditing && isCompact && (
+        <div className={styles.previewToggleDock}>
+          <button
+            type="button"
+            className={styles.previewToggle}
+            aria-label={lang(isPreview ? 'KnowledgePreviewHide' : 'KnowledgePreviewShow')}
+            title={lang(isPreview ? 'KnowledgePreviewHide' : 'KnowledgePreviewShow')}
+            aria-pressed={isPreview}
+            data-note-preview-toggle
+            onClick={isPreview ? hidePreview : showPreview}
+          >
+            <PvIcon name={isPreview ? 'edit' : 'eye'} />
+          </button>
+        </div>
+      )}
       <CanvasFilePicker
         isOpen={isCloudPickerOpen}
         nodes={driveNodes}

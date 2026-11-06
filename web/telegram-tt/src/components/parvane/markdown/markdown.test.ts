@@ -1,8 +1,24 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  embedNames, parseInline, parseMarkdown, renameEmbeds,
+  collectTexts, embedNames, MD_BOLD, MD_CODE, MD_ITALIC, MD_MARK, MD_STRIKE, MD_UNDERLINE, parseInline, parseMarkdown,
+  renameEmbeds,
 } from './markdown';
+
+// Общий образец разбора web ↔ ядро desktop/android (тестовый файл пользователя 6 ноя 2026)
+const FIXTURE_DIR = resolve(__dirname, '../../../../../../conformance/markdown');
+const FIXTURE = resolve(FIXTURE_DIR, 'all-constructs.md');
+const EXPECTED = resolve(FIXTURE_DIR, 'all-constructs.expected.json');
+
+function buildExpected(markdown: string) {
+  const blocks = parseMarkdown(markdown, 'Тест');
+  return JSON.parse(JSON.stringify({
+    blocks,
+    inlines: collectTexts(blocks).map((text) => ({ text, parts: parseInline(text) })),
+  }));
+}
 
 describe('markdown', () => {
   it('блоки: заголовок-название пропускается, списки, цитата, код, встроенный файл; номера строк — исходные', () => {
@@ -12,7 +28,9 @@ describe('markdown', () => {
       '> мысль', '> дальше', '', '```', 'code # не заголовок', '```', '---', '![[карта.png]]', 'строка', 'вторая',
     ].join('\n');
     expect(parseMarkdown(text, 'Поход')).toEqual([
-      { type: 'heading', level: 2, text: 'Вещи', line: 5 },
+      {
+        type: 'heading', level: 2, text: 'Вещи', id: 'вещи', line: 5,
+      },
       {
         type: 'list',
         isOrdered: false,
@@ -23,15 +41,17 @@ describe('markdown', () => {
           {
             text: 'спальник', depth: 0, isChecked: true, line: 8,
           },
+          {
+            text: 'выйти', depth: 0, number: 1, line: 9,
+          },
+          {
+            text: 'дойти', depth: 0, number: 2, line: 10,
+          },
         ],
       },
       {
-        type: 'list',
-        isOrdered: true,
-        line: 9,
-        items: [{ text: 'выйти', depth: 0, line: 9 }, { text: 'дойти', depth: 0, line: 10 }],
+        type: 'quote', blocks: [{ type: 'paragraph', text: 'мысль\nдальше', line: 11 }], line: 11,
       },
-      { type: 'quote', text: 'мысль\nдальше', line: 11 },
       { type: 'code', text: 'code # не заголовок', line: 14 },
       { type: 'rule', line: 17 },
       { type: 'embed', name: 'карта.png', line: 18 },
@@ -74,27 +94,35 @@ describe('markdown', () => {
         '![x](https://site/a.png)', '![[фото (2).jpg]]'].join('\n'));
   });
 
-  it('строка: жирный, курсив, зачёркнутый, код, ссылки, заметки, теги; опасная ссылка — текстом', () => {
-    expect(parseInline('**a** _b_ ~~s~~ `c` [d](https://x.y) [[E|е]] #tag [f](javascript:1)')).toEqual([
-      { type: 'bold', text: 'a' },
-      { type: 'text', text: ' ' },
-      { type: 'italic', text: 'b' },
-      { type: 'text', text: ' ' },
-      { type: 'strike', text: 's' },
-      { type: 'text', text: ' ' },
-      { type: 'code', text: 'c' },
-      { type: 'text', text: ' ' },
-      { type: 'link', text: 'd', url: 'https://x.y' },
-      { type: 'text', text: ' ' },
-      { type: 'note', text: 'е', target: 'E' },
-      { type: 'text', text: ' ' },
-      { type: 'tag', text: '#tag' },
-      { type: 'text', text: ' f' },
-    ]);
+  it('строка: начертания, вложенность, ссылки, заметки, теги; опасная ссылка — текстом', () => {
+    expect(parseInline('**a *b*** _c_ ~~s~~ ==m== <u>u</u> `c` [d](https://x.y) [[E|е]] #tag [f](javascript:1)'))
+      .toEqual([
+        { type: 'text', text: 'a ', style: MD_BOLD },
+        { type: 'text', text: 'b', style: MD_BOLD | MD_ITALIC },
+        { type: 'text', text: ' ' },
+        { type: 'text', text: 'c', style: MD_ITALIC },
+        { type: 'text', text: ' ' },
+        { type: 'text', text: 's', style: MD_STRIKE },
+        { type: 'text', text: ' ' },
+        { type: 'text', text: 'm', style: MD_MARK },
+        { type: 'text', text: ' ' },
+        { type: 'text', text: 'u', style: MD_UNDERLINE },
+        { type: 'text', text: ' ' },
+        { type: 'text', text: 'c', style: MD_CODE },
+        { type: 'text', text: ' ' },
+        { type: 'link', text: 'd', url: 'https://x.y' },
+        { type: 'text', text: ' ' },
+        { type: 'note', text: 'е', target: 'E' },
+        { type: 'text', text: ' ' },
+        { type: 'tag', text: '#tag' },
+        { type: 'text', text: ' f' },
+      ]);
   });
 
-  it('звёздочки внутри слова — не курсив', () => {
-    expect(parseInline('2*3*4')).toEqual([{ type: 'text', text: '2*3*4' }]);
+  it('звёздочки между пробелами и подчёркивания внутри слова — не курсив; экранирование', () => {
+    expect(parseInline('2 * 3 * 4 snake_case_x \\*x\\*'))
+      .toEqual([{ type: 'text', text: '2 * 3 * 4 snake_case_x *x*' }]);
+    expect(parseInline('#123 #тег')).toEqual([{ type: 'text', text: '#123 ' }, { type: 'tag', text: '#тег' }]);
   });
 
   it('длинная строка без закрывающих знаков разбирается быстро (не квадратично)', () => {
@@ -102,8 +130,21 @@ describe('markdown', () => {
     parseMarkdown(`![a](${'b'.repeat(64000)}`);
     parseMarkdown('['.repeat(64000));
     parseInline('['.repeat(64000));
+    parseInline('*'.repeat(64000));
+    parseInline('* a '.repeat(16000));
+    parseInline('`` ` '.repeat(16000));
     parseInline(`[a](${'b'.repeat(64000)}`);
+    parseMarkdown('> '.repeat(5000));
+    parseMarkdown(Array.from({ length: 2000 }, (_, i) => `${' '.repeat(i % 40)}- x`).join('\n'));
     renameEmbeds(`![a](${'b'.repeat(64000)}`, new Map());
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('общий образец разбора совпадает с conformance/markdown (ядро desktop/android сверяет тот же файл)', () => {
+    const expected = buildExpected(readFileSync(FIXTURE, 'utf8'));
+    if (process.env.PARVANE_WRITE_MD_FIXTURE || !existsSync(EXPECTED)) {
+      writeFileSync(EXPECTED, `${JSON.stringify(expected, undefined, 1)}\n`);
+    }
+    expect(expected).toEqual(JSON.parse(readFileSync(EXPECTED, 'utf8')));
   });
 });

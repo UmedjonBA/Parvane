@@ -3161,6 +3161,14 @@ export interface LangPair {
   'ParvaneExportHtmlExportedAt': undefined;
   'ParvaneExportHtmlPrivacyOn': undefined;
   'ParvaneExportHtmlPrivacyOff': undefined;
+  'MdCalloutNote': undefined;
+  'MdCalloutTip': undefined;
+  'MdCalloutImportant': undefined;
+  'MdCalloutWarning': undefined;
+  'MdCalloutCaution': undefined;
+  'KnowledgePreviewShow': undefined;
+  'KnowledgePreviewHide': undefined;
+  'KnowledgePreviewTitle': undefined;
 }
 
 export interface LangPairWithVariables<V = LangVariable> {

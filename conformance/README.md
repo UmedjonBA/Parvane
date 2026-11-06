@@ -2010,3 +2010,23 @@ Android (spec 031): `android/jni/jni_groups.cpp` (`nativePublic*` — метод
 Реализации — см. `clients` в `sync-rules.json`; тесты: web `polls.anon.test.ts`, ядро `tests/poll_tests.cpp`
 (routeVote, readTally, tallyContent) и `tests/v2_tests.cpp` (poll_vote tally), движок — вектор `poll-vote-tally`
 (`proto/parvane/vectors/content/kinds.json`), android `PollStoreTest` (POLL-1), сторож `conformance.test.ts` (POLL-1).
+
+## MD-1. Разбор Markdown заметок и статей — один на всех клиентах (6 ноя 2026)
+
+Заметки «Знаний» и статьи в чате (ARTICLE-1) показываются по ОДНОМУ разбору Markdown: web —
+`web/telegram-tt/src/components/parvane/markdown/markdown.ts`, desktop и android — его порт в ядре
+`desktop/parvane-core/src/sections/markdown.cpp` (android берёт блоки через JNI `ParvaneSections.markdown`, своего
+разбора на Kotlin нет). Сверка — общий образец `conformance/markdown/all-constructs.md` (тестовый файл пользователя со
+всеми конструкциями): ответ `all-constructs.expected.json` пишет web (`markdown.test.ts`,
+`PARVANE_WRITE_MD_FIXTURE=1`), ядро обязано совпасть блоками и кусками каждой строки
+(`tests/sections/markdown_tests.cpp`). Правка разбора — в обоих файлах и с новым ответом образца.
+
+Что входит: заголовки H1–H6 (закрывающие `#`, `{#id}`, якоря как у GitHub), абзацы (перевод строки — перенос),
+списки (нумерация с первого номера, галочки и в нумерованных, вложенность отступом, блоки внутри пункта), цитаты с
+любыми блоками и вложенные, callouts GitHub/Obsidian (`> [!NOTE]`, `> [!info]-`), код ```/~~~/отступ 4 (язык из info
+string), черта, таблицы GFM, встроенные файлы; в строке — жирный/курсив (вложенные, правила CommonMark о пробелах и
+подчёркиваниях внутри слова), `~~`, `==`, код в любом числе кавычек, экранирование `\`, HTML-сущности, разрешённые теги
+`<br> <u> <ins> <mark> <sub> <sup> <kbd> <b> <strong> <i> <em> <s> <del>`, ссылки (заголовок, скобки в адресе,
+`<адрес>`, голые адреса, `#якорь`), `[[заметки]]`, `#теги` (не из одних цифр), комментарии `<!-- -->` и `%% %%`
+скрыты. Прочий HTML — текстом (не исполняется). Ссылка открывается только http(s)/mailto (подпись ≠ адресу — с
+подтверждением на desktop). Поиск закрывающего знака ограничен окном (разбор не квадратичен).

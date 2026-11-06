@@ -57,7 +57,7 @@ const MARKER_ID_LENGTH = 5;
 const MARKER_ATTEMPTS = 50;
 const FRONT_MATTER_FENCE = '---';
 
-const TASK_RE = /^(\s*[-*+]\s+\[)([ xX])(\](?:\s+(.*))?)$/;
+const TASK_RE = /^(\s*(?:[-*+]|\d{1,9}[.)])\s+\[)([ xX])(\](?:\s+(.*))?)$/;
 const MARKER_RE = /\s\^(t[a-z0-9]{4,12})\s*$/;
 const LINK_RE = /\[\[([^[\]|]+)(?:\|([^[\]]*))?\]\]/g;
 const TAG_RE = /(^|\s)#([\p{L}\p{N}_/-]+)/gu;

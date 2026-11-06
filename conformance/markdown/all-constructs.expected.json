@@ -1,0 +1,5125 @@
+{
+ "blocks": [
+  {
+   "type": "heading",
+   "level": 1,
+   "text": "Тест Markdown: все конструкции",
+   "id": "тест-markdown-все-конструкции",
+   "line": 7
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Файл для проверки ридера. Разделы идут от базового CommonMark к расширениям\nGFM и к редким расширениям (Pandoc, MultiMarkdown, Obsidian и т. д.).\nFront matter выше (YAML между `---`) тоже часть теста.",
+     "line": 9
+    }
+   ],
+   "line": 9
+  },
+  {
+   "type": "paragraph",
+   "text": "[TOC]",
+   "line": 13
+  },
+  {
+   "type": "rule",
+   "line": 15
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "1. Заголовки",
+   "id": "1-заголовки",
+   "line": 17
+  },
+  {
+   "type": "heading",
+   "level": 1,
+   "text": "H1 — заголовок первого уровня",
+   "id": "h1--заголовок-первого-уровня",
+   "line": 19
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "H2 — заголовок второго уровня",
+   "id": "h2--заголовок-второго-уровня",
+   "line": 20
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "H3 — заголовок третьего уровня",
+   "id": "h3--заголовок-третьего-уровня",
+   "line": 21
+  },
+  {
+   "type": "heading",
+   "level": 4,
+   "text": "H4 — заголовок четвёртого уровня",
+   "id": "h4--заголовок-четвёртого-уровня",
+   "line": 22
+  },
+  {
+   "type": "heading",
+   "level": 5,
+   "text": "H5 — заголовок пятого уровня",
+   "id": "h5--заголовок-пятого-уровня",
+   "line": 23
+  },
+  {
+   "type": "heading",
+   "level": 6,
+   "text": "H6 — заголовок шестого уровня",
+   "id": "h6--заголовок-шестого-уровня",
+   "line": 24
+  },
+  {
+   "type": "paragraph",
+   "text": "####### Семь решёток — это НЕ заголовок, а обычный текст",
+   "line": 26
+  },
+  {
+   "type": "paragraph",
+   "text": "#Без пробела — тоже не заголовок (в CommonMark)",
+   "line": 28
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "Заголовок с закрывающими решётками",
+   "id": "заголовок-с-закрывающими-решётками",
+   "line": 30
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "Заголовок с *курсивом*, **жирным** и `кодом`",
+   "id": "заголовок-с-курсивом-жирным-и-кодом",
+   "line": 32
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "Заголовок со своим id",
+   "id": "custom-id",
+   "line": 34
+  },
+  {
+   "type": "paragraph",
+   "text": "Setext-заголовок первого уровня\n===============================",
+   "line": 36
+  },
+  {
+   "type": "paragraph",
+   "text": "Setext-заголовок второго уровня",
+   "line": 39
+  },
+  {
+   "type": "rule",
+   "line": 40
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "2. Абзацы и переносы строк",
+   "id": "2-абзацы-и-переносы-строк",
+   "line": 42
+  },
+  {
+   "type": "paragraph",
+   "text": "Это обычный абзац. Строки внутри одного абзаца\nсклеиваются в одну, если между ними нет пустой строки.",
+   "line": 44
+  },
+  {
+   "type": "paragraph",
+   "text": "Это новый абзац после пустой строки.",
+   "line": 47
+  },
+  {
+   "type": "paragraph",
+   "text": "Жёсткий перенос через два пробела в конце строки\nвот эта строка должна начаться с новой строки.",
+   "line": 49
+  },
+  {
+   "type": "paragraph",
+   "text": "Жёсткий перенос через обратный слэш\\\nи эта строка тоже с новой строки.",
+   "line": 52
+  },
+  {
+   "type": "paragraph",
+   "text": "Перенос через HTML<br>тег br.",
+   "line": 55
+  },
+  {
+   "type": "paragraph",
+   "text": "Очень длинная строка без переносов для проверки переноса по ширине окна: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
+   "line": 57
+  },
+  {
+   "type": "paragraph",
+   "text": "ОченьДлинноеСловоБезПробеловКотороеДолжноКорректноПереноситьсяИлиХотяБыНеЛоматьВёрсткуДокументаВообщеНикакимОбразомАааааааааааааааааааааа",
+   "line": 59
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "3. Выделение текста",
+   "id": "3-выделение-текста",
+   "line": 61
+  },
+  {
+   "type": "paragraph",
+   "text": "*курсив звёздочками* и _курсив подчёркиваниями_",
+   "line": 63
+  },
+  {
+   "type": "paragraph",
+   "text": "**жирный звёздочками** и __жирный подчёркиваниями__",
+   "line": 65
+  },
+  {
+   "type": "paragraph",
+   "text": "***жирный курсив*** и ___жирный курсив___ и **_смешанный_** и *__смешанный__*",
+   "line": 67
+  },
+  {
+   "type": "paragraph",
+   "text": "~~зачёркнутый (GFM)~~ и ~одинарная тильда~",
+   "line": 69
+  },
+  {
+   "type": "paragraph",
+   "text": "**Жирный с *вложенным курсивом* внутри**",
+   "line": 71
+  },
+  {
+   "type": "paragraph",
+   "text": "*Курсив с **вложенным жирным** внутри*",
+   "line": 73
+  },
+  {
+   "type": "paragraph",
+   "text": "Внутри слова: пре*фикс*ный, пре**фикс**ный, snake_case_variable (подчёркивания внутри слова не должны давать курсив).",
+   "line": 75
+  },
+  {
+   "type": "paragraph",
+   "text": "Звёздочки без пары: 2 * 3 * 4 = 24, а также * одинокая звёздочка.",
+   "line": 77
+  },
+  {
+   "type": "paragraph",
+   "text": "==выделение маркером== (расширение)",
+   "line": 79
+  },
+  {
+   "type": "paragraph",
+   "text": "H~2~O — нижний индекс, x^2^ — верхний индекс (расширения)",
+   "line": 81
+  },
+  {
+   "type": "paragraph",
+   "text": "<u>подчёркнутый HTML</u>, <mark>mark HTML</mark>, <sub>sub</sub> и <sup>sup</sup>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>",
+   "line": 83
+  },
+  {
+   "type": "paragraph",
+   "text": "++вставленный текст++ (расширение markdown-it-ins)",
+   "line": 85
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "4. Цитаты",
+   "id": "4-цитаты",
+   "line": 87
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Простая цитата.",
+     "line": 89
+    }
+   ],
+   "line": 89
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Многострочная цитата,\nкоторая продолжается на следующей строке.",
+     "line": 91
+    },
+    {
+     "type": "paragraph",
+     "text": "И второй абзац в той же цитате.",
+     "line": 94
+    }
+   ],
+   "line": 91
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Ленивое продолжение цитаты:\nэта строка без `>`, но всё равно в цитате.",
+     "line": 96
+    }
+   ],
+   "line": 96
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Уровень 1",
+     "line": 99
+    },
+    {
+     "type": "quote",
+     "blocks": [
+      {
+       "type": "paragraph",
+       "text": "Уровень 2",
+       "line": 100
+      },
+      {
+       "type": "quote",
+       "blocks": [
+        {
+         "type": "paragraph",
+         "text": "Уровень 3",
+         "line": 101
+        },
+        {
+         "type": "quote",
+         "blocks": [
+          {
+           "type": "paragraph",
+           "text": "Уровень 4",
+           "line": 102
+          }
+         ],
+         "line": 102
+        }
+       ],
+       "line": 101
+      }
+     ],
+     "line": 100
+    }
+   ],
+   "line": 99
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "heading",
+     "level": 3,
+     "text": "Заголовок в цитате",
+     "id": "заголовок-в-цитате",
+     "line": 104
+    },
+    {
+     "type": "list",
+     "isOrdered": false,
+     "items": [
+      {
+       "text": "список в цитате",
+       "depth": 0,
+       "line": 106
+      },
+      {
+       "text": "второй пункт",
+       "depth": 0,
+       "line": 107
+      }
+     ],
+     "line": 106
+    },
+    {
+     "type": "code",
+     "text": "print(\"код в цитате\")",
+     "lang": "python",
+     "line": 109
+    },
+    {
+     "type": "paragraph",
+     "text": "**Жирный** и `код` в цитате.",
+     "line": 113
+    }
+   ],
+   "line": 104
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "5. Списки",
+   "id": "5-списки",
+   "line": 115
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.1 Маркированные",
+   "id": "51-маркированные",
+   "line": 117
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "пункт с дефисом",
+     "depth": 0,
+     "line": 119
+    },
+    {
+     "text": "второй пункт",
+     "depth": 0,
+     "line": 120
+    },
+    {
+     "text": "третий пункт",
+     "depth": 0,
+     "line": 121
+    }
+   ],
+   "line": 119
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "пункт со звёздочкой",
+     "depth": 0,
+     "line": 123
+    },
+    {
+     "text": "второй",
+     "depth": 0,
+     "line": 124
+    }
+   ],
+   "line": 123
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "пункт с плюсом",
+     "depth": 0,
+     "line": 126
+    },
+    {
+     "text": "второй",
+     "depth": 0,
+     "line": 127
+    }
+   ],
+   "line": 126
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.2 Нумерованные",
+   "id": "52-нумерованные",
+   "line": 129
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "первый",
+     "depth": 0,
+     "number": 1,
+     "line": 131
+    },
+    {
+     "text": "второй",
+     "depth": 0,
+     "number": 2,
+     "line": 132
+    },
+    {
+     "text": "третий",
+     "depth": 0,
+     "number": 3,
+     "line": 133
+    }
+   ],
+   "line": 131
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "все единицы",
+     "depth": 0,
+     "number": 1,
+     "line": 135
+    },
+    {
+     "text": "должны стать",
+     "depth": 0,
+     "number": 2,
+     "line": 136
+    },
+    {
+     "text": "1, 2, 3",
+     "depth": 0,
+     "number": 3,
+     "line": 137
+    }
+   ],
+   "line": 135
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "список начинается с семи",
+     "depth": 0,
+     "number": 7,
+     "line": 139
+    },
+    {
+     "text": "восемь",
+     "depth": 0,
+     "number": 8,
+     "line": 140
+    },
+    {
+     "text": "девять",
+     "depth": 0,
+     "number": 9,
+     "line": 141
+    }
+   ],
+   "line": 139
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "нумерация со скобкой",
+     "depth": 0,
+     "number": 1,
+     "line": 143
+    },
+    {
+     "text": "второй пункт",
+     "depth": 0,
+     "number": 2,
+     "line": 144
+    }
+   ],
+   "line": 143
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.3 Вложенные",
+   "id": "53-вложенные",
+   "line": 146
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "Уровень 1",
+     "depth": 0,
+     "line": 148
+    },
+    {
+     "text": "Уровень 2",
+     "depth": 1,
+     "line": 149
+    },
+    {
+     "text": "Уровень 3",
+     "depth": 2,
+     "line": 150
+    },
+    {
+     "text": "Уровень 4",
+     "depth": 3,
+     "line": 151
+    },
+    {
+     "text": "Уровень 5",
+     "depth": 4,
+     "line": 152
+    },
+    {
+     "text": "Снова уровень 1",
+     "depth": 0,
+     "line": 153
+    },
+    {
+     "text": "Нумерованный внутри маркированного",
+     "depth": 1,
+     "number": 1,
+     "line": 154
+    },
+    {
+     "text": "Второй",
+     "depth": 1,
+     "number": 2,
+     "line": 155
+    },
+    {
+     "text": "И маркированный внутри нумерованного",
+     "depth": 2,
+     "line": 156
+    },
+    {
+     "text": "Нумерованный верхнего уровня",
+     "depth": 0,
+     "number": 1,
+     "line": 157
+    },
+    {
+     "text": "вложенный",
+     "depth": 1,
+     "line": 158
+    },
+    {
+     "text": "ещё",
+     "depth": 1,
+     "line": 159
+    }
+   ],
+   "line": 148
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.4 «Рыхлый» список (с абзацами)",
+   "id": "54-рыхлый-список-с-абзацами",
+   "line": 161
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "Первый пункт с абзацем.",
+     "depth": 0,
+     "line": 163,
+     "blocks": [
+      {
+       "type": "paragraph",
+       "text": "Второй абзац того же пункта.",
+       "line": 165
+      }
+     ]
+    }
+   ],
+   "line": 163
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "Второй пункт.",
+     "depth": 0,
+     "line": 167,
+     "blocks": [
+      {
+       "type": "code",
+       "text": "echo \"код внутри пункта списка\"",
+       "lang": "bash",
+       "line": 169
+      }
+     ]
+    }
+   ],
+   "line": 167
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "Третий пункт с цитатой:",
+     "depth": 0,
+     "line": 173,
+     "blocks": [
+      {
+       "type": "quote",
+       "blocks": [
+        {
+         "type": "paragraph",
+         "text": "цитата внутри пункта",
+         "line": 175
+        }
+       ],
+       "line": 175
+      }
+     ]
+    }
+   ],
+   "line": 173
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.5 Списки задач (GFM)",
+   "id": "55-списки-задач-gfm",
+   "line": 177
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "выполненная задача",
+     "depth": 0,
+     "isChecked": true,
+     "line": 179
+    },
+    {
+     "text": "невыполненная задача",
+     "depth": 0,
+     "isChecked": false,
+     "line": 180
+    },
+    {
+     "text": "выполненная с большой X",
+     "depth": 0,
+     "isChecked": true,
+     "line": 181
+    },
+    {
+     "text": "задача с **форматированием** и [ссылкой](https://example.com)",
+     "depth": 0,
+     "isChecked": false,
+     "line": 182
+    },
+    {
+     "text": "вложенная выполненная",
+     "depth": 1,
+     "isChecked": true,
+     "line": 183
+    },
+    {
+     "text": "вложенная невыполненная",
+     "depth": 1,
+     "isChecked": false,
+     "line": 184
+    }
+   ],
+   "line": 179
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "задача в нумерованном списке",
+     "depth": 0,
+     "isChecked": false,
+     "number": 1,
+     "line": 186
+    },
+    {
+     "text": "вторая",
+     "depth": 0,
+     "isChecked": true,
+     "number": 2,
+     "line": 187
+    }
+   ],
+   "line": 186
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "5.6 Граничные случаи",
+   "id": "56-граничные-случаи",
+   "line": 189
+  },
+  {
+   "type": "paragraph",
+   "text": "-не список (нет пробела)",
+   "line": 191
+  },
+  {
+   "type": "paragraph",
+   "text": "2026\\. Это не список, точка экранирована.",
+   "line": 193
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "",
+     "depth": 0,
+     "line": 195,
+     "blocks": [
+      {
+       "type": "paragraph",
+       "text": "пустой первый пункт со следующей строкой",
+       "line": 196
+      }
+     ]
+    }
+   ],
+   "line": 195
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "a",
+     "depth": 0,
+     "line": 198
+    },
+    {
+     "text": "b",
+     "depth": 0,
+     "line": 199
+    }
+   ],
+   "line": 198
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "c (новый список после пустой строки? зависит от парсера)",
+     "depth": 0,
+     "line": 201
+    }
+   ],
+   "line": 201
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "6. Код",
+   "id": "6-код",
+   "line": 203
+  },
+  {
+   "type": "paragraph",
+   "text": "Встроенный код: `printf(\"hi\")`, с обратной кавычкой внутри: `` a ` b ``, с пробелами по краям: `` `код` ``.",
+   "line": 205
+  },
+  {
+   "type": "paragraph",
+   "text": "Блок с отступом в 4 пробела:",
+   "line": 207
+  },
+  {
+   "type": "code",
+   "text": "int main() {\n    return 0;\n}",
+   "line": 209
+  },
+  {
+   "type": "paragraph",
+   "text": "Огороженный блок без языка:",
+   "line": 213
+  },
+  {
+   "type": "code",
+   "text": "просто текст\n  с отступами    и   пробелами",
+   "line": 215
+  },
+  {
+   "type": "paragraph",
+   "text": "Огороженный тильдами:",
+   "line": 220
+  },
+  {
+   "type": "code",
+   "text": "код в тильдах",
+   "line": 222
+  },
+  {
+   "type": "paragraph",
+   "text": "Блок с ``` внутри (внешний из четырёх кавычек):",
+   "line": 226
+  },
+  {
+   "type": "code",
+   "text": "```js\nconsole.log(\"вложенный блок\");\n```",
+   "lang": "markdown",
+   "line": 228
+  },
+  {
+   "type": "heading",
+   "level": 3,
+   "text": "6.1 Подсветка синтаксиса",
+   "id": "61-подсветка-синтаксиса",
+   "line": 234
+  },
+  {
+   "type": "code",
+   "text": "#include <stdio.h>\n\nint main(void) {\n    printf(\"Hello, %s!\\n\", \"world\");\n    return 0;\n}",
+   "lang": "c",
+   "line": 236
+  },
+  {
+   "type": "code",
+   "text": "#include <cstdint>\n#include <iostream>\n#include <vector>\n\nint main() {\n    std::vector<std::int64_t> v{1, 2, 3};\n    for (auto x : v) std::cout << x << '\\n';\n}",
+   "lang": "cpp",
+   "line": 245
+  },
+  {
+   "type": "code",
+   "text": "from dataclasses import dataclass\n\n@dataclass\nclass Point:\n    x: float\n    y: float\n\n    def norm(self) -> float:\n        return (self.x ** 2 + self.y ** 2) ** 0.5\n\nprint(f\"{Point(3, 4).norm()=}\")",
+   "lang": "python",
+   "line": 256
+  },
+  {
+   "type": "code",
+   "text": "const sum = (...xs) => xs.reduce((a, b) => a + b, 0);\nconsole.log(`sum = ${sum(1, 2, 3)}`);",
+   "lang": "javascript",
+   "line": 270
+  },
+  {
+   "type": "code",
+   "text": "interface User { id: number; name: string }\nconst greet = (u: User): string => `Hi, ${u.name}`;",
+   "lang": "typescript",
+   "line": 275
+  },
+  {
+   "type": "code",
+   "text": "fn main() {\n    let v: Vec<i32> = (1..=5).collect();\n    println!(\"{:?}\", v);\n}",
+   "lang": "rust",
+   "line": 280
+  },
+  {
+   "type": "code",
+   "text": "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"hello\") }",
+   "lang": "go",
+   "line": 287
+  },
+  {
+   "type": "code",
+   "text": "#!/usr/bin/env bash\nfor f in *.md; do\n  echo \"Файл: $f\"\ndone",
+   "lang": "bash",
+   "line": 295
+  },
+  {
+   "type": "code",
+   "text": "{\n  \"name\": \"test\",\n  \"version\": 1,\n  \"nested\": { \"array\": [1, 2, 3], \"null\": null, \"bool\": true }\n}",
+   "lang": "json",
+   "line": 302
+  },
+  {
+   "type": "code",
+   "text": "server:\n  host: 127.0.0.1\n  ports: [80, 443]",
+   "lang": "yaml",
+   "line": 310
+  },
+  {
+   "type": "code",
+   "text": "[package]\nname = \"demo\"\nversion = \"0.1.0\"",
+   "lang": "toml",
+   "line": 316
+  },
+  {
+   "type": "code",
+   "text": "<!DOCTYPE html>\n<html>\n  <body><h1 class=\"title\">Привет</h1></body>\n</html>",
+   "lang": "html",
+   "line": 322
+  },
+  {
+   "type": "code",
+   "text": "body { margin: 0; font-family: sans-serif; }\n.title:hover { color: #b8bb26; }",
+   "lang": "css",
+   "line": 329
+  },
+  {
+   "type": "code",
+   "text": "SELECT id, name FROM users WHERE age > 18 ORDER BY name;",
+   "lang": "sql",
+   "line": 334
+  },
+  {
+   "type": "code",
+   "text": "local t = { a = 1, b = 2 }\nfor k, v in pairs(t) do print(k, v) end",
+   "lang": "lua",
+   "line": 338
+  },
+  {
+   "type": "code",
+   "text": "- удалённая строка\n+ добавленная строка\n  неизменённая строка",
+   "lang": "diff",
+   "line": 343
+  },
+  {
+   "type": "code",
+   "text": "блок с несуществующим языком — не должен падать",
+   "lang": "неизвестный-язык",
+   "line": 349
+  },
+  {
+   "type": "code",
+   "text": "# блок с атрибутами в info string\na = 1\nb = 2",
+   "lang": "python",
+   "line": 353
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "7. Горизонтальные линии",
+   "id": "7-горизонтальные-линии",
+   "line": 359
+  },
+  {
+   "type": "rule",
+   "line": 361
+  },
+  {
+   "type": "rule",
+   "line": 363
+  },
+  {
+   "type": "rule",
+   "line": 365
+  },
+  {
+   "type": "rule",
+   "line": 367
+  },
+  {
+   "type": "rule",
+   "line": 369
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "8. Ссылки",
+   "id": "8-ссылки",
+   "line": 371
+  },
+  {
+   "type": "paragraph",
+   "text": "[Обычная ссылка](https://example.com)",
+   "line": 373
+  },
+  {
+   "type": "paragraph",
+   "text": "[Ссылка с title](https://example.com \"Подсказка при наведении\")",
+   "line": 375
+  },
+  {
+   "type": "paragraph",
+   "text": "[Относительная ссылка](./other-file.md)",
+   "line": 377
+  },
+  {
+   "type": "paragraph",
+   "text": "[Якорь на раздел «Таблицы»](#9-таблицы)",
+   "line": 379
+  },
+  {
+   "type": "paragraph",
+   "text": "[Якорь на custom-id](#custom-id)",
+   "line": 381
+  },
+  {
+   "type": "paragraph",
+   "text": "[Ссылка-сноска][ref1], [ещё одна][REF1] (регистр не важен), [короткая форма][] и [ref2].",
+   "line": 383
+  },
+  {
+   "type": "paragraph",
+   "text": "[ref1]: https://example.com/ref1 \"Заголовок ref1\"\n[короткая форма]: https://example.com/short\n[ref2]: <https://example.com/с пробелами> 'В одинарных кавычках'",
+   "line": 385
+  },
+  {
+   "type": "paragraph",
+   "text": "Автоссылка: <https://example.com>, почта: <user@example.com>",
+   "line": 389
+  },
+  {
+   "type": "paragraph",
+   "text": "Голый URL (GFM autolink): https://example.com/path?a=1&b=2#frag и www.example.com",
+   "line": 391
+  },
+  {
+   "type": "paragraph",
+   "text": "Ссылка с **жирным** текстом: [**жирная ссылка**](https://example.com), с кодом: [`code`](https://example.com)",
+   "line": 393
+  },
+  {
+   "type": "paragraph",
+   "text": "Ссылка со скобками в URL: [Википедия](https://ru.wikipedia.org/wiki/Markdown_(язык))",
+   "line": 395
+  },
+  {
+   "type": "paragraph",
+   "text": "Кириллический URL: [пример](https://пример.рф/путь)",
+   "line": 397
+  },
+  {
+   "type": "paragraph",
+   "text": "Пустая ссылка: [](https://example.com) и ссылка без адреса: [текст]()",
+   "line": 399
+  },
+  {
+   "type": "paragraph",
+   "text": "Вики-ссылки (Obsidian): [[Другая заметка]] и [[Заметка|с псевдонимом]]",
+   "line": 401
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "9. Таблицы",
+   "id": "9-таблицы",
+   "line": 403
+  },
+  {
+   "type": "table",
+   "header": [
+    "Слева",
+    "По центру",
+    "Справа",
+    "Без выравнивания"
+   ],
+   "align": [
+    "left",
+    "center",
+    "right",
+    null
+   ],
+   "rows": [
+    [
+     "a",
+     "b",
+     "c",
+     "d"
+    ],
+    [
+     "длинная ячейка с текстом",
+     "`код`",
+     "**жирный**",
+     "*курсив*"
+    ],
+    [
+     "1",
+     "2",
+     "3",
+     "4"
+    ],
+    [
+     "[ссылка](https://example.com)",
+     "~~зачёркнуто~~",
+     "100.00",
+     ""
+    ]
+   ],
+   "line": 405
+  },
+  {
+   "type": "paragraph",
+   "text": "Таблица без боковых вертикальных черт:",
+   "line": 412
+  },
+  {
+   "type": "table",
+   "header": [
+    "Имя",
+    "Значение"
+   ],
+   "align": [
+    null,
+    null
+   ],
+   "rows": [
+    [
+     "x",
+     "1"
+    ],
+    [
+     "y",
+     "2"
+    ]
+   ],
+   "line": 414
+  },
+  {
+   "type": "paragraph",
+   "text": "Экранированная черта внутри ячейки:",
+   "line": 419
+  },
+  {
+   "type": "table",
+   "header": [
+    "Выражение",
+    "Значение"
+   ],
+   "align": [
+    null,
+    null
+   ],
+   "rows": [
+    [
+     "`a | b`",
+     "или"
+    ],
+    [
+     "a | b",
+     "тоже или"
+    ]
+   ],
+   "line": 421
+  },
+  {
+   "type": "paragraph",
+   "text": "Таблица с неровным числом ячеек:",
+   "line": 426
+  },
+  {
+   "type": "table",
+   "header": [
+    "A",
+    "B",
+    "C"
+   ],
+   "align": [
+    null,
+    null,
+    null
+   ],
+   "rows": [
+    [
+     "1",
+     "2",
+     ""
+    ],
+    [
+     "1",
+     "2",
+     "3"
+    ]
+   ],
+   "line": 428
+  },
+  {
+   "type": "paragraph",
+   "text": "Очень широкая таблица:",
+   "line": 433
+  },
+  {
+   "type": "table",
+   "header": [
+    "Кол 1",
+    "Кол 2",
+    "Кол 3",
+    "Кол 4",
+    "Кол 5",
+    "Кол 6",
+    "Кол 7",
+    "Кол 8",
+    "Кол 9",
+    "Кол 10",
+    "Кол 11",
+    "Кол 12"
+   ],
+   "align": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "rows": [
+    [
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение",
+     "значение"
+    ]
+   ],
+   "line": 435
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "10. Изображения",
+   "id": "10-изображения",
+   "line": 439
+  },
+  {
+   "type": "embed",
+   "name": "https://picsum.photos/400/200",
+   "alt": "Альтернативный текст",
+   "url": "https://picsum.photos/400/200",
+   "line": 441
+  },
+  {
+   "type": "paragraph",
+   "text": "![Картинка по ссылке-сноске][img-ref]",
+   "line": 443
+  },
+  {
+   "type": "paragraph",
+   "text": "[img-ref]: https://picsum.photos/200/100",
+   "line": 445
+  },
+  {
+   "type": "paragraph",
+   "text": "[![Картинка-ссылка](https://picsum.photos/120/60)](https://example.com)",
+   "line": 447
+  },
+  {
+   "type": "embed",
+   "name": "./does-not-exist.png",
+   "alt": "Несуществующая картинка",
+   "line": 449
+  },
+  {
+   "type": "embed",
+   "name": "images/local.png",
+   "alt": "Локальная картинка",
+   "line": 451
+  },
+  {
+   "type": "paragraph",
+   "text": "<img src=\"https://picsum.photos/100/100\" alt=\"HTML img\" width=\"100\">",
+   "line": 453
+  },
+  {
+   "type": "embed",
+   "name": "https://img.shields.io/badge/markdown-test-green",
+   "alt": "SVG-бейдж",
+   "url": "https://img.shields.io/badge/markdown-test-green",
+   "line": 455
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "11. HTML",
+   "id": "11-html",
+   "line": 457
+  },
+  {
+   "type": "paragraph",
+   "text": "<div align=\"center\">\n<b>Блок HTML</b> по центру\n</div>",
+   "line": 459
+  },
+  {
+   "type": "paragraph",
+   "text": "<details>\n<summary>Раскрывающийся блок (нажми)</summary>",
+   "line": 463
+  },
+  {
+   "type": "paragraph",
+   "text": "Скрытое содержимое с **markdown** внутри.",
+   "line": 466
+  },
+  {
+   "type": "code",
+   "text": "console.log(\"код внутри details\");",
+   "lang": "js",
+   "line": 468
+  },
+  {
+   "type": "paragraph",
+   "text": "</details>",
+   "line": 472
+  },
+  {
+   "type": "paragraph",
+   "text": "<table>\n<tr><th>HTML</th><th>таблица</th></tr>\n<tr><td>1</td><td>2</td></tr>\n</table>",
+   "line": 474
+  },
+  {
+   "type": "paragraph",
+   "text": "<p style=\"color: red\">Абзац с инлайн-стилем</p>",
+   "line": 481
+  },
+  {
+   "type": "paragraph",
+   "text": "<dl>\n<dt>HTML-термин</dt>\n<dd>HTML-определение</dd>\n</dl>",
+   "line": 483
+  },
+  {
+   "type": "paragraph",
+   "text": "<script>alert(\"Если это выполнилось — ридер небезопасен (XSS)!\")</script>",
+   "line": 488
+  },
+  {
+   "type": "paragraph",
+   "text": "<img src=\"x\" onerror=\"alert('XSS через onerror')\">",
+   "line": 490
+  },
+  {
+   "type": "paragraph",
+   "text": "[XSS-ссылка](javascript:alert('xss'))",
+   "line": 492
+  },
+  {
+   "type": "paragraph",
+   "text": "<iframe src=\"https://example.com\" width=\"300\" height=\"100\"></iframe>",
+   "line": 494
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "12. Экранирование и спецсимволы",
+   "id": "12-экранирование-и-спецсимволы",
+   "line": 496
+  },
+  {
+   "type": "paragraph",
+   "text": "\\*не курсив\\*, \\_не курсив\\_, \\`не код\\`, \\# не заголовок, \\[не ссылка\\](url)",
+   "line": 498
+  },
+  {
+   "type": "paragraph",
+   "text": "\\\\ обратный слэш, \\> не цитата, \\- не список, \\+ \\! \\{ \\} \\( \\) \\. \\| \\~",
+   "line": 500
+  },
+  {
+   "type": "paragraph",
+   "text": "HTML-сущности: &copy; &reg; &trade; &amp; &lt; &gt; &quot; &nbsp; &mdash; &ndash; &hellip; &#8364; &#x1F600;",
+   "line": 502
+  },
+  {
+   "type": "paragraph",
+   "text": "Сырые символы: < > & \" ' — должны отображаться как есть: a < b && c > d",
+   "line": 504
+  },
+  {
+   "type": "paragraph",
+   "text": "Типографика: \"прямые кавычки\", 'одинарные', -- двойной дефис, --- тройной, ... многоточие, (c) (r) (tm) +-",
+   "line": 506
+  },
+  {
+   "type": "paragraph",
+   "text": "Неразрывный пробел и табуляция:    ←таб→    (внутри текста)",
+   "line": 508
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "13. Сноски",
+   "id": "13-сноски",
+   "line": 510
+  },
+  {
+   "type": "paragraph",
+   "text": "Текст со сноской[^1] и ещё одной[^note]. Повторное использование сноски[^1].",
+   "line": 512
+  },
+  {
+   "type": "paragraph",
+   "text": "Встроенная сноска^[Это inline-сноска (Pandoc).].",
+   "line": 514
+  },
+  {
+   "type": "paragraph",
+   "text": "[^1]: Текст первой сноски.\n[^note]: Многоабзацная сноска.",
+   "line": 516
+  },
+  {
+   "type": "code",
+   "text": "Второй абзац сноски с отступом.\n\n```\nкод в сноске\n```",
+   "line": 519
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "14. Списки определений (расширение)",
+   "id": "14-списки-определений-расширение",
+   "line": 525
+  },
+  {
+   "type": "paragraph",
+   "text": "Термин 1\n: Определение первого термина.",
+   "line": 527
+  },
+  {
+   "type": "paragraph",
+   "text": "Термин 2\n: Первое определение второго термина.\n: Второе определение второго термина.",
+   "line": 530
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "15. Аббревиатуры (расширение)",
+   "id": "15-аббревиатуры-расширение",
+   "line": 534
+  },
+  {
+   "type": "paragraph",
+   "text": "HTML и CSS используются в вебе.",
+   "line": 536
+  },
+  {
+   "type": "paragraph",
+   "text": "*[HTML]: HyperText Markup Language\n*[CSS]: Cascading Style Sheets",
+   "line": 538
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "16. Предупреждения / Callouts",
+   "id": "16-предупреждения--callouts",
+   "line": 541
+  },
+  {
+   "type": "paragraph",
+   "text": "GitHub alerts:",
+   "line": 543
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Полезная информация.",
+     "line": 546
+    }
+   ],
+   "callout": {
+    "kind": "note",
+    "title": ""
+   },
+   "line": 545
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Совет.",
+     "line": 549
+    }
+   ],
+   "callout": {
+    "kind": "tip",
+    "title": ""
+   },
+   "line": 548
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Важно.",
+     "line": 552
+    }
+   ],
+   "callout": {
+    "kind": "important",
+    "title": ""
+   },
+   "line": 551
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Предупреждение.",
+     "line": 555
+    }
+   ],
+   "callout": {
+    "kind": "warning",
+    "title": ""
+   },
+   "line": 554
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Осторожно.",
+     "line": 558
+    }
+   ],
+   "callout": {
+    "kind": "caution",
+    "title": ""
+   },
+   "line": 557
+  },
+  {
+   "type": "paragraph",
+   "text": "Obsidian callout со сворачиванием:",
+   "line": 560
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "paragraph",
+     "text": "Содержимое скрыто по умолчанию.",
+     "line": 563
+    }
+   ],
+   "callout": {
+    "kind": "info",
+    "title": "Свёрнутый callout с заголовком",
+    "fold": "closed"
+   },
+   "line": 562
+  },
+  {
+   "type": "paragraph",
+   "text": "MkDocs / Python-Markdown admonition:",
+   "line": 565
+  },
+  {
+   "type": "paragraph",
+   "text": "!!! note \"Заголовок заметки\"\nТекст внутри admonition.",
+   "line": 567
+  },
+  {
+   "type": "paragraph",
+   "text": "Container (markdown-it-container / VuePress):",
+   "line": 570
+  },
+  {
+   "type": "paragraph",
+   "text": "::: warning\nКонтейнер-предупреждение\n:::",
+   "line": 572
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "17. Математика (LaTeX)",
+   "id": "17-математика-latex",
+   "line": 576
+  },
+  {
+   "type": "paragraph",
+   "text": "Встроенная формула: $E = mc^2$, и ещё $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$.",
+   "line": 578
+  },
+  {
+   "type": "paragraph",
+   "text": "Блочная формула:",
+   "line": 580
+  },
+  {
+   "type": "paragraph",
+   "text": "$$\n\\int_{-\\infty}^{+\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}\n$$",
+   "line": 582
+  },
+  {
+   "type": "paragraph",
+   "text": "$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\\\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax + by \\\\ cx + dy \\end{pmatrix}\n$$",
+   "line": 586
+  },
+  {
+   "type": "paragraph",
+   "text": "GitHub-стиль: $`\\alpha + \\beta`$",
+   "line": 593
+  },
+  {
+   "type": "code",
+   "text": "f(x) = \\begin{cases} x^2, & x \\ge 0 \\\\ -x, & x < 0 \\end{cases}",
+   "lang": "math",
+   "line": 595
+  },
+  {
+   "type": "paragraph",
+   "text": "Доллар не как формула: цена $5 и $10.",
+   "line": 599
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "18. Диаграммы",
+   "id": "18-диаграммы",
+   "line": 601
+  },
+  {
+   "type": "code",
+   "text": "graph TD\n    A[Старт] --> B{Условие?}\n    B -->|Да| C[Действие]\n    B -->|Нет| D[Другое действие]\n    C --> E[Конец]\n    D --> E",
+   "lang": "mermaid",
+   "line": 603
+  },
+  {
+   "type": "code",
+   "text": "sequenceDiagram\n    Клиент->>Сервер: Запрос\n    Сервер-->>Клиент: Ответ",
+   "lang": "mermaid",
+   "line": 612
+  },
+  {
+   "type": "code",
+   "text": "@startuml\nAlice -> Bob: Hello\n@enduml",
+   "lang": "plantuml",
+   "line": 618
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "19. Эмодзи и Unicode",
+   "id": "19-эмодзи-и-unicode",
+   "line": 624
+  },
+  {
+   "type": "paragraph",
+   "text": "Шорткоды: :smile: :rocket: :+1: :warning: :heart:",
+   "line": 626
+  },
+  {
+   "type": "paragraph",
+   "text": "Напрямую: 😀 🚀 👍 ⚠️ ❤️ 🇷🇺 👨‍👩‍👧‍👦 (составной эмодзи)",
+   "line": 628
+  },
+  {
+   "type": "paragraph",
+   "text": "Разные письменности: English, Русский, Ελληνικά, 中文, 日本語, 한국어, עברית, العربية, हिन्दी",
+   "line": 630
+  },
+  {
+   "type": "paragraph",
+   "text": "RTL-текст: مرحبا بالعالم — שלום עולם",
+   "line": 632
+  },
+  {
+   "type": "paragraph",
+   "text": "Комбинирующие символы: é (e + ́), Z̤͔ͧ̑̓ä͖̭̈̇lͮ̒ͫǧ̗͚̚o̙̔ͮ̇͐̇",
+   "line": 634
+  },
+  {
+   "type": "paragraph",
+   "text": "Математические символы: ∀x ∈ ℝ, ∃y: x² + y² ≤ r², ∞, ≠, ≈, √, ∑, ∫",
+   "line": 636
+  },
+  {
+   "type": "paragraph",
+   "text": "Псевдографика:",
+   "line": 638
+  },
+  {
+   "type": "code",
+   "text": "┌─────┬─────┐\n│  A  │  B  │\n├─────┼─────┤\n│  1  │  2  │\n└─────┴─────┘",
+   "line": 640
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "20. Прочие расширения",
+   "id": "20-прочие-расширения",
+   "line": 648
+  },
+  {
+   "type": "paragraph",
+   "text": "Теги (Obsidian): #тег #вложенный/тег",
+   "line": 650
+  },
+  {
+   "type": "paragraph",
+   "text": "Встраивание (Obsidian): ![[Другая заметка]]",
+   "line": 652
+  },
+  {
+   "type": "paragraph",
+   "text": "Комментарий Obsidian: %%этого не должно быть видно%%",
+   "line": 654
+  },
+  {
+   "type": "paragraph",
+   "text": "Атрибуты (kramdown/markdown-it-attrs): **жирный**{.class #id style=\"color:blue\"}",
+   "line": 656
+  },
+  {
+   "type": "paragraph",
+   "text": "Упоминания и ссылки GitHub: @username, #123, user/repo#456, коммит a1b2c3d",
+   "line": 658
+  },
+  {
+   "type": "paragraph",
+   "text": "Клавиши: <kbd>Super</kbd> + <kbd>K</kbd>",
+   "line": 660
+  },
+  {
+   "type": "paragraph",
+   "text": "Строка с [ ] квадратными скобками, но не ссылка, и [x] не задача вне списка.",
+   "line": 662
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "21. Вложенность «всё во всём»",
+   "id": "21-вложенность-всё-во-всём",
+   "line": 664
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "Пункт списка",
+     "depth": 0,
+     "number": 1,
+     "line": 666,
+     "blocks": [
+      {
+       "type": "quote",
+       "blocks": [
+        {
+         "type": "paragraph",
+         "text": "Цитата в пункте",
+         "line": 667
+        },
+        {
+         "type": "table",
+         "header": [
+          "Таблица",
+          "в цитате"
+         ],
+         "align": [
+          null,
+          null
+         ],
+         "rows": [
+          [
+           "1",
+           "2"
+          ]
+         ],
+         "line": 669
+        },
+        {
+         "type": "list",
+         "isOrdered": false,
+         "items": [
+          {
+           "text": "задача в цитате в списке",
+           "depth": 0,
+           "isChecked": true,
+           "line": 673,
+           "blocks": [
+            {
+             "type": "code",
+             "text": "print(\"код в задаче в цитате в списке\")",
+             "lang": "python",
+             "line": 674
+            }
+           ]
+          }
+         ],
+         "line": 673
+        }
+       ],
+       "line": 667
+      }
+     ]
+    }
+   ],
+   "line": 666
+  },
+  {
+   "type": "list",
+   "isOrdered": true,
+   "items": [
+    {
+     "text": "Второй пункт с формулой $a^2+b^2=c^2$ и сноской[^1].",
+     "depth": 0,
+     "number": 2,
+     "line": 678
+    }
+   ],
+   "line": 678
+  },
+  {
+   "type": "quote",
+   "blocks": [
+    {
+     "type": "list",
+     "isOrdered": false,
+     "items": [
+      {
+       "text": "список",
+       "depth": 0,
+       "line": 680,
+       "blocks": [
+        {
+         "type": "quote",
+         "blocks": [
+          {
+           "type": "paragraph",
+           "text": "вложенная цитата в списке в цитате",
+           "line": 681
+          },
+          {
+           "type": "list",
+           "isOrdered": true,
+           "items": [
+            {
+             "text": "нумерованный ещё глубже",
+             "depth": 0,
+             "number": 1,
+             "line": 682
+            },
+            {
+             "text": "и ещё глубже: `код`, **жирный**, [ссылка](#)",
+             "depth": 1,
+             "line": 683
+            }
+           ],
+           "line": 682
+          }
+         ],
+         "line": 681
+        }
+       ]
+      }
+     ],
+     "line": 680
+    }
+   ],
+   "line": 680
+  },
+  {
+   "type": "heading",
+   "level": 2,
+   "text": "22. Граничные случаи парсинга",
+   "id": "22-граничные-случаи-парсинга",
+   "line": 685
+  },
+  {
+   "type": "paragraph",
+   "text": "Пустой блок кода:",
+   "line": 687
+  },
+  {
+   "type": "code",
+   "text": "",
+   "line": 689
+  },
+  {
+   "type": "paragraph",
+   "text": "Незакрытый `инлайн-код",
+   "line": 692
+  },
+  {
+   "type": "paragraph",
+   "text": "Незакрытое **жирное выделение",
+   "line": 694
+  },
+  {
+   "type": "paragraph",
+   "text": "Незакрытая [ссылка(https://example.com)",
+   "line": 696
+  },
+  {
+   "type": "paragraph",
+   "text": "Абзац сразу после списка:",
+   "line": 698
+  },
+  {
+   "type": "list",
+   "isOrdered": false,
+   "items": [
+    {
+     "text": "пункт\nТекст, который может «прилипнуть» к пункту (ленивое продолжение).",
+     "depth": 0,
+     "line": 699
+    }
+   ],
+   "line": 699
+  },
+  {
+   "type": "paragraph",
+   "text": "Строка из одних пробелов ниже:",
+   "line": 702
+  },
+  {
+   "type": "paragraph",
+   "text": "Конец пробельной строки.",
+   "line": 704
+  },
+  {
+   "type": "paragraph",
+   "text": "Абзац с 3 пробелами отступа (ещё не код)",
+   "line": 706
+  },
+  {
+   "type": "code",
+   "text": "Строка с табуляцией (должна стать кодом)",
+   "line": 708
+  },
+  {
+   "type": "paragraph",
+   "text": "Последняя строка файла без перевода строки в конце.",
+   "line": 714
+  }
+ ],
+ "inlines": [
+  {
+   "text": "Тест Markdown: все конструкции",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Тест Markdown: все конструкции"
+    }
+   ]
+  },
+  {
+   "text": "Файл для проверки ридера. Разделы идут от базового CommonMark к расширениям\nGFM и к редким расширениям (Pandoc, MultiMarkdown, Obsidian и т. д.).\nFront matter выше (YAML между `---`) тоже часть теста.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Файл для проверки ридера. Разделы идут от базового CommonMark к расширениям\nGFM и к редким расширениям (Pandoc, MultiMarkdown, Obsidian и т. д.).\nFront matter выше (YAML между "
+    },
+    {
+     "type": "text",
+     "text": "---",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": ") тоже часть теста."
+    }
+   ]
+  },
+  {
+   "text": "[TOC]",
+   "parts": [
+    {
+     "type": "text",
+     "text": "[TOC]"
+    }
+   ]
+  },
+  {
+   "text": "1. Заголовки",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1. Заголовки"
+    }
+   ]
+  },
+  {
+   "text": "H1 — заголовок первого уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H1 — заголовок первого уровня"
+    }
+   ]
+  },
+  {
+   "text": "H2 — заголовок второго уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H2 — заголовок второго уровня"
+    }
+   ]
+  },
+  {
+   "text": "H3 — заголовок третьего уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H3 — заголовок третьего уровня"
+    }
+   ]
+  },
+  {
+   "text": "H4 — заголовок четвёртого уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H4 — заголовок четвёртого уровня"
+    }
+   ]
+  },
+  {
+   "text": "H5 — заголовок пятого уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H5 — заголовок пятого уровня"
+    }
+   ]
+  },
+  {
+   "text": "H6 — заголовок шестого уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H6 — заголовок шестого уровня"
+    }
+   ]
+  },
+  {
+   "text": "####### Семь решёток — это НЕ заголовок, а обычный текст",
+   "parts": [
+    {
+     "type": "text",
+     "text": "####### Семь решёток — это НЕ заголовок, а обычный текст"
+    }
+   ]
+  },
+  {
+   "text": "#Без пробела — тоже не заголовок (в CommonMark)",
+   "parts": [
+    {
+     "type": "tag",
+     "text": "#Без"
+    },
+    {
+     "type": "text",
+     "text": " пробела — тоже не заголовок (в CommonMark)"
+    }
+   ]
+  },
+  {
+   "text": "Заголовок с закрывающими решётками",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Заголовок с закрывающими решётками"
+    }
+   ]
+  },
+  {
+   "text": "Заголовок с *курсивом*, **жирным** и `кодом`",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Заголовок с "
+    },
+    {
+     "type": "text",
+     "text": "курсивом",
+     "style": 2
+    },
+    {
+     "type": "text",
+     "text": ", "
+    },
+    {
+     "type": "text",
+     "text": "жирным",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "кодом",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "Заголовок со своим id",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Заголовок со своим id"
+    }
+   ]
+  },
+  {
+   "text": "Setext-заголовок первого уровня\n===============================",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Setext-заголовок первого уровня\n==============================="
+    }
+   ]
+  },
+  {
+   "text": "Setext-заголовок второго уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Setext-заголовок второго уровня"
+    }
+   ]
+  },
+  {
+   "text": "2. Абзацы и переносы строк",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2. Абзацы и переносы строк"
+    }
+   ]
+  },
+  {
+   "text": "Это обычный абзац. Строки внутри одного абзаца\nсклеиваются в одну, если между ними нет пустой строки.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Это обычный абзац. Строки внутри одного абзаца\nсклеиваются в одну, если между ними нет пустой строки."
+    }
+   ]
+  },
+  {
+   "text": "Это новый абзац после пустой строки.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Это новый абзац после пустой строки."
+    }
+   ]
+  },
+  {
+   "text": "Жёсткий перенос через два пробела в конце строки\nвот эта строка должна начаться с новой строки.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Жёсткий перенос через два пробела в конце строки\nвот эта строка должна начаться с новой строки."
+    }
+   ]
+  },
+  {
+   "text": "Жёсткий перенос через обратный слэш\\\nи эта строка тоже с новой строки.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Жёсткий перенос через обратный слэш\nи эта строка тоже с новой строки."
+    }
+   ]
+  },
+  {
+   "text": "Перенос через HTML<br>тег br.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Перенос через HTML\nтег br."
+    }
+   ]
+  },
+  {
+   "text": "Очень длинная строка без переносов для проверки переноса по ширине окна: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Очень длинная строка без переносов для проверки переноса по ширине окна: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur."
+    }
+   ]
+  },
+  {
+   "text": "ОченьДлинноеСловоБезПробеловКотороеДолжноКорректноПереноситьсяИлиХотяБыНеЛоматьВёрсткуДокументаВообщеНикакимОбразомАааааааааааааааааааааа",
+   "parts": [
+    {
+     "type": "text",
+     "text": "ОченьДлинноеСловоБезПробеловКотороеДолжноКорректноПереноситьсяИлиХотяБыНеЛоматьВёрсткуДокументаВообщеНикакимОбразомАааааааааааааааааааааа"
+    }
+   ]
+  },
+  {
+   "text": "3. Выделение текста",
+   "parts": [
+    {
+     "type": "text",
+     "text": "3. Выделение текста"
+    }
+   ]
+  },
+  {
+   "text": "*курсив звёздочками* и _курсив подчёркиваниями_",
+   "parts": [
+    {
+     "type": "text",
+     "text": "курсив звёздочками",
+     "style": 2
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "курсив подчёркиваниями",
+     "style": 2
+    }
+   ]
+  },
+  {
+   "text": "**жирный звёздочками** и __жирный подчёркиваниями__",
+   "parts": [
+    {
+     "type": "text",
+     "text": "жирный звёздочками",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "жирный подчёркиваниями",
+     "style": 1
+    }
+   ]
+  },
+  {
+   "text": "***жирный курсив*** и ___жирный курсив___ и **_смешанный_** и *__смешанный__*",
+   "parts": [
+    {
+     "type": "text",
+     "text": "жирный курсив",
+     "style": 3
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "жирный курсив",
+     "style": 3
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "смешанный",
+     "style": 3
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "смешанный",
+     "style": 3
+    }
+   ]
+  },
+  {
+   "text": "~~зачёркнутый (GFM)~~ и ~одинарная тильда~",
+   "parts": [
+    {
+     "type": "text",
+     "text": "зачёркнутый (GFM)",
+     "style": 4
+    },
+    {
+     "type": "text",
+     "text": " и ~одинарная тильда~"
+    }
+   ]
+  },
+  {
+   "text": "**Жирный с *вложенным курсивом* внутри**",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Жирный с ",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": "вложенным курсивом",
+     "style": 3
+    },
+    {
+     "type": "text",
+     "text": " внутри",
+     "style": 1
+    }
+   ]
+  },
+  {
+   "text": "*Курсив с **вложенным жирным** внутри*",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Курсив с ",
+     "style": 2
+    },
+    {
+     "type": "text",
+     "text": "вложенным жирным",
+     "style": 3
+    },
+    {
+     "type": "text",
+     "text": " внутри",
+     "style": 2
+    }
+   ]
+  },
+  {
+   "text": "Внутри слова: пре*фикс*ный, пре**фикс**ный, snake_case_variable (подчёркивания внутри слова не должны давать курсив).",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Внутри слова: пре"
+    },
+    {
+     "type": "text",
+     "text": "фикс",
+     "style": 2
+    },
+    {
+     "type": "text",
+     "text": "ный, пре"
+    },
+    {
+     "type": "text",
+     "text": "фикс",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": "ный, snake_case_variable (подчёркивания внутри слова не должны давать курсив)."
+    }
+   ]
+  },
+  {
+   "text": "Звёздочки без пары: 2 * 3 * 4 = 24, а также * одинокая звёздочка.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Звёздочки без пары: 2 * 3 * 4 = 24, а также * одинокая звёздочка."
+    }
+   ]
+  },
+  {
+   "text": "==выделение маркером== (расширение)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "выделение маркером",
+     "style": 16
+    },
+    {
+     "type": "text",
+     "text": " (расширение)"
+    }
+   ]
+  },
+  {
+   "text": "H~2~O — нижний индекс, x^2^ — верхний индекс (расширения)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "H~2~O — нижний индекс, x^2^ — верхний индекс (расширения)"
+    }
+   ]
+  },
+  {
+   "text": "<u>подчёркнутый HTML</u>, <mark>mark HTML</mark>, <sub>sub</sub> и <sup>sup</sup>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "подчёркнутый HTML",
+     "style": 8
+    },
+    {
+     "type": "text",
+     "text": ", "
+    },
+    {
+     "type": "text",
+     "text": "mark HTML",
+     "style": 16
+    },
+    {
+     "type": "text",
+     "text": ", "
+    },
+    {
+     "type": "text",
+     "text": "sub",
+     "style": 32
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "sup",
+     "style": 64
+    },
+    {
+     "type": "text",
+     "text": ", "
+    },
+    {
+     "type": "text",
+     "text": "Ctrl",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": "+"
+    },
+    {
+     "type": "text",
+     "text": "Shift",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": "+"
+    },
+    {
+     "type": "text",
+     "text": "A",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "++вставленный текст++ (расширение markdown-it-ins)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "++вставленный текст++ (расширение markdown-it-ins)"
+    }
+   ]
+  },
+  {
+   "text": "4. Цитаты",
+   "parts": [
+    {
+     "type": "text",
+     "text": "4. Цитаты"
+    }
+   ]
+  },
+  {
+   "text": "Простая цитата.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Простая цитата."
+    }
+   ]
+  },
+  {
+   "text": "Многострочная цитата,\nкоторая продолжается на следующей строке.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Многострочная цитата,\nкоторая продолжается на следующей строке."
+    }
+   ]
+  },
+  {
+   "text": "И второй абзац в той же цитате.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "И второй абзац в той же цитате."
+    }
+   ]
+  },
+  {
+   "text": "Ленивое продолжение цитаты:\nэта строка без `>`, но всё равно в цитате.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Ленивое продолжение цитаты:\nэта строка без "
+    },
+    {
+     "type": "text",
+     "text": ">",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": ", но всё равно в цитате."
+    }
+   ]
+  },
+  {
+   "text": "Уровень 1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 1"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 2"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 3"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 4",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 4"
+    }
+   ]
+  },
+  {
+   "text": "Заголовок в цитате",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Заголовок в цитате"
+    }
+   ]
+  },
+  {
+   "text": "список в цитате",
+   "parts": [
+    {
+     "type": "text",
+     "text": "список в цитате"
+    }
+   ]
+  },
+  {
+   "text": "второй пункт",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй пункт"
+    }
+   ]
+  },
+  {
+   "text": "**Жирный** и `код` в цитате.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Жирный",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "text",
+     "text": "код",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": " в цитате."
+    }
+   ]
+  },
+  {
+   "text": "5. Списки",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5. Списки"
+    }
+   ]
+  },
+  {
+   "text": "5.1 Маркированные",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.1 Маркированные"
+    }
+   ]
+  },
+  {
+   "text": "пункт с дефисом",
+   "parts": [
+    {
+     "type": "text",
+     "text": "пункт с дефисом"
+    }
+   ]
+  },
+  {
+   "text": "второй пункт",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй пункт"
+    }
+   ]
+  },
+  {
+   "text": "третий пункт",
+   "parts": [
+    {
+     "type": "text",
+     "text": "третий пункт"
+    }
+   ]
+  },
+  {
+   "text": "пункт со звёздочкой",
+   "parts": [
+    {
+     "type": "text",
+     "text": "пункт со звёздочкой"
+    }
+   ]
+  },
+  {
+   "text": "второй",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй"
+    }
+   ]
+  },
+  {
+   "text": "пункт с плюсом",
+   "parts": [
+    {
+     "type": "text",
+     "text": "пункт с плюсом"
+    }
+   ]
+  },
+  {
+   "text": "второй",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй"
+    }
+   ]
+  },
+  {
+   "text": "5.2 Нумерованные",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.2 Нумерованные"
+    }
+   ]
+  },
+  {
+   "text": "первый",
+   "parts": [
+    {
+     "type": "text",
+     "text": "первый"
+    }
+   ]
+  },
+  {
+   "text": "второй",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй"
+    }
+   ]
+  },
+  {
+   "text": "третий",
+   "parts": [
+    {
+     "type": "text",
+     "text": "третий"
+    }
+   ]
+  },
+  {
+   "text": "все единицы",
+   "parts": [
+    {
+     "type": "text",
+     "text": "все единицы"
+    }
+   ]
+  },
+  {
+   "text": "должны стать",
+   "parts": [
+    {
+     "type": "text",
+     "text": "должны стать"
+    }
+   ]
+  },
+  {
+   "text": "1, 2, 3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1, 2, 3"
+    }
+   ]
+  },
+  {
+   "text": "список начинается с семи",
+   "parts": [
+    {
+     "type": "text",
+     "text": "список начинается с семи"
+    }
+   ]
+  },
+  {
+   "text": "восемь",
+   "parts": [
+    {
+     "type": "text",
+     "text": "восемь"
+    }
+   ]
+  },
+  {
+   "text": "девять",
+   "parts": [
+    {
+     "type": "text",
+     "text": "девять"
+    }
+   ]
+  },
+  {
+   "text": "нумерация со скобкой",
+   "parts": [
+    {
+     "type": "text",
+     "text": "нумерация со скобкой"
+    }
+   ]
+  },
+  {
+   "text": "второй пункт",
+   "parts": [
+    {
+     "type": "text",
+     "text": "второй пункт"
+    }
+   ]
+  },
+  {
+   "text": "5.3 Вложенные",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.3 Вложенные"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 1"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 2"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 3"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 4",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 4"
+    }
+   ]
+  },
+  {
+   "text": "Уровень 5",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Уровень 5"
+    }
+   ]
+  },
+  {
+   "text": "Снова уровень 1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Снова уровень 1"
+    }
+   ]
+  },
+  {
+   "text": "Нумерованный внутри маркированного",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Нумерованный внутри маркированного"
+    }
+   ]
+  },
+  {
+   "text": "Второй",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Второй"
+    }
+   ]
+  },
+  {
+   "text": "И маркированный внутри нумерованного",
+   "parts": [
+    {
+     "type": "text",
+     "text": "И маркированный внутри нумерованного"
+    }
+   ]
+  },
+  {
+   "text": "Нумерованный верхнего уровня",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Нумерованный верхнего уровня"
+    }
+   ]
+  },
+  {
+   "text": "вложенный",
+   "parts": [
+    {
+     "type": "text",
+     "text": "вложенный"
+    }
+   ]
+  },
+  {
+   "text": "ещё",
+   "parts": [
+    {
+     "type": "text",
+     "text": "ещё"
+    }
+   ]
+  },
+  {
+   "text": "5.4 «Рыхлый» список (с абзацами)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.4 «Рыхлый» список (с абзацами)"
+    }
+   ]
+  },
+  {
+   "text": "Первый пункт с абзацем.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Первый пункт с абзацем."
+    }
+   ]
+  },
+  {
+   "text": "Второй абзац того же пункта.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Второй абзац того же пункта."
+    }
+   ]
+  },
+  {
+   "text": "Второй пункт.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Второй пункт."
+    }
+   ]
+  },
+  {
+   "text": "Третий пункт с цитатой:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Третий пункт с цитатой:"
+    }
+   ]
+  },
+  {
+   "text": "цитата внутри пункта",
+   "parts": [
+    {
+     "type": "text",
+     "text": "цитата внутри пункта"
+    }
+   ]
+  },
+  {
+   "text": "5.5 Списки задач (GFM)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.5 Списки задач (GFM)"
+    }
+   ]
+  },
+  {
+   "text": "выполненная задача",
+   "parts": [
+    {
+     "type": "text",
+     "text": "выполненная задача"
+    }
+   ]
+  },
+  {
+   "text": "невыполненная задача",
+   "parts": [
+    {
+     "type": "text",
+     "text": "невыполненная задача"
+    }
+   ]
+  },
+  {
+   "text": "выполненная с большой X",
+   "parts": [
+    {
+     "type": "text",
+     "text": "выполненная с большой X"
+    }
+   ]
+  },
+  {
+   "text": "задача с **форматированием** и [ссылкой](https://example.com)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "задача с "
+    },
+    {
+     "type": "text",
+     "text": "форматированием",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "link",
+     "text": "ссылкой",
+     "url": "https://example.com"
+    }
+   ]
+  },
+  {
+   "text": "вложенная выполненная",
+   "parts": [
+    {
+     "type": "text",
+     "text": "вложенная выполненная"
+    }
+   ]
+  },
+  {
+   "text": "вложенная невыполненная",
+   "parts": [
+    {
+     "type": "text",
+     "text": "вложенная невыполненная"
+    }
+   ]
+  },
+  {
+   "text": "задача в нумерованном списке",
+   "parts": [
+    {
+     "type": "text",
+     "text": "задача в нумерованном списке"
+    }
+   ]
+  },
+  {
+   "text": "вторая",
+   "parts": [
+    {
+     "type": "text",
+     "text": "вторая"
+    }
+   ]
+  },
+  {
+   "text": "5.6 Граничные случаи",
+   "parts": [
+    {
+     "type": "text",
+     "text": "5.6 Граничные случаи"
+    }
+   ]
+  },
+  {
+   "text": "-не список (нет пробела)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "-не список (нет пробела)"
+    }
+   ]
+  },
+  {
+   "text": "2026\\. Это не список, точка экранирована.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2026. Это не список, точка экранирована."
+    }
+   ]
+  },
+  {
+   "text": "",
+   "parts": []
+  },
+  {
+   "text": "пустой первый пункт со следующей строкой",
+   "parts": [
+    {
+     "type": "text",
+     "text": "пустой первый пункт со следующей строкой"
+    }
+   ]
+  },
+  {
+   "text": "a",
+   "parts": [
+    {
+     "type": "text",
+     "text": "a"
+    }
+   ]
+  },
+  {
+   "text": "b",
+   "parts": [
+    {
+     "type": "text",
+     "text": "b"
+    }
+   ]
+  },
+  {
+   "text": "c (новый список после пустой строки? зависит от парсера)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "c (новый список после пустой строки? зависит от парсера)"
+    }
+   ]
+  },
+  {
+   "text": "6. Код",
+   "parts": [
+    {
+     "type": "text",
+     "text": "6. Код"
+    }
+   ]
+  },
+  {
+   "text": "Встроенный код: `printf(\"hi\")`, с обратной кавычкой внутри: `` a ` b ``, с пробелами по краям: `` `код` ``.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Встроенный код: "
+    },
+    {
+     "type": "text",
+     "text": "printf(\"hi\")",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": ", с обратной кавычкой внутри: "
+    },
+    {
+     "type": "text",
+     "text": "a ` b",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": ", с пробелами по краям: "
+    },
+    {
+     "type": "text",
+     "text": "`код`",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": "."
+    }
+   ]
+  },
+  {
+   "text": "Блок с отступом в 4 пробела:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Блок с отступом в 4 пробела:"
+    }
+   ]
+  },
+  {
+   "text": "Огороженный блок без языка:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Огороженный блок без языка:"
+    }
+   ]
+  },
+  {
+   "text": "Огороженный тильдами:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Огороженный тильдами:"
+    }
+   ]
+  },
+  {
+   "text": "Блок с ``` внутри (внешний из четырёх кавычек):",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Блок с ``` внутри (внешний из четырёх кавычек):"
+    }
+   ]
+  },
+  {
+   "text": "6.1 Подсветка синтаксиса",
+   "parts": [
+    {
+     "type": "text",
+     "text": "6.1 Подсветка синтаксиса"
+    }
+   ]
+  },
+  {
+   "text": "7. Горизонтальные линии",
+   "parts": [
+    {
+     "type": "text",
+     "text": "7. Горизонтальные линии"
+    }
+   ]
+  },
+  {
+   "text": "8. Ссылки",
+   "parts": [
+    {
+     "type": "text",
+     "text": "8. Ссылки"
+    }
+   ]
+  },
+  {
+   "text": "[Обычная ссылка](https://example.com)",
+   "parts": [
+    {
+     "type": "link",
+     "text": "Обычная ссылка",
+     "url": "https://example.com"
+    }
+   ]
+  },
+  {
+   "text": "[Ссылка с title](https://example.com \"Подсказка при наведении\")",
+   "parts": [
+    {
+     "type": "link",
+     "text": "Ссылка с title",
+     "url": "https://example.com"
+    }
+   ]
+  },
+  {
+   "text": "[Относительная ссылка](./other-file.md)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Относительная ссылка"
+    }
+   ]
+  },
+  {
+   "text": "[Якорь на раздел «Таблицы»](#9-таблицы)",
+   "parts": [
+    {
+     "type": "link",
+     "text": "Якорь на раздел «Таблицы»",
+     "url": "#9-таблицы"
+    }
+   ]
+  },
+  {
+   "text": "[Якорь на custom-id](#custom-id)",
+   "parts": [
+    {
+     "type": "link",
+     "text": "Якорь на custom-id",
+     "url": "#custom-id"
+    }
+   ]
+  },
+  {
+   "text": "[Ссылка-сноска][ref1], [ещё одна][REF1] (регистр не важен), [короткая форма][] и [ref2].",
+   "parts": [
+    {
+     "type": "text",
+     "text": "[Ссылка-сноска][ref1], [ещё одна][REF1] (регистр не важен), [короткая форма][] и [ref2]."
+    }
+   ]
+  },
+  {
+   "text": "[ref1]: https://example.com/ref1 \"Заголовок ref1\"\n[короткая форма]: https://example.com/short\n[ref2]: <https://example.com/с пробелами> 'В одинарных кавычках'",
+   "parts": [
+    {
+     "type": "text",
+     "text": "[ref1]: "
+    },
+    {
+     "type": "link",
+     "text": "https://example.com/ref1",
+     "url": "https://example.com/ref1"
+    },
+    {
+     "type": "text",
+     "text": " \"Заголовок ref1\"\n[короткая форма]: "
+    },
+    {
+     "type": "link",
+     "text": "https://example.com/short",
+     "url": "https://example.com/short"
+    },
+    {
+     "type": "text",
+     "text": "\n[ref2]: <https://example.com/с пробелами> 'В одинарных кавычках'"
+    }
+   ]
+  },
+  {
+   "text": "Автоссылка: <https://example.com>, почта: <user@example.com>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Автоссылка: "
+    },
+    {
+     "type": "link",
+     "text": "https://example.com",
+     "url": "https://example.com"
+    },
+    {
+     "type": "text",
+     "text": ", почта: "
+    },
+    {
+     "type": "link",
+     "text": "user@example.com",
+     "url": "mailto:user@example.com"
+    }
+   ]
+  },
+  {
+   "text": "Голый URL (GFM autolink): https://example.com/path?a=1&b=2#frag и www.example.com",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Голый URL (GFM autolink): "
+    },
+    {
+     "type": "link",
+     "text": "https://example.com/path?a=1&b=2#frag",
+     "url": "https://example.com/path?a=1&b=2#frag"
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "link",
+     "text": "www.example.com",
+     "url": "https://www.example.com"
+    }
+   ]
+  },
+  {
+   "text": "Ссылка с **жирным** текстом: [**жирная ссылка**](https://example.com), с кодом: [`code`](https://example.com)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Ссылка с "
+    },
+    {
+     "type": "text",
+     "text": "жирным",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " текстом: "
+    },
+    {
+     "type": "link",
+     "text": "жирная ссылка",
+     "url": "https://example.com",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": ", с кодом: "
+    },
+    {
+     "type": "link",
+     "text": "code",
+     "url": "https://example.com",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "Ссылка со скобками в URL: [Википедия](https://ru.wikipedia.org/wiki/Markdown_(язык))",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Ссылка со скобками в URL: "
+    },
+    {
+     "type": "link",
+     "text": "Википедия",
+     "url": "https://ru.wikipedia.org/wiki/Markdown_(язык)"
+    }
+   ]
+  },
+  {
+   "text": "Кириллический URL: [пример](https://пример.рф/путь)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кириллический URL: "
+    },
+    {
+     "type": "link",
+     "text": "пример",
+     "url": "https://пример.рф/путь"
+    }
+   ]
+  },
+  {
+   "text": "Пустая ссылка: [](https://example.com) и ссылка без адреса: [текст]()",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Пустая ссылка: "
+    },
+    {
+     "type": "link",
+     "text": "https://example.com",
+     "url": "https://example.com"
+    },
+    {
+     "type": "text",
+     "text": " и ссылка без адреса: текст"
+    }
+   ]
+  },
+  {
+   "text": "Вики-ссылки (Obsidian): [[Другая заметка]] и [[Заметка|с псевдонимом]]",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Вики-ссылки (Obsidian): "
+    },
+    {
+     "type": "note",
+     "text": "Другая заметка",
+     "target": "Другая заметка"
+    },
+    {
+     "type": "text",
+     "text": " и "
+    },
+    {
+     "type": "note",
+     "text": "с псевдонимом",
+     "target": "Заметка"
+    }
+   ]
+  },
+  {
+   "text": "9. Таблицы",
+   "parts": [
+    {
+     "type": "text",
+     "text": "9. Таблицы"
+    }
+   ]
+  },
+  {
+   "text": "Слева",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Слева"
+    }
+   ]
+  },
+  {
+   "text": "По центру",
+   "parts": [
+    {
+     "type": "text",
+     "text": "По центру"
+    }
+   ]
+  },
+  {
+   "text": "Справа",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Справа"
+    }
+   ]
+  },
+  {
+   "text": "Без выравнивания",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Без выравнивания"
+    }
+   ]
+  },
+  {
+   "text": "a",
+   "parts": [
+    {
+     "type": "text",
+     "text": "a"
+    }
+   ]
+  },
+  {
+   "text": "b",
+   "parts": [
+    {
+     "type": "text",
+     "text": "b"
+    }
+   ]
+  },
+  {
+   "text": "c",
+   "parts": [
+    {
+     "type": "text",
+     "text": "c"
+    }
+   ]
+  },
+  {
+   "text": "d",
+   "parts": [
+    {
+     "type": "text",
+     "text": "d"
+    }
+   ]
+  },
+  {
+   "text": "длинная ячейка с текстом",
+   "parts": [
+    {
+     "type": "text",
+     "text": "длинная ячейка с текстом"
+    }
+   ]
+  },
+  {
+   "text": "`код`",
+   "parts": [
+    {
+     "type": "text",
+     "text": "код",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "**жирный**",
+   "parts": [
+    {
+     "type": "text",
+     "text": "жирный",
+     "style": 1
+    }
+   ]
+  },
+  {
+   "text": "*курсив*",
+   "parts": [
+    {
+     "type": "text",
+     "text": "курсив",
+     "style": 2
+    }
+   ]
+  },
+  {
+   "text": "1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1"
+    }
+   ]
+  },
+  {
+   "text": "2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2"
+    }
+   ]
+  },
+  {
+   "text": "3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "3"
+    }
+   ]
+  },
+  {
+   "text": "4",
+   "parts": [
+    {
+     "type": "text",
+     "text": "4"
+    }
+   ]
+  },
+  {
+   "text": "[ссылка](https://example.com)",
+   "parts": [
+    {
+     "type": "link",
+     "text": "ссылка",
+     "url": "https://example.com"
+    }
+   ]
+  },
+  {
+   "text": "~~зачёркнуто~~",
+   "parts": [
+    {
+     "type": "text",
+     "text": "зачёркнуто",
+     "style": 4
+    }
+   ]
+  },
+  {
+   "text": "100.00",
+   "parts": [
+    {
+     "type": "text",
+     "text": "100.00"
+    }
+   ]
+  },
+  {
+   "text": "",
+   "parts": []
+  },
+  {
+   "text": "Таблица без боковых вертикальных черт:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Таблица без боковых вертикальных черт:"
+    }
+   ]
+  },
+  {
+   "text": "Имя",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Имя"
+    }
+   ]
+  },
+  {
+   "text": "Значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Значение"
+    }
+   ]
+  },
+  {
+   "text": "x",
+   "parts": [
+    {
+     "type": "text",
+     "text": "x"
+    }
+   ]
+  },
+  {
+   "text": "1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1"
+    }
+   ]
+  },
+  {
+   "text": "y",
+   "parts": [
+    {
+     "type": "text",
+     "text": "y"
+    }
+   ]
+  },
+  {
+   "text": "2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2"
+    }
+   ]
+  },
+  {
+   "text": "Экранированная черта внутри ячейки:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Экранированная черта внутри ячейки:"
+    }
+   ]
+  },
+  {
+   "text": "Выражение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Выражение"
+    }
+   ]
+  },
+  {
+   "text": "Значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Значение"
+    }
+   ]
+  },
+  {
+   "text": "`a | b`",
+   "parts": [
+    {
+     "type": "text",
+     "text": "a | b",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "или",
+   "parts": [
+    {
+     "type": "text",
+     "text": "или"
+    }
+   ]
+  },
+  {
+   "text": "a | b",
+   "parts": [
+    {
+     "type": "text",
+     "text": "a | b"
+    }
+   ]
+  },
+  {
+   "text": "тоже или",
+   "parts": [
+    {
+     "type": "text",
+     "text": "тоже или"
+    }
+   ]
+  },
+  {
+   "text": "Таблица с неровным числом ячеек:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Таблица с неровным числом ячеек:"
+    }
+   ]
+  },
+  {
+   "text": "A",
+   "parts": [
+    {
+     "type": "text",
+     "text": "A"
+    }
+   ]
+  },
+  {
+   "text": "B",
+   "parts": [
+    {
+     "type": "text",
+     "text": "B"
+    }
+   ]
+  },
+  {
+   "text": "C",
+   "parts": [
+    {
+     "type": "text",
+     "text": "C"
+    }
+   ]
+  },
+  {
+   "text": "1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1"
+    }
+   ]
+  },
+  {
+   "text": "2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2"
+    }
+   ]
+  },
+  {
+   "text": "",
+   "parts": []
+  },
+  {
+   "text": "1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1"
+    }
+   ]
+  },
+  {
+   "text": "2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2"
+    }
+   ]
+  },
+  {
+   "text": "3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "3"
+    }
+   ]
+  },
+  {
+   "text": "Очень широкая таблица:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Очень широкая таблица:"
+    }
+   ]
+  },
+  {
+   "text": "Кол 1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 1"
+    }
+   ]
+  },
+  {
+   "text": "Кол 2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 2"
+    }
+   ]
+  },
+  {
+   "text": "Кол 3",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 3"
+    }
+   ]
+  },
+  {
+   "text": "Кол 4",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 4"
+    }
+   ]
+  },
+  {
+   "text": "Кол 5",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 5"
+    }
+   ]
+  },
+  {
+   "text": "Кол 6",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 6"
+    }
+   ]
+  },
+  {
+   "text": "Кол 7",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 7"
+    }
+   ]
+  },
+  {
+   "text": "Кол 8",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 8"
+    }
+   ]
+  },
+  {
+   "text": "Кол 9",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 9"
+    }
+   ]
+  },
+  {
+   "text": "Кол 10",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 10"
+    }
+   ]
+  },
+  {
+   "text": "Кол 11",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 11"
+    }
+   ]
+  },
+  {
+   "text": "Кол 12",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Кол 12"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "значение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "значение"
+    }
+   ]
+  },
+  {
+   "text": "10. Изображения",
+   "parts": [
+    {
+     "type": "text",
+     "text": "10. Изображения"
+    }
+   ]
+  },
+  {
+   "text": "![Картинка по ссылке-сноске][img-ref]",
+   "parts": [
+    {
+     "type": "text",
+     "text": "![Картинка по ссылке-сноске][img-ref]"
+    }
+   ]
+  },
+  {
+   "text": "[img-ref]: https://picsum.photos/200/100",
+   "parts": [
+    {
+     "type": "text",
+     "text": "[img-ref]: "
+    },
+    {
+     "type": "link",
+     "text": "https://picsum.photos/200/100",
+     "url": "https://picsum.photos/200/100"
+    }
+   ]
+  },
+  {
+   "text": "[![Картинка-ссылка](https://picsum.photos/120/60)](https://example.com)",
+   "parts": [
+    {
+     "type": "link",
+     "text": "Картинка-ссылка",
+     "url": "https://example.com"
+    }
+   ]
+  },
+  {
+   "text": "<img src=\"https://picsum.photos/100/100\" alt=\"HTML img\" width=\"100\">",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<img src=\"https://picsum.photos/100/100\" alt=\"HTML img\" width=\"100\">"
+    }
+   ]
+  },
+  {
+   "text": "11. HTML",
+   "parts": [
+    {
+     "type": "text",
+     "text": "11. HTML"
+    }
+   ]
+  },
+  {
+   "text": "<div align=\"center\">\n<b>Блок HTML</b> по центру\n</div>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<div align=\"center\">\n"
+    },
+    {
+     "type": "text",
+     "text": "Блок HTML",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " по центру\n</div>"
+    }
+   ]
+  },
+  {
+   "text": "<details>\n<summary>Раскрывающийся блок (нажми)</summary>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<details>\n<summary>Раскрывающийся блок (нажми)</summary>"
+    }
+   ]
+  },
+  {
+   "text": "Скрытое содержимое с **markdown** внутри.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Скрытое содержимое с "
+    },
+    {
+     "type": "text",
+     "text": "markdown",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": " внутри."
+    }
+   ]
+  },
+  {
+   "text": "</details>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "</details>"
+    }
+   ]
+  },
+  {
+   "text": "<table>\n<tr><th>HTML</th><th>таблица</th></tr>\n<tr><td>1</td><td>2</td></tr>\n</table>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<table>\n<tr><th>HTML</th><th>таблица</th></tr>\n<tr><td>1</td><td>2</td></tr>\n</table>"
+    }
+   ]
+  },
+  {
+   "text": "<p style=\"color: red\">Абзац с инлайн-стилем</p>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<p style=\"color: red\">Абзац с инлайн-стилем</p>"
+    }
+   ]
+  },
+  {
+   "text": "<dl>\n<dt>HTML-термин</dt>\n<dd>HTML-определение</dd>\n</dl>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<dl>\n<dt>HTML-термин</dt>\n<dd>HTML-определение</dd>\n</dl>"
+    }
+   ]
+  },
+  {
+   "text": "<script>alert(\"Если это выполнилось — ридер небезопасен (XSS)!\")</script>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<script>alert(\"Если это выполнилось — ридер небезопасен (XSS)!\")</script>"
+    }
+   ]
+  },
+  {
+   "text": "<img src=\"x\" onerror=\"alert('XSS через onerror')\">",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<img src=\"x\" onerror=\"alert('XSS через onerror')\">"
+    }
+   ]
+  },
+  {
+   "text": "[XSS-ссылка](javascript:alert('xss'))",
+   "parts": [
+    {
+     "type": "text",
+     "text": "XSS-ссылка"
+    }
+   ]
+  },
+  {
+   "text": "<iframe src=\"https://example.com\" width=\"300\" height=\"100\"></iframe>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "<iframe src=\"https://example.com\" width=\"300\" height=\"100\"></iframe>"
+    }
+   ]
+  },
+  {
+   "text": "12. Экранирование и спецсимволы",
+   "parts": [
+    {
+     "type": "text",
+     "text": "12. Экранирование и спецсимволы"
+    }
+   ]
+  },
+  {
+   "text": "\\*не курсив\\*, \\_не курсив\\_, \\`не код\\`, \\# не заголовок, \\[не ссылка\\](url)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "*не курсив*, _не курсив_, `не код`, # не заголовок, [не ссылка](url)"
+    }
+   ]
+  },
+  {
+   "text": "\\\\ обратный слэш, \\> не цитата, \\- не список, \\+ \\! \\{ \\} \\( \\) \\. \\| \\~",
+   "parts": [
+    {
+     "type": "text",
+     "text": "\\ обратный слэш, > не цитата, - не список, + ! { } ( ) . | ~"
+    }
+   ]
+  },
+  {
+   "text": "HTML-сущности: &copy; &reg; &trade; &amp; &lt; &gt; &quot; &nbsp; &mdash; &ndash; &hellip; &#8364; &#x1F600;",
+   "parts": [
+    {
+     "type": "text",
+     "text": "HTML-сущности: © ® ™ & < > \"   — – … € 😀"
+    }
+   ]
+  },
+  {
+   "text": "Сырые символы: < > & \" ' — должны отображаться как есть: a < b && c > d",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Сырые символы: < > & \" ' — должны отображаться как есть: a < b && c > d"
+    }
+   ]
+  },
+  {
+   "text": "Типографика: \"прямые кавычки\", 'одинарные', -- двойной дефис, --- тройной, ... многоточие, (c) (r) (tm) +-",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Типографика: \"прямые кавычки\", 'одинарные', -- двойной дефис, --- тройной, ... многоточие, (c) (r) (tm) +-"
+    }
+   ]
+  },
+  {
+   "text": "Неразрывный пробел и табуляция:    ←таб→    (внутри текста)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Неразрывный пробел и табуляция:    ←таб→    (внутри текста)"
+    }
+   ]
+  },
+  {
+   "text": "13. Сноски",
+   "parts": [
+    {
+     "type": "text",
+     "text": "13. Сноски"
+    }
+   ]
+  },
+  {
+   "text": "Текст со сноской[^1] и ещё одной[^note]. Повторное использование сноски[^1].",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Текст со сноской[^1] и ещё одной[^note]. Повторное использование сноски[^1]."
+    }
+   ]
+  },
+  {
+   "text": "Встроенная сноска^[Это inline-сноска (Pandoc).].",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Встроенная сноска^[Это inline-сноска (Pandoc).]."
+    }
+   ]
+  },
+  {
+   "text": "[^1]: Текст первой сноски.\n[^note]: Многоабзацная сноска.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "[^1]: Текст первой сноски.\n[^note]: Многоабзацная сноска."
+    }
+   ]
+  },
+  {
+   "text": "14. Списки определений (расширение)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "14. Списки определений (расширение)"
+    }
+   ]
+  },
+  {
+   "text": "Термин 1\n: Определение первого термина.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Термин 1\n: Определение первого термина."
+    }
+   ]
+  },
+  {
+   "text": "Термин 2\n: Первое определение второго термина.\n: Второе определение второго термина.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Термин 2\n: Первое определение второго термина.\n: Второе определение второго термина."
+    }
+   ]
+  },
+  {
+   "text": "15. Аббревиатуры (расширение)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "15. Аббревиатуры (расширение)"
+    }
+   ]
+  },
+  {
+   "text": "HTML и CSS используются в вебе.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "HTML и CSS используются в вебе."
+    }
+   ]
+  },
+  {
+   "text": "*[HTML]: HyperText Markup Language\n*[CSS]: Cascading Style Sheets",
+   "parts": [
+    {
+     "type": "text",
+     "text": "*[HTML]: HyperText Markup Language\n*[CSS]: Cascading Style Sheets"
+    }
+   ]
+  },
+  {
+   "text": "16. Предупреждения / Callouts",
+   "parts": [
+    {
+     "type": "text",
+     "text": "16. Предупреждения / Callouts"
+    }
+   ]
+  },
+  {
+   "text": "GitHub alerts:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "GitHub alerts:"
+    }
+   ]
+  },
+  {
+   "text": "Полезная информация.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Полезная информация."
+    }
+   ]
+  },
+  {
+   "text": "Совет.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Совет."
+    }
+   ]
+  },
+  {
+   "text": "Важно.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Важно."
+    }
+   ]
+  },
+  {
+   "text": "Предупреждение.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Предупреждение."
+    }
+   ]
+  },
+  {
+   "text": "Осторожно.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Осторожно."
+    }
+   ]
+  },
+  {
+   "text": "Obsidian callout со сворачиванием:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Obsidian callout со сворачиванием:"
+    }
+   ]
+  },
+  {
+   "text": "Свёрнутый callout с заголовком",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Свёрнутый callout с заголовком"
+    }
+   ]
+  },
+  {
+   "text": "Содержимое скрыто по умолчанию.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Содержимое скрыто по умолчанию."
+    }
+   ]
+  },
+  {
+   "text": "MkDocs / Python-Markdown admonition:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "MkDocs / Python-Markdown admonition:"
+    }
+   ]
+  },
+  {
+   "text": "!!! note \"Заголовок заметки\"\nТекст внутри admonition.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "!!! note \"Заголовок заметки\"\nТекст внутри admonition."
+    }
+   ]
+  },
+  {
+   "text": "Container (markdown-it-container / VuePress):",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Container (markdown-it-container / VuePress):"
+    }
+   ]
+  },
+  {
+   "text": "::: warning\nКонтейнер-предупреждение\n:::",
+   "parts": [
+    {
+     "type": "text",
+     "text": "::: warning\nКонтейнер-предупреждение\n:::"
+    }
+   ]
+  },
+  {
+   "text": "17. Математика (LaTeX)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "17. Математика (LaTeX)"
+    }
+   ]
+  },
+  {
+   "text": "Встроенная формула: $E = mc^2$, и ещё $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Встроенная формула: $E = mc^2$, и ещё $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$."
+    }
+   ]
+  },
+  {
+   "text": "Блочная формула:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Блочная формула:"
+    }
+   ]
+  },
+  {
+   "text": "$$\n\\int_{-\\infty}^{+\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}\n$$",
+   "parts": [
+    {
+     "type": "text",
+     "text": "$$\n\\int_{-\\infty}^{+\\infty} e^{-x^2},dx = \\sqrt{\\pi}\n$$"
+    }
+   ]
+  },
+  {
+   "text": "$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\\\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax + by \\\\ cx + dy \\end{pmatrix}\n$$",
+   "parts": [
+    {
+     "type": "text",
+     "text": "$$\n\\begin{pmatrix} a & b \\ c & d \\end{pmatrix}\n\\begin{pmatrix} x \\ y \\end{pmatrix}\n=\n\\begin{pmatrix} ax + by \\ cx + dy \\end{pmatrix}\n$$"
+    }
+   ]
+  },
+  {
+   "text": "GitHub-стиль: $`\\alpha + \\beta`$",
+   "parts": [
+    {
+     "type": "text",
+     "text": "GitHub-стиль: $"
+    },
+    {
+     "type": "text",
+     "text": "\\alpha + \\beta",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": "$"
+    }
+   ]
+  },
+  {
+   "text": "Доллар не как формула: цена $5 и $10.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Доллар не как формула: цена $5 и $10."
+    }
+   ]
+  },
+  {
+   "text": "18. Диаграммы",
+   "parts": [
+    {
+     "type": "text",
+     "text": "18. Диаграммы"
+    }
+   ]
+  },
+  {
+   "text": "19. Эмодзи и Unicode",
+   "parts": [
+    {
+     "type": "text",
+     "text": "19. Эмодзи и Unicode"
+    }
+   ]
+  },
+  {
+   "text": "Шорткоды: :smile: :rocket: :+1: :warning: :heart:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Шорткоды: :smile: :rocket: :+1: :warning: :heart:"
+    }
+   ]
+  },
+  {
+   "text": "Напрямую: 😀 🚀 👍 ⚠️ ❤️ 🇷🇺 👨‍👩‍👧‍👦 (составной эмодзи)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Напрямую: 😀 🚀 👍 ⚠️ ❤️ 🇷🇺 👨‍👩‍👧‍👦 (составной эмодзи)"
+    }
+   ]
+  },
+  {
+   "text": "Разные письменности: English, Русский, Ελληνικά, 中文, 日本語, 한국어, עברית, العربية, हिन्दी",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Разные письменности: English, Русский, Ελληνικά, 中文, 日本語, 한국어, עברית, العربية, हिन्दी"
+    }
+   ]
+  },
+  {
+   "text": "RTL-текст: مرحبا بالعالم — שלום עולם",
+   "parts": [
+    {
+     "type": "text",
+     "text": "RTL-текст: مرحبا بالعالم — שלום עולם"
+    }
+   ]
+  },
+  {
+   "text": "Комбинирующие символы: é (e + ́), Z̤͔ͧ̑̓ä͖̭̈̇lͮ̒ͫǧ̗͚̚o̙̔ͮ̇͐̇",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Комбинирующие символы: é (e + ́), Z̤͔ͧ̑̓ä͖̭̈̇lͮ̒ͫǧ̗͚̚o̙̔ͮ̇͐̇"
+    }
+   ]
+  },
+  {
+   "text": "Математические символы: ∀x ∈ ℝ, ∃y: x² + y² ≤ r², ∞, ≠, ≈, √, ∑, ∫",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Математические символы: ∀x ∈ ℝ, ∃y: x² + y² ≤ r², ∞, ≠, ≈, √, ∑, ∫"
+    }
+   ]
+  },
+  {
+   "text": "Псевдографика:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Псевдографика:"
+    }
+   ]
+  },
+  {
+   "text": "20. Прочие расширения",
+   "parts": [
+    {
+     "type": "text",
+     "text": "20. Прочие расширения"
+    }
+   ]
+  },
+  {
+   "text": "Теги (Obsidian): #тег #вложенный/тег",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Теги (Obsidian): "
+    },
+    {
+     "type": "tag",
+     "text": "#тег"
+    },
+    {
+     "type": "text",
+     "text": " "
+    },
+    {
+     "type": "tag",
+     "text": "#вложенный/тег"
+    }
+   ]
+  },
+  {
+   "text": "Встраивание (Obsidian): ![[Другая заметка]]",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Встраивание (Obsidian): "
+    },
+    {
+     "type": "note",
+     "text": "Другая заметка",
+     "target": "Другая заметка"
+    }
+   ]
+  },
+  {
+   "text": "Комментарий Obsidian: %%этого не должно быть видно%%",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Комментарий Obsidian: "
+    }
+   ]
+  },
+  {
+   "text": "Атрибуты (kramdown/markdown-it-attrs): **жирный**{.class #id style=\"color:blue\"}",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Атрибуты (kramdown/markdown-it-attrs): "
+    },
+    {
+     "type": "text",
+     "text": "жирный",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": "{.class "
+    },
+    {
+     "type": "tag",
+     "text": "#id"
+    },
+    {
+     "type": "text",
+     "text": " style=\"color:blue\"}"
+    }
+   ]
+  },
+  {
+   "text": "Упоминания и ссылки GitHub: @username, #123, user/repo#456, коммит a1b2c3d",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Упоминания и ссылки GitHub: @username, #123, user/repo#456, коммит a1b2c3d"
+    }
+   ]
+  },
+  {
+   "text": "Клавиши: <kbd>Super</kbd> + <kbd>K</kbd>",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Клавиши: "
+    },
+    {
+     "type": "text",
+     "text": "Super",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": " + "
+    },
+    {
+     "type": "text",
+     "text": "K",
+     "style": 128
+    }
+   ]
+  },
+  {
+   "text": "Строка с [ ] квадратными скобками, но не ссылка, и [x] не задача вне списка.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Строка с [ ] квадратными скобками, но не ссылка, и [x] не задача вне списка."
+    }
+   ]
+  },
+  {
+   "text": "21. Вложенность «всё во всём»",
+   "parts": [
+    {
+     "type": "text",
+     "text": "21. Вложенность «всё во всём»"
+    }
+   ]
+  },
+  {
+   "text": "Пункт списка",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Пункт списка"
+    }
+   ]
+  },
+  {
+   "text": "Цитата в пункте",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Цитата в пункте"
+    }
+   ]
+  },
+  {
+   "text": "Таблица",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Таблица"
+    }
+   ]
+  },
+  {
+   "text": "в цитате",
+   "parts": [
+    {
+     "type": "text",
+     "text": "в цитате"
+    }
+   ]
+  },
+  {
+   "text": "1",
+   "parts": [
+    {
+     "type": "text",
+     "text": "1"
+    }
+   ]
+  },
+  {
+   "text": "2",
+   "parts": [
+    {
+     "type": "text",
+     "text": "2"
+    }
+   ]
+  },
+  {
+   "text": "задача в цитате в списке",
+   "parts": [
+    {
+     "type": "text",
+     "text": "задача в цитате в списке"
+    }
+   ]
+  },
+  {
+   "text": "Второй пункт с формулой $a^2+b^2=c^2$ и сноской[^1].",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Второй пункт с формулой $a^2+b^2=c^2$ и сноской[^1]."
+    }
+   ]
+  },
+  {
+   "text": "список",
+   "parts": [
+    {
+     "type": "text",
+     "text": "список"
+    }
+   ]
+  },
+  {
+   "text": "вложенная цитата в списке в цитате",
+   "parts": [
+    {
+     "type": "text",
+     "text": "вложенная цитата в списке в цитате"
+    }
+   ]
+  },
+  {
+   "text": "нумерованный ещё глубже",
+   "parts": [
+    {
+     "type": "text",
+     "text": "нумерованный ещё глубже"
+    }
+   ]
+  },
+  {
+   "text": "и ещё глубже: `код`, **жирный**, [ссылка](#)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "и ещё глубже: "
+    },
+    {
+     "type": "text",
+     "text": "код",
+     "style": 128
+    },
+    {
+     "type": "text",
+     "text": ", "
+    },
+    {
+     "type": "text",
+     "text": "жирный",
+     "style": 1
+    },
+    {
+     "type": "text",
+     "text": ", ссылка"
+    }
+   ]
+  },
+  {
+   "text": "22. Граничные случаи парсинга",
+   "parts": [
+    {
+     "type": "text",
+     "text": "22. Граничные случаи парсинга"
+    }
+   ]
+  },
+  {
+   "text": "Пустой блок кода:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Пустой блок кода:"
+    }
+   ]
+  },
+  {
+   "text": "Незакрытый `инлайн-код",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Незакрытый `инлайн-код"
+    }
+   ]
+  },
+  {
+   "text": "Незакрытое **жирное выделение",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Незакрытое **жирное выделение"
+    }
+   ]
+  },
+  {
+   "text": "Незакрытая [ссылка(https://example.com)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Незакрытая [ссылка("
+    },
+    {
+     "type": "link",
+     "text": "https://example.com",
+     "url": "https://example.com"
+    },
+    {
+     "type": "text",
+     "text": ")"
+    }
+   ]
+  },
+  {
+   "text": "Абзац сразу после списка:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Абзац сразу после списка:"
+    }
+   ]
+  },
+  {
+   "text": "пункт\nТекст, который может «прилипнуть» к пункту (ленивое продолжение).",
+   "parts": [
+    {
+     "type": "text",
+     "text": "пункт\nТекст, который может «прилипнуть» к пункту (ленивое продолжение)."
+    }
+   ]
+  },
+  {
+   "text": "Строка из одних пробелов ниже:",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Строка из одних пробелов ниже:"
+    }
+   ]
+  },
+  {
+   "text": "Конец пробельной строки.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Конец пробельной строки."
+    }
+   ]
+  },
+  {
+   "text": "Абзац с 3 пробелами отступа (ещё не код)",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Абзац с 3 пробелами отступа (ещё не код)"
+    }
+   ]
+  },
+  {
+   "text": "Последняя строка файла без перевода строки в конце.",
+   "parts": [
+    {
+     "type": "text",
+     "text": "Последняя строка файла без перевода строки в конце."
+    }
+   ]
+  }
+ ]
+}

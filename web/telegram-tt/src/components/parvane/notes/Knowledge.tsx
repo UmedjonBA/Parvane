@@ -632,6 +632,9 @@ const Knowledge = () => {
   const isList = view === 'notes';
   const isNoteShown = isList && Boolean(openNote);
   const isNoteAlone = isNarrow && isNoteShown;
+  // Правка заметки на широком экране: список и «Связи» убраны, место — редактору и просмотру
+  const [isNoteEditing, setIsNoteEditing] = useState(false);
+  const isEditFocus = isNoteEditing && !isNarrow;
   const openFolder = openNote && (openNote.isDaily ? lang('KnowledgeDailyFolder') : folderCaption(openNote.folder));
   const isGuideNew = Boolean(guideOverview) && !hasSeenGuide && !found;
 
@@ -919,9 +922,9 @@ const Knowledge = () => {
               searchStep={searchStep}
             />
           ) : (
-            <div className={styles.layout}>
-              {!isNoteAlone && renderList()}
-              {!isNoteAlone && !isNarrow && (
+            <div className={buildClassName(styles.layout, isEditFocus && styles.layoutFocus)}>
+              {!isNoteAlone && !isEditFocus && renderList()}
+              {!isNoteAlone && !isNarrow && !isEditFocus && (
                 <PvResizer
                   panel="notes-list"
                   edge="end"
@@ -946,6 +949,7 @@ const Knowledge = () => {
                       onRename={handleRename}
                       onDelete={handleDelete}
                       onPickFolder={handleAskMove}
+                      onEditingChange={setIsNoteEditing}
                     />
                   ) : (
                     <p className={styles.pickNote}>
@@ -978,7 +982,7 @@ const Knowledge = () => {
           )}
         </div>
       </div>
-      {hasSide && isNoteShown && openNote && (
+      {hasSide && isNoteShown && openNote && !isEditFocus && (
         <aside className={buildClassName(kit.island, styles.side)} aria-label={lang('KnowledgeLinks')}>
           <PvResizer panel="notes-links" edge="start" min={NOTES_LINKS_MIN} max={NOTES_LINKS_MAX} />
           <header className={kit.hdr}>

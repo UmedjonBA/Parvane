@@ -2967,7 +2967,7 @@ describe('READ-2: прочитанное на одном своём устрой
     expect(history).toContain('(void)h->sync->advanceMark(best, /*own=*/false);');
     // Своё сообщение с любого своего устройства сдвигает маркер — счётчик заново
     expect(history)
-      .toContain('if (h->sync->isSelf(from)) emit(readStateEvent(*h, chat, view.value("chatKey", std::string())));');
+      .toContain('if (h->sync->isSelf(from)) emit(readStateEvent(*h, chat, strOf(view, "chatKey")));');
     // Счётчик — readState ядра (historyIsUnread), шов выставляет его заново, а не прибавляет
     expect(history).toContain('const auto rs = h.sync->readState(');
     const client = readAndroidKt('Client.kt');
@@ -2978,5 +2978,25 @@ describe('READ-2: прочитанное на одном своём устрой
     expect(readRepo('android/libtd/src/test/java/org/drinkless/tdlib/ParvaneStoreHistoryTest.kt'))
       .toContain('fun readStateFromMarkerSetsCountAndBoundary()');
     expect(String(rule('READ-2').clients!.android)).not.toContain('ОТКРЫТО');
+  });
+});
+
+// MD-1 (6 ноя 2026): разбор Markdown заметок и статей один — web и порт в ядре (desktop, android через JNI)
+describe('conformance MD-1: общий разбор Markdown', () => {
+  it('образец и ответ на месте; ядро сверяет тот же файл', () => {
+    expect(rule('MD-1').clients).toBeDefined();
+    expect(readRepo('conformance/markdown/all-constructs.md')).toContain('## 21. Вложенность «всё во всём»');
+    expect(JSON.parse(readRepo('conformance/markdown/all-constructs.expected.json')).blocks.length).toBeGreaterThan(100);
+    expect(readRepo('desktop/parvane-core/tests/sections/markdown_tests.cpp'))
+      .toContain('all-constructs.expected.json');
+  });
+  it('desktop и android показывают блоки ядра, своего разбора нет', () => {
+    expect(readRepo('desktop/tdesktop/Telegram/SourceFiles/parvane/parvane_note_view.cpp'))
+      .toContain('md::parseMarkdown(');
+    expect(readRepo('android/jni/jni_sections.cpp')).toContain('Java_org_parvane_core_ParvaneSections_nativeMarkdown');
+    const overlay = 'android/tgx-overlay/app/src/main/java/org/thunderdog/challegram/parvane/sections/';
+    expect(readRepo(`${overlay}NoteMarkdown.kt`)).toContain('ParvaneSections.markdown(text, title)');
+    // Прежний разбор Kotlin регулярками не вернулся
+    expect(readRepo(`${overlay}NoteText.kt`)).not.toMatch(/fun render\(|fun parts\(/);
   });
 });

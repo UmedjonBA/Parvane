@@ -1660,6 +1660,16 @@
         "desktop": "desktop/parvane-core/include/parvane/poll.h (isAnonymousGroup, routeVote, readTally, tallyContent), src/v2_content.cpp (poll_vote tally); tdesktop parvane_client.cpp (RoutePollVote, SchedulePollTally, handlePollService, MirrorPollVotes)",
         "android": "android/libtd/src/main/java/org/drinkless/tdlib/PollStore.kt (route, applyTally, tallyToPublish), Client.kt (onPollService, pollVote, scheduleTally), ParvaneStore.kt (polls.register)"
       }
+    },
+    {
+      "id": "MD-1",
+      "title": "Разбор Markdown заметок и статей — один на всех клиентах; сверка по общему образцу conformance/markdown",
+      "fixture": "conformance/markdown/all-constructs.md",
+      "clients": {
+        "web": "web/telegram-tt/src/components/parvane/markdown/markdown.ts (разбор), MarkdownBlocks.tsx (показ); тест markdown.test.ts пишет all-constructs.expected.json",
+        "desktop": "desktop/parvane-core/src/sections/markdown.cpp (порт web); тест tests/sections/markdown_tests.cpp сверяет образец; показ tdesktop/Telegram/SourceFiles/parvane/parvane_note_markdown.cpp",
+        "android": "android/jni/jni_sections.cpp nativeMarkdown (разбор ядра) → tgx-overlay/.../parvane/sections/NoteMarkdown.kt (только показ)"
+      }
     }
   ]
 }

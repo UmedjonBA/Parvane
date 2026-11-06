@@ -4208,3 +4208,11 @@
 "ParvaneExportHtmlExportedAt" = "Exported";
 "ParvaneExportHtmlPrivacyOn" = "enabled enhanced privacy";
 "ParvaneExportHtmlPrivacyOff" = "disabled enhanced privacy";
+"MdCalloutNote" = "Note";
+"MdCalloutTip" = "Tip";
+"MdCalloutImportant" = "Important";
+"MdCalloutWarning" = "Warning";
+"MdCalloutCaution" = "Caution";
+"KnowledgePreviewShow" = "Show preview";
+"KnowledgePreviewHide" = "Back to editor";
+"KnowledgePreviewTitle" = "Preview";

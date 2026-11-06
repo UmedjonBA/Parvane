@@ -139,6 +139,8 @@ log "Task offer in chat e2e (spec 011, TASK-1)"
 
 log "Article in chat e2e (ARTICLE-1)"
 "$ROOT/scripts/run_web_article_e2e.sh"
+log "Markdown in notes e2e (MD-1)"
+"$ROOT/scripts/run_web_markdown_e2e.sh"
 
 log "Offline device catch-up e2e (conformance: device was absent)"
 "$ROOT/scripts/run_web_offline_device_e2e.sh"

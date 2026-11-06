@@ -203,6 +203,10 @@
   }
 }
 
+.layoutFocus {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 // Ручка ширины списка лежит рядом с ним (сам список прокручивается), на его правой границе
 .listResizer {
   inset-inline-start: calc(var(--pv-panel-notes-list, 20rem) - 0.3125rem);
@@ -377,6 +381,8 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  // Заметка не короче области прокрутки: кнопка «правка ↔ просмотр» у её конца стоит у низа экрана
+  min-height: 100%;
 }
 
 // Шапка заметки на узком экране: папка и кнопка правки; остаётся на месте при прокрутке
@@ -2143,4 +2149,111 @@
 
 .hiddenInput {
   display: none;
+}
+
+// Правка заметки: слева текст `.md`, справа живой просмотр (на узком экране — одно окно и кнопка-переключатель)
+.editSplit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+  align-self: stretch;
+}
+
+.editSplitCompact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.editSplitCompact > * {
+  width: 100%;
+}
+
+.editPane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.editSplit .editor {
+  resize: vertical;
+  min-height: calc(100vh - 16rem);
+}
+
+.editSplitCompact .editor {
+  min-height: calc(100vh - 14rem);
+}
+
+.previewPane {
+  position: sticky;
+  top: 0;
+
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+
+  min-width: 0;
+  max-height: calc(100vh - 6rem);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.5rem;
+}
+
+.editSplitCompact .previewPane {
+  position: static;
+
+  overflow: visible;
+
+  max-height: none;
+  padding: 0;
+  border: none;
+}
+
+.previewLabel {
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-semibold);
+  color: var(--pv-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+// Кнопка «правка ↔ просмотр» прилипает к низу видимой части при любой прокрутке: последний элемент заметки
+// (её высота — вся прокрутка) с `position: sticky` (fixed ломается внутри предков с `transform`)
+.previewToggleDock {
+  position: sticky;
+  z-index: 3;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+
+  display: flex;
+  justify-content: flex-end;
+
+  height: 0;
+  margin-top: auto;
+}
+
+.previewToggle {
+  cursor: var(--custom-cursor, pointer);
+
+  transform: translateY(-100%);
+
+  display: grid;
+  place-items: center;
+
+  width: 3rem;
+  height: 3rem;
+  border: none;
+  border-radius: 50%;
+
+  color: var(--pv-accent-ink);
+
+  background: var(--pv-accent);
+  box-shadow: 0 0.25rem 0.75rem rgb(0 0 0 / 30%);
+
+  &:focus-visible {
+    outline: 2px solid var(--pv-fg);
+    outline-offset: 2px;
+  }
 }
