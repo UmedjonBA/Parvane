@@ -43,7 +43,7 @@ void emitOwn(const std::string &id, const std::string &to, const json &content, 
     noteMessage(id, self(), to, content);
     const auto ms = nowMs();
     auto ev = json{{"type", "message"}, {"id", id}, {"from", self()}, {"to", to}, {"ts", ms / 1000},
-                   {"text", content.value("text", content.value("caption", std::string()))}, {"out", true},
+                   {"text", textOrCaption(content)}, {"out", true},
                    {"kind", parvane::contentKind(content)}, {"read", false}, {"content", content},
                    {"reply_to", replyTo.empty() ? json() : json(replyTo)}, {"group", isGroupAddress(to)}, {"proto", 2}};
     (void)historyRecordMessageEvent(ev, /*own=*/true, ms);
@@ -326,8 +326,8 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeEdit(JNIEnv *
         if (parvane::contentKind(content) == "location") {
             if (const auto m = parvane::v2::toV2(content)) edit["location"] = (*m)["location"];
         } else {
-            const auto text = parvane::contentKind(content) == "text" ? content.value("text", std::string())
-                                                                      : content.value("caption", std::string());
+            const auto text = parvane::contentKind(content) == "text" ? strOf(content, "text")
+                                                                      : strOf(content, "caption");
             if (const auto m = parvane::v2::toV2(parvane::textContent(text, parvane::contentEntities(content)))) edit["text"] = (*m)["text"];
         }
         updateMessageContent(id, content);

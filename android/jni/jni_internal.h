@@ -37,6 +37,19 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "parvane", __VA_ARGS__)
 
 namespace pvjni {
+// Поле строкой либо пусто: `json::value(k, std::string())` бросает type_error, если поле есть, но null/не строка.
+// Строки истории и сообщения других клиентов несут `"caption": null` — 5 ноя 2026 это роняло X (SIGABRT на parvane-io).
+inline std::string strOf(const nlohmann::json &o, const char *key) {
+    if (!o.is_object()) return {};
+    const auto it = o.find(key);
+    return (it != o.end() && it->is_string()) ? it->get<std::string>() : std::string();
+}
+// Текст сообщения для списка и уведомлений: `text`, иначе подпись медиа
+inline std::string textOrCaption(const nlohmann::json &content) {
+    auto t = strOf(content, "text");
+    return t.empty() ? strOf(content, "caption") : t;
+}
+
 // Фоновая задача JNI: исключение из ядра не уходит в std::terminate (SIGABRT всего приложения), а пишется в журнал.
 template <typename F> void runDetached(F &&fn) {
     std::thread([fn = std::forward<F>(fn)]() mutable {

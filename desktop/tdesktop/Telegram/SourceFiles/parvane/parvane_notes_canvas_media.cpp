@@ -189,7 +189,18 @@ QImage Thumb(const std::string &container, const cloud::CloudNode &node) {
 		return QImage();
 	}
 	s.thumbsLoading.insert(key);
-	ReadImage(container, node.id, *node.thumb, kThumbMaxSide, cloud::kThumbMaxBytes, [key](QImage image) {
+	// Миниатюра зашифрована ключом ФАЙЛА со своим nonce (как ядро `CloudFiles::thumb`, web `parvaneCloudThumb`): в её
+	// описании ключа нет — без него расшифровка проваливалась, и desktop не показывал ни одной миниатюры облака
+	// (видео в заметке оставалось карточкой, 5 ноя 2026)
+	auto ref = *node.thumb;
+	if (node.blob && node.blob->is_object()) {
+		for (const auto field : { "key", "uploader", "domain" }) {
+			if (!ref.contains(field) && node.blob->contains(field)) {
+				ref[field] = (*node.blob)[field];
+			}
+		}
+	}
+	ReadImage(container, node.id, ref, kThumbMaxSide, cloud::kThumbMaxBytes, [key](QImage image) {
 		auto &s = S();
 		s.thumbsLoading.erase(key);
 		if (image.isNull()) {

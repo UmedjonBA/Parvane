@@ -4511,7 +4511,7 @@ void MirrorOutgoingSticker(PeerData *peer, DocumentData *document) {
 			AttachBlobCap(content, fileId);
 			if (kind == "gif") {
 				content["duration_secs"] = durationSecs;
-				content["caption"] = parvane::json(nullptr);
+				// Подписи у GIF нет — поле не пишется: `"caption": null` ронял Android при реплее истории (5 ноя 2026)
 			}
 			if (!alt.empty()) {
 				// alt-эмодзи → filename (buildLocalMtpDocument кладёт его в

@@ -451,7 +451,7 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeCheckModReport
                 const auto row = messageRow(opId);
                 if (!row) return std::nullopt;
                 return parvane::v2::ReportLocalMessage{row->chat, row->from,
-                                                        row->content.value("text", row->content.value("caption", std::string()))};
+                                                        textOrCaption(row->content)};
             },
             // Сообщения нет в своей истории — подпись автора из жалобы (A0008-2)
             [](const std::string &opId, const std::string &author, const std::string &text, const std::string &groupHex,
