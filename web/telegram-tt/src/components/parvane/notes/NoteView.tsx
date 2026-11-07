@@ -335,20 +335,34 @@ const NoteView = ({
       data-note-id={note.id}
       data-note-title={note.title}
     >
-      {onBack && (
-        <header className={buildClassName(kit.hdr, styles.noteBar)}>
-          <h1 className={buildClassName(kit.hdrSmall, kit.muted, kit.grow)}>{folderName}</h1>
+      {/* Шапка закреплена сверху: «Изменить» и «Запланировать» не нужно искать в конце длинной заметки */}
+      <header className={buildClassName(kit.hdr, styles.noteBar)} data-note-bar>
+        {/* На широком экране папка уже в строке «Знаний» — здесь только кнопки */}
+        <h1 className={buildClassName(kit.hdrSmall, kit.muted, kit.grow)}>{isCompact ? folderName : undefined}</h1>
+        {!isEditing && !isDaily && (
           <button
             type="button"
             className={kit.ib}
-            aria-label={lang(isEditing ? 'KnowledgeSave' : 'KnowledgeEdit')}
-            disabled={isSaving}
-            onClick={isEditing ? handleSave : handleEdit}
+            aria-label={lang('KnowledgePlan')}
+            title={lang('KnowledgePlan')}
+            data-note-bar-plan
+            onClick={handlePlan}
           >
-            <PvIcon name={isEditing ? 'check' : 'edit'} />
+            <PvIcon name="cal" />
           </button>
-        </header>
-      )}
+        )}
+        <button
+          type="button"
+          className={kit.ib}
+          aria-label={lang(isEditing ? 'KnowledgeSave' : 'KnowledgeEdit')}
+          title={lang(isEditing ? 'KnowledgeSave' : 'KnowledgeEdit')}
+          disabled={isSaving}
+          data-note-bar-edit
+          onClick={isEditing ? handleSave : handleEdit}
+        >
+          <PvIcon name={isEditing ? 'check' : 'edit'} />
+        </button>
+      </header>
       <div className={styles.noteBody}>
         {onBack && (
           <button

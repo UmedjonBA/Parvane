@@ -1,5 +1,8 @@
 // Текст заметки и статьи (этап 6 плана 15 окт 2026): тона пространства Parvane (`--pv-*`)
 .root {
+  // Текст можно выделить и скопировать (страница Telegram Web выделение запрещает, как и у текста сообщений)
+  user-select: text;
+
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -157,11 +160,54 @@
 .codeLang {
   position: absolute;
   inset-block-start: 0.25rem;
-  inset-inline-end: 0.5rem;
+  inset-inline-start: 0.75rem;
 
   font-family: var(--font-family-monospace);
   font-size: 0.6875rem;
   color: var(--pv-faint);
+}
+
+.codeCopy {
+  cursor: pointer;
+
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 0.375rem;
+  inset-inline-end: 0.375rem;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--pv-line);
+  border-radius: 0.375rem;
+
+  font-size: 1rem;
+  color: var(--pv-muted);
+
+  opacity: 0;
+  background: var(--pv-panel);
+
+  transition: opacity 0.15s;
+}
+
+.codeBlock:hover .codeCopy,
+.codeCopy:focus-visible {
+  opacity: 1;
+}
+
+.codeCopy:hover {
+  color: var(--pv-fg);
+}
+
+// Касание без наведения (телефон): кнопка видна всегда
+@media (hover: none) {
+  .codeCopy {
+    opacity: 1;
+  }
 }
 
 .codeBlock:has(.codeLang) .pre {

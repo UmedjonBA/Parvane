@@ -21,6 +21,13 @@ function buildExpected(markdown: string) {
 }
 
 describe('markdown', () => {
+  it('строка, начатая табуляцией, — код (табуляция до 4 колонок, как в CommonMark); в списке — уровень', () => {
+    const blocks = parseMarkdown('абзац\n\n\tкод с табуляцией\n\n- пункт\n\t- вложенный');
+    expect(blocks.map((b) => b.type)).toEqual(['paragraph', 'code', 'list']);
+    expect(blocks[1].type === 'code' && blocks[1].text).toBe('код с табуляцией');
+    expect(blocks[2].type === 'list' && blocks[2].items.map((item) => item.depth)).toEqual([0, 1]);
+  });
+
   it('блоки: заголовок-название пропускается, списки, цитата, код, встроенный файл; номера строк — исходные', () => {
     const text = [
       '---', 'tags: [a]', '---',

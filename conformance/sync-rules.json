@@ -1582,6 +1582,19 @@
       }
     },
     {
+      "id": "GIF-1",
+      "title": "Свои GIF — на всех своих устройствах (журнал личного состояния, вид packs, ключ g:<sha256>)",
+      "kind": "packs",
+      "record": "state.v1 sticker_pack_set/sticker_pack_remove; set_id g:<sha256 файла hex>, ref — ссылка на сам файл GIF (file_id, key/nonce, capability, blob_domain, name с расширением, count 1, content_hash = sha256), emoji false, added_ms",
+      "behaviour": "«Сохранить в GIF» из чата — ссылка из сообщения без повторной загрузки; «Загрузить GIF» из файла — загрузка как вложение (CAP-1); удаление — sticker_pack_remove; другие свои устройства скачивают файл, сверяют sha256 и добавляют в сохранённые GIF; записи g: — не наборы стикеров",
+      "status": "7 ноя 2026: web (savedGifJournal.test.ts, сторож conformance), desktop, android (PackJournalTest) — сделано",
+      "clients": {
+        "web": "web/telegram-tt/src/api/parvane/savedGifJournal.ts (buildGifJournalKey, splitJournalPacks, verifyGifBytes, buildGifJournalEntry, parseGifJournalEntry), provider.ts (saveGif, parvaneUploadGif → uploadSavedGif, recordSavedGif, forgetSavedGifRecord, applyJournalStickerPacks → applyJournalGifs/fetchJournalGif, syncSavedGifs — перенос сохранённых до правила один раз на устройство), messages.ts (rememberSavedGif/forgetSavedGif/findSavedGifByHash), gifs.ts (SavedGifRecord: mimeType, sha256, blobDomain, capability; convertGifToWebm), components/middle/composer/GifPicker.tsx («Загрузить GIF»), global/actions/apiUpdaters/symbols.ts (updateSavedGifs); тест savedGifJournal.test.ts, сторож conformance.test.ts (GIF-1)",
+        "desktop": "tdesktop parvane_client.cpp (NoteGifRef — ссылка и sha256 GIF из чата в pumpMediaDownload; ToggleSavedGif → RecordSavedGif/ForgetSavedGif; InstallSavedGifFromJournal — скачать, сверить sha256, в Saved GIFs; RemoveSavedGifFromJournal; AddSavedGifFromFile — «Добавить GIF из файла» в «Стикеры и эмодзи»), parvane_client_state.cpp (RecordSavedGif, ForgetSavedGif; InstallMissingStickerPacks/ProjectStickerPacks отделяют записи g: от наборов)",
+        "android": "android/libtd/src/main/java/org/drinkless/tdlib/PackJournal.kt (recordGif/forgetGif: запись g:<sha256 hex>, ref на сам файл — count 1, content_hash = base64 sha256; project отделяет записи g: от наборов — Projection.gifs/gifsRemoved), Stickers.kt (addSavedAnimation — «Сохранить в GIF» X: ссылка из сообщения ParvaneStore.contentByFileId без повторной загрузки, sha256 по рабочей копии либо ядром; removeSavedAnimation — запись снимается (sticker_pack_remove); applyJournal → applyJournalGifs: скачать по ссылке, сверить sha256, добавить в сохранённые, снятые убрать, неудачные — retryPendingGifs), android/jni/jni_messages.cpp nativeGifFetch (кэш устройства либо блоб по секрету CAP-1 и домену FED-1, sha256 сверяется до кэша; ParvaneCore.gifFetch); тесты PackJournalTest (savedGifSyncsAsFileNotStickerPack, journalGifWithWrongHashOrOfflineIsNotAdded, gifRecordKeyAndRefShape). «Загрузить GIF» из файла в X нет"
+      }
+    },
+    {
       "id": "CALL-2",
       "title": "Приглашение в групповой звонок несёт ссылку на группу и её название; известная группа — своё название, неизвестная — из приглашения",
       "fields": {

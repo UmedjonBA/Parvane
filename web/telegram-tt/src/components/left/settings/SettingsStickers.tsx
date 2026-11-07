@@ -90,7 +90,8 @@ const SettingsStickers: FC<OwnProps & StateProps> = ({
   }, [lang, showNotification]);
 
   const handleCreatePackClick = useCallback(() => {
-    openSystemFilesDialog('.webp,.png,.tgs,.webm', (e) => {
+    // Любая картинка: JPG и прочие провайдер приводит к стикеру (WebP 512 px)
+    openSystemFilesDialog('.webp,.png,.tgs,.webm,.jpg,.jpeg,.gif,.bmp,image/*', (e) => {
       const { files } = e.target as HTMLInputElement;
       void handlePackFilesSelected(Array.from(files || []));
     });

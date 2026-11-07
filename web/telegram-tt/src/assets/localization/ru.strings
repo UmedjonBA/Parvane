@@ -868,6 +868,11 @@
 "MediaReplaceInvalidError_other" = "Это медиа нельзя заменить выбранными файлами";
 "GifPickerBlocked" = "В этом чате запрещена отправка GIF";
 "GifPickerEmpty" = "Нет сохранённых GIF";
+"ParvaneUploadGif" = "Загрузить GIF";
+"ParvaneUploadGifProgress" = "GIF загружается…";
+"ParvaneUploadGifTooBig" = "Файл слишком большой для GIF (до 20 МБ)";
+"ParvaneUploadGifUnsupported" = "Этот файл не подходит для GIF. Выберите файл .gif, .mp4 или .webm";
+"ParvaneUploadGifFailed" = "Не удалось загрузить GIF";
 "FormattingSpoilerAria" = "Спойлер";
 "FormattingBoldAria" = "Жирный";
 "FormattingItalicAria" = "Курсив";

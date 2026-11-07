@@ -261,8 +261,10 @@ export const OLD_LANG_PACK_EN: ApiOldLangPack = {
   ParvaneSignOutRotateHint: 'If the device was lost or stolen: the keys it held are replaced. To add new devices '
     + 'you may need your recovery key.',
   ParvaneLeftDevices: 'Signed-out devices',
-  ParvaneLeftDevicesHint: 'These devices signed out without changing keys. If one of them was stolen, mark '
-    + 'it — the device signing key will be replaced with your recovery key.',
+  ParvaneLeftDevicesHint: 'These devices signed out by themselves. If one of them was stolen, tap it — '
+    + 'other devices will stop trusting its keys. If nobody stole them, remove them from the list.',
+  ParvaneLeftDeviceSignedOut: 'Signed out',
+  ParvaneLeftDevicesDismiss: 'Nobody stole them — remove from list',
   ParvaneLeftDeviceStolen: 'This device was stolen',
   ParvaneLeftDeviceStolenConfirm: 'Mark %@ as stolen? You will need your recovery key to replace the device signing '
     + 'key; until then new devices can\'t be added and contacts see a warning.',
@@ -1644,8 +1646,10 @@ export const OLD_LANG_PACK_RU: ApiOldLangPack = {
   ParvaneSignOutRotateHint: 'Если устройство потеряно или украдено: ключи, которые оно хранило, сменятся. Чтобы '
     + 'добавлять новые устройства, может понадобиться ключ восстановления.',
   ParvaneLeftDevices: 'Вышедшие устройства',
-  ParvaneLeftDevicesHint: 'Эти устройства вышли из аккаунта без смены ключей. Если одно из них украли, отметьте '
-    + 'его — ключ подписи устройств сменится по ключу восстановления.',
+  ParvaneLeftDevicesHint: 'Эти устройства вышли из аккаунта сами. Если одно из них украли, нажмите на него — '
+    + 'другие устройства перестанут доверять его ключам. Если их никто не крал, уберите их из списка.',
+  ParvaneLeftDeviceSignedOut: 'Вышло само',
+  ParvaneLeftDevicesDismiss: 'Их никто не крал — убрать из списка',
   ParvaneLeftDeviceStolen: 'Это устройство украли',
   ParvaneLeftDeviceStolenConfirm: 'Отметить %@ украденным? Для смены ключа подписи устройств понадобится '
     + 'ключ восстановления; до смены новые устройства не добавляются, а собеседники видят предупреждение.',

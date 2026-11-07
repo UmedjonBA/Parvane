@@ -181,13 +181,14 @@ const SettingsFoldersMain = ({
       return;
     }
 
-    dragOrderIds.splice(index + delta + (isPremium ? 0 : 1), 0, id as number);
+    // Parvane: «Все чаты» двигается без Premium — место в списке не сдвигается на единицу
+    dragOrderIds.splice(index + delta, 0, id as number);
     setState((current) => ({
       ...current,
       draggedIndex: index,
       dragOrderIds,
     }));
-  }, [folderIds?.length, isPremium, state.orderedFolderIds]);
+  }, [folderIds?.length, state.orderedFolderIds]);
 
   const handleDragEnd = useCallback(() => {
     setState((current) => {
@@ -253,7 +254,7 @@ const SettingsFoldersMain = ({
                   onDragEnd={handleDragEnd}
                   style={`top: ${isDragged ? draggedTop : top}px;`}
                   knobStyle={`${lang.isRtl ? 'left' : 'right'}: 0.375rem;`}
-                  isDisabled={!isPremium || !isActive}
+                  isDisabled={!isActive}
                 >
                   <ListItem
                     key={folder.id}

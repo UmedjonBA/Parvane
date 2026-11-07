@@ -271,6 +271,11 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
     void refreshLinkState();
   });
 
+  const handleDismissLeftDevices = useLastCallback(async () => {
+    await callParvane('parvaneDismissLeftDevices', { deviceIds: leftDevices });
+    void refreshLinkState();
+  });
+
   const handleReportStolen = useLastCallback(async () => {
     const deviceId = stolenDevice;
     setStolenDevice(undefined);
@@ -596,15 +601,17 @@ const SettingsActiveSessions: FC<OwnProps & StateProps> = ({
               icon="delete-user"
               narrow
               ripple
-              destructive
               onClick={() => setStolenDevice(deviceId)}
             >
               <div className="multiline-item full-size" dir="auto" data-left-device={deviceId}>
                 <span className="title">{`Web ${deviceId.slice(0, 8)}`}</span>
-                <span className="subtitle">{oldLang('ParvaneLeftDeviceStolen')}</span>
+                <span className="subtitle">{oldLang('ParvaneLeftDeviceSignedOut')}</span>
               </div>
             </ListItem>
           ))}
+          <ListItem icon="check" narrow ripple onClick={handleDismissLeftDevices}>
+            <span data-left-devices-dismiss>{oldLang('ParvaneLeftDevicesDismiss')}</span>
+          </ListItem>
         </Island>
         <p className="settings-item-description-larger">{oldLang('ParvaneLeftDevicesHint')}</p>
       </>

@@ -1,9 +1,11 @@
 import type { TeactNode } from '../../../lib/teact/teact';
 import { memo, useRef } from '../../../lib/teact/teact';
+import { getActions } from '../../../global';
 
 import type { MdBlock, MdCallout, MdEmbed, MdListItem } from './markdown';
 
 import buildClassName from '../../../util/buildClassName';
+import { copyTextToClipboard } from '../../../util/clipboard';
 import {
   MD_BOLD, MD_CODE, MD_ITALIC, MD_MARK, MD_STRIKE, MD_SUB, MD_SUP, MD_UNDERLINE, parseInline,
 } from './markdown';
@@ -11,6 +13,8 @@ import {
 import useAsync from '../../../hooks/useAsync';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
+
+import Icon from '../../common/icons/Icon';
 
 import '../../common/code/CodeBlock.scss';
 import styles from './Markdown.module.scss';
@@ -340,9 +344,28 @@ const CodeView = memo(({ text, language, line }: { text: string; language?: stri
       .catch(() => undefined);
   }, [language, text]);
 
+  const { showNotification } = getActions();
+  const lang = useLang();
+
+  const handleCopy = useLastCallback(() => {
+    copyTextToClipboard(text);
+    showNotification({ message: lang('TextCopied') });
+  });
+
   return (
     <div className={styles.codeBlock} data-md-code={language} data-md-line={line}>
       {language && <span className={styles.codeLang}>{language}</span>}
+      {/* Как на GitHub: кнопка появляется при наведении, справа сверху внутри блока */}
+      <button
+        type="button"
+        className={styles.codeCopy}
+        aria-label={lang('Copy')}
+        title={lang('Copy')}
+        data-md-copy
+        onClick={handleCopy}
+      >
+        <Icon name="copy" />
+      </button>
       <pre className={styles.pre}>{highlighted ?? text}</pre>
     </div>
   );

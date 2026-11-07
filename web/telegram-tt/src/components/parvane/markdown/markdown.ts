@@ -91,9 +91,10 @@ export function parseMarkdown(markdown: string, title = ''): MdBlock[] {
 
 type Fence = { char: string; length: number; indent: number; lang?: string };
 
-function columnsOf(indent: string) {
+// `tab` — колонок на табуляцию: в списках INDENT_STEP (уровень), в коде с отступом — CODE_INDENT (как CommonMark)
+function columnsOf(indent: string, tab = INDENT_STEP) {
   let n = 0;
-  for (const c of indent) n += c === '\t' ? INDENT_STEP : 1;
+  for (const c of indent) n += c === '\t' ? tab : 1;
   return n;
 }
 
@@ -102,11 +103,11 @@ function leadingOf(line: string) {
 }
 
 /** Убрать до `columns` колонок отступа (табуляция — INDENT_STEP колонок) */
-function dedent(line: string, columns: number) {
+function dedent(line: string, columns: number, tab = INDENT_STEP) {
   let n = 0;
   let i = 0;
   while (i < line.length && n < columns && (line[i] === ' ' || line[i] === '\t')) {
-    n += line[i] === '\t' ? INDENT_STEP : 1;
+    n += line[i] === '\t' ? tab : 1;
     i++;
   }
   return line.slice(i);
@@ -238,15 +239,15 @@ function parseBlocks(lines: string[], lineNos: number[], depth: number): MdBlock
       }
     }
     // Код с отступом в 4 колонки (не продолжение абзаца)
-    if (!paragraph.length && columnsOf(leadingOf(line)) >= CODE_INDENT) {
+    if (!paragraph.length && columnsOf(leadingOf(line), CODE_INDENT) >= CODE_INDENT) {
       const code: string[] = [];
       let end = i;
       while (end < lines.length) {
-        if (lines[end].trim() && columnsOf(leadingOf(lines[end])) < CODE_INDENT) break;
+        if (lines[end].trim() && columnsOf(leadingOf(lines[end]), CODE_INDENT) < CODE_INDENT) break;
         end++;
       }
       while (end > i && !lines[end - 1].trim()) end--;
-      for (let k = i; k < end; k++) code.push(dedent(lines[k], CODE_INDENT));
+      for (let k = i; k < end; k++) code.push(dedent(lines[k], CODE_INDENT, CODE_INDENT));
       blocks.push({ type: 'code', text: code.join('\n'), line: at });
       i = end;
       continue;

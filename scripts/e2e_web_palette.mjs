@@ -83,11 +83,11 @@ try {
   await title.fill(NOTE);
   await title.blur();
   await visible(knowledge.locator(`[data-note-row="${NOTE}"]`), 'строка заметки');
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill(
     [`# ${NOTE}`, '', 'Стоит в шкафу.', `Заменить ${NOTE_WORD} до зимы`].join('\n'),
   );
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(note.locator('[data-note-body]').getByText(NOTE_WORD), 'текст заметки');
 
   await openPlannerScreen(page, 'today');

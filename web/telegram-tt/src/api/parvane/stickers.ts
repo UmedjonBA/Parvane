@@ -270,3 +270,32 @@ export async function buildBuiltinEmojiPack(): Promise<StoredPack> {
 export function getBuiltinEmojiSetId() {
   return EMOJI_SET_ID;
 }
+
+// Стикер из любой картинки, которую понимает браузер (JPG, BMP, GIF — первый кадр): WebP, большая сторона 512 px,
+// как требует Telegram; прозрачность сохраняется. Не картинка или не раскодировалась — undefined
+const STICKER_MAX_SIDE = 512;
+const STICKER_QUALITY = 0.92;
+
+export async function convertImageToSticker(file: File): Promise<{ name: string; data: ArrayBuffer } | undefined> {
+  if (!file.type.startsWith('image/')) return undefined;
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return undefined;
+  }
+  const scale = Math.min(1, STICKER_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/webp', STICKER_QUALITY);
+  });
+  if (!blob) return undefined;
+  const base = file.name.replace(/\.[^.]+$/, '') || 'sticker';
+  // Браузер без WebP-кодировщика отдаёт PNG — расширение по фактическому типу
+  const ext = blob.type === 'image/webp' ? 'webp' : 'png';
+  return { name: `${base}.${ext}`, data: await blob.arrayBuffer() };
+}

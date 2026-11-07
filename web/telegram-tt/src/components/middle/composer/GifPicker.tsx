@@ -7,13 +7,17 @@ import { SLIDE_TRANSITION_DURATION } from '../../../config';
 import { selectCurrentMessageList, selectIsChatWithSelf } from '../../../global/selectors';
 import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
+import { openSystemFilesDialog } from '../../../util/systemFilesDialog';
+import { callApi } from '../../../api/gramjs';
 
+import useFlag from '../../../hooks/useFlag';
 import { useIntersectionObserver } from '../../../hooks/useIntersectionObserver';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useAsyncRendering from '../../right/hooks/useAsyncRendering';
 
 import GifButton from '../../common/GifButton';
+import Icon from '../../common/icons/Icon';
 import Loading from '../../ui/Loading';
 import Transition from '../../ui/Transition.tsx';
 
@@ -32,7 +36,16 @@ type StateProps = {
   isSavedMessages?: boolean;
 };
 
+type GifUploadResult = { isOk: true } | { error: 'TOO_BIG' | 'UNSUPPORTED' | 'FAILED' };
+
 const INTERSECTION_DEBOUNCE = 300;
+// GIF-1: свой GIF из файла — анимированный .gif, .mp4 или .webm
+const GIF_UPLOAD_ACCEPT = '.gif,.mp4,.webm,image/gif,video/mp4,video/webm';
+const GIF_UPLOAD_ERROR_KEYS = {
+  TOO_BIG: 'ParvaneUploadGifTooBig',
+  UNSUPPORTED: 'ParvaneUploadGifUnsupported',
+  FAILED: 'ParvaneUploadGifFailed',
+} as const;
 
 const GifPicker = ({
   className,
@@ -43,7 +56,7 @@ const GifPicker = ({
   onGifSelect,
   onGifAddCaption,
 }: OwnProps & StateProps) => {
-  const { loadSavedGifs, saveGif } = getActions();
+  const { loadSavedGifs, saveGif, showNotification } = getActions();
 
   const containerRef = useRef<HTMLDivElement>();
 
@@ -61,9 +74,49 @@ const GifPicker = ({
     saveGif({ gif, shouldUnsave: true });
   });
 
+  const [isUploading, markUploading, unmarkUploading] = useFlag();
+
   const canRenderContents = useAsyncRendering([], SLIDE_TRANSITION_DURATION);
   const isLoading = canSendGifs && (!canRenderContents || !savedGifs);
   const lang = useLang();
+
+  const handleUploadFile = useLastCallback(async (file: File) => {
+    markUploading();
+    // Метод провайдера Parvane — вне типов MTProto-API
+    const callParvane = callApi as unknown as (
+      method: string, args: unknown,
+    ) => Promise<GifUploadResult | undefined>;
+    const result = await callParvane('parvaneUploadGif', { file });
+    unmarkUploading();
+    if (result && 'isOk' in result) return;
+    showNotification({ message: lang(GIF_UPLOAD_ERROR_KEYS[result?.error || 'FAILED']) });
+  });
+
+  const handleUploadClick = useLastCallback(() => {
+    openSystemFilesDialog(GIF_UPLOAD_ACCEPT, (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) void handleUploadFile(file);
+    }, true);
+  });
+
+  function renderUploadButton() {
+    return (
+      <button
+        key="upload"
+        type="button"
+        className={buildClassName(styles.gifButton, styles.uploadButton)}
+        disabled={isUploading}
+        aria-label={lang('ParvaneUploadGif')}
+        data-gif-upload
+        onClick={handleUploadClick}
+      >
+        <Icon name="add" className={styles.uploadIcon} />
+        <span className={styles.uploadLabel}>
+          {lang(isUploading ? 'ParvaneUploadGifProgress' : 'ParvaneUploadGif')}
+        </span>
+      </button>
+    );
+  }
 
   return (
     <Transition
@@ -77,7 +130,7 @@ const GifPicker = ({
       {!canSendGifs ? (
         <div className={styles.pickerDisabled}>{lang('GifPickerBlocked')}</div>
       ) : canRenderContents && savedGifs && savedGifs.length ? (
-        savedGifs.map((gif) => (
+        [renderUploadButton(), ...savedGifs.map((gif) => (
           <GifButton
             key={gif.id}
             gif={gif}
@@ -89,9 +142,9 @@ const GifPicker = ({
             onUnsaveClick={handleUnsaveClick}
             onAddCaption={canSendGifs ? onGifAddCaption : undefined}
           />
-        ))
+        ))]
       ) : canRenderContents && savedGifs ? (
-        <div className={styles.pickerDisabled}>{lang('GifPickerEmpty')}</div>
+        [renderUploadButton(), <div key="empty" className={styles.emptyHint}>{lang('GifPickerEmpty')}</div>]
       ) : (
         <Loading className={styles.loading} color="yellow" />
       )}

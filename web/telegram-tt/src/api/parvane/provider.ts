@@ -34,6 +34,7 @@ import { ApiMessageEntityTypes, MAIN_THREAD_ID } from '../types';
 import {
   ARCHIVED_FOLDER_ID, MUTE_INDEFINITE_TIMESTAMP, PARVANE_LEGACY_APP_VERSION, UNMUTE_TIMESTAMP,
 } from '../../config';
+import { preloadVideo } from '../../util/files';
 import { getLangStringByKey, getTranslationFn } from '../../util/localization';
 import { clearDiag, diagLog, scrubErrorText } from '../../util/parvaneDiag';
 import { clearWorkerReminders, markWorkerReminderShown, saveWorkerReminders } from '../../util/reminderStore';
@@ -69,7 +70,9 @@ import {
 } from './connectionController';
 import { fingerprintOf } from './fingerprint';
 import { getGatewayUrl, getV2Bridge } from './gateway';
-import { buildBuiltinGifs, BUILTIN_GIF_TAGS } from './gifs';
+import {
+  buildApiVideoFromSavedRecord, buildBuiltinGifs, BUILTIN_GIF_TAGS, canConvertGif, convertGifToWebm,
+} from './gifs';
 import { createGroupController } from './groups';
 import { createHistoryRows } from './historyRows';
 import { exportEncryptedBackup, importEncryptedBackup } from './keyBackup';
@@ -93,6 +96,20 @@ import { createMessageController } from './messages';
 import { buildOldLangPack } from './oldLangPack';
 import { PollStore } from './polls';
 import { createReminderScheduler } from './reminders';
+import {
+  buildGifFileName,
+  buildGifJournalEntry,
+  buildGifJournalKey,
+  computeSha256Hex,
+  getGifHashFromKey,
+  getGifMimeFromName,
+  type GifJournalRef,
+  isGifJournalKey,
+  parseGifJournalEntry,
+  sortGifEntriesOldestFirst,
+  splitJournalPacks,
+  verifyGifBytes,
+} from './savedGifJournal';
 import {
   clearSecureSession, hasStoragePin, isStorageUnlocked, loadSecureSession, lockStorage, migrateStorageUser,
   saveSecureSession,
@@ -129,6 +146,7 @@ import {
 } from './stickerPacks';
 import {
   buildBuiltinCustomEmojiSet,
+  convertImageToSticker,
   getBuiltinLegacyEmojiIds,
   getBuiltinStickerSet,
   getStickerBlobMime,
@@ -306,6 +324,19 @@ let token = '';
 // включая мут) на messenger — синхронизация между своими устройствами.
 // P-34: «кто может добавлять меня в группы» — часть блоба настроек
 // (messenger читает `group_add`), хранится локально рядом с остальными
+function dismissedLeftDevicesKey(user: string) {
+  return `parvane:left_devices_dismissed:${user}`;
+}
+
+function readDismissedLeftDevices(user: string) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(dismissedLeftDevicesKey(user)) || '[]') as unknown;
+    return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
 function groupAddPolicyKey(user: string) {
   return `parvane:group_add:${user}`;
 }
@@ -577,7 +608,12 @@ function forgetStickerPack(setId: string) {
 }
 
 // Журнал: недостающие наборы скачать и поставить, убранные на другом устройстве — снять
-async function applyJournalStickerPacks(packs: LocalStickerPack[], removed: string[]) {
+async function applyJournalStickerPacks(allPacks: LocalStickerPack[], allRemoved: string[]) {
+  // GIF-1: записи `g:` — сохранённые GIF, не наборы (архив не разбирать)
+  const {
+    packs, removed, gifs, removedGifs,
+  } = splitJournalPacks(allPacks, allRemoved);
+  if (gifs.length || removedGifs.length) applyJournalGifs(gifs, removedGifs);
   const ids = packLocalIds();
   for (const key of removed) {
     const setId = ids[key];
@@ -614,6 +650,219 @@ async function syncInstalledPacksOnce() {
     localStorage.setItem(key, '1');
   } catch {
     // приватный режим — перенос повторится и сойдётся
+  }
+}
+
+// ── Свои GIF на всех своих устройствах (GIF-1, 7 ноя 2026) ─────────────────────────────────────────────────
+// Сохранённый GIF — запись `g:<sha256>` журнала личного состояния (вид `packs`) со ссылкой на сам файл в облаке:
+// GIF из чата — ссылка сообщения (без повторной загрузки), из файла — загрузка как вложение (CAP-1)
+
+const BUILTIN_GIF_PREFIX = 'pvgif';
+const MAX_GIF_UPLOAD_BYTES = 20 * 1024 * 1024;
+const GIF_UPLOAD_MIMES = new Set(['video/mp4', 'video/webm', 'image/gif']);
+const DEFAULT_GIF_SIDE = 240;
+
+type GifUploadResult = { isOk: true } | { error: 'TOO_BIG' | 'UNSUPPORTED' | 'FAILED' };
+
+let gifApplyChain = Promise.resolve();
+// Файлы, не скачанные или не сошедшиеся по sha256 в этой сессии, — не повторять на каждой проекции журнала
+const failedGifHashes = new Set<string>();
+
+async function loadGifBlob(fileId: string) {
+  const cached = await mediaService.getCached(fileId)?.catch(() => undefined)
+    || await mediaService.downloadBlob(fileId).catch(() => undefined);
+  return cached?.blob;
+}
+
+/** Записать сохранённый GIF в журнал; хеш считается по файлу, если ещё не известен. */
+async function recordSavedGif(gif: ApiVideo, addedMs = Date.now()) {
+  if (gif.id.startsWith(BUILTIN_GIF_PREFIX)) return;
+  try {
+    let hashHex = messageController.getSavedGifHash(gif.id);
+    if (!hashHex) {
+      const blob = await loadGifBlob(gif.id);
+      if (!blob) {
+        logDebug(`GIF: ${gif.id} не записан в журнал — файл недоступен`);
+        return;
+      }
+      hashHex = await computeSha256Hex(new Uint8Array(await blob.arrayBuffer()));
+      messageController.rememberSavedGif(gif, hashHex);
+    }
+    const keys = mediaService.getMediaKeys(gif.id);
+    const entry = buildGifJournalEntry({
+      hashHex,
+      fileId: gif.id,
+      name: gif.fileName || 'animation',
+      mimeType: gif.mimeType || 'video/webm',
+      key: keys?.keyB64,
+      nonce: keys?.nonceB64,
+      capability: mediaService.getCapability(gif.id),
+      blobDomain: v2Controller.getBlobDomain(gif.id),
+      addedMs,
+    });
+    const packs = localState.loadStickerPacks().filter((pack) => pack.set_id !== entry.set_id);
+    packs.push(entry);
+    localState.saveStickerPacks(packs);
+    logDebug(`GIF: ${gif.id} записан в журнал состояния`);
+  } catch (e) {
+    logDebug(`GIF: ${gif.id} не записан в журнал: ${String(e)}`);
+  }
+}
+
+function forgetSavedGifRecord(fileId: string, hashHex?: string) {
+  const key = hashHex ? buildGifJournalKey(hashHex) : undefined;
+  const packs = localState.loadStickerPacks();
+  const next = packs.filter((pack) => !isGifJournalKey(pack.set_id)
+    || (pack.set_id !== key && pack.ref.file_id !== fileId));
+  if (next.length !== packs.length) localState.saveStickerPacks(next);
+}
+
+// Записи `g:` из журнала — по очереди: проекции журнала приходят чаще, чем скачиваются файлы
+function applyJournalGifs(entries: LocalStickerPack[], removed: string[]) {
+  gifApplyChain = gifApplyChain.then(() => applyJournalGifsNow(entries, removed))
+    .catch((e: unknown) => logDebug(`GIF: журнал не применён: ${String(e)}`));
+}
+
+async function applyJournalGifsNow(entries: LocalStickerPack[], removed: string[]) {
+  await messageController.ensureSavedGifsHydrated();
+  let hasChanged = false;
+  removed.forEach((setId) => {
+    const hashHex = getGifHashFromKey(setId);
+    const gif = hashHex ? messageController.findSavedGifByHash(hashHex) : undefined;
+    if (gif && messageController.forgetSavedGif(gif.id)) hasChanged = true;
+  });
+  const refs = entries.map(parseGifJournalEntry).filter((ref): ref is GifJournalRef => Boolean(ref));
+  for (const ref of sortGifEntriesOldestFirst(refs)) {
+    if (messageController.findSavedGifByHash(ref.hashHex) || failedGifHashes.has(ref.hashHex)) continue;
+    const known = messageController.getSavedGifs().find((gif) => gif.id === ref.fileId);
+    if (known) {
+      messageController.rememberSavedGif(known, ref.hashHex);
+      continue;
+    }
+    const gif = await fetchJournalGif(ref);
+    if (!gif) {
+      failedGifHashes.add(ref.hashHex);
+      continue;
+    }
+    messageController.rememberSavedGif(gif, ref.hashHex);
+    hasChanged = true;
+  }
+  if (hasChanged) sendUpdate({ '@type': 'updateSavedGifs' });
+}
+
+async function fetchJournalGif(ref: GifJournalRef): Promise<ApiVideo | undefined> {
+  mediaService.rememberKeys({
+    kind: 'gif',
+    file_id: ref.fileId,
+    file_key: ref.key,
+    file_nonce: ref.nonce,
+    capability: ref.capability,
+    mime: ref.mimeType,
+    blob_domain: ref.blobDomain,
+  });
+  const blob = await loadGifBlob(ref.fileId);
+  if (!blob) {
+    logDebug(`GIF: ${ref.fileId} из журнала не скачан`);
+    return undefined;
+  }
+  if (!await verifyGifBytes(new Uint8Array(await blob.arrayBuffer()), buildGifJournalKey(ref.hashHex))) {
+    logDebug(`GIF: ${ref.fileId} из журнала отвергнут — sha256 не сошёлся`);
+    return undefined;
+  }
+  mediaService.cacheBlob(ref.fileId, blob, ref.mimeType);
+  const meta = await readGifMeta(blob);
+  logDebug(`GIF: ${ref.fileId} добавлен из журнала состояния`);
+  return buildApiVideoFromSavedRecord({
+    id: ref.fileId,
+    width: meta?.width,
+    height: meta?.height,
+    duration: meta?.duration || 1,
+    size: blob.size,
+    fileName: ref.name,
+    mimeType: ref.mimeType,
+  });
+}
+
+async function readGifMeta(blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const video = await preloadVideo(url);
+    const { videoWidth, videoHeight, duration } = video;
+    if (!videoWidth || !videoHeight) return undefined;
+    return { width: videoWidth, height: videoHeight, duration: Number.isFinite(duration) ? duration : undefined };
+  } catch {
+    return undefined;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// GIF, сохранённые до GIF-1, — в журнал один раз на устройство; затем недостающие из журнала — сюда
+async function syncSavedGifs() {
+  const key = `parvane:gifs-synced:${store.self}`;
+  let isSynced = true;
+  try {
+    isSynced = localStorage.getItem(key) === '1';
+  } catch {
+    // приватный режим — перенос не делаем
+  }
+  await messageController.ensureSavedGifsHydrated();
+  if (!isSynced) {
+    const recorded = new Set(localState.loadStickerPacks()
+      .filter((pack) => isGifJournalKey(pack.set_id)).map((pack) => pack.ref.file_id));
+    // Список — новые первыми; в журнал от старых к новым, чтобы порядок сохранился
+    const oldestFirst = [...messageController.getSavedGifs()].reverse();
+    const startMs = Date.now() - oldestFirst.length;
+    for (const [index, gif] of oldestFirst.entries()) {
+      if (recorded.has(gif.id) || !mediaService.getMediaKeys(gif.id)) continue;
+      await recordSavedGif(gif, startMs + index);
+    }
+    try {
+      localStorage.setItem(key, '1');
+    } catch {
+      // перенос повторится и сойдётся по ключу `g:`
+    }
+  }
+  applyJournalGifs(localState.loadStickerPacks().filter((pack) => isGifJournalKey(pack.set_id)), []);
+}
+
+async function uploadSavedGif(file: File): Promise<GifUploadResult> {
+  const sourceMime = (file.type || getGifMimeFromName(file.name)).toLowerCase();
+  if (!GIF_UPLOAD_MIMES.has(sourceMime)) return { error: 'UNSUPPORTED' };
+  if (file.size > MAX_GIF_UPLOAD_BYTES) return { error: 'TOO_BIG' };
+  try {
+    let blob: Blob = file;
+    let mimeType = sourceMime;
+    let duration: number | undefined;
+    if (sourceMime === 'image/gif') {
+      const converted = await convertGifToWebm(file);
+      if (!converted) return { error: canConvertGif() ? 'FAILED' : 'UNSUPPORTED' };
+      ({ blob, duration } = converted);
+      mimeType = 'video/webm';
+    }
+    const meta = await readGifMeta(blob);
+    if (!meta) return { error: 'UNSUPPORTED' };
+    await messageController.ensureSavedGifsHydrated();
+    const hashHex = await computeSha256Hex(new Uint8Array(await blob.arrayBuffer()));
+    if (messageController.findSavedGifByHash(hashHex)) return { isOk: true };
+    const fileName = buildGifFileName(file.name, mimeType);
+    const { fileId } = await mediaService.uploadBlob(blob, fileName, mimeType, { encrypt: true, withCapability: true });
+    const gif = buildApiVideoFromSavedRecord({
+      id: fileId,
+      width: meta.width || DEFAULT_GIF_SIDE,
+      height: meta.height || DEFAULT_GIF_SIDE,
+      duration: meta.duration || duration || 1,
+      size: blob.size,
+      fileName,
+      mimeType,
+    });
+    messageController.rememberSavedGif(gif, hashHex);
+    await recordSavedGif(gif);
+    sendUpdate({ '@type': 'updateSavedGifs' });
+    return { isOk: true };
+  } catch (e) {
+    logDebug(`GIF: загрузка из файла не удалась: ${String(e)}`);
+    return { error: 'FAILED' };
   }
 }
 
@@ -922,6 +1171,9 @@ const v2Controller = createV2Controller({
     // PACK-3: наборы, установленные до синхронизации, — в журнал (после подключения, чтобы не затереть журнал)
     void Promise.resolve(attached).then(() => syncInstalledPacksOnce())
       .catch((e: unknown) => logDebug(`стикеры: перенос наборов в журнал: ${String(e)}`));
+    // GIF-1: сохранённые GIF — в журнал и из журнала
+    void Promise.resolve(attached).then(() => syncSavedGifs())
+      .catch((e: unknown) => logDebug(`GIF: перенос сохранённых в журнал: ${String(e)}`));
     return attached;
   },
   onL2Changed: (address) => applyL2Change(address),
@@ -2691,11 +2943,13 @@ const methods = {
   fetchChatFolders() {
     const folders = localState.loadFolders();
     const byId: Record<number, unknown> = {};
-    const orderedIds: number[] = [0]; // 0 = All chats
+    const orderedIds: number[] = [];
     folders.forEach((folder) => {
       byId[folder.id] = folder;
       orderedIds.push(folder.id);
     });
+    // 0 = «Все чаты» — на своём месте (двигается без Premium)
+    orderedIds.splice(Math.min(localState.loadAllFolderIndex(), orderedIds.length), 0, 0);
     return Promise.resolve({ byId, orderedIds, recommended: undefined });
   },
 
@@ -2716,6 +2970,8 @@ const methods = {
   // Перетаскивание папок в Settings → Folders: без ответа tt не обновлял ни
   // вкладки слева, ни порядок после reload
   sortChatFolders(folderIds: number[]) {
+    const allIndex = folderIds.indexOf(0);
+    localState.saveAllFolderIndex(allIndex < 0 ? 0 : allIndex);
     const order = new Map(folderIds.map((folderId, index) => [folderId, index]));
     const folders = localState.loadFolders().sort((a, b) => (
       (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER)
@@ -3169,8 +3425,13 @@ const methods = {
   async parvaneCreateStickerPack({ name, files }: { name: string; files: File[] }) {
     const packFiles: PackFile[] = [];
     for (const file of files) {
-      if (!getPackFileMime(file.name)) continue;
-      packFiles.push({ name: file.name, data: await file.arrayBuffer() });
+      if (getPackFileMime(file.name)) {
+        packFiles.push({ name: file.name, data: await file.arrayBuffer() });
+        continue;
+      }
+      // JPG и прочие картинки — в стикер (WebP 512 px)
+      const converted = await convertImageToSticker(file);
+      if (converted) packFiles.push(converted);
     }
     if (!packFiles.length) return undefined;
     const baseName = sanitizePackName(name);
@@ -3258,7 +3519,20 @@ const methods = {
 
   // ENG-04: свои устройства, державшие ключ подписи и вышедшие сами; выход украденного выглядит так же
   parvaneGetLeftDevices() {
-    return Promise.resolve({ deviceIds: v2Controller.leftSskHolders() });
+    const dismissed = readDismissedLeftDevices(store.self);
+    return Promise.resolve({ deviceIds: v2Controller.leftSskHolders().filter((id) => !dismissed.has(id)) });
+  },
+
+  // «Их никто не крал»: убрать вышедшие устройства из списка на этом устройстве (журнал устройств не меняется)
+  parvaneDismissLeftDevices({ deviceIds }: { deviceIds: string[] }) {
+    const dismissed = readDismissedLeftDevices(store.self);
+    deviceIds.forEach((id) => dismissed.add(id));
+    try {
+      localStorage.setItem(dismissedLeftDevicesKey(store.self), JSON.stringify([...dismissed].slice(-500)));
+    } catch {
+      // хранилище недоступно — список покажется снова после перезагрузки
+    }
+    return Promise.resolve(true);
   },
 
   async parvaneReportDeviceStolen({ deviceId }: { deviceId: string }) {
@@ -3685,6 +3959,24 @@ const methods = {
     const sources: GifSearchSource[] = [...saved, ...builtin.filter((gif) => !savedIds.has(gif.id))]
       .map((gif) => ({ gif, ...BUILTIN_GIF_TAGS[gif.id] }));
     return { gifs: searchGifSources(query, sources), nextOffset: GIF_SEARCH_END };
+  },
+
+  // «Сохранить в GIF» / «Удалить из GIF» (контекстное меню сообщения, вкладка GIF); GIF-1 — запись в журнал
+  async saveGif({ gif, shouldUnsave }: { gif: ApiVideo; shouldUnsave?: boolean }) {
+    await messageController.ensureSavedGifsHydrated();
+    if (shouldUnsave) {
+      const hashHex = messageController.forgetSavedGif(gif.id);
+      forgetSavedGifRecord(gif.id, hashHex);
+      return true;
+    }
+    messageController.rememberSavedGif(gif);
+    void recordSavedGif(gif);
+    return true;
+  },
+
+  // «Загрузить GIF» из файла (.gif, .mp4, .webm) на вкладке GIF
+  parvaneUploadGif({ file }: { file: File }) {
+    return uploadSavedGif(file);
   },
 
   async fetchSavedGifs() {

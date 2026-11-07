@@ -247,12 +247,12 @@ try {
   await title.fill(NOTE);
   await title.blur();
   await visible(row(NOTE), 'строка переименованной заметки');
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill([
     `# ${NOTE}`, '', `Бюджетный сервер под LLM. См. [[${OTHER}]] #проект`, '',
     '- [ ] заказать блок питания до пт', '- [ ] проверить обе GPU',
   ].join('\n'));
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body.getByRole('button', { name: OTHER }), 'ссылка в тексте');
   await visible(body.getByText('#проект'), 'тег');
   assert.equal(await body.locator('input[type="checkbox"]').count(), 2, 'два пункта с галочками');
@@ -308,11 +308,11 @@ try {
 
   // ── Текст заметки дня виден на «Сегодня»; нажатие на него открывает заметку ──
   const DAILY_TEXT = 'Выспался, день спокойный';
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill([
     `# ${dayKey}`, '', 'Выспался, **день** спокойный', '', '- [ ] разобрать почту', '- [x] зарядка',
   ].join('\n'));
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body.getByText('разобрать почту'), 'текст заметки дня в «Знаниях»');
   await openPlannerScreen(page, 'today');
   const dailyCard = planner.locator('[data-today-note="text"]');
@@ -437,10 +437,10 @@ try {
   await panel.locator('[data-note-backlinks]').getByRole('button', { name: NOTE }).click();
   await visible(panel.locator(`[data-note-title="${NOTE}"]`), 'заметка по обратной ссылке в панели графа');
   // Правка прямо в панели
-  await panel.getByRole('button', { name: 'Edit' }).click();
+  await panel.getByRole('button', { name: 'Edit' }).first().click();
   const panelEditor = page.locator('#knowledge-note-editor');
   await panelEditor.fill(`${await panelEditor.inputValue()}\n\n${PANEL_EDIT}`);
-  await panel.getByRole('button', { name: 'Save' }).click();
+  await panel.getByRole('button', { name: 'Save' }).first().click();
   await visible(panelBody.getByText(PANEL_EDIT), 'правка заметки в панели графа');
   console.log('OK: граф — заметка открывается в панели справа, ссылки в ней выбирают точки, правка на месте');
 
@@ -585,9 +585,9 @@ try {
   await note.getByLabel('Note title').fill(FOLDER_NOTE);
   await note.getByLabel('Note title').blur();
   await visible(rowsIn(GRAPH_FOLDER).and(row(FOLDER_NOTE)), 'заметка в папке для графа');
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill(`В ней стоит [[${NOTE}]]`);
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body.getByRole('button', { name: NOTE }), 'ссылка из заметки папки');
 
   await openTab('Graph');
@@ -623,7 +623,7 @@ try {
   // Escape: правка в панели остаётся, режим «Связать» отменяется первым, потом закрывается панель
   await clickNode(FOLDER_NOTE);
   await visible(panel.locator(`[data-note-title="${FOLDER_NOTE}"]`), 'заметка папки в панели графа');
-  await panel.getByRole('button', { name: 'Edit' }).click();
+  await panel.getByRole('button', { name: 'Edit' }).first().click();
   await visible(page.locator('#knowledge-note-editor'), 'правка заметки в панели');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
@@ -792,11 +792,11 @@ try {
     await openTab('Notes');
     await row(NOTE).click();
     await visible(knowledge.locator(`[data-note-title="${NOTE}"]`), 'заметка для правки');
-    await note.getByRole('button', { name: 'Edit' }).click();
+    await note.getByRole('button', { name: 'Edit' }).first().click();
     const editor = page.locator('#knowledge-note-editor');
     const before = await editor.inputValue();
     await editor.fill(change(before));
-    await note.getByRole('button', { name: 'Save' }).click();
+    await note.getByRole('button', { name: 'Save' }).first().click();
     return before;
   };
   const backToCanvas = async () => {
@@ -1285,9 +1285,9 @@ try {
   // Название с карточки: Escape и пустое название ничего не меняют; новое доходит до списка и ссылок
   await row(OTHER).click();
   await visible(knowledge.locator(`[data-note-title="${OTHER}"]`), 'заметка для ссылки');
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   await page.locator('#knowledge-note-editor').fill(`# ${OTHER}\n\nСм. [[${NOTE}]]`);
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body.getByRole('button', { name: NOTE, exact: true }), 'ссылка на заметку в другой заметке');
   const toCanvasCard = async (title) => {
     await openTab('Canvas');

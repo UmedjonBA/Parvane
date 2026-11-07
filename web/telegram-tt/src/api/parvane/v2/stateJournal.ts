@@ -145,6 +145,13 @@ const HANGUP_BY_NUMBER = [undefined, HANGUP_NORMAL, HANGUP_DECLINED, HANGUP_BUSY
 const PIN_LIST_MAIN_NUMBER = 1;
 const NO_COLOR = -1;
 const ALL_CHATS_FOLDER_ID = 0;
+
+// Порядок папок с «Все чаты» (id 0) на месте index; 0 — первыми
+function withAllFolder(ids: number[], index: number) {
+  const out = ids.filter((id) => id !== ALL_CHATS_FOLDER_ID);
+  out.splice(Math.min(Math.max(0, index), out.length), 0, ALL_CHATS_FOLDER_ID);
+  return out;
+}
 const MS_IN_SECOND = 1000;
 const FLUSH_DELAY_MS = 700;
 // SC-009: правка с другого устройства видна ≤ 10 с (запись 0,7 с + синк). С spec 033 запись в журнал будит прочие
@@ -678,7 +685,7 @@ export function createStateJournal(deps: Deps) {
     return {
       ...current,
       folders: folders.map(folderToState).filter((f): f is SFolder => Boolean(f)),
-      folder_order: { ids: folders.map(({ id }) => id) },
+      folder_order: { ids: withAllFolder(folders.map(({ id }) => id), localState.loadAllFolderIndex()) },
       blocked: localState.loadBlocked().map(peerOf).filter(isPeer).map((peer) => ({
         peer, blocked_at_ms: blockedAt.get(peerKey(peer)) || now,
       })),
@@ -784,18 +791,25 @@ export function createStateJournal(deps: Deps) {
     const next = (snap.folders || []).map(stateToFolder).sort((a, b) => rank(a.id) - rank(b.id));
     const beforeIds = Array.from(before.keys());
     const nextIds = next.map(({ id }) => id);
+    // «Все чаты» — id 0 в общем порядке (его место выбрал пользователь на любом своём устройстве)
+    const allAt = order.indexOf(ALL_CHATS_FOLDER_ID);
+    const allIndex = allAt < 0 ? 0 : order.slice(0, allAt).filter((id) => nextIds.includes(id)).length;
+    const isAllMoved = allIndex !== localState.loadAllFolderIndex();
     const isChanged = next.some((f) => JSON.stringify(before.get(f.id)) !== JSON.stringify(f))
       || beforeIds.some((id) => !nextIds.includes(id)) || beforeIds.join() !== nextIds.join();
-    if (!isChanged) return;
-    localState.saveFolders(next as unknown as { id: number }[]);
-    next.forEach((folder) => {
-      if (JSON.stringify(before.get(folder.id)) === JSON.stringify(folder)) return;
-      deps.sendUpdate({ '@type': 'updateChatFolder', id: folder.id, folder });
-    });
-    beforeIds.filter((id) => !nextIds.includes(id)).forEach((id) => {
-      deps.sendUpdate({ '@type': 'updateChatFolder', id, folder: undefined });
-    });
-    deps.sendUpdate({ '@type': 'updateChatFoldersOrder', orderedIds: [ALL_CHATS_FOLDER_ID, ...nextIds] });
+    if (!isChanged && !isAllMoved) return;
+    if (isAllMoved) localState.saveAllFolderIndex(allIndex);
+    if (isChanged) {
+      localState.saveFolders(next as unknown as { id: number }[]);
+      next.forEach((folder) => {
+        if (JSON.stringify(before.get(folder.id)) === JSON.stringify(folder)) return;
+        deps.sendUpdate({ '@type': 'updateChatFolder', id: folder.id, folder });
+      });
+      beforeIds.filter((id) => !nextIds.includes(id)).forEach((id) => {
+        deps.sendUpdate({ '@type': 'updateChatFolder', id, folder: undefined });
+      });
+    }
+    deps.sendUpdate({ '@type': 'updateChatFoldersOrder', orderedIds: withAllFolder(nextIds, allIndex) });
   }
 
   function stateToFolder(f: SFolder): ApiChatFolder {

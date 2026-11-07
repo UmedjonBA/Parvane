@@ -312,6 +312,8 @@ export function createMessageController(deps: MessageDependencies) {
 
   const uuidBySentLocalKey = new Map<string, string>();
   const savedGifs: ApiVideo[] = [];
+  // Сохранённый GIF → sha256 его файла (ключ `g:` журнала личного состояния, GIF-1)
+  const savedGifHashes = new Map<string, string>();
   // Кэш загруженных в cloud архивов паков на сессию: ключ набор+отпечаток,
   // значение — архивы под разные наборы получателей (PACK-1)
   const uploadedPackRefs = new Map<string, CachedPackRef[]>();
@@ -407,6 +409,7 @@ export function createMessageController(deps: MessageDependencies) {
 
   function resetSavedGifs() {
     savedGifs.length = 0;
+    savedGifHashes.clear();
     savedGifsHydratedFor = '';
     savedGifsHydration = undefined;
   }
@@ -421,9 +424,16 @@ export function createMessageController(deps: MessageDependencies) {
           if (savedGifs.some((candidate) => candidate.id === record.id)) return;
           if (record.keyB64 && record.nonceB64) {
             deps.media.rememberKeys({
-              kind: 'gif', file_id: record.id, file_key: record.keyB64, file_nonce: record.nonceB64, mime: 'video/webm',
+              kind: 'gif',
+              file_id: record.id,
+              file_key: record.keyB64,
+              file_nonce: record.nonceB64,
+              mime: record.mimeType || 'video/webm',
+              capability: record.capability,
+              blob_domain: record.blobDomain,
             });
           }
+          if (record.sha256) savedGifHashes.set(record.id, record.sha256);
           savedGifs.push(buildApiVideoFromSavedRecord(record));
         });
       }).catch(() => undefined);
@@ -447,18 +457,41 @@ export function createMessageController(deps: MessageDependencies) {
             duration: gif.duration,
             size: gif.size,
             fileName: gif.fileName,
+            mimeType: gif.mimeType,
+            sha256: savedGifHashes.get(gif.id),
+            blobDomain: deps.v2?.getBlobDomain(gif.id),
             keyB64: keys?.keyB64,
             nonceB64: keys?.nonceB64,
+            capability: deps.media.getCapability(gif.id),
           };
         });
       void storeSavedGifRecords(self, records);
     });
   }
 
-  function rememberSavedGif(gif: ApiVideo) {
-    if (savedGifs.some((candidate) => candidate.id === gif.id)) return;
+  function rememberSavedGif(gif: ApiVideo, sha256?: string) {
+    if (sha256) savedGifHashes.set(gif.id, sha256);
+    if (savedGifs.some((candidate) => candidate.id === gif.id)) {
+      if (sha256) persistSavedGifs();
+      return;
+    }
     savedGifs.unshift(gif);
     persistSavedGifs();
+  }
+
+  /** Убрать из сохранённых по id; хеш содержимого убранного (GIF-1), если был известен. */
+  function forgetSavedGif(id: string) {
+    const index = savedGifs.findIndex((candidate) => candidate.id === id);
+    if (index < 0) return undefined;
+    savedGifs.splice(index, 1);
+    const sha256 = savedGifHashes.get(id);
+    savedGifHashes.delete(id);
+    persistSavedGifs();
+    return sha256;
+  }
+
+  function findSavedGifByHash(sha256: string) {
+    return savedGifs.find((gif) => savedGifHashes.get(gif.id) === sha256);
   }
 
   async function sendGif(chat: ApiChat, gif: ApiVideo) {
@@ -466,12 +499,15 @@ export function createMessageController(deps: MessageDependencies) {
     const toAddress = currentStore.getAddressForId(chat.id);
     if (!toAddress) return;
     const cached = await deps.media.getCached(gif.id);
+    // Сохранённый GIF после перезагрузки в кэше не лежит — файл из облака по известной ссылке
     const blob = cached?.blob || (
       gif.blobUrl ? await fetch(gif.blobUrl).then((response) => response.blob()) : undefined
-    );
+    ) || (gif.id.startsWith('pvgif') ? undefined : (await deps.media.downloadBlob(gif.id))?.blob);
     if (!blob) return;
+    const mimeType = gif.mimeType || 'video/webm';
+    const fileName = gif.fileName || `${gif.id}.webm`;
     const { fileId, mediaKeys, capability } = await deps.media.uploadBlob(
-      blob, `${gif.id}.webm`, 'video/webm', mediaUploadOptions(),
+      blob, fileName, mimeType, mediaUploadOptions(),
     );
     const mediaCrypto = mediaKeys
       ? { file_key: mediaKeys.keyB64, file_nonce: mediaKeys.nonceB64, capability } : {};
@@ -479,8 +515,8 @@ export function createMessageController(deps: MessageDependencies) {
     const wireContent: Record<string, unknown> = {
       kind: 'gif',
       file_id: fileId,
-      filename: `${gif.id}.webm`,
-      mime: 'video/webm',
+      filename: fileName,
+      mime: mimeType,
       width: gif.width || 240,
       height: gif.height || 240,
       duration_secs: Math.round(gif.duration),
@@ -488,11 +524,12 @@ export function createMessageController(deps: MessageDependencies) {
       ttl_secs: ttlSecs || undefined,
       ...mediaCrypto,
     };
-    deps.media.cacheBlob(fileId, blob, 'video/webm');
+    deps.media.cacheBlob(fileId, blob, mimeType);
     const uuid = await publishInner(toAddress, wireContent);
     const id = currentStore.allocateMessageId(chat.id, uuid);
-    const sentGif = { ...gif, id: fileId };
-    rememberSavedGif(sentGif);
+    const sentGif = { ...gif, id: fileId, mimeType, fileName };
+    // Уже сохранённый GIF второй копией (новый file_id) в список не встаёт
+    if (!savedGifs.some((candidate) => candidate.id === gif.id)) rememberSavedGif(sentGif);
     const message: ApiMessage = {
       id,
       chatId: chat.id,
@@ -1505,18 +1542,6 @@ export function createMessageController(deps: MessageDependencies) {
       return true;
     },
 
-    // «Save GIF»/unsave из контекст-меню сообщения; персист на пользователя
-    saveGif({ gif, shouldUnsave }: { gif: ApiVideo; shouldUnsave?: boolean }) {
-      if (shouldUnsave) {
-        const index = savedGifs.findIndex((candidate) => candidate.id === gif.id);
-        if (index >= 0) savedGifs.splice(index, 1);
-        persistSavedGifs();
-      } else {
-        rememberSavedGif(gif);
-      }
-      return Promise.resolve(true);
-    },
-
     // Список голосовавших за вариант (панель результатов публичного опроса).
     // Агрегат весь на клиенте — пагинация не нужна
     loadPollOptionResults({ chat, messageId, option }: {
@@ -1993,6 +2018,9 @@ export function createMessageController(deps: MessageDependencies) {
     getSavedGifs: () => savedGifs,
     methods,
     rememberSavedGif,
+    forgetSavedGif,
+    findSavedGifByHash,
+    getSavedGifHash: (id: string) => savedGifHashes.get(id),
     resetSavedGifs,
     refreshPollMessage,
     scheduleAnonymousTally,

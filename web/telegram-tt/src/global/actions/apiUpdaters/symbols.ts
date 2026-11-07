@@ -8,6 +8,11 @@ addActionHandler('apiUpdate', (global, actions, update): ActionReturnType => {
     case 'updateStickerSet': {
       return updateStickerSet(global, update.id, update.stickerSet);
     }
+
+    case 'updateSavedGifs': {
+      actions.loadSavedGifs();
+      return undefined;
+    }
   }
 
   return undefined;

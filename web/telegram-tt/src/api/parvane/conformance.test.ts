@@ -2986,7 +2986,8 @@ describe('conformance MD-1: общий разбор Markdown', () => {
   it('образец и ответ на месте; ядро сверяет тот же файл', () => {
     expect(rule('MD-1').clients).toBeDefined();
     expect(readRepo('conformance/markdown/all-constructs.md')).toContain('## 21. Вложенность «всё во всём»');
-    expect(JSON.parse(readRepo('conformance/markdown/all-constructs.expected.json')).blocks.length).toBeGreaterThan(100);
+    const expected = JSON.parse(readRepo('conformance/markdown/all-constructs.expected.json'));
+    expect(expected.blocks.length).toBeGreaterThan(100);
     expect(readRepo('desktop/parvane-core/tests/sections/markdown_tests.cpp'))
       .toContain('all-constructs.expected.json');
   });
@@ -2998,5 +2999,23 @@ describe('conformance MD-1: общий разбор Markdown', () => {
     expect(readRepo(`${overlay}NoteMarkdown.kt`)).toContain('ParvaneSections.markdown(text, title)');
     // Прежний разбор Kotlin регулярками не вернулся
     expect(readRepo(`${overlay}NoteText.kt`)).not.toMatch(/fun render\(|fun parts\(/);
+  });
+});
+
+// GIF-1 (7 ноя 2026): сохранённые GIF — записи `g:<sha256>` вида packs журнала личного состояния
+describe('conformance GIF-1: свои GIF на всех своих устройствах', () => {
+  it('web: запись g: ссылкой на файл, записи g: не ставятся как наборы, приём сверяет sha256', () => {
+    expect(String(rule('GIF-1').clients!.web)).not.toContain('ОТКРЫТО');
+    const provider = readRepo('web/telegram-tt/src/api/parvane/provider.ts');
+    expect(provider).toContain('} = splitJournalPacks(allPacks, allRemoved);');
+    expect(provider)
+      .toContain('if (gifs.length || removedGifs.length) applyJournalGifs(gifs, removedGifs);');
+    expect(provider)
+      .toContain('verifyGifBytes(new Uint8Array(await blob.arrayBuffer()), buildGifJournalKey(ref.hashHex))');
+    expect(provider)
+      .toMatch(/async saveGif\([\s\S]{0,400}forgetSavedGifRecord\(gif\.id, hashHex\)[\s\S]{0,200}recordSavedGif/);
+    expect(provider).toContain('uploadBlob(blob, fileName, mimeType, { encrypt: true, withCapability: true })');
+    const journal = readRepo('web/telegram-tt/src/api/parvane/savedGifJournal.ts');
+    expect(journal).toContain('const GIF_KEY_PREFIX = \'g:\';');
   });
 });

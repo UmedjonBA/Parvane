@@ -954,6 +954,26 @@ export function createLocalState(deps: LocalStateDependencies) {
     notifyChange('folders');
   }
 
+  // Место «Все чаты» среди папок (0 — первыми): Telegram даёт двигать его только с Premium, у нас — всем.
+  // Хранится отдельно от списка папок (их записи журнала не трогаются); в журнал уходит как id 0 в folder_order.
+  function loadAllFolderIndex(): number {
+    try {
+      const value = Number(localStorage.getItem(storageKey('folders_all_index')) || '0');
+      return Number.isInteger(value) && value > 0 ? value : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function saveAllFolderIndex(index: number) {
+    try {
+      localStorage.setItem(storageKey('folders_all_index'), String(Math.max(0, Math.floor(index))));
+    } catch {
+      // квота — переживём
+    }
+    notifyChange('folders');
+  }
+
   // Черновики: chatId → draft (сериализованный ApiDraft). localStorage общий
   // для вкладок — конфликт решается last-write-wins по date
   function loadDrafts(): Record<string, Record<string, unknown>> {
@@ -1229,6 +1249,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     flushHistoryNow: flushHistoryQueue,
     loadDrafts,
     loadFolders,
+    loadAllFolderIndex,
     loadInviteLinks,
     isBlocked,
     loadNotifyDefaults,
@@ -1251,6 +1272,7 @@ export function createLocalState(deps: LocalStateDependencies) {
     saveRepairAttempts,
     saveDraft,
     saveFolders,
+    saveAllFolderIndex,
     saveInviteLinks,
     setArchived,
     setPinned,

@@ -40,10 +40,14 @@ const TGS_BYTES = gzipSync(JSON.stringify({
 
 async function openStickerTab(page) {
   const menu = page.locator('.SymbolMenu');
-  if (!(await menu.isVisible().catch(() => false))) {
-    await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first().click();
-    await menu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+  // Панель, закрывающаяся после окна набора, ещё держит подложку и перехватывает нажатие — повторить после Escape
+  for (let attempt = 0; attempt < 4 && !(await menu.isVisible().catch(() => false)); attempt++) {
+    const isClicked = await page.getByRole('button', { name: 'Choose emoji, sticker or GIF' }).first()
+      .click({ timeout: 5000 }).then(() => true, () => false);
+    if (!isClicked) await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'visible', timeout: 5000 }).catch(() => undefined);
   }
+  await menu.waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
   // force: кнопка таба «нестабильна» из-за пульсирующих анимаций панели
   await menu.getByRole('button', { name: 'Stickers', exact: true }).click({ force: true });
 }

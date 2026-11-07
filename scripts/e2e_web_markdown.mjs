@@ -73,9 +73,19 @@ try {
   await title.blur();
 
   // ── Правка на широком экране: редактор и просмотр рядом, без списка и «Связей» ──
-  await note.getByRole('button', { name: 'Edit' }).click();
   const editor = page.locator('#knowledge-note-editor');
-  await editor.fill(FIXTURE);
+  // Переименование перерисовывает заметку — нажатие сразу после него может потеряться: повторить
+  for (let attempt = 0; attempt < 5 && !await editor.isVisible(); attempt++) {
+    await note.getByRole('button', { name: 'Edit' }).first().click().catch(() => undefined);
+    await editor.waitFor({ state: 'visible', timeout: 3000 }).catch(() => undefined);
+  }
+  // Редактор после открытия правки ещё раз перерисовывается — заполнение может попасть в отцепленный узел
+  for (let attempt = 0; ; attempt++) {
+    try { await editor.fill(FIXTURE, { timeout: 5000 }); break; } catch (error) {
+      if (attempt >= 4) throw error;
+      await page.waitForTimeout(500);
+    }
+  }
   const split = note.locator('[data-note-edit="split"]');
   await visible(split, 'правка с просмотром рядом');
   const preview = note.locator('[data-note-preview]');
@@ -139,7 +149,7 @@ try {
     .catch(() => assert.fail('прокрутка редактора к «17. Математика» не поставила заголовок вверх просмотра'));
   await shot('edit-sync');
   console.log('OK: правка — панели одной высоты, прокрутка синхронна по строкам в обе стороны');
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await visible(body, 'текст заметки после сохранения');
   await visible(knowledge.locator('[data-notes-list]'), 'список заметок вернулся после правки');
   console.log('OK: правка — редактор и живой просмотр рядом, список и «Связи» на время правки убраны');
@@ -170,6 +180,34 @@ try {
   assert.equal(dialogs, 0, 'ни один alert из текста не выполнился');
   await shot('read-top');
   console.log('OK: H1–H6, цитаты, callouts, начертания, таблицы, задачи, подсветка кода; HTML не исполняется');
+
+  // ── Текст выделяется, у кода — «Копировать», «Изменить» и «Запланировать» — в закреплённой шапке ──
+  assert.equal(await body.locator('[data-md-line]').first().evaluate(
+    (element) => getComputedStyle(element).userSelect), 'text', 'текст заметки выделяется');
+  const pythonCode = body.locator('[data-md-code="python"]').first();
+  await pythonCode.scrollIntoViewIfNeeded();
+  await pythonCode.hover();
+  const copyButton = pythonCode.locator('[data-md-copy]');
+  await visible(copyButton, 'кнопка «Копировать» у кода при наведении');
+  // Кнопка проявляется плавно (0,15 с) — ждать, а не мерить в первый же момент
+  await copyButton.first().evaluate((element) => new Promise((resolve, reject) => {
+    const deadline = Date.now() + 3000;
+    const check = () => {
+      if (Number(getComputedStyle(element).opacity) > 0.5) resolve(undefined);
+      else if (Date.now() > deadline) reject(new Error('кнопка «Копировать» не проявилась при наведении'));
+      else requestAnimationFrame(check);
+    };
+    check();
+  }));
+  await copyButton.click();
+  await visible(page.getByText('Text copied to clipboard', { exact: false }).first(), 'уведомление о копировании');
+  await scrollNote(0.9);
+  const bar = page.locator('[data-note-bar]');
+  await visible(bar.locator('[data-note-bar-edit]'), '«Изменить» в шапке');
+  await visible(bar.locator('[data-note-bar-plan]'), '«Запланировать» в шапке');
+  assert.ok(await inViewport(bar.locator('[data-note-bar-edit]')), '«Изменить» на экране и в конце заметки');
+  await scrollNote(0);
+  console.log('OK: текст выделяется, «Копировать» у кода, «Изменить»/«Запланировать» в закреплённой шапке');
 
   // ── Якорь `#раздел` прокручивает к заголовку ──
   await scrollNote(0);

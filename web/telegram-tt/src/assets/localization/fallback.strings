@@ -1607,6 +1607,11 @@
 "MediaReplaceInvalidError_other" = "This media cannot be replaced with the selected files";
 "GifPickerBlocked" = "Sending GIFs is not allowed in this chat";
 "GifPickerEmpty" = "No saved GIFs";
+"ParvaneUploadGif" = "Upload GIF";
+"ParvaneUploadGifProgress" = "Uploading GIF…";
+"ParvaneUploadGifTooBig" = "The file is too large for a GIF (up to 20 MB)";
+"ParvaneUploadGifUnsupported" = "This file can't be used as a GIF. Choose a .gif, .mp4 or .webm file";
+"ParvaneUploadGifFailed" = "Couldn't upload the GIF";
 "AriaCancelPollCreation" = "Cancel poll creation";
 "AriaLabelSearchStickers" = "Search stickers";
 "AriaLabelSearchGifs" = "Search GIFs";

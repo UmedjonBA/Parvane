@@ -1331,6 +1331,11 @@ export interface LangPair {
   'FileDropZoneNoCompression': undefined;
   'GifPickerBlocked': undefined;
   'GifPickerEmpty': undefined;
+  'ParvaneUploadGif': undefined;
+  'ParvaneUploadGifProgress': undefined;
+  'ParvaneUploadGifTooBig': undefined;
+  'ParvaneUploadGifUnsupported': undefined;
+  'ParvaneUploadGifFailed': undefined;
   'AriaCancelPollCreation': undefined;
   'AriaLabelSearchStickers': undefined;
   'AriaLabelSearchGifs': undefined;

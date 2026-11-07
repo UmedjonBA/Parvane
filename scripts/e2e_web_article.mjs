@@ -112,7 +112,7 @@ try {
   await note.getByLabel('Note title').fill(title);
   await note.getByLabel('Note title').blur();
   await knowledge.locator(`[data-note-row="${title}"]`).first().waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-  await note.getByRole('button', { name: 'Edit' }).click();
+  await note.getByRole('button', { name: 'Edit' }).first().click();
   const editor = page.locator('#knowledge-note-editor');
   await editor.fill(markdown);
   // Картинка и видео — «Вставить файл»: файлы ложатся в облако рядом с заметкой, в текст — `![[имя]]`
@@ -125,7 +125,7 @@ try {
     const value = document.querySelector('#knowledge-note-editor')?.value || '';
     return value.includes('![[карта.png]]') && value.includes('![[клип.webm]]');
   }, undefined, { timeout: 60000 }).catch(() => assert.fail('файлы не вставились в текст заметки'));
-  await note.getByRole('button', { name: 'Save' }).click();
+  await note.getByRole('button', { name: 'Save' }).first().click();
   await knowledge.locator(`[data-note-row="${title}"]`).getByText('Вещи').first()
     .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
   const noteBody = note.locator('[data-note-body]');

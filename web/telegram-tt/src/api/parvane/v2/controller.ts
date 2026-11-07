@@ -3149,6 +3149,11 @@ export function createV2Controller(deps: Deps) {
     if (fileId && d && !blobDomains.has(fileId)) blobDomains.set(fileId, d);
   }
 
+  /** Сервер блоба, если он чужой; свой — undefined. */
+  function getBlobDomain(fileId: string) {
+    return blobDomains.get(fileId);
+  }
+
   async function streamBlobCap(
     conn: V2Connection, fileId: string, capabilityB64: string, firstChunk: number, chunkCount: number,
   ) {
@@ -4802,6 +4807,7 @@ export function createV2Controller(deps: Deps) {
     completeBlobUpload,
     downloadBlobCap,
     setBlobDomain,
+    getBlobDomain,
     withBlobSession,
     trySendTyping,
     publishPresence,
