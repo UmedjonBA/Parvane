@@ -268,7 +268,7 @@ SplitToggle SetupSplitToggle(
 	return button;
 }
 
-[[nodiscard]] not_null<Ui::SettingsButton*> AddReactionsButton(
+[[maybe_unused, nodiscard]] not_null<Ui::SettingsButton*> AddReactionsButton(
 		not_null<Ui::VerticalLayout*> container,
 		not_null<Window::SessionController*> controller,
 		Fn<void(Type)> showOther) {
@@ -1176,10 +1176,7 @@ void BuildNotifyTypeSection(SectionBuilder &builder) {
 			controller,
 			Data::DefaultNotify::Broadcast,
 			showOther);
-		const auto reactions = AddReactionsButton(
-			ctx.container,
-			controller,
-			showOther);
+		// Parvane: уведомлений о реакциях нет (настройка была только облачной Telegram) — пункта нет
 		if (ctx.highlights) {
 			ctx.highlights->push_back({
 				u"notifications/private"_q,
@@ -1192,10 +1189,6 @@ void BuildNotifyTypeSection(SectionBuilder &builder) {
 			ctx.highlights->push_back({
 				u"notifications/channels"_q,
 				{ channels.get(), { .rippleShape = true } },
-			});
-			ctx.highlights->push_back({
-				u"notifications/reactions"_q,
-				{ reactions.get(), { .rippleShape = true } },
 			});
 		}
 		return SectionBuilder::WidgetToAdd{};
@@ -1223,17 +1216,9 @@ void BuildNotifyTypeSection(SectionBuilder &builder) {
 			.icon = { &st::menuIconChannel },
 		};
 	});
-	builder.add(nullptr, [] {
-		return SearchEntry{
-			.id = u"notifications/reactions"_q,
-			.title = tr::lng_notification_reactions(tr::now),
-			.keywords = { u"reactions"_q },
-			.icon = { &st::menuIconGroupReactions },
-		};
-	});
 }
 
-void BuildEventNotificationsSection(SectionBuilder &builder) {
+[[maybe_unused]] void BuildEventNotificationsSection(SectionBuilder &builder) {
 	builder.addSkip(st::settingsCheckboxesSkip);
 	builder.addDivider();
 	builder.addSkip(st::settingsCheckboxesSkip);
@@ -1583,7 +1568,7 @@ void BuildNotificationsSectionContent(SectionBuilder &builder) {
 	BuildGlobalNotificationsSection(builder);
 	BuildNotifyViewSection(builder);
 	BuildNotifyTypeSection(builder);
-	BuildEventNotificationsSection(builder);
+	// Parvane: «События» (закреплённые сообщения) — служебных сообщений о закреплении у нас нет, пункт пустой
 	BuildCallNotificationsSection(builder);
 	BuildBadgeCounterSection(builder);
 	BuildSystemIntegrationAndAdvancedSection(builder);

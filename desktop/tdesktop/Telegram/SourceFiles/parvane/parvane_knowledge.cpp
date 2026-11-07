@@ -773,7 +773,7 @@ void KnowledgeScreen::refreshHeader() {
 		? (note->isDaily ? tr::lng_parvane_notes_daily_folder(tr::now) : FolderCaption(note->folder))
 		: QString();
 	const auto key = std::to_string(int(_view)) + (isNarrow() ? "n" : "w") + (isNoteAlone ? "a" : "-")
-		+ S(crumb);
+		+ (_noteEditing ? "e" : "-") + S(crumb);
 	if (key == _headerKey && (_header || isNoteAlone)) {
 		return;
 	}
@@ -830,6 +830,29 @@ void KnowledgeScreen::refreshHeader() {
 	}
 	if (isNoteShown && !narrow) {
 		header->add(object_ptr<Kit::Label>(header, u"/ "_q + crumb, Kit::Label::Muted()));
+		// «Изменить» и «Запланировать» — в закреплённой строке: в длинной заметке не листать до её конца
+		if (!_noteEditing) {
+			const auto edit = header->add(object_ptr<NotesIconButton>(
+				header,
+				u"edit"_q,
+				tr::lng_parvane_notes_edit(tr::now)));
+			edit->setClickedCallback([=] { crl::on_main(this, [=] {
+				if (_noteView) {
+					_noteView->startEdit();
+				}
+			}); });
+			if (!(note->isDaily && notes::isDayTitle(note->title))) {
+				const auto plan = header->add(object_ptr<NotesIconButton>(
+					header,
+					u"cal"_q,
+					tr::lng_parvane_notes_plan(tr::now)));
+				plan->setClickedCallback([=] { crl::on_main(this, [=] {
+					if (_noteView) {
+						_noteView->schedule();
+					}
+				}); });
+			}
+		}
 	}
 	header->addStretch();
 	if (_view == View::Notes && !narrow) {
@@ -977,6 +1000,7 @@ void KnowledgeScreen::refreshPane() {
 				.editingChanged = [=](bool editing) {
 					if (_noteEditing != editing) {
 						_noteEditing = editing;
+						refreshHeader(); // кнопки правки в строке «Знаний» — только вне правки
 						refreshSide();
 						relayout();
 						if (editing) {

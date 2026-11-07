@@ -404,6 +404,10 @@ std::unique_ptr<base::Timer> g_stateTimer;
 	auto folders = parvane::json::array();
 	auto order = parvane::json::array();
 	for (const auto &f : session->data().chatsFilters().list()) {
+		if (!f.id()) {
+			order.push_back(0); // «все чаты» — только место в порядке (двигается без Premium)
+			continue;
+		}
 		if (f.id() <= 1) {
 			continue; // 0 и 1 зарезервированы журналом («все чаты», архив) — не трогаем
 		}
@@ -750,23 +754,25 @@ void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap)
 			++changed;
 		}
 	}
-	// Порядок папок (LWW-регистр); «все чаты» (id 0) — на своём месте в начале.
+	// Порядок папок (LWW-регистр); «все чаты» (id 0) — на месте, выбранном на любом своём устройстве (без Premium).
+	// Порядок без id 0 (записан до 7 ноя 2026) — «все чаты» первыми.
 	if (snap.contains("folder_order") && snap["folder_order"].contains("ids")) {
-		auto ids = QVector<MTPint>();
 		auto localOrder = std::vector<int>();
 		for (const auto &f : filters.list()) {
-			if (!f.id()) {
-				ids.push_back(MTP_int(0));
-			} else {
-				localOrder.push_back(f.id());
-			}
+			localOrder.push_back(f.id());
 		}
 		auto wantOrder = std::vector<int>();
 		for (const auto &v : snap["folder_order"]["ids"]) {
-			if (v.is_number_integer() && wanted.contains(v.get<int>())
-				&& ranges::find(localOrder, v.get<int>()) != localOrder.end()) {
+			if (v.is_number_integer()
+				&& (v.get<int>() == 0 || wanted.contains(v.get<int>()))
+				&& ranges::find(localOrder, v.get<int>()) != localOrder.end()
+				&& ranges::find(wantOrder, v.get<int>()) == wantOrder.end()) {
 				wantOrder.push_back(v.get<int>());
 			}
+		}
+		if (ranges::find(wantOrder, 0) == wantOrder.end()
+			&& ranges::find(localOrder, 0) != localOrder.end()) {
+			wantOrder.insert(wantOrder.begin(), 0);
 		}
 		for (const auto id : localOrder) {
 			if (ranges::find(wantOrder, id) == wantOrder.end()) {
@@ -774,6 +780,7 @@ void ProjectFolders(not_null<Main::Session*> session, const parvane::json &snap)
 			}
 		}
 		if (wantOrder != localOrder) {
+			auto ids = QVector<MTPint>();
 			for (const auto id : wantOrder) {
 				ids.push_back(MTP_int(id));
 			}
@@ -1116,6 +1123,10 @@ void InstallMissingStickerPacks() { // main
 			continue;
 		}
 		g_stickerPacksTried.insert(key);
+		if (key.startsWith(u"g:"_q)) {
+			InstallSavedGifFromJournal(record); // GIF-1: не набор стикеров — сохранённый GIF
+			continue;
+		}
 		InstallStickerPackFromJournal(record);
 	}
 }
@@ -1141,6 +1152,10 @@ void ProjectStickerPacks(const parvane::json &snap) { // main
 			const auto key = StickerPackRecordKey(record);
 			if (!key.isEmpty() && !kept.contains(key)) {
 				g_stickerPacksTried.remove(key);
+				if (key.startsWith(u"g:"_q)) {
+					RemoveSavedGifFromJournal(key.mid(2)); // GIF-1: убран на другом устройстве
+					continue;
+				}
 				LOG(("Parvane: стикеры: набор %1 убран из журнала состояния — на desktop набор остаётся").arg(key));
 			}
 		}
@@ -1178,6 +1193,64 @@ void RecordStickerPack(const parvane::json &ref, bool emoji) { // main
 	SaveStickerPacksLocal();
 	LOG(("Parvane: стикеры: набор %1 записан в журнал состояния").arg(QString::fromStdString(key)));
 	ScheduleStateFlush("packs");
+}
+
+// GIF-1: сохранённый GIF — запись `g:<sha256>`, ссылка на сам файл (count 1, content_hash — sha256 в base64)
+void RecordSavedGif(const parvane::json &fileRef, const std::string &sha256Hex) { // main
+	LoadStickerPacksLocal();
+	const auto key = "g:" + sha256Hex;
+	auto ref = PackArchiveRef(fileRef);
+	ref["count"] = 1;
+	ref["content_hash"] = QByteArray::fromHex(QByteArray::fromStdString(sha256Hex)).toBase64().toStdString();
+	auto next = parvane::json::array();
+	for (const auto &item : g_stickerPackRecords) {
+		if (item.value("set_id", std::string()) != key) {
+			next.push_back(item);
+		}
+	}
+	next.push_back({
+		{ "set_id", key },
+		{ "ref", ref },
+		{ "added_ms", std::to_string(QDateTime::currentMSecsSinceEpoch()) },
+	});
+	g_stickerPackRecords = std::move(next);
+	g_stickerPacksTried.insert(QString::fromStdString(key));
+	SaveStickerPacksLocal();
+	LOG(("Parvane: GIF-1: GIF %1 сохранён в журнал состояния").arg(QString::fromStdString(sha256Hex).left(12)));
+	ScheduleStateFlush("packs");
+}
+
+void ForgetSavedGif(const std::string &sha256Hex) { // main
+	LoadStickerPacksLocal();
+	const auto key = "g:" + sha256Hex;
+	auto next = parvane::json::array();
+	for (const auto &item : g_stickerPackRecords) {
+		if (item.value("set_id", std::string()) != key) {
+			next.push_back(item);
+		}
+	}
+	if (next.size() == g_stickerPackRecords.size()) {
+		return;
+	}
+	g_stickerPackRecords = std::move(next);
+	g_stickerPacksTried.remove(QString::fromStdString(key));
+	SaveStickerPacksLocal();
+	LOG(("Parvane: GIF-1: GIF %1 убран из журнала состояния").arg(QString::fromStdString(sha256Hex).left(12)));
+	ScheduleStateFlush("packs");
+}
+
+// Новые локальные наборы (созданные из файлов) — архив в облако и запись в журнал состояния (PACK-3)
+void RecordNewLocalStickerPacks() { // main
+	LoadStickerPacksLocal();
+	auto recorded = QSet<QString>();
+	for (const auto &record : g_stickerPackRecords) {
+		recorded.insert(StickerPackRecordKey(record));
+	}
+	UploadLocalStickerPacksForJournal(recorded, [](std::vector<parvane::json> refs, bool) {
+		for (const auto &ref : refs) {
+			RecordStickerPack(ref, false);
+		}
+	});
 }
 
 // Наборы, стоявшие на устройстве до PACK-3, — в журнал один раз (дальше журнал главнее). Звать при подключении
@@ -2174,6 +2247,19 @@ void ResetStateAccountData() {
 	g_stickerPacksMigrated = false;
 	g_stickerPacksMigrating = false;
 	g_stickerPacksTried.clear();
+}
+
+// Блок-лист аккаунта для экрана «Заблокированные пользователи»: MTProto contacts.getBlocked у нас нет, список берётся из
+// своего (`g_blockedAddrs`, журнал состояния); пользователи заводятся, если ещё не известны
+std::vector<not_null<PeerData*>> BlockedPeers(not_null<Main::Session*> session) { // main
+	auto result = std::vector<not_null<PeerData*>>();
+	auto addresses = g_blockedAddrs.values();
+	std::sort(addresses.begin(), addresses.end());
+	for (const auto &address : addresses) {
+		RegisterPeer(address);
+		result.push_back(ensurePeerUser(session, IdForAddress(address), address));
+	}
+	return result;
 }
 
 } // namespace Parvane

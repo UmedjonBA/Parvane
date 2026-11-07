@@ -1,0 +1,15 @@
+lng_parvane_media_cache_title
+Parvane media
+Медиа Parvane
+
+lng_parvane_media_cache
+Downloaded chat media
+Скачанные медиа чатов
+
+lng_parvane_media_cache_about
+Photos, videos and files from your chats, saved on this device (encrypted). Cleared media is downloaded again when you open the chat after a restart.
+Фото, видео и файлы из чатов, сохранённые на этом устройстве (в зашифрованном виде). Очищенные медиа скачаются заново, когда вы откроете чат после перезапуска.
+
+lng_parvane_media_cache_clear_sure
+Clear downloaded chat media on this device?
+Очистить скачанные медиа чатов на этом устройстве?

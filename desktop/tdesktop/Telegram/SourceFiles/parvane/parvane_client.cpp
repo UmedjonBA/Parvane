@@ -32,6 +32,7 @@ void DecCacheRemove(const QString &id);
 [[nodiscard]] nlohmann::json DecCacheSnapshot();
 void OnAuthRejected(const QString &reason); // fwd: отказ JWT → экран входа
 void ApplyNotifyBlob(const QString &json);   // fwd: настройки уведомлений с другого устройства
+void ApplySavedNotify(not_null<Main::Session*> session); // fwd: сохранённые настройки уведомлений → tdesktop
 [[nodiscard]] QString GatewayUrl();                          // fwd: адрес gateway (v2-сессия)
 void SaveFolders(not_null<Main::Session*> session);          // fwd: папки → tdata (журнал состояния v2)
 // fwd: изменение группы v2 записью журнала (раздел «Протокол v2: группы…»).
@@ -2797,6 +2798,18 @@ bool StartSession() {
 					}
 				});
 			}
+			// «Приём звонков на этом устройстве» выключен: здесь не звонит, вызов молча закрывается только на этом
+			// устройстве (на других своих звонит как обычно)
+			if (CallsDisabledHere()) {
+				LOG(("Parvane: входящий звонок от %1 — приём звонков на этом устройстве выключен")
+					.arg(QString::fromStdString(peer)));
+				crl::on_main([] {
+					if (const auto m = CurrentCallManager()) {
+						m->dismissIncoming(m->callId());
+					}
+				});
+				return;
+			}
 			// Авто-приём (e2e) без UI.
 			if (const char *aa = ParvaneDevEnv("PARVANE_AUTOACCEPT"); aa && *aa) {
 				crl::on_main([] { if (const auto m = CurrentCallManager()) m->accept(); });
@@ -3030,21 +3043,57 @@ bool StartSession() {
 // Теперь снимаем учётные данные (иначе рестарт зациклится на том же токене) и
 // показываем экран входа. Ключи и история остаются — повторный вход вернёт их.
 std::atomic<bool> g_authRejectHandling{ false };
+std::atomic<crl::time> g_interactiveLoginAt{ 0 };
+
+void NoteInteractiveLogin() {
+	g_interactiveLoginAt = crl::now();
+}
+
+namespace {
+
+// Устройство вышло из аккаунта («Завершить сеанс» → «Просто выйти» на другом устройстве): его device_id в списке
+// отозванных, и вход паролем с прежними ключами упирается в «отозвано» (6 ноя 2026: компьютер крутился в окне
+// входа без объяснений). Ключи прежнего устройства не стираются — откладываются рядом; следующий вход — новым
+// устройством (подтверждение ботом или другим своим устройством, история — из журнала аккаунта).
+void RetireSignedOutDevice(const QString &address) {
+	const auto dir = V2StateDir(address);
+	if (address.isEmpty() || !QDir(dir).exists()) {
+		return;
+	}
+	const auto aside = dir + u".signed-out-"_q
+		+ QDateTime::currentDateTime().toString(u"yyyyMMdd-HHmmss"_q);
+	LOG(("Parvane: устройство вышло из аккаунта — ключи прежнего устройства отложены, вход будет новым "
+		"устройством: %1").arg(QDir(dir).rename(dir, aside) ? u"да"_q : u"не удалось"_q));
+}
+
+} // namespace
+
 void OnAuthRejected(const QString &reason) {
 	if (g_authRejectHandling.exchange(true)) {
 		return;
 	}
+	// Отказ сразу после входа паролем: токен свежий, пароль верный — значит, отозвано само устройство
+	const auto loginAt = g_interactiveLoginAt.exchange(0);
+	const auto signedOut = loginAt > 0 && (crl::now() - loginAt) < 120 * crl::time(1000);
+	const auto address = SelfAddress();
 	LOG(("Parvane: авторизация отклонена (%1) — на экран входа; ключи и история "
-		"сохранены").arg(reason));
+		"сохранены%2").arg(reason, signedOut ? u" (устройство вышло из аккаунта)"_q : QString()));
 	const auto generation = AccountGeneration();
-	crl::on_main([generation] {
+	crl::on_main([generation, signedOut, address] {
 		g_authRejectHandling = false;
 		if (!AccountGenerationIs(generation)) {
 			return; // отказ токена прежнего аккаунта — не выход следующего (ревью 21 окт)
 		}
+		if (signedOut) {
+			StopSession(); // рабочий поток v2 отпускает файлы каталога устройства
+			RetireSignedOutDevice(address);
+		}
 		ClearLocalState();
 		if (const auto session = g_sessionWeak.get()) {
 			session->account().forcedLogOut();
+		}
+		if (signedOut) {
+			Ui::show(Ui::MakeInformBox(tr::lng_parvane_device_signed_out_relogin()));
 		}
 	});
 }
@@ -5229,6 +5278,60 @@ void UploadLocalStickerPacksForJournal(
 	});
 }
 
+// Свой набор стикеров из файлов («Стикеры и эмодзи → Создать набор из файлов», как web): PNG/WebP/TGS/WebM —
+// как есть, прочие картинки (JPG, BMP, GIF — первый кадр) — PNG со стороной до 512 px. Набор — каталог в
+// StickerPacksRoot (его же читает LoadLocalStickerPacks), затем архив — в облако и в журнал состояния (PACK-3).
+void CreateStickerPackFromFiles(
+		not_null<Main::Session*> session,
+		const QString &name,
+		const QStringList &paths,
+		Fn<void(int count, QString shown)> done) {
+	const auto root = StickerPacksRoot();
+	auto base = SanitizePackName(name.trimmed().isEmpty() ? u"Stickers"_q : name.trimmed());
+	auto shown = base;
+	for (auto n = 2; QDir(root + u"/"_q + shown).exists(); ++n) {
+		shown = base + u" "_q + QString::number(n);
+	}
+	const auto dir = root + u"/"_q + shown;
+	const auto weak = base::make_weak(session);
+	crl::async([=] {
+		QDir().mkpath(dir);
+		auto count = 0;
+		for (const auto &path : paths) {
+			const auto info = QFileInfo(path);
+			const auto ext = info.suffix().toLower();
+			const auto target = dir + u"/"_q + QString::number(count + 1).rightJustified(2, '0');
+			if (ext == u"webp"_q || ext == u"png"_q || ext == u"tgs"_q || ext == u"webm"_q) {
+				count += QFile::copy(path, target + u"."_q + ext) ? 1 : 0;
+				continue;
+			}
+			auto image = QImage(path);
+			if (image.isNull()) {
+				continue;
+			}
+			if (std::max(image.width(), image.height()) > 512) {
+				image = image.scaled(512, 512, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+			}
+			count += image.save(target + u".png"_q, "PNG") ? 1 : 0;
+		}
+		if (!count) {
+			QDir(dir).removeRecursively();
+		}
+		crl::on_main([=] {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			if (count) {
+				LoadLocalStickerPacks(strong);
+				RecordNewLocalStickerPacks(); // PACK-3: архив — в облако, набор — на все свои устройства
+				LOG(("Parvane: стикеры: свой набор «%1» создан из файлов (%2 шт)").arg(shown).arg(count));
+			}
+			done(count, shown);
+		});
+	});
+}
+
 void AttachLocalOutgoingMedia(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &file) {
@@ -6357,7 +6460,9 @@ void injectMediaOnMain(
 	// документе без location проваливается и StreamingPlaybackFailed залипает
 	// на всю сессию (кружок навсегда «не скачан»).
 	const auto doc = session->data().processDocument(mtpDoc);
-	doc->setLocation(Core::FileLocation(localPath));
+	if (!localPath.isEmpty()) { // пусто — файл скачается по нажатию (автозагрузка выключена настройкой)
+		doc->setLocation(Core::FileLocation(localPath));
+	}
 	// Гифки — в Saved GIFs (вкладка GIFs панели): на реплее журнала список
 	// восстанавливается сам, нативный персист не задействуем.
 	if (kind == u"gif"_q) {
@@ -6527,6 +6632,35 @@ void injectPhotoOnMain(
 	}
 }
 
+// «Автозагрузка медиа» (настройки tdesktop): файл, видео или музыка сверх лимита для личных чатов / групп не качаются
+// сами — сообщение показывается сразу, файл — по нажатию (DocumentData::save → StartDeferredDownload). 7 ноя 2026.
+struct DeferredMedia {
+	QString fileId;
+	QString filename;
+	QString kind;
+	std::int64_t size = 0;
+	QString fileKey;
+	QString fileNonce;
+	bool running = false;
+	QString saveTo;
+};
+QHash<DocumentId, DeferredMedia> g_deferredMedia; // main
+
+[[nodiscard]] bool ShouldAutoDownload(
+		not_null<Main::Session*> session,
+		const QString &kind,
+		std::int64_t size,
+		bool peerIsChat) {
+	using namespace Data::AutoDownload;
+	const auto type = (kind == u"video"_q) ? Type::AutoPlayVideo
+		: (kind == u"audio"_q) ? Type::Music
+		: Type::File;
+	return session->settings().autoDownload().shouldDownload(
+		peerIsChat ? Source::Group : Source::User,
+		type,
+		size);
+}
+
 // Скачивает блоб из cloud на воркере, сохраняет на диск, затем инъецирует на
 // main. Дедуп-резервирование msgId делает вызывающий (injectOnMain).
 void pumpMediaDownload(
@@ -6555,6 +6689,28 @@ void pumpMediaDownload(
 	const auto fileIdStd = fileId.toStdString();
 	const auto fileKeyStd = fileKey.toStdString();
 	const auto fileNonceStd = fileNonce.toStdString();
+	// Автозагрузка выключена для такого файла — сообщение сразу, файл по нажатию (уже скачанное — из кэша, как раньше)
+	if ((kind == u"file"_q || kind == u"video"_q || kind == u"audio"_q)
+		&& ttlSecs <= 0
+		&& IsSafeFileId(fileId)
+		&& !QFile::exists(MediaCachePath(fileId))) {
+		if (const auto session = g_sessionWeak.get(); session && !ShouldAutoDownload(session, kind, size, peerIsChat)) {
+			const auto mediaId = docIdFromFileId(fileId);
+			g_deferredMedia.insert(DocumentId(mediaId), DeferredMedia{
+				.fileId = fileId,
+				.filename = filename,
+				.kind = kind,
+				.size = size,
+				.fileKey = fileKey,
+				.fileNonce = fileNonce,
+			});
+			injectMediaOnMain(session, from, senderId, authorId, out,
+				ts, msgId, mediaId, kind, QString(), filename, mime, size,
+				durationSecs, width, height, caption, peerIsChat, authorAddr,
+				ttlSecs);
+			return;
+		}
+	}
 	crl::async([=] {
 		const auto t = ControlSnapshot();
 		if (!t) {
@@ -6609,6 +6765,23 @@ void pumpMediaDownload(
 			return;
 		}
 		const auto mediaId = docIdFromFileId(fileId);
+		// GIF-1: отпечаток и ссылка на файл — чтобы «Сохранить GIF» записал его в журнал без повторной загрузки
+		if (kind == u"gif"_q) {
+			const auto hex = QString::fromLatin1(QCryptographicHash::hash(
+				QByteArray::fromStdString(bytes),
+				QCryptographicHash::Sha256).toHex());
+			auto ref = parvane::json{
+				{ "file_id", fileIdStd },
+				{ "name", SafeFileName(filename).toStdString() },
+				{ "count", 1 },
+			};
+			if (!fileKeyStd.empty()) {
+				ref["key"] = fileKeyStd;
+				ref["nonce"] = fileNonceStd;
+			}
+			AttachBlobCap(ref, fileIdStd);
+			crl::on_main([=] { NoteGifRef(DocumentId(mediaId), ref, hex); });
+		}
 		// Стикер: размеры — по самой картинке (spec 030). Без них tdesktop брал 512×512, и стикер не квадратной
 		// формы (web шлёт картинку стикером без width/height) рисовался растянутым.
 		auto realW = width;
@@ -6642,6 +6815,72 @@ void pumpMediaDownload(
 			}
 		});
 	});
+}
+
+bool StartDeferredDownloadImpl(not_null<DocumentData*> document, const QString &saveTo) { // main
+	const auto it = g_deferredMedia.find(document->id);
+	if (it == g_deferredMedia.end()) {
+		return false;
+	}
+	if (!saveTo.isEmpty()) {
+		it->saveTo = saveTo;
+	}
+	if (it->running) {
+		return true;
+	}
+	it->running = true;
+	const auto info = *it;
+	const auto docId = document->id;
+	const auto generation = AccountGeneration();
+	LOG(("Parvane: медиа %1 — скачивание по нажатию").arg(info.fileId));
+	crl::async([=] {
+		auto bytes = std::string();
+		auto d = DownloadChatBlob(
+			info.fileId.toStdString(),
+			parvane::chatrules::chatBlobCipherCap(info.kind.toStdString(), info.size));
+		auto ok = d.ok;
+		if (ok) {
+			bytes = std::move(d.bytes);
+			if (!info.fileKey.isEmpty()) {
+				auto dec = parvane::blobcrypt::decrypt(bytes, info.fileKey.toStdString(), info.fileNonce.toStdString());
+				ok = dec.has_value();
+				if (ok) {
+					bytes = std::move(*dec);
+				}
+			}
+		}
+		auto path = QString();
+		if (ok) {
+			WriteMediaCache(info.fileId, bytes);
+			path = WriteMediaWorkCopy(info.fileId + u"_"_q + SafeFileName(info.filename), bytes);
+		}
+		crl::on_main([=] {
+			const auto session = g_sessionWeak.get();
+			const auto it = g_deferredMedia.find(docId);
+			if (!session || it == g_deferredMedia.end() || !AccountGenerationIs(generation)) {
+				return;
+			}
+			const auto saveTo = it->saveTo;
+			if (path.isEmpty()) {
+				it->running = false;
+				LOG(("Parvane: медиа %1 по нажатию не скачано").arg(info.fileId));
+				return;
+			}
+			g_deferredMedia.erase(it);
+			const auto document = session->data().document(docId);
+			auto location = path;
+			if (!saveTo.isEmpty() && !IsInternalMediaPath(saveTo)) {
+				QFile::remove(saveTo);
+				if (QFile::copy(path, saveTo)) {
+					location = saveTo;
+				}
+			}
+			document->setLocation(Core::FileLocation(location));
+			session->data().requestDocumentViewRepaint(document);
+			session->data().notifyDocumentLayoutChanged(document);
+		});
+	});
+	return true;
 }
 
 // ── опросы (паритет): синтез и агрегация ─────────────────────────────────────
@@ -8703,6 +8942,43 @@ void RequestTelegramKeyAgain() {
 	crl::async([] { StartTelegramRecovery(true); });
 }
 
+// «Их никто не крал»: вышедшие устройства, убранные из списка на этом устройстве (журнал устройств не меняется)
+[[nodiscard]] QString DismissedLeftDevicesPath() {
+	return AccountFilePath(u"parvane-left-dismissed-"_q, SelfAddress(), u".json"_q);
+}
+
+[[nodiscard]] QSet<QString> DismissedLeftDevices() {
+	auto out = QSet<QString>();
+	const auto path = DismissedLeftDevicesPath();
+	if (path.isEmpty()) {
+		return out;
+	}
+	const auto list = QJsonDocument::fromJson(StoreRead(path)).array();
+	for (const auto &v : list) {
+		if (v.isString()) {
+			out.insert(v.toString());
+		}
+	}
+	return out;
+}
+
+void DismissLeftDevices(const std::vector<QString> &ids) {
+	const auto path = DismissedLeftDevicesPath();
+	if (path.isEmpty()) {
+		return;
+	}
+	auto all = DismissedLeftDevices();
+	for (const auto &id : ids) {
+		all.insert(id);
+	}
+	auto list = QJsonArray();
+	for (const auto &id : all) {
+		list.push_back(id);
+	}
+	StoreWrite(path, QJsonDocument(list).toJson(QJsonDocument::Compact));
+	LOG(("Parvane: экран устройств: из списка вышедших убрано %1").arg(int(ids.size())));
+}
+
 DevicesExtras FetchDevicesExtras() {
 	auto out = DevicesExtras();
 	const auto s = V2Ready();
@@ -8715,8 +8991,12 @@ DevicesExtras FetchDevicesExtras() {
 		out.rotationNeeded = s->sskState().value("rotationNeeded", false);
 		out.escrowMissing = s->isEscrowCopyMissing();
 		out.canSendTelegram = s->canSendKeyToTelegram();
+		const auto dismissed = DismissedLeftDevices();
 		for (const auto &id : s->leftSskHolders()) {
-			out.leftDevices.push_back(QString::fromStdString(id));
+			const auto qid = QString::fromStdString(id);
+			if (!dismissed.contains(qid)) {
+				out.leftDevices.push_back(qid);
+			}
 		}
 	} catch (const std::exception &e) {
 		LOG(("Parvane: экран устройств: состояние не получено: %1").arg(QString::fromUtf8(e.what())));
@@ -8821,6 +9101,26 @@ QString ResetIdentityWithPassword(const QString &password) {
 
 bool CallsRelayOnly() {
 	return QFile::exists(CallsRelayPath());
+}
+
+[[nodiscard]] QString CallsDisabledPath() {
+	return cWorkingDir() + u"tdata/parvane-calls-disabled"_q;
+}
+
+bool CallsDisabledHere() {
+	return QFile::exists(CallsDisabledPath());
+}
+
+void SetCallsDisabledHere(bool disabled) {
+	if (disabled) {
+		QFile file(CallsDisabledPath());
+		if (file.open(QIODevice::WriteOnly)) {
+			file.write("1");
+		}
+	} else {
+		QFile::remove(CallsDisabledPath());
+	}
+	LOG(("Parvane: приём звонков на этом устройстве: %1").arg(disabled ? u"выключен"_q : u"включён"_q));
 }
 
 bool PrivacyAudienceNobody(PrivacyAudience which) {
@@ -9445,6 +9745,71 @@ void ApplyNotifyBlob(const QString &json) {
 	}
 	SaveNotifyState();
 	LOG(("Parvane: настройки уведомлений применены с другого устройства"));
+}
+
+// Сохранённые настройки уведомлений → tdesktop при входе (7 ноя 2026). Без этого умолчания для личных чатов, групп и
+// каналов оставались «неизвестными» (MTProto account.getNotifySettings нет), tdesktop считал их заглушёнными, и
+// уведомлений и звука не было ни из одного чата без своего исключения. Нет сохранённого — включено, как в Telegram.
+// Исключения собеседников (адрес с @) — сразу; групп — когда группа появится (журнал состояния, ProjectNotify).
+void ApplySavedNotify(not_null<Main::Session*> session) { // main
+	auto &settings = session->data().notifySettings();
+	const auto guard = ApplyingNotifyGuard();
+	const auto types = std::array<std::pair<Data::DefaultNotify, QString>, 3>{ {
+		{ Data::DefaultNotify::User, u"users"_q },
+		{ Data::DefaultNotify::Group, u"groups"_q },
+		{ Data::DefaultNotify::Broadcast, u"channels"_q },
+	} };
+	for (const auto &[type, key] : types) {
+		auto mute = std::optional<Data::MuteValue>();
+		auto silent = std::optional<bool>();
+		if (g_notifyDefaults.contains(key)) {
+			const auto j = nlohmann::json::parse(g_notifyDefaults.value(key).toStdString(), nullptr, false);
+			mute = MuteFromWeb(j);
+			silent = SilentFromWeb(j);
+		}
+		settings.defaultUpdate(type, mute.value_or(Data::MuteValue{ .unmute = true }), silent);
+	}
+	auto users = 0;
+	for (auto it = g_notifyExceptions.constBegin(); it != g_notifyExceptions.constEnd(); ++it) {
+		if (!it.key().contains('@')) {
+			continue;
+		}
+		const auto j = nlohmann::json::parse(it.value().toStdString(), nullptr, false);
+		if (const auto mute = MuteFromWeb(j)) {
+			RegisterPeer(it.key());
+			settings.update(ensurePeerUser(session, IdForAddress(it.key()), it.key()), *mute, SilentFromWeb(j));
+			++users;
+		}
+	}
+	LOG(("Parvane: настройки уведомлений применены при входе (умолчания: %1, собеседников: %2)")
+		.arg(g_notifyDefaults.size())
+		.arg(users));
+}
+
+int64 MediaCacheBytes() {
+	auto total = int64(0);
+	const auto dir = QDir(cWorkingDir() + u"tdata/parvane-media-cache"_q);
+	for (const auto &info : dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+		total += info.size();
+	}
+	return total;
+}
+
+void ClearMediaCache() {
+	auto dir = QDir(cWorkingDir() + u"tdata/parvane-media-cache"_q);
+	auto removed = 0;
+	for (const auto &name : dir.entryList(QDir::Files | QDir::NoDotAndDotDot)) {
+		removed += dir.remove(name) ? 1 : 0;
+	}
+	LOG(("Parvane: кэш медиа очищен (%1 файлов)").arg(removed));
+}
+
+bool IsInternalMediaPath(const QString &path) {
+	if (path.isEmpty()) {
+		return false;
+	}
+	const auto internal = QDir(cWorkingDir() + u"tdata"_q).absolutePath() + u"/parvane-"_q;
+	return QFileInfo(path).absoluteFilePath().startsWith(internal);
 }
 
 void MirrorNotifySettings(not_null<const PeerData*> peer) {
@@ -10336,6 +10701,8 @@ void SaveFolders(not_null<Main::Session*> session) {
 	};
 	for (const auto &f : list) {
 		if (!f.id()) {
+			// «Все чаты»: только место среди папок (двигается без Premium); при чтении id 0 пропускается
+			arr.push_back({ { "id", 0 }, { "all_at", int(arr.size()) } });
 			continue;
 		}
 		nlohmann::json o;
@@ -10379,7 +10746,11 @@ void LoadFolders(not_null<Main::Session*> session) {
 		return s;
 	};
 	auto restored = 0;
+	auto allAt = 0;
 	for (const auto &o : arr) {
+		if (o.is_object() && o.contains("all_at") && o["all_at"].is_number_integer()) {
+			allAt = std::max(0, o["all_at"].get<int>());
+		}
 		if (!o.is_object() || !o.value("id", 0)) {
 			continue;
 		}
@@ -10409,6 +10780,20 @@ void LoadFolders(not_null<Main::Session*> session) {
 	}
 	if (restored > 0) {
 		LOG(("Parvane: папки восстановлены: %1").arg(restored));
+	}
+	if (allAt > 0) {
+		auto order = std::vector<int>();
+		for (const auto &f : session->data().chatsFilters().list()) {
+			if (f.id()) {
+				order.push_back(f.id());
+			}
+		}
+		order.insert(order.begin() + std::min(allAt, int(order.size())), 0);
+		auto ids = QVector<MTPint>();
+		for (const auto id : order) {
+			ids.push_back(MTP_int(id));
+		}
+		session->data().chatsFilters().apply(MTP_updateDialogFilterOrder(MTP_vector<MTPint>(ids)));
 	}
 }
 
@@ -10504,8 +10889,10 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			continue;
 		}
 		using SFlag = MTPDstickerSet::Flag;
+		// Обложка набора — первый стикер (thumb_document_id): без неё в списке наборов («Стикеры») превью было пустым
+		const auto coverId = paths.front().first;
 		const auto set = MTP_stickerSet(
-			MTP_flags(SFlag::f_installed_date),
+			MTP_flags(SFlag::f_installed_date | SFlag::f_thumb_document_id),
 			MTP_int(int(base::unixtime::now())), // installed_date
 			MTP_long(setId),
 			MTP_long(0),                         // access_hash
@@ -10514,7 +10901,7 @@ void LoadLocalStickerPacks(not_null<Main::Session*> session) {
 			MTPVector<MTPPhotoSize>(),           // thumbs (flags.4 — нет)
 			MTPint(),                            // thumb_dc_id
 			MTPint(),                            // thumb_version
-			MTPlong(),                           // thumb_document_id (flags.8)
+			MTP_long(coverId),                   // thumb_document_id (flags.8)
 			MTP_int(docs.size()),
 			MTP_int(0));                         // hash
 		const auto full = MTP_messages_stickerSet(
@@ -10599,6 +10986,200 @@ void SaveHiddenGifs() {
 	StoreWrite(HiddenGifsPath(), QByteArray::fromStdString(j.dump()));
 }
 
+// ── GIF-1: свои GIF на всех своих устройствах ───────────────────────────────
+// Документ GIF (показанный из чата, загруженный из файла, пришедший журналом) ↔ ссылка на файл и sha256
+struct GifRef {
+	parvane::json ref;
+	QString hex;
+};
+QHash<DocumentId, GifRef> g_gifRefs; // main
+QHash<QString, DocumentId> g_gifDocs; // sha256 → документ; main
+QSet<QString> g_gifLoading; // main
+
+void NoteGifRef(DocumentId docId, const parvane::json &ref, const QString &hex) { // main
+	if (hex.isEmpty() || ref.value("file_id", std::string()).empty()) {
+		return;
+	}
+	g_gifRefs.insert(docId, GifRef{ ref, hex });
+	g_gifDocs.insert(hex, docId);
+}
+
+// Документ GIF из локального файла (тот же вид, что у GIF из чата) — в «Сохранённые GIF»
+[[nodiscard]] DocumentData *MakeLocalGifDocument(
+		not_null<Main::Session*> session,
+		const QString &fileId,
+		const QString &name,
+		const QString &path) {
+	const auto info = QFileInfo(path);
+	const auto ext = info.suffix().toLower();
+	const auto mime = (ext == u"mp4"_q) ? u"video/mp4"_q
+		: (ext == u"webm"_q) ? u"video/webm"_q
+		: u"image/gif"_q;
+	auto w = 0, h = 0;
+	if (const auto size = QImageReader(path).size(); size.isValid()) {
+		w = size.width();
+		h = size.height();
+	}
+	const auto docId = docIdFromFileId(fileId);
+	const auto doc = session->data().processDocument(buildLocalMtpDocument(
+		session, docId, u"gif"_q, mime, info.size(), name,
+		QDateTime::currentSecsSinceEpoch(), 0, w, h, path));
+	doc->setLocation(Core::FileLocation(path));
+	return doc.get();
+}
+
+// Запись g: журнала, которой нет на устройстве: скачать файл, сверить sha256, добавить в «Сохранённые GIF»
+void InstallSavedGifFromJournal(const parvane::json &record) { // main
+	const auto key = QString::fromStdString(record.value("set_id", std::string()));
+	const auto hex = key.mid(2);
+	const auto session = g_sessionWeak.get();
+	if (!session || hex.isEmpty()) {
+		return;
+	}
+	if (const auto it = g_gifDocs.find(hex); it != g_gifDocs.end()) {
+		const auto doc = session->data().document(it.value());
+		LoadHiddenGifs();
+		g_hiddenGifs.remove(doc->id);
+		session->data().stickers().addSavedGif(nullptr, doc);
+		return;
+	}
+	if (g_gifLoading.contains(hex)) {
+		return;
+	}
+	const auto ref = record.value("ref", parvane::json::object());
+	const auto fileId = ref.value("file_id", std::string());
+	if (!IsSafeFileId(QString::fromStdString(fileId))) {
+		return;
+	}
+	RememberBlobCaps(ref);
+	g_gifLoading.insert(hex);
+	const auto generation = AccountGeneration();
+	crl::async([=] {
+		auto bytes = std::string();
+		if (auto cached = ReadMediaCache(QString::fromStdString(fileId))) {
+			bytes = std::move(*cached);
+		} else {
+			auto d = DownloadChatBlob(fileId, parvane::chatrules::chatBlobCipherCap("gif", 0));
+			if (!d.ok) {
+				LOG(("Parvane: GIF-1: файл %1 не скачан: %2").arg(hex.left(12), QString::fromStdString(d.error)));
+				crl::on_main([=] { g_gifLoading.remove(hex); });
+				return;
+			}
+			bytes = std::move(d.bytes);
+			const auto key = ref.value("key", std::string());
+			if (!key.empty()) {
+				auto dec = parvane::blobcrypt::decrypt(bytes, key, ref.value("nonce", std::string()));
+				if (!dec) {
+					crl::on_main([=] { g_gifLoading.remove(hex); });
+					return;
+				}
+				bytes = std::move(*dec);
+			}
+		}
+		const auto real = QString::fromLatin1(QCryptographicHash::hash(
+			QByteArray::fromStdString(bytes),
+			QCryptographicHash::Sha256).toHex());
+		if (real != hex) {
+			LOG(("Parvane: GIF-1: отпечаток файла не совпал — запись %1 отвергнута").arg(hex.left(12)));
+			crl::on_main([=] { g_gifLoading.remove(hex); });
+			return;
+		}
+		WriteMediaCache(QString::fromStdString(fileId), bytes);
+		const auto name = SafeFileName(QString::fromStdString(ref.value("name", std::string("gif.mp4"))));
+		const auto path = WriteMediaWorkCopy(QString::fromStdString(fileId) + u"_"_q + name, bytes);
+		crl::on_main([=] {
+			g_gifLoading.remove(hex);
+			const auto session = g_sessionWeak.get();
+			if (!session || path.isEmpty() || !AccountGenerationIs(generation)) {
+				return;
+			}
+			if (const auto doc = MakeLocalGifDocument(session, QString::fromStdString(fileId), name, path)) {
+				NoteGifRef(doc->id, ref, hex);
+				LoadHiddenGifs();
+				g_hiddenGifs.remove(doc->id);
+				session->data().stickers().addSavedGif(nullptr, doc);
+				LOG(("Parvane: GIF-1: сохранённый GIF %1 пришёл с другого устройства").arg(hex.left(12)));
+			}
+		});
+	});
+}
+
+// Запись g: снята на другом устройстве — убрать из «Сохранённых GIF»
+void RemoveSavedGifFromJournal(const QString &hex) { // main
+	const auto session = g_sessionWeak.get();
+	const auto it = g_gifDocs.find(hex);
+	if (!session || it == g_gifDocs.end()) {
+		return;
+	}
+	const auto doc = session->data().document(it.value());
+	auto &stickers = session->data().stickers();
+	auto &list = stickers.savedGifsRef();
+	if (const auto index = list.indexOf(doc); index >= 0) {
+		list.remove(index);
+		session->local().writeSavedGifs();
+		stickers.notifySavedGifsUpdated();
+	}
+}
+
+// «Добавить GIF из файла» (GIF-1): файл — в облако (CAP-1, как вложение), в «Сохранённые GIF» и в журнал состояния
+void AddSavedGifFromFile(
+		not_null<Main::Session*> session,
+		const QString &path,
+		Fn<void(bool ok)> done) {
+	const auto generation = AccountGeneration();
+	crl::async([=] {
+		auto file = QFile(path);
+		constexpr auto kMaxGifBytes = qint64(20 * 1024 * 1024);
+		if (!file.open(QIODevice::ReadOnly) || file.size() > kMaxGifBytes) {
+			crl::on_main([=] { done(false); });
+			return;
+		}
+		const auto plain = file.readAll().toStdString();
+		const auto hex = QString::fromLatin1(QCryptographicHash::hash(
+			QByteArray::fromStdString(plain),
+			QCryptographicHash::Sha256).toHex());
+		auto ref = parvane::json();
+		auto fileId = std::string();
+		try {
+			auto enc = parvane::blobcrypt::encrypt(plain);
+			fileId = UploadBlobWith(enc.ciphertext, { kBlobCapabilityMark });
+			ref = parvane::json{
+				{ "file_id", fileId },
+				{ "name", SafeFileName(QFileInfo(path).fileName()).toStdString() },
+				{ "count", 1 },
+				{ "key", enc.keyB64 },
+				{ "nonce", enc.nonceB64 },
+			};
+			AttachBlobCap(ref, fileId);
+		} catch (const std::exception &e) {
+			LOG(("Parvane: GIF-1: файл не загружен: %1").arg(QString::fromUtf8(e.what())));
+			crl::on_main([=] { done(false); });
+			return;
+		}
+		WriteMediaCache(QString::fromStdString(fileId), plain);
+		const auto name = SafeFileName(QFileInfo(path).fileName());
+		const auto work = WriteMediaWorkCopy(QString::fromStdString(fileId) + u"_"_q + name, plain);
+		crl::on_main([=] {
+			const auto session = g_sessionWeak.get();
+			if (!session || work.isEmpty() || !AccountGenerationIs(generation)) {
+				done(false);
+				return;
+			}
+			const auto doc = MakeLocalGifDocument(session, QString::fromStdString(fileId), name, work);
+			if (!doc) {
+				done(false);
+				return;
+			}
+			NoteGifRef(doc->id, ref, hex);
+			LoadHiddenGifs();
+			g_hiddenGifs.remove(doc->id);
+			session->data().stickers().addSavedGif(nullptr, doc);
+			RecordSavedGif(ref, hex.toStdString());
+			done(true);
+		});
+	});
+}
+
 void AddSavedGifLocal(not_null<Main::Session*> session, not_null<DocumentData*> doc) {
 	LoadHiddenGifs();
 	if (!g_hiddenGifs.contains(doc->id)) {
@@ -10613,6 +11194,14 @@ bool ToggleSavedGif(not_null<DocumentData*> document, bool saved) {
 	LoadHiddenGifs();
 	const auto session = &document->session();
 	auto &stickers = session->data().stickers();
+	if (const auto it = g_gifRefs.find(document->id); it != g_gifRefs.end()) {
+		// GIF-1: сохранённые GIF — на всех своих устройствах (журнал состояния, вид packs, ключ g:<sha256>)
+		if (saved) {
+			RecordSavedGif(it->ref, it->hex.toStdString());
+		} else {
+			ForgetSavedGif(it->hex.toStdString());
+		}
+	}
 	if (saved) {
 		g_hiddenGifs.remove(document->id);
 		SaveHiddenGifs();
@@ -10947,6 +11536,7 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 			return;
 		}
 		LoadNotifyState();  // снимок настроек уведомлений
+		ApplySavedNotify(session); // и сразу в tdesktop: иначе всё «заглушено» (MTProto умолчаний нет)
 		LoadBlockedState(); // блок-лист (применяется к пользователям по мере появления)
 		LoadDialogState();  // архив и закреп (применяются после воспроизведения истории)
 		if (SelfAddress().isEmpty()) {
@@ -12662,5 +13252,9 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 	});
 }
 
+
+bool StartDeferredDownload(not_null<DocumentData*> document, const QString &saveTo) {
+	return Internal::StartDeferredDownloadImpl(document, saveTo);
+}
 
 } // namespace Parvane

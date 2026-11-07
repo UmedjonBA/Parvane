@@ -150,6 +150,19 @@ void BlockedPeers::request(int offset, Fn<void(BlockedPeers::Slice)> done) {
 	if (_requestId) {
 		return;
 	}
+	// Parvane: contacts.getBlocked нет (MTProto заглушён — список вечно пустой) — свой блок-лист целиком
+	{
+		auto slice = Slice();
+		if (!offset) {
+			for (const auto peer : Parvane::BlockedPeers(_session)) {
+				peer->setIsBlocked(true);
+				slice.list.push_back({ peer->id, TimeId(0) });
+			}
+		}
+		slice.total = int(slice.list.size());
+		done(std::move(slice));
+		return;
+	}
 	_requestId = _api.request(MTPcontacts_GetBlocked(
 		MTP_flags(0),
 		MTP_int(offset),

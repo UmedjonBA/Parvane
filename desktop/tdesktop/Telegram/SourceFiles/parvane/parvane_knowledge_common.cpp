@@ -20,6 +20,12 @@
 #include "spellcheck/spellcheck_highlight_syntax.h"
 #include "window/window_controller.h"
 #include "ui/painter.h"
+#include "ui/widgets/popup_menu.h"
+#include "ui/text/text_utilities.h"
+#include "base/qt/qt_key_modifiers.h"
+#include "styles/style_chat_helpers.h"
+#include "styles/style_widgets.h"
+#include "styles/style_menu_icons.h"
 #include "ui/style/style_core.h"
 #include "ui/wrap/vertical_layout.h"
 #include "styles/style_basic.h"
@@ -32,6 +38,7 @@
 #include <QtCore/QLocale>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
+#include <QtGui/QClipboard>
 #include <QtGui/QtEvents>
 #include <QtSvg/QSvgRenderer>
 #include <QtCore/QHash>
@@ -303,6 +310,17 @@ struct RichText::Colors {
 		}
 		// Цвета подсветки кода — те же, что у кода в сообщениях
 		syntax = Ui::SyntaxHighlightColors(style::main_palette::get());
+		// Блок кода как в чате (`EnsurePreCache`): подложка, полоса и шапка «язык / копировать» цветом кода
+		const auto base = ToneColor(Tone::Orange);
+		pre.bg = base;
+		pre.bg.setAlpha(Ui::kDefaultBgOpacity * 255);
+		pre.outlines[0] = base;
+		pre.outlines[0].setAlpha(Ui::kDefaultOutline1Opacity * 255);
+		pre.outlines[1] = pre.outlines[2] = QColor(0, 0, 0, 0);
+		pre.header = base;
+		pre.header.setAlpha(Ui::kDefaultOutline2Opacity * 255);
+		pre.icon = pre.outlines[0];
+		pre.icon.setAlpha(Ui::kDefaultOutline3Opacity * 255);
 	}
 
 	style::owned_color link;
@@ -313,6 +331,7 @@ struct RichText::Colors {
 	std::array<QPen, 3> pens;
 	std::array<Ui::Text::SpecialColor, 3> special;
 	std::vector<Ui::Text::SpecialColor> syntax;
+	Ui::Text::QuotePaintCache pre;
 };
 
 namespace {
@@ -377,6 +396,7 @@ RichText::RichText(QWidget *parent, Style st)
 // ширины переносится по буквам
 , _text(Kit::Rem(2)) {
 	setMouseTracking(true);
+	setFocusPolicy(Qt::ClickFocus);
 	refreshStyle();
 	TonesChanges() | rpl::on_next([=] {
 		_colors->refresh();
@@ -409,9 +429,13 @@ void RichText::setPlain(const QString &text) {
 
 void RichText::setCode(const QString &text, const QString &language) {
 	_syntax = true;
+	// Блок рисуется как код в сообщениях: шапка с языком (без языка — «копировать») и копированием по нажатию
+	_colors->style.pre = st::historyTextStyle.pre;
 	auto marked = TextWithEntities{ text };
-	if (!language.isEmpty() && !text.isEmpty()) {
+	if (!text.isEmpty()) {
 		marked.entities.push_back(EntityInText(EntityType::Pre, 0, int(text.size()), language));
+	}
+	if (!language.isEmpty() && !text.isEmpty()) {
 		_highlightLifetime.destroy();
 		if (const auto id = Spellchecker::TryHighlightSyntax(marked)) {
 			// Подсветка считается в фоне: по готовности — ещё раз, уже с цветами
@@ -420,10 +444,6 @@ void RichText::setCode(const QString &text, const QString &language) {
 				setCode(text, language);
 			}, _highlightLifetime);
 		}
-		// Подложку блока рисует сам блок: остаются только цвета подсветки
-		marked.entities.erase(std::remove_if(marked.entities.begin(), marked.entities.end(), [](const EntityInText &entity) {
-			return entity.type() == EntityType::Pre;
-		}), marked.entities.end());
 	}
 	_marked = std::move(marked);
 	apply();
@@ -454,6 +474,7 @@ void RichText::apply() {
 		Qt::LayoutDirectionAuto,
 	};
 	_text.setMarkedText(_colors->style, marked, options);
+	_selection = TextSelection();
 	setNaturalWidth(_text.maxWidth());
 	resize(width(), resizeGetHeight(width()));
 	update();
@@ -480,9 +501,11 @@ void RichText::paintEvent(QPaintEvent *e) {
 		.availableWidth = width(),
 		.clip = e->rect(),
 		.palette = &_colors->palette,
+		.pre = &_colors->pre,
 		.colors = _syntax
 			? std::span<Ui::Text::SpecialColor>(_colors->syntax)
 			: std::span<Ui::Text::SpecialColor>(_colors->special),
+		.selection = _selection,
 	});
 }
 
@@ -490,9 +513,25 @@ ClickHandlerPtr RichText::linkAt(QPoint point) const {
 	return _text.getState(point, width()).link;
 }
 
+uint16 RichText::symbolAt(QPoint point) const {
+	auto request = Ui::Text::StateRequest();
+	request.flags |= Ui::Text::StateRequest::Flag::LookupSymbol;
+	const auto state = _text.getState(point, width(), request);
+	return uint16(state.symbol + (state.afterSymbol ? 1 : 0));
+}
+
 void RichText::mouseMoveEvent(QMouseEvent *e) {
+	if (_selecting) {
+		const auto at = symbolAt(e->pos());
+		const auto selection = TextSelection{ std::min(_selectFrom, at), std::max(_selectFrom, at) };
+		if (selection != _selection) {
+			_selection = selection;
+			update();
+		}
+		return;
+	}
 	const auto link = linkAt(e->pos());
-	setCursor(link ? style::cur_pointer : style::cur_default);
+	setCursor(link ? style::cur_pointer : style::cur_text);
 	if (ClickHandler::getActive() != link) {
 		ClickHandler::setActive(link, nullptr);
 		update();
@@ -509,18 +548,96 @@ void RichText::leaveEventHook(QEvent *e) {
 
 void RichText::mousePressEvent(QMouseEvent *e) {
 	_pressed = (e->button() == Qt::LeftButton) ? linkAt(e->pos()) : nullptr;
+	if (e->button() == Qt::LeftButton && !_pressed) {
+		// Начало выделения: прежнее снимается
+		_selecting = true;
+		_selectFrom = symbolAt(e->pos());
+		_selection = TextSelection{ _selectFrom, _selectFrom };
+		update();
+		return;
+	}
 	if (!_pressed) {
 		RpWidget::mousePressEvent(e);
 	}
 }
 
+void RichText::mouseDoubleClickEvent(QMouseEvent *e) {
+	if (e->button() != Qt::LeftButton || linkAt(e->pos())) {
+		return;
+	}
+	// Двойной щелчок — слово
+	const auto at = symbolAt(e->pos());
+	_selection = _text.adjustSelection(TextSelection{ at, at }, TextSelectType::Words);
+	_selecting = false;
+	update();
+}
+
+void RichText::copySelection() {
+	if (_selection.empty()) {
+		return;
+	}
+	TextUtilities::SetClipboardText(_text.toTextForMimeData(_selection));
+}
+
+void RichText::keyPressEvent(QKeyEvent *e) {
+	if (e->matches(QKeySequence::Copy) && !_selection.empty()) {
+		copySelection();
+		return;
+	}
+	if (e->matches(QKeySequence::SelectAll)) {
+		_selection = TextSelection{ 0, uint16(_text.length()) };
+		update();
+		return;
+	}
+	RpWidget::keyPressEvent(e);
+}
+
+void RichText::focusOutEvent(QFocusEvent *e) {
+	// Выделение живёт, пока текст в фокусе (как у подписи в окне), меню копирования его не снимает
+	if (!_menu && !_selection.empty()) {
+		_selection = TextSelection();
+		update();
+	}
+	RpWidget::focusOutEvent(e);
+}
+
+void RichText::contextMenuEvent(QContextMenuEvent *e) {
+	const auto hasSelection = !_selection.empty();
+	_menu = base::make_unique_q<Ui::PopupMenu>(this, st::popupMenuWithIcons);
+	_menu->addAction(
+		hasSelection ? tr::lng_context_copy_selected(tr::now) : tr::lng_context_copy_text(tr::now),
+		[=] {
+			if (hasSelection) {
+				copySelection();
+			} else {
+				TextUtilities::SetClipboardText(_text.toTextForMimeData());
+			}
+		},
+		&st::menuIconCopy);
+	_menu->setDestroyedCallback(crl::guard(this, [=] { _menu = nullptr; }));
+	_menu->popup(e->globalPos());
+	e->accept();
+}
+
 void RichText::mouseReleaseEvent(QMouseEvent *e) {
+	if (std::exchange(_selecting, false)) {
+		if (_selection.empty()) {
+			_selection = TextSelection();
+			update();
+		}
+		return;
+	}
 	const auto pressed = std::exchange(_pressed, nullptr);
 	if (!pressed || linkAt(e->pos()) != pressed) {
 		RpWidget::mouseReleaseEvent(e);
 		return;
 	}
 	const auto url = pressed->url();
+	if (url.isEmpty()) {
+		// Шапка блока кода («копировать») и прочие обработчики без адреса
+		pressed->onClick(ClickContext{ .button = Qt::LeftButton });
+		return;
+	}
 	if (url.startsWith(kNoteScheme)) {
 		if (_openNote) {
 			_openNote(url.mid(kNoteScheme.size()));

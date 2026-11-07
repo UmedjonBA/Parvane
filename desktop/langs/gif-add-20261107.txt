@@ -1,0 +1,11 @@
+lng_parvane_gif_add_file
+Add a GIF from a file
+Добавить GIF из файла
+
+lng_parvane_gif_added
+GIF added to saved GIFs on all your devices.
+GIF добавлен в сохранённые на всех ваших устройствах.
+
+lng_parvane_gif_add_failed
+Could not add this file as a GIF (up to 20 MB: GIF, MP4, WebM).
+Не удалось добавить файл как GIF (до 20 МБ: GIF, MP4, WebM).

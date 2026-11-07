@@ -1,0 +1,19 @@
+lng_parvane_sticker_pack_create
+Create a set from files
+Создать набор из файлов
+
+lng_parvane_sticker_pack_name
+Set name
+Название набора
+
+lng_parvane_sticker_pack_choose
+Choose pictures
+Выбрать картинки
+
+lng_parvane_sticker_pack_created
+Set «{name}» created: {amount} stickers. It is already on your other devices too.
+Набор «{name}» создан: {amount} стикеров. Он появится и на других ваших устройствах.
+
+lng_parvane_sticker_pack_create_failed
+No pictures could be turned into stickers.
+Ни одну картинку не удалось превратить в стикер.

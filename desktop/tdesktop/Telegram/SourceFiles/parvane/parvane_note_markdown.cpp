@@ -195,44 +195,22 @@ private:
 // Код: подложка `--pv-raised`, скругление 0.5rem, поля 0.5rem 0.75rem, моноширинный 0.8125rem
 class PreBlock final : public Ui::RpWidget {
 public:
+	// Блок кода рисует сам текст, как код в сообщениях: подложка, полоса, шапка с языком и «копировать»
 	PreBlock(QWidget *parent, const std::string &text, const std::string &language)
 	: RpWidget(parent)
-	, _text(Ui::CreateChild<RichText>(this, RichText::Style{ .px = 13, .mono = true }))
-	, _language(Q(language)) {
-		Kit::RepaintOnTones(this);
-		_text->setCode(Q(text), _language);
+	, _text(Ui::CreateChild<RichText>(this, RichText::Style{ .px = 13, .mono = true })) {
+		_text->setCode(Q(text), Q(language));
 	}
 
 protected:
 	int resizeGetHeight(int newWidth) override {
-		const auto padX = Rem(0.75);
-		const auto padY = Rem(0.5);
-		_text->resizeToWidth(std::max(newWidth - 2 * padX, 1));
-		_text->moveToLeft(padX, padY, newWidth);
-		return _text->height() + 2 * padY;
-	}
-	void paintEvent(QPaintEvent *e) override {
-		auto p = QPainter(this);
-		PainterHighQualityEnabler hq(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(ToneColor(Tone::Raised));
-		const auto radius = Rem(0.5);
-		p.drawRoundedRect(rect(), radius, radius);
-		if (!_language.isEmpty()) {
-			// Язык — подписью в правом верхнем углу (`.codeLang`)
-			const auto font = Kit::Font(11, false, true);
-			p.setFont(font->f);
-			p.setPen(ToneColor(Tone::Faint));
-			p.drawText(
-				QRect(0, Rem(0.25), width() - Rem(0.5), font->height),
-				Qt::AlignRight | Qt::AlignTop,
-				_language);
-		}
+		_text->resizeToWidth(std::max(newWidth, 1));
+		_text->moveToLeft(0, 0, newWidth);
+		return _text->height();
 	}
 
 private:
 	const not_null<RichText*> _text;
-	const QString _language;
 
 };
 

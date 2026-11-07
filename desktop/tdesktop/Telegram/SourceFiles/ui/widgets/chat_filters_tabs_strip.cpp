@@ -148,7 +148,7 @@ void ShowFiltersListMenu(
 		parent,
 		st::popupMenuWithIcons);
 
-	const auto reorderAll = session->user()->isPremium();
+	const auto reorderAll = true; // Parvane fork: «Все чаты» двигается без Premium
 	const auto maxLimit = (reorderAll ? 1 : 0)
 		+ Data::PremiumLimits(session).dialogFiltersCurrent();
 	const auto premiumFrom = (reorderAll ? 0 : 1) + maxLimit;
@@ -265,7 +265,7 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 
 			const auto filters = &session->data().chatsFilters();
 			const auto &list = filters->list();
-			if (!session->user()->isPremium()) {
+			if (false) { // Parvane fork: «Все чаты» не возвращается в начало (без Premium)
 				if (list[0].id() != FilterId()) {
 					filters->moveAllToFront();
 				}
@@ -420,7 +420,7 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 		state->rebuildLifetime.destroy();
 		slider->fitWidthToSections();
 		{
-			const auto reorderAll = session->user()->isPremium();
+			const auto reorderAll = true; // Parvane fork: «Все чаты» двигается без Premium
 			const auto maxLimit = (reorderAll ? 1 : 0)
 				+ Data::PremiumLimits(session).dialogFiltersCurrent();
 			const auto premiumFrom = (reorderAll ? 0 : 1) + maxLimit;

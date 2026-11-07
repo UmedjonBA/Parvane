@@ -64,6 +64,9 @@ public:
 	void requestEdit(size_t from, size_t to);
 	// Высота видимой области раздела: правка на широком экране занимает её целиком (редактор и просмотр)
 	void setViewportHeight(int height);
+	// Правка и «Запланировать» — и из закреплённой строки «Знаний» (кнопки, Ctrl+E)
+	void startEdit();
+	void schedule();
 
 protected:
 	int resizeGetHeight(int newWidth) override;
@@ -77,7 +80,6 @@ private:
 	void rebuildLinks();
 	void relayout();
 
-	void startEdit();
 	void cancelEdit();
 	void rebuildPreview();
 	void refreshEditing();
@@ -87,7 +89,6 @@ private:
 	void save();
 	void toggleTask(int line, bool done);
 	void askDelete();
-	void schedule();
 	void chooseFromCloud();
 	void insertEmbeds(const std::vector<QString> &names);
 	void insertLocalFiles(const QStringList &paths);

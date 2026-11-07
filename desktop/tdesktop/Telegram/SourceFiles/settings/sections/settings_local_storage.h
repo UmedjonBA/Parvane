@@ -82,6 +82,7 @@ private:
 		not_null<Ui::SlideWrap<Row>*> row,
 		const Database::TaggedSummary *data);
 	void setupControls(not_null<Ui::VerticalLayout*> container);
+	void setupParvaneMedia(not_null<Ui::VerticalLayout*> container);
 	void setupLimits(not_null<Ui::VerticalLayout*> container);
 	void updateMediaLimit();
 	void updateTotalLimit();

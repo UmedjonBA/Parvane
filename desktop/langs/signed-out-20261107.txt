@@ -1,0 +1,11 @@
+lng_parvane_device_signed_out_relogin
+This device was signed out of the account from another device. Sign in again: it will connect as a new device and get your chats from the server.
+Это устройство вышло из аккаунта: сеанс завершили на другом устройстве. Войдите ещё раз: компьютер подключится как новое устройство и получит переписку с сервера.
+
+lng_parvane_left_device_signed_out
+Signed out
+Вышло само
+
+lng_parvane_left_devices_dismiss
+Nobody stole them — remove from list
+Их никто не крал — убрать из списка

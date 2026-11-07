@@ -280,7 +280,7 @@ void FiltersMenu::setupList() {
 }
 
 bool FiltersMenu::premium() const {
-	return _session->session().user()->isPremium();
+	return true; // Parvane fork: всё, что Telegram даёт Premium для папок, — всем
 }
 
 base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareAll() {

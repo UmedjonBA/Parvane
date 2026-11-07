@@ -604,7 +604,7 @@ void BuildSecuritySection(
 			.id = u"security/parvane_twofa"_q,
 			.title = tr::lng_parvane_two_factor_toggle(),
 			.icon = { &st::menuIconLock },
-			.label = twofa->label.value(),
+			// Parvane: подписи «Вкл./Выкл.» нет — её рисовало поверх тумблера; состояние показывает сам тумблер
 			.toggled = twofa->enabled.value(),
 			.keywords = { u"2fa"_q, u"telegram"_q, u"two-factor"_q },
 		});

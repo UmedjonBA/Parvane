@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_chat.h"
+#include "parvane/parvane_client.h"
 
 #include "parvane/parvane_scheme_picker.h"
 
@@ -1565,6 +1566,71 @@ void SetupStickersEmoji(
 			{ .rippleShape = true },
 		} });
 	}
+
+	// Parvane: свой набор из файлов (как web «Создать набор»): любые картинки → стикеры, на все свои устройства
+	AddButtonWithIcon(
+		container,
+		tr::lng_parvane_sticker_pack_create(),
+		st::settingsButton,
+		{ &st::menuIconAdd }
+	)->addClickHandler([=] {
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			box->setTitle(tr::lng_parvane_sticker_pack_create());
+			const auto field = box->addRow(object_ptr<Ui::InputField>(
+				box,
+				st::defaultInputField,
+				tr::lng_parvane_sticker_pack_name()));
+			field->setMaxLength(32);
+			box->setFocusCallback([=] { field->setFocusFast(); });
+			box->addButton(tr::lng_parvane_sticker_pack_choose(), [=] {
+				const auto name = field->getLastText().trimmed();
+				FileDialog::GetOpenPaths(
+					box.get(),
+					tr::lng_parvane_sticker_pack_choose(tr::now),
+					u"Images (*.png *.webp *.jpg *.jpeg *.gif *.bmp *.tgs *.webm);;All files (*)"_q,
+					crl::guard(box, [=](FileDialog::OpenResult &&result) {
+						if (result.paths.isEmpty()) {
+							return;
+						}
+						box->closeBox();
+						Parvane::CreateStickerPackFromFiles(session, name, result.paths, [=](int count, QString shown) {
+							controller->showToast(count
+								? tr::lng_parvane_sticker_pack_created(
+									tr::now,
+									lt_name,
+									shown,
+									lt_amount,
+									QString::number(count))
+								: tr::lng_parvane_sticker_pack_create_failed(tr::now));
+						});
+					}));
+			});
+			box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+		}));
+	});
+
+	// Parvane (GIF-1): свой GIF из файла — в «Сохранённые GIF» на всех своих устройствах
+	AddButtonWithIcon(
+		container,
+		tr::lng_parvane_gif_add_file(),
+		st::settingsButton,
+		{ &st::menuIconGif }
+	)->addClickHandler([=] {
+		FileDialog::GetOpenPath(
+			container.get(),
+			tr::lng_parvane_gif_add_file(tr::now),
+			u"GIF (*.gif *.mp4 *.webm);;All files (*)"_q,
+			crl::guard(container, [=](FileDialog::OpenResult &&result) {
+				if (result.paths.isEmpty()) {
+					return;
+				}
+				Parvane::AddSavedGifFromFile(session, result.paths.front(), [=](bool ok) {
+					controller->showToast(ok
+						? tr::lng_parvane_gif_added(tr::now)
+						: tr::lng_parvane_gif_add_failed(tr::now));
+				});
+			}));
+	});
 
 	const auto emojiSetsButton = AddButtonWithIcon(
 		container,

@@ -56,6 +56,7 @@ Authorizations::Authorizations(not_null<ApiWrap*> api)
 	if (Core::App().settings().disableCallsLegacy()) {
 		toggleCallsDisabledHere(true);
 	}
+	_callsDisabledHere = Parvane::CallsDisabledHere(); // Parvane: настройка этого устройства (MTProto нет)
 }
 
 namespace {
@@ -127,6 +128,9 @@ void Authorizations::cancelCurrentRequest() {
 }
 
 void Authorizations::refreshCallsDisabledHereFromCloud() {
+	// Parvane: список устройств этот флаг не несёт — значение этого устройства локальное
+	_callsDisabledHere = Parvane::CallsDisabledHere();
+	return;
 	const auto that = ranges::find(_list, 0, &Entry::hash);
 	if (that != end(_list)
 		&& !_toggleCallsDisabledRequests.contains(0)) {
@@ -263,6 +267,12 @@ rpl::producer<int> Authorizations::ttlDays() const {
 }
 
 void Authorizations::toggleCallsDisabled(uint64 hash, bool disabled) {
+	if (!hash) {
+		// Parvane: этого устройства — локально (account.changeAuthorizationSettings нет)
+		Parvane::SetCallsDisabledHere(disabled);
+		_callsDisabledHere = disabled;
+		return;
+	}
 	if (const auto sent = _toggleCallsDisabledRequests.take(hash)) {
 		_api.request(*sent).cancel();
 	}

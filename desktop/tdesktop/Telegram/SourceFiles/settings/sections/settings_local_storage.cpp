@@ -9,6 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "settings.h"
 #include "settings/settings_common.h"
+#include "parvane/parvane_client.h" // Parvane: кэш медиа чатов
+#include "ui/boxes/confirm_box.h"
+#include "styles/style_menu_icons.h"
+#include "styles/style_settings.h"
 #include "data/data_session.h"
 #include "lottie/lottie_icon.h"
 #include "base/call_delayed.h"
@@ -1944,6 +1948,7 @@ void LocalStorage::setupContent() {
 		QPainter(content).fillRect(clip, st::windowBgOver);
 	}, content->lifetime());
 
+	setupParvaneMedia(content);
 	setupControls(content);
 
 	rpl::combine(
@@ -1956,6 +1961,43 @@ void LocalStorage::setupContent() {
 	}, content->lifetime());
 
 	Ui::ResizeFitChild(this, content);
+}
+
+// Parvane: медиа чатов Parvane лежат в своём зашифрованном кэше, а не в базах tdesktop ниже — их размер и очистка
+void LocalStorage::setupParvaneMedia(not_null<Ui::VerticalLayout*> container) {
+	const auto size = container->lifetime().make_state<rpl::variable<QString>>(u"…"_q);
+	const auto refresh = [=] {
+		crl::async([=, weak = base::make_weak(container)] {
+			const auto bytes = Parvane::MediaCacheBytes();
+			crl::on_main(weak, [=] {
+				*size = bytes ? Ui::FormatSizeText(bytes) : tr::lng_local_storage_empty(tr::now);
+			});
+		});
+	};
+	refresh();
+	Ui::AddSkip(container);
+	Ui::AddSubsectionTitle(container, tr::lng_parvane_media_cache_title());
+	Settings::AddButtonWithLabel(
+		container,
+		tr::lng_parvane_media_cache(),
+		size->value(),
+		st::settingsButton,
+		{ &st::menuIconDelete }
+	)->addClickHandler([=] {
+		controller()->show(Ui::MakeConfirmBox({
+			.text = tr::lng_parvane_media_cache_clear_sure(),
+			.confirmed = [=](Fn<void()> close) {
+				close();
+				crl::async([=, weak = base::make_weak(container)] {
+					Parvane::ClearMediaCache();
+					crl::on_main(weak, refresh);
+				});
+			},
+			.confirmText = tr::lng_local_storage_clear_some(),
+		}));
+	});
+	Ui::AddSkip(container);
+	Ui::AddDividerText(container, tr::lng_parvane_media_cache_about());
 }
 
 void LocalStorage::setupControls(not_null<Ui::VerticalLayout*> container) {

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_document.h"
+#include "parvane/parvane_client.h" // Parvane: сохранение внутренней копии медиа
 
 #include "data/data_document_resolver.h"
 #include "data/data_session.h"
@@ -1199,6 +1200,10 @@ void DocumentData::save(
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
+	// Parvane: файл не скачан автозагрузкой (настройка) — качается по нажатию своим путём (MTProto нет)
+	if (!autoLoading && Parvane::StartDeferredDownload(this, toFile)) {
+		return;
+	}
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
 		auto &l = location(true);
 		if (!toFile.isEmpty()) {
@@ -1439,13 +1444,36 @@ QString DocumentData::filepath(bool check) const {
 }
 
 bool DocumentData::saveFromData() {
+	// Parvane: внутренняя копия медиа — не «сохранённый» файл, а кэш; сохранение копирует её в папку загрузок
+	if (Parvane::IsInternalMediaPath(filepath(true))) {
+		return saveInternalCopy();
+	}
 	return !filepath(true).isEmpty() || saveFromDataChecked();
 }
 
 bool DocumentData::saveFromDataSilent() {
+	if (Parvane::IsInternalMediaPath(filepath(true))) {
+		return Core::App().canSaveFileWithoutAskingForPath() && saveInternalCopy();
+	}
 	return !filepath(true).isEmpty()
 		|| (Core::App().canSaveFileWithoutAskingForPath()
 			&& saveFromDataChecked());
+}
+
+bool DocumentData::saveInternalCopy() {
+	// Путь — по настройкам («Путь для сохранения», «Спрашивать путь»), имя — исходное имя файла
+	const auto source = filepath(true);
+	const auto path = DocumentFileNameForSave(this);
+	if (path.isEmpty()) {
+		return false;
+	}
+	QFile::remove(path);
+	if (!QFile::copy(source, path)) {
+		return false;
+	}
+	_location = Core::FileLocation(path);
+	session().local().writeFileLocation(mediaKey(), _location);
+	return true;
 }
 
 bool DocumentData::saveFromDataChecked() {

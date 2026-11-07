@@ -17,6 +17,8 @@
 #include "parvane/keybackup.h"        // резервная копия ключей (формат веба)
 #include "parvane/parvane_map.h"      // карта геолокации: сброс при StopSession
 #include "data/data_session.h"
+#include "data/data_auto_download.h"
+#include "main/main_session_settings.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
 #include "data/data_photo.h"
@@ -42,6 +44,8 @@
 #include <QtCore/QThread>
 #include <atomic>
 #include <QtCore/QSet>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
 #include <QtCore/QBuffer>
 #include <QtCore/QCryptographicHash>
 #include "history/history.h"
@@ -372,6 +376,10 @@ bool TryMutateV2(const QString &uuid, const parvane::json &content, const std::s
 
 // PACK-3 (parvane_client_state.cpp): набор поставлен на этом устройстве — запись в журнал состояния (main).
 void RecordStickerPack(const parvane::json &ref, bool emoji);
+void RecordNewLocalStickerPacks(); // новые локальные наборы — в облако и журнал (PACK-3)
+// GIF-1: сохранённый GIF — запись журнала packs с ключом g:<sha256>; снятие — удаление записи
+void RecordSavedGif(const parvane::json &fileRef, const std::string &sha256Hex);
+void ForgetSavedGif(const std::string &sha256Hex);
 
 } // namespace Internal
 using namespace Internal;
@@ -448,6 +456,10 @@ void EndCallsForLogout();
 [[nodiscard]] std::string PackJournalKey(const parvane::json &ref);
 [[nodiscard]] parvane::json PackArchiveRef(const parvane::json &ref);
 void InstallStickerPackFromJournal(const parvane::json &record);
+// GIF-1 (parvane_client.cpp): документ GIF ↔ ссылка на файл и sha256; записи g: журнала — в «Сохранённые GIF» и обратно
+void NoteGifRef(DocumentId docId, const parvane::json &ref, const QString &hex);
+void InstallSavedGifFromJournal(const parvane::json &record);
+void RemoveSavedGifFromJournal(const QString &hex);
 void UploadLocalStickerPacksForJournal(
 	const QSet<QString> &recorded,
 	Fn<void(std::vector<parvane::json> refs, bool complete)> done);

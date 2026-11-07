@@ -321,7 +321,7 @@ void FillReadyExtras(
 			Settings::AddButtonWithLabel(
 				container,
 				rpl::single(name),
-				tr::lng_parvane_left_device_stolen(),
+				tr::lng_parvane_left_device_signed_out(),
 				st::settingsButton,
 				{ &st::menuIconBlock }
 			)->addClickHandler([=] {
@@ -343,6 +343,18 @@ void FillReadyExtras(
 				}));
 			});
 		}
+		const auto ids = extras.leftDevices;
+		Settings::AddButtonWithIcon(
+			container,
+			tr::lng_parvane_left_devices_dismiss(),
+			st::settingsButton,
+			{ &st::menuIconSelect }
+		)->addClickHandler([=] {
+			RunWork(container, [=] {
+				DismissLeftDevices(ids);
+				return u"ok"_q;
+			}, [=](QString) { refresh(); });
+		});
 		Ui::AddSkip(container);
 		Ui::AddDividerText(container, tr::lng_parvane_left_devices_hint());
 	}

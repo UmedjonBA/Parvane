@@ -38,6 +38,7 @@
 #include <QtCore/QMimeData>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
+#include <QtGui/QShortcut>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextLayout>
@@ -310,6 +311,21 @@ NoteView::NoteView(QWidget *parent, NoteOptions options, NoteCallbacks callbacks
 			_titleField->update();
 		}
 	}, lifetime());
+	// Ctrl+E: открыть правку (в правке — сохранить), пока заметка на экране
+	const auto shortcut = new QShortcut(QKeySequence(u"Ctrl+E"_q), this);
+	shortcut->setContext(Qt::WindowShortcut);
+	QObject::connect(shortcut, &QShortcut::activated, this, [=] {
+		if (!isVisible() || !_data.note) {
+			return;
+		}
+		crl::on_main(this, [=] {
+			if (isEditing()) {
+				save();
+			} else {
+				startEdit();
+			}
+		});
+	});
 }
 
 NoteView::~NoteView() {

@@ -1986,13 +1986,33 @@ void ApiWrap::requestNotifySettings(const MTPInputNotifyPeer &peer) {
 		_session->data().notifySettings().apply(peer, result);
 		_notifySettingRequests.remove(key);
 	}).fail([=] {
+		// Parvane: MTProto нет — умолчание для типа чатов без ответа = «включено» (пустые настройки tdesktop считал
+		// «заглушено»: ни уведомлений, ни звука); настройки собеседника пустые — берутся умолчания
+		using Default = Data::DefaultNotify;
+		const auto type = peer.match([](const MTPDinputNotifyUsers &) {
+			return std::optional<Default>(Default::User);
+		}, [](const MTPDinputNotifyChats &) {
+			return std::optional<Default>(Default::Group);
+		}, [](const MTPDinputNotifyBroadcasts &) {
+			return std::optional<Default>(Default::Broadcast);
+		}, [](const auto &) {
+			return std::optional<Default>();
+		});
+		auto &notify = _session->data().notifySettings();
+		if (type && notify.defaultSettings(*type).muteUntil().has_value()) {
+			// Умолчание уже задано (сохранённое Parvane либо выбранное) — пустой «ответ» его не затирает
+			_notifySettingRequests.erase(key);
+			return;
+		}
+		const auto isDefault = type.has_value();
+		using Flag = MTPDpeerNotifySettings::Flag;
 		_session->data().notifySettings().apply(
 			peer,
 			MTP_peerNotifySettings(
-				MTP_flags(0),
+				MTP_flags(isDefault ? Flag::f_mute_until : Flag(0)),
 				MTPBool(),
 				MTPBool(),
-				MTPint(),
+				MTP_int(0),
 				MTPNotificationSound(),
 				MTPNotificationSound(),
 				MTPNotificationSound(),

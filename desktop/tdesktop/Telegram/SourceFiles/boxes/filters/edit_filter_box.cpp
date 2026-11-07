@@ -639,18 +639,11 @@ void EditFilterBox(
 		const auto colors = wrap->entity();
 		const auto session = &window->session();
 
-		wrap->toggleOn(
-			rpl::combine(
-				session->premiumPossibleValue(),
-				session->data().chatsFilters().tagsEnabledValue(),
-				Data::AmPremiumValue(session)
-			) | rpl::map([=] (bool possible, bool tagsEnabled, bool premium) {
-				return possible && (tagsEnabled || !premium);
-			}),
-			anim::type::instant);
+		// Parvane fork: цвет папки — без Premium (у нас его нет), всегда виден; хранится в журнале папок
+		wrap->toggleOn(rpl::single(true), anim::type::instant);
 
 		const auto &padding = st::defaultSubsectionTitlePadding;
-		const auto isPremium = session->premium();
+		const auto isPremium = true; // Parvane fork: без Premium
 		const auto titleWrap = colors->add(
 			object_ptr<Ui::FixedHeightWidget>(
 				colors,
@@ -778,11 +771,6 @@ void EditFilterBox(
 				}
 				state->colorIndex = now;
 			});
-			if (!session->premium()) {
-				button->setClickedCallback([w = window] {
-					ShowPremiumPreviewToBuy(w, PremiumFeature::FilterTags);
-				});
-			}
 		}
 		line->sizeValue() | rpl::on_next([=](const QSize &size) {
 			const auto totalWidth = buttons.size() * side;
@@ -800,7 +788,7 @@ void EditFilterBox(
 			icon->resize(side, side);
 			icon->paintRequest() | rpl::on_next([=] {
 				auto p = QPainter(icon);
-				(session->premium()
+				(isPremium
 					? st::windowFilterSmallRemove.icon
 					: st::historySendDisabledIcon).paintInCenter(
 						p,

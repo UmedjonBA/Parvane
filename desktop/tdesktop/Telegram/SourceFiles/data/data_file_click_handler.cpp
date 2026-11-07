@@ -6,6 +6,8 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_file_click_handler.h"
+#include "parvane/parvane_client.h" // Parvane: внутренняя копия медиа
+#include "base/unixtime.h"
 
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
@@ -96,12 +98,16 @@ void DocumentSaveClickHandler::Save(
 			return;
 		}
 		const auto filepath = data->filepath(true);
+		// Parvane: внутренняя копия медиа — не предлагать её папку и служебное имя `<file_id>_имя`
+		const auto internal = Parvane::IsInternalMediaPath(filepath);
 		const auto fileinfo = QFileInfo(filepath);
-		const auto filedir = filepath.isEmpty()
+		const auto filedir = (filepath.isEmpty() || internal)
 			? QDir()
 			: fileinfo.dir();
 		const auto filename = filepath.isEmpty()
 			? QString()
+			: internal
+			? data->filename()
 			: fileinfo.fileName();
 		const auto savename = DocumentFileNameForSave(
 			data,
@@ -129,6 +135,15 @@ void DocumentSaveClickHandler::SaveAndTrack(
 					.item = item,
 					.document = document,
 				});
+			}
+		} else if (const auto path = document->filepath(true);
+				!path.isEmpty() && !Parvane::IsInternalMediaPath(path)) {
+			// Parvane: файл скопирован из внутренней копии сразу (без загрузчика tdesktop) — в «Загрузки»
+			if (const auto item = document->owner().message(itemId)) {
+				Core::App().downloadManager().addLoaded({
+					.item = item,
+					.document = document,
+				}, path, base::unixtime::now());
 			}
 		}
 		if (started) {

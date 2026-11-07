@@ -105,6 +105,12 @@ int main() {
             "таблица: заголовок, выравнивание, `\\|` внутри ячейки, недостающие ячейки — пустые");
         const std::string embeds = "![[фото.jpg|подпись]]\n![карта](папка/карта%201.png)\n![x](https://site/a.png)\n![[фото.jpg]]";
         const auto renamed = renameEmbeds(embeds, {{"фото.jpg", "фото (2).jpg"}, {"папка/карта 1.png", "карта 1.png"}});
+        {
+            // Строка, начатая табуляцией, — код (до 4 колонок, как CommonMark); в списке табуляция — уровень
+            const auto blocks = parseMarkdown("абзац\n\n\tкод с табуляцией\n\n- пункт\n\t- вложенный");
+            check(blocks.size() == 3 && blocks[1].type == MdBlockType::Code && blocks[1].text == "код с табуляцией"
+                && blocks[2].items.size() == 2 && blocks[2].items[1].depth == 1, "табуляция: код и уровень списка");
+        }
         check(embedNames(embeds) == std::vector<std::string>{"фото.jpg", "папка/карта 1.png"}
                 && renamed == "![[фото (2).jpg|подпись]]\n![карта](%D0%BA%D0%B0%D1%80%D1%82%D0%B0%201.png)\n"
                               "![x](https://site/a.png)\n![[фото (2).jpg]]",

@@ -135,6 +135,10 @@ enum class PrivacyAudience { Calls, Presence, GroupAdd, CallsPeerToPeer };
 // WEB-14: «Звонки только через сервер» — настройка этого устройства (штатный пункт «Peer-to-peer»: «никто» =
 // только через TURN, собеседник не видит IP-адрес).
 [[nodiscard]] bool CallsRelayOnly();
+// «Приём звонков на этом устройстве» выключен: входящие здесь не звонят (другие свои устройства звонят как обычно);
+// только это устройство, файл tdata/parvane-calls-disabled
+[[nodiscard]] bool CallsDisabledHere();
+void SetCallsDisabledHere(bool disabled);
 [[nodiscard]] bool PrivacyAudienceNobody(PrivacyAudience which);
 void SetPrivacyAudienceNobody(PrivacyAudience which, bool nobody);
 
@@ -190,6 +194,9 @@ struct DevicesExtras {
 };
 [[nodiscard]] DevicesExtras FetchDevicesExtras();
 [[nodiscard]] bool ReportDeviceStolen(const QString &deviceId);
+// Блок-лист аккаунта (свой, журнал состояния) — для экрана «Заблокированные пользователи»
+[[nodiscard]] std::vector<not_null<PeerData*>> BlockedPeers(not_null<Main::Session*> session);
+void DismissLeftDevices(const std::vector<QString> &ids); // «их никто не крал» — убрать из списка на этом устройстве
 // "ok" | "bad_key" | "no_backup" | "failed".
 [[nodiscard]] QString StoreEscrowCopy(const QString &recoveryKey);
 // "ok" | "bad_key" | "no_telegram" | "failed".
@@ -350,6 +357,9 @@ void RegisterPeer(const QString &address);
 // ── сессия ───────────────────────────────────────────────────────────────────
 // Запомнить себя (адрес + JWT) после успешного логина.
 void SetSelf(const QString &address, const QString &token);
+// Вход паролем с экрана входа (не восстановление при запуске): отказ «отозвано» сразу после него значит, что это
+// устройство вышло из аккаунта (сеанс завершён с другого устройства) — его ключи откладываются, вход — новым устройством.
+void NoteInteractiveLogin();
 [[nodiscard]] QString SelfAddress();
 
 // Открыть/переиспользовать персистентное соединение с шиной (по SelfAddress/Token).
@@ -771,6 +781,27 @@ void AfterSessionReady(not_null<Main::Session*> session);
 [[nodiscard]] QByteArray SectionsRead(const QString &path);          // зашифрованные файлы tdata (P-13)
 bool SectionsWrite(const QString &path, const QByteArray &data);
 [[nodiscard]] bool IsRussianUi();
+// Внутренняя копия медиа Parvane (`tdata/parvane-*`): tdesktop считает такой документ уже скачанным, поэтому
+// «Сохранить» и «Сохранить как» копируют его в папку загрузок / выбранный путь (7 ноя 2026)
+[[nodiscard]] bool IsInternalMediaPath(const QString &path);
+// Файл, не скачанный автозагрузкой (настройка «Автозагрузка медиа»): скачать по нажатию; true — документ наш
+// (скачивание идёт либо запущено), false — обычный путь tdesktop. saveTo — куда сохранить копию (пусто — только кэш)
+bool StartDeferredDownload(not_null<DocumentData*> document, const QString &saveTo);
+// Свой набор стикеров из файлов (любые картинки → стикеры), сразу в панели и на всех своих устройствах (PACK-3)
+// «Добавить GIF из файла» (GIF-1): в «Сохранённые GIF» на всех своих устройствах
+void AddSavedGifFromFile(
+	not_null<Main::Session*> session,
+	const QString &path,
+	Fn<void(bool ok)> done);
+void CreateStickerPackFromFiles(
+	not_null<Main::Session*> session,
+	const QString &name,
+	const QStringList &paths,
+	Fn<void(int count, QString shown)> done);
+// Кэш скачанных медиа чатов этого устройства (`tdata/parvane-media-cache`) — для «Управления памятью»: размер в байтах
+// (считать вне главного потока) и очистка
+[[nodiscard]] int64 MediaCacheBytes();
+void ClearMediaCache();
 
 // Переменная окружения dev/e2e-хука: в сборке без PARVANE_DEV всегда nullptr (NAT-11 — хуков в релизе нет)
 [[nodiscard]] const char *DevEnv(const char *name);

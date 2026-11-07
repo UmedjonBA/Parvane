@@ -228,11 +228,13 @@ char32_t at(const U32 &s, size_t i) { return i < s.size() ? s[i] : 0; }
 
 bool isBlank(const U32 &s) { return trimU(s).empty(); }
 
-int columnsOf(const U32 &line) {
+// tab — сколько колонок даёт табуляция: в списках kIndentStep (уровень вложенности), в коде с отступом — kCodeIndent
+// (CommonMark: строка, начатая табуляцией, — код)
+int columnsOf(const U32 &line, int tab = kIndentStep) {
     int n = 0;
     for (char32_t c : line) {
         if (!isTabOrSpace(c)) break;
-        n += c == '\t' ? kIndentStep : 1;
+        n += c == '\t' ? tab : 1;
     }
     return n;
 }
@@ -243,11 +245,11 @@ int columnsOfRun(const U32 &s, size_t from, size_t to) {
     return n;
 }
 
-U32 dedent(const U32 &line, int columns) {
+U32 dedent(const U32 &line, int columns, int tab = kIndentStep) {
     int n = 0;
     size_t i = 0;
     while (i < line.size() && n < columns && isTabOrSpace(line[i])) {
-        n += line[i] == '\t' ? kIndentStep : 1;
+        n += line[i] == '\t' ? tab : 1;
         ++i;
     }
     return line.substr(i);
@@ -690,15 +692,15 @@ std::vector<MdBlock> parseBlocks(const std::vector<U32> &lines, const std::vecto
             }
         }
         // Код с отступом в 4 колонки (не продолжение абзаца)
-        if (paragraph.empty() && columnsOf(line) >= kCodeIndent) {
+        if (paragraph.empty() && columnsOf(line, kCodeIndent) >= kCodeIndent) {
             size_t end = i;
             while (end < lines.size()) {
-                if (!isBlank(lines[end]) && columnsOf(lines[end]) < kCodeIndent) break;
+                if (!isBlank(lines[end]) && columnsOf(lines[end], kCodeIndent) < kCodeIndent) break;
                 ++end;
             }
             while (end > i && isBlank(lines[end - 1])) --end;
             std::vector<U32> code;
-            for (size_t k = i; k < end; ++k) code.push_back(dedent(lines[k], kCodeIndent));
+            for (size_t k = i; k < end; ++k) code.push_back(dedent(lines[k], kCodeIndent, kCodeIndent));
             MdBlock block;
             block.type = MdBlockType::Code;
             block.text = joinLines(code, 0, code.size());

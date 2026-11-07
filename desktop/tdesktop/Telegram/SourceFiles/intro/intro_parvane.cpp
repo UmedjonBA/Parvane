@@ -729,6 +729,7 @@ void ParvaneWidget::onIssued(
 	if (address != user) {
 		Parvane::MoveAccountLocal(user, address);
 	}
+	Parvane::NoteInteractiveLogin();
 	Parvane::SetSelf(address, token);
 	crl::async([] { Parvane::StartSession(); });
 	loginSucceeded(address);

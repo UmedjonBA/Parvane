@@ -374,6 +374,7 @@ private:
 	void destroyLoader();
 
 	bool saveFromDataChecked();
+	bool saveInternalCopy(); // Parvane: копия внутреннего файла медиа в папку загрузок
 
 	void refreshPossibleCoverThumbnail();
 

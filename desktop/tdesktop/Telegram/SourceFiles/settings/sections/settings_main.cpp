@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/sections/settings_main.h"
 
+#include "parvane/parvane_client.h" // Parvane: IsRussianUi
 #include "parvane/parvane_account_ui.h" // Parvane: «Сообщить об ошибке»
 #include "parvane/parvane_health.h" // Parvane: цели здоровья
 #include "parvane/parvane_islands.h" // Parvane: профиль-хаб карточками
@@ -421,14 +422,24 @@ void BuildSectionButtons(SectionBuilder &builder) {
 			.title = tr::lng_archived_name(),
 			.icon = { &st::menuIconArchive },
 			.onClick = [=] {
-				if (const auto f = folder()) {
-					controller->window().hideSettingsAndLayer();
-					Parvane::ShowSection(Parvane::Section::Chats);
-					controller->openFolder(f);
+				const auto f = folder();
+				if (!f || f->chatsList()->empty()) {
+					// Parvane: архив пуст — сказать, а не молчать (раньше нажатие ничего не делало)
+					controller->showToast(Parvane::IsRussianUi()
+						? u"Архив пуст: «⋮ → Архивировать» у чата убирает его сюда"_q
+						: u"Archive is empty: «⋮ → Archive» on a chat moves it here"_q);
+					return;
 				}
+				controller->window().hideSettingsAndLayer();
+				Parvane::ShowSection(Parvane::Section::Chats);
+				controller->openFolder(f);
 			},
 			.keywords = { u"archive"_q },
-			.shown = session->settings().archiveInMainMenuChanges(
+			// Parvane: с текущим значением — без него строка показывалась всегда, даже при архиве в списке чатов
+			.shown = rpl::single(
+				session->settings().archiveInMainMenu()
+			) | rpl::then(
+				session->settings().archiveInMainMenuChanges()
 			) | rpl::map([=](bool inMenu) {
 				const auto f = folder();
 				return inMenu && f && !f->chatsList()->empty();
@@ -447,7 +458,7 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.title = tr::lng_parvane_profile_general(),
 		.targetSection = ChatId(),
 		.icon = { &st::menuIconChatBubble },
-		.keywords = { u"themes"_q, u"appearance"_q, u"text"_q, u"background"_q },
+		.keywords = { u"themes"_q, u"appearance"_q, u"text"_q, u"background"_q, u"scheme"_q, u"colors"_q },
 	});
 
 	builder.addButton({
@@ -752,13 +763,8 @@ void BuildParvaneSection(SectionBuilder &builder) {
 		},
 		.keywords = { u"notes"_q, u"vault"_q, u"knowledge"_q, u"files"_q },
 	});
-	builder.addButton({
-		.id = u"main/parvane-appearance"_q,
-		.title = tr::lng_parvane_profile_appearance(),
-		.icon = { &st::menuIconPalette },
-		.onClick = [=] { showOther(ChatId()); },
-		.keywords = { u"scheme"_q, u"colors"_q, u"theme"_q },
-	});
+	// Parvane: «Оформление» открывало тот же экран, что «Основные настройки» (дубль, 7 ноя 2026) — пункт убран,
+	// слова для поиска перенесены к «Основным настройкам»
 }
 
 void BuildValidationSuggestions(SectionBuilder &builder) {

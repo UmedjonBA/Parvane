@@ -31,6 +31,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QDesktopServices>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QProcess>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 #include <kshell.h>
 #include <ksandbox.h>
@@ -632,23 +635,54 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done) {
 		return;
 	}
 
+	// Parvane fork: свой ярлык автозапуска `parvane-desktop.desktop` (имя и значок Parvane, запуск через лаунчер
+	// `~/.local/bin/parvane-desktop`, если он есть). Шаблон tdesktop писал `org.telegram.desktop.desktop` с Name=Telegram
+	// и мог затереть или удалить автозапуск установленного Telegram (7 ноя 2026).
 	const auto success = [&] {
 		const auto autostart = QStandardPaths::writableLocation(
 			QStandardPaths::GenericConfigLocation)
 			+ u"/autostart/"_q;
-
-		if (!enabled) {
-			return QFile::remove(
-				autostart
-					+ QGuiApplication::desktopFileName()
-					+ u".desktop"_q);
+		const auto target = autostart + u"parvane-desktop.desktop"_q;
+		const auto exe = cExeDir() + cExeName();
+		// Ярлык прежних версий форка — только если он наш (Exec на этот бинарь); ярлык Telegram не трогаем
+		{
+			auto old = QFile(autostart + QGuiApplication::desktopFileName() + u".desktop"_q);
+			if (old.open(QIODevice::ReadOnly)) {
+				const auto text = QString::fromUtf8(old.readAll());
+				old.close();
+				if (text.contains(exe)) {
+					old.remove();
+				}
+			}
 		}
-
-		return GenerateDesktopFile(
-			autostart,
-			{ u"-autostart"_q },
-			true,
-			!done);
+		if (!enabled) {
+			return !QFile::exists(target) || QFile::remove(target);
+		}
+		const auto quote = [](const QString &value) {
+			auto escaped = value;
+			escaped.replace('\\', u"\\\\"_q).replace('"', u"\\\""_q);
+			return u"\""_q + escaped + u"\""_q;
+		};
+		const auto launcher = QDir::homePath() + u"/.local/bin/parvane-desktop"_q;
+		const auto command = QFileInfo(launcher).isExecutable()
+			? quote(launcher) + u" -autostart"_q
+			: quote(exe) + u" -workdir "_q + quote(cWorkingDir()) + u" -autostart"_q;
+		if (!QDir(autostart).exists()) {
+			QDir().mkpath(autostart);
+		}
+		auto file = QFile(target);
+		if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+			return false;
+		}
+		file.write((u"[Desktop Entry]\n"_q
+			u"Type=Application\n"_q
+			u"Name=Parvane\n"_q
+			u"Comment=Parvane Desktop\n"_q
+			u"Icon=parvane\n"_q
+			u"Exec="_q + command + u"\n"_q
+			u"Terminal=false\n"_q
+			u"X-GNOME-Autostart-enabled=true\n"_q).toUtf8());
+		return file.error() == QFileDevice::NoError;
 	}();
 
 	if (done) {

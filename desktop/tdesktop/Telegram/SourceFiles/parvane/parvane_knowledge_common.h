@@ -12,7 +12,12 @@
 #include <parvane/sections/notes_model.h>
 #include <parvane/sections/notes_planned.h>
 
+#include "base/unique_qptr.h"
 #include "ui/text/text.h"
+
+namespace Ui {
+class PopupMenu;
+} // namespace Ui
 
 #include <optional>
 #include <string>
@@ -168,6 +173,10 @@ protected:
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
+	void mouseDoubleClickEvent(QMouseEvent *e) override;
+	void contextMenuEvent(QContextMenuEvent *e) override;
+	void keyPressEvent(QKeyEvent *e) override;
+	void focusOutEvent(QFocusEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 
 private:
@@ -175,6 +184,8 @@ private:
 	void refreshStyle();
 	void apply();
 	[[nodiscard]] ClickHandlerPtr linkAt(QPoint point) const;
+	[[nodiscard]] uint16 symbolAt(QPoint point) const;
+	void copySelection();
 
 	Style _st;
 	std::unique_ptr<Colors> _colors;
@@ -185,6 +196,11 @@ private:
 	ClickHandlerPtr _pressed;
 	bool _syntax = false;
 	rpl::lifetime _highlightLifetime;
+	// Выделение мышью, как в тексте сообщения (Ctrl+C, правый клик — «Копировать»)
+	TextSelection _selection;
+	uint16 _selectFrom = 0;
+	bool _selecting = false;
+	base::unique_qptr<Ui::PopupMenu> _menu;
 
 };
 
