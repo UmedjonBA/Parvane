@@ -787,6 +787,9 @@ bool SectionsWrite(const QString &path, const QByteArray &data);
 // Файл, не скачанный автозагрузкой (настройка «Автозагрузка медиа»): скачать по нажатию; true — документ наш
 // (скачивание идёт либо запущено), false — обычный путь tdesktop. saveTo — куда сохранить копию (пусто — только кэш)
 bool StartDeferredDownload(not_null<DocumentData*> document, const QString &saveTo);
+// Документ ждёт скачивания по нажатию: у него нет ни пути, ни удалённого адреса, но isNull() ложен — иначе обработчики
+// клика выходят сразу и файл не скачать вовсе (main)
+[[nodiscard]] bool IsDeferredDownload(uint64 documentId);
 // Свой набор стикеров из файлов (любые картинки → стикеры), сразу в панели и на всех своих устройствах (PACK-3)
 // «Добавить GIF из файла» (GIF-1): в «Сохранённые GIF» на всех своих устройствах
 void AddSavedGifFromFile(

@@ -1201,7 +1201,11 @@ void DocumentData::save(
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading) {
 	// Parvane: файл не скачан автозагрузкой (настройка) — качается по нажатию своим путём (MTProto нет)
-	if (!autoLoading && Parvane::StartDeferredDownload(this, toFile)) {
+	// автозагрузка tdesktop такой файл не трогает: удалённого адреса нет, запрос ушёл бы в MTProto
+	if (Parvane::IsDeferredDownload(id)) {
+		if (!autoLoading) {
+			(void)Parvane::StartDeferredDownload(this, toFile);
+		}
 		return;
 	}
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
@@ -1732,7 +1736,8 @@ bool DocumentData::isNull() const {
 		&& !hasWebLocation()
 		&& _url.isEmpty()
 		&& !uploading()
-		&& _location.isEmpty();
+		&& _location.isEmpty()
+		&& !Parvane::IsDeferredDownload(id);
 }
 
 MTPInputDocument DocumentData::mtpInput() const {

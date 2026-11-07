@@ -6817,6 +6817,10 @@ void pumpMediaDownload(
 	});
 }
 
+bool IsDeferredDownloadImpl(uint64 documentId) { // main
+	return g_deferredMedia.contains(DocumentId(documentId));
+}
+
 bool StartDeferredDownloadImpl(not_null<DocumentData*> document, const QString &saveTo) { // main
 	const auto it = g_deferredMedia.find(document->id);
 	if (it == g_deferredMedia.end()) {
@@ -13255,6 +13259,10 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 
 bool StartDeferredDownload(not_null<DocumentData*> document, const QString &saveTo) {
 	return Internal::StartDeferredDownloadImpl(document, saveTo);
+}
+
+bool IsDeferredDownload(uint64 documentId) {
+	return Internal::IsDeferredDownloadImpl(documentId);
 }
 
 } // namespace Parvane
