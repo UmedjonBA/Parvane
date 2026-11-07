@@ -918,6 +918,7 @@ class Client private constructor(
         is TdApi.ReorderChatFolders -> run {
             val l = store.local ?: return@run TdApi.Error(500, "no local state")
             l.folders.reorder(f.chatFolderIds ?: IntArray(0), f.mainChatListPosition)
+            stateJournal.noteAllFolderAt(l.folders.mainPosition) // место «Все чаты» — в журнал состояния
             postUpdate(TdApi.UpdateChatFolders(l.folders.infos(), l.folders.mainPosition, false))
             scheduleStateFlush("folders")
             TdApi.Ok()
@@ -1086,7 +1087,10 @@ class Client private constructor(
         is TdApi.AddFavoriteSticker -> stickers.addFavorite(f.sticker)
         is TdApi.RemoveFavoriteSticker -> stickers.removeFavorite(f.sticker)
         is TdApi.RemoveRecentSticker -> stickers.removeRecent(f.sticker)
-        is TdApi.GetSavedAnimations -> stickers.savedAnimations()
+        is TdApi.GetSavedAnimations -> { // GIF-1: GIF журнала, не скачанные без сети, — повтор в фоне
+            if (stickers.hasPendingGifs()) io.execute { try { stickers.retryPendingGifs() } catch (e: Throwable) { Log.w(TAG, "GIF журнала: ${e.message}") } }
+            stickers.savedAnimations()
+        }
         is TdApi.AddSavedAnimation -> stickers.addSavedAnimation(f.animation)
         is TdApi.RemoveSavedAnimation -> stickers.removeSavedAnimation(f.animation)
         is TdApi.SearchEmojis -> TdApi.EmojiKeywords(arrayOf())

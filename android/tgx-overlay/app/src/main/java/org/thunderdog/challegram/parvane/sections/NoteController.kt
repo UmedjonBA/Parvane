@@ -68,7 +68,11 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (n != null) {
             if (editing) addView(context.pvButton(Sx.t("Сохранить", "Save"), "acc") { save() })
-            else addView(context.pvIconButton("edit", Sx.t("Изменить", "Edit"), Pv.c.muted) { startEdit() })
+            else {
+                // «Запланировать» в шапке (как web `.noteBar`): в длинной заметке не листать до кнопок в конце
+                if (!n.optBoolean("isDaily")) addView(context.pvIconButton("calendar", Sx.t("Запланировать", "Schedule"), Pv.c.muted) { plan(n) })
+                addView(context.pvIconButton("edit", Sx.t("Изменить", "Edit"), Pv.c.muted) { startEdit() })
+            }
         }
     }
 
@@ -301,6 +305,9 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(context.pvButton(Sx.t("Изменить", "Edit"), icon = "edit") { startEdit() })
+                if (!n.optBoolean("isDaily")) addView(context.pvButton(Sx.t("Запланировать", "Schedule"), "ghost", icon = "calendar") { plan(n) }.apply {
+                    (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f)
+                })
                 addView(context.pvButton(Sx.t("Удалить", "Delete"), "ghost", icon = "trash") { delete(n) }.apply {
                     (layoutParams as LinearLayout.LayoutParams).leftMargin = Pv.rem(0.5f)
                 })
@@ -315,6 +322,14 @@ class NoteController(context: Context, tdlib: Tdlib) : SectionController(context
                 }
             }
         }
+    }
+
+    /**
+     * «Запланировать» (web `handlePlan` → `notePlanLine`): окно «Новая запись» со строкой `[[название]] ` — запись со
+     * ссылкой на заметку встаёт в её «Запланировано».
+     */
+    private fun plan(n: JSONObject) {
+        QuickAdd.show(this, "[[${n.optString("title").trim()}]] ")
     }
 
     private fun cancelEdit() {

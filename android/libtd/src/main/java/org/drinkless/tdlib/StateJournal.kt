@@ -130,6 +130,16 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
     @Volatile var hasUnresolved = false
         private set
 
+    /**
+     * Место «Все чаты» среди папок по журналу (0 — первыми). Проекция кладёт его в `Folders.mainPosition` — X ставит
+     * страницу «Все чаты» (и чип полосы папок) на это место; своя перестановка в X — [noteAllFolderAt].
+     */
+    @Volatile var allFolderAt = 0
+        private set
+
+    /** Перестановка папок на этом устройстве (ReorderChatFolders): место «Все чаты» — в следующий снимок. */
+    fun noteAllFolderAt(pos: Int) { allFolderAt = pos.coerceAtLeast(0) }
+
     // ── локальные данные → желаемый снимок (виды [KINDS]) ───────────────────
     fun build(local: ChatLocalState, queue: ScheduledQueue, blockedSet: Set<String> = emptySet(), notify: NotifyView? = null,
               packs: PackJournal? = null): JSONObject {
@@ -143,6 +153,13 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
                 .put("channels", f.includeChannels).put("bots", f.includeBots).put("exclude_muted", f.excludeMuted)
                 .put("exclude_read", f.excludeRead).put("exclude_archived", f.excludeArchived).put("color", f.colorId))
             order.put(f.id)
+        }
+        // «Все чаты» (id 0): место выбирают web/desktop (без Premium) — сохраняем его, чтобы правка папок здесь не сбрасывала
+        if (order.length() >= allFolderAt) {
+            val ids = (0 until order.length()).map { order.get(it) }.toMutableList()
+            ids.add(minOf(allFolderAt, ids.size), 0)
+            while (order.length() > 0) order.remove(0)
+            ids.forEach { order.put(it) }
         }
         val drafts = JSONArray()
         local.draftChatIds().forEach { chatId ->
@@ -257,6 +274,8 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
     private fun projectFolders(snap: JSONObject, local: ChatLocalState, ch: Changes) {
         val list = snap.optJSONArray("folders") ?: JSONArray()
         val order = snap.optJSONObject("folder_order")?.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optInt(it) } } ?: emptyList()
+        // Место «Все чаты»: сколько папок перед id 0 (нет 0 — первыми)
+        allFolderAt = order.indexOf(0).let { at -> if (at < 0) 0 else order.take(at).count { it > 1 } }
         val next = LinkedHashMap<Int, Folders.Folder>()
         synchronized(unresolved) { unresolved.keys.removeAll { it.startsWith("folder:") }; hasUnresolved = unresolved.isNotEmpty() }
         for (i in 0 until list.length()) {
@@ -272,8 +291,9 @@ class StateJournal(private val codec: Codec, private val resolver: Resolver) {
         val sorted = next.values.sortedBy { rank(it.id) }
         val before = local.folders.all().map { it.toJson().toString() }
         val after = sorted.map { it.toJson().toString() }
-        if (before == after) return
-        local.folders.replaceAll(sorted)
+        val mainMoved = local.folders.setMainPosition(minOf(allFolderAt, sorted.size))
+        if (before == after && !mainMoved) return
+        if (before != after) local.folders.replaceAll(sorted)
         ch.folders = true
     }
 

@@ -280,8 +280,11 @@ object ParvaneCore {
     @JvmStatic private external fun nativeSetCallsPresencePrivacy(callsNobody: Boolean, presenceNobody: Boolean): Boolean
     @JvmStatic fun resetIdentity(password: String): String = nativeResetIdentity(password)
     fun packHash(dir: String): String = nativePackHash(dir)
+    /** GIF-1: файл сохранённого GIF по ссылке журнала (кэш либо блоб по секрету), sha256 сверяется с wantHex → {ok,path,sha256,size,error}. Блокирующий. */
+    fun gifFetch(refJson: String, wantHex: String): JSONObject = JSONObject(nativeGifFetch(refJson, wantHex))
     @JvmStatic private external fun nativeResetIdentity(password: String): String
     @JvmStatic private external fun nativePackHash(dir: String): String
+    @JvmStatic private external fun nativeGifFetch(refJson: String, wantHex: String): String
     @JvmStatic private external fun nativePackRefFor(dir: String, rawName: String): String
     @JvmStatic private external fun nativePreviewFetch(url: String, timeoutMs: Int): String
     @JvmStatic private external fun nativeMapTile(z: Int, x: Int, y: Int): ByteArray?

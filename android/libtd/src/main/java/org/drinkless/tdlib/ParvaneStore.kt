@@ -650,6 +650,9 @@ class ParvaneStore {
     fun uuidOf(chatId: Long, msgId: Long): String? = uuidByMsg[key(chatId, msgId)]
     fun messageByUuid(uuid: String): TdApi.Message? = msgByUuid[uuid]
     fun contentOf(uuid: String): JSONObject? = contentByUuid[uuid]
+    /** Исходный content сообщения с этим вложением (GIF-1: ссылка на файл для журнала без повторной загрузки). */
+    fun contentByFileId(remoteId: String): JSONObject? =
+        if (remoteId.isEmpty()) null else contentByUuid.values.firstOrNull { it.optString("file_id") == remoteId }
 
     /** Правка: новый контент → апдейты для UI. */
     @Synchronized

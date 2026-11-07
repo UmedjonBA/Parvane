@@ -26,9 +26,12 @@ class Stickers(
     interface Core {
         fun packFetch(refJson: String): JSONObject
         fun packRefFor(dir: String, rawName: String, recipients: List<String>): JSONObject
+        /** GIF-1: файл GIF по ссылке журнала, sha256 сверяется с wantHex (пусто — только посчитать) → {ok,path,sha256,size}. */
+        fun gifFetch(refJson: String, wantHex: String): JSONObject = JSONObject().put("ok", false).put("error", "unsupported")
     }
     object RealCore : Core {
         override fun packFetch(refJson: String) = ParvaneCore.packFetch(refJson)
+        override fun gifFetch(refJson: String, wantHex: String) = ParvaneCore.gifFetch(refJson, wantHex)
         override fun packRefFor(dir: String, rawName: String, recipients: List<String>) = ParvaneCore.packRefFor(dir, rawName) // CAP-1: блоб по секрету, получатели не нужны
     }
 
@@ -38,7 +41,10 @@ class Stickers(
     private val stateFile = File(root, "stickers-state.json")
     private val recent = ArrayList<String>()     // "setId:name"
     private val favorite = ArrayList<String>()
-    private val savedGifs = ArrayList<JSONObject>() // {file_id,key,nonce,width,height,duration_secs,mime,size_bytes,filename}
+    private val savedGifs = ArrayList<JSONObject>() // {file_id,key,nonce,width,height,duration_secs,mime,size_bytes,filename,local_path,sha256?}
+    /** GIF-1: записи журнала, чей файл не скачался (нет сети) — повтор [retryPendingGifs]. */
+    private val pendingGifs = LinkedHashMap<String, JSONObject>()
+    @Volatile private var pendingTriedMs = 0L
     private val fileKeyByTdId = HashMap<Int, Pair<Long, String>>()
 
     init { loadState() }
@@ -163,6 +169,7 @@ class Stickers(
      * ссылке и поставить (без подтверждения). Сеть — блокирует: звать не с потока X.
      */
     @Synchronized fun applyJournal(pr: PackJournal.Projection) {
+        applyJournalGifs(pr.gifs, pr.gifsRemoved)
         for (setId in pr.removed) {
             val p = index.bySetId(setId) ?: continue
             if (!p.installed || p.builtin) continue
@@ -226,37 +233,148 @@ class Stickers(
         post(TdApi.UpdateRecentStickers(false, recents().stickers.map { it.id.toInt() }.toIntArray())); return TdApi.Ok()
     }
 
-    // ── GIF (сохранённые, ≤50 как web) ─────────────────────────────────────
-    fun savedAnimations(): TdApi.Animations = TdApi.Animations(savedGifs.map { animationOf(it) }.toTypedArray())
+    // ── GIF (сохранённые, ≤50 как web; GIF-1 — на всех своих устройствах) ──────
+    @Synchronized fun savedAnimations(): TdApi.Animations = TdApi.Animations(savedGifs.map { animationOf(it) }.toTypedArray())
     private fun animationOf(g: JSONObject): TdApi.Animation {
-        val f = store.fileFor(g.optString("file_id"), g.optString("key"), g.optString("nonce"), g.optLong("size_bytes"), g.optString("mime", "video/webm"), g.optString("local_path"))
+        // рабочая копия могла пропасть (временный каталог) — тогда файл скачивается заново (кэш устройства)
+        val local = g.optString("local_path").takeIf { it.isNotEmpty() && File(it).isFile } ?: ""
+        val f = store.fileFor(g.optString("file_id"), g.optString("key"), g.optString("nonce"), g.optLong("size_bytes"), g.optString("mime", "video/webm"), local)
         return TdApi.Animation(g.optInt("duration_secs", 1), g.optInt("width", 240), g.optInt("height", 240), g.optString("filename", "animation.webm"),
             g.optString("mime", "video/webm"), false, null, null, f)
     }
-    /** Принятый gif → в сохранённые (как web rememberSavedGif). */
-    fun noteReceivedGif(content: JSONObject) {
+    private fun postSavedGifs() = post(TdApi.UpdateSavedAnimations(savedAnimations().animations.map { it.animation.id }.toIntArray()))
+    private fun trimSavedGifs() { while (savedGifs.size > 50) savedGifs.removeAt(savedGifs.size - 1) }
+
+    /** Принятый gif → в сохранённые этого устройства (как web rememberSavedGif; в журнал не пишется — только «Сохранить в GIF»). */
+    @Synchronized fun noteReceivedGif(content: JSONObject) {
         val fid = content.optString("file_id"); if (fid.isEmpty() || savedGifs.any { it.optString("file_id") == fid }) return
         savedGifs.add(0, JSONObject().put("file_id", fid).put("key", content.optString("file_key")).put("nonce", content.optString("file_nonce"))
             .put("width", content.optInt("width", 240)).put("height", content.optInt("height", 240)).put("duration_secs", content.optInt("duration_secs", 1))
             .put("mime", content.optString("mime", "video/webm")).put("size_bytes", content.optLong("size_bytes")).put("filename", content.optString("filename", "animation.webm")))
-        while (savedGifs.size > 50) savedGifs.removeAt(savedGifs.size - 1)
-        saveState(); post(TdApi.UpdateSavedAnimations(savedAnimations().animations.map { it.animation.id }.toIntArray()))
+        trimSavedGifs()
+        saveState(); postSavedGifs()
     }
-    fun addSavedAnimation(input: TdApi.InputFile?): TdApi.Object {
+
+    /**
+     * «Сохранить в GIF» (X: AddSavedAnimation). GIF-1: запись журнала `g:<sha256>` ссылкой из сообщения (файл заново
+     * не загружается); sha256 — по рабочей копии, иначе файл скачивается ядром. Сеть — блокирует (поток io шва).
+     */
+    @Synchronized fun addSavedAnimation(input: TdApi.InputFile?): TdApi.Object {
         val id = (input as? TdApi.InputFileId)?.id ?: return TdApi.Error(400, "unsupported input")
         val ref = store.fileRef(id) ?: return TdApi.Error(404, "file not found")
-        if (savedGifs.none { it.optString("file_id") == ref.remoteId }) {
-            savedGifs.add(0, JSONObject().put("file_id", ref.remoteId).put("key", ref.key).put("nonce", ref.nonce).put("mime", ref.mime).put("size_bytes", ref.size).put("local_path", ref.path))
-            while (savedGifs.size > 50) savedGifs.removeAt(savedGifs.size - 1)
-            saveState()
+        val had = savedGifs.firstOrNull { it.optString("file_id") == ref.remoteId }
+        val g: JSONObject = had ?: newSavedGif(ref)
+        if (had != null) {
+            savedGifs.remove(had)
+            if (had.optString("local_path").isEmpty() && ref.path.isNotEmpty()) had.put("local_path", ref.path)
         }
-        post(TdApi.UpdateSavedAnimations(savedAnimations().animations.map { it.animation.id }.toIntArray())); return TdApi.Ok()
+        savedGifs.add(0, g); trimSavedGifs()
+        if (recordGifInJournal(g)) journalChanged()
+        saveState(); postSavedGifs(); return TdApi.Ok()
     }
-    fun removeSavedAnimation(input: TdApi.InputFile?): TdApi.Object {
+
+    private fun newSavedGif(ref: ParvaneStore.FileRef): JSONObject {
+        val g = JSONObject().put("file_id", ref.remoteId).put("key", ref.key).put("nonce", ref.nonce).put("mime", ref.mime).put("size_bytes", ref.size).put("local_path", ref.path)
+        val c = store.contentByFileId(ref.remoteId) ?: return g
+        g.put("width", c.optInt("width", 240)).put("height", c.optInt("height", 240)).put("duration_secs", c.optInt("duration_secs", 1))
+        if (!c.isNull("filename") && c.optString("filename").isNotEmpty()) g.put("filename", c.optString("filename"))
+        if (!c.isNull("mime") && c.optString("mime").isNotEmpty()) g.put("mime", c.optString("mime"))
+        return g
+    }
+
+    @Synchronized fun removeSavedAnimation(input: TdApi.InputFile?): TdApi.Object {
         val id = (input as? TdApi.InputFileId)?.id ?: return TdApi.Error(400, "unsupported input")
         val ref = store.fileRef(id) ?: return TdApi.Error(404, "file not found")
-        savedGifs.removeAll { it.optString("file_id") == ref.remoteId }; saveState()
-        post(TdApi.UpdateSavedAnimations(savedAnimations().animations.map { it.animation.id }.toIntArray())); return TdApi.Ok()
+        val gone = savedGifs.filter { it.optString("file_id") == ref.remoteId }
+        savedGifs.removeAll(gone.toSet()); saveState()
+        // GIF-1: снятие — sticker_pack_remove с тем же ключом
+        var changed = false
+        for (g in gone) {
+            val hex = g.optString("sha256").ifEmpty { g.optString("local_path").takeIf { it.isNotEmpty() }?.let { sha256Of(File(it)) } ?: "" }
+            if (hex.isNotEmpty() && journal.forgetGif(hex)) changed = true
+        }
+        if (changed) { Log.i(TAG, "GIF ${ref.remoteId} снят из журнала состояния"); journalChanged() }
+        postSavedGifs(); return TdApi.Ok()
+    }
+
+    /** GIF → запись журнала (ссылка на файл из сообщения). true — запись новая. */
+    private fun recordGifInJournal(g: JSONObject): Boolean {
+        val fid = g.optString("file_id"); if (fid.isEmpty()) return false
+        val c = store.contentByFileId(fid)
+        fun pick(k: String, ck: String) = g.optString(k).ifEmpty { c?.takeUnless { it.isNull(ck) }?.optString(ck) ?: "" }
+        val name = gifName(pick("filename", "filename"), g.optString("mime"))
+        val ref = JSONObject().put("file_id", fid).put("name", name)
+        pick("key", "file_key").takeIf { it.isNotEmpty() }?.let { ref.put("key", it) }
+        pick("nonce", "file_nonce").takeIf { it.isNotEmpty() }?.let { ref.put("nonce", it) }
+        pick("capability", "capability").takeIf { it.isNotEmpty() }?.let { ref.put("capability", it); g.put("capability", it) }
+        pick("blob_domain", "blob_domain").takeIf { it.isNotEmpty() }?.let { ref.put("blob_domain", it); g.put("blob_domain", it) }
+        var hex = g.optString("sha256")
+        if (hex.isEmpty()) hex = g.optString("local_path").takeIf { it.isNotEmpty() && File(it).isFile }?.let { sha256Of(File(it)) } ?: ""
+        if (hex.isEmpty()) {
+            val r = try { core.gifFetch(JSONObject(ref.toString()).put("size_bytes", g.optLong("size_bytes")).toString(), "") } catch (e: Throwable) { JSONObject().put("error", e.message) }
+            if (!r.optBoolean("ok")) { Log.w(TAG, "GIF $fid: в журнал не записан — файл не получен (${r.optString("error")})"); return false }
+            hex = r.optString("sha256")
+            r.optString("path").takeIf { it.isNotEmpty() }?.let { g.put("local_path", it) }
+        }
+        if (hex.isEmpty()) return false
+        g.put("sha256", hex)
+        val before = journal.records().toString()
+        journal.recordGif(ref, hex) ?: return false
+        if (journal.records().toString() == before) return false
+        Log.i(TAG, "GIF $fid записан в журнал состояния")
+        return true
+    }
+
+    /**
+     * Проекция журнала (GIF-1): снятые на другом своём устройстве — убрать, недостающие — скачать по ссылке, сверить
+     * sha256, добавить (новые первыми по added_ms). Неудачные скачивания ждут [retryPendingGifs].
+     */
+    @Synchronized private fun applyJournalGifs(gifs: List<JSONObject>, removed: List<String>) {
+        var changed = false
+        for (hex in removed) {
+            pendingGifs.remove(hex)
+            if (savedGifs.removeAll { it.optString("sha256") == hex }) { changed = true; Log.i(TAG, "GIF $hex снят (журнал состояния)") }
+        }
+        val want = gifs.mapNotNull { r -> r.optString("set_id").takeIf { PackJournal.isGifKey(it) }?.removePrefix(PackJournal.GIF_PREFIX)?.let { it to r } }.toMap()
+        pendingGifs.keys.retainAll(want.keys)
+        for ((hex, r) in want) if (savedGifs.none { it.optString("sha256") == hex }) pendingGifs[hex] = r
+        if (fetchPendingGifs()) changed = true
+        if (changed) { saveState(); postSavedGifs() }
+    }
+
+    /** Повтор скачивания GIF журнала (не чаще раза в 60 с). Сеть — блокирует. */
+    @Synchronized fun retryPendingGifs(nowMs: Long = System.currentTimeMillis()) {
+        if (pendingGifs.isEmpty() || nowMs - pendingTriedMs < 60_000) return
+        if (fetchPendingGifs()) { saveState(); postSavedGifs() }
+    }
+    fun hasPendingGifs() = pendingGifs.isNotEmpty()
+
+    private fun fetchPendingGifs(): Boolean {
+        if (pendingGifs.isEmpty()) return false
+        pendingTriedMs = System.currentTimeMillis()
+        val added = ArrayList<JSONObject>()
+        for ((hex, rec) in pendingGifs.entries.toList()) {
+            val ref = rec.optJSONObject("ref")
+            if (ref == null) { pendingGifs.remove(hex); continue }
+            val fid = ref.optString("file_id")
+            val r = try { core.gifFetch(ref.toString(), hex) } catch (e: Throwable) { JSONObject().put("error", e.message) }
+            if (!r.optBoolean("ok")) { Log.w(TAG, "GIF $fid из журнала не получен (${r.optString("error")})"); continue }
+            pendingGifs.remove(hex)
+            val name = ref.optString("name").ifEmpty { "animation.mp4" }
+            val g = JSONObject().put("file_id", fid).put("key", ref.optString("key")).put("nonce", ref.optString("nonce"))
+                .put("mime", mimeOf(name)).put("size_bytes", r.optLong("size")).put("filename", name)
+                .put("local_path", r.optString("path")).put("sha256", hex).put("added_ms", rec.optString("added_ms"))
+            ref.optString("capability").takeIf { it.isNotEmpty() }?.let { g.put("capability", it) }
+            ref.optString("blob_domain").takeIf { it.isNotEmpty() }?.let { g.put("blob_domain", it) }
+            savedGifs.removeAll { it.optString("file_id") == fid }
+            added.add(g)
+            Log.i(TAG, "GIF $fid добавлен из журнала состояния")
+        }
+        if (added.isEmpty()) return false
+        // новые первыми (added_ms записи журнала)
+        added.sortByDescending { it.optString("added_ms").toLongOrNull() ?: 0L }
+        savedGifs.addAll(0, added); trimSavedGifs()
+        return true
     }
 
     // ── отправка ───────────────────────────────────────────────────────────
@@ -341,5 +459,24 @@ class Stickers(
         } catch (e: Exception) { /* в памяти */ }
     }
 
-    companion object { private const val TAG = "ParvaneClient" }
+    companion object {
+        private const val TAG = "ParvaneClient"
+        /** GIF-1: тип файла — по расширению имени (`.mp4`, `.webm`, `.gif`). */
+        fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+            "gif" -> "image/gif"; "mp4" -> "video/mp4"; else -> "video/webm"
+        }
+        /** Имя файла с расширением (PackRef.name ≤ 64): без расширения — по типу. */
+        fun gifName(filename: String, mime: String): String {
+            val ext = when { mime.contains("gif") -> "gif"; mime.contains("mp4") -> "mp4"; else -> "webm" }
+            var n = filename.trim().substringAfterLast('/').ifEmpty { "animation.$ext" }
+            if (!n.contains('.')) n = "$n.$ext"
+            if (n.length > 64) { val e = n.substringAfterLast('.'); n = n.substring(0, 63 - e.length) + "." + e }
+            return n
+        }
+        fun sha256Of(f: File): String = try {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            f.inputStream().use { input -> val buf = ByteArray(64 * 1024); while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) } }
+            md.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        } catch (e: Exception) { "" }
+    }
 }

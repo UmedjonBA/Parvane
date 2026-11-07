@@ -12,8 +12,12 @@ import java.io.File
  * и сопоставление «ключ журнала → локальный setId» этого устройства. Файл `packs-journal.json`; чистый JVM-класс.
  */
 class PackJournal(private val dir: File) {
-    /** Итог проекции снимка: записи, которые надо поставить, и локальные наборы, снятые на другом устройстве. */
-    class Projection(val records: List<JSONObject>, val removed: List<Long>)
+    /**
+     * Итог проекции снимка: записи наборов, которые надо поставить, и локальные наборы, снятые на другом устройстве;
+     * GIF-1 — записи сохранённых GIF (`g:<sha256 hex>`, не наборы) и ключи снятых.
+     */
+    class Projection(val records: List<JSONObject>, val removed: List<Long>,
+                     val gifs: List<JSONObject> = emptyList(), val gifsRemoved: List<String> = emptyList())
 
     private val records = LinkedHashMap<String, JSONObject>()
     private val localIds = HashMap<String, Long>()
@@ -44,6 +48,29 @@ class PackJournal(private val dir: File) {
         save(); return key
     }
 
+    /**
+     * GIF-1: сохранённый GIF → запись `g:<sha256 hex>` ссылкой на сам файл (count 1, content_hash — base64 сырых 32
+     * байт sha256, emoji нет). Ключ записи; null — нет `file_id` или sha256 не 64 hex. Та же ссылка — без перезаписи.
+     */
+    @Synchronized fun recordGif(ref: JSONObject, sha256Hex: String, nowMs: Long = System.currentTimeMillis()): String? {
+        val hex = sha256Hex.lowercase()
+        val raw = hexToBytes(hex)?.takeIf { it.size == 32 } ?: return null
+        val r = wireRef(JSONObject(ref.toString()).put("count", 1).put("content_hash", java.util.Base64.getEncoder().encodeToString(raw))) ?: return null
+        val key = GIF_PREFIX + hex
+        val prev = records[key]
+        if (prev != null && prev.optJSONObject("ref")?.toString() == r.toString()) return key
+        records.remove(key)
+        records[key] = JSONObject().put("set_id", key).put("ref", r).put("added_ms", nowMs.toString())
+        save(); return key
+    }
+
+    /** GIF-1: GIF убран из сохранённых на этом устройстве → записи нет. true — запись была. */
+    @Synchronized fun forgetGif(sha256Hex: String): Boolean {
+        val had = records.remove(GIF_PREFIX + sha256Hex.lowercase()) != null
+        if (had) save()
+        return had
+    }
+
     /** Набор снят на этом устройстве → записи нет (ключ; null — набор журнал не вёл). */
     @Synchronized fun forget(setId: Long): String? {
         val key = localIds.entries.firstOrNull { it.value == setId }?.key ?: return null
@@ -66,10 +93,13 @@ class PackJournal(private val dir: File) {
             next[key] = o
         }
         if (next.keys.toList() == records.keys.toList() && next.all { (k, v) -> records[k]?.toString() == v.toString() }) return null
-        val removed = (records.keys - next.keys).mapNotNull { localIds.remove(it) }
+        val gone = records.keys - next.keys
+        val removed = gone.filterNot { isGifKey(it) }.mapNotNull { localIds.remove(it) }
+        val gifsRemoved = gone.filter { isGifKey(it) }.map { it.removePrefix(GIF_PREFIX) }
         records.clear(); records.putAll(next)
         save()
-        return Projection(next.values.map { JSONObject(it.toString()) }, removed)
+        val (gifs, packs) = next.entries.partition { isGifKey(it.key) }
+        return Projection(packs.map { JSONObject(it.value.toString()) }, removed, gifs.map { JSONObject(it.value.toString()) }, gifsRemoved)
     }
 
     private fun load() {
@@ -91,6 +121,13 @@ class PackJournal(private val dir: File) {
 
     companion object {
         private val REF_FIELDS = listOf("file_id", "name", "key", "nonce", "capability", "content_hash", "blob_domain")
+        /** GIF-1: ключ записи сохранённого GIF — `g:<sha256 содержимого, hex>`. */
+        const val GIF_PREFIX = "g:"
+        fun isGifKey(key: String) = key.startsWith(GIF_PREFIX)
+        private fun hexToBytes(hex: String): ByteArray? {
+            if (hex.length % 2 != 0 || hex.any { Character.digit(it, 16) < 0 }) return null
+            return ByteArray(hex.length / 2) { i -> ((Character.digit(hex[2 * i], 16) shl 4) or Character.digit(hex[2 * i + 1], 16)).toByte() }
+        }
 
         /** Ключ журнала набора: `h:<content_hash>` (PACK-2), иначе `n:<sanitizeName(name)>`; null — нет `file_id`. */
         fun keyOf(ref: JSONObject): String? {

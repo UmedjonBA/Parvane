@@ -59,6 +59,12 @@ class Folders(private val dir: File) {
         val re = LinkedHashMap<Int, Folder>(); ids.forEach { id -> folders[id]?.let { re[id] = it } }; folders.values.forEach { if (!re.containsKey(it.id)) re[it.id] = it }
         folders.clear(); folders.putAll(re); mainPosition = main; save()
     }
+    /** Место «Все чаты» среди папок из журнала состояния (X строит страницы по `mainChatListPosition`). true — изменилось. */
+    @Synchronized fun setMainPosition(pos: Int): Boolean {
+        val p = pos.coerceAtLeast(0)
+        if (mainPosition == p) return false
+        mainPosition = p; save(); return true
+    }
     /** Весь список из журнала состояния (spec 007, T098): порядок — как в [list]. */
     @Synchronized fun replaceAll(list: List<Folder>) {
         folders.clear(); list.forEach { folders[it.id] = it; if (it.id >= nextId) nextId = it.id + 1 }; save()

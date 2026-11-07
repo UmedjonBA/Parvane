@@ -221,4 +221,31 @@ class StateJournalTest {
         assertEquals("0192f0e4-1a2b-7c3d-8e4f-001122334455", j.addressOf(v1))
         assertEquals("bob@local", j.addressOf(j.peerOf("bob@local")))
     }
+
+    /** Место «Все чаты» (id 0 в folder_order) из журнала → `Folders.mainPosition` (по нему X ставит страницу и чип). */
+    @Test
+    fun allChatsPositionFromJournal() {
+        val b = tmp()
+        val local = ChatLocalState(b)
+        val snap = JSONObject()
+            .put("folders", JSONArray().put(JSONObject().put("id", 2).put("title", "A")).put(JSONObject().put("id", 3).put("title", "B")))
+            .put("folder_order", JSONObject().put("ids", JSONArray().put(2).put(0).put(3)))
+        val j = StateJournal(ParvaneProtocol.stateCodec, resolver())
+        val ch = j.project(snap, local, ScheduledQueue(b) { 1000L })
+        assertTrue(ch.folders)
+        assertEquals(1, local.folders.mainPosition)
+        assertEquals(1, j.allFolderAt)
+        // только место «Все чаты» сменилось — тоже изменение папок
+        snap.put("folder_order", JSONObject().put("ids", JSONArray().put(2).put(3).put(0)))
+        assertTrue(j.project(snap, local, ScheduledQueue(b) { 1000L }).folders)
+        assertEquals(2, local.folders.mainPosition)
+        assertFalse(j.project(snap, local, ScheduledQueue(b) { 1000L }).folders)
+        // снимок этого устройства сохраняет место; своя перестановка — в следующий снимок
+        val order = j.build(local, ScheduledQueue(b) { 1000L }).getJSONObject("folder_order").getJSONArray("ids")
+        assertEquals(listOf(2, 3, 0), (0 until order.length()).map { order.getInt(it) })
+        j.noteAllFolderAt(0)
+        val moved = j.build(local, ScheduledQueue(b) { 1000L }).getJSONObject("folder_order").getJSONArray("ids")
+        assertEquals(listOf(0, 2, 3), (0 until moved.length()).map { moved.getInt(it) })
+        assertEquals(2, ChatLocalState(b).folders.mainPosition) // переживает перезапуск (folders.json)
+    }
 }

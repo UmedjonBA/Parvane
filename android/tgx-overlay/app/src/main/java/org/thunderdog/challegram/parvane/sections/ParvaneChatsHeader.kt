@@ -64,7 +64,11 @@ object ParvaneChatsHeader {
 
     private fun chipsHeight() = Pv.rem(0.625f + 1.875f + 0.5f)
 
-    /** Папки изменились (`updatePagerSections`) — перестроить чипы. */
+    /**
+     * Папки изменились (`updatePagerSections`) — перестроить чипы. Порядок чипов = порядок страниц X: «Все чаты» стоит
+     * на месте из журнала состояния (`folder_order`, id 0 → `Folders.mainPosition` → `mainChatListPosition`), индекс
+     * чипа — индекс страницы.
+     */
     @JvmStatic
     fun refresh(owner: MainController) {
         val scroll = owner.parvaneChips as? HorizontalScrollView ?: return

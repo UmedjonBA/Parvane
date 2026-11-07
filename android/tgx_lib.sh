@@ -26,14 +26,25 @@ tgx_env() {
 emu_boot() {
   local out="$1"
   if [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; then
-    pkill -f "emulator -avd ${AVD:-parvane33}" 2>/dev/null; sleep 2
+    # сам эмулятор — процесс qemu-system-x86_64[-headless] -avd …: прежний шаблон «emulator -avd» его не ловил, и
+    # зависший экземпляр держал AVD («Another emulator instance is running»)
+    pkill -f -- "(emulator|qemu-system-x86_64[a-z-]*) -avd ${AVD:-parvane33}( |$)" 2>/dev/null
+    for _ in $(seq 1 15); do pgrep -f -- "qemu-system-x86_64[a-z-]* -avd ${AVD:-parvane33}( |$)" >/dev/null || break; sleep 1; done
+    pkill -9 -f -- "qemu-system-x86_64[a-z-]* -avd ${AVD:-parvane33}( |$)" 2>/dev/null; sleep 2
+    # без графического сеанса (сборочный ноутбук по ssh) -gpu host не поднимает GL, а swiftshader_indirect/guest
+    # роняют qemu (SIGSEGV в рендере через минуту после входа, 7 ноя 2026) — виртуальный экран Xvfb :77 и mesa
+    local gpu="${EMU_GPU:-host}" disp="${DISPLAY:-}"
+    if [ -z "${EMU_GPU:-}" ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v Xvfb >/dev/null; then
+      pgrep -f "Xvfb :77" >/dev/null || { setsid Xvfb :77 -screen 0 1280x1024x24 +extension GLX >/dev/null 2>&1 & sleep 2; }
+      disp=:77
+    fi
     # shellcheck disable=SC2086
-    emulator -avd "${AVD:-parvane33}" -no-window -audio none -no-boot-anim -gpu "${EMU_GPU:-host}" -no-snapshot \
+    DISPLAY="$disp" emulator -avd "${AVD:-parvane33}" -no-window -audio none -no-boot-anim -gpu "$gpu" -no-snapshot \
       -memory 2048 ${EMU_EXTRA:-} > "$out/emulator.log" 2>&1 &
     # эмулятор переживает сценарий (его берут следующие) — не ребёнок для `wait` в stack_stop, иначе сценарий,
     # первым поднявший эмулятор, висит в конце навсегда
     disown
-    for _ in $(seq 1 150); do [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break; sleep 2; done
+    for _ in $(seq 1 300); do [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break; sleep 2; done
   fi
   [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] || return 1
   a root >/dev/null 2>&1; sleep 2

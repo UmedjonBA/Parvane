@@ -31,6 +31,23 @@ class PackJournalTest {
             uploads++
             return JSONObject().put("file_id", "01a0f000-0000-7000-8000-0000000000f$uploads").put("name", rawName).put("count", 1).put("key", "k").put("nonce", "n")
         }
+        /** GIF-1: «облако» — общее для устройств теста (file_id → байты); sha256 сверяется, как ядро. */
+        var gifFetches = 0
+        override fun gifFetch(refJson: String, wantHex: String): JSONObject {
+            gifFetches++
+            val ref = JSONObject(refJson)
+            val fid = ref.optString("file_id")
+            val bytes = cloud[fid] ?: return JSONObject().put("ok", false).put("error", "нет сети")
+            val hex = sha256Hex(bytes)
+            if (wantHex.isNotEmpty() && wantHex != hex) return JSONObject().put("ok", false).put("error", "sha256 не совпал")
+            val f = File(root, "media-$fid").also { it.writeBytes(bytes) }
+            return JSONObject().put("ok", true).put("path", f.absolutePath).put("sha256", hex).put("size", bytes.size)
+        }
+    }
+
+    private companion object {
+        val cloud = HashMap<String, ByteArray>()
+        fun sha256Hex(b: ByteArray) = java.security.MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private class Device {
@@ -38,7 +55,8 @@ class PackJournalTest {
         val core = FakeCore(root)
         val updates = ArrayList<TdApi.Update>()
         var flushes = 0
-        val st = Stickers(ParvaneStore().apply { self = "alice@local" }, root, { updates.add(it) }, core) { flushes++ }
+        val store = ParvaneStore().apply { self = "alice@local" }
+        val st = Stickers(store, root, { updates.add(it) }, core) { flushes++ }
         /** Снимок журнала — так, как его отдаст движок (записи вида `packs`). */
         fun snapshot(): JSONObject = JSONObject().put("sticker_packs", st.journal.records())
     }
@@ -158,5 +176,87 @@ class PackJournalTest {
             .put(JSONObject().put("set_id", "n:C").put("ref", ref("C")))
         val pr = pj.project(list)!!
         assertEquals(listOf("n:C"), pr.records.map { it.optString("set_id") })
+    }
+
+    /**
+     * GIF-1: «Сохранить в GIF» на A — запись `g:<sha256>` ссылкой на сам файл (без повторной загрузки); на B она не
+     * набор стикеров: файл скачивается по ссылке, sha256 сверяется, GIF — в сохранённых; удаление на A снимает на B.
+     */
+    @Test
+    fun savedGifSyncsAsFileNotStickerPack() {
+        val a = Device(); val b = Device()
+        val bytes = "GIF89a-parvane-test".toByteArray()
+        val fid = "01a0f000-0000-7000-8000-0000000000g1"
+        cloud[fid] = bytes
+        val hex = sha256Hex(bytes)
+        // A: GIF из чата (уже скачан — рабочая копия есть)
+        val local = File(a.root, "chat.gif").also { it.writeBytes(bytes) }
+        val tdFile = a.store.fileFor(fid, "a2V5", "bm9uY2U=", bytes.size.toLong(), "image/gif", local.absolutePath)
+        assertTrue(a.st.addSavedAnimation(TdApi.InputFileId(tdFile.id)) is TdApi.Ok)
+        assertEquals(1, a.flushes)
+        assertEquals(0, a.core.gifFetches) // sha256 — по рабочей копии, без сети и без загрузки
+        val rec = a.st.journal.records().getJSONObject(0)
+        assertEquals("g:$hex", rec.optString("set_id"))
+        val r = rec.getJSONObject("ref")
+        assertEquals(fid, r.optString("file_id")); assertEquals(1, r.optInt("count")); assertEquals("animation.gif", r.optString("name"))
+        assertEquals("a2V5", r.optString("key"))
+        assertEquals(java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)), r.optString("content_hash"))
+        assertFalse(rec.has("emoji"))
+        // повторное сохранение — журнал не трогается
+        assertTrue(a.st.addSavedAnimation(TdApi.InputFileId(tdFile.id)) is TdApi.Ok)
+        assertEquals(1, a.flushes)
+
+        // B: проекция — запись не набор (наборов нет), GIF скачан и сверен
+        val pr = b.st.journal.project(a.snapshot().getJSONArray("sticker_packs"))!!
+        assertTrue(pr.records.isEmpty()); assertEquals(1, pr.gifs.size)
+        b.st.applyJournal(pr)
+        assertEquals(0, b.st.index.all().count { !it.builtin })
+        assertEquals(0, b.core.fetches) // архив набора не запрашивался
+        assertEquals(1, b.st.savedAnimations().animations.size)
+        assertTrue(b.updates.any { it is TdApi.UpdateSavedAnimations && it.animationIds.size == 1 })
+        assertEquals(0, b.flushes) // из журнала обратно в журнал не пишется
+
+        // A убирает GIF → sticker_pack_remove (записи нет) → B убирает
+        assertTrue(a.st.removeSavedAnimation(TdApi.InputFileId(tdFile.id)) is TdApi.Ok)
+        assertEquals(2, a.flushes)
+        assertEquals(0, a.st.journal.records().length())
+        val pr2 = b.st.journal.project(a.snapshot().getJSONArray("sticker_packs"))!!
+        assertEquals(listOf(hex), pr2.gifsRemoved); assertTrue(pr2.removed.isEmpty())
+        b.st.applyJournal(pr2)
+        assertEquals(0, b.st.savedAnimations().animations.size)
+    }
+
+    /** GIF-1: файл, не совпавший с sha256 записи, не добавляется; без сети — повтор позже. */
+    @Test
+    fun journalGifWithWrongHashOrOfflineIsNotAdded() {
+        val b = Device()
+        val fid = "01a0f000-0000-7000-8000-0000000000g2"
+        val good = "GIF89a-good".toByteArray()
+        val rec = { hex: String -> JSONObject().put("set_id", "g:$hex").put("added_ms", "5")
+            .put("ref", JSONObject().put("file_id", fid).put("name", "cat.mp4").put("count", 1)) }
+        // подменённое содержимое
+        cloud[fid] = "evil".toByteArray()
+        b.st.applyJournal(b.st.journal.project(JSONArray().put(rec(sha256Hex(good))))!!)
+        assertEquals(0, b.st.savedAnimations().animations.size)
+        assertTrue(b.st.hasPendingGifs())
+        // настоящее содержимое появилось — повтор (не чаще раза в 60 с) добавляет
+        cloud[fid] = good
+        b.st.retryPendingGifs(nowMs = System.currentTimeMillis() + 61_000)
+        val anims = b.st.savedAnimations().animations
+        assertEquals(1, anims.size)
+        assertEquals("video/mp4", anims[0].mimeType)
+        assertFalse(b.st.hasPendingGifs())
+    }
+
+    @Test
+    fun gifRecordKeyAndRefShape() {
+        val pj = PackJournal(Files.createTempDirectory("pv-pj").toFile())
+        assertNull(pj.recordGif(JSONObject().put("file_id", "f"), "zz")) // не sha256
+        val hex = "ab".repeat(32)
+        assertEquals("g:$hex", pj.recordGif(JSONObject().put("file_id", "f").put("name", "x.webm").put("capability", "Y2Fw"), hex.uppercase()))
+        val r = pj.records().getJSONObject(0).getJSONObject("ref")
+        assertEquals("Y2Fw", r.optString("capability")); assertEquals(1, r.optInt("count"))
+        assertTrue(PackJournal.isGifKey("g:$hex")); assertFalse(PackJournal.isGifKey("h:abc"))
+        assertTrue(pj.forgetGif(hex)); assertFalse(pj.forgetGif(hex))
     }
 }

@@ -19,6 +19,7 @@ import android.text.style.UnderlineSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -28,6 +29,7 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import org.parvane.core.ParvaneSections
+import org.thunderdog.challegram.tool.UI
 
 /**
  * Parvane (доработка 6 ноя 2026): показ Markdown заметки по разбору ядра (`ParvaneSections.markdown` — тот же разбор,
@@ -191,19 +193,38 @@ class NoteMarkdown(
         if (view is ViewGroup) for (i in 0 until view.childCount) tintMuted(view.getChildAt(i))
     }
 
-    // Код: подложка `--pv-raised`, моноширинный 0.8125rem, язык подписью справа; длинные строки листаются вбок
-    private fun code(block: JSONObject): View = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        background = Pv.shape(Pv.c.raised, 0.5f)
-        setPadding(Pv.rem(0.75f), Pv.rem(0.5f), Pv.rem(0.75f), Pv.rem(0.5f))
-        block.optString("lang").takeIf { it.isNotEmpty() }?.let { lang ->
-            addView(context.pvText(lang, 0.6875f, Pv.c.faint, mono = true).apply { gravity = Gravity.END },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    // Код: подложка `--pv-raised`, моноширинный 0.8125rem, язык подписью справа; длинные строки листаются вбок.
+    // Кнопка «копировать» в правом верхнем углу (web — по наведению; на телефоне наведения нет — видна всегда)
+    private fun code(block: JSONObject): View {
+        val text = block.optString("text")
+        val body = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Pv.shape(Pv.c.raised, 0.5f)
+            // справа — место под кнопку, чтобы первая строка кода и язык не уходили под неё
+            setPadding(Pv.rem(0.75f), Pv.rem(0.5f), Pv.rem(2.5f), Pv.rem(0.5f))
+            block.optString("lang").takeIf { it.isNotEmpty() }?.let { lang ->
+                addView(context.pvText(lang, 0.6875f, Pv.c.faint, mono = true).apply { gravity = Gravity.END },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            addView(HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(context.pvText(text, 0.8125f, Pv.c.fg, mono = true).apply { setTextIsSelectable(true) })
+            })
         }
-        addView(HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(context.pvText(block.optString("text"), 0.8125f, Pv.c.fg, mono = true).apply { setTextIsSelectable(true) })
-        })
+        return FrameLayout(context).apply {
+            addView(body, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(context.pvIconButton("copy", Sx.t("Копировать код", "Copy code"), Pv.c.muted) {
+                copy(text, Sx.t("Код скопирован", "Code copied"))
+            }, FrameLayout.LayoutParams(Pv.rem(2.25f), Pv.rem(2.25f), Gravity.TOP or Gravity.END))
+        }
+    }
+
+    private fun copy(text: String, done: String) {
+        try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Parvane", text))
+            UI.showToast(done, android.widget.Toast.LENGTH_SHORT)
+        } catch (e: Throwable) { /* буфер обмена недоступен */ }
     }
 
     // Таблица: ячейки в рамке `--pv-line`, шапка полужирная на `--pv-raised`, текст 0.875rem; широкая — листается вбок
@@ -237,7 +258,20 @@ class NoteMarkdown(
             movementMethod = LinkMovementMethod.getInstance()
             setLineSpacing(0f, 1.5f / 1.2f)
             highlightColor = Pv.alpha(Pv.c.accent, 22)
+            // Копирование текста — долгим нажатием на блок: setTextIsSelectable заменил бы LinkMovementMethod, и
+            // ссылки, [[заметки]] и сворачивание callout перестали бы нажиматься. Нажатие ссылки после долгого — гасится
+            setOnLongClickListener { v ->
+                longPressedAt[v] = android.os.SystemClock.uptimeMillis()
+                val plain = (v as TextView).text.toString().trim()
+                if (plain.isNotEmpty()) copy(plain, Sx.t("Текст скопирован", "Text copied"))
+                true
+            }
         }
+
+    /** Блоки, на которых только что было долгое нажатие: отпускание пальца над ссылкой её не открывает. */
+    private val longPressedAt = java.util.WeakHashMap<View, Long>()
+    private fun wasLongPressed(v: View): Boolean =
+        longPressedAt.remove(v)?.let { android.os.SystemClock.uptimeMillis() - it < 2000 } ?: false
 
     /** Куски строки → текст со стилями (биты стиля — как MD_* web: 1 жирный … 128 код). */
     private fun spans(parts: JSONArray): SpannableStringBuilder {
@@ -295,8 +329,8 @@ class NoteMarkdown(
         scroll.smoothScrollTo(0, y)
     }
 
-    private class Link(private val color: Int, private val underline: Boolean, private val action: () -> Unit) : ClickableSpan() {
-        override fun onClick(widget: View) = action()
+    private inner class Link(private val color: Int, private val underline: Boolean, private val action: () -> Unit) : ClickableSpan() {
+        override fun onClick(widget: View) { if (!wasLongPressed(widget)) action() }
         override fun updateDrawState(ds: TextPaint) {
             ds.color = color
             ds.isUnderlineText = underline

@@ -10,8 +10,10 @@
 #include <parvane/storecrypt.h>
 
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -553,6 +555,72 @@ JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackRefFor(JNI
 // Отпечаток содержимого установленного набора (PACK-2: тот же набор от другого отправителя — один набор).
 JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativePackHash(JNIEnv *env, jclass, jstring dirJ) {
     return jout(env, packDirHash(jstr(env, dirJ)));
+}
+
+// GIF-1: сохранённый GIF — файл по ссылке (поля PackRef: file_id, key/nonce, capability, blob_domain, size_bytes):
+// кэш устройства, иначе блоб по секрету (CAP-1, домен блоба — FED-1). sha256 содержимого (hex); wantHex непуст и не
+// совпал — отказ, в кэш не кладётся. → {"ok","path","sha256","size"} | {"ok":false,"error"}.
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeGifFetch(JNIEnv *env, jclass, jstring refJson, jstring wantHexJ) {
+    json out{{"ok", false}};
+    try {
+        const auto ref = json::parse(jstr(env, refJson), nullptr, false);
+        if (!ref.is_object()) throw std::runtime_error("битая ссылка GIF");
+        const auto str = [&](const char *k) {
+            return ref.contains(k) && ref[k].is_string() ? ref[k].get<std::string>() : std::string();
+        };
+        const auto fid = str("file_id");
+        if (!isSafeFileId(fid)) throw std::runtime_error("недопустимый file_id"); // NAT-04
+        rememberBlobCaps(ref);
+        std::string plain;
+        bool fromCache = false;
+        if (const auto cached = readMediaCache(fid)) {
+            plain = *cached;
+            fromCache = true;
+        } else {
+            const std::int64_t declared = ref.contains("size_bytes") && ref["size_bytes"].is_number_integer()
+                ? ref["size_bytes"].get<std::int64_t>() : 0;
+            const auto cap = parvane::chatrules::chatBlobCipherCap("gif", declared);
+            std::string cipher;
+            const auto capB64 = str("capability"), domain = str("blob_domain");
+            if (!capB64.empty() && !domain.empty()) {
+                const auto s = v2Ready();
+                if (!s) throw std::runtime_error("нет сессии");
+                const auto secret = parvane::v2::fromBase64Safe(capB64);
+                if (!secret) throw std::runtime_error("секрет блоба не base64");
+                cipher = s->downloadBlobCap(fid, *secret, domain, cap);
+            } else {
+                const auto d = downloadChatBlob(fid, cap);
+                if (!d.ok) throw std::runtime_error(d.error);
+                cipher = d.bytes;
+            }
+            const auto k = str("key");
+            if (!k.empty()) {
+                const auto dec = parvane::blobcrypt::decrypt(cipher, k, str("nonce"));
+                if (!dec) throw std::runtime_error("GIF не расшифровался");
+                plain = *dec;
+            } else {
+                plain = std::move(cipher);
+            }
+        }
+        if (plain.empty()) throw std::runtime_error("GIF пуст");
+        unsigned char md[SHA256_DIGEST_LENGTH];
+        SHA256(reinterpret_cast<const unsigned char *>(plain.data()), plain.size(), md);
+        static const char *hexd = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(SHA256_DIGEST_LENGTH * 2);
+        for (unsigned char b : md) { hex.push_back(hexd[b >> 4]); hex.push_back(hexd[b & 15]); }
+        auto want = jstr(env, wantHexJ);
+        std::transform(want.begin(), want.end(), want.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (!want.empty() && want != hex) throw std::runtime_error("sha256 GIF не совпал с записью журнала");
+        if (!fromCache) writeMediaCache(fid, plain);
+        const auto path = mediaWorkCopy(fid, plain);
+        if (path.empty()) throw std::runtime_error("рабочая копия не записана");
+        out = json{{"ok", true}, {"path", path}, {"sha256", hex}, {"size", plain.size()}};
+    } catch (const std::exception &e) {
+        LOGE("gifFetch: %s", e.what());
+        out["error"] = e.what();
+    }
+    return jreply(env, out);
 }
 
 // Превью ссылки — только через шард preview; картинка превью (если есть) — вложением по секрету при отправке.

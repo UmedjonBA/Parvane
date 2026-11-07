@@ -873,6 +873,21 @@ patch("extension/hms/src/main/kotlin/tgx/extension/hms/HuaweiDeviceTokenRetrieve
   "// Parvane: токен не в журнал")
 PYLOG
 
+echo "== Parvane: место «Все чаты» среди папок без Premium (журнал состояния folder_order, 7 ноя 2026) =="
+python3 - "$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsFoldersController.java" <<'PYFOLD'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "// Parvane: «Все чаты» на любом месте"
+if marker not in s:
+    old = "    if (mainChatListPosition > 0 && !tdlib.hasPremium()) {\n"
+    assert s.count(old) == 1, "SettingsFoldersController: якорь premium-проверки порядка папок"
+    # место «Все чаты» выбирают web/desktop и журнал состояния; Premium в Parvane нет — перестановка не откатывается
+    s = s.replace(old, "    if (false && mainChatListPosition > 0 && !tdlib.hasPremium()) { " + marker + "\n", 1)
+    open(p, "w").write(s)
+PYFOLD
+grep -q "«Все чаты» на любом месте" "$TGX/app/src/main/java/org/thunderdog/challegram/ui/SettingsFoldersController.java" || { echo "   SettingsFoldersController не пропатчен"; exit 2; }
+
 if [ "${1:-}" = "--build" ]; then
   echo "== сборка assembleLatestArm64Debug (долго: ffmpeg/libvpx/webrtc) =="
   cd "$TGX"
