@@ -335,7 +335,8 @@ export function wireToV2(c: WireMessageContent, replyTo?: string): V2Content {
       out = {
         sticker: {
           pack: c.pack_ref?.name,
-          sticker_id: c.file_id,
+          // FR-075: id стикера в наборе (не file_id загрузки); стикер без набора — пусто
+          sticker_id: c.sticker_id || undefined,
           emoji: c.filename,
           media: { ...mediaToV2({ ...c, kind: 'photo' }), caption: undefined },
           pack_ref: packToV2(c.pack_ref),
@@ -514,7 +515,11 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
   } else if (c.sticker) {
     const m = c.sticker.media ? mediaFromV2(c.sticker.media) : { kind: 'photo' } as WireMessageContent;
     out = {
-      ...m, kind: 'sticker', filename: c.sticker.emoji || m.filename, pack_ref: packFromV2(c.sticker.pack_ref),
+      ...m,
+      kind: 'sticker',
+      filename: c.sticker.emoji || m.filename,
+      pack_ref: packFromV2(c.sticker.pack_ref),
+      sticker_id: c.sticker.sticker_id || undefined,
     };
   } else if (c.location) {
     out = {
