@@ -105,6 +105,8 @@ void historyReset();   // выход, смена аккаунта, смена н
 void historySessionEvent(const json &ev); // {"type":"journal","journal":"history"} | stateReady
 // Домен группы для Peer строк журнала; authoritative = false (из строк журнала) — только если ещё не известен.
 void historyNoteGroupDomain(const std::string &address, const std::string &domain, bool authoritative = true);
+// Выгрузка «ничего не потеряно» (spec 035, T007): JSONL строк parvane::audit; пусто вне debug-сборки.
+[[nodiscard]] std::string auditDumpJsonl();
 void historyNoteGroupInfo(const std::string &address, const json &info); // кто в группе удаляет чужое
 [[nodiscard]] bool historyGroupCanDelete(const std::string &group, const std::string &user);
 [[nodiscard]] json historyPeerOf(const std::string &chatAddress); // state.v1.Peer; null — не чат

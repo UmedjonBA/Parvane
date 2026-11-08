@@ -192,6 +192,8 @@ object ParvaneCore {
 
     // ── хранилище, паки, превью, карта ───────────────────────────────────────
     fun storeRead(path: String): String = nativeStoreRead(path)
+    /** spec 035, T007: выгрузка «ничего не потеряно» (JSONL `{kind,key,digest}`); пусто вне debug-сборки. */
+    fun auditDump(): String = nativeAuditDump()
     fun storeWrite(path: String, text: String): Boolean = nativeStoreWrite(path, text)
     fun packFetch(refJson: String): JSONObject = JSONObject(nativePackFetch(refJson))
     fun packRefFor(dir: String, rawName: String): JSONObject = JSONObject(nativePackRefFor(dir, rawName))
@@ -280,6 +282,7 @@ object ParvaneCore {
     @JvmStatic private external fun nativeL2Available(chat: String): Boolean
     @JvmStatic private external fun nativeSetL2(chat: String, enabled: Boolean): String
     @JvmStatic private external fun nativeStoreRead(path: String): String
+    @JvmStatic private external fun nativeAuditDump(): String
     @JvmStatic private external fun nativeStoreWrite(path: String, text: String): Boolean
     @JvmStatic private external fun nativePackFetch(refJson: String): String
     @JvmStatic private external fun nativeSetCallsPresencePrivacy(callsNobody: Boolean, presenceNobody: Boolean): Boolean

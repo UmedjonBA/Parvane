@@ -7,6 +7,7 @@
 #include <parvane/messenger.h>
 #include <parvane/process_hardening.h>
 #include <parvane/storecrypt.h>
+#include <parvane/test_counters.h>
 
 #include <algorithm>
 #include <cctype>
@@ -84,8 +85,10 @@ void callOnEvent(const std::string &s) {
     std::lock_guard<std::recursive_mutex> serial(g_onEventMu);
     JNIEnv *env = nullptr;
     bool attached = false;
+    parvane::counters::get().jniEvents++; // SC-009 (spec 035, T009): базис «присоединений на событие»
     if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
         if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        parvane::counters::get().jniAttach++;
         attached = true;
     }
     jstring js = parvane::jniutf::toJava(env, s);
@@ -633,5 +636,16 @@ JNIEXPORT jboolean JNICALL Java_org_parvane_core_ParvaneCore_nativeStoreWrite(JN
 }
 
 JNIEXPORT void JNICALL Java_org_parvane_core_ParvaneCore_nativeReplayJournal(JNIEnv *, jclass) { historyReplay(); }
+
+// spec 035, T007: выгрузка «ничего не потеряно» (debug) — e2e-команда audit_dump
+JNIEXPORT jstring JNICALL Java_org_parvane_core_ParvaneCore_nativeAuditDump(JNIEnv *env, jclass) {
+    try {
+        if (g_debugBuild) LOGI("счётчики SC-009: %s", parvane::counters::summary().c_str());
+        return jout(env, auditDumpJsonl());
+    } catch (const std::exception &e) {
+        LOGE("audit dump не снят: %s", e.what());
+        return jout(env, std::string());
+    }
+}
 
 } // extern "C"

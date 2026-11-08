@@ -42,6 +42,10 @@ else
 fi
 
 # ── 1. Rust unit-тесты (все шарды + types) ───────────────────────────────────
+log "0b. перечень хранимого и сверка баз (spec 035, T005/T007)"
+node "$ROOT/scripts/check_migration_inventory.mjs" || fail "check_migration_inventory.mjs"
+python3 "$ROOT/scripts/migration_audit_server_test.py" >/dev/null 2>&1 || fail "migration_audit_server_test.py"
+
 log "1. cargo test --workspace"
 cargo test --manifest-path "$BACKEND/Cargo.toml" --workspace 2>&1 \
     | tee "$TMP/cargo.log" | grep -E "test result:|error\[|error:" || true

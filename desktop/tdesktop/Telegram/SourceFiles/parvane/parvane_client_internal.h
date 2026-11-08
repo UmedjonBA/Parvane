@@ -354,6 +354,9 @@ void WaitHistoryReady();                    // хранилище открыто
 void StopHistorySync();                     // выход, сброс, смена адреса: не ждёт (поток журнала дорабатывает фоном)
 [[nodiscard]] std::shared_ptr<parvane::history::HistorySync> HistorySyncNow();
 void OnHistorySessionEvent(const parvane::json &ev); // journal:history, stateReady
+// Выгрузка «ничего не потеряно» (spec 035, T007; только dev-хук PARVANE_AUDIT_DUMP=<файл>): после подъёма журнала
+// состояния раз в PARVANE_AUDIT_DUMP_EVERY с (по умолчанию 15) переписывает файл строками parvane::audit. Только читает.
+void StartAuditDumpIfRequested();
 // Собеседник журнала (state.v1.Peer) по адресу чата клиента ("v2g:<hex>" — группа) и обратно; ключ чата движка.
 [[nodiscard]] parvane::json HistoryPeerFor(const QString &chatAddress);
 [[nodiscard]] QString HistoryChatAddress(const parvane::json &peer);

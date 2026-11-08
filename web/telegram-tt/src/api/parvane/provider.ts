@@ -50,13 +50,14 @@ import {
 import { loadProtocol, verifyMessageProof } from './v2/engine';
 import { createHistoryJournal } from './v2/history';
 import {
-  type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs,
+  historyChatKey, type HOp, newStamp, peerForAddress, rowOpFromStored, rowTsMs, viewOf,
 } from './v2/historyModel';
 import { pickRecoveryKey } from './v2/keyBundle';
 import { parseLinkCloudKeys, parseLinkPlannerKeys } from './v2/linkKeys';
 import { createMessageIndex } from './v2/messageIndex';
 import { createStateJournal } from './v2/stateJournal';
 import { createTabSignal } from './v2/tabSignal';
+import { auditJsonl, buildAuditDump } from './auditDump';
 import {
   clearLoginStorage,
   consumeLegacyCredentials,
@@ -3419,6 +3420,33 @@ const methods = {
       logDebug(`выгрузка: вложение ${fileId} не скачано: ${String(err)}`);
       return undefined;
     }
+  },
+
+  /** Счётчики-базис SC-009 (spec 035, T009; только диаг-сборка). */
+  parvaneAuditCounters() {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return undefined;
+    return v2Controller.auditCounters();
+  },
+
+  /** Выгрузка «ничего не потеряно» (spec 035, T007; только диаг-сборка): JSONL `{kind, key, digest}`. */
+  async parvaneAuditDump() {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return undefined;
+    const sources = v2Controller.auditSources();
+    const marks = await localState.loadReadMarks();
+    const lines = await buildAuditDump({
+      rows: await historyRows.collectStates(),
+      marks: Object.values(marks),
+      ownJournal: await localState.readOwnJournal(),
+      stateSnapshot: stateJournal.snapshotJson(),
+      plannerState: sources?.plannerState,
+      cloud: sources?.cloud || [],
+      groups: sources?.groups || [],
+      deviceLogs: sources?.deviceLogs || [],
+      accountKeys: sources?.accountKeys || {},
+      view: viewOf,
+      chatKey: historyChatKey,
+    });
+    return auditJsonl(lines);
   },
 
   /** Замер п. 21 плана 15 окт (только диаг-сборка): `count` строк истории «Избранного» прямо в кэш истории. */

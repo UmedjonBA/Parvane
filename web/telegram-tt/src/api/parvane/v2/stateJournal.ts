@@ -1112,6 +1112,8 @@ export function createStateJournal(deps: Deps) {
     recordCloudEntry,
     reset: detach,
     syncNow,
+    /** Снимок личного состояния движка (JSON) — для выгрузки «ничего не потеряно» (spec 035, T007), только чтение. */
+    snapshotJson: () => (session ? session.snapshot() : undefined),
   };
 }
 

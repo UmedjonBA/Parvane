@@ -2196,6 +2196,7 @@ bool HandleV2SessionEvent(const parvane::json &ev) {
 		});
 		PublishLinkingStatus();
 		V2NoteRoot(V2Ready(), SelfAddress().toStdString());
+		StartAuditDumpIfRequested();
 		return true;
 	}
 	if (type == "authRejected") {

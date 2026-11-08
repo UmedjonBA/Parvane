@@ -9,6 +9,7 @@
 #include "parvane/v2_content.h"
 #include "parvane/v2_control.h"
 #include "parvane/v2_engine.h"
+#include "parvane/test_counters.h"
 #include "parvane/v2_link.h"
 
 #include <openssl/evp.h>
@@ -943,6 +944,7 @@ void Session::runRequestsLocked(const json &reqs) {
 
 void Session::persistLocked() {
     if (!client_ || storageKey_.size() != 32) return;
+    counters::get().persist++;
     try {
         writeStateFile("state", client_->exportState(storageKey_));
     } catch (const std::exception &e) {
@@ -1063,6 +1065,7 @@ void Session::syncAllLocked(std::vector<json> &events) {
         const auto req = parseRequest(client_->syncRequest());
         const auto resp = call(req.anon, req.method, req.body);
         const auto batch = splitSyncResponse(resp);
+        counters::get().syncPages++;
         const auto &records = batch.contains("records") ? batch["records"] : json::array();
         for (const auto &r : records) {
             if (r.is_string()) openRecordLocked(fromBase64(r.get<std::string>()), events);
@@ -1072,6 +1075,7 @@ void Session::syncAllLocked(std::vector<json> &events) {
     persistLocked(); // до ack — см. обработчик inbox.record
     try {
         const auto ack = parseRequest(client_->ackRequest());
+        counters::get().syncAck++;
         call(ack.anon, ack.method, ack.body);
     } catch (const std::exception &) {
     }
@@ -1314,11 +1318,14 @@ void Session::openPendingRecords() {
         openRecordLocked(body, events);
         log("запись инбокса: событий " + std::to_string(events.size()));
         absorbLocked(std::move(events));
+        counters::get().inboxRecords++;
         // Сначала на диск (сессии Olm продвинулись), потом ack: процесс,
         // убитый между ними, иначе терял входящую сессию навсегда.
+        counters::get().inboxPersist++;
         persistLocked();
         try {
             const auto ack = parseRequest(client_->ackRequest());
+            counters::get().inboxAck++;
             call(ack.anon, ack.method, ack.body);
         } catch (const std::exception &) {
         }

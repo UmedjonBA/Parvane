@@ -60,6 +60,7 @@ add_library(parvane_core STATIC
     ${CORE}/src/v2_session.cpp
     ${CORE}/src/v2_session_account.cpp
     ${CORE}/src/v2_session_groups.cpp
+    ${CORE}/src/audit_dump.cpp
     ${CORE}/src/history_sync.cpp)
 target_include_directories(parvane_core PUBLIC
     ${CORE}/include

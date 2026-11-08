@@ -13,6 +13,7 @@
 //                                      квитанции READ собеседникам (повтор до успеха, READ-1 п. 3).
 #include "jni_internal.h"
 
+#include <parvane/audit_dump.h>
 #include <parvane/history_sync.h>
 #include <parvane/local_files.h>
 #include <parvane/messenger.h>
@@ -606,6 +607,37 @@ std::shared_ptr<Hist> ensureHist() {
 } // namespace
 
 // ── публичные ────────────────────────────────────────────────────────────────
+
+// Выгрузка «ничего не потеряно» (spec 035, T007; только debug-сборка): строки parvane::audit — журнал истории
+// устройства и JSON движка (личное состояние, «План», «Облако», группы, журнал своих устройств). Только читает.
+std::string auditDumpJsonl() {
+    if (!g_debugBuild) return std::string();
+    parvane::audit::Sources src;
+    if (const auto h = hist(); h && h->store) parvane::audit::addRowStore(src, *h->store);
+    const auto me = self();
+    if (const auto s = v2Ready()) {
+        const auto snapshot = s->stateSnapshot();
+        if (!snapshot.is_null()) src.stateSnapshot = snapshot.dump();
+        const auto planner = s->engineCall("plannerStateJson", json::object());
+        if (!planner.is_null()) src.plannerState = planner.dump();
+        const auto containers = s->engineCall("cloudContainers", json::object());
+        for (const auto &c : containers.is_array() ? containers : json::array()) {
+            const auto state = s->engineCall("cloudStateJson", json{{"id", c.value("id", std::string())}});
+            src.cloud.emplace_back(c, state.is_null() ? std::string() : state.dump());
+        }
+        const auto groups = s->engineCall("groupList", json::object());
+        for (const auto &g : groups.is_array() ? groups : json::array()) {
+            const auto hex = g.get<std::string>();
+            src.groups.emplace_back(hex, s->engineCall("groupInfo", json{{"group", hex}}));
+        }
+        src.deviceLogs.push_back(json{{"user", me},
+                                      {"version", s->engineCall("logVersion", json{{"user", me}})},
+                                      {"devices", s->engineCall("logDevices", json{{"user", me}})}});
+        src.accountKeys = json{{"state", s->engineCall("hasStateKey", json::object())},
+                               {"planner", s->engineCall("plannerHasKey", json::object())}};
+    }
+    return parvane::audit::jsonl(parvane::audit::build(src));
+}
 
 void historyNoteGroupDomain(const std::string &address, const std::string &domain, bool authoritative) {
     if (address.empty() || domain.empty()) return;

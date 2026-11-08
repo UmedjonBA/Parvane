@@ -10,7 +10,12 @@
 //   tdata/parvane-history-sync-<адрес>-meta.json / -pending.json — курсор, голова, точка, флаг переноса, очередь своих.
 #include "parvane/parvane_client_internal.h"
 
+#include <cstdio>
+#include <fstream>
+
+#include <parvane/audit_dump.h>
 #include <parvane/history_sync.h>
+#include <parvane/test_counters.h>
 #include <parvane/v2_engine.h>
 
 namespace Parvane {
@@ -620,6 +625,78 @@ void MoveHistoryFiles(const QString &oldAddress, const QString &newAddress) {
 			move(from + name, to + name);
 		}
 	}
+}
+
+// ── выгрузка «ничего не потеряно» (spec 035, T007) ──
+namespace {
+
+std::atomic<bool> g_auditDumpStarted = false;
+
+[[nodiscard]] std::string WriteAuditDump(const std::string &path) {
+	parvane::audit::Sources src;
+	if (const auto store = StoreNow()) {
+		parvane::audit::addRowStore(src, *store);
+	}
+	const auto self = SelfAddress().toStdString();
+	if (const auto s = V2Ready()) {
+		const auto snapshot = s->stateSnapshot();
+		if (!snapshot.is_null()) src.stateSnapshot = snapshot.dump();
+		const auto planner = s->engineCall("plannerStateJson", parvane::json::object());
+		if (!planner.is_null()) src.plannerState = planner.dump();
+		const auto containers = s->engineCall("cloudContainers", parvane::json::object());
+		for (const auto &c : containers.is_array() ? containers : parvane::json::array()) {
+			const auto id = c.value("id", std::string());
+			const auto state = s->engineCall("cloudStateJson", parvane::json{ { "id", id } });
+			src.cloud.emplace_back(c, state.is_null() ? std::string() : state.dump());
+		}
+		const auto groups = s->engineCall("groupList", parvane::json::object());
+		for (const auto &g : groups.is_array() ? groups : parvane::json::array()) {
+			const auto hex = g.get<std::string>();
+			src.groups.emplace_back(hex, s->engineCall("groupInfo", parvane::json{ { "group", hex } }));
+		}
+		src.deviceLogs.push_back(parvane::json{
+			{ "user", self },
+			{ "version", s->engineCall("logVersion", parvane::json{ { "user", self } }) },
+			{ "devices", s->engineCall("logDevices", parvane::json{ { "user", self } }) },
+		});
+		src.accountKeys = parvane::json{
+			{ "state", s->engineCall("hasStateKey", parvane::json::object()) },
+			{ "planner", s->engineCall("plannerHasKey", parvane::json::object()) },
+		};
+	}
+	const auto lines = parvane::audit::build(src);
+	const auto tmp = path + ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		out << parvane::audit::jsonl(lines);
+	}
+	std::rename(tmp.c_str(), path.c_str());
+	return std::to_string(lines.size());
+}
+
+} // namespace
+
+void StartAuditDumpIfRequested() {
+	const char *path = ParvaneDevEnv("PARVANE_AUDIT_DUMP");
+	if (!path || !*path || g_auditDumpStarted.exchange(true)) {
+		return;
+	}
+	const char *every = ParvaneDevEnv("PARVANE_AUDIT_DUMP_EVERY");
+	const int seconds = std::max(1, every && *every ? std::atoi(every) : 15);
+	std::thread([target = std::string(path), seconds] {
+		for (;;) {
+			std::this_thread::sleep_for(std::chrono::seconds(seconds));
+			try {
+				const auto count = WriteAuditDump(target);
+				LOG(("Parvane: audit dump → %1 (%2 строк); счётчики SC-009: %3").arg(
+					QString::fromStdString(target),
+					QString::fromStdString(count),
+					QString::fromStdString(parvane::counters::summary())));
+			} catch (const std::exception &e) {
+				LOG(("Parvane: audit dump не снят: %1").arg(QString::fromUtf8(e.what())));
+			}
+		}
+	}).detach();
 }
 
 } // namespace Internal

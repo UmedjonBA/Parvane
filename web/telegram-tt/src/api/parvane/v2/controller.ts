@@ -461,6 +461,7 @@ const unb64 = base64ToBytes;
 export function createV2Controller(deps: Deps) {
   let pv: Protocol | undefined;
   let client: PvClient | undefined;
+  let groupCacheWrites = 0;
   let storage: SecureE2eStorage | undefined;
   let storageKey: Uint8Array | undefined;
   let idConn: V2Connection | undefined;
@@ -3841,6 +3842,8 @@ export function createV2Controller(deps: Deps) {
   }
 
   function saveGroupCache(info: WireGroupInfo, isListed: boolean) {
+    // SC-009 (spec 035, T009): базис — сколько раз список групп переписан целиком с запуска страницы
+    groupCacheWrites += 1;
     const rest = cachedGroups().filter(({ group_id: id }) => id !== info.group_id);
     try {
       localStorage.setItem(groupCacheKey(), JSON.stringify(isListed ? [...rest, info] : rest));
@@ -4746,6 +4749,26 @@ export function createV2Controller(deps: Deps) {
     storedMessage: knownMessage,
     /** Планировщик на сервере (spec 010). */
     planner,
+    /** Счётчики-базис SC-009 (spec 035, T009): записи кэша групп с запуска страницы. */
+    auditCounters: () => ({ groupCacheWrites, groups: client?.groupList().length ?? 0 }),
+    /** Источники выгрузки «ничего не потеряно» (spec 035, T007): JSON движка, только чтение. */
+    auditSources: () => {
+      if (!client || !ready) return undefined;
+      const engine = client;
+      const self = deps.getSelf();
+      const containers = JSON.parse(client.cloudContainers()) as { id: string }[];
+      return {
+        plannerState: engine.plannerStateJson() || undefined,
+        cloud: containers.map((container) => ({ container, state: engine.cloudStateJson(container.id) || undefined })),
+        groups: engine.groupList().map((hex) => ({ hex, info: readGroup(hex) })),
+        deviceLogs: [{
+          user: self, version: Number(engine.logVersion(self)), devices: JSON.parse(client.logDevices(self)) as unknown,
+        }],
+        accountKeys: {
+          state: engine.hasStateKey(), planner: engine.plannerHasKey(),
+        },
+      };
+    },
     cloud,
     blobCall,
     linkGrantMaterial,

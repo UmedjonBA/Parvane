@@ -1,4 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -3090,5 +3094,34 @@ describe('conformance QUOTE-1: цитата в ответе', () => {
     expect(guard).toContain('if c.reply_to.is_none() {');
     const store = readRepo('web/telegram-tt/src/api/parvane/store.ts');
     expect(store).toContain('replyInfoWithQuote(replyKey.id, stored.content.reply_quote)');
+  });
+});
+
+// Перечень хранимого (spec 035, T005): всё, что клиенты и шарды кладут на диск, перечислено с судьбой при разовом
+// переносе — новый ключ хранения без записи перечня роняет этот тест (`scripts/check_migration_inventory.mjs`)
+describe('migration-inventory: перечень хранимого сверен с кодом', () => {
+  const guard = path.join(REPO_ROOT, 'scripts/check_migration_inventory.mjs');
+  const inventoryPath = path.join(REPO_ROOT, 'specs/035-protocol-evolution/migration-inventory.json');
+  const runGuard = (...args: string[]) => spawnSync(process.execPath, [guard, ...args], { encoding: 'utf8' });
+
+  it('every storage key of every layer is listed', () => {
+    const result = runGuard();
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  it('a key missing from the inventory fails the guard', () => {
+    const inventory = JSON.parse(readFileSync(inventoryPath, 'utf8')) as { entries: { layer: string; key: string }[] };
+    const dropped = inventory.entries.find((entry) => entry.key === 'localStorage:parvane:folders:*')!;
+    inventory.entries = inventory.entries.filter((entry) => entry !== dropped);
+    const partial = path.join(mkdtempSync(path.join(tmpdir(), 'pv-inventory-')), 'inventory.json');
+    writeFileSync(partial, JSON.stringify(inventory));
+    const result = runGuard('--inventory', partial);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('не в перечне: web localStorage:parvane:folders:*');
+  });
+
+  it('no inventory — failure', () => {
+    expect(runGuard('--inventory', path.join(tmpdir(), 'pv-no-such-inventory.json')).status).toBe(1);
   });
 });

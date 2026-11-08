@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Сверка баз шардов «ничего не потеряно» (spec 035, T007/T008; contracts/migration.md).
+
+  migration_audit_server.py --dump <каталог с *.db> [-o out.jsonl]
+      выгрузка: по строке на таблицу каждой базы —
+      {"kind": "sqlite:<база>", "key": "<таблица>", "digest": "<sha256 строк по первичному ключу>",
+       "pk_digest": "<sha256 только первичных ключей>", "rows": N}
+      Базы открываются только на чтение (`mode=ro`), WAL читается как есть — можно снимать с живого стека.
+  migration_audit_server.py <before.jsonl | каталог> <after.jsonl | каталог>
+      сравнение двух выгрузок: потеряно / изменено / добавлено по таблицам (только счётчики и имена, без содержимого);
+      код 1, если таблица пропала или в ней стало меньше строк.
+
+Содержимое строк в выгрузку не попадает — только дайджесты и числа (копия баз прода, D3, не должна утечь в отчёт).
+Инварианты переноса (окна членства, журналы) — задача T1xx; здесь — базовая сверка.
+"""
+import argparse
+import hashlib
+import json
+import os
+import sqlite3
+import sys
+
+
+def canonical(value):
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"hex": bytes(value).hex()}
+    return value
+
+
+def table_names(conn):
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+    return [r[0] for r in rows]
+
+
+def primary_key(conn, table):
+    cols = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+    pk = sorted((c[5], c[1]) for c in cols if c[5])
+    return [name for _, name in pk], [c[1] for c in cols]
+
+
+def dump_db(path):
+    name = os.path.basename(path)
+    if name.endswith(".db"):
+        name = name[:-3]
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        for table in table_names(conn):
+            pk, cols = primary_key(conn, table)
+            order = pk or cols
+            quoted = ", ".join(f'"{c}"' for c in order)
+            full = hashlib.sha256()
+            keys = hashlib.sha256()
+            count = 0
+            for row in conn.execute(f'SELECT {", ".join(chr(34) + c + chr(34) for c in cols)} FROM "{table}" '
+                                    f'ORDER BY {quoted}'):
+                record = dict(zip(cols, (canonical(v) for v in row)))
+                full.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode())
+                full.update(b"\n")
+                keys.update(json.dumps([record[c] for c in order], ensure_ascii=False, separators=(",", ":")).encode())
+                keys.update(b"\n")
+                count += 1
+            yield {"kind": f"sqlite:{name}", "key": table, "digest": full.hexdigest(), "pk_digest": keys.hexdigest(),
+                   "rows": count}
+    finally:
+        conn.close()
+
+
+def dump_dir(directory):
+    lines = []
+    for entry in sorted(os.listdir(directory)):
+        if entry.endswith(".db"):
+            lines.extend(dump_db(os.path.join(directory, entry)))
+    return lines
+
+
+def load(source):
+    if os.path.isdir(source):
+        return dump_dir(source)
+    with open(source, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def compare(before, after):
+    b = {(l["kind"], l["key"]): l for l in before}
+    a = {(l["kind"], l["key"]): l for l in after}
+    lost = sorted(set(b) - set(a))
+    added = sorted(set(a) - set(b))
+    changed, shrunk = [], []
+    for key in sorted(set(a) & set(b)):
+        if a[key]["digest"] != b[key]["digest"]:
+            changed.append((key, b[key]["rows"], a[key]["rows"]))
+            if a[key]["rows"] < b[key]["rows"]:
+                shrunk.append(key)
+    print(f"таблиц до: {len(b)}, после: {len(a)}")
+    for kind, table in lost:
+        print(f"ПОТЕРЯНА таблица {kind} {table} ({b[(kind, table)]['rows']} строк)")
+    for kind, table in added:
+        print(f"добавлена таблица {kind} {table} ({a[(kind, table)]['rows']} строк)")
+    for (kind, table), rb, ra in changed:
+        print(f"{'МЕНЬШЕ СТРОК' if ra < rb else 'изменена'} {kind} {table}: {rb} → {ra}")
+    print(f"итог: потеряно таблиц {len(lost)}, изменено {len(changed)} (из них меньше строк {len(shrunk)}), "
+          f"добавлено {len(added)}")
+    return 1 if lost or shrunk else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dump", metavar="DIR", help="каталог с базами *.db")
+    parser.add_argument("-o", "--out", help="файл выгрузки (по умолчанию stdout)")
+    parser.add_argument("sources", nargs="*", help="две выгрузки (или каталога) для сравнения")
+    args = parser.parse_args()
+    if args.dump:
+        lines = dump_dir(args.dump)
+        text = "".join(json.dumps(l, ensure_ascii=False, separators=(",", ":")) + "\n" for l in lines)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            sys.stdout.write(text)
+        return 0
+    if len(args.sources) != 2:
+        parser.error("нужны --dump DIR или две выгрузки для сравнения")
+    return compare(load(args.sources[0]), load(args.sources[1]))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

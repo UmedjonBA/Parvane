@@ -2741,6 +2741,11 @@ class Client private constructor(
                     // «Сообщить об ошибке» тем же путём, что окно «Профиля» (журнал — строки команды)
                     "bug_report" -> TdApi.Text(bugReport(cmd.optString("text"), listOf("e2e: строка журнала с адресом bob@local"),
                         "e2e", java.io.File(System.getProperty("java.io.tmpdir") ?: "/data/local/tmp")))
+                    // spec 035, T007: выгрузка «ничего не потеряно» в каталог профиля (число строк — в лог)
+                    "audit_dump" -> {
+                        Log.i(TAG, "audit dump: ${AuditDump.write(java.io.File(boundDir))} строк → ${java.io.File(boundDir, AuditDump.FILE_NAME).absolutePath}")
+                        TdApi.Ok()
+                    }
                     "note_create" -> sectionsResult("note_create", org.parvane.core.ParvaneSections.notes("create",
                         JSONObject().put("title", cmd.optString("title")).put("text", cmd.optString("text")).toString()))
                     "cloud_folder" -> {
