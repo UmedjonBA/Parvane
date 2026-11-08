@@ -4,7 +4,12 @@
 // не экспортирует и не хранит. Список методов выведен из прежней обвязки WASM (`PvClient`) и сверен с
 // `backend/protocol/src/host/call.rs` (имена аргументов camelCase; байты — base64 на границе).
 
-import type { ModelHost } from './engine';
+/** Ядро, в которое идут вызовы: модель профиля (`ModelHost`) либо модель в памяти (`openMemoryClient`). */
+export interface ClientCore {
+  clientCall(name: string, args: Record<string, unknown>): unknown;
+  historyCall(name: string, argsJson: string): string;
+  close?(): void;
+}
 
 /** Нет значения: единая точка входа отдаёт `null`. */
 function isNil(value: unknown) {
@@ -62,16 +67,19 @@ function bytesIn(value: any, fields: string[]) {
 export type EngineHistory = { call: (name: string, argsJson: string) => string; free: () => void };
 
 export class EngineClient {
-  constructor(private readonly host: ModelHost) {}
+  constructor(private readonly host: ClientCore) {}
 
   private c(name: string, args: Record<string, unknown>): unknown {
     return this.host.clientCall(name, args);
   }
 
-  /** Клиент принадлежит модели — освобождать нечего (совместимость с прежним интерфейсом). */
+  /** Клиент принадлежит модели: освобождается только модель в памяти (`openMemoryClient`), модель профиля — нет. */
   free() {
-    // клиент живёт в модели
+    if (this.ownsCore) this.host.close?.();
   }
+
+  /** Клиент владеет моделью в памяти (тесты, доказательство устройства по снимку). */
+  ownsCore = false;
 
   historySession(): EngineHistory | undefined {
     if (!this.hasStateKey()) return undefined;

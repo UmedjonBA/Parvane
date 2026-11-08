@@ -1,6 +1,8 @@
 //! Сторож паритета нативных хостов с web (spec 029, FR-003): каждая функция, которую WASM-обвязка отдаёт
 //! web, доступна desktop/android через единую точку входа (`HostClient::call`, `HostState::call`,
-//! `call_static`) под тем же именем — либо записана в `NOT_ROUTED` с причиной.
+//! `call_static`) под тем же именем — либо записана в `NOT_ROUTED` с причиной. spec 035 (T113/T118): клиент web —
+//! в модели движка (`clientCall`, та же единая точка входа); имена его действий — методы `EngineClient`
+//! (`web/telegram-tt/src/api/parvane/v2/engineClient.ts`), каждое обязано быть в единой точке входа.
 
 use parvane_protocol::host::call::{call_static, NOT_ROUTED};
 use parvane_protocol::host::HostClient;
@@ -66,10 +68,40 @@ fn wasm_exports() -> Vec<String> {
     out
 }
 
+/// Действия клиента web через модель: методы класса `EngineClient`.
+fn engine_client_methods() -> Vec<String> {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/telegram-tt/src/api/parvane/v2/engineClient.ts"))
+        .expect("engineClient.ts");
+    let class = &src[src.find("export class EngineClient").expect("класс EngineClient")..];
+    let mut out: Vec<String> = class
+        .lines()
+        .filter_map(|l| l.strip_prefix("  "))
+        .filter(|l| !l.starts_with(' '))
+        .filter_map(|l| {
+            let name: String = l.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            (!name.is_empty() && l[name.len()..].starts_with('(')).then_some(name)
+        })
+        .filter(|n| !["constructor", "c", "free", "historySession"].contains(&n.as_str()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[test]
+fn every_engine_client_call_is_in_the_entry_point() {
+    let names = engine_client_methods();
+    assert!(names.len() > 150, "разбор engineClient.ts сломан: {} имён", names.len());
+    let mut client = HostClient::new("alice@local", "d1", "local").unwrap();
+    let unknown = |r: &Result<serde_json::Value, String>| matches!(r, Err(e) if e.contains("UnknownCall"));
+    let missing: Vec<&String> = names.iter().filter(|n| unknown(&client.call(n, &json!({})))).collect();
+    assert!(missing.is_empty(), "действия EngineClient без единой точки входа: {missing:?}");
+}
+
 #[test]
 fn every_wasm_export_is_reachable_from_native_hosts() {
     let names = wasm_exports();
-    assert!(names.len() > 150, "разбор wasm/src/lib.rs сломан: {} имён", names.len());
+    assert!(names.len() > 20, "разбор wasm/src/lib.rs сломан: {} имён", names.len());
     let mut client = HostClient::new("alice@local", "d1", "local").unwrap();
     assert!(client.ensure_state_key());
     let mut state = client.state_session().unwrap();

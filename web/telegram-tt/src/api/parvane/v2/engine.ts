@@ -7,6 +7,7 @@ import init, * as pv from '../../../lib/parvane-protocol/parvane_protocol';
 import wasmUrl from '../../../lib/parvane-protocol/parvane_protocol_bg.wasm?url';
 import { storeBatchFromJson, storeLoadedToJson, storeReadsFromJson } from './gen/model';
 import { base64ToBytes } from './base64';
+import { EngineClient } from './engineClient';
 import { errorCodeNumber } from './transport';
 
 export type Protocol = typeof pv;
@@ -184,7 +185,8 @@ export class ModelHost {
    * записью (`flush`). Ошибка — `EngineCallError` с JSON `{"need": …}` / `{"error": …}`. */
   clientCall(name: string, args: Record<string, unknown> = {}): unknown {
     if (this.closed) throw new EngineCallError('{"error":"Closed"}');
-    const out = JSON.parse(this.engine.call('clientCall', JSON.stringify({ name, args_json: JSON.stringify(args) }))) as {
+    const argsJson = JSON.stringify({ name, args_json: JSON.stringify(args) });
+    const out = JSON.parse(this.engine.call('clientCall', argsJson)) as {
       result_json?: string; need?: unknown; error?: unknown;
     };
     if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
@@ -360,6 +362,70 @@ export class MemoryModelStore implements ModelStore {
     }
     return Promise.resolve(out);
   }
+}
+
+// ── Модель в памяти: клиент без профиля (тесты, разовые проверки; spec 035 T113/T118) ─────────────────────────
+//
+// Модель открывается синхронно над пустым хранилищем в памяти (пачки не сохраняются); клиент — её ядро. Снимок
+// прежнего клиента (`blob` под `key`) — импортом.
+
+class MemoryCore {
+  private closed = false;
+
+  constructor(private readonly engine: EngineLike) {}
+
+  clientCall(name: string, args: Record<string, unknown>): unknown {
+    const argsJson = JSON.stringify({ name, args_json: JSON.stringify(args) });
+    const out = JSON.parse(this.engine.call('clientCall', argsJson)) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    return JSON.parse(out.result_json ?? 'null');
+  }
+
+  historyCall(name: string, argsJson: string): string {
+    const out = JSON.parse(this.engine.call('historyCall', JSON.stringify({ name, args_json: argsJson || '{}' }))) as {
+      result_json?: string; need?: unknown; error?: unknown;
+    };
+    if (out.need !== undefined || out.error !== undefined) throw new EngineCallError(JSON.stringify(out));
+    return out.result_json ?? 'null';
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.engine.free?.();
+  }
+}
+
+/** Клиент модели в памяти (`user`, устройство, домен); `snapshot` — экспорт прежнего клиента. */
+export function openMemoryClient(
+  user: string, deviceId: string, domain = 'local', snapshot?: { blob: Uint8Array; key: Uint8Array },
+): EngineClient {
+  const memory = { engine: pv.PvEngine.open(JSON.stringify({
+    user,
+    device_id: deviceId,
+    domain,
+    now_ms: String(Date.now()),
+    device_key: b64(crypto.getRandomValues(new Uint8Array(32))),
+    host_driven: true,
+  })) };
+  const { engine } = memory;
+  const start = JSON.parse(memory.engine.call('start', '{}')) as { store_reads?: { read_id?: string }[] };
+  const readId = start.store_reads?.[0]?.read_id ?? '1';
+  JSON.parse(memory.engine.call('storeLoaded', JSON.stringify({ read_id: readId, entries: [] })));
+  if (snapshot) {
+    const out = JSON.parse(memory.engine.call('clientReplace', JSON.stringify({
+      mode: 'import', blob: b64(snapshot.blob), key: b64(snapshot.key),
+    }))) as { error?: string };
+    if (out.error) {
+      engine.free();
+      throw new EngineCallError(JSON.stringify(out));
+    }
+  }
+  const client = new EngineClient(new MemoryCore(engine));
+  client.ownsCore = true;
+  return client;
 }
 
 // ── Хранилище модели в профиле web (spec 035 T113) ─────────────────────────────────────────────────────────

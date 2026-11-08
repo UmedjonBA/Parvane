@@ -6,7 +6,7 @@ import type { ApiUpdate } from '../types';
 import type { GatewayConnection } from './gateway';
 import type { WireStoredMessage } from './wire';
 
-import { PvClient } from '../../lib/parvane-protocol/parvane_protocol';
+import { openMemoryClient } from './v2/engine';
 import { createL2Gate, type L2State, parseL2State } from './v2/l2';
 import { createConnectionController } from './connectionController';
 import { createMessageController } from './messages';
@@ -75,7 +75,7 @@ beforeEach(() => {
 
 describe('L2: состояние режима по движку', () => {
   it('разбирает JSON `l2Direct` настоящего движка: режим выключен, эфемерные каналы разрешены', () => {
-    const client = new PvClient(SELF, 'device-a', 'local');
+    const client = openMemoryClient(SELF, 'device-a', 'local');
     try {
       expect(parseL2State(client.l2Direct(PEER))).toEqual(OFF);
       expect(client.presenceAllowed()).toBe(true);

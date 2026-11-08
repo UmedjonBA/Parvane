@@ -664,11 +664,8 @@ pub fn call_static(name: &str, args: &Value) -> R {
 /// Имена WASM, которые единая точка входа сознательно не обслуживает, — с причиной (сторож паритета).
 pub const NOT_ROUTED: &[(&str, &str)] = &[
     ("start", "инициализация модуля WASM (часы браузера)"),
-    ("new", "конструктор — pv_client_new"),
-    ("importState", "конструктор — pv_client_import"),
-    ("historySession", "создаёт сессию журнала истории — pv_client_history_session"),
+    ("new", "конструктор PvAnonPlanner — pv_anon_planner_new"),
     ("historyCall", "диспетчер статических функций `history*` WASM — у хостов это call_static / pv_call"),
-    ("call", "PvHistory.call — pv_history_call (HostHistory::call)"),
     ("assign", "PvAnonPlanner — pv_anon_planner_*"),
     ("expired", "PvAnonPlanner — pv_anon_planner_*"),
     ("closed", "PvAnonPlanner — pv_anon_planner_*"),

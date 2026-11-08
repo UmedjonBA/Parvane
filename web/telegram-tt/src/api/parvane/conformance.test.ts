@@ -419,8 +419,8 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
   it('грант v2: материал движка отдельным блобом, второе устройство корень не создаёт', async () => {
     expect(r.v2Grant.secondDeviceCreatesRoot).toBe(false);
     // Материал движка (WASM; формат общий с C ABI) — ровно ключи из правила
-    const { PvClient } = await import('../../lib/parvane-protocol/parvane_protocol');
-    const first = new PvClient('alice@local', 'd1', 'local');
+    const { openMemoryClient } = await import('./v2/engine');
+    const first = openMemoryClient('alice@local', 'd1', 'local');
     first.createIdentity(1);
     first.ensureStateKey();
     const material = JSON.parse(new TextDecoder().decode(first.linkGrantMaterial())) as Record<string, unknown>;
@@ -476,16 +476,16 @@ describe('LINK-1: линковка v2 — обязательство, challenge,
         grantOnlyUnderFixedChallenge: boolean; };
     }).sharedChallenge;
     expect(shared.grantOnlyUnderFixedChallenge).toBe(true);
-    const { PvClient } = await import('../../lib/parvane-protocol/parvane_protocol');
+    const { openMemoryClient } = await import('./v2/engine');
     const {
       exportLinkPrivateScalar, exportLinkPublicKey, generateLinkChallengeKey, generateLinkKeyPair,
       importLinkPrivateScalar, linkCommitment, openLinkBox, sasCodeV2, sealLinkBox,
     } = await import('./linking');
-    const first = new PvClient('alice@local', 'd1', 'local');
+    const first = openMemoryClient('alice@local', 'd1', 'local');
     first.createIdentity(1);
-    const second = new PvClient('alice@local', 'd2', 'local');
+    const second = openMemoryClient('alice@local', 'd2', 'local');
     second.joinWithGrant(first.linkGrantMaterial(), 1);
-    const stranger = new PvClient('mallory@local', 'm1', 'local');
+    const stranger = openMemoryClient('mallory@local', 'm1', 'local');
     stranger.createIdentity(1);
 
     const fresh = await generateLinkKeyPair();
@@ -1110,10 +1110,11 @@ describe('PROTO-1: в клиенте нет собственного разбо�
       const parses = source.match(/JSON\.parse\(([^)]*)/g) || [];
       parses.forEach((call) => {
         // (журнал состояния: `session` — сессия движка, `host.decode` — движок; `this.engine` — модель в engine.ts;
-        // spec 035 T113: `out.result_json` — результат `clientCall` модели, `clientEvents` — события записей от модели)
+        // spec 035 T113: `out.result_json` — результат `clientCall` модели, `clientEvents` — события записей от модели,
+        // `memory.engine` — модель в памяти)
         const sources = [
           'pv\\.', 'codec\\.decode', 'client\\.', 'session\\.', 'host\\.decode', 'this\\.engine\\.', 'String\\(e$',
-          'localStorage\\.', 'out\\.result_json', 'clientEvents\\.',
+          'localStorage\\.', 'out\\.result_json', 'clientEvents\\.', 'memory\\.engine\\.',
         ];
         expect(call, `${file}: ${call}`).toMatch(new RegExp(`JSON\\.parse\\((${sources.join('|')})`));
       });
@@ -1366,7 +1367,8 @@ describe('RECOVER-1: смена корня собеседника, восста�
     const identity = readRepo('backend/shards/identity/src/v2.rs');
     [r.backupMethods.set, r.backupMethods.get].forEach((method) => expect(identity).toContain(`"${method}" =>`));
     // Ответ несёт генезис журнала; записи — исходными байтами (spec 035 T057, `with_raw_entries`)
-    expect(identity).toContain(`DeviceLogSyncAnonResponse { entries: vec![], more, ${r.genesisField}, deleted: false }`);
+    expect(identity)
+      .toContain(`DeviceLogSyncAnonResponse { entries: vec![], more, ${r.genesisField}, deleted: false }`);
     expect(identity).toContain('with_raw_entries(&entries, pb::DeviceLogSyncAnonResponse');
     const proto = readRepo('proto/parvane/identity/v2/identity.proto');
     [r.backupMethods.set, r.backupMethods.get, r.resetMethod, r.reauthMethod].forEach((method) => {
@@ -1431,7 +1433,8 @@ describe('GPHOTO-1: фото частной группы шифруется, с�
     const group = readRepo('backend/protocol/src/group.rs');
     expect(group).toContain('s.avatar_key_id = i.avatar_key_id.clone();');
     expect(group).toContain('const INVITE_AVATAR_INFO: &[u8] = b"parvane/group-avatar-invite/v1\\0";');
-    ['backend/protocol/src/host.rs', 'backend/protocol/wasm/src/lib.rs'].forEach((file) => {
+    // spec 035 (T118): web берёт сведения группы у модели движка — тот же host.rs, отдельной обвязки WASM нет
+    ['backend/protocol/src/host.rs'].forEach((file) => {
       expect(readRepo(file), file).toContain('"avatarKey": ');
       // host.rs: сведения группы — общая функция `group_info_value(c, …)` (её же зовёт выгрузка сверки spec 035)
       expect(readRepo(file), file).toMatch(/(self\.inner|\bc)\.group_avatar_key\(&s\.group\.id\)/);
@@ -1680,7 +1683,6 @@ describe('GROUP-4: группа v1 переводится в v2, чат оста
     expect(readRepo('proto/parvane/group/v2/group.proto')).toContain(`string ${r.createField} = 6`);
     expect(readRepo('backend/protocol/src/client.rs')).toContain(`${r.createField}: ${r.createField}.into()`);
     expect(readRepo('backend/protocol/src/host.rs')).toContain(`"${r.infoField}": s.${r.createField}`);
-    expect(readRepo('backend/protocol/wasm/src/lib.rs')).toContain(`"${r.infoField}": s.${r.createField}`);
   });
 
   it('web: id чата — от прежнего адреса; перевод групп не запускается (T110)', () => {
@@ -3282,7 +3284,8 @@ describe('ENGINE-1: desktop — смысл решает движок', () => {
 
   // Показ состояния в tdesktop — пока из снимка формы state.v1 (stateViewV1), не из StateView модели (T126)
   it.fails('parvane_client_state.cpp — показ из StateView модели (T126)', () => {
-    expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`)).not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
+    expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`))
+      .not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
   });
 
   it.fails('права групп по типу содержимого — из Capabilities движка, не из chat_rules (GROUP-2, T126)', () => {
@@ -3318,7 +3321,22 @@ describe('ENGINE-1 (web): модель движка — единственный
     expect(drive.indexOf('await this.deps.store.commit(typed);')).toBeLessThan(drive.indexOf('this.deps.send(r)'));
   });
 
-  // Остаток T113/T114 (переход входящих и групп на модель): пока личность, инбокс и группы ведёт прежний клиент
+  it('клиентское ядро — в модели: контроллер без клиента WASM, записи инбокса — через ingest модели (T113)', () => {
+    const controller = strip(readRepo(`${V2}/controller.ts`));
+    // Нет своего экземпляра прежнего клиента, его снимков и ручного открытия записей
+    expect(controller)
+      .not.toMatch(/\bpv\.PvClient\b|PvClient\.importState|\.openRecord\(|stateWriter|syncRequest\(\)|ackRequest\(\)/);
+    expect(controller).toContain('host?.ingestRecord(ev.body)');
+    expect(controller).toContain('host_driven: true,');
+    const engine = readRepo(`${V2}/engine.ts`);
+    expect(engine).toContain('this.engine.call(\'clientCall\'');
+    // Хост успевает записать события записи до того, как модель отметит её применённой (SYNC-1)
+    const drive = engine.slice(engine.indexOf('private async drive('));
+    expect(drive.indexOf('await this.deps.onDelta(delta);'))
+      .toBeLessThan(drive.indexOf('await this.deps.store.commit(typed);'));
+  });
+
+  // Остаток T114 (показ и права групп из модели): строки истории и права пока считает хост
   it.todo('v2/contentMap.ts: нет разбора видов содержимого (входящие — MessageView модели)');
   it.todo('прав групп вне движка нет: композер и меню — по capabilities модели (GROUP-2)');
 });
