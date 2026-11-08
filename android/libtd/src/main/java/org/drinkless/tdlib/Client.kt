@@ -2281,20 +2281,19 @@ class Client private constructor(
     @Volatile private var stateTimerStarted = false
     private fun attachStateJournal() {
         val l = store.local ?: return
-        val snap = try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString()) } catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
-        if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
-        // T150: несохранённая правка (до подключения или перед остановкой процесса) — в журнал раньше проекции
+        // T150: несохранённая правка (до подключения или перед остановкой процесса) — в журнал раньше проекции, разницей
+        // от показанного ДО правки (база ядра — state-base прошлого запуска). Отдельный синк после подключения считал
+        // разницу от только что сведённого и откатывал правки другого устройства (spec 035 T134)
         val dirty = loadStateDirty()
-        var effective: JSONObject = snap
+        val snap = synchronized(stateLock) {
+            try { ParvaneCore.stateAttach(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), loadStateDirty()) }
+            catch (e: Throwable) { Log.w(TAG, "журнал состояния: ${e.message}"); null }
+        }
+        if (snap == null) { Log.i(TAG, "журнал состояния недоступен"); return }
+        val effective: JSONObject = snap
         if (dirty.isNotEmpty()) {
-            val r = synchronized(stateLock) {
-                ParvaneCore.stateSync(stateJournal.build(l, scheduledQueue, store.blocked, store.notifyView(), stickers.journal).toString(), dirty.toList())
-            }
-            if (r != null) {
-                clearStateDirty()
-                r.optJSONObject("snapshot")?.let { effective = it }
-                Log.i(TAG, "несохранённая правка личного состояния дослана в журнал (${dirty.sorted().joinToString()})")
-            }
+            clearStateDirty() // не дошедшее ядро досылает при синке (вид остаётся в желаемом)
+            Log.i(TAG, "несохранённая правка личного состояния дослана в журнал (${dirty.sorted().joinToString()})")
         }
         stateAttached = true
         // Вид `notify` появился позже первого переноса состояния (T132): пока журнал его не содержит,
@@ -2306,11 +2305,24 @@ class Client private constructor(
         if (keepLocalNotify) scheduleStateFlush("notify")
         // PACK-3: наборы, установленные до журнала, — записями один раз на устройство (после проекции: журнал главнее)
         io.execute { try { if (stickers.migrateToJournal()) scheduleStateFlush("packs") } catch (e: Throwable) { Log.w(TAG, "стикеры: перенос в журнал: ${e.message}") } }
+        // spec 035 (FR-075): избранные стикеры — объекты модели; прежний локальный список — в модель один раз
+        io.execute { try { stickers.migrateFavorites(); stickers.refreshFavorites() } catch (e: Throwable) { Log.w(TAG, "стикеры: избранные: ${e.message}") } }
         Log.i(TAG, "журнал личного состояния подключён (${StateJournal.KINDS.joinToString()})")
         if (!stateTimerStarted) {
             stateTimerStarted = true
             scheduledTick.scheduleWithFixedDelay({ try { stateSyncNow() } catch (e: Throwable) { Log.w(TAG, "синк журнала состояния: ${e.message}") } }, 8, 8, java.util.concurrent.TimeUnit.SECONDS) // SC-009: ≤ 10 с, как web
         }
+    }
+    /**
+     * spec 035 (US5, FR-041): журнал личного состояния закрыт для записи более новой версией (критичный вид) — правки
+     * этого устройства в него не уходят; один раз за запуск — штатное уведомление X «обновите приложение».
+     */
+    @Volatile private var stateBlockedShown = false
+    private fun noteStateWriteBlocked() {
+        if (stateBlockedShown || !ParvaneCore.stateWriteBlocked()) return
+        stateBlockedShown = true
+        Log.w(TAG, "журнал личного состояния закрыт для записи более новой версией — нужно обновить приложение")
+        postUpdate(TdApi.UpdateServiceNotification(UpgradeNotices.TYPE_REQUIRED, TdApi.MessageText(TdApi.FormattedText(uiText("upgrade_state_blocked"), arrayOf()), null, null)))
     }
     /** Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). */
     private val stateLock = Any()
@@ -2533,6 +2545,8 @@ class Client private constructor(
     @Volatile private var lastStateSnap: JSONObject? = null
     private fun applyState(snap: JSONObject, projectNotify: Boolean = true) {
         lastStateSnap = snap
+        noteStateWriteBlocked()
+        try { stickers.refreshFavorites() } catch (e: Throwable) { Log.w(TAG, "стикеры: избранные: ${e.message}") }
         projectCleared(snap)
         val l = store.local ?: return
         val ch = stateJournal.project(snap, l, scheduledQueue, store.blocked, if (projectNotify) store.notifyView() else null, stickers.journal)
@@ -2705,6 +2719,19 @@ class Client private constructor(
                     "archive" -> handle(TdApi.AddChatToList(chatId, if (cmd.optBoolean("on")) TdApi.ChatListArchive() else TdApi.ChatListMain()))
                     "folder" -> handle(TdApi.CreateChatFolder(TdApi.ChatFolder(TdApi.ChatFolderName(TdApi.FormattedText(cmd.optString("title", "Work"), arrayOf()), false),
                         TdApi.ChatFolderIcon("💼"), 3, false, LongArray(0), longArrayOf(chatId), LongArray(0), false, false, false, false, false, false, false, false)))
+                    // spec 035 T134 (STATE-1 v2): правка ОДНОГО поля папки (значок) путём окна папки X — EditChatFolder с
+                    // прежними остальными полями; заметка контакта без имени (SetUserNote); что показывает X — в журнал
+                    "folder_icon" -> store.local?.folders?.all()?.firstOrNull { it.title == cmd.optString("title") }?.let { fo ->
+                        val cur = handle(TdApi.GetChatFolder(fo.id))
+                        if (cur is TdApi.ChatFolder) { cur.icon = TdApi.ChatFolderIcon(cmd.optString("icon")); handle(TdApi.EditChatFolder(fo.id, cur)) } else cur
+                    } ?: TdApi.Error(404, "folder not found")
+                    "contact_note" -> handle(TdApi.SetUserNote(store.idOf(peer), TdApi.FormattedText(cmd.optString("note"), arrayOf())))
+                    "state_check" -> {
+                        val folders = store.local?.folders?.all().orEmpty().joinToString(", ") { "«${it.title}» ${it.icon}" }
+                        val u = store.user(peer)
+                        Log.i(TAG, "состояние-проверка: папки [$folders]; контакт имя «${u?.firstName.orEmpty()}» заметка «${userFullInfo(peer).note?.text.orEmpty()}»")
+                        TdApi.Ok()
+                    }
                     "resolve" -> { resolvedAt.remove(cmd.optString("peer")); resolveLater(cmd.optString("peer")); TdApi.Ok() }
                     "birthday" -> handle(TdApi.SetBirthdate(TdApi.Birthdate(cmd.optInt("day"), cmd.optInt("month"), cmd.optInt("year"))))
                     "dump" -> { Log.i(TAG, "e2e-dump: ${store.e2eDump()}"); TdApi.Ok() }

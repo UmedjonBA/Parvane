@@ -28,11 +28,17 @@ class Stickers(
         fun packRefFor(dir: String, rawName: String, recipients: List<String>): JSONObject
         /** GIF-1: файл GIF по ссылке журнала, sha256 сверяется с wantHex (пусто — только посчитать) → {ok,path,sha256,size}. */
         fun gifFetch(refJson: String, wantHex: String): JSONObject = JSONObject().put("ok", false).put("error", "unsupported")
+        /** spec 035 (FR-075): избранные — объекты FAVED_STICKER модели [{set_id, sticker_id, added_ms}]; null — журнал не подключён. */
+        fun favedStickers(): JSONArray? = null
+        /** «В избранное» / «Убрать» — намерение модели fave_sticker; true — ушло в журнал. */
+        fun faveSticker(setId: String, stickerId: String, on: Boolean): Boolean = false
     }
     object RealCore : Core {
         override fun packFetch(refJson: String) = ParvaneCore.packFetch(refJson)
         override fun gifFetch(refJson: String, wantHex: String) = ParvaneCore.gifFetch(refJson, wantHex)
         override fun packRefFor(dir: String, rawName: String, recipients: List<String>) = ParvaneCore.packRefFor(dir, rawName) // CAP-1: блоб по секрету, получатели не нужны
+        override fun favedStickers() = ParvaneCore.stateFavedStickers()
+        override fun faveSticker(setId: String, stickerId: String, on: Boolean) = ParvaneCore.stateFaveSticker(setId, stickerId, on)
     }
 
     val index = PackIndex(root)
@@ -40,7 +46,14 @@ class Stickers(
     val journal = PackJournal(root)
     private val stateFile = File(root, "stickers-state.json")
     private val recent = ArrayList<String>()     // "setId:name"
-    private val favorite = ArrayList<String>()
+    /**
+     * Избранные (spec 035, FR-075) — объекты FAVED_STICKER личного состояния модели движка: ключ набора (`setId` шва)
+     * и id стикера в наборе (имя файла), новые сначала; на всех своих устройствах android. Здесь — только показанный
+     * список ("setId:name"), правка — намерением модели. Прежний локальный список `stickers-state.json` переносится в
+     * модель один раз ([migrateFavorites]).
+     */
+    private val faved = ArrayList<String>()
+    private val legacyFaved = ArrayList<String>()
     private val savedGifs = ArrayList<JSONObject>() // {file_id,key,nonce,width,height,duration_secs,mime,size_bytes,filename,local_path,sha256?}
     /** GIF-1: записи журнала, чей файл не скачался (нет сети) — повтор [retryPendingGifs]. */
     private val pendingGifs = LinkedHashMap<String, JSONObject>()
@@ -255,21 +268,40 @@ class Stickers(
         post(TdApi.UpdateRecentStickers(false, IntArray(0)))
         return TdApi.Ok()
     }
-    fun favorites(): TdApi.Stickers = TdApi.Stickers(favorite.mapNotNull { byKey(it) }.map { sticker(it.first, it.second) }.toTypedArray())
+    @Synchronized fun favorites(): TdApi.Stickers = TdApi.Stickers(faved.mapNotNull { byKey(it) }.map { sticker(it.first, it.second) }.toTypedArray())
+    /** Избранные из модели → показанный список; изменился — апдейт X. false — журнал не подключён. */
+    @Synchronized fun refreshFavorites(): Boolean {
+        val list = core.favedStickers() ?: return false
+        val next = (0 until list.length()).mapNotNull { list.optJSONObject(it) }
+            .sortedByDescending { it.optString("added_ms").toLongOrNull() ?: 0L }
+            .map { "${it.optString("set_id")}:${it.optString("sticker_id")}" }
+        if (next != faved) {
+            faved.clear(); faved.addAll(next)
+            post(TdApi.UpdateFavoriteStickers(favorites().stickers.map { it.id.toInt() }.toIntArray()))
+        }
+        return true
+    }
+    /** Прежние локальные избранные — в модель один раз (после подключения журнала); true — перенесено. */
+    @Synchronized fun migrateFavorites(): Boolean {
+        if (legacyFaved.isEmpty() || core.favedStickers() == null) return false
+        // старые сначала: у последнего добавленного — самое позднее время, он первым в списке
+        val all = legacyFaved.reversed().all { k -> core.faveSticker(k.substringBefore(':'), k.substringAfter(':'), true) }
+        if (!all) return false
+        legacyFaved.clear(); saveState(); refreshFavorites()
+        return true
+    }
     fun recents(): TdApi.Stickers = TdApi.Stickers(recent.mapNotNull { byKey(it) }.map { sticker(it.first, it.second) }.toTypedArray())
     fun noteRecent(p: PackIndex.Pack, f: PackIndex.PackFile) {
         val k = key(p, f); recent.remove(k); recent.add(0, k); while (recent.size > 20) recent.removeAt(recent.size - 1)
         saveState(); post(TdApi.UpdateRecentStickers(false, recents().stickers.map { it.id.toInt() }.toIntArray()))
     }
-    fun addFavorite(input: TdApi.InputFile?): TdApi.Object {
+    fun addFavorite(input: TdApi.InputFile?): TdApi.Object = fave(input, true)
+    fun removeFavorite(input: TdApi.InputFile?): TdApi.Object = fave(input, false)
+    private fun fave(input: TdApi.InputFile?, on: Boolean): TdApi.Object {
         val r = resolveInput(input) ?: return TdApi.Error(404, "sticker not found")
-        val k = key(r.pack, r.file); favorite.remove(k); favorite.add(0, k); saveState()
-        post(TdApi.UpdateFavoriteStickers(favorites().stickers.map { it.id.toInt() }.toIntArray())); return TdApi.Ok()
-    }
-    fun removeFavorite(input: TdApi.InputFile?): TdApi.Object {
-        val r = resolveInput(input) ?: return TdApi.Error(404, "sticker not found")
-        favorite.remove(key(r.pack, r.file)); saveState()
-        post(TdApi.UpdateFavoriteStickers(favorites().stickers.map { it.id.toInt() }.toIntArray())); return TdApi.Ok()
+        if (!core.faveSticker(r.pack.setId.toString(), r.file.name, on)) return TdApi.Error(400, "FAVE_UNAVAILABLE")
+        refreshFavorites()
+        return TdApi.Ok()
     }
     fun removeRecent(input: TdApi.InputFile?): TdApi.Object {
         val r = resolveInput(input) ?: return TdApi.Error(404, "sticker not found")
@@ -492,19 +524,21 @@ class Stickers(
         try {
             val o = JSONObject(SeamFiles.read(stateFile))
             o.optJSONArray("recent")?.let { a -> for (i in 0 until a.length()) recent.add(a.getString(i)) }
-            o.optJSONArray("favorite")?.let { a -> for (i in 0 until a.length()) favorite.add(a.getString(i)) }
+            o.optJSONArray(LEGACY_FAVORITE)?.let { a -> for (i in 0 until a.length()) legacyFaved.add(a.getString(i)) }
             o.optJSONArray("savedGifs")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { savedGifs.add(it) } }
         } catch (e: Exception) { Log.w(TAG, "stickers-state: ${e.message}") }
     }
     private fun saveState() {
         try {
             root.mkdirs()
-            SeamFiles.write(stateFile, JSONObject().put("recent", JSONArray(recent)).put("favorite", JSONArray(favorite)).put("savedGifs", JSONArray(savedGifs)).toString())
+            SeamFiles.write(stateFile, JSONObject().put("recent", JSONArray(recent)).put(LEGACY_FAVORITE, JSONArray(legacyFaved)).put("savedGifs", JSONArray(savedGifs)).toString())
         } catch (e: Exception) { /* в памяти */ }
     }
 
     companion object {
         private const val TAG = "ParvaneClient"
+        /** Прежний локальный список избранных в stickers-state.json (до переноса в модель, spec 035). */
+        private const val LEGACY_FAVORITE = "favorite"
         /** GIF-1: тип файла — по расширению имени (`.mp4`, `.webm`, `.gif`). */
         fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
             "gif" -> "image/gif"; "mp4" -> "video/mp4"; else -> "video/webm"

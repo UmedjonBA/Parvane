@@ -61,4 +61,13 @@
   <item type="id" name="edit_parvaneContactNote" />
   <string name="ParvaneContactNote">Note</string>
   <string name="ParvaneContactNoteInfo">Only you can see the name and note you set for a contact — on all your devices.</string>
+  <!-- spec 035 (US5): «обновите приложение» — критичный вид, журнал закрыт для записи, сервер новее (тексты = SeamText шва) -->
+  <string name="ParvaneStubCritical">This message needs a newer version of Parvane. Update the app to see it.</string>
+  <string name="ParvaneUpgradeStateBlocked">Chat settings were changed by a newer version of Parvane. Update the app — until then, changes to folders, drafts and contacts on this device are not saved.</string>
+  <string name="ParvaneTooNew">The server uses a newer protocol version. Update the app.</string>
+  <!-- spec 035 (US1, T137): разовый перенос данных в новое хранилище -->
+  <string name="ParvaneMigrateTitle">Updating local data</string>
+  <string name="ParvaneMigrateProgress">Moving your chats and settings to the new storage: step %1$d of %2$d</string>
+  <string name="ParvaneMigrateDone">Local data updated</string>
+  <string name="ParvaneMigrateFailed">Could not update local data. Your old data is kept — the app will try again on next start.</string>
 </resources>

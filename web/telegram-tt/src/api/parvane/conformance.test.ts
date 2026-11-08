@@ -3389,3 +3389,63 @@ describe('ENGINE-1 (web): модель движка — единственный
     expect(store).toContain('extraBannedRights(');
   });
 });
+
+// spec 035 T132 (FR-095, SC-005): ENGINE-1 «смысл решает движок» — android. Модель вызывается только из хоста ядра
+// `engine_host.cpp` (общий с desktop; JNI — `model_jni.cpp` поверх него), личное состояние сводит модель (шов отдаёт
+// желаемое и проецирует показанное, ни лампортов, ни меток), события ядра — пачками одной очередью с потолком
+// (`event_queue.h`). Пункты `it.fails` — что на android ещё НЕ переведено на модель (личность, инбокс, группы и
+// история — у прежнего клиента ядра): как только перевод сделан, vitest требует снять `.fails`.
+describe('ENGINE-1: android — смысл решает движок', () => {
+  const jniDir = 'android/jni';
+  const jniFiles = readdirSync(path.join(REPO_ROOT, jniDir)).filter((f) => /\.(cpp|h)$/.test(f));
+  const strip = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  it('модель (`pv_engine_*`) из JNI не вызывается — только через хост ядра (engine_host, model_jni.cpp)', () => {
+    expect(jniFiles.filter((f) => /\bpv_engine_(open|call|free|adopt_state_keys)\b/.test(readRepo(`${jniDir}/${f}`))))
+      .toEqual([]);
+    const model = readRepo(`${jniDir}/model_jni.cpp`);
+    expect(model).toContain('parvane::engine::Host::open(');
+    expect(readRepo(`${jniDir}/CMakeLists.txt`)).toMatch(/engine_host\.cpp[\s\S]*model_jni\.cpp/);
+  });
+
+  it('StateJournal.kt и ParvaneStore.kt не сводят личное состояние: ни лампортов, ни меток, ни state.v1-журнала', () => {
+    for (const name of ['StateJournal.kt', 'ParvaneStore.kt', 'Client.kt']) {
+      expect(strip(readAndroidKt(name)), name)
+        .not.toMatch(/lamport|\bstamp\b|"state\.(append|sync)"|\.diff\(|mergeLww|lwwMerge/i);
+    }
+    // Своя правка без связи — в журнал при подключении разницей от показанного ДО правки (виды T150 — в stateAttach),
+    // а не отдельным синком после проекции (иначе правка другого устройства откатывалась)
+    const client = readAndroidKt('Client.kt');
+    expect(client).toContain('ParvaneCore.stateAttach(stateJournal.build(');
+    expect(client).toMatch(/ParvaneCore\.stateAttach\([^\n]*loadStateDirty\(\)/);
+    expect(readAndroidJni('jni_account.cpp')).toContain('s->stateAttach(local.is_object() ? local : json::object(), dirtyKinds)');
+  });
+
+  it('избранные стикеры — объекты модели (FAVED_STICKER, намерение fave_sticker), не локальный список шва', () => {
+    const stickers = readAndroidKt('Stickers.kt');
+    expect(stickers).not.toMatch(/"favorite"\)|favorite\.add\(0/);
+    expect(readAndroidJni('jni_account.cpp')).toContain('s->stateFaveSticker(');
+    expect(readAndroidJni('jni_account.cpp')).toContain('s->stateFavedStickers()');
+  });
+
+  it('события ядра в Kotlin — пачками одной очередью с потолком, поток очереди присоединяется к JVM один раз', () => {
+    const main = strip(readAndroidJni('jni_main.cpp'));
+    expect(main).toContain('pvjni::EventQueue');
+    expect(main).not.toMatch(/if \(attached\) g_vm->DetachCurrentThread\(\)/); // прежнее: отсоединение на событие
+    expect(main).toContain('"onEvents", "(Ljava/lang/String;)V"');
+    const core = readRepo('android/libtd/src/main/java/org/parvane/core/ParvaneCore.kt');
+    expect(core).toMatch(/fun onEvents\(batch: String\)/);
+    const queue = strip(readRepo(`${jniDir}/event_queue.h`));
+    expect(queue).toMatch(/maxEvents|maxBytes/);
+    expect(queue).not.toMatch(/deliver_\(\{s\}\)/);
+  });
+
+  // Остаток T136 (модель движка целиком — у другой работы): входящие пока разбирает прежний путь ядра (v2_content.cpp
+  // → событие ядра → ParvaneStore.kt), показ личного состояния — из снимка формы state.v1 (stateViewV1)
+  it.fails('ParvaneStore.kt — содержимое из MessageView модели, своего разбора видов нет (T136)', () => {
+    expect(strip(readAndroidKt('ParvaneStore.kt'))).not.toMatch(/when \(kind\)|"task_offer"|"cloud_invite"/);
+  });
+  it.fails('StateJournal.kt — показ из StateView модели, без перекладки v1 ↔ v2 содержимого (T136)', () => {
+    expect(strip(readAndroidKt('StateJournal.kt'))).not.toMatch(/fun toV2\(|fun fromV2\(/);
+  });
+});
