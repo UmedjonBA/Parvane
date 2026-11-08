@@ -467,6 +467,13 @@ impl CloudState {
         out.into_iter().collect()
     }
 
+    /// spec 035 (FR-035, T054): заменяющий снимок журнала контейнера до `upto_seq` — только если отметки
+    /// `range-hold` не накрывают диапазон; иначе `RangeHeld` (FR-034). Показ — `view()`.
+    pub fn replacement_snapshot(&self, holds: &[crate::pb::parvane::engine::v1::RangeHold], container: &crate::pb::parvane::core::v2::Container, upto_seq: u64, now_ms: u64) -> Result<CloudSnapshot> {
+        super::replacement_allowed(holds, container, upto_seq)?;
+        Ok(self.to_snapshot(now_ms))
+    }
+
     /// Снимок: узлы с регистрами. Стёртые давнее
     /// `PURGED_KEEP_MS` (сами и их потомки) в снимок не попадают.
     pub fn to_snapshot(&self, now_ms: u64) -> CloudSnapshot {
