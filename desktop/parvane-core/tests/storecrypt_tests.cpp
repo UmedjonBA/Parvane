@@ -96,7 +96,9 @@ int main() {
         using namespace parvane::storecrypt;
         setKey(deriveKey("sep-key"));
         const std::string plain = "{\"k\":1}";
-        const auto sealed = seal(plain);
+        // legacy с первым байтом iv = 0 неотличим от нового формата (≈1/256) — для проверки legacy берём iv[0] ≠ 0
+        auto sealed = seal(plain);
+        for (int i = 0; i < 64 && sealed.size() > 6 && sealed[6] == '\0'; ++i) sealed = seal(plain);
         check(sealed.size() > 6 && sealed[5] == '\0', "seal: разделитель \\0 после магии");
         check(isSealed(sealed) && open(sealed).value_or("") == plain, "open: новый формат");
         const auto legacy = sealed.substr(0, 5) + sealed.substr(6);
