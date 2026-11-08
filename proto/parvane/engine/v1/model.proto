@@ -1,0 +1,668 @@
+// Модель движка (spec 035, contracts/engine-api.md, FR-001…FR-007, FR-051). Локальные типы границы
+// движок ⇄ хост — на провод не выходят, в реестр методов не попадают. Граница — proto3-JSON этих типов
+// (pbjson: bytes → base64, int64 → строка, enum → имя); из них генерируются типы клиентов (`gen_bindings`,
+// contracts/codegen.md): TS, C++, Kotlin.
+//
+// Хост вызывает движок по имени (`engine.call(name, argsJson)` / `pv_engine_call`), аргумент и результат —
+// сообщения этого файла: `submit(Intent) → Outcome`, `storeCommitted(StoreCommitted) → Outcome`,
+// `storeLoaded(StoreLoaded) → Outcome`, `ingest(ServerInput) → Outcome`, `tick(Tick) → Outcome`,
+// `chatList(ChatListRequest) → ChatPage`, `historyPage(HistoryPageRequest) → HistoryPage`,
+// `viewState(ViewStateRequest) → StateView`, `viewGroup(ViewGroupRequest) → GroupView`,
+// `capabilities(CapabilitiesRequest) → Capabilities`, `engineInfo() → EngineInfo`. Ошибка — `EngineError`.
+syntax = "proto3";
+
+package parvane.engine.v1;
+
+import "parvane/core/v2/envelope.proto";
+import "parvane/core/v2/options.proto";
+import "parvane/engine/v1/store.proto";
+import "parvane/state/v1/state.proto";
+import "parvane/state/v2/state.proto";
+
+// ── Версии (contracts/versioning.md) ────────────────────────────────────────────────────────────────────
+
+message StorageFormat {
+  string kind = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 format = 2;
+}
+
+message CriticalRange {
+  string name = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 from = 2;
+  uint32 to = 3;
+}
+
+message EngineInfo {
+  string engine_api = 1 [(parvane.core.v2.max_len) = 32];
+  uint32 proto_major = 2;
+  uint32 proto_minor = 3;
+  uint32 min_supported_minor = 4;
+  repeated string features = 5 [(parvane.core.v2.max_items) = 256, (parvane.core.v2.max_len) = 64];
+  repeated StorageFormat storage_formats = 6 [(parvane.core.v2.max_items) = 256];
+  repeated CriticalRange critical_ranges = 7 [(parvane.core.v2.max_items) = 16];
+  string source_hash = 8 [(parvane.core.v2.max_len) = 64];
+  string schema_hash = 9 [(parvane.core.v2.max_len) = 64];
+  string build_id = 10 [(parvane.core.v2.max_len) = 128];
+  string target = 11 [(parvane.core.v2.max_len) = 64];
+}
+
+// ── Жизненный цикл ──────────────────────────────────────────────────────────────────────────────────────
+
+message EngineConfig {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  string device_id = 2 [(parvane.core.v2.max_len) = 64];
+  string domain = 3 [(parvane.core.v2.max_len) = 255];
+  // Возможности интерфейса устройства (`model/features.rs`): вид, которого нет, отдаётся текстом (FR-004).
+  repeated string features = 4 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 64];
+  int64 now_ms = 5;
+  uint64 memory_budget_bytes = 6;
+}
+
+enum OpenState {
+  OPEN_STATE_UNSPECIFIED = 0;
+  OPEN_STATE_READY = 1;
+  OPEN_STATE_MIGRATION_NEEDED = 2;
+  // Формат хранилища новее движка: только показ известного, запись — `WriteBlocked`.
+  OPEN_STATE_TOO_NEW = 3;
+  OPEN_STATE_LOCKED = 4;
+}
+
+message MigrationPlan {
+  repeated string steps = 1 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 128];
+  uint64 legacy_records = 2;
+}
+
+message OpenResult {
+  OpenState state = 1;
+  MigrationPlan migration = 2;
+}
+
+// ── Журналы: запись и диапазоны, которые нельзя заменять (data-model.md §2–3) ────────────────────────────
+
+enum JournalWrite {
+  JOURNAL_WRITE_UNSPECIFIED = 0;
+  JOURNAL_WRITE_OPEN = 1;
+  // В журнале есть неизвестный критичный вид (1000–1999): запись закрыта, показ известного работает.
+  JOURNAL_WRITE_BLOCKED_CRITICAL_UNKNOWN = 2;
+  // Формат журнала новее движка.
+  JOURNAL_WRITE_BLOCKED_TOO_NEW = 3;
+}
+
+message JournalState {
+  // Имя журнала: "state", "history", "domain:<hex id контейнера>", "group:<hex id группы>", "device".
+  string journal = 1 [(parvane.core.v2.max_len) = 128];
+  uint64 cursor = 2;
+  uint64 head = 3;
+  JournalWrite write = 4;
+}
+
+// Диапазон записей журнала с непонятным этой версии (вид хранилища `range-hold`): компактизация, заменяющий
+// снимок и обрезка, пересекающие диапазон, запрещены (FR-032/FR-033). При потере записи — пересчёт по
+// исходным записям журнала (`hold.rs`).
+message RangeHold {
+  string journal = 1 [(parvane.core.v2.max_len) = 128];
+  uint64 from_seq = 2;
+  uint64 to_seq = 3;
+  // Пути находок `unknown::scan` (без значений).
+  repeated string paths = 4 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 512];
+}
+
+message RangeHolds {
+  repeated RangeHold holds = 1 [(parvane.core.v2.max_items) = 4096];
+}
+
+// ── Представления ───────────────────────────────────────────────────────────────────────────────────────
+
+enum Disposition {
+  DISPOSITION_UNSPECIFIED = 0;
+  DISPOSITION_SHOW = 1;
+  // Неизвестный обычный вид: заглушка «не поддерживается вашей версией», ответ и пересылка разрешены.
+  DISPOSITION_STUB = 2;
+  // Неизвестный критичный вид: та же заглушка, ответ, правка и пересылка запрещены.
+  DISPOSITION_STUB_CRITICAL = 3;
+}
+
+enum Delivery {
+  DELIVERY_UNSPECIFIED = 0;
+  DELIVERY_PENDING = 1;
+  DELIVERY_SENT = 2;
+  DELIVERY_READ = 3;
+  DELIVERY_FAILED = 4;
+}
+
+message MsgAnchor {
+  int64 ts_ms = 1;
+  bytes id = 2 [(parvane.core.v2.max_len) = 16];
+}
+
+message ChatAnchor {
+  int64 ts_ms = 1;
+  string chat_key = 2 [(parvane.core.v2.max_len) = 512];
+}
+
+message ViewEntity {
+  string type = 1 [(parvane.core.v2.max_len) = 32];
+  uint32 offset = 2;
+  uint32 length = 3;
+  string url = 4 [(parvane.core.v2.max_len) = 2048];
+  string user = 5 [(parvane.core.v2.max_len) = 255];
+  string language = 6 [(parvane.core.v2.max_len) = 64];
+  string custom_emoji_id = 7 [(parvane.core.v2.max_len) = 32];
+}
+
+message ViewText {
+  string text = 1 [(parvane.core.v2.max_len) = 65536];
+  repeated ViewEntity entities = 2 [(parvane.core.v2.max_items) = 1024];
+}
+
+message ViewMedia {
+  // photo | video | voice | round | file | gif | audio
+  string kind = 1 [(parvane.core.v2.max_len) = 16];
+  string file_id = 2 [(parvane.core.v2.max_len) = 64];
+  string blob_domain = 3 [(parvane.core.v2.max_len) = 128];
+  bytes key = 4 [(parvane.core.v2.max_len) = 32];
+  bytes nonce = 5 [(parvane.core.v2.max_len) = 24];
+  bytes capability = 6 [(parvane.core.v2.max_len) = 32];
+  string mime = 7 [(parvane.core.v2.max_len) = 128];
+  string name = 8 [(parvane.core.v2.max_len) = 256];
+  uint64 size = 9;
+  uint32 width = 10;
+  uint32 height = 11;
+  uint32 duration_s = 12;
+  bytes thumb = 13 [(parvane.core.v2.max_len) = 65536];
+  ViewText caption = 14;
+  bool spoiler = 15;
+  bool caption_above = 16;
+}
+
+message ViewSticker {
+  string pack = 1 [(parvane.core.v2.max_len) = 128];
+  string sticker_id = 2 [(parvane.core.v2.max_len) = 128];
+  string emoji = 3 [(parvane.core.v2.max_len) = 64];
+  ViewMedia media = 4;
+}
+
+message ViewPoll {
+  string question = 1 [(parvane.core.v2.max_len) = 1024];
+  repeated string options = 2 [(parvane.core.v2.max_items) = 32, (parvane.core.v2.max_len) = 256];
+  bool multiple = 3;
+  bool quiz = 4;
+  repeated uint32 my_votes = 5 [(parvane.core.v2.max_items) = 32];
+  repeated uint32 votes = 6 [(parvane.core.v2.max_items) = 32];
+}
+
+message ViewLocation {
+  double lat = 1;
+  double lon = 2;
+  string title = 3 [(parvane.core.v2.max_len) = 256];
+}
+
+message ViewContact {
+  string user = 1 [(parvane.core.v2.max_len) = 255];
+  string first_name = 2 [(parvane.core.v2.max_len) = 256];
+  string last_name = 3 [(parvane.core.v2.max_len) = 256];
+}
+
+message ViewCall {
+  bool video = 1;
+  bool outgoing = 2;
+  uint32 duration_s = 3;
+  string reason = 4 [(parvane.core.v2.max_len) = 32];
+}
+
+message ViewTaskOffer {
+  string title = 1 [(parvane.core.v2.max_len) = 512];
+  string text = 2 [(parvane.core.v2.max_len) = 65536];
+  bytes task_id = 3 [(parvane.core.v2.max_len) = 16];
+}
+
+message ViewArticle {
+  string title = 1 [(parvane.core.v2.max_len) = 512];
+  string markdown = 2 [(parvane.core.v2.max_len) = 262144];
+}
+
+message ViewCloudInvite {
+  string title = 1 [(parvane.core.v2.max_len) = 512];
+  string owner = 2 [(parvane.core.v2.max_len) = 255];
+  string role = 3 [(parvane.core.v2.max_len) = 32];
+}
+
+message ViewService {
+  // Вид служебной строки (вступил, вышел, сменил название, звонок, …) — клиент подставляет свою формулировку.
+  string kind = 1 [(parvane.core.v2.max_len) = 64];
+  string actor = 2 [(parvane.core.v2.max_len) = 255];
+  repeated string targets = 3 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 255];
+  string text = 4 [(parvane.core.v2.max_len) = 4096];
+}
+
+// Вид показа. Вид, которого клиент не объявил в `features`, приходит как `text` (FR-004).
+message ViewBody {
+  oneof kind {
+    ViewText text = 1;
+    ViewMedia media = 2;
+    ViewSticker sticker = 3;
+    ViewPoll poll = 4;
+    ViewLocation location = 5;
+    ViewContact contact = 6;
+    ViewCall call = 7;
+    ViewTaskOffer task_offer = 8;
+    ViewArticle article = 9;
+    ViewCloudInvite cloud_invite = 10;
+    ViewService service = 11;
+  }
+}
+
+message ViewReaction {
+  string emoji = 1 [(parvane.core.v2.max_len) = 64];
+  uint32 count = 2;
+  bool mine = 3;
+}
+
+message MessageView {
+  bytes id = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  string from = 3 [(parvane.core.v2.max_len) = 255];
+  int64 ts_ms = 4;
+  int64 edited_ts_ms = 5;
+  bool outgoing = 6;
+  Disposition disposition = 7;
+  ViewBody body = 8;
+  bytes reply_to = 9 [(parvane.core.v2.max_len) = 16];
+  string forward_from = 10 [(parvane.core.v2.max_len) = 255];
+  repeated ViewReaction reactions = 11 [(parvane.core.v2.max_items) = 64];
+  bool pinned = 12;
+  uint32 ttl_secs = 13;
+  Delivery delivery = 14;
+}
+
+message ChatView {
+  parvane.state.v1.Peer chat = 1;
+  string title = 2 [(parvane.core.v2.max_len) = 256];
+  ViewMedia photo = 3;
+  MessageView last = 4;
+  uint32 unread = 5;
+  bool mention = 6;
+  uint32 pinned_rank = 7;
+  bool archived = 8;
+  int64 muted_until_ms = 9;
+  string draft = 10 [(parvane.core.v2.max_len) = 65536];
+  repeated uint32 folder_ids = 11 [(parvane.core.v2.max_items) = 256];
+}
+
+message ChatPage {
+  repeated ChatView chats = 1 [(parvane.core.v2.max_items) = 200];
+  ChatAnchor next = 2;
+}
+
+message HistoryPage {
+  repeated MessageView rows = 1 [(parvane.core.v2.max_items) = 200];
+  MsgAnchor older = 2;
+  MsgAnchor newer = 3;
+  bool has_older = 4;
+  bool has_newer = 5;
+  // Строк нет в памяти: хост читает и подаёт `storeLoaded`, затем повторяет вызов.
+  StoreReads pending = 6;
+}
+
+// Объект личного состояния для показа: только известные поля, только видимые объекты.
+message StateObjectView {
+  parvane.state.v2.ObjectKey object = 1;
+  repeated parvane.state.v2.FieldValue fields = 2 [(parvane.core.v2.max_items) = 512];
+  repeated parvane.state.v2.MarkValue marks = 3 [(parvane.core.v2.max_items) = 64];
+}
+
+message StateView {
+  repeated StateObjectView objects = 1 [(parvane.core.v2.max_items) = 200000];
+}
+
+enum GroupRole {
+  GROUP_ROLE_UNSPECIFIED = 0;
+  GROUP_ROLE_MEMBER = 1;
+  GROUP_ROLE_ADMIN = 2;
+  GROUP_ROLE_OWNER = 3;
+  GROUP_ROLE_LEFT = 4;
+  GROUP_ROLE_BANNED = 5;
+}
+
+message GroupPerms {
+  bool send_media = 1;
+  bool send_stickers = 2;
+  bool send_polls = 3;
+  bool send_links = 4;
+  bool invite = 5;
+  bool pin = 6;
+  bool change_info = 7;
+}
+
+message GroupView {
+  parvane.core.v2.Ref group = 1;
+  // group | channel
+  string kind = 2 [(parvane.core.v2.max_len) = 16];
+  string title = 3 [(parvane.core.v2.max_len) = 256];
+  string about = 4 [(parvane.core.v2.max_len) = 4096];
+  ViewMedia photo = 5;
+  uint32 members_count = 6;
+  GroupRole my_role = 7;
+  GroupPerms perms = 8;
+  bool is_public = 9;
+  repeated string invite_links = 10 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 512];
+}
+
+// Что разрешено композеру и меню чата (GROUP-2, роль, критичные виды).
+message Capabilities {
+  bool send_text = 1;
+  bool send_media = 2;
+  bool send_stickers = 3;
+  bool send_polls = 4;
+  bool send_links = 5;
+  bool delete_everyone = 6;
+  bool pin = 7;
+  bool edit = 8;
+  bool react = 9;
+  bool forward = 10;
+  bool reply = 11;
+}
+
+// ── Намерения ───────────────────────────────────────────────────────────────────────────────────────────
+
+message ComposeContent {
+  oneof kind {
+    ViewText text = 1;
+    ViewMedia media = 2;
+    ViewSticker sticker = 3;
+    ViewPoll poll = 4;
+    ViewLocation location = 5;
+    ViewContact contact = 6;
+    ViewArticle article = 7;
+  }
+  bytes reply_to = 20 [(parvane.core.v2.max_len) = 16];
+  bool silent = 21;
+}
+
+message IntentSend {
+  parvane.state.v1.Peer chat = 1;
+  ComposeContent content = 2;
+  // Отложенная отправка (0 — сразу).
+  int64 schedule_at_ms = 3;
+}
+
+message IntentEdit {
+  parvane.state.v1.Peer chat = 1;
+  bytes target = 2 [(parvane.core.v2.max_len) = 16];
+  ComposeContent content = 3;
+}
+
+enum DeleteScope {
+  DELETE_SCOPE_UNSPECIFIED = 0;
+  DELETE_SCOPE_ME = 1;
+  DELETE_SCOPE_EVERYONE = 2;
+}
+
+message IntentDelete {
+  parvane.state.v1.Peer chat = 1;
+  repeated bytes targets = 2 [(parvane.core.v2.max_items) = 100, (parvane.core.v2.max_len) = 16];
+  DeleteScope scope = 3;
+}
+
+message IntentReact {
+  parvane.state.v1.Peer chat = 1;
+  bytes target = 2 [(parvane.core.v2.max_len) = 16];
+  // Пусто — снять реакцию.
+  string emoji = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+message IntentPin {
+  parvane.state.v1.Peer chat = 1;
+  bytes target = 2 [(parvane.core.v2.max_len) = 16];
+  bool on = 3;
+}
+
+message IntentRead {
+  parvane.state.v1.Peer chat = 1;
+  MsgAnchor up_to = 2;
+}
+
+message IntentTyping {
+  parvane.state.v1.Peer chat = 1;
+  // typing | cancel | record_voice | upload_media …
+  string action = 2 [(parvane.core.v2.max_len) = 32];
+}
+
+message IntentStatePatch {
+  parvane.state.v2.ObjectKey object = 1;
+  repeated parvane.state.v2.FieldValue set = 2 [(parvane.core.v2.max_items) = 64];
+  repeated uint32 clear = 3 [(parvane.core.v2.max_items) = 64];
+}
+
+message IntentStateCreate {
+  parvane.state.v2.ObjectKey object = 1;
+  repeated parvane.state.v2.FieldValue set = 2 [(parvane.core.v2.max_items) = 64];
+}
+
+message IntentStateDelete {
+  parvane.state.v2.ObjectKey object = 1;
+}
+
+message IntentStateSetAdd {
+  parvane.state.v2.ObjectKey object = 1;
+  uint32 field = 2;
+  bytes element = 3 [(parvane.core.v2.max_len) = 1024];
+}
+
+message IntentStateSetRemove {
+  parvane.state.v2.ObjectKey object = 1;
+  uint32 field = 2;
+  bytes element = 3 [(parvane.core.v2.max_len) = 1024];
+}
+
+message IntentGroupCreate {
+  string title = 1 [(parvane.core.v2.max_len) = 256];
+  repeated string members = 2 [(parvane.core.v2.max_items) = 200, (parvane.core.v2.max_len) = 255];
+  // group | channel
+  string kind = 3 [(parvane.core.v2.max_len) = 16];
+}
+
+message IntentGroupChange {
+  parvane.core.v2.Ref group = 1;
+  // Байты `parvane.group.v2.GroupChange` (схема журнала группы клиентам не генерируется — PROTO-1).
+  bytes change = 2 [(parvane.core.v2.max_len) = 65536];
+}
+
+message IntentGroupJoinByLink {
+  string url = 1 [(parvane.core.v2.max_len) = 2048];
+}
+
+message IntentDomainOp {
+  parvane.core.v2.Ref container = 1;
+  // Байты операции домена (`planner.v1`, `cloud.v1`).
+  bytes op = 2 [(parvane.core.v2.max_len) = 262144];
+}
+
+message IntentFaveSticker {
+  string set_id = 1 [(parvane.core.v2.max_len) = 128];
+  string sticker_id = 2 [(parvane.core.v2.max_len) = 128];
+  bool on = 3;
+}
+
+message IntentRotateSsk {
+  bytes root_secret = 1 [(parvane.core.v2.max_len) = 64];
+}
+
+message IntentRevoke {
+  string device_id = 1 [(parvane.core.v2.max_len) = 64];
+  bool stolen = 2;
+}
+
+message Intent {
+  oneof kind {
+    IntentSend send = 1;
+    IntentEdit edit = 2;
+    IntentDelete delete_messages = 3;
+    IntentReact react = 4;
+    IntentPin pin = 5;
+    IntentRead read = 6;
+    IntentTyping typing = 7;
+    IntentStatePatch state_patch = 8;
+    IntentStateCreate state_create = 9;
+    IntentStateDelete state_delete = 10;
+    IntentStateSetAdd state_set_add = 11;
+    IntentStateSetRemove state_set_remove = 12;
+    IntentGroupCreate group_create = 13;
+    IntentGroupChange group_change = 14;
+    IntentGroupJoinByLink group_join_by_link = 15;
+    IntentDomainOp domain_op = 16;
+    IntentFaveSticker fave_sticker = 17;
+    IntentRotateSsk rotate_ssk = 18;
+    IntentRevoke revoke = 19;
+  }
+}
+
+// ── Ввод-вывод хоста ────────────────────────────────────────────────────────────────────────────────────
+
+enum RequestChannel {
+  REQUEST_CHANNEL_UNSPECIFIED = 0;
+  REQUEST_CHANNEL_ID = 1;
+  REQUEST_CHANNEL_ANON = 2;
+}
+
+// Запрос, который хост отправляет и чей ответ подаёт обратно `ingest` (движок упорядочивает по `req_id`).
+message OutRequest {
+  uint64 req_id = 1;
+  string method = 2 [(parvane.core.v2.max_len) = 128];
+  RequestChannel channel = 3;
+  bytes body = 4 [(parvane.core.v2.max_len) = 4194304];
+  int64 deadline_ms = 5;
+  // Объект чужого сервера (spec 028); пусто — свой.
+  string dest_domain = 6 [(parvane.core.v2.max_len) = 255];
+}
+
+enum ServerInputKind {
+  SERVER_INPUT_KIND_UNSPECIFIED = 0;
+  SERVER_INPUT_KIND_RESPONSE = 1;
+  SERVER_INPUT_KIND_EVENT = 2;
+  SERVER_INPUT_KIND_INBOX_RECORD = 3;
+  SERVER_INPUT_KIND_STREAM_CHUNK = 4;
+}
+
+message ServerInput {
+  ServerInputKind kind = 1;
+  string method = 2 [(parvane.core.v2.max_len) = 128];
+  uint64 req_id = 3;
+  bytes body = 4 [(parvane.core.v2.max_len) = 4194304];
+  // Код ошибки ответа (`parvane.core.v2.ErrorCode`); 0 — успех.
+  int32 error = 5;
+}
+
+message MessageRemove {
+  parvane.state.v1.Peer chat = 1;
+  bytes id = 2 [(parvane.core.v2.max_len) = 16];
+}
+
+message StateChanged {
+  parvane.state.v2.ObjectKey object = 1;
+  // Нет — объект удалён (не виден).
+  StateObjectView view = 2;
+}
+
+message Notice {
+  parvane.state.v1.Peer chat = 1;
+  // key_changed | update_required | …: формулировку подставляет клиент.
+  string kind = 2 [(parvane.core.v2.max_len) = 64];
+  string detail = 3 [(parvane.core.v2.max_len) = 1024];
+}
+
+message UnreadChanged {
+  parvane.state.v1.Peer chat = 1;
+  uint32 count = 2;
+  bool mention = 3;
+}
+
+message WriteBlocked {
+  string journal = 1 [(parvane.core.v2.max_len) = 128];
+  JournalWrite reason = 2;
+}
+
+message Need {
+  // peer_log | retry | group_log | key …
+  string kind = 1 [(parvane.core.v2.max_len) = 64];
+  parvane.state.v1.Peer chat = 2;
+  string detail = 3 [(parvane.core.v2.max_len) = 1024];
+}
+
+message ModelChange {
+  oneof change {
+    ChatView chat_upsert = 1;
+    parvane.state.v1.Peer chat_remove = 2;
+    MessageView message_upsert = 3;
+    MessageRemove message_remove = 4;
+    StateChanged state_changed = 5;
+    GroupView group_changed = 6;
+    Notice notice = 7;
+    UnreadChanged unread_changed = 8;
+    WriteBlocked write_blocked = 9;
+    Need needs = 10;
+  }
+}
+
+// Ревизия растёт на 1 с каждым непустым изменением; повтор того же изменения не меняет показ (FR-006).
+message ModelDelta {
+  uint64 revision = 1;
+  repeated ModelChange changes = 2 [(parvane.core.v2.max_items) = 100000];
+}
+
+message Outcome {
+  // Хост MUST зафиксировать пачку ДО отправки `requests` этого результата, затем — `storeCommitted`.
+  StoreBatch store_batch = 1;
+  repeated StoreReads store_reads = 2 [(parvane.core.v2.max_items) = 64];
+  repeated OutRequest requests = 3 [(parvane.core.v2.max_items) = 1024];
+  ModelDelta delta = 4;
+}
+
+// ── Аргументы вызовов ───────────────────────────────────────────────────────────────────────────────────
+
+message StoreCommitted {
+  uint64 batch_id = 1;
+}
+
+message Tick {
+  int64 now_ms = 1;
+}
+
+message ChatListRequest {
+  ChatAnchor after = 1;
+  uint32 limit = 2;
+  // 0 — все чаты.
+  uint32 folder = 3;
+}
+
+enum PageDirection {
+  PAGE_DIRECTION_UNSPECIFIED = 0;
+  PAGE_DIRECTION_OLDER = 1;
+  PAGE_DIRECTION_NEWER = 2;
+  PAGE_DIRECTION_AROUND = 3;
+}
+
+message HistoryPageRequest {
+  parvane.state.v1.Peer chat = 1;
+  MsgAnchor anchor = 2;
+  PageDirection direction = 3;
+  uint32 limit = 4;
+}
+
+message ViewStateRequest {
+  // Пусто — все виды; иначе имена `parvane.state.v2.ObjectKind`.
+  repeated string kinds = 1 [(parvane.core.v2.max_items) = 64, (parvane.core.v2.max_len) = 64];
+}
+
+message ViewGroupRequest {
+  parvane.core.v2.Ref group = 1;
+}
+
+message CapabilitiesRequest {
+  parvane.state.v1.Peer chat = 1;
+}
+
+message EngineError {
+  // Имя вида `ProtoError` либо `UnknownCall`.
+  string error = 1 [(parvane.core.v2.max_len) = 64];
+}

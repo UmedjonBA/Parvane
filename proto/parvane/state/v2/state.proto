@@ -1,0 +1,236 @@
+// Личное состояние v2 (spec 035, FR-010…FR-018; правило STATE-1 v2): регистры по полям, патч, множества.
+//
+// Объект состояния — `(вид, ключ)`. Операции: Create / Patch / Delete / SetAdd / SetRemove / Mark / Migrated.
+// Метка операции — `(lamport, device_id, op_id)`; ничья — большие байты значения. Сведение (движок,
+// `backend/protocol/src/state2.rs`) даёт побайтно один снимок при любом порядке, повторах и разбиении записей.
+//
+// Значение поля объекта (`FieldValue.value`) — байты поля в кодировке сообщения-значения вида ВМЕСТЕ с тегом
+// (одна или несколько записей с номером `field`, как они стоят внутри сообщения; пусто — «значение по
+// умолчанию», не очистка). Склейка значений полей объекта — байты сообщения-значения (`Folder`, `Contact`, …),
+// поэтому неизвестное поле (новее движка) переносится без разбора. Элемент множества (`SetAdd.element`) —
+// полезные байты ОДНОГО элемента repeated-поля без тега (для `Folder.include_peers` — байты `Peer`).
+//
+// Отметка (`Mark.value`) — беззнаковое целое big-endian без ведущих нулей (1–64 байта); сводится максимумом и
+// сильнее надгробия: `SCHEDULED` отметка 1 = «отправлено» (значение 0x01), `CHAT_CLEARED` отметка 2 = граница
+// очистки (мс эпохи).
+//
+// Номера видов в oneof `StateOp.op`: 1–999 — обычные, 1000–1999 — критичные (contracts/versioning.md). Неизвестный
+// обычный вид хранится исходными байтами и запрещает заменяющий снимок; неизвестный критичный — запись в журнал
+// закрыта (`writeBlocked`), показ известного работает.
+//
+// Сервер (шард messenger, таблица `user_state_log_v2`) хранит только `op_id` и шифртекст записи:
+// `nonce (12) ‖ ChaCha20-Poly1305(StateOp)`, ключ — ключ личного состояния (тот же, что у `state.v1`),
+// AAD = `"parvane/v2/state2\0" ‖ user ‖ op_id`.
+syntax = "proto3";
+
+package parvane.state.v2;
+
+import "parvane/core/v2/options.proto";
+import "parvane/core/v2/registry.proto";
+import "parvane/state/v1/state.proto";
+
+service StateOpsService {
+  rpc Append(AppendRequest) returns (AppendResponse) {
+    option (parvane.core.v2.method) = {
+      name: "state.ops.append"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_MSG
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc Sync(SyncRequest) returns (SyncResponse) {
+    option (parvane.core.v2.method) = {
+      name: "state.ops.sync"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+}
+
+// Вид объекта. Номер вида — часть ключа объекта; новый вид объекта — новый номер.
+enum ObjectKind {
+  OBJECT_KIND_UNSPECIFIED = 0;
+  OBJECT_KIND_FOLDER = 1;             // ключ: id папки десятичной строкой; значение parvane.state.v1.Folder
+  OBJECT_KIND_BLOCK = 2;              // ключ: peer_key; BlockEntry
+  OBJECT_KIND_PEER_NOTIFY = 3;        // ключ: peer_key; PeerNotify
+  OBJECT_KIND_NOTIFY_DEFAULTS = 4;    // одиночка (ключ ""); NotifyDefaults
+  OBJECT_KIND_DRAFT = 5;              // ключ: peer_key; Draft
+  OBJECT_KIND_SCHEDULED = 6;          // ключ: op_id отложенного (hex); ScheduledMessage; отметка 1 — «отправлено»
+  OBJECT_KIND_ARCHIVE = 7;            // ключ: peer_key (объект-признак)
+  OBJECT_KIND_PIN_LIST = 8;           // ключ: номер списка закрепа (1 — основной, 2 — архив); PinnedOrder
+  OBJECT_KIND_CALL = 9;               // ключ: call_id (hex); CallRecord
+  OBJECT_KIND_GROUP_INVITE = 10;      // ключ: link_id (hex); GroupInvite
+  OBJECT_KIND_PLANNER_CONTAINER = 11; // одиночка; PlannerContainer
+  OBJECT_KIND_CLOUD_CONTAINER = 12;   // ключ: "<домен>:<hex id>" контейнера; CloudContainer
+  OBJECT_KIND_UNREAD_MARK = 13;       // ключ: peer_key (объект-признак)
+  OBJECT_KIND_QUICK_REACTION = 14;    // одиночка; QuickReaction
+  OBJECT_KIND_STICKER_PACK = 15;      // ключ: set_id; StickerPack
+  OBJECT_KIND_CONTACT = 16;           // ключ: адрес; Contact
+  OBJECT_KIND_FOLDER_ORDER = 17;      // одиночка; FolderOrder
+  OBJECT_KIND_CHAT_CLEARED = 18;      // ключ: peer_key; отметка 2 — граница очистки (только растёт)
+  OBJECT_KIND_SAVED_GIF = 19;         // ключ: "g:<sha256>" (GIF-1); StickerPack
+  OBJECT_KIND_FAVED_STICKER = 20;     // ключ: set_id ‖ "/" ‖ sticker_id (FR-075); FavedSticker
+}
+
+message ObjectKey {
+  ObjectKind kind = 1;
+  string key = 2 [(parvane.core.v2.max_len) = 256];
+}
+
+// Значение поля объекта: номер поля сообщения-значения вида → байты поля с тегом.
+message FieldValue {
+  uint32 field = 1;
+  bytes value = 2 [(parvane.core.v2.max_len) = 65536];
+}
+
+message Create {
+  ObjectKey object = 1;
+  repeated FieldValue set = 2 [(parvane.core.v2.max_items) = 64];
+}
+
+// Присутствующее в `set` — новое значение; номер в `clear` — явная очистка; остальное — не трогать.
+// Поле не может быть одновременно в `set` и `clear` и не может повторяться (отказ операции).
+message Patch {
+  ObjectKey object = 1;
+  repeated FieldValue set = 2 [(parvane.core.v2.max_items) = 64];
+  repeated uint32 clear = 3 [(parvane.core.v2.max_items) = 64];
+}
+
+// Удаление — надгробие с меткой; правка новее надгробия воскрешает объект (FR-014).
+message Delete {
+  ObjectKey object = 1;
+}
+
+// Поле-множество (чаты папки, исключённые чаты): элемент — отдельный регистр «есть/нет».
+message SetAdd {
+  ObjectKey object = 1;
+  uint32 field = 2;
+  bytes element = 3 [(parvane.core.v2.max_len) = 1024];
+}
+message SetRemove {
+  ObjectKey object = 1;
+  uint32 field = 2;
+  bytes element = 3 [(parvane.core.v2.max_len) = 1024];
+}
+
+// Необратимые отметки (scheduled_sent) и границы «только растёт» (chat_cleared) — максимум, сильнее надгробия.
+message Mark {
+  ObjectKey object = 1;
+  uint32 field = 2;
+  bytes value = 3 [(parvane.core.v2.max_len) = 64];
+}
+
+// Конец разового переноса из state.v1 (FR-063).
+message Migrated {
+  // Голова замороженного журнала state.v1, прочитанная устройством.
+  uint64 from_seq = 1;
+}
+
+// Операция журнала — открытый текст записи. op_id совпадает с op_id записи (входит в AAD).
+message StateOp {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  uint64 lamport = 2;
+  string device_id = 3 [(parvane.core.v2.max_len) = 64];
+  // Только показ, в сведении не участвует.
+  int64 ts_ms = 4;
+  oneof op {
+    Create create = 10;
+    Patch patch = 11;
+    Delete delete = 12;
+    SetAdd set_add = 13;
+    SetRemove set_remove = 14;
+    Mark mark = 15;
+    Migrated migrated = 16;
+    // 1000–1999 — зарезервировано под критичные виды будущих версий.
+  }
+}
+
+// Избранный стикер (FR-075): ссылка на файл стикера в своём наборе.
+message FavedSticker {
+  string set_id = 1 [(parvane.core.v2.max_len) = 128];
+  string sticker_id = 2 [(parvane.core.v2.max_len) = 128];
+  parvane.state.v1.PackArchive media = 3;
+  int64 added_ms = 4;
+}
+
+// ── Сведённое состояние (снимок движка, хранилище `state-object`; на провод не выходит) ─────────────────
+
+message Stamp {
+  uint64 lamport = 1;
+  string device_id = 2 [(parvane.core.v2.max_len) = 64];
+  bytes op_id = 3 [(parvane.core.v2.max_len) = 16];
+}
+
+// Регистр поля: `cleared` — явная очистка (значения нет).
+message FieldRegister {
+  uint32 field = 1;
+  Stamp stamp = 2;
+  bytes value = 3 [(parvane.core.v2.max_len) = 65536];
+  bool cleared = 4;
+}
+
+message SetElement {
+  uint32 field = 1;
+  bytes element = 2 [(parvane.core.v2.max_len) = 1024];
+  Stamp stamp = 3;
+  bool present = 4;
+}
+
+message MarkValue {
+  uint32 field = 1;
+  bytes value = 2 [(parvane.core.v2.max_len) = 64];
+}
+
+message ObjectState {
+  ObjectKey object = 1;
+  Stamp created = 2;
+  Stamp deleted = 3;
+  repeated FieldRegister fields = 4 [(parvane.core.v2.max_items) = 512];
+  repeated SetElement elements = 5 [(parvane.core.v2.max_items) = 4096];
+  repeated MarkValue marks = 6 [(parvane.core.v2.max_items) = 64];
+}
+
+// Каноничный снимок: объекты по (вид, ключ), регистры по номеру, элементы по (номер, байты).
+message StateSnapshot {
+  repeated ObjectState objects = 1 [(parvane.core.v2.max_items) = 200000];
+  uint64 max_lamport = 2;
+  // Перенос из state.v1 завершён (есть Migrated); наибольший from_seq.
+  bool migrated = 3;
+  uint64 migrated_from_seq = 4;
+  // Исходные байты записей с непонятным этой версии (неизвестный вид операции, неизвестное поле операции) —
+  // по возрастанию байтов. Есть хоть одна — заменяющий снимок запрещён (FR-035).
+  repeated bytes held = 5 [
+    (parvane.core.v2.max_items) = 100000,
+    (parvane.core.v2.max_len) = 262144
+  ];
+}
+
+// ── Сервер ──────────────────────────────────────────────────────────────────────────────────────────────
+
+message StateRecord {
+  uint64 seq = 1 [(parvane.core.v2.actor) = ACTOR_SERVER_SET];
+  bytes op_id = 2 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 3 [(parvane.core.v2.max_len) = 262144];
+}
+
+message AppendRequest {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  bytes aead_ciphertext = 2 [(parvane.core.v2.max_len) = 262144];
+}
+message AppendResponse {
+  uint64 seq = 1;
+}
+
+message SyncRequest {
+  // Курсор: записи с seq > after_seq.
+  uint64 after_seq = 1;
+  // Байтовый бюджет страницы; 0 — по умолчанию, сервер ограничивает ≤ 716800. Хотя бы одна запись.
+  uint32 max_bytes = 2;
+}
+message SyncResponse {
+  repeated StateRecord records = 1 [(parvane.core.v2.max_items) = 1024];
+  bool more = 2;
+}

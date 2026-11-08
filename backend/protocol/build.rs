@@ -48,6 +48,7 @@ const COVERED_KIND_ONEOFS: &[&str] = &[
     "parvane.cloud.v1.CloudOp.op",
     "parvane.group.v2.GroupChange.change",
     "parvane.state.v1.StateOp.op",
+    "parvane.state.v2.StateOp.op",
 ];
 /// Схема «движка будущего» (T025): виды ≥ 1000 разрешены только здесь.
 const SAMPLE_PACKAGE: &str = "parvane.sample.v1";

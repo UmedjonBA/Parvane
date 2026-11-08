@@ -1,0 +1,62 @@
+{
+  "suite": "state2/unknown_fields",
+  "description": "spec 035 FR-015/FR-031/FR-041: неизвестное в журнале состояния. Неизвестное поле значения (новее движка) и неизвестный вид объекта хранятся байтами в регистре и сводятся по метке — в показ не попадают, в снимке остаются (kept_fields: [номер вида, ключ, номер поля]). Неизвестный вид операции (extra_hex — запись поля StateOp после заголовка) и неизвестное поле внутри известной операции (op_extra_hex — дописано в байты вида) хранятся исходными байтами (held) и запрещают заменяющий снимок; лампорт учитывается. Критичный вид (1000–1999) закрывает журнал для записи (write_blocked). Ожидания руками.",
+  "cases": [
+    {
+      "name": "неизвестное поле значения папки хранится, в показе его нет",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}, "50": {"hex": "920306667574757265"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 1, "held": 0, "write_blocked": false, "kept_fields": [[1, "5", 50]], "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    },
+    {
+      "name": "неизвестное поле значения сводится по метке, как известное",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"50": {"hex": "92030161"}}}},
+        {"id": "02", "lamport": 2, "device": "d2", "patch": {"kind": "FOLDER", "key": "5", "set": {"50": {"hex": "92030162"}}}},
+        {"id": "03", "lamport": 3, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Т"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "held": 0, "write_blocked": false, "kept_fields": [[1, "5", 50]], "kept_values": [[1, "5", 50, "92030162"]], "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Т"}}
+      ]}
+    },
+    {
+      "name": "неизвестный вид объекта хранится целиком, в показе его нет",
+      "input": {"ops": [
+        {"id": "01", "lamport": 2, "device": "d1", "create": {"kind": 77, "key": "x", "set": {"1": {"hex": "0801"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "held": 0, "write_blocked": false, "kept_fields": [[77, "x", 1]], "objects": []}
+    },
+    {
+      "name": "неизвестный обычный вид операции — исходными байтами, запись разрешена",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}}}},
+        {"id": "0f", "lamport": 7, "device": "d9", "extra_hex": "a23800"}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 7, "held": 1, "write_blocked": false, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    },
+    {
+      "name": "неизвестный критичный вид операции закрывает журнал для записи, показ известного работает",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}}}},
+        {"id": "10", "lamport": 3, "device": "d9", "extra_hex": "c23e00"}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "held": 1, "write_blocked": true, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    },
+    {
+      "name": "неизвестное поле внутри известной операции: известное применено, байты хранятся",
+      "input": {"ops": [
+        {"id": "01", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}}}, "op_extra_hex": "4801"}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "held": 1, "write_blocked": false, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    }
+  ]
+}

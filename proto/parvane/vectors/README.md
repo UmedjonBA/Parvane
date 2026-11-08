@@ -52,6 +52,8 @@
 | `history/` | журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): сведение строки (`merge`), непрочитанное, маркеры и права удаления (`unread`), сегменты, горизонт, строка формата привязки (`segment`), ключ истории и записи (`aead`) | `kind` случая + proto3-JSON сообщений `history.v1` (id сообщений — UUID-строки) |
 | `conformance/` | правила conformance как векторы (T088) | (US3) |
 | `unknown/` | spec 035 (FR-031): `unknown::scan` — неизвестное поле на любой глубине, вид oneof (обычный/критичный), значение enum; ожидания руками | `type`, `hex` → `items[]` (`path`, `kind`, `number`, `critical`) |
+| `state2/` | spec 035 (FR-010…FR-017): личное состояние v2 — патч по полям (`patch`), множества (`sets`), упорядоченные списки (`ordered`), «удаление против правки» (`delete_vs_edit`), отметки (`marks`), неизвестное (`unknown_fields`), отказы (`rejected`); ожидания руками, каждый случай — во всех перестановках, с повтором и разбиением через снимок | `ops[]` — краткая запись операций (см. `description`) → `rejected`, `max_lamport`, `objects` (показ), `held`, `write_blocked`, `kept_fields` |
+| `content/critical.json`, `model/critical_journal.json` | spec 035 (FR-041/FR-042): критичность номером вида — показ содержимого по исходным байтам (`show`/`stub`/`stub_critical`) и разрешённые действия; критичный вид закрывает журнал (state, history) для записи, отметки `range-hold`; ожидания руками | `content_hex`, `critical_fields`? → `disposition`, `actions`; `journal`, `ops`/`records_hex` → `write`, `holds`, `submit`, `objects` |
 | `storage/` | spec 035 (contracts/storage.md): AAD и ключ записи (`aad`), KEK/проверка PIN (`wrap`), перенос поколения P1–P6 с прерываниями (`generation`), слишком новый формат (`too_new`) — `backend/protocol/tests/store_vectors.rs`; общий набор адаптеров хоста (`adapter`) — ctest ядра `store_fs_tests`, web `v2/storeIdb.test.ts` | см. `description` файлов |
 
 Все наборы прогоняет `parvane_protocol::conformance::run(<набор>, <json>)` —
@@ -61,7 +63,9 @@
 `invite/links`, `state/merge`, `content/kinds`, `l2/mode`, `codec/frames`,
 `sign/ops`, `device_log/alice`, `group_log/group`, `content_guard/content`,
 `legacy_v1/messages`, `call/signals`, `link/sas`, `history/merge`, `history/unread`,
-`history/segment`, `history/aead`. Там, где работу делает сам
+`history/segment`, `history/aead`, `history/checkpoint`, `state2/patch`, `state2/sets`, `state2/ordered`,
+`state2/delete_vs_edit`, `state2/marks`, `state2/unknown_fields`, `state2/rejected`, `content/critical`,
+`model/critical_journal`. Там, где работу делает сам
 клиент (содержимое UI, сигнал звонка, линковка), тест клиента дополнительно
 сверяет собственную перекладку с теми же файлами: web —
 `src/api/parvane/protocol.vectors.test.ts`, desktop/android (ядро) —

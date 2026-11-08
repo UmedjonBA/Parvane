@@ -42,6 +42,14 @@ const SUITES: [string, string, number][] = [
   ['history/segment', 'history/segment.json', 5],
   ['history/aead', 'history/aead.json', 2],
   ['history/checkpoint', 'history/checkpoint.json', 6],
+  // spec 035: личное состояние v2 — патч по полям, множества, «удаление против правки», отметки, неизвестное
+  ['state2/patch', 'state2/patch.json', 6],
+  ['state2/sets', 'state2/sets.json', 4],
+  ['state2/ordered', 'state2/ordered.json', 3],
+  ['state2/delete_vs_edit', 'state2/delete_vs_edit.json', 5],
+  ['state2/marks', 'state2/marks.json', 3],
+  ['state2/unknown_fields', 'state2/unknown_fields.json', 6],
+  ['state2/rejected', 'state2/rejected.json', 2],
 ];
 
 type CallCase = {

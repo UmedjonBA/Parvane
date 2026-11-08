@@ -97,7 +97,8 @@ fn content_json(c: &Content) -> Value {
 fn disp(d: Disposition) -> &'static str {
     match d {
         Disposition::Show => "show",
-        Disposition::Stub => "stub",
+        // spec 035: критичная заглушка нынешним клиентам — та же заглушка (запреты — в модели движка).
+        Disposition::Stub | Disposition::StubCritical => "stub",
         Disposition::Skip => "skip",
     }
 }

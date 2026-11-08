@@ -3,4 +3,5 @@
 //! Намерения, изменения модели и представления появятся с `engine/v1/model.proto`.
 
 pub mod features;
+pub mod journal;
 pub mod store_kinds;

@@ -1,0 +1,38 @@
+{
+  "suite": "state2/ordered",
+  "description": "spec 035 FR-013: упорядоченные списки (закреплённые чаты папки pinned_peers = 6, порядок папок FOLDER_ORDER, закреп списка PIN_LIST) — регистр списка целиком: побеждает список с большей меткой, списки не сливаются. Ожидания руками.",
+  "cases": [
+    {
+      "name": "закреп папки: список с большей меткой целиком",
+      "input": {"ops": [
+        {"id": "01", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"6": {"pinned_peers": [{"user": {"address": "a@x"}}, {"user": {"address": "b@x"}}]}}}},
+        {"id": "02", "lamport": 3, "device": "d2", "patch": {"kind": "FOLDER", "key": "5", "set": {"6": {"pinned_peers": [{"user": {"address": "c@x"}}]}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"pinned_peers": [{"user": {"address": "c@x"}}]}}
+      ]}
+    },
+    {
+      "name": "порядок папок и закреп основного списка",
+      "input": {"ops": [
+        {"id": "01", "lamport": 4, "device": "d1", "patch": {"kind": "FOLDER_ORDER", "key": "", "set": {"1": {"ids": [3, 2, 5]}}}},
+        {"id": "02", "lamport": 4, "device": "d0", "patch": {"kind": "FOLDER_ORDER", "key": "", "set": {"1": {"ids": [2, 3]}}}},
+        {"id": "03", "lamport": 1, "device": "d1", "patch": {"kind": "PIN_LIST", "key": "1", "set": {"2": {"peers": [{"user": {"address": "b@x"}}, {"user": {"address": "a@x"}}]}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 4, "objects": [
+        {"kind": "OBJECT_KIND_PIN_LIST", "key": "1", "value": {"peers": [{"user": {"address": "b@x"}}, {"user": {"address": "a@x"}}]}},
+        {"kind": "OBJECT_KIND_FOLDER_ORDER", "key": "", "value": {"ids": [3, 2, 5]}}
+      ]}
+    },
+    {
+      "name": "пустой список — значение, а не очистка",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "PIN_LIST", "key": "2", "set": {"2": {"peers": [{"user": {"address": "a@x"}}]}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "patch": {"kind": "PIN_LIST", "key": "2", "set": {"2": {"hex": ""}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_PIN_LIST", "key": "2", "value": {}, "present": [2]}
+      ]}
+    }
+  ]
+}

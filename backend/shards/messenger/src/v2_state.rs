@@ -1,4 +1,8 @@
-//! Журнал личного состояния пользователя (spec 007, US5: T096, R10).
+//! Журнал личного состояния пользователя (spec 007, US5: T096, R10; spec 035: журнал v2, T035).
+//!
+//! spec 035 (FR-063): `state.ops.append` / `state.ops.sync` — журнал `state.v2` (`user_state_log_v2`, миграция
+//! 0007), те же правила, что у прежнего журнала; прежний `state.append` отвергается (`UPGRADE_REQUIRED`,
+//! `v2.rs`), `state.sync` прежнего журнала — только чтение для разового переноса.
 //!
 //! `state.append` / `state.sync`: журнал `user_state_log` (миграции v2) хранит
 //! ТОЛЬКО шифртекст записи и её `op_id` — содержимое (папки, блок-лист,
@@ -22,6 +26,7 @@ use parvane_protocol::limits::Origin;
 use parvane_protocol::pb::parvane::core::v2::{ErrorCode, PrivacyOfRequest, PrivacyOfResponse};
 use parvane_protocol::pb::parvane::identity::v2::Audience;
 use parvane_protocol::pb::parvane::state::v1 as spb;
+use parvane_protocol::pb::parvane::state::v2 as s2pb;
 use parvane_protocol::registry_gen::INTERNAL_PRIVACY_OF;
 use parvane_protocol::state::{NONCE_LEN, TAG_LEN};
 use parvane_protocol::sync::PAGE_BUDGET;
@@ -53,42 +58,65 @@ fn db_err<E: std::fmt::Display>(e: E) -> ErrorCode {
     ErrorCode::Unavailable
 }
 
+/// Таблицы журнала: прежний `state.v1` (только чтение с spec 035) и `state.v2` (`state.ops.*`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Journal {
+    log: &'static str,
+    head: &'static str,
+}
+
+/// Журнал `state.v1` — с spec 035 заморожен: `state.append` → `UPGRADE_REQUIRED`, `state.sync` читает.
+pub(crate) const V1: Journal = Journal { log: "user_state_log", head: "user_state_head" };
+/// Журнал `state.v2` (spec 035, FR-063): `state.ops.append` / `state.ops.sync`.
+pub(crate) const V2: Journal = Journal { log: "user_state_log_v2", head: "user_state_head_v2" };
+
 /// Уже записанная операция с этим op_id: тот же шифртекст — её seq (повтор),
 /// другой — `DUPLICATE`.
-async fn existing(db: &SqlitePool, user: &str, r: &spb::AppendRequest) -> Result<Option<u64>, ErrorCode> {
-    let row: Option<(i64, Vec<u8>)> = sqlx::query_as("SELECT seq, record FROM user_state_log WHERE user = ? AND op_id = ?")
+async fn existing(db: &SqlitePool, j: Journal, user: &str, op_id: &[u8], ct: &[u8]) -> Result<Option<u64>, ErrorCode> {
+    let row: Option<(i64, Vec<u8>)> = sqlx::query_as(&format!("SELECT seq, record FROM {} WHERE user = ? AND op_id = ?", j.log))
         .bind(user)
-        .bind(&r.op_id)
+        .bind(op_id)
         .fetch_optional(db)
         .await
         .map_err(db_err)?;
     match row {
-        Some((seq, rec)) if rec == r.aead_ciphertext => Ok(Some(seq as u64)),
+        Some((seq, rec)) if rec == ct => Ok(Some(seq as u64)),
         Some(_) => Err(ErrorCode::Duplicate),
         None => Ok(None),
     }
 }
 
-/// `state.append`: дописать запись в журнал пользователя, вернуть её seq.
+/// Запись в прежний журнал (только тесты: с spec 035 `state.append` отвергается).
+#[cfg(test)]
 pub(crate) async fn append(db: &SqlitePool, user: &str, r: &spb::AppendRequest, limits: StateLimits) -> Result<u64, ErrorCode> {
-    if !parvane_protocol::sign::is_valid_op_id(&r.op_id) {
+    append_in(db, V1, user, &r.op_id, &r.aead_ciphertext, limits).await
+}
+
+/// `state.ops.append`: дописать запись в журнал v2 пользователя, вернуть её seq.
+pub(crate) async fn append_v2(db: &SqlitePool, user: &str, r: &s2pb::AppendRequest, limits: StateLimits) -> Result<u64, ErrorCode> {
+    append_in(db, V2, user, &r.op_id, &r.aead_ciphertext, limits).await
+}
+
+async fn append_in(db: &SqlitePool, j: Journal, user: &str, op_id: &[u8], ct: &[u8], limits: StateLimits) -> Result<u64, ErrorCode> {
+    if !parvane_protocol::sign::is_valid_op_id(op_id) {
         return Err(ErrorCode::Invalid);
     }
     // nonce ‖ шифртекст ‖ тег; верхняя граница — лимит схемы (decode_checked).
-    if r.aead_ciphertext.len() < NONCE_LEN + TAG_LEN {
+    if ct.len() < NONCE_LEN + TAG_LEN {
         return Err(ErrorCode::Invalid);
     }
-    if let Some(seq) = existing(db, user, r).await? {
+    if let Some(seq) = existing(db, j, user, op_id, ct).await? {
         return Ok(seq);
     }
-    let len = r.aead_ciphertext.len() as i64;
+    let len = ct.len() as i64;
     let mut tx = db.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
     // Сначала запись (блокировка на запись берётся сразу — без гонки чтение→запись).
-    let (seq, records, bytes): (i64, i64, i64) = sqlx::query_as(
-        "INSERT INTO user_state_head (user, next_seq, records, bytes) VALUES (?, 1, 1, ?)
+    let (seq, records, bytes): (i64, i64, i64) = sqlx::query_as(&format!(
+        "INSERT INTO {} (user, next_seq, records, bytes) VALUES (?, 1, 1, ?)
          ON CONFLICT(user) DO UPDATE SET next_seq = next_seq + 1, records = records + 1, bytes = bytes + excluded.bytes
          RETURNING next_seq, records, bytes",
-    )
+        j.head
+    ))
     .bind(user)
     .bind(len)
     .fetch_one(&mut *tx)
@@ -98,11 +126,11 @@ pub(crate) async fn append(db: &SqlitePool, user: &str, r: &spb::AppendRequest, 
         let _ = tx.rollback().await;
         return Err(ErrorCode::Limit);
     }
-    let ins = sqlx::query("INSERT INTO user_state_log (user, seq, op_id, record, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING")
+    let ins = sqlx::query(&format!("INSERT INTO {} (user, seq, op_id, record, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING", j.log))
         .bind(user)
         .bind(seq)
-        .bind(&r.op_id)
-        .bind(&r.aead_ciphertext)
+        .bind(op_id)
+        .bind(ct)
         .bind(now_unix())
         .execute(&mut *tx)
         .await
@@ -110,38 +138,50 @@ pub(crate) async fn append(db: &SqlitePool, user: &str, r: &spb::AppendRequest, 
     if ins.rows_affected() == 0 {
         // Параллельный повтор того же op_id успел раньше: seq не расходуется.
         let _ = tx.rollback().await;
-        return existing(db, user, r).await?.ok_or(ErrorCode::Duplicate);
+        return existing(db, j, user, op_id, ct).await?.ok_or(ErrorCode::Duplicate);
     }
     tx.commit().await.map_err(db_err)?;
     Ok(seq as u64)
 }
 
-/// `state.sync`: записи с seq > after_seq, страница ≤ бюджета (хотя бы одна запись).
-pub(crate) async fn sync(db: &SqlitePool, user: &str, r: &spb::SyncRequest) -> Result<spb::SyncResponse, ErrorCode> {
-    let after = i64::try_from(r.after_seq).map_err(|_| ErrorCode::Invalid)?;
-    let budget = if r.max_bytes == 0 { PAGE_BUDGET } else { (r.max_bytes as usize).min(PAGE_BUDGET) };
+/// Страница журнала: записи с seq > after_seq, ≤ бюджета (хотя бы одна запись) → (записи, есть ли ещё).
+async fn page(db: &SqlitePool, j: Journal, user: &str, after_seq: u64, max_bytes: u32) -> Result<(Vec<(u64, Vec<u8>, Vec<u8>)>, bool), ErrorCode> {
+    let after = i64::try_from(after_seq).map_err(|_| ErrorCode::Invalid)?;
+    let budget = if max_bytes == 0 { PAGE_BUDGET } else { (max_bytes as usize).min(PAGE_BUDGET) };
     let rows: Vec<(i64, Vec<u8>, Vec<u8>)> =
-        sqlx::query_as("SELECT seq, op_id, record FROM user_state_log WHERE user = ? AND seq > ? ORDER BY seq LIMIT ?")
+        sqlx::query_as(&format!("SELECT seq, op_id, record FROM {} WHERE user = ? AND seq > ? ORDER BY seq LIMIT ?", j.log))
             .bind(user)
             .bind(after)
             .bind(PAGE_ITEMS as i64 + 1)
             .fetch_all(db)
             .await
             .map_err(db_err)?;
-    let mut records = Vec::new();
+    let mut out = Vec::new();
     let mut used = 0usize;
-    let mut more = false;
     for (seq, op_id, rec) in rows {
-        let r = spb::StateRecord { seq: seq as u64, op_id, aead_ciphertext: rec };
-        let len = r.encoded_len() + 4;
-        if records.len() >= PAGE_ITEMS || (!records.is_empty() && used + len > budget) {
-            more = true;
-            break;
+        // Размер записи страницы в кодировке StateRecord (одинаков у v1 и v2).
+        let len = spb::StateRecord { seq: seq as u64, op_id: op_id.clone(), aead_ciphertext: rec.clone() }.encoded_len() + 4;
+        if out.len() >= PAGE_ITEMS || (!out.is_empty() && used + len > budget) {
+            return Ok((out, true));
         }
         used += len;
-        records.push(r);
+        out.push((seq as u64, op_id, rec));
     }
+    Ok((out, false))
+}
+
+/// `state.sync`: прежний журнал — только чтение (разовый перенос, FR-063).
+pub(crate) async fn sync(db: &SqlitePool, user: &str, r: &spb::SyncRequest) -> Result<spb::SyncResponse, ErrorCode> {
+    let (rows, more) = page(db, V1, user, r.after_seq, r.max_bytes).await?;
+    let records = rows.into_iter().map(|(seq, op_id, aead_ciphertext)| spb::StateRecord { seq, op_id, aead_ciphertext }).collect();
     Ok(spb::SyncResponse { records, more })
+}
+
+/// `state.ops.sync`: журнал v2.
+pub(crate) async fn sync_v2(db: &SqlitePool, user: &str, r: &s2pb::SyncRequest) -> Result<s2pb::SyncResponse, ErrorCode> {
+    let (rows, more) = page(db, V2, user, r.after_seq, r.max_bytes).await?;
+    let records = rows.into_iter().map(|(seq, op_id, aead_ciphertext)| s2pb::StateRecord { seq, op_id, aead_ciphertext }).collect();
+    Ok(s2pb::SyncResponse { records, more })
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +295,29 @@ mod tests {
         assert_eq!(s.records.len(), 1);
         assert!(s.more);
         assert_eq!(sync(&db, "a@local", &spb::SyncRequest { after_seq: u64::MAX, max_bytes: 0 }).await.err(), Some(ErrorCode::Invalid));
+    }
+
+    /// spec 035 T035: журнал v2 — отдельные seq и таблица, те же правила идемпотентности и лимитов.
+    #[tokio::test]
+    async fn journal_v2_separate_from_v1() {
+        let db = pool().await;
+        let r = req(40, 1);
+        assert_eq!(append(&db, "a@local", &r, BIG).await.unwrap(), 1);
+        let r2 = s2pb::AppendRequest { op_id: r.op_id.clone(), aead_ciphertext: vec![2; 40] };
+        assert_eq!(append_v2(&db, "a@local", &r2, BIG).await.unwrap(), 1, "свой seq, тот же op_id в другом журнале — не дубль");
+        assert_eq!(append_v2(&db, "a@local", &r2, BIG).await.unwrap(), 1, "повтор — прежний seq");
+        let forged = s2pb::AppendRequest { op_id: r.op_id.clone(), aead_ciphertext: vec![3; 40] };
+        assert_eq!(append_v2(&db, "a@local", &forged, BIG).await, Err(ErrorCode::Duplicate));
+        let r3 = s2pb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![4; 40] };
+        assert_eq!(append_v2(&db, "a@local", &r3, BIG).await.unwrap(), 2);
+        let s = sync_v2(&db, "a@local", &s2pb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
+        assert_eq!(s.records.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(s.records[0].aead_ciphertext, vec![2; 40]);
+        let old = sync(&db, "a@local", &spb::SyncRequest { after_seq: 0, max_bytes: 0 }).await.unwrap();
+        assert_eq!(old.records.len(), 1, "прежний журнал не тронут");
+        let lim = StateLimits { max_records: 2, max_bytes: 1 << 20 };
+        let r4 = s2pb::AppendRequest { op_id: Uuid::now_v7().as_bytes().to_vec(), aead_ciphertext: vec![5; 40] };
+        assert_eq!(append_v2(&db, "a@local", &r4, lim).await, Err(ErrorCode::Limit));
     }
 
     #[test]

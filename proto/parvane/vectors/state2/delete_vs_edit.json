@@ -1,0 +1,58 @@
+{
+  "suite": "state2/delete_vs_edit",
+  "description": "spec 035 FR-012/FR-014: удаление — надгробие с меткой; объект виден, если самая свежая метка среди его полей, элементов и Create новее надгробия; правка старше надгробия ничего не воскрешает; правка новее — воскрешает объект только с полями и элементами новее надгробия. Правило одно для всех видов. Ожидания руками.",
+  "cases": [
+    {
+      "name": "удаление новее правки — объекта нет",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "BLOCK", "key": "u:bob@x", "set": {"2": {"blocked_at_ms": "100"}}}},
+        {"id": "02", "lamport": 2, "device": "d2", "delete": {"kind": "BLOCK", "key": "u:bob@x"}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": []}
+    },
+    {
+      "name": "правка новее надгробия воскрешает объект только с новыми полями",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "А"}, "3": {"emoticon": "Б"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "delete": {"kind": "FOLDER", "key": "5"}},
+        {"id": "03", "lamport": 3, "device": "d2", "patch": {"kind": "FOLDER", "key": "5", "set": {"3": {"emoticon": "В"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"emoticon": "В"}}
+      ]}
+    },
+    {
+      "name": "опоздавшая правка старше надгробия не воскрешает",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "DRAFT", "key": "u:bob@x", "set": {"4": {"date_ms": "1"}}}},
+        {"id": "02", "lamport": 3, "device": "d1", "delete": {"kind": "DRAFT", "key": "u:bob@x"}},
+        {"id": "03", "lamport": 2, "device": "d2", "patch": {"kind": "DRAFT", "key": "u:bob@x", "set": {"4": {"date_ms": "2"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": []}
+    },
+    {
+      "name": "элемент множества новее надгробия воскрешает, старые элементы скрыты",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "set_add": {"kind": "FOLDER", "key": "6", "field": 4, "element": {"user": {"address": "a@x"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "delete": {"kind": "FOLDER", "key": "6"}},
+        {"id": "03", "lamport": 3, "device": "d2", "set_add": {"kind": "FOLDER", "key": "6", "field": 4, "element": {"user": {"address": "b@x"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "6", "value": {"include_peers": [{"user": {"address": "b@x"}}]}}
+      ]}
+    },
+    {
+      "name": "объекты-признаки: архив — Create после Delete возвращает, отметка «непрочитано» снята",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "ARCHIVE", "key": "u:bob@x"}},
+        {"id": "02", "lamport": 2, "device": "d2", "delete": {"kind": "ARCHIVE", "key": "u:bob@x"}},
+        {"id": "03", "lamport": 3, "device": "d1", "create": {"kind": "ARCHIVE", "key": "u:bob@x"}},
+        {"id": "04", "lamport": 1, "device": "d1", "create": {"kind": "UNREAD_MARK", "key": "u:carol@x"}},
+        {"id": "05", "lamport": 2, "device": "d1", "delete": {"kind": "UNREAD_MARK", "key": "u:carol@x"}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": [
+        {"kind": "OBJECT_KIND_ARCHIVE", "key": "u:bob@x", "value": {}}
+      ]}
+    }
+  ]
+}

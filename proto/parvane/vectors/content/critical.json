@@ -1,0 +1,41 @@
+{
+  "suite": "content/critical",
+  "description": "spec 035 FR-041/FR-042 (contracts/versioning.md «Критичность»): показ содержимого по исходным байтам (unknown::scan до разбора). Известный вид — show, все действия; неизвестный обычный вид (1–999) — stub: заглушка, ответ и пересылка разрешены, правка — нет; неизвестный критичный вид (1000–1999) — stub_critical: ответ, правка и пересылка запрещены; неизвестное поле внутри известного вида — show; неизвестный номер из critical_fields — stub (правило T016). Ожидания руками; байты — из «движка будущего» (sample/v1 FutureContent).",
+  "cases": [
+    {
+      "name": "известный текст — показ и все действия",
+      "input": {"content_hex": "0a040a026869"},
+      "expect": {"disposition": "show", "actions": {"reply": true, "edit": true, "forward": true}}
+    },
+    {
+      "name": "неизвестное поле внутри текста — показ",
+      "input": {"content_hex": "0a070a026869e00303"},
+      "expect": {"disposition": "show", "actions": {"reply": true, "edit": true, "forward": true}}
+    },
+    {
+      "name": "неизвестный обычный вид 900 — заглушка, ответ и пересылка разрешены",
+      "input": {"content_hex": "a238030a0178"},
+      "expect": {"disposition": "stub", "actions": {"reply": true, "edit": false, "forward": true}}
+    },
+    {
+      "name": "неизвестный критичный вид 1000 — заглушка, ответ, правка и пересылка запрещены",
+      "input": {"content_hex": "c23e050a03010203"},
+      "expect": {"disposition": "stub_critical", "actions": {"reply": false, "edit": false, "forward": false}}
+    },
+    {
+      "name": "критичный вид с известным полем ttl_secs — всё равно stub_critical",
+      "input": {"content_hex": "c23e050a03010203a00600"},
+      "expect": {"disposition": "stub_critical", "actions": {"reply": false, "edit": false, "forward": false}}
+    },
+    {
+      "name": "неизвестный номер из critical_fields — заглушка",
+      "input": {"content_hex": "0a040a026869", "critical_fields": [77]},
+      "expect": {"disposition": "stub", "actions": {"reply": true, "edit": false, "forward": true}}
+    },
+    {
+      "name": "пустое содержимое — заглушка",
+      "input": {"content_hex": ""},
+      "expect": {"disposition": "stub", "actions": {"reply": true, "edit": false, "forward": true}}
+    }
+  ]
+}

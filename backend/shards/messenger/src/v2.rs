@@ -159,12 +159,19 @@ async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest) -> Reply 
             let r: mpb::DeliverGroupRequest = body(&req)?;
             crate::v2_groups::deliver_group(ctx, r).await
         }
-        "state.append" => {
+        // spec 035 (FR-063): прежний журнал заморожен — запись только в state.v2 (`state.ops.append`).
+        "state.append" => Err(ErrorCode::UpgradeRequired),
+        "state.ops.append" => {
             let (user, device) = me(&req)?;
-            let r: spb::AppendRequest = body(&req)?;
-            let seq = crate::v2_state::append(&ctx.v2, &user, &r, crate::v2_state::StateLimits::from_env()).await?;
+            let r: parvane_protocol::pb::parvane::state::v2::AppendRequest = body(&req)?;
+            let seq = crate::v2_state::append_v2(&ctx.v2, &user, &r, crate::v2_state::StateLimits::from_env()).await?;
             notify_journal(&user, &device, JournalKind::State, seq);
-            Ok(spb::AppendResponse { seq }.encode_to_vec())
+            Ok(parvane_protocol::pb::parvane::state::v2::AppendResponse { seq }.encode_to_vec())
+        }
+        "state.ops.sync" => {
+            let (user, _) = me(&req)?;
+            let r: parvane_protocol::pb::parvane::state::v2::SyncRequest = body(&req)?;
+            Ok(crate::v2_state::sync_v2(&ctx.v2, &user, &r).await?.encode_to_vec())
         }
         "state.sync" => {
             let (user, _) = me(&req)?;

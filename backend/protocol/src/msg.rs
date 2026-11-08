@@ -159,7 +159,8 @@ pub fn message_proof(sender_cert: &SignedDeviceCertificate, op: &SignedOp) -> Ve
 
 fn finish(sender: VerifiedDevice, op: VerifiedOp, proof: Vec<u8>) -> Result<Opened> {
     let mut content: Content = decode_checked(&op.payload, Origin::Client)?;
-    let disposition = unknown::content_disposition(&content, &op.header.critical_fields);
+    // spec 035: показ — по исходным байтам (критичный неизвестный вид виден только до разбора).
+    let disposition = unknown::content_disposition_bytes(&op.payload, &op.header.critical_fields)?;
     content_guard::sanitize_content(&mut content);
     Ok(Opened { sender, op, content, disposition, proof })
 }

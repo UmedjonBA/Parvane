@@ -55,6 +55,13 @@ pub enum ProtoError {
     /// spec 035: хранилище заблокировано (PIN не введён) — DEK в памяти нет.
     #[error("хранилище заблокировано")]
     Locked,
+    /// spec 035 (FR-041): в журнале есть неизвестный критичный вид — запись в журнал закрыта, показ известного
+    /// работает; хост показывает «обновите приложение».
+    #[error("журнал закрыт для записи этой версией")]
+    WriteBlocked,
+    /// spec 035 (FR-032/FR-034): уничтожающая операция над диапазоном с непонятным — явный отказ, данные не тронуты.
+    #[error("в диапазоне есть непонятное этой версии")]
+    RangeHeld,
 }
 
 impl ProtoError {
@@ -85,6 +92,8 @@ impl ProtoError {
             ProtoError::NotFound => "NotFound",
             ProtoError::TooNew => "TooNew",
             ProtoError::Locked => "Locked",
+            ProtoError::WriteBlocked => "WriteBlocked",
+            ProtoError::RangeHeld => "RangeHeld",
         }
     }
 
@@ -98,7 +107,7 @@ impl ProtoError {
             ProtoError::RateLimited => ErrorCode::RateLimited,
             ProtoError::FrameTooLarge => ErrorCode::Limit,
             ProtoError::NotFound => ErrorCode::NotFound,
-            ProtoError::TooNew => ErrorCode::UpgradeRequired,
+            ProtoError::TooNew | ProtoError::WriteBlocked => ErrorCode::UpgradeRequired,
             _ => ErrorCode::Invalid,
         }
     }

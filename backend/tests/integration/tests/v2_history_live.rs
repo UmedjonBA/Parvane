@@ -292,7 +292,7 @@ async fn v2_history_live() {
         let op = parvane_protocol::state::make_op(&mut clock, "d1", 1, parvane_protocol::pb::parvane::state::v1::state_op::Op::ArchiveSet(
             parvane_protocol::pb::parvane::state::v1::PeerKey { peer: Some(chat(&bob)) })).unwrap();
         let sreq = parvane_protocol::state::seal_op(&st_key, &alice, &op).unwrap();
-        f.check("state-append", d1.id.call("state.append", sreq.encode_to_vec()).is_ok(), "");
+        f.check("state-append", d1.id.call("state.ops.append", sreq.encode_to_vec()).is_ok(), "");
         let j = journal_notice(&mut d2, Duration::from_secs(5));
         f.check("notice-state", j.as_ref().is_some_and(|j| j.kind == mpb::JournalKind::State as i32 && j.seq == 1), &j);
 

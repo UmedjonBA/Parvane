@@ -1,0 +1,56 @@
+{
+  "suite": "state2/rejected",
+  "description": "spec 035 (data-model.md §1): отказы операций одинаковы при любом порядке — зависят только от самой операции: плохой op_id, lamport 0 или > 2^40, плохой device_id, вид UNSPECIFIED, ключ не по виду (папка — каноничное десятичное число, одиночка — пустой ключ, собеседник — u:/g:, контакт — адрес, закреп — 1 или 2), поле одновременно в set и clear, повтор поля, поле 0, удаление зарезервированных папок 0/1, значение сверх лимита схемы-значения, запись другого номера в значении поля, элемент множества не по схеме, отметка пустая или с ведущим нулём, операция без вида. Отвергнутая операция не двигает лампорт. Ожидания руками; set_list — поля списком (повтор поля в JSON-объекте не записать).",
+  "cases": [
+    {
+      "name": "все отказы одной операцией, в том числе рядом с допустимой",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "ок"}}}},
+        {"id": "02", "lamport": 0, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "0"}}}},
+        {"id": "03", "lamport": 1099511627777, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "max"}}}},
+        {"id": "04", "lamport": 2, "device": "d 1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "dev"}}}},
+        {"id_exact": "0102", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "id"}}}},
+        {"id": "06", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "оба"}}, "clear": [2]}},
+        {"id": "07", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set_list": [[2, {"title": "a"}], [2, {"title": "b"}]]}},
+        {"id": "08", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"0": {"hex": ""}}}},
+        {"id": "09", "lamport": 2, "device": "d1", "delete": {"kind": "FOLDER", "key": "0"}},
+        {"id": "0a", "lamport": 2, "device": "d1", "delete": {"kind": "FOLDER", "key": "1"}},
+        {"id": "0b", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "05", "set": {"2": {"title": "a"}}}},
+        {"id": "0c", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "abc", "set": {"2": {"title": "a"}}}},
+        {"id": "0d", "lamport": 2, "device": "d1", "patch": {"kind": "QUICK_REACTION", "key": "x", "set": {"1": {"emoji": "👍"}}}},
+        {"id": "0e", "lamport": 2, "device": "d1", "create": {"kind": "BLOCK", "key": ""}},
+        {"id": "0f", "lamport": 2, "device": "d1", "create": {"kind": 0, "key": "a"}},
+        {"id": "10", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}}},
+        {"id": "11", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"hex": "1a0141"}}}},
+        {"id": "12", "lamport": 2, "device": "d1", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 2, "value_hex": ""}},
+        {"id": "13", "lamport": 2, "device": "d1", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 2, "value_hex": "0001"}},
+        {"id": "14", "lamport": 2, "device": "d1", "set_add": {"kind": "FOLDER", "key": "5", "field": 0, "element": {"hex": "00"}}},
+        {"id": "15", "lamport": 2, "device": "d1"},
+        {"id": "16", "lamport": 2, "device": "d1", "create": {"kind": "BLOCK", "key": "bob@x"}},
+        {"id": "17", "lamport": 2, "device": "d1", "create": {"kind": "CONTACT", "key": "u:bob@x"}},
+        {"id": "18", "lamport": 2, "device": "d1", "set_add": {"kind": "FOLDER", "key": "5", "field": 4, "element": {"hex": "ff"}}},
+        {"id": "19", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "clear": [0]}},
+        {"id": "1a", "lamport": 2, "device": "d1", "create": {"kind": "PIN_LIST", "key": "3"}},
+        {"id": "1b", "lamport": 2, "device": "d1", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 0, "value_hex": "01"}}
+      ]},
+      "expect": {"rejected": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26], "max_lamport": 1, "held": 0, "write_blocked": false, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "ок"}}
+      ]}
+    },
+    {
+      "name": "допустимые ключи разных видов",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "GROUP_INVITE", "key": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "set": {"5": {"title": "ссылка"}}}},
+        {"id": "02", "lamport": 1, "device": "d1", "create": {"kind": "PIN_LIST", "key": "2"}},
+        {"id": "03", "lamport": 1, "device": "d1", "create": {"kind": "UNREAD_MARK", "key": "g:x:0a0b"}},
+        {"id": "04", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "4294967295", "set": {"2": {"title": "макс"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 1, "held": 0, "write_blocked": false, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "4294967295", "value": {"title": "макс"}},
+        {"kind": "OBJECT_KIND_PIN_LIST", "key": "2", "value": {}},
+        {"kind": "OBJECT_KIND_GROUP_INVITE", "key": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "value": {"title": "ссылка"}},
+        {"kind": "OBJECT_KIND_UNREAD_MARK", "key": "g:x:0a0b", "value": {}}
+      ]}
+    }
+  ]
+}
