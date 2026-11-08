@@ -3382,7 +3382,10 @@ describe('ENGINE-1 (web): модель движка — единственный
     expect(controller).toContain('host!.peek<ChatCapabilities>(\'capabilities\', { chat })');
     const store = strip(readRepo('web/telegram-tt/src/api/parvane/store.ts'));
     expect(store).toContain('currentUserBannedRights: !isChannel');
-    expect(store).toContain('bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id))');
+    expect(store).toContain('const caps = ParvaneStore.capabilitiesOf?.(info.group_id);');
+    expect(store).toContain('extraBannedRights(bannedRightsFromCapabilities(caps), defaults)');
+    // Меню сообщений админа (удалить у всех, закреп) — тоже по capabilities
+    expect(store).toContain('adminRightsWithCapabilities(toAdminRights(selfMember?.admin_rights, isChannel), caps)');
     expect(store).toContain('extraBannedRights(');
   });
 });

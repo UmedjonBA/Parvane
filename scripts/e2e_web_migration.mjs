@@ -128,6 +128,18 @@ async function migrateProfile(who) {
   }
   try {
     await waitReady(session.page);
+    // FR-071: частная группа сида с открытым фото — владелец (alice1, первым из устройств аккаунта) перезаливает
+    // его с секретом; выгрузка — после перезалива
+    const reuploads = who === 'alice1' && summary.photoGroup;
+    if (reuploads) {
+      const deadline = Date.now() + READY_TIMEOUT_MS;
+      while (!session.logs.some((l) => /фото группы [0-9a-f]+ перезалито с секретом/.test(l))) {
+        if (Date.now() > deadline) throw new Error('фото частной группы не перезалито (needs{group_avatar_reupload})');
+        // eslint-disable-next-line no-await-in-loop
+        await pause(1000);
+      }
+      results.push({ step: `${who}: открытое фото группы перезалито с секретом`, ok: true });
+    }
     await pause(SETTLE_MS);
     const engine = await session.page.evaluate(() => window.__parvaneDiagCallApi('parvaneAuditDump', { source: 'engine' }));
     const host = await session.page.evaluate(() => window.__parvaneDiagCallApi('parvaneAuditDump'));
@@ -137,7 +149,13 @@ async function migrateProfile(who) {
     writeFileSync(join(OUT, `web-${who}.host.jsonl`), host || '');
     const fromEngine = diff(before, after, `${who}-engine`);
     const fromHost = diff(before, join(OUT, `web-${who}.host.jsonl`), `${who}-host`);
-    const ok = fromEngine.code === 0;
+    // Ожидаемое изменение — только сведения группы с перезалитым фото (новый файл и отпечаток секрета, FR-071):
+    // одна строка вида `group`; у владельца, перезалившего фото, — ровно одна
+    const r = fromEngine.report;
+    const changed = r.changed_by_kind || {};
+    const onlyPhoto = Object.keys(changed).every((k) => k === 'group') && (changed.group || 0) <= 1
+      && (!reuploads || changed.group === 1);
+    const ok = fromEngine.code === 0 || (summary.photoGroup && r.lost === 0 && !r.unexpected_added && onlyPhoto);
     results.push({
       step: `${who}: сверка`, ok, ms: Date.now() - started, engine: fromEngine.report, host: fromHost.report,
     });

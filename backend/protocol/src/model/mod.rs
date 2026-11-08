@@ -661,6 +661,11 @@ impl Engine {
         for (op_hex, pt) in unsent {
             self.send_state_raw(&op_hex, &pt, w);
         }
+        // FR-071: открытое фото частной группы, которое ещё не перезалито (перенос прерван после нужды, хост закрыт
+        // до перезалива), — нужда снова при каждом открытии; хост сверяет журнал группы перед перезаливом
+        if self.open_state == OpenState::Ready {
+            self.avatar_reupload_needs(w);
+        }
         Ok(())
     }
 
