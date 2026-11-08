@@ -226,8 +226,14 @@ try {
 
   // ── без связи: X правит значок и заметку и останавливается, не дослав ─────────
   await step('X (без связи): значок папки 🏠 и заметка carol, остановка', async () => {
+    // Снятый adb reverse не рвёт уже открытое соединение — X перезапускается без него (на самом деле без связи)
+    adb('shell', 'am', 'force-stop', PKG);
     adb('reverse', '--remove', `tcp:${GW_PORT}`);
-    await new Promise((r) => { setTimeout(r, 3000); });
+    await new Promise((r) => { setTimeout(r, 2000); });
+    markX();
+    adb('shell', 'am', 'start', '-n', `${PKG}/org.thunderdog.challegram.MainActivity`);
+    await xWait(/v2: сессия запускается/, 60000);
+    await new Promise((r) => { setTimeout(r, 5000); });
     await xCommand({ op: 'folder_icon', title: base.title, icon: '🏠' });
     await xCommand({ op: 'contact_note', peer: CAROL, note: NOTE });
     await xShows({ ...base, emoticon: '🏠', note: NOTE }, 20000);
