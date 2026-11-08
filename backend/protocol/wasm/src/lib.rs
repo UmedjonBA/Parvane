@@ -1859,15 +1859,4 @@ impl PvEngine {
     pub fn engine_info(&self) -> String {
         parvane_protocol::engine_info_json()
     }
-
-    /// Переходный период web (spec 035 T114): ключи личного состояния прежнего клиента — в модель. Ключи
-    /// переходят внутри WASM и в JS не выходят; результат — итог движка (`Outcome`, JSON) либо `{"error": …}`.
-    #[wasm_bindgen(js_name = adoptStateKeys)]
-    pub fn adopt_state_keys(&mut self, client: &PvClient) -> String {
-        let keys = client.inner.state_keys_all();
-        match self.inner.adopt_state_keys(&keys) {
-            Ok(o) => serde_json::to_string(&o).unwrap_or_else(|_| parvane_protocol::model::err_json(ProtoError::Malformed)),
-            Err(e) => parvane_protocol::model::err_json(e),
-        }
-    }
 }

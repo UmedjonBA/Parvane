@@ -1109,10 +1109,11 @@ describe('PROTO-1: в клиенте нет собственного разбо�
       // JSON разбирается только из ответов движка (proto3-JSON pbjson) и своих настроек
       const parses = source.match(/JSON\.parse\(([^)]*)/g) || [];
       parses.forEach((call) => {
-        // (журнал состояния: `session` — сессия движка, `host.decode` — движок; `this.engine` — модель в engine.ts)
+        // (журнал состояния: `session` — сессия движка, `host.decode` — движок; `this.engine` — модель в engine.ts;
+        // spec 035 T113: `out.result_json` — результат `clientCall` модели, `clientEvents` — события записей от модели)
         const sources = [
           'pv\\.', 'codec\\.decode', 'client\\.', 'session\\.', 'host\\.decode', 'this\\.engine\\.', 'String\\(e$',
-          'localStorage\\.',
+          'localStorage\\.', 'out\\.result_json', 'clientEvents\\.',
         ];
         expect(call, `${file}: ${call}`).toMatch(new RegExp(`JSON\\.parse\\((${sources.join('|')})`));
       });
