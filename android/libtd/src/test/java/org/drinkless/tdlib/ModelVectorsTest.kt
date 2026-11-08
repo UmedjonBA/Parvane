@@ -12,7 +12,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * spec 035 T130 (contracts/engine-api.md «Векторы»): векторы модели движка `proto/parvane/vectors/model/*.json` через
+ * spec 035 T130 (contracts/engine-api.md «Векторы»): векторы модели движка `proto/parvane/vectors/model/` (все наборы) через
  * JNI → хост ядра `parvane::engine::Host` (тот же, что desktop `model_vectors_tests.cpp`) над НАСТОЯЩИМ файловым
  * хранилищем `store_fs` во временном каталоге. Тот же прогон, что `cargo test -p parvane-protocol --test
  * model_vectors`, web `modelVectors.test.ts`, ctest ядра `model_vectors`.
