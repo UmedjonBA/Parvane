@@ -41,7 +41,8 @@ run_case() { # run_case <имя> <шаг, на котором убить про�
   [ ! -e "$v2/engine-migrated" ] || bad "$name: профиль уже помечен перенесённым"
   if [ -n "$killAt" ]; then
     p=$(start_client "$A" alice@local PARVANE_NO_LINK_OFFER=1 PARVANE_AUTOLINK_GRANT=1)
-    if wait_log "$log" "перенос прежнего состояния, шаг $killAt" 180; then
+    # Точка хода может проскочить за один шаг движка — убиваем на ней или на следующей
+    if wait_log "$log" "перенос прежнего состояния, шаг ($killAt|$((killAt + 1))) " 180; then
       kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null
       ok "$name: процесс убит на шаге M$killAt"
     else

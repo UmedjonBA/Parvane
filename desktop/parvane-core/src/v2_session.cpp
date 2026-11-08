@@ -3745,7 +3745,12 @@ json Session::stateSync(const json &desired, const std::vector<std::string> &kin
     // Своя правка — сначала в журнал, затем чужие записи (иначе снимок откатит её). Не дошла — исключение: хост
     // держит вид «несохранённым» (T150) и досылает при следующем подключении
     if (desired.is_object() && !kinds.empty() && !pushDesiredLocked(desired, kinds)) throw V2Error("ERROR_CODE_UNAVAILABLE");
-    const bool changed = pullStateLocked();
+    pullStateLocked();
+    // «Изменилось» — относительно того, что хост показывал последним (state-base), а не относительно этого синка:
+    // запись другого устройства модель применяет уже при разборе записи инбокса (уведомление журнала в режиме
+    // хоста), к синку хоста журнал бывает сведён — и хост не показывал правку другого устройства
+    const auto snap = state_->snapshot();
+    const bool changed = !(stateBase_.is_object() && snap == stateBase_);
     if (changed) mergeSharedInvitesLocked();
     return json{{"changed", changed}, {"snapshot", projectStateLocked()}};
 }
