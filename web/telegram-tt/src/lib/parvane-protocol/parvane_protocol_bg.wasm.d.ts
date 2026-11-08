@@ -16,6 +16,7 @@ export const encodeMethodRequest: (a: number, b: number, c: number, d: number, e
 export const encodePing: (a: number, b: bigint) => void;
 export const encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
 export const encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const engineInfo: (a: number) => void;
 export const generateRecoveryKey: (a: number) => void;
 export const grantRootBackup: (a: number, b: number, c: number) => void;
 export const grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -199,6 +200,7 @@ export const pvstate_syncRequest: (a: number, b: number) => void;
 export const recoveryTgKeypair: (a: number) => void;
 export const recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
+export const schemaMessageNames: (a: number) => void;
 export const sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const splitSyncResponse: (a: number, b: number, c: number) => void;
 export const start: () => void;

@@ -728,7 +728,7 @@ export class PvState {
 export function decodeFrame(bytes: Uint8Array): any;
 
 /**
- * Байты ответа → proto3-JSON по полному имени типа.
+ * Байты → proto3-JSON по полному имени типа (лимиты схемы — до разбора). Незнакомый тип — `UnknownMethod`.
  */
 export function decodeMessage(type_name: string, bytes: Uint8Array): string;
 
@@ -750,7 +750,8 @@ export function encodeAuth(token: string): Uint8Array;
 export function encodeHello(channel: number, client_kind: string, client_version: string): Uint8Array;
 
 /**
- * proto3-JSON → байты сообщения по полному имени типа (тела запросов из JS).
+ * proto3-JSON → байты сообщения по полному имени типа — для ВСЕХ сообщений схемы (spec 035, FR-050:
+ * тонкий вызов сгенерированного `type_codec`). Незнакомый тип — `UnknownMethod`.
  */
 export function encodeMessage(type_name: string, json: string): Uint8Array;
 
@@ -774,6 +775,11 @@ export function encodeRequest(id: bigint, method: string, body: Uint8Array, time
  * уже приходят байтами (`decodeFrame` → `chunk.data`).
  */
 export function encodeUploadChunk(upload_id: string, index: number, bucket: number, data: Uint8Array): Uint8Array;
+
+/**
+ * spec 035 (FR-046, contracts/versioning.md): `engineInfo()` этой сборки движка (JSON).
+ */
+export function engineInfo(): string;
 
 export function generateRecoveryKey(): string;
 
@@ -827,6 +833,11 @@ export function recoveryTgOpen(secret: Uint8Array, user: string, device_id: stri
 export function runConformanceVectors(suite: string, json: string): number;
 
 /**
+ * Полные имена всех сообщений схемы (тесты кодеков во всех обвязках, spec 035 T012).
+ */
+export function schemaMessageNames(): string;
+
+/**
  * C1-06: новый ключ восстановления (184 бита, `XXXX-XXXX-…`, 10 групп).
  * Жалоба администратору сервера (spec 024): JSON жалобы, запечатанный его открытым ключом
  * (`ServerDescribeResponse.report_public_key`); `reporter` — свой адрес (сервер берёт его из сессии).
@@ -878,6 +889,7 @@ export interface InitOutput {
     readonly encodePing: (a: number, b: bigint) => void;
     readonly encodeRequest: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly encodeUploadChunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly engineInfo: (a: number) => void;
     readonly generateRecoveryKey: (a: number) => void;
     readonly grantRootBackup: (a: number, b: number, c: number) => void;
     readonly grantWithRootBackup: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1061,6 +1073,7 @@ export interface InitOutput {
     readonly recoveryTgKeypair: (a: number) => void;
     readonly recoveryTgOpen: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly runConformanceVectors: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly schemaMessageNames: (a: number) => void;
     readonly sealReport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly splitSyncResponse: (a: number, b: number, c: number) => void;
     readonly start: () => void;

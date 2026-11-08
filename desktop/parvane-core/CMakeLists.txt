@@ -51,6 +51,8 @@ add_library(parvane_core STATIC
     src/linking.cpp
     src/blobcrypt.cpp
     src/storecrypt.cpp
+    src/store_fs.cpp
+    src/gen/model.cpp
     src/local_files.cpp
     src/keybackup.cpp
     src/keybundle.cpp
@@ -105,16 +107,18 @@ if (PARVANE_CORE_BUILD_PROBE)
     set(PARVANE_VECTORS ${CMAKE_CURRENT_SOURCE_DIR}/../../proto/parvane/vectors)
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 v2_session
               l2_ticker reconnect_backoff queue_watchdog transport local_files blob_download dev_hooks chat_rules
-              history_sync client_safety)
+              history_sync client_safety store_fs)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
     endforeach()
     # NAT-07/08/14: тест перехватывает SSL_read/SSL_write/SSL_free (dlsym RTLD_NEXT) и поднимает свой TLS-сервер
     target_link_libraries(parvane_transport_tests PRIVATE OpenSSL::SSL OpenSSL::Crypto dl pthread)
+    # spec 035 T016/T017: общий набор адаптера хранилища (proto/parvane/vectors/storage/adapter.json)
+    target_compile_definitions(parvane_store_fs_tests PRIVATE PARVANE_VECTORS_DIR="${PARVANE_VECTORS}")
     # Живой тест сессии гоняет и разделы «План»/«Облако» поверх сессии (spec 029, T026)
     target_link_libraries(parvane_v2_session_tests PRIVATE parvane_sections)
     # Общие векторы conformance v2 (SEAL-1, GSEAL-1, приглашения) через C ABI и векторы форматов web ↔ desktop
-    foreach(t protocol_vectors webcompat)
+    foreach(t protocol_vectors webcompat engine_abi)
         add_executable(parvane_${t}_tests tests/${t}_tests.cpp)
         target_link_libraries(parvane_${t}_tests PRIVATE parvane_core)
         target_include_directories(parvane_${t}_tests PRIVATE ${PARVANE_BACKEND_DIR}/protocol/ffi/include)
@@ -123,8 +127,8 @@ if (PARVANE_CORE_BUILD_PROBE)
 
     enable_testing()
     foreach(t crypto blobcrypt storecrypt linking call_session call_manager map_tiles pack poll v2 l2_ticker
-              reconnect_backoff queue_watchdog protocol_vectors webcompat transport local_files blob_download dev_hooks chat_rules
-              history_sync client_safety)
+              reconnect_backoff queue_watchdog protocol_vectors webcompat engine_abi transport local_files blob_download dev_hooks chat_rules
+              history_sync client_safety store_fs)
         add_test(NAME ${t} COMMAND parvane_${t}_tests)
     endforeach()
     # Тесты разделов (порт vitest web): по бинарю на файл

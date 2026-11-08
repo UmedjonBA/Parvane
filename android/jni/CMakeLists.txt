@@ -41,6 +41,8 @@ add_library(parvane_core STATIC
     ${CORE}/src/linking.cpp
     ${CORE}/src/blobcrypt.cpp
     ${CORE}/src/storecrypt.cpp
+    ${CORE}/src/store_fs.cpp
+    ${CORE}/src/gen/model.cpp
     ${CORE}/src/local_files.cpp
     ${CORE}/src/keybackup.cpp
     ${CORE}/src/keybundle.cpp
