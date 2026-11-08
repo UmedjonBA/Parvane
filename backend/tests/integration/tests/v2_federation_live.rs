@@ -910,3 +910,79 @@ async fn federation_download_larger_than_stream_window() {
         panic!("{e:?}{}", fail_logs(&a, &b));
     }
 }
+
+/// Версии уведомлений группы `group` в инбоксе устройства (сырым `msg.inbox.sync`, без клиента).
+fn group_notices(d: &mut Dev, group: &parvane_protocol::pb::parvane::core::v2::Ref) -> Vec<u64> {
+    use parvane_protocol::pb::parvane::msg::v2::inbox_record;
+    let b = d.id.call("msg.inbox.sync", mpb::InboxSyncRequest { after_seq: 0, max_bytes: 0 }.encode_to_vec()).unwrap();
+    mpb::InboxSyncResponse::decode(b.as_slice())
+        .unwrap()
+        .records
+        .iter()
+        .filter_map(|r| match &r.item {
+            Some(inbox_record::Item::GroupState(n)) if n.group.as_ref() == Some(group) => Some(n.version),
+            _ => None,
+        })
+        .collect()
+}
+
+/// spec 035 T074 (PV-014, US7): сервер B шлёт `S2sInboxPush` своей группы для `anya@a`, которая на неё не
+/// подписана (не вступала) — запись в инбокс не кладётся. После `group.remote.subscribe` тот же пуш доходит
+/// (путь доставки исправен — отказ именно из-за подписки). Без правки PV-014 запись клалась сразу.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn federation_push_of_unsubscribed_group_is_dropped() {
+    use parvane_protocol::pb::parvane::core::v2::{federation_out, FederationOut, Ref, S2sInboxPush};
+    use parvane_protocol::pb::parvane::group::v2 as gpb;
+    use parvane_protocol::pb::parvane::msg::v2::{inbox_record, GroupStateNotice, InboxRecord};
+    let Some((a, b)) = tokio::task::spawn_blocking(|| two_stacks(&[], &[])).await.unwrap() else { return };
+    let addr_a = a.gateway_tcp.clone();
+    let nats_b = b.fed_env.iter().find(|(k, _)| *k == "PARVANE_NATS_URL").map(|(_, v)| v.clone()).unwrap();
+    let tag = free_port();
+    let stacks = std::sync::Arc::new(std::sync::Mutex::new((a, b)));
+    let handle = tokio::runtime::Handle::current();
+    let r = tokio::task::spawn_blocking(move || {
+        let anya_u = format!("anya{tag}@{A}");
+        let mut anya = Dev::register(&addr_a, &anya_u);
+        let group = Ref { domain: B.into(), id: vec![0x42; 16] };
+        let nc = handle.block_on(async_nats::connect(&nats_b)).expect("nats B");
+        // Роль messenger сервера B: пуш записи группы B участнику на A (очередь federation B → A)
+        let push = |version: u64| {
+            let record = InboxRecord { seq: 0, received_ms: 0, item: Some(inbox_record::Item::GroupState(GroupStateNotice { group: Some(group.clone()), version })) };
+            let out = FederationOut {
+                dest_domain: A.into(),
+                timeout_ms: 0,
+                kind: Some(federation_out::Kind::InboxPush(S2sInboxPush {
+                    group: Some(group.clone()),
+                    recipients: vec![UserRef { address: anya_u.clone() }],
+                    record: record.encode_to_vec(),
+                })),
+            };
+            handle
+                .block_on(nc.request(parvane_protocol::registry_gen::FEDERATION_OUT.to_string(), out.encode_to_vec().into()))
+                .expect("federation_out B");
+        };
+        push(1);
+        std::thread::sleep(Duration::from_secs(4));
+        assert_eq!(group_notices(&mut anya, &group), Vec::<u64>::new(), "запись чужой группы без подписки не кладётся");
+
+        // Подписка на группу B — тот же путь доставляет
+        anya.id
+            .call("group.remote.subscribe", gpb::RemoteSubscribeRequest { group: Some(group.clone()) }.encode_to_vec())
+            .expect("group.remote.subscribe");
+        push(2);
+        eventually("запись подписанной группы", || (group_notices(&mut anya, &group) == vec![2]).then_some(()));
+
+        // Отписка — снова отбрасывается
+        anya.id
+            .call("group.remote.unsubscribe", gpb::RemoteUnsubscribeRequest { group: Some(group.clone()) }.encode_to_vec())
+            .expect("group.remote.unsubscribe");
+        push(3);
+        std::thread::sleep(Duration::from_secs(4));
+        assert_eq!(group_notices(&mut anya, &group), vec![2], "после отписки — снова не кладётся");
+    })
+    .await;
+    if let Err(e) = r {
+        let g = stacks.lock().unwrap();
+        panic!("{e:?}{}", fail_logs(&g.0, &g.1));
+    }
+}
