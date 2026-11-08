@@ -134,3 +134,69 @@ fn content_kinds_match_web_mapping() {
     }
     assert!(checked > 30, "сверено {checked}");
 }
+
+/// spec 035 T114 (ENGINE-1): обратный перенос `wireToV2` и разбор для клиента (`contentView`) — движок, не web.
+/// Строка формата экспорта → `Content` → строка: то же, что дала строка из исходного `Content` (векторы
+/// `content/kinds.json`); класс и содержимое `contentView` совпадают с `class_of`/`content_to_wire`.
+#[test]
+fn wire_to_content_roundtrips_kinds() {
+    use parvane_protocol::model::views;
+    use parvane_protocol::pb::parvane::msg::v2::Content;
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto/parvane/vectors/content/kinds.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+    let mut checked = 0;
+    for case in v["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let bytes = hex::decode(case["input"]["content_hex"].as_str().unwrap()).unwrap();
+        let Ok(c) = parvane_protocol::codec::decode_checked::<Content>(&bytes, parvane_protocol::limits::Origin::Client) else { continue };
+        let view = views::content_view(&c);
+        let Some(wire) = views::content_to_wire(&c) else {
+            assert!(view.get("wire").is_none(), "{name}: wire без сообщения");
+            continue;
+        };
+        assert_eq!(view["wire"], wire, "{name}: contentView.wire");
+        if wire["kind"] == "chat_mode" {
+            // Режим L2 собирает контроллер (web `wireToV2` его тоже не принимал)
+            assert!(views::wire_to_content(wire.as_object().unwrap(), None).is_err(), "{name}");
+            continue;
+        }
+        let reply = view.get("replyTo").and_then(Value::as_str).map(str::to_string);
+        let back = views::wire_to_content(wire.as_object().unwrap(), reply.as_deref()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(views::content_to_wire(&back).unwrap(), wire, "{name}: wire → Content → wire");
+        checked += 1;
+    }
+    assert!(checked > 15, "сверено {checked}");
+}
+
+#[test]
+fn content_view_mutations() {
+    use parvane_protocol::model::views;
+    use parvane_protocol::pb::parvane::msg::v2::{content, Content, Delete, Edit, Location, MessageRef, Pin, Reaction, Receipt, ReceiptKind, Text};
+    let id = vec![0x01u8; 16];
+    let uuid = "01010101-0101-0101-0101-010101010101";
+    let r = || Some(MessageRef { op_id: id.clone() });
+    let with = |k: content::Kind| Content { kind: Some(k), ..Default::default() };
+    let v = views::content_view(&with(content::Kind::Edit(Edit { target: r(), text: Some(Text { text: "новый".into(), ..Default::default() }), location: None })));
+    assert_eq!(v["class"], "mutation");
+    assert_eq!(v["mutation"], serde_json::json!({"kind": "edit", "target": uuid, "patch": {"text": "новый"}}));
+    let v = views::content_view(&with(content::Kind::Edit(Edit { target: r(), text: None, location: Some(Location { latitude: 1.5, longitude: 2.5, ..Default::default() }) })));
+    assert_eq!(v["mutation"]["patch"]["fields"], serde_json::json!({"kind": "location", "lat": 1.5, "long": 2.5}));
+    let v = views::content_view(&with(content::Kind::Delete(Delete { targets: vec![MessageRef { op_id: id.clone() }, MessageRef { op_id: vec![1, 2] }], for_everyone: true })));
+    assert_eq!(v["mutation"], serde_json::json!({"kind": "delete", "targets": [uuid], "forEveryone": true}));
+    let v = views::content_view(&with(content::Kind::Reaction(Reaction { target: r(), emoji: "👍".into(), remove: true })));
+    assert_eq!(v["mutation"], serde_json::json!({"kind": "reaction", "target": uuid, "emoji": ""}));
+    let v = views::content_view(&with(content::Kind::Pin(Pin { target: r(), unpin: true, silent: false })));
+    assert_eq!(v["mutation"], serde_json::json!({"kind": "pin", "target": uuid, "pinned": false}));
+    let v = views::content_view(&with(content::Kind::Receipt(Receipt { kind: ReceiptKind::Read as i32, messages: vec![MessageRef { op_id: id.clone() }] })));
+    assert_eq!(v["mutation"], serde_json::json!({"kind": "receipt", "read": true, "targets": [uuid]}));
+    // Ответ и цитата: UUID ответа — у разбора, цитата — у строки
+    let wire = serde_json::json!({"kind": "text", "text": "да", "reply_quote": {"text": "цитата длинная", "entities": [{"type": "bold", "offset": 0, "length": 6}, {"type": "italic", "offset": 10, "length": 40}]}});
+    let c = views::wire_to_content(wire.as_object().unwrap(), Some(uuid)).unwrap();
+    let v = views::content_view(&c);
+    assert_eq!(v["replyTo"], uuid);
+    assert_eq!(v["wire"]["reply_quote"], serde_json::json!({"text": "цитата длинная", "entities": [{"type": "bold", "offset": 0, "length": 6}]}));
+    // Без ответа цитаты нет; неизвестный вид — отказ
+    let c = views::wire_to_content(wire.as_object().unwrap(), None).unwrap();
+    assert!(c.reply_quote.is_none() && c.reply_to.is_none());
+    assert!(views::wire_to_content(serde_json::json!({"kind": "нет такого"}).as_object().unwrap(), None).is_err());
+}

@@ -453,9 +453,11 @@ android — JVM-юнит `libtd/src/test/.../ParvaneStoreGroupTest.kt` и сце
   sticker/gif, `send_polls` → poll, `embed_links` → text с превью или
   URL-сущностью; `send_messages=false` → любой вид; location не фильтруется).
 
-Реализации: web `api/parvane/groups.ts` (`isContentAllowedForMember`) и
-`api/parvane/sync.ts` (`isHiddenByGroupPermissions`, live + full sync,
-журнал `group-perm-hidden`), композер — `defaultBannedRights` (spec 003);
+Реализации: с spec 035 (T114, ENGINE-1) формула — в движке (`backend/protocol/src/model/capabilities.rs`,
+`GroupFacts::hides` и `capabilities`; ссылка в подписи медиа — тоже ссылка); web своей формулы не держит:
+`api/parvane/sync.ts` (`isHiddenByGroupPermissions` → `contentHidden` модели, live + full sync, журнал
+`group-perm-hidden`; ссылки, которые приёмник разметит при показе, — `autoEntities.ts withDetectedLinks`),
+композер — `currentUserBannedRights` из `capabilities` модели (`defaultBannedRights` — показ прав по умолчанию);
 desktop `parvane-core/include/parvane/group.h` (`isContentAllowedForMember`,
 `contentHasLink`) + `parvane/parvane_client.cpp` (`injectOnMain`, маркер
 «скрыто правами группы»; композер — нативные `defaultRestrictions` через

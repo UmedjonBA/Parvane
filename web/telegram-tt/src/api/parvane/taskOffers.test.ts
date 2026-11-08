@@ -1,11 +1,19 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 /* eslint-disable no-null/no-null -- JSON движка планировщика: null = «не задано» */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
-import { v2Class, v2ToWire, wireToV2 } from './v2/contentMap';
+import { initSync } from '../../lib/parvane-protocol/parvane_protocol';
+import { contentOfWire, contentView, wireOfContent } from './v2/contentMap';
 import {
   buildOfferEvent, findOfferInPlan, getOfferEventEnd, getTaskOfferKind, TaskOfferStore, taskOfferText,
   taskResponseText,
 } from './taskOffers';
+
+// Виды содержимого разбирает движок (spec 035 T114) — WASM нужен и юнит-тестам
+beforeAll(() => {
+  initSync({ module: readFileSync(path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm')) });
+});
 
 describe('задание в чат (spec 011, TASK-1)', () => {
   it('карточка и решения: регистрация, ответы по участникам, поздний ответ побеждает, своё решение', () => {
@@ -112,7 +120,7 @@ describe('задание в чат (spec 011, TASK-1)', () => {
   });
 
   it('содержимое v2 ↔ wire: задание и решение — видимые сообщения', () => {
-    const offer = wireToV2({
+    const offer = contentOfWire({
       kind: 'task_offer', name: 'Отчёт', steps: ['а', 'б'], day: '2026-10-20', minutes: 60, text: '📋 Задание: Отчёт',
     });
     expect(offer).toEqual({
@@ -120,15 +128,15 @@ describe('задание в чат (spec 011, TASK-1)', () => {
         name: 'Отчёт', steps: [{ text: 'а' }, { text: 'б' }], day: '2026-10-20', minutes: 60, text: '📋 Задание: Отчёт',
       },
     });
-    expect(v2Class(offer)).toBe('message');
-    expect(v2ToWire(offer)).toEqual({
+    expect(contentView(offer).class).toBe('message');
+    expect(wireOfContent(offer)).toEqual({
       kind: 'task_offer', name: 'Отчёт', steps: ['а', 'б'], day: '2026-10-20', minutes: 60, text: '📋 Задание: Отчёт',
     });
     const uuid = '0192f0e4-1a2b-7c3d-8e4f-001122334455';
-    const response = wireToV2({ kind: 'task_response', offer: uuid, accepted: false, text: '❌' });
+    const response = contentOfWire({ kind: 'task_response', offer: uuid, accepted: false, text: '❌' });
     expect(response.task_response).toMatchObject({ decision: 'TASK_DECISION_DECLINED', text: '❌' });
-    expect(v2ToWire(response)).toEqual({ kind: 'task_response', offer: uuid, accepted: false, text: '❌' });
-    expect(v2Class(response)).toBe('message');
+    expect(wireOfContent(response)).toEqual({ kind: 'task_response', offer: uuid, accepted: false, text: '❌' });
+    expect(contentView(response).class).toBe('message');
   });
 });
 

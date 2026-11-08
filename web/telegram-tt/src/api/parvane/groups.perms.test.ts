@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { WireGroupInfo, WireMessageContent } from './wire';
 
-import { isContentAllowedForMember, pickPrimaryInvite } from './groups';
+import { historyCall, initSync } from '../../lib/parvane-protocol/parvane_protocol';
+import { withDetectedLinks } from './autoEntities';
+import { pickPrimaryInvite } from './groups';
 import {
   DEFAULT_GROUP_PERMISSIONS, fromBannedRights, ParvaneStore, shouldApplyGroupInfo, toAdminRights, toBannedRights,
   toWireAdminRights,
@@ -154,7 +158,20 @@ describe('права админа ↔ ApiChatAdminRights', () => {
   });
 });
 
-describe('isContentAllowedForMember (FR-009, только на клиентах)', () => {
+// GROUP-2 (FR-009, spec 035 T114): решение приёмного фильтра — у движка; web лишь размечает ссылки так же, как
+// покажет их человеку (`withDetectedLinks`)
+describe('приёмный фильтр GROUP-2 — решение движка', () => {
+  beforeAll(() => {
+    initSync({ module: readFileSync(path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm')) });
+  });
+  const FULL = {
+    send_messages: true, send_media: true, send_stickers_gifs: true, send_polls: true, embed_links: true,
+  };
+  const isContentAllowedForMember = (perms: Record<string, boolean> | undefined, content: WireMessageContent) => (
+    !JSON.parse(historyCall('groupContentHidden', JSON.stringify({
+      perms: { ...FULL, ...perms }, role: 'member', wire: withDetectedLinks(content),
+    })))
+  );
   const text = (extra: Partial<WireMessageContent> = {}): WireMessageContent => ({
     kind: 'text', text: 'hi', ...extra,
   });

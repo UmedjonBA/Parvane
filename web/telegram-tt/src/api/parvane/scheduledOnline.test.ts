@@ -6,7 +6,7 @@ import type { V2Content } from './v2/contentMap';
 
 import { SCHEDULED_WHEN_ONLINE } from '../../config';
 import { decodeMessage, encodeMessage, initSync } from '../../lib/parvane-protocol/parvane_protocol';
-import { v2ToWire, wireToV2 } from './v2/contentMap';
+import { contentOfWire, wireOfContent } from './v2/contentMap';
 import { SCHEDULED_UNTIL_ONLINE, selectDueScheduled } from './localState';
 
 const WASM = path.join(process.cwd(), 'src/lib/parvane-protocol/parvane_protocol_bg.wasm');
@@ -36,9 +36,9 @@ describe('scheduled: send when online (desktop parity)', () => {
 describe('scheduled text without sound', () => {
   it('silent travels inside the serialized Content of ScheduledMessage', () => {
     initSync({ module: readFileSync(WASM) });
-    const content = wireToV2({ kind: 'text', text: 'позже', silent: true });
+    const content = contentOfWire({ kind: 'text', text: 'позже', silent: true });
     const bytes = encodeMessage('parvane.msg.v2.Content', JSON.stringify(content));
-    const back = v2ToWire(JSON.parse(decodeMessage('parvane.msg.v2.Content', bytes)) as V2Content);
+    const back = wireOfContent(JSON.parse(decodeMessage('parvane.msg.v2.Content', bytes)) as V2Content);
     expect(back).toMatchObject({ kind: 'text', text: 'позже', silent: true });
   });
 });

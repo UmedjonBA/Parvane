@@ -533,7 +533,7 @@
         }
       ],
       "clients": {
-        "web": "web/telegram-tt/src/api/parvane/groups.ts (isContentAllowedForMember), sync.ts (isHiddenByGroupPermissions), store.ts (toBannedRights)",
+        "web": "решение — движок (backend/protocol/src/model/capabilities.rs GroupFacts::hides/capabilities; spec 035 T114): web sync.ts (isHiddenByGroupPermissions → contentHidden модели, разметка ссылок autoEntities.ts withDetectedLinks), store.ts (currentUserBannedRights из capabilities модели; toBannedRights — показ прав по умолчанию)",
         "desktop": [
           "parvane-core/include/parvane/group.h (isContentAllowedForMember, contentHasLink)",
           "tdesktop/Telegram/SourceFiles/parvane/parvane_client.cpp (injectOnMain: скрыто правами группы; composer — defaultRestrictions)",

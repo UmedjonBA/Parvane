@@ -6,7 +6,7 @@ import type { ApiMessage } from '../types';
 import type { V2Content } from './v2/contentMap';
 
 import { decodeMessage, encodeMessage, initSync } from '../../lib/parvane-protocol/parvane_protocol';
-import { truncateUtf8, v2ToWire, wireToV2 } from './v2/contentMap';
+import { contentOfWire, truncateUtf8, wireOfContent } from './v2/contentMap';
 import {
   ALBUM_MAX_ITEMS,
   albumFields,
@@ -32,24 +32,24 @@ function fixedRandom(seed: number) {
 
 describe('MEDIA-2: поля провода', () => {
   it('спойлер, подпись над медиа и альбом проходят wire → v2 → wire', () => {
-    const v2 = wireToV2({
+    const v2 = contentOfWire({
       ...PHOTO, caption: 'подпись', spoiler: true, invert_media: true, album_id: 'QUJD',
     });
     expect(v2.media?.spoiler).toBe(true);
     expect(v2.media?.album_id).toBe('QUJD');
     expect(v2.invert_media).toBe(true);
-    const back = v2ToWire(v2);
+    const back = wireOfContent(v2);
     expect(back).toMatchObject({ spoiler: true, invert_media: true, album_id: 'QUJD' });
   });
 
   it('спойлер не ставится голосовому и файлу', () => {
-    expect(wireToV2({ kind: 'voice', file_id: 'v', spoiler: true }).media?.spoiler).toBeUndefined();
-    expect(v2ToWire({ media: { kind: 'MEDIA_KIND_FILE', file_id: 'x', spoiler: true } })?.spoiler).toBeUndefined();
+    expect(contentOfWire({ kind: 'voice', file_id: 'v', spoiler: true }).media?.spoiler).toBeUndefined();
+    expect(wireOfContent({ media: { kind: 'MEDIA_KIND_FILE', file_id: 'x', spoiler: true } })?.spoiler).toBeUndefined();
   });
 
   it('движок (WASM) знает поля: Content.invert_media, Media.spoiler, Media.album_id', () => {
     initSync({ module: readFileSync(WASM) });
-    const v2 = wireToV2({
+    const v2 = contentOfWire({
       ...PHOTO, caption: 'x', spoiler: true, invert_media: true, album_id: btoa('0123456789abcdef'),
     });
     const decoded = JSON.parse(decodeMessage('parvane.msg.v2.Content', encodeMessage(
@@ -136,9 +136,9 @@ describe('QUOTE-1: цитата в ответе', () => {
     const quote = quoteFromReplyInfo(replyInfo);
     expect(quote).toMatchObject({ text: 'важная часть', offset: 7 });
     expect(quote?.entities?.[0]).toMatchObject({ type: 'bold', offset: 0, length: 6 });
-    const v2 = wireToV2({ kind: 'text', text: 'ответ', reply_quote: quote }, REPLY_UUID);
+    const v2 = contentOfWire({ kind: 'text', text: 'ответ', reply_quote: quote }, REPLY_UUID);
     expect(v2.reply_quote?.text).toBe('важная часть');
-    const back = v2ToWire(v2);
+    const back = wireOfContent(v2);
     expect(back?.reply_quote?.text).toBe('важная часть');
     const info = replyInfoWithQuote(42, back?.reply_quote);
     expect(info).toMatchObject({ replyToMsgId: 42, isQuote: true, quoteOffset: 7 });
@@ -147,14 +147,14 @@ describe('QUOTE-1: цитата в ответе', () => {
 
   it('без ответа цитата не уходит и не принимается', () => {
     const quote = quoteFromReplyInfo(replyInfo);
-    expect(wireToV2({ kind: 'text', text: 'x', reply_quote: quote }).reply_quote).toBeUndefined();
-    expect(v2ToWire({ text: { text: 'x' }, reply_quote: { text: 'q' } })?.reply_quote).toBeUndefined();
+    expect(contentOfWire({ kind: 'text', text: 'x', reply_quote: quote }).reply_quote).toBeUndefined();
+    expect(wireOfContent({ text: { text: 'x' }, reply_quote: { text: 'q' } })?.reply_quote).toBeUndefined();
     expect(quoteFromReplyInfo({ type: 'message', replyToMsgId: 5 })).toBeUndefined();
   });
 
   it('движок (WASM) знает Content.reply_quote', () => {
     initSync({ module: readFileSync(WASM) });
-    const v2 = wireToV2({ kind: 'text', text: 'ответ', reply_quote: { text: 'цитата', offset: 3 } }, REPLY_UUID);
+    const v2 = contentOfWire({ kind: 'text', text: 'ответ', reply_quote: { text: 'цитата', offset: 3 } }, REPLY_UUID);
     const decoded = JSON.parse(decodeMessage('parvane.msg.v2.Content', encodeMessage(
       'parvane.msg.v2.Content', JSON.stringify(v2),
     ))) as V2Content;
@@ -164,14 +164,14 @@ describe('QUOTE-1: цитата в ответе', () => {
   it('длинная цитата режется по байтам UTF-8 (max_len схемы), символ не разрывается, движок её принимает', () => {
     const utf8 = (text: string) => new TextEncoder().encode(text).length;
     const cyrillic = 'ж'.repeat(600);
-    const v2 = wireToV2({ kind: 'text', text: 'ответ', reply_quote: { text: cyrillic } }, REPLY_UUID);
+    const v2 = contentOfWire({ kind: 'text', text: 'ответ', reply_quote: { text: cyrillic } }, REPLY_UUID);
     expect(utf8(v2.reply_quote!.text!)).toBe(1024);
     expect(v2.reply_quote!.text).toBe('ж'.repeat(512));
     // Эмодзи (4 байта, 2 единицы UTF-16) на границе не разрывается
     const emoji = truncateUtf8(`${'a'.repeat(1022)}😀`, 1024);
     expect(emoji).toBe('a'.repeat(1022));
     expect(truncateUtf8('abc', 1024)).toBe('abc');
-    expect(utf8(v2ToWire({ text: { text: 'x' }, reply_to: { op_id: 'AA==' }, reply_quote: { text: cyrillic } })!
+    expect(utf8(wireOfContent({ text: { text: 'x' }, reply_to: { op_id: 'AA==' }, reply_quote: { text: cyrillic } })!
       .reply_quote!.text)).toBeLessThanOrEqual(1024);
     initSync({ module: readFileSync(WASM) });
     expect(() => encodeMessage('parvane.msg.v2.Content', JSON.stringify(v2))).not.toThrow();

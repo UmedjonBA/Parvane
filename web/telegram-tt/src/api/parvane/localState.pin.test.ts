@@ -1,6 +1,7 @@
 // spec 035 T039 (PV-020, FR-026): личные данные — контакты, своё имя и заметка контакта (CONTACT-1),
-// блокировки, ссылки-приглашения, кэш групп — не лежат в localStorage открытым текстом; после перезапуска
-// читаются из хранилища движка (`hydrate()`). Данные выдуманные.
+// блокировки, ссылки-приглашения — не лежат в localStorage открытым текстом; после перезапуска читаются из
+// хранилища движка (`hydrate()`). Своего кэша сведений групп у web с T118 нет (журналы групп — в модели движка).
+// Данные выдуманные.
 import {
   beforeEach, describe, expect, it, vi,
 } from 'vitest';
@@ -9,12 +10,9 @@ import { createLocalState } from './localState';
 import { SecureE2eStorage, secureStorageInternals } from './secureStorage';
 
 const SELF = 'pin-local@local';
-const MARKERS = ['заметка-тест', 'Имя-маркер', 'blocked-marker@x', 'invite-marker', 'Группа-маркер',
-  'contact-marker@x'];
+const MARKERS = ['заметка-тест', 'Имя-маркер', 'blocked-marker@x', 'invite-marker', 'contact-marker@x'];
 
 type PersonalModule = {
-  saveGroupCache?: (user: string, info: unknown, isListed: boolean) => void;
-  loadGroupCache?: (user: string) => { name?: string }[];
   flushPersonal?: () => Promise<void>;
   forgetPersonal?: (user: string) => void;
 };
@@ -60,7 +58,7 @@ describe('PV-020: личные данные не в localStorage', () => {
     await SecureE2eStorage.clear(SELF);
   });
 
-  it('контакты, заметка, блокировка, приглашение, кэш группы — ни одного маркера в localStorage', async () => {
+  it('контакты, заметка, блокировка, приглашение — ни одного маркера в localStorage', async () => {
     const state = makeState();
     await state.hydrate();
     state.saveContacts(['contact-marker@x']);
@@ -72,8 +70,7 @@ describe('PV-020: личные данные не в localStorage', () => {
     // Модуль появился в spec 035; имя собрано, чтобы прежний код падал проверкой, а не разбором импорта
     const personalPath = './personal' + 'Store';
     const personal = await import(/* @vite-ignore */ personalPath).catch(() => undefined) as PersonalModule | undefined;
-    expect(personal?.saveGroupCache).toBeTypeOf('function');
-    personal!.saveGroupCache!(SELF, { group_id: 'g1', name: 'Группа-маркер', members: [] }, true);
+    expect(personal?.flushPersonal).toBeTypeOf('function');
 
     const dump = localStorageDump();
     MARKERS.forEach((marker) => expect(dump).not.toContain(marker));
@@ -88,7 +85,6 @@ describe('PV-020: личные данные не в localStorage', () => {
     expect(again.loadContactInfo()['bob@x']).toMatchObject({ note: 'заметка-тест' });
     expect(again.isBlocked('blocked-marker@x')).toBe(true);
     expect(again.loadInviteLinks().g1?.link).toContain('invite-marker');
-    expect(personal!.loadGroupCache!(SELF).map((g) => g.name)).toEqual(['Группа-маркер']);
     const after = localStorageDump();
     MARKERS.forEach((marker) => expect(after).not.toContain(marker));
   });
