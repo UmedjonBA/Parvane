@@ -148,6 +148,15 @@ fn disp(d: Disposition) -> &'static str {
     }
 }
 
+/// spec 035 T128 (US5, FR-041): критичная заглушка — та же `"stub"` (прежние разборы клиентов), плюс
+/// `"critical": true`: клиент показывает «обновите приложение» вместо обычного «не поддерживается».
+fn with_critical(mut v: Value, d: Disposition) -> Value {
+    if d == Disposition::StubCritical {
+        v["critical"] = json!(true);
+    }
+    v
+}
+
 /// Доказательство авторства (`proof`, base64) — в событие, если есть (REPORT-1, A0008-2).
 fn with_proof(mut v: Value, proof: &[u8]) -> Value {
     if !proof.is_empty() {
@@ -159,14 +168,14 @@ fn with_proof(mut v: Value, proof: &[u8]) -> Value {
 fn event_json(e: &Event) -> Value {
     let content = |c: &Content| serde_json::to_value(c).unwrap_or(Value::Null);
     match e {
-        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
+        Event::Direct { seq, chat, from, device, op_id, ts_ms, content: c, disposition, proof } => with_critical(with_proof(json!({
             "type": "direct", "seq": seq, "chat": chat, "from": from, "device": device,
             "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof),
-        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_proof(json!({
+        }), proof), *disposition),
+        Event::Group { seq, group, from, device, op_id, ts_ms, content: c, disposition, proof } => with_critical(with_proof(json!({
             "type": "group", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "from": from,
             "device": device, "opId": uuid_str(op_id), "tsMs": ts_ms, "content": content(c), "disposition": disp(*disposition)
-        }), proof),
+        }), proof), *disposition),
         Event::LegacyV1 { seq, json } => json!({"type": "legacyV1", "seq": seq, "json": String::from_utf8_lossy(json)}),
         Event::GroupChanged { seq, group, version } => json!({"type": "groupChanged", "seq": seq, "group": {"domain": group.domain, "id": hex::encode(&group.id)}, "version": version}),
         Event::DeviceRevoked { seq, device_id } => json!({"type": "deviceRevoked", "seq": seq, "deviceId": device_id}),
@@ -1206,6 +1215,20 @@ pub fn from_b64(s: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn critical_stub_is_marked_in_event() {
+        let ev = |d| Event::Direct {
+            seq: 1, chat: "bob@local".into(), from: "bob@local".into(), device: "d1".into(), op_id: vec![1; 16],
+            ts_ms: 1, content: Content::default(), disposition: d, proof: vec![],
+        };
+        let crit = event_json(&ev(Disposition::StubCritical));
+        assert_eq!(crit["disposition"], json!("stub"));
+        assert_eq!(crit["critical"], json!(true));
+        let plain = event_json(&ev(Disposition::Stub));
+        assert_eq!(plain["disposition"], json!("stub"));
+        assert!(plain.get("critical").is_none());
+    }
 
     #[test]
     fn grant_numbers_are_required_and_not_truncated() {

@@ -3214,3 +3214,49 @@ describe('spec 035 PROTO_MINOR: самописные Hello совпадают с
     expect(Number(match![1])).toBe(engineMinor);
   });
 });
+
+// spec 035 T122 (FR-095, SC-005): ENGINE-1 «смысл решает движок» — desktop. Разбор содержимого, сведение личного
+// состояния и права групп — только в модели движка; клиент переводит готовые представления (`MessageView`,
+// `StateView`, `GroupView`, `Capabilities`) в объекты tdesktop. Модель вызывается только из хоста ядра
+// `engine_host.cpp` (общий с android), хранилище модели — только файловый адаптер `store_fs`.
+// Пункты `it.fails` — то, что на desktop ещё НЕ переведено на модель (T125/T126): пока старый разбор на месте, они
+// «проходят»; как только перевод сделан, vitest требует снять `.fails` — правило закрыто для desktop.
+describe('ENGINE-1: desktop — смысл решает движок', () => {
+  const coreSrc = 'desktop/parvane-core/src';
+  const coreFiles = readdirSync(path.join(REPO_ROOT, coreSrc)).filter((f) => f.endsWith('.cpp'));
+  const tdesktopDir = 'desktop/tdesktop/Telegram/SourceFiles/parvane';
+  const tdesktopFiles = readdirSync(path.join(REPO_ROOT, tdesktopDir)).filter((f) => /\.(cpp|h)$/.test(f));
+  const callsModel = (text: string) => /\bpv_engine_(open|call|free)\b/.test(text);
+
+  it('модель движка (`pv_engine_*`) вызывается только из хоста ядра engine_host.cpp', () => {
+    const offenders = [
+      ...coreFiles.filter((f) => f !== 'engine_host.cpp' && callsModel(readRepo(`${coreSrc}/${f}`))),
+      ...tdesktopFiles.filter((f) => callsModel(readRepo(`${tdesktopDir}/${f}`))),
+    ];
+    expect(offenders).toEqual([]);
+    const host = readRepo(`${coreSrc}/engine_host.cpp`);
+    // Порядок итога: пачка хранилища фиксируется ДО запросов того же итога, затем storeCommitted
+    const commit = host.indexOf('commitJson(');
+    const requests = host.indexOf('st.requests.push_back');
+    const committed = host.indexOf('"storeCommitted"');
+    expect(commit).toBeGreaterThan(0);
+    expect(requests).toBeGreaterThan(commit);
+    expect(committed).toBeGreaterThan(requests);
+  });
+
+  it.fails('v2_content.cpp не разбирает виды содержимого (перевод MessageView, T125)', () => {
+    expect(readRepo(`${coreSrc}/v2_content.cpp`)).not.toMatch(/\bv2Kind\(|\bfromV2\(|"parvane\.msg\.v2\.Content"/);
+  });
+
+  it.fails('parvane_client_state.cpp не сводит личное состояние (StateView, T126)', () => {
+    expect(readRepo(`${tdesktopDir}/parvane_client_state.cpp`)).not.toMatch(/->stateSync\(|->stateAttach\(|kV2StateKinds/);
+  });
+
+  it.fails('сессия ядра не пишет прежний журнал состояния (state.append → намерения модели, T125)', () => {
+    expect(readDesktopSession()).not.toMatch(/"state\.append"|StateSession::open/);
+  });
+
+  it.fails('права групп по типу содержимого — из Capabilities движка, не из chat_rules (GROUP-2, T126)', () => {
+    expect(readRepo('desktop/parvane-core/include/parvane/chat_rules.h')).not.toMatch(/GROUP-2/);
+  });
+});

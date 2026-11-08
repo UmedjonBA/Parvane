@@ -205,6 +205,19 @@ public:
     // или снова needsLinking (событие `needsLinking`).
     void joinWithGrant(std::string material);
 
+    // spec 035 T121 (OPT-024): записи инбокса, накопившиеся к началу разбора, разбираются ПАЧКОЙ — одно сохранение
+    // состояния и один ack на пачку, сохранение на диск раньше ack. Счётчики этой сессии и задержка разбора — для
+    // тестов (holdInboxForTest(true) — записи только копятся; false — разобрать накопленное).
+    struct InboxStats {
+        std::uint64_t records = 0;
+        std::uint64_t persists = 0;
+        std::uint64_t acks = 0;
+        std::uint64_t persistBeforeAck = 0; // ack, перед которым состояние с этими записями уже на диске
+    };
+    [[nodiscard]] InboxStats inboxStats() const;
+    void holdInboxForTest(bool hold);
+    [[nodiscard]] std::size_t pendingInboxForTest();
+
     // Собеседник на v2 (есть журнал устройств)? Блокирующий (сеть при промахе
     // кэша). Кэш: да — 10 мин, нет — 30 с. Не готово/self — false.
     bool isV2Peer(const std::string &address);
@@ -519,6 +532,19 @@ private:
     std::mutex recordsMu_;
     std::deque<std::string> records_;
     void openPendingRecords();
+    std::atomic<bool> inboxHeld_{false};
+    std::atomic<std::uint64_t> statRecords_{0}, statPersists_{0}, statAcks_{0}, statPersistBeforeAck_{0};
+    // OPT-024: снимок состояния снимается под engineMu_, пишется на диск вне его (persistMu_). Номер снимка — под
+    // engineMu_; более старый снимок поверх более нового не пишется.
+    struct Exported {
+        std::uint64_t seq = 0;
+        std::string blob;
+    };
+    std::optional<Exported> exportLocked();
+    bool writeExported(const Exported &e);
+    std::uint64_t exportSeq_ = 0;
+    std::mutex persistMu_;
+    std::uint64_t writtenSeq_ = 0;
     void workerLoop();
     void connectOnce();
     bool connectLocked(std::string *error);

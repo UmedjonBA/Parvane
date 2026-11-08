@@ -1003,7 +1003,7 @@ Incoming interpretDirect(const json &ev, const std::string &self) {
     in.tsMs = tsMs;
     if (str(ev, "disposition") == "stub") {
         in.kind = Incoming::Kind::Stub;
-        in.content = unsupportedContent();
+        in.content = unsupportedContent(ev.value("critical", false));
         return in;
     }
     if (str(ev, "disposition") == "skip") return in;

@@ -942,14 +942,50 @@ void Session::runRequestsLocked(const json &reqs) {
     }
 }
 
-void Session::persistLocked() {
-    if (!client_ || storageKey_.size() != 32) return;
-    counters::get().persist++;
+std::optional<Session::Exported> Session::exportLocked() {
+    if (!client_ || storageKey_.size() != 32) return std::nullopt;
     try {
-        writeStateFile("state", client_->exportState(storageKey_));
+        return Exported{++exportSeq_, client_->exportState(storageKey_)};
     } catch (const std::exception &e) {
         log(std::string("состояние не сохранено: ") + e.what());
+        return std::nullopt;
     }
+}
+
+bool Session::writeExported(const Exported &e) {
+    std::lock_guard<std::mutex> lk(persistMu_);
+    // Уже записан более новый снимок — в нём есть и это состояние
+    if (e.seq <= writtenSeq_) return true;
+    counters::get().persist++;
+    if (!writeStateFile("state", e.blob)) {
+        log("состояние не сохранено: запись файла");
+        return false;
+    }
+    writtenSeq_ = e.seq;
+    return true;
+}
+
+void Session::persistLocked() {
+    if (const auto e = exportLocked()) writeExported(*e);
+}
+
+Session::InboxStats Session::inboxStats() const {
+    return InboxStats{statRecords_.load(), statPersists_.load(), statAcks_.load(), statPersistBeforeAck_.load()};
+}
+
+void Session::holdInboxForTest(bool hold) {
+    inboxHeld_ = hold;
+    if (!hold) {
+        post([this] {
+            openPendingRecords();
+            flush();
+        });
+    }
+}
+
+std::size_t Session::pendingInboxForTest() {
+    std::lock_guard<std::mutex> lk(recordsMu_);
+    return records_.size();
 }
 
 bool Session::satisfyLocked(const std::exception &ex) {
@@ -1300,36 +1336,60 @@ bool Session::acquirePeerKey(const std::string &peer) {
 // События уходят в outbox_; onEvent здесь не зовётся — отдаёт их flush вызывающего.
 void Session::openPendingRecords() {
     for (;;) {
-        std::string body;
+        if (inboxHeld_) return;
+        // OPT-024: всё, что накопилось к этому моменту, — одной пачкой: одно сохранение и один ack
+        std::deque<std::string> batch;
         {
             std::lock_guard<std::mutex> lk(recordsMu_);
             if (records_.empty()) return;
-            body = std::move(records_.front());
-            records_.pop_front();
+            batch.swap(records_);
         }
-        std::vector<json> events;
-        std::lock_guard<std::recursive_mutex> lk(engineMu_);
-        if (!client_) {
-            // Сессия закрыта — записи без ack сервер отдаст заново
-            std::lock_guard<std::mutex> rl(recordsMu_);
-            records_.clear();
-            return;
+        std::optional<Exported> snapshot;
+        std::optional<OutRequest> ack;
+        {
+            std::lock_guard<std::recursive_mutex> lk(engineMu_);
+            if (!client_) {
+                // Сессия закрыта — записи без ack сервер отдаст заново
+                std::lock_guard<std::mutex> rl(recordsMu_);
+                records_.clear();
+                return;
+            }
+            std::size_t total = 0;
+            for (const auto &body : batch) {
+                std::vector<json> events;
+                openRecordLocked(body, events);
+                total += events.size();
+                absorbLocked(std::move(events));
+                counters::get().inboxRecords++;
+                statRecords_++;
+            }
+            log("записи инбокса: " + std::to_string(batch.size()) + ", событий " + std::to_string(total));
+            reciprocateKeysLocked(); // T185: записи могли принести ключ участника группы
+            // Сначала на диск (сессии Olm продвинулись), потом ack: процесс, убитый между ними, иначе терял
+            // входящую сессию навсегда. Снимок — здесь, запись и ack — вне мьютекса движка.
+            snapshot = exportLocked();
+            try {
+                ack = parseRequest(client_->ackRequest());
+            } catch (const std::exception &) {
+            }
         }
-        openRecordLocked(body, events);
-        log("запись инбокса: событий " + std::to_string(events.size()));
-        absorbLocked(std::move(events));
-        counters::get().inboxRecords++;
-        // Сначала на диск (сессии Olm продвинулись), потом ack: процесс,
-        // убитый между ними, иначе терял входящую сессию навсегда.
         counters::get().inboxPersist++;
-        persistLocked();
-        try {
-            const auto ack = parseRequest(client_->ackRequest());
-            counters::get().inboxAck++;
-            call(ack.anon, ack.method, ack.body);
-        } catch (const std::exception &) {
+        statPersists_++;
+        const bool onDisk = snapshot && writeExported(*snapshot);
+        if (!onDisk) {
+            // Не записано — ack не шлём: сервер отдаст записи заново
+            log("записи инбокса: состояние не сохранено — ack отложен");
+            continue;
         }
-        reciprocateKeysLocked(); // T185: запись могла принести ключ участника группы
+        if (ack) {
+            try {
+                counters::get().inboxAck++;
+                statAcks_++;
+                statPersistBeforeAck_++;
+                call(ack->anon, ack->method, ack->body);
+            } catch (const std::exception &) {
+            }
+        }
     }
 }
 

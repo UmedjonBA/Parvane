@@ -8439,10 +8439,16 @@ void injectOnMain(
 			const auto msgId = MsgId(g_nextMsgId++);
 			g_uuidToMsgId.insert(uuid, msgId.bare);
 			g_msgIdToUuid.insert(msgId.bare, uuid);
+			// spec 035 T128: критичный вид — текст «обновите приложение» (обычная строка ленты), иначе штатное
+			// «не поддерживается».
+			const auto critical = parvane::v2::isCriticalStub(sm.content);
 			const auto item = session->data().addNewMessage(
 				msgId,
-				buildMessageFor(msgId, authorId, peerId, out, sm.ts, QString(),
-					MTP_messageMediaUnsupported(), /*hasMedia=*/true),
+				critical
+					? buildMessageFor(msgId, authorId, peerId, out, sm.ts, tr::lng_parvane_stub_critical(tr::now),
+						MTP_messageMediaEmpty(), /*hasMedia=*/false)
+					: buildMessageFor(msgId, authorId, peerId, out, sm.ts, QString(),
+						MTP_messageMediaUnsupported(), /*hasMedia=*/true),
 				MessageFlags(),
 				NewMessageType::Unread);
 			if (item && !item->history()->folderKnown()) {
