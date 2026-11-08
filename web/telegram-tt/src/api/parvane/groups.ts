@@ -79,6 +79,9 @@ export function pickPrimaryInvite<T extends {
 export function createGroupController(deps: GroupDependencies) {
   // Незавершённые запросы основной ссылки — по одному на группу
   const v2PrimaryRequests = new Map<string, Promise<V2InviteRecord | undefined>>();
+  // Идёт создание группы «по заявке» (spec 014): чат публикуется журналом ещё до конца создания, и экран ссылок,
+  // успевший спросить основную ссылку, создал бы ОТКРЫТУЮ — запрос основной ждёт конца таких созданий
+  const requestGroupCreations = new Set<Promise<unknown>>();
 
   function v2Of(address: string) {
     const v2 = deps.getV2?.();
@@ -184,6 +187,11 @@ export function createGroupController(deps: GroupDependencies) {
     if (!deps.getConnection() || !v2?.isReady()) return undefined;
     const store = deps.getStore();
     const members = users.map((user) => store.getAddressForId(user.id)).filter(Boolean);
+    let markDone: (() => void) | undefined;
+    const creation = new Promise<void>((resolve) => {
+      markDone = resolve;
+    });
+    if (isJoinRequestNeeded) requestGroupCreations.add(creation);
     try {
       const v2Info = await v2.createGroup(title, members, kind);
       if (!v2Info) return undefined;
@@ -208,6 +216,9 @@ export function createGroupController(deps: GroupDependencies) {
     } catch (error) {
       deps.log(`группа v2 не создана: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
+    } finally {
+      requestGroupCreations.delete(creation);
+      markDone?.();
     }
   }
 
@@ -376,6 +387,7 @@ export function createGroupController(deps: GroupDependencies) {
   // Основная ссылка группы v2: первая без параметров, созданная этим
   // устройством (секрет ссылки есть только у создателя); нет — создаём
   async function ensureV2Primary(v2: V2Groups, address: string) {
+    if (requestGroupCreations.size) await Promise.allSettled([...requestGroupCreations]);
     const inFlight = v2PrimaryRequests.get(address);
     if (inFlight) return inFlight;
     const findPrimary = async () => pickPrimaryInvite(await v2.listInvites(address));
