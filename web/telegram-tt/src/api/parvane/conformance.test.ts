@@ -3383,5 +3383,6 @@ describe('ENGINE-1 (web): модель движка — единственный
     const store = strip(readRepo('web/telegram-tt/src/api/parvane/store.ts'));
     expect(store).toContain('currentUserBannedRights: !isChannel');
     expect(store).toContain('bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id))');
+    expect(store).toContain('extraBannedRights(');
   });
 });

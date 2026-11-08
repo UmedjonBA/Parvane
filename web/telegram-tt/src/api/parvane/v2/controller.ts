@@ -487,6 +487,14 @@ const JOIN_KEY_RECORD = 'v2-join-recovery-key';
 // принял журнал нового корня, — как телефон, выгрузивший вкладку в этот момент
 const RELOAD_AFTER_CREATE_KEY = 'parvane:e2e:reloadAfterCreate';
 const ARE_DIAG_HOOKS_ENABLED = import.meta.env.VITE_PARVANE_DIAG_HOOKS === '1';
+
+function readE2e(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return undefined;
+  }
+}
 // Отказы, после которых повтор того же запроса имеет смысл (связь, частота)
 const TRANSIENT_CODES = new Set([
   'ERROR_CODE_UNAVAILABLE', 'ERROR_CODE_RATE_LIMITED', 'ERROR_CODE_UNSPECIFIED', 'ERROR_CODE_EXPIRED',
@@ -710,18 +718,31 @@ export function createV2Controller(deps: Deps) {
       phase: 'engine', active, done, total: MIGRATION_POINTS,
     });
     progress(0);
+    // e2e (только диаг-сборка, T109): «вкладка закрыта» в точке M2/M4 — перенос встаёт после фиксации шага этой
+    // точки, сценарий закрывает страницу; размер части строк — мелкий, чтобы M2 пришлась на середину строк
+    const haltAt = ARE_DIAG_HOOKS_ENABLED ? Number(readE2e('parvane:e2e:migrationHalt') || 0) : 0;
+    const chunk = ARE_DIAG_HOOKS_ENABLED ? Number(readE2e('parvane:e2e:migrationChunk') || 0) : 0;
+    const haltIfAsked = async (point: number) => {
+      if (!haltAt || point < haltAt) return;
+      (window as { __parvaneMigrationHalted?: number }).__parvaneMigrationHalted = point;
+      deps.log(`v2: перенос остановлен сценарием в точке M${point}`);
+      await new Promise(() => undefined);
+    };
     // M1: записи прежнего клиента — частями (строк истории могут быть десятки тысяч), последняя — `last`
     let out: ModelJson = {};
     for (let from = 0; from === 0 || from < records.length; from += MIGRATION_RECORDS_PER_STEP) {
       const part = records.slice(from, from + MIGRATION_RECORDS_PER_STEP);
       const last = from + MIGRATION_RECORDS_PER_STEP >= records.length;
-      out = await host.run('migrateStep', { layer: 'web', records: part, last });
+      out = await host.run('migrateStep', {
+        layer: 'web', records: part, last, chunk: chunk || undefined,
+      });
     }
     for (let i = 0; i < 400 && modelOpenState !== 'OPEN_STATE_READY'; i++) {
       await sender.idle();
       if (modelOpenState === 'OPEN_STATE_READY') break;
       const status = host.peek<{ point?: number; done?: boolean; report_json?: string }>('migrateStatus');
       progress(status.point || 0);
+      await haltIfAsked(status.point || 0);
       if (status.done && modelOpenState !== 'OPEN_STATE_READY') {
         deps.log(`v2: перенос остановлен: ${status.report_json || ''}`);
         break;
@@ -5102,6 +5123,7 @@ export function createV2Controller(deps: Deps) {
     settleState: persistNow,
     cachedGroups,
     groupContentHidden,
+    migrationState: () => ({ open: modelOpenState }),
     engineAuditDump: () => (host ? host.peek<{ jsonl?: string }>('auditDump').jsonl || '' : undefined),
     chatCapabilities,
     changeGroup,

@@ -3493,6 +3493,12 @@ const methods = {
     return v2Controller.auditCounters();
   },
 
+  /** e2e (только диаг-сборка, spec 035 T109): состояние модели после разового переноса. */
+  parvaneDiagMigration() {
+    if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1') return Promise.resolve(undefined);
+    return Promise.resolve(v2Controller.migrationState());
+  },
+
   /** Выгрузка «ничего не потеряно» (spec 035, T007; только диаг-сборка): JSONL `{kind, key, digest}`. */
   async parvaneAuditDump({ source }: { source?: 'engine' } = {}) {
     if (import.meta.env.VITE_PARVANE_DIAG_HOOKS !== '1' || !store.self) return undefined;

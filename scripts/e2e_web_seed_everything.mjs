@@ -351,6 +351,15 @@ try {
     const result = await api(c, 'parvaneSetStoragePin', { pin: STORAGE_PIN });
     return { result, pin: STORAGE_PIN };
   });
+  // Эталон «до» профиля под PIN — то, что прежний код читает ПОСЛЕ перезапуска (PIN спрашивается окном): записи,
+  // которые он сам не смог бы открыть (PV-001), переносу показать нечем (T109)
+  await step('перезапуск carol под PIN', async () => {
+    c.on('dialog', (d) => { void d.accept(STORAGE_PIN); });
+    await c.reload();
+    await c.locator('#LeftColumn').waitFor({ state: 'visible', timeout: LOGIN_TIMEOUT_MS });
+    await c.waitForFunction(() => typeof window.__parvaneDiagCallApi === 'function', undefined, { timeout: LOGIN_TIMEOUT_MS });
+    await pause(10000);
+  });
 
   await pause(HISTORY_SETTLE_MS);
 
@@ -383,12 +392,20 @@ try {
 
   await step('выгрузка сервера', async () => {
     assert.ok(BACKEND_DIR, 'нет PARVANE_E2E_BACKEND_LOG_DIR');
+    // Профили закрыты ДО копии баз: курсоры и подтверждения профиля не уходят дальше копии сервера (T109)
+    for (const context of Object.values(ctx)) {
+      // eslint-disable-next-line no-await-in-loop
+      await context.close().catch(() => undefined);
+    }
+    await pause(3000);
     const out = join(OUT, 'audit', 'server.jsonl');
     execFileSync('python3', [join(ROOT, 'scripts/migration_audit_server.py'), '--dump', BACKEND_DIR, '-o', out]);
     // Копия баз (вместе с -wal/-shm) — сервер этого же состояния для сценария переноса
     const dbDir = join(OUT, 'profiles', 'server');
     mkdirSync(dbDir, { recursive: true });
-    const copied = readdirSync(BACKEND_DIR).filter((n) => /\.db(-wal|-shm)?$/.test(n) || n === 'parvane.json');
+    // Ключ подписи JWT identity — тоже: сессии профилей сида принимаются тем же сервером (T109)
+    const copied = readdirSync(BACKEND_DIR)
+      .filter((n) => /\.db(-wal|-shm)?$/.test(n) || n === 'parvane.json' || /^identity-.*\.pem$/.test(n));
     copied.forEach((n) => copyFileSync(join(BACKEND_DIR, n), join(dbDir, n)));
     return { tables: execFileSync('wc', ['-l', out]).toString().trim(), copied: copied.length };
   });

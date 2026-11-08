@@ -600,6 +600,7 @@ export class ParvaneStore {
     const selfMember = info.members.find(({ address }) => address === this.self);
     const selfRole = selfMember?.role;
     if (this.isPublicPreview(info)) return this.buildPublicPreviewChat(info);
+    const defaults = toBannedRights(info.default_permissions);
     return {
       id: this.getIdForAddress(info.group_id, isChannel ? 'channel' : 'group'),
       type: isChannel ? 'chatTypeChannel' : 'chatTypeBasicGroup',
@@ -611,9 +612,12 @@ export class ParvaneStore {
       // без явного набора от сервера приходит с полным
       adminRights: selfRole === 'admin' ? toAdminRights(selfMember?.admin_rights, isChannel) : undefined,
       // Права по умолчанию — только у групп: в канале пишут владелец и админы
-      defaultBannedRights: !isChannel ? toBannedRights(info.default_permissions) : undefined,
+      defaultBannedRights: !isChannel ? defaults : undefined,
+      // Сверх прав по умолчанию (немота участника и т. п.) — тем же решением движка; запрет, совпадающий с правом
+      // по умолчанию, второй раз не ставится (tt показывает по нему «запрещено в группе», а не «вас ограничили»)
       currentUserBannedRights: !isChannel
-        ? bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id)) : undefined,
+        ? extraBannedRights(bannedRightsFromCapabilities(ParvaneStore.capabilitiesOf?.(info.group_id)), defaults)
+        : undefined,
       // Фото группы — открытый объект cloud, как аватар пользователя: tt
       // строит hash `avatar<id>?<file_id>`, провайдер отдаёт файл по file_id
       avatarPhotoId: info.avatar || undefined,
@@ -1069,6 +1073,14 @@ export function bannedRightsFromCapabilities(c?: ChatCapabilities): ApiChatBanne
   if (!c.send_links) out.embedLinks = true;
   if (!c.pin) out.pinMessages = true;
   return out;
+}
+
+/** Запреты решения движка, которых нет среди запретов по умолчанию; нет таких — `undefined`. */
+export function extraBannedRights(rights: ApiChatBannedRights | undefined, defaults: ApiChatBannedRights) {
+  if (!rights) return undefined;
+  const extra = Object.fromEntries(Object.entries(rights)
+    .filter(([key, value]) => value && !defaults[key as keyof ApiChatBannedRights])) as ApiChatBannedRights;
+  return Object.keys(extra).length ? extra : undefined;
 }
 
 export function toBannedRights(perms?: WireDefaultPermissions): ApiChatBannedRights {

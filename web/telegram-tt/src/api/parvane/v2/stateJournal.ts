@@ -363,9 +363,11 @@ export function createStateJournal(deps: Deps) {
         return;
       }
       if (!isMigrated()) {
-        // Первый запуск на v2: локальные данные — начальными записями журнала
+        // Первый запуск на v2: локальные данные — начальными записями журнала. Основа — уже сведённое моделью
+        // (журнал сервера): время блокировки и прочие поля, которых нет в локальном виде, не перезаписываются
+        // «сейчас» (spec 035 T109: после разового переноса блок-лист менял `blocked_at_ms`)
         const revision = deps.localState.getDirtyRevision();
-        await write(buildDesired({}));
+        await write(buildDesired(readSnapshot()));
         markMigrated();
         LATE_KINDS.forEach(markKindMigrated);
         deps.localState.clearDirtyKinds(revision);
