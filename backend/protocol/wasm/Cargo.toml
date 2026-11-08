@@ -25,5 +25,9 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 vodozemac = { version = "0.11", features = ["wasm_js"] }
 uuid = { version = "1", features = ["v7", "js"] }
 
+# spec 035 T012/T014: тесты обвязки в WASM (wasm-bindgen-test-runner, node). Версия — в паре с wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.76"
+
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz"]

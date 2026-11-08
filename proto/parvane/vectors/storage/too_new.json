@@ -1,0 +1,25 @@
+{
+  "suite": "storage/too_new",
+  "description": "spec 035 FR-025, contracts/storage.md «Слишком новый формат»: корень с kinds_max_format новее известного движку (или с видом, которого движок не знает) открывается в состоянии TOO_NEW — чтение известных видов возможно, любая пачка (запись, смена обёртки, перенос поколения) не выпускается (ошибка TooNew). Запись Stored с format новее известного не открывается (TooNew). root — proto3-JSON parvane.engine.v1.Root без обёрток (их добавляет тест).",
+  "cases": [
+    {
+      "name": "формат известного вида новее",
+      "input": {"kinds_max_format": [{"kind": "state-object", "format": 2}]},
+      "expect": {"state": "TOO_NEW", "write": "TooNew", "set_pin": "TooNew", "rotation": "TooNew", "read_known": "ok"}
+    },
+    {
+      "name": "вид, которого движок не знает",
+      "input": {"kinds_max_format": [{"kind": "future-kind", "format": 1}]},
+      "expect": {"state": "TOO_NEW", "write": "TooNew", "set_pin": "TooNew", "rotation": "TooNew", "read_known": "ok"}
+    },
+    {
+      "name": "все форматы известны",
+      "input": {"kinds_max_format": [{"kind": "state-object", "format": 1}]},
+      "expect": {"state": "READY", "write": "ok", "set_pin": "ok", "rotation": "ok", "read_known": "ok"}
+    }
+  ],
+  "records": [
+    {"name": "запись формата 2 при известном 1", "input": {"kind": "state-object", "format": 2}, "expect": {"error": "TooNew"}},
+    {"name": "запись формата 1", "input": {"kind": "state-object", "format": 1}, "expect": {"ok": true}}
+  ]
+}

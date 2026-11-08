@@ -51,6 +51,8 @@
 | `content/` | все виды содержимого (CONTENT-1): байты ↔ proto3-JSON, лимиты, показ/заглушка, содержимое UI клиентов | `content_hex`, `critical_fields`? → `content`, `disposition`; `client` (`class`, `v1`) |
 | `history/` | журнал истории аккаунта (spec 033, HIST-1/HIST-2/READ-2): сведение строки (`merge`), непрочитанное, маркеры и права удаления (`unread`), сегменты, горизонт, строка формата привязки (`segment`), ключ истории и записи (`aead`) | `kind` случая + proto3-JSON сообщений `history.v1` (id сообщений — UUID-строки) |
 | `conformance/` | правила conformance как векторы (T088) | (US3) |
+| `unknown/` | spec 035 (FR-031): `unknown::scan` — неизвестное поле на любой глубине, вид oneof (обычный/критичный), значение enum; ожидания руками | `type`, `hex` → `items[]` (`path`, `kind`, `number`, `critical`) |
+| `storage/` | spec 035 (contracts/storage.md): AAD и ключ записи (`aad`), KEK/проверка PIN (`wrap`), перенос поколения P1–P6 с прерываниями (`generation`), слишком новый формат (`too_new`) — `backend/protocol/tests/store_vectors.rs`; общий набор адаптеров хоста (`adapter`) — ctest ядра `store_fs_tests`, web `v2/storeIdb.test.ts` | см. `description` файлов |
 
 Все наборы прогоняет `parvane_protocol::conformance::run(<набор>, <json>)` —
 его же зовут обвязки клиентов (WASM `runConformanceVectors`, C ABI

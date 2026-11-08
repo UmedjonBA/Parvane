@@ -1,0 +1,91 @@
+{
+  "suite": "unknown/scan",
+  "description": "spec 035 FR-031, R5: обнаружение неизвестного по дескриптору схемы по исходным байтам ДО разбора prost. Байты и ожидания написаны руками (FR-053). path — путь до сообщения, где найдено неизвестное (имена полей схемы через точку, индекс элемента repeated — [i]); у неизвестного значения enum — путь до самого поля. kind: field — неизвестный номер поля; oneof — неизвестный вид oneof (номер не из схемы, а ни одного известного вида этого oneof в сообщении нет; у сообщения с несколькими oneof — первый по схеме, охваченный диапазонами видов); enum — значение вне объявленных. critical — номер вида 1000–1999 у oneof, охваченного диапазонами (contracts/versioning.md). Находки — в порядке байтов.",
+  "cases": [
+    {
+      "name": "известное — пусто",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a040a026869"},
+      "expect": {"items": []}
+    },
+    {
+      "name": "известное с enum и вложенным — пусто",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a0a0a026869120408011000"},
+      "expect": {"items": []}
+    },
+    {
+      "name": "неизвестное поле на глубине 3 (Content.text.entities[0] #9)",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a0a0a026869120408014801"},
+      "expect": {"items": [{"path": "text.entities[0]", "kind": "field", "number": 9, "critical": false}]}
+    },
+    {
+      "name": "неизвестное поле во втором элементе repeated",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a0e0a02686912020801120408024801"},
+      "expect": {"items": [{"path": "text.entities[1]", "kind": "field", "number": 9, "critical": false}]}
+    },
+    {
+      "name": "неизвестный обычный вид oneof Content.kind (#50)",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "920300"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "kind", "number": 50, "critical": false}]}
+    },
+    {
+      "name": "неизвестный критичный вид oneof Content.kind (#1000)",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "c23e00"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "kind", "number": 1000, "critical": true}]}
+    },
+    {
+      "name": "неизвестный вид рядом с известным полем вне oneof (ttl_secs) — всё равно вид",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "a00605920300"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "kind", "number": 50, "critical": false}]}
+    },
+    {
+      "name": "неизвестное поле верхнего уровня при известном виде — поле, не вид",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a040a026869c00c01"},
+      "expect": {"items": [{"path": "", "kind": "field", "number": 200, "critical": false}]}
+    },
+    {
+      "name": "номер 1000 при известном виде — поле, не критичный вид",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a040a026869c03e01"},
+      "expect": {"items": [{"path": "", "kind": "field", "number": 1000, "critical": false}]}
+    },
+    {
+      "name": "неизвестное значение enum (Entity.type = 99)",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a0412020863"},
+      "expect": {"items": [{"path": "text.entities[0].type", "kind": "enum", "number": 99, "critical": false}]}
+    },
+    {
+      "name": "неизвестный вид журнала инбокса (InboxRecord.item #40)",
+      "input": {"type": "parvane.msg.v2.InboxRecord", "hex": "0805c20200"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "item", "number": 40, "critical": false}]}
+    },
+    {
+      "name": "критичный вид журнала истории (HistoryOp.op #1500)",
+      "input": {"type": "parvane.history.v1.HistoryOp", "hex": "e25d00"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "op", "number": 1500, "critical": true}]}
+    },
+    {
+      "name": "номер 1000 в oneof вне охвата диапазонов (Frame.kind) — не критичный",
+      "input": {"type": "parvane.core.v2.Frame", "hex": "c23e00"},
+      "expect": {"items": [{"path": "", "kind": "oneof", "oneof": "kind", "number": 1000, "critical": false}]}
+    },
+    {
+      "name": "несколько находок — в порядке байтов",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a0c0a0268691206086348014801c00c01"},
+      "expect": {"items": [
+        {"path": "text.entities[0].type", "kind": "enum", "number": 99, "critical": false},
+        {"path": "text.entities[0]", "kind": "field", "number": 9, "critical": false},
+        {"path": "text.entities[0]", "kind": "field", "number": 9, "critical": false},
+        {"path": "", "kind": "field", "number": 200, "critical": false}
+      ]}
+    },
+    {
+      "name": "незнакомый тип — ошибка",
+      "input": {"type": "parvane.nope.v1.X", "hex": ""},
+      "expect": {"error": "Malformed"}
+    },
+    {
+      "name": "обрезанные байты — ошибка",
+      "input": {"type": "parvane.msg.v2.Content", "hex": "0a05"},
+      "expect": {"error": "Malformed"}
+    }
+  ]
+}

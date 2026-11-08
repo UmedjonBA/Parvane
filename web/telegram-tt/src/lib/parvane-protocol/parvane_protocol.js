@@ -3674,7 +3674,7 @@ export function decodeFrame(bytes) {
 }
 
 /**
- * Байты ответа → proto3-JSON по полному имени типа.
+ * Байты → proto3-JSON по полному имени типа (лимиты схемы — до разбора). Незнакомый тип — `UnknownMethod`.
  * @param {string} type_name
  * @param {Uint8Array} bytes
  * @returns {string}
@@ -3812,7 +3812,8 @@ export function encodeHello(channel, client_kind, client_version) {
 }
 
 /**
- * proto3-JSON → байты сообщения по полному имени типа (тела запросов из JS).
+ * proto3-JSON → байты сообщения по полному имени типа — для ВСЕХ сообщений схемы (spec 035, FR-050:
+ * тонкий вызов сгенерированного `type_codec`). Незнакомый тип — `UnknownMethod`.
  * @param {string} type_name
  * @param {string} json
  * @returns {Uint8Array}
@@ -3949,6 +3950,27 @@ export function encodeUploadChunk(upload_id, index, bucket, data) {
         return v3;
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * spec 035 (FR-046, contracts/versioning.md): `engineInfo()` этой сборки движка (JSON).
+ * @returns {string}
+ */
+export function engineInfo() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.engineInfo(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred1_0 = r0;
+        deferred1_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
     }
 }
 
@@ -4219,6 +4241,27 @@ export function runConformanceVectors(suite, json) {
         return r0 >>> 0;
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * Полные имена всех сообщений схемы (тесты кодеков во всех обвязках, spec 035 T012).
+ * @returns {string}
+ */
+export function schemaMessageNames() {
+    let deferred1_0;
+    let deferred1_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.schemaMessageNames(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred1_0 = r0;
+        deferred1_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export4(deferred1_0, deferred1_1, 1);
     }
 }
 

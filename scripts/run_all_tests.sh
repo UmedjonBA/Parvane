@@ -55,6 +55,16 @@ else
     echo "cargo: OK"
 fi
 
+# ── 1a. сгенерированное == закоммиченное (spec 035, FR-052): ACL NATS и типы границы движка ──
+log "1a. gen_registry --check, gen_bindings --check"
+for g in gen_registry gen_bindings; do
+    if (cd "$BACKEND" && cargo run -q -p parvane-protocol --bin "$g" -- --check); then
+        echo "$g: OK"
+    else
+        fail "$g --check (запустите cargo run -p parvane-protocol --bin $g)"
+    fi
+done
+
 # ── 1b. протокол v2: схема и fuzz-регрессия (spec 007, T087/T108) ──────────
 log "1b. buf lint + buf breaking (proto/)"
 if command -v buf >/dev/null; then

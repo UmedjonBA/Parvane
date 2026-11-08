@@ -60,6 +60,23 @@ void parvane_protocol_string_free(char *s);
 void parvane_protocol_bytes_free(struct PvBytes b);
 
 /**
+ * spec 035 (FR-046, contracts/versioning.md): `engineInfo()` этой сборки движка — JSON-строка;
+ * освобождать `pv_free_string`.
+ */
+char *pv_engine_info(void);
+
+/**
+ * Освободить строку движка (то же, что `parvane_protocol_string_free`; имя из contracts/versioning.md).
+ */
+void pv_free_string(char *s);
+
+/**
+ * Полные имена всех сообщений схемы — JSON-массив строк (тесты кодеков во всех обвязках, spec 035 T012);
+ * освобождать `pv_free_string`.
+ */
+char *pv_schema_message_names(void);
+
+/**
  * Вызвать функцию клиента по имени WASM (`plannerSeal`, `groupInfo`, …): `args` — объект JSON (байты —
  * base64), результат — JSON-текст значения (освобождать `parvane_protocol_string_free`), ошибка — `err`.
  * Имена без клиента (`encodeRequest`, `parseInvite`, …) тоже принимаются.

@@ -1,0 +1,21 @@
+{
+  "suite": "storage/aad",
+  "description": "spec 035 contracts/storage.md: ключ записи на носителе g<generation>/<kind>/<name> и AAD записи Stored = \"parvane/store/v1\\0\" ‖ store_id(16) ‖ u32be(format) ‖ kind ‖ \"\\0\" ‖ u32be(generation) ‖ name. Ожидания посчитаны вне движка (python: конкатенация байтов), FR-053.",
+  "cases": [
+    {
+      "name": "объект состояния",
+      "input": {"store_id_hex": "000102030405060708090a0b0c0d0e0f", "format": 1, "kind": "state-object", "generation": 1, "name": "FOLDER/7"},
+      "expect": {"key": "g1/state-object/FOLDER/7", "aad_hex": "70617276616e652f73746f72652f763100000102030405060708090a0b0c0d0e0f0000000173746174652d6f626a6563740000000001464f4c4445522f37"}
+    },
+    {
+      "name": "строка истории, поколение 12, формат 3",
+      "input": {"store_id_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "format": 3, "kind": "history-row", "generation": 12, "name": "chat:bob@x/0190aa"},
+      "expect": {"key": "g12/history-row/chat:bob@x/0190aa", "aad_hex": "70617276616e652f73746f72652f763100aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000003686973746f72792d726f77000000000c636861743a626f6240782f303139306161"}
+    },
+    {
+      "name": "пустое имя",
+      "input": {"store_id_hex": "01010101010101010101010101010101", "format": 1, "kind": "engine-core", "generation": 1, "name": ""},
+      "expect": {"key": "g1/engine-core/", "aad_hex": "70617276616e652f73746f72652f7631000101010101010101010101010101010100000001656e67696e652d636f72650000000001"}
+    }
+  ]
+}

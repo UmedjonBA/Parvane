@@ -16,6 +16,11 @@ use crate::schema::{self, FieldTy, MsgSpec, MESSAGES};
 /// Максимальная вложенность сообщений.
 pub const MAX_DEPTH: u32 = 32;
 
+/// spec 035 (FR-047, contracts/versioning.md): минорная версия протокола этого выпуска и одновременно
+/// минимум, который gateway и federation принимают по умолчанию (`PARVANE_V2_MIN_MINOR`). Клиент ниже —
+/// `UPGRADE_REQUIRED` и закрытие соединения; S2S-партнёр ниже — `UPGRADE_REQUIRED` в ответе S2S.
+pub const PROTO_MINOR_035: u32 = 1;
+
 /// Откуда пришли байты: от клиента серверные поля запрещены.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {

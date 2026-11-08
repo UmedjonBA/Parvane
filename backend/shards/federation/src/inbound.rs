@@ -166,8 +166,15 @@ async fn s2s(fed: &Arc<Fed>, req: Request<Incoming>, ip: std::net::IpAddr) -> Re
     let (tx, rx) = mpsc::channel::<Bytes>(8);
     let fed2 = fed.clone();
     let nonce = v.nonce.clone();
+    // spec 035 (FR-047): партнёр с минорной версией ниже минимума — отказ UPGRADE_REQUIRED в ответе S2S.
+    let partner_minor = peer.trusted.descriptor.proto_minor;
     tokio::spawn(async move {
         let sink = Responder { fed: fed2.clone(), dest: origin.clone(), nonce, tx };
+        if partner_minor < fed2.cfg.min_minor {
+            warn!("федерация: {} — proto_minor {} ниже минимума {}", origin, partner_minor, fed2.cfg.min_minor);
+            sink.head(Err(err(ErrorCode::UpgradeRequired, 0))).await;
+            return;
+        }
         if !fed2.admit(&origin) {
             sink.head(Err(err(ErrorCode::RateLimited, 1000))).await;
             return;

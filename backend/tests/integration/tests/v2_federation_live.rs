@@ -820,6 +820,32 @@ async fn federation_switched_off_refuses_both_ways() {
     }
 }
 
+/// spec 035 T015 (FR-047): сервер принимает кадры федерации только от партнёров с `proto_minor` описателя не
+/// ниже своего минимума. Федерация B с минимумом выше выпуска A отвечает на межсерверный запрос A отказом
+/// `UPGRADE_REQUIRED` (в ответе S2S), A передаёт его клиенту. Минимум задан только федерации B
+/// (`PARVANE_FEDERATION_MIN_MINOR`, по умолчанию — `PARVANE_V2_MIN_MINOR`), gateway B работает как обычно.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn federation_partner_below_min_minor_refused() {
+    let above = [("PARVANE_FEDERATION_MIN_MINOR", (parvane_protocol::PROTO_MINOR + 1).to_string())];
+    let Some((a, b)) = tokio::task::spawn_blocking(move || two_stacks(&[], &above)).await.unwrap() else { return };
+    let (addr_a, addr_b) = (a.gateway_tcp.clone(), b.gateway_tcp.clone());
+    let tag = free_port();
+    let r = tokio::task::spawn_blocking(move || {
+        let anya = Dev::register(&addr_a, &format!("anya{tag}@{A}"));
+        let boris = Dev::register(&addr_b, &format!("boris{tag}@{B}"));
+        let req = |u: &str| ipb::DeviceLogSyncAnonRequest { user: Some(UserRef { address: u.into() }), after_version: 0, ..Default::default() }.encode_to_vec();
+        assert_eq!(
+            anya.anon_to("identity.device.log_sync_anon", req(&boris.client.user), B).err(),
+            Some(ErrorCode::UpgradeRequired),
+            "B принял кадр сервера ниже своего минимума"
+        );
+    })
+    .await;
+    if let Err(e) = r {
+        panic!("{e:?}{}", fail_logs(&a, &b));
+    }
+}
+
 /// PV-015: файл больше окна gateway (S7-13, 16 кусков) с чужого сервера. Gateway A режет запрос на окна по
 /// 16 кусков, каждое окно — отдельный межсерверный запрос с `first_chunk` = 0, 16, 32; federation B обязан
 /// отдавать номера кусков блоба как есть. Раньше он нумеровал каждое окно с 0: второе окно приходило как

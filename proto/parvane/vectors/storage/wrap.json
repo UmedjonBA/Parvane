@@ -1,0 +1,26 @@
+{
+  "suite": "storage/wrap",
+  "description": "spec 035 contracts/storage.md: обёртка DEK под PIN — KEK = PBKDF2-HMAC-SHA256(pin UTF-8, salt, iterations, 32 байта); запись проверки check = SHA-256(\"parvane/store/pin-check/v1\\0\" ‖ KEK)[0..16]. Ожидания посчитаны вне движка (python hashlib), FR-053. Сценарии обёрток (установка/смена/снятие PIN не трогает записи данных; неверный PIN не открывает) — в cases_flow.",
+  "cases": [
+    {
+      "name": "PIN 1234, 1000 итераций",
+      "input": {"pin": "1234", "salt_hex": "000102030405060708090a0b0c0d0e0f", "iterations": 1000},
+      "expect": {"kek_hex": "2240ea2a22754a3c4610356ef8e4d7acf25af2ac3d2d11866de97a8b7812c52c", "check_hex": "6edf8ca0c12558d133d6fd9912bbe18c"}
+    },
+    {
+      "name": "PIN не ASCII, 2000 итераций",
+      "input": {"pin": "пин-тест", "salt_hex": "07070707070707070707070707070707", "iterations": 2000},
+      "expect": {"kek_hex": "56afaece22144894a20c56be2fe4a8fa3b5a64a404ec00854c124156a5cbcf66", "check_hex": "dca33795368c518fa9086ae33db4fce2"}
+    },
+    {
+      "name": "PIN 1234, 310 000 итераций (значение выпуска)",
+      "input": {"pin": "1234", "salt_hex": "000102030405060708090a0b0c0d0e0f", "iterations": 310000},
+      "expect": {"kek_hex": "eb753a8382dd43e02653fb25d81486bcd4688a3be755bed0cb938af95b727387", "check_hex": "4e42ca3ce567609ea8cefa9194cedca1"}
+    }
+  ],
+  "cases_flow": [
+    {"name": "установка PIN", "steps": ["device", "put", "set_pin:1111"], "expect": {"wraps": ["pin"], "batch_touches_only_root": true, "reopen": {"pin:1111": "ok", "pin:2222": "Crypto", "device": "Crypto"}}},
+    {"name": "смена PIN", "steps": ["device", "put", "set_pin:1111", "set_pin:2222"], "expect": {"wraps": ["pin"], "batch_touches_only_root": true, "reopen": {"pin:2222": "ok", "pin:1111": "Crypto"}}},
+    {"name": "снятие PIN", "steps": ["device", "put", "set_pin:1111", "remove_pin"], "expect": {"wraps": ["device"], "batch_touches_only_root": true, "reopen": {"device": "ok", "pin:1111": "Crypto"}}}
+  ]
+}

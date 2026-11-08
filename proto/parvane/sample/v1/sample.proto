@@ -28,3 +28,54 @@ message SampleOp {
 message SampleSnapshot {
   repeated SampleEntry entries = 1 [(parvane.core.v2.max_items) = 4096];
 }
+
+// ── «Движок будущего» (spec 035, T025) ───────────────────────────────────────
+// Надмножества сообщений выпуска для круга совместимости «движок будущего → движок выпуска → движок
+// будущего» (FR-034): те же номера и типы полей, что у `parvane.msg.v2.Content`/`Text`/`Entity`, плюс
+// новое вложенное поле, новый обычный вид, критичный вид (диапазон 1000–1999) и новое значение enum.
+// Только для тестов движка (cargo-feature `future-schema`); клиенты эти типы не используют. Номер
+// вида ≥ 1000 разрешён `build.rs` только в этом пакете.
+
+enum FutureEntityType {
+  FUTURE_ENTITY_TYPE_UNSPECIFIED = 0;
+  FUTURE_ENTITY_TYPE_BOLD = 1;
+  FUTURE_ENTITY_TYPE_ITALIC = 2;
+  // Новое значение enum (в `parvane.msg.v2.EntityType` его нет).
+  FUTURE_ENTITY_TYPE_SPARKLE = 900;
+}
+
+// Как `parvane.msg.v2.Entity` (поля 1–3) + новое поле.
+message FutureEntity {
+  FutureEntityType type = 1;
+  uint32 offset = 2;
+  uint32 length = 3;
+  // Новое вложенное поле (глубина 3 от FutureContent).
+  string future_note = 50 [(parvane.core.v2.max_len) = 256];
+}
+
+// Как `parvane.msg.v2.Text` (поля 1–2) + новое поле.
+message FutureText {
+  string text = 1 [(parvane.core.v2.max_len) = 65536];
+  repeated FutureEntity entities = 2 [(parvane.core.v2.max_items) = 1024];
+  uint32 future_level = 60;
+}
+
+// Новый обычный вид содержимого.
+message FutureNormal {
+  string label = 1 [(parvane.core.v2.max_len) = 256];
+}
+
+// Новый критичный вид: старый движок не вправе отвечать/править/пересылать (STUB_CRITICAL).
+message FutureCritical {
+  bytes secret_rule = 1 [(parvane.core.v2.max_len) = 256];
+}
+
+// Как `parvane.msg.v2.Content` (вид text = 1, ttl_secs = 100) + новые виды.
+message FutureContent {
+  oneof kind {
+    FutureText text = 1;
+    FutureNormal future_normal = 900;
+    FutureCritical future_critical = 1000;
+  }
+  uint32 ttl_secs = 100;
+}
