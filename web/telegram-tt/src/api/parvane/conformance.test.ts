@@ -3174,7 +3174,8 @@ describe('spec 035 FR-026: ключи localStorage только из разре�
 // spec 035 (FR-047): самописные кодировщики Hello (страница ссылки облака, бот Telegram, роль бота в e2e) шлют тот же
 // минор, что движок, — иначе gateway отвечает UPGRADE_REQUIRED (так страница ссылок и бот потерялись бы при выпуске)
 describe('spec 035 PROTO_MINOR: самописные Hello совпадают с движком', () => {
-  const engineMinor = Number(/pub const PROTO_MINOR_035: u32 = (\d+);/.exec(readRepo('backend/protocol/src/limits.rs'))![1]);
+  const limits = readRepo('backend/protocol/src/limits.rs');
+  const engineMinor = Number(/pub const PROTO_MINOR_035: u32 = (\d+);/.exec(limits)![1]);
   const places: [string, RegExp][] = [
     ['web/telegram-tt/src/publicLink/frames.ts', /export const PROTO_MINOR = (\d+);/],
     ['backend/infra/telegram-bot/parvane_tg_bot.py', /^PROTO_MINOR = (\d+)/m],
