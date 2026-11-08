@@ -1,0 +1,138 @@
+{
+ "suite": "model/delete_me",
+ "description": "spec 035 T062 (HIST-1 п. 4): «только у меня» — ТОЛЬКО запись журнала (GONE_SCOPE_ME), собеседник ничего не получает: запросов нет; строка не воскресает при повторе входящего (HIST-1 п. 2). Ожидания руками.",
+ "cases": [
+  {
+   "name": "удалить у себя",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "02020202020202020202020202020202",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "два"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "AgICAgICAgICAgICAgICAg=="
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 1
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ],
+      "requests": []
+     }
+    },
+    {
+     "submit": {
+      "delete_messages": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "targets": [
+        "AgICAgICAgICAgICAgICAg=="
+       ],
+       "scope": "DELETE_SCOPE_ME"
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_remove": {
+         "id": "AgICAgICAgICAgICAgICAg=="
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "last": null
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": null
+        }
+       }
+      ],
+      "requests": [],
+      "puts": [
+       "history-row"
+      ]
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "02020202020202020202020202020202",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "два"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    }
+   ]
+  }
+ ]
+}

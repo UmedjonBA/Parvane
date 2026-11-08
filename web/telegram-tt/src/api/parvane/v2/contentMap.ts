@@ -627,7 +627,7 @@ export function v2ToWire(c: V2Content): WireMessageContent | undefined {
 export type V2Class = 'message' | 'mutation' | 'service' | 'stub';
 
 const MUTATION_KINDS = ['receipt', 'edit', 'delete', 'reaction', 'pin'];
-const SERVICE_KINDS = ['call', 'group_key', 'delivery_key', 'container_key', 'state_key'];
+const SERVICE_KINDS = ['call', 'group_key', 'delivery_key', 'container_key', 'state_key', 'group_avatar_key'];
 
 /// Чем содержимое является для клиента — одинаково во всех клиентах (векторы
 /// `proto/parvane/vectors/content/kinds.json`): сообщение чата, мутация или

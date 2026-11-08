@@ -1,0 +1,271 @@
+{
+ "suite": "model/edit_before_row",
+ "description": "spec 035 T062 (HIST-1 п. 3–4): правка, пришедшая раньше сообщения, — сирота: ничего не показывается, а пришедшая строка показывается сразу с правкой (автор правки = автор строки); удаление раньше сообщения — строка не появляется вовсе; чужая правка (другой автор) не применяется. Ожидания руками.",
+ "cases": [
+  {
+   "name": "правка раньше строки",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "21212121212121212121212121212121",
+       "ts_ms": 1800000005000,
+       "content": {
+        "edit": {
+         "target": {
+          "op_id": "AwMDAwMDAwMDAwMDAwMDAw=="
+         },
+         "text": {
+          "text": "новый"
+         }
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "03030303030303030303030303030303",
+       "ts_ms": 1800000001000,
+       "content": {
+        "text": {
+         "text": "старый"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "AwMDAwMDAwMDAwMDAwMDAw==",
+         "body": {
+          "text": {
+           "text": "новый"
+          }
+         },
+         "edited_ts_ms": "1800000005000"
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 1
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "удаление раньше строки",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "22222222222222222222222222222222",
+       "ts_ms": 1800000000000,
+       "content": {
+        "delete": {
+         "targets": [
+          {
+           "op_id": "BAQEBAQEBAQEBAQEBAQEBA=="
+          }
+         ],
+         "for_everyone": true
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "04040404040404040404040404040404",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "не появится"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 50
+     },
+     "expect": {
+      "result": {
+       "rows": null
+      }
+     }
+    }
+   ]
+  },
+  {
+   "name": "чужая правка не применяется",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "carol@local",
+       "id": "23232323232323232323232323232323",
+       "ts_ms": 1800000000000,
+       "content": {
+        "edit": {
+         "target": {
+          "op_id": "BQUFBQUFBQUFBQUFBQUFBQ=="
+         },
+         "text": {
+          "text": "подмена"
+         }
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": []
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "05050505050505050505050505050505",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "оригинал"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+         "body": {
+          "text": {
+           "text": "оригинал"
+          }
+         },
+         "edited_ts_ms": null
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         }
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

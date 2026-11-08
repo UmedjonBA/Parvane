@@ -48,6 +48,9 @@ use crate::pb::parvane::msg::v2::{self as mpb, content, inbox_record, Content, D
 use crate::policy::{self, SendFormat, StickyV2};
 use crate::seal;
 use crate::sign::{self, ReplayGuard};
+
+/// Сколько секретов фото помнить на группу (секрет может прийти раньше записи журнала).
+const AVATAR_KEYS_PER_GROUP: usize = 4;
 use crate::state::StateKey;
 use crate::sync::Cursor;
 use crate::unknown::Disposition;
@@ -366,6 +369,9 @@ pub struct Client {
     /// (группа, ссылка): хост забирает их `take_shared_invites` сразу после
     /// открытия записи и хранит сам; в экспорт состояния не входят.
     shared_invites: Vec<(Vec<u8>, String)>,
+    /// spec 035 (PV-005): секреты фото частных групп из конвертов эпохи (группа → (avatar_key_id, секрет)),
+    /// последние `AVATAR_KEYS_PER_GROUP`; действует тот, чей id совпадает с журналом группы.
+    group_avatar_keys: BTreeMap<Vec<u8>, Vec<([u8; 16], Zeroizing<[u8; 32]>)>>,
     /// Запрос жетонов в полёте (не сохраняется).
     token_req: Option<(crate::tokens::TokenRequest, TokenKey)>,
     /// Жетоны серверов других доменов (spec 028): письмо незнакомцу с чужого
@@ -497,6 +503,7 @@ impl Client {
             rekey: BTreeMap::new(),
             pending_keys: vec![],
             shared_invites: vec![],
+            group_avatar_keys: BTreeMap::new(),
             token_req: None,
             foreign_tokens: BTreeMap::new(),
             l2_direct: BTreeMap::new(),
@@ -2133,34 +2140,47 @@ impl Client {
         }
         let devices: Vec<VerifiedDevice> = self.own_log.devices.values().cloned().collect();
         let new_ssk = sign::generate_signing_key();
-        let (entry, root_sig) = identity::rotate_ssk_entry(&root.root, &self.user, self.own_log.version + 1, self.own_log.head_hash, &new_ssk)?;
+        // spec 035 (FR-074): смена и пересертификация оставшихся устройств — одна запись (`resigned`)
+        let certs: Vec<crate::pb::parvane::core::v2::DeviceCertificate> = devices
+            .iter()
+            .map(|d| {
+                let mut cert = d.cert.clone();
+                let max = self.own_log.max_serial.get(&cert.device_id).copied().unwrap_or(cert.serial);
+                cert.serial = max.saturating_add(1);
+                cert.created_ms = now_ms();
+                cert.features.retain(|f| f != identity::FEATURE_NO_SSK);
+                if cert.device_id != self.device_id {
+                    cert.features.push(identity::FEATURE_NO_SSK.to_string());
+                }
+                cert
+            })
+            .collect();
+        let (entry, _, resigned) =
+            identity::rotate_ssk_entry_resigned(&root.root, &self.user, self.own_log.version + 1, self.own_log.head_hash, &new_ssk, &certs)?;
         self.own_log.apply(&entry)?;
         self.own_entries.push(entry.clone());
-        let mut out = vec![OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(entry) })];
-        let root_pub = self.own_log.root_key;
-        for d in devices {
-            let mut cert = d.cert.clone();
-            let max = self.own_log.max_serial.get(&cert.device_id).copied().unwrap_or(cert.serial);
-            cert.serial = max.saturating_add(1);
-            cert.created_ms = now_ms();
-            let mine = cert.device_id == self.device_id;
-            cert.features.retain(|f| f != identity::FEATURE_NO_SSK);
-            if !mine {
-                cert.features.push(identity::FEATURE_NO_SSK.to_string());
-            }
-            let signed = identity::sign_certificate(&new_ssk, &root_pub, root_sig.clone(), &cert);
-            let e = identity::device_log_entry(&self.user, self.own_log.version + 1, self.own_log.head_hash, DevChange::AddDevice(signed.clone()), None);
-            let op = identity::sign_device_log_entry(&new_ssk, &e)?;
-            self.own_log.apply(&op)?;
-            self.own_entries.push(op.clone());
-            if mine {
-                self.cert_serial = cert.serial;
-                self.my_cert = Some(signed);
-            }
-            out.push(OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(op) }));
+        let out = vec![OutRequest::id("identity.device.log_append", &ipb::DeviceLogAppendRequest { entry: Some(entry) })];
+        if let Some((cert, signed)) = certs.iter().zip(resigned).find(|(c, _)| c.device_id == self.device_id) {
+            self.cert_serial = cert.serial;
+            self.my_cert = Some(signed);
         }
         self.ssk = Some(new_ssk);
         Ok(out)
+    }
+
+    /// «Завершить сеанс» украденного устройства одной операцией (spec 035, FR-074, R12): отзыв и, если отзыв
+    /// раскрыл SSK, смена SSK корнем с переподписью оставшихся — собеседники не видят «SSK раскрыт», следующий
+    /// отзыв подписывается новым SSK. Без корня — [`Client::revoke_device`] (останется `ssk_rotation_required`).
+    pub fn revoke_device_with_root(&mut self, device_id: &str, root: &RootIdentity) -> CResult<RevocationOutcome> {
+        if root.user != self.user || root.root_pub() != self.own_log.root_key {
+            return Err(ClientError::Proto(ProtoError::RootMismatch));
+        }
+        let mut o = self.revoke_device(device_id)?;
+        if self.own_log.ssk_exposed {
+            o.requests.extend(self.rotate_ssk(root)?);
+        }
+        o.ssk_rotation_required = self.own_log.ssk_exposed;
+        Ok(o)
     }
 
     /// То же по секрету корня (хост получает его из резервной копии под
@@ -2203,7 +2223,13 @@ impl Client {
         for op in self.own_entries.iter().rev() {
             let Ok(body) = crate::pb::parvane::core::v2::OpBody::decode(op.body.as_slice()) else { continue };
             let Ok(e) = crate::pb::parvane::core::v2::UserDeviceLogEntry::decode(body.payload.as_slice()) else { continue };
-            if let Some(DevChange::AddDevice(c)) = e.change {
+            // spec 035 (FR-074): свой сертификат — из AddDevice либо переподписанный сменой SSK (`resigned`)
+            let certs = match e.change {
+                Some(DevChange::AddDevice(c)) => vec![c],
+                Some(DevChange::RotateSelfSigningKey(r)) => r.resigned,
+                _ => continue,
+            };
+            for c in certs {
                 if identity::verify_certificate(&c, Some(&self.user)).is_ok_and(|v| v.cert == active) {
                     self.cert_serial = self.cert_serial.max(active.serial);
                     self.my_cert = Some(c);
@@ -2775,6 +2801,21 @@ impl Client {
         self.groups.iter().filter(|(_, g)| g.state.is_some()).map(|(id, _)| id.clone()).collect()
     }
 
+    /// Запрос журнала группы до вступления по ссылке (spec 035, PV-006): `invite_link_id` и доказательство знания
+    /// секрета ссылки — подпись ключом ссылки над группой, своим адресом и временем `ts_ms`. Без доказательства
+    /// частная группа журнал постороннему не отдаёт.
+    pub fn group_sync_by_link(&self, group: &Ref, after_version: u64, parts: &gpb::InviteLinkParts, ts_ms: i64) -> Result<OutRequest> {
+        let link = crate::invite::signing_key(parts)?;
+        let req = gpb::StateSyncRequest {
+            group: Some(group.clone()),
+            after_version,
+            invite_link_id: parts.link_id.clone(),
+            invite_proof: crate::invite::sync_proof(&link, group, &self.user, ts_ms),
+            invite_proof_ts_ms: ts_ms,
+        };
+        Ok(OutRequest::id("group.state.sync", &req))
+    }
+
     /// Вступить по ссылке-приглашению (D-04): журнал группы уже принят
     /// (`group.state.sync` с `invite_link_id`); подпись ключом ссылки над
     /// позицией и своим корнем, запись — своим устройством.
@@ -3314,6 +3355,88 @@ impl Client {
     }
 
     /// Забрать принятые секреты ссылок-приглашений: пары (группа, ссылка).
+    /// Запомнить секрет фото группы (из конверта эпохи или своей смены фото). `true` — он действующий по журналу.
+    fn note_group_avatar_key(&mut self, group_id: &[u8], key: &[u8]) -> bool {
+        let Ok(key) = <[u8; 32]>::try_from(key) else { return false };
+        let id = group::avatar_key_id(&key);
+        let list = self.group_avatar_keys.entry(group_id.to_vec()).or_default();
+        if !list.iter().any(|(k, _)| *k == id) {
+            if list.len() >= AVATAR_KEYS_PER_GROUP {
+                list.remove(0);
+            }
+            list.push((id, Zeroizing::new(key)));
+        }
+        self.group_state(group_id).is_some_and(|s| s.avatar_key_id.as_slice() == id)
+    }
+
+    /// spec 035 (PV-005, GPHOTO-1): действующий секрет фото частной группы (сходится с `avatar_key_id` журнала);
+    /// нет — фото не открывается (ждать `GroupAvatarKey` конвертом эпохи).
+    pub fn group_avatar_key(&self, group_id: &[u8]) -> Option<[u8; 32]> {
+        let s = self.group_state(group_id)?;
+        let list = self.group_avatar_keys.get(group_id)?;
+        list.iter().find(|(id, k)| id.as_slice() == s.avatar_key_id.as_slice() && s.avatar_key_matches(&s.avatar_file_id, k)).map(|(_, k)| **k)
+    }
+
+    /// Новое фото частной группы (spec 035, PV-005): запись `SetInfo` с `avatar_key_id` (секрета в журнале нет),
+    /// сведения прежние. Секрет запоминается; участникам его везёт [`Client::group_avatar_key_content`] конвертом
+    /// эпохи, держателям ссылок — [`Client::group_invite_avatar_wraps`]. Пустой `file_id` — снять фото.
+    pub fn group_set_photo(&mut self, group_id: &[u8], file_id: &str, avatar_domain: &str, avatar_key: Option<&[u8; 32]>) -> Result<OutRequest> {
+        let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
+        if !file_id.is_empty() {
+            if let Some(k) = avatar_key {
+                self.note_group_avatar_key(group_id, k);
+            }
+        }
+        let info = gpb::SetInfo {
+            name: state.name.clone(),
+            about: state.about.clone(),
+            avatar_file_id: file_id.to_string(),
+            avatar_domain: avatar_domain.to_string(),
+            avatar_key_id: match (file_id.is_empty(), avatar_key) {
+                (false, Some(k)) => group::avatar_key_id(k).to_vec(),
+                _ => Vec::new(),
+            },
+        };
+        self.group_change(group_id, Change::SetInfo(info))
+    }
+
+    /// Секрет фото как служебное содержимое группы (spec 035): хост шлёт его `prepare_group` после смены фото и
+    /// после каждой новой эпохи (новые участники получают его только так). `None` — секрета нет либо фото открытое.
+    pub fn group_avatar_key_content(&self, group_id: &[u8]) -> Option<Content> {
+        let s = self.group_state(group_id)?;
+        let key = self.group_avatar_key(group_id)?;
+        Some(Content {
+            kind: Some(content::Kind::GroupAvatarKey(mpb::GroupAvatarKey { file_id: s.avatar_file_id.clone(), avatar_key: key.to_vec(), info_version: s.version })),
+            ..Default::default()
+        })
+    }
+
+    /// Превью по ссылке с фото (spec 035, D1): записи `InviteAvatarWrap` для ссылок группы (`links` — ссылки целиком,
+    /// с секретом; чужие, отозванные и уже обёрнутые текущим секретом пропускаются). Звать после смены фото и после
+    /// создания ссылки.
+    pub fn group_invite_avatar_wraps(&mut self, group_id: &[u8], links: &[String]) -> Result<Vec<OutRequest>> {
+        let Some(key) = self.group_avatar_key(group_id) else { return Ok(vec![]) };
+        let mut out = vec![];
+        for link in links {
+            let state = self.group_state(group_id).cloned().ok_or(ProtoError::NotFound)?;
+            let Ok(crate::invite::ParsedInvite::V2(parts)) = crate::invite::parse(link) else { continue };
+            let Ok(id) = <[u8; 32]>::try_from(parts.link_id.as_slice()) else { continue };
+            let Ok(seed) = <[u8; 32]>::try_from(parts.seed.as_slice()) else { continue };
+            if !state.invite_links.contains_key(&id) || state.invite_avatar_wraps.get(&id).is_some_and(|w| w.avatar_key_id == state.avatar_key_id) {
+                continue;
+            }
+            let wrap = group::wrap_invite_avatar(&seed, &state.group, &key)?;
+            out.push(self.group_change(group_id, Change::InviteAvatarWrap(wrap))?);
+        }
+        Ok(out)
+    }
+
+    /// Секрет фото для превью по ссылке (D1): журнал группы принят по `group.state.sync` с доказательством ссылки.
+    pub fn group_invite_avatar_key(&self, group_id: &[u8], parts: &gpb::InviteLinkParts) -> Option<[u8; 32]> {
+        let seed = <[u8; 32]>::try_from(parts.seed.as_slice()).ok()?;
+        self.group_state(group_id)?.invite_avatar_key(&seed).map(|k| *k)
+    }
+
     pub fn take_shared_invites(&mut self) -> Vec<(Vec<u8>, String)> {
         std::mem::take(&mut self.shared_invites)
     }
@@ -3540,6 +3663,12 @@ impl Client {
         if matches!(opened.content.kind, Some(content::Kind::ChatMode(_))) {
             return Ok(vec![Event::Internal { seq }]);
         }
+        // spec 035 (PV-005): секрет фото — служебный конверт эпохи, в ленту не идёт; дальше — хосту сменой группы
+        if let Some(content::Kind::GroupAvatarKey(k)) = &opened.content.kind {
+            let changed = self.note_group_avatar_key(&g.id, &k.avatar_key);
+            let version = state.version;
+            return Ok(if changed { vec![Event::GroupChanged { seq, group: g, version }] } else { vec![Event::Internal { seq }] });
+        }
         Ok(vec![Event::Group {
             seq,
             group: g,
@@ -3623,6 +3752,7 @@ impl Client {
             former_state_keys: self.former_state_keys.iter().map(|(k, v)| (b(k.as_bytes()), *v)).collect(),
             reads: self.reads.clone(),
             revocations_done: self.revocations_done.iter().cloned().collect(),
+            group_avatar_keys: self.group_avatar_keys.iter().flat_map(|(g, l)| l.iter().map(|(_, k)| (b(g), b(&**k)))).collect(),
             trust: self.peers.keys().filter_map(|u| self.trust.get(u).map(|r| (u.clone(), b(r)))).collect(),
             sticky: self.sticky.users().cloned().collect(),
             seen: vec![],
@@ -3784,6 +3914,10 @@ impl Client {
             .collect::<Result<_>>()?;
         c.reads = p.reads;
         c.revocations_done = p.revocations_done.into_iter().collect();
+        for (g, k) in &p.group_avatar_keys {
+            let (Ok(g), Ok(k)) = (base64::engine::general_purpose::STANDARD.decode(g), base64::engine::general_purpose::STANDARD.decode(k)) else { continue };
+            c.note_group_avatar_key(&g, &k);
+        }
         // Прежний формат: сырые ключи без момента записи — считаем свежими.
         let now = now_ms();
         for s in p.seen {
@@ -3993,6 +4127,9 @@ struct Persisted {
     /// L2 личных чатов: (собеседник, предпочтения участников).
     #[serde(default)]
     l2_direct: Vec<(String, Vec<PersistedL2Pref>)>,
+    /// spec 035 (PV-005): секреты фото групп (группа, секрет) — base64.
+    #[serde(default)]
+    group_avatar_keys: Vec<(String, String)>,
     /// Личное предпочтение L2 в группах (ключ — id группы).
     #[serde(default)]
     l2_group_pref: Vec<PersistedL2Pref>,

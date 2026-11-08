@@ -11,7 +11,9 @@ use ed25519_dalek::SigningKey;
 use crate::address::is_valid_domain;
 use crate::error::{ProtoError, Result};
 use crate::group::link_id;
+use crate::pb::parvane::core::v2::Ref;
 use crate::pb::parvane::group::v2::InviteLinkParts;
+use crate::sign::{self, ctx};
 
 /// Длина seed и link_id.
 pub const LINK_BYTES: usize = 32;
@@ -71,6 +73,32 @@ pub fn signing_key(parts: &InviteLinkParts) -> Result<SigningKey> {
     check(parts)?;
     let seed: [u8; LINK_BYTES] = parts.seed.as_slice().try_into().map_err(|_| ProtoError::InvalidField("invite"))?;
     Ok(SigningKey::from_bytes(&seed))
+}
+
+/// Допустимое расхождение `invite_proof_ts_ms` с часами сервера (spec 035, `contracts/group-access.md`).
+pub const SYNC_PROOF_WINDOW_MS: i64 = 5 * 60 * 1000;
+
+/// Подписываемые данные доказательства: `domain ‖ "\0" ‖ group_id ‖ user ‖ "\0" ‖ i64be(ts_ms)`.
+fn sync_proof_parts(group: &Ref, user: &str, ts_ms: i64) -> Vec<u8> {
+    let mut p = Vec::with_capacity(group.domain.len() + group.id.len() + user.len() + 10);
+    p.extend_from_slice(group.domain.as_bytes());
+    p.push(0);
+    p.extend_from_slice(&group.id);
+    p.extend_from_slice(user.as_bytes());
+    p.push(0);
+    p.extend_from_slice(&ts_ms.to_be_bytes());
+    p
+}
+
+/// Доказательство знания секрета ссылки для `group.state.sync` до вступления (PV-006): подпись ключом ссылки
+/// над группой, адресом запрашивающего и временем. Сервер, знающий только `link_id`, его не сделает.
+pub fn sync_proof(link: &SigningKey, group: &Ref, user: &str, ts_ms: i64) -> Vec<u8> {
+    sign::sign_ctx(link, ctx::GROUP_INVITE_SYNC, &[&sync_proof_parts(group, user, ts_ms)])
+}
+
+/// Проверка доказательства по публичному ключу ссылки из журнала группы (свежесть проверяет вызывающий).
+pub fn verify_sync_proof(link_public_key: &[u8], proof: &[u8], group: &Ref, user: &str, ts_ms: i64) -> Result<()> {
+    sign::verify_ctx(link_public_key, proof, ctx::GROUP_INVITE_SYNC, &[&sync_proof_parts(group, user, ts_ms)])
 }
 
 /// Разобрать ссылку любого поддерживаемого вида.
@@ -166,6 +194,22 @@ mod tests {
         assert!(parse(&url).is_err());
         // Без фрагмента (секрета) ссылка не принимается
         assert!(parse(&format!("https://a.b/join/{}", URL_SAFE_NO_PAD.encode(&other.link_id))).is_err());
+    }
+
+    /// PV-006: доказательство привязано к ссылке, группе, адресу и времени.
+    #[test]
+    fn sync_proof_binds_link_group_user_and_time() {
+        let (key, _) = generate("a.b").unwrap();
+        let (other, _) = generate("a.b").unwrap();
+        let pk = key.verifying_key().to_bytes();
+        let g = Ref { domain: "a.b".into(), id: vec![3; 32] };
+        let proof = sync_proof(&key, &g, "ann@a.b", 1_000);
+        verify_sync_proof(&pk, &proof, &g, "ann@a.b", 1_000).unwrap();
+        assert!(verify_sync_proof(&pk, &proof, &g, "bob@a.b", 1_000).is_err(), "чужой адрес");
+        assert!(verify_sync_proof(&pk, &proof, &g, "ann@a.b", 1_001).is_err(), "другое время");
+        assert!(verify_sync_proof(&pk, &proof, &Ref { id: vec![4; 32], ..g.clone() }, "ann@a.b", 1_000).is_err(), "другая группа");
+        assert!(verify_sync_proof(&pk, &sync_proof(&other, &g, "ann@a.b", 1_000), &g, "ann@a.b", 1_000).is_err(), "другая ссылка");
+        assert!(verify_sync_proof(&pk, &[0; 64], &g, "ann@a.b", 1_000).is_err());
     }
 
     #[test]

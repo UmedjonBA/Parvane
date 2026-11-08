@@ -1,0 +1,153 @@
+{
+ "suite": "model/send_direct",
+ "description": "spec 035 T062 (contracts/engine-api.md): своё сообщение в личный чат — строка сразу в ленте с доставкой PENDING и место после показанного (ORDER-1), чат наверх; своё сообщение двигает маркер (READ-2 п. 1) — счётчик 0; запись — история и исходящая очередь в одной пачке; журнала собеседника нет — движок сам запрашивает его анонимным каналом (`identity.device.log_sync_anon`). Ожидания руками.",
+ "cases": [
+  {
+   "name": "текст незнакомому собеседнику",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "submit": {
+      "send": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "content": {
+        "text": {
+         "text": "привет"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "$m",
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "outgoing": true,
+         "disposition": "DISPOSITION_SHOW",
+         "body": {
+          "text": {
+           "text": "привет"
+          }
+         },
+         "delivery": "DELIVERY_PENDING",
+         "from": "alice@local"
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "title": "bob@local",
+         "last": {
+          "id": "$m",
+          "body": {
+           "text": {
+            "text": "привет"
+           }
+          }
+         },
+         "unread": null
+        }
+       }
+      ],
+      "requests": [
+       "identity.device.log_sync_anon"
+      ],
+      "puts": [
+       "history-mark",
+       "history-row",
+       "outbox"
+      ]
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 50
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "$m",
+         "outgoing": true,
+         "delivery": "DELIVERY_PENDING"
+        }
+       ],
+       "has_older": null,
+       "has_newer": null
+      }
+     }
+    },
+    {
+     "chatList": {
+      "limit": 10
+     },
+     "expect": {
+      "result": {
+       "chats": [
+        {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "last": {
+          "id": "$m"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "capabilities": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      }
+     },
+     "expect": {
+      "result": {
+       "send_text": true,
+       "send_media": true,
+       "send_stickers": true,
+       "send_polls": true,
+       "send_links": true,
+       "delete_everyone": true,
+       "pin": true,
+       "edit": true,
+       "react": true,
+       "forward": true,
+       "reply": true
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

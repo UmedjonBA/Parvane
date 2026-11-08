@@ -1,0 +1,70 @@
+{
+  "suite": "state2/patch",
+  "description": "spec 035 FR-010/FR-011: патч по полям — правки разных полей с двух устройств не теряются, очистка отличается от пустого значения, у одного поля побеждает большая метка (lamport, device_id, op_id), при ничьей — большие байты значения. Ожидания написаны руками. Операции — краткая запись движка (conformance.rs, state2_op): id — hex op_id, дополненный нулями слева до 16 байт; kind — вид без префикса OBJECT_KIND_ (или номер); set — номер поля → proto3-JSON сообщения-значения вида с одним этим полем либо {hex: байты поля с тегом}. Каждый случай прогоняется во всех перестановках (до 5 операций), с повторами и с разбиением через снимок — снимок обязан совпасть побайтно. present — номера полей, у которых в показе есть значение (в том числе пустое).",
+  "cases": [
+    {
+      "name": "правки разных полей с двух устройств — обе в итоге",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}, "3": {"emoticon": "💼"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Дела"}}}},
+        {"id": "03", "lamport": 2, "device": "d2", "patch": {"kind": "FOLDER", "key": "5", "set": {"3": {"emoticon": "📌"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Дела", "emoticon": "📌"}}
+      ]}
+    },
+    {
+      "name": "очистка поля и пустое значение различимы",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "7", "set": {"2": {"title": "А"}, "3": {"emoticon": "Б"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "patch": {"kind": "FOLDER", "key": "7", "set": {"3": {"hex": "1a00"}}, "clear": [2]}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "7", "value": {}, "present": [3]}
+      ]}
+    },
+    {
+      "name": "одно поле: побеждает большая метка, при равном лампорте — больший device_id",
+      "input": {"ops": [
+        {"id": "01", "lamport": 3, "device": "d1", "patch": {"kind": "FOLDER", "key": "9", "set": {"2": {"title": "X"}}}},
+        {"id": "02", "lamport": 3, "device": "d2", "patch": {"kind": "FOLDER", "key": "9", "set": {"2": {"title": "Y"}}}},
+        {"id": "03", "lamport": 2, "device": "d9", "patch": {"kind": "FOLDER", "key": "9", "set": {"2": {"title": "W"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 3, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "9", "value": {"title": "Y"}}
+      ]}
+    },
+    {
+      "name": "ничья меток — большие байты значения",
+      "input": {"ops": [
+        {"id": "0a", "lamport": 4, "device": "d1", "patch": {"kind": "CONTACT", "key": "bob@x", "set": {"4": {"note": "a"}}}},
+        {"id": "0a", "lamport": 4, "device": "d1", "patch": {"kind": "CONTACT", "key": "bob@x", "set": {"4": {"note": "b"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 4, "objects": [
+        {"kind": "OBJECT_KIND_CONTACT", "key": "bob@x", "value": {"note": "b"}}
+      ]}
+    },
+    {
+      "name": "патч без Create создаёт объект; Create не стирает поля, которых в нём нет",
+      "input": {"ops": [
+        {"id": "01", "lamport": 3, "device": "d1", "patch": {"kind": "CONTACT", "key": "carol@x", "set": {"4": {"note": "заметка"}}}},
+        {"id": "02", "lamport": 5, "device": "d2", "create": {"kind": "CONTACT", "key": "carol@x", "set": {"2": {"first_name": "Кэрол"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 5, "objects": [
+        {"kind": "OBJECT_KIND_CONTACT", "key": "carol@x", "value": {"first_name": "Кэрол", "note": "заметка"}}
+      ]}
+    },
+    {
+      "name": "одиночки: быстрая реакция и умолчания уведомлений",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "QUICK_REACTION", "key": "", "set": {"1": {"emoji": "👍"}}}},
+        {"id": "02", "lamport": 2, "device": "d2", "patch": {"kind": "QUICK_REACTION", "key": "", "set": {"1": {"emoji": "🔥"}}}},
+        {"id": "03", "lamport": 1, "device": "d3", "patch": {"kind": "NOTIFY_DEFAULTS", "key": "", "set": {"1": {"users": {"silent": true}}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_NOTIFY_DEFAULTS", "key": "", "value": {"users": {"silent": true}}},
+        {"kind": "OBJECT_KIND_QUICK_REACTION", "key": "", "value": {"emoji": "🔥"}}
+      ]}
+    }
+  ]
+}

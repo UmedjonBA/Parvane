@@ -832,6 +832,14 @@ pub fn compact(states: &[RowState], now_ms: i64) -> Result<Vec<RowState>> {
     Ok(out)
 }
 
+/// spec 035 (FR-032/FR-034): свёртка для контрольной точки журнала до `upto_seq` — только если в записях
+/// `1..=upto_seq` нет непонятного этой версии (`holds` журнала "history", `hold.rs`); иначе явный отказ
+/// `RangeHeld`, исходные записи не трогаются.
+pub fn compact_checked(states: &[RowState], now_ms: i64, holds: &[crate::pb::parvane::engine::v1::RangeHold], upto_seq: u64) -> Result<Vec<RowState>> {
+    crate::hold::check(holds, crate::hold::HISTORY, 1, upto_seq)?;
+    compact(states, now_ms)
+}
+
 /// Режим замены (R8): точка свернула надгробия после последней полной синхронизации устройства, а курсор
 /// устройства — до точки.
 pub fn needs_replace(last_full_sync_ms: i64, tombstones_since_ms: i64, cursor: u64, upto_seq: u64) -> bool {
@@ -1087,16 +1095,25 @@ pub fn seal_with_nonce(key: &HistoryKey, address: &str, op_id: &[u8], chunk: boo
     if !address::is_valid_address(address) {
         return Err(ProtoError::BadAddress);
     }
+    let pt = Zeroizing::new(batch.encode_to_vec());
+    seal_raw_with_nonce(key, address, op_id, chunk, &pt, nonce)
+}
+
+/// spec 035 (FR-030/FR-032): зашифровать ИСХОДНЫЕ байты пачки (в том числе с непонятным этой версии) —
+/// без разбора и пересборки.
+pub fn seal_raw_with_nonce(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, pt: &[u8], nonce: [u8; NONCE_LEN]) -> Result<AppendRequest> {
+    if !address::is_valid_address(address) {
+        return Err(ProtoError::BadAddress);
+    }
     if !crate::sign::is_valid_op_id(op_id) {
         return Err(ProtoError::InvalidField("op_id"));
     }
-    let pt = Zeroizing::new(batch.encode_to_vec());
     if NONCE_LEN + pt.len() + TAG_LEN > MAX_RECORD {
         return Err(ProtoError::FieldLimit("aead_ciphertext"));
     }
     let ct = key
         .cipher()
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: &pt, aad: &record_aad(address, op_id, chunk) })
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: pt, aad: &record_aad(address, op_id, chunk) })
         .map_err(|_| ProtoError::Crypto)?;
     let mut out = Vec::with_capacity(NONCE_LEN + ct.len());
     out.extend_from_slice(&nonce);
@@ -1113,6 +1130,14 @@ pub fn seal_batch(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, ba
 
 /// Открыть запись: тег сходится (ключ, адрес, op_id, chunk), пачка разбирается по лимитам схемы.
 pub fn open_record(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<HistoryBatch> {
+    let pt = Zeroizing::new(open_record_raw(key, address, op_id, chunk, aead_ciphertext)?);
+    decode_checked(&pt, Origin::Client)
+}
+
+/// spec 035 (FR-031/FR-032): открыть запись и вернуть ИСХОДНЫЕ байты пачки (проверены лимиты схемы и автор);
+/// непонятное этой версии (`unknown::scan`, `hold.rs`) остаётся в байтах — для отметки `range-hold` и
+/// перешифровки без разбора.
+pub fn open_record_raw(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<Vec<u8>> {
     if !address::is_valid_address(address) {
         return Err(ProtoError::BadAddress);
     }
@@ -1133,7 +1158,31 @@ pub fn open_record(key: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, a
     if !address::is_valid_device_id(&batch.device_id) {
         return Err(ProtoError::InvalidField("device_id"));
     }
-    Ok(batch)
+    Ok(pt.to_vec())
+}
+
+/// Метка детерминированного nonce перешифровки записи истории.
+pub const RESEAL_NONCE_LABEL: &[u8] = b"parvane/history/reseal\0";
+
+/// spec 035 (FR-032, T055): перешифровать запись под новый ключ истории без разбора — открыть старый AEAD → те
+/// же байты → новый AEAD (nonce = HMAC-SHA256(новый ключ, метка ‖ op_id ‖ chunk ‖ байты)[..12]: два устройства
+/// дают одни байты) → проверить открытием.
+pub fn reseal_raw(old: &HistoryKey, new: &HistoryKey, address: &str, op_id: &[u8], chunk: bool, aead_ciphertext: &[u8]) -> Result<AppendRequest> {
+    use hmac::Mac;
+    let pt = Zeroizing::new(open_record_raw(old, address, op_id, chunk, aead_ciphertext)?);
+    let mut mac = <hmac::Hmac<Sha256> as Mac>::new_from_slice(new.as_bytes()).map_err(|_| ProtoError::Crypto)?;
+    mac.update(RESEAL_NONCE_LABEL);
+    mac.update(op_id);
+    mac.update(&[u8::from(chunk)]);
+    mac.update(&pt);
+    let mut nonce = [0u8; NONCE_LEN];
+    nonce.copy_from_slice(&mac.finalize().into_bytes()[..NONCE_LEN]);
+    let out = seal_raw_with_nonce(new, address, op_id, chunk, &pt, nonce)?;
+    let back = Zeroizing::new(open_record_raw(new, address, op_id, chunk, &out.aead_ciphertext)?);
+    if *back != *pt {
+        return Err(ProtoError::Crypto);
+    }
+    Ok(out)
 }
 
 /// Выровнять открытый текст пачки по сетке L2 (S7-3/S7-5): `padding` доводит сериализацию ровно до корзины

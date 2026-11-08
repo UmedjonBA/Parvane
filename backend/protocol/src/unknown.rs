@@ -14,8 +14,11 @@ use crate::schema;
 pub enum Disposition {
     /// Показать как обычно.
     Show,
-    /// Показать нативную заглушку «не поддерживается».
+    /// Показать нативную заглушку «не поддерживается»; ответ и пересылка разрешены.
     Stub,
+    /// spec 035 (FR-041): неизвестный критичный вид (1000–1999) — та же заглушка, ответ, правка и пересылка
+    /// запрещены. Обвязки нынешних клиентов получают её как `stub` (заглушка), запреты — в модели движка.
+    StubCritical,
     /// Пропустить без показа (служебное), курсор двигается.
     Skip,
 }
@@ -34,6 +37,36 @@ pub fn content_disposition(content: &Content, critical_fields: &[u32]) -> Dispos
         return Disposition::Stub;
     }
     Disposition::Show
+}
+
+/// Что разрешено над сообщением с этим показом (contracts/versioning.md «Критичность»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Actions {
+    pub reply: bool,
+    pub edit: bool,
+    pub forward: bool,
+}
+
+/// Действия по показу: известное — всё; заглушка — ответ и пересылка (править непонятное нельзя — правка
+/// пересобрала бы его без неизвестного); критичная заглушка и служебное — ничего.
+pub fn actions(d: Disposition) -> Actions {
+    match d {
+        Disposition::Show => Actions { reply: true, edit: true, forward: true },
+        Disposition::Stub => Actions { reply: true, edit: false, forward: true },
+        Disposition::StubCritical | Disposition::Skip => Actions { reply: false, edit: false, forward: false },
+    }
+}
+
+/// spec 035 (FR-031/FR-041): решение по ИСХОДНЫМ байтам содержимого — `unknown::scan` до разбора: неизвестный
+/// критичный вид — `StubCritical`, неизвестный обычный вид — `Stub`, неизвестное поле внутри известного вида —
+/// показ известного; затем правило `critical_fields` ([`content_disposition`]).
+pub fn content_disposition_bytes(bytes: &[u8], critical_fields: &[u32]) -> crate::Result<Disposition> {
+    let report = scan("parvane.msg.v2.Content", bytes)?;
+    if report.has_critical() {
+        return Ok(Disposition::StubCritical);
+    }
+    let content: Content = crate::codec::decode_checked(bytes, crate::limits::Origin::Client)?;
+    Ok(content_disposition(&content, critical_fields))
 }
 
 /// Решение по записи журнала инбокса.

@@ -179,11 +179,113 @@ async fn inbox_push(ctx: &V2, req: ShardRequest) -> Result<(), ErrorCode> {
         }
         let Ok(devs) = ctx.devices_of(&r.address).await else { continue };
         let owner = crate::v2::inbox_owner(&r.address, &devs).to_string();
-        for d in &devs.v2_device_ids {
-            let _ = ctx.append(&owner, d, item.clone()).await;
+        match store_pushed(&ctx.v2, &r.address, &owner, &devs.v2_device_ids, &group, &item).await {
+            Ok(done) => {
+                for (a, it) in done {
+                    ctx.publish_live(a, it).await;
+                }
+            }
+            Err(e) => warn!("messenger: запись группы с {} не сохранена: {:?}", origin, e),
         }
     }
     Ok(())
+}
+
+/// Потолок подписок одного пользователя на группы других серверов.
+pub(crate) const MAX_REMOTE_SUBSCRIPTIONS: i64 = 5000;
+
+fn sub_err<E: std::fmt::Display>(e: E) -> ErrorCode {
+    error!("messenger: подписки на удалённые группы: {}", e);
+    ErrorCode::Unavailable
+}
+
+/// `group.remote.subscribe` (PV-014): своему пользователю — записи группы другого сервера. Группа своего сервера —
+/// `INVALID` (её записи и так кладёт свой журнал группы).
+pub(crate) async fn subscribe(pool: &sqlx::SqlitePool, user: &str, group: &Ref) -> Result<(), ErrorCode> {
+    parvane_protocol::address::check_ref(group).map_err(|_| ErrorCode::Invalid)?;
+    let domain = group.domain.to_ascii_lowercase();
+    if domain == server_domain() {
+        return Err(ErrorCode::Invalid);
+    }
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(sub_err)?;
+    let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM remote_group_subscriptions WHERE user = ?").bind(user).fetch_one(&mut *tx).await.map_err(sub_err)?;
+    let r = sqlx::query("INSERT OR IGNORE INTO remote_group_subscriptions (user, group_domain, group_id, created_ms) SELECT ?, ?, ?, ? WHERE ? < ?")
+        .bind(user)
+        .bind(&domain)
+        .bind(&group.id)
+        .bind(crate::now_unix() * 1000)
+        .bind(n)
+        .bind(MAX_REMOTE_SUBSCRIPTIONS)
+        .execute(&mut *tx)
+        .await
+        .map_err(sub_err)?;
+    if r.rows_affected() == 0 && n >= MAX_REMOTE_SUBSCRIPTIONS {
+        let (had,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM remote_group_subscriptions WHERE user = ? AND group_domain = ? AND group_id = ?")
+            .bind(user)
+            .bind(&domain)
+            .bind(&group.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(sub_err)?;
+        if had == 0 {
+            return Err(ErrorCode::Limit);
+        }
+    }
+    tx.commit().await.map_err(sub_err)?;
+    Ok(())
+}
+
+/// `group.remote.unsubscribe`: выход из группы другого сервера (повтор — без ошибки).
+pub(crate) async fn unsubscribe(pool: &sqlx::SqlitePool, user: &str, group: &Ref) -> Result<(), ErrorCode> {
+    parvane_protocol::address::check_ref(group).map_err(|_| ErrorCode::Invalid)?;
+    sqlx::query("DELETE FROM remote_group_subscriptions WHERE user = ? AND group_domain = ? AND group_id = ?")
+        .bind(user)
+        .bind(group.domain.to_ascii_lowercase())
+        .bind(&group.id)
+        .execute(pool)
+        .await
+        .map_err(sub_err)?;
+    Ok(())
+}
+
+async fn subscribed(pool: &sqlx::SqlitePool, user: &str, group: &Ref) -> Result<bool, ErrorCode> {
+    let r: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM remote_group_subscriptions WHERE user = ? AND group_domain = ? AND group_id = ?")
+        .bind(user)
+        .bind(group.domain.to_ascii_lowercase())
+        .bind(&group.id)
+        .fetch_optional(pool)
+        .await
+        .map_err(sub_err)?;
+    Ok(r.is_some())
+}
+
+/// Запись группы с другого сервера в журналы устройств получателя `recipient` (журналы — на адресе `owner`).
+pub(crate) async fn store_pushed(
+    pool: &sqlx::SqlitePool,
+    recipient: &str,
+    owner: &str,
+    devices: &[String],
+    group: &Ref,
+    item: &inbox_record::Item,
+) -> Result<Vec<(crate::v2::Appended, inbox_record::Item)>, ErrorCode> {
+    // PV-014: только группы, на которые получатель подписан; иначе запись отбрасывается молча — ответ об
+    // ошибке выдал бы чужому серверу, состоит ли наш пользователь в группе
+    if !subscribed(pool, recipient, group).await? {
+        return Ok(vec![]);
+    }
+    let mut out = vec![];
+    for d in devices {
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|_| ErrorCode::Unavailable)?;
+        match crate::v2::append_in(&mut tx, owner, d, item).await {
+            Ok(a) => {
+                tx.commit().await.map_err(|_| ErrorCode::Unavailable)?;
+                out.push((a, item.clone()));
+            }
+            Err(ErrorCode::Limit) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(out)
 }
 
 /// Адрес другого сервера удалён (spec 027): забыть кэш владельцев ключей. Членство в группах —
@@ -261,5 +363,47 @@ mod tests {
         }
         assert_eq!(ok, 2 * PUSH_SITE_FACTOR, "20 поддоменов — не больше общего потолка сайта");
         assert!(push_allowed("calm.example", "zoe@near.example", 2), "другой сайт не затронут");
+    }
+
+    async fn pool() -> sqlx::SqlitePool {
+        let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations_v2").run(&p).await.unwrap();
+        p
+    }
+
+    fn group(id: u8) -> Ref {
+        Ref { domain: "far.example".into(), id: vec![id; parvane_protocol::address::REF_ID_LEN] }
+    }
+
+    fn rows(n: usize) -> inbox_record::Item {
+        inbox_record::Item::Group(parvane_protocol::pb::parvane::core::v2::GroupEnvelope { epoch_aead_ciphertext: vec![1; n], group: Some(group(9)), ..Default::default() })
+    }
+
+    /// PV-014 (spec 035, FR-072): чужой сервер не кладёт записи группы, на которую получатель не подписан; 1000
+    /// таких пушей не занимают журнал, законная запись проходит. Подписанная группа доставляется, после отписки — нет.
+    #[tokio::test]
+    async fn push_of_unsubscribed_group_is_dropped() {
+        let p = pool().await;
+        let devs = vec!["d1".to_string()];
+        for _ in 0..1000 {
+            store_pushed(&p, "alice@local", "alice@local", &devs, &group(9), &rows(64)).await.unwrap();
+        }
+        let dev = crate::v2::device_key("alice@local", "d1").unwrap();
+        let count = |p: sqlx::SqlitePool, dev: String| async move {
+            let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM inbox_log WHERE device = ?").bind(&dev).fetch_one(&p).await.unwrap();
+            n
+        };
+        assert_eq!(count(p.clone(), dev.clone()).await, 0, "неизвестная группа не попадает в инбокс");
+        let mut tx = p.begin().await.unwrap();
+        let sealed = inbox_record::Item::Sealed(Default::default());
+        crate::v2::append_in(&mut tx, "alice@local", "d1", &sealed).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(count(p.clone(), dev.clone()).await, 1);
+        // Подписка — запись доставляется; отписка — снова нет
+        subscribe(&p, "alice@local", &group(9)).await.unwrap();
+        assert_eq!(store_pushed(&p, "alice@local", "alice@local", &devs, &group(9), &rows(64)).await.unwrap().len(), 1);
+        unsubscribe(&p, "alice@local", &group(9)).await.unwrap();
+        assert!(store_pushed(&p, "alice@local", "alice@local", &devs, &group(9), &rows(64)).await.unwrap().is_empty());
+        assert_eq!(count(p, dev).await, 2);
     }
 }

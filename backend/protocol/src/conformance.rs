@@ -64,6 +64,12 @@ pub fn run(suite: &str, json: &str) -> Result<usize, String> {
             "call/signals" => call_case(case),
             "link/sas" => link_case(case),
             "history/merge" | "history/unread" | "history/segment" | "history/aead" | "history/checkpoint" => history_case(suite, case),
+            // spec 035: личное состояние v2 (патч по полям, множества, «удаление против правки», отметки, неизвестное)
+            "state2/patch" | "state2/sets" | "state2/ordered" | "state2/delete_vs_edit" | "state2/marks" | "state2/unknown_fields"
+            | "state2/rejected" => crate::conformance_state2::case(case),
+            // spec 035: критичность номером вида — содержимое и журналы
+            "content/critical" => crate::conformance_state2::content_critical_case(case),
+            "model/critical_journal" => crate::conformance_state2::critical_journal_case(case),
             _ => return Err(format!("неизвестный набор {suite}")),
         };
         r.map_err(|e| format!("{suite}/{name}: {e}"))?;
@@ -180,6 +186,7 @@ fn content_case(case: &Value) -> Result<(), String> {
     let disposition = match unknown::content_disposition(&content, &critical) {
         Disposition::Show => "show",
         Disposition::Stub => "stub",
+        Disposition::StubCritical => "stub_critical",
         Disposition::Skip => "skip",
     };
     if expect.get("disposition").and_then(Value::as_str) != Some(disposition) {
@@ -771,6 +778,15 @@ mod tests {
             ("history/segment", "history/segment.json", 8),
             ("history/aead", "history/aead.json", 6),
             ("history/checkpoint", "history/checkpoint.json", 6),
+            ("state2/patch", "state2/patch.json", 6),
+            ("state2/sets", "state2/sets.json", 4),
+            ("state2/ordered", "state2/ordered.json", 3),
+            ("state2/delete_vs_edit", "state2/delete_vs_edit.json", 5),
+            ("state2/marks", "state2/marks.json", 3),
+            ("state2/unknown_fields", "state2/unknown_fields.json", 6),
+            ("state2/rejected", "state2/rejected.json", 2),
+            ("content/critical", "content/critical.json", 7),
+            ("model/critical_journal", "model/critical_journal.json", 4),
         ] {
             let n = run(suite, &read(file)).unwrap();
             assert!(n >= least, "{suite}: {n}");

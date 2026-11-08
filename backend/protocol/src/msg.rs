@@ -159,7 +159,8 @@ pub fn message_proof(sender_cert: &SignedDeviceCertificate, op: &SignedOp) -> Ve
 
 fn finish(sender: VerifiedDevice, op: VerifiedOp, proof: Vec<u8>) -> Result<Opened> {
     let mut content: Content = decode_checked(&op.payload, Origin::Client)?;
-    let disposition = unknown::content_disposition(&content, &op.header.critical_fields);
+    // spec 035: показ — по исходным байтам (критичный неизвестный вид виден только до разбора).
+    let disposition = unknown::content_disposition_bytes(&op.payload, &op.header.critical_fields)?;
     content_guard::sanitize_content(&mut content);
     Ok(Opened { sender, op, content, disposition, proof })
 }
@@ -416,6 +417,20 @@ pub fn is_trackable(c: &Content) -> bool {
             | Some(content::Kind::Article(_))
             | Some(content::Kind::ModReport(_))
     )
+}
+
+/// `Sticker.sticker_id` (spec 035, FR-075, R13, PACK-1): id элемента манифеста архива набора — имя файла записи
+/// индекса архива (basename, `.webp`/`.png`/`.tgs`/`.webm`, ≤ 64 байт); пусто — стикер без набора. Не `file_id`
+/// загрузки: у каждой загрузки он свой, а id манифеста одинаков у всех, кто установил набор (избранное, PACK-3).
+pub fn is_pack_sticker_id(id: &str) -> bool {
+    if id.is_empty() {
+        return true;
+    }
+    if id.len() > 64 || id.contains('/') || id.contains('\\') {
+        return false;
+    }
+    let Some((stem, ext)) = id.rsplit_once('.') else { return false };
+    !stem.is_empty() && matches!(ext.to_ascii_lowercase().as_str(), "webp" | "png" | "tgs" | "webm")
 }
 
 /// Мутация (правка/удаление/реакция/закреп/квитанция) и её цели.

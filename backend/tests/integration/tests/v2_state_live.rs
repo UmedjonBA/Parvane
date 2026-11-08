@@ -1,4 +1,6 @@
-//! Личное состояние v2 против живого стека (spec 007, US5: T096).
+//! Личное состояние v2 против живого стека (spec 007, US5: T096). С spec 035 журнал — `state.ops.*` (сервер
+//! не разбирает шифртекст: тела запросов те же); смысл state.v2 и заморозку state.append проверяет
+//! `v2_state2_live.rs`.
 //! `state.append` с двух устройств одного пользователя, `state.sync` с
 //! курсором и бюджетом, изоляция чужого пользователя; согласие на добавление
 //! в группы из `identity.privacy.set` для v1-кода messenger (FR-040).
@@ -240,11 +242,11 @@ async fn token(addr: &str, user: &str, dev: &str) -> String {
 }
 
 fn append(c: &mut V2, r: &AppendRequest) -> Result<u64, ErrorCode> {
-    c.call("state.append", r.encode_to_vec()).map(|b| AppendResponse::decode(b.as_slice()).unwrap_or_default().seq)
+    c.call("state.ops.append", r.encode_to_vec()).map(|b| AppendResponse::decode(b.as_slice()).unwrap_or_default().seq)
 }
 
 fn sync(c: &mut V2, after_seq: u64, max_bytes: u32) -> Result<SyncResponse, ErrorCode> {
-    c.call("state.sync", SyncRequest { after_seq, max_bytes }.encode_to_vec()).map(|b| SyncResponse::decode(b.as_slice()).unwrap_or_default())
+    c.call("state.ops.sync", SyncRequest { after_seq, max_bytes }.encode_to_vec()).map(|b| SyncResponse::decode(b.as_slice()).unwrap_or_default())
 }
 
 fn set_group_add(addr: &str, token: &str, a: Audience) -> bool {

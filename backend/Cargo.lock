@@ -1999,6 +1999,7 @@ dependencies = [
  "parvane-types",
  "parvane-v2rt",
  "prost",
+ "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "tokio",
@@ -2313,6 +2314,7 @@ dependencies = [
  "parvane-protocol",
  "prost",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

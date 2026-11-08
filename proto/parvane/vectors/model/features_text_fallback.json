@@ -1,0 +1,248 @@
+{
+ "suite": "model/features_text_fallback",
+ "description": "spec 035 T062 (FR-004, TASK-1, ARTICLE-1): вид, которого клиент не объявил в features, приходит текстом его поля `text`; объявленный — своим видом. Ожидания руками.",
+ "cases": [
+  {
+   "name": "без возможностей — текст",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "51515151515151515151515151515151",
+       "ts_ms": 1800000000000,
+       "content": {
+        "task_offer": {
+         "name": "Купить хлеб",
+         "text": "Задание: Купить хлеб"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "UVFRUVFRUVFRUVFRUVFRUQ==",
+         "body": {
+          "text": {
+           "text": "Задание: Купить хлеб"
+          }
+         }
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         }
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ]
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "52525252525252525252525252525252",
+       "ts_ms": 1800000000000,
+       "content": {
+        "article": {
+         "title": "Рецепт",
+         "markdown": "# Рецепт\nмука",
+         "text": "Статья: Рецепт"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "UlJSUlJSUlJSUlJSUlJSUg==",
+         "body": {
+          "text": {
+           "text": "Статья: Рецепт"
+          }
+         }
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         }
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 2
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "с возможностями — свой вид",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [
+     "article",
+     "task_offer"
+    ],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "51515151515151515151515151515151",
+       "ts_ms": 1800000000000,
+       "content": {
+        "task_offer": {
+         "name": "Купить хлеб",
+         "text": "Задание: Купить хлеб"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "UVFRUVFRUVFRUVFRUVFRUQ==",
+         "body": {
+          "task_offer": {
+           "title": "Купить хлеб"
+          }
+         }
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         }
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ]
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "52525252525252525252525252525252",
+       "ts_ms": 1800000000000,
+       "content": {
+        "article": {
+         "title": "Рецепт",
+         "markdown": "# Рецепт\nмука",
+         "text": "Статья: Рецепт"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "UlJSUlJSUlJSUlJSUlJSUg==",
+         "body": {
+          "article": {
+           "title": "Рецепт",
+           "markdown": "# Рецепт\nмука"
+          }
+         }
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         }
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 2
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

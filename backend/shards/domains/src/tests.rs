@@ -473,3 +473,56 @@ async fn handler_share_per_user_and_origin_domain() {
     assert_ne!(d.dispatch("domain.op.sync", req).await, Err(ErrorCode::RateLimited));
     drop(held);
 }
+
+/// spec 035 (S7-22, FR-077): снимок с `complete` обрезает журнал до своего `upto_seq` — операции удалены, квота
+/// уменьшена, синк с курсором внутри обрезанного отдаёт `truncated_upto` и пустую страницу; снимок без `complete`
+/// журнал не трогает.
+#[tokio::test]
+async fn truncate_after_complete_snapshot() {
+    let lim = store::Limits { ops_per_container: 12, ops_per_writer: 1000, bytes_per_container: 1 << 22, bytes_per_writer: 1 << 22 };
+    let d = setup_with(lim).await;
+    let alice = device(&d, "alice@local", "a1");
+    let (c, cref) = new_container(&d, &alice, "alice@local").await;
+    let k1 = domain::new_epoch_key();
+    for i in 1..=10u64 {
+        append(&d, "alice@local", &op(&alice, &c, 1, &k1, i, "a1", &"x".repeat(1000))).await.unwrap();
+    }
+    let usage = || async {
+        let (ops, bytes): (i64, i64) = sqlx::query_as("SELECT ops, bytes FROM log_usage WHERE user = 'alice@local'").fetch_one(&d.pool).await.unwrap();
+        let (lb,): (i64,) = sqlx::query_as("SELECT log_bytes FROM containers").fetch_one(&d.pool).await.unwrap();
+        (ops, bytes, lb)
+    };
+    let before = usage().await;
+    // Снимок без complete — журнал целиком
+    let partial = domain::seal_snapshot(&alice, &c, 1, &k1, 6, b"state@6", 1).unwrap();
+    call(&d, "alice@local", "domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(partial) }).await.unwrap();
+    let p = sync(&d, "alice@local", &cref, 0, 0).await.unwrap();
+    assert_eq!((p.ops.len(), p.truncated_upto), (10, 0));
+    assert_eq!(usage().await, before);
+    // Подмена флага без подписи не проходит: complete входит в подписанный дайджест
+    let mut forged = domain::seal_snapshot(&alice, &c, 1, &k1, 8, b"state@8", 1).unwrap();
+    forged.complete = true;
+    assert_eq!(call(&d, "alice@local", "domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(forged) }).await, Err(ErrorCode::Invalid));
+    // Снимок с complete до 8 — операции 1..=8 удалены, квота уменьшена
+    let full = domain::seal_snapshot_complete(&alice, &c, 1, &k1, 8, b"state@8", 1, true).unwrap();
+    assert!(full.complete);
+    call(&d, "alice@local", "domain.snapshot.put", &DomainSnapshotPutRequest { snapshot: Some(full) }).await.unwrap();
+    let (left,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM container_log").fetch_one(&d.pool).await.unwrap();
+    assert_eq!(left, 2);
+    let after = usage().await;
+    assert_eq!(after.0, 2);
+    assert!(after.1 < before.1 / 4 && after.2 < before.2 / 4, "{before:?} → {after:?}");
+    // Курсор внутри обрезанного: пустая страница и граница — клиент берёт снимок
+    let p = sync(&d, "alice@local", &cref, 3, 0).await.unwrap();
+    assert!(p.ops.is_empty());
+    assert_eq!(p.truncated_upto, 8);
+    let p = sync(&d, "alice@local", &cref, 8, 0).await.unwrap();
+    assert_eq!((p.ops.iter().map(|o| o.seq).collect::<Vec<_>>(), p.truncated_upto), (vec![9, 10], 8));
+    let snap: DomainSnapshotGetResponse = resp(call(&d, "alice@local", "domain.snapshot.get", &DomainSnapshotGetRequest { container: Some(cref.clone()) }).await.unwrap());
+    assert_eq!(snap.snapshot.unwrap().upto_seq, 8);
+    // Потолок операций контейнера считает живые операции: после обрезки журнал снова пишется
+    for i in 11..=20u64 {
+        append(&d, "alice@local", &op(&alice, &c, 1, &k1, i, "a1", "y")).await.unwrap();
+    }
+    assert_eq!(append(&d, "alice@local", &op(&alice, &c, 1, &k1, 21, "a1", "y")).await, Err(ErrorCode::Limit));
+}

@@ -1,0 +1,173 @@
+{
+ "suite": "model/delete_everyone_direct",
+ "description": "spec 035 T062 (HIST-1 п. 4): «удалить у всех» в личном чате — любое сообщение, в том числе собеседника: строка исчезает (messageRemove), надгробие хранится, счётчик снимается; мутация уходит собеседнику (сначала его журнал устройств); повтор входящего не воскрешает строку. Ожидания руками.",
+ "cases": [
+  {
+   "name": "входящее, затем удалить у всех",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "01010101010101010101010101010101",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "раз"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+         "outgoing": null,
+         "body": {
+          "text": {
+           "text": "раз"
+          }
+         },
+         "from": "bob@local"
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 1
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 1
+        }
+       }
+      ],
+      "requests": [],
+      "puts": [
+       "history-row"
+      ]
+     }
+    },
+    {
+     "submit": {
+      "delete_messages": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "targets": [
+        "AQEBAQEBAQEBAQEBAQEBAQ=="
+       ],
+       "scope": "DELETE_SCOPE_EVERYONE"
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_remove": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "id": "AQEBAQEBAQEBAQEBAQEBAQ=="
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "last": null,
+         "unread": null
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": null
+        }
+       }
+      ],
+      "requests": [
+       "identity.device.log_sync_anon"
+      ],
+      "puts": [
+       "history-row",
+       "outbox"
+      ]
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 50
+     },
+     "expect": {
+      "result": {
+       "rows": null
+      }
+     }
+    },
+    {
+     "input": {
+      "incoming": {
+       "chat": {
+        "user": {
+         "address": "bob@local"
+        }
+       },
+       "from": "bob@local",
+       "id": "01010101010101010101010101010101",
+       "ts_ms": 1800000000000,
+       "content": {
+        "text": {
+         "text": "раз"
+        }
+       }
+      }
+     },
+     "expect": {
+      "changes": [],
+      "requests": []
+     }
+    }
+   ]
+  }
+ ]
+}

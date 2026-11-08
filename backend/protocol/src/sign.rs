@@ -37,10 +37,12 @@ pub mod ctx {
     pub const SELF_SIGNING: &[u8] = b"parvane/v2/self-signing\0";
     pub const SERVER_DESCRIPTOR: &[u8] = b"parvane/v2/server-descriptor\0";
     pub const GROUP_ENVELOPE: &[u8] = b"parvane/v2/group-env\0";
-    pub const GROUP_TYPING: &[u8] = b"parvane/v2/group-typing\0";
-    /// Подпись «печатает» группы с channel_id (A0015-2); прежняя GROUP_TYPING — только приём от старых клиентов.
+    /// Подпись «печатает» группы с channel_id (A0015-2). Прежний контекст `parvane/v2/group-typing\0` без канала
+    /// удалён (spec 035, FR-076): такие подписи не принимаются.
     pub const GROUP_TYPING_V2: &[u8] = b"parvane/v2/group-typing2\0";
     pub const GROUP_JOIN: &[u8] = b"parvane/v2/group-join\0";
+    /// spec 035 (PV-006): доказательство знания секрета ссылки для `group.state.sync` до вступления.
+    pub const GROUP_INVITE_SYNC: &[u8] = b"parvane/group-invite-sync/v1\0";
     pub const GROUP_ENTRY_HASH: &[u8] = b"parvane/v2/group-entry\0";
     pub const GROUP_GENESIS: &[u8] = b"parvane/v2/group-genesis\0";
     pub const DEVICE_LOG_HASH: &[u8] = b"parvane/v2/device-log\0";
@@ -64,9 +66,9 @@ pub mod ctx {
         SELF_SIGNING,
         SERVER_DESCRIPTOR,
         GROUP_ENVELOPE,
-        GROUP_TYPING,
         GROUP_TYPING_V2,
         GROUP_JOIN,
+        GROUP_INVITE_SYNC,
         GROUP_ENTRY_HASH,
         GROUP_GENESIS,
         DEVICE_LOG_HASH,

@@ -10,6 +10,8 @@ package parvane.sample.v1;
 
 import "parvane/core/v2/domain.proto";
 import "parvane/core/v2/options.proto";
+import "parvane/state/v1/state.proto";
+import "parvane/state/v2/state.proto";
 
 message SampleEntry {
   string key = 1 [(parvane.core.v2.max_len) = 256];
@@ -78,4 +80,55 @@ message FutureContent {
     FutureCritical future_critical = 1000;
   }
   uint32 ttl_secs = 100;
+}
+
+// ── «Движок будущего» для журналов (spec 035, T049/T050) ─────────────────────────────────────────────────
+// Надмножество `parvane.state.v2.StateOp` (те же номера заголовка и видов): новое поле внутри известной
+// операции (`FuturePatch.reason`), новый обычный вид операции (900) и критичный (1000). Значение папки
+// будущего — `FutureFolder` (поля 2/3 как у `parvane.state.v1.Folder` + новое поле 50).
+
+message FuturePatch {
+  parvane.state.v2.ObjectKey object = 1;
+  repeated parvane.state.v2.FieldValue set = 2 [(parvane.core.v2.max_items) = 64];
+  repeated uint32 clear = 3 [(parvane.core.v2.max_items) = 64];
+  // Новое поле известной операции.
+  string reason = 4 [(parvane.core.v2.max_len) = 256];
+}
+
+message FutureTag {
+  string label = 1 [(parvane.core.v2.max_len) = 256];
+}
+
+message FutureLock {
+  bytes rule = 1 [(parvane.core.v2.max_len) = 256];
+}
+
+message FutureStateOp {
+  bytes op_id = 1 [(parvane.core.v2.max_len) = 16];
+  uint64 lamport = 2;
+  string device_id = 3 [(parvane.core.v2.max_len) = 64];
+  int64 ts_ms = 4;
+  oneof op {
+    parvane.state.v2.Create create = 10;
+    FuturePatch patch = 11;
+    FutureTag tag = 900;
+    FutureLock lock = 1000;
+  }
+}
+
+message FutureFolder {
+  string title = 2 [(parvane.core.v2.max_len) = 128];
+  string emoticon = 3 [(parvane.core.v2.max_len) = 32];
+  // Новое поле значения папки.
+  string badge = 50 [(parvane.core.v2.max_len) = 64];
+}
+
+// Надмножество `parvane.history.v1.MessageRow` (поля 1–5) + новое поле строки.
+message FutureMessageRow {
+  bytes id = 1 [(parvane.core.v2.max_len) = 16];
+  parvane.state.v1.Peer chat = 2;
+  string from = 3 [(parvane.core.v2.max_len) = 255];
+  int64 ts_ms = 4;
+  bytes body = 5 [(parvane.core.v2.max_len) = 262144];
+  string future_mood = 40 [(parvane.core.v2.max_len) = 64];
 }

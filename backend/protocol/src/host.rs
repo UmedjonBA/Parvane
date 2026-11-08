@@ -109,6 +109,28 @@ pub fn parse_legacy_devices(devices_json: &str) -> Result<Vec<crate::pb::parvane
         .collect()
 }
 
+/// Итог создания/сброса личности (OPT-015): запросы — типами, корень — только в `Zeroizing` (ни одной
+/// `String` с корнем, кроме стираемой при освобождении строки границы).
+pub struct IdentityCreated {
+    pub requests: Vec<OutRequest>,
+    pub root_secret: zeroize::Zeroizing<[u8; 32]>,
+}
+
+impl IdentityCreated {
+    /// JSON границы без промежуточного разбора: запросы — `req_json`, корень — base64 прямо в стираемый буфер.
+    pub fn to_json(&self) -> zeroize::Zeroizing<String> {
+        let reqs = reqs_json(&self.requests);
+        let secret = zeroize::Zeroizing::new(b64(&*self.root_secret));
+        let mut out = zeroize::Zeroizing::new(String::with_capacity(reqs.len() + secret.len() + 32));
+        out.push_str("{\"requests\":");
+        out.push_str(&reqs);
+        out.push_str(",\"rootSecret\":\"");
+        out.push_str(&secret);
+        out.push_str("\"}");
+        out
+    }
+}
+
 fn uuid_str(b: &[u8]) -> String {
     let h = hex::encode(b);
     if h.len() != 32 {
@@ -120,7 +142,8 @@ fn uuid_str(b: &[u8]) -> String {
 fn disp(d: Disposition) -> &'static str {
     match d {
         Disposition::Show => "show",
-        Disposition::Stub => "stub",
+        // spec 035: критичная заглушка нынешним клиентам — та же заглушка (запреты — в модели движка).
+        Disposition::Stub | Disposition::StubCritical => "stub",
         Disposition::Skip => "skip",
     }
 }
@@ -355,9 +378,15 @@ impl HostClient {
         Ok(())
     }
 
-    pub fn create_identity(&mut self, otk: usize) -> Result<String, String> {
-        let (reqs, root) = self.inner.create_identity(otk).map_err(err)?;
-        Ok(json!({"requests": serde_json::from_str::<Value>(&reqs_json(&reqs)).unwrap_or(Value::Null), "rootSecret": b64(&root.root.to_bytes())}).to_string())
+    /// Первое устройство: запросы и корень (OPT-015: без круга serialize→parse, корень — в `Zeroizing`).
+    pub fn create_identity_typed(&mut self, otk: usize) -> Result<IdentityCreated, String> {
+        let (requests, root) = self.inner.create_identity(otk).map_err(err)?;
+        Ok(IdentityCreated { requests, root_secret: zeroize::Zeroizing::new(root.root.to_bytes()) })
+    }
+
+    /// JSON границы `{"requests": [...], "rootSecret": base64}` — строка с корнем стирается при освобождении.
+    pub fn create_identity(&mut self, otk: usize) -> Result<zeroize::Zeroizing<String>, String> {
+        self.create_identity_typed(otk).map(|r| r.to_json())
     }
 
     /// C1-06: резервная копия корня (`root_secret` — 32 байта из
@@ -455,9 +484,13 @@ impl HostClient {
 
     /// T130: сброс личности (новый корень взамен прежнего) → как
     /// `create_identity`; первый запрос — `identity.root.rotate`.
-    pub fn reset_identity(&mut self, otk: usize) -> Result<String, String> {
-        let (reqs, root) = self.inner.reset_identity(otk).map_err(err)?;
-        Ok(json!({"requests": serde_json::from_str::<Value>(&reqs_json(&reqs)).unwrap_or(Value::Null), "rootSecret": b64(&root.root.to_bytes())}).to_string())
+    pub fn reset_identity_typed(&mut self, otk: usize) -> Result<IdentityCreated, String> {
+        let (requests, root) = self.inner.reset_identity(otk).map_err(err)?;
+        Ok(IdentityCreated { requests, root_secret: zeroize::Zeroizing::new(root.root.to_bytes()) })
+    }
+
+    pub fn reset_identity(&mut self, otk: usize) -> Result<zeroize::Zeroizing<String>, String> {
+        self.reset_identity_typed(otk).map(|r| r.to_json())
     }
 
     pub fn ingest_bundle(&mut self, user: &str, resp: &[u8]) -> Result<usize, String> {
@@ -602,7 +635,7 @@ impl HostClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&s.avatar_key), "migratedFrom": s.migrated_from,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64(&self.inner.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch, "epochStale": s.epoch_stale,
             "deleted": s.deleted, "defaultPermissions": serde_json::to_value(s.default_permissions).unwrap_or(Value::Null),
             "inviteLinks": s.invite_links.keys().map(hex::encode).collect::<Vec<_>>(),

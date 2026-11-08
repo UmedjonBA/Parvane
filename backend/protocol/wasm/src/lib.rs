@@ -100,7 +100,8 @@ fn content_json(c: &Content) -> Value {
 fn disp(d: Disposition) -> &'static str {
     match d {
         Disposition::Show => "show",
-        Disposition::Stub => "stub",
+        // spec 035: критичная заглушка нынешним клиентам — та же заглушка (запреты — в модели движка).
+        Disposition::Stub | Disposition::StubCritical => "stub",
         Disposition::Skip => "skip",
     }
 }
@@ -829,6 +830,8 @@ impl PvClient {
         set(&o, "headSeq", &JsValue::from_f64(r.head_seq as f64));
         set(&o, "more", &JsValue::from_bool(r.more));
         set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
+        // spec 035 (S7-22): курсор внутри обрезанного журнала — взять снимок
+        set(&o, "needSnapshot", &JsValue::from_bool(r.need_snapshot));
         if let Some(e) = r.missing_epoch {
             set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
         }
@@ -974,6 +977,7 @@ impl PvClient {
         set(&o, "more", &JsValue::from_bool(r.more));
         set(&o, "grantsBehind", &JsValue::from_bool(r.grants_behind));
         set(&o, "authorsBehind", &JsValue::from_bool(r.authors_behind));
+        set(&o, "needSnapshot", &JsValue::from_bool(r.need_snapshot));
         if let Some(e) = r.missing_epoch {
             set(&o, "missingEpoch", &JsValue::from_f64(e as f64));
         }
@@ -1318,7 +1322,7 @@ impl PvClient {
             .map(|(u, m)| json!({"user": u, "role": m.role as i32, "mutedUntilMs": m.muted_until_ms, "rights": serde_json::to_value(m.rights).unwrap_or(Value::Null)}))
             .collect();
         Ok(json!({
-            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64_std(&s.avatar_key), "migratedFrom": s.migrated_from,
+            "version": s.version, "kind": s.kind as i32, "name": s.name, "about": s.about, "avatarFileId": s.avatar_file_id, "avatarKey": b64_std(&self.inner.group_avatar_key(&s.group.id).map(|k| k.to_vec()).unwrap_or_default()), "avatarKeyId": hex::encode(&s.avatar_key_id), "migratedFrom": s.migrated_from,
             "owner": s.owner, "members": members, "banned": s.banned, "epoch": s.epoch,
             // ENG-06: и после ухода устройства участника — новую эпоху начинает тот, кто вправе
             "epochStale": s.epoch_stale || self.inner.group_rekey_pending(&s.group.id),
@@ -1952,5 +1956,38 @@ mod tests {
     #[test]
     fn version() {
         assert_eq!(super::version(), parvane_protocol::version());
+    }
+}
+
+/// spec 035 (T070, contracts/engine-api.md): модель движка — намерения → изменения модели. Граница —
+/// proto3-JSON типов `engine/v1/model.proto`; ошибка вызова — `{"error": "<вид>"}` в строке результата,
+/// ошибка открытия — исключение с той же строкой. Прежние поштучные экспорты (`Client`, `history*`, …)
+/// остаются до перехода web на модель (T118).
+#[wasm_bindgen]
+pub struct PvEngine {
+    inner: parvane_protocol::model::Engine,
+}
+
+#[wasm_bindgen]
+impl PvEngine {
+    /// Открыть по конфигурации (`EngineConfig`, JSON); дальше — `call("start", "{}")`.
+    pub fn open(config_json: &str) -> Result<PvEngine, JsValue> {
+        parvane_protocol::model::Engine::open_json(config_json).map(|inner| PvEngine { inner }).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Вызов по имени (`start`, `submit`, `storeLoaded`, `storeCommitted`, `ingest`, `tick`, `chatList`,
+    /// `historyPage`, `viewState`, `viewGroup`, `capabilities`, `unlockPin`, `engineInfo`) → JSON результата.
+    pub fn call(&mut self, name: &str, args_json: &str) -> String {
+        self.inner.call(name, args_json)
+    }
+
+    /// Ревизия последнего выпущенного изменения модели.
+    pub fn revision(&self) -> f64 {
+        self.inner.revision() as f64
+    }
+
+    #[wasm_bindgen(js_name = engineInfo)]
+    pub fn engine_info(&self) -> String {
+        parvane_protocol::engine_info_json()
     }
 }

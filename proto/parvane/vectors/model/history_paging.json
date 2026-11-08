@@ -1,0 +1,454 @@
+{
+ "suite": "model/history_paging",
+ "description": "spec 035 T062 (FR-005, ORDER-1 п. 3): строки журнала истории (старые — по времени отправителя), страницы по якорю (order, id) в обе стороны и вокруг; удалённая строка из страниц пропадает, соседние страницы не повторяются; маркер «прочитано до» пересчитывает счётчик (READ-2 п. 2). Ожидания руками.",
+ "cases": [
+  {
+   "name": "семь строк, страницы по три",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "input": {
+      "history": [
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "01010101010101010101010101010101",
+         "from": "bob@local",
+         "ts_ms": 1000,
+         "content": {
+          "kind": "text",
+          "text": "1"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "02020202020202020202020202020202",
+         "from": "bob@local",
+         "ts_ms": 2000,
+         "content": {
+          "kind": "text",
+          "text": "2"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "03030303030303030303030303030303",
+         "from": "bob@local",
+         "ts_ms": 3000,
+         "content": {
+          "kind": "text",
+          "text": "3"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "04040404040404040404040404040404",
+         "from": "bob@local",
+         "ts_ms": 4000,
+         "content": {
+          "kind": "text",
+          "text": "4"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "05050505050505050505050505050505",
+         "from": "bob@local",
+         "ts_ms": 5000,
+         "content": {
+          "kind": "text",
+          "text": "5"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "06060606060606060606060606060606",
+         "from": "bob@local",
+         "ts_ms": 6000,
+         "content": {
+          "kind": "text",
+          "text": "6"
+         }
+        }
+       },
+       {
+        "row": {
+         "chat": "bob@local",
+         "id": "07070707070707070707070707070707",
+         "from": "bob@local",
+         "ts_ms": 7000,
+         "content": {
+          "kind": "text",
+          "text": "7"
+         }
+        }
+       }
+      ]
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_upsert": {
+         "id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+         "order": "1000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "AgICAgICAgICAgICAgICAg==",
+         "order": "2000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "AwMDAwMDAwMDAwMDAwMDAw==",
+         "order": "3000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "BAQEBAQEBAQEBAQEBAQEBA==",
+         "order": "4000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+         "order": "5000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "BgYGBgYGBgYGBgYGBgYGBg==",
+         "order": "6000"
+        }
+       },
+       {
+        "message_upsert": {
+         "id": "BwcHBwcHBwcHBwcHBwcHBw==",
+         "order": "7000"
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 7
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 7
+        }
+       }
+      ]
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 3
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+         "order": "5000"
+        },
+        {
+         "id": "BgYGBgYGBgYGBgYGBgYGBg==",
+         "order": "6000"
+        },
+        {
+         "id": "BwcHBwcHBwcHBwcHBwcHBw==",
+         "order": "7000"
+        }
+       ],
+       "older": {
+        "ts_ms": "5000",
+        "id": "BQUFBQUFBQUFBQUFBQUFBQ=="
+       },
+       "newer": {
+        "ts_ms": "7000",
+        "id": "BwcHBwcHBwcHBwcHBwcHBw=="
+       },
+       "has_older": true,
+       "has_newer": null
+      }
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "anchor": {
+       "ts_ms": "5000",
+       "id": "BQUFBQUFBQUFBQUFBQUFBQ=="
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 3
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "AgICAgICAgICAgICAgICAg==",
+         "order": "2000"
+        },
+        {
+         "id": "AwMDAwMDAwMDAwMDAwMDAw==",
+         "order": "3000"
+        },
+        {
+         "id": "BAQEBAQEBAQEBAQEBAQEBA==",
+         "order": "4000"
+        }
+       ],
+       "has_older": true,
+       "has_newer": true
+      }
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "anchor": {
+       "ts_ms": "2000",
+       "id": "AgICAgICAgICAgICAgICAg=="
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 3
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+         "order": "1000"
+        }
+       ],
+       "has_older": null,
+       "has_newer": true
+      }
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_NEWER",
+      "limit": 3
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "AQEBAQEBAQEBAQEBAQEBAQ==",
+         "order": "1000"
+        },
+        {
+         "id": "AgICAgICAgICAgICAgICAg==",
+         "order": "2000"
+        },
+        {
+         "id": "AwMDAwMDAwMDAwMDAwMDAw==",
+         "order": "3000"
+        }
+       ],
+       "has_older": null,
+       "has_newer": true
+      }
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "anchor": {
+       "ts_ms": "4000",
+       "id": "BAQEBAQEBAQEBAQEBAQEBA=="
+      },
+      "direction": "PAGE_DIRECTION_AROUND",
+      "limit": 4
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "AgICAgICAgICAgICAgICAg==",
+         "order": "2000"
+        },
+        {
+         "id": "AwMDAwMDAwMDAwMDAwMDAw==",
+         "order": "3000"
+        },
+        {
+         "id": "BAQEBAQEBAQEBAQEBAQEBA==",
+         "order": "4000"
+        },
+        {
+         "id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+         "order": "5000"
+        }
+       ]
+      }
+     }
+    },
+    {
+     "input": {
+      "history": [
+       {
+        "gone": {
+         "chat": "bob@local",
+         "target": "06060606060606060606060606060606",
+         "ts_ms": 9000,
+         "op_id": "66666666666666666666666666666666",
+         "by": "bob@local"
+        }
+       }
+      ]
+     },
+     "expect": {
+      "changes": [
+       {
+        "message_remove": {
+         "id": "BgYGBgYGBgYGBgYGBgYGBg=="
+        }
+       },
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 6
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 6
+        }
+       }
+      ]
+     }
+    },
+    {
+     "historyPage": {
+      "chat": {
+       "user": {
+        "address": "bob@local"
+       }
+      },
+      "direction": "PAGE_DIRECTION_OLDER",
+      "limit": 3
+     },
+     "expect": {
+      "result": {
+       "rows": [
+        {
+         "id": "BAQEBAQEBAQEBAQEBAQEBA==",
+         "order": "4000"
+        },
+        {
+         "id": "BQUFBQUFBQUFBQUFBQUFBQ==",
+         "order": "5000"
+        },
+        {
+         "id": "BwcHBwcHBwcHBwcHBwcHBw==",
+         "order": "7000"
+        }
+       ],
+       "has_older": true
+      }
+     }
+    },
+    {
+     "input": {
+      "history": [
+       {
+        "read": {
+         "chat": "bob@local",
+         "ts_ms": 4000,
+         "id": "04040404040404040404040404040404"
+        }
+       }
+      ]
+     },
+     "expect": {
+      "changes": [
+       {
+        "chat_upsert": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "unread": 2
+        }
+       },
+       {
+        "unread_changed": {
+         "chat": {
+          "user": {
+           "address": "bob@local"
+          }
+         },
+         "count": 2
+        }
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

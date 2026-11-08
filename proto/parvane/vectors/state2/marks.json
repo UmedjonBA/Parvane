@@ -1,0 +1,38 @@
+{
+  "suite": "state2/marks",
+  "description": "spec 035 FR-017 (STATE-1): отметки — беззнаковое целое big-endian без ведущих нулей, сводятся максимумом, не зависят от меток и сильнее надгробия. SCHEDULED отметка 1 = «отправлено» (01); CHAT_CLEARED отметка 2 = граница очистки (мс). Ожидания руками; marks — номер отметки → hex значения.",
+  "cases": [
+    {
+      "name": "«отправлено» сильнее удаления отложенного",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "SCHEDULED", "key": "000000000000000000000000000000aa", "set": {"3": {"send_at_ms": "500"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "mark": {"kind": "SCHEDULED", "key": "000000000000000000000000000000aa", "field": 1, "value_hex": "01"}},
+        {"id": "03", "lamport": 5, "device": "d2", "delete": {"kind": "SCHEDULED", "key": "000000000000000000000000000000aa"}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 5, "objects": [
+        {"kind": "OBJECT_KIND_SCHEDULED", "key": "000000000000000000000000000000aa", "value": {}, "marks": {"1": "01"}}
+      ]}
+    },
+    {
+      "name": "граница очистки чата только растёт, метка не важна",
+      "input": {"ops": [
+        {"id": "01", "lamport": 9, "device": "d1", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 2, "value_hex": "0186a0"}},
+        {"id": "02", "lamport": 1, "device": "d2", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 2, "value_hex": "0f4240"}},
+        {"id": "03", "lamport": 10, "device": "d3", "mark": {"kind": "CHAT_CLEARED", "key": "u:bob@x", "field": 2, "value_hex": "2710"}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 10, "objects": [
+        {"kind": "OBJECT_KIND_CHAT_CLEARED", "key": "u:bob@x", "value": {}, "marks": {"2": "0f4240"}}
+      ]}
+    },
+    {
+      "name": "отметка и поля одного отложенного",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "SCHEDULED", "key": "000000000000000000000000000000bb", "set": {"3": {"send_at_ms": "700"}}}},
+        {"id": "02", "lamport": 2, "device": "d2", "mark": {"kind": "SCHEDULED", "key": "000000000000000000000000000000bb", "field": 1, "value_hex": "01"}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_SCHEDULED", "key": "000000000000000000000000000000bb", "value": {"send_at_ms": "700"}, "marks": {"1": "01"}}
+      ]}
+    }
+  ]
+}

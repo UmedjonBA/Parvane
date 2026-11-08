@@ -1,0 +1,51 @@
+{
+  "suite": "state2/sets",
+  "description": "spec 035 FR-013: поля-множества (чаты папки include_peers = 4, exclude_peers = 5) сводятся по элементам — каждый элемент отдельный регистр «есть/нет» с меткой; без перезаписи списка целиком. Элемент — proto3-JSON элемента (Peer) либо {hex}. Ожидания руками; элементы в показе — по возрастанию байтов элемента (байты Peer начинаются с длины адреса: bob@x раньше alice@x).",
+  "cases": [
+    {
+      "name": "два устройства добавляют разные чаты — оба в папке",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "create": {"kind": "FOLDER", "key": "3", "set": {"2": {"title": "Друзья"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "set_add": {"kind": "FOLDER", "key": "3", "field": 4, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "03", "lamport": 2, "device": "d2", "set_add": {"kind": "FOLDER", "key": "3", "field": 4, "element": {"user": {"address": "alice@x"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "3", "value": {"title": "Друзья", "include_peers": [{"user": {"address": "bob@x"}}, {"user": {"address": "alice@x"}}]}}
+      ]}
+    },
+    {
+      "name": "удаление элемента новее добавления убирает его, старее — нет",
+      "input": {"ops": [
+        {"id": "01", "lamport": 2, "device": "d1", "set_add": {"kind": "FOLDER", "key": "4", "field": 4, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "02", "lamport": 3, "device": "d2", "set_remove": {"kind": "FOLDER", "key": "4", "field": 4, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "03", "lamport": 4, "device": "d1", "set_add": {"kind": "FOLDER", "key": "4", "field": 4, "element": {"user": {"address": "carol@x"}}}},
+        {"id": "04", "lamport": 1, "device": "d2", "set_remove": {"kind": "FOLDER", "key": "4", "field": 4, "element": {"user": {"address": "carol@x"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 4, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "4", "value": {"include_peers": [{"user": {"address": "carol@x"}}]}}
+      ]}
+    },
+    {
+      "name": "добавление и удаление с равным лампортом — решает device_id",
+      "input": {"ops": [
+        {"id": "01", "lamport": 5, "device": "d1", "set_add": {"kind": "FOLDER", "key": "6", "field": 5, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "02", "lamport": 5, "device": "d2", "set_remove": {"kind": "FOLDER", "key": "6", "field": 5, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "03", "lamport": 5, "device": "d1", "set_add": {"kind": "FOLDER", "key": "6", "field": 5, "element": {"user": {"address": "dan@x"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 5, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "6", "value": {"exclude_peers": [{"user": {"address": "dan@x"}}]}}
+      ]}
+    },
+    {
+      "name": "включённые и исключённые — разные множества",
+      "input": {"ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "set_add": {"kind": "FOLDER", "key": "8", "field": 4, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "02", "lamport": 2, "device": "d1", "set_remove": {"kind": "FOLDER", "key": "8", "field": 5, "element": {"user": {"address": "bob@x"}}}},
+        {"id": "03", "lamport": 2, "device": "d2", "set_add": {"kind": "FOLDER", "key": "8", "field": 5, "element": {"user": {"address": "eve@x"}}}}
+      ]},
+      "expect": {"rejected": [], "max_lamport": 2, "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "8", "value": {"include_peers": [{"user": {"address": "bob@x"}}], "exclude_peers": [{"user": {"address": "eve@x"}}]}}
+      ]}
+    }
+  ]
+}

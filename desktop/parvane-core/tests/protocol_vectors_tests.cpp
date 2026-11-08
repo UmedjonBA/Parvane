@@ -285,6 +285,14 @@ int main() {
     run("history/aead", "history/aead.json", 6);
     run("history/checkpoint", "history/checkpoint.json", 6); // S7-3/S7-4: сверка точки, цепочки, выравнивание
     runHistoryClient();
+    // spec 035: личное состояние v2 — патч по полям, множества, «удаление против правки», отметки, неизвестное
+    run("state2/patch", "state2/patch.json", 6);
+    run("state2/sets", "state2/sets.json", 4);
+    run("state2/ordered", "state2/ordered.json", 3);
+    run("state2/delete_vs_edit", "state2/delete_vs_edit.json", 5);
+    run("state2/marks", "state2/marks.json", 3);
+    run("state2/unknown_fields", "state2/unknown_fields.json", 6);
+    run("state2/rejected", "state2/rejected.json", 2);
     std::printf("=== %d/%d ok ===\n", g_total - g_fail, g_total);
     return g_fail ? 1 : 0;
 }

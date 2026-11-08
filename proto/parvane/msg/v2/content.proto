@@ -53,6 +53,9 @@ message Content {
     // Жалоба на сообщения группы её админам (spec 024, REPORT-1): уходит личным сообщением
     // каждому админу с правом удалять сообщения или банить. Клиент без модерации показывает `text`.
     ModReport mod_report = 24;
+    // Секрет фото частной группы (spec 035, PV-005, GPHOTO-1): служебный групповой конверт эпохи, только
+    // участникам. Не показывается в ленте.
+    GroupAvatarKey group_avatar_key = 25;
   }
   // D-09: LegacyV1 не может быть содержимым v2-конверта — v1-записи приходят
   // только записью журнала LegacyV1Record (msg.proto).
@@ -219,6 +222,10 @@ message Media {
 message Sticker {
   // Короткое имя набора.
   string pack = 1 [(parvane.core.v2.max_len) = 64];
+  // spec 035 (FR-075, R13): id элемента манифеста архива набора (PACK-1) — имя файла записи индекса архива PVPK
+  // (basename с расширением .webp/.png/.tgs/.webm, как в web `stickerPacks.ts` и ядре `pack_archive.cpp`), один у
+  // всех, кто установил набор; НЕ file_id загрузки. Стикер без набора — пусто. Проверка — `msg::is_pack_sticker_id`,
+  // векторы `vectors/content/sticker_id.json`. Избранное — объект state.v2 FAVED_STICKER (ключ set_id ‖ "/" ‖ sticker_id).
   string sticker_id = 2 [(parvane.core.v2.max_len) = 64];
   string emoji = 3 [(parvane.core.v2.max_len) = 32];
   Media media = 4;
@@ -372,6 +379,18 @@ message Pin {
 
 // Раздача ключей группы по E2E (только участникам по проверенному журналу).
 // D-03: несёт голову журнала отправителя (GroupContext).
+// Секрет фото частной группы (spec 035, `data-model.md` §6): едет конвертом текущей эпохи, при смене эпохи
+// действующий секрет переотправляется новой эпохой. Получатель принимает его, только если
+// SHA-256(avatar_key)[..16] = `SetInfo.avatar_key_id` журнала группы (и `file_id` совпадает): секрет связан со
+// своим файлом подписанной записью администратора, подмена участником не проходит. Из секрета выводятся ключи
+// PVB2 и capability блоба (GPHOTO-1, метка `parvane/group-avatar/v1/`).
+message GroupAvatarKey {
+  string file_id = 1 [(parvane.core.v2.max_len) = 64];
+  bytes avatar_key = 2 [(parvane.core.v2.max_len) = 32];
+  // Версия журнала группы с записью `SetInfo` этого фото.
+  uint64 info_version = 3;
+}
+
 message GroupKeyShare {
   parvane.core.v2.GroupContext context = 1;
   // Ключ конверта эпохи (AEAD GroupEnvelope), всем читающим участникам.

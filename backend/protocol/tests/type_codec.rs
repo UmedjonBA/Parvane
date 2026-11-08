@@ -52,3 +52,16 @@ fn host_calls_are_thin_wrappers_over_type_codec() {
     }
     assert!(type_codec::encode_by_type("parvane.nope.v1.Nope", "{}").is_none());
 }
+
+/// spec 035 T059: кругооборот временного сообщения `parvane.engine.v1.CodegenProbe`, которое добавляет
+/// `scripts/check_codegen_roundtrip.sh` (без него — пропуск): кодек по имени типа порождён build.rs сам.
+#[test]
+fn codegen_probe_roundtrip() {
+    let Ok(json) = std::env::var("PARVANE_CODEGEN_PROBE") else { return };
+    let ty = "parvane.engine.v1.CodegenProbe";
+    let bytes = parvane_protocol::type_codec::encode_by_type(ty, &json).expect("тип порождён").expect("кодирование");
+    let back = parvane_protocol::type_codec::decode_by_type(ty, &bytes, parvane_protocol::limits::Origin::Server).expect("тип").expect("разбор");
+    let a: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let b: serde_json::Value = serde_json::from_str(&back).unwrap();
+    assert_eq!(a, b);
+}

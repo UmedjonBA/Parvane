@@ -163,6 +163,27 @@ service GroupService {
       federated: true
     };
   }
+  // spec 035 (PV-014, FR-072): подписка своего пользователя на группу другого сервера. Записи такой группы
+  // (`S2sInboxPush`) сервер кладёт в инбокс только подписанным; факт членства в чужой группе виден своему
+  // серверу — маршрутный метаданный доставки (FED-1). Не federated: запрос — своему серверу.
+  rpc RemoteSubscribe(RemoteSubscribeRequest) returns (RemoteSubscribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.remote.subscribe"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
+  rpc RemoteUnsubscribe(RemoteUnsubscribeRequest) returns (RemoteUnsubscribeResponse) {
+    option (parvane.core.v2.method) = {
+      name: "group.remote.unsubscribe"
+      channel: METHOD_CHANNEL_ID
+      rate: RATE_CLASS_REQ
+      kind: METHOD_KIND_CALL
+      shard: "messenger"
+    };
+  }
 }
 
 enum GroupKind {
@@ -246,7 +267,20 @@ message GroupChange {
     SetPublic set_public = 17;
     InviteEdit invite_edit = 18;
     RenameMember rename_member = 19;
+    // spec 035 (D1): секрет фото для превью по ссылке.
+    InviteAvatarWrap invite_avatar_wrap = 20;
   }
+}
+
+// Секрет фото частной группы для держателя ссылки (spec 035, D1, GPHOTO-1): `avatar_key` под ключом
+// HKDF-SHA256(секрет ссылки, info = "parvane/group-avatar-invite/v1\0" ‖ group_id ‖ link_id), AEAD
+// ChaCha20-Poly1305, AAD = link_id ‖ avatar_key_id; `wrapped` = nonce(12) ‖ шифртекст ‖ тег. Секрет ссылки есть
+// только во фрагменте адреса — сервер фото не открывает. Пишет администратор (или создатель ссылки) при смене
+// фото и при создании ссылки; обёртка отозванной ссылки удаляется с ней, обёртка прежнего фото — сменой фото.
+message InviteAvatarWrap {
+  bytes link_id = 1 [(parvane.core.v2.max_len) = 32];
+  bytes avatar_key_id = 2 [(parvane.core.v2.max_len) = 16];
+  bytes wrapped = 3 [(parvane.core.v2.max_len) = 64];
 }
 
 // Участник сменил ник (spec 026): пишет он сам новым адресом; доказательство — запись `Rename` журнала
@@ -328,11 +362,18 @@ message Mute {
 message SetInfo {
   string name = 1 [(parvane.core.v2.max_len) = 255];
   string about = 2 [(parvane.core.v2.max_len) = 1024];
-  // Фото группы — объект, зашифрованный ключом эпохи.
+  // Фото группы — объект PVB2, ключи которого выводятся из 32-байтного секрета фото (GPHOTO-1).
   string avatar_file_id = 3 [(parvane.core.v2.max_len) = 64];
-  bytes avatar_key = 4 [(parvane.core.v2.max_len) = 32];
+  // spec 035 (PV-005): секрет фото больше не лежит в открытом журнале — он едет участникам конвертом эпохи
+  // (`msg.v2.GroupAvatarKey`), держателю ссылки — `InviteAvatarWrap`. Прежние записи с полем 4 читает только
+  // разовый перенос (перезаливка фото администратором).
+  reserved 4;
+  reserved "avatar_key";
   // Федерация (spec 028): домен сервера блоба фото; пусто — домен группы.
   string avatar_domain = 5 [(parvane.core.v2.max_len) = 128];
+  // spec 035: SHA-256(секрет фото)[..16] — связь «секрет идёт со своим файлом»; пусто — фото открытое
+  // (публичная группа) либо фото нет.
+  bytes avatar_key_id = 6 [(parvane.core.v2.max_len) = 16];
 }
 
 message SetPermissions {
@@ -384,6 +425,11 @@ message StateSyncRequest {
   // группы — журнал нужен, чтобы подписать вступление над головой (D-04) и
   // проверить состав до вступления. link_id знает только держатель ссылки.
   bytes invite_link_id = 3 [(parvane.core.v2.max_len) = 32];
+  // spec 035 (PV-006): доказательство знания секрета ссылки — подпись ключом ссылки над
+  // "parvane/group-invite-sync/v1\0" ‖ domain ‖ "\0" ‖ group_id ‖ user ‖ "\0" ‖ i64be(invite_proof_ts_ms)
+  // (`invite::sync_proof`). Без него посторонний журнал частной группы не получает; свежесть ±5 мин.
+  bytes invite_proof = 4 [(parvane.core.v2.max_len) = 64];
+  int64 invite_proof_ts_ms = 5;
 }
 message StateSyncResponse {
   repeated parvane.core.v2.GroupStateEntry entries = 1 [(parvane.core.v2.max_items) = 1024];
@@ -543,3 +589,13 @@ message PublicHistoryResponse {
   repeated PublicHistoryItem items = 1 [(parvane.core.v2.max_items) = 100];
   bool more = 2;
 }
+
+message RemoteSubscribeRequest {
+  parvane.core.v2.Ref group = 1;
+}
+message RemoteSubscribeResponse {}
+
+message RemoteUnsubscribeRequest {
+  parvane.core.v2.Ref group = 1;
+}
+message RemoteUnsubscribeResponse {}

@@ -3,6 +3,7 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_pvanonplanner_free: (a: number, b: number) => void;
 export const __wbg_pvclient_free: (a: number, b: number) => void;
+export const __wbg_pvengine_free: (a: number, b: number) => void;
 export const __wbg_pvhistory_free: (a: number, b: number) => void;
 export const __wbg_pvstate_free: (a: number, b: number) => void;
 export const __wbg_pvstore_free: (a: number, b: number) => void;
@@ -182,6 +183,10 @@ export const pvclient_tokenRequest: (a: number, b: number, c: number, d: number,
 export const pvclient_tokenRequestFor: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const pvclient_tokenResponse: (a: number, b: number, c: number, d: number) => void;
 export const pvclient_tokenResponseFor: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const pvengine_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const pvengine_engineInfo: (a: number, b: number) => void;
+export const pvengine_open: (a: number, b: number, c: number) => void;
+export const pvengine_revision: (a: number) => number;
 export const pvhistory_call: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const pvstate_callSet: (a: number, b: number, c: number, d: number) => void;
 export const pvstate_chatCleared: (a: number, b: number, c: number, d: number) => void;

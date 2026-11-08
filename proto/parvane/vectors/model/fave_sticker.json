@@ -1,0 +1,129 @@
+{
+ "suite": "model/fave_sticker",
+ "description": "spec 035 T062 (FR-075): избранный стикер — объект личного состояния FAVED_STICKER с ключом `set_id/sticker_id` (поля set_id, sticker_id, added_ms); снятие — удаление объекта. Ожидания руками.",
+ "cases": [
+  {
+   "name": "в избранное и обратно",
+   "config": {
+    "user": "alice@local",
+    "device_id": "d1",
+    "domain": "local",
+    "features": [],
+    "now_ms": "1800000000000"
+   },
+   "steps": [
+    {
+     "submit": {
+      "fave_sticker": {
+       "set_id": "cats",
+       "sticker_id": "s1",
+       "on": true
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FAVED_STICKER",
+          "key": "cats/s1"
+         },
+         "view": {
+          "object": {
+           "kind": "OBJECT_KIND_FAVED_STICKER",
+           "key": "cats/s1"
+          },
+          "fields": [
+           {
+            "field": 1,
+            "value": "CgRjYXRz"
+           },
+           {
+            "field": 2,
+            "value": "EgJzMQ=="
+           },
+           {
+            "field": 4
+           }
+          ]
+         }
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ]
+     }
+    },
+    {
+     "viewState": {
+      "kinds": [
+       "OBJECT_KIND_FAVED_STICKER"
+      ]
+     },
+     "expect": {
+      "result": {
+       "objects": [
+        {
+         "object": {
+          "kind": "OBJECT_KIND_FAVED_STICKER",
+          "key": "cats/s1"
+         }
+        }
+       ]
+      }
+     }
+    },
+    {
+     "submit": {
+      "fave_sticker": {
+       "set_id": "cats",
+       "sticker_id": "s1",
+       "on": false
+      }
+     },
+     "expect": {
+      "changes": [
+       {
+        "state_changed": {
+         "object": {
+          "kind": "OBJECT_KIND_FAVED_STICKER",
+          "key": "cats/s1"
+         },
+         "view": null
+        }
+       }
+      ],
+      "requests": [
+       "state.ops.append"
+      ]
+     }
+    },
+    {
+     "viewState": {
+      "kinds": [
+       "OBJECT_KIND_FAVED_STICKER"
+      ]
+     },
+     "expect": {
+      "result": {
+       "objects": null
+      }
+     }
+    },
+    {
+     "submit": {
+      "fave_sticker": {
+       "set_id": "a/b",
+       "sticker_id": "s1",
+       "on": true
+      }
+     },
+     "expect": {
+      "error": "InvalidField"
+     }
+    }
+   ]
+  }
+ ]
+}

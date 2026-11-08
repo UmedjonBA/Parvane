@@ -23,6 +23,11 @@ typedef struct PvAnonPlanner PvAnonPlanner;
 typedef struct PvClient PvClient;
 
 /**
+ * spec 035 (T070, contracts/engine-api.md): модель движка. Владеет хост; освобождать `pv_engine_free`.
+ */
+typedef struct PvEngine PvEngine;
+
+/**
  * Сессия журнала истории (непрозрачный указатель, освобождать `pv_history_free`).
  */
 typedef struct PvHistorySession PvHistorySession;
@@ -69,6 +74,26 @@ void parvane_protocol_bytes_free(struct PvBytes b);
  * освобождать `pv_free_string`.
  */
 char *pv_engine_info(void);
+
+/**
+ * Открыть модель по конфигурации (`EngineConfig`, JSON). NULL — ошибка; тогда `*err` (если не NULL) —
+ * JSON `{"error": "<вид>"}`, освобождать `pv_free_string`.
+ */
+struct PvEngine *pv_engine_open(const char *config_json,
+                                char **err);
+
+/**
+ * Вызов модели по имени → JSON результата (ошибка — `{"error": "<вид>"}`, незнакомое имя —
+ * `{"error": "UnknownCall"}`); освобождать `pv_free_string`. `args_json` NULL — `{}`.
+ */
+char *pv_engine_call(struct PvEngine *e,
+                     const char *name,
+                     const char *args_json);
+
+/**
+ * Закрыть модель.
+ */
+void pv_engine_free(struct PvEngine *e);
 
 /**
  * Освободить строку движка (то же, что `parvane_protocol_string_free`; имя из contracts/versioning.md).

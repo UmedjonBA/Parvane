@@ -1522,7 +1522,15 @@ async fn signed_certificates(ctx: &V2Ctx, user: &str) -> Result<std::collections
             Some(Change::RevokeDeviceId(id)) => {
                 m.remove(&id);
             }
-            Some(Change::RotateSelfSigningKey(_)) => m.clear(),
+            // spec 035 (FR-074): смена SSK несёт переподписанные сертификаты оставшихся устройств
+            Some(Change::RotateSelfSigningKey(r)) => {
+                m.clear();
+                for c in r.resigned {
+                    if let Ok(v) = parvane_protocol::identity::verify_certificate(&c, Some(user)) {
+                        m.insert(v.cert.device_id, c);
+                    }
+                }
+            }
             _ => {}
         }
     }

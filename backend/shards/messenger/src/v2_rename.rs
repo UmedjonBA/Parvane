@@ -66,6 +66,9 @@ pub(crate) async fn rename_db(db: &sqlx::SqlitePool, n: &RenameNotice) -> Result
     // целиком (identity повторял его без успеха, строки оставались под прежним ником)
     drop_op_dups(&mut tx, "user_state_log", "user_state_head", old, new).await?;
     merge_queue(&mut tx, "user_state_log", "user", "seq", "user_state_head", "user", old, new).await?;
+    // spec 035: журнал state.v2 — так же
+    drop_op_dups(&mut tx, "user_state_log_v2", "user_state_head_v2", old, new).await?;
+    merge_queue(&mut tx, "user_state_log_v2", "user", "seq", "user_state_head_v2", "user", old, new).await?;
     // Журнал истории (spec 033): записи прежнего адреса сохраняют seq — контрольная точка переходит вместе с ними
     drop_op_dups(&mut tx, "user_history_log", "user_history_head", old, new).await?;
     let old_next: Option<(i64,)> = sqlx::query_as("SELECT next_seq FROM user_history_head WHERE user = ?").bind(old).fetch_optional(&mut *tx).await?;
@@ -171,6 +174,8 @@ async fn purge(ctx: &V2, n: &RenameNotice) -> Result<(), sqlx::Error> {
     }
     sqlx::query("DELETE FROM user_state_log WHERE user = ?").bind(address).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM user_state_head WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM user_state_log_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM user_state_head_v2 WHERE user = ?").bind(address).execute(&mut *tx).await?;
     for table in ["user_history_log", "user_history_head", "user_history_checkpoint"] {
         sqlx::query(&format!("DELETE FROM {table} WHERE user = ?")).bind(address).execute(&mut *tx).await?;
     }

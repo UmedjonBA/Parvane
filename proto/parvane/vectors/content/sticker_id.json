@@ -1,0 +1,17 @@
+{
+  "suite": "content/sticker_id",
+  "description": "spec 035 (FR-075, R13, PACK-1): Sticker.sticker_id — id элемента манифеста архива набора, тот же у всех клиентов, установивших набор: имя файла записи индекса архива PVPK (`name` после basename: web stickerPacks.ts, ядро pack_archive.cpp build/parse) с расширением .webp/.png/.tgs/.webm. Не file_id загрузки (у каждой загрузки свой), не путь. Стикер без набора — пусто. Ожидания написаны руками. Проверяет движок msg::is_pack_sticker_id (protocol/tests/vectors_sticker_id.rs).",
+  "cases": [
+    { "name": "имя элемента индекса", "input": { "sticker_id": "01-1f600.webp" }, "expect": { "ok": true } },
+    { "name": "анимированный", "input": { "sticker_id": "07-1f389.tgs" }, "expect": { "ok": true } },
+    { "name": "видео, расширение в верхнем регистре", "input": { "sticker_id": "12-2764.WEBM" }, "expect": { "ok": true } },
+    { "name": "png с юникодом", "input": { "sticker_id": "кот.png" }, "expect": { "ok": true } },
+    { "name": "стикер без набора", "input": { "sticker_id": "" }, "expect": { "ok": true, "no_pack": true } },
+    { "name": "file_id загрузки, не id манифеста", "input": { "sticker_id": "3f2a9c1e0b7d4a6f9e8c2b1a0d3e4f5a" }, "expect": { "error": "InvalidField" } },
+    { "name": "путь внутри архива", "input": { "sticker_id": "stickers/01-1f600.webp" }, "expect": { "error": "InvalidField" } },
+    { "name": "обратный слеш", "input": { "sticker_id": "a\\01.webp" }, "expect": { "error": "InvalidField" } },
+    { "name": "чужое расширение", "input": { "sticker_id": "01.gif" }, "expect": { "error": "InvalidField" } },
+    { "name": "только расширение", "input": { "sticker_id": ".webp" }, "expect": { "error": "InvalidField" } },
+    { "name": "длиннее 64 байт", "input": { "sticker_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.webp" }, "expect": { "error": "InvalidField" } }
+  ]
+}

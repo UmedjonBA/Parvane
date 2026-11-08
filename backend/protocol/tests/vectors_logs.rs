@@ -184,3 +184,86 @@ fn group_log_vectors() {
         assert_eq!(st.check_context(&ctx), group::ContextVerdict::Fork);
     }
 }
+
+/// Сертификат с ключом Curve25519 своим у каждого устройства (журнал не принимает общий ключ, C1-01).
+fn cert_own(root: &RootIdentity, id: &str, serial: u64) -> DeviceCertificate {
+    let mut c = cert(root, "alice@x", id, serial);
+    c.olm_curve25519 = vec![id.bytes().last().unwrap_or(1); 32];
+    let k = {
+        let mut seed = [7u8; 32];
+        for (i, b) in id.bytes().enumerate().take(32) {
+            seed[i] = b;
+        }
+        ed25519_dalek::SigningKey::from_bytes(&seed)
+    };
+    identity::prove_possession(&k, &mut c, &root.root_pub()).unwrap();
+    c
+}
+
+/// spec 035 (FR-074, R12): смена SSK — одна запись с переподписью; ожидания (ok / вид ошибки) заданы руками.
+fn gen_ssk_rotate() -> Value {
+    let a = RootIdentity::generate("alice@x").unwrap();
+    let mut log = DeviceLog::new("alice@x").unwrap();
+    let mut steps = vec![];
+    let push = |log: &mut DeviceLog, steps: &mut Vec<Value>, op: SignedOp, expect: Value| {
+        if expect.get("error").is_none() {
+            log.apply(&op).unwrap();
+        }
+        steps.push(step(&op, expect));
+    };
+    let g = a.genesis_entry().unwrap();
+    push(&mut log, &mut steps, g, ok());
+    for (v, id) in [(2u64, "d1"), (3, "d2"), (4, "d3")] {
+        let add = a.add_device_entry(v, log.head_hash, &cert_own(&a, id, 1)).unwrap();
+        push(&mut log, &mut steps, add, ok());
+    }
+    // Украденное d3 отозвано SSK: SSK раскрыт
+    let e = identity::device_log_entry("alice@x", 5, log.head_hash, DevChange::RevokeDeviceId("d3".into()), None);
+    push(&mut log, &mut steps, identity::sign_device_log_entry(&a.self_signing, &e).unwrap(), ok());
+    // Смена SSK с переподписью отозванного d3 — отказ (переподписать можно только действовавшее)
+    let ssk2 = ed25519_dalek::SigningKey::from_bytes(&[0x52; 32]);
+    let (bad, _, _) = identity::rotate_ssk_entry_resigned(&a.root, "alice@x", 6, log.head_hash, &ssk2, &[cert_own(&a, "d3", 2)]).unwrap();
+    push(&mut log, &mut steps, bad, err("Forbidden"));
+    // Смена SSK подписью прежнего SSK — отказ
+    let (by_ssk, _, _) = identity::rotate_ssk_entry_resigned(&a.self_signing, "alice@x", 6, log.head_hash, &ssk2, &[]).unwrap();
+    push(&mut log, &mut steps, by_ssk, err("BadSignature"));
+    // Смена SSK корнем с переподписью d1, d2 — одна запись, устройства остаются действующими
+    let (rot, _, _) =
+        identity::rotate_ssk_entry_resigned(&a.root, "alice@x", 6, log.head_hash, &ssk2, &[cert_own(&a, "d1", 2), cert_own(&a, "d2", 2)]).unwrap();
+    push(&mut log, &mut steps, rot, ok());
+    // Запись прежним SSK после смены — BadSignature (и отзыв, и добавление)
+    let e = identity::device_log_entry("alice@x", 7, log.head_hash, DevChange::RevokeDeviceId("d2".into()), None);
+    push(&mut log, &mut steps, identity::sign_device_log_entry(&a.self_signing, &e).unwrap(), err("BadSignature"));
+    let stale_add = a.add_device_entry(7, log.head_hash, &cert_own(&a, "d4", 1)).unwrap();
+    push(&mut log, &mut steps, stale_add, err("BadSignature"));
+    // «Завершить все сеансы» второй раз: отзыв d2 новым SSK и снова смена корнем с переподписью d1
+    let e = identity::device_log_entry("alice@x", 7, log.head_hash, DevChange::RevokeDeviceId("d2".into()), None);
+    push(&mut log, &mut steps, identity::sign_device_log_entry(&ssk2, &e).unwrap(), ok());
+    let ssk3 = ed25519_dalek::SigningKey::from_bytes(&[0x53; 32]);
+    let (rot2, _, _) = identity::rotate_ssk_entry_resigned(&a.root, "alice@x", 8, log.head_hash, &ssk3, &[cert_own(&a, "d1", 3)]).unwrap();
+    push(&mut log, &mut steps, rot2, ok());
+    json!({
+        "suite": "device_log",
+        "description": "spec 035 (FR-074): смена SSK корнем — одна запись RotateSelfSigning с переподписанными сертификатами (resigned); переподпись отозванного — Forbidden; запись прежним SSK после смены — BadSignature; «завершить все сеансы» дважды — оба отзыва приняты. Ожидания руками; ни в одной версии нет «SSK новый, устройств нет».",
+        "user": "alice@x",
+        "final": {"version": log.version, "active": ["d1"], "revoked": ["d2", "d3"]},
+        "cases": [{"name": "sequence", "input": {"steps": steps}, "expect": ok()}]
+    })
+}
+
+#[test]
+fn ssk_rotate_vectors() {
+    let v = load_or_generate("device_log", "ssk_rotate.json", gen_ssk_rotate);
+    let user = v["user"].as_str().unwrap();
+    for case in cases(&v) {
+        let mut log = DeviceLog::new(user).unwrap();
+        for (i, s) in case["input"]["steps"].as_array().unwrap().iter().enumerate() {
+            let op: SignedOp = decode_checked(&unhex(s, "entry_hex"), Origin::Client).unwrap();
+            check(&format!("ssk_rotate шаг {i}"), &log.apply(&op), &s["expect"]);
+            assert!(log.version <= 1 || !log.devices.is_empty(), "шаг {i}: SSK есть, действующих устройств нет");
+        }
+        assert_eq!(log.version, v["final"]["version"].as_u64().unwrap());
+        assert_eq!(log.devices.keys().cloned().collect::<Vec<_>>(), vec!["d1".to_string()]);
+        assert!(!log.ssk_exposed);
+    }
+}

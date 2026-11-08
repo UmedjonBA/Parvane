@@ -1354,4 +1354,24 @@ mod tests {
         let rm = make_op(&mut c, "d1", 0, Op::DraftRemove(PeerKey { peer: None })).unwrap();
         assert!(s.apply(&rm).is_err());
     }
+
+    // spec 035 T029: фиксация потери v1 — два устройства параллельно правят РАЗНЫЕ поля одной папки
+    // (`folder_set` несёт папку целиком), побеждает одна запись, правка другого поля теряется. Тест остаётся,
+    // пока `state.v1` не удалён; `state.v2` (`state2.rs`, векторы `state2/patch.json`) сводит поля раздельно.
+    #[test]
+    fn concurrent_field_edits_lost_v1() {
+        let base = Folder { id: 5, title: "Работа".into(), emoticon: "💼".into(), ..Default::default() };
+        let mut c1 = LamportClock::new(1);
+        let mut c2 = LamportClock::new(1);
+        // Устройство 1 меняет название, устройство 2 — значок; обе видели одну и ту же папку.
+        let a = make_op(&mut c1, "d1", 0, Op::FolderSet(Folder { title: "Дела".into(), ..base.clone() })).unwrap();
+        let b = make_op(&mut c2, "d2", 0, Op::FolderSet(Folder { emoticon: "📌".into(), ..base.clone() })).unwrap();
+        let mut s = PersonalState::new();
+        s.apply(&a).unwrap();
+        s.apply(&b).unwrap();
+        let f = s.snapshot().folders.into_iter().next().unwrap();
+        let both = f.title == "Дела" && f.emoticon == "📌";
+        assert!(!both, "v1 неожиданно сохранил обе правки");
+        assert!(f.title == "Дела" || f.emoticon == "📌", "одна из правок должна победить");
+    }
 }

@@ -64,6 +64,9 @@ for g in gen_registry gen_bindings; do
         fail "$g --check (запустите cargo run -p parvane-protocol --bin $g)"
     fi
 done
+# spec 035 T058/T059: манифест выпуска ловит подмену WASM; новое сообщение схемы проходит все слои само
+bash "$ROOT/scripts/test_release_manifest.sh" || fail "test_release_manifest"
+bash "$ROOT/scripts/check_codegen_roundtrip.sh" || fail "check_codegen_roundtrip"
 
 # ── 1b. протокол v2: схема и fuzz-регрессия (spec 007, T087/T108) ──────────
 log "1b. buf lint + buf breaking (proto/)"

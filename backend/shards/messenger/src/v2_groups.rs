@@ -139,6 +139,36 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
             return Ok(Some(s.clone()));
         }
     }
+    let Some((state, _)) = replay(ctx, group_id).await? else { return Ok(None) };
+    if let Ok(mut g) = ctx.groups.states.lock() {
+        if g.len() >= CACHE_MAX {
+            g.clear();
+        }
+        g.insert(group_id.to_vec(), state.clone());
+    }
+    Ok(Some(state))
+}
+
+/// Изменение окон членства одной записью журнала (spec 035): кто стал участником и кто перестал.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WindowStep {
+    pub version: u64,
+    pub joined: Vec<String>,
+    pub left: Vec<String>,
+}
+
+/// Окна членства по составу до и после записи.
+pub(crate) fn window_step(prev: Option<&GroupState>, next: &GroupState) -> WindowStep {
+    let before = |u: &String| prev.is_some_and(|p| p.members.contains_key(u));
+    WindowStep {
+        version: next.version,
+        joined: next.members.keys().filter(|u| !before(u)).cloned().collect(),
+        left: prev.map(|p| p.members.keys().filter(|u| !next.members.contains_key(*u)).cloned().collect()).unwrap_or_default(),
+    }
+}
+
+/// Перестройка состояния из журнала и окна членства по каждой записи.
+async fn replay(ctx: &V2, group_id: &[u8]) -> Result<Option<(GroupState, Vec<WindowStep>)>, ErrorCode> {
     let rows: Vec<(i64, Vec<u8>, Option<String>, Option<Vec<u8>>)> =
         sqlx::query_as("SELECT version, entry, signer_user, signer_root FROM group_state_log WHERE group_id = ? ORDER BY version")
             .bind(group_id)
@@ -149,6 +179,7 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
         return Ok(None);
     }
     let mut state: Option<GroupState> = None;
+    let mut steps = Vec::with_capacity(rows.len());
     let mut heal = vec![];
     for (version, e, su, sr) in rows {
         let entry = GroupStateEntry::decode(e.as_slice()).map_err(db_err)?;
@@ -164,6 +195,7 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
                 if !had {
                     heal.push((version, signer));
                 }
+                steps.push(window_step(state.as_ref(), &s));
                 state = Some(s);
             }
             Err(code) => {
@@ -187,13 +219,100 @@ async fn load(ctx: &V2, group_id: &[u8]) -> Result<Option<GroupState>, ErrorCode
             warn!("группа: подписант записи не сохранён: {}", e);
         }
     }
-    if let (Some(s), Ok(mut g)) = (state.as_ref(), ctx.groups.states.lock()) {
-        if g.len() >= CACHE_MAX {
-            g.clear();
-        }
-        g.insert(group_id.to_vec(), s.clone());
+    Ok(state.map(|s| (s, steps)))
+}
+
+/// Записать изменение окон членства в транзакции вызывающего.
+pub(crate) async fn write_window_step(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, group_id: &[u8], step: &WindowStep) -> Result<(), ErrorCode> {
+    let v = step.version as i64;
+    for u in &step.left {
+        sqlx::query("UPDATE group_membership_windows SET exit_v = ? WHERE group_id = ? AND user = ? AND exit_v IS NULL")
+            .bind(v)
+            .bind(group_id)
+            .bind(u)
+            .execute(&mut **tx)
+            .await
+            .map_err(db_err)?;
     }
-    Ok(state)
+    for u in &step.joined {
+        sqlx::query("INSERT OR IGNORE INTO group_membership_windows (group_id, user, join_v, exit_v) VALUES (?, ?, ?, NULL)")
+            .bind(group_id)
+            .bind(u)
+            .bind(v)
+            .execute(&mut **tx)
+            .await
+            .map_err(db_err)?;
+    }
+    Ok(())
+}
+
+async fn windows_built(ctx: &V2, group_id: &[u8]) -> Result<bool, ErrorCode> {
+    let r: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM group_windows_built WHERE group_id = ?").bind(group_id).fetch_optional(&ctx.v2).await.map_err(db_err)?;
+    Ok(r.is_some())
+}
+
+/// Пересчитать окна членства группы из её журнала (миграция 0008 и группы, пропущенные при старте).
+async fn rebuild_windows_for(ctx: &V2, group_id: &[u8]) -> Result<(), ErrorCode> {
+    let Some((_, steps)) = replay(ctx, group_id).await? else { return Ok(()) };
+    let mut tx = ctx.v2.begin_with("BEGIN IMMEDIATE").await.map_err(db_err)?;
+    // Под блокировкой записи: журнал мог вырасти после чтения — тогда пересчёт на следующем обращении
+    let (head,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(version), 0) FROM group_state_log WHERE group_id = ?")
+        .bind(group_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    if steps.last().map(|s| s.version as i64) != Some(head) {
+        return Ok(());
+    }
+    write_windows(&mut tx, group_id, &steps).await?;
+    tx.commit().await.map_err(db_err)?;
+    Ok(())
+}
+
+/// Окна группы заново по шагам всего журнала и отметка «посчитано».
+pub(crate) async fn write_windows(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, group_id: &[u8], steps: &[WindowStep]) -> Result<(), ErrorCode> {
+    sqlx::query("DELETE FROM group_membership_windows WHERE group_id = ?").bind(group_id).execute(&mut **tx).await.map_err(db_err)?;
+    for st in steps {
+        write_window_step(tx, group_id, st).await?;
+    }
+    sqlx::query("INSERT OR IGNORE INTO group_windows_built (group_id) VALUES (?)").bind(group_id).execute(&mut **tx).await.map_err(db_err)?;
+    Ok(())
+}
+
+/// spec 035 (миграция 0008): окна членства для журналов, принятых до неё, — один раз при старте шарда.
+pub(crate) async fn rebuild_windows(ctx: &V2) {
+    let groups: Vec<(Vec<u8>,)> =
+        match sqlx::query_as("SELECT DISTINCT group_id FROM group_state_log WHERE group_id NOT IN (SELECT group_id FROM group_windows_built)")
+            .fetch_all(&ctx.v2)
+            .await
+        {
+            Ok(g) => g,
+            Err(e) => {
+                error!("группы v2: окна членства: {}", e);
+                return;
+            }
+        };
+    let (mut ok, mut failed) = (0usize, 0usize);
+    for (gid,) in groups {
+        match rebuild_windows_for(ctx, &gid).await {
+            Ok(()) => ok += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    if ok + failed > 0 {
+        info!("группы v2: окна членства пересчитаны ({ok}, не удалось {failed})");
+    }
+}
+
+/// Версия закрытия последнего окна членства `user` (None — окна нет либо оно открыто).
+pub(crate) async fn last_exit(pool: &SqlitePool, group_id: &[u8], user: &str) -> Result<Option<u64>, ErrorCode> {
+    let r: Option<(Option<i64>,)> = sqlx::query_as("SELECT exit_v FROM group_membership_windows WHERE group_id = ? AND user = ? ORDER BY join_v DESC LIMIT 1")
+        .bind(group_id)
+        .bind(user)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_err)?;
+    Ok(r.and_then(|(e,)| e).map(|e| e as u64))
 }
 
 /// MSG-14/ENG-09: допустимое расхождение метки времени записи журнала группы с
@@ -307,6 +426,17 @@ async fn append(ctx: &V2, actor: &str, entry: GroupStateEntry) -> Result<GroupSt
     for m in next.members.keys() {
         sqlx::query("INSERT INTO group_members_v2 (group_id, member) VALUES (?, ?)").bind(&g.id).bind(m).execute(&mut *tx).await.map_err(db_err)?;
     }
+    // spec 035: окна членства — в той же транзакции, что и запись. Журнал до миграции 0008, окна которого ещё не
+    // посчитаны, пересчитывается при первом обращении к журналу (`group.state.sync`)
+    let step = window_step(prev.as_ref(), &next);
+    if prev.is_none() {
+        write_windows(&mut tx, &g.id, std::slice::from_ref(&step)).await?;
+    } else {
+        let built: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM group_windows_built WHERE group_id = ?").bind(&g.id).fetch_optional(&mut *tx).await.map_err(db_err)?;
+        if built.is_some() {
+            write_window_step(&mut tx, &g.id, &step).await?;
+        }
+    }
     tx.commit().await.map_err(db_err)?;
     if let Ok(mut c) = ctx.groups.states.lock() {
         if c.len() >= CACHE_MAX {
@@ -359,29 +489,60 @@ async fn notify_invite_admins(ctx: &V2, s: &GroupState) {
     }
 }
 
-/// Версия последней записи, которой `u` вышел из группы, исключён или забанен.
-async fn exit_version(ctx: &V2, group_id: &[u8], u: &str) -> Result<Option<i64>, ErrorCode> {
-    let rows: Vec<(i64, Vec<u8>, Option<String>)> =
-        sqlx::query_as("SELECT version, entry, signer_user FROM group_state_log WHERE group_id = ? ORDER BY version")
-            .bind(group_id)
-            .fetch_all(&ctx.v2)
-            .await
-            .map_err(db_err)?;
-    let mut last = None;
-    for (version, e, signer) in rows {
-        let Ok(entry) = GroupStateEntry::decode(e.as_slice()) else { continue };
-        let target = |m: &Option<UserRef>| m.as_ref().map(|m| m.address.as_str()) == Some(u);
-        let out = match change_of(&entry) {
-            Some(Change::RemoveMember(c)) => target(&c.member),
-            Some(Change::Ban(c)) => target(&c.member),
-            Some(Change::Leave(_)) => signer.as_deref() == Some(u),
-            _ => false,
-        };
-        if out {
-            last = Some(version);
-        }
+/// Роль запрашивающего журнал группы (spec 035, `contracts/group-access.md`).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Viewer {
+    /// Действующий участник.
+    pub member: bool,
+    /// Версия записи, закрывшей последнее окно членства (выход, исключение, бан после вступления).
+    pub exit_v: Option<u64>,
+    pub banned: bool,
+    /// Публичная группа (PUBLIC-1).
+    pub public: bool,
+    /// Передан `invite_link_id` действующей ссылки.
+    pub link: bool,
+    /// `invite_proof` верен, свеж и сделан ключом действующей ссылки.
+    pub proof_ok: bool,
+    /// Заявка на вступление ждёт решения (D5).
+    pub pending: bool,
+}
+
+/// Какие записи журнала отдать.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncRange {
+    /// `(after, H]`.
+    All,
+    /// `(after, exit_v]`.
+    Upto(u64),
+}
+
+/// Матрица доступа к журналу группы (spec 035, FR-070; PV-006, PV-007, A0023-2, D5).
+pub(crate) fn sync_access(v: &Viewer) -> Result<SyncRange, ErrorCode> {
+    if v.member {
+        return Ok(SyncRange::All);
     }
-    Ok(last)
+    if v.banned {
+        // Бан закрывает и публичную группу; забаненный после вступления видит журнал до своего бана,
+        // забаненный посторонний — ничего (PV-007)
+        return match (v.public, v.exit_v) {
+            (false, Some(exit)) => Ok(SyncRange::Upto(exit)),
+            _ => Err(ErrorCode::Forbidden),
+        };
+    }
+    // Публичная группа открыта всем незабаненным (PUBLIC-1)
+    if v.public {
+        return Ok(SyncRange::All);
+    }
+    // Вступающий: только с доказательством знания секрета ссылки (PV-006); ожидающий одобрения — и без свежего
+    // доказательства, пока заявка не решена (D5)
+    if (v.proof_ok && v.link) || v.pending {
+        return Ok(SyncRange::All);
+    }
+    // Бывший участник — до записи своего выхода (A0023-2); живая ссылка без доказательства этого не расширяет
+    match v.exit_v {
+        Some(exit) => Ok(SyncRange::Upto(exit)),
+        None => Err(ErrorCode::Forbidden),
+    }
 }
 
 fn is_member(s: &GroupState, u: &str) -> bool {
@@ -400,6 +561,19 @@ fn invite_link_valid(s: &GroupState, link_id: &[u8]) -> bool {
         (l.announce.expires_ms == 0 || now_ms() <= l.announce.expires_ms)
             && (l.announce.usage_limit == 0 || l.uses < l.announce.usage_limit)
     })
+}
+
+/// `invite_proof` (PV-006): подпись ключом действующей ссылки над группой, адресом и временем, свежая ±5 мин.
+fn invite_proof_ok(s: &GroupState, user: &str, r: &gpb::StateSyncRequest, now_ms: i64) -> bool {
+    if r.invite_proof.is_empty() || !invite_link_valid(s, &r.invite_link_id) {
+        return false;
+    }
+    if r.invite_proof_ts_ms.saturating_sub(now_ms).saturating_abs() > parvane_protocol::invite::SYNC_PROOF_WINDOW_MS {
+        return false;
+    }
+    let Ok(id) = <[u8; 32]>::try_from(r.invite_link_id.as_slice()) else { return false };
+    let Some(l) = s.invite_links.get(&id) else { return false };
+    parvane_protocol::invite::verify_sync_proof(&l.announce.link_public_key, &r.invite_proof, &s.group, user, r.invite_proof_ts_ms).is_ok()
 }
 
 fn change_of(entry: &GroupStateEntry) -> Option<Change> {
@@ -487,27 +661,44 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
         }
         "group.state.sync" => {
             let r: gpb::StateSyncRequest = body(&req)?;
-            let g: Ref = r.group.ok_or(ErrorCode::Invalid)?;
+            let g: Ref = r.group.clone().ok_or(ErrorCode::Invalid)?;
             let s = load(ctx, &g.id).await?.ok_or(ErrorCode::NotFound)?;
-            // Журнал видят участники; бывший участник — до записи своего исключения
-            // (клиент должен увидеть, что его исключили).
-            let was: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM group_members_v2 WHERE group_id = ? AND member = ?")
-                .bind(&g.id)
-                .bind(&user)
-                .fetch_optional(&ctx.v2)
-                .await
-                .map_err(db_err)?;
-            // Вступающий по ссылке (D-04): журнал нужен до вступления, чтобы
-            // подписать JoinByInvite над головой. link_id — только у держателя
-            // ссылки; забаненному и по недействительной ссылке — отказ.
-            // Публичная группа (spec 023): журнал открыт любому незабаненному — секрет и так в каталоге
-            let by_link = !s.banned.contains(&user)
-                && (s.public.is_some() || (!r.invite_link_id.is_empty() && invite_link_valid(&s, &r.invite_link_id)));
-            if !is_member(&s, &user) && was.is_none() && !s.banned.contains(&user) && !by_link {
-                return Err(ErrorCode::Forbidden);
-            }
-            // Бывший участник и забаненный — только до записи своего выхода/исключения (A0023-2)
-            let upto = if is_member(&s, &user) || by_link { i64::MAX } else { exit_version(ctx, &g.id, &user).await?.unwrap_or(i64::MAX) };
+            // Матрица доступа (spec 035, contracts/group-access.md): участник — всё; бывший — до своего выхода;
+            // вступающий — только с доказательством знания секрета ссылки; ожидающий одобрения — пока заявка
+            // не решена; забаненный посторонний и посторонний — отказ; публичная группа — всем незабаненным.
+            let member = is_member(&s, &user);
+            let pending = if member {
+                false
+            } else {
+                let p: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM group_join_requests_v2 WHERE group_id = ? AND user = ?")
+                    .bind(&g.id)
+                    .bind(&user)
+                    .fetch_optional(&ctx.v2)
+                    .await
+                    .map_err(db_err)?;
+                p.is_some()
+            };
+            let exit_v = if member {
+                None
+            } else {
+                if !windows_built(ctx, &g.id).await? {
+                    rebuild_windows_for(ctx, &g.id).await?;
+                }
+                last_exit(&ctx.v2, &g.id, &user).await?
+            };
+            let viewer = Viewer {
+                member,
+                exit_v,
+                banned: s.banned.contains(&user),
+                public: s.public.is_some(),
+                link: !r.invite_link_id.is_empty() && invite_link_valid(&s, &r.invite_link_id),
+                proof_ok: !member && invite_proof_ok(&s, &user, &r, now_ms()),
+                pending,
+            };
+            let upto = match sync_access(&viewer)? {
+                SyncRange::All => i64::MAX,
+                SyncRange::Upto(v) => i64::try_from(v).unwrap_or(i64::MAX),
+            };
             let rows: Vec<(Vec<u8>, Option<String>)> = sqlx::query_as(
                 "SELECT entry, signer_user FROM group_state_log WHERE group_id = ? AND version > ? AND version <= ? ORDER BY version LIMIT 1025",
             )
@@ -528,6 +719,17 @@ pub(crate) async fn dispatch(ctx: &V2, m: &'static MethodInfo, req: ShardRequest
                 }
             }
             Ok(gpb::StateSyncResponse { entries, more, signer_hints }.encode_to_vec())
+        }
+        // Подписки на группы других серверов (spec 035, PV-014)
+        "group.remote.subscribe" => {
+            let r: gpb::RemoteSubscribeRequest = body(&req)?;
+            crate::v2_fed::subscribe(&ctx.v2, &user, &r.group.ok_or(ErrorCode::Invalid)?).await?;
+            Ok(gpb::RemoteSubscribeResponse {}.encode_to_vec())
+        }
+        "group.remote.unsubscribe" => {
+            let r: gpb::RemoteUnsubscribeRequest = body(&req)?;
+            crate::v2_fed::unsubscribe(&ctx.v2, &user, &r.group.ok_or(ErrorCode::Invalid)?).await?;
+            Ok(gpb::RemoteUnsubscribeResponse {}.encode_to_vec())
         }
         "group.invite.create" => {
             let r: gpb::InviteCreateRequest = body(&req)?;
@@ -808,4 +1010,87 @@ pub(crate) fn remote_domains(s: &parvane_protocol::group::GroupState) -> Vec<Str
     out.dedup();
     out.truncate(64);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MATRIX: &str = include_str!("../../../../proto/parvane/vectors/group_access/matrix.json");
+    /// Версия записи выхода в случаях с закрытым окном.
+    const EXIT_V: u64 = 7;
+
+    fn viewer(c: &serde_json::Value, public: bool) -> Viewer {
+        let v = &c["viewer"];
+        let b = |k: &str| v[k].as_bool().unwrap();
+        Viewer {
+            member: b("member"),
+            exit_v: (v["window"] == "closed").then_some(EXIT_V),
+            banned: b("banned"),
+            public,
+            link: b("link"),
+            proof_ok: v["proof"] == "valid",
+            pending: b("pending"),
+        }
+    }
+
+    fn verdict(r: Result<SyncRange, ErrorCode>) -> &'static str {
+        match r {
+            Ok(SyncRange::All) => "all",
+            Ok(SyncRange::Upto(EXIT_V)) => "upto_exit",
+            Ok(SyncRange::Upto(_)) => "upto_other",
+            Err(ErrorCode::Forbidden) => "forbidden",
+            Err(_) => "error",
+        }
+    }
+
+    fn check(column: &str) {
+        let m: serde_json::Value = serde_json::from_str(MATRIX).unwrap();
+        let mut bad = vec![];
+        for c in m["cases"].as_array().unwrap() {
+            let got = verdict(sync_access(&viewer(c, column == "public")));
+            let want = c["expect"][column].as_str().unwrap();
+            if got != want {
+                bad.push(format!("{} (строка {}): ждали {want}, получили {got}", c["name"], c["row"]));
+            }
+        }
+        assert!(bad.is_empty(), "матрица доступа, столбец {column}:\n{}", bad.join("\n"));
+    }
+
+    /// PV-006 (только `invite_link_id`), PV-007 (забаненный посторонний), A0023-2 (бывший — до своего выхода).
+    #[test]
+    fn access_matrix_private() {
+        check("private");
+    }
+
+    /// PUBLIC-1: журнал публичной группы открыт всем, кроме забаненных.
+    #[test]
+    fn access_matrix_public() {
+        check("public");
+    }
+
+    /// Окна членства: повторное вступление открывает новое окно, выход закрывает последнее.
+    #[tokio::test]
+    async fn membership_windows_follow_rejoin() {
+        let p = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations_v2").run(&p).await.unwrap();
+        let st = |v: u64, j: &[&str], l: &[&str]| WindowStep { version: v, joined: j.iter().map(|s| s.to_string()).collect(), left: l.iter().map(|s| s.to_string()).collect() };
+        let gid = [5u8; 32];
+        let mut tx = p.begin().await.unwrap();
+        write_windows(&mut tx, &gid, &[st(1, &["olga@local", "pavel@local"], &[]), st(5, &[], &["olga@local"])]).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(last_exit(&p, &gid, "olga@local").await.unwrap(), Some(5));
+        assert_eq!(last_exit(&p, &gid, "pavel@local").await.unwrap(), None, "окно открыто");
+        assert_eq!(last_exit(&p, &gid, "rita@local").await.unwrap(), None, "окна нет");
+        let mut tx = p.begin().await.unwrap();
+        write_window_step(&mut tx, &gid, &st(7, &["olga@local"], &[])).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(last_exit(&p, &gid, "olga@local").await.unwrap(), None, "снова участник");
+        let mut tx = p.begin().await.unwrap();
+        write_window_step(&mut tx, &gid, &st(9, &[], &["olga@local"])).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(last_exit(&p, &gid, "olga@local").await.unwrap(), Some(9));
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM group_membership_windows WHERE user = 'olga@local'").fetch_one(&p).await.unwrap();
+        assert_eq!(n, 2);
+    }
 }

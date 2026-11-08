@@ -567,9 +567,9 @@ mod in_budget {
         assert!(w.await.unwrap());
     }
 
-    /// Решение 8 ноя 2026: подпись «печатает» группы без channel_id больше не принимается.
+    /// Решение 8 ноя 2026, spec 035 (FR-076): подпись «печатает» группы без channel_id больше не принимается.
     #[test]
-    fn legacy_group_typing_signature_is_refused() {
+    fn typing_legacy_signature_rejected() {
         use ed25519_dalek::Signer;
         let sk = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
         let pk = sk.verifying_key().to_bytes();
@@ -584,10 +584,14 @@ mod in_budget {
         aad.extend_from_slice(&3u64.to_be_bytes());
         aad.extend_from_slice(&r.nonce);
         aad.extend_from_slice(&r.payload);
-        let mut msg = parvane_protocol::sign::ctx::GROUP_TYPING.to_vec();
+        let mut msg = b"parvane/v2/group-typing\0".to_vec();
         msg.extend_from_slice(&aad);
         r.epoch_signature = sk.sign(&msg).to_bytes().to_vec();
-        assert!(parvane_protocol::group::verify_group_typing_legacy(&pk, &g, 3, &r.nonce, &r.payload, &r.epoch_signature).is_ok(), "подпись собрана прежним способом");
         assert!(check_group_typing_signature(&pk, &g, &r).is_err());
+        r.channel_id.clear();
+        assert!(check_group_typing_signature(&pk, &g, &r).is_err(), "прежний вид: без канала");
+        // Новая подпись над пустым каналом — тоже отказ: channel_id обязателен
+        r.epoch_signature = parvane_protocol::group::sign_group_typing(&sk, &g, 3, &r.channel_id, &r.nonce, &r.payload);
+        assert!(check_group_typing_signature(&pk, &g, &r).is_err(), "пустой channel_id");
     }
 }

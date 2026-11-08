@@ -1,0 +1,36 @@
+{
+  "suite": "model/critical_journal",
+  "description": "spec 035 FR-041 (contracts/versioning.md): неизвестный критичный вид (1000–1999) в журнале закрывает журнал для записи — writeBlocked{journal, CRITICAL_UNKNOWN}; чтение и показ известного работают; неизвестный обычный вид запись не закрывает. Журнал state — операции краткой записью state2 (объекты показа сверяются, как в state2/*); журнал history — исходные байты открытых текстов записей (HistoryBatch). submit — итог попытки записать свою новую операцию (ok либо вид ошибки). holds — диапазоны записей, которые нельзя заменять (range-hold, по seq = номер записи с 1). Ожидания руками.",
+  "cases": [
+    {
+      "name": "state: критичный вид — запись закрыта, показ известного работает",
+      "input": {"journal": "state", "ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}}}},
+        {"id": "02", "lamport": 2, "device": "d9", "extra_hex": "c23e00"}
+      ]},
+      "expect": {"write": "JOURNAL_WRITE_BLOCKED_CRITICAL_UNKNOWN", "submit": "WriteBlocked", "holds": [[2, 2]], "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    },
+    {
+      "name": "state: обычный неизвестный вид — запись открыта",
+      "input": {"journal": "state", "ops": [
+        {"id": "01", "lamport": 1, "device": "d1", "patch": {"kind": "FOLDER", "key": "5", "set": {"2": {"title": "Работа"}}}},
+        {"id": "02", "lamport": 2, "device": "d9", "extra_hex": "a23800"}
+      ]},
+      "expect": {"write": "JOURNAL_WRITE_OPEN", "submit": "ok", "holds": [[2, 2]], "objects": [
+        {"kind": "OBJECT_KIND_FOLDER", "key": "5", "value": {"title": "Работа"}}
+      ]}
+    },
+    {
+      "name": "history: критичный вид операции в пачке — запись закрыта",
+      "input": {"journal": "history", "records_hex": ["0a0264311a00", "0a0264311a03c23e00"]},
+      "expect": {"write": "JOURNAL_WRITE_BLOCKED_CRITICAL_UNKNOWN", "holds": [[2, 2]]}
+    },
+    {
+      "name": "history: обычный неизвестный вид операции — запись открыта, диапазон держится",
+      "input": {"journal": "history", "records_hex": ["0a0264311a03a23800", "0a0264311a00"]},
+      "expect": {"write": "JOURNAL_WRITE_OPEN", "holds": [[1, 1]]}
+    }
+  ]
+}
