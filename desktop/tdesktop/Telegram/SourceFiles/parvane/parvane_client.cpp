@@ -8455,7 +8455,7 @@ void injectOnMain(
 				item->history()->clearFolder();
 			}
 			++added;
-			LOG(("Parvane: заглушка unsupported msg %1 (%2)").arg(uuid, peerAddress));
+			LOG(("Parvane: заглушка unsupported msg %1 (%2)%3").arg(uuid, peerAddress, critical ? u" критичная"_q : QString()));
 			continue;
 		}
 		const auto maybeText = sm.text();
@@ -13672,6 +13672,80 @@ void AfterSessionReady(not_null<Main::Session*> session) {
 						std::move(always), {}, {}));
 					LOG(("Parvane: AUTOFOLDER создал папку '%1' (id=%2) → %3")
 						.arg(fname, QString::number(newId), peerAddr));
+				});
+			}
+		}
+
+		// Правка ОДНОГО поля объекта личного состояния (spec 035 T124, verify_state_patch.sh):
+		// PARVANE_AUTOPATCH=<op>|<a>|<b>@сек[,…] — нативными путями:
+		//   folder-title|<название>|<новое>  — переименовать папку;
+		//   folder-add|<название>|<адрес>    — добавить чат в папку;
+		//   contact-name|<адрес>|<имя>       — своё имя контакта (заметка — прежняя своя);
+		//   contact-note|<адрес>|<заметка>   — заметка контакта (имя — прежнее своё).
+		if (const char *pv = ParvaneDevEnv("PARVANE_AUTOPATCH"); pv && *pv) {
+			for (const auto &part : QString::fromUtf8(pv).split(QChar(','), Qt::SkipEmptyParts)) {
+				const auto at = part.lastIndexOf(u'@');
+				const auto fields = part.left(at).split(QChar('|'));
+				if (at <= 0 || fields.size() != 3) {
+					continue;
+				}
+				const auto op = fields[0];
+				const auto a = fields[1];
+				const auto b = fields[2];
+				const auto delay = part.mid(at + 1).toInt();
+				base::call_delayed(delay * crl::time(1000), [op, a, b] {
+					const auto s = g_sessionWeak.get();
+					if (!s) {
+						return;
+					}
+					if (op == u"dump"_q) {
+						// dump|<папка>|<адрес контакта>: строка журнала для сценария — как папка и контакт видны сейчас
+						auto chats = QStringList();
+						auto title = QString();
+						for (const auto &f : s->data().chatsFilters().list()) {
+							if (f.titleText().text == a || f.titleText().text.startsWith(a + u"+"_q)) {
+								title = f.titleText().text;
+								for (const auto &h : f.always()) {
+									chats.push_back(BusAddressForPeer(h->peer));
+								}
+							}
+						}
+						chats.sort();
+						const auto c = ContactRecordFor(b);
+						LOG(("Parvane: autopatch dump папка «%1» чаты [%2]; контакт %3 имя «%4» заметка «%5»")
+							.arg(title, chats.join(u" "_q), b, c ? c->first : QString(), c ? c->note : QString()));
+						return;
+					}
+					if (op == u"folder-title"_q || op == u"folder-add"_q) {
+						for (const auto &f : s->data().chatsFilters().list()) {
+							if (f.titleText().text != a) {
+								continue;
+							}
+							if (op == u"folder-title"_q) {
+								s->data().chatsFilters().set(
+									f.withTitle(Data::ChatFilterTitle{ TextWithEntities{ b }, false }));
+							} else {
+								RegisterPeer(b);
+								auto always = f.always();
+								always.emplace(s->data().history(
+									peerFromUser(UserId(BareId(IdForAddress(b))))));
+								s->data().chatsFilters().set(Data::ChatFilter(
+									f.id(), f.title(), f.iconEmoji(), f.colorIndex(), f.flags(),
+									std::move(always), f.pinned(), f.never()));
+							}
+							LOG(("Parvane: autopatch %1 «%2» → %3").arg(op, a, b));
+							return;
+						}
+						LOG(("Parvane: autopatch %1: папки «%2» нет").arg(op, a));
+						return;
+					}
+					RegisterPeer(a);
+					const auto user = s->data().user(UserId(BareId(IdForAddress(a))));
+					const auto current = ContactRecordFor(a);
+					const auto ok = (op == u"contact-name"_q)
+						? SetContact(user, b, current ? current->last : QString(), current ? current->note : QString())
+						: (op == u"contact-note"_q) ? SetContactNote(user, b) : false;
+					LOG(("Parvane: autopatch %1 %2 → %3 (%4)").arg(op, a, b, ok ? u"ok"_q : u"нет"_q));
 				});
 			}
 		}
