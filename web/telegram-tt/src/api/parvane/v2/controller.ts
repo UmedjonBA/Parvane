@@ -3557,7 +3557,9 @@ export function createV2Controller(deps: Deps) {
         })),
         ...g.banned.map((address) => ({ address, role: 'banned' })),
       ],
-      avatar: g.avatarFileId || undefined,
+      // Фото частной группы (PV-005) — только когда пришёл его секрет: иначе UI скачал бы файл без ключа и не
+      // повторил бы, когда конверт эпохи с секретом догонит запись SetInfo
+      avatar: g.avatarFileId && (g.avatarKey || !g.avatarKeyId) ? g.avatarFileId : undefined,
       about: g.about || undefined,
       default_permissions: expandFlags(PERMISSION_FIELDS, g.defaultPermissions),
       version: Number(g.version),
